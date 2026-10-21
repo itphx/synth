@@ -7,12 +7,15 @@
  * последовательность событий журнала и самодостаточность прогона.
  */
 import { describe, it, expect, vi } from 'vitest';
+import { z } from 'zod';
+import { ToolCapability } from '@itphx/synth-shared';
 import type {
   PipelineNode,
   PipelineNodeKind,
   PipelineRunTrigger,
   PipelineSpec,
   StepResult,
+  ToolDefinition,
 } from '@itphx/synth-shared';
 
 import {
@@ -20,6 +23,8 @@ import {
   MemoryProjectPipelineRepository,
 } from '../../storage/memory/index.js';
 import { PipelineEngine } from './engine.js';
+import { createToolStepExecutor, humanStepExecutor } from './executors/index.js';
+import type { PermissionEvaluator } from '../permission/evaluator.js';
 import { PipelineEngineError, type StepExecutionContext, type StepExecutor } from './types.js';
 
 const trigger: PipelineRunTrigger = {
@@ -421,8 +426,8 @@ describe('PipelineEngine', () => {
     expect(error?.code).toBe('pipeline.step_timeout');
   });
 
-  it('таймаут гейта: ожидание человека истекло — прогон failed (pipeline.gate_timeout)', async () => {
-    const { engine } = await setup(
+  it('таймаут гейта: активный таймер в процессе проваливает прогон сам (pipeline.gate_timeout)', async () => {
+    const { runs, engine } = await setup(
       spec([{ id: 'approve', kind: 'human', timeoutSec: 1 }]),
       [],
     );
@@ -430,13 +435,39 @@ describe('PipelineEngine', () => {
     const paused = await engine.run({ pipelineId: 'p1', trigger });
     expect(paused.status).toBe('awaiting_human');
 
-    // Ожидание истекло: ждём дольше таймаута гейта.
+    // Активный таймер (unref) живёт в процессе: по истечении таймаута прогон
+    // продолжается с провалом шага — перехода нет, значит прогон падает.
     await new Promise((resolve) => setTimeout(resolve, 1100));
 
-    const resumed = await engine.resume(paused.id, { approved: true });
+    const stored = await runs.getRun(paused.id);
+    expect(stored?.status).toBe('failed');
+    expect(stored?.error).toContain('approve');
+    const events = await runs.listEvents(paused.id);
+    const failed = events.find((event) => event.type === 'run.failed');
+    expect(failed?.payload?.code).toBe('pipeline.gate_timeout');
+  });
 
-    expect(resumed.status).toBe('failed');
-    expect(resumed.error).toContain('approve');
+  it('таймаут гейта: проверка по времени ожидания ловит истёкший гейт при resume', async () => {
+    vi.useFakeTimers();
+    try {
+      const { engine } = await setup(
+        spec([{ id: 'approve', kind: 'human', timeoutSec: 60 }]),
+        [],
+      );
+
+      const paused = await engine.run({ pipelineId: 'p1', trigger });
+      expect(paused.status).toBe('awaiting_human');
+
+      // Процесс перезапустился: активного таймера нет, но время ожидания истекло.
+      vi.setSystemTime(Date.now() + 61_000);
+
+      const resumed = await engine.resume(paused.id, { approved: true });
+
+      expect(resumed.status).toBe('failed');
+      expect(resumed.error).toContain('approve');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('неизвестный пайплайн — ошибка pipeline.not_found', async () => {    const { engine } = await setup(spec([{ id: 'a', kind: 'tool', tool: 'noop' }]), []);
@@ -446,6 +477,141 @@ describe('PipelineEngine', () => {
     await expect(engine.run({ pipelineId: 'other', trigger })).rejects.toMatchObject({
       code: 'pipeline.not_found',
     });
+  });
+
+  it('эскалация ask: шаг tool ставит прогон на паузу, одобрение выполняет инструмент', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const tool: ToolDefinition = {
+      name: 'noop',
+      description: 'noop',
+      parameters: z.object({ value: z.string().optional() }),
+      capabilities: [ToolCapability.SEARCH],
+      execute: async (args) => {
+        calls.push(args as Record<string, unknown>);
+        return { content: 'готово' };
+      },
+    };
+    // Первая проверка — `ask` (эскалация в гейт), дальше — `allow`.
+    let checks = 0;
+    const evaluator = {
+      check: () => {
+        checks += 1;
+        return checks === 1
+          ? { action: 'ask' as const, reason: 'нужно подтверждение' }
+          : { action: 'allow' as const, reason: 'ok' };
+      },
+    } as unknown as PermissionEvaluator;
+
+    const { runs, engine } = await setup(
+      spec([
+        { id: 'ask', kind: 'tool', tool: 'noop', toolArgs: { value: 'x' } },
+        { id: 'after', kind: 'tool', tool: 'noop' },
+      ]),
+      [
+        createToolStepExecutor({
+          toolRegistry: { get: () => tool },
+          permissions: { evaluator },
+        }),
+      ],
+    );
+
+    const paused = await engine.run({ pipelineId: 'p1', trigger });
+    expect(paused.status).toBe('awaiting_human');
+    expect(paused.currentNode).toBe('ask');
+    expect(calls).toHaveLength(0);
+
+    const gate = (await runs.listEvents(paused.id)).find((event) => event.type === 'gate.awaiting');
+    expect(gate?.payload?.kind).toBe('tool_approval');
+    expect(gate?.payload?.toolName).toBe('noop');
+
+    const resumed = await engine.resume(paused.id, { approved: true });
+
+    expect(resumed.status).toBe('done');
+    // Инструмент исполнен один раз — уже с выданным правом.
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toEqual({ value: 'x' });
+  });
+
+  it('эскалация ask: отклонение оператором → шаг failed с pipeline.gate_rejected', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const tool: ToolDefinition = {
+      name: 'noop',
+      description: 'noop',
+      parameters: z.object({ value: z.string().optional() }),
+      capabilities: [ToolCapability.SEARCH],
+      execute: async (args) => {
+        calls.push(args as Record<string, unknown>);
+        return { content: 'готово' };
+      },
+    };
+    let checks = 0;
+    const evaluator = {
+      check: () => {
+        checks += 1;
+        return checks === 1
+          ? { action: 'ask' as const, reason: 'нужно подтверждение' }
+          : { action: 'allow' as const, reason: 'ok' };
+      },
+    } as unknown as PermissionEvaluator;
+
+    const { runs, engine } = await setup(
+      spec([
+        {
+          id: 'ask',
+          kind: 'tool',
+          tool: 'noop',
+          toolArgs: { value: 'x' },
+          on: [
+            {
+              when: { path: 'prev.error.code', op: 'eq', value: 'pipeline.gate_rejected' },
+              then: 'after',
+            },
+          ],
+        },
+        { id: 'after', kind: 'tool', tool: 'noop' },
+      ]),
+      [
+        createToolStepExecutor({
+          toolRegistry: { get: () => tool },
+          permissions: { evaluator },
+        }),
+      ],
+    );
+
+    const paused = await engine.run({ pipelineId: 'p1', trigger });
+    expect(paused.status).toBe('awaiting_human');
+
+    const resumed = await engine.resume(paused.id, { approved: false, comment: 'не надо' });
+
+    // Отклонение — провал шага; явный переход по условию ведёт дальше.
+    expect(resumed.status).toBe('done');
+    // Инструмент узла «ask» не вызывался (у него свои аргументы).
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({});
+    const finished = (await runs.listEvents(paused.id)).find((event) => event.type === 'node.finished');
+    expect((finished?.payload?.error as { code?: string } | undefined)?.code).toBe(
+      'pipeline.gate_rejected',
+    );
+  });
+
+  it('human-исполнитель: одобрение оператора превращается в результат шага', async () => {
+    const { engine } = await setup(
+      spec([
+        { id: 'approve', kind: 'human', prompt: 'Подтверди?' },
+        { id: 'after', kind: 'tool', tool: 'noop' },
+      ]),
+      [
+        humanStepExecutor,
+        executor('tool', (ctx) => ({ status: 'ok', attempt: ctx.attempt, output: { node: ctx.node.id } })),
+      ],
+    );
+
+    const paused = await engine.run({ pipelineId: 'p1', trigger });
+    expect(paused.status).toBe('awaiting_human');
+    expect(paused.currentNode).toBe('approve');
+
+    const resumed = await engine.resume(paused.id, { approved: true, output: { answer: 'да' } });
+    expect(resumed.status).toBe('done');
   });
 
   it('невалидная спецификация — ошибка pipeline.invalid_spec', async () => {
@@ -495,5 +661,46 @@ describe('PipelineEngine', () => {
     const events = await runs.listEvents(run.id);
     const failed = events.find((event) => event.type === 'run.failed');
     expect(failed?.payload?.code).toBe('pipeline.loop_limit');
+  });
+
+  it('buildStepContext собирает контекст шага из зависимостей движка (ADR-101 §10)', async () => {
+    const pipelines = new MemoryProjectPipelineRepository();
+    const runs = new MemoryPipelineRunRepository();
+    const engine = new PipelineEngine({
+      pipelines,
+      runs,
+      executors: [],
+      projectStore: {
+        load: async (id: string) =>
+          ({
+            id,
+            name: 'Проект',
+            workspace: '/ws/proj',
+          }) as never,
+      },
+    });
+
+    const pipelineSpec = spec([{ id: 'a', kind: 'agent', agent: 'implementer' }]);
+    const ctx: StepExecutionContext = {
+      runId: 'prun_1',
+      pipelineId: 'p1',
+      version: pipelineSpec.version,
+      node: pipelineSpec.nodes[0]!,
+      spec: pipelineSpec,
+      projectId: 'proj-1',
+      trigger,
+      input: {},
+      vars: {},
+      signal: new AbortController().signal,
+      attempt: 1,
+      mode: 'act',
+    };
+
+    const stepContext = await engine.buildStepContext(ctx);
+
+    expect(stepContext.project?.id).toBe('proj-1');
+    expect(stepContext.workspace).toBe('/ws/proj');
+    expect(stepContext.workspaceReady).toBe(true);
+    expect(stepContext.mode).toBe('act');
   });
 });

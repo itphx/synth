@@ -15,12 +15,24 @@
  *        → переход (edge.taken) → … → выходы (run.finished)
  * ```
  *
- * ## HITL-гейт
+ * ## Гейт (пауза прогона)
  *
- * Узел вида `human` — пауза: прогон переводится в `awaiting_human`, в журнал
- * пишется `gate.awaiting`, а `run()` возвращает управление. Продолжение —
- * `resume(runId, {approved, output?, comment?})`: результат гейта становится
- * `StepResult` (`ok`/`failed`), дальше — обычный цикл.
+ * Прогон может встать на паузу **на любом узле**: исполнитель возвращает
+ * исход-гейт (`StepGateOutcome`) — либо вопрос human-шага (`kind: 'human'`),
+ * либо эскалацию `ask`-политики permission-слоя (`kind: 'tool_approval'`,
+ * ADR-101 §6). Движок сохраняет текущий узел, пишет в журнал `gate.awaiting`
+ * (payload — данные гейта), ставит статус прогона `awaiting_human` и
+ * **возвращает управление**.
+ *
+ * Продолжение — `resume(runId, {approved, output?, comment?})`: узел
+ * исполняется заново, с решением оператора в контексте (`ctx.gateDecision`),
+ * и цикл продолжается из результата этого вызова.
+ *
+ * ## Активный таймаут гейта
+ *
+ * Ожидание оператора ограничено `node.timeoutSec`: таймер живёт **в процессе**
+ * ядра (`unref`), по истечении шаг проваливается с `pipeline.gate_timeout`, а
+ * прогон продолжается по условиям перехода (или завершается).
  *
  * ## Отмена
  *
@@ -34,19 +46,29 @@ import type { PipelineNode, PipelineRunEventType, PipelineSpec, StepResult } fro
 import { error as logError, info as logInfo, warning as logWarning } from '../../logger.js';
 import type { PipelineRunRecord } from '../../storage/ports/index.js';
 import { t } from '../system-messages.js';
+import {
+  gateDecisionResult,
+  gateTimeoutResult,
+  humanGate,
+  startGateTimeout,
+} from './gate.js';
 import { resolveSpecVars, resolveStepInput } from './mapping.js';
 import { sanitizeRecord, sanitizeTrigger } from './payload.js';
 import { MAX_PIPELINE_TRANSITIONS, nextNodeId } from './planner.js';
+import { buildPipelineStepContext, type PipelineStepContext } from './step-context.js';
 import {
   PipelineEngineError,
+  isStepGateOutcome,
   type PipelineEngineDeps,
   type PipelineEngineLogger,
   type PipelineExitContext,
   type PipelineExitHandler,
+  type PipelineGate,
   type PipelineGateDecision,
   type PipelineRunOptions,
   type StepExecutionContext,
   type StepExecutor,
+  type StepOutcome,
 } from './types.js';
 
 /** Лог-группа движка пайплайнов. */
@@ -70,6 +92,38 @@ interface RunState {
 }
 
 /**
+ * Активный гейт прогона — ожидание решения оператора в процессе.
+ *
+ * Нужен для двух вещей: активного таймаута (по истечении прогон продолжается
+ * с провалом шага) и защиты от гонки «таймер сработал после `resume`» —
+ * срабатывает только гейт с тем же токеном.
+ */
+interface PendingGate {
+  /** Токен гейта (уникален в пределах движка). */
+  token: string;
+  /** Узел, на котором прогон ждёт решения. */
+  nodeId: string;
+  /** Номер попытки узла. */
+  attempt: number;
+  /** Состояние прогона на момент паузы (нужно для продолжения по таймауту). */
+  state: RunState;
+}
+
+/**
+ * Коды ошибок шага, по которым повторять шаг **нельзя**.
+ *
+ * Отказ по правам, отклонение гейта и истечение таймаута гейта — решения
+ * человека/политики: повтор не изменит исход.
+ */
+const NON_RETRYABLE_ERROR_CODES = new Set<string>([
+  'pipeline.executor_missing',
+  'pipeline.cancelled',
+  'pipeline.gate_rejected',
+  'pipeline.gate_timeout',
+  'permission.denied',
+]);
+
+/**
  * Движок пайплайнов (ADR-101).
  *
  * Публичный API:
@@ -83,6 +137,12 @@ export class PipelineEngine {
   private readonly _exitHandlers: PipelineExitHandler[];
   private readonly _sleep: (ms: number) => Promise<void>;
   private readonly _logger: PipelineEngineLogger;
+  /** Активные гейты прогонов (ожидание решения оператора). */
+  private readonly _pendingGates = new Map<string, PendingGate>();
+  /** Счётчик токенов гейтов (уникальность активного таймера). */
+  private _gateSeq = 0;
+  /** Зависимости сборки контекста шага (ADR-101 §10) — опциональные. */
+  private readonly _stepContextDeps: PipelineEngineDeps;
 
   constructor(deps: PipelineEngineDeps) {
     this._pipelines = deps.pipelines;
@@ -93,11 +153,23 @@ export class PipelineEngine {
     }
     this._exitHandlers = deps.exits ?? [];
     this._sleep = deps.sleep ?? defaultSleep;
+    this._stepContextDeps = deps;
     this._logger = deps.logger ?? {
       info: (group, message) => logInfo(group, message),
       warning: (group, message) => logWarning(group, message),
       error: (group, message) => logError(group, message),
     };
+  }
+
+  /**
+   * Контекст шага (ADR-101 §10): проект, рабочий каталог, режим, инструменты,
+   * MCP-скоуп, инструкции и скиллы — всё, что нужно исполнителю шага.
+   *
+   * Исполнители видов шагов (Э4.2/Э4.3) получают контекст отсюда; шага без
+   * проекта/рабочего каталога — не ошибка (контекст без проектной части).
+   */
+  async buildStepContext(ctx: StepExecutionContext): Promise<PipelineStepContext> {
+    return buildPipelineStepContext(ctx, this._stepContextDeps);
   }
 
   /**
@@ -150,10 +222,19 @@ export class PipelineEngine {
   /**
    * Продолжение прогона после HITL-паузы.
    *
-   * Результат гейта становится `StepResult`: одобрение — `ok` (выход гейта —
-   * в `output`), отклонение — `failed` с кодом `pipeline.gate_rejected`.
-   * Дальше — обычный цикл (переходы считаются от журнала, поэтому лимит
-   * переходов сохраняется между паузой и возобновлением).
+   * Прогон продолжается **с того узла, на котором он встал на паузу**:
+   *
+   * - одобрение гейта `tool_approval` — узел исполняется **заново**, но право
+   *   на инструмент считается выданным (`ctx.gateDecision.approved`), поэтому
+   *   permission-проверка не повторяется; цикл продолжается из результата
+   *   вызова инструмента;
+   * - одобрение гейта `human` — результат шага = выход гейта (`output`) и
+   *   комментарий оператора;
+   * - отклонение — результат шага `failed` с кодом `pipeline.gate_rejected`,
+   *   дальше — обычный цикл (переход по условиям или завершение прогона).
+   *
+   * Таймаут ожидания проверяется по времени ожидания: детерминированно и
+   * переживает рестарт процесса (активный таймер в процессе — дополнительно).
    */
   async resume(runId: string, decision: PipelineGateDecision): Promise<PipelineRunRecord> {
     const stored = await this._runs.getRun(runId);
@@ -201,74 +282,50 @@ export class PipelineEngine {
       }
     }
 
-    const result: StepResult = decision.approved
-      ? {
-          status: 'ok',
-          attempt: 1,
-          ...(decision.output ? { output: decision.output } : {}),
-          startedAt: now,
-          finishedAt: now,
-          durationMs: 0,
-        }
-      : {
-          status: 'failed',
-          attempt: 1,
-          error: {
-            code: 'pipeline.gate_rejected',
-            message: t('pipeline.gate_rejected', { node: node.id }),
-          },
-          startedAt: now,
-          finishedAt: now,
-          durationMs: 0,
-        };
-
-    await this._appendEvent(runId, 'node.started', { node: node.id, kind: node.kind, attempt: 1 });
-    await this._appendEvent(runId, 'node.finished', {
-      node: node.id,
-      kind: node.kind,
-      attempt: 1,
-      status: result.status,
-      durationMs: 0,
-      ...(result.error ? { error: result.error } : {}),
-      ...(decision.comment ? { comment: decision.comment } : {}),
-    });
+    // Гейт закрыт решением оператора — активное ожидание снимается.
+    this._pendingGates.delete(runId);
 
     const state: RunState = {
       record: { ...stored, status: 'running', updatedAt: now },
       spec,
-      prev: result,
       vars: {},
       transitions: await this._countTransitions(runId),
     };
-    state.vars = resolveSpecVars(spec, { prev: result, trigger });
-    // Статус прогона — «идёт» уже до вычисления следующего узла.
-    await this._runs.saveRun(state.record);
+    state.vars = resolveSpecVars(spec, { trigger });
 
-    const next = nextNodeId(spec, { node, prev: result, trigger, vars: state.vars });
-    if (!next) {
-      if (result.status === 'failed') {
-        return this._finishFailed(
-          state,
-          'pipeline.gate_rejected',
-          result.error?.message ?? t('pipeline.gate_rejected', { node: node.id }),
-        );
-      }
-      return this._finishDone(state);
+    const executor = this._executors.get(node.kind);
+    const signal = new AbortController().signal;
+
+    if (!executor) {
+      // Исполнителя нет — решение применяет сам движок (human-узел без
+      // зарегистрированного исполнителя).
+      const result = gateDecisionResult(decision, node, 1);
+      await this._appendEvent(runId, 'node.started', { node: node.id, kind: node.kind, attempt: 1 });
+      await this._appendEvent(runId, 'node.finished', {
+        node: node.id,
+        kind: node.kind,
+        attempt: 1,
+        status: result.status,
+        durationMs: 0,
+        ...(result.error ? { error: result.error } : {}),
+        ...(decision.comment ? { comment: decision.comment } : {}),
+      });
+      return this._continueAfterStep(state, node, result, signal);
     }
 
-    state.transitions += 1;
-    if (state.transitions > MAX_PIPELINE_TRANSITIONS) {
-      return this._finishFailed(
-        state,
-        'pipeline.loop_limit',
-        t('pipeline.loop_limit', { limit: String(MAX_PIPELINE_TRANSITIONS) }),
-      );
+    // Узел исполняется заново — с решением оператора в контексте шага.
+    const attempt = (await this._countNodeAttempts(runId, node.id)) + 1;
+    const gateToken = this._nextGateToken();
+    const outcome = await this._runStep(state, node, signal, {
+      gateDecision: decision,
+      startAttempt: attempt,
+      gateToken,
+    });
+    if (isStepGateOutcome(outcome)) {
+      // Исполнитель запросил гейт снова — пауза продлевается.
+      return this._pauseForGate(state, node, outcome.gate, gateToken);
     }
-    await this._appendEvent(runId, 'edge.taken', { from: node.id, to: next });
-    state.record.currentNode = next;
-    await this._runs.saveRun(state.record);
-
-    return this._drive(state, new AbortController().signal, next);
+    return this._continueAfterStep(state, node, outcome, signal);
   }
 
   /**
@@ -323,7 +380,13 @@ export class PipelineEngine {
    * Основной цикл прогона: узел → шаг → переход → … → выходы.
    *
    * Правила переходов — в `planner.ts`; при отсутствии перехода успешный шаг
-   * завершает прогон (выходы), неуспешный — валит прогон.
+   * завершает прогон (выходы), неуспешный — валит прогон. Исполнитель может
+   * в любой момент **попросить паузу** (исход-гейт): прогон встаёт на
+   * `awaiting_human`, а `resume()` продолжает его с того же узла.
+   *
+   * Переход к следующему узлу — в `_continueAfterStep` (он же продолжает цикл
+   * рекурсивным вызовом `_drive`); глубина рекурсии ограничена лимитом
+   * переходов прогона (`MAX_PIPELINE_TRANSITIONS`).
    */
   private async _drive(
     state: RunState,
@@ -331,71 +394,99 @@ export class PipelineEngine {
     startNodeId: string | null,
   ): Promise<PipelineRunRecord> {
     const trigger = state.record.trigger ?? { kind: 'manual' };
-    let nodeId = startNodeId;
+    if (!startNodeId) return this._finishDone(state);
+    if (signal.aborted) return this._finishCancelled(state);
 
-    while (nodeId) {
-      if (signal.aborted) return this._finishCancelled(state);
-
-      const node = state.spec.nodes.find((item) => item.id === nodeId);
-      if (!node) {
-        return this._finishFailed(
-          state,
-          'pipeline.invalid_spec',
-          t('pipeline.invalid_spec', { problems: `node «${nodeId}» is missing in the spec` }),
-        );
-      }
-
-      // HITL-гейт: прогон встаёт на паузу и ждёт решения человека.
-      if (node.kind === 'human') return this._pauseForGate(state, node);
-
-      // Переменные для входа шага — по результату предыдущего шага.
-      state.vars = resolveSpecVars(state.spec, { ...(state.prev ? { prev: state.prev } : {}), trigger });
-
-      const result = await this._runStep(state, node, signal);
-      state.prev = result;
-
-      // Переменные для условий перехода — по результату текущего шага.
-      state.vars = resolveSpecVars(state.spec, { prev: result, trigger });
-
-      if (signal.aborted) return this._finishCancelled(state);
-
-      const next = nextNodeId(state.spec, {
-        node,
-        prev: result,
-        trigger,
-        vars: state.vars,
-      });
-
-      if (!next) {
-        if (result.error?.code === 'pipeline.cancelled') return this._finishCancelled(state);
-        if (result.status === 'failed') {
-          const failure = runFailure(node, result);
-          return this._finishFailed(state, failure.code, failure.message);
-        }
-        return this._finishDone(state);
-      }
-
-      state.transitions += 1;
-      if (state.transitions > MAX_PIPELINE_TRANSITIONS) {
-        this._logger.warning(
-          LOG_GROUP,
-          `прогон ${state.record.id}: превышен лимит переходов (${MAX_PIPELINE_TRANSITIONS})`,
-        );
-        return this._finishFailed(
-          state,
-          'pipeline.loop_limit',
-          t('pipeline.loop_limit', { limit: String(MAX_PIPELINE_TRANSITIONS) }),
-        );
-      }
-
-      await this._appendEvent(state.record.id, 'edge.taken', { from: node.id, to: next });
-      state.record.currentNode = next;
-      state.record.updatedAt = nowISO();
-      await this._runs.saveRun(state.record);
-      nodeId = next;
+    const node = state.spec.nodes.find((item) => item.id === startNodeId);
+    if (!node) {
+      return this._finishFailed(
+        state,
+        'pipeline.invalid_spec',
+        t('pipeline.invalid_spec', { problems: `node «${startNodeId}» is missing in the spec` }),
+      );
     }
 
-    return this._finishDone(state);
+    // HITL-гейт без зарегистрированного исполнителя: движок сам останавливает
+    // прогон (обратная совместимость с Э3).
+    if (node.kind === 'human' && !this._executors.has('human')) {
+      return this._pauseForGate(state, node, humanGate(node), this._nextGateToken());
+    }
+
+    // Переменные для входа шага — по результату предыдущего шага.
+    state.vars = resolveSpecVars(state.spec, { ...(state.prev ? { prev: state.prev } : {}), trigger });
+
+    // Токен гейта узла: один на попытку — им же защищается активный таймер
+    // (таймер закрытого гейта не должен провалить уже завершённый прогон).
+    const gateToken = this._nextGateToken();
+    const outcome = await this._runStep(state, node, signal, { gateToken });
+
+    // Исполнитель запросил решение человека — прогон встаёт на паузу.
+    if (isStepGateOutcome(outcome)) {
+      return this._pauseForGate(state, node, outcome.gate, gateToken);
+    }
+
+    if (signal.aborted) return this._finishCancelled(state);
+
+    return this._continueAfterStep(state, node, outcome, signal);
+  }
+
+  /**
+   * Продолжение прогона после шага: результат → переменные → переход → узел.
+   *
+   * Переход и его ограничения — как в `planner.ts`; перехода нет при успешном
+   * шаге — прогон завершается штатно (выходы), при провале — прогон падает.
+   */
+  private async _continueAfterStep(
+    state: RunState,
+    node: PipelineNode,
+    result: StepResult,
+    signal: AbortSignal,
+  ): Promise<PipelineRunRecord> {
+    const trigger = state.record.trigger ?? { kind: 'manual' };
+    state.prev = result;
+    state.record.status = 'running';
+    state.record.currentNode = node.id;
+    state.record.updatedAt = nowISO();
+
+    // Переменные для условий перехода — по результату текущего шага.
+    state.vars = resolveSpecVars(state.spec, { prev: result, trigger });
+    await this._runs.saveRun(state.record);
+
+    const next = nextNodeId(state.spec, {
+      node,
+      prev: result,
+      trigger,
+      vars: state.vars,
+    });
+
+    if (!next) {
+      if (result.error?.code === 'pipeline.cancelled') return this._finishCancelled(state);
+      if (result.status === 'failed') {
+        const failure = runFailure(node, result);
+        return this._finishFailed(state, failure.code, failure.message);
+      }
+      return this._finishDone(state);
+    }
+
+    state.transitions += 1;
+    if (state.transitions > MAX_PIPELINE_TRANSITIONS) {
+      this._logger.warning(
+        LOG_GROUP,
+        `прогон ${state.record.id}: превышен лимит переходов (${MAX_PIPELINE_TRANSITIONS})`,
+      );
+      return this._finishFailed(
+        state,
+        'pipeline.loop_limit',
+        t('pipeline.loop_limit', { limit: String(MAX_PIPELINE_TRANSITIONS) }),
+      );
+    }
+
+    await this._appendEvent(state.record.id, 'edge.taken', { from: node.id, to: next });
+    state.record.currentNode = next;
+    state.record.updatedAt = nowISO();
+    await this._runs.saveRun(state.record);
+
+    return this._drive(state, signal, next);
   }
 
   /**
@@ -403,17 +494,23 @@ export class PipelineEngine {
    *
    * Попыток — `1 + node.retry.max`; между попытками пауза `node.retry.backoffSec`
    * (через инъектированный `sleep` — в тестах мгновенная). Ошибки
-   * «нет исполнителя» и «отмена» не повторяются.
+   * «нет исполнителя», «отмена», «отказ по правам» и «решение человека» не
+   * повторяются. Исход-пауза (гейт) шаг не завершает — прогон встаёт на
+   * ожидание решения оператора.
    */
   private async _runStep(
     state: RunState,
     node: PipelineNode,
     signal: AbortSignal,
-  ): Promise<StepResult> {
+    opts?: { gateDecision?: PipelineGateDecision; startAttempt?: number; gateToken?: string },
+  ): Promise<StepOutcome> {
     const executor = this._executors.get(node.kind);
     const maxAttempts = 1 + Math.max(0, node.retry?.max ?? 0);
-    let attempt = 0;
-    let result: StepResult;
+    let attempt = opts?.startAttempt !== undefined ? opts.startAttempt - 1 : 0;
+    let outcome: StepOutcome | undefined;
+
+    const baseCtx = await this._buildStepContext(state, node, opts?.gateDecision);
+    const gateToken = opts?.gateToken ?? this._nextGateToken();
 
     for (;;) {
       attempt += 1;
@@ -425,7 +522,7 @@ export class PipelineEngine {
       });
 
       if (!executor) {
-        result = {
+        const missing: StepResult = {
           status: 'failed',
           attempt,
           error: {
@@ -437,57 +534,51 @@ export class PipelineEngine {
           node: node.id,
           kind: node.kind,
           attempt,
-          status: result.status,
-          ...(result.error ? { error: result.error } : {}),
+          status: missing.status,
+          ...(missing.error ? { error: missing.error } : {}),
         });
-        break;
+        return missing;
       }
 
-      result = await this._invoke(state, node, executor, attempt, signal);
+      outcome = await this._invoke(baseCtx, node, executor, attempt, signal, gateToken);
+
+      // Пауза: шаг не завершён, журналить `node.finished` нечего.
+      if (isStepGateOutcome(outcome)) return outcome;
+
       await this._appendEvent(state.record.id, 'node.finished', {
         node: node.id,
         kind: node.kind,
         attempt,
-        status: result.status,
-        ...(result.durationMs !== undefined ? { durationMs: result.durationMs } : {}),
-        ...(result.error ? { error: result.error } : {}),
+        status: outcome.status,
+        ...(outcome.durationMs !== undefined ? { durationMs: outcome.durationMs } : {}),
+        ...(outcome.error ? { error: outcome.error } : {}),
       });
 
       const retryable =
-        result.status === 'failed' &&
-        result.error?.code !== 'pipeline.executor_missing' &&
-        result.error?.code !== 'pipeline.cancelled';
-      if (!retryable || attempt >= maxAttempts) break;
+        outcome.status === 'failed' &&
+        !NON_RETRYABLE_ERROR_CODES.has(outcome.error?.code ?? '');
+      if (!retryable || attempt >= maxAttempts) return outcome;
 
       const backoffSec = node.retry?.backoffSec;
       if (backoffSec) await this._sleep(backoffSec * 1000);
       if (signal.aborted) break;
     }
 
-    return result;
+    return outcome as StepOutcome;
   }
 
   /**
-   * Вызов исполнителя шага: таймаут, отмена, приведение исключения к
-   * `StepResult{status:'failed'}` (наружу исключение не выходит).
+   * Базовый контекст шага: прогон, узел, маппинг входа, режим — плюс
+   * **контекст шага** (ADR-101 §10): проект, рабочий каталог, тулы, MCP-скоуп.
+   *
+   * Собирается один раз на узел (не на попытку): исполнителям нужен один и тот
+   * же набор инструментов и окружение.
    */
-  private async _invoke(
+  private async _buildStepContext(
     state: RunState,
     node: PipelineNode,
-    executor: StepExecutor,
-    attempt: number,
-    signal: AbortSignal,
-  ): Promise<StepResult> {
-    const startedAt = nowISO();
-    const startMs = Date.now();
-    const controller = new AbortController();
-    const abort = (reason: Error): void => {
-      if (!controller.signal.aborted) controller.abort(reason);
-    };
-    const onAbort = (): void => abort(new Error('pipeline cancelled'));
-    if (signal.aborted) onAbort();
-    else signal.addEventListener('abort', onAbort, { once: true });
-
+    gateDecision?: PipelineGateDecision,
+  ): Promise<StepExecutionContext> {
     const trigger = state.record.trigger ?? { kind: 'manual' };
     const ctx: StepExecutionContext = {
       runId: state.record.id,
@@ -504,9 +595,55 @@ export class PipelineEngine {
       }),
       vars: state.vars,
       ...(state.prev ? { prev: state.prev } : {}),
+      signal: new AbortController().signal,
+      attempt: 1,
+      mode: state.spec.mode,
+      ...(gateDecision ? { gateDecision } : {}),
+    };
+
+    try {
+      const step = await buildPipelineStepContext(ctx, this._stepContextDeps);
+      return { ...ctx, step };
+    } catch {
+      // Контекст шага — вспомогательный: его отсутствие не роняет шаг.
+      return ctx;
+    }
+  }
+
+  /**
+   * Вызов исполнителя шага: таймаут, отмена, приведение исключения к
+   * `StepResult{status:'failed'}` (наружу исключение не выходит).
+   *
+   * Исход может быть гейтом (`StepGateOutcome`) — тогда шаг не завершён, а
+   * прогон встаёт на ожидание решения оператора.
+   */
+  private async _invoke(
+    baseCtx: StepExecutionContext,
+    node: PipelineNode,
+    executor: StepExecutor,
+    attempt: number,
+    signal: AbortSignal,
+    gateToken: string,
+  ): Promise<StepOutcome> {
+    const startedAt = nowISO();
+    const startMs = Date.now();
+    const controller = new AbortController();
+    const abort = (reason: Error): void => {
+      if (!controller.signal.aborted) controller.abort(reason);
+    };
+    const onAbort = (): void => abort(new Error('pipeline cancelled'));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+
+    const ctx: StepExecutionContext = {
+      ...baseCtx,
       signal: controller.signal,
       attempt,
-      mode: state.spec.mode,
+      // Активный таймаут гейта: исполнитель сообщает движку о готовом провале
+      // шага, движок продолжает прогон по условиям перехода.
+      onGateTimeout: (_gate, result) => {
+        void this._onGateTimeout(baseCtx.runId, gateToken, result);
+      },
     };
 
     const timeoutMs = node.timeoutSec ? node.timeoutSec * 1000 : 0;
@@ -519,7 +656,7 @@ export class PipelineEngine {
       // необработанным отказом.
       execution.catch(() => undefined);
 
-      let result: StepResult;
+      let result: StepOutcome;
       if (timeoutMs > 0) {
         const guard = new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => {
@@ -540,6 +677,7 @@ export class PipelineEngine {
       } else {
         result = await execution;
       }
+      if (isStepGateOutcome(result)) return result;
       return normalizeResult(result, node.id, attempt, startedAt, startMs);
     } catch (err) {
       if (timedOut) {
@@ -587,19 +725,90 @@ export class PipelineEngine {
     }
   }
 
-  /** HITL-пауза: прогон ждёт решения человека. */
-  private async _pauseForGate(state: RunState, node: PipelineNode): Promise<PipelineRunRecord> {
+  /**
+   * Пауза прогона на гейте: узел сохраняется в записи прогона, в журнал
+   * пишется `gate.awaiting` (payload — данные гейта), статус прогона —
+   * `awaiting_human`, управление возвращается вызывающему.
+   *
+   * Данные гейта живут **в журнале** (append-only) — контракт записи прогона
+   * не меняется и миграция схемы не нужна: при `resume` движок читает
+   * последнее событие `gate.awaiting`.
+   */
+  private async _pauseForGate(
+    state: RunState,
+    node: PipelineNode,
+    gate: PipelineGate,
+    gateToken: string,
+  ): Promise<PipelineRunRecord> {
     state.record.status = 'awaiting_human';
     state.record.currentNode = node.id;
     state.record.updatedAt = nowISO();
     await this._runs.saveRun(state.record);
     await this._appendEvent(state.record.id, 'gate.awaiting', {
       node: node.id,
-      kind: node.kind,
-      ...(node.timeoutSec !== undefined ? { timeoutSec: node.timeoutSec } : {}),
+      kind: gate.kind,
+      ...(gate.toolName ? { toolName: gate.toolName } : {}),
+      ...(gate.args ? { args: gate.args } : {}),
+      ...(gate.question ? { question: gate.question } : {}),
+      ...(gate.title ? { title: gate.title } : {}),
+      ...(gate.timeoutSec !== undefined ? { timeoutSec: gate.timeoutSec } : {}),
+      ...(gate.reason ? { reason: gate.reason } : {}),
     });
-    this._logger.info(LOG_GROUP, `прогон ${state.record.id}: ожидание человека на узле «${node.id}»`);
+
+    this._pendingGates.set(state.record.id, {
+      token: gateToken,
+      nodeId: node.id,
+      attempt: 1,
+      state,
+    });
+
+    // Активный таймаут гейта: таймер в процессе (`unref`). Исполнитель human-шага
+    // заводит свой таймер (шаг сам знает про таймаут) — первым сработавший
+    // продолжает прогон, второй игнорируется (проверка по токену гейта).
+    if (gate.timeoutSec !== undefined && gate.timeoutSec > 0) {
+      startGateTimeout(gate.timeoutSec, () => {
+        void this._onGateTimeout(state.record.id, gateToken, gateTimeoutResult(node, 1));
+      });
+    }
+
+    this._logger.info(
+      LOG_GROUP,
+      `прогон ${state.record.id}: ожидание человека на узле «${node.id}» (гейт «${gate.kind}»)`,
+    );
     return state.record;
+  }
+
+  /**
+   * Истечение активного таймаута гейта: шаг проваливается с
+   * `pipeline.gate_timeout`, прогон продолжается по условиям перехода (или
+   * завершается, если перехода нет).
+   *
+   * Срабатывает только для того гейта, который активен сейчас: таймер,
+   * оставшийся от закрытого гейта, игнорируется (по токену).
+   */
+  private async _onGateTimeout(
+    runId: string,
+    token: string,
+    result: StepResult,
+  ): Promise<void> {
+    const pending = this._pendingGates.get(runId);
+    if (!pending || pending.token !== token) return;
+    this._pendingGates.delete(runId);
+
+    const node = pending.state.spec.nodes.find((item) => item.id === pending.nodeId);
+    if (!node) return;
+
+    this._logger.warning(
+      LOG_GROUP,
+      `прогон ${runId}: истекло время ожидания гейта «${node.id}»`,
+    );
+    await this._continueAfterStep(pending.state, node, result, new AbortController().signal);
+  }
+
+  /** Токен активного гейта (уникален в пределах движка). */
+  private _nextGateToken(): string {
+    this._gateSeq += 1;
+    return `gate_${this._gateSeq}`;
   }
 
   /** Штатное завершение прогона: выходы пайплайна фиксируются в журнале. */
@@ -707,6 +916,17 @@ export class PipelineEngine {
     const events = await this._runs.listEvents(runId);
     return events.filter((event) => event.type === 'edge.taken').length;
   }
+
+  /**
+   * Число попыток узла (по журналу) — нумерация попыток продолжается после
+   * паузы и переживает рестарт процесса.
+   */
+  private async _countNodeAttempts(runId: string, nodeId: string): Promise<number> {
+    const events = await this._runs.listEvents(runId);
+    return events.filter(
+      (event) => event.type === 'node.started' && event.payload?.node === nodeId,
+    ).length;
+  }
 }
 
 /**
@@ -714,7 +934,10 @@ export class PipelineEngine {
  *
  * Код шага может быть произвольным (исполнитель сообщает свой код) — на
  * уровне прогона используются только коды движка: «нет исполнителя»,
- * «таймаут шага», «отмена» и общий «шаг провалился».
+ * «таймаут шага», «отмена» и общий «шаг провалился». Решения человека и
+ * политики прав сохраняют свой код: отказ по правам (`permission.denied`),
+ * отклонение гейта (`pipeline.gate_rejected`) и истечение таймаута гейта
+ * (`pipeline.gate_timeout`) — по ним понятно, **почему** прогон встал.
  */
 function runFailure(
   node: PipelineNode,
@@ -732,6 +955,13 @@ function runFailure(
         detail ||
         t('pipeline.step_timeout', { node: node.id, timeoutSec: String(node.timeoutSec ?? '') }),
     };
+  }
+  if (
+    code === 'pipeline.gate_timeout' ||
+    code === 'pipeline.gate_rejected' ||
+    code === 'permission.denied'
+  ) {
+    return { code, message: detail || t('pipeline.step_failed', { node: node.id, error: code }) };
   }
   return {
     code: 'pipeline.step_failed',

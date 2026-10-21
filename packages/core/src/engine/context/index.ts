@@ -20,6 +20,7 @@ export {
 export {
   SystemPromptComposer,
   type ComposerContext,
+  type ComposerSessionLike,
   type ComposedPrompt,
   type SystemPromptComposerDeps,
 } from './composer.js';

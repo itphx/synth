@@ -22,6 +22,7 @@ import type {
   PipelineRunRepository,
   ProjectPipelineRepository,
 } from '../../storage/ports/index.js';
+import type { PipelineStepContext, PipelineStepContextDeps } from './step-context.js';
 
 /**
  * Машиночитаемые коды ошибок движка пайплайнов (латница, ADR-101).
@@ -34,6 +35,11 @@ import type {
  * существующих: `pipeline.run_not_found` (прогон не найден), `pipeline.invalid_state`
  * (возобновление прогона не в состоянии `awaiting_human`), `pipeline.gate_timeout`
  * (истекло время ожидания человека), `pipeline.step_timeout` (истёк таймаут шага).
+ *
+ * Э4.2 добавил коды исполнителей шагов: `pipeline.tool_not_found` (инструмента
+ * нет в реестре), `pipeline.tool_failed` (тул вернул ошибку), `pipeline.script_failed`
+ * (команда завершилась с ненулевым кодом) и `permission.denied` (отказ
+ * permission-слоя — эскалация `ask` уходит в human-гейт, а `deny` валит шаг).
  */
 export const PIPELINE_ERROR_CODES = [
   'pipeline.not_found',
@@ -48,6 +54,10 @@ export const PIPELINE_ERROR_CODES = [
   'pipeline.step_timeout',
   'pipeline.run_not_found',
   'pipeline.invalid_state',
+  'pipeline.tool_not_found',
+  'pipeline.tool_failed',
+  'pipeline.script_failed',
+  'permission.denied',
 ] as const;
 
 /** Код ошибки движка пайплайнов (см. `PIPELINE_ERROR_CODES`). */
@@ -103,6 +113,86 @@ export interface StepExecutionContext {
   attempt: number;
   /** Режим пайплайна (`plan`/`act`/`yolo`) — применяет permission-слой. */
   mode: PipelineMode;
+  /**
+   * Контекст шага (ADR-101 §10): проект, рабочий каталог, режим, тулы,
+   * MCP-скоуп, инструкции и скиллы. Собирается движком один раз на шаг и
+   * кладётся в контекст — исполнители берут из него инструменты и окружение.
+   */
+  step?: PipelineStepContext;
+  /**
+   * Решение оператора по гейту (ADR-101 §6). Задаётся **только** при повторном
+   * исполнении узла после `resume`: исполнитель не запрашивает гейт заново, а
+   * применяет решение оператора (одобрение/отклонение).
+   */
+  gateDecision?: PipelineGateDecision;
+  /**
+   * Обработчик активного таймаута гейта (ADR-101 §6): исполнитель, у которого
+   * гейт имеет `timeoutSec`, по истечении времени вызывает колбэк с готовым
+   * результатом шага (`pipeline.gate_timeout`). Движок продолжает прогон по
+   * условиям перехода или завершает его.
+   */
+  onGateTimeout?: (gate: PipelineGate, result: StepResult) => void;
+}
+
+/**
+ * Вид гейта пайплайна (ADR-101 §6):
+ * - `tool_approval` — эскалация `ask`-политики permission-слоя: нужно одобрение
+ *   инструмента оператором (наблюдателя-сессии у пайплайна нет);
+ * - `human` — вопрос human-шага (HITL).
+ */
+export type PipelineGateKind = 'tool_approval' | 'human';
+
+/**
+ * Данные гейта — что оператору нужно для решения (ADR-101 §6).
+ *
+ * Гейт **не меняет** контракт `StepResult` из `@itphx/synth-shared`: это
+ * расширение уровня ядра (движок умеет остановиться на произвольном узле и
+ * продолжить прогон с него).
+ */
+export interface PipelineGate {
+  /** Вид гейта. */
+  kind: PipelineGateKind;
+  /** Узел, на котором прогон встал на паузу. */
+  nodeId: string;
+  /** Инструмент (для `tool_approval`). */
+  toolName?: string;
+  /** Аргументы инструмента (для `tool_approval`). */
+  args?: Record<string, unknown>;
+  /** Вопрос оператору (для `human`). */
+  question?: string;
+  /** Заголовок узла (для `human`). */
+  title?: string;
+  /** Таймаут ожидания оператора (секунды). */
+  timeoutSec?: number;
+  /** Причина эскалации (решение permission-слоя). */
+  reason?: string;
+}
+
+/**
+ * Исход шага-паузы: исполнитель просит решения человека.
+ *
+ * Отличается от `StepResult` наличием поля `gate` — по нему движок узнаёт, что
+ * прогон надо поставить на паузу (`awaiting_human`), а не считать шаг
+ * завершённым.
+ */
+export interface StepGateOutcome {
+  /** Маркер исхода-паузы. */
+  kind: 'gate';
+  /** Данные гейта. */
+  gate: PipelineGate;
+}
+
+/**
+ * Исход шага: либо результат (`StepResult`), либо запрос решения человека.
+ *
+ * Расширение `StepResult` держится в ядре (ADR-101 §3 — контракт `shared`
+ * зафиксирован и не меняется).
+ */
+export type StepOutcome = StepResult | StepGateOutcome;
+
+/** Проверка: исход шага — запрос паузы (а не результат). */
+export function isStepGateOutcome(outcome: StepOutcome | undefined): outcome is StepGateOutcome {
+  return !!outcome && typeof outcome === 'object' && 'gate' in outcome;
 }
 
 /**
@@ -111,13 +201,16 @@ export interface StepExecutionContext {
  * Исполнитель выбирается по виду узла (`kind`): `agent`/`script`/`tool`
  * реализуются в Э4, `human` обрабатывается движком как HITL-гейт (Э3/Э4).
  * Движок **не** знает, как именно исполняется шаг: он строит контекст, отдаёт
- * его исполнителю и получает `StepResult`.
+ * его исполнителю и получает исход — результат либо запрос паузы (гейт).
  */
 export interface StepExecutor {
   /** Вид узла, который исполняет исполнитель. */
   kind: PipelineNodeKind;
-  /** Исполнение шага; бросок исключения — ошибка шага (`pipeline.step_failed`). */
-  execute(ctx: StepExecutionContext): Promise<StepResult>;
+  /**
+   * Исполнение шага; бросок исключения — ошибка шага (`pipeline.step_failed`).
+   * Исход-пауза (`StepGateOutcome`) — прогон встаёт на ожидание решения.
+   */
+  execute(ctx: StepExecutionContext): Promise<StepOutcome>;
 }
 
 /**
@@ -176,8 +269,15 @@ export interface PipelineEngineLogger {
   error(group: string, message: string): void;
 }
 
-/** Зависимости движка пайплайнов (ADR-101). */
-export interface PipelineEngineDeps {
+/**
+ * Зависимости движка пайплайнов (ADR-101).
+ *
+ * Порты и исполнители — обязательны; остальное — опционально (движок работает
+ * и без проектного окружения). Зависимости контекста шага (проекты, реестр
+ * инструментов, MCP, резолвер инструкций, реестр агентов, каталог скиллов) —
+ * те же объекты, что собираются в `server/app/deps.ts`.
+ */
+export interface PipelineEngineDeps extends PipelineStepContextDeps {
   /** Порт спецификаций пайплайнов (черновик + опубликованные версии). */
   pipelines: ProjectPipelineRepository;
   /** Порт прогонов и журнала выполнения. */

@@ -51,6 +51,8 @@ export { DebugCollector } from './debug.js';
 export { ContextConfig, ContextBuilder, isInterviewCompleted } from './engine/context/index.js';
 export { ContextOptimizer } from './engine/context/index.js';
 export type { BuildSystemPromptParams, ContextBuilderOptions, SummarizationResult, SlidingWindowResult } from './engine/context/index.js';
+// ADR-101 §10: суженный «session-like» контракт Composer'а (шаг пайплайна — не сессия).
+export type { ComposerSessionLike } from './engine/context/index.js';
 
 export { ChatOrchestrator } from './engine/orchestrator.js';
 export type { OrchestratorOptions, ProcessMessageResult, ModelPricing } from './engine/orchestrator.js';
@@ -77,7 +79,7 @@ export type { RuntimeDeps, RuntimeDependency } from './engine/tools/runtime-deps
 export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, normalizeAgentModes, isModeApplicable, DEFAULT_AGENT_ID, registerStoredAgents } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
 export type { McpToolDef, McpToolResult } from './engine/mcp/index.js';
-export { resolveMcpScope } from './engine/mcp/index.js';
+export { resolveMcpScope, resolveMcpProjectScope } from './engine/mcp/index.js';
 export type { McpScopeServer, McpScopeSession, McpScopeDecision } from './engine/mcp/index.js';
 export {
   evaluateMcpNetworkAccess,
@@ -952,7 +954,23 @@ export {
   PipelineEngineError,
   NoopPipelineExitHandler,
   PIPELINE_ERROR_CODES,
+  buildPipelineStepContext,
+  buildShellCommand,
+  buildToolContext,
+  checkPipelineToolPermission,
+  createHumanStepExecutor,
+  createScriptStepExecutor,
+  createToolStepExecutor,
   evaluateCondition,
+  executeScriptStep,
+  executeToolStep,
+  findTool,
+  gateDecisionResult,
+  gateRejectedResult,
+  gateTimeoutResult,
+  humanGate,
+  humanStepExecutor,
+  isStepGateOutcome,
   nextNodeId,
   MAX_PIPELINE_TRANSITIONS,
   resolveSpecVars,
@@ -962,20 +980,41 @@ export {
   sanitizeRecord,
   sanitizeTrigger,
   sanitizeValue,
+  SHELL_TOOL_NAME,
+  startGateTimeout,
+  stepWorkingDir,
 } from './engine/pipelines/index.js';
 export type {
   ConditionContext,
+  PipelineAgentRegistryLike,
   PipelineEngineDeps,
   PipelineEngineLogger,
   PipelineErrorCode,
   PipelineExitContext,
   PipelineExitHandler,
+  PipelineGate,
   PipelineGateDecision,
+  PipelineGateKind,
+  PipelineInstructionsResolverLike,
+  PipelineMcpManagerLike,
+  PipelinePermissionDecision,
+  PipelinePermissionDeps,
   PipelinePathContext,
+  PipelineProjectStoreLike,
   PipelineRunOptions,
+  PipelineSkillsCatalogLike,
+  PipelineStepContext,
+  PipelineStepContextDeps,
+  PipelineToolLookup,
+  PipelineToolPermissionCheck,
+  PipelineToolRegistryLike,
   PlannerContext,
+  ScriptStepExecutorOptions,
   StepExecutionContext,
   StepExecutor,
+  StepGateOutcome,
+  StepOutcome,
+  ToolStepExecutorOptions,
 } from './engine/pipelines/index.js';
 export { createSchedulerRoutes } from './server/routes/schedules.js';
 export type {

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { Project, Session, SessionSettings, TodoItem } from '@itphx/synth-shared';
 import { ContextConfig } from './config.js';
 import { ContextBuilder } from './builder.js';
-import { SystemPromptComposer, type ComposerContext, type ComposerMcpServer } from './composer.js';
+import { SystemPromptComposer, type ComposerContext, type ComposerMcpServer, type ComposerSessionLike } from './composer.js';
 import { sortPromptBlocks } from './prompt-blocks.js';
 import { DebugCollector } from '../../debug.js';
 import { stubContextFiles } from '../../test-helpers/storage-stubs.js';
@@ -117,7 +117,10 @@ describe('SystemPromptComposer', () => {
     });
   }
 
-  function makeCtx(session: Session, extra: Partial<ComposerContext> = {}): ComposerContext {
+  function makeCtx(
+    session: ComposerSessionLike,
+    extra: Partial<ComposerContext> = {},
+  ): ComposerContext {
     return {
       session,
       workingDir: '/ws',
@@ -989,6 +992,54 @@ describe('SystemPromptComposer', () => {
       expect(captured).toHaveLength(1);
       expect(captured[0]!.interviewEligible).toBe(true);
       expect(captured[0]!.userId).toBe('u1');
+    });
+  });
+
+  describe('session-like контракт (ADR-101 §10)', () => {
+    it('обычная Session assignable к ComposerSessionLike', () => {
+      const session = makeSession({ projectId: 'p1' });
+
+      // Совместимость гарантирована компилятором (`Pick` от типа `Session`),
+      // а не соглашением: обычная сессия подставляется без преобразований.
+      const like: ComposerSessionLike = session;
+
+      expect(like.projectId).toBe('p1');
+      expect(like.settings.agentRole).toBe('assistant');
+      expect(like.settings.language).toBe('ru');
+      expect(like.promptStates).toBeUndefined();
+    });
+
+    it('сборка промпта обычной сессии не изменилась: тот же system и тот же снимок блоков', async () => {
+      const composer = makeComposer();
+      const session = makeSession({ projectId: 'p1', todos: makeTodos() });
+      const ctx = makeCtx(session);
+
+      const composed = await composer.compose(ctx);
+
+      // Снимок состава блоков (ключ/тир/порядок) — контракт ADR-070 §2.1.
+      expect(composed.blocks.map((b) => ({ key: b.key, tier: b.tier, order: b.order }))).toEqual([
+        { key: 'role', tier: 'stable', order: 10 },
+        { key: 'additional', tier: 'stable', order: 20 },
+        { key: 'profile', tier: 'context', order: 10 },
+        { key: 'project.info', tier: 'context', order: 20 },
+        { key: 'sticky', tier: 'volatile', order: 10 },
+        { key: 'participants', tier: 'volatile', order: 20 },
+        { key: 'summary', tier: 'volatile', order: 30 },
+        { key: 'interview', tier: 'volatile', order: 90 },
+        { key: 'gateway', tier: 'stable', order: 30 },
+        { key: 'plan.guide', tier: 'stable', order: 40 },
+        { key: 'mode.policy', tier: 'stable', order: 45 },
+        { key: 'session.info', tier: 'context', order: 30 },
+      ]);
+
+      // Побайтовое сравнение: обычная сессия и её «session-like» срез дают
+      // один и тот же system — сужение контракта не меняет сборку.
+      const like: ComposerSessionLike = session;
+      const likeComposed = await composer.compose(makeCtx(like));
+
+      expect(likeComposed.system).toBe(composed.system);
+      expect(likeComposed.stablePrefix).toBe(composed.stablePrefix);
+      expect(likeComposed.blocks.map((b) => b.content)).toEqual(composed.blocks.map((b) => b.content));
     });
   });
 });
