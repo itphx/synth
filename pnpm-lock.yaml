@@ -128,9 +128,31 @@ importers:
         specifier: ^5.8.0
         version: 5.9.3
     optionalDependencies:
+      '@itphx/synth-executor':
+        specifier: workspace:*
+        version: link:../executor
       '@itphx/synth-storage-postgres':
         specifier: workspace:*
         version: link:../storage-postgres
+
+  packages/executor:
+    dependencies:
+      '@itphx/synth-shared':
+        specifier: workspace:*
+        version: link:../shared
+      hono:
+        specifier: ^4.9.0
+        version: 4.13.13
+    devDependencies:
+      '@itphx/synth-core':
+        specifier: workspace:*
+        version: link:../core
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.19
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
 
   packages/sdk:
     dependencies:

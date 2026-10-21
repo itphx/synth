@@ -7,8 +7,9 @@ allowBuilds:
 onlyBuiltDependencies:
   - esbuild
 
-# Цикл core ↔ @itphx/synth-storage-postgres намеренный (core: optionalDependencies
-# на драйвер; драйвер: peer/dev-deps на core). С pnpm ≥12 рекурсивные задачи
+# Циклы core ↔ @itphx/synth-storage-postgres и core ↔ @itphx/synth-executor
+# намеренные (core: optionalDependencies на драйвер и динамический import()
+# исполнителя; оба пакета: peer/dev-deps на core). С pnpm ≥12 рекурсивные задачи
 # (`pnpm typecheck`/`lint`/`test`) иначе падают с ERR_PNPM_TASK_CYCLE — разрешаем
 # произвольный порядок; порядок сборки задают явные `--filter` в корневом `build`.
 ignoreWorkspaceCycles: true
