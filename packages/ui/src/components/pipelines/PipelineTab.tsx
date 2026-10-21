@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
@@ -124,9 +124,17 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
   )
   const canEdit = canEditProjectContent(project, user)
 
-  const [detail, setDetail] = useState<ProjectPipelineDetail | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  /**
+   * Ключ сущности страницы (`projectId:pipelineId`). Загруженные данные и
+   * ошибка хранятся вместе с ключом: при переключении вкладок содержимое
+   * предыдущего пайплайна показывать нельзя (иначе виден «чужой» пайплайн).
+   */
+  const pipelineKey = `${projectId}:${pipelineId}`
+
+  /** Загруженный пайплайн вместе с ключом сущности, к которой он относится. */
+  const [loaded, setLoaded] = useState<{ key: string; detail: ProjectPipelineDetail } | null>(null)
+  /** Ошибка загрузки — с ключом сущности (ошибка прошлой вкладки не показывается). */
+  const [loadError, setLoadError] = useState<{ key: string; message: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [viewMode, setViewMode] = useState<DraftViewMode>('visual')
   const [draftSpec, setDraftSpec] = useState<PipelineSpec | null>(null)
@@ -134,24 +142,39 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
   const [jsonError, setJsonError] = useState<string | null>(null)
   const [validation, setValidation] = useState<DraftValidation | null>(null)
   const [statusFilter, setStatusFilter] = useState<PipelineRunStatus | ''>('')
+  /** Порядковый номер последнего запроса — защита от «гонки» ответов при быстром переключении вкладок. */
+  const requestSeq = useRef(0)
+
+  /** Данные показываем только для текущей сущности — stale-состояния не видно. */
+  const detail = loaded && loaded.key === pipelineKey ? loaded.detail : null
+  /** Сообщение об ошибке — только для текущей сущности. */
+  const errorMessage = loadError && loadError.key === pipelineKey ? loadError.message : null
 
   const reload = useCallback(async () => {
     if (!projectId || !pipelineId) return
-    setLoading(true)
+    const requestId = ++requestSeq.current
+    setLoadError(null)
     try {
       const result = await synthApi.getProjectPipeline(projectId, pipelineId)
-      setDetail(result)
+      // Ответ устарел (вкладку переключили) — не применяем его.
+      if (requestId !== requestSeq.current) return
+      setLoaded({ key: pipelineKey, detail: result })
       setDraftSpec(result.pipeline.draft ?? null)
       setDraftJson(result.pipeline.draft ? JSON.stringify(result.pipeline.draft, null, 2) : '')
-      setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setLoading(false)
+      if (requestId !== requestSeq.current) return
+      setLoadError({ key: pipelineKey, message: err instanceof Error ? err.message : String(err) })
     }
-  }, [projectId, pipelineId])
+  }, [projectId, pipelineId, pipelineKey])
 
   useEffect(() => { void reload() }, [reload])
+
+  // Смена сущности (переключение вкладки) — сбрасываем состояние черновика:
+  // результат проверки и ошибка JSON относятся к предыдущему пайплайну.
+  useEffect(() => {
+    setValidation(null)
+    setJsonError(null)
+  }, [pipelineKey])
 
   useEffect(() => {
     if (!projectId || !pipelineId) return
@@ -306,20 +329,22 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
     })
   }
 
-  if (loading && !detail) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-        <Icon name="loader-2" className="mr-2 h-4 w-4 animate-spin" />
-        {t('common.loading')}
-      </div>
-    )
-  }
-
   if (!detail) {
+    // Данных для текущей сущности нет: пока идёт загрузка — индикатор,
+    // при ошибке (404/403/сеть) — сообщение. Содержимое прошлой вкладки
+    // («чужой» пайплайн) не показываем.
+    if (!errorMessage && projectId && pipelineId) {
+      return (
+        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+          <Icon name="loader-2" className="mr-2 h-4 w-4 animate-spin" />
+          {t('common.loading')}
+        </div>
+      )
+    }
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
         <Icon name="alert-triangle" className="h-6 w-6" />
-        <p>{error ?? t('pipelines.notFound')}</p>
+        <p>{errorMessage ?? t('pipelines.notFound')}</p>
         <button onClick={() => void reload()} className="rounded bg-interactive px-2 py-1 text-xs text-foreground hover:bg-interactive-hover">
           {t('common.refresh')}
         </button>

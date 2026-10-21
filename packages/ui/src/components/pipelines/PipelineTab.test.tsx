@@ -174,6 +174,31 @@ const DETAIL = {
   ],
 }
 
+/** Вторая вкладка пайплайна — другой пайплайн того же проекта (переключение вкладок). */
+const TAB2: CenterTab = {
+  id: 'pipeline-p1-pl2',
+  type: 'pipeline',
+  title: 'Deploy',
+  data: { projectId: 'p1', pipelineId: 'pl2' },
+}
+
+/** Деталь второго пайплайна (ничего общего с первым — чтобы «залипание» было видно). */
+const DETAIL2 = {
+  pipeline: {
+    ...DETAIL.pipeline,
+    id: 'pl2',
+    name: 'Deploy',
+    description: 'Deploy pipeline',
+    draft: { ...SPEC, id: 'pl2', name: 'Deploy' },
+  },
+  published: {
+    ...DETAIL.published,
+    pipelineId: 'pl2',
+    spec: { ...SPEC, id: 'pl2', name: 'Deploy', version: 1, status: 'published' as const },
+  },
+  versions: [],
+}
+
 const RUN_DONE = {
   id: 'run1',
   pipelineId: 'pl1',
@@ -182,6 +207,7 @@ const RUN_DONE = {
   currentNode: 'step-1',
   startedAt: '2026-10-20T12:00:00.000Z',
 }
+
 
 const RUN_WAITING = {
   id: 'run2',
@@ -193,21 +219,36 @@ const RUN_WAITING = {
 }
 
 async function renderTab(): Promise<HTMLElement> {
+  const { container } = await mountTab(TAB)
+  return container
+}
+
+/**
+ * Монтирует вкладку и даёт возможность перерендерить её с другим `tab` —
+ * так проверяется переключение вкладок (смена `projectId`/`pipelineId`).
+ */
+async function mountTab(initial: CenterTab): Promise<{
+  container: HTMLElement
+  setTab: (tab: CenterTab) => Promise<void>
+}> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push({ root, container })
-  await act(async () => {
-    root.render(
-      <I18nProvider>
-        <PipelineTab tab={TAB} />
-      </I18nProvider>,
-    )
-  })
-  await act(async () => {})
-  await act(async () => {})
-  return container
+  const setTab = async (tab: CenterTab) => {
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <PipelineTab tab={tab} />
+        </I18nProvider>,
+      )
+    })
+    await act(async () => {})
+    await act(async () => {})
+  }
+  await setTab(initial)
+  return { container, setTab }
 }
 
 const action = (container: HTMLElement, name: string): HTMLElement | null =>
@@ -243,6 +284,7 @@ beforeEach(() => {
     loadingProjects: new Set<string>(),
     runsByPipeline: {},
     runDetail: {},
+    runError: {},
     runSignal: {},
     error: null,
   })
@@ -282,6 +324,97 @@ describe('PipelineTab — права на действия (ADR-101, Э7)', () =
     // Переключатель режима правки (канвас ↔ JSON) тоже скрыт.
     expect(action(container, 'view-json')).toBeNull()
     expect(action(container, 'view-visual')).toBeNull()
+  })
+})
+
+describe('PipelineTab — переключение вкладок (нет stale-состояния)', () => {
+  it('до ответа по новому пайплайну содержимое прошлого не показывается', async () => {
+    const { container, setTab } = await mountTab(TAB)
+    expect(container.textContent ?? '').toContain('Release')
+
+    // Ответ по второму пайплайну отложен — «залипания» быть не должно.
+    let resolveSecond: ((value: unknown) => void) | null = null
+    mocks.getProjectPipeline.mockImplementation((_projectId: string, pipelineId: string) => {
+      if (pipelineId === 'pl2') {
+        return new Promise((resolve) => {
+          resolveSecond = resolve
+        })
+      }
+      return Promise.resolve(DETAIL)
+    })
+
+    await setTab(TAB2)
+
+    const loading = container.textContent ?? ''
+    expect(loading).not.toContain('Release')
+    expect(loading).toContain('Loading')
+
+    await act(async () => {
+      resolveSecond?.(DETAIL2)
+    })
+    await act(async () => {})
+
+    const loaded = container.textContent ?? ''
+    expect(loaded).toContain('Deploy')
+    expect(loaded).not.toContain('Release')
+  })
+
+  it('при 404 по новому пайплайну показывается ошибка, а не содержимое прошлого', async () => {
+    const { container, setTab } = await mountTab(TAB)
+    expect(container.textContent ?? '').toContain('Release')
+
+    mocks.getProjectPipeline.mockRejectedValue(new Error('HTTP 404: pipeline not found'))
+    await setTab(TAB2)
+
+    const text = container.textContent ?? ''
+    expect(text).not.toContain('Release')
+    expect(text).toContain('HTTP 404')
+  })
+
+  it('после успешной перезагрузки показывается содержимое текущего пайплайна', async () => {
+    const { container, setTab } = await mountTab(TAB)
+
+    mocks.getProjectPipeline.mockImplementation((_projectId: string, pipelineId: string) =>
+      Promise.resolve(pipelineId === 'pl2' ? DETAIL2 : DETAIL),
+    )
+    await setTab(TAB2)
+
+    const text = container.textContent ?? ''
+    expect(text).toContain('Deploy')
+    expect(text).not.toContain('Release')
+  })
+
+  it('после ошибки кнопка «Обновить» перечитывает пайплайн', async () => {
+    const { container, setTab } = await mountTab(TAB)
+
+    mocks.getProjectPipeline.mockRejectedValueOnce(new Error('HTTP 404: pipeline not found'))
+    await setTab(TAB2)
+    expect(container.textContent ?? '').toContain('HTTP 404')
+
+    mocks.getProjectPipeline.mockResolvedValue(DETAIL2)
+    const refresh = container.querySelector('button') as HTMLButtonElement
+    await act(async () => {
+      refresh.click()
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    const text = container.textContent ?? ''
+    expect(text).toContain('Deploy')
+    expect(text).not.toContain('HTTP 404')
+  })
+
+  it('без pipelineId показывается «не найдено», а не вечная загрузка', async () => {
+    const { container } = await mountTab({
+      id: 'pipeline-p1-empty',
+      type: 'pipeline',
+      title: '—',
+      data: { projectId: 'p1' },
+    })
+
+    const text = container.textContent ?? ''
+    expect(text).not.toContain('Loading')
+    expect(text).toContain('Pipeline not found')
   })
 })
 

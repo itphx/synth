@@ -3,7 +3,9 @@
 // Хранит:
 //   - пайплайны проектов (`pipelinesByProject`) — из `GET /projects/:id/pipelines`;
 //   - прогоны пайплайна (`runsByPipeline`) — из `GET .../pipelines/:pid/runs`;
-//   - детали открытого прогона с журналом (`runDetail`) — `GET /pipeline-runs/:runId`.
+//   - детали открытого прогона с журналом (`runDetail`) — `GET /pipeline-runs/:runId`;
+//   - ошибка загрузки прогона (`runError`) — по id прогона, чтобы страница
+//     прогона показала сообщение, а не «залипла» на индикаторе загрузки.
 //
 // Live-обновление: движок публикует `pipeline.run.*` в **инстансный** канал
 // шины (ADR-101 §2.12.3, `docs/PIPELINES.md`); UI читает их через общий
@@ -63,6 +65,8 @@ interface PipelinesState {
   runsByPipeline: Record<string, PipelineRunRecord[]>
   /** Детали прогонов с журналом. */
   runDetail: Record<string, PipelineRunDetail>
+  /** Ошибка загрузки прогона — по id прогона (страница прогона показывает её вместо вечной загрузки). */
+  runError: Record<string, string>
   /** Счётчик сигналов «перечитать прогон» (live-события). */
   runSignal: Record<string, number>
 
@@ -89,6 +93,7 @@ export const usePipelinesStore = create<PipelinesState>()((set, get) => ({
 
   runsByPipeline: {},
   runDetail: {},
+  runError: {},
   runSignal: {},
 
   loadProjectPipelines: async (projectId, opts) => {
@@ -143,9 +148,19 @@ export const usePipelinesStore = create<PipelinesState>()((set, get) => ({
   loadRun: async (runId) => {
     try {
       const detail = await synthApi.getPipelineRun(runId)
-      set((s) => ({ runDetail: { ...s.runDetail, [runId]: detail } }))
+      set((s) => {
+        // Ошибка прогона снимается — деталь снова актуальна.
+        const runError = { ...s.runError }
+        delete runError[runId]
+        return { runDetail: { ...s.runDetail, [runId]: detail }, runError }
+      })
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : String(err) })
+      // Ошибка хранится по id прогона: страница прогона показывает её вместо
+      // бесконечной загрузки (прогон удалён/нет доступа — 404/403).
+      set((s) => ({
+        error: err instanceof Error ? err.message : String(err),
+        runError: { ...s.runError, [runId]: err instanceof Error ? err.message : String(err) },
+      }))
     }
   },
 

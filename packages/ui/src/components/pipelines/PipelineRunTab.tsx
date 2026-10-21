@@ -30,6 +30,7 @@ export function PipelineRunTab({ tab }: { tab: CenterTab }) {
   const projects = useProjectsStore((s) => s.projects)
   const user = useAuthStore((s) => s.user)
   const runDetail = usePipelinesStore((s) => s.runDetail)
+  const runError = usePipelinesStore((s) => s.runError)
   const runSignal = usePipelinesStore((s) => s.runSignal)
   const loadRun = usePipelinesStore((s) => s.loadRun)
 
@@ -39,9 +40,13 @@ export function PipelineRunTab({ tab }: { tab: CenterTab }) {
   )
   const canEdit = canEditProjectContent(project, user)
 
+  // Детали прогонов лежат в сторе по id прогона — содержимое «чужого» прогона
+  // не подставляется. Ошибка загрузки — тоже по id (см. `runError`).
   const detail = runDetail[runId]
   const run: PipelineRunRecord | undefined = detail?.run
   const events: PipelineRunEvent[] = detail?.events ?? []
+  /** Сообщение об ошибке загрузки текущего прогона (404/403/сеть). */
+  const loadError = runError[runId]
 
   const [busy, setBusy] = useState(false)
   const [comment, setComment] = useState('')
@@ -52,6 +57,12 @@ export function PipelineRunTab({ tab }: { tab: CenterTab }) {
   }, [runId, loadRun])
 
   useEffect(() => { void reload() }, [reload])
+
+  // Смена прогона (переключение вкладок) — сбрасываем локальное состояние:
+  // комментарий HITL относится к предыдущему прогону.
+  useEffect(() => {
+    setComment('')
+  }, [runId])
 
   // Live-событие прогона → перечитываем журнал (с сервера).
   const signal = runSignal[runId] ?? 0
@@ -97,6 +108,19 @@ export function PipelineRunTab({ tab }: { tab: CenterTab }) {
   }
 
   if (!run) {
+    // Прогон не загрузился: при ошибке (404/403/сеть) — понятное сообщение
+    // вместо бесконечного индикатора загрузки.
+    if (loadError) {
+      return (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+          <Icon name="alert-triangle" className="h-6 w-6" />
+          <p>{loadError}</p>
+          <button onClick={() => void reload()} className="rounded bg-interactive px-2 py-1 text-xs text-foreground hover:bg-interactive-hover">
+            {t('common.refresh')}
+          </button>
+        </div>
+      )
+    }
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
         <Icon name="loader-2" className="mr-2 h-4 w-4 animate-spin" />

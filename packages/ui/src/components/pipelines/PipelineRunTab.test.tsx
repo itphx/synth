@@ -57,6 +57,14 @@ const TAB: CenterTab = {
   data: { projectId: 'p1', pipelineId: 'pl1', runId: 'run1' },
 }
 
+/** Вторая вкладка прогона — другой прогон (переключение вкладок). */
+const TAB2: CenterTab = {
+  id: 'pipeline-run-run2',
+  type: 'pipeline-run',
+  title: 'Run 2',
+  data: { projectId: 'p1', pipelineId: 'pl1', runId: 'run2' },
+}
+
 const PROJECT = {
   id: 'p1',
   name: 'Proj1',
@@ -87,10 +95,10 @@ const EVENTS = [
 ]
 
 /** Деталь прогона с заданным статусом. */
-function detail(status: string) {
+function detail(status: string, runId = 'run1') {
   return {
     run: {
-      id: 'run1',
+      id: runId,
       pipelineId: 'pl1',
       version: 2,
       projectId: 'p1',
@@ -99,26 +107,41 @@ function detail(status: string) {
       trigger: { kind: 'manual' },
       startedAt: '2026-10-20T12:00:00.000Z',
     },
-    events: EVENTS,
+    events: EVENTS.map((event) => ({ ...event, runId })),
   }
 }
 
 async function renderTab(): Promise<HTMLElement> {
+  const { container } = await mountTab(TAB)
+  return container
+}
+
+/**
+ * Монтирует вкладку и даёт возможность перерендерить её с другим `tab` —
+ * так проверяется переключение вкладок (смена `runId`).
+ */
+async function mountTab(initial: CenterTab): Promise<{
+  container: HTMLElement
+  setTab: (tab: CenterTab) => Promise<void>
+}> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push({ root, container })
-  await act(async () => {
-    root.render(
-      <I18nProvider>
-        <PipelineRunTab tab={TAB} />
-      </I18nProvider>,
-    )
-  })
-  await act(async () => {})
-  await act(async () => {})
-  return container
+  const setTab = async (tab: CenterTab) => {
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <PipelineRunTab tab={tab} />
+        </I18nProvider>,
+      )
+    })
+    await act(async () => {})
+    await act(async () => {})
+  }
+  await setTab(initial)
+  return { container, setTab }
 }
 
 const action = (container: HTMLElement, name: string): HTMLElement | null =>
@@ -140,6 +163,7 @@ beforeEach(() => {
     loadingProjects: new Set<string>(),
     runsByPipeline: {},
     runDetail: {},
+    runError: {},
     runSignal: {},
     error: null,
   })
@@ -265,6 +289,63 @@ describe('PipelineRunTab — отмена прогона', () => {
     const container = await renderTab()
 
     expect(action(container, 'cancel-run')).toBeNull()
+  })
+})
+
+describe('PipelineRunTab — переключение вкладок и ошибка загрузки', () => {
+  it('при смене runId содержимое прошлого прогона не показывается', async () => {
+    const { container, setTab } = await mountTab(TAB)
+    expect(container.textContent ?? '').toContain('run1')
+
+    // Ответ по второму прогону отложен — «залипания» быть не должно.
+    mocks.getPipelineRun.mockImplementation((runId: string) =>
+      runId === 'run2' ? new Promise(() => {}) : Promise.resolve(detail('awaiting_human')),
+    )
+
+    await setTab(TAB2)
+
+    const text = container.textContent ?? ''
+    expect(text).not.toContain('run1')
+    expect(text).toContain('Loading')
+  })
+
+  it('после ответа показывается содержимое текущего прогона', async () => {
+    mocks.getPipelineRun.mockImplementation((runId: string) =>
+      Promise.resolve(detail('awaiting_human', runId)),
+    )
+    const { container, setTab } = await mountTab(TAB)
+    await setTab(TAB2)
+
+    const text = container.textContent ?? ''
+    expect(text).toContain('run2')
+    expect(text).not.toContain('run1')
+  })
+
+  it('при 404 по прогону показывается сообщение, а не вечная загрузка', async () => {
+    mocks.getPipelineRun.mockRejectedValue(new Error('HTTP 404: run not found'))
+    const container = await renderTab()
+
+    const text = container.textContent ?? ''
+    expect(text).not.toContain('Loading')
+    expect(text).toContain('HTTP 404')
+  })
+
+  it('после ошибки кнопка «Обновить» перечитывает прогон', async () => {
+    mocks.getPipelineRun.mockRejectedValueOnce(new Error('HTTP 404: run not found'))
+    const container = await renderTab()
+    expect(container.textContent ?? '').toContain('HTTP 404')
+
+    mocks.getPipelineRun.mockResolvedValue(detail('running'))
+    const refresh = container.querySelector('button') as HTMLButtonElement
+    await act(async () => {
+      refresh.click()
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    const text = container.textContent ?? ''
+    expect(text).toContain('run1')
+    expect(text).not.toContain('HTTP 404')
   })
 })
 

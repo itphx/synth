@@ -145,6 +145,7 @@ beforeEach(() => {
     loadingProjects: new Set<string>(),
     runsByPipeline: {},
     runDetail: {},
+    runError: {},
     runSignal: {},
     error: null,
   })
