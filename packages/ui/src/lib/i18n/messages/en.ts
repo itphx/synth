@@ -2293,6 +2293,12 @@ export const dict = {
   'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
   'git.repo_exists': 'Repository already exists at "{path}"',
 
+  // --- Execution (PROP-077) ---
+  'execution.remote_url_required':
+    'Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
+  'execution.remote_unavailable':
+    'Remote execution mode (execution.mode=remote) is unavailable: {reason}',
+
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH keys',
   'sshKeys.description': 'Per-agent SSH keys for git operations. Private keys and passphrases are encrypted at rest and are never shown after saving.',
