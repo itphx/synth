@@ -50,7 +50,6 @@
 | ADR-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, keys, journal)/UI, источник ADR-051 (cron), API-ключи привязок (label/лимит/revoke + per-key rate limit), retention журнала, runtime-настройки «События», auto-bind (`events.autoBind`); ADR-052 ✅ (этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK, перевод шлюза); первый add-on — Telegram-шлюз — реализован; вне объёма — Plugin SDK (PROP-090, отложен 2026-10-19), пайплайны (PROP-059), HA/второй канал (ADR-087) | ✅ Реализовано | [adr-089-external-events-automation.md](./adr-089-external-events-automation.md) |
 | ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ✅ Реализовано | [adr-095-god-object-decomposition.md](./adr-095-god-object-decomposition.md) |
 | ADR-096 | Единый слой хранения — доменные порты с взаимозаменяемыми backend'ами | ✅ Реализовано | [adr-096-storage-layer.md](./adr-096-storage-layer.md) |
-| ADR-100 | Пакет расширения и пайплайн в ядре: единый контракт доставки (`synth.pack`) и учёт прогонов | ✅ Реализовано | [adr-100-extension-packs-pipelines.md](./adr-100-extension-packs-pipelines.md) |
 
 ## Частично
 
@@ -68,6 +67,8 @@
 | ADR-097 | Класс расширения «хранилище» (storage) — контракт портов, драйверы из коробки | ⚠️ Частично | [adr-097-storage-provider-class.md](./adr-097-storage-provider-class.md) |
 | ADR-098 | Деградированный режим и восстановление хранилища | ⚠️ Частично | [adr-098-storage-degraded-recovery.md](./adr-098-storage-degraded-recovery.md) |
 | ADR-099 | Единый egress-слой: доверие TLS/CA (mTLS, bootstrap `security-tls.json`, per-host профили, UI), адресная политика (`egress.tools`/`egress.webhooks`, `mcp.networkPolicy`) и HTTP/HTTPS/SOCKS5-прокси (`proxy.*`, Basic, `no_proxy`, proxied-режим, runtime-настройка из админ-UI, аудит и журнал); доменная аутентификация прокси (NTLM/Negotiate/Kerberos) — вне scope, делегируется egress-шлюзу | ⚠️ Частично | [adr-099-egress-tls-trust.md](./adr-099-egress-tls-trust.md) |
+| ADR-100 | Пакет расширения и пайплайн в ядре: единый контракт доставки (`synth.pack`) и учёт прогонов | ⚠️ Частично | [adr-100-extension-packs-pipelines.md](./adr-100-extension-packs-pipelines.md) |
+| ADR-101 | Pipeline Engine: пайплайн как второй движок рядом с оркестратором | ⚠️ Частично | [adr-101-pipeline-engine.md](./adr-101-pipeline-engine.md) |
 
 ## Предложения
 
@@ -133,4 +134,4 @@
 
 ---
 
-Всего документов: 93 (Решения: 39, Частично: 12, Предложения: 30, Vision: 9, Icebox: 1, Legacy: 1).
+Всего документов: 94 (Решения: 38, Частично: 14, Предложения: 30, Vision: 9, Icebox: 1, Legacy: 1).

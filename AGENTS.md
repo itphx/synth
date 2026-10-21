@@ -534,8 +534,9 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | PROP-098 | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | [prop-098](./docs/arch_decisions/prop-098-mid-turn-steering.md) |
 | ADR-099 | Единый egress-слой — доверие TLS/CA (и mTLS) для исходящих соединений | ⚠️ Частично | [adr-099](./docs/arch_decisions/adr-099-egress-tls-trust.md) |
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099](./docs/arch_decisions/prop-099-memory-footprint-optimization.md) |
-| ADR-100 | Пакет расширения и пайплайн в ядре: единый контракт доставки (`synth.pack`) и учёт прогонов | ✅ Реализовано | [adr-100](./docs/arch_decisions/adr-100-extension-packs-pipelines.md) |
+| ADR-100 | Пакет расширения и пайплайн в ядре: единый контракт доставки (`synth.pack`) и учёт прогонов | ⚠️ Частично | [adr-100](./docs/arch_decisions/adr-100-extension-packs-pipelines.md) |
 | PROP-100 | SSRF и TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению | 🧩 Предложение | [prop-100](./docs/arch_decisions/prop-100-ssrf-dns-rebinding.md) |
+| ADR-101 | Pipeline Engine: пайплайн как второй движок рядом с оркестратором | ⚠️ Частично | [adr-101](./docs/arch_decisions/adr-101-pipeline-engine.md) |
 | PROP-101 | Локальные инсталляторы и платформенная дистрибуция (Windows / macOS / Linux) | 🧩 Предложение | [prop-101](./docs/arch_decisions/prop-101-local-installers-platforms.md) |
 | PROP-102 | Аналитика и отчётность инстанса | 🧩 Предложение | [prop-102](./docs/arch_decisions/prop-102-analytics-reports.md) |
 <!-- ad-index:end -->
@@ -588,7 +589,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | блокировка настроек (locked settings) | [PROP-083](./docs/arch_decisions/prop-083-instance-customization-branding.md), [PROP-073](./docs/arch_decisions/prop-073-client-integrity-hybrid.md), [PROP-080](./docs/arch_decisions/prop-080-managed-hybrid-modes.md), [PROP-081](./docs/arch_decisions/prop-081-hybrid-policy-leak-protection.md) |
 | внешние события / хуки / роутинг / сессии | [ADR-089](./docs/arch_decisions/adr-089-external-events-automation.md), [ADR-030](./docs/arch_decisions/adr-030-hooks-agent-events.md), [ADR-033](./docs/arch_decisions/adr-033-session-branching-merge.md) |
 | мессенджеры / шлюзы | [ADR-087](./docs/arch_decisions/adr-087-gateways.md) (класс Gateway: контракт, Telegram-шлюз, топология «один бот — один инстанс», HA через leader election, мультитенантность, singleton-гарантия) |
-| шедулер / пайплайны | [ADR-051](./docs/arch_decisions/adr-051-scheduler-pipelines.md), [ADR-100](./docs/arch_decisions/adr-100-extension-packs-pipelines.md), [PROP-059](./docs/arch_decisions/prop-059-pipeline-automation.md), [PROP-057](./docs/arch_decisions/prop-057-loop-engine.md) |
+| шедулер / пайплайны | [ADR-051](./docs/arch_decisions/adr-051-scheduler-pipelines.md), [ADR-100](./docs/arch_decisions/adr-100-extension-packs-pipelines.md) (поставка `synth.pack`), [ADR-101](./docs/arch_decisions/adr-101-pipeline-engine.md) (пайплайн как второй движок), [docs/PIPELINES.md](./docs/PIPELINES.md) (формат и устройство), [PROP-059](./docs/arch_decisions/prop-059-pipeline-automation.md), [PROP-057](./docs/arch_decisions/prop-057-loop-engine.md) |
 | публичный API / webhooks / scoped service-key | [ADR-052](./docs/arch_decisions/adr-052-public-api-platform.md) (service-key + scopes + `allowedProjects`, только public-OpenAPI через `@hono/zod-openapi`, `@itphx/synth-sdk`, webhooks; tenants исключены), [ADR-089](./docs/arch_decisions/adr-089-external-events-automation.md) |
 | MCP-сервер Synth | [PROP-056](./docs/arch_decisions/prop-056-synth-mcp-server.md), [PROP-048](./docs/arch_decisions/prop-048-self-help-skills-admin-mcp.md) |
 | внешние add-on сервисы / шлюзы / плагины / editions | [ADR-086](./docs/arch_decisions/adr-086-extensibility-plugins-editions.md), [ADR-087](./docs/arch_decisions/adr-087-gateways.md), [ADR-100](./docs/arch_decisions/adr-100-extension-packs-pipelines.md), [PROP-090](./docs/arch_decisions/prop-090-extension-api.md), [PROP-068](./docs/arch_decisions/prop-068-skills-agents-registry.md), [ADR-030](./docs/arch_decisions/adr-030-hooks-agent-events.md) |
@@ -627,6 +628,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | [docs/KEYCLOAK.md](./docs/KEYCLOAK.md) | Учётки/настройки Keycloak |
 | [docs/LLM_PROVIDERS.md](./docs/LLM_PROVIDERS.md) | Провайдеры LLM для разработки |
 | [docs/PUBLISHING.md](./docs/PUBLISHING.md) | Сборка, публикация npm, Docker, Helm, релиз |
+| [docs/PIPELINES.md](./docs/PIPELINES.md) | Пайплайны: формат и устройство (ADR-101 — пайплайн как второй движок; ADR-100 — поставка `synth.pack`) |
 | [docs/QUICKSTART.md](./docs/QUICKSTART.md) | Быстрый старт |
 | [docs/ROUTING.md](./docs/ROUTING.md) | Routing и микро-слой |
 | [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) | Диагностика проблем |

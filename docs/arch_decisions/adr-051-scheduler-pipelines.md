@@ -1,13 +1,15 @@
 # ADR-051: Шедулер и пайплайны (облегчённый n8n)
 
-> **Статус:** ⚠️ Частично — реализованы минимальный срез (cron/interval-источник `schedule_fired` через ADR-089, идентичность сообщений `Scheduler`), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск (rate limit) и мульти-инстанс (`events.dedupStore`, `scheduler.leaderElection` — `none`/`file`/`postgres`, `scheduler.crossProcessLocks`; default OFF), в т.ч. PG advisory-lock лидер-выбор (PROP-032); **пайплайны реализованы как декларация + учёт прогона** (объект, экземпляры, гейты через события, артефакт = payload события — [ADR-100](./adr-100-extension-packs-pipelines.md)); собственный движок шагов (PROP-057), rollback/exit-стратегия и мониторинг-дашборд (PROP-059), размещение в гибриде, K8s Lease и разные dataDir на реплику — нет
+> **Статус:** ⚠️ Частично — реализованы минимальный срез (cron/interval-источник `schedule_fired` через ADR-089, идентичность сообщений `Scheduler`), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск (rate limit) и мульти-инстанс (`events.dedupStore`, `scheduler.leaderElection` — `none`/`file`/`postgres`, `scheduler.crossProcessLocks`; default OFF), в т.ч. PG advisory-lock лидер-выбор (PROP-032); **пайплайны реализованы как декларация + учёт прогона** (объект, экземпляры, гейты через события, артефакт = payload события — [ADR-100](./adr-100-extension-packs-pipelines.md)); **движок пайплайна принят как решение [ADR-101](./adr-101-pipeline-engine.md)** (реализуется по этапам Э1–Э7), Loop Engine (PROP-057) — вне объёма, rollback/exit-стратегия и мониторинг-дашборд (PROP-059), размещение в гибриде, K8s Lease и разные dataDir на реплику — нет
 > **Дата:** 2026-09-16
+> **Обновлено:** 2026-10-21 — **движок пайплайна принят как [ADR-101](./adr-101-pipeline-engine.md)** («пайплайн как второй движок»); ADR-051 остаётся владельцем шедулера и запуска по расписанию (источник запуска `schedule` для пайплайна), остаток ADR-051 — размещение в гибриде, K8s Lease и разные dataDir на реплику.
 > **Обновлено:** 2026-10-20 — **пайплайны в ядре реализованы** (декларация в пакете расширения, экземпляры, триггер/гейты по событиям, артефакт = payload события) — вынесено в [ADR-100](./adr-100-extension-packs-pipelines.md); этот AD остаётся владельцем шедулера и запуска по расписанию.
 > **Источник:** перенесено из `AD-DRAFTS.md` (D6, идея 6 + Roadmap Фаза 2; прототип
 > `~/dev/aic/t11/synth/app/scheduler.py`).
 > **Связано:** [ADR-030](./adr-030-hooks-agent-events.md), [ADR-017](./adr-017-api-v2-hono.md),
 > [ADR-042](./adr-042-hybrid-mode.md), [ADR-089](./adr-089-external-events-automation.md),
 > [ADR-100](./adr-100-extension-packs-pipelines.md),
+> [ADR-101](./adr-101-pipeline-engine.md),
 > [PROP-059](./prop-059-pipeline-automation.md), [PROP-057](./prop-057-loop-engine.md).
 
 **Решение:** ввести `SchedulerService` — планировщик запуска промптов и циклов по расписанию:
@@ -266,8 +268,21 @@ advisory-локом), а также решение для разных dataDir �
 - [ADR-042](./adr-042-hybrid-mode.md) «Гибридный режим» — размещение планировщика.
 - [PROP-054](./prop-054-kanban-backlog.md) «Kanban-доска, backlog» — задачи как цель запуска по расписанию (D9).
 
+## Обновлено (2026-10-21)
+
+- **Движок пайплайна принят как решение [ADR-101](./adr-101-pipeline-engine.md)** — «пайплайн как второй
+  движок» рядом с оркестратором. Разделение владельцев: **ADR-051** — шедулер и запуск по расписанию
+  (для пайплайна это триггер `kind: schedule`); **ADR-100** — поставка расширений (`synth.pack`);
+  **ADR-101** — движок, контракты, версии, переходы, журнал прогона, выход, привязка к проекту.
+  Loop Engine ([PROP-057](./prop-057-loop-engine.md)) — вне объёма ADR-101.
+- Указание «остаток — движок шагов (PROP-057)» в теле этого AD **устарело**: движок — это ADR-101,
+  а PROP-057 остаётся отдельным предложением (loop'и, верификация, termination guards).
+- Остаток именно ADR-051 не изменился: размещение в гибриде, K8s Lease и разные `dataDir` на реплику.
+  Формат пайплайнов — [docs/PIPELINES.md](../PIPELINES.md).
+
 ## История
 
+- 2026-10-21 — движок пайплайна принят как [ADR-101](./adr-101-pipeline-engine.md); ADR-051 остаётся владельцем шедулера.
 - 2026-10-20 — пайплайны: база реализована (декларация + экземпляры + гейты по событиям), решение вынесено в [ADR-100](./adr-100-extension-packs-pipelines.md); остаток — движок шагов (PROP-057) и rollback/дашборд (PROP-059).
 - 2026-10-12 — добавлены мульти-инстанс-механизмы: семы (`DedupStore`), выбор лидера (`SchedulerLeader`), межпроцессная сериализация `ScheduleStore` (`FileMutex`).
 - 2026-10-02 — добавлены Job-история, catch-up и force-запуск.
