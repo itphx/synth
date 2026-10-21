@@ -2598,6 +2598,20 @@ export const dict = {
   'profile.save_error': 'Ошибка сохранения профиля: {error}',
   'profile.updated': 'Профиль обновлён ({fields}).',
 
+  // --- Движок пайплайнов (ADR-101) ---
+  'pipeline.not_found': 'Пайплайн «{id}» не найден',
+  'pipeline.not_published': 'У пайплайна «{id}» нет опубликованной версии',
+  'pipeline.invalid_spec': 'Некорректная спецификация пайплайна: {problems}',
+  'pipeline.loop_limit': 'Прогон остановлен: превышен лимит переходов ({limit})',
+  'pipeline.cancelled': 'Прогон пайплайна отменён',
+  'pipeline.executor_missing': 'Нет исполнителя для вида шага «{kind}»',
+  'pipeline.gate_rejected': 'Шаг «{node}» отклонён человеком',
+  'pipeline.gate_timeout': 'Ожидание шага «{node}» истекло по таймауту ({timeoutSec} с)',
+  'pipeline.step_failed': 'Шаг «{node}» завершился ошибкой: {error}',
+  'pipeline.step_timeout': 'Истёк таймаут шага «{node}» ({timeoutSec} с)',
+  'pipeline.run_not_found': 'Прогон пайплайна «{id}» не найден',
+  'pipeline.invalid_state': 'Прогон пайплайна «{id}» нельзя возобновить (статус: {status})',
+
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',
   'sshKeys.description': 'SSH-ключи per-agent для git-операций. Приватные ключи и парольные фразы шифруются at-rest и не отображаются после сохранения.',

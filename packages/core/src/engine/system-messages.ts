@@ -361,6 +361,20 @@ export const SYSTEM_MESSAGES = {
   'profile.user_unavailable': 'Error: the session has no owner — profile update is unavailable',
   'profile.save_error': 'Error saving the profile: {error}',
   'profile.updated': 'Profile updated ({fields}).',
+
+  // --- Движок пайплайнов (ADR-101) ---
+  'pipeline.not_found': 'Pipeline "{id}" not found',
+  'pipeline.not_published': 'Pipeline "{id}" has no published version',
+  'pipeline.invalid_spec': 'Invalid pipeline specification: {problems}',
+  'pipeline.loop_limit': 'Pipeline run stopped: transition limit ({limit}) exceeded',
+  'pipeline.cancelled': 'Pipeline run cancelled',
+  'pipeline.executor_missing': 'No executor registered for step kind "{kind}"',
+  'pipeline.gate_rejected': 'Step "{node}" was rejected by a human',
+  'pipeline.gate_timeout': 'Waiting for step "{node}" timed out after {timeoutSec}s',
+  'pipeline.step_failed': 'Step "{node}" failed: {error}',
+  'pipeline.step_timeout': 'Step "{node}" timed out after {timeoutSec}s',
+  'pipeline.run_not_found': 'Pipeline run "{id}" not found',
+  'pipeline.invalid_state': 'Pipeline run "{id}" cannot be resumed (status: {status})',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

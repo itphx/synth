@@ -294,6 +294,19 @@ export const ENGINE_MESSAGE_KEYS = [
   'profile.user_unavailable',
   'profile.save_error',
   'profile.updated',
+  // --- Движок пайплайнов (ADR-101) ---
+  'pipeline.not_found',
+  'pipeline.not_published',
+  'pipeline.invalid_spec',
+  'pipeline.loop_limit',
+  'pipeline.cancelled',
+  'pipeline.executor_missing',
+  'pipeline.gate_rejected',
+  'pipeline.gate_timeout',
+  'pipeline.step_failed',
+  'pipeline.step_timeout',
+  'pipeline.run_not_found',
+  'pipeline.invalid_state',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -581,6 +594,19 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'profile.user_unavailable': [],
   'profile.save_error': ["error"],
   'profile.updated': ["fields"],
+  // --- Движок пайплайнов (ADR-101) ---
+  'pipeline.not_found': ["id"],
+  'pipeline.not_published': ["id"],
+  'pipeline.invalid_spec': ["problems"],
+  'pipeline.loop_limit': ["limit"],
+  'pipeline.cancelled': [],
+  'pipeline.executor_missing': ["kind"],
+  'pipeline.gate_rejected': ["node"],
+  'pipeline.gate_timeout': ["node","timeoutSec"],
+  'pipeline.step_failed': ["node","error"],
+  'pipeline.step_timeout': ["node","timeoutSec"],
+  'pipeline.run_not_found': ["id"],
+  'pipeline.invalid_state': ["id","status"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

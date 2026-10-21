@@ -224,6 +224,17 @@ export type {
   PackInstallation,
   PackInstallationProvides,
   PackInstallationStatus,
+  // ADR-101 (Pipeline Engine): спецификации пайплайнов, прогоны, журнал.
+  ProjectPipelineRepository,
+  PipelineRecord,
+  PipelineVersionRecord,
+  PipelineScope,
+  PipelineFilter,
+  PipelineRunRepository,
+  PipelineRunRecord,
+  PipelineRunEventRecord,
+  PipelineRunFilter,
+  PipelineRunEventListOptions,
 } from './storage/ports/index.js';
 // PROP-032 (W2.2): in-memory реализации портов хранения (второй backend за единым слоем).
 export {
@@ -259,6 +270,9 @@ export {
   // ADR-051/PROP-059: пайплайны; ADR-086 §5: реестр установок пакетов.
   MemoryPipelineRepository,
   MemoryPackRepository,
+  // ADR-101: спецификации пайплайнов, прогоны и журнал выполнения.
+  MemoryProjectPipelineRepository,
+  MemoryPipelineRunRepository,
 } from './storage/memory/index.js';
 // PROP-032 (W2.4): generic-реализация конфигурационных словарей (провайдеры/модели/агенты).
 export { MemoryDocumentRepository } from './storage/memory/document-repository.js';
@@ -932,6 +946,37 @@ export {
   publicErrorSchema,
 } from './server/openapi/public-openapi.js';
 export type { PublicError } from './server/openapi/public-openapi.js';
+// ADR-101 (Pipeline Engine): движок пайплайнов (второй движок рядом с оркестратором).
+export {
+  PipelineEngine,
+  PipelineEngineError,
+  NoopPipelineExitHandler,
+  PIPELINE_ERROR_CODES,
+  evaluateCondition,
+  nextNodeId,
+  MAX_PIPELINE_TRANSITIONS,
+  resolveSpecVars,
+  resolveStepInput,
+  resolvePathValue,
+  resolvePipelinePath,
+  sanitizeRecord,
+  sanitizeTrigger,
+  sanitizeValue,
+} from './engine/pipelines/index.js';
+export type {
+  ConditionContext,
+  PipelineEngineDeps,
+  PipelineEngineLogger,
+  PipelineErrorCode,
+  PipelineExitContext,
+  PipelineExitHandler,
+  PipelineGateDecision,
+  PipelinePathContext,
+  PipelineRunOptions,
+  PlannerContext,
+  StepExecutionContext,
+  StepExecutor,
+} from './engine/pipelines/index.js';
 export { createSchedulerRoutes } from './server/routes/schedules.js';
 export type {
   SchedulerRoutesAuth,
