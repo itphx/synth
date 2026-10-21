@@ -6,13 +6,13 @@
 
 ## Порядок публикации пакетов
 
-Публикуются **все 7 пакетов** в строгом порядке зависимостей:
+Публикуются **все 8 пакетов** в строгом порядке зависимостей:
 
 ```
-shared → core → storage-postgres → ui → backend → sdk → synth
+shared → core → executor → storage-postgres → ui → backend → sdk → synth
 ```
 
-Порядок задан иерархией зависимостей: `@itphx/synth-shared` — фундамент, `@itphx/synth-core` импортирует shared, `@itphx/synth-storage-postgres` — опциональный драйвер слоя хранения (`peerDependencies: @itphx/synth-core`, `pg` — `optionalDependencies`, ADR-097/PROP-032), `@itphx/synth-backend`/`@itphx/synth-ui` импортируют core, `@itphx/synth-sdk` — тонкий клиент публичного API над shared (ADR-052), `@itphx/synth` — тонкая обёртка над core/ui/shared (ADR-038).
+Порядок задан иерархией зависимостей: `@itphx/synth-shared` — фундамент, `@itphx/synth-core` импортирует shared, `@itphx/synth-executor` — исполнитель агентских команд (`dependencies`: `@itphx/synth-shared`, `peerDependencies`: `@itphx/synth-core`, PROP-077), `@itphx/synth-storage-postgres` — опциональный драйвер слоя хранения (`peerDependencies: @itphx/synth-core`, `pg` — `optionalDependencies`, ADR-097/PROP-032), `@itphx/synth-backend`/`@itphx/synth-ui` импортируют core, `@itphx/synth-sdk` — тонкий клиент публичного API над shared (ADR-052), `@itphx/synth` — тонкая обёртка над core/ui/shared (ADR-038).
 
 ## `pnpm publish` вместо `npm publish`
 
@@ -106,7 +106,7 @@ helm install synth synth/synth --version <version> -f my-values.yaml
 
 Обновляет:
 1. `packages/shared/src/version.ts` — константу `SYNTH_VERSION`
-2. `packages/*/package.json` — поле `version` во всех 7 пакетах
+2. `packages/*/package.json` — поле `version` во всех 8 пакетах
 
 Единый источник версии — `SYNTH_VERSION` в `packages/shared/src/version.ts` (импортируется из `@itphx/synth-shared`).
 
@@ -194,7 +194,7 @@ Docker-образы **не** собирает (их собирает CI GitVerse
 | Workflow | Триггер | Содержание |
 |---|---|---|
 | `.gitverse/workflows/release.yaml` | push тега `v*` + `workflow_dispatch` | **сборка и публикация** релиза (включая GitHub-зеркало и релиз) |
-| `.gitverse/workflows/ci.yaml` | push в `main`/`master`/`feature/**`/`fix/**`/`refactor/**`/`chore/**`/`docs/**` и PR | тесты кода: typecheck, lint, тесты `shared`/`core`/`backend`/`ui`/`sdk`, `helm lint` + `template`, `pnpm audit --audit-level=high` (report-only) |
+| `.gitverse/workflows/ci.yaml` | push в `main`/`master`/`feature/**`/`fix/**`/`refactor/**`/`chore/**`/`docs/**` и PR | тесты кода: typecheck, lint, тесты `shared`/`core`/`executor`/`storage-postgres`/`backend`/`ui`/`sdk`, `helm lint` + `template`, `pnpm audit --audit-level=high` (report-only) |
 | `.gitverse/workflows/ci-docs.yaml` | push в `main`/`master`/`feature/**` и PR, изменения по `paths` (доки/AGENTS.md/скрипты проверок) | `node scripts/adr-check.mjs` + `node scripts/docs-link-check.mjs` |
 
 Разделение сделано через `paths`/`paths-ignore`: у `ci.yaml` в `paths-ignore` есть `docs/**` и `**/*.md`, поэтому доковые пуши не гоняют тяжёлые джобы; у `ci-docs.yaml` наоборот — `paths` только по докам, и джоба не ставит pnpm (скрипты на голом node).
@@ -301,7 +301,7 @@ GitHub — **зеркало и релизы**, а не билд-контур. Gi
 
 ## Важно: поле `repository` в package.json
 
-Для публикации в GitVerse Package Registry поле `repository` в `package.json` **должно отсутствовать**: GitVerse при привязке пакета к репозиторию по `repository.url` проверяет права и отдаёт 403 «no permission». Во всех 7 пакетах поле `repository` удалено — не добавляйте его обратно.
+Для публикации в GitVerse Package Registry поле `repository` в `package.json` **должно отсутствовать**: GitVerse при привязке пакета к репозиторию по `repository.url` проверяет права и отдаёт 403 «no permission». Во всех 8 пакетах поле `repository` удалено — не добавляйте его обратно.
 
 ## Локальная проверка перед пушем
 

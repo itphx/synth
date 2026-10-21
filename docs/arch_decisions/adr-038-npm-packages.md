@@ -66,3 +66,29 @@ shared → core → ui → backend → sdk → synth
 - Не публикуем workspace-сборку как единый артефакт — только npm-пакеты
 - Не копируем ассеты между пакетами при сборке
 - Не используем `noExternal`-бандл core/ui/shared в `@itphx/synth`
+
+## Обновлено (2026-10-21)
+
+Пакетов в монорепо стало **8** — добавлен `@itphx/synth-executor` (`packages/executor`),
+исполнитель агентских команд ([PROP-077](./prop-077-runtime-toolchain.md)):
+
+- **Форма поставки — по образцу драйвера хранилища**
+  ([ADR-097](./adr-097-storage-provider-class.md)): отдельный in-tree пакет с
+  `dependencies` — `@itphx/synth-shared` (`workspace:*`), `peerDependencies` —
+  `@itphx/synth-core` (`workspace:*`), `files: ["dist"]`; core подключает его
+  **динамическим `import()`** по `execution.mode === 'remote'` и **fail-closed** при
+  недоступности пакета.
+- **Причина** — исполнитель выступает внешним «бэкендом» **порта исполнения**
+  ([PROP-077](./prop-077-runtime-toolchain.md)): одна семантика команд в control plane
+  и в worker'е, отдельный release-цикл, чистое разделение секретов между control plane
+  и исполнителем. По форме это ровно тот же класс, что драйвер БД у слоя хранения.
+- **Порядок публикации** дополнен: `shared → core → executor → ui → backend → sdk → synth`.
+  Цикл `core ↔ @itphx/synth-executor` намеренный — `ignoreWorkspaceCycles: true` в
+  `pnpm-workspace.yaml:14` (как у `@itphx/synth-storage-postgres`).
+
+Тело ADR не меняется: решение «каждый пакет монорепо публикуется в npm независимо»
+остаётся в силе — расширен только состав пакетов.
+
+## История
+
+- 2026-10-21 — добавлен восьмой пакет — `@itphx/synth-executor` (исполнитель, PROP-077): форма поставки по образцу драйвера хранилища (ADR-097), подключение динамическим `import()` по `execution.mode=remote` (fail-closed), порядок сборки `shared → core → executor → …`.

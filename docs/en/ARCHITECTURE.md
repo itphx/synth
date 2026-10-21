@@ -8,13 +8,14 @@
 
 ## Components
 
-Synth consists of seven packages in a monorepo:
+Synth consists of eight packages in a monorepo:
 
 | Package | Purpose | Stack |
 |-------|-----------|------|
 | **@itphx/synth-shared** | Types, interfaces, Zod schemas, protocols, configuration | TypeScript |
 | **@itphx/synth-core** | Standalone engine: sessions, queue, LLM providers, CLI, HTTP API v2 | TypeScript, Hono |
 | **@itphx/synth-storage-postgres** | Optional storage-layer driver over PostgreSQL (ADR-097/PROP-032): implements the `StorageContext` domain ports, `peer-dep` core, `pg` — optional | TypeScript, `pg` |
+| **@itphx/synth-executor** | Agent command executor — a separate process (PROP-077): executor server + remote port client, `peer-dep` core | TypeScript, Hono |
 | **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
 | **@itphx/synth-ui** | React 19 SPA + admin panel (role-based rendering) | TypeScript, React 19, Vite |
 | **@itphx/synth-sdk** | Typed public API client (ADR-052): a wrapper over `public-OpenAPI` (`events`/`sessions`/`schedules`/`llm`) | TypeScript, ESM |
@@ -57,6 +58,10 @@ flowchart TB
         storage_pg["postgres — @itphx/synth-storage-postgres (optional)"]
     end
 
+    subgraph Execution["Command execution (PROP-077)"]
+        synth_executor["@itphx/synth-executor — executor (optional)"]
+    end
+
     subgraph Integrations["Integrations"]
         event_sources["External event sources"]
         webhook_targets["HTTP subscribers (webhooks)"]
@@ -82,6 +87,8 @@ flowchart TB
     synth_core -->|StorageContext| storage_pg
     synth_backend -->|StorageContext| storage_file
     synth_backend -->|StorageContext| storage_pg
+
+    synth_core -->|ExecutionPort (HTTP)| synth_executor
 ```
 
 ## Deployment scenarios

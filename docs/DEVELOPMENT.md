@@ -270,7 +270,7 @@ synth/
 │   ├── standalone.sh           # Standalone из собранных npm-пакетов
 │   ├── hybrid.sh               # Локальный core + удалённый backend (гибрид)
 │   ├── publish.sh              # Публикация в npm
-│   ├── publish-packages.sh     # Идемпотентная публикация 7 пакетов (release)
+│   ├── publish-packages.sh     # Идемпотентная публикация 8 пакетов (release)
 │   ├── version-bump.sh         # Bump версии
 │   ├── changelog.sh            # Генерация CHANGELOG (для CI release)
 │   ├── wait-npm-version.sh     # Ожидание доступности версии в npm (release)

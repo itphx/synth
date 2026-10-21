@@ -58,7 +58,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_ANALYTICS_RETENTION_DAYS` | PROP-102: срок хранения суточных роллапов аналитики, дни (`<= 0` — без ограничения) | `analytics.retentionDays` (`400`) |
 | `SYNTH_METRICS_ENABLED` | ADR-094: включить `GET /metrics` (Prometheus exposition 0.0.4); `false` → 404 | `metrics.enabled` (`false`) |
 | `SYNTH_METRICS_TOKEN` | ADR-094: bearer-токен `/metrics` (приоритетнее файла `{dataDir}/secrets/metrics-token`); значение не логируется | — |
-| `SYNTH_EXECUTION_MODE` | PROP-077: топология исполнения — `inline` (по умолчанию) \| `remote` (шаг 7 плана PROP-077; пока fail-closed на старте) | `inline` |
+| `SYNTH_EXECUTION_MODE` | PROP-077: топология исполнения — `inline` (по умолчанию) \| `remote` (удалённый исполнитель, шаг 7b PROP-077; fail-closed на старте) | `inline` |
 | `SYNTH_EXECUTION_REMOTE_URL` | PROP-077: список адресов исполнителей (через запятую) | — |
 | `SYNTH_EXECUTION_TOKEN` | PROP-077: путь/ссылка на токен исполнителя (НЕ значение, инвариант 13) | — |
 | `SYNTH_EXECUTION_TIMEOUT_MS` | PROP-077: таймаут exec-вызова, мс | `30000` |
@@ -522,21 +522,23 @@ env `SYNTH_EXECUTION_*` > `config.yaml` > дефолт. Резолвер — `re
 [config] невалидное значение --execution-mode="inlne": ожидается одно из 'inline', 'remote'
 ```
 
-**Текущее состояние реализации (шаг 3 плана PROP-077).** Реализован только режим `inline` —
-прежнее поведение, ничего не меняется. Режим `remote` (удалённый исполнитель) — **шаг 7** плана
-PROP-077, поэтому на этом шаге он **fail-closed на старте** (процесс не поднимается, а не «молча
-уходит в inline»):
+**Текущее состояние реализации (шаги 3 и 7b плана PROP-077).** Режим `inline` — прежнее
+поведение, ничего не меняется. Режим `remote` реализован **шагом 7b**: core подключает пакет
+исполнителя `@itphx/synth-executor` динамическим `import()` и собирает удалённый порт. Пакет
+опционален (`optionalDependencies` core), поэтому режим `remote` — **fail-closed на старте**
+(процесс не поднимается, а не «молча уходит в inline»):
 
 | Ситуация | Что видит оператор |
 |---|---|
 | `mode: remote`, список `remote.url` пуст | `Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).` |
-| `mode: remote`, адреса заданы | `Remote execution mode (execution.mode=remote) is not available yet: the executor service is not implemented (PROP-077, step 7). Use execution.mode=inline.` |
+| `mode: remote`, адреса заданы, но пакет исполнителя не установлен | `Remote execution mode (execution.mode=remote) is unavailable: executor package '@itphx/synth-executor/client' is not installed` |
+| `mode: remote`, пакет есть, но токен не читается | `Remote execution mode (execution.mode=remote) is unavailable: executor token could not be read (execution.remote.tokenSecret / SYNTH_EXECUTION_TOKEN)` |
 
 Пример `config.yaml`:
 
 ```yaml
 execution:
-  mode: "inline"                   # inline (по умолчанию) | remote (шаг 7 PROP-077; пока fail-closed)
+  mode: "inline"                   # inline (по умолчанию) | remote (PROP-077)
   remote:
     url: []                        # список адресов исполнителей (через запятую — env SYNTH_EXECUTION_REMOTE_URL)
     timeoutMs: 30000               # SYNTH_EXECUTION_TIMEOUT_MS

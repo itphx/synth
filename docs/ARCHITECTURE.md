@@ -8,13 +8,14 @@
 
 ## Компоненты
 
-Synth состоит из семи пакетов в монорепозитории:
+Synth состоит из восьми пакетов в монорепозитории:
 
 | Пакет | Назначение | Стек |
 |-------|-----------|------|
 | **@itphx/synth-shared** | Типы, интерфейсы, Zod-схемы, протоколы, конфигурация | TypeScript |
 | **@itphx/synth-core** | Автономный движок: сессии, очередь, LLM-провайдеры, CLI, HTTP API v2 | TypeScript, Hono |
 | **@itphx/synth-storage-postgres** | Опциональный драйвер слоя хранения поверх PostgreSQL (ADR-097/PROP-032): реализует доменные порты `StorageContext`, `peer-dep` core, `pg` — optional | TypeScript, `pg` |
+| **@itphx/synth-executor** | Исполнитель агентских команд — отдельный процесс (PROP-077): сервер исполнителя + клиент удалённого порта, `peer-dep` core | TypeScript, Hono |
 | **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
 | **@itphx/synth-ui** | React 19 SPA + админка (рендеринг по ролям) | TypeScript, React 19, Vite |
 | **@itphx/synth-sdk** | Типизированный клиент публичного API (ADR-052): обёртка над public-OpenAPI (`events`/`sessions`/`schedules`/`llm`) | TypeScript, ESM |
@@ -57,6 +58,10 @@ flowchart TB
         storage_pg["postgres — @itphx/synth-storage-postgres (опц.)"]
     end
 
+    subgraph Execution["Исполнение команд (PROP-077)"]
+        synth_executor["@itphx/synth-executor — исполнитель (опц.)"]
+    end
+
     subgraph Integrations["Интеграции"]
         event_sources["Внешние источники событий"]
         webhook_targets["HTTP-подписчики (webhooks)"]
@@ -82,6 +87,8 @@ flowchart TB
     synth_core -->|StorageContext| storage_pg
     synth_backend -->|StorageContext| storage_file
     synth_backend -->|StorageContext| storage_pg
+
+    synth_core -->|ExecutionPort (HTTP)| synth_executor
 ```
 
 ## Сценарии развёртывания

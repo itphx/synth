@@ -59,7 +59,7 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_DECISION_MODEL` | ADR-084: decision-layer model (e.g. `clef-flash`) | `decision.model` |
 | `SYNTH_METRICS_ENABLED` | ADR-094: enable `GET /metrics` (Prometheus exposition 0.0.4); `false` → 404 | `metrics.enabled` (`false`) |
 | `SYNTH_METRICS_TOKEN` | ADR-094: bearer token for `/metrics` (takes precedence over the file `{dataDir}/secrets/metrics-token`); the value is never logged | — |
-| `SYNTH_EXECUTION_MODE` | PROP-077: execution topology — `inline` (default) \| `remote` (PROP-077 plan step 7; currently fail-closed at startup) | `inline` |
+| `SYNTH_EXECUTION_MODE` | PROP-077: execution topology — `inline` (default) \| `remote` (remote executor, PROP-077 step 7b; fail-closed at startup) | `inline` |
 | `SYNTH_EXECUTION_REMOTE_URL` | PROP-077: executor address list (comma-separated) | — |
 | `SYNTH_EXECUTION_TOKEN` | PROP-077: path/reference to the executor token (NOT a value, invariant 13) | — |
 | `SYNTH_EXECUTION_TIMEOUT_MS` | PROP-077: exec-call timeout, ms | `30000` |
@@ -522,21 +522,23 @@ env `SYNTH_EXECUTION_*` > `config.yaml` > default. Resolver — `resolveExecutio
 [config] невалидное значение --execution-mode="inlne": ожидается одно из 'inline', 'remote'
 ```
 
-**Current implementation state (step 3 of the PROP-077 plan).** Only the `inline` mode is implemented —
-the previous behaviour, nothing changes. The `remote` mode (a remote executor) is **step 7** of the
-PROP-077 plan, so at this step it is **fail-closed at startup** (the process does not start rather than
-"silently falling back to inline"):
+**Current implementation state (steps 3 and 7b of the PROP-077 plan).** The `inline` mode — the
+previous behaviour, nothing changes. The `remote` mode is implemented in **step 7b**: core loads the
+executor package `@itphx/synth-executor` through a dynamic `import()` and builds the remote port.
+The package is optional (`optionalDependencies` of core), so the `remote` mode is **fail-closed at
+startup** (the process does not start rather than "silently falling back to inline"):
 
 | Situation | What the operator sees |
 |---|---|
 | `mode: remote`, empty `remote.url` list | `Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).` |
-| `mode: remote`, addresses are set | `Remote execution mode (execution.mode=remote) is not available yet: the executor service is not implemented (PROP-077, step 7). Use execution.mode=inline.` |
+| `mode: remote`, addresses are set, but the executor package is not installed | `Remote execution mode (execution.mode=remote) is unavailable: executor package '@itphx/synth-executor/client' is not installed` |
+| `mode: remote`, the package is there, but the token cannot be read | `Remote execution mode (execution.mode=remote) is unavailable: executor token could not be read (execution.remote.tokenSecret / SYNTH_EXECUTION_TOKEN)` |
 
 `config.yaml` example:
 
 ```yaml
 execution:
-  mode: "inline"                   # inline (default) | remote (PROP-077 step 7; currently fail-closed)
+  mode: "inline"                   # inline (default) | remote (PROP-077)
   remote:
     url: []                        # executor address list (comma-separated — env SYNTH_EXECUTION_REMOTE_URL)
     timeoutMs: 30000               # SYNTH_EXECUTION_TIMEOUT_MS
