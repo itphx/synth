@@ -24,6 +24,7 @@
  */
 
 import type {
+  PipelineProvenance,
   PipelineRecord,
   PipelineRunEventRecord,
   PipelineRunRecord,
@@ -83,6 +84,7 @@ type PipelineSpecRow = {
   draft: unknown;
   draft_version: number;
   published_version: number | null;
+  installed_by: unknown;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -107,6 +109,8 @@ function toPipeline(row: PipelineSpecRow): PipelineRecord {
     draft: (row.draft ?? undefined) as PipelineSpec | undefined,
     draftVersion: row.draft_version,
     publishedVersion: row.published_version ?? undefined,
+    // Провенанс установки (ADR-101 §2.11): jsonb `{pack, version}`.
+    installedBy: (row.installed_by ?? undefined) as PipelineProvenance | undefined,
     createdAt: toIsoRequired(row.created_at),
     updatedAt: toIsoRequired(row.updated_at),
   }) as PipelineRecord;
@@ -133,9 +137,9 @@ export class PgProjectPipelineRepository implements ProjectPipelineRepository {
     await this._deps.connection.query(
       `INSERT INTO pipeline_specs
          (id, scope, project_id, name, description, icon, draft, draft_version,
-          published_version, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::timestamptz,
-               GREATEST($11::timestamptz, now()))
+          published_version, installed_by, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::timestamptz,
+               GREATEST($12::timestamptz, now()))
        ON CONFLICT (id) DO UPDATE SET
          scope = EXCLUDED.scope,
          project_id = EXCLUDED.project_id,
@@ -145,6 +149,7 @@ export class PgProjectPipelineRepository implements ProjectPipelineRepository {
          draft = EXCLUDED.draft,
          draft_version = EXCLUDED.draft_version,
          published_version = EXCLUDED.published_version,
+         installed_by = EXCLUDED.installed_by,
          created_at = pipeline_specs.created_at,
          updated_at = ${updatedAtExpr('pipeline_specs')}`,
       [
@@ -157,6 +162,7 @@ export class PgProjectPipelineRepository implements ProjectPipelineRepository {
         rec.draft !== undefined ? jsonbParam(rec.draft) : null,
         rec.draftVersion,
         rec.publishedVersion ?? null,
+        rec.installedBy !== undefined ? jsonbParam(rec.installedBy) : null,
         rec.createdAt,
         rec.updatedAt,
       ],
