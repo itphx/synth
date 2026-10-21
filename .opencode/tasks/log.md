@@ -2,6 +2,30 @@
 
 > Архив: `log.1.md` (по 2026-08-31), `log.2.md` (2026-08-31 — 2026-09-16), `log.3.md` (2026-09-17 — 2026-10-07).
 
+## 2026-10-21 — PROP-077/PROP-082, шаги 1–2: порт исполнения и all-in-one образ (flavor `core`)
+- **Задача:** «С чего начнём реализацию?» → по плану PROP-077/PROP-082 — шаг 1 (порт `ExecutionPort`) и шаг 2 (мультистадийный образ с flavor `core`).
+- **Тип:** feature / refactor / infra
+- **Исполнитель:** @orchestrator → @fixer ×3 (порт; добивка шага 1; образы) → @fixer (коммиты)
+- **Результат:** PASS
+- **Где:** worktree `/mnt/data/Agent/dev/Synth/wt-execution-port`, ветка `feature/execution-port`.
+- **Принятые решения:**
+  - Команда в порте — **дискриминированный union** `{kind:'shell'}` | `{kind:'argv'}` (не строка): в коде есть `sh -c` и прямой argv без shell; строкой пришлось бы либо потерять различие, либо получить инъекцию в argv-пути. `stdin` не реализован.
+  - Неуспешный код выхода — **ошибкой** `ExecutionError` (`reason:'nonzero_exit'`), а не полем результата: так дословно сохраняется текст «Command failed: …», который видит модель; `ExecResult.exitCode` у успеха всегда `0`.
+  - Ошибка типизирована (`reason`/`code`/`stdout`/`stderr`/`killed`/`signal`/`truncated`/`durationMs`), исходное `name` сохраняется → распознавание `AbortError` не сломано.
+  - Два лимита вывода разведены: `maxOutputBytes` (10 МБ, порт — как прежний `maxBuffer`) и обрезка на уровне тула (shell 100 КБ, git 20 КБ, rg 200 строк).
+  - Шов внедрения — существующий `ctx.extra.executionPort` (`resolveExecutionPort(ctx)`), без process-глобальных синглтонов (инвариант 24); порт по умолчанию — `InlineExecutionPort`.
+  - Швы `project-context.ts` и `context/instructions.ts` закрыты в этом шаге — иначе в split-режиме они поедут в control plane мимо исполнителя.
+  - Вне порта остаются `simple-git` (`git/git-service.ts`), MCP stdio (`engine/mcp/client.ts`), обслуживание — фазы 2–3 плана.
+  - Образ: стадия `core` (all-in-one: control plane + toolchain) с `RUN` в целевой архитектуре; стадия `slim` — последняя и **без `RUN`**, поэтому дефолтная сборка не меняется и arm64 slim собирается без QEMU.
+  - arm64 для flavor'ов — **per-arch** (вариант A): требует QEMU/binfmt на раннере (шаг 6, CI).
+  - Найдено: kaniko v1.24.0 не задаёт `BUILDPLATFORM`/`TARGETPLATFORM` → явный `--platform` в flavor-стадии уронил бы CI-сборку; стадия `core` оставлена без него.
+  - Найдено: `${var:+word}` некорректно разбирается в busybox ash (alpine) — таблицы тиров разбираются через `sed`/`tr`.
+  - Найдено: в `node:22-alpine` uid/gid 1000 заняты пользователем `node` → отдельная учётка не создаётся, каталоги принадлежат 1000:1000.
+  - Замеры: slim — 63,8 МБ, core — 101,6 МБ (оценка «~200 МБ» в PROP-082 была завышена вдвое — исправлена).
+  - Регрессия slim проверена сравнением file-manifest'ов (8422 файла) и config старого/нового Dockerfile — идентичны (различаются только `/etc/hostname` и `/etc/hosts`, которые подставляет рантайм контейнера).
+- **Проверки:** `pnpm typecheck` — 0 ошибок; `pnpm lint` — 0 ошибок; `pnpm test` — 7320 passed, 0 failed (node v26; в CI — node 22, расхождений не проявилось); `adr-check`/`docs-link-check` — 0 ошибок; сборки образов slim/core — успешно, smoke-проверки toolchain'а — все 17 бинарников на месте, backend отвечает `/health` 200.
+- **Осталось:** шаг 3 — секция `execution` в конфиге (env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed); шаги 4–5 — flavor'ы `dev`/`devops`/`browser`/`full` и образ worker'а `synth-executor` (для debian-ветки — решение по `yq`: в apt это python-реализация, CLI несовместим с Go-вариантом, и по `pip` в debian); шаг 6 — CI (QEMU/binfmt, теги `:core`, smoke-тесты, `scripts/docker-cleanup.mjs` под новые репозитории); шаг 7 — executor-сервис, `RemoteExecutionPort`, чарт `executor.*`, RWX-том workspace; шаг 10 — метрики `synth_executor_*`; шаг 12 — volume/`fsGroup` под HOME-кэши и документация.
+
 ## 2026-10-21 — PROP-077/PROP-082: проработка двух топологий развёртывания (отдельные контейнеры-исполнители vs all-in-one)
 - **Задача:** «Нужно проработать prop с отдельными контейнерами воркерами / экзекьюторами, а также с большим контейнером All-in-one». Решение пользователя: расширить PROP-077 и PROP-082, объём — полный цикл.
 - **Тип:** design / docs
