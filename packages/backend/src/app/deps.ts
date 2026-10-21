@@ -49,6 +49,7 @@ import {
   createWebhookMetrics,
   createEventMetrics,
   startEventJournalMetrics,
+  InlineExecutionPort,
 } from '@itphx/synth-core';
 import type { DecisionAgentCandidate, EventsRuntimeSettings, MetricsRegistry, StorageContext } from '@itphx/synth-core';
 import type { BackendConfig } from '../lib/app-config.js';
@@ -463,10 +464,18 @@ export async function createBackendDeps(
     bundleStore,
   });
 
+  // PROP-077: порт исполнения команд. Режим (`inline`/`remote`) — параметр
+  // запуска процесса (инвариант 24), поэтому порт собирается здесь, при старте.
+  // Тот же порт получают оркестратор (тулы, inline-shell, детект зависимостей)
+  // и резолвер проектных инструкций.
+  const executionPort = new InlineExecutionPort();
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
     hooks,
+    // PROP-077: порт исполнения команд (inline — исполнение в процессе).
+    executionPort,
     // PROP-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
     contextBuilder,
@@ -511,7 +520,8 @@ export async function createBackendDeps(
     // ADR-046 §4.5: системный hard-gate скиллов (runtime-настройка).
     skillsDisabled,
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
-    runtimeDeps: await detectRuntimeDeps(),
+    // Проба бинарников — через тот же порт исполнения (PROP-077).
+    runtimeDeps: await detectRuntimeDeps(executionPort),
     // ADR-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
     onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
@@ -845,6 +855,9 @@ export async function createBackendDeps(
     bundleStore,
     commandService,
     orchestrator,
+    // PROP-077: порт исполнения — тот же инстанс, что у оркестратора и тулов
+    // (резолвер проектных инструкций берёт его для `git rev-parse`).
+    executionPort,
     processMessage,
     eventBindingStore,
     eventApiKeyStore,

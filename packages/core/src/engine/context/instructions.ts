@@ -34,6 +34,7 @@ import { resolveToolsEgressPolicy } from '../net/egress-runtime.js';
 import { egressFetch } from '../../security/tls.js';
 import type { HostResolver } from '../mcp/network-policy.js';
 import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
+import type { ExecutionPort } from '../../execution/ports/index.js';
 
 /** Fallback-окно модели, если оно неизвестно (ADR-069 §5.1: разумный дефолт). */
 export const DEFAULT_INSTRUCTIONS_CONTEXT_WINDOW = 128_000;
@@ -167,6 +168,12 @@ export interface ProjectInstructionsDeps {
   dictionaryStore?: DictionaryRepository | null;
   /** Подменяемый git-раннер (тесты). */
   runGitFn?: (args: string[], cwd: string, signal?: AbortSignal) => Promise<{ stdout: string; stderr: string }>;
+  /**
+   * PROP-077: порт исполнения для `git rev-parse --show-toplevel` (поиск корня
+   * репозитория для merged chain). Не задан — inline-исполнение в процессе
+   * (прежнее поведение); задан — вызов уходит в исполнителя (split-режим).
+   */
+  execution?: ExecutionPort;
   /** ADR-069 §3.5: `config.skills.trustedProjectDirs` — project-trust гейт. */
   trustedProjectDirs?: readonly string[];
   /** ADR-069 R3: `storage.workspacesRoot` — авто-trust workspace внутри него. */
@@ -534,7 +541,9 @@ export class ProjectInstructionsResolver {
   constructor(deps: ProjectInstructionsDeps) {
     this._config = deps.config;
     this._dictionaryStore = deps.dictionaryStore ?? null;
-    this._runGit = deps.runGitFn ?? runGit;
+    // PROP-077: git-исполнение — через порт (`deps.execution`), иначе inline.
+    this._runGit =
+      deps.runGitFn ?? ((args, cwd, signal) => runGit(args, cwd, signal, undefined, deps.execution));
     this._trustedProjectDirs = deps.trustedProjectDirs ?? [];
     this._workspacesRoot = deps.workspacesRoot ?? '';
     this._dataDir = deps.dataDir ?? null;

@@ -101,46 +101,87 @@ CLI-флаг: `--execution-mode inline|remote` (рядом с `--restart-mode`,
 ## Контракт исполнения (порт)
 
 Исполнение — **порт**, по образцу портов слоя хранения ([ADR-096](./adr-096-storage-layer.md)):
-домен работает через интерфейс, физический backend — взаимозаменяем.
+домен работает через интерфейс, физический backend — взаимозаменяем. Реализовано в
+`packages/core/src/execution/` (шаг 1 плана реализации).
 
 ```ts
-// Порт — в core, реализации — рядом с ним.
-interface ExecutionPort {
-  execute(req: ExecRequest): Promise<ExecResult>;
-}
+// packages/core/src/execution/ports/execution-port.ts
+/** Форма команды: shell-строка или argv-массив (без shell). */
+type ExecCommand =
+  | { kind: 'shell'; command: string; shell?: string }  // `<shell> -c <command>` (по умолчанию `sh`)
+  | { kind: 'argv'; file: string; args?: string[] };     // `<file> <args…>` — без shell
 
 interface ExecRequest {
-  command: string;                 // строка (shell-семантика) — как сейчас в execute_shell
-  cwd: string;                     // абсолютный путь внутри workspace
-  env?: Record<string, string>;    // ДОПОЛНИТЕЛЬНОЕ окружение (мержится с базовым)
-  timeoutMs?: number;              // таймаут вызова
-  stdin?: string;                  // ввод (для неинтерактивных сценариев)
+  command: ExecCommand;
+  cwd?: string;                     // рабочий каталог команды; не задан — каталог исполнителя
+  env?: Record<string, string>;     // ДОПОЛНИТЕЛЬНОЕ окружение (мержится поверх базового)
+  timeoutMs?: number;               // таймаут вызова
+  signal?: AbortSignal;             // отмена («Стоп» сессии)
+  maxOutputBytes?: number;          // лимит буфера вывода; по умолчанию DEFAULT_MAX_OUTPUT_BYTES (10 МБ)
 }
 
 interface ExecResult {
   stdout: string;
   stderr: string;
-  exitCode: number;
-  truncated: boolean;              // вывод обрезан по лимиту
-  durationMs: number;              // длительность исполнения
+  exitCode: number;      // у успешного вызова всегда 0
+  truncated: boolean;     // вывод обрезан по лимиту порта
+  durationMs: number;     // длительность исполнения
+}
+
+interface ExecutionPort {
+  execute(req: ExecRequest): Promise<ExecResult>;
 }
 ```
 
-- **Реализации:** `InlineExecutionPort` — нынешние `execFileAsync` в 5+ местах
-  (`packages/core/src/engine/tools/shell.ts:45`, `packages/core/src/engine/tools/search.ts:49`,
-  `packages/core/src/engine/tools/git.ts:30`, `packages/core/src/engine/commands/inline-shell.ts:39`,
-  `packages/core/src/engine/tools/runtime-deps.ts:79`); `RemoteExecutionPort` — HTTP к исполнителю.
+- **Команда — дискриминированный union, а не строка.** В домене две формы вызова, и
+  различие принципиально: `shell` (`sh -c <команда>` — тул `execute_shell`, inline-shell
+  `` !`cmd` ``) сохраняет shell-семантику (пайпы, редиректы, подстановки переменных), а
+  `argv` (git, `rg`, проба `bin --version`) запускает бинарник **без shell** — значит,
+  классическая инъекция невозможна и allowlist значений в git-тулах (ADR-076) остаётся
+  осмысленным. Строкой это различие не выразить: либо инъекция, либо запрет shell-семантики.
+- **Неуспешный код выхода — ошибка, а не поле результата.** `ExecResult.exitCode` у
+  успешного вызова всегда `0`; ненулевой код приходит **ошибкой** `ExecutionError`
+  (`reason: 'nonzero_exit'`, `code` = код выхода). Так дословно сохраняется текст
+  «Command failed: …», который видит модель: тексты ошибок тулов — контракт, и переписывать
+  их в тулах ради «красивого» кода выхода нельзя.
+- **Ошибка типизирована.** `ExecutionError` несёт `reason` (`timeout`/`aborted`/
+  `spawn_failed`/`nonzero_exit`/`max_output`), `code`, `stdout`, `stderr`, `killed`,
+  `signal`, `truncated`, `durationMs` и **сохраняет исходное `name`** (`AbortError` — для
+  отмены): благодаря этому распознавание отмены (`isAbortError`) и тексты ошибок не
+  изменились. Разбор ошибки на конкретные тексты (`ENOENT` → `tool.binary_missing`) остался
+  в тулах — порт не знает про i18n-ключи.
+- **`stdin` не реализован.** Потребности в неинтерактивном вводе у домена нет: exec-API
+  обслуживает только неинтерактивные команды (PTY/attach — вне объёма этой версии,
+  [PROP-064](./prop-064-ui-browser-terminal.md)). Поле не добавлено «на будущее» — при
+  реальной потребности контракт изменится осознанно.
+- **Два лимита вывода — это разные вещи.** `maxOutputBytes` — лимит **порта** (буфер
+  процесса; по умолчанию 10 МБ — как прежний `maxBuffer`); превышение → ошибка с
+  `reason: 'max_output'` и `truncated: true`. Обрезка **текста, который видит модель**, —
+  на уровне тула и в контракт порта не входит: shell — 100 КБ (`MAX_OUTPUT_LENGTH`,
+  `packages/core/src/engine/tools/shell.ts:11`), git — 20 КБ (`MAX_GIT_OUTPUT`,
+  `packages/core/src/engine/tools/git.ts:15`), `rg` — 200 строк
+  (`packages/core/src/engine/tools/search.ts:59`).
+- **Реализации:** `InlineExecutionPort` — исполнение в процессе поверх прежних
+  `execFileAsync` (`packages/core/src/engine/tools/shell.ts:46`,
+  `packages/core/src/engine/tools/search.ts:50`, `packages/core/src/engine/tools/git.ts:33`,
+  `packages/core/src/engine/commands/inline-shell.ts:43`,
+  `packages/core/src/engine/tools/runtime-deps.ts:93`); `RemoteExecutionPort` — HTTP к
+  исполнителю (шаг 7 плана реализации).
 - **Контрактный suite** — как у storage-драйвера ([ADR-097](./adr-097-storage-provider-class.md)):
-  один набор тестов на обе реализации (`packages/core/src/storage/contract/index.ts:1` — образец
-  «паспорта порта»). Проверяется: корректность `exitCode`, раздельность stdout/stderr, `truncated` при
-  превышении лимита, таймаут, отмена (`AbortSignal`), поведение при недоступности (fail-closed в
-  `RemoteExecutionPort` при `failMode: fail`).
-- Точка подключения — **один шов**: сегодня исполнение разбросано по 5+ местам и общего шва нет
-  (перечислено выше); после шага 1 (см. «Порядок реализации») все эти места ходят в порт.
-- **Ошибки** — типизированы: `ENOENT` (нет бинарника) → `tool.binary_missing`
-  (`packages/core/src/engine/tools/shell.ts` — текущая ветка ошибки), таймаут/отмена → отдельные
-  коды; классификация — по образцу [ADR-041](./adr-041-llm-error-taxonomy.md), строки — через
-  `shared/i18n`.
+  один набор тестов на любую реализацию (`packages/core/src/execution/contract/execution.ts` —
+  «паспорт» порта; образец — `packages/core/src/storage/contract/index.ts:1`). Проверяется:
+  разделение stdout/stderr, обе формы команды, ненулевой код выхода (ошибка с кодом и
+  частичным выводом), `cwd`, мердж `env` (окружение не заменяется целиком), таймаут, отмена
+  (`AbortSignal`), превышение лимита вывода, отсутствующий бинарник (`ENOENT`), заполненный
+  `durationMs`. Для удалённой реализации каталог из `cwd` должен быть виден исполнителю
+  (общий том workspace) — контракт это предполагает.
+- **Точка подключения — один шов:** `ctx.extra.executionPort`
+  (`packages/core/src/execution/tool-port.ts`, `resolveExecutionPort(ctx)`) — существующий
+  шов зависимостей тулов (`ToolContext.extra`); порт кладёт оркестратор, fallback —
+  inline-исполнение в процессе (прежнее поведение). Не-туловые точки (резолвер проектных
+  инструкций, детект зависимостей, inline-shell) берут **тот же** порт через композицию, а
+  не через собственный inline-экземпляр — иначе в split-режиме они остались бы в control
+  plane.
 
 ## Executor: сервис и разделение ответственности
 
@@ -625,3 +666,4 @@ Split-топология технически возможна и при одн�
 ## История
 
 - 2026-10-21 — переработано: split-топология (control plane + отдельные контейнеры-исполнители) как предмет PROP-077, единый переключатель `execution.mode`, порт `ExecutionPort`, all-in-one вынесен в PROP-082.
+- 2026-10-21 — шаг 1: порт исполнения реализован (union shell/argv вместо строки, типизированная ExecutionError, inline-реализация + контрактный suite); эскиз порта уточнён.

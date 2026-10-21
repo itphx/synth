@@ -43,6 +43,7 @@ import {
   type StorageContext,
 } from '../../index.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
+import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
 import {
   mergeLlmGatewayConfig, mergeSecurityConfig,
   mergeEventsConfig, mergeDecisionConfig,
@@ -495,10 +496,20 @@ export async function createStandaloneDeps(
     bundleStore,
   });
 
+  // PROP-077: порт исполнения команд. Режим (`inline`/`remote`) — параметр
+  // запуска процесса (инвариант 24), поэтому порт собирается здесь, при
+  // старте, и не переинициализируется на лету.
+  const executionPort = new InlineExecutionPort();
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
     hooks,
+    // PROP-077: порт исполнения команд (inline — исполнение в процессе;
+    // режим — параметр запуска, инвариант 24). Тот же порт получает и
+    // детект внешних зависимостей (ниже) — иначе они смотрели бы в разные
+    // места окружения.
+    executionPort,
     // PROP-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
     contextBuilder,
@@ -539,7 +550,7 @@ export async function createStandaloneDeps(
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте,
     // fail-open при ошибке. Пробинг идёт до сборки оркестратора, чтобы первый
     // же запрос видел корректную доступность.
-    runtimeDeps: await detectRuntimeDeps(),
+    runtimeDeps: await detectRuntimeDeps(executionPort),
     // ADR-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
     onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
@@ -862,6 +873,9 @@ export async function createStandaloneDeps(
     bundleStore,
     commandService,
     orchestrator,
+    // PROP-077: порт исполнения — тот же инстанс, что у оркестратора и тулов
+    // (резолвер проектных инструкций берёт его для `git rev-parse`).
+    executionPort,
     processMessage,
     eventBindingStore,
     eventApiKeyStore,

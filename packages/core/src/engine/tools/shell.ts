@@ -1,5 +1,3 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
@@ -7,8 +5,8 @@ import { resolvePath, validateInputPath, isSymlinkEscape, pathEscapesWorkspaceRe
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
-
-const execFileAsync = promisify(execFile);
+import { resolveExecutionPort } from '../../execution/tool-port.js';
+import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError } from '../../execution/ports/index.js';
 
 const MAX_OUTPUT_LENGTH = 100_000;
 const DEFAULT_TIMEOUT = 30_000;
@@ -42,14 +40,18 @@ export const executeShellTool: ToolDefinition = {
     const command = await deobfuscateText(ctx, params.command);
 
     try {
-      const { stdout, stderr } = await execFileAsync('sh', ['-c', command], {
+      // PROP-077: исполнение — через порт (inline-реализация повторяет
+      // прежний `sh -c`: тот же бинарь, таймаут, maxBuffer 10 МБ и окружение
+      // `{...process.env, HOME: process.env.HOME || '/root'}`).
+      const { stdout, stderr } = await resolveExecutionPort(ctx).execute({
+        command: { kind: 'shell', command, shell: 'sh' },
         cwd,
-        timeout,
+        timeoutMs: timeout,
         // «Стоп» (POST /sessions/:id/abort → toolAbortController.abort) убивает
         // процесс SIGTERM — зомби-процессов не остаётся.
         signal: ctx.abortSignal,
-        maxBuffer: 10 * 1024 * 1024,
-        env: { ...process.env, HOME: process.env.HOME || '/root' },
+        maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+        env: { HOME: process.env.HOME || '/root' },
       });
 
       let output = '';
@@ -65,7 +67,7 @@ export const executeShellTool: ToolDefinition = {
         metadata: { command: params.command, exitCode: 0, truncated: output.length > MAX_OUTPUT_LENGTH },
       };
     } catch (err: unknown) {
-      const execError = err as { stdout?: string; stderr?: string; killed?: boolean; code?: number; message?: string };
+      const execError = err as ExecutionError;
 
       // Прерывание по «Стоп» — вернуть единый маркер отмены + частичный вывод
       if (isAborted(ctx)) {
@@ -74,7 +76,7 @@ export const executeShellTool: ToolDefinition = {
       }
 
       // Fallback, если детекция окружения не сработала, а `sh` не установлен.
-      if ((execError as { code?: unknown }).code === 'ENOENT') {
+      if (execError.code === 'ENOENT') {
         return {
           content: sm('tool.binary_missing', { tool: this.name, binary: 'sh' }),
           isError: true,

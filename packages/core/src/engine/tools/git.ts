@@ -1,5 +1,3 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
@@ -10,8 +8,9 @@ import { isAborted, abortedResult } from './abort.js';
 import { resolveRepoGitEnv, resolveProjectRepoEntry } from './git-ssh.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import type { SystemMessageKey } from '../system-messages.js';
-
-const execFileAsync = promisify(execFile);
+import { resolveExecutionPort } from '../../execution/tool-port.js';
+import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
+import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError, type ExecutionPort } from '../../execution/ports/index.js';
 
 const MAX_GIT_OUTPUT = 20_000;
 
@@ -19,15 +18,27 @@ const MAX_GIT_OUTPUT = 20_000;
  * Обёртка git-команд: signal (если передан) убивает процесс SIGTERM по «Стоп».
  * `env` (ADR-076 §T6) — дополнительные переменные окружения (например
  * `GIT_SSH_COMMAND`): объединяются с `process.env`, а не заменяют его.
+ *
+ * PROP-077: исполнение — через порт (`execution`). По умолчанию — inline:
+ * те же argv без shell, `cwd`, таймаут 30 с, `maxBuffer` 10 МБ и окружение
+ * `{...process.env, ...env}`.
  */
 export async function runGit(
   args: string[],
   cwd: string,
   signal?: AbortSignal,
   env?: Record<string, string>,
+  execution?: ExecutionPort,
 ): Promise<{ stdout: string; stderr: string }> {
-  const mergedEnv = env ? { ...process.env, ...env } : process.env;
-  return execFileAsync('git', args, { cwd, timeout: 30_000, signal, maxBuffer: 10 * 1024 * 1024, env: mergedEnv });
+  const { stdout, stderr } = await (execution ?? new InlineExecutionPort()).execute({
+    command: { kind: 'argv', file: 'git', args },
+    cwd,
+    timeoutMs: 30_000,
+    signal,
+    env,
+    maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+  });
+  return { stdout, stderr };
 }
 
 /** ADR-076 §T6: `repo_path` выходит за пределы workspace проекта. */
@@ -93,7 +104,7 @@ function truncateOutput(output: string): string {
 
 /** Ошибка запуска процесса из-за отсутствия бинарника в окружении (ENOENT). */
 function isBinaryMissing(err: unknown): boolean {
-  return (err as { code?: unknown } | null)?.code === 'ENOENT';
+  return (err as ExecutionError | null)?.code === 'ENOENT';
 }
 
 /**
@@ -234,6 +245,8 @@ async function resolveRegistryRemote(
       mode === 'push' ? ['remote', 'get-url', '--push', remote] : ['remote', 'get-url', remote],
       cwd,
       ctx.abortSignal,
+      undefined,
+      resolveExecutionPort(ctx),
     );
     url = stdout.trim().split('\n')[0]?.trim() ?? '';
   } catch (err: unknown) {
@@ -265,9 +278,11 @@ export const gitStatusTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
+    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    const execution = resolveExecutionPort(ctx);
 
     try {
-      const { stdout } = await runGit(['status', '--porcelain', '--branch'], cwd, ctx.abortSignal);
+      const { stdout } = await runGit(['status', '--porcelain', '--branch'], cwd, ctx.abortSignal, undefined, execution);
       return {
         content: stdout || '(чистая рабочая директория)',
         metadata: { cwd, hasChanges: stdout.length > 0 },
@@ -305,6 +320,8 @@ export const gitDiffTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; staged?: boolean; commit?: string };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
+    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    const execution = resolveExecutionPort(ctx);
 
     // Значение от модели не должно стать флагом git (`--output=…`, `--ext-diff`).
     // Пустая строка — как и раньше, просто не попадает в argv.
@@ -322,7 +339,7 @@ export const gitDiffTool: ToolDefinition = {
       if (params.staged) diffArgs.push('--staged');
       if (params.commit) diffArgs.push(params.commit);
 
-      const { stdout } = await runGit(diffArgs, cwd, ctx.abortSignal);
+      const { stdout } = await runGit(diffArgs, cwd, ctx.abortSignal, undefined, execution);
       const output = stdout || '(нет изменений)';
 
       return {
@@ -362,12 +379,16 @@ export const gitLogTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; max_count?: number };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
+    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    const execution = resolveExecutionPort(ctx);
 
     try {
       const { stdout } = await runGit(
         ['log', `-${params.max_count ?? 10}`, '--oneline', '--decorate'],
         cwd,
         ctx.abortSignal,
+        undefined,
+        execution,
       );
       return {
         content: stdout || '(нет коммитов)',
@@ -406,6 +427,8 @@ export const gitCommitTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; message: string; allow_empty?: boolean };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
+    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    const execution = resolveExecutionPort(ctx);
 
     // ADR-036: деобфускация в точке потребления — message может содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; message: string; allow_empty?: boolean };
@@ -414,7 +437,7 @@ export const gitCommitTool: ToolDefinition = {
       const commitArgs = ['commit', '-m', restored.message];
       if (restored.allow_empty) commitArgs.push('--allow-empty');
 
-      const { stdout, stderr } = await runGit(commitArgs, cwd, ctx.abortSignal);
+      const { stdout, stderr } = await runGit(commitArgs, cwd, ctx.abortSignal, undefined, execution);
       return {
         content: stdout || stderr || 'Коммит создан',
         metadata: { cwd, message: params.message },
@@ -453,6 +476,8 @@ export const gitPushTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; remote?: string; branch?: string };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
+    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    const execution = resolveExecutionPort(ctx);
 
     // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string };
@@ -490,7 +515,7 @@ export const gitPushTool: ToolDefinition = {
       const pushArgs = ['push', '--', remote];
       if (branch) pushArgs.push(branch);
 
-      const { stdout, stderr } = await runGit(pushArgs, cwd, ctx.abortSignal, ssh.env);
+      const { stdout, stderr } = await runGit(pushArgs, cwd, ctx.abortSignal, ssh.env, execution);
       return {
         content: stdout || stderr || 'git push выполнен',
         metadata: { cwd, remote: params.remote, branch: params.branch },
@@ -531,6 +556,8 @@ export const gitPullTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; remote?: string; branch?: string };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
+    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    const execution = resolveExecutionPort(ctx);
 
     // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string };
@@ -566,7 +593,7 @@ export const gitPullTool: ToolDefinition = {
       const pullArgs = ['pull', '--', remote];
       if (branch) pullArgs.push(branch);
 
-      const { stdout, stderr } = await runGit(pullArgs, cwd, ctx.abortSignal, ssh.env);
+      const { stdout, stderr } = await runGit(pullArgs, cwd, ctx.abortSignal, ssh.env, execution);
       return {
         content: stdout || stderr || 'git pull выполнен',
         metadata: { cwd, remote: params.remote, branch: params.branch },
@@ -606,6 +633,8 @@ export const gitCheckoutTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; target: string; create_branch?: boolean };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
+    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    const execution = resolveExecutionPort(ctx);
 
     // ADR-036: деобфускация в точке потребления — target может содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; target: string; create_branch?: boolean };
@@ -621,7 +650,7 @@ export const gitCheckoutTool: ToolDefinition = {
       if (restored.create_branch) checkoutArgs.push('-b');
       checkoutArgs.push(restored.target);
 
-      const { stdout, stderr } = await runGit(checkoutArgs, cwd, ctx.abortSignal);
+      const { stdout, stderr } = await runGit(checkoutArgs, cwd, ctx.abortSignal, undefined, execution);
       return {
         content: stdout || stderr || `Переключён на ${params.target}`,
         metadata: { cwd, target: params.target, createdBranch: params.create_branch },
@@ -659,6 +688,8 @@ export const gitBranchListTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; all?: boolean; verbose?: boolean };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
+    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    const execution = resolveExecutionPort(ctx);
 
     try {
       const branchArgs = ['branch'];
@@ -670,7 +701,7 @@ export const gitBranchListTool: ToolDefinition = {
         branchArgs.push('--format=%(refname:short)');
       }
 
-      const { stdout, stderr } = await runGit(branchArgs, cwd, ctx.abortSignal);
+      const { stdout, stderr } = await runGit(branchArgs, cwd, ctx.abortSignal, undefined, execution);
       if (stderr) {
         return { content: `Ошибка git branch: ${stderr.trim()}`, isError: true, metadata: { cwd } };
       }
@@ -681,7 +712,7 @@ export const gitBranchListTool: ToolDefinition = {
 
       let output = stdout.trimEnd();
       if (!params.verbose && !params.all) {
-        const current = (await runGit(['branch', '--show-current'], cwd, ctx.abortSignal)).stdout.trim();
+        const current = (await runGit(['branch', '--show-current'], cwd, ctx.abortSignal, undefined, execution)).stdout.trim();
         if (current) {
           output = stdout
             .split('\n')
@@ -725,6 +756,8 @@ export const gitShowTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; object?: string; stat?: boolean };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
+    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    const execution = resolveExecutionPort(ctx);
 
     // Значение от модели не должно стать флагом git (`--output=…`, `--ext-diff`).
     const object = params.object ?? 'HEAD';
@@ -739,7 +772,7 @@ export const gitShowTool: ToolDefinition = {
       if (params.stat) showArgs.push('--stat');
       showArgs.push(object);
 
-      const { stdout, stderr } = await runGit(showArgs, cwd, ctx.abortSignal);
+      const { stdout, stderr } = await runGit(showArgs, cwd, ctx.abortSignal, undefined, execution);
       if (stderr) {
         return { content: `Ошибка git show: ${stderr.trim()}`, isError: true, metadata: { cwd } };
       }
@@ -782,6 +815,8 @@ export const gitBlameTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; file: string; max_count?: number; line_range?: string };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
+    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    const execution = resolveExecutionPort(ctx);
 
     try {
       const blameArgs = ['blame'];
@@ -789,7 +824,7 @@ export const gitBlameTool: ToolDefinition = {
       if (params.line_range) blameArgs.push('-L', params.line_range);
       blameArgs.push('--', params.file);
 
-      const { stdout, stderr } = await runGit(blameArgs, cwd, ctx.abortSignal);
+      const { stdout, stderr } = await runGit(blameArgs, cwd, ctx.abortSignal, undefined, execution);
       if (stderr) {
         return { content: `Ошибка git blame: ${stderr.trim()}`, isError: true, metadata: { cwd, file: params.file } };
       }
@@ -841,6 +876,8 @@ export const gitStashTool: ToolDefinition = {
     };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
+    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    const execution = resolveExecutionPort(ctx);
     const action = params.action ?? 'push';
 
     // ADR-036: деобфускация в точке потребления — message может содержать ⟦SYNTH_SECRET_N⟧
@@ -852,7 +889,7 @@ export const gitStashTool: ToolDefinition = {
 
       if (action === 'list') {
         stashArgs.push('list');
-        result = await runGit(stashArgs, cwd, ctx.abortSignal);
+        result = await runGit(stashArgs, cwd, ctx.abortSignal, undefined, execution);
         if (result.stderr) {
           return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
         }
@@ -862,7 +899,7 @@ export const gitStashTool: ToolDefinition = {
       if (action === 'show') {
         stashArgs.push('show');
         if (restored.stash_index !== undefined) stashArgs.push(`stash@{${restored.stash_index}}`);
-        result = await runGit(stashArgs, cwd, ctx.abortSignal);
+        result = await runGit(stashArgs, cwd, ctx.abortSignal, undefined, execution);
         if (result.stderr) {
           return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
         }
@@ -872,7 +909,7 @@ export const gitStashTool: ToolDefinition = {
       if (action === 'drop' || action === 'pop' || action === 'apply') {
         stashArgs.push(action);
         if (restored.stash_index !== undefined) stashArgs.push(`stash@{${restored.stash_index}}`);
-        result = await runGit(stashArgs, cwd, ctx.abortSignal);
+        result = await runGit(stashArgs, cwd, ctx.abortSignal, undefined, execution);
         if (result.stderr) {
           return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
         }
@@ -885,7 +922,7 @@ export const gitStashTool: ToolDefinition = {
       } else {
         stashArgs.push('push');
       }
-      result = await runGit(stashArgs, cwd, ctx.abortSignal);
+      result = await runGit(stashArgs, cwd, ctx.abortSignal, undefined, execution);
       if (result.stderr) {
         return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
       }

@@ -66,6 +66,14 @@
 - Хранилище — только через порты слоя хранения (`StorageContext`, ADR-096); файловая
   реализация — `FileStore`/`JsonStore`/… (JSON + атомарная запись tmp→rename,
   ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя.
+- Исполнение агентских команд — **только через порт** `ExecutionPort` (`execution/ports`), а не
+  прямым `execFile`; реализация по умолчанию — `InlineExecutionPort` (в процессе), удалённая —
+  шаг 7 плана PROP-077. Шов внедрения — `ctx.extra.executionPort` (`resolveExecutionPort(ctx)`);
+  не-туловые точки (резолвер проектных инструкций, детект зависимостей, inline-shell) берут
+  тот же порт через композицию. Вне порта остаются операции, не относящиеся к агентским
+  командам: `simple-git` (`git/git-service.ts` — clone/fetch/init с SSH/CA-окружением), MCP
+  stdio (`engine/mcp/client.ts`), обслуживание (`maintenance/update.ts`) — они уезжают в
+  исполнитель по фазам 2–3 плана PROP-077.
 - Конфиг — через `@itphx/synth-shared/config` (ADR-023); приоритет
   CLI-флаги > `SYNTH_*` env > config.yaml > defaults.
 - **Доверие TLS/CA исходящих соединений — единый слой (ADR-099).**
@@ -184,6 +192,13 @@
 ## Карта модулей
 
 - `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, `analytics rebuild`, …).
+- `execution/` — PROP-077 (шаг 1): порт исполнения команд — `ports/execution-port.ts`
+  (`ExecutionPort`, `ExecRequest`, `ExecResult`, `ExecCommand` — union `shell`/`argv`,
+  `ExecutionError`, `DEFAULT_MAX_OUTPUT_BYTES`), `inline-execution-port.ts`
+  (`InlineExecutionPort` — исполнение в процессе поверх `execFile`), `contract/`
+  (контрактный suite порта — обязателен для любой реализации, как `storage/contract/`),
+  `tool-port.ts` (`resolveExecutionPort(ctx)` — шов: берёт порт из `ctx.extra.executionPort`,
+  иначе inline-фоллбэк).
 - `metrics/` — ADR-094: `registry.ts` (counter/gauge/histogram, лимит серий 2000,
   `synth_metrics_series_dropped_total`, `addCollector`), `renderer.ts` (text exposition 0.0.4,
   golden-тесты), `http.ts` (Hono-middleware: `method`/шаблон `route`/`status`, `in_flight`,

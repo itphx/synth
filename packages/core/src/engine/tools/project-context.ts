@@ -8,6 +8,8 @@ import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { runGit } from './git.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm } from '../system-messages.js';
+import { resolveExecutionPort } from '../../execution/tool-port.js';
+import type { ExecutionPort } from '../../execution/ports/index.js';
 
 interface ProjectContextExtra {
   sessionManager?: SessionManager;
@@ -54,7 +56,16 @@ interface RepoInfo {
   lastCommit?: string;
 }
 
-async function detectRepoInfo(dir: string, signal?: AbortSignal): Promise<RepoInfo | null> {
+/**
+ * PROP-077: git-детект идёт через порт исполнения (`ctx.extra.executionPort`),
+ * иначе — inline-фоллбэк (`resolveExecutionPort`). Порт внедряется оркестратором,
+ * поэтому в split-режиме детект поедет в исполнителя, а не в control plane.
+ */
+async function detectRepoInfo(
+  dir: string,
+  signal?: AbortSignal,
+  execution?: ExecutionPort,
+): Promise<RepoInfo | null> {
   let isRepo = false;
   try {
     await access(join(dir, '.git'));
@@ -66,28 +77,28 @@ async function detectRepoInfo(dir: string, signal?: AbortSignal): Promise<RepoIn
   const info: RepoInfo = { path: dir, isRepo, hasChanges: false };
 
   try {
-    const branch = (await runGit(['branch', '--show-current'], dir, signal)).stdout.trim();
+    const branch = (await runGit(['branch', '--show-current'], dir, signal, undefined, execution)).stdout.trim();
     if (branch) info.branch = branch;
   } catch {
     // ветку не определить — пропускаем
   }
 
   try {
-    const remoteUrl = (await runGit(['remote', 'get-url', 'origin'], dir, signal)).stdout.trim();
+    const remoteUrl = (await runGit(['remote', 'get-url', 'origin'], dir, signal, undefined, execution)).stdout.trim();
     if (remoteUrl) info.remoteUrl = remoteUrl;
   } catch {
     // remote не настроен — пропускаем
   }
 
   try {
-    const status = (await runGit(['status', '--porcelain'], dir, signal)).stdout;
+    const status = (await runGit(['status', '--porcelain'], dir, signal, undefined, execution)).stdout;
     info.hasChanges = status.trim().length > 0;
   } catch {
     // статус не определить — пропускаем
   }
 
   try {
-    const lastCommit = (await runGit(['log', '-1', '--oneline'], dir, signal)).stdout.trim();
+    const lastCommit = (await runGit(['log', '-1', '--oneline'], dir, signal, undefined, execution)).stdout.trim();
     if (lastCommit) info.lastCommit = lastCommit;
   } catch {
     // нет коммитов — пропускаем
@@ -96,10 +107,14 @@ async function detectRepoInfo(dir: string, signal?: AbortSignal): Promise<RepoIn
   return info;
 }
 
-async function findReposInDir(root: string, signal?: AbortSignal): Promise<RepoInfo[]> {
+async function findReposInDir(
+  root: string,
+  signal?: AbortSignal,
+  execution?: ExecutionPort,
+): Promise<RepoInfo[]> {
   const repos: RepoInfo[] = [];
 
-  const rootRepo = await detectRepoInfo(root, signal);
+  const rootRepo = await detectRepoInfo(root, signal, execution);
   if (rootRepo) repos.push(rootRepo);
 
   let entries;
@@ -112,7 +127,7 @@ async function findReposInDir(root: string, signal?: AbortSignal): Promise<RepoI
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     if (SKIP_DIRS.has(entry.name)) continue;
-    const repo = await detectRepoInfo(join(root, entry.name), signal);
+    const repo = await detectRepoInfo(join(root, entry.name), signal, execution);
     if (repo) repos.push(repo);
   }
 
@@ -215,7 +230,7 @@ export const getProjectInfoTool: ToolDefinition = {
       parts.push(sm('projectctx.no_plan_hint'));
     }
 
-    const repo = await detectRepoInfo(projectDir, ctx.abortSignal);
+    const repo = await detectRepoInfo(projectDir, ctx.abortSignal, resolveExecutionPort(ctx));
     if (repo) {
       parts.push('');
       parts.push(sm('projectctx.git_section'));
@@ -249,6 +264,8 @@ export const listReposTool: ToolDefinition = {
     // ввод пути от агента инструмент не принимает (z.object({})).
     const extra = ctx.extra as ProjectContextExtra | undefined;
     const projectDir = resolveWorkspaceDir(project, extra?.workspacesRoot, ctx.workingDir);
+    // PROP-077: git-детект — через внедрённый порт исполнения.
+    const execution = resolveExecutionPort(ctx);
 
     if (project?.repos && project.repos.length > 0) {
       parts.push(sm('projectctx.repos_title', { name: project.name }));
@@ -257,11 +274,11 @@ export const listReposTool: ToolDefinition = {
         // каталога проекта: `destination` — абсолютный путь внутри workspace,
         // git-детект ищет в правильном месте (ADR-076).
         const destination = resolveRepoPath(repoCfg.path, projectDir);
-        const repo = await detectRepoInfo(destination, ctx.abortSignal);
+        const repo = await detectRepoInfo(destination, ctx.abortSignal, execution);
         parts.push(formatRegistryRepo(repoCfg, destination, repo));
       }
     } else {
-      const repos = await findReposInDir(projectDir, ctx.abortSignal);
+      const repos = await findReposInDir(projectDir, ctx.abortSignal, execution);
       if (repos.length === 0) {
         return {
           content: sm('projectctx.repos_none', { dir: projectDir }),

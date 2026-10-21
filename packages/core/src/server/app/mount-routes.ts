@@ -629,6 +629,8 @@ export function mountStandaloneRoutes(
         trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
         // ADR-069 R3: авто-trust workspace внутри workspacesRoot (как в оркестраторе).
         workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
+        // PROP-077: `git rev-parse` — через порт исполнения (тот же, что у тулов).
+        execution: deps.executionPort,
       }),
       config.instructionsConfig,
     );
