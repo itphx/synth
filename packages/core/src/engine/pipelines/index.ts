@@ -80,11 +80,19 @@ export {
   NoopPipelineExitHandler,
   PIPELINE_ERROR_CODES,
 } from './types.js';
+export { createPipelineExitHandler } from './exits.js';
+export type {
+  PipelineExitDeps,
+  PipelineExitEventBusLike,
+  PipelineExitIngressLike,
+  PipelineExitSessionManagerLike,
+} from './exits.js';
 export type {
   ConditionContext,
   PipelineEngineDeps,
   PipelineEngineLogger,
   PipelineErrorCode,
+  PipelineEventPublisher,
   PipelineExitContext,
   PipelineExitHandler,
   PipelineGate,

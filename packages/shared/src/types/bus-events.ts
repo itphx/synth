@@ -59,6 +59,16 @@ export type EventType =
   | 'event.received'
   | 'event.routed'
   | 'binding.changed'
+  // ADR-101 (Pipeline Engine): прогон пайплайна — инстансное собыдение
+  // (не сессионное), публикуется в существующей шине; новых каналов нет.
+  | 'pipeline.run.started'
+  | 'pipeline.run.node_started'
+  | 'pipeline.run.node_finished'
+  | 'pipeline.run.awaiting_human'
+  | 'pipeline.run.finished'
+  | 'pipeline.run.failed'
+  // ADR-101: выход пайплайна вида `gateway` — публикация наружу (ADR-052/ADR-087).
+  | 'pipeline.completed'
   | 'error';
 
 export interface BusEvent {

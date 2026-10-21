@@ -942,6 +942,35 @@ export class ChatOrchestrator {
   }
 
   /**
+   * ADR-101: сборщик системного промпта (ADR-070) — **тот же инстанс**, что у
+   * сессий. Движок пайплайнов использует его для agent-шага: шаг ≠ сессия
+   * (ADR-101 §1), но промпт собирается той же подсистемой (иначе разойдутся
+   * блоки, политики и кэш-маркеры).
+   */
+  getComposer(): SystemPromptComposer {
+    return this._composer;
+  }
+
+  /**
+   * ADR-101/ADR-069: резолвер проектных инструкций — тот же инстанс, что у
+   * сессий (политика trust/dedup/лимиты — общие). `null` — инструкции
+   * инстанса выключены.
+   */
+  getInstructionsResolver(): ProjectInstructionsResolver | null {
+    return this._instructionsResolver;
+  }
+
+  /**
+   * ADR-036/ADR-101: обернуть провайдера в `GatewayProvider` — общая точка
+   * обвязки для движков вне сессии (шаг пайплайна — не сессия, поэтому карта
+   * обфускации пустая, как у пула провайдеров). Инвариант «любой LLM-вызов
+   * через gateway» сохраняется.
+   */
+  wrapProviderWithGateway(provider: BaseProvider): BaseProvider {
+    return this._poolGatewayFactory()(provider);
+  }
+
+  /**
    * ADR-071 §2.6: тул жёстко отключён администратором (`tools.disabled`) — по
    * capability или по имени. `runtime` неотключаем (защита на API + здесь).
    */

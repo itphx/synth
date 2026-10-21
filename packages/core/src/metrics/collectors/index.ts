@@ -23,6 +23,25 @@ export {
 export type { EventMetricsHooks } from './events.js';
 export { createSchedulerMetrics } from './scheduler.js';
 export type { SchedulerJobInfo, SchedulerJobMetrics } from './scheduler.js';
+export {
+  createPipelineMetrics,
+  normalizePipelineRunStatus,
+  normalizePipelineStepOutcome,
+  normalizePipelineNodeKind,
+  normalizePipelineGateKind,
+  normalizePipelineTriggerSource,
+  PIPELINE_RUN_DURATION_BUCKETS,
+  PIPELINE_STEP_DURATION_BUCKETS,
+  PIPELINE_WAIT_DURATION_BUCKETS,
+} from './pipelines.js';
+export type {
+  PipelineGateMetricKind,
+  PipelineMetricsHooks,
+  PipelineNodeMetricKind,
+  PipelineRunMetricStatus,
+  PipelineStepMetricOutcome,
+  PipelineTriggerMetricSource,
+} from './pipelines.js';
 export { createWebhookMetrics } from './webhooks.js';
 export type {
   WebhookDeliveryInfo,

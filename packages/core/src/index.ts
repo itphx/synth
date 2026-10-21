@@ -7,7 +7,7 @@ export { SessionManager } from './sessions/manager.js';
 export { parseTtl, startEphemeralSweeper, DEFAULT_EPHEMERAL_SWEEP_INTERVAL_MS } from './sessions/ephemeral.js';
 export { computeSessionStats, MAX_SUBAGENT_DEPTH } from './sessions/stats.js';
 export type { SessionStatsDeps } from './sessions/stats.js';
-export { EventBus, sseEventStream } from './events/bus.js';
+export { EventBus, INSTANCE_EVENT_CHANNEL, sseEventStream } from './events/bus.js';
 export { extractChildSessionId, extractCreatedSession } from './events/child-session.js';
 export type { CreatedSessionTarget } from './events/child-session.js';
 export { HookBus, HOOK_ASYNC_TIMEOUT_MS } from './engine/hooks/index.js';
@@ -61,7 +61,7 @@ export type { SubagentResumeDeps, SubagentResumeOptions, SubagentResumeResult, S
 export { SUBAGENT_MAX_ATTEMPTS, SUBAGENT_RETRY_DELAYS_MS } from './engine/tools/task.js';
 export type { SubagentRetryConfig, SubagentRunConfig } from './engine/tools/task.js';
 
-export { ModelRouter, ContentClassifier, ProviderPool, QualityChecker, DictionaryStore, DICTIONARY_LANGUAGES, DICTIONARY_MAX_KEYWORDS, DICTIONARY_MAX_TOOLS } from './engine/router/index.js';
+export { ModelRouter, ContentClassifier, ProviderPool, QualityChecker, DictionaryStore, toCoreProviderConfig, DICTIONARY_LANGUAGES, DICTIONARY_MAX_KEYWORDS, DICTIONARY_MAX_TOOLS } from './engine/router/index.js';
 export type { StoredDictionary, DictionaryLanguage } from './engine/router/index.js';
 export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
 
@@ -961,6 +961,7 @@ export {
   checkPipelineToolPermission,
   createAgentStepExecutor,
   createHumanStepExecutor,
+  createPipelineExitHandler,
   createScriptStepExecutor,
   createToolStepExecutor,
   evaluateCondition,
@@ -995,8 +996,13 @@ export type {
   PipelineEngineDeps,
   PipelineEngineLogger,
   PipelineErrorCode,
+  PipelineEventPublisher,
   PipelineExitContext,
+  PipelineExitDeps,
+  PipelineExitEventBusLike,
   PipelineExitHandler,
+  PipelineExitIngressLike,
+  PipelineExitSessionManagerLike,
   PipelineGate,
   PipelineGateDecision,
   PipelineGateKind,
@@ -1121,6 +1127,12 @@ export {
   createSchedulerMetrics,
   createWebhookMetrics,
   createEventMetrics,
+  createPipelineMetrics,
+  normalizePipelineRunStatus,
+  normalizePipelineStepOutcome,
+  normalizePipelineNodeKind,
+  normalizePipelineGateKind,
+  normalizePipelineTriggerSource,
   startEventJournalMetrics,
   attachHybridMetrics,
   setSynthReady,
@@ -1131,6 +1143,9 @@ export {
   STORAGE_RECORDS_INTERVAL_MS,
   STORAGE_BYTES_INTERVAL_MS,
   EVENT_JOURNAL_INTERVAL_MS,
+  PIPELINE_RUN_DURATION_BUCKETS,
+  PIPELINE_STEP_DURATION_BUCKETS,
+  PIPELINE_WAIT_DURATION_BUCKETS,
 } from './metrics/index.js';
 export type {
   TurnOutcome,
@@ -1143,6 +1158,12 @@ export type {
   WebhookDeliveryMetrics,
   WebhookDeliveryOutcome,
   EventMetricsHooks,
+  PipelineGateMetricKind,
+  PipelineMetricsHooks,
+  PipelineNodeMetricKind,
+  PipelineRunMetricStatus,
+  PipelineStepMetricOutcome,
+  PipelineTriggerMetricSource,
   LlmCallInfo,
   LlmCallOutcome,
 } from './metrics/index.js';

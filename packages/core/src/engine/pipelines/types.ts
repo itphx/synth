@@ -18,7 +18,9 @@ import type {
   PipelineSpec,
   StepResult,
 } from '@itphx/synth-shared';
+import type { EventType } from '@itphx/synth-shared';
 import type { BaseProvider } from '../../providers/base.js';
+import type { PipelineMetricsHooks } from '../../metrics/collectors/pipelines.js';
 import type {
   PipelineRunRepository,
   ProjectPipelineRepository,
@@ -315,6 +317,21 @@ export interface PipelineExitContext {
 }
 
 /**
+ * Публикатор **инстансных** событий (ADR-101 §2.12) — минимальный контракт
+ * шины, который нужен движку.
+ *
+ * Прогон пайплайна — не сессия (ADR-101 §1), поэтому его события публикуются
+ * в отдельный инстансный канал существующей шины (`EventBus.publishInstance`):
+ * их видят глобальные подписчики (SSE-хаб `GET /api/v2/events`, watch-all
+ * клиенты managed-хаба, движок webhooks), а per-session подписки — нет.
+ * Новый транспортный канал не заводится (ADR-024/ADR-089).
+ */
+export interface PipelineEventPublisher {
+  /** Публикация инстансного события (тип — из контракта `EventType`). */
+  publishInstance(type: EventType, data?: Record<string, unknown>): void;
+}
+
+/**
  * Обработчик выхода пайплайна — **точка расширения** движка (ADR-101 §9).
  *
  * В Э3 используется no-op реализация: выходы фиксируются в журнале прогона,
@@ -382,6 +399,19 @@ export interface PipelineEngineDeps extends PipelineStepContextDeps {
    * funnel'а сессий.
    */
   resolveLlmDefaults?: () => PipelineLlmDefaults | Promise<PipelineLlmDefaults>;
+  /**
+   * Шина инстансных событий (ADR-101 §2.12) — движок публикует в неё
+   * `pipeline.run.*` (старт/финиш прогона, шаг, ожидание человека, ошибка).
+   *
+   * Не задана — события не публикуются (движок работает и без шины).
+   */
+  eventBus?: PipelineEventPublisher | null;
+  /**
+   * Метрики прогонов (ADR-094, `synth_pipeline_*`) — колбэки движка.
+   *
+   * Не заданы — метрики не пишутся (реестр пуст, `/metrics` → 404).
+   */
+  metrics?: PipelineMetricsHooks | null;
 }
 
 /** Опции запуска прогона. */

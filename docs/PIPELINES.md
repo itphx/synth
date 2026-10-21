@@ -386,6 +386,41 @@ Payload проходит общую санитизацию журнала (§2.1
 | `gateway` | публикует событие/вызывает webhook наружу (ADR-087/ADR-052) |
 | `none` | прогон завершается без внешнего следа |
 
+#### 2.10.1. Реализация выходов (Э5)
+
+> **Реализовано (Э5):** обработчики выходов — `packages/core/src/engine/pipelines/exits.ts`
+> (`createPipelineExitHandler`). Подключаются в точке сборки (`server/app/deps.ts` —
+> standalone, `backend/app/deps.ts` — managed) через `PipelineEngineDeps.exits`;
+> глобальных синглтонов нет.
+
+| Вид | Что именно делается | Ключевые правила |
+|---|---|---|
+| `session` | новая сессия в проекте прогона (`SessionManager.createSession`) — **владелец — владелец проекта** (ADR-089); результат шага кладётся сообщением (`author: 'Pipeline'`, `metadata.pipeline`); `session.created` публикуется в канал сессии, хабы подписывают владельца (инвариант 18) | `exit.session.sessionId` — **продолжение** существующей сессии (владелец не меняется); агент — `exit.session.agent`, модель — дефолты инстанса (`resolveLlmDefaults`) |
+| `file` | артефакт пишется в **workspace проекта** (ADR-075); содержимое — `exit.file.contentFrom` (путь в данных прогона) либо весь выход шага (JSON) | **containment**: путь только **относительный**; абсолютный путь, `..` за пределы workspace и отсутствие workspace — **отказ**; каталоги создаются, файл перезаписывается |
+| `gateway` | событие публикуется **наружу** через ingress внешних событий (`EventIngress.ingest`, ADR-089) — источник `pipeline`, тип — `exit.gateway.event` (по умолчанию `pipeline.completed`); payload — **санитизированный** результат шага (секреты вырезаны) | дополнительно событие уходит в **инстансный канал** шины (`pipeline.completed`) — его видят исходящие webhooks (ADR-052) и UI; адресная доставка по `exit.gateway.webhookId` не реализована (подписки срабатывают по типу события) |
+| `none` | ничего не делает | — |
+
+**Сбой выхода не роняет прогон.** Ошибка обработчика (например, отказ по containment'у)
+ловится движком, пишется в лог **и фиксируется в результате выхода** — в журнале
+прогона событие `run.finished` содержит `exits[i].error = {code: 'pipeline.exit_failed',
+message}`. Статус прогона при этом остаётся `done`: отказ артефакта — не провал шага.
+
+```ts
+// точка сборки (standalone/backend) — обработчик один на все виды выхода
+const exits = [
+  createPipelineExitHandler({
+    sessionManager,   // выход `session`
+    projectStore,     // владелец проекта и его workspace
+    eventBus,         // `session.created` + инстансный `pipeline.completed`
+    ingress,          // выход `gateway` (ADR-089)
+    workspacesRoot,   // относительный workspace проекта (ADR-075)
+    resolveLlmDefaults,
+    resolveOwnerId,             // владелец сессии без проекта
+    onSessionMaterialized,      // хабы подписывают владельца (инвариант 18)
+  }),
+];
+```
+
 ### 2.11. Проектная привязка и шаблоны
 
 - `projectId` — обязателен для пайплайна проекта; видимость — по владельцу/участникам проекта (те же
@@ -399,6 +434,60 @@ Payload проходит общую санитизацию журнала (§2.1
 - Метрики — реестр ADR-094: `synth_pipeline_*` (прогоны, шаги, длительности, статусы, HITL-ожидания).
 - Строки движка — через ключи `shared/i18n` (ADR-041).
 
+#### 2.12.1. Имена событий (Э5)
+
+> **Реализовано (Э5):** типы — в `packages/shared/src/types/bus-events.ts` (`EventType`);
+> публикация — `EventBus.publishInstance` (`packages/core/src/events/bus.ts`), инстансный
+> канал `instance`.
+
+| Тип | Когда | Payload |
+|---|---|---|
+| `pipeline.run.started` | прогон запущен | `runId`, `pipelineId`, `version`, `projectId?`, `triggerKind` |
+| `pipeline.run.node_started` | начало попытки узла | `runId`, `pipelineId`, `version`, `projectId?`, `node`, `nodeKind`, `attempt` |
+| `pipeline.run.node_finished` | узел завершён (попытка) | те же поля + `status`, `durationMs?`, `errorCode?` (**только код**, не текст ошибки) |
+| `pipeline.run.awaiting_human` | прогон встал на ожидание решения | те же поля + `node`, `gateKind` (`human`/`tool_approval`), `timeoutSec?` (вопрос оператора и аргументы инструмента — **в журнале прогона**, не в событии) |
+| `pipeline.run.finished` | прогон завершён штатно | те же поля + `status: 'done'`, `exits` (число выходов), `durationMs` |
+| `pipeline.run.failed` | прогон провален/отменён | те же поля + `status` (`failed`/`cancelled`), `code`, `node?`, `durationMs` |
+| `pipeline.completed` | выход `gateway` — публикация наружу | `source: 'pipeline'`, `type` (из `exit.gateway.event`), санитизированный результат шага |
+
+**В payload событий не попадают**: payload прогона/триггера, секреты, сырые пути и
+тексты ошибок — только идентификаторы и технические поля (ADR-094/ADR-101 §2.9).
+
+#### 2.12.2. Имена метрик и лейблы (Э5)
+
+> **Реализовано (Э5):** `packages/core/src/metrics/collectors/pipelines.ts`
+> (`createPipelineMetrics`) — колбэки движка.
+
+| Метрика | Тип | Лейблы | Значения лейблов |
+|---|---|---|---|
+| `synth_pipeline_runs_total` | counter | `status` | `done`/`failed`/`cancelled` |
+| `synth_pipeline_runs_started_total` | counter | `source` | `user`/`gateway`/`schedule`/`tool`/`webhook`/`manual` |
+| `synth_pipeline_run_duration_seconds` | histogram | `status` | как у `synth_pipeline_runs_total` |
+| `synth_pipeline_steps_total` | counter | `kind`, `outcome` | `kind`: `agent`/`script`/`tool`/`human`; `outcome`: `ok`/`failed`/`skipped` |
+| `synth_pipeline_step_duration_seconds` | histogram | `kind` | как у `synth_pipeline_steps_total` |
+| `synth_pipeline_human_waits_total` | counter | `kind` | `human`/`tool_approval` |
+| `synth_pipeline_human_wait_duration_seconds` | histogram | — | — |
+
+**Контракт ADR-094:** в лейблах **нет** id (пайплайна/прогона/узла/сессии) и сырых
+путей — значения приводятся к конечным наборам (неизвестное → `other`), поэтому
+кардинальность серий ограничена. Идентификаторы прогонов живут только в payload
+событий и в журнале прогона.
+
+#### 2.12.3. Канал live-обновлений прогона
+
+> **Ответ на открытый вопрос ADR-101:** отдельный поток **не нужен** — хватает
+> существующей шины (ADR-024/ADR-089). Прогон — не сессия, поэтому его события
+> публикуются в **инстансный канал** (`EventBus.publishInstance`, канал `instance`):
+> per-session подписки их не касаются, а глобальные — видят.
+
+| Режим | Путь доставки |
+|---|---|
+| standalone | SSE `GET /api/v2/events` (глобальная подписка `subscribeAll`) + WS `/ws/events` (клиент подписывается на инстансный канал) |
+| managed (backend) | `EventHub` — watch-all клиенты: `ADMIN`/`LEAD` и service-key (ADR-052); обычный `USER` per-session событий прогонов **не получает** — прогон здесь инстансный админ-ресурс (права уточняются в Э6) |
+
+Новых транспортных каналов не заводится (инвариант 6): UI подписывается на тот же
+`/ws/events`/SSE, что и остальные события.
+
 ### 2.13. Движок: точки расширения
 
 > **Реализовано (Э3):** `packages/core/src/engine/pipelines/` — движок, условия, маппинг,
@@ -408,6 +497,14 @@ Payload проходит общую санитизацию журнала (§2.1
 > **Реализовано (Э4.1–Э4.2):** контекст шага (`step-context.ts`), permission-обёртка
 > (`permissions.ts`), помощники гейтов (`gate.ts`) и исполнители видов `tool`/`script`/`human`
 > (`executors/`). Исполнитель вида `agent` — Э4.3.
+>
+> **Реализовано (Э4.3/Э4.3b):** исполнитель вида `agent` (`executors/agent-step.ts`) —
+> свой Tool-Use-цикл внутри движка.
+>
+> **Реализовано (Э5):** наблюдаемость (метрики `synth_pipeline_*`, события
+> `pipeline.run.*` в инстансном канале шины) и реальные обработчики выходов
+> (`exits.ts`). Точка сборки движка — `server/app/deps.ts` (standalone) и
+> `backend/app/deps.ts` (managed); HTTP-роутов у движка нет (Э6).
 
 **Движок** — `PipelineEngine`, второй оркестратор рядом с `ChatOrchestrator`. Знает только про
 порты слоя хранения (ADR-096) и исполнителей шагов — ни HTTP, ни сессий, ни очереди.
@@ -504,9 +601,10 @@ const engine = new PipelineEngine({
 Коды сохраняются и на уровне прогона — по ним видно, **почему** прогон встал или упал.
 
 **Точки выхода.** `PipelineExitHandler` (`handle(ctx)`) — точка расширения; по умолчанию no-op
-(`NoopPipelineExitHandler`). В Э3 выходы **не исполняются**: движок фиксирует сработавшие выходы
-в журнале (`run.finished.exits`) и отдаёт контекст обработчикам; реальные действия (создание
-сессии, запись файла, публикация в шлюз) подключаются в Э5 — без переписывания движка.
+(`NoopPipelineExitHandler`). В Э3 выходы **не исполнялись**: движок фиксировал сработавшие выходы
+в журнале (`run.finished.exits`) и отдавал контекст обработчикам. С **Э5** подключён реальный
+обработчик — `createPipelineExitHandler` (`engine/pipelines/exits.ts`): сессия/файл/шлюз/none,
+с правилами containment'а файла (ADR-075) и санитизацией наружу (ADR-101 §9, §2.10.1).
 
 **Ретраи, таймауты, отмена.** `node.retry.max` (попыток = `1 + max`) и `node.retry.backoffSec`
 (пауза между попытками); `node.timeoutSec` — таймаут шага (`pipeline.step_timeout`). `AbortSignal`

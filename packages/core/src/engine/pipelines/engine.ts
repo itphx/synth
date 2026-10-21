@@ -41,7 +41,7 @@
  */
 import { generateId, nowISO } from '@itphx/synth-shared';
 import { pipelineSpecSchema, validatePipelineSpec } from '@itphx/synth-shared';
-import type { PipelineNode, PipelineRunEventType, PipelineSpec, StepResult } from '@itphx/synth-shared';
+import type { EventType, PipelineNode, PipelineRunEventType, PipelineSpec, StepResult } from '@itphx/synth-shared';
 
 import { error as logError, info as logInfo, warning as logWarning } from '../../logger.js';
 import type { PipelineRunRecord } from '../../storage/ports/index.js';
@@ -61,6 +61,7 @@ import {
   isStepGateOutcome,
   type PipelineEngineDeps,
   type PipelineEngineLogger,
+  type PipelineEventPublisher,
   type PipelineExitContext,
   type PipelineExitHandler,
   type PipelineGate,
@@ -108,6 +109,8 @@ interface PendingGate {
   attempt: number;
   /** Состояние прогона на момент паузы (нужно для продолжения по таймауту). */
   state: RunState;
+  /** Момент постановки на паузу (мс) — длительность ожидания человека. */
+  waitStartedAt: number;
 }
 
 /**
@@ -154,6 +157,10 @@ export class PipelineEngine {
   private readonly _stepContextDeps: PipelineEngineDeps;
   /** LLM-контур шага (ADR-101 §4) — прокидывается в контекст исполнения. */
   private readonly _llm: PipelineStepLlmRuntime | undefined;
+  /** Шина инстансных событий (ADR-101 §2.12) — публикация `pipeline.run.*`. */
+  private readonly _eventBus: PipelineEventPublisher | null;
+  /** Метрики прогонов (ADR-094, `synth_pipeline_*`). */
+  private readonly _metrics: PipelineEngineDeps['metrics'];
 
   constructor(deps: PipelineEngineDeps) {
     this._pipelines = deps.pipelines;
@@ -165,6 +172,8 @@ export class PipelineEngine {
     this._exitHandlers = deps.exits ?? [];
     this._sleep = deps.sleep ?? defaultSleep;
     this._stepContextDeps = deps;
+    this._eventBus = deps.eventBus ?? null;
+    this._metrics = deps.metrics ?? null;
     // ADR-101 §4: LLM-контур шага собирается один раз (движок не знает, откуда
     // берётся провайдер — это забота точки сборки). Без композитора agent-шаги
     // падают с `pipeline.agent_unavailable`.
@@ -232,6 +241,17 @@ export class PipelineEngine {
       ...(trigger.source ? { source: trigger.source } : {}),
       ...(trigger.type ? { type: trigger.type } : {}),
     });
+
+    // ADR-101 §2.12: прогон виден в шине (инстансный канал) — UI/наблюдаемость.
+    this._publish('pipeline.run.started', {
+      ...this._eventBase(record),
+      triggerKind: trigger.kind,
+    });
+    try {
+      this._metrics?.onRunStarted({ source: trigger.kind });
+    } catch {
+      // метрики не влияют на прогон
+    }
 
     this._logger.info(LOG_GROUP, `прогон ${runId} запущен (пайплайн «${opts.pipelineId}»@${spec.version})`);
 
@@ -304,7 +324,17 @@ export class PipelineEngine {
     }
 
     // Гейт закрыт решением оператора — активное ожидание снимается.
+    const pending = this._pendingGates.get(runId);
     this._pendingGates.delete(runId);
+    // ADR-094: длительность ожидания человека (от паузы до решения оператора).
+    const waitStartedAt = pending?.waitStartedAt ?? Date.parse(stored.updatedAt ?? stored.startedAt ?? '');
+    try {
+      if (!Number.isNaN(waitStartedAt)) {
+        this._metrics?.onHumanWaitFinished({ durationMs: Math.max(0, Date.now() - waitStartedAt) });
+      }
+    } catch {
+      // метрики не влияют на прогон
+    }
 
     const state: RunState = {
       record: { ...stored, status: 'running', updatedAt: now },
@@ -331,6 +361,26 @@ export class PipelineEngine {
         ...(result.error ? { error: result.error } : {}),
         ...(decision.comment ? { comment: decision.comment } : {}),
       });
+      this._publish('pipeline.run.node_started', {
+        ...this._eventBase(state.record),
+        node: node.id,
+        nodeKind: node.kind,
+        attempt: 1,
+      });
+      this._publish('pipeline.run.node_finished', {
+        ...this._eventBase(state.record),
+        node: node.id,
+        nodeKind: node.kind,
+        attempt: 1,
+        status: result.status,
+        durationMs: 0,
+        ...(result.error?.code ? { errorCode: result.error.code } : {}),
+      });
+      try {
+        this._metrics?.onStepFinished({ kind: node.kind, outcome: result.status, durationMs: 0 });
+      } catch {
+        // метрики не влияют на прогон
+      }
       return this._continueAfterStep(state, node, result, signal);
     }
 
@@ -549,6 +599,12 @@ export class PipelineEngine {
         kind: node.kind,
         attempt,
       });
+      this._publish('pipeline.run.node_started', {
+        ...this._eventBase(state.record),
+        node: node.id,
+        nodeKind: node.kind,
+        attempt,
+      });
 
       if (!executor) {
         const missing: StepResult = {
@@ -566,6 +622,19 @@ export class PipelineEngine {
           status: missing.status,
           ...(missing.error ? { error: missing.error } : {}),
         });
+        this._publish('pipeline.run.node_finished', {
+          ...this._eventBase(state.record),
+          node: node.id,
+          nodeKind: node.kind,
+          attempt,
+          status: missing.status,
+          errorCode: missing.error?.code,
+        });
+        try {
+          this._metrics?.onStepFinished({ kind: node.kind, outcome: missing.status, durationMs: 0 });
+        } catch {
+          // метрики не влияют на прогон
+        }
         return missing;
       }
 
@@ -582,6 +651,25 @@ export class PipelineEngine {
         ...(outcome.durationMs !== undefined ? { durationMs: outcome.durationMs } : {}),
         ...(outcome.error ? { error: outcome.error } : {}),
       });
+      this._publish('pipeline.run.node_finished', {
+        ...this._eventBase(state.record),
+        node: node.id,
+        nodeKind: node.kind,
+        attempt,
+        status: outcome.status,
+        ...(outcome.durationMs !== undefined ? { durationMs: outcome.durationMs } : {}),
+        // Только машинночитаемый код ошибки — текст ошибки живёт в журнале.
+        ...(outcome.error?.code ? { errorCode: outcome.error.code } : {}),
+      });
+      try {
+        this._metrics?.onStepFinished({
+          kind: node.kind,
+          outcome: outcome.status,
+          durationMs: outcome.durationMs ?? 0,
+        });
+      } catch {
+        // метрики не влияют на прогон
+      }
 
       const retryable =
         outcome.status === 'failed' &&
@@ -792,7 +880,23 @@ export class PipelineEngine {
       nodeId: node.id,
       attempt: 1,
       state,
+      waitStartedAt: Date.now(),
     });
+
+    // ADR-101 §2.12: прогон встал на ожидание решения человека — событие шины
+    // и счётчик ожиданий (без вопроса и аргументов инструмента: они живут в
+    // журнале прогона).
+    this._publish('pipeline.run.awaiting_human', {
+      ...this._eventBase(state.record),
+      node: node.id,
+      gateKind: gate.kind,
+      ...(gate.timeoutSec !== undefined ? { timeoutSec: gate.timeoutSec } : {}),
+    });
+    try {
+      this._metrics?.onHumanWaitStarted({ kind: gate.kind });
+    } catch {
+      // метрики не влияют на прогон
+    }
 
     // Активный таймаут гейта: таймер в процессе (`unref`). Исполнитель human-шага
     // заводит свой таймер (шаг сам знает про таймаут) — первым сработавший
@@ -861,30 +965,52 @@ export class PipelineEngine {
         output,
         vars: state.vars,
       };
+      // Сбой обработчика выхода не роняет прогон, но **фиксируется в результате
+      // выхода** (журнал прогона, `run.finished.exits[i].error`) — иначе отказ
+      // выхода (например, containment файла) был бы виден только в логе.
+      let failure: { code: string; message: string } | undefined;
       for (const handler of this._exitHandlers) {
         try {
           await handler.handle(ctx);
         } catch (err) {
-          // Выход не исполняется «по-жёсткому»: сбой обработчика не роняет прогон.
+          failure = {
+            code: 'pipeline.exit_failed',
+            message: err instanceof Error ? err.message : String(err),
+          };
           this._logger.error(
             LOG_GROUP,
             `обработчик выхода пайплайна завершился ошибкой: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       }
-      applied.push(sanitizeRecord(exit as unknown as Record<string, unknown>) ?? { kind: exit.kind });
+      const record = sanitizeRecord(exit as unknown as Record<string, unknown>) ?? { kind: exit.kind };
+      applied.push(
+        sanitizeRecord(failure ? { ...record, error: failure } : record) ?? { kind: exit.kind },
+      );
     }
 
     const now = nowISO();
     state.record.status = 'done';
     state.record.finishedAt = now;
     state.record.updatedAt = now;
+    const durationMs = this._runDurationMs(state.record);
     await this._runs.saveRun(state.record);
     await this._appendEvent(state.record.id, 'run.finished', {
       status: 'done',
       exits: applied,
       ...(sanitizeRecord(output) ? { output: sanitizeRecord(output) } : {}),
     });
+    this._publish('pipeline.run.finished', {
+      ...this._eventBase(state.record),
+      status: 'done',
+      exits: applied.length,
+      durationMs,
+    });
+    try {
+      this._metrics?.onRunFinished({ status: 'done', durationMs });
+    } catch {
+      // метрики не влияют на прогон
+    }
     this._logger.info(LOG_GROUP, `прогон ${state.record.id} завершён (выходов: ${applied.length})`);
     return state.record;
   }
@@ -900,12 +1026,25 @@ export class PipelineEngine {
     state.record.error = message;
     state.record.finishedAt = now;
     state.record.updatedAt = now;
+    const durationMs = this._runDurationMs(state.record);
     await this._runs.saveRun(state.record);
     await this._appendEvent(state.record.id, 'run.failed', {
       code,
       error: message,
       ...(state.record.currentNode ? { node: state.record.currentNode } : {}),
     });
+    this._publish('pipeline.run.failed', {
+      ...this._eventBase(state.record),
+      status: 'failed',
+      code,
+      durationMs,
+      ...(state.record.currentNode ? { node: state.record.currentNode } : {}),
+    });
+    try {
+      this._metrics?.onRunFinished({ status: 'failed', durationMs });
+    } catch {
+      // метрики не влияют на прогон
+    }
     this._logger.warning(LOG_GROUP, `прогон ${state.record.id} провалился (${code})`);
     return state.record;
   }
@@ -918,12 +1057,25 @@ export class PipelineEngine {
     state.record.error = message;
     state.record.finishedAt = now;
     state.record.updatedAt = now;
+    const durationMs = this._runDurationMs(state.record);
     await this._runs.saveRun(state.record);
     await this._appendEvent(state.record.id, 'run.failed', {
       code: 'pipeline.cancelled',
       error: message,
       ...(state.record.currentNode ? { node: state.record.currentNode } : {}),
     });
+    this._publish('pipeline.run.failed', {
+      ...this._eventBase(state.record),
+      status: 'cancelled',
+      code: 'pipeline.cancelled',
+      durationMs,
+      ...(state.record.currentNode ? { node: state.record.currentNode } : {}),
+    });
+    try {
+      this._metrics?.onRunFinished({ status: 'cancelled', durationMs });
+    } catch {
+      // метрики не влияют на прогон
+    }
     this._logger.warning(LOG_GROUP, `прогон ${state.record.id} отменён`);
     return state.record;
   }
@@ -941,6 +1093,43 @@ export class PipelineEngine {
       type,
       ...(sanitized ? { payload: sanitized } : {}),
     });
+  }
+
+  /**
+   * Публикация инстансного события прогона в существующую шину
+   * (ADR-101 §2.12, ADR-024/ADR-089) — **новых каналов нет**.
+   *
+   * Полезная нагрузка: id прогона, id пайплайна, версия, id узла, статус и
+   * вид триггера. Секреты, payload прогонов и сырые пути сюда не попадают.
+   * Ошибка публикации не влияет на прогон.
+   */
+  private _publish(type: EventType, data: Record<string, unknown>): void {
+    if (!this._eventBus) return;
+    try {
+      this._eventBus.publishInstance(type, data);
+    } catch (err) {
+      this._logger.warning(
+        LOG_GROUP,
+        `не удалось опубликовать событие «${type}»: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** Базовая часть полезной нагрузки события прогона (без секретов). */
+  private _eventBase(record: PipelineRunRecord): Record<string, unknown> {
+    return {
+      runId: record.id,
+      pipelineId: record.pipelineId,
+      version: record.version,
+      ...(record.projectId ? { projectId: record.projectId } : {}),
+    };
+  }
+
+  /** Длительность прогона в миллисекундах (по времени старта записи прогона). */
+  private _runDurationMs(record: PipelineRunRecord): number {
+    const started = Date.parse(record.startedAt ?? record.createdAt ?? '');
+    if (Number.isNaN(started)) return 0;
+    return Math.max(0, Date.now() - started);
   }
 
   /** Счётчик переходов прогона (по журналу — переживает паузу и рестарт). */
