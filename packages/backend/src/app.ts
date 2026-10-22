@@ -39,7 +39,7 @@ import type {
   EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository,
   SettingsRepository, EventRouter, RequestSessionService, EventBindingRepository,
   EventJournalRepository, EventIngress, ScheduleRepository, SchedulerService,
-  WebhookRepository, WebhookService, StorageContext,
+  WebhookRepository, WebhookService, StorageContext, PluginRuntime,
 } from '@itphx/synth-core';
 import { createStorageDegradedGuard, createStorageStatusRoutes } from '@itphx/synth-core/server/storage-degraded.js';
 import { loadBackendConfig } from './lib/app-config.js';
@@ -93,6 +93,11 @@ export interface BackendAppHandle {
   eventJournal: EventJournalRepository;
   /** ADR-089: ingress-точка приёма внешних событий. */
   ingress: EventIngress;
+  /**
+   * PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного
+   * (`main.ts`) и точки для HTTP API/CLI (Ф5б-2/3).
+   */
+  pluginRuntime: PluginRuntime;
   // ADR-051 (срез) / ADR-089: реестр расписаний и планировщик (cron/interval).
   scheduleStore: ScheduleRepository;
   scheduler: SchedulerService;
@@ -389,6 +394,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       eventBindingStore: deps.eventBindingStore,
       eventJournal: deps.eventJournal,
       ingress: deps.eventIngress,
+      // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация в `main.ts`
+      // и точки для HTTP API/CLI (Ф5б-2/3).
+      pluginRuntime: deps.pluginRuntime,
       // ADR-051 (срез) / ADR-089: реестр расписаний и планировщик.
       scheduleStore: deps.scheduleStore,
       scheduler: deps.schedulerService,

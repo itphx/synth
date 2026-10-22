@@ -558,6 +558,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     requestSessionService: deps.requestSessionService,
     eventBindingStore: deps.eventBindingStore,
     eventJournal: deps.eventJournal,
+    // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация в `main.ts`
+    // и точки для HTTP API/CLI (Ф5б-2/3).
+    pluginRuntime: deps.pluginRuntime,
     // ADR-089: ingress-точка приёма внешних событий.
     ingress: deps.eventIngress,
     // ADR-051 (срез) / ADR-089: реестр расписаний и планировщик.

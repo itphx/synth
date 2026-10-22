@@ -180,8 +180,15 @@ export interface PluginUninstallResult {
   deactivated?: boolean;
 }
 
-/** Собранный бандл: текстовые файлы (в хеше и на диске) + пропущенные бинарные. */
-interface CollectedBundle {
+/**
+ * Собранный бандл: текстовые файлы (в хеше и на диске) + пропущенные бинарные.
+ *
+ * Экспортируется вместе с {@link collectBundleFiles}: тем же обходом
+ * пользуется `PluginRuntime` при старт-активации (шаг `integrity` сверяет
+ * `content_hash` из lock с фактическим содержимым каталога — состав файлов
+ * обязан считаться **одинаково**, иначе хеши разойдутся).
+ */
+export interface CollectedBundle {
   files: Record<string, string>;
   /** Бинарные файлы (в `files` не попадают: содержимое нельзя представить строкой). */
   binaryFiles: string[];
@@ -261,8 +268,11 @@ function describeIssues(error: {
  * `node_modules`/`.git` пропускаются, `PLUGIN_INTEGRITY.json` исключается.
  * Бинарные файлы (по расширению или NUL-признаку — та же функция, что у
  * сканера) в `files` не попадают.
+ *
+ * Экспортируется для `PluginRuntime` (старт-активация): гейт целостности
+ * сверяет `content_hash` из lock с этим же составом файлов.
  */
-async function collectBundleFiles(rootDir: string): Promise<CollectedBundle> {
+export async function collectBundleFiles(rootDir: string): Promise<CollectedBundle> {
   const files: Record<string, string> = {};
   const binaryFiles: string[] = [];
 

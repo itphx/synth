@@ -58,13 +58,18 @@ export {
 } from './engine/plugins/index.js';
 export type { InlinePluginLoaderOptions } from './engine/plugins/index.js';
 // PROP-090 §5/§9 (Ф5а): сервис установки/подтверждения/снятия плагина.
-export { PluginInstaller, resolvePluginEntry } from './engine/plugins/index.js';
+export { PluginInstaller, collectBundleFiles, resolvePluginEntry } from './engine/plugins/index.js';
 export type {
+  CollectedBundle,
   PluginInstallOutcome,
   PluginInstallRequest,
   PluginInstallerDeps,
   PluginUninstallResult,
 } from './engine/plugins/index.js';
+// PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного,
+// список со статусом активации, `dispose`.
+export { PluginRuntime } from './engine/plugins/index.js';
+export type { PluginRuntimeDeps, PluginRuntimeEntry } from './engine/plugins/index.js';
 // PROP-068 §4.3 / PROP-090 §9 (Ф2): статический сканер расширений — правила,
 // квоты, `.skillignore`, кэш сканов и дефолтный хук скана.
 export {
@@ -146,6 +151,10 @@ export { DebugCollector } from './debug.js';
 export { ContextConfig, ContextBuilder, isInterviewCompleted } from './engine/context/index.js';
 export { ContextOptimizer } from './engine/context/index.js';
 export type { BuildSystemPromptParams, ContextBuilderOptions, SummarizationResult, SlidingWindowResult } from './engine/context/index.js';
+// PROP-090 §«Точка promptBlocks» (Ф3а): реестр провайдеров блоков системного
+// промпта — **один** экземпляр на инстанс (композер + фасад плагинов).
+export { PromptBlockRegistrationError, PromptBlockRegistry } from './engine/context/index.js';
+export type { PromptBlockRegistrationOptions, RegisteredPromptBlock } from './engine/context/index.js';
 // ADR-101 §10: суженный «session-like» контракт Composer'а (шаг пайплайна — не сессия).
 export type { ComposerSessionLike } from './engine/context/index.js';
 

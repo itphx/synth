@@ -278,6 +278,25 @@ program
     });
     const { server, wss } = appHandle;
 
+    // PROP-090 §5/§10 (Ф5б-1): старт-активация установленных плагинов.
+    // `plugins.lock.json` — источник истины; `executionEnabled=false` (дефолт) →
+    // no-op. Ошибка плагина (или самого рантайма) **не роняет старт** — только
+    // предупреждение; тексты плагинов в лог не попадают (инвариант 13), только
+    // счётчики исходов.
+    if (appHandle.pluginRuntime) {
+      try {
+        const results = await appHandle.pluginRuntime.activateInstalled({ actor: 'startup' });
+        if (results.length > 0) {
+          const activated = results.filter((item) => item.outcome === 'activated').length;
+          console.log(`[plugins] активировано: ${activated}, отклонено: ${results.length - activated}`);
+        }
+      } catch (err) {
+        console.warn(
+          `[plugins] старт-активация не выполнена: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     let shuttingDown = false;
 
     async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
@@ -315,6 +334,16 @@ program
 
       // ADR-077 (шаг B2): остановить источник MCP-серверов исполнителя.
       appHandle.stopExecutorMcpSource?.();
+
+      // PROP-090 §5 (Ф5б-1): снять вклады плагинов (обратный порядок) — до
+      // закрытия хранилища; ошибка деактивации не мешает остановке.
+      if (appHandle.pluginRuntime) {
+        try {
+          await appHandle.pluginRuntime.dispose();
+        } catch {
+          // Деактивация плагинов не должна ломать shutdown.
+        }
+      }
 
       // ADR-097: закрыть backend хранения (пул соединений PG); `file`/`memory`
       // ресурсов не держат — вызов no-op (см. `StorageContext.close?`).
