@@ -13,7 +13,6 @@ import {
   resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir,
   resolveExecutionConfig,
   readTlsRuntimeSettings,
-  pluginsConfigSchema,
   SYNTH_VERSION,
 } from '@itphx/synth-shared';
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
@@ -24,7 +23,7 @@ import {
   createToolRegistry, createAgentRegistry, McpManager,
   DEFAULT_AGENT_ID, registerStoredAgents,
   AuditLogger, mergeLlmGatewayConfig, mergeSecurityConfig,
-  mergeEventsConfig, mergeDecisionConfig,
+  mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig,
   createEgressPolicyResolver, createEgressLogSink,
   configureEgressRuntime, startEgressLogPruner,
   SkillService, resolveProjectSkillSeed,
@@ -621,6 +620,15 @@ export async function createBackendDeps(
       (await sessionManager.getSession(sid))?.status.cancelRequested === true,
   });
 
+  // PROP-090 §10 (Ф5б-2): эффективный конфиг слоя = config.yaml (+env) поверх
+  // runtime-настроек (`settings.json`/PG): админка `/api/v2/settings/plugins`
+  // пишет runtime, рантайм собирается при старте (применение — рестартом,
+  // инвариант 24), поэтому слияние делается **здесь**, а не в рантайме.
+  const effectivePluginsConfig = mergePluginsConfig(
+    config.synth.plugins,
+    await settingsStore.getPlugins(),
+  );
+
   // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного
   // (`plugins.lock.json` — источник истины), список со статусом активации и
   // точки `activate`/`deactivate` для HTTP API/CLI (Ф5б-2/3). Реестры — **те же**
@@ -628,7 +636,7 @@ export async function createBackendDeps(
   // `plugins.executionEnabled=false` (дефолт) → `activateInstalled()` — no-op.
   const pluginRuntime = new PluginRuntime({
     layout: resolvePluginLayout({ dataDir, env: process.env }),
-    config: config.synth.plugins ?? pluginsConfigSchema.parse({}),
+    config: effectivePluginsConfig,
     hostVersion: SYNTH_VERSION,
     audit: storageContext.pluginAudit,
     lock: storageContext.pluginLock,

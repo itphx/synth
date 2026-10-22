@@ -1530,6 +1530,62 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 
 ---
 
+### 5.36 Плагины — `/api/v2/plugins*` и `/api/v2/settings/plugins` (оба, PROP-090)
+
+Слой плагинов (PROP-090, Extension API v1): установка бандла `synth.pack` (`kind: 'plugin'`),
+модель доверия/скан/install-policy (PROP-068), активация через `PluginHost` и точки расширения
+(`promptBlocks`, `llmFilters`, `tools`). Единая фабрика `createPluginsRoutes` для core и backend;
+`plugins.lock.json` — источник истины (что установлено), `installed/<name>@<version>/` — бандл,
+`quarantine/` — ожидающие подтверждения, журнал `{dataDir}/audit/plugins.jsonl`.
+
+**Исполнение кода выключено по умолчанию** (`plugins.executionEnabled: false`): установка и снятие
+работают, активация останавливается на шаге `import` (`plugin.execution_disabled`). Включение —
+через `PUT /api/v2/settings/plugins` + **перезапуск инстанса**.
+
+| Метод | Путь | Сборка | RBAC (backend / core) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/plugins` | оба | ADMIN / auth | `{plugins: PluginRuntimeEntry[]}` — установленные записи lock + `active`/`mode`; карантин в список не входит |
+| GET | `/api/v2/plugins/:name` | оба | ADMIN / auth | `{plugin, manifest?, integrity?}`: манифест из установленного бандла и `PLUGIN_INTEGRITY.json` (best-effort — порча файла не даёт 500); нет в lock → 404 `plugin.not_found` |
+| POST | `/api/v2/plugins/install` | оба | ADMIN или service-key `addons:install` / auth | Тело `{path, trustLevel?, source?}` (установка из локального каталога): `201` — установлено, `202` — нужно подтверждение (`plugin.approval_required`, бандл в карантине), `400` `plugin.manifest_invalid`, `403` `plugin.trust_below_floor`/`plugin.runtime_install_denied`/`plugin.scan_disabled_with_execution`, `409` `plugin.scan_rejected`. **Managed**: установка с локального пути запрещена → `403 LOCAL_INSTALL_DISABLED` (бандлы приходят deploy-time; архив/npm — Ф5б-3) |
+| POST | `/api/v2/plugins/:name/approve` | оба | **ADMIN** / auth | Подтвердить карантин (`202`-установку): повторные гейты + сверка integrity → `200` установлено; `404` `plugin.not_found`, `409` `plugin.scan_rejected` |
+| POST | `/api/v2/plugins/:name/enable` | оба | ADMIN или `addons:install` / auth | Активация (пайплайн PROP-090 §10) → `200 {activation}`; отказ по гейту (`plugin.execution_disabled`/`trust_below_floor`/`scan_rejected`/`approval_required`) → `409` с `reason`; нет в lock → `404` |
+| POST | `/api/v2/plugins/:name/disable` | оба | ADMIN или `addons:install` / auth | Обратная прокрутка disposers → `200 {deactivation}`; не активен → `404 plugin.not_active` |
+| DELETE | `/api/v2/plugins/:name` | оба | **ADMIN** / auth | Снятие: деактивация → `lock.delete` → удаление каталога версии; **идемпотентно** → `204` даже если записи не было |
+| POST | `/api/v2/plugins/update` | оба | ADMIN или `addons:install` / auth | **`501 NOT_IMPLEMENTED`** — обновление по pinned ref/hash появится вместе с установкой из npm/архива (Ф5б-3); маршрут объявлен, чтобы контракт был виден клиентам |
+
+**Маппинг причин отказа → HTTP** (исчерпывающая таблица `PLUGIN_REASON_HTTP` в
+`packages/core/src/server/routes/plugins.ts`): `400` — `manifest_invalid`, `contract_mismatch`,
+`host_mismatch`, `module_invalid`, `provides_mismatch`; `403` — `trust_below_floor`, `disabled`,
+`not_allowlisted`, `denylisted`, `runtime_install_denied`, `scan_disabled_with_execution`;
+`404` — `not_found`, `not_active`; `409` — `scan_rejected`, `integrity_mismatch`,
+`integrity_unverifiable`, `execution_disabled`; `202` — `approval_required`; `500` —
+`loader_unavailable`, `disposer_failed` (сбой хоста, не клиента). При активации
+`execution_disabled`/`trust_below_floor`/`scan_rejected`/`approval_required` → `409`, `not_found` →
+`404`, прочие отказы → `200 {activation: {outcome: 'rejected', reason}}`.
+
+**Настройки — `/api/v2/settings/plugins`.** Runtime-override поверх `config.yaml` (`settings.json` /
+PG, порт настроек): `enabled`, `executionEnabled`, `runtimeInstall` (`allow|deny`), `trustFloor`,
+`scan` (`enabled|disabled`), `allowlist`/`denylist`/`remoteAllowlist`, `exactHostExceptions`,
+`promptBlockMaxChars` (бюджет символов блока, дефолт 4 000), `llmFilterTimeoutMs` (бюджет фильтра,
+дефолт 1 000).
+
+| Метод | Путь | RBAC (backend / core) | Назначение |
+|---|---|---|---|
+| GET | `/api/v2/settings/plugins` | ADMIN / auth | `{plugins (runtime), defaults (config), isOverridden, restartRequired: true, running}` |
+| PUT | `/api/v2/settings/plugins` | ADMIN / auth | Частичное обновление (`pluginsConfigSchema.partial().strict()`): неизвестный ключ/невалидное значение → `400 VALIDATION_ERROR`; ответ как у `GET` |
+| DELETE | `/api/v2/settings/plugins` | ADMIN / auth | Сброс override к `config.yaml`/дефолтам; ответ как у `GET` |
+
+**`restartRequired: true` всегда** (инвариант 24): рантайм плагинов (хост, загрузчик, эффективный
+конфиг) собирается при старте инстанса, поэтому смена политики применяется **после перезапуска**
+(`POST /api/v2/maintenance/restart`). Приоритет значений — `SYNTH_*` env > runtime (этот раздел) >
+`config.yaml` > дефолты (ADR-023).
+
+**RBAC.** Managed (backend): чтение и настройки — `ADMIN`; установка/активация/деактивация —
+`ADMIN` **или** service-key со scope `addons:install`; подтверждение карантина и снятие — **только
+`ADMIN`**. Core (standalone): единый `requireAuth` (владелец инстанса, ADR-079). Своя матрица —
+`packages/backend/src/routes/plugins-rbac-matrix.test.ts` (негативная: `USER`/`LEAD`/`AUDITOR` →
+403; позитивная: `ADMIN`, service-key со scope и без).
+
 ## 6. Источники
 
 | Компонент | Файл |
@@ -1546,6 +1602,7 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 | Аналитика и отчёты (ADR-102) | `packages/core/src/server/routes/analytics.ts`, `packages/core/src/analytics/*`, `packages/shared/src/types/analytics.ts` |
 | Пакеты расширений и пайплайны (ADR-100) | `packages/core/src/server/routes/packs.ts`, `packages/core/src/server/routes/pipelines.ts`, `packages/core/src/engine/events/pipeline-tracker.ts`, `packages/core/src/storage/ports/pack-repository.ts`, `packages/core/src/storage/ports/pipeline-repository.ts`, `packages/shared/src/types/pack.ts`, `packages/shared/src/types/pipeline.ts` |
 | Пайплайны проекта, прогоны и шаблоны (ADR-101, Э6) | `packages/core/src/server/routes/pipeline-project-routes.ts`, `packages/core/src/engine/pipelines/*`, `packages/core/src/storage/ports/project-pipeline-repository.ts`, `packages/core/src/storage/ports/pipeline-run-repository.ts`, `packages/shared/src/types/pipeline-engine.ts` |
+| Плагины (PROP-090) | `packages/core/src/server/routes/plugins.ts`, `packages/core/src/engine/plugins/*` (хост, загрузчик, установщик, рантайм), `packages/shared/src/types/{pack,plugin-audit,plugin-lock,plugin-scan,prompt-blocks,llm-filters,plugin-tools}.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

@@ -36,6 +36,7 @@ import type {
   EventsRuntimeSettings,
   LlmGatewayRuntimeSettings,
   MetricsRuntimeSettings,
+  PluginsRuntimeSettings,
   RuntimeSettings,
   SecurityRuntimeSettings,
 } from '../runtime-settings.js';
@@ -305,6 +306,18 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearMetrics(): Promise<void> {
     this._clear('metrics');
+  }
+
+  async getPlugins(): Promise<Partial<PluginsRuntimeSettings>> {
+    return structuredClone(this._settings.plugins ?? {});
+  }
+
+  async setPlugins(config: Partial<PluginsRuntimeSettings>): Promise<void> {
+    this._patch({ plugins: config });
+  }
+
+  async clearPlugins(): Promise<void> {
+    this._clear('plugins');
   }
 
   async getProxySettings(): Promise<Partial<ProxyConfig> | undefined> {

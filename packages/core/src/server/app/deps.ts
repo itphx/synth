@@ -8,7 +8,7 @@ import type {
   ProviderConfig, ModelConfig, ToolsPolicy, ToolsDisabledConfig,
   WorkspaceOutsideRootPolicy, WebhooksConfig, SummarizationConfig, Session,
 } from '@itphx/synth-shared';
-import { ensureDataDir, parsePrincipalId, pluginsConfigSchema, readTlsRuntimeSettings, SYNTH_VERSION } from '@itphx/synth-shared';
+import { ensureDataDir, parsePrincipalId, readTlsRuntimeSettings, SYNTH_VERSION } from '@itphx/synth-shared';
 import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -65,7 +65,7 @@ import { createExecutionPortForConfig } from '../../execution/factory.js';
 import { attachExecutorMcpSource } from '../../engine/mcp/executor-mcp-source.js';
 import {
   mergeLlmGatewayConfig, mergeSecurityConfig,
-  mergeEventsConfig, mergeDecisionConfig,
+  mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
 import { applyStartupMigrations, applyPendingRestore } from '../../maintenance/startup.js';
@@ -653,6 +653,15 @@ export async function createStandaloneDeps(
       (await sessionManager.getSession(sid))?.status.cancelRequested === true,
   });
 
+  // PROP-090 §10 (Ф5б-2): эффективный конфиг слоя = config.yaml (+env) поверх
+  // runtime-настроек (`settings.json`/PG): админка `/api/v2/settings/plugins`
+  // пишет runtime, рантайм собирается при старте (применение — рестартом,
+  // инвариант 24), поэтому слияние делается **здесь**, а не в рантайме.
+  const effectivePluginsConfig = mergePluginsConfig(
+    config.pluginsConfig,
+    await settingsStore.getPlugins(),
+  );
+
   // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного
   // (`plugins.lock.json` — источник истины), список со статусом активации и
   // точки `activate`/`deactivate` для HTTP API/CLI (Ф5б-2/3). Реестры — **те же**
@@ -661,7 +670,7 @@ export async function createStandaloneDeps(
   // `executionEnabled=false` (дефолт) → `activateInstalled()` — no-op.
   const pluginRuntime = new PluginRuntime({
     layout: resolvePluginLayout({ dataDir, env: process.env }),
-    config: config.pluginsConfig ?? pluginsConfigSchema.parse({}),
+    config: effectivePluginsConfig,
     hostVersion: SYNTH_VERSION,
     audit: storageContext.pluginAudit,
     lock: storageContext.pluginLock,

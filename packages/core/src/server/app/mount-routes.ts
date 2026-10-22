@@ -24,6 +24,7 @@ import {
   createMetricsSettingsRoutes,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
+  createPluginsRoutes, createPluginSettingsRoutes,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -32,7 +33,7 @@ import { createProjectTransferRoutes } from '../routes/project-transfer.js';
 import { createUpdateRoutes } from '../routes/updates.js';
 import { ProjectInstructionsResolver, createInstructionsInfoResolver } from '../../engine/context/instructions.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
-import { mergeLlmGatewayConfig, mergeSecurityConfig } from '../../storage/runtime-settings.js';
+import { mergeLlmGatewayConfig, mergeSecurityConfig, mergePluginsConfig } from '../../storage/runtime-settings.js';
 import type { DefaultModelPair } from '../../storage/runtime-settings.js';
 import { resolveProjectWorkspace } from '../fs-workspace.js';
 import type { StandaloneConfig } from '../app.js';
@@ -482,6 +483,18 @@ export function mountStandaloneRoutes(
     },
   ));
 
+  // PROP-090 §10 (Ф5б-2): runtime-настройки слоя плагинов
+  // (`/api/v2/settings/plugins`). `restartRequired` — всегда true: рантайм
+  // плагинов и хост собираются при старте (инвариант 24). Core — `requireAuth`.
+  app.route('/api/v2/settings', createPluginSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      config: mergePluginsConfig(config.pluginsConfig, {}),
+      settings: settingsStore,
+      running: deps.pluginRuntime.config,
+    },
+  ));
+
   // Словари классификации: чтение — все аутентифицированные, запись/сброс —
   // аутентификация (в standalone достаточно --api-key, локальный режим).
   // Модуль общий с backend, отличается только writeGuard. Порт — из контекста хранения.
@@ -563,6 +576,21 @@ export function mountStandaloneRoutes(
       routes: routeRuleStore,
       registerAgent: (agent) => agentRegistry.register(agent),
       unregisterAgent: (id) => agentRegistry.unregister(id),
+    },
+  ));
+
+  // PROP-090 §«HTTP API» (Ф5б-2): управление плагинами — список/деталь,
+  // установка из локального каталога (standalone: `localInstall: true`),
+  // подтверждение карантина, активация/деактивация и снятие. Standalone —
+  // дефолтные guard'ы (`requireAuth`; единственный пользователь инстанса —
+  // владелец, ADR-079). `update` — 501 (установка из npm/архива — Ф5б-3).
+  app.route('/api/v2/plugins', createPluginsRoutes(
+    auth,
+    {
+      runtime: deps.pluginRuntime,
+      config: mergePluginsConfig(config.pluginsConfig, {}),
+      settings: settingsStore,
+      localInstall: true,
     },
   ));
 

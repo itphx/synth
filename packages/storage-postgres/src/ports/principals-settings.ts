@@ -47,6 +47,7 @@ const SECTION_KEYS = [
   'events',
   'decision',
   'proxy',
+  'plugins',
 ] as const satisfies readonly (keyof RuntimeSettings)[];
 
 const SECTION_KEY_SET: ReadonlySet<string> = new Set<string>(SECTION_KEYS);
@@ -318,6 +319,16 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
     },
     async clearMetrics(): Promise<void> {
       await deleteSetting(conn, 'metrics');
+    },
+
+    async getPlugins(): Promise<RuntimeSettingsValue<'plugins'>> {
+      return (await readSetting<RuntimeSettingsValue<'plugins'>>(conn, 'plugins')) ?? {};
+    },
+    async setPlugins(config: RuntimeSettingsValue<'plugins'>): Promise<void> {
+      await writeSetting(conn, 'plugins', config);
+    },
+    async clearPlugins(): Promise<void> {
+      await deleteSetting(conn, 'plugins');
     },
 
     async getProxySettings(): Promise<RuntimeSettingsValue<'proxy'> | undefined> {
