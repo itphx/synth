@@ -18,6 +18,7 @@ export {
   type PluginDisposer,
   type PluginFacade,
   type PluginLlmFilterOptions,
+  type PluginToolDefinition,
   type PluginLoader,
   type PluginLogger,
   type PluginModule,
@@ -71,3 +72,16 @@ export type {
   PluginIntegrityFile,
   PluginLayout,
 } from './layout.js';
+
+// Ф3в — контрактный suite расширений («паспорт» плагина).
+export {
+  DEFAULT_PLUGIN_CONTRACT_REFERENCE,
+  describePluginContract,
+  PLUGIN_CONTRACT_FIXTURES,
+} from './contract/index.js';
+export type {
+  PluginContractFixtureName,
+  PluginContractHarness,
+  PluginContractHarnessFactory,
+  PluginContractReference,
+} from './contract/index.js';

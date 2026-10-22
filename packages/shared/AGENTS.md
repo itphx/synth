@@ -201,6 +201,16 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (`open`/`closed`), `LLM_FILTER_VERDICTS` + предикаты; `phaseCanBlock(phase)` — блокировать может
   только `pre_request`/`embedding` (`post_response` — наблюдение, ADR-036); единый источник истины
   бюджета времени — `DEFAULT_LLM_FILTER_TIMEOUT_MS = 1000` (совпадает с `plugins.llmFilterTimeoutMs`).
+- PROP-090 §«Точка `tools`» (Ф3в): **namespace инструментов плагина** — `types/plugin-tools.ts`
+  (browser-safe: только константы и чистые функции; реэкспорт из `types`):
+  `PLUGIN_TOOL_NAME_PREFIX = 'plugin'`, `pluginToolNamespace(name)` (slug имени плагина),
+  `pluginToolFullName(plugin, tool)` → `plugin_<ns>_<tool>`, `pluginToolLocalName(full, plugin)`
+  (чужой префикс → `undefined`), `PLUGIN_TOOL_LOCAL_NAME_REGEX` и
+  `isValidPluginToolLocalName` (локальное имя с префиксом `plugin_` запрещено — иначе сверка
+  `provides` неоднозначна). В `types/tools.ts` — `ToolSource` расширен до
+  `'builtin' | 'mcp' | 'plugin'`, в `ToolDefinition` — необязательный `pluginName?` (владелец
+  плагинного тула); в манифесте (`provides.tools[]`) объявляется **локальное** имя, в реестре
+  живёт полное (сверка `diffPackProvides` — по локальным).
 - PROP-090 §10: **семвер и доверие** — `types/semver.ts`: `SEMVER_RANGE_REGEX`, `isSemverRange`,
   `parseSemver`, `satisfiesSemverRange` (операторы `^`/`~`/`>=`/`<=`/`>`/`<`/`=`, wildcard `x`/`*`,
   конъюнкция пробелом; `||` не поддерживается — fail-closed); `PACK_HOST_RANGE_REGEX` ссылается на

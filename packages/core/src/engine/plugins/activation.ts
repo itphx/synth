@@ -18,7 +18,10 @@ import type {
   PluginScanFinding,
   PluginScanVerdict,
   PromptBlockProvider,
+  ToolCapability,
+  ToolExecutor,
 } from '@itphx/synth-shared';
+import type { z } from 'zod';
 
 /**
  * Шаги пайплайна активации плагина (PROP-090 §10, шаги 1–8).
@@ -156,7 +159,9 @@ export interface PluginDeactivationResult {
  * Ф1: только сбор disposers. **Ф3а**: регистрация провайдера блока системного
  * промпта (точка `promptBlocks`) — с возвратом disposer'а, который снимает
  * блок при деактивации плагина. **Ф3б**: регистрация фильтра LLM-вызовов
- * (точка `llmFilters`) — с тем же контрактом disposer'а.
+ * (точка `llmFilters`) — с тем же контрактом disposer'а. **Ф3в**: регистрация
+ * инструмента (точка `tools`) — имя с namespace, регистрация в общем
+ * `ToolRegistry`, снятие тем же disposer'ом.
  */
 export interface PluginFacade {
   /**
@@ -195,6 +200,51 @@ export interface PluginFacade {
    * @returns disposer — снимает фильтр (идемпотентен). При отказе — no-op.
    */
   registerLlmFilter(filter: LlmCallFilter, opts?: PluginLlmFilterOptions): PluginDisposer;
+  /**
+   * Ф3в: зарегистрировать инструмент плагина (точка `tools`).
+   *
+   * Имя в общем `ToolRegistry` составляет **хост**: `plugin_<plugin>_<tool>`
+   * (`pluginToolFullName`, `@itphx/synth-shared`) — плагин передаёт только
+   * локальное имя, поэтому занять имя встроенного (`read_file`) или
+   * MCP-инструмента невозможно (коллизия → отказ регистрации).
+   *
+   * Доступность инструмента решает permission-слой (ADR-029), а не тул:
+   * плагинные инструменты адресуются группой `plugin` и своими
+   * capabilities. `capabilities` обязательны (иначе тул не виден ни группе,
+   * ни admin-отключению) и валидируются по известному набору; `mcp`
+   * зарезервирована за MCP-серверами.
+   *
+   * Отказ регистрации **не роняет активацию**: предупреждение в лог хоста и
+   * no-op disposer (как у точек `promptBlocks`/`llmFilters`). Расхождение
+   * фактических регистраций с `provides.tools[]` манифеста — отказ активации
+   * (`plugin.provides_mismatch`, шаг `facade`).
+   *
+   * @returns disposer — снимает инструмент из реестра (идемпотентен).
+   */
+  registerTool(def: PluginToolDefinition): PluginDisposer;
+}
+
+/**
+ * Определение инструмента, которое регистрирует плагин (PROP-090 §«Точка
+ * `tools`»).
+ *
+ * Зеркало `ToolDefinition` из реестра ядра (`engine/tools/registry.ts`), но
+ * **без** полей источника: `name` — локальное имя (namespace-префикс
+ * добавляет хост), `source`/`pluginName` проставляет `ToolRegistry`.
+ */
+export interface PluginToolDefinition {
+  /** Локальное имя тула (без префикса `plugin_`): `[A-Za-z0-9_-]`. */
+  name: string;
+  /** Описание для модели. */
+  description: string;
+  /** Параметры (zod-схема) — как у встроенных тулов. */
+  parameters: z.ZodTypeAny;
+  /** Capabilities тула (обязательны; `mcp` зарезервирована). */
+  capabilities: ToolCapability[];
+  /** Исполнитель. Получает те же `params`/`ctx`, что и встроенные тулы. */
+  execute: ToolExecutor;
+  /** Готовый JSON-схема параметров (не задан — конвертируется из `parameters`). */
+  jsonSchema?: Record<string, unknown>;
 }
 
 /**

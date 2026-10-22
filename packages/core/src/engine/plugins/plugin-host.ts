@@ -28,6 +28,7 @@ import {
   diffPackProvides,
   generateId,
   installPolicyDecision,
+  pluginToolLocalName,
   trustLevelRank,
 } from '@itphx/synth-shared';
 import type {
@@ -46,6 +47,7 @@ import type { DictionaryRepository } from '../../storage/ports/dictionary-reposi
 import type { PluginAuditRepository } from '../../storage/ports/plugin-audit-repository.js';
 import type { PromptBlockRegistry } from '../context/prompt-block-registry.js';
 import type { LlmFilterAuditEvent, LlmFilterRegistry } from '../gateway/llm-filter-registry.js';
+import type { ToolRegistry } from '../tools/registry.js';
 import type {
   PluginActivationDescriptor,
   PluginActivationHandle,
@@ -65,8 +67,11 @@ import { createPluginScanHook } from './scan/hook.js';
 /**
  * Версия контракта Extension API, который предоставляет хост.
  * Манифест плагина объявляет совместимость через `contracts.extensionApi`.
+ *
+ * Полный semver обязателен: гейт (`satisfiesSemverRange`) разбирает версию
+ * строго (`major.minor.patch`), поэтому `'1'` не прошёл бы даже диапазон `^1`.
  */
-export const DEFAULT_EXTENSION_CONTRACT_VERSION = '1';
+export const DEFAULT_EXTENSION_CONTRACT_VERSION = '1.0.0';
 
 /**
  * Соответствие кодов решений фильтра каноническим причинам журнала плагинов.
@@ -146,6 +151,16 @@ export interface PluginHostOptions {
    * лог, активация не падает).
    */
   llmFilters?: LlmFilterRegistry;
+  /**
+   * Ф3в: общий реестр инструментов (точка `tools`).
+   *
+   * Тот же экземпляр, что получает оркестратор (`Orchestrator`/
+   * `PermissionEvaluator`): плагин регистрирует тул под namespace-именем
+   * `plugin_<plugin>_<tool>`, доступность решает permission-слой. Не задан —
+   * точка `tools` плагину недоступна (регистрация возвращает no-op disposer
+   * с предупреждением в лог, активация не падает).
+   */
+  tools?: ToolRegistry;
   /** Логгер (по умолчанию — `console.warn`). */
   logger?: PluginLogger;
 }
@@ -171,6 +186,8 @@ export class PluginHost {
   private readonly _promptBlocks: PromptBlockRegistry | undefined;
   /** Ф3б: реестр фильтров LLM-вызовов (точка `llmFilters`). */
   private readonly _llmFilters: LlmFilterRegistry | undefined;
+  /** Ф3в: общий реестр инструментов (точка `tools`). */
+  private readonly _tools: ToolRegistry | undefined;
   private readonly _logger: PluginLogger;
   /** Реестр активных плагинов: имя → дескриптор активации. */
   private readonly _activations = new Map<string, PluginActivationHandle>();
@@ -191,6 +208,7 @@ export class PluginHost {
     this._loader = options.loader;
     this._promptBlocks = options.promptBlocks;
     this._llmFilters = options.llmFilters;
+    this._tools = options.tools;
     this._explicitExceptions = options.exactHostExceptions;
     this._logger = options.logger ?? {
       warn: (message: string) => {
@@ -338,6 +356,7 @@ export class PluginHost {
      */
     const registeredPromptBlocks: string[] = [];
     const registeredLlmFilters: string[] = [];
+    const registeredTools: string[] = [];
     const facade: PluginFacade = {
       registerDisposer: (disposer: PluginDisposer) => {
         handle.disposers.push(disposer);
@@ -404,6 +423,47 @@ export class PluginHost {
           return () => undefined;
         }
       },
+      // Ф3в: точка `tools` — регистрация инструмента в общем `ToolRegistry`.
+      // Имя с namespace составляет хост (`plugin_<plugin>_<tool>`), коллизия с
+      // builtin/MCP — отказ; capability `runtime` неотключаема админом, `mcp`
+      // зарезервирована (валидация в реестре). Отказ — предупреждение +
+      // no-op disposer (активация не падает), как у прочих точек.
+      registerTool: (def) => {
+        if (!this._tools) {
+          this._logger.warn(
+            `точка tools недоступна хосту — плагин «${handle.plugin}» не зарегистрировал тул «${def?.name ?? '?'}».`,
+          );
+          return () => undefined;
+        }
+        const registered = this._tools.registerPlugin(
+          {
+            name: def.name,
+            description: def.description,
+            parameters: def.parameters,
+            capabilities: def.capabilities,
+            execute: def.execute,
+            ...(def.jsonSchema ? { jsonSchema: def.jsonSchema } : {}),
+          },
+          handle.plugin,
+        );
+        if (!registered.ok) {
+          this._logger.warn(`регистрация тула плагина отклонена: ${registered.message}`);
+          return () => undefined;
+        }
+        const fullName = registered.name;
+        let removed = false;
+        const disposer = (): void => {
+          if (removed) return;
+          removed = true;
+          this._tools?.deregister(fullName);
+        };
+        handle.disposers.push(disposer);
+        // В сверку `provides.tools[]` идёт **локальное** имя: namespace-префикс —
+        // деталь реестра, а не контракта манифеста.
+        const local = pluginToolLocalName(fullName, handle.plugin);
+        if (local) registeredTools.push(local);
+        return disposer;
+      },
     };
 
     let module;
@@ -430,16 +490,23 @@ export class PluginHost {
 
     // ── Шаг 8б: сверка `provides` с фактическими регистрациями ────────
     // PROP-090 §«Правило соответствия»: расхождение — **отказ активации**
-    // (признак несогласованной сборки, а не «мелочь»). Сверяются точки,
-    // реализованные в Ф3 (`promptBlocks`, `llmFilters`); `provides.tools[]`
-    // присоединится вместе с точкой `tools` (Ф3в).
+    // (признак несогласованной сборки, а не «мелочь»). Сверяются все три точки,
+    // реализованные в Ф3 (`promptBlocks`, `llmFilters`, `tools`). Тулы
+    // сверяются по **локальным** именам: в манифесте объявляется имя без
+    // namespace-префикса (`memory_search`), в реестре живёт
+    // `plugin_<plugin>_memory_search`.
     const declared = ready.manifest.provides as PackProvides | undefined;
     const mismatches = diffPackProvides(
       {
+        tools: declared?.tools ?? [],
         promptBlocks: declared?.promptBlocks ?? [],
         llmFilters: declared?.llmFilters ?? [],
       },
-      { promptBlocks: registeredPromptBlocks, llmFilters: registeredLlmFilters },
+      {
+        tools: registeredTools,
+        promptBlocks: registeredPromptBlocks,
+        llmFilters: registeredLlmFilters,
+      },
     );
     if (mismatches.length > 0) {
       // Вклады уже зарегистрированы — откатываем, иначе отклонённый плагин

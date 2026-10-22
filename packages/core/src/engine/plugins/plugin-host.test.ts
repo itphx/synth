@@ -7,6 +7,7 @@
  * `plugin.execution_disabled` (ожидаемый исход, а не ошибка).
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { z } from 'zod';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,8 +21,9 @@ import type {
   PluginsConfig,
   PromptBlockProvider,
   Session,
+  ToolContext,
 } from '@itphx/synth-shared';
-import { pluginsConfigSchema } from '@itphx/synth-shared';
+import { pluginsConfigSchema, ToolCapability } from '@itphx/synth-shared';
 
 import { MemoryPluginAuditRepository } from '../../storage/memory/plugin-audit.js';
 import { PluginHost } from './plugin-host.js';
@@ -39,6 +41,8 @@ import { ContextBuilder } from '../context/builder.js';
 import { ContextConfig } from '../context/config.js';
 import { AuditLogger, GatewayProvider, LlmFilterRegistry, RateLimiter } from '../gateway/index.js';
 import { BaseProvider, type CancellationToken, type LLMMessage } from '../../providers/base.js';
+import { ToolRegistry } from '../tools/registry.js';
+import { PermissionEvaluator } from '../permission/evaluator.js';
 
 /** Конфиг слоя плагинов с дефолтами схемы. */
 function config(over: Partial<PluginsConfig> = {}): PluginsConfig {
@@ -57,7 +61,9 @@ function manifest(over: Partial<PackManifest> = {}): PackManifest {
       skills: [],
       agents: [],
       pipelines: [],
-      tools: ['demo_tool'],
+      // Ф3в: тулы сверяются с фактическими регистрациями — по умолчанию плагин
+      // тулов не объявляет (кейсы точки `tools` задают список явно).
+      tools: [],
       promptBlocks: [],
       llmFilters: [],
     },
@@ -1102,5 +1108,344 @@ describe('PluginHost: Ф3б — фасад (точка llmFilters)', () => {
     expect(result.reason).toBe('plugin.provides_mismatch');
     // Отклонённый плагин не оставляет фильтров в живом реестре.
     expect(registry.size).toBe(0);
+  });
+});
+
+// ── Ф3в: точка `tools` — фасад, реестр, permission-слой, сверка `provides` ──
+
+/** Манифест плагина, объявивший тулы (`provides.tools[]` — локальные имена). */
+function manifestWithTools(tools: string[]): PackManifest {
+  return manifest({ provides: { ...manifest().provides, tools } });
+}
+
+/** Загрузчик, регистрирующий тулы через фасад. */
+function toolLoader(
+  tools: Array<{ name: string; capabilities?: ToolCapability[] }>,
+): PluginLoader {
+  return async () => ({
+    apply: (facade: PluginFacade) => {
+      for (const tool of tools) {
+        facade.registerTool({
+          name: tool.name,
+          description: `плагинный ${tool.name}`,
+          parameters: z.object({ query: z.string().optional() }),
+          capabilities: tool.capabilities ?? [ToolCapability.SEARCH],
+          execute: async (params: unknown) => ({
+            content: `ok:${JSON.stringify(params)}`,
+          }),
+        });
+      }
+    },
+  });
+}
+
+/** Контекст исполнения встроенного/плагинного тула. */
+function toolCtx(): ToolContext {
+  return { sessionId: 's1', messageId: 'm1', workingDir: '/ws' };
+}
+
+describe('PluginHost: Ф3в — фасад (точка tools)', () => {
+  it('регистрация тула → источник plugin и namespace; deactivate() снимает тул', async () => {
+    const tools = new ToolRegistry();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      tools,
+      loader: toolLoader([{ name: 'memory_search' }]),
+    });
+
+    const activated = await host.activate(
+      descriptor({ manifest: manifestWithTools(['memory_search']) }),
+    );
+    expect(activated.outcome).toBe('activated');
+
+    // Имя в реестре — с namespace хоста, а не то, что передал плагин.
+    const tool = tools.get('plugin_demo_plugin_memory_search');
+    expect(tool).toBeDefined();
+    expect(tool!.source).toBe('plugin');
+    expect(tool!.pluginName).toBe('demo-plugin');
+    expect(tool!.capabilities).toEqual([ToolCapability.SEARCH]);
+    expect(tools.pluginLocalNames('demo-plugin')).toEqual(['memory_search']);
+    await expect(tool!.execute({ query: 'привет' }, toolCtx())).resolves.toEqual({
+      content: 'ok:{"query":"привет"}',
+    });
+
+    const deactivated = await host.deactivate('demo-plugin');
+    expect(deactivated.outcome).toBe('ok');
+    expect(tools.get('plugin_demo_plugin_memory_search')).toBeUndefined();
+    expect(tools.pluginLocalNames('demo-plugin')).toEqual([]);
+  });
+
+  it('namespace: попытка занять имя встроенного тула уходит в свой namespace (builtin не подменён)', async () => {
+    const warnings: string[] = [];
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'read_file',
+      description: 'встроенный',
+      parameters: z.object({ file_path: z.string() }),
+      capabilities: [ToolCapability.FILE_READ],
+      execute: async () => ({ content: 'builtin' }),
+    });
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      tools,
+      logger: { warn: (message: string) => warnings.push(message) },
+      // Плагин пытается зарегистрировать `read_file` — попытка уходит в namespace.
+      loader: toolLoader([{ name: 'read_file' }]),
+    });
+
+    const result = await host.activate(descriptor({ manifest: manifestWithTools(['read_file']) }));
+    expect(result.outcome).toBe('activated');
+    // Встроенный тул не подменён; плагинный живёт под своим именем.
+    expect(tools.get('read_file')!.execute).not.toBeUndefined();
+    expect((await tools.get('read_file')!.execute({ file_path: '/x' }, toolCtx())).content).toBe('builtin');
+    expect(tools.get('plugin_demo_plugin_read_file')).toBeDefined();
+    expect(warnings.length).toBe(0);
+  });
+
+  it('коллизия плагинного имени с MCP-инструментом → отказ регистрации (warn + no-op)', async () => {
+    const warnings: string[] = [];
+    const tools = new ToolRegistry();
+    // Занимаем ровно то имя, которое получилось бы у плагина.
+    tools.register({
+      name: 'plugin_demo_plugin_memory_search',
+      description: 'чужой',
+      parameters: z.object({}),
+      capabilities: [ToolCapability.MCP],
+      source: 'mcp',
+      mcpServer: 'plugin_demo_plugin',
+      execute: async () => ({ content: 'mcp' }),
+    });
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      tools,
+      logger: { warn: (message: string) => warnings.push(message) },
+      loader: toolLoader([{ name: 'memory_search' }]),
+    });
+
+    const result = await host.activate(descriptor({ manifest: manifestWithTools(['memory_search']) }));
+    // Регистрация отклонена → provides не сошёлся → отказ активации.
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.provides_mismatch');
+    expect(warnings.join('\n')).toContain('конфликтует');
+    // Чужой (MCP) тул не перезаписан.
+    expect(tools.get('plugin_demo_plugin_memory_search')!.source).toBe('mcp');
+  });
+
+  it('тул с неизвестной capability отклоняется (нет обхода permission-слоя)', async () => {
+    const warnings: string[] = [];
+    const tools = new ToolRegistry();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      tools,
+      logger: { warn: (message: string) => warnings.push(message) },
+      loader: toolLoader([{ name: 'sneaky', capabilities: ['root' as ToolCapability] }]),
+    });
+
+    const result = await host.activate(descriptor({ manifest: manifestWithTools(['sneaky']) }));
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.provides_mismatch');
+    expect(tools.listPlugin()).toHaveLength(0);
+    expect(warnings.join('\n')).toContain('неизвестная capability');
+  });
+
+  it('тул с capability mcp отклоняется: слой MCP зарезервирован', async () => {
+    const warnings: string[] = [];
+    const tools = new ToolRegistry();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      tools,
+      logger: { warn: (message: string) => warnings.push(message) },
+      loader: toolLoader([{ name: 'fake_mcp', capabilities: [ToolCapability.MCP] }]),
+    });
+
+    const result = await host.activate(descriptor({ manifest: manifestWithTools(['fake_mcp']) }));
+    expect(result.outcome).toBe('rejected');
+    expect(warnings.join('\n')).toContain('зарезервирована');
+  });
+
+  it('тул с capability runtime отклоняется: примитивы ядра неотключаемы админом', async () => {
+    const warnings: string[] = [];
+    const tools = new ToolRegistry();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      tools,
+      logger: { warn: (message: string) => warnings.push(message) },
+      loader: toolLoader([{ name: 'stealth', capabilities: [ToolCapability.RUNTIME] }]),
+    });
+
+    const result = await host.activate(descriptor({ manifest: manifestWithTools(['stealth']) }));
+    expect(result.outcome).toBe('rejected');
+    expect(tools.listPlugin()).toHaveLength(0);
+    expect(warnings.join('\n')).toContain('«runtime» зарезервирована');
+  });
+
+  it('сверка provides.tools: объявлен, но не зарегистрирован → plugin.provides_mismatch', async () => {
+    const tools = new ToolRegistry();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      tools,
+      loader: toolLoader([]),
+    });
+
+    const result = await host.activate(descriptor({ manifest: manifestWithTools(['memory_search']) }));
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.provides_mismatch');
+    expect(result.step).toBe('facade');
+    expect(result.message).toContain('memory_search');
+  });
+
+  it('сверка provides.tools: зарегистрирован, но не объявлен → отказ и откат регистрации', async () => {
+    const tools = new ToolRegistry();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      tools,
+      loader: toolLoader([{ name: 'extra_tool' }]),
+    });
+
+    const result = await host.activate(descriptor());
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.provides_mismatch');
+    expect(tools.listPlugin()).toHaveLength(0);
+  });
+
+  it('без реестра инструментов регистрация — предупреждение; provides не сходится → отказ', async () => {
+    const warnings: string[] = [];
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      logger: { warn: (message: string) => warnings.push(message) },
+      loader: toolLoader([{ name: 'memory_search' }]),
+    });
+
+    // Точки `tools` у хоста нет: регистрация — предупреждение + no-op, поэтому
+    // объявленный в манифесте тул остаётся незарегистрированным (отказ честный:
+    // плагин без своих тулов не должен считаться активированным).
+    const result = await host.activate(descriptor({ manifest: manifestWithTools(['memory_search']) }));
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.provides_mismatch');
+    expect(warnings.join('\n')).toContain('точка tools недоступна');
+  });
+
+  it('permission-слой: allow по умолчанию, deny группой plugin и по имени тула', async () => {
+    const tools = new ToolRegistry();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      tools,
+      loader: toolLoader([{ name: 'memory_search' }, { name: 'memory_write', capabilities: [ToolCapability.FILE_WRITE] }]),
+    });
+    await host.activate(
+      descriptor({ manifest: manifestWithTools(['memory_search', 'memory_write']) }),
+    );
+    const searchTool = tools.get('plugin_demo_plugin_memory_search')!;
+    const writeTool = tools.get('plugin_demo_plugin_memory_write')!;
+
+    const allow = new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 });
+    expect(
+      allow.check({
+        toolName: searchTool.name,
+        params: {},
+        workingDir: '/ws',
+        capabilities: searchTool.capabilities,
+        toolSource: searchTool.source,
+      }).action,
+    ).toBe('allow');
+
+    // Групповой deny `plugin` накрывает все плагинные инструменты сразу.
+    const denyGroup = new PermissionEvaluator({ rules: { plugin: 'deny' }, askTimeoutMs: 30_000 });
+    for (const tool of [searchTool, writeTool]) {
+      const decision = denyGroup.check({
+        toolName: tool.name,
+        params: {},
+        workingDir: '/ws',
+        capabilities: tool.capabilities,
+        toolSource: tool.source,
+      });
+      expect(decision.action).toBe('deny');
+      expect(decision.matchedRule).toBe('plugin');
+    }
+
+    // Правило по имени тула тоже работает (приоритетнее групп).
+    const denyName = new PermissionEvaluator({
+      rules: { plugin: 'allow', plugin_demo_plugin_memory_search: 'deny' },
+      askTimeoutMs: 30_000,
+    });
+    expect(
+      denyName.check({
+        toolName: searchTool.name,
+        params: {},
+        workingDir: '/ws',
+        capabilities: searchTool.capabilities,
+        toolSource: searchTool.source,
+      }).action,
+    ).toBe('deny');
+    // Без `toolSource` группа `plugin` не срабатывает — источник обязателен.
+    expect(
+      denyGroup.check({
+        toolName: searchTool.name,
+        params: {},
+        workingDir: '/ws',
+        capabilities: searchTool.capabilities,
+      }).action,
+    ).toBe('allow');
+  });
+
+  it('deregisterByCapability снимает плагинные тулы группы; builtin не тронут', async () => {
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'grep_files',
+      description: 'встроенный поиск',
+      parameters: z.object({ path: z.string() }),
+      capabilities: [ToolCapability.SEARCH],
+      execute: async () => ({ content: 'builtin' }),
+    });
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      tools,
+      loader: toolLoader([{ name: 'memory_search' }]),
+    });
+    await host.activate(descriptor({ manifest: manifestWithTools(['memory_search']) }));
+    expect(tools.listPlugin()).toHaveLength(1);
+
+    // deregisterByCapability — общий механизм: снимает тулы группы (в т.ч. builtin).
+    expect(tools.deregisterByCapability(ToolCapability.SEARCH)).toBe(2);
+    expect(tools.get('plugin_demo_plugin_memory_search')).toBeUndefined();
+    expect(tools.get('grep_files')).toBeUndefined();
+
+    // Деактивация после ручного снятия не падает (disposer идемпотентен).
+    const deactivated = await host.deactivate('demo-plugin');
+    expect(deactivated.outcome).toBe('ok');
+    expect(deactivated.failures).toHaveLength(0);
+  });
+
+  it('тулы плагина попадают в выборку сессии отдельным слоем (после builtin, до MCP)', async () => {
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'read_file',
+      description: 'встроенный',
+      parameters: z.object({}),
+      capabilities: [ToolCapability.FILE_READ],
+      execute: async () => ({ content: '' }),
+    });
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      tools,
+      loader: toolLoader([{ name: 'memory_search' }]),
+    });
+    await host.activate(descriptor({ manifest: manifestWithTools(['memory_search']) }));
+
+    const selection = tools.selectForSession([]);
+    expect(selection.builtin.map((t) => t.function.name)).toEqual(['read_file']);
+    expect(selection.plugin.map((t) => t.function.name)).toEqual([
+      'plugin_demo_plugin_memory_search',
+    ]);
+    expect(selection.mcp).toEqual([]);
+    expect(tools.toLLMFormatForSession([]).map((t) => t.function.name)).toEqual([
+      'read_file',
+      'plugin_demo_plugin_memory_search',
+    ]);
+
+    // deny-предикат слоя plugin не трогает builtin.
+    const filtered = tools.selectForSession([], { plugin: () => false });
+    expect(filtered.plugin).toEqual([]);
+    expect(filtered.builtin).toHaveLength(1);
   });
 });
