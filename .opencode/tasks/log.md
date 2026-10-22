@@ -2,6 +2,26 @@
 
 > Архив: `log.1.md` (по 2026-08-31), `log.2.md` (2026-08-31 — 2026-09-16), `log.3.md` (2026-09-17 — 2026-10-07).
 
+## 2026-10-22 — PROP-082/PROP-077, шаги 5–6 и 7c: образы исполнителей, публикация в Gitea, пул в Helm
+- **Задача:** «Цель — все запланированные образы экзекьюторов + реальные тесты. Образы экзекьюторов для теста храним в gitea» → шаг 5 плана PROP-082 (debian-ветка `browser`/`full` + образы исполнителей), шаг 6 (CI, публикация в Gitea, smoke-тесты, сквозной e2e), шаг 7c плана PROP-077 (пул исполнителей в Helm-чарте).
+- **Тип:** feature / infra
+- **Исполнитель:** @orchestrator → @fixer ×6 (образы; Helm; CI и тесты; добивка образов; правки gitea-mcp; доработки чарта) → @fixer (финальный проход и коммиты)
+- **Результат:** PASS
+- **Где:** репозиторий `/mnt/data/Agent/dev/Synth/synth`, ветка `master` (работа велась в worktree `wt-execution-port`, слита коммитом `3e521bdb`).
+- **Принятые решения:**
+  - **Публикация — в приватный Gitea `git.itphx.ru/itphx/*`, все flavor'ы**: `gitverse.ru`/`ghcr.io` держат лимит ~500 МБ на репозиторий, Gitea — нет; pull-secret `git.itphx.ru` в namespace `synth` уже существует. Теги только версионные (`<v>-<flavor>`), без `latest`; секрет `GV_GITEA_TOKEN` (логин `itphx`), без токена при пуше — fail-closed; push последовательный с ретраями (DNS `git.itphx.ru` сбрасывает параллельные запросы); публикация — по тегу релиза, в CI на push/PR только сборка и smoke.
+  - **Восемь образов собраны и замерены**: `synth-backend` slim 64,0 / core 101,6 / dev 320,1 / devops 508,5 / browser 674,9 / full 925,5 МБ; `synth-executor` core 107,0 / full 930,8 МБ. Оценки в PROP-082 были завышены втрое — исправлены на замеры.
+  - **Регрессия slim не сломана**: file-manifest 9224 записи совпал с эталоном (расходятся только `prunedAt` pnpm и `/etc/hostname`/`/etc/hosts`, которые даёт рантайм контейнера).
+  - **Сквозной e2e — на настоящих контейнерах, 15/15**: маршрутизация команды в исполнитель доказана hostname'ом контейнера и env-маркером; fail-closed доказан отсутствием локального маркера после остановки исполнителя; `cwd` вне workspace → 400 `EWORKSPACE`; без токена → 401.
+  - **Одна физическая копия core в образе** (проверено на собранном образе): peer-ссылка pnpm резолвит core в один экземпляр, поэтому `instanceof ExecutionError` на границе «core ↔ исполнитель» работает и в рантайме.
+  - **Том workspace — общий RWX**: один claim монтируется в backend и во все реплики исполнителя по одинаковому пути `/var/synth/data/workspaces` (вложенное монтирование разрешено: родитель монтируется первым, вложенный — последним). В тестовом кластере RWX-класс — `nfs-rwx` (дефолтный `local-path` только RWO ⇒ класс задаётся явно); размер для стенда — 5–10 ГБ.
+  - **Токен доверия**: один Secret; backend получает его файлом (`/etc/synth/executor/token`), исполнитель — значением в env; в values только ссылка на Secret и имя ключа.
+  - **Исполнители не спавнятся**: статический пул (Deployment N реплик), backend маршрутизирует по HTTP (round-robin, failover к следующему); per-session спавн отложен (нет RBAC на создание pod'ов).
+  - **Фикс `gitea-mcp`**: у пакета `@boringstudio_org/gitea-mcp@2.0.0` guard `process.argv[1] === fileURLToPath(import.meta.url)` не срабатывает из-за npm-симлинка → процесс молча выходил с кодом 0; в tier 4 введено поле «режим запуска» (`bin`|`direct`), для `gitea-mcp` — `direct` (launcher запускает реальный файл пакета), пин версии и integrity не тронуты; smoke-проверка стала настоящим handshake по stdio.
+  - **Flavor'ы публикуются amd64-only** (per-arch сборка с QEMU/binfmt потребовала бы доработки раннера).
+- **Проверки:** typecheck — 0 ошибок; lint — 0 errors; `pnpm test` — 0 failed; `helm lint` — 0 failures; `adr-check`/`docs-link-check` — 0 ошибок; smoke по всем flavor'ам — 0 провалов; e2e — 15/15.
+- **Осталось:** шаг 10 (PROP-077) — метрики `synth_executor_*` и `/metrics` исполнителя, алерты; шаг 12 — runbook переключения топологии в `docs/MAINTENANCE.md`, метрики в `docs/OBSERVABILITY.md`; публикация образов в Gitea и раскатка в тестовый K3s (отдельный репозиторий `synth-deploy`: пины образов, pull-secret, RWX-claim на `nfs-rwx`, Secret с токеном, `execution.mode=remote`, NetworkPolicy); per-arch сборка flavor'ов (QEMU/binfmt); развязка порта исполнения в `shared` — чтобы образ исполнителя не нёс `dist` core.
+
 ## 2026-10-21 — PROP-082/PROP-077: шаги 4, 7a, 7b — flavor'ы dev/devops, пакет исполнителя, подключение к core
 - **Задача:** шаг 4 плана PROP-082 (flavor'ы `dev`/`devops`) и шаги 7a–7b плана PROP-077 (пакет исполнителя и его подключение к core) — по решению пользователя: упаковка исполнителя **отдельным пакетом по образцу слоя хранения**, транспорт — **HTTP/1.1 + JSON**.
 - **Тип:** feature / infra
