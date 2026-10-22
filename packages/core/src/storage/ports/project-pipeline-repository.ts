@@ -4,7 +4,7 @@ import type { PipelineSpec } from '@itphx/synth-shared';
  * ADR-101 (Pipeline Engine): порт хранилища **спецификаций** пайплайнов —
  * черновик, публикация и журнал опубликованных версий (ADR-096 — слой хранения).
  *
- * Отличие от legacy-порта `PipelineRepository` (ADR-051/ADR-100, ADR-100):
+ * Отличие от legacy-порта `PipelineRepository` (ADR-051/ADR-101, ADR-100):
  * там пайплайн — «декларация + учёт прогона» (шаги-сессии), здесь — полноценная
  * спецификация `PipelineSpec` (ADR-101, `packages/shared/src/types/pipeline-engine.ts`)
  * с версионированием. Legacy-порт не трогаем: он заменяется на Э3.

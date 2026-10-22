@@ -63,7 +63,7 @@ services:
       - SYNTH_PROVIDER_OLLAMA_URL=${SYNTH_PROVIDER_OLLAMA_URL:-http://ollama:11434}
       - SYNTH_PROVIDER_OLLAMA_MODEL=${SYNTH_PROVIDER_OLLAMA_MODEL:-qwen3.8:27b}
       - SYNTH_PROVIDER_OLLAMA_TYPE=ollama
-      # --- Слой хранения (ADR-096, ADR-096/ADR-097) ---
+      # --- Слой хранения (ADR-096/ADR-097) ---
       # backend: file (дефолт) | memory (данные НЕ сохраняются) | postgres.
       # При postgres поднимите профиль `postgres` (сервис ниже) — иначе хост
       # `postgres` не разрешится в DNS Docker-сети.
@@ -184,7 +184,7 @@ services:
       - SYNTH_PORT=5000
       - SYNTH_DATA_DIR=/var/synth/data
       - SYNTH_RESTART_MODE=${SYNTH_RESTART_MODE:-process}
-      # Слой хранения — как у standalone-сценария (ADR-096, ADR-096).
+      # Слой хранения — как у standalone-сценария (ADR-096).
       - SYNTH_STORAGE_BACKEND=${SYNTH_STORAGE_BACKEND:-file}
       - SYNTH_POSTGRES_HOST=${SYNTH_POSTGRES_HOST:-postgres}
       - SYNTH_POSTGRES_PORT=${SYNTH_POSTGRES_PORT:-5432}
@@ -242,7 +242,7 @@ services:
       # локально. `inline-fallback` — осознанный обход изоляции, в managed-
       # контуре не включать.
       - SYNTH_EXECUTION_FAIL_MODE=${SYNTH_EXECUTION_FAIL_MODE:-fail}
-      # Слой хранения — как у standalone-сценария (ADR-096, ADR-096).
+      # Слой хранения — как у standalone-сценария (ADR-096).
       - SYNTH_STORAGE_BACKEND=${SYNTH_STORAGE_BACKEND:-file}
       - SYNTH_POSTGRES_HOST=${SYNTH_POSTGRES_HOST:-postgres}
       - SYNTH_POSTGRES_PORT=${SYNTH_POSTGRES_PORT:-5432}

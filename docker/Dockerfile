@@ -2,7 +2,7 @@
 # Зависимости (@itphx/synth-core, @itphx/synth-ui, @itphx/synth-shared) ставятся как
 # транзитивные npm-зависимости глобально, промпты/UI резолвятся оттуда.
 #
-# Слой хранения (ADR-096, ADR-096/ADR-097): драйвер `@itphx/synth-storage-postgres`
+# Слой хранения (ADR-096/ADR-097): драйвер `@itphx/synth-storage-postgres`
 # — optionalDependency ядра, `pg` — optionalDependency драйвера. npm ставит
 # optional-зависимости транзитивных пакетов по умолчанию, поэтому
 # `storage.backend=postgres` работает без доустановки; `--omit=optional`/
