@@ -38,6 +38,7 @@ import type {
   IdentityClaimRepository,
   JobRepository,
   MaintenanceAuditRepository,
+  PluginAuditRepository,
   SecurityAuditRepository,
   EgressRequestLogRepository,
   McpRegistryRepository,
@@ -86,6 +87,7 @@ import { WebhookDeliveryStore } from './webhook-delivery-store.js';
 import { ScheduleStore } from './schedule-store.js';
 import { JobStore } from './job-store.js';
 import { MaintenanceAuditStore } from './maintenance-audit-store.js';
+import { FilePluginAuditStore } from './file-plugin-audit-store.js';
 import { SecurityAuditStore } from './security-audit-store.js';
 import { applyStartupProxyConfig } from '../security/proxy-startup.js';
 import { EgressRequestLogStore } from './egress-request-log-store.js';
@@ -119,6 +121,7 @@ import {
   MemoryIdentityClaimRepository,
   MemoryJobRepository,
   MemoryMaintenanceAuditRepository,
+  MemoryPluginAuditRepository,
   MemorySecurityAuditRepository,
   MemoryEgressRequestLogRepository,
   MemoryMcpRegistryRepository,
@@ -300,6 +303,12 @@ export interface StorageContext {
   schedules: ScheduleRepository;
   jobs: JobRepository;
   maintenanceAudit: MaintenanceAuditRepository;
+  /**
+   * PROP-090 §9: журнал аудита плагинов (append-only). Отдельный порт, а не
+   * расширение `securityAudit`: семантика «событие расширения» ≠ «изменение
+   * политики».
+   */
+  pluginAudit: PluginAuditRepository;
   /** Аудит изменений egress/security-политик (append-only). */
   securityAudit: SecurityAuditRepository;
   /** Журнал внешних запросов (append-only, retention-прунер). */
@@ -525,6 +534,8 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     }),
     jobs: new JobStore({ dataDir }),
     maintenanceAudit: new MaintenanceAuditStore({ dataDir }),
+    // PROP-090 §9: журнал аудита плагинов (`audit/plugins.jsonl`).
+    pluginAudit: new FilePluginAuditStore({ dataDir }),
     securityAudit: new SecurityAuditStore({ dataDir }),
     egressRequests: new EgressRequestLogStore({ dataDir }),
     analyticsRollups: new AnalyticsRollupStore({ dataDir }),
@@ -586,6 +597,7 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     schedules: new MemoryScheduleRepository(),
     jobs: new MemoryJobRepository(),
     maintenanceAudit: new MemoryMaintenanceAuditRepository(),
+    pluginAudit: new MemoryPluginAuditRepository(),
     securityAudit: new MemorySecurityAuditRepository(),
     egressRequests: new MemoryEgressRequestLogRepository(),
     analyticsRollups: new MemoryAnalyticsRollupRepository(),

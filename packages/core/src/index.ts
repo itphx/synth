@@ -12,6 +12,31 @@ export { extractChildSessionId, extractCreatedSession } from './events/child-ses
 export type { CreatedSessionTarget } from './events/child-session.js';
 export { HookBus, HOOK_ASYNC_TIMEOUT_MS } from './engine/hooks/index.js';
 export type { HookHandler, HookRegistrationOptions, HookEmitResult } from './engine/hooks/index.js';
+// PROP-090 §10: загрузчик плагинов (`PluginHost`). Ф1: исполнение кода
+// выключено по умолчанию (`plugins.executionEnabled=false`).
+export { PluginHost, DEFAULT_EXTENSION_CONTRACT_VERSION } from './engine/plugins/index.js';
+export {
+  PLUGIN_ACTIVATION_STEPS,
+  computePluginContentHash,
+  verifyPluginIntegrity,
+  readExactHostExceptions,
+} from './engine/plugins/index.js';
+export type {
+  PluginHostOptions,
+  PluginActivationDescriptor,
+  PluginActivationHandle,
+  PluginActivationResult,
+  PluginActivationStep,
+  PluginDeactivationResult,
+  PluginDisposer,
+  PluginFacade,
+  PluginLoader,
+  PluginLogger,
+  PluginModule,
+  PluginScanHook,
+  PluginScanResult,
+  PluginIntegrityVerdict,
+} from './engine/plugins/index.js';
 export { QueueProcessor, QueueProcessorManager, enqueueUserMessage } from './queue/processor.js';
 export type { ProcessMessageFn } from './queue/processor.js';
 
@@ -245,6 +270,9 @@ export type {
   JobRepository,
   MaintenanceAuditRepository,
   MaintenanceAuditListOptions,
+  // PROP-090 §9: журнал аудита плагинов (отдельный порт, не security-аудит).
+  PluginAuditRepository,
+  PluginAuditListOptions,
   SecurityAuditRepository,
   SecurityAuditListOptions,
   EgressRequestLogRepository,
@@ -307,6 +335,7 @@ export {
   MemoryScheduleRepository,
   MemoryJobRepository,
   MemoryMaintenanceAuditRepository,
+  MemoryPluginAuditRepository,
   MemorySecurityAuditRepository,
   MemoryEgressRequestLogRepository,
   MemoryAnalyticsRollupRepository,
@@ -643,6 +672,9 @@ export type { JobStoreConfig, JobListOptions } from './storage/job-store.js';
 // ADR-092 (остаток): аудит-журнал обслуживания инстанса — файловая реализация порта.
 export { MaintenanceAuditStore } from './storage/maintenance-audit-store.js';
 export type { MaintenanceAuditStoreConfig } from './storage/maintenance-audit-store.js';
+// PROP-090 §9: журнал аудита плагинов (append-only JSONL `audit/plugins.jsonl`).
+export { FilePluginAuditStore } from './storage/file-plugin-audit-store.js';
+export type { FilePluginAuditStoreConfig } from './storage/file-plugin-audit-store.js';
 // Egress: аудит изменений security-политик и журнал внешних запросов.
 export { SecurityAuditStore } from './storage/security-audit-store.js';
 export type { SecurityAuditStoreConfig } from './storage/security-audit-store.js';

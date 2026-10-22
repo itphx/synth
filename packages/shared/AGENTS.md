@@ -81,9 +81,11 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (уровень доверия, default `trusted`), `scan` (`enabled|disabled`, default `enabled`),
   `allowlist`/`denylist`/`remoteAllowlist` (списки имён, default `[]`), `exactHostExceptions`
   (путь к файлу точных исключений семвер-гейта, default `''`), `promptBlockMaxChars`
-  (бюджет символов на блок промпта от плагина, default `4000`); скалярные env-оверрайды
+  (бюджет символов на блок промпта от плагина, default `4000`), `executionEnabled`
+  (**главный переключатель исполнения кода плагинов**, default `false` — без него загрузчик
+  останавливается на шаге `import`, PROP-090 §10/Ф1); скалярные env-оверрайды
   `SYNTH_PLUGINS_*` (`enabled`/`runtimeInstall`/`trustFloor`/`scan`/`exactHostExceptions`/
-  `promptBlockMaxChars`) — списки остаются в `config.yaml`. Runtime-override в core —
+  `promptBlockMaxChars`/`executionEnabled`) — списки остаются в `config.yaml`. Runtime-override в core —
   `RuntimeSettings.plugins` + `mergePluginsConfig` (приоритет runtime > config > defaults).
 - **Env-оверрайды скалярных ключей секций** `events`/`scheduler`/`webhooks`/`decision`/`analytics`/`metrics`/`plugins` —
   реестр `ENV_OVERRIDES` (`src/config/env-overrides.ts`), применяется в `loadConfig`;
@@ -185,6 +187,14 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `trustLevelRank` — единый перечень уровней (`builtin`/`verified`/`trusted`/`community`), общий для
   каталога (`types/catalog.ts` реэкспортирует) и манифеста (модуль выделен из-за цикла
   `catalog → pack`).
+- PROP-090 §9: **журнал аудита плагинов** — `types/plugin-audit.ts` (re-export из `types`):
+  `PluginAuditEntry` (`id` `pa_<uuid>`/`ts`/`actor`/`scope: 'plugin'`/`action`/`plugin`/`version`/
+  `trustLevel?`/`scanVerdict?`/`contentHash?`/`mode?`/`outcome`/`reason?`/`source?`) и перечни
+  `PLUGIN_AUDIT_ACTIONS` (`activate`/`deactivate`), `PLUGIN_AUDIT_OUTCOMES` (`ok`/`rejected`),
+  `PLUGIN_SCAN_VERDICTS` (`safe`/`caution`/`dangerous`), `PLUGIN_AUDIT_REASONS` — **закрытый** список
+  17 кодов отказа (по одному на гейт пайплайна активации; источник истины — `PluginHost`,
+  `packages/core/src/engine/plugins/plugin-host.ts`). Журнал **отдельный**: `SECURITY_AUDIT_SCOPES`
+  (семантика «изменение политики») не расширяется; секреты в журнал не пишутся (инвариант 13).
 - ADR-084: типы decision-моделей — `DecisionQuestion`/`DecisionAnswer` (варианты `noul`/`choice`/`score`),
   `DecisionRequest`/`DecisionResponse`/`DecisionUsage` и медиа-контракт `DecisionMediaInput`
   (`images?`/`videos?`, задел PROP-085) (`types/decision.ts`); Zod

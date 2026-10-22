@@ -95,6 +95,7 @@ export {
   CATALOG_UNKNOWN_VERSION,
   catalogLocalizedTextSchema,
   catalogTrustLevelSchema,
+  trustLevelRank,
   catalogSourceSchema,
   catalogSourceAdapterSchema,
   catalogTimestampSchema,

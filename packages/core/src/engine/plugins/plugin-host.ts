@@ -1,0 +1,588 @@
+/**
+ * PROP-090 §10: `PluginHost` — загрузчик плагинов.
+ *
+ * Пайплайн активации (PROP-090 §10, шаги 1–9):
+ * `resolve → integrity → semver-гейт → trust/scan → политика режима → import →
+ * facade (сбор disposers) → аудит`.
+ *
+ * Каждый шаг — отдельная проверяемая функция с **машиночитаемым вердиктом**
+ * (код причины + человекочитаемое сообщение). Отказ на раннем шаге не даёт
+ * дойти до поздних: плагин, не прошедший integrity, не дойдёт до `import`.
+ *
+ * **Ф1: исполнение кода выключено по умолчанию.** `plugins.executionEnabled`
+ * по умолчанию `false` — шаг `import` останавливается с
+ * `plugin.execution_disabled` (это ожидаемый исход, а не ошибка). Загрузчика
+ * кода (`PluginLoader`) в core нет: `import()` чужого кода в ядре отсутствует,
+ * а при включённом `executionEnabled` без загрузчика шаг останавливается с
+ * `plugin.loader_unavailable`. Точки расширения под Ф2/Ф3/Ф4: хук скана
+ * (`PluginScanHook`), загрузчик (`PluginLoader`), фасад (`PluginFacade`).
+ *
+ * **Идемпотентность:** повторная активация уже активного плагина —
+ * **осмысленный отказ** `plugin.already_active` (а не переактивация):
+ * активация имеет побочные эффекты (регистрации), поэтому переключение
+ * выполняется явно — `deactivate()` → `activate()`.
+ */
+import {
+  DEFAULT_EXTENSION_CONTRACT,
+  checkExtensionCompatibility,
+  generateId,
+  trustLevelRank,
+} from '@itphx/synth-shared';
+import type {
+  CatalogTrustLevel,
+  PackManifest,
+  PluginAuditEntry,
+  PluginAuditReason,
+  PluginsConfig,
+} from '@itphx/synth-shared';
+import type { PluginAuditRepository } from '../../storage/ports/plugin-audit-repository.js';
+import type {
+  PluginActivationDescriptor,
+  PluginActivationHandle,
+  PluginActivationResult,
+  PluginActivationStep,
+  PluginDeactivationResult,
+  PluginDisposer,
+  PluginFacade,
+  PluginLoader,
+  PluginLogger,
+  PluginScanHook,
+} from './activation.js';
+import { readExactHostExceptions } from './exact-host-exceptions.js';
+import { verifyPluginIntegrity } from './integrity.js';
+
+/**
+ * Версия контракта Extension API, который предоставляет хост.
+ * Манифест плагина объявляет совместимость через `contracts.extensionApi`.
+ */
+export const DEFAULT_EXTENSION_CONTRACT_VERSION = '1';
+
+/** Опции `PluginHost`. */
+export interface PluginHostOptions {
+  /** Порт журнала аудита плагинов (ADR-096). */
+  audit: PluginAuditRepository;
+  /** Эффективная конфигурация слоя плагинов (runtime > config > defaults). */
+  config: PluginsConfig;
+  /** Версия host-приложения (Synth) — сверяется с `host` манифеста. */
+  hostVersion: string;
+  /** Версия контракта Extension API (по умолчанию `1`). */
+  contractVersion?: string;
+  /**
+   * Явный список точных исключений семвер-гейта. Перекрывает файл из конфига
+   * (`plugins.exactHostExceptions`) — используется в тестах и там, где список
+   * приходит не из файла.
+   */
+  exactHostExceptions?: readonly string[];
+  /** Хук скана/проверки доверия — точка расширения Ф2. */
+  scan?: PluginScanHook;
+  /** Загрузчик кода — точка расширения Ф3 (`inline`) / Ф4 (`out-of-process`). */
+  loader?: PluginLoader;
+  /** Логгер (по умолчанию — `console.warn`). */
+  logger?: PluginLogger;
+}
+
+/**
+ * Загрузчик плагинов: активация по пайплайну, реестр активных плагинов и
+ * обратная прокрутка disposers.
+ */
+export class PluginHost {
+  private readonly _audit: PluginAuditRepository;
+  private readonly _config: PluginsConfig;
+  private readonly _hostVersion: string;
+  private readonly _contractVersion: string;
+  private readonly _scan: PluginScanHook | undefined;
+  private readonly _loader: PluginLoader | undefined;
+  private readonly _logger: PluginLogger;
+  /** Реестр активных плагинов: имя → дескриптор активации. */
+  private readonly _activations = new Map<string, PluginActivationHandle>();
+  /** Явный список точных исключений семвер-гейта (из опций; `undefined` — читать из файла). */
+  private readonly _explicitExceptions: readonly string[] | undefined;
+  /** Кэш списка точных исключений (ленивый, один на инстанс). */
+  private _exactHostExceptions: string[] | null = null;
+
+  constructor(options: PluginHostOptions) {
+    this._audit = options.audit;
+    this._config = options.config;
+    this._hostVersion = options.hostVersion;
+    this._contractVersion = options.contractVersion ?? DEFAULT_EXTENSION_CONTRACT_VERSION;
+    this._scan = options.scan;
+    this._loader = options.loader;
+    this._explicitExceptions = options.exactHostExceptions;
+    this._logger = options.logger ?? {
+      warn: (message: string) => {
+        console.warn(`[plugin-host] ${message}`);
+      },
+    };
+  }
+
+  // ── Реестр активаций ────────────────────────────────────────────────
+
+  /** Все активные плагины (детерминированный порядок — по имени). */
+  listActivations(): PluginActivationHandle[] {
+    return [...this._activations.values()].sort((a, b) => a.plugin.localeCompare(b.plugin));
+  }
+
+  /** Дескриптор активной активации плагина (`undefined` — не активен). */
+  getActivation(plugin: string): PluginActivationHandle | undefined {
+    return this._activations.get(plugin);
+  }
+
+  /** Активен ли плагин. */
+  isActive(plugin: string): boolean {
+    return this._activations.has(plugin);
+  }
+
+  /**
+   * Зарегистрировать disposer для **активного** плагина.
+   *
+   * Точка расширения для Ф3: точки расширения (тулы/хуки/блоки промпта/
+   * фильтры LLM) регистрируют свои вклады и возвращают disposer'ы. Плагин не
+   * активен — `false` (disposer некуда положить).
+   */
+  registerDisposer(plugin: string, disposer: PluginDisposer): boolean {
+    const handle = this._activations.get(plugin);
+    if (!handle) return false;
+    handle.disposers.push(disposer);
+    return true;
+  }
+
+  // ── Активация ───────────────────────────────────────────────────────
+
+  /**
+   * Активировать плагин: прогнать пайплайн и (при успехе) зарегистрировать
+   * активацию в реестре.
+   *
+   * Отказ на любом шаге пишется в журнал аудита (`outcome: 'rejected'` с кодом
+   * причины) и возвращается вызывающему — исключений шаги не бросают.
+   */
+  async activate(
+    descriptor: PluginActivationDescriptor | null | undefined,
+    opts?: { actor?: string },
+  ): Promise<PluginActivationResult> {
+    const plugin = descriptor?.name ?? '';
+    const version = descriptor?.version ?? '';
+
+    const failure = async (
+      step: PluginActivationStep,
+      reason: PluginAuditReason,
+      message: string,
+    ): Promise<PluginActivationResult> => {
+      await this._writeAudit({
+        action: 'activate',
+        plugin,
+        version,
+        outcome: 'rejected',
+        reason,
+        descriptor,
+        actor: opts?.actor,
+      });
+      return { outcome: 'rejected', plugin, version, step, reason, message };
+    };
+
+    // ── Шаг 1: resolve ────────────────────────────────────────────────
+    const resolved = this._resolve(descriptor);
+    if (!resolved.ok) {
+      return failure(resolved.step, resolved.reason, resolved.message);
+    }
+    const ready = resolved.descriptor;
+
+    // Повторная активация активного плагина — осмысленный отказ.
+    if (this._activations.has(ready.name)) {
+      return failure(
+        'resolve',
+        'plugin.already_active',
+        `Плагин «${ready.name}» уже активен — сначала деактивируйте его (deactivate → activate).`,
+      );
+    }
+
+    // ── Шаг 2: integrity ──────────────────────────────────────────────
+    const integrity = verifyPluginIntegrity(ready);
+    if (!integrity.ok) {
+      return failure('integrity', integrity.code, integrity.message);
+    }
+
+    // ── Шаг 3: semver-гейт ────────────────────────────────────────────
+    const semver = await this._checkSemver(ready);
+    if (!semver.ok) {
+      return failure('semver', semver.reason, semver.message);
+    }
+
+    // ── Шаг 4: trust/scan ─────────────────────────────────────────────
+    const trust = await this._checkTrust(ready);
+    if (!trust.ok) {
+      return failure('trust', trust.reason, trust.message);
+    }
+
+    // ── Шаг 5: политика режима ────────────────────────────────────────
+    const policy = this._checkPolicy(ready);
+    if (!policy.ok) {
+      return failure('policy', policy.reason, policy.message);
+    }
+
+    // ── Шаг 6: import ─────────────────────────────────────────────────
+    // Ф1: код НЕ грузится — шаг обязан явно остановиться.
+    if (!this._config.executionEnabled) {
+      return failure(
+        'import',
+        'plugin.execution_disabled',
+        'Исполнение кода плагинов выключено (plugins.executionEnabled=false) — загрузчик остановлен на шаге import.',
+      );
+    }
+    if (!this._loader) {
+      return failure(
+        'import',
+        'plugin.loader_unavailable',
+        'Загрузчик кода плагина недоступен (Ф1: import() чужого кода в ядре отсутствует) — шаг import остановлен.',
+      );
+    }
+
+    // ── Шаг 7: facade + шаг 8: сбор disposers ─────────────────────────
+    const handle: PluginActivationHandle = {
+      plugin: ready.name,
+      version: ready.version,
+      activatedAt: new Date().toISOString(),
+      trustLevel: ready.trustLevel,
+      ...(integrity.actual ? { contentHash: integrity.actual } : {}),
+      ...(ready.manifest.mode ? { mode: ready.manifest.mode } : {}),
+      disposers: [],
+    };
+    const facade: PluginFacade = {
+      registerDisposer: (disposer: PluginDisposer) => {
+        handle.disposers.push(disposer);
+      },
+    };
+
+    let module;
+    try {
+      module = await this._loader(ready);
+    } catch (err) {
+      return failure(
+        'import',
+        'plugin.loader_unavailable',
+        `Загрузчик кода плагина завершился ошибкой: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    try {
+      await module.apply?.(facade);
+    } catch (err) {
+      // Ошибка `apply()` — откатываем уже зарегистрированные вклады.
+      await this._runDisposers(handle);
+      return failure(
+        'facade',
+        'plugin.loader_unavailable',
+        `Фасад плагина отверг регистрацию вкладов: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // ── Шаг 9: аудит ──────────────────────────────────────────────────
+    this._activations.set(handle.plugin, handle);
+    await this._writeAudit({
+      action: 'activate',
+      plugin: handle.plugin,
+      version: handle.version,
+      outcome: 'ok',
+      descriptor: ready,
+      actor: opts?.actor,
+      contentHash: handle.contentHash,
+      trustLevel: handle.trustLevel,
+      mode: handle.mode,
+    });
+
+    return {
+      outcome: 'activated',
+      plugin: handle.plugin,
+      version: handle.version,
+      step: 'facade',
+      activation: handle,
+    };
+  }
+
+  /**
+   * Деактивировать плагин: обратная прокрутка disposers **в обратном порядке**
+   * регистрации, затем аудит.
+   *
+   * Ошибка одного disposer'а **не прерывает** остальные (изолируется и
+   * логируется) — снятие вкладов не должно оставлять половину плагина.
+   */
+  async deactivate(
+    plugin: string,
+    opts?: { actor?: string },
+  ): Promise<PluginDeactivationResult> {
+    const handle = this._activations.get(plugin);
+    if (!handle) {
+      await this._writeAudit({
+        action: 'deactivate',
+        plugin,
+        version: '',
+        outcome: 'rejected',
+        reason: 'plugin.not_active',
+        actor: opts?.actor,
+      });
+      return {
+        outcome: 'rejected',
+        plugin,
+        version: '',
+        reason: 'plugin.not_active',
+        message: `Плагин «${plugin}» не активен — деактивировать нечего.`,
+        disposed: 0,
+        failures: [],
+      };
+    }
+
+    const { disposed, failures } = await this._runDisposers(handle);
+    this._activations.delete(plugin);
+
+    await this._writeAudit({
+      action: 'deactivate',
+      plugin: handle.plugin,
+      version: handle.version,
+      outcome: 'ok',
+      reason: failures.length > 0 ? 'plugin.disposer_failed' : undefined,
+      actor: opts?.actor,
+      contentHash: handle.contentHash,
+      trustLevel: handle.trustLevel,
+      mode: handle.mode,
+    });
+
+    return {
+      outcome: 'ok',
+      plugin: handle.plugin,
+      version: handle.version,
+      disposed,
+      failures,
+    };
+  }
+
+  // ── Шаги пайплайна ──────────────────────────────────────────────────
+
+  /** Шаг 1: resolve — дескриптор установлен и манифест корректен. */
+  private _resolve(
+    descriptor: PluginActivationDescriptor | null | undefined,
+  ):
+    | { ok: true; descriptor: PluginActivationDescriptor }
+    | { ok: false; step: PluginActivationStep; reason: PluginAuditReason; message: string } {
+    if (!descriptor || !descriptor.name || !descriptor.version || !descriptor.manifest) {
+      return {
+        ok: false,
+        step: 'resolve',
+        reason: 'plugin.not_found',
+        message: 'Плагин не найден: дескриптор установки пуст или неполон.',
+      };
+    }
+    const manifest: PackManifest = descriptor.manifest;
+    if (manifest.kind !== 'plugin') {
+      return {
+        ok: false,
+        step: 'resolve',
+        reason: 'plugin.manifest_invalid',
+        message: `Манифест «${descriptor.name}» имеет kind «${manifest.kind}» — активировать можно только kind: 'plugin'.`,
+      };
+    }
+    if (manifest.name !== descriptor.name || manifest.version !== descriptor.version) {
+      return {
+        ok: false,
+        step: 'resolve',
+        reason: 'plugin.manifest_invalid',
+        message:
+          'Дескриптор установки расходится с манифестом (имя/версия) — активация отклонена.',
+      };
+    }
+    return { ok: true, descriptor };
+  }
+
+  /** Шаг 3: semver-гейт — `contracts` и `host` против версий хоста. */
+  private async _checkSemver(
+    descriptor: PluginActivationDescriptor,
+  ): Promise<{ ok: true } | { ok: false; reason: PluginAuditReason; message: string }> {
+    const manifest = descriptor.manifest;
+    const verdict = checkExtensionCompatibility({
+      contracts: manifest.contracts,
+      host: manifest.host,
+      hostVersion: this._hostVersion,
+      contractVersion: this._contractVersion,
+      contractName: DEFAULT_EXTENSION_CONTRACT,
+      exactHostExceptions: await this._resolveExactHostExceptions(),
+    });
+    if (verdict.ok) return { ok: true };
+
+    if (verdict.reason === 'contract_mismatch') {
+      return {
+        ok: false,
+        reason: 'plugin.contract_mismatch',
+        message:
+          `Контракт расширения несовместим: требуется «${verdict.expected ?? '?'}», ` +
+          `хост предоставляет «${verdict.actual ?? '?'}».`,
+      };
+    }
+    return {
+      ok: false,
+      reason: 'plugin.host_mismatch',
+      message:
+        `Версия Synth несовместима с плагином: требуется «${verdict.expected ?? '?'}», ` +
+        `установлено «${verdict.actual ?? this._hostVersion}».`,
+    };
+  }
+
+  /**
+   * Шаг 4: trust/scan.
+   *
+   * Ф1 проверяет **только то, что уже есть**: trust-floor из конфига.
+   * Сканер и install-policy — Ф2 (точка расширения — `PluginScanHook`).
+   */
+  private async _checkTrust(
+    descriptor: PluginActivationDescriptor,
+  ): Promise<{ ok: true } | { ok: false; reason: PluginAuditReason; message: string }> {
+    const floor = this._config.trustFloor;
+    // Неизвестное доверие — fail-closed: считаем `community` (ниже порога).
+    const level: CatalogTrustLevel = descriptor.trustLevel ?? 'community';
+    // `trustLevelRank`: меньше — довереннее (`builtin` = 0). Ниже порога ⇒ rank больше.
+    if (trustLevelRank(level) > trustLevelRank(floor)) {
+      return {
+        ok: false,
+        reason: 'plugin.trust_below_floor',
+        message:
+          `Уровень доверия плагина «${level}» ниже trust-floor инстанса «${floor}» — ` +
+          'плагин может быть установлен, но не активирован.',
+      };
+    }
+
+    // Сканер — Ф2: подключённый хук возвращает вердикт.
+    if (this._scan && this._config.scan === 'enabled') {
+      const result = await this._scan(descriptor);
+      if (result.verdict !== 'safe') {
+        return {
+          ok: false,
+          reason: 'plugin.scan_rejected',
+          message:
+            `Сканер отклонил плагин (вердикт «${result.verdict}»)` +
+            (result.reason ? `: ${result.reason}` : '.'),
+        };
+      }
+    }
+    return { ok: true };
+  }
+
+  /** Шаг 5: политика режима — мастер-выключатель, списки имён, runtime-install. */
+  private _checkPolicy(
+    descriptor: PluginActivationDescriptor,
+  ): { ok: true } | { ok: false; reason: PluginAuditReason; message: string } {
+    if (!this._config.enabled) {
+      return {
+        ok: false,
+        reason: 'plugin.disabled',
+        message: 'Слой плагинов выключен (plugins.enabled=false) — активация запрещена.',
+      };
+    }
+    if (this._config.denylist.includes(descriptor.name)) {
+      return {
+        ok: false,
+        reason: 'plugin.denylisted',
+        message: `Плагин «${descriptor.name}» входит в plugins.denylist — активация запрещена.`,
+      };
+    }
+    if (this._config.allowlist.length > 0 && !this._config.allowlist.includes(descriptor.name)) {
+      return {
+        ok: false,
+        reason: 'plugin.not_allowlisted',
+        message:
+          `Плагин «${descriptor.name}» не входит в plugins.allowlist — активация запрещена.`,
+      };
+    }
+    if (descriptor.installKind === 'runtime' && this._config.runtimeInstall === 'deny') {
+      return {
+        ok: false,
+        reason: 'plugin.runtime_install_denied',
+        message:
+          'Установка плагинов во время работы инстанса запрещена ' +
+          '(plugins.runtimeInstall=deny) — активация не выполняется.',
+      };
+    }
+    return { ok: true };
+  }
+
+  // ── Вспомогательное ────────────────────────────────────────────────
+
+  /**
+   * Список точных исключений семвер-гейта: явный список из опций перекрывает
+   * файл конфига; файл читается один раз и кэшируется.
+   */
+  private async _resolveExactHostExceptions(): Promise<string[]> {
+    if (this._explicitExceptions !== undefined) return [...this._explicitExceptions];
+    if (this._exactHostExceptions === null) {
+      this._exactHostExceptions = await readExactHostExceptions(this._config.exactHostExceptions);
+    }
+    return this._exactHostExceptions;
+  }
+
+  /**
+   * Обратная прокрутка disposers: **обратный порядок** регистрации, ошибка
+   * одного не прерывает остальные (изолируется и логируется).
+   */
+  private async _runDisposers(handle: PluginActivationHandle): Promise<{
+    disposed: number;
+    failures: Array<{ error: string }>;
+  }> {
+    const failures: Array<{ error: string }> = [];
+    let disposed = 0;
+    for (const disposer of [...handle.disposers].reverse()) {
+      try {
+        await disposer();
+        disposed += 1;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        failures.push({ error: message });
+        this._logger.warn(
+          `disposer плагина «${handle.plugin}» завершился ошибкой (${message}) — остальные disposer'ы выполняются.`,
+        );
+      }
+    }
+    return { disposed, failures };
+  }
+
+  /**
+   * Запись в журнал аудита плагинов (best-effort: сбой записи не ломает
+   * активацию — предупреждение в лог, как в аудите обслуживания, ADR-092).
+   */
+  private async _writeAudit(input: {
+    action: 'activate' | 'deactivate';
+    plugin: string;
+    version: string;
+    outcome: 'ok' | 'rejected';
+    reason?: PluginAuditReason;
+    descriptor?: PluginActivationDescriptor | null;
+    actor?: string;
+    contentHash?: string;
+    trustLevel?: CatalogTrustLevel;
+    mode?: PluginActivationHandle['mode'];
+  }): Promise<void> {
+    const descriptor = input.descriptor ?? undefined;
+    const entry: PluginAuditEntry = {
+      id: `pa_${generateId()}`,
+      ts: new Date().toISOString(),
+      actor: input.actor ?? descriptor?.actor ?? 'system',
+      scope: 'plugin',
+      action: input.action,
+      plugin: input.plugin,
+      version: input.version,
+      outcome: input.outcome,
+      ...(input.reason ? { reason: input.reason } : {}),
+      ...(input.trustLevel ?? descriptor?.trustLevel
+        ? { trustLevel: input.trustLevel ?? descriptor?.trustLevel }
+        : {}),
+      ...(input.contentHash ?? descriptor?.contentHash
+        ? { contentHash: input.contentHash ?? descriptor?.contentHash }
+        : {}),
+      ...(input.mode ?? descriptor?.manifest.mode
+        ? { mode: input.mode ?? descriptor?.manifest.mode }
+        : {}),
+      ...(descriptor?.source ? { source: descriptor.source } : {}),
+    };
+    try {
+      await this._audit.append(entry);
+    } catch (err) {
+      this._logger.warn(
+        `не удалось записать событие аудита плагинов (${input.action}/${input.plugin}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+}

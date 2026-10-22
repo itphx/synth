@@ -84,8 +84,9 @@ export interface MetricsRuntimeSettings {
  * PROP-090 §10 / ADR-023: runtime-настройки секции `plugins` (слой плагинов),
  * сохраняемые через UI. Состав ключей — ровно `pluginsConfigSchema`
  * (`@itphx/synth-shared/config`): политики (`enabled`/`runtimeInstall`/
- * `trustFloor`/`scan`), списки имён (`allowlist`/`denylist`/`remoteAllowlist`),
- * путь файла исключений семвер-гейта и бюджет блока промпта.
+ * `trustFloor`/`scan`/`executionEnabled`), списки имён (`allowlist`/`denylist`/
+ * `remoteAllowlist`), путь файла исключений семвер-гейта и бюджет блока
+ * промпта.
  *
  * Эффективные значения = `mergePluginsConfig(config.plugins, runtime)`
  * (приоритет runtime > config > defaults).
@@ -100,6 +101,12 @@ export interface PluginsRuntimeSettings {
   remoteAllowlist?: string[];
   exactHostExceptions?: string;
   promptBlockMaxChars?: number;
+  /**
+   * PROP-090 Ф1: переключатель исполнения кода плагинов (по умолчанию `false`).
+   * `false` — загрузчик доводит плагин до шага `import` и останавливается
+   * (`plugin.execution_disabled`).
+   */
+  executionEnabled?: boolean;
 }
 
 /**
@@ -340,6 +347,7 @@ export function mergePluginsConfig(
     remoteAllowlist: r.remoteAllowlist ?? base?.remoteAllowlist ?? [],
     exactHostExceptions: r.exactHostExceptions ?? base?.exactHostExceptions ?? '',
     promptBlockMaxChars: r.promptBlockMaxChars ?? base?.promptBlockMaxChars ?? 4000,
+    executionEnabled: r.executionEnabled ?? base?.executionEnabled ?? false,
   };
 }
 

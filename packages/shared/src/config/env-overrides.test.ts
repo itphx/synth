@@ -184,6 +184,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       SYNTH_PLUGINS_SCAN: 'disabled',
       SYNTH_PLUGINS_EXACT_HOST_EXCEPTIONS: '/etc/synth/plugin-hosts.txt',
       SYNTH_PLUGINS_PROMPT_BLOCK_MAX_CHARS: '8000',
+      SYNTH_PLUGINS_EXECUTION_ENABLED: 'true',
     });
 
     expect(cfg.plugins).toEqual({
@@ -193,7 +194,17 @@ describe('applyEnvOverrides (ADR-023)', () => {
       scan: 'disabled',
       exactHostExceptions: '/etc/synth/plugin-hosts.txt',
       promptBlockMaxChars: 8000,
+      executionEnabled: true,
     });
+  });
+
+  it('plugins.executionEnabled: невалидное значение → warn + игнор (PROP-090 Ф1)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyEnvOverrides(makeConfig(), { SYNTH_PLUGINS_EXECUTION_ENABLED: 'perhaps' });
+
+    expect(cfg.plugins).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('SYNTH_PLUGINS_EXECUTION_ENABLED');
   });
 
   it('plugins.*: невалидное число → warn + игнор', () => {

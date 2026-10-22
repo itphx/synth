@@ -52,6 +52,11 @@ export type {
   MaintenanceAuditRepository,
   MaintenanceAuditListOptions,
 } from './maintenance-audit-repository.js';
+// PROP-090 §9: журнал аудита плагинов (отдельный порт, не security-аудит).
+export type {
+  PluginAuditRepository,
+  PluginAuditListOptions,
+} from './plugin-audit-repository.js';
 export type {
   SecurityAuditRepository,
   SecurityAuditListOptions,

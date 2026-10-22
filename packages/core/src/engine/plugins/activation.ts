@@ -1,0 +1,184 @@
+/**
+ * PROP-090 §10: контракты загрузчика плагинов (`PluginHost`).
+ *
+ * Ф1 — каркас: описанные здесь типы закрывают пайплайн активации (resolve →
+ * integrity → semver-гейт → trust/scan → политика режима → import → facade),
+ * реестр активаций и модель disposers. Исполнение кода в Ф1 **выключено**:
+ * `plugins.executionEnabled` по умолчанию `false`, а загрузчик (`PluginLoader`)
+ * в core не реализован — это точка расширения Ф3 (`inline`) / Ф4
+ * (`out-of-process`).
+ */
+import type {
+  CatalogTrustLevel,
+  PackManifest,
+  PackPluginMode,
+  PluginAuditReason,
+  PluginScanVerdict,
+} from '@itphx/synth-shared';
+
+/**
+ * Шаги пайплайна активации плагина (PROP-090 §10, шаги 1–8).
+ *
+ * Порядок фиксирован и **одинаков** для всех реализаций: отказ на раннем
+ * шаге не даёт дойти до later-гейтов (например, до `import`).
+ */
+export const PLUGIN_ACTIVATION_STEPS = [
+  'resolve',
+  'integrity',
+  'semver',
+  'trust',
+  'policy',
+  'import',
+  'facade',
+] as const;
+export type PluginActivationStep = (typeof PLUGIN_ACTIVATION_STEPS)[number];
+
+/**
+ * Disposer — обратная операция регистрации вклада плагина (снять блок/
+ * фильтр/тул/хук). Выполняется при деактивации **в обратном порядке**
+ * регистрации; ошибка одного disposer'а не прерывает остальные.
+ */
+export type PluginDisposer = () => void | Promise<void>;
+
+/**
+ * Дескриптор плагина, подготовленного к активации.
+ *
+ * В Ф1 источник — переданный дескриптор установки (полноценная установка,
+ * карантин и `plugins.lock.json` — Ф2/Ф5).
+ */
+export interface PluginActivationDescriptor {
+  /** Имя плагина (совпадает с `manifest.name`). */
+  name: string;
+  /** Версия плагина (совпадает с `manifest.version`). */
+  version: string;
+  /** Разобранный манифест `synth.pack` (`kind: 'plugin'`). */
+  manifest: PackManifest;
+  /** Файлы бандла (относительный путь → содержимое) — источник content-hash. */
+  files?: Record<string, string>;
+  /**
+   * Ожидаемый content-hash (из `plugins.lock.json`/`PLUGIN_INTEGRITY.json`).
+   * Не задан — сверять нечего (шаг integrity пропускается).
+   */
+  contentHash?: string;
+  /**
+   * Фактический уровень доверия (резолвится по источнику/реестру, не по
+   * манифесту). Не задан — fail-closed: считается `community`.
+   */
+  trustLevel?: CatalogTrustLevel;
+  /** Источник установки (`npm`/`local`/`catalog`/`builtin`/…). */
+  source?: string;
+  /**
+   * Как попал в инстанс: `deploy` (deploy-time, бандл в образе/PVC) или
+   * `runtime` (установка во время работы). На `runtime` при
+   * `plugins.runtimeInstall=deny` активация запрещена.
+   */
+  installKind?: 'deploy' | 'runtime';
+  /** Инициатор активации (`userId` при API/UI, `'cli'`, `'startup'`). */
+  actor?: string;
+}
+
+/** Дескриптор состоявшейся активации (реестр активаций `PluginHost`). */
+export interface PluginActivationHandle {
+  /** Имя плагина. */
+  plugin: string;
+  /** Версия плагина. */
+  version: string;
+  /** Момент активации (ISO-8601). */
+  activatedAt: string;
+  /** Уровень доверия на момент активации. */
+  trustLevel?: CatalogTrustLevel;
+  /** Content-hash бандла, проверенный при активации. */
+  contentHash?: string;
+  /** Режим исполнения, объявленный манифестом. */
+  mode?: PackPluginMode;
+  /** Disposer'ы в порядке регистрации (деактивация — обратный порядок). */
+  disposers: PluginDisposer[];
+}
+
+/** Итог активации плагина. */
+export interface PluginActivationResult {
+  /**
+   * `activated` — плагин активен; `rejected` — активация не состоялась
+   * (отказ по гейту или остановка на шаге `import`).
+   */
+  outcome: 'activated' | 'rejected';
+  /** Имя плагина. */
+  plugin: string;
+  /** Версия плагина. */
+  version: string;
+  /** Шаг пайплайна, на котором завершилась активация. */
+  step: PluginActivationStep;
+  /** Машиночитаемый код отказа (при `outcome: 'rejected'`). */
+  reason?: PluginAuditReason;
+  /** Человекочитаемое сообщение (при `outcome: 'rejected'`). */
+  message?: string;
+  /** Дескриптор активной активации (при `outcome: 'activated'`). */
+  activation?: PluginActivationHandle;
+}
+
+/** Итог деактивации плагина (обратная прокрутка disposers). */
+export interface PluginDeactivationResult {
+  /** `ok` — плагин снят; `rejected` — деактивировать было нечего. */
+  outcome: 'ok' | 'rejected';
+  /** Имя плагина. */
+  plugin: string;
+  /** Версия плагина (пустая — плагин не был активен). */
+  version: string;
+  /** Код отказа (при `outcome: 'rejected'`). */
+  reason?: PluginAuditReason;
+  /** Человекочитаемое сообщение. */
+  message?: string;
+  /** Сколько disposer'ов выполнено успешно. */
+  disposed: number;
+  /** Сбои disposer'ов (изолированы: остальные disposer'ы всё равно выполнены). */
+  failures: Array<{ error: string }>;
+}
+
+/**
+ * Фасад плагина (PROP-090 §10, шаг 7) — Ф1: **только** сбор disposers.
+ * Регистрации вкладов (тулы/хуки/блоки промпта/фильтры LLM) появятся в Ф3.
+ */
+export interface PluginFacade {
+  /**
+   * Зарегистрировать обратную операцию (disposer). Выполняется при
+   * деактивации в обратном порядке регистрации.
+   */
+  registerDisposer(disposer: PluginDisposer): void;
+}
+
+/**
+ * Модуль плагина, подготовленный загрузчиком (Ф3: результат `import()` бандла).
+ */
+export interface PluginModule {
+  /** Вызывается с фасадом — плагин регистрирует свои вклады. */
+  apply?(facade: PluginFacade): void | Promise<void>;
+}
+
+/**
+ * Загрузчик кода плагина — **точка расширения Ф3/Ф4**.
+ *
+ * В Ф1 загрузчика в core нет: `import()` чужого кода в ядре отсутствует, а
+ * шаг `import` без загрузчика останавливается с `plugin.loader_unavailable`.
+ */
+export type PluginLoader = (descriptor: PluginActivationDescriptor) => Promise<PluginModule>;
+
+/** Вердикт сканера/проверки доверия (точка расширения Ф2). */
+export interface PluginScanResult {
+  /** Вердикт скана (PROP-068 §4.3). */
+  verdict: PluginScanVerdict;
+  /** Причина отказа (человекочитаемая) — при вердикте не `safe`. */
+  reason?: string;
+}
+
+/**
+ * Хук скана/проверки доверия — **точка расширения Ф2**.
+ *
+ * Ф1 его не реализует: собственный сканер и install-policy — Ф2. Подключённый
+ * хук возвращает вердикт; вердикт ≠ `safe` → отказ `plugin.scan_rejected`.
+ */
+export type PluginScanHook = (descriptor: PluginActivationDescriptor) => Promise<PluginScanResult>;
+
+/** Логгер загрузчика (по умолчанию — `console.warn`). */
+export interface PluginLogger {
+  warn(message: string): void;
+}

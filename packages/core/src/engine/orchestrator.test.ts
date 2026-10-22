@@ -664,6 +664,15 @@ describe('ChatOrchestrator._sessionMessagesToLlm — агенты и tool-chain'
  * прерывается AbortController).
  */
 class AbortAfterToolProvider extends BaseProvider {
+  /**
+   * Хук «дошли до второй итерации» (tool-результат уже получен, стрим идёт).
+   *
+   * Тест отменяет ход **по факту** достижения этого состояния, а не по
+   * таймеру: фиксированная задержка была гонкой — на загруженной машине
+   * отмена приходила раньше tool-раунда, и цепочка tool-chain не сохранялась.
+   */
+  static onSecondIteration: (() => void) | null = null;
+
   async chat(
     _messages: LLMMessage[],
     _systemPrompt?: string,
@@ -702,6 +711,9 @@ class AbortAfterToolProvider extends BaseProvider {
       usage: { inputTokens: 20, outputTokens: 8, totalTokens: 28 },
       model: this.model,
     };
+    // Частичный чанк уже отдан оркестратору (следующий он запрашивает не
+    // успеет) — отменяем ход по факту, без гонки с таймером.
+    AbortAfterToolProvider.onSecondIteration?.();
     // Ждём отмены — реальный провайдер увидел бы AbortSignal и прекратил стрим
     while (!_cancellationToken?.cancelled) {
       await new Promise((r) => setTimeout(r, 5));
@@ -724,6 +736,7 @@ describe('ChatOrchestrator — отмена сохраняет tool-вызовы
   });
 
   afterEach(async () => {
+    AbortAfterToolProvider.onSecondIteration = null;
     ProviderFactory['_providers'].delete('mockabort');
     await rm(tmpDir, { recursive: true, force: true });
   });
@@ -749,13 +762,14 @@ describe('ChatOrchestrator — отмена сохраняет tool-вызовы
 
     const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
     const controller = new AbortController();
+    // Отмена приходит по факту: провайдер дошёл до второй итерации
+    // (tool-результат получен, стрим идёт) — гонки с таймером нет.
+    AbortAfterToolProvider.onSecondIteration = () => controller.abort();
     const processMessage = orchestrator.createProcessMessage();
     const promise = processMessage(fresh, msg, controller.signal, (event, data) => {
       chunks.push({ event, data });
     });
 
-    // Даём выполниться первой итерации (toolCalls) и начаться второй, затем отменяем
-    setTimeout(() => controller.abort(), 50);
     await promise;
 
     const updated = (await sessionManager.getSession(session.id))!;

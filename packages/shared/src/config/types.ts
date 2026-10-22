@@ -589,7 +589,11 @@ export const webhooksConfigSchema = z.object({
  *   (формат файла — открытый вопрос PROP-090 §14);
  * - `promptBlockMaxChars` — бюджет символов **на блок** системного промпта
  *   от плагина (по умолчанию 4000; превышение — обрезка хостом с маркером
- *   усечения, PROP-090 §5).
+ *   усечения, PROP-090 §5);
+ * - `executionEnabled` — **главный переключатель исполнения кода плагинов**
+ *   (по умолчанию `false`: в Ф1 загрузчик доводит плагин до шага `import` и
+ *   останавливается — `plugin.execution_disabled`; в Ф3/Ф4 включает `inline`/
+ *   `out-of-process`).
  */
 export const pluginsConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -601,6 +605,7 @@ export const pluginsConfigSchema = z.object({
   remoteAllowlist: z.array(z.string().min(1)).default([]),
   exactHostExceptions: z.string().default(''),
   promptBlockMaxChars: z.number().int().positive().default(4000),
+  executionEnabled: z.boolean().default(false),
 });
 
 // --- Egress-политика (shared формат tools/webhooks/MCP) ---

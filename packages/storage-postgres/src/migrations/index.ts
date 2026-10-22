@@ -14,6 +14,7 @@ import { MIGRATION_002_EGRESS_AUDIT } from './002-egress-audit.js';
 import { MIGRATION_003_ANALYTICS_ROLLUPS } from './003-analytics-rollups.js';
 import { MIGRATION_004_PIPELINE_ENGINE } from './004-pipeline-engine.js';
 import { MIGRATION_005_PIPELINE_PROVENANCE } from './005-pipeline-provenance.js';
+import { MIGRATION_006_PLUGIN_AUDIT } from './006-plugin-audit.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -32,6 +33,7 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 3, id: '003_analytics_rollups', sql: MIGRATION_003_ANALYTICS_ROLLUPS },
   { version: 4, id: '004_pipeline_engine', sql: MIGRATION_004_PIPELINE_ENGINE },
   { version: 5, id: '005_pipeline_provenance', sql: MIGRATION_005_PIPELINE_PROVENANCE },
+  { version: 6, id: '006_plugin_audit', sql: MIGRATION_006_PLUGIN_AUDIT },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

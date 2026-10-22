@@ -61,6 +61,7 @@ export type CatalogLocalizedText = z.infer<typeof catalogLocalizedTextSchema>;
 export {
   CATALOG_TRUST_LEVELS,
   catalogTrustLevelSchema,
+  trustLevelRank,
   type CatalogTrustLevel,
 } from './trust.js';
 

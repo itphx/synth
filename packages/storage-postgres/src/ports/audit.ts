@@ -22,6 +22,7 @@ import type {
 import type { PostgresExecutor } from '../pool.js';
 import { jsonbLiteral } from '../json-param.js';
 import type { PortDeps } from './deps.js';
+import { buildPluginAuditPorts } from './plugin-audit.js';
 
 type Row = Record<string, unknown>;
 
@@ -252,12 +253,14 @@ class PostgresEgressRequestLogRepository implements EgressRequestLogRepository {
 }
 
 /** Часть `StorageContext`, которой владеет группа `audit`. */
-export type AuditPorts = Pick<StorageContext, 'securityAudit' | 'egressRequests'>;
+export type AuditPorts = Pick<StorageContext, 'securityAudit' | 'egressRequests' | 'pluginAudit'>;
 
 /** Собрать порты журналов безопасности. */
 export function buildAuditPorts(deps: PortDeps): AuditPorts {
   return {
     securityAudit: new PostgresSecurityAuditRepository(deps),
     egressRequests: new PostgresEgressRequestLogRepository(deps),
+    // PROP-090 §9: журнал аудита плагинов (отдельный порт, не security-аудит).
+    ...buildPluginAuditPorts(deps),
   };
 }

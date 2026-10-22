@@ -214,6 +214,9 @@ export const defaultConfig: SynthConfig = {
     exactHostExceptions: '',
     // Бюджет символов на блок системного промпта от плагина.
     promptBlockMaxChars: 4000,
+    // Исполнение кода плагинов выключено по умолчанию (Ф1: загрузчик доходит
+    // до шага `import` и останавливается — `plugin.execution_disabled`).
+    executionEnabled: false,
   },
   egress: {
     // Политика встроенных инструментов: deny приватных/служебных диапазонов.

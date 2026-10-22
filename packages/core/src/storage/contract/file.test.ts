@@ -16,6 +16,7 @@ import {
   describeIdentityClaimRepository,
   describeJobRepository,
   describeMaintenanceAuditRepository,
+  describePluginAuditRepository,
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
   describeMcpRegistryRepository,
@@ -51,6 +52,7 @@ import { FileDedupStore } from '../../engine/events/dedup-store.js';
 import { ScheduleStore } from '../schedule-store.js';
 import { JobStore } from '../job-store.js';
 import { MaintenanceAuditStore } from '../maintenance-audit-store.js';
+import { FilePluginAuditStore } from '../file-plugin-audit-store.js';
 import { SecurityAuditStore } from '../security-audit-store.js';
 import { EgressRequestLogStore } from '../egress-request-log-store.js';
 import { AnalyticsRollupStore } from '../analytics-rollup-store.js';
@@ -143,6 +145,17 @@ describe('контрактные тесты файловых реализаци�
       return {
         repo: new MaintenanceAuditStore({ dataDir: dir }),
         filePath: join(dir, 'audit', 'maintenance.jsonl'),
+      };
+    },
+  );
+
+  describePluginAuditRepository(
+    'FilePluginAuditStore → PluginAuditRepository',
+    async () => {
+      const dir = await tmp();
+      return {
+        repo: new FilePluginAuditStore({ dataDir: dir }),
+        filePath: join(dir, 'audit', 'plugins.jsonl'),
       };
     },
   );

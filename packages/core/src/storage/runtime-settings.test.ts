@@ -486,6 +486,7 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
     remoteAllowlist: ['c'],
     exactHostExceptions: '/etc/synth/base-hosts.txt',
     promptBlockMaxChars: 1000,
+    executionEnabled: false,
   };
 
   it('runtime поверх base: каждое заданное поле перекрывает base', () => {
@@ -511,6 +512,7 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
       remoteAllowlist: [],
       exactHostExceptions: '/etc/synth/runtime-hosts.txt',
       promptBlockMaxChars: 8000,
+      executionEnabled: false,
     });
   });
 
@@ -537,6 +539,23 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
       remoteAllowlist: [],
       exactHostExceptions: '',
       promptBlockMaxChars: 4000,
+      executionEnabled: false,
     });
+  });
+
+  it('executionEnabled: runtime перекрывает config (приоритет runtime > config)', () => {
+    // config разрешает исполнение кода, runtime запрещает — побеждает runtime.
+    expect(mergePluginsConfig({ ...base, executionEnabled: true }, { executionEnabled: false }))
+      .toMatchObject({ executionEnabled: false });
+    // config запрещает, runtime разрешает — побеждает runtime.
+    expect(mergePluginsConfig(base, { executionEnabled: true })).toMatchObject({
+      executionEnabled: true,
+    });
+    // runtime не задал — берётся значение config.
+    expect(mergePluginsConfig({ ...base, executionEnabled: true }, {})).toMatchObject({
+      executionEnabled: true,
+    });
+    // Ни config, ни runtime — дефолт `false` (исполнение кода выключено).
+    expect(mergePluginsConfig(undefined, {})).toMatchObject({ executionEnabled: false });
   });
 });

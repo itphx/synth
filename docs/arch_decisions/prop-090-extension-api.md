@@ -8,6 +8,12 @@
 > `out-of-process`), **две новые точки расширения** (`promptBlocks`, `llmFilters`), **модель доверия**
 > (PROP-068) и **полный контур управления** (API/CLI/UI). Прежняя редакция (🧊 Icebox, отложено
 > 2026-10-19) заменена; фазы перестроены в Ф0–Ф7 с критериями приёмки.
+> **Обновлено (Ф1):** 2026-10-22 — **Ф1 выполнен** (ветка `feature/plugin-host`): загрузчик `PluginHost`
+> с пайплайном активации, integrity, семвер-гейт с файлом точных исключений, trust-floor, реестр
+> активаций и журнал аудита плагинов (`PluginAuditRepository`). **Исполнение кода выключено по
+> умолчанию** (`plugins.executionEnabled=false`) — загрузчика кода в core нет (Ф3/Ф4). Формат файла
+> точных исключений семвер-гейта **зафиксирован** в Ф1 (требует подтверждения владельца — см.
+> §«Открытые вопросы» → «Решено 2026-10-22»).
 > **Источник:** вынесено из зонтика [ADR-086](./adr-086-extensibility-plugins-editions.md) — Extension API
 > проектировался там как первый из четырёх столпов (плагины, editions, contribution flow, add-on'ы);
 > здесь он выделен в отдельный документ и детализирован.
@@ -704,7 +710,9 @@ round-robin по адресам, failover только при ошибке со�
 «изменение политики»), а **свой порт** `PluginAuditRepository` (по образцу
 `MaintenanceAuditRepository`, `packages/core/src/storage/maintenance-audit-store.ts`) и файл
 `{dataDir}/audit/plugins.jsonl` (append-only JSONL). События:
-`install | uninstall | enable | disable | activate | deactivate | scan | trust_change`.
+`install | uninstall | enable | disable | activate | deactivate | scan | trust_change`
+(в Ф1 реализованы только `activate`/`deactivate` — перечень `PLUGIN_AUDIT_ACTIONS`, см.
+§«Статус реализации в коде (Ф1)»).
 Секреты в журнал не пишутся (инвариант 13).
 
 ### Что переиспользуется из кода
@@ -766,7 +774,10 @@ content_hash, ref, entry, installed_at, updated_at }`. **Pin обязателе�
 2. **integrity** — сверить sha256 с lock и `PLUGIN_INTEGRITY.json`; несовпадение — отказ.
 3. **semver-гейт** — `contracts` (semver-мажор) совместим и `host` покрывает текущую версию Synth;
    иначе — `plugin.host_incompatible`. Файл **exact-исключений** (аналог peer-gate) — формат
-   открытый вопрос (§14).
+   зафиксирован в Ф1: текстовый файл, **одна версия host в строке**, `#` — комментарий, разбор
+   fail-closed (не-semver строка пропускается, недоступный файл — исключений нет); формат
+   **требует подтверждения владельца** (§«Открытые вопросы» → «Решено 2026-10-22 — формат файла
+   точных исключений»).
 4. **trust/scan** — резолв trust по источнику; статический сканер → вердикт (`severity → verdict`,
    §9); install-policy; **trust-floor** (`plugins.trustFloor`, дефолт `trusted`) — ниже порога:
    `plugin.trust_below_floor`, активация не выполняется.
@@ -918,7 +929,7 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | Фаза | Содержание | Критерий приёмки |
 |---|---|---|
 | **Ф0 — предпосылки** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-layer`, коммитов нет) | Остаток [ADR-030](./adr-030-hooks-agent-events.md): политика `builtin` (защита builtin-обработчиков от снятия) + 4 недостающих эмита (`plan_rejected`, `message_received`, `callback`, `schedule_fired`); семвер-гейт `contracts`/`host` (semver-мажор контракта); явные Zod-схемы `provides.tools`/`provides.promptBlocks`/`provides.llmFilters` в `packages/shared/src/types/pack.ts` (без `.passthrough()`); `RuntimeSettings.plugins` + `plugins.*` в конфиге ([ADR-023](./adr-023-configuration.md)). **Сделано:** `builtin` (`off`/отписка отказывают, `offBuiltin` — путь владельца), 3 эмита (`callback` — обоснованно вне core, остаток ADR-030), semver-матчер + `checkExtensionCompatibility`, схемы вкладов + `mode`/`permissions`/`trust` + `diffPackProvides`, секция `plugins` + `mergePluginsConfig` | тест: builtin-обработчик нельзя снять через `off`; эмиты вызываются; `validatePackManifest` отклоняет `tier: 'stable'` в `provides.promptBlocks`, невалидный `provides.tools[]` (пустое имя/дубль) и расхождение `provides` — в т.ч. `provides.tools[]` ↔ фактические регистрации тулов; `pnpm --filter @itphx/synth-shared build` зелёный |
-| **Ф1 — манифест + `PluginHost`** | Схема манифеста плагина, `PluginHost`-пайплайн (§10), integrity, semver-гейт, реестр активаций, аудит активации. **Исполнение кода выключено по умолчанию**: только resolve/integrity/гейт/скан/аудит, без `import()` | тест: `PluginHost.activate` доходит до шага «import» и останавливается; несовпадение integrity → отказ; тест аудита: запись `activate`/`deactivate` в `audit/plugins.jsonl` |
+| **Ф1 — манифест + `PluginHost`** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-host`, коммитов нет) | Схема манифеста плагина, `PluginHost`-пайплайн (§10), integrity, semver-гейт, реестр активаций, аудит активации. **Исполнение кода выключено по умолчанию**: только resolve/integrity/гейт/скан/аудит, без `import()`. **Сделано:** модуль `engine/plugins/*` (`PluginHost`, контракты активации, `computePluginContentHash`/`verifyPluginIntegrity`, `readExactHostExceptions`), порт `PluginAuditRepository` (файл/память/PG + контрактный suite), ключ `plugins.executionEnabled` (дефолт `false`); seam'ы `PluginLoader`/`PluginScanHook`/`PluginFacade` оставлены под Ф2/Ф3/Ф4 | тест: `PluginHost.activate` доходит до шага «import» и останавливается; несовпадение integrity → отказ; тест аудита: запись `activate`/`deactivate` в `audit/plugins.jsonl` — **выполнено**, см. §«Статус реализации в коде (Ф1)» |
 | **Ф2 — модель доверия** | Уровни trust, матрица install-policy с ячейкой `kind: "plugin"`, сканер (6+1 категорий, квоты, `content_hash`, кэш сканов, `.skillignore`, бинарные расширения), матрица `severity → verdict`, `quarantine/`, `plugins.lock.json`, порт `PluginAuditRepository` + `{dataDir}/audit/plugins.jsonl` | тест: вердикт по severity (`info\|low → safe`, `medium → caution`, `high\|critical → dangerous`); квоты → `caution`; бинарник → `dangerous`; `community` + `dangerous` → `block`; trust-floor: `community` устанавливается, но не активируется (`plugin.trust_below_floor`) |
 | **Ф3 — точки `promptBlocks` + `llmFilters`** | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный |
 | **Ф4 — два режима исполнения** | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация | тест: плагин в `out-of-process` регистрирует `promptBlocks` и отдаёт блок; неверный токен → 401; недоступный процесс → деградация по `failMode`; контрактный suite порта расширений зелёный |
@@ -975,10 +986,66 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 правила 12–14, `diffPackProvides`), `packages/shared/src/types/semver.test.ts` (грамматика, операторы, fail-closed,
 `checkExtensionCompatibility`), `packages/shared/src/config/env-overrides.test.ts`, `packages/core/src/storage/runtime-settings.test.ts`.
 
-**Остаток после Ф0.** Загрузчик `PluginHost` и исполнение кода (Ф1), сканер/доверие/lock/аудит (Ф2), точки
-`promptBlocks`/`llmFilters` в композере и gateway (Ф3), два режима исполнения (Ф4), install/activate + API/CLI/UI
-(Ф5/Ф6), hybrid (Ф7); регистрация `/api/v2/settings/plugins` в HTTP-роутах ещё не сделана (сейчас есть только
-типы, схема и runtime-store).
+**Остаток после Ф0.** Загрузчик `PluginHost` и исполнение кода (Ф1) — **выполнено, см. §«Статус реализации
+в коде (Ф1)» ниже**; сканер/доверие/lock (Ф2), точки `promptBlocks`/`llmFilters` в композере и gateway (Ф3),
+два режима исполнения (Ф4), install/activate + API/CLI/UI (Ф5/Ф6), hybrid (Ф7); регистрация
+`/api/v2/settings/plugins` в HTTP-роутах ещё не сделана (сейчас есть только типы, схема и runtime-store).
+
+### Статус реализации в коде (Ф1, 2026-10-22)
+
+Ф1 закрыт в ветке `feature/plugin-host`: появился загрузчик `PluginHost` и журнал аудита плагинов.
+**Исполнения кода плагинов нет** — загрузчик (`PluginLoader`) в core отсутствует, а
+`plugins.executionEnabled` по умолчанию `false` (Ф3/Ф4). Пути — фактические, проверены по коду.
+
+**Пайплайн активации (`PluginHost.activate`) — шаг | код отказа | что проверяет | где в коде.**
+
+| Шаг | Код отказа | Что проверяет | Где в коде |
+|---|---|---|---|
+| `resolve` | `plugin.not_found`, `plugin.manifest_invalid` | дескриптор установки непуст; `manifest.kind === 'plugin'`; имя/версия дескриптора совпадают с манифестом; **повторная активация активного плагина** — `plugin.already_active` (переключение — только `deactivate` → `activate`) | `packages/core/src/engine/plugins/plugin-host.ts` (`_resolve`) |
+| `integrity` | `plugin.integrity_mismatch`, `plugin.integrity_unverifiable` | content-hash бандла (sha256 от отсортированного набора файлов) против ожидаемого; хеш не задан — шаг пропускается; хеш задан, а файлов нет — **fail-closed** | `packages/core/src/engine/plugins/integrity.ts` (`computePluginContentHash`, `verifyPluginIntegrity`) |
+| `semver` | `plugin.contract_mismatch`, `plugin.host_mismatch` | порядок «контракт → host»: `contracts` (semver-мажор) и диапазон `host` против версии Synth; точные исключения — из файла `plugins.exactHostExceptions` | `plugin-host.ts` (`_checkSemver`) + `packages/shared/src/types/semver.ts` (`checkExtensionCompatibility`) |
+| `trust` | `plugin.trust_below_floor`, `plugin.scan_rejected` | trust-floor инстанса (`plugins.trustFloor`): не задан — `community` (fail-closed); ниже порога — отказ. Сканер — **Ф2**: подключённый хук `PluginScanHook` возвращает вердикт, не `safe` — отказ | `plugin-host.ts` (`_checkTrust`) |
+| `policy` | `plugin.disabled`, `plugin.not_allowlisted`, `plugin.denylisted`, `plugin.runtime_install_denied` | мастер-выключатель `plugins.enabled`; списки имён `allowlist`/`denylist`; `plugins.runtimeInstall=deny` для `installKind: 'runtime'` | `plugin-host.ts` (`_checkPolicy`) |
+| `import` | `plugin.execution_disabled`, `plugin.loader_unavailable` | **Ф1: код не грузится.** При `plugins.executionEnabled=false` шаг останавливается явно; при `true` без загрузчика — `plugin.loader_unavailable` (`import()` чужого кода в ядре отсутствует) | `plugin-host.ts` (шаг 6) |
+| `facade` | `plugin.loader_unavailable` | вызов `apply()` фасадом; ошибка — откат уже зарегистрированных вкладов (`disposers`) | `plugin-host.ts` (шаги 7–8), контракт — `engine/plugins/activation.ts` (`PluginFacade`, `PluginDisposer`) |
+| аудит | — | запись `activate`/`deactivate` (исход `ok`/`rejected`, код причины, trust/hash/режим) — при **обоих** исходах; сбой записи аудита не ломает активацию (best-effort) | `plugin-host.ts` (`_writeAudit`), порт `PluginAuditRepository` |
+
+**Обратная прокрутка (`deactivate`).** Disposer'ы выполняются **в обратном порядке** регистрации; ошибка
+одного **не прерывает** остальные (изолируется и логируется), факт — в аудите (`plugin.disposer_failed`).
+
+**Журнал аудита плагинов (PROP-090 §9).**
+
+| Что | Где |
+|---|---|
+| Порт `PluginAuditRepository` (append-only; `append`/`list` «свежие первыми» с фильтрами `plugin`/`action`/`outcome`/`limit`/`clear`) | `packages/core/src/storage/ports/plugin-audit-repository.ts` |
+| Тип записи `PluginAuditEntry` + перечни `PLUGIN_AUDIT_ACTIONS`/`PLUGIN_AUDIT_OUTCOMES`/`PLUGIN_SCAN_VERDICTS`/`PLUGIN_AUDIT_REASONS` (17 кодов — по одному на гейт пайплайна) | `packages/shared/src/types/plugin-audit.ts` |
+| Файловая реализация — JSONL `{dataDir}/audit/plugins.jsonl` (append под `AsyncLock`, `clear` атомарно tmp→rename) | `packages/core/src/storage/file-plugin-audit-store.ts` |
+| In-memory реализация (герметичные тесты) | `packages/core/src/storage/memory/plugin-audit.ts` |
+| БД-драйвер: таблица `plugin_audit` (`seq bigserial` — порядок «свежие первыми»), миграция `006_plugin_audit` | `packages/storage-postgres/src/ports/plugin-audit.ts`, `packages/storage-postgres/src/migrations/006-plugin-audit.ts` |
+| Контрактный suite порта (прогон на file/memory/PG) | `packages/core/src/storage/contract/plugin-audit-repository.contract.ts` (PG — `contract/postgres.test.ts`) |
+| Подключение к `StorageContext` (`pluginAudit`) | `packages/core/src/storage/storage-context.ts` |
+
+**Конфиг.** Добавлен ключ `plugins.executionEnabled` (дефолт `false`) — главный переключатель исполнения
+кода плагинов; приоритет runtime > config > defaults (`mergePluginsConfig`), env-оверрайд
+`SYNTH_PLUGINS_EXECUTION_ENABLED`. Остальные ключи секции `plugins` — из Ф0.
+
+**Seam'ы, оставленные под Ф2/Ф3/Ф4** (описаны в `engine/plugins/activation.ts`):
+
+| Seam | Что под него | Статус |
+|---|---|---|
+| `PluginScanHook` | сканер/проверка доверия (Ф2) | хук есть, реализации нет |
+| `PluginLoader` | загрузчик кода: `inline` (Ф3) / `out-of-process` (Ф4) | тип есть, реализации нет |
+| `PluginFacade` | регистрация вкладов (Ф3: тулы/хуки/блоки промпта/фильтры LLM) | Ф1 — только сбор `disposer`ов |
+
+**Тесты Ф1.** `packages/core/src/engine/plugins/plugin-host.test.ts` (пайплайн, гейты, коды отказа, реестр,
+обратная прокрутка, аудит), `packages/core/src/engine/plugins/exact-host-exceptions.test.ts` (формат файла,
+fail-closed), `packages/core/src/storage/contract/plugin-audit-repository.contract.ts` (file/memory/PG),
+`packages/core/src/storage/runtime-settings.test.ts` (приоритет runtime > config для `executionEnabled`).
+
+**Остаток после Ф1.** Сканер/install-policy/карантин/`plugins.lock.json` (Ф2), точки `promptBlocks`/
+`llmFilters` в композере и gateway (Ф3), два режима исполнения (Ф4), install/activate + API/CLI/UI
+(Ф5/Ф6), hybrid (Ф7); HTTP-роут `/api/v2/settings/plugins` не зарегистрирован (есть типы, схема и
+runtime-store).
 
 ## Открытые вопросы
 
@@ -986,7 +1053,10 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 > контракт — в `@itphx/synth-shared`, отдельный пакет не создаётся); место контракта
 > `MemoryProvider` (`@itphx/synth-shared`, реализации — плагинами); матрица `severity → verdict`
 > (каноническая таблица — PROP-068 §4.3); третья фаза `llmFilters` — `embedding`. Решения по каталогу и
-> маркету — ниже, «Решено 2026-10-22 — каталог и маркет».
+> маркету — ниже, «Решено 2026-10-22 — каталог и маркет». **Ф1 слоя выполнена 2026-10-22**
+> (ветка `feature/plugin-host`): пайплайн `PluginHost` реализован, **исполнение кода выключено по
+> умолчанию** (`plugins.executionEnabled=false`), журнал аудита плагинов — **отдельный порт**
+> `PluginAuditRepository` (не расширение `SECURITY_AUDIT_SCOPES`).
 
 1. **Версии контракта расширений и окно deprecation.** Как версионируется контракт точки
    (`promptBlocks@1`, `llmFilters@1`), сколько релизов живёт старая мажорная версия, что делает
@@ -1010,6 +1080,35 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
    но где лежит реализация клиента/сервера: в core рядом с `execution/remote.ts`
    (`packages/core/src/execution/remote.ts`) или отдельным пакетом по образцу
    `@itphx/synth-executor`? От ответа зависит, кто собирает `out-of-process`-плагин.
+
+### Решено 2026-10-22 — формат файла точных исключений
+
+Файл точных исключений семвер-гейта (путь — конфиг `plugins.exactHostExceptions`) — **текстовый**,
+**одна полная semver-версия host в строке** (`readExactHostExceptions`,
+`packages/core/src/engine/plugins/exact-host-exceptions.ts`):
+
+```text
+# Точные исключения семвер-гейта плагинов (PROP-090 §10).
+# Одна версия Synth в строке; строки с `#` — комментарии.
+0.11.0
+0.11.1
+```
+
+Правила разбора — **fail-closed**:
+
+- пустые строки и строки с `#` (в т.ч. с ведущими пробелами) — пропускаются;
+- строка должна быть полной semver-версией (`MAJOR.MINOR.PATCH`); **не-semver строка
+  пропускается с предупреждением** — исключение не выдаётся;
+- файл недоступен (нет файла/нет прав) — список **пуст**, предупреждение в лог: исключений
+  **нет** (гейт остаётся строгим).
+
+**Формат требует подтверждения владельца.** Текстовый формат выбран исполнителем в Ф1 как
+минимальный (без новой зависимости и без Zod-схемы на стороне конфига), но это **не решение
+владельца**: допустимые альтернативы — JSON/YAML (схема в `shared`, валидация при чтении) или
+список прямо в секции `plugins.*` конфига. Вопрос остаётся открытым (формат файла — не сам
+механизм гейта); при смене формата меняются только `readExactHostExceptions` и путь из
+`plugins.exactHostExceptions` — сам семвер-гейт и его вердикты (`contract_mismatch`/
+`host_mismatch`) не меняются.
 
 ### Решено 2026-10-22 — каталог и маркет
 
@@ -1052,6 +1151,6 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 
 ## История
 
-- 2026-10-22 — уточнение контракта: в `PromptBlockContext` добавлен контекст текущего хода (`query`) и бюджет символов блока; в манифест добавлено `provides.tools[]` (нужно для тула `memory_search` плагина-памяти).
 - 2026-10-22 — решения владельца: wire-протокол `out-of-process` — HTTP/1.1 + JSON, контракт протокола в `@itphx/synth-shared` (отдельный пакет не создаётся); третья фаза `llmFilters` — `embedding` (эмбеддинги идут через gateway-контур, инвариант 3); матрица `severity → verdict` согласована — каноническая таблица в PROP-068 §4.3; бюджет символов блока — настраиваемый параметр (дефолт 4 000) в `plugins.*` и `GET/PUT/DELETE /api/v2/settings/plugins`; шов промпт-блоков — `PromptBlockProvider` (реализуется в Ф3; строка `packages/core/AGENTS.md:410` не соответствует коду и будет приведена в соответствие в Ф3).
 - 2026-10-22 — **Ф0 выполнен** (ветка `feature/plugin-layer`): политика `builtin` в `HookBus` (+ `offBuiltin`), эмиты `message_received`/`plan_rejected`/`schedule_fired` (`callback` — вне core, контракт внешнего канала), semver-матчер `types/semver.ts` + `checkExtensionCompatibility`, модуль `types/trust.ts`, явные схемы `provides.tools/promptBlocks/llmFilters` и поля `mode`/`permissions`/`trust` + `diffPackProvides`, секция `plugins.*` и `RuntimeSettings.plugins` + `mergePluginsConfig`; добавлен раздел «Статус реализации в коде (Ф0)». Решения по каталогу/маркету (общий `synth-registry`, `trust_level` записи = истина, `synth plugin *`, kind-aware витрина) — в «Открытые вопросы» → «Решено 2026-10-22».
+- 2026-10-22 — **Ф1 выполнен** (ветка `feature/plugin-host`): модуль `engine/plugins/*` (`PluginHost` — пайплайн resolve → integrity → semver → trust → policy → import → facade, реестр активных плагинов, обратная прокрутка disposers; `computePluginContentHash`/`verifyPluginIntegrity`; `readExactHostExceptions`), журнал аудита плагинов — **отдельный порт** `PluginAuditRepository` (файл `{dataDir}/audit/plugins.jsonl` / память / PostgreSQL, миграция `006-plugin-audit.ts`, контрактный suite), ключ `plugins.executionEnabled` (дефолт `false` — код плагинов не грузится); формат файла точных исключений зафиксирован и **требует подтверждения владельца** (см. «Открытые вопросы» → «Решено 2026-10-22 — формат файла точных исключений»).

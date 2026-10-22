@@ -59,6 +59,9 @@ export * from './analytics.js';
 export * from './pack.js';
 // PROP-090 §8/§10: semver-матчер диапазонов версий (host/контракты расширения)
 export * from './semver.js';
+// PROP-090 §9: журнал аудита плагинов — отдельный тип и отдельный scope
+// (не расширение `SECURITY_AUDIT_SCOPES` — семантика «событие расширения»).
+export * from './plugin-audit.js';
 // PROP-068 §3/§12: контракт индекса каталога расширений (format: 1) — типы, zod-схемы, tolerant-парсер
 export * from './catalog.js';
 // ADR-051/ADR-100: контракт пайплайна (определение, шаг, экземпляр)

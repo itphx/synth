@@ -558,6 +558,27 @@
   `external_event`/`message_received` (только `role: user`, первая попытка, без текста)/
   `schedule_fired` (метаданные расписания, без текста задания). `callback` объявлен, но в core
   не эмитится — нет точки «нажатие инлайн-кнопки» (контракт внешнего канала, ADR-087/ADR-103).
+- `engine/plugins/*` — PROP-090 §10: загрузчик плагинов `PluginHost` и его пайплайн активации
+  (**resolve → integrity → semver-гейт → trust/scan → политика режима → import → facade**).
+  **Ф1: исполнение кода выключено** — `plugins.executionEnabled` (default `false`), загрузчика кода
+  (`PluginLoader`) в core нет, шаг `import` останавливается явно. Файлы: `plugin-host.ts`
+  (`PluginHost`/`PluginHostOptions`/`DEFAULT_EXTENSION_CONTRACT_VERSION`; реестр активных плагинов,
+  обратная прокрутка disposers, аудит **каждого** исхода — успех и отказ), `activation.ts`
+  (контракты: `PLUGIN_ACTIVATION_STEPS`, `PluginActivationDescriptor`/`PluginActivationHandle`/
+  `PluginActivationResult`/`PluginDeactivationResult`, `PluginDisposer`, `PluginFacade`,
+  `PluginModule`, `PluginLogger`), `integrity.ts` (`computePluginContentHash`/
+  `verifyPluginIntegrity`), `exact-host-exceptions.ts` (`readExactHostExceptions` — файл точных
+  исключений семвер-гейта: **одна полная semver-версия host в строке**, `#` — комментарий,
+  не-semver строка пропускается с предупреждением, недоступный файл → исключений нет
+  (fail-closed)), `index.ts` — баррел. **Коды отказа** (`PLUGIN_AUDIT_REASONS`,
+  `shared/src/types/plugin-audit.ts`): `plugin.not_found`/`plugin.manifest_invalid` (resolve),
+  `plugin.integrity_mismatch`/`plugin.integrity_unverifiable` (integrity),
+  `plugin.contract_mismatch`/`plugin.host_mismatch` (semver), `plugin.trust_below_floor`/
+  `plugin.scan_rejected` (trust), `plugin.disabled`/`plugin.not_allowlisted`/`plugin.denylisted`/
+  `plugin.runtime_install_denied` (policy), `plugin.execution_disabled`/
+  `plugin.loader_unavailable` (import/facade), `plugin.already_active`, `plugin.not_active`,
+  `plugin.disposer_failed`. Seam'ы под Ф2–Ф4: `PluginScanHook` (Ф2), `PluginLoader` (Ф3/Ф4),
+  `PluginFacade` (Ф3 — в Ф1 только сбор disposer'ов).
 - `engine/pipelines/*` — ADR-101: **второй движок** рядом с `ChatOrchestrator`
   (шаг пайплайна ≠ сессия; движок сам по себе не знает про HTTP/сессии/очередь).
   `engine.ts` — `PipelineEngine`: цикл прогона по опубликованной версии спецификации,
@@ -674,7 +695,7 @@
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`). ADR-099: доверие CA для
   git-over-https — `simpleGit({ config: ['http.sslCAInfo=<path>'] })` из
   `gitCaConfig()` (путь берётся из уже инициализированного `initTlsTrust`).
-- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (36 — 34 файла-описания, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
+- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (37 — 35 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
   запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/
@@ -726,7 +747,8 @@
   `metrics` — runtime `metrics.enabled` (ADR-094), резолв — `resolveMetricsEnabled`;
   `plugins` + `mergePluginsConfig` — runtime-настройки слоя плагинов (PROP-090 §10: `enabled`/
   `runtimeInstall`/`trustFloor`/`scan`/`allowlist`/`denylist`/`remoteAllowlist`/`exactHostExceptions`/
-  `promptBlockMaxChars`; приоритет runtime > config > defaults; `getPlugins`/`setPlugins`/`clearPlugins`),
+  `promptBlockMaxChars`/`executionEnabled` (главный переключатель исполнения кода плагинов, default
+  `false`); приоритет runtime > config > defaults; `getPlugins`/`setPlugins`/`clearPlugins`),
   `McpRegistryStore` (единый реестр MCP, ADR-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (ADR-046), `SSHKeyStore`
   (`secrets/ssh-keys`, шифрование at-rest, ADR-076),
@@ -759,6 +781,13 @@
   **инстанс-локальный** — не переносится publish/fork, ADR-042/PROP-081)
   и `JobStore` (`scheduler/jobs.jsonl`, Job-история, ADR-051),
   `MaintenanceAuditStore` (`audit/maintenance.jsonl`, append-only аудит-журнал обслуживания, ADR-092);
+  `FilePluginAuditStore` (`audit/plugins.jsonl`, append-only журнал аудита плагинов, PROP-090 §9 —
+  порт `PluginAuditRepository`, **отдельный**: `SECURITY_AUDIT_SCOPES` не расширяется; append под
+  `AsyncLock`, `clear` атомарно tmp→rename), `MemoryPluginAuditRepository`
+  (`storage/memory/plugin-audit.ts`), PostgreSQL — `packages/storage-postgres/src/ports/plugin-audit.ts`
+  (таблица `plugin_audit`, миграция `006-plugin-audit.ts`); контрактный suite —
+  `storage/contract/plugin-audit-repository.contract.ts` (file/memory/PG; прогон на живой БД —
+  `storage/contract/postgres.test.ts`); подключение — `StorageContext.pluginAudit`;
   `migrations.ts` — идемпотентная разовая миграция снапшотов
   `mcpDefaultOn`/`skillsDefaultOn` (маркер `session-scope-snapshots-v1`).
 - `sessions/ephemeral.ts` — ephemeral TTL (ADR-089): `parseTtl`

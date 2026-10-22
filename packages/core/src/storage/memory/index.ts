@@ -32,6 +32,8 @@ export { MemoryWebhookRepository, MemoryWebhookDeliveryRepository } from './webh
 export { MemoryScheduleRepository, MemoryJobRepository } from './scheduler.js';
 
 export { MemoryMaintenanceAuditRepository } from './audit.js';
+// PROP-090 §9: журнал аудита плагинов (отдельный порт, не security-аудит).
+export { MemoryPluginAuditRepository } from './plugin-audit.js';
 export { MemorySecurityAuditRepository, MemoryEgressRequestLogRepository } from './security-audit.js';
 export { MemoryAnalyticsRollupRepository } from './analytics-rollup.js';
 

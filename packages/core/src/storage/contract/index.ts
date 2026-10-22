@@ -25,6 +25,8 @@ export { describeDedupRepository } from './events.js';
 export { describeScheduleRepository } from './scheduler.js';
 export { describeJobRepository } from './scheduler.js';
 export { describeMaintenanceAuditRepository } from './maintenance.js';
+// PROP-090 §9: журнал аудита плагинов (отдельный порт).
+export { describePluginAuditRepository } from './plugin-audit-repository.contract.js';
 export {
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,

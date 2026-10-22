@@ -194,4 +194,19 @@ describe('defaultConfig', () => {
   it('metrics по умолчанию выключены (ADR-094: /metrics → 404)', () => {
     expect(defaultConfig.metrics).toEqual({ enabled: false });
   });
+
+  it('plugins по умолчанию: включены, runtime-install deny, trust-floor trusted, исполнение кода выключено (PROP-090 Ф0/Ф1)', () => {
+    expect(defaultConfig.plugins).toEqual({
+      enabled: true,
+      runtimeInstall: 'deny',
+      trustFloor: 'trusted',
+      scan: 'enabled',
+      allowlist: [],
+      denylist: [],
+      remoteAllowlist: [],
+      exactHostExceptions: '',
+      promptBlockMaxChars: 4000,
+      executionEnabled: false,
+    });
+  });
 });

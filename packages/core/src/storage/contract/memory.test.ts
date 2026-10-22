@@ -15,6 +15,7 @@ import {
   describeIdentityClaimRepository,
   describeJobRepository,
   describeMaintenanceAuditRepository,
+  describePluginAuditRepository,
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
   describeMcpRegistryRepository,
@@ -51,6 +52,7 @@ import {
   MemoryIdentityClaimRepository,
   MemoryJobRepository,
   MemoryMaintenanceAuditRepository,
+  MemoryPluginAuditRepository,
   MemorySecurityAuditRepository,
   MemoryEgressRequestLogRepository,
   MemoryMcpRegistryRepository,
@@ -131,6 +133,11 @@ describe('контрактные тесты in-memory реализаций по�
   describeMaintenanceAuditRepository(
     'MemoryMaintenanceAuditRepository → MaintenanceAuditRepository',
     async () => ({ repo: new MemoryMaintenanceAuditRepository() }),
+  );
+
+  describePluginAuditRepository(
+    'MemoryPluginAuditRepository → PluginAuditRepository',
+    async () => ({ repo: new MemoryPluginAuditRepository() }),
   );
 
   describeSecurityAuditRepository(
