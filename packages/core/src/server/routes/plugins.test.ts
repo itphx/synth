@@ -128,6 +128,8 @@ interface Stand {
   runtime: PluginRuntime;
   settings: MemorySettingsRepository;
   dataDir: string;
+  /** Вызовы `onPluginsChange` (живые бюджеты, долги Д3). */
+  changes: Array<Record<string, unknown>>;
 }
 
 async function makeStand(
@@ -164,12 +166,20 @@ async function makeStand(
   const app = new Hono();
   const auth = createMockAuth();
   app.route('/api/v2/plugins', createPluginsRoutes(auth, deps));
+  const changes: Array<Record<string, unknown>> = [];
   app.route('/api/v2/settings', createPluginSettingsRoutes(auth, {
     config: cfg,
     settings,
     running: runtime.config,
+    // Долги Д3: живые ключи — проверяем, что колбэк получает эффективные значения.
+    onPluginsChange: (effective) => {
+      changes.push({
+        promptBlockMaxChars: effective.promptBlockMaxChars,
+        llmFilterTimeoutMs: effective.llmFilterTimeoutMs,
+      });
+    },
   }));
-  return { app, runtime, settings, dataDir };
+  return { app, runtime, settings, dataDir, changes };
 }
 
 /** Вызов с JSON-телом. */
@@ -737,5 +747,26 @@ describe('Plugins API — источники установки (Д1)', () => {
     });
 
     expect(res.status).toBe(502);
+  });
+});
+
+describe('настройки плагинов: живые бюджеты (долги Д3)', () => {
+  it('PUT вызывает onPluginsChange с эффективными значениями (config + runtime)', async () => {
+    const { app, changes } = await makeStand();
+    const res = await jsonReq(app, 'PUT', '/api/v2/settings/plugins', {
+      promptBlockMaxChars: 1234,
+      llmFilterTimeoutMs: 250,
+    });
+    expect(res.status).toBe(200);
+    expect(changes.at(-1)).toEqual({ promptBlockMaxChars: 1234, llmFilterTimeoutMs: 250 });
+  });
+
+  it('DELETE возвращает дефолты config и тоже уведомляет', async () => {
+    const { app, changes } = await makeStand();
+    await jsonReq(app, 'PUT', '/api/v2/settings/plugins', { promptBlockMaxChars: 999 });
+    await jsonReq(app, 'DELETE', '/api/v2/settings/plugins');
+    const last = changes.at(-1) as { promptBlockMaxChars?: number; llmFilterTimeoutMs?: number };
+    expect(last.promptBlockMaxChars).toBe(4000);
+    expect(last.llmFilterTimeoutMs).toBe(1000);
   });
 });

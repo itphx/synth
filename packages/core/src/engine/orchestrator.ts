@@ -213,6 +213,14 @@ export interface OrchestratorOptions {
    */
   llmFilterTimeoutMs?: number;
   /**
+   * PROP-090 §«Точка `promptBlocks`»: бюджет символов **на блок** системного
+   * промпта от плагина (`plugins.promptBlockMaxChars`, дефолт 4 000).
+   *
+   * Ранее ключ конфигурации не доходил до композера — бюджет всегда оставался
+   * дефолтным (долги Д3). Живое изменение — `setPromptBlockMaxChars`.
+   */
+  promptBlockMaxChars?: number;
+  /**
    * PROP-090 §«Точка `promptBlocks`»: реестр провайдеров блоков системного
    * промпта — **тот же** экземпляр, в который регистрирует вклады фасад
    * плагинов (`PluginRuntime`/`PluginHost`).
@@ -425,6 +433,8 @@ export class ChatOrchestrator {
    * общий для всех gateway-точек — см. `getLlmFilters()`).
    */
   private readonly _llmFilters: LlmFilterRegistry;
+  /** Бюджет символов на блок плагина; мутабелен (runtime-настройка). */
+  private _promptBlockMaxChars: number | undefined;
   private readonly _dataDir: string;
   /** Путь к JSONL полного лога запросов/ответов LLM (передаётся в GatewayProvider). */
   private readonly _gatewayPayloadLogPath: string | undefined;
@@ -732,6 +742,10 @@ export class ChatOrchestrator {
           ? { defaultTimeoutMs: options.llmFilterTimeoutMs }
           : {},
       );
+    // Долги Д3: бюджет символов блока плагина (`plugins.promptBlockMaxChars`)
+    // обязан доходить до композера — иначе плагинный блок молча обрезался бы
+    // по дефолту (4 000) при любом конфиге.
+    this._promptBlockMaxChars = options.promptBlockMaxChars;
 
     // ADR-036: суммаризация (ContextOptimizer) создаёт провайдера напрямую —
     // передаём ему общую gateway-обвязку, чтобы эта точка тоже была защищена.
@@ -952,6 +966,26 @@ export class ChatOrchestrator {
    */
   getLlmFilters(): LlmFilterRegistry {
     return this._llmFilters;
+  }
+
+  /**
+   * PROP-090 (долги Д3): живое применение `plugins.promptBlockMaxChars`.
+   *
+   * `undefined` — вернуться к дефолту композера (`DEFAULT_PROMPT_BLOCK_MAX_CHARS`).
+   * Действует со следующего хода: бюджет читается при сборке промпта.
+   */
+  setPromptBlockMaxChars(maxChars: number | undefined): void {
+    this._promptBlockMaxChars = maxChars;
+  }
+
+  /**
+   * PROP-090 (долги Д3): живое применение бюджета фильтров
+   * (`plugins.llmFilterTimeoutMs`). Действует на **последующие** регистрации
+   * фильтров: у уже зарегистрированных бюджет зафиксирован при регистрации
+   * (политика плагина не переписывается на лету).
+   */
+  setLlmFilterTimeoutMs(timeoutMs: number): void {
+    this._llmFilters.setDefaultTimeoutMs(timeoutMs);
   }
 
   /**
@@ -1255,6 +1289,10 @@ export class ChatOrchestrator {
         : undefined,
       toolsPolicy,
       mcpPolicy,
+      // Долги Д3: бюджет символов плагинного блока (иначе — дефолт композера).
+      ...(this._promptBlockMaxChars !== undefined
+        ? { promptBlockMaxChars: this._promptBlockMaxChars }
+        : {}),
       adminDisabled: this._toolsDisabled,
       envDeps: this._runtimeDeps,
       tokenRatio,

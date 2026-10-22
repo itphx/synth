@@ -2,6 +2,16 @@
 
 > Архив: `log.1.md` (по 2026-08-31), `log.2.md` (2026-08-31 — 2026-09-16), `log.3.md` (2026-09-17 — 2026-10-07), `log.4.md` (2026-10-07 — 2026-10-21).
 
+## 2026-10-23 — Долги Д3: живые бюджеты плагинов и дефект `promptBlockMaxChars`
+
+- **Задача:** закрыть остаток долгов — живое применение бюджетов `plugins.promptBlockMaxChars`/`plugins.llmFilterTimeoutMs` из runtime-настроек и решение по `post_response`-буферизации. **Тип:** bug fix + feature + docs. **Исполнитель:** @orchestrator. **Результат:** PASS. **Ветка:** master (небольшая правка после Д2).
+- **Найденный дефект:** `plugins.promptBlockMaxChars` присутствовал в конфиге, runtime-настройках, схеме и ответах API, но **не доходил до композера** — бюджет плагинного блока всегда оставался дефолтным (4 000) при любом значении конфига. Исправлено: `OrchestratorOptions.promptBlockMaxChars` → поле → `ComposerContext`; эффективный конфиг (`mergePluginsConfig`) читается в deps **до** сборки оркестратора.
+- **Живые бюджеты:** `Orchestrator.setPromptBlockMaxChars(max)` (действует со следующего хода) и `setLlmFilterTimeoutMs(ms)` → `LlmFilterRegistry.setDefaultTimeoutMs` (к последующим регистрациям фильтров; у активных бюджет зафиксирован при регистрации). Вызывает `onPluginsChange` роута `/api/v2/settings/plugins` после `PUT`/`DELETE` — передаётся **эффективный** конфиг. Остальные ключи секции (`executionEnabled`/`trustFloor`/`scan`/allow-deny) — по-прежнему после рестарта (инвариант 24), ответ API сохраняет `restartRequired: true`.
+- **Решение по `post_response`:** буферизация ответа для `deny`/`redact` в v1 **не реализуется** осознанно (ADR-036: стрим не буферизуется, задержка первого чанка недопустима); вердикт фиксируется как `plugin_filter.buffering_required`. Открытый вопрос закрыт как решение, а не как «остаток».
+- **Тесты:** `engine/orchestrator-prompt-blocks.test.ts` +1 (бюджет из опций реально обрезает блок → `status: 'truncated'`; `setPromptBlockMaxChars` меняет без пересборки), `server/routes/plugins.test.ts` +2 (`PUT`/`DELETE` вызывают `onPluginsChange` с эффективными значениями; сброс возвращает 4000/1000).
+- **Документы:** PROP-090 (раздел «Статус реализации (долги Д3)», закрыт пункт про live-бюджет в «Открытых вопросах», решение по `post_response`, «История»), `docs/CONFIGURATION.md` («Живые ключи»), `docs/API_V2.md` §5.36 (исключение из `restartRequired`), `packages/core/AGENTS.md` (опции/сеттеры/`onPluginsChange`), журнал задач.
+- **Замечание по процессу:** проверки в основном репозитории требуют актуального `packages/shared/dist` — при устаревшей сборке `@itphx/synth-shared` резолвится без новых модулей (`verdictFromFindings is not a function`). Перед тестами в `synth/` — `pnpm --filter @itphx/synth-shared build && ... core build`.
+
 ## 2026-10-22 — PROP-090, долги Д2: `update` и `rollback` версий плагина
 
 - **Задача:** закрыть вторую часть долгов — явное обновление по источнику из lock и **откат** на предыдущую версию (одна ступень), через installer/API/CLI, с хранением ступени в lock (файл/память/PG). **Тип:** feature + docs. **Исполнитель:** @orchestrator → @fixer (прерван по лимиту шагов) → @orchestrator (guard managed, документация, прогон). **Результат:** PASS. **Ветка:** `feature/plugin-points`. **Коммитов нет** (инвариант 12).

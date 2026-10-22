@@ -725,6 +725,12 @@
   `PLUGIN_INTEGRITY.json` (Ф5а) хранит не только `sha256`/`source`/`fetched_at`, но и `trust_level?`/
   `install_kind?`/`identifier?`/`ref?` — иначе подтверждение из карантина не знало бы фактическое
   доверие (его резолвит источник, не манифест).
+- **Бюджеты слоя плагинов (долги Д3).** `OrchestratorOptions.promptBlockMaxChars` → `ComposerContext`
+  (`plugins.promptBlockMaxChars`; до Д3 ключ **не доходил** до композера и бюджет всегда был дефолтным);
+  `OrchestratorOptions.llmFilterTimeoutMs` → `LlmFilterRegistry`. Живое применение —
+  `setPromptBlockMaxChars` (со следующего хода) и `setLlmFilterTimeoutMs` (последующие регистрации
+  фильтров) через `onPluginsChange` роута `/api/v2/settings/plugins` (эффективный `mergePluginsConfig`).
+  Остальные ключи секции — только рестартом (инвариант 24).
 - `engine/plugins/runtime.ts` — **Ф5б-1: `PluginRuntime`** — сборка слоя плагинов на инстанс:
   раскладка (`resolvePluginLayout`), порты `StorageContext.pluginAudit`/`pluginLock` (ADR-096), `PluginHost`
   (с `createInlinePluginLoader` по умолчанию), `PluginInstaller`; реестры `promptBlocks`/`llmFilters`/`tools`

@@ -66,6 +66,7 @@ import type {
   PluginSourceContext,
 } from '../../engine/plugins/sources.js';
 import type { PluginsRuntimeSettings } from '../../storage/runtime-settings.js';
+import { mergePluginsConfig } from '../../storage/runtime-settings.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -668,6 +669,14 @@ export type PluginSettingsRoutesDeps = Pick<PluginsRoutesDeps, 'config' | 'setti
    * равным `config` (runtime-переопределений нет).
    */
   running?: PluginsConfig;
+  /**
+   * Колбэк применения **живых** ключей после успешной записи/сброса
+   * (PROP-090, долги Д3): `promptBlockMaxChars` и `llmFilterTimeoutMs`
+   * применяются без рестарта (эффективные значения — после слияния config +
+   * runtime). Остальные ключи (`executionEnabled`, `trustFloor`, `scan`, …)
+   * действуют только после перезапуска (инвариант 24) — см. `restartRequired`.
+   */
+  onPluginsChange?: (effective: PluginsConfig) => void;
 };
 
 /** Опции фабрики настроек. */
@@ -756,11 +765,16 @@ export function createPluginSettingsRoutes(
       );
     }
     await deps.settings.setPlugins(parsed.data as Partial<PluginsRuntimeSettings>);
+    // Долги Д3: живые ключи (бюджеты) применяются сразу — остальные ждут рестарта.
+    deps.onPluginsChange?.(
+      mergePluginsConfig(deps.config, parsed.data as Partial<PluginsRuntimeSettings>),
+    );
     return c.json(await buildView());
   });
 
   app.delete('/plugins', writeGuard, async (c) => {
     await deps.settings.clearPlugins();
+    deps.onPluginsChange?.(deps.config);
     return c.json(await buildView());
   });
 

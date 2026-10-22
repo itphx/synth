@@ -75,7 +75,10 @@ describe('ChatOrchestrator: общий реестр блоков промпта 
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  function makeOrchestrator(promptBlocks?: PromptBlockRegistry): ChatOrchestrator {
+  function makeOrchestrator(
+    promptBlocks?: PromptBlockRegistry,
+    extra: { promptBlockMaxChars?: number } = {},
+  ): ChatOrchestrator {
     return new ChatOrchestrator({
       sessionManager,
       eventBus: new EventBus(),
@@ -85,6 +88,7 @@ describe('ChatOrchestrator: общий реестр блоков промпта 
       defaultWorkingDir: tmpDir,
       toolRegistry: createToolRegistry(),
       ...(promptBlocks ? { promptBlocks } : {}),
+      ...extra,
     });
   }
 
@@ -107,6 +111,30 @@ describe('ChatOrchestrator: общий реестр блоков промпта 
     expect(
       composed.blocks.find((block) => block.key === 'plugin.demo.tip')?.provenance,
     ).toBe('plugin:demo');
+  });
+
+  it('бюджет блока из опций доходит до композера, setPromptBlockMaxChars меняет его на лету', async () => {
+    const registry = new PromptBlockRegistry();
+    const long = 'M'.repeat(600);
+    registry.register(pluginProvider(long));
+    const orchestrator = makeOrchestrator(registry, { promptBlockMaxChars: 120 });
+
+    const entry = async () => {
+      const info = await orchestrator.getPromptInfo(makeSession());
+      return info.manifest.entries.find((item) => item.key === 'plugin.demo.tip');
+    };
+
+    // Конфиг `plugins.promptBlockMaxChars` реально доходит до композера: блок
+    // обрезан по бюджету (а не по дефолту 4 000).
+    const tight = await entry();
+    expect(tight).toBeDefined();
+    expect(tight!.status).toBe('truncated');
+    expect(tight!.chars).toBeLessThan(600);
+
+    // Живое изменение бюджета (runtime-настройка) — без пересборки оркестратора.
+    orchestrator.setPromptBlockMaxChars(4000);
+    const wide = await entry();
+    expect(wide!.chars).toBe(600);
   });
 
   it('без опции promptBlocks блоки плагинов в промпт не попадают (прежнее поведение)', async () => {

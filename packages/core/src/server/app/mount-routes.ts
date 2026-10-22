@@ -492,6 +492,11 @@ export function mountStandaloneRoutes(
       config: mergePluginsConfig(config.pluginsConfig, {}),
       settings: settingsStore,
       running: deps.pluginRuntime.config,
+      // Долги Д3: бюджеты применяются живьём, остальные ключи — рестартом.
+      onPluginsChange: (effective) => {
+        deps.orchestrator.setPromptBlockMaxChars(effective.promptBlockMaxChars);
+        deps.orchestrator.setLlmFilterTimeoutMs(effective.llmFilterTimeoutMs);
+      },
     },
   ));
 

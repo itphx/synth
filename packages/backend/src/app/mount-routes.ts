@@ -466,6 +466,12 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       config: mergePluginsConfig(config.synth.plugins, {}),
       settings: settingsStore,
       running: deps.pluginRuntime.config,
+      // Долги Д3: бюджеты (`promptBlockMaxChars`, `llmFilterTimeoutMs`) —
+      // живые; остальные ключи — после рестарта (инвариант 24).
+      onPluginsChange: (effective) => {
+        deps.orchestrator.setPromptBlockMaxChars(effective.promptBlockMaxChars);
+        deps.orchestrator.setLlmFilterTimeoutMs(effective.llmFilterTimeoutMs);
+      },
     },
     {
       readGuard: auth.requirePermission('ADMIN'),

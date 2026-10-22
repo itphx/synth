@@ -1300,6 +1300,10 @@ plugins:
   llmFilterTimeoutMs: 1000
 ```
 
+- **Живые ключи.** `promptBlockMaxChars` и `llmFilterTimeoutMs` применяются **без перезапуска**
+  (первый — со следующего хода, второй — к последующим регистрациям фильтров); остальные ключи секции
+  (`executionEnabled`, `trustFloor`, `scan`, `runtimeInstall`, allow/deny) вступают в силу **после
+  перезапуска** инстанса (инвариант 24).
 - **Где живут плагины**: `<home>/plugin/` (ADR-079) или `{dataDir}/plugin/` — `installed/<name>@<version>/`,
   `quarantine/` (ожидают подтверждения), `plugins.lock.json` (провенанс — источник истины для
   update/uninstall). Журнал — `{dataDir}/audit/plugins.jsonl`.

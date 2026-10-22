@@ -2102,6 +2102,42 @@ lock (+2: `previous` сохраняется, без `previous` поля нет) 
 **Остаток.** `catalog`-источник и подписи (PROP-068), `post_response`-буферизация фильтров, **Ф5в**
 (managed deploy-time политика), **Ф6** (UI), **Ф4б** (`out-of-process`).
 
+### Статус реализации в коде (долги Д3 — 2026-10-23)
+
+Живые бюджеты слоя плагинов и закрытие двух открытых вопросов. Ветка — master (небольшая правка
+после слияния Д2).
+
+**Найденный дефект: `plugins.promptBlockMaxChars` не доходил до композера.** Ключ был в конфиге,
+runtime-настройках, схеме и ответах API, но `Orchestrator` не передавал его в `ComposerContext`:
+бюджет плагинного блока **всегда** оставался дефолтным (4 000), любое значение конфига молча
+игнорировалось. Исправлено: `OrchestratorOptions.promptBlockMaxChars` → поле → `ComposerContext`
+(эффективный конфиг `mergePluginsConfig` читается в deps **до** сборки оркестратора).
+
+**Живое применение бюджетов (без рестарта).**
+
+| Ключ | Как применяется | Предел |
+|---|---|---|
+| `plugins.promptBlockMaxChars` | `Orchestrator.setPromptBlockMaxChars(max)` — бюджет читается при следующей сборке промпта | действует со следующего хода |
+| `plugins.llmFilterTimeoutMs` | `Orchestrator.setLlmFilterTimeoutMs(ms)` → `LlmFilterRegistry.setDefaultTimeoutMs` | только **последующие** регистрации фильтров; у активных бюджет зафиксирован при регистрации (политика плагина не переписывается на лету) |
+
+Оба сеттера вызывает `onPluginsChange` роута `/api/v2/settings/plugins` (после `PUT`/`DELETE`) с
+**эффективным** конфигом (`mergePluginsConfig`). Остальные ключи (`executionEnabled`, `trustFloor`,
+`scan`, `allowlist`, …) по-прежнему требуют перезапуска инстанса (инвариант 24) — ответ API сохраняет
+`restartRequired: true`, а документация перечисляет живые ключи явно.
+
+**Решение по `post_response`-буферизации (закрыт открытый вопрос).** Буферизация ответа для
+`deny`/`redact` в фазе `post_response` в v1 **не реализуется** — осознанно: она требует задержки
+первого чанка и полного ответа в памяти, что прямо противоречит позиции [ADR-036](./adr-036-llm-gateway.md)
+(стрим не буферизуется). Фильтр фазы `post_response` остаётся наблюдательным; фактический вердикт
+`deny`/`redact` фиксируется как `plugin_filter.buffering_required`. Если понадобится реальная
+блокировка ответа — это отдельное решение с явной ценой (opt-in флаг фильтра, отдельный бюджет
+задержки), а не «тихое» включение.
+
+**Тесты Д3.** `engine/orchestrator-prompt-blocks.test.ts` (+1): бюджет из опций реально обрезает блок
+(`status: 'truncated'`, длина < исходной) и `setPromptBlockMaxChars` меняет его без пересборки;
+`server/routes/plugins.test.ts` (+2): `PUT`/`DELETE` настроек вызывают `onPluginsChange` с
+эффективными значениями (config + runtime), сброс возвращает дефолты (4 000 / 1 000).
+
 ## Открытые вопросы
 
 > Закрыто решениями владельца продукта 2026-10-22: форма out-of-process-протокола (HTTP/1.1 + JSON,
@@ -2157,9 +2193,10 @@ lock (+2: `previous` сохраняется, без `previous` поля нет) 
    отдельный лимит для embedding-фазы (индексация — latency-чувствительный путь). **Механизм закрыт
    Ф3б:** `DEFAULT_LLM_FILTER_TIMEOUT_MS = 1 000`, приоритет `filter.timeoutMs` > хост-опция регистрации >
    бюджет реестра (`plugins.llmFilterTimeoutMs`), `LlmFilterRegistry.setDefaultTimeoutMs(ms)` меняет
-   бюджет **последующих** регистраций. **Осталось:** live-применение runtime-значения
-   `plugins.llmFilterTimeoutMs` (реестр держит бюджет с момента создания — wiring из
-   `RuntimeSettings.plugins` в Ф5/Ф6) и решение, нужен ли **отдельный** бюджет для embedding-фазы.
+   бюджет **последующих** регистраций. **Закрыто долгами Д3 (2026-10-23):** runtime-значение применяется живьём —
+   `Orchestrator.setLlmFilterTimeoutMs` → `LlmFilterRegistry.setDefaultTimeoutMs` (действует на
+   последующие регистрации; у активных фильтров бюджет фиксируется при регистрации).
+   **Осталось:** решение, нужен ли **отдельный** бюджет для embedding-фазы.
 3. **Hot-reload vs restart в managed** — где граница: всегда restart или отдельные плагины допускают
    reload (в managed перезапуск пода = `kubectl rollout restart`, инвариант 24).
 4. **Поддержка схемы каталога при изменении контракта.** Владелец каталога — мы: записи плагинов
@@ -2277,5 +2314,6 @@ lock (+2: `previous` сохраняется, без `previous` поля нет) 
 - 2026-10-22 — **Ф5б-1 выполнен** (ветка `feature/plugin-points`): **`PluginRuntime`** (`packages/core/src/engine/plugins/runtime.ts`) — сборка слоя плагинов на инстанс (раскладка, порты `pluginAudit`/`pluginLock` из `StorageContext`, `PluginHost`, inline-загрузчик, `PluginInstaller`) и **старт-активация** `activateInstalled()`: lock → дескриптор (с `files` для шага integrity) → активация в порядке имён, `executionEnabled=false` — no-op, сбой плагина не роняет старт; `list()`/`activate`/`deactivate`/`dispose`. **`OrchestratorOptions.promptBlocks`** прокинут в `SystemPromptComposer` — до этого композер создавал собственный `PromptBlockRegistry`, и блоки плагинов в промпт сессии **не попадали** (тесты точки были зелёными, потому что собирали реестр вручную). Проводка standalone и managed: один экземпляр реестра в оркестратор и рантайм, `pluginLockPath` из единственного резолвера `resolvePluginLayout`, `pluginRuntime` в хэндле приложения, старт-активация в `main.ts` и `dispose()` при остановке до закрытия хранилища. Тесты: `runtime.test.ts` (8 — персистентность, сломанный бандл рядом с рабочим, `dispose`, `list`), `orchestrator-prompt-blocks.test.ts` (3 — один экземпляр реестра).
 - 2026-10-22 — **Ф5б-2 выполнен** (ветка `feature/plugin-points`): **HTTP-контур плагинов** — `createPluginsRoutes` (`GET /api/v2/plugins`, деталь с манифестом и `PLUGIN_INTEGRITY.json`, `install`, `approve`, `enable`, `disable`, `DELETE`, `update` → `501`) и `createPluginSettingsRoutes` (`/api/v2/settings/plugins`: `enabled`/`executionEnabled`/`runtimeInstall`/`trustFloor`/`scan`/allow-deny/бюджеты, `restartRequired: true`), исчерпывающая таблица `PLUGIN_REASON_HTTP`; монтаж в core (`requireAuth`, `localInstall: true`) и backend (ADMIN; install/enable — scope `addons:install`; approve и DELETE — только ADMIN; `localInstall: false`); порт настроек расширен `getPlugins/setPlugins/clearPlugins` (файл/память/PG); эффективный конфиг — `mergePluginsConfig`. Тесты: `routes/plugins.test.ts` (20) и **своя** RBAC-матрица `backend/routes/plugins-rbac-matrix.test.ts` (8 — негативная USER/LEAD/AUDITOR → 403, позитивная ADMIN и service-key со scope). Попутно зафиксирована ловушка: backend использует `core/dist`, поэтому после правок роутов core нужен `core build` до backend-тестов.
 - 2026-10-22 — **Ф5б-3 выполнен** (ветка `feature/plugin-points`): **CLI `synth plugin *`** — `packages/core/src/cli/plugin-commands.ts` (`createPluginCommand`/`createPluginCliContext`), подключён в `core/main.ts` и `packages/synth/src/cli.ts` (точный subpath-экспорт `./cli/plugin-commands.js`): `list` (`--json`), `install <path>` (`--trust`/`--source`/`--activate`, `installKind: 'deploy'` — офлайн-операция, политика `runtimeInstall` к ней не применяется), `approve`, `enable`, `disable`, `remove` (без `--yes` — отказ), `scan` (dry-run, без записи); контекст — тем же путём, что `doctor`/`backup`, с `pluginLockPath` из раскладки. Установщик: **byte-copy бинарных ассетов** (`binaryFiles`/`sourceDir` в `stagePluginBundle`, containment) — закрыто ограничение Ф5а; **чистка каталога старой версии** после успешной установки (кроме активного плагина). Тесты: `cli/plugin-commands.test.ts` (20), `installer.test.ts`/`layout.test.ts` (+byte-copy, чистка). Ручная проверка: scan → install → list → enable (полный пайплайн активации) → remove на временном data-dir.
+- 2026-10-23 — **Долги Д3** (master): найден и исправлен дефект — `plugins.promptBlockMaxChars` **не доходил до композера** (бюджет плагинного блока всегда оставался дефолтным 4 000 при любом конфиге): добавлен `OrchestratorOptions.promptBlockMaxChars` → `ComposerContext`, эффективный конфиг читается до сборки оркестратора. Бюджеты применяются **живьём**: `setPromptBlockMaxChars` (со следующего хода) и `setLlmFilterTimeoutMs` (последующие регистрации фильтров) через `onPluginsChange` роута `/api/v2/settings/plugins`; остальные ключи — после рестарта (инвариант 24). Закрыт открытый вопрос о `post_response`-буферизации: в v1 **не реализуется** осознанно (ADR-036 — стрим не буферизуется), вердикт фиксируется как `plugin_filter.buffering_required`.
 - 2026-10-22 — **долги Д1 закрыты** (ветка `feature/plugin-points`): **источники установки** — `engine/plugins/archive.ts` (свой tar-ридер: `node:zlib` + разбор tar, ustar/pax `x`/`g`/GNU long name, только файлы и каталоги, лимиты 500 записей / 16 МиБ файл / 64 МиБ сумма / 1024 символа путь, `stripPrefix`, tar-slip-защита, `cleanup`) и `engine/plugins/sources.ts` (`dir`/`archive`/`npm`/`url`: обязательный SRI `sha512` (+`shasum`) для npm, обязательный `sha256` для URL, редиректы до 3 с повторной проверкой `https:`, лимит скачивания, только `egressFetch`/инъекция); `PluginInstaller.installFromSource` (резолвинг → тот же `installFromDirectory` → `cleanup` в `finally`); новый код отказа **`plugin.source_unavailable`** (`PLUGIN_AUDIT_REASONS` 24 → 25); `POST /api/v2/plugins/install` принимает `source`/`path`/`name`/`version`/`url`/`sha256` (вид источника выводится из полей; локальные в managed → 403, сетевые разрешены; отказ источника — 400 локально / 502 сетевой); CLI `install <ref>` с `--source`/`--version`/`--sha256`. Тесты: `archive.test.ts` (24), `sources.test.ts` (20), +4 установщика, +9 роутов, +4 CLI. Добавлен раздел «Статус реализации в коде (долги Д1)», подраздел «Источники установки (Д1)», обновлены §«Bundle-only»/§«HTTP API»/§«CLI».
 - 2026-10-22 — **долги Д2 закрыты** (ветка `feature/plugin-points`): **обновление и откат** плагинов — `PluginLockEntry.previous` (`PluginLockPrevious`: `version`/`content_hash`/`entry?`/`installed_at`; **одна ступень**, миграция `009_plugin_lock_previous`, порт читает/пишет `jsonb`), `PluginInstaller.update` (источник из lock: `npm`/`local`/`url`, для `url` обязателен новый `sha256`; `content_hash` совпал → `unchanged` без записи; иначе `installFromDirectory` с `keepPrevious` — гейты и доверие те же/из lock, каталог прежней версии сохраняется, `previous` пишется в lock; активный плагин деактивируется **после** установки и активируется новая версия, `activate` не задан — состояние сохраняется) и `PluginInstaller.rollback` (каталог `previous` → swap в lock, `installed_at` иммутабелен, аудит `rollback`, откат обратим; нет ступени/каталога → `plugin.rollback_unavailable`); новое действие аудита **`rollback`** и код отказа **`plugin.rollback_unavailable`** (`PLUGIN_AUDIT_REASONS` 25 → 26); HTTP `POST /api/v2/plugins/update` (200/400/404/409/502) и `POST /api/v2/plugins/:name/rollback` (200/404/409) вместо `501`; CLI `synth plugin update`/`rollback`. Тесты: `installer.test.ts` (+9), `routes/plugins.test.ts` (+2), `cli/plugin-commands.test.ts` (+4), контрактный suite lock (+2, в т.ч. живая PostgreSQL). Добавлен раздел «Статус реализации в коде (долги Д2)».

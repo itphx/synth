@@ -569,6 +569,14 @@ export async function createStandaloneDeps(
   // модульный, порт берётся из первого вызова (fail-closed в remote-режиме).
   const runtimeDeps = await detectRuntimeDeps(executionPort);
 
+  // PROP-090 §5 (долги Д3): эффективный конфиг слоя = config.yaml (+env) поверх
+  // runtime-настроек — нужен **до** оркестратора: бюджеты `promptBlockMaxChars`
+  // и `llmFilterTimeoutMs` попадают в композер/реестр фильтров при сборке.
+  const effectivePluginsConfig = mergePluginsConfig(
+    config.pluginsConfig,
+    await settingsStore.getPlugins(),
+  );
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -608,10 +616,12 @@ export async function createStandaloneDeps(
     securityConfig: effectiveSecurityConfig,
     gatewayConfig,
     gatewayPatternStore: patternStore,
-    // PROP-090 §«Точка llmFilters»: бюджет времени фильтров LLM-вызовов
-    // (`plugins.llmFilterTimeoutMs`). Сам реестр создаётся оркестратором и
-    // доступен фасаду плагинов через `getLlmFilters()`.
-    llmFilterTimeoutMs: config.pluginsConfig?.llmFilterTimeoutMs,
+    // PROP-090 §«Точка llmFilters»/«Точка promptBlocks»: бюджеты слоя плагинов.
+    // Реестр фильтров создаётся оркестратором (`getLlmFilters()`), бюджет блока
+    // уходит в композер; оба меняются живьём — `setLlmFilterTimeoutMs`/
+    // `setPromptBlockMaxChars` (долги Д3).
+    llmFilterTimeoutMs: effectivePluginsConfig.llmFilterTimeoutMs,
+    promptBlockMaxChars: effectivePluginsConfig.promptBlockMaxChars,
     // ADR-094: реестр метрик (только при `metrics.enabled`) — LLM-вызовы
     // сессий учитываются и при выключенном LLM Gateway.
     metrics,
@@ -657,10 +667,6 @@ export async function createStandaloneDeps(
   // runtime-настроек (`settings.json`/PG): админка `/api/v2/settings/plugins`
   // пишет runtime, рантайм собирается при старте (применение — рестартом,
   // инвариант 24), поэтому слияние делается **здесь**, а не в рантайме.
-  const effectivePluginsConfig = mergePluginsConfig(
-    config.pluginsConfig,
-    await settingsStore.getPlugins(),
-  );
 
   // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного
   // (`plugins.lock.json` — источник истины), список со статусом активации и

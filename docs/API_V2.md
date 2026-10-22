@@ -1607,9 +1607,10 @@ PG, порт настроек): `enabled`, `executionEnabled`, `runtimeInstall` 
 | PUT | `/api/v2/settings/plugins` | ADMIN / auth | Частичное обновление (`pluginsConfigSchema.partial().strict()`): неизвестный ключ/невалидное значение → `400 VALIDATION_ERROR`; ответ как у `GET` |
 | DELETE | `/api/v2/settings/plugins` | ADMIN / auth | Сброс override к `config.yaml`/дефолтам; ответ как у `GET` |
 
-**`restartRequired: true` всегда** (инвариант 24): рантайм плагинов (хост, загрузчик, эффективный
-конфиг) собирается при старте инстанса, поэтому смена политики применяется **после перезапуска**
-(`POST /api/v2/maintenance/restart`). Приоритет значений — `SYNTH_*` env > runtime (этот раздел) >
+**`restartRequired: true`** (инвариант 24): рантайм плагинов (хост, загрузчик, эффективный конфиг)
+собирается при старте инстанса, поэтому смена **политики** применяется после перезапуска
+(`POST /api/v2/maintenance/restart`). Исключение — **живые бюджеты**: `promptBlockMaxChars`
+(со следующего хода) и `llmFilterTimeoutMs` (к последующим регистрациям фильтров) применяются сразу. Приоритет значений — `SYNTH_*` env > runtime (этот раздел) >
 `config.yaml` > дефолты (ADR-023).
 
 **RBAC.** Managed (backend): чтение и настройки — `ADMIN`; установка/активация/деактивация —
