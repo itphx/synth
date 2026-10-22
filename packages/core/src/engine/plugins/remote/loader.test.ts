@@ -14,12 +14,14 @@ import type { PackManifest, PluginsConfig } from '@itphx/synth-shared';
 import {
   PLUGIN_PROTOCOL_MAX_PROMPT_BLOCK_CHARS,
   PLUGIN_PROTOCOL_VERSION,
+  ToolCapability,
   pluginsConfigSchema,
 } from '@itphx/synth-shared';
 
 import { MemoryPluginAuditRepository } from '../../../storage/memory/plugin-audit.js';
 import { LlmFilterRegistry } from '../../gateway/llm-filter-registry.js';
 import { PromptBlockRegistry } from '../../context/prompt-block-registry.js';
+import { ToolRegistry } from '../../tools/registry.js';
 import { PluginHost } from '../plugin-host.js';
 import { PluginLoadError } from '../activation.js';
 import type {
@@ -27,6 +29,7 @@ import type {
   PluginLogger,
   PluginModule,
 } from '../activation.js';
+import { RemotePluginUnavailableError } from './client.js';
 import { createRemotePluginLoader } from './loader.js';
 
 const TOKEN = 'plugin-remote-loader-token-1234567890';
@@ -34,6 +37,15 @@ const NAME = 'demo-plugin';
 const VERSION = '1.0.0';
 const BLOCK_KEY = 'plugin.demo.memory';
 const FILTER_ID = 'plugin:demo-plugin:dlp';
+const TOOL_NAME = 'memory_search';
+const TOOL_FULL_NAME = 'plugin_demo_plugin_memory_search';
+
+/** JSON-Schema параметров удалённого тула (приходит из протокола). */
+const TOOL_JSON_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: { query: { type: 'string' } },
+  required: ['query'],
+};
 
 const silentLogger: PluginLogger = { warn: () => undefined };
 
@@ -106,6 +118,22 @@ function capabilities(over: Record<string, unknown> = {}): Record<string, unknow
   };
 }
 
+/** Описание удалённого тула в `/capabilities` (точка `tools`). */
+function toolCapability(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    name: TOOL_NAME,
+    description: 'Поиск по памяти плагина',
+    parameters: TOOL_JSON_SCHEMA,
+    capabilities: ['search'],
+    ...over,
+  };
+}
+
+/** Ответ `/capabilities` с единственной точкой `tools`. */
+function toolsCapabilities(tools: Record<string, unknown>[] = [toolCapability()]): Record<string, unknown> {
+  return capabilities({ points: { tools } });
+}
+
 /** Манифест удалённого плагина. */
 function manifest(over: Partial<PackManifest> = {}): PackManifest {
   return {
@@ -125,6 +153,22 @@ function manifest(over: Partial<PackManifest> = {}): PackManifest {
     },
     ...over,
   } as PackManifest;
+}
+
+/** Манифест плагина, объявляющего только инструмент. */
+function toolsManifest(over: Partial<PackManifest> = {}): PackManifest {
+  return manifest({
+    provides: {
+      mcp: [],
+      skills: [],
+      agents: [],
+      pipelines: [],
+      tools: [TOOL_NAME],
+      promptBlocks: [],
+      llmFilters: [],
+    },
+    ...over,
+  } as Partial<PackManifest>);
 }
 
 /** Дескриптор активации с адресом и токеном процесса. */
@@ -152,15 +196,18 @@ function config(over: Partial<PluginsConfig> = {}): PluginsConfig {
 function makeHost(over: {
   promptBlocks?: PromptBlockRegistry;
   llmFilters?: LlmFilterRegistry;
+  tools?: ToolRegistry;
 } = {}): {
   host: PluginHost;
   audit: MemoryPluginAuditRepository;
   promptBlocks: PromptBlockRegistry;
   llmFilters: LlmFilterRegistry;
+  tools: ToolRegistry;
 } {
   const audit = new MemoryPluginAuditRepository();
   const promptBlocks = over.promptBlocks ?? new PromptBlockRegistry();
   const llmFilters = over.llmFilters ?? new LlmFilterRegistry();
+  const tools = over.tools ?? new ToolRegistry();
   const host = new PluginHost({
     audit,
     config: config(),
@@ -171,8 +218,9 @@ function makeHost(over: {
     loaders: { remote: createRemotePluginLoader({ logger: silentLogger }) },
     promptBlocks,
     llmFilters,
+    tools,
   });
-  return { host, audit, promptBlocks, llmFilters };
+  return { host, audit, promptBlocks, llmFilters, tools };
 }
 
 /** Ожидаемый `PluginLoadError` с причиной. */
@@ -284,6 +332,242 @@ describe('createRemotePluginLoader: активация через PluginHost', (
       texts: ['x'],
     });
     expect(verdict).toEqual({ verdict: 'redact', redactedTexts: ['a', 'b'] });
+  });
+});
+
+// ── Точка `tools` (Ф4б-3) ───────────────────────────────────────────────
+
+describe('createRemotePluginLoader: точка tools', () => {
+  it('тул регистрируется под namespace: source plugin, capabilities и JSON-Schema из протокола', async () => {
+    const url = await startPluginStub({ capabilities: toolsCapabilities() });
+    const { host, tools } = makeHost();
+
+    const result = await host.activate(descriptor(url, { manifest: toolsManifest() }));
+    expect(result.outcome).toBe('activated');
+
+    const tool = tools.get(TOOL_FULL_NAME);
+    expect(tool).toBeDefined();
+    expect(tool!.source).toBe('plugin');
+    expect(tool!.pluginName).toBe(NAME);
+    // Полное имя составил хост; локальное — только в протоколе/манифесте.
+    expect(tool!.name).toBe(TOOL_FULL_NAME);
+    expect(tools.pluginLocalNames(NAME)).toEqual([TOOL_NAME]);
+    // Capabilities пришли из протокола (permission-слой видит тул).
+    expect(tool!.capabilities).toEqual([ToolCapability.SEARCH]);
+
+    // Схема для модели — из протокола, а не из «проницаемой» zod-схемы.
+    const llm = tools.toLLMFormatForSession();
+    const entry = llm.find((item) => item.function.name === TOOL_FULL_NAME);
+    expect(entry).toBeDefined();
+    expect(entry!.function.description).toBe('Поиск по памяти плагина');
+    expect(entry!.function.parameters).toEqual(TOOL_JSON_SCHEMA);
+  });
+
+  it('без JSON-Schema в протоколе подставляется минимальная схема (не выдумываем)', async () => {
+    const raw = toolCapability();
+    delete raw.parameters;
+    const url = await startPluginStub({ capabilities: toolsCapabilities([raw]) });
+    const { host, tools } = makeHost();
+    expect((await host.activate(descriptor(url, { manifest: toolsManifest() }))).outcome)
+      .toBe('activated');
+
+    const entry = tools
+      .toLLMFormatForSession()
+      .find((item) => item.function.name === TOOL_FULL_NAME);
+    expect(entry!.function.parameters).toEqual({
+      type: 'object',
+      properties: {},
+      additionalProperties: true,
+    });
+  });
+
+  it('execute() уходит в /invoke с параметрами и контекстом, возвращая контент', async () => {
+    const calls: Array<{ point: string; id: string; input: unknown }> = [];
+    const url = await startPluginStub({
+      capabilities: toolsCapabilities(),
+      onInvoke: (point, id, input) => {
+        calls.push({ point, id, input });
+        return { content: `memory:${JSON.stringify((input as { parameters: unknown }).parameters)}` };
+      },
+    });
+    const { host, tools } = makeHost();
+    expect((await host.activate(descriptor(url, { manifest: toolsManifest() }))).outcome)
+      .toBe('activated');
+
+    const result = await tools.get(TOOL_FULL_NAME)!.execute(
+      { query: 'x' },
+      { sessionId: 's1', messageId: 'm1', workingDir: '/ws' },
+    );
+
+    expect(result).toEqual({ content: 'memory:{"query":"x"}' });
+    expect(calls).toEqual([
+      {
+        point: 'tools',
+        id: TOOL_NAME,
+        input: {
+          parameters: { query: 'x' },
+          context: { sessionId: 's1', messageId: 'm1', workingDir: '/ws' },
+        },
+      },
+    ]);
+  });
+
+  it('isError: true — ошибка тула, а не хоста: контент возвращается без броска', async () => {
+    const url = await startPluginStub({
+      capabilities: toolsCapabilities(),
+      onInvoke: () => ({ content: 'память недоступна', isError: true }),
+    });
+    const { host, tools } = makeHost();
+    expect((await host.activate(descriptor(url, { manifest: toolsManifest() }))).outcome)
+      .toBe('activated');
+
+    const result = await tools.get(TOOL_FULL_NAME)!.execute(
+      {},
+      { sessionId: 's1', messageId: 'm1', workingDir: '/ws' },
+    );
+    expect(result).toEqual({ content: 'память недоступна', isError: true });
+  });
+
+  it('результат не по контракту → бросок (вызывающий деградирует сам)', async () => {
+    const url = await startPluginStub({
+      capabilities: toolsCapabilities(),
+      onInvoke: () => 42,
+    });
+    const { host, tools } = makeHost();
+    expect((await host.activate(descriptor(url, { manifest: toolsManifest() }))).outcome)
+      .toBe('activated');
+
+    await expect(
+      tools.get(TOOL_FULL_NAME)!.execute(
+        {},
+        { sessionId: 's1', messageId: 'm1', workingDir: '/ws' },
+      ),
+    ).rejects.toThrow(/не по контракту/);
+  });
+
+  it('сетевая ошибка (процесс погас) → бросок', async () => {
+    const url = await startPluginStub({ capabilities: toolsCapabilities() });
+    const { host, tools } = makeHost();
+    expect((await host.activate(descriptor(url, { manifest: toolsManifest() }))).outcome)
+      .toBe('activated');
+
+    await Promise.all(servers.splice(0).map(({ close }) => close()));
+
+    const failure = tools.get(TOOL_FULL_NAME)!.execute(
+      {},
+      { sessionId: 's1', messageId: 'm1', workingDir: '/ws' },
+    );
+    await expect(failure).rejects.toBeInstanceOf(RemotePluginUnavailableError);
+  });
+
+  it('деактивация снимает удалённый тул из реестра', async () => {
+    const url = await startPluginStub({ capabilities: toolsCapabilities() });
+    const { host, tools } = makeHost();
+    expect((await host.activate(descriptor(url, { manifest: toolsManifest() }))).outcome)
+      .toBe('activated');
+    expect(tools.listPlugin()).toHaveLength(1);
+
+    expect((await host.deactivate(NAME)).outcome).toBe('ok');
+    expect(tools.listPlugin()).toHaveLength(0);
+  });
+});
+
+describe('createRemotePluginLoader: отказы объявления точки tools', () => {
+  it('тул без capabilities → отказ активации (fail-closed)', async () => {
+    const raw = toolCapability();
+    delete raw.capabilities;
+    const url = await startPluginStub({ capabilities: toolsCapabilities([raw]) });
+    const { host, tools } = makeHost();
+
+    const result = await host.activate(descriptor(url, { manifest: toolsManifest() }));
+    expect(result.outcome).toBe('rejected');
+    expect(result.step).toBe('import');
+    expect(result.reason).toBe('plugin.loader_unavailable');
+    expect(result.message).toContain('capabilities');
+    expect(tools.listPlugin()).toHaveLength(0);
+  });
+
+  it('пустой набор capabilities → отказ активации', async () => {
+    const url = await startPluginStub({
+      capabilities: toolsCapabilities([toolCapability({ capabilities: [] })]),
+    });
+    const { host, tools } = makeHost();
+    const result = await host.activate(descriptor(url, { manifest: toolsManifest() }));
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.loader_unavailable');
+    expect(tools.listPlugin()).toHaveLength(0);
+  });
+
+  it('неизвестная capability → отказ активации', async () => {
+    const url = await startPluginStub({
+      capabilities: toolsCapabilities([toolCapability({ capabilities: ['root'] })]),
+    });
+    const { host, tools } = makeHost();
+    const result = await host.activate(descriptor(url, { manifest: toolsManifest() }));
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.loader_unavailable');
+    expect(result.message).toContain('capability');
+    expect(tools.listPlugin()).toHaveLength(0);
+  });
+
+  it('пустое имя и пустое описание → отказ активации', async () => {
+    for (const over of [{ name: '   ' }, { name: undefined }, { description: '' }, { description: undefined }]) {
+      const url = await startPluginStub({
+        capabilities: toolsCapabilities([toolCapability(over)]),
+      });
+      const { host } = makeHost();
+      const result = await host.activate(descriptor(url, { manifest: toolsManifest() }));
+      expect(result.outcome, JSON.stringify(over)).toBe('rejected');
+      expect(result.reason).toBe('plugin.loader_unavailable');
+    }
+  });
+
+  it('дубли локальных имён → отказ активации', async () => {
+    const url = await startPluginStub({
+      capabilities: toolsCapabilities([toolCapability(), toolCapability()]),
+    });
+    const { host, tools } = makeHost();
+    const result = await host.activate(descriptor(url, { manifest: toolsManifest() }));
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.loader_unavailable');
+    expect(result.message).toContain('дважды');
+    expect(tools.listPlugin()).toHaveLength(0);
+  });
+
+  it('зарезервированная реестром capability runtime → регистрация отклонена → provides_mismatch', async () => {
+    const url = await startPluginStub({
+      capabilities: toolsCapabilities([toolCapability({ capabilities: ['runtime'] })]),
+    });
+    const { host, tools } = makeHost();
+    const result = await host.activate(descriptor(url, { manifest: toolsManifest() }));
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.provides_mismatch');
+    expect(tools.listPlugin()).toHaveLength(0);
+  });
+
+  it('имя с зарезервированным namespace plugin_ → регистрация отклонена → provides_mismatch', async () => {
+    const url = await startPluginStub({
+      capabilities: toolsCapabilities([toolCapability({ name: 'plugin_victim_tool' })]),
+    });
+    const { host, tools } = makeHost();
+    const result = await host.activate(
+      descriptor(url, {
+        manifest: toolsManifest({
+          provides: {
+            mcp: [],
+            skills: [],
+            agents: [],
+            pipelines: [],
+            tools: ['plugin_victim_tool'],
+            promptBlocks: [],
+            llmFilters: [],
+          },
+        } as Partial<PackManifest>),
+      }),
+    );
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.provides_mismatch');
+    expect(tools.listPlugin()).toHaveLength(0);
   });
 });
 
@@ -432,7 +716,7 @@ describe('createRemotePluginLoader: ответы точек не по контр
 // ── Сверка provides ─────────────────────────────────────────────────────
 
 describe('createRemotePluginLoader: сверка provides', () => {
-  it('плагин объявил provides.tools — активация отклонена (tools в протоколе нет, Ф4б-3)', async () => {
+  it('манифест объявил provides.tools, а процесс тул не объявил → provides_mismatch', async () => {
     const url = await startPluginStub();
     const { host } = makeHost({
       promptBlocks: new PromptBlockRegistry(),

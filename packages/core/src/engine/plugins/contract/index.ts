@@ -14,7 +14,11 @@ export type {
   PluginContractHarness,
   PluginContractHarnessFactory,
   PluginContractReference,
+  PluginContractTransport,
 } from './plugin-contract.js';
+
+export { createContractHarness, createFixtureLoader } from './harness.js';
+export type { PluginContractHarnessOptions } from './harness.js';
 
 export {
   PLUGIN_CONTRACT_FIXTURES,

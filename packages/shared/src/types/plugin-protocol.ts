@@ -12,12 +12,18 @@
  * функции (без `node:*` и без `zod`).
  *
  * **Что пересекает границу.** Только сериализуемые DTO: вход/выход точек
- * `promptBlocks` (`PromptBlockContext` → `PromptBlockContent`) и `llmFilters`
- * (`LlmFilterInput` → `LlmFilterVerdict`). Порты хранилища, реестры ядра и
- * `GatewayProvider` наружу не отдаются (PROP-090 §«Что пересекает границу»).
+ * `promptBlocks` (`PromptBlockContext` → `PromptBlockContent`), `llmFilters`
+ * (`LlmFilterInput` → `LlmFilterVerdict`) и `tools`
+ * (`{ parameters, context }` → `{ content, isError? }`, как у MCP-инструментов).
+ * Порты хранилища, реестры ядра и `GatewayProvider` наружу не отдаются
+ * (PROP-090 §«Что пересекает границу»).
  *
- * **Чего в протоколе нет (волна Ф4б-1).** Точки `tools` — её транспорт
- * появится в Ф4б-3.
+ * **Точка `tools` (Ф4б-3).** Процесс объявляет инструменты в
+ * `points.tools[]` (`PluginCapabilitiesTool`: локальное имя, описание,
+ * JSON-Schema параметров и **обязательные** capabilities — без них тул невидим
+ * permission-слою и admin-отключению); вызов — `POST /invoke` с
+ * `id = <локальное имя>`. Namespace `plugin_<ns>_<tool>` составляет **хост**:
+ * по проводу идёт локальное имя, как в `provides.tools[]` манифеста.
  *
  * **Серверная сторона (Ф4б-2).** Контракт точки входа сервера
  * (`PluginServerOptions`/`PluginServerHandle`/`PluginServerFactory`), строка
@@ -28,6 +34,8 @@
 import { isLlmFilterFailMode, isLlmFilterPhase } from './llm-filters.js';
 import type { LlmFilterFailMode, LlmFilterPhase } from './llm-filters.js';
 import type { PromptManifestStatus } from './prompt.js';
+import { ToolCapability } from './tools.js';
+import type { ToolCapability as ToolCapabilityValue } from './tools.js';
 
 /** Версия wire-протокола плагина (аналог `EXECUTOR_PROTOCOL_VERSION`). */
 export const PLUGIN_PROTOCOL_VERSION = 1;
@@ -103,12 +111,13 @@ export function parsePluginServerReadyLine(line: string): { port: number } | nul
 /**
  * Точки, передаваемые по протоколу.
  *
- * В этой волне — только `promptBlocks` и `llmFilters`; `tools` появится
- * вместе с транспортом инструментов (Ф4б-3). Плагин, объявивший
- * `provides.tools` при `mode: 'remote'`, будет отклонён сверкой `provides`
- * (`plugin.provides_mismatch`) — это ожидаемое поведение до Ф4б-3.
+ * `promptBlocks` (блок системного промпта), `llmFilters` (фильтр LLM-вызовов)
+ * и `tools` (инструмент плагина, Ф4б-3). Плагин, объявивший в манифесте
+ * `provides.tools`, обязан объявить те же **локальные** имена в
+ * `points.tools[]` — иначе сверка `provides` отклонит активацию
+ * (`plugin.provides_mismatch`).
  */
-export const PLUGIN_PROTOCOL_POINTS = ['promptBlocks', 'llmFilters'] as const;
+export const PLUGIN_PROTOCOL_POINTS = ['promptBlocks', 'llmFilters', 'tools'] as const;
 export type PluginProtocolPoint = (typeof PLUGIN_PROTOCOL_POINTS)[number];
 
 /** Описание плагинного блока промпта в `/capabilities`. */
@@ -135,6 +144,33 @@ export interface PluginCapabilitiesLlmFilter {
   timeoutMs?: number;
 }
 
+/**
+ * Описание инструмента плагина в `/capabilities` (точка `tools`, Ф4б-3).
+ *
+ * `name` — **локальное** имя (без namespace): полное имя `plugin_<ns>_<tool>`
+ * составляет хост, поэтому по проводу идёт то же имя, что в
+ * `provides.tools[]` манифеста.
+ */
+export interface PluginCapabilitiesTool {
+  /** Локальное имя инструмента (`[A-Za-z0-9_-]`, без префикса `plugin_`). */
+  name: string;
+  /** Описание для модели (непустое). */
+  description: string;
+  /**
+   * JSON-Schema параметров (для модели). Не задана — хост подставит
+   * минимальную `{type:'object', properties:{}, additionalProperties:true}` и
+   * **не** будет выдумывать схему.
+   */
+  parameters?: Record<string, unknown>;
+  /**
+   * Capabilities инструмента — **обязательны** и непусты: без них тул был бы
+   * невидим permission-слою (группа `plugin`, ADR-029) и admin-отключению.
+   * Значения — из известного набора `ToolCapability`; `mcp` и `runtime`
+   * зарезервированы и отклоняются реестром хоста.
+   */
+  capabilities: ToolCapabilityValue[];
+}
+
 /** Ответ `GET /capabilities`: версия протокола + поддерживаемые точки. */
 export interface PluginCapabilities {
   /** Версия wire-протокола (`PLUGIN_PROTOCOL_VERSION`). */
@@ -147,6 +183,7 @@ export interface PluginCapabilities {
   points: {
     promptBlocks?: PluginCapabilitiesPromptBlock[];
     llmFilters?: PluginCapabilitiesLlmFilter[];
+    tools?: PluginCapabilitiesTool[];
   };
 }
 
@@ -156,9 +193,15 @@ export interface PluginInvokeRequest {
   protocol: number;
   /** Точка расширения. */
   point: PluginProtocolPoint;
-  /** `promptBlocks` — ключ блока; `llmFilters` — id фильтра. */
+  /**
+   * `promptBlocks` — ключ блока; `llmFilters` — id фильтра; `tools` —
+   * **локальное** имя инструмента (без namespace).
+   */
   id: string;
-  /** Вход точки: `PromptBlockContext` | `LlmFilterInput` (валидирует плагин). */
+  /**
+   * Вход точки: `PromptBlockContext` | `LlmFilterInput` |
+   * `{ parameters, context }` для `tools` (валидирует плагин).
+   */
   input: unknown;
 }
 
@@ -166,7 +209,8 @@ export interface PluginInvokeRequest {
  * Тело успешного ответа `POST /invoke`.
  *
  * `output` — `PromptBlockContent` (или строка) для `promptBlocks`,
- * `LlmFilterVerdict` для `llmFilters`.
+ * `LlmFilterVerdict` для `llmFilters`, `{ content: string; isError?: boolean }`
+ * для `tools` (как у MCP-инструментов).
  */
 export type PluginInvokeResponse =
   | { ok: true; output: unknown }
@@ -238,6 +282,9 @@ const PROMPT_BLOCK_STATUSES: readonly PromptManifestStatus[] = [
   'suppressed',
 ];
 
+/** Известные capabilities тула (точка `tools`, `ToolCapability`). */
+const KNOWN_TOOL_CAPABILITIES: ReadonlySet<string> = new Set(Object.values(ToolCapability));
+
 /** Предел символов содержимого блока в ответе (защита от «случайного» мегабайта). */
 export const PLUGIN_PROTOCOL_MAX_PROMPT_BLOCK_CHARS = 64 * 1024;
 
@@ -252,6 +299,11 @@ export type PluginCapabilitiesCheck =
  * **Fail-closed:** мусор в ответе, чужая версия протокола и чужой плагин
  * (имя/версия) — отказ. Успех возвращает **нормализованный** снимок: только
  * известные поля, проверенные типы, без дублей ключей/идентификаторов.
+ *
+ * Точки: `promptBlocks` (тир `stable` запрещён, дубли ключей), `llmFilters`
+ * (фаза/`failMode`/`timeoutMs`, дубли id) и `tools` (Ф4б-3: непустые
+ * `name`/`description`, `capabilities` непусты и из набора `ToolCapability`,
+ * дубли локальных имён).
  *
  * @param payload — распарсенное тело ответа (неизвестной формы).
  * @param expected — ожидаемые имя и версия плагина.
@@ -379,6 +431,63 @@ export function checkPluginCapabilities(
         });
       }
       points.llmFilters = filters;
+    }
+
+    if (pointsRaw.tools !== undefined) {
+      if (!Array.isArray(pointsRaw.tools)) {
+        return fail('invalid_request', 'points.tools должен быть массивом');
+      }
+      const tools: PluginCapabilitiesTool[] = [];
+      const seen = new Set<string>();
+      for (const [index, raw] of pointsRaw.tools.entries()) {
+        if (!isRecord(raw)) {
+          return fail('invalid_request', `points.tools[${index}] — не объект`);
+        }
+        const toolName = raw.name;
+        if (!isNonEmptyString(toolName)) {
+          return fail('invalid_request', `points.tools[${index}].name обязателен`);
+        }
+        if (seen.has(toolName)) {
+          return fail('invalid_request', `points.tools: имя «${toolName}» объявлено дважды`);
+        }
+        if (!isNonEmptyString(raw.description)) {
+          return fail(
+            'invalid_request',
+            `points.tools[${index}].description обязателен (тул без описания бесполезен модели)`,
+          );
+        }
+        if (raw.parameters !== undefined && !isRecord(raw.parameters)) {
+          return fail(
+            'invalid_request',
+            `points.tools[${index}].parameters должен быть JSON-Schema-объектом`,
+          );
+        }
+        const capabilities = raw.capabilities;
+        if (!Array.isArray(capabilities) || capabilities.length === 0) {
+          return fail(
+            'invalid_request',
+            `points.tools[${index}].capabilities обязательны и непусты — иначе тул невидим ` +
+            'permission-слою и admin-отключению',
+          );
+        }
+        const unknown = capabilities.find(
+          (capability) => typeof capability !== 'string' || !KNOWN_TOOL_CAPABILITIES.has(capability),
+        );
+        if (unknown !== undefined) {
+          return fail(
+            'invalid_request',
+            `points.tools[${index}].capabilities: неизвестная capability «${String(unknown)}»`,
+          );
+        }
+        seen.add(toolName);
+        tools.push({
+          name: toolName,
+          description: raw.description,
+          ...(raw.parameters ? { parameters: raw.parameters } : {}),
+          capabilities: [...capabilities] as ToolCapabilityValue[],
+        });
+      }
+      points.tools = tools;
     }
   }
 

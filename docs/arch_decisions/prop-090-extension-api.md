@@ -55,6 +55,12 @@
 > аудит `install`. Действия аудита **`install`/`uninstall`** (`PLUGIN_AUDIT_ACTIONS`), `PLUGIN_INTEGRITY.json`
 > хранит доверие/вид установки — подтверждение из карантина не угадывает trust. HTTP API, CLI,
 > `plugins.json` и старт-активация из lock — **Ф5б/Ф5в**.
+> **Обновлено (Ф4б-3):** 2026-10-23 — **Ф4б закрыта, Ф4 завершена**: точка `tools` по
+> wire-протоколу (`PLUGIN_PROTOCOL_POINTS` + `tools`, `PluginCapabilitiesTool` с обязательными
+> `capabilities` и JSON-Schema, валидация в `checkPluginCapabilities`) и **контрактный suite на
+> удалённой реализации** (реальный HTTP-процесс-заглушка на `127.0.0.1:0`, `loaders.remote`,
+> 23 проверки × 2 транспорта). Инструменты удалённого плагина описываются в `capabilities`, а не
+> `apply()`; полное имя `plugin_<ns>_<tool>` по-прежнему составляет хост.
 > **Источник:** вынесено из зонтика [ADR-086](./adr-086-extensibility-plugins-editions.md) — Extension API
 > проектировался там как первый из четырёх столпов (плагины, editions, contribution flow, add-on'ы);
 > здесь он выделен в отдельный документ и детализирован.
@@ -437,6 +443,16 @@ LLM Proxy — `packages/backend/src/routes/llm.ts:283,355`).
 `provider.embed` напрямую через duck-типизированный `ProviderPool` — **мимо gateway вовсе**.
 Поэтому embedding-фаза фильтров без правки этих путей не заработает: см. §«Фаза `embedding`».
 
+**Требование к LLM-шлюзу.** Фильтры точки `llmFilters` живут **внутри** LLM-шлюза
+(`GatewayProvider`), поэтому выполняются **только при включённом шлюзе** (`llmGateway.enabled: true`
+в `config.yaml`; по умолчанию шлюз **выключен**). При выключенном шлюзе вызов провайдера идёт мимо
+gateway-контура — фильтры (как и guard'ы, rate-limit, аудит вызовов) не применяются, и это **не**
+ошибка плагина. Блоки точки `promptBlocks` от шлюза не зависят: они попадают в промпт через композер.
+
+**Что видит фильтр.** В `pre_request` фильтр получает **весь** запрос сессии — системный промпт и
+**всю историю сообщений**, а не только последнее сообщение. Для DLP-подобных фильтров это
+существенно: срабатывание может произойти на тексте из более ранней реплики.
+
 ### Фаза `embedding`
 
 **Решение владельца (2026-10-22): эмбеддинги идут через фильтры.** Третья фаза `llmFilters` —
@@ -618,7 +634,7 @@ round-robin по адресам, failover только при ошибке со�
 **Реализация (Ф4б-1).** Контракт протокола — `packages/shared/src/types/plugin-protocol.ts`
 (browser-safe: только типы, константы и чистые функции; отдельный npm-пакет не создаётся):
 `PLUGIN_PROTOCOL_VERSION = 1`, пути `PLUGIN_PROTOCOL_PATHS` (`/invoke`/`/capabilities`/`/health`),
-точки `PLUGIN_PROTOCOL_POINTS` (`promptBlocks`/`llmFilters`), DTO (`PluginCapabilities`,
+точки `PLUGIN_PROTOCOL_POINTS` (`promptBlocks`/`llmFilters`; `tools` добавлена Ф4б-3), DTO (`PluginCapabilities`,
 `PluginInvokeRequest`, `PluginInvokeResponse`, `PluginProtocolError`), коды причин
 (`PLUGIN_PROTOCOL_ERROR_REASONS`) и их HTTP-статусы (`PLUGIN_PROTOCOL_ERROR_STATUS`), проверка
 ответа `/capabilities` (`checkPluginCapabilities`: версия протокола + имя/версия плагина + форма
@@ -628,9 +644,9 @@ round-robin по адресам, failover только при ошибке со�
 `engine/plugins/remote/loader.ts` (`createRemotePluginLoader`: `mode: 'remote'|'both'`,
 `descriptor.remote { url, token }`, `capabilities()` **до** активации, прокси-провайдеры точек с
 минимальной нормализацией ответов). Новое поле дескриптора —
-`PluginActivationDescriptor.remote`. **Чего в этой волне нет:** запуска/остановки процесса, файла
-токена и передачи `remote` из установки (**Ф4б-2**), точки `tools` по протоколу (**Ф4б-3**).
-Загрузчик — фабрика: автоподключения в `server/app.ts`/`main.ts`/deps нет.
+`PluginActivationDescriptor.remote`. **Чего не было в волне Ф4б-1:** запуска/остановки процесса,
+файла токена и передачи `remote` из установки (закрыто Ф4б-2), точки `tools` по протоколу
+(закрыто Ф4б-3 — см. ниже).
 
 ### Сравнение режимов
 
@@ -657,6 +673,26 @@ round-robin по адресам, failover только при ошибке со�
 health-опрос, `SIGTERM`→`SIGKILL`, токен-файл `{dataDir}/secrets/plugin-token` с правами `0600`).
 Выбор транспорта — в шаге `import` хоста по `manifest.mode` (`inline`/`remote`/`both`).
 
+**Реализация точки `tools` по протоколу (Ф4б-3).** Плагин `out-of-process` описывает свои
+инструменты **в `/capabilities`**, а не через `facade.registerTool` (кода исполнения в процессе
+хоста нет):
+
+| Что | Как |
+|---|---|
+| Объявление | `points.tools[]` — `PluginCapabilitiesTool`: `name` (**локальное** имя, без namespace), `description`, необязательная `parameters` (JSON-Schema для модели), **обязательные** `capabilities` (`ToolCapability[]`) |
+| Почему capabilities обязательны | без них тул невидим permission-слою (группа `plugin`, ADR-029) и admin-отключению — такой тул не должен существовать |
+| Валидация `/capabilities` | `checkPluginCapabilities`: непустые `name`/`description`, `capabilities` непусты и из известного набора `ToolCapability`, дубли локальных имён → `invalid_request` (fail-closed, активация отклоняется) |
+| Вызов | `POST /invoke` `{point:'tools', id:'<локальное имя>', input:{parameters:<args>, context:{sessionId, messageId, workingDir}}}` |
+| Ответ | `{content: string, isError?: boolean}` — как у MCP-инструментов; `isError: true` — **ошибка тула**, контент возвращается модели как есть (не бросок) |
+| Регистрация у хоста | `facade.registerTool` с JSON-Schema **из протокола** (`jsonSchema`); локальная zod-схема — «проницаемая» (`z.object({}).passthrough()`): валидирует удалённая сторона, схему для модели не выдумываем (нет `parameters` → минимальная `{type:'object', properties:{}, additionalProperties:true}`) |
+| Namespace | полное имя `plugin_<ns>_<tool>` составляет хост; `id` на проводе — локальное имя (как в `provides.tools[]`) |
+| Сверка `provides` | объявленные локальные имена обязаны совпасть с фактическими регистрациями; иначе `plugin.provides_mismatch` (ожидаемо для несогласованной сборки) |
+| Сбой транспорта | сеть/таймаут → бросок из `execute` (деградацию обеспечивает вызывающий), сбой процесса — не «тихий» пропуск тула |
+
+Суффикс «схема для модели приходит из протокола» важен: удалённый тул не может отдать zod-схему
+через провод — только JSON-Schema, поэтому модель получает ровно тот контракт аргументов, который
+заявил плагин.
+
 ### Что пересекает границу
 
 Через границу идут **только сериализуемые DTO**. `ComposerContext` (с портами и функциями)
@@ -664,7 +700,12 @@ health-опрос, `SIGTERM`→`SIGKILL`, токен-файл `{dataDir}/secrets
 
 - `promptBlocks` → `PromptBlockContext` (`sessionId`, `agentRole`, `language`, `projectId?`, `mode`,
   `query?`, `turnId?`, `timestamp?`) и обратно `{ content, provenance?, status? }`;
-- `llmFilters` → `LlmFilterInput` / `LlmFilterVerdict` (см. §6).
+- `llmFilters` → `LlmFilterInput` / `LlmFilterVerdict` (см. §6);
+- `tools` (Ф4б-3) → `{ parameters, context: { sessionId, messageId, workingDir } }` и обратно
+  `{ content, isError? }` (как у MCP-инструментов); JSON-Schema параметров — в `points.tools[]`
+  `/capabilities`. Внутренний `ToolContext` целиком наружу **не** отдаётся (ни `extra`, ни
+  портов хранилища, ни обфускационной карты): плагин получает только идентификаторы хода и
+  рабочий каталог.
 
 Всё, что не сериализуется (порты хранилища, `GatewayProvider`, реестры ядра), остаётся внутри
 процесса core — фасад `out-of-process`-плагина состоит из «чистых» DTO-обменов. Это делает
@@ -1197,7 +1238,7 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | **Ф1 — манифест + `PluginHost`** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-host`, коммитов нет) | Схема манифеста плагина, `PluginHost`-пайплайн (§10), integrity, semver-гейт, реестр активаций, аудит активации. **Исполнение кода выключено по умолчанию**: только resolve/integrity/гейт/скан/аудит, без `import()`. **Сделано:** модуль `engine/plugins/*` (`PluginHost`, контракты активации, `computePluginContentHash`/`verifyPluginIntegrity`, `readExactHostExceptions`), порт `PluginAuditRepository` (файл/память/PG + контрактный suite), ключ `plugins.executionEnabled` (дефолт `false`); seam'ы `PluginLoader`/`PluginScanHook`/`PluginFacade` оставлены под Ф2/Ф3/Ф4 | тест: `PluginHost.activate` доходит до шага «import» и останавливается; несовпадение integrity → отказ; тест аудита: запись `activate`/`deactivate` в `audit/plugins.jsonl` — **выполнено**, см. §«Статус реализации в коде (Ф1)» |
 | **Ф2 — модель доверия** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-trust`, коммитов нет) | Уровни trust, матрица install-policy с ячейкой `kind: "plugin"`, сканер (6+1 категорий, квоты, `content_hash`, кэш сканов, `.skillignore`, бинарные расширения), матрица `severity → verdict`, `quarantine/`, `plugins.lock.json`, порт `PluginAuditRepository` + `{dataDir}/audit/plugins.jsonl`. **Сделано:** встроенный статический сканер (`engine/plugins/scan/*`: правила, `.skillignore`, кэш, дефолтный хук скана), матрица install-policy одной функцией `installPolicyDecision` (`shared`, ячейка `kind: 'plugin'`), раскладка `<home>/plugin/` с карантином и `PLUGIN_INTEGRITY.json` (`engine/plugins/layout.ts`), порт `PluginLockRepository` (файл/память/PostgreSQL + миграция `007_plugin_lock`), аудит-событие `scan` (+ `plugin.approval_required`), шаг trust/scan в `PluginHost` — **trust-floor до install-policy** | тест: вердикт по severity (`info\|low → safe`, `medium → caution`, `high\|critical → dangerous`); квоты → `caution`; бинарник → `dangerous`; `community` + `dangerous` → `block`; trust-floor: `community` устанавливается, но не активируется (`plugin.trust_below_floor`) — **выполнено**, см. §«Статус реализации в коде (Ф2)» |
 | **Ф3 — точки `promptBlocks` + `llmFilters` + `tools`** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-points`): Ф3а — точка **`promptBlocks`**, Ф3б — точка **`llmFilters`**, Ф3в — точка **`tools`** и **контрактный suite расширений** | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений**. **Сделано (Ф3а):** контракт `PromptBlockProvider`/`PromptBlockContext` (`shared`, `types/prompt-blocks.ts`), реестр `PromptBlockRegistry` (`engine/context/prompt-block-registry.ts`), сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`), контекст хода (`query`/`turnId`), бюджет символов блока + обрезка (`status: 'truncated'`), инвалидация `promptStates` по блокам провайдеров (`provider: true`), фасад `PluginFacade.registerPromptBlock` (disposer снимает блок при деактивации), решение fail-closed `plugins.scan='disabled'` + `executionEnabled=true` (`plugin.scan_disabled_with_execution`), **версия правил сканера в ключе кэша сканов** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный — **по части `promptBlocks` выполнено**, см. §«Статус реализации в коде (Ф3а)»; критерии `llmFilters` — **выполнено, см. §«Статус реализации в коде (Ф3б)»**; точка `tools` (namespace, permission-слой, сверка `provides.tools[]`) и **контрактный suite расширений** — **выполнено, см. §«Статус реализации в коде (Ф3в)»** |
-| **Ф4 — два режима исполнения** — ⚠️ **частично**: протокол + remote-клиент/загрузчик (Ф4б-1) и жизненный цикл процесса, токен-файл, выбор транспорта по режиму (Ф4б-2) — **сделано**; точка `tools` по протоколу — остаток (Ф4б-3) | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация. **Сделано (Ф4а):** `inline`-загрузчик `createInlinePluginLoader` (`engine/plugins/inline-loader.ts`): containment по `realpath`, `.js`/`.mjs`, предел 8 МиБ, cache-busting `?v=<hash\|mtime>`, три формы модуля, новый код `plugin.module_invalid`; экспорт из `engine/plugins/index.ts` и `src/index.ts`. **Автоподключения в `server/app.ts`/`main.ts`/`backend/app/deps.ts` нет** — установка/активация и сканирование `plugins.lock.json` при старте появятся в Ф5 | тест: эталонный бандл (реальные `mkdtemp` + ESM-файл) активируется **через `PluginHost`** при `executionEnabled: true`, блок в `PromptBlockRegistry`, аудит `activate`; `export const x`/`export default 42` → `plugin.module_invalid`; бросок в модуле → `plugin.loader_unavailable`; `../evil.js`, абсолютный путь, симлинк наружу, `.ts`, превышение размера → отказ; перезапись бандла → новое содержимое — **выполнено (21 тест), см. §«Статус реализации в коде (Ф4а)»**. **Сделано (Ф4б-1):** контракт `plugin-protocol.ts` в `shared` (версия/DTO/коды/`checkPluginCapabilities`), `RemotePluginClient` (loopback-only, Bearer, `AbortSignal.timeout`, токен не утекает в `message`) и `createRemotePluginLoader` (`mode: 'remote'\|'both'`, `descriptor.remote`, прокси-провайдеры `promptBlocks`/`llmFilters`); тесты — **17 shared + 20 client + 17 loader**, включая 401 без утечки токена, чужую версию протокола, закрытый порт. **Остаток Ф4б:** spawn/health-ожидание/остановка процесса и файл токена (Ф4б-2), точка `tools` (Ф4б-3), suite на живом out-of-process процессе; критерии «неверный токен → 401, недоступный процесс → деградация по `failMode`» покрыты на уровне клиента/загрузчика — **см. §«Статус реализации в коде (Ф4б, часть 1)»** |
+| **Ф4 — два режима исполнения** — ✅ **выполнено 2026-10-23** (ветка `feature/plugin-points`): `inline` (Ф4а) + `out-of-process` (Ф4б-1/2/3 — протокол, клиент/загрузчик, процесс и токен, выбор транспорта, точка `tools`); контрактный suite зелёный на **обоих** транспортах | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация. **Сделано (Ф4а):** `inline`-загрузчик `createInlinePluginLoader` (`engine/plugins/inline-loader.ts`): containment по `realpath`, `.js`/`.mjs`, предел 8 МиБ, cache-busting `?v=<hash\|mtime>`, три формы модуля, новый код `plugin.module_invalid`; экспорт из `engine/plugins/index.ts` и `src/index.ts`. **Автоподключения в `server/app.ts`/`main.ts`/`backend/app/deps.ts` нет** — установка/активация и сканирование `plugins.lock.json` при старте появятся в Ф5 | тест: эталонный бандл (реальные `mkdtemp` + ESM-файл) активируется **через `PluginHost`** при `executionEnabled: true`, блок в `PromptBlockRegistry`, аудит `activate`; `export const x`/`export default 42` → `plugin.module_invalid`; бросок в модуле → `plugin.loader_unavailable`; `../evil.js`, абсолютный путь, симлинк наружу, `.ts`, превышение размера → отказ; перезапись бандла → новое содержимое — **выполнено (21 тест), см. §«Статус реализации в коде (Ф4а)»**. **Сделано (Ф4б-1):** контракт `plugin-protocol.ts` в `shared` (версия/DTO/коды/`checkPluginCapabilities`), `RemotePluginClient` (loopback-only, Bearer, `AbortSignal.timeout`, токен не утекает в `message`) и `createRemotePluginLoader` (`mode: 'remote'\|'both'`, `descriptor.remote`, прокси-провайдеры `promptBlocks`/`llmFilters`); тесты — **17 shared + 20 client + 17 loader**, включая 401 без утечки токена, чужую версию протокола, закрытый порт. **Сделано (Ф4б-2):** `PluginProcessManager` (spawn без shell, ready-строка + `/health`, `SIGTERM`→`SIGKILL`, токен-файл `0600`), выбор транспорта в шаге `import`, `mode`/`remote_entry` в lock. **Сделано (Ф4б-3):** точка `tools` по протоколу (`points.tools[]`, вызов `{parameters, context}` → `{content, isError?}`, JSON-Schema из протокола) и контрактный suite на удалённой реализации (23 проверки × 2 транспорта); критерии «неверный токен → 401, недоступный процесс → деградация по `failMode`» покрыты на уровне клиента/загрузчика — **см. §«Статус реализации в коде (Ф4б, часть 3)»** |
 | **Ф5 — install/activate: сервис + runtime + API + CLI; managed deploy-time** — ⚠️ **частично**: `PluginInstaller` (Ф5а), `PluginRuntime` + старт-активация (Ф5б-1), HTTP API + RBAC (Ф5б-2), **CLI `synth plugin *`** (Ф5б-3), **источники установки** `dir`/`archive`/`npm`/`url` (долги Д1) и **`update`/`rollback`** (долги Д2) — **сделано**; managed deploy-time — Ф5в | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
 | **Ф6 — UI** | Раздел «Плагины»: список, карточка (trust/scan/hash/version/`contracts`/`host`/`provides`/режим), тумблеры enable/disable, install/update/remove, статус скана | тест UI: карточка показывает trust/scan/hash; переключатель enable вызывает API и обновляет список; i18n-паритет `ru.ts`/`en.ts` зелёный (`parity.test.ts`) |
 | **Ф7 — hybrid** | Allow-list сервера, форма политики, discovery (`/api/v2/settings/plugins` + сигнал в `/auth/oidc-meta`), server-scoped токены с `plugin_id`-scope (Уровень 2) | тест: плагин вне allow-list не активируется в hybrid; токен с чужим `plugin_id` отвергается сервером; локальный плагин без сервера — cooperative (помечено в UI/доках) |
@@ -2267,9 +2308,57 @@ runtime-настройках, схеме и ответах API, но `Orchestrat
 `backend/app/deps.ts` создают `PluginProcessManager` (`{dataDir}/secrets`) и подключают оба
 загрузчика.
 
-**Остаток после Ф4б-2.** Точка `tools` по протоколу (Ф4б-3): сейчас плагин в режиме `remote` с
-`provides.tools` получает ожидаемый `plugin.provides_mismatch`. Ротация `plugin-token` — вне объёма
-(как и ротация `master.key`, отдельная операция).
+**Остаток после Ф4б-2** (закрыт Ф4б-3, см. следующий раздел): точка `tools` по протоколу —
+до Ф4б-3 плагин в режиме `remote` с `provides.tools` получал ожидаемый `plugin.provides_mismatch`.
+Ротация `plugin-token` — вне объёма (как и ротация `master.key`, отдельная операция).
+
+### Статус реализации в коде (Ф4б, часть 3 — 2026-10-23)
+
+Точка `tools` по wire-протоколу и **контрактный suite расширений на удалённой реализации** —
+Ф4б закрыта. Ветка `feature/plugin-points`, worktree `wt-plugin-points`, коммитов нет.
+
+**Контракт протокола** (`packages/shared/src/types/plugin-protocol.ts`).
+
+| Что | Как |
+|---|---|
+| Точки | `PLUGIN_PROTOCOL_POINTS = ['promptBlocks', 'llmFilters', 'tools']` |
+| DTO тула | `PluginCapabilitiesTool`: `name` (локальное, без namespace), `description`, `parameters?` (JSON-Schema), `capabilities: ToolCapability[]` (обязательны) |
+| `points.tools[]` | `PluginCapabilities.points.tools?: PluginCapabilitiesTool[]` |
+| Валидация | `checkPluginCapabilities`: `points.tools` — массив объектов; непустые `name`/`description`; `parameters` — объект (если задан); `capabilities` непусты и из `ToolCapability` (рантайм-значение `ToolCapability` из `types/tools.ts`); дубли локальных имён → `invalid_request` |
+| Вызов | `PluginInvokeRequest` `{point:'tools', id:'<локальное имя>', input:{parameters, context:{sessionId, messageId, workingDir}}}` |
+| Ответ | `output = { content: string, isError?: boolean }` — как у MCP-инструментов |
+
+**Регистрация удалённых тулов** (`packages/core/src/engine/plugins/remote/loader.ts`).
+
+| Что | Как |
+|---|---|
+| Источник | `capabilities.points.tools[]` (процесс объявляет, хост регистрирует) |
+| `facade.registerTool` | `name` — локальное из протокола; `description`; `parameters` — **проницаемая** zod-схема `z.object({}).passthrough()` (валидирует удалённая сторона); `jsonSchema` — из протокола, без `parameters` → минимальная `{type:'object', properties:{}, additionalProperties:true}`; `capabilities` — из протокола |
+| `execute` | `client.invoke('tools', name, { parameters: args, context: { sessionId, messageId, workingDir } })` → `{ content, isError? }`; `isError: true` — контент как есть (ошибка тула, не хоста); не по контракту / сеть / таймаут — бросок (деградирует вызывающий) |
+| Namespace | полное имя `plugin_<ns>_<tool>` составляет хост (`ToolRegistry.registerPlugin`), `source: 'plugin'`, `pluginName` — плагин |
+| Сверка `provides` | по локальным именам; расхождение → `plugin.provides_mismatch` (с откатом) |
+
+**Контрактный suite на удалённой реализации** (`engine/plugins/contract/*`,
+`engine/plugins/plugin-contract-remote.test.ts`).
+
+| Что | Как |
+|---|---|
+| Параметризация | `PluginContractHarness.transport: 'inline' \| 'remote'`; сборка харнесса — общая (`contract/harness.ts`: `createContractHarness({transport, loader/loaders, descriptorExtra, cleanup})`) |
+| In-memory | `plugin-contract.test.ts`: загрузчик отдаёт модуль фикстуры (`createFixtureLoader`) |
+| Remote | `plugin-contract-remote.test.ts`: **реальный** `node:http` на `127.0.0.1:0` обслуживает `/health`, `/capabilities`, `/invoke` по фикстуре; хост получает `loaders.remote`, дескриптор — `remote: {url, token}` и `manifest.mode = 'remote'`; сервер на фикстуру поднимается лениво, закрывается в `dispose()` |
+| Набор | те же 23 проверки: блоки (тир/ключи/бюджет/`status`), фильтры (порядок/`failMode`/вердикты/понижение `deny`), тул (namespace, `source`, permission-слой, коллизии), сверка `provides` (все три вида), dispose-дисциплина, запрет обхода |
+| Различие транспортов | одно: **где** отклоняется невалидный вклад. Inline — реестр при регистрации (активация жива, если вклад не объявлен в манифесте); remote — `checkPluginCapabilities` на `/capabilities` (fail-closed, активация отклоняется на шаге `import`). Проверки suite формулируются как «регистрации не появилось + причина названа» (`refusalText` = предупреждения хоста + сообщение результата) |
+
+**Тесты.** `remote/loader.test.ts` — добавлены 15 кейсов точки `tools` (регистрация под namespace,
+`source`/`capabilities`/JSON-Schema и минимальная схема, `execute` → `/invoke` с параметрами и
+контекстом, `isError`, ответ не по контракту, сетевая ошибка, деактивация; отказы объявления: без
+`capabilities`, пустой набор, неизвестная capability, пустые имя/описание, дубли имён,
+зарезервированные `runtime` и namespace → `provides_mismatch`); `plugin-protocol.test.ts` — 7
+кейсов валидации `points.tools`; `plugin-contract.test.ts`/`plugin-contract-remote.test.ts` — по
+23 проверки suite (46 суммарно).
+
+**Остаток Ф4/Ф4б.** Ф4 закрыта: точка `tools` есть на обоих транспортах, suite зелёный на
+`out-of-process`. Дальше — **Ф5в** (managed deploy-time) и **Ф6** (UI).
 
 ## Открытые вопросы
 
@@ -2452,3 +2541,4 @@ runtime-настройках, схеме и ответах API, но `Orchestrat
 - 2026-10-22 — **долги Д2 закрыты** (ветка `feature/plugin-points`): **обновление и откат** плагинов — `PluginLockEntry.previous` (`PluginLockPrevious`: `version`/`content_hash`/`entry?`/`installed_at`; **одна ступень**, миграция `009_plugin_lock_previous`, порт читает/пишет `jsonb`), `PluginInstaller.update` (источник из lock: `npm`/`local`/`url`, для `url` обязателен новый `sha256`; `content_hash` совпал → `unchanged` без записи; иначе `installFromDirectory` с `keepPrevious` — гейты и доверие те же/из lock, каталог прежней версии сохраняется, `previous` пишется в lock; активный плагин деактивируется **после** установки и активируется новая версия, `activate` не задан — состояние сохраняется) и `PluginInstaller.rollback` (каталог `previous` → swap в lock, `installed_at` иммутабелен, аудит `rollback`, откат обратим; нет ступени/каталога → `plugin.rollback_unavailable`); новое действие аудита **`rollback`** и код отказа **`plugin.rollback_unavailable`** (`PLUGIN_AUDIT_REASONS` 25 → 26); HTTP `POST /api/v2/plugins/update` (200/400/404/409/502) и `POST /api/v2/plugins/:name/rollback` (200/404/409) вместо `501`; CLI `synth plugin update`/`rollback`. Тесты: `installer.test.ts` (+9), `routes/plugins.test.ts` (+2), `cli/plugin-commands.test.ts` (+4), контрактный suite lock (+2, в т.ч. живая PostgreSQL). Добавлен раздел «Статус реализации в коде (долги Д2)».
 - 2026-10-23 — **Ф4б, часть 1 выполнена** (ветка `feature/plugin-points`, worktree `wt-plugin-points`): транспорт `out-of-process` — контракт wire-протокола `packages/shared/src/types/plugin-protocol.ts` (`PLUGIN_PROTOCOL_VERSION = 1`, `/invoke`/`/capabilities`/`/health`, точки `promptBlocks`/`llmFilters`, DTO, коды `PLUGIN_PROTOCOL_ERROR_REASONS`/`_STATUS`, `checkPluginCapabilities`); клиент `RemotePluginClient` (loopback-only `127.0.0.1`/`::1`/`localhost`, Bearer, `AbortSignal.timeout` 5 000 мс, причина из тела/статуса, токен вырезается из `message`) и загрузчик `createRemotePluginLoader` (`mode: 'remote'|'both'`, `PluginActivationDescriptor.remote`, `capabilities()` до активации, прокси-провайдеры точек; `load`/`inspect` пробрасывают ошибки — композер/gateway деградируют по `failMode`); точка `tools`, spawn/health/stop и файл токена — **Ф4б-2/Ф4б-3**. Тесты: 17 shared + 20 client + 17 loader (реальный `node:http` на `127.0.0.1:0`). Добавлен раздел «Статус реализации в коде (Ф4б, часть 1 — 2026-10-23)».
 - 2026-10-23 — **Ф4б-2 выполнен** (ветка `feature/plugin-points`): **жизненный цикл удалённого процесса плагина** — `PluginProcessManager` (`engine/plugins/remote/process.ts`): spawn `process.execPath` без shell, env **ровно** `PATH`/`NODE_ENV`/`SYNTH_PLUGIN_PORT`/`SYNTH_PLUGIN_TOKEN` (наследования нет), готовность по строке `SYNTH_PLUGIN_READY port=<n>` + опрос `/health`, адрес только `127.0.0.1`, остановка `SIGTERM`→`SIGKILL`; токен-файл `{dataDir}/secrets/plugin-token` (`randomBytes(32).hex`, `0600`, каталог `0700`, атомарно, read-after-write ради общих PVC реплик, в лог/ошибки не попадает). **Выбор транспорта** — в шаге `import` хоста по `manifest.mode` (`inline`/`remote`/`both`; `both` → inline при наличии `dist/index.js`), `descriptor.remote` приоритетнее. В lock — `mode` и `remote_entry` (PostgreSQL: миграция `010_plugin_lock_mode`); `mode: remote` без `dist/server.js` → отказ `plugin.remote_entry_missing` (**27** кодов). Проводка: `PluginRuntime` получил `loaders`/`processManager` (`dispose()` гасит процессы), оба `deps.ts` создают менеджер и подключают загрузчики; `approve()` приводит к согласованности с установкой (режим в lock + отказ).
+- 2026-10-23 — **Ф4б, часть 3 (Ф4 закрыта)** (ветка `feature/plugin-points`, worktree `wt-plugin-points`): **точка `tools` по wire-протоколу** — `PLUGIN_PROTOCOL_POINTS` расширены `tools`, DTO `PluginCapabilitiesTool` (`name`/`description`/`parameters?` JSON-Schema/**обязательные** `capabilities: ToolCapability[]`), `PluginCapabilities.points.tools[]`, валидация в `checkPluginCapabilities` (непустые имя/описание, известные capabilities, дубли имён, `parameters` — объект) и вызов `POST /invoke {point:'tools', id:'<локальное имя>', input:{parameters, context:{sessionId, messageId, workingDir}}}` → `{content, isError?}`; `createRemotePluginLoader` регистрирует тулы через `facade.registerTool` с JSON-Schema из протокола (минимальная схема, если её нет; локальная zod — «проницаемая»), `isError: true` — ошибка тула без броска, сеть/таймаут — бросок. **Контрактный suite параметризован транспортом** (`PluginContractHarness.transport`, общая сборка `contract/harness.ts`): прогон на in-memory и на **реальном** HTTP-процессе-заглушке (`plugin-contract-remote.test.ts`: `/health`, `/capabilities`, `/invoke` по фикстуре, ленивый сервер на фикстуру, закрытие в `dispose()`) — 23 проверки зелёные на обоих, различие только в месте отказа невалидного вклада (реестр при регистрации vs `checkPluginCapabilities` на `/capabilities`, fail-closed).

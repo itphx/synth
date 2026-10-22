@@ -23,8 +23,11 @@
  *    и заявленный trust выше фактического не проходят.
  *
  * Suite не знает, откуда берутся хост и реестры: харнесс строит вызывающая
- * сторона (тест — на in-memory реестрах; будущий `out-of-process` — на
- * wire-протоколе, Ф4).
+ * сторона. Прогоняется на **двух** транспортах (Ф4б-3): `inline`
+ * (`plugin-contract.test.ts`, загрузчик отдаёт модуль фикстуры) и
+ * `out-of-process` (`plugin-contract-remote.test.ts`: `loaders.remote` +
+ * процесс-заглушка по wire-протоколу). Проверки одни и те же; различается
+ * только место отказа невалидного вклада (`harness.transport`).
  */
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import type {
@@ -83,12 +86,27 @@ export const DEFAULT_PLUGIN_CONTRACT_REFERENCE: PluginContractReference = {
 };
 
 /**
+ * Транспорт исполнения, на котором прогоняется suite:
+ * `inline` (код плагина в процессе core) или `remote` (`out-of-process`).
+ *
+ * Transport-difference ровно один: **где** отклоняется невалидный вклад.
+ * `inline` регистрирует его через фасад и получает отказ от реестра (активация
+ * при этом жива, если манифест не объявлял этот вклад); `remote` объявляет
+ * вклад по проводу (`/capabilities`), и `checkPluginCapabilities` отклоняет
+ * всё объявление целиком (fail-closed, активация отклоняется на шаге
+ * `import`). В обоих случаях регистрации **не появляется**, а причина названа.
+ */
+export type PluginContractTransport = 'inline' | 'remote';
+
+/**
  * Харнесс suite: хост плагинов с общими реестрами и вспомогательные операции.
  *
  * `make()` вызывается на каждый тест (изоляция: реестры и предупреждения не
  * переносятся между кейсами).
  */
 export interface PluginContractHarness {
+  /** Транспорт исполнения (различает только место отказа невалидного вклада). */
+  transport: PluginContractTransport;
   /** Хост плагинов (активация/деактивация/журнал). */
   host: PluginHost;
   /** Общий реестр инструментов (точка `tools`). */
@@ -131,6 +149,20 @@ function entryOf(manifest: PromptManifest, key: string) {
 }
 
 /**
+ * Текст отказа транспорта: предупреждения хоста (отказ регистрации в `inline`)
+ * **и** сообщение результата активации (отказ `/capabilities` в `remote`).
+ *
+ * Смысл проверки один — «причина названа»; канал, которым она пришла,
+ * зависит от транспорта.
+ */
+function refusalText(
+  h: PluginContractHarness,
+  result: { message?: string },
+): string {
+  return [h.warnings.join('\n'), result.message ?? ''].join('\n');
+}
+
+/**
  * Контрактный suite расширений.
  *
  * @param name — подпись набора (реализация хоста/реестров).
@@ -166,15 +198,22 @@ export function describePluginContract(
         expect(system).toContain(h.reference.longContent.slice(0, 32));
       });
 
-      it('тир stable отклоняется (не тихое понижение), активация не падает', async () => {
+      it('тир stable отклоняется (не тихое понижение), блок в промпт не попадает', async () => {
         const result = await h.activate('stable-block');
-        expect(result.outcome).toBe('activated');
-        // Блок не зарегистрирован и в промпт не попадает.
+        if (h.transport === 'inline') {
+          // Inline: регистрация отклонена реестром, активация плагина жива.
+          expect(result.outcome).toBe('activated');
+        } else {
+          // Out-of-process: невалидное объявление точки отклоняет /capabilities
+          // (fail-closed до регистрации) — сильнее, но блок так же не появился.
+          expect(result.outcome).toBe('rejected');
+          expect(result.step).toBe('import');
+        }
         expect(h.promptBlocks.list().map((entry) => entry.provider.key)).not.toContain(
           'plugin.contract.stable',
         );
         expect(await h.composeSystem()).not.toContain('НЕ ДОЛЖНО БЫТЬ В STABLE');
-        expect(h.warnings.join('\n')).toContain('stable');
+        expect(refusalText(h, result)).toContain('stable');
       });
 
       it('пустой ключ, нечисловой order и дубль ключа отклоняются регистрацией', () => {
@@ -268,13 +307,19 @@ export function describePluginContract(
         expect(untrusted.failMode).toBe('open');
       });
 
-      it('неизвестная фаза отклоняется регистрацией', async () => {
+      it('неизвестная фаза отклоняется, фильтр не регистрируется', async () => {
         const result = await h.activate('bad-phase');
-        // Регистрация отклонена (предупреждение), активация при этом жива:
-        // `provides` фильтр не объявляет.
-        expect(result.outcome).toBe('activated');
+        if (h.transport === 'inline') {
+          // Inline: регистрация отклонена (предупреждение), активация жива —
+          // `provides` фильтр не объявляет.
+          expect(result.outcome).toBe('activated');
+        } else {
+          // Out-of-process: невалидная фаза в /capabilities — отказ импорта.
+          expect(result.outcome).toBe('rejected');
+        }
         expect(h.llmFilters.list()).toHaveLength(0);
-        expect(h.warnings.join('\n')).toContain('фазу');
+        // Inline: «неизвестную фазу»; remote: `points.llmFilters[i].phase`.
+        expect(refusalText(h, result)).toMatch(/фаз|phase/i);
       });
 
       it('неизвестный вердикт трактуется как сбой фильтра по failMode (fail-closed)', async () => {
@@ -418,12 +463,16 @@ export function describePluginContract(
     // ── 6. Запрет обхода ─────────────────────────────────────────────────
 
     describe('запрет обхода', () => {
-      it('неизвестная capability инструмента — отказ регистрации, активация отклонена', async () => {
+      it('неизвестная capability инструмента — отказ, регистрации нет', async () => {
         const result = await h.activate('unknown-capability');
         expect(result.outcome).toBe('rejected');
-        expect(result.reason).toBe('plugin.provides_mismatch');
+        // Inline: реестр отверг тул → `provides` не сошёлся. Remote: тул с
+        // неизвестной capability не проходит проверку /capabilities.
+        expect(result.reason).toBe(
+          h.transport === 'inline' ? 'plugin.provides_mismatch' : 'plugin.loader_unavailable',
+        );
         expect(h.tools.listPlugin()).toHaveLength(0);
-        expect(h.warnings.join('\n')).toContain('capability');
+        expect(refusalText(h, result)).toContain('capability');
       });
 
       it('заявленный в манифесте trust не повышает фактический', async () => {

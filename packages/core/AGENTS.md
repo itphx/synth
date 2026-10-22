@@ -659,7 +659,10 @@
   вердикт — по `LLM_FILTER_VERDICTS` + `redactedContent`/`redactedTexts`; ошибки **вызова**
   пробрасываются — композер/gateway деградируют, `failMode` фильтра применяет gateway),
   `index.ts` — баррел. Управление процессом (spawn/health-ожидание/stop, файл токена) — **Ф4б-2**,
-  точка `tools` — **Ф4б-3**; автоподключения загрузчика в `server/app.ts`/`main.ts`/deps нет,
+  точка `tools` — **Ф4б-3** (`points.tools[]` → `facade.registerTool`: локальное имя, JSON-Schema из
+  протокола как `jsonSchema`, «проницаемая» zod-схема `z.object({}).passthrough()` вместо локальной
+  валидации; `execute` → `POST /invoke` `{parameters, context:{sessionId,messageId,workingDir}}`;
+  ответ `{content, isError?}`, `isError: true` — контент без броска, сеть/таймаут — бросок);
   `PluginActivationDescriptor.remote` заполняет установка,
   `integrity.ts` (`computePluginContentHash`/
   `verifyPluginIntegrity`), `exact-host-exceptions.ts` (`readExactHostExceptions` — файл точных
@@ -710,8 +713,16 @@
   фильтров; namespace, источник `plugin` и **прохождение через permission-слой** тулов; сверка
   `provides` (все три вида); **dispose-дисциплина** (после `deactivate()` ни одной регистрации);
   запрет обхода (неизвестная/зарезервированная capability, заявленный trust не повышает фактический).
-  Suite работает только через операции харнесса — тот же набор обязан пройти на `out-of-process`
-  реализации (Ф4). Прогон — `engine/plugins/plugin-contract.test.ts` (21 тест).
+  Suite работает только через операции харнесса, поэтому **параметризован транспортом** (Ф4б-3):
+  `PluginContractHarness.transport: 'inline' | 'remote'`, сборка — `contract/harness.ts`
+  (`createContractHarness({transport, loader|loaders, descriptorExtra, cleanup})`, общая часть —
+  реестры/композер/gateway/permission-слой). Прогоны: `engine/plugins/plugin-contract.test.ts`
+  (in-memory, `createFixtureLoader`) и `engine/plugins/plugin-contract-remote.test.ts`
+  (`loaders.remote` + **реальный** `node:http` на `127.0.0.1:0`: `/health`/`/capabilities`/`/invoke`
+  по фикстуре, сервер на фикстуру поднимается лениво и закрывается в `dispose()`) — по 23 проверки
+  (46 суммарно). Различие транспортов одно: невалидный вклад отклоняет реестр при регистрации
+  (inline) либо `checkPluginCapabilities` на `/capabilities` (remote, fail-closed) — suite проверяет
+  «регистрации не появилось + причина названа» (`refusalText`).
 - `engine/plugins/scan/*` — PROP-090 §9 / PROP-068 §4.3: встроенный статический сканер расширений
   (**advisory**: код не исполняется, сканер лишь выносит вердикт; блокирует матрица install-policy).
   Файлы: `rules.ts` (таблица правил `PLUGIN_SCAN_RULES` по 7 категориям — 6 базовых + `invisible_unicode`;
@@ -835,11 +846,13 @@
   сетевые `npm`/`url` разрешены — это не путь с ФС хоста). Опция `sourceContext` — инъекция
   сети/лимитов источников (тесты). ⚠️ Backend импортирует core из `dist` — после правок
   `server/routes/*` обязателен `pnpm --filter @itphx/synth-core build` перед backend-тестами.
-- **Транспорты исполнения (Ф4б-1/Ф4б-2).** `engine/plugins/remote/*`: `client.ts`
+- **Транспорты исполнения (Ф4б-1/Ф4б-2/Ф4б-3).** `engine/plugins/remote/*`: `client.ts`
   (`RemotePluginClient` — **только loopback** `127.0.0.1/::1/localhost`, bearer на `/capabilities` и
   `/invoke`, таймаут через `AbortSignal`, токен вырезается из текстов ошибок), `loader.ts`
   (`createRemotePluginLoader` — режим `remote|both`, `descriptor.remote {url,token}` приоритетнее,
-  `capabilities()` до активации, прокси-регистрация блоков/фильтров с валидацией ответов),
+  `capabilities()` до активации, прокси-регистрация блоков/фильтров **и тулов** с валидацией
+  ответов: тул регистрируется через `facade.registerTool` с JSON-Schema из протокола, `execute` →
+  `POST /invoke` `{parameters, context}` → `{content, isError?}`),
   `process.ts` (`PluginProcessManager` — spawn `process.execPath` без shell, env **ровно**
   `PATH`/`NODE_ENV`/`SYNTH_PLUGIN_PORT`/`SYNTH_PLUGIN_TOKEN`, готовность по строке
   `SYNTH_PLUGIN_READY port=<n>` + опрос `/health`, адрес только `127.0.0.1`, `SIGTERM`→`SIGKILL`,

@@ -45,11 +45,12 @@ describe('константы протокола', () => {
     });
   });
 
-  it('по протоколу в этой волне передаются только promptBlocks и llmFilters', () => {
-    expect(PLUGIN_PROTOCOL_POINTS).toEqual(['promptBlocks', 'llmFilters']);
+  it('по протоколу передаются promptBlocks, llmFilters и tools', () => {
+    expect(PLUGIN_PROTOCOL_POINTS).toEqual(['promptBlocks', 'llmFilters', 'tools']);
     expect(isPluginProtocolPoint('promptBlocks')).toBe(true);
     expect(isPluginProtocolPoint('llmFilters')).toBe(true);
-    expect(isPluginProtocolPoint('tools')).toBe(false);
+    expect(isPluginProtocolPoint('tools')).toBe(true);
+    expect(isPluginProtocolPoint('hooks')).toBe(false);
   });
 
   it('таблица HTTP-статусов покрывает все причины отказа', () => {
@@ -146,7 +147,7 @@ describe('checkPluginCapabilities: отказы', () => {
 
   it('неизвестная точка в points → unknown_point', () => {
     const result = checkPluginCapabilities(
-      validCapabilities({ points: { tools: [] } }),
+      validCapabilities({ points: { hooks: [] } }),
       EXPECTED,
     );
     expect(result).toMatchObject({ ok: false, reason: 'unknown_point' });
@@ -223,5 +224,114 @@ describe('checkPluginCapabilities: отказы', () => {
       ok: false,
       reason: 'invalid_request',
     });
+  });
+});
+
+describe('checkPluginCapabilities: точка tools (Ф4б-3)', () => {
+  /** Валидное описание тула. */
+  function tool(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      name: 'memory_search',
+      description: 'Поиск по памяти плагина',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+      },
+      capabilities: ['search'],
+      ...over,
+    };
+  }
+
+  it('валидный тул нормализуется (JSON-Schema и capabilities сохраняются)', () => {
+    const result = checkPluginCapabilities(
+      validCapabilities({ points: { tools: [tool()] } }),
+      EXPECTED,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.capabilities.points.tools).toEqual([
+      {
+        name: 'memory_search',
+        description: 'Поиск по памяти плагина',
+        parameters: {
+          type: 'object',
+          properties: { query: { type: 'string' } },
+          required: ['query'],
+        },
+        capabilities: ['search'],
+      },
+    ]);
+  });
+
+  it('тул без parameters принимается (схему не выдумываем)', () => {
+    const raw = tool();
+    delete raw.parameters;
+    const result = checkPluginCapabilities(
+      validCapabilities({ points: { tools: [raw] } }),
+      EXPECTED,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.capabilities.points.tools).toEqual([
+      {
+        name: 'memory_search',
+        description: 'Поиск по памяти плагина',
+        capabilities: ['search'],
+      },
+    ]);
+  });
+
+  it('без capabilities тул отклоняется (был бы невидим permission-слою)', () => {
+    for (const over of [{ capabilities: [] }, { capabilities: undefined }, { capabilities: 'search' }]) {
+      const result = checkPluginCapabilities(
+        validCapabilities({ points: { tools: [tool(over)] } }),
+        EXPECTED,
+      );
+      expect(result, JSON.stringify(over)).toMatchObject({ ok: false, reason: 'invalid_request' });
+    }
+  });
+
+  it('неизвестная capability тула → invalid_request', () => {
+    const result = checkPluginCapabilities(
+      validCapabilities({ points: { tools: [tool({ capabilities: ['root'] })] } }),
+      EXPECTED,
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'invalid_request' });
+    if (result.ok) return;
+    expect(result.message).toContain('capability');
+  });
+
+  it('пустые имя/описание и нечисловая схема → invalid_request', () => {
+    for (const over of [
+      { name: '   ' },
+      { name: undefined },
+      { description: '' },
+      { description: undefined },
+      { parameters: 'object' },
+      { parameters: [] },
+    ]) {
+      const result = checkPluginCapabilities(
+        validCapabilities({ points: { tools: [tool(over)] } }),
+        EXPECTED,
+      );
+      expect(result, JSON.stringify(over)).toMatchObject({ ok: false, reason: 'invalid_request' });
+    }
+  });
+
+  it('дубли локальных имён тулов → invalid_request', () => {
+    const result = checkPluginCapabilities(
+      validCapabilities({ points: { tools: [tool(), tool()] } }),
+      EXPECTED,
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'invalid_request' });
+    if (result.ok) return;
+    expect(result.message).toContain('дважды');
+  });
+
+  it('points.tools не массив → invalid_request', () => {
+    expect(
+      checkPluginCapabilities(validCapabilities({ points: { tools: {} } }), EXPECTED),
+    ).toMatchObject({ ok: false, reason: 'invalid_request' });
   });
 });

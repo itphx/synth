@@ -4,7 +4,18 @@
  * Шаг `import` пайплайна `PluginHost` для `mode: 'remote' | 'both'`: вместо
  * `import()` бандла загрузчик подключается к уже запущенному процессу плагина
  * (`descriptor.remote.url`) и регистрирует **прокси-провайдеры** точек
- * `promptBlocks`/`llmFilters` через wire-протокол (`RemotePluginClient`).
+ * `promptBlocks`/`llmFilters`/`tools` через wire-протокол
+ * (`RemotePluginClient`).
+ *
+ * **Точка `tools`** (Ф4б-3): тул из `points.tools[]` регистрируется в общем
+ * `ToolRegistry` под namespace-именем `plugin_<ns>_<tool>` (имя составляет
+ * хост, как у inline-тулов). `execute` уходит в `POST /invoke` с
+ * `input: { parameters, context }`; ответ — `{ content, isError? }` (как у
+ * MCP-инструментов). `isError: true` — это **ошибка тула**, а не хоста:
+ * контент возвращается как есть. Сетевой сбой/таймаут — бросок (деградацию
+ * обеспечивает вызывающий). Схему для модели берём **из протокола**
+ * (`jsonSchema`) и не выдумываем: локальная zod-схема — «проницаемая»
+ * (валидирует удалённая сторона).
  *
  * **Управление процессом** (Ф4б-2): загрузчик получает опциональный
  * `processManager`. Если `descriptor.remote` (адрес+токен) задан — транспорт
@@ -15,14 +26,18 @@
  * Без менеджера и без `remote` — отказ (fail-closed), а не «работаем без
  * плагина».
  *
- * **Границы волны Ф4б-1.** Точки `tools` в протоколе нет: плагин, объявивший
- * `provides.tools` при `mode: 'remote'`, будет отклонён сверкой `provides` в
- * хосте (`plugin.provides_mismatch`) — это ожидаемо до Ф4б-3.
+ * **Границы волны.** Точки `promptBlocks`, `llmFilters`, `tools` покрыты
+ * протоколом (Ф4б-3); серверная сторона (`PluginServerFactory`) и менеджер
+ * процесса — Ф4б-2. Плагин в режиме `remote`, объявивший в манифесте
+ * `provides.tools`, обязан объявить те же локальные имена в `points.tools[]`:
+ * иначе сверка `provides` отклонит активацию (`plugin.provides_mismatch`) —
+ * ожидаемое поведение (несогласованная сборка).
  *
  * **Ошибки.** Сбой `capabilities()` (сеть, 401, чужая версия протокола) —
  * `PluginLoadError('plugin.loader_unavailable')`: активация отклоняется.
- * Ошибки **при вызове** точки (`load`/`inspect`) пробрасываются как есть —
- * композер деградирует блок, gateway применяет `failMode` фильтра.
+ * Ошибки **при вызове** точки (`load`/`inspect`/`execute`) пробрасываются как
+ * есть — композер деградирует блок, gateway применяет `failMode` фильтра,
+ * вызывающий тула деградирует сам.
  */
 import {
   PLUGIN_PROTOCOL_MAX_PROMPT_BLOCK_CHARS,
@@ -32,7 +47,9 @@ import {
 import type {
   LlmFilterVerdict,
   PromptBlockContent,
+  ToolResult,
 } from '@itphx/synth-shared';
+import { z } from 'zod';
 
 import { PluginLoadError } from '../activation.js';
 import type {
@@ -66,10 +83,30 @@ export interface RemotePluginLoaderOptions {
 /** Контекст нормализации ответа точки (для сообщений и лога). */
 interface ResponseContext {
   plugin: string;
-  /** Ключ блока / id фильтра. */
+  /** Ключ блока / id фильтра / локальное имя тула. */
   id: string;
   logger: PluginLogger;
 }
+
+/**
+ * Локальная zod-схема параметров удалённого тула — **проницаемая**.
+ *
+ * Валидация аргументов не нужна: их проверяет удалённая сторона (она знает
+ * свой контракт), а схема для модели приходит из протокола (`jsonSchema`) и
+ * реестр берёт именно её (`tool.jsonSchema ?? zodToJsonSchema(tool.parameters)`).
+ */
+const PASSTHROUGH_TOOL_PARAMETERS = z.object({}).passthrough();
+
+/**
+ * Минимальная JSON-Schema, когда процесс не прислал свою: пустой объект с
+ * разрешёнными дополнительными полями. Схему «из головы» не выдумываем —
+ * иначе модель получила бы ложный контракт аргументов.
+ */
+const MINIMAL_TOOL_JSON_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {},
+  additionalProperties: true,
+};
 
 /**
  * Создать загрузчик `out-of-process` (`PluginLoader`).
@@ -198,6 +235,31 @@ export function createRemotePluginLoader(
               ),
           });
         }
+
+        // Точка `tools` (Ф4б-3): локальное имя из протокола; полное
+        // `plugin_<ns>_<tool>` составит хост (`ToolRegistry.registerPlugin`).
+        for (const tool of capabilities.points.tools ?? []) {
+          const ctx: ResponseContext = { plugin, id: tool.name, logger };
+          facade.registerTool({
+            name: tool.name,
+            description: tool.description,
+            parameters: PASSTHROUGH_TOOL_PARAMETERS,
+            jsonSchema: tool.parameters ?? MINIMAL_TOOL_JSON_SCHEMA,
+            capabilities: tool.capabilities,
+            execute: async (args, toolCtx) =>
+              normalizeToolResult(
+                await client.invoke('tools', tool.name, {
+                  parameters: args,
+                  context: {
+                    sessionId: toolCtx.sessionId,
+                    messageId: toolCtx.messageId,
+                    workingDir: toolCtx.workingDir,
+                  },
+                }),
+                ctx,
+              ),
+          });
+        }
       },
     };
   };
@@ -292,6 +354,27 @@ function normalizeLlmFilterVerdict(
       ? { redactedTexts: raw.redactedTexts as string[] }
       : {}),
   };
+}
+
+/**
+ * Ответ точки `tools` → `ToolResult` (`{ content, isError? }`, как у
+ * MCP-инструментов).
+ *
+ * `isError: true` — **ошибка тула**, а не хоста: контент возвращается модели
+ * как есть (без броска). Не по контракту (нет `content: string`, `isError` не
+ * boolean) — ошибка вызова: вызывающий деградирует, ход не падает.
+ */
+function normalizeToolResult(raw: unknown, ctx: ResponseContext): ToolResult {
+  if (!isRecord(raw)) {
+    throw responseError(ctx, 'результат тула — не JSON-объект { content: string }');
+  }
+  if (typeof raw.content !== 'string') {
+    throw responseError(ctx, 'поле content результата тула должно быть строкой');
+  }
+  if (raw.isError !== undefined && typeof raw.isError !== 'boolean') {
+    throw responseError(ctx, 'поле isError результата тула должно быть boolean');
+  }
+  return raw.isError === true ? { content: raw.content, isError: true } : { content: raw.content };
 }
 
 /** Ошибка «ответ точки не по контракту»: лог (без полезной нагрузки) + throw. */
