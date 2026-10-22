@@ -7,6 +7,16 @@ metadata:
     app.kubernetes.io/component: ui
 spec:
   type: {{ .Values.ui.service.type }}
+  {{- /* Привязка клиента к UI-поду: без неё клиент чередуется между UI-под'ами,
+         а для Service backend'а это разные clientIP — привязка control plane
+         держится лишь в пределах одного UI-пода. С привязкой цепочка
+         "клиент → UI-под → backend-под" стабильна. "None" — дефолт Kubernetes,
+         поле не рендерим: дефолтный манифест Service не меняется побайтово. */ -}}
+  {{- with .Values.ui.service.sessionAffinity }}
+  {{- if ne . "None" }}
+  sessionAffinity: {{ . }}
+  {{- end }}
+  {{- end }}
   ports:
     - port: {{ .Values.ui.service.port }}
       targetPort: {{ .Values.ui.service.targetPort }}

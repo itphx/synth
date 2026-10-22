@@ -109,6 +109,13 @@
 10. **Пул исполнителей — привязка клиента на его Service** (`executor.service.sessionAffinity`): браузерные
     MCP-сессии живут внутри под'а, а control plane ходит в пул по одному адресу (ClusterIP) — балансировка per
     TCP-соединение ⇒ вызовы одной сессии попадали бы на разные поды; `ClientIP` — компромисс как sticky control plane (п. 7).
+11. **Привязка клиента — на всех трёх Service цепочки** (control plane, пул исполнителей, UI). Запрос идёт
+    как «клиент → Service UI → UI-под (nginx) → Service backend'а → backend-под», поэтому привязка control plane
+    (п. 7) работает только в пределах одного UI-пода: без привязки Service UI клиент чередуется между UI-под'ами,
+    а для Service backend'а это **разные clientIP** ⇒ цепочка рвётся, и один backend-под обслуживает несколько
+    UI-подов. Значит у Service UI своя привязка (`ui.service.sessionAffinity`) — тот же компромисс (sticky по IP);
+    реплик UI должно быть не меньше, чем реплик backend'а. Полноценное решение — внешний транспорт событий
+    (PROP-104); привязка клиента его не заменяет.
 
 ## Альтернативы
 
@@ -235,6 +242,10 @@
   `charts/synth/templates/backend-service.yaml` (поле рендерится только для значения, отличного от
   `None`, — дефолтный манифест Service не меняется побайтово); подробности и оговорки — README чарта
   («Sticky-сессии при нескольких репликах backend»).
+- **Привязка клиента на Service UI** (`ui.service.sessionAffinity` — `None` по умолчанию), шаблон
+  `charts/synth/templates/ui-service.yaml` (поле рендерится только для значения, отличного от `None`, —
+  дефолтный манифест Service не меняется побайтово); оговорки про цепочку
+  «клиент → UI-под → backend-под» — README чарта («Привязка клиента к UI-поду»).
 - **Адрес backend'а в образе UI — из окружения:** `docker/nginx-ui.conf.template` (шаблон nginx +
   `envsubst` с фильтром `NGINX_ENVSUBST_FILTER=SYNTH_BACKEND_URL` — переменные nginx не подменяются),
   `docker/Dockerfile.ui` (`ENV SYNTH_BACKEND_URL=http://synth-backend:5000`), чарт —
