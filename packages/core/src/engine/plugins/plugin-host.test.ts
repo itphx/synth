@@ -10,7 +10,17 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { PackManifest, PluginsConfig, PromptBlockProvider, Session } from '@itphx/synth-shared';
+import type {
+  LlmCallFilter,
+  LlmFilterPhase,
+  LLMChunk,
+  LLMGatewayConfig,
+  LLMResponse,
+  PackManifest,
+  PluginsConfig,
+  PromptBlockProvider,
+  Session,
+} from '@itphx/synth-shared';
 import { pluginsConfigSchema } from '@itphx/synth-shared';
 
 import { MemoryPluginAuditRepository } from '../../storage/memory/plugin-audit.js';
@@ -18,6 +28,7 @@ import { PluginHost } from './plugin-host.js';
 import type {
   PluginActivationDescriptor,
   PluginDisposer,
+  PluginFacade,
   PluginLoader,
   PluginModule,
 } from './activation.js';
@@ -26,6 +37,8 @@ import { PromptBlockRegistry } from '../context/prompt-block-registry.js';
 import { SystemPromptComposer, type ComposerContext } from '../context/composer.js';
 import { ContextBuilder } from '../context/builder.js';
 import { ContextConfig } from '../context/config.js';
+import { AuditLogger, GatewayProvider, LlmFilterRegistry, RateLimiter } from '../gateway/index.js';
+import { BaseProvider, type CancellationToken, type LLMMessage } from '../../providers/base.js';
 
 /** Конфиг слоя плагинов с дефолтами схемы. */
 function config(over: Partial<PluginsConfig> = {}): PluginsConfig {
@@ -611,7 +624,18 @@ describe('PluginHost: Ф3а — фасад (точка promptBlocks)', () => {
     });
 
     // Активация не падает: ошибка провайдера — дело хода, а не регистрации.
-    const result = await host.activate(descriptor());
+    // Блок объявлен в `provides` — сверка «объявлено ↔ зарегистрировано» (Ф3б)
+    // проходит.
+    const result = await host.activate(
+      descriptor({
+        manifest: manifest({
+          provides: {
+            ...manifest().provides,
+            promptBlocks: [{ key: 'plugin.demo.broken', tier: 'context', order: 100 }],
+          },
+        }),
+      }),
+    );
     expect(result.outcome).toBe('activated');
     expect(registry.size).toBe(1);
 
@@ -757,5 +781,326 @@ describe('PluginHost: деактивация и disposers', () => {
     const { host } = await hostWithDisposers([]);
     expect(host.registerDisposer('demo-plugin', () => undefined)).toBe(true);
     expect(host.registerDisposer('other-plugin', () => undefined)).toBe(false);
+  });
+});
+
+// ── Ф3б: точка `llmFilters` — фасад, реестр, gateway, сверка `provides` ──
+
+/** Мок-провайдер: считает вызовы `chat` (эмбеддинги в этих кейсах не нужны). */
+class MockPluginFilterProvider extends BaseProvider {
+  static chatCalls = 0;
+  static responseContent = 'ответ модели';
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _stream?: boolean,
+    _debugCollector?: unknown,
+  ): Promise<LLMResponse> {
+    MockPluginFilterProvider.chatCalls += 1;
+    return {
+      content: MockPluginFilterProvider.responseContent,
+      model: this.model,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<LLMChunk> {
+    MockPluginFilterProvider.chatCalls += 1;
+    yield { content: MockPluginFilterProvider.responseContent, isFinal: true, model: this.model };
+  }
+
+  async embed(_text: string): Promise<number[]> {
+    return [0.1, 0.2];
+  }
+
+  getProviderName(): string {
+    return 'mockplugin';
+  }
+}
+
+/** Gateway с общим реестром фильтров — тот же экземпляр, что у хоста плагинов. */
+function makeFilterGateway(registry: LlmFilterRegistry, auditDir: string): GatewayProvider {
+  const inner = new MockPluginFilterProvider({ url: 'http://mock', apiKey: 'k', model: 'm' });
+  const gatewayConfig: LLMGatewayConfig = {
+    enabled: true,
+    inputMode: 'obfuscate',
+    logPayloads: false,
+    payloadLogPath: '',
+    rateLimit: { userPerMinute: 100, providerPerMinute: 100 },
+    audit: { enabled: true, logPath: '' },
+  };
+  return new GatewayProvider(inner, gatewayConfig, {
+    getMap: async () => ({}),
+    saveMap: async () => undefined,
+    getAudit: () => new AuditLogger(join(auditDir, 'gateway-audit.jsonl')),
+    getRateLimiter: () => new RateLimiter(100, 100),
+    sessionId: 's1',
+    userId: 'u1',
+    filters: registry,
+  });
+}
+
+/** Одно сообщение пользователя для вызова gateway. */
+function makeLlmMessage(content: string): LLMMessage {
+  return {
+    id: 'm1',
+    role: 'user',
+    content,
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    disabled: false,
+    pinned: false,
+    branchId: 'b1',
+  };
+}
+
+/** Манифест плагина, объявивший фильтры LLM-вызовов (`provides.llmFilters[]`). */
+function manifestWithFilters(filters: Array<{ id: string; phase?: LlmFilterPhase }>): PackManifest {
+  return manifest({
+    provides: {
+      ...manifest().provides,
+      llmFilters: filters.map((filter) => ({
+        id: filter.id,
+        phase: filter.phase ?? 'pre_request',
+      })),
+    },
+  });
+}
+
+describe('PluginHost: Ф3б — фасад (точка llmFilters)', () => {
+  let auditDir: string;
+
+  beforeEach(async () => {
+    auditDir = await mkdtemp(join(tmpdir(), 'synth-plugin-filters-'));
+    MockPluginFilterProvider.chatCalls = 0;
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(auditDir, { recursive: true, force: true });
+  });
+
+  /** Загрузчик, регистрирующий фильтры через фасад. */
+  function filterLoader(filters: LlmCallFilter[]): PluginLoader {
+    return async () => ({
+      apply: (facade: PluginFacade) => {
+        for (const filter of filters) facade.registerLlmFilter(filter);
+      },
+    });
+  }
+
+  it('фильтр из плагина применяется: deny блокирует вызов, событие — в журнале плагинов', async () => {
+    const registry = new LlmFilterRegistry();
+    const { host, audit } = makeHost({
+      config: config({ executionEnabled: true }),
+      llmFilters: registry,
+      loader: filterLoader([
+        {
+          id: 'plugin:demo-plugin:dlp',
+          phase: 'pre_request',
+          inspect: () => ({ verdict: 'deny', reason: 'DLP' }),
+        },
+      ]),
+    });
+
+    const activated = await host.activate(
+      descriptor({ manifest: manifestWithFilters([{ id: 'plugin:demo-plugin:dlp' }]) }),
+    );
+    expect(activated.outcome).toBe('activated');
+
+    // Хост подставил владельца: имя/версия/фактическое доверие.
+    const entry = registry.get('plugin:demo-plugin:dlp');
+    expect(entry).toBeDefined();
+    expect(entry!.pluginName).toBe('demo-plugin');
+    expect(entry!.pluginVersion).toBe('1.0.0');
+    expect(entry!.trustLevel).toBe('trusted');
+
+    const gateway = makeFilterGateway(registry, auditDir);
+    const response = await gateway.chat([makeLlmMessage('привет')]);
+
+    expect(MockPluginFilterProvider.chatCalls).toBe(0);
+    expect(response.content).toContain('extension filter');
+
+    const filterEntries = (await audit.list()).filter((e) => e.action === 'filter');
+    expect(filterEntries).toHaveLength(1);
+    expect(filterEntries[0]).toMatchObject({
+      plugin: 'demo-plugin',
+      version: '1.0.0',
+      outcome: 'rejected',
+      reason: 'plugin_filter.denied',
+      trustLevel: 'trusted',
+    });
+    // Текст запроса в журнал не попадает (инвариант 13).
+    expect(JSON.stringify(filterEntries)).not.toContain('привет');
+  });
+
+  it('deactivate() снимает фильтр — вызов снова уходит провайдеру', async () => {
+    const registry = new LlmFilterRegistry();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      llmFilters: registry,
+      loader: filterLoader([
+        { id: 'plugin:demo-plugin:dlp', phase: 'pre_request', inspect: () => ({ verdict: 'deny' }) },
+      ]),
+    });
+    await host.activate(
+      descriptor({ manifest: manifestWithFilters([{ id: 'plugin:demo-plugin:dlp' }]) }),
+    );
+    expect(registry.size).toBe(1);
+
+    const deactivated = await host.deactivate('demo-plugin');
+    expect(deactivated.outcome).toBe('ok');
+    expect(registry.size).toBe(0);
+
+    const gateway = makeFilterGateway(registry, auditDir);
+    const response = await gateway.chat([makeLlmMessage('привет')]);
+    expect(MockPluginFilterProvider.chatCalls).toBe(1);
+    expect(response.content).toBe('ответ модели');
+  });
+
+  it('фильтр недоверенного плагина: deny понижается до allow, в журнале — факт понижения', async () => {
+    const registry = new LlmFilterRegistry();
+    const { host, audit } = makeHost({
+      config: config({ executionEnabled: true, trustFloor: 'community' }),
+      llmFilters: registry,
+      loader: filterLoader([
+        {
+          id: 'plugin:demo-plugin:block',
+          phase: 'pre_request',
+          inspect: () => ({ verdict: 'deny', reason: 'хочу блок' }),
+        },
+      ]),
+    });
+
+    const activated = await host.activate(
+      descriptor({
+        trustLevel: 'community',
+        manifest: manifestWithFilters([{ id: 'plugin:demo-plugin:block' }]),
+      }),
+    );
+    expect(activated.outcome).toBe('activated');
+    expect(registry.get('plugin:demo-plugin:block')!.trustLevel).toBe('community');
+
+    const gateway = makeFilterGateway(registry, auditDir);
+    const response = await gateway.chat([makeLlmMessage('привет')]);
+
+    // Право вето — только у доверенных: вызов ушёл провайдеру.
+    expect(MockPluginFilterProvider.chatCalls).toBe(1);
+    expect(response.content).toBe('ответ модели');
+
+    const filterEntries = (await audit.list()).filter((e) => e.action === 'filter');
+    expect(filterEntries).toHaveLength(1);
+    expect(filterEntries[0]).toMatchObject({
+      outcome: 'ok',
+      reason: 'plugin_filter.deny_downgraded',
+      trustLevel: 'community',
+    });
+  });
+
+  it('битый фильтр (дубль id) → предупреждение, активация не падает, disposer — no-op', async () => {
+    const warnings: string[] = [];
+    const registry = new LlmFilterRegistry();
+    const filter: LlmCallFilter = {
+      id: 'plugin:demo-plugin:dup',
+      phase: 'pre_request',
+      inspect: () => ({ verdict: 'allow' }),
+    };
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      llmFilters: registry,
+      logger: { warn: (message: string) => warnings.push(message) },
+      loader: filterLoader([filter, filter]),
+    });
+
+    const result = await host.activate(
+      descriptor({ manifest: manifestWithFilters([{ id: 'plugin:demo-plugin:dup' }]) }),
+    );
+    expect(result.outcome).toBe('activated');
+    expect(registry.size).toBe(1);
+    expect(warnings.join('\n')).toContain('plugin:demo-plugin:dup');
+
+    // Деактивация проходит: no-op disposer не бросает, живой фильтр снят.
+    await host.deactivate('demo-plugin');
+    expect(registry.size).toBe(0);
+  });
+
+  it('фильтр с пустым id отклоняется на регистрации: предупреждение, активация не падает', async () => {
+    const warnings: string[] = [];
+    const registry = new LlmFilterRegistry();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      llmFilters: registry,
+      logger: { warn: (message: string) => warnings.push(message) },
+      loader: filterLoader([
+        { id: '', phase: 'pre_request', inspect: () => ({ verdict: 'allow' }) },
+      ]),
+    });
+
+    const result = await host.activate(descriptor());
+    expect(result.outcome).toBe('activated');
+    expect(registry.size).toBe(0);
+    expect(warnings.join('\n')).toContain('фильтра LLM-вызовов');
+  });
+
+  it('без реестра фильтров регистрация — предупреждение, активация не падает', async () => {
+    const warnings: string[] = [];
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      logger: { warn: (message: string) => warnings.push(message) },
+      loader: filterLoader([
+        { id: 'plugin:demo-plugin:x', phase: 'pre_request', inspect: () => ({ verdict: 'allow' }) },
+      ]),
+    });
+
+    const result = await host.activate(descriptor());
+    expect(result.outcome).toBe('activated');
+    expect(warnings.join('\n')).toContain('llmFilters');
+  });
+
+  it('сверка provides: объявлен, но не зарегистрирован → plugin.provides_mismatch', async () => {
+    const registry = new LlmFilterRegistry();
+    const { host, audit } = makeHost({
+      config: config({ executionEnabled: true }),
+      llmFilters: registry,
+      loader: filterLoader([]),
+    });
+
+    const result = await host.activate(
+      descriptor({ manifest: manifestWithFilters([{ id: 'plugin:demo-plugin:f1' }]) }),
+    );
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.provides_mismatch');
+    expect(result.step).toBe('facade');
+    expect(result.message).toContain('plugin:demo-plugin:f1');
+    expect(host.isActive('demo-plugin')).toBe(false);
+
+    const rejected = (await audit.list()).find(
+      (entry) => entry.action === 'activate' && entry.outcome === 'rejected',
+    );
+    expect(rejected?.reason).toBe('plugin.provides_mismatch');
+  });
+
+  it('сверка provides: зарегистрирован, но не объявлен → отказ и откат регистрации', async () => {
+    const registry = new LlmFilterRegistry();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      llmFilters: registry,
+      loader: filterLoader([
+        { id: 'plugin:demo-plugin:extra', phase: 'pre_request', inspect: () => ({ verdict: 'allow' }) },
+      ]),
+    });
+
+    const result = await host.activate(descriptor());
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.provides_mismatch');
+    // Отклонённый плагин не оставляет фильтров в живом реестре.
+    expect(registry.size).toBe(0);
   });
 });

@@ -25,6 +25,7 @@
 import {
   DEFAULT_EXTENSION_CONTRACT,
   checkExtensionCompatibility,
+  diffPackProvides,
   generateId,
   installPolicyDecision,
   trustLevelRank,
@@ -32,6 +33,10 @@ import {
 import type {
   CatalogTrustLevel,
   PackManifest,
+  PackProvides,
+  PackProvidesKind,
+  PackProvidesMismatch,
+  PluginAuditAction,
   PluginAuditEntry,
   PluginAuditReason,
   PluginScanVerdict,
@@ -40,6 +45,7 @@ import type {
 import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
 import type { PluginAuditRepository } from '../../storage/ports/plugin-audit-repository.js';
 import type { PromptBlockRegistry } from '../context/prompt-block-registry.js';
+import type { LlmFilterAuditEvent, LlmFilterRegistry } from '../gateway/llm-filter-registry.js';
 import type {
   PluginActivationDescriptor,
   PluginActivationHandle,
@@ -61,6 +67,37 @@ import { createPluginScanHook } from './scan/hook.js';
  * Манифест плагина объявляет совместимость через `contracts.extensionApi`.
  */
 export const DEFAULT_EXTENSION_CONTRACT_VERSION = '1';
+
+/**
+ * Соответствие кодов решений фильтра каноническим причинам журнала плагинов.
+ *
+ * Колбэк `onAudit` зовётся gateway'ем **только** для канонических кодов
+ * (`plugin_filter.denied`/`deny_downgraded`/`unavailable`); коды хоста
+ * (`plugin_filter.timeout`/`error`/`allowed`/`redact_*`/`buffering_required`)
+ * живут исключительно в аудите gateway — перечень `PLUGIN_AUDIT_REASONS` ими
+ * не расширяется (решение Ф3б, 2026-10-22).
+ */
+const FILTER_JOURNAL_REASONS: ReadonlyMap<string, PluginAuditReason> = new Map([
+  ['plugin_filter.denied', 'plugin_filter.denied'],
+  ['plugin_filter.deny_downgraded', 'plugin_filter.deny_downgraded'],
+  ['plugin_filter.unavailable', 'plugin_filter.unavailable'],
+]);
+
+/** Названия видов вкладов для сообщений об отказе (PROP-090 §«Правило соответствия»). */
+const PROVIDES_KIND_LABELS: Record<PackProvidesKind, string> = {
+  tool: 'тул',
+  promptBlock: 'блок промпта',
+  llmFilter: 'фильтр LLM-вызовов',
+};
+
+/** Человекочитаемое описание одного расхождения `provides` ↔ регистрации. */
+function describeProvidesMismatch(mismatch: PackProvidesMismatch): string {
+  const label = PROVIDES_KIND_LABELS[mismatch.kind] ?? mismatch.kind;
+  return mismatch.issue === 'missing'
+    ? `${label} «${mismatch.name}» объявлен, но не зарегистрирован`
+    : `${label} «${mismatch.name}» зарегистрирован, но не объявлен`;
+}
+
 
 /** Опции `PluginHost`. */
 export interface PluginHostOptions {
@@ -99,6 +136,16 @@ export interface PluginHostOptions {
    * возвращает no-op disposer с предупреждением в лог).
    */
   promptBlocks?: PromptBlockRegistry;
+  /**
+   * Ф3б: реестр фильтров LLM-вызовов (точка `llmFilters`).
+   *
+   * Тот же экземпляр, что получает `GatewayProvider`
+   * (`orchestrator.getLlmFilters()`): плагин регистрирует фильтр через фасад,
+   * gateway применяет его в своей фазе. Не задан — точка `llmFilters` плагину
+   * недоступна (регистрация возвращает no-op disposer с предупреждением в
+   * лог, активация не падает).
+   */
+  llmFilters?: LlmFilterRegistry;
   /** Логгер (по умолчанию — `console.warn`). */
   logger?: PluginLogger;
 }
@@ -122,6 +169,8 @@ export class PluginHost {
   private readonly _loader: PluginLoader | undefined;
   /** Ф3а: реестр провайдеров блоков системного промпта (точка `promptBlocks`). */
   private readonly _promptBlocks: PromptBlockRegistry | undefined;
+  /** Ф3б: реестр фильтров LLM-вызовов (точка `llmFilters`). */
+  private readonly _llmFilters: LlmFilterRegistry | undefined;
   private readonly _logger: PluginLogger;
   /** Реестр активных плагинов: имя → дескриптор активации. */
   private readonly _activations = new Map<string, PluginActivationHandle>();
@@ -141,6 +190,7 @@ export class PluginHost {
     });
     this._loader = options.loader;
     this._promptBlocks = options.promptBlocks;
+    this._llmFilters = options.llmFilters;
     this._explicitExceptions = options.exactHostExceptions;
     this._logger = options.logger ?? {
       warn: (message: string) => {
@@ -280,6 +330,14 @@ export class PluginHost {
       ...(ready.manifest.mode ? { mode: ready.manifest.mode } : {}),
       disposers: [],
     };
+    /**
+     * Фактические регистрации вкладов (**только успешные**) — для сверки с
+     * `provides` манифеста (`diffPackProvides`, PROP-090 §«Правило
+     * соответствия»). Отклонённая регистрация сюда не попадает: иначе отказ
+     * точки (например, тир `stable`) выглядел бы как «зарегистрировано».
+     */
+    const registeredPromptBlocks: string[] = [];
+    const registeredLlmFilters: string[] = [];
     const facade: PluginFacade = {
       registerDisposer: (disposer: PluginDisposer) => {
         handle.disposers.push(disposer);
@@ -301,10 +359,46 @@ export class PluginHost {
             ...(opts?.title ? { title: opts.title } : {}),
           });
           handle.disposers.push(disposer);
+          registeredPromptBlocks.push(provider.key);
           return disposer;
         } catch (err) {
           this._logger.warn(
             `регистрация блока промпта «${provider?.key ?? '?'}» отклонена: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+          );
+          return () => undefined;
+        }
+      },
+      // Ф3б: точка `llmFilters` — регистрация фильтра LLM-вызовов. Владелец
+      // (имя/версия/доверие) подставляет хост: заявленный в манифесте trust
+      // не поднимает фактический, право вето даёт только trust ≥ `trusted`.
+      // Отказ регистрации — предупреждение + no-op disposer (активация не
+      // падает), как у точки `promptBlocks`.
+      registerLlmFilter: (filter, filterOpts) => {
+        if (!this._llmFilters) {
+          this._logger.warn(
+            `точка llmFilters недоступна хосту — плагин «${handle.plugin}» не зарегистрировал фильтр «${filter?.id ?? '?'}».`,
+          );
+          return () => undefined;
+        }
+        try {
+          const disposer = this._llmFilters.register(filter, {
+            trustLevel: handle.trustLevel,
+            pluginName: handle.plugin,
+            pluginVersion: handle.version,
+            // Журнал плагинов — только канонические коды (`denied`/
+            // `deny_downgraded`/`unavailable`): gateway зовёт колбэк лишь для
+            // них, перечень `PLUGIN_AUDIT_REASONS` не расширяется кодами хоста.
+            onAudit: (event: LlmFilterAuditEvent) => this._writeFilterAudit(handle, event),
+            ...(filterOpts?.failMode ? { failMode: filterOpts.failMode } : {}),
+            ...(filterOpts?.timeoutMs !== undefined ? { timeoutMs: filterOpts.timeoutMs } : {}),
+          });
+          handle.disposers.push(disposer);
+          registeredLlmFilters.push(filter.id);
+          return disposer;
+        } catch (err) {
+          this._logger.warn(
+            `регистрация фильтра LLM-вызовов «${filter?.id ?? '?'}» отклонена: ` +
             `${err instanceof Error ? err.message : String(err)}`,
           );
           return () => undefined;
@@ -331,6 +425,31 @@ export class PluginHost {
         'facade',
         'plugin.loader_unavailable',
         `Фасад плагина отверг регистрацию вкладов: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // ── Шаг 8б: сверка `provides` с фактическими регистрациями ────────
+    // PROP-090 §«Правило соответствия»: расхождение — **отказ активации**
+    // (признак несогласованной сборки, а не «мелочь»). Сверяются точки,
+    // реализованные в Ф3 (`promptBlocks`, `llmFilters`); `provides.tools[]`
+    // присоединится вместе с точкой `tools` (Ф3в).
+    const declared = ready.manifest.provides as PackProvides | undefined;
+    const mismatches = diffPackProvides(
+      {
+        promptBlocks: declared?.promptBlocks ?? [],
+        llmFilters: declared?.llmFilters ?? [],
+      },
+      { promptBlocks: registeredPromptBlocks, llmFilters: registeredLlmFilters },
+    );
+    if (mismatches.length > 0) {
+      // Вклады уже зарегистрированы — откатываем, иначе отклонённый плагин
+      // оставил бы после себя блоки/фильтры в живых реестрах.
+      await this._runDisposers(handle);
+      return failure(
+        'facade',
+        'plugin.provides_mismatch',
+        `Расхождение provides и фактических регистраций плагина «${ready.name}»: ` +
+        `${mismatches.map(describeProvidesMismatch).join('; ')} — активация отклонена.`,
       );
     }
 
@@ -721,11 +840,36 @@ export class PluginHost {
   }
 
   /**
+   * Запись решения фильтра в журнал плагинов (Ф3б, действие `filter`).
+   *
+   * Пишется только канонический код причины (`plugin_filter.denied`/
+   * `plugin_filter.deny_downgraded`/`plugin_filter.unavailable`) и итог
+   * операции: вердикт после понижения `deny` ⇒ вызов заблокирован
+   * (`outcome: 'rejected'`), иначе `ok`. Идентификатор фильтра и фаза остаются
+   * в аудите gateway (`filterId`/`filterPhase`); текст запроса/ответа не
+   * пишется ни там, ни здесь (инвариант 13).
+   */
+  private async _writeFilterAudit(
+    handle: PluginActivationHandle,
+    event: LlmFilterAuditEvent,
+  ): Promise<void> {
+    const reason = FILTER_JOURNAL_REASONS.get(event.code ?? '');
+    await this._writeAudit({
+      action: 'filter',
+      plugin: handle.plugin,
+      version: handle.version,
+      outcome: event.effectiveVerdict === 'deny' ? 'rejected' : 'ok',
+      ...(reason ? { reason } : {}),
+      trustLevel: handle.trustLevel,
+    });
+  }
+
+  /**
    * Запись в журнал аудита плагинов (best-effort: сбой записи не ломает
    * активацию — предупреждение в лог, как в аудите обслуживания, ADR-092).
    */
   private async _writeAudit(input: {
-    action: 'activate' | 'deactivate' | 'scan';
+    action: PluginAuditAction;
     plugin: string;
     version: string;
     outcome: 'ok' | 'rejected';

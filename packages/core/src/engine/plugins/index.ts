@@ -17,6 +17,7 @@ export {
   type PluginDeactivationResult,
   type PluginDisposer,
   type PluginFacade,
+  type PluginLlmFilterOptions,
   type PluginLoader,
   type PluginLogger,
   type PluginModule,

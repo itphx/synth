@@ -2,7 +2,7 @@ import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
 import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig } from '@itphx/synth-shared';
-import { DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
+import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 import type { SettingsRepository } from './ports/settings-repository.js';
 
@@ -107,6 +107,11 @@ export interface PluginsRuntimeSettings {
    * (`plugin.execution_disabled`).
    */
   executionEnabled?: boolean;
+  /**
+   * PROP-090 Ф3б: бюджет времени на один вызов фильтра LLM-вызовов, мс
+   * (точка `llmFilters`).
+   */
+  llmFilterTimeoutMs?: number;
 }
 
 /**
@@ -348,6 +353,7 @@ export function mergePluginsConfig(
     exactHostExceptions: r.exactHostExceptions ?? base?.exactHostExceptions ?? '',
     promptBlockMaxChars: r.promptBlockMaxChars ?? base?.promptBlockMaxChars ?? 4000,
     executionEnabled: r.executionEnabled ?? base?.executionEnabled ?? false,
+    llmFilterTimeoutMs: r.llmFilterTimeoutMs ?? base?.llmFilterTimeoutMs ?? DEFAULT_LLM_FILTER_TIMEOUT_MS,
   };
 }
 

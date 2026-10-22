@@ -20,9 +20,12 @@ import type { CatalogTrustLevel } from './trust.js';
  *
  * Ф1 реализовал `activate`/`deactivate`; Ф2 добавил `scan` (сканер и
  * install-policy — вердикт и число находок пишутся отдельной записью, чтобы по
- * журналу было видно, **чем** решена активация).
+ * журналу было видно, **чем** решена активация); Ф3б добавил `filter` —
+ * события решений фильтров LLM-вызовов (точка `llmFilters`): понижение вето
+ * недоверенного фильтра, блокировка вызова доверенным фильтром, сбой/таймаут
+ * фильтра.
  */
-export const PLUGIN_AUDIT_ACTIONS = ['activate', 'deactivate', 'scan'] as const;
+export const PLUGIN_AUDIT_ACTIONS = ['activate', 'deactivate', 'scan', 'filter'] as const;
 export type PluginAuditAction = (typeof PLUGIN_AUDIT_ACTIONS)[number];
 
 /**
@@ -96,6 +99,32 @@ export const PLUGIN_AUDIT_REASONS = [
   'plugin.not_active',
   /** Сбой disposer'а при обратной прокрутке (остальные disposer'ы выполнены). */
   'plugin.disposer_failed',
+  /**
+   * Ф3б: фактические регистрации вкладов не совпали с `provides` манифеста
+   * (`diffPackProvides`: объявлено, но не зарегистрировано — или наоборот).
+   * PROP-090 §«Правило соответствия»: расхождение — **отказ активации**
+   * (признак несогласованной сборки). Проверяются точки, реализованные в Ф3:
+   * `provides.promptBlocks[]` и `provides.llmFilters[]`; `provides.tools[]`
+   * присоединится вместе с точкой `tools` (Ф3в).
+   */
+  'plugin.provides_mismatch',
+  /**
+   * Ф3б (точка `llmFilters`): фильтр вернул блокирующий вердикт (`deny`/
+   * `redact`), но доверие его владельца ниже `trusted` — **хост понизил
+   * вердикт до `allow`**. Право вето — только у доверенных (PROP-090
+   * §«Кто вправе блокировать»).
+   */
+  'plugin_filter.deny_downgraded',
+  /**
+   * Ф3б: фильтр доверенного плагина заблокировал LLM-вызов (`deny`) —
+   * вызов не ушёл провайдеру.
+   */
+  'plugin_filter.denied',
+  /**
+   * Ф3б: фильтр завершился ошибкой или не уложился в бюджет времени —
+   * по `failMode` вызов либо заблокирован (`closed`), либо прошёл (`open`).
+   */
+  'plugin_filter.unavailable',
 ] as const;
 export type PluginAuditReason = (typeof PLUGIN_AUDIT_REASONS)[number];
 

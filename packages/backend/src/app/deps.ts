@@ -563,6 +563,9 @@ export async function createBackendDeps(
     gatewayAuditLogger,
     gatewayPayloadLogPath,
     gatewayPatternStore: patternStore,
+    // PROP-090 §«Точка llmFilters»: бюджет времени фильтров LLM-вызовов
+    // (`plugins.llmFilterTimeoutMs`); реестр — `orchestrator.getLlmFilters()`.
+    llmFilterTimeoutMs: config.synth.plugins?.llmFilterTimeoutMs,
     // ADR-094: реестр метрик (только при `metrics.enabled`) — LLM-вызовы
     // сессий учитываются и при выключенном LLM Gateway.
     metrics,

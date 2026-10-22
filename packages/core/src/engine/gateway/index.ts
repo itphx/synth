@@ -20,4 +20,17 @@ export { writePayloadLog, readPayloadLog } from './payload-logger.js';
 export type { LlmPayloadEntry, LlmPayloadRequest, LlmPayloadResponse, PayloadLogQuery } from './payload-logger.js';
 export { GatewayProvider, DISABLED_GATEWAY_CONFIG } from './gateway-provider.js';
 export type { GatewayProviderOptions } from './gateway-provider.js';
+export {
+  LlmFilterRegistry,
+  LlmFilterRegistrationError,
+  canVetoLlmFilter,
+  defaultLlmFilterFailMode,
+  LLM_FILTER_VETO_TRUST_LEVEL,
+} from './llm-filter-registry.js';
+export type {
+  LlmFilterAuditEvent,
+  LlmFilterRegistrationOptions,
+  LlmFilterRegistryOptions,
+  RegisteredLlmFilter,
+} from './llm-filter-registry.js';
 export { ObfuscationMapStore, stripSessionSecrets } from './obfuscation-map-store.js';

@@ -251,6 +251,8 @@ program
       analyticsConfig: synth.analytics,
       // ADR-094: конфигурация метрик (`metrics.enabled`, env SYNTH_METRICS_ENABLED).
       metricsConfig: synth.metrics,
+      // PROP-090 §10: конфигурация слоя плагинов (политики + бюджеты).
+      pluginsConfig: synth.plugins,
       // ADR-052 (этап II): конфигурация исходящих webhooks (enabled/retry).
       webhooksConfig: synth.webhooks,
       // ADR-071 §2.3.1 / egress: политика сетевого доступа (config-фоллбек).

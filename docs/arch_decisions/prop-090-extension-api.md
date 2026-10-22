@@ -22,7 +22,13 @@
 > `PluginFacade.registerPromptBlock`. Решения Ф3а: тир `stable` у провайдера — **отказ** (не тихое
 > понижение); `plugins.scan: 'disabled'` + `plugins.executionEnabled: true` — **fail-closed**
 > (`plugin.scan_disabled_with_execution`); **версия правил сканера входит в ключ кэша сканов**.
-> Точка `llmFilters` — **Ф3б, не начата**.
+> **Обновлено (Ф3б):** 2026-10-22 — **Ф3б выполнен** (та же ветка): закрыта точка **`llmFilters`** —
+> контракт `LlmCallFilter` (`shared`), реестр `LlmFilterRegistry`, фильтры в `GatewayProvider`
+> (три фазы: `pre_request`/`post_response`/`embedding`), право вето только у trust ≥ `trusted`,
+> `failMode`/таймаут, аудит решений (`plugin_filter`), фасад `PluginFacade.registerLlmFilter` и
+> **сверка `provides` ↔ фактические регистрации** (`plugin.provides_mismatch`). Эмбеддинги перестали
+> быть дырой инварианта 3: `embed` идёт через gateway-контур. После Ф3б открытым в Ф3 остаётся только
+> **Ф3в** — точка `tools`, сверка `provides.tools[]` и контрактный suite расширений.
 > **Источник:** вынесено из зонтика [ADR-086](./adr-086-extensibility-plugins-editions.md) — Extension API
 > проектировался там как первый из четырёх столпов (плагины, editions, contribution flow, add-on'ы);
 > здесь он выделен в отдельный документ и детализирован.
@@ -946,7 +952,7 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | **Ф0 — предпосылки** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-layer`, коммитов нет) | Остаток [ADR-030](./adr-030-hooks-agent-events.md): политика `builtin` (защита builtin-обработчиков от снятия) + 4 недостающих эмита (`plan_rejected`, `message_received`, `callback`, `schedule_fired`); семвер-гейт `contracts`/`host` (semver-мажор контракта); явные Zod-схемы `provides.tools`/`provides.promptBlocks`/`provides.llmFilters` в `packages/shared/src/types/pack.ts` (без `.passthrough()`); `RuntimeSettings.plugins` + `plugins.*` в конфиге ([ADR-023](./adr-023-configuration.md)). **Сделано:** `builtin` (`off`/отписка отказывают, `offBuiltin` — путь владельца), 3 эмита (`callback` — обоснованно вне core, остаток ADR-030), semver-матчер + `checkExtensionCompatibility`, схемы вкладов + `mode`/`permissions`/`trust` + `diffPackProvides`, секция `plugins` + `mergePluginsConfig` | тест: builtin-обработчик нельзя снять через `off`; эмиты вызываются; `validatePackManifest` отклоняет `tier: 'stable'` в `provides.promptBlocks`, невалидный `provides.tools[]` (пустое имя/дубль) и расхождение `provides` — в т.ч. `provides.tools[]` ↔ фактические регистрации тулов; `pnpm --filter @itphx/synth-shared build` зелёный |
 | **Ф1 — манифест + `PluginHost`** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-host`, коммитов нет) | Схема манифеста плагина, `PluginHost`-пайплайн (§10), integrity, semver-гейт, реестр активаций, аудит активации. **Исполнение кода выключено по умолчанию**: только resolve/integrity/гейт/скан/аудит, без `import()`. **Сделано:** модуль `engine/plugins/*` (`PluginHost`, контракты активации, `computePluginContentHash`/`verifyPluginIntegrity`, `readExactHostExceptions`), порт `PluginAuditRepository` (файл/память/PG + контрактный suite), ключ `plugins.executionEnabled` (дефолт `false`); seam'ы `PluginLoader`/`PluginScanHook`/`PluginFacade` оставлены под Ф2/Ф3/Ф4 | тест: `PluginHost.activate` доходит до шага «import» и останавливается; несовпадение integrity → отказ; тест аудита: запись `activate`/`deactivate` в `audit/plugins.jsonl` — **выполнено**, см. §«Статус реализации в коде (Ф1)» |
 | **Ф2 — модель доверия** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-trust`, коммитов нет) | Уровни trust, матрица install-policy с ячейкой `kind: "plugin"`, сканер (6+1 категорий, квоты, `content_hash`, кэш сканов, `.skillignore`, бинарные расширения), матрица `severity → verdict`, `quarantine/`, `plugins.lock.json`, порт `PluginAuditRepository` + `{dataDir}/audit/plugins.jsonl`. **Сделано:** встроенный статический сканер (`engine/plugins/scan/*`: правила, `.skillignore`, кэш, дефолтный хук скана), матрица install-policy одной функцией `installPolicyDecision` (`shared`, ячейка `kind: 'plugin'`), раскладка `<home>/plugin/` с карантином и `PLUGIN_INTEGRITY.json` (`engine/plugins/layout.ts`), порт `PluginLockRepository` (файл/память/PostgreSQL + миграция `007_plugin_lock`), аудит-событие `scan` (+ `plugin.approval_required`), шаг trust/scan в `PluginHost` — **trust-floor до install-policy** | тест: вердикт по severity (`info\|low → safe`, `medium → caution`, `high\|critical → dangerous`); квоты → `caution`; бинарник → `dangerous`; `community` + `dangerous` → `block`; trust-floor: `community` устанавливается, но не активируется (`plugin.trust_below_floor`) — **выполнено**, см. §«Статус реализации в коде (Ф2)» |
-| **Ф3 — точки `promptBlocks` + `llmFilters`** — ⚠️ **Ф3а выполнено 2026-10-22** (ветка `feature/plugin-points`, коммитов нет): закрыта точка **`promptBlocks`**; точка **`llmFilters` — Ф3б, не начата** | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений**. **Сделано (Ф3а):** контракт `PromptBlockProvider`/`PromptBlockContext` (`shared`, `types/prompt-blocks.ts`), реестр `PromptBlockRegistry` (`engine/context/prompt-block-registry.ts`), сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`), контекст хода (`query`/`turnId`), бюджет символов блока + обрезка (`status: 'truncated'`), инвалидация `promptStates` по блокам провайдеров (`provider: true`), фасад `PluginFacade.registerPromptBlock` (disposer снимает блок при деактивации), решение fail-closed `plugins.scan='disabled'` + `executionEnabled=true` (`plugin.scan_disabled_with_execution`), **версия правил сканера в ключе кэша сканов** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный — **по части `promptBlocks` выполнено**, см. §«Статус реализации в коде (Ф3а)»; критерии `llmFilters` и сверка `provides.tools[]` ↔ регистрации — **Ф3б** |
+| **Ф3 — точки `promptBlocks` + `llmFilters`** — ✅ **Ф3 выполнено 2026-10-22** (ветка `feature/plugin-points`, коммитов нет): закрыта точка **`promptBlocks`** (Ф3а) и точка **`llmFilters`** (Ф3б); остаток — точка `tools` и контрактный suite расширений (Ф3в) | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений**. **Сделано (Ф3а):** контракт `PromptBlockProvider`/`PromptBlockContext` (`shared`, `types/prompt-blocks.ts`), реестр `PromptBlockRegistry` (`engine/context/prompt-block-registry.ts`), сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`), контекст хода (`query`/`turnId`), бюджет символов блока + обрезка (`status: 'truncated'`), инвалидация `promptStates` по блокам провайдеров (`provider: true`), фасад `PluginFacade.registerPromptBlock` (disposer снимает блок при деактивации), решение fail-closed `plugins.scan='disabled'` + `executionEnabled=true` (`plugin.scan_disabled_with_execution`), **версия правил сканера в ключе кэша сканов** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный — **по части `promptBlocks` выполнено**, см. §«Статус реализации в коде (Ф3а)»; критерии `llmFilters` — **выполнено, см. §«Статус реализации в коде (Ф3б)»**; сверка `provides.tools[]` ↔ регистрации и контрактный suite расширений — **Ф3в** |
 | **Ф4 — два режима исполнения** | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация | тест: плагин в `out-of-process` регистрирует `promptBlocks` и отдаёт блок; неверный токен → 401; недоступный процесс → деградация по `failMode`; контрактный suite порта расширений зелёный |
 | **Ф5 — install/activate: CLI + API + managed deploy-time** | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
 | **Ф6 — UI** | Раздел «Плагины»: список, карточка (trust/scan/hash/version/`contracts`/`host`/`provides`/режим), тумблеры enable/disable, install/update/remove, статус скана | тест UI: карточка показывает trust/scan/hash; переключатель enable вызывает API и обновляет список; i18n-паритет `ru.ts`/`en.ts` зелёный (`parity.test.ts`) |
@@ -1312,6 +1318,135 @@ install-policy для всех 15 ячеек `trust × verdict` + ячейка `
 расширений** (Ф3), два режима исполнения (Ф4), install/activate + API/CLI/UI (Ф5/Ф6), hybrid (Ф7);
 HTTP-роут `/api/v2/settings/plugins` не зарегистрирован (есть типы, схема и runtime-store).
 
+### Статус реализации в коде (Ф3б, 2026-10-22)
+
+Ф3б закрывает **вторую половину Ф3** — точку `llmFilters`: контракт фильтра, реестр, три фазы в
+`GatewayProvider`, политику вето, бюджет времени и семантику отказа, аудит решений, фасад плагина и
+**сверку `provides` ↔ фактические регистрации**. Ветка `feature/plugin-points`, коммитов нет.
+
+**Контракт (в `shared`, browser-safe).**
+
+| Что | Где |
+|---|---|
+| `LlmCallFilter` (`id`/`phase`/`failMode?`/`timeoutMs?`/`inspect(input)`), `LlmFilterInput` (узкий DTO: `phase`/`provider`/`model`/`sessionId?` + поля по фазе), `LlmFilterVerdict` (`allow`/`deny`/`redact` + `reason`/`code`/`redactedContent?`/`redactedTexts?`), `LlmFilterMessage` (роль + текст + `toolCalls?`, без служебных полей `LLMMessage`) | `packages/shared/src/types/llm-filters.ts` (реэкспорт — `types/index.ts`) |
+| Перечни `LLM_FILTER_PHASES` (`pre_request`/`post_response`/`embedding`), `LLM_FILTER_FAIL_MODES` (`open`/`closed`), `LLM_FILTER_VERDICTS` + предикаты `isLlmFilterPhase`/`isLlmFilterFailMode`/`isLlmFilterVerdictKind` | там же |
+| `phaseCanBlock(phase)` — блокировать вызов может только `pre_request`/`embedding`; `post_response` в первой волне — наблюдение (ADR-036 запрещает буферизацию) | там же |
+| `DEFAULT_LLM_FILTER_TIMEOUT_MS = 1000` — единый источник истины для `plugins.llmFilterTimeoutMs` (конфиг/дефолты) и для реестра | там же |
+
+**Реестр (core).**
+
+| Что | Где |
+|---|---|
+| `LlmFilterRegistry` — `register(filter, opts)` (fail-closed: пустой `id`, неизвестная фаза, занятый `id` → `LlmFilterRegistrationError`), возвращает **disposer** (идемпотентный); `unregister`/`get`/`list(phase?)`/`size`/`clear` | `packages/core/src/engine/gateway/llm-filter-registry.ts` |
+| Метаданные регистрации (`LlmFilterRegistrationOptions`): `trustLevel?`, `pluginName?`, `pluginVersion?`, `onAudit?`, `failMode?`, `timeoutMs?`; владелец (плагин) подставляет их через фасад, а не фильтр | там же |
+| Право вето: `canVetoLlmFilter` (`trustLevelRank ≤ rank('trusted')`), порог `LLM_FILTER_VETO_TRUST_LEVEL = 'trusted'`; неуказанное доверие — `community` (fail-closed) | там же |
+| Режим отказа по умолчанию — `defaultLlmFilterFailMode(phase, trust)`: блокирующий класс + право вето → `closed`, иначе `open` | там же |
+| **Runtime-бюджет:** `setDefaultTimeoutMs(ms)` (валидация: положительное конечное число, иначе `RangeError`) + геттер `defaultTimeoutMs`. Действует на **последующие** регистрации; у уже зарегистрированных фильтров бюджет зафиксирован при регистрации. Live-wiring из `RuntimeSettings.plugins.llmFilterTimeoutMs` — **не сделан** (Ф5/Ф6, остаток) | там же |
+
+**Три фазы в `GatewayProvider` ([ADR-036](./adr-036-llm-gateway.md)).**
+
+| Фаза | Seam (фактические пути:строки) | Что видит фильтр | Что может |
+|---|---|---|---|
+| `pre_request` | `gateway-provider.ts:529` — вызов `_applyPreRequestFilters` **после** `saveMap` (карта обфускации сохранена), до отправки провайдеру; сам метод — `:681` | обфусцированные сообщения, текст системного промпта, `tools`, `provider`/`model`/`sessionId` | `allow` — пропустить; `deny` — вызов **не уходит** провайдеру (причина — в текст ошибки и аудит); `redact` — **отклоняется хостом** (нужно переписывать запрос) |
+| `post_response` | `gateway-provider.ts:991` — вызов `_applyPostResponseFilters` в `_auditCompletion` (после output-guard); сам метод — `:889` | полный текст ответа, `usage` | **только наблюдение** (`allow` по факту): `deny`/`redact` отклоняются хостом (`plugin_filter.buffering_required`) — буферизация ответа запрещена ADR-036 |
+| `embedding` | `gateway-provider.ts:352` `embed()` → `:359` `_prepareEmbedding` (метод — `:783`) **до** `_inner.embed` | тексты, уходящие в эмбеддинг (`texts`), `provider`/`model` | `deny` — эмбеддинг не уходит провайдеру; `redact` — тексты заменяются на `redactedTexts` (несовпадение длины/нестроковые элементы → fail-closed `deny`) |
+
+**Путь эмбеддингов: было/стало.** Было: `GatewayProvider.embed` — прямой вызов `_inner.embed` в обход
+guard/обфускации/rate-limit/аудита, а микро-слой (`router/micro/models/embedding-model.ts`) звал
+`provider.embed` через duck-типизированный `ProviderPool` — **мимо gateway вовсе** (дыра инварианта 3).
+Стало: `embed` идёт через `_prepareEmbedding` (фильтры фазы `embedding`, аудит вызова, rate-limit), а
+`ProviderPool` оборачивает провайдера в `GatewayProvider` (`filters` прокинут из оркестратора) — прямых
+вызовов `provider.embed` в микро-слое не осталось. Как следствие, embedding-фаза фильтров **работает**,
+а не только объявлена.
+
+**Чего не может каждая фаза (и почему).**
+
+- `pre_request`: `redact` — не поддерживается, хост отклоняет вердикт (`plugin_filter.redact_unsupported`):
+  правка запроса требует пересборки сообщений/промпта/tools и повторной проверки guard'ами.
+- `post_response`: `deny`/`redact` — не поддерживаются (`plugin_filter.buffering_required`): блокировка или
+  правка ответа требует буферизации всего ответа и задержки первого чанка, а ADR-036 это запрещает.
+- `embedding`: нет rate-limit по пользователю/провайдеру в прежнем смысле и нет обфускации текстов —
+  эмбеддинг-путь использует те же слои, что применимы к тексту без ролей и истории; `redact` ограничен
+  заменой массива `texts` той же длины.
+
+**`failMode` × таймаут/сбой × доверие → поведение.**
+
+| `failMode` | Сбой/таймаут фильтра | Доверие владельца | Поведение | Код в аудите gateway |
+|---|---|---|---|---|
+| `closed` (дефолт блокирующего класса) | да | ≥ `trusted` | вызов **не уходит** провайдеру (`pre_request`/`embedding`) | `plugin_filter.unavailable` (+ `plugin_filter.timeout`/`.error` как причина) |
+| `open` (дефолт наблюдательного класса) | да | любое | вызов идёт как есть, факт в аудите | `plugin_filter.unavailable` |
+| любой | нет | ≥ `trusted`, вердикт `deny` | вызов заблокирован | `plugin_filter.denied` |
+| любой | нет | < `trusted`, вердикт `deny`/`redact` | **понижение до `allow`** (права вето нет), факт в журнале плагинов | `plugin_filter.deny_downgraded` |
+| любой | нет | ≥ `trusted`, вердикт `allow` | вызов идёт | `plugin_filter.allowed` |
+| любой | нет | любое, `post_response` | только наблюдение | `plugin_filter.allowed` / `.buffering_required` |
+
+Бюджет времени: `filter.timeoutMs` > `opts.timeoutMs` (хост-политика регистрации) > бюджет реестра
+(`plugins.llmFilterTimeoutMs`, дефолт 1 000 мс) на момент регистрации.
+
+**Аудит (два журнала, разные перечни).**
+
+- **Аудит gateway** (`AuditLogger`, `type: 'plugin_filter'`): `filterId`/`filterPhase`/`filterTrust`/
+  `filterVerdict`/`filterEffectiveVerdict`/`filterDowngraded`/`filterCode`/`filterTimeoutMs` — видно **все**
+  решения, включая коды хоста `plugin_filter.allowed`/`.timeout`/`.error`/`.redact_unsupported`/
+  `.buffering_required`/`.redact_invalid`. Текст запроса/ответа/эмбеддингов **не пишется**.
+- **Журнал плагинов** (`PluginAuditRepository`, `action: 'filter'`): только **канонические** коды —
+  `plugin_filter.denied` (вызов заблокирован, `outcome: 'rejected'`), `plugin_filter.deny_downgraded`
+  (понижено, `outcome: 'ok'`), `plugin_filter.unavailable` (сбой/таймаут; `outcome` — по эффективному
+  вердикту). Коды хоста в журнал плагинов **не идут**: `PLUGIN_AUDIT_REASONS` не расширяется без решения
+  владельца. Запись содержит плагин/версию/доверие и код; идентификатор фильтра и фаза остаются в аудите
+  gateway.
+
+**Фасад плагина.**
+
+`PluginFacade.registerLlmFilter(filter, opts?)` (`packages/core/src/engine/plugins/activation.ts`,
+опции — `PluginLlmFilterOptions` `{failMode?, timeoutMs?}`) возвращает disposer (снимает фильтр).
+Реализация — `PluginHost` (`packages/core/src/engine/plugins/plugin-host.ts:377`): регистрирует фильтр
+**от имени плагина** (`pluginName`/`pluginVersion`/`trustLevel` из активации — не из манифеста) и
+подставляет `onAudit` в журнал плагинов (`_writeFilterAudit`, `:852`). Реестр передаётся опцией
+`PluginHostOptions.llmFilters` — тот же экземпляр, что у `GatewayProvider` (`orchestrator.getLlmFilters()`,
+`packages/core/src/engine/orchestrator.ts:938`); без реестра точка недоступна (предупреждение + no-op).
+Отказ регистрации (пустой/занятый `id`, неизвестная фаза, недоступный реестр) — **предупреждение в лог,
+активация не падает**; при деактивации фильтры снимаются обратной прокруткой disposers.
+
+**Сверка `provides` ↔ фактические регистрации (Ф3б).**
+
+`diffPackProvides` (`packages/shared/src/types/pack.ts`) вызывается в `PluginHost` **после** `apply()` и
+**до** фиксации активации (шаг `facade`, `plugin-host.ts:431-455`). Сверяются реализации, доведённые до
+кода: `provides.promptBlocks[]` и `provides.llmFilters[]`. Расхождение в **любую** сторону
+(`missing` — объявлено, но не зарегистрировано; `unexpected` — зарегистрировано, но не объявлено) →
+**отказ активации** `plugin.provides_mismatch`: PROP-090 §«Правило соответствия» трактует это как признак
+несогласованной сборки. Перед отказом выполняется обратная прокрутка disposers — отклонённый плагин не
+оставляет блоков/фильтров в живых реестрах. В сообщении об отказе расхождения перечислены **поимённо**
+(«фильтр LLM-вызовов «…» объявлен, но не зарегистрирован»). Учитываются только **успешные** регистрации:
+отклонённая точка (например, тир `stable` у блока) не выглядит как «зарегистрировано».
+`provides.tools[]` в сверку **пока не входит** — точка `tools` ещё не реализована (Ф3в), а манифест
+плагина с тулами обязан объявлять их (§«Правило соответствия»).
+
+**Решения, закрытые в Ф3б.**
+
+| Решение | Как реализовано |
+|---|---|
+| Расхождение `provides` — отказ или предупреждение | **Отказ** активации (`plugin.provides_mismatch`), как требует PROP-090 §«Правило соответствия»; с откатом уже сделанных регистраций |
+| Коды хоста в журнале плагинов | **Не пишутся**: журнал плагинов получает только `denied`/`deny_downgraded`/`unavailable`; коды `allowed`/`timeout`/`error`/`redact_unsupported`/`buffering_required`/`redact_invalid` живут только в аудите gateway (перечень `PLUGIN_AUDIT_REASONS` — закрытый, 23 кода) |
+| Runtime-бюджет фильтра | `LlmFilterRegistry.setDefaultTimeoutMs(ms)` (+ геттер). Действует на последующие регистрации; live-wiring из runtime-настроек — остаток Ф5/Ф6 |
+| Право вето и `redact` в `pre_request` | Вето — только trust ≥ `trusted`; `redact` в `pre_request` отклоняется (`redact_unsupported`), в `embedding` — поддержан, в `post_response` — запрещён (ADR-036) |
+
+**Тесты Ф3б.** `packages/core/src/engine/gateway/gateway-filters.test.ts` (24 кейса: три фазы, вето/понижение,
+таймаут/сбой по `failMode`, аудит `plugin_filter` без текста, пустой реестр — регрессия, эмбеддинги через
+gateway и пул, бюджет: `setDefaultTimeoutMs` меняет только последующие регистрации, явный `timeoutMs`
+приоритетнее, невалидный бюджет → `RangeError`), `packages/core/src/engine/plugins/plugin-host.test.ts`
+(Ф3б: фильтр из плагина применяется — `deny` блокирует вызов и пишет `plugin_filter.denied`; `deactivate()`
+снимает фильтр; `community`-плагин — `deny` понижается до `allow` + `plugin_filter.deny_downgraded`;
+битый фильтр (дубль `id`, пустой `id`) — предупреждение, активация не падает, disposer no-op; без реестра —
+предупреждение; `provides` — объявлено/не зарегистрировано и зарегистрировано/не объявлено → отказ
+`plugin.provides_mismatch` с откатом).
+
+**Остаток после Ф3б.** Точка `tools` + сверка `provides.tools[]` + **контрактный suite расширений**
+(Ф3в); буферизация `post_response` (явная опция, по умолчанию выключена); live-применение
+`plugins.llmFilterTimeoutMs` из runtime-настроек; payload-лог эмбеддингов и их rate-limit в прежней
+семантике; два режима исполнения (Ф4), install/activate + API/CLI/UI (Ф5/Ф6), hybrid (Ф7); HTTP-роут
+`/api/v2/settings/plugins` не зарегистрирован (есть типы, схема и runtime-store).
+
 ## Открытые вопросы
 
 > Закрыто решениями владельца продукта 2026-10-22: форма out-of-process-протокола (HTTP/1.1 + JSON,
@@ -1338,18 +1473,38 @@ HTTP-роут `/api/v2/settings/plugins` не зарегистрирован (е
 > контракт `PromptBlockProvider`/`PromptBlockContext` (`shared`), реестр `PromptBlockRegistry`, сборка
 > блоков в `SystemPromptComposer`, контекст хода (`query`/`turnId`), бюджет символов блока
 > (`plugins.promptBlockMaxChars`, дефолт 4 000) с обрезкой и `status: 'truncated'`, инвалидация
-> `promptStates` по блокам провайдеров, фасад `PluginFacade.registerPromptBlock`. Точка `llmFilters` —
-> **Ф3б, не начата**. **Закрыто реализацией Ф3а:** тир `stable` у провайдера — отказ на регистрации
+> `promptStates` по блокам провайдеров, фасад `PluginFacade.registerPromptBlock`. **Закрыто реализацией
+> Ф3а:** тир `stable` у провайдера — отказ на регистрации
 > (не тихое понижение); `plugins.scan: 'disabled'` вместе с `plugins.executionEnabled: true` —
 > **fail-closed** (`plugin.scan_disabled_with_execution`); **версия правил сканера входит в ключ кэша
 > сканов** (при смене правил — пересчёт, а не попадание в кэш). Остальные открытые вопросы (в т.ч.
 > подтверждение владельца по формату файла точных исключений и режиму `plugins.scan: 'disabled'`) — ниже.
+>
+> **Ф3б слоя выполнена 2026-10-22** (та же ветка): закрыта точка **`llmFilters`** — контракт
+> `LlmCallFilter` (`shared`, `types/llm-filters.ts`), реестр `LlmFilterRegistry`, фильтры в трёх фазах
+> `GatewayProvider` (`pre_request`/`post_response`/`embedding`), право вето только у trust ≥ `trusted`
+> (понижение — `plugin_filter.deny_downgraded`), `failMode`/таймаут, аудит решений (`plugin_filter` в
+> аудите gateway + `action: 'filter'` в журнале плагинов), фасад `PluginFacade.registerLlmFilter` и
+> **сверка `provides` ↔ фактические регистрации** (расхождение — отказ `plugin.provides_mismatch`).
+> **Закрыто реализацией Ф3б:** «что видит и что может каждая фаза» (в т.ч. запрет `redact` в
+> `pre_request`, только наблюдение в `post_response`); путь эмбеддингов «было/стало» (закрыта дыра
+> инварианта 3 — `embed` и микро-слой идут через gateway-контур); правило «коды хоста живут только в
+> аудите gateway» (журнал плагинов получает лишь `denied`/`deny_downgraded`/`unavailable`); механизм
+> runtime-бюджета (`setDefaultTimeoutMs`, live-wiring — остаток). **Осталось:** буферизация
+> `post_response` (явная опция, по умолчанию выключена), live-применение `plugins.llmFilterTimeoutMs` из
+> runtime-настроек, payload-лог и rate-limit эмбеддингов в прежней семантике; точка `tools`, сверка
+> `provides.tools[]` и контрактный suite расширений — Ф3в.
 
 1. **Версии контракта расширений и окно deprecation.** Как версионируется контракт точки
    (`promptBlocks@1`, `llmFilters@1`), сколько релизов живёт старая мажорная версия, что делает
    плагин на несовместимом контракте (отказ активации vs «мягкий» режим).
 2. **Бюджет времени фильтра.** Значение по умолчанию для `timeoutMs` плагинных фильтров и
-   отдельный лимит для embedding-фазы (индексация — latency-чувствительный путь).
+   отдельный лимит для embedding-фазы (индексация — latency-чувствительный путь). **Механизм закрыт
+   Ф3б:** `DEFAULT_LLM_FILTER_TIMEOUT_MS = 1 000`, приоритет `filter.timeoutMs` > хост-опция регистрации >
+   бюджет реестра (`plugins.llmFilterTimeoutMs`), `LlmFilterRegistry.setDefaultTimeoutMs(ms)` меняет
+   бюджет **последующих** регистраций. **Осталось:** live-применение runtime-значения
+   `plugins.llmFilterTimeoutMs` (реестр держит бюджет с момента создания — wiring из
+   `RuntimeSettings.plugins` в Ф5/Ф6) и решение, нужен ли **отдельный** бюджет для embedding-фазы.
 3. **Hot-reload vs restart в managed** — где граница: всегда restart или отдельные плагины допускают
    reload (в managed перезапуск пода = `kubectl rollout restart`, инвариант 24).
 4. **Поддержка схемы каталога при изменении контракта.** Владелец каталога — мы: записи плагинов
@@ -1460,3 +1615,4 @@ HTTP-роут `/api/v2/settings/plugins` не зарегистрирован (е
 - 2026-10-22 — **Ф1 выполнен** (ветка `feature/plugin-host`): модуль `engine/plugins/*` (`PluginHost` — пайплайн resolve → integrity → semver → trust → policy → import → facade, реестр активных плагинов, обратная прокрутка disposers; `computePluginContentHash`/`verifyPluginIntegrity`; `readExactHostExceptions`), журнал аудита плагинов — **отдельный порт** `PluginAuditRepository` (файл `{dataDir}/audit/plugins.jsonl` / память / PostgreSQL, миграция `006-plugin-audit.ts`, контрактный suite), ключ `plugins.executionEnabled` (дефолт `false` — код плагинов не грузится); формат файла точных исключений зафиксирован и **требует подтверждения владельца** (см. «Открытые вопросы» → «Решено 2026-10-22 — формат файла точных исключений»).
 - 2026-10-22 — **Ф2 выполнен** (ветка `feature/plugin-trust`): встроенный статический сканер (`engine/plugins/scan/*` — 7 категорий, квоты `50` файлов / `1024` КиБ суммарно / `256` КиБ на файл, `.skillignore`, кэш `sha256(source \0 sourceUrl \0 contentHash)`, дефолтный хук `PluginScanHook`), матрица install-policy **одной функцией** `installPolicyDecision` (ячейка `kind: 'plugin'`: `safe→allow`, `caution→ask`, `dangerous→block`) в `shared`, раскладка `<home>/plugin/` с `quarantine/` и `PLUGIN_INTEGRITY.json` (`engine/plugins/layout.ts`), порт `PluginLockRepository` (файл/память/PostgreSQL, миграция `007_plugin_lock`, контрактный suite), аудит-событие `scan` + поля `scanVerdict`/`scanPerformed`/`scanFindings` и новый код отказа `plugin.approval_required` (миграция `008_plugin_audit_scan`); в `PluginHost` — **trust-floor до install-policy**; решение по `plugins.scan: 'disabled'` (скан не выполняется, доверие проверяется всегда, в аудите `scanPerformed: false`) — **требует подтверждения владельца**; добавлен раздел «Статус реализации в коде (Ф2)».
 - 2026-10-22 — **Ф3а выполнен** (ветка `feature/plugin-points`): закрыта точка **`promptBlocks`** — контракт `PromptBlockProvider`/`PromptBlockContext`/`PromptBlockContent` (`packages/shared/src/types/prompt-blocks.ts`, тир провайдера ограничен `context`/`volatile` **на уровне типа**), реестр `PromptBlockRegistry` (`engine/context/prompt-block-registry.ts`, fail-closed: пустой ключ / нечисловой `order` / занятый ключ / тир `stable`), сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`: один манифест, одна склейка, одна сортировка по тирам; override `session.settings.systemPrompt` — блоки не добавляются), контекст хода (`query` — только пользовательский текст, `turnId`, `timestamp`; `resolveTurnQuery`), бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000 — `DEFAULT_PROMPT_BLOCK_MAX_CHARS`) с обрезкой голова+хвост и `status: 'truncated'`, деградация (ошибка провайдера → `warning`, блок пуст, **ход не падает**), инвалидация `promptStates` по блокам провайдеров (`PromptBlock.source='provider'` → `PromptBlockState.provider`), фасад `PluginFacade.registerPromptBlock` (disposer снимает блок при деактивации), решения: **fail-closed** `plugins.scan='disabled'` + `plugins.executionEnabled=true` (новый код отказа `plugin.scan_disabled_with_execution`) и **версия правил сканера в ключе кэша сканов** (`PLUGIN_SCAN_RULES_VERSION`); добавлен раздел «Статус реализации в коде (Ф3а)». Точка `llmFilters` — **Ф3б, не начата**.
+- 2026-10-22 — **Ф3б выполнен** (ветка `feature/plugin-points`): закрыта точка **`llmFilters`** — контракт `LlmCallFilter`/`LlmFilterInput`/`LlmFilterVerdict`/`LlmFilterMessage` (`packages/shared/src/types/llm-filters.ts`, browser-safe: только типы и чистые функции; `phaseCanBlock`, `DEFAULT_LLM_FILTER_TIMEOUT_MS = 1000`), реестр `LlmFilterRegistry` (`engine/gateway/llm-filter-registry.ts`: fail-closed регистрация, disposer, `canVetoLlmFilter` — вето только у trust ≥ `trusted`, `defaultLlmFilterFailMode`, `setDefaultTimeoutMs` для runtime-бюджета), фильтры в `GatewayProvider` (три фазы: `pre_request` после `saveMap`, `post_response` — только наблюдение, `embedding` через `_prepareEmbedding`; таймаут `Promise.race`, понижение вето недоверенных, `FILTER_CODES`), **эмбеддинги перестали быть дырой инварианта 3** (`embed` и микро-слой идут через gateway-контур), аудит: `type: 'plugin_filter'` в аудите gateway (без текста) + `action: 'filter'` в журнале плагинов только для канонических кодов (`plugin_filter.denied`/`deny_downgraded`/`unavailable`; коды хоста `allowed`/`timeout`/`error`/`redact_*`/`buffering_required` — только в gateway), фасад `PluginFacade.registerLlmFilter` (владелец — плагин: имя/версия/фактическое доверие; отказ — предупреждение, активация не падает), **сверка `provides` ↔ фактические регистрации** (`diffPackProvides` после `apply()`: `provides.promptBlocks[]`/`provides.llmFilters[]`, расхождение в любую сторону → отказ `plugin.provides_mismatch` с откатом disposers; `provides.tools[]` — вместе с точкой `tools`, Ф3в). Кодов отказа в `PLUGIN_AUDIT_REASONS` — **23** (19 прежних + 3 канонических кода фильтров + `plugin.provides_mismatch`). Добавлен раздел «Статус реализации в коде (Ф3б, 2026-10-22)».

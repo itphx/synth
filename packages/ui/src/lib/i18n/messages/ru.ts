@@ -2505,6 +2505,9 @@ export const dict = {
   'gateway.input_blocked': 'В запросе обнаружены секреты ({reason}). Запрос заблокирован LLM Gateway.',
   'gateway.rate_limit_warning': '⚠️ Превышен лимит запросов. Повторите попытку позже.',
   'gateway.output_secrets_reason': 'секреты в ответе модели',
+  // PROP-090 §«Точка llmFilters»: решения фильтров LLM-вызовов.
+  'gateway.filter_denied': 'Запрос LLM отклонён фильтром расширения ({reason}).',
+  'gateway.filter_unavailable': 'Запрос LLM заблокирован: фильтр расширения недоступен ({reason}).',
 
   // --- Router / провайдеры ---
   'router.timeout': 'Таймаут или разрыв соединения с LLM-провайдером',

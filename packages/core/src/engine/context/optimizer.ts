@@ -5,7 +5,7 @@ import type { LLMMessage } from '../../providers/base.js';
 import { BaseProvider, ProviderFactory } from '../../providers/index.js';
 import { info, warning } from '../../logger.js';
 import { GatewayProvider, ObfuscationMapStore } from '../gateway/index.js';
-import type { AuditLogger, RateLimiter } from '../gateway/index.js';
+import type { AuditLogger, LlmFilterRegistry, RateLimiter } from '../gateway/index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
 
 export interface SummarizationResult {
@@ -39,6 +39,11 @@ export interface ContextOptimizerGatewayHooks {
   obfMapStore: ObfuscationMapStore;
   /** ADR-094: реестр метрик (учёт вызовов суммаризации). */
   metrics?: MetricsRegistry;
+  /**
+   * PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов — суммаризация
+   * тоже LLM-вызов, её видит фаза `pre_request` (`GatewayProvider._prepare`).
+   */
+  filters?: LlmFilterRegistry;
 }
 
 function toCoreProviderConfig(shared: SharedProviderConfig, model: string): { url: string; apiKey: string; model: string; timeout?: number; name?: string; type?: string } {
@@ -641,6 +646,7 @@ export class ContextOptimizer {
       sessionId: session.id,
       userId: session.userId ?? '',
       metrics: hooks.metrics,
+      filters: hooks.filters,
     });
   }
 

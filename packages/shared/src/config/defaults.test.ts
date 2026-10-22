@@ -207,6 +207,8 @@ describe('defaultConfig', () => {
       exactHostExceptions: '',
       promptBlockMaxChars: 4000,
       executionEnabled: false,
+      // PROP-090 §«Точка llmFilters» (Ф3б): бюджет времени фильтра.
+      llmFilterTimeoutMs: 1000,
     });
   });
 });
