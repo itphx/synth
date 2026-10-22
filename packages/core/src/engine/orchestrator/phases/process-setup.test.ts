@@ -303,6 +303,79 @@ describe('runProcessSetup', () => {
     expect(stored.promptStates!.developer).toMatchObject({ reason: 'override', staticPrefix: '' });
   });
 
+  it('PROP-090: «вопрос хода» (текст сообщения пользователя) уходит в контекст композера', async () => {
+    const { id, message } = await makeSession();
+    const deps = makeDeps();
+
+    await runProcessSetup(await makeArgs(id, message), deps);
+
+    expect(deps.buildComposerContext).toHaveBeenCalledWith(
+      expect.objectContaining({ query: 'вопрос', turnId: 'stream1' }),
+    );
+  });
+
+  it('PROP-090: системные/state-сообщения в «вопрос хода» не попадают', async () => {
+    const { id, message } = await makeSession();
+    // Последнее сообщение пользователя — до state-сообщения: state-сообщение
+    // не должно перебивать вопрос хода.
+    await sessionManager.addMessage(id, {
+      id: generateId(),
+      role: MessageRole.SYSTEM,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('РЕЖИМ: act')],
+      content: 'РЕЖИМ: act',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      metadata: { type: 'mode_change', state: true },
+    } as Message);
+    const deps = makeDeps();
+
+    await runProcessSetup(await makeArgs(id, message), deps);
+
+    expect(deps.buildComposerContext).toHaveBeenCalledWith(
+      expect.objectContaining({ query: 'вопрос' }),
+    );
+  });
+
+  it('PROP-090: смена содержимого плагинного блока инвалидирует promptStates', async () => {
+    const { id, message } = await makeSession();
+    const withPluginBlock = (content: string): ComposedPrompt => ({
+      ...composedBase,
+      blocks: [
+        ...composedBase.blocks,
+        { key: 'plugin.demo.memory', tier: 'context', order: 100, content, source: 'provider' },
+      ] as PromptBlock[],
+    });
+    const deps = makeDeps({
+      composer: {
+        compose: vi.fn(async () => withPluginBlock('ПАМЯТЬ-1')),
+      } as unknown as SystemPromptComposer,
+    });
+
+    await runProcessSetup(await makeArgs(id, message), deps);
+    let stored = (await sessionManager.getSession(id))!;
+    expect(stored.promptStates!.developer).toMatchObject({ generation: 1, reason: 'init' });
+    // Блок провайдера помечен в состоянии — по нему ведётся отдельный трек.
+    expect(stored.promptStates!.developer!.blocks).toContainEqual(
+      expect.objectContaining({ key: 'plugin.demo.memory', provider: true }),
+    );
+
+    // Содержимое плагинного блока изменилось, stable-префикс — прежний.
+    const changed = makeDeps({
+      composer: {
+        compose: vi.fn(async () => withPluginBlock('ПАМЯТЬ-2')),
+      } as unknown as SystemPromptComposer,
+    });
+    const outcome = await runProcessSetup(await makeArgs(id, message), changed);
+    expect(outcome.failed).toBe(false);
+
+    stored = (await sessionManager.getSession(id))!;
+    expect(stored.promptStates!.developer).toMatchObject({ generation: 2, reason: 'generation-change' });
+  });
+
   it('инструменты: builtin + MCP активных серверов, stableToolCount = число встроенных', async () => {
     const { id, message } = await makeSession();
     const deps = makeDeps();

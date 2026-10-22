@@ -9,6 +9,8 @@ export * from './message.js';
 export * from './session.js';
 // Промпт: состояние/манифест/история (ADR-070/071)
 export * from './prompt.js';
+// PROP-090 §«Точка promptBlocks»: контракт провайдера блока системного промпта
+export * from './prompt-blocks.js';
 // MCP: реестр серверов, сетевой доступ, уровни/эффективный набор (ADR-071)
 export * from './mcp.js';
 // Проекты, workspace-политика, иконки/цвета, план (ADR-039/075)

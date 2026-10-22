@@ -74,7 +74,7 @@ import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, join
 import { StreamMessageDraft, type StreamMessageRef } from './orchestrator/stream-persistence.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './orchestrator/errors.js';
 import { resolveModelContextWindow, getEffectiveModel, wrapWithGateway, getProvider, routeProvider, type RouteProviderDeps } from './orchestrator/routing.js';
-import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn } from './orchestrator/prompt-info.js';
+import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn, resolveTurnQuery as resolveTurnQueryFn } from './orchestrator/prompt-info.js';
 import { publishLocalCompletion as publishLocalCompletionFn, finishLocalCommand as finishLocalCommandFn, type FinishLocalCommandDeps } from './orchestrator/commands.js';
 import { handleDebugSystemMessage as handleDebugSystemMessageFn, type DebugSystemMessageDeps } from './orchestrator/debug.js';
 import { handleSummarization as handleSummarizationFn, type SummarizationDeps } from './orchestrator/summarization.js';
@@ -1151,11 +1151,16 @@ export class ChatOrchestrator {
     interviewEligible?: boolean;
     /** ADR-051: текущий ход инициирован планировщиком. */
     schedulerCurrentTurn?: boolean;
+    /** PROP-090 §«Точка promptBlocks»: «вопрос хода» (текст сообщения пользователя). */
+    query?: string;
+    /** PROP-090 §«Точка promptBlocks»: идентификатор хода (`streamId`). */
+    turnId?: string;
   }): ComposerContext {
     const {
       session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio, mcpServers, project, toolSelection, debugCollector,
       skillsCatalog, instructions, schedulerActive, interviewEligible, schedulerCurrentTurn,
+      query, turnId,
     } = args;
     return {
       session,
@@ -1190,6 +1195,8 @@ export class ChatOrchestrator {
       instructions,
       schedulerActive,
       schedulerCurrentTurn,
+      ...(query ? { query } : {}),
+      ...(turnId ? { turnId } : {}),
     };
   }
 
@@ -2275,6 +2282,9 @@ export class ChatOrchestrator {
         agentDef, sessionMode, planMode, planApproved, workspaceReady,
       }),
       schedulerCurrentTurn: this._schedulerCurrentTurn(session),
+      // PROP-090 §«Точка promptBlocks»: в диагностике «вопрос хода» — последнее
+      // пользовательское сообщение истории (явного хода нет).
+      query: resolveTurnQueryFn(session),
     });
 
     const manifest = await this._composer.manifest(ctx);

@@ -39,6 +39,7 @@ import type {
 } from '@itphx/synth-shared';
 import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
 import type { PluginAuditRepository } from '../../storage/ports/plugin-audit-repository.js';
+import type { PromptBlockRegistry } from '../context/prompt-block-registry.js';
 import type {
   PluginActivationDescriptor,
   PluginActivationHandle,
@@ -91,6 +92,13 @@ export interface PluginHostOptions {
   dictionaryStore?: DictionaryRepository;
   /** Загрузчик кода — точка расширения Ф3 (`inline`) / Ф4 (`out-of-process`). */
   loader?: PluginLoader;
+  /**
+   * Ф3а: реестр провайдеров блоков системного промпта (точка `promptBlocks`).
+   *
+   * Не задан — точка `promptBlocks` плагину недоступна (регистрация
+   * возвращает no-op disposer с предупреждением в лог).
+   */
+  promptBlocks?: PromptBlockRegistry;
   /** Логгер (по умолчанию — `console.warn`). */
   logger?: PluginLogger;
 }
@@ -112,6 +120,8 @@ export class PluginHost {
    */
   private readonly _builtinScan: PluginScanHook;
   private readonly _loader: PluginLoader | undefined;
+  /** Ф3а: реестр провайдеров блоков системного промпта (точка `promptBlocks`). */
+  private readonly _promptBlocks: PromptBlockRegistry | undefined;
   private readonly _logger: PluginLogger;
   /** Реестр активных плагинов: имя → дескриптор активации. */
   private readonly _activations = new Map<string, PluginActivationHandle>();
@@ -130,6 +140,7 @@ export class PluginHost {
       ...(options.dictionaryStore ? { dictionaryStore: options.dictionaryStore } : {}),
     });
     this._loader = options.loader;
+    this._promptBlocks = options.promptBlocks;
     this._explicitExceptions = options.exactHostExceptions;
     this._logger = options.logger ?? {
       warn: (message: string) => {
@@ -272,6 +283,32 @@ export class PluginHost {
     const facade: PluginFacade = {
       registerDisposer: (disposer: PluginDisposer) => {
         handle.disposers.push(disposer);
+      },
+      // Ф3а: точка `promptBlocks` — регистрация провайдера блока системного
+      // промпта. Отказ (например, тир `stable`) **не роняет** остальные точки
+      // расширения плагина: фиксируется предупреждением, возвращается no-op
+      // disposer (PROP-090, критерии приёмки точки `promptBlocks`).
+      registerPromptBlock: (provider, opts) => {
+        if (!this._promptBlocks) {
+          this._logger.warn(
+            `точка promptBlocks недоступна хосту — плагин «${handle.plugin}» не зарегистрировал блок «${provider?.key ?? '?'}».`,
+          );
+          return () => undefined;
+        }
+        try {
+          const disposer = this._promptBlocks.register(provider, {
+            provenance: `plugin:${handle.plugin}`,
+            ...(opts?.title ? { title: opts.title } : {}),
+          });
+          handle.disposers.push(disposer);
+          return disposer;
+        } catch (err) {
+          this._logger.warn(
+            `регистрация блока промпта «${provider?.key ?? '?'}» отклонена: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+          );
+          return () => undefined;
+        }
       },
     };
 
@@ -460,11 +497,29 @@ export class PluginHost {
    *
    * Скан выключен политикой (`plugins.scan: 'disabled'`) — это **не** ошибка:
    * вердикт по умолчанию `safe`, а в журнале аудита видно, что скана не было
-   * (`scanPerformed: false`).
+   * (`scanPerformed: false`). **Исключение:** если при этом включено
+   * исполнение кода (`plugins.executionEnabled=true`) — активация
+   * отклоняется (fail-closed, `plugin.scan_disabled_with_execution`).
    */
   private async _checkTrust(
     descriptor: PluginActivationDescriptor,
   ): Promise<{ ok: true } | { ok: false; reason: PluginAuditReason; message: string }> {
+    // Решение владельца (Ф3а, 2026-10-22): исполняемый код обязан быть
+    // просканирован. `plugins.scan='disabled'` вместе с
+    // `plugins.executionEnabled=true` — **fail-closed**: активация отклоняется
+    // (без скана нельзя допускать исполнение кода). Проверка — до скана,
+    // чтобы в журнале не оставалось записи «скан выполнен, вердикт safe».
+    if (this._config.scan === 'disabled' && this._config.executionEnabled) {
+      return {
+        ok: false,
+        reason: 'plugin.scan_disabled_with_execution',
+        message:
+          'Сканирование расширений выключено (plugins.scan=disabled), а исполнение кода ' +
+          'плагинов включено (plugins.executionEnabled=true) — активация отклонена: ' +
+          'исполняемый код обязан быть просканирован.',
+      };
+    }
+
     const floor = this._config.trustFloor;
     // Неизвестное доверие — fail-closed: считаем `community` (ниже порога).
     const level: CatalogTrustLevel = descriptor.trustLevel ?? 'community';

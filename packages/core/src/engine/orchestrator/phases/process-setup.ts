@@ -42,7 +42,7 @@ import type { RoutingDecision } from '../../router/router.js';
 import type { LlmFailureContext } from '../errors.js';
 import { syncStateMessages } from '../../context/state-messages.js';
 import { agentKeyOf, buildPromptState, computeExpected, isBlockChanged, isPrefixUnchanged, type PromptStateReason } from '../../context/prompt-state.js';
-import { sessionMessagesToLlm } from '../prompt-info.js';
+import { sessionMessagesToLlm, resolveTurnQuery } from '../prompt-info.js';
 import { DEFAULT_CHARS_PER_TOKEN } from '../../context/token-ratio.js';
 import { t as sm } from '../../system-messages.js';
 import { warning } from '../../../logger.js';
@@ -191,6 +191,10 @@ export interface ProcessSetupDeps {
     schedulerActive?: boolean;
     interviewEligible?: boolean;
     schedulerCurrentTurn?: boolean;
+    /** PROP-090 §«Точка promptBlocks»: текст последнего сообщения пользователя. */
+    query?: string;
+    /** PROP-090 §«Точка promptBlocks»: идентификатор хода (`streamId`). */
+    turnId?: string;
   }) => ComposerContext;
   collectComposerMcpServers: (decisions: McpScopeDecision[]) => ComposerMcpServer[] | undefined;
   interviewEligible: (
@@ -413,6 +417,11 @@ export async function runProcessSetup(
     }),
     // Текущий ход инициирован планировщиком — volatile-пояснение модели.
     schedulerCurrentTurn: deps.schedulerCurrentTurn(session, message),
+    // PROP-090 §«Точка promptBlocks»: контекст текущего хода для провайдеров
+    // блоков промпта — «вопрос хода» (текст последнего сообщения пользователя)
+    // и метка хода. Системные/state-сообщения в вопрос не попадают.
+    query: resolveTurnQuery(session, message),
+    turnId: streamId,
   });
   const composed = await deps.composer.compose(composerCtx);
   // ADR-070 §2.2: в провайдер уходит payload с границей stable-префикса и
@@ -445,7 +454,27 @@ export async function runProcessSetup(
   // контента инструкций отслеживаем отдельно — иначе promptStates/generation
   // не инвалидируются при изменении `AGENTS.md`.
   const instructionsChanged = isBlockChanged(prevPromptState, composed.blocks, 'instructions');
-  if (!prevPromptState || !isPrefixUnchanged(prevPromptState, promptStateInput) || instructionsChanged) {
+  // PROP-090 §«Точка promptBlocks»: блоки провайдеров лежат вне тира `stable`,
+  // поэтому `isPrefixUnchanged` их не видит — трек ведётся отдельно, по
+  // образцу `instructions`. Учитываем и текущие блоки провайдеров, и те, что
+  // были в прошлом состоянии (плагин мог быть деактивирован — блок исчез, а
+  // состояние промпта должно это увидеть).
+  const providerKeys = new Set<string>();
+  for (const block of composed.blocks) {
+    if (block.source === 'provider') providerKeys.add(block.key);
+  }
+  for (const block of prevPromptState?.blocks ?? []) {
+    if (block.provider) providerKeys.add(block.key);
+  }
+  const providerBlocksChanged = [...providerKeys].some((key) =>
+    isBlockChanged(prevPromptState, composed.blocks, key),
+  );
+  if (
+    !prevPromptState
+    || !isPrefixUnchanged(prevPromptState, promptStateInput)
+    || instructionsChanged
+    || providerBlocksChanged
+  ) {
     const reason: PromptStateReason = hasSystemPromptOverride
       ? 'override'
       : prevPromptState

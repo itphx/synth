@@ -6,8 +6,11 @@
  * `plugins.executionEnabled=false`, поэтому шаг `import` останавливается с
  * `plugin.execution_disabled` (ожидаемый исход, а не ошибка).
  */
-import { describe, expect, it, vi } from 'vitest';
-import type { PackManifest, PluginsConfig } from '@itphx/synth-shared';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { PackManifest, PluginsConfig, PromptBlockProvider, Session } from '@itphx/synth-shared';
 import { pluginsConfigSchema } from '@itphx/synth-shared';
 
 import { MemoryPluginAuditRepository } from '../../storage/memory/plugin-audit.js';
@@ -19,6 +22,10 @@ import type {
   PluginModule,
 } from './activation.js';
 import { computePluginContentHash } from './integrity.js';
+import { PromptBlockRegistry } from '../context/prompt-block-registry.js';
+import { SystemPromptComposer, type ComposerContext } from '../context/composer.js';
+import { ContextBuilder } from '../context/builder.js';
+import { ContextConfig } from '../context/config.js';
 
 /** Конфиг слоя плагинов с дефолтами схемы. */
 function config(over: Partial<PluginsConfig> = {}): PluginsConfig {
@@ -71,6 +78,45 @@ function makeHost(
     ...over,
   });
   return { host, audit };
+}
+
+// ── Ф3а: композер для проверки блоков промпта ─────────────────────────
+
+/** Временный каталог с ролями — ContextBuilder читает оттуда ролевой промпт. */
+async function makeUserDataDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'synth-plugin-host-'));
+  await mkdir(join(dir, 'user'), { recursive: true });
+  await mkdir(join(dir, 'roles'), { recursive: true });
+  await writeFile(join(dir, 'roles', 'ASSISTANT.md'), 'ROLE-MARKER', 'utf-8');
+  return dir;
+}
+
+/**
+ * Композер с общим реестром провайдеров (тот же, что у хоста плагинов).
+ *
+ * `userDataDir` — временный каталог с ролями: без него `ContextBuilder` не
+ * находит ролевой промпт, и проверка «блок попал в промпт» зависела бы от
+ * того, что в системе нет постороннего `roles/ASSISTANT.md`.
+ */
+function makeComposer(registry: PromptBlockRegistry, userDataDir: string): SystemPromptComposer {
+  const builder = new ContextBuilder(new ContextConfig({ userDataDir }));
+  return new SystemPromptComposer({ contextBuilder: builder, promptBlocks: registry });
+}
+
+/** Минимальный контекст композера (сессия без проекта). */
+function makeComposerCtx(): ComposerContext {
+  const session = {
+    id: 's1',
+    messages: [],
+    settings: { language: 'ru', agentRole: 'assistant', showInterview: false },
+  } as unknown as Session;
+  return {
+    session,
+    workingDir: '/ws',
+    language: 'ru',
+    routingEnabled: false,
+    gatewayEnabled: false,
+  };
 }
 
 describe('PluginHost: шаг resolve', () => {
@@ -456,6 +502,178 @@ describe('PluginHost: активация, реестр и идемпотентн
     expect(result.reason).toBe('plugin.loader_unavailable');
     expect(host.isActive('demo-plugin')).toBe(false);
     expect(disposed).toEqual(['a']);
+  });
+});
+
+describe('PluginHost: Ф3а — фасад (точка promptBlocks)', () => {
+  /** Каталог с ролями для композера (создаётся на каждый кейс). */
+  let userDataDir: string;
+
+  beforeEach(async () => {
+    userDataDir = await makeUserDataDir();
+  });
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true });
+  });
+
+  it('плагин регистрирует блок промпта → блок в промпте; deactivate() → блок исчезает', async () => {
+    const registry = new PromptBlockRegistry();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      promptBlocks: registry,
+      loader: async () => ({
+        apply: (facade) => {
+          facade.registerPromptBlock({
+            key: 'plugin.demo.memory',
+            tier: 'context',
+            order: 100,
+            load: () => 'ПАМЯТЬ ПЛАГИНА',
+          });
+        },
+      }),
+    });
+
+    const activated = await host.activate(
+      descriptor({
+        manifest: manifest({
+          provides: {
+            ...manifest().provides,
+            promptBlocks: [{ key: 'plugin.demo.memory', tier: 'context', order: 100 }],
+          },
+        }),
+      }),
+    );
+    expect(activated.outcome).toBe('activated');
+    expect(registry.size).toBe(1);
+
+    const composer = makeComposer(registry, userDataDir);
+    const composed = await composer.compose(makeComposerCtx());
+    expect(composed.system).toContain('ПАМЯТЬ ПЛАГИНА');
+    const block = composed.blocks.find((b) => b.key === 'plugin.demo.memory');
+    expect(block?.provenance).toBe('plugin:demo-plugin');
+
+    // Деактивация снимает блок (обратная прокрутка disposers).
+    const deactivated = await host.deactivate('demo-plugin');
+    expect(deactivated.outcome).toBe('ok');
+    expect(registry.size).toBe(0);
+
+    const after = await composer.compose(makeComposerCtx());
+    expect(after.system).not.toContain('ПАМЯТЬ ПЛАГИНА');
+  });
+
+  it('провайдер с тиром stable отклоняется, активация плагина не падает', async () => {
+    const warnings: string[] = [];
+    const registry = new PromptBlockRegistry();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      promptBlocks: registry,
+      logger: { warn: (message: string) => warnings.push(message) },
+      loader: async () => ({
+        apply: (facade) => {
+          facade.registerPromptBlock({
+            key: 'plugin.demo.stable',
+            tier: 'stable',
+            order: 100,
+            load: () => 'НЕ ДОЛЖНО ПОПАСТЬ',
+          } as unknown as PromptBlockProvider);
+        },
+      }),
+    });
+
+    const result = await host.activate(descriptor());
+    expect(result.outcome).toBe('activated');
+    expect(registry.size).toBe(0);
+    expect(warnings.join('\n')).toContain('stable');
+
+    const composer = makeComposer(registry, userDataDir);
+    const composed = await composer.compose(makeComposerCtx());
+    expect(composed.system).not.toContain('НЕ ДОЛЖНО ПОПАСТЬ');
+  });
+
+  it('провайдер, бросающий исключение → ход не падает, блок пуст', async () => {
+    const registry = new PromptBlockRegistry();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      promptBlocks: registry,
+      loader: async () => ({
+        apply: (facade) => {
+          facade.registerPromptBlock({
+            key: 'plugin.demo.broken',
+            tier: 'context',
+            order: 100,
+            load: () => {
+              throw new Error('сбой retrieval');
+            },
+          });
+        },
+      }),
+    });
+
+    // Активация не падает: ошибка провайдера — дело хода, а не регистрации.
+    const result = await host.activate(descriptor());
+    expect(result.outcome).toBe('activated');
+    expect(registry.size).toBe(1);
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const composer = makeComposer(registry, userDataDir);
+      const composed = await composer.compose(makeComposerCtx());
+      expect(composed.system).not.toContain('сбой retrieval');
+      const block = composed.blocks.find((b) => b.key === 'plugin.demo.broken');
+      expect(block).toBeDefined();
+      expect(block!.content).toBe('');
+      expect(block!.status).toBe('empty');
+      // Деградация зафиксирована предупреждением, а не исключением.
+      expect(warn).toHaveBeenCalled();
+      expect(String(warn.mock.calls[0]![0])).toContain('plugin.demo.broken');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('без реестра провайдеров регистрация блока — предупреждение, не падение', async () => {
+    const warnings: string[] = [];
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      logger: { warn: (message: string) => warnings.push(message) },
+      loader: async () => ({
+        apply: (facade) => {
+          facade.registerPromptBlock({
+            key: 'plugin.demo.memory',
+            tier: 'context',
+            order: 100,
+            load: () => 'x',
+          });
+        },
+      }),
+    });
+
+    const result = await host.activate(descriptor());
+    expect(result.outcome).toBe('activated');
+    expect(warnings.join('\n')).toContain('promptBlocks');
+  });
+});
+
+describe('PluginHost: решение владельца — scan=disabled при включённом исполнении', () => {
+  it('plugins.scan=disabled + executionEnabled=true → plugin.scan_disabled_with_execution', async () => {
+    const { host, audit } = makeHost({
+      config: config({ scan: 'disabled', executionEnabled: true }),
+    });
+    const result = await host.activate(descriptor());
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.scan_disabled_with_execution');
+    expect(result.step).toBe('trust');
+
+    // Скан не выполнялся — записи `scan` в журнале нет.
+    const scans = (await audit.list()).filter((entry) => entry.action === 'scan');
+    expect(scans).toHaveLength(0);
+  });
+
+  it('plugins.scan=disabled без исполнения кода — поведение прежнее (активация проходит)', async () => {
+    const { host } = makeHost({ config: config({ scan: 'disabled' }) });
+    const result = await host.activate(descriptor());
+    expect(result.step).toBe('import');
   });
 });
 

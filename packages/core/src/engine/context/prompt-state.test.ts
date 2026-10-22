@@ -73,6 +73,31 @@ describe('buildPromptState', () => {
     expect(next.generation).toBe(2);
     expect(next.reason).toBe('generation-change');
   });
+
+  it('блок провайдера помечается `provider: true` (PROP-090, точка promptBlocks)', () => {
+    const c = {
+      system: 'SYS',
+      stablePrefix: 'STABLE',
+      blocks: [
+        block('role', 'STABLE'),
+        {
+          key: 'plugin.demo.memory',
+          tier: 'context' as const,
+          order: 100,
+          content: 'ПАМЯТЬ',
+          source: 'provider' as const,
+        },
+      ],
+    };
+
+    const state = buildPromptState(c, null, 'init');
+
+    const providerBlock = state.blocks.find((b) => b.key === 'plugin.demo.memory');
+    expect(providerBlock).toBeDefined();
+    expect(providerBlock!.provider).toBe(true);
+    // Встроенные блоки флагом не помечены — он только у провайдеров.
+    expect(state.blocks.find((b) => b.key === 'role')!.provider).toBeUndefined();
+  });
 });
 
 describe('isPrefixUnchanged', () => {

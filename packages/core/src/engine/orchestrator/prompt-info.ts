@@ -130,6 +130,45 @@ export function sessionMessagesToLlm(
 }
 
 /**
+ * PROP-090 §«Точка promptBlocks»: «вопрос хода» — текст последнего сообщения
+ * пользователя (то, по чему идёт retrieval в провайдере блока промпта).
+ *
+ * Правила:
+ * - только сообщения **пользователя** (`role: user`); системные и
+ *   state-сообщения (`role: system`, `metadata.state=true`) — не вопрос;
+ * - сообщения, выключенные из контекста (`disabled`/`hidden`), не берутся:
+ *   в LLM они не уходят, значит и retrieval по ним не идёт;
+ * - сначала — сообщение, которым инициирован ход (`ProcessSetupArgs.message`),
+ *   затем — последнее пользовательское сообщение истории (на случай, если ход
+ *   начат не пользователем: cron/внешнее событие).
+ *
+ * Текст не логируется и не пишется в состояние промпта — он живёт только в
+ * контексте вызова провайдера.
+ */
+export function resolveTurnQuery(session: Session, message?: Message): string | undefined {
+  const candidates: Message[] = [];
+  if (message) candidates.push(message);
+  for (let i = session.messages.length - 1; i >= 0; i--) {
+    const msg = session.messages[i]!;
+    if (!message || msg.id !== message.id) candidates.push(msg);
+  }
+  for (const candidate of candidates) {
+    const text = userQueryText(candidate);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+/** Текст сообщения, если оно является «вопросом хода». */
+function userQueryText(message: Message): string | undefined {
+  if (message.role !== MessageRole.USER) return undefined;
+  if (message.disabled || message.hidden) return undefined;
+  if (message.metadata?.state === true) return undefined;
+  const text = message.content?.trim();
+  return text ? text : undefined;
+}
+
+/**
  * ADR-070 §2.5: состав слоя истории (`messages`) — read-only. Зеркалит
  * реальную отправку через тот же `sessionMessagesToLlm`, что и
  * `_processMessage`, чтобы статистика не расходилась с запросом.

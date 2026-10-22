@@ -436,7 +436,9 @@
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
   Системный промпт (ADR-070): `composer.ts` — `SystemPromptComposer` (единственная точка сборки
   промпта основной сессии и саб-агентов: `compose()` идемпотентно собирает из состояния, `manifest()` —
-  манифест источников; типы `ComposedPrompt`/`PromptBlock`, `ContextSource`-шов `{ key, load(ctx) }`);
+  манифест источников; типы `ComposedPrompt`/`PromptBlock`, **`PromptBlockProvider`-шов**
+  (`{ key, tier, order, load(ctx) }` — точка `promptBlocks`, PROP-090; имя `ContextSource` из
+  `shared/types/provider.ts` — метаданные модели, к промпт-блокам отношения не имеет));
   `prompt-blocks.ts` — тиры `stable`/`context`/`volatile` и детерминированная склейка
   (`sortPromptBlocks`/`joinPromptBlocks`); `prompt-state.ts` — состояние промпта per-agent
   (`agentKeyOf`/`DEFAULT_AGENT_KEY`, `buildPromptState`/`computeExpected`/`validateExpected`, запись
@@ -449,6 +451,28 @@
   Профиль/интервью в промпте резолвит единый `_resolveProfile(userId)` (`loadProfile(userId) ??
   getProfileByUsername(userId)`; `session.userId` — username, профиль ключуется по id-UUID); `profilesStore`
   проброшен и в standalone `ContextBuilder` (`server/app.ts`, `server/chat.ts`).
+  **Реестр блоков промпта (PROP-090 §«Точка `promptBlocks``, Ф3а).**
+  `engine/context/prompt-block-registry.ts` — `PromptBlockRegistry`: реестр провайдеров блоков
+  системного промпта; `register()` — **fail-closed** (пустой ключ / нечисловой `order` / занятый ключ /
+  тир `stable` → `PromptBlockRegistrationError`), возвращает **disposer** (идемпотентный);
+  `unregister`/`get`/`list`/`size`/`clear`. Провайдер (`PromptBlockProvider`,
+  `shared/src/types/prompt-blocks.ts`) вызывается композером **раз в ход**; тир ограничен
+  `context`/`volatile` **на уровне типа** — `stable` запрещён (граница prompt-cache, ADR-070 §2.1).
+  Блоки провайдеров добавляются в `SystemPromptComposer._collectProviderBlocks` — **тот же** массив
+  блоков, что и встроенные (один манифест, одна склейка, одна сортировка по тирам); при
+  `session.settings.systemPrompt` (override) блоки **не добавляются**.
+  Правила: ошибка провайдера → `warning` в лог, блок пуст, **ход не падает**; пустой результат →
+  `status: 'empty'`; содержимое длиннее бюджета → хост обрезает (голова+хвост, свой маркер усечения
+  без `read_file`) и ставит `status: 'truncated'`. **Бюджет символов блока** —
+  `plugins.promptBlockMaxChars` (дефолт 4 000 — `DEFAULT_PROMPT_BLOCK_MAX_CHARS` в `shared`).
+  **Контекст хода** (`PromptBlockContext`): `sessionId`/`agentRole`/`language`/`projectId?`/`mode` +
+  `query?`/`turnId?`/`timestamp?`; `query` — **только текст сообщения пользователя** (не системные и не
+  state-сообщения, не отключённые — `resolveTurnQuery`, `engine/orchestrator/prompt-info.ts`); история
+  сессии наружу не отдаётся. Инвалидация состояния промпта: блоки провайдеров лежат вне тира
+  `stable`, поэтому трек ведётся отдельно (`PromptBlock.source='provider'` →
+  `PromptBlockState.provider`, `isBlockChanged` — как у блока `instructions`).
+  Регистрация из плагина — `PluginFacade.registerPromptBlock` (`engine/plugins/activation.ts`,
+  реализация — `PluginHost`): при отказе — предупреждение в лог, активация плагина не падает.
   Проектные инструкции (ADR-069): `instructions.ts` — `ProjectInstructionsResolver`
   (merged chain `git root → … → workspace`, кандидаты `AGENTS.override.md` > `AGENTS.md` >
   `agents.md` > `CLAUDE.md` (opt-in) > `CONTEXT.md` (deprecated); дедуп sha256;
@@ -586,10 +610,13 @@
   `plugin.contract_mismatch`/`plugin.host_mismatch` (semver), `plugin.trust_below_floor`/
   `plugin.scan_rejected`/`plugin.approval_required` (trust/scan), `plugin.disabled`/
   `plugin.not_allowlisted`/`plugin.denylisted`/`plugin.runtime_install_denied` (policy),
+  `plugin.scan_disabled_with_execution` (trust; Ф3а — **fail-closed**: `plugins.scan='disabled'` вместе
+  с `plugins.executionEnabled=true` → отказ, исполняемый код обязан быть просканирован),
   `plugin.execution_disabled`/`plugin.loader_unavailable` (import/facade), `plugin.already_active`,
   `plugin.not_active`, `plugin.disposer_failed`. Seam'ы: `PluginScanHook` (**Ф2 — закрыт**,
   дефолтная реализация встроенная), `PluginLoader` (Ф3/Ф4 — реализации нет), `PluginFacade`
-  (Ф3 — пока только сбор disposer'ов).
+  (**Ф3а — `registerPromptBlock`**: регистрация провайдера блока промпта с возвратом disposer'а;
+  отказ — предупреждение в лог, активация плагина не падает).
 - `engine/plugins/scan/*` — PROP-090 §9 / PROP-068 §4.3: встроенный статический сканер расширений
   (**advisory**: код не исполняется, сканер лишь выносит вердикт; блокирует матрица install-policy).
   Файлы: `rules.ts` (таблица правил `PLUGIN_SCAN_RULES` по 7 категориям — 6 базовых + `invisible_unicode`;
@@ -599,8 +626,11 @@
   `engine/security/prompt-injection.ts`, свой словарь не заводится; content-hash — **та же** функция
   `computePluginContentHash`, что и в шаге integrity), `ignore.ts` (`.skillignore` в стиле gitignore:
   `#` — комментарий, `!` — отрицание, `/` — только в корне, `*`/`?`/`**`, «последнее совпадение
-  выигрывает»), `cache.ts` (`PluginScanCache`, ключ `sha256(source\0sourceUrl\0contentHash)`,
-  **in-process**, FIFO 100 записей), `hook.ts` (`createPluginScanHook` — дефолтная реализация seam'а
+  выигрывает»), `cache.ts` (`PluginScanCache`, ключ
+  `sha256(версияПравил\0source\0sourceUrl\0contentHash)` — **версия правил входит в ключ**
+  (`PLUGIN_SCAN_RULES_VERSION`, `shared/src/types/plugin-scan.ts`): при изменении правил сканера старый
+  вердикт из кэша **не переиспользуется** — идёт пересчёт; **in-process**, FIFO 100 записей),
+  `hook.ts` (`createPluginScanHook` — дефолтная реализация seam'а
   `PluginScanHook`), `index.ts` — баррел. **Квоты** (`PLUGIN_SCAN_QUOTAS` + `PLUGIN_SCAN_QUOTA_SEVERITIES`,
   `shared/src/types/plugin-scan.ts`): 50 файлов / 1024 КиБ суммарно → `medium` (вердикт не выше `caution`),
   256 КиБ на файл → `high` (`dangerous`).

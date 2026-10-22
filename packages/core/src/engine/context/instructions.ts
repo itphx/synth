@@ -430,6 +430,30 @@ export function truncateHeadTail(
   tailRatio: number,
   displayPath: string,
 ): { content: string; truncated: boolean } {
+  return truncateHeadTailWithMarker(
+    content,
+    budget,
+    headRatio,
+    tailRatio,
+    (offset, limit) => buildTruncationMarker(displayPath, offset, limit),
+  );
+}
+
+/**
+ * Обрезка head/tail с **произвольным** маркером усечения.
+ *
+ * `truncateHeadTail` — частный случай (маркер усечения файла). Общая форма
+ * нужна там, где обрезаемый текст не является файлом: например, блок
+ * системного промпта от провайдера точки `promptBlocks` (PROP-090) — его
+ * маркер усечения не должен предлагать `read_file`.
+ */
+export function truncateHeadTailWithMarker(
+  content: string,
+  budget: number,
+  headRatio: number,
+  tailRatio: number,
+  buildMarker: (offset: number, limit: number) => string,
+): { content: string; truncated: boolean } {
   if (budget <= 0) return { content: '', truncated: content.length > 0 };
   if (content.length <= budget) return { content, truncated: false };
 
@@ -444,14 +468,14 @@ export function truncateHeadTail(
 
   let headLines = countLines(head);
   let droppedLines = Math.max(1, totalLines - headLines - countLines(tail));
-  let marker = buildTruncationMarker(displayPath, headLines, droppedLines);
+  let marker = buildMarker(headLines, droppedLines);
 
   let over = head.length + marker.length + tail.length - budget;
   if (over > 0) {
     head = head.slice(0, Math.max(0, head.length - over));
     headLines = countLines(head);
     droppedLines = Math.max(1, totalLines - headLines - countLines(tail));
-    marker = buildTruncationMarker(displayPath, headLines, droppedLines);
+    marker = buildMarker(headLines, droppedLines);
     over = head.length + marker.length + tail.length - budget;
     if (over > 0) {
       tail = tail.slice(0, Math.max(0, tail.length - over));

@@ -14,6 +14,7 @@ import type {
   McpServerLevel,
   Message,
   Project,
+  PromptBlockContext,
   PromptManifest,
   PromptManifestEntry,
   PromptManifestStatus,
@@ -22,16 +23,28 @@ import type {
   StickyNote,
   ToolsPolicy,
 } from '@itphx/synth-shared';
+import { DEFAULT_PROMPT_BLOCK_MAX_CHARS, PLUGIN_PROMPT_BLOCK_KEY_PREFIX } from '@itphx/synth-shared';
 import type { ContextBuilder } from './builder.js';
 import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-blocks.js';
+import { PromptBlockRegistry } from './prompt-block-registry.js';
 import { formatSkillsCatalogBlock, type ComposerSkillsCatalog } from '../skills/catalog.js';
 import { agentKeyOf } from './prompt-state.js';
 import { RUNTIME_DEP_BINARY, type RuntimeDeps } from '../tools/runtime-deps.js';
 import type { DebugCollector } from '../../debug.js';
+import { warning } from '../../logger.js';
+import { truncateHeadTailWithMarker } from './instructions.js';
 
 /** Эвристика оценки токенов (ADR-070 §2.5, открытый вопрос 4 — chars/4). */
 const EST_TOKENS_DIVISOR = 4;
+
+/**
+ * PROP-090 §«Точка promptBlocks»: доли головы/хвоста при обрезке блока
+ * провайдера по бюджету символов (те же пропорции, что у проектных
+ * инструкций, ADR-069 §5.1).
+ */
+const PROVIDER_BLOCK_HEAD_RATIO = 0.7;
+const PROVIDER_BLOCK_TAIL_RATIO = 0.2;
 
 /** Человекочитаемые подписи блоков манифеста (UI локализует по `key`). */
 const PROMPT_BLOCK_LABELS: Record<string, string> = {
@@ -59,7 +72,26 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   'mcp.status': 'MCP status',
   'skills.catalog': 'Skills catalog',
   'skills.catalog.session': 'Session skills',
+  // PROP-090 §«Точка promptBlocks»: плагинные блоки. Ключ плагина —
+  // динамический (`plugin.<pluginName>.<slot>`), поэтому ниже работает
+  // fallback по префиксу (`promptBlockLabel`).
+  plugin: 'Plugin block',
 };
+
+/**
+ * PROP-090 §«Точка promptBlocks»: подпись блока в манифесте промпта.
+ *
+ * Порядок: явная запись в `PROMPT_BLOCK_LABELS` → подпись провайдера
+ * (`provider.title`) → общая подпись для плагинных ключей → сам ключ.
+ * Так в манифесте не торчит сырой ключ `plugin.<name>.<slot>`.
+ */
+function promptBlockLabel(key: string, title?: string): string {
+  const known = PROMPT_BLOCK_LABELS[key];
+  if (known) return known;
+  if (title) return title;
+  if (key.startsWith(PLUGIN_PROMPT_BLOCK_KEY_PREFIX)) return PROMPT_BLOCK_LABELS.plugin!;
+  return key;
+}
 
 /** ADR-071 §2.6: есть ли непустые административные отключения инструментов. */
 export function hasAdminDisabled(
@@ -68,8 +100,7 @@ export function hasAdminDisabled(
   return !!disabled && (disabled.capabilities.length > 0 || disabled.tools.length > 0);
 }
 
-/** ADR-070 §2.9.1: есть ли отсутствующие во внешнем окружении зависимости. */
-export function hasMissingDeps(deps?: RuntimeDeps): boolean {
+/** ADR-070 §2.9.1: есть ли отсутствующие во внешнем окружении зависимости. */export function hasMissingDeps(deps?: RuntimeDeps): boolean {
   return !!deps && (deps.git === false || deps.rg === false || deps.sh === false);
 }
 
@@ -118,18 +149,21 @@ export interface ComposerMcpServer {
 /**
  * ADR-101 §10: минимальный «session-like» контракт Composer'а.
  *
- * Composer читает из сессии ровно три вещи:
+ * Composer читает из сессии ровно пять вещей:
+ * - `id` — идентификатор сессии (в контексте провайдера блока промпта,
+ *   PROP-090 §«Точка promptBlocks»; для шага пайплайна — `pipeline:<runId>:<nodeId>`);
  * - `settings` — роль агента (`agentRole`), язык (`language`) и override
  *   системного промпта (`systemPrompt`);
  * - `promptStates` — состояние промпта per-agent (`generation`, ADR-070 §2.4);
- * - `projectId` — привязка к проекту (блок `session.info`, ADR-040).
+ * - `projectId` — привязка к проекту (блок `session.info`, ADR-040);
+ * - `mode` — режим сессии (в контексте провайдера блока промпта).
  *
  * Тип построен через `Pick` от **реального** типа `Session`: совместимость
  * обычной сессии с Composer'ом гарантирована компилятором, а не соглашением.
  * Шаг пайплайна — не сессия (ADR-101 §1), поэтому исполнителю шага достаточно
  * этого контракта, а не всей сессии.
  */
-export type ComposerSessionLike = Pick<Session, 'settings' | 'promptStates' | 'projectId'>;
+export type ComposerSessionLike = Pick<Session, 'id' | 'settings' | 'promptStates' | 'projectId' | 'mode'>;
 
 /**
  * ADR-069 §3.3/§11: результат резолва проектных инструкций для блока
@@ -256,6 +290,28 @@ export interface ComposerContext {
    * общая точка, а коллектор живёт в рамках одного сообщения).
    */
   debugCollector?: DebugCollector;
+  /**
+   * PROP-090 §«Точка promptBlocks»: текст последнего сообщения пользователя —
+   * «вопрос хода», по которому идёт retrieval. Не задан — вопроса хода нет
+   * (шаг пайплайна, саб-агент `task`).
+   */
+  query?: string;
+  /**
+   * PROP-090 §«Точка promptBlocks»: идентификатор хода (`streamId`) — для
+   * мемоизации/кэша провайдера.
+   */
+  turnId?: string;
+  /**
+   * PROP-090 §«Точка promptBlocks»: метка времени хода (ISO 8601) — для оценки
+   * «свежести» фактов.
+   */
+  timestamp?: string;
+  /**
+   * PROP-090 §«Точка promptBlocks»: бюджет символов **одного** блока
+   * провайдера (`plugins.promptBlockMaxChars`). Не задан — дефолт
+   * `DEFAULT_PROMPT_BLOCK_MAX_CHARS` (4 000).
+   */
+  promptBlockMaxChars?: number;
 }
 
 export interface ComposedPrompt {
@@ -272,6 +328,11 @@ export interface SystemPromptComposerDeps {
   contextConfig?: ContextFileRepository | null;
   projectStore?: { load(id: string): Promise<Project | null> } | null;
   debugCollector?: DebugCollector;
+  /**
+   * PROP-090 §«Точка promptBlocks»: реестр провайдеров блоков системного
+   * промпта. Не задан — пустой реестр (встроенных блоков это не касается).
+   */
+  promptBlocks?: PromptBlockRegistry;
 }
 
 export class SystemPromptComposer {
@@ -279,12 +340,26 @@ export class SystemPromptComposer {
   private readonly _contextConfig: ContextFileRepository | null;
   private readonly _projectStore: { load(id: string): Promise<Project | null> } | null;
   private readonly _debug: DebugCollector | undefined;
+  /**
+   * PROP-090 §«Точка promptBlocks»: реестр провайдеров блоков. Общий с
+   * загрузчиком плагинов (фасад плагина регистрирует провайдера здесь).
+   */
+  private readonly _promptBlocks: PromptBlockRegistry;
 
   constructor(deps: SystemPromptComposerDeps) {
     this._contextBuilder = deps.contextBuilder;
     this._contextConfig = deps.contextConfig ?? null;
     this._projectStore = deps.projectStore ?? null;
     this._debug = deps.debugCollector;
+    this._promptBlocks = deps.promptBlocks ?? new PromptBlockRegistry();
+  }
+
+  /**
+   * PROP-090 §«Точка promptBlocks»: реестр провайдеров блоков системного
+   * промпта (точка регистрации для фасада плагина).
+   */
+  get promptBlocks(): PromptBlockRegistry {
+    return this._promptBlocks;
   }
 
   /**
@@ -332,7 +407,7 @@ export class SystemPromptComposer {
     // (`sortPromptBlocks`: тир → order), тот же, что в `compose().system`.
     const entries: PromptManifestEntry[] = sortPromptBlocks(blocks).map((block) => ({
       key: block.key,
-      label: PROMPT_BLOCK_LABELS[block.key] ?? block.key,
+      label: promptBlockLabel(block.key, this._promptBlocks.get(block.key)?.title),
       tier: block.tier,
       order: block.order,
       chars: block.content.length,
@@ -642,7 +717,143 @@ export class SystemPromptComposer {
       provenance: session.projectId ? `projects/${session.projectId}` : 'session.info',
     });
 
+    // PROP-090 §«Точка promptBlocks»: блоки от зарегистрированных провайдеров.
+    // Правила (зафиксированы здесь и в PROP-090):
+    //  - при `session.settings.systemPrompt` override блоки провайдеров **не
+    //    добавляются** (то же правило, что для `instructions`/`skills.catalog`:
+    //    пользовательский промпт заменяет систему целиком);
+    //  - тир `stable` провайдеру запрещён (отказ на регистрации, не понижение);
+    //  - ошибка провайдера → `warning` в лог, блок пустой, **ход не падает**;
+    //  - пустой результат → блок со `status: 'empty'` (в промпт не попадает);
+    //  - содержимое длиннее бюджета (`plugins.promptBlockMaxChars`) → хост
+    //    обрезает (голова+хвост с маркером) и ставит `status: 'truncated'`.
+    const providerBlocks = await this._collectProviderBlocks(ctx, override);
+    extraBlocks.push(...providerBlocks);
+
     return [...baseBlocks, ...extraBlocks];
+  }
+
+  /**
+   * PROP-090 §«Точка promptBlocks»: блоки провайдеров блоков системного промпта.
+   *
+   * Провайдеры обходятся в порядке регистрации; итоговый порядок блоков
+   * определяет `sortPromptBlocks` (тир → `order`, tie-break — регистрация).
+   */
+  private async _collectProviderBlocks(
+    ctx: ComposerContext,
+    override: string | undefined,
+  ): Promise<PromptBlock[]> {
+    const registrations = this._promptBlocks.list();
+    if (registrations.length === 0) return [];
+    // Override пользователя заменяет системный промпт целиком — блоки
+    // провайдеров не добавляются (как `instructions`/`skills.catalog`).
+    if (override) return [];
+
+    const budget = ctx.promptBlockMaxChars ?? DEFAULT_PROMPT_BLOCK_MAX_CHARS;
+    const providerCtx = this._providerContext(ctx);
+    const blocks: PromptBlock[] = [];
+
+    for (const registration of registrations) {
+      const { provider } = registration;
+      let content = '';
+      let status: PromptManifestStatus | undefined;
+      let provenance = registration.provenance;
+
+      try {
+        const loaded = await provider.load(providerCtx);
+        if (loaded == null) {
+          content = '';
+        } else if (typeof loaded === 'string') {
+          content = loaded;
+        } else {
+          content = loaded.content ?? '';
+          provenance = loaded.provenance ?? provenance;
+          status = loaded.status;
+        }
+      } catch (err) {
+        // Деградация: ошибка провайдера не роняет ход (PROP-090 §«Правила»).
+        warning(
+          'PROMPT',
+          `Провайдер блока промпта «${provider.key}» завершился ошибкой: ` +
+          `${err instanceof Error ? err.message : String(err)} — блок пуст, ход продолжается.`,
+        );
+        content = '';
+        status = 'empty';
+      }
+
+      if (content === '') {
+        blocks.push({
+          key: provider.key,
+          tier: provider.tier,
+          order: provider.order,
+          content: '',
+          ...(provenance ? { provenance } : {}),
+          status: status ?? 'empty',
+          source: 'provider',
+        });
+        continue;
+      }
+
+      // Бюджет символов блока: провайдер обязан уложиться, иначе хост обрезает
+      // (голова+хвост с маркером усечения — как у проектных инструкций,
+      // ADR-069 §5.1; маркер свой: блок провайдера не файл, `read_file` здесь
+      // неуместен).
+      if (content.length > budget) {
+        const truncated = truncateHeadTailWithMarker(
+          content,
+          budget,
+          PROVIDER_BLOCK_HEAD_RATIO,
+          PROVIDER_BLOCK_TAIL_RATIO,
+          (offset, limit) =>
+            `\n\n[TRUNCATED: блок «${provider.key}» обрезан хостом ` +
+            `(бюджет ${budget} символов; строк пропущено: ${limit})]\n\n`,
+        );
+        blocks.push({
+          key: provider.key,
+          tier: provider.tier,
+          order: provider.order,
+          content: truncated.content,
+          ...(provenance ? { provenance } : {}),
+          status: 'truncated',
+          source: 'provider',
+        });
+        continue;
+      }
+
+      blocks.push({
+        key: provider.key,
+        tier: provider.tier,
+        order: provider.order,
+        content,
+        ...(provenance ? { provenance } : {}),
+        ...(status ? { status } : {}),
+        source: 'provider',
+      });
+    }
+
+    return blocks;
+  }
+
+  /**
+   * PROP-090 §«Точка promptBlocks»: узкий контекст вызова провайдера.
+   *
+   * Только DTO: история сессии наружу не отдаётся (контракт должен оставаться
+   * сериализуемым, PROP-090 §7).
+   */
+  private _providerContext(ctx: ComposerContext): PromptBlockContext {
+    const agentRole = ctx.agentRole ?? ctx.agentDef?.id ?? ctx.session.settings.agentRole ?? '';
+    const language = ctx.language || ctx.session.settings.language || 'ru';
+    const projectId = ctx.session.projectId;
+    return {
+      sessionId: ctx.session.id,
+      agentRole,
+      language,
+      ...(projectId ? { projectId } : {}),
+      mode: ctx.session.mode ?? 'act',
+      ...(ctx.query ? { query: ctx.query } : {}),
+      ...(ctx.turnId ? { turnId: ctx.turnId } : {}),
+      ...(ctx.timestamp ? { timestamp: ctx.timestamp } : {}),
+    };
   }
 
   /**
