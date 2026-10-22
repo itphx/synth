@@ -390,3 +390,20 @@
   3. Pull-secret `git.itphx.ru` — **namespace-скоупен**: в новом namespace его не было ⇒ `ErrImagePull`/`ImagePullBackOff`; SealedSecret сгенерирован и добавлен в values.
 - **Подтверждено фактами:** health `{"status":"healthy","version":"0.11.4"}` HTTP 200; UI `/` HTTP 200; toolchain в образе: `git /usr/bin/git`, `rg /usr/bin/rg`, `node /usr/local/bin/node`, `/opt/synth/browser/chrome` → Google Chrome for Testing 155.0.8059.12, `playwright-mcp` 0.0.83.
 - **Откат:** убрать путь `test-allinone` из `paths` в `gitrepo.yaml` + `kubectl apply -f gitrepo.yaml` (Fleet снесёт бандл/релиз); PVC переживёт (`keepOnUninstall: true`).
+
+## 2026-10-22 — All-in-one: подтверждён inline-исполнитель и браузерные MCP-тулы в процессе control plane
+- **Задача:** завершить проверку сценария all-in-one (C) — доказать, что в нём (а) инструменты исполняются в процессе control plane и (б) работают браузерные MCP-тулы.
+- **Тип:** infra
+- **Исполнитель:** @orchestrator (проверка выполнена напрямую — предыдущий агент исчерпал лимит шагов на правке pull-secret)
+- **Результат:** PASS
+- **Как проверял:** ROPC-вход `POST /auth/login` (корневой путь; ответ — cookie `user_session`, а не bearer), далее `POST /api/v2/sessions` c `settings.agentRole` (не `agentId`!) и `POST /api/v2/sessions/:id/prompt` c `{content}` → SSE-поток; транскрипт — `GET /api/v2/sessions/:id/messages`.
+- **Доказательства (все-in-one, namespace `synth-allinone`):**
+  - **inline-исполнение:** ход «Выполни `echo allinone-inline-ok` инструментом execute_shell» → `[tool] [CONTENT | SOURCE: shell | trust: untrusted] allinone-inline-ok` — команда исполнилась **в процессе control plane** (исполнителей нет, `SYNTH_EXECUTION_*` в env нет).
+  - **браузерные MCP-тулы:** ход с `playwright-mcp_browser_navigate` (`data:text/html,<h1>allinone-ok</h1>`) → `[tool] [CONTENT | SOURCE: mcp | trust: untrusted] … Page URL: data:text/html,<h1>allinone-ok</h1>`; затем `playwright-mcp_browser_evaluate` → `### Result "allinone-ok"`. MCP-сервер поднят **самим core** (stdio, из `backend.config.mcp.servers`), не исполнителем.
+- **Найдено по пути (важно для эксплуатации):** в новом инстансе доступны только модели из config: `itphx/omn.qwen3.8:27b` (дефолт) и `ollama/deepseek-coder-v2:16b`.
+  - `omn.qwen3.8:27b` **не вызывает инструменты** — отвечает приветствием («Привет! Я готов помочь») при любой формулировке промпта; тулы при этом в промпте есть (блок `mcp.servers` в системном промпте, описания `[MCP:playwright-mcp]`);
+  - `ollama/deepseek-coder-v2:16b` инструменты **не поддерживает**: «registry.ollama.ai/library/deepseek-coder-v2:16b does not support tools»;
+  - рабочая модель — `itphx/routerai.deepseek/deepseek-v4-flash` (в основном инстансе она зарегистрирована и даже default; в новом инстансе реестра моделей нет, но роутер принимает такую строку в `settings.model` сессии) ⇒ **для новых инстансов модель надо заводить в реестр моделей** — иначе агент «не работает» при полностью исправной платформе;
+  - `settings.agentRole` (а не `agentId`) — поле выбора агента при создании сессии.
+- **Правка UI (коммит `20851ad9`, `master`, не запушен):** `docker/nginx-ui.conf` → `docker/nginx-ui.conf.template`, `proxy_pass ${SYNTH_BACKEND_URL}` (5 вхождений), `ENV NGINX_ENVSUBST_FILTER=SYNTH_BACKEND_URL` (в конфиге 16 nginx-переменных `$host`/`$remote_addr`/… — без фильтра envsubst их бы уничтожил), `ENV SYNTH_BACKEND_URL=http://synth-backend:5000` (прежнее поведение); чарт: helper `synth.ui.backendUrl` — по умолчанию Service backend'а **своего** релиза, переопределение — `ui.extraEnv`. Проверено на собранном образе: `nginx -T` → `proxy_pass http://synth-backend:5000;` при сохранённых `proxy_set_header Host $host;`; с `-e SYNTH_BACKEND_URL=…` — подстановка. Побочно выяснилось: имя Service задаёт `backend.nameOverride`/`backend.fullnameOverride` (корневой `nameOverride` — нет), поэтому «второй инстанс в одном namespace» чинится правильно, без alias-Service.
+- **Прочее:** устаревшие ссылки на старое имя файла — в `docker-compose.yml` и ADR-044 — поправлены (`495ba8ca`).
