@@ -7,6 +7,15 @@ metadata:
     app.kubernetes.io/component: backend
 spec:
   type: {{ .Values.backend.service.type }}
+  {{- /* Sticky-сессии: шина событий in-process, поэтому при нескольких репликах
+         control plane клиент и его WS-соединение должны попадать на один под.
+         "None" — дефолт Kubernetes, поле не рендерим: дефолтный манифест
+         Service не меняется побайтово. */ -}}
+  {{- with .Values.backend.service.sessionAffinity }}
+  {{- if ne . "None" }}
+  sessionAffinity: {{ . }}
+  {{- end }}
+  {{- end }}
   ports:
     - port: {{ .Values.backend.service.port }}
       targetPort: {{ .Values.backend.service.targetPort }}

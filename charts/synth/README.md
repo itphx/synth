@@ -22,6 +22,9 @@ Backend самодостаточен (встроенный движок + хра
 не разворачивается. Backend всегда 1 реплика (`backend.replicaCount`), чарт не
 разворачивает HA: файловое хранилище не масштабируется, а PostgreSQL-бэкенд в
 этом чарте — смена носителя данных, не переход на мультирепличный режим.
+Если реплик несколько — нужны sticky-сессии (`backend.service.sessionAffinity`),
+иначе теряются события чата (шина событий in-process): см. «Sticky-сессии при
+нескольких репликах backend».
 
 ## Требования
 
@@ -118,6 +121,7 @@ ingress:
 | `backend.extraEnv` | `{}` | Доп. env для backend |
 | `backend.restartMode` | `process` | Restart из UI: `process` \| `supervisor` \| `disabled` (env `SYNTH_RESTART_MODE`, см. «Перезапуск инстанса из UI») |
 | `backend.config` | `{}` | Декларативный `config.yaml` backend (монтируется в `/etc/synth`); сюда же домерживается секция `storage` из значений ниже |
+| `backend.service.sessionAffinity` | `None` | Sticky-сессии Service backend'а: `None` \| `ClientIP`. Нужно при `backend.replicaCount > 1` — шина событий in-process (см. «Sticky-сессии при нескольких репликах backend») |
 | `storage.backend` | `file` | Backend хранения (ADR-097): `file` \| `memory` \| `postgres` |
 | `storage.postgres.host` | `""` | Хост БД (при `backend: postgres`) |
 | `storage.postgres.port` | `5432` | Порт БД |
@@ -197,6 +201,35 @@ ingress:
 | `installerKey.tokenKey` | `token` | Ключ внутри Secret с plaintext-токеном (для аддонов) |
 | `caCert` | `""` | PEM внутреннего CA (опционально) |
 | `extraObjects` | `[]` | Произвольные дополнительные манифесты (рендерятся как есть) |
+
+## Sticky-сессии при нескольких репликах backend
+
+Шина событий Synth — **in-process** (`packages/core/src/events/bus.ts`, ADR-077): событие,
+опубликованное в реплике A, не доходит до WS/SSE-клиента, подключённого к реплике B. Поэтому при
+`backend.replicaCount > 1` клиент (браузер) и его WS-соединение должны попадать на один под —
+это и даёт `backend.service.sessionAffinity: ClientIP` на Service backend'а:
+
+```yaml
+backend:
+  replicaCount: 2
+  service:
+    sessionAffinity: ClientIP
+```
+
+По умолчанию `None` — обычная балансировка, поле в манифест Service не попадает (дефолтный рендер
+чарта не меняется побайтово).
+
+**Оговорки — sticky по IP это компромисс:**
+
+- пользователи за одним NAT делят один под;
+- смена IP клиента (сеть оператора, VPN, мобильный интернет) перебрасывает его на другой под —
+  события текущей сессии могут «потеряться» до переподключения WS;
+- в типовой схеме чарта (ingress → UI nginx → Service backend'а) к backend'у подключается **пода UI**,
+  поэтому `ClientIP` сводит весь трафик UI к одной реплике backend'а: события не теряются, но и
+  нагрузка не распределяется. Распределение появится, когда источником соединения будет сам клиент
+  (прямой доступ к Service backend'а) — либо когда шина событий станет внешней;
+- полноценное решение — **внешний транспорт событий** (общий broker/шина между репликами вместо
+  in-process) — это отдельная задача, sticky-сессии её не заменяют.
 
 ## Наблюдаемость
 

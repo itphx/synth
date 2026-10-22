@@ -34,6 +34,14 @@
 6. **Шов внедрения** — `ctx.extra.executionPort` (`packages/core/src/execution/tool-port.ts`): порт кладёт
    оркестратор, тулы и не-туловые точки (резолвер проектных инструкций, детект зависимостей, inline-shell) берут
    **тот же** порт через композицию.
+7. **Несколько реплик control plane — sticky-сессии как текущий компромисс.** Шина событий Synth —
+   **in-process** (`packages/core/src/events/bus.ts`): событие, опубликованное в реплике A, не доходит
+   до WS/SSE-клиента, подключённого к реплике B, поэтому при `backend.replicaCount > 1` чат и стримы
+   ломаются. Дёшевое лечение — прибить клиента к реплике: `sessionAffinity: ClientIP` на Service
+   control plane (`backend.service.sessionAffinity` в чарте). Это компромисс: sticky по IP делит под
+   между пользователями за одним NAT и перебрасывает клиента при смене IP. Полноценное решение —
+   **внешний транспорт событий** (общая шина между репликами вместо in-process) — отдельная задача;
+   sticky-сессии её не заменяют, а лишь делают multireplica control plane безопасным на текущем этапе.
 
 ## Альтернативы
 
@@ -83,6 +91,11 @@
   токен — из Secret (backend получает **файлом**, worker — **значением** в env), fail-closed проверки
   рендера (неизвестный `mode`/`failMode`, отсутствие адреса, `executor.enabled` без workspace,
   accessMode ≠ RWX); при `executor.enabled: false` рендер чарта побайтово не меняется.
+- **Sticky-сессии control plane (подготовка к мультирепличности):** `charts/synth/values.yaml`
+  (`backend.service.sessionAffinity` — `None` по умолчанию), шаблон
+  `charts/synth/templates/backend-service.yaml` (поле рендерится только для значения, отличного от
+  `None`, — дефолтный манифест Service не меняется побайтово); подробности и оговорки — README чарта
+  («Sticky-сессии при нескольких репликах backend»).
 - **Остаток:** метрики `synth_executor_*` и runbook переключения топологии (шаг 7d), перенос `simple-git`
   и MCP-stdio в исполнитель (шаги 8–9, фазы 2–3 матрицы), правка `packages/core/AGENTS.md` под порт
   исполнения.

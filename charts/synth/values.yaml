@@ -35,6 +35,12 @@ backend:
     port: 5000
     targetPort: 5000
 
+    # Sticky-сессии: при backend.replicaCount > 1 клиент (браузер) и его
+    # WS-соединение должны попадать на один под — шина событий in-process,
+    # иначе события теряются между репликами. None (по умолчанию) — обычная
+    # балансировка; ClientIP — привязка по IP клиента.
+    sessionAffinity: None
+
   # Хранилище JSON-данных Synth (сессии, проекты, провайдеры, настройки).
   persistence:
     enabled: true
