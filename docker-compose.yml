@@ -311,7 +311,9 @@ services:
     profiles:
       - split
 
-  # UI (nginx + SPA) — проксирует API на `synth-backend` (см. docker/nginx-ui.conf).
+  # UI (nginx + SPA) — проксирует API на `synth-backend` (см.
+  # docker/nginx-ui.conf.template: nginx-конфиг — шаблон, адрес backend'а
+  # берётся из `SYNTH_BACKEND_URL`, дефолт в образе — `http://synth-backend:5000`).
   synth-ui:
     build:
       context: .
@@ -323,8 +325,9 @@ services:
     # Зависимость от backend'а НЕ объявляется: имя сервиса различается в
     # профилях (`synth-backend` в all-in-one, `synth-backend-split` в split —
     # с алиасом `synth-backend` в сети). nginx проксирует API на DNS-имя
-    # `synth-backend` (docker/nginx-ui.conf), поэтому отдельная зависимость
-    # не нужна.
+    # `synth-backend` (docker/nginx-ui.conf.template; адрес backend'а — из
+    # `SYNTH_BACKEND_URL`, дефолт в образе — `http://synth-backend:5000`),
+    # поэтому отдельная зависимость не нужна.
     restart: unless-stopped
     profiles:
       - all-in-one

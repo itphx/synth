@@ -32,7 +32,7 @@ px-ширинами, действия видны только по hover, чат
 | 12 | PWA | **ручной app-shell**: статический `manifest.webmanifest` + минимальный `sw.js` (runtime-кэш шела; `/api,/ws,/auth,/admin,/health` не кэшируются; навигация network-first → офлайн-заглушка) |
 | 13 | Иконки | 192/512/maskable/apple — сгенерированы из логотипа (`font` `rsvg-convert`/ImageMagick) в `public/icons/` |
 | 14 | Инсталл | `usePwaInstall` + `PwaInstallButton` (`beforeinstallprompt`) — кнопка в мобильном хедере; регистрация SW только в prod |
-| 15 | Раздача | `docker/nginx-ui.conf`: MIME `.webmanifest` + `no-cache` для `/sw.js`, `/manifest.webmanifest`; `packages/core/src/server/app.ts`: MIME `.webmanifest` + `no-cache` для sw/manifest |
+| 15 | Раздача | `docker/nginx-ui.conf.template` (шаблон nginx; адрес backend'а — из `SYNTH_BACKEND_URL`): MIME `.webmanifest` + `no-cache` для `/sw.js`, `/manifest.webmanifest`; `packages/core/src/server/app.ts`: MIME `.webmanifest` + `no-cache` для sw/manifest |
 
 ## Особенности реализации
 
@@ -74,7 +74,7 @@ px-ширинами, действия видны только по hover, чат
 - Регистрация SW только в `import.meta.env.PROD`.
 
 ### Раздача
-- `docker/nginx-ui.conf`: `location = /manifest.webmanifest { default_type application/manifest+json; add_header Cache-Control "no-cache"; }` и `location = /sw.js { ... no-cache, no-store, must-revalidate }`.
+- `docker/nginx-ui.conf.template` (шаблон nginx, `envsubst`; адрес backend'а — из `SYNTH_BACKEND_URL`): `location = /manifest.webmanifest { default_type application/manifest+json; add_header Cache-Control "no-cache"; }` и `location = /sw.js { ... no-cache, no-store, must-revalidate }`.
 - `packages/core/src/server/app.ts`: `MIME_TYPES['.webmanifest'] = 'application/manifest+json'`; `Cache-Control: no-cache` для `.html`, `.webmanifest` и `sw.js`.
 
 ### Фиксы логина (в рамках этой работы)
@@ -93,4 +93,4 @@ px-ширинами, действия видны только по hover, чат
 - `packages/ui/src/hooks/usePwaInstall.ts`, `components/layout/PwaInstallButton.tsx`
 - `packages/ui/public/{manifest.webmanifest, sw.js, icons/*}`
 - `packages/ui/index.html`
-- `docker/nginx-ui.conf`, `packages/core/src/server/app.ts`
+- `docker/nginx-ui.conf.template`, `packages/core/src/server/app.ts`
