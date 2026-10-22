@@ -295,6 +295,14 @@ services:
       - SYNTH_EXECUTOR_WORKSPACE=/var/synth/data/workspaces
       - SYNTH_EXECUTOR_HOST=0.0.0.0
       - SYNTH_EXECUTOR_PORT=5100
+      # MCP-хостинг (ADR-077 шаг B1): env SYNTH_EXECUTOR_MCP_SERVERS задаётся
+      # только у flavor'ов с браузером. Здесь профиль `split` собирает
+      # `target: core` (alpine, без Chromium), поэтому переменная НЕ задаётся —
+      # серверов нет. Для браузерных инструментов переключите сборку на
+      # `target: full` (debian + Playwright) — образ уже несёт дефолт
+      # `[{"name":"playwright-mcp",...,"--executable-path","/opt/synth/browser/chrome"}]`;
+      # либо задайте свой список и `--executable-path` на стабильный симлинк
+      # (в контейнере нужны `--headless --no-sandbox`).
     volumes:
       - synth-workspace:/var/synth/data/workspaces
     expose:

@@ -36,6 +36,10 @@
 #   * системные зависимости Chromium (шрифты, libnss3, libgbm1, xvfb и пр.)
 #     ставит сам Playwright (`install --with-deps`).
 #   * `libxml2-utils` — apt-пакет с `xmllint`.
+#   * стабильные симлинки на браузер: `/opt/synth/browser/chrome` (и
+#     `headless-shell`) → фактический `chromium-<ревизия>/...`. Версия ревизии
+#     в конфигурации не хардкодится, а `playwright-mcp` без `--executable-path`
+#     ищет Google Chrome, которого в образе нет.
 #
 # Скрипт distro-aware: сам выбирает `apk` (alpine) или `apt-get` (debian).
 # Идемпотентен, неинтерактивен, без `local` (POSIX sh).
@@ -136,6 +140,49 @@ if [ ! -d "$PLAYWRIGHT_BROWSERS_PATH" ]; then
     echo "install-tier-3.sh: браузеры Playwright не установлены в $PLAYWRIGHT_BROWSERS_PATH" >&2
     exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# Стабильные симлинки на браузер
+# ---------------------------------------------------------------------------
+#
+# Путь к Chromium **версионно-зависим**: `chromium-<ревизия>/chrome-linux64/chrome`
+# (ревизия меняется вместе с парой `playwright`/`@playwright/mcp` — сейчас 1247).
+# Хардкодить номер ревизии в конфигурации нельзя: при обновлении пина браузер
+# остался бы «не найден» без единой ошибки сборки. Поэтому после установки
+# создаём стабильные симлинки `/opt/synth/browser/chrome` (и, при наличии,
+# `headless-shell`), резолвя фактический каталог по glob.
+#
+# Зачем это вообще нужно: сам `playwright-mcp` по умолчанию ищет **Google
+# Chrome** (`/opt/google/chrome/chrome`), которого в образе нет, и падает с
+# `Chromium distribution 'chrome' is not found`. Флага `--browser chromium`
+# не существует (`--browser` = chrome|firefox|webkit|msedge), рабочий путь —
+# `--executable-path`. Конфигурация исполнителя (ENV в Dockerfile.executor)
+# указывает на стабильный симлинк, а не на версионный каталог.
+BROWSER_LINK_DIR=/opt/synth/browser
+
+# `ls -d` без совпадений печатает ошибку в stderr и возвращает ненулевой код,
+# но в пайпе статус берётся от `tail` — сборку это не роняет (fail-closed —
+# проверка ниже). `sort -V` выбирает старшую ревизию, если каталогов несколько.
+CHROME_BIN=$(ls -d "$PLAYWRIGHT_BROWSERS_PATH"/chromium-[0-9]*/chrome-linux64/chrome 2>/dev/null \
+    | sort -V | tail -n 1)
+if [ -z "$CHROME_BIN" ] || [ ! -x "$CHROME_BIN" ]; then
+    echo "install-tier-3.sh: Chromium не найден в $PLAYWRIGHT_BROWSERS_PATH (chromium-*/chrome-linux64/chrome)" >&2
+    echo "install-tier-3.sh: симлинк /opt/synth/browser/chrome не создан — сборка остановлена" >&2
+    exit 1
+fi
+
+mkdir -p "$BROWSER_LINK_DIR"
+ln -sfn "$CHROME_BIN" "$BROWSER_LINK_DIR/chrome"
+
+# headless-shell — отдельный бинарь Playwright (используется headless-режимом);
+# его может не быть в неполной установке, поэтому симлинк — при наличии.
+HEADLESS_SHELL_BIN=$(ls -d "$PLAYWRIGHT_BROWSERS_PATH"/chromium_headless_shell-[0-9]*/chrome-headless-shell-linux64/chrome-headless-shell 2>/dev/null \
+    | sort -V | tail -n 1)
+if [ -n "$HEADLESS_SHELL_BIN" ] && [ -x "$HEADLESS_SHELL_BIN" ]; then
+    ln -sfn "$HEADLESS_SHELL_BIN" "$BROWSER_LINK_DIR/headless-shell"
+fi
+
+echo "install-tier-3.sh: стабильный симлинк $BROWSER_LINK_DIR/chrome → $CHROME_BIN"
 
 # Индекс apt после установки системных зависимостей Chromium не нужен —
 # уменьшаем слой (иначе в образе остаётся ~40 МБ списков и deb-архивов).

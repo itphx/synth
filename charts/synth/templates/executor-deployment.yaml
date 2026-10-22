@@ -71,6 +71,19 @@ spec:
               value: {{ .Values.executor.limits.maxTimeoutMs | int64 | quote }}
             - name: SYNTH_EXECUTOR_MAX_OUTPUT_BYTES
               value: {{ .Values.executor.limits.maxOutputBytes | int64 | quote }}
+            {{- /* MCP-серверы, которые исполнитель хостит у себя (ADR-077, шаг
+                   B1). Пустой список → env не выставляется: действует дефолт
+                   образа (у flavor'ов с браузером — Playwright MCP).
+                   enabled: false → пустое значение = «серверов нет». */}}
+            {{- with .Values.executor.mcp }}
+            {{- if not .enabled }}
+            - name: SYNTH_EXECUTOR_MCP_SERVERS
+              value: ""
+            {{- else if .servers }}
+            - name: SYNTH_EXECUTOR_MCP_SERVERS
+              value: {{ .servers | toJson | quote }}
+            {{- end }}
+            {{- end }}
           volumeMounts:
             {{- /* Общий том workspace: те же файлы, что у control plane. */}}
             - name: workspace

@@ -216,6 +216,19 @@ RUN set -eux; \
     sh /tmp/synth-install/install-diag.sh; \
     rm -rf /tmp/synth-install
 
+# MCP-серверы по умолчанию — только во flavor'ах с браузером (`browser`/`full`,
+# стадия `full` наследует ENV). В `core`/`dev`/`devops` переменная не задаётся:
+# браузера там нет, и дефолт молча поднимал бы заведомо падающий сервер.
+#
+# Playwright MCP: `playwright-mcp` по умолчанию ищет **Google Chrome**
+# (`/opt/google/chrome/chrome`), которого в образе нет (браузеры Playwright
+# лежат в `PLAYWRIGHT_BROWSERS_PATH`), поэтому нужен `--executable-path` на
+# стабильный симлинк tier 3. `--headless` — в контейнере нет дисплея;
+# `--no-sandbox` — контейнер по умолчанию работает под root (uid 0), без флага
+# Chromium не стартует (при запуске под uid 1000 флаг безвреден).
+# Отключить дефолт: `SYNTH_EXECUTOR_MCP_SERVERS=''` (пустая строка = серверов нет).
+ENV SYNTH_EXECUTOR_MCP_SERVERS='[{"name":"playwright-mcp","command":"playwright-mcp","args":["--headless","--no-sandbox","--executable-path","/opt/synth/browser/chrome"]}]'
+
 # Рантайм исполнителя (см. стадию `core`).
 COPY --from=build /out/app /app
 COPY --from=build /out/core /opt/synth-core

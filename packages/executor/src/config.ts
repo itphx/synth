@@ -15,18 +15,27 @@
  * | `SYNTH_EXECUTOR_MAX_CONCURRENCY` | нет | `4` | лимит одновременных команд |
  * | `SYNTH_EXECUTOR_MAX_TIMEOUT_MS` | нет | `120000` | потолок таймаута команды |
  * | `SYNTH_EXECUTOR_MAX_OUTPUT_BYTES` | нет | `10485760` | потолок буфера вывода |
+ * | `SYNTH_EXECUTOR_MCP_SERVERS` | нет | `[]` | MCP-серверы, которые исполнитель хостит у себя (JSON-массив) |
  *
  * **Fail-closed**: без токена или без корня workspace процесс не стартует —
  * исполнитель без аутентификации или без границы рабочего каталога опаснее,
  * чем отсутствие исполнителя (ADR-077 §безопасность). Нечисловые значения —
  * тоже ошибка (явная настройка оператора не должна молча превращаться в дефолт).
+ * `SYNTH_EXECUTOR_MCP_SERVERS` разбирается **строго**: невалидный JSON или
+ * невалидное описание сервера — тоже ошибка старта (иначе оператор посчитал бы
+ * серверы поднятыми, а они не поднялись). **Пустая строка — это «серверов
+ * нет»**, а не ошибка: так отключается дефолт из образа (`ENV` во flavor'ах с
+ * браузером, см. `docker/Dockerfile.executor`).
  *
  * Токен читается из env **один раз** при старте и удаляется из `process.env`
  * (см. `scrubExecutorToken`): иначе он попадёт в окружение дочерних процессов
- * и утечёт в текст команды, который видит модель.
+ * и утечёт в текст команды, который видит модель. Так же вычищается
+ * `SYNTH_EXECUTOR_MCP_SERVERS` (в нём могут быть токены MCP-серверов) —
+ * см. `scrubExecutorMcpServers`.
  */
 
 import { EXECUTOR_PROTOCOL_VERSION } from './protocol.js';
+import type { McpServerSpec } from './mcp.js';
 
 /** Env-имена исполнителя. */
 export const EXECUTOR_ENV = {
@@ -37,6 +46,7 @@ export const EXECUTOR_ENV = {
   maxConcurrency: 'SYNTH_EXECUTOR_MAX_CONCURRENCY',
   maxTimeoutMs: 'SYNTH_EXECUTOR_MAX_TIMEOUT_MS',
   maxOutputBytes: 'SYNTH_EXECUTOR_MAX_OUTPUT_BYTES',
+  mcpServers: 'SYNTH_EXECUTOR_MCP_SERVERS',
 } as const;
 
 /** Дефолты исполнителя. */
@@ -64,6 +74,8 @@ export interface ExecutorConfig {
   maxTimeoutMs: number;
   /** Потолок буфера вывода, байт. */
   maxOutputBytes: number;
+  /** MCP-серверы, которые исполнитель хостит у себя (stdio). */
+  mcpServers: McpServerSpec[];
 }
 
 function requireEnvString(env: NodeJS.ProcessEnv, name: string): string {
@@ -119,7 +131,91 @@ export function resolveExecutorConfig(env: NodeJS.ProcessEnv = process.env): Exe
       EXECUTOR_ENV.maxOutputBytes,
       EXECUTOR_DEFAULTS.maxOutputBytes,
     ),
+    mcpServers: parseMcpServerSpecs(env[EXECUTOR_ENV.mcpServers], EXECUTOR_ENV.mcpServers),
   };
+}
+
+/**
+ * Разбор описаний MCP-серверов исполнителя (JSON-массив в env).
+ *
+ * Формат:
+ *
+ * ```json
+ * [{"name":"playwright-mcp","command":"playwright-mcp","args":["--no-sandbox"],"env":{}}]
+ * ```
+ *
+ * Разбор **строгий**: невалидный JSON, не-массив, не-объект, отсутствующие
+ * `name`/`command`, не-строковые `args`/`env` или повторяющиеся имена — ошибка
+ * (fail-closed при старте). Молчаливый пропуск сломанной записи означал бы,
+ * что оператор считает серверы поднятыми, а они не поднялись.
+ *
+ * Значения `env` — секреты (токены хостингов): они не логируются и не
+ * возвращаются в ответах API (см. `mcp.ts`).
+ *
+ * @param raw значение env (пустое/незаданное — ни одного сервера)
+ * @param envName имя переменной (для понятного текста ошибки)
+ * @throws Error при невалидном значении
+ */
+export function parseMcpServerSpecs(raw: string | undefined, envName: string): McpServerSpec[] {
+  if (raw === undefined) return [];
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (err) {
+    throw new Error(
+      `[executor] невалидный JSON в ${envName}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`[executor] ${envName} должен быть JSON-массивом описаний MCP-серверов`);
+  }
+
+  const specs: McpServerSpec[] = [];
+  const names = new Set<string>();
+  parsed.forEach((item, index) => {
+    const where = `${envName}[${index}]`;
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw new Error(`[executor] ${where}: описание MCP-сервера должно быть объектом`);
+    }
+    const record = item as Record<string, unknown>;
+    const name = typeof record.name === 'string' ? record.name.trim() : '';
+    if (name.length === 0) {
+      throw new Error(`[executor] ${where}: обязательное поле name (имя MCP-сервера)`);
+    }
+    if (names.has(name)) {
+      throw new Error(`[executor] ${where}: имя MCP-сервера "${name}" уже используется`);
+    }
+    names.add(name);
+    const command = typeof record.command === 'string' ? record.command.trim() : '';
+    if (command.length === 0) {
+      throw new Error(`[executor] ${where} ("${name}"): обязательное поле command (команда запуска)`);
+    }
+    let args: string[] = [];
+    if (record.args !== undefined) {
+      if (!Array.isArray(record.args) || !record.args.every((arg) => typeof arg === 'string')) {
+        throw new Error(`[executor] ${where} ("${name}"): поле args должно быть массивом строк`);
+      }
+      args = [...(record.args as string[])];
+    }
+    const env: Record<string, string> = {};
+    if (record.env !== undefined) {
+      if (typeof record.env !== 'object' || record.env === null || Array.isArray(record.env)) {
+        throw new Error(`[executor] ${where} ("${name}"): поле env должно быть объектом`);
+      }
+      for (const [key, value] of Object.entries(record.env as Record<string, unknown>)) {
+        if (typeof value !== 'string') {
+          throw new Error(`[executor] ${where} ("${name}"): env.${key} должно быть строкой`);
+        }
+        env[key] = value;
+      }
+    }
+    specs.push({ name, command, args, env });
+  });
+
+  return specs;
 }
 
 /**
@@ -131,6 +227,19 @@ export function resolveExecutorConfig(env: NodeJS.ProcessEnv = process.env): Exe
  */
 export function scrubExecutorToken(env: NodeJS.ProcessEnv = process.env): void {
   delete env[EXECUTOR_ENV.token];
+}
+
+/**
+ * Убрать описание MCP-серверов из `process.env`.
+ *
+ * В `SYNTH_EXECUTOR_MCP_SERVERS` могут быть **токены** MCP-серверов (например,
+ * `GITHUB_PERSONAL_ACCESS_TOKEN`). Если оставить переменную в окружении
+ * процесса, её увидит любая агентская команда (`env`, `printenv`) — то есть
+ * модель. Значения остаются в памяти (в `ExecutorConfig.mcpServers`) и
+ * передаются MCP-серверам **явно** при спавне.
+ */
+export function scrubExecutorMcpServers(env: NodeJS.ProcessEnv = process.env): void {
+  delete env[EXECUTOR_ENV.mcpServers];
 }
 
 /** Версия wire-протокола (в ответе `/capabilities` и `/health`). */

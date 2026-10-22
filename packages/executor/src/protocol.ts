@@ -34,14 +34,38 @@
  *
  * `reason` — либо одна из причин порта (`timeout` | `aborted` | `spawn_failed` |
  * `nonzero_exit` | `max_output`), либо протокольная причина
- * (`invalid_request` | `cwd_outside_workspace` | `unauthorized` |
+ * (`invalid_request` | `cwd_outside_workspace` | `unauthorized` | `not_found` |
  * `too_many_requests` | `internal_error`).
+ *
+ * ## MCP-эндпоинты (протокол 2)
+ *
+ * Исполнитель **хостит MCP-серверы у себя** (stdio) — это основа для
+ * браузерных и tier-4 инструментов в split-режиме, где control plane тонкий,
+ * а toolchain живёт в исполнителе (ADR-077, шаг B1).
+ *
+ * - `GET /mcp/servers` → `[{ name, status, toolCount, error? }]` — состояние
+ *   серверов (`idle` — не поднимался, `up` — работает, `down` — упал);
+ *   значения `env` **не отдаются**;
+ * - `GET /mcp/tools` → `[{ server, name, description, inputSchema }]` — инструменты
+ *   всех **поднятых** серверов (серверы, которые не удалось поднять,
+ *   пропускаются — их причина видна в `/mcp/servers`);
+ * - `POST /mcp/call` — тело `{ server, tool, arguments? }` → `{ content, isError }`;
+ *   неизвестный сервер/инструмент → `404`, ошибка MCP → `500` с текстом ошибки
+ *   (без секретов).
  */
 
 import type { ExecCommand } from '@itphx/synth-core';
 
-/** Версия wire-протокола исполнителя. */
-export const EXECUTOR_PROTOCOL_VERSION = 1;
+/**
+ * Версия wire-протокола исполнителя.
+ *
+ * **2** — добавлены MCP-эндпоинты (`/mcp/servers`, `/mcp/tools`,
+ * `/mcp/call`). Старый исполнитель (версия 1) их не знает ⇒ control plane и
+ * исполнитель обязаны быть **одной версии** (ADR-077, операционное следствие
+ * шага A: инвентарь пула приходит от исполнителя, а не вычисляется на
+ * стороне control plane).
+ */
+export const EXECUTOR_PROTOCOL_VERSION = 2;
 
 /** Причина неудачи на проводе. */
 export type ExecutorErrorReason =
@@ -61,6 +85,8 @@ export type ExecutorErrorReason =
   | 'cwd_outside_workspace'
   /** Нет или неверный bearer-токен. */
   | 'unauthorized'
+  /** Запрошенный ресурс не найден (неизвестный MCP-сервер/инструмент). */
+  | 'not_found'
   /** Превышен лимит одновременных команд. */
   | 'too_many_requests'
   /** Прочие ошибки сервера. */
@@ -132,19 +158,88 @@ export interface ExecutorHealth {
 }
 
 /**
+ * Статус MCP-сервера у исполнителя (`GET /mcp/servers`).
+ *
+ * Значения `env` сервера **не отдаются** — только имя, состояние, число
+ * инструментов и причина последней ошибки (без секретов).
+ */
+export interface McpServerStatusBody {
+  name: string;
+  /** `idle` — настроен, но ещё не поднимался; `up` — работает; `down` — упал. */
+  status: 'idle' | 'up' | 'down';
+  toolCount: number;
+  /** Причина последней ошибки (без секретов). */
+  error?: string;
+}
+
+/** Инструмент MCP-сервера в плоском виде (`GET /mcp/tools`). */
+export interface McpToolInfoBody {
+  /** Имя сервера-источника. */
+  server: string;
+  /** Имя инструмента в MCP-сервере (без префикса сервера). */
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+/** Тело запроса `POST /mcp/call`. */
+export interface McpCallRequestBody {
+  /** Имя MCP-сервера. */
+  server: string;
+  /** Имя инструмента в сервере. */
+  tool: string;
+  /** Аргументы вызова. */
+  arguments?: Record<string, unknown>;
+}
+
+/** Тело ответа `POST /mcp/call`. */
+export interface McpCallResultBody {
+  /** Текстовый результат вызова. */
+  content: string;
+  /** Инструмент отработал с ошибкой (сам вызов состоялся). */
+  isError: boolean;
+}
+
+/** Разбор тела запроса `POST /mcp/call` → валидный запрос или причина отказа. */
+export function parseMcpCallRequestBody(
+  body: unknown,
+): { ok: true; value: McpCallRequestBody } | { ok: false; message: string } {
+  if (typeof body !== 'object' || body === null) {
+    return { ok: false, message: 'тело запроса должно быть JSON-объектом' };
+  }
+  const raw = body as Record<string, unknown>;
+  if (typeof raw.server !== 'string' || raw.server.trim().length === 0) {
+    return { ok: false, message: 'поле server обязательно: имя MCP-сервера' };
+  }
+  if (typeof raw.tool !== 'string' || raw.tool.trim().length === 0) {
+    return { ok: false, message: 'поле tool обязательно: имя инструмента MCP-сервера' };
+  }
+  const value: McpCallRequestBody = { server: raw.server.trim(), tool: raw.tool.trim() };
+  if (raw.arguments !== undefined) {
+    if (typeof raw.arguments !== 'object' || raw.arguments === null || Array.isArray(raw.arguments)) {
+      return { ok: false, message: 'поле arguments должно быть объектом' };
+    }
+    value.arguments = raw.arguments as Record<string, unknown>;
+  }
+  return { ok: true, value };
+}
+
+/**
  * HTTP-код ответа по классу ошибки.
  *
  * - `400` — некорректный запрос или `cwd` вне workspace;
  * - `401` — нет/неверный токен;
+ * - `404` — запрошенный ресурс не найден (неизвестный MCP-сервер/инструмент);
  * - `429` — превышен лимит одновременных команд;
  * - `500` — прочие ошибки исполнения (включая ненулевой код выхода).
  */
-export type ExecErrorStatus = 400 | 401 | 429 | 500;
+export type ExecErrorStatus = 400 | 401 | 404 | 429 | 500;
 
 export const EXEC_ERROR_STATUS: Record<ExecutorErrorReason, ExecErrorStatus> = {
   invalid_request: 400,
   cwd_outside_workspace: 400,
   unauthorized: 401,
+  not_found: 404,
   too_many_requests: 429,
   timeout: 500,
   aborted: 500,

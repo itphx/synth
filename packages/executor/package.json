@@ -28,7 +28,9 @@
   },
   "dependencies": {
     "@itphx/synth-shared": "workspace:*",
-    "hono": "^4.9.0"
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "hono": "^4.9.0",
+    "zod": "^3.24.0"
   },
   "peerDependencies": {
     "@itphx/synth-core": "workspace:*"

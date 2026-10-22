@@ -6,11 +6,13 @@ import {
   detectRuntimeDeps,
   isRuntimeDepAvailable,
   probeBinary,
+  refreshRuntimeDeps,
   resetRuntimeDepsCache,
   runtimeDepUnavailableDetail,
   runtimeRequires,
   toolRuntimeRequires,
 } from './runtime-deps.js';
+import type { RuntimeDeps } from './runtime-deps.js';
 import type { ExecRequest, ExecResult, ExecutionPort } from '../../execution/ports/index.js';
 
 /** Порт-заглушка: отвечает о своих возможностях, команды не выполняет. */
@@ -170,5 +172,158 @@ describe('runtime-deps: детект через порт (ADR-077)', () => {
     } else {
       expect(runtimeDepUnavailableDetail(deps, 'rg')).toBeUndefined();
     }
+  });
+});
+
+/** Порт с изменяемым составом: «исполнитель поднялся» между вызовами детекта. */
+class MutableCapabilityPort implements ExecutionPort {
+  readonly probes: string[] = [];
+
+  constructor(public available: Record<string, boolean>) {}
+
+  async execute(_req: ExecRequest): Promise<ExecResult> {
+    throw new Error('порт-заглушка не выполняет команды');
+  }
+
+  async probe(bin: string): Promise<boolean> {
+    this.probes.push(bin);
+    return this.available[bin] ?? false;
+  }
+
+  async capabilitySummary(bin: string): Promise<{
+    available: boolean;
+    missing: number;
+    total: number;
+    unreachable: number;
+  }> {
+    const available = this.available[bin] ?? false;
+    return { available, missing: available ? 0 : 1, total: 1, unreachable: 0 };
+  }
+}
+
+/** Порт, проба которого падает (детект не может определить состав). */
+class FailingProbePort implements ExecutionPort {
+  async execute(_req: ExecRequest): Promise<ExecResult> {
+    throw new Error('порт-заглушка не выполняет команды');
+  }
+
+  async probe(): Promise<boolean> {
+    throw new Error('пул исполнителей не ответил');
+  }
+}
+
+/**
+ * ADR-077: бессрочный кэш детекта был дефектом — ложный negative («sh нет»),
+ * снятый при старте рядом с ещё не поднявшимся исполнителем, залипал до
+ * перезапуска процесса. Теперь запись живёт `RUNTIME_DEPS_CACHE_TTL_MS`.
+ */
+describe('runtime-deps: TTL-кэш детекта (ADR-077)', () => {
+  const TTL = 60_000;
+
+  beforeEach(() => {
+    resetRuntimeDepsCache();
+  });
+
+  it('в пределах TTL повторного вызова порта нет (дедупликация)', async () => {
+    const port = new MutableCapabilityPort({ git: true, rg: true, sh: true });
+    const first = detectRuntimeDeps(port, { ttlMs: TTL, now: 0 });
+    await first;
+
+    const second = detectRuntimeDeps(port, { ttlMs: TTL, now: TTL - 1 });
+
+    expect(second).toBe(first);
+    expect(port.probes).toEqual(['git', 'rg', 'sh']);
+  });
+
+  it('внеочередной (параллельный) вызов не создаёт лавину проб', async () => {
+    const port = new MutableCapabilityPort({ git: true, rg: true, sh: false });
+    const first = detectRuntimeDeps(port, { ttlMs: TTL, now: 0 });
+    const second = detectRuntimeDeps(port, { ttlMs: TTL, now: 0 });
+
+    expect(second).toBe(first);
+    await Promise.all([first, second]);
+    expect(port.probes).toEqual(['git', 'rg', 'sh']);
+
+    // После истечения окна — одна новая проба на все параллельные вызовы.
+    const third = detectRuntimeDeps(port, { ttlMs: TTL, now: TTL });
+    const fourth = detectRuntimeDeps(port, { ttlMs: TTL, now: TTL });
+    expect(fourth).toBe(third);
+    await Promise.all([third, fourth]);
+    expect(port.probes).toEqual(['git', 'rg', 'sh', 'git', 'rg', 'sh']);
+  });
+
+  it('TTL истёк → перепроба порта (удалённый режим)', async () => {
+    const port = new MutableCapabilityPort({ git: true, rg: true, sh: false });
+    const before = await detectRuntimeDeps(port, { ttlMs: TTL, now: 0 });
+    expect(before.sh).toBe(false);
+    expect(runtimeDepUnavailableDetail(before, 'sh')).toBeTruthy();
+
+    // Исполнитель поднялся — состав пула изменился.
+    port.available.sh = true;
+
+    const after = await detectRuntimeDeps(port, { ttlMs: TTL, now: TTL });
+
+    expect(after).not.toBe(before);
+    expect(after.sh).toBe(true);
+    expect(runtimeDepUnavailableDetail(after, 'sh')).toBeUndefined();
+    expect(port.probes).toHaveLength(6);
+  });
+
+  it('inline: TTL соблюдается, перепроба локальная (поведение прежнее)', async () => {
+    const first = detectRuntimeDeps(undefined, { ttlMs: TTL, now: 0 });
+    const firstDeps = await first;
+
+    // В пределах окна — тот же промис (пробы нет).
+    expect(detectRuntimeDeps(undefined, { ttlMs: TTL, now: TTL - 1 })).toBe(first);
+
+    // После окна — новая локальная проба; результат тот же (окружение не менялось).
+    const second = detectRuntimeDeps(undefined, { ttlMs: TTL, now: TTL });
+    expect(second).not.toBe(first);
+    const secondDeps = await second;
+
+    expect(secondDeps).toEqual(firstDeps);
+    expect(secondDeps.sh).toBe(true);
+    // Деталь недоступности inline — общего вида, без формулировок про пул.
+    if (secondDeps.git === false) {
+      expect(runtimeDepUnavailableDetail(secondDeps, 'git')).not.toContain('пула');
+    }
+  });
+
+  it('refreshRuntimeDeps: обновляет снимок по месту (тот же объект)', async () => {
+    const port = new MutableCapabilityPort({ git: true, rg: true, sh: false });
+    const snapshot: RuntimeDeps = { git: true, rg: true, sh: false };
+    await refreshRuntimeDeps(snapshot, port, { ttlMs: TTL, now: 0 });
+    expect(snapshot.sh).toBe(false);
+    expect(snapshot.details?.sh).toBeTruthy();
+
+    port.available.sh = true;
+    const returned = await refreshRuntimeDeps(snapshot, port, { ttlMs: TTL, now: TTL });
+
+    // Ссылка та же (снимок разделяется с точкой сборки), значения — свежие.
+    expect(returned).toBe(snapshot);
+    expect(snapshot.sh).toBe(true);
+    // Устаревшая деталь снята, а не осталась висеть от прошлого снимка.
+    expect(snapshot.details).toBeUndefined();
+  });
+
+  it('refreshRuntimeDeps: ошибка детекта оставляет прежний снимок (fail-open)', async () => {
+    const snapshot: RuntimeDeps = {
+      git: false,
+      rg: true,
+      sh: true,
+      details: { git: 'git: отсутствует в 1 из 1 адресов пула' },
+    };
+    const returned = await refreshRuntimeDeps(snapshot, new FailingProbePort(), {
+      ttlMs: TTL,
+      now: 0,
+    });
+
+    expect(returned).toBe(snapshot);
+    expect(snapshot).toEqual({
+      git: false,
+      rg: true,
+      sh: true,
+      details: { git: 'git: отсутствует в 1 из 1 адресов пула' },
+    });
   });
 });

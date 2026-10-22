@@ -70,6 +70,8 @@ export interface PipelineMcpManagerLike {
   getServerOrigin(name: string): McpRegistryOrigin;
   /** Системный мастер-флаг записи реестра (`McpRegistryEntry.enabled`). */
   isServerSystemEnabled(name: string): boolean;
+  /** ADR-077 (шаг B2): сервер поднят пулом исполнителей (system-level runtime). */
+  isExecutorServer?(name: string): boolean;
 }
 
 /** Минимальный контракт резолвера проектных инструкций (ADR-069). */
@@ -276,6 +278,7 @@ function resolveMcpDecisions(
     name,
     origin: manager.getServerOrigin(name),
     systemEnabled: manager.isServerSystemEnabled(name),
+    ...(manager.isExecutorServer?.(name) === true ? { executor: true } : {}),
   }));
   return resolveMcpProjectScope(servers, project?.mcp);
 }

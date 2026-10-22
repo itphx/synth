@@ -19,7 +19,31 @@ export interface McpToolResult {
   isError: boolean;
 }
 
-const MAX_TOOL_RESULT = 30_000;
+/** Потолок длины текста результата MCP-вызова, символов (общий с исполнителем). */
+export const MAX_TOOL_RESULT_CHARS = 30_000;
+
+/**
+ * Поверхность MCP-клиента (ADR-077, шаг B2).
+ *
+ * `McpManager` работает с клиентом через этот интерфейс, а не через конкретный
+ * класс: транспорт может быть локальным (`McpClient` — stdio/HTTP) или
+ * удалённым (`ExecutorMcpClient` — HTTP API исполнителя). Регистрация тулов,
+ * вызов, circuit breaker и permissions — **один** путь для обоих (инвариант 5).
+ */
+export interface McpClientLike {
+  readonly name: string;
+  readonly isConnected: boolean;
+  readonly tools: McpToolDef[];
+  /** ADR-071 §2.2: `instructions` из MCP initialize (если сервер отдал). */
+  readonly instructions?: string | undefined;
+  connect(): Promise<void>;
+  disconnect(): Promise<void>;
+  callTool(
+    name: string,
+    args: Record<string, unknown>,
+    meta?: Record<string, unknown>,
+  ): Promise<McpToolResult>;
+}
 
 export class McpClient {
   private _name: string;
@@ -131,8 +155,8 @@ export class McpClient {
           .map((c) => c.text!);
 
         let content = textParts.join('\n') || 'Инструмент выполнен (пустой результат)';
-        if (content.length > MAX_TOOL_RESULT) {
-          content = content.slice(0, MAX_TOOL_RESULT) + `\n\n...(усечено, полный размер: ${content.length} символов)`;
+        if (content.length > MAX_TOOL_RESULT_CHARS) {
+          content = content.slice(0, MAX_TOOL_RESULT_CHARS) + `\n\n...(усечено, полный размер: ${content.length} символов)`;
         }
 
         return {

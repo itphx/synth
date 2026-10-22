@@ -1,5 +1,5 @@
 /**
- * HTTP-сервер исполнителя (ADR-077, шаг 7a).
+ * HTTP-сервер исполнителя (ADR-077, шаг 7a; MCP-хостинг — шаг B1).
  *
  * Транспорт — HTTP/1.1 + JSON (как весь Synth — на Hono). Роуты:
  *
@@ -7,11 +7,15 @@
  * |---|---|---|---|
  * | `POST` | `/exec` | выполнить команду | bearer-токен |
  * | `GET` | `/capabilities` | версия протокола и состав toolchain'а | bearer-токен |
+ * | `GET` | `/mcp/servers` | состояние MCP-серверов исполнителя | bearer-токен |
+ * | `GET` | `/mcp/tools` | инструменты поднятых MCP-серверов | bearer-токен |
+ * | `POST` | `/mcp/call` | вызов инструмента MCP-сервера | bearer-токен |
  * | `GET` | `/health` | liveness исполнителя | без токена |
  *
  * Коды ответов — по классу ошибки (`EXEC_ERROR_STATUS`): `400` — некорректный
- * запрос или `cwd` вне workspace, `401` — нет/неверный токен, `429` — превышен
- * лимит одновременных команд, `500` — прочие ошибки исполнения.
+ * запрос или `cwd` вне workspace, `401` — нет/неверный токен, `404` — неизвестный
+ * MCP-сервер/инструмент, `429` — превышен лимит одновременных команд, `500` —
+ * прочие ошибки исполнения.
  *
  * Разрыв соединения клиентом («Стоп») → сервер убивает дочерний процесс
  * (SIGTERM) и закрывает запрос: зомби-процессов не остаётся.
@@ -26,10 +30,15 @@ import {
   EXECUTOR_PROTOCOL_VERSION,
   errorResponse,
   parseExecRequestBody,
+  parseMcpCallRequestBody,
   type ExecutorCapabilities,
   type ExecutorHealth,
+  type McpCallResultBody,
+  type McpServerStatusBody,
+  type McpToolInfoBody,
 } from './protocol.js';
 import { detectToolchain, type ToolchainInfo } from './toolchain.js';
+import { ExecutorMcpError, ExecutorMcpHost, type McpServerSpec } from './mcp.js';
 
 /** Контекст Hono: Node-запрос (для отслеживания разрыва соединения). */
 type ExecutorEnv = {
@@ -50,6 +59,10 @@ export interface ExecutorAppOptions {
   maxOutputBytes?: number;
   /** Заранее определённый состав toolchain'а (определяется на старте). */
   toolchain?: ToolchainInfo;
+  /** MCP-серверы, которые исполнитель хостит у себя (stdio). */
+  mcpServers?: McpServerSpec[];
+  /** Готовый хост MCP-серверов (иначе создаётся из `mcpServers`). */
+  mcpHost?: ExecutorMcpHost;
   /** Момент старта процесса, мс (для `uptimeSec`). */
   startedAt?: number;
   /** Порт исполнения (инъекция для тестов). */
@@ -106,6 +119,9 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
   const startedAt = opts.startedAt ?? Date.now();
   const token = opts.token;
 
+  // Хост MCP-серверов: серверы поднимаются лениво (первое обращение).
+  const mcpHost = opts.mcpHost ?? new ExecutorMcpHost(opts.mcpServers ?? []);
+
   // Состав toolchain'а: задан на старте либо определяется при первом запросе
   // (результат кэшируется).
   let toolchainPromise: Promise<ToolchainInfo> | undefined = opts.toolchain
@@ -128,6 +144,9 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
 
   app.use('/exec', requireToken);
   app.use('/capabilities', requireToken);
+  app.use('/mcp/servers', requireToken);
+  app.use('/mcp/tools', requireToken);
+  app.use('/mcp/call', requireToken);
 
   app.post('/exec', async (c) => {
     let raw: unknown;
@@ -165,6 +184,58 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
       node: process.version,
     };
     return c.json(body, 200);
+  });
+
+  // --- MCP-хостинг (ADR-077, шаг B1) ---------------------------------------
+
+  app.get('/mcp/servers', (c) => {
+    const body: McpServerStatusBody[] = mcpHost.listServers();
+    return c.json(body, 200);
+  });
+
+  app.get('/mcp/tools', async (c) => {
+    const body: McpToolInfoBody[] = await mcpHost.listTools();
+    return c.json(body, 200);
+  });
+
+  app.post('/mcp/call', async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return c.json(body, status);
+    }
+
+    const parsed = parseMcpCallRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+
+    try {
+      const result = await mcpHost.callTool(
+        parsed.value.server,
+        parsed.value.tool,
+        parsed.value.arguments ?? {},
+      );
+      const body: McpCallResultBody = { content: result.content, isError: result.isError };
+      return c.json(body, 200);
+    } catch (err) {
+      if (err instanceof ExecutorMcpError) {
+        // Неизвестный сервер/инструмент — 404; недоступный сервер и сбой вызова — 500.
+        const reason = err.kind === 'unknown_server' || err.kind === 'unknown_tool'
+          ? 'not_found'
+          : 'internal_error';
+        const { status, body } = errorResponse(reason, err.message);
+        return c.json(body, status);
+      }
+      const { status, body } = errorResponse(
+        'internal_error',
+        err instanceof Error ? err.message : String(err),
+      );
+      return c.json(body, status);
+    }
   });
 
   app.get('/health', (c) => {
@@ -253,12 +324,17 @@ export interface ExecutorHandle {
  * Поднять сервер исполнителя.
  *
  * Состав toolchain'а определяется **на старте** (проба бинарников) и
- * кэшируется в приложении.
+ * кэшируется в приложении. MCP-серверы, наоборот, поднимаются **лениво**
+ * (первое обращение к `/mcp/tools` или `/mcp/call`).
+ *
+ * При остановке сначала закрываются MCP-серверы (дочерние процессы
+ * завершаются — зомби-процессов не остаётся), затем — HTTP-сервер.
  */
 export async function startExecutorServer(opts: ExecutorServerOptions): Promise<ExecutorHandle> {
   const host = opts.host ?? '0.0.0.0';
   const toolchain = opts.toolchain ?? (await detectToolchain());
-  const app = createExecutorApp({ ...opts, toolchain });
+  const mcpHost = opts.mcpHost ?? new ExecutorMcpHost(opts.mcpServers ?? []);
+  const app = createExecutorApp({ ...opts, toolchain, mcpHost });
   const server = createExecutorHttpServer(app);
 
   await new Promise<void>((resolve, reject) => {
@@ -277,9 +353,13 @@ export async function startExecutorServer(opts: ExecutorServerOptions): Promise<
     host,
     port,
     url: `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`,
-    close: () =>
-      new Promise<void>((resolve) => {
+    close: async () => {
+      // Сначала MCP-серверы: их дочерние процессы (в т.ч. Chromium) должны
+      // завершиться вместе с исполнителем.
+      await mcpHost.close();
+      await new Promise<void>((resolve) => {
         server.close(() => resolve());
-      }),
+      });
+    },
   };
 }

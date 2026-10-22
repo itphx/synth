@@ -7,7 +7,8 @@
  * `dependency` — слой доступности сообщает об этом модели и UI.
  *
  * Модуль листовой: не импортирует permission/evaluator (иначе цикл) — только
- * порт исполнения. Детекция кэшируется **по экземпляру порта** (см. ниже),
+ * порт исполнения. Детекция кэшируется **по экземпляру порта** на TTL (см.
+ * ниже), `refreshRuntimeDeps()` перечитывает снимок по месту (ход сессии),
  * `resetRuntimeDepsCache()` — для тестов.
  *
  * ADR-077: проба идёт через порт исполнения. Ответ порта зависит от режима:
@@ -26,7 +27,9 @@
  * локальной пробы — детект и исполнение расходились (control plane считал
  * доступным бинарь, которого нет ни у одного исполнителя). Теперь кэш
  * привязан к инстансу порта (`WeakMap`), поэтому inline- и remote-детекты
- * не мешают друг другу.
+ * не мешают друг другу. Срок жизни записи — `RUNTIME_DEPS_CACHE_TTL_MS`:
+ * состав пула меняется (раскатка), поэтому кэш не бессрочный; сам снимок в
+ * домене перечитывает `refreshRuntimeDeps` (ход сессии).
  */
 
 import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
@@ -197,29 +200,58 @@ async function detectDeps(port: ExecutionPort): Promise<RuntimeDeps> {
   return deps;
 }
 
+/**
+ * Срок жизни кэша детекции, мс.
+ *
+ * Бессрочный кэш «по порту» был дефектом: в split-режиме состав пула
+ * появляется не мгновенно (control plane и исполнитель стартуют вместе, при
+ * раскатке control plane может застать **старый** под без нужных бинарей).
+ * Отрицательный результат «sh нет» запоминался на весь процесс — `execute_shell`
+ * оставался недоступен до перезапуска backend (наблюдалось в test после
+ * раскатки: `sh: отсутствует в 1 из 1 адресов пула`, хотя /bin/sh в образе
+ * есть). Теперь детекция переиспользуется минуту, а состав пула порт обновляет
+ * сам по своему TTL.
+ */
+export const RUNTIME_DEPS_CACHE_TTL_MS = 60_000;
+
+interface DepsCacheEntry {
+  promise: Promise<RuntimeDeps>;
+  /** Момент создания записи (мс). */
+  at: number;
+}
+
 /** Кэш детекции по экземпляру порта (см. шапку модуля). */
-let cacheByPort = new WeakMap<ExecutionPort, Promise<RuntimeDeps>>();
+let cacheByPort = new WeakMap<ExecutionPort, DepsCacheEntry>();
 /** Кэш детекции для inline-порта по умолчанию. */
-let inlineCache: Promise<RuntimeDeps> | undefined;
+let inlineCache: DepsCacheEntry | undefined;
 
 /**
- * Детекция всех зависимостей параллельно. Промис кэшируется **по порту**:
- * повторные вызовы с тем же портом возвращают тот же промис (дедупликация
- * пробинга), а вызовы с другим портом (или без порта) считаются отдельно —
- * детект и исполнение всегда смотрят в одно окружение.
+ * Детекция всех зависимостей параллельно. Результат кэшируется **по порту** на
+ * `ttlMs` (по умолчанию `RUNTIME_DEPS_CACHE_TTL_MS`): повторные вызовы с тем же
+ * портом возвращают тот же промис (дедупликация пробинга), а вызовы с другим
+ * портом (или без порта) считаются отдельно — детект и исполнение всегда
+ * смотрят в одно окружение.
  *
  * Порт исполнения — параметр запуска процесса (инвариант 24), сменить его
- * «на лету» нельзя; состав пула при этом обновляется портом сам (TTL).
+ * «на лету» нельзя; состав пула при этом обновляется портом сам (TTL), поэтому
+ * и детекцию нельзя кэшировать бессрочно.
  */
-export function detectRuntimeDeps(execution?: ExecutionPort): Promise<RuntimeDeps> {
+export function detectRuntimeDeps(
+  execution?: ExecutionPort,
+  opts: { ttlMs?: number; now?: number } = {},
+): Promise<RuntimeDeps> {
+  const ttlMs = opts.ttlMs ?? RUNTIME_DEPS_CACHE_TTL_MS;
+  const now = opts.now ?? Date.now();
   if (!execution) {
-    inlineCache ??= detectDeps(new InlineExecutionPort());
-    return inlineCache;
+    if (inlineCache && now - inlineCache.at < ttlMs) return inlineCache.promise;
+    const promise = detectDeps(new InlineExecutionPort());
+    inlineCache = { promise, at: now };
+    return promise;
   }
   const cached = cacheByPort.get(execution);
-  if (cached) return cached;
+  if (cached && now - cached.at < ttlMs) return cached.promise;
   const promise = detectDeps(execution);
-  cacheByPort.set(execution, promise);
+  cacheByPort.set(execution, { promise, at: now });
   return promise;
 }
 
@@ -227,5 +259,44 @@ export function detectRuntimeDeps(execution?: ExecutionPort): Promise<RuntimeDep
 export function resetRuntimeDepsCache(): void {
   inlineCache = undefined;
   // WeakMap не очищается — пересоздаём (записи старых инстансов портов теряются).
-  cacheByPort = new WeakMap<ExecutionPort, Promise<RuntimeDeps>>();
+  cacheByPort = new WeakMap<ExecutionPort, DepsCacheEntry>();
+}
+
+/**
+ * Перечитать доступность зависимостей в **живой** снимок (ADR-070 §2.9.1/ADR-077).
+ *
+ * Снимок, снятый при старте, устаревает: в split-режиме состав пула появляется
+ * не мгновенно (control plane стартует раньше исполнителя, при раскатке — с
+ * прошлым образом). Без перечитывания отрицательный результат пробы залипал бы
+ * до перезапуска процесса даже при TTL-кэше: кэш ограничивает срок жизни
+ * результата, но кто-то должен спросить детект заново (наблюдалось в test:
+ * `sh: отсутствует в 1 из 1 адресов пула`, хотя `/bin/sh` в образе есть).
+ *
+ * Запись — **по месту**, а не заменой ссылки: объект снимка разделяется с
+ * другими потребителями, собранными в точке сборки (permission-слой шагов
+ * пайплайнов), иначе они остались бы со значением на момент старта.
+ *
+ * Ошибка детекта снимок не меняет (fail-open, ADR-078): прежнее значение лучше,
+ * чем «доступность неизвестна». Повторные вызовы дешевы — `detectRuntimeDeps`
+ * кэширует результат на `RUNTIME_DEPS_CACHE_TTL_MS`.
+ *
+ * @returns тот же объект-снимок (для цепочек вызовов и тестов)
+ */
+export async function refreshRuntimeDeps(
+  target: RuntimeDeps,
+  execution?: ExecutionPort,
+  opts: { ttlMs?: number; now?: number } = {},
+): Promise<RuntimeDeps> {
+  let fresh: RuntimeDeps;
+  try {
+    fresh = await detectRuntimeDeps(execution, opts);
+  } catch {
+    // Детект не удался (порт/проба бросили) — оставляем прежний снимок.
+    return target;
+  }
+  target.git = fresh.git;
+  target.rg = fresh.rg;
+  target.sh = fresh.sh;
+  target.details = fresh.details;
+  return target;
 }

@@ -147,6 +147,8 @@ ingress:
 | `executor.service.port` / `.targetPort` | `5100` / `5100` | Service исполнителя (его адрес — `SYNTH_EXECUTION_REMOTE_URL`) |
 | `executor.resources` | `1000m/1Gi`, `200m/256Mi` | limits/requests исполнителя |
 | `executor.limits.maxConcurrency` / `.maxTimeoutMs` / `.maxOutputBytes` | `4` / `120000` / `10485760` | Лимиты исполнителя (env `SYNTH_EXECUTOR_MAX_*`) |
+| `executor.mcp.enabled` | `true` | MCP-хостинг в исполнителе; `false` → env `SYNTH_EXECUTOR_MCP_SERVERS=""` (серверов нет, дефолт образа отключён) |
+| `executor.mcp.servers` | `[]` | MCP-серверы, которые хостит исполнитель (stdio, ADR-077 шаг B1): `[{name, command, args, env}]` → env `SYNTH_EXECUTOR_MCP_SERVERS` (JSON). Пусто → env не выставляется, действует дефолт образа (у flavor'ов с браузером — Playwright MCP) |
 | `executor.workspace.enabled` | `true` | Чарт управляет общим томом workspace (действует при `executor.enabled: true`) |
 | `executor.workspace.existingClaim` / `.claimName` | `""` | Существующий claim (например, при отсутствии RWX-класса); пусто → claim создаёт чарт |
 | `executor.workspace.accessMode` | `ReadWriteMany` | RWX обязателен: том общий для control plane и всех реплик исполнителя |
@@ -837,6 +839,66 @@ executor:
 видно исполнителям и в claim'е). Перед откатом на `inline` сохраните
 workspace, если он нужен.
 
+### MCP-серверы исполнителя (Playwright, ADR-077 шаг B1)
+
+Исполнитель умеет **хостить MCP-серверы у себя** (stdio) и отдавать их
+инструменты и вызовы по HTTP: `GET /mcp/servers`, `GET /mcp/tools`,
+`POST /mcp/call` — всё под тем же bearer-токеном (protocol 2). Зачем: в
+split-режиме control plane тонкий (в образе `synth-backend` нет Chromium), а
+браузерные инструменты агенту нужны — значит и хостить их должен исполнитель.
+
+`executor.mcp.servers` рендерится в env `SYNTH_EXECUTOR_MCP_SERVERS` (JSON):
+
+```yaml
+executor:
+  mcp:
+    servers:
+      - name: playwright-mcp
+        command: playwright-mcp
+        args:
+          - --headless
+          - --no-sandbox                    # контейнер по умолчанию root; под uid 1000 безвреден
+          - --executable-path
+          - /opt/synth/browser/chrome       # стабильный симлинк tier 3 (не версионный каталог)
+        env: {}
+```
+
+Почему именно такие аргументы:
+
+- **`--executable-path` обязателен**: сам `playwright-mcp` по умолчанию ищет
+  **Google Chrome** (`/opt/google/chrome/chrome`), которого в образе нет —
+  падает с `Chromium distribution 'chrome' is not found`. Флага
+  `--browser chromium` не существует (`--browser` = `chrome|firefox|webkit|msedge`).
+- `/opt/synth/browser/chrome` — стабильный симлинк на фактический
+  `chromium-<ревизия>/chrome-linux64/chrome` (создаёт `docker/install-tier-3.sh`
+  резолвом по glob): номер ревизии меняется вместе с пином Playwright, и
+  хардкодить его нельзя.
+- **`--headless`** — в контейнере нет дисплея; **`--no-sandbox`** — образ
+  по умолчанию работает под root (uid 0), без флага Chromium не стартует.
+- Требуется flavor образа с браузером: `browser` или `full`
+  (`executor.image.tag`/`repository` — под ваш реестр). В `slim`/`core`/`dev`
+  браузера нет — сервер останется `down` с причиной в `GET /mcp/servers`.
+
+Дефолт в `values.yaml` — пустой список: чарт ничего не навязывает. Образы
+flavor'ов `browser`/`full` уже несут этот же дефолт в `ENV`, поэтому без
+`executor.mcp.servers` Playwright MCP поднимется «из коробки». Список из
+values **заменяет** дефолт образа целиком. Отключить MCP-хостинг совсем —
+`executor.mcp.enabled: false` (рендерит `SYNTH_EXECUTOR_MCP_SERVERS=""` =
+«серверов нет»); пустая строка трактуется именно так, а не как ошибка разбора.
+
+`env` элемента — секреты MCP-сервера (токены SCM-хостингов). В `values` их
+хранить нельзя (инвариант 13): передавайте из Secret (`secretKeyRef`) в
+env-список; значения не логируются, не возвращаются в ответах и вычищаются из
+текстов ошибок, а сама переменная удаляется из `process.env` после разбора.
+
+Проверка:
+
+```bash
+kubectl exec -n synth deploy/synth-executor -- \
+  sh -c 'wget -qO- --header="Authorization: Bearer $SYNTH_EXECUTOR_TOKEN" http://127.0.0.1:5100/mcp/servers' || true
+# → [{"name":"playwright-mcp","status":"up","toolCount":25}]  (status до первого обращения — "idle")
+```
+
 ### Ограничения и NetworkPolicy
 
 - `NetworkPolicy` (`executor.networkPolicy.enabled`) по умолчанию разрешает
@@ -868,7 +930,7 @@ kubectl logs -n synth deploy/synth-executor | head
 # рукопожатие исполнителя (токен обязателен)
 kubectl run -n synth curl --rm -it --restart=Never --image=curlimages/curl -- \
   curl -sS -H "Authorization: Bearer synth_exec_…" http://synth-executor:5100/capabilities
-# → {"protocol":1,"toolchain":{...},"os":"linux","arch":"x64","node":"v22..."}
+# → {"protocol":2,"toolchain":{...},"os":"linux","arch":"x64","node":"v22..."}
 
 # пул виден со стороны control plane
 kubectl exec -n synth deploy/synth-backend -- printenv SYNTH_EXECUTION_MODE SYNTH_EXECUTION_REMOTE_URL

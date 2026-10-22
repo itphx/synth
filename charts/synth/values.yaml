@@ -264,6 +264,35 @@ executor:
     # Потолок буфера вывода, байт.
     maxOutputBytes: 10485760
 
+  # MCP-серверы, которые исполнитель хостит у себя (stdio, ADR-077 шаг B1).
+  #
+  # Элемент списка: { name, command, args, env }. Рендерится в env
+  # `SYNTH_EXECUTOR_MCP_SERVERS` (JSON) — конфигурация исполнителя только через
+  # env (config.yaml у воркера нет). `env` — секреты MCP-сервера: передавайте
+  # их через `extraEnv`/Secret, а не в values (инвариант 13).
+  #
+  # По умолчанию — пусто: чарт ничего не навязывает и не зависит от flavor'а
+  # образа. Образы flavor'ов `browser`/`full` уже несут дефолт с Playwright MCP
+  # (см. `docker/Dockerfile.executor`); этот список **заменяет** его целиком.
+  #
+  # Рецепт Playwright (образ `full`; в контейнере нет дисплея и Google Chrome):
+  #
+  #   mcp:
+  #     servers:
+  #       - name: playwright-mcp
+  #         command: playwright-mcp
+  #         args:
+  #           - --headless
+  #           - --no-sandbox          # образ по умолчанию root; под uid 1000 безвреден
+  #           - --executable-path
+  #           - /opt/synth/browser/chrome   # стабильный симлинк tier 3
+  #         env: {}
+  mcp:
+    # false → env SYNTH_EXECUTOR_MCP_SERVERS="" (MCP-серверов нет; отключает и
+    # дефолт образа). true + пустой servers → env не выставляется (дефолт образа).
+    enabled: true
+    servers: []
+
   probes:
     liveness:
       path: /health

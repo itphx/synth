@@ -108,6 +108,7 @@ export type {
 } from './execution/startup.js';
 export {
   detectRuntimeDeps,
+  refreshRuntimeDeps,
   resetRuntimeDepsCache,
   isRuntimeDepAvailable,
   runtimeDepUnavailableDetail,

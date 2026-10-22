@@ -3,7 +3,8 @@ import type { McpServerConfig, McpNetworkPolicy, McpRegistryAuthor, McpRegistryO
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext, ToolResult } from '@itphx/synth-shared';
-import { McpClient } from './client.js';
+import { McpClient, type McpClientLike } from './client.js';
+import type { ExecutorMcpSource } from './executor-mcp-source.js';
 import { evaluateMcpNetworkAccess, hostFromUrl, isHttpMcpConfig } from './network-policy.js';
 import { currentEgressLog } from '../net/egress-runtime.js';
 import { sanitizeEgressTarget } from '../net/egress-guard.js';
@@ -14,8 +15,18 @@ import { ObfuscationMapStore } from '../gateway/obfuscation-map-store.js';
 const CIRCUIT_BREAKER_THRESHOLD = 5;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 
+/** Параметры менеджера (инъекция для тестов/расширений). */
+export interface McpManagerOptions {
+  /**
+   * Фабрика клиента. Нужна, чтобы транспорт был заменяемым (локальный MCP vs
+   * HTTP API исполнителя, ADR-077 шаг B2) без дублирования регистрации тулов,
+   * вызова и circuit breaker'а.
+   */
+  createClient?: (name: string, config: McpServerConfig) => McpClientLike;
+}
+
 interface ServerEntry {
-  client: McpClient;
+  client: McpClientLike;
   registeredToolNames: string[];
   errorCount: number;
   lastErrorTime: number;
@@ -45,6 +56,141 @@ export class McpManager {
    * задан (реестр не подключён); `config.enabled` — лишь сид записи реестра, не гейт.
    */
   private _serverSystemEnabled: Map<string, boolean> | null = null;
+  /** Фабрика клиента (тесты/расширения; по умолчанию — `McpClient`). */
+  private readonly _createClientFactory: McpManagerOptions['createClient'];
+  /**
+   * Серверы пула исполнителей (ADR-077 шаг B2): **runtime-записи**, не
+   * персистятся в реестр и не редактируются пользователем. Живут только в
+   * памяти процесса; после рестарта состав перечитывается источником.
+   */
+  private _executorServers = new Set<string>();
+  /** Источник состава серверов исполнителя (только `execution.mode=remote`). */
+  private _executorSource: ExecutorMcpSource | null = null;
+
+  constructor(opts: McpManagerOptions = {}) {
+    this._createClientFactory = opts.createClient;
+  }
+
+  /**
+   * Подключить источник серверов исполнителя (ADR-077 шаг B2).
+   *
+   * `null` — отключить (inline-режим и тесты): серверы исполнителя из
+   * `_config` снимаются, поведение остаётся прежним.
+   */
+  setExecutorMcpSource(source: ExecutorMcpSource | null): void {
+    this._executorSource = source;
+    if (!source) {
+      for (const name of this._executorServers) {
+        delete this._config[name];
+        this._serverOrigins.delete(name);
+      }
+      this._executorServers.clear();
+    }
+  }
+
+  /** Сервер поднят исполнителем (а не реестром/config)? */
+  isExecutorServer(name: string): boolean {
+    return this._executorServers.has(name);
+  }
+
+  /** Источник серверов исполнителя уже подключён? (идемпотентность проводки) */
+  hasExecutorMcpSource(): boolean {
+    return this._executorSource !== null;
+  }
+
+  /** Имена серверов исполнителя в текущем снимке. */
+  getExecutorServerNames(): string[] {
+    return [...this._executorServers];
+  }
+
+  /**
+   * Перечитать состав серверов исполнителя и внести их в `_config` как
+   * runtime-записи (помечены `_executorServers`, origin `instance` →
+   * system-level, ADR-071).
+   *
+   * Коллизия имён: сервер с тем же именем, что локальный/реестровый,
+   * **не подменяет** его — локальный приоритетнее, в лог идёт warning (тулы
+   * исполнителя в этом случае не теряются молча: о них сообщается).
+   * Исчезнувшие серверы снимаются вместе с зарегистрированными тулами.
+   */
+  async refreshExecutorServers(toolRegistry?: ToolRegistry): Promise<void> {
+    const source = this._executorSource;
+    if (!source) return;
+
+    const servers = await source.ensureFresh();
+    const seen = new Set<string>();
+
+    for (const server of servers) {
+      const name = server.name;
+      const local = this._config[name];
+      if (local && !this._executorServers.has(name)) {
+        warning(
+          'MCP',
+          `Сервер исполнителя "${name}" конфликтует с локальным/реестровым — ` +
+            `оставлен локальный (тулы исполнителя не подключены)`,
+        );
+        continue;
+      }
+      seen.add(name);
+      if (!this._executorServers.has(name)) {
+        this._config[name] = this._executorRuntimeConfig(name);
+        this._executorServers.add(name);
+        // System-level (ADR-071): origin `instance`, чтобы сетевая политика
+        // пользовательских серверов и уровень скоупа были как у системных.
+        this._serverOrigins.set(name, 'instance');
+      } else if (!this._config[name]) {
+        // `setConfig` (реестр) мог заменить конфиг целиком — возвращаем
+        // runtime-запись исполнителя, иначе `connectServer` скажет «не настроен».
+        this._config[name] = this._executorRuntimeConfig(name);
+        this._serverOrigins.set(name, 'instance');
+      }
+    }
+
+    // Сервер исчез у исполнителя — снять runtime-запись (и тулы, если передали реестр).
+    for (const name of [...this._executorServers]) {
+      if (seen.has(name)) continue;
+      if (toolRegistry) await this.deregisterTools(name, toolRegistry);
+      await this.disconnectServer(name);
+      delete this._config[name];
+      this._serverOrigins.delete(name);
+      this._executorServers.delete(name);
+    }
+  }
+
+  /** Ленивое обновление состава исполнителя по TTL (перед загрузкой тулов). */
+  private async _refreshExecutorIfStale(toolRegistry?: ToolRegistry): Promise<void> {
+    const source = this._executorSource;
+    if (!source || !source.isStale()) return;
+    try {
+      await this.refreshExecutorServers(toolRegistry);
+    } catch (err) {
+      warning(
+        'MCP',
+        `Не удалось обновить состав серверов исполнителя: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** Runtime-конфиг сервера исполнителя (не персистится, ADR-077 шаг B2). */
+  private _executorRuntimeConfig(name: string): McpServerConfig {
+    return {
+      type: 'http',
+      description: `MCP-сервер исполнителя "${name}" (ADR-077)`,
+      enabledByDefault: true,
+    };
+  }
+
+  /**
+   * Фабрика клиента: сервер исполнителя → `ExecutorMcpClient`, иначе инъекция
+   * из опций/`McpClient`. Единственная точка выбора транспорта.
+   */
+  private _createClient(name: string, config: McpServerConfig): McpClientLike {
+    if (this._executorServers.has(name) && this._executorSource) {
+      return this._executorSource.createClient(name);
+    }
+    if (this._createClientFactory) return this._createClientFactory(name, config);
+    return new McpClient(name, config);
+  }
 
   setConfig(servers: Record<string, McpServerConfig>): void {
     this._config = servers;
@@ -110,6 +256,9 @@ export class McpManager {
   }
 
   isDefaultServer(name: string): boolean {
+    // ADR-077 (шаг B2): серверы исполнителя — системные и включены по умолчанию
+    // (их состав задаёт оператор топологии, а не проект).
+    if (this._executorServers.has(name)) return true;
     if (this._defaultServers) return this._defaultServers.has(name);
     return this._config[name]?.enabledByDefault === true;
   }
@@ -238,7 +387,13 @@ export class McpManager {
   }
 
   async connectServer(name: string): Promise<void> {
-    const config = this._config[name];
+    let config = this._config[name];
+    if (!config && this._executorServers.has(name)) {
+      // runtime-запись исполнителя могла быть снята `setConfig` (реестр) —
+      // восстанавливаем, иначе сервер «не настроен» до следующего refresh.
+      config = this._executorRuntimeConfig(name);
+      this._config[name] = config;
+    }
     if (!config) {
       throw new Error(`MCP-сервер "${name}" не настроен`);
     }
@@ -250,7 +405,7 @@ export class McpManager {
 
     await this._assertNetworkAllowed(name, config);
 
-    const client = new McpClient(name, config);
+    const client = this._createClient(name, config);
 
     try {
       await client.connect();
@@ -286,7 +441,7 @@ export class McpManager {
 
     await this._assertNetworkAllowed(name, config);
 
-    const client = new McpClient(name, config);
+    const client = this._createClient(name, config);
     try {
       await client.connect();
       return client.tools.map((t) => ({
@@ -396,6 +551,8 @@ export class McpManager {
     serverNames: string[],
     toolRegistry: ToolRegistry,
   ): Promise<void> {
+    // ADR-077 (шаг B2): состав серверов исполнителя обновляется по TTL 120 с.
+    await this._refreshExecutorIfStale(toolRegistry);
     for (const name of serverNames) {
       if (this._isCircuitBroken(name)) continue;
       try {

@@ -57,6 +57,7 @@ import {
 } from '../../index.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
 import { createExecutionPortForConfig } from '../../execution/factory.js';
+import { attachExecutorMcpSource } from '../../engine/mcp/executor-mcp-source.js';
 import {
   mergeLlmGatewayConfig, mergeSecurityConfig,
   mergeEventsConfig, mergeDecisionConfig,
@@ -533,6 +534,13 @@ export async function createStandaloneDeps(
   // старте, и не переинициализируется на лету. Выбор режима — фабрика
   // `execution/factory.ts` (`remote` → удалённый порт, fail-closed).
   const executionPort = await createExecutionPortForConfig(config.executionConfig);
+
+  // ADR-077 (шаг B2): в split-режиме MCP-серверы поднимаются **в исполнителе**
+  // (браузерные/tier-4 тулы) — control plane забирает их состав и инструменты
+  // по HTTP API исполнителя. Только `mode=remote`: в `inline` источник не
+  // создаётся, поведение прежнее. Ошибки discovery не валят старт (fail-closed
+  // режима уже проверен сборкой порта исполнения выше).
+  const executorMcpSource = await attachExecutorMcpSource(mcpManager, config.executionConfig);
 
   // ADR-070 §2.9.1/ADR-101: зависимости окружения (git/rg/sh) — детекция при
   // старте, fail-open при ошибке. Пробинг идёт до сборки оркестратора, чтобы
@@ -1031,6 +1039,9 @@ export async function createStandaloneDeps(
     // ADR-077: порт исполнения — тот же инстанс, что у оркестратора и тулов
     // (резолвер проектных инструкций берёт его для `git rev-parse`).
     executionPort,
+    // ADR-077 (шаг B2): источник MCP-серверов исполнителя (только remote);
+    // `null` в inline — останавливать нечего.
+    executorMcpSource,
     processMessage,
     eventBindingStore,
     eventApiKeyStore,

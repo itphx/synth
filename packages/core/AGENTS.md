@@ -106,7 +106,10 @@
   через `execution/probe.ts` (`probeBinaryThroughPort`): `ENOENT` → `false`, прочая ошибка →
   `true` (fail-open, ADR-078); второй реализации пробы не заводить. Слой доступности
   (`engine/tools/runtime-deps.ts`) спрашивает **порт**, а не пробует локально; кэш детекции —
-  **по экземпляру порта** (`WeakMap`): локальная (inline) проба не должна отравлять remote-кэш.
+  **по экземпляру порта** (`WeakMap`) на `RUNTIME_DEPS_CACHE_TTL_MS` (60 с): локальная (inline)
+  проба не отравляет remote-кэш, а состав пула обновляется — бессрочный кэш залипал бы ложным
+  negative после раскатки. Сам снимок доступности — живой: ход сессии перечитывает его
+  `refreshRuntimeDeps()` (запись по месту — объект разделяется с permission-слоем шагов пайплайнов).
   Требования тулов берутся из карты `TOOL_RUNTIME_DEP` (`runtimeRequires()`/
   `toolRuntimeRequires()`) — строки не дублируются руками.
 - Конфиг — через `@itphx/synth-shared/config` (ADR-023); приоритет
@@ -472,7 +475,12 @@
   читает только каталог: без этого агент, поставленный пакетом расширения (ADR-086),
   после рестарта не резолвился в Router (`agentTemplate` → `null`, сессия не создавалась).
   Вызывается в `server/app/deps.ts` и `backend/app/deps.ts` (обе сборки — async).
-- `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP.
+- `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP; `executor-mcp-source.ts` +
+  `executor-mcp-client.ts` — состав MCP-серверов пула исполнителей и вызовы их инструментов
+  поверх HTTP API исполнителя (ADR-077, шаг B2): TTL снимка 120 с, а **неудачный** discovery
+  (404/сеть/таймаут) повторяется через `EXECUTOR_MCP_SOURCE_RETRY_MS` (15 с) — иначе backend,
+  стартовавший раньше пода исполнителя, «запоминал» пустой состав на весь TTL; успешный
+  пустой ответ — валидный снимок и живёт до TTL.
 - `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (ADR-046);
   гейты уровней (system/project/session) — `scope.ts` (`resolveSkillAvailability`,
   `skill.scope_disabled`), сид новых проектов — `seed.ts` (мастер `disabled` +
@@ -524,7 +532,8 @@
   provisioning workspace (нормализация/containment/создание каталога) для
   HTTP-роутов и тулов (ADR-075). `engine/tools/runtime-deps.ts` — детект внешних
   бинарников (`git`/`rg`/`sh`; источник — **порт** (`probe()`), в inline — локальная
-  проба; fail-open; кэш детекции — **по экземпляру порта**, `WeakMap`) и карта
+  проба; fail-open; кэш детекции — **по экземпляру порта**, `WeakMap`, TTL 60 с;
+  снимок перечитывается ходом — `refreshRuntimeDeps`) и карта
   `TOOL_RUNTIME_DEP`; из неё же берутся бинарные требования тулов
   (`runtimeRequires()`/`toolRuntimeRequires()` → `ExecRequest.requires`); деталь
   недоступности — в `RuntimeDeps.details` («в пуле: N из M» в remote-режиме) и далее

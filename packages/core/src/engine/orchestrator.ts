@@ -26,6 +26,7 @@ import { createStateMessage, findLastStateMessage, buildModeChangeContent, build
 import type { ToolRegistry } from './tools/registry.js';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
+import { attachExecutorMcpFromDescriptor } from './mcp/executor-mcp-source.js';
 import { resolveMcpScope, type McpScopeDecision } from './mcp/scope.js';
 import { warning } from '../logger.js';
 import { ModelRouter } from './router/router.js';
@@ -53,7 +54,7 @@ import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
 import type { HookBus } from './hooks/hook-bus.js';
 import type { RequestSessionService } from './events/request-session.js';
 
-import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, type RuntimeDeps } from './tools/runtime-deps.js';
+import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, refreshRuntimeDeps, type RuntimeDeps } from './tools/runtime-deps.js';
 import { InlineExecutionPort } from '../execution/inline-execution-port.js';
 import type { ExecutionPort } from '../execution/ports/index.js';
 import { getToolTrust } from './security/trust.js';
@@ -226,7 +227,12 @@ export interface OrchestratorOptions {
   /**
    * ADR-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) —
    * детекция `detectRuntimeDeps()`. Не задана — fail-open (все доступны).
-   * Runtime-обновление — `setRuntimeDeps`.
+   *
+   * Это **живой** снимок: перед каждым ходом он перечитывается
+   * (`refreshRuntimeDeps`, запись по месту), поэтому объект разделяется с
+   * другими потребителями снимка из точки сборки (permission-слой шагов
+   * пайплайнов) — не заменять ссылку. Ручная подстановка — `setRuntimeDeps`
+   * (живёт до ближайшего перечитывания снимка).
    */
   runtimeDeps?: RuntimeDeps;
   /**
@@ -644,6 +650,13 @@ export class ChatOrchestrator {
     this._runtimeDeps = options.runtimeDeps ?? { ...ALL_RUNTIME_DEPS_AVAILABLE };
     // ADR-077: порт исполнения — inline по умолчанию (прежнее поведение).
     this._executionPort = options.executionPort ?? new InlineExecutionPort();
+    // ADR-077 (шаг B2): в split-режиме MCP-серверы живут в исполнителе, а
+    // удалённый порт несёт дескриптор пула. Оркестратор поднимает источник —
+    // так managed-backend получает это без отдельной проводки в своей сборке
+    // `McpManager` (идемпотентно: если источник уже подключён — no-op).
+    if (this._mcpManager) {
+      attachExecutorMcpFromDescriptor(this._mcpManager, this._executionPort.executorMcp);
+    }
     this._tokenRatioLoader = options.tokenRatioLoader;
     this._onTokenRatioCalibrated = options.onTokenRatioCalibrated;
     this._skillRuntime = options.skillRuntime ?? null;
@@ -2025,9 +2038,15 @@ export class ChatOrchestrator {
       name,
       origin: manager.getServerOrigin(name),
       systemEnabled: manager.isServerSystemEnabled(name),
+      // ADR-077 (шаг B2): серверы пула исполнителей — system-level runtime-записи.
+      ...(manager.isExecutorServer?.(name) === true ? { executor: true } : {}),
     }));
+    // ADR-077 (шаг B2): серверы исполнителя включены по умолчанию (их состав
+    // задаёт оператор топологии в конфигурации исполнителя); сессионный
+    // opt-out (`mcpDisabledServers`) по-прежнему работает.
+    const executorNames = manager.getExecutorServerNames?.() ?? [];
     return resolveMcpScope(servers, project?.mcp, {
-      enabled: session.settings.mcpServers,
+      enabled: [...(session.settings.mcpServers ?? []), ...executorNames],
       disabled: session.settings.mcpDisabledServers,
       defaultOn: session.settings.mcpDefaultOn,
     });
@@ -2413,6 +2432,14 @@ export class ChatOrchestrator {
     const effectiveReasoningLevel = agentDef?.reasoningLevel ?? session.settings.reasoningLevel;
 
     const debugCollector = new DebugCollector(session.settings.debugEnabled);
+
+    // ADR-070 §2.9.1/ADR-077: перечитать доступность внешних программ (git/rg/sh)
+    // перед ходом. Снимок на старте устаревает: в split-режиме состав пула
+    // появляется не мгновенно (раскатка поднимает control plane раньше
+    // исполнителя), и ложный negative («sh отсутствует») иначе залипал бы до
+    // перезапуска процесса. Перечитывание дешево: `detectRuntimeDeps` кэширует
+    // результат на `RUNTIME_DEPS_CACHE_TTL_MS`.
+    await refreshRuntimeDeps(this._runtimeDeps, this._executionPort);
 
     // --- ADR-095 (шаг 6b-1): ранние выходы (системные сообщения, `/`-команды,
     // micro-first) вынесены в `orchestrator/phases/process-early.ts`; порядок
