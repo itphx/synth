@@ -1277,6 +1277,11 @@ synth plugin enable synth-plugin-memory
 # 5. Выключить / снять
 synth plugin disable synth-plugin-memory
 synth plugin remove synth-plugin-memory --yes          # --keep-files — оставить каталог бандла
+
+# 6. Обновить из источника записи lock и откатить на предыдущую версию
+synth plugin update synth-plugin-memory                # npm: latest; --version — точная
+synth plugin update synth-plugin-memory --sha256 <64-hex>   # url: обязателен новый pin
+synth plugin rollback synth-plugin-memory              # обратно — ещё раз rollback
 ```
 
 **Источники `install <ref>`:** путь (каталог), `.tgz`/`.tar.gz`, npm-имя (`name`/`@scope/name`) или
@@ -1305,7 +1310,15 @@ synth plugin remove synth-plugin-memory --yes          # --keep-files — ост
 | Подтверждение карантина (`202`) | `POST /api/v2/plugins/:name/approve` |
 | Включить / выключить | `POST /api/v2/plugins/:name/enable` / `.../disable` |
 | Снять | `DELETE /api/v2/plugins/:name` (идемпотентно) |
+| Обновить из источника lock | `POST /api/v2/plugins/update` `{name, version?, sha256?, activate?}` → `{outcome:'unchanged'\|'updated'}` |
+| Откатить на предыдущую версию | `POST /api/v2/plugins/:name/rollback` → `{outcome:'rolled_back', version, previousVersion}` |
 | Политика слоя | `GET/PUT/DELETE /api/v2/settings/plugins` (`restartRequired: true`) |
+
+**Обновление** — только явная операция (`«всегда latest» нет`): источник берётся из записи lock
+(`local`/`npm`/`url`), для `url` обязателен новый `sha256`. Если бандл источника совпал по
+content-hash — `unchanged` (ничего не пишется). Иначе версия ставится теми же гейтами, что
+установка (доверие — из lock), каталог прежней версии **сохраняется**, а в lock пишется `previous` —
+одна ступень отката. `rollback` меняет текущую и предыдущую версии местами (обратим).
 
 RBAC managed: чтение и настройки — `ADMIN`; установка/активация — `ADMIN` или service-key со scope
 `addons:install`; подтверждение карантина и снятие — **только `ADMIN`**. Локальные источники

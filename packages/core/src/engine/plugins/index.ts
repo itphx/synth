@@ -55,7 +55,10 @@ export type {
   PluginInstallRequest,
   PluginInstallerDeps,
   PluginManifestReadResult,
+  PluginRollbackOutcome,
   PluginUninstallResult,
+  PluginUpdateOptions,
+  PluginUpdateOutcome,
 } from './installer.js';
 
 // Д1 — источники установки: архив (свой tar-ридер) и резолвинг dir/archive/npm/url.

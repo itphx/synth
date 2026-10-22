@@ -15,14 +15,17 @@
  * POST   /plugins/:name/approve   — подтверждение карантина (202-установка)
  * POST   /plugins/:name/enable    — активация (гейты §10)
  * POST   /plugins/:name/disable   — деактивация (обратная прокрутка disposers)
+ * POST   /plugins/:name/rollback  — откат на предыдущую версию (ступень lock)
+ * POST   /plugins/update          — обновление из источника записи lock
  * DELETE /plugins/:name           — снятие по записи lock (идемпотентно)
- * POST   /plugins/update          — 501: обновление по pinned ref/hash — Д2
  * ```
  *
- * **Почему `update` объявлен, но `501`.** Контракт нужен клиентам (UI/CLI) и
- * тест-переписи маршрутов; фактический `update` требует сравнения версий и
- * отката — отдельная задача (долги Д2). Заглушка, а не «тихое 404»: клиент
- * видит, что маршрут существует и ещё не реализован.
+ * **Обновление и откат (долги Д2).** `update` — явная операция: источник
+ * берётся **из lock** (`npm`/`local`/`url`), «всегда latest» нет; совпадение
+ * `content_hash` — `200 {outcome:'unchanged'}` (ничего не пишется). `rollback`
+ * — возврат на сохранённую ступень `previous` (одна ступень, swap), без неё —
+ * `409 plugin.rollback_unavailable`. Гейты у обновления те же, что у установки
+ * (их выполняет `PluginInstaller`), доверие — из lock.
  *
  * **Источники установки (Д1).** `POST /install` принимает вид источника
  * (`source: 'dir'|'archive'|'npm'|'url'`) и соответствующую ссылку: `path`
@@ -116,7 +119,7 @@ export interface PluginsRouteMessages {
   notActive: (c: Context) => string;
   invalidBody: (c: Context) => string;
   localInstallDisabled: (c: Context) => string;
-  updateNotImplemented: (c: Context) => string;
+  rollbackUnavailable: (c: Context) => string;
 }
 
 /** Опции фабрики: guard'ы и сообщения. */
@@ -139,8 +142,7 @@ const DEFAULT_MESSAGES: PluginsRouteMessages = {
   localInstallDisabled: () =>
     'Установка из локального каталога или архива недоступна в этом режиме инстанса ' +
     '(managed: локальный путь с ФС хоста не принимается; сетевые источники npm/url разрешены)',
-  updateNotImplemented: () =>
-    'Обновление плагинов (сравнение версий и откат) ещё не реализовано — долги Д2',
+  rollbackUnavailable: () => 'Нет предыдущей версии для отката',
 };
 
 /** Имя файла манифеста (`synth.pack`, ADR-086 §5). */
@@ -173,6 +175,9 @@ export const PLUGIN_REASON_HTTP: Record<PluginAuditReason, number> = {
   // Источник установки (Д1): по умолчанию «плохой запрос»; роут поднимает код
   // до **502** для сетевых источников (`npm`/`url`) — registry/сеть не отвечают.
   'plugin.source_unavailable': 400,
+  // Откат (Д2): ступени `previous` нет или каталог предыдущей версии пропал —
+  // состояние не изменилось, клиенту нужна установка, а не конфликт ввода.
+  'plugin.rollback_unavailable': 409,
   'plugin.manifest_invalid': 400,
   'plugin.integrity_mismatch': 409,
   'plugin.integrity_unverifiable': 409,
@@ -459,12 +464,78 @@ export function createPluginsRoutes(
     );
   });
 
-  // POST /api/v2/plugins/update — объявленный контракт, реализация — Ф5б-3.
-  app.post('/update', writeGuard, (c) => {
-    return c.json(
-      { error: { code: 'NOT_IMPLEMENTED', message: messages.updateNotImplemented(c) } },
-      501,
-    );
+  // POST /api/v2/plugins/update — обновление из источника записи lock (Д2).
+  // Тело: `{name, version?, sha256?, activate?}`. Источник клиентом не
+  // выбирается (провенанс берётся из lock); `sha256` обязателен для `url`.
+  app.post('/update', writeGuard, async (c) => {
+    const rawBody = (await c.req.json().catch(() => ({}))) as unknown;
+    const body: Record<string, unknown> =
+      typeof rawBody === 'object' && rawBody !== null && !Array.isArray(rawBody)
+        ? (rawBody as Record<string, unknown>)
+        : {};
+
+    const name = optionalString(body.name);
+    if (!name) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: `${messages.invalidBody(c)}: поле "name" обязательно` } },
+        400,
+      );
+    }
+    const sha256 = optionalString(body.sha256)?.toLowerCase();
+    if (sha256 && !/^[0-9a-f]{64}$/.test(sha256)) {
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `${messages.invalidBody(c)}: "sha256" — 64 hex-символа`,
+          },
+        },
+        400,
+      );
+    }
+    const version = optionalString(body.version);
+    const activate = typeof body.activate === 'boolean' ? body.activate : undefined;
+
+    // Managed: обновление плагина, установленного с локального пути, невозможно
+    // (локальные файлы инстанса не являются источником для control plane) —
+    // тот же отказ, что у `install` (`localInstall: false`), а не «источник
+    // недоступен»: причина — политика, а не сбой источника.
+    if (deps.localInstall === false) {
+      const existing = await findEntry(name);
+      if (existing?.source === 'local') {
+        return c.json(
+          { error: { code: 'LOCAL_INSTALL_DISABLED', message: messages.localInstallDisabled(c) } },
+          403,
+        );
+      }
+    }
+
+    const outcome = await deps.runtime.installer.update(name, {
+      ...(version ? { version } : {}),
+      ...(sha256 ? { sha256 } : {}),
+      ...(activate !== undefined ? { activate } : {}),
+      actor: actorOf(c),
+      ...(deps.sourceContext ? { sourceContext: deps.sourceContext } : {}),
+    });
+
+    if (outcome.outcome === 'unchanged' || outcome.outcome === 'updated') {
+      return c.json(outcome);
+    }
+
+    // Сетевой источник недоступен — 502 (сбой upstream), локальный — 400.
+    // Запись lock остаётся прежней, поэтому источник известен по ней.
+    const current = await findEntry(name);
+    const status =
+      outcome.reason === 'plugin.source_unavailable'
+        ? current?.source === 'local'
+          ? 400
+          : 502
+        : // `approval_required` — не отказ ввода: бандл ушёл в карантин,
+          // состояние требует подтверждения владельца (как у активации).
+          outcome.reason === 'plugin.approval_required'
+          ? 409
+          : httpStatusForRejection(outcome.reason);
+    return c.json({ error: { code: outcome.reason, message: outcome.message } }, status as 400);
   });
 
   // GET /api/v2/plugins/:name — деталь: запись lock + манифест + целостность.
@@ -542,6 +613,25 @@ export function createPluginsRoutes(
     // Прочие отказы (`plugin.already_active`, `plugin.module_invalid`, …) —
     // 200 с результатом активации: состояние плагина известно клиенту из тела.
     return c.json({ activation });
+  });
+
+  // POST /api/v2/plugins/:name/rollback — откат на предыдущую версию (Д2).
+  // Ступень `previous` — одна; откат обратим (повторный откат вернёт обратно).
+  app.post('/:name/rollback', writeGuard, async (c) => {
+    const name = c.req.param('name');
+    const outcome = await deps.runtime.installer.rollback(name, { actor: actorOf(c) });
+    if (outcome.outcome === 'rolled_back') return c.json(outcome);
+
+    const status =
+      outcome.reason === 'plugin.rollback_unavailable'
+        ? 409
+        : httpStatusForRejection(outcome.reason);
+    const message =
+      outcome.reason === 'plugin.rollback_unavailable' &&
+      !outcome.message.trim()
+        ? messages.rollbackUnavailable(c)
+        : outcome.message;
+    return c.json({ error: { code: outcome.reason, message } }, status as 400);
   });
 
   // POST /api/v2/plugins/:name/disable — деактивация (идемпотентности нет:

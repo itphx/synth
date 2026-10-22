@@ -17,6 +17,7 @@ import { MIGRATION_005_PIPELINE_PROVENANCE } from './005-pipeline-provenance.js'
 import { MIGRATION_006_PLUGIN_AUDIT } from './006-plugin-audit.js';
 import { MIGRATION_007_PLUGIN_LOCK } from './007-plugin-lock.js';
 import { MIGRATION_008_PLUGIN_AUDIT_SCAN } from './008-plugin-audit-scan.js';
+import { MIGRATION_009_PLUGIN_LOCK_PREVIOUS } from './009-plugin-lock-previous.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -38,6 +39,7 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 6, id: '006_plugin_audit', sql: MIGRATION_006_PLUGIN_AUDIT },
   { version: 7, id: '007_plugin_lock', sql: MIGRATION_007_PLUGIN_LOCK },
   { version: 8, id: '008_plugin_audit_scan', sql: MIGRATION_008_PLUGIN_AUDIT_SCAN },
+  { version: 9, id: '009_plugin_lock_previous', sql: MIGRATION_009_PLUGIN_LOCK_PREVIOUS },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

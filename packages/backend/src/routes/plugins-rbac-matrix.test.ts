@@ -22,8 +22,9 @@
  *
  * Коды обработчика проверяются там, где они и есть доказательство «guard
  * пропустил»: managed-запрет локальной установки → 403 `LOCAL_INSTALL_DISABLED`,
- * `update` → 501 `NOT_IMPLEMENTED`, `enable` несуществующего → 404
- * `plugin.not_found`, снятие несуществующего → 204 (идемпотентно).
+ * `update` без `name` → 400 `VALIDATION_ERROR`, `enable`/`rollback`
+ * несуществующего → 404 `plugin.not_found`, снятие несуществующего → 204
+ * (идемпотентно).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -124,6 +125,7 @@ describe('backend: RBAC-матрица контура плагинов (PROP-090
       'POST /api/v2/plugins/:name/approve',
       'POST /api/v2/plugins/:name/enable',
       'POST /api/v2/plugins/:name/disable',
+      'POST /api/v2/plugins/:name/rollback',
       'DELETE /api/v2/plugins/:name',
       'GET /api/v2/settings/plugins',
       'PUT /api/v2/settings/plugins',
@@ -145,6 +147,7 @@ describe('backend: RBAC-матрица контура плагинов (PROP-090
       { method: 'POST', path: '/api/v2/plugins/demo-plugin/approve' },
       { method: 'POST', path: '/api/v2/plugins/demo-plugin/enable' },
       { method: 'POST', path: '/api/v2/plugins/demo-plugin/disable' },
+      { method: 'POST', path: '/api/v2/plugins/demo-plugin/rollback' },
       { method: 'DELETE', path: '/api/v2/plugins/demo-plugin' },
       { method: 'GET', path: '/api/v2/settings/plugins' },
       { method: 'PUT', path: '/api/v2/settings/plugins', body: { executionEnabled: true } },
@@ -170,7 +173,7 @@ describe('backend: RBAC-матрица контура плагинов (PROP-090
   // -------------------------------------------------------------------------
   // 2. Позитивная матрица: ADMIN проходит guard и получает код обработчика
   // -------------------------------------------------------------------------
-  it('ADMIN: список/настройки → 200, update → 501, установка → 403 LOCAL_INSTALL_DISABLED', async () => {
+  it('ADMIN: список/настройки → 200, update без name → 400, установка → 403 LOCAL_INSTALL_DISABLED', async () => {
     const list = await req('/api/v2/plugins', {}, ADMIN);
     expect(list.status).toBe(200);
     expect(await list.json()).toEqual({ plugins: [] });
@@ -192,10 +195,14 @@ describe('backend: RBAC-матрица контура плагинов (PROP-090
     expect(install.status).toBe(403);
     expect(await errorCode(install)).toBe('LOCAL_INSTALL_DISABLED');
 
-    // `update` объявлен, реализация — Ф5б-3.
+    // `update`/`rollback`: guard пропустил, отказ даёт обработчик. Пустое тело
+    // update — ошибка ввода (400), откат несуществующего — 404.
     const update = await json('/api/v2/plugins/update', {}, ADMIN);
-    expect(update.status).toBe(501);
-    expect(await errorCode(update)).toBe('NOT_IMPLEMENTED');
+    expect(update.status).toBe(400);
+    expect(await errorCode(update)).toBe('VALIDATION_ERROR');
+    const rollback = await json('/api/v2/plugins/absent/rollback', {}, ADMIN);
+    expect(rollback.status).toBe(404);
+    expect(await errorCode(rollback)).toBe('plugin.not_found');
 
     // Активация/подтверждение несуществующего — 404 (guard пропустил).
     const enable = await json('/api/v2/plugins/absent/enable', {}, ADMIN);
@@ -220,7 +227,7 @@ describe('backend: RBAC-матрица контура плагинов (PROP-090
   // -------------------------------------------------------------------------
   // 3. Service-key: scope `addons:install` даёт установку/активацию, не снятие
   // -------------------------------------------------------------------------
-  it('service-key со scope addons:install: install/update/enable разрешены, DELETE — только ADMIN', async () => {
+  it('service-key со scope addons:install: install/update/rollback/enable разрешены, DELETE — только ADMIN', async () => {
     const key = await createServiceKey({
       label: 'plugins-scoped',
       roles: ['USER'],
@@ -232,10 +239,13 @@ describe('backend: RBAC-матрица контура плагинов (PROP-090
     expect(install.status).toBe(403);
     expect(await errorCode(install)).toBe('LOCAL_INSTALL_DISABLED');
 
-    // update/enable — тот же writeGuard.
-    expect(await errorCode(await json('/api/v2/plugins/update', {}, key))).toBe('NOT_IMPLEMENTED');
+    // update/enable/rollback — тот же writeGuard.
+    expect(
+      (await json('/api/v2/plugins/update', {}, key)).status,
+    ).toBe(400);
     expect((await json('/api/v2/plugins/absent/enable', {}, key)).status).toBe(404);
     expect((await json('/api/v2/plugins/absent/disable', {}, key)).status).toBe(404);
+    expect((await json('/api/v2/plugins/absent/rollback', {}, key)).status).toBe(404);
 
     // Чтение реестра и настроек — только ADMIN (scope не заменяет роль).
     expect((await req('/api/v2/plugins', {}, key)).status).toBe(403);
@@ -262,6 +272,10 @@ describe('backend: RBAC-матрица контура плагинов (PROP-090
     const enable = await json('/api/v2/plugins/absent/enable', {}, key);
     expect(enable.status).toBe(403);
     expect(await errorCode(enable)).toBe('SCOPE_REQUIRED');
+
+    const rollback = await json('/api/v2/plugins/absent/rollback', {}, key);
+    expect(rollback.status).toBe(403);
+    expect(await errorCode(rollback)).toBe('SCOPE_REQUIRED');
   });
 
   it('service-key с ролью ADMIN (без scope) проходит writeGuard установки', async () => {

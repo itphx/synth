@@ -14,6 +14,9 @@
  *   ask:   quarantine/<name>@<version>/ (lock НЕ пишется) + approval_required
  *   block: отказ plugin.scan_rejected (на диск не пишется)
  * approve  → скан карантина → releaseFromQuarantine → lock.save → аудит install
+ * update   → источник из lock → сверка content_hash → installFromDirectory
+ *            (keepPrevious) → деактивация старого модуля → активация нового
+ * rollback → каталог previous → swap в lock → аудит rollback → активация
  * uninstall→ деактивация (если активен) → lock.delete → rm -rf каталога → аудит
  * ```
  *
@@ -71,6 +74,7 @@ import type {
   PluginAuditEntry,
   PluginAuditReason,
   PluginLockEntry,
+  PluginLockPrevious,
   PluginScanVerdict,
   PluginsConfig,
 } from '@itphx/synth-shared';
@@ -108,6 +112,9 @@ const INTEGRITY_FILE = 'PLUGIN_INTEGRITY.json';
 /** Каталоги, которые не являются частью бандла (как в сканере, PROP-068 §4.3). */
 const SKIPPED_DIRS: readonly string[] = ['node_modules', '.git'];
 
+/** Расширение локального архива (`local`-источник в lock) — вид `archive` при update. */
+const ARCHIVE_EXTENSION_REGEX = /\.(tgz|tar\.gz)$/i;
+
 /** Зависимости сервиса установки (ADR-096: хранилище — только через порты). */
 export interface PluginInstallerDeps {
   /** Раскладка слоя плагинов (`<home>/plugin` или `{dataDir}/plugin`). */
@@ -144,6 +151,16 @@ export interface PluginInstallRequest {
   installKind?: 'deploy' | 'runtime';
   /** Активировать после установки (по умолчанию `false`). */
   activate?: boolean;
+  /**
+   * Сохранить каталог предыдущей версии (долги Д2, `update`).
+   *
+   * `false` (по умолчанию) — прежнее поведение: после успешной установки
+   * каталог прежней версии удаляется (`_cleanupPreviousVersion`), а в lock
+   * ступень отката не пишется. `true` — каталог остаётся, а в lock
+   * записывается `previous` (снимок текущей записи) — иначе `rollback` было
+   * бы некуда возвращаться.
+   */
+  keepPrevious?: boolean;
   /** Инициатор операции (`userId` API/UI, `'cli'`, `'startup'`). */
   actor?: string;
 }
@@ -211,6 +228,81 @@ export interface PluginUninstallResult {
   /** Плагин был активен и деактивирован? */
   deactivated?: boolean;
 }
+
+/** Параметры обновления (`PluginInstaller.update`, PROP-090 §«Запись lock»). */
+export interface PluginUpdateOptions {
+  /**
+   * `npm`: точная версия или `latest` (по умолчанию `latest`); `local`/`url` —
+   * не используется (источник берётся из lock).
+   */
+  version?: string;
+  /**
+   * `url`: **обязательный** новый pin — sha256 архива (64 hex). Для остальных
+   * источников не нужен: npm проверяется SRI реестра, локальный архив — хешем
+   * байтов.
+   */
+  sha256?: string;
+  /**
+   * Активация после обновления. Не задано — сохранить текущее состояние
+   * (был активен → активировать новую версию); `true` — активировать в любом
+   * случае; `false` — не активировать.
+   */
+  activate?: boolean;
+  /**
+   * Вид установки: `runtime` (по умолчанию, политика `plugins.runtimeInstall`)
+   * или `deploy` (CLI — офлайн-операция оператора, как у `install`).
+   */
+  installKind?: 'deploy' | 'runtime';
+  /** Инициатор операции (`userId` API/UI, `'cli'`). */
+  actor?: string;
+  /** Инъекция сети/лимитов источника (тесты, CLI); по умолчанию — `egressFetch`. */
+  sourceContext?: PluginSourceContext;
+}
+
+/**
+ * Итог обновления.
+ *
+ * `unchanged` — бандл источника совпал с установленным по `content_hash`
+ * (ничего не пишется, каталог/ступень отката не трогаются). `updated` —
+ * установлена новая версия; `previous` в lock указывает на прежнюю, её каталог
+ * сохранён. `rejected` — отказ (источник/гейты/скан): состояние не изменилось.
+ */
+export type PluginUpdateOutcome =
+  | { outcome: 'unchanged'; name: string; version: string; contentHash: string }
+  | {
+      outcome: 'updated';
+      name: string;
+      version: string;
+      /** Версия, с которой ушли (та, что стала `previous` в lock). */
+      previousVersion: string;
+      /** Каталог установленной версии (`installed/<name>@<version>`). */
+      dir: string;
+      contentHash: string;
+      /** Результат активации — если она запрашивалась/сохранялась и хост передан. */
+      activated?: PluginActivationResult;
+    }
+  | { outcome: 'rejected'; name: string; reason: PluginAuditReason; message: string };
+
+/**
+ * Итог отката (`PluginInstaller.rollback`).
+ *
+ * `rolled_back` — версия и content-hash взяты из `previous`, прежняя текущая
+ * версия стала `previous` (swap — откат обратим). `rejected` — откат
+ * невозможен (`plugin.not_found`/`plugin.rollback_unavailable`), состояние не
+ * изменилось.
+ */
+export type PluginRollbackOutcome =
+  | {
+      outcome: 'rolled_back';
+      name: string;
+      /** Версия, на которую откатились (из `previous`). */
+      version: string;
+      /** Версия, с которой откатились (стала `previous`). */
+      previousVersion: string;
+      /** Результат активации откатанной версии (если плагин был активен). */
+      activated?: PluginActivationResult;
+    }
+  | { outcome: 'rejected'; name: string; reason: PluginAuditReason; message: string };
 
 /**
  * Собранный бандл: текстовые файлы (в хеше и на диске) + пропущенные бинарные.
@@ -282,6 +374,22 @@ async function pathExists(path: string): Promise<boolean> {
 /** Объект ли значение (для чтения «сырого» манифеста до валидации). */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Снимок записи lock как ступени отката (`PluginLockPrevious`).
+ *
+ * Хранится ровно то, что нужно для возврата: версия, content-hash, точка входа
+ * и время установки. Источник/pin/доверие — свойства плагина, а не версии,
+ * поэтому остаются в основной записи.
+ */
+function previousOf(entry: PluginLockEntry): PluginLockPrevious {
+  return {
+    version: entry.version,
+    content_hash: entry.content_hash,
+    ...(entry.entry ? { entry: entry.entry } : {}),
+    installed_at: entry.installed_at,
+  };
 }
 
 /** Человекочитаемая сводка проблем zod-валидации. */
@@ -670,8 +778,11 @@ export class PluginInstaller {
 
     // ── Шаг 8: lock + аудит + (опционально) активация ─────────────────
     // Предыдущая версия того же плагина — её каталог убирается **после**
-    // успешной записи lock (Ф5б-3, см. `_cleanupPreviousVersion`).
+    // успешной записи lock (Ф5б-3, см. `_cleanupPreviousVersion`). При
+    // `keepPrevious` (update) каталог и снимок записи сохраняются: это ступень
+    // отката (`previous` в lock, долги Д2).
     const previous = await this._lock.get(name);
+    const keepPrevious = request.keepPrevious === true;
     await this._lock.save(
       this._buildLockEntry({
         name,
@@ -683,6 +794,7 @@ export class PluginInstaller {
         entry,
         ...(request.identifier ? { identifier: request.identifier } : {}),
         ...(request.ref ? { ref: request.ref } : {}),
+        ...(keepPrevious && previous ? { previous: previousOf(previous) } : {}),
       }),
     );
     await this._writeAudit({
@@ -700,7 +812,7 @@ export class PluginInstaller {
       mode: manifest.mode,
     });
 
-    await this._cleanupPreviousVersion(name, previous?.version, version);
+    await this._cleanupPreviousVersion(name, previous?.version, version, keepPrevious);
 
     const activated = request.activate
       ? await this._activate({
@@ -784,6 +896,269 @@ export class PluginInstaller {
         );
       }
     }
+  }
+
+  // ── Обновление и откат ─────────────────────────────────────────────
+
+  /**
+   * Обновить установленный плагин из **того же источника**, что записан в lock
+   * (PROP-090 §«Запись lock», долги Д2).
+   *
+   * Правила:
+   * 1. Нет записи в lock → `plugin.not_found`.
+   * 2. Источник — из lock (`source`/`identifier`/`ref`), а не из запроса:
+   *    `npm` → `kind: 'npm'` (`version ?? 'latest'`), `local` → существующий
+   *    каталог (`dir`) или `.tgz`/`.tar.gz` (`archive`), `url` → `kind: 'url'`
+   *    с **обязательным** новым `sha256` (pin), прочее → отказ
+   *    `plugin.source_unavailable`.
+   * 3. Резолвинг → content-hash: совпал с lock → **`unchanged`** (ничего не
+   *    пишется; временный каталог убирается).
+   * 4. Иначе — обычная установка (`installFromDirectory`) с `keepPrevious`:
+   *    гейты (манифест/скан/trust-floor/install-policy) те же, доверие —
+   *    **из lock**, каталог прежней версии сохраняется, в lock пишется
+   *    `previous`.
+   * 5. Активация: был активен → старый модуль деактивируется **после**
+   *    успешной установки, затем активируется новая версия; `activate: false`
+   *    не активирует, не задано — сохраняет прежнее состояние. Отказ активации
+   *    обновление не отменяет (возвращается `activated` с `rejected`).
+   *
+   * `cleanup()` резолвера вызывается всегда (в `finally`).
+   */
+  async update(name: string, opts: PluginUpdateOptions = {}): Promise<PluginUpdateOutcome> {
+    const actor = opts.actor ?? 'system';
+
+    const entry = await this._lock.get(name);
+    if (!entry) {
+      return this._rejectUpdate({
+        name,
+        actor,
+        reason: 'plugin.not_found',
+        message:
+          `Плагин «${name}» не установлен (нет записи в plugins.lock.json) — обновлять нечего.`,
+      });
+    }
+
+    const source = await this._updateSource(entry, opts);
+    if ('message' in source) {
+      return this._rejectUpdate({
+        name,
+        actor,
+        reason: 'plugin.source_unavailable',
+        message: source.message,
+        entry,
+      });
+    }
+
+    let resolved: ResolvedPluginSource;
+    try {
+      resolved = await resolvePluginSource(source, opts.sourceContext ?? {});
+    } catch (err) {
+      return this._rejectUpdate({
+        name,
+        actor,
+        reason: 'plugin.source_unavailable',
+        message:
+          `Не удалось получить бандл обновления плагина «${name}» из источника ` +
+          `«${source.kind}» (${source.ref}): ${err instanceof Error ? err.message : String(err)}`,
+        entry,
+      });
+    }
+
+    try {
+      // Сверка с установленным: тот же состав файлов — обновлять нечего.
+      // Манифест не читается здесь: с ним разберётся `installFromDirectory`
+      // (и запишет осмысленный отказ `plugin.manifest_invalid` с аудитом).
+      const { files } = await collectBundleFiles(resolved.dir);
+      const contentHash = computePluginContentHash(files);
+      if (contentHash === entry.content_hash) {
+        this._logger.warn(
+          `плагин «${name}» уже на версии ${entry.version}: бандл источника совпал по ` +
+            'content-hash — обновление не требуется.',
+        );
+        return { outcome: 'unchanged', name, version: entry.version, contentHash };
+      }
+
+      const wasActive = this._host?.isActive(name) ?? false;
+      const installed = await this.installFromDirectory({
+        dir: resolved.dir,
+        // Доверие — из lock: update не «переспрашивает» оператора заново.
+        trustLevel: entry.trust_level,
+        source: resolved.source,
+        ...(resolved.identifier ? { identifier: resolved.identifier } : {}),
+        ...(resolved.ref ? { ref: resolved.ref } : {}),
+        installKind: opts.installKind ?? 'runtime',
+        // Ступень отката: каталог прежней версии остаётся, в lock — `previous`.
+        keepPrevious: true,
+        actor,
+      });
+
+      if (installed.outcome === 'approval_required') {
+        return {
+          outcome: 'rejected',
+          name,
+          reason: 'plugin.approval_required',
+          message: installed.reason,
+        };
+      }
+      if (installed.outcome === 'rejected') {
+        return {
+          outcome: 'rejected',
+          name: installed.name ?? name,
+          reason: installed.reason,
+          message: installed.message,
+        };
+      }
+
+      const updated = await this._lock.get(name);
+      // Старый модуль ещё загружен (активация в реестре — по имени): снимаем
+      // его **после** успешной раскладки новой версии, затем активируем новую.
+      if (wasActive) {
+        await this._host?.deactivate(name, { actor });
+      }
+      const shouldActivate = opts.activate === true ? true : opts.activate === false ? false : wasActive;
+      const activated = shouldActivate
+        ? await this._activateInstalledVersion({
+            name,
+            version: installed.version,
+            rootDir: installed.dir,
+            ...(updated?.entry ? { entry: updated.entry } : {}),
+            contentHash: installed.contentHash,
+            trustLevel: entry.trust_level,
+            installKind: opts.installKind ?? 'runtime',
+            source: resolved.source,
+            actor,
+          })
+        : undefined;
+
+      return {
+        outcome: 'updated',
+        name,
+        version: installed.version,
+        previousVersion: entry.version,
+        dir: installed.dir,
+        contentHash: installed.contentHash,
+        ...(activated ? { activated } : {}),
+      };
+    } finally {
+      try {
+        await resolved.cleanup();
+      } catch (err) {
+        this._logger.warn(
+          `не удалось удалить временный каталог источника обновления плагина «${name}»: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Откатить плагин на предыдущую установленную версию (PROP-090 §«Запись
+   * lock», долги Д2).
+   *
+   * `previous` в lock — **одна ступень**: откат меняет местами текущую и
+   * предыдущую, поэтому повторный `rollback` возвращает обратно. Каталог
+   * предыдущей версии обязан существовать (иначе `plugin.rollback_unavailable`:
+   * возвращаться некуда). Активный плагин деактивируется, затем активируется
+   * откатанная версия; отказ активации откат не отменяет.
+   */
+  async rollback(
+    name: string,
+    opts: { actor?: string } = {},
+  ): Promise<PluginRollbackOutcome> {
+    const actor = opts.actor ?? 'system';
+    const entry = await this._lock.get(name);
+    if (!entry) {
+      return this._rejectRollback({
+        name,
+        actor,
+        reason: 'plugin.not_found',
+        message:
+          `Плагин «${name}» не установлен (нет записи в plugins.lock.json) — откатывать нечего.`,
+      });
+    }
+
+    const previous = entry.previous;
+    if (!previous) {
+      return this._rejectRollback({
+        name,
+        version: entry.version,
+        actor,
+        reason: 'plugin.rollback_unavailable',
+        message:
+          `У плагина «${name}» нет предыдущей версии для отката (плагин не обновлялся).`,
+        entry,
+      });
+    }
+
+    const previousDir = pluginInstalledDir(this._layout, name, previous.version);
+    if (!(await pathExists(join(previousDir, MANIFEST_FILE)))) {
+      return this._rejectRollback({
+        name,
+        version: entry.version,
+        actor,
+        reason: 'plugin.rollback_unavailable',
+        message:
+          `Каталог предыдущей версии плагина «${name}@${previous.version}» отсутствует ` +
+          '(удалён вручную или почищен) — откат невозможен.',
+        entry,
+      });
+    }
+
+    const wasActive = this._host?.isActive(name) ?? false;
+    if (wasActive) {
+      await this._host?.deactivate(name, { actor });
+    }
+
+    // Swap: текущая версия становится ступенью отката. `installed_at` записи —
+    // исходный (иммутабелен), меняется только `updated_at`.
+    await this._lock.save({
+      name: entry.name,
+      version: previous.version,
+      source: entry.source,
+      ...(entry.identifier ? { identifier: entry.identifier } : {}),
+      trust_level: entry.trust_level,
+      scan_verdict: entry.scan_verdict,
+      content_hash: previous.content_hash,
+      ...(entry.ref ? { ref: entry.ref } : {}),
+      ...(previous.entry ? { entry: previous.entry } : {}),
+      previous: previousOf(entry),
+      installed_at: entry.installed_at,
+      updated_at: this._now(),
+    });
+
+    await this._writeAudit({
+      action: 'rollback',
+      plugin: name,
+      version: previous.version,
+      outcome: 'ok',
+      actor,
+      trustLevel: entry.trust_level,
+      scanVerdict: entry.scan_verdict,
+      contentHash: previous.content_hash,
+      source: entry.source,
+    });
+
+    const activated = wasActive
+      ? await this._activateInstalledVersion({
+          name,
+          version: previous.version,
+          rootDir: previousDir,
+          ...(previous.entry ? { entry: previous.entry } : {}),
+          contentHash: previous.content_hash,
+          trustLevel: entry.trust_level,
+          installKind: 'deploy',
+          source: entry.source,
+          actor,
+        })
+      : undefined;
+
+    return {
+      outcome: 'rolled_back',
+      name,
+      version: previous.version,
+      previousVersion: entry.version,
+      ...(activated ? { activated } : {}),
+    };
   }
 
   // ── Подтверждение ───────────────────────────────────────────────────
@@ -1152,12 +1527,201 @@ export class PluginInstaller {
   // ── Вспомогательное ────────────────────────────────────────────────
 
   /**
+   * Источник обновления по записи lock → запрос резолвера (или причина отказа).
+   *
+   * Клиент не выбирает источник при `update` (иначе «обновление» могло бы
+   * подменить провенанс); поддерживаются те же виды, что ставились: `npm`,
+   * локальный каталог/архив и https-URL (с **новым** pin).
+   */
+  private async _updateSource(
+    entry: PluginLockEntry,
+    opts: PluginUpdateOptions,
+  ): Promise<
+    | { kind: 'dir' | 'archive' | 'npm' | 'url'; ref: string; version?: string; sha256?: string }
+    | { message: string }
+  > {
+    const identifier = entry.identifier?.trim();
+    switch (entry.source) {
+      case 'npm': {
+        if (!identifier) {
+          return {
+            message:
+              `У записи плагина «${entry.name}» нет npm-пакета в lock — ` +
+              'источник обновления не восстановить, поставьте нужную версию установкой.',
+          };
+        }
+        return { kind: 'npm', ref: identifier, version: opts.version?.trim() || 'latest' };
+      }
+      case 'local': {
+        if (!identifier) {
+          return { message: 'источник установки не найден по записи lock (нет identifier)' };
+        }
+        // Каталог — приоритетнее расширения: имя каталога может оканчиваться
+        // на `.tgz`, но это всё ещё каталог бандла.
+        if (await this._isDirectory(identifier)) {
+          return { kind: 'dir', ref: identifier };
+        }
+        if (ARCHIVE_EXTENSION_REGEX.test(identifier)) {
+          return { kind: 'archive', ref: identifier };
+        }
+        return {
+          message:
+            `источник установки не найден по записи lock: «${identifier}» не каталог и не ` +
+            'архив (.tgz/.tar.gz) — обновите плагин установкой из доступного источника.',
+        };
+      }
+      case 'url': {
+        if (!identifier) {
+          return { message: 'источник установки не найден по записи lock (нет identifier)' };
+        }
+        const sha256 = opts.sha256?.trim().toLowerCase() ?? '';
+        if (!/^[0-9a-f]{64}$/.test(sha256)) {
+          return {
+            message:
+              'для обновления из URL укажите новый sha256 (pin) — адрес из lock сам по себе ' +
+              'не гарантирует целостность.',
+          };
+        }
+        return { kind: 'url', ref: identifier, sha256 };
+      }
+      default:
+        return {
+          message:
+            `источник обновления «${entry.source}» не поддерживается: ` +
+            'обновление возможно для local/npm/url — поставьте нужную версию установкой.',
+        };
+    }
+  }
+
+  /** Каталог ли путь (без исключений; отсутствующий — `false`). */
+  private async _isDirectory(path: string): Promise<boolean> {
+    try {
+      return (await stat(path)).isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
+  /** Отказ обновления: аудит `install/rejected` + результат вызывающему. */
+  private async _rejectUpdate(input: {
+    name: string;
+    actor: string;
+    reason: PluginAuditReason;
+    message: string;
+    entry?: PluginLockEntry;
+  }): Promise<PluginUpdateOutcome> {
+    await this._writeAudit({
+      action: 'install',
+      plugin: input.name,
+      version: input.entry?.version ?? '',
+      outcome: 'rejected',
+      reason: input.reason,
+      actor: input.actor,
+      ...(input.entry
+        ? {
+            trustLevel: input.entry.trust_level,
+            scanVerdict: input.entry.scan_verdict,
+            contentHash: input.entry.content_hash,
+            source: input.entry.source,
+          }
+        : {}),
+    });
+    return {
+      outcome: 'rejected',
+      name: input.name,
+      reason: input.reason,
+      message: input.message,
+    };
+  }
+
+  /** Отказ отката: аудит `rollback/rejected` + результат вызывающему. */
+  private async _rejectRollback(input: {
+    name: string;
+    version?: string;
+    actor: string;
+    reason: PluginAuditReason;
+    message: string;
+    entry?: PluginLockEntry;
+  }): Promise<PluginRollbackOutcome> {
+    await this._writeAudit({
+      action: 'rollback',
+      plugin: input.name,
+      version: input.version ?? '',
+      outcome: 'rejected',
+      reason: input.reason,
+      actor: input.actor,
+      ...(input.entry
+        ? {
+            trustLevel: input.entry.trust_level,
+            scanVerdict: input.entry.scan_verdict,
+            contentHash: input.entry.content_hash,
+            source: input.entry.source,
+          }
+        : {}),
+    });
+    return {
+      outcome: 'rejected',
+      name: input.name,
+      reason: input.reason,
+      message: input.message,
+    };
+  }
+
+  /**
+   * Активировать установленную версию по каталогу (update/rollback).
+   *
+   * Манифест и состав файлов перечитываются из каталога: шаг integrity хоста
+   * сверяет переданный `contentHash` с фактическим содержимым — без `files`
+   * проверка была бы «непроверяема». Хост не передан — активации нет.
+   */
+  private async _activateInstalledVersion(input: {
+    name: string;
+    version: string;
+    rootDir: string;
+    entry?: string;
+    contentHash: string;
+    trustLevel: CatalogTrustLevel;
+    installKind: 'deploy' | 'runtime';
+    source: string;
+    actor: string;
+  }): Promise<PluginActivationResult | undefined> {
+    if (!this._host) return undefined;
+    const manifestRead = await readPluginManifest(input.rootDir);
+    if (!manifestRead.ok) {
+      return {
+        outcome: 'rejected',
+        plugin: input.name,
+        version: input.version,
+        step: 'resolve',
+        reason: 'plugin.manifest_invalid',
+        message: manifestRead.message,
+      };
+    }
+    const { files } = await collectBundleFiles(input.rootDir);
+    return this._activate({
+      name: input.name,
+      version: input.version,
+      manifest: manifestRead.manifest,
+      files,
+      rootDir: input.rootDir,
+      entry: input.entry ?? resolvePluginEntry(files),
+      contentHash: input.contentHash,
+      trustLevel: input.trustLevel,
+      installKind: input.installKind,
+      source: input.source,
+      actor: input.actor,
+    });
+  }
+
+  /**
    * Удалить каталог предыдущей версии плагина после успешной установки новой
    * (PROP-090 §5, Ф5б-3).
    *
    * Правила:
    * - вызывается **только после** раскладки новой версии и записи lock —
    *   сбой уборки не должен превращать успешную установку в отказ;
+   * - `keepPrevious` (update, долги Д2) — каталог **не** удаляется: это
+   *   ступень отката (`previous` в lock);
    * - плагин **активен** (модуль загружен в процесс) → каталог остаётся:
    *   удалять код работающего плагина нельзя, предупреждение в лог; уборка
    *   произойдёт при следующей установке после деактивации/рестарта;
@@ -1167,8 +1731,10 @@ export class PluginInstaller {
     name: string,
     previousVersion: string | undefined,
     version: string,
+    keepPrevious = false,
   ): Promise<void> {
     if (!previousVersion || previousVersion === version) return;
+    if (keepPrevious) return;
     const previousDir = pluginInstalledDir(this._layout, name, previousVersion);
     if (!(await pathExists(previousDir))) return;
 
@@ -1381,6 +1947,8 @@ export class PluginInstaller {
     entry: string;
     identifier?: string;
     ref?: string;
+    /** Ступень отката (update): снимок прежней записи. */
+    previous?: PluginLockPrevious;
   }): PluginLockEntry {
     const ts = this._now();
     return {
@@ -1395,6 +1963,7 @@ export class PluginInstaller {
       entry: input.entry,
       installed_at: ts,
       updated_at: ts,
+      ...(input.previous ? { previous: input.previous } : {}),
     };
   }
 

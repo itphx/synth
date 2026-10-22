@@ -55,6 +55,7 @@ import type {
 } from '../engine/plugins/activation.js';
 import { computePluginContentHash } from '../engine/plugins/integrity.js';
 import type { PluginInstallOutcome } from '../engine/plugins/installer.js';
+import type { PluginRollbackOutcome, PluginUpdateOutcome } from '../engine/plugins/installer.js';
 import { collectBundleFiles, readPluginManifest } from '../engine/plugins/installer.js';
 import type { PluginInstallSourceKind } from '../engine/plugins/sources.js';
 import {
@@ -224,6 +225,15 @@ function writeReasonHint(reason: PluginAuditReason | undefined): void {
           'и совпадение контрольной суммы (SRI/sha256).',
       );
       break;
+    case 'plugin.rollback_unavailable':
+      console.error(
+        '  Подсказка: откатываться некуда — плагин не обновлялся (нет ступени previous) ' +
+          'или каталог предыдущей версии удалён; поставьте нужную версию: synth plugin install <ref>.',
+      );
+      break;
+    case 'plugin.already_active':
+      console.error('  Подсказка: плагин уже активен в этом процессе.');
+      break;
     default:
       break;
   }
@@ -256,6 +266,74 @@ function printInstallOutcome(outcome: PluginInstallOutcome): number {
     return 0;
   }
   console.error(`Отклонено${outcome.name ? ` (${outcome.name})` : ''}: ${outcome.reason}`);
+  console.error(`  ${outcome.message}`);
+  writeReasonHint(outcome.reason);
+  return 1;
+}
+
+/** Итог обновления → код выхода и сообщение человеку. */
+function printUpdateOutcome(outcome: PluginUpdateOutcome): number {
+  if (outcome.outcome === 'unchanged') {
+    console.log(`Уже актуален: ${outcome.name} v${outcome.version}`);
+    return 0;
+  }
+  if (outcome.outcome === 'updated') {
+    console.log(
+      `Обновлён: ${outcome.name} v${outcome.previousVersion} → v${outcome.version}`,
+    );
+    console.log(`  каталог: ${outcome.dir}`);
+    console.log(`  content-hash: ${outcome.contentHash}`);
+    const activation = outcome.activated;
+    if (activation) {
+      if (activation.outcome === 'activated') {
+        console.log(
+          '  активация: активен (проверка в процессе CLI; инстанс применит после перезапуска)',
+        );
+      } else {
+        console.log(
+          `  активация: отклонена (${activation.reason ?? 'без кода'})` +
+            (activation.message ? ` — ${activation.message}` : ''),
+        );
+        writeReasonHint(activation.reason);
+      }
+    }
+    return 0;
+  }
+  if (outcome.reason === 'plugin.approval_required') {
+    console.log(`Обновление отложено (карантин): ${outcome.name}`);
+    console.log(`  ${outcome.message}`);
+    console.log(`  Подтвердите установку: synth plugin approve ${outcome.name}`);
+    return 0;
+  }
+  console.error(`Обновление отклонено (${outcome.name}): ${outcome.reason}`);
+  console.error(`  ${outcome.message}`);
+  writeReasonHint(outcome.reason);
+  return 1;
+}
+
+/** Итог отката → код выхода и сообщение человеку. */
+function printRollbackOutcome(outcome: PluginRollbackOutcome): number {
+  if (outcome.outcome === 'rolled_back') {
+    console.log(
+      `Откат: ${outcome.name} v${outcome.previousVersion} → v${outcome.version}`,
+    );
+    const activation = outcome.activated;
+    if (activation) {
+      if (activation.outcome === 'activated') {
+        console.log(
+          '  активация: активен (проверка в процессе CLI; инстанс применит после перезапуска)',
+        );
+      } else {
+        console.log(
+          `  активация: отклонена (${activation.reason ?? 'без кода'})` +
+            (activation.message ? ` — ${activation.message}` : ''),
+        );
+        writeReasonHint(activation.reason);
+      }
+    }
+    return 0;
+  }
+  console.error(`Откат отклонён (${outcome.name}): ${outcome.reason}`);
   console.error(`  ${outcome.message}`);
   writeReasonHint(outcome.reason);
   return 1;
@@ -508,6 +586,60 @@ function createInstallCommand(deps: PluginCommandDeps): Command {
   });
 }
 
+/** `synth plugin update <name>` — обновление из источника записи lock (Д2). */
+function createUpdateCommand(deps: PluginCommandDeps): Command {
+  const cmd = new Command('update').description(
+    'Обновить плагин из источника записи lock (npm/local/url; гейты те же, что у установки)',
+  );
+  cmd.argument('<name>', 'имя плагина');
+  addCommonOptions(
+    cmd
+      .option('--version <version>', 'npm: точная версия или latest (по умолчанию latest)')
+      .option('--sha256 <hex>', 'url: обязательный новый pin — sha256 архива (64 hex-символа)')
+      .option('--activate', 'активировать после обновления (исполняет код — спросит подтверждение)')
+      .option('--yes', 'не спрашивать подтверждение активации'),
+  );
+  return cmd.action(async (name: string, options: Record<string, unknown>) => {
+    const activate = options.activate === true;
+    if (activate && !(await confirmActivation(name, options.yes === true))) {
+      console.error('Отменено: активация не подтверждена.');
+      process.exitCode = 1;
+      return;
+    }
+    await withContext(deps, options, async ({ runtime }) => {
+      const outcome = await runtime.installer.update(name, {
+        ...(typeof options.version === 'string' && options.version.trim()
+          ? { version: options.version.trim() }
+          : {}),
+        ...(typeof options.sha256 === 'string' && options.sha256.trim()
+          ? { sha256: options.sha256.trim().toLowerCase() }
+          : {}),
+        ...(activate ? { activate: true } : {}),
+        // CLI — офлайн-операция оператора (как `install`): политика
+        // `plugins.runtimeInstall` к ней не применяется (инвариант 24).
+        installKind: 'deploy',
+        actor: ACTOR,
+      });
+      return printUpdateOutcome(outcome);
+    });
+  });
+}
+
+/** `synth plugin rollback <name>` — откат на предыдущую версию (Д2). */
+function createRollbackCommand(deps: PluginCommandDeps): Command {
+  const cmd = new Command('rollback').description(
+    'Откатить плагин на предыдущую версию (ступень `previous` записи lock)',
+  );
+  cmd.argument('<name>', 'имя плагина');
+  addCommonOptions(cmd);
+  return cmd.action(async (name: string, options: Record<string, unknown>) => {
+    await withContext(deps, options, async ({ runtime }) => {
+      const outcome = await runtime.installer.rollback(name, { actor: ACTOR });
+      return printRollbackOutcome(outcome);
+    });
+  });
+}
+
 /** `synth plugin approve <name>` — подтверждение бандла из карантина. */
 function createApproveCommand(deps: PluginCommandDeps): Command {
   const cmd = new Command('approve').description(
@@ -717,9 +849,11 @@ async function runScan(dir: string, json: boolean): Promise<number> {
  */
 export function createPluginCommand(deps: PluginCommandDeps): Command {
   return new Command('plugin')
-    .description('Плагины (PROP-090): установка, проверка, включение, снятие')
+    .description('Плагины (PROP-090): установка, проверка, обновление, откат, снятие')
     .addCommand(createListCommand(deps))
     .addCommand(createInstallCommand(deps))
+    .addCommand(createUpdateCommand(deps))
+    .addCommand(createRollbackCommand(deps))
     .addCommand(createApproveCommand(deps))
     .addCommand(createEnableCommand(deps))
     .addCommand(createDisableCommand(deps))

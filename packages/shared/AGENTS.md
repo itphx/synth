@@ -220,6 +220,10 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `trustLevelRank` — единый перечень уровней (`builtin`/`verified`/`trusted`/`community`), общий для
   каталога (`types/catalog.ts` реэкспортирует) и манифеста (модуль выделен из-за цикла
   `catalog → pack`).
+- PROP-068 §4.4 / PROP-090 §5 (долги Д2): **ступень отката в lock** — `types/plugin-lock.ts`:
+  `PluginLockPrevious` (`version`/`content_hash`/`entry?`/`installed_at`) и
+  `PluginLockEntry.previous?` — **одна** ступень (откат обратим, «на две версии назад» = два
+  `rollback`); при обновлении прежняя запись переезжает в `previous`, при откате — swap.
 - PROP-090 §9: **журнал аудита плагинов** — `types/plugin-audit.ts` (re-export из `types`):
   `PluginAuditEntry` (`id` `pa_<uuid>`/`ts`/`actor`/`scope: 'plugin'`/`action`/`plugin`/`version`/
   `trustLevel?`/`scanVerdict?`/`scanFindings?`/`scanPerformed?`/`contentHash?`/`mode?`/`outcome`/
@@ -227,7 +231,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `scan`/`filter` — `filter` добавлено Ф3б: события решений фильтров LLM-вызовов, `install`/`uninstall` —
   Ф5а: установка и снятие плагина `PluginInstaller`),
   `PLUGIN_AUDIT_OUTCOMES` (`ok`/`rejected`), `PLUGIN_SCAN_VERDICTS` (`safe`/`caution`/`dangerous`),
-  `PLUGIN_AUDIT_REASONS` — **закрытый** список **25** кодов отказа (по одному на гейт пайплайна
+  `PLUGIN_AUDIT_REASONS` — **закрытый** список **26** кодов отказа (по одному на гейт пайплайна
   активации; Д1 добавил `plugin.source_unavailable` — источник установки недоступен или не прошёл
   проверку целостности: локальный путь/архив, npm без SRI или с несовпадением, URL без pin/с
   несовпадением sha256; Ф2 добавил `plugin.scan_rejected` и `plugin.approval_required`, Ф3а —
