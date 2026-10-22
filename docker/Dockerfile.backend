@@ -51,7 +51,7 @@ WORKDIR /repo
 COPY . .
 
 # Установка зависимостей workspace и сборка в порядке: shared → core →
-# storage-postgres → backend.
+# storage-postgres → executor → backend.
 #
 # `@itphx/synth-storage-postgres` — опциональный БД-драйвер слоя хранения
 # (ADR-096/ADR-097), обязательный для `storage.backend=postgres`. Его нужно и
@@ -59,10 +59,17 @@ COPY . .
 # (только `dist`), поэтому непособанный пакет уехал бы в образ без кода.
 # `--prod`/`--legacy` (ниже) optional-зависимости не выкидывают; `--no-optional`
 # использовать нельзя.
-RUN pnpm install --filter @itphx/synth-backend --filter @itphx/synth-core --filter @itphx/synth-shared --filter @itphx/synth-storage-postgres \
+#
+# `@itphx/synth-executor` — опциональный пакет исполнителя (ADR-077): core
+# подключает его динамическим `import()` (fail-closed), и без него образ
+# control plane не способен работать в режиме `execution.mode=remote`. Точно
+# так же его нужно и установить, и собрать — иначе в образ уедет пакет без
+# `dist` (в `files` пакета только `dist`), и удалённый режим не поднимется.
+RUN pnpm install --filter @itphx/synth-backend --filter @itphx/synth-core --filter @itphx/synth-shared --filter @itphx/synth-storage-postgres --filter @itphx/synth-executor \
     && pnpm --filter @itphx/synth-shared build \
     && pnpm --filter @itphx/synth-core build \
     && pnpm --filter @itphx/synth-storage-postgres build \
+    && pnpm --filter @itphx/synth-executor build \
     && pnpm --filter @itphx/synth-backend build
 
 # pnpm deploy создаёт самодостаточную папку с реальными node_modules (без symlinks),
