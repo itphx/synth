@@ -53,12 +53,12 @@
 > первое совпадение; `noProxy` важнее правил; CIDR — только по IP-литералу), пароли и TLS-материалы
 > профилей в `secrets/proxy/`, API `settings/proxy/profiles/:name/*` и `POST settings/proxy/test`,
 > UI-редактор профилей/правил и target-check, legacy-совместимость.
-> **Связано:** [PROP-088](./prop-088-http-proxy.md) (заменён/надстроен), [PROP-100](./prop-100-ssrf-dns-rebinding.md),
+> **Связано:** [PROP-100](./prop-100-ssrf-dns-rebinding.md),
 > [ADR-071](./adr-071-mcp-servers-prompt.md) §2.3.1 (сетевой доступ MCP), [ADR-052](./adr-052-public-api-platform.md)
 > (webhooks), [ADR-041](./adr-041-llm-error-taxonomy.md) (ключи ошибок), [ADR-036](./adr-036-llm-gateway.md),
 > [ADR-094](./adr-094-observability-metrics.md), [ADR-023](./adr-023-configuration.md),
 > [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-078](./adr-078-runtime-dependency-availability.md),
-> [ADR-096](./adr-096-storage-layer.md), [PROP-032](./prop-032-history-storage-postgresql.md);
+> [ADR-096](./adr-096-storage-layer.md), [ADR-097](./adr-097-storage-provider-class.md);
 > конфиг — [docs/CONFIGURATION.md](../CONFIGURATION.md).
 
 ## Контекст
@@ -70,10 +70,10 @@
 не было: каждая точка (провайдеры LLM, MCP HTTP, `web_fetch`/`web_search`, webhooks, гибридный backend,
 инструкции/скиллы по URL, update-checker, OIDC, загрузка иконок, git, PostgreSQL) решала вопрос сама.
 
-[PROP-088](./prop-088-http-proxy.md) проектировал единый **egress-слой целиком** (прокси + `no_proxy` +
-доверенные CA + аутентификация прокси/Kerberos). Прокси-часть реализована; **доменная аутентификация
-прокси осознанно не входит в приложение** — делегируется промежуточному egress-прокси/шлюзу (п. 25),
-PROP-088 закрыт как заменённый. Доверие TLS/CA зафиксировано отдельным решением в этом же ADR.
+Единый **egress-слой целиком** (прокси + `no_proxy` + доверенные CA + аутентификация прокси/Kerberos)
+проектировался как отдельное предложение — теперь оно в этом же ADR. Прокси-часть реализована;
+**доменная аутентификация прокси осознанно не входит в приложение** — делегируется промежуточному
+egress-прокси/шлюзу (п. 25). Доверие TLS/CA зафиксировано отдельным решением в этом же ADR.
 
 Адресная (SSRF) политика при этом оставалась рассыпанной: у MCP — собственный `mcp.networkPolicy`, у
 webhooks — зашитый `allowPrivateTargets` плюс отдельный `evaluateWebhookTarget`, у `web_fetch`/
@@ -167,7 +167,8 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
     `egress.log.retentionDays` (`0` — без очистки), prune на старте и раз в 6 ч; чтение —
     `GET /api/v2/audit/egress?limit&scope&status`. **Провайдеры LLM в журнал не входят** — у них свой
     LLM audit/payload-лог ([ADR-036](./adr-036-llm-gateway.md)).
-15. **Правило при HTTP-прокси** (реализовано, пункты 16–20; доменный остаток — [PROP-088](./prop-088-http-proxy.md)).
+15. **Правило при HTTP-прокси** (реализовано, пункты 16–20; доменный остаток — runtime-reload
+    прокси/TLS без рестарта, см. «Статус в коде» → «Нет (остаток)»).
     Если адрес резолвит прокси, адресная проверка на стороне Synth **отключается** (проверять нечего:
     соединение устанавливает прокси), hostname-правила (`list`/`exceptions` по имени) остаются;
     ответственность за адресную политику переходит на прокси и его allowlist. Исключение — хосты из
@@ -465,7 +466,7 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   в CI). PostgreSQL не проксируется; git применяет `no_proxy` средствами libcurl, per-remote
   настройки нет; `stdio`-MCP получает env без пароля.
 - (−) TLS инициализируется при старте (без hot-reload); hot-reload прокси/TLS — остаток
-  ([PROP-088](./prop-088-http-proxy.md)).
+  (см. «Статус в коде» → «Нет (остаток)»).
 
 ## Статус в коде
 
@@ -585,7 +586,7 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   делегируется промежуточному egress-прокси/шлюзу (Squid `login=NEGOTIATE`, `px` для NTLM/PAC), п. 25;
   в коде только отказ `auth.type` ≠ `basic` (400/`EGRESS_PROXY_CONFIG_INVALID`). Egress gateway —
   deploy/docs (манифесты/чарт), не код приложения. 407-диагностика `Negotiate|NTLM` — следующий шаг.
-- **Нет (остаток):** runtime-reload прокси/TLS без рестарта ([PROP-088](./prop-088-http-proxy.md));
+- **Нет (остаток):** runtime-reload прокси/TLS без рестарта;
   `security.tls` к **цели** через SOCKS5 (best-effort, п. 26); per-host CA и несколько default-клиентских
   сертов (одна CA-бандл-модель на цель; per-profile TLS — только **к прокси**, п. 27); пиннинг адреса
   (TOCTOU), в т.ч. для direct/`noProxy`-хостов —
@@ -596,12 +597,11 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
 
 - 2026-10-16 — ADR заведён: единый egress-слой доверия TLS/CA + mTLS (секция `security.tls`, общий
   транспорт `egressFetch`/`applyGlobalTlsTrust`, перевод всех исходящих точек, git-CA, PostgreSQL
-  `sslmode` + запрет TLS-параметров в DSN); прокси-часть PROP-088 не вошла — заменён/надстроен.
-- 2026-10-17 — ADR расширен адресной политикой исходящих запросов: `egress.tools`/`egress.webhooks`
-  (единый формат `mode`/`list`/`exceptions`, `off` только у webhooks), `mcp.networkPolicy` в том же
-  формате, независимые экземпляры, live per-request, аудит изменений и журнал внешних запросов,
-  удаление `webhooks.allowPrivateTargets`, правило взаимодействия с прокси.
-- 2026-10-17/18 — прокси и TLS настраиваются runtime: HTTP/HTTPS/SOCKS5-прокси (секция `proxy`,
+  `sslmode` + запрет TLS-параметров в DSN); прокси-часть не вошла — заменён/надстроен.
+- 2026-10-17/18 — адресная политика исходящих запросов (`egress.tools`/`egress.webhooks` — единый формат
+  `mode`/`list`/`exceptions`, `off` только у webhooks; `mcp.networkPolicy` в том же формате; независимые
+  экземпляры, live per-request, аудит изменений и журнал внешних запросов; удаление
+  `webhooks.allowPrivateTargets`; правило взаимодействия с прокси) и runtime-настройка прокси и TLS: HTTP/HTTPS/SOCKS5-прокси (секция `proxy`,
   `EgressDispatcher` с per-origin маршрутом, Basic и TLS/mTLS к https-прокси, `noProxy`, proxied-режим
   адресной политики и `via`, fail-closed/`fallbackDirect`, git/MCP через env; runtime-override в
   `RuntimeSettings.proxy`, применение при старте, `restartRequired`, write-only пароль, аудит
@@ -614,3 +614,6 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   per-profile `auth`/`tls`, пароли/TLS-материалы профилей в `secrets/proxy/`, API
   `settings/proxy/profiles/:name/*` и `POST settings/proxy/test` (target-check), UI-редактор
   профилей/правил и проверка цели, legacy-конвертация в `profiles.default`.
+- 2026-10-22 — материал отдельного предложения о «работе через HTTP-прокси» перенесён сюда: документ
+  удалён, прокси/CA/адресная политика и доменная аутентификация уже были в этом ADR; остаток
+  (runtime-reload прокси/TLS без рестарта) зафиксирован выше.

@@ -68,7 +68,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `escalationProvider`/`escalationModel` — необязательный точный тир на эскалацию
   (пусто — эскалации нет), env-резолверы `SYNTH_DECISION_PROVIDER`/`SYNTH_DECISION_MODEL`;
   поле `events.decisionRouting` (decision-маршрутизация внешних событий, default `false`, ADR-084 × ADR-089).
-- PROP-102: секция `analytics` (`retentionDays`, default `400`; `<= 0` — хранение без
+- ADR-102: секция `analytics` (`retentionDays`, default `400`; `<= 0` — хранение без
   ограничения; `analyticsConfigSchema` + `AnalyticsConfig`), скалярный env-оверрайд
   `SYNTH_ANALYTICS_RETENTION_DAYS` по общему правилу секций.
 - ADR-094: секция `metrics` (`enabled`, default `false`; `metricsConfigSchema` + `MetricsConfig`) —
@@ -81,7 +81,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   имя `SYNTH_<SECTION>_<KEY>` (camelCase→SNAKE_CASE), невалидное значение → warn + игнор;
   приоритет `CLI > env > config.yaml > defaults` (ADR-023). Объектные/нескалярные ключи
   (`events.identityMap`, `events.dedupStore`, `mcp.servers`, …) остаются в config.yaml.
-- PROP-077: секция `execution` — **переключатель топологии исполнения** (`mode`:
+- ADR-077: секция `execution` — **переключатель топологии исполнения** (`mode`:
   `inline`|`remote`; `remote.url`/`remote.timeoutMs`/`remote.concurrency`/`remote.failMode`/
   `remote.tokenSecret`); Zod `executionConfigSchema` + `ExecutionConfig`/`ExecutionMode`/
   `ExecutionFailMode` (`config/types.ts`), дефолты — `config/defaults.ts`, резолвер
@@ -93,7 +93,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (ADR-023); **fail-closed** на неизвестном `mode`/`failMode` (как `storage.backend`);
   `remote.concurrency` по умолчанию — число CPU процесса. Секция — **параметр запуска**
   (инвариант 24): смена режима — только рестартом.
-- PROP-032 (слой хранения, ADR-096/ADR-097): секция `storage` — `backend`
+- ADR-096/ADR-097 (слой хранения): секция `storage` — `backend`
   (`file`|`memory`|`postgres`, резолвер `resolveStorageBackend` + env
   `SYNTH_STORAGE_BACKEND`, **fail-closed** на неизвестном явном значении), `postgres`
   (`dsn`/`host`/`port`/`database`/`user`/`schema`/`sslmode`/`ssl`/`poolMax`, резолвер
@@ -109,7 +109,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `SYNTH_TLS_CA_PEM`/`SYNTH_TLS_CERT_FILE`/`SYNTH_TLS_KEY_FILE`/`SYNTH_TLS_REJECT_UNAUTHORIZED`)
   в `config/tls.ts`. Резолверы хранят только **чтение/валидацию** конфига — построение
   undici-dispatcher и применение к запросам живут в core (`security/tls.ts`). Там же — TLS-опции
-  PostgreSQL (ADR-099 × PROP-032): `normalizePostgresSslMode` (`disable`/`require`/`verify-full`,
+  PostgreSQL (ADR-099 × ADR-097): `normalizePostgresSslMode` (`disable`/`require`/`verify-full`,
   алиас `verify-ca`→`verify-full`), `buildPostgresSslOptions` (sslmode + CA/mTLS из `security.tls`;
   **fail-closed** `verify-full` без CA) и `findDsnTlsParams`/`DSN_TLS_PARAMS` — **TLS-параметры в
   DSN запрещены** (`pg` накладывает DSN `Object.assign`-ом поверх конфига и молча перекрывает `ssl`).
@@ -131,7 +131,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - ADR-089/ADR-052: API-ключи привязок — типы `EventBindingApiKey` (поля `label` (обязательная, уникальная глобально по инстансу)/`description?`/`rateLimitPerMinute?`/`createdBy`/`prefix`/`lastUsedAt?`, `expiresAt?`/`revokedAt?`) и `EventBindingApiKeyCreated` (+ `key` — plaintext единожды), `EventKeyCredential` (в core); Zod `eventBindingApiKeySchema`/`eventBindingApiKeyCreateSchema` (`{label, description?, expiresAt?, rateLimitPerMinute?}`)/`eventBindingApiKeyUpdateSchema` (`null` — сброс поля)/`eventBindingApiKeyCreatedSchema` и `eventKeyIngestSchema` (`eventIngestSchema.partial({ source: true })` — приём по ключу).
 - ADR-052 (этап I): **service-key** — тип `ServiceApiKey` (`id` `svk_<uuid>`/`label`/`description?`/`roles: GlobalRole[]`/`scopes: string[]`/`allowedProjects?: string[]`/`rateLimitPerMinute?`/`expiresAt?`/`revokedAt?`/`createdBy`/`createdAt`/`lastUsedAt?`/`prefix`) и `ServiceApiKeyCreated` (+ `key` — plaintext единожды) (`types/service-keys.ts`, re-export из `types`); входные `CreateServiceApiKeyInput`/`UpdateServiceApiKeyPatch` (`null` — сброс поля). Реестры/матчер: `SERVICE_SCOPES` (точечные scope'ы, включая зонтичный `automation:install` — установщик пакетов расширений: агенты и их ролевые промпты, пайплайны, порождаемые пакетом правила маршрутизации и расписания), `SERVICE_SCOPE_FAMILIES` (wildcard-семейства, глобального `*` нет; `automation` в семейства **не** входит), `isKnownScope`/`hasServiceScope`, `SERVICE_SCOPE_SETS` (наборы «достаточно любого из»: `routesWrite`/`schedulesWrite`/`agentsWrite`) и матчер `hasAnyServiceScope`. Zod — `serviceApiKeySchema`/`serviceApiKeyCreateSchema`/`serviceApiKeyUpdateSchema`/`serviceApiKeyCreatedSchema` (валидация scope/role).
 - ADR-052 (этап II): **webhooks** — типы `WebhookSubscription` (`id` `whk_<uuid>`/`label` (уникальна)/`description?`/`url`/`events: string[]`/`enabled`/`secretPrefix`/`createdBy`/`createdAt`/`lastDeliveryAt?`/`lastStatus?`/`disabledAt?`) и `WebhookSubscriptionCreated` (+ `secret` — plaintext единожды), `WebhookDelivery` (`whd_<uuid>`/`subscriptionId`/`eventType`/`status`/`attempts`/`responseStatus?`/`error?`/`createdAt`/`completedAt?`), входные `CreateWebhookSubscriptionInput`/`UpdateWebhookSubscriptionPatch` (`types/webhooks.ts`, re-export из `types`); матчер `matchWebhookEvent(patterns, type)` (exact/`prefix.*`, пусто — `DEFAULT_WEBHOOK_EVENT_PATTERNS`), валидатор `isWebhookEventPattern`, префикс `WEBHOOK_SECRET_PREFIX` (`whsec_`). Zod — `webhookSubscriptionSchema`/`webhookSubscriptionCreateSchema`/`webhookSubscriptionUpdateSchema`/`webhookSubscriptionCreatedSchema`/`webhookDeliverySchema`/`webhookEventPatternSchema`/`webhookUrlSchema`.
-- ADR-051/PROP-059: **пайплайны** — типы `PipelineStepKind` (`agent`/`loop`), `EventMatch` (сужение
+- ADR-051/ADR-100: **пайплайны** — типы `PipelineStepKind` (`agent`/`loop`), `EventMatch` (сужение
   `eventRouteMatchSchema` до `source`/`type` — триггер шага), `PipelineArtifact` (`kind`/`id?`/`from?`),
   `PipelineStep` (`id`/`kind`/`title?`/`agent?`/`skill?`/`prompt?`/`waitsFor?`/`artifact?`/`timeoutSec?`;
   первый шаг с `waitsFor` — триггер пайплайна, последующие — гейты/HITL), `PipelineErrorPolicy`
@@ -158,7 +158,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (`images?`/`videos?`, задел PROP-085) (`types/decision.ts`); Zod
   `decisionQuestionSchema`/`decisionAnswerSchema`/`decisionRequestSchema`/`decisionResponseSchema`;
   per-session флаг `SessionSettings.decisionFirst` (ADR-035).
-- PROP-102: типы аналитики — `AnalyticsFamily`/`AnalyticsDimension`/`AnalyticsRollupBucket`/
+- ADR-102: типы аналитики — `AnalyticsFamily`/`AnalyticsDimension`/`AnalyticsRollupBucket`/
   `AnalyticsRollupQuery`/`AnalyticsRollupRow`/`AnalyticsReport`/`AnalyticsReportRow`/
   `AnalyticsSummary`/`AnalyticsExportFormat` и реестры `ANALYTICS_FAMILIES`,
   `ANALYTICS_DIMENSIONS`, `ANALYTICS_MEASURES_BY_FAMILY`, `ANALYTICS_DERIVED_MEASURES`
@@ -189,9 +189,9 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (причина `system`/`project`/`session`).
 - ADR-030/ADR-089: `event.ingested`, `event.routed.*`, `event.binding.not_found`,
   `event.source_not_allowed`, `event.duplicate`, `hook.blocked`.
-- PROP-077: `execution.remote_url_required`, `execution.remote_unavailable` (`{reason}`) —
+- ADR-077: `execution.remote_url_required`, `execution.remote_unavailable` (`{reason}`) —
   fail-closed на старте при `execution.mode=remote` (удалённый исполнитель — шаг 7b плана
-  PROP-077: пакет исполнителя недоступен / токен не читается).
+  ADR-077: пакет исполнителя недоступен / токен не читается).
 
 ## Тесты и сборка
 

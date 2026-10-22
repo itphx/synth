@@ -193,7 +193,7 @@ export const packAgentProvideSchema = z.object({
 export type PackAgentProvide = z.infer<typeof packAgentProvideSchema>;
 
 /**
- * Пайплайн-предоставление (ADR-051/PROP-059): описание автомата. Либо файл
+ * Пайплайн-предоставление (ADR-051/ADR-100): описание автомата. Либо файл
  * (`path`), либо inline-определение (`definition` — тот же контракт, что и
  * `pipelineDefinitionSchema`).
  */

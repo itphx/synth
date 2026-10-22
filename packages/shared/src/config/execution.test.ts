@@ -25,7 +25,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe('дефолты секции execution (PROP-077)', () => {
+describe('дефолты секции execution (ADR-077)', () => {
   it('mode=inline, remote без адресов, failMode=fail, timeout 30 с', () => {
     expect(cfg.execution.mode).toBe('inline');
     expect(cfg.execution.remote.url).toEqual([]);
@@ -47,7 +47,7 @@ describe('дефолты секции execution (PROP-077)', () => {
   });
 });
 
-describe('resolveExecutionMode (PROP-077)', () => {
+describe('resolveExecutionMode (ADR-077)', () => {
   it('env SYNTH_EXECUTION_MODE имеет приоритет над config.yaml', () => {
     const c = withExecution({ mode: 'inline' });
     expect(resolveExecutionMode(c, { [EXECUTION_ENV.mode]: 'remote' })).toBe('remote');
@@ -92,7 +92,7 @@ describe('resolveExecutionMode (PROP-077)', () => {
   });
 });
 
-describe('resolveExecutionConfig (PROP-077)', () => {
+describe('resolveExecutionConfig (ADR-077)', () => {
   it('env переопределяет config.yaml для remote-параметров', () => {
     const c = withExecution({
       remote: {
@@ -189,7 +189,7 @@ describe('resolveExecutionConfig (PROP-077)', () => {
   });
 });
 
-describe('parseExecutionUrlList (PROP-077)', () => {
+describe('parseExecutionUrlList (ADR-077)', () => {
   it('разбирает список через запятую, отбрасывает пустые элементы', () => {
     expect(parseExecutionUrlList('http://a:8080, http://b:8080')).toEqual([
       'http://a:8080',
@@ -200,7 +200,7 @@ describe('parseExecutionUrlList (PROP-077)', () => {
   });
 });
 
-describe('предикаты режимов (PROP-077)', () => {
+describe('предикаты режимов (ADR-077)', () => {
   it('isExecutionMode / isExecutionFailMode', () => {
     expect(isExecutionMode('inline')).toBe(true);
     expect(isExecutionMode('remote')).toBe(true);

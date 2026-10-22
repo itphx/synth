@@ -625,10 +625,10 @@ describe('Maintenance API Routes (ADR-091/ADR-092)', () => {
     });
   });
 
-  // PROP-032: admin-API при `storage.backend=postgres` — doctor/миграции ходят в
+  // ADR-097: admin-API при `storage.backend=postgres` — doctor/миграции ходят в
   // БД через переданные швы (`dbHealth`/`schemaMigrations`), файловые проверки
   // помечаются `skipped`; архивы несут `storageBackend`.
-  describe('PROP-032 — backend=postgres', () => {
+  describe('ADR-097 — backend=postgres', () => {
     const pgApp = (extra: {
       dbHealth?: () => Promise<{ ok: boolean; latencyMs?: number; schemaVersion?: number | null; expectedSchemaVersion?: number; error?: string }>;
       schemaMigrations?: (opts?: { dryRun?: boolean }) => Promise<{

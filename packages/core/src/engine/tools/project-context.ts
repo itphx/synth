@@ -57,7 +57,7 @@ interface RepoInfo {
 }
 
 /**
- * PROP-077: git-детект идёт через порт исполнения (`ctx.extra.executionPort`),
+ * ADR-077: git-детект идёт через порт исполнения (`ctx.extra.executionPort`),
  * иначе — inline-фоллбэк (`resolveExecutionPort`). Порт внедряется оркестратором,
  * поэтому в split-режиме детект поедет в исполнителя, а не в control plane.
  */
@@ -264,7 +264,7 @@ export const listReposTool: ToolDefinition = {
     // ввод пути от агента инструмент не принимает (z.object({})).
     const extra = ctx.extra as ProjectContextExtra | undefined;
     const projectDir = resolveWorkspaceDir(project, extra?.workspacesRoot, ctx.workingDir);
-    // PROP-077: git-детект — через внедрённый порт исполнения.
+    // ADR-077: git-детект — через внедрённый порт исполнения.
     const execution = resolveExecutionPort(ctx);
 
     if (project?.repos && project.repos.length > 0) {

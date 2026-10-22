@@ -306,7 +306,7 @@ describe('resolveSecretKey (ADR-076)', () => {
   });
 });
 
-describe('resolveStorageBackend (PROP-032)', () => {
+describe('resolveStorageBackend (ADR-096)', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
@@ -355,7 +355,7 @@ describe('resolveStorageBackend (PROP-032)', () => {
   });
 });
 
-describe('resolvePostgresConfig / resolvePostgresPassword (PROP-032)', () => {
+describe('resolvePostgresConfig / resolvePostgresPassword (ADR-097)', () => {
   let dir: string | null = null;
 
   afterEach(async () => {
@@ -490,7 +490,7 @@ describe('resolvePostgresConfig / resolvePostgresPassword (PROP-032)', () => {
   });
 });
 
-describe('resolveDegradedMode / resolveStorageFallbackDir (PROP-032, задел W5)', () => {
+describe('resolveDegradedMode / resolveStorageFallbackDir (ADR-098, задел W5)', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });

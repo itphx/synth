@@ -1,6 +1,5 @@
 /**
- * Драйвер слоя хранения Synth на PostgreSQL — публичная фабрика (ADR-096/ADR-097,
- * PROP-032).
+ * Драйвер слоя хранения Synth на PostgreSQL — публичная фабрика (ADR-097).
  *
  * Пакет `@itphx/synth-storage-postgres` — in-tree **опциональный** драйвер: он
  * реализует доменные порты `StorageContext` и подключается из
@@ -41,14 +40,14 @@ export interface PostgresStorageConfig extends StorageContextConfig, PostgresCon
   /** Применять миграции схемы при сборке контекста (по умолчанию — `true`). */
   migrate?: boolean;
   /**
-   * PROP-032: режим работы со схемой при сборке (`apply`/`assert`/`skip`);
+   * ADR-097: режим работы со схемой при сборке (`apply`/`assert`/`skip`);
    * приоритетнее `migrate`. `skip` — только подключение (диагностика/CLI,
    * управляющие миграциями сами). Не задан — выводится из `migrate`
    * (`false` → `assert`, иначе `apply`).
    */
   schemaMode?: 'apply' | 'assert' | 'skip';
   /**
-   * ADR-097/PROP-032: синхронные данные/хелперы core (`secretPatterns`/
+   * ADR-097: синхронные данные/хелперы core (`secretPatterns`/
    * `protectedPaths`/`dictionaries`), инъектируемые core'ом
    * (`packages/core/src/storage/storage-context.ts`). Не заданы (прямой вызов
    * фабрики) — драйвер собирает их ленивым `import('@itphx/synth-core')`.
@@ -82,7 +81,7 @@ export function validatePostgresConfig(config: PostgresStorageConfig): void {
 
   if (config.schema !== undefined) assertValidSchema(config.schema);
 
-  // ADR-099/PROP-032: fail-closed до обращения к БД — TLS-параметры в DSN
+  // ADR-099/ADR-097: fail-closed до обращения к БД — TLS-параметры в DSN
   // молча перекрываются конфигом (`pg` накладывает DSN поверх `ssl`).
   assertNoDsnTlsParams(config.connectionString);
 
@@ -97,7 +96,7 @@ export function validatePostgresConfig(config: PostgresStorageConfig): void {
 }
 
 /**
- * Собрать `StorageContext` на PostgreSQL (форма — ADR-097/PROP-032).
+ * Собрать `StorageContext` на PostgreSQL (форма — ADR-097).
  *
  * Валидирует конфиг, лениво подключается к БД, применяет миграции (или, при
  * `migrate:false`, проверяет актуальность схемы — fail-closed) и возвращает
@@ -122,7 +121,7 @@ export async function createPostgresStorage(config: PostgresStorageConfig): Prom
   });
 
   try {
-    // PROP-032: режим схемы — `apply` (дефолт), `assert` (DBA), `skip` (диагностика).
+    // ADR-097: режим схемы — `apply` (дефолт), `assert` (DBA), `skip` (диагностика).
     const schemaMode = config.schemaMode ?? config.postgresSchemaMode
       ?? (config.migrate === false ? 'assert' : 'apply');
     if (schemaMode === 'assert') {
@@ -135,7 +134,7 @@ export async function createPostgresStorage(config: PostgresStorageConfig): Prom
     throw err;
   }
 
-  // PROP-032: соединение удерживается в контексте (порты БД ходят через него),
+  // ADR-097: соединение удерживается в контексте (порты БД ходят через него),
   // `ctx.close()` закрывает пул. Незанятые соединения не удерживают event loop
   // (`allowExitOnIdle` в `pool.ts`), поэтому CLI-команды завершаются.
   return buildPostgresStorageContext({

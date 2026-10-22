@@ -574,7 +574,7 @@ export class FileStore implements SessionRepository {
    * Лёгкий список (порт `SessionRepository.listLight`): тот же набор id и порядок,
    * что у `list`, но `messages`/`pendingMessages`/`checkpoints` очищены. Сессия
    * хранится одним JSON-файлом, поэтому `JSON.parse` неизбежно читает историю —
-   * экономится только десериализация сообщений; для БД-бэкенда (PROP-032) это
+   * экономится только десериализация сообщений; для БД-бэкенда (ADR-097) это
    * полноценная выборка без join.
    */
   async listLight(filter?: SessionFilter): Promise<Session[]> {
@@ -593,7 +593,7 @@ export class FileStore implements SessionRepository {
 
   /**
    * Поиск сессий по содержимому (заголовок + сообщения) — доменный метод порта
-   * `SessionRepository` (для SQL-бэкенда PROP-032: полнотекстовый поиск). Файловая
+   * `SessionRepository` (для SQL-бэкенда ADR-097: полнотекстовый поиск). Файловая
    * реализация делегирует сканирующему `list`.
    */
   async search(query: string, filter?: SessionFilter): Promise<Session[]> {

@@ -4,8 +4,8 @@
 > **Решение до:** 2026-11-14
 > **Дата:** 2026-10-01
 > **Источник:** перенесено из `AD-DRAFTS.md` (D27).
-> **Связано:** [ADR-005](./adr-005-json-storage.md), [PROP-032](./prop-032-history-storage-postgresql.md),
-> [PROP-077](./prop-077-runtime-toolchain.md), [ADR-070](./adr-070-system-prompt-composer.md), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md),
+> **Связано:** [ADR-005](./adr-005-json-storage.md), [ADR-097](./adr-097-storage-provider-class.md),
+> [ADR-077](./adr-077-runtime-toolchain.md), [ADR-070](./adr-070-system-prompt-composer.md), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md),
 > [ADR-087](./adr-087-gateways.md), [ADR-089](./adr-089-external-events-automation.md),
 > [ADR-086](./adr-086-extensibility-plugins-editions.md), [PROP-047](./prop-047-memory-gbrain.md),
 > [ADR-036](./adr-036-llm-gateway.md), [ADR-023](./adr-023-configuration.md).
@@ -36,7 +36,7 @@
 
 Blob/artifact-хранилище для бинарных вложений: на первом этапе — под `$SYNTH_DATA_DIR` через `FileStore`
 ([ADR-005](./adr-005-json-storage.md), content-addressed по хэшу), целевое — PostgreSQL/S3
-([PROP-032](./prop-032-history-storage-postgresql.md), [PROP-077](./prop-077-runtime-toolchain.md)).
+([ADR-097](./adr-097-storage-provider-class.md), [ADR-077](./adr-077-runtime-toolchain.md)).
 
 ### Маппинг в форматы провайдеров
 
@@ -82,7 +82,7 @@ PII-риски медиа ([ADR-036](./adr-036-llm-gateway.md)), права и �
 
 ## Открытые вопросы
 
-- Где хранить бинарные вложения: каталог `dataDir`/FileStore vs S3 ([PROP-077](./prop-077-runtime-toolchain.md)) vs БД ([PROP-032](./prop-032-history-storage-postgresql.md))?
+- Где хранить бинарные вложения: каталог `dataDir`/FileStore vs S3 ([ADR-077](./adr-077-runtime-toolchain.md)) vs БД ([ADR-097](./adr-097-storage-provider-class.md))?
 - Транскрипция: локально (whisper.cpp) vs провайдер (API) — приватность/зависимости?
 - Видео: полноценный ввод (native video, Gemini) vs извлечение кадров+аудио?
 - Конвертация/сжатие — на клиенте или на сервере?
@@ -92,7 +92,7 @@ PII-риски медиа ([ADR-036](./adr-036-llm-gateway.md)), права и �
 
 ## Связи
 
-- [ADR-005](./adr-005-json-storage.md) «JSON-хранилище» — базовое хранение вложений; [PROP-032](./prop-032-history-storage-postgresql.md)/[PROP-077](./prop-077-runtime-toolchain.md) — целевое blob/S3-хранилище.
+- [ADR-005](./adr-005-json-storage.md) «JSON-хранилище» — базовое хранение вложений; [ADR-097](./adr-097-storage-provider-class.md)/[ADR-077](./adr-077-runtime-toolchain.md) — целевое blob/S3-хранилище.
 - [ADR-070](./adr-070-system-prompt-composer.md) «SystemPromptComposer» — промпт, статистика и prompt-cache медиа.
 - [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md) «Мобильный UI/PWA» — камера и микрофон как источники ввода.
 - [ADR-087](./adr-087-gateways.md) «Gateway мессенджеров» — вложения из чатов; [ADR-089](./adr-089-external-events-automation.md) «Внешние события/автоматизация» — вложения из событий.

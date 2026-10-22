@@ -258,7 +258,7 @@ synth/
 ├── packages/
 │   ├── shared/   → @itphx/synth-shared    # Types, Zod schemas, protocols, configuration
 │   ├── core/     → @itphx/synth-core      # Engine, CLI, HTTP API v2, MCP, FileStore
-│   ├── storage-postgres/ → @itphx/synth-storage-postgres  # Optional storage-layer DB driver (ADR-097/PROP-032)
+│   ├── storage-postgres/ → @itphx/synth-storage-postgres  # Optional storage-layer DB driver (ADR-097)
 │   ├── backend/  → @itphx/synth-backend   # Hono API Hub: OIDC, RBAC, Runner Registry
 │   ├── ui/       → @itphx/synth-ui        # React 19 SPA + admin panel (Vite)
 │   ├── sdk/      → @itphx/synth-sdk       # Typed client for the public API (ADR-052)

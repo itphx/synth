@@ -375,7 +375,7 @@ async function _restoreFromArchive(
   const schemaOlder = manifest.schemaVersion < SCHEMA_VERSION;
   const fileCount = manifest.entries.filter((entry) => entry.type === 'file').length;
 
-  // PROP-032: архив снят при backend=postgres — данные БД (сессии/проекты/
+  // ADR-097: архив снят при backend=postgres — данные БД (сессии/проекты/
   // настройки/секреты-в-БД) в архив каталога не попадают и не восстанавливаются;
   // восстанавливается только файловый периметр. Данные БД — через pg_restore/PITR.
   const postgresArchive = manifest.storageBackend === 'postgres';

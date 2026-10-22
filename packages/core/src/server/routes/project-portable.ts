@@ -55,7 +55,7 @@ export interface ProjectPortableRoutesDeps {
   /** Каталог данных инстанса (`$SYNTH_DATA_DIR`). */
   dataDir: string;
   /**
-   * PROP-032: контекст хранения инстанса (`StorageContext`). Без него
+   * ADR-096: контекст хранения инстанса (`StorageContext`). Без него
    * `exportProject`/`importProject` собирают СВОЙ файловый контекст по
    * `dataDir` — на инстансе с `storage.backend=postgres` экспорт/импорт тогда
    * видят не тот бэкенд (проект не найден / импорт уходит в файловое хранилище).

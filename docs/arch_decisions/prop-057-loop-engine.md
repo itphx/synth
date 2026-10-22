@@ -7,7 +7,7 @@
 > **Связано:** [ADR-030](./adr-030-hooks-agent-events.md), [PROP-031](./prop-031-verification-agent.md),
 > [ADR-039](./adr-039-plan-in-project.md), [PROP-047](./prop-047-memory-gbrain.md),
 > [PROP-050](./prop-050-external-engines-runner.md), [ADR-051](./adr-051-scheduler-pipelines.md),
-> [PROP-058](./prop-058-service-agents-council.md), [PROP-059](./prop-059-pipeline-automation.md).
+> [PROP-058](./prop-058-service-agents-council.md), [ADR-100](./adr-100-extension-packs-pipelines.md).
 
 **Решение:** inner loop (ReAct) в Synth уже автоматический; PROP-057 автоматизирует **outer loop** —
 управляемый цикл «шаг → проверка → повтор» вокруг работы агента.
@@ -122,6 +122,6 @@
 - [PROP-050](./prop-050-external-engines-runner.md) «Внешние движки — Runner» — возможный исполнитель шага.
 - [ADR-051](./adr-051-scheduler-pipelines.md) «Шедулер и пайплайны» — запуск циклов по расписанию.
 - [PROP-058](./prop-058-service-agents-council.md) «Служебные агенты и консилиум» — verification/consensus.
-- [PROP-059](./prop-059-pipeline-automation.md) «Pipeline Automation» — композиция циклов.
+- [ADR-101](./adr-101-pipeline-engine.md) «Pipeline Automation» — композиция циклов.
 - [PROP-047](./prop-047-memory-gbrain.md) «Память Synth» — журнал/guardrails/шаблоны.
 - [PROP-063](./prop-063-user-learning-metrics.md) «Обучение пользователя и метрики» — метрики циклов.

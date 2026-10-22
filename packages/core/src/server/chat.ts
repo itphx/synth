@@ -31,7 +31,7 @@ export interface SingleChatOptions {
 }
 
 export async function runSingleChat(options: SingleChatOptions): Promise<void> {
-  // PROP-032 (W2.4): единый контекст хранения (`createStorageContextAsync` —
+  // ADR-096 (W2.4): единый контекст хранения (`createStorageContextAsync` —
   // resolved backend, включая `postgres` через динамический драйвер).
   const storage = await createStorageContextAsync(
     resolveStorageBackend(options.config, process.env),
@@ -48,7 +48,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
       bundlesPath: options.config.commands?.bundlesPath,
     },
   );
-  // PROP-032 (волна 5): one-shot путь — контекст закрываем явно (`close?()`
+  // ADR-096 (волна 5): one-shot путь — контекст закрываем явно (`close?()`
   // освобождает пул БД), не полагаясь только на `allowExitOnIdle` драйвера.
   let code = 1;
   try {
@@ -60,7 +60,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
 }
 
 /**
- * Тело одного чат-запроса (PROP-032: контекст хранения передаётся снаружи —
+ * Тело одного чат-запроса (ADR-096: контекст хранения передаётся снаружи —
  * его освобождает `runSingleChat`). Возвращает код выхода процесса: 0 — успех,
  * 1 — ошибка (выход выполняет обёртка — после закрытия контекста).
  */
@@ -203,7 +203,7 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
   const effectiveSecurityConfig = mergeSecurityConfig(options.config.security, runtimeSecurity);
 
   // ADR-046: сервис скиллов + slash-команд (резолвинг в core до LLM).
-  // PROP-077: порт исполнения команд — по режиму `execution.mode`
+  // ADR-077: порт исполнения команд — по режиму `execution.mode`
   // (`inline` — исполнение в процессе, `remote` — удалённый исполнитель).
   const executionPort = await createExecutionPortForConfig(
     resolveExecutionConfig(options.config, process.env),
@@ -220,7 +220,7 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
     dataDir,
     toolRegistry,
     agentRegistry,
-    // PROP-032 (W2.4): порты хранилищ (SSH-ключи, словари) — из контекста, без фоллбэков.
+    // ADR-096 (W2.4): порты хранилищ (SSH-ключи, словари) — из контекста, без фоллбэков.
     sshKeyStore: storage.sshKeys,
     dictionaryStore: storage.dictionaries,
     defaultWorkingDir,

@@ -1,6 +1,6 @@
 /**
  * Отображение строк PostgreSQL ↔ доменных объектов порта `SessionRepository`
- * (PROP-032, волна 3b).
+ * (ADR-097, волна 3b).
  *
  * Эталон семантики — файловая реализация (`core/src/storage/file-store.ts`):
  * `serializeSession`/`serializeMessage` и `deserializeSession`/`deserializeMessage`
@@ -600,7 +600,7 @@ export function deserializeSession(
 
 /**
  * Строка `sessions` → доменная сессия **без истории** (`SessionRepository.listLight`,
- * PROP-032): `messages`/`pendingMessages`/`checkpoints` пусты, child-таблицы не
+ * ADR-097): `messages`/`pendingMessages`/`checkpoints` пусты, child-таблицы не
  * читаются. Метаданные (id/статус/settings/projectId/expiresAt/…) идентичны
  * `deserializeSession` — механика переиспользуется.
  */

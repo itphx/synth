@@ -1,5 +1,5 @@
 {{- /* Декларативный config.yaml backend (ADR-023). Рендерится, если задан
-       backend.config ИЛИ домерживаются chart-значения storage.* (PROP-032). */ -}}
+       backend.config ИЛИ домерживаются chart-значения storage.* (ADR-096). */ -}}
 {{- if include "synth.backend.hasConfigMap" . }}
 apiVersion: v1
 kind: ConfigMap

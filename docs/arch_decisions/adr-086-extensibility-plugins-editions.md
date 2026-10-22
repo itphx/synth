@@ -1,7 +1,10 @@
 # ADR-086: Расширяемость Synth: классы расширений, editions и contribution flow
 
-> **Статус:** ⚠️ Частично — первый **Gateway** (Telegram-шлюз) реализован и мультитенантен; эталон **Add-on** — `synth-media`; **доставка пакета расширения в ядро** реализована ([ADR-100](./adr-100-extension-packs-pipelines.md): манифест `synth.pack` валидируется, установка — одна операция, одобрение администратора); класс **Gateway** выделен в [ADR-087](./adr-087-gateways.md) (HA/leader election — нет); класс **Storage** выделен в [ADR-097](./adr-097-storage-provider-class.md) (PostgreSQL-драйвер — нет); Plugin SDK ([PROP-090](./prop-090-extension-api.md)), editions и contribution flow — нет
+> **Статус:** ⚠️ Частично — первый **Gateway** (Telegram-шлюз) реализован и мультитенантен; эталон **Add-on** — `synth-media`; **доставка пакета расширения в ядро** реализована ([ADR-100](./adr-100-extension-packs-pipelines.md): манифест `synth.pack` валидируется, установка — одна операция, одобрение администратора); класс **Gateway** выделен в [ADR-087](./adr-087-gateways.md) (HA/leader election — нет); класс **Storage** выделен в [ADR-097](./adr-097-storage-provider-class.md) (PostgreSQL-драйвер — нет); Plugin SDK ([PROP-090](./prop-090-extension-api.md) — в работе, в коде нет; спецификация 2026-10-22 добавляет два режима исполнения плагина: inline и out-of-process), editions и contribution flow — нет
 > **Дата:** 2026-10-02
+> **Обновлено:** 2026-10-22 — PROP-090 **вернулся в работу** (🧩 Предложение, срок решения 2026-11-14); Plugin определён
+> как **код расширения с двумя режимами исполнения** — `inline` (в процессе ядра) и `out-of-process` (отдельный процесс);
+> в коде Plugin SDK по-прежнему нет.
 > **Обновлено:** 2026-10-20 — **доставка пакета в ядро** вынесена в [ADR-100](./adr-100-extension-packs-pipelines.md):
 > контракт манифеста валидируется в ядре, установка — одна операция `POST /api/v2/packs`, пакеты с
 > capability-грантами требуют одобрения администратора; `provides` аддона может включать `agents`/`pipelines`.
@@ -24,7 +27,7 @@
 > [PROP-082](./prop-082-full-images-deployment.md) «Flavor-образы», [ADR-089](./adr-089-external-events-automation.md) «Платформа внешних событий»,
 > [ADR-023](./adr-023-configuration.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-036](./adr-036-llm-gateway.md),
 > [ADR-042](./adr-042-hybrid-mode.md), [PROP-080](./prop-080-managed-hybrid-modes.md), [PROP-081](./prop-081-hybrid-policy-leak-protection.md),
-> [PROP-055](./prop-055-instance-exchange.md) «Обмен между инстансами», [PROP-032](./prop-032-history-storage-postgresql.md) «PostgreSQL».
+> [PROP-055](./prop-055-instance-exchange.md) «Обмен между инстансами», [ADR-097](./adr-097-storage-provider-class.md) «PostgreSQL».
 
 **Решение:** дать сообществу и пользователям **лёгкий путь** доработать Synth без приватного форка ядра. Четыре
 взаимодополняющих столпа и набор **классов расширений**:
@@ -53,7 +56,7 @@
 
 | Класс | Что запускается | Где спецификация/детали |
 |---|---|---|
-| **Plugin** | код **в процессе ядра** (Extension API, фасад `@itphx/synth-plugin`) | [PROP-090](./prop-090-extension-api.md) |
+| **Plugin** | код расширения: **в процессе ядра** (`inline`) или **отдельным процессом** (`out-of-process`); фасад `@itphx/synth-plugin` | [PROP-090](./prop-090-extension-api.md) |
 | **Gateway** | **внешний сервис-транспорт** внешний мир ↔ Synth (двусторонний обмен) | **[ADR-087](./adr-087-gateways.md)** |
 | **Add-on** | **внешний сервис** иного назначения (свой репозиторий/образы/деплой) | этот AD, §4 |
 | **Storage** | **драйвер слоя хранения** (доменные порты + контрактный suite; `file`/`memory`/`postgres`) | **[ADR-097](./adr-097-storage-provider-class.md)** |
@@ -172,8 +175,8 @@ npm-плагин кладёт `synth.pack` в `files` пакета (канони
 ролями → определения пайплайнов → порождённые правила маршрутизации). Пакет, дающий
 capability-гранты (непустые `capabilities` агента), объявляющий пайплайны или расписания,
 **требует одобрения администратора** (`POST /api/v2/packs/:name/approve`, только ADMIN) — фактическая
-установка не выполняется до одобрения. **Plugin (in-process код) остаётся вне объёма** —
-[PROP-090](./prop-090-extension-api.md) (🧊 Icebox).
+установка не выполняется до одобрения. **Plugin (код расширения) остаётся вне объёма** —
+[PROP-090](./prop-090-extension-api.md) (вернулся в работу 2026-10-22).
 
 ### Что уже есть
 
@@ -197,7 +200,7 @@ capability-гранты (непустые `capabilities` агента), объя
   API v2 [ADR-017](./adr-017-api-v2-hono.md), события [ADR-024](./adr-024-eventhub-transport.md),
   guard [ADR-036](./adr-036-llm-gateway.md), home/хранение [ADR-005](./adr-005-json-storage.md)/[ADR-045](./adr-045-hybrid-server-profiles.md)/[ADR-079](./adr-079-local-home-independent-instances.md),
   гибрид/политики [ADR-042](./adr-042-hybrid-mode.md)/[PROP-080](./prop-080-managed-hybrid-modes.md)/[PROP-081](./prop-081-hybrid-policy-leak-protection.md),
-  промпт [ADR-070](./adr-070-system-prompt-composer.md), egress [PROP-088](./prop-088-http-proxy.md).
+  промпт [ADR-070](./adr-070-system-prompt-composer.md), egress [ADR-099](./adr-099-egress-tls-trust.md).
 - **Лицензия MIT:** корневой `synth/LICENSE` (англ.) + `synth/LICENSE.ru.md` (рус.; приоритет — у англ.),
   правообладатель `Дмитрий Рамазанов <ramazanov_dv@mail.ru>`; `license: MIT` во всех `package.json`
   (root + 6 пакетов). В npm-пакеты оба файла материализуются при публикации (`scripts/publish.sh`,
@@ -217,7 +220,7 @@ capability-гранты (непустые `capabilities` агента), объя
 [ADR-005](./adr-005-json-storage.md)/[ADR-045](./adr-045-hybrid-server-profiles.md)/[ADR-079](./adr-079-local-home-independent-instances.md) (хранение/home),
 [ADR-017](./adr-017-api-v2-hono.md)/[ADR-024](./adr-024-eventhub-transport.md) (API/события),
 [ADR-042](./adr-042-hybrid-mode.md)/[PROP-080](./prop-080-managed-hybrid-modes.md)/[PROP-081](./prop-081-hybrid-policy-leak-protection.md) (гибрид/политики),
-[PROP-088](./prop-088-http-proxy.md) (egress add-on'ов и шлюзов), D3 (self-help/dogfooding), D21/D22 (гайдлайны и стандарты).
+[ADR-099](./adr-099-egress-tls-trust.md) (egress add-on'ов и шлюзов), D3 (self-help/dogfooding), D21/D22 (гайдлайны и стандарты).
 
 ## Статус реализации в коде
 
@@ -287,12 +290,12 @@ _Вопросы шлюза (топология приёма, HA-стейт, ре
 - [ADR-089](./adr-089-external-events-automation.md) — Event/Binding/Router: как шлюзы и add-on'ы приносят события в Synth.
 - [ADR-042](./adr-042-hybrid-mode.md), [PROP-080](./prop-080-managed-hybrid-modes.md), [PROP-081](./prop-081-hybrid-policy-leak-protection.md) — гибрид и политики для сторонних расширений.
 - [PROP-055](./prop-055-instance-exchange.md) — обмен между инстансами: родственная тема мультитенантности шлюза (один бот → несколько инстансов/тенантов).
-- [PROP-032](./prop-032-history-storage-postgresql.md) — PostgreSQL: возможная опора общего стейта HA-шлюза (мультирепличный `offset`/дедуп).
-- [PROP-088](./prop-088-http-proxy.md) — egress внешних add-on/gateway сервисов.
+- [ADR-097](./adr-097-storage-provider-class.md) — PostgreSQL: возможная опора общего стейта HA-шлюза (мультирепличный `offset`/дедуп).
+- [ADR-099](./adr-099-egress-tls-trust.md) — egress внешних add-on/gateway сервисов.
 - `synth-media` — существующий внешний сервис-демонстратор (прототип add-on'а) и **эталон пакета расширения** (ставится в инстанс как пакет — [ADR-100](./adr-100-extension-packs-pipelines.md)).
 
 ## История
 
+- 2026-10-22 — PROP-090 вернулся в работу; Plugin определён как код расширения с двумя режимами исполнения (`inline`/`out-of-process`); в коде SDK нет.
 - 2026-10-20 — доставка пакета расширения в ядро вынесена в [ADR-100](./adr-100-extension-packs-pipelines.md); §5 дополнен: `provides` любого класса может включать `agents`/`pipelines`, установка — `POST /api/v2/packs`, capability-гранты требуют одобрения.
 - 2026-10-16 — добавлен класс **Storage** (`kind: "storage"`) — [ADR-097](./adr-097-storage-provider-class.md).
-- 2026-10-14 — реструктуризация классов расширений: класс **Gateway** выделен в [ADR-087](./adr-087-gateways.md), ADR-086 стал зонтиком «Классы расширений».

@@ -66,7 +66,7 @@ export type { StoredDictionary, DictionaryLanguage } from './engine/router/index
 export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
 
 export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
-// PROP-077 (шаг 1): порт исполнения команд — интерфейс домена + реализации.
+// ADR-077 (шаг 1): порт исполнения команд — интерфейс домена + реализации.
 // Домен (тулы shell/rg/git, inline-shell, детект зависимостей) ходит в порт,
 // а не в `execFile` напрямую: физический исполнитель взаимозаменяем
 // (inline — в процессе; remote — отдельный сервис, шаг 7 плана).
@@ -86,7 +86,7 @@ export type {
 } from './execution/ports/index.js';
 export { InlineExecutionPort } from './execution/inline-execution-port.js';
 export { resolveExecutionPort, EXECUTION_PORT_KEY } from './execution/tool-port.js';
-// PROP-077 (шаг 7b): выбор порта по режиму `execution.mode` — фабрика
+// ADR-077 (шаг 7b): выбор порта по режиму `execution.mode` — фабрика
 // (`inline` → InlineExecutionPort, `remote` → удалённый порт из пакета
 // `@itphx/synth-executor`, динамический `import()`, fail-closed).
 export { createExecutionPortForConfig } from './execution/factory.js';
@@ -96,7 +96,7 @@ export {
   readExecutorToken,
   RemoteExecutionUnavailableError,
 } from './execution/remote.js';
-// PROP-077 (шаг 3): проверка режима исполнения при старте процесса.
+// ADR-077 (шаг 3): проверка режима исполнения при старте процесса.
 export { checkExecutionMode, assertExecutionModeSupported } from './execution/startup.js';
 export type {
   ExecutionStartupCheck,
@@ -205,10 +205,10 @@ export type {
 export { FileProfileStore } from './storage/profile-store.js';
 export { JsonStore } from './storage/json-store.js';
 export type { JsonStoreConfig, JsonStoreLike } from './storage/json-store.js';
-// PROP-032 (W2.1): доменные порты слоя хранения + файловая реализация BlobStore.
+// ADR-096 (W2.1): доменные порты слоя хранения + файловая реализация BlobStore.
 export { FileBlobStore } from './storage/file-blob-store.js';
 export type { FileBlobStoreConfig } from './storage/file-blob-store.js';
-// ADR-051/PROP-059: файловая реализация порта пайплайнов.
+// ADR-051/ADR-100: файловая реализация порта пайплайнов.
 export { FilePipelineStore } from './storage/file-pipeline-store.js';
 export type { FilePipelineStoreConfig } from './storage/file-pipeline-store.js';
 // ADR-086 §5: файловая реализация порта реестра установок пакетов.
@@ -254,7 +254,7 @@ export type {
   DefaultsRepository,
   AppearanceDefaults,
   DocumentRepository,
-  // ADR-051/PROP-059: пайплайны; ADR-086 §5: реестр установок пакетов.
+  // ADR-051/ADR-100: пайплайны; ADR-086 §5: реестр установок пакетов.
   PipelineRepository,
   PipelineDefinitionRecord,
   PipelineInstanceRecord,
@@ -276,7 +276,7 @@ export type {
   PipelineRunFilter,
   PipelineRunEventListOptions,
 } from './storage/ports/index.js';
-// PROP-032 (W2.2): in-memory реализации портов хранения (второй backend за единым слоем).
+// ADR-096 (W2.2): in-memory реализации портов хранения (второй backend за единым слоем).
 export {
   MemorySessionRepository,
   MemoryProjectRepository,
@@ -307,18 +307,18 @@ export {
   MemoryContextFileRepository,
   MemoryBlobStore,
   MemorySSHKeyRepository,
-  // ADR-051/PROP-059: пайплайны; ADR-086 §5: реестр установок пакетов.
+  // ADR-051/ADR-100: пайплайны; ADR-086 §5: реестр установок пакетов.
   MemoryPipelineRepository,
   MemoryPackRepository,
   // ADR-101: спецификации пайплайнов, прогоны и журнал выполнения.
   MemoryProjectPipelineRepository,
   MemoryPipelineRunRepository,
 } from './storage/memory/index.js';
-// PROP-032 (W2.4): generic-реализация конфигурационных словарей (провайдеры/модели/агенты).
+// ADR-096 (W2.4): generic-реализация конфигурационных словарей (провайдеры/модели/агенты).
 export { MemoryDocumentRepository } from './storage/memory/document-repository.js';
-// PROP-032 (W2.3): умолчания оформления (перенесено из backend) — файловая реализация.
+// ADR-096 (W2.3): умолчания оформления (перенесено из backend) — файловая реализация.
 export { DefaultsStore, UI_SCALE_MIN, UI_SCALE_MAX } from './storage/defaults-store.js';
-// PROP-032 (W2.3): единый контекст слоя хранения + фабрики `file`/`memory`.
+// ADR-096 (W2.3): единый контекст слоя хранения + фабрики `file`/`memory`.
 export {
   createFileStorage,
   createMemoryStorage,
@@ -640,10 +640,10 @@ export { SecurityAuditStore } from './storage/security-audit-store.js';
 export type { SecurityAuditStoreConfig } from './storage/security-audit-store.js';
 export { EgressRequestLogStore } from './storage/egress-request-log-store.js';
 export type { EgressRequestLogStoreConfig } from './storage/egress-request-log-store.js';
-// PROP-102: файловая реализация порта пред-агрегированных роллапов аналитики.
+// ADR-102: файловая реализация порта пред-агрегированных роллапов аналитики.
 export { AnalyticsRollupStore, ANALYTICS_ROLLUPS_SCHEMA_VERSION } from './storage/analytics-rollup-store.js';
 export type { AnalyticsRollupStoreConfig } from './storage/analytics-rollup-store.js';
-// PROP-102 (волна 1): сервис чтения отчётов/сводки + дериваты на чтении.
+// ADR-102 (волна 1): сервис чтения отчётов/сводки + дериваты на чтении.
 export { AnalyticsService, AnalyticsValidationError, utcDay } from './analytics/service.js';
 export type {
   AnalyticsPeriod,
@@ -652,9 +652,9 @@ export type {
   AnalyticsServiceOptions,
   AnalyticsValidationReason,
 } from './analytics/service.js';
-// PROP-102 §6: серверная выгрузка отчёта CSV/JSON (только данные).
+// ADR-102 §6: серверная выгрузка отчёта CSV/JSON (только данные).
 export { toCsv, toJson } from './analytics/export.js';
-// PROP-102 (волна 1): сборщики роллапов (write-path), hook-шов `activity` и retention.
+// ADR-102 (волна 1): сборщики роллапов (write-path), hook-шов `activity` и retention.
 export { AnalyticsRecorder, activityMeasureForMessage, sessionAxes } from './analytics/recorder.js';
 export type {
   ActivityMeasure,
@@ -671,7 +671,7 @@ export { attachAnalyticsActivityHooks } from './analytics/hooks.js';
 export type { AnalyticsActivityAxes, AttachAnalyticsHooksDeps } from './analytics/hooks.js';
 export { analyticsRetentionCutoff, startAnalyticsRollupPruner } from './analytics/prune.js';
 export type { AnalyticsRollupPrunerOptions } from './analytics/prune.js';
-// PROP-102 §10: идемпотентный бэкфилл роллапов из истории (`synth analytics rebuild`).
+// ADR-102 §10: идемпотентный бэкфилл роллапов из истории (`synth analytics rebuild`).
 export { rebuildAnalyticsRollups } from './analytics/rebuild.js';
 export type {
   AnalyticsRebuildOptions,
@@ -708,7 +708,7 @@ export type {
   RequestSessionServiceDeps,
   LlmDefaults,
 } from './engine/events/request-session.js';
-// ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059) — состояние
+// ADR-089/ADR-051: учёт экземпляров пайплайна (ADR-100) — состояние
 // автомата публикации в ядре, артефакт шага — по id.
 export { PipelineTracker } from './engine/events/pipeline-tracker.js';
 export { pipelineTriggerPayload, pipelineStepArtifact } from './engine/events/pipeline-tracker.js';
@@ -763,7 +763,7 @@ export type {
 // ADR-051/ADR-089: файловый мьютекс (общий dataDir на одном хосте/FS).
 export { FileMutex } from './storage/file-mutex.js';
 export type { FileMutexOptions } from './storage/file-mutex.js';
-// PROP-032: контракт межпроцессного мьютекса (file/PG) — общий шов координации.
+// ADR-096: контракт межпроцессного мьютекса (file/PG) — общий шов координации.
 export type { Mutex, LockOptions, MutexFactoryOptions, LeaderFactoryOptions } from './storage/mutex.js';
 // ADR-046: скиллы (реестр/discovery/каталог/instance-запись/роуты).
 export { SkillService } from './engine/skills/service.js';
@@ -803,7 +803,7 @@ export {
 export type { InstanceMeta, Migration, MigrationDeps, InstanceCompatibility } from './storage/instance-meta.js';
 export { runMigrateCommand } from './maintenance/migrate.js';
 export type { MigrateCommandOptions } from './maintenance/migrate.js';
-// PROP-032 (волна 5): `synth storage migrate` — идемпотентный перенос данных инстанса между backend'ами (file ↔ postgres).
+// ADR-097 (волна 5): `synth storage migrate` — идемпотентный перенос данных инстанса между backend'ами (file ↔ postgres).
 export { runStorageMigrateCommand, migrateStorageData, STORAGE_MIGRATION_ENTITIES } from './maintenance/storage-migrate.js';
 export type {
   StorageMigrateCommandOptions,
@@ -949,7 +949,7 @@ export { createSettingsRoutes } from './server/routes/settings.js';
 export type { SettingsRoutesDeps } from './server/routes/settings.js';
 export { createAuditRoutes } from './server/routes/audit.js';
 export type { AuditRoutesDeps, AuditRoutesOptions } from './server/routes/audit.js';
-// PROP-102: HTTP-фабрика отчётов аналитики (только чтение) — общая для core и backend.
+// ADR-102: HTTP-фабрика отчётов аналитики (только чтение) — общая для core и backend.
 export { createAnalyticsRoutes } from './server/routes/analytics.js';
 export type {
   AnalyticsRoutesAuth,
@@ -1074,7 +1074,7 @@ export type {
   SchedulerRoutesOptions,
   SchedulerRouteMessages,
 } from './server/routes/schedules.js';
-// ADR-051/PROP-059: API пайплайнов (определения/экземпляры/ручной запуск).
+// ADR-051/ADR-100: API пайплайнов (определения/экземпляры/ручной запуск).
 export { createPipelinesRoutes } from './server/routes/pipelines.js';
 export type {
   PipelinesRoutesAuth,

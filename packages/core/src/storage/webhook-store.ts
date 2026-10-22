@@ -12,7 +12,7 @@ import { generateId, AsyncLock, atomicWrite, safeJsonParse, nowISO } from '@itph
 import { decryptSecret, encryptSecret, isEncrypted, resolveMasterKey } from '../security/crypto.js';
 import type { WebhookRepository } from './ports/webhook-repository.js';
 
-/** ADR-052 (этап II): версия схемы файла подписок webhooks (для будущей миграции PROP-032). */
+/** ADR-052 (этап II): версия схемы файла подписок webhooks (для будущей миграции ADR-096). */
 export const WEBHOOKS_SCHEMA_VERSION = 1;
 
 const SECRET_PREFIX_VISIBLE = 12;
@@ -56,7 +56,7 @@ interface WebhooksFile {
  * нельзя хранить sha256-хеш: HMAC-подпись доставки требует исходный секрет,
  * поэтому `secret` шифруется at-rest мастер-ключом (AES-256-GCM, ADR-076) и
  * расшифровывается только при отправке (`getSecret`). Plaintext наружу —
- * единственный раз при создании/ротации. Модель PG-ready (PROP-032): плоские
+ * единственный раз при создании/ротации. Модель PG-ready (ADR-097): плоские
  * записи со стабильным `id` и `schemaVersion`.
  */
 export class WebhookStore implements WebhookRepository {

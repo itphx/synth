@@ -62,7 +62,7 @@ import {
   createPipelineMetrics,
   toCoreProviderConfig,
   ProviderFactory,
-  // PROP-077: порт исполнения команд (inline/remote).
+  // ADR-077: порт исполнения команд (inline/remote).
   createExecutionPortForConfig,
 } from '@itphx/synth-core';
 import type {
@@ -78,7 +78,7 @@ import { EventHub } from '../events/hub.js';
 import { seedDebugTestUsers } from './bootstrap.js';
 
 /**
- * PROP-032 (W2.4): единая точка сборки слоя хранения backend — `app.ts` строит
+ * ADR-096 (W2.4): единая точка сборки слоя хранения backend — `app.ts` строит
  * её до `auth` (реестр `serviceKeys` нужен резолверу ключа, `mcpRegistry` —
  * сидированию instance-серверов), а `createBackendDeps` переиспользует инстанс.
  */
@@ -134,7 +134,7 @@ export async function createBackendDeps(
   storage?: StorageContext,
   metrics?: MetricsRegistry,
   /**
-   * PROP-077: эффективная секция `execution` (режим исполнения + параметры
+   * ADR-077: эффективная секция `execution` (режим исполнения + параметры
    * удалённого исполнителя). Не задана — резолвится из конфигу инстанса.
    */
   executionConfig?: ResolvedExecutionConfig,
@@ -153,11 +153,11 @@ export async function createBackendDeps(
   // с обязательной страховочной копией ниже (`applyStartupMigrations`).
   await assertInstanceDataNotTooNew(dataDir);
 
-  // PROP-032 (W2.3/W2.4): единый контекст хранения — домен получает порты из
+  // ADR-096 (W2.3/W2.4): единый контекст хранения — домен получает порты из
   // одного места. По умолчанию собирается `createBackendStorage`, готовый можно
   // передать (паритет с `app.ts`, где `serviceKeys`/`mcpRegistry` нужны до `auth`).
   const storageContext = storage ?? (await createBackendStorage(config));
-  // PROP-032 (W5): деградированное хранилище (postgres недоступен → файловый
+  // ADR-098 (W5): деградированное хранилище (postgres недоступен → файловый
   // фоллбек, read-only). Фоновые писатели отключаются (split-brain): миграции,
   // провайдеры из env, шедулер, webhooks, sweeper/ephemeral, retention-прунеры.
   const storageDegraded = storageContext.degraded !== undefined;
@@ -191,20 +191,20 @@ export async function createBackendDeps(
     skillBundles: bundleStore,
     mcpRegistry: mcpRegistryStore,
     analyticsRollups,
-    // ADR-051/PROP-059: реестр пайплайнов; ADR-086 §5: реестр установок пакетов.
+    // ADR-051/ADR-100: реестр пайплайнов; ADR-086 §5: реестр установок пакетов.
     pipelines: pipelineStore,
     packs: packStore,
   } = storageContext;
 
   // ADR-030: ядровая шина хуков — общий инстанс для SessionManager и оркестратора.
   const hooks = new HookBus();
-  // PROP-102: сборщик роллапов аналитики (write-path) — только через порт слоя
+  // ADR-102: сборщик роллапов аналитики (write-path) — только через порт слоя
   // хранения; в деградации выключен (не пишем домен в файловый фоллбек).
   const analytics = storageDegraded ? undefined : new AnalyticsRecorder({ repo: analyticsRollups });
   const sessionManager = new SessionManager(fileStore, {
     projectStore,
     hooks,
-    // PROP-102: точка персиста сообщений (`messages_assistant`/`messages_tool`).
+    // ADR-102: точка персиста сообщений (`messages_assistant`/`messages_tool`).
     analytics,
     // ADR-071 §2.4 / ADR-046 §4.5: системные дефолты для сессий без проекта.
     systemDefaultsProvider: async () => ({
@@ -218,7 +218,7 @@ export async function createBackendDeps(
   // ADR-089: авто-архивация ephemeral-сессий по TTL (таймер `unref`).
   // Остановка — через хэндл `stopEphemeralSweeper` на graceful shutdown.
   const stopEphemeralSweeper = storageDegraded ? () => {} : startEphemeralSweeper(sessionManager);
-  // PROP-102: шов записи `activity` через hook-шину (ADR-030) + retention суточных
+  // ADR-102: шов записи `activity` через hook-шину (ADR-030) + retention суточных
   // роллапов (prune на старте и каждые 6 ч, таймер `unref`).
   const detachAnalyticsHooks = analytics
     ? attachAnalyticsActivityHooks(hooks, {
@@ -284,7 +284,7 @@ export async function createBackendDeps(
 
   const eventBus = new EventBus();
   const queueManager = new QueueProcessorManager();
-  // PROP-102: пользовательские сообщения персистит процессор — мера `messages_user`.
+  // ADR-102: пользовательские сообщения персистит процессор — мера `messages_user`.
   queueManager.setAnalytics(analytics);
 
   // ADR-094: доменные коллекторы. `metrics` приходит только при
@@ -363,7 +363,7 @@ export async function createBackendDeps(
   // ADR-038: синхронизация провайдеров/моделей из переменных окружения (общая
   // core-реализация). Вызывается ПОСЛЕ создания providerStore/modelStore, но ДО
   // заполнения кэшей, чтобы env-провайдеры попали в providerCache/modelCache.
-  // PROP-032 (W5): в деградации не пишем в фоллбек.
+  // ADR-098 (W5): в деградации не пишем в фоллбек.
   if (!storageDegraded) await syncProvidersFromEnv(providerStore, modelStore);
 
   // Кеш провайдеров (заполняется при старте)
@@ -466,7 +466,7 @@ export async function createBackendDeps(
   const toolRegistry = createToolRegistry();
   const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
-  // ADR-096/PROP-032 + ADR-086 §5: агенты из **стора** — в реестр при старте.
+  // ADR-096 + ADR-086 §5: агенты из **стора** — в реестр при старте.
   // `createAgentRegistry` читает только файловый каталог `{dataDir}/agents`,
   // а при `storage.backend=postgres` стор агентов — это БД: агент, поставленный
   // пакетом расширения, после рестарта не попадал в реестр → Router не
@@ -507,7 +507,7 @@ export async function createBackendDeps(
     bundleStore,
   });
 
-  // PROP-077: порт исполнения команд. Режим (`inline`/`remote`) — параметр
+  // ADR-077: порт исполнения команд. Режим (`inline`/`remote`) — параметр
   // запуска процесса (инвариант 24), поэтому порт собирается здесь, при старте.
   // Тот же порт получают оркестратор (тулы, inline-shell, детект зависимостей)
   // и резолвер проектных инструкций.
@@ -518,7 +518,7 @@ export async function createBackendDeps(
   // старте, fail-open при ошибке. Общий для оркестратора и движка пайплайнов
   // (контекст шага, ADR-101 §10).
   //
-  // PROP-077: проба бинарников идёт **через порт исполнения** — в split-режиме
+  // ADR-077: проба бинарников идёт **через порт исполнения** — в split-режиме
   // они ищутся в окружении исполнителя. Порт передаётся здесь: кэш детекции
   // модульный, порт берётся из первого вызова (fail-closed в remote-режиме).
   const runtimeDeps = await detectRuntimeDeps(executionPort);
@@ -527,9 +527,9 @@ export async function createBackendDeps(
     sessionManager,
     eventBus,
     hooks,
-    // PROP-077: порт исполнения команд (inline — исполнение в процессе).
+    // ADR-077: порт исполнения команд (inline — исполнение в процессе).
     executionPort,
-    // PROP-102: сборщик `usage`/`decision` роллапов (write-path).
+    // ADR-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
     contextBuilder,
     contextConfig,
@@ -545,7 +545,7 @@ export async function createBackendDeps(
     profilesStore,
     // ADR-076 §T6: тот же store, что у git/ssh-роутов — без дублей инстансов.
     sshKeyStore,
-    // PROP-032 (W2.4): словари классификации — порт из контекста хранения.
+    // ADR-096 (W2.4): словари классификации — порт из контекста хранения.
     dictionaryStore,
     workspacesRoot: config.workspacesRoot,
     // ADR-075: backend — managed-режим, workspace вне workspacesRoot запрещён.
@@ -573,7 +573,7 @@ export async function createBackendDeps(
     // ADR-046 §4.5: системный hard-gate скиллов (runtime-настройка).
     skillsDisabled,
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
-    // Проба бинарников — через тот же порт исполнения (PROP-077).
+    // Проба бинарников — через тот же порт исполнения (ADR-077).
     runtimeDeps: await detectRuntimeDeps(executionPort),
     // ADR-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
@@ -656,7 +656,7 @@ export async function createBackendDeps(
           displayName: agent.displayName,
           description: agent.description,
         })),
-      // PROP-102: персистентные decision-метрики (ось provider/model).
+      // ADR-102: персистентные decision-метрики (ось provider/model).
       analytics,
     }),
   );
@@ -679,7 +679,7 @@ export async function createBackendDeps(
     profiles: profilesStore,
     getIdentityMap: () => effectiveEventsSettings.identityMap,
   });
-  // ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059) — состояние
+  // ADR-089/ADR-051: учёт экземпляров пайплайна (ADR-100) — состояние
   // автомата публикации живёт в ядре (решение владельца), add-on отдаёт
   // артефакт по id. Трекер работает через порт `storage.pipelines`.
   const pipelineTracker = new PipelineTracker({ repository: pipelineStore });
@@ -746,7 +746,7 @@ export async function createBackendDeps(
     // бейдж агента (паритет с `POST /api/v2/sessions`). Источник — админка
     // «Агенты» (`getDefaultAgentId`) поверх `DEFAULT_AGENT_ID`.
     resolveDefaultAgent: getDefaultAgentId,
-    // ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059) — решение с
+    // ADR-089/ADR-051: учёт экземпляров пайплайна (ADR-100) — решение с
     // `pipeline: {id, step}` продвигает автомат пайплайна; учёт best-effort.
     pipelineTracker,
     // ADR-089: UI-событие после материализации внешнего события.
@@ -880,7 +880,7 @@ export async function createBackendDeps(
   // `start()` гейтится конфигом (`scheduler.enabled: false` — тикер не стартует),
   // ошибки старта логируются и не роняют процесс; остановка — `stopScheduler`.
   const schedulerTickMs = config.synth.scheduler.tickSec * 1000;
-  // PROP-032: `leaderElection=postgres` требует advisory-локов backend'а
+  // ADR-097: `leaderElection=postgres` требует advisory-локов backend'а
   // (`storage.backend=postgres`); иначе — предупреждение и AlwaysLeader.
   if (config.synth.scheduler.leaderElection === 'postgres' && !storageContext.locks) {
     console.warn(
@@ -898,7 +898,7 @@ export async function createBackendDeps(
     jobRetentionDays: config.synth.scheduler.jobRetentionDays,
     // ADR-094: завершённые Job (outcome + дрейф cron).
     onJob: schedulerJobMetrics,
-    // ADR-051/ADR-089/PROP-032: тикер стартует только у лидера (default —
+    // ADR-051/ADR-089/ADR-096: тикер стартует только у лидера (default —
     // AlwaysLeader). `file` — файловый лок на общем dataDir, `postgres` —
     // session-level advisory-lock драйвера (доступен только при PG-backend).
     leader:
@@ -918,7 +918,7 @@ export async function createBackendDeps(
   // обязательная страховочная копия + межпроцессный лок. Миграция снапшотов скоупа —
   // зарегистрированная миграция реестра (`session-scope-snapshots-v1`), отдельный
   // прямой вызов больше не нужен. Fail-closed: ошибка не глушится.
-  // PROP-032 (W5): в деградации миграции не применяем (фоллбек-каталог пуст —
+  // ADR-098 (W5): в деградации миграции не применяем (фоллбек-каталог пуст —
   // страховочная копия/миграция были бы доменной записью в фоллбек).
   if (!storageDegraded) {
     await applyStartupMigrations({
@@ -926,7 +926,7 @@ export async function createBackendDeps(
       settingsStore,
       sessionManager,
       projectStore,
-      // PROP-032: под PG — advisory-лок драйвера вместо файлового `{dataDir}/migrate`.
+      // ADR-097: под PG — advisory-лок драйвера вместо файлового `{dataDir}/migrate`.
       ...(storageContext.locks
         ? { mutex: storageContext.locks.createMutex({ name: 'startup-migrate' }) }
         : {}),
@@ -942,7 +942,7 @@ export async function createBackendDeps(
 
   return {
     dataDir,
-    // PROP-032: контекст хранения инстанса — для операций, которым нужен
+    // ADR-096: контекст хранения инстанса — для операций, которым нужен
     // целиком (напр. портативный экспорт/импорт проекта, ADR-091).
     storageContext,
     // ADR-094: реестр метрик (доменные коллекторы подключаются выше) и
@@ -957,7 +957,7 @@ export async function createBackendDeps(
     providerStore,
     modelStore,
     agentStore,
-    // PROP-032 (W2.4): конфигурационные словари и реестр service-key — из контекста.
+    // ADR-096 (W2.4): конфигурационные словари и реестр service-key — из контекста.
     dictionaries: dictionaryStore,
     serviceApiKeyStore,
     contextConfig,
@@ -971,16 +971,16 @@ export async function createBackendDeps(
     egressLogConfig,
     securityAudit,
     egressRequests,
-    // PROP-102 (волна 1): порт пред-агрегированных роллапов аналитики — для роутов отчётов.
+    // ADR-102 (волна 1): порт пред-агрегированных роллапов аналитики — для роутов отчётов.
     analyticsRollups,
-    // PROP-102: write-path — сборщик роллапов (+ остановка hook-подписки и pruner'а).
+    // ADR-102: write-path — сборщик роллапов (+ остановка hook-подписки и pruner'а).
     analytics,
     detachAnalyticsHooks,
     stopAnalyticsRollupPruner,
     stopEgressLogPruner,
     mcpManager,
     mcpRegistryStore,
-    // ADR-051/PROP-059: порт реестра пайплайнов (определения + экземпляры).
+    // ADR-051/ADR-100: порт реестра пайплайнов (определения + экземпляры).
     pipelines: pipelineStore,
     // ADR-101 (Э5): движок пайплайнов (второй движок) — HTTP-роутов нет (Э6).
     pipelineEngine,
@@ -1009,7 +1009,7 @@ export async function createBackendDeps(
     bundleStore,
     commandService,
     orchestrator,
-    // PROP-077: порт исполнения — тот же инстанс, что у оркестратора и тулов
+    // ADR-077: порт исполнения — тот же инстанс, что у оркестратора и тулов
     // (резолвер проектных инструкций берёт его для `git rev-parse`).
     executionPort,
     processMessage,

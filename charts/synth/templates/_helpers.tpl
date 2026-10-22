@@ -42,7 +42,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- .name | upper | replace "-" "_" }}
 {{- end }}
 
-{{- /* PROP-032: chart-значения storage.* отличаются от дефолта (backend != file
+{{- /* ADR-096: chart-значения storage.* отличаются от дефолта (backend != file
        либо задан задел деградации) → секцию storage нужно домержить в
        config.yaml. Возвращает "true" или пустую строку. */ -}}
 {{- define "synth.storage.inConfig" -}}
@@ -50,13 +50,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if or (ne ($s.backend | default "file") "file") $s.degradedMode $s.fallbackDir -}}true{{- end -}}
 {{- end -}}
 
-{{- /* PROP-032/ADR-099: ConfigMap <release>-config нужен, если задан backend.config
-       ИЛИ домерживаются security.tls (ADR-099) / storage.* (PROP-032). */ -}}
+{{- /* ADR-096/ADR-099: ConfigMap <release>-config нужен, если задан backend.config
+       ИЛИ домерживаются security.tls (ADR-099) / storage.* (ADR-096). */ -}}
 {{- define "synth.backend.hasConfigMap" -}}
 {{- if or .Values.backend.config (include "synth.storage.inConfig" .) (include "synth.tls.inConfig" .) -}}true{{- end -}}
 {{- end -}}
 
-{{- /* PROP-032: активен ли postgres-backend (нужен ли env с паролем БД). */ -}}
+{{- /* ADR-097: активен ли postgres-backend (нужен ли env с паролем БД). */ -}}
 {{- define "synth.storage.isPostgres" -}}
 {{- $s := .Values.storage | default dict -}}
 {{- if eq ($s.backend | default "file") "postgres" -}}true{{- end -}}
@@ -105,7 +105,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- toYaml $tls -}}
 {{- end }}
 
-{{- /* PROP-032: итоговый config.yaml backend = backend.config, поверх которого
+{{- /* ADR-096: итоговый config.yaml backend = backend.config, поверх которого
        домерживается секция storage (chart-значения storage.* приоритетнее
        backend.config.storage.*). Пароль БД сюда НЕ попадает (инвариант 13) —
        он идёт только в env SYNTH_POSTGRES_PASSWORD из Secret.

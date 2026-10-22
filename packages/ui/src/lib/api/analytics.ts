@@ -1,11 +1,11 @@
 // analytics: домен API v2 (ADR-095) — объект `analyticsApi` и его DTO.
 //
-// PROP-102 §4: отчёты аналитики инстанса — **только чтение**. Поверхность:
+// ADR-102 §4: отчёты аналитики инстанса — **только чтение**. Поверхность:
 // `GET /analytics/summary`, `GET /analytics/{usage,activity,decision,prompt}` и
 // `GET /analytics/export?report&format`. Типы — общий контракт shared
 // (`@itphx/synth-shared/types`); локальных дубликатов DTO нет.
 //
-// RBAC серверный (PROP-102 §7): обычному пользователю `decision` и `summary`
+// RBAC серверный (ADR-102 §7): обычному пользователю `decision` и `summary`
 // отдают 403 `FORBIDDEN`, а `usage`/`activity`/`prompt` сервер фильтрует по его
 // оси `user` сам. UI только показывает понятное сообщение — права не дублируются.
 
@@ -109,7 +109,7 @@ async function throwExportError(response: Response): Promise<never> {
 }
 
 export const analyticsApi = {
-  // --- PROP-102 §4: сводка инстанса за период (сквозная → elevated/auditor) ---
+  // --- ADR-102 §4: сводка инстанса за период (сквозная → elevated/auditor) ---
   /** GET /analytics/summary — итоги usage/activity/decision + стоимость. */
   async getAnalyticsSummary(params: Pick<AnalyticsQuery, 'from' | 'to'> = {}): Promise<AnalyticsSummary> {
     return fetchJSON<AnalyticsSummary>(

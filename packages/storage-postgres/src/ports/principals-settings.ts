@@ -1,6 +1,6 @@
 /**
  * Порт `settings` (runtime-настройки инстанса) PostgreSQL-драйвера
- * (PROP-032, волна 3b).
+ * (ADR-097, волна 3b).
  *
  * Эталон семантики — `RuntimeSettingsStore`/`MemorySettingsRepository`:
  *   - `load()` на пустом сторе — `{}` (не заданные секции в результат не попадают);

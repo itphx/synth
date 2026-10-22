@@ -58,7 +58,7 @@ export function renderUnavailableTools(tools: UnavailableTool[], language: strin
   const en = language === 'en';
   const header = en ? '[UNAVAILABLE TOOLS]' : '[НЕДОСТУПНЫЕ ТУЛЫ]';
   const lines: string[] = [];
-  // PROP-032 (W5): деградированное хранилище — все несейфовые тулы схлопываются
+  // ADR-098 (W5): деградированное хранилище — все несейфовые тулы схлопываются
   // в одну строку с указанием аварийного режима.
   if (tools.some((t) => t.reason === 'storage')) {
     lines.push(en

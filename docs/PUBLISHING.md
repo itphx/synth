@@ -12,7 +12,7 @@
 shared → core → executor → storage-postgres → ui → backend → sdk → synth
 ```
 
-Порядок задан иерархией зависимостей: `@itphx/synth-shared` — фундамент, `@itphx/synth-core` импортирует shared, `@itphx/synth-executor` — исполнитель агентских команд (`dependencies`: `@itphx/synth-shared`, `peerDependencies`: `@itphx/synth-core`, PROP-077), `@itphx/synth-storage-postgres` — опциональный драйвер слоя хранения (`peerDependencies: @itphx/synth-core`, `pg` — `optionalDependencies`, ADR-097/PROP-032), `@itphx/synth-backend`/`@itphx/synth-ui` импортируют core, `@itphx/synth-sdk` — тонкий клиент публичного API над shared (ADR-052), `@itphx/synth` — тонкая обёртка над core/ui/shared (ADR-038).
+Порядок задан иерархией зависимостей: `@itphx/synth-shared` — фундамент, `@itphx/synth-core` импортирует shared, `@itphx/synth-executor` — исполнитель агентских команд (`dependencies`: `@itphx/synth-shared`, `peerDependencies`: `@itphx/synth-core`, ADR-077), `@itphx/synth-storage-postgres` — опциональный драйвер слоя хранения (`peerDependencies: @itphx/synth-core`, `pg` — `optionalDependencies`, ADR-097), `@itphx/synth-backend`/`@itphx/synth-ui` импортируют core, `@itphx/synth-sdk` — тонкий клиент публичного API над shared (ADR-052), `@itphx/synth` — тонкая обёртка над core/ui/shared (ADR-038).
 
 ## `pnpm publish` вместо `npm publish`
 

@@ -10,7 +10,7 @@
 > - [ADR-089](./adr-089-external-events-automation.md) — надёжный «Стоп», события и видимость;
 > - [ADR-024](./adr-024-eventhub-transport.md) — live-tail логов в UI;
 > - [PROP-064](./prop-064-ui-browser-terminal.md) «UI-терминал» — будущий PTY/attach поверх того же реестра;
-> - [PROP-077](./prop-077-runtime-toolchain.md) «Executor» — где процессы исполняются в managed.
+> - [ADR-077](./adr-077-runtime-toolchain.md) «Executor» — где процессы исполняются в managed.
 
 ## Решение
 
@@ -65,11 +65,11 @@ MVP: `background` у `execute_shell` + реестр + API + панель «Пр�
 
 ## Открытые вопросы
 
-1. Где исполнять процессы в **managed** — в thin backend или в executor (PROP-077)? В **гибриде** — локально или на сервере?
+1. Где исполнять процессы в **managed** — в thin backend или в executor (ADR-077)? В **гибриде** — локально или на сервере?
 2. Политика рестарта: убивать «осиротевшие» процессы или пытаться переприсоединиться?
 3. Нужен ли «живой» стрим всего stdout (WS), или достаточно tail + инкремента через EventHub?
 4. Единый реестр для процессов и фоновых саб-агентов (рекомендуется) или два раздельных?
 
 ## Связи
 
-- [PROP-096](./prop-096-background-subagent-sessions.md), [ADR-025](./adr-025-plan-act-toggle.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-089](./adr-089-external-events-automation.md), [ADR-024](./adr-024-eventhub-transport.md), [PROP-064](./prop-064-ui-browser-terminal.md), [PROP-077](./prop-077-runtime-toolchain.md), [PROP-082](./prop-082-full-images-deployment.md).
+- [PROP-096](./prop-096-background-subagent-sessions.md), [ADR-025](./adr-025-plan-act-toggle.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-089](./adr-089-external-events-automation.md), [ADR-024](./adr-024-eventhub-transport.md), [PROP-064](./prop-064-ui-browser-terminal.md), [ADR-077](./adr-077-runtime-toolchain.md), [PROP-082](./prop-082-full-images-deployment.md).

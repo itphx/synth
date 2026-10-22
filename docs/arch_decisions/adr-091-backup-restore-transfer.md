@@ -2,7 +2,7 @@
 
 > **Статус:** ⚠️ Частично — MVP реализован (`synth backup`/`restore`/`doctor`); admin-API/UI добавлены (`/api/v2/maintenance`, раздел «Обслуживание»); шифрование архива (`--encrypt`) реализовано; портативный экспорт/импорт проекта (`synth project export|import`) реализован (ядро + CLI); остаток — онлайн-консистентность/PITR.
 > **Дата:** 2026-10-16
-> **Связано:** [ADR-005](./adr-005-json-storage.md), [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-079](./adr-079-local-home-independent-instances.md), [PROP-055](./prop-055-instance-exchange.md), [PROP-048](./prop-048-self-help-skills-admin-mcp.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md).
+> **Связано:** [ADR-005](./adr-005-json-storage.md), [ADR-097](./adr-097-storage-provider-class.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-079](./adr-079-local-home-independent-instances.md), [PROP-055](./prop-055-instance-exchange.md), [PROP-048](./prop-048-self-help-skills-admin-mcp.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md).
 
 ## Контекст
 
@@ -25,7 +25,7 @@
 
 - **Системный `tar`/`gzip` через `child_process`** — отклонён: нет на Windows и в минимальных образах, внешняя зависимость в рантайме.
 - **Готовая библиотека архивации** — отклонена: новая зависимость ради простого ustar-формата и контроля путей (отвергаем абсолютные и `..`).
-- **Бэкапить только БД** — преждевременно: файлового уровня ещё нет (БД — следующий шаг, [PROP-032](./prop-032-history-storage-postgresql.md)).
+- **Бэкапить только БД** — преждевременно: файлового уровня ещё нет (БД — следующий шаг, [ADR-097](./adr-097-storage-provider-class.md)).
 
 ## Последствия
 
@@ -39,7 +39,7 @@
 ## Остаток
 
 - `workspaces/` по умолчанию не входит в бэкап (исключение по объёму): при восстановлении он **сохраняется**, поэтому полный откат рабочих файлов проектов даёт только архив с `--with-workspace`; вкладывать рабочие каталоги автоматически — не решено;
-- онлайн-консистентный/инкрементальный бэкап и PITR — после [PROP-032](./prop-032-history-storage-postgresql.md);
+- онлайн-консистентный/инкрементальный бэкап и PITR — после [ADR-097](./adr-097-storage-provider-class.md);
 - UI-кнопки портативного экспорта/импорта проекта в разделе проекта (HTTP-роуты `/api/v2/projects/:id/export|import` готовы);
 - руководства портала `docs.synth.itphx.ru`; автоматизация ops-скиллами ([PROP-048](./prop-048-self-help-skills-admin-mcp.md)).
 

@@ -117,9 +117,9 @@ describe('runDoctor', () => {
   });
 });
 
-// PROP-032: `storage.backend=postgres` — вместо файловых проверок идут проба
+// ADR-097: `storage.backend=postgres` — вместо файловых проверок идут проба
 // соединения и версия схемы БД; файловые проверки помечаются `skipped`.
-describe('runDoctor — backend=postgres (PROP-032)', () => {
+describe('runDoctor — backend=postgres (ADR-097)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {

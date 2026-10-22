@@ -18,7 +18,7 @@ import { Divider } from '@/components/ui/Divider'
 
 interface QuickSettingsPopupProps {
   onSettingsClick: () => void
-  /** PROP-102: открыть модальное окно «Аналитика и отчёты» (пункт меню пользователя). */
+  /** ADR-102: открыть модальное окно «Аналитика и отчёты» (пункт меню пользователя). */
   onAnalyticsClick?: () => void
 }
 

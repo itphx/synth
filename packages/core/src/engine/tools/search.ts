@@ -44,7 +44,7 @@ export const grepFilesTool: ToolDefinition = {
 
       rgArgs.push(pattern, searchDir);
 
-      // PROP-077: исполнение — через порт (inline-реализация повторяет
+      // ADR-077: исполнение — через порт (inline-реализация повторяет
       // прежний `execFile('rg', …)`: argv без shell, таймаут 30 с,
       // maxBuffer 10 МБ, базовое окружение — `process.env`).
       const { stdout } = await resolveExecutionPort(ctx).execute({

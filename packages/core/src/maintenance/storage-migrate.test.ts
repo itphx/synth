@@ -1,4 +1,4 @@
-// PROP-032 (волна 5): тесты `synth storage migrate` — перенос данных между
+// ADR-097 (волна 5): тесты `synth storage migrate` — перенос данных между
 // backend'ами через порты (`migrateStorageData`) и CLI-команда
 // (`runStorageMigrateCommand`): идемпотентность, пропуски существующего,
 // dry-run, `--yes`, аудит. Для логики достаточно file ↔ memory (без БД).
@@ -23,7 +23,7 @@ import {
 } from './storage-migrate.js';
 
 /**
- * PROP-032: драйвер прогревается один раз на модуль — до первого теста.
+ * ADR-097: драйвер прогревается один раз на модуль — до первого теста.
  *
  * Тест «недоступный целевой backend» строит цель через `buildStorageContext`
  * → `createStorageContextAsync('postgres', …)`, а тот грузит модуль-драйвер
@@ -327,7 +327,7 @@ describe('migrateStorageData — перенос данных через порт
   });
 });
 
-describe('runStorageMigrateCommand — CLI-команда (PROP-032)', () => {
+describe('runStorageMigrateCommand — CLI-команда (ADR-096)', () => {
   let tmpDir: string;
   let dataDir: string;
   let targetDir: string;

@@ -120,7 +120,7 @@ export async function getAssistantSecrets(
 }
 
 /**
- * PROP-102: есть ли в usage реальные токены (нулевой ответ не создаёт бакет).
+ * ADR-102: есть ли в usage реальные токены (нулевой ответ не создаёт бакет).
  */
 function hasUsageTokens(usage: TokenUsage | undefined): boolean {
   if (!usage) return false;
@@ -224,7 +224,7 @@ export interface SaveAssistantMessageDeps {
   eventBus: EventBus;
   obfMapStore: ObfuscationMapStore | null;
   modelPriceLoader: ModelPriceLoader | null;
-  /** PROP-102: сборщик `usage`-роллапа (не задан — запись не выполняется). */
+  /** ADR-102: сборщик `usage`-роллапа (не задан — запись не выполняется). */
   analytics?: AnalyticsRecorder;
 }
 
@@ -400,7 +400,7 @@ export async function saveAssistantMessage(
     await sessionManager.addMessage(sessionId, msg);
   }
 
-  // PROP-102 §3: шов записи `usage` — значение уже посчитано (usage/model/cost/
+  // ADR-102 §3: шов записи `usage` — значение уже посчитано (usage/model/cost/
   // сабагенты). Best-effort: рекордер не пробрасывает ошибки и не блокирует ход.
   // Числа согласованы с `computeSessionStats`: собственный usage сообщения +
   // usage сабагентов из `metadata.subagents` (их сообщения персистятся мимо

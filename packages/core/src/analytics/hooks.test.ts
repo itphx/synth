@@ -1,5 +1,5 @@
 /**
- * PROP-102: шов записи `activity` через hook-шину (ADR-030) на memory-сторадже.
+ * ADR-102: шов записи `activity` через hook-шину (ADR-030) на memory-сторадже.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';

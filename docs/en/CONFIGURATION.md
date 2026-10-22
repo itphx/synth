@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-10-19 (ADR-094, секция `metrics`); перевод отстаёт (PROP-102, `analytics`).
+> ⚠️ RU-версия обновлена 2026-10-19 (ADR-094, секция `metrics`); перевод отстаёт (ADR-102, `analytics`).
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -26,19 +26,19 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 |-----------|------------|--------------|
 | `SYNTH_API_KEY` | Key to log into the API (backend → role ADMIN; core standalone → role ADMIN). If not set, `synth serve` generates a stable local key in `{dataDir}/secrets/api-key` | — |
 | `SYNTH_DATA_DIR` | Data directory (sessions, projects, providers, models) | per mode: `~/.local/share/synth` (user), `./data` (dev), `/var/synth/data` (docker/server) |
-| `SYNTH_STORAGE_BACKEND` | ADR-096: physical storage backend: `file` (JSON files, ADR-005), `memory` (in-memory, data is **not** persisted) or `postgres` (PROP-032) | `file` |
-| `SYNTH_POSTGRES_DSN` | PROP-032: PostgreSQL connection string (takes precedence over separate `host`/`port`/`database`/`user`) | — |
-| `SYNTH_POSTGRES_HOST` | PROP-032: PostgreSQL host | — |
-| `SYNTH_POSTGRES_PORT` | PROP-032: PostgreSQL port | — |
-| `SYNTH_POSTGRES_DATABASE` | PROP-032: PostgreSQL database name | — |
-| `SYNTH_POSTGRES_USER` | PROP-032: PostgreSQL user | — |
-| `SYNTH_POSTGRES_SCHEMA` | PROP-032: DB schema (namespace of the driver's tables) | — |
-| `SYNTH_POSTGRES_SSL` | PROP-032: legacy TLS-connection flag (`true`/`false`); used only when `SYNTH_POSTGRES_SSLMODE` is not set | — |
-| `SYNTH_POSTGRES_SSLMODE` | PROP-032/ADR-099: TLS mode for the DB connection: `disable` / `require` / `verify-full` (`verify-ca` is an alias of `verify-full`); takes precedence over the legacy `ssl` | — |
-| `SYNTH_POSTGRES_POOL_MAX` | PROP-032: maximum connection pool size | `10` |
-| `SYNTH_POSTGRES_PASSWORD` | PROP-032: DB password — **only** via env or the file `{dataDir}/secrets/postgres-password` (never stored in `config.yaml`, invariant 13) | — |
-| `SYNTH_DEGRADED_MODE` | PROP-032/ADR-098: behaviour when the DB is unreachable (`fallback-file`/`halt`) | `fallback-file` |
-| `SYNTH_STORAGE_FALLBACK_DIR` | PROP-032/ADR-098: directory of the file fallback in degraded mode | `{dataDir}/fallback` |
+| `SYNTH_STORAGE_BACKEND` | ADR-096: physical storage backend: `file` (JSON files, ADR-005), `memory` (in-memory, data is **not** persisted) or `postgres` (ADR-097) | `file` |
+| `SYNTH_POSTGRES_DSN` | ADR-097: PostgreSQL connection string (takes precedence over separate `host`/`port`/`database`/`user`) | — |
+| `SYNTH_POSTGRES_HOST` | ADR-097: PostgreSQL host | — |
+| `SYNTH_POSTGRES_PORT` | ADR-097: PostgreSQL port | — |
+| `SYNTH_POSTGRES_DATABASE` | ADR-097: PostgreSQL database name | — |
+| `SYNTH_POSTGRES_USER` | ADR-097: PostgreSQL user | — |
+| `SYNTH_POSTGRES_SCHEMA` | ADR-097: DB schema (namespace of the driver's tables) | — |
+| `SYNTH_POSTGRES_SSL` | ADR-097: legacy TLS-connection flag (`true`/`false`); used only when `SYNTH_POSTGRES_SSLMODE` is not set | — |
+| `SYNTH_POSTGRES_SSLMODE` | ADR-097/ADR-099: TLS mode for the DB connection: `disable` / `require` / `verify-full` (`verify-ca` is an alias of `verify-full`); takes precedence over the legacy `ssl` | — |
+| `SYNTH_POSTGRES_POOL_MAX` | ADR-097: maximum connection pool size | `10` |
+| `SYNTH_POSTGRES_PASSWORD` | ADR-097: DB password — **only** via env or the file `{dataDir}/secrets/postgres-password` (never stored in `config.yaml`, invariant 13) | — |
+| `SYNTH_DEGRADED_MODE` | ADR-098: behaviour when the DB is unreachable (`fallback-file`/`halt`) | `fallback-file` |
+| `SYNTH_STORAGE_FALLBACK_DIR` | ADR-098: directory of the file fallback in degraded mode | `{dataDir}/fallback` |
 | `SYNTH_WORKSPACES_ROOT` | Root of the project workspace directories (`storage.workspacesRoot`) | `{dataDir}/workspaces` |
 | `SYNTH_DEFAULT_WORKSPACE` | Default working directory (`storage.defaultWorkspace`) | `{dataDir}/workspaces/default` |
 | `SYNTH_WORKSPACE_OUTSIDE_ROOT` | ADR-075: policy for an absolute workspace outside `workspacesRoot` (`confirm`/`deny`) | per mode (standalone — `confirm`, managed — `deny`) |
@@ -59,12 +59,12 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_DECISION_MODEL` | ADR-084: decision-layer model (e.g. `clef-flash`) | `decision.model` |
 | `SYNTH_METRICS_ENABLED` | ADR-094: enable `GET /metrics` (Prometheus exposition 0.0.4); `false` → 404 | `metrics.enabled` (`false`) |
 | `SYNTH_METRICS_TOKEN` | ADR-094: bearer token for `/metrics` (takes precedence over the file `{dataDir}/secrets/metrics-token`); the value is never logged | — |
-| `SYNTH_EXECUTION_MODE` | PROP-077: execution topology — `inline` (default) \| `remote` (remote executor, PROP-077 step 7b; fail-closed at startup) | `inline` |
-| `SYNTH_EXECUTION_REMOTE_URL` | PROP-077: executor address list (comma-separated) | — |
-| `SYNTH_EXECUTION_TOKEN` | PROP-077: path/reference to the executor token (NOT a value, invariant 13) | — |
-| `SYNTH_EXECUTION_TIMEOUT_MS` | PROP-077: exec-call timeout, ms | `30000` |
-| `SYNTH_EXECUTION_CONCURRENCY` | PROP-077: limit of concurrent exec calls | process CPU count |
-| `SYNTH_EXECUTION_FAIL_MODE` | PROP-077: behaviour when the executor is unavailable (`fail`/`inline-fallback`) | `fail` |
+| `SYNTH_EXECUTION_MODE` | ADR-077: execution topology — `inline` (default) \| `remote` (remote executor, ADR-077 step 7b; fail-closed at startup) | `inline` |
+| `SYNTH_EXECUTION_REMOTE_URL` | ADR-077: executor address list (comma-separated) | — |
+| `SYNTH_EXECUTION_TOKEN` | ADR-077: path/reference to the executor token (NOT a value, invariant 13) | — |
+| `SYNTH_EXECUTION_TIMEOUT_MS` | ADR-077: exec-call timeout, ms | `30000` |
+| `SYNTH_EXECUTION_CONCURRENCY` | ADR-077: limit of concurrent exec calls | process CPU count |
+| `SYNTH_EXECUTION_FAIL_MODE` | ADR-077: behaviour when the executor is unavailable (`fail`/`inline-fallback`) | `fail` |
 
 **UI (Vite):**
 
@@ -237,9 +237,9 @@ storage:
   dataDir: "/var/synth/data"      # data directory outside the repository
   backend: "file"                 # ADR-096: physical storage backend — file (JSON files with atomic write,
                                   # default) | memory (in-memory, data is NOT persisted — hermetic tests/emulation)
-                                  # | postgres (PROP-032: optional driver @itphx/synth-storage-postgres);
+                                  # | postgres (ADR-097: optional driver @itphx/synth-storage-postgres);
                                   # SYNTH_STORAGE_BACKEND
-  postgres:                       # PROP-032: PostgreSQL parameters (used when backend: postgres)
+  postgres:                       # ADR-097: PostgreSQL parameters (used when backend: postgres)
     # dsn: "postgres://synth@db:5432/synth"   # connection string; takes precedence over host/port/database/user
     host: ""                      # SYNTH_POSTGRES_HOST
     port: 5432                    # SYNTH_POSTGRES_PORT
@@ -252,9 +252,9 @@ storage:
     poolMax: 10                   # SYNTH_POSTGRES_POOL_MAX — maximum pool size
     # The PASSWORD is NOT stored here (invariant 13): env SYNTH_POSTGRES_PASSWORD or the file
     # {dataDir}/secrets/postgres-password.
-  degradedMode: "fallback-file"   # PROP-032/ADR-098: on DB unavailability — fallback-file (file fallback,
+  degradedMode: "fallback-file"   # ADR-098: on DB unavailability — fallback-file (file fallback,
                                   # strict read-only) | halt (stop startup); SYNTH_DEGRADED_MODE
-  fallbackDir: ""                 # PROP-032/ADR-098: file fallback directory; empty — {dataDir}/fallback;
+  fallbackDir: ""                 # ADR-098: file fallback directory; empty — {dataDir}/fallback;
                                   # SYNTH_STORAGE_FALLBACK_DIR
   workspacesRoot: ""              # if empty — {dataDir}/workspaces; SYNTH_WORKSPACES_ROOT
   defaultWorkspace: ""            # if empty — {dataDir}/workspaces/default; SYNTH_DEFAULT_WORKSPACE
@@ -264,7 +264,7 @@ storage:
   maxUploadBytes: 104857600       # file upload limit for /api/v2/fs/upload, bytes (>=1024, <=2 GiB);
                                   # unset — 100 MiB; SYNTH_MAX_UPLOAD_BYTES
 
-execution:                         # PROP-077: execution topology (startup parameter, invariant 24)
+execution:                         # ADR-077: execution topology (startup parameter, invariant 24)
   mode: "inline"                  # inline (default) | remote; SYNTH_EXECUTION_MODE;
                                   # the --execution-mode CLI flag wins over env; an unknown value is fail-closed
   remote:
@@ -444,12 +444,12 @@ The full list of fields (including `logging`, `tsm`, `context`, `summarization`,
 
 ### Storage backend (`storage.backend`, ADR-096)
 
-- `storage.backend` — the physical storage backend: `file` (JSON files with atomic tmp→rename write, [ADR-005](../arch_decisions/adr-005-json-storage.md); default), `memory` (in-memory, data is **not** persisted to disk — for hermetic tests and emulation) or `postgres` (PostgreSQL; optional in-tree driver `@itphx/synth-storage-postgres`, [PROP-032](../arch_decisions/prop-032-history-storage-postgresql.md)). The domain works through domain ports, the backend is interchangeable ([ADR-096](../arch_decisions/adr-096-storage-layer.md)); any backend must pass the contract suite `packages/core/src/storage/contract/*`.
+- `storage.backend` — the physical storage backend: `file` (JSON files with atomic tmp→rename write, [ADR-005](../arch_decisions/adr-005-json-storage.md); default), `memory` (in-memory, data is **not** persisted to disk — for hermetic tests and emulation) or `postgres` (PostgreSQL; optional in-tree driver `@itphx/synth-storage-postgres`, [ADR-097](../arch_decisions/adr-097-storage-provider-class.md)). The domain works through domain ports, the backend is interchangeable ([ADR-096](../arch_decisions/adr-096-storage-layer.md)); any backend must pass the contract suite `packages/core/src/storage/contract/*`.
 - **Priority** ([ADR-023](../arch_decisions/adr-023-configuration.md)): env `SYNTH_STORAGE_BACKEND` > `config.storage.backend` > `file`. An invalid value (not `file`/`memory`/`postgres`) — warn and fall back to config/default (fail-soft); an unknown **explicit** value in `resolveStorageBackend` itself — **fail-closed** (an error, not a silent fallback to files). Resolver — `resolveStorageBackend` (`@itphx/synth-shared/config`); the choice is applied at the assembly point `StorageContext` (`createStorageContextAsync`/`buildStorageContext`; the synchronous `createStorageContext` throws for `postgres`).
 - `memory` prints the warning `storage.backend=memory: данные не сохраняются на диск` — a mode **not for production** (tests/emulation only).
 - `postgres` requires the installed driver (`@itphx/synth-storage-postgres`, shipped with `@itphx/synth`; `pg` is an optional dependency of the driver) and a reachable DB. The driver applies/asserts **its own** DB schema (`synth_schema_migrations`, inline SQL migrations) — separate from `meta.json`/`synth migrate` (ADR-092); "DB schema is newer than the driver" — fail-closed.
 
-### PostgreSQL (`storage.postgres`, PROP-032)
+### PostgreSQL (`storage.postgres`, ADR-097)
 
 The section is used when `storage.backend: postgres`. Source of truth — `postgresStorageConfigSchema` (`packages/shared/src/config/types.ts`); resolver — `resolvePostgresConfig` (env `SYNTH_POSTGRES_*` > `config.storage.postgres`; [ADR-023](../arch_decisions/adr-023-configuration.md)).
 
@@ -469,7 +469,7 @@ The section is used when `storage.backend: postgres`. Source of truth — `postg
 - Invalid numeric/boolean env values — a resolver error with a clear message (no silent passthrough).
 - Driver contract and DB schema — `packages/storage-postgres/AGENTS.md`; acceptance criterion — the suite `packages/core/src/storage/contract/*` (run against a live DB via env `SYNTH_TEST_POSTGRES_DSN`).
 
-### TLS for the PostgreSQL connection (`storage.postgres.sslmode`, ADR-099 × PROP-032)
+### TLS for the PostgreSQL connection (`storage.postgres.sslmode`, ADR-099 × ADR-097)
 
 The source of truth for the TLS policy is `storage.postgres.sslmode`; the CA and client certificates (mTLS) come from the **shared** `security.tls` section (see below). The mode resolver is `normalizePostgresSslMode`, the `pg` `ssl` options are assembled by `buildPostgresSslOptions` (`packages/shared/src/config/tls.ts`).
 
@@ -494,12 +494,12 @@ If `postgres` is selected but the DB is unreachable at startup, the behaviour is
 
 **Fail-closed** (the fallback is **not** applied regardless of `degradedMode`): a configuration/credentials error (`STORAGE_POSTGRES_CONFIG_INVALID`), a missing dependency (`…DEPENDENCY_MISSING`, no `pg`), a driver package that cannot be loaded (`STORAGE_BACKEND_UNAVAILABLE`), a DB schema newer than the driver (`…SCHEMA_TOO_NEW`). Degradation covers a **DB failure** (network/class `08`/`57P0x`, a server auth error, `…SCHEMA_OUTDATED` — fixed by `synth migrate`, other runtime errors). There is **no** auto-return to the DB — only a restart after the connection is restored ([ADR-098](../arch_decisions/adr-098-storage-degraded-recovery.md)); procedures — [MAINTENANCE.md](../MAINTENANCE.md).
 
-### Execution topology (`execution.*`, PROP-077)
+### Execution topology (`execution.*`, ADR-077)
 
 The `execution` section is the **execution topology switch**: where the commands of agent tools
 (`execute_shell`, `grep_files`, git tools) are executed. It is a **startup parameter**, not a runtime
 setting: switching the mode requires a process restart (invariant 24). The specification —
-[PROP-077](../arch_decisions/prop-077-runtime-toolchain.md).
+[ADR-077](../arch_decisions/adr-077-runtime-toolchain.md).
 
 | Field | Type / values | Default | Env | Meaning |
 |---|---|---|---|---|
@@ -522,7 +522,7 @@ env `SYNTH_EXECUTION_*` > `config.yaml` > default. Resolver — `resolveExecutio
 [config] невалидное значение --execution-mode="inlne": ожидается одно из 'inline', 'remote'
 ```
 
-**Current implementation state (steps 3 and 7b of the PROP-077 plan).** The `inline` mode — the
+**Current implementation state (steps 3 and 7b of the ADR-077 plan).** The `inline` mode — the
 previous behaviour, nothing changes. The `remote` mode is implemented in **step 7b**: core loads the
 executor package `@itphx/synth-executor` through a dynamic `import()` and builds the remote port.
 The package is optional (`optionalDependencies` of core), so the `remote` mode is **fail-closed at
@@ -538,7 +538,7 @@ startup** (the process does not start rather than "silently falling back to inli
 
 ```yaml
 execution:
-  mode: "inline"                   # inline (default) | remote (PROP-077)
+  mode: "inline"                   # inline (default) | remote (ADR-077)
   remote:
     url: []                        # executor address list (comma-separated — env SYNTH_EXECUTION_REMOTE_URL)
     timeoutMs: 30000               # SYNTH_EXECUTION_TIMEOUT_MS
@@ -1255,7 +1255,7 @@ File-based flags (`events.dedupStore: file`, `scheduler.leaderElection: file`,
 `scheduler.crossProcessLocks: true`) are designed for a **shared `dataDir` on one host/FS** and
 are disabled by default (single-process behaviour is unchanged). For replicas without a shared FS,
 use `storage.backend=postgres` and `scheduler.leaderElection: postgres` (a DB advisory lock,
-PROP-032); a K8s `Lease` is a future step (ADR-051).
+ADR-097); a K8s `Lease` is a future step (ADR-051).
 
 Example:
 

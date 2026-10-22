@@ -5,7 +5,7 @@ import type { McpToolDetail } from './prompt.js';
 
 // --- MCP: реестр серверов и сетевой доступ (ADR-071 §2.3.1/§2.5) ---
 
-/** Версия схемы записи реестра MCP — для будущей миграции (PROP-032). */
+/** Версия схемы записи реестра MCP — для будущей миграции (ADR-096). */
 export const MCP_REGISTRY_SCHEMA_VERSION = 1;
 
 export const MCP_REGISTRY_ORIGINS = ['instance', 'user'] as const;
@@ -23,7 +23,7 @@ export interface McpRegistryAuthor {
 /**
  * ADR-071 §2.5: плоская запись единого реестра MCP-серверов.
  *
- * Логическая модель сразу проектируется под PostgreSQL (PROP-032): стабильный
+ * Логическая модель сразу проектируется под PostgreSQL (ADR-097): стабильный
  * `id`, `schemaVersion`, timestamps; вложенность ограничена `config`/`author`
  * (раскладываются в JSONB/отдельные колонки). Instance- и пользовательские
  * записи различаются полем `origin`, не отдельными реестрами.

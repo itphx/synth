@@ -32,7 +32,7 @@ const instance = (
   ...overrides,
 });
 
-describe('FilePipelineStore (ADR-051/PROP-059, ADR-005)', () => {
+describe('FilePipelineStore (ADR-051/ADR-100, ADR-005)', () => {
   let store: FilePipelineStore;
   let tmpDir: string;
 

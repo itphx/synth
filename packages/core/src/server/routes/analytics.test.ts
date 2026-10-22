@@ -26,7 +26,7 @@ const opts: AnalyticsRoutesOptions = {
   },
 };
 
-describe('Analytics API Routes (PROP-102 §4/§7)', () => {
+describe('Analytics API Routes (ADR-102 §4/§7)', () => {
   let repo: MemoryAnalyticsRollupRepository;
   let app: Hono;
 
@@ -120,7 +120,7 @@ describe('Analytics API Routes (PROP-102 §4/§7)', () => {
     expect(((await res.json()) as { error: { message: string } }).error.message).toBe('groupBy!');
   });
 
-  describe('скоуп (PROP-102 §7)', () => {
+  describe('скоуп (ADR-102 §7)', () => {
     it('обычный пользователь: принудительный фильтр оси user по себе', async () => {
       const own = await request('/api/v2/analytics/usage?from=2026-03-01&to=2026-03-01&groupBy=user', 'user', 'u1');
       expect(own.status).toBe(200);
@@ -157,7 +157,7 @@ describe('Analytics API Routes (PROP-102 §4/§7)', () => {
     });
   });
 
-  describe('GET /export (PROP-102 §6)', () => {
+  describe('GET /export (ADR-102 §6)', () => {
     it('CSV — BOM, Content-Disposition, строки и TOTAL', async () => {
       const res = await request('/api/v2/analytics/export?report=usage&format=csv&from=2026-03-01&to=2026-03-01&groupBy=day');
       expect(res.status).toBe(200);

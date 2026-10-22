@@ -15,7 +15,7 @@ function bucket(over: Partial<AnalyticsRollupBucket> = {}): AnalyticsRollupBucke
 }
 
 /**
- * Паспорт порта `AnalyticsRollupRepository` (PROP-102): пред-агрегированные
+ * Паспорт порта `AnalyticsRollupRepository` (ADR-102): пред-агрегированные
  * суточные роллапы. Ключ бакета `(family, day, dimensions)`; `increment` —
  * upsert с суммированием мер, `set` — точная перезапись; `query` фильтрует
  * (семейство/период включительно/оси) и агрегирует по `groupBy` (пусто — одна

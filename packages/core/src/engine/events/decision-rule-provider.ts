@@ -57,7 +57,7 @@ export interface DecisionRuleProviderDeps {
   getDecisionConfig: () => DecisionConfigLike | undefined;
   /** Enabled-шаблоны агентов для `criteria` decision-вопроса. */
   getAgentCandidates: () => DecisionAgentCandidate[];
-  /** PROP-102: сборщик decision-роллапов (персистентные метрики ADR-084). */
+  /** ADR-102: сборщик decision-роллапов (персистентные метрики ADR-084). */
   analytics?: AnalyticsRecorder;
 }
 

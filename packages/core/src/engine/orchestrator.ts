@@ -118,7 +118,7 @@ export interface OrchestratorOptions {
    */
   hooks?: HookBus;
   /**
-   * PROP-102: сборщик суточных роллапов аналитики (`usage`/`decision`). Не задан —
+   * ADR-102: сборщик суточных роллапов аналитики (`usage`/`decision`). Не задан —
    * запись не выполняется, поведение оркестратора не меняется.
    */
   analytics?: AnalyticsRecorder;
@@ -155,7 +155,7 @@ export interface OrchestratorOptions {
    * ADR-034/ADR-035: порт словарей классификации (микро-слой, threat-scan,
    * проектные инструкции). Продакшн передаёт `StorageContext.dictionaries`;
    * не задан — собирается из `dataDir` для прямого конструирования (тесты),
-   * TODO(PROP-032): убрать фоллбэк, брать обязательным портом.
+   * TODO(ADR-096): убрать фоллбэк, брать обязательным портом.
    */
   dictionaryStore?: DictionaryRepository;
   defaultWorkingDir?: string;
@@ -230,7 +230,7 @@ export interface OrchestratorOptions {
    */
   runtimeDeps?: RuntimeDeps;
   /**
-   * PROP-077: порт исполнения команд. Не задан — inline-реализация (исполнение
+   * ADR-077: порт исполнения команд. Не задан — inline-реализация (исполнение
    * в процессе, прежнее поведение). Задаётся при сборке приложения: режим
    * исполнения — параметр запуска, а не runtime-настройка (инвариант 24).
    */
@@ -404,7 +404,7 @@ export class ChatOrchestrator {
   /** ADR-070 §2.9.1: доступность внешних программ окружения (runtime-изменяемая). */
   private _runtimeDeps: RuntimeDeps;
   /**
-   * PROP-077: порт исполнения команд (inline по умолчанию; в split-режиме —
+   * ADR-077: порт исполнения команд (inline по умолчанию; в split-режиме —
    * удалённый исполнитель). Режим — параметр запуска процесса, поэтому порт
    * задаётся при сборке приложения и не переинициализируется на лету.
    */
@@ -441,7 +441,7 @@ export class ChatOrchestrator {
   /** Политика защищённых путей (СКВОЗНАЯ проверка файловых тулов + shell) — ленивая загрузка с кэшем. */
   private _protectedPaths: ProtectedPathsPolicy | null = null;
   private _protectedPathsLoaded = false;
-  /** PROP-102: сборщик роллапов аналитики (`null` — запись выключена). */
+  /** ADR-102: сборщик роллапов аналитики (`null` — запись выключена). */
   private readonly _analytics: AnalyticsRecorder | null;
 
   /** Публичный доступ к реестру агентов (для сериализации modeApplicable). */
@@ -606,7 +606,7 @@ export class ChatOrchestrator {
     // ADR-076 §T6: хранилище SSH-ключей для git-тулов. Явный порт (продакшн)
     // приоритетнее; иначе — из файлового контекста хранения по `dataDir`
     // (прямое конструирование/тесты).
-    // TODO(PROP-032): убрать фоллбэк, сделать порт обязательным.
+    // TODO(ADR-096): убрать фоллбэк, сделать порт обязательным.
     this._sshKeyStore = options.sshKeyStore
       ?? (options.dataDir
         ? createFileStorage({ dataDir: options.dataDir, env: process.env }).sshKeys
@@ -642,7 +642,7 @@ export class ChatOrchestrator {
     this._skillsDisabled = options.skillsDisabled ?? { categories: [], groups: [], skills: [] };
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — fail-open по умолчанию.
     this._runtimeDeps = options.runtimeDeps ?? { ...ALL_RUNTIME_DEPS_AVAILABLE };
-    // PROP-077: порт исполнения — inline по умолчанию (прежнее поведение).
+    // ADR-077: порт исполнения — inline по умолчанию (прежнее поведение).
     this._executionPort = options.executionPort ?? new InlineExecutionPort();
     this._tokenRatioLoader = options.tokenRatioLoader;
     this._onTokenRatioCalibrated = options.onTokenRatioCalibrated;
@@ -683,7 +683,7 @@ export class ChatOrchestrator {
 
     // DictionaryStore и ProviderPool создаём всегда (нужны микро-слою и роутеру).
     // Продакшн передаёт порт; фоллбэк — файловый контекст по `dataDir`.
-    // TODO(PROP-032): убрать фоллбэк, сделать порт обязательным.
+    // TODO(ADR-096): убрать фоллбэк, сделать порт обязательным.
     const dictionaryStore = options.dictionaryStore
       ?? createFileStorage({ dataDir: options.dataDir || '/var/synth/data' }).dictionaries;
     this._dictionaryStore = dictionaryStore;
@@ -699,7 +699,7 @@ export class ChatOrchestrator {
             trustedProjectDirs: options.instructionsTrustedProjectDirs,
             // ADR-069 R3: workspace внутри workspacesRoot доверяется автоматически.
             workspacesRoot: this._workspacesRoot,
-            // PROP-077: `git rev-parse` (корень merged chain) — через тот же
+            // ADR-077: `git rev-parse` (корень merged chain) — через тот же
             // порт исполнения, что и тулы; иначе в split-режиме поиск корня
             // репозитория шёл бы в control plane, а не в исполнителя.
             execution: this._executionPort,
@@ -3033,7 +3033,7 @@ export class ChatOrchestrator {
                   // в permission-слой саб-агента (enforce `dependency`) и его
                   // `[НЕДОСТУПНЫЕ ТУЛЫ]`.
                   runtimeDeps: this._runtimeDeps,
-                  // PROP-077: порт исполнения команд — тулы (shell/rg/git)
+                  // ADR-077: порт исполнения команд — тулы (shell/rg/git)
                   // ходят в него вместо прямого `execFile`.
                   executionPort: this._executionPort,
                   // ADR-075: гейт `workspace` наследуется саб-агентом —
@@ -3298,7 +3298,7 @@ export class ChatOrchestrator {
               input: toolArgs,
               output: toolResult,
               duration: Date.now() - tcStartedMs,
-              // PROP-102: оси атрибуции активности (`tool_calls`) — значения
+              // ADR-102: оси атрибуции активности (`tool_calls`) — значения
               // сессии уже под рукой, подписчику не нужно её читать.
               sessionId: session.id,
               ...(session.userId ? { userId: session.userId } : {}),

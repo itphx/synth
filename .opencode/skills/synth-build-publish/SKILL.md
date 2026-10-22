@@ -34,7 +34,7 @@ shared → core → executor → storage-postgres → ui → backend → sdk →
 ```
 
 Порядок задан иерархией зависимостей: `executor` (`@itphx/synth-executor`, исполнитель
-агентских команд, PROP-077; `peer-dep` core) публикуется после `core`; `sdk`
+агентских команд, ADR-077; `peer-dep` core) публикуется после `core`; `sdk`
 (`@itphx/synth-sdk`, клиент публичного API, ADR-052) — тонкий пакет над `shared`;
 публикуется перед `synth`.
 

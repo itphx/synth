@@ -1,5 +1,5 @@
 /**
- * Порт `SessionRepository` поверх PostgreSQL (PROP-032, волна 3b).
+ * Порт `SessionRepository` поверх PostgreSQL (ADR-097, волна 3b).
  *
  * Группа портов **сессий** PostgreSQL-драйвера: единственная фабрика
  * `buildSessionPorts(deps)` собирает `StorageContext['sessions']`.
@@ -679,7 +679,7 @@ export class PostgresSessionRepository implements SessionRepository {
     return null;
   }
 
-  /** PROP-032: per-session сериализация записи — транзакционный advisory-лок. */
+  /** ADR-097: per-session сериализация записи — транзакционный advisory-лок. */
   private async _lockSession(tx: PostgresExecutor, sessionId: string): Promise<void> {
     await tx.query('SELECT pg_advisory_xact_lock(hashtext($1::text)::bigint)', [sessionId]);
   }

@@ -61,7 +61,7 @@ Themes:
 | Area | Capability |
 |---------|-------------|
 | **Centralization** | A single hub for all of the team's AI agents. Collaboration: several users in one session, history on the server |
-| **History and metadata** | JSON files with atomic writes (ADR-005): sessions, projects, providers, models. A normalized PostgreSQL schema (PROP-032) is planned |
+| **History and metadata** | JSON files with atomic writes (ADR-005): sessions, projects, providers, models. A normalized PostgreSQL schema (ADR-097) is planned |
 | **Audit** | Every LLM request is logged (ADR-036): who, when, which model, how many tokens — full transparency |
 | **Planning** | A project plan with a kanban structure (ADR-039): columns, priorities, dependencies; todo lives in the session. Managed by the `plan_*`/`todo_*` tools |
 | **MCP** | Model Context Protocol support — pluggable tools and data sources |

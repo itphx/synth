@@ -79,11 +79,11 @@ describe('runMigrateCommand — аудит-журнал (ADR-092)', () => {
 });
 
 /**
- * PROP-032: `synth migrate` при `storage.backend=postgres` мигрирует SQL-схему
+ * ADR-097: `synth migrate` при `storage.backend=postgres` мигрирует SQL-схему
  * драйвера (контур `synth_schema_migrations`), а не `meta.json`. Контекст хранения
  * подменяется memory-сборкой с швом `schemaMigrations` — БД не нужна.
  */
-describe('runMigrateCommand — backend=postgres (PROP-032)', () => {
+describe('runMigrateCommand — backend=postgres (ADR-097)', () => {
   let tmpDir: string;
   let dataDir: string;
 

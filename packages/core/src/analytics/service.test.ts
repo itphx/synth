@@ -9,7 +9,7 @@ function makeService(today = '2026-03-15T12:00:00Z') {
   return { repo, service };
 }
 
-describe('AnalyticsService (PROP-102, волна 1)', () => {
+describe('AnalyticsService (ADR-102, волна 1)', () => {
   describe('resolvePeriod', () => {
     it('по умолчанию: to — сегодня UTC, from — to минус 29 суток (30 дней)', () => {
       const { service } = makeService();

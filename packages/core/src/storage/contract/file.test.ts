@@ -212,7 +212,7 @@ describe('контрактные тесты файловых реализаци�
     repo: new DictionaryStore(await tmp()),
   }));
 
-  // PROP-032 (W2.4): конфигурационные словари (провайдеры/модели/агенты).
+  // ADR-096 (W2.4): конфигурационные словари (провайдеры/модели/агенты).
   describeDocumentRepository<{ name: string; enabled: boolean }>(
     'JsonStore → DocumentRepository',
     async () => ({
@@ -241,7 +241,7 @@ describe('контрактные тесты файловых реализаци�
     return { repo: new FileBlobStore({ root: join(dir, 'blobs') }) };
   });
 
-  // ADR-051/PROP-059: пайплайны (определения + экземпляры).
+  // ADR-051/ADR-100: пайплайны (определения + экземпляры).
   describePipelineRepository('FilePipelineStore → PipelineRepository', async () => ({
     repo: new FilePipelineStore({ dataDir: await tmp() }),
   }));

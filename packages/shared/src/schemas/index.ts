@@ -1015,14 +1015,14 @@ export const scheduleJobSchema = z.object({
 
 export type ScheduleJobRequest = z.infer<typeof scheduleJobSchema>;
 
-/** PROP-102: семейство роллапов аналитики (`usage`/`activity`/`decision`/`prompt`). */
+/** ADR-102: семейство роллапов аналитики (`usage`/`activity`/`decision`/`prompt`). */
 export const analyticsFamilySchema = z.enum(ANALYTICS_FAMILIES);
-/** PROP-102: ось измерения роллапа (`day`/`user`/`project`/`model`/`agent`/`provider`). */
+/** ADR-102: ось измерения роллапа (`day`/`user`/`project`/`model`/`agent`/`provider`). */
 export const analyticsDimensionSchema = z.enum(ANALYTICS_DIMENSIONS);
-/** PROP-102: сутки UTC в формате `YYYY-MM-DD`. */
+/** ADR-102: сутки UTC в формате `YYYY-MM-DD`. */
 export const analyticsDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
-/** PROP-102: пред-агрегированный бакет роллапа (запись через порт хранения). */
+/** ADR-102: пред-агрегированный бакет роллапа (запись через порт хранения). */
 export const analyticsRollupBucketSchema = z.object({
   family: analyticsFamilySchema,
   day: analyticsDaySchema,
@@ -1031,7 +1031,7 @@ export const analyticsRollupBucketSchema = z.object({
   costByCurrency: z.record(z.string(), z.number()).optional(),
 });
 
-/** PROP-102: запрос среза/серии роллапов (только чтение). */
+/** ADR-102: запрос среза/серии роллапов (только чтение). */
 export const analyticsRollupQuerySchema = z.object({
   family: analyticsFamilySchema,
   from: analyticsDaySchema.optional(),
@@ -1044,7 +1044,7 @@ export type AnalyticsRollupBucketInput = z.infer<typeof analyticsRollupBucketSch
 export type AnalyticsRollupQueryInput = z.infer<typeof analyticsRollupQuerySchema>;
 
 /**
- * PROP-102: строка отчёта — оси группировки + меры (сырые счётчики и
+ * ADR-102: строка отчёта — оси группировки + меры (сырые счётчики и
  * дериваты `ANALYTICS_DERIVED_MEASURES`). `costByCurrency` опускается, если пусто.
  */
 export const analyticsReportRowSchema = z.object({
@@ -1053,7 +1053,7 @@ export const analyticsReportRowSchema = z.object({
   costByCurrency: z.record(z.string(), z.number()).optional(),
 });
 
-/** PROP-102: отчёт по семейству за период (только чтение, данные без i18n). */
+/** ADR-102: отчёт по семейству за период (только чтение, данные без i18n). */
 export const analyticsReportSchema = z.object({
   report: analyticsFamilySchema,
   from: analyticsDaySchema,
@@ -1062,10 +1062,10 @@ export const analyticsReportSchema = z.object({
   rows: z.array(analyticsReportRowSchema),
 });
 
-/** PROP-102: формат выгрузки отчёта (`csv`/`json`; только данные). */
+/** ADR-102: формат выгрузки отчёта (`csv`/`json`; только данные). */
 export const analyticsExportFormatSchema = z.enum(ANALYTICS_EXPORT_FORMATS);
 
-/** PROP-102: сводка инстанса за период — агрегаты `usage`/`activity`/`decision`. */
+/** ADR-102: сводка инстанса за период — агрегаты `usage`/`activity`/`decision`. */
 export const analyticsSummarySchema = z.object({
   from: analyticsDaySchema,
   to: analyticsDaySchema,

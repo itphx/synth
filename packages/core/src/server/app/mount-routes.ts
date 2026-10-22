@@ -199,7 +199,7 @@ export function mountStandaloneRoutes(
     auth,
     {
       dataDir,
-      // PROP-032: экспорт/импорт проекта работают через контекст хранения
+      // ADR-096: экспорт/импорт проекта работают через контекст хранения
       // инстанса (иначе — свой файловый контекст, а на `backend=postgres`
       // проект не найден бы).
       storage: deps.storageContext,
@@ -289,7 +289,7 @@ export function mountStandaloneRoutes(
 
   // ADR-091/ADR-092: обслуживание инстанса (backup/restore/doctor/migrate).
   // Standalone — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC (ADMIN).
-  // PROP-032: при backend=postgres doctor/migrations ходят в БД через read-only
+  // ADR-097: при backend=postgres doctor/migrations ходят в БД через read-only
   // пробу (контекст собирается в режиме `skip` — миграции не применяются).
   const storageBackend = config.storageBackend ?? 'file';
   const withPostgresContext = storageBackend === 'postgres'
@@ -336,7 +336,7 @@ export function mountStandaloneRoutes(
   // Журналы безопасности: аудит изменений политик + внешние запросы (egress).
   app.route('/api/v2/audit', createAuditRoutes(auth, { securityAudit, egressRequests }));
 
-  // PROP-102 (волна 1): отчёты аналитики — только чтение. В standalone-режиме
+  // ADR-102 (волна 1): отчёты аналитики — только чтение. В standalone-режиме
   // единственный ключ → ADMIN, поэтому `resolveElevated` по умолчанию true (сквозной обзор).
   app.route('/api/v2/analytics', createAnalyticsRoutes(auth, {
     service: new AnalyticsService({ repo: analyticsRollups }),
@@ -529,7 +529,7 @@ export function mountStandaloneRoutes(
     },
   ));
 
-  // ADR-051/PROP-059: API пайплайнов — определения (ставит установщик пакета),
+  // ADR-051/ADR-100: API пайплайнов — определения (ставит установщик пакета),
   // экземпляры и ручной запуск. Standalone — дефолтные guard'ы (`requireAuth`).
   app.route('/api/v2/pipelines', createPipelinesRoutes(auth, { pipelines }));
 
@@ -671,7 +671,7 @@ export function mountStandaloneRoutes(
         trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
         // ADR-069 R3: авто-trust workspace внутри workspacesRoot (как в оркестраторе).
         workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
-        // PROP-077: `git rev-parse` — через порт исполнения (тот же, что у тулов).
+        // ADR-077: `git rev-parse` — через порт исполнения (тот же, что у тулов).
         execution: deps.executionPort,
       }),
       config.instructionsConfig,

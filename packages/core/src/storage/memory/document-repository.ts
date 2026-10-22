@@ -1,7 +1,7 @@
 import type { DocumentRepository } from '../ports/document-repository.js';
 
 /**
- * In-memory реализация `DocumentRepository` (PROP-032, шаг W2.4).
+ * In-memory реализация `DocumentRepository` (ADR-096, шаг W2.4).
  *
  * Состояние — `Map<key, T>`; значения клонируются (`structuredClone`) на входе и
  * выходе, чтобы вызывающий не мог мутировать «стор» через переданный/полученный

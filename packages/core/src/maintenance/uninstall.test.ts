@@ -179,9 +179,9 @@ describe('runUninstallCommand (ADR-092)', () => {
   });
 });
 
-// PROP-032: `synth uninstall` при `storage.backend=postgres` по умолчанию не
+// ADR-097: `synth uninstall` при `storage.backend=postgres` по умолчанию не
 // трогает данные БД — схема удаляется только явным `--purge-db`.
-describe('runUninstallCommand — backend=postgres (PROP-032)', () => {
+describe('runUninstallCommand — backend=postgres (ADR-097)', () => {
   let tmpDir: string;
   let dataDir: string;
 

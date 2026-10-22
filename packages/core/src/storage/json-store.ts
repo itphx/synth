@@ -12,7 +12,7 @@ export interface JsonStoreConfig {
  * Структурный контракт JSON-хранилища (алиас порта `DocumentRepository`).
  * Нужен, чтобы core-фабрики роутов можно было переиспользовать в backend с его
  * собственным `JsonStore` (у классов есть приватные поля, поэтому напрямую типы
- * не совместимы, а публичный API — общий). PROP-032 (W2.4): сам порт —
+ * не совместимы, а публичный API — общий). ADR-096 (W2.4): сам порт —
  * `DocumentRepository<T>`, `JsonStore` его реализует.
  */
 export type JsonStoreLike<T> = DocumentRepository<T>;

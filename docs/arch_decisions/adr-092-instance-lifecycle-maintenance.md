@@ -2,7 +2,7 @@
 
 > **Статус:** ⚠️ Частично — MVP реализован (`meta.json`, реестр миграций, авто-миграции, `synth migrate`, `synth update`/`--to` (обновление и откат), `synth uninstall`, аудит-журнал обслуживания, **graceful restart из UI**); миграции и перезапуск доступны через admin-API/UI (`/api/v2/maintenance`, раздел «Обслуживание»); остаток — публикация runbook на портале, мульти-инстанс-локи.
 > **Дата:** 2026-10-16
-> **Связано:** [ADR-005](./adr-005-json-storage.md), [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-038](./adr-038-npm-packages.md), [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-079](./adr-079-local-home-independent-instances.md), [ADR-051](./adr-051-scheduler-pipelines.md), [ADR-091](./adr-091-backup-restore-transfer.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md).
+> **Связано:** [ADR-005](./adr-005-json-storage.md), [ADR-097](./adr-097-storage-provider-class.md), [ADR-038](./adr-038-npm-packages.md), [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-079](./adr-079-local-home-independent-instances.md), [ADR-051](./adr-051-scheduler-pipelines.md), [ADR-091](./adr-091-backup-restore-transfer.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md).
 
 ## Контекст
 
@@ -65,7 +65,7 @@
 
 - публикация runbook на портале `docs.synth.itphx.ru` (dev-вариант — [docs/MAINTENANCE.md](../MAINTENANCE.md));
 - внешний audit-sink и запись аудита обслуживания вне инстанса (`uninstall --purge` удаляет запись вместе с каталогом);
-- K8s Lease / PG advisory lock для мульти-инстанса (после [PROP-032](./prop-032-history-storage-postgresql.md)).
+- K8s Lease / PG advisory lock для мульти-инстанса (после [ADR-097](./adr-097-storage-provider-class.md)).
 
 ## История
 

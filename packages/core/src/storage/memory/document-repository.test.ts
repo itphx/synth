@@ -1,4 +1,4 @@
-// PROP-032 (W2.4): специфика in-memory `DocumentRepository` — детерминированный
+// ADR-096 (W2.4): специфика in-memory `DocumentRepository` — детерминированный
 // порядок `list()`, глубокая изоляция значений и независимость экземпляров.
 // Общий паспорт порта — `contract/memory.test.ts` (`describeDocumentRepository`).
 import { describe, it, expect } from 'vitest';
@@ -9,7 +9,7 @@ interface Doc {
   nested: { n: number };
 }
 
-describe('MemoryDocumentRepository (PROP-032, W2.4)', () => {
+describe('MemoryDocumentRepository (ADR-096, W2.4)', () => {
   it('list детерминирован по ключу', async () => {
     const repo = new MemoryDocumentRepository<Doc>();
     await repo.save('zeta', { id: 'zeta', nested: { n: 1 } });

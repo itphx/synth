@@ -1,4 +1,4 @@
-// PROP-032 (W2.3): реализация перенесена в core (`storage/defaults-store.ts`) —
+// ADR-096 (W2.3): реализация перенесена в core (`storage/defaults-store.ts`) —
 // это просто `{dataDir}/defaults.json` + атомарная запись, без backend-специфики.
 // Здесь оставлен реэкспорт, чтобы существующие импорты (`../lib/defaults-store.js`)
 // не менялись. См. `@itphx/synth-core`.

@@ -14,8 +14,8 @@ Synth consists of eight packages in a monorepo:
 |-------|-----------|------|
 | **@itphx/synth-shared** | Types, interfaces, Zod schemas, protocols, configuration | TypeScript |
 | **@itphx/synth-core** | Standalone engine: sessions, queue, LLM providers, CLI, HTTP API v2 | TypeScript, Hono |
-| **@itphx/synth-storage-postgres** | Optional storage-layer driver over PostgreSQL (ADR-097/PROP-032): implements the `StorageContext` domain ports, `peer-dep` core, `pg` — optional | TypeScript, `pg` |
-| **@itphx/synth-executor** | Agent command executor — a separate process (PROP-077): executor server + remote port client, `peer-dep` core | TypeScript, Hono |
+| **@itphx/synth-storage-postgres** | Optional storage-layer driver over PostgreSQL (ADR-097): implements the `StorageContext` domain ports, `peer-dep` core, `pg` — optional | TypeScript, `pg` |
+| **@itphx/synth-executor** | Agent command executor — a separate process (ADR-077): executor server + remote port client, `peer-dep` core | TypeScript, Hono |
 | **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
 | **@itphx/synth-ui** | React 19 SPA + admin panel (role-based rendering) | TypeScript, React 19, Vite |
 | **@itphx/synth-sdk** | Typed public API client (ADR-052): a wrapper over `public-OpenAPI` (`events`/`sessions`/`schedules`/`llm`) | TypeScript, ESM |
@@ -58,7 +58,7 @@ flowchart TB
         storage_pg["postgres — @itphx/synth-storage-postgres (optional)"]
     end
 
-    subgraph Execution["Command execution (PROP-077)"]
+    subgraph Execution["Command execution (ADR-077)"]
         synth_executor["@itphx/synth-executor — executor (optional)"]
     end
 
@@ -201,7 +201,7 @@ swappable. The assembly point is `packages/core/src/storage/storage-context.ts`
 the choice — `storage.backend` (`file`|`memory`|`postgres`, env `SYNTH_STORAGE_BACKEND`).
 
 - **`file`** (default) — `FileStore`/`JsonStore`, JSON + atomic tmp→rename write ([ADR-005](../arch_decisions/adr-005-json-storage.md)); **`memory`** — in-memory (hermetic tests, semantics reference).
-- **`postgres`** — the second selectable backend ([PROP-032](../arch_decisions/prop-032-history-storage-postgresql.md)): a separate in-tree driver package **`@itphx/synth-storage-postgres`** ([ADR-097](../arch_decisions/adr-097-storage-provider-class.md)), loaded by core via a dynamic `import()`; `pg` is optional. Any backend must pass the contract suite `packages/core/src/storage/contract/*` (the "port passport"); running the driver against a live DB is gated by env `SYNTH_TEST_POSTGRES_DSN`.
+- **`postgres`** — the second selectable backend ([ADR-097](../arch_decisions/adr-097-storage-provider-class.md)): a separate in-tree driver package **`@itphx/synth-storage-postgres`** ([ADR-097](../arch_decisions/adr-097-storage-provider-class.md)), loaded by core via a dynamic `import()`; `pg` is optional. Any backend must pass the contract suite `packages/core/src/storage/contract/*` (the "port passport"); running the driver against a live DB is gated by env `SYNTH_TEST_POSTGRES_DSN`.
 - **Degraded mode** ([ADR-098](../arch_decisions/adr-098-storage-degraded-recovery.md)): when the DB is unreachable, the service starts on a file fallback in strict read-only (ADMIN-only, `/health` → `degraded`); there is no auto-return — only a restart. Configuration/dependency/"schema newer" errors — fail-closed.
 - **Not everything is behind the ports:** the "file perimeter" stays file-specific/hybrid — secrets in `secrets/` (master key, API keys), `meta.json`/`synth migrate`, `workspaces/`, skill and prompt content, audit journals (`audit/*.jsonl`), instruction URL caches ([ADR-091](../arch_decisions/adr-091-backup-restore-transfer.md)/[ADR-092](../arch_decisions/adr-092-instance-lifecycle-maintenance.md)).
 
@@ -217,7 +217,7 @@ synth/
 └── packages/
     ├── shared/   → @itphx/synth-shared
     ├── core/     → @itphx/synth-core
-    ├── storage-postgres/ → @itphx/synth-storage-postgres (opt. DB driver, ADR-097/PROP-032)
+    ├── storage-postgres/ → @itphx/synth-storage-postgres (opt. DB driver, ADR-097)
     ├── backend/  → @itphx/synth-backend
     ├── ui/       → @itphx/synth-ui
     ├── sdk/      → @itphx/synth-sdk (public API client, ADR-052)
@@ -434,7 +434,7 @@ API endpoints and RBAC — `docs/API_V2.md` §5.26; configuration — `docs/CONF
 keys with scopes and a project projection, webhooks, `public-OpenAPI` (28 operations, `GET /api/v2/openapi.json`)
 and the `@itphx/synth-sdk` SDK — **ADR-052 is closed in full (stages I–IV, including moving the Telegram gateway
 to a scoped service key)**; the first add-on is the Telegram gateway (`addons/synth-gateway-telegram`) —
-implemented; plugins (Plugin SDK, PROP-090) and pipelines (PROP-059) are not implemented.
+implemented; plugins (Plugin SDK, PROP-090) and pipelines (ADR-101) are not implemented.
 
 ## Egress layer (outbound connections)
 
@@ -474,7 +474,7 @@ With a proxy enabled the address policy runs in **proxied mode**: only the schem
 checked, no DNS/CIDR (the proxy resolves the address); for `noProxy` hosts the check is full. The actual
 route is written to the journal (`via`: `proxy`/`direct`/`fallback`). API — `docs/API_V2.md` §5.21
 (`settings/egress/*`, `settings/proxy*`), configuration — `docs/CONFIGURATION.md` (`egress.*`, `proxy.*`,
-`security.tls`); limitations (NTLM/Kerberos, SOCKS + target CA, IP/SNI) — ADR-099 and PROP-088.
+`security.tls`); limitations (NTLM/Kerberos, SOCKS + target CA, IP/SNI) — ADR-099.
 
 ## Instance lifecycle and restart
 

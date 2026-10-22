@@ -14,8 +14,8 @@ Synth состоит из восьми пакетов в монорепозит�
 |-------|-----------|------|
 | **@itphx/synth-shared** | Типы, интерфейсы, Zod-схемы, протоколы, конфигурация | TypeScript |
 | **@itphx/synth-core** | Автономный движок: сессии, очередь, LLM-провайдеры, CLI, HTTP API v2 | TypeScript, Hono |
-| **@itphx/synth-storage-postgres** | Опциональный драйвер слоя хранения поверх PostgreSQL (ADR-097/PROP-032): реализует доменные порты `StorageContext`, `peer-dep` core, `pg` — optional | TypeScript, `pg` |
-| **@itphx/synth-executor** | Исполнитель агентских команд — отдельный процесс (PROP-077): сервер исполнителя + клиент удалённого порта, `peer-dep` core | TypeScript, Hono |
+| **@itphx/synth-storage-postgres** | Опциональный драйвер слоя хранения поверх PostgreSQL (ADR-097): реализует доменные порты `StorageContext`, `peer-dep` core, `pg` — optional | TypeScript, `pg` |
+| **@itphx/synth-executor** | Исполнитель агентских команд — отдельный процесс (ADR-077): сервер исполнителя + клиент удалённого порта, `peer-dep` core | TypeScript, Hono |
 | **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
 | **@itphx/synth-ui** | React 19 SPA + админка (рендеринг по ролям) | TypeScript, React 19, Vite |
 | **@itphx/synth-sdk** | Типизированный клиент публичного API (ADR-052): обёртка над public-OpenAPI (`events`/`sessions`/`schedules`/`llm`) | TypeScript, ESM |
@@ -58,7 +58,7 @@ flowchart TB
         storage_pg["postgres — @itphx/synth-storage-postgres (опц.)"]
     end
 
-    subgraph Execution["Исполнение команд (PROP-077)"]
+    subgraph Execution["Исполнение команд (ADR-077)"]
         synth_executor["@itphx/synth-executor — исполнитель (опц.)"]
     end
 
@@ -201,7 +201,7 @@ flowchart LR
 (`file`|`memory`|`postgres`, env `SYNTH_STORAGE_BACKEND`).
 
 - **`file`** (default) — `FileStore`/`JsonStore`, JSON + атомарная запись tmp→rename ([ADR-005](./arch_decisions/adr-005-json-storage.md)); **`memory`** — in-memory (герметичные тесты, эталон семантики).
-- **`postgres`** — второй selectable backend ([PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md)): отдельный in-tree пакет-драйвер **`@itphx/synth-storage-postgres`** ([ADR-097](./arch_decisions/adr-097-storage-provider-class.md)), подключаемый core **динамическим `import()`**; `pg` — optional. Любой backend обязан пройти контрактный suite `packages/core/src/storage/contract/*` («паспорт порта»); прогон драйвера против живой БД гейтится env `SYNTH_TEST_POSTGRES_DSN`.
+- **`postgres`** — второй selectable backend ([ADR-096](./arch_decisions/adr-096-storage-layer.md)): отдельный in-tree пакет-драйвер **`@itphx/synth-storage-postgres`** ([ADR-097](./arch_decisions/adr-097-storage-provider-class.md)), подключаемый core **динамическим `import()`**; `pg` — optional. Любой backend обязан пройти контрактный suite `packages/core/src/storage/contract/*` («паспорт порта»); прогон драйвера против живой БД гейтится env `SYNTH_TEST_POSTGRES_DSN`.
 - **Деградированный режим** ([ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)): при недоступности БД сервис поднимается на файловом фоллбеке в строгом read-only (ADMIN-only, `/health` → `degraded`); авто-возврата нет — только рестарт. Ошибки конфигурации/зависимостей/«схема новее» — fail-closed.
 - **За портами не всё:** «файловый периметр» остаётся file-специфичным/гибридным — секреты в `secrets/` (мастер-ключ, API-ключи), `meta.json`/`synth migrate`, `workspaces/`, содержимое скиллов и промптов, аудит-журналы (`audit/*.jsonl`), URL-кэши инструкций ([ADR-091](./arch_decisions/adr-091-backup-restore-transfer.md)/[ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)).
 
@@ -217,7 +217,7 @@ synth/
 └── packages/
     ├── shared/   → @itphx/synth-shared
     ├── core/     → @itphx/synth-core
-    ├── storage-postgres/ → @itphx/synth-storage-postgres (опц. БД-драйвер, ADR-097/PROP-032)
+    ├── storage-postgres/ → @itphx/synth-storage-postgres (опц. БД-драйвер, ADR-097)
     ├── backend/  → @itphx/synth-backend
     ├── ui/       → @itphx/synth-ui
     ├── sdk/      → @itphx/synth-sdk (клиент публичного API, ADR-052)
@@ -433,7 +433,7 @@ API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `do
 со scopes/проектной проекцией, webhooks, public-OpenAPI (28 операций, `GET /api/v2/openapi.json`)
 и SDK `@itphx/synth-sdk` — **ADR-052 закрыт целиком (этапы I–IV: включая перевод Telegram-шлюза
 на scoped service-key)**; первый add-on — Telegram-шлюз (`addons/synth-gateway-telegram`) —
-реализован; не реализованы плагины (Plugin SDK, PROP-090) и пайплайны (PROP-059).
+реализован; не реализованы плагины (Plugin SDK, PROP-090) и пайплайны (ADR-100).
 
 ## Egress-слой (исходящие соединения)
 
@@ -474,7 +474,7 @@ API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `do
 hostname-правила, DNS/CIDR не выполняются (адрес резолвит прокси); для хостов из `noProxy` — полная
 проверка. Фактический маршрут пишется в журнал (`via`: `proxy`/`direct`/`fallback`). API — `docs/API_V2.md`
 §5.21 (`settings/egress/*`, `settings/proxy*`), конфиг — `docs/CONFIGURATION.md` (`egress.*`, `proxy.*`,
-`security.tls`); ограничения (NTLM/Kerberos, SOCKS + CA к цели, IP/SNI) — ADR-099 и PROP-088.
+`security.tls`); ограничения (NTLM/Kerberos, SOCKS + CA к цели, IP/SNI) — ADR-099.
 
 ## Жизненный цикл инстанса и перезапуск
 

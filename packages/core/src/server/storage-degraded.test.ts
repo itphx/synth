@@ -1,4 +1,4 @@
-// PROP-032 (W5): HTTP-слой деградированного хранилища — guard (ADMIN-only +
+// ADR-098 (W5): HTTP-слой деградированного хранилища — guard (ADMIN-only +
 // строгий read-only), диагностический эндпоинт `GET /api/v2/storage/status` и
 // аддитивные поля `/health`. Тесты герметичны: guard/роуты собираются на лёгком
 // Hono-приложении с подставленным пользователем (без реального хранилища).
@@ -60,7 +60,7 @@ function makeGuardedApp(opts: {
   return app;
 }
 
-describe('createStorageDegradedGuard (PROP-032 W5)', () => {
+describe('createStorageDegradedGuard (ADR-098 W5)', () => {
   it('хранилище в норме (degraded=null) — все методы и роли проходят', async () => {
     for (const admin of [true, false]) {
       const app = makeGuardedApp({ degraded: null, admin });
@@ -140,7 +140,7 @@ describe('createStorageDegradedGuard (PROP-032 W5)', () => {
   });
 });
 
-describe('storageHealthFields + /health (PROP-032 W5)', () => {
+describe('storageHealthFields + /health (ADR-098 W5)', () => {
   it('норма: storageHealthFields → {status:healthy} (прежний контракт)', () => {
     expect(storageHealthFields(null)).toEqual({ status: 'healthy' });
     expect(storageHealthFields(undefined)).toEqual({ status: 'healthy' });
@@ -186,7 +186,7 @@ describe('storageHealthFields + /health (PROP-032 W5)', () => {
   });
 });
 
-describe('createStorageStatusRoutes (PROP-032 W5)', () => {
+describe('createStorageStatusRoutes (ADR-098 W5)', () => {
   it('норма → {status:healthy, degraded:false}', async () => {
     const app = createStorageStatusRoutes({ getDegraded: () => null });
     const res = await app.request('/api/v2/storage/status');

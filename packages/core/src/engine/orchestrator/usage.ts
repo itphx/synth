@@ -210,7 +210,7 @@ function forEachSubagentTask(
 }
 
 /**
- * PROP-102: usage саб-агентов в разбивке по моделям — для роллапа `usage`
+ * ADR-102: usage саб-агентов в разбивке по моделям — для роллапа `usage`
  * (ось `model`/`agent`). Считается тем же разбором `task`-результатов, что и
  * `aggregateSubagentStats`, и тем же `computeCost`; группы «модель+агент+валюта»
  * суммируются, `sessions` — число задач саб-агента в группе (для `requests`).

@@ -19,9 +19,9 @@ export const defaultConfig: SynthConfig = {
   storage: {
     dataDir: '/var/synth/data',
     backend: 'file',
-    // PROP-032: параметры PostgreSQL-backend (пусто — драйвер берёт дефолты/env).
+    // ADR-097: параметры PostgreSQL-backend (пусто — драйвер берёт дефолты/env).
     postgres: {},
-    // PROP-032 (задел W5): при недоступности backend — файловый фоллбек в {dataDir}/fallback.
+    // ADR-098 (задел W5): при недоступности backend — файловый фоллбек в {dataDir}/fallback.
     degradedMode: 'fallback-file',
     fallbackDir: '',
     workspacesRoot: '',
@@ -30,9 +30,9 @@ export const defaultConfig: SynthConfig = {
     maxUploadBytes: DEFAULT_MAX_UPLOAD_BYTES,
   },
   execution: {
-    // PROP-077: топология исполнения — параметр запуска (инвариант 24: смена
+    // ADR-077: топология исполнения — параметр запуска (инвариант 24: смена
     // режима — только рестартом). `inline` — исполнение в процессе (прежнее
-    // поведение); `remote` — отдельные исполнители (шаг 7 плана PROP-077).
+    // поведение); `remote` — отдельные исполнители (шаг 7 плана ADR-077).
     mode: 'inline',
     remote: {
       // Список адресов исполнителей; пусто при `remote` → fail-closed на старте.
@@ -187,7 +187,7 @@ export const defaultConfig: SynthConfig = {
     escalationModel: '',
   },
   analytics: {
-    // PROP-102: срок хранения суточных роллапов — 400 дней (<= 0 — без ограничения).
+    // ADR-102: срок хранения суточных роллапов — 400 дней (<= 0 — без ограничения).
     retentionDays: 400,
   },
   metrics: {

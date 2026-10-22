@@ -24,19 +24,19 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 |-----------|------------|--------------|
 | `SYNTH_API_KEY` | Ключ для входа в API (backend → роль ADMIN; core standalone → роль ADMIN). Если не задан, `synth serve` генерирует устойчивый локальный ключ в `{dataDir}/secrets/api-key` | — |
 | `SYNTH_DATA_DIR` | Каталог данных (сессии, проекты, провайдеры, модели) | по режиму: `~/.local/share/synth` (user), `./data` (dev), `/var/synth/data` (docker/server) |
-| `SYNTH_STORAGE_BACKEND` | ADR-096: физический backend хранения: `file` (JSON-файлы, ADR-005), `memory` (in-memory, данные **не** сохраняются) или `postgres` (PROP-032) | `file` |
-| `SYNTH_POSTGRES_DSN` | PROP-032: строка подключения PostgreSQL (приоритетнее отдельных `host`/`port`/`database`/`user`) | — |
-| `SYNTH_POSTGRES_HOST` | PROP-032: хост PostgreSQL | — |
-| `SYNTH_POSTGRES_PORT` | PROP-032: порт PostgreSQL | — |
-| `SYNTH_POSTGRES_DATABASE` | PROP-032: имя базы данных PostgreSQL | — |
-| `SYNTH_POSTGRES_USER` | PROP-032: пользователь PostgreSQL | — |
-| `SYNTH_POSTGRES_SCHEMA` | PROP-032: схема БД (namespace таблиц драйвера) | — |
-| `SYNTH_POSTGRES_SSL` | PROP-032: legacy-флаг TLS-соединения (`true`/`false`); используется, только если `SYNTH_POSTGRES_SSLMODE` не задан | — |
-| `SYNTH_POSTGRES_SSLMODE` | PROP-032/ADR-099: TLS-режим соединения с БД: `disable` / `require` / `verify-full` (`verify-ca` — алиас `verify-full`); приоритетнее legacy `ssl` | — |
-| `SYNTH_POSTGRES_POOL_MAX` | PROP-032: максимальный размер пула соединений | `10` |
-| `SYNTH_POSTGRES_PASSWORD` | PROP-032: пароль БД — **только** env или файл `{dataDir}/secrets/postgres-password` (в `config.yaml` не хранится, инвариант 13) | — |
-| `SYNTH_DEGRADED_MODE` | PROP-032/ADR-098: поведение при недоступности БД (`fallback-file`/`halt`) | `fallback-file` |
-| `SYNTH_STORAGE_FALLBACK_DIR` | PROP-032/ADR-098: каталог файлового фоллбека при деградации | `{dataDir}/fallback` |
+| `SYNTH_STORAGE_BACKEND` | ADR-096: физический backend хранения: `file` (JSON-файлы, ADR-005), `memory` (in-memory, данные **не** сохраняются) или `postgres` (ADR-097) | `file` |
+| `SYNTH_POSTGRES_DSN` | ADR-097: строка подключения PostgreSQL (приоритетнее отдельных `host`/`port`/`database`/`user`) | — |
+| `SYNTH_POSTGRES_HOST` | ADR-097: хост PostgreSQL | — |
+| `SYNTH_POSTGRES_PORT` | ADR-097: порт PostgreSQL | — |
+| `SYNTH_POSTGRES_DATABASE` | ADR-097: имя базы данных PostgreSQL | — |
+| `SYNTH_POSTGRES_USER` | ADR-097: пользователь PostgreSQL | — |
+| `SYNTH_POSTGRES_SCHEMA` | ADR-097: схема БД (namespace таблиц драйвера) | — |
+| `SYNTH_POSTGRES_SSL` | ADR-097: legacy-флаг TLS-соединения (`true`/`false`); используется, только если `SYNTH_POSTGRES_SSLMODE` не задан | — |
+| `SYNTH_POSTGRES_SSLMODE` | ADR-097/ADR-099: TLS-режим соединения с БД: `disable` / `require` / `verify-full` (`verify-ca` — алиас `verify-full`); приоритетнее legacy `ssl` | — |
+| `SYNTH_POSTGRES_POOL_MAX` | ADR-097: максимальный размер пула соединений | `10` |
+| `SYNTH_POSTGRES_PASSWORD` | ADR-097: пароль БД — **только** env или файл `{dataDir}/secrets/postgres-password` (в `config.yaml` не хранится, инвариант 13) | — |
+| `SYNTH_DEGRADED_MODE` | ADR-098: поведение при недоступности БД (`fallback-file`/`halt`) | `fallback-file` |
+| `SYNTH_STORAGE_FALLBACK_DIR` | ADR-098: каталог файлового фоллбека при деградации | `{dataDir}/fallback` |
 | `SYNTH_WORKSPACES_ROOT` | Корень каталогов workspace проектов (`storage.workspacesRoot`) | `{dataDir}/workspaces` |
 | `SYNTH_DEFAULT_WORKSPACE` | Рабочий каталог по умолчанию (`storage.defaultWorkspace`) | `{dataDir}/workspaces/default` |
 | `SYNTH_WORKSPACE_OUTSIDE_ROOT` | ADR-075: политика абсолютного workspace вне `workspacesRoot` (`confirm`/`deny`) | по режиму (standalone — `confirm`, managed — `deny`) |
@@ -55,15 +55,15 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_CORS_ORIGIN` | CORS origin (приоритет выше конфига) | — |
 | `SYNTH_DECISION_PROVIDER` | ADR-084: имя провайдера decision-типа (`decision`/`systemone`) | `decision.provider` |
 | `SYNTH_DECISION_MODEL` | ADR-084: модель decision-слоя (напр. `clef-flash`) | `decision.model` |
-| `SYNTH_ANALYTICS_RETENTION_DAYS` | PROP-102: срок хранения суточных роллапов аналитики, дни (`<= 0` — без ограничения) | `analytics.retentionDays` (`400`) |
+| `SYNTH_ANALYTICS_RETENTION_DAYS` | ADR-102: срок хранения суточных роллапов аналитики, дни (`<= 0` — без ограничения) | `analytics.retentionDays` (`400`) |
 | `SYNTH_METRICS_ENABLED` | ADR-094: включить `GET /metrics` (Prometheus exposition 0.0.4); `false` → 404 | `metrics.enabled` (`false`) |
 | `SYNTH_METRICS_TOKEN` | ADR-094: bearer-токен `/metrics` (приоритетнее файла `{dataDir}/secrets/metrics-token`); значение не логируется | — |
-| `SYNTH_EXECUTION_MODE` | PROP-077: топология исполнения — `inline` (по умолчанию) \| `remote` (удалённый исполнитель, шаг 7b PROP-077; fail-closed на старте) | `inline` |
-| `SYNTH_EXECUTION_REMOTE_URL` | PROP-077: список адресов исполнителей (через запятую) | — |
-| `SYNTH_EXECUTION_TOKEN` | PROP-077: путь/ссылка на токен исполнителя (НЕ значение, инвариант 13) | — |
-| `SYNTH_EXECUTION_TIMEOUT_MS` | PROP-077: таймаут exec-вызова, мс | `30000` |
-| `SYNTH_EXECUTION_CONCURRENCY` | PROP-077: лимит одновременных exec-вызовов | число CPU процесса |
-| `SYNTH_EXECUTION_FAIL_MODE` | PROP-077: поведение при недоступном исполнителе (`fail`/`inline-fallback`) | `fail` |
+| `SYNTH_EXECUTION_MODE` | ADR-077: топология исполнения — `inline` (по умолчанию) \| `remote` (удалённый исполнитель, шаг 7b ADR-077; fail-closed на старте) | `inline` |
+| `SYNTH_EXECUTION_REMOTE_URL` | ADR-077: список адресов исполнителей (через запятую) | — |
+| `SYNTH_EXECUTION_TOKEN` | ADR-077: путь/ссылка на токен исполнителя (НЕ значение, инвариант 13) | — |
+| `SYNTH_EXECUTION_TIMEOUT_MS` | ADR-077: таймаут exec-вызова, мс | `30000` |
+| `SYNTH_EXECUTION_CONCURRENCY` | ADR-077: лимит одновременных exec-вызовов | число CPU процесса |
+| `SYNTH_EXECUTION_FAIL_MODE` | ADR-077: поведение при недоступном исполнителе (`fail`/`inline-fallback`) | `fail` |
 
 **UI (Vite):**
 
@@ -235,9 +235,9 @@ storage:
   dataDir: "/var/synth/data"      # каталог данных вне репозитория
   backend: "file"                 # ADR-096: физический backend хранения — file (JSON-файлы с атомарной записью,
                                   # дефолт) | memory (in-memory, данные НЕ сохраняются — герметичные тесты/эмуляция)
-                                  # | postgres (PROP-032: опциональный драйвер @itphx/synth-storage-postgres);
+                                  # | postgres (ADR-097: опциональный драйвер @itphx/synth-storage-postgres);
                                   # SYNTH_STORAGE_BACKEND
-  postgres:                       # PROP-032: параметры PostgreSQL (используются при backend: postgres)
+  postgres:                       # ADR-097: параметры PostgreSQL (используются при backend: postgres)
     # dsn: "postgres://synth@db:5432/synth"   # строка подключения; задана — приоритетнее host/port/database/user
     host: ""                      # SYNTH_POSTGRES_HOST
     port: 5432                    # SYNTH_POSTGRES_PORT
@@ -250,9 +250,9 @@ storage:
     poolMax: 10                   # SYNTH_POSTGRES_POOL_MAX — максимальный размер пула
     # ПАРОЛЬ здесь НЕ хранится (инвариант 13): env SYNTH_POSTGRES_PASSWORD или файл
     # {dataDir}/secrets/postgres-password.
-  degradedMode: "fallback-file"   # PROP-032/ADR-098: при недоступности БД — fallback-file (файловый фоллбек,
+  degradedMode: "fallback-file"   # ADR-098: при недоступности БД — fallback-file (файловый фоллбек,
                                   # строго read-only) | halt (остановить старт); SYNTH_DEGRADED_MODE
-  fallbackDir: ""                 # PROP-032/ADR-098: каталог файлового фоллбека; пусто — {dataDir}/fallback;
+  fallbackDir: ""                 # ADR-098: каталог файлового фоллбека; пусто — {dataDir}/fallback;
                                   # SYNTH_STORAGE_FALLBACK_DIR
   workspacesRoot: ""              # если пусто — {dataDir}/workspaces; SYNTH_WORKSPACES_ROOT
   defaultWorkspace: ""            # если пусто — {dataDir}/workspaces/default; SYNTH_DEFAULT_WORKSPACE
@@ -262,7 +262,7 @@ storage:
   maxUploadBytes: 104857600       # лимит загрузки файла /api/v2/fs/upload, байт (>=1024, <=2 ГиБ);
                                   # не задано — 100 МиБ; SYNTH_MAX_UPLOAD_BYTES
 
-execution:                         # PROP-077: топология исполнения (параметр запуска, инвариант 24)
+execution:                         # ADR-077: топология исполнения (параметр запуска, инвариант 24)
   mode: "inline"                  # inline (по умолчанию) | remote; SYNTH_EXECUTION_MODE;
                                   # CLI-флаг --execution-mode важнее env; неверное значение — fail-closed
   remote:
@@ -396,7 +396,7 @@ decision:                         # ADR-084: decision-модели (System One: 
 > маршрутизации внешних событий (`DecisionRuleProvider`, ADR-089); агрегатные метрики decision-слоя
 > доступны через `GET/DELETE /api/v2/settings/decision/metrics`. Мутации в managed — ADMIN.
 
-analytics:                        # PROP-102: аналитика и отчётность инстанса
+analytics:                        # ADR-102: аналитика и отчётность инстанса
   retentionDays: 400              # хранение суточных роллапов (UTC-дни; <= 0 — без ограничения)
 
 permission:
@@ -445,12 +445,12 @@ remote:                           # гибридный режим: локаль�
 
 ### Backend хранения (`storage.backend`, ADR-096)
 
-- `storage.backend` — физический backend хранения: `file` (JSON-файлы с атомарной записью tmp→rename, [ADR-005](./arch_decisions/adr-005-json-storage.md); по умолчанию), `memory` (in-memory, данные **не** сохраняются на диск — для герметичных тестов и эмуляции) или `postgres` (PostgreSQL; опциональный in-tree драйвер `@itphx/synth-storage-postgres`, [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md)). Домен работает через доменные порты, backend взаимозаменяем ([ADR-096](./arch_decisions/adr-096-storage-layer.md)); любой backend обязан пройти контрактный suite `packages/core/src/storage/contract/*`.
+- `storage.backend` — физический backend хранения: `file` (JSON-файлы с атомарной записью tmp→rename, [ADR-005](./arch_decisions/adr-005-json-storage.md); по умолчанию), `memory` (in-memory, данные **не** сохраняются на диск — для герметичных тестов и эмуляции) или `postgres` (PostgreSQL; опциональный in-tree драйвер `@itphx/synth-storage-postgres`, [ADR-097](./arch_decisions/adr-097-storage-provider-class.md)). Домен работает через доменные порты, backend взаимозаменяем ([ADR-096](./arch_decisions/adr-096-storage-layer.md)); любой backend обязан пройти контрактный suite `packages/core/src/storage/contract/*`.
 - **Приоритет** ([ADR-023](./arch_decisions/adr-023-configuration.md)): env `SYNTH_STORAGE_BACKEND` > `config.storage.backend` > `file`. Некорректное значение (не `file`/`memory`/`postgres`) — warn и фолбэк на config/дефолт (fail-soft); неизвестное **явное** значение в самом `resolveStorageBackend` — **fail-closed** (ошибка, а не тихий уход на файлы). Резолвер — `resolveStorageBackend` (`@itphx/synth-shared/config`); выбор применяется в точке сборки `StorageContext` (`createStorageContextAsync`/`buildStorageContext`; синхронный `createStorageContext` для `postgres` бросает).
 - `memory` печатает предупреждение `storage.backend=memory: данные не сохраняются на диск` — режим **не для прода** (только тесты/эмуляция).
 - `postgres` требует установленного драйвера (`@itphx/synth-storage-postgres`, ставится в комплекте `@itphx/synth`; `pg` — optional-зависимость драйвера) и доступной БД. Драйвер применяет/проверяет **свою** схему БД (`synth_schema_migrations`, инлайн-SQL-миграции) — отдельно от `meta.json`/`synth migrate` (ADR-092); «схема БД новее драйвера» — fail-closed.
 
-### PostgreSQL (`storage.postgres`, PROP-032)
+### PostgreSQL (`storage.postgres`, ADR-097)
 
 Секция используется при `storage.backend: postgres`. Источник истины — `postgresStorageConfigSchema` (`packages/shared/src/config/types.ts`); резолвер — `resolvePostgresConfig` (env `SYNTH_POSTGRES_*` > `config.storage.postgres`; [ADR-023](./arch_decisions/adr-023-configuration.md)).
 
@@ -470,7 +470,7 @@ remote:                           # гибридный режим: локаль�
 - Невалидные числовые/boolean env-значения — ошибка резолвинга с внятным сообщением (не «тихо как есть»).
 - Контракт драйвера и схема БД — `packages/storage-postgres/AGENTS.md`; критерий приёмки — suite `packages/core/src/storage/contract/*` (прогон против живой БД по env `SYNTH_TEST_POSTGRES_DSN`).
 
-### TLS соединения с PostgreSQL (`storage.postgres.sslmode`, ADR-099 × PROP-032)
+### TLS соединения с PostgreSQL (`storage.postgres.sslmode`, ADR-099 × ADR-097)
 
 Источник истины для TLS-политики — `storage.postgres.sslmode`; CA и клиентские сертификаты (mTLS) берутся из **общей** секции `security.tls` (см. ниже). Резолвер режима — `normalizePostgresSslMode`, сборка `ssl`-опций `pg` — `buildPostgresSslOptions` (`packages/shared/src/config/tls.ts`).
 
@@ -495,11 +495,11 @@ remote:                           # гибридный режим: локаль�
 
 **Fail-closed** (фоллбек **не** применяется независимо от `degradedMode`): ошибка конфигурации/кред (`STORAGE_POSTGRES_CONFIG_INVALID`), отсутствие зависимости (`…DEPENDENCY_MISSING`, нет `pg`), незагружаемый пакет-драйвер (`STORAGE_BACKEND_UNAVAILABLE`), схема БД новее драйвера (`…SCHEMA_TOO_NEW`). Деградация охватывает **отказ БД** (сеть/класс `08`/`57P0x`, auth-ошибка сервера, `…SCHEMA_OUTDATED` — лечится `synth migrate`, прочие runtime-ошибки). Авто-возврата к БД **нет** — только рестарт после восстановления соединения ([ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)); процедуры — [MAINTENANCE.md](./MAINTENANCE.md).
 
-### Исполнение (топология) (`execution.*`, PROP-077)
+### Исполнение (топология) (`execution.*`, ADR-077)
 
 Секция `execution` — **переключатель топологии исполнения**: где выполняются команды агентских
 тулов (`execute_shell`, `grep_files`, git-тулы). Это **параметр запуска**, а не runtime-настройка:
-смена режима — только рестартом процесса (инвариант 24). Спецификация — [PROP-077](./arch_decisions/prop-077-runtime-toolchain.md).
+смена режима — только рестартом процесса (инвариант 24). Спецификация — [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md).
 
 | Поле | Тип / значения | Дефолт | Env | Смысл |
 |---|---|---|---|---|
@@ -522,7 +522,7 @@ env `SYNTH_EXECUTION_*` > `config.yaml` > дефолт. Резолвер — `re
 [config] невалидное значение --execution-mode="inlne": ожидается одно из 'inline', 'remote'
 ```
 
-**Текущее состояние реализации (шаги 3 и 7b плана PROP-077).** Режим `inline` — прежнее
+**Текущее состояние реализации (шаги 3 и 7b плана ADR-077).** Режим `inline` — прежнее
 поведение, ничего не меняется. Режим `remote` реализован **шагом 7b**: core подключает пакет
 исполнителя `@itphx/synth-executor` динамическим `import()` и собирает удалённый порт. Пакет
 опционален (`optionalDependencies` core), поэтому режим `remote` — **fail-closed на старте**
@@ -538,7 +538,7 @@ env `SYNTH_EXECUTION_*` > `config.yaml` > дефолт. Резолвер — `re
 
 ```yaml
 execution:
-  mode: "inline"                   # inline (по умолчанию) | remote (PROP-077)
+  mode: "inline"                   # inline (по умолчанию) | remote (ADR-077)
   remote:
     url: []                        # список адресов исполнителей (через запятую — env SYNTH_EXECUTION_REMOTE_URL)
     timeoutMs: 30000               # SYNTH_EXECUTION_TIMEOUT_MS
@@ -1257,7 +1257,7 @@ File-based флаги (`events.dedupStore: file`, `scheduler.leaderElection: fil
 `scheduler.crossProcessLocks: true`) рассчитаны на **общий `dataDir` на одном хосте/FS** и
 по умолчанию выключены (поведение single-process не меняется). Для реплик без общего FS
 используйте `storage.backend=postgres` и `scheduler.leaderElection: postgres` (advisory-лок
-БД, PROP-032); K8s `Lease` — будущий шаг (ADR-051).
+БД, ADR-097); K8s `Lease` — будущий шаг (ADR-051).
 
 Пример:
 
@@ -1271,7 +1271,7 @@ scheduler:
   crossProcessLocks: false
 ```
 
-### Аналитика и отчётность (`analytics.*`, PROP-102)
+### Аналитика и отчётность (`analytics.*`, ADR-102)
 
 Секция задаёт только срок хранения **пред-агрегированных суточных роллапов**
 аналитики (единица — сутки UTC). Отчёты и их параметры — [API_V2.md](./API_V2.md)

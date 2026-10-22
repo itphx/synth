@@ -48,7 +48,7 @@ const usageReport: AnalyticsReport = {
   ],
 };
 
-describe('toCsv (PROP-102 §6)', () => {
+describe('toCsv (ADR-102 §6)', () => {
   it('начинается с BOM UTF-8 и заканчивается CRLF', () => {
     const csv = toCsv(usageReport);
     expect(csv.startsWith('\uFEFF')).toBe(true);
@@ -148,7 +148,7 @@ describe('toCsv (PROP-102 §6)', () => {
   });
 });
 
-describe('toJson (PROP-102 §6)', () => {
+describe('toJson (ADR-102 §6)', () => {
   it('возвращает отчёт как есть (сырые данные без локализации)', () => {
     expect(JSON.parse(toJson(usageReport))).toEqual(usageReport);
   });

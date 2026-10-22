@@ -1,5 +1,5 @@
 /**
- * Ошибки PostgreSQL-драйвера хранения (ADR-096/ADR-097, PROP-032).
+ * Ошибки PostgreSQL-драйвера хранения (ADR-097).
  *
  * Здесь живут и «конфигурационные» ошибки драйвера, и маппинг сырых ошибок
  * `pg`/PostgreSQL в доменные классы. Маппинг — интерфейс для следующих волн
@@ -37,7 +37,7 @@ export class PostgresStorageDependencyError extends PostgresStorageError {
 /** Реализация портов ещё не поставлена (инфраструктурная волна). */
 export class PostgresStorageNotImplementedError extends PostgresStorageError {
   constructor(
-    message = 'PostgreSQL-драйвер хранения: реализация портов ещё не поставлена (PROP-032).',
+    message = 'PostgreSQL-драйвер хранения: реализация портов ещё не поставлена (ADR-097).',
   ) {
     super(message, 'STORAGE_POSTGRES_NOT_IMPLEMENTED');
     this.name = 'PostgresStorageNotImplementedError';

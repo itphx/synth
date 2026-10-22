@@ -1,5 +1,5 @@
 /**
- * PROP-102 §10: тело CLI-команды `synth analytics rebuild` — переиспользуется
+ * ADR-102 §10: тело CLI-команды `synth analytics rebuild` — переиспользуется
  * dev-CLI (`packages/core/src/main.ts`) и тестами; домен — `analytics/rebuild.ts`.
  *
  * Паттерн ADR-091/ADR-092: без `--yes` и без `--dry-run` — отказ (ненулевой код);
@@ -16,7 +16,7 @@ import { rebuildAnalyticsRollups, type AnalyticsRebuildResult } from './rebuild.
 export interface AnalyticsRebuildCommandOptions {
   /** Каталог данных инстанса (путь журнала аудита по умолчанию). */
   dataDir: string;
-  /** Готовый контекст слоя хранения (backend-aware, PROP-032). */
+  /** Готовый контекст слоя хранения (backend-aware, ADR-096). */
   storage: Pick<StorageContext, 'analyticsRollups' | 'sessions'>;
   /** Начало окна включительно (`YYYY-MM-DD`, UTC). */
   from?: string;

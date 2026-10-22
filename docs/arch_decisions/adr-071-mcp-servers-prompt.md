@@ -16,7 +16,7 @@
 > - [ADR-014](./adr-014-project-container.md) «Проект как контейнер» и [ADR-040](./adr-040-sessions-without-project.md) «Сессии без проекта» — носители проектного и сессионного скоупа;
 > - [PROP-068](./prop-068-skills-agents-registry.md) «Реестр скиллов и агентов» — модель trust/guard/install-policy, переиспользуемая для реестра MCP-серверов;
 > - [ADR-005](./adr-005-json-storage.md) «JSON-хранилище» — хранение реестра MCP-серверов через `FileStore` (атомарная запись);
-> - [PROP-032](./prop-032-history-storage-postgresql.md) «Миграция хранения на PostgreSQL» — логическая модель реестра проектируется сразу под будущую миграцию.
+> - [ADR-097](./adr-097-storage-provider-class.md) «Миграция хранения на PostgreSQL» — логическая модель реестра проектируется сразу под будущую миграцию.
 
 **Решение:** отделить MCP от встроенных инструментов на всех уровнях (промпт, реестр, UI) и ввести явную модель уровней/скоупа и политику включения инструментов:
 
@@ -143,13 +143,13 @@ DNS-резолв и CIDR-сверка **не выполняются** — адр
 - **HTTP-серверы (`sse`/`http`):** добавить может **любой пользователь**; запись попадает в **реестр MCP-серверов** с фиксацией автора (`author`, `createdAt`) и признаком доверия (`community`/unverified). URL пользовательского HTTP/SSE-сервера проверяется адресной политикой `mcp.networkPolicy` (§2.3.1, общий формат с `egress.*`, [ADR-099](./adr-099-egress-tls-trust.md)) при записи и при подключении; `origin: 'instance'` и `stdio` не проверяются.
 - **`stdio`-серверы:** добавляет **только admin** на уровне инстанса (RCE-риск); admin же выставляет `enabledByDefault`.
 - **Включение по умолчанию для проекта:** только owner/lead (человеческий гейт для пользовательских серверов).
-- **Единый реестр.** Один реестр MCP-серверов (не разделяем на instance/пользовательский); instance- и пользовательские записи различаются полем `origin`. Логическая модель сразу проектируется под будущую миграцию на PostgreSQL (по образцу PROP-032): плоские записи со стабильным `id`, `schemaVersion`, timestamps, без вложенных структур, которые нельзя разложить в таблицы.
+- **Единый реестр.** Один реестр MCP-серверов (не разделяем на instance/пользовательский); instance- и пользовательские записи различаются полем `origin`. Логическая модель сразу проектируется под будущую миграцию на PostgreSQL (по образцу ADR-097): плоские записи со стабильным `id`, `schemaVersion`, timestamps, без вложенных структур, которые нельзя разложить в таблицы.
 - **Схема записи:** `McpRegistryEntry { schemaVersion, id, name, config, origin: 'instance' | 'user', author: { userId, username } | null, trust: 'builtin' | 'community', enabled: boolean, enabledByDefault: boolean, createdAt, updatedAt }`.
   - `enabled` (дефолт `true`) — системный мастер-флаг (hard-gate): `false` → сервер недоступен нигде и никогда (включая старые сессии/проекты).
   - `enabledByDefault` — переосмыслено: «включать по умолчанию в НОВЫХ проектах» (сид `project.mcp.enabled`/`defaultOn` при создании проекта); снимок — на созданные проекты/сессии не влияет. Config `mcp.servers[name].enabled` — только сид системного мастера при первичном создании записи из config (`seedFromConfig`); после создания мастер-флаг живёт в реестре и редактируется там, `config.enabled` в резолвинге не участвует.
   - Проект ссылается на записи (`Project.mcp = { enabled: string[]; defaultOn: string[] }`), сессия — через явные overrides.
 - **Разрешение эффективного набора для сессии:** per-item `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`; `snapshotOn` — `session.settings.mcpDefaultOn` (снимок `project.defaultOn`/системного `enabledByDefault` на момент создания). Динамический `project.defaultOn` в формуле не участвует (дефолты — snapshot, §2.4). Конфликт имён — по приоритету (§2.4).
-- **Хранение сейчас:** `FileStore` (JSON + атомарная запись, ADR-005) в `$SYNTH_DATA_DIR`; instance-дефолты (`enabledByDefault`) могут дублироваться в config.yaml. Миграция на PostgreSQL — отдельная задача (ср. PROP-032), модель к ней готова.
+- **Хранение сейчас:** `FileStore` (JSON + атомарная запись, ADR-005) в `$SYNTH_DATA_DIR`; instance-дефолты (`enabledByDefault`) могут дублироваться в config.yaml. Миграция на PostgreSQL — отдельная задача (ср. ADR-097), модель к ней готова.
 - **Провенанс:** кто добавил/включил/выключил и когда — в аудит (ADR-036-совместимо).
 
 ### 2.6. UI

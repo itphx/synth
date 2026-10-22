@@ -1,6 +1,6 @@
 /**
  * Порт `defaults` (умолчания оформления) PostgreSQL-драйвера
- * (PROP-032, волна 3b).
+ * (ADR-097, волна 3b).
  *
  * Эталон семантики — `DefaultsStore`/`MemoryDefaultsRepository`: `loadDefaults`
  * на пустом сторе — `{}`; `saveDefaults` — частичный патч, сливается поверх

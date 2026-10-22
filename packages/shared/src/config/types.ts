@@ -30,7 +30,7 @@ export const serverConfigSchema = z.object({
 });
 
 /**
- * PROP-032: параметры подключения к PostgreSQL (секция `storage.postgres`).
+ * ADR-097: параметры подключения к PostgreSQL (секция `storage.postgres`).
  *
  * Пароль здесь **не хранится** (инвариант 13) — его читает резолвер
  * `resolvePostgresPassword` (env `SYNTH_POSTGRES_PASSWORD` → файл
@@ -48,7 +48,7 @@ export const postgresStorageConfigSchema = z.object({
   /** Схема БД (namespace таблиц). */
   schema: z.string().optional(),
   /**
-   * ADR-099/PROP-032: TLS-режим соединения с БД.
+   * ADR-099/ADR-097: TLS-режим соединения с БД.
    * `disable` — без TLS; `require` — шифрование без проверки сертификата;
    * `verify-full` — проверка сертификата сервера по CA из `security.tls`.
    * `verify-ca` принимается как **алиас** `verify-full` (нормализуется с
@@ -72,7 +72,7 @@ export const postgresStorageConfigSchema = z.object({
 export const storageConfigSchema = z.object({
   dataDir: z.string().default('/var/synth/data'),
   /**
-   * PROP-032: физический backend хранения. `file` — JSON-файлы с атомарной
+   * ADR-096: физический backend хранения. `file` — JSON-файлы с атомарной
    * записью tmp→rename (ADR-005, дефолт); `memory` — in-memory (энергонезависимо
    * НЕ сохраняется, для герметичных тестов); `postgres` — БД (драйвер —
    * in-tree опциональный пакет `@itphx/synth-storage-postgres`). Читать через
@@ -83,17 +83,17 @@ export const storageConfigSchema = z.object({
    * остаются валидными, а дефолт `file` задают `defaults.ts`/`resolveStorageBackend`.
    */
   backend: z.enum(['file', 'memory', 'postgres']).optional(),
-  /** PROP-032: параметры PostgreSQL-backend (используются при `backend: postgres`). */
+  /** ADR-097: параметры PostgreSQL-backend (используются при `backend: postgres`). */
   postgres: postgresStorageConfigSchema.default({}),
   /**
-   * PROP-032 (волна 5): поведение при недоступности выбранного backend —
+   * ADR-098 (волна 5): поведение при недоступности выбранного backend —
    * `fallback-file` (перейти на файловое хранилище в `fallbackDir`, default) |
    * `halt` (остановить старт). Читать через `resolveDegradedMode`
    * (приоритет env `SYNTH_DEGRADED_MODE` > это поле > `fallback-file`).
    */
   degradedMode: z.enum(['fallback-file', 'halt']).default('fallback-file'),
   /**
-   * PROP-032 (волна 5): каталог файлового фоллбека при деградации.
+   * ADR-098 (волна 5): каталог файлового фоллбека при деградации.
    * `''` — не задано (эффективно `{dataDir}/fallback`), читать через
    * `resolveStorageFallbackDir` (приоритет env `SYNTH_STORAGE_FALLBACK_DIR` >
    * это поле > `{dataDir}/fallback`).
@@ -118,15 +118,15 @@ export const storageConfigSchema = z.object({
   maxUploadBytes: z.number().int().min(MIN_UPLOAD_BYTES).max(MAX_UPLOAD_BYTES_LIMIT).optional(),
 });
 
-// --- Исполнение (PROP-077) ---
+// --- Исполнение (ADR-077) ---
 
 /**
- * PROP-077: топология исполнения — переключатель запуска (`execution.mode`).
+ * ADR-077: топология исполнения — переключатель запуска (`execution.mode`).
  *
  * - `inline` (дефолт) — исполнение в процессе backend'а (прежнее поведение,
  *   all-in-one образ);
  * - `remote` — отдельные исполнители (`RemoteExecutionPort` + сервис-исполнитель,
- *   шаг 7 плана PROP-077).
+ *   шаг 7 плана ADR-077).
  *
  * Секция — **параметр запуска**, а не runtime-настройка: смена режима — только
  * рестартом процесса (инвариант 24 — process-глобальные решения не
@@ -174,7 +174,7 @@ export const executionRemoteConfigSchema = z.object({
   tokenSecret: z.string().default(''),
 });
 
-/** PROP-077: секция `execution` — топология исполнения (параметр запуска). */
+/** ADR-077: секция `execution` — топология исполнения (параметр запуска). */
 export const executionConfigSchema = z.object({
   mode: z.enum(EXECUTION_MODES).default('inline'),
   remote: executionRemoteConfigSchema.default({}),
@@ -520,10 +520,10 @@ export const decisionConfigSchema = z.object({
   escalationModel: z.string().default(''),
 });
 
-// --- Аналитика и отчётность (PROP-102) ---
+// --- Аналитика и отчётность (ADR-102) ---
 
 /**
- * PROP-102: конфигурация аналитики инстанса.
+ * ADR-102: конфигурация аналитики инстанса.
  * - `retentionDays` — срок хранения суточных роллапов (UTC-дни): бакеты со
  *   `day < utcDay(now) - retentionDays` удаляются прунером. `<= 0` — без
  *   ограничения. Default — 400.
@@ -1024,11 +1024,11 @@ export const synthConfigSchema = z.object({
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
 export type StorageConfig = z.infer<typeof storageConfigSchema>;
-/** PROP-032: параметры PostgreSQL-backend (`storage.postgres`). */
+/** ADR-097: параметры PostgreSQL-backend (`storage.postgres`). */
 export type PostgresStorageConfig = z.infer<typeof postgresStorageConfigSchema>;
-/** PROP-077: секция `execution` — топология исполнения. */
+/** ADR-077: секция `execution` — топология исполнения. */
 export type ExecutionConfig = z.infer<typeof executionConfigSchema>;
-/** PROP-077: параметры удалённого исполнителя (`execution.remote`). */
+/** ADR-077: параметры удалённого исполнителя (`execution.remote`). */
 export type ExecutionRemoteConfig = z.infer<typeof executionRemoteConfigSchema>;
 export type AuthConfig = z.infer<typeof authConfigSchema>;
 export type LLMConfig = z.infer<typeof llmConfigSchema>;

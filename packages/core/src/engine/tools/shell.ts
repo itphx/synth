@@ -40,7 +40,7 @@ export const executeShellTool: ToolDefinition = {
     const command = await deobfuscateText(ctx, params.command);
 
     try {
-      // PROP-077: исполнение — через порт (inline-реализация повторяет
+      // ADR-077: исполнение — через порт (inline-реализация повторяет
       // прежний `sh -c`: тот же бинарь, таймаут, maxBuffer 10 МБ и окружение
       // `{...process.env, HOME: process.env.HOME || '/root'}`).
       const { stdout, stderr } = await resolveExecutionPort(ctx).execute({

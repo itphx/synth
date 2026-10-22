@@ -2628,7 +2628,7 @@ export const dict = {
   'pipeline.llm_failed': 'Шаг «{node}» завершился ошибкой LLM ({type})',
   'pipeline.llm_unrecoverable': 'Шаг «{node}» завершился ошибкой LLM ({type}), повтор не поможет',
 
-  // --- Исполнение (PROP-077) ---
+  // --- Исполнение (ADR-077) ---
   'execution.remote_url_required': 'Удалённый режим исполнения (execution.mode=remote) требует хотя бы один адрес исполнителя (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
   'execution.remote_unavailable': 'Удалённый режим исполнения (execution.mode=remote) недоступен: {reason}',
 
@@ -3233,7 +3233,7 @@ export const dict = {
 
   'sessionCreate.project': 'Проект',
 
-  // --- PROP-102: аналитика и отчёты (UI, волна 2) ---
+  // --- ADR-102: аналитика и отчёты (UI, волна 2) ---
   'analytics.title': 'Аналитика и отчёты',
   'analytics.description': 'Отчёты по пред-агрегированным суточным роллапам (UTC)',
   'analytics.tab.usage': 'Расход и стоимость',
@@ -3593,7 +3593,7 @@ export const dict = {
   'settings.help.debug.section.debug-service': 'Служебные группы инстанса: маршруты, хранилище, WebSocket и сам отладочный вывод.',
   'settings.help.debug.levels': 'NONE — выключено, DEBUG — подробно, INFO — обычные события, WARNING — проблемы, ERROR — только ошибки.',
 
-  // --- Аддоны (ADR-086 §5, ADR-051/PROP-059) ---
+  // --- Аддоны (ADR-086 §5, ADR-051/ADR-100) ---
   'addons.title': 'Аддоны',
   'addons.description':
     'Пакеты расширений, установленные в этом инстансе, и принесённые ими пайплайны. Пакет, выдающий capability-гранты, ждёт подтверждения администратора: его агенты, скиллы, MCP-серверы и пайплайны появляются в инстансе только после подтверждения.',

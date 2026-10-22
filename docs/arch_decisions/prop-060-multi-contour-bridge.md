@@ -5,7 +5,7 @@
 > **Источник:** перенесено из `AD-DRAFTS.md` (D15; черновик 2026-09-16); Roadmap Фаза 2.
 > **Связано:** [ADR-036](./adr-036-llm-gateway.md), [ADR-042](./adr-042-hybrid-mode.md),
 > [PROP-050](./prop-050-external-engines-runner.md), [PROP-055](./prop-055-instance-exchange.md),
-> [PROP-061](./prop-061-llm-security-layers.md), [PROP-088](./prop-088-http-proxy.md).
+> [PROP-061](./prop-061-llm-security-layers.md), [ADR-099](./adr-099-egress-tls-trust.md).
 
 **Решение:** `ContourBridge` (на базе Runner, [PROP-050](./prop-050-external-engines-runner.md)) —
 единый шлюз между **контурами** (изолированными средами/сетями, например внешний и внутренний контур).
@@ -113,5 +113,5 @@ CLI > env > yaml > defaults, [ADR-023](./adr-023-configuration.md)).
   сравнить подходы.
 - [PROP-055](./prop-055-instance-exchange.md) «Обмен между инстансами» — родственный обмен данными.
 - [PROP-061](./prop-061-llm-security-layers.md) «Многослойная безопасность LLM» — неизменяемость аудита.
-- [PROP-088](./prop-088-http-proxy.md) «Работа через HTTP-прокси» — сетевые ограничения контуров.
+- [ADR-099](./adr-099-egress-tls-trust.md) «Единый egress-слой» — сетевые ограничения контуров.
 - [ADR-023](./adr-023-configuration.md) «Конфигурация» — секция `contour`.

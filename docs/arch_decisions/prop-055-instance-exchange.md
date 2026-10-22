@@ -5,7 +5,7 @@
 > **Источник:** перенесено из `AD-DRAFTS.md` (D10; черновик 2026-09-16); Roadmap, идея 10.
 > **Связано:** [ADR-042](./adr-042-hybrid-mode.md), [ADR-043](./adr-043-unified-identity-login.md),
 > [ADR-045](./adr-045-hybrid-server-profiles.md), [ADR-033](./adr-033-session-branching-merge.md),
-> [PROP-032](./prop-032-history-storage-postgresql.md), [PROP-047](./prop-047-memory-gbrain.md),
+> [ADR-097](./adr-097-storage-provider-class.md), [PROP-047](./prop-047-memory-gbrain.md),
 > [ADR-052](./adr-052-public-api-platform.md), [PROP-073](./prop-073-client-integrity-hybrid.md),
 > [PROP-081](./prop-081-hybrid-policy-leak-protection.md).
 
@@ -55,7 +55,7 @@ API v2.
 изменения с последней известной позиции, отправитель отдаёт пачку и новый курсор. Требует:
 
 - курсора по каждой синхронизируемой сущности/потоку;
-- хранения состояния синхронизации на обоих инстансах (JSON до [PROP-032](./prop-032-history-storage-postgresql.md));
+- хранения состояния синхронизации на обоих инстансах (JSON до [ADR-097](./adr-097-storage-provider-class.md));
 - идемпотентности повторов (at-least-once доставка).
 
 ### 3. Peer-auth
@@ -135,7 +135,7 @@ API v2.
   peer-auth — отдельный слой.
 - [ADR-033](./adr-033-session-branching-merge.md) «Ветвление сессий и слияние» — логическая модель мёржа
   для идемпотентного upsert.
-- [PROP-032](./prop-032-history-storage-postgresql.md) «История на PostgreSQL» — хранилище курсоров и
+- [ADR-097](./adr-097-storage-provider-class.md) «История на PostgreSQL» — хранилище курсоров и
   состояния синхронизации.
 - [PROP-047](./prop-047-memory-gbrain.md) «Память Synth» — обмен памятью/индексами.
 - [ADR-052](./adr-052-public-api-platform.md) «Публичная API-платформа» — скоупы/токены/контуры.

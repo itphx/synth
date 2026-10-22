@@ -127,11 +127,11 @@ backend:
   # Приоритет: CLI-флаги > SYNTH_* env > config.yaml > defaults; runtime-настройки
   # из UI/API (settings.json) применяются поверх файла.
   # Пример: { events: { autoBind: true } }.
-  # Секция `storage` ниже домержится в этот же config.yaml (PROP-032).
+  # Секция `storage` ниже домержится в этот же config.yaml (ADR-096).
   config: {}
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Слой хранения (PROP-032, ADR-096/ADR-097) — instance-wide для backend.
+# Слой хранения (ADR-096, ADR-096/ADR-097) — instance-wide для backend.
 # ─────────────────────────────────────────────────────────────────────────────
 # Всё, кроме пароля, рендерится в config.yaml (ConfigMap <release>-config) и
 # монтируется в backend как /etc/synth/config.yaml. Пароль БД в values НЕ

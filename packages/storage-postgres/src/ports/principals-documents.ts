@@ -1,5 +1,5 @@
 /**
- * Порты `providers`/`models`/`agents` PostgreSQL-драйвера (PROP-032, волна 3b).
+ * Порты `providers`/`models`/`agents` PostgreSQL-драйвера (ADR-097, волна 3b).
  *
  * Все три — `DocumentRepository<T>` над одной таблицей `documents(kind, key,
  * value jsonb)`: `kind` = `provider`/`model`/`agent`, ключ документа — как в

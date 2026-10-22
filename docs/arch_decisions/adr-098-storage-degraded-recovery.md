@@ -2,11 +2,11 @@
 
 > **Статус:** ⚠️ Частично — реализовано: матрица fail-closed/деградация, файловый `fallbackDir`, ADMIN-only + строгий read-only, `/health` → `degraded` + `GET /api/v2/storage/status`, встроенный скилл `synth-storage-recovery`, диагностика (`doctor`); остаток: авто-возврат к БД без рестарта, `/ready` и DB-aware probes ([ADR-094](./adr-094-observability-metrics.md))
 > **Дата:** 2026-10-16
-> **Связано:** [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-096](./adr-096-storage-layer.md), [ADR-097](./adr-097-storage-provider-class.md), [ADR-091](./adr-091-backup-restore-transfer.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [ADR-094](./adr-094-observability-metrics.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md), конфиг — [docs/CONFIGURATION.md](../CONFIGURATION.md).
+> **Связано:** [ADR-097](./adr-097-storage-provider-class.md), [ADR-096](./adr-096-storage-layer.md), [ADR-091](./adr-091-backup-restore-transfer.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [ADR-094](./adr-094-observability-metrics.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md), конфиг — [docs/CONFIGURATION.md](../CONFIGURATION.md).
 
 ## Контекст
 
-Второй backend хранения — PostgreSQL ([PROP-032](./prop-032-history-storage-postgresql.md), драйвер [ADR-097](./adr-097-storage-provider-class.md)) — вносит **внешнюю зависимость**: в отличие от файлового default'а, БД может быть недоступна на старте (сеть, креды, схема, перегрузка). Голый отказ старта лишает администратора даже диагностики, а **тихий** уход на пустое файловое хранилище маскирует проблему развёртывания («все данные исчезли» вместо внятной ошибки). Нужен явный, предсказуемый контракт поведения при недоступности backend'а.
+Второй backend хранения — PostgreSQL (драйвер — [ADR-097](./adr-097-storage-provider-class.md)) — вносит **внешнюю зависимость**: в отличие от файлового default'а, БД может быть недоступна на старте (сеть, креды, схема, перегрузка). Голый отказ старта лишает администратора даже диагностики, а **тихий** уход на пустое файловое хранилище маскирует проблему развёртывания («все данные исчезли» вместо внятной ошибки). Нужен явный, предсказуемый контракт поведения при недоступности backend'а.
 
 ## Решение
 
@@ -63,4 +63,4 @@
 
 ## История
 
-- 2026-10-16 — ADR заведён: деградированный режим при отказе PostgreSQL, матрица fail-closed/деградации, read-only ADMIN-only, диагностика и скилл восстановления ([PROP-032](./prop-032-history-storage-postgresql.md), волна 5).
+- 2026-10-16 — ADR заведён: деградированный режим при отказе PostgreSQL, матрица fail-closed/деградации, read-only ADMIN-only, диагностика и скилл восстановления (волна 5 БД-backend'а).

@@ -5,7 +5,7 @@
 #        docker compose up -d
 #      Поднимается только `synth`; данные — в томе `synth-data`.
 #
-#   2) PostgreSQL как backend хранения (PROP-032, ADR-096/ADR-097):
+#   2) PostgreSQL как backend хранения (ADR-097, ADR-096/ADR-097):
 #      задайте в .env рядом с этим файлом (минимум — пароль БД):
 #        SYNTH_STORAGE_BACKEND=postgres
 #        SYNTH_POSTGRES_PASSWORD=<пароль>          # секрет, в git не коммитить
@@ -41,7 +41,7 @@ services:
       - SYNTH_PROVIDER_OLLAMA_URL=${SYNTH_PROVIDER_OLLAMA_URL:-http://ollama:11434}
       - SYNTH_PROVIDER_OLLAMA_MODEL=${SYNTH_PROVIDER_OLLAMA_MODEL:-qwen3.8:27b}
       - SYNTH_PROVIDER_OLLAMA_TYPE=ollama
-      # --- Слой хранения (PROP-032, ADR-096/ADR-097) ---
+      # --- Слой хранения (ADR-096, ADR-096/ADR-097) ---
       # backend: file (дефолт) | memory (данные НЕ сохраняются) | postgres.
       # При postgres поднимите профиль `postgres` (сервис ниже) — иначе хост
       # `postgres` не разрешится в DNS Docker-сети.
@@ -105,7 +105,7 @@ services:
     profiles:
       - ollama
 
-  # PostgreSQL — backend хранения (PROP-032). Профиль `postgres`: без него
+  # PostgreSQL — backend хранения (ADR-097). Профиль `postgres`: без него
   # `docker compose up` остаётся файловым (сервис и том не создаются).
   # Требуется SYNTH_POSTGRES_PASSWORD (см. шапку файла) — пароль попадает в
   # контейнер БД через env, в git/compose-файл не хардкодится.

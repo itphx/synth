@@ -14,7 +14,7 @@
 > (Event/Binding/Router, identity/claim-flow), [ADR-030](./adr-030-hooks-agent-events.md) (hooks),
 > [ADR-052](./adr-052-public-api-platform.md) (service-key/scopes/webhooks), [ADR-076](./adr-076-git-repo-registry-ssh.md)
 > (секреты at-rest), [PROP-085](./prop-085-multimodal-input.md) (вложения), [ADR-051](./adr-051-scheduler-pipelines.md)
-> (ориентир HA — leader election), [PROP-088](./prop-088-http-proxy.md) (egress/прокси).
+> (ориентир HA — leader election), [ADR-099](./adr-099-egress-tls-trust.md) (egress/прокси).
 
 ## 1. Решение
 
@@ -65,7 +65,7 @@ Gateway — **не** подвид Add-on'а и **не** Plugin: это само�
 - **Вложения.** Медиа из чатов → контракт вложений ([PROP-085](./prop-085-multimodal-input.md)).
 - **Дедуп/идемпотентность.** Дедуп входящих апдейтов и **дедуп отправки** ответов.
 - **Прокси/egress.** Bot API требует прокси (HTTP CONNECT / SOCKS5); OIDC-запросы идут напрямую;
-  общий egress-слой — [PROP-088](./prop-088-http-proxy.md).
+  общий egress-слой — [ADR-099](./adr-099-egress-tls-trust.md).
 - **Секреты at-rest.** Токены ботов и SSH/иные секреты — по модели [ADR-076](./adr-076-git-repo-registry-ssh.md).
 
 ## 4. Первый подтип — мессенджеры (Telegram)
@@ -266,7 +266,7 @@ tombstone-файл удалён. Наследование относительн
 ## 6. Открытые вопросы
 
 - **Совместное использование стейта HA-шлюза:** Redis vs RWX-PVC vs Postgres — чем синхронизировать
-  `offset`/`sent`/дедуп между репликами (зависит от [PROP-032](./prop-032-history-storage-postgresql.md)); как
+  `offset`/`sent`/дедуп между репликами (зависит от [ADR-097](./adr-097-storage-provider-class.md)); как
   сделать дедуп отправки атомарным между процессами.
 - **Реализация HA:** K8s Lease для шлюза (лидер-гейт поллинга, hot standby, failover).
 - **Судьба `strategy`** в чарте шлюза `synth-gateway-telegram` (сейчас не задан — риск при случайном
@@ -291,6 +291,6 @@ tombstone-файл удалён. Наследование относительн
 - [ADR-076](./adr-076-git-repo-registry-ssh.md) — хранение секретов ботов at-rest.
 - [PROP-085](./prop-085-multimodal-input.md) — вложения из чатов.
 - [ADR-051](./adr-051-scheduler-pipelines.md) — ориентир для HA: семы leader election и file-based реализации.
-- [PROP-088](./prop-088-http-proxy.md) — egress/прокси: Bot API требует прокси.
+- [ADR-099](./adr-099-egress-tls-trust.md) — egress/прокси: Bot API требует прокси.
 - [PROP-055](./prop-055-instance-exchange.md) — родственная тема мультитенантности (один бот → несколько инстансов/тенантов).
 - [PROP-081](./prop-081-hybrid-policy-leak-protection.md) — политики/утечки для мультитенантного размещения.

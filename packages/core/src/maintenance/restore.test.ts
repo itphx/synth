@@ -370,10 +370,10 @@ describe('restoreBackup — аудит-журнал (ADR-092)', () => {
   });
 });
 
-// PROP-032: архив, снятый при `storage.backend=postgres`, покрывает только
+// ADR-097: архив, снятый при `storage.backend=postgres`, покрывает только
 // файловый периметр — при восстановлении выводится предупреждение (данные БД
 // восстанавливаются через pg_restore/PITR, не этой командой).
-describe('restoreBackup — архив backend=postgres (PROP-032)', () => {
+describe('restoreBackup — архив backend=postgres (ADR-097)', () => {
   let tmpDir: string;
   let dataDir: string;
   let archive: string;

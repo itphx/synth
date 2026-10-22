@@ -65,7 +65,7 @@ export class DecisionModel implements MicroModel {
   readonly name = 'decision-classifier';
   private readonly _resolver: DecisionProviderResolver;
   private readonly _getConfig: () => DecisionConfigLike | undefined;
-  /** PROP-102: сборщик decision-роллапов (персистентные метрики ADR-084). */
+  /** ADR-102: сборщик decision-роллапов (персистентные метрики ADR-084). */
   private readonly _analytics?: AnalyticsRecorder;
 
   constructor(

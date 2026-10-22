@@ -10,7 +10,7 @@
  * порт исполнения. Детекция кэшируется на уровне модуля (одноразовый
  * пробинг на процесс), `resetRuntimeDepsCache()` — для тестов.
  *
- * PROP-077: пробинг идёт через порт исполнения (inline — то же `execFile`,
+ * ADR-077: пробинг идёт через порт исполнения (inline — то же `execFile`,
  * что и раньше; в split-режиме — исполнитель, у которого свой toolchain).
  */
 
@@ -81,7 +81,7 @@ export function isRuntimeDepAvailable(deps: RuntimeDeps | undefined, dep: Runtim
  * любая прочая ошибка (таймаут, ненулевой код выхода, EACCES) → true (fail-open,
  * не блокируем тул из-за неоднозначной ошибки).
  *
- * PROP-077: `execution` — порт исполнения; не задан — inline (прежнее поведение).
+ * ADR-077: `execution` — порт исполнения; не задан — inline (прежнее поведение).
  */
 export async function probeBinary(
   bin: string,

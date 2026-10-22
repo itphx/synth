@@ -48,7 +48,7 @@ function instance(
 }
 
 /**
- * Паспорт порта `PipelineRepository` (ADR-051/PROP-059, ADR-096).
+ * Паспорт порта `PipelineRepository` (ADR-051/ADR-100, ADR-096).
  *
  * Проверяется общий для всех backend'ов контракт:
  * - определения — upsert по `id` (`createdAt` не теряется, `updatedAt` обновляется),

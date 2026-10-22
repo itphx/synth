@@ -5,7 +5,7 @@
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D17, «Умная оптимизация контекста», Roadmap Фаза 3);
 > текущее состояние проверено по `packages/core/src/engine/context/optimizer.ts`.
-> **Связано:** [ADR-070](./adr-070-system-prompt-composer.md), [PROP-032](./prop-032-history-storage-postgresql.md),
+> **Связано:** [ADR-070](./adr-070-system-prompt-composer.md), [ADR-097](./adr-097-storage-provider-class.md),
 > [PROP-047](./prop-047-memory-gbrain.md), [ADR-026](./adr-026-subagent-context-modes.md),
 > [ADR-036](./adr-036-llm-gateway.md), [ADR-035](./adr-035-micro-model-first.md).
 
@@ -23,7 +23,7 @@
   отдельных флагов.
 - **Хранилище архива**: архивированное не теряется — уходит в память проекта
   ([PROP-047](./prop-047-memory-gbrain.md)) и/или в `context_snapshot`
-  ([PROP-032](./prop-032-history-storage-postgresql.md)), при необходимости подтягивается назад
+  ([ADR-097](./adr-097-storage-provider-class.md)), при необходимости подтягивается назад
   (recall).
 
 ## Контекст
@@ -56,7 +56,7 @@
 - Авто-суммаризации «по приближению к лимиту» с учётом приоритета — нет; порог задаётся вручную.
 - Приоритизации сообщений (по тегам, наличию tool-calls, рекурсии) — нет.
 - Профилей `aggressive`/`moderate`/`off` — нет.
-- `context_snapshot` ([PROP-032](./prop-032-history-storage-postgresql.md)) — не реализован.
+- `context_snapshot` ([ADR-097](./adr-097-storage-provider-class.md)) — не реализован.
 
 ## Детали
 
@@ -97,7 +97,7 @@
 ### 5. Хранилище архива
 
 Архив — не «мусорка»: это вход в память проекта ([PROP-047](./prop-047-memory-gbrain.md)) и/или
-`context_snapshot` ([PROP-032](./prop-032-history-storage-postgresql.md)) с возможностью recall.
+`context_snapshot` ([ADR-097](./adr-097-storage-provider-class.md)) с возможностью recall.
 Формально это отдельный вопрос: где хранить, как индексировать, как подтягивать обратно.
 
 ## Статус реализации в коде
@@ -108,7 +108,7 @@
 - `ContextOptimizer` содержит только `sliding_window` / `summarization` / `sticky_notes`
   (`optimizer.ts:96–101`), поля конфигурации — `slidingWindow*`, `summarization*`,
   `contextOptimization` (`packages/shared/src/types/index.ts:546`).
-- `context_snapshot` (PROP-032) и storage backbone памяти (PROP-047) отсутствуют.
+- `context_snapshot` (ADR-096) и storage backbone памяти (PROP-047) отсутствуют.
 - Метрики — только `DebugCollector` (общий debug), специализированных метрик оптимизации контекста нет.
 
 ## Открытые вопросы
@@ -124,7 +124,7 @@
 
 - [ADR-070](./adr-070-system-prompt-composer.md) «SystemPromptComposer» — тиры `stable/context/volatile`,
   prompt-cache; оптимизация контекста должна не ломать кэш.
-- [PROP-032](./prop-032-history-storage-postgresql.md) «Хранение истории на PostgreSQL» — `context_snapshot`
+- [ADR-097](./adr-097-storage-provider-class.md) «Хранение истории на PostgreSQL» — `context_snapshot`
   как место хранения/recall архива.
 - [PROP-047](./prop-047-memory-gbrain.md) «Память Synth (Gbrain + композиция)» — память как долгосрочный
   архив и источник recall.

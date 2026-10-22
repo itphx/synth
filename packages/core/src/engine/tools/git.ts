@@ -19,7 +19,7 @@ const MAX_GIT_OUTPUT = 20_000;
  * `env` (ADR-076 §T6) — дополнительные переменные окружения (например
  * `GIT_SSH_COMMAND`): объединяются с `process.env`, а не заменяют его.
  *
- * PROP-077: исполнение — через порт (`execution`). По умолчанию — inline:
+ * ADR-077: исполнение — через порт (`execution`). По умолчанию — inline:
  * те же argv без shell, `cwd`, таймаут 30 с, `maxBuffer` 10 МБ и окружение
  * `{...process.env, ...env}`.
  */
@@ -278,7 +278,7 @@ export const gitStatusTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
-    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
 
     try {
@@ -320,7 +320,7 @@ export const gitDiffTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; staged?: boolean; commit?: string };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
-    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
 
     // Значение от модели не должно стать флагом git (`--output=…`, `--ext-diff`).
@@ -379,7 +379,7 @@ export const gitLogTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; max_count?: number };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
-    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
 
     try {
@@ -427,7 +427,7 @@ export const gitCommitTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; message: string; allow_empty?: boolean };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
-    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
 
     // ADR-036: деобфускация в точке потребления — message может содержать ⟦SYNTH_SECRET_N⟧
@@ -476,7 +476,7 @@ export const gitPushTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; remote?: string; branch?: string };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
-    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
 
     // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
@@ -556,7 +556,7 @@ export const gitPullTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; remote?: string; branch?: string };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
-    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
 
     // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
@@ -633,7 +633,7 @@ export const gitCheckoutTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; target: string; create_branch?: boolean };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
-    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
 
     // ADR-036: деобфускация в точке потребления — target может содержать ⟦SYNTH_SECRET_N⟧
@@ -688,7 +688,7 @@ export const gitBranchListTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; all?: boolean; verbose?: boolean };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
-    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
 
     try {
@@ -756,7 +756,7 @@ export const gitShowTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; object?: string; stat?: boolean };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
-    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
 
     // Значение от модели не должно стать флагом git (`--output=…`, `--ext-diff`).
@@ -815,7 +815,7 @@ export const gitBlameTool: ToolDefinition = {
     const params = parsed.data as { path?: string; repo_path?: string; file: string; max_count?: number; line_range?: string };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
-    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
 
     try {
@@ -876,7 +876,7 @@ export const gitStashTool: ToolDefinition = {
     };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
-    // PROP-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
+    // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
     const action = params.action ?? 'push';
 

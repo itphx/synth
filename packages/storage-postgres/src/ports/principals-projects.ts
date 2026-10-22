@@ -1,5 +1,5 @@
 /**
- * Порт `projects` PostgreSQL-драйвера (PROP-032, волна 3b).
+ * Порт `projects` PostgreSQL-драйвера (ADR-097, волна 3b).
  *
  * Эталон семантики — `ProjectStore`/`MemoryProjectRepository`:
  *   - `create()` — синхронная чистая фабрика (id, `members`, 4 дефолтные колонки

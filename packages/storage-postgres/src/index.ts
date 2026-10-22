@@ -1,6 +1,6 @@
 /**
  * Публичная поверхность `@itphx/synth-storage-postgres` — опциональный драйвер
- * слоя хранения Synth на PostgreSQL (ADR-096/ADR-097, PROP-032).
+ * слоя хранения Synth на PostgreSQL (ADR-097).
  *
  * Импорт модуля не требует установленного `pg` — драйвер подключается лениво
  * внутри `createPostgresConnection`/`createPostgresStorage`.
@@ -32,7 +32,7 @@ export type {
   HeldPostgresClient,
 } from './pool.js';
 
-// PROP-032: БД-механизмы координации (advisory-локи) — мьютекс, лидер-выбор,
+// ADR-097: БД-механизмы координации (advisory-локи) — мьютекс, лидер-выбор,
 // фабрика `StorageLocks` для `StorageContext.locks`.
 export { PgMutex, PgLeader, createPostgresLocks, postgresLockKey, DEFAULT_LEADER_LOCK_NAME } from './locks.js';
 export type { PgMutexOptions, PgLeaderOptions } from './locks.js';

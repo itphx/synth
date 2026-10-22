@@ -15,7 +15,7 @@ import {
   rollupBucketKey,
 } from './analytics-rollup-helpers.js';
 
-/** Версия схемы файла роллапов аналитики — для будущей миграции (PROP-032). */
+/** Версия схемы файла роллапов аналитики — для будущей миграции (ADR-096). */
 export const ANALYTICS_ROLLUPS_SCHEMA_VERSION = 1;
 
 export interface AnalyticsRollupStoreConfig {
@@ -50,12 +50,12 @@ function isRollupBucket(value: unknown): value is AnalyticsRollupBucket {
 }
 
 /**
- * PROP-102: файловая реализация порта `AnalyticsRollupRepository` — пред-
+ * ADR-102: файловая реализация порта `AnalyticsRollupRepository` — пред-
  * агрегированные суточные роллапы аналитики.
  *
  * Хранится одним JSON-файлом `{dataDir}/analytics/rollups.json` (ADR-005,
  * атомарная запись tmp→rename): `{schemaVersion, buckets}`. Модель PG-ready
- * (PROP-032): плоские записи со стабильным `schemaVersion`. Вся логика ключа,
+ * (ADR-096): плоские записи со стабильным `schemaVersion`. Вся логика ключа,
  * инкремента и агрегации — в `analytics-rollup-helpers.ts` (общая с memory-
  * реализацией, чтобы та не тянула модули ФС).
  */

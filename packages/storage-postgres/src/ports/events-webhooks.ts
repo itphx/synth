@@ -1,5 +1,5 @@
 /**
- * PG-реализация портов исходящих webhooks (PROP-032, волна 3b):
+ * PG-реализация портов исходящих webhooks (ADR-097, волна 3b):
  * `webhooks`/`webhookDeliveries`.
  *
  * Семантика повторяет файловые реализации core (`WebhookStore`,

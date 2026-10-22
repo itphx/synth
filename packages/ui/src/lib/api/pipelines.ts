@@ -1,4 +1,4 @@
-// pipelines: домен API v2 (ADR-095) — пайплайны инстанса (ADR-051, PROP-059).
+// pipelines: домен API v2 (ADR-095) — пайплайны инстанса (ADR-051, ADR-100).
 //
 // Определения пайплайнов ставит установщик пакета расширения (ADR-086 §5);
 // этот контур только читает реестр и отдаёт экземпляры прогонов.
@@ -100,7 +100,7 @@ export interface PipelineInstancesListResponse {
 }
 
 export const pipelinesApi = {
-  // --- ADR-051/PROP-059: пайплайны инстанса ---
+  // --- ADR-051/ADR-100: пайплайны инстанса ---
   /** GET /pipelines — определения пайплайнов (ставит установщик пакета). */
   async getPipelines(): Promise<PipelineDefinition[]> {
     const response = await fetchJSON<PipelinesListResponse>(`${BASE_URL}/pipelines`)

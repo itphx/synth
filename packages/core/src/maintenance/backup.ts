@@ -37,7 +37,7 @@ export interface BackupManifest {
   withSecrets: boolean;
   withWorkspace: boolean;
   /**
-   * PROP-032: физический backend хранения на момент снятия. `postgres` —
+   * ADR-097: физический backend хранения на момент снятия. `postgres` —
    * архив каталога данных **не содержит** данных БД (сессии/проекты/настройки/
    * секреты-в-БД); для полного бэкапа нужен `pg_dump`/PITR.
    */
@@ -61,7 +61,7 @@ export interface CreateBackupOptions {
   /** Включить `workspaces/`. */
   withWorkspace?: boolean;
   /**
-   * PROP-032: физический backend хранения — пишется в манифест
+   * ADR-096: физический backend хранения — пишется в манифест
    * (`storageBackend`) и включает предупреждение о неполноте архива при
    * `postgres` (данные БД в архив каталога не попадают).
    */

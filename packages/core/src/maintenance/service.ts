@@ -59,7 +59,7 @@ export interface MaintenanceBackupInfo {
   withSecrets: boolean;
   /** Архив содержит `workspaces/`. */
   withWorkspace: boolean;
-  /** PROP-032: физический backend хранения в архиве (`postgres` — данных БД внутри нет). */
+  /** ADR-097: физический backend хранения в архиве (`postgres` — данных БД внутри нет). */
   storageBackend?: string;
   /** Число записей в манифесте. */
   entries: number;
@@ -119,7 +119,7 @@ export interface RestoreArchiveManifest {
   instanceVersion: string;
   withSecrets: boolean;
   withWorkspace: boolean;
-  /** PROP-032: backend архива (`postgres` — данные БД в архив не входят). */
+  /** ADR-097: backend архива (`postgres` — данные БД в архив не входят). */
   storageBackend?: string;
   entries: number;
   createdAt: string;
@@ -525,9 +525,9 @@ export async function getMaintenanceStatus(opts: {
   dataDir: string;
   secretKey?: string;
   env?: NodeJS.ProcessEnv;
-  /** PROP-032: физический backend хранения (по умолчанию `file`). */
+  /** ADR-096: физический backend хранения (по умолчанию `file`). */
   storageBackend?: StorageBackendKind;
-  /** PROP-032: read-only проба БД (postgres) для `doctor`. */
+  /** ADR-097: read-only проба БД (postgres) для `doctor`. */
   dbHealth?: () => Promise<StorageHealth>;
 }): Promise<MaintenanceStatus> {
   const dataDir = resolve(opts.dataDir);

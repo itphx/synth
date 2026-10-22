@@ -1268,7 +1268,7 @@ curl -X POST http://localhost:5000/api/v2/maintenance/restart \
 до нового `startedAt`, затем reload). Процедуры и правила безопасности —
 [docs/MAINTENANCE.md](./MAINTENANCE.md).
 
-### 5.32 Аналитика и отчётность — `/api/v2/analytics` (оба, PROP-102)
+### 5.32 Аналитика и отчётность — `/api/v2/analytics` (оба, ADR-102)
 
 Отчёты по **пред-агрегированным суточным роллапам** (единица — сутки UTC): сервис
 читает роллапы через доменный порт `AnalyticsRollupRepository` (ADR-096) и считает
@@ -1523,7 +1523,7 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 **Хранилище.** Черновики и версии — порт `ProjectPipelineRepository`
 (`{dataDir}/pipelines/{pipelines,versions}.json`), прогоны и журнал — `PipelineRunRepository`
 (`{dataDir}/pipelines/{runs.json,run-events.jsonl}`); при `storage.backend=postgres` — драйвер
-`@itphx/synth-storage-postgres` (PROP-032).
+`@itphx/synth-storage-postgres` (ADR-097).
 
 **UI.** Экран пайплайнов/прогонов и визуальный редактор **реализованы** (ADR-101 §5.35): вкладка
 «Пайплайны», страницы пайплайна и прогона, HITL-действия, редактор `@xyflow/react`.
@@ -1543,7 +1543,7 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 | SDK публичного API (ADR-052, этап III) | `packages/sdk/*` (`@itphx/synth-sdk`) |
 | Webhooks store/журнал/роуты/движок (ADR-052) | `packages/core/src/storage/webhook-store.ts`, `packages/core/src/storage/webhook-delivery-store.ts`, `packages/core/src/server/routes/webhooks.ts`, `packages/core/src/engine/webhooks/*` |
 | Admin-API обслуживания инстанса (ADR-091/ADR-092) | `packages/core/src/server/routes/maintenance.ts`, `packages/core/src/maintenance/*` |
-| Аналитика и отчёты (PROP-102) | `packages/core/src/server/routes/analytics.ts`, `packages/core/src/analytics/*`, `packages/shared/src/types/analytics.ts` |
+| Аналитика и отчёты (ADR-102) | `packages/core/src/server/routes/analytics.ts`, `packages/core/src/analytics/*`, `packages/shared/src/types/analytics.ts` |
 | Пакеты расширений и пайплайны (ADR-100) | `packages/core/src/server/routes/packs.ts`, `packages/core/src/server/routes/pipelines.ts`, `packages/core/src/engine/events/pipeline-tracker.ts`, `packages/core/src/storage/ports/pack-repository.ts`, `packages/core/src/storage/ports/pipeline-repository.ts`, `packages/shared/src/types/pack.ts`, `packages/shared/src/types/pipeline.ts` |
 | Пайплайны проекта, прогоны и шаблоны (ADR-101, Э6) | `packages/core/src/server/routes/pipeline-project-routes.ts`, `packages/core/src/engine/pipelines/*`, `packages/core/src/storage/ports/project-pipeline-repository.ts`, `packages/core/src/storage/ports/pipeline-run-repository.ts`, `packages/shared/src/types/pipeline-engine.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |

@@ -21,7 +21,7 @@ export interface ServiceKeyResolution {
  * (регистронезависимо) — инвариант любой реализации.
  *
  * `exportAll`/`importExisting` — служебная пара для переноса между backend'ами
- * (`synth storage migrate`, PROP-032): она работает с **готовым хешем**, plaintext
+ * (`synth storage migrate`, ADR-097): она работает с **готовым хешем**, plaintext
  * не участвует. HTTP-слой эти методы не использует.
  */
 export interface ServiceKeyRepository {
@@ -42,7 +42,7 @@ export interface ServiceKeyRepository {
    */
   exportAll(): Promise<ServiceApiKeyRecord[]>;
   /**
-   * Импорт готовой записи **как есть** (PROP-032): сохраняет `id`, `prefix`,
+   * Импорт готовой записи **как есть** (ADR-096): сохраняет `id`, `prefix`,
    * `hash` и метаданные; новый секрет не генерируется, plaintext не принимается.
    * Идемпотентно: если запись с таким `id`, меткой (регистронезависимо) или
    * хешем уже существует — возвращается она, запись не перезаписывается.

@@ -103,7 +103,7 @@ program
         port: parseInt(options.port, 10),
         apiKey: options.apiKey,
       },
-      // PROP-032: `deepMerge` дошлёт дефолты `storage` (postgres/degradedMode/…);
+      // ADR-098: `deepMerge` дошлёт дефолты `storage` (postgres/degradedMode/…);
       // тип требует полный StorageConfig — сужаем кастом (как для `remote` ниже).
       storage: { dataDir } as SynthConfig['storage'],
     };
@@ -187,7 +187,7 @@ program
       port,
       dataDir,
       apiKey,
-      // PROP-032: физический backend хранения (env > config.yaml > file) —
+      // ADR-096: физический backend хранения (env > config.yaml > file) —
       // паритет с core `main.ts`/`chat.ts` (иначе публичный `synth serve`
       // игнорировал бы `storage.backend`).
       storageBackend: resolveStorageBackend(synth, process.env),
@@ -531,7 +531,7 @@ projectCmd
     await ensureDataDir(dataDir);
 
     const { exportProject, buildStorageContext } = await import('@itphx/synth-core');
-    // PROP-032: one-shot путь — контекст закрываем явно (не полагаемся на `allowExitOnIdle`).
+    // ADR-096: one-shot путь — контекст закрываем явно (не полагаемся на `allowExitOnIdle`).
     const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home });
     let exitCode = 0;
     try {
@@ -580,7 +580,7 @@ projectCmd
     await ensureDataDir(dataDir);
 
     const { importProject, buildStorageContext } = await import('@itphx/synth-core');
-    // PROP-032: one-shot путь — контекст закрываем явно (не полагаемся на `allowExitOnIdle`).
+    // ADR-096: one-shot путь — контекст закрываем явно (не полагаемся на `allowExitOnIdle`).
     const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home });
     let exitCode = 0;
     try {
@@ -896,7 +896,7 @@ program
 
 program
   .command('storage')
-  .description('Управление физическим слоем хранения (PROP-032)')
+  .description('Управление физическим слоем хранения (ADR-096)')
   .addCommand(
     new Command('migrate')
       .description('Перенести данные инстанса между backend\'ами хранения (file ↔ postgres), идемпотентно')
@@ -917,7 +917,7 @@ program
         const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
         const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
 
-        // PROP-032: контексты собираются и закрываются внутри команды (`finally`).
+        // ADR-096: контексты собираются и закрываются внутри команды (`finally`).
         const { runStorageMigrateCommand } = await import('@itphx/synth-core');
         const code = await runStorageMigrateCommand({
           dataDir,
@@ -972,7 +972,7 @@ program
 
 program
   .command('analytics')
-  .description('Аналитика и отчётность инстанса (PROP-102)')
+  .description('Аналитика и отчётность инстанса (ADR-102)')
   .addCommand(
     new Command('rebuild')
       .description('Идемпотентно пересобрать суточные роллапы аналитики из истории (usage/activity)')
@@ -989,7 +989,7 @@ program
         const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
         const auditPath = synth.llmGateway.audit.logPath || join(dataDir, 'audit', 'llm-gateway.jsonl');
 
-        // PROP-032: контекст под выбранный backend, закрывается в `finally` (pool PG);
+        // ADR-097: контекст под выбранный backend, закрывается в `finally` (pool PG);
         // схема не мигрируется — это контур `synth migrate`.
         const { runAnalyticsRebuildCommand, buildStorageContext } = await import('@itphx/synth-core');
         const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home, postgresSchemaMode: 'skip' });
@@ -1025,7 +1025,7 @@ program
 
     const { runDoctorCommand, buildStorageContext } = await import('@itphx/synth-core');
     const backend = resolveStorageBackend(synth, process.env);
-    // PROP-032: при backend=postgres — read-only проба БД (`postgresSchemaMode:'skip'`).
+    // ADR-097: при backend=postgres — read-only проба БД (`postgresSchemaMode:'skip'`).
     let dbHealth: (() => Promise<{ ok: boolean; latencyMs?: number; schemaVersion?: number | null; expectedSchemaVersion?: number; error?: string }>) | undefined;
     if (backend === 'postgres') {
       dbHealth = async () => {

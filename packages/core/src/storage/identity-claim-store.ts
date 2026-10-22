@@ -4,7 +4,7 @@ import { randomInt } from 'node:crypto';
 import { AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-shared';
 import type { IdentityClaimRepository } from './ports/identity-claim-repository.js';
 
-/** ADR-089 (claim-flow): версия схемы файла claim-кодов (для будущей миграции PROP-032). */
+/** ADR-089 (claim-flow): версия схемы файла claim-кодов (для будущей миграции ADR-096). */
 export const IDENTITY_CLAIMS_SCHEMA_VERSION = 1;
 
 /**

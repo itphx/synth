@@ -1,5 +1,5 @@
 /**
- * PROP-032: БД-механизмы межпроцессной координации — мьютекс и лидер-выбор
+ * ADR-097: БД-механизмы межпроцессной координации — мьютекс и лидер-выбор
  * поверх session-level advisory-локов PostgreSQL.
  *
  * Заменяют файловые примитивы core (`FileMutex`/`FileLeader`) при
@@ -79,7 +79,7 @@ export interface PgMutexOptions {
 }
 
 /**
- * PROP-032: мьютекс на session-level `pg_advisory_lock` (выделенное соединение).
+ * ADR-097: мьютекс на session-level `pg_advisory_lock` (выделенное соединение).
  *
  * Семантика (паритет с `FileMutex`, ADR-051/ADR-089):
  * - захват с ретраями `pg_try_advisory_lock` до `timeoutMs`;
@@ -156,7 +156,7 @@ export interface PgLeaderOptions {
 }
 
 /**
- * PROP-032: лидер-выбор планировщика на удерживаемом session-level advisory-локе
+ * ADR-097: лидер-выбор планировщика на удерживаемом session-level advisory-локе
  * (ADR-051/ADR-089). Совместим с `SchedulerLeader`.
  *
  * - `acquire()` — одна попытка `pg_try_advisory_lock` на **постоянном** соединении:
@@ -237,7 +237,7 @@ export class PgLeader implements SchedulerLeader {
 }
 
 /**
- * PROP-032: примитивы координации PG, публикуемые в `StorageContext.locks`
+ * ADR-097: примитивы координации PG, публикуемые в `StorageContext.locks`
  * (`StorageLocks`) — composition root подставляет их вместо файловых.
  */
 export function createPostgresLocks(connection: PostgresConnection): StorageLocks {

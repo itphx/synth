@@ -161,7 +161,7 @@ describe('createBackendDeps: композиция и live-аксессоры', (
 });
 
 /**
- * ADR-096/PROP-032 + ADR-086 §5: при `storage.backend=postgres` стор агентов —
+ * ADR-096 + ADR-086 §5: при `storage.backend=postgres` стор агентов —
  * БД, а `createAgentRegistry` читает только файловый каталог `{dataDir}/agents`.
  * Агент, поставленный пакетом расширения, после рестарта процесса не попадал
  * в реестр → Router не резолвил `agentTemplate` → сессия не создавалась.

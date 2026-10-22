@@ -195,7 +195,7 @@
 - **Журнал доставок** (`GET /:id/deliveries`, тумблер «Журнал доставок» в карточке): статус (ok/failed), `attempts`, `responseStatus`, `error`, время; при закрытии — сброс состояния.
 - Типы `WebhookSubscription`/`WebhookSubscriptionCreated`/`WebhookDelivery`/`CreateWebhookSubscriptionInput`/`UpdateWebhookSubscriptionPatch` — из `@itphx/synth-shared` (type-only); значения `DEFAULT_WEBHOOK_EVENT_PATTERNS`/`isWebhookEventPattern` — из subpath `@itphx/synth-shared/types`.
 
-## Аддоны (ADR-086 §5, ADR-051/PROP-059)
+## Аддоны (ADR-086 §5, ADR-051/ADR-100)
 
 - **Админ-раздел «Аддоны»** (`components/settings/AddonsSettings.tsx`; категория `addons`, `labelKey: settings.category.addons`, icon `rocket`, `roles: ['ADMIN']` — за границей админ-блока, рядом с «Сервисными ключами»): реестр установленных **пакетов расширений** (`synth.pack`) и пайплайны инстанса. API — два доменных модуля: `lib/api/packs.ts` (`packsApi`: `getPacks`/`getPack`/`approvePack`/`uninstallPack` → `/api/v2/packs*`) и `lib/api/pipelines.ts` (`pipelinesApi`: `getPipelines`/`getPipelineInstances` → `/api/v2/pipelines*`); оба входят в barrel `synthApi`, DTO объявлены **локально** (core-типы в браузерный бандл не тащим).
 - **Правда чтения:** в core — `requireAuth`, в managed (backend) — **ADMIN** (реестр инстанса, как service-keys/webhooks). Одобрение и снятие — только ADMIN (guard сервера); UI прячет кнопки мутаций для не-ADMIN, 403 читается понятной ошибкой (`addons.forbidden`).
@@ -228,7 +228,7 @@
 - **Офлайн-семантика.** Восстановление не выполняется сразу: `POST /restore` планирует его, применение — при следующем старте инстанса (`appliesOnNextStart`); отложенный запрос показывается плашкой с архивом/датой и кнопкой «Отменить». Мутации защищены серверным `requirePermission('ADMIN')`; UI лишь прячет раздел.
 - **Форматтеры.** `formatBytes` (1024-основание) и `archiveBaseName` — экспортируемые (тестируемые) функции в компоненте.
 
-## Аналитика и отчёты (PROP-102)
+## Аналитика и отчёты (ADR-102)
 
 - **Модальное окно `AnalyticsModal`** (`components/analytics/`) — отдельный ленивый чанк: `App.tsx` держит `lazy(() => import('./components/analytics/AnalyticsModal'))`, монтирует узел при первом открытии (дальше живёт в DOM ради анимации), а в простое прогревает `import()` (как `SettingsModal`/`LogsModal`). Состояние — `isAnalyticsDialogOpen`/`setAnalyticsDialogOpen` в `useUIStore`. `DashboardPanel` **не** заменяется и не трогается.
 - **Входы** — кнопка в шапке приложения (`Header` → `AnalyticsButton`, единственный экземпляр: иконка `chart-line`, touch-таргет 40px) и пункт меню пользователя (`Header` → `QuickSettingsPopup`, «Аналитика и отчёты»); оба зовут `setAnalyticsDialogOpen(true)`. Роль в UI не проверяется — RBAC отдаёт сервер (403 → `analytics.forbidden`).

@@ -1,10 +1,10 @@
 /**
- * Пул соединений и низкоуровневые хелперы PostgreSQL-драйвера (PROP-032, волна 3a).
+ * Пул соединений и низкоуровневые хелперы PostgreSQL-драйвера (ADR-097, волна 3a).
  *
  * Модуль **не требует** установленного `pg` на импорте: `pg` подключается лениво,
  * внутри `createPostgresConnection`/при первом обращении к пулу (типы `pg` приходят
  * из `@types/pg` и стираются на этапе компиляции). Это требование формы поставки
- * (`pg` — `optionalDependencies`, ADR-097/PROP-032).
+ * (`pg` — `optionalDependencies`, ADR-097).
  *
  * Публичные примитивы следующей волны (портов):
  *   - `query(text, params)` — запрос через пул (с маппингом ошибок);
@@ -86,7 +86,7 @@ export interface PostgresPoolConfig {
   /** Таймаут простаивающего соединения, мс (дефолт 30000). */
   idleTimeoutMillis?: number;
   /**
-   * ADR-099/PROP-032: TLS-режим (`disable`/`require`/`verify-full`; `verify-ca` —
+   * ADR-099/ADR-097: TLS-режим (`disable`/`require`/`verify-full`; `verify-ca` —
    * алиас `verify-full`). Не задан — используется legacy `ssl`, иначе без TLS.
    */
   sslmode?: PostgresSslMode;
@@ -143,7 +143,7 @@ export interface PostgresExecutor {
 }
 
 /**
- * PROP-032: выделенное соединение, удерживаемое вызывающим (напр. для
+ * ADR-097: выделенное соединение, удерживаемое вызывающим (напр. для
  * session-level advisory-лока лидера). Пока оно не возвращено в пул, пул не
  * может его переиспользовать — держите не больше одного такого соединения на
  * процесс, если в этом нет необходимости (`poolMax` по умолчанию невелик).
@@ -171,7 +171,7 @@ export function advisoryLockKeyToBigInt(key: string): bigint {
 
 /** Собирает объект конфигурации `pg.Pool` из конфига драйвера. */
 export function buildPoolConfig(config: PostgresConnectionConfig, schema: string): Record<string, unknown> {
-  // ADR-099/PROP-032: TLS-параметры в DSN запрещены — `pg` накладывает DSN поверх
+  // ADR-099/ADR-097: TLS-параметры в DSN запрещены — `pg` накладывает DSN поверх
   // конфига (`Object.assign({}, config, parse(connectionString))`) и молча
   // перекрывает явные ssl-опции (вплоть до отключения TLS).
   assertNoDsnTlsParams(config.connectionString);
@@ -181,7 +181,7 @@ export function buildPoolConfig(config: PostgresConnectionConfig, schema: string
     max: pool?.max ?? DEFAULT_POOL_MAX,
     connectionTimeoutMillis: pool?.connectionTimeoutMillis ?? DEFAULT_CONNECTION_TIMEOUT_MS,
     idleTimeoutMillis: pool?.idleTimeoutMillis ?? DEFAULT_IDLE_TIMEOUT_MS,
-    // PROP-032: незанятые соединения не удерживают event loop — CLI-команды
+    // ADR-097: незанятые соединения не удерживают event loop — CLI-команды
     // (`synth migrate`/`doctor`/…) со `storage.backend=postgres` завершаются,
     // а не висят вечно из-за открытых idle-клиентов пула.
     allowExitOnIdle: true,
@@ -205,7 +205,7 @@ export function buildPoolConfig(config: PostgresConnectionConfig, schema: string
   const password = config.password ?? pool?.password;
   if (password) pgConfig.password = password;
 
-  // ADR-099/PROP-032: единый источник TLS — `sslmode` (`storage.postgres.sslmode`)
+  // ADR-099/ADR-097: единый источник TLS — `sslmode` (`storage.postgres.sslmode`)
   // + `security.tls` (CA/mTLS). Не задан — прежнее поведение (legacy `ssl` либо
   // дефолт `pg` — без TLS). Ошибки сборки (нет CA при `verify-full`) — fail-closed
   // доменной ошибкой конфигурации.
@@ -232,7 +232,7 @@ export function buildPoolConfig(config: PostgresConnectionConfig, schema: string
 }
 
 /**
- * ADR-099/PROP-032: fail-closed проверка DSN на TLS-параметры. DSN из
+ * ADR-099/ADR-097: fail-closed проверка DSN на TLS-параметры. DSN из
  * `storage.postgres.dsn` не должен нести `sslmode`/`sslrootcert`/`sslcert`/`sslkey`/…:
  * `pg` накладывает DSN поверх конфига и молча перекрывает `ssl`-объект, что
  * обнуляло бы политику CA. Задавайте TLS только в `storage.postgres.sslmode` +
@@ -313,7 +313,7 @@ export class PostgresConnection implements PostgresExecutor {
 
   /** Ленивое создание пула (первое обращение к БД). */
   async getPool(): Promise<PgPool> {
-    // PROP-032 (W5): после `end()` пул не пересоздаётся — иначе запрос после
+    // ADR-097 (W5): после `end()` пул не пересоздаётся — иначе запрос после
     // `close()` снова поднимал бы соединение и «закрытие» было бы фиктивным.
     if (this._closed) {
       throw new PostgresConnectionError(
@@ -402,7 +402,7 @@ export class PostgresConnection implements PostgresExecutor {
    * Захватить выделенное соединение, удерживаемое вызывающим (не возвращается в
    * пул до `release()`). Нужно для session-level advisory-локов: лок живёт ровно
    * столько, сколько открыто соединение, и снимается автоматически при его
-   * разрыве/закрытии (PROP-032).
+   * разрыве/закрытии (ADR-097).
    */
   async acquireHeldClient(): Promise<HeldPostgresClient> {
     const client = await this._acquire();

@@ -1,6 +1,6 @@
 /**
  * PG-реализация append-журнала событий, одноразовых claim-кодов и дедупа
- * (PROP-032, волна 3b): `eventJournal`/`identityClaims`/`dedup`.
+ * (ADR-097, волна 3b): `eventJournal`/`identityClaims`/`dedup`.
  *
  * Семантика повторяет файловые реализации core (`EventJournalStore`,
  * `IdentityClaimStore`, `FileDedupStore`): журнал — append-only (`seq bigserial`),

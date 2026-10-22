@@ -124,7 +124,7 @@ spec:
                   optional: {{ .Values.metrics.tokenOptional }}
             {{- end }}
             {{- end }}
-            {{- /* PROP-032: пароль БД — только env из Secret (в config.yaml не
+            {{- /* ADR-097: пароль БД — только env из Secret (в config.yaml не
                    попадает, инвариант 13). Пустой/отсутствующий ключ → core
                    попробует файл {dataDir}/secrets/postgres-password. */}}
             {{- if include "synth.storage.isPostgres" . }}

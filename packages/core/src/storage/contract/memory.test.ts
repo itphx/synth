@@ -74,7 +74,7 @@ import {
 } from '../memory/index.js';
 
 /**
- * Контрактный прогон in-memory реализаций портов (PROP-032, W2.2) — те же
+ * Контрактный прогон in-memory реализаций портов (ADR-096, W2.2) — те же
  * `describeXxxRepository`, что и `contract/file.test.ts`. Общие проверки обязаны
  * проходить на обеих реализациях; файловые детали (tmp-каталоги, права,
  * атомарность) в общие функции не входят.
@@ -180,7 +180,7 @@ describe('контрактные тесты in-memory реализаций по�
     repo: new MemoryDictionaryRepository(),
   }));
 
-  // PROP-032 (W2.4): конфигурационные словари (провайдеры/модели/агенты).
+  // ADR-096 (W2.4): конфигурационные словари (провайдеры/модели/агенты).
   describeDocumentRepository<{ name: string; enabled: boolean }>(
     'MemoryDocumentRepository → DocumentRepository',
     async () => ({ repo: new MemoryDocumentRepository<{ name: string; enabled: boolean }>() }),
@@ -207,7 +207,7 @@ describe('контрактные тесты in-memory реализаций по�
     repo: new MemoryDefaultsRepository(),
   }));
 
-  // ADR-051/PROP-059: пайплайны (определения + экземпляры).
+  // ADR-051/ADR-100: пайплайны (определения + экземпляры).
   describePipelineRepository('MemoryPipelineRepository → PipelineRepository', async () => ({
     repo: new MemoryPipelineRepository(),
   }));

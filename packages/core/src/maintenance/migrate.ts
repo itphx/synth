@@ -24,7 +24,7 @@ export interface MigrateCommandOptions {
   /** ADR-092: аудит-журнал обслуживания (best-effort). */
   audit?: MaintenanceAuditRepository;
   /**
-   * PROP-032: готовый контекст хранения (иначе собирается `file`-контекст) —
+   * ADR-096: готовый контекст хранения (иначе собирается `file`-контекст) —
    * чтобы миграции работали на выбранном backend (напр. `postgres`).
    */
   storage?: StorageContext;
@@ -48,7 +48,7 @@ export async function runMigrateCommand(opts: MigrateCommandOptions): Promise<nu
     return 1;
   }
 
-  // PROP-032: при backend=postgres мигрируется SQL-схема драйвера (свой контур
+  // ADR-097: при backend=postgres мигрируется SQL-схема драйвера (свой контур
   // версионирования, не `meta.json`); лок берёт `runMigrations` драйвера.
   if (opts.storage?.kind === 'postgres') {
     return _runPostgresMigrate(opts, log, error);
@@ -81,7 +81,7 @@ export async function runMigrateCommand(opts: MigrateCommandOptions): Promise<nu
   }
 
   // Дефолтные зависимости данных инстанса: сессии/проекты/маркеры миграций.
-  // PROP-032: готовый контекст (любой backend) либо дефолтный `file`-контекст.
+  // ADR-096: готовый контекст (любой backend) либо дефолтный `file`-контекст.
   const storage = opts.storage ?? (await createStorageContextAsync('file', { dataDir }));
   const deps = {
     settingsStore: storage.settings,
@@ -126,7 +126,7 @@ export async function runMigrateCommand(opts: MigrateCommandOptions): Promise<nu
 }
 
 /**
- * Миграции SQL-схемы драйвера при `storage.backend=postgres` (PROP-032).
+ * Миграции SQL-схемы драйвера при `storage.backend=postgres` (ADR-097).
  * План — `--dry-run`; применение — `--yes`; контур `meta.json` не трогается.
  * `runMigrations` драйвера берёт advisory-лок сам (не дублируем).
  */

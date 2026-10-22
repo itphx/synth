@@ -102,7 +102,7 @@ export interface BackendAppHandle {
   stopEphemeralSweeper: () => void;
   /** ADR-089: остановка периодической retention-очистки журнала событий. */
   stopEventJournalPruner: () => void;
-  /** PROP-102: остановка retention-очистки суточных роллапов аналитики. */
+  /** ADR-102: остановка retention-очистки суточных роллапов аналитики. */
   stopAnalyticsRollupPruner: () => void;
   /** ADR-052 (этап II): реестр подписок webhooks (для тестов/диагностики). */
   webhookStore: WebhookRepository;
@@ -150,7 +150,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Конфигурация
     const backendConfig = await loadBackendConfig({ configPath: opts.configPath });
 
-    // PROP-077: топология исполнения — параметр запуска (инвариант 24). Fail-closed:
+    // ADR-077: топология исполнения — параметр запуска (инвариант 24). Fail-closed:
     // неверный `mode`/`failMode` — ошибка; `remote` без адресов/пакета исполнителя/
     // читаемого токена — старт прерывается, а не «молча уходит в inline».
     const execution = resolveExecutionConfig(backendConfig.synth, process.env);
@@ -163,7 +163,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     app.use(logger());
 
-    // PROP-032 (W2.4): единый контекст хранения — собирается до `auth`, реестр
+    // ADR-096 (W2.4): единый контекст хранения — собирается до `auth`, реестр
     // service-key (`storage.serviceKeys`) нужен резолверу `synth_svc_…`; тот же
     // инстанс переиспользует `createBackendDeps` (в т.ч. `mcpRegistry`, который
     // деп сидирует instance-серверами).
@@ -187,7 +187,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     // CORS настраивается после загрузки конфига
 
-    // Health (без auth). PROP-032 (W5): при деградации хранилища status='degraded'
+    // Health (без auth). ADR-098 (W5): при деградации хранилища status='degraded'
     // + блок storage (аддитивно к {status, version, time}). `degradedInfo`
     // заполняется после сборки контекста хранения ниже (до первого запроса).
     // ADR-094: `/ready` — readiness (200 и при деградации, 503 — только не готов).
@@ -226,7 +226,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       credentials: true,
     }));
 
-    // PROP-032 (W5): состояние деградации — для health/guard/диагностики
+    // ADR-098 (W5): состояние деградации — для health/guard/диагностики
     // (уже проставлено при сборке контекста выше).
     // ADR-052 (этап I): реестр service-key — резолвер ключа `synth_svc_…`
     // нужен аутентификации (паритет с core `server/app.ts`).
@@ -293,7 +293,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Auth routes (после profilesStore)
     app.route('/auth', createAuthRoutes(auth, backendConfig.auth, deps.profilesStore, deps.dataDir, deps.defaultsStore));
 
-    // PROP-032 (W5): деградированное хранилище — managed: доступ только роли
+    // ADR-098 (W5): деградированное хранилище — managed: доступ только роли
     // ADMIN (остальным 503 STORAGE_DEGRADED), мутации — 503 STORAGE_DEGRADED_READONLY
     // (кроме ремонтных операций maintenance). Guard — после auth-роутов (логин/health
     // не блокируются) и до admin-роутов.
@@ -306,7 +306,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       mutationAllowlist: ['/api/v2/maintenance'],
     }));
 
-    // PROP-032 (W5): диагностика деградации (проверка соединения + «нужен рестарт»).
+    // ADR-098 (W5): диагностика деградации (проверка соединения + «нужен рестарт»).
     app.route('/', createStorageStatusRoutes({ getDegraded: () => degradedInfo }));
 
     // Роуты API v2 (порядок монтирования — как раньше, см. mount-routes.ts).

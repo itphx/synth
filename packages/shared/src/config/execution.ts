@@ -1,11 +1,11 @@
 /**
- * PROP-077: резолвер секции `execution` — топология исполнения.
+ * ADR-077: резолвер секции `execution` — топология исполнения.
  *
  * Секция — **параметр запуска** (не runtime-настройка): смена `mode` — только
  * рестартом процесса (инвариант 24). Приоритет (ADR-023):
  * **CLI-флаг > env > config.yaml > дефолт**.
  *
- * Env-имена (ровно эти — как зафиксировано в PROP-077):
+ * Env-имена (ровно эти — как зафиксировано в ADR-077):
  * `SYNTH_EXECUTION_MODE`, `SYNTH_EXECUTION_REMOTE_URL`, `SYNTH_EXECUTION_TOKEN`,
  * `SYNTH_EXECUTION_TIMEOUT_MS`, `SYNTH_EXECUTION_CONCURRENCY`,
  * `SYNTH_EXECUTION_FAIL_MODE`.
@@ -23,7 +23,7 @@ import {
   type ExecutionMode,
 } from './types.js';
 
-/** Env-имена секции `execution` (PROP-077). */
+/** Env-имена секции `execution` (ADR-077). */
 export const EXECUTION_ENV = {
   mode: 'SYNTH_EXECUTION_MODE',
   remoteUrl: 'SYNTH_EXECUTION_REMOTE_URL',
@@ -144,7 +144,7 @@ export function resolveExecutionMode(
 }
 
 /**
- * Резолвит секцию `execution` целиком (PROP-077).
+ * Резолвит секцию `execution` целиком (ADR-077).
  *
  * Приоритет (ADR-023): CLI-флаг (`--execution-mode`) > env `SYNTH_EXECUTION_*` >
  * `config.execution.*` > дефолты. Нечисловые env-значения — warn и фолбэк на

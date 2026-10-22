@@ -53,7 +53,7 @@ export interface SessionRoutesDeps {
    */
   requestSessionService?: RequestSessionService;
   /**
-   * PROP-102: сборщик аналитики — меры `activity` (`aborts`) из роутов сессий.
+   * ADR-102: сборщик аналитики — меры `activity` (`aborts`) из роутов сессий.
    * Не задан — запись не выполняется.
    */
   analytics?: AnalyticsRecorder;
@@ -228,7 +228,7 @@ export function createSessionRoutes(
 ): Hono {
   const app = new Hono();
   const { sessionManager, eventBus, queueManager, processMessage, orchestrator } = deps;
-  /** PROP-102: сборщик `activity` (aborts) — не задан → no-op. */
+  /** ADR-102: сборщик `activity` (aborts) — не задан → no-op. */
   const analytics = deps.analytics;
   const agentRegistry = orchestrator.agentRegistry;
 
@@ -910,7 +910,7 @@ export function createSessionRoutes(
         await sessionManager.saveSession(s);
       });
     }
-    // PROP-102: мера `activity.aborts` — на осях `user`/`project` сессии.
+    // ADR-102: мера `activity.aborts` — на осях `user`/`project` сессии.
     void analytics?.recordActivity('aborts', sessionAxes(session));
     return c.json({ status: 'aborted' });
   });

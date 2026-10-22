@@ -360,7 +360,7 @@ export function resolveTlsTrust(
   return trust;
 }
 
-// ─── PostgreSQL: TLS-опции соединения (ADR-099 × PROP-032) ─────────────────────
+// ─── PostgreSQL: TLS-опции соединения (ADR-099 × ADR-097) ─────────────────────
 
 /**
  * Эффективный TLS-режим PostgreSQL (`storage.postgres.sslmode`).

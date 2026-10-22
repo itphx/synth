@@ -1,5 +1,5 @@
 /**
- * PROP-102 §4/§7: HTTP-фабрика отчётов аналитики — **только чтение**.
+ * ADR-102 §4/§7: HTTP-фабрика отчётов аналитики — **только чтение**.
  *
  * Единая реализация для core (standalone) и backend (managed): RBAC/скоуп
  * задаются через `opts` (`resolveElevated`/`resolveAuditor`/`resolveUserId`),
@@ -10,7 +10,7 @@
  * - `GET /usage|/activity|/decision|/prompt?from&to&groupBy=day,user,…&userId&projectId&model&agent`;
  * - `GET /export?report=usage|activity|decision|prompt&format=csv|json&…`.
  *
- * Скоуп (PROP-102 §7): `ADMIN`/`LEAD` — сквозной обзор; `AUDITOR` — чтение всех
+ * Скоуп (ADR-102 §7): `ADMIN`/`LEAD` — сквозной обзор; `AUDITOR` — чтение всех
  * отчётов; обычный пользователь — принудительный фильтр оси `user` по себе, а
  * для сквозных отчётов (`decision`, `summary`) — 403 `FORBIDDEN`.
  */
@@ -86,7 +86,7 @@ function parseGroupBy(raw: string | undefined): AnalyticsDimension[] | undefined
 }
 
 /**
- * PROP-102: фабрика роутов отчётов аналитики (только чтение). Денорализованный
+ * ADR-102: фабрика роутов отчётов аналитики (только чтение). Денорализованный
  * фильтр оси `user` для обычного пользователя применяется здесь — обработчик не
  * доверяет query-параметру `userId`.
  */
@@ -169,7 +169,7 @@ export function createAnalyticsRoutes(
     });
   }
 
-  // GET /api/v2/analytics/export — выгрузка отчёта CSV/JSON (только данные, PROP-102 §6).
+  // GET /api/v2/analytics/export — выгрузка отчёта CSV/JSON (только данные, ADR-102 §6).
   app.get('/export', readGuard, async (c) => {
     const reportRaw = queryParam(c, 'report');
     const formatRaw = queryParam(c, 'format');

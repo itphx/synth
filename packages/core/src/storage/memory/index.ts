@@ -1,5 +1,5 @@
 /**
- * Barrel in-memory реализаций портов хранения (PROP-032, шаг W2.2).
+ * Barrel in-memory реализаций портов хранения (ADR-096, шаг W2.2).
  *
  * Второй backend за единым слоем хранения (после файлового): чистая реализация
  * без модулей ФС (`fs`/`path`), состояние — в памяти процесса. Используется в
@@ -41,7 +41,7 @@ export {
   MemoryContextFileRepository,
   MemoryBlobStore,
   MemorySSHKeyRepository,
-  // ADR-051/PROP-059 + ADR-086 §5: пайплайны и реестр установок пакетов.
+  // ADR-051/ADR-100 + ADR-086 §5: пайплайны и реестр установок пакетов.
   MemoryPipelineRepository,
   MemoryPackRepository,
 } from './content.js';
@@ -49,5 +49,5 @@ export {
 // ADR-101 (Pipeline Engine): спецификации пайплайнов, прогоны и журнал выполнения.
 export { MemoryProjectPipelineRepository, MemoryPipelineRunRepository } from './pipelines.js';
 
-// PROP-032 (W2.4): конфигурационные словари (провайдеры/модели/агенты) — общий generic-порт.
+// ADR-096 (W2.4): конфигурационные словари (провайдеры/модели/агенты) — общий generic-порт.
 export { MemoryDocumentRepository } from './document-repository.js';

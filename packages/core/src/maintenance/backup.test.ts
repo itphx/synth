@@ -220,7 +220,7 @@ describe('createBackup', () => {
     await expect(stat(out)).resolves.toBeTruthy();
   });
 
-  // PROP-032: манифест фиксирует backend хранения, а при `postgres` печатается
+  // ADR-097: манифест фиксирует backend хранения, а при `postgres` печатается
   // предупреждение о неполноте архива каталога (данных БД в нём нет).
   it('backend=postgres: storageBackend в манифесте + предупреждение про pg_dump', async () => {
     const out = join(tmpDir, 'pg.tar.gz');

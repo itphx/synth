@@ -1,5 +1,5 @@
 /**
- * Порт `profiles` PostgreSQL-драйвера (PROP-032, волна 3b).
+ * Порт `profiles` PostgreSQL-драйвера (ADR-097, волна 3b).
  *
  * Эталон семантики — `FileProfileStore`/`MemoryProfileRepository`:
  *   - `saveProfile` проставляет `updatedAt` при записи;

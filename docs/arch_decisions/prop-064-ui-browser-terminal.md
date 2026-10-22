@@ -7,7 +7,7 @@
 > идея пользователя 2026-09-16 + `Фичи.md` (Terminal)); состояние проверено по `packages/ui/` и `packages/core/`.
 > **Связано:** [ADR-019](./adr-019-react-spa.md), [ADR-024](./adr-024-eventhub-transport.md),
 > [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-029](./adr-029-granular-permissions.md),
-> [ADR-036](./adr-036-llm-gateway.md), [PROP-047](./prop-047-memory-gbrain.md), [PROP-088](./prop-088-http-proxy.md).
+> [ADR-036](./adr-036-llm-gateway.md), [PROP-047](./prop-047-memory-gbrain.md), [ADR-099](./adr-099-egress-tls-trust.md).
 
 **Решение:** добавить в UI две встроенные панели, синхронизированные с агентом и проектом:
 
@@ -64,7 +64,7 @@
 - **Варианты реализации:** webview (Tauri/Electron — сейчас UI — браузерный SPA,
   [ADR-019](./adr-019-react-spa.md)), `iframe`, либо **серверный прокси** (страница тянется сервером,
   при необходимости с обезличиванием; согласуется с сетевым слоем
-  [PROP-088](./prop-088-http-proxy.md) и guard'ом [ADR-036](./adr-036-llm-gateway.md)).
+  [ADR-099](./adr-099-egress-tls-trust.md) и guard'ом [ADR-036](./adr-036-llm-gateway.md)).
 - Для SPA-сборки без нативного хоста `iframe` ограничен `X-Frame-Options`/CSP многих сайтов →
   реалистичен серверный прокси.
 - **Синхронизация с агентом**: агент открывает страницу/вкладку (например, документацию из памяти
@@ -98,7 +98,7 @@
 - Как согласуется с `execute_shell`/`web_fetch` — один движок или разные?
 - Терминальные/браузерные события — расширение существующих событий или новые типы в `EventHub`?
 - Нужен ли браузерный прокси со стриппингом/обезличиванием ([ADR-036](./adr-036-llm-gateway.md),
-  [PROP-088](./prop-088-http-proxy.md))?
+  [ADR-099](./adr-099-egress-tls-trust.md))?
 - Какие фронтенд-зависимости добавляем (xterm.js и т. п.) — согласовать.
 - Поведение на телефоне/планшете ([ADR-044](./adr-044-mobile-adaptive-ui-pwa.md)): терминал на мягкой
   клавиатуре, браузер в дровере?
@@ -115,7 +115,7 @@
 - [PROP-047](./prop-047-memory-gbrain.md) «Память Synth» — «открыть в браузере» для памяти/документации.
 - [PROP-065](./prop-065-ui-docs-plan-todo.md) «Просмотр документации, планов и ToDo в UI» — соседний
   UI-viewer; браузер и docs-viewer пересекаются по рендеру документов.
-- [PROP-088](./prop-088-http-proxy.md) «Работа через HTTP-прокси» — общий сетевой egress для браузерного
+- [ADR-099](./adr-099-egress-tls-trust.md) «Единый egress-слой» — общий сетевой egress для браузерного
   прокси.
 - [ADR-075](./adr-075-project-workspace-provisioning.md) «Окружение проекта» — каталог терминала
   (`project.workspace`).

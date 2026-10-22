@@ -1,5 +1,5 @@
 /**
- * In-memory реализации портов исходящих webhooks (PROP-032, шаг W2.2).
+ * In-memory реализации портов исходящих webhooks (ADR-096, шаг W2.2).
  *
  * Чистая реализация без модулей ФС (`fs`/`path`). Семантика повторяет файловую
  * (`WebhookStore`/`WebhookDeliveryStore`): уникальность `label`

@@ -326,7 +326,7 @@ idMap}` (маппинг старый id → новый id). Лимит загр�
 ## PostgreSQL как backend хранения (`storage.backend=postgres`)
 
 **Цель:** эксплуатировать инстанс с БД-backend'ом ([ADR-096](./arch_decisions/adr-096-storage-layer.md),
-[ADR-097](./arch_decisions/adr-097-storage-provider-class.md), [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md));
+[ADR-097](./arch_decisions/adr-097-storage-provider-class.md), [ADR-097](./arch_decisions/adr-097-storage-provider-class.md));
 ожидаемый результат — `synth doctor` без `fail` по `db-connection`/`db-schema`, сервис отвечает на `GET /health`
 со `status: healthy`. Конфиг — [CONFIGURATION.md](./CONFIGURATION.md) («PostgreSQL»); драйвер и схема БД —
 `packages/storage-postgres/AGENTS.md`.
@@ -993,7 +993,7 @@ storage:
 
 ### Service-key: перенос и легаси-восстановление
 
-**Исправлено в коде (PROP-032).** `synth storage migrate` переносит `serviceKeys` и
+**Исправлено в коде (ADR-097).** `synth storage migrate` переносит `serviceKeys` и
 `eventApiKeys` **как есть** через `importExisting`: сохраняются `id`, `prefix` и at-rest
 sha256-хеш (`hash`). Секрет не перевыпускается, plaintext не нужен — токены, выданные до
 миграции, продолжают работать. Предупреждение «секреты перевыпущены» и note про перевыпуск
@@ -1368,9 +1368,9 @@ curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
 
 ## История
 
-- 2026-10-18 — добавлен runbook «Аналитика: пересборка роллапов» (`synth analytics rebuild`, PROP-102): назначение, флаги (`--from`/`--dry-run`/`--yes`/`--json`), отказ без флагов, идемпотентность через `set`, источники и политика «сообщения — истина, аудит — дополнение», диагностика `computeSessionStats`, ограничения (`decision` не пересобирается, `prompt` — проекция на чтении, аудита в `maintenance.jsonl` нет).
+- 2026-10-18 — добавлен runbook «Аналитика: пересборка роллапов» (`synth analytics rebuild`, ADR-102): назначение, флаги (`--from`/`--dry-run`/`--yes`/`--json`), отказ без флагов, идемпотентность через `set`, источники и политика «сообщения — истина, аудит — дополнение», диагностика `computeSessionStats`, ограничения (`decision` не пересобирается, `prompt` — проекция на чтении, аудита в `maintenance.jsonl` нет).
 - 2026-10-16 — краткое описание `synth storage migrate` развёрнуто в runbook «Перенос данных между backend'ами»: цель, предусловия (env-адресация цели, запрет `SYNTH_STORAGE_BACKEND` при вызове, останов сервиса), порядок (бэкап → dry-run → apply), независимая сверка (`psql`/`doctor`), закрепление режима, верификация после старта (в т.ч. проверка записи в БД), откат, ограничения/fail-closed и предупреждение о `storage.degradedMode`; проверено на живом dev-переносе (2026-10-16).
-- 2026-10-16 — добавлен раздел «PostgreSQL как backend хранения» ([PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md)/[ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)): схема драйвера и `synth migrate`, db-проверки `doctor`, бэкап/restore (данных БД в архиве нет — `pg_dump`/PITR), `uninstall --purge-db`, деградированный режим и скилл `synth-storage-recovery`, перенос данных `synth storage migrate` с честными ограничениями.
+- 2026-10-16 — добавлен раздел «PostgreSQL как backend хранения» ([ADR-097](./arch_decisions/adr-097-storage-provider-class.md)/[ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)): схема драйвера и `synth migrate`, db-проверки `doctor`, бэкап/restore (данных БД в архиве нет — `pg_dump`/PITR), `uninstall --purge-db`, деградированный режим и скилл `synth-storage-recovery`, перенос данных `synth storage migrate` с честными ограничениями.
 - 2026-10-16 — runbook создан (первичная настройка, диагностика, бэкап/восстановление, миграции, удаление, обновление/откат).
 - 2026-10-16 — добавлены разделы «Обслуживание из UI» (Настройки → «Обслуживание», ADMIN) и «Обслуживание по API» (admin-API `/api/v2/maintenance/*`, [API_V2.md](./API_V2.md) §5.31); восстановление — офлайн (`appliesOnNextStart`, отложенный запрос применяется при старте).
 - 2026-10-16 — добавлен журнал обслуживания (`GET/DELETE /api/v2/maintenance/audit`, ADR-092): история операций жизненного цикла, видна в разделе «Обслуживание» и по API.

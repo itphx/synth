@@ -68,7 +68,7 @@ function measureColumn(key: string, derived: boolean): AnalyticsColumn {
 }
 
 /**
- * Печатная версия отчёта (браузерная печать → PDF, PROP-102 §5). Рендерится в
+ * Печатная версия отчёта (браузерная печать → PDF, ADR-102 §5). Рендерится в
  * портал `document.body`; вне `@media print` скрыта (`analytics-print.css`).
  */
 export function AnalyticsPrintReport({ snapshot }: { snapshot: AnalyticsPrintSnapshot }) {

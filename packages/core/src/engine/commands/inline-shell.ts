@@ -9,7 +9,7 @@ import type { ExecutionError, ExecutionPort } from '../../execution/ports/index.
  * зеркалят тул `execute_shell`: `sh -c`, timeout 30 c, maxBuffer 10 MB,
  * `signal` сессии для «Стоп».
  *
- * PROP-077: исполнение — через порт (`execution`); по умолчанию — inline с
+ * ADR-077: исполнение — через порт (`execution`); по умолчанию — inline с
  * прежними параметрами.
  */
 export const INLINE_SHELL_TIMEOUT_MS = 30_000;
@@ -28,7 +28,7 @@ export interface InlineShellOptions {
   workingDir: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
-  /** Порт исполнения (PROP-077). Не задан — inline-реализация. */
+  /** Порт исполнения (ADR-077). Не задан — inline-реализация. */
   execution?: ExecutionPort;
 }
 
