@@ -39,6 +39,7 @@ import type {
   JobRepository,
   MaintenanceAuditRepository,
   PluginAuditRepository,
+  PluginLockRepository,
   SecurityAuditRepository,
   EgressRequestLogRepository,
   McpRegistryRepository,
@@ -88,6 +89,7 @@ import { ScheduleStore } from './schedule-store.js';
 import { JobStore } from './job-store.js';
 import { MaintenanceAuditStore } from './maintenance-audit-store.js';
 import { FilePluginAuditStore } from './file-plugin-audit-store.js';
+import { FilePluginLockStore, defaultPluginLockPath } from './file-plugin-lock-store.js';
 import { SecurityAuditStore } from './security-audit-store.js';
 import { applyStartupProxyConfig } from '../security/proxy-startup.js';
 import { EgressRequestLogStore } from './egress-request-log-store.js';
@@ -122,6 +124,7 @@ import {
   MemoryJobRepository,
   MemoryMaintenanceAuditRepository,
   MemoryPluginAuditRepository,
+  MemoryPluginLockRepository,
   MemorySecurityAuditRepository,
   MemoryEgressRequestLogRepository,
   MemoryMcpRegistryRepository,
@@ -309,6 +312,12 @@ export interface StorageContext {
    * политики».
    */
   pluginAudit: PluginAuditRepository;
+  /**
+   * PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов (`plugins.lock.json`) —
+   * **источник истины** для update/uninstall (провенанс: источник, pin,
+   * content-hash, доверие, вердикт скана).
+   */
+  pluginLock: PluginLockRepository;
   /** Аудит изменений egress/security-политик (append-only). */
   securityAudit: SecurityAuditRepository;
   /** Журнал внешних запросов (append-only, retention-прунер). */
@@ -376,6 +385,12 @@ export interface StorageContextConfig {
   degradedMode?: 'fallback-file' | 'halt';
   /** ADR-098 (задел W5): каталог файлового фоллбека при деградации. */
   fallbackDir?: string;
+  /**
+   * PROP-090 §5: путь к lock-файлу плагинов. По умолчанию —
+   * `{dataDir}/plugin/plugins.lock.json`; при home-модели (ADR-079) —
+   * `<home>/plugin/plugins.lock.json` (путь задаёт composition root).
+   */
+  pluginLockPath?: string;
 }
 
 /**
@@ -536,6 +551,12 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     maintenanceAudit: new MaintenanceAuditStore({ dataDir }),
     // PROP-090 §9: журнал аудита плагинов (`audit/plugins.jsonl`).
     pluginAudit: new FilePluginAuditStore({ dataDir }),
+    // PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов. Путь задаётся
+    // раскладкой (`<home>/plugin/plugins.lock.json` при home-модели), без
+    // home — `{dataDir}/plugin/plugins.lock.json`.
+    pluginLock: new FilePluginLockStore({
+      path: config.pluginLockPath ?? defaultPluginLockPath(dataDir),
+    }),
     securityAudit: new SecurityAuditStore({ dataDir }),
     egressRequests: new EgressRequestLogStore({ dataDir }),
     analyticsRollups: new AnalyticsRollupStore({ dataDir }),
@@ -598,6 +619,7 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     jobs: new MemoryJobRepository(),
     maintenanceAudit: new MemoryMaintenanceAuditRepository(),
     pluginAudit: new MemoryPluginAuditRepository(),
+    pluginLock: new MemoryPluginLockRepository(),
     securityAudit: new MemorySecurityAuditRepository(),
     egressRequests: new MemoryEgressRequestLogRepository(),
     analyticsRollups: new MemoryAnalyticsRollupRepository(),

@@ -202,6 +202,117 @@ describe('PluginHost: шаг trust/scan', () => {
   });
 });
 
+describe('PluginHost: Ф2 — скан и install-policy', () => {
+  it('вердикт dangerous → plugin.scan_rejected', async () => {
+    const { host, audit } = makeHost({
+      scan: async () => ({ verdict: 'dangerous', performed: true, findings: [] }),
+    });
+    const result = await host.activate(descriptor());
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.scan_rejected');
+    expect(result.step).toBe('trust');
+
+    const scans = (await audit.list()).filter((entry) => entry.action === 'scan');
+    expect(scans).toHaveLength(1);
+    expect(scans[0]!.scanVerdict).toBe('dangerous');
+    expect(scans[0]!.outcome).toBe('rejected');
+    expect(scans[0]!.reason).toBe('plugin.scan_rejected');
+  });
+
+  it('вердикт caution → plugin.approval_required (не scan_rejected)', async () => {
+    const { host, audit } = makeHost({
+      scan: async () => ({ verdict: 'caution', performed: true, findings: [] }),
+    });
+    const result = await host.activate(descriptor());
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.approval_required');
+    expect(result.reason).not.toBe('plugin.scan_rejected');
+
+    const scans = (await audit.list()).filter((entry) => entry.action === 'scan');
+    expect(scans[0]!.scanVerdict).toBe('caution');
+    expect(scans[0]!.reason).toBe('plugin.approval_required');
+  });
+
+  it('plugins.scan=disabled → активация проходит, в аудите scanPerformed=false', async () => {
+    const { host, audit } = makeHost({ config: config({ scan: 'disabled' }) });
+    const result = await host.activate(descriptor());
+    expect(result.step).toBe('import');
+
+    const scans = (await audit.list()).filter((entry) => entry.action === 'scan');
+    expect(scans).toHaveLength(1);
+    expect(scans[0]!.scanPerformed).toBe(false);
+    expect(scans[0]!.scanVerdict).toBe('safe');
+    expect(scans[0]!.outcome).toBe('ok');
+  });
+
+  it('plugins.scan=disabled → сканирование не выполняется вовсе', async () => {
+    const scan = vi.fn(async () => ({ verdict: 'dangerous' as const }));
+    const { host } = makeHost({ config: config({ scan: 'disabled' }), scan });
+    const result = await host.activate(descriptor());
+    expect(result.step).toBe('import');
+    expect(scan).not.toHaveBeenCalled();
+  });
+
+  it('trust-floor срабатывает ДО install-policy (dangerous не перебивает доверие)', async () => {
+    const { host, audit } = makeHost({
+      scan: async () => ({ verdict: 'dangerous', performed: true, findings: [] }),
+    });
+    const result = await host.activate(descriptor({ trustLevel: 'community' }));
+    expect(result.reason).toBe('plugin.trust_below_floor');
+    expect(result.reason).not.toBe('plugin.scan_rejected');
+
+    // Скан не запускался — в журнале нет записи `scan`.
+    const scans = (await audit.list()).filter((entry) => entry.action === 'scan');
+    expect(scans).toHaveLength(0);
+  });
+
+  it('встроенный сканер (без явного хука) отклоняет опасный бандл', async () => {
+    const { host } = makeHost();
+    const result = await host.activate(
+      descriptor({ files: { 'a.js': "readFileSync('.env')" } }),
+    );
+    expect(result.reason).toBe('plugin.scan_rejected');
+  });
+
+  it('встроенный сканер: caution → plugin.approval_required', async () => {
+    const { host } = makeHost();
+    const result = await host.activate(
+      descriptor({ files: { 'a.js': 'const k = process.env.KEY; fetch(url);' } }),
+    );
+    expect(result.reason).toBe('plugin.approval_required');
+  });
+
+  it('сбой сканера → fail-closed (plugin.scan_rejected)', async () => {
+    const { host } = makeHost({
+      scan: async () => {
+        throw new Error('сканер упал');
+      },
+    });
+    const result = await host.activate(descriptor());
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.scan_rejected');
+  });
+
+  it('число находок и вердикт пишутся в запись аудита `scan`', async () => {
+    const { host, audit } = makeHost({
+      scan: async () => ({
+        verdict: 'caution',
+        performed: true,
+        findings: [
+          { category: 'injection', severity: 'medium', file: 'a.js', line: 1, description: 'x' },
+        ],
+        contentHash: 'a'.repeat(64),
+      }),
+    });
+    await host.activate(descriptor());
+
+    const scans = (await audit.list()).filter((entry) => entry.action === 'scan');
+    expect(scans[0]!.scanFindings).toBe(1);
+    expect(scans[0]!.contentHash).toBe('a'.repeat(64));
+    expect(scans[0]!.trustLevel).toBe('trusted');
+  });
+});
+
 describe('PluginHost: шаг политики режима', () => {
   it('plugins.enabled=false → plugin.disabled', async () => {
     const { host } = makeHost({ config: config({ enabled: false }) });
@@ -277,11 +388,15 @@ describe('PluginHost: активация, реестр и идемпотентн
     expect(host.getActivation('demo-plugin')?.version).toBe('1.0.0');
 
     const entries = await audit.list();
-    expect(entries).toHaveLength(1);
+    // Ф2: активация + отдельная запись скана.
+    expect(entries).toHaveLength(2);
     expect(entries[0]!.outcome).toBe('ok');
     expect(entries[0]!.action).toBe('activate');
     expect(entries[0]!.actor).toBe('admin');
     expect(entries[0]!.scope).toBe('plugin');
+    expect(entries[1]!.action).toBe('scan');
+    expect(entries[1]!.scanVerdict).toBe('safe');
+    expect(entries[1]!.scanPerformed).toBe(true);
   });
 
   it('повторная активация активного плагина → plugin.already_active', async () => {
@@ -295,7 +410,8 @@ describe('PluginHost: активация, реестр и идемпотентн
     expect(second.reason).toBe('plugin.already_active');
 
     const entries = await audit.list();
-    expect(entries).toHaveLength(2);
+    // Ф2: scan + activate(ok) + activate(rejected).
+    expect(entries).toHaveLength(3);
     expect(entries[0]!.outcome).toBe('rejected');
     expect(entries[0]!.reason).toBe('plugin.already_active');
   });

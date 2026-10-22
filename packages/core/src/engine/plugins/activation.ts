@@ -13,6 +13,7 @@ import type {
   PackManifest,
   PackPluginMode,
   PluginAuditReason,
+  PluginScanFinding,
   PluginScanVerdict,
 } from '@itphx/synth-shared';
 
@@ -56,6 +57,13 @@ export interface PluginActivationDescriptor {
   /** Файлы бандла (относительный путь → содержимое) — источник content-hash. */
   files?: Record<string, string>;
   /**
+   * Каталог **распакованного** бандла (PROP-090 §5: `installed/<name>@<version>/`).
+   *
+   * Задан — сканер обходит каталог (файлы, бинарники, `.skillignore`); не
+   * задан — сканируется `files` (бандл в памяти).
+   */
+  rootDir?: string;
+  /**
    * Ожидаемый content-hash (из `plugins.lock.json`/`PLUGIN_INTEGRITY.json`).
    * Не задан — сверять нечего (шаг integrity пропускается).
    */
@@ -67,6 +75,11 @@ export interface PluginActivationDescriptor {
   trustLevel?: CatalogTrustLevel;
   /** Источник установки (`npm`/`local`/`catalog`/`builtin`/…). */
   source?: string;
+  /**
+   * URL/идентификатор источника — часть ключа кэша сканов
+   * (`sha256(source\0source_url)` + `content_hash`, PROP-068 §4.3).
+   */
+  sourceUrl?: string;
   /**
    * Как попал в инстанс: `deploy` (deploy-time, бандл в образе/PVC) или
    * `runtime` (установка во время работы). На `runtime` при
@@ -162,19 +175,42 @@ export interface PluginModule {
  */
 export type PluginLoader = (descriptor: PluginActivationDescriptor) => Promise<PluginModule>;
 
-/** Вердикт сканера/проверки доверия (точка расширения Ф2). */
+/**
+ * Вердикт сканера/проверки доверия (точка расширения Ф2).
+ *
+ * Заполняется сканером (`engine/plugins/scan/`): вердикт + находки + хеш
+ * просканированного содержимого. Вердикт ≠ `safe` → отказ активации:
+ * `dangerous` → `plugin.scan_rejected`, `caution` → `plugin.approval_required`
+ * (install-policy, PROP-068 §4.2 / PROP-090 §9).
+ */
 export interface PluginScanResult {
   /** Вердикт скана (PROP-068 §4.3). */
   verdict: PluginScanVerdict;
   /** Причина отказа (человекочитаемая) — при вердикте не `safe`. */
   reason?: string;
+  /**
+   * Скан выполнен? `false` — скан выключен политикой (`plugins.scan=disabled`)
+   * или сканировать было нечего; вердикт в этом случае по умолчанию `safe`,
+   * но по журналу аудита видно, что скана не было.
+   */
+  performed?: boolean;
+  /** Находки сканера (для UI/аудита). */
+  findings?: PluginScanFinding[];
+  /** Content-hash просканированного содержимого. */
+  contentHash?: string;
+  /** Число просканированных файлов. */
+  scannedFiles?: number;
+  /** Отчёт взят из кэша сканов? */
+  cached?: boolean;
 }
 
 /**
  * Хук скана/проверки доверия — **точка расширения Ф2**.
  *
- * Ф1 его не реализует: собственный сканер и install-policy — Ф2. Подключённый
- * хук возвращает вердикт; вердикт ≠ `safe` → отказ `plugin.scan_rejected`.
+ * Дефолтная реализация — встроенный статический сканер
+ * (`engine/plugins/scan/`, `createPluginScanHook`): вердикт выносится по
+ * правилам `severity → verdict` (PROP-068 §4.3), решение — по матрице
+ * install-policy (`installPolicyDecision`, `@itphx/synth-shared`).
  */
 export type PluginScanHook = (descriptor: PluginActivationDescriptor) => Promise<PluginScanResult>;
 

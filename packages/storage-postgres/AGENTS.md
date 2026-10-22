@@ -54,13 +54,14 @@ ADR-097): реализация доменных портов `StorageContext` (`
 Волна **3a — инфраструктура драйвера** (готова): пул/подключение, схема БД и
 миграции, сборка контекста. Волна **3b — порты** (готова): все доменные порты
 `StorageContext` реализованы и проходят контрактный suite
-(`packages/core/src/storage/contract/postgres.test.ts` → 56/56 против
-dev-Postgres). Проводка домена — через `storage.backend = postgres`.
+(`packages/core/src/storage/contract/postgres.test.ts` → 128/128 против
+живого PostgreSQL 17). Проводка домена — через `storage.backend = postgres`.
 
-**Текущий статус (сводно).** Реализованы: все 34 доменных порта (группы
+**Текущий статус (сводно).** Реализованы: все 38 доменных порта (группы
 `ports/*`; включая `analyticsRollups` — ADR-102 и `projectPipelines`/`pipelineRuns` —
 ADR-101, SQL-реализация поверх `pipeline_specs`/`pipeline_versions`/`pipeline_runs`/
-`pipeline_run_events`), лёгкие выборки `@future-backend` (в т.ч. `listLight`/`loadLight` — метаданные
+`pipeline_run_events`, а также `pluginAudit` — PROP-090 §9 и `pluginLock` — PROP-068 §4.4 /
+PROP-090 §5), лёгкие выборки `@future-backend` (в т.ч. `listLight`/`loadLight` — метаданные
 сессий без истории, `ports/sessions.ts`), точечная запись сообщений `appendMessage`/`updateMessage`
 (одна строка `messages` в транзакции под per-session advisory-локом; `save` остаётся полной заменой
 истории для импорта/ветвления), координация на session-level
@@ -88,7 +89,13 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
   (НЕ `meta.json`/ADR-092): таблица `synth_schema_migrations(version int PK, id text,
   applied_at timestamptz)` в схеме драйвера. SQL-миграции — **inline TS-строки**
   (`src/migrations/001-init.ts`, `002-egress-audit.ts`, `003-analytics-rollups.ts`,
-  `004-pipeline-engine.ts`, `005-pipeline-provenance.ts`) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
+  `004-pipeline-engine.ts`, `005-pipeline-provenance.ts`, `006-plugin-audit.ts`,
+  `007-plugin-lock.ts`, `008-plugin-audit-scan.ts`) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
+  Миграции **006–008** — слой плагинов (PROP-090): `006_plugin_audit` (таблица `plugin_audit`,
+  `seq bigserial` — порядок «свежие первыми»), `007_plugin_lock` (таблица `plugin_lock`, PK — имя
+  плагина; upsert — `ON CONFLICT`; `installed_at` при перезаписи сохраняется),
+  `008_plugin_audit_scan` (`ALTER TABLE plugin_audit ADD COLUMN IF NOT EXISTS scan_performed boolean /
+  scan_findings integer` — Ф2). Все идемпотентны.
   `runMigrations(conn, { schema })`: `CREATE SCHEMA IF NOT EXISTS` → advisory-лок
   (`synth:migrate:<schema>`) → применение по возрастанию версии (каждая миграция —
   в транзакции с записью версии). **Fail-closed**, если версия в БД **больше**
@@ -110,7 +117,7 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
   **Риск пула:** удерживаемое соединение не возвращается в пул — держите не больше
   одного на процесс; `poolMax` по умолчанию 10 (`pool.ts`).
 - **Сборка контекста (`storage-context.ts` + `src/ports/*`).** Порты разложены по
-  семи независимым файлам-группам (по одному владельцу-агенту на файл, волна
+  восьми независимым файлам-группам (по одному владельцу-агенту на файл, волна
   реализации правит их параллельно и без конфликтов); каждая группа экспортирует
   одну фабрику, возвращающую свою часть `StorageContext`:
   - `ports/sessions.ts` → `buildSessionPorts(deps)` → `sessions`;
@@ -131,6 +138,12 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
     (ADR-101: таблицы `pipeline_specs`/`pipeline_versions`/`pipeline_runs`/
     `pipeline_run_events`, миграция 004 — миграций данных нет, схема версионируется
     как обычно; `installed_by` добавлен миграцией 005, идемпотентной).
+  - журнал аудита плагинов `pluginAudit` — **внутри** `ports/audit.ts`
+    (`buildAuditPorts(deps)`; SQL-часть — `ports/plugin-audit.ts`, PROP-090 §9: таблица
+    `plugin_audit`, миграция 006; поля скана `scan_performed`/`scan_findings` — миграция 008).
+  - `ports/plugin-lock.ts` → `buildPluginLockPorts(deps)` → `pluginLock`
+    (PROP-068 §4.4 / PROP-090 §5: таблица `plugin_lock`, миграция 007; ключ — имя
+    плагина, `save` — upsert с сохранением `installed_at`, `list` — `ORDER BY name ASC`).
 
   Общий тип зависимостей — `PortDeps` (`ports/deps.ts`): `connection` (живой
   `PostgresConnection`), `dataDir`, `secretKey?`, `env?`, `systemDictionariesDir?`,
@@ -245,6 +258,21 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
 - **Retention `dedup` не реализован**: в порту `DedupRepository` нет метода
   prune (`seed` — no-op, durable-бэкенд хранит ключи сам), поэтому таблица
   `dedup` растёт без очистки.
+- **Жизненный цикл `pg_trgm` при по-тестовой схеме** (воспроизведено на живом
+  PostgreSQL 17 в контейнере `postgres:17-alpine`): миграция `001_init` делает
+  `CREATE EXTENSION IF NOT EXISTS pg_trgm`, и при `search_path = <тестовая схема>`
+  расширение создаётся **внутри** неё. Контрактный suite чистит состояние через
+  `DROP SCHEMA … CASCADE` — это роняет расширение, следующая тестовая схема
+  создаёт его заново, а закэшированный lookup опкласса `gin_trgm_ops` указывает на
+  удалённый oid → падение с
+  `operator class "gin_trgm_ops" does not exist for access method "gin"`
+  (воспроизводится **без** кода слоя плагинов — это не регрессия Ф1/Ф2).
+  **Обход:** расширение создаётся один раз **вне** тестовой схемы —
+  `CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public;` в базе прогона; тогда
+  `DROP SCHEMA … CASCADE` его не трогает, а `search_path = <схема>, public`
+  находит опкласс. С этим обходом весь контрактный suite core проходит против
+  живой БД: 128/128 (в т.ч. `PG → PluginLockRepository` — 6/6,
+  `PG → PluginAuditRepository` — 7/7).
 
 ## Критерий приёмки
 
@@ -274,7 +302,8 @@ workspace) остаются file-специфичными ([ADR-091](../../docs/
   **Контрактный прогон портов** живёт в core — `packages/core/src/storage/contract/postgres.test.ts`
   (тот же гейт `SYNTH_TEST_POSTGRES_DSN`, уникальная схема на каждый `make()`,
   `vi.setConfig({ testTimeout: 30000 })` — миграции под параллельной нагрузкой):
-  проходят **все** блоки контрактного suite (30 портов; `AnalyticsRollupRepository` — 11 блоков).
+  проходят **все** блоки контрактного suite (35 портов; `AnalyticsRollupRepository` — 11 блоков,
+  `PluginLockRepository` — 6 блоков, `PluginAuditRepository` — 7 блоков).
   Пример: `SYNTH_TEST_POSTGRES_DSN="postgres://synth:<pw>@127.0.0.1:5432/synth_test" pnpm --filter @itphx/synth-storage-postgres test`.
 - Сборка: `pnpm --filter @itphx/synth-storage-postgres build` (`tsc -p tsconfig.build.json`);
   порядок релизной сборки — `shared → core → storage-postgres → ui → sdk → synth`

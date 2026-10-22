@@ -40,6 +40,8 @@ interface PluginAuditRow extends Row {
   version: string;
   trust_level: string | null;
   scan_verdict: string | null;
+  scan_performed: boolean | null;
+  scan_findings: number | null;
   content_hash: string | null;
   mode: string | null;
   outcome: string;
@@ -60,6 +62,8 @@ function pluginRowToEntry(row: PluginAuditRow): PluginAuditEntry {
   };
   if (row.trust_level !== null) entry.trustLevel = row.trust_level as CatalogTrustLevel;
   if (row.scan_verdict !== null) entry.scanVerdict = row.scan_verdict as PluginScanVerdict;
+  if (row.scan_performed !== null) entry.scanPerformed = row.scan_performed;
+  if (row.scan_findings !== null) entry.scanFindings = row.scan_findings;
   if (row.content_hash !== null) entry.contentHash = row.content_hash;
   if (row.mode !== null) entry.mode = row.mode as PackPluginMode;
   if (row.reason !== null) entry.reason = row.reason as PluginAuditEntry['reason'];
@@ -79,8 +83,8 @@ class PostgresPluginAuditRepository implements PluginAuditRepository {
     await this._db().query(
       `INSERT INTO plugin_audit
          (id, ts, actor, scope, action, plugin, version, trust_level, scan_verdict,
-          content_hash, mode, outcome, reason, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          scan_performed, scan_findings, content_hash, mode, outcome, reason, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [
         entry.id,
         entry.ts,
@@ -91,6 +95,8 @@ class PostgresPluginAuditRepository implements PluginAuditRepository {
         entry.version,
         entry.trustLevel ?? null,
         entry.scanVerdict ?? null,
+        entry.scanPerformed ?? null,
+        entry.scanFindings ?? null,
         entry.contentHash ?? null,
         entry.mode ?? null,
         entry.outcome,

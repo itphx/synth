@@ -26,6 +26,7 @@ import {
   DEFAULT_EXTENSION_CONTRACT,
   checkExtensionCompatibility,
   generateId,
+  installPolicyDecision,
   trustLevelRank,
 } from '@itphx/synth-shared';
 import type {
@@ -33,8 +34,10 @@ import type {
   PackManifest,
   PluginAuditEntry,
   PluginAuditReason,
+  PluginScanVerdict,
   PluginsConfig,
 } from '@itphx/synth-shared';
+import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
 import type { PluginAuditRepository } from '../../storage/ports/plugin-audit-repository.js';
 import type {
   PluginActivationDescriptor,
@@ -50,6 +53,7 @@ import type {
 } from './activation.js';
 import { readExactHostExceptions } from './exact-host-exceptions.js';
 import { verifyPluginIntegrity } from './integrity.js';
+import { createPluginScanHook } from './scan/hook.js';
 
 /**
  * Версия контракта Extension API, который предоставляет хост.
@@ -73,8 +77,18 @@ export interface PluginHostOptions {
    * приходит не из файла.
    */
   exactHostExceptions?: readonly string[];
-  /** Хук скана/проверки доверия — точка расширения Ф2. */
+  /**
+   * Хук скана/проверки доверия — точка расширения Ф2.
+   *
+   * Не задан — используется **встроенный** сканер (`engine/plugins/scan/`):
+   * статический разбор бандла + матрица install-policy.
+   */
   scan?: PluginScanHook;
+  /**
+   * Словарь системных словарей — детектор prompt-injection для встроенного
+   * сканера (категория `injection`).
+   */
+  dictionaryStore?: DictionaryRepository;
   /** Загрузчик кода — точка расширения Ф3 (`inline`) / Ф4 (`out-of-process`). */
   loader?: PluginLoader;
   /** Логгер (по умолчанию — `console.warn`). */
@@ -91,6 +105,12 @@ export class PluginHost {
   private readonly _hostVersion: string;
   private readonly _contractVersion: string;
   private readonly _scan: PluginScanHook | undefined;
+  /**
+   * Встроенный сканер (Ф2) — используется, когда явный хук не задан.
+   * Создаётся лениво (в конструкторе), чтобы не поднимать кэш сканов, если
+   * скан выключен политикой.
+   */
+  private readonly _builtinScan: PluginScanHook;
   private readonly _loader: PluginLoader | undefined;
   private readonly _logger: PluginLogger;
   /** Реестр активных плагинов: имя → дескриптор активации. */
@@ -106,6 +126,9 @@ export class PluginHost {
     this._hostVersion = options.hostVersion;
     this._contractVersion = options.contractVersion ?? DEFAULT_EXTENSION_CONTRACT_VERSION;
     this._scan = options.scan;
+    this._builtinScan = createPluginScanHook({
+      ...(options.dictionaryStore ? { dictionaryStore: options.dictionaryStore } : {}),
+    });
     this._loader = options.loader;
     this._explicitExceptions = options.exactHostExceptions;
     this._logger = options.logger ?? {
@@ -426,8 +449,18 @@ export class PluginHost {
   /**
    * Шаг 4: trust/scan.
    *
-   * Ф1 проверяет **только то, что уже есть**: trust-floor из конфига.
-   * Сканер и install-policy — Ф2 (точка расширения — `PluginScanHook`).
+   * Порядок (**важно**):
+   * 1. **trust-floor** (`plugins.trustFloor`) — ниже порога плагин не
+   *    активируется **в любом случае** (`plugin.trust_below_floor`);
+   * 2. **скан** — вердикт статического сканера (встроенный или подключённый
+   *    хук); при `dangerous` → `plugin.scan_rejected`;
+   * 3. **install-policy** (PROP-068 §4.2 + ячейка `kind: plugin`) — для
+   *    плагина `caution` → `ask` (явное подтверждение владельца), а не блок:
+   *    `plugin.approval_required`.
+   *
+   * Скан выключен политикой (`plugins.scan: 'disabled'`) — это **не** ошибка:
+   * вердикт по умолчанию `safe`, а в журнале аудита видно, что скана не было
+   * (`scanPerformed: false`).
    */
   private async _checkTrust(
     descriptor: PluginActivationDescriptor,
@@ -446,20 +479,113 @@ export class PluginHost {
       };
     }
 
-    // Сканер — Ф2: подключённый хук возвращает вердикт.
-    if (this._scan && this._config.scan === 'enabled') {
-      const result = await this._scan(descriptor);
-      if (result.verdict !== 'safe') {
-        return {
-          ok: false,
-          reason: 'plugin.scan_rejected',
-          message:
-            `Сканер отклонил плагин (вердикт «${result.verdict}»)` +
-            (result.reason ? `: ${result.reason}` : '.'),
-        };
-      }
+    // Сканер (встроенный или подключённый хук).
+    const scan = await this._runScan(descriptor, level);
+    if (!scan.ok) return scan;
+
+    // Install-policy: ячейка `kind: plugin` (PROP-090 §9).
+    const action = installPolicyDecision({
+      trust: level,
+      verdict: scan.verdict,
+      kind: 'plugin',
+    });
+    if (action === 'block') {
+      return {
+        ok: false,
+        reason: 'plugin.scan_rejected',
+        message:
+          `Install-policy: вердикт сканера «${scan.verdict}» для плагина — ` +
+          'установка/активация заблокированы.',
+      };
+    }
+    if (action === 'ask') {
+      return {
+        ok: false,
+        reason: 'plugin.approval_required',
+        message:
+          `Install-policy: вердикт сканера «${scan.verdict}» для плагина — ` +
+          'требуется явное подтверждение владельца (решение не принято автоматически).',
+      };
     }
     return { ok: true };
+  }
+
+  /**
+   * Прогон сканера + запись события аудита `scan`.
+   *
+   * Скан выключен политикой — вердикт `safe` по умолчанию, но событие аудита
+   * всё равно пишется: по журналу видно, что скана **не было**.
+   */
+  private async _runScan(
+    descriptor: PluginActivationDescriptor,
+    trustLevel: CatalogTrustLevel,
+  ): Promise<
+    | { ok: true; verdict: PluginScanVerdict; performed: boolean }
+    | { ok: false; reason: PluginAuditReason; message: string }
+  > {
+    const plugin = descriptor.name;
+    const version = descriptor.version;
+
+    if (this._config.scan === 'disabled') {
+      await this._writeAudit({
+        action: 'scan',
+        plugin,
+        version,
+        outcome: 'ok',
+        scanVerdict: 'safe',
+        scanPerformed: false,
+        scanFindings: 0,
+        trustLevel,
+        descriptor,
+      });
+      return { ok: true, verdict: 'safe', performed: false };
+    }
+
+    const hook = this._scan ?? this._builtinScan;
+    let result;
+    try {
+      result = await hook(descriptor);
+    } catch (err) {
+      // Сбой сканера — fail-closed: активация не выполняется.
+      return {
+        ok: false,
+        reason: 'plugin.scan_rejected',
+        message: `Сканер завершился ошибкой: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    const performed = result.performed !== false;
+    const findings = result.findings?.length ?? 0;
+    const rejected =
+      result.verdict === 'dangerous' || result.verdict === 'caution';
+    await this._writeAudit({
+      action: 'scan',
+      plugin,
+      version,
+      outcome: rejected ? 'rejected' : 'ok',
+      reason: rejected
+        ? result.verdict === 'dangerous'
+          ? 'plugin.scan_rejected'
+          : 'plugin.approval_required'
+        : undefined,
+      scanVerdict: result.verdict,
+      scanPerformed: performed,
+      scanFindings: findings,
+      trustLevel,
+      descriptor,
+      ...(result.contentHash ? { contentHash: result.contentHash } : {}),
+    });
+
+    if (result.verdict === 'dangerous') {
+      return {
+        ok: false,
+        reason: 'plugin.scan_rejected',
+        message:
+          `Сканер отклонил плагин (вердикт «dangerous», находок: ${findings})` +
+          (result.reason ? `: ${result.reason}` : '.'),
+      };
+    }
+    return { ok: true, verdict: result.verdict, performed };
   }
 
   /** Шаг 5: политика режима — мастер-выключатель, списки имён, runtime-install. */
@@ -544,7 +670,7 @@ export class PluginHost {
    * активацию — предупреждение в лог, как в аудите обслуживания, ADR-092).
    */
   private async _writeAudit(input: {
-    action: 'activate' | 'deactivate';
+    action: 'activate' | 'deactivate' | 'scan';
     plugin: string;
     version: string;
     outcome: 'ok' | 'rejected';
@@ -554,6 +680,9 @@ export class PluginHost {
     contentHash?: string;
     trustLevel?: CatalogTrustLevel;
     mode?: PluginActivationHandle['mode'];
+    scanVerdict?: PluginScanVerdict;
+    scanPerformed?: boolean;
+    scanFindings?: number;
   }): Promise<void> {
     const descriptor = input.descriptor ?? undefined;
     const entry: PluginAuditEntry = {
@@ -569,6 +698,9 @@ export class PluginHost {
       ...(input.trustLevel ?? descriptor?.trustLevel
         ? { trustLevel: input.trustLevel ?? descriptor?.trustLevel }
         : {}),
+      ...(input.scanVerdict ? { scanVerdict: input.scanVerdict } : {}),
+      ...(input.scanPerformed !== undefined ? { scanPerformed: input.scanPerformed } : {}),
+      ...(input.scanFindings !== undefined ? { scanFindings: input.scanFindings } : {}),
       ...(input.contentHash ?? descriptor?.contentHash
         ? { contentHash: input.contentHash ?? descriptor?.contentHash }
         : {}),

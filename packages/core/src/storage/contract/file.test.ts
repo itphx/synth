@@ -17,6 +17,7 @@ import {
   describeJobRepository,
   describeMaintenanceAuditRepository,
   describePluginAuditRepository,
+  describePluginLockRepository,
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
   describeMcpRegistryRepository,
@@ -53,6 +54,7 @@ import { ScheduleStore } from '../schedule-store.js';
 import { JobStore } from '../job-store.js';
 import { MaintenanceAuditStore } from '../maintenance-audit-store.js';
 import { FilePluginAuditStore } from '../file-plugin-audit-store.js';
+import { FilePluginLockStore } from '../file-plugin-lock-store.js';
 import { SecurityAuditStore } from '../security-audit-store.js';
 import { EgressRequestLogStore } from '../egress-request-log-store.js';
 import { AnalyticsRollupStore } from '../analytics-rollup-store.js';
@@ -156,6 +158,16 @@ describe('контрактные тесты файловых реализаци�
       return {
         repo: new FilePluginAuditStore({ dataDir: dir }),
         filePath: join(dir, 'audit', 'plugins.jsonl'),
+      };
+    },
+  );
+
+  describePluginLockRepository(
+    'FilePluginLockStore → PluginLockRepository',
+    async () => {
+      const dir = await tmp();
+      return {
+        repo: new FilePluginLockStore({ path: join(dir, 'plugin', 'plugins.lock.json') }),
       };
     },
   );
