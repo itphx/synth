@@ -33,6 +33,18 @@ import {
 /** TTL снимка состава серверов (как инвентарь возможностей порта, шаг A). */
 export const EXECUTOR_MCP_SOURCE_TTL_MS = 120_000;
 
+/**
+ * Пауза перед повтором **неудачного** discovery, мс.
+ *
+ * Полный TTL на неудачу ставить нельзя: типичная причина пустого снимка —
+ * временная недоступность пула (раскатка исполнителя, старт рядом с control
+ * plane). С TTL 120 с control plane оставался без MCP-инструментов две минуты
+ * после того, как исполнитель уже поднялся (наблюдалось в test: backend
+ * стартовал раньше нового пода исполнителя, получил 404 и «запомнил» пустой
+ * состав). Короткая пауза гасит шторм запросов, но не блокирует восстановление.
+ */
+export const EXECUTOR_MCP_SOURCE_RETRY_MS = 15_000;
+
 /** Таймаут одного discovery-запроса `GET /mcp/servers` (5 c). */
 export const EXECUTOR_MCP_DISCOVERY_TIMEOUT_MS = 5_000;
 
@@ -57,6 +69,8 @@ export interface ExecutorMcpSourceOptions {
   fetchImpl?: ExecutorFetch;
   /** TTL снимка, мс (по умолчанию 120 000). */
   ttlMs?: number;
+  /** Пауза перед повтором неудачного discovery, мс (по умолчанию 15 000). */
+  retryMs?: number;
   /** Таймаут discovery-запроса, мс (по умолчанию 5 000). */
   requestTimeoutMs?: number;
   /** Таймауты клиента сервера (пробрасываются в `ExecutorMcpClient`). */
@@ -73,11 +87,14 @@ export interface ExecutorMcpSourceOptions {
 export class ExecutorMcpSource {
   private readonly _pool: ExecutorMcpPool;
   private readonly _ttlMs: number;
+  private readonly _retryMs: number;
   private readonly _requestTimeoutMs: number;
   private readonly _connectTimeoutMs: number | undefined;
   private readonly _toolTimeoutMs: number | undefined;
   private _servers = new Map<string, ExecutorMcpServerInfo>();
   private _snapshotAt = 0;
+  /** Момент, до которого повтор после неудачи не нужен (0 — неудачи не было). */
+  private _retryAt = 0;
   private _closed = false;
   private _warnedEmpty = false;
 
@@ -88,6 +105,7 @@ export class ExecutorMcpSource {
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
     });
     this._ttlMs = opts.ttlMs ?? EXECUTOR_MCP_SOURCE_TTL_MS;
+    this._retryMs = opts.retryMs ?? EXECUTOR_MCP_SOURCE_RETRY_MS;
     this._requestTimeoutMs = opts.requestTimeoutMs ?? EXECUTOR_MCP_DISCOVERY_TIMEOUT_MS;
     this._connectTimeoutMs = opts.connectTimeoutMs;
     this._toolTimeoutMs = opts.toolTimeoutMs;
@@ -117,6 +135,9 @@ export class ExecutorMcpSource {
 
   /** Снимок просрочен (или его ещё нет)? */
   isStale(now: number = Date.now()): boolean {
+    // Неудача discovery: короткая пауза вместо полного TTL — иначе временная
+    // недоступность пула (раскатка) прячет MCP-инструменты на весь TTL.
+    if (this._retryAt !== 0) return now >= this._retryAt;
     return this._snapshotAt === 0 || now - this._snapshotAt >= this._ttlMs;
   }
 
@@ -135,6 +156,7 @@ export class ExecutorMcpSource {
   async refresh(): Promise<ExecutorMcpServerInfo[]> {
     if (this._closed) {
       this._servers.clear();
+      this._retryAt = 0;
       return [];
     }
 
@@ -146,6 +168,7 @@ export class ExecutorMcpSource {
       }
       this._servers.clear();
       this._snapshotAt = Date.now();
+      this._retryAt = 0;
       return [];
     }
 
@@ -175,7 +198,9 @@ export class ExecutorMcpSource {
           (reasons.length > 0 ? ` (${reasons.join('; ')})` : ''),
       );
       this._servers.clear();
-      this._snapshotAt = Date.now();
+      // Короткая пауза: пул может подняться через секунды (раскатка), полный
+      // TTL на неудачу скрывал бы инструменты две минуты.
+      this._retryAt = Date.now() + this._retryMs;
       return [];
     }
 
@@ -185,6 +210,7 @@ export class ExecutorMcpSource {
     );
     this._servers = merged;
     this._snapshotAt = Date.now();
+    this._retryAt = 0;
     this._warnedEmpty = false;
     if (merged.size > 0) {
       const up = [...merged.values()].filter((server) => server.status === 'up').length;
@@ -209,6 +235,7 @@ export class ExecutorMcpSource {
     this._closed = true;
     this._servers.clear();
     this._snapshotAt = 0;
+    this._retryAt = 0;
   }
 }
 
@@ -303,7 +330,14 @@ export function attachExecutorMcpFromDescriptor(
  */
 export async function createExecutorMcpSourceFromConfig(
   config?: ResolvedExecutionConfig | null,
-  opts: { fetchImpl?: ExecutorFetch; ttlMs?: number; requestTimeoutMs?: number; connectTimeoutMs?: number; toolTimeoutMs?: number } = {},
+  opts: {
+    fetchImpl?: ExecutorFetch;
+    ttlMs?: number;
+    retryMs?: number;
+    requestTimeoutMs?: number;
+    connectTimeoutMs?: number;
+    toolTimeoutMs?: number;
+  } = {},
 ): Promise<ExecutorMcpSource | null> {
   if (!config || config.mode !== 'remote') return null;
   const urls = (config.remote.url ?? []).map((url) => url.trim()).filter((url) => url.length > 0);
@@ -328,6 +362,7 @@ export async function attachExecutorMcpSource(
   opts: {
     fetchImpl?: ExecutorFetch;
     ttlMs?: number;
+    retryMs?: number;
     requestTimeoutMs?: number;
     connectTimeoutMs?: number;
     toolTimeoutMs?: number;

@@ -54,7 +54,7 @@ import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
 import type { HookBus } from './hooks/hook-bus.js';
 import type { RequestSessionService } from './events/request-session.js';
 
-import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, type RuntimeDeps } from './tools/runtime-deps.js';
+import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, refreshRuntimeDeps, type RuntimeDeps } from './tools/runtime-deps.js';
 import { InlineExecutionPort } from '../execution/inline-execution-port.js';
 import type { ExecutionPort } from '../execution/ports/index.js';
 import { getToolTrust } from './security/trust.js';
@@ -227,7 +227,12 @@ export interface OrchestratorOptions {
   /**
    * ADR-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) —
    * детекция `detectRuntimeDeps()`. Не задана — fail-open (все доступны).
-   * Runtime-обновление — `setRuntimeDeps`.
+   *
+   * Это **живой** снимок: перед каждым ходом он перечитывается
+   * (`refreshRuntimeDeps`, запись по месту), поэтому объект разделяется с
+   * другими потребителями снимка из точки сборки (permission-слой шагов
+   * пайплайнов) — не заменять ссылку. Ручная подстановка — `setRuntimeDeps`
+   * (живёт до ближайшего перечитывания снимка).
    */
   runtimeDeps?: RuntimeDeps;
   /**
@@ -2395,6 +2400,14 @@ export class ChatOrchestrator {
     const effectiveReasoningLevel = agentDef?.reasoningLevel ?? session.settings.reasoningLevel;
 
     const debugCollector = new DebugCollector(session.settings.debugEnabled);
+
+    // ADR-070 §2.9.1/ADR-077: перечитать доступность внешних программ (git/rg/sh)
+    // перед ходом. Снимок на старте устаревает: в split-режиме состав пула
+    // появляется не мгновенно (раскатка поднимает control plane раньше
+    // исполнителя), и ложный negative («sh отсутствует») иначе залипал бы до
+    // перезапуска процесса. Перечитывание дешево: `detectRuntimeDeps` кэширует
+    // результат на `RUNTIME_DEPS_CACHE_TTL_MS`.
+    await refreshRuntimeDeps(this._runtimeDeps, this._executionPort);
 
     // --- ADR-095 (шаг 6b-1): ранние выходы (системные сообщения, `/`-команды,
     // micro-first) вынесены в `orchestrator/phases/process-early.ts`; порядок

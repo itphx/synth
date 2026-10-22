@@ -4,7 +4,7 @@
  * `unavailable`-подсказок в режиме `available`.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +21,7 @@ import type { ContextFileRepository } from '../storage/ports/context-file-reposi
 import type { McpManager } from './mcp/index.js';
 import { createToolRegistry } from './tools/index.js';
 import { createAgentRegistry } from './agents/index.js';
+import type { ExecRequest, ExecResult, ExecutionPort } from '../execution/ports/index.js';
 import { stubContextFiles } from '../test-helpers/storage-stubs.js';
 import {
   generateId,
@@ -163,6 +164,19 @@ function makeMockMcpManager(): McpManager {
   return manager as unknown as McpManager;
 }
 
+/** Порт-заглушка: доступность программ задаётся тестом (ADR-077, шаг A). */
+class DepsPort implements ExecutionPort {
+  constructor(readonly available: Record<string, boolean>) {}
+
+  async execute(_req: ExecRequest): Promise<ExecResult> {
+    throw new Error('порт-заглушка не выполняет команды');
+  }
+
+  async probe(bin: string): Promise<boolean> {
+    return this.available[bin] ?? true;
+  }
+}
+
 describe('ChatOrchestrator — tools.policy (ADR-071 §2.3)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
@@ -182,8 +196,13 @@ describe('ChatOrchestrator — tools.policy (ADR-071 §2.3)', () => {
     ProviderFactory.register('toolcapture', ToolCaptureProvider);
     ProviderFactory.register('ollama', LocalCaptureProvider);
 
+    orchestrator = makeOrchestrator();
+  });
+
+  /** Сборка оркестратора; `executionPort` — источник доступности программ (ADR-077). */
+  function makeOrchestrator(opts: { executionPort?: ExecutionPort } = {}): ChatOrchestrator {
     const toolRegistry = createToolRegistry();
-    orchestrator = new ChatOrchestrator({
+    return new ChatOrchestrator({
       sessionManager,
       eventBus: new EventBus(),
       contextBuilder: makeCtxBuilder(),
@@ -201,8 +220,9 @@ describe('ChatOrchestrator — tools.policy (ADR-071 §2.3)', () => {
       toolRegistry,
       agentRegistry: createAgentRegistry(toolRegistry),
       mcpManager: makeMockMcpManager(),
+      ...(opts.executionPort ? { executionPort: opts.executionPort } : {}),
     });
-  });
+  }
 
   afterEach(async () => {
     ProviderFactory['_providers'].delete('toolcapture');
@@ -444,8 +464,10 @@ describe('ChatOrchestrator — tools.policy (ADR-071 §2.3)', () => {
   });
 
   it('available + отсутствие git: git-тулы отфильтрованы, toolsDetail reason=dependency', async () => {
+    // Доступность берётся из порта исполнения (ADR-077): снимок перечитывается
+    // в начале хода, поэтому задаём её портом, а не `setRuntimeDeps`.
+    orchestrator = makeOrchestrator({ executionPort: new DepsPort({ git: false, rg: true, sh: true }) });
     orchestrator.setToolsPolicy('available');
-    orchestrator.setRuntimeDeps({ git: false, rg: true, sh: true });
     const session = await createSession({ mode: 'act' });
     await runTurn(session.id);
 
@@ -468,8 +490,8 @@ describe('ChatOrchestrator — tools.policy (ADR-071 §2.3)', () => {
   });
 
   it('available + отсутствие rg: grep_files отфильтрован, toolsDetail reason=dependency', async () => {
+    orchestrator = makeOrchestrator({ executionPort: new DepsPort({ git: true, rg: false, sh: true }) });
     orchestrator.setToolsPolicy('available');
-    orchestrator.setRuntimeDeps({ git: true, rg: false, sh: true });
     const session = await createSession({ mode: 'act' });
     await runTurn(session.id);
 
@@ -480,5 +502,38 @@ describe('ChatOrchestrator — tools.policy (ADR-071 §2.3)', () => {
     const grep = info.toolsDetail.find((t) => t.name === 'grep_files');
     expect(grep!.available).toBe(false);
     expect(grep!.reason).toBe('dependency');
+  });
+
+  /**
+   * ADR-077: снимок доступности — живой. Ложный negative, снятый на старте
+   * (раскатка: control plane поднялся раньше исполнителя), не должен залипать
+   * до перезапуска процесса — ход перечитывает снимок.
+   */
+  it('снимок доступности перечитывается ходом: ложный negative старта не залипает', async () => {
+    const port = new DepsPort({ git: true, rg: true, sh: false });
+    orchestrator = makeOrchestrator({ executionPort: port });
+    orchestrator.setToolsPolicy('available');
+    // Детерминированный сдвиг TTL кэша детекта: подменяем только Date.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const startedAt = new Date('2026-01-01T00:00:00Z');
+    vi.setSystemTime(startedAt);
+    try {
+      const session = await createSession({ mode: 'act' });
+      await runTurn(session.id);
+      expect(toolNames()).not.toContain('execute_shell');
+
+      // Исполнитель поднялся: проба теперь видит `sh`, TTL детекта истёк.
+      port.available.sh = true;
+      vi.setSystemTime(new Date(startedAt.getTime() + 61_000));
+      await runTurn(session.id);
+
+      expect(toolNames()).toContain('execute_shell');
+      // Деталь недоступности снята вместе с ложным negative.
+      const after = (await sessionManager.getSession(session.id))!;
+      const info = await orchestrator.getPromptInfo(after);
+      expect(info.toolsDetail.find((t) => t.name === 'execute_shell')!.available).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

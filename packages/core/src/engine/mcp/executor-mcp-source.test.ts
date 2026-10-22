@@ -14,6 +14,7 @@ import {
   createExecutorMcpSourceFromConfig,
   attachExecutorMcpSource,
   attachExecutorMcpFromDescriptor,
+  EXECUTOR_MCP_SOURCE_RETRY_MS,
   EXECUTOR_MCP_SOURCE_TTL_MS,
   type ExecutorMcpManagerLike,
 } from './executor-mcp-source.js';
@@ -142,8 +143,131 @@ describe('ExecutorMcpSource: снимок состава', () => {
   });
 });
 
-describe('ExecutorMcpSource: подключение по execution-конфигу', () => {
-  function remoteConfig(urls: string[]) {
+/**
+ * Гонка раскатки: backend поднимается раньше нового пода исполнителя и получает
+ * 404. Полный TTL (120 с) на неудачу означал бы «нет MCP-инструментов» на две
+ * минуты после того, как исполнитель уже отвечает, поэтому неудача даёт короткую
+ * паузу, а успех (в т.ч. пустой снимок) — обычный TTL.
+ */
+describe('ExecutorMcpSource: восстановление после неудачного discovery', () => {
+  const TTL = EXECUTOR_MCP_SOURCE_TTL_MS;
+  const RETRY = EXECUTOR_MCP_SOURCE_RETRY_MS;
+
+  function playwrightList() {
+    return [{ name: 'playwright-mcp', status: 'up', toolCount: 25 }];
+  }
+
+  /** Сценарий «сначала неудача, потом исполнитель поднялся». */
+  async function expectRetryAfterFailure(fail: () => Promise<Response>): Promise<void> {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    let calls = 0;
+    let healthy = false;
+    const fetchImpl: ExecutorFetch = () => {
+      calls += 1;
+      return healthy ? Promise.resolve(json(playwrightList())) : fail();
+    };
+    const source = new ExecutorMcpSource({
+      urls: ['http://a:5100'],
+      token: TOKEN,
+      fetchImpl,
+      ttlMs: TTL,
+      retryMs: RETRY,
+    });
+
+    await expect(source.refresh()).resolves.toEqual([]);
+    expect(calls).toBe(1);
+
+    // Пауза, а не TTL: в пределах `retryMs` повторной попытки нет.
+    vi.advanceTimersByTime(RETRY - 1);
+    expect(source.isStale()).toBe(false);
+    await source.ensureFresh();
+    expect(calls).toBe(1);
+
+    // Пауза истекла → повтор, и исполнитель уже отвечает.
+    healthy = true;
+    vi.advanceTimersByTime(2);
+    expect(source.isStale()).toBe(true);
+    await source.ensureFresh();
+    expect(calls).toBe(2);
+    expect(source.listServers().map((server) => server.name)).toEqual(['playwright-mcp']);
+  }
+
+  it('404 от исполнителя → повтор через retryMs, а не через TTL', async () => {
+    await expectRetryAfterFailure(() => Promise.resolve(json({ error: { message: 'not found' } }, 404)));
+  });
+
+  it('сеть недоступна → повтор через retryMs, а не через TTL', async () => {
+    await expectRetryAfterFailure(() => Promise.reject(new Error('ECONNREFUSED')));
+  });
+
+  it('успешный пустой ответ → повтор только по TTL (пустой снимок валиден)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    let calls = 0;
+    const fetchImpl: ExecutorFetch = () => {
+      calls += 1;
+      return Promise.resolve(json([]));
+    };
+    const source = new ExecutorMcpSource({
+      urls: ['http://a:5100'],
+      token: TOKEN,
+      fetchImpl,
+      ttlMs: TTL,
+      retryMs: RETRY,
+    });
+
+    await expect(source.refresh()).resolves.toEqual([]);
+    expect(calls).toBe(1);
+
+    // Ответ получен (пусть и пустой) — паузы нет, действует полный TTL.
+    vi.advanceTimersByTime(RETRY + 1);
+    expect(source.isStale()).toBe(false);
+    await source.ensureFresh();
+    expect(calls).toBe(1);
+
+    vi.advanceTimersByTime(TTL - RETRY);
+    expect(source.isStale()).toBe(true);
+    await source.ensureFresh();
+    expect(calls).toBe(2);
+  });
+
+  it('успех после неудачи сбрасывает паузу: дальше действует TTL', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    let calls = 0;
+    let healthy = false;
+    const fetchImpl: ExecutorFetch = () => {
+      calls += 1;
+      if (!healthy) return Promise.reject(new Error('ECONNREFUSED'));
+      return Promise.resolve(json(playwrightList()));
+    };
+    const source = new ExecutorMcpSource({
+      urls: ['http://a:5100'],
+      token: TOKEN,
+      fetchImpl,
+      ttlMs: TTL,
+      retryMs: RETRY,
+    });
+
+    await source.refresh();
+    healthy = true;
+    vi.advanceTimersByTime(RETRY);
+    await source.ensureFresh();
+    expect(calls).toBe(2);
+
+    // Пауза снята: следующий повтор — только по TTL от успешного снимка.
+    vi.advanceTimersByTime(RETRY);
+    expect(source.isStale()).toBe(false);
+    await source.ensureFresh();
+    expect(calls).toBe(2);
+
+    vi.advanceTimersByTime(TTL - RETRY);
+    expect(source.isStale()).toBe(true);
+  });
+});
+
+describe('ExecutorMcpSource: подключение по execution-конфигу', () => {  function remoteConfig(urls: string[]) {
     return {
       mode: 'remote' as const,
       remote: {
