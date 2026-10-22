@@ -30,9 +30,15 @@
  * служебный файл раскладки, а не часть бандла). Текстовые файлы
  * (включая `synth.pack`) входят в `files` и в content-hash; бинарные файлы в
  * `files` **не попадают** (их содержимое нельзя представить строкой без
- * порчи), но сканер видит их в каталоге: исполняемый бинарник → `high` →
- * `dangerous` → отказ. Поэтому хеш установщика совпадает с хешем, который
- * считает `scanPluginDirectory`, — сверка целостности при активации работает.
+ * порчи), но:
+ * - **копируются байт-в-байт** при раскладке (Ф5б-3, `stagePluginBundle`:
+ *   `binaryFiles` + `sourceDir`) — иначе установленный бандл терял бы ассеты;
+ * - сканер видит их в каталоге: исполняемый бинарник → `high` → `dangerous` →
+ *   отказ.
+ * Поэтому content-hash **по-прежнему считается только по текстовым файлам** и
+ * совпадает с хешем `scanPluginDirectory` — сверка целостности при активации
+ * работает. Бинарники в хеш осознанно не входят: их целостность проверяет
+ * скан каталога, а не хеш (иначе хеш и скан разошлись бы по составу файлов).
  *
  * **Точка входа (`entry`).** `dist/index.js`, если он есть в составе бандла;
  * иначе первый по алфавиту `.js`/`.mjs` внутри `dist/`; иначе
@@ -42,10 +48,11 @@
  * **Идемпотентность.** Lock-запись — upsert по имени плагина
  * (`PluginLockRepository`): повторная установка той же версии не плодит
  * записей, каталог перезаписывается, `installed_at` сохраняется, `updated_at`
- * обновляется. Установка **другой** версии заменяет lock-запись (по имени), но
- * каталог прежней версии остаётся на диске — известное ограничение: чистка
- * старых версий и явный update — Ф5б (`uninstall` снимает каталог версии из
- * lock-записи).
+ * обновляется. Установка **другой** версии заменяет lock-запись (по имени) и
+ * удаляет каталог предыдущей версии — **только после** успешной раскладки и
+ * записи lock; если плагин активен (модуль загружен в процесс), каталог
+ * остаётся с предупреждением в лог (уборка — при следующей установке после
+ * деактивации/рестарта: удалять код работающего плагина нельзя).
  */
 import { readFile, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -190,12 +197,15 @@ export interface PluginUninstallResult {
  */
 export interface CollectedBundle {
   files: Record<string, string>;
-  /** Бинарные файлы (в `files` не попадают: содержимое нельзя представить строкой). */
-  binaryFiles: string[];
-}
+  /**
+   * Бинарные файлы (в `files` не попадают: содержимое нельзя представить
+   * строкой). При установке копируются байт-в-байт (`stagePluginBundle`),
+   * в content-hash не входят — там только текстовые (как у сканера).
+   */
+  binaryFiles: string[];}
 
 /** Чтение манифеста: успех с разобранным манифестом либо причина отказа. */
-type ManifestReadResult =
+export type PluginManifestReadResult =
   | { ok: true; manifest: PackManifest }
   | { ok: false; message: string; name?: string; version?: string };
 
@@ -320,8 +330,14 @@ export function resolvePluginEntry(files: Record<string, string>): string {
   return candidates[0] ?? preferred;
 }
 
-/** Прочитать и проверить `synth.pack` (fail-closed: любая проблема — отказ). */
-async function readManifest(dir: string): Promise<ManifestReadResult> {
+/**
+ * Прочитать и проверить `synth.pack` (fail-closed: любая проблема — отказ).
+ *
+ * Экспортируется для CLI (`synth plugin scan`): dry-run обязан проверять
+ * манифест **тем же** кодом, что установка, иначе «разрешено сканом» и
+ * «разрешено установкой» разошлись бы.
+ */
+export async function readPluginManifest(dir: string): Promise<PluginManifestReadResult> {
   let text: string;
   try {
     text = await readFile(join(dir, MANIFEST_FILE), 'utf8');
@@ -445,7 +461,7 @@ export class PluginInstaller {
     const installKind = request.installKind ?? 'runtime';
 
     // ── Шаг 1: манифест ───────────────────────────────────────────────
-    const manifestRead = await readManifest(request.dir);
+    const manifestRead = await readPluginManifest(request.dir);
     if (!manifestRead.ok) {
       await this._writeAudit({
         action: 'install',
@@ -469,13 +485,9 @@ export class PluginInstaller {
     const { name, version } = manifest;
 
     // ── Шаг 2: состав бандла и content-hash ───────────────────────────
+    // Бинарные файлы в хеш не входят (хеш = код/текстовые ассеты, как у
+    // сканера), но при раскладке копируются байт-в-байт (Ф5б-3).
     const { files, binaryFiles } = await collectBundleFiles(request.dir);
-    if (binaryFiles.length > 0) {
-      this._logger.warn(
-        `плагин «${name}@${version}»: бинарные файлы не попадают в бандл при установке ` +
-          `(${binaryFiles.join(', ')}) — сканер проверяет их в каталоге, но установка их пропускает.`,
-      );
-    }
     const contentHash = computePluginContentHash(files);
     const entry = resolvePluginEntry(files);
 
@@ -586,10 +598,13 @@ export class PluginInstaller {
     }
 
     // Раскладка: `allow` → installed/, `ask` → quarantine/ (lock не пишется).
+    // Бинарные ассеты копируются байтами из каталога-источника (Ф5б-3).
     const staged = await stagePluginBundle(this._layout, {
       name,
       version,
       files,
+      binaryFiles,
+      sourceDir: request.dir,
       action,
       source: request.source,
       contentHash,
@@ -629,6 +644,9 @@ export class PluginInstaller {
     }
 
     // ── Шаг 8: lock + аудит + (опционально) активация ─────────────────
+    // Предыдущая версия того же плагина — её каталог убирается **после**
+    // успешной записи lock (Ф5б-3, см. `_cleanupPreviousVersion`).
+    const previous = await this._lock.get(name);
     await this._lock.save(
       this._buildLockEntry({
         name,
@@ -656,6 +674,8 @@ export class PluginInstaller {
       source: request.source,
       mode: manifest.mode,
     });
+
+    await this._cleanupPreviousVersion(name, previous?.version, version);
 
     const activated = request.activate
       ? await this._activate({
@@ -738,7 +758,7 @@ export class PluginInstaller {
         const entry = existing.entry ?? resolvePluginEntry(files);
         let activated: PluginActivationResult | undefined;
         if (opts.activate) {
-          const manifestRead = await readManifest(dir);
+          const manifestRead = await readPluginManifest(dir);
           if (!manifestRead.ok) {
             return this._rejectInstall({
               name,
@@ -786,7 +806,7 @@ export class PluginInstaller {
 
     // ── Карантин: манифест, файлы, целостность ────────────────────────
     const qdir = lookup.dir;
-    const manifestRead = await readManifest(qdir);
+    const manifestRead = await readPluginManifest(qdir);
     if (!manifestRead.ok) {
       return this._rejectInstall({
         name,
@@ -959,6 +979,10 @@ export class PluginInstaller {
       mode: manifest.mode,
     });
 
+    // Подтверждение — тоже установка: каталог предыдущей версии убирается
+    // (если плагин не активен), как и в `installFromDirectory`.
+    await this._cleanupPreviousVersion(name, existing?.version, version);
+
     const activated = opts.activate
       ? await this._activate({
           name,
@@ -1043,6 +1067,46 @@ export class PluginInstaller {
   }
 
   // ── Вспомогательное ────────────────────────────────────────────────
+
+  /**
+   * Удалить каталог предыдущей версии плагина после успешной установки новой
+   * (PROP-090 §5, Ф5б-3).
+   *
+   * Правила:
+   * - вызывается **только после** раскладки новой версии и записи lock —
+   *   сбой уборки не должен превращать успешную установку в отказ;
+   * - плагин **активен** (модуль загружен в процесс) → каталог остаётся:
+   *   удалять код работающего плагина нельзя, предупреждение в лог; уборка
+   *   произойдёт при следующей установке после деактивации/рестарта;
+   * - ошибка удаления — предупреждение, не исключение (best-effort).
+   */
+  private async _cleanupPreviousVersion(
+    name: string,
+    previousVersion: string | undefined,
+    version: string,
+  ): Promise<void> {
+    if (!previousVersion || previousVersion === version) return;
+    const previousDir = pluginInstalledDir(this._layout, name, previousVersion);
+    if (!(await pathExists(previousDir))) return;
+
+    if (this._host?.isActive(name)) {
+      this._logger.warn(
+        `плагин «${name}» активен (версия ${this._host.getActivation(name)?.version ?? '?'}) — ` +
+          `каталог предыдущей версии ${previousVersion} оставлен; он будет удалён ` +
+          'при следующей установке после деактивации/рестарта.',
+      );
+      return;
+    }
+
+    try {
+      await rm(previousDir, { recursive: true, force: true });
+    } catch (err) {
+      this._logger.warn(
+        `не удалось удалить каталог предыдущей версии плагина «${name}@${previousVersion}»: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   /** Найти карантин по имени (и версии, если задана). */
   private async _findQuarantine(

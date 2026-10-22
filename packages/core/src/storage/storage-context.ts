@@ -977,6 +977,13 @@ export interface BuildStorageContextOptions {
   systemDictionariesDir?: string;
   /** ADR-097: режим работы со схемой БД при сборке (`postgres`). */
   postgresSchemaMode?: PostgresSchemaMode;
+  /**
+   * PROP-090 §5: путь к lock-файлу плагинов (`plugins.lock.json`). Задаёт
+   * composition root — при home-модели это `<home>/plugin/plugins.lock.json`
+   * (иначе порт смотрел бы в `{dataDir}/plugin/…`, и CLI с `--home` разошёлся
+   * бы с сервером).
+   */
+  pluginLockPath?: string;
 }
 
 /**
@@ -1012,6 +1019,7 @@ export async function buildStorageContext(
     bundlesPath: opts.bundlesPath,
     contextUserDataDir: opts.contextUserDataDir,
     systemDictionariesDir: opts.systemDictionariesDir,
+    ...(opts.pluginLockPath ? { pluginLockPath: opts.pluginLockPath } : {}),
   });
   // ADR-099: CLI/обслуживание — после создания storage применяем прокси
   // (config ← runtime) до дальнейших исходящих запросов. В серверных точках

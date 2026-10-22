@@ -22,7 +22,8 @@ import { MemoryPluginAuditRepository } from '../../storage/memory/plugin-audit.j
 import { MemoryPluginLockRepository } from '../../storage/memory/plugin-lock.js';
 import { PromptBlockRegistry } from '../context/prompt-block-registry.js';
 import { createInlinePluginLoader } from './inline-loader.js';
-import { PluginInstaller } from './installer.js';
+import { collectBundleFiles, PluginInstaller } from './installer.js';
+import { computePluginContentHash } from './integrity.js';
 import { pluginInstalledDir, pluginQuarantineDir, resolvePluginLayout } from './layout.js';
 import type { PluginLayout } from './layout.js';
 import { PluginHost } from './plugin-host.js';
@@ -430,7 +431,7 @@ describe('PluginInstaller: повторная установка', () => {
     expect(existsSync(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'))).toBe(true);
   });
 
-  it('другая версия → одна запись по имени (upsert), каталог прежней версии остаётся', async () => {
+  it('другая версия → одна запись по имени (upsert), каталог прежней версии удалён (Ф5б-3)', async () => {
     const { installer, layout, lock } = await makeInstaller();
     const v1 = await makeBundle({ manifest: manifest({ version: '1.0.0' }) });
     const v2 = await makeBundle({ manifest: manifest({ version: '1.1.0' }) });
@@ -459,9 +460,84 @@ describe('PluginInstaller: повторная установка', () => {
     const entries = await lock.list();
     expect(entries).toHaveLength(1);
     expect(entries[0]?.version).toBe('1.1.0');
-    // Известное ограничение: каталог старой версии остаётся (чистка — Ф5б).
+    // Ф5б-3: чистка каталога прежней версии после успешной установки новой.
+    expect(existsSync(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'))).toBe(false);
+    expect(existsSync(pluginInstalledDir(layout, 'demo-plugin', '1.1.0'))).toBe(true);
+  });
+
+  it('плагин активен → каталог прежней версии остаётся (код работающего не удаляем)', async () => {
+    const registry = new PromptBlockRegistry();
+    const host = makeHost(registry);
+    const code =
+      'export function apply(facade) {\n' +
+      '  facade.registerPromptBlock({\n' +
+      "    key: 'plugin.demo-plugin.tip',\n" +
+      "    tier: 'context',\n" +
+      '    order: 10,\n' +
+      "    load: () => ({ content: 'MARKER' }),\n" +
+      '  });\n' +
+      '}\n';
+    const v1 = await makeBundle({ manifest: manifest({ version: '1.0.0' }), code });
+    const v2 = await makeBundle({ manifest: manifest({ version: '1.1.0' }), code });
+    const { installer, layout, lock } = await makeInstaller({ host });
+
+    const first = await installer.installFromDirectory({
+      dir: v1,
+      trustLevel: 'trusted',
+      source: 'local',
+      installKind: 'deploy',
+      activate: true,
+      actor: 'tester',
+    });
+    expect(first.outcome).toBe('installed');
+    if (first.outcome === 'installed') expect(first.activated?.outcome).toBe('activated');
+    expect(host.isActive('demo-plugin')).toBe(true);
+
+    const second = await installer.installFromDirectory({
+      dir: v2,
+      trustLevel: 'trusted',
+      source: 'local',
+      installKind: 'deploy',
+    });
+    expect(second.outcome).toBe('installed');
+    // Активный плагин: каталог v1 сохраняется до деактивации/рестарта.
     expect(existsSync(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'))).toBe(true);
     expect(existsSync(pluginInstalledDir(layout, 'demo-plugin', '1.1.0'))).toBe(true);
+    expect((await lock.get('demo-plugin'))?.version).toBe('1.1.0');
+  });
+});
+
+// ── Бинарные ассеты (Ф5б-3) ──────────────────────────────────────────────
+
+describe('PluginInstaller: бинарные ассеты', () => {
+  it('бинарный файл копируется байт-в-байт в installed/ (в хеш не входит)', async () => {
+    const dir = await makeBundle();
+    // Валидный бинарник, но **не** исполняемый: `.png` → `info` у сканера.
+    // (`.bin` в `EXECUTABLE_EXTENSIONS` дал бы `dangerous` — установка бы
+    // отклонилась, а проверяется именно копирование.)
+    const bytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0xde, 0xad, 0xbe, 0xef,
+    ]);
+    await mkdir(join(dir, 'assets'), { recursive: true });
+    await writeFile(join(dir, 'assets', 'logo.png'), bytes);
+
+    const { installer, layout } = await makeInstaller();
+    const result = await installer.installFromDirectory({
+      dir,
+      trustLevel: 'trusted',
+      source: 'local',
+      installKind: 'deploy',
+    });
+
+    expect(result.outcome).toBe('installed');
+    if (result.outcome !== 'installed') return;
+    const target = join(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'), 'assets', 'logo.png');
+    expect(existsSync(target)).toBe(true);
+    expect(await readFile(target)).toEqual(bytes);
+    // Content-hash — только по текстовым файлам (как у сканера).
+    const text = await collectBundleFiles(join(layout.installedDir, 'demo-plugin@1.0.0'));
+    expect(text.binaryFiles).toContain('assets/logo.png');
+    expect(result.contentHash).toBe(computePluginContentHash(text.files));
   });
 });
 
@@ -662,7 +738,7 @@ describe('PluginInstaller: список', () => {
 // ── Раскладка: вспомогательные проверки ───────────────────────────────────
 
 describe('PluginInstaller: каталоги раскладки', () => {
-  it('бинарные файлы не попадают в бандл, но видны сканеру (info → safe)', async () => {
+  it('бинарные файлы видны сканеру (info → safe) и копируются в бандл (Ф5б-3)', async () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
     const dir = await makeTempDir('synth-plugin-installer-png-');
     await writeFile(
@@ -684,9 +760,11 @@ describe('PluginInstaller: каталоги раскладки', () => {
 
     expect(result.outcome).toBe('installed');
     if (result.outcome !== 'installed') return;
-    // Бинарный ассет не установлен (известное ограничение Ф5а: байтовое
-    // копирование — Ф5б), но установке не мешает (info ≠ dangerous).
-    const files = await readdir(join(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'), 'dist'));
-    expect(files).toEqual(['index.js']);
+    // Бинарный ассет копируется байтами (Ф5б-3) и установке не мешает
+    // (info ≠ dangerous).
+    const installedDist = join(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'), 'dist');
+    const files = await readdir(installedDist);
+    expect(files.sort()).toEqual(['index.js', 'logo.png']);
+    expect(await readFile(join(installedDist, 'logo.png'))).toEqual(png);
   });
 });

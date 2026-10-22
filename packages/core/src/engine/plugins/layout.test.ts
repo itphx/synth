@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -149,6 +149,42 @@ describe('раскладка бандла и карантин', () => {
     expect(existsSync(join(installed, 'dist', 'index.js'))).toBe(true);
     expect(existsSync(join(installed, 'PLUGIN_INTEGRITY.json'))).toBe(true);
     expect(existsSync(pluginQuarantineDir(l, 'demo-plugin', '1.0.0'))).toBe(false);
+  });
+
+  it('бинарные файлы (`binaryFiles` + `sourceDir`) копируются байт-в-байт', async () => {
+    const l = layout();
+    const source = join(dataDir, 'source-bundle');
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0xff, 0xfe]);
+    await mkdir(join(source, 'assets'), { recursive: true });
+    await writeFile(join(source, 'assets', 'logo.png'), bytes);
+
+    const result = await stagePluginBundle(l, {
+      name: 'demo-plugin',
+      version: '1.0.0',
+      files: files(),
+      binaryFiles: ['assets/logo.png'],
+      sourceDir: source,
+      action: 'allow',
+    });
+
+    expect(await readFile(join(result.dir, 'assets', 'logo.png'))).toEqual(bytes);
+  });
+
+  it('бинарный файл вне каталога бандла (`..`) → бросок, установка не создаётся', async () => {
+    const l = layout();
+    const source = join(dataDir, 'source-bundle');
+    await mkdir(source, { recursive: true });
+
+    await expect(
+      stagePluginBundle(l, {
+        name: 'demo-plugin',
+        version: '1.0.0',
+        files: files(),
+        binaryFiles: ['../evil.bin'],
+        sourceDir: source,
+        action: 'allow',
+      }),
+    ).rejects.toThrow(/Недопустимый путь файла бандла/);
   });
 
   it('повторная раскладка вытесняет предыдущий каталог', async () => {

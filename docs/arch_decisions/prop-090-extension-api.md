@@ -1007,15 +1007,31 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 добавлять в core команды, которых нет в `src/main.ts`» — значит `synth plugin *` объявляется в обоих.
 Режим `--json` — как у остальных команд.
 
-| Команда | Действие |
-|---|---|
-| `synth plugin list` | список установленных + статус |
-| `synth plugin inspect <name>` | манифест, trust, scan, hash, `provides` |
-| `synth plugin install <id> [--ref <sha\|tag>] [--force]` | установка (карантин → скан → политика) |
-| `synth plugin enable <name>` / `disable <name>` | вкл/выкл (активация/обратная прокрутка) |
-| `synth plugin update [<name>]` | обновление по pinned ref/hash, явно |
-| `synth plugin remove <name>` | снятие по записи lock |
-| `synth plugin scan <name>` | повторный скан без установки |
+**Реализовано (Ф5б-3)** — команды ниже; источник и логика — `packages/core/src/cli/plugin-commands.ts`
+(`createPluginCommand`), подключён в оба CLI.
+
+| Команда | Флаги | Действие / коды выхода |
+|---|---|---|
+| `synth plugin list` | `--json`, `--data-dir`, `--config`, `--home` | установленные + статус активации (имя, версия, доверие, вердикт скана, `active`); `0` |
+| `synth plugin install <path>` | `--trust <level>` (по умолчанию `community`), `--source <s>`, `--activate`, `--yes`, пути | установка из локального каталога (манифест → скан → политика); `0` — установлено или в карантине, `1` — отказ (код причины в stderr) |
+| `synth plugin approve <name>` | `--version`, `--activate`, `--yes`, пути | подтверждение бандла из карантина (повторные гейты + сверка integrity); `0`/`1` |
+| `synth plugin enable <name>` | пути | активация (пайплайн §10) в процессе CLI; `0` — активирован, `1` — отказ с причиной (`plugin.execution_disabled` → подсказка включить `plugins.executionEnabled` и перезапустить) |
+| `synth plugin disable <name>` | пути | обратная прокрутка; `0`/`1` |
+| `synth plugin remove <name>` | `--keep-files`, `--yes`, пути | снятие (lock + каталог); без `--yes` — отказ (`1`); идемпотентно (`0`, если не был установлен) |
+| `synth plugin scan <path>` | `--json` | **dry-run**: манифест + вердикт сканера + находки + content-hash, ничего не пишет; `0` — safe/caution, `1` — dangerous/ошибка |
+
+Отличия от первоначального наброска (осознанно): `inspect` не выделен — деталь отдаёт
+`GET /api/v2/plugins/:name`, а в CLI достаточно `list --json`; `install` принимает **локальный путь**
+(установка из npm/архива/URL — отдельная задача, требующая скачивания/распаковки и egress-политики);
+`update` не объявлен в CLI (HTTP отдаёт `501` до появления источников обновления).
+
+**`install` из CLI — офлайн-операция оператора** на файлах инстанса: передаётся
+`installKind: 'deploy'`, поэтому политика `plugins.runtimeInstall` (`deny` по умолчанию) к ней не
+применяется — иначе CLI был бы неработоспособен на дефолтном конфиге. Применение изменений —
+**после перезапуска** инстанса (инвариант 24); работающий инстанс управляется через
+`/api/v2/plugins*`, а не CLI. Контекст CLI собирается тем же путём, что `doctor`/`backup`
+(`loadConfig` → `resolveHome`/`resolveDataDir` → `buildStorageContext` с `pluginLockPath` из
+`resolvePluginLayout`), при `storage.backend=postgres` — тот же путь и та же диагностика.
 
 ### UI
 
@@ -1070,7 +1086,7 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | **Ф2 — модель доверия** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-trust`, коммитов нет) | Уровни trust, матрица install-policy с ячейкой `kind: "plugin"`, сканер (6+1 категорий, квоты, `content_hash`, кэш сканов, `.skillignore`, бинарные расширения), матрица `severity → verdict`, `quarantine/`, `plugins.lock.json`, порт `PluginAuditRepository` + `{dataDir}/audit/plugins.jsonl`. **Сделано:** встроенный статический сканер (`engine/plugins/scan/*`: правила, `.skillignore`, кэш, дефолтный хук скана), матрица install-policy одной функцией `installPolicyDecision` (`shared`, ячейка `kind: 'plugin'`), раскладка `<home>/plugin/` с карантином и `PLUGIN_INTEGRITY.json` (`engine/plugins/layout.ts`), порт `PluginLockRepository` (файл/память/PostgreSQL + миграция `007_plugin_lock`), аудит-событие `scan` (+ `plugin.approval_required`), шаг trust/scan в `PluginHost` — **trust-floor до install-policy** | тест: вердикт по severity (`info\|low → safe`, `medium → caution`, `high\|critical → dangerous`); квоты → `caution`; бинарник → `dangerous`; `community` + `dangerous` → `block`; trust-floor: `community` устанавливается, но не активируется (`plugin.trust_below_floor`) — **выполнено**, см. §«Статус реализации в коде (Ф2)» |
 | **Ф3 — точки `promptBlocks` + `llmFilters` + `tools`** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-points`): Ф3а — точка **`promptBlocks`**, Ф3б — точка **`llmFilters`**, Ф3в — точка **`tools`** и **контрактный suite расширений** | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений**. **Сделано (Ф3а):** контракт `PromptBlockProvider`/`PromptBlockContext` (`shared`, `types/prompt-blocks.ts`), реестр `PromptBlockRegistry` (`engine/context/prompt-block-registry.ts`), сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`), контекст хода (`query`/`turnId`), бюджет символов блока + обрезка (`status: 'truncated'`), инвалидация `promptStates` по блокам провайдеров (`provider: true`), фасад `PluginFacade.registerPromptBlock` (disposer снимает блок при деактивации), решение fail-closed `plugins.scan='disabled'` + `executionEnabled=true` (`plugin.scan_disabled_with_execution`), **версия правил сканера в ключе кэша сканов** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный — **по части `promptBlocks` выполнено**, см. §«Статус реализации в коде (Ф3а)»; критерии `llmFilters` — **выполнено, см. §«Статус реализации в коде (Ф3б)»**; точка `tools` (namespace, permission-слой, сверка `provides.tools[]`) и **контрактный suite расширений** — **выполнено, см. §«Статус реализации в коде (Ф3в)»** |
 | **Ф4 — два режима исполнения** — ⚠️ **частично: `inline` — выполнено (Ф4а), `out-of-process` — остаётся** | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация. **Сделано (Ф4а):** `inline`-загрузчик `createInlinePluginLoader` (`engine/plugins/inline-loader.ts`): containment по `realpath`, `.js`/`.mjs`, предел 8 МиБ, cache-busting `?v=<hash\|mtime>`, три формы модуля, новый код `plugin.module_invalid`; экспорт из `engine/plugins/index.ts` и `src/index.ts`. **Автоподключения в `server/app.ts`/`main.ts`/`backend/app/deps.ts` нет** — установка/активация и сканирование `plugins.lock.json` при старте появятся в Ф5 | тест: эталонный бандл (реальные `mkdtemp` + ESM-файл) активируется **через `PluginHost`** при `executionEnabled: true`, блок в `PromptBlockRegistry`, аудит `activate`; `export const x`/`export default 42` → `plugin.module_invalid`; бросок в модуле → `plugin.loader_unavailable`; `../evil.js`, абсолютный путь, симлинк наружу, `.ts`, превышение размера → отказ; перезапись бандла → новое содержимое — **выполнено (21 тест), см. §«Статус реализации в коде (Ф4а)»**. Критерии `out-of-process` (неверный токен → 401, недоступный процесс → деградация по `failMode`, suite на out-of-process реализации) — **остаются за Ф4б** |
-| **Ф5 — install/activate: сервис + runtime + API/CLI; managed deploy-time** — ⚠️ **частично**: `PluginInstaller` (Ф5а), `PluginRuntime` + старт-активация (Ф5б-1) и **HTTP API** `/api/v2/plugins*` + `/api/v2/settings/plugins` со своей RBAC-матрицей (Ф5б-2) — **сделано**; CLI `synth plugin *` и установка из npm/архива — остаток (Ф5б-3) | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
+| **Ф5 — install/activate: сервис + runtime + API + CLI; managed deploy-time** — ⚠️ **частично**: `PluginInstaller` (Ф5а), `PluginRuntime` + старт-активация (Ф5б-1), HTTP API + RBAC (Ф5б-2) и **CLI `synth plugin *`** (Ф5б-3) — **сделано**; установка из npm/архива/URL и `update` — остаток (отдельная задача); managed deploy-time — Ф5в | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
 | **Ф6 — UI** | Раздел «Плагины»: список, карточка (trust/scan/hash/version/`contracts`/`host`/`provides`/режим), тумблеры enable/disable, install/update/remove, статус скана | тест UI: карточка показывает trust/scan/hash; переключатель enable вызывает API и обновляет список; i18n-паритет `ru.ts`/`en.ts` зелёный (`parity.test.ts`) |
 | **Ф7 — hybrid** | Allow-list сервера, форма политики, discovery (`/api/v2/settings/plugins` + сигнал в `/auth/oidc-meta`), server-scoped токены с `plugin_id`-scope (Уровень 2) | тест: плагин вне allow-list не активируется в hybrid; токен с чужим `plugin_id` отвергается сервером; локальный плагин без сервера — cooperative (помечено в UI/доках) |
 
@@ -1871,6 +1887,43 @@ scope → `403 SCOPE_REQUIRED`.
 каталогов старых версий; **Ф5в** — managed deploy-time политика; **Ф6** — UI; **Ф4б** —
 `out-of-process`.
 
+### Статус реализации в коде (Ф5б, часть 3 — 2026-10-22)
+
+CLI `synth plugin *` и два улучшения установщика. Ветка `feature/plugin-points`, коммитов нет.
+
+**CLI.**
+
+| Что | Где |
+|---|---|
+| `createPluginCommand` / `createPluginCliContext` — группа `plugin` с командами `list`/`install`/`approve`/`enable`/`disable`/`remove`/`scan`; контекст всегда освобождается в `finally` (`runtime.dispose()` + `storage.close()`), код выхода — через `process.exitCode` | `packages/core/src/cli/plugin-commands.ts` |
+| Подключение в обоих CLI (правило PROP-090 §«CLI»): dev/standalone и публичная обёртка | `packages/core/src/main.ts`, `packages/synth/src/cli.ts` |
+| Subpath-экспорт для обёртки — **точный** путь `./cli/plugin-commands.js` (wildcard `./cli/*` не резолвился TypeScript'ом) | `packages/core/package.json` |
+| Сборка контекста: `loadConfig` → `resolveHome`/`resolveDataDir` → `resolvePluginLayout` → `buildStorageContext` (**`pluginLockPath` из раскладки** — иначе при `--home` порт lock смотрел бы в `{dataDir}/plugin`) → `mergePluginsConfig(config, runtime)` → `PluginRuntime` | `cli/plugin-commands.ts`, `storage/storage-context.ts` |
+| `scan` — **без** сборки контекста: манифест + `scanPluginDirectory` + content-hash, на диск ничего не пишет | там же |
+
+**Установщик.**
+
+| Что | Как |
+|---|---|
+| **Byte-copy бинарных ассетов** (закрывает ограничение Ф5а) | `PluginBundleStageInput.binaryFiles?` + `sourceDir?`; `stagePluginBundle` копирует байтами (`mkdir -p` + `copyFile`), путь нормализуется и проверяется на containment (`..`/абсолютный/`C:\` → бросок), ошибка копирования — бросок (не «тихая» потеря ассета). Content-hash по-прежнему по текстовым файлам (как у сканера): бинарники проверяет сканер по каталогу |
+| **Чистка каталогов старых версий** | после `lock.save` + аудита установщик удаляет `installed/<name>@<oldVersion>/`; если плагин **активен** (модуль загружен в процесс) — каталог остаётся + предупреждение, уборка произойдёт при следующей установке после деактивации/рестарта |
+| `readPluginManifest` экспортирован (для dry-run `scan`) | `engine/plugins/installer.ts` |
+
+**Проверено вручную** (собранный CLI, временный `--data-dir`): `plugin --help`; `scan` демо-плагина →
+`safe`, content-hash; `install --trust trusted` → `installed/demo-memory@0.1.0/`; `list` → таблица с
+доверием и вердиктом; `enable` (с `plugins.executionEnabled: true`) → активация прошла весь пайплайн
+(import + фасад + сверка `provides`); `remove` без `--yes` → код 1, с `--yes` → снят, повтор → «не
+установлен» (код 0).
+
+**Тесты Ф5б-3.** `packages/core/src/cli/plugin-commands.test.ts` (20 — все команды, коды выхода,
+`list --json`, `scan` без записи, `remove` без `--yes`), `engine/plugins/installer.test.ts`
+(byte-copy ассета + чистка старой версии + «активный плагин — каталог остаётся»),
+`engine/plugins/layout.test.ts` (byte-copy и отказ на `../evil.bin`).
+
+**Остаток после Ф5б-3.** Установка из **npm/архива/URL** (скачивание, распаковка, pin по
+`ref`/`content_hash`, egress-политика) и `update`/откат — отдельная задача; **Ф5в** — managed
+deploy-time политика (запрет снятия management-плагинов); **Ф6** — UI; **Ф4б** — `out-of-process`.
+
 ## Открытые вопросы
 
 > Закрыто решениями владельца продукта 2026-10-22: форма out-of-process-протокола (HTTP/1.1 + JSON,
@@ -2045,3 +2098,4 @@ scope → `403 SCOPE_REQUIRED`.
 - 2026-10-22 — **Ф5а выполнен** (ветка `feature/plugin-points`): сервис установки в ядре — `PluginInstaller` (`engine/plugins/installer.ts`): `installFromDirectory` (манифест → состав бандла/content-hash → fail-closed `scan`+`executionEnabled` → trust-floor → скан → `runtimeInstall` → install-policy → lock + аудит `install`; `ask` → карантин без lock, `block`/`dangerous` → отказ), `approve` (повторный скан карантина, сверка `PLUGIN_INTEGRITY.json` с хешем, `releaseFromQuarantine`, lock; хеш/доверие не подтверждаются → fail-closed), `uninstall` (деактивация → lock → `rm -rf` каталога; идемпотентно) и `list`. Действия аудита `install`/`uninstall` (`PLUGIN_AUDIT_ACTIONS`), `PLUGIN_INTEGRITY.json` расширен `trust_level`/`install_kind`/`identifier`/`ref`. Правило `entry`: `dist/index.js` → первый `.js`/`.mjs` в `dist/` → дефолт. Установка другой версии оставляет каталог прежней (известное ограничение; чистка — Ф5б). HTTP API/CLI/`plugins.json`/старт-активация из lock — Ф5б/Ф5в. Тесты — `engine/plugins/installer.test.ts` (20, реальные `mkdtemp` + in-memory порты).
 - 2026-10-22 — **Ф5б-1 выполнен** (ветка `feature/plugin-points`): **`PluginRuntime`** (`packages/core/src/engine/plugins/runtime.ts`) — сборка слоя плагинов на инстанс (раскладка, порты `pluginAudit`/`pluginLock` из `StorageContext`, `PluginHost`, inline-загрузчик, `PluginInstaller`) и **старт-активация** `activateInstalled()`: lock → дескриптор (с `files` для шага integrity) → активация в порядке имён, `executionEnabled=false` — no-op, сбой плагина не роняет старт; `list()`/`activate`/`deactivate`/`dispose`. **`OrchestratorOptions.promptBlocks`** прокинут в `SystemPromptComposer` — до этого композер создавал собственный `PromptBlockRegistry`, и блоки плагинов в промпт сессии **не попадали** (тесты точки были зелёными, потому что собирали реестр вручную). Проводка standalone и managed: один экземпляр реестра в оркестратор и рантайм, `pluginLockPath` из единственного резолвера `resolvePluginLayout`, `pluginRuntime` в хэндле приложения, старт-активация в `main.ts` и `dispose()` при остановке до закрытия хранилища. Тесты: `runtime.test.ts` (8 — персистентность, сломанный бандл рядом с рабочим, `dispose`, `list`), `orchestrator-prompt-blocks.test.ts` (3 — один экземпляр реестра).
 - 2026-10-22 — **Ф5б-2 выполнен** (ветка `feature/plugin-points`): **HTTP-контур плагинов** — `createPluginsRoutes` (`GET /api/v2/plugins`, деталь с манифестом и `PLUGIN_INTEGRITY.json`, `install`, `approve`, `enable`, `disable`, `DELETE`, `update` → `501`) и `createPluginSettingsRoutes` (`/api/v2/settings/plugins`: `enabled`/`executionEnabled`/`runtimeInstall`/`trustFloor`/`scan`/allow-deny/бюджеты, `restartRequired: true`), исчерпывающая таблица `PLUGIN_REASON_HTTP`; монтаж в core (`requireAuth`, `localInstall: true`) и backend (ADMIN; install/enable — scope `addons:install`; approve и DELETE — только ADMIN; `localInstall: false`); порт настроек расширен `getPlugins/setPlugins/clearPlugins` (файл/память/PG); эффективный конфиг — `mergePluginsConfig`. Тесты: `routes/plugins.test.ts` (20) и **своя** RBAC-матрица `backend/routes/plugins-rbac-matrix.test.ts` (8 — негативная USER/LEAD/AUDITOR → 403, позитивная ADMIN и service-key со scope). Попутно зафиксирована ловушка: backend использует `core/dist`, поэтому после правок роутов core нужен `core build` до backend-тестов.
+- 2026-10-22 — **Ф5б-3 выполнен** (ветка `feature/plugin-points`): **CLI `synth plugin *`** — `packages/core/src/cli/plugin-commands.ts` (`createPluginCommand`/`createPluginCliContext`), подключён в `core/main.ts` и `packages/synth/src/cli.ts` (точный subpath-экспорт `./cli/plugin-commands.js`): `list` (`--json`), `install <path>` (`--trust`/`--source`/`--activate`, `installKind: 'deploy'` — офлайн-операция, политика `runtimeInstall` к ней не применяется), `approve`, `enable`, `disable`, `remove` (без `--yes` — отказ), `scan` (dry-run, без записи); контекст — тем же путём, что `doctor`/`backup`, с `pluginLockPath` из раскладки. Установщик: **byte-copy бинарных ассетов** (`binaryFiles`/`sourceDir` в `stagePluginBundle`, containment) — закрыто ограничение Ф5а; **чистка каталога старой версии** после успешной установки (кроме активного плагина). Тесты: `cli/plugin-commands.test.ts` (20), `installer.test.ts`/`layout.test.ts` (+byte-copy, чистка). Ручная проверка: scan → install → list → enable (полный пайплайн активации) → remove на временном data-dir.

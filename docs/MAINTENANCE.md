@@ -1239,6 +1239,86 @@ graceful shutdown и завершается с кодом **75** (`EX_TEMPFAIL`)
      `/settings/tls` и что рестарт действительно произошёл (смена `startedAt`), а не был перехвачен
      другим процессом.
 
+## Плагины: установка, проверка, снятие
+
+Слой плагинов (PROP-090, Extension API v1) — расширения, исполняемые **в процессе** Synth (`inline`):
+блоки системного промпта, фильтры LLM-вызовов, инструменты. Бандл — self-contained ESM-каталог
+(`synth.pack` + `dist/index.js`); npm-зависимости не резолвятся, `@itphx/*` — external.
+
+**Исполнение кода выключено по умолчанию** (`plugins.executionEnabled: false`): установка, скан и
+снятие работают, активация останавливается на шаге `import` (`plugin.execution_disabled`). Включается
+в `config.yaml` (или `PUT /api/v2/settings/plugins`) и **применяется после перезапуска** (инвариант 24).
+
+### Установка и проверка (CLI, standalone)
+
+```bash
+# 1. Проверить бандл без установки (ничего не пишет): вердикт сканера, находки, content-hash
+synth plugin scan ./synth-plugin-memory
+
+# 2. Установить (скан → trust-floor → install-policy). trust по умолчанию community
+synth plugin install ./synth-plugin-memory --trust trusted
+
+# 3. Список установленного и статус активации
+synth plugin list          # или --json
+
+# 4. Включить (исполняет код плагина; при executionEnabled=false — отказ с подсказкой)
+synth plugin enable synth-plugin-memory
+
+# 5. Выключить / снять
+synth plugin disable synth-plugin-memory
+synth plugin remove synth-plugin-memory --yes          # --keep-files — оставить каталог бандла
+```
+
+`install` — **офлайн-операция оператора**: политика `plugins.runtimeInstall` к ней не применяется
+(передаётся `installKind: 'deploy'`), изменения вступают в силу после перезапуска инстанса.
+`enable`/`disable` в CLI работают в одноразовом процессе: они проверяют, что пайплайн активации
+проходит, но не переключают живой инстанс — для этого используйте API/UI.
+
+### Установка и управление (API, managed и standalone)
+
+| Действие | Запрос |
+|---|---|
+| Список | `GET /api/v2/plugins` |
+| Детали (манифест, integrity) | `GET /api/v2/plugins/:name` |
+| Установка из локального каталога (только standalone) | `POST /api/v2/plugins/install` `{path, trustLevel?, source?}` |
+| Подтверждение карантина (`202`) | `POST /api/v2/plugins/:name/approve` |
+| Включить / выключить | `POST /api/v2/plugins/:name/enable` / `.../disable` |
+| Снять | `DELETE /api/v2/plugins/:name` (идемпотентно) |
+| Политика слоя | `GET/PUT/DELETE /api/v2/settings/plugins` (`restartRequired: true`) |
+
+RBAC managed: чтение и настройки — `ADMIN`; установка/активация — `ADMIN` или service-key со scope
+`addons:install`; подтверждение карантина и снятие — **только `ADMIN`**. Спецификация —
+[API_V2.md](./API_V2.md) §5.36.
+
+### Где что лежит
+
+```text
+<home>/plugin/  (или {dataDir}/plugin/)
+├── installed/<name>@<version>/   # бандл + synth.pack + PLUGIN_INTEGRITY.json
+├── quarantine/<name>@<version>/  # ожидают подтверждения (install-policy ask)
+├── plugins.lock.json             # провенанс: доверие, вердикт скана, content-hash, entry
+└── plugins.json                  # runtime-override включения/настроек
+```
+
+Журнал решений и операций — `{dataDir}/audit/plugins.jsonl` (действия `install`/`activate`/
+`deactivate`/`uninstall`/`scan`/`filter`, исход и код причины; **без** текстов промптов/ответов).
+
+### Диагностика
+
+| Симптом | Что смотреть |
+|---|---|
+| `plugin.execution_disabled` при `enable` | `plugins.executionEnabled` (по умолчанию `false`) + перезапуск |
+| `plugin.trust_below_floor` | доверие установки ниже `plugins.trustFloor` (по умолчанию `trusted`); переустановите с `--trust` или понизьте порог осознанно |
+| `plugin.approval_required` / статус `approval_required` | бандл в `quarantine/` — подтвердите `approve` (после проверки находок скана) |
+| `plugin.integrity_mismatch` | содержимое `installed/…` изменилось после установки — переустановите бандл |
+| `plugin.provides_mismatch` | манифест обещает вклад, которого плагин не регистрирует (или наоборот) — ошибка сборки плагина |
+| `plugin.scan_disabled_with_execution` | `plugins.scan=disabled` вместе с `executionEnabled=true` — включите скан (fail-closed) |
+| Плагин активен, но блока нет в промпте | блок объявлен и зарегистрирован? `GET /api/v2/plugins/:name` → `provides.promptBlocks`; бюджет `plugins.promptBlockMaxChars` (обрезка) |
+
+Полный сброс слоя (осторожно, деструктивно): `synth plugin remove <name> --yes` для каждого плагина
+или остановка инстанса + удаление `<home>/plugin/` — **вместе** с `plugins.lock.json`.
+
+
 ## Обслуживание из UI
 
 **Цель:** выполнить эксплуатационные операции без CLI; доступно только роли ADMIN.

@@ -750,10 +750,25 @@
   `contentHash`/`entry`; отказ активации установку не отменяет. **Правило `entry`**:
   `dist/index.js` → первый по алфавиту `.js`/`.mjs` в `dist/` → `dist/index.js`. Состав бандла:
   рекурсивный обход (сортировка, симлинки/`node_modules`/`.git` пропускаются, `PLUGIN_INTEGRITY.json`
-  исключён); бинарные файлы в `files` не попадают (сканер видит их в каталоге; байтовое
-  копирование ассетов — Ф5б) — поэтому хеш совпадает с `scanPluginDirectory`. Идемпотентность: lock —
+  исключён); бинарные файлы не входят в `files`/content-hash, но **копируются байтами** при
+  установке (`PluginBundleStageInput.binaryFiles`/`sourceDir` → `mkdir -p` + `copyFile`, containment
+  относительного пути) — поэтому хеш совпадает с `scanPluginDirectory`, а ассеты не теряются.
+  После успешной установки новой версии каталог предыдущей удаляется (`_cleanupPreviousVersion`),
+  **кроме** случая, когда плагин активен (модуль загружен в процесс) — тогда остаётся + warning. Идемпотентность: lock —
   upsert по имени (`installed_at` иммутабелен, `updated_at` обновляется); другая версия заменяет
   запись, каталог прежней версии остаётся (известное ограничение, чистка — Ф5б).
+- `cli/plugin-commands.ts` — **Ф5б-3: CLI `synth plugin *`**. `createPluginCommand` (группа `plugin`:
+  `list` (`--json`), `install <path>` (`--trust`/`--source`/`--activate`/`--yes`), `approve`, `enable`,
+  `disable`, `remove` (`--keep-files`/`--yes`), `scan <path>` (dry-run)) и `createPluginCliContext`
+  (сборка: `loadConfig` → `resolveHome`/`resolveDataDir` → `resolvePluginLayout` → `buildStorageContext`
+  с `pluginLockPath` из раскладки → `mergePluginsConfig(config, runtime)` → `PluginRuntime`; при
+  `backend=postgres` — тот же путь, что `doctor`/`backup`). Контекст освобождается в `finally`
+  (`dispose` + `close`), коды — `process.exitCode`: `0` успех/карантин, `1` отказ (код причины в stderr).
+  **`install` — офлайн-операция**: передаёт `installKind: 'deploy'`, поэтому `plugins.runtimeInstall`
+  к ней не применяется; изменения — после рестарта (инвариант 24). `enable`/`disable` в одноразовом
+  процессе проверяют пайплайн, но не переключают живой инстанс (для этого API/UI). Подключён в
+  `main.ts` **и** `packages/synth/src/cli.ts` (subpath-экспорт `./cli/plugin-commands.js` — точный путь,
+  wildcard не резолвится TS).
 - `server/routes/plugins.ts` — **Ф5б-2: HTTP-контур плагинов**. `createPluginsRoutes(auth, deps, opts)`:
   `GET /`, `GET /:name` (манифест + `PLUGIN_INTEGRITY.json` — best-effort, порча не даёт 500), `POST /install`
   (`201`/`202`/`400`/`403`/`409`), `POST /:name/approve`, `/:name/enable`, `/:name/disable`, `DELETE /:name`
