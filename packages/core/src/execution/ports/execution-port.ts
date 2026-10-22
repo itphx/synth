@@ -109,6 +109,16 @@ export interface ExecutionPort {
    * общего вида («программа не установлена»).
    */
   capabilitySummary?(bin: string): Promise<ExecutionCapabilitySummary>;
+
+  /**
+   * ADR-077 (шаг B2): параметры пула исполнителей для MCP-хоста.
+   *
+   * Заполняет удалённый порт (фабрика core, `execution/remote.ts`): по этим
+   * адресам control plane забирает MCP-серверы исполнителя. `inline`-порт поля
+   * не имеет — поведение прежнее. Значение **не сериализуется** и не пишется в
+   * логи: `token` — секрет (инвариант 13).
+   */
+  readonly executorMcp?: { readonly urls: string[]; readonly token: string };
 }
 
 /**

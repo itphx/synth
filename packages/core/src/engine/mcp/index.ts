@@ -20,6 +20,7 @@ export {
   ExecutorMcpSource,
   createExecutorMcpSourceFromConfig,
   attachExecutorMcpSource,
+  attachExecutorMcpFromDescriptor,
   EXECUTOR_MCP_SOURCE_TTL_MS,
   EXECUTOR_MCP_DISCOVERY_TIMEOUT_MS,
 } from './executor-mcp-source.js';
@@ -27,6 +28,7 @@ export type {
   ExecutorMcpServerInfo,
   ExecutorMcpSourceOptions,
   ExecutorMcpManagerLike,
+  ExecutorMcpDescriptorLike,
 } from './executor-mcp-source.js';
 export { resolveMcpScope, resolveMcpProjectScope } from './scope.js';
 export type { McpScopeServer, McpScopeSession, McpScopeDecision } from './scope.js';

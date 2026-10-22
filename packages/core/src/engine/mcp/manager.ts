@@ -93,6 +93,11 @@ export class McpManager {
     return this._executorServers.has(name);
   }
 
+  /** Источник серверов исполнителя уже подключён? (идемпотентность проводки) */
+  hasExecutorMcpSource(): boolean {
+    return this._executorSource !== null;
+  }
+
   /** Имена серверов исполнителя в текущем снимке. */
   getExecutorServerNames(): string[] {
     return [...this._executorServers];

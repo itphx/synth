@@ -135,6 +135,39 @@ export async function isExecutorPackageAvailable(): Promise<boolean> {
 }
 
 /**
+ * Удалённый порт + дескриптор MCP-пула (ADR-077, шаг B2).
+ *
+ * Обёртка нужна, чтобы домен (оркестратор) мог подключить MCP-серверы
+ * исполнителя, не зная деталей загрузки пакета. Она прозрачно делегирует порт
+ * и добавляет неизменяемый дескриптор `executorMcp` (адреса + токен); токен в
+ * логи/ошибки не попадает.
+ */
+class RemoteExecutionPortWithExecutorMcp implements ExecutionPort {
+  readonly executorMcp: { readonly urls: string[]; readonly token: string };
+  private readonly _inner: ExecutionPort;
+
+  constructor(inner: ExecutionPort, urls: string[], token: string) {
+    this._inner = inner;
+    this.executorMcp = { urls: [...urls], token };
+  }
+
+  execute(req: Parameters<ExecutionPort['execute']>[0]): ReturnType<ExecutionPort['execute']> {
+    return this._inner.execute(req);
+  }
+
+  probe(bin: string, args?: string[]): Promise<boolean> {
+    return this._inner.probe ? this._inner.probe(bin, args) : Promise.resolve(true);
+  }
+
+  capabilitySummary(bin: string): ReturnType<NonNullable<ExecutionPort['capabilitySummary']>> {
+    if (!this._inner.capabilitySummary) {
+      return Promise.reject(new Error('capabilitySummary не поддерживается портом'));
+    }
+    return this._inner.capabilitySummary(bin);
+  }
+}
+
+/**
  * Собрать удалённый порт исполнения по конфигурации (`execution.mode=remote`).
  *
  * Порядок проверок — от дешёвых к дорогим, все **fail-closed**:
@@ -176,11 +209,15 @@ export async function createRemoteExecutionPortFromConfig(
     );
   }
 
-  return mod.createRemoteExecutionPort({
+  return new RemoteExecutionPortWithExecutorMcp(
+    mod.createRemoteExecutionPort({
+      urls,
+      token,
+      timeoutMs: remote.timeoutMs,
+      concurrency: remote.concurrency,
+      failMode: remote.failMode,
+    }),
     urls,
     token,
-    timeoutMs: remote.timeoutMs,
-    concurrency: remote.concurrency,
-    failMode: remote.failMode,
-  });
+  );
 }

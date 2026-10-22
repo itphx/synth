@@ -260,6 +260,38 @@ function mergeServerStatuses(
 export interface ExecutorMcpManagerLike {
   setExecutorMcpSource(source: ExecutorMcpSource | null): void;
   refreshExecutorServers(): Promise<void>;
+  /** Источник уже подключён? (идемпотентность проводки). */
+  hasExecutorMcpSource?(): boolean;
+}
+
+/** Дескриптор MCP-пула на порту исполнения (ADR-077 шаг B2). */
+export interface ExecutorMcpDescriptorLike {
+  readonly urls: readonly string[];
+  readonly token: string;
+}
+
+/**
+ * Подключить источник по дескриптору порта исполнения (идемпотентно).
+ *
+ * Нужен managed-backend'у: оркестратор получает удалённый порт из общей
+ * фабрики core и сам поднимает MCP-источник — отдельная проводка в каждой
+ * сборке `McpManager` не требуется. `inline`-порт дескриптора не несёт, поэтому
+ * там ничего не происходит.
+ */
+export function attachExecutorMcpFromDescriptor(
+  manager: ExecutorMcpManagerLike,
+  descriptor: ExecutorMcpDescriptorLike | undefined,
+): ExecutorMcpSource | null {
+  if (!descriptor) return null;
+  const urls = descriptor.urls.map((url) => url.trim()).filter((url) => url.length > 0);
+  if (urls.length === 0) return null;
+  if (manager.hasExecutorMcpSource?.() === true) return null;
+  const source = new ExecutorMcpSource({ urls, token: descriptor.token });
+  manager.setExecutorMcpSource(source);
+  // Discovery — фоном: первый ход не должен ждать исполнителя (сам старт режима
+  // уже проверен fail-closed сборкой порта). Ошибки — warning внутри refresh.
+  void manager.refreshExecutorServers().catch(() => {});
+  return source;
 }
 
 /**

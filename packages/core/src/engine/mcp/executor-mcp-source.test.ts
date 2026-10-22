@@ -13,6 +13,7 @@ import {
   ExecutorMcpSource,
   createExecutorMcpSourceFromConfig,
   attachExecutorMcpSource,
+  attachExecutorMcpFromDescriptor,
   EXECUTOR_MCP_SOURCE_TTL_MS,
   type ExecutorMcpManagerLike,
 } from './executor-mcp-source.js';
@@ -214,5 +215,54 @@ describe('ExecutorMcpSource: подключение по execution-конфиг�
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('ExecutorMcpSource: дескриптор порта исполнения (managed-backend)', () => {
+  // Мок типизирован по поверхности менеджера: без явной сигнатуры `vi.fn()`
+  // выводится как `Mock<Procedure | Constructable>` и не совпадает с
+  // `(source: ExecutorMcpSource | null) => void` (обязательный член интерфейса).
+  function fakeManager(alreadyAttached = false) {
+    return {
+      setExecutorMcpSource: vi.fn<(source: ExecutorMcpSource | null) => void>(),
+      refreshExecutorServers: vi.fn<() => Promise<void>>(async () => {}),
+      hasExecutorMcpSource: () => alreadyAttached,
+    } satisfies ExecutorMcpManagerLike;
+  }
+
+  it('подключает источник по descriptor и запускает discovery', async () => {
+    const manager = fakeManager();
+    const source = attachExecutorMcpFromDescriptor(manager, {
+      urls: ['http://a:5100'],
+      token: TOKEN,
+    });
+    expect(source).toBeInstanceOf(ExecutorMcpSource);
+    expect(manager.setExecutorMcpSource).toHaveBeenCalledWith(source);
+    // Discovery — фоном (await не нужен, вызывается сразу).
+    expect(manager.refreshExecutorServers).toHaveBeenCalledTimes(1);
+    // Токен живёт только внутри пула (нужен для bearer-запроса) и не выходит
+    // через публичную поверхность источника — адреса и снимок состава.
+    // `JSON.stringify(source)` проверять нельзя: приватные поля JS-объекта
+    // сериализуются, и токен «нашёлся» бы в самом пуле, а не в утечке.
+    expect(source!.urls).toEqual(['http://a:5100']);
+    expect(JSON.stringify({ urls: source!.urls, servers: source!.listServers() })).not.toContain(TOKEN);
+  });
+
+  it('нет дескриптора (inline) → ничего не подключается', () => {
+    const manager = fakeManager();
+    expect(attachExecutorMcpFromDescriptor(manager, undefined)).toBeNull();
+    expect(manager.setExecutorMcpSource).not.toHaveBeenCalled();
+  });
+
+  it('пустой список адресов → ничего не подключается', () => {
+    const manager = fakeManager();
+    expect(attachExecutorMcpFromDescriptor(manager, { urls: ['  '], token: TOKEN })).toBeNull();
+    expect(manager.setExecutorMcpSource).not.toHaveBeenCalled();
+  });
+
+  it('идемпотентно: источник уже подключён → повторный вызов no-op', () => {
+    const manager = fakeManager(true);
+    expect(attachExecutorMcpFromDescriptor(manager, { urls: ['http://a:5100'], token: TOKEN })).toBeNull();
+    expect(manager.setExecutorMcpSource).not.toHaveBeenCalled();
   });
 });

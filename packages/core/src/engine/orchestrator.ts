@@ -26,6 +26,7 @@ import { createStateMessage, findLastStateMessage, buildModeChangeContent, build
 import type { ToolRegistry } from './tools/registry.js';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
+import { attachExecutorMcpFromDescriptor } from './mcp/executor-mcp-source.js';
 import { resolveMcpScope, type McpScopeDecision } from './mcp/scope.js';
 import { warning } from '../logger.js';
 import { ModelRouter } from './router/router.js';
@@ -644,6 +645,13 @@ export class ChatOrchestrator {
     this._runtimeDeps = options.runtimeDeps ?? { ...ALL_RUNTIME_DEPS_AVAILABLE };
     // ADR-077: порт исполнения — inline по умолчанию (прежнее поведение).
     this._executionPort = options.executionPort ?? new InlineExecutionPort();
+    // ADR-077 (шаг B2): в split-режиме MCP-серверы живут в исполнителе, а
+    // удалённый порт несёт дескриптор пула. Оркестратор поднимает источник —
+    // так managed-backend получает это без отдельной проводки в своей сборке
+    // `McpManager` (идемпотентно: если источник уже подключён — no-op).
+    if (this._mcpManager) {
+      attachExecutorMcpFromDescriptor(this._mcpManager, this._executionPort.executorMcp);
+    }
     this._tokenRatioLoader = options.tokenRatioLoader;
     this._onTokenRatioCalibrated = options.onTokenRatioCalibrated;
     this._skillRuntime = options.skillRuntime ?? null;
