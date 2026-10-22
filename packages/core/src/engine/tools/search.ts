@@ -6,6 +6,7 @@ import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
+import { toolRuntimeRequires } from './runtime-deps.js';
 import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError } from '../../execution/ports/index.js';
 
 export const grepFilesTool: ToolDefinition = {
@@ -49,6 +50,9 @@ export const grepFilesTool: ToolDefinition = {
       // maxBuffer 10 МБ, базовое окружение — `process.env`).
       const { stdout } = await resolveExecutionPort(ctx).execute({
         command: { kind: 'argv', file: 'rg', args: rgArgs },
+        // ADR-077: бинарное требование тула (`rg`) — в remote-режиме команда
+        // уходит в адрес пула, где ripgrep есть.
+        requires: toolRuntimeRequires('grep_files'),
         timeoutMs: 30_000,
         // «Стоп» (toolAbortController.abort) убивает процесс SIGTERM
         signal: ctx.abortSignal,

@@ -75,6 +75,7 @@ export {
   isExecutionPort,
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_SHELL_BINARY,
+  EXECUTION_BASE_CAPABILITIES,
 } from './execution/ports/index.js';
 export type {
   ExecutionPort,
@@ -83,6 +84,8 @@ export type {
   ExecCommand,
   ExecFailureReason,
   ExecutionErrorInit,
+  ExecutionCapabilitySummary,
+  ExecutionBaseCapability,
 } from './execution/ports/index.js';
 export { InlineExecutionPort } from './execution/inline-execution-port.js';
 export { resolveExecutionPort, EXECUTION_PORT_KEY } from './execution/tool-port.js';
@@ -107,9 +110,13 @@ export {
   detectRuntimeDeps,
   resetRuntimeDepsCache,
   isRuntimeDepAvailable,
+  runtimeDepUnavailableDetail,
+  runtimeRequires,
+  toolRuntimeRequires,
   probeBinary,
   ALL_RUNTIME_DEPS_AVAILABLE,
   RUNTIME_DEP_BINARY,
+  RUNTIME_DEPENDENCIES,
   TOOL_RUNTIME_DEP,
 } from './engine/tools/runtime-deps.js';
 export type { RuntimeDeps, RuntimeDependency } from './engine/tools/runtime-deps.js';

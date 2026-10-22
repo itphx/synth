@@ -28,6 +28,21 @@
  *     `cwd` — локальный путь (в удалённом режиме пути исполнителя могут
  *     отличаться), а containment исполнителя не действует.
  *
+ * ## Инвентарь пула и маршрутизация по возможностям (ADR-077)
+ *
+ * Состав пула известен из `GET /capabilities` каждого адреса: порт собирает
+ * **карту «адрес → множество программ»** и обновляет её по TTL
+ * (`REMOTE_CAPABILITIES_TTL_MS`). На этой карте решаются две задачи:
+ *
+ * 1. **Доступность инструмента** — `probe(bin)`: программа доступна, если она
+ *    есть хотя бы у одного **ответившего** адреса. Так доступность тула
+ *    определяется составом пула, а не одиночной пробой в control plane.
+ * 2. **Маршрутизация команды** — `ExecRequest.requires`: команда уходит в
+ *    адрес, чей инвентарь покрывает все требуемые бинари. Адрес, который не
+ *    ответил на `/capabilities`, в маршрутизации **не участвует** (его состав
+ *    неизвестен — fail-closed); если подходящего адреса нет, команда падает с
+ *    различимой причиной `dependency_missing`.
+ *
  * ## Отмена
  *
  * `req.signal` («Стоп») → разрыв HTTP-запроса → на стороне исполнителя
@@ -35,7 +50,12 @@
  * причиной `aborted` — как и в inline-режиме.
  */
 
-import type { ExecRequest, ExecResult, ExecutionPort } from '@itphx/synth-core';
+import type {
+  ExecRequest,
+  ExecResult,
+  ExecutionCapabilitySummary,
+  ExecutionPort,
+} from '@itphx/synth-core';
 import {
   EXECUTOR_PROTOCOL_VERSION,
   isPortFailureReason,
@@ -72,6 +92,29 @@ export const DEFAULT_REMOTE_TIMEOUT_MS = 30_000;
 /** Запас к таймауту команды: HTTP-запрос живёт дольше самой команды. */
 export const REMOTE_TIMEOUT_GRACE_MS = 5_000;
 
+/**
+ * TTL инвентаря пула, мс (ADR-077).
+ *
+ * Состав пула меняется редко (образ исполнителя фиксирован), но узнать его
+ * заново перед каждой командой — лишний round-trip. Инвентарь обновляется
+ * лениво: перед `probe`/маршрутизацией, если он просрочен.
+ */
+export const REMOTE_CAPABILITIES_TTL_MS = 120_000;
+
+/** Таймаут запроса `/capabilities`, мс — запрос лёгкий, ждать долго незачем. */
+export const REMOTE_CAPABILITIES_TIMEOUT_MS = 5_000;
+
+/**
+ * Снимок состава одного адреса пула (ADR-077).
+ *
+ * `reachable: false` — адрес не ответил на `/capabilities`: его состав
+ * неизвестен, поэтому в маршрутизации он не участвует.
+ */
+interface PoolEntry {
+  reachable: boolean;
+  binaries: Set<string>;
+}
+
 /** Ошибка соединения — повод переключиться на следующий адрес. */
 class ConnectionFailure extends Error {
   constructor(readonly cause: unknown) {
@@ -97,7 +140,13 @@ async function resolveFetch(override?: ExecutorFetch): Promise<ExecutorFetch> {
 
 /** Собрать `ExecutionError` из core (класс нужен рантаймом). */
 async function buildExecutionError(init: {
-  reason: 'timeout' | 'aborted' | 'spawn_failed' | 'nonzero_exit' | 'max_output';
+  reason:
+    | 'timeout'
+    | 'aborted'
+    | 'spawn_failed'
+    | 'nonzero_exit'
+    | 'max_output'
+    | 'dependency_missing';
   message: string;
   name?: string;
   code?: string | number | null;
@@ -142,6 +191,12 @@ export class RemoteExecutionPort implements ExecutionPort {
   private _cursor = 0;
   private _active = 0;
   private readonly _waiting: Array<() => void> = [];
+  /** Инвентарь пула: адрес → состав (ADR-077). */
+  private _inventory: Map<string, PoolEntry> | undefined;
+  /** Момент последнего обновления инвентаря, мс. */
+  private _inventoryAt = 0;
+  /** Промис текущего обновления инвентаря (дедупликация параллельных запросов). */
+  private _inventoryPromise: Promise<Map<string, PoolEntry>> | undefined;
 
   constructor(opts: RemoteExecutionPortOptions) {
     this._urls = (opts.urls ?? [])
@@ -159,6 +214,38 @@ export class RemoteExecutionPort implements ExecutionPort {
     return [...this._urls];
   }
 
+  /**
+   * ADR-077: доступность программы в окружении порта.
+   *
+   * Ответ — по **инвентарю пула**: программа доступна, если она есть хотя бы
+   * у одного ответившего адреса. Если ни один адрес не ответил, состав пула
+   * неизвестен — fail-open (ADR-078): неоднозначная ошибка не должна блокировать
+   * инструмент (команда упадёт с `EUNREACHABLE` — ошибка видна модели).
+   */
+  async probe(bin: string): Promise<boolean> {
+    const inventory = await this._ensureInventory();
+    const reachable = [...inventory.values()].filter((entry) => entry.reachable);
+    if (reachable.length === 0) return true;
+    return reachable.some((entry) => entry.binaries.has(bin));
+  }
+
+  /**
+   * ADR-077: сводка о составе пула по программе — для объяснения модели, где
+   * программы нет («в пуле: 2 из 3 адресов»).
+   */
+  async capabilitySummary(bin: string): Promise<ExecutionCapabilitySummary> {
+    const inventory = await this._ensureInventory();
+    const entries = [...inventory.values()];
+    const reachable = entries.filter((entry) => entry.reachable);
+    const missing = reachable.filter((entry) => !entry.binaries.has(bin)).length;
+    return {
+      available: reachable.some((entry) => entry.binaries.has(bin)),
+      missing,
+      total: entries.length,
+      unreachable: entries.length - reachable.length,
+    };
+  }
+
   /** Выполнить команду на удалённом исполнителе. */
   async execute(req: ExecRequest): Promise<ExecResult> {
     await this._acquire();
@@ -174,6 +261,11 @@ export class RemoteExecutionPort implements ExecutionPort {
   private async _execute(req: ExecRequest): Promise<ExecResult> {
     if (this._urls.length === 0) {
       return this._unreachable(new Error('не задано ни одного адреса исполнителя'), req);
+    }
+
+    const requires = req.requires ?? [];
+    if (requires.length > 0) {
+      return this._executeWithRequirements(req, requires);
     }
 
     const start = this._cursor;
@@ -194,6 +286,129 @@ export class RemoteExecutionPort implements ExecutionPort {
       }
     }
     return this._unreachable(lastCause, req);
+  }
+
+  /**
+   * ADR-077: маршрутизация команды по бинарным требованиям.
+   *
+   * Команда уходит в адрес, чей инвентарь покрывает **все** требуемые
+   * бинари. Адреса, не ответившие на `/capabilities`, не участвуют (состав
+   * неизвестен — fail-closed). Если подходящего адреса нет:
+   *
+   * - ни один адрес не ответил — поведение по `failMode` (пул недоступен);
+   * - пул ответил, но нужной программы нет ни у кого — ошибка
+   *   `dependency_missing` (различимая причина: слой доступности превращает
+   *   её в `unavailable(dependency)`).
+   */
+  private async _executeWithRequirements(
+    req: ExecRequest,
+    requires: string[],
+  ): Promise<ExecResult> {
+    const inventory = await this._ensureInventory();
+    const start = this._cursor;
+    this._cursor = (this._cursor + 1) % this._urls.length;
+
+    const candidates: string[] = [];
+    for (let i = 0; i < this._urls.length; i += 1) {
+      const url = this._urls[(start + i) % this._urls.length] as string;
+      const entry = inventory.get(url);
+      if (!entry || !entry.reachable) continue;
+      if (!requires.every((bin) => entry.binaries.has(bin))) continue;
+      candidates.push(url);
+    }
+
+    if (candidates.length === 0) {
+      const reachable = [...inventory.values()].filter((entry) => entry.reachable);
+      if (reachable.length === 0) {
+        // Пул целиком недоступен — как при обычной недоступности адресов.
+        return this._unreachable(
+          new Error('исполнители не ответили на /capabilities'),
+          req,
+        );
+      }
+      throw await buildExecutionError({
+        reason: 'dependency_missing',
+        code: 'EDEPENDENCY',
+        message: `необходимый бинарь недоступен в пуле: ${describeMissing(requires, inventory)}`,
+      });
+    }
+
+    let lastCause: unknown;
+    for (const url of candidates) {
+      try {
+        return await this._call(url, req);
+      } catch (err) {
+        if (err instanceof ConnectionFailure) {
+          // Адрес не отвечает — пробуем следующего кандидата (команда не выполнялась).
+          lastCause = err.cause;
+          continue;
+        }
+        throw err;
+      }
+    }
+    return this._unreachable(lastCause, req);
+  }
+
+  /**
+   * Инвентарь пула — карта «адрес → состав» (ADR-077).
+   *
+   * Обновление **ленивое**: перед `probe`/маршрутизацией, если инвентарь
+   * просрочен (TTL). Не ответивший адрес помечается недоступным — это не
+   * фатально, пока есть другие.
+   */
+  private async _ensureInventory(): Promise<Map<string, PoolEntry>> {
+    const now = Date.now();
+    if (this._inventory && now - this._inventoryAt < REMOTE_CAPABILITIES_TTL_MS) {
+      return this._inventory;
+    }
+    this._inventoryPromise ??= this._refreshInventory();
+    try {
+      return await this._inventoryPromise;
+    } finally {
+      this._inventoryPromise = undefined;
+    }
+  }
+
+  /** Опросить `GET /capabilities` у всех адресов и собрать инвентарь. */
+  private async _refreshInventory(): Promise<Map<string, PoolEntry>> {
+    const entries = await Promise.all(
+      this._urls.map((url) => this._fetchCapabilities(url)),
+    );
+    const inventory = new Map<string, PoolEntry>();
+    this._urls.forEach((url, index) => {
+      inventory.set(url, entries[index] ?? { reachable: false, binaries: new Set() });
+    });
+    this._inventory = inventory;
+    this._inventoryAt = Date.now();
+    return inventory;
+  }
+
+  /** Состав одного адреса (`GET /capabilities`); ошибка — адрес недоступен. */
+  private async _fetchCapabilities(url: string): Promise<PoolEntry> {
+    const fetchImpl = await resolveFetch(this._fetchImpl);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REMOTE_CAPABILITIES_TIMEOUT_MS);
+    timer.unref?.();
+    try {
+      const response = await fetchImpl(`${url}/capabilities`, {
+        method: 'GET',
+        headers: { authorization: `Bearer ${this._token}` },
+        signal: controller.signal,
+      });
+      if (!response.ok) return { reachable: false, binaries: new Set() };
+      const body = (await response.json()) as { toolchain?: Record<string, unknown> } | null;
+      const toolchain = body?.toolchain;
+      const binaries = new Set<string>();
+      if (toolchain && typeof toolchain === 'object') {
+        for (const key of Object.keys(toolchain)) binaries.add(key);
+      }
+      return { reachable: true, binaries };
+    } catch {
+      // Адрес не ответил — состав неизвестен (в маршрутизации не участвует).
+      return { reachable: false, binaries: new Set() };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Один вызов исполнителя: HTTP-запрос + разбор ответа. */
@@ -355,6 +570,28 @@ function describeCause(cause: unknown): string {
   }
   if (typeof cause === 'string') return cause;
   return 'причина неизвестна';
+}
+
+/**
+ * Описание отсутствующих требований по составу пула (ADR-077).
+ *
+ * Модель видит, **какой** бинарь отсутствует и **в скольких** адресах его
+ * нет, — иначе ошибка «программа недоступна» неотличима от «исполнитель
+ * упал».
+ */
+function describeMissing(
+  requires: string[],
+  inventory: Map<string, PoolEntry>,
+): string {
+  const entries = [...inventory.values()];
+  const reachable = entries.filter((entry) => entry.reachable);
+  const unreachable = entries.length - reachable.length;
+  const parts = requires.map((bin) => {
+    const missing = reachable.filter((entry) => !entry.binaries.has(bin)).length;
+    return `${bin} отсутствует в ${missing} из ${reachable.length} доступных адресов`;
+  });
+  if (unreachable > 0) parts.push(`${unreachable} адресов не ответили`);
+  return parts.join('; ');
 }
 
 /**

@@ -25,6 +25,12 @@ export interface UnavailableTool {
   reason: 'mode' | 'role' | 'dependency' | 'workspace' | 'storage';
   /** Для `dependency` — человекочитаемое имя отсутствующей программы. */
   binary?: string;
+  /**
+   * Для `dependency` — техническая деталь недоступности (ADR-077): в
+   * remote-режиме «в пуле: 2 из 3 адресов», в inline-режиме «программа не
+   * установлена». Не переводится — это данные о составе окружения.
+   */
+  detail?: string;
 }
 
 /** Обёртка state-сообщения для LLM: role system недопустим в messages. */
@@ -72,7 +78,7 @@ export function renderUnavailableTools(tools: UnavailableTool[], language: strin
       ? '- file/shell/git tools — unavailable: the project working directory is not set. Create/attach a project and set its working directory (project_create/project_attach + project_workspace_set)'
       : '- file/shell/git-инструменты — недоступны: не задан рабочий каталог проекта. Создайте/привяжите проект и задайте рабочий каталог (project_create/project_attach + project_workspace_set)');
   }
-  for (const { name, reason, binary } of tools) {
+  for (const { name, reason, binary, detail } of tools) {
     if (reason === 'workspace' || reason === 'storage') continue;
     if (reason === 'dependency') {
       const program = binary ?? (en ? 'required program' : 'необходимая программа');
@@ -82,7 +88,9 @@ export function renderUnavailableTools(tools: UnavailableTool[], language: strin
       const hint = en
         ? 'install the program or contact the administrator'
         : 'установите программу или обратитесь к администратору';
-      lines.push(`- ${name} — ${cause}: ${hint}`);
+      // ADR-077: деталь (состав пула исполнителей) — технический текст.
+      const suffix = detail ? ` (${detail})` : '';
+      lines.push(`- ${name} — ${cause}: ${hint}${suffix}`);
       continue;
     }
     const cause = reason === 'mode'

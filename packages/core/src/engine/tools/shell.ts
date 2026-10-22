@@ -6,6 +6,7 @@ import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
+import { toolRuntimeRequires } from './runtime-deps.js';
 import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError } from '../../execution/ports/index.js';
 
 const MAX_OUTPUT_LENGTH = 100_000;
@@ -45,6 +46,9 @@ export const executeShellTool: ToolDefinition = {
       // `{...process.env, HOME: process.env.HOME || '/root'}`).
       const { stdout, stderr } = await resolveExecutionPort(ctx).execute({
         command: { kind: 'shell', command, shell: 'sh' },
+        // ADR-077: бинарное требование тула (`sh`) — в remote-режиме команда
+        // уходит в адрес пула, где оболочка есть. Inline-режим поле игнорирует.
+        requires: toolRuntimeRequires('execute_shell'),
         cwd,
         timeoutMs: timeout,
         // «Стоп» (POST /sessions/:id/abort → toolAbortController.abort) убивает

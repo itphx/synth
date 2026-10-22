@@ -166,3 +166,129 @@ describe('клиент удалённого порта', () => {
     expect((err as ExecutionError).code).toBe('EWORKSPACE');
   });
 });
+
+/**
+ * ADR-077: инвентарь пула (`GET /capabilities`) и маршрутизация команды по
+ * бинарным требованиям (`ExecRequest.requires`).
+ */
+describe('клиент удалённого порта: инвентарь пула и маршрутизация', () => {
+  /** Исполнитель с заданным составом toolchain'а. */
+  async function startExecutorWithToolchain(toolchain: Record<string, string>): Promise<ExecutorHandle> {
+    const handle = await startExecutorServer({
+      token: TOKEN,
+      workspaceRoot: workspace,
+      host: '127.0.0.1',
+      port: 0,
+      toolchain,
+    });
+    handles.push(handle);
+    return handle;
+  }
+
+  it('инвентарь строится по /capabilities: probe отвечает по составу пула', async () => {
+    const withGit = await startExecutorWithToolchain({ git: 'git version 2.39.2' });
+    const withoutGit = await startExecutorWithToolchain({ sh: 'sh 5.2' });
+    const port = createRemoteExecutionPort({
+      urls: [withGit.url, withoutGit.url],
+      token: TOKEN,
+    });
+
+    // `git` есть у одного из двух адресов → доступен (команда уйдёт туда).
+    expect(await port.probe?.('git')).toBe(true);
+    // `rg` нет ни у кого → недоступен.
+    expect(await port.probe?.('rg')).toBe(false);
+  });
+
+  it('команда с requires уходит в адрес, где есть нужная программа', async () => {
+    const withGit = await startExecutorWithToolchain({ git: 'git version 2.39.2' });
+    const withoutGit = await startExecutorWithToolchain({ sh: 'sh 5.2' });
+    const hits: string[] = [];
+    const counting: ExecutorFetch = async (url, init) => {
+      if (url.endsWith('/exec')) hits.push(new URL(url).port);
+      return egressFetch(url, init);
+    };
+    const port = createRemoteExecutionPort({
+      urls: [withoutGit.url, withGit.url],
+      token: TOKEN,
+      fetchImpl: counting,
+    });
+
+    const res = await port.execute({
+      command: { kind: 'shell', command: 'printf ok' },
+      requires: ['git'],
+    });
+    expect(res.stdout).toBe('ok');
+    // Исполнение — только у адреса с `git`.
+    expect(hits).toEqual([String(withGit.port)]);
+  });
+
+  it('нет ни одного адреса с требуемой программой — различимая ошибка', async () => {
+    const first = await startExecutorWithToolchain({ sh: 'sh 5.2' });
+    const second = await startExecutorWithToolchain({ sh: 'sh 5.2' });
+    const port = createRemoteExecutionPort({
+      urls: [first.url, second.url],
+      token: TOKEN,
+    });
+
+    const err = await port
+      .execute({
+        command: { kind: 'shell', command: 'printf ok' },
+        requires: ['git'],
+      })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ExecutionError);
+    expect((err as ExecutionError).reason).toBe('dependency_missing');
+    expect((err as ExecutionError).code).toBe('EDEPENDENCY');
+    expect((err as ExecutionError).message).toContain('git');
+  });
+
+  it('адрес, не ответивший на /capabilities, выпадает из маршрутизации', async () => {
+    const alive = await startExecutorWithToolchain({ git: 'git version 2.39.2' });
+    const dead = await deadPort();
+    const port = createRemoteExecutionPort({
+      urls: [`http://127.0.0.1:${dead}`, alive.url],
+      token: TOKEN,
+    });
+
+    // Состав мёртвого адреса неизвестен → в маршрутизации он не участвует,
+    // команда уходит живому адресу (у него `git` есть).
+    const res = await port.execute({
+      command: { kind: 'shell', command: 'printf ok' },
+      requires: ['git'],
+    });
+    expect(res.stdout).toBe('ok');
+    expect(await port.probe?.('git')).toBe(true);
+  });
+
+  it('пул целиком недоступен — поведение по failMode (fail-closed)', async () => {
+    const dead = await deadPort();
+    const port = createRemoteExecutionPort({
+      urls: [`http://127.0.0.1:${dead}`],
+      token: TOKEN,
+      failMode: 'fail',
+    });
+    const err = await port
+      .execute({
+        command: { kind: 'shell', command: 'printf ok' },
+        requires: ['git'],
+      })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ExecutionError);
+    expect((err as ExecutionError).code).toBe('EUNREACHABLE');
+  });
+
+  it('сводка о составе пула — сколько адресов без программы', async () => {
+    const withGit = await startExecutorWithToolchain({ git: 'git version 2.39.2' });
+    const withoutGit = await startExecutorWithToolchain({ sh: 'sh 5.2' });
+    const port = createRemoteExecutionPort({
+      urls: [withGit.url, withoutGit.url],
+      token: TOKEN,
+    });
+
+    const summary = await port.capabilitySummary?.('git');
+    expect(summary?.available).toBe(true);
+    expect(summary?.missing).toBe(1);
+    expect(summary?.total).toBe(2);
+    expect(summary?.unreachable).toBe(0);
+  });
+});

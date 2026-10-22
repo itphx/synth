@@ -95,6 +95,20 @@
   командам: `simple-git` (`git/git-service.ts` — clone/fetch/init с SSH/CA-окружением), MCP
   stdio (`engine/mcp/client.ts`), обслуживание (`maintenance/update.ts`) — они уезжают в
   исполнитель по фазам 2–3 плана ADR-077.
+- **Доступность программы — вопрос порта, а не control plane (ADR-077 шаг A).**
+  `ExecRequest.requires?: string[]` — бинарные требования команды; канонический словарь
+  базовых возможностей — `EXECUTION_BASE_CAPABILITIES` (`git`/`rg`/`sh`) в
+  `execution/ports/execution-port.ts` (единственный источник истины для обеих сторон:
+  исполнитель отдаёт тот же словарь в `GET /capabilities`). У порта — необязательные
+  `probe?(bin, args?)` («доступен ли бинарь в моём окружении») и `capabilitySummary?(bin)`
+  (сводка «в пуле: N из M»); удалённая реализация отвечает по **инвентарю пула**
+  (ADR-077, `packages/executor/src/client.ts`), inline — локальной пробой. Проба — **только**
+  через `execution/probe.ts` (`probeBinaryThroughPort`): `ENOENT` → `false`, прочая ошибка →
+  `true` (fail-open, ADR-078); второй реализации пробы не заводить. Слой доступности
+  (`engine/tools/runtime-deps.ts`) спрашивает **порт**, а не пробует локально; кэш детекции —
+  **по экземпляру порта** (`WeakMap`): локальная (inline) проба не должна отравлять remote-кэш.
+  Требования тулов берутся из карты `TOOL_RUNTIME_DEP` (`runtimeRequires()`/
+  `toolRuntimeRequires()`) — строки не дублируются руками.
 - Конфиг — через `@itphx/synth-shared/config` (ADR-023); приоритет
   CLI-флаги > `SYNTH_*` env > config.yaml > defaults.
 - **Доверие TLS/CA исходящих соединений — единый слой (ADR-099).**
@@ -224,20 +238,32 @@
 ## Карта модулей
 
 - `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, `analytics rebuild`, …).
-- `execution/` — ADR-077 (шаги 1, 3, 7b): порт исполнения команд, выбор реализации по
+- `execution/` — ADR-077 (шаги 1, 3, 7b + шаг A): порт исполнения команд, выбор реализации по
   режиму и проверка режима при старте —
   `ports/execution-port.ts`
   (`ExecutionPort`, `ExecRequest`, `ExecResult`, `ExecCommand` — union `shell`/`argv`,
-  `ExecutionError`, `DEFAULT_MAX_OUTPUT_BYTES`), `inline-execution-port.ts`
-  (`InlineExecutionPort` — исполнение в процессе поверх `execFile`), `contract/`
+  `ExecutionError`, `DEFAULT_MAX_OUTPUT_BYTES`; **шаг A**: `ExecRequest.requires?: string[]`,
+  `ExecutionPort.probe?(bin, args?)`, `ExecutionPort.capabilitySummary?(bin)`,
+  `ExecutionCapabilitySummary`, `EXECUTION_BASE_CAPABILITIES = ['git','rg','sh']`,
+  причина отказа `dependency_missing`), `inline-execution-port.ts`
+  (`InlineExecutionPort` — исполнение в процессе поверх `execFile`; `probe()` — поверх общей пробы),
+  `probe.ts` (**единственная** проба `bin --version` через порт: `ENOENT` → `false`, прочая ошибка →
+  `true`, fail-open, ADR-078), `contract/`
   (контрактный suite порта — обязателен для любой реализации, как `storage/contract/`;
   общий набор проверок + блоки `describeInlineOnlyExecutionChecks`/`describeRemoteOnlyExecutionChecks`
   — разделение намеренное: у remote `cwd` обязан лежать в workspace исполнителя, у inline
-  такого ограничения нет), `remote.ts` (загрузчик удалённого порта: **динамический `import()`
+  такого ограничения нет; `probe`/`requires` проверяются в общем наборе, `dependency_missing` —
+  в remote-блоке), `remote.ts` (загрузчик удалённого порта: **динамический `import()`
   по строке-константе** `'@itphx/synth-executor/client'` + локальный интерфейс модуля +
   каст — по образцу драйвера хранилища в `storage/storage-context.ts`; чтение токена из
   файла по `execution.remote.tokenSecret` — **fail-closed**, значение токена не логируется
-  и не попадает в текст ошибок; `RemoteExecutionUnavailableError` — отдельный класс),
+  и не попадает в текст ошибок; `RemoteExecutionUnavailableError` — отдельный класс;
+  **инвентарь пула и маршрутизация по `requires` живут в клиенте пакета** —
+  `packages/executor/src/client.ts`: карта «адрес → состав программ» по `GET /capabilities`
+  всех адресов, TTL `REMOTE_CAPABILITIES_TTL_MS = 120_000` с ленивым обновлением,
+  `probe()`/`capabilitySummary()` по инвентарю, маршрутизация команды в адрес с нужными
+  бинарями; адрес без нужного бинаря и не ответивший адрес из маршрутизации исключаются,
+  подходящего адреса нет → `dependency_missing`/`EDEPENDENCY` с текстом «в пуле: N из M»),
   `factory.ts` (`createExecutionPortForConfig` — выбор порта по режиму: `inline` →
   `InlineExecutionPort`, `remote` → удалённый порт; экземпляр на каждый вызов, без
   process-глобальных синглтонов), `tool-port.ts` (`resolveExecutionPort(ctx)` — шов: берёт
@@ -403,7 +429,7 @@
   `SystemPromptPayload` (`stablePrefix`/`cacheKey`/`cachePolicy`, ADR-070) проходит через Gateway в
   провайдер без изменений — prompt-cache-маркеры ставятся в провайдерах **после** guard/обфускации.
 - `engine/router/*` — routing моделей и micro-model слой (ADR-034/035); decision-слой — `DecisionContentClassifier` (`decision-content-classifier.ts`, ADR-084), `DecisionModel` в `micro/models/` (`kind='decision'`, per-session `decisionFirst`), единый каскад `decision-cascade.ts` (`decideChoiceCascade`: `primary → escalation` по необязательной паре `escalationProvider`/`escalationModel`, fail-safe) и агрегатные метрики `decision-metrics.ts` (синглтон `decisionMetrics`: `calls`/`handled`/`fallback`/`escalated`/`attempts`/`rejected`/`by_model`). Мультимодальный контракт (задел PROP-085): `MicroInput.images`/`videos`, `ClassifyRequest.images`/`videos`, `DecisionProvider.decide(opts.images/videos)` — добавляются в тело запроса только если непусты.
-- `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
+- `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
   Системный промпт (ADR-070): `composer.ts` — `SystemPromptComposer` (единственная точка сборки
   промпта основной сессии и саб-агентов: `compose()` идемпотентно собирает из состояния, `manifest()` —
@@ -497,7 +523,12 @@
   (`canEditProject`, ADR-075/D5). `engine/workspace-provision.ts` — общий
   provisioning workspace (нормализация/containment/создание каталога) для
   HTTP-роутов и тулов (ADR-075). `engine/tools/runtime-deps.ts` — детект внешних
-  бинарников (`git`/`rg`/`sh`, fail-open, кэш) и карта `TOOL_RUNTIME_DEP`; отсутствие
+  бинарников (`git`/`rg`/`sh`; источник — **порт** (`probe()`), в inline — локальная
+  проба; fail-open; кэш детекции — **по экземпляру порта**, `WeakMap`) и карта
+  `TOOL_RUNTIME_DEP`; из неё же берутся бинарные требования тулов
+  (`runtimeRequires()`/`toolRuntimeRequires()` → `ExecRequest.requires`); деталь
+  недоступности — в `RuntimeDeps.details` («в пуле: N из M» в remote-режиме) и далее
+  в `ToolAvailability.detail` → `UnavailableTool.detail` → текст модели. Отсутствие
   программы даёт `unavailable(dependency)` (ADR-078), тулы из реестра не удаляются.
   `profile_update` (`profile-update.ts`) — онбординг владельца сессии: сохраняет
   `display_name`/`email`/`phone`/`notes` и завершает интервью (`ProfileData.interviewCompleted`);

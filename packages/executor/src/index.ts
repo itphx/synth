@@ -67,7 +67,11 @@ export { ExecService } from './exec-service.js';
 export type { ExecServiceOptions, ExecOutcome } from './exec-service.js';
 
 // Toolchain.
-export { TOOLCHAIN_BINARIES, detectToolchain } from './toolchain.js';
+export {
+  EXTRA_TOOLCHAIN_BINARIES,
+  detectToolchain,
+  resolveToolchainBinaries,
+} from './toolchain.js';
 export type { ToolchainInfo } from './toolchain.js';
 
 // Сервер.

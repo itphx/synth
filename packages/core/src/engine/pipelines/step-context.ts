@@ -322,6 +322,8 @@ function partitionTools(
       name: tool.name,
       reason: availability.reason,
       ...(dep ? { binary: RUNTIME_DEP_BINARY[dep] } : {}),
+      // ADR-077: деталь недоступности (состав пула исполнителей).
+      ...(availability.detail ? { detail: availability.detail } : {}),
     });
   }
   return { availableTools, unavailableTools };

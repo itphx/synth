@@ -63,6 +63,21 @@ interface ExecutorClientModule {
 
 const TOKEN = 'executor-matrix-token-1234567890';
 
+/**
+ * Состав toolchain'а исполнителя в матрице (ADR-077).
+ *
+ * Матрица проверяет, что команды уходят **исполнителю**; с маршрутизацией
+ * по возможностям (`ExecRequest.requires`) исполнитель обязан объявлять
+ * базовые возможности (словарь core: `git`/`rg`/`sh`) — иначе команда не
+ * будет маршрутизирована ни в один адрес.
+ */
+const EXECUTOR_TOOLCHAIN: Record<string, string> = {
+  git: 'git version 2.39.2',
+  rg: 'rg 15.2.0',
+  sh: 'sh 5.2',
+  python3: 'python3 3.12',
+};
+
 /** Загрузить модуль сервера исполнителя (однократно). */
 async function loadServerModule(): Promise<ExecutorServerModule> {
   return (await import(EXECUTOR_PACKAGE)) as unknown as ExecutorServerModule;
@@ -111,7 +126,7 @@ describe.skipIf(!EXECUTOR_AVAILABLE)(
         workspaceRoot: workspace,
         host: '127.0.0.1',
         port: 0,
-        toolchain: {},
+        toolchain: EXECUTOR_TOOLCHAIN,
       });
       port = client.createRemoteExecutionPort({ urls: [handle.url], token: TOKEN, timeoutMs: 20_000 });
     });
@@ -186,7 +201,7 @@ describe.skipIf(!EXECUTOR_AVAILABLE)(
         workspaceRoot: outsideDir,
         host: '127.0.0.1',
         port: 0,
-        toolchain: {},
+        toolchain: EXECUTOR_TOOLCHAIN,
       });
       port = client.createRemoteExecutionPort({ urls: [handle.url], token: TOKEN, timeoutMs: 5_000 });
       // Исполнитель остановлен — порт остаётся, но адрес недоступен.

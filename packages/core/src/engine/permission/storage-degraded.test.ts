@@ -157,6 +157,35 @@ describe('state-messages — схлопнутая подсказка дегра�
     expect(renderUnavailableTools([], 'ru')).toBe('');
   });
 
+  it('renderUnavailableTools: деталь состава пула попадает в строку тула (ADR-077)', () => {
+    const ru = renderUnavailableTools(
+      [
+        {
+          name: 'git_status',
+          reason: 'dependency',
+          binary: 'git',
+          detail: 'git: отсутствует в 2 из 3 адресов пула',
+        },
+      ],
+      'ru',
+    );
+    expect(ru).toContain('git_status');
+    expect(ru).toContain('git: отсутствует в 2 из 3 адресов пула');
+
+    const en = renderUnavailableTools(
+      [
+        {
+          name: 'git_status',
+          reason: 'dependency',
+          binary: 'git',
+          detail: 'git: отсутствует в 2 из 3 адресов пула',
+        },
+      ],
+      'en',
+    );
+    expect(en).toContain('git: отсутствует в 2 из 3 адресов пула');
+  });
+
   it('buildModeChangeContent: секция storage подмешивается к промпту режима', () => {
     const content = buildModeChangeContent('act', 'auto', false, 'ru', {
       getModePrompt: () => '[MODE act]',

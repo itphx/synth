@@ -34,6 +34,9 @@ const harness = async () => ({
   port: new InlineExecutionPort(),
   cwd,
   cwdOutside,
+  // `sh` есть в любом POSIX-окружении — программа, доступность которой
+  // проверяется пробой порта (ADR-077).
+  availableBinaries: ['sh'],
 });
 
 describeExecutionPort('InlineExecutionPort → ExecutionPort', harness);

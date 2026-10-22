@@ -84,6 +84,8 @@ let cwdOutside: string;
 
 let handle: { url: string; close: () => Promise<void> };
 let port: ExecutionPort;
+/** Программы, которые исполнитель реально отдаёт в `/capabilities`. */
+let availableBinaries: string[] = [];
 
 /**
  * Контракт против удалённого исполнителя — только при установленном пакете
@@ -106,9 +108,16 @@ describe.skipIf(!(await isExecutorPackageAvailable()))(
         workspaceRoot: workspace,
         host: '127.0.0.1',
         port: 0,
-        // Состав toolchain'а задан явно — без пробы бинарников при старте.
-        toolchain: {},
+        // Состав toolchain'а НЕ задан — исполнитель определяет его сам (проба
+        // бинарников): инвентарь пула должен совпадать с реальным окружением.
       });
+
+      // Состав, объявленный исполнителем, — эталон для проверок `probe`.
+      const capabilities = await fetch(`${handle.url}/capabilities`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      const body = (await capabilities.json()) as { toolchain?: Record<string, string> };
+      availableBinaries = Object.keys(body.toolchain ?? {});
 
       const client = await loadClientModule();
       port = client.createRemoteExecutionPort({
@@ -124,7 +133,7 @@ describe.skipIf(!(await isExecutorPackageAvailable()))(
       await rm(cwdOutside, { recursive: true, force: true });
     });
 
-    const harness = async () => ({ port, cwd, cwdOutside });
+    const harness = async () => ({ port, cwd, cwdOutside, availableBinaries });
 
     describeExecutionPort('RemoteExecutionPort → ExecutionPort', harness);
     describeRemoteOnlyExecutionChecks('RemoteExecutionPort → ExecutionPort', harness);

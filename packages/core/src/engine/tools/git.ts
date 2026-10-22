@@ -10,6 +10,7 @@ import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import type { SystemMessageKey } from '../system-messages.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
+import { runtimeRequires } from './runtime-deps.js';
 import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError, type ExecutionPort } from '../../execution/ports/index.js';
 
 const MAX_GIT_OUTPUT = 20_000;
@@ -32,6 +33,9 @@ export async function runGit(
 ): Promise<{ stdout: string; stderr: string }> {
   const { stdout, stderr } = await (execution ?? new InlineExecutionPort()).execute({
     command: { kind: 'argv', file: 'git', args },
+    // ADR-077: бинарное требование (`git`) — в remote-режиме команда уходит в
+    // адрес пула, где git есть. Все git-тулы в карте `TOOL_RUNTIME_DEP` → `git`.
+    requires: runtimeRequires('git'),
     cwd,
     timeoutMs: 30_000,
     signal,

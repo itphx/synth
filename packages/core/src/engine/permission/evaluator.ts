@@ -8,6 +8,7 @@ import { isStorageDegraded } from './storage-state.js';
 import {
   isRuntimeDepAvailable,
   RUNTIME_DEP_BINARY,
+  runtimeDepUnavailableDetail,
   TOOL_RUNTIME_DEP,
   type RuntimeDeps,
 } from '../tools/runtime-deps.js';
@@ -230,13 +231,18 @@ export class PermissionEvaluator {
     const runtimeDep = TOOL_RUNTIME_DEP[toolName];
     if (runtimeDep && !isRuntimeDepAvailable(runtimeDeps, runtimeDep)) {
       const binary = RUNTIME_DEP_BINARY[runtimeDep];
+      // ADR-077: деталь недоступности (в remote-режиме — «в пуле: N из M
+      // адресов») — технический текст рядом с локализованной причиной.
+      const detail = runtimeDepUnavailableDetail(runtimeDeps, runtimeDep);
       return {
         action: 'deny',
-        reason: sm('permission.dep_unavailable', { binary }),
+        reason: detail
+          ? `${sm('permission.dep_unavailable', { binary })} (${detail})`
+          : sm('permission.dep_unavailable', { binary }),
         matchedRule: 'dependency.unavailable',
         unavailable: { reason: 'dependency' },
         messageId: 'tool-unavailable-dependency',
-        params: { binary },
+        params: { binary, ...(detail ? { detail } : {}) },
       };
     }
 

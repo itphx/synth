@@ -1,6 +1,6 @@
 # ADR-077: Инструментальное окружение исполнения — единый порт ExecutionPort и режим remote
 
-> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте и чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула); остаток — метрики `synth_executor_*` и runbook (шаг 7d), перенос `simple-git` и MCP-stdio в исполнитель (шаги 8–9) и правка `packages/core/AGENTS.md` под порт.
+> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула) и **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`); остаток — метрики `synth_executor_*` и runbook (шаг 7d) и перенос `simple-git` и MCP-stdio в исполнитель (шаги 8–9).
 > **Дата:** 2026-10-21
 > **Связано:** [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md) (образец портов и контрактного suite), [ADR-099](./adr-099-egress-tls-trust.md) (доверенная граница и исходящий транспорт), [ADR-092](./adr-092-instance-lifecycle-maintenance.md) (рестарт, exit 75), [ADR-094](./adr-094-observability-metrics.md) (метрики), [ADR-075](./adr-075-project-workspace-provisioning.md) (workspace), [ADR-076](./adr-076-git-repo-registry-ssh.md) (git-реестр и SSH), [ADR-078](./adr-078-runtime-dependency-availability.md) (детект зависимостей), [ADR-036](./adr-036-llm-gateway.md) (в исполнителе LLM-ключей нет), [ADR-038](./adr-038-npm-packages.md) (поставка пакета); детали и формат — [docs/EXECUTION.md](../EXECUTION.md) (Spec).
 
@@ -42,6 +42,26 @@
    между пользователями за одним NAT и перебрасывает клиента при смене IP. Полноценное решение —
    **внешний транспорт событий** (общая шина между репликами вместо in-process) — отдельная задача;
    sticky-сессии её не заменяют, а лишь делают multireplica control plane безопасным на текущем этапе.
+8. **Доступность инструмента в remote-режиме определяется составом пула (шаг A).** «Есть ли программа»
+   — вопрос не про control plane, а про то окружение, где команда будет выполнена. Поэтому:
+   - **Порт** получил необязательные `probe(bin, args?)` и `capabilitySummary(bin)`, а запрос —
+     `requires?: string[]` — бинарные требования команды. Словарь базовых возможностей — общий для обеих
+     сторон: `EXECUTION_BASE_CAPABILITIES` (`git`/`rg`/`sh`) в core; исполнитель отдаёт **тот же**
+     словарь в `GET /capabilities`.
+   - **Инвентарь пула** — карта «адрес → множество программ», собранная удалённым портом по
+     `GET /capabilities` **всех** адресов (TTL `REMOTE_CAPABILITIES_TTL_MS = 120_000`, обновление
+     **ленивое** — перед пробой/маршрутизацией, если снимок просрочен).
+   - **Маршрутизация по требованиям:** команда с `requires` уходит в адрес, чей инвентарь покрывает все
+     требуемые бинари. Адрес **без** нужного бинаря и адрес, **не ответивший** на `/capabilities`, в
+     маршрутизации не участвуют (состав неизвестен — fail-closed); подходящего адреса нет —
+     различимая ошибка `dependency_missing` (`EDEPENDENCY`) с текстом «в пуле: N из M».
+   - **Слой доступности (ADR-078) спрашивает порт**, а не пробует локально: `probe()` отвечает по
+     инвентарю пула. Порт без `probe` (inline) проверяется локальной пробой `bin --version` —
+     `packages/core/src/execution/probe.ts`, **единственная** реализация пробы: `ENOENT` → программы нет,
+     прочие ошибки → fail-open (неоднозначная ошибка не блокирует инструмент).
+   - **Кэш детекции — по экземпляру порта** (`WeakMap`): локальная (inline) проба больше не отравляет
+     remote-кэш — иначе control plane считал бы доступным бинарь, которого нет ни у одного исполнителя.
+   - **Inline-режим не изменился**: те же локальная проба и дефолты, порт игнорирует `requires`.
 
 ## Альтернативы
 
@@ -65,6 +85,26 @@
 - **Следствия:** образы разводятся по режиму (`synth-backend` — control plane, `synth-executor` — worker);
   `execution.*` — секция конфигурации, применяемая при старте; наблюдаемость исполнителя — отдельный `/metrics`
   (ADR-094).
+- **Операционные следствия шага A (доступность по составу пула):**
+  - **(а) Состав пула известен только из `/capabilities`** ⇒ control plane и исполнитель обязаны быть
+    **одной версии протокола**: инвентарь приходит от исполнителя, а не вычисляется на стороне control
+    plane. При rolling update возможно окно, когда старый исполнитель ещё не знает `sh` (словарь
+    базовых возможностей расширен) и не может обслужить `execute_shell` — команда уйдёт в другой адрес
+    или вернёт `dependency_missing`. Обновление пула ⇒ обновление control plane (или наоборот).
+  - **(б) Fail-open при недоступном инвентаре, fail-closed в маршрутизации.** Если **ни один** адрес не
+    ответил на `/capabilities`, состав пула неизвестен ⇒ тул **не** блокируется (ADR-078: неоднозначная
+    ошибка не должна отключать инструмент) — команда падает с `EUNREACHABLE`, ошибка видна модели. Если же
+    адрес **ответил**, но нужной программы у него нет, — такой адрес из маршрутизации **исключается**
+    (fail-closed): неизвестный/отсутствующий состав нельзя считать подходящим.
+  - **(в) Ограничение «все реплики пула — один образ ⇒ один инвентарь».** Сейчас пул — это Deployment из
+    однотипных реплик: инвентарь у них общий. Перечисление **отдельных** реплик (адрес → свой состав)
+    потребовало бы стабильных адресов/имён — то есть StatefulSet. Это **открытый вопрос**, а не решённый
+    факт: до решения пул описывается как «один образ — один инвентарь».
+  - **(г) Снимок доступности вычисляется один раз на порт** (кэш детекции — `WeakMap` по экземпляру
+    порта; фактически — при старте процесса, до первого запроса) и **не пересчитывается** при обновлении
+    инвентаря по TTL: обновление инвентаря влияет на **маршрутизацию команд**, но не на «зелёный/красный»
+    статус тула. Изменился состав пула — снимок пересчитается после рестарта control plane (инвариант 24:
+    process-глобальные решения не переинициализируются на лету).
 
 ## Статус в коде
 
@@ -84,6 +124,42 @@
   `defaults.ts`, `execution.ts` (резолвер), env `SYNTH_EXECUTION_*`, CLI `--execution-mode`.
 - **Потребители:** `packages/core/src/engine/tools/git.ts` (исполнение через порт), `engine/tools/shell.ts`,
   `engine/tools/search.ts`, `engine/commands/inline-shell.ts`, `engine/tools/runtime-deps.ts`.
+- **Шаг A — доступность инструментов по составу пула исполнителей (ADR-077/ADR-078):**
+  - **Порт:** `packages/core/src/execution/ports/execution-port.ts` — `ExecRequest.requires?: string[]`
+    (бинарные требования команды), `ExecutionPort.probe?(bin, args?)` («доступен ли бинарь в моём
+    окружении»), `ExecutionPort.capabilitySummary?(bin)` (сводка «в пуле: N из M»), тип
+    `ExecutionCapabilitySummary` (`available`/`missing`/`total`/`unreachable`), канонический словарь
+    `EXECUTION_BASE_CAPABILITIES = ['git','rg','sh']`, новая причина отказа `dependency_missing`;
+    реэкспорт — `ports/index.ts`, `packages/core/src/index.ts`.
+  - **Единственная проба:** `packages/core/src/execution/probe.ts` (`probeBinaryThroughPort`) — `bin --version`
+    через порт: `ENOENT` → `false`, прочая ошибка → `true` (fail-open, ADR-078);
+    `inline-execution-port.ts` реализует `probe()` поверх неё — поведение inline не изменилось.
+  - **Слой доступности:** `packages/core/src/engine/tools/runtime-deps.ts` — детект через `port.probe`
+    (remote) либо локальная проба (inline); кэш детекции **по экземпляру порта** (`WeakMap`) — локальная
+    проба больше не отравляет remote-кэш; `runtimeRequires()`/`toolRuntimeRequires()` (источник — карта
+    `TOOL_RUNTIME_DEP`, строки не дублируются), `RuntimeDeps.details` — деталь недоступности.
+  - **Требования тулов:** `engine/tools/shell.ts` (`execute_shell → ['sh']`), `engine/tools/search.ts`
+    (`grep_files → ['rg']`), `engine/tools/git.ts` (все git-тулы → `['git']`).
+  - **Деталь до модели:** `engine/permission/availability.ts` (`ToolAvailability.detail`),
+    `engine/permission/evaluator.ts` (деталь в тексте deny), `engine/orchestrator.ts` и
+    `engine/pipelines/step-context.ts` (`UnavailableTool.detail`), `engine/context/state-messages.ts`
+    (рендер строки недоступного тула).
+  - **Инвентарь и маршрутизация (клиент исполнителя):** `packages/executor/src/client.ts` —
+    `RemoteExecutionPort` собирает инвентарь пула по `GET /capabilities` **всех** адресов
+    (`REMOTE_CAPABILITIES_TTL_MS = 120_000`, ленивое обновление), отвечает `probe()`/`capabilitySummary()`,
+    маршрутизирует команду с `requires` в адрес с нужными бинарями; адрес без нужного бинаря и не
+    ответивший адрес не участвуют; подходящего адреса нет → `dependency_missing`/`EDEPENDENCY` с текстом
+    «в пуле: N из M».
+  - **Словарь исполнителя:** `packages/executor/src/toolchain.ts` — базовый словарь берётся из core
+    (`EXECUTION_BASE_CAPABILITIES`, точечный динамический `import()`), допсведения отделены
+    (`EXTRA_TOOLCHAIN_BINARIES = ['python3']`), проба различает `ENOENT` («программы нет») и «есть, но не
+    поддержал `--version`» (программа есть).
+  - **Тесты:** контракт порта (`packages/core/src/execution/contract/execution.ts` — `probe`, `requires`),
+    `packages/core/src/engine/tools/runtime-deps.test.ts` (remote-детект, деталь, отсутствие отравления
+    кэша, inline без изменений), `packages/executor/src/client.test.ts` (инвентарь, маршрутизация,
+    недоступный адрес, `EDEPENDENCY`, сводка пула), `packages/executor/src/toolchain.test.ts`,
+    `packages/core/src/execution/port-wiring.test.ts` (требования тулов), `availability.test.ts`,
+    `storage-degraded.test.ts` (рендер детали).
 - **Чарт split-развёртывания (шаг 7c):** `charts/synth/values.yaml` (`execution.*`, `executor.*`), шаблоны
   `charts/synth/templates/executor-deployment.yaml`, `executor-service.yaml`, `executor-pvc.yaml`
   (общий том workspace, RWX), `executor-networkpolicy.yaml` (ingress — только от pod'ов control plane,
@@ -97,8 +173,8 @@
   `None`, — дефолтный манифест Service не меняется побайтово); подробности и оговорки — README чарта
   («Sticky-сессии при нескольких репликах backend»).
 - **Остаток:** метрики `synth_executor_*` и runbook переключения топологии (шаг 7d), перенос `simple-git`
-  и MCP-stdio в исполнитель (шаги 8–9, фазы 2–3 матрицы), правка `packages/core/AGENTS.md` под порт
-  исполнения.
+  и MCP-stdio в исполнитель (шаги 8–9, фазы 2–3 матрицы), спека `docs/EXECUTION.md` — синхронизация
+  описания инвентаря пула и словаря базовых возможностей.
 
 ## Связи
 
@@ -127,4 +203,10 @@
 - 2026-10-22 — шаг 7c: чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны
   `executor-*.yaml`, RWX-том workspace в backend и в пуле, `NetworkPolicy` пула, токен из Secret —
   backend файлом, worker значением, fail-closed проверки рендера); предложение повышено до ADR, детали
-  вынесены в [docs/EXECUTION.md](../EXECUTION.md) (Spec).
+  вынесены в [docs/EXECUTION.md](../EXECUTION.md) (Spec); **шаг A**: доступность инструментов
+  определяется составом пула исполнителей — `probe()`/`capabilitySummary()` у порта,
+  `ExecRequest.requires`, инвентарь пула по `GET /capabilities` (TTL + ленивое обновление),
+  маршрутизация команды по требуемым бинарям, причина `dependency_missing` + деталь «в пуле: N из M»,
+  кэш детекции по экземпляру порта; зафиксированы операционные следствия (единая версия протокола
+  control plane и исполнителя, fail-open при недоступном инвентаре и fail-closed в маршрутизации,
+  «один образ — один инвентарь», снимок доступности при старте).

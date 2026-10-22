@@ -13,10 +13,13 @@ export type {
   ExecutionPort,
   ExecutionErrorInit,
   ExecFailureReason,
+  ExecutionCapabilitySummary,
+  ExecutionBaseCapability,
 } from './execution-port.js';
 export {
   ExecutionError,
   isExecutionPort,
   DEFAULT_SHELL_BINARY,
   DEFAULT_MAX_OUTPUT_BYTES,
+  EXECUTION_BASE_CAPABILITIES,
 } from './execution-port.js';

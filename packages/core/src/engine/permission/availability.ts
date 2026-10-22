@@ -16,7 +16,12 @@
 import { ToolCapability } from '@itphx/synth-shared';
 import type { McpServerToolSettings, PlanMode, SessionMode } from '@itphx/synth-shared';
 import { getMcpToolAvailability, isPlanBlockedTool, isPlanRestricted } from './evaluator.js';
-import { isRuntimeDepAvailable, TOOL_RUNTIME_DEP, type RuntimeDeps } from '../tools/runtime-deps.js';
+import {
+  isRuntimeDepAvailable,
+  runtimeDepUnavailableDetail,
+  TOOL_RUNTIME_DEP,
+  type RuntimeDeps,
+} from '../tools/runtime-deps.js';
 import { isStorageDegraded } from './storage-state.js';
 
 export type ToolUnavailableReason = 'mode' | 'role' | 'dependency' | 'workspace' | 'storage';
@@ -64,6 +69,13 @@ export function isWorkspaceDependentTool(capabilities?: readonly string[]): bool
 export interface ToolAvailability {
   available: boolean;
   reason?: ToolUnavailableReason;
+  /**
+   * Деталь причины (ADR-077) — технический текст: в remote-режиме «в пуле:
+   * 2 из 3 адресов», в inline-режиме «программа не установлена». Показывается
+   * рядом с причиной, чтобы модель видела не только «программы нет», но и
+   * **где** её нет.
+   */
+  detail?: string;
 }
 
 export interface ToolAvailabilityOptions {
@@ -144,7 +156,12 @@ export function computeToolAvailability(
   // 3. Зависимость окружения: нет внешней программы тула (git/rg/sh).
   const dep = TOOL_RUNTIME_DEP[toolName];
   if (dep && !isRuntimeDepAvailable(opts.runtimeDeps, dep)) {
-    return { available: false, reason: 'dependency' };
+    const detail = runtimeDepUnavailableDetail(opts.runtimeDeps, dep);
+    return {
+      available: false,
+      reason: 'dependency',
+      ...(detail ? { detail } : {}),
+    };
   }
 
   // 4. Рабочий каталог проекта: без `project.workspace` относительные пути

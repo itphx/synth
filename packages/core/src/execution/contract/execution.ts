@@ -44,12 +44,16 @@ import { ExecutionError, type ExecutionPort } from '../ports/index.js';
  *   (для удалённого исполнителя — внутри его workspace);
  * - `cwdOutside` — каталог **вне** границ реализации (для remote-проверок
  *   containment'а; для inline — просто каталог вне рабочего каталога проекта);
+ * - `availableBinaries` — программы, которые гарантированно есть в окружении
+ *   реализации (для проверок `probe`/`requires`; пустой список — проверки
+ *   возможностей неприменимы);
  * - `dispose` — освобождение ресурсов реализации (опционально).
  */
 export interface ExecutionPortHarness {
   port: ExecutionPort;
   cwd: string;
   cwdOutside?: string;
+  availableBinaries?: string[];
   dispose?: () => Promise<void>;
 }
 
@@ -170,6 +174,32 @@ export function describeExecutionPort(name: string, make: ExecutionPortHarnessFa
       expect(err.reason).toBe('spawn_failed');
       expect(err.code).toBe('ENOENT');
     });
+
+    it('probe: заведомо отсутствующая программа → false', async () => {
+      const { port } = await make();
+      if (typeof port.probe !== 'function') return;
+      expect(await port.probe('synth-exec-contract-missing-binary')).toBe(false);
+    });
+
+    it('probe: программа из состава окружения → true', async () => {
+      const { port, availableBinaries = [] } = await make();
+      if (typeof port.probe !== 'function') return;
+      for (const bin of availableBinaries) {
+        expect(await port.probe(bin), bin).toBe(true);
+      }
+    });
+
+    it('requires: команда с бинарным требованием уходит в среду, где программа есть', async () => {
+      const { port, availableBinaries = [] } = await make();
+      const bin = availableBinaries[0];
+      if (!bin) return;
+      const res = await port.execute({
+        command: { kind: 'shell', command: 'printf ok' },
+        requires: [bin],
+      });
+      expect(res.stdout).toBe('ok');
+      expect(res.exitCode).toBe(0);
+    });
   });
 }
 
@@ -217,6 +247,20 @@ export function describeRemoteOnlyExecutionChecks(
       expect(err).toBeInstanceOf(ExecutionError);
       expect(err.reason).toBe('spawn_failed');
       expect(err.code).toBe('EWORKSPACE');
+    });
+
+    it('requires: программы нет ни у одного адреса — различимая ошибка', async () => {
+      const { port } = await make();
+      const err = await captureError(
+        port.execute({
+          command: { kind: 'shell', command: 'printf ok' },
+          requires: ['synth-exec-contract-missing-binary'],
+        }),
+      );
+      expect(err).toBeInstanceOf(ExecutionError);
+      expect(err.reason).toBe('dependency_missing');
+      expect(err.code).toBe('EDEPENDENCY');
+      expect(err.message).toContain('synth-exec-contract-missing-binary');
     });
   });
 }

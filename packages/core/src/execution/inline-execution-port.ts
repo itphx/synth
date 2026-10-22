@@ -17,6 +17,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { probeBinaryThroughPort } from './probe.js';
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_SHELL_BINARY,
@@ -86,6 +87,17 @@ function toExecutionError(err: unknown, durationMs: number): ExecutionError {
  * синглтонов не появляется (инвариант 24).
  */
 export class InlineExecutionPort implements ExecutionPort {
+  /**
+   * ADR-077/ADR-078: наличие программы в окружении исполнения.
+   *
+   * У inline-порта окружение — процесс control plane, поэтому проба та же,
+   * что и до появления порта: `bin --version`; `ENOENT` → программы нет,
+   * прочие ошибки → fail-open (программа, скорее всего, есть).
+   */
+  async probe(bin: string, args?: string[]): Promise<boolean> {
+    return probeBinaryThroughPort(this, bin, args);
+  }
+
   async execute(req: ExecRequest): Promise<ExecResult> {
     const startedAt = Date.now();
     const { file, args } = resolveInvocation(req.command);

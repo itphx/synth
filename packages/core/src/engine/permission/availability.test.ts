@@ -114,6 +114,20 @@ describe('computeToolAvailability (ADR-070 §2.9.1)', () => {
     ).toEqual({ available: true });
   });
 
+  it('dependency: деталь из состава пула попадает в результат (ADR-077)', () => {
+    const result = computeToolAvailability('git_status', ['git_read'], {
+      runtimeDeps: {
+        git: false,
+        rg: true,
+        sh: true,
+        details: { git: 'git: отсутствует в 2 из 3 адресов пула' },
+      },
+    });
+    expect(result.available).toBe(false);
+    expect(result.reason).toBe('dependency');
+    expect(result.detail).toBe('git: отсутствует в 2 из 3 адресов пула');
+  });
+
   it('runtimeDeps не задан → доступно (fail-open)', () => {
     expect(computeToolAvailability('git_status', ['git_read'], {})).toEqual({ available: true });
   });

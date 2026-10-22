@@ -108,6 +108,12 @@ describe('ADR-077: точки исполнения ходят в порт с п�
     expect(req.signal).toBeUndefined();
   });
 
+  it('execute_shell: бинарное требование тула — sh (ADR-077)', async () => {
+    const port = new RecordingPort({ result: { stdout: 'ok' } });
+    await executeShellTool.execute({ command: 'echo ok' }, makeCtx(port));
+    expect(port.requests[0]!.requires).toEqual(['sh']);
+  });
+
   it('execute_shell: явный таймаут уходит в порт; лимит 120 с не менялся', async () => {
     const port = new RecordingPort();
     await executeShellTool.execute({ command: 'echo ok', timeout: 5_000 }, makeCtx(port));
@@ -142,6 +148,8 @@ describe('ADR-077: точки исполнения ходят в порт с п�
     expect(req.maxOutputBytes).toBe(DEFAULT_MAX_OUTPUT_BYTES);
     expect(req.cwd).toBeUndefined();
     expect(req.env).toBeUndefined();
+    // ADR-077: бинарное требование тула — rg.
+    expect(req.requires).toEqual(['rg']);
   });
 
   it('git: argv без shell, cwd, таймаут 30 с, лимит 10 МБ', async () => {
@@ -154,6 +162,8 @@ describe('ADR-077: точки исполнения ходят в порт с п�
     expect(req.cwd).toBe(tmpDir);
     expect(req.timeoutMs).toBe(30_000);
     expect(req.maxOutputBytes).toBe(DEFAULT_MAX_OUTPUT_BYTES);
+    // ADR-077: бинарное требование тула — git.
+    expect(req.requires).toEqual(['git']);
   });
 
   it('inline-shell: shell-форма, cwd, таймаут 30 с, лимит 10 МБ, HOME', async () => {
