@@ -54,6 +54,73 @@ gitverse.ru/itphx/synth:<version>
 
 Дополнительно **все три базовых образа** (`synth`, `synth-backend`, `synth-ui`) зеркалируются в GitHub Container Registry: `ghcr.io/itphx/synth:<version>`, `ghcr.io/itphx/synth-backend:<version>`, `ghcr.io/itphx/synth-ui:<version>`. Политика — в разделе [Релиз в GitHub-зеркале](#релиз-в-github-зеркале).
 
+## Образы исполнителей и flavor'ы (PROP-082)
+
+Кроме трёх базовых образов публикуются **flavor-образы** (all-in-one: control plane + toolchain) и **образы исполнителей** (worker'ы, split-топология). Все они — в реестре Gitea `git.itphx.ru`:
+
+| Образ | Тег | Состав |
+|---|---|---|
+| `synth-backend` | `<версия>` | slim: control plane без toolchain'а |
+| `synth-backend` | `<версия>-core` | hard deps + tier 0 + control plane |
+| `synth-backend` | `<версия>-dev` | core + tier 1 + tier 4 (MCP) + БД-клиенты + buildah |
+| `synth-backend` | `<версия>-devops` | dev + tier 2 + диаг + docker CLI |
+| `synth-backend` | `<версия>-browser` | debian-ветка: tier 0/1 + tier 3 (Playwright + Chromium) + диаг |
+| `synth-backend` | `<версия>-full` | всё вышеперечисленное |
+| `synth-executor` | `<версия>-core` … `<версия>-full` | образы исполнителей (те же flavor'ы, без control plane) |
+
+Полный адрес: `git.itphx.ru/itphx/synth-backend:<версия>-core`, `git.itphx.ru/itphx/synth-executor:<версия>-core`.
+
+**Теги версионные, без `latest`.** Pull в кластере идёт по конкретной версии (`<версия>-<flavor>`) — иначе развёртывание перестаёт быть воспроизводимым. Ограничение GitVerse/GHCR (~500 МБ на репозиторий) к Gitea-реестру не относится, но политика тегов общая для всех реестров.
+
+### Секрет
+
+Публикация в Gitea-реестр — по секрету **`GV_GITEA_TOKEN`** (логин `itphx`); локально и в `synth-deploy` — переменная `GITEA_TOKEN`. Если секрет не задан, публикация **падает** с понятным сообщением (fail-closed), а не пропускается молча: `scripts/docker-auth-gitea.sh` готовит `config.json` для kaniko/CLI.
+
+### Сборка и публикация
+
+В CI публикация живёт в джобе `publish-images-gitea` файла `.gitverse/workflows/release.yaml`: она запускается **по тегу релиза** (как и публикация базовых образов) и собирает каждый flavor отдельным шагом kaniko с `--target` и `--destination=git.itphx.ru/itphx/<образ>:<версия>-<flavor>`. В `ci.yaml` (push/PR) публикации нет — там только сборка и smoke-тесты (джоба `images`).
+
+Явный `--platform` в flavor-шагах **не задаётся**: kaniko не выставляет `BUILDPLATFORM`/`TARGETPLATFORM` (проверено на v1.24.0), и пустое значение уронило бы сборку (PROP-082, «Multistage-сборка»). Registry-кэш включён — иначе одиннадцать сборок повторяли бы тяжёлую стадию `build`.
+
+Локально:
+
+```bash
+# план действий (ничего не выполняется)
+./scripts/publish-images.sh --tag-base 0.11.4 --dry-run
+
+# собрать локально, без публикации
+./scripts/publish-images.sh --tag-base 0.11.4 --skip-push
+
+# собрать и опубликовать все flavor'ы в Gitea
+GV_GITEA_TOKEN=<токен> ./scripts/publish-images.sh --tag-base 0.11.4
+
+# только образ исполнителя, flavor core
+GV_GITEA_TOKEN=<токен> ./scripts/publish-images.sh --tag-base 0.11.4 \
+    --only executor --flavor core
+```
+
+Скрипт печатает сводку (образ, тег, размер, digest) и пушит **последовательно**, с ретраями: DNS `git.itphx.ru` на nameserver `10.0.0.245` сбрасывает параллельные запросы, из-за чего `docker push` падал с `Temporary failure in name resolution`.
+
+### Smoke-тесты flavor'ов
+
+```bash
+./scripts/smoke-image.sh --image synth-backend:0.11.4-dev
+./scripts/smoke-image.sh --image git.itphx.ru/itphx/synth-executor:0.11.4-core --flavor core
+```
+
+Скрипт запускает контейнер и проверяет состав **по flavor'у** (не только наличие бинарников, но и их работоспособность):
+
+| Flavor | Проверки |
+|---|---|
+| `core` | `git`, `rg`, `python3` (+`pip`, `python3 -m venv`), `bash`, `jq`, `yq`, `curl`, `openssl`, `ssh`, `ca-certificates` |
+| `dev` | + tier 1 (`make`, `gcc`, `g++`, `patch`, `rsync`), MCP-серверы (`initialize` по stdio), клиенты БД (`sqlite3`, `psql`, `redis-cli`, `mysql`), `buildah` |
+| `devops` | + tier 2 (`kubectl`, `helm`, `kustomize`, `tofu`/`terraform`, `ansible`, `shellcheck`, `yamllint`, `hadolint`), диаг (`dig`, `nc`, `lsof`, `ss`, `traceroute`), `docker --version` (демона в образе нет) |
+| `browser` | + `playwright`, headless-старт Chromium, `xmllint` |
+| `full` | всё вышеперечисленное |
+| `slim` | **негативная проверка:** бинарников toolchain'а в образе быть не должно |
+
+Код возврата ненулевой при провале; в выводе видно, какая именно проверка не сошлась.
+
 ## Helm-чарт
 
 Чарт приложения — `charts/synth/` в монорепозитории. Версия чарта и `appVersion` равны версии релиза: при bump в CI (`version-bump` в `release.yaml`) они обновляются вместе с `version.ts` и `package.json`.
@@ -246,6 +313,7 @@ node scripts/adr-check.mjs && node scripts/docs-link-check.mjs
 |--------|------------|
 | `NPM_TOKEN` | Публикация в npmjs.org |
 | `GV_TOKEN` | Единый токен GitVerse (API, Docker Registry, npm registry, git push от бота) |
+| `GV_GITEA_TOKEN` | Токен Gitea (`git.itphx.ru`) с правом на container registry — публикация flavor-образов и образов исполнителей (логин `itphx`) |
 | `GH_TOKEN` | GitHub-зеркало: push refs, GitHub Release, публикация базовых образов в GHCR (classic PAT, scope `repo` + `write:packages`) |
 | `GHCR_USER` | Необязательно: логин владельца `GH_TOKEN` для `ghcr.io` (по умолчанию `itphx`) |
 | `GV_SYNTH_URL` | База API v2 инстанса Synth для события релиза (например `https://synth.k3s.itphx.loc/api/v2`) |

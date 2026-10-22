@@ -251,6 +251,86 @@ set, a stable local key is generated (32 hex), stored in
 `{dataDir}/secrets/api-key` (file `0600`, directory `0700`) and printed at startup
 in full together with the path to the file.
 
+## Local scenarios: all-in-one and split (docker compose)
+
+`docker-compose.yml` contains four scenarios. Besides the previous standalone (`synth`) and the `ollama`/`postgres` profiles, two more were added (PROP-077/PROP-082):
+
+| Profile | Content | Execution mode |
+|---|---|---|
+| `all-in-one` | `synth-backend` (flavor `core` — control plane + toolchain), `synth-ui`, `postgres` | `inline` (default) — commands run in the control plane process |
+| `split` | `synth-backend-split` (slim — control plane only), `synth-executor` (worker with the toolchain), `synth-ui`, `postgres`, shared workspace volume | `remote` — commands go to the executor over HTTP |
+
+```bash
+# all-in-one: a single node, the toolchain lives inside the control plane
+docker compose --profile all-in-one up -d --build
+
+# split: control plane without the toolchain + a separate executor
+docker compose --profile split up -d --build
+```
+
+Preparing `.env` (`SYNTH_API_KEY` is required):
+
+```bash
+printf 'SYNTH_API_KEY=dev-key-123\n' > .env
+```
+
+The split profile also needs a **trust token**: the control plane reads it **from a
+file** (invariant 13 — the token value is never stored in the config), while the
+executor gets the same value in an env variable. Generate both with one command:
+
+```bash
+TOKEN=$(openssl rand -base64 32)
+printf '%s' "$TOKEN" > .executor-token     # the file is mounted to /etc/synth/executor/token
+echo "SYNTH_EXECUTOR_TOKEN=$TOKEN" >> .env # the same value goes to the executor
+```
+
+`.executor-token` is listed in `.gitignore`. If the file is missing, Docker creates
+a directory in its place and the control plane fails closed (see
+[Troubleshooting](./TROUBLESHOOTING.md)).
+
+Checking the split mode:
+
+```bash
+# is the executor alive?
+docker compose --profile split exec synth-executor wget -qO- http://127.0.0.1:5100/health
+# the executor toolchain (needs the bearer token)
+docker compose --profile split exec synth-executor wget -qO- \
+  --header="Authorization: Bearer $SYNTH_EXECUTOR_TOKEN" http://127.0.0.1:5100/capabilities
+```
+
+Important: the workspace path of the control plane and of the executor must
+**match** (`/var/synth/data/workspaces` in both containers) — otherwise the
+executor containment rejects `cwd` (`EWORKSPACE`).
+
+## End-to-end test: control plane ↔ executor
+
+`scripts/e2e-executor.sh` is **not a mock**: real processes in containers, HTTP
+transport, commands executed by a real `sh`. It checks:
+
+1. the control plane starts in remote mode (`SYNTH_EXECUTION_MODE=remote`);
+2. a command sent through the control plane execution port runs **in the executor**
+   (proved by the container hostname and an env marker that exist only in the
+   executor);
+3. **fail-closed:** with the executor stopped, the command runs nowhere — the call
+   fails with `EUNREACHABLE` and no local marker appears in the control plane;
+4. the protocol: without a valid `Authorization` the executor answers `401`;
+5. `/capabilities` returns the executor toolchain.
+
+```bash
+# build the images and run (a docker daemon is required)
+./scripts/e2e-executor.sh
+
+# run only, the images are already built
+./scripts/e2e-executor.sh --no-build --backend-image synth-backend:e2e-local \
+    --executor-image synth-executor:e2e-local
+
+# keep the containers for inspection
+./scripts/e2e-executor.sh --keep --verbose
+```
+
+The script prints `✓`/`✗` per check and returns a non-zero code if anything did
+not pass.
+
 ## Project structure
 
 ```

@@ -422,9 +422,12 @@ jobs:
 
       # Политика образов: все три БАЗОВЫХ образа (synth, synth-backend, synth-ui)
       # публикуются в ДВА реестра — gitverse.ru (основной) и ghcr.io (зеркало
-      # GitHub-контура). Будущие дополнительные/full-образы (flavor-образы из
-      # PROP-082: dev/devops/browser/full и т.п.) пойдут ТОЛЬКО в Docker Hub —
-      # лимит размера артефактов GHCR ~500 МБ. Только версионный тег, без `latest`.
+      # GitHub-контура). Только версионный тег, без `latest`.
+      #
+      # Flavor-образы (PROP-082: dev/devops/browser/full и образы исполнителей
+      # synth-executor) в эти реестры НЕ идут: лимит артефактов GHCR ~500 МБ.
+      # Их публикует отдельная джоба `publish-images-gitea` в реестр Gitea
+      # (`git.itphx.ru/itphx/…`, теги `<версия>-<flavor>`), версионными тегами.
       - name: Сборка и публикация Docker образа synth (kaniko → gitverse.ru + ghcr.io)
         uses: docker://gcr.io/kaniko-project/executor:v1.24.0
         env:
@@ -510,6 +513,251 @@ jobs:
             --platforms amd64,arm64 \
             --manifests \
             --registry-prefix gitverse.ru/itphx,ghcr.io/itphx || true
+
+  # --- Flavor-образы и образы исполнителей → реестр Gitea (PROP-082, шаг 6) ---
+  #
+  # Публикуются ВСЕ flavor'ы в реестр Gitea `git.itphx.ru/itphx/…`:
+  #
+  #   synth-backend:<v>-<flavor>    all-in-one: control plane + toolchain
+  #   synth-backend:<v>             slim: control plane без toolchain'а
+  #   synth-executor:<v>-<flavor>   образы исполнителей (worker'ы)
+  #
+  #   flavor'ы: core | dev | devops | browser | full
+  #
+  # Политика тегов — версионные, БЕЗ `latest`: pull в K3s идёт по конкретной
+  # версии (`<v>-<flavor>`), поэтому развёртывание остаётся воспроизводимым.
+  # Ограничение GitVerse/GHCR (~500 МБ на репозиторий) к Gitea-реестру не
+  # относится, но политика тегов — общая для всех реестров.
+  #
+  # Секрет — `GV_GITEA_TOKEN` (логин `itphx`). Если секрета нет — шаг падает
+  # (fail-closed, scripts/docker-auth-gitea.sh), а не публикует «молча».
+  #
+  # Kaniko НЕ задаёт BUILDPLATFORM/TARGETPLATFORM (проверено на v1.24.0), а
+  # flavor-стадии содержат RUN с установкой пакетов → явный `--platform` в них
+  # уронил бы сборку (PROP-082, «Multistage-сборка»). Поэтому `--platform` не
+  # задаётся, и flavor'ы публикуются для архитектуры раннера (amd64).
+  #
+  # Registry-кэш включён: без него одиннадцать сборок повторяли бы тяжёлую
+  # стадию `build` (сборка монорепо). Если кэш недоступен — сборка всё равно
+  # проходит, просто медленнее.
+  publish-images-gitea:
+    name: Flavor-образы (Gitea)
+    needs: [build, publish-npmjs]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Определить теги
+        id: image_tags
+        run: |
+          if [ "${{ gitverse.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ needs.version-bump.outputs.version }}"
+          else
+            VERSION=$(echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||')
+          fi
+          echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
+
+      - name: Авторизация для Docker Registry (Gitea)
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+          GITEA_USER: itphx
+          GITEA_TOKEN: ${{ secrets.GV_GITEA_TOKEN }}
+        run: bash scripts/docker-auth-gitea.sh
+
+      # --- synth-backend: slim (control plane без toolchain'а) ---
+      - name: Публикация synth-backend (slim) — kaniko → Gitea
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.backend
+            --target=slim
+            --build-arg=SYNTH_BACKEND_VERSION=${{ steps.image_tags.outputs.version }}
+            --destination=git.itphx.ru/itphx/synth-backend:${{ steps.image_tags.outputs.version }}
+            --cache=true
+            --cache-repo=git.itphx.ru/itphx/synth-buildcache
+            --snapshot-mode=redo
+            --push-retry=3
+            --verbosity=info
+
+      # --- synth-backend: core ---
+      - name: Публикация synth-backend (core) — kaniko → Gitea
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.backend
+            --target=core
+            --build-arg=SYNTH_BACKEND_VERSION=${{ steps.image_tags.outputs.version }}
+            --destination=git.itphx.ru/itphx/synth-backend:${{ steps.image_tags.outputs.version }}-core
+            --cache=true
+            --cache-repo=git.itphx.ru/itphx/synth-buildcache
+            --snapshot-mode=redo
+            --push-retry=3
+            --verbosity=info
+
+      # --- synth-backend: dev ---
+      - name: Публикация synth-backend (dev) — kaniko → Gitea
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.backend
+            --target=dev
+            --build-arg=SYNTH_BACKEND_VERSION=${{ steps.image_tags.outputs.version }}
+            --destination=git.itphx.ru/itphx/synth-backend:${{ steps.image_tags.outputs.version }}-dev
+            --cache=true
+            --cache-repo=git.itphx.ru/itphx/synth-buildcache
+            --snapshot-mode=redo
+            --push-retry=3
+            --verbosity=info
+
+      # --- synth-backend: devops ---
+      - name: Публикация synth-backend (devops) — kaniko → Gitea
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.backend
+            --target=devops
+            --build-arg=SYNTH_BACKEND_VERSION=${{ steps.image_tags.outputs.version }}
+            --destination=git.itphx.ru/itphx/synth-backend:${{ steps.image_tags.outputs.version }}-devops
+            --cache=true
+            --cache-repo=git.itphx.ru/itphx/synth-buildcache
+            --snapshot-mode=redo
+            --push-retry=3
+            --verbosity=info
+
+      # --- synth-backend: browser (debian-ветка) ---
+      - name: Публикация synth-backend (browser) — kaniko → Gitea
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.backend
+            --target=browser
+            --build-arg=SYNTH_BACKEND_VERSION=${{ steps.image_tags.outputs.version }}
+            --destination=git.itphx.ru/itphx/synth-backend:${{ steps.image_tags.outputs.version }}-browser
+            --cache=true
+            --cache-repo=git.itphx.ru/itphx/synth-buildcache
+            --snapshot-mode=redo
+            --push-retry=3
+            --verbosity=info
+
+      # --- synth-backend: full ---
+      - name: Публикация synth-backend (full) — kaniko → Gitea
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.backend
+            --target=full
+            --build-arg=SYNTH_BACKEND_VERSION=${{ steps.image_tags.outputs.version }}
+            --destination=git.itphx.ru/itphx/synth-backend:${{ steps.image_tags.outputs.version }}-full
+            --cache=true
+            --cache-repo=git.itphx.ru/itphx/synth-buildcache
+            --snapshot-mode=redo
+            --push-retry=3
+            --verbosity=info
+
+      # --- synth-executor: core ---
+      - name: Публикация synth-executor (core) — kaniko → Gitea
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.executor
+            --target=core
+            --destination=git.itphx.ru/itphx/synth-executor:${{ steps.image_tags.outputs.version }}-core
+            --cache=true
+            --cache-repo=git.itphx.ru/itphx/synth-buildcache
+            --snapshot-mode=redo
+            --push-retry=3
+            --verbosity=info
+
+      # --- synth-executor: dev ---
+      - name: Публикация synth-executor (dev) — kaniko → Gitea
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.executor
+            --target=dev
+            --destination=git.itphx.ru/itphx/synth-executor:${{ steps.image_tags.outputs.version }}-dev
+            --cache=true
+            --cache-repo=git.itphx.ru/itphx/synth-buildcache
+            --snapshot-mode=redo
+            --push-retry=3
+            --verbosity=info
+
+      # --- synth-executor: devops ---
+      - name: Публикация synth-executor (devops) — kaniko → Gitea
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.executor
+            --target=devops
+            --destination=git.itphx.ru/itphx/synth-executor:${{ steps.image_tags.outputs.version }}-devops
+            --cache=true
+            --cache-repo=git.itphx.ru/itphx/synth-buildcache
+            --snapshot-mode=redo
+            --push-retry=3
+            --verbosity=info
+
+      # --- synth-executor: browser (debian-ветка) ---
+      - name: Публикация synth-executor (browser) — kaniko → Gitea
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.executor
+            --target=browser
+            --destination=git.itphx.ru/itphx/synth-executor:${{ steps.image_tags.outputs.version }}-browser
+            --cache=true
+            --cache-repo=git.itphx.ru/itphx/synth-buildcache
+            --snapshot-mode=redo
+            --push-retry=3
+            --verbosity=info
+
+      # --- synth-executor: full ---
+      - name: Публикация synth-executor (full) — kaniko → Gitea
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.executor
+            --target=full
+            --destination=git.itphx.ru/itphx/synth-executor:${{ steps.image_tags.outputs.version }}-full
+            --cache=true
+            --cache-repo=git.itphx.ru/itphx/synth-buildcache
+            --snapshot-mode=redo
+            --push-retry=3
+            --verbosity=info
 
   # --- Offline-образы для закрытого контура ---
   #

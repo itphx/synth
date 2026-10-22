@@ -54,6 +54,73 @@ The `latest` tag is **not published** — only versioned tags remain in the regi
 
 Additionally **all three base images** (`synth`, `synth-backend`, `synth-ui`) are mirrored to the GitHub Container Registry: `ghcr.io/itphx/synth:<version>`, `ghcr.io/itphx/synth-backend:<version>`, `ghcr.io/itphx/synth-ui:<version>`. The policy is in the section [Release to the GitHub mirror](#release-to-the-github-mirror).
 
+## Executor images and flavors (PROP-082)
+
+Besides the three base images, **flavor images** (all-in-one: control plane + toolchain) and **executor images** (workers, split topology) are published. All of them go to the Gitea registry `git.itphx.ru`:
+
+| Image | Tag | Content |
+|---|---|---|
+| `synth-backend` | `<version>` | slim: control plane without the toolchain |
+| `synth-backend` | `<version>-core` | hard deps + tier 0 + control plane |
+| `synth-backend` | `<version>-dev` | core + tier 1 + tier 4 (MCP) + DB clients + buildah |
+| `synth-backend` | `<version>-devops` | dev + tier 2 + diagnostics + docker CLI |
+| `synth-backend` | `<version>-browser` | debian branch: tier 0/1 + tier 3 (Playwright + Chromium) + diagnostics |
+| `synth-backend` | `<version>-full` | everything above |
+| `synth-executor` | `<version>-core` … `<version>-full` | executor images (the same flavors, without the control plane) |
+
+Full addresses: `git.itphx.ru/itphx/synth-backend:<version>-core`, `git.itphx.ru/itphx/synth-executor:<version>-core`.
+
+**Tags are versioned, without `latest`.** Pulls in the cluster use a concrete version (`<version>-<flavor>`) — otherwise a deployment stops being reproducible. The GitVerse/GHCR limit (~500 MB per repository) does not apply to the Gitea registry, but the tag policy is the same for every registry.
+
+### Secret
+
+Publishing to the Gitea registry uses the **`GV_GITEA_TOKEN`** secret (login `itphx`); locally and in `synth-deploy` it is the `GITEA_TOKEN` environment variable. If the secret is missing, publishing **fails** with a clear message (fail-closed) instead of being silently skipped: `scripts/docker-auth-gitea.sh` prepares the `config.json` for kaniko/CLI.
+
+### Build and publish
+
+In CI, publishing lives in the `publish-images-gitea` job of `.gitverse/workflows/release.yaml`: it runs **on a release tag** (like the base image publishing) and builds every flavor with a separate kaniko step using `--target` and `--destination=git.itphx.ru/itphx/<image>:<version>-<flavor>`. In `ci.yaml` (push/PR) there is no publishing — only builds and smoke tests (the `images` job).
+
+An explicit `--platform` is **not** set in the flavor steps: kaniko does not provide `BUILDPLATFORM`/`TARGETPLATFORM` (verified on v1.24.0), and an empty value would break the build (PROP-082, "Multistage build"). The registry cache is enabled — otherwise eleven builds would repeat the heavy `build` stage.
+
+Locally:
+
+```bash
+# show the plan (nothing is executed)
+./scripts/publish-images.sh --tag-base 0.11.4 --dry-run
+
+# build locally, without publishing
+./scripts/publish-images.sh --tag-base 0.11.4 --skip-push
+
+# build and publish all flavors to Gitea
+GV_GITEA_TOKEN=<token> ./scripts/publish-images.sh --tag-base 0.11.4
+
+# only the executor image, core flavor
+GV_GITEA_TOKEN=<token> ./scripts/publish-images.sh --tag-base 0.11.4 \
+    --only executor --flavor core
+```
+
+The script prints a summary (image, tag, size, digest) and pushes **sequentially**, with retries: the DNS server `10.0.0.245` behind `git.itphx.ru` drops parallel queries, which made `docker push` fail with `Temporary failure in name resolution`.
+
+### Flavor smoke tests
+
+```bash
+./scripts/smoke-image.sh --image synth-backend:0.11.4-dev
+./scripts/smoke-image.sh --image git.itphx.ru/itphx/synth-executor:0.11.4-core --flavor core
+```
+
+The script starts a container and checks the content **per flavor** (not only that binaries exist, but that they work):
+
+| Flavor | Checks |
+|---|---|
+| `core` | `git`, `rg`, `python3` (+`pip`, `python3 -m venv`), `bash`, `jq`, `yq`, `curl`, `openssl`, `ssh`, `ca-certificates` |
+| `dev` | + tier 1 (`make`, `gcc`, `g++`, `patch`, `rsync`), MCP servers (`initialize` over stdio), DB clients (`sqlite3`, `psql`, `redis-cli`, `mysql`), `buildah` |
+| `devops` | + tier 2 (`kubectl`, `helm`, `kustomize`, `tofu`/`terraform`, `ansible`, `shellcheck`, `yamllint`, `hadolint`), diagnostics (`dig`, `nc`, `lsof`, `ss`, `traceroute`), `docker --version` (there is no daemon in the image) |
+| `browser` | + `playwright`, headless Chromium start, `xmllint` |
+| `full` | everything above |
+| `slim` | **negative check:** no toolchain binaries must be present |
+
+The exit code is non-zero on a failure; the output shows which check did not pass.
+
 ## Helm chart
 
 The application chart is `charts/synth/` in the monorepo. The chart version and `appVersion` equal the release version: on a bump in CI (`version-bump` in `release.yaml`) they are updated together with `version.ts` and `package.json`.
@@ -240,6 +307,7 @@ node scripts/adr-check.mjs && node scripts/docs-link-check.mjs
 |--------|------------|
 | `NPM_TOKEN` | Publishing to npmjs.org |
 | `GV_TOKEN` | Single GitVerse token (API, Docker Registry, npm registry, git push from the bot) |
+| `GV_GITEA_TOKEN` | Gitea token (`git.itphx.ru`) with container-registry rights — publishing flavor images and executor images (login `itphx`) |
 | `GH_TOKEN` | GitHub mirror: push refs, GitHub Release, publishing the base images to GHCR (classic PAT, scopes `repo` + `write:packages`) |
 | `GHCR_USER` | Optional: the login of the `GH_TOKEN` owner for `ghcr.io` (default `itphx`) |
 | `GV_SYNTH_URL` | Base API v2 URL of the Synth instance that receives the release event (e.g. `https://synth.k3s.itphx.loc/api/v2`) |

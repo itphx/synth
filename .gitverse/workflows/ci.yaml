@@ -287,3 +287,79 @@ jobs:
 
       - name: Рендер шаблонов
         run: bash scripts/ci-helm.sh template synth charts/synth
+
+  # Образы (PROP-082, шаг 6): сборка flavor'ов + smoke-тесты.
+  #
+  # Публикации здесь НЕТ: образы публикуются по тегу релиза
+  # (`.gitverse/workflows/release.yaml` → джоба `publish-images-gitea`,
+  # реестр Gitea `git.itphx.ru`). Здесь — только проверка, что flavor'ы
+  # собираются и что toolchain внутри них работает.
+  #
+  # Раннер GitVerse может быть без docker-демона (прецедент: сборка arm64
+  # образов в release.yaml — best-effort с предупреждением). Поэтому два пути:
+  #   * демон есть → `docker build` + `scripts/smoke-image.sh` для КАЖДОГО
+  #     flavor'а; провал сборки или проверки ВАЛИТ джобу;
+  #   * демона нет → kaniko `--no-push` (проверка, что Dockerfile собирается в
+  #     CI-контуре) и предупреждение «smoke-тесты пропущены». Полная матрица
+  #     flavor'ов собирается и публикуется в release.yaml по тегу.
+  images:
+    name: Образы (сборка + smoke)
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-executor]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Диагностика docker-демона
+        id: dockerdaemon
+        run: |
+          if docker version >/dev/null 2>&1; then
+            echo "available=true" >> "$GITVERSE_OUTPUT"
+            echo "docker-демон доступен: flavor'ы собираются локально и проходят smoke-тесты"
+          else
+            echo "available=false" >> "$GITVERSE_OUTPUT"
+            echo "ПРЕДУПРЕЖДЕНИЕ: docker-демон недоступен — smoke-тесты образов пропущены (best-effort)"
+          fi
+
+      - name: Сборка flavor-образов + smoke-тесты (docker)
+        if: ${{ steps.dockerdaemon.outputs.available == 'true' }}
+        run: bash scripts/ci-images.sh
+
+      # kaniko без push: проверяем, что flavor-стадии Dockerfile'ов собираются
+      # в CI-контуре (kaniko не задаёт BUILDPLATFORM/TARGETPLATFORM — это
+      # важно для flavor-стадий, см. PROP-082, «Multistage-сборка»).
+      - name: Сборка synth-backend:core (kaniko, без push)
+        if: ${{ steps.dockerdaemon.outputs.available != 'true' }}
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.backend
+            --target=core
+            --no-push
+            --snapshot-mode=redo
+            --verbosity=info
+
+      - name: Сборка synth-backend:slim (kaniko, без push)
+        if: ${{ steps.dockerdaemon.outputs.available != 'true' }}
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.backend
+            --target=slim
+            --no-push
+            --snapshot-mode=redo
+            --verbosity=info
+
+      - name: Сборка synth-executor:core (kaniko, без push)
+        if: ${{ steps.dockerdaemon.outputs.available != 'true' }}
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.executor
+            --target=core
+            --no-push
+            --snapshot-mode=redo
+            --verbosity=info

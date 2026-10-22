@@ -252,6 +252,86 @@ node packages/core/dist/main.js config
 `{dataDir}/secrets/api-key` (файл `0600`, каталог `0700`) и печатается при старте
 полностью вместе с путём к файлу.
 
+## Локальные сценарии: all-in-one и split (docker compose)
+
+`docker-compose.yml` содержит четыре сценария. Кроме прежнего standalone (`synth`) и профилей `ollama`/`postgres` добавлены два (PROP-077/PROP-082):
+
+| Профиль | Состав | Режим исполнения |
+|---|---|---|
+| `all-in-one` | `synth-backend` (flavor `core` — control plane + toolchain), `synth-ui`, `postgres` | `inline` (дефолт) — команды идут в процесс control plane |
+| `split` | `synth-backend-split` (slim — только control plane), `synth-executor` (worker с toolchain'ом), `synth-ui`, `postgres`, общий том workspace | `remote` — команды уходят исполнителю по HTTP |
+
+```bash
+# all-in-one: одна нода, toolchain внутри control plane
+docker compose --profile all-in-one up -d --build
+
+# split: control plane без toolchain'а + отдельный исполнитель
+docker compose --profile split up -d --build
+```
+
+Подготовка `.env` (обязателен `SYNTH_API_KEY`):
+
+```bash
+printf 'SYNTH_API_KEY=dev-key-123\n' > .env
+```
+
+Для split-профиля дополнительно нужен **токен доверия**: control plane читает его
+**из файла** (инвариант 13 — значение токена не хранится в конфиге), исполнитель
+получает то же значение в env. Сгенерировать оба значения одной командой:
+
+```bash
+TOKEN=$(openssl rand -base64 32)
+printf '%s' "$TOKEN" > .executor-token     # файл монтируется в /etc/synth/executor/token
+echo "SYNTH_EXECUTOR_TOKEN=$TOKEN" >> .env # то же значение — исполнителю
+```
+
+`.executor-token` добавлен в `.gitignore`. Если файл не создан, Docker создаст на
+его месте каталог, и control plane упадёт с fail-closed (см.
+[Диагностика](./TROUBLESHOOTING.md)).
+
+Проверка split-режима:
+
+```bash
+# исполнитель жив?
+docker compose --profile split exec synth-executor wget -qO- http://127.0.0.1:5100/health
+# состав toolchain'а исполнителя (нужен bearer-токен)
+docker compose --profile split exec synth-executor wget -qO- \
+  --header="Authorization: Bearer $SYNTH_EXECUTOR_TOKEN" http://127.0.0.1:5100/capabilities
+```
+
+Важно: путь workspace у control plane и исполнителя должен **совпадать**
+(`/var/synth/data/workspaces` в обоих контейнерах) — иначе containment исполнителя
+отклонит `cwd` (`EWORKSPACE`).
+
+## Сквозной тест control plane ↔ исполнитель
+
+`scripts/e2e-executor.sh` — **не мок**: настоящие процессы в контейнерах, обмен по
+HTTP, команды исполняет реальный `sh`. Проверяется:
+
+1. control plane поднимается в remote-режиме (`SYNTH_EXECUTION_MODE=remote`);
+2. команда, отправленная портом исполнения control plane, выполняется **в
+   исполнителе** (доказывается hostname'ом контейнера и env-маркером, которые есть
+   только у исполнителя);
+3. **fail-closed:** при остановленном исполнителе команда не выполняется нигде —
+   вызов падает с `EUNREACHABLE`, а локальный маркер в control plane не появляется;
+4. протокол: без корректного `Authorization` исполнитель отвечает `401`;
+5. `/capabilities` отдаёт состав toolchain'а исполнителя.
+
+```bash
+# собрать образы и прогнать (docker-демон обязателен)
+./scripts/e2e-executor.sh
+
+# только прогон, образы уже собраны
+./scripts/e2e-executor.sh --no-build --backend-image synth-backend:e2e-local \
+    --executor-image synth-executor:e2e-local
+
+# оставить контейнеры для разбора
+./scripts/e2e-executor.sh --keep --verbose
+```
+
+Скрипт печатает по каждой проверке `✓`/`✗` и возвращает ненулевой код, если что-то
+не сошлось.
+
 ## Структура проекта
 
 ```

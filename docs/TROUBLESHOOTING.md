@@ -124,6 +124,47 @@ security:
 
 **Решение:** задайте CA **файлом** через `security.tls.caFile` — git-канал передаёт его пер-вызовом (`git -c http.sslCAInfo=<path>`). `caPem` (PEM без файла) git-каналу недоступен — нужен именно `caFile`.
 
+## 8. Исполнитель недоступен (split-топология)
+
+**Симптомы:**
+
+- control plane (backend) не стартует: в логе `remote execution is unavailable: …` или `исполнитель недоступен: fetch failed`; либо агентские команды падают с `EUNREACHABLE`;
+- `docker compose --profile split up` — backend вrestart'ится, `synth-executor` не стартует: `[executor] обязательная переменная SYNTH_EXECUTOR_TOKEN не задана — исполнитель не стартует (fail-closed)`;
+- исполнитель жив, но команды падают с `EWORKSPACE` / `cwd_outside_workspace`.
+
+**Диагностика (по порядку):**
+
+1. **Жив ли исполнитель и что он сообщает о себе:**
+
+   ```bash
+   docker compose --profile split exec synth-executor wget -qO- http://127.0.0.1:5100/health
+   docker compose --profile split exec synth-executor wget -qO- \
+     --header="Authorization: Bearer $SYNTH_EXECUTOR_TOKEN" http://127.0.0.1:5100/capabilities
+   ```
+
+   `/capabilities` отдаёт версию протокола и состав toolchain'а (`git`, `rg`, `python3`) — по нему видно, какой образ исполнителя запущен.
+
+2. **Токен.** Без корректного bearer-токена исполнитель отвечает `401` (это нормально). Проверить пару «файл ↔ значение»:
+
+   ```bash
+   # значение, которое видит исполнитель (должно совпадать с содержимым файла)
+   docker compose --profile split exec synth-executor printenv SYNTH_EXECUTOR_TOKEN
+   # файл, который читает control plane
+   docker compose --profile split exec synth-backend-split cat /etc/synth/executor/token
+   ```
+
+   Значения обязаны совпадать посимвольно. Control plane читает токен **только из файла** (`SYNTH_EXECUTION_TOKEN` — это путь, а не значение; инвариант 13).
+
+3. **Режим и адрес.** `SYNTH_EXECUTION_MODE=remote` — переключатель запуска (инвариант 24): смена режима требует рестарта процесса, а не runtime-настройки. `SYNTH_EXECUTION_REMOTE_URL` должен указывать на **адрес исполнителя** (`http://synth-executor:5100` в compose, `http://<pod>:5100` в K3s), а не на control plane.
+
+4. **Файл токена существует.** Если `.executor-token` не создан, Docker создал на его месте **каталог** — control plane читает его как файл и падает. Проверка: `docker compose --profile split exec synth-backend-split ls -l /etc/synth/executor/token` (ожидается regular file).
+
+5. **Workspace совпадает.** Путь workspace у control plane и исполнителя должен быть одинаковым (`/var/synth/data/workspaces` в обоих). Иначе `cwd` не попадает в workspace исполнителя → `EWORKSPACE`.
+
+6. **Поведение при недоступности.** По умолчанию `SYNTH_EXECUTION_FAIL_MODE=fail` — команда **не** выполняется локально (fail-closed). `inline-fallback` — осознанный обход изоляции (команда уйдёт в control plane); в managed-контуре его включать не стоит.
+
+**Сквозная проверка:** `./scripts/e2e-executor.sh` поднимает настоящие control plane и исполнитель и проверяет маршрутизацию, fail-closed и 401 — см. [DEVELOPMENT.md](./DEVELOPMENT.md#сквозной-тест-control-plane--исполнитель).
+
 ## Где смотреть логи
 
 | Сервис | Лог |
