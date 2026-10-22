@@ -6,6 +6,7 @@ import {
   DEFAULT_EGRESS_LOG,
 } from '../types/index.js';
 import { DEFAULT_MAX_UPLOAD_BYTES } from '../types/index.js';
+import { DEFAULT_PROMPT_BLOCK_MAX_CHARS } from '../types/index.js';
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from './types.js';
 import { defaultExecutionConcurrency } from './execution.js';
 
@@ -213,7 +214,7 @@ export const defaultConfig: SynthConfig = {
     // Файл точных исключений семвер-гейта (формат — открытый вопрос §14).
     exactHostExceptions: '',
     // Бюджет символов на блок системного промпта от плагина.
-    promptBlockMaxChars: 4000,
+    promptBlockMaxChars: DEFAULT_PROMPT_BLOCK_MAX_CHARS,
     // Исполнение кода плагинов выключено по умолчанию (Ф1: загрузчик доходит
     // до шага `import` и останавливается — `plugin.execution_disabled`).
     executionEnabled: false,

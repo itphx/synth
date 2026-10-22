@@ -6,6 +6,15 @@ export {
   sortPromptBlocks,
   joinPromptBlocks,
 } from './prompt-blocks.js';
+// PROP-090 §«Точка promptBlocks»: реестр провайдеров блоков системного промпта.
+export {
+  PromptBlockRegistrationError,
+  PromptBlockRegistry,
+} from './prompt-block-registry.js';
+export type {
+  PromptBlockRegistrationOptions,
+  RegisteredPromptBlock,
+} from './prompt-block-registry.js';
 export {
   type PromptStateReason,
   type ComposedPromptLike,
@@ -14,6 +23,7 @@ export {
   hashText,
   buildPromptState,
   isPrefixUnchanged,
+  isBlockChanged,
   computeExpected,
   validateExpected,
 } from './prompt-state.js';

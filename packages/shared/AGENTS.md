@@ -178,6 +178,16 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `{level?, source?}`, заявленный уровень — верхняя граница, выше записи каталога не поднимает).
   `validatePackManifest` — правила 12–14 (вклады плагина по явным схемам; `mode` только у плагина;
   `trust.level` плагина не выше `trusted`). Сверка «объявлено ↔ зарегистрировано» — `diffPackProvides`.
+- PROP-090 §«Точка `promptBlocks`» (Ф3а): **контракт провайдера блока системного промпта** —
+  `types/prompt-blocks.ts` (browser-safe: только типы и чистые функции; реэкспорт из `types`):
+  `PromptBlockProvider` (`key`/`tier`/`order`/`title?`/`load(ctx)`), узкий DTO-контекст
+  `PromptBlockContext` (`sessionId`/`agentRole`/`language`/`projectId?`/`mode`/`query?`/`turnId?`/
+  `timestamp?` — история сессии наружу не отдаётся) и `PromptBlockContent` (`content`/`provenance?`/
+  `status?`); тир провайдера ограничен `context`/`volatile` **на уровне типа**
+  (`PROMPT_BLOCK_PROVIDER_TIERS`) — `stable` запрещён (граница prompt-cache, ADR-070 §2.1);
+  единый источник истины для бюджета символов блока — `DEFAULT_PROMPT_BLOCK_MAX_CHARS = 4000`
+  (совпадает с `plugins.promptBlockMaxChars` в конфиге) и префикс ключа плагинного блока
+  `PLUGIN_PROMPT_BLOCK_KEY_PREFIX = 'plugin.'` + хелпер `isPluginPromptBlockKey`.
 - PROP-090 §10: **семвер и доверие** — `types/semver.ts`: `SEMVER_RANGE_REGEX`, `isSemverRange`,
   `parseSemver`, `satisfiesSemverRange` (операторы `^`/`~`/`>=`/`<=`/`>`/`<`/`=`, wildcard `x`/`*`,
   конъюнкция пробелом; `||` не поддерживается — fail-closed); `PACK_HOST_RANGE_REGEX` ссылается на
@@ -193,7 +203,9 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `reason?`/`source?`) и перечни `PLUGIN_AUDIT_ACTIONS` (`activate`/`deactivate`/`scan`),
   `PLUGIN_AUDIT_OUTCOMES` (`ok`/`rejected`), `PLUGIN_SCAN_VERDICTS` (`safe`/`caution`/`dangerous`),
   `PLUGIN_AUDIT_REASONS` — **закрытый** список **19** кодов отказа (по одному на гейт пайплайна
-  активации; Ф2 добавил `plugin.scan_rejected` и `plugin.approval_required`; источник истины —
+  активации; Ф2 добавил `plugin.scan_rejected` и `plugin.approval_required`, Ф3а —
+  `plugin.scan_disabled_with_execution` (fail-closed: `plugins.scan='disabled'` вместе с
+  `plugins.executionEnabled=true`); источник истины —
   `PluginHost`, `packages/core/src/engine/plugins/plugin-host.ts`). Журнал **отдельный**:
   `SECURITY_AUDIT_SCOPES` (семантика «изменение политики») не расширяется; секреты в журнал не
   пишутся (инвариант 13).
@@ -208,7 +220,9 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `medium`, `singleFile` → `high`), матрица install-policy **одной функцией**
   `installPolicyDecision({trust, verdict, kind})` (`INSTALL_POLICY_ACTIONS`, `INSTALL_POLICY_TRUST_LEVELS`,
   `InstallPolicyKind` = `content`|`plugin`; ячейка `kind: 'plugin'`: `safe→allow`, `caution→ask`,
-  `dangerous→block`); `types/plugin-lock.ts` — `PluginLockEntry` (snake_case: `name`, `version`,
+  `dangerous→block`), **версия правил сканера** `PLUGIN_SCAN_RULES_VERSION` (входит в **ключ кэша
+  сканов**: при изменении правил старый вердикт из кэша не переиспользуется — идёт пересчёт; любое
+  изменение правил сканера **поднимает версию**); `types/plugin-lock.ts` — `PluginLockEntry` (snake_case: `name`, `version`,
   `source`, `identifier?`, `trust_level`, `scan_verdict`, `content_hash`, `ref?`, `entry?`,
   `installed_at`, `updated_at`) и `PluginLockFile` (формат `plugins.lock.json`); `types/plugin-runtime.ts` —
   `PluginRuntimeOverride`/`PluginSettingsFile`/`PLUGIN_SETTINGS_FILE_VERSION` (формат `plugins.json`).

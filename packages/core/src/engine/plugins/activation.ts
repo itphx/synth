@@ -15,6 +15,7 @@ import type {
   PluginAuditReason,
   PluginScanFinding,
   PluginScanVerdict,
+  PromptBlockProvider,
 } from '@itphx/synth-shared';
 
 /**
@@ -148,8 +149,11 @@ export interface PluginDeactivationResult {
 }
 
 /**
- * Фасад плагина (PROP-090 §10, шаг 7) — Ф1: **только** сбор disposers.
- * Регистрации вкладов (тулы/хуки/блоки промпта/фильтры LLM) появятся в Ф3.
+ * Фасад плагина (PROP-090 §10, шаг 7).
+ *
+ * Ф1: только сбор disposers. **Ф3а**: регистрация провайдера блока системного
+ * промпта (точка `promptBlocks`) — с возвратом disposer'а, который снимает
+ * блок при деактивации плагина.
  */
 export interface PluginFacade {
   /**
@@ -157,6 +161,21 @@ export interface PluginFacade {
    * деактивации в обратном порядке регистрации.
    */
   registerDisposer(disposer: PluginDisposer): void;
+  /**
+   * Ф3а: зарегистрировать провайдера блока системного промпта (точка
+   * `promptBlocks`).
+   *
+   * Провайдер с тиром `stable` **отклоняется** (граница prompt-cache,
+   * ADR-070) — тихого понижения до `context` нет. Отказ фиксируется
+   * предупреждением в лог хоста: остальные точки расширения плагина при этом
+   * регистрируются (PROP-090, критерии приёмки точки `promptBlocks`).
+   *
+   * @returns disposer — снимает блок (идемпотентен). При отказе — no-op.
+   */
+  registerPromptBlock(
+    provider: PromptBlockProvider,
+    opts?: { title?: string },
+  ): PluginDisposer;
 }
 
 /**

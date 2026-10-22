@@ -14,6 +14,15 @@
 > умолчанию** (`plugins.executionEnabled=false`) — загрузчика кода в core нет (Ф3/Ф4). Формат файла
 > точных исключений семвер-гейта **зафиксирован** в Ф1 (требует подтверждения владельца — см.
 > §«Открытые вопросы» → «Решено 2026-10-22»).
+> **Обновлено (Ф3а):** 2026-10-22 — **Ф3а выполнен** (ветка `feature/plugin-points`): закрыта точка
+> **`promptBlocks`** — контракт `PromptBlockProvider`/`PromptBlockContext` (`shared`), реестр
+> `PromptBlockRegistry`, сборка блоков в `SystemPromptComposer`, контекст хода (`query`/`turnId`),
+> бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000) с обрезкой и
+> `status: 'truncated'`, инвалидация `promptStates` по блокам провайдеров, фасад
+> `PluginFacade.registerPromptBlock`. Решения Ф3а: тир `stable` у провайдера — **отказ** (не тихое
+> понижение); `plugins.scan: 'disabled'` + `plugins.executionEnabled: true` — **fail-closed**
+> (`plugin.scan_disabled_with_execution`); **версия правил сканера входит в ключ кэша сканов**.
+> Точка `llmFilters` — **Ф3б, не начата**.
 > **Источник:** вынесено из зонтика [ADR-086](./adr-086-extensibility-plugins-editions.md) — Extension API
 > проектировался там как первый из четырёх столпов (плагины, editions, contribution flow, add-on'ы);
 > здесь он выделен в отдельный документ и детализирован.
@@ -937,7 +946,7 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | **Ф0 — предпосылки** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-layer`, коммитов нет) | Остаток [ADR-030](./adr-030-hooks-agent-events.md): политика `builtin` (защита builtin-обработчиков от снятия) + 4 недостающих эмита (`plan_rejected`, `message_received`, `callback`, `schedule_fired`); семвер-гейт `contracts`/`host` (semver-мажор контракта); явные Zod-схемы `provides.tools`/`provides.promptBlocks`/`provides.llmFilters` в `packages/shared/src/types/pack.ts` (без `.passthrough()`); `RuntimeSettings.plugins` + `plugins.*` в конфиге ([ADR-023](./adr-023-configuration.md)). **Сделано:** `builtin` (`off`/отписка отказывают, `offBuiltin` — путь владельца), 3 эмита (`callback` — обоснованно вне core, остаток ADR-030), semver-матчер + `checkExtensionCompatibility`, схемы вкладов + `mode`/`permissions`/`trust` + `diffPackProvides`, секция `plugins` + `mergePluginsConfig` | тест: builtin-обработчик нельзя снять через `off`; эмиты вызываются; `validatePackManifest` отклоняет `tier: 'stable'` в `provides.promptBlocks`, невалидный `provides.tools[]` (пустое имя/дубль) и расхождение `provides` — в т.ч. `provides.tools[]` ↔ фактические регистрации тулов; `pnpm --filter @itphx/synth-shared build` зелёный |
 | **Ф1 — манифест + `PluginHost`** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-host`, коммитов нет) | Схема манифеста плагина, `PluginHost`-пайплайн (§10), integrity, semver-гейт, реестр активаций, аудит активации. **Исполнение кода выключено по умолчанию**: только resolve/integrity/гейт/скан/аудит, без `import()`. **Сделано:** модуль `engine/plugins/*` (`PluginHost`, контракты активации, `computePluginContentHash`/`verifyPluginIntegrity`, `readExactHostExceptions`), порт `PluginAuditRepository` (файл/память/PG + контрактный suite), ключ `plugins.executionEnabled` (дефолт `false`); seam'ы `PluginLoader`/`PluginScanHook`/`PluginFacade` оставлены под Ф2/Ф3/Ф4 | тест: `PluginHost.activate` доходит до шага «import» и останавливается; несовпадение integrity → отказ; тест аудита: запись `activate`/`deactivate` в `audit/plugins.jsonl` — **выполнено**, см. §«Статус реализации в коде (Ф1)» |
 | **Ф2 — модель доверия** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-trust`, коммитов нет) | Уровни trust, матрица install-policy с ячейкой `kind: "plugin"`, сканер (6+1 категорий, квоты, `content_hash`, кэш сканов, `.skillignore`, бинарные расширения), матрица `severity → verdict`, `quarantine/`, `plugins.lock.json`, порт `PluginAuditRepository` + `{dataDir}/audit/plugins.jsonl`. **Сделано:** встроенный статический сканер (`engine/plugins/scan/*`: правила, `.skillignore`, кэш, дефолтный хук скана), матрица install-policy одной функцией `installPolicyDecision` (`shared`, ячейка `kind: 'plugin'`), раскладка `<home>/plugin/` с карантином и `PLUGIN_INTEGRITY.json` (`engine/plugins/layout.ts`), порт `PluginLockRepository` (файл/память/PostgreSQL + миграция `007_plugin_lock`), аудит-событие `scan` (+ `plugin.approval_required`), шаг trust/scan в `PluginHost` — **trust-floor до install-policy** | тест: вердикт по severity (`info\|low → safe`, `medium → caution`, `high\|critical → dangerous`); квоты → `caution`; бинарник → `dangerous`; `community` + `dangerous` → `block`; trust-floor: `community` устанавливается, но не активируется (`plugin.trust_below_floor`) — **выполнено**, см. §«Статус реализации в коде (Ф2)» |
-| **Ф3 — точки `promptBlocks` + `llmFilters`** | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный |
+| **Ф3 — точки `promptBlocks` + `llmFilters`** — ⚠️ **Ф3а выполнено 2026-10-22** (ветка `feature/plugin-points`, коммитов нет): закрыта точка **`promptBlocks`**; точка **`llmFilters` — Ф3б, не начата** | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений**. **Сделано (Ф3а):** контракт `PromptBlockProvider`/`PromptBlockContext` (`shared`, `types/prompt-blocks.ts`), реестр `PromptBlockRegistry` (`engine/context/prompt-block-registry.ts`), сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`), контекст хода (`query`/`turnId`), бюджет символов блока + обрезка (`status: 'truncated'`), инвалидация `promptStates` по блокам провайдеров (`provider: true`), фасад `PluginFacade.registerPromptBlock` (disposer снимает блок при деактивации), решение fail-closed `plugins.scan='disabled'` + `executionEnabled=true` (`plugin.scan_disabled_with_execution`), **версия правил сканера в ключе кэша сканов** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный — **по части `promptBlocks` выполнено**, см. §«Статус реализации в коде (Ф3а)»; критерии `llmFilters` и сверка `provides.tools[]` ↔ регистрации — **Ф3б** |
 | **Ф4 — два режима исполнения** | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация | тест: плагин в `out-of-process` регистрирует `promptBlocks` и отдаёт блок; неверный токен → 401; недоступный процесс → деградация по `failMode`; контрактный suite порта расширений зелёный |
 | **Ф5 — install/activate: CLI + API + managed deploy-time** | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
 | **Ф6 — UI** | Раздел «Плагины»: список, карточка (trust/scan/hash/version/`contracts`/`host`/`provides`/режим), тумблеры enable/disable, install/update/remove, статус скана | тест UI: карточка показывает trust/scan/hash; переключатель enable вызывает API и обновляет список; i18n-паритет `ru.ts`/`en.ts` зелёный (`parity.test.ts`) |
@@ -1141,10 +1150,12 @@ dist/*.map             # glob (якорь — от корня бандла)
 `engine/plugins/scan/ignore.ts` (`parseIgnorePatterns`/`isIgnored`); симлинки не следуются
 (защита от выхода за пределы бандла), `node_modules`/`.git` не обходятся.
 
-**Формат кэша сканов** — ключ `sha256(source \0 sourceUrl \0 contentHash)`
+**Формат кэша сканов** — ключ `sha256(версия правил \0 source \0 sourceUrl \0 contentHash)`
 (`PluginScanCache.key`, `engine/plugins/scan/cache.ts`): повторный скан **идентичного** содержимого из того
 же источника не выполняется. Кэш **in-process** на инстанс (FIFO, по умолчанию 100 записей);
-постоянное хранилище кэша — задача Ф5 (установщик).
+постоянное хранилище кэша — задача Ф5 (установщик). **Ф3а: версия правил сканера входит в ключ**
+(`PLUGIN_SCAN_RULES_VERSION`) — при изменении правил старый вердикт из кэша не переиспользуется,
+идёт пересчёт.
 
 **Аудит-события Ф2.** Действие `scan` добавлено в `PLUGIN_AUDIT_ACTIONS` (`activate`/`deactivate`/`scan`);
 запись аудита плагина получила поля `scanVerdict?`, `scanPerformed?`, `scanFindings?`
@@ -1202,9 +1213,15 @@ ref, entry, installed_at, updated_at`), формат файла — `PluginLockF
    сознательно снимает advisory-контроль **содержимого**; компенсирующие гейты — trust-floor (fail-closed
    по доверию) и `plugins.executionEnabled` (код плагинов по умолчанию не исполняется).
 
-**Требует подтверждения владельца** (см. «Открытые вопросы»): альтернативы — запретить `disabled` при
-`plugins.executionEnabled: true` (fail-closed по содержимому) или требовать скан при установке из
-источника ниже trust-floor.
+**Уточнение Ф3а (2026-10-22) — fail-closed при включённом исполнении.** Вариант «запретить `disabled`
+при `plugins.executionEnabled: true`» **реализован**: активация отклоняется с кодом
+`plugin.scan_disabled_with_execution` (шаг `trust`, проверка — **до** скана, поэтому в журнале аудита
+не остаётся записи «скан выполнен, вердикт safe»). Исполняемый код обязан быть просканирован:
+админ-настройка не может отключить контроль содержимого для кода, который реально исполняется.
+Без исполнения кода (`plugins.executionEnabled=false`) поведение прежнее — компромисс п. 1–4.
+
+**Требует подтверждения владельца** (см. «Открытые вопросы»): оставшаяся альтернатива — требовать скан
+при установке из источника ниже trust-floor.
 
 **Тесты Ф2.** `packages/shared/src/types/plugin-scan.test.ts` (23 — матрицы `severity → verdict`, квоты,
 install-policy для всех 15 ячеек `trust × verdict` + ячейка `kind: 'plugin'`),
@@ -1219,6 +1236,81 @@ install-policy для всех 15 ячеек `trust × verdict` + ячейка `
 **Остаток после Ф2.** Точки `promptBlocks`/`llmFilters` в композере и gateway (Ф3), два режима исполнения
 (Ф4), install/activate + API/CLI/UI (Ф5/Ф6), hybrid (Ф7); HTTP-роут `/api/v2/settings/plugins`
 не зарегистрирован (есть типы, схема и runtime-store).
+
+### Статус реализации в коде (Ф3а, 2026-10-22)
+
+Ф3а закрывает **первую половину Ф3** — точку `promptBlocks` (контракт, реестр, сборка блоков,
+контекст хода, бюджет символов, инвалидация состояния промпта, фасад плагина). Вторая половина —
+точка `llmFilters` в `GatewayProvider` — **Ф3б, не начата**. Ветка `feature/plugin-points`,
+коммитов нет.
+
+**Контракт (в `shared`, browser-safe).**
+
+| Что | Где |
+|---|---|
+| `PromptBlockProvider` (`key`/`tier`/`order`/`title?`/`load(ctx)`), `PromptBlockContent`, узкий DTO `PromptBlockContext` (`sessionId`/`agentRole`/`language`/`projectId?`/`mode`/`query?`/`turnId?`/`timestamp?`) | `packages/shared/src/types/prompt-blocks.ts` (реэкспорт — `types/index.ts`) |
+| Тир провайдера ограничен `context`/`volatile` **на уровне типа** (`PROMPT_BLOCK_PROVIDER_TIERS`) — `stable` запрещён (граница prompt-cache, [ADR-070](./adr-070-system-prompt-composer.md)) | там же |
+| Единый источник истины для бюджета символов: `DEFAULT_PROMPT_BLOCK_MAX_CHARS = 4000` (совпадает с `plugins.promptBlockMaxChars` в конфиге) | там же + `packages/shared/src/config/defaults.ts` |
+| Префикс ключа плагинного блока `plugin.` + хелпер `isPluginPromptBlockKey` | там же |
+
+**Реестр и сборка блоков (core).**
+
+| Что | Где |
+|---|---|
+| `PromptBlockRegistry` — реестр провайдеров: `register()` (fail-closed: пустой ключ, нечисловой `order`, занятый ключ, тир `stable` → `PromptBlockRegistrationError`), `unregister`/`get`/`list`/`size`/`clear`; `register` возвращает **disposer** (идемпотентный) | `packages/core/src/engine/context/prompt-block-registry.ts` |
+| Сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`): обход в порядке регистрации, блоки попадают в **тот же** массив, что и встроенные (один манифест, одна склейка, одна сортировка по тирам) | `packages/core/src/engine/context/composer.ts` |
+| Узкий контекст вызова (`_providerContext`): `sessionId`/`agentRole`/`language`/`projectId?`/`mode` + `query?`/`turnId?`/`timestamp?`; **история сессии наружу не отдаётся** | там же |
+| «Вопрос хода» (`resolveTurnQuery`): только сообщения **пользователя** (`role: user`), не отключённые (`disabled`/`hidden`), не state-сообщения (`metadata.state=true`); сначала — сообщение, которым инициирован ход, затем последнее пользовательское сообщение истории | `packages/core/src/engine/orchestrator/prompt-info.ts` |
+| Хост обрезает блок по бюджету (`plugins.promptBlockMaxChars`, дефолт 4 000): голова+хвост с **своим** маркером усечения (без `read_file` — блок провайдера не файл), `status: 'truncated'`; общая форма обрезки — `truncateHeadTailWithMarker` | `packages/core/src/engine/context/composer.ts`, `packages/core/src/engine/context/instructions.ts` |
+| Подпись блока в манифесте: для плагинных ключей — «Plugin block» (сырой ключ `plugin.<name>.<slot>` в манифесте не торчит) | `packages/core/src/engine/context/composer.ts` (`promptBlockLabel`) |
+| `PromptBlock.source = 'provider'` + `PromptBlockState.provider` — пометка блока провайдера в состоянии промпта | `packages/core/src/engine/context/prompt-blocks.ts`, `packages/shared/src/types/prompt.ts` |
+
+**Инвалидация состояния промпта.**
+
+Блоки провайдеров лежат вне тира `stable`, поэтому `isPrefixUnchanged` их не видит — трек ведётся
+отдельно, по образцу блока `instructions` ([ADR-069](./adr-069-project-instructions-agents-md.md) §11):
+`process-setup.ts` собирает множество ключей блоков провайдеров (текущие + бывшие — плагин мог быть
+деактивирован, и блок исчез) и при изменении любого из них пересобирает `session.promptStates`
+(`reason: 'generation-change'`).
+
+**Фасад плагина.**
+
+`PluginFacade.registerPromptBlock(provider, opts?)` (`packages/core/src/engine/plugins/activation.ts`)
+— возвращает disposer (снимает блок), при отказе — no-op + предупреждение в лог хоста (остальные
+точки расширения плагина при этом регистрируются). Реализация фасада — в `PluginHost`
+(`packages/core/src/engine/plugins/plugin-host.ts`): реестр провайдеров передаётся в хоста опцией
+`promptBlocks`; без него точка недоступна (предупреждение, no-op).
+
+**Решения, закрытые в Ф3а.**
+
+| Решение | Как реализовано |
+|---|---|
+| `plugins.scan: 'disabled'` + `plugins.executionEnabled: true` | **fail-closed**: активация отклоняется с новым кодом `plugin.scan_disabled_with_execution` (шаг `trust`, до скана — в журнале не остаётся записи «скан выполнен, вердикт safe»). Без исполнения кода поведение прежнее: скан не выполняется, вердикт `safe`, в аудите `scanPerformed: false` |
+| Кэш сканов и смена правил | **Версия правил входит в ключ**: `sha256(версия правил\0source\0source_url\0content_hash)` (`PLUGIN_SCAN_RULES_VERSION`, `packages/shared/src/types/plugin-scan.ts`). При изменении правил сканера старый вердикт из кэша **не переиспользуется** — пересчёт. Кэш остаётся **in-process** (FIFO, 100 записей); постоянное хранилище — задача Ф5 |
+| Тир `stable` у провайдера | **Отказ** на регистрации (`PromptBlockRegistrationError`), а не тихое понижение до `context`; в фасаде — предупреждение, активация плагина не падает |
+
+**Тесты Ф3а.** `packages/core/src/engine/context/composer.prompt-blocks.test.ts` (реестр: блок в
+`compose().blocks` и в `manifest()` с `provenance`; отказ тира `stable`; дубликат/пустой ключ; ошибка
+провайдера → warning + пустой блок, ход не падает; пустой результат → `status: 'empty'`; обрезка по
+бюджету + `status: 'truncated'`; бюджет по умолчанию 4 000; override `session.settings.systemPrompt`;
+порядок «тир → order, tie-break — регистрация»; контекст провайдера; disposer снимает блок),
+`packages/core/src/engine/plugins/plugin-host.test.ts` (Ф3а: блок плагина попадает в промпт и
+`provenance: 'plugin:<name>'`; `deactivate()` — блок исчезает; тир `stable` — отказ без падения
+активации; провайдер бросает исключение — ход не падает, блок пуст; без реестра — предупреждение;
+`plugin.scan_disabled_with_execution` — fail-closed),
+`packages/core/src/engine/context/prompt-state.test.ts` (блок провайдера помечается `provider: true`),
+`packages/core/src/engine/orchestrator/phases/process-setup.test.ts` («вопрос хода» доходит до
+контекста композера; state-сообщения в вопрос не попадают; смена содержимого плагинного блока
+инвалидирует `promptStates`),
+`packages/core/src/engine/plugins/scan/cache.test.ts` (версия правил в ключе: другая версия → другой
+ключ → пересчёт, а не попадание в кэш),
+`packages/shared/src/types/prompt-blocks.test.ts` (контракт: тиры, префикс ключа, бюджет).
+
+**Остаток после Ф3а.** Точка `llmFilters` в `GatewayProvider` (Ф3б: контракт `LlmCallFilter`, фазы
+`pre_request`/`post_response`/`embedding`, право вето, таймаут, семантика отказа — см. §«Точка
+`llmFilters»), сверка фактических регистраций тулов с `provides.tools[]` и **контрактный suite
+расширений** (Ф3), два режима исполнения (Ф4), install/activate + API/CLI/UI (Ф5/Ф6), hybrid (Ф7);
+HTTP-роут `/api/v2/settings/plugins` не зарегистрирован (есть типы, схема и runtime-store).
 
 ## Открытые вопросы
 
@@ -1241,6 +1333,17 @@ install-policy для всех 15 ячеек `trust × verdict` + ячейка `
 > (упрощённый `.gitignore`), формат кэша сканов (`sha256(source \0 sourceUrl \0 contentHash)`, in-process).
 > Требуют подтверждения владельца: формат файла точных исключений (ниже) и режим `plugins.scan: 'disabled'`
 > (см. «Решение 2026-10-22 — `plugins.scan: 'disabled'`»).
+>
+> **Ф3а слоя выполнена 2026-10-22** (ветка `feature/plugin-points`): закрыта точка **`promptBlocks`** —
+> контракт `PromptBlockProvider`/`PromptBlockContext` (`shared`), реестр `PromptBlockRegistry`, сборка
+> блоков в `SystemPromptComposer`, контекст хода (`query`/`turnId`), бюджет символов блока
+> (`plugins.promptBlockMaxChars`, дефолт 4 000) с обрезкой и `status: 'truncated'`, инвалидация
+> `promptStates` по блокам провайдеров, фасад `PluginFacade.registerPromptBlock`. Точка `llmFilters` —
+> **Ф3б, не начата**. **Закрыто реализацией Ф3а:** тир `stable` у провайдера — отказ на регистрации
+> (не тихое понижение); `plugins.scan: 'disabled'` вместе с `plugins.executionEnabled: true` —
+> **fail-closed** (`plugin.scan_disabled_with_execution`); **версия правил сканера входит в ключ кэша
+> сканов** (при смене правил — пересчёт, а не попадание в кэш). Остальные открытые вопросы (в т.ч.
+> подтверждение владельца по формату файла точных исключений и режиму `plugins.scan: 'disabled'`) — ниже.
 
 1. **Версии контракта расширений и окно deprecation.** Как версионируется контракт точки
    (`promptBlocks@1`, `llmFilters@1`), сколько релизов живёт старая мажорная версия, что делает
@@ -1264,16 +1367,21 @@ install-policy для всех 15 ячеек `trust × verdict` + ячейка `
    но где лежит реализация клиента/сервера: в core рядом с `execution/remote.ts`
    (`packages/core/src/execution/remote.ts`) или отдельным пакетом по образцу
    `@itphx/synth-executor`? От ответа зависит, кто собирает `out-of-process`-плагин.
-7. **Режим `plugins.scan: 'disabled'` — подтверждение владельца.** Реализовано как осознанный
-   компромисс: скан не выполняется, но **trust-floor проверяется до install-policy**, поэтому fail-open
+7. **Режим `plugins.scan: 'disabled'` — подтверждение владельца.** **Частично закрыто Ф3а:** вариант
+   «запретить `disabled` при `plugins.executionEnabled: true`» **реализован** — fail-closed, отказ
+   `plugin.scan_disabled_with_execution` (шаг `trust`, до скана). Без исполнения кода поведение
+   прежнее: скан не выполняется, **trust-floor проверяется до install-policy**, поэтому fail-open
    ограничен уже доверенными плагинами; в аудите — `scanPerformed: false` (см. «Решение 2026-10-22 —
-   `plugins.scan: 'disabled'`»). Альтернативы: запретить `disabled` при `plugins.executionEnabled: true`
-   (fail-closed по содержимому) или требовать скан при установке из источника ниже trust-floor.
+   `plugins.scan: 'disabled'`»). **Осталось подтвердить владельцу:** сама совместимость режима
+   `disabled` без исполнения кода (и альтернатива «требовать скан при установке из источника ниже
+   trust-floor»).
 8. **Кэш сканов — постоянный или in-process, и как инвалидируется при смене правил.** Ф2: кэш
-   **in-process** (FIFO, 100 записей), ключ `sha256(source \0 sourceUrl \0 contentHash)` — **версия правил
-   сканера в ключ не входит**. Значит, при изменении таблицы правил (`PLUGIN_SCAN_RULES`) старый вердикт
-   может быть отдан из кэша. Нужно решение: (а) включать версию правил в ключ кэша, (б) хранить кэш
-   персистентно (файл/БД — тогда нужен порт), (в) сбрасывать кэш при старте процесса.
+   **in-process** (FIFO, 100 записей). **Ф3а: вариант (а) реализован** — в ключ кэша входит **версия
+   правил сканера**: `sha256(версия правил \0 source \0 sourceUrl \0 contentHash)`
+   (`PLUGIN_SCAN_RULES_VERSION`, `packages/shared/src/types/plugin-scan.ts`), поэтому при изменении
+   таблицы правил (`PLUGIN_SCAN_RULES`) старый вердикт **не переиспользуется** — идёт пересчёт.
+   **Осталось подтвердить владельцу:** постоянный кэш (файл/БД — тогда нужен порт) или сброс кэша
+   при старте процесса (варианты (б)/(в) — задача Ф5, установщик).
 9. **Кто и как подтверждает `ask`** (вердикт `caution` → `plugin.approval_required`): API/CLI/UI — это
    Ф5/Ф6, но сама механика подтверждения не определена: чем подтверждается (вердикт / версия /
    content-hash), какой срок жизни подтверждения и кто именно может его выдать (владелец / ADMIN).
@@ -1351,3 +1459,4 @@ install-policy для всех 15 ячеек `trust × verdict` + ячейка `
 - 2026-10-22 — **Ф0 выполнен** (ветка `feature/plugin-layer`): политика `builtin` в `HookBus` (+ `offBuiltin`), эмиты `message_received`/`plan_rejected`/`schedule_fired` (`callback` — вне core, контракт внешнего канала), semver-матчер `types/semver.ts` + `checkExtensionCompatibility`, модуль `types/trust.ts`, явные схемы `provides.tools/promptBlocks/llmFilters` и поля `mode`/`permissions`/`trust` + `diffPackProvides`, секция `plugins.*` и `RuntimeSettings.plugins` + `mergePluginsConfig`; добавлен раздел «Статус реализации в коде (Ф0)». Решения по каталогу/маркету (общий `synth-registry`, `trust_level` записи = истина, `synth plugin *`, kind-aware витрина) — в «Открытые вопросы» → «Решено 2026-10-22».
 - 2026-10-22 — **Ф1 выполнен** (ветка `feature/plugin-host`): модуль `engine/plugins/*` (`PluginHost` — пайплайн resolve → integrity → semver → trust → policy → import → facade, реестр активных плагинов, обратная прокрутка disposers; `computePluginContentHash`/`verifyPluginIntegrity`; `readExactHostExceptions`), журнал аудита плагинов — **отдельный порт** `PluginAuditRepository` (файл `{dataDir}/audit/plugins.jsonl` / память / PostgreSQL, миграция `006-plugin-audit.ts`, контрактный suite), ключ `plugins.executionEnabled` (дефолт `false` — код плагинов не грузится); формат файла точных исключений зафиксирован и **требует подтверждения владельца** (см. «Открытые вопросы» → «Решено 2026-10-22 — формат файла точных исключений»).
 - 2026-10-22 — **Ф2 выполнен** (ветка `feature/plugin-trust`): встроенный статический сканер (`engine/plugins/scan/*` — 7 категорий, квоты `50` файлов / `1024` КиБ суммарно / `256` КиБ на файл, `.skillignore`, кэш `sha256(source \0 sourceUrl \0 contentHash)`, дефолтный хук `PluginScanHook`), матрица install-policy **одной функцией** `installPolicyDecision` (ячейка `kind: 'plugin'`: `safe→allow`, `caution→ask`, `dangerous→block`) в `shared`, раскладка `<home>/plugin/` с `quarantine/` и `PLUGIN_INTEGRITY.json` (`engine/plugins/layout.ts`), порт `PluginLockRepository` (файл/память/PostgreSQL, миграция `007_plugin_lock`, контрактный suite), аудит-событие `scan` + поля `scanVerdict`/`scanPerformed`/`scanFindings` и новый код отказа `plugin.approval_required` (миграция `008_plugin_audit_scan`); в `PluginHost` — **trust-floor до install-policy**; решение по `plugins.scan: 'disabled'` (скан не выполняется, доверие проверяется всегда, в аудите `scanPerformed: false`) — **требует подтверждения владельца**; добавлен раздел «Статус реализации в коде (Ф2)».
+- 2026-10-22 — **Ф3а выполнен** (ветка `feature/plugin-points`): закрыта точка **`promptBlocks`** — контракт `PromptBlockProvider`/`PromptBlockContext`/`PromptBlockContent` (`packages/shared/src/types/prompt-blocks.ts`, тир провайдера ограничен `context`/`volatile` **на уровне типа**), реестр `PromptBlockRegistry` (`engine/context/prompt-block-registry.ts`, fail-closed: пустой ключ / нечисловой `order` / занятый ключ / тир `stable`), сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`: один манифест, одна склейка, одна сортировка по тирам; override `session.settings.systemPrompt` — блоки не добавляются), контекст хода (`query` — только пользовательский текст, `turnId`, `timestamp`; `resolveTurnQuery`), бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000 — `DEFAULT_PROMPT_BLOCK_MAX_CHARS`) с обрезкой голова+хвост и `status: 'truncated'`, деградация (ошибка провайдера → `warning`, блок пуст, **ход не падает**), инвалидация `promptStates` по блокам провайдеров (`PromptBlock.source='provider'` → `PromptBlockState.provider`), фасад `PluginFacade.registerPromptBlock` (disposer снимает блок при деактивации), решения: **fail-closed** `plugins.scan='disabled'` + `plugins.executionEnabled=true` (новый код отказа `plugin.scan_disabled_with_execution`) и **версия правил сканера в ключе кэша сканов** (`PLUGIN_SCAN_RULES_VERSION`); добавлен раздел «Статус реализации в коде (Ф3а)». Точка `llmFilters` — **Ф3б, не начата**.

@@ -79,6 +79,13 @@ export const PLUGIN_AUDIT_REASONS = [
   'plugin.denylisted',
   /** Установка во время работы инстанса запрещена (`plugins.runtimeInstall=deny`). */
   'plugin.runtime_install_denied',
+  /**
+   * Сканирование выключено (`plugins.scan='disabled'`), а исполнение кода
+   * плагинов включено (`plugins.executionEnabled=true`) — **fail-closed**:
+   * исполняемый код обязан быть просканирован. Решение владельца (Ф3а,
+   * 2026-10-22).
+   */
+  'plugin.scan_disabled_with_execution',
   /** Исполнение кода выключено (`plugins.executionEnabled=false`). */
   'plugin.execution_disabled',
   /** Загрузчика кода ещё нет (Ф3/Ф4) — исполнять нечем. */

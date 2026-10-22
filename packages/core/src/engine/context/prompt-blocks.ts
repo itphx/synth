@@ -20,6 +20,15 @@ export interface PromptBlock {
    * инструкций ADR-069). Не задан — выводится из `content` (`empty`/`loaded`).
    */
   status?: PromptManifestStatus;
+  /**
+   * Источник блока. `provider` — блок от провайдера точки `promptBlocks`
+   * (PROP-090); не задан — встроенный блок Composer'а.
+   *
+   * Нужен для инвалидации состояния промпта: блоки провайдеров лежат вне
+   * тира `stable`, поэтому смена их содержимого не видна `isPrefixUnchanged`
+   * — трек ведётся отдельно (по образцу блока `instructions`, ADR-069 §11).
+   */
+  source?: 'builtin' | 'provider';
 }
 
 const TIER_ORDER: Record<PromptTier, number> = {
