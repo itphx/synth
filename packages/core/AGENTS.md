@@ -669,7 +669,7 @@
   исключений семвер-гейта: **одна полная semver-версия host в строке**, `#` — комментарий,
   не-semver строка пропускается с предупреждением, недоступный файл → исключений нет
   (fail-closed)), `index.ts` — баррел. **Коды отказа** (`PLUGIN_AUDIT_REASONS`,
-  `shared/src/types/plugin-audit.ts`, всего **27**): `plugin.not_found` (resolve),
+  `shared/src/types/plugin-audit.ts`, всего **28**): `plugin.not_found` (resolve),
   `plugin.source_unavailable` (Д1 — источник бандла недоступен или не прошёл проверку целостности:
   локальный путь/архив не распакован, npm без SRI / с несовпадением SRI-sha512 или shasum, URL без pin
   или с несовпадением sha256; отказ **до** гейтов установщика), `plugin.manifest_invalid` (resolve),
@@ -846,6 +846,15 @@
   сетевые `npm`/`url` разрешены — это не путь с ФС хоста). Опция `sourceContext` — инъекция
   сети/лимитов источников (тесты). ⚠️ Backend импортирует core из `dist` — после правок
   `server/routes/*` обязателен `pnpm --filter @itphx/synth-core build` перед backend-тестами.
+- **Managed deploy-time (Ф5в).** `engine/plugins/deploy.ts` — `listDeployPlugins(dir)`: подкаталоги =
+  бандлы, манифест `synth.pack` валидируется, битый → запись пропущена с `warn` (разбор не ломается).
+  `PluginRuntime.installDeployPlugins({actor})` — установка образных бандлов (**те же** гейты, что у
+  обычной установки; `source: 'deploy'`, `identifier` = путь, `installKind: 'deploy'`, без активации);
+  та же версия и тот же content-hash → `skipped`; ошибка одного бандла → `failed` + `warn`, старт не
+  падает. Порядок в `main.ts` (оба режима): установка → активация. **Неприкосновенность:** плагин
+  управляемый ⇔ `managedReadonly === true` **и** (`lock.source === 'deploy'` **или** `identifier`
+  внутри `plugins.deployDir`); `uninstall`/`update` → отказ `plugin.managed_readonly` (**28** кодов),
+  API → 403, CLI → код 1.
 - **Транспорты исполнения (Ф4б-1/Ф4б-2/Ф4б-3).** `engine/plugins/remote/*`: `client.ts`
   (`RemotePluginClient` — **только loopback** `127.0.0.1/::1/localhost`, bearer на `/capabilities` и
   `/invoke`, таймаут через `AbortSignal`, токен вырезается из текстов ошибок), `loader.ts`

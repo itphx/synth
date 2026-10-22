@@ -431,6 +431,56 @@ describe('Plugins API — жизненный цикл (PROP-090 Ф5б-2)', () =>
     expect(second.status).toBe(204);
   });
 
+  // ── Ф5в: management-плагин ───────────────────────────────────────────
+  it('DELETE management-плагина → 403 plugin.managed_readonly (не 404/409)', async () => {
+    const { app, runtime } = await makeStand();
+    const bundle = await makeBundle();
+    expect(
+      (
+        await runtime.installer.installFromDirectory({
+          dir: bundle,
+          trustLevel: 'verified',
+          source: 'deploy',
+          identifier: bundle,
+          installKind: 'deploy',
+          actor: 'startup',
+        })
+      ).outcome,
+    ).toBe('installed');
+
+    const res = await app.request('/api/v2/plugins/demo-plugin', { method: 'DELETE' });
+
+    expect(res.status).toBe(403);
+    expect((await errorOf(res)).code).toBe('plugin.managed_readonly');
+    // Плагин на месте: список не опустел.
+    const list = (await (await app.request('/api/v2/plugins')).json()) as {
+      plugins: Array<{ name: string }>;
+    };
+    expect(list.plugins.map((item) => item.name)).toEqual(['demo-plugin']);
+  });
+
+  it('POST /plugins/update management-плагина → 403 plugin.managed_readonly', async () => {
+    const { app, runtime } = await makeStand();
+    const bundle = await makeBundle();
+    expect(
+      (
+        await runtime.installer.installFromDirectory({
+          dir: bundle,
+          trustLevel: 'verified',
+          source: 'deploy',
+          identifier: bundle,
+          installKind: 'deploy',
+          actor: 'startup',
+        })
+      ).outcome,
+    ).toBe('installed');
+
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/update', { name: 'demo-plugin' });
+
+    expect(res.status).toBe(403);
+    expect((await errorOf(res)).code).toBe('plugin.managed_readonly');
+  });
+
   it('POST /plugins/update: 200 unchanged/updated, 400 VALIDATION_ERROR, 404 not_found', async () => {
     const { app } = await makeStand();
     const bundle = await makeBundle();

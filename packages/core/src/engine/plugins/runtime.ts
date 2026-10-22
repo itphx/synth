@@ -64,6 +64,9 @@ import type {
 } from './activation.js';
 import { createInlinePluginLoader, DEFAULT_PLUGIN_ENTRY } from './inline-loader.js';
 import { collectBundleFiles, PluginInstaller } from './installer.js';
+import { computePluginContentHash } from './integrity.js';
+import { listDeployPlugins } from './deploy.js';
+import type { PluginDeployScanEntry } from './deploy.js';
 import type { PluginLayout } from './layout.js';
 import { pluginInstalledDir } from './layout.js';
 import { PluginHost } from './plugin-host.js';
@@ -73,6 +76,16 @@ const MANIFEST_FILE = 'synth.pack';
 
 /** Актор по умолчанию для операций времени жизни (аудит). */
 const DEFAULT_ACTOR = 'system';
+
+/** Итог deploy-установки при старте (`installDeployPlugins`, Ф5в). */
+export interface PluginDeployInstallResult {
+  /** Установленные (или переустановленные) плагины. */
+  installed: string[];
+  /** Пропущенные: та же версия и тот же content-hash, что в lock. */
+  skipped: string[];
+  /** Не установленные: `reason` — код отказа (`plugin.*`) или причина сбоя. */
+  failed: Array<{ name: string; reason: string }>;
+}
 
 /** Зависимости `PluginRuntime`. */
 export interface PluginRuntimeDeps {
@@ -242,6 +255,108 @@ export class PluginRuntime {
       results.push(await this._activateEntrySafe(entry, actor));
     }
     return results;
+  }
+
+  // ── Установка deploy-плагинов (Ф5в) ────────────────────────────────
+
+  /**
+   * Установить бандлы из deploy-каталога (`plugins.deployDir`) — образ/PVC.
+   *
+   * Запускается **при старте** инстанса (managed и standalone) до
+   * {@link activateInstalled}: сначала плагины ставятся (гейты те же, что у
+   * ручной установки), затем активируются из lock.
+   *
+   * Правила:
+   * 1. Каталог не задан (`deployDir` пуст) → no-op: пустой результат. Это
+   *    штатный случай standalone и образов без плагинов.
+   * 2. Установка — **без активации**: активация отдельным шагом, чтобы
+   *    `plugins.executionEnabled` оставался единственным переключателем
+   *    исполнения кода.
+   * 3. Идемпотентность: та же версия и тот же `content_hash`, что в lock →
+   *    `skipped` (каталог не перезаписывается).
+   * 4. Ошибка одного бандла (манифест, trust-floor, скан, раскладка) **не
+   *    ломает старт**: запись в `failed` + `logger.warn`; остальные ставятся.
+   * 5. Доверие — `plugins.deployTrust` (образ — доверенный источник кода, но
+   *    политика инстанса важнее: ниже `trustFloor` — штатный отказ
+   *    `plugin.trust_below_floor`). Скан и install-policy — **те же**, что у
+   *    ручной установки: образ не повод отключать проверку содержимого.
+   *
+   * Метод **никогда не бросает**.
+   */
+  async installDeployPlugins(
+    opts: { actor?: string } = {},
+  ): Promise<PluginDeployInstallResult> {
+    const result: PluginDeployInstallResult = { installed: [], skipped: [], failed: [] };
+    const deployDir = (this.config.deployDir ?? '').trim();
+    if (!deployDir) return result;
+
+    const actor = opts.actor ?? 'startup';
+    let entries: PluginDeployScanEntry[];
+    try {
+      entries = await listDeployPlugins(deployDir, { logger: this._logger });
+    } catch (err) {
+      this._logger.warn(
+        `не удалось прочитать каталог deploy-плагинов «${deployDir}» — установка пропущена: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return result;
+    }
+
+    for (const entry of entries) {
+      try {
+        // Сверка с lock до установки: тот же бандл не переустанавливаем.
+        const existing = await this._lock.get(entry.name);
+        if (existing) {
+          const { files } = await collectBundleFiles(entry.dir);
+          const contentHash = computePluginContentHash(files);
+          if (
+            existing.version === entry.version &&
+            existing.content_hash === contentHash
+          ) {
+            result.skipped.push(entry.name);
+            continue;
+          }
+        }
+
+        const outcome = await this.installer.installFromDirectory({
+          dir: entry.dir,
+          // Доверие deploy-бандлов задаёт конфиг инстанса; манифест его не
+          // повышает (trust-floor проверяется установщиком до install-policy).
+          trustLevel: this.config.deployTrust,
+          source: 'deploy',
+          identifier: entry.dir,
+          installKind: 'deploy',
+          actor,
+        });
+
+        if (outcome.outcome === 'installed') {
+          result.installed.push(outcome.name);
+          continue;
+        }
+        if (outcome.outcome === 'approval_required') {
+          this._logger.warn(
+            `deploy-плагин «${entry.name}@${entry.version}» требует подтверждения ` +
+              '(install-policy ask) — бандл оставлен в карантине, установка при старте не выполнена.',
+          );
+          result.failed.push({ name: entry.name, reason: 'plugin.approval_required' });
+          continue;
+        }
+        this._logger.warn(
+          `deploy-плагин «${entry.name}@${entry.version}» не установлен: ` +
+            `${outcome.reason} — ${outcome.message}`,
+        );
+        result.failed.push({ name: entry.name, reason: outcome.reason });
+      } catch (err) {
+        this._logger.warn(
+          `deploy-плагин «${entry.name}@${entry.version}» не установлен: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        );
+        // Бандл не читается/не раскладывается — «источник недоступен».
+        result.failed.push({ name: entry.name, reason: 'plugin.source_unavailable' });
+      }
+    }
+    return result;
   }
 
   // ── Список/точечные операции ────────────────────────────────────────

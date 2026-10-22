@@ -109,7 +109,15 @@ export type {
 
 // Ф5б-1 — рантайм плагинов: старт-активация из lock, список, dispose.
 export { PluginRuntime } from './runtime.js';
-export type { PluginRuntimeDeps, PluginRuntimeEntry } from './runtime.js';
+export type {
+  PluginDeployInstallResult,
+  PluginRuntimeDeps,
+  PluginRuntimeEntry,
+} from './runtime.js';
+
+// Ф5в — deploy-каталог (образ/PVC): разбор бандлов, ставит `PluginRuntime`.
+export { listDeployPlugins } from './deploy.js';
+export type { ListDeployPluginsOptions, PluginDeployScanEntry } from './deploy.js';
 
 export { readExactHostExceptions } from './exact-host-exceptions.js';
 

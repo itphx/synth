@@ -58,7 +58,7 @@
  * деактивации/рестарта: удалять код работающего плагина нельзя).
  */
 import { readFile, readdir, rm, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import {
   generateId,
@@ -234,6 +234,11 @@ export interface PluginUninstallResult {
   removed: boolean;
   /** Плагин был активен и деактивирован? */
   deactivated?: boolean;
+  /**
+   * Отказ (Ф5в): плагин управляется развёртыванием (`plugins.managedReadonly`)
+   * — снимать его через API/CLI нельзя. Состояние не изменилось.
+   */
+  rejected?: { reason: PluginAuditReason; message: string };
 }
 
 /** Параметры обновления (`PluginInstaller.update`, PROP-090 §«Запись lock»). */
@@ -983,6 +988,18 @@ export class PluginInstaller {
       });
     }
 
+    // Ф5в: management-плагин обновляется новым образом/переразвёртыванием, а не
+    // через API/CLI — переустановка из источника подменила бы поставку образа.
+    if (this._isManagedReadonly(entry)) {
+      return this._rejectUpdate({
+        name,
+        actor,
+        reason: 'plugin.managed_readonly',
+        message: this._managedMessage(name),
+        entry,
+      });
+    }
+
     const source = await this._updateSource(entry, opts);
     if ('message' in source) {
       return this._rejectUpdate({
@@ -1550,6 +1567,12 @@ export class PluginInstaller {
    * снимать нечего). Каталоги `installed/<name>@<version>` и
    * `quarantine/<name>@<version>` (версия из lock) удаляются, если
    * `removeFiles !== false`.
+   *
+   * **Ф5в — management-плагин неприкосновенен.** Если запись поставлена
+   * развёртыванием (`_isManagedReadonly`: `source: 'deploy'` либо `identifier`
+   * внутри `plugins.deployDir`) и `plugins.managedReadonly: true` (дефолт) —
+   * отказ `{removed: false, rejected: {reason: 'plugin.managed_readonly'}}`
+   * с аудитом `uninstall/rejected`; lock и каталог остаются целы.
    */
   async uninstall(
     name: string,
@@ -1558,6 +1581,13 @@ export class PluginInstaller {
     const actor = opts.actor ?? 'system';
     const entry = await this._lock.get(name);
     if (!entry) return { removed: false };
+
+    // Ф5в: management-плагин (образ/PVC) снимается только развёртыванием —
+    // через API/CLI его снять нельзя (иначе следующий старт поставил бы его
+    // заново, а «снятие» было бы ложью оператору).
+    if (this._isManagedReadonly(entry)) {
+      return this._rejectUninstall(name, entry, actor);
+    }
 
     let deactivated = false;
     if (this._host?.isActive(name)) {
@@ -1596,6 +1626,66 @@ export class PluginInstaller {
   /** Установленные плагины (записи lock, детерминированный порядок). */
   async list(): Promise<PluginLockEntry[]> {
     return this._lock.list();
+  }
+
+  // ── Управляемость (Ф5в) ─────────────────────────────────────────────
+
+  /**
+   * Плагин управляется развёртыванием? (`lock.source === 'deploy'` **или**
+   * `identifier` внутри `plugins.deployDir`).
+   *
+   * Второе условие нужно для записей, поставленных до появления `source:
+   * 'deploy'` (или перенесённых с образом), и для случая, когда каталог образа
+   * смонтирован под тем же путём: принадлежность определяется путём, а не
+   * только меткой источника. `managedReadonly: false` снимает запрет
+   * (`false` — оператор осознанно разрешает ручное управление).
+   */
+  private _isManagedReadonly(entry: PluginLockEntry): boolean {
+    if (!this._config.managedReadonly) return false;
+    if (entry.source === 'deploy') return true;
+    const deployDir = (this._config.deployDir ?? '').trim();
+    const identifier = entry.identifier?.trim();
+    if (!deployDir || !identifier) return false;
+    // Относительный identifier резолвим от deployDir: в lock может лежать
+    // `<name>` (относительно каталога) или абсолютный путь.
+    const root = resolve(deployDir);
+    const bundle = isAbsolute(identifier) ? resolve(identifier) : resolve(root, identifier);
+    const rel = relative(root, bundle);
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  }
+
+  /** Текст отказа `plugin.managed_readonly` (единый для uninstall/update). */
+  private _managedMessage(name: string): string {
+    return (
+      `Плагин «${name}» управляется развёртыванием (plugins.deployDir) — ` +
+      'снять или переустановить его через API/CLI нельзя: он меняется новым образом ' +
+      'или переразвёртыванием каталога (plugins.managedReadonly=true).'
+    );
+  }
+
+  /** Отказ снятия management-плагина: аудит + результат вызывающему. */
+  private async _rejectUninstall(
+    name: string,
+    entry: PluginLockEntry,
+    actor: string,
+  ): Promise<PluginUninstallResult> {
+    const message = this._managedMessage(name);
+    await this._writeAudit({
+      action: 'uninstall',
+      plugin: name,
+      version: entry.version,
+      outcome: 'rejected',
+      reason: 'plugin.managed_readonly',
+      actor,
+      trustLevel: entry.trust_level,
+      scanVerdict: entry.scan_verdict,
+      contentHash: entry.content_hash,
+      source: entry.source,
+    });
+    return {
+      removed: false,
+      rejected: { reason: 'plugin.managed_readonly', message },
+    };
   }
 
   // ── Вспомогательное ────────────────────────────────────────────────

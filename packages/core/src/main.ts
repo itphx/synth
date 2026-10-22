@@ -284,7 +284,26 @@ program
     // no-op. Ошибка плагина (или самого рантайма) **не роняет старт** — только
     // предупреждение; тексты плагинов в лог не попадают (инвариант 13), только
     // счётчики исходов.
+    //
+    // Ф5в: **сначала** установка deploy-плагинов (образ/PVC, `plugins.deployDir`),
+    // затем активация. Каталог не задан (или пуст) → no-op: поведение standalone
+    // не расходится с managed.
     if (appHandle.pluginRuntime) {
+      try {
+        const deploy = await appHandle.pluginRuntime.installDeployPlugins({ actor: 'startup' });
+        if (deploy.installed.length > 0 || deploy.failed.length > 0) {
+          console.log(
+            `[plugins] deploy: установлено ${deploy.installed.length}, ` +
+              `пропущено ${deploy.skipped.length}, ошибок ${deploy.failed.length}`,
+          );
+        }
+      } catch (err) {
+        console.warn(
+          `[plugins] установка deploy-плагинов не выполнена: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
       try {
         const results = await appHandle.pluginRuntime.activateInstalled({ actor: 'startup' });
         if (results.length > 0) {

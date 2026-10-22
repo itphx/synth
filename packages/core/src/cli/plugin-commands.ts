@@ -234,6 +234,13 @@ function writeReasonHint(reason: PluginAuditReason | undefined): void {
     case 'plugin.already_active':
       console.error('  Подсказка: плагин уже активен в этом процессе.');
       break;
+    case 'plugin.managed_readonly':
+      console.error(
+        '  Подсказка: плагин управляется развёртыванием (plugins.deployDir) — снять или ' +
+          'переустановить его через API/CLI нельзя. Новый образ/переразвёртывание каталога — ' +
+          'единственный способ изменить такой плагин (plugins.managedReadonly).',
+      );
+      break;
     default:
       break;
   }
@@ -745,6 +752,12 @@ function createRemoveCommand(deps: PluginCommandDeps): Command {
         removeFiles: options.keepFiles !== true,
         actor: ACTOR,
       });
+      if (result.rejected) {
+        console.error(`Не снят (${name}): ${result.rejected.reason}`);
+        console.error(`  ${result.rejected.message}`);
+        writeReasonHint(result.rejected.reason);
+        return 1;
+      }
       if (!result.removed) {
         console.log(`Плагин «${name}» не установлен.`);
         return 0;

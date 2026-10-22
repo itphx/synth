@@ -85,6 +85,20 @@ RUN mkdir -p /out && pnpm --filter @itphx/synth-backend deploy --prod --legacy /
 # без эмуляции).
 RUN chmod -R a+rX /out/app /repo/packages/backend/dist
 
+# Ф5в (PROP-090 §«Managed deploy-time»): deploy-плагины из образа.
+# Каталог `docker/plugins/` (или `docker/deploy-plugins/`) в контексте сборки
+# копируется в `/opt/synth/plugins`; каждый подкаталог — бандл (`synth.pack` +
+# `dist/`). Каталог готовится здесь (в build-стадии есть RUN), чтобы
+# runtime-стадии оставались без RUN (важно для кросс-сборки arm64 без QEMU).
+# Нет каталога → остаётся пустой `/opt/synth/plugins`: образ собирается как
+# раньше, deploy-установка — no-op.
+# Права a+rX: backend работает под uid 1000 и должен читать бандлы.
+RUN set -eux; \
+    mkdir -p /out/deploy-plugins; \
+    if [ -d docker/plugins ]; then cp -a docker/plugins/. /out/deploy-plugins/; \
+    elif [ -d docker/deploy-plugins ]; then cp -a docker/deploy-plugins/. /out/deploy-plugins/; fi; \
+    chmod -R a+rX /out/deploy-plugins
+
 # ------------------------------------------------------------------------------
 # flavor `core` — all-in-one: control plane + toolchain (PROP-082)
 # ------------------------------------------------------------------------------
@@ -136,10 +150,16 @@ ENV HOME=/home/synth
 ENV PYTHONUSERBASE=/home/synth/.local
 ENV PIP_CACHE_DIR=/home/synth/.cache/pip
 
+# Ф5в: каталог deploy-плагинов (образ). Пустой каталог → установка — no-op.
+ENV SYNTH_PLUGINS_DEPLOY_DIR=/opt/synth/plugins
+
 COPY --from=build /out/app /app
 
 # Скомпилированный код backend поверх pnpm deploy.
 COPY --from=build /repo/packages/backend/dist /app/dist
+
+# Ф5в: бандлы, поставленные образом (нет каталога в контексте — пусто).
+COPY --from=build /out/deploy-plugins /opt/synth/plugins
 
 WORKDIR /app
 # Права (a+rX) выставлены в стадии сборки, здесь только читаем из образа.
@@ -284,6 +304,10 @@ COPY --from=build /out/app /app
 # Скомпилированный код backend поверх pnpm deploy.
 COPY --from=build /repo/packages/backend/dist /app/dist
 
+# Ф5в: deploy-плагины из образа (см. стадию build).
+ENV SYNTH_PLUGINS_DEPLOY_DIR=/opt/synth/plugins
+COPY --from=build /out/deploy-plugins /opt/synth/plugins
+
 WORKDIR /app
 CMD ["node", "dist/main.js"]
 
@@ -337,11 +361,16 @@ LABEL org.opencontainers.image.description="Synth backend API hub: OIDC/RBAC, ru
 ENV NODE_ENV=production
 ENV SYNTH_DATA_DIR=/var/synth/data
 ENV SYNTH_PORT=5000
+# Ф5в: каталог deploy-плагинов (образ). Пустой каталог → установка — no-op.
+ENV SYNTH_PLUGINS_DEPLOY_DIR=/opt/synth/plugins
 
 COPY --from=build /out/app /app
 
 # Скомпилированный код backend поверх pnpm deploy.
 COPY --from=build /repo/packages/backend/dist /app/dist
+
+# Ф5в: бандлы, поставленные образом (нет каталога в контексте — пусто).
+COPY --from=build /out/deploy-plugins /opt/synth/plugins
 
 WORKDIR /app
 # Права (a+rX) выставлены в стадии сборки, здесь только читаем из образа.

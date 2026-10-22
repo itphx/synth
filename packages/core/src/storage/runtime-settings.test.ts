@@ -489,6 +489,10 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
     executionEnabled: false,
     // PROP-090 §«Точка llmFilters» (Ф3б): бюджет времени фильтра.
     llmFilterTimeoutMs: 1500,
+    // PROP-090 §«Managed deploy-time» (Ф5в): образные бандлы и управляемость.
+    deployDir: '/opt/synth/plugins',
+    deployTrust: 'trusted' as const,
+    managedReadonly: true,
   };
 
   it('runtime поверх base: каждое заданное поле перекрывает base', () => {
@@ -516,6 +520,10 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
       promptBlockMaxChars: 8000,
       executionEnabled: false,
       llmFilterTimeoutMs: 1500,
+      // Ф5в: ключи managed deploy-time наследуются из base (не перекрыты runtime).
+      deployDir: '/opt/synth/plugins',
+      deployTrust: 'trusted',
+      managedReadonly: true,
     });
   });
 
@@ -544,6 +552,10 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
       promptBlockMaxChars: 4000,
       executionEnabled: false,
       llmFilterTimeoutMs: 1000,
+      // Ф5в: дефолты managed deploy-time из схемы.
+      deployDir: '',
+      deployTrust: 'trusted',
+      managedReadonly: true,
     });
   });
 

@@ -112,6 +112,16 @@ export interface PluginsRuntimeSettings {
    * (точка `llmFilters`).
    */
   llmFilterTimeoutMs?: number;
+  /**
+   * PROP-090 Ф5в: каталог бандлов, поставленных образом/PVC (deploy-time).
+   * Пусто — не задан. Runtime-override действует после рестарта (рантайм
+   * плагинов собирается при старте, инвариант 24).
+   */
+  deployDir?: string;
+  /** PROP-090 Ф5в: доверие deploy-бандлов (`plugin.trust_below_floor` при ниже порога). */
+  deployTrust?: PluginsConfig['deployTrust'];
+  /** PROP-090 Ф5в: management-плагин нельзя снять/переустановить через API/CLI. */
+  managedReadonly?: boolean;
 }
 
 /**
@@ -354,6 +364,13 @@ export function mergePluginsConfig(
     promptBlockMaxChars: r.promptBlockMaxChars ?? base?.promptBlockMaxChars ?? 4000,
     executionEnabled: r.executionEnabled ?? base?.executionEnabled ?? false,
     llmFilterTimeoutMs: r.llmFilterTimeoutMs ?? base?.llmFilterTimeoutMs ?? DEFAULT_LLM_FILTER_TIMEOUT_MS,
+    // Ф5в: deploy-каталог/PVC (путь внутри контейнера) и доверие deploy-бандлов.
+    deployDir: r.deployDir ?? base?.deployDir ?? '',
+    // Дефолт — как в схеме (`pluginsConfigSchema`): образные бандлы доверены
+    // ровно настолько, насколько доверен образ; при trustFloor=trusted (дефолт)
+    // установка проходит.
+    deployTrust: r.deployTrust ?? base?.deployTrust ?? 'trusted',
+    managedReadonly: r.managedReadonly ?? base?.managedReadonly ?? true,
   };
 }
 

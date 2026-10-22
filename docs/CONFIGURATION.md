@@ -1290,6 +1290,9 @@ scheduler:
 | `plugins.exactHostExceptions` | Путь к файлу точных исключений семвер-гейта (`host`, одна версия в строке) | `''` |
 | `plugins.promptBlockMaxChars` | Бюджет символов **на блок** системного промпта от плагина (превышение — обрезка с маркером, `status: 'truncated'`) | `4000` |
 | `plugins.llmFilterTimeoutMs` | Бюджет времени на один вызов фильтра LLM-вызовов; по истечении — `failMode` фильтра | `1000` |
+| `plugins.deployDir` | Каталог бандлов, поставленных **образом/развёртыванием** (каждый подкаталог — бандл с `synth.pack` + `dist/`). Ставится при старте инстанса (манифест → скан → trust-floor → install-policy), затем активируется из lock. Пусто — deploy-плагинов нет | `''` |
+| `plugins.deployTrust` | Уровень доверия deploy-бандлов (`builtin`/`verified`/`trusted`/`community`). Ниже `trustFloor` — штатный отказ `plugin.trust_below_floor`; скан содержимого выполняется всегда | `verified` |
+| `plugins.managedReadonly` | Management-плагин (`deployDir`, lock `source: 'deploy'`) **нельзя** снять или переустановить через API/CLI — `403 plugin.managed_readonly`. Меняется только новым образом/переразвёртыванием. Действует независимо от режима инстанса | `true` |
 
 ```yaml
 plugins:
@@ -1298,6 +1301,10 @@ plugins:
   trustFloor: trusted
   promptBlockMaxChars: 4000
   llmFilterTimeoutMs: 1000
+  # Managed deploy-time (Ф5в): бандлы из образа/PVC.
+  deployDir: /opt/synth/plugins
+  deployTrust: verified
+  managedReadonly: true
 ```
 
 - **Живые ключи.** `promptBlockMaxChars` и `llmFilterTimeoutMs` применяются **без перезапуска**
@@ -1312,6 +1319,13 @@ plugins:
 - **Порядок гейтов** (установка и активация): манифест → fail-closed (`scan=disabled` +
   `executionEnabled`) → trust-floor → скан → `runtimeInstall` → install-policy
   (`safe→allow`, `caution→ask` = карантин, `dangerous→block`).
+- **Deploy-плагины (образ/PVC, Ф5в).** `deployDir` читается при старте: каждый подкаталог — бандл;
+  битый манифест пропускается с предупреждением (старт не падает), совпадение версии и `content_hash`
+  с lock — «skipped» (не переустанавливается). Скан и install-policy — **те же**, что у ручной
+  установки (образ — доверенный источник кода, но не повод отключать проверку содержимого).
+  `managedReadonly: true` запрещает снятие/`update` такого плагина через API/CLI: он меняется новым
+  образом или переразвёртыванием каталога. Env-эквиваленты — `SYNTH_PLUGINS_DEPLOY_DIR`,
+  `SYNTH_PLUGINS_DEPLOY_TRUST`, `SYNTH_PLUGINS_MANAGED_READONLY`.
 
 ### Аналитика и отчётность (`analytics.*`, ADR-102)
 
