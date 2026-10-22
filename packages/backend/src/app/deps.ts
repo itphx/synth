@@ -69,6 +69,9 @@ import {
   // блоков промпта (композер + фасад плагинов) и рантайм плагинов.
   PromptBlockRegistry,
   PluginRuntime,
+  PluginProcessManager,
+  createInlinePluginLoader,
+  createRemotePluginLoader,
   resolvePluginLayout,
 } from '@itphx/synth-core';
 import type {
@@ -634,6 +637,14 @@ export async function createBackendDeps(
   // точки `activate`/`deactivate` для HTTP API/CLI (Ф5б-2/3). Реестры — **те же**
   // экземпляры, что у оркестратора (`promptBlocks`, `getLlmFilters()`, `toolRegistry`).
   // `plugins.executionEnabled=false` (дефолт) → `activateInstalled()` — no-op.
+  // Ф4б-2: транспорты исполнения плагина (`inline` — в процессе core,
+  // `remote` — отдельный процесс на loopback). Менеджер процессов гасится в
+  // `PluginRuntime.dispose()` при остановке инстанса.
+  const pluginProcessManager = new PluginProcessManager({
+    secretsDir: join(dataDir, 'secrets'),
+    logger: { warn: (message: string) => console.warn(`[plugin-process] ${message}`) },
+  });
+
   const pluginRuntime = new PluginRuntime({
     layout: resolvePluginLayout({ dataDir, env: process.env }),
     config: effectivePluginsConfig,
@@ -643,6 +654,11 @@ export async function createBackendDeps(
     promptBlocks,
     llmFilters: orchestrator.getLlmFilters(),
     tools: toolRegistry,
+    loaders: {
+      inline: createInlinePluginLoader(),
+      remote: createRemotePluginLoader({ processManager: pluginProcessManager }),
+    },
+    processManager: pluginProcessManager,
   });
 
   const processMessage = orchestrator.createProcessMessage();

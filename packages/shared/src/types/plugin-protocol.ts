@@ -17,7 +17,13 @@
  * `GatewayProvider` наружу не отдаются (PROP-090 §«Что пересекает границу»).
  *
  * **Чего в протоколе нет (волна Ф4б-1).** Точки `tools` — её транспорт
- * появится в Ф4б-3; запуск/остановка процесса и файл токена — Ф4б-2.
+ * появится в Ф4б-3.
+ *
+ * **Серверная сторона (Ф4б-2).** Контракт точки входа сервера
+ * (`PluginServerOptions`/`PluginServerHandle`/`PluginServerFactory`), строка
+ * готовности `PLUGIN_SERVER_READY_LINE` и её разбор
+ * (`parsePluginServerReadyLine`) живут здесь же: плагин и хост обязаны
+ * понимать формат одинаково, отдельный пакет не нужен.
  */
 import { isLlmFilterFailMode, isLlmFilterPhase } from './llm-filters.js';
 import type { LlmFilterFailMode, LlmFilterPhase } from './llm-filters.js';
@@ -35,6 +41,64 @@ export const PLUGIN_PROTOCOL_PATHS = {
   /** `GET` — процесс жив (без токена). */
   health: '/health',
 } as const;
+
+/**
+ * Строка готовности, которую сервер плагина печатает в **stdout** при старте
+ * (Ф4б-2). Хост читает stdout процесса до этой строки и берёт из неё порт.
+ *
+ * Формат: `SYNTH_PLUGIN_READY port=<n>` (разбор — {@link parsePluginServerReadyLine}).
+ * Только stdout: диагностика процесса идёт в stderr и на разбор не влияет.
+ */
+export const PLUGIN_SERVER_READY_LINE = 'SYNTH_PLUGIN_READY';
+
+/** Опции, с которыми хост запускает сервер плагина (`dist/server.js`). */
+export interface PluginServerOptions {
+  /** Порт, который должен занять сервер (0 — выбрать свободный и сообщить). */
+  port: number;
+  /** Bearer-токен, который сервер обязан проверять на `/capabilities` и `/invoke`. */
+  token: string;
+}
+
+/** Дескриптор запущенного сервера плагина (возвращает фабрика `dist/server.js`). */
+export interface PluginServerHandle {
+  /** Остановить сервер. */
+  close(): void | Promise<void>;
+  /** Порт, на котором сервер слушает (после `listen`). */
+  readonly port?: number;
+}
+
+/**
+ * Фабрика сервера плагина: `dist/server.js` экспортирует её (или `default`).
+ *
+ * Хост вызывает фабрику с {@link PluginServerOptions}, сервер занимает порт,
+ * печатает {@link PLUGIN_SERVER_READY_LINE} и обслуживает `/health`,
+ * `/capabilities`, `/invoke`. Процесс завершается сигналом (`SIGTERM`), поэтому
+ * `close()` нужен для аккуратной остановки в тестах и при явном shutdown.
+ */
+export type PluginServerFactory = (
+  options: PluginServerOptions,
+) => PluginServerHandle | Promise<PluginServerHandle>;
+
+/**
+ * Разобрать строку готовности процесса плагина.
+ *
+ * **Строгая проверка** (fail-closed): принимается ровно
+ * `SYNTH_PLUGIN_READY port=<целое 1..65535>` (окружающие пробелы и `\r`
+ * допускаются — stdout приходит с `\n`/`\r\n`). Мусор, чужие поля, порт `0`,
+ * отрицательный или вне диапазона — `null` (хост считает, что готовности не
+ * было).
+ *
+ * @param line одна строка stdout (без завершающего перевода строки)
+ */
+export function parsePluginServerReadyLine(line: string): { port: number } | null {
+  if (typeof line !== 'string') return null;
+  const trimmed = line.replace(/\r$/, '').trim();
+  const match = /^SYNTH_PLUGIN_READY port=(\d{1,5})$/.exec(trimmed);
+  if (!match) return null;
+  const port = Number(match[1]);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  return { port };
+}
 
 /**
  * Точки, передаваемые по протоколу.

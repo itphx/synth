@@ -1449,3 +1449,152 @@ describe('PluginHost: Ф3в — фасад (точка tools)', () => {
     expect(filtered.builtin).toHaveLength(1);
   });
 });
+
+// ── Ф4б-2: выбор транспорта загрузчика ───────────────────────────────────
+
+/**
+ * Загрузчик-заглушка, считающий вызовы.
+ *
+ * Выбор транспорта проверяется **без процессов**: хост обязан детерминированно
+ * решить, какой из двух загрузчиков звать (`loaders.inline` / `loaders.remote`),
+ * и не трогать второй.
+ */
+function countingLoader(): { loader: PluginLoader; calls: () => number } {
+  let calls = 0;
+  return {
+    loader: async () => {
+      calls += 1;
+      return { apply: () => undefined };
+    },
+    calls: () => calls,
+  };
+}
+
+describe('PluginHost: Ф4б-2 — выбор транспорта загрузчика', () => {
+  /** Хост с двумя считающими загрузчиками (исполнение кода включено). */
+  function hostWithTransports(): {
+    host: PluginHost;
+    inline: { loader: PluginLoader; calls: () => number };
+    remote: { loader: PluginLoader; calls: () => number };
+  } {
+    const inline = countingLoader();
+    const remote = countingLoader();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      loaders: { inline: inline.loader, remote: remote.loader },
+    });
+    return { host, inline, remote };
+  }
+
+  it("mode: 'inline' → вызван inline-загрузчик, remote — нет", async () => {
+    const { host, inline, remote } = hostWithTransports();
+    const result = await host.activate(descriptor({ manifest: manifest({ mode: 'inline' }) }));
+
+    expect(result.outcome).toBe('activated');
+    expect(inline.calls()).toBe(1);
+    expect(remote.calls()).toBe(0);
+  });
+
+  it("mode: 'remote' → вызван remote-загрузчик, inline — нет", async () => {
+    const { host, inline, remote } = hostWithTransports();
+    const result = await host.activate(descriptor({ manifest: manifest({ mode: 'remote' }) }));
+
+    expect(result.outcome).toBe('activated');
+    expect(remote.calls()).toBe(1);
+    expect(inline.calls()).toBe(0);
+  });
+
+  it("mode: 'both' + dist/index.js в бандле → inline", async () => {
+    const { host, inline, remote } = hostWithTransports();
+    const result = await host.activate(
+      descriptor({
+        manifest: manifest({ mode: 'both' }),
+        files: { 'dist/index.js': 'export function apply() {}\n' },
+      }),
+    );
+
+    expect(result.outcome).toBe('activated');
+    expect(inline.calls()).toBe(1);
+    expect(remote.calls()).toBe(0);
+  });
+
+  it("mode: 'both' без dist/index.js в бандле → remote", async () => {
+    const { host, inline, remote } = hostWithTransports();
+    const result = await host.activate(
+      descriptor({
+        manifest: manifest({ mode: 'both' }),
+        files: { 'dist/server.js': 'export function apply() {}\n' },
+      }),
+    );
+
+    expect(result.outcome).toBe('activated');
+    expect(remote.calls()).toBe(1);
+    expect(inline.calls()).toBe(0);
+  });
+
+  it("mode: 'both' + dist/index.js на диске (rootDir) → inline", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'synth-plugin-host-both-'));
+    try {
+      await mkdir(join(rootDir, 'dist'), { recursive: true });
+      await writeFile(
+        join(rootDir, 'dist', 'index.js'),
+        'export function apply() {}\n',
+        'utf-8',
+      );
+      const { host, inline, remote } = hostWithTransports();
+
+      // Состав файлов дескриптором не передан — хост смотрит на диск бандла.
+      const result = await host.activate(
+        descriptor({ manifest: manifest({ mode: 'both' }), files: undefined, rootDir }),
+      );
+
+      expect(result.outcome).toBe('activated');
+      expect(inline.calls()).toBe(1);
+      expect(remote.calls()).toBe(0);
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it('режим не задан → дефолт inline', async () => {
+    const { host, inline, remote } = hostWithTransports();
+    const result = await host.activate(descriptor());
+
+    expect(result.outcome).toBe('activated');
+    expect(inline.calls()).toBe(1);
+    expect(remote.calls()).toBe(0);
+  });
+
+  it('descriptor.remote задан → remote вне зависимости от режима манифеста', async () => {
+    const { host, inline, remote } = hostWithTransports();
+    const result = await host.activate(
+      descriptor({
+        manifest: manifest({ mode: 'inline' }),
+        remote: { url: 'http://127.0.0.1:12345', token: 'tok' },
+      }),
+    );
+
+    expect(result.outcome).toBe('activated');
+    expect(remote.calls()).toBe(1);
+    expect(inline.calls()).toBe(0);
+  });
+
+  it("mode: 'remote' без подключённого remote-загрузчика → plugin.loader_unavailable", async () => {
+    const inline = countingLoader();
+    const { host } = makeHost({
+      config: config({ executionEnabled: true }),
+      loaders: { inline: inline.loader },
+    });
+
+    const result = await host.activate(descriptor({ manifest: manifest({ mode: 'remote' }) }));
+
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.loader_unavailable');
+    expect(result.step).toBe('import');
+    // Сообщение объясняет, какой транспорт требуется и что именно не подключено.
+    expect(result.message).toContain('режим remote');
+    expect(result.message).toContain('loaders.remote');
+    expect(inline.calls()).toBe(0);
+    expect(host.isActive('demo-plugin')).toBe(false);
+  });
+});

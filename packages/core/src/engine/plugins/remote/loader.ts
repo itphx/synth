@@ -6,10 +6,14 @@
  * (`descriptor.remote.url`) и регистрирует **прокси-провайдеры** точек
  * `promptBlocks`/`llmFilters` через wire-протокол (`RemotePluginClient`).
  *
- * **Управления процессом здесь нет** (Ф4б-2): spawn/health-ожидание/stop и
- * файл токена `{dataDir}/secrets/plugin-token` — отдельная часть. Загрузчик
- * получает адрес и токен уже готовыми (`PluginActivationDescriptor.remote`) и
- * отказывает, если их нет (fail-closed).
+ * **Управление процессом** (Ф4б-2): загрузчик получает опциональный
+ * `processManager`. Если `descriptor.remote` (адрес+токен) задан — транспорт
+ * работает с уже запущенным процессом (внешний/тестовый сценарий) и процесс
+ * не останавливает. Иначе процесс поднимается менеджером из `rootDir` +
+ * `remoteEntry` (`dist/server.js`) и останавливается disposer'ом при
+ * деактивации плагина; сбой активации после запуска процесс тоже гасит.
+ * Без менеджера и без `remote` — отказ (fail-closed), а не «работаем без
+ * плагина».
  *
  * **Границы волны Ф4б-1.** Точки `tools` в протоколе нет: плагин, объявивший
  * `provides.tools` при `mode: 'remote'`, будет отклонён сверкой `provides` в
@@ -38,6 +42,7 @@ import type {
   PluginModule,
 } from '../activation.js';
 import { RemotePluginClient, type RemotePluginFetch } from './client.js';
+import type { PluginProcessManager, RemotePluginProcess } from './process.js';
 
 /** Опции загрузчика `out-of-process`. */
 export interface RemotePluginLoaderOptions {
@@ -45,6 +50,15 @@ export interface RemotePluginLoaderOptions {
   timeoutMs?: number;
   /** Инъекция fetch — тесты (по умолчанию глобальный `fetch`). */
   fetch?: RemotePluginFetch;
+  /**
+   * Менеджер процессов плагинов (Ф4б-2).
+   *
+   * Задан — загрузчик сам поднимает процесс из `descriptor.rootDir` +
+   * `descriptor.remoteEntry`, если в дескрипторе нет готового `remote`
+   * (адрес+токен). Не задан — транспорт принимает только **уже запущенный**
+   * процесс (`descriptor.remote`), иначе отказ (fail-closed).
+   */
+  processManager?: PluginProcessManager;
   /** Логгер (по умолчанию `console.warn`). */
   logger?: PluginLogger;
 }
@@ -60,9 +74,10 @@ interface ResponseContext {
 /**
  * Создать загрузчик `out-of-process` (`PluginLoader`).
  *
- * Загрузчик сам **не поднимает** процесс и не ждёт health: это делает
- * установка/активация (Ф4б-2). Здесь — только протокол и регистрация
- * прокси-провайдеров.
+ * С заданным `processManager` загрузчик сам поднимает процесс и ждёт его
+ * готовности/health (`PluginProcessManager.start`), а при деактивации плагина
+ * останавливает его. Без менеджера — только протокол и регистрация
+ * прокси-провайдеров для уже запущенного процесса (`descriptor.remote`).
  */
 export function createRemotePluginLoader(
   options: RemotePluginLoaderOptions = {},
@@ -83,38 +98,77 @@ export function createRemotePluginLoader(
     }
 
     const remote = descriptor.remote;
-    if (!remote || !isNonEmptyString(remote.url) || !isNonEmptyString(remote.token)) {
+    let process: RemotePluginProcess | undefined;
+    let url: string;
+    let token: string;
+
+    if (remote && isNonEmptyString(remote.url) && isNonEmptyString(remote.token)) {
+      // Явный адрес+токен приоритетнее: процесс уже запущен (внешний или
+      // тестовый), загрузчик его не поднимает и не останавливает.
+      url = remote.url;
+      token = remote.token;
+    } else if (options.processManager) {
+      if (!isNonEmptyString(descriptor.rootDir)) {
+        throw new PluginLoadError(
+          `Плагин «${descriptor.name}»: не задан каталог бандла (rootDir) — ` +
+            'поднять процесс out-of-process неоткуда.',
+        );
+      }
+      try {
+        process = await options.processManager.start({
+          name: descriptor.name,
+          rootDir: descriptor.rootDir,
+          ...(descriptor.remoteEntry ? { entry: descriptor.remoteEntry } : {}),
+        });
+      } catch (err) {
+        throw new PluginLoadError(describeProcessFailure(descriptor, err));
+      }
+      url = process.url;
+      token = process.token;
+    } else {
       throw new PluginLoadError(
         `Плагин «${descriptor.name}»: не задан адрес/токен удалённого процесса ` +
-        `(descriptor.remote) — загрузчик out-of-process не угадывает адрес и не поднимает процесс.`,
+          '(descriptor.remote) и не подключён менеджер процессов — загрузчик ' +
+          'out-of-process не угадывает адрес и не поднимает процесс.',
       );
     }
 
     let client: RemotePluginClient;
     try {
       client = new RemotePluginClient({
-        baseUrl: remote.url,
-        token: remote.token,
+        baseUrl: url,
+        token,
         name: descriptor.name,
         version: descriptor.version,
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
         ...(options.fetch ? { fetch: options.fetch } : {}),
       });
     } catch (err) {
-      throw new PluginLoadError(describeLoadFailure(descriptor, remote.token, err));
+      await process?.stop();
+      throw new PluginLoadError(describeLoadFailure(descriptor, token, err));
     }
 
     let capabilities;
     try {
       capabilities = await client.capabilities();
     } catch (err) {
-      throw new PluginLoadError(describeLoadFailure(descriptor, remote.token, err));
+      // Активация не состоялась — процесс, поднятый нами, останавливаем:
+      // иначе он остался бы висеть без владельца.
+      await process?.stop();
+      throw new PluginLoadError(describeLoadFailure(descriptor, token, err));
     }
 
     const plugin = descriptor.name;
 
     return {
       apply: async (facade) => {
+        // Процесс, поднятый загрузчиком, живёт ровно столько, сколько активен
+        // плагин: деактивация (обратная прокрутка disposers) его останавливает.
+        if (process) {
+          const running = process;
+          facade.registerDisposer(() => running.stop());
+        }
+
         for (const block of capabilities.points.promptBlocks ?? []) {
           const ctx: ResponseContext = { plugin, id: block.key, logger };
           facade.registerPromptBlock({
@@ -246,6 +300,15 @@ function responseError(ctx: ResponseContext, reason: string): Error {
     `плагин «${ctx.plugin}»: ответ точки «${ctx.id}» не по контракту — ${reason}.`;
   ctx.logger.warn(message);
   return new Error(message);
+}
+
+/** Ошибка запуска процесса плагина (текст уже без токена — его чистит менеджер). */
+function describeProcessFailure(
+  descriptor: PluginActivationDescriptor,
+  err: unknown,
+): string {
+  const detail = err instanceof Error ? err.message : String(err);
+  return `Плагин «${descriptor.name}»: процесс out-of-process не запущен — ${detail}`;
 }
 
 /** Ошибка загрузки: сообщение без токена (и без «сырого» стека процесса). */

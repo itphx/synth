@@ -78,6 +78,15 @@ export interface PluginActivationDescriptor {
    */
   entry?: string;
   /**
+   * Ф4б-2: серверная точка входа удалённого плагина — **относительный** путь
+   * внутри `rootDir` (из записи `plugins.lock.json`, поле `remote_entry`); по
+   * умолчанию `dist/server.js`.
+   *
+   * Используется только `out-of-process`: `PluginProcessManager` запускает
+   * `node <rootDir>/<remoteEntry>`. Для `inline` поле не нужно.
+   */
+  remoteEntry?: string;
+  /**
    * Ожидаемый content-hash (из `plugins.lock.json`/`PLUGIN_INTEGRITY.json`).
    * Не задан — сверять нечего (шаг integrity пропускается).
    */

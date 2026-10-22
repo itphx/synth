@@ -12,6 +12,7 @@
  * Имена полей — snake_case (как в модели `lock.json` из PROP-068 §4.4).
  */
 import type { PluginScanVerdict } from './plugin-audit.js';
+import type { PackPluginMode } from './pack.js';
 import type { CatalogTrustLevel } from './trust.js';
 
 /**
@@ -58,6 +59,22 @@ export interface PluginLockEntry {
   ref?: string;
   /** Точка входа бандла (например `dist/index.js`). */
   entry?: string;
+  /**
+   * Ф4б-2: режим исполнения из манифеста (`inline`/`remote`/`both`).
+   *
+   * Записывается установкой (эффективный режим: `mode` манифеста, иначе
+   * `inline`). Активация выбирает транспорт по этому полю, а не перечитывая
+   * манифест; у legacy-записей поле отсутствует — трактуется как `inline`.
+   */
+  mode?: PackPluginMode;
+  /**
+   * Ф4б-2: серверная точка входа удалённого плагина (`dist/server.js`).
+   *
+   * Пишется, если режим `remote`/`both` и файл есть в бандле. Именно её
+   * запускает `PluginProcessManager`; в дескриптор активации попадает как
+   * `remoteEntry`.
+   */
+  remote_entry?: string;
   /** ISO-время установки. */
   installed_at: string;
   /** ISO-время последней записи. */

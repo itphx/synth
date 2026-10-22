@@ -70,6 +70,7 @@ import {
 import type {
   CatalogTrustLevel,
   PackManifest,
+  PackPluginMode,
   PluginAuditAction,
   PluginAuditEntry,
   PluginAuditReason,
@@ -108,6 +109,12 @@ const MANIFEST_FILE = 'synth.pack';
 
 /** Служебный файл раскладки — не часть бандла (не входит в хеш и в `files`). */
 const INTEGRITY_FILE = 'PLUGIN_INTEGRITY.json';
+
+/**
+ * Серверная точка входа `out-of-process` (Ф4б-2): её наличие обязательно для
+ * `mode: 'remote'` и записывается в lock (`remote_entry`).
+ */
+const REMOTE_ENTRY_FILE = 'dist/server.js';
 
 /** Каталоги, которые не являются частью бандла (как в сканере, PROP-068 §4.3). */
 const SKIPPED_DIRS: readonly string[] = ['node_modules', '.git'];
@@ -526,8 +533,25 @@ export async function readPluginManifest(dir: string): Promise<PluginManifestRea
   return { ok: true, manifest };
 }
 
-/** Прочитать `PLUGIN_INTEGRITY.json` карантина (`null` — нет/битый). */
-async function readIntegrityFile(dir: string): Promise<PluginIntegrityFile | null> {
+/**
+ * Режим исполнения и серверная точка входа для lock-записи (Ф4б-2).
+ *
+ * `mode` — эффективный режим манифеста (`inline`, если не задан). Для
+ * `remote`/`both` пишется `remote_entry`, только если файл `dist/server.js`
+ * реально есть в бандле; для `remote` его отсутствие — отказ установки
+ * (`plugin.remote_entry_missing`, проверяет вызывающий).
+ */
+async function resolveExecutionMode(
+  rootDir: string,
+  manifest: PackManifest,
+): Promise<{ mode: PackPluginMode; remoteEntry?: string }> {
+  const mode = manifest.mode ?? 'inline';
+  if (mode !== 'remote' && mode !== 'both') return { mode };
+  if (!(await pathExists(join(rootDir, REMOTE_ENTRY_FILE)))) return { mode };
+  return { mode, remoteEntry: REMOTE_ENTRY_FILE };
+}
+
+/** Прочитать `PLUGIN_INTEGRITY.json` карантина (`null` — нет/битый). */async function readIntegrityFile(dir: string): Promise<PluginIntegrityFile | null> {
   try {
     const text = await readFile(join(dir, INTEGRITY_FILE), 'utf8');
     const parsed: unknown = JSON.parse(text);
@@ -623,6 +647,24 @@ export class PluginInstaller {
     const { files, binaryFiles } = await collectBundleFiles(request.dir);
     const contentHash = computePluginContentHash(files);
     const entry = resolvePluginEntry(files);
+
+    // ── Шаг 2б: режим исполнения и серверная точка входа (Ф4б-2) ──────
+    // `remote` без `dist/server.js` — отказ: поднимать нечего (fail-closed).
+    const execution = await resolveExecutionMode(request.dir, manifest);
+    if (execution.mode === 'remote' && !execution.remoteEntry) {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: 'plugin.remote_entry_missing',
+        message:
+          `Плагин «${name}» объявлен с mode: 'remote', но в бандле нет серверной точки ` +
+          `входа «${REMOTE_ENTRY_FILE}» — установка отклонена (поднимать нечего).`,
+        request,
+        contentHash,
+        mode: execution.mode,
+      });
+    }
 
     // ── Шаг 3: fail-closed — скан выключен, а исполнение включено ─────
     if (this._config.scan === 'disabled' && this._config.executionEnabled) {
@@ -792,6 +834,8 @@ export class PluginInstaller {
         verdict: scan.verdict,
         contentHash,
         entry,
+        mode: execution.mode,
+        ...(execution.remoteEntry ? { remoteEntry: execution.remoteEntry } : {}),
         ...(request.identifier ? { identifier: request.identifier } : {}),
         ...(request.ref ? { ref: request.ref } : {}),
         ...(keepPrevious && previous ? { previous: previousOf(previous) } : {}),
@@ -822,6 +866,7 @@ export class PluginInstaller {
           files,
           rootDir: staged.dir,
           entry,
+          ...(execution.remoteEntry ? { remoteEntry: execution.remoteEntry } : {}),
           contentHash,
           trustLevel: request.trustLevel,
           installKind,
@@ -1022,6 +1067,7 @@ export class PluginInstaller {
             version: installed.version,
             rootDir: installed.dir,
             ...(updated?.entry ? { entry: updated.entry } : {}),
+            ...(updated?.remote_entry ? { remoteEntry: updated.remote_entry } : {}),
             contentHash: installed.contentHash,
             trustLevel: entry.trust_level,
             installKind: opts.installKind ?? 'runtime',
@@ -1121,6 +1167,9 @@ export class PluginInstaller {
       content_hash: previous.content_hash,
       ...(entry.ref ? { ref: entry.ref } : {}),
       ...(previous.entry ? { entry: previous.entry } : {}),
+      // Режим исполнения и серверная точка входа — свойства плагина, не версии.
+      ...(entry.mode ? { mode: entry.mode } : {}),
+      ...(entry.remote_entry ? { remote_entry: entry.remote_entry } : {}),
       previous: previousOf(entry),
       installed_at: entry.installed_at,
       updated_at: this._now(),
@@ -1144,6 +1193,7 @@ export class PluginInstaller {
           version: previous.version,
           rootDir: previousDir,
           ...(previous.entry ? { entry: previous.entry } : {}),
+          ...(entry.remote_entry ? { remoteEntry: entry.remote_entry } : {}),
           contentHash: previous.content_hash,
           trustLevel: entry.trust_level,
           installKind: 'deploy',
@@ -1408,6 +1458,26 @@ export class PluginInstaller {
       });
     }
 
+    // Ф4б-2: режим исполнения и точка входа удалённого процесса — те же, что
+    // при установке: режим `remote` без `dist/server.js` отклоняем (иначе
+    // подтверждённый плагин нельзя было бы активировать).
+    const { mode, remoteEntry } = await resolveExecutionMode(qdir, manifest);
+    if (mode === 'remote' && !remoteEntry) {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: 'plugin.remote_entry_missing',
+        message:
+          `Плагин «${name}@${version}» объявлен в режиме «remote», но в бандле нет ` +
+          `точки входа «${REMOTE_ENTRY_FILE}» — подтверждение отклонено.`,
+        trustLevel,
+        source,
+        contentHash,
+        mode,
+      });
+    }
+
     const dir = await releaseFromQuarantine(this._layout, name, version);
     await this._lock.save(
       this._buildLockEntry({
@@ -1418,6 +1488,8 @@ export class PluginInstaller {
         verdict: scan.verdict,
         contentHash,
         entry,
+        mode,
+        ...(remoteEntry ? { remoteEntry } : {}),
         ...(integrity.identifier ? { identifier: integrity.identifier } : {}),
         ...(integrity.ref ? { ref: integrity.ref } : {}),
       }),
@@ -1454,6 +1526,8 @@ export class PluginInstaller {
           installKind,
           source,
           actor,
+          // Ф4б-2: режим `remote` — дескриптору нужна точка входа процесса.
+          ...(remoteEntry ? { remoteEntry } : {}),
         })
       : undefined;
 
@@ -1679,6 +1753,8 @@ export class PluginInstaller {
     version: string;
     rootDir: string;
     entry?: string;
+    /** Ф4б-2: серверная точка входа (remote/both) из lock. */
+    remoteEntry?: string;
     contentHash: string;
     trustLevel: CatalogTrustLevel;
     installKind: 'deploy' | 'runtime';
@@ -1705,6 +1781,7 @@ export class PluginInstaller {
       files,
       rootDir: input.rootDir,
       entry: input.entry ?? resolvePluginEntry(files),
+      ...(input.remoteEntry ? { remoteEntry: input.remoteEntry } : {}),
       contentHash: input.contentHash,
       trustLevel: input.trustLevel,
       installKind: input.installKind,
@@ -1911,6 +1988,8 @@ export class PluginInstaller {
     files: Record<string, string>;
     rootDir: string;
     entry: string;
+    /** Ф4б-2: серверная точка входа (для `out-of-process`). */
+    remoteEntry?: string;
     contentHash: string;
     trustLevel: CatalogTrustLevel;
     installKind: 'deploy' | 'runtime';
@@ -1927,6 +2006,7 @@ export class PluginInstaller {
       files: input.files,
       rootDir: input.rootDir,
       entry: input.entry,
+      ...(input.remoteEntry ? { remoteEntry: input.remoteEntry } : {}),
       contentHash: input.contentHash,
       trustLevel: input.trustLevel,
       installKind: input.installKind,
@@ -1945,6 +2025,10 @@ export class PluginInstaller {
     verdict: PluginScanVerdict;
     contentHash: string;
     entry: string;
+    /** Ф4б-2: эффективный режим исполнения из манифеста. */
+    mode?: PackPluginMode;
+    /** Ф4б-2: серверная точка входа `dist/server.js` (remote/both). */
+    remoteEntry?: string;
     identifier?: string;
     ref?: string;
     /** Ступень отката (update): снимок прежней записи. */
@@ -1961,6 +2045,8 @@ export class PluginInstaller {
       content_hash: input.contentHash,
       ...(input.ref ? { ref: input.ref } : {}),
       entry: input.entry,
+      ...(input.mode ? { mode: input.mode } : {}),
+      ...(input.remoteEntry ? { remote_entry: input.remoteEntry } : {}),
       installed_at: ts,
       updated_at: ts,
       ...(input.previous ? { previous: input.previous } : {}),

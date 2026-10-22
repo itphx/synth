@@ -39,17 +39,28 @@ export {
 export type { InlinePluginLoaderOptions } from './inline-loader.js';
 
 // Ф4б-1 — `out-of-process`: wire-протокол (клиент) и удалённый загрузчик.
+// Ф4б-2 — менеджер процесса (spawn/health/stop) и токен-файл инстанса.
 export {
+  DEFAULT_PLUGIN_HEALTH_TIMEOUT_MS,
+  DEFAULT_PLUGIN_READY_TIMEOUT_MS,
+  DEFAULT_PLUGIN_SERVER_ENTRY,
+  DEFAULT_PLUGIN_STOP_TIMEOUT_MS,
   DEFAULT_REMOTE_PLUGIN_TIMEOUT_MS,
   LOOPBACK_PLUGIN_HOSTS,
+  PLUGIN_TOKEN_FILE,
+  PluginProcessManager,
   RemotePluginClient,
   RemotePluginUnavailableError,
   createRemotePluginLoader,
+  pluginTokenPath,
 } from './remote/index.js';
 export type {
+  PluginProcessHandle,
+  PluginProcessManagerOptions,
   RemotePluginClientOptions,
   RemotePluginFetch,
   RemotePluginLoaderOptions,
+  RemotePluginProcess,
   RemotePluginUnavailableReason,
 } from './remote/index.js';
 

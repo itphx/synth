@@ -189,5 +189,55 @@ export function describePluginLockRepository(
       expect(stored?.previous).toBeUndefined();
       expect(Object.prototype.hasOwnProperty.call(stored, 'previous')).toBe(false);
     });
+
+    // ── Ф4б-2: режим исполнения плагина ────────────────────────────────
+    it('`mode`/`remote_entry` сохраняются без потерь (и в list())', async () => {
+      const { repo } = await make();
+      await repo.save(
+        entry('remote-plugin', { mode: 'remote', remote_entry: 'dist/server.js' }),
+      );
+
+      const stored = await repo.get('remote-plugin');
+      expect(stored?.mode).toBe('remote');
+      expect(stored?.remote_entry).toBe('dist/server.js');
+
+      const listed = (await repo.list()).find((item) => item.name === 'remote-plugin');
+      expect(listed?.mode).toBe('remote');
+      expect(listed?.remote_entry).toBe('dist/server.js');
+    });
+
+    it('у записи без режима поля отсутствуют (не null) — и снимаются при перезаписи', async () => {
+      const { repo } = await make();
+      // Legacy-запись: поля нет вовсе.
+      await repo.save(entry('inline-plugin'));
+      const plain = await repo.get('inline-plugin');
+      expect(plain?.mode).toBeUndefined();
+      expect(plain?.remote_entry).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(plain, 'mode')).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(plain, 'remote_entry')).toBe(false);
+
+      // Перезапись без режима снимает прежние значения (не «залипают»).
+      await repo.save(
+        entry('inline-plugin', {
+          version: '2.0.0',
+          content_hash: 'f'.repeat(64),
+          updated_at: '2026-06-01T00:00:00.000Z',
+          mode: 'both',
+          remote_entry: 'dist/server.js',
+        }),
+      );
+      await repo.save(
+        entry('inline-plugin', {
+          version: '3.0.0',
+          content_hash: 'a'.repeat(64),
+          updated_at: '2026-07-01T00:00:00.000Z',
+        }),
+      );
+      const rewritten = await repo.get('inline-plugin');
+      expect(rewritten?.mode).toBeUndefined();
+      expect(rewritten?.remote_entry).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(rewritten, 'mode')).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(rewritten, 'remote_entry')).toBe(false);
+    });
   });
 }

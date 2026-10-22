@@ -1195,3 +1195,174 @@ describe('PluginInstaller: rollback (Д2)', () => {
     expect(result.message).toContain('отсутствует');
   });
 });
+
+// ── Ф4б-2: режим исполнения и серверная точка входа в lock ────────────────
+
+/**
+ * Карантин, созданный **вручную** (как «оставшийся с прошлой версии установщика»).
+ *
+ * Штатная установка `mode: 'remote'` без `dist/server.js` теперь отклоняется до
+ * раскладки, поэтому отрицательный кейс `approve` иначе не воспроизвести.
+ * `PLUGIN_INTEGRITY.json` пишется по фактическому составу файлов — иначе
+ * `approve` отклонил бы бандл раньше проверки режима (`plugin.integrity_mismatch`).
+ */
+async function stageQuarantine(
+  layout: PluginLayout,
+  opts: { manifest: PackManifest; files: Record<string, string> },
+): Promise<string> {
+  const qdir = pluginQuarantineDir(layout, opts.manifest.name, opts.manifest.version);
+  const entries: Record<string, string> = {
+    'synth.pack': `${JSON.stringify(opts.manifest, null, 2)}\n`,
+    ...opts.files,
+  };
+  for (const [rel, content] of Object.entries(entries)) {
+    const target = join(qdir, rel);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content, 'utf-8');
+  }
+  const { files } = await collectBundleFiles(qdir);
+  await writeFile(
+    join(qdir, 'PLUGIN_INTEGRITY.json'),
+    `${JSON.stringify(
+      {
+        sha256: computePluginContentHash(files),
+        trust_level: 'trusted',
+        install_kind: 'deploy',
+        source: 'local',
+      },
+      null,
+      2,
+    )}\n`,
+    'utf-8',
+  );
+  return qdir;
+}
+
+describe('PluginInstaller: Ф4б-2 — режим исполнения в lock', () => {
+  it("mode: 'remote' без dist/server.js → plugin.remote_entry_missing, на диск ничего не записано", async () => {
+    const dir = await makeBundle({ manifest: manifest({ mode: 'remote' }) });
+    const { installer, layout, lock, audit } = await makeInstaller();
+
+    const result = await installer.installFromDirectory({
+      dir,
+      trustLevel: 'trusted',
+      source: 'local',
+      installKind: 'deploy',
+    });
+
+    expect(result.outcome).toBe('rejected');
+    if (result.outcome !== 'rejected') return;
+    expect(result.reason).toBe('plugin.remote_entry_missing');
+    expect(result.message).toContain('dist/server.js');
+    // Fail-closed: ни lock, ни каталогов раскладки.
+    expect(await lock.list()).toEqual([]);
+    expect(existsSync(layout.installedDir)).toBe(false);
+    expect(existsSync(layout.quarantineDir)).toBe(false);
+    expect((await audit.list({ action: 'install' }))[0]?.reason).toBe(
+      'plugin.remote_entry_missing',
+    );
+  });
+
+  it("mode: 'remote' с dist/server.js → установка ок, в lock mode и remote_entry", async () => {
+    const dir = await makeBundle({
+      manifest: manifest({ mode: 'remote' }),
+      files: { 'dist/server.js': 'export function apply() {}\n' },
+    });
+    const { installer, layout, lock } = await makeInstaller();
+
+    const result = await installer.installFromDirectory({
+      dir,
+      trustLevel: 'trusted',
+      source: 'local',
+      installKind: 'deploy',
+    });
+
+    expect(result.outcome).toBe('installed');
+    if (result.outcome !== 'installed') return;
+    const entry = await lock.get('demo-plugin');
+    expect(entry?.mode).toBe('remote');
+    expect(entry?.remote_entry).toBe('dist/server.js');
+    // Точка входа процесса реально попала в установленный бандл.
+    expect(existsSync(join(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'), 'dist', 'server.js'))).toBe(
+      true,
+    );
+  });
+
+  it("mode: 'both' с dist/server.js → в lock mode 'both' и remote_entry", async () => {
+    const dir = await makeBundle({
+      manifest: manifest({ mode: 'both' }),
+      files: { 'dist/server.js': 'export function apply() {}\n' },
+    });
+    const { installer, lock } = await makeInstaller();
+
+    const result = await installer.installFromDirectory({
+      dir,
+      trustLevel: 'trusted',
+      source: 'local',
+      installKind: 'deploy',
+    });
+
+    expect(result.outcome).toBe('installed');
+    const entry = await lock.get('demo-plugin');
+    expect(entry?.mode).toBe('both');
+    expect(entry?.remote_entry).toBe('dist/server.js');
+  });
+
+  it("mode: 'both' без dist/server.js → установка ок, mode 'both' без remote_entry", async () => {
+    const dir = await makeBundle({ manifest: manifest({ mode: 'both' }) });
+    const { installer, lock } = await makeInstaller();
+
+    const result = await installer.installFromDirectory({
+      dir,
+      trustLevel: 'trusted',
+      source: 'local',
+      installKind: 'deploy',
+    });
+
+    expect(result.outcome).toBe('installed');
+    const entry = await lock.get('demo-plugin');
+    expect(entry?.mode).toBe('both');
+    expect(entry?.remote_entry).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(entry, 'remote_entry')).toBe(false);
+  });
+
+  it('approve: карантин mode remote без dist/server.js → plugin.remote_entry_missing, карантин остаётся', async () => {
+    const { installer, layout, lock } = await makeInstaller();
+    const qdir = await stageQuarantine(layout, {
+      manifest: manifest({ mode: 'remote' }),
+      files: { 'dist/index.js': 'export function apply() {}\n' },
+    });
+
+    const result = await installer.approve('demo-plugin');
+
+    expect(result.outcome).toBe('rejected');
+    if (result.outcome !== 'rejected') return;
+    expect(result.reason).toBe('plugin.remote_entry_missing');
+    expect(result.message).toContain('dist/server.js');
+    // Бандл не перенесён из карантина, lock не записан.
+    expect(existsSync(qdir)).toBe(true);
+    expect(existsSync(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'))).toBe(false);
+    expect(await lock.list()).toEqual([]);
+  });
+
+  it('approve: карантин mode remote с dist/server.js → установка, в lock mode и remote_entry', async () => {
+    const { installer, layout, lock } = await makeInstaller();
+    const qdir = await stageQuarantine(layout, {
+      manifest: manifest({ mode: 'remote' }),
+      files: {
+        'dist/index.js': 'export function apply() {}\n',
+        'dist/server.js': 'export function apply() {}\n',
+      },
+    });
+
+    const result = await installer.approve('demo-plugin');
+
+    expect(result.outcome).toBe('installed');
+    if (result.outcome !== 'installed') return;
+    expect(result.dir).toBe(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'));
+    expect(existsSync(qdir)).toBe(false);
+    const entry = await lock.get('demo-plugin');
+    expect(entry?.mode).toBe('remote');
+    expect(entry?.remote_entry).toBe('dist/server.js');
+  });
+});

@@ -166,7 +166,9 @@ function makeHost(over: {
     config: config(),
     hostVersion: '0.11.4',
     logger: silentLogger,
-    loader: createRemotePluginLoader({ logger: silentLogger }),
+    // Ф4б-2: хост выбирает транспорт по режиму/дескриптору, поэтому удалённый
+    // загрузчик передаётся каналом `loaders.remote` (а не `loader` — это inline).
+    loaders: { remote: createRemotePluginLoader({ logger: silentLogger }) },
     promptBlocks,
     llmFilters,
   });

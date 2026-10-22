@@ -54,7 +54,7 @@ ADR-097): реализация доменных портов `StorageContext` (`
 Волна **3a — инфраструктура драйвера** (готова): пул/подключение, схема БД и
 миграции, сборка контекста. Волна **3b — порты** (готова): все доменные порты
 `StorageContext` реализованы и проходят контрактный suite
-(`packages/core/src/storage/contract/postgres.test.ts` → 128/128 против
+(`packages/core/src/storage/contract/postgres.test.ts` → 132/132 против
 живого PostgreSQL 17). Проводка домена — через `storage.backend = postgres`.
 
 **Текущий статус (сводно).** Реализованы: все 38 доменных порта (группы
@@ -271,7 +271,7 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
   `CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public;` в базе прогона; тогда
   `DROP SCHEMA … CASCADE` его не трогает, а `search_path = <схема>, public`
   находит опкласс. С этим обходом весь контрактный suite core проходит против
-  живой БД: 128/128 (в т.ч. `PG → PluginLockRepository` — 6/6,
+  живой БД: 132/132 (в т.ч. `PG → PluginLockRepository` — 10/10,
   `PG → PluginAuditRepository` — 7/7).
 
 ## Критерий приёмки
@@ -303,7 +303,7 @@ workspace) остаются file-специфичными ([ADR-091](../../docs/
   (тот же гейт `SYNTH_TEST_POSTGRES_DSN`, уникальная схема на каждый `make()`,
   `vi.setConfig({ testTimeout: 30000 })` — миграции под параллельной нагрузкой):
   проходят **все** блоки контрактного suite (35 портов; `AnalyticsRollupRepository` — 11 блоков,
-  `PluginLockRepository` — 6 блоков, `PluginAuditRepository` — 7 блоков).
+  `PluginLockRepository` — 10 блоков, `PluginAuditRepository` — 7 блоков).
   Пример: `SYNTH_TEST_POSTGRES_DSN="postgres://synth:<pw>@127.0.0.1:5432/synth_test" pnpm --filter @itphx/synth-storage-postgres test`.
 - Сборка: `pnpm --filter @itphx/synth-storage-postgres build` (`tsc -p tsconfig.build.json`);
   порядок релизной сборки — `shared → core → storage-postgres → ui → sdk → synth`

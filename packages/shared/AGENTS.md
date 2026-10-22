@@ -246,7 +246,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `scan`/`filter` — `filter` добавлено Ф3б: события решений фильтров LLM-вызовов, `install`/`uninstall` —
   Ф5а: установка и снятие плагина `PluginInstaller`),
   `PLUGIN_AUDIT_OUTCOMES` (`ok`/`rejected`), `PLUGIN_SCAN_VERDICTS` (`safe`/`caution`/`dangerous`),
-  `PLUGIN_AUDIT_REASONS` — **закрытый** список **26** кодов отказа (по одному на гейт пайплайна
+  `PLUGIN_AUDIT_REASONS` — **закрытый** список **27** кодов отказа (по одному на гейт пайплайна
   активации; Д1 добавил `plugin.source_unavailable` — источник установки недоступен или не прошёл
   проверку целостности: локальный путь/архив, npm без SRI или с несовпадением, URL без pin/с
   несовпадением sha256; Ф2 добавил `plugin.scan_rejected` и `plugin.approval_required`, Ф3а —

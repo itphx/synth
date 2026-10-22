@@ -13,11 +13,16 @@
  * но драйвер не полагается на это: строка нормализуется (объект или JSON-
  * строка), неполное значение игнорируется (fail-safe — откат просто
  * недоступен, чтение записи не падает).
+ *
+ * **Режим исполнения (Ф4б-2).** Колонки `mode text` и `remote_entry text`
+ * (миграция `010`): режим `inline`/`remote`/`both` и путь к серверной точке
+ * входа (`dist/server.js`) нужны активации, чтобы выбрать транспорт и поднять
+ * процесс. `NULL` — поле в домене отсутствует (legacy-запись).
  */
 
 import type { PluginLockEntry, PluginLockPrevious } from '@itphx/synth-shared';
 import type { CatalogTrustLevel } from '@itphx/synth-shared';
-import type { PluginScanVerdict } from '@itphx/synth-shared';
+import type { PluginScanVerdict, PackPluginMode } from '@itphx/synth-shared';
 import type { PluginLockRepository, StorageContext } from '@itphx/synth-core';
 import type { PostgresExecutor } from '../pool.js';
 import type { PortDeps } from './deps.js';
@@ -66,6 +71,10 @@ interface PluginLockRow extends Row {
   installed_at: Date | string;
   updated_at: Date | string;
   previous?: unknown;
+  /** Режим исполнения плагина (`inline`/`remote`/`both`) — Ф4б-2. */
+  mode?: string | null;
+  /** Точка входа удалённого процесса (`dist/server.js`) — Ф4б-2. */
+  remote_entry?: string | null;
 }
 
 function pluginLockRowToEntry(row: PluginLockRow): PluginLockEntry {
@@ -84,6 +93,12 @@ function pluginLockRowToEntry(row: PluginLockRow): PluginLockEntry {
   if (row.entry !== null) entry.entry = row.entry;
   const previous = normalizePrevious(row.previous);
   if (previous) entry.previous = previous;
+  if (row.mode !== null && row.mode !== undefined) {
+    entry.mode = row.mode as PackPluginMode;
+  }
+  if (row.remote_entry !== null && row.remote_entry !== undefined) {
+    entry.remote_entry = row.remote_entry;
+  }
   return entry;
 }
 
@@ -99,8 +114,8 @@ class PostgresPluginLockRepository implements PluginLockRepository {
     await this._db().query(
       `INSERT INTO plugin_lock
          (name, version, source, identifier, trust_level, scan_verdict, content_hash,
-          ref, entry, installed_at, updated_at, previous)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          ref, entry, installed_at, updated_at, previous, mode, remote_entry)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        ON CONFLICT (name) DO UPDATE SET
          version      = EXCLUDED.version,
          source       = EXCLUDED.source,
@@ -112,7 +127,9 @@ class PostgresPluginLockRepository implements PluginLockRepository {
          entry        = EXCLUDED.entry,
          installed_at = plugin_lock.installed_at,
          updated_at   = EXCLUDED.updated_at,
-         previous     = EXCLUDED.previous`,
+         previous     = EXCLUDED.previous,
+         mode         = EXCLUDED.mode,
+         remote_entry = EXCLUDED.remote_entry`,
       [
         entry.name,
         entry.version,
@@ -126,6 +143,8 @@ class PostgresPluginLockRepository implements PluginLockRepository {
         entry.installed_at,
         entry.updated_at,
         entry.previous ? JSON.stringify(entry.previous) : null,
+        entry.mode ?? null,
+        entry.remote_entry ?? null,
       ],
     );
   }

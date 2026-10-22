@@ -21,6 +21,9 @@
  * активация имеет побочные эффекты (регистрации), поэтому переключение
  * выполняется явно — `deactivate()` → `activate()`.
  */
+import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import {
   DEFAULT_EXTENSION_CONTRACT,
   checkExtensionCompatibility,
@@ -62,6 +65,7 @@ import type {
 import { pluginLoadFailureReason } from './activation.js';
 import { readExactHostExceptions } from './exact-host-exceptions.js';
 import { verifyPluginIntegrity } from './integrity.js';
+import { DEFAULT_PLUGIN_ENTRY } from './inline-loader.js';
 import { createPluginScanHook } from './scan/hook.js';
 
 /**
@@ -132,8 +136,25 @@ export interface PluginHostOptions {
    * сканера (категория `injection`).
    */
   dictionaryStore?: DictionaryRepository;
-  /** Загрузчик кода — точка расширения Ф3 (`inline`) / Ф4 (`out-of-process`). */
+  /**
+   * Загрузчик `inline` (код в процессе core) — исторически опция `loader`
+   * (Ф4а). Эквивалент `loaders.inline`; `loaders.inline` приоритетнее.
+   */
   loader?: PluginLoader;
+  /**
+   * Ф4б-2: загрузчики по режиму исполнения манифеста.
+   *
+   * Хост выбирает транспорт в шаге `import` (детерминированно):
+   * - `mode: 'inline'` → `inline`;
+   * - `mode: 'remote'` → `remote`;
+   * - `mode: 'both'` → `inline`, если в бандле есть `dist/index.js`, иначе `remote`;
+   * - режим не задан → `inline`;
+   * - `descriptor.remote` (явный url+token) → `remote` приоритетнее режима.
+   *
+   * Не задан нужный загрузчик → шаг `import` завершается
+   * `plugin.loader_unavailable` с пояснением, какой транспорт требуется.
+   */
+  loaders?: { inline?: PluginLoader; remote?: PluginLoader };
   /**
    * Ф3а: реестр провайдеров блоков системного промпта (точка `promptBlocks`).
    *
@@ -181,7 +202,9 @@ export class PluginHost {
    * скан выключен политикой.
    */
   private readonly _builtinScan: PluginScanHook;
-  private readonly _loader: PluginLoader | undefined;
+  private readonly _inlineLoader: PluginLoader | undefined;
+  /** Ф4б-2: загрузчик `out-of-process` (поднимает процесс или работает с `descriptor.remote`). */
+  private readonly _remoteLoader: PluginLoader | undefined;
   /** Ф3а: реестр провайдеров блоков системного промпта (точка `promptBlocks`). */
   private readonly _promptBlocks: PromptBlockRegistry | undefined;
   /** Ф3б: реестр фильтров LLM-вызовов (точка `llmFilters`). */
@@ -205,7 +228,8 @@ export class PluginHost {
     this._builtinScan = createPluginScanHook({
       ...(options.dictionaryStore ? { dictionaryStore: options.dictionaryStore } : {}),
     });
-    this._loader = options.loader;
+    this._inlineLoader = options.loaders?.inline ?? options.loader;
+    this._remoteLoader = options.loaders?.remote;
     this._promptBlocks = options.promptBlocks;
     this._llmFilters = options.llmFilters;
     this._tools = options.tools;
@@ -330,12 +354,9 @@ export class PluginHost {
         'Исполнение кода плагинов выключено (plugins.executionEnabled=false) — загрузчик остановлен на шаге import.',
       );
     }
-    if (!this._loader) {
-      return failure(
-        'import',
-        'plugin.loader_unavailable',
-        'Загрузчик кода плагина недоступен (опция loader не передана; inline — createInlinePluginLoader) — шаг import остановлен.',
-      );
+    const selected = await this._selectLoader(ready);
+    if (!selected.ok) {
+      return failure('import', 'plugin.loader_unavailable', selected.message);
     }
 
     // ── Шаг 7: facade + шаг 8: сбор disposers ─────────────────────────
@@ -468,7 +489,7 @@ export class PluginHost {
 
     let module;
     try {
-      module = await this._loader(ready);
+      module = await selected.loader(ready);
     } catch (err) {
       // Причина берётся из `PluginLoadError` (Ф4а): «код загружен, но не
       // выполнил контракт» (`plugin.module_invalid`) — не то же самое, что
@@ -877,6 +898,87 @@ export class PluginHost {
   // ── Вспомогательное ────────────────────────────────────────────────
 
   /**
+   * Выбрать загрузчик по режиму исполнения (Ф4б-2, «детерминированный выбор
+   * хоста»).
+   *
+   * Приоритет: явный `descriptor.remote` (уже запущенный процесс) → `mode`
+   * манифеста. Для `both` inline выбирается ровно тогда, когда в бандле есть
+   * `dist/index.js` (на диске `rootDir` или в переданных `files`): иначе
+   * inline-загрузчик гарантированно отказал бы, поэтому берётся remote.
+   * Режим не задан — дефолт манифеста `inline`.
+   */
+  private async _selectLoader(
+    descriptor: PluginActivationDescriptor,
+  ): Promise<
+    | { ok: true; loader: PluginLoader; transport: 'inline' | 'remote' }
+    | { ok: false; message: string }
+  > {
+    const inlineLoader = this._inlineLoader;
+    const remoteLoader = this._remoteLoader;
+
+    if (descriptor.remote) {
+      return remoteLoader
+        ? { ok: true, loader: remoteLoader, transport: 'remote' }
+        : {
+            ok: false,
+            message:
+              `Плагин «${descriptor.name}»: в дескрипторе задан удалённый процесс ` +
+              '(descriptor.remote), но загрузчик out-of-process не подключён ' +
+              '(PluginHostOptions.loaders.remote) — шаг import остановлен.',
+          };
+    }
+
+    const mode = descriptor.manifest.mode ?? 'inline';
+    if (mode === 'inline') {
+      return inlineLoader
+        ? { ok: true, loader: inlineLoader, transport: 'inline' }
+        : {
+            ok: false,
+            message:
+              `Плагин «${descriptor.name}»: режим inline, но inline-загрузчик не подключён ` +
+              '(PluginHostOptions.loader/loaders.inline) — шаг import остановлен.',
+          };
+    }
+    if (mode === 'remote') {
+      return remoteLoader
+        ? { ok: true, loader: remoteLoader, transport: 'remote' }
+        : {
+            ok: false,
+            message:
+              `Плагин «${descriptor.name}»: режим remote, но загрузчик out-of-process не ` +
+              'подключён (PluginHostOptions.loaders.remote) — шаг import остановлен.',
+          };
+    }
+
+    // mode === 'both': inline — только при наличии dist/index.js в бандле.
+    const preferInline = await hasInlineBundle(descriptor);
+    const preferred = preferInline ? inlineLoader : remoteLoader;
+    if (preferred) {
+      return {
+        ok: true,
+        loader: preferred,
+        transport: preferInline ? 'inline' : 'remote',
+      };
+    }
+    // Предпочтительного загрузчика нет — берём второй, если он есть (иначе
+    // установка «both» без файла dist/index.js не активировалась бы вовсе).
+    const fallback = preferInline ? remoteLoader : inlineLoader;
+    if (fallback) {
+      return {
+        ok: true,
+        loader: fallback,
+        transport: preferInline ? 'remote' : 'inline',
+      };
+    }
+    return {
+      ok: false,
+      message:
+        `Плагин «${descriptor.name}»: режим both, но ни один загрузчик не подключён ` +
+        '(PluginHostOptions.loader/loaders) — шаг import остановлен.',
+    };
+  }
+
+  /**
    * Список точных исключений семвер-гейта: явный список из опций перекрывает
    * файл конфига; файл читается один раз и кэшируется.
    */
@@ -989,5 +1091,21 @@ export class PluginHost {
         `не удалось записать событие аудита плагинов (${input.action}/${input.plugin}): ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+}
+
+/**
+ * Есть ли в бандле точка входа inline (`dist/index.js`).
+ *
+ * Сначала — состав файлов дескриптора (активация из установки/старта), затем
+ * каталог `rootDir` (если дескриптор без `files`). Ошибки чтения — `false`.
+ */
+async function hasInlineBundle(descriptor: PluginActivationDescriptor): Promise<boolean> {
+  if (descriptor.files && DEFAULT_PLUGIN_ENTRY in descriptor.files) return true;
+  if (!descriptor.rootDir) return false;
+  try {
+    return (await stat(join(descriptor.rootDir, DEFAULT_PLUGIN_ENTRY))).isFile();
+  } catch {
+    return false;
   }
 }

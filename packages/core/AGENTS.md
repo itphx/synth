@@ -666,7 +666,7 @@
   исключений семвер-гейта: **одна полная semver-версия host в строке**, `#` — комментарий,
   не-semver строка пропускается с предупреждением, недоступный файл → исключений нет
   (fail-closed)), `index.ts` — баррел. **Коды отказа** (`PLUGIN_AUDIT_REASONS`,
-  `shared/src/types/plugin-audit.ts`, всего **26**): `plugin.not_found` (resolve),
+  `shared/src/types/plugin-audit.ts`, всего **27**): `plugin.not_found` (resolve),
   `plugin.source_unavailable` (Д1 — источник бандла недоступен или не прошёл проверку целостности:
   локальный путь/архив не распакован, npm без SRI / с несовпадением SRI-sha512 или shasum, URL без pin
   или с несовпадением sha256; отказ **до** гейтов установщика), `plugin.manifest_invalid` (resolve),
@@ -787,7 +787,7 @@
 - `engine/plugins/archive.ts` — **Д1: свой tar-ридер и распаковка** `.tar.gz`/`.tgz` **без новых
   зависимостей** (`node:zlib` + разбор tar; `node:zlib/promises` в Node нет — `promisify`).
   `extractPluginArchive(bytes, {limits?, stripPrefix?, destDir?})` → `{dir, files, totalBytes, cleanup}`:
-  блоки 512, ustar/pax (`x`/`g`)/GNU long name (`L`), **только** обычные файлы (`0`/` `/`7`) и каталоги
+  блоки 512, ustar/pax (`x`/`g`)/GNU long name (`L`), **только** обычные файлы (`0`/`NUL`/`7`) и каталоги
   (`5`); симлинки/hardlink/устройства/FIFO — отказ; путь нормализуется (`\`→`/`, `./`), отклоняются
   абсолютный путь, `..`, windows-диск (`C:`), NUL, пустое имя файла, длина > `maxPathLength`; лимиты
   **500 записей / 16 МиБ файл / 64 МиБ сумма** проверяются по заголовку до записи (плюс
@@ -835,6 +835,21 @@
   сетевые `npm`/`url` разрешены — это не путь с ФС хоста). Опция `sourceContext` — инъекция
   сети/лимитов источников (тесты). ⚠️ Backend импортирует core из `dist` — после правок
   `server/routes/*` обязателен `pnpm --filter @itphx/synth-core build` перед backend-тестами.
+- **Транспорты исполнения (Ф4б-1/Ф4б-2).** `engine/plugins/remote/*`: `client.ts`
+  (`RemotePluginClient` — **только loopback** `127.0.0.1/::1/localhost`, bearer на `/capabilities` и
+  `/invoke`, таймаут через `AbortSignal`, токен вырезается из текстов ошибок), `loader.ts`
+  (`createRemotePluginLoader` — режим `remote|both`, `descriptor.remote {url,token}` приоритетнее,
+  `capabilities()` до активации, прокси-регистрация блоков/фильтров с валидацией ответов),
+  `process.ts` (`PluginProcessManager` — spawn `process.execPath` без shell, env **ровно**
+  `PATH`/`NODE_ENV`/`SYNTH_PLUGIN_PORT`/`SYNTH_PLUGIN_TOKEN`, готовность по строке
+  `SYNTH_PLUGIN_READY port=<n>` + опрос `/health`, адрес только `127.0.0.1`, `SIGTERM`→`SIGKILL`,
+  токен-файл `{dataDir}/secrets/plugin-token` — `0600`, каталог `0700`, read-after-write ради общих
+  PVC реплик). **Выбор транспорта** — в шаге `import` хоста (`_selectLoader`): `descriptor.remote` →
+  remote; `manifest.mode` (`inline`/`remote`/`both`, дефолт `inline`); `both` → inline при наличии
+  `dist/index.js`. Загрузчики — опция хоста `loaders: { inline?, remote? }` (`loader` = inline).
+  `PluginRuntime` получает `loaders` и `processManager` — `dispose()` гасит процессы плагинов.
+  В lock — `mode`/`remote_entry` (PostgreSQL: миграция `010_plugin_lock_mode`); `mode: remote` без
+  `dist/server.js` → отказ `plugin.remote_entry_missing` (**27** кодов отказа).
 - **Обновление и откат (долги Д2).** `PluginInstaller.update(name, {version?, sha256?, activate?})`:
   источник берётся **из lock** (`npm` → `identifier` + `version`/`latest`; `local` → существующий каталог
   (`dir`) или `.tgz|.tar.gz` (`archive`); `url` → `identifier` + **обязательный** новый `sha256`;

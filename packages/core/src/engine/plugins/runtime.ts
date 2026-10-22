@@ -94,6 +94,17 @@ export interface PluginRuntimeDeps {
   tools: ToolRegistry;
   /** Загрузчик кода плагина (по умолчанию — `inline`: `createInlinePluginLoader`). */
   loader?: PluginLoader;
+  /**
+   * Ф4б-2: загрузчики по транспорту. Хост сам выбирает транспорт по
+   * `manifest.mode` (`inline`/`remote`/`both`): `inline` — код в процессе core,
+   * `remote` — отдельный процесс на loopback (`PluginProcessManager`).
+   */
+  loaders?: { inline?: PluginLoader; remote?: PluginLoader };
+  /**
+   * Ф4б-2: менеджер процессов удалённых плагинов — его `stopAll()` вызывается
+   * при `dispose()` (остановка инстанса): процессы не должны остаться висеть.
+   */
+  processManager?: { stopAll(): Promise<void> };
   /** Скан/проверка доверия (не задан — встроенный сканер `engine/plugins/scan/`). */
   scan?: PluginScanHook;
   /** Логгер (по умолчанию — `console.warn` с префиксом `[plugin-runtime]`). */
@@ -157,11 +168,14 @@ export class PluginRuntime {
 
   private readonly _lock: PluginLockRepository;
   private readonly _logger: PluginLogger;
+  /** Менеджер процессов удалённых плагинов (Ф4б-2) — гасится в `dispose`. */
+  private readonly _processManager: PluginRuntimeDeps['processManager'];
 
   constructor(deps: PluginRuntimeDeps) {
     this.layout = deps.layout;
     this.config = deps.config;
     this._lock = deps.lock;
+    this._processManager = deps.processManager;
     this._logger = deps.logger ?? {
       warn: (message: string) => {
         console.warn(`[plugin-runtime] ${message}`);
@@ -169,6 +183,7 @@ export class PluginRuntime {
     };
 
     this.host = new PluginHost({
+      ...(deps.loaders ? { loaders: deps.loaders } : {}),
       audit: deps.audit,
       config: deps.config,
       hostVersion: deps.hostVersion,
@@ -377,6 +392,9 @@ export class PluginRuntime {
       files,
       rootDir,
       entry: entry.entry ?? DEFAULT_PLUGIN_ENTRY,
+      // Ф4б-2: режим `remote` — хост поднимает отдельный процесс плагина;
+      // точка входа сервера приходит из lock (`dist/server.js`).
+      ...(entry.remote_entry ? { remoteEntry: entry.remote_entry } : {}),
       contentHash: entry.content_hash,
       trustLevel: entry.trust_level,
       installKind: 'deploy',

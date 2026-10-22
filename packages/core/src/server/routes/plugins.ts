@@ -180,6 +180,8 @@ export const PLUGIN_REASON_HTTP: Record<PluginAuditReason, number> = {
   // состояние не изменилось, клиенту нужна установка, а не конфликт ввода.
   'plugin.rollback_unavailable': 409,
   'plugin.manifest_invalid': 400,
+  // Банддл объявляет режим `remote`, но серверной точки входа нет — 400.
+  'plugin.remote_entry_missing': 400,
   'plugin.integrity_mismatch': 409,
   'plugin.integrity_unverifiable': 409,
   'plugin.contract_mismatch': 400,

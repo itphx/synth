@@ -18,6 +18,7 @@ import { MIGRATION_006_PLUGIN_AUDIT } from './006-plugin-audit.js';
 import { MIGRATION_007_PLUGIN_LOCK } from './007-plugin-lock.js';
 import { MIGRATION_008_PLUGIN_AUDIT_SCAN } from './008-plugin-audit-scan.js';
 import { MIGRATION_009_PLUGIN_LOCK_PREVIOUS } from './009-plugin-lock-previous.js';
+import { MIGRATION_010_PLUGIN_LOCK_MODE } from './010-plugin-lock-mode.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -40,6 +41,7 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 7, id: '007_plugin_lock', sql: MIGRATION_007_PLUGIN_LOCK },
   { version: 8, id: '008_plugin_audit_scan', sql: MIGRATION_008_PLUGIN_AUDIT_SCAN },
   { version: 9, id: '009_plugin_lock_previous', sql: MIGRATION_009_PLUGIN_LOCK_PREVIOUS },
+  { version: 10, id: '010_plugin_lock_mode', sql: MIGRATION_010_PLUGIN_LOCK_MODE },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

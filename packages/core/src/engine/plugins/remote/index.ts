@@ -3,7 +3,7 @@
  *
  * Ф4б-1 — wire-протокол (контракт — `@itphx/synth-shared`,
  * `types/plugin-protocol.ts`), клиент и загрузчик удалённых плагинов.
- * Управление процессом (spawn/health/stop, файл токена) — Ф4б-2.
+ * Ф4б-2 — жизненный цикл процесса (spawn/health/stop) и файл токена инстанса.
  */
 export {
   DEFAULT_REMOTE_PLUGIN_TIMEOUT_MS,
@@ -18,3 +18,17 @@ export type {
 } from './client.js';
 export { createRemotePluginLoader } from './loader.js';
 export type { RemotePluginLoaderOptions } from './loader.js';
+export {
+  DEFAULT_PLUGIN_HEALTH_TIMEOUT_MS,
+  DEFAULT_PLUGIN_READY_TIMEOUT_MS,
+  DEFAULT_PLUGIN_SERVER_ENTRY,
+  DEFAULT_PLUGIN_STOP_TIMEOUT_MS,
+  PLUGIN_TOKEN_FILE,
+  PluginProcessManager,
+  pluginTokenPath,
+} from './process.js';
+export type {
+  PluginProcessHandle,
+  PluginProcessManagerOptions,
+  RemotePluginProcess,
+} from './process.js';

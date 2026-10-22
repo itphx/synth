@@ -134,6 +134,13 @@ export const PLUGIN_AUDIT_REASONS = [
    * (`engine/plugins/inline-loader.ts` → `PluginLoadError`).
    */
   'plugin.module_invalid',
+  /**
+   * Ф4б-2: режим исполнения `remote`, но в бандле нет серверной точки входа
+   * `dist/server.js` — поднимать нечего. Установка/активация отклоняется
+   * (`PluginInstaller.installFromDirectory`/`approve`), в lock `remote_entry`
+   * не записывается.
+   */
+  'plugin.remote_entry_missing',
   /** Плагин уже активен — повторная активация отклонена. */
   'plugin.already_active',
   /** Плагин не активен — деактивация нечего снимать. */

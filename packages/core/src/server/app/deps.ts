@@ -55,6 +55,9 @@ import {
   // промпта (композер + фасад плагинов) и рантайм плагинов (старт-активация).
   PromptBlockRegistry,
   PluginRuntime,
+  PluginProcessManager,
+  createInlinePluginLoader,
+  createRemotePluginLoader,
   resolvePluginLayout,
   type BaseProvider,
   type PipelinePermissionDeps,
@@ -674,6 +677,15 @@ export async function createStandaloneDeps(
   // экземпляры, что у оркестратора: блоки промпта (`promptBlocks` выше), фильтры
   // LLM-вызовов (`getLlmFilters()`) и инструменты (`toolRegistry`).
   // `executionEnabled=false` (дефолт) → `activateInstalled()` — no-op.
+  // Ф4б-2: транспорты исполнения плагина. `inline` — код в процессе core;
+  // `remote` — отдельный процесс на loopback (менеджер поднимает его сам).
+  // Менеджер процессов нужен и хосту (выбор транспорта), и рантайму (гашение
+  // процессов при остановке инстанса).
+  const pluginProcessManager = new PluginProcessManager({
+    secretsDir: join(dataDir, 'secrets'),
+    logger: { warn: (message: string) => console.warn(`[plugin-process] ${message}`) },
+  });
+
   const pluginRuntime = new PluginRuntime({
     layout: resolvePluginLayout({ dataDir, env: process.env }),
     config: effectivePluginsConfig,
@@ -683,6 +695,11 @@ export async function createStandaloneDeps(
     promptBlocks,
     llmFilters: orchestrator.getLlmFilters(),
     tools: toolRegistry,
+    loaders: {
+      inline: createInlinePluginLoader(),
+      remote: createRemotePluginLoader({ processManager: pluginProcessManager }),
+    },
+    processManager: pluginProcessManager,
   });
 
   const processMessage = orchestrator.createProcessMessage();
