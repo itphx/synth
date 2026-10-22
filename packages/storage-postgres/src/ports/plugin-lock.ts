@@ -6,9 +6,16 @@
  * файловой реализации core (`FilePluginLockStore`): upsert по имени
  * (`installed_at` сохраняется, `updated_at` обновляется), чтечение, список с
  * детерминированным порядком по имени, снятие записи.
+ *
+ * **Ступень отката (долги Д2).** Колонка `previous jsonb` (миграция `009`) —
+ * одна предыдущая версия для `rollback`; отсутствует (`NULL`) у записи,
+ * поставленной обычной установкой. `pg` отдаёт `jsonb` разобранным объектом,
+ * но драйвер не полагается на это: строка нормализуется (объект или JSON-
+ * строка), неполное значение игнорируется (fail-safe — откат просто
+ * недоступен, чтение записи не падает).
  */
 
-import type { PluginLockEntry } from '@itphx/synth-shared';
+import type { PluginLockEntry, PluginLockPrevious } from '@itphx/synth-shared';
 import type { CatalogTrustLevel } from '@itphx/synth-shared';
 import type { PluginScanVerdict } from '@itphx/synth-shared';
 import type { PluginLockRepository, StorageContext } from '@itphx/synth-core';
@@ -20,6 +27,30 @@ type Row = Record<string, unknown>;
 function toISO(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
   return String(value);
+}
+
+/** Разобрать `previous` из `jsonb` (объект или JSON-строка); неполное — `undefined`. */
+function normalizePrevious(value: unknown): PluginLockPrevious | undefined {
+  let raw: unknown = value;
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return undefined;
+    }
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+  if (typeof record.version !== 'string' || typeof record.content_hash !== 'string') {
+    return undefined;
+  }
+  const previous: PluginLockPrevious = {
+    version: record.version,
+    content_hash: record.content_hash,
+    installed_at: typeof record.installed_at === 'string' ? record.installed_at : '',
+  };
+  if (typeof record.entry === 'string') previous.entry = record.entry;
+  return previous;
 }
 
 interface PluginLockRow extends Row {
@@ -34,6 +65,7 @@ interface PluginLockRow extends Row {
   entry: string | null;
   installed_at: Date | string;
   updated_at: Date | string;
+  previous?: unknown;
 }
 
 function pluginLockRowToEntry(row: PluginLockRow): PluginLockEntry {
@@ -50,6 +82,8 @@ function pluginLockRowToEntry(row: PluginLockRow): PluginLockEntry {
   if (row.identifier !== null) entry.identifier = row.identifier;
   if (row.ref !== null) entry.ref = row.ref;
   if (row.entry !== null) entry.entry = row.entry;
+  const previous = normalizePrevious(row.previous);
+  if (previous) entry.previous = previous;
   return entry;
 }
 
@@ -65,8 +99,8 @@ class PostgresPluginLockRepository implements PluginLockRepository {
     await this._db().query(
       `INSERT INTO plugin_lock
          (name, version, source, identifier, trust_level, scan_verdict, content_hash,
-          ref, entry, installed_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          ref, entry, installed_at, updated_at, previous)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (name) DO UPDATE SET
          version      = EXCLUDED.version,
          source       = EXCLUDED.source,
@@ -77,7 +111,8 @@ class PostgresPluginLockRepository implements PluginLockRepository {
          ref          = EXCLUDED.ref,
          entry        = EXCLUDED.entry,
          installed_at = plugin_lock.installed_at,
-         updated_at   = EXCLUDED.updated_at`,
+         updated_at   = EXCLUDED.updated_at,
+         previous     = EXCLUDED.previous`,
       [
         entry.name,
         entry.version,
@@ -90,6 +125,7 @@ class PostgresPluginLockRepository implements PluginLockRepository {
         entry.entry ?? null,
         entry.installed_at,
         entry.updated_at,
+        entry.previous ? JSON.stringify(entry.previous) : null,
       ],
     );
   }

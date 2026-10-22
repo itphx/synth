@@ -71,7 +71,10 @@ export type {
   PluginInstallRequest,
   PluginInstallerDeps,
   PluginManifestReadResult,
+  PluginRollbackOutcome,
   PluginUninstallResult,
+  PluginUpdateOptions,
+  PluginUpdateOutcome,
 } from './engine/plugins/index.js';
 // PROP-090 §«Источники установки» (Д1): свой tar-ридер и резолвинг dir/archive/npm/url.
 export { extractPluginArchive, PluginArchiveError } from './engine/plugins/index.js';

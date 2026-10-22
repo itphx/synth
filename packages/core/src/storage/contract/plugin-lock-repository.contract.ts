@@ -28,7 +28,9 @@ function entry(name: string, overrides: Partial<PluginLockEntry> = {}): PluginLo
  * - чтение (`null` для неизвестного), список (детерминированный порядок — по имени);
  * - снятие записи (`true`/`false`);
  * - провенанс (источник, pin `ref`, `content_hash`, доверие, вердикт скана)
- *   сохраняется без потерь.
+ *   сохраняется без потерь;
+ * - ступень отката `previous` (одна предыдущая версия): запись с ней читается
+ *   обратно, у записи без неё поле **отсутствует** (а не `null`).
  */
 export function describePluginLockRepository(
   name: string,
@@ -136,6 +138,56 @@ export function describePluginLockRepository(
       expect(stored?.identifier).toBeUndefined();
       expect(stored?.ref).toBeUndefined();
       expect(stored?.entry).toBeUndefined();
+    });
+
+    it('ступень отката `previous` сохраняется без потерь', async () => {
+      const { repo } = await make();
+      await repo.save(
+        entry('rollback-plugin', {
+          version: '2.0.0',
+          content_hash: 'b'.repeat(64),
+          previous: {
+            version: '1.0.0',
+            content_hash: 'a'.repeat(64),
+            entry: 'dist/old.js',
+            installed_at: '2026-01-01T00:00:00.000Z',
+          },
+        }),
+      );
+
+      const stored = await repo.get('rollback-plugin');
+      expect(stored?.version).toBe('2.0.0');
+      expect(stored?.previous).toEqual({
+        version: '1.0.0',
+        content_hash: 'a'.repeat(64),
+        entry: 'dist/old.js',
+        installed_at: '2026-01-01T00:00:00.000Z',
+      });
+    });
+
+    it('без `previous` поле отсутствует (не null) — и снимается при перезаписи', async () => {
+      const { repo } = await make();
+      await repo.save(
+        entry('plain-plugin', {
+          previous: {
+            version: '0.9.0',
+            content_hash: 'd'.repeat(64),
+            installed_at: '2025-12-01T00:00:00.000Z',
+          },
+        }),
+      );
+      // Перезапись без предыдущей версии: ступень не «залипает».
+      await repo.save(
+        entry('plain-plugin', {
+          version: '2.0.0',
+          content_hash: 'e'.repeat(64),
+          updated_at: '2026-06-01T00:00:00.000Z',
+        }),
+      );
+
+      const stored = await repo.get('plain-plugin');
+      expect(stored?.previous).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(stored, 'previous')).toBe(false);
     });
   });
 }

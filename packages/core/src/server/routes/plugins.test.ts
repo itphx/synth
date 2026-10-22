@@ -421,13 +421,88 @@ describe('Plugins API — жизненный цикл (PROP-090 Ф5б-2)', () =>
     expect(second.status).toBe(204);
   });
 
-  it('POST /plugins/update: 501 NOT_IMPLEMENTED (обновление — долги Д2)', async () => {
+  it('POST /plugins/update: 200 unchanged/updated, 400 VALIDATION_ERROR, 404 not_found', async () => {
     const { app } = await makeStand();
-    const res = await jsonReq(app, 'POST', '/api/v2/plugins/update', { name: 'demo-plugin' });
-    expect(res.status).toBe(501);
-    const error = await errorOf(res);
-    expect(error.code).toBe('NOT_IMPLEMENTED');
-    expect(error.message).toContain('Д2');
+    const bundle = await makeBundle();
+    expect((await jsonReq(app, 'POST', '/api/v2/plugins/install', { path: bundle })).status).toBe(201);
+
+    // Бандл источника тот же — обновлять нечего.
+    const unchanged = await jsonReq(app, 'POST', '/api/v2/plugins/update', {
+      name: 'demo-plugin',
+    });
+    expect(unchanged.status).toBe(200);
+    const unchangedBody = (await unchanged.json()) as { outcome: string; version: string };
+    expect(unchangedBody.outcome).toBe('unchanged');
+    expect(unchangedBody.version).toBe('1.0.0');
+
+    // Версия в бандле источника выросла → installed + previous в lock.
+    await writeFile(
+      join(bundle, 'synth.pack'),
+      `${JSON.stringify(manifest({ version: '2.0.0' }), null, 2)}\n`,
+      'utf-8',
+    );
+    const updated = await jsonReq(app, 'POST', '/api/v2/plugins/update', {
+      name: 'demo-plugin',
+    });
+    expect(updated.status).toBe(200);
+    const updatedBody = (await updated.json()) as {
+      outcome: string;
+      version: string;
+      previousVersion: string;
+      contentHash: string;
+    };
+    expect(updatedBody.outcome).toBe('updated');
+    expect(updatedBody.version).toBe('2.0.0');
+    expect(updatedBody.previousVersion).toBe('1.0.0');
+
+    // Тело: `name` обязателен; `sha256` — 64 hex.
+    expect(
+      (await errorOf(await jsonReq(app, 'POST', '/api/v2/plugins/update', {}))).code,
+    ).toBe('VALIDATION_ERROR');
+    expect(
+      (await errorOf(await jsonReq(app, 'POST', '/api/v2/plugins/update', { name: 'x', sha256: 'abc' })))
+        .code,
+    ).toBe('VALIDATION_ERROR');
+
+    const missing = await jsonReq(app, 'POST', '/api/v2/plugins/update', { name: 'absent' });
+    expect(missing.status).toBe(404);
+    expect((await errorOf(missing)).code).toBe('plugin.not_found');
+  });
+
+  it('POST /plugins/:name/rollback: 200 rolled_back, 409 без previous, 404 not_found', async () => {
+    const { app } = await makeStand();
+    const bundle = await makeBundle();
+    expect((await jsonReq(app, 'POST', '/api/v2/plugins/install', { path: bundle })).status).toBe(201);
+
+    // Плагин не обновлялся — ступени отката нет.
+    const noPrevious = await jsonReq(app, 'POST', '/api/v2/plugins/demo-plugin/rollback');
+    expect(noPrevious.status).toBe(409);
+    expect((await errorOf(noPrevious)).code).toBe('plugin.rollback_unavailable');
+
+    // Обновление → откат возвращает прежнюю версию (swap).
+    await writeFile(
+      join(bundle, 'synth.pack'),
+      `${JSON.stringify(manifest({ version: '2.0.0' }), null, 2)}\n`,
+      'utf-8',
+    );
+    expect(
+      (await jsonReq(app, 'POST', '/api/v2/plugins/update', { name: 'demo-plugin' })).status,
+    ).toBe(200);
+
+    const rolledBack = await jsonReq(app, 'POST', '/api/v2/plugins/demo-plugin/rollback');
+    expect(rolledBack.status).toBe(200);
+    const body = (await rolledBack.json()) as {
+      outcome: string;
+      version: string;
+      previousVersion: string;
+    };
+    expect(body.outcome).toBe('rolled_back');
+    expect(body.version).toBe('1.0.0');
+    expect(body.previousVersion).toBe('2.0.0');
+
+    const missing = await jsonReq(app, 'POST', '/api/v2/plugins/absent/rollback');
+    expect(missing.status).toBe(404);
+    expect((await errorOf(missing)).code).toBe('plugin.not_found');
   });
 });
 
@@ -441,6 +516,7 @@ describe('Plugins API — таблица причин → HTTP', () => {
     expect(PLUGIN_REASON_HTTP['plugin.scan_disabled_with_execution']).toBe(403);
     expect(PLUGIN_REASON_HTTP['plugin.scan_rejected']).toBe(409);
     expect(PLUGIN_REASON_HTTP['plugin.not_found']).toBe(404);
+    expect(PLUGIN_REASON_HTTP['plugin.rollback_unavailable']).toBe(409);
     expect(PLUGIN_REASON_HTTP['plugin.approval_required']).toBe(202);
     const twoHundreds = Object.entries(PLUGIN_REASON_HTTP)
       .filter(([, status]) => status < 400)

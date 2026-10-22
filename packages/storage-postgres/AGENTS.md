@@ -91,11 +91,11 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
   (`src/migrations/001-init.ts`, `002-egress-audit.ts`, `003-analytics-rollups.ts`,
   `004-pipeline-engine.ts`, `005-pipeline-provenance.ts`, `006-plugin-audit.ts`,
   `007-plugin-lock.ts`, `008-plugin-audit-scan.ts`) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
-  Миграции **006–008** — слой плагинов (PROP-090): `006_plugin_audit` (таблица `plugin_audit`,
+  Миграции **006–009** — слой плагинов (PROP-090): `006_plugin_audit` (таблица `plugin_audit`,
   `seq bigserial` — порядок «свежие первыми»), `007_plugin_lock` (таблица `plugin_lock`, PK — имя
   плагина; upsert — `ON CONFLICT`; `installed_at` при перезаписи сохраняется),
   `008_plugin_audit_scan` (`ALTER TABLE plugin_audit ADD COLUMN IF NOT EXISTS scan_performed boolean /
-  scan_findings integer` — Ф2). Все идемпотентны.
+  scan_findings integer` — Ф2). `009_plugin_lock_previous` (долги Д2) — колонка `previous jsonb` (ступень отката версии в lock). Все идемпотентны.
   `runMigrations(conn, { schema })`: `CREATE SCHEMA IF NOT EXISTS` → advisory-лок
   (`synth:migrate:<schema>`) → применение по возрастанию версии (каждая миграция —
   в транзакции с записью версии). **Fail-closed**, если версия в БД **больше**

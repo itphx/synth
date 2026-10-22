@@ -653,7 +653,7 @@
   исключений семвер-гейта: **одна полная semver-версия host в строке**, `#` — комментарий,
   не-semver строка пропускается с предупреждением, недоступный файл → исключений нет
   (fail-closed)), `index.ts` — баррел. **Коды отказа** (`PLUGIN_AUDIT_REASONS`,
-  `shared/src/types/plugin-audit.ts`, всего **25**): `plugin.not_found` (resolve),
+  `shared/src/types/plugin-audit.ts`, всего **26**): `plugin.not_found` (resolve),
   `plugin.source_unavailable` (Д1 — источник бандла недоступен или не прошёл проверку целостности:
   локальный путь/архив не распакован, npm без SRI / с несовпадением SRI-sha512 или shasum, URL без pin
   или с несовпадением sha256; отказ **до** гейтов установщика), `plugin.manifest_invalid` (resolve),
@@ -816,6 +816,20 @@
   сетевые `npm`/`url` разрешены — это не путь с ФС хоста). Опция `sourceContext` — инъекция
   сети/лимитов источников (тесты). ⚠️ Backend импортирует core из `dist` — после правок
   `server/routes/*` обязателен `pnpm --filter @itphx/synth-core build` перед backend-тестами.
+- **Обновление и откат (долги Д2).** `PluginInstaller.update(name, {version?, sha256?, activate?})`:
+  источник берётся **из lock** (`npm` → `identifier` + `version`/`latest`; `local` → существующий каталог
+  (`dir`) или `.tgz|.tar.gz` (`archive`); `url` → `identifier` + **обязательный** новый `sha256`;
+  `catalog`/прочее → `plugin.source_unavailable`); резолвинг → `collectBundleFiles` + hash → совпал с
+  lock → **`unchanged`** (ни lock, ни `updated_at` не меняются); иначе `installFromDirectory` с
+  `keepPrevious: true` (каталог прежней версии **не** удаляется, в lock пишется
+  `previous = {version, content_hash, entry?, installed_at}` — **одна** ступень), затем активация по
+  факту (был активен → деактивация старого модуля + активация нового; `activate` переопределяет).
+  Доверие — из lock (не запрашивается заново); гейты — те же, что у установки. `rollback(name)`:
+  ступень `previous` + каталог `installed/<name>@<prev>` обязательны (иначе `plugin.rollback_unavailable`
+  — новый код), деактивация активного → **swap** (`version`/`content_hash`/`entry` ← `previous`,
+  `previous` ← откатанная; `installed_at` иммутабелен) → аудит `rollback` → активация откатанной
+  версии. Хранилище: `PluginLockEntry.previous` — файл/память как есть, PG — колонка `previous jsonb`
+  (миграция `009_plugin_lock_previous`), кейс в контрактном suite порта.
 - **Шаг trust/scan в `PluginHost` (Ф2).** Порядок: **trust-floor → скан → install-policy**.
   Trust-floor проверяется **до** install-policy (`plugins.trustFloor`; ниже порога — отказ
   `plugin.trust_below_floor` **при любом вердикте**). Скан — встроенный или подключённый хук
@@ -824,8 +838,8 @@
   (`installPolicyDecision`, `shared/src/types/plugin-scan.ts`). Сбой сканера — **fail-closed**
   (`plugin.scan_rejected`). При `plugins.scan: 'disabled'` сканирование **не выполняется**, вердикт
   `safe`, в аудите — `scanPerformed: false`; доверие при этом всё равно проверяется по trust-floor.
-  **Аудит:** действия `activate`/`deactivate`/`scan`/`filter` + Ф5а — `install`/`uninstall`
-  (`PLUGIN_AUDIT_ACTIONS`; порядок — жизненный цикл, `install` перед `activate`); запись получила
+  **Аудит:** действия `install`/`activate`/`deactivate`/`rollback`/`uninstall`/`scan`/`filter`
+  (`PLUGIN_AUDIT_ACTIONS`; порядок — жизненный цикл; `rollback` добавлен долгами Д2); запись получила
   поля `scanVerdict?`/`scanPerformed?`/`scanFindings?`.
 - `engine/pipelines/*` — ADR-101: **второй движок** рядом с `ChatOrchestrator`
   (шаг пайплайна ≠ сессия; движок сам по себе не знает про HTTP/сессии/очередь).

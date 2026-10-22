@@ -1551,7 +1551,8 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 | POST | `/api/v2/plugins/:name/enable` | оба | ADMIN или `addons:install` / auth | Активация (пайплайн PROP-090 §10) → `200 {activation}`; отказ по гейту (`plugin.execution_disabled`/`trust_below_floor`/`scan_rejected`/`approval_required`) → `409` с `reason`; нет в lock → `404` |
 | POST | `/api/v2/plugins/:name/disable` | оба | ADMIN или `addons:install` / auth | Обратная прокрутка disposers → `200 {deactivation}`; не активен → `404 plugin.not_active` |
 | DELETE | `/api/v2/plugins/:name` | оба | **ADMIN** / auth | Снятие: деактивация → `lock.delete` → удаление каталога версии; **идемпотентно** → `204` даже если записи не было |
-| POST | `/api/v2/plugins/update` | оба | ADMIN или `addons:install` / auth | **`501 NOT_IMPLEMENTED`** — обновление по pinned ref/hash (сравнение версий и откат) ещё не реализовано (долги Д2); маршрут объявлен, чтобы контракт был виден клиентам |
+| POST | `/api/v2/plugins/:name/rollback` | оба | ADMIN или `addons:install` / auth | Откат на ступень `previous`: `200 {outcome:'rolled_back', version, previousVersion, activated?}`; нет ступени/каталога → `409 plugin.rollback_unavailable`, нет записи → `404 plugin.not_found` |
+| POST | `/api/v2/plugins/update` | оба | ADMIN или `addons:install` / auth | **Обновление из источника записи lock**: `200 {outcome:'unchanged'|'updated', ...}`; `400 VALIDATION_ERROR` (нет `name`/невалидный `sha256`) или `plugin.source_unavailable` для локального источника, `404 plugin.not_found`, `409 plugin.approval_required`/`scan_rejected`/`integrity_*`, `502 plugin.source_unavailable` для сетевого источника. Тело `{name, version?, sha256?, activate?}`; источник клиентом не выбирается |
 
 **Источники установки (`POST /plugins/install`).** Тело:
 `{source?: 'dir'|'archive'|'npm'|'url', path?, name?, version?, url?, sha256?, trustLevel?}`.
@@ -1570,13 +1571,25 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 windows-диски отклоняются), в `installed/`/`quarantine/` пишет только установщик. Ошибки резолвинга —
 `plugin.source_unavailable`: `400` для локальных источников, `502` для сетевых.
 
+**Обновление и откат (`POST /update`, `POST /:name/rollback`).** Источник обновления берётся **из
+записи lock** (`source`/`identifier`/`ref`), а не из тела: `npm` — `name` из lock, `version` из тела
+(по умолчанию `latest`); `local` — каталог или `.tgz`/`.tar.gz` из lock; `url` — адрес из lock +
+**обязательный** новый `sha256` (pin). Совпал `content_hash` — `200 {outcome:'unchanged'}` (ничего не
+пишется). Иначе — обычная установка с теми же гейтами (скан/trust-floor/install-policy), доверие
+берётся из lock, каталог прежней версии сохраняется, в lock пишется `previous` (одна ступень
+отката). Активация: был активен — новая версия активируется после деактивации старой; `activate:
+false` — не активировать, не задано — сохранить состояние. `rollback` меняет текущую и предыдущую
+версии местами (обратим), `installed_at` записи не меняется. Managed: запись lock с `source:
+'local'` при обновлении отклоняется (`403 LOCAL_INSTALL_DISABLED`) — иначе обновление обходило бы
+запрет локальной установки.
+
 **Маппинг причин отказа → HTTP** (исчерпывающая таблица `PLUGIN_REASON_HTTP` в
 `packages/core/src/server/routes/plugins.ts`): `400` — `manifest_invalid`, `contract_mismatch`,
 `host_mismatch`, `module_invalid`, `provides_mismatch`, `source_unavailable` (локальный источник);
 `403` — `trust_below_floor`, `disabled`,
 `not_allowlisted`, `denylisted`, `runtime_install_denied`, `scan_disabled_with_execution`;
 `404` — `not_found`, `not_active`; `409` — `scan_rejected`, `integrity_mismatch`,
-`integrity_unverifiable`, `execution_disabled`; `202` — `approval_required`; `500` —
+`integrity_unverifiable`, `execution_disabled`, `rollback_unavailable`; `202` — `approval_required`; `500` —
 `loader_unavailable`, `disposer_failed` (сбой хоста, не клиента); `502` — `source_unavailable` для
 сетевого источника. При активации
 `execution_disabled`/`trust_below_floor`/`scan_rejected`/`approval_required` → `409`, `not_found` →

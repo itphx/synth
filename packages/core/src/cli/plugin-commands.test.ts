@@ -565,3 +565,69 @@ describe('synth plugin install — источники установки (Д1)',
     expect(result.err).toContain('plugin.source_unavailable');
   });
 });
+
+describe('synth plugin update / rollback (долги Д2)', () => {
+  /** Поднять версию бандла на месте (источник записи lock — этот же каталог). */
+  async function bumpBundle(bundle: string, version: string): Promise<void> {
+    await writeFile(
+      join(bundle, 'synth.pack'),
+      `${JSON.stringify(manifest({ version }), null, 2)}\n`,
+      'utf-8',
+    );
+  }
+
+  it('update: тот же бандл → 0 «Уже актуален»; версия выросла → 0 «Обновлён»', async () => {
+    const harness = await makeHarness();
+    const bundle = await makeBundle();
+    expect((await runPlugin(harness, ['install', bundle, '--trust', 'trusted'])).code).toBe(0);
+
+    const same = await runPlugin(harness, ['update', 'cli-plugin']);
+    expect(same.code).toBe(0);
+    expect(same.out).toContain('Уже актуален: cli-plugin v1.0.0');
+
+    await bumpBundle(bundle, '2.0.0');
+    const updated = await runPlugin(harness, ['update', 'cli-plugin']);
+
+    expect(updated.code).toBe(0);
+    expect(updated.out).toContain('Обновлён: cli-plugin v1.0.0 → v2.0.0');
+    expect((await readLock(harness))['cli-plugin']?.version).toBe('2.0.0');
+  });
+
+  it('rollback: 0 «Откат: v2 → v1», повторный — обратно; без previous → 1', async () => {
+    const harness = await makeHarness();
+    const bundle = await makeBundle();
+    await runPlugin(harness, ['install', bundle, '--trust', 'trusted']);
+    await bumpBundle(bundle, '2.0.0');
+    expect((await runPlugin(harness, ['update', 'cli-plugin'])).code).toBe(0);
+
+    const rolledBack = await runPlugin(harness, ['rollback', 'cli-plugin']);
+    expect(rolledBack.code).toBe(0);
+    expect(rolledBack.out).toContain('Откат: cli-plugin v2.0.0 → v1.0.0');
+    expect((await readLock(harness))['cli-plugin']?.version).toBe('1.0.0');
+
+    const forward = await runPlugin(harness, ['rollback', 'cli-plugin']);
+    expect(forward.code).toBe(0);
+    expect(forward.out).toContain('Откат: cli-plugin v1.0.0 → v2.0.0');
+  });
+
+  it('rollback без предыдущей версии → 1, plugin.rollback_unavailable', async () => {
+    const harness = await makeHarness();
+    const bundle = await makeBundle();
+    await runPlugin(harness, ['install', bundle, '--trust', 'trusted']);
+
+    const result = await runPlugin(harness, ['rollback', 'cli-plugin']);
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('plugin.rollback_unavailable');
+    expect(result.err).toContain('synth plugin install');
+  });
+
+  it('update неизвестного плагина → 1, plugin.not_found', async () => {
+    const harness = await makeHarness();
+
+    const result = await runPlugin(harness, ['update', 'missing-plugin']);
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('plugin.not_found');
+  });
+});

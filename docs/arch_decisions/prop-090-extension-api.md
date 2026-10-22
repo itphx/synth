@@ -830,8 +830,15 @@ Home-модель ([ADR-079](./adr-079-local-home-independent-instances.md)); б
 ### Запись lock
 
 `plugins.lock.json` — на плагин: `{ name, version, source, identifier, trust_level, scan_verdict,
-content_hash, ref, entry, installed_at, updated_at }`. **Pin обязателен**: `ref` (sha/тег) +
+content_hash, ref, entry, installed_at, updated_at, previous? }`. **Pin обязателен**: `ref` (sha/тег) +
 `content_hash`; update — только явная операция, «всегда latest» нет.
+
+`previous` — **одна ступень отката** (`{ version, content_hash, entry?, installed_at }`): её
+заполняет `update` снимком прежней установленной версии, `rollback` меняет текущую и предыдущую
+местами (поэтому откат обратим, а «на две версии назад» — это два отката подряд). У записи,
+поставленной обычной установкой, поля нет. Источник/pin/доверие/вердикт скана — свойства плагина, а
+не версии: при откате они остаются, меняются только `version`/`content_hash`/`entry`/`previous`
+(`installed_at` записи иммутабелен, `updated_at` обновляется).
 
 ### Реализация (Ф5а)
 
@@ -1035,7 +1042,8 @@ npm-именем не считаются. Ставится **точная вер
 | POST | `/api/v2/plugins/:name/approve` | `requireAuth` / **ADMIN** | 200, 400, 404, 409 | Подтверждение `202`-установки: повторные гейты + сверка integrity → `installed/` → lock |
 | POST | `/api/v2/plugins/:name/enable` | `requireAuth` / ADMIN | 200, 400, 404, 409 | активация (шаги §10) |
 | POST | `/api/v2/plugins/:name/disable` | `requireAuth` / ADMIN | 200, 404, 409 | обратная прокрутка |
-| POST | `/api/v2/plugins/update` | `requireAuth` / ADMIN | **501** (долги Д2) | обновление по pinned ref/hash, явно — маршрут объявлен, реализации нет |
+| POST | `/api/v2/plugins/update` | `requireAuth` / ADMIN (+ scope `addons:install`) | 200 (`unchanged`/`updated`), 400, 404, 409, 502 | обновление из источника записи lock (`{name, version?, sha256?, activate?}`): источник клиентом не выбирается, `sha256` обязателен для `url`; совпадение content-hash — `unchanged` |
+| POST | `/api/v2/plugins/:name/rollback` | `requireAuth` / ADMIN (+ scope `addons:install`) | 200, 404, 409 | откат на ступень `previous` (swap — обратим); нет ступени/каталога — 409 `plugin.rollback_unavailable` |
 | DELETE | `/api/v2/plugins/:name` | `requireAuth` / ADMIN | 204, 404, 409 | снятие по записи lock (идемпотентно) |
 | GET/PUT/DELETE | `/api/v2/settings/plugins` | `requireAuth` / ADMIN | 200, 400, 401, 403 | runtime-настройки: `enabled`, `runtimeInstall`, `trustFloor`, `scan`, `allowlist`, `denylist`, `promptBlockMaxChars` (бюджет символов блока, дефолт 4 000) |
 
@@ -1054,6 +1062,14 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 позитивная по ролям) по образцу `packages/backend/src/routes/session-idor-matrix.test.ts` (существующая
 матрица покрывает `sessions|messages|queue` — для плагинов она не применима).
 
+**Тело `POST /update` и откат (Д2).** `update` — `{name, version?, sha256?, activate?}`; источник
+берётся из lock (`npm`/`local`/`url`), `version` — только для npm (точная или `latest`), `sha256` —
+**обязателен** для `url` (новый pin). `409` — `plugin.approval_required` (бандл ушёл в карантин) и
+`plugin.scan_rejected`/`integrity_*`; `404` — `plugin.not_found`; `400` — локальный
+`plugin.source_unavailable` (путь/архив из lock не найден), `502` — сетевой (npm/URL недоступны).
+`rollback` возвращает `200 {outcome:'rolled_back', version, previousVersion, activated?}`; нет
+ступени `previous` или каталога предыдущей версии — `409 plugin.rollback_unavailable`.
+
 ### CLI (`synth plugin *`)
 
 Команды объявляются **параллельно в двух местах**: `packages/core/src/main.ts` (dev/standalone CLI,
@@ -1069,6 +1085,8 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 |---|---|---|
 | `synth plugin list` | `--json`, `--data-dir`, `--config`, `--home` | установленные + статус активации (имя, версия, доверие, вердикт скана, `active`); `0` |
 | `synth plugin install <ref>` | `--source <dir\|archive\|npm\|url>` (по умолчанию — по `<ref>`), `--version <v>`, `--sha256 <hex>`, `--trust <level>` (по умолчанию `community`), `--activate`, `--yes`, пути | установка из источника: каталог, `.tgz`/`.tar.gz`, npm-пакет или https-URL (манифест → скан → политика); `0` — установлено или в карантине, `1` — отказ (код причины в stderr) |
+| `synth plugin update <name>` | `--version`, `--sha256`, `--activate`, `--yes`, пути | обновление из источника записи lock; `0` — «Уже актуален: vN» / «Обновлён: vN → vM» (или карантин), `1` — отказ с причиной |
+| `synth plugin rollback <name>` | пути | откат на предыдущую версию; `0` — «Откат: vM → vN», `1` — отказ (`plugin.rollback_unavailable`) |
 | `synth plugin approve <name>` | `--version`, `--activate`, `--yes`, пути | подтверждение бандла из карантина (повторные гейты + сверка integrity); `0`/`1` |
 | `synth plugin enable <name>` | пути | активация (пайплайн §10) в процессе CLI; `0` — активирован, `1` — отказ с причиной (`plugin.execution_disabled` → подсказка включить `plugins.executionEnabled` и перезапустить) |
 | `synth plugin disable <name>` | пути | обратная прокрутка; `0`/`1` |
@@ -1076,8 +1094,9 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | `synth plugin scan <path>` | `--json` | **dry-run**: манифест + вердикт сканера + находки + content-hash, ничего не пишет; `0` — safe/caution, `1` — dangerous/ошибка |
 
 Отличия от первоначального наброска (осознанно): `inspect` не выделен — деталь отдаёт
-`GET /api/v2/plugins/:name`, а в CLI достаточно `list --json`; `update` не объявлен в CLI (HTTP отдаёт
-`501` до появления обновления/отката).
+`GET /api/v2/plugins/:name`, а в CLI достаточно `list --json`. `update` и `rollback` объявлены в CLI
+(Д2) и работают с теми же операциями установщика, что API: CLI — офлайн-операция оператора, поэтому
+передаёт `installKind: 'deploy'`.
 
 **Источники `<ref>` (Д1).** `<ref>` — путь (каталог; `.tgz`/`.tar.gz` — архив), npm-имя пакета
 (`name`/`@scope/name`) либо `https:`-URL архива. Вид источника: `--source` (приоритет) или вывод по
@@ -1147,7 +1166,7 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | **Ф2 — модель доверия** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-trust`, коммитов нет) | Уровни trust, матрица install-policy с ячейкой `kind: "plugin"`, сканер (6+1 категорий, квоты, `content_hash`, кэш сканов, `.skillignore`, бинарные расширения), матрица `severity → verdict`, `quarantine/`, `plugins.lock.json`, порт `PluginAuditRepository` + `{dataDir}/audit/plugins.jsonl`. **Сделано:** встроенный статический сканер (`engine/plugins/scan/*`: правила, `.skillignore`, кэш, дефолтный хук скана), матрица install-policy одной функцией `installPolicyDecision` (`shared`, ячейка `kind: 'plugin'`), раскладка `<home>/plugin/` с карантином и `PLUGIN_INTEGRITY.json` (`engine/plugins/layout.ts`), порт `PluginLockRepository` (файл/память/PostgreSQL + миграция `007_plugin_lock`), аудит-событие `scan` (+ `plugin.approval_required`), шаг trust/scan в `PluginHost` — **trust-floor до install-policy** | тест: вердикт по severity (`info\|low → safe`, `medium → caution`, `high\|critical → dangerous`); квоты → `caution`; бинарник → `dangerous`; `community` + `dangerous` → `block`; trust-floor: `community` устанавливается, но не активируется (`plugin.trust_below_floor`) — **выполнено**, см. §«Статус реализации в коде (Ф2)» |
 | **Ф3 — точки `promptBlocks` + `llmFilters` + `tools`** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-points`): Ф3а — точка **`promptBlocks`**, Ф3б — точка **`llmFilters`**, Ф3в — точка **`tools`** и **контрактный suite расширений** | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений**. **Сделано (Ф3а):** контракт `PromptBlockProvider`/`PromptBlockContext` (`shared`, `types/prompt-blocks.ts`), реестр `PromptBlockRegistry` (`engine/context/prompt-block-registry.ts`), сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`), контекст хода (`query`/`turnId`), бюджет символов блока + обрезка (`status: 'truncated'`), инвалидация `promptStates` по блокам провайдеров (`provider: true`), фасад `PluginFacade.registerPromptBlock` (disposer снимает блок при деактивации), решение fail-closed `plugins.scan='disabled'` + `executionEnabled=true` (`plugin.scan_disabled_with_execution`), **версия правил сканера в ключе кэша сканов** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный — **по части `promptBlocks` выполнено**, см. §«Статус реализации в коде (Ф3а)»; критерии `llmFilters` — **выполнено, см. §«Статус реализации в коде (Ф3б)»**; точка `tools` (namespace, permission-слой, сверка `provides.tools[]`) и **контрактный suite расширений** — **выполнено, см. §«Статус реализации в коде (Ф3в)»** |
 | **Ф4 — два режима исполнения** — ⚠️ **частично: `inline` — выполнено (Ф4а), `out-of-process` — остаётся** | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация. **Сделано (Ф4а):** `inline`-загрузчик `createInlinePluginLoader` (`engine/plugins/inline-loader.ts`): containment по `realpath`, `.js`/`.mjs`, предел 8 МиБ, cache-busting `?v=<hash\|mtime>`, три формы модуля, новый код `plugin.module_invalid`; экспорт из `engine/plugins/index.ts` и `src/index.ts`. **Автоподключения в `server/app.ts`/`main.ts`/`backend/app/deps.ts` нет** — установка/активация и сканирование `plugins.lock.json` при старте появятся в Ф5 | тест: эталонный бандл (реальные `mkdtemp` + ESM-файл) активируется **через `PluginHost`** при `executionEnabled: true`, блок в `PromptBlockRegistry`, аудит `activate`; `export const x`/`export default 42` → `plugin.module_invalid`; бросок в модуле → `plugin.loader_unavailable`; `../evil.js`, абсолютный путь, симлинк наружу, `.ts`, превышение размера → отказ; перезапись бандла → новое содержимое — **выполнено (21 тест), см. §«Статус реализации в коде (Ф4а)»**. Критерии `out-of-process` (неверный токен → 401, недоступный процесс → деградация по `failMode`, suite на out-of-process реализации) — **остаются за Ф4б** |
-| **Ф5 — install/activate: сервис + runtime + API + CLI; managed deploy-time** — ⚠️ **частично**: `PluginInstaller` (Ф5а), `PluginRuntime` + старт-активация (Ф5б-1), HTTP API + RBAC (Ф5б-2) и **CLI `synth plugin *`** (Ф5б-3) и **источники установки** `dir`/`archive`/`npm`/`url` (долги Д1) — **сделано**; `update`/откат — остаток (долги Д2); managed deploy-time — Ф5в | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
+| **Ф5 — install/activate: сервис + runtime + API + CLI; managed deploy-time** — ⚠️ **частично**: `PluginInstaller` (Ф5а), `PluginRuntime` + старт-активация (Ф5б-1), HTTP API + RBAC (Ф5б-2), **CLI `synth plugin *`** (Ф5б-3), **источники установки** `dir`/`archive`/`npm`/`url` (долги Д1) и **`update`/`rollback`** (долги Д2) — **сделано**; managed deploy-time — Ф5в | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
 | **Ф6 — UI** | Раздел «Плагины»: список, карточка (trust/scan/hash/version/`contracts`/`host`/`provides`/режим), тумблеры enable/disable, install/update/remove, статус скана | тест UI: карточка показывает trust/scan/hash; переключатель enable вызывает API и обновляет список; i18n-паритет `ru.ts`/`en.ts` зелёный (`parity.test.ts`) |
 | **Ф7 — hybrid** | Allow-list сервера, форма политики, discovery (`/api/v2/settings/plugins` + сигнал в `/auth/oidc-meta`), server-scoped токены с `plugin_id`-scope (Уровень 2) | тест: плагин вне allow-list не активируется в hybrid; токен с чужим `plugin_id` отвергается сервером; локальный плагин без сервера — cooperative (помечено в UI/доках) |
 
@@ -2032,6 +2051,57 @@ deploy-time политика (запрет снятия management-плагин�
 (PROP-068), `post_response`-буферизация фильтров, **Ф5в** (managed deploy-time политика), **Ф6** (UI),
 **Ф4б** (`out-of-process`).
 
+### Статус реализации в коде (долги Д2 — 2026-10-22)
+
+Обновление и откат плагина. Ветка `feature/plugin-points`, коммитов нет (инвариант 12).
+
+**Код.**
+
+| Что | Где |
+|---|---|
+| `PluginLockPrevious` + поле `previous?` записи lock (одна ступень отката) | `packages/shared/src/types/plugin-lock.ts` |
+| Новый код отказа `plugin.rollback_unavailable` (`PLUGIN_AUDIT_REASONS` **25 → 26**) и действие аудита `rollback` | `packages/shared/src/types/plugin-audit.ts` |
+| `PluginInstaller.update(name, opts)`: источник из lock (`npm`/`local`/`url`), сверка `content_hash` → `unchanged`, установка с `keepPrevious` | `packages/core/src/engine/plugins/installer.ts` |
+| `PluginInstaller.rollback(name, opts)`: каталог `previous` → swap в lock → активация откатанной версии | там же |
+| `PluginInstallRequest.keepPrevious` — не удалять каталог прежней версии и записать `previous` в lock | там же |
+| Таблица `plugin_lock.previous jsonb` — миграция `009_plugin_lock_previous`; порт читает/пишет `previous` (объект или JSON-строка), пустое значение — поля нет | `packages/storage-postgres/src/{migrations/009-plugin-lock-previous.ts,ports/plugin-lock.ts}` |
+| `POST /api/v2/plugins/update` (200/400/404/409/502) и `POST /api/v2/plugins/:name/rollback` (200/404/409); `plugin.rollback_unavailable` → 409 | `packages/core/src/server/routes/plugins.ts` |
+| CLI `synth plugin update <name>` (`--version`/`--sha256`/`--activate`/`--yes`) и `synth plugin rollback <name>` | `packages/core/src/cli/plugin-commands.ts` |
+
+**Решения.**
+
+1. **`keepPrevious` в запросе установки, а не отдельная «установка версии».** Обновление проходит
+   **те же** гейты, что установка (манифест/скан/trust-floor/install-policy): отдельная ветка
+   разошлась бы с ними. Отличие ровно одно — каталог прежней версии сохраняется и в lock пишется
+   `previous`.
+2. **Одна ступень и swap.** `previous` — ровно одна версия: обновление перезаписывает её, откат
+   меняет текущую и предыдущую местами. Так откат обратим, а «на две версии назад» — два отката
+   (осознанно: хранение истории версий — отдельная задача, не долг Д2).
+3. **Действие аудита `rollback`.** Журнал должен различать откат и установку: `install` фиксирует
+   новую версию, `rollback` — возврат (запись `ok` с версией, на которую откатились; `rejected` с
+   причиной). `update` пишет обычный `install/ok` — установка действительно состоялась, а факт
+   перехода виден по `previous` в записи lock.
+4. **`unchanged` — без аудита.** Совпадение `content_hash` не меняет состояние: запись в журнал
+   только логируется (`warn`), `updated_at`/`previous` не трогаются — иначе «проверка обновления»
+   выглядела бы как операция.
+5. **Активация — после установки.** Старый модуль нельзя выгружать до раскладки новой версии (при
+   отказе установки плагин остался бы выключенным); последовательность: установка → деактивация
+   старого → активация нового. `activate` не задан — состояние сохраняется (был активен → активен).
+6. **Managed и локальные источники.** `update` не принимает источник от клиента и в managed
+   отклоняет запись lock с `source: 'local'` (`403 LOCAL_INSTALL_DISABLED`) — иначе обновление стало
+   бы обходом запрета локальной установки.
+
+**Тесты (+13).** `installer.test.ts` (+9: npm-update с `previous`/сохранённым каталогом, активный
+плагин — блок заменён, `unchanged` с неизменным `updated_at`, URL без `sha256`, `not_found`,
+откат-туда-обратно, без `previous`, без каталога предыдущей версии);
+`routes/plugins.test.ts` (+2: update 200/400/404, rollback 200/409/404); `cli/plugin-commands.test.ts`
+(+4: `unchanged`/`updated`, откат и обратно, без ступени, неизвестный плагин); контрактный suite
+lock (+2: `previous` сохраняется, без `previous` поля нет) — прогоняется на file/memory и PostgreSQL
+(миграция `009`).
+
+**Остаток.** `catalog`-источник и подписи (PROP-068), `post_response`-буферизация фильтров, **Ф5в**
+(managed deploy-time политика), **Ф6** (UI), **Ф4б** (`out-of-process`).
+
 ## Открытые вопросы
 
 > Закрыто решениями владельца продукта 2026-10-22: форма out-of-process-протокола (HTTP/1.1 + JSON,
@@ -2208,3 +2278,4 @@ deploy-time политика (запрет снятия management-плагин�
 - 2026-10-22 — **Ф5б-2 выполнен** (ветка `feature/plugin-points`): **HTTP-контур плагинов** — `createPluginsRoutes` (`GET /api/v2/plugins`, деталь с манифестом и `PLUGIN_INTEGRITY.json`, `install`, `approve`, `enable`, `disable`, `DELETE`, `update` → `501`) и `createPluginSettingsRoutes` (`/api/v2/settings/plugins`: `enabled`/`executionEnabled`/`runtimeInstall`/`trustFloor`/`scan`/allow-deny/бюджеты, `restartRequired: true`), исчерпывающая таблица `PLUGIN_REASON_HTTP`; монтаж в core (`requireAuth`, `localInstall: true`) и backend (ADMIN; install/enable — scope `addons:install`; approve и DELETE — только ADMIN; `localInstall: false`); порт настроек расширен `getPlugins/setPlugins/clearPlugins` (файл/память/PG); эффективный конфиг — `mergePluginsConfig`. Тесты: `routes/plugins.test.ts` (20) и **своя** RBAC-матрица `backend/routes/plugins-rbac-matrix.test.ts` (8 — негативная USER/LEAD/AUDITOR → 403, позитивная ADMIN и service-key со scope). Попутно зафиксирована ловушка: backend использует `core/dist`, поэтому после правок роутов core нужен `core build` до backend-тестов.
 - 2026-10-22 — **Ф5б-3 выполнен** (ветка `feature/plugin-points`): **CLI `synth plugin *`** — `packages/core/src/cli/plugin-commands.ts` (`createPluginCommand`/`createPluginCliContext`), подключён в `core/main.ts` и `packages/synth/src/cli.ts` (точный subpath-экспорт `./cli/plugin-commands.js`): `list` (`--json`), `install <path>` (`--trust`/`--source`/`--activate`, `installKind: 'deploy'` — офлайн-операция, политика `runtimeInstall` к ней не применяется), `approve`, `enable`, `disable`, `remove` (без `--yes` — отказ), `scan` (dry-run, без записи); контекст — тем же путём, что `doctor`/`backup`, с `pluginLockPath` из раскладки. Установщик: **byte-copy бинарных ассетов** (`binaryFiles`/`sourceDir` в `stagePluginBundle`, containment) — закрыто ограничение Ф5а; **чистка каталога старой версии** после успешной установки (кроме активного плагина). Тесты: `cli/plugin-commands.test.ts` (20), `installer.test.ts`/`layout.test.ts` (+byte-copy, чистка). Ручная проверка: scan → install → list → enable (полный пайплайн активации) → remove на временном data-dir.
 - 2026-10-22 — **долги Д1 закрыты** (ветка `feature/plugin-points`): **источники установки** — `engine/plugins/archive.ts` (свой tar-ридер: `node:zlib` + разбор tar, ustar/pax `x`/`g`/GNU long name, только файлы и каталоги, лимиты 500 записей / 16 МиБ файл / 64 МиБ сумма / 1024 символа путь, `stripPrefix`, tar-slip-защита, `cleanup`) и `engine/plugins/sources.ts` (`dir`/`archive`/`npm`/`url`: обязательный SRI `sha512` (+`shasum`) для npm, обязательный `sha256` для URL, редиректы до 3 с повторной проверкой `https:`, лимит скачивания, только `egressFetch`/инъекция); `PluginInstaller.installFromSource` (резолвинг → тот же `installFromDirectory` → `cleanup` в `finally`); новый код отказа **`plugin.source_unavailable`** (`PLUGIN_AUDIT_REASONS` 24 → 25); `POST /api/v2/plugins/install` принимает `source`/`path`/`name`/`version`/`url`/`sha256` (вид источника выводится из полей; локальные в managed → 403, сетевые разрешены; отказ источника — 400 локально / 502 сетевой); CLI `install <ref>` с `--source`/`--version`/`--sha256`. Тесты: `archive.test.ts` (24), `sources.test.ts` (20), +4 установщика, +9 роутов, +4 CLI. Добавлен раздел «Статус реализации в коде (долги Д1)», подраздел «Источники установки (Д1)», обновлены §«Bundle-only»/§«HTTP API»/§«CLI».
+- 2026-10-22 — **долги Д2 закрыты** (ветка `feature/plugin-points`): **обновление и откат** плагинов — `PluginLockEntry.previous` (`PluginLockPrevious`: `version`/`content_hash`/`entry?`/`installed_at`; **одна ступень**, миграция `009_plugin_lock_previous`, порт читает/пишет `jsonb`), `PluginInstaller.update` (источник из lock: `npm`/`local`/`url`, для `url` обязателен новый `sha256`; `content_hash` совпал → `unchanged` без записи; иначе `installFromDirectory` с `keepPrevious` — гейты и доверие те же/из lock, каталог прежней версии сохраняется, `previous` пишется в lock; активный плагин деактивируется **после** установки и активируется новая версия, `activate` не задан — состояние сохраняется) и `PluginInstaller.rollback` (каталог `previous` → swap в lock, `installed_at` иммутабелен, аудит `rollback`, откат обратим; нет ступени/каталога → `plugin.rollback_unavailable`); новое действие аудита **`rollback`** и код отказа **`plugin.rollback_unavailable`** (`PLUGIN_AUDIT_REASONS` 25 → 26); HTTP `POST /api/v2/plugins/update` (200/400/404/409/502) и `POST /api/v2/plugins/:name/rollback` (200/404/409) вместо `501`; CLI `synth plugin update`/`rollback`. Тесты: `installer.test.ts` (+9), `routes/plugins.test.ts` (+2), `cli/plugin-commands.test.ts` (+4), контрактный suite lock (+2, в т.ч. живая PostgreSQL). Добавлен раздел «Статус реализации в коде (долги Д2)».

@@ -153,6 +153,18 @@ function makeHost(registry: PromptBlockRegistry, over: Partial<PluginsConfig> = 
 
 // ── Установка ────────────────────────────────────────────────────────────
 
+/** Текст блока провайдера: `load` может вернуть строку, объект с `content` или `null`. */
+async function blockText(
+  provider: { load(ctx: unknown): unknown },
+  ctx: unknown,
+): Promise<string | undefined> {
+  const loaded = await provider.load(ctx);
+  if (loaded === null || loaded === undefined) return undefined;
+  if (typeof loaded === 'string') return loaded;
+  const content = (loaded as { content?: unknown }).content;
+  return typeof content === 'string' ? content : undefined;
+}
+
 describe('PluginInstaller: установка из каталога', () => {
   it('безопасный плагин (trusted, safe) → installed, каталог, PLUGIN_INTEGRITY.json, lock и аудит', async () => {
     const dir = await makeBundle();
@@ -869,5 +881,317 @@ describe('PluginInstaller: установка из источника (dir/archi
     if (result.outcome !== 'rejected') return;
     expect(result.reason).toBe('plugin.source_unavailable');
     expect(result.message).toContain('символьную ссылку');
+  });
+});
+
+// ── Обновление и откат (долги Д2) ────────────────────────────────────────
+
+/** npm-бандл: tar с каталогом `package/` (stripPrefix 'package'). */
+function npmTarball(manifestObj: PackManifest, code: string): Buffer {
+  return buildTarGz([
+    { name: 'package/synth.pack', content: `${JSON.stringify(manifestObj)}\n` },
+    { name: 'package/dist/index.js', content: code },
+  ]);
+}
+
+/**
+ * Фейковый fetch npm: metadata (dist-tags `latest` — последняя версия в
+ * объекте) + тарболы с корректным SRI/shasum.
+ */
+function npmFetch(
+  pkg: string,
+  tarballs: Record<string, Buffer>,
+): (url: string) => Promise<Response> {
+  const versions: Record<string, unknown> = {};
+  const distTags: Record<string, string> = {};
+  for (const [version, bytes] of Object.entries(tarballs)) {
+    versions[version] = {
+      dist: {
+        tarball: `https://registry.npmjs.org/${pkg}/-/${pkg}-${version}.tgz`,
+        integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`,
+        shasum: createHash('sha1').update(bytes).digest('hex'),
+      },
+    };
+    distTags.latest = version;
+  }
+  return async (url: string): Promise<Response> => {
+    if (url === `https://registry.npmjs.org/${pkg}`) {
+      return new Response(JSON.stringify({ 'dist-tags': distTags, versions }), { status: 200 });
+    }
+    for (const [version, bytes] of Object.entries(tarballs)) {
+      if (url.endsWith(`-${version}.tgz`)) return new Response(bytes, { status: 200 });
+    }
+    return new Response('not found', { status: 404 });
+  };
+}
+
+/** Код бандла, регистрирующий объявленный блок промпта с меткой версии. */
+function blockCodeV(marker: string): string {
+  return (
+    'export function apply(facade) {\n' +
+    '  facade.registerPromptBlock({\n' +
+    "    key: 'plugin.demo-plugin.tip',\n" +
+    "    tier: 'context',\n" +
+    '    order: 10,\n' +
+    `    load: () => ({ content: '${marker}' }),\n` +
+    '  });\n' +
+    '}\n'
+  );
+}
+
+describe('PluginInstaller: update (Д2)', () => {
+  it('npm: новая версия, previous в lock, каталог прежней версии сохранён', async () => {
+    const tarballs = {
+      '1.0.0': npmTarball(manifest({ version: '1.0.0' }), 'export function apply() {}\n'),
+      '2.0.0': npmTarball(manifest({ version: '2.0.0' }), 'export function apply() { /* v2 */ }\n'),
+    };
+    const sourceContext = { fetch: npmFetch('demo-plugin', tarballs) };
+    const { installer, layout, lock } = await makeInstaller();
+
+    const first = await installer.installFromSource({
+      kind: 'npm',
+      ref: 'demo-plugin',
+      version: '1.0.0',
+      trustLevel: 'trusted',
+      installKind: 'deploy',
+      sourceContext,
+    });
+    expect(first.outcome).toBe('installed');
+    const oldEntry = await lock.get('demo-plugin');
+    expect(oldEntry?.version).toBe('1.0.0');
+
+    const result = await installer.update('demo-plugin', { sourceContext, actor: 'tester' });
+
+    expect(result.outcome).toBe('updated');
+    if (result.outcome !== 'updated') return;
+    expect(result.version).toBe('2.0.0');
+    expect(result.previousVersion).toBe('1.0.0');
+    expect(result.contentHash).not.toBe(oldEntry?.content_hash);
+
+    const updated = await lock.get('demo-plugin');
+    expect(updated?.version).toBe('2.0.0');
+    expect(updated?.content_hash).toBe(result.contentHash);
+    expect(updated?.previous).toEqual({
+      version: '1.0.0',
+      content_hash: oldEntry?.content_hash,
+      entry: oldEntry?.entry,
+      installed_at: oldEntry?.installed_at,
+    });
+    // Ступень отката материальна: каталог прежней версии на месте.
+    expect(existsSync(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'))).toBe(true);
+    expect(existsSync(pluginInstalledDir(layout, 'demo-plugin', '2.0.0'))).toBe(true);
+  });
+
+  it('активный плагин: старый модуль деактивирован, новый активирован (блок заменён)', async () => {
+    const registry = new PromptBlockRegistry();
+    const host = makeHost(registry);
+    const tarballs = {
+      '1.0.0': npmTarball(manifest({ version: '1.0.0' }), blockCodeV('V1')),
+      '2.0.0': npmTarball(manifest({ version: '2.0.0' }), blockCodeV('V2')),
+    };
+    const sourceContext = { fetch: npmFetch('demo-plugin', tarballs) };
+    const { installer } = await makeInstaller({ host });
+
+    const first = await installer.installFromSource({
+      kind: 'npm',
+      ref: 'demo-plugin',
+      version: '1.0.0',
+      trustLevel: 'trusted',
+      installKind: 'deploy',
+      activate: true,
+      sourceContext,
+    });
+    expect(first.outcome).toBe('installed');
+    if (first.outcome !== 'installed') return;
+    expect(first.activated?.outcome).toBe('activated');
+    const ctx = {
+      sessionId: 's',
+      agentRole: 'assistant',
+      language: 'ru' as const,
+      mode: 'act' as const,
+    };
+    const v1Block = registry.get('plugin.demo-plugin.tip');
+    expect(v1Block).toBeDefined();
+    expect(await blockText(v1Block!.provider, ctx)).toBe('V1');
+
+    const result = await installer.update('demo-plugin', { sourceContext });
+
+    expect(result.outcome).toBe('updated');
+    if (result.outcome !== 'updated') return;
+    // Активация сохранена (был активен), версия в реестре — новая.
+    expect(result.activated?.outcome).toBe('activated');
+    expect(host.getActivation('demo-plugin')?.version).toBe('2.0.0');
+    const v2Block = registry.get('plugin.demo-plugin.tip');
+    expect(v2Block).toBeDefined();
+    expect(await blockText(v2Block!.provider, ctx)).toBe('V2');
+  });
+
+  it('тот же content-hash → unchanged, lock не изменён (updated_at/previous)', async () => {
+    const tarballs = {
+      '1.0.0': npmTarball(manifest({ version: '1.0.0' }), 'export function apply() {}\n'),
+    };
+    const sourceContext = { fetch: npmFetch('demo-plugin', tarballs) };
+    const { installer, lock } = await makeInstaller();
+
+    await installer.installFromSource({
+      kind: 'npm',
+      ref: 'demo-plugin',
+      version: '1.0.0',
+      trustLevel: 'trusted',
+      installKind: 'deploy',
+      sourceContext,
+    });
+    const before = await lock.get('demo-plugin');
+
+    const result = await installer.update('demo-plugin', { sourceContext });
+
+    expect(result).toEqual({
+      outcome: 'unchanged',
+      name: 'demo-plugin',
+      version: '1.0.0',
+      contentHash: before?.content_hash,
+    });
+    const after = await lock.get('demo-plugin');
+    expect(after?.version).toBe(before?.version);
+    expect(after?.updated_at).toBe(before?.updated_at);
+    expect(after?.previous).toBeUndefined();
+  });
+
+  it('url без sha256 → rejected plugin.source_unavailable, lock прежний', async () => {
+    const bundle = await makeBundle();
+    const pack = await readFile(join(bundle, 'synth.pack'), 'utf-8');
+    const code = await readFile(join(bundle, 'dist', 'index.js'), 'utf-8');
+    const tgz = buildTarGz([
+      { name: 'synth.pack', content: pack },
+      { name: 'dist/index.js', content: code },
+    ]);
+    const sha256 = createHash('sha256').update(tgz).digest('hex');
+    const url = 'https://example.com/demo-plugin.tgz';
+    const sourceContext = {
+      fetch: async (): Promise<Response> => new Response(tgz, { status: 200 }),
+    };
+    const { installer, lock } = await makeInstaller();
+
+    const first = await installer.installFromSource({
+      kind: 'url',
+      ref: url,
+      sha256,
+      trustLevel: 'trusted',
+      installKind: 'deploy',
+      sourceContext,
+    });
+    expect(first.outcome).toBe('installed');
+    const before = await lock.get('demo-plugin');
+
+    const result = await installer.update('demo-plugin', { sourceContext });
+
+    expect(result.outcome).toBe('rejected');
+    if (result.outcome !== 'rejected') return;
+    expect(result.reason).toBe('plugin.source_unavailable');
+    expect(result.message).toContain('sha256');
+    expect(await lock.get('demo-plugin')).toEqual(before);
+  });
+
+  it('нет записи в lock → rejected plugin.not_found', async () => {
+    const { installer } = await makeInstaller();
+    const result = await installer.update('missing-plugin');
+    expect(result.outcome).toBe('rejected');
+    if (result.outcome !== 'rejected') return;
+    expect(result.reason).toBe('plugin.not_found');
+  });
+});
+
+describe('PluginInstaller: rollback (Д2)', () => {
+  /** Установить v1 и обновить до v2 (npm) — стенд для отката. */
+  async function installAndUpdate(): Promise<{
+    installer: PluginInstaller;
+    layout: PluginLayout;
+    lock: MemoryPluginLockRepository;
+    audit: MemoryPluginAuditRepository;
+  }> {
+    const tarballs = {
+      '1.0.0': npmTarball(manifest({ version: '1.0.0' }), 'export function apply() {}\n'),
+      '2.0.0': npmTarball(manifest({ version: '2.0.0' }), 'export function apply() { /* v2 */ }\n'),
+    };
+    const sourceContext = { fetch: npmFetch('demo-plugin', tarballs) };
+    const stand = await makeInstaller();
+    await stand.installer.installFromSource({
+      kind: 'npm',
+      ref: 'demo-plugin',
+      version: '1.0.0',
+      trustLevel: 'trusted',
+      installKind: 'deploy',
+      sourceContext,
+    });
+    const updated = await stand.installer.update('demo-plugin', { sourceContext });
+    expect(updated.outcome).toBe('updated');
+    return stand;
+  }
+
+  it('откат возвращает версию/хеш прежние, previous — откатанная; повторный откат обратим', async () => {
+    const { installer, lock, audit } = await installAndUpdate();
+    const before = await lock.get('demo-plugin');
+    const previous = before!.previous!;
+
+    const first = await installer.rollback('demo-plugin', { actor: 'tester' });
+
+    expect(first.outcome).toBe('rolled_back');
+    if (first.outcome !== 'rolled_back') return;
+    expect(first.version).toBe('1.0.0');
+    expect(first.previousVersion).toBe('2.0.0');
+
+    const afterFirst = await lock.get('demo-plugin');
+    expect(afterFirst?.version).toBe('1.0.0');
+    expect(afterFirst?.content_hash).toBe(previous.content_hash);
+    expect(afterFirst?.previous).toEqual({
+      version: '2.0.0',
+      content_hash: before?.content_hash,
+      entry: before?.entry,
+      installed_at: before?.installed_at,
+    });
+    // `installed_at` записи — исходный (иммутабелен).
+    expect(afterFirst?.installed_at).toBe(before?.installed_at);
+    const rolledBack = (await audit.list({ action: 'rollback', outcome: 'ok' }))[0];
+    expect(rolledBack?.version).toBe('1.0.0');
+
+    const second = await installer.rollback('demo-plugin');
+    expect(second.outcome).toBe('rolled_back');
+    if (second.outcome !== 'rolled_back') return;
+    expect(second.version).toBe('2.0.0');
+    expect(second.previousVersion).toBe('1.0.0');
+    expect((await lock.get('demo-plugin'))?.content_hash).toBe(before?.content_hash);
+  });
+
+  it('без previous → plugin.rollback_unavailable', async () => {
+    const { installer } = await makeInstaller();
+    const bundle = await makeBundle();
+    await installer.installFromDirectory({
+      dir: bundle,
+      trustLevel: 'trusted',
+      source: 'local',
+      installKind: 'deploy',
+    });
+
+    const result = await installer.rollback('demo-plugin');
+
+    expect(result.outcome).toBe('rejected');
+    if (result.outcome !== 'rejected') return;
+    expect(result.reason).toBe('plugin.rollback_unavailable');
+    expect(result.message).toContain('нет предыдущей версии');
+  });
+
+  it('каталог предыдущей версии отсутствует → plugin.rollback_unavailable', async () => {
+    const { installer, layout } = await installAndUpdate();
+    await rm(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'), {
+      recursive: true,
+      force: true,
+    });
+
+    const result = await installer.rollback('demo-plugin');
+
+    expect(result.outcome).toBe('rejected');
+    if (result.outcome !== 'rejected') return;
+    expect(result.reason).toBe('plugin.rollback_unavailable');
+    expect(result.message).toContain('отсутствует');
   });
 });
