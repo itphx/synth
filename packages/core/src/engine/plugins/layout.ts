@@ -27,7 +27,7 @@
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import type { InstallPolicyAction } from '@itphx/synth-shared';
+import type { CatalogTrustLevel, InstallPolicyAction } from '@itphx/synth-shared';
 import { resolveHome } from '@itphx/synth-shared/config';
 
 import { computePluginContentHash } from './integrity.js';
@@ -98,6 +98,21 @@ export interface PluginIntegrityFile {
   source?: string;
   /** Время получения бандла (ISO-8601). */
   fetched_at: string;
+  /**
+   * Ф5а: фактический уровень доверия на момент раскладки.
+   *
+   * Нужен подтверждению из карантина (`PluginInstaller.approve`): запись в
+   * lock ещё не создана, а доверие резолвится источником, не манифестом —
+   * без него подтверждение пришлось бы угадывать (fail-closed не дал бы
+   * подтвердить ни один бандл).
+   */
+  trust_level?: CatalogTrustLevel;
+  /** Ф5а: вид установки (`deploy`/`runtime`) — повторная проверка при `approve`. */
+  install_kind?: 'deploy' | 'runtime';
+  /** Ф5а: идентификатор источника (`owner/repo`, npm-пакет) — для lock после `approve`. */
+  identifier?: string;
+  /** Ф5а: pin источника (sha/тег) — для lock после `approve`. */
+  ref?: string;
 }
 
 /** Вход раскладки бандла. */
@@ -112,6 +127,14 @@ export interface PluginBundleStageInput {
   action: InstallPolicyAction;
   /** Источник установки (пишется в `PLUGIN_INTEGRITY.json`). */
   source?: string;
+  /** Ф5а: фактический уровень доверия (пишется в `PLUGIN_INTEGRITY.json`). */
+  trustLevel?: CatalogTrustLevel;
+  /** Ф5а: вид установки (пишется в `PLUGIN_INTEGRITY.json`). */
+  installKind?: 'deploy' | 'runtime';
+  /** Ф5а: идентификатор источника (пишется в `PLUGIN_INTEGRITY.json`). */
+  identifier?: string;
+  /** Ф5а: pin источника (пишется в `PLUGIN_INTEGRITY.json`). */
+  ref?: string;
   /** Content-hash (по умолчанию — считается из файлов). */
   contentHash?: string;
   /** Момент получения бандла (ISO-8601; по умолчанию — сейчас). */
@@ -164,6 +187,10 @@ export async function stagePluginBundle(
     sha256: contentHash,
     ...(input.source ? { source: input.source } : {}),
     fetched_at: input.fetchedAt ?? new Date().toISOString(),
+    ...(input.trustLevel ? { trust_level: input.trustLevel } : {}),
+    ...(input.installKind ? { install_kind: input.installKind } : {}),
+    ...(input.identifier ? { identifier: input.identifier } : {}),
+    ...(input.ref ? { ref: input.ref } : {}),
   };
   await writeFile(join(dir, 'PLUGIN_INTEGRITY.json'), `${JSON.stringify(integrity, null, 2)}\n`, 'utf-8');
 

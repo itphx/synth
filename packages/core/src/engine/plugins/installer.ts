@@ -1,0 +1,1321 @@
+/**
+ * PROP-090 §5/§9/§10, фаза Ф5а: `PluginInstaller` — сервис установки,
+ * подтверждения и снятия плагина.
+ *
+ * Это **ядро** контура установки: HTTP API (`/api/v2/plugins*`), CLI
+ * (`synth plugin *`), runtime-override (`plugins.json`) и старт-активация из
+ * `plugins.lock.json` — остаток Ф5б/Ф5в. Здесь только операции над каталогом
+ * бандла и портами слоя хранения:
+ *
+ * ```text
+ * installFromDirectory → манифест → файлы → fail-closed(scan+execution) →
+ *   trust-floor → скан → runtime-install → install-policy →
+ *   allow: installed/<name>@<version>/ + lock.save + аудит install
+ *   ask:   quarantine/<name>@<version>/ (lock НЕ пишется) + approval_required
+ *   block: отказ plugin.scan_rejected (на диск не пишется)
+ * approve  → скан карантина → releaseFromQuarantine → lock.save → аудит install
+ * uninstall→ деактивация (если активен) → lock.delete → rm -rf каталога → аудит
+ * ```
+ *
+ * **Порядок проверок важен** и повторяет `PluginHost` (Ф2/Ф3а): сначала
+ * fail-closed «скан выключен, а исполнение включено», затем **trust-floor**,
+ * затем скан и только потом install-policy. Плагин ниже `plugins.trustFloor`
+ * не устанавливается ни при каком вердикте сканера; решение «можно ли ставить
+ * по вердикту» принимает матрица `installPolicyDecision` (ячейка
+ * `kind: 'plugin'`: `safe → allow`, `caution → ask`, `dangerous → block`).
+ *
+ * **Состав бандла и content-hash.** Файлы каталога читаются рекурсивно
+ * (сортировка по имени — детерминизм), симлинки и `node_modules`/`.git`
+ * пропускаются (как в сканере), `PLUGIN_INTEGRITY.json` исключается (это
+ * служебный файл раскладки, а не часть бандла). Текстовые файлы
+ * (включая `synth.pack`) входят в `files` и в content-hash; бинарные файлы в
+ * `files` **не попадают** (их содержимое нельзя представить строкой без
+ * порчи), но сканер видит их в каталоге: исполняемый бинарник → `high` →
+ * `dangerous` → отказ. Поэтому хеш установщика совпадает с хешем, который
+ * считает `scanPluginDirectory`, — сверка целостности при активации работает.
+ *
+ * **Точка входа (`entry`).** `dist/index.js`, если он есть в составе бандла;
+ * иначе первый по алфавиту `.js`/`.mjs` внутри `dist/`; иначе
+ * `dist/index.js` (значение по умолчанию загрузчика — отказ `import` будет
+ * явным, а не «молча ничего не загрузили»).
+ *
+ * **Идемпотентность.** Lock-запись — upsert по имени плагина
+ * (`PluginLockRepository`): повторная установка той же версии не плодит
+ * записей, каталог перезаписывается, `installed_at` сохраняется, `updated_at`
+ * обновляется. Установка **другой** версии заменяет lock-запись (по имени), но
+ * каталог прежней версии остаётся на диске — известное ограничение: чистка
+ * старых версий и явный update — Ф5б (`uninstall` снимает каталог версии из
+ * lock-записи).
+ */
+import { readFile, readdir, rm, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import {
+  generateId,
+  installPolicyDecision,
+  packManifestSchema,
+  trustLevelRank,
+  validatePackManifest,
+} from '@itphx/synth-shared';
+import type {
+  CatalogTrustLevel,
+  PackManifest,
+  PluginAuditAction,
+  PluginAuditEntry,
+  PluginAuditReason,
+  PluginLockEntry,
+  PluginScanVerdict,
+  PluginsConfig,
+} from '@itphx/synth-shared';
+
+import type { PluginAuditRepository } from '../../storage/ports/plugin-audit-repository.js';
+import type { PluginLockRepository } from '../../storage/ports/plugin-lock-repository.js';
+import type {
+  PluginActivationDescriptor,
+  PluginActivationResult,
+  PluginLogger,
+  PluginScanHook,
+  PluginScanResult,
+} from './activation.js';
+import { DEFAULT_PLUGIN_ENTRY } from './inline-loader.js';
+import { computePluginContentHash } from './integrity.js';
+import type { PluginIntegrityFile, PluginLayout } from './layout.js';
+import {
+  pluginInstalledDir,
+  pluginQuarantineDir,
+  releaseFromQuarantine,
+  stagePluginBundle,
+} from './layout.js';
+import type { PluginHost } from './plugin-host.js';
+import { createPluginScanHook } from './scan/hook.js';
+import { isBinaryContent } from './scan/scanner.js';
+
+/** Имя файла манифеста (`synth.pack`, ADR-086 §5). */
+const MANIFEST_FILE = 'synth.pack';
+
+/** Служебный файл раскладки — не часть бандла (не входит в хеш и в `files`). */
+const INTEGRITY_FILE = 'PLUGIN_INTEGRITY.json';
+
+/** Каталоги, которые не являются частью бандла (как в сканере, PROP-068 §4.3). */
+const SKIPPED_DIRS: readonly string[] = ['node_modules', '.git'];
+
+/** Зависимости сервиса установки (ADR-096: хранилище — только через порты). */
+export interface PluginInstallerDeps {
+  /** Раскладка слоя плагинов (`<home>/plugin` или `{dataDir}/plugin`). */
+  layout: PluginLayout;
+  /** Порт lock-файла плагинов (`plugins.lock.json`) — источник истины. */
+  lock: PluginLockRepository;
+  /** Порт журнала аудита плагинов. */
+  audit: PluginAuditRepository;
+  /** Эффективная конфигурация слоя плагинов (runtime > config > defaults). */
+  config: PluginsConfig;
+  /** Скан: не задан — встроенный (`createPluginScanHook`). */
+  scan?: PluginScanHook;
+  /** Хост плагинов — нужен для деактивации при `uninstall` и активации после установки. */
+  host?: PluginHost;
+  /** Логгер (по умолчанию — `console.warn`). */
+  logger?: PluginLogger;
+  /** Инъекция часов — для детерминированных тестов (ISO-8601). */
+  now?: () => string;
+}
+
+/** Запрос установки из локального каталога (распаковка/скачивание — Ф5б). */
+export interface PluginInstallRequest {
+  /** Каталог распакованного бандла (`synth.pack` + `dist/index.js`). */
+  dir: string;
+  /** Фактический уровень доверия (резолвится источником, не манифестом). */
+  trustLevel: CatalogTrustLevel;
+  /** Источник установки (`local`/`npm`/`catalog`/`builtin`/…). */
+  source: string;
+  /** Идентификатор источника (`owner/repo`, npm-пакет, URL). */
+  identifier?: string;
+  /** Pin источника (sha/тег) — обязателен для воспроизводимого update. */
+  ref?: string;
+  /** `deploy` (бандл в образе) | `runtime` (по умолчанию). */
+  installKind?: 'deploy' | 'runtime';
+  /** Активировать после установки (по умолчанию `false`). */
+  activate?: boolean;
+  /** Инициатор операции (`userId` API/UI, `'cli'`, `'startup'`). */
+  actor?: string;
+}
+
+/** Итог установки/подтверждения. */
+export type PluginInstallOutcome =
+  | {
+      outcome: 'installed';
+      name: string;
+      version: string;
+      /** Каталог установленного бандла (`installed/<name>@<version>`). */
+      dir: string;
+      contentHash: string;
+      /**
+       * Результат активации — только если она запрашивалась **и** хост передан.
+       * Отказ активации (`activated.outcome === 'rejected'`) установку не
+       * отменяет: установка и активация — разные статусы (плагин остаётся
+       * установленным, но неактивным, причина — в результате и аудите).
+       */
+      activated?: PluginActivationResult;
+    }
+  | {
+      outcome: 'approval_required';
+      name: string;
+      version: string;
+      /** Каталог карантина (`quarantine/<name>@<version>`). */
+      dir: string;
+      reason: string;
+    }
+  | {
+      outcome: 'rejected';
+      name?: string;
+      version?: string;
+      reason: PluginAuditReason;
+      message: string;
+    };
+
+/** Итог снятия установки. */
+export interface PluginUninstallResult {
+  /** Запись lock была (и снята)? Повторный `uninstall` — `false` (идемпотентно). */
+  removed: boolean;
+  /** Плагин был активен и деактивирован? */
+  deactivated?: boolean;
+}
+
+/** Собранный бандл: текстовые файлы (в хеше и на диске) + пропущенные бинарные. */
+interface CollectedBundle {
+  files: Record<string, string>;
+  /** Бинарные файлы (в `files` не попадают: содержимое нельзя представить строкой). */
+  binaryFiles: string[];
+}
+
+/** Чтение манифеста: успех с разобранным манифестом либо причина отказа. */
+type ManifestReadResult =
+  | { ok: true; manifest: PackManifest }
+  | { ok: false; message: string; name?: string; version?: string };
+
+/** Найденный карантин. */
+type QuarantineLookup =
+  | { kind: 'found'; version: string; dir: string }
+  | { kind: 'none' }
+  | { kind: 'ambiguous'; versions: string[] };
+
+/** Вход записи аудита (внутренний — поля собираются из операции). */
+interface AuditInput {
+  action: PluginAuditAction;
+  plugin: string;
+  version: string;
+  outcome: 'ok' | 'rejected';
+  actor: string;
+  reason?: PluginAuditReason;
+  trustLevel?: CatalogTrustLevel;
+  scanVerdict?: PluginScanVerdict;
+  scanPerformed?: boolean;
+  scanFindings?: number;
+  contentHash?: string;
+  source?: string;
+  mode?: PackManifest['mode'];
+}
+
+/** Результат скана на шаге установки. */
+type ScanStepResult =
+  | { ok: true; verdict: PluginScanVerdict; performed: boolean; findings: number; note?: string }
+  | { ok: false; reason: PluginAuditReason; message: string };
+
+/** Успешный скан с вердиктом/находками (для записи аудита `install`). */
+interface ScanSummary {
+  verdict: PluginScanVerdict;
+  performed: boolean;
+  findings: number;
+}
+
+/** Есть ли путь (файл/каталог) — без исключений. */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Объект ли значение (для чтения «сырого» манифеста до валидации). */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Человекочитаемая сводка проблем zod-валидации. */
+function describeIssues(error: {
+  issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }>;
+}): string {
+  return error.issues
+    .map((issue) => {
+      const path = issue.path.map((segment) => String(segment)).join('.');
+      return path ? `${path}: ${issue.message}` : issue.message;
+    })
+    .join('; ');
+}
+
+/**
+ * Рекурсивный сбор файлов бандла.
+ *
+ * Обход детерминированный (сортировка по имени), симлинки не читаются,
+ * `node_modules`/`.git` пропускаются, `PLUGIN_INTEGRITY.json` исключается.
+ * Бинарные файлы (по расширению или NUL-признаку — та же функция, что у
+ * сканера) в `files` не попадают.
+ */
+async function collectBundleFiles(rootDir: string): Promise<CollectedBundle> {
+  const files: Record<string, string> = {};
+  const binaryFiles: string[] = [];
+
+  const walk = async (dir: string, rel: string): Promise<void> => {
+    let items;
+    try {
+      items = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    items.sort((a, b) => a.name.localeCompare(b.name));
+    for (const item of items) {
+      const relPath = rel ? `${rel}/${item.name}` : item.name;
+      if (item.isDirectory()) {
+        if (SKIPPED_DIRS.includes(item.name)) continue;
+        await walk(join(dir, item.name), relPath);
+        continue;
+      }
+      // Симлинки не читаем: выход за пределы бандла (как в сканере).
+      if (!item.isFile() || item.isSymbolicLink()) continue;
+      if (relPath === INTEGRITY_FILE) continue;
+      const buffer = await readFile(join(dir, item.name));
+      if (isBinaryContent(buffer, relPath)) {
+        binaryFiles.push(relPath);
+        continue;
+      }
+      files[relPath] = buffer.toString('utf8');
+    }
+  };
+
+  await walk(rootDir, '');
+  return { files, binaryFiles };
+}
+
+/**
+ * Точка входа бандла: `dist/index.js` → первый `.js`/`.mjs` в `dist/` →
+ * `dist/index.js` (дефолт загрузчика, чтобы отказ `import` был явным).
+ */
+export function resolvePluginEntry(files: Record<string, string>): string {
+  const preferred = DEFAULT_PLUGIN_ENTRY;
+  if (preferred in files) return preferred;
+  const candidates = Object.keys(files)
+    .filter((path) => path.startsWith('dist/') && /\.(js|mjs)$/.test(path))
+    .sort();
+  return candidates[0] ?? preferred;
+}
+
+/** Прочитать и проверить `synth.pack` (fail-closed: любая проблема — отказ). */
+async function readManifest(dir: string): Promise<ManifestReadResult> {
+  let text: string;
+  try {
+    text = await readFile(join(dir, MANIFEST_FILE), 'utf8');
+  } catch {
+    return { ok: false, message: `В каталоге бандла нет манифеста «${MANIFEST_FILE}».` };
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    return {
+      ok: false,
+      message: `Манифест «${MANIFEST_FILE}» — не JSON: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  const name =
+    isRecord(raw) && typeof raw.name === 'string' ? raw.name : undefined;
+  const version =
+    isRecord(raw) && typeof raw.version === 'string' ? raw.version : undefined;
+
+  const problems = validatePackManifest(raw);
+  if (problems.length > 0) {
+    return {
+      ok: false,
+      message: `Манифест не прошёл проверку целостности: ${problems.join('; ')}`,
+      ...(name ? { name } : {}),
+      ...(version ? { version } : {}),
+    };
+  }
+
+  const parsed = packManifestSchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      message: `Манифест не соответствует схеме: ${describeIssues(parsed.error)}`,
+      ...(name ? { name } : {}),
+      ...(version ? { version } : {}),
+    };
+  }
+  const manifest = parsed.data;
+  if (manifest.kind !== 'plugin') {
+    return {
+      ok: false,
+      message:
+        `Манифест «${manifest.name}» имеет kind «${manifest.kind}» — ` +
+        'установке подлежит только kind: \'plugin\'.',
+      name: manifest.name,
+      version: manifest.version,
+    };
+  }
+  return { ok: true, manifest };
+}
+
+/** Прочитать `PLUGIN_INTEGRITY.json` карантина (`null` — нет/битый). */
+async function readIntegrityFile(dir: string): Promise<PluginIntegrityFile | null> {
+  try {
+    const text = await readFile(join(dir, INTEGRITY_FILE), 'utf8');
+    const parsed: unknown = JSON.parse(text);
+    if (!isRecord(parsed) || typeof parsed.sha256 !== 'string') return null;
+    return parsed as unknown as PluginIntegrityFile;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Сервис установки/подтверждения/снятия плагина (Ф5а).
+ *
+ * Все проверки — **fail-closed**: непрочитанный манифест, сбой сканера,
+ * несовпадение хеша карантина и отсутствие данных доверия ведут к отказу, а не
+ * к «пропустить проверку». На диск (lock/installed/quarantine) ничего не
+ * пишется до прохождения всех гейтов.
+ */
+export class PluginInstaller {
+  private readonly _layout: PluginLayout;
+  private readonly _lock: PluginLockRepository;
+  private readonly _audit: PluginAuditRepository;
+  private readonly _config: PluginsConfig;
+  private readonly _host: PluginHost | undefined;
+  private readonly _scan: PluginScanHook | undefined;
+  /** Встроенный сканер (Ф2) — используется, когда явный хук не задан. */
+  private readonly _builtinScan: PluginScanHook;
+  private readonly _logger: PluginLogger;
+  private readonly _now: () => string;
+
+  constructor(deps: PluginInstallerDeps) {
+    this._layout = deps.layout;
+    this._lock = deps.lock;
+    this._audit = deps.audit;
+    this._config = deps.config;
+    this._host = deps.host;
+    this._scan = deps.scan;
+    this._builtinScan = createPluginScanHook();
+    this._logger = deps.logger ?? {
+      warn: (message: string) => {
+        console.warn(`[plugin-installer] ${message}`);
+      },
+    };
+    this._now = deps.now ?? (() => new Date().toISOString());
+  }
+
+  // ── Установка ───────────────────────────────────────────────────────
+
+  /**
+   * Установить плагин из локального каталога.
+   *
+   * Порядок проверок (важен, каждый шаг fail-closed):
+   * 1. манифест (`synth.pack`: JSON, `validatePackManifest`, `kind: 'plugin'`);
+   * 2. состав бандла + content-hash (детерминированный обход);
+   * 3. скан выключен, а исполнение включено → отказ
+   *    (`plugin.scan_disabled_with_execution`);
+   * 4. trust-floor (`plugin.trust_below_floor`) — **до** install-policy;
+   * 5. скан (сбой → `plugin.scan_rejected`, `dangerous` → `plugin.scan_rejected`);
+   * 6. `installKind: 'runtime'` при `plugins.runtimeInstall: 'deny'` → отказ;
+   * 7. install-policy: `allow` → установка, `ask` → карантин, `block` → отказ.
+   */
+  async installFromDirectory(request: PluginInstallRequest): Promise<PluginInstallOutcome> {
+    const actor = request.actor ?? 'system';
+    const installKind = request.installKind ?? 'runtime';
+
+    // ── Шаг 1: манифест ───────────────────────────────────────────────
+    const manifestRead = await readManifest(request.dir);
+    if (!manifestRead.ok) {
+      await this._writeAudit({
+        action: 'install',
+        plugin: manifestRead.name ?? '',
+        version: manifestRead.version ?? '',
+        outcome: 'rejected',
+        reason: 'plugin.manifest_invalid',
+        actor,
+        trustLevel: request.trustLevel,
+        source: request.source,
+      });
+      return {
+        outcome: 'rejected',
+        ...(manifestRead.name ? { name: manifestRead.name } : {}),
+        ...(manifestRead.version ? { version: manifestRead.version } : {}),
+        reason: 'plugin.manifest_invalid',
+        message: manifestRead.message,
+      };
+    }
+    const manifest = manifestRead.manifest;
+    const { name, version } = manifest;
+
+    // ── Шаг 2: состав бандла и content-hash ───────────────────────────
+    const { files, binaryFiles } = await collectBundleFiles(request.dir);
+    if (binaryFiles.length > 0) {
+      this._logger.warn(
+        `плагин «${name}@${version}»: бинарные файлы не попадают в бандл при установке ` +
+          `(${binaryFiles.join(', ')}) — сканер проверяет их в каталоге, но установка их пропускает.`,
+      );
+    }
+    const contentHash = computePluginContentHash(files);
+    const entry = resolvePluginEntry(files);
+
+    // ── Шаг 3: fail-closed — скан выключен, а исполнение включено ─────
+    if (this._config.scan === 'disabled' && this._config.executionEnabled) {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: 'plugin.scan_disabled_with_execution',
+        message:
+          'Сканирование расширений выключено (plugins.scan=disabled), а исполнение кода ' +
+          'плагинов включено (plugins.executionEnabled=true) — установка отклонена: ' +
+          'исполняемый код обязан быть просканирован.',
+        request,
+        contentHash,
+        mode: manifest.mode,
+      });
+    }
+
+    // ── Шаг 4: trust-floor (до install-policy, как в PluginHost) ──────
+    if (trustLevelRank(request.trustLevel) > trustLevelRank(this._config.trustFloor)) {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: 'plugin.trust_below_floor',
+        message:
+          `Уровень доверия плагина «${request.trustLevel}» ниже trust-floor инстанса ` +
+          `«${this._config.trustFloor}» — установка запрещена.`,
+        request,
+        contentHash,
+        mode: manifest.mode,
+      });
+    }
+
+    // ── Шаг 5: скан ───────────────────────────────────────────────────
+    const scan = await this._scanBundle({
+      name,
+      version,
+      manifest,
+      files,
+      rootDir: request.dir,
+      trustLevel: request.trustLevel,
+      installKind,
+      source: request.source,
+      identifier: request.identifier,
+      actor,
+      contentHash,
+    });
+    if (!scan.ok) {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: scan.reason,
+        message: scan.message,
+        request,
+        contentHash,
+        mode: manifest.mode,
+      });
+    }
+    const scanSummary: ScanSummary = {
+      verdict: scan.verdict,
+      performed: scan.performed,
+      findings: scan.findings,
+    };
+
+    // ── Шаг 6: runtime-install ────────────────────────────────────────
+    if (installKind === 'runtime' && this._config.runtimeInstall === 'deny') {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: 'plugin.runtime_install_denied',
+        message:
+          'Установка плагинов во время работы инстанса запрещена ' +
+          '(plugins.runtimeInstall=deny) — бандл не установлен.',
+        request,
+        contentHash,
+        mode: manifest.mode,
+        scan: scanSummary,
+      });
+    }
+
+    // ── Шаг 7: install-policy ─────────────────────────────────────────
+    const action = installPolicyDecision({
+      trust: request.trustLevel,
+      verdict: scan.verdict,
+      kind: 'plugin',
+    });
+
+    if (action === 'block') {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: 'plugin.scan_rejected',
+        message:
+          `install-policy: block — вердикт сканера «${scan.verdict}» ` +
+          `(находок: ${scan.findings}): установка заблокирована.` +
+          (scan.note ? ` ${scan.note}.` : ''),
+        request,
+        contentHash,
+        mode: manifest.mode,
+        scan: scanSummary,
+      });
+    }
+
+    // Раскладка: `allow` → installed/, `ask` → quarantine/ (lock не пишется).
+    const staged = await stagePluginBundle(this._layout, {
+      name,
+      version,
+      files,
+      action,
+      source: request.source,
+      contentHash,
+      fetchedAt: this._now(),
+      trustLevel: request.trustLevel,
+      installKind,
+      ...(request.identifier ? { identifier: request.identifier } : {}),
+      ...(request.ref ? { ref: request.ref } : {}),
+    });
+
+    if (action === 'ask') {
+      await this._writeAudit({
+        action: 'install',
+        plugin: name,
+        version,
+        outcome: 'rejected',
+        reason: 'plugin.approval_required',
+        actor,
+        trustLevel: request.trustLevel,
+        scanVerdict: scan.verdict,
+        scanPerformed: scan.performed,
+        scanFindings: scan.findings,
+        contentHash,
+        source: request.source,
+        mode: manifest.mode,
+      });
+      return {
+        outcome: 'approval_required',
+        name,
+        version,
+        dir: staged.dir,
+        reason:
+          `install-policy: ask — вердикт сканера «${scan.verdict}» ` +
+          `(находок: ${scan.findings}); бандл помещён в карантин ` +
+          `(${staged.dir}) и будет установлен после подтверждения.`,
+      };
+    }
+
+    // ── Шаг 8: lock + аудит + (опционально) активация ─────────────────
+    await this._lock.save(
+      this._buildLockEntry({
+        name,
+        version,
+        source: request.source,
+        trustLevel: request.trustLevel,
+        verdict: scan.verdict,
+        contentHash,
+        entry,
+        ...(request.identifier ? { identifier: request.identifier } : {}),
+        ...(request.ref ? { ref: request.ref } : {}),
+      }),
+    );
+    await this._writeAudit({
+      action: 'install',
+      plugin: name,
+      version,
+      outcome: 'ok',
+      actor,
+      trustLevel: request.trustLevel,
+      scanVerdict: scan.verdict,
+      scanPerformed: scan.performed,
+      scanFindings: scan.findings,
+      contentHash,
+      source: request.source,
+      mode: manifest.mode,
+    });
+
+    const activated = request.activate
+      ? await this._activate({
+          name,
+          version,
+          manifest,
+          files,
+          rootDir: staged.dir,
+          entry,
+          contentHash,
+          trustLevel: request.trustLevel,
+          installKind,
+          source: request.source,
+          actor,
+        })
+      : undefined;
+
+    return {
+      outcome: 'installed',
+      name,
+      version,
+      dir: staged.dir,
+      contentHash,
+      ...(activated ? { activated } : {}),
+    };
+  }
+
+  // ── Подтверждение ───────────────────────────────────────────────────
+
+  /**
+   * Подтвердить бандл из карантина (`ask` → установка).
+   *
+   * Сначала ищется карантин (`opts.version` либо единственный каталог по
+   * префиксу `name@`); если его нет, но lock-запись есть — установка уже
+   * состоялась, результат идемпотентный (`installed`). Карантин **повторно**
+   * сканируется: `block`/`dangerous` → отказ, бандл остаётся в карантине
+   * (перенос «назад» из `installed/` не выполняется — мы туда не переносили).
+   * `caution` при явном подтверждении владельца — достаточное основание для
+   * установки: запрос `approve` и есть ответ на `ask`.
+   *
+   * Доверие/вид установки/источник берутся из `PLUGIN_INTEGRITY.json`
+   * карантина (их резолвит источник, а не манифест); нет данных доверия —
+   * fail-closed `community` (ниже любого дефолтного trust-floor).
+   */
+  async approve(
+    name: string,
+    opts: { version?: string; activate?: boolean; actor?: string } = {},
+  ): Promise<PluginInstallOutcome> {
+    const actor = opts.actor ?? 'system';
+    const existing = await this._lock.get(name);
+    const requestedVersion = opts.version ?? existing?.version;
+    const lookup = await this._findQuarantine(name, requestedVersion);
+
+    if (lookup.kind === 'ambiguous') {
+      return this._rejectInstall({
+        name,
+        actor,
+        reason: 'plugin.not_found',
+        message:
+          `В карантине несколько версий плагина «${name}» ` +
+          `(${lookup.versions.join(', ')}) — укажите version явно.`,
+      });
+    }
+
+    if (lookup.kind === 'none') {
+      const installedDir = existing
+        ? pluginInstalledDir(this._layout, name, existing.version)
+        : undefined;
+      const installedPresent = installedDir ? await pathExists(installedDir) : false;
+
+      // Уже установлен — подтверждение идемпотентно (активация по запросу).
+      if (
+        existing &&
+        installedDir &&
+        installedPresent &&
+        (!opts.version || opts.version === existing.version)
+      ) {
+        const dir = installedDir;
+        const { files } = await collectBundleFiles(dir);
+        const entry = existing.entry ?? resolvePluginEntry(files);
+        let activated: PluginActivationResult | undefined;
+        if (opts.activate) {
+          const manifestRead = await readManifest(dir);
+          if (!manifestRead.ok) {
+            return this._rejectInstall({
+              name,
+              version: existing.version,
+              actor,
+              reason: 'plugin.manifest_invalid',
+              message: manifestRead.message,
+            });
+          }
+          activated = await this._activate({
+            name,
+            version: existing.version,
+            manifest: manifestRead.manifest,
+            files,
+            rootDir: dir,
+            entry,
+            contentHash: existing.content_hash,
+            trustLevel: existing.trust_level,
+            installKind: 'runtime',
+            source: existing.source,
+            actor,
+          });
+        }
+        return {
+          outcome: 'installed',
+          name,
+          version: existing.version,
+          dir,
+          contentHash: existing.content_hash,
+          ...(activated ? { activated } : {}),
+        };
+      }
+      return this._rejectInstall({
+        name,
+        ...(requestedVersion ? { version: requestedVersion } : {}),
+        actor,
+        reason: 'plugin.not_found',
+        message: existing
+          ? `Lock-запись плагина «${name}» есть, но каталог ` +
+            `installed/<name>@${existing.version} отсутствует, а карантина нет — подтверждать нечего.`
+          : `Плагин «${name}» не найден ни в lock-файле, ни в карантине — ` +
+            'подтверждать нечего.',
+      });
+    }
+
+    // ── Карантин: манифест, файлы, целостность ────────────────────────
+    const qdir = lookup.dir;
+    const manifestRead = await readManifest(qdir);
+    if (!manifestRead.ok) {
+      return this._rejectInstall({
+        name,
+        version: lookup.version,
+        actor,
+        reason: 'plugin.manifest_invalid',
+        message: manifestRead.message,
+      });
+    }
+    const manifest = manifestRead.manifest;
+    const version = manifest.version;
+    const { files } = await collectBundleFiles(qdir);
+    const contentHash = computePluginContentHash(files);
+    const entry = resolvePluginEntry(files);
+
+    const integrity = await readIntegrityFile(qdir);
+    if (!integrity) {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: 'plugin.integrity_unverifiable',
+        message:
+          `В карантине «${name}@${version}» нет читаемого ${INTEGRITY_FILE} — ` +
+          'целостность и доверие бандла подтвердить нечем.',
+      });
+    }
+    if (integrity.sha256 !== contentHash) {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: 'plugin.integrity_mismatch',
+        message:
+          `content-hash карантина «${name}@${version}» не совпал с записанным в ` +
+          `${INTEGRITY_FILE} (файлы изменены после сканирования) — подтверждение отклонено.`,
+      });
+    }
+
+    const trustLevel: CatalogTrustLevel = integrity.trust_level ?? 'community';
+    const installKind = integrity.install_kind ?? 'runtime';
+    const source = integrity.source ?? 'unknown';
+
+    // ── Повторные гейты (те же, что при установке) ────────────────────
+    if (this._config.scan === 'disabled' && this._config.executionEnabled) {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: 'plugin.scan_disabled_with_execution',
+        message:
+          'Сканирование расширений выключено (plugins.scan=disabled), а исполнение кода ' +
+          'плагинов включено (plugins.executionEnabled=true) — подтверждение отклонено.',
+        trustLevel,
+        source,
+        contentHash,
+        mode: manifest.mode,
+      });
+    }
+
+    if (trustLevelRank(trustLevel) > trustLevelRank(this._config.trustFloor)) {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: 'plugin.trust_below_floor',
+        message:
+          `Уровень доверия плагина «${trustLevel}» ниже trust-floor инстанса ` +
+          `«${this._config.trustFloor}» — подтверждение отклонено.`,
+        trustLevel,
+        source,
+        contentHash,
+        mode: manifest.mode,
+      });
+    }
+
+    const scan = await this._scanBundle({
+      name,
+      version,
+      manifest,
+      files,
+      rootDir: qdir,
+      trustLevel,
+      installKind,
+      source,
+      identifier: integrity.identifier,
+      actor,
+      contentHash,
+    });
+    if (!scan.ok) {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: scan.reason,
+        message: scan.message,
+        trustLevel,
+        source,
+        contentHash,
+        mode: manifest.mode,
+      });
+    }
+    const scanSummary: ScanSummary = {
+      verdict: scan.verdict,
+      performed: scan.performed,
+      findings: scan.findings,
+    };
+
+    if (installKind === 'runtime' && this._config.runtimeInstall === 'deny') {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: 'plugin.runtime_install_denied',
+        message:
+          'Установка плагинов во время работы инстанса запрещена ' +
+          '(plugins.runtimeInstall=deny) — подтверждение отклонено.',
+        trustLevel,
+        source,
+        contentHash,
+        mode: manifest.mode,
+        scan: scanSummary,
+      });
+    }
+
+    if (installPolicyDecision({ trust: trustLevel, verdict: scan.verdict, kind: 'plugin' }) === 'block') {
+      return this._rejectInstall({
+        name,
+        version,
+        actor,
+        reason: 'plugin.scan_rejected',
+        message:
+          `install-policy: block — повторный скан карантина дал вердикт «${scan.verdict}» ` +
+          `(находок: ${scan.findings}); бандл остаётся в карантине.` +
+          (scan.note ? ` ${scan.note}.` : ''),
+        trustLevel,
+        source,
+        contentHash,
+        mode: manifest.mode,
+        scan: scanSummary,
+      });
+    }
+
+    const dir = await releaseFromQuarantine(this._layout, name, version);
+    await this._lock.save(
+      this._buildLockEntry({
+        name,
+        version,
+        source,
+        trustLevel,
+        verdict: scan.verdict,
+        contentHash,
+        entry,
+        ...(integrity.identifier ? { identifier: integrity.identifier } : {}),
+        ...(integrity.ref ? { ref: integrity.ref } : {}),
+      }),
+    );
+    await this._writeAudit({
+      action: 'install',
+      plugin: name,
+      version,
+      outcome: 'ok',
+      actor,
+      trustLevel,
+      scanVerdict: scan.verdict,
+      scanPerformed: scan.performed,
+      scanFindings: scan.findings,
+      contentHash,
+      source,
+      mode: manifest.mode,
+    });
+
+    const activated = opts.activate
+      ? await this._activate({
+          name,
+          version,
+          manifest,
+          files,
+          rootDir: dir,
+          entry,
+          contentHash,
+          trustLevel,
+          installKind,
+          source,
+          actor,
+        })
+      : undefined;
+
+    return {
+      outcome: 'installed',
+      name,
+      version,
+      dir,
+      contentHash,
+      ...(activated ? { activated } : {}),
+    };
+  }
+
+  // ── Снятие ──────────────────────────────────────────────────────────
+
+  /**
+   * Снять установку: деактивация (если активен) → запись lock → каталог.
+   *
+   * Идемпотентно: нет записи в lock — `{removed: false}` (аудит не пишется,
+   * снимать нечего). Каталоги `installed/<name>@<version>` и
+   * `quarantine/<name>@<version>` (версия из lock) удаляются, если
+   * `removeFiles !== false`.
+   */
+  async uninstall(
+    name: string,
+    opts: { removeFiles?: boolean; actor?: string } = {},
+  ): Promise<PluginUninstallResult> {
+    const actor = opts.actor ?? 'system';
+    const entry = await this._lock.get(name);
+    if (!entry) return { removed: false };
+
+    let deactivated = false;
+    if (this._host?.isActive(name)) {
+      await this._host.deactivate(name, { actor });
+      deactivated = true;
+    }
+
+    await this._lock.delete(name);
+
+    if (opts.removeFiles !== false) {
+      await rm(pluginInstalledDir(this._layout, name, entry.version), {
+        recursive: true,
+        force: true,
+      });
+      await rm(pluginQuarantineDir(this._layout, name, entry.version), {
+        recursive: true,
+        force: true,
+      });
+    }
+
+    await this._writeAudit({
+      action: 'uninstall',
+      plugin: name,
+      version: entry.version,
+      outcome: 'ok',
+      actor,
+      trustLevel: entry.trust_level,
+      scanVerdict: entry.scan_verdict,
+      contentHash: entry.content_hash,
+      source: entry.source,
+    });
+
+    return { removed: true, ...(deactivated ? { deactivated: true } : {}) };
+  }
+
+  /** Установленные плагины (записи lock, детерминированный порядок). */
+  async list(): Promise<PluginLockEntry[]> {
+    return this._lock.list();
+  }
+
+  // ── Вспомогательное ────────────────────────────────────────────────
+
+  /** Найти карантин по имени (и версии, если задана). */
+  private async _findQuarantine(
+    name: string,
+    version: string | undefined,
+  ): Promise<QuarantineLookup> {
+    if (version) {
+      const dir = pluginQuarantineDir(this._layout, name, version);
+      if (await pathExists(dir)) return { kind: 'found', version, dir };
+      return { kind: 'none' };
+    }
+
+    let items: string[];
+    try {
+      items = await readdir(this._layout.quarantineDir);
+    } catch {
+      return { kind: 'none' };
+    }
+    const prefix = `${name}@`;
+    const versions = items
+      .filter((item) => item.startsWith(prefix))
+      .map((item) => item.slice(prefix.length))
+      .sort();
+    if (versions.length === 0) return { kind: 'none' };
+    if (versions.length > 1) return { kind: 'ambiguous', versions };
+    return {
+      kind: 'found',
+      version: versions[0] as string,
+      dir: pluginQuarantineDir(this._layout, name, versions[0] as string),
+    };
+  }
+
+  /**
+   * Шаг скана: прогон хука + запись аудита `scan` (всегда, как в `PluginHost`).
+   *
+   * `plugins.scan = 'disabled'` — скан не выполняется: вердикт `safe`, в
+   * аудите `scanPerformed: false` (по журналу видно, что скана не было).
+   * Сбой сканера — fail-closed (`plugin.scan_rejected`).
+   */
+  private async _scanBundle(input: {
+    name: string;
+    version: string;
+    manifest: PackManifest;
+    files: Record<string, string>;
+    rootDir: string;
+    trustLevel: CatalogTrustLevel;
+    installKind: 'deploy' | 'runtime';
+    source: string;
+    identifier?: string;
+    actor: string;
+    contentHash: string;
+  }): Promise<ScanStepResult> {
+    if (this._config.scan === 'disabled') {
+      await this._writeAudit({
+        action: 'scan',
+        plugin: input.name,
+        version: input.version,
+        outcome: 'ok',
+        actor: input.actor,
+        trustLevel: input.trustLevel,
+        scanVerdict: 'safe',
+        scanPerformed: false,
+        scanFindings: 0,
+        contentHash: input.contentHash,
+        source: input.source,
+      });
+      return { ok: true, verdict: 'safe', performed: false, findings: 0 };
+    }
+
+    const hook = this._scan ?? this._builtinScan;
+    const descriptor: PluginActivationDescriptor = {
+      name: input.name,
+      version: input.version,
+      manifest: input.manifest,
+      files: input.files,
+      rootDir: input.rootDir,
+      trustLevel: input.trustLevel,
+      installKind: input.installKind,
+      source: input.source,
+      ...(input.identifier ? { sourceUrl: input.identifier } : {}),
+    };
+
+    let result: PluginScanResult;
+    try {
+      result = await hook(descriptor);
+    } catch (err) {
+      return {
+        ok: false,
+        reason: 'plugin.scan_rejected',
+        message: `Сканер недоступен: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    const performed = result.performed !== false;
+    const findings = result.findings?.length ?? 0;
+    const risky = result.verdict === 'dangerous' || result.verdict === 'caution';
+
+    // Человекочитаемая сводка находок (для сообщения об отказе): первые три —
+    // полный список в аудите не хранится (только число), а владельцу нужен
+    // хотя бы один конкретный повод.
+    const findingsNote = (result.findings ?? [])
+      .slice(0, 3)
+      .map((finding) => `${finding.category}/${finding.severity}: ${finding.description}`)
+      .join('; ');
+    const note = [result.reason, findingsNote].filter(Boolean).join('; ');
+
+    await this._writeAudit({
+      action: 'scan',
+      plugin: input.name,
+      version: input.version,
+      outcome: risky ? 'rejected' : 'ok',
+      actor: input.actor,
+      ...(risky
+        ? {
+            reason:
+              result.verdict === 'dangerous'
+                ? ('plugin.scan_rejected' as const)
+                : ('plugin.approval_required' as const),
+          }
+        : {}),
+      trustLevel: input.trustLevel,
+      scanVerdict: result.verdict,
+      scanPerformed: performed,
+      scanFindings: findings,
+      contentHash: result.contentHash ?? input.contentHash,
+      source: input.source,
+    });
+
+    if (result.verdict === 'dangerous') {
+      return {
+        ok: false,
+        reason: 'plugin.scan_rejected',
+        message:
+          `Сканер отклонил плагин (вердикт «dangerous», находок: ${findings})` +
+          (note ? `: ${note}.` : '.'),
+      };
+    }
+
+    return {
+      ok: true,
+      verdict: result.verdict,
+      performed,
+      findings,
+      ...(note ? { note } : {}),
+    };
+  }
+
+  /** Активировать установленный бандл (хост не передан — не ошибка). */
+  private async _activate(input: {
+    name: string;
+    version: string;
+    manifest: PackManifest;
+    files: Record<string, string>;
+    rootDir: string;
+    entry: string;
+    contentHash: string;
+    trustLevel: CatalogTrustLevel;
+    installKind: 'deploy' | 'runtime';
+    source: string;
+    actor: string;
+  }): Promise<PluginActivationResult | undefined> {
+    if (!this._host) return undefined;
+    const descriptor: PluginActivationDescriptor = {
+      name: input.name,
+      version: input.version,
+      manifest: input.manifest,
+      // Файлы передаются обязательно: шаг integrity сверяет content-hash,
+      // а ожидаемый хеш известен — без файлов проверка «непроверяема».
+      files: input.files,
+      rootDir: input.rootDir,
+      entry: input.entry,
+      contentHash: input.contentHash,
+      trustLevel: input.trustLevel,
+      installKind: input.installKind,
+      source: input.source,
+      actor: input.actor,
+    };
+    return this._host.activate(descriptor, { actor: input.actor });
+  }
+
+  /** Запись lock-файла (upsert по имени — семантика порта). */
+  private _buildLockEntry(input: {
+    name: string;
+    version: string;
+    source: string;
+    trustLevel: CatalogTrustLevel;
+    verdict: PluginScanVerdict;
+    contentHash: string;
+    entry: string;
+    identifier?: string;
+    ref?: string;
+  }): PluginLockEntry {
+    const ts = this._now();
+    return {
+      name: input.name,
+      version: input.version,
+      source: input.source,
+      ...(input.identifier ? { identifier: input.identifier } : {}),
+      trust_level: input.trustLevel,
+      scan_verdict: input.verdict,
+      content_hash: input.contentHash,
+      ...(input.ref ? { ref: input.ref } : {}),
+      entry: input.entry,
+      installed_at: ts,
+      updated_at: ts,
+    };
+  }
+
+  /** Отказ установки/подтверждения: аудит `install` + результат вызывающему. */
+  private async _rejectInstall(input: {
+    name?: string;
+    version?: string;
+    actor: string;
+    reason: PluginAuditReason;
+    message: string;
+    request?: PluginInstallRequest;
+    trustLevel?: CatalogTrustLevel;
+    source?: string;
+    contentHash?: string;
+    mode?: PackManifest['mode'];
+    scan?: ScanSummary;
+  }): Promise<PluginInstallOutcome> {
+    const name = input.name ?? '';
+    const trustLevel = input.trustLevel ?? input.request?.trustLevel;
+    const source = input.source ?? input.request?.source;
+    await this._writeAudit({
+      action: 'install',
+      plugin: name,
+      version: input.version ?? '',
+      outcome: 'rejected',
+      reason: input.reason,
+      actor: input.actor,
+      ...(trustLevel ? { trustLevel } : {}),
+      ...(input.scan
+        ? {
+            scanVerdict: input.scan.verdict,
+            scanPerformed: input.scan.performed,
+            scanFindings: input.scan.findings,
+          }
+        : {}),
+      ...(input.contentHash ? { contentHash: input.contentHash } : {}),
+      ...(source ? { source } : {}),
+      ...(input.mode ? { mode: input.mode } : {}),
+    });
+    return {
+      outcome: 'rejected',
+      ...(input.name ? { name: input.name } : {}),
+      ...(input.version ? { version: input.version } : {}),
+      reason: input.reason,
+      message: input.message,
+    };
+  }
+
+  /**
+   * Запись в журнал аудита плагинов (best-effort: сбой записи не ломает
+   * установку — предупреждение в лог, как в `PluginHost`/ADR-092).
+   */
+  private async _writeAudit(input: AuditInput): Promise<void> {
+    const entry: PluginAuditEntry = {
+      id: `pa_${generateId()}`,
+      ts: this._now(),
+      actor: input.actor,
+      scope: 'plugin',
+      action: input.action,
+      plugin: input.plugin,
+      version: input.version,
+      outcome: input.outcome,
+      ...(input.reason ? { reason: input.reason } : {}),
+      ...(input.trustLevel ? { trustLevel: input.trustLevel } : {}),
+      ...(input.scanVerdict ? { scanVerdict: input.scanVerdict } : {}),
+      ...(input.scanPerformed !== undefined ? { scanPerformed: input.scanPerformed } : {}),
+      ...(input.scanFindings !== undefined ? { scanFindings: input.scanFindings } : {}),
+      ...(input.contentHash ? { contentHash: input.contentHash } : {}),
+      ...(input.source ? { source: input.source } : {}),
+      ...(input.mode ? { mode: input.mode } : {}),
+    };
+    try {
+      await this._audit.append(entry);
+    } catch (err) {
+      this._logger.warn(
+        `не удалось записать событие аудита плагинов (${input.action}/${input.plugin}): ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+}

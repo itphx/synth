@@ -43,6 +43,13 @@
 > cache-busting `?v=<contentHash|mtimeMs>`, три формы модуля (`apply` / `default.apply` /
 > `default`-функция). Новый код отказа **`plugin.module_invalid`** («модуль загружен, но не выполнил
 > контракт `PluginModule`»); кодов в `PLUGIN_AUDIT_REASONS` — **24**. `out-of-process` — остаток Ф4б.
+> **Обновлено (Ф5а):** 2026-10-22 — **Ф5а выполнен** (та же ветка): сервис установки в ядре —
+> `engine/plugins/installer.ts` (`PluginInstaller.installFromDirectory`/`approve`/`uninstall`/`list`):
+> манифест → состав бандла/content-hash → fail-closed(`scan`+`executionEnabled`) → trust-floor → скан →
+> `runtimeInstall` → install-policy (`allow` → `installed/`, `ask` → карантин, `block` → отказ) → lock +
+> аудит `install`. Действия аудита **`install`/`uninstall`** (`PLUGIN_AUDIT_ACTIONS`), `PLUGIN_INTEGRITY.json`
+> хранит доверие/вид установки — подтверждение из карантина не угадывает trust. HTTP API, CLI,
+> `plugins.json` и старт-активация из lock — **Ф5б/Ф5в**.
 > **Источник:** вынесено из зонтика [ADR-086](./adr-086-extensibility-plugins-editions.md) — Extension API
 > проектировался там как первый из четырёх столпов (плагины, editions, contribution flow, add-on'ы);
 > здесь он выделен в отдельный документ и детализирован.
@@ -822,6 +829,71 @@ Home-модель ([ADR-079](./adr-079-local-home-independent-instances.md)); б
 content_hash, ref, entry, installed_at, updated_at }`. **Pin обязателен**: `ref` (sha/тег) +
 `content_hash`; update — только явная операция, «всегда latest» нет.
 
+### Реализация (Ф5а)
+
+Сервис установки живёт в ядре — `PluginInstaller` (`packages/core/src/engine/plugins/installer.ts`),
+без HTTP API/CLI (они — Ф5б/Ф5в). Операции: `installFromDirectory(request)` (локальный каталог
+распакованного бандла), `approve(name, {version?, activate?, actor?})` (подтверждение карантина),
+`uninstall(name, {removeFiles?, actor?})` и `list()`. Зависимости — раскладка, порты
+`PluginLockRepository`/`PluginAuditRepository`, конфиг `plugins.*`, опциональные `PluginHost`
+(деактивация при снятии и активация после установки) и `PluginScanHook` (не задан — встроенный
+сканер).
+
+**Порядок проверок** (каждый шаг fail-closed; на диск до последнего гейта ничего не пишется):
+
+| # | Проверка | Отказ |
+|---|---|---|
+| 1 | `synth.pack` читается как JSON, проходит `validatePackManifest` и схему, `kind: 'plugin'` | `plugin.manifest_invalid` |
+| 2 | Состав бандла: рекурсивный обход (сортировка по имени; симлинки, `node_modules`, `.git` пропускаются; `PLUGIN_INTEGRITY.json` исключён), content-hash | — |
+| 3 | `plugins.scan='disabled'` **и** `plugins.executionEnabled=true` | `plugin.scan_disabled_with_execution` |
+| 4 | Trust-floor (до install-policy, как в `PluginHost`) | `plugin.trust_below_floor` |
+| 5 | Скан (сбой сканера — тоже отказ), вердикт `dangerous` | `plugin.scan_rejected` |
+| 6 | `installKind: 'runtime'` при `plugins.runtimeInstall: 'deny'` | `plugin.runtime_install_denied` |
+| 7 | Install-policy (`installPolicyDecision`, ячейка `kind: 'plugin'`): `allow` → установка; `ask` → карантин; `block` → отказ | `plugin.scan_rejected` / `approval_required` |
+
+**Точка входа (`entry`)** — для lock-записи и активации: `dist/index.js`, если он есть в составе
+бандла; иначе первый по алфавиту `.js`/`.mjs` внутри `dist/`; иначе `dist/index.js` (дефолт
+загрузчика: отказ `import` будет явным).
+
+**Состав бандла и хеш.** Текстовые файлы (включая `synth.pack`) входят в `files` и в content-hash —
+хеш установщика совпадает с хешем `scanPluginDirectory`, поэтому шаг `integrity` при активации
+сверяется с тем же значением. Бинарные файлы в `files` не попадают (строкой без порчи не
+представить), но их видит сканер в каталоге: исполняемый бинарник → `high` → `dangerous` → отказ.
+Ограничение Ф5а: прочие бинарные ассеты (например, PNG) в установленный каталог не копируются —
+байтовое копирование и распаковка архивов — Ф5б.
+
+**Карантин (`ask`).** `stagePluginBundle` с `action: 'ask'` кладёт бандл в
+`quarantine/<name>@<version>/` (+ `PLUGIN_INTEGRITY.json`), lock **не пишется**, ответ —
+`approval_required`, аудит `install` с `outcome: 'rejected'`, `reason: 'plugin.approval_required'`.
+`approve` ищет карантин (по `opts.version` или единственному каталогу по префиксу `name@`), сверяет
+`PLUGIN_INTEGRITY.json` с фактическим content-hash (`plugin.integrity_mismatch` при расхождении),
+повторяет гейты (fail-closed, trust-floor, скан, `runtimeInstall`) и переносит бандл через
+`releaseFromQuarantine` только при отсутствии `block`; `caution` при явном подтверждении владельца
+достаточен (запрос `approve` и есть ответ на `ask`). Доверие/вид установки/источник берутся из
+`PLUGIN_INTEGRITY.json` (их резолвит источник, а не манифест); нет данных доверия — fail-closed
+`community`.
+
+**Аудит.** Действия `install`/`uninstall` добавлены в `PLUGIN_AUDIT_ACTIONS` (порядок — жизненный
+цикл: `install` → `activate` → `deactivate` → `uninstall` → `scan` → `filter`). Записи `install`:
+`ok` при установке/подтверждении, `rejected` с причиной гейта (`plugin.manifest_invalid`,
+`plugin.trust_below_floor`, `plugin.scan_rejected`, `plugin.scan_disabled_with_execution`,
+`plugin.runtime_install_denied`, `plugin.approval_required`, `plugin.integrity_mismatch`/
+`plugin.integrity_unverifiable`, `plugin.not_found`); запись `scan` пишется всегда (при
+`plugins.scan='disabled'` — с `scanPerformed: false`). `uninstall` пишется только при фактическом
+снятии (идемпотентный повтор — без записи).
+
+**Идемпотентность и версии.** Lock — upsert по имени (`installed_at` иммутабелен, `updated_at`
+обновляется); повторная установка той же версии не плодит записей и перезаписывает каталог.
+Установка другой версии заменяет запись по имени, но каталог прежней версии остаётся на диске —
+**известное ограничение** (чистка старых версий и `update` — Ф5б); `uninstall` удаляет каталог
+версии из lock-записи (`installed/<name>@<version>`) и одноимённый карантин.
+
+**Активация после установки.** `activate: true` вызывает `host.activate(descriptor)` с `rootDir`
+установленного каталога, `files` (для шага integrity), `contentHash`, `entry` и фактическим
+доверием. Хост не передан — активации нет (не ошибка). Отказ активации (`activated.outcome ===
+'rejected'`) установку не отменяет: установка и активация — разные статусы (причина — в результате и
+аудите `activate`).
+
 ### Пайплайн `PluginHost` (активация одного плагина)
 
 1. **resolve** — найти установленный бандл + манифест (по `plugins.lock.json`).
@@ -987,7 +1059,7 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | **Ф2 — модель доверия** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-trust`, коммитов нет) | Уровни trust, матрица install-policy с ячейкой `kind: "plugin"`, сканер (6+1 категорий, квоты, `content_hash`, кэш сканов, `.skillignore`, бинарные расширения), матрица `severity → verdict`, `quarantine/`, `plugins.lock.json`, порт `PluginAuditRepository` + `{dataDir}/audit/plugins.jsonl`. **Сделано:** встроенный статический сканер (`engine/plugins/scan/*`: правила, `.skillignore`, кэш, дефолтный хук скана), матрица install-policy одной функцией `installPolicyDecision` (`shared`, ячейка `kind: 'plugin'`), раскладка `<home>/plugin/` с карантином и `PLUGIN_INTEGRITY.json` (`engine/plugins/layout.ts`), порт `PluginLockRepository` (файл/память/PostgreSQL + миграция `007_plugin_lock`), аудит-событие `scan` (+ `plugin.approval_required`), шаг trust/scan в `PluginHost` — **trust-floor до install-policy** | тест: вердикт по severity (`info\|low → safe`, `medium → caution`, `high\|critical → dangerous`); квоты → `caution`; бинарник → `dangerous`; `community` + `dangerous` → `block`; trust-floor: `community` устанавливается, но не активируется (`plugin.trust_below_floor`) — **выполнено**, см. §«Статус реализации в коде (Ф2)» |
 | **Ф3 — точки `promptBlocks` + `llmFilters` + `tools`** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-points`): Ф3а — точка **`promptBlocks`**, Ф3б — точка **`llmFilters`**, Ф3в — точка **`tools`** и **контрактный suite расширений** | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений**. **Сделано (Ф3а):** контракт `PromptBlockProvider`/`PromptBlockContext` (`shared`, `types/prompt-blocks.ts`), реестр `PromptBlockRegistry` (`engine/context/prompt-block-registry.ts`), сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`), контекст хода (`query`/`turnId`), бюджет символов блока + обрезка (`status: 'truncated'`), инвалидация `promptStates` по блокам провайдеров (`provider: true`), фасад `PluginFacade.registerPromptBlock` (disposer снимает блок при деактивации), решение fail-closed `plugins.scan='disabled'` + `executionEnabled=true` (`plugin.scan_disabled_with_execution`), **версия правил сканера в ключе кэша сканов** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный — **по части `promptBlocks` выполнено**, см. §«Статус реализации в коде (Ф3а)»; критерии `llmFilters` — **выполнено, см. §«Статус реализации в коде (Ф3б)»**; точка `tools` (namespace, permission-слой, сверка `provides.tools[]`) и **контрактный suite расширений** — **выполнено, см. §«Статус реализации в коде (Ф3в)»** |
 | **Ф4 — два режима исполнения** — ⚠️ **частично: `inline` — выполнено (Ф4а), `out-of-process` — остаётся** | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация. **Сделано (Ф4а):** `inline`-загрузчик `createInlinePluginLoader` (`engine/plugins/inline-loader.ts`): containment по `realpath`, `.js`/`.mjs`, предел 8 МиБ, cache-busting `?v=<hash\|mtime>`, три формы модуля, новый код `plugin.module_invalid`; экспорт из `engine/plugins/index.ts` и `src/index.ts`. **Автоподключения в `server/app.ts`/`main.ts`/`backend/app/deps.ts` нет** — установка/активация и сканирование `plugins.lock.json` при старте появятся в Ф5 | тест: эталонный бандл (реальные `mkdtemp` + ESM-файл) активируется **через `PluginHost`** при `executionEnabled: true`, блок в `PromptBlockRegistry`, аудит `activate`; `export const x`/`export default 42` → `plugin.module_invalid`; бросок в модуле → `plugin.loader_unavailable`; `../evil.js`, абсолютный путь, симлинк наружу, `.ts`, превышение размера → отказ; перезапись бандла → новое содержимое — **выполнено (21 тест), см. §«Статус реализации в коде (Ф4а)»**. Критерии `out-of-process` (неверный токен → 401, недоступный процесс → деградация по `failMode`, suite на out-of-process реализации) — **остаются за Ф4б** |
-| **Ф5 — install/activate: CLI + API + managed deploy-time** | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
+| **Ф5 — install/activate: CLI + API + managed deploy-time** — ⚠️ **частично: сервис установки — Ф5а; API/CLI — остаётся** | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
 | **Ф6 — UI** | Раздел «Плагины»: список, карточка (trust/scan/hash/version/`contracts`/`host`/`provides`/режим), тумблеры enable/disable, install/update/remove, статус скана | тест UI: карточка показывает trust/scan/hash; переключатель enable вызывает API и обновляет список; i18n-паритет `ru.ts`/`en.ts` зелёный (`parity.test.ts`) |
 | **Ф7 — hybrid** | Allow-list сервера, форма политики, discovery (`/api/v2/settings/plugins` + сигнал в `/auth/oidc-meta`), server-scoped токены с `plugin_id`-scope (Уровень 2) | тест: плагин вне allow-list не активируется в hybrid; токен с чужим `plugin_id` отвергается сервером; локальный плагин без сервера — cooperative (помечено в UI/доках) |
 
@@ -1634,6 +1706,65 @@ bearer-токен из файла, `127.0.0.1`, запуск/остановка 
 suite расширений обязан пройти на out-of-process реализации. Далее **Ф5** (install/activate: CLI
 `synth plugin *`, `/api/v2/plugins*`, RBAC, старт-сканирование lock), **Ф6** (UI), **Ф7** (hybrid).
 
+### Статус реализации в коде (Ф5а, 2026-10-22)
+
+Ф5а — **первая часть Ф5**: сервис установки в ядре. Ветка `feature/plugin-points`, коммитов нет.
+HTTP API (`/api/v2/plugins*`), CLI (`synth plugin *`), runtime-override `plugins.json`, проводка в
+`server/app.ts`/`main.ts`/deps и старт-активация из `plugins.lock.json` — **Ф5б/Ф5в, не начаты**.
+
+| Что | Где |
+|---|---|
+| `PluginInstaller` — установка/подтверждение/снятие/список | `packages/core/src/engine/plugins/installer.ts` |
+| `PluginInstallerDeps` (`layout`/`lock`/`audit`/`config`/`scan?`/`host?`/`logger?`/`now?`), `PluginInstallRequest`, `PluginInstallOutcome` (`installed`/`approval_required`/`rejected`), `PluginUninstallResult` | там же |
+| `resolvePluginEntry(files)` — правило точки входа (`dist/index.js` → первый `.js`/`.mjs` в `dist/` → дефолт) | там же |
+| `PLUGIN_INTEGRITY.json` расширен: `trust_level?`/`install_kind?`/`identifier?`/`ref?` — подтверждение из карантина знает фактическое доверие и провенанс | `engine/plugins/layout.ts` |
+| Действия аудита `install`/`uninstall` (порядок: `install` → `activate` → `deactivate` → `uninstall` → `scan` → `filter`) | `packages/shared/src/types/plugin-audit.ts` |
+| Публичная поверхность: `PluginInstaller`, `resolvePluginEntry` и типы — из баррела `engine/plugins/index.ts` и `src/index.ts` core | `engine/plugins/index.ts`, `src/index.ts` |
+
+**Гейты установки** (`installFromDirectory`) — порядок и исходы:
+
+| Шаг | Проверка | `installed` | `approval_required` | `rejected` (код) |
+|---|---|---|---|---|
+| 1 | `synth.pack`: JSON, `validatePackManifest`, схема, `kind: 'plugin'` | — | — | `plugin.manifest_invalid` (ничего не пишется) |
+| 2 | Обход каталога + content-hash + `entry` | — | — | — |
+| 3 | `scan=disabled` + `executionEnabled=true` | — | — | `plugin.scan_disabled_with_execution` |
+| 4 | Trust-floor | — | — | `plugin.trust_below_floor` |
+| 5 | Скан (сбой/`dangerous`) | — | — | `plugin.scan_rejected` |
+| 6 | `runtime` + `runtimeInstall=deny` | — | — | `plugin.runtime_install_denied` |
+| 7 | Install-policy | `allow` → `installed/` + lock + аудит | `ask` → `quarantine/`, lock не пишется | `block` → `plugin.scan_rejected` («install-policy: block») |
+
+**Подтверждение и снятие.**
+
+| Операция | Поведение |
+|---|---|
+| `approve(name)` | lock есть и карантина нет → идемпотентный `installed`; карантина и lock нет → `plugin.not_found`; несколько версий в карантине без `version` → `plugin.not_found` («укажите version»); нет/битый `PLUGIN_INTEGRITY.json` → `plugin.integrity_unverifiable`; хеш не совпал → `plugin.integrity_mismatch`; `block` после повторного скана → `plugin.scan_rejected` (бандл остаётся в карантине); иначе `releaseFromQuarantine` → lock → аудит `install` |
+| `uninstall(name)` | нет lock → `{removed:false}` (аудит не пишется); активен → `host.deactivate` (`deactivated:true`); `lock.delete`; `rm -rf installed/<name>@<version>` и одноимённого карантина; аудит `uninstall` |
+
+**Тесты Ф5а.** `packages/core/src/engine/plugins/installer.test.ts` (20 тестов) — на **реальных**
+временных каталогах (`mkdtemp`, настоящие `synth.pack` и `dist/index.js`), in-memory порты
+(`MemoryPluginLockRepository`, `MemoryPluginAuditRepository`), инъекция часов: безопасный плагин
+(`trusted`/`safe`) → `installed`, каталог `installed/<name>@<version>/`, `PLUGIN_INTEGRITY.json`
+(`sha256 == content_hash`, `trust_level`, `install_kind`), lock-запись, аудит `scan`+`install`;
+`dangerous` (`eval(` и исполняемый `.exe`) → `plugin.scan_rejected`, lock пуст, `installed/` пуст;
+`caution` (`process.env` + `fetch` → `exfil_env_network`) → `approval_required` в карантин, lock пуст,
+затем `approve` → `installed` + lock, карантин пуст; trust-floor `community` при `trusted` →
+`plugin.trust_below_floor`, каталогов нет; `scan=disabled`+`executionEnabled` →
+`plugin.scan_disabled_with_execution`; `runtime` при `runtimeInstall=deny` →
+`plugin.runtime_install_denied`; `activate:true` + `createInlinePluginLoader` → `activated`, блок в
+`PromptBlockRegistry`; активация при `executionEnabled=false` → установка остаётся, `activated.rejected`
+(`plugin.execution_disabled`); идемпотентность (одна запись, `installed_at` сохранён, `updated_at`
+обновлён) и другая версия (одна запись, каталог старой остаётся); `uninstall` установленного и
+активного (`removed`+`deactivated`, lock пуст, каталог удалён, аудит; повтор → `{removed:false}`);
+манифесты `kind: 'addon'` и тир `stable` → `plugin.manifest_invalid` без записи на диск;
+`approve` без lock/карантина → `plugin.not_found`, подмена файла карантина →
+`plugin.integrity_mismatch`; бинарный (неисполняемый) файл не попадает в бандл (известное ограничение).
+
+**Остаток после Ф5а.** **Ф5б** — установка из `npm`/архива/URL (скачивание, распаковка, byte-copy
+бинарных ассетов), обновление/чистка старых версий, HTTP API `/api/v2/plugins*` и
+`/api/v2/settings/plugins`, CLI `synth plugin *`, runtime-override `plugins.json`, проводка в
+`server/app.ts`/`main.ts`/deps и старт-активация установленных плагинов из lock (deploy-time),
+RBAC/scope-гейты; **Ф5в** — managed deploy-time политика и UI (Ф6).
+
 ## Открытые вопросы
 
 > Закрыто решениями владельца продукта 2026-10-22: форма out-of-process-протокола (HTTP/1.1 + JSON,
@@ -1805,3 +1936,4 @@ suite расширений обязан пройти на out-of-process реа�
 - 2026-10-22 — **Ф3б выполнен** (ветка `feature/plugin-points`): закрыта точка **`llmFilters`** — контракт `LlmCallFilter`/`LlmFilterInput`/`LlmFilterVerdict`/`LlmFilterMessage` (`packages/shared/src/types/llm-filters.ts`, browser-safe: только типы и чистые функции; `phaseCanBlock`, `DEFAULT_LLM_FILTER_TIMEOUT_MS = 1000`), реестр `LlmFilterRegistry` (`engine/gateway/llm-filter-registry.ts`: fail-closed регистрация, disposer, `canVetoLlmFilter` — вето только у trust ≥ `trusted`, `defaultLlmFilterFailMode`, `setDefaultTimeoutMs` для runtime-бюджета), фильтры в `GatewayProvider` (три фазы: `pre_request` после `saveMap`, `post_response` — только наблюдение, `embedding` через `_prepareEmbedding`; таймаут `Promise.race`, понижение вето недоверенных, `FILTER_CODES`), **эмбеддинги перестали быть дырой инварианта 3** (`embed` и микро-слой идут через gateway-контур), аудит: `type: 'plugin_filter'` в аудите gateway (без текста) + `action: 'filter'` в журнале плагинов только для канонических кодов (`plugin_filter.denied`/`deny_downgraded`/`unavailable`; коды хоста `allowed`/`timeout`/`error`/`redact_*`/`buffering_required` — только в gateway), фасад `PluginFacade.registerLlmFilter` (владелец — плагин: имя/версия/фактическое доверие; отказ — предупреждение, активация не падает), **сверка `provides` ↔ фактические регистрации** (`diffPackProvides` после `apply()`: `provides.promptBlocks[]`/`provides.llmFilters[]`, расхождение в любую сторону → отказ `plugin.provides_mismatch` с откатом disposers; `provides.tools[]` — вместе с точкой `tools`, Ф3в). Кодов отказа в `PLUGIN_AUDIT_REASONS` — **23** (19 прежних + 3 канонических кода фильтров + `plugin.provides_mismatch`). Добавлен раздел «Статус реализации в коде (Ф3б, 2026-10-22)».
 - 2026-10-22 — **Ф3в выполнен, Ф3 закрыта полностью** (ветка `feature/plugin-points`): закрыта точка **`tools`** — `ToolSource = 'builtin' | 'mcp' | 'plugin'` + `pluginName` в `ToolDefinition` (`shared`), namespace-хелперы `types/plugin-tools.ts` (`plugin_<ns>_<tool>`; локальное имя с префиксом `plugin_` запрещено), `ToolRegistry.registerPlugin` (атомарная валидация: `invalid_name`/`invalid_definition`/`invalid_capability`/`name_conflict`; capability `mcp` и `runtime` зарезервированы — `runtime`-примитивы ядра неотключаемы админом; пустой набор capabilities — отказ), выборка по слоям `selectForSession → { builtin, plugin, mcp }`, группа `plugin` в permission-слое с матчем **по источнику** (`getToolGroups(..., source?)`, `PermissionCheckInput.toolSource`), фасад `PluginFacade.registerTool` и снятие при деактивации, сверка `provides.tools[]` по локальным именам (расхождение → `plugin.provides_mismatch` с откатом); **контрактный suite расширений** — `describePluginContract` + `PluginContractHarness` + 8 фикстур (`engine/plugins/contract/*`: эталон + `stable-block`/`bad-phase`/`bad-verdict`/`provides-mismatch`/`unknown-capability`/`reserved-tool-name`/`untrusted-deny`), прогон на in-memory ядре (21 тест) и пригодность для `out-of-process` (Ф4); проверки suite: тир/ключи/бюджет блоков, порядок и `failMode` фильтров, namespace и permission-слой тулов, сверка `provides`, dispose-дисциплина, запрет обхода (заявленный trust не повышает фактический). Попутно исправлен дефект Ф1: `DEFAULT_EXTENSION_CONTRACT_VERSION` `'1'` → `'1.0.0'` — строгий `parseSemver` отвергал документированный `contracts.extensionApi: '^1'` (любой такой манифест получал `plugin.contract_mismatch`).
 - 2026-10-22 — **Ф4а выполнен** (ветка `feature/plugin-points`): реализован **`inline`-загрузчик** кода плагина — `createInlinePluginLoader` (`packages/core/src/engine/plugins/inline-loader.ts`), закрывающий шаг `import` пайплайна `PluginHost`: точка входа `join(rootDir, entry ?? 'dist/index.js')` (`PluginActivationDescriptor.entry` — из lock-записи), **containment** по `realpath` (отсекает `..`, абсолютные пути и симлинки наружу), расширение только `.js`/`.mjs`, предел бандла 8 МиБ (`DEFAULT_MAX_PLUGIN_BUNDLE_BYTES`), cache-busting `?v=<contentHash|mtimeMs>`, три формы модуля (`apply` / `default.apply` / `default`-функция), bundle-only (npm-зависимости не резолвятся, `@itphx/*` — external). Новый код отказа **`plugin.module_invalid`** (модуль загружен, но контракт `PluginModule` не выполнен) — `PLUGIN_AUDIT_REASONS` **23 → 24**; причина отказа шага `import` передаётся из загрузчика в хост через `PluginLoadError`/`pluginLoadFailureReason`. Загрузчик доступен как фабрика (нет автоподключения в `server/app.ts`/`main.ts`/`backend/app/deps.ts` — установка и старт-сканирование lock — Ф5). Тесты — `engine/plugins/inline-loader.test.ts` (21, реальные `mkdtemp` + ESM-файлы, включая сквозную активацию через `PluginHost` с блоком в `PromptBlockRegistry`).
+- 2026-10-22 — **Ф5а выполнен** (ветка `feature/plugin-points`): сервис установки в ядре — `PluginInstaller` (`engine/plugins/installer.ts`): `installFromDirectory` (манифест → состав бандла/content-hash → fail-closed `scan`+`executionEnabled` → trust-floor → скан → `runtimeInstall` → install-policy → lock + аудит `install`; `ask` → карантин без lock, `block`/`dangerous` → отказ), `approve` (повторный скан карантина, сверка `PLUGIN_INTEGRITY.json` с хешем, `releaseFromQuarantine`, lock; хеш/доверие не подтверждаются → fail-closed), `uninstall` (деактивация → lock → `rm -rf` каталога; идемпотентно) и `list`. Действия аудита `install`/`uninstall` (`PLUGIN_AUDIT_ACTIONS`), `PLUGIN_INTEGRITY.json` расширен `trust_level`/`install_kind`/`identifier`/`ref`. Правило `entry`: `dist/index.js` → первый `.js`/`.mjs` в `dist/` → дефолт. Установка другой версии оставляет каталог прежней (известное ограничение; чистка — Ф5б). HTTP API/CLI/`plugins.json`/старт-активация из lock — Ф5б/Ф5в. Тесты — `engine/plugins/installer.test.ts` (20, реальные `mkdtemp` + in-memory порты).

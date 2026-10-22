@@ -223,8 +223,9 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - PROP-090 §9: **журнал аудита плагинов** — `types/plugin-audit.ts` (re-export из `types`):
   `PluginAuditEntry` (`id` `pa_<uuid>`/`ts`/`actor`/`scope: 'plugin'`/`action`/`plugin`/`version`/
   `trustLevel?`/`scanVerdict?`/`scanFindings?`/`scanPerformed?`/`contentHash?`/`mode?`/`outcome`/
-  `reason?`/`source?`) и перечни `PLUGIN_AUDIT_ACTIONS` (`activate`/`deactivate`/`scan`/`filter` —
-  последнее добавлено Ф3б: события решений фильтров LLM-вызовов),
+  `reason?`/`source?`) и перечни `PLUGIN_AUDIT_ACTIONS` (`install`/`activate`/`deactivate`/`uninstall`/
+  `scan`/`filter` — `filter` добавлено Ф3б: события решений фильтров LLM-вызовов, `install`/`uninstall` —
+  Ф5а: установка и снятие плагина `PluginInstaller`),
   `PLUGIN_AUDIT_OUTCOMES` (`ok`/`rejected`), `PLUGIN_SCAN_VERDICTS` (`safe`/`caution`/`dangerous`),
   `PLUGIN_AUDIT_REASONS` — **закрытый** список **24** кодов отказа (по одному на гейт пайплайна
   активации; Ф2 добавил `plugin.scan_rejected` и `plugin.approval_required`, Ф3а —

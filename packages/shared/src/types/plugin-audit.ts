@@ -23,9 +23,21 @@ import type { CatalogTrustLevel } from './trust.js';
  * журналу было видно, **чем** решена активация); Ф3б добавил `filter` —
  * события решений фильтров LLM-вызовов (точка `llmFilters`): понижение вето
  * недоверенного фильтра, блокировка вызова доверенным фильтром, сбой/таймаут
- * фильтра.
+ * фильтра. Ф5а добавил `install`/`uninstall` — события установки
+ * (`PluginInstaller`: манифест → скан → trust-floor → install-policy →
+ * раскладка → lock) и снятия (деактивация → lock → каталог).
+ *
+ * Порядок — жизненный цикл расширения: установка → активация → деактивация →
+ * снятие, затем диагностические действия (`scan`/`filter`).
  */
-export const PLUGIN_AUDIT_ACTIONS = ['activate', 'deactivate', 'scan', 'filter'] as const;
+export const PLUGIN_AUDIT_ACTIONS = [
+  'install',
+  'activate',
+  'deactivate',
+  'uninstall',
+  'scan',
+  'filter',
+] as const;
 export type PluginAuditAction = (typeof PLUGIN_AUDIT_ACTIONS)[number];
 
 /**
@@ -156,7 +168,7 @@ export interface PluginAuditEntry {
   actor: string;
   /** Scope журнала — всегда `plugin` (отдельная семантика от security-аудита). */
   scope: 'plugin';
-  /** Вид операции: активация или деактивация. */
+  /** Вид операции: установка/активация/деактивация/снятие/скан/фильтр. */
   action: PluginAuditAction;
   /** Имя плагина (из манифеста `synth.pack`). */
   plugin: string;
