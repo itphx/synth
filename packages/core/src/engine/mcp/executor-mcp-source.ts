@@ -6,7 +6,15 @@
  * (`execution.remote.url`). Здесь — discovery-слой:
  *
  * - **объединение по имени**: сервер считается доступным (`up`), если **хотя бы
- *   один** адрес отдал `up`; `down`/`idle` пробрасываются как есть;
+ *   один** адрес отдал `up` (лучшее состояние побеждает); `down` пробрасывается
+ *   как есть (с причиной);
+ * - **`idle` = «ещё не поднят», а не «недоступен»**: у исполнителя ленивый
+ *   старт — сервер поднимается при первом обращении к `/mcp/tools`. Увидев
+ *   `idle`, источник **активирует** сервер (вызов `/mcp/tools` — тот же
+ *   триггер ленивого старта) и перечитывает `/mcp/servers`: после этого сервер
+ *   должен быть `up`. Иначе control plane считал бы сервер «недоступным» и
+ *   первый ход агента после раскатки исполнителя ушёл бы без браузерных
+ *   инструментов (тулы появлялись бы только к следующему ходу, по TTL);
  * - **TTL 120 с** (как инвентарь возможностей в шаге A): ленивое обновление
  *   при обращении (`ensureFresh`) и явное (`refresh`);
  * - пустой/недоступный пул → **пустой список и warning**, без исключения:
@@ -24,10 +32,12 @@ import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { readExecutorToken } from '../../execution/remote.js';
 import { info, warning } from '../../logger.js';
 import {
+  EXECUTOR_MCP_CONNECT_TIMEOUT_MS,
   ExecutorMcpClient,
   ExecutorMcpPool,
   type ExecutorFetch,
   type ExecutorMcpServerStatus,
+  type ExecutorMcpToolInfo,
 } from './executor-mcp-client.js';
 
 /** TTL снимка состава серверов (как инвентарь возможностей порта, шаг A). */
@@ -152,6 +162,13 @@ export class ExecutorMcpSource {
    *
    * Ошибки отдельных адресов не пробрасываются: снимок собирается из
    * ответивших. Не ответил никто → пустой список + warning (тулов нет).
+   *
+   * **Ленивый старт исполнителя.** `GET /mcp/servers` только показывает
+   * состояние (`idle` — сервер настроен, но ещё не поднимался), а поднимает
+   * серверы `GET /mcp/tools`. Поэтому увидев `idle`, источник активирует
+   * серверы и перечитывает состояние: после активации сервер должен быть `up`.
+   * Без этого control plane считал бы сервер «недоступным», и первый ход
+   * агента после раскатки исполнителя ушёл бы без браузерных инструментов.
    */
   async refresh(): Promise<ExecutorMcpServerInfo[]> {
     if (this._closed) {
@@ -172,6 +189,88 @@ export class ExecutorMcpSource {
       return [];
     }
 
+    const first = await this._readServers(urls);
+
+    if (first.lists.length === 0) {
+      warning(
+        'MCP',
+        `MCP-серверы исполнителя недоступны: не ответил ни один адрес из ${urls.length}` +
+          (first.failures.length > 0 ? ` (${first.failures.join('; ')})` : ''),
+      );
+      this._servers.clear();
+      // Короткая пауза: пул может подняться через секунды (раскатка), полный
+      // TTL на неудачу скрывал бы инструменты две минуты.
+      this._retryAt = Date.now() + this._retryMs;
+      return [];
+    }
+
+    let merged = mergeServerStatuses(
+      first.lists.flat(),
+      (text) => this._pool.redact(text),
+    );
+
+    // `idle` — «ещё не поднят» (ленивый старт исполнителя), а не «недоступен»:
+    // активируем серверы через `/mcp/tools` и перечитываем состояние.
+    let retryAt = 0;
+    const idle = [...merged.values()].filter((server) => server.status === 'idle');
+    if (idle.length > 0) {
+      const activation = await this._activateIdleServers();
+      if (activation.ok) {
+        const second = await this._readServers(urls);
+        if (second.lists.length > 0) {
+          merged = mergeServerStatuses(
+            second.lists.flat(),
+            (text) => this._pool.redact(text),
+          );
+        }
+        // Сервер, который не поднялся даже после активации, — `down` с
+        // причиной: иначе он «залипает» в `idle` до конца TTL и выглядит как
+        // «ещё не поднят», хотя исполнитель его не отдаёт.
+        for (const server of [...merged.values()]) {
+          if (server.status !== 'idle') continue;
+          merged.set(server.name, {
+            ...server,
+            status: 'down',
+            error: 'сервер не поднялся после активации (/mcp/tools)',
+          });
+        }
+      } else {
+        // Ошибка активации не ломает снимок: остальные серверы сохраняются,
+        // неактивированный помечается `down` с причиной.
+        for (const server of idle) {
+          merged.set(server.name, { ...server, status: 'down', error: activation.error });
+        }
+        // Повтор — через короткую паузу, а не через TTL: исполнитель мог
+        // перезапускаться (раскатка) и поднять сервер с минуту.
+        retryAt = Date.now() + this._retryMs;
+      }
+    }
+
+    this._servers = merged;
+    this._snapshotAt = Date.now();
+    this._retryAt = retryAt;
+    this._warnedEmpty = false;
+    if (merged.size > 0) {
+      const up = [...merged.values()].filter((server) => server.status === 'up').length;
+      info(
+        'MCP',
+        `Серверы исполнителя: ${merged.size} (up: ${up}, адресов ответило: ${first.lists.length} из ${urls.length})`,
+      );
+    }
+    return this.listServers();
+  }
+
+  /**
+   * Прочитать `/mcp/servers` со всех адресов пула.
+   *
+   * Ошибка отдельного адреса не пробрасывается: снимок собирается из
+   * ответивших. `lists` — ответы (возможно пустые массивы), `failures` —
+   * тексты ошибок не ответивших адресов (для warning'а).
+   */
+  private async _readServers(urls: string[]): Promise<{
+    lists: ExecutorMcpServerStatus[][];
+    failures: string[];
+  }> {
     const responses = await Promise.allSettled(
       urls.map((url) =>
         this._pool.requestAt<ExecutorMcpServerStatus[]>(
@@ -183,43 +282,40 @@ export class ExecutorMcpSource {
       ),
     );
 
-    const reachable = responses.filter(
-      (result): result is PromiseFulfilledResult<ExecutorMcpServerStatus[]> =>
-        result.status === 'fulfilled' && Array.isArray(result.value),
-    );
-
-    if (reachable.length === 0) {
-      const reasons = responses
-        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-        .map((result) => (result.reason instanceof Error ? result.reason.message : String(result.reason)));
-      warning(
-        'MCP',
-        `MCP-серверы исполнителя недоступны: не ответил ни один адрес из ${urls.length}` +
-          (reasons.length > 0 ? ` (${reasons.join('; ')})` : ''),
-      );
-      this._servers.clear();
-      // Короткая пауза: пул может подняться через секунды (раскатка), полный
-      // TTL на неудачу скрывал бы инструменты две минуты.
-      this._retryAt = Date.now() + this._retryMs;
-      return [];
+    const lists: ExecutorMcpServerStatus[][] = [];
+    const failures: string[] = [];
+    for (const result of responses) {
+      if (result.status === 'fulfilled' && Array.isArray(result.value)) {
+        lists.push(result.value);
+        continue;
+      }
+      if (result.status === 'rejected') {
+        failures.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
+      }
     }
+    return { lists, failures };
+  }
 
-    const merged = mergeServerStatuses(
-      reachable.flatMap((result) => result.value),
-      (text) => this._pool.redact(text),
-    );
-    this._servers = merged;
-    this._snapshotAt = Date.now();
-    this._retryAt = 0;
-    this._warnedEmpty = false;
-    if (merged.size > 0) {
-      const up = [...merged.values()].filter((server) => server.status === 'up').length;
-      info(
-        'MCP',
-        `Серверы исполнителя: ${merged.size} (up: ${up}, адресов ответило: ${reachable.length} из ${urls.length})`,
+  /**
+   * Активировать серверы в статусе `idle` — вызов `/mcp/tools` (триггер
+   * ленивого старта исполнителя) с обычным failover пула.
+   *
+   * Ошибка не пробрасывается: активация — best effort, снимок собирается
+   * дальше (серверы без активации помечаются `down` с причиной).
+   */
+  private async _activateIdleServers(): Promise<{ ok: boolean; error?: string }> {
+    try {
+      await this._pool.request<ExecutorMcpToolInfo[]>(
+        '/mcp/tools',
+        { method: 'GET' },
+        this._connectTimeoutMs ?? EXECUTOR_MCP_CONNECT_TIMEOUT_MS,
       );
+      return { ok: true };
+    } catch (err) {
+      const reason = this._pool.redact(err instanceof Error ? err.message : String(err));
+      warning('MCP', `Не удалось активировать MCP-серверы исполнителя (/mcp/tools): ${reason}`);
+      return { ok: false, error: `активация не удалась: ${reason}` };
     }
-    return this.listServers();
   }
 
   /** Клиент одного сервера исполнителя (поверхность `McpClientLike`). */

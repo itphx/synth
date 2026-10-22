@@ -140,6 +140,66 @@ describe('McpManager: серверы исполнителя (ADR-077 шаг B2)'
     });
   });
 
+  it('сервер в idle не отбрасывается: он в списке, его тулы доступны, вызов доходит до исполнителя', async () => {
+    // ADR-077: ленивый старт исполнителя — `/mcp/servers` отдаёт `idle`
+    // (сервер настроен, но ещё не поднят). Это НЕ «недоступен»: сервер
+    // должен попасть в список и дать тулы с первого хода.
+    const callBodies: Array<Record<string, unknown>> = [];
+    let started = false;
+    const fetchImpl: ExecutorFetch = (url, init) => {
+      if (url.endsWith('/mcp/servers')) {
+        return Promise.resolve(
+          json([
+            started
+              ? { name: 'playwright-mcp', status: 'up', toolCount: 1 }
+              : { name: 'playwright-mcp', status: 'idle', toolCount: 0 },
+          ]),
+        );
+      }
+      if (url.endsWith('/mcp/tools')) {
+        // Триггер ленивого старта: сервер поднимается.
+        started = true;
+        return Promise.resolve(
+          json([
+            {
+              server: 'playwright-mcp',
+              name: 'browser_navigate',
+              description: 'Открыть URL',
+              inputSchema: { type: 'object' },
+            },
+          ]),
+        );
+      }
+      if (url.endsWith('/mcp/call')) {
+        callBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return Promise.resolve(json({ content: 'navigated', isError: false }));
+      }
+      return Promise.resolve(json({ error: { message: 'unexpected' } }, 500));
+    };
+    const manager = new McpManager();
+    manager.setExecutorMcpSource(makeSource(fetchImpl));
+    const registry = makeMockToolRegistry();
+
+    await manager.refreshExecutorServers();
+
+    // `idle` не отбрасывается: сервер в runtime-записях менеджера.
+    expect(manager.isExecutorServer('playwright-mcp')).toBe(true);
+    expect(manager.getExecutorServerNames()).toEqual(['playwright-mcp']);
+
+    await manager.ensureToolsLoaded(['playwright-mcp'], registry);
+
+    const tool = registry.get('playwright-mcp_browser_navigate');
+    expect(tool).toBeDefined();
+    expect(tool!.source).toBe('mcp');
+
+    // Вызов уходит к исполнителю (а не в локальный MCP-клиент).
+    const direct = await manager.callTool('playwright-mcp_browser_navigate', { url: 'https://example.com' });
+    expect(direct).toEqual({ content: 'navigated', isError: false });
+    expect(callBodies).toEqual([
+      { server: 'playwright-mcp', tool: 'browser_navigate', arguments: { url: 'https://example.com' } },
+    ]);
+  });
+
   it('коллизия имён: локальный/реестровый сервер приоритетнее, предупреждение', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     // Локальный сервер — фейковый клиент (реальный stdio не поднимаем).

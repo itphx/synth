@@ -69,14 +69,38 @@ describe('ExecutorMcpSource: снимок состава', () => {
     expect(source.getServer('unknown')).toBeUndefined();
   });
 
-  it('idle пробрасывается, если сервер нигде не поднимался', async () => {
+  it('idle больше не пробрасывается: сервер активируется, и если он не поднялся — down с причиной', async () => {
+    // Контракт изменился осознанно: `idle` = «ещё не поднят» (ленивый старт
+    // исполнителя), а не «недоступен» — источник активирует сервер вызовом
+    // `/mcp/tools`. Если исполнитель и после этого не поднял сервер, тот
+    // помечается `down` с причиной (иначе он «залипает» в `idle` до конца TTL
+    // и выглядит как «ещё не поднят», хотя исполнитель его не отдаёт).
+    const calls: string[] = [];
+    const fetchImpl: ExecutorFetch = (url) => {
+      calls.push(url);
+      if (url.endsWith('/mcp/servers')) {
+        return Promise.resolve(json([{ name: 'scm', status: 'idle', toolCount: 0 }]));
+      }
+      return Promise.resolve(json([]));
+    };
     const source = new ExecutorMcpSource({
       urls: ['http://a:5100'],
       token: TOKEN,
-      fetchImpl: () => Promise.resolve(json([{ name: 'scm', status: 'idle', toolCount: 0 }])),
+      fetchImpl,
     });
     const servers = await source.refresh();
-    expect(servers).toEqual([{ name: 'scm', status: 'idle', toolCount: 0, origin: 'executor' }]);
+    // Активация выполнена (`/mcp/tools`), состояние перечитано (`/mcp/servers`).
+    expect(calls.filter((url) => url.endsWith('/mcp/tools'))).toHaveLength(1);
+    expect(calls.filter((url) => url.endsWith('/mcp/servers'))).toHaveLength(2);
+    expect(servers).toEqual([
+      {
+        name: 'scm',
+        status: 'down',
+        toolCount: 0,
+        origin: 'executor',
+        error: 'сервер не поднялся после активации (/mcp/tools)',
+      },
+    ]);
   });
 
   it('пустой пул → пустой список без исключения', async () => {
@@ -140,6 +164,193 @@ describe('ExecutorMcpSource: снимок состава', () => {
     source.close();
     expect(source.closed).toBe(true);
     expect(source.listServers()).toEqual([]);
+  });
+});
+
+/**
+ * Ленивый старт исполнителя (ADR-077, шаг B1/B2): `GET /mcp/servers` только
+ * показывает состояние, а поднимает серверы `GET /mcp/tools`.
+ *
+ * `idle` = «ещё не поднят», а не «недоступен»: источник активирует сервер и
+ * перечитывает состояние. Без этого первый ход агента после раскатки
+ * исполнителя уходил без браузерных инструментов (тулы появлялись только к
+ * следующему ходу, по TTL источника).
+ */
+describe('ExecutorMcpSource: активация сервера в статусе idle', () => {
+  it('idle → источник активирует сервер через /mcp/tools и перечитывает состояние ⇒ up', async () => {
+    const calls: string[] = [];
+    let started = false;
+    const fetchImpl: ExecutorFetch = (url) => {
+      calls.push(url);
+      if (url.endsWith('/mcp/servers')) {
+        return Promise.resolve(
+          json([
+            started
+              ? { name: 'playwright-mcp', status: 'up', toolCount: 25 }
+              : { name: 'playwright-mcp', status: 'idle', toolCount: 0 },
+          ]),
+        );
+      }
+      // `/mcp/tools` — триггер ленивого старта: сервер поднимается.
+      started = true;
+      return Promise.resolve(
+        json([
+          {
+            server: 'playwright-mcp',
+            name: 'browser_navigate',
+            description: 'Открыть URL',
+            inputSchema: { type: 'object' },
+          },
+        ]),
+      );
+    };
+    const source = new ExecutorMcpSource({
+      urls: ['http://a:5100'],
+      token: TOKEN,
+      fetchImpl,
+    });
+
+    const servers = await source.refresh();
+
+    // Активация выполнена, состояние перечитано.
+    expect(calls.filter((url) => url.endsWith('/mcp/tools'))).toHaveLength(1);
+    expect(calls.filter((url) => url.endsWith('/mcp/servers'))).toHaveLength(2);
+    // Сервер поднят — в снимке `up`, а не «недоступен».
+    expect(servers).toEqual([
+      { name: 'playwright-mcp', status: 'up', toolCount: 25, origin: 'executor' },
+    ]);
+    expect(source.getServer('playwright-mcp')?.status).toBe('up');
+  });
+
+  it('idle у одного адреса и up у другого → в снимке up (лучшее состояние), активация не нужна', async () => {
+    const calls: string[] = [];
+    const fetchImpl: ExecutorFetch = (url) => {
+      calls.push(url);
+      if (url.startsWith('http://a:')) {
+        return Promise.resolve(json([{ name: 'playwright-mcp', status: 'idle', toolCount: 0 }]));
+      }
+      return Promise.resolve(json([{ name: 'playwright-mcp', status: 'up', toolCount: 25 }]));
+    };
+    const source = new ExecutorMcpSource({
+      urls: ['http://a:5100', 'http://b:5100'],
+      token: TOKEN,
+      fetchImpl,
+    });
+
+    const servers = await source.refresh();
+
+    expect(servers).toEqual([
+      { name: 'playwright-mcp', status: 'up', toolCount: 25, origin: 'executor' },
+    ]);
+    // Состав уже `up` — лишних вызовов `/mcp/tools` не делаем.
+    expect(calls.filter((url) => url.endsWith('/mcp/tools'))).toHaveLength(0);
+  });
+
+  it('ошибка активации → сервер down с причиной, остальные серверы не потеряны, снимок не пустой', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchImpl: ExecutorFetch = (url) => {
+      if (url.endsWith('/mcp/servers')) {
+        return Promise.resolve(
+          json([
+            { name: 'playwright-mcp', status: 'idle', toolCount: 0 },
+            { name: 'scm', status: 'up', toolCount: 3 },
+          ]),
+        );
+      }
+      // Активация не удалась (исполнитель ответил 500).
+      return Promise.resolve(json({ error: { message: 'boom' } }, 500));
+    };
+    const source = new ExecutorMcpSource({
+      urls: ['http://a:5100'],
+      token: TOKEN,
+      fetchImpl,
+    });
+
+    const servers = await source.refresh();
+
+    // Снимок не пустой: рабочий сервер на месте.
+    expect(servers.map((server) => server.name)).toEqual(['playwright-mcp', 'scm']);
+    expect(servers[1]).toMatchObject({ name: 'scm', status: 'up', toolCount: 3 });
+    // Неактивированный сервер — `down` с причиной (не потерян молча).
+    expect(servers[0]).toMatchObject({ name: 'playwright-mcp', status: 'down' });
+    expect(servers[0]!.error).toContain('активация не удалась');
+    expect(servers[0]!.error).toContain('500');
+    warn.mockRestore();
+  });
+
+  it('после неудачной активации — повтор через retryMs (15 с), а не через TTL', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    let calls = 0;
+    let healthy = false;
+    const fetchImpl: ExecutorFetch = (url) => {
+      if (url.endsWith('/mcp/servers')) {
+        calls += 1;
+        return Promise.resolve(
+          json([
+            healthy
+              ? { name: 'playwright-mcp', status: 'up', toolCount: 25 }
+              : { name: 'playwright-mcp', status: 'idle', toolCount: 0 },
+          ]),
+        );
+      }
+      // Пока сервер не починен — активация падает.
+      return healthy ? Promise.resolve(json([])) : Promise.reject(new Error('ECONNRESET'));
+    };
+    const source = new ExecutorMcpSource({
+      urls: ['http://a:5100'],
+      token: TOKEN,
+      fetchImpl,
+      ttlMs: EXECUTOR_MCP_SOURCE_TTL_MS,
+      retryMs: EXECUTOR_MCP_SOURCE_RETRY_MS,
+    });
+
+    await source.refresh();
+    expect(calls).toBe(1);
+
+    // В пределах паузы повтора нет (даже TTL ещё не истёк).
+    vi.advanceTimersByTime(EXECUTOR_MCP_SOURCE_RETRY_MS - 1);
+    expect(source.isStale()).toBe(false);
+    await source.ensureFresh();
+    expect(calls).toBe(1);
+
+    // Пауза истекла → повтор (не ждём TTL).
+    healthy = true;
+    vi.advanceTimersByTime(2);
+    expect(source.isStale()).toBe(true);
+    await source.ensureFresh();
+    expect(calls).toBe(2);
+    expect(source.getServer('playwright-mcp')?.status).toBe('up');
+  });
+
+  it('успешный пустой ответ → без активации, повтор по TTL', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    let toolCalls = 0;
+    const fetchImpl: ExecutorFetch = (url) => {
+      if (url.endsWith('/mcp/tools')) {
+        toolCalls += 1;
+        return Promise.resolve(json([]));
+      }
+      return Promise.resolve(json([]));
+    };
+    const source = new ExecutorMcpSource({
+      urls: ['http://a:5100'],
+      token: TOKEN,
+      fetchImpl,
+      ttlMs: EXECUTOR_MCP_SOURCE_TTL_MS,
+      retryMs: EXECUTOR_MCP_SOURCE_RETRY_MS,
+    });
+
+    await expect(source.refresh()).resolves.toEqual([]);
+    // Активации нет: серверов нет — активировать нечего.
+    expect(toolCalls).toBe(0);
+
+    // Пустой ответ — валидный снимок: действует TTL, а не пауза.
+    vi.advanceTimersByTime(EXECUTOR_MCP_SOURCE_RETRY_MS + 1);
+    expect(source.isStale()).toBe(false);
+    await source.ensureFresh();
+    expect(toolCalls).toBe(0);
   });
 });
 
