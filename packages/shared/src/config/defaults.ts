@@ -6,7 +6,7 @@ import {
   DEFAULT_EGRESS_LOG,
 } from '../types/index.js';
 import { DEFAULT_MAX_UPLOAD_BYTES } from '../types/index.js';
-import { DEFAULT_PROMPT_BLOCK_MAX_CHARS } from '../types/index.js';
+import { DEFAULT_PROMPT_BLOCK_MAX_CHARS, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '../types/index.js';
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from './types.js';
 import { defaultExecutionConcurrency } from './execution.js';
 
@@ -218,6 +218,10 @@ export const defaultConfig: SynthConfig = {
     // Исполнение кода плагинов выключено по умолчанию (Ф1: загрузчик доходит
     // до шага `import` и останавливается — `plugin.execution_disabled`).
     executionEnabled: false,
+    // Бюджет времени на один вызов фильтра LLM-вызовов (точка `llmFilters`,
+    // Ф3б). Значение — вопрос владельца (PROP-090 §14), механизм fail-closed/open
+    // реализован.
+    llmFilterTimeoutMs: DEFAULT_LLM_FILTER_TIMEOUT_MS,
   },
   egress: {
     // Политика встроенных инструментов: deny приватных/служебных диапазонов.

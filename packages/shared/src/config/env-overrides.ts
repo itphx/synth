@@ -84,6 +84,7 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'plugins', key: 'exactHostExceptions', type: 'string' },
   { section: 'plugins', key: 'promptBlockMaxChars', type: 'number' },
   { section: 'plugins', key: 'executionEnabled', type: 'boolean' },
+  { section: 'plugins', key: 'llmFilterTimeoutMs', type: 'number' },
 ];
 
 /** camelCase → SNAKE_CASE (`autoBind` → `AUTO_BIND`, `ephemeralTtl` → `EPHEMERAL_TTL`). */

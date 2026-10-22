@@ -6,9 +6,22 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+import type { CatalogTrustLevel, LlmFilterPhase, LlmFilterVerdictKind } from '@itphx/synth-shared';
+
 import { warning } from '../../logger.js';
 
-export type AuditEventType = 'obfuscated' | 'blocked' | 'revealed' | 'rate_limited' | 'output_guard';
+export type AuditEventType =
+  | 'obfuscated'
+  | 'blocked'
+  | 'revealed'
+  | 'rate_limited'
+  | 'output_guard'
+  /**
+   * PROP-090 §«Точка `llmFilters`»: решение фильтра LLM-вызовов (плагинного
+   * расширения). **Текст запроса/ответа/эмбеддингов в записи не пишется** —
+   * только идентификатор фильтра, фаза, вердикты, доверие владельца и код.
+   */
+  | 'plugin_filter';
 
 export interface AuditEntry {
   ts: string;
@@ -25,6 +38,32 @@ export interface AuditEntry {
   tokensOut?: number;
   costUsd?: number;
   reason?: string;
+  /** Фильтр LLM-вызовов: идентификатор (`plugin:<plugin>:<filter>`). */
+  filterId?: string;
+  /** Фильтр LLM-вызовов: фаза (`pre_request`/`post_response`/`embedding`). */
+  filterPhase?: LlmFilterPhase;
+  /** Фильтр LLM-вызовов: уровень доверия владельца (право вето — `trusted` и выше). */
+  filterTrust?: CatalogTrustLevel;
+  /** Фильтр LLM-вызовов: вердикт фильтра (до политики хоста). */
+  filterVerdict?: LlmFilterVerdictKind;
+  /**
+   * Фильтр LLM-вызовов: итог после политики хоста.
+   * `ignored` — вердикт отклонён хостом (нет права вето у владельца либо фаза
+   * не поддерживает блокировку/переписывание); `deny` — вызов заблокирован.
+   */
+  filterEffectiveVerdict?: LlmFilterVerdictKind | 'ignored';
+  /** Фильтр LLM-вызовов: вердикт понижен хостом (у владельца нет права вето). */
+  filterDowngraded?: boolean;
+  /**
+   * Фильтр LLM-вызовов: машиночитаемый код решения хоста
+   * (`plugin_filter.denied`/`plugin_filter.deny_downgraded`/
+   * `plugin_filter.unavailable`/`plugin_filter.timeout`/`plugin_filter.error`/
+   * `plugin_filter.allowed`/`plugin_filter.redact_unsupported`/
+   * `plugin_filter.buffering_required`/`plugin_filter.redact_invalid`).
+   */
+  filterCode?: string;
+  /** Фильтр LLM-вызовов: бюджет времени на вызов фильтра, мс. */
+  filterTimeoutMs?: number;
 }
 
 export class AuditLogger {

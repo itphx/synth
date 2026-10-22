@@ -11,6 +11,8 @@ export * from './session.js';
 export * from './prompt.js';
 // PROP-090 §«Точка promptBlocks»: контракт провайдера блока системного промпта
 export * from './prompt-blocks.js';
+// PROP-090 §«Точка llmFilters»: контракт фильтра LLM-вызовов
+export * from './llm-filters.js';
 // MCP: реестр серверов, сетевой доступ, уровни/эффективный набор (ADR-071)
 export * from './mcp.js';
 // Проекты, workspace-политика, иконки/цвета, план (ADR-039/075)

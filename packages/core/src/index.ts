@@ -1329,6 +1329,11 @@ export {
   readAuditLog,
   writePayloadLog,
   readPayloadLog,
+  LlmFilterRegistry,
+  LlmFilterRegistrationError,
+  canVetoLlmFilter,
+  defaultLlmFilterFailMode,
+  LLM_FILTER_VETO_TRUST_LEVEL,
 } from './engine/gateway/index.js';
 export type {
   GatewayProviderOptions,
@@ -1343,6 +1348,10 @@ export type {
   SecretDetectorPattern,
   LlmPayloadEntry,
   PayloadLogQuery,
+  LlmFilterAuditEvent,
+  LlmFilterRegistrationOptions,
+  LlmFilterRegistryOptions,
+  RegisteredLlmFilter,
 } from './engine/gateway/index.js';
 
 export {

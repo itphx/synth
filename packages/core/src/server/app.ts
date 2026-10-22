@@ -130,6 +130,12 @@ export interface StandaloneConfig {
   /** ADR-094: конфигурация метрик (`metrics.enabled`) из config.yaml/env. */
   metricsConfig?: SynthConfig['metrics'];
   /**
+   * PROP-090 §10: конфигурация слоя плагинов из config.yaml `plugins`
+   * (`enabled`/`trustFloor`/`scan`/… и бюджеты: `promptBlockMaxChars`,
+   * `llmFilterTimeoutMs`).
+   */
+  pluginsConfig?: SynthConfig['plugins'];
+  /**
    * ADR-077: эффективная секция `execution` (режим исполнения + параметры
    * удалённого исполнителя). Не задана — `inline` (прежнее поведение).
    * Секция — **параметр запуска** (инвариант 24): смена режима — только

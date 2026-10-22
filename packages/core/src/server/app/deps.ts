@@ -588,6 +588,10 @@ export async function createStandaloneDeps(
     securityConfig: effectiveSecurityConfig,
     gatewayConfig,
     gatewayPatternStore: patternStore,
+    // PROP-090 §«Точка llmFilters»: бюджет времени фильтров LLM-вызовов
+    // (`plugins.llmFilterTimeoutMs`). Сам реестр создаётся оркестратором и
+    // доступен фасаду плагинов через `getLlmFilters()`.
+    llmFilterTimeoutMs: config.pluginsConfig?.llmFilterTimeoutMs,
     // ADR-094: реестр метрик (только при `metrics.enabled`) — LLM-вызовы
     // сессий учитываются и при выключенном LLM Gateway.
     metrics,

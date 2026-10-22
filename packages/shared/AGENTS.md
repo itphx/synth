@@ -81,11 +81,13 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (уровень доверия, default `trusted`), `scan` (`enabled|disabled`, default `enabled`),
   `allowlist`/`denylist`/`remoteAllowlist` (списки имён, default `[]`), `exactHostExceptions`
   (путь к файлу точных исключений семвер-гейта, default `''`), `promptBlockMaxChars`
-  (бюджет символов на блок промпта от плагина, default `4000`), `executionEnabled`
+  (бюджет символов на блок промпта от плагина, default `4000`), `llmFilterTimeoutMs`
+  (бюджет времени на один вызов фильтра LLM-вызовов, мс; default — `DEFAULT_LLM_FILTER_TIMEOUT_MS`
+  = `1000` из `types/llm-filters.ts`, PROP-090 §«Точка `llmFilters`», Ф3б), `executionEnabled`
   (**главный переключатель исполнения кода плагинов**, default `false` — без него загрузчик
   останавливается на шаге `import`, PROP-090 §10/Ф1); скалярные env-оверрайды
   `SYNTH_PLUGINS_*` (`enabled`/`runtimeInstall`/`trustFloor`/`scan`/`exactHostExceptions`/
-  `promptBlockMaxChars`/`executionEnabled`) — списки остаются в `config.yaml`. Runtime-override в core —
+  `promptBlockMaxChars`/`llmFilterTimeoutMs`/`executionEnabled`) — списки остаются в `config.yaml`. Runtime-override в core —
   `RuntimeSettings.plugins` + `mergePluginsConfig` (приоритет runtime > config > defaults).
 - **Env-оверрайды скалярных ключей секций** `events`/`scheduler`/`webhooks`/`decision`/`analytics`/`metrics`/`plugins` —
   реестр `ENV_OVERRIDES` (`src/config/env-overrides.ts`), применяется в `loadConfig`;
@@ -188,6 +190,17 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   единый источник истины для бюджета символов блока — `DEFAULT_PROMPT_BLOCK_MAX_CHARS = 4000`
   (совпадает с `plugins.promptBlockMaxChars` в конфиге) и префикс ключа плагинного блока
   `PLUGIN_PROMPT_BLOCK_KEY_PREFIX = 'plugin.'` + хелпер `isPluginPromptBlockKey`.
+- PROP-090 §«Точка `llmFilters`» (Ф3б): **контракт фильтра LLM-вызовов** — `types/llm-filters.ts`
+  (browser-safe: только типы и чистые функции; реэкспорт из `types`): `LlmCallFilter`
+  (`id`/`phase`/`failMode?`/`timeoutMs?`/`inspect(input)`), узкий DTO `LlmFilterInput`
+  (`phase`/`provider`/`model`/`sessionId?` + поля по фазе: `messages`/`systemPrompt`/`tools`,
+  `content`/`usage`, `texts`), `LlmFilterMessage` (роль + текст + `toolCalls?` — **не** `LLMMessage`
+  из core: служебные поля ядра (`branchId`/`pinned`/`usage`) наружу не отдаются) и `LlmFilterVerdict`
+  (`allow`/`deny`/`redact` + `reason`/`code`/`redactedContent?`/`redactedTexts?`); перечни
+  `LLM_FILTER_PHASES` (`pre_request`/`post_response`/`embedding`), `LLM_FILTER_FAIL_MODES`
+  (`open`/`closed`), `LLM_FILTER_VERDICTS` + предикаты; `phaseCanBlock(phase)` — блокировать может
+  только `pre_request`/`embedding` (`post_response` — наблюдение, ADR-036); единый источник истины
+  бюджета времени — `DEFAULT_LLM_FILTER_TIMEOUT_MS = 1000` (совпадает с `plugins.llmFilterTimeoutMs`).
 - PROP-090 §10: **семвер и доверие** — `types/semver.ts`: `SEMVER_RANGE_REGEX`, `isSemverRange`,
   `parseSemver`, `satisfiesSemverRange` (операторы `^`/`~`/`>=`/`<=`/`>`/`<`/`=`, wildcard `x`/`*`,
   конъюнкция пробелом; `||` не поддерживается — fail-closed); `PACK_HOST_RANGE_REGEX` ссылается на
@@ -200,13 +213,18 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - PROP-090 §9: **журнал аудита плагинов** — `types/plugin-audit.ts` (re-export из `types`):
   `PluginAuditEntry` (`id` `pa_<uuid>`/`ts`/`actor`/`scope: 'plugin'`/`action`/`plugin`/`version`/
   `trustLevel?`/`scanVerdict?`/`scanFindings?`/`scanPerformed?`/`contentHash?`/`mode?`/`outcome`/
-  `reason?`/`source?`) и перечни `PLUGIN_AUDIT_ACTIONS` (`activate`/`deactivate`/`scan`),
+  `reason?`/`source?`) и перечни `PLUGIN_AUDIT_ACTIONS` (`activate`/`deactivate`/`scan`/`filter` —
+  последнее добавлено Ф3б: события решений фильтров LLM-вызовов),
   `PLUGIN_AUDIT_OUTCOMES` (`ok`/`rejected`), `PLUGIN_SCAN_VERDICTS` (`safe`/`caution`/`dangerous`),
-  `PLUGIN_AUDIT_REASONS` — **закрытый** список **19** кодов отказа (по одному на гейт пайплайна
+  `PLUGIN_AUDIT_REASONS` — **закрытый** список **23** кодов отказа (по одному на гейт пайплайна
   активации; Ф2 добавил `plugin.scan_rejected` и `plugin.approval_required`, Ф3а —
   `plugin.scan_disabled_with_execution` (fail-closed: `plugins.scan='disabled'` вместе с
-  `plugins.executionEnabled=true`); источник истины —
-  `PluginHost`, `packages/core/src/engine/plugins/plugin-host.ts`). Журнал **отдельный**:
+  `plugins.executionEnabled=true`), Ф3б — `plugin.provides_mismatch` (расхождение объявленных
+  `provides.promptBlocks[]`/`provides.llmFilters[]` с фактическими регистрациями) и три
+  канонических кода фильтров `plugin_filter.denied`/`.deny_downgraded`/`.unavailable`;
+  неканонические коды хоста (`allowed`/`timeout`/`error`/`redact_unsupported`/`buffering_required`/
+  `redact_invalid`) живут **только** в аудите gateway, в журнал плагинов не попадают; источник
+  истины — `PluginHost`, `packages/core/src/engine/plugins/plugin-host.ts`). Журнал **отдельный**:
   `SECURITY_AUDIT_SCOPES` (семантика «изменение политики») не расширяется; секреты в журнал не
   пишутся (инвариант 13).
 - PROP-068 §4.2–§4.4 / PROP-090 §5, §9: **контракты сканера и lock-файла плагинов** —

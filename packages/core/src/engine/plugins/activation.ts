@@ -10,6 +10,8 @@
  */
 import type {
   CatalogTrustLevel,
+  LlmCallFilter,
+  LlmFilterFailMode,
   PackManifest,
   PackPluginMode,
   PluginAuditReason,
@@ -153,7 +155,8 @@ export interface PluginDeactivationResult {
  *
  * Ф1: только сбор disposers. **Ф3а**: регистрация провайдера блока системного
  * промпта (точка `promptBlocks`) — с возвратом disposer'а, который снимает
- * блок при деактивации плагина.
+ * блок при деактивации плагина. **Ф3б**: регистрация фильтра LLM-вызовов
+ * (точка `llmFilters`) — с тем же контрактом disposer'а.
  */
 export interface PluginFacade {
   /**
@@ -176,6 +179,33 @@ export interface PluginFacade {
     provider: PromptBlockProvider,
     opts?: { title?: string },
   ): PluginDisposer;
+  /**
+   * Ф3б: зарегистрировать фильтр LLM-вызовов (точка `llmFilters`).
+   *
+   * Хост сам подставляет владельца регистрации: `pluginName`/`pluginVersion`
+   * и **уровень доверия плагина** (фактический, из активации, — не из
+   * манифеста). Право вето фильтр получает только при trust ≥ `trusted`:
+   * `deny` фильтра недоверенного плагина хост понижает до `allow`
+   * (PROP-090 §«Кто вправе блокировать»), факт уходит в журнал плагинов.
+   *
+   * Отказ регистрации (пустой/занятый идентификатор, неизвестная фаза,
+   * недоступный реестр) **не роняет активацию**: предупреждение в лог хоста
+   * и no-op disposer (как у точки `promptBlocks`).
+   *
+   * @returns disposer — снимает фильтр (идемпотентен). При отказе — no-op.
+   */
+  registerLlmFilter(filter: LlmCallFilter, opts?: PluginLlmFilterOptions): PluginDisposer;
+}
+
+/**
+ * Опции регистрации фильтра от плагина: хост-политика поверх контракта
+ * `LlmCallFilter` (сам фильтр тоже может задать `failMode`/`timeoutMs`).
+ */
+export interface PluginLlmFilterOptions {
+  /** Переопределение режима отказа (`open`/`closed`). */
+  failMode?: LlmFilterFailMode;
+  /** Переопределение бюджета времени на вызов фильтра, мс. */
+  timeoutMs?: number;
 }
 
 /**

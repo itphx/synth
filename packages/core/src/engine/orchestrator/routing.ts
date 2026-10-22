@@ -10,7 +10,7 @@ import { lookupContextWindow } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/base.js';
 import type { ProviderConfig as CoreProviderConfig, BaseProvider } from '../../providers/base.js';
 import { GatewayProvider, DISABLED_GATEWAY_CONFIG } from '../gateway/index.js';
-import type { ObfuscationMapStore, AuditLogger, RateLimiter } from '../gateway/index.js';
+import type { ObfuscationMapStore, AuditLogger, RateLimiter, LlmFilterRegistry } from '../gateway/index.js';
 import type { SecretPatternRepository } from '../../storage/ports/secret-pattern-repository.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
@@ -60,6 +60,11 @@ export interface GatewayWrapDeps {
   gatewayPayloadLogPath: string | undefined;
   /** ADR-094: реестр метрик — обёртка ставится и при выключенном gateway. */
   metrics?: MetricsRegistry;
+  /**
+   * PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов. Не задан/пуст —
+   * прежнее поведение (фильтры не выполняются).
+   */
+  filters?: LlmFilterRegistry;
 }
 
 /**
@@ -80,6 +85,7 @@ export function wrapWithGateway(provider: BaseProvider, session: Session, deps: 
     sessionId: session.id,
     userId: session.userId ?? '',
     metrics: deps.metrics,
+    filters: deps.filters,
   });
 }
 

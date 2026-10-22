@@ -424,6 +424,12 @@
   trust/dedup/лимиты общие; `null` — инструкции инстанса выключены);
   `wrapProviderWithGateway(provider)` — общая обвязка провайдера в `GatewayProvider`
   (ADR-036) для движков вне сессии — инвариант «любой LLM-вызов через gateway» сохраняется.
+  **Шов точки `llmFilters` (Ф3б):** `getLlmFilters()` — реестр фильтров LLM-вызовов
+  (`LlmFilterRegistry`) инстанса: **тот же экземпляр** уходит во все gateway-точки (основной ход,
+  пул провайдеров, decision, оптимизатор/суммаризация) и в фасад плагинов
+  (`PluginHostOptions.llmFilters`) — плагин регистрирует фильтр, gateway его применяет. Опции —
+  `Options.llmFilters` (готовый реестр) и `Options.llmFilterTimeoutMs` (`plugins.llmFilterTimeoutMs`,
+  бюджет новых регистраций); не задан реестр — создаётся пустой (поведение прежнее).
   Шаг пайплайна — не сессия, поэтому он работает с суженным контрактом Composer'а
   `ComposerSessionLike = Pick<Session, 'settings' | 'promptStates' | 'projectId'>`
   (`engine/context/composer.ts`) — обычная `Session` структурно совместима.
@@ -431,6 +437,25 @@
   decision-вызов (ADR-084: guard/обфускация `state`, тот же `_prepare`/аудит, что у chat-путей).
   `SystemPromptPayload` (`stablePrefix`/`cacheKey`/`cachePolicy`, ADR-070) проходит через Gateway в
   провайдер без изменений — prompt-cache-маркеры ставятся в провайдерах **после** guard/обфускации.
+  **Фильтры LLM-вызовов (точка `llmFilters`, PROP-090, Ф3б):** `llm-filter-registry.ts` —
+  `LlmFilterRegistry` (fail-closed `register` + disposer, `unregister`/`get`/`list(phase)`/`size`/`clear`;
+  метаданные владельца `trustLevel`/`pluginName`/`pluginVersion`/`onAudit`/`failMode`/`timeoutMs`;
+  `canVetoLlmFilter` — вето только у trust ≥ `trusted`, `LLM_FILTER_VETO_TRUST_LEVEL`;
+  `defaultLlmFilterFailMode` — блокирующий класс `closed`, наблюдательный `open`;
+  `setDefaultTimeoutMs` — runtime-бюджет **последующих** регистраций, у зарегистрированных бюджет
+  зафиксирован). Три фазы в `gateway-provider.ts`: `pre_request` (`_applyPreRequestFilters`, после
+  `saveMap` — фильтр видит **обфусцированный** запрос; `redact` отклоняется хостом), `post_response`
+  (`_applyPostResponseFilters` в `_auditCompletion` — **только наблюдение**, блокировка/правка требуют
+  буферизации, ADR-036), `embedding` (`_prepareEmbedding` внутри `embed` — `deny` не пускает вызов,
+  `redact` заменяет `texts`). Таймаут — `Promise.race` с `unref`-таймером; вердикт недоверенного
+  понижается до `allow`. **`embed` больше не обходит контур:** эмбеддинги (в т.ч. микро-слой через
+  `ProviderPool`) идут через `GatewayProvider` — дыра инварианта 3 закрыта. Аудит — `type: 'plugin_filter'`
+  в аудите gateway (`filterId`/`filterPhase`/`filterTrust`/`filterVerdict`/`filterEffectiveVerdict`/
+  `filterDowngraded`/`filterCode`/`filterTimeoutMs`, **без текста**); коды хоста
+  (`plugin_filter.allowed`/`.timeout`/`.error`/`.redact_unsupported`/`.buffering_required`/`.redact_invalid`)
+  живут только там, в журнал плагинов уходят лишь канонические `denied`/`deny_downgraded`/`unavailable`.
+  `filters` прокидывается из оркестратора (`Options.llmFilters`/`llmFilterTimeoutMs`, шов
+  `getLlmFilters()`) в пул, decision- и optimizer-gateway; пустой реестр — поведение прежнее.
 - `engine/router/*` — routing моделей и micro-model слой (ADR-034/035); decision-слой — `DecisionContentClassifier` (`decision-content-classifier.ts`, ADR-084), `DecisionModel` в `micro/models/` (`kind='decision'`, per-session `decisionFirst`), единый каскад `decision-cascade.ts` (`decideChoiceCascade`: `primary → escalation` по необязательной паре `escalationProvider`/`escalationModel`, fail-safe) и агрегатные метрики `decision-metrics.ts` (синглтон `decisionMetrics`: `calls`/`handled`/`fallback`/`escalated`/`attempts`/`rejected`/`by_model`). Мультимодальный контракт (задел PROP-085): `MicroInput.images`/`videos`, `ClassifyRequest.images`/`videos`, `DecisionProvider.decide(opts.images/videos)` — добавляются в тело запроса только если непусты.
 - `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
@@ -605,7 +630,7 @@
   исключений семвер-гейта: **одна полная semver-версия host в строке**, `#` — комментарий,
   не-semver строка пропускается с предупреждением, недоступный файл → исключений нет
   (fail-closed)), `index.ts` — баррел. **Коды отказа** (`PLUGIN_AUDIT_REASONS`,
-  `shared/src/types/plugin-audit.ts`, всего 19): `plugin.not_found`/`plugin.manifest_invalid` (resolve),
+  `shared/src/types/plugin-audit.ts`, всего **23**): `plugin.not_found`/`plugin.manifest_invalid` (resolve),
   `plugin.integrity_mismatch`/`plugin.integrity_unverifiable` (integrity),
   `plugin.contract_mismatch`/`plugin.host_mismatch` (semver), `plugin.trust_below_floor`/
   `plugin.scan_rejected`/`plugin.approval_required` (trust/scan), `plugin.disabled`/
@@ -613,10 +638,23 @@
   `plugin.scan_disabled_with_execution` (trust; Ф3а — **fail-closed**: `plugins.scan='disabled'` вместе
   с `plugins.executionEnabled=true` → отказ, исполняемый код обязан быть просканирован),
   `plugin.execution_disabled`/`plugin.loader_unavailable` (import/facade), `plugin.already_active`,
-  `plugin.not_active`, `plugin.disposer_failed`. Seam'ы: `PluginScanHook` (**Ф2 — закрыт**,
+  `plugin.not_active`, `plugin.disposer_failed`, `plugin.provides_mismatch` (facade; Ф3б — объявленное в
+  `provides` не совпало с фактическими регистрациями, см. ниже), `plugin_filter.denied`/
+  `plugin_filter.deny_downgraded`/`plugin_filter.unavailable` (журнал решений фильтров). Seam'ы:
+  `PluginScanHook` (**Ф2 — закрыт**,
   дефолтная реализация встроенная), `PluginLoader` (Ф3/Ф4 — реализации нет), `PluginFacade`
   (**Ф3а — `registerPromptBlock`**: регистрация провайдера блока промпта с возвратом disposer'а;
-  отказ — предупреждение в лог, активация плагина не падает).
+  **Ф3б — `registerLlmFilter`**: регистрация фильтра LLM-вызовов от имени плагина — хост подставляет
+  `pluginName`/`pluginVersion` и **фактическое** доверие активации, `onAudit` пишет в журнал плагинов;
+  отказ любой точки — предупреждение в лог, активация плагина не падает).
+  **Сверка `provides` (Ф3б).** После `apply()` и **до** фиксации активации `PluginHost` сверяет
+  `provides.promptBlocks[]`/`provides.llmFilters[]` с фактическими регистрациями (`diffPackProvides`):
+  расхождение в любую сторону (`missing`/`unexpected`) → **отказ** `plugin.provides_mismatch` с обратной
+  прокруткой disposers (отклонённый плагин не оставляет блоков/фильтров в живых реестрах). Отклонённая
+  регистрация (например, тир `stable`) «зарегистрированной» не считается. `provides.tools[]` войдёт в
+  сверку вместе с точкой `tools` (Ф3в). Опции хоста: `promptBlocks` (**Ф3а**) и `llmFilters` (**Ф3б**,
+  тот же экземпляр, что у `GatewayProvider`, — `orchestrator.getLlmFilters()`); не переданы — точка
+  недоступна (предупреждение, no-op).
 - `engine/plugins/scan/*` — PROP-090 §9 / PROP-068 §4.3: встроенный статический сканер расширений
   (**advisory**: код не исполняется, сканер лишь выносит вердикт; блокирует матрица install-policy).
   Файлы: `rules.ts` (таблица правил `PLUGIN_SCAN_RULES` по 7 категориям — 6 базовых + `invisible_unicode`;

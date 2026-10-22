@@ -61,7 +61,7 @@ import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
 import type { ProtectedPathsPolicy } from './security/protected-paths.js';
-import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, DISABLED_GATEWAY_CONFIG } from './gateway/index.js';
+import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, DISABLED_GATEWAY_CONFIG, LlmFilterRegistry } from './gateway/index.js';
 import type { SecretPatternRepository } from '../storage/ports/secret-pattern-repository.js';
 import type { MetricsRegistry } from '../metrics/registry.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
@@ -195,6 +195,22 @@ export interface OrchestratorOptions {
   gatewayAuditLogger?: AuditLogger;
   /** Хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт). */
   gatewayPatternStore?: SecretPatternRepository;
+  /**
+   * PROP-090 §«Точка `llmFilters`»: **мутабельный** реестр фильтров LLM-вызовов.
+   * Единый экземпляр на инстанс: через него `GatewayProvider` (все точки:
+   * ход сессии, пул, decision, суммаризация) видит фильтры, а фасад плагинов
+   * (`PluginHost`, часть 2) регистрирует/снимает их при активации/деактивации.
+   *
+   * Не задан — реестр создаётся здесь пустым (`getLlmFilters()`); пустой реестр
+   * поведения не меняет (PROP-090: без фильтров — прежний ход вызова).
+   */
+  llmFilters?: LlmFilterRegistry;
+  /**
+   * PROP-090 §«Точка `llmFilters`»: бюджет времени на один вызов фильтра по
+   * умолчанию, мс (`plugins.llmFilterTimeoutMs`). Действует, если фильтр не
+   * задал свой `timeoutMs`. Применяется только к реестру, созданному здесь.
+   */
+  llmFilterTimeoutMs?: number;
   /**
    * ADR-094: реестр метрик — LLM-вызовы учитываются и при выключенном gateway
    * (`synth_llm_requests_total`/`..._duration_seconds`/`..._tokens_total`).
@@ -392,6 +408,11 @@ export class ChatOrchestrator {
   private readonly _gatewayPatternStore: SecretPatternRepository | null;
   /** ADR-094: реестр метрик (LLM-вызовы; временные метрики подключаются приложением). */
   private readonly _metrics: MetricsRegistry | null;
+  /**
+   * PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов (мутабельный;
+   * общий для всех gateway-точек — см. `getLlmFilters()`).
+   */
+  private readonly _llmFilters: LlmFilterRegistry;
   private readonly _dataDir: string;
   /** Путь к JSONL полного лога запросов/ответов LLM (передаётся в GatewayProvider). */
   private readonly _gatewayPayloadLogPath: string | undefined;
@@ -687,6 +708,15 @@ export class ChatOrchestrator {
     }
     this._gatewayPatternStore = options.gatewayPatternStore ?? null;
     this._metrics = options.metrics ?? null;
+    // PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов. Экземпляр
+    // может прийти извне (общий с фасадом плагинов); иначе создаём пустой —
+    // бюджет времени из `plugins.llmFilterTimeoutMs`.
+    this._llmFilters = options.llmFilters
+      ?? new LlmFilterRegistry(
+        options.llmFilterTimeoutMs !== undefined
+          ? { defaultTimeoutMs: options.llmFilterTimeoutMs }
+          : {},
+      );
 
     // ADR-036: суммаризация (ContextOptimizer) создаёт провайдера напрямую —
     // передаём ему общую gateway-обвязку, чтобы эта точка тоже была защищена.
@@ -793,6 +823,9 @@ export class ChatOrchestrator {
       audit,
       rateLimiter,
       obfMapStore,
+      // PROP-090 §«Точка llmFilters»: суммаризация — тоже LLM-вызов, фильтры
+      // фазы `pre_request` видят и её (порядок — тот же gateway-контур).
+      filters: this._llmFilters,
       ...(this._metrics ? { metrics: this._metrics } : {}),
     };
   }
@@ -801,6 +834,10 @@ export class ChatOrchestrator {
    * ADR-036: фабрика gateway-обёртки для ProviderPool — единая точка (конструктор
    * и live-переключение). У пула нет сессии, поэтому карта обфускации пустая:
    * защита от утечки секретов работает, карта не персистится.
+   *
+   * PROP-090 §«Точка `llmFilters`»: тот же реестр фильтров — так embedding-фаза
+   * видит эмбеддинги микро-слоя (`router/micro/models/embedding-model.ts` берёт
+   * провайдера из пула, а пул оборачивает его в `GatewayProvider`).
    */
   private _poolGatewayFactory(gatewayConfig: LLMGatewayConfig = this._gatewayConfig ?? DISABLED_GATEWAY_CONFIG): (inner: BaseProvider) => BaseProvider {
     return (inner) => new GatewayProvider(inner, gatewayConfig, {
@@ -812,6 +849,7 @@ export class ChatOrchestrator {
       sessionId: '',
       userId: '',
       metrics: this._metrics ?? undefined,
+      filters: this._llmFilters,
     });
   }
 
@@ -838,6 +876,7 @@ export class ChatOrchestrator {
       sessionId: '',
       userId: '',
       metrics: this._metrics ?? undefined,
+      filters: this._llmFilters,
     });
   }
 
@@ -886,6 +925,18 @@ export class ChatOrchestrator {
   /** ADR-036: включён ли LLM Gateway (runtime-тумблер / конфиг). */
   isGatewayEnabled(): boolean {
     return !!this._gatewayConfig;
+  }
+
+  /**
+   * PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов инстанса.
+   *
+   * Тот же экземпляр, что видят все gateway-точки (ход сессии, пул провайдеров,
+   * decision, суммаризация). Фасад плагинов регистрирует в нём фильтры при
+   * активации и снимает при деактивации — реестр **мутабельный**, поэтому
+   * пересборка провайдеров не нужна.
+   */
+  getLlmFilters(): LlmFilterRegistry {
+    return this._llmFilters;
   }
 
   /**
@@ -3726,6 +3777,7 @@ export class ChatOrchestrator {
         gatewayRateLimiter: this._gatewayRateLimiter,
         gatewayPayloadLogPath: this._gatewayPayloadLogPath,
         metrics: this._metrics ?? undefined,
+        filters: this._llmFilters,
       },
     };
   }

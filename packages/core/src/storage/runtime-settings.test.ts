@@ -487,6 +487,8 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
     exactHostExceptions: '/etc/synth/base-hosts.txt',
     promptBlockMaxChars: 1000,
     executionEnabled: false,
+    // PROP-090 §«Точка llmFilters» (Ф3б): бюджет времени фильтра.
+    llmFilterTimeoutMs: 1500,
   };
 
   it('runtime поверх base: каждое заданное поле перекрывает base', () => {
@@ -513,6 +515,7 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
       exactHostExceptions: '/etc/synth/runtime-hosts.txt',
       promptBlockMaxChars: 8000,
       executionEnabled: false,
+      llmFilterTimeoutMs: 1500,
     });
   });
 
@@ -540,6 +543,7 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
       exactHostExceptions: '',
       promptBlockMaxChars: 4000,
       executionEnabled: false,
+      llmFilterTimeoutMs: 1000,
     });
   });
 
@@ -557,5 +561,13 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
     });
     // Ни config, ни runtime — дефолт `false` (исполнение кода выключено).
     expect(mergePluginsConfig(undefined, {})).toMatchObject({ executionEnabled: false });
+  });
+
+  it('llmFilterTimeoutMs (Ф3б): runtime перекрывает config, иначе дефолт схемы', () => {
+    expect(mergePluginsConfig(base, { llmFilterTimeoutMs: 250 })).toMatchObject({
+      llmFilterTimeoutMs: 250,
+    });
+    expect(mergePluginsConfig(base, {})).toMatchObject({ llmFilterTimeoutMs: 1500 });
+    expect(mergePluginsConfig(undefined, {})).toMatchObject({ llmFilterTimeoutMs: 1000 });
   });
 });

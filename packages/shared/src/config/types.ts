@@ -13,6 +13,7 @@ import {
   EGRESS_POLICY_MODES,
   WEBHOOKS_EGRESS_POLICY_MODES,
   DEFAULT_LLM_GATEWAY_RATE_LIMIT,
+  DEFAULT_LLM_FILTER_TIMEOUT_MS,
   MIN_UPLOAD_BYTES,
   MAX_UPLOAD_BYTES_LIMIT,
   ToolCapability,
@@ -606,6 +607,13 @@ export const pluginsConfigSchema = z.object({
   exactHostExceptions: z.string().default(''),
   promptBlockMaxChars: z.number().int().positive().default(4000),
   executionEnabled: z.boolean().default(false),
+  /**
+   * Бюджет времени на один вызов фильтра LLM-вызовов, мс (точка
+   * `llmFilters`, PROP-090 §6). Не задан фильтром — берётся это значение;
+   * по истечении применяется `failMode` фильтра (`closed` → вызов не уходит,
+   * `open` → вызов идёт, факт — в аудите).
+   */
+  llmFilterTimeoutMs: z.number().int().positive().default(DEFAULT_LLM_FILTER_TIMEOUT_MS),
 });
 
 // --- Egress-политика (shared формат tools/webhooks/MCP) ---
