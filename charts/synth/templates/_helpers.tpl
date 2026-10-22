@@ -38,6 +38,104 @@ app.kubernetes.io/component: ui
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{- /* PROP-077: исполнитель (worker) — пул контейнеров с toolchain'ом. */ -}}
+{{- define "synth.executor.fullname" -}}
+{{- if .Values.executor.fullnameOverride }}
+{{- .Values.executor.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- default "synth-executor" .Values.executor.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+
+{{- define "synth.executor.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "synth.name" . }}
+app.kubernetes.io/component: executor
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{- /* PROP-077: адрес Service пула исполнителей (control plane ходит сюда). */ -}}
+{{- define "synth.executor.serviceUrl" -}}
+{{- printf "http://%s:%d" (include "synth.executor.fullname" .) (.Values.executor.service.port | int64) -}}
+{{- end }}
+
+{{- /* PROP-077: общий том workspace включён? (управляется чартом). */ -}}
+{{- define "synth.executor.workspaceEnabled" -}}
+{{- $w := .Values.executor.workspace | default dict -}}
+{{- if $w.enabled -}}true{{- end -}}
+{{- end }}
+
+{{- /* PROP-077: claim общего тома workspace (существующий или созданный чартом). */ -}}
+{{- define "synth.executor.workspaceClaim" -}}
+{{- $w := .Values.executor.workspace | default dict -}}
+{{- $w.existingClaim | default $w.claimName | default (printf "%s-workspace" (include "synth.executor.fullname" .)) -}}
+{{- end }}
+
+{{- /* PROP-077: режим исполнения (fail-closed на неизвестном значении). */ -}}
+{{- define "synth.execution.mode" -}}
+{{- $m := (((.Values.execution | default dict).mode) | default "inline") | toString -}}
+{{- if not (has $m (list "inline" "remote")) -}}
+{{- fail (printf "execution.mode: ожидается \"inline\" или \"remote\", получено %q" $m) -}}
+{{- end -}}
+{{- $m -}}
+{{- end }}
+
+{{- /* PROP-077: удалённый режим (split-топология) включён? */ -}}
+{{- define "synth.execution.isRemote" -}}
+{{- if eq (include "synth.execution.mode" .) "remote" -}}true{{- end -}}
+{{- end }}
+
+{{- /* PROP-077: поведение при недоступном исполнителе (fail-closed по умолчанию). */ -}}
+{{- define "synth.execution.failMode" -}}
+{{- $fm := ((((.Values.execution | default dict).remote | default dict).failMode) | default "fail") | toString -}}
+{{- if not (has $fm (list "fail" "inline-fallback")) -}}
+{{- fail (printf "execution.remote.failMode: ожидается \"fail\" или \"inline-fallback\", получено %q" $fm) -}}
+{{- end -}}
+{{- $fm -}}
+{{- end }}
+
+{{- /* PROP-077: список адресов исполнителей (через запятую — формат env).
+       Пусто → адрес Service пула (если executor.enabled), иначе — ошибка
+       рендера (fail-closed: без адреса удалённый режим не поднимется). */ -}}
+{{- define "synth.execution.remoteUrls" -}}
+{{- $r := (.Values.execution | default dict).remote | default dict -}}
+{{- $raw := $r.url | default list -}}
+{{- $urls := $raw -}}
+{{- if kindIs "string" $raw -}}
+{{- $urls = list $raw -}}
+{{- end -}}
+{{- if not $urls -}}
+{{- if .Values.executor.enabled -}}
+{{- $urls = list (include "synth.executor.serviceUrl" .) -}}
+{{- else -}}
+{{- fail "execution.mode: remote — задайте execution.remote.url (список адресов исполнителей) или включите executor.enabled: true (тогда чарт подставит адрес Service пула)" -}}
+{{- end -}}
+{{- end -}}
+{{- $urls | join "," -}}
+{{- end }}
+
+{{- /* PROP-077: Secret с токеном доверия — один на control plane и исполнителя. */ -}}
+{{- define "synth.execution.tokenSecretName" -}}
+{{- $t := .Values.executor.token | default dict -}}
+{{- $t.existingSecret | default .Values.secrets.existingSecret -}}
+{{- end }}
+
+{{- /* PROP-077: ключ токена внутри Secret. */ -}}
+{{- define "synth.execution.tokenKey" -}}
+{{- $t := .Values.executor.token | default dict -}}
+{{- $t.secretKey | default "SYNTH_EXECUTION_TOKEN" -}}
+{{- end }}
+
+{{- /* PROP-077: каталог монтирования Secret с токеном в backend. */ -}}
+{{- define "synth.execution.tokenMountDir" -}}
+/etc/synth/executor
+{{- end }}
+
+{{- /* PROP-077: путь к файлу с токеном (control plane читает токен из файла —
+       значение токена в env/ConfigMap не попадает, инвариант 13). */ -}}
+{{- define "synth.execution.tokenFilePath" -}}
+{{- include "synth.execution.tokenMountDir" . }}/token
+{{- end }}
+
 {{- define "synth.envName" -}}
 {{- .name | upper | replace "-" "_" }}
 {{- end }}

@@ -1,0 +1,106 @@
+{{- /* PROP-077, шаг 7c: пул исполнителей (executor/worker) — отдельные
+       контейнеры с toolchain'ом. Backend в split-режиме — тонкий control
+       plane: команды агентских тулов уходят сюда по HTTP (exec-API). */ -}}
+{{- if .Values.executor.enabled }}
+{{- /* Fail-closed: исполнителю обязателен корень workspace
+       (SYNTH_EXECUTOR_WORKSPACE — без него процесс не стартует). */ -}}
+{{- if not (include "synth.executor.workspaceEnabled" .) }}
+{{- fail "executor.enabled: true требует executor.workspace.enabled: true — исполнитель работает в общем томе workspace (PROP-077)" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "synth.executor.fullname" . }}
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: executor
+spec:
+  replicas: {{ .Values.executor.replicaCount }}
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      {{- include "synth.executor.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "synth.executor.selectorLabels" . | nindent 8 }}
+      annotations:
+        synth.io/build: {{ .Chart.Version | quote }}
+    spec:
+      {{- with .Values.executor.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "synth.executor.fullname" . }}
+      {{- /* Исполнитель не ходит в API Kubernetes — токен не монтируем. */}}
+      automountServiceAccountToken: false
+      {{- with .Values.executor.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: executor
+          image: "{{ .Values.executor.image.repository }}:{{ .Values.executor.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.executor.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.executor.service.targetPort }}
+              protocol: TCP
+          {{- /* Конфигурация исполнителя — только env (нет config.yaml:
+                 у воркера нет доступа к каталогу данных инстанса). */}}
+          env:
+            - name: SYNTH_EXECUTOR_HOST
+              value: "0.0.0.0"
+            - name: SYNTH_EXECUTOR_PORT
+              value: {{ .Values.executor.service.targetPort | int64 | quote }}
+            {{- /* Токен доверия — значение из Secret (инвариант 13). Процесс
+                   исполнителя вычитывает его при старте и вычищает из
+                   process.env — в окружение дочерних процессов он не утечёт. */}}
+            - name: SYNTH_EXECUTOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "synth.execution.tokenSecretName" . }}
+                  key: {{ include "synth.execution.tokenKey" . }}
+                  optional: false
+            {{- /* Корень workspace — граница containment'а для `cwd`. */}}
+            - name: SYNTH_EXECUTOR_WORKSPACE
+              value: {{ .Values.executor.workspace.mountPath | quote }}
+            - name: SYNTH_EXECUTOR_MAX_CONCURRENCY
+              value: {{ .Values.executor.limits.maxConcurrency | int64 | quote }}
+            - name: SYNTH_EXECUTOR_MAX_TIMEOUT_MS
+              value: {{ .Values.executor.limits.maxTimeoutMs | int64 | quote }}
+            - name: SYNTH_EXECUTOR_MAX_OUTPUT_BYTES
+              value: {{ .Values.executor.limits.maxOutputBytes | int64 | quote }}
+          volumeMounts:
+            {{- /* Общий том workspace: те же файлы, что у control plane. */}}
+            - name: workspace
+              mountPath: {{ .Values.executor.workspace.mountPath }}
+          {{- with .Values.executor.probes.liveness }}
+          livenessProbe:
+            httpGet:
+              path: {{ .path }}
+              port: {{ $.Values.executor.service.targetPort }}
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            periodSeconds: {{ .periodSeconds }}
+          {{- end }}
+          {{- with .Values.executor.probes.readiness }}
+          readinessProbe:
+            httpGet:
+              path: {{ .path }}
+              port: {{ $.Values.executor.service.targetPort }}
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            periodSeconds: {{ .periodSeconds }}
+          {{- end }}
+          {{- with .Values.executor.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.executor.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: {{ include "synth.executor.workspaceClaim" . }}
+{{- end }}

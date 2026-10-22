@@ -170,6 +170,179 @@ storage:
   fallbackDir: ""
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Топология исполнения (PROP-077, шаг 7c) — split-режим «control plane +
+# отдельные исполнители (executor/worker)».
+#
+# По умолчанию всё выключено: `execution.mode: inline` — команды агентских
+# тулов исполняются в процессе backend'а (прежнее поведение). Включение
+# split-режима:
+#
+#   execution:
+#     mode: remote
+#   executor:
+#     enabled: true
+#
+# Переключатель — параметр запуска (инвариант 24): смена режима требует
+# рестарта процесса (graceful shutdown, exit code 75), а не runtime-настройки.
+#
+# Секция `execution` попадает в backend ТОЛЬКО через env `SYNTH_EXECUTION_*`
+# (config.yaml не трогается): токен остаётся путём к файлу, а не значением
+# (инвариант 13).
+# ─────────────────────────────────────────────────────────────────────────────
+execution:
+  # inline (дефолт) | remote. Неизвестное значение → понятная ошибка рендера.
+  mode: inline
+  remote:
+    # Адреса исполнителей (список). Пусто + `executor.enabled: true` → чарт
+    # подставит адрес Service пула (http://synth-executor:<port>): балансировку
+    # по репликам делает Kubernetes. Пусто + `executor.enabled: false` → ошибка
+    # рендера (fail-closed: без адреса удалённый режим не поднимется).
+    url: []
+    # Таймаут exec-вызова, мс (env backend'а SYNTH_EXECUTION_TIMEOUT_MS).
+    timeoutMs: 30000
+    # Лимит одновременных exec-вызовов на backend (env SYNTH_EXECUTION_CONCURRENCY).
+    # 0 → env не выставляется: дефолт приложения — число CPU control plane.
+    concurrency: 0
+    # fail (дефолт, fail-closed) | inline-fallback (явная настройка: backend
+    # исполняет команду сам — обход изоляции, в managed-контуре включать осознанно).
+    failMode: fail
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Исполнитель (executor/worker) — пул контейнеров с toolchain'ом (PROP-077).
+#
+# Включается `executor.enabled: true` (вместе с `execution.mode: remote`).
+# Требования к окружению:
+#   - образ `synth-executor` (публикация образов — шаг 6 плана PROP-077);
+#     для приватного реестра — `executor.imagePullSecrets`;
+#   - RWX-том (NFS/CephFS/…) под общий workspace: том должен быть виден и
+#     control plane, и всем репликам исполнителя. Если в кластере нет RWX-класса
+#     — задайте свой claim (`executor.workspace.existingClaim`);
+#   - Secret с токеном доверия `synth_exec_…` (см. `executor.token`).
+# ─────────────────────────────────────────────────────────────────────────────
+executor:
+  enabled: false
+  nameOverride: ""
+  fullnameOverride: ""
+  # Размер пула: столько реплик исполнителя (балансировка — через Service).
+  replicaCount: 1
+
+  image:
+    repository: git.itphx.ru/itphx/synth-executor
+    # Пустой tag → .Chart.AppVersion (как у backend'а/UI).
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # Секреты для приватного реестра (kubernetes.io/dockerconfigjson).
+  imagePullSecrets: []
+
+  service:
+    type: ClusterIP
+    port: 5100
+    targetPort: 5100
+
+  # Ресурсы исполнителя: подберите под нагрузку окружения.
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+
+  # Лимиты исполнителя (env SYNTH_EXECUTOR_MAX_*).
+  limits:
+    # Лимит одновременных команд в одном исполнителе.
+    maxConcurrency: 4
+    # Потолок таймаута команды, мс.
+    maxTimeoutMs: 120000
+    # Потолок буфера вывода, байт.
+    maxOutputBytes: 10485760
+
+  probes:
+    liveness:
+      path: /health
+      initialDelaySeconds: 15
+      periodSeconds: 30
+    readiness:
+      path: /health
+      initialDelaySeconds: 5
+      periodSeconds: 10
+
+  podSecurityContext:
+    fsGroup: 1000
+  containerSecurityContext:
+    runAsUser: 1000
+    runAsNonRoot: true
+    readOnlyRootFilesystem: false
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+
+  workspace:
+    # Общий том workspace: control plane и все реплики исполнителя должны
+    # видеть одни и те же файлы. true → чарт создаёт PVC (RWX) и монтирует его
+    # в backend и в исполнитель по пути `mountPath`. Действует только при
+    # `executor.enabled: true` (иначе чарт ничего не создаёт и не монтирует).
+    enabled: true
+    # Существующий claim (например, если в кластере нет RWX-класса). Пусто →
+    # `claimName`, пусто → claim создаёт чарт.
+    existingClaim: ""
+    claimName: ""
+    # Размер общего тома. Для тестовых стендов достаточно 5–10 ГБ: workspace —
+    # это рабочие каталоги проектов, большие объёмы не нужны.
+    size: 10Gi
+    # Класс хранилища. Пусто → класс по умолчанию кластера.
+    # ВАЖНО: класс должен поддерживать ReadWriteMany (RWX) — том общий для
+    # backend'а и всех реплик исполнителя (NFS/CephFS-подобные классы;
+    # `local-path`/ReadWriteOnce не подойдут). Пример из тестового окружения
+    # (K3s): `nfs-rwx` (provisioner `nfs.csi.k8s.io`).
+    # Дефолт намеренно пустой: чарт публикуемый — подставлять класс
+    # конкретного окружения нельзя, у клиента без такого класса установка
+    # сломается. Если в кластере нет RWX-класса — задайте свой существующий
+    # claim (`existingClaim`) с accessMode: ReadWriteMany.
+    storageClass: ""
+    # RWX обязателен: том общий для backend и всех реплик исполнителя.
+    # Если класс тома не поддерживает ReadWriteMany — задайте свой claim
+    # (`existingClaim`) с нужным accessMode.
+    accessMode: ReadWriteMany
+    # true → PVC не удаляется при `helm uninstall`: чарт добавляет в манифест
+    # аннотацию helm.sh/resource-policy: keep. Включайте, когда общий том
+    # workspace нельзя терять: у класса с reclaimPolicy: Retain PV иначе
+    # остаётся осиротевшим (вне релизов, без управления).
+    # (Ручной kubectl annotate живого PVC не работает — Helm смотрит манифест релиза.)
+    keepOnUninstall: false
+    # Точка монтирования в обоих контейнерах (одинаковый путь внутри контейнера).
+    mountPath: /var/synth/data/workspaces
+    # Каталог workspace на стороне backend'а (storage.workspacesRoot → env
+    # SYNTH_WORKSPACES_ROOT). Пусто → дефолт приложения ({dataDir}/workspaces) —
+    # он совпадает с mountPath по умолчанию. Задайте, если mountPath отличается
+    # от {dataDir}/workspaces: иначе backend создаст каталоги проектов вне общего
+    # тома, и исполнитель их не увидит (containment → отказ EWORKSPACE).
+    backendWorkspacesRoot: ""
+
+  networkPolicy:
+    # NetworkPolicy для пула (PROP-077 «Изоляция, лимиты и квоты»).
+    # false → объект не рендерится (сеть кластера как есть).
+    enabled: false
+    # Дополнительные egress-правила (формат networking.k8s.io/v1). По умолчанию
+    # разрешён только DNS (namespace kube-system) — открытого egress в интернет
+    # нет. Пример (доступ к внешнему git-репозиторию):
+    #   allowedEgress:
+    #     - to: [{ipBlock: {cidr: 203.0.113.0/24}}]
+    #       ports: [{protocol: TCP, port: 443}]
+    allowedEgress: []
+
+  token:
+    # Secret с токеном доверия `synth_exec_…`. Пусто → secrets.existingSecret.
+    # Значение токена в values НЕ хранится (инвариант 13) — только ссылка.
+    existingSecret: ""
+    # Ключ внутри Secret. Backend получает токен ФАЙЛОМ
+    # (/etc/synth/executor/token → env SYNTH_EXECUTION_TOKEN=путь), исполнитель —
+    # значением в env SYNTH_EXECUTOR_TOKEN (secretKeyRef). Один Secret на обе
+    # стороны — токен совпадает.
+    secretKey: SYNTH_EXECUTION_TOKEN
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Доверие TLS/CA исходящих соединений Synth (ADR-099, конфиг `security.tls`).
 # Пусто (дефолт) → системное доверие Node; манифесты не меняются.
 #

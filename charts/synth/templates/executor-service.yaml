@@ -1,0 +1,21 @@
+{{- /* PROP-077, шаг 7c: Service пула исполнителей. Control plane ходит по
+       этому адресу (SYNTH_EXECUTION_REMOTE_URL); балансировку по репликам
+       делает Kubernetes. */ -}}
+{{- if .Values.executor.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "synth.executor.fullname" . }}
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: executor
+spec:
+  type: {{ .Values.executor.service.type }}
+  ports:
+    - port: {{ .Values.executor.service.port }}
+      targetPort: {{ .Values.executor.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "synth.executor.selectorLabels" . | nindent 4 }}
+{{- end }}

@@ -1,0 +1,35 @@
+{{- /* PROP-077, шаг 7c: общий том workspace (control plane ↔ исполнители).
+       Claim создаётся чартом, только если пользователь не принёс свой
+       (`executor.workspace.existingClaim` / `claimName`). */ -}}
+{{- if and .Values.executor.enabled (include "synth.executor.workspaceEnabled" .) }}
+{{- $w := .Values.executor.workspace -}}
+{{- if not ($w.existingClaim | default $w.claimName) }}
+{{- /* RWX обязателен: том общий для backend и всех реплик исполнителя.
+       Если класс тома не поддерживает ReadWriteMany — нужен свой claim. */ -}}
+{{- if ne ($w.accessMode | default "ReadWriteMany") "ReadWriteMany" }}
+{{- fail (printf "executor.workspace.accessMode: ожидается \"ReadWriteMany\" (общий том для control plane и всех реплик исполнителя), получено %q — либо задайте свой claim (executor.workspace.existingClaim)" ($w.accessMode | default "ReadWriteMany")) }}
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "synth.executor.workspaceClaim" . }}
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: executor
+  {{- if $w.keepOnUninstall }}
+  # Аннотация обязана быть в манифесте релиза: Helm при uninstall фильтрует
+  # ресурсы по манифесту и не видит аннотацию, проставленную вручную на живом PVC.
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  accessModes:
+    - {{ $w.accessMode | default "ReadWriteMany" }}
+  {{- with $w.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $w.size | default "10Gi" }}
+{{- end }}
+{{- end }}

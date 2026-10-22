@@ -1,0 +1,43 @@
+{{- /* PROP-077, шаг 7c: NetworkPolicy пула исполнителей.
+       ingress — только от pod'ов control plane (тот же namespace чарта) на порт
+       исполнителя; egress — по умолчанию ограничен (DNS), без открытого
+       доступа в интернет. Доп. правила — `executor.networkPolicy.allowedEgress`. */ -}}
+{{- if and .Values.executor.enabled .Values.executor.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "synth.executor.fullname" . }}
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: executor
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "synth.executor.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        {{- /* Control plane (backend) в namespace чарта. */}}
+        - podSelector:
+            matchLabels:
+              {{- include "synth.backend.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.executor.service.targetPort }}
+  egress:
+    {{- /* DNS — без него не работает ни один egress-вызов. */}}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- with .Values.executor.networkPolicy.allowedEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

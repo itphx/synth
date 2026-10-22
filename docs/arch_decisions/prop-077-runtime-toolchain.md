@@ -4,7 +4,7 @@
 > **Решение до:** 2026-11-14
 > **Дата:** 2026-10-21
 > **Источник:** переработано 2026-10-21 (проработка двух топологий развёртывания: отдельные контейнеры-исполнители vs all-in-one)
-> **Ближайший шаг:** шаги 7a–7d плана реализации — executor-сервис и `RemoteExecutionPort` (см. «Порядок реализации»); образы worker'а и публикация flavor'ов — [PROP-082](./prop-082-full-images-deployment.md) (шаги 4–6).
+> **Ближайший шаг:** шаг 7d плана реализации — метрики `synth_executor_*` и runbook (переключение топологии, диагностика «исполнитель недоступен»); образы worker'а и публикация flavor'ов — [PROP-082](./prop-082-full-images-deployment.md) (шаги 4–6).
 
 **Решение:** инструментальное окружение исполнения (toolchain) и сам механизм исполнения команд
 выносятся из процесса backend'а в **отдельный сервис-исполнитель (executor/worker)** — это
@@ -100,7 +100,7 @@ Env-имена (по одному на поле; **зафиксированы и
 
 CLI-флаг: `--execution-mode inline|remote` (рядом с `--restart-mode`,
 `packages/core/src/main.ts:106`; **реализован**); в managed этот флаг задаётся через env/ConfigMap чарта
-(`charts/synth/templates/backend-deployment.yaml:59`), в standalone/local — через `config.yaml` или env.
+(`charts/synth/templates/backend-deployment.yaml:149`), в standalone/local — через `config.yaml` или env.
 
 `failMode: inline-fallback` — **явная** настройка, не дефолт: она означает, что при недоступности
 исполнителя backend исполнит команду сам (в своём окружении, со своим toolchain). Это удобно для
@@ -370,7 +370,7 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   HTTP-агентов и не полагается на `NODE_EXTRA_CA_CERTS` как на конфигурацию (инвариант 22).
   Доверие к сертификату исполнителя — секция `security.tls` + per-host mapping для его адреса
   (ADR-099); CA-материалы — в Secret, в config.yaml попадают только пути
-  (`charts/synth/values.yaml:176` — комментарий «в config.yaml попадают ТОЛЬКО пути внутри контейнера»).
+  (`charts/synth/values.yaml:332` — комментарий «в config.yaml попадают ТОЛЬКО пути внутри контейнера»).
 - **Аутентификация.** Статический токен `synth_exec_…` — по образцу service-key
   (`packages/core/src/storage/service-api-key-store.ts:19`): хранится в Secret, в конфиг/ConfigMap
   не попадает (инвариант 13); передаётся как bearer-заголовок. Значение токена берётся
@@ -409,14 +409,19 @@ Workspace проекта (`project.workspace`, [ADR-075](./adr-075-project-works
   (`packages/core/src/engine/workspace-provision.ts:109`), `provisionManagedWorkspace`
   (`packages/core/src/engine/workspace-provision.ts:179`), единая точка `provisionWorkspace`
   (`packages/core/src/engine/workspace-provision.ts:232`). Исполнитель provisioning'ом не занимается.
-- **Сейчас** workspace лежит на PVC backend'а (`charts/synth/templates/backend-deployment.yaml:134` —
-  mount `data` → `/var/synth/data`), отдельного тома под workspace в чарте нет; `storage.workspacesRoot`
-  по умолчанию пуст (`packages/shared/src/config/defaults.ts:25`).
+- **Сейчас** workspace лежит на PVC backend'а (`charts/synth/templates/backend-deployment.yaml:176` —
+  mount `data` → `/var/synth/data`); отдельного тома под workspace в чарте (до шага 7c) не было;
+  `storage.workspacesRoot` по умолчанию пуст (`packages/shared/src/config/defaults.ts:25`), но
+  `resolveWorkspacesRoot` даёт `{dataDir}/workspaces` (`packages/shared/src/config/resolve.ts:200`).
 - **В split-режиме** нужен **общий том**: backend и все исполнители монтируют один и тот же каталог
-  workspace. Требование — RWX-класс (NFS/CephFS и т.п.). В чарте **RWX-варианта нет**: PVC создаётся
-  с `accessMode: ReadWriteOnce` (`charts/synth/values.yaml:45`,
+  workspace. Требование — RWX-класс (NFS/CephFS и т.п.). **Шаг 7c закрыл это в чарте**: PVC данных
+  backend'а по-прежнему RWO (`charts/synth/values.yaml:45`,
   `charts/synth/templates/backend-pvc.yaml:16`) и `replicaCount: 1` — «Хранилище JSON-файлы → НЕ
-  масштабируется, всегда 1 реплика» (`charts/synth/values.yaml:11`).
+  масштабируется, всегда 1 реплика» (`charts/synth/values.yaml:11`), — но для workspace заведён
+  отдельный том `executor.workspace.*` с `accessMode: ReadWriteMany` по умолчанию
+  (`charts/synth/templates/executor-pvc.yaml:1`), который монтируется в backend и в пул по одному пути
+  (`executor.workspace.mountPath`). Если в кластере нет RWX-класса — свой claim
+  (`executor.workspace.existingClaim`).
 - **Следствие для состояния**: файловая БД (JSON в `{dataDir}`) **не масштабируется** на несколько
   реплик backend'а — это отдельное ограничение, не связанное с исполнителем. Распределённое
   исполнение при 1 реплике backend'а — уже полезно (пул worker'ов на отдельных нодах), но требует
@@ -467,9 +472,11 @@ Workspace проекта (`project.workspace`, [ADR-075](./adr-075-project-works
 | NetworkPolicy | дефолтно — ограниченный egress (только нужные адреса) | pod worker'а |
 | Отсутствие секретов | в worker'е нет LLM-ключей/OIDC/провайдерских ключей | образ + монтирование |
 
-**NetworkPolicy в чарте сейчас нет**: в `charts/synth/templates/` есть Deployment/Service/PVC/
-ServiceAccount/ConfigMap/Ingress/ServiceMonitor/PrometheusRule/extraObjects, но **`Role`/`RoleBinding`
-и `NetworkPolicy` отсутствуют**. `ResourceQuota`/`LimitRange` в чарте тоже нет. Это часть «Дельты».
+**NetworkPolicy**: в чарте их **нет** для backend'а/UI, но **есть** для пула исполнителей
+(шаг 7c, `charts/synth/templates/executor-networkpolicy.yaml:1`): ingress — только от pod'ов
+control plane (тот же namespace) на порт исполнителя, egress — по умолчанию только DNS
+(доп. правила — `executor.networkPolicy.allowedEgress`). `Role`/`RoleBinding` и
+`ResourceQuota`/`LimitRange` в чарте по-прежнему отсутствуют — это часть «Дельты» (шаг 10).
 
 ## Наблюдаемость
 
@@ -507,28 +514,39 @@ ServiceAccount/ConfigMap/Ingress/ServiceMonitor/PrometheusRule/extraObjects, н�
 
 ## Развёртывание: чарт, образы, CI
 
-### Значения чарта (предлагаемые)
+### Значения чарта (реализовано — шаг 7c)
+
+Секция `execution` попадает в backend **только через env `SYNTH_EXECUTION_*`**
+(`config.yaml` не трогается) — так токен остаётся путём к файлу, а не значением
+(инвариант 13).
 
 | Ключ | Смысл |
 |---|---|
-| `execution.mode` | `inline` \| `remote` (рендерится в `config.yaml` и/или env backend'а) |
-| `execution.remote.url` | Адреса исполнителей (список) |
-| `execution.remote.existingSecret` / `execution.remote.tokenKey` | Secret с токеном `synth_exec_…` и ключ внутри него |
-| `execution.remote.timeoutMs` | Таймаут exec-вызова |
-| `execution.remote.concurrency` | Лимит одновременных вызовов |
-| `execution.remote.failMode` | `fail` \| `inline-fallback` |
-| `executor.enabled` | Включить split-топологию (рендерит Deployment/Service worker'а) |
+| `execution.mode` | `inline` (дефолт) \| `remote` → env `SYNTH_EXECUTION_MODE`; неизвестное значение → ошибка рендера (fail-closed) |
+| `execution.remote.url` | Адреса исполнителей (список) → env `SYNTH_EXECUTION_REMOTE_URL` (через запятую); пусто + `executor.enabled: true` → адрес Service пула; пусто без пула → ошибка рендера |
+| `execution.remote.timeoutMs` | Таймаут exec-вызова → env `SYNTH_EXECUTION_TIMEOUT_MS` |
+| `execution.remote.concurrency` | Лимит одновременных вызовов → env `SYNTH_EXECUTION_CONCURRENCY`; `0` → env не выставляется (дефолт — число CPU) |
+| `execution.remote.failMode` | `fail` \| `inline-fallback` → env `SYNTH_EXECUTION_FAIL_MODE` |
+| `executor.enabled` | Включить split-топологию (рендерит Deployment/Service/ServiceAccount worker'а) |
 | `executor.image.repository` / `.tag` / `.pullPolicy` | Образ worker'а (`synth-executor`) |
+| `executor.imagePullSecrets` | Секреты приватного реестра (для `git.itphx.ru`) |
 | `executor.replicaCount` | Размер пула |
+| `executor.service.port` / `.targetPort` | Service пула (`5100`) — его адрес и есть `SYNTH_EXECUTION_REMOTE_URL` |
 | `executor.resources` | limits/requests worker'а |
-| `executor.workspace.claimName` / `.mountPath` | Общий том с workspace (PVC) + точка монтирования |
-| `executor.podSecurityContext` / `executor.containerSecurityContext` | Изоляция (как у backend'а) |
-| `executor.networkPolicy` | Ограниченный egress |
+| `executor.limits.maxConcurrency` / `.maxTimeoutMs` / `.maxOutputBytes` | Лимиты worker'а → env `SYNTH_EXECUTOR_MAX_*` |
+| `executor.podSecurityContext` / `executor.containerSecurityContext` | Изоляция (как у backend'а) + `capabilities.drop: [ALL]` |
+| `executor.workspace.enabled` / `.existingClaim` / `.claimName` / `.size` / `.storageClass` / `.accessMode` | Общий том с workspace (PVC, RWX по умолчанию); свой claim — если в кластере нет RWX-класса |
+| `executor.workspace.mountPath` | Точка монтирования общего тома — **одинаковая** в backend и в worker'е (по умолчанию `/var/synth/data/workspaces` — совпадает с дефолтом `storage.workspacesRoot` = `{dataDir}/workspaces`) |
+| `executor.workspace.backendWorkspacesRoot` | `storage.workspacesRoot` backend'а (env `SYNTH_WORKSPACES_ROOT`) — задаётся, если `mountPath` отличается от `{dataDir}/workspaces` |
+| `executor.networkPolicy.enabled` / `.allowedEgress` | NetworkPolicy worker'а: ingress — только от pod'ов control plane, egress — по умолчанию только DNS |
+| `executor.token.existingSecret` / `.secretKey` | Secret с токеном `synth_exec_…` и ключ внутри него |
 
-Токен — **только** из Secret (`secretKeyRef`), по образцу `SYNTH_POSTGRES_PASSWORD`
-(`charts/synth/templates/backend-deployment.yaml:125`) и `SYNTH_METRICS_TOKEN`
-(`charts/synth/templates/backend-deployment.yaml:113`); в ConfigMap/values — никаких значений
-(инвариант 13).
+Токен — **только** из Secret: backend получает его **файлом**
+(`/etc/synth/executor/token`, `0400` → в env идёт путь, `SYNTH_EXECUTION_TOKEN`),
+worker — **значением** в env (`SYNTH_EXECUTOR_TOKEN`, `secretKeyRef`). Secret и
+ключ общие, поэтому токен совпадает на обеих сторонах; в ConfigMap/values —
+никаких значений (инвариант 13). При `executor.enabled: false` рендер чарта
+**побайтово не меняется**.
 
 ### Образы
 
@@ -618,11 +636,11 @@ backend'а. Данные не затронуты (workspace — тот же то
 | В образах backend'а/UI нет `EXPOSE`/`VOLUME`/`HEALTHCHECK`/`USER`; UI — nginx, root | `docker/Dockerfile.backend:48`, `:69`; `docker/Dockerfile.ui:25`, `:43` |
 | CI: сборка образов kaniko (`gcr.io/kaniko-project/executor:v1.24.0`), три образа, push в `gitverse.ru` + `ghcr.io`, `--push-retry=3`; **registry-cache не включён**; **smoke-тестов нет** | `.gitverse/workflows/release.yaml:321`, `:378`, `:392`, `:407`, `:389` |
 | Квота реестра: только версионные теги; на 0.9.0 вышло 607,4 МБ из 500 | `.gitverse/workflows/release.yaml:308` |
-| Чарт: `backend.replicaCount: 1` («Хранилище JSON-файлы → НЕ масштабируется»), PVC `data` → `/var/synth/data`, `accessMode: ReadWriteOnce`, RWX-варианта нет | `charts/synth/values.yaml:16`, `:11`, `:45`; `charts/synth/templates/backend-deployment.yaml:134`; `charts/synth/templates/backend-pvc.yaml:16` |
-| В чарте **нет** `Role`/`RoleBinding`, `NetworkPolicy`, `ResourceQuota` — есть только ServiceAccount'ы | `charts/synth/templates/serviceaccount.yaml:1` |
+| Чарт: `backend.replicaCount: 1` («Хранилище JSON-файлы → НЕ масштабируется»), PVC `data` → `/var/synth/data`, `accessMode: ReadWriteOnce`; RWX-варианта для **workspace** не было до шага 7c | `charts/synth/values.yaml:16`, `:11`, `:45`; `charts/synth/templates/backend-pvc.yaml:16` |
+| В чарте **нет** `Role`/`RoleBinding`, `ResourceQuota` — есть только ServiceAccount'ы; `NetworkPolicy` добавлен для пула исполнителей на шаге 7c | `charts/synth/templates/serviceaccount.yaml:1`; `charts/synth/templates/executor-networkpolicy.yaml:1` |
 | Probes backend'а — оба `GET /health` (не `/ready`): деградация БД — штатный сценарий | `charts/synth/values.yaml:103`, `:107`, `:97` |
-| `runAsUser: 1000`, `runAsNonRoot: true`, `allowPrivilegeEscalation: false`; UI — `fsGroup: 101` | `charts/synth/values.yaml:113`, `:115`, `:118`; `:347` |
-| Секреты в чарте — только из Secret (`SYNTH_POSTGRES_PASSWORD`, `SYNTH_METRICS_TOKEN`, `SYNTH_BOOTSTRAP_SERVICE_KEYS`, `SYNTH_API_KEY`), в ConfigMap/values — никаких значений | `charts/synth/templates/backend-deployment.yaml:79`, `:100`, `:113`, `:125` |
+| `runAsUser: 1000`, `runAsNonRoot: true`, `allowPrivilegeEscalation: false`; UI — `fsGroup: 101` | `charts/synth/values.yaml:113`, `:115`, `:118`; `:503` |
+| Секреты в чарте — только из Secret (`SYNTH_POSTGRES_PASSWORD`, `SYNTH_METRICS_TOKEN`, `SYNTH_BOOTSTRAP_SERVICE_KEYS`, `SYNTH_API_KEY`), в ConfigMap/values — никаких значений | `charts/synth/templates/backend-deployment.yaml:82`, `:100`, `:125`, `:137` |
 | Наблюдаемость: реестр с лимитом 2000 серий, рендер 0.0.4, `/metrics` (404/401/`no-store`), `/health` + `/ready`; метрик **очереди/занятости исполнителей нет** | `packages/core/src/metrics/registry.ts:19`, `:27`; `packages/core/src/server/routes/metrics.ts:52`, `:56`, `:63`, `:82`; `packages/core/src/server/routes/health.ts:63`, `:65` |
 | `synth_sessions_active` / `synth_queue_pending` — про сессии и очередь **сообщений**, не про исполнение | `packages/core/src/metrics/collectors/sessions.ts:26`, `:30` |
 | Порт исполнения: `ExecutionPort` + `InlineExecutionPort` + контрактный suite (шаг 1) | `packages/core/src/execution/ports/execution-port.ts:1`, `packages/core/src/execution/inline-execution-port.ts:1`, `packages/core/src/execution/contract/execution.ts:1` |
@@ -662,7 +680,7 @@ backend'а. Данные не затронуты (workspace — тот же то
    реестру (квота 500 МБ) — отдельный репозиторий или Docker Hub.
 8. **Чарт**: значения `execution.*` и `executor.*`; шаблоны `executor-deployment.yaml`,
    `executor-service.yaml`, PVC общего workspace (RWX), `NetworkPolicy` для worker'а, токен из
-   Secret; `executor.enabled` — переключатель split-развёртывания.
+   Secret; `executor.enabled` — переключатель split-развёртывания. — **реализовано (шаг 7c)**
 9. **Наблюдаемость**: метрики `synth_executor_queue_depth`, `synth_executor_workers_busy`,
    `synth_executor_wait_seconds`, `synth_executor_commands_total{outcome}`; `/metrics` исполнителя;
    агрегация на backend'е; алерты в `charts/synth/files/alerts/`.
@@ -803,3 +821,4 @@ Split-топология технически возможна и при одн�
 - 2026-10-21 — шаг 3: секция `execution` в конфиге (mode/remote.*, env SYNTH_EXECUTION_*, CLI --execution-mode, fail-closed); `remote` — fail-closed до шага 7.
 - 2026-10-21 — шаг 7a: пакет исполнителя `@itphx/synth-executor` (exec-API `/exec`/`/capabilities`/`/health`, containment `cwd`, клиент удалённого порта `./client`).
 - 2026-10-21 — шаг 7b: подключение по `execution.mode=remote` — динамический `import()` пакета в core (fail-closed, по образцу драйвера хранилища), чтение токена из файла по `execution.remote.tokenSecret` (путь, не значение; значение не логируется), фабрика выбора порта по режиму, стартовая проверка режима (пакет доступен + токен читается); контрактный suite прогоняется против живого исполнителя в core, разделение проверок `cwd` на inline-only/remote-only (containment `EWORKSPACE`).
+- 2026-10-22 — шаг 7c: чарт — значения `execution.*` и `executor.*`, шаблоны `executor-deployment.yaml`/`executor-service.yaml`/`executor-pvc.yaml`/`executor-networkpolicy.yaml`, общий том workspace (RWX) в backend и в пуле, токен из Secret (backend — файлом, worker — значением), fail-closed проверки рендера (неизвестный `mode`/`failMode`, отсутствие адреса, `executor.enabled` без workspace, accessMode ≠ RWX); при `executor.enabled: false` рендер не меняется.

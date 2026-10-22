@@ -16,6 +16,7 @@ PostgreSQL) и
 |---|---|---|---|
 | `backend` | `gitverse.ru/itphx/synth-backend` | 5000 | API Hub: OIDC + RBAC + движок; данные — JSON в PVC (по умолчанию) или PostgreSQL (`storage.backend: postgres`) |
 | `ui` | `gitverse.ru/itphx/synth-ui` | 8080 | React SPA под nginx; проксирует API на backend |
+| `executor` | `git.itphx.ru/itphx/synth-executor` | 5100 | Опционально (PROP-077, split-режим): пул исполнителей с toolchain'ом; включается `executor.enabled: true` + `execution.mode: remote` |
 
 Backend самодостаточен (встроенный движок + хранилище), поэтому отдельный runner
 не разворачивается. Backend всегда 1 реплика (`backend.replicaCount`), чарт не
@@ -32,6 +33,9 @@ Backend самодостаточен (встроенный движок + хра
 - Secret с секретами (см. ниже).
 - (Опционально) PostgreSQL, если выбран `storage.backend: postgres`, и Secret с
   паролем БД — см. раздел «PostgreSQL как backend хранения».
+- (Опционально, split-режим) RWX-том под общий workspace, образ
+  `synth-executor` и Secret с токеном доверия — см. раздел «Исполнитель
+  (split-режим, PROP-077)».
 
 ## Установка
 
@@ -126,6 +130,30 @@ ingress:
 | `storage.postgres.secretPasswordKey` | `SYNTH_POSTGRES_PASSWORD` | Ключ внутри Secret с паролем БД |
 | `storage.degradedMode` | `""` | Задел деградации: `fallback-file` \| `halt` (пусто → дефолт core) |
 | `storage.fallbackDir` | `""` | Каталог файлового фоллбека (пусто → `{dataDir}/fallback`) |
+| `execution.mode` | `inline` | Топология исполнения (PROP-077): `inline` (в процессе backend'а) \| `remote` (пул исполнителей); переключатель — параметр запуска, смена — рестарт |
+| `execution.remote.url` | `[]` | Адреса исполнителей (список); пусто + `executor.enabled: true` → адрес Service пула |
+| `execution.remote.timeoutMs` | `30000` | Таймаут exec-вызова (env `SYNTH_EXECUTION_TIMEOUT_MS`) |
+| `execution.remote.concurrency` | `0` | Лимит одновременных exec-вызовов; `0` → env не выставляется (дефолт — число CPU) |
+| `execution.remote.failMode` | `fail` | `fail` (fail-closed) \| `inline-fallback` (backend исполняет сам — обход изоляции) |
+| `executor.enabled` | `false` | Включить split-режим: Deployment + Service + PVC пула исполнителей |
+| `executor.replicaCount` | `1` | Размер пула исполнителей |
+| `executor.image.repository` | `git.itphx.ru/itphx/synth-executor` | Образ исполнителя |
+| `executor.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
+| `executor.imagePullSecrets` | `[]` | Секреты для приватного реестра (нужны для `git.itphx.ru`) |
+| `executor.service.port` / `.targetPort` | `5100` / `5100` | Service исполнителя (его адрес — `SYNTH_EXECUTION_REMOTE_URL`) |
+| `executor.resources` | `1000m/1Gi`, `200m/256Mi` | limits/requests исполнителя |
+| `executor.limits.maxConcurrency` / `.maxTimeoutMs` / `.maxOutputBytes` | `4` / `120000` / `10485760` | Лимиты исполнителя (env `SYNTH_EXECUTOR_MAX_*`) |
+| `executor.workspace.enabled` | `true` | Чарт управляет общим томом workspace (действует при `executor.enabled: true`) |
+| `executor.workspace.existingClaim` / `.claimName` | `""` | Существующий claim (например, при отсутствии RWX-класса); пусто → claim создаёт чарт |
+| `executor.workspace.accessMode` | `ReadWriteMany` | RWX обязателен: том общий для control plane и всех реплик исполнителя |
+| `executor.workspace.size` / `.storageClass` | `10Gi` / `""` | Размер тома workspace (для тестовых стендов 5–10 ГБ достаточно) и класс хранилища — **должен поддерживать RWX** (в тестовом окружении: `nfs-rwx`); пусто → класс по умолчанию кластера |
+| `executor.workspace.keepOnUninstall` | `false` | Не удалять PVC общего тома при `helm uninstall` (аннотация `helm.sh/resource-policy: keep` в манифесте релиза); включать, когда общий workspace нельзя терять — иначе PV класса с `reclaimPolicy: Retain` остаётся осиротевшим (вне релизов, без управления) |
+| `executor.workspace.mountPath` | `/var/synth/data/workspaces` | Точка монтирования общего тома (одинаковая в backend и исполнителе) |
+| `executor.workspace.backendWorkspacesRoot` | `""` | `storage.workspacesRoot` backend'а (env `SYNTH_WORKSPACES_ROOT`); пусто → дефолт `{dataDir}/workspaces` |
+| `executor.networkPolicy.enabled` | `false` | NetworkPolicy пула: ingress — только от control plane, egress — по умолчанию только DNS |
+| `executor.networkPolicy.allowedEgress` | `[]` | Доп. egress-правила (формат `networking.k8s.io/v1`) |
+| `executor.token.existingSecret` | `""` | Secret с токеном доверия `synth_exec_…` (пусто → `secrets.existingSecret`) |
+| `executor.token.secretKey` | `SYNTH_EXECUTION_TOKEN` | Ключ внутри Secret: backend читает файл, исполнитель — значение из `secretKeyRef` |
 | `security.tls.existingSecret` | `""` | Secret с CA/клиентскими сертификатами → mount в `/etc/synth/tls` (ADR-099) |
 | `security.tls.caKey` / `certKey` / `keyKey` | `""` | Ключи внутри Secret → `security.tls.{caFile,certFile,keyFile}` (путь `/etc/synth/tls/<key>`) |
 | `security.tls.caFile` / `certFile` / `keyFile` | `""` | Явные пути внутри контейнера (когда файлы смонтированы вами) |
@@ -406,6 +434,7 @@ namespace релиза. Имя задаётся `secrets.existingSecret` (по �
 | `SYNTH_API_KEY` | при `backend.auth.apiKey.enabled: true` (ключ переопределяется `backend.auth.apiKey.secretKey`, Secret — `backend.auth.apiKey.existingSecret`) |
 | `SYNTH_PROVIDER_<NAME>_API_KEY` | для каждого провайдера с `apiKey: true` (`<NAME>` — name в верхнем регистре, `-` → `_`) |
 | `SYNTH_POSTGRES_PASSWORD` | при `storage.backend: postgres` — пароль БД (ключ переопределяется `storage.postgres.secretPasswordKey`, Secret — `storage.postgres.existingSecret`) |
+| `SYNTH_EXECUTION_TOKEN` | при `execution.mode: remote` — токен доверия исполнителя `synth_exec_…` (ключ переопределяется `executor.token.secretKey`, Secret — `executor.token.existingSecret`) |
 
 Пример:
 
@@ -581,6 +610,283 @@ PVC (`backend.persistence.*`) остаётся смонтированным в `
 выполняется. Реализация — параллельная волна PROP-032; чарт лишь доводит значения
 до `config.yaml` (env-переменных у этих ключей нет). Значение `storage.backend`
 валидируется приложением (при неизвестном — ошибка старта), чарт его не проверяет.
+
+## Исполнитель (split-режим, PROP-077)
+
+По умолчанию Synth работает в **all-in-one** режиме: команды агентских тулов
+(`execute_shell`, `grep_files`, python) исполняются в процессе backend'а
+(`execution.mode: inline` — прежнее поведение, ничего не меняется).
+
+Альтернатива — **split-топология**: backend становится тонким control plane
+(сессии, история, контекст, permissions, RBAC/OIDC, LLM Gateway, API v2), а
+команды исполняются в отдельных контейнерах-исполнителях (`synth-executor`) с
+toolchain'ом (`git`, `ripgrep`, `python3`, `openssh-client`). Переключатель —
+**параметр запуска** (`execution.mode`), смена режима требует рестарта процесса
+(graceful shutdown, exit code 75).
+
+| Роль | Что в ней | Env |
+|---|---|---|
+| control plane (`backend`) | сессии, история, контекст, permissions, LLM-вызовы, API v2 | `SYNTH_EXECUTION_MODE=remote`, `SYNTH_EXECUTION_REMOTE_URL`, `SYNTH_EXECUTION_TOKEN` (путь к файлу), `SYNTH_EXECUTION_TIMEOUT_MS`, `SYNTH_EXECUTION_FAIL_MODE` |
+| исполнитель (`synth-executor`) | выполнение команд, разбор env, лимиты вывода, таймаут | `SYNTH_EXECUTOR_TOKEN` (значение), `SYNTH_EXECUTOR_WORKSPACE`, `SYNTH_EXECUTOR_HOST/PORT`, `SYNTH_EXECUTOR_MAX_*` |
+
+### Требования
+
+- **Класс хранилища с поддержкой RWX** под общий workspace: backend и все
+  реплики исполнителя должны видеть одни и те же файлы, поэтому том обязан
+  быть `ReadWriteMany` (RWX) — это NFS/CephFS-подобные классы, а не
+  `local-path`/ReadWriteOnce. В тестовом окружении (K3s) такой класс —
+  **`nfs-rwx`** (provisioner `nfs.csi.k8s.io`).
+  Дефолт в чарте — пусто (класс по умолчанию кластера): чарт публикуемый, и
+  класс конкретного окружения подставлять нельзя — у клиента без такого
+  класса установка сломается. Задайте класс явно:
+
+  ```yaml
+  executor:
+    enabled: true
+    workspace:
+      storageClass: nfs-rwx      # класс с поддержкой ReadWriteMany
+      size: 10Gi                 # для тестовых стендов 5–10 ГБ достаточно
+  ```
+
+  Если в кластере **нет** RWX-класса — принесите свой существующий claim
+  (accessMode `ReadWriteMany`):
+
+  ```yaml
+  executor:
+    workspace:
+      existingClaim: synth-shared-workspaces   # чарт PVC не создаёт
+  ```
+
+  Чарт не может проверить accessMode чужого claim — это на вас.
+- **Secret с токеном доверия** `synth_exec_…` (см. ниже). Значение токена в
+  `values`/ConfigMap не хранится (инвариант 13) — только ссылка на Secret и
+  имя ключа.
+- **Образ `synth-executor`** в реестре, из которого тянет кластер
+  (`executor.image.repository`); для приватного реестра — `executor.imagePullSecrets`.
+- **Пакет исполнителя в образе control plane**: режим `remote` подключает
+  `@itphx/synth-executor` динамическим `import()` и **fail-closed** — без пакета
+  процесс не стартует, а не уйдёт молча в `inline`. В официальном образе
+  `synth-backend` пакет присутствует (optionalDependencies ядра) — при сборке
+  своего образа не выбрасывайте optional-зависимости (`pnpm deploy --prod`
+  **без** `--no-optional`).
+- Backend остаётся **1 репликой** (файловое хранилище не масштабируется;
+  несколько реплик control plane — только с PostgreSQL, см. раздел выше).
+
+### Включение
+
+```yaml
+# my-values.yaml
+execution:
+  mode: remote                 # split-режим (переключатель — параметр запуска)
+  remote:
+    url: []                    # пусто → адрес Service пула (http://synth-executor:5100)
+    timeoutMs: 30000
+    concurrency: 0             # 0 → дефолт приложения (число CPU control plane)
+    failMode: fail             # fail (fail-closed) | inline-fallback
+
+executor:
+  enabled: true
+  replicaCount: 2              # размер пула
+  image:
+    repository: git.itphx.ru/itphx/synth-executor
+    tag: ""                    # пусто → .Chart.AppVersion
+  imagePullSecrets:            # приватный реестр
+    - name: regcred
+  workspace:
+    enabled: true
+    accessMode: ReadWriteMany  # RWX обязателен
+    size: 10Gi                 # для тестовых стендов 5–10 ГБ достаточно
+    storageClass: nfs-rwx      # класс с поддержкой ReadWriteMany (K3s-тест)
+  networkPolicy:
+    enabled: true              # ограниченный egress (по умолчанию — только DNS)
+  token:
+    existingSecret: synth-secrets   # пусто → secrets.existingSecret
+    secretKey: SYNTH_EXECUTION_TOKEN
+```
+
+```bash
+helm upgrade --install synth ./charts/synth -f my-values.yaml \
+  --namespace synth --create-namespace
+```
+
+### Токен доверия (Secret)
+
+Один Secret обслуживает обе стороны: backend получает токен **файлом**
+(`/etc/synth/executor/token`, режим 0400 → в env идёт путь), исполнитель —
+**значением** в env (`secretKeyRef`). Токен на обеих сторонах совпадает, потому
+что Secret и ключ общие.
+
+```bash
+# токен формата synth_exec_… (как service-key, ADR-052)
+TOKEN="$(head -c 32 /dev/urandom | base64 | tr -d '=+/')"
+kubectl create secret generic synth-secrets \
+  --namespace synth \
+  --from-literal=SYNTH_EXECUTION_TOKEN="synth_exec_${TOKEN}"
+```
+
+Проверка, что ключ на месте (значение не печатаем):
+
+```bash
+kubectl get secret synth-secrets -n synth -o jsonpath='{.data.SYNTH_EXECUTION_TOKEN}' | wc -c
+```
+
+Если Secret лежит в другом Secret'е/ключе — задайте
+`executor.token.existingSecret` и `executor.token.secretKey`.
+
+### Общий том workspace
+
+Один PVC (RWX) монтируется **и в backend, и в исполнитель** по одному пути
+(`executor.workspace.mountPath`, по умолчанию `/var/synth/data/workspaces`).
+Путь внутри контейнера одинаков с обеих сторон — на этом держится containment
+исполнителя (`cwd` обязан лежать внутри его workspace-корня, иначе — отказ
+`EWORKSPACE`).
+
+По умолчанию путь совпадает с дефолтом приложения `{dataDir}/workspaces`
+(`storage.workspacesRoot`), поэтому каталоги проектов и default-workspace
+попадают в общий том без дополнительной настройки. Если `mountPath` отличается
+от `{dataDir}/workspaces` (например, изменён `storage.dataDir`) — задайте
+`executor.workspace.backendWorkspacesRoot`, иначе backend создаст каталоги
+проектов вне общего тома и исполнитель их не увидит:
+
+```yaml
+executor:
+  workspace:
+    mountPath: /mnt/synth-workspaces
+    backendWorkspacesRoot: /mnt/synth-workspaces   # → env SYNTH_WORKSPACES_ROOT
+```
+
+Своего claim (например, в кластере без RWX-класса):
+
+```yaml
+executor:
+  workspace:
+    existingClaim: synth-shared-workspaces   # чарт PVC не создаёт
+```
+
+### Вложенное монтирование (путь внутри пути)
+
+У backend'а общий том workspace смонтирован **внутрь** тома данных: `data` →
+`/var/synth/data`, workspace → `/var/synth/data/workspaces`. Такое вложение
+(путь тома внутри пути другого тома) в Kubernetes разрешено:
+
+- kubelet создаёт каталог точки монтирования внутри родительского тома —
+  upstream `pkg/volume/util/nested_volumes.go`, `MakeNestedMountpoints`
+  («creates mount points in baseDir for volumes mounted beneath name»);
+- runtime монтирует тома **по возрастанию глубины пути** — containerd
+  `internal/cri/opts/spec_opts.go`: «Sort mounts in number of parts. This
+  ensures that high level mounts don't shadow other mounts» (сортировка по
+  числу частей `ContainerPath`, родитель — первым).
+
+Практические следствия:
+
+- по пути `/var/synth/data/workspaces` виден **том workspace** (PVC
+  исполнителя): он перекрывает (затеняет) одноимённый подкаталог тома `data`;
+  всё остальное содержимое `/var/synth/data` (сессии, провайдеры, секреты)
+  остаётся на томе `data`;
+- каталог `workspaces` внутри тома `data` может существовать (пустой) — он не
+  используется: всё, что backend пишет в `{dataDir}/workspaces`, попадает в
+  общий RWX-том;
+- у исполнителя вложенности нет: у него единственный том `workspace`,
+  смонтированный по тому же пути `/var/synth/data/workspaces`.
+
+Требования к путям (нарушение → «не тот том» и отказ `EWORKSPACE`):
+
+1. путь тома workspace **глубже** пути тома данных
+   (`/var/synth/data/workspaces` ⊂ `/var/synth/data`);
+2. путь тома workspace **одинаковый** у backend'а и у исполнителя;
+3. `backendWorkspacesRoot` совпадает с `mountPath` (иначе backend создаст
+   каталоги проектов вне общего тома).
+
+Осторожно с откатом: том workspace монтируется в backend только пока
+`executor.enabled: true`. Если исполнитель выключить, backend останется без
+этого монтирования и увидит пустой каталог `workspaces` на томе `data` —
+файлы проектов при этом не удаляются, они лежат на RWX-PVC (их по-прежнему
+видно исполнителям и в claim'е). Перед откатом на `inline` сохраните
+workspace, если он нужен.
+
+### Ограничения и NetworkPolicy
+
+- `NetworkPolicy` (`executor.networkPolicy.enabled`) по умолчанию разрешает
+  **только DNS** — открытого egress в интернет нет. Добавьте нужные адреса
+  (например, внешний git-репозиторий):
+
+  ```yaml
+  executor:
+    networkPolicy:
+      allowedEgress:
+        - to: [{ipBlock: {cidr: 203.0.113.0/24}}]
+          ports: [{protocol: TCP, port: 443}]
+  ```
+
+  ingress — только от pod'ов control plane (тот же namespace) на порт исполнителя.
+- `failMode: fail` (дефолт) — при недоступном исполнителе инструмент
+  недоступен с явной причиной; `inline-fallback` — backend исполнит команду
+  сам (обход изоляции, включать осознанно).
+- В исполнителе **нет** LLM-ключей, OIDC-секретов и чужих workspace: образ
+  worker'а собирается отдельно от образа backend'а.
+- `docker.sock` в исполнитель **не монтируется никогда**.
+
+### Как проверить
+
+```bash
+kubectl get pods -n synth -l app.kubernetes.io/component=executor
+kubectl logs -n synth deploy/synth-executor | head
+
+# рукопожатие исполнителя (токен обязателен)
+kubectl run -n synth curl --rm -it --restart=Never --image=curlimages/curl -- \
+  curl -sS -H "Authorization: Bearer synth_exec_…" http://synth-executor:5100/capabilities
+# → {"protocol":1,"toolchain":{...},"os":"linux","arch":"x64","node":"v22..."}
+
+# пул виден со стороны control plane
+kubectl exec -n synth deploy/synth-backend -- printenv SYNTH_EXECUTION_MODE SYNTH_EXECUTION_REMOTE_URL
+```
+
+Проверка тома workspace — claim действительно **RWX** (поле в PVC называется
+`spec.accessModes`, во множественном числе):
+
+```bash
+# accessMode всех claim'ов в namespace: у claim'а исполнителя — ReadWriteMany
+kubectl get pvc -n synth -o jsonpath='{.items[*].spec.accessModes}'
+# → ["ReadWriteOnce"] ["ReadWriteMany"]
+
+# claim исполнителя: нужный класс (в тестовом окружении — nfs-rwx)
+kubectl get pvc -n synth -l app.kubernetes.io/component=executor \
+  -o jsonpath='{range .items[*]}{.metadata.name}{" -> "}{.spec.storageClassName}{" "}{.spec.accessModes}{"\n"}{end}'
+# → synth-executor-workspace -> nfs-rwx ["ReadWriteMany"]
+```
+
+Проверка, что backend и исполнитель монтируют **один и тот же** claim по
+**одинаковому** пути (иначе исполнитель не увидит каталоги проектов, а
+containment отклонит `cwd` с `EWORKSPACE`):
+
+```bash
+# точки монтирования
+kubectl get deploy synth-backend -n synth \
+  -o jsonpath='{range .spec.template.spec.containers[*].volumeMounts[*]}{.name}{" -> "}{.mountPath}{"\n"}{end}'
+# → data -> /var/synth/data
+# → executor-workspace -> /var/synth/data/workspaces
+
+kubectl get deploy synth-executor -n synth \
+  -o jsonpath='{range .spec.template.spec.containers[*].volumeMounts[*]}{.name}{" -> "}{.mountPath}{"\n"}{end}'
+# → workspace -> /var/synth/data/workspaces
+
+# источник тома — один и тот же claim
+kubectl get deploy synth-backend -n synth \
+  -o jsonpath='{range .spec.template.spec.volumes[*]}{.name}{" -> "}{.persistentVolumeClaim.claimName}{"\n"}{end}'
+# → executor-workspace -> synth-executor-workspace
+
+kubectl get deploy synth-executor -n synth \
+  -o jsonpath='{range .spec.template.spec.volumes[*]}{.name}{" -> "}{.persistentVolumeClaim.claimName}{"\n"}{end}'
+# → workspace -> synth-executor-workspace
+```
+
+У backend'а путь workspace **вложен** в путь тома данных
+(`/var/synth/data/workspaces` ⊂ `/var/synth/data`) — это разрешено, том
+workspace перекрывает поддерево (см. «Вложенное монтирование» выше).
+
+Если backend не стартует с `SYNTH_EXECUTION_MODE=remote` — проверьте, что Secret
+с токеном существует и в нём есть нужный ключ: режим `remote` **fail-closed**
+(процесс не поднимется, а не уйдёт молча в `inline`).
 
 ## Installer service-key (опция `installerKey`)
 
