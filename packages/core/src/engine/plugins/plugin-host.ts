@@ -11,11 +11,10 @@
  *
  * **Ф1: исполнение кода выключено по умолчанию.** `plugins.executionEnabled`
  * по умолчанию `false` — шаг `import` останавливается с
- * `plugin.execution_disabled` (это ожидаемый исход, а не ошибка). Загрузчика
- * кода (`PluginLoader`) в core нет: `import()` чужого кода в ядре отсутствует,
- * а при включённом `executionEnabled` без загрузчика шаг останавливается с
- * `plugin.loader_unavailable`. Точки расширения под Ф2/Ф3/Ф4: хук скана
- * (`PluginScanHook`), загрузчик (`PluginLoader`), фасад (`PluginFacade`).
+ * `plugin.execution_disabled` (это ожидаемый исход, а не ошибка). Загрузчик
+ * `inline` реализован в Ф4а (`engine/plugins/inline-loader.ts`) и включается
+ * опцией `loader`; без него при включённом `executionEnabled` шаг
+ * останавливается с `plugin.loader_unavailable`.
  *
  * **Идемпотентность:** повторная активация уже активного плагина —
  * **осмысленный отказ** `plugin.already_active` (а не переактивация):
@@ -60,6 +59,7 @@ import type {
   PluginLogger,
   PluginScanHook,
 } from './activation.js';
+import { pluginLoadFailureReason } from './activation.js';
 import { readExactHostExceptions } from './exact-host-exceptions.js';
 import { verifyPluginIntegrity } from './integrity.js';
 import { createPluginScanHook } from './scan/hook.js';
@@ -322,7 +322,7 @@ export class PluginHost {
     }
 
     // ── Шаг 6: import ─────────────────────────────────────────────────
-    // Ф1: код НЕ грузится — шаг обязан явно остановиться.
+    // Исполнение кода выключено политикой — шаг обязан явно остановиться.
     if (!this._config.executionEnabled) {
       return failure(
         'import',
@@ -334,7 +334,7 @@ export class PluginHost {
       return failure(
         'import',
         'plugin.loader_unavailable',
-        'Загрузчик кода плагина недоступен (Ф1: import() чужого кода в ядре отсутствует) — шаг import остановлен.',
+        'Загрузчик кода плагина недоступен (опция loader не передана; inline — createInlinePluginLoader) — шаг import остановлен.',
       );
     }
 
@@ -470,10 +470,17 @@ export class PluginHost {
     try {
       module = await this._loader(ready);
     } catch (err) {
+      // Причина берётся из `PluginLoadError` (Ф4а): «код загружен, но не
+      // выполнил контракт» (`plugin.module_invalid`) — не то же самое, что
+      // «загрузчик недоступен/сломался» (`plugin.loader_unavailable`).
+      const reason = pluginLoadFailureReason(err);
+      const detail = err instanceof Error ? err.message : String(err);
       return failure(
         'import',
-        'plugin.loader_unavailable',
-        `Загрузчик кода плагина завершился ошибкой: ${err instanceof Error ? err.message : String(err)}`,
+        reason,
+        reason === 'plugin.module_invalid'
+          ? detail
+          : `Загрузчик кода плагина завершился ошибкой: ${detail}`,
       );
     }
     try {

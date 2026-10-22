@@ -10,6 +10,8 @@ export type { PluginHostOptions } from './plugin-host.js';
 
 export {
   PLUGIN_ACTIVATION_STEPS,
+  PluginLoadError,
+  pluginLoadFailureReason,
   type PluginActivationDescriptor,
   type PluginActivationHandle,
   type PluginActivationResult,
@@ -18,6 +20,7 @@ export {
   type PluginDisposer,
   type PluginFacade,
   type PluginLlmFilterOptions,
+  type PluginLoadFailureReason,
   type PluginToolDefinition,
   type PluginLoader,
   type PluginLogger,
@@ -25,6 +28,15 @@ export {
   type PluginScanHook,
   type PluginScanResult,
 } from './activation.js';
+
+// Ф4а — `inline`-загрузчик кода плагина (bundle-only, containment, cache-busting).
+export {
+  DEFAULT_MAX_PLUGIN_BUNDLE_BYTES,
+  DEFAULT_PLUGIN_ENTRY,
+  PLUGIN_BUNDLE_EXTENSIONS,
+  createInlinePluginLoader,
+} from './inline-loader.js';
+export type { InlinePluginLoaderOptions } from './inline-loader.js';
 
 export { computePluginContentHash, verifyPluginIntegrity } from './integrity.js';
 export type { PluginIntegrityVerdict } from './integrity.js';

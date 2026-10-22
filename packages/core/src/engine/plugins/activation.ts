@@ -3,10 +3,10 @@
  *
  * Ф1 — каркас: описанные здесь типы закрывают пайплайн активации (resolve →
  * integrity → semver-гейт → trust/scan → политика режима → import → facade),
- * реестр активаций и модель disposers. Исполнение кода в Ф1 **выключено**:
- * `plugins.executionEnabled` по умолчанию `false`, а загрузчик (`PluginLoader`)
- * в core не реализован — это точка расширения Ф3 (`inline`) / Ф4
- * (`out-of-process`).
+ * реестр активаций и модель disposers. Исполнение кода по умолчанию
+ * **выключено** (`plugins.executionEnabled=false`). Загрузчик `inline`
+ * реализован в Ф4а (`engine/plugins/inline-loader.ts`); `out-of-process` —
+ * остаток Ф4б.
  */
 import type {
   CatalogTrustLevel,
@@ -66,9 +66,16 @@ export interface PluginActivationDescriptor {
    * Каталог **распакованного** бандла (PROP-090 §5: `installed/<name>@<version>/`).
    *
    * Задан — сканер обходит каталог (файлы, бинарники, `.skillignore`); не
-   * задан — сканируется `files` (бандл в памяти).
+   * задан — сканируется `files` (бандл в памяти). Также корень containment'а
+   * для `entry` (Ф4а, `engine/plugins/inline-loader.ts`).
    */
   rootDir?: string;
+  /**
+   * Точка входа бандла — **относительный** путь внутри `rootDir` (из записи
+   * `plugins.lock.json`, поле `entry`); по умолчанию `dist/index.js`
+   * (PROP-090 §5, «Раскладка»).
+   */
+  entry?: string;
   /**
    * Ожидаемый content-hash (из `plugins.lock.json`/`PLUGIN_INTEGRITY.json`).
    * Не задан — сверять нечего (шаг integrity пропускается).
@@ -260,6 +267,12 @@ export interface PluginLlmFilterOptions {
 
 /**
  * Модуль плагина, подготовленный загрузчиком (Ф3: результат `import()` бандла).
+ *
+ * Поле `apply` объявлено необязательным **на уровне типа** (модуль может
+ * готовиться разными загрузчиками), но контракт строгий на уровне загрузчика:
+ * inline-загрузчик (Ф4а) обязан вернуть `apply`, иначе шаг `import`
+ * завершается отказом `plugin.module_invalid`. Вызывает `apply` **хост**
+ * (`PluginHost`, шаг `facade`), не загрузчик.
  */
 export interface PluginModule {
   /** Вызывается с фасадом — плагин регистрирует свои вклады. */
@@ -267,10 +280,53 @@ export interface PluginModule {
 }
 
 /**
- * Загрузчик кода плагина — **точка расширения Ф3/Ф4**.
+ * Коды отказа, которыми может завершиться шаг `import` (`PluginHost`).
  *
- * В Ф1 загрузчика в core нет: `import()` чужого кода в ядре отсутствует, а
- * шаг `import` без загрузчика останавливается с `plugin.loader_unavailable`.
+ * Загрузчик сигнализирует их через {@link PluginLoadError}: без машиночитаемой
+ * причины хост не отличил бы «кода нет/сломан» (`plugin.loader_unavailable`)
+ * от «код загружен, но не выполнил контракт» (`plugin.module_invalid`).
+ */
+export type PluginLoadFailureReason = Extract<
+  PluginAuditReason,
+  'plugin.loader_unavailable' | 'plugin.module_invalid'
+>;
+
+/**
+ * Ошибка загрузчика кода плагина с машиночитаемой причиной отказа.
+ *
+ * Загрузчик не пробрасывает наружу «сырые» исключения `fs`/`import()`:
+ * он оборачивает их в этот класс, а `PluginHost` превращает в результат
+ * активации (`outcome: 'rejected'` + код причины) и запись аудита.
+ */
+export class PluginLoadError extends Error {
+  /** Код отказа шага `import` (по умолчанию — `plugin.loader_unavailable`). */
+  readonly reason: PluginLoadFailureReason;
+
+  constructor(message: string, reason: PluginLoadFailureReason = 'plugin.loader_unavailable') {
+    super(message);
+    this.name = 'PluginLoadError';
+    this.reason = reason;
+  }
+}
+
+/**
+ * Код отказа шага `import` по исключению загрузчика.
+ *
+ * Причина берётся из {@link PluginLoadError}; любое другое исключение —
+ * `plugin.loader_unavailable` (fail-closed: неизвестный сбой загрузчика — это
+ * недоступность загрузчика, а не «модуль не выполнил контракт»).
+ */
+export function pluginLoadFailureReason(err: unknown): PluginLoadFailureReason {
+  if (err instanceof PluginLoadError) return err.reason;
+  return 'plugin.loader_unavailable';
+}
+
+/**
+ * Загрузчик кода плагина — **точка расширения** (Ф4а — `inline`,
+ * `engine/plugins/inline-loader.ts`; `out-of-process` — остаток Ф4б).
+ *
+ * Не задан (`PluginHostOptions.loader`) — шаг `import` останавливается с
+ * `plugin.loader_unavailable`.
  */
 export type PluginLoader = (descriptor: PluginActivationDescriptor) => Promise<PluginModule>;
 

@@ -226,12 +226,13 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `reason?`/`source?`) и перечни `PLUGIN_AUDIT_ACTIONS` (`activate`/`deactivate`/`scan`/`filter` —
   последнее добавлено Ф3б: события решений фильтров LLM-вызовов),
   `PLUGIN_AUDIT_OUTCOMES` (`ok`/`rejected`), `PLUGIN_SCAN_VERDICTS` (`safe`/`caution`/`dangerous`),
-  `PLUGIN_AUDIT_REASONS` — **закрытый** список **23** кодов отказа (по одному на гейт пайплайна
+  `PLUGIN_AUDIT_REASONS` — **закрытый** список **24** кодов отказа (по одному на гейт пайплайна
   активации; Ф2 добавил `plugin.scan_rejected` и `plugin.approval_required`, Ф3а —
   `plugin.scan_disabled_with_execution` (fail-closed: `plugins.scan='disabled'` вместе с
   `plugins.executionEnabled=true`), Ф3б — `plugin.provides_mismatch` (расхождение объявленных
   `provides.promptBlocks[]`/`provides.llmFilters[]` с фактическими регистрациями) и три
-  канонических кода фильтров `plugin_filter.denied`/`.deny_downgraded`/`.unavailable`;
+  канонических кода фильтров `plugin_filter.denied`/`.deny_downgraded`/`.unavailable`, Ф4а —
+  `plugin.module_invalid` (модуль загружен, но не выполнил контракт `PluginModule` — нет `apply`);
   неканонические коды хоста (`allowed`/`timeout`/`error`/`redact_unsupported`/`buffering_required`/
   `redact_invalid`) живут **только** в аудите gateway, в журнал плагинов не попадают; источник
   истины — `PluginHost`, `packages/core/src/engine/plugins/plugin-host.ts`). Журнал **отдельный**:

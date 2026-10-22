@@ -632,30 +632,41 @@
   не эмитится — нет точки «нажатие инлайн-кнопки» (контракт внешнего канала, ADR-087/ADR-103).
 - `engine/plugins/*` — PROP-090 §10: загрузчик плагинов `PluginHost` и его пайплайн активации
   (**resolve → integrity → semver-гейт → trust/scan → политика режима → import → facade**).
-  **Ф1: исполнение кода выключено** — `plugins.executionEnabled` (default `false`), загрузчика кода
-  (`PluginLoader`) в core нет, шаг `import` останавливается явно. Файлы: `plugin-host.ts`
+  **Исполнение кода по умолчанию выключено** — `plugins.executionEnabled` (default `false`), шаг `import`
+  останавливается явно. **Ф4а: `inline`-загрузчик реализован** (`inline-loader.ts`), но **не
+  подключается автоматически** (нет `loader` в `server/app.ts`/`main.ts`/`server/app/deps.ts`/
+  `backend/app/deps.ts`): установка и активация из `plugins.lock.json` — Ф5. Файлы: `plugin-host.ts`
   (`PluginHost`/`PluginHostOptions`/`DEFAULT_EXTENSION_CONTRACT_VERSION`; реестр активных плагинов,
   обратная прокрутка disposers, аудит **каждого** исхода — успех и отказ), `activation.ts`
   (контракты: `PLUGIN_ACTIVATION_STEPS`, `PluginActivationDescriptor`/`PluginActivationHandle`/
   `PluginActivationResult`/`PluginDeactivationResult`, `PluginDisposer`, `PluginFacade`,
-  `PluginModule`, `PluginLogger`), `integrity.ts` (`computePluginContentHash`/
+  `PluginModule`, `PluginLogger`, `PluginLoadError`/`pluginLoadFailureReason` — машиночитаемая причина
+  отказа шага `import`), `inline-loader.ts` (**Ф4а** — `createInlinePluginLoader`:
+  `rootDir` обязателен, точка входа `join(rootDir, entry ?? 'dist/index.js')`, **containment** по
+  `realpath` (`..`/абсолютный путь/симлинк наружу — отказ), расширение только `.js`/`.mjs`, предел
+  `maxBundleBytes` (8 МиБ), cache-busting `?v=<contentHash|mtimeMs>`, формы модуля `apply` /
+  `default.apply` / `default`-функция, иначе `plugin.module_invalid`; bundle-only — npm-зависимости
+  не резолвятся, `@itphx/*` — external, их резолвит Node из `node_modules` ядра),
+  `integrity.ts` (`computePluginContentHash`/
   `verifyPluginIntegrity`), `exact-host-exceptions.ts` (`readExactHostExceptions` — файл точных
   исключений семвер-гейта: **одна полная semver-версия host в строке**, `#` — комментарий,
   не-semver строка пропускается с предупреждением, недоступный файл → исключений нет
   (fail-closed)), `index.ts` — баррел. **Коды отказа** (`PLUGIN_AUDIT_REASONS`,
-  `shared/src/types/plugin-audit.ts`, всего **23**): `plugin.not_found`/`plugin.manifest_invalid` (resolve),
+  `shared/src/types/plugin-audit.ts`, всего **24**): `plugin.not_found`/`plugin.manifest_invalid` (resolve),
   `plugin.integrity_mismatch`/`plugin.integrity_unverifiable` (integrity),
   `plugin.contract_mismatch`/`plugin.host_mismatch` (semver), `plugin.trust_below_floor`/
   `plugin.scan_rejected`/`plugin.approval_required` (trust/scan), `plugin.disabled`/
   `plugin.not_allowlisted`/`plugin.denylisted`/`plugin.runtime_install_denied` (policy),
   `plugin.scan_disabled_with_execution` (trust; Ф3а — **fail-closed**: `plugins.scan='disabled'` вместе
   с `plugins.executionEnabled=true` → отказ, исполняемый код обязан быть просканирован),
-  `plugin.execution_disabled`/`plugin.loader_unavailable` (import/facade), `plugin.already_active`,
+  `plugin.execution_disabled`/`plugin.loader_unavailable`/`plugin.module_invalid` (import — Ф4а:
+  модуль загружен, но контракт `PluginModule` не выполнен), `plugin.already_active`,
   `plugin.not_active`, `plugin.disposer_failed`, `plugin.provides_mismatch` (facade; Ф3б — объявленное в
   `provides` не совпало с фактическими регистрациями, см. ниже), `plugin_filter.denied`/
   `plugin_filter.deny_downgraded`/`plugin_filter.unavailable` (журнал решений фильтров). Seam'ы:
   `PluginScanHook` (**Ф2 — закрыт**,
-  дефолтная реализация встроенная), `PluginLoader` (Ф3/Ф4 — реализации нет), `PluginFacade`
+  дефолтная реализация встроенная), `PluginLoader` (**Ф4а — `inline` реализован**;
+  `out-of-process` — остаток Ф4б), `PluginFacade`
   (**Ф3а — `registerPromptBlock`**: регистрация провайдера блока промпта с возвратом disposer'а;
   **Ф3б — `registerLlmFilter`**: регистрация фильтра LLM-вызовов от имени плагина — хост подставляет
   `pluginName`/`pluginVersion` и **фактическое** доверие активации, `onAudit` пишет в журнал плагинов;

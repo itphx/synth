@@ -13,14 +13,17 @@ export type { CreatedSessionTarget } from './events/child-session.js';
 export { HookBus, HOOK_ASYNC_TIMEOUT_MS } from './engine/hooks/index.js';
 export type { HookHandler, HookRegistrationOptions, HookEmitResult } from './engine/hooks/index.js';
 // PROP-090 §10: загрузчик плагинов (`PluginHost`). Ф1: исполнение кода
-// выключено по умолчанию (`plugins.executionEnabled=false`).
+// выключено по умолчанию (`plugins.executionEnabled=false`); Ф4а — `inline`
+// загрузчик кода (`createInlinePluginLoader`).
 export { PluginHost, DEFAULT_EXTENSION_CONTRACT_VERSION } from './engine/plugins/index.js';
 export {
   PLUGIN_ACTIVATION_STEPS,
   DEFAULT_PLUGIN_CONTRACT_REFERENCE,
   PLUGIN_CONTRACT_FIXTURES,
+  PluginLoadError,
   computePluginContentHash,
   describePluginContract,
+  pluginLoadFailureReason,
   verifyPluginIntegrity,
   readExactHostExceptions,
 } from './engine/plugins/index.js';
@@ -33,6 +36,7 @@ export type {
   PluginDeactivationResult,
   PluginDisposer,
   PluginFacade,
+  PluginLoadFailureReason,
   PluginLoader,
   PluginLogger,
   PluginModule,
@@ -45,6 +49,14 @@ export type {
   PluginContractReference,
   PluginToolDefinition,
 } from './engine/plugins/index.js';
+// PROP-090 §«inline» (Ф4а): загрузчик кода плагина из распакованного бандла.
+export {
+  DEFAULT_MAX_PLUGIN_BUNDLE_BYTES,
+  DEFAULT_PLUGIN_ENTRY,
+  PLUGIN_BUNDLE_EXTENSIONS,
+  createInlinePluginLoader,
+} from './engine/plugins/index.js';
+export type { InlinePluginLoaderOptions } from './engine/plugins/index.js';
 // PROP-068 §4.3 / PROP-090 §9 (Ф2): статический сканер расширений — правила,
 // квоты, `.skillignore`, кэш сканов и дефолтный хук скана.
 export {
