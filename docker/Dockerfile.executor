@@ -1,0 +1,256 @@
+# Образ synth-executor — исполнитель агентских команд (PROP-077 шаг 7a,
+# PROP-082 шаг 5). Worker в split-топологии: control plane (backend) в одном
+# контейнере, исполнитель — в отдельном; связь — HTTP по протоколу
+# `ExecutionPort` с bearer-токеном.
+#
+# В образе НЕТ control plane: ни OIDC/RBAC, ни LLM-конфигурации, ни ключей
+# (инвариант 13). Токен доступа к API исполнителя и корень workspace
+# передаются в рантайме через env и ОБЯЗАТЕЛЬНЫ (fail-closed, см.
+# packages/executor/src/config.ts).
+#
+# Стадии:
+#   build   — сборка монорепо (платформа билдера, `$BUILDPLATFORM`);
+#   core    — flavor `core`: hard deps + tier 0 + рантайм исполнителя;
+#   dev     — flavor `dev`: core + tier 1 + tier 4 + БД-клиенты + buildah;
+#   devops  — flavor `devops`: dev + tier 2 + диаг + docker CLI;
+#   browser — flavor `browser` (debian-ветка): hard deps + tier 0 + tier 1 +
+#             tier 3 (Playwright + Chromium) + диаг;
+#   full    — flavor `full` (debian-ветка): browser + tier 2 + tier 4 + БД +
+#             docker CLI + buildah.
+#
+# Flavor'ы `core`/`dev`/`devops` — alpine-ветка; `browser`/`full` — debian
+# (`node:22-bookworm-slim`): Playwright/Chromium не имеют сборок под musl.
+# Списки пакетов НЕ дублируются: используются те же `docker/install-*.sh`,
+# что и у all-in-one (docker/Dockerfile.backend).
+#
+# multi-arch: стадия сборки идёт на платформе билдера (`$BUILDPLATFORM`),
+# flavor-стадии — на целевой (в них есть `RUN` с установкой пакетов), поэтому
+# arm64-сборка flavor'а требует QEMU/binfmt (PROP-082, решение по arm64 —
+# вариант A). `${BUILDPLATFORM:-linux/amd64}` — дефолт для kaniko/legacy
+# `docker build`.
+ARG BUILDPLATFORM
+
+FROM --platform=${BUILDPLATFORM:-linux/amd64} node:22-alpine AS build
+
+# corepack скачивает бинарь pnpm при ПЕРВОМ вызове `pnpm` — то есть уже в
+# следующем слое, где сеть может отвалиться (сборка падает на таймауте
+# загрузки). Поэтому materialize бинаря здесь, в кэшируемом слое: сбой сети
+# тогда не роняет сборку целиком, а повторная попытка переиспользует слой.
+RUN corepack enable && corepack prepare pnpm@latest --activate && pnpm --version
+
+WORKDIR /repo
+
+# Копируем весь монорепо целиком (для workspace-зависимостей и сборки
+# shared → core → executor).
+COPY . .
+
+# Порядок сборки — по зависимостям: shared → core → executor.
+#
+# `@itphx/synth-executor` объявляет `@itphx/synth-core` как peerDependency и
+# импортирует его В РАНТАЙМЕ (`InlineExecutionPort`, `ExecutionError`,
+# `egressFetch`), поэтому в образ обязателен `dist` core — «лёгкий worker без
+# node-приложения» из PROP-082 в этом смысле не реализуем (см. уточнение в
+# PROP-082, шаг 5).
+RUN pnpm install --filter @itphx/synth-executor --filter @itphx/synth-core --filter @itphx/synth-shared \
+    && pnpm --filter @itphx/synth-shared build \
+    && pnpm --filter @itphx/synth-core build \
+    && pnpm --filter @itphx/synth-executor build
+
+# pnpm deploy создаёт самодостаточную папку с реальными node_modules (без
+# symlinks в пакеты workspace). Два отдельных deploy'а:
+#   * /out/app  — пакет исполнителя (его `dist` + `hono` + `@itphx/synth-shared`);
+#   * /out/core — пакет core (`dist` + его runtime-зависимости), который
+#     исполнитель импортирует в рантайме.
+# `--no-optional`: core тянет `@itphx/synth-executor` и
+# `@itphx/synth-storage-postgres` как optionalDependencies — в образе
+# исполнителя они не нужны (storage-postgres — драйвер БД control plane).
+RUN mkdir -p /out \
+    && pnpm --filter @itphx/synth-executor deploy --prod --legacy --no-optional /out/app \
+    && pnpm --filter @itphx/synth-core deploy --prod --legacy --no-optional /out/core
+
+# Права чиним на платформе билдера: файлы pnpm deploy имеют mode 770 (root)
+# и под runAsUser 1000 недоступны. В целевой стадии права не чинятся (важно
+# для кросс-сборки arm64 без эмуляции) — COPY сохраняет режимы как есть.
+RUN chmod -R a+rX /out/app /out/core
+
+# ------------------------------------------------------------------------------
+# flavor `core` — рантайм исполнителя + hard deps + tier 0
+# ------------------------------------------------------------------------------
+FROM node:22-alpine AS core
+
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth Executor (core)"
+LABEL org.opencontainers.image.description="Synth executor: runtime исполнителя + toolchain (hard deps + tier 0)."
+
+ENV NODE_ENV=production
+# Адрес/порт исполнителя — дефолты пакета (packages/executor/src/config.ts).
+# Токен и корень workspace НЕ задаются: они обязательны и передаются
+# в рантайме (fail-closed).
+ENV SYNTH_EXECUTOR_HOST=0.0.0.0
+ENV SYNTH_EXECUTOR_PORT=5100
+
+# Toolchain: hard deps (git, ripgrep, python3 + pip + venv, openssh-client,
+# ca-certificates) + tier 0 (bash, curl, jq, yq, unzip/zip, xz, zstd, GNU
+# coreutils/findutils/grep/sed/gawk, less, tree, openssl).
+COPY docker/install-lib.sh docker/install-hard-deps.sh docker/install-tier-0.sh /tmp/synth-install/
+RUN set -eux; \
+    sh /tmp/synth-install/install-hard-deps.sh; \
+    sh /tmp/synth-install/install-tier-0.sh; \
+    rm -rf /tmp/synth-install
+
+# Каталоги пользователя uid 1000 и его HOME (как в all-in-one: чарт запускает
+# процессы с runAsUser: 1000, а HOME по умолчанию /root — не writable).
+# В `node:22-alpine` uid/gid 1000 уже заняты пользователем `node`, поэтому
+# отдельная учётная запись не создаётся — важен сам uid.
+RUN set -eux; \
+    mkdir -p /home/synth/.cache/pip /home/synth/.local /workspace; \
+    chown -R 1000:1000 /home/synth /workspace
+
+ENV HOME=/home/synth
+ENV PYTHONUSERBASE=/home/synth/.local
+ENV PIP_CACHE_DIR=/home/synth/.cache/pip
+
+# Рантайм исполнителя: пакет исполнителя + core (импортируется в рантайме).
+COPY --from=build /out/app /app
+COPY --from=build /out/core /opt/synth-core
+
+WORKDIR /app
+
+# `@itphx/synth-core` — peerDependency исполнителя: pnpm не выносит peer в
+# верхний уровень node_modules, поэтому пакет доступен по явному симлинку.
+# Node разыменовывает симлинку и резолвит зависимости core от её реального
+# пути (/opt/synth-core/node_modules) — то есть рантайм самодостаточен.
+# Проверка в образе — fail-closed: без рабочего `InlineExecutionPort`
+# исполнитель не сможет исполнять команды, и это должно быть видно на
+# этапе сборки, а не в рантайме.
+RUN set -eux; \
+    mkdir -p /app/node_modules/@itphx; \
+    ln -sfn /opt/synth-core /app/node_modules/@itphx/synth-core; \
+    node -e "import('@itphx/synth-core').then((m) => { if (!m.InlineExecutionPort) { throw new Error('core без InlineExecutionPort'); } console.log('core runtime OK'); }).catch((e) => { console.error(e); process.exit(1); })"
+
+EXPOSE 5100
+CMD ["node", "dist/main.js"]
+
+# ------------------------------------------------------------------------------
+# flavor `dev` — core + tier 1 + tier 4 + БД-клиенты + buildah
+# ------------------------------------------------------------------------------
+FROM core AS dev
+
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth Executor (dev)"
+LABEL org.opencontainers.image.description="Synth executor: runtime исполнителя + toolchain (hard deps, tier 0-1, tier 4 MCP servers, DB clients, buildah)."
+
+COPY docker/install-lib.sh docker/install-tier-1.sh docker/install-db-clients.sh \
+     docker/install-buildah.sh docker/install-tier-4.sh /tmp/synth-install/
+RUN set -eux; \
+    sh /tmp/synth-install/install-tier-1.sh; \
+    sh /tmp/synth-install/install-db-clients.sh; \
+    sh /tmp/synth-install/install-buildah.sh
+# npm-слой (tier 4) отдельным RUN: смена состава MCP-серверов не должна
+# инвалидировать слои с системными пакетами.
+RUN set -eux; \
+    sh /tmp/synth-install/install-tier-4.sh; \
+    rm -rf /tmp/synth-install
+
+# ------------------------------------------------------------------------------
+# flavor `devops` — dev + tier 2 + диаг + docker CLI
+# ------------------------------------------------------------------------------
+FROM dev AS devops
+
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth Executor (devops)"
+LABEL org.opencontainers.image.description="Synth executor: runtime исполнителя + toolchain (hard deps, tier 0-2, tier 4 MCP servers, DB clients, buildah, diag tools, docker CLI)."
+
+COPY docker/install-lib.sh docker/install-tier-2.sh docker/install-diag.sh \
+     docker/install-docker-cli.sh /tmp/synth-install/
+RUN set -eux; \
+    sh /tmp/synth-install/install-tier-2.sh; \
+    sh /tmp/synth-install/install-diag.sh; \
+    sh /tmp/synth-install/install-docker-cli.sh; \
+    rm -rf /tmp/synth-install
+
+# ------------------------------------------------------------------------------
+# debian-ветка: flavor'ы `browser`/`full` (PROP-082, шаг 5)
+# ------------------------------------------------------------------------------
+#
+# База — `node:22-bookworm-slim` (glibc): Playwright/Chromium официально не
+# поддерживают musl. Состав toolchain'а — тот же, что у all-in-one
+# (docker/Dockerfile.backend), но без control plane.
+FROM node:22-bookworm-slim AS browser
+
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth Executor (browser)"
+LABEL org.opencontainers.image.description="Synth executor: runtime исполнителя + toolchain (hard deps, tier 0-1, tier 3 Playwright/Chromium, MCP playwright, diag)."
+
+ENV NODE_ENV=production
+ENV SYNTH_EXECUTOR_HOST=0.0.0.0
+ENV SYNTH_EXECUTOR_PORT=5100
+
+COPY docker/install-lib.sh docker/install-hard-deps.sh docker/install-tier-0.sh /tmp/synth-install/
+RUN set -eux; \
+    sh /tmp/synth-install/install-hard-deps.sh; \
+    sh /tmp/synth-install/install-tier-0.sh; \
+    rm -rf /tmp/synth-install
+
+RUN set -eux; \
+    mkdir -p /home/synth/.cache/pip /home/synth/.local /workspace; \
+    chown -R 1000:1000 /home/synth /workspace
+
+ENV HOME=/home/synth
+ENV PYTHONUSERBASE=/home/synth/.local
+ENV PIP_CACHE_DIR=/home/synth/.cache/pip
+
+# Каталог браузеров Playwright: общий для всех пользователей образа.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+
+# tier 1 (сборка) + tier 3 (playwright + Chromium) + диагностика.
+COPY docker/install-lib.sh docker/install-tier-1.sh docker/install-tier-3.sh \
+     docker/install-diag.sh /tmp/synth-install/
+RUN set -eux; \
+    sh /tmp/synth-install/install-tier-1.sh; \
+    sh /tmp/synth-install/install-tier-3.sh; \
+    sh /tmp/synth-install/install-diag.sh; \
+    rm -rf /tmp/synth-install
+
+# Рантайм исполнителя (см. стадию `core`).
+COPY --from=build /out/app /app
+COPY --from=build /out/core /opt/synth-core
+
+WORKDIR /app
+
+# Проверка в образе — fail-closed: без рабочего `InlineExecutionPort`
+# исполнитель не сможет исполнять команды, и это должно быть видно на
+# этапе сборки, а не в рантайме.
+RUN set -eux; \
+    mkdir -p /app/node_modules/@itphx; \
+    ln -sfn /opt/synth-core /app/node_modules/@itphx/synth-core; \
+    node -e "import('@itphx/synth-core').then((m) => { if (!m.InlineExecutionPort) { throw new Error('core без InlineExecutionPort'); } console.log('core runtime OK'); }).catch((e) => { console.error(e); process.exit(1); })"
+
+EXPOSE 5100
+CMD ["node", "dist/main.js"]
+
+# ------------------------------------------------------------------------------
+# flavor `full` — browser + tier 2 + tier 4 + БД + docker CLI + buildah
+# ------------------------------------------------------------------------------
+FROM browser AS full
+
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth Executor (full)"
+LABEL org.opencontainers.image.description="Synth executor: runtime исполнителя + toolchain (hard deps, tier 0-4, Playwright/Chromium, MCP servers, DB clients, buildah, diag tools, docker CLI)."
+
+COPY docker/install-lib.sh docker/install-tier-2.sh docker/install-tier-4.sh \
+     docker/install-db-clients.sh docker/install-docker-cli.sh \
+     docker/install-buildah.sh /tmp/synth-install/
+RUN set -eux; \
+    sh /tmp/synth-install/install-tier-2.sh; \
+    sh /tmp/synth-install/install-db-clients.sh; \
+    sh /tmp/synth-install/install-docker-cli.sh; \
+    sh /tmp/synth-install/install-buildah.sh
+RUN set -eux; \
+    sh /tmp/synth-install/install-tier-4.sh; \
+    rm -rf /tmp/synth-install

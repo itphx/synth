@@ -11,8 +11,10 @@
 #   1) тарбол скачивается напрямую по зафиксированному URL;
 #   2) сверяется sha512 (integrity из реестра npm, зафиксированная в таблице);
 #   3) только при совпадении — `npm install -g` (зависимости самого сервера npm
-#      тоже проверяет по integrity реестра).
-# Расхождение контрольной сумты = ошибка сборки (fail-closed).
+#      тоже проверяет по integrity реестра);
+#   4) для серверов с режимом запуска `direct` npm-бин заменяется launcher'ом
+#      на реальный файл пакета (см. «Почему gitea-mcp требует direct»).
+# Расхождение контрольной суммы = ошибка сборки (fail-closed).
 #
 # ТОКЕНЫ ХОСТИНГОВ В ОБРАЗ НЕ ЗАПЕКАЮТСЯ (ADR-076/ADR-036): сервер читает их
 # из окружения в рантайме (инъекция при спавне MCP-процесса):
@@ -33,14 +35,31 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/install-lib.sh"
 
-# Состав: logical|версия|url_тарбола|sha512_base64
+# Состав: logical|версия|url_тарбола|sha512_base64|режим_запуска
 #
-#   logical          | версия   | bin в образе
-#   -----------------+----------+-------------------
-#   mcp-server-github| 2025.4.8 | mcp-server-github
-#   mcp-server-gitlab| 2025.4.25| mcp-server-gitlab
-#   gitea-mcp        | 2.0.0    | gitea-mcp
-#   gitverse-mcp     | 1.1.0    | gitverse-mcp
+#   logical          | версия   | режим запуска | bin в образе
+#   -----------------+----------+----------------+-------------------
+#   mcp-server-github| 2025.4.8 | bin            | mcp-server-github
+#   mcp-server-gitlab| 2025.4.25| bin            | mcp-server-gitlab
+#   gitea-mcp        | 2.0.0    | direct         | gitea-mcp
+#   gitverse-mcp     | 1.1.0    | bin            | gitverse-mcp
+#
+# Режим запуска:
+#   bin    — рабочего npm-бина (симлинк) достаточно;
+#   direct — после установки npm-бин заменяется launcher'ом, который запускает
+#            РЕАЛЬНЫЙ файл пакета по его собственному пути (см. ниже про
+#            gitea-mcp и `synth_npm_direct_launcher` в install-lib.sh).
+#
+# Почему gitea-mcp требует `direct` (дефект пакета, не наш):
+#   @boringstudio_org/gitea-mcp@2.0.0 поднимает сервер ТОЛЬКО под guard'ом
+#       if (process.argv[1] === fileURLToPath(import.meta.url)) { ... }
+#   npm кладёт bin СИМЛИНКОМ (`/usr/local/bin/gitea-mcp` →
+#   `../lib/node_modules/@boringstudio_org/gitea-mcp/index.js`), node в
+#   `process.argv[1]` оставляет путь СИМЛИНКА, а ESM-лоадер в `import.meta.url`
+#   — РЕАЛЬНЫЙ путь. Пути не совпадают → guard не срабатывает → процесс молча
+#   завершается с кодом 0, stdio-транспорт не поднимается. Launcher запускает
+#   реальный файл по его собственному пути — совпадение восстанавливается,
+#   guard срабатывает. Остальные три сервера через npm-бин работают.
 #
 # Соответствие logical → npm-пакет:
 #   mcp-server-github → @modelcontextprotocol/server-github (официальный)
@@ -51,10 +70,10 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 #                      GitVerse MCP — удалённый HTTP-сервис mcp.gitverse.ru,
 #                      stdio-вариант нужен именно как локальный бинарь)
 TIER_4_NPM='
-mcp-server-github|2025.4.8|https://registry.npmjs.org/@modelcontextprotocol/server-github/-/server-github-2025.4.8.tgz|8N43bQw9MlUB0piTZHK2JMh8kYPKxH57d4Z7Wb8PS4by2MkZ0FzI5xPImg3xumpev82VZw2VWHQJJJYp+WkwEw==
-mcp-server-gitlab|2025.4.25|https://registry.npmjs.org/@modelcontextprotocol/server-gitlab/-/server-gitlab-2025.4.25.tgz|IQY57XkHjaIcSOWi+Qs9w8ZZMqhz5YOYOkU3v1CTbHU8rcIm/NhtX4/7XBeFRgXwRpvTuGP+WdnWg+1hH/wJdw==
-gitea-mcp|2.0.0|https://registry.npmjs.org/@boringstudio_org/gitea-mcp/-/gitea-mcp-2.0.0.tgz|75pRunAZ/LD+Jw8bLg3YmzPjIuUJZnEkpnMXQMMQQFXTBJheYfIZcxRHpUAyRKiH6c+gTpfYBxDhNqVUKQCGvQ==
-gitverse-mcp|1.1.0|https://registry.npmjs.org/@grigoriy-grisha/gitverse-mcp/-/gitverse-mcp-1.1.0.tgz|RmdjgIx8131Gpytst2eVGwbh53el4TbczlPbxaxbXrGHM8oUNZep/We/XTM9LUrm6npAnnyYI6EdA/+cMurnMw==
+mcp-server-github|2025.4.8|https://registry.npmjs.org/@modelcontextprotocol/server-github/-/server-github-2025.4.8.tgz|8N43bQw9MlUB0piTZHK2JMh8kYPKxH57d4Z7Wb8PS4by2MkZ0FzI5xPImg3xumpev82VZw2VWHQJJJYp+WkwEw==|bin
+mcp-server-gitlab|2025.4.25|https://registry.npmjs.org/@modelcontextprotocol/server-gitlab/-/server-gitlab-2025.4.25.tgz|IQY57XkHjaIcSOWi+Qs9w8ZZMqhz5YOYOkU3v1CTbHU8rcIm/NhtX4/7XBeFRgXwRpvTuGP+WdnWg+1hH/wJdw==|bin
+gitea-mcp|2.0.0|https://registry.npmjs.org/@boringstudio_org/gitea-mcp/-/gitea-mcp-2.0.0.tgz|75pRunAZ/LD+Jw8bLg3YmzPjIuUJZnEkpnMXQMMQQFXTBJheYfIZcxRHpUAyRKiH6c+gTpfYBxDhNqVUKQCGvQ==|direct
+gitverse-mcp|1.1.0|https://registry.npmjs.org/@grigoriy-grisha/gitverse-mcp/-/gitverse-mcp-1.1.0.tgz|RmdjgIx8131Gpytst2eVGwbh53el4TbczlPbxaxbXrGHM8oUNZep/We/XTM9LUrm6npAnnyYI6EdA/+cMurnMw==|bin
 '
 
 TIER_4_ROWS=$(printf '%s\n' "$TIER_4_NPM")
@@ -67,7 +86,13 @@ while IFS= read -r tier4_row; do
     tier4_version=$(printf '%s' "$tier4_row" | cut -d'|' -f2)
     tier4_url=$(printf '%s' "$tier4_row" | cut -d'|' -f3)
     tier4_sha=$(printf '%s' "$tier4_row" | cut -d'|' -f4)
+    # Пятое поле — режим запуска; для строк без него — обычный npm-бин.
+    tier4_mode=$(printf '%s' "$tier4_row" | cut -d'|' -f5)
+    [ -n "$tier4_mode" ] || tier4_mode=bin
     synth_install_npm_pinned "$tier4_name" "$tier4_version" "$tier4_url" "$tier4_sha"
+    if [ "$tier4_mode" = "direct" ]; then
+        synth_npm_direct_launcher "$tier4_name"
+    fi
 done <<EOF
 $TIER_4_ROWS
 EOF

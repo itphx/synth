@@ -28,13 +28,16 @@
 # на debian (dash) тот же код работает, на alpine ломается. Конструкция
 # `${var:+...}` здесь намеренно не используется.
 #
-# Кроме дистрибутивных пакетов здесь есть два помощника для инструментов,
+# Кроме дистрибутивных пакетов здесь есть помощники для инструментов,
 # которых НЕТ в репозиториях дистрибутивов:
 #   * synth_install_upstream_binaries — бинарные релизы upstream (tier 2:
 #     kubectl/helm/kustomize/opentofu/hadolint): пин версии + проверка sha256;
 #   * synth_install_npm_pinned — npm-пакеты MCP-серверов (tier 4): пин версии
-#     + проверка integrity (sha512) тарбола до установки.
-# Оба — fail-closed: расхождение контрольной суммы = ошибка сборки.
+#     + проверка integrity (sha512) тарбола до установки;
+#   * synth_npm_direct_launcher — launcher для npm-пакетов с guard'ом
+#     «запускайся только по собственному пути» (tier 4): вызывает реальный
+#     файл пакета, минуя расхождение argv[1] / import.meta.url.
+# Первые два — fail-closed: расхождение контрольной суммы = ошибка сборки.
 
 set -eu
 
@@ -86,8 +89,8 @@ synth_install_tier() {
             # shellcheck disable=SC2086
             apt-get install -y --no-install-recommends $synth_apt_list
             set +f
-            # индекс apt в образе не нужен — уменьшаем слой
-            rm -rf /var/lib/apt/lists/*
+            # индекс apt и кэш deb-архивов в образе не нужны — уменьшаем слой
+            rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb
             ;;
     esac
 }
@@ -233,4 +236,67 @@ synth_install_npm_pinned() {
     npm install -g --no-audit --no-fund "$synth_tgz"
     rm -rf "$synth_tmp"
     echo "install-lib.sh: $synth_name@$synth_version установлен глобально"
+}
+
+# synth_npm_direct_launcher <имя_бина>
+#
+# Заменяет npm-бин (симлинк) на launcher-скрипт, который запускает РЕАЛЬНЫЙ
+# файл пакета по его собственному пути. Нужна для ESM-пакетов, которые
+# поднимают сервер только под guard'ом вида
+#
+#     if (process.argv[1] === fileURLToPath(import.meta.url)) { ... }
+#
+# npm кладёт bin СИМЛИНКОМ (`/usr/local/bin/gitea-mcp` →
+# `../lib/node_modules/<pkg>/index.js`). При этом node в `process.argv[1]`
+# оставляет путь СИМЛИНКА, а ESM-лоадер в `import.meta.url` — РЕАЛЬНЫЙ путь
+# (симлинки резолвятся). Пути не совпадают → guard не срабатывает → процесс
+# молча завершается с кодом 0, stdio-транспорт не поднимается (дефект пакета
+# @boringstudio_org/gitea-mcp@2.0.0).
+#
+# Запуск РЕАЛЬНОГО файла по его собственному пути возвращает совпадение
+# (`process.argv[1] === fileURLToPath(import.meta.url)`) и включает guard.
+#
+# Файл пакета НЕ копируется и остаётся на месте: иначе ломаются относительные
+# require'ы внутри пакета (`require("./package.json")` из index.js).
+#
+# Пином версии и проверкой integrity это НЕ подменяется: launcher создаётся
+# ПОСЛЕ успешной установки уже проверенного тарбола.
+synth_npm_direct_launcher() {
+    synth_bin_name=$1
+
+    synth_prefix=$(npm prefix -g)
+    synth_bin_path="$synth_prefix/bin/$synth_bin_name"
+    if [ ! -e "$synth_bin_path" ]; then
+        echo "install-lib.sh: npm-бин $synth_bin_name не найден ($synth_bin_path)" >&2
+        exit 1
+    fi
+
+    synth_real=$(readlink -f "$synth_bin_path")
+    if [ ! -f "$synth_real" ]; then
+        echo "install-lib.sh: реальный файл пакета $synth_bin_name не найден ($synth_real)" >&2
+        exit 1
+    fi
+
+    synth_node=$(command -v node || true)
+    if [ -z "$synth_node" ]; then
+        echo "install-lib.sh: node не найден в PATH — launcher для $synth_bin_name не создать" >&2
+        exit 1
+    fi
+
+    # Симлинк удаляется ДО записи launcher'а: иначе запись ушла бы по симлинку
+    # внутрь файла пакета и испортила бы его.
+    rm -f "$synth_bin_path"
+    cat > "$synth_bin_path" <<EOF
+#!/bin/sh
+# $synth_bin_name — launcher (PROP-082, tier 4).
+#
+# npm-бин пакета — симлинк, из-за чего guard пакета
+# (process.argv[1] === fileURLToPath(import.meta.url)) не срабатывает: процесс
+# молча завершается с кодом 0, stdio-транспорт не поднимается. Launcher
+# запускает РЕАЛЬНЫЙ файл пакета по его собственному пути — тогда
+# process.argv[1] совпадает с import.meta.url, и guard срабатывает.
+exec $synth_node $synth_real "\$@"
+EOF
+    chmod 0755 "$synth_bin_path"
+    echo "install-lib.sh: launcher $synth_bin_name → $synth_real"
 }

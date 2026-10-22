@@ -21,6 +21,18 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/install-lib.sh"
 
+# Статический бандл docker для debian-ветки (используется только в apt-ветке).
+#
+#   logical | url_amd64                                         | sha256_amd64 | url_arm64                                         | sha256_arm64 | файл
+#   --------+-----------------------------------------------------+--------------+----------------------------------------------------+--------------+------
+#   docker  | download.docker.com/.../x86_64/docker-29.9.2.tgz | 9ac22599... | download.docker.com/.../aarch64/docker-29.9.2.tgz | 873b3e02... | docker
+#
+# Поле «файл» — `docker`: из архива берётся ТОЛЬКО клиент; демон (`dockerd`),
+# `containerd`, `runc` и `containerd-shim` в образ не попадают.
+DOCKER_CLI_UPSTREAM='
+docker|https://download.docker.com/linux/static/stable/x86_64/docker-29.9.2.tgz|9ac225999fd5e863f7694c728ef23d480616b1e5639328fa309befd4243d69eb|https://download.docker.com/linux/static/stable/aarch64/docker-29.9.2.tgz|873b3e0207857c3b2f28392fb922f3ea6efe37620c16d4d4aaf2fef409c90b73|docker
+'
+
 case "$(synth_pkg_manager)" in
     apk)
         # В alpine есть отдельный пакет `docker-cli` — только клиент
@@ -30,11 +42,20 @@ case "$(synth_pkg_manager)" in
     apt-get)
         # В debian отдельного пакета `docker-cli` нет, а `docker.io` тянет
         # демон (dockerd + containerd) — а он в образе не нужен (см. шапку).
-        # Для debian-ветки (flavor'ы `browser`/`full`, шаг 5) CLI ставится из
-        # статического bundle download.docker.com (распаковать только
-        # `docker`). До тех пор — fail-closed, а не молчаливый dockerd.
-        echo "install-docker-cli.sh: в debian нет пакета docker-CLI без демона;" >&2
-        echo "install-docker-cli.sh: используйте статический bundle download.docker.com (шаг 5)." >&2
-        exit 1
+        # Поэтому CLI собирается из СТАТИЧЕСКОГО бандла docker (upstream-релиз
+        # `download.docker.com/linux/static/stable/<arch>/docker-<ver>.tgz`):
+        # это статический бинарь без зависимостей, из архива берётся ТОЛЬКО
+        # `docker` (CLI). Пин версии + проверка sha256 (fail-closed), как у
+        # kubectl/helm в tier 2.
+        #
+        # Оговорка по контрольной сумме: docker НЕ публикует файл checksum'ов
+        # для статического бандла (в `download.docker.com/linux/static/stable/`
+        # лежат только `.tgz`), поэтому sha256 зафиксирован в репозитории по
+        # скачанному артефакту. fail-closed при этом сохраняется: любое
+        # изменение бандла ломает сборку. Альтернатива — apt-репозиторий
+        # docker (`docker-ce-cli`, у которого sha256 опубликованы в `Packages`),
+        # но он требует добавления чужого GPG-ключа в образ (PROP-082,
+        # «Открытые вопросы»: вариант (б)).
+        synth_install_upstream_binaries "$DOCKER_CLI_UPSTREAM"
         ;;
 esac

@@ -7,11 +7,16 @@
 #           (hard deps + tier 0). Здесь ЕСТЬ `RUN` (установка пакетов);
 #   dev   — flavor `dev`: core + tier 1 + tier 4 + БД-клиенты + buildah;
 #   devops— flavor `devops`: dev + tier 2 + диаг + docker CLI;
+#   browser — flavor `browser` (debian-ветка): hard deps + tier 0 + tier 1 +
+#           tier 3 (Playwright + Chromium) + диаг;
+#   full  — flavor `full` (debian-ветка): browser + tier 2 + tier 4 + БД +
+#           docker CLI + buildah;
 #   slim  — control plane без toolchain'а. ПОСЛЕДНЯЯ стадия: сборка без
 #           `--target` даёт ровно этот образ (регрессия slim недопустима).
 #
-# Flavor'ы `dev`/`devops` — alpine-ветка. Debian-ветка (`browser`/`full`,
-# шаг 5) добавляется отдельными стадиями и НЕ входит в этот файл сейчас.
+# Flavor'ы `core`/`dev`/`devops` — alpine-ветка. Flavor'ы `browser`/`full` —
+# debian-ветка (`node:22-bookworm-slim`): Playwright/Chromwright не имеют
+# сборок под musl, поэтому для них база — glibc.
 #
 # multi-arch (amd64/arm64) для slim: стадия сборки идёт на платформе билдера
 # (`$BUILDPLATFORM`), runtime — на целевой. В runtime-стадии нет RUN (chmod
@@ -34,7 +39,11 @@ ARG BUILDPLATFORM
 
 FROM --platform=${BUILDPLATFORM:-linux/amd64} node:22-alpine AS build
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# corepack скачивает бинарь pnpm при ПЕРВОМ вызове `pnpm` — то есть уже в
+# следующем слое, где сеть может отвалиться (сборка падает на таймауте
+# загрузки). Поэтому materialize бинаря здесь, в кэшируемом слое: сбой сети
+# тогда не роняет сборку целиком, а повторная попытка переиспользует слой.
+RUN corepack enable && corepack prepare pnpm@latest --activate && pnpm --version
 
 WORKDIR /repo
 
@@ -190,6 +199,114 @@ RUN set -eux; \
     sh /tmp/synth-install/install-tier-2.sh; \
     sh /tmp/synth-install/install-diag.sh; \
     sh /tmp/synth-install/install-docker-cli.sh; \
+    rm -rf /tmp/synth-install
+
+# ------------------------------------------------------------------------------
+# debian-ветка: flavor'ы `browser`/`full` (PROP-082, шаг 5)
+# ------------------------------------------------------------------------------
+#
+# База — `node:22-bookworm-slim` (glibc): Playwright/Chromium официально не
+# поддерживают musl, поэтому для `browser`/`full` база обязана быть glibc.
+#
+#   browser — hard deps + tier 0 + tier 1 + tier 3 (playwright + Chromium +
+#             @playwright/mcp + libxml2-utils) + диаг + control plane;
+#   full    — browser + tier 2 (инфра) + tier 4 (MCP-серверы) + БД-клиенты +
+#             docker CLI + buildah.
+#
+# Отличие от alpine-ветки: в debian `yq` из apt — python-реализация с
+# несовместимым CLI, поэтому ставится Go-вариант из upstream (пин + sha256);
+# docker CLI — статический бандл docker (в apt нет клиента без демона).
+FROM node:22-bookworm-slim AS browser
+
+# OCI-метки: org.opencontainers.image.source связывает пакет в GHCR с
+# репозиторием-источником (иначе GitHub Packages не показывает связь и
+# унаследованные права доступа). Для GitVerse-сборки (kaniko) метки инертны.
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth Backend (browser)"
+LABEL org.opencontainers.image.description="Synth backend all-in-one: control plane + toolchain (hard deps, tier 0-1, tier 3 Playwright/Chromium, MCP playwright, diag)."
+
+ENV NODE_ENV=production
+ENV SYNTH_DATA_DIR=/var/synth/data
+ENV SYNTH_PORT=5000
+
+# Toolchain: hard deps (git, ripgrep, python3 + pip + venv, openssh-client,
+# ca-certificates) + tier 0 (bash, curl, jq, yq, unzip/zip, xz, zstd, GNU
+# coreutils/findutils/grep/sed/gawk, less, tree, openssl).
+COPY docker/install-lib.sh docker/install-hard-deps.sh docker/install-tier-0.sh /tmp/synth-install/
+RUN set -eux; \
+    sh /tmp/synth-install/install-hard-deps.sh; \
+    sh /tmp/synth-install/install-tier-0.sh; \
+    rm -rf /tmp/synth-install
+
+# Каталоги пользователя uid 1000 и его HOME — те же, что в alpine-ветке
+# (чарт запускает backend с runAsUser: 1000, а HOME по умолчанию /root —
+# не writable, из-за чего `pip install --user` и кэши python падают с EACCES).
+#
+# В `node:22-bookworm-slim` uid/gid 1000 уже заняты пользователем `node`
+# (как и в alpine-образе), поэтому отдельная учётная запись не создаётся —
+# важен сам uid: каталоги принадлежат 1000:1000.
+RUN set -eux; \
+    mkdir -p /home/synth/.cache/pip /home/synth/.local /var/synth/data; \
+    chown -R 1000:1000 /home/synth /var/synth/data
+
+# Python-окружение и кэши (PROP-082, «Python-окружение и кэши»).
+ENV HOME=/home/synth
+ENV PYTHONUSERBASE=/home/synth/.local
+ENV PIP_CACHE_DIR=/home/synth/.cache/pip
+
+# Каталог браузеров Playwright: общий для всех пользователей образа
+# (в том числе uid 1000) и НЕ на HOME — иначе при runAsUser: 1000 каталог
+# не читался бы. Chromium печётся в образ (см. docker/install-tier-3.sh).
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+
+# tier 1 (сборка) + tier 3 (playwright + Chromium) + диагностика.
+# tier 3 ставит npm-пакеты и печёт браузеры — отдельным слоем, чтобы смена
+# состава MCP-серверов не инвалидировала слои системных пакетов.
+COPY docker/install-lib.sh docker/install-tier-1.sh docker/install-tier-3.sh \
+     docker/install-diag.sh /tmp/synth-install/
+RUN set -eux; \
+    sh /tmp/synth-install/install-tier-1.sh; \
+    sh /tmp/synth-install/install-tier-3.sh; \
+    sh /tmp/synth-install/install-diag.sh; \
+    rm -rf /tmp/synth-install
+
+# Control plane — в конце: смена кода не инвалидирует слои toolchain'а.
+COPY --from=build /out/app /app
+
+# Скомпилированный код backend поверх pnpm deploy.
+COPY --from=build /repo/packages/backend/dist /app/dist
+
+WORKDIR /app
+CMD ["node", "dist/main.js"]
+
+# ------------------------------------------------------------------------------
+# flavor `full` — browser + tier 2 + tier 4 + БД + docker CLI + buildah
+# ------------------------------------------------------------------------------
+#
+# full ⊃ browser: наследует всю toolchain'у `browser` (включая Playwright с
+# Chromium) и добавляет инфраструктурный тир (kubectl/helm/kustomize/
+# ansible/opentofu/yamllint/shellcheck/hadolint), MCP-серверы SCM-хостингов,
+# клиенты БД, docker CLI и buildah.
+FROM browser AS full
+
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth Backend (full)"
+LABEL org.opencontainers.image.description="Synth backend all-in-one: control plane + toolchain (hard deps, tier 0-4, Playwright/Chromium, MCP servers, DB clients, buildah, diag tools, docker CLI)."
+
+COPY docker/install-lib.sh docker/install-tier-2.sh docker/install-tier-4.sh \
+     docker/install-db-clients.sh docker/install-docker-cli.sh \
+     docker/install-buildah.sh /tmp/synth-install/
+RUN set -eux; \
+    sh /tmp/synth-install/install-tier-2.sh; \
+    sh /tmp/synth-install/install-db-clients.sh; \
+    sh /tmp/synth-install/install-docker-cli.sh; \
+    sh /tmp/synth-install/install-buildah.sh
+# npm-слой (tier 4) отдельным RUN: смена состава MCP-серверов не должна
+# инвалидировать слои с системными пакетами.
+RUN set -eux; \
+    sh /tmp/synth-install/install-tier-4.sh; \
     rm -rf /tmp/synth-install
 
 # ------------------------------------------------------------------------------
