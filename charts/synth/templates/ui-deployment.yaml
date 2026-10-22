@@ -38,6 +38,11 @@ spec:
             - name: http
               containerPort: {{ .Values.ui.service.targetPort }}
               protocol: TCP
+          {{- /* ADR-077: адрес backend'а для nginx — по умолчанию Service
+                 backend'а этого же релиза, переопределяется через
+                 `ui.extraEnv.SYNTH_BACKEND_URL`. */}}
+          env:
+            {{- include "synth.ui.env" . | trim | nindent 12 }}
           {{- with .Values.ui.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

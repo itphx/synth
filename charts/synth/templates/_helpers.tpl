@@ -38,6 +38,32 @@ app.kubernetes.io/component: ui
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{- /* ADR-077: адрес backend'а для nginx UI по умолчанию — Service backend'а
+       ТЕКУЩЕГО релиза (`synth.backend.fullname` + порт Service'а): иначе второй
+       инстанс в одном namespace проксировал бы на backend основного инстанса
+       (и OIDC-редирект уходил на чужой хост). */ -}}
+{{- define "synth.ui.backendUrl" -}}
+{{- printf "http://%s:%d" (include "synth.backend.fullname" .) (.Values.backend.service.port | int64) -}}
+{{- end }}
+
+{{- /* ADR-077: env контейнера UI: адрес backend'а + `ui.extraEnv` (словарь
+       имя → значение). extraEnv имеет приоритет, дубликаты не рендерим.
+       Пустое значение SYNTH_BACKEND_URL → дефолт (nginx не стартует с пустым
+       proxy_pass — рабочий адрес лучше, чем CrashLoop). */ -}}
+{{- define "synth.ui.env" -}}
+{{- $env := dict "SYNTH_BACKEND_URL" (include "synth.ui.backendUrl" .) -}}
+{{- range $name, $value := (.Values.ui.extraEnv | default dict) -}}
+{{- $_ := set $env $name (toString $value) -}}
+{{- end -}}
+{{- if not (get $env "SYNTH_BACKEND_URL") -}}
+{{- $_ := set $env "SYNTH_BACKEND_URL" (include "synth.ui.backendUrl" .) -}}
+{{- end -}}
+{{- range $name, $value := $env }}
+- name: {{ $name }}
+  value: {{ $value | quote }}
+{{- end -}}
+{{- end }}
+
 {{- /* ADR-077: исполнитель (worker) — пул контейнеров с toolchain'ом. */ -}}
 {{- define "synth.executor.fullname" -}}
 {{- if .Values.executor.fullnameOverride }}

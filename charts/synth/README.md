@@ -185,6 +185,7 @@ ingress:
 | `ui.image.repository` | `gitverse.ru/itphx/synth-ui` | Образ UI |
 | `ui.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
 | `ui.imagePullSecrets` | `[]` | Секреты для приватного реестра |
+| `ui.extraEnv` | `{}` | Доп. env для контейнера UI (словарь имя → значение). `SYNTH_BACKEND_URL` — адрес backend'а, на который nginx проксирует `/api /ws /auth /admin /health`; по умолчанию — Service backend'а **текущего** релиза (см. «Адрес backend'а для UI») |
 | `ingress.enabled` | `false` | Включить Ingress |
 | `ingress.controller` | `nginx` | Ingress-контроллер: `nginx` \| `traefik` \| `none` |
 | `ingress.className` | `""` | IngressClass |
@@ -204,6 +205,56 @@ ingress:
 | `installerKey.tokenKey` | `token` | Ключ внутри Secret с plaintext-токеном (для аддонов) |
 | `caCert` | `""` | PEM внутреннего CA (опционально) |
 | `extraObjects` | `[]` | Произвольные дополнительные манифесты (рендерятся как есть) |
+
+## Адрес backend'а для UI (`SYNTH_BACKEND_URL`)
+
+UI — это nginx, который проксирует `/api /ws /auth /admin /health` на backend.
+Адрес backend'а задаётся **окружением**, а не зашит в образ:
+
+| Что | Значение |
+|---|---|
+| Переменная | `SYNTH_BACKEND_URL` (значение целиком, с портом) |
+| Дефолт в образе | `http://synth-backend:5000` (прежнее поведение) |
+| Дефолт в чарте | `http://<имя Service backend'а этого релиза>:<порт Service>` |
+| Переопределение | `ui.extraEnv.SYNTH_BACKEND_URL` |
+
+В образе nginx-конфиг — **шаблон** (`/etc/nginx/templates/default.conf.template`),
+entrypoint официального образа `nginx:alpine` подставляет в него переменные
+окружения (`envsubst`). Подстановка ограничена фильтром
+`NGINX_ENVSUBST_FILTER=SYNTH_BACKEND_URL` — переменные самого nginx
+(`$host`, `$remote_addr`, `$proxy_add_x_forwarded_for`, `$scheme`) не подменяются.
+
+**Зачем это нужно.** Имя Service backend'а (`synth-backend`) — общее для всех
+релизов чарта в namespace. Если в одном namespace развернуть **второй** инстанс
+Synth, его UI (с зашитым адресом) молча проксировал бы на backend **основного**
+инстанса: `/health` отдавал чужой `startedAt`, а OIDC-редирект уходил на чужой хост.
+Сейчас адрес берётся из окружения, поэтому UI второго инстанса смотрит на свой
+backend — при условии, что Service backend'а переименован (иначе имя в namespace
+занято):
+
+```yaml
+# Второй инстанс в том же namespace: переименовываем Service backend'а —
+# UI сам подхватит новое имя (SYNTH_BACKEND_URL = http://<имя>:5000).
+backend:
+  nameOverride: synth-backend-2   # → SYNTH_BACKEND_URL=http://synth-backend-2:5000
+```
+
+Переопределение адреса напрямую (например, backend вне кластера или за
+балансировщиком):
+
+```yaml
+ui:
+  extraEnv:
+    SYNTH_BACKEND_URL: "http://backend.example.com:5000"
+```
+
+**Оговорка про отдельный namespace.** Разнесение инстансов по **разным
+namespace'ам** — тоже рабочий вариант (имя `synth-backend` тогда не конфликтует);
+дополнительный namespace ничего не требует от чарта. Значение `SYNTH_BACKEND_URL`
+нужно, когда инстансы **в одном namespace** (или когда Service backend'а
+переименован). Имя Service backend'а задаётся `backend.nameOverride` /
+`backend.fullnameOverride`; корневой `nameOverride` на имя Service не влияет
+(он меняет только labels).
 
 ## Sticky-сессии при нескольких репликах backend
 

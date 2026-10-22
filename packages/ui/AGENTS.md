@@ -253,7 +253,7 @@
 - Из пакета: `pnpm test` (`vitest run`) / `pnpm test:watch`; из корня — `pnpm test`.
 - Сборка `pnpm build` = `tsc -b && vite build`; typecheck `pnpm typecheck` (`tsc --noEmit`); lint `pnpm lint` (`eslint src/`). Порядок проверок — корневой `AGENTS.md`.
 - В тестах не поднимать реальный транспорт/сеть — мокать `synthApi` и сторы.
-- Раздача SPA и CSP: статику UI отдают core (`packages/core/src/server/app/static.ts`, standalone/`synth serve --ui`) и nginx (`docker/nginx-ui.conf`, k8s-поды) — `Content-Security-Policy` задаётся **единой** политикой в обеих точках (побуквенное совпадение и хэши инлайн-бутстрапов проверяет `static.test.ts`; `unsafe-inline`/`unsafe-eval` для скриптов не выдаются).
+- Раздача SPA и CSP: статику UI отдают core (`packages/core/src/server/app/static.ts`, standalone/`synth serve --ui`) и nginx (`docker/nginx-ui.conf.template`, k8s-поды) — `Content-Security-Policy` задаётся **единой** политикой в обеих точках (побуквенное совпадение и хэши инлайн-бутстрапов проверяет `static.test.ts`; `unsafe-inline`/`unsafe-eval` для скриптов не выдаются).
 
 ## Куда смотреть
 

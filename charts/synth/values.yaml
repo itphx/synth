@@ -541,6 +541,25 @@ ui:
 
   imagePullSecrets: []
 
+  # Доп. env для контейнера UI (словарь имя → значение).
+  #
+  # ADR-077: адрес backend'а, на который nginx (UI) проксирует /api /ws /auth
+  # /admin /health, задаётся переменной `SYNTH_BACKEND_URL`. По умолчанию
+  # чарт подставляет Service backend'а ТЕКУЩЕГО релиза
+  # (`http://<имя Service>:5000`) — это важно для второго инстанса Synth в одном
+  # namespace: с жёстко зашитым адресом UI молча проксировал бы на backend
+  # основного инстанса (и OIDC-редирект уходил на чужой хост).
+  #
+  # Переопределение (значение целиком, с портом):
+  #   ui:
+  #     extraEnv:
+  #       SYNTH_BACKEND_URL: "http://other-backend:5000"
+  #
+  # Оговорка: имя Service backend'а — `backend.nameOverride` /
+  # `backend.fullnameOverride` (по умолчанию `synth-backend`); корневой
+  # `nameOverride` на имя Service не влияет (он меняет только labels).
+  extraEnv: {}
+
   service:
     type: ClusterIP
     port: 8080

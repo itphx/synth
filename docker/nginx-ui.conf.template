@@ -1,4 +1,13 @@
-# nginx для synth-ui: статика + reverse-proxy на synth-backend.
+# nginx для synth-ui: статика + reverse-proxy на backend'а.
+#
+# Файл — ШАБЛОН: entrypoint официального образа nginx (nginx:alpine) подставляет
+# env-переменные в /etc/nginx/templates/*.template (envsubst). Адрес backend'а
+# берётся из env SYNTH_BACKEND_URL: в образе по умолчанию http://synth-backend:5000
+# (обратная совместимость), в чарте — Service backend'а ТЕКУЩЕГО релиза
+# (иначе второй инстанс в одном namespace проксирует на чужой backend).
+# Фильтр подстановки NGINX_ENVSUBST_FILTER=SYNTH_BACKEND_URL: подставляется
+# ТОЛЬКО эта переменная — переменные самого nginx ($host, $remote_addr,
+# $proxy_add_x_forwarded_for, $scheme, $http_upgrade) остаются нетронутыми.
 server {
   listen 8080;
   server_name _;
@@ -8,7 +17,7 @@ server {
 
   # Backend-прокси для API/WS (паролится на backend-сервис, порт 5000).
   location /api/ {
-    proxy_pass http://synth-backend:5000;
+    proxy_pass ${SYNTH_BACKEND_URL};
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -18,7 +27,7 @@ server {
   }
 
   location /auth/ {
-    proxy_pass http://synth-backend:5000;
+    proxy_pass ${SYNTH_BACKEND_URL};
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -28,7 +37,7 @@ server {
   }
 
   location /admin/ {
-    proxy_pass http://synth-backend:5000;
+    proxy_pass ${SYNTH_BACKEND_URL};
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -37,14 +46,14 @@ server {
   }
 
   location /health {
-    proxy_pass http://synth-backend:5000;
+    proxy_pass ${SYNTH_BACKEND_URL};
     proxy_http_version 1.1;
     proxy_set_header Host $host;
   }
 
   # WebSocket-прокси (EventHub /ws/events).
   location /ws/ {
-    proxy_pass http://synth-backend:5000;
+    proxy_pass ${SYNTH_BACKEND_URL};
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";

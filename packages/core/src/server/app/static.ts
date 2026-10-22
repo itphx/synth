@@ -24,7 +24,7 @@ const MIME_TYPES: Record<string, string> = {
 /**
  * Content-Security-Policy UI-документа — **единая** политика для обеих точек
  * раздачи SPA: эта (`serveStatic` в standalone-core, `synth serve --ui`) и nginx
- * (`docker/nginx-ui.conf` — образ `synth-ui`, k8s-поды `ui`). Расхождение политик
+ * (`docker/nginx-ui.conf.template` — образ `synth-ui`, k8s-поды `ui`). Расхождение политик
  * недопустимо; синхронность строки с nginx-конфигом и хэшей с инлайн-скриптами
  * проверяет `static.test.ts`.
  *

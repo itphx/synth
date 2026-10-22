@@ -34,7 +34,7 @@ describe('UI Content-Security-Policy', () => {
 
     // Если падает здесь — изменился инлайн-скрипт в HTML (или сама политика):
     // обновите `UI_CONTENT_SECURITY_POLICY` в `static.ts` И строку CSP в
-    // `docker/nginx-ui.conf` (иначе бутстрап темы/диагностика будут заблокированы).
+    // `docker/nginx-ui.conf.template` (иначе бутстрап темы/диагностика будут заблокированы).
     const indexHtml = readFileSync(repoFile('packages/ui/index.html'), 'utf8');
     const diagHtml = readFileSync(repoFile('packages/ui/public/diag.html'), 'utf8');
     expect(policyHashes.sort()).toEqual(
@@ -51,7 +51,7 @@ describe('UI Content-Security-Policy', () => {
   });
 
   it('совпадает побазно с CSP в nginx-конфиге (единая политика, а не «две разные»)', () => {
-    const nginx = readFileSync(repoFile('docker/nginx-ui.conf'), 'utf8');
+    const nginx = readFileSync(repoFile('docker/nginx-ui.conf.template'), 'utf8');
     expect(nginx).toContain(UI_CONTENT_SECURITY_POLICY);
   });
 });

@@ -235,6 +235,10 @@
   `charts/synth/templates/backend-service.yaml` (поле рендерится только для значения, отличного от
   `None`, — дефолтный манифест Service не меняется побайтово); подробности и оговорки — README чарта
   («Sticky-сессии при нескольких репликах backend»).
+- **Адрес backend'а в образе UI — из окружения:** `docker/nginx-ui.conf.template` (шаблон nginx +
+  `envsubst` с фильтром `NGINX_ENVSUBST_FILTER=SYNTH_BACKEND_URL` — переменные nginx не подменяются),
+  `docker/Dockerfile.ui` (`ENV SYNTH_BACKEND_URL=http://synth-backend:5000`), чарт —
+  `ui.extraEnv.SYNTH_BACKEND_URL` (дефолт — Service backend'а текущего релиза).
 - **Шаг B1 — исполнитель хостит MCP-серверы:** `packages/executor/src/mcp.ts` (`ExecutorMcpHost`:
   stdio через `@modelcontextprotocol/sdk`, лимиты как в core, circuit breaker, `redactSecrets`,
   статусы `idle`/`up`/`down`, `close()`), `src/config.ts` (`SYNTH_EXECUTOR_MCP_SERVERS`, строгий
