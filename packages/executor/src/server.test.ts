@@ -284,7 +284,7 @@ describe('исполнитель: лимиты и служебные эндпо�
       arch: string;
       node: string;
     };
-    expect(body.protocol).toBe(1);
+    expect(body.protocol).toBe(2);
     expect(body.toolchain.git).toBe('git version 2.39.2');
     expect(body.os.length).toBeGreaterThan(0);
     expect(body.arch.length).toBeGreaterThan(0);
@@ -303,6 +303,6 @@ describe('исполнитель: лимиты и служебные эндпо�
     expect(res.status).toBe(200);
     const body = (await res.json()) as { status: string; protocol: number };
     expect(body.status).toBe('ok');
-    expect(body.protocol).toBe(1);
+    expect(body.protocol).toBe(2);
   });
 });

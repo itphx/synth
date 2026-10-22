@@ -10,8 +10,11 @@
 > **Статус документа:** порт `ExecutionPort`, обе реализации (inline/remote), секция `execution` в конфигурации,
 > пакет исполнителя `@itphx/synth-executor`, подключение по `execution.mode=remote` и чарт
 > split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том
-> workspace, `NetworkPolicy` пула) — **реализованы**; остаток — метрики `synth_executor_*` и runbook
-> переключения топологии (шаг 7d) и перенос `simple-git` и MCP-stdio в исполнитель (шаги 8–9).
+> workspace, `NetworkPolicy` пула) — **реализованы**; **шаг B1** — исполнитель хостит MCP-серверы
+> у себя (`SYNTH_EXECUTOR_MCP_SERVERS`, эндпоинты `/mcp/servers`, `/mcp/tools`, `/mcp/call`,
+> протокол версии 2) — **реализован на стороне исполнителя**; остаток — клиентская проводка в
+> control plane (шаг B2), метрики `synth_executor_*` и runbook переключения топологии (шаг 7d),
+> перенос `simple-git` в исполнитель (шаг 8) и `inline-shell` (шаг 9).
 
 ---
 
@@ -64,7 +67,7 @@
 | **Git-реестр** (`project.repos`, [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md)) | backend | backend (реестр и SSH-материал — в backend'е) |
 | **LLM-вызовы** (через `GatewayProvider`, [ADR-036](./arch_decisions/adr-036-llm-gateway.md)) | backend | backend (в исполнителе LLM-ключей нет) |
 | **Permission-слой** (`plan`/`act`/`yolo`, allow/deny/ask) | backend | backend (решение о допуске — до вызова порта) |
-| **MCP stdio-серверы** | в процессе backend'а (spawn через `StdioClientTransport`) | в процессе backend'а на фазе 1; в исполнителе — на фазе 3 |
+| **MCP stdio-серверы** | в процессе backend'а (spawn через `StdioClientTransport`) | **в исполнителе** (шаг B1: `SYNTH_EXECUTOR_MCP_SERVERS` + `/mcp/*`); клиентская проводка в control plane — шаг B2 |
 | **Наблюдаемость** | `/metrics` backend'а | `/metrics` backend'а + `/metrics` исполнителя (агрегация) |
 
 ---
@@ -283,7 +286,10 @@ interface ExecutionPort {
 | Метод | Путь | Назначение |
 |---|---|---|
 | `POST` | `/exec` | тело: `{ command: ExecCommand, cwd?, env?, timeoutMs?, maxOutputBytes? }` → `200 { stdout, stderr, exitCode, truncated, durationMs }`; при неудаче — код ошибки с телом `{ error: { reason, code, message, stdout, stderr, killed, signal, truncated, durationMs } }` (зеркалит `ExecutionError`) |
-| `GET` | `/capabilities` | `{ protocol: 1, toolchain: {git?, rg?, python3?}, os, arch, node }` — рукопожатие версии протокола и состава toolchain'а |
+| `GET` | `/capabilities` | `{ protocol: 2, toolchain: {git?, rg?, sh?, python3?}, os, arch, node }` — рукопожатие версии протокола и состава toolchain'а |
+| `GET` | `/mcp/servers` | `[{ name, status, toolCount, error? }]` — состояние MCP-серверов исполнителя (`idle`/`up`/`down`); значения `env` не отдаются |
+| `GET` | `/mcp/tools` | `[{ server, name, description, inputSchema }]` — инструменты всех **поднятых** MCP-серверов |
+| `POST` | `/mcp/call` | тело: `{ server, tool, arguments? }` → `200 { content, isError }`; неизвестный сервер/инструмент → `404`, ошибка MCP → `500` с текстом ошибки (без секретов) |
 | `GET` | `/health` | живость исполнителя |
 
 - Тело `/exec` — проекция `ExecRequest`
@@ -297,6 +303,42 @@ interface ExecutionPort {
 - **Отмена:** разрыв HTTP-запроса → `AbortSignal` на сервере → SIGTERM процессу.
   Семантика «Стоп» (ADR-005) сохраняется: клиентский `AbortSignal` доезжает до
   исполнителя тем же эффектом, что и в inline-режиме.
+- **Версия протокола — 2** (было 1): добавлены MCP-эндпоинты, старый исполнитель
+  их не знает ⇒ **control plane и исполнитель обязаны быть одной версии**
+  (см. «Операционные следствия» в [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md)).
+
+### 4.2.1. MCP-хостинг исполнителя (шаг B1)
+
+В split-топологии control plane тонкий (в образе `synth-backend` нет Chromium и
+tier-4 MCP-серверов), а браузерные инструменты нужны агенту. Поэтому **хостит**
+MCP-серверы исполнитель — у него и toolchain, и Chromium.
+
+- **Конфигурация — env** `SYNTH_EXECUTOR_MCP_SERVERS`: JSON-массив описаний
+  `[{"name":"playwright-mcp","command":"playwright-mcp","args":["--headless","--no-sandbox","--executable-path","/opt/synth/browser/chrome"],"env":{}}]`.
+  Разбор **строгий** (невалидный JSON/запись — ошибка старта, fail-closed);
+  **пустая строка — «серверов нет»** (так отключается дефолт образа). `env`
+  сервера может содержать токены — они не логируются, не отдаются в
+  ответах и вычищаются из текстов ошибок. Сама переменная убирается из
+  `process.env` после разбора (`scrubExecutorMcpServers`) — иначе токены утекли бы
+  в окружение агентских команд.
+- **MCP-клиент — тот же SDK и те же лимиты, что в core**
+  (`@modelcontextprotocol/sdk`, `StdioClientTransport`): connect 60 c, вызов
+  инструмента 120 c, усечение результата до 30 000 символов, circuit breaker
+  (5 ошибок → 60 c). Свой MCP-клиент не пишется.
+- **Жизненный цикл — ленивый:** сервер поднимается при первом обращении
+  (`GET /mcp/tools` — все серверы, `POST /mcp/call` — нужный). Неудачный старт
+  не ломает исполнитель: сервер получает статус `down` с причиной, а
+  следующее обращение его переподнимает. При остановке исполнителя MCP-серверы
+  закрываются — дочерние процессы (и Chromium) не остаются жить.
+- **Ограничение шага B1:** реализована **серверная** часть. Клиентская проводка в
+  control plane (транспорт MCP-исполнителя, регистрация тулов с префиксом
+  `{serverName}_{toolName}`) — шаг B2.
+- **Playwright MCP:** `playwright-mcp` по умолчанию ищет Google Chrome, которого в
+  образе нет ⇒ `--executable-path /opt/synth/browser/chrome` (стабильный симлинк
+  tier 3 на фактический `chromium-<ревизия>/chrome-linux64/chrome`), плюс
+  `--headless` и `--no-sandbox` (контейнер по умолчанию под root). Дефолт задан
+  **только** во flavor'ах с браузером (`browser`/`full`); проверено в контейнере:
+  `/mcp/servers` → `up`, 25 инструментов, DOM рендерится. Детали — [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) п. 9.
 
 ### 4.3. Пул адресов, отказ и параллелизм
 
@@ -383,10 +425,12 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   `packages/core/src/engine/tools/git.ts`, `packages/core/src/engine/tools/path-utils.ts`);
   выход за пределы → ошибка. Это **доверительная граница**, а не косметика: без неё
   удалённый порт превращается в выполнение команд в произвольном каталоге.
-- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 1`) и
-  состав toolchain'а (`git`/`rg`/`python3`), ОС и архитектуру. Это источник правды для
+- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 2`) и
+  состав toolchain'а (`git`/`rg`/`sh`/`python3`), ОС и архитектуру. Это источник правды для
   детекта внешних зависимостей в split-режиме (ADR-078): backend не должен считать
-  `git`/`rg` доступными там, где их нет.
+  `git`/`rg`/`sh` доступными там, где их нет. Версия протокола — **контракт совместимости**:
+  исполнитель версии 1 не знает MCP-эндпоинтов, поэтому control plane и пул
+  исполнителей обязаны обновляться вместе (ADR-077, операционные следствия шага A).
 - **Egress-политика.** Обращения backend'а к исполнителю проходят через политику встроенных
   инструментов (`egress.tools`, `packages/shared/src/config/types.ts`) — адрес исполнителя должен
   быть разрешён; `POST /api/v2/settings/egress/check` (ADR-099) — offline-проверка без запроса.
@@ -547,6 +591,7 @@ control plane (тот же namespace) на порт исполнителя, egre
 | `executor.workspace.backendWorkspacesRoot` | `storage.workspacesRoot` backend'а (env `SYNTH_WORKSPACES_ROOT`) — задаётся, если `mountPath` отличается от `{dataDir}/workspaces` |
 | `executor.networkPolicy.enabled` / `.allowedEgress` | NetworkPolicy worker'а: ingress — только от pod'ов control plane, egress — по умолчанию только DNS |
 | `executor.token.existingSecret` / `.secretKey` | Secret с токеном `synth_exec_…` и ключ внутри него |
+| `executor.mcp.enabled` / `.servers` | MCP-серверы, которые хостит исполнитель (ADR-077 шаг B1): `[{name, command, args, env}]` → env `SYNTH_EXECUTOR_MCP_SERVERS` (JSON). Пусто → env не выставляется (дефолт образа: у flavor'ов с браузером — Playwright MCP); `enabled: false` → env `""` = серверов нет |
 
 Токен — **только** из Secret: backend получает его **файлом**
 (`/etc/synth/executor/token`, `0400` → в env идёт путь, `SYNTH_EXECUTION_TOKEN`),
@@ -636,7 +681,7 @@ backend'а. Данные не затронуты (workspace — тот же то
 | `git`: argv-массив без shell, `mergedEnv = { ...process.env, ...env }`, containment `resolveRepoCwd` (симлинки) | `packages/core/src/engine/tools/git.ts:29`, `:30`, `:52` |
 | `simple-git`: env санитизируется (`sanitizeGitEnv` вырезает `git*` и blocklist `EDITOR`/`PAGER`/`SSH_ASKPASS`…), `GIT_TERMINAL_PROMPT=0` | `packages/core/src/git/git-service.ts:81`, `:107`, `:148` |
 | MCP stdio: `StdioClientTransport`; SDK мержит `getDefaultEnvironment()` (whitelist HOME/PATH) | `packages/core/src/engine/mcp/client.ts:159`, `:169` |
-| Детект бинарников `git`/`rg`/`sh`: `probeBinary` → `execFileAsync(bin, ['--version'], { timeout: 3000 })`; ENOENT → `false`, прочие ошибки → `true` (**fail-open**); кэш модульного уровня | `packages/core/src/engine/tools/runtime-deps.ts:77`, `:79`, `:92` |
+| Детект бинарников `git`/`rg`/`sh`: `probeBinary` → `execFileAsync(bin, ['--version'], { timeout: 3000 })`; ENOENT → `false`, прочие ошибки → `true` (**fail-open**); кэш детекции — **по экземпляру порта** (`WeakMap`), не модульного уровня (после шага A: локальная проба inline не должна отравлять remote-кэш) | `packages/core/src/engine/tools/runtime-deps.ts:77`, `:79`, `:92` |
 | Причины недоступности тула: `mode`/`role`/`dependency`/`workspace`/`storage`; порядок проверок storage→role→mode→dependency→workspace; `WORKSPACE_CAPABILITIES` | `packages/core/src/engine/permission/availability.ts:22`, `:28`, `:94`, `:147`, `:152` |
 | При деградации хранилища доступны только `skill`/`web_fetch`/`web_search`, прочие — `unavailable(storage)` | `packages/core/src/engine/permission/availability.ts:54`, `:113` |
 | Workspace: provisioning в backend'е — `resolveWorkspaceForLocalProject`, `validateManagedWorkspacePath`, `provisionManagedWorkspace` (атомарный `mkdir` без `recursive`), единая точка `provisionWorkspace` | `packages/core/src/engine/workspace-provision.ts:47`, `:109`, `:179`, `:207`, `:232` |
@@ -654,7 +699,7 @@ backend'а. Данные не затронуты (workspace — тот же то
 | `synth_sessions_active` / `synth_queue_pending` — про сессии и очередь **сообщений**, не про исполнение | `packages/core/src/metrics/collectors/sessions.ts:26`, `:30` |
 | Порт исполнения: `ExecutionPort` + `InlineExecutionPort` + контрактный suite (шаг 1) | `packages/core/src/execution/ports/execution-port.ts:1`, `packages/core/src/execution/inline-execution-port.ts:1`, `packages/core/src/execution/contract/execution.ts:1` |
 | Секция `execution` в конфиге, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed на старте (шаг 3) | `packages/shared/src/config/execution.ts:1`, `packages/shared/src/config/types.ts:178`, `packages/shared/src/config/defaults.ts:32`, `packages/core/src/execution/startup.ts:1`, `packages/core/src/main.ts:110` |
-| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); осталось: метрики `synth_executor_*` + runbook (7d), образ worker'а и flavor'ы — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) (шаги 4–6) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
+| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-хостинг исполнителя** (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call`, протокол версии 2) — **реализован** (шаг B1, серверная часть); осталось: клиентская проводка в control plane (B2), метрики `synth_executor_*` + runbook (7d), образ worker'а и flavor'ы — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) (шаги 4–6) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
 | Слой хранения — образец портов: 30 доменных портов, контрактный suite, `createFileStorage`/`createMemoryStorage`/`createPostgresStorage`/`createStorageContextAsync`/`buildStorageContext` | `packages/core/src/storage/ports/`, `packages/core/src/storage/contract/index.ts:1`, `packages/core/src/storage/storage-context.ts:467`, `:529`, `:599`, `:847`, `:917` |
 | Ограничения >1 реплики: файловая БД не масштабируется; RWO PVC; `FileMutex` (эксклюзивный `mkdir` + stale-takeover) работает только на общем FS; `scheduler.leaderElection: none`, `crossProcessLocks: false` (в PG — `PgMutex`/`PgLeader`) | `charts/synth/values.yaml:11`, `:45`; `packages/core/src/storage/file-mutex.ts:33`, `:48`; `packages/core/src/storage/mutex.ts:7`; `packages/shared/src/config/defaults.ts:155` |
 | Рестарт инстанса — graceful shutdown с exit code 75, режимы `disabled`/`process`/`supervisor` | `packages/core/src/server/restart.ts:20`, `:23`; `packages/core/src/main.ts:81` |
@@ -702,6 +747,11 @@ backend'а. Данные не затронуты (workspace — тот же то
 12. **Документация**: `docs/CONFIGURATION.md` (секция `execution`), `docs/API_V2.md` (если exec-API
      станет публичным — не планируется), `docs/OBSERVABILITY.md` (новые метрики), `charts/synth/README.md`
      (примеры split-развёртывания), `docs/TROUBLESHOOTING.md` (исполнитель недоступен). — **частично**
+13. **Перенос MCP stdio в исполнитель (шаг 9/B1+B2)**: исполнитель поднимает MCP-серверы у себя
+     (`SYNTH_EXECUTOR_MCP_SERVERS`), отдаёт инструменты и вызовы по HTTP (`/mcp/servers`,
+     `/mcp/tools`, `/mcp/call`), протокол поднят до версии 2. — **B1 (серверная часть) сделано**;
+     **B2 (клиентская проводка в control plane)** — транспорт MCP-исполнителя, регистрация тулов
+     с префиксом `{serverName}_{toolName}`, e2e в кластере — **остаток**
 
 ### 12.3. Порядок реализации
 
@@ -721,7 +771,7 @@ backend'а. Данные не затронуты (workspace — тот же то
 | **7c** | Helm: значения `executor.*` (Deployment/Service/пул), RWX-том общего workspace, токен — из Secret, `NetworkPolicy` для worker'а; **фаза 1** матрицы (`execute_shell`/`grep_files`/`python`) | ADR-077 | не нужна |
 | **7d** | Метрики `synth_executor_*` (+ `/metrics` исполнителя) и runbook (переключение топологии, диагностика «исполнитель недоступен») | ADR-077 | не нужна |
 | **8** | **Фаза 2** матрицы: git-тулы + доставка SSH-материала в исполнителя | ADR-077 | не нужна |
-| **9** | **Фаза 3** матрицы: MCP stdio-серверы и inline-shell | ADR-077 | не нужна |
+| **9** | **Фаза 3** матрицы: MCP stdio-серверы и inline-shell. **B1 (серверная часть MCP) — сделано**: исполнитель хостит MCP-серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/*`, протокол 2); **B2** — клиентская проводка в control plane (транспорт, регистрация тулов `{serverName}_{toolName}`, e2e в кластере) | ADR-077 | не нужна |
 | **10** | Изоляция и квоты (`NetworkPolicy`, `ResourceQuota`/`LimitRange`, лимиты worker'а, без `docker.sock`); наблюдаемость: метрики `synth_executor_*`, `/metrics` исполнителя, алерты; детект зависимостей (ADR-078) на стороне исполнителя | ADR-077 | не нужна |
 | **11** | Workspace-v2: per-worker копия или S3-совместимое объектное хранилище (снимает «один RWX-том на всех») | ADR-077 | желательна |
 | **12** | Миграции и документация: переключение топологии (runbook — `docs/MAINTENANCE.md`), секция `execution` в `docs/CONFIGURATION.md`, метрики в `docs/OBSERVABILITY.md`, примеры в `charts/synth/README.md`, диагностика в `docs/TROUBLESHOOTING.md`; compose-сценарии all-in-one/split | общий | не нужна |

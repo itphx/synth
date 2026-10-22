@@ -1,6 +1,6 @@
 # ADR-077: Инструментальное окружение исполнения — единый порт ExecutionPort и режим remote
 
-> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула) и **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`); остаток — метрики `synth_executor_*` и runbook (шаг 7d) и перенос `simple-git` и MCP-stdio в исполнитель (шаги 8–9).
+> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула), **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`) и **шаг B1** — исполнитель **хостит MCP-серверы у себя** (stdio) и отдаёт их инструменты и вызовы по HTTP (`GET /mcp/servers`, `GET /mcp/tools`, `POST /mcp/call`; протокол версии 2); остаток — клиентская проводка в control plane (шаг B2), метрики `synth_executor_*` и runbook (шаг 7d) и перенос `simple-git` в исполнитель (шаг 8).
 > **Дата:** 2026-10-21
 > **Связано:** [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md) (образец портов и контрактного suite), [ADR-099](./adr-099-egress-tls-trust.md) (доверенная граница и исходящий транспорт), [ADR-092](./adr-092-instance-lifecycle-maintenance.md) (рестарт, exit 75), [ADR-094](./adr-094-observability-metrics.md) (метрики), [ADR-075](./adr-075-project-workspace-provisioning.md) (workspace), [ADR-076](./adr-076-git-repo-registry-ssh.md) (git-реестр и SSH), [ADR-078](./adr-078-runtime-dependency-availability.md) (детект зависимостей), [ADR-036](./adr-036-llm-gateway.md) (в исполнителе LLM-ключей нет), [ADR-038](./adr-038-npm-packages.md) (поставка пакета); детали и формат — [docs/EXECUTION.md](../EXECUTION.md) (Spec).
 
@@ -19,8 +19,9 @@
    `DEFAULT_MAX_OUTPUT_BYTES` (10 МБ).
 2. **Две взаимозаменяемые реализации.** `InlineExecutionPort` — исполнение в процессе control plane (прежнее
    поведение). Удалённая — HTTP/1.1 + JSON к исполнителю: exec-API `/exec`, `/capabilities`, `/health`,
-   протокол `EXECUTOR_PROTOCOL_VERSION = 1`, bearer-токен `synth_exec_…` **из файла** (`execution.remote.tokenSecret`
-   — путь, не значение; инвариант 13). Исполнитель поставляется отдельным in-tree пакетом
+   протокол `EXECUTOR_PROTOCOL_VERSION = 2` (было 1 — с шагом B1 добавлены MCP-эндпоинты), bearer-токен
+   `synth_exec_…` **из файла** (`execution.remote.tokenSecret` — путь, не значение; инвариант 13).
+   Исполнитель поставляется отдельным in-tree пакетом
    `@itphx/synth-executor` (`packages/executor`), который core подключает **динамическим `import()`**
    (`@itphx/synth-executor/client`) — по образцу драйвера хранилища (ADR-097).
 3. **Выбор реализации — параметр запуска `execution.mode`** (`inline` — дефолт, `remote` — split). Топология —
@@ -62,6 +63,49 @@
    - **Кэш детекции — по экземпляру порта** (`WeakMap`): локальная (inline) проба больше не отравляет
      remote-кэш — иначе control plane считал бы доступным бинарь, которого нет ни у одного исполнителя.
    - **Inline-режим не изменился**: те же локальная проба и дефолты, порт игнорирует `requires`.
+9. **MCP-серверы хостит исполнитель, а не control plane (шаг B1).** В split-топологии control plane
+   тонкий (в образе `synth-backend` нет Chromium и tier-4 MCP-серверов), а браузерные инструменты
+   агенту нужны. Значит и **хостить** их должен исполнитель — у него toolchain и Chromium:
+   - **Конфигурация — env исполнителя** `SYNTH_EXECUTOR_MCP_SERVERS`: JSON-массив описаний
+     `[{"name":"playwright-mcp","command":"playwright-mcp","args":["--no-sandbox"],"env":{}}]`.
+     Разбор **строгий**: невалидный JSON или запись — **fail-closed при старте** (иначе оператор
+     считал бы серверы поднятыми, а они не поднялись). `env` сервера может содержать токены —
+     они не логируются, не отдаются в ответах, вычищаются из текстов ошибок; сама переменная
+     убирается из `process.env` после разбора (иначе токены утекли бы в окружение агентских команд).
+   - **MCP-клиент — тот же SDK и те же лимиты, что в core** (`@modelcontextprotocol/sdk`,
+     `StdioClientTransport`): connect 60 c, вызов 120 c, усечение результата до 30 000 символов,
+     circuit breaker (5 ошибок → 60 c). Свой MCP-клиент не пишется — иначе handshake и разбор
+     результатов разойдутся с core.
+   - **Жизненный цикл — ленивый:** сервер поднимается при первом обращении (`GET /mcp/tools` —
+     все серверы, `POST /mcp/call` — нужный). Неудачный старт не ломает исполнитель: сервер
+     получает статус `down` с причиной, следующее обращение его переподнимает; при остановке
+     исполнителя MCP-серверы закрываются (дочерние процессы, включая Chromium, не остаются жить).
+   - **Поверхность HTTP (протокол 2):** `GET /mcp/servers` → `[{name, status, toolCount, error?}]`,
+     `GET /mcp/tools` → `[{server, name, description, inputSchema}]`, `POST /mcp/call`
+     `{server, tool, arguments}` → `{content, isError}`; неизвестный сервер/инструмент → `404`,
+     ошибка MCP → `500` с текстом ошибки. Всё — **под тем же bearer-токеном**, что и остальные
+     эндпоинты исполнителя.
+   - **Граница шага:** B1 — **серверная** часть. Клиентская проводка в control plane (транспорт
+     MCP-исполнителя, регистрация тулов с префиксом `{serverName}_{toolName}`, e2e в кластере) —
+     **шаг B2**.
+   - **Фактическая проверка в контейнере** (образ `synth-executor`, flavor `full`, Playwright MCP
+     0.0.83 + Chromium 1247 / Chrome for Testing 155.0.8059.12):
+     аргументы `--headless --no-sandbox --executable-path /opt/synth/browser/chrome` — рабочие:
+     `GET /mcp/servers` → `{"name":"playwright-mcp","status":"up","toolCount":25}`,
+     `POST /mcp/call` `browser_navigate` на `data:text/html,…` → `isError:false`, `browser_evaluate` →
+     отрендеренный DOM и `HeadlessChrome/155`. Без `--executable-path` сервер падает:
+     `Chromium distribution 'chrome' is not found at /opt/google/chrome/chrome` — Chrome в образе нет,
+     браузеры лежат в `PLAYWRIGHT_BROWSERS_PATH` (`/opt/ms-playwright`); флага `--browser chromium`
+     **не существует** (`--browser` = `chrome|firefox|webkit|msedge`). Версионный путь
+     (`/opt/ms-playwright/chromium-1247/chrome-linux64/chrome`, именно `chrome-linux64`) в конфигурации
+     не хардкодится: tier 3 создаёт стабильный симлинк `/opt/synth/browser/chrome` резолвом по glob.
+     `--no-sandbox` обязателен, т.к. контейнер по умолчанию под root (uid 0); `--headless` — дисплея нет.
+     Ленивый старт подтверждён: сразу после старта `status:"idle", toolCount:0`, `GET /mcp/tools`
+     поднимает сервер (25 инструментов) → `status:"up"`. Отсутствующий бинарник: исполнитель жив,
+     `/mcp/tools` → `[]`, `/mcp/call` → `internal_error` с `spawn … ENOENT`, `/mcp/servers` →
+     `down` + `error` (в первой проверке отдавал `idle` — дефект статуса исправлен: транспортное
+     закрытие/ошибка до подъёма больше не игнорируется). `docker stop` → 351 мс, `Exited (0)`,
+     дочерних `playwright-mcp`/Chromium не остаётся (`docker top`/`pgrep` после остановки).
 
 ## Альтернативы
 
@@ -105,6 +149,22 @@
     инвентаря по TTL: обновление инвентаря влияет на **маршрутизацию команд**, но не на «зелёный/красный»
     статус тула. Изменился состав пула — снимок пересчитается после рестарта control plane (инвариант 24:
     process-глобальные решения не переинициализируются на лету).
+- **Операционные следствия шага B1 (MCP-хостинг исполнителя):**
+  - **(а) Версия протокола — контракт совместимости.** Добавление эндпоинтов `/mcp/*` подняло версию
+    протокола до **2**: старый исполнитель их не знает. Значит **control plane и пул исполнителей
+    обязаны быть одной версии** — то же правило, что и для инвентаря пула (шаг A, следствие (а)):
+    обновление пула ⇒ обновление control plane (или наоборот). Проверка версии на проводе — задача
+    шага B2 (клиентская проводка).
+  - **(б) Секреты MCP-серверов живут в исполнителе.** `env` сервера (токены SCM-хостингов) приходят
+    в исполнитель из Secret и **не покидают** его: в ответах `/mcp/servers` значений нет, тексты
+    ошибок вычищаются, переменная `SYNTH_EXECUTOR_MCP_SERVERS` убирается из `process.env` — иначе
+    токены утекли бы в окружение агентских команд (тот же приём, что с bearer-токеном исполнителя).
+  - **(в) Жизненный цикл MCP-сервера — ленивый и восстановимый.** Сервер не поднимается, пока к нему не
+    обратились; упавший сервер помечается `down` с причиной и **переподнимается** при следующем
+    обращении (circuit breaker защищает от частых переподключений). Это значит, что «сервер не
+    отвечает» в статусе — не фатально: следующий запрос его поднимет.
+  - **(г) Остановка исполнителя завершает и MCP-серверы.** Дочерние процессы MCP (и Chromium)
+    закрываются вместе с исполнителем — зомби-процессов в поде не остаётся.
 
 ## Статус в коде
 
@@ -114,9 +174,9 @@
   `contract/remote.test.ts`.
 - **Реализации:** `packages/core/src/execution/inline-execution-port.ts` (в процессе) и удалённая —
   `packages/core/src/execution/remote.ts` (динамический `import()` `@itphx/synth-executor/client`, fail-closed,
-  чтение токена из файла) + пакет `packages/executor/` (`protocol.ts` — `EXECUTOR_PROTOCOL_VERSION = 1`,
-  `client.ts` — `RemoteExecutionPort`, `server.ts`, `exec-service.ts`, `auth.ts`, `workspace.ts` — containment `cwd`,
-  `toolchain.ts`, `config.ts`, `main.ts`).
+  чтение токена из файла) + пакет `packages/executor/` (`protocol.ts` — `EXECUTOR_PROTOCOL_VERSION = 2`,
+  `client.ts` — `RemoteExecutionPort`, `server.ts`, `mcp.ts` — хостинг MCP-серверов, `exec-service.ts`,
+  `auth.ts`, `workspace.ts` — containment `cwd`, `toolchain.ts`, `config.ts`, `main.ts`).
 - **Выбор режима и шов:** `packages/core/src/execution/factory.ts` (`createExecutionPortForConfig`),
   `packages/core/src/execution/startup.ts` (`checkExecutionMode`/`assertExecutionModeSupported` — fail-closed),
   `packages/core/src/execution/tool-port.ts` (`resolveExecutionPort(ctx)` → `ctx.extra.executionPort`).
@@ -172,9 +232,19 @@
   `charts/synth/templates/backend-service.yaml` (поле рендерится только для значения, отличного от
   `None`, — дефолтный манифест Service не меняется побайтово); подробности и оговорки — README чарта
   («Sticky-сессии при нескольких репликах backend»).
-- **Остаток:** метрики `synth_executor_*` и runbook переключения топологии (шаг 7d), перенос `simple-git`
-  и MCP-stdio в исполнитель (шаги 8–9, фазы 2–3 матрицы), спека `docs/EXECUTION.md` — синхронизация
-  описания инвентаря пула и словаря базовых возможностей.
+- **Шаг B1 — исполнитель хостит MCP-серверы:** `packages/executor/src/mcp.ts` (`ExecutorMcpHost`:
+  stdio через `@modelcontextprotocol/sdk`, лимиты как в core, circuit breaker, `redactSecrets`,
+  статусы `idle`/`up`/`down`, `close()`), `src/config.ts` (`SYNTH_EXECUTOR_MCP_SERVERS`, строгий
+  разбор, `''` = серверов нет, `scrubExecutorMcpServers`), `src/server.ts` (`GET /mcp/servers`,
+  `GET /mcp/tools`, `POST /mcp/call` под bearer), `src/protocol.ts` (протокол 2, причина `not_found`);
+  тесты `src/mcp.test.ts`, `src/mcp-routes.test.ts`, фикстура `test-fixtures/mcp-stdio-server.mjs`.
+  Образ: `docker/install-tier-3.sh` создаёт стабильный симлинк `/opt/synth/browser/chrome`
+  (резолв по glob `chromium-*/chrome-linux64/chrome`, fail-closed если браузера нет),
+  `docker/Dockerfile.executor` задаёт дефолт `SYNTH_EXECUTOR_MCP_SERVERS` только во flavor'ах
+  с браузером (`browser`/`full`); чарт — `executor.mcp.servers`/`executor.mcp.enabled`.
+- **Остаток:** метрики `synth_executor_*` и runbook переключения топологии (шаг 7d), клиентская
+  проводка MCP в control plane (шаг B2), перенос `simple-git` в исполнитель (шаг 8),
+  спека `docs/EXECUTION.md` — синхронизация описания инвентаря пула и словаря базовых возможностей.
 
 ## Связи
 

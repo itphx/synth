@@ -140,9 +140,15 @@ importers:
       '@itphx/synth-shared':
         specifier: workspace:*
         version: link:../shared
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.32.1
+        version: 1.32.1(supports-color@10.2.2)(zod@3.25.76)
       hono:
         specifier: ^4.9.0
         version: 4.13.13
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
     devDependencies:
       '@itphx/synth-core':
         specifier: workspace:*

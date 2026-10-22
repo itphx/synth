@@ -5,7 +5,9 @@
  * Пакет даёт две вещи:
  *
  * - **сервер исполнителя** (`createExecutorApp`/`startExecutorServer`) —
- *   HTTP/1.1 + JSON API: `POST /exec`, `GET /capabilities`, `GET /health`;
+ *   HTTP/1.1 + JSON API: `POST /exec`, `GET /capabilities`, `GET /health`,
+ *   а также MCP-хостинг: `GET /mcp/servers`, `GET /mcp/tools`,
+ *   `POST /mcp/call` (ADR-077, шаг B1);
  * - **клиент удалённого порта** (`createRemoteExecutionPort`, отдельный
  *   экспорт `@itphx/synth-executor/client`) — реализация `ExecutionPort` из
  *   `@itphx/synth-core` поверх HTTP.
@@ -39,14 +41,21 @@ export type {
   ExecutorHealth,
   ExecutorErrorReason,
   PortFailureReason,
+  McpServerStatusBody,
+  McpToolInfoBody,
+  McpCallRequestBody,
+  McpCallResultBody,
 } from './protocol.js';
+export { parseMcpCallRequestBody } from './protocol.js';
 
 // Конфигурация (env).
 export {
   EXECUTOR_ENV,
   EXECUTOR_DEFAULTS,
   resolveExecutorConfig,
+  parseMcpServerSpecs,
   scrubExecutorToken,
+  scrubExecutorMcpServers,
 } from './config.js';
 export type { ExecutorConfig } from './config.js';
 
@@ -73,6 +82,30 @@ export {
   resolveToolchainBinaries,
 } from './toolchain.js';
 export type { ToolchainInfo } from './toolchain.js';
+
+// MCP-хостинг (ADR-077, шаг B1).
+export {
+  ExecutorMcpHost,
+  ExecutorMcpError,
+  MCP_CONNECT_TIMEOUT_MS,
+  MCP_TOOL_TIMEOUT_MS,
+  MCP_MAX_RESULT_CHARS,
+  MCP_CIRCUIT_THRESHOLD,
+  MCP_CIRCUIT_COOLDOWN_MS,
+  MCP_INHERITED_ENV_VARS,
+  sanitizeError,
+  redactSecrets,
+} from './mcp.js';
+export type {
+  McpServerSpec,
+  McpServerState,
+  McpServerStatus,
+  McpToolDef,
+  McpToolInfo,
+  McpToolResult,
+  ExecutorMcpErrorKind,
+  ExecutorMcpHostOptions,
+} from './mcp.js';
 
 // Сервер.
 export {

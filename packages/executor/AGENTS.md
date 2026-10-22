@@ -40,12 +40,15 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
 - Собственных HTTP-агентов/диспетчеров пакет **не создаёт** (инвариант 22):
   исходящие запросы клиента — только через `egressFetch` из core.
 
-## Wire-протокол (версия 1)
+## Wire-протокол (версия 2)
 
 | Метод | Путь | Назначение | Авторизация |
 |---|---|---|---|
 | `POST` | `/exec` | выполнить команду | bearer-токен |
 | `GET` | `/capabilities` | версия протокола и состав toolchain'а (базовый словарь core + допсведения) | bearer-токен |
+| `GET` | `/mcp/servers` | состояние MCP-серверов исполнителя (`idle`/`up`/`down` + причина) | bearer-токен |
+| `GET` | `/mcp/tools` | инструменты поднятых MCP-серверов (ленивый старт) | bearer-токен |
+| `POST` | `/mcp/call` | вызов инструмента MCP-сервера | bearer-токен |
 | `GET` | `/health` | liveness исполнителя | без токена |
 
 - Запрос: `{ command: ExecCommand, cwd?, env?, timeoutMs?, maxOutputBytes? }`.
@@ -57,14 +60,20 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
 - Ошибка — тело `{ error: { reason, code, message, stdout, stderr, killed,
   signal, truncated, durationMs } }` — зеркало `ExecutionError` из core.
 - Коды ответа — по классу ошибки: `400` — некорректный запрос или `cwd` вне
-  workspace; `401` — нет/неверный токен; `429` — превышен лимит одновременных
-  команд; `500` — прочие ошибки исполнения (включая ненулевой код выхода).
+  workspace; `401` — нет/неверный токен; `404` — неизвестный MCP-сервер или
+  инструмент; `429` — превышен лимит одновременных команд; `500` — прочие
+  ошибки исполнения (включая ненулевой код выхода).
 - `reason` на проводе: либо причина порта (`timeout` | `aborted` |
   `spawn_failed` | `nonzero_exit` | `max_output`), либо протокольная
-  (`invalid_request` | `cwd_outside_workspace` | `unauthorized` |
+  (`invalid_request` | `cwd_outside_workspace` | `unauthorized` | `not_found` |
   `too_many_requests` | `internal_error`). Клиент переносит причину порта как
   есть, протокольную — в `reason: 'spawn_failed'` с различающим `code`
   (`EWORKSPACE`/`EAUTH`/`ELIMIT`/`EINVAL`).
+
+**Версия протокола — контракт совместимости.** `EXECUTOR_PROTOCOL_VERSION = 2`
+(в 1 не было `/mcp/*`): control plane и пул исполнителей обновляются **вместе**
+(то же правило, что для инвентаря пула, шаг A). Старый исполнитель MCP-маршрутов
+не знает, новый control plane получил бы `404`.
 
 ## Клиент удалённого порта
 
@@ -120,6 +129,53 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
   `TOOL_RUNTIME_DEP` (`toolRuntimeRequires()`). Клиент своего словаря не
   заводит.
 
+### MCP-хостинг (ADR-077, шаг B1)
+
+Исполнитель **поднимает MCP-серверы у себя** (stdio, `@modelcontextprotocol/sdk`
++ `StdioClientTransport` — тот же клиент, что в core) и отдаёт их инструменты и
+вызовы по HTTP. Зачем: в split-топологии control plane тонкий (в образе
+`synth-backend` нет Chromium и tier-4 серверов), а браузерные/SCM-инструменты
+живут в toolchain'е исполнителя.
+
+- **Конфигурация — env** `SYNTH_EXECUTOR_MCP_SERVERS`: JSON-массив
+  `[{"name","command","args","env"}]`. Разбор **строгий** (невалидный JSON или
+  запись → ошибка старта, fail-closed). **Пустая строка — «серверов нет»**, а не
+  ошибка: так отключается дефолт образа. `env` сервера может содержать токены —
+  они не логируются и не отдаются в ответах (только `name`/`status`/`toolCount`/
+  `error`), вычищаются из текстов ошибок (`redactSecrets` по значениям `env`), а
+  сама переменная удаляется из `process.env` после разбора
+  (`scrubExecutorMcpServers`).
+- **Лимиты — как в core:** connect 60 c, вызов инструмента 120 c, усечение
+  результата 30 000 символов, circuit breaker 5 ошибок → cooldown 60 c.
+- **Жизненный цикл — ленивый:** сервер поднимается при первом обращении
+  (`/mcp/tools` — все, `/mcp/call` — нужный); до этого `status: "idle"`.
+  Статусы: `idle` (не поднимался) / `up` (работает) / `down` (не поднялся —
+  причина в `error`; в т.ч. после неудачного спавна). Упавший сервер
+  **переподнимается** следующим обращением (circuit breaker прикрывает частые
+  попытки). `close()` исполнителя закрывает MCP-серверы — дочерние процессы
+  (включая Chromium) не остаются.
+- **Playwright MCP — фактические условия (проверено в контейнере):**
+  - `playwright-mcp` по умолчанию ищет **Google Chrome**
+    (`/opt/google/chrome/chrome`), которого в образе нет ⇒ обязателен
+    `--executable-path`.
+  - Флага `--browser chromium` **не существует** (`--browser` =
+    `chrome|firefox|webkit|msedge`).
+  - Рабочие аргументы: `--headless --no-sandbox --executable-path
+    /opt/synth/browser/chrome`. `--no-sandbox` нужен, потому что контейнер по
+    умолчанию под root (uid 0); `--headless` — дисплея нет.
+  - `/opt/synth/browser/chrome` — **стабильный симлинк** на фактический
+    `chromium-<ревизия>/chrome-linux64/chrome` (создаёт
+    `docker/install-tier-3.sh` резолвом по glob; версия ревизии меняется вместе
+    с пином Playwright, хардкодить нельзя). Там же `headless-shell` при наличии.
+  - Дефолт `ENV SYNTH_EXECUTOR_MCP_SERVERS` задан **только** во flavor'ах с
+    браузером (`browser`/`full`, `docker/Dockerfile.executor`); в
+    `core`/`dev`/`devops` его нет.
+  - Версия браузера в образе — Google Chrome for Testing 155.x (ревизия
+    `chromium-1247`), путь `chrome-linux64` (не `chrome-linux`).
+- **Зависимости пакета:** `@modelcontextprotocol/sdk` и `zod` — **те же версии,
+  что в core** (`^1.32.1` / `^3.24.0`): иначе handshake и разбор результатов
+  разойдутся. Своего MCP-клиента пакет не пишет.
+
 ### Состав toolchain'а исполнителя
 
 - **Базовый словарь — из core:** `EXECUTION_BASE_CAPABILITIES` (`git`/`rg`/`sh`)
@@ -168,6 +224,7 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
 | `SYNTH_EXECUTOR_MAX_CONCURRENCY` | нет | `4` | лимит одновременных команд |
 | `SYNTH_EXECUTOR_MAX_TIMEOUT_MS` | нет | `120000` | потолок таймаута команды |
 | `SYNTH_EXECUTOR_MAX_OUTPUT_BYTES` | нет | `10485760` | потолок буфера вывода |
+| `SYNTH_EXECUTOR_MCP_SERVERS` | нет | `[]` | MCP-серверы, которые хостит исполнитель: JSON-массив `{name,command,args,env}`; fail-closed на невалидном, `''` = серверов нет (отключает дефолт образа; у flavor'ов с браузером дефолт — Playwright MCP) |
 
 Без токена или без корня workspace процесс **не стартует** (fail-closed);
 невалидные числа — тоже ошибка (явная настройка оператора не должна молча
@@ -192,7 +249,15 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
     недоступен → `EUNREACHABLE`, сводка пула (`missing`/`total`/`unreachable`);
   - `toolchain.test.ts` — состав toolchain'а: базовый словарь core + допсведения,
     различение `ENOENT` и «есть, но не поддержал `--version`»;
-  - `config.test.ts` — fail-closed разбор env.
+  - `mcp.test.ts` — MCP-хостинг: ленивый старт (реальный stdio-сервер на SDK —
+    фикстура `test-fixtures/mcp-stdio-server.mjs`), `idle`→`up`, `down` с
+    причиной, переподнятие, circuit breaker, таймауты, усечение, `redactSecrets`,
+    `close()` завершает дочерний процесс;
+  - `mcp-routes.test.ts` — `/mcp/servers|tools|call` под bearer: 401, 404
+    (`not_found`), 400, `down` после неудачного спавна (ENOENT), секреты не
+    попадают в ответ;
+  - `config.test.ts` — fail-closed разбор env (в т.ч. `SYNTH_EXECUTOR_MCP_SERVERS`:
+    строгий JSON, `''` = пустой список).
 
   **Контрактного набора проверок в пакете нет** — источник истины один: контрактный
   suite порта живёт в core (`packages/core/src/execution/contract/execution.ts`), прогон

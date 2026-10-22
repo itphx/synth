@@ -9,9 +9,9 @@
  *
  * 1. конфигурация из env (`resolveExecutorConfig`) — **fail-closed**: без
  *    токена или без корня workspace процесс не стартует;
- * 2. токен удаляется из `process.env` (`scrubExecutorToken`) — иначе он попал бы
- *    в окружение дочерних процессов и утек в текст команды, который видит
- *    модель;
+ * 2. токен удаляется из `process.env` (`scrubExecutorToken`), как и описание
+ *    MCP-серверов (`scrubExecutorMcpServers`) — иначе они попали бы в
+ *    окружение дочерних процессов и в текст команды, который видит модель;
  * 3. поднимается HTTP-сервер (`startExecutorServer`), в лог уходят адрес и
  *    порт (токен — никогда);
  * 4. graceful shutdown по `SIGINT`/`SIGTERM`: сервер закрывается, процесс
@@ -21,7 +21,11 @@
  */
 
 import { pathToFileURL } from 'node:url';
-import { resolveExecutorConfig, scrubExecutorToken } from './config.js';
+import {
+  resolveExecutorConfig,
+  scrubExecutorMcpServers,
+  scrubExecutorToken,
+} from './config.js';
 import { startExecutorServer } from './server.js';
 
 /** Код выхода при штатном завершении. */
@@ -39,6 +43,9 @@ export async function main(): Promise<void> {
   const config = resolveExecutorConfig();
   // Токен больше не нужен в окружении процесса — убираем (см. модуль config).
   scrubExecutorToken();
+  // Описание MCP-серверов (в нём могут быть токены) — тоже убираем: агентская
+  // команда не должна видеть секреты других MCP-серверов.
+  scrubExecutorMcpServers();
 
   const handle = await startExecutorServer({
     token: config.token,
@@ -46,6 +53,7 @@ export async function main(): Promise<void> {
     maxConcurrency: config.maxConcurrency,
     maxTimeoutMs: config.maxTimeoutMs,
     maxOutputBytes: config.maxOutputBytes,
+    mcpServers: config.mcpServers,
     host: config.host,
     port: config.port,
   });
@@ -53,7 +61,8 @@ export async function main(): Promise<void> {
   console.log(
     `[executor] исполнитель слушает ${handle.host}:${handle.port} ` +
       `(workspace: ${config.workspaceRoot}; лимит команд: ${config.maxConcurrency}; ` +
-      `потолок таймаута: ${config.maxTimeoutMs} мс; потолок вывода: ${config.maxOutputBytes} байт)`,
+      `потолок таймаута: ${config.maxTimeoutMs} мс; потолок вывода: ${config.maxOutputBytes} байт; ` +
+      `MCP-серверов: ${config.mcpServers.length})`,
   );
 
   let stopping = false;
