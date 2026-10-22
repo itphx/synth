@@ -34,6 +34,8 @@ export { MemoryScheduleRepository, MemoryJobRepository } from './scheduler.js';
 export { MemoryMaintenanceAuditRepository } from './audit.js';
 // PROP-090 §9: журнал аудита плагинов (отдельный порт, не security-аудит).
 export { MemoryPluginAuditRepository } from './plugin-audit.js';
+// PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов.
+export { MemoryPluginLockRepository } from './plugin-lock.js';
 export { MemorySecurityAuditRepository, MemoryEgressRequestLogRepository } from './security-audit.js';
 export { MemoryAnalyticsRollupRepository } from './analytics-rollup.js';
 

@@ -57,6 +57,9 @@ export type {
   PluginAuditRepository,
   PluginAuditListOptions,
 } from './plugin-audit-repository.js';
+// PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов (источник истины для
+// update/uninstall).
+export type { PluginLockRepository } from './plugin-lock-repository.js';
 export type {
   SecurityAuditRepository,
   SecurityAuditListOptions,

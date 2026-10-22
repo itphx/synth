@@ -62,6 +62,13 @@ export * from './semver.js';
 // PROP-090 §9: журнал аудита плагинов — отдельный тип и отдельный scope
 // (не расширение `SECURITY_AUDIT_SCOPES` — семантика «событие расширения»).
 export * from './plugin-audit.js';
+// PROP-068 §4.2/§4.3 + PROP-090 §9: контракты сканера расширений (категории,
+// severity→verdict, квоты), матрица install-policy и запись lock-файла.
+export * from './plugin-scan.js';
+// PROP-068 §4.4 / PROP-090 §5: запись lock-файла плагинов (`plugins.lock.json`).
+export * from './plugin-lock.js';
+// PROP-090 §5: runtime-override плагинов (`plugins.json`).
+export * from './plugin-runtime.js';
 // PROP-068 §3/§12: контракт индекса каталога расширений (format: 1) — типы, zod-схемы, tolerant-парсер
 export * from './catalog.js';
 // ADR-051/ADR-100: контракт пайплайна (определение, шаг, экземпляр)

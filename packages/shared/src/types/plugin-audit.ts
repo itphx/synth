@@ -15,8 +15,14 @@
 import type { PackPluginMode } from './pack.js';
 import type { CatalogTrustLevel } from './trust.js';
 
-/** Виды операций журнала плагинов (PROP-090 §9). */
-export const PLUGIN_AUDIT_ACTIONS = ['activate', 'deactivate'] as const;
+/**
+ * Виды операций журнала плагинов (PROP-090 §9).
+ *
+ * Ф1 реализовал `activate`/`deactivate`; Ф2 добавил `scan` (сканер и
+ * install-policy — вердикт и число находок пишутся отдельной записью, чтобы по
+ * журналу было видно, **чем** решена активация).
+ */
+export const PLUGIN_AUDIT_ACTIONS = ['activate', 'deactivate', 'scan'] as const;
 export type PluginAuditAction = (typeof PLUGIN_AUDIT_ACTIONS)[number];
 
 /**
@@ -59,6 +65,12 @@ export const PLUGIN_AUDIT_REASONS = [
   'plugin.trust_below_floor',
   /** Сканер/политика установки отклонили плагин (Ф2). */
   'plugin.scan_rejected',
+  /**
+   * Вердикт сканера `caution` — требуется **явное подтверждение** владельца
+   * (install-policy: `ask`, Ф2). Это не блокировка: активация прерывается с
+   * требованием подтверждения, а не запрещается.
+   */
+  'plugin.approval_required',
   /** Слой плагинов выключен мастер-выключателем (`plugins.enabled=false`). */
   'plugin.disabled',
   /** Плагин не входит в `plugins.allowlist` (список задан — разрешены только перечисленные). */
@@ -107,6 +119,16 @@ export interface PluginAuditEntry {
   trustLevel?: CatalogTrustLevel;
   /** Вердикт статического сканера (Ф2+). */
   scanVerdict?: PluginScanVerdict;
+  /**
+   * Число находок сканера (Ф2). Заполняется в записях действия `scan`.
+   */
+  scanFindings?: number;
+  /**
+   * Выполнялся ли скан (Ф2). `false` — скан **выключен политикой**
+   * (`plugins.scan: 'disabled'`) или сканировать было нечего; вердикт в этом
+   * случае по умолчанию `safe`, но по журналу видно, что скана не было.
+   */
+  scanPerformed?: boolean;
   /** Content-hash бандла (sha256 от отсортированного набора файлов). */
   contentHash?: string;
   /** Режим исполнения, объявленный манифестом (`inline`/`remote`/`both`). */

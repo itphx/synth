@@ -37,6 +37,48 @@ export type {
   PluginScanResult,
   PluginIntegrityVerdict,
 } from './engine/plugins/index.js';
+// PROP-068 §4.3 / PROP-090 §9 (Ф2): статический сканер расширений — правила,
+// квоты, `.skillignore`, кэш сканов и дефолтный хук скана.
+export {
+  BINARY_EXTENSIONS,
+  EXECUTABLE_EXTENSIONS,
+  INVISIBLE_UNICODE_PATTERNS,
+  PLUGIN_IGNORE_FILE,
+  PLUGIN_SCAN_RULES,
+  PluginScanCache,
+  createPluginScanHook,
+  isBinaryContent,
+  isExecutableFile,
+  isIgnored,
+  parseIgnorePatterns,
+  scanPluginDirectory,
+  scanPluginFiles,
+} from './engine/plugins/scan/index.js';
+export type {
+  IgnorePattern,
+  PluginScanEntry,
+  PluginScanHookOptions,
+  PluginScanOptions,
+  PluginScanReport,
+  ScanRule,
+  ScanRuleContext,
+} from './engine/plugins/scan/index.js';
+// PROP-090 §5 (Ф2): раскладка слоя плагинов на диске + карантин.
+export {
+  ensurePluginLayout,
+  pluginBundleDirName,
+  pluginInstalledDir,
+  pluginQuarantineDir,
+  releaseFromQuarantine,
+  resolvePluginLayout,
+  stagePluginBundle,
+} from './engine/plugins/layout.js';
+export type {
+  PluginBundleStageInput,
+  PluginBundleStageResult,
+  PluginIntegrityFile,
+  PluginLayout,
+} from './engine/plugins/layout.js';
 export { QueueProcessor, QueueProcessorManager, enqueueUserMessage } from './queue/processor.js';
 export type { ProcessMessageFn } from './queue/processor.js';
 
@@ -273,6 +315,8 @@ export type {
   // PROP-090 §9: журнал аудита плагинов (отдельный порт, не security-аудит).
   PluginAuditRepository,
   PluginAuditListOptions,
+  // PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов (`plugins.lock.json`).
+  PluginLockRepository,
   SecurityAuditRepository,
   SecurityAuditListOptions,
   EgressRequestLogRepository,
@@ -336,6 +380,7 @@ export {
   MemoryJobRepository,
   MemoryMaintenanceAuditRepository,
   MemoryPluginAuditRepository,
+  MemoryPluginLockRepository,
   MemorySecurityAuditRepository,
   MemoryEgressRequestLogRepository,
   MemoryAnalyticsRollupRepository,
@@ -675,6 +720,9 @@ export type { MaintenanceAuditStoreConfig } from './storage/maintenance-audit-st
 // PROP-090 §9: журнал аудита плагинов (append-only JSONL `audit/plugins.jsonl`).
 export { FilePluginAuditStore } from './storage/file-plugin-audit-store.js';
 export type { FilePluginAuditStoreConfig } from './storage/file-plugin-audit-store.js';
+// PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов (`plugins.lock.json`).
+export { FilePluginLockStore, defaultPluginLockPath } from './storage/file-plugin-lock-store.js';
+export type { FilePluginLockStoreConfig } from './storage/file-plugin-lock-store.js';
 // Egress: аудит изменений security-политик и журнал внешних запросов.
 export { SecurityAuditStore } from './storage/security-audit-store.js';
 export type { SecurityAuditStoreConfig } from './storage/security-audit-store.js';

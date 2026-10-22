@@ -14,6 +14,12 @@
 > (каталогом управляем мы: PR-ревью + CI), заявленный в манифесте уровень — только верхняя граница и выше
 > записи не поднимает; (3) в будущем — **локальные каталоги у заказчиков**, где доверенным для **их** инстанса
 > считается **их** каталог (**per-instance trust**), а не наш. Уточнение в §4.1.
+>
+> **Обновлено:** 2026-10-22 (Ф2) — **модель доверия §4.2–§4.4 реализована в коде** для класса Plugin
+> ([PROP-090](./prop-090-extension-api.md) §«Статус реализации в коде (Ф2)»): матрица install-policy, матрица
+> `severity → verdict`, квоты и формат lock-файла/карантина — одной функцией/одним набором типов в
+> `@itphx/synth-shared` и в `packages/core/src/engine/plugins/*`. Этот документ остаётся **каноном значений**
+> (таблицы ниже не дублируются в коде), реализация — в PROP-090; пометки о реализации — в §4.2, §4.3, §4.4.
 
 **Решение:** построить **реестр скиллов и агентов** как отдельную контент-платформу:
 свой git-репозиторий с категоризированным каталогом (`skills/<category>/<name>/SKILL.md`)
@@ -307,6 +313,13 @@ Trust резолвится по источнику и по репозитори�
 жёсткого блока используется `ask` — агент получает ошибку с причиной и может
 перегенерировать контент без опасных конструкций.
 
+> **Реализовано (Ф2, 2026-10-22).** Матрица — **одна функция** `installPolicyDecision({ trust, verdict, kind })`
+> (`packages/shared/src/types/plugin-scan.ts`); таблица выше — канон, в коде она **не дублируется** числами.
+> Ячейка `kind: 'plugin'` — **новая** (класс Plugin, [PROP-090](./prop-090-extension-api.md) §9):
+> `safe → allow`, `caution → ask`, `dangerous → block` — блокирующий вердикт для плагина — `dangerous`,
+> а `caution` требует подтверждения владельца. Порядок проверок в загрузчике: **trust-floor до
+> install-policy**. Подробности — [PROP-090](./prop-090-extension-api.md) §«Статус реализации в коде (Ф2)».
+
 ### 4.3. Сканер безопасности (advisory)
 
 Статический regex-сканер по всем файлам скилла. Категории: `exfiltration`,
@@ -342,6 +355,18 @@ Trust резолвится по источнику и по репозитори�
 - **Advisory-этап не блокирует публикацию/установку сам по себе** — блокирует только
   матрица install-policy. Сканер лишь выносит вердикт.
 
+> **Реализовано (Ф2, 2026-10-22).** Сканер плагинов — встроенный
+> (`packages/core/src/engine/plugins/scan/*`): таблица правил по 7 категориям
+> (6 базовых + `invisible_unicode`), квоты (`PLUGIN_SCAN_QUOTAS` + `PLUGIN_SCAN_QUOTA_SEVERITIES` —
+> какой severity даёт нарушение), границы `severity → verdict` (`PLUGIN_SCAN_SEVERITY_VERDICTS`,
+> `severityToVerdict`, `verdictFromFindings` — вердикт = **максимум** severity), словарный детектор
+> prompt-injection — **тот же**, что и в ADR-069 (свой словарь не заводится), формат `.skillignore`
+> (упрощённый `.gitignore`, «последнее совпадение выигрывает») и кэш сканов — по ключу
+> `sha256(source \0 sourceUrl \0 contentHash)` (**in-process**, FIFO, 100 записей). Значения квот и
+> границы `severity → verdict` — **канон этого §4.3**; код их не дублирует числами, а ссылается сюда.
+> Формат lock-записи и раскладки карантина — §4.4; детали — [PROP-090](./prop-090-extension-api.md)
+> §«Статус реализации в коде (Ф2)».
+
 ### 4.4. Провенанс
 
 - **`lock.json`** (`{dataDir}/skills/lock.json`): запись на установленный скилл —
@@ -357,6 +382,15 @@ Trust резолвится по источнику и по репозитори�
 - **Pin:** в lock пишется `ref` (commit SHA/тег) + `content_hash`. Update — только
   явная операция; автоматического «взять latest» нет. Откат — по сохранённому
   `content_hash`/предыдущей записи.
+
+> **Реализовано (Ф2, 2026-10-22) — класс Plugin.** Формат lock-записи плагина:
+> `{ name, version, source, identifier, trust_level, scan_verdict, content_hash, ref, entry, installed_at,
+> updated_at }` (snake_case, `PluginLockEntry` в `@itphx/synth-shared`); ключ записи — **имя плагина**
+> (upsert, `installed_at` иммутабельно). Раскладка — `<home>/plugin/` (без home — `{dataDir}/plugin/`):
+> `installed/<name>@<version>/` + `PLUGIN_INTEGRITY.json`, `quarantine/` (при `ask`/`block` бандл в
+> `installed/` **не попадает**), `plugins.lock.json`, `plugins.json` (runtime-override). Хранилище — порт
+> `PluginLockRepository` ([ADR-096](./adr-096-storage-layer.md): файл/память/PostgreSQL + контрактный suite).
+> Детали — [PROP-090](./prop-090-extension-api.md) §«Статус реализации в коде (Ф2)».
 
 ### 4.5. Безопасность установки
 

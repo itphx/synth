@@ -581,14 +581,45 @@
   исключений семвер-гейта: **одна полная semver-версия host в строке**, `#` — комментарий,
   не-semver строка пропускается с предупреждением, недоступный файл → исключений нет
   (fail-closed)), `index.ts` — баррел. **Коды отказа** (`PLUGIN_AUDIT_REASONS`,
-  `shared/src/types/plugin-audit.ts`): `plugin.not_found`/`plugin.manifest_invalid` (resolve),
+  `shared/src/types/plugin-audit.ts`, всего 19): `plugin.not_found`/`plugin.manifest_invalid` (resolve),
   `plugin.integrity_mismatch`/`plugin.integrity_unverifiable` (integrity),
   `plugin.contract_mismatch`/`plugin.host_mismatch` (semver), `plugin.trust_below_floor`/
-  `plugin.scan_rejected` (trust), `plugin.disabled`/`plugin.not_allowlisted`/`plugin.denylisted`/
-  `plugin.runtime_install_denied` (policy), `plugin.execution_disabled`/
-  `plugin.loader_unavailable` (import/facade), `plugin.already_active`, `plugin.not_active`,
-  `plugin.disposer_failed`. Seam'ы под Ф2–Ф4: `PluginScanHook` (Ф2), `PluginLoader` (Ф3/Ф4),
-  `PluginFacade` (Ф3 — в Ф1 только сбор disposer'ов).
+  `plugin.scan_rejected`/`plugin.approval_required` (trust/scan), `plugin.disabled`/
+  `plugin.not_allowlisted`/`plugin.denylisted`/`plugin.runtime_install_denied` (policy),
+  `plugin.execution_disabled`/`plugin.loader_unavailable` (import/facade), `plugin.already_active`,
+  `plugin.not_active`, `plugin.disposer_failed`. Seam'ы: `PluginScanHook` (**Ф2 — закрыт**,
+  дефолтная реализация встроенная), `PluginLoader` (Ф3/Ф4 — реализации нет), `PluginFacade`
+  (Ф3 — пока только сбор disposer'ов).
+- `engine/plugins/scan/*` — PROP-090 §9 / PROP-068 §4.3: встроенный статический сканер расширений
+  (**advisory**: код не исполняется, сканер лишь выносит вердикт; блокирует матрица install-policy).
+  Файлы: `rules.ts` (таблица правил `PLUGIN_SCAN_RULES` по 7 категориям — 6 базовых + `invisible_unicode`;
+  `INVISIBLE_UNICODE_PATTERNS` — zero-width/bidi/unicode-tag/soft-hyphen), `scanner.ts`
+  (`scanPluginFiles`/`scanPluginDirectory`; бинарники по расширению и по NUL-признаку; исполняемый
+  файл → `high`, обычный бинарник → `info`; квоты; словарный детектор IPI — **существующий**
+  `engine/security/prompt-injection.ts`, свой словарь не заводится; content-hash — **та же** функция
+  `computePluginContentHash`, что и в шаге integrity), `ignore.ts` (`.skillignore` в стиле gitignore:
+  `#` — комментарий, `!` — отрицание, `/` — только в корне, `*`/`?`/`**`, «последнее совпадение
+  выигрывает»), `cache.ts` (`PluginScanCache`, ключ `sha256(source\0sourceUrl\0contentHash)`,
+  **in-process**, FIFO 100 записей), `hook.ts` (`createPluginScanHook` — дефолтная реализация seam'а
+  `PluginScanHook`), `index.ts` — баррел. **Квоты** (`PLUGIN_SCAN_QUOTAS` + `PLUGIN_SCAN_QUOTA_SEVERITIES`,
+  `shared/src/types/plugin-scan.ts`): 50 файлов / 1024 КиБ суммарно → `medium` (вердикт не выше `caution`),
+  256 КиБ на файл → `high` (`dangerous`).
+- `engine/plugins/layout.ts` — PROP-090 §5: раскладка слоя плагинов на диске. `resolvePluginLayout`
+  (приоритет корня: явный home > env `SYNTH_HOME` > `{dataDir}/plugin` — ADR-079) →
+  `<home>/plugin/{installed,quarantine,plugins.lock.json,plugins.json}`; `pluginInstalledDir`/
+  `pluginQuarantineDir` (`<name>@<version>`); `stagePluginBundle` (решение install-policy: `allow` →
+  в `installed/` + `PLUGIN_INTEGRITY.json`; `ask`/`block` → остаётся в `quarantine/`, в `installed/`
+  **не попадает**); `releaseFromQuarantine` (перенос из карантина после подтверждения владельца).
+- **Шаг trust/scan в `PluginHost` (Ф2).** Порядок: **trust-floor → скан → install-policy**.
+  Trust-floor проверяется **до** install-policy (`plugins.trustFloor`; ниже порога — отказ
+  `plugin.trust_below_floor` **при любом вердикте**). Скан — встроенный или подключённый хук
+  (`PluginScanHook`): вердикт `dangerous` → `plugin.scan_rejected` (блок), `caution` →
+  `plugin.approval_required` (**ask**, не блок) — по ячейке `kind: 'plugin'` матрицы install-policy
+  (`installPolicyDecision`, `shared/src/types/plugin-scan.ts`). Сбой сканера — **fail-closed**
+  (`plugin.scan_rejected`). При `plugins.scan: 'disabled'` сканирование **не выполняется**, вердикт
+  `safe`, в аудите — `scanPerformed: false`; доверие при этом всё равно проверяется по trust-floor.
+  **Аудит:** действие `scan` (плюс `activate`/`deactivate`) — `PLUGIN_AUDIT_ACTIONS`; запись получила
+  поля `scanVerdict?`/`scanPerformed?`/`scanFindings?`.
 - `engine/pipelines/*` — ADR-101: **второй движок** рядом с `ChatOrchestrator`
   (шаг пайплайна ≠ сессия; движок сам по себе не знает про HTTP/сессии/очередь).
   `engine.ts` — `PipelineEngine`: цикл прогона по опубликованной версии спецификации,
@@ -705,7 +736,7 @@
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`). ADR-099: доверие CA для
   git-over-https — `simpleGit({ config: ['http.sslCAInfo=<path>'] })` из
   `gitCaConfig()` (путь берётся из уже инициализированного `initTlsTrust`).
-- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (37 — 35 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
+- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (38 — 36 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
   запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/
@@ -734,7 +765,7 @@
   в `optionalDependencies` core и подключается динамическим `import()` по `storage.backend === 'postgres'`
   (`pg` — optional у драйвера, core его рантаймом не тянет); драйвер применяет/проверяет схему и
   **удерживает соединение в `StorageContext`** — `close?()` закрывает пул, ресурсы освобождает домен;
-  **все порты реализованы** (по группам `src/ports/*`: `sessions`/`principals`/`events`/`content`/`audit`/`analytics`/`pipelines`),
+  **все порты реализованы** (по группам `src/ports/*`: `sessions`/`principals`/`events`/`content`/`audit`/`analytics`/`pipelines`/`plugins`),
   координация — `StorageContext.locks` (`PgMutex`/`PgLeader`, scheduler `leaderElection: postgres`).
   **Деградированный режим** (ADR-098): недоступность БД → файловый фоллбек строго read-only
   (`createStorageContextAsync` публикует состояние в `engine/permission/storage-state.ts`), HTTP-guard и
@@ -798,6 +829,15 @@
   (таблица `plugin_audit`, миграция `006-plugin-audit.ts`); контрактный suite —
   `storage/contract/plugin-audit-repository.contract.ts` (file/memory/PG; прогон на живой БД —
   `storage/contract/postgres.test.ts`); подключение — `StorageContext.pluginAudit`;
+  `FilePluginLockStore` (`storage/file-plugin-lock-store.ts`, порт `PluginLockRepository`,
+  PROP-068 §4.4 / PROP-090 §5 — lock-файл плагинов `plugins.lock.json`, **источник истины** для
+  update/uninstall; путь задаёт раскладка `<home>/plugin/` или `{dataDir}/plugin/` — опция
+  `pluginLockPath`; ключ записи — имя плагина, `installed_at` иммутабельно; атомарная запись
+  tmp→rename), `MemoryPluginLockRepository` (`storage/memory/plugin-lock.ts`), PostgreSQL —
+  `packages/storage-postgres/src/ports/plugin-lock.ts` (таблица `plugin_lock`, миграция
+  `007-plugin-lock.ts`); контрактный suite —
+  `storage/contract/plugin-lock-repository.contract.ts` (file/memory/PG; прогон на живой БД —
+  `storage/contract/postgres.test.ts`); подключение — `StorageContext.pluginLock`;
   `migrations.ts` — идемпотентная разовая миграция снапшотов
   `mcpDefaultOn`/`skillsDefaultOn` (маркер `session-scope-snapshots-v1`).
 - `sessions/ephemeral.ts` — ephemeral TTL (ADR-089): `parseTtl`

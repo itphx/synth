@@ -28,3 +28,45 @@ export { computePluginContentHash, verifyPluginIntegrity } from './integrity.js'
 export type { PluginIntegrityVerdict } from './integrity.js';
 
 export { readExactHostExceptions } from './exact-host-exceptions.js';
+
+// Ф2 — модель доверия: статический сканер, install-policy, раскладка и lock.
+export {
+  BINARY_EXTENSIONS,
+  EXECUTABLE_EXTENSIONS,
+  INVISIBLE_UNICODE_PATTERNS,
+  PLUGIN_IGNORE_FILE,
+  PLUGIN_SCAN_RULES,
+  PluginScanCache,
+  createPluginScanHook,
+  isBinaryContent,
+  isExecutableFile,
+  isIgnored,
+  parseIgnorePatterns,
+  scanPluginDirectory,
+  scanPluginFiles,
+} from './scan/index.js';
+export type {
+  IgnorePattern,
+  PluginScanEntry,
+  PluginScanHookOptions,
+  PluginScanOptions,
+  PluginScanReport,
+  ScanRule,
+  ScanRuleContext,
+} from './scan/index.js';
+
+export {
+  ensurePluginLayout,
+  pluginBundleDirName,
+  pluginInstalledDir,
+  pluginQuarantineDir,
+  releaseFromQuarantine,
+  resolvePluginLayout,
+  stagePluginBundle,
+} from './layout.js';
+export type {
+  PluginBundleStageInput,
+  PluginBundleStageResult,
+  PluginIntegrityFile,
+  PluginLayout,
+} from './layout.js';

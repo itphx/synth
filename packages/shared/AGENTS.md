@@ -189,12 +189,31 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `catalog → pack`).
 - PROP-090 §9: **журнал аудита плагинов** — `types/plugin-audit.ts` (re-export из `types`):
   `PluginAuditEntry` (`id` `pa_<uuid>`/`ts`/`actor`/`scope: 'plugin'`/`action`/`plugin`/`version`/
-  `trustLevel?`/`scanVerdict?`/`contentHash?`/`mode?`/`outcome`/`reason?`/`source?`) и перечни
-  `PLUGIN_AUDIT_ACTIONS` (`activate`/`deactivate`), `PLUGIN_AUDIT_OUTCOMES` (`ok`/`rejected`),
-  `PLUGIN_SCAN_VERDICTS` (`safe`/`caution`/`dangerous`), `PLUGIN_AUDIT_REASONS` — **закрытый** список
-  17 кодов отказа (по одному на гейт пайплайна активации; источник истины — `PluginHost`,
-  `packages/core/src/engine/plugins/plugin-host.ts`). Журнал **отдельный**: `SECURITY_AUDIT_SCOPES`
-  (семантика «изменение политики») не расширяется; секреты в журнал не пишутся (инвариант 13).
+  `trustLevel?`/`scanVerdict?`/`scanFindings?`/`scanPerformed?`/`contentHash?`/`mode?`/`outcome`/
+  `reason?`/`source?`) и перечни `PLUGIN_AUDIT_ACTIONS` (`activate`/`deactivate`/`scan`),
+  `PLUGIN_AUDIT_OUTCOMES` (`ok`/`rejected`), `PLUGIN_SCAN_VERDICTS` (`safe`/`caution`/`dangerous`),
+  `PLUGIN_AUDIT_REASONS` — **закрытый** список **19** кодов отказа (по одному на гейт пайплайна
+  активации; Ф2 добавил `plugin.scan_rejected` и `plugin.approval_required`; источник истины —
+  `PluginHost`, `packages/core/src/engine/plugins/plugin-host.ts`). Журнал **отдельный**:
+  `SECURITY_AUDIT_SCOPES` (семантика «изменение политики») не расширяется; секреты в журнал не
+  пишутся (инвариант 13).
+- PROP-068 §4.2–§4.4 / PROP-090 §5, §9: **контракты сканера и lock-файла плагинов** —
+  `types/plugin-scan.ts` (browser-safe: только типы и чистые функции, без `zod` — модуль используется
+  и в UI, и в ядре): `PLUGIN_SCAN_CATEGORIES` (6 базовых + `invisible_unicode`), `PLUGIN_SCAN_SEVERITIES`
+  (`info`/`low`/`medium`/`high`/`critical`), `PluginScanFinding` (`category`/`severity`/`file`/`line`/
+  `description`), границы `severity → verdict` (`PLUGIN_SCAN_SEVERITY_VERDICTS`, `severityToVerdict`,
+  `verdictFromFindings` — вердикт = **максимум** severity), квоты (`PLUGIN_SCAN_QUOTAS` —
+  50 файлов / 1024 КиБ суммарно / 256 КиБ на файл; `PluginScanQuotas`/`DEFAULT_PLUGIN_SCAN_QUOTAS`) и
+  `PLUGIN_SCAN_QUOTA_SEVERITIES` (**какой severity даёт нарушение квоты**: `fileCount`/`totalSize` →
+  `medium`, `singleFile` → `high`), матрица install-policy **одной функцией**
+  `installPolicyDecision({trust, verdict, kind})` (`INSTALL_POLICY_ACTIONS`, `INSTALL_POLICY_TRUST_LEVELS`,
+  `InstallPolicyKind` = `content`|`plugin`; ячейка `kind: 'plugin'`: `safe→allow`, `caution→ask`,
+  `dangerous→block`); `types/plugin-lock.ts` — `PluginLockEntry` (snake_case: `name`, `version`,
+  `source`, `identifier?`, `trust_level`, `scan_verdict`, `content_hash`, `ref?`, `entry?`,
+  `installed_at`, `updated_at`) и `PluginLockFile` (формат `plugins.lock.json`); `types/plugin-runtime.ts` —
+  `PluginRuntimeOverride`/`PluginSettingsFile`/`PLUGIN_SETTINGS_FILE_VERSION` (формат `plugins.json`).
+  **Канон значений** (границы `severity → verdict`, квоты, матрица install-policy) — PROP-068 §4.2–§4.3;
+  при изменении — правка обоих документов.
 - ADR-084: типы decision-моделей — `DecisionQuestion`/`DecisionAnswer` (варианты `noul`/`choice`/`score`),
   `DecisionRequest`/`DecisionResponse`/`DecisionUsage` и медиа-контракт `DecisionMediaInput`
   (`images?`/`videos?`, задел PROP-085) (`types/decision.ts`); Zod

@@ -44,6 +44,7 @@ import { buildAnalyticsPorts } from './ports/analytics.js';
 import type { CoreSyncDeps, PortDeps } from './ports/deps.js';
 import { buildEventPorts } from './ports/events.js';
 import { buildPipelinePorts } from './ports/pipelines.js';
+import { buildPluginLockPorts } from './ports/plugin-lock.js';
 import { buildPrincipalPorts } from './ports/principals.js';
 import { buildSessionPorts } from './ports/sessions.js';
 import { createPostgresLocks } from './locks.js';
@@ -157,6 +158,9 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // (`pipeline_specs`/`pipeline_versions`/`pipeline_runs`/`pipeline_run_events`,
     // миграция 004).
     ...buildPipelinePorts(deps),
+    // PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов (таблица `plugin_lock`,
+    // миграция 007) — источник истины для update/uninstall.
+    ...buildPluginLockPorts(deps),
     // FS/package-bound порты: остаются файловыми (см. шапку модуля).
     skills: file.skills,
     contextFiles: file.contextFiles,

@@ -23,6 +23,7 @@ import {
   describeJobRepository,
   describeMaintenanceAuditRepository,
   describePluginAuditRepository,
+  describePluginLockRepository,
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
   describeMcpRegistryRepository,
@@ -179,6 +180,8 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   describeMaintenanceAuditRepository('PG → MaintenanceAuditRepository', () => makePort('maintenanceAudit'));
   // PROP-090 §9: журнал аудита плагинов (отдельный порт, не security-аудит).
   describePluginAuditRepository('PG → PluginAuditRepository', () => makePort('pluginAudit'));
+  // PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов.
+  describePluginLockRepository('PG → PluginLockRepository', () => makePort('pluginLock'));
   describeSecurityAuditRepository('PG → SecurityAuditRepository', () => makePort('securityAudit'));
   describeEgressRequestLogRepository('PG → EgressRequestLogRepository', () => makePort('egressRequests'));
   describeAnalyticsRollupRepository('PG → AnalyticsRollupRepository', () => makePort('analyticsRollups'));
