@@ -91,8 +91,19 @@ export const PLUGIN_AUDIT_REASONS = [
   'plugin.scan_disabled_with_execution',
   /** Исполнение кода выключено (`plugins.executionEnabled=false`). */
   'plugin.execution_disabled',
-  /** Загрузчика кода ещё нет (Ф3/Ф4) — исполнять нечем. */
+  /**
+   * Загрузчик кода недоступен (`PluginHost` без `loader`, Ф1) или загрузка
+   * бандла сорвалась (Ф4а: нет `rootDir`, файл вне `rootDir`, не `.js`/`.mjs`,
+   * превышен размер, ошибка `import()`).
+   */
   'plugin.loader_unavailable',
+  /**
+   * Ф4а: модуль **загружен**, но не выполнил контракт `PluginModule` — нет
+   * `apply(facade)` (ни `module.apply`, ни `module.default.apply`, ни
+   * `module.default`-функции). Исполнять нечего: активация отклонена
+   * (`engine/plugins/inline-loader.ts` → `PluginLoadError`).
+   */
+  'plugin.module_invalid',
   /** Плагин уже активен — повторная активация отклонена. */
   'plugin.already_active',
   /** Плагин не активен — деактивация нечего снимать. */

@@ -36,6 +36,13 @@
 > `describePluginContract` + 8 фикстур в `engine/plugins/contract/*` (прогон на in-memory ядре, 21 тест;
 > пригоден для `out-of-process` в Ф4). Попутно исправлен дефект Ф1: версия контракта хоста `'1'` →
 > `'1.0.0'` (строгий `parseSemver` отвергал `contracts.extensionApi: '^1'`).
+> **Обновлено (Ф4а):** 2026-10-22 — **Ф4а выполнен** (та же ветка): реализован **`inline`-загрузчик**
+> кода плагина — `engine/plugins/inline-loader.ts` (`createInlinePluginLoader`): точка входа
+> `join(rootDir, entry ?? 'dist/index.js')`, **containment** по `realpath` (отсекает `..`, абсолютные
+> пути и симлинки наружу), расширение только `.js`/`.mjs`, предел размера бандла (8 МиБ),
+> cache-busting `?v=<contentHash|mtimeMs>`, три формы модуля (`apply` / `default.apply` /
+> `default`-функция). Новый код отказа **`plugin.module_invalid`** («модуль загружен, но не выполнил
+> контракт `PluginModule`»); кодов в `PLUGIN_AUDIT_REASONS` — **24**. `out-of-process` — остаток Ф4б.
 > **Источник:** вынесено из зонтика [ADR-086](./adr-086-extensibility-plugins-editions.md) — Extension API
 > проектировался там как первый из четырёх столпов (плагины, editions, contribution flow, add-on'ы);
 > здесь он выделен в отдельный документ и детализирован.
@@ -549,6 +556,25 @@ LLM Proxy — `packages/backend/src/routes/llm.ts:283,355`).
 нет: плагин видит internals процесса — компромисс, закрытый trust/scan'ом, install-policy и
 trust-floor'ом.
 
+**Реализация (Ф4а).** `createInlinePluginLoader` (`packages/core/src/engine/plugins/inline-loader.ts`)
+возвращает `PluginLoader` и закрывает шаг `import` пайплайна `PluginHost`:
+
+| Проверка | Правило | Отказ |
+|---|---|---|
+| Корень бандла | `descriptor.rootDir` обязателен (`installed/<name>@<version>/`) | `plugin.loader_unavailable` |
+| Точка входа | `join(rootDir, descriptor.entry ?? 'dist/index.js')` (`entry` из `plugins.lock.json`) | — |
+| **Containment** | `realpath` каталога и файла; файл обязан лежать **внутри** `realpath(rootDir)` — отсекает `..`, абсолютные пути и симлинки наружу | `plugin.loader_unavailable` |
+| Расширение | только `.js`/`.mjs` (бандл, не `.ts`/`.cjs`) | `plugin.loader_unavailable` |
+| Размер | ≤ `maxBundleBytes` (по умолчанию **8 МиБ**) | `plugin.loader_unavailable` |
+| Cache-busting | `import(pathToFileURL(abs).href + '?v=' + (contentHash ?? mtimeMs))` — после переустановки ESM-кэш не отдаёт старый модуль | — |
+| Форма модуля | `module.apply` \| `module.default.apply` \| `module.default`-функция (= `apply`) | **`plugin.module_invalid`** |
+
+`apply` вызывает **хост** (шаг `facade`), не загрузчик. **Bundle-only:** загрузчик не резолвит
+npm-зависимости и не ходит в registry — только `import()` файла; `@itphx/*` внутри бандла остаются
+external и резолвятся Node из `node_modules` ядра (ожидаемо). Все проверки **fail-closed**:
+исключения не пробрасываются наружу, а оборачиваются в `PluginLoadError` с машиночитаемой причиной,
+которую `PluginHost` превращает в код отказа и запись журнала аудита.
+
 ### `out-of-process`
 
 Плагин исполняется в **отдельном процессе**; Synth общается с ним по локальному HTTP. Транспорт —
@@ -960,7 +986,7 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | **Ф1 — манифест + `PluginHost`** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-host`, коммитов нет) | Схема манифеста плагина, `PluginHost`-пайплайн (§10), integrity, semver-гейт, реестр активаций, аудит активации. **Исполнение кода выключено по умолчанию**: только resolve/integrity/гейт/скан/аудит, без `import()`. **Сделано:** модуль `engine/plugins/*` (`PluginHost`, контракты активации, `computePluginContentHash`/`verifyPluginIntegrity`, `readExactHostExceptions`), порт `PluginAuditRepository` (файл/память/PG + контрактный suite), ключ `plugins.executionEnabled` (дефолт `false`); seam'ы `PluginLoader`/`PluginScanHook`/`PluginFacade` оставлены под Ф2/Ф3/Ф4 | тест: `PluginHost.activate` доходит до шага «import» и останавливается; несовпадение integrity → отказ; тест аудита: запись `activate`/`deactivate` в `audit/plugins.jsonl` — **выполнено**, см. §«Статус реализации в коде (Ф1)» |
 | **Ф2 — модель доверия** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-trust`, коммитов нет) | Уровни trust, матрица install-policy с ячейкой `kind: "plugin"`, сканер (6+1 категорий, квоты, `content_hash`, кэш сканов, `.skillignore`, бинарные расширения), матрица `severity → verdict`, `quarantine/`, `plugins.lock.json`, порт `PluginAuditRepository` + `{dataDir}/audit/plugins.jsonl`. **Сделано:** встроенный статический сканер (`engine/plugins/scan/*`: правила, `.skillignore`, кэш, дефолтный хук скана), матрица install-policy одной функцией `installPolicyDecision` (`shared`, ячейка `kind: 'plugin'`), раскладка `<home>/plugin/` с карантином и `PLUGIN_INTEGRITY.json` (`engine/plugins/layout.ts`), порт `PluginLockRepository` (файл/память/PostgreSQL + миграция `007_plugin_lock`), аудит-событие `scan` (+ `plugin.approval_required`), шаг trust/scan в `PluginHost` — **trust-floor до install-policy** | тест: вердикт по severity (`info\|low → safe`, `medium → caution`, `high\|critical → dangerous`); квоты → `caution`; бинарник → `dangerous`; `community` + `dangerous` → `block`; trust-floor: `community` устанавливается, но не активируется (`plugin.trust_below_floor`) — **выполнено**, см. §«Статус реализации в коде (Ф2)» |
 | **Ф3 — точки `promptBlocks` + `llmFilters` + `tools`** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-points`): Ф3а — точка **`promptBlocks`**, Ф3б — точка **`llmFilters`**, Ф3в — точка **`tools`** и **контрактный suite расширений** | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений**. **Сделано (Ф3а):** контракт `PromptBlockProvider`/`PromptBlockContext` (`shared`, `types/prompt-blocks.ts`), реестр `PromptBlockRegistry` (`engine/context/prompt-block-registry.ts`), сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`), контекст хода (`query`/`turnId`), бюджет символов блока + обрезка (`status: 'truncated'`), инвалидация `promptStates` по блокам провайдеров (`provider: true`), фасад `PluginFacade.registerPromptBlock` (disposer снимает блок при деактивации), решение fail-closed `plugins.scan='disabled'` + `executionEnabled=true` (`plugin.scan_disabled_with_execution`), **версия правил сканера в ключе кэша сканов** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный — **по части `promptBlocks` выполнено**, см. §«Статус реализации в коде (Ф3а)»; критерии `llmFilters` — **выполнено, см. §«Статус реализации в коде (Ф3б)»**; точка `tools` (namespace, permission-слой, сверка `provides.tools[]`) и **контрактный suite расширений** — **выполнено, см. §«Статус реализации в коде (Ф3в)»** |
-| **Ф4 — два режима исполнения** | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация | тест: плагин в `out-of-process` регистрирует `promptBlocks` и отдаёт блок; неверный токен → 401; недоступный процесс → деградация по `failMode`; контрактный suite порта расширений зелёный |
+| **Ф4 — два режима исполнения** — ⚠️ **частично: `inline` — выполнено (Ф4а), `out-of-process` — остаётся** | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация. **Сделано (Ф4а):** `inline`-загрузчик `createInlinePluginLoader` (`engine/plugins/inline-loader.ts`): containment по `realpath`, `.js`/`.mjs`, предел 8 МиБ, cache-busting `?v=<hash\|mtime>`, три формы модуля, новый код `plugin.module_invalid`; экспорт из `engine/plugins/index.ts` и `src/index.ts`. **Автоподключения в `server/app.ts`/`main.ts`/`backend/app/deps.ts` нет** — установка/активация и сканирование `plugins.lock.json` при старте появятся в Ф5 | тест: эталонный бандл (реальные `mkdtemp` + ESM-файл) активируется **через `PluginHost`** при `executionEnabled: true`, блок в `PromptBlockRegistry`, аудит `activate`; `export const x`/`export default 42` → `plugin.module_invalid`; бросок в модуле → `plugin.loader_unavailable`; `../evil.js`, абсолютный путь, симлинк наружу, `.ts`, превышение размера → отказ; перезапись бандла → новое содержимое — **выполнено (21 тест), см. §«Статус реализации в коде (Ф4а)»**. Критерии `out-of-process` (неверный токен → 401, недоступный процесс → деградация по `failMode`, suite на out-of-process реализации) — **остаются за Ф4б** |
 | **Ф5 — install/activate: CLI + API + managed deploy-time** | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
 | **Ф6 — UI** | Раздел «Плагины»: список, карточка (trust/scan/hash/version/`contracts`/`host`/`provides`/режим), тумблеры enable/disable, install/update/remove, статус скана | тест UI: карточка показывает trust/scan/hash; переключатель enable вызывает API и обновляет список; i18n-паритет `ru.ts`/`en.ts` зелёный (`parity.test.ts`) |
 | **Ф7 — hybrid** | Allow-list сервера, форма политики, discovery (`/api/v2/settings/plugins` + сигнал в `/auth/oidc-meta`), server-scoped токены с `plugin_id`-scope (Уровень 2) | тест: плагин вне allow-list не активируется в hybrid; токен с чужим `plugin_id` отвергается сервером; локальный плагин без сервера — cooperative (помечено в UI/доках) |
@@ -1434,7 +1460,7 @@ guard/обфускации/rate-limit/аудита, а микро-слой (`rou
 | Решение | Как реализовано |
 |---|---|
 | Расхождение `provides` — отказ или предупреждение | **Отказ** активации (`plugin.provides_mismatch`), как требует PROP-090 §«Правило соответствия»; с откатом уже сделанных регистраций |
-| Коды хоста в журнале плагинов | **Не пишутся**: журнал плагинов получает только `denied`/`deny_downgraded`/`unavailable`; коды `allowed`/`timeout`/`error`/`redact_unsupported`/`buffering_required`/`redact_invalid` живут только в аудите gateway (перечень `PLUGIN_AUDIT_REASONS` — закрытый, 23 кода) |
+| Коды хоста в журнале плагинов | **Не пишутся**: журнал плагинов получает только `denied`/`deny_downgraded`/`unavailable`; коды `allowed`/`timeout`/`error`/`redact_unsupported`/`buffering_required`/`redact_invalid` живут только в аудите gateway (перечень `PLUGIN_AUDIT_REASONS` — закрытый, 24 кода) |
 | Runtime-бюджет фильтра | `LlmFilterRegistry.setDefaultTimeoutMs(ms)` (+ геттер). Действует на последующие регистрации; live-wiring из runtime-настроек — остаток Ф5/Ф6 |
 | Право вето и `redact` в `pre_request` | Вето — только trust ≥ `trusted`; `redact` в `pre_request` отклоняется (`redact_unsupported`), в `embedding` — поддержан, в `post_response` — запрещён (ADR-036) |
 
@@ -1535,6 +1561,78 @@ wire-протокол в `shared`), **Ф5/Ф6** (install/activate: CLI `synth pl
 нужен ли отдельный полюс), какие плагинные тулы попадают в промпт сессии (сейчас — все тулы активных
 плагинов инстанса, отбора «по сессии/проекту» нет), подтверждение `plugins.scan: 'disabled'`,
 буферизация `post_response`, live-бюджет фильтра.
+
+### Статус реализации в коде (Ф4а, 2026-10-22)
+
+Ф4а закрывает **первую половину Ф4** — `inline`-загрузчик кода плагина. Ветка
+`feature/plugin-points`, коммитов нет. `out-of-process` (wire-протокол, клиент, запуск процесса) —
+**Ф4б, не начата**.
+
+**Что появилось.**
+
+| Что | Где |
+|---|---|
+| `createInlinePluginLoader(options?) → PluginLoader` — загрузчик `inline` (bundle-only, `import()` ESM-файла) | `packages/core/src/engine/plugins/inline-loader.ts` |
+| `InlinePluginLoaderOptions` (`maxBundleBytes?`, `logger?`, `importModule?`); константы `DEFAULT_PLUGIN_ENTRY = 'dist/index.js'`, `DEFAULT_MAX_PLUGIN_BUNDLE_BYTES = 8 МиБ`, `PLUGIN_BUNDLE_EXTENSIONS = ['.js', '.mjs']` | там же |
+| `PluginActivationDescriptor.entry?: string` — относительный путь точки входа внутри `rootDir` (из lock-записи `plugins.lock.json`, поле `entry`) | `engine/plugins/activation.ts` |
+| `PluginLoadError` (+ `pluginLoadFailureReason(err)`) — ошибка загрузчика с **машиночитаемой причиной** (`plugin.loader_unavailable` \| `plugin.module_invalid`); `PluginHost` читает её на шаге `import` | `engine/plugins/activation.ts`, `engine/plugins/plugin-host.ts` |
+| Новый код отказа `plugin.module_invalid` — «модуль загружен, но не выполнил контракт `PluginModule` (нет `apply`)»; кодов в `PLUGIN_AUDIT_REASONS` — **24** | `packages/shared/src/types/plugin-audit.ts` |
+| Публичная поверхность: `createInlinePluginLoader` и опции/константы — из баррела `engine/plugins/index.ts` и `src/index.ts` core | `engine/plugins/index.ts`, `src/index.ts` |
+
+**Проверки загрузчика (все fail-closed, наружу — только `PluginLoadError`).**
+
+| Проверка | Что именно проверяется | Отказ |
+|---|---|---|
+| Корень | `descriptor.rootDir` задан (иначе загружать нечего) | `plugin.loader_unavailable` |
+| Точка входа | `join(rootDir, entry ?? 'dist/index.js')`; абсолютный `entry` отвергается отдельно | `plugin.loader_unavailable` |
+| Containment | `realpath` каталога и файла + проверка префикса: `..`, абсолютный путь и симлинк наружу дают путь вне `realpath(rootDir)` | `plugin.loader_unavailable` |
+| Расширение | только `.js`/`.mjs` (собранный бандл, не `.ts`/`.cjs`) | `plugin.loader_unavailable` |
+| Размер | `stat.size ≤ maxBundleBytes` (8 МиБ по умолчанию) | `plugin.loader_unavailable` |
+| Загрузка | ошибка `import()` (в т.ч. бросок на верхнем уровне модуля) | `plugin.loader_unavailable` |
+| Форма модуля | `module.apply` \| `module.default.apply` \| `module.default`-функция | **`plugin.module_invalid`** |
+
+**Формы модуля.**
+
+| Форма бандла | Результат |
+|---|---|
+| `export function apply(facade) {}` | ✅ принято (эталон) |
+| `export default { apply(facade) {} }` | ✅ принято |
+| `export default function apply(facade) {}` | ✅ принято (функция трактуется как `apply`) |
+| `export const x = 1` (нет `apply`) | ❌ `plugin.module_invalid` |
+| `export default 42` | ❌ `plugin.module_invalid` |
+| функция вместо namespace (`import()`-переопределение) | ❌ `plugin.module_invalid` (иначе `Function.prototype.apply` был бы принят за `apply`) |
+
+**Cache-busting.** URL импорта — `pathToFileURL(abs).href + '?v=' + (contentHash ?? mtimeMs)`:
+установка после обновления плагина грузит **новый** модуль, а не закэшированный ESM. Если
+`contentHash` не задан (шаг `integrity` пропущен), загрузчик пишет предупреждение — cache-busting
+по `mtime` корректен для локальной установки, но не является пиннингом.
+
+**Чего загрузчик не делает.** Не резолвит npm-зависимости и не ходит в registry (bundle-only),
+не вызывает `apply` (это шаг `facade` хоста), не решает, можно ли активировать плагин (это
+resolve/integrity/semver/trust/policy), не кэширует дескрипторы и не следит за изменениями
+бандла на диске (переустановка = новая активация).
+
+**Проводка.** Загрузчик доступен как **фабрика**; автоматически он **не подключается**:
+`server/app.ts`, `main.ts`, `server/app/deps.ts`, `backend/app/deps.ts` не создают его и не
+сканируют `plugins.lock.json` при старте — установка/активация через API/CLI и старт-сканирование
+lock-файла появятся в **Ф5**. `PluginHost` не менялся по существу: он по-прежнему принимает
+`loader` опцией, а `entry`/`rootDir` доходят до загрузчика как поля дескриптора (`_resolve`
+возвращает дескриптор без потери полей).
+
+**Тесты Ф4а.** `packages/core/src/engine/plugins/inline-loader.test.ts` (21 тест) — на **реальных**
+временных каталогах (`mkdtemp`) и реальных ESM-файлах: формы модуля (3 принимаются, 2 отклоняются),
+`rootDir` без значения, `../evil.js` (файл-приманка реально существует), абсолютный путь вне корня,
+симлинк наружу, `.ts`, превышение `maxBundleBytes`, отсутствующий файл, бросок в модуле,
+cache-busting (`?v=<hash>`, `?v=<mtime>`, перезапись бандла → новое содержимое), а также **сквозная
+активация через `PluginHost`** (`executionEnabled: true` + `createInlinePluginLoader` + `rootDir`):
+`activated`, блок в `PromptBlockRegistry`, запись `activate/ok` в журнале, снятие блока при
+`deactivate()`; `plugin.module_invalid` и `plugin.loader_unavailable` — с записью аудита.
+
+**Остаток после Ф4а.** **Ф4б** — `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`,
+`POST /invoke`, `GET /capabilities`, `GET /health`; контракт DTO — в `@itphx/synth-shared`),
+bearer-токен из файла, `127.0.0.1`, запуск/остановка процесса, `failMode`/деградация; контрактный
+suite расширений обязан пройти на out-of-process реализации. Далее **Ф5** (install/activate: CLI
+`synth plugin *`, `/api/v2/plugins*`, RBAC, старт-сканирование lock), **Ф6** (UI), **Ф7** (hybrid).
 
 ## Открытые вопросы
 
@@ -1706,3 +1804,4 @@ wire-протокол в `shared`), **Ф5/Ф6** (install/activate: CLI `synth pl
 - 2026-10-22 — **Ф3а выполнен** (ветка `feature/plugin-points`): закрыта точка **`promptBlocks`** — контракт `PromptBlockProvider`/`PromptBlockContext`/`PromptBlockContent` (`packages/shared/src/types/prompt-blocks.ts`, тир провайдера ограничен `context`/`volatile` **на уровне типа**), реестр `PromptBlockRegistry` (`engine/context/prompt-block-registry.ts`, fail-closed: пустой ключ / нечисловой `order` / занятый ключ / тир `stable`), сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`: один манифест, одна склейка, одна сортировка по тирам; override `session.settings.systemPrompt` — блоки не добавляются), контекст хода (`query` — только пользовательский текст, `turnId`, `timestamp`; `resolveTurnQuery`), бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000 — `DEFAULT_PROMPT_BLOCK_MAX_CHARS`) с обрезкой голова+хвост и `status: 'truncated'`, деградация (ошибка провайдера → `warning`, блок пуст, **ход не падает**), инвалидация `promptStates` по блокам провайдеров (`PromptBlock.source='provider'` → `PromptBlockState.provider`), фасад `PluginFacade.registerPromptBlock` (disposer снимает блок при деактивации), решения: **fail-closed** `plugins.scan='disabled'` + `plugins.executionEnabled=true` (новый код отказа `plugin.scan_disabled_with_execution`) и **версия правил сканера в ключе кэша сканов** (`PLUGIN_SCAN_RULES_VERSION`); добавлен раздел «Статус реализации в коде (Ф3а)». Точка `llmFilters` — **Ф3б, не начата**.
 - 2026-10-22 — **Ф3б выполнен** (ветка `feature/plugin-points`): закрыта точка **`llmFilters`** — контракт `LlmCallFilter`/`LlmFilterInput`/`LlmFilterVerdict`/`LlmFilterMessage` (`packages/shared/src/types/llm-filters.ts`, browser-safe: только типы и чистые функции; `phaseCanBlock`, `DEFAULT_LLM_FILTER_TIMEOUT_MS = 1000`), реестр `LlmFilterRegistry` (`engine/gateway/llm-filter-registry.ts`: fail-closed регистрация, disposer, `canVetoLlmFilter` — вето только у trust ≥ `trusted`, `defaultLlmFilterFailMode`, `setDefaultTimeoutMs` для runtime-бюджета), фильтры в `GatewayProvider` (три фазы: `pre_request` после `saveMap`, `post_response` — только наблюдение, `embedding` через `_prepareEmbedding`; таймаут `Promise.race`, понижение вето недоверенных, `FILTER_CODES`), **эмбеддинги перестали быть дырой инварианта 3** (`embed` и микро-слой идут через gateway-контур), аудит: `type: 'plugin_filter'` в аудите gateway (без текста) + `action: 'filter'` в журнале плагинов только для канонических кодов (`plugin_filter.denied`/`deny_downgraded`/`unavailable`; коды хоста `allowed`/`timeout`/`error`/`redact_*`/`buffering_required` — только в gateway), фасад `PluginFacade.registerLlmFilter` (владелец — плагин: имя/версия/фактическое доверие; отказ — предупреждение, активация не падает), **сверка `provides` ↔ фактические регистрации** (`diffPackProvides` после `apply()`: `provides.promptBlocks[]`/`provides.llmFilters[]`, расхождение в любую сторону → отказ `plugin.provides_mismatch` с откатом disposers; `provides.tools[]` — вместе с точкой `tools`, Ф3в). Кодов отказа в `PLUGIN_AUDIT_REASONS` — **23** (19 прежних + 3 канонических кода фильтров + `plugin.provides_mismatch`). Добавлен раздел «Статус реализации в коде (Ф3б, 2026-10-22)».
 - 2026-10-22 — **Ф3в выполнен, Ф3 закрыта полностью** (ветка `feature/plugin-points`): закрыта точка **`tools`** — `ToolSource = 'builtin' | 'mcp' | 'plugin'` + `pluginName` в `ToolDefinition` (`shared`), namespace-хелперы `types/plugin-tools.ts` (`plugin_<ns>_<tool>`; локальное имя с префиксом `plugin_` запрещено), `ToolRegistry.registerPlugin` (атомарная валидация: `invalid_name`/`invalid_definition`/`invalid_capability`/`name_conflict`; capability `mcp` и `runtime` зарезервированы — `runtime`-примитивы ядра неотключаемы админом; пустой набор capabilities — отказ), выборка по слоям `selectForSession → { builtin, plugin, mcp }`, группа `plugin` в permission-слое с матчем **по источнику** (`getToolGroups(..., source?)`, `PermissionCheckInput.toolSource`), фасад `PluginFacade.registerTool` и снятие при деактивации, сверка `provides.tools[]` по локальным именам (расхождение → `plugin.provides_mismatch` с откатом); **контрактный suite расширений** — `describePluginContract` + `PluginContractHarness` + 8 фикстур (`engine/plugins/contract/*`: эталон + `stable-block`/`bad-phase`/`bad-verdict`/`provides-mismatch`/`unknown-capability`/`reserved-tool-name`/`untrusted-deny`), прогон на in-memory ядре (21 тест) и пригодность для `out-of-process` (Ф4); проверки suite: тир/ключи/бюджет блоков, порядок и `failMode` фильтров, namespace и permission-слой тулов, сверка `provides`, dispose-дисциплина, запрет обхода (заявленный trust не повышает фактический). Попутно исправлен дефект Ф1: `DEFAULT_EXTENSION_CONTRACT_VERSION` `'1'` → `'1.0.0'` — строгий `parseSemver` отвергал документированный `contracts.extensionApi: '^1'` (любой такой манифест получал `plugin.contract_mismatch`).
+- 2026-10-22 — **Ф4а выполнен** (ветка `feature/plugin-points`): реализован **`inline`-загрузчик** кода плагина — `createInlinePluginLoader` (`packages/core/src/engine/plugins/inline-loader.ts`), закрывающий шаг `import` пайплайна `PluginHost`: точка входа `join(rootDir, entry ?? 'dist/index.js')` (`PluginActivationDescriptor.entry` — из lock-записи), **containment** по `realpath` (отсекает `..`, абсолютные пути и симлинки наружу), расширение только `.js`/`.mjs`, предел бандла 8 МиБ (`DEFAULT_MAX_PLUGIN_BUNDLE_BYTES`), cache-busting `?v=<contentHash|mtimeMs>`, три формы модуля (`apply` / `default.apply` / `default`-функция), bundle-only (npm-зависимости не резолвятся, `@itphx/*` — external). Новый код отказа **`plugin.module_invalid`** (модуль загружен, но контракт `PluginModule` не выполнен) — `PLUGIN_AUDIT_REASONS` **23 → 24**; причина отказа шага `import` передаётся из загрузчика в хост через `PluginLoadError`/`pluginLoadFailureReason`. Загрузчик доступен как фабрика (нет автоподключения в `server/app.ts`/`main.ts`/`backend/app/deps.ts` — установка и старт-сканирование lock — Ф5). Тесты — `engine/plugins/inline-loader.test.ts` (21, реальные `mkdtemp` + ESM-файлы, включая сквозную активацию через `PluginHost` с блоком в `PromptBlockRegistry`).
