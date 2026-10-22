@@ -31,6 +31,15 @@ export interface McpScopeServer {
    * только реестровое `McpRegistryEntry.enabled` (`config.enabled` — сид, не гейт).
    */
   systemEnabled: boolean;
+  /**
+   * ADR-077 (шаг B2): сервер поднят **исполнителем** (runtime-запись, не реестр).
+   *
+   * Такой сервер — инфраструктура топологии (system-level), а не curated-запись
+   * проекта: проектный allow-list (`project.mcp.enabled`) его не отсекает.
+   * Остальные гейты действуют как обычно — мастер-флаг, сессионный opt-out,
+   * режимы/политики MCP-инструментов (`mcp.policy`, `mcp.tools`).
+   */
+  executor?: boolean;
 }
 
 /** Вход: сессионные overrides/снапшот. */
@@ -65,9 +74,15 @@ export function resolveMcpScope(
 
   return servers.map((server) => {
     const { name } = server;
-    const isSystem = server.origin === 'instance';
-    const projectOn = projectGate === null ? true : projectGate.has(name);
-    const inProject = projectGate !== null && projectGate.has(name);
+    const isSystem = server.origin === 'instance' || server.executor === true;
+    // ADR-077 (шаг B2): серверы исполнителя — system-level инфраструктура, а не
+    // curated-запись проекта; проектный allow-list их не отсекает (см. тип).
+    const projectOn = server.executor === true
+      ? true
+      : projectGate === null
+        ? true
+        : projectGate.has(name);
+    const inProject = server.executor === true || (projectGate !== null && projectGate.has(name));
     // Уровень: system > project > session.
     const level: McpServerLevel = isSystem ? 'system' : inProject ? 'project' : 'session';
 
@@ -114,10 +129,13 @@ export function resolveMcpProjectScope(
   servers: McpScopeServer[],
   project: ProjectMcpSettings | null | undefined,
 ): McpScopeDecision[] {
+  // ADR-077 (шаг B2): серверы исполнителя доступны и без записи в проектном
+  // allow-list (они не редактируются пользователем, см. `McpScopeServer.executor`).
+  const executorNames = servers.filter((server) => server.executor === true).map((server) => server.name);
   if (!project) {
     // Проектного скоупа нет (legacy) — гейт не задан: доступны все
     // системно-включённые серверы (сессионного слоя у шага нет).
     return resolveMcpScope(servers, null, { enabled: servers.map((server) => server.name) });
   }
-  return resolveMcpScope(servers, project, { enabled: project.enabled });
+  return resolveMcpScope(servers, project, { enabled: [...(project.enabled ?? []), ...executorNames] });
 }

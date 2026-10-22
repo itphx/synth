@@ -2025,9 +2025,15 @@ export class ChatOrchestrator {
       name,
       origin: manager.getServerOrigin(name),
       systemEnabled: manager.isServerSystemEnabled(name),
+      // ADR-077 (шаг B2): серверы пула исполнителей — system-level runtime-записи.
+      ...(manager.isExecutorServer?.(name) === true ? { executor: true } : {}),
     }));
+    // ADR-077 (шаг B2): серверы исполнителя включены по умолчанию (их состав
+    // задаёт оператор топологии в конфигурации исполнителя); сессионный
+    // opt-out (`mcpDisabledServers`) по-прежнему работает.
+    const executorNames = manager.getExecutorServerNames?.() ?? [];
     return resolveMcpScope(servers, project?.mcp, {
-      enabled: session.settings.mcpServers,
+      enabled: [...(session.settings.mcpServers ?? []), ...executorNames],
       disabled: session.settings.mcpDisabledServers,
       defaultOn: session.settings.mcpDefaultOn,
     });

@@ -311,6 +311,9 @@ program
       // ADR-051 (срез): остановить планировщик расписаний.
       appHandle.stopScheduler?.();
 
+      // ADR-077 (шаг B2): остановить источник MCP-серверов исполнителя.
+      appHandle.stopExecutorMcpSource?.();
+
       // ADR-097: закрыть backend хранения (пул соединений PG); `file`/`memory`
       // ресурсов не держат — вызов no-op (см. `StorageContext.close?`).
       if (appHandle.closeStorage) {
