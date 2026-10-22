@@ -15,6 +15,7 @@ import { ContextOptimizer } from './context/optimizer.js';
 import type { ContextOptimizerGatewayHooks } from './context/optimizer.js';
 import type { ContextFileRepository } from '../storage/ports/context-file-repository.js';
 import { SystemPromptComposer, type ComposerContext, type ComposerInstructions, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
+import type { PromptBlockRegistry } from './context/prompt-block-registry.js';
 import { ProjectInstructionsResolver, type InstructionsFileInfo } from './context/instructions.js';
 import { LazyInstructionsLoader } from './context/lazy-instructions.js';
 import type { ComposerSkillsCatalog } from './skills/catalog.js';
@@ -211,6 +212,17 @@ export interface OrchestratorOptions {
    * задал свой `timeoutMs`. Применяется только к реестру, созданному здесь.
    */
   llmFilterTimeoutMs?: number;
+  /**
+   * PROP-090 §«Точка `promptBlocks`»: реестр провайдеров блоков системного
+   * промпта — **тот же** экземпляр, в который регистрирует вклады фасад
+   * плагинов (`PluginRuntime`/`PluginHost`).
+   *
+   * Не задан — композер создаёт собственный пустой реестр: блоки плагинов в
+   * промпт сессии не попадут (прежнее поведение), вклады плагинов уйдут в
+   * другой экземпляр. Поэтому composition root обязан передать сюда общий
+   * реестр (`server/app/deps.ts`, `backend/app/deps.ts`).
+   */
+  promptBlocks?: PromptBlockRegistry;
   /**
    * ADR-094: реестр метрик — LLM-вызовы учитываются и при выключенном gateway
    * (`synth_llm_requests_total`/`..._duration_seconds`/`..._tokens_total`).
@@ -639,10 +651,13 @@ export class ChatOrchestrator {
         ? createFileStorage({ dataDir: options.dataDir, env: process.env }).sshKeys
         : null);
     // ADR-070 §2.1: единая точка сборки системного промпта (идемпотентно).
+    // PROP-090 §«Точка promptBlocks»: реестр блоков промпта — **один** экземпляр
+    // на инстанс (его же получает фасад плагинов); второй не создаём.
     this._composer = new SystemPromptComposer({
       contextBuilder: this._contextBuilder,
       contextConfig: this._contextConfig,
       projectStore: this._projectStore,
+      ...(options.promptBlocks ? { promptBlocks: options.promptBlocks } : {}),
     });
     this._defaultWorkingDir = options.defaultWorkingDir ?? join(options.dataDir || '/var/synth/data', 'workspaces', 'default');
     this._workspacesRoot = options.workspacesRoot ?? join(options.dataDir || '/var/synth/data', 'workspaces');

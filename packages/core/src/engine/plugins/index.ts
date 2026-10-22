@@ -42,13 +42,18 @@ export { computePluginContentHash, verifyPluginIntegrity } from './integrity.js'
 export type { PluginIntegrityVerdict } from './integrity.js';
 
 // Ф5а — сервис установки: манифест → скан → политика → раскладка/lock → аудит.
-export { PluginInstaller, resolvePluginEntry } from './installer.js';
+export { PluginInstaller, collectBundleFiles, resolvePluginEntry } from './installer.js';
 export type {
+  CollectedBundle,
   PluginInstallOutcome,
   PluginInstallRequest,
   PluginInstallerDeps,
   PluginUninstallResult,
 } from './installer.js';
+
+// Ф5б-1 — рантайм плагинов: старт-активация из lock, список, dispose.
+export { PluginRuntime } from './runtime.js';
+export type { PluginRuntimeDeps, PluginRuntimeEntry } from './runtime.js';
 
 export { readExactHostExceptions } from './exact-host-exceptions.js';
 

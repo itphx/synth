@@ -25,6 +25,22 @@ try {
 }
 const { app, dataDir, port, config, auth, eventHub, queueManager, sessionManager, stopEphemeralSweeper, stopEventJournalPruner, stopAnalyticsRollupPruner, stopScheduler, stopWebhookService, stopWebhookDeliveryPruner, stopMetrics } = handle;
 
+// PROP-090 §5/§10 (Ф5б-1): старт-активация установленных плагинов.
+// `plugins.lock.json` — источник истины; `plugins.executionEnabled=false`
+// (дефолт) → no-op. Ошибка плагина/рантайма **не роняет старт** (только
+// предупреждение); тексты плагинов в лог не попадают (инвариант 13).
+try {
+  const results = await handle.pluginRuntime.activateInstalled({ actor: 'startup' });
+  if (results.length > 0) {
+    const activated = results.filter((item) => item.outcome === 'activated').length;
+    console.log(`[plugins] активировано: ${activated}, отклонено: ${results.length - activated}`);
+  }
+} catch (err) {
+  console.warn(
+    `[plugins] старт-активация не выполнена: ${err instanceof Error ? err.message : String(err)}`,
+  );
+}
+
 let shuttingDown = false;
 
 async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {

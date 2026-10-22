@@ -633,9 +633,10 @@
 - `engine/plugins/*` — PROP-090 §10: загрузчик плагинов `PluginHost` и его пайплайн активации
   (**resolve → integrity → semver-гейт → trust/scan → политика режима → import → facade**).
   **Исполнение кода по умолчанию выключено** — `plugins.executionEnabled` (default `false`), шаг `import`
-  останавливается явно. **Ф4а: `inline`-загрузчик реализован** (`inline-loader.ts`), но **не
-  подключается автоматически** (нет `loader` в `server/app.ts`/`main.ts`/`server/app/deps.ts`/
-  `backend/app/deps.ts`): установка и активация из `plugins.lock.json` — Ф5. Файлы: `plugin-host.ts`
+  останавливается явно. **Ф4а:** `inline`-загрузчик реализован (`inline-loader.ts`); **Ф5б-1: подключён** —
+  `PluginRuntime` (`runtime.ts`) собирает хост с этим загрузчиком в `server/app/deps.ts` и
+  `backend/app/deps.ts`, а `main.ts` обоих режимов делает **старт-активацию** установленного
+  (`activateInstalled`, `executionEnabled=false` → no-op) и `dispose()` при остановке. Файлы: `plugin-host.ts`
   (`PluginHost`/`PluginHostOptions`/`DEFAULT_EXTENSION_CONTRACT_VERSION`; реестр активных плагинов,
   обратная прокрутка disposers, аудит **каждого** исхода — успех и отказ), `activation.ts`
   (контракты: `PLUGIN_ACTIVATION_STEPS`, `PluginActivationDescriptor`/`PluginActivationHandle`/
@@ -721,6 +722,18 @@
   `PLUGIN_INTEGRITY.json` (Ф5а) хранит не только `sha256`/`source`/`fetched_at`, но и `trust_level?`/
   `install_kind?`/`identifier?`/`ref?` — иначе подтверждение из карантина не знало бы фактическое
   доверие (его резолвит источник, не манифест).
+- `engine/plugins/runtime.ts` — **Ф5б-1: `PluginRuntime`** — сборка слоя плагинов на инстанс:
+  раскладка (`resolvePluginLayout`), порты `StorageContext.pluginAudit`/`pluginLock` (ADR-096), `PluginHost`
+  (с `createInlinePluginLoader` по умолчанию), `PluginInstaller`; реестры `promptBlocks`/`llmFilters`/`tools`
+  — **те же экземпляры**, что у оркестратора и композера (иначе вклады попадут в «теневой» реестр).
+  `activateInstalled({actor})`: lock (порядок по имени) → дескриптор (`rootDir` из раскладки,
+  `entry`/`content_hash`/`trust_level` из записи, `installKind: 'deploy'`, `files` — `collectBundleFiles`,
+  иначе шаг integrity отклонит плагин) → `host.activate`; уже активные пропускаются; **никогда не бросает**,
+  сбой одного плагина не мешает остальным; `executionEnabled=false` → `[]`. `list()` — установленные +
+  `active`/`mode` (карантин не входит); `activate(name)`/`deactivate(name)` — по lock без броска
+  (`plugin.not_found`/`plugin.not_active`); `dispose()` — деактивация в обратном порядке.
+  `OrchestratorOptions.promptBlocks` прокидывается в `SystemPromptComposer` — **один** реестр на инстанс
+  (до Ф5б-1 композер создавал собственный, и блоки плагинов в промпт не попадали).
 - `engine/plugins/installer.ts` — **Ф5а: `PluginInstaller`**, сервис установки/подтверждения/снятия
   (API/CLI — Ф5б/Ф5в). `installFromDirectory({dir, trustLevel, source, identifier?, ref?, installKind?,
   activate?, actor?})`: порядок **манифест (`validatePackManifest`, `kind: 'plugin'`) → состав бандла и

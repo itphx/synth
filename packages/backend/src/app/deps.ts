@@ -13,6 +13,8 @@ import {
   resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir,
   resolveExecutionConfig,
   readTlsRuntimeSettings,
+  pluginsConfigSchema,
+  SYNTH_VERSION,
 } from '@itphx/synth-shared';
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import {
@@ -64,6 +66,11 @@ import {
   ProviderFactory,
   // ADR-077: порт исполнения команд (inline/remote).
   createExecutionPortForConfig,
+  // PROP-090 §«Точка promptBlocks» (Ф3а) / §5, §10 (Ф5б-1): общий реестр
+  // блоков промпта (композер + фасад плагинов) и рантайм плагинов.
+  PromptBlockRegistry,
+  PluginRuntime,
+  resolvePluginLayout,
 } from '@itphx/synth-core';
 import type {
   DecisionAgentCandidate,
@@ -112,6 +119,11 @@ export async function createBackendStorage(config: BackendConfig): Promise<Stora
     dedupStore: config.synth.events.dedupStore,
     scheduleCrossProcess: config.synth.scheduler.crossProcessLocks,
     bundlesPath: config.synth.commands.bundlesPath,
+    // PROP-090 §5: путь lock-файла плагинов задаёт раскладка (композиционный
+    // корень) — `<home>/plugin/plugins.lock.json` либо `{dataDir}/plugin/…`.
+    // Резолвер один — `resolvePluginLayout` (его же использует `PluginRuntime`),
+    // поэтому порт и каталоги установки согласованы.
+    pluginLockPath: resolvePluginLayout({ dataDir: config.dataDir, env: process.env }).lockPath,
   });
   // ADR-099: второй шаг egress — runtime-override прокси после хранилища и до
   // создания deps/провайдеров (TLS/PG уже применены ранним `initTlsTrust`).
@@ -466,6 +478,11 @@ export async function createBackendDeps(
   const toolRegistry = createToolRegistry();
   const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
+  // PROP-090 §«Точка promptBlocks» (Ф3а): **один** реестр провайдеров блоков
+  // системного промпта на инстанс — композер добавляет блоки в промпт сессии,
+  // фасад плагинов (`PluginRuntime` → `PluginHost`) их регистрирует.
+  const promptBlocks = new PromptBlockRegistry();
+
   // ADR-096 + ADR-086 §5: агенты из **стора** — в реестр при старте.
   // `createAgentRegistry` читает только файловый каталог `{dataDir}/agents`,
   // а при `storage.backend=postgres` стор агентов — это БД: агент, поставленный
@@ -539,6 +556,9 @@ export async function createBackendDeps(
     dataDir,
     toolRegistry,
     agentRegistry,
+    // PROP-090 §«Точка promptBlocks»: тот же реестр, что у фасада плагинов
+    // (ниже, `PluginRuntime`) — блоки плагинов попадают в промпт сессии.
+    promptBlocks,
     mcpManager,
     projectStore,
     // Онбординг: тул `profile_update` сохраняет ответы интервью в профиль.
@@ -599,6 +619,22 @@ export async function createBackendDeps(
     // многоитерационный Tool Use на границе итерации (backoff/гонка).
     isCancelRequested: async (sid) =>
       (await sessionManager.getSession(sid))?.status.cancelRequested === true,
+  });
+
+  // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного
+  // (`plugins.lock.json` — источник истины), список со статусом активации и
+  // точки `activate`/`deactivate` для HTTP API/CLI (Ф5б-2/3). Реестры — **те же**
+  // экземпляры, что у оркестратора (`promptBlocks`, `getLlmFilters()`, `toolRegistry`).
+  // `plugins.executionEnabled=false` (дефолт) → `activateInstalled()` — no-op.
+  const pluginRuntime = new PluginRuntime({
+    layout: resolvePluginLayout({ dataDir, env: process.env }),
+    config: config.synth.plugins ?? pluginsConfigSchema.parse({}),
+    hostVersion: SYNTH_VERSION,
+    audit: storageContext.pluginAudit,
+    lock: storageContext.pluginLock,
+    promptBlocks,
+    llmFilters: orchestrator.getLlmFilters(),
+    tools: toolRegistry,
   });
 
   const processMessage = orchestrator.createProcessMessage();
@@ -1014,6 +1050,9 @@ export async function createBackendDeps(
     bundleStore,
     commandService,
     orchestrator,
+    // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного
+    // (`app.ts`/`main.ts`) и точки для HTTP API/CLI (Ф5б-2/3). `host`+`installer` внутри.
+    pluginRuntime,
     // ADR-077: порт исполнения — тот же инстанс, что у оркестратора и тулов
     // (резолвер проектных инструкций берёт его для `git rev-parse`).
     executionPort,

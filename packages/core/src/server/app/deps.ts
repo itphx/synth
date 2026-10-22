@@ -8,7 +8,7 @@ import type {
   ProviderConfig, ModelConfig, ToolsPolicy, ToolsDisabledConfig,
   WorkspaceOutsideRootPolicy, WebhooksConfig, SummarizationConfig, Session,
 } from '@itphx/synth-shared';
-import { ensureDataDir, parsePrincipalId, readTlsRuntimeSettings } from '@itphx/synth-shared';
+import { ensureDataDir, parsePrincipalId, pluginsConfigSchema, readTlsRuntimeSettings, SYNTH_VERSION } from '@itphx/synth-shared';
 import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -51,6 +51,11 @@ import {
   createPipelineMetrics,
   toCoreProviderConfig,
   ProviderFactory,
+  // PROP-090 §«Точка promptBlocks» (Ф3а) / §5, §10 (Ф5б-1): общий реестр блоков
+  // промпта (композер + фасад плагинов) и рантайм плагинов (старт-активация).
+  PromptBlockRegistry,
+  PluginRuntime,
+  resolvePluginLayout,
   type BaseProvider,
   type PipelinePermissionDeps,
   type StorageContext,
@@ -127,6 +132,12 @@ export async function createStandaloneStorage(config: StandaloneConfig): Promise
     scheduleCrossProcess: config.schedulerConfig?.crossProcessLocks ?? false,
     systemPromptsDir: config.systemPromptsDir,
     bundlesPath: config.commandsConfig?.bundlesPath,
+    // PROP-090 §5: путь lock-файла плагинов задаёт раскладка (композиционный
+    // корень) — `<home>/plugin/plugins.lock.json` либо `{dataDir}/plugin/…`.
+    // Логику home не дублируем: единственный резолвер — `resolvePluginLayout`,
+    // его же использует `PluginRuntime` (раскладка `installed/`/`quarantine/`),
+    // поэтому порт и каталоги установки всегда согласованы.
+    pluginLockPath: resolvePluginLayout({ dataDir: config.dataDir, env: process.env }).lockPath,
   });
 }
 
@@ -455,6 +466,12 @@ export async function createStandaloneDeps(
   const toolRegistry = createToolRegistry();
   const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
+  // PROP-090 §«Точка promptBlocks» (Ф3а): **один** реестр провайдеров блоков
+  // системного промпта на инстанс. Композер добавляет блоки в промпт сессии,
+  // фасад плагинов (`PluginRuntime` → `PluginHost`) регистрирует их — экземпляр
+  // обязан быть общим, иначе плагинные блоки в промпт не попадут.
+  const promptBlocks = new PromptBlockRegistry();
+
   // ADR-096 + ADR-086 §5: агенты из **стора** — в реестр при старте.
   // `createAgentRegistry` читает только файловый каталог `{dataDir}/agents`,
   // а при `storage.backend=postgres` стор агентов — это БД: агент, поставленный
@@ -571,6 +588,9 @@ export async function createStandaloneDeps(
     dataDir,
     toolRegistry,
     agentRegistry,
+    // PROP-090 §«Точка promptBlocks»: тот же реестр, что у фасада плагинов
+    // (ниже, `PluginRuntime`) — блоки плагинов попадают в промпт сессии.
+    promptBlocks,
     projectStore,
     // Онбординг: тул `profile_update` сохраняет ответы интервью в профиль.
     profilesStore,
@@ -631,6 +651,23 @@ export async function createStandaloneDeps(
     // многоитерационный Tool Use на границе итерации (backoff/гонка).
     isCancelRequested: async (sid) =>
       (await sessionManager.getSession(sid))?.status.cancelRequested === true,
+  });
+
+  // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного
+  // (`plugins.lock.json` — источник истины), список со статусом активации и
+  // точки `activate`/`deactivate` для HTTP API/CLI (Ф5б-2/3). Реестры — **те же**
+  // экземпляры, что у оркестратора: блоки промпта (`promptBlocks` выше), фильтры
+  // LLM-вызовов (`getLlmFilters()`) и инструменты (`toolRegistry`).
+  // `executionEnabled=false` (дефолт) → `activateInstalled()` — no-op.
+  const pluginRuntime = new PluginRuntime({
+    layout: resolvePluginLayout({ dataDir, env: process.env }),
+    config: config.pluginsConfig ?? pluginsConfigSchema.parse({}),
+    hostVersion: SYNTH_VERSION,
+    audit: storageContext.pluginAudit,
+    lock: storageContext.pluginLock,
+    promptBlocks,
+    llmFilters: orchestrator.getLlmFilters(),
+    tools: toolRegistry,
   });
 
   const processMessage = orchestrator.createProcessMessage();
@@ -1040,6 +1077,9 @@ export async function createStandaloneDeps(
     // ADR-071 §2.5: единый реестр MCP-серверов (установщик пакета пишет в него).
     mcpRegistryStore,
     orchestrator,
+    // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного
+    // (`main.ts`) и точки для HTTP API/CLI (Ф5б-2/3). `host`+`installer` внутри.
+    pluginRuntime,
     // ADR-077: порт исполнения — тот же инстанс, что у оркестратора и тулов
     // (резолвер проектных инструкций берёт его для `git rev-parse`).
     executionPort,
