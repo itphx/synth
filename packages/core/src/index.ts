@@ -57,6 +57,20 @@ export {
   createInlinePluginLoader,
 } from './engine/plugins/index.js';
 export type { InlinePluginLoaderOptions } from './engine/plugins/index.js';
+// PROP-090 §«out-of-process» (Ф4б-1): клиент wire-протокола и удалённый загрузчик.
+export {
+  DEFAULT_REMOTE_PLUGIN_TIMEOUT_MS,
+  LOOPBACK_PLUGIN_HOSTS,
+  RemotePluginClient,
+  RemotePluginUnavailableError,
+  createRemotePluginLoader,
+} from './engine/plugins/index.js';
+export type {
+  RemotePluginClientOptions,
+  RemotePluginFetch,
+  RemotePluginLoaderOptions,
+  RemotePluginUnavailableReason,
+} from './engine/plugins/index.js';
 // PROP-090 §5/§9 (Ф5а): сервис установки/подтверждения/снятия плагина.
 export {
   PluginInstaller,

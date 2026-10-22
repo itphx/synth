@@ -38,6 +38,21 @@ export {
 } from './inline-loader.js';
 export type { InlinePluginLoaderOptions } from './inline-loader.js';
 
+// Ф4б-1 — `out-of-process`: wire-протокол (клиент) и удалённый загрузчик.
+export {
+  DEFAULT_REMOTE_PLUGIN_TIMEOUT_MS,
+  LOOPBACK_PLUGIN_HOSTS,
+  RemotePluginClient,
+  RemotePluginUnavailableError,
+  createRemotePluginLoader,
+} from './remote/index.js';
+export type {
+  RemotePluginClientOptions,
+  RemotePluginFetch,
+  RemotePluginLoaderOptions,
+  RemotePluginUnavailableReason,
+} from './remote/index.js';
+
 export { computePluginContentHash, verifyPluginIntegrity } from './integrity.js';
 export type { PluginIntegrityVerdict } from './integrity.js';
 

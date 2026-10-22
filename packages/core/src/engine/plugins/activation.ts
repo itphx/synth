@@ -5,8 +5,9 @@
  * integrity → semver-гейт → trust/scan → политика режима → import → facade),
  * реестр активаций и модель disposers. Исполнение кода по умолчанию
  * **выключено** (`plugins.executionEnabled=false`). Загрузчик `inline`
- * реализован в Ф4а (`engine/plugins/inline-loader.ts`); `out-of-process` —
- * остаток Ф4б.
+ * реализован в Ф4а (`engine/plugins/inline-loader.ts`); `out-of-process` — Ф4б
+ * (`engine/plugins/remote/*`: протокол/клиент/загрузчик — Ф4б-1, управление
+ * процессом — Ф4б-2).
  */
 import type {
   CatalogTrustLevel,
@@ -101,6 +102,22 @@ export interface PluginActivationDescriptor {
   installKind?: 'deploy' | 'runtime';
   /** Инициатор активации (`userId` при API/UI, `'cli'`, `'startup'`). */
   actor?: string;
+  /**
+   * Ф4б (`out-of-process`): адрес и токен удалённого процесса плагина.
+   *
+   * Заполняется **установкой/активацией** (Ф4б-2): базовый адрес процесса и
+   * токен из `{dataDir}/secrets/plugin-token` (в `plugins.lock.json` токен не
+   * хранится). Значение токена не логируется и не попадает в тексты ошибок.
+   *
+   * Не задан — `createRemotePluginLoader` отказывает (fail-closed): загрузчик
+   * `out-of-process` не угадывает адрес и не поднимает процесс сам.
+   */
+  remote?: {
+    /** Базовый адрес процесса (`http://127.0.0.1:<port>`). */
+    url: string;
+    /** Bearer-токен доступа к процессу (из файла; не логируется). */
+    token: string;
+  };
 }
 
 /** Дескриптор состоявшейся активации (реестр активаций `PluginHost`). */
@@ -323,7 +340,8 @@ export function pluginLoadFailureReason(err: unknown): PluginLoadFailureReason {
 
 /**
  * Загрузчик кода плагина — **точка расширения** (Ф4а — `inline`,
- * `engine/plugins/inline-loader.ts`; `out-of-process` — остаток Ф4б).
+ * `engine/plugins/inline-loader.ts`; `out-of-process` — Ф4б-1,
+ * `engine/plugins/remote/*`; управление процессом — Ф4б-2).
  *
  * Не задан (`PluginHostOptions.loader`) — шаг `import` останавливается с
  * `plugin.loader_unavailable`.

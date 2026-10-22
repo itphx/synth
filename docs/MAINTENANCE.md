@@ -1245,6 +1245,14 @@ graceful shutdown и завершается с кодом **75** (`EX_TEMPFAIL`)
 блоки системного промпта, фильтры LLM-вызовов, инструменты. Бандл — self-contained ESM-каталог
 (`synth.pack` + `dist/index.js`); npm-зависимости не резолвятся, `@itphx/*` — external.
 
+**Удалённое исполнение (`out-of-process`, Ф4б-1).** Плагин с `mode: 'remote'` или `'both'` может
+исполняться **отдельным процессом**: транспорт — HTTP/1.1 + JSON только на loopback
+(`127.0.0.1`/`::1`/`localhost`), Bearer-токен из файла. Адрес и токен задаёт **установка**
+(`PluginActivationDescriptor.remote`; файл токена — `{dataDir}/secrets/plugin-token`, Ф4б-2) —
+вручную в конфиг их не прописывают, загрузчик не поднимает процесс сам (fail-closed). В этой
+волне по протоколу передаются только `promptBlocks`/`llmFilters`: плагин с `provides.tools`
+при `mode: 'remote'` будет отклонён сверкой `provides` (`plugin.provides_mismatch`) до Ф4б-3.
+
 **Исполнение кода выключено по умолчанию** (`plugins.executionEnabled: false`): установка, скан и
 снятие работают, активация останавливается на шаге `import` (`plugin.execution_disabled`). Включается
 в `config.yaml` (или `PUT /api/v2/settings/plugins`) и **применяется после перезапуска** (инвариант 24).

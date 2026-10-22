@@ -211,6 +211,21 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `'builtin' | 'mcp' | 'plugin'`, в `ToolDefinition` — необязательный `pluginName?` (владелец
   плагинного тула); в манифесте (`provides.tools[]`) объявляется **локальное** имя, в реестре
   живёт полное (сверка `diffPackProvides` — по локальным).
+- PROP-090 §«out-of-process» (Ф4б-1): **wire-протокол плагина** — `types/plugin-protocol.ts`
+  (browser-safe: только типы, константы и чистые функции; реэкспорт из `types`; отдельный
+  пакет не создаётся): `PLUGIN_PROTOCOL_VERSION = 1`, `PLUGIN_PROTOCOL_PATHS`
+  (`/invoke`/`/capabilities`/`/health`), `PLUGIN_PROTOCOL_POINTS` (`promptBlocks`/`llmFilters`;
+  `tools` — Ф4б-3), DTO `PluginCapabilities` (`protocol`/`name`/`version`/`points`),
+  `PluginInvokeRequest` (`protocol`/`point`/`id`/`input`), `PluginInvokeResponse`
+  (`{ok:true,output}` | `{ok:false,error}`), `PluginProtocolError`; перечень
+  `PLUGIN_PROTOCOL_ERROR_REASONS` (`invalid_request`/`unknown_point`/`unknown_id`/
+  `unauthorized`/`timeout`/`internal_error`/`protocol_mismatch`) и `PLUGIN_PROTOCOL_ERROR_STATUS`
+  (как в исполнителе: 400/401/404/500), предикаты `isPluginProtocolErrorReason`/
+  `isPluginProtocolPoint`, проверка ответа `/capabilities` — `checkPluginCapabilities`
+  (версия протокола + имя/версия плагина + валидация точек: тир `stable` запрещён, фазы
+  фильтров из `LLM_FILTER_PHASES`, дубли ключей/id — отказ) и
+  `PLUGIN_PROTOCOL_MAX_PROMPT_BLOCK_CHARS = 64 КиБ` (предел содержимого блока на проводе) +
+  `isPluginPromptBlockStatus`.
 - PROP-090 §10: **семвер и доверие** — `types/semver.ts`: `SEMVER_RANGE_REGEX`, `isSemverRange`,
   `parseSemver`, `satisfiesSemverRange` (операторы `^`/`~`/`>=`/`<=`/`>`/`<`/`=`, wildcard `x`/`*`,
   конъюнкция пробелом; `||` не поддерживается — fail-closed); `PACK_HOST_RANGE_REGEX` ссылается на

@@ -648,6 +648,19 @@
   `maxBundleBytes` (8 МиБ), cache-busting `?v=<contentHash|mtimeMs>`, формы модуля `apply` /
   `default.apply` / `default`-функция, иначе `plugin.module_invalid`; bundle-only — npm-зависимости
   не резолвятся, `@itphx/*` — external, их резолвит Node из `node_modules` ядра),
+  `remote/*` (**Ф4б-1** — транспорт `out-of-process`): `client.ts` (`RemotePluginClient`:
+  loopback-only `127.0.0.1`/`::1`/`localhost` и только `http://`, Bearer на
+  `/capabilities`/`/invoke` (без токена — только `/health`), `AbortSignal.timeout` (5 000 мс),
+  причина отказа из тела `{error:{reason,…}}` или HTTP-статуса, `RemotePluginUnavailableError`;
+  токен **никогда** не пишется в `message` — тексты процесса редактируются), `loader.ts`
+  (`createRemotePluginLoader`: `mode: 'remote'|'both'` иначе `plugin.loader_unavailable`,
+  `PluginActivationDescriptor.remote {url, token}`, `capabilities()` **до** активации,
+  прокси-провайдеры `promptBlocks`/`llmFilters`; ответ блока — строка/`{content}` ≤ 64 КиБ,
+  вердикт — по `LLM_FILTER_VERDICTS` + `redactedContent`/`redactedTexts`; ошибки **вызова**
+  пробрасываются — композер/gateway деградируют, `failMode` фильтра применяет gateway),
+  `index.ts` — баррел. Управление процессом (spawn/health-ожидание/stop, файл токена) — **Ф4б-2**,
+  точка `tools` — **Ф4б-3**; автоподключения загрузчика в `server/app.ts`/`main.ts`/deps нет,
+  `PluginActivationDescriptor.remote` заполняет установка,
   `integrity.ts` (`computePluginContentHash`/
   `verifyPluginIntegrity`), `exact-host-exceptions.ts` (`readExactHostExceptions` — файл точных
   исключений семвер-гейта: **одна полная semver-версия host в строке**, `#` — комментарий,
@@ -669,8 +682,8 @@
   `provides` не совпало с фактическими регистрациями, см. ниже), `plugin_filter.denied`/
   `plugin_filter.deny_downgraded`/`plugin_filter.unavailable` (журнал решений фильтров). Seam'ы:
   `PluginScanHook` (**Ф2 — закрыт**,
-  дефолтная реализация встроенная), `PluginLoader` (**Ф4а — `inline` реализован**;
-  `out-of-process` — остаток Ф4б), `PluginFacade`
+  дефолтная реализация встроенная), `PluginLoader` (**Ф4а — `inline` реализован**; **Ф4б-1 —
+  `remote`-загрузчик `createRemotePluginLoader`**; управление процессом — Ф4б-2), `PluginFacade`
   (**Ф3а — `registerPromptBlock`**: регистрация провайдера блока промпта с возвратом disposer'а;
   **Ф3б — `registerLlmFilter`**: регистрация фильтра LLM-вызовов от имени плагина — хост подставляет
   `pluginName`/`pluginVersion` и **фактическое** доверие активации, `onAudit` пишет в журнал плагинов;
