@@ -57,6 +57,14 @@ export {
   createInlinePluginLoader,
 } from './engine/plugins/index.js';
 export type { InlinePluginLoaderOptions } from './engine/plugins/index.js';
+// PROP-090 §5/§9 (Ф5а): сервис установки/подтверждения/снятия плагина.
+export { PluginInstaller, resolvePluginEntry } from './engine/plugins/index.js';
+export type {
+  PluginInstallOutcome,
+  PluginInstallRequest,
+  PluginInstallerDeps,
+  PluginUninstallResult,
+} from './engine/plugins/index.js';
 // PROP-068 §4.3 / PROP-090 §9 (Ф2): статический сканер расширений — правила,
 // квоты, `.skillignore`, кэш сканов и дефолтный хук скана.
 export {

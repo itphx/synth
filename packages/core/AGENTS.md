@@ -718,6 +718,29 @@
   `pluginQuarantineDir` (`<name>@<version>`); `stagePluginBundle` (решение install-policy: `allow` →
   в `installed/` + `PLUGIN_INTEGRITY.json`; `ask`/`block` → остаётся в `quarantine/`, в `installed/`
   **не попадает**); `releaseFromQuarantine` (перенос из карантина после подтверждения владельца).
+  `PLUGIN_INTEGRITY.json` (Ф5а) хранит не только `sha256`/`source`/`fetched_at`, но и `trust_level?`/
+  `install_kind?`/`identifier?`/`ref?` — иначе подтверждение из карантина не знало бы фактическое
+  доверие (его резолвит источник, не манифест).
+- `engine/plugins/installer.ts` — **Ф5а: `PluginInstaller`**, сервис установки/подтверждения/снятия
+  (API/CLI — Ф5б/Ф5в). `installFromDirectory({dir, trustLevel, source, identifier?, ref?, installKind?,
+  activate?, actor?})`: порядок **манифест (`validatePackManifest`, `kind: 'plugin'`) → состав бандла и
+  content-hash → fail-closed (`scan=disabled` + `executionEnabled`) → trust-floor → скан →
+  `runtimeInstall=deny` → install-policy**; `allow` → `installed/<name>@<version>/` + `lock.save` +
+  аудит `install`; `ask` → `quarantine/…` (lock **не** пишется, аудит `install/rejected`
+  `plugin.approval_required`); `block`/`dangerous` → `plugin.scan_rejected`. `approve(name, {version?,
+  activate?})` ищет lock, затем карантин; сверяет `PLUGIN_INTEGRITY.json` с фактическим хешем
+  (`plugin.integrity_mismatch`/`plugin.integrity_unverifiable`), повторяет гейты и переносит
+  `releaseFromQuarantine` только без `block`; нет данных доверия → fail-closed `community`.
+  `uninstall(name, {removeFiles?})` — деактивация активного (`host.deactivate`) → `lock.delete` →
+  `rm -rf installed/<name>@<version>` и одноимённого карантина → аудит `uninstall`; повтор —
+  `{removed:false}` без записи. `activation: true` вызывает `host.activate` с `rootDir`/`files`/
+  `contentHash`/`entry`; отказ активации установку не отменяет. **Правило `entry`**:
+  `dist/index.js` → первый по алфавиту `.js`/`.mjs` в `dist/` → `dist/index.js`. Состав бандла:
+  рекурсивный обход (сортировка, симлинки/`node_modules`/`.git` пропускаются, `PLUGIN_INTEGRITY.json`
+  исключён); бинарные файлы в `files` не попадают (сканер видит их в каталоге; байтовое
+  копирование ассетов — Ф5б) — поэтому хеш совпадает с `scanPluginDirectory`. Идемпотентность: lock —
+  upsert по имени (`installed_at` иммутабелен, `updated_at` обновляется); другая версия заменяет
+  запись, каталог прежней версии остаётся (известное ограничение, чистка — Ф5б).
 - **Шаг trust/scan в `PluginHost` (Ф2).** Порядок: **trust-floor → скан → install-policy**.
   Trust-floor проверяется **до** install-policy (`plugins.trustFloor`; ниже порога — отказ
   `plugin.trust_below_floor` **при любом вердикте**). Скан — встроенный или подключённый хук
@@ -726,7 +749,8 @@
   (`installPolicyDecision`, `shared/src/types/plugin-scan.ts`). Сбой сканера — **fail-closed**
   (`plugin.scan_rejected`). При `plugins.scan: 'disabled'` сканирование **не выполняется**, вердикт
   `safe`, в аудите — `scanPerformed: false`; доверие при этом всё равно проверяется по trust-floor.
-  **Аудит:** действие `scan` (плюс `activate`/`deactivate`) — `PLUGIN_AUDIT_ACTIONS`; запись получила
+  **Аудит:** действия `activate`/`deactivate`/`scan`/`filter` + Ф5а — `install`/`uninstall`
+  (`PLUGIN_AUDIT_ACTIONS`; порядок — жизненный цикл, `install` перед `activate`); запись получила
   поля `scanVerdict?`/`scanPerformed?`/`scanFindings?`.
 - `engine/pipelines/*` — ADR-101: **второй движок** рядом с `ChatOrchestrator`
   (шаг пайплайна ≠ сессия; движок сам по себе не знает про HTTP/сессии/очередь).

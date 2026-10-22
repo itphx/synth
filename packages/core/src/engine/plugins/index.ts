@@ -41,6 +41,15 @@ export type { InlinePluginLoaderOptions } from './inline-loader.js';
 export { computePluginContentHash, verifyPluginIntegrity } from './integrity.js';
 export type { PluginIntegrityVerdict } from './integrity.js';
 
+// Ф5а — сервис установки: манифест → скан → политика → раскладка/lock → аудит.
+export { PluginInstaller, resolvePluginEntry } from './installer.js';
+export type {
+  PluginInstallOutcome,
+  PluginInstallRequest,
+  PluginInstallerDeps,
+  PluginUninstallResult,
+} from './installer.js';
+
 export { readExactHostExceptions } from './exact-host-exceptions.js';
 
 // Ф2 — модель доверия: статический сканер, install-policy, раскладка и lock.
