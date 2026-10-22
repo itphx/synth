@@ -177,3 +177,102 @@ describe('HookBus', () => {
     expect(result.context).toEqual(ctx);
   });
 });
+
+describe('HookBus — политика builtin (PROP-090 §10)', () => {
+  let bus: HookBus;
+
+  beforeEach(() => {
+    bus = new HookBus();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('builtin-обработчик нельзя снять через возвращённую функцию отписки', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const handler = vi.fn();
+    const unsubscribe = bus.on('message_received', handler, { builtin: true, mode: 'async' });
+
+    unsubscribe();
+
+    expect(bus.count('message_received')).toBe(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('builtin handler'));
+    bus.emitAsync('message_received', {
+      sessionId: 's1',
+      kind: 'user',
+    });
+    await flush();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('builtin-обработчик нельзя снять через off()', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const handler = vi.fn();
+    bus.on('session_start', handler, { builtin: true });
+
+    bus.off('session_start', handler);
+
+    expect(bus.count('session_start')).toBe(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('off()'));
+    await bus.emit('session_start', { sessionId: 's1' });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('обычный обработчик снимается как раньше (off и отписка)', async () => {
+    const byOff = vi.fn();
+    const byUnsubscribe = vi.fn();
+    bus.on('session_start', byOff);
+    const unsubscribe = bus.on('session_start', byUnsubscribe);
+
+    bus.off('session_start', byOff);
+    unsubscribe();
+
+    expect(bus.count('session_start')).toBe(0);
+    await bus.emit('session_start', { sessionId: 's1' });
+    expect(byOff).not.toHaveBeenCalled();
+    expect(byUnsubscribe).not.toHaveBeenCalled();
+  });
+
+  it('offBuiltin — явный путь владельца регистрации', async () => {
+    const handler = vi.fn();
+    bus.on('session_start', handler, { builtin: true });
+
+    bus.offBuiltin('session_start', handler);
+
+    expect(bus.count('session_start')).toBe(0);
+    await bus.emit('session_start', { sessionId: 's1' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('offBuiltin не снимает обычные обработчики, если ссылка не совпала', async () => {
+    const kept = vi.fn();
+    bus.on('session_start', kept, { builtin: true });
+
+    bus.offBuiltin('session_start', vi.fn());
+
+    expect(bus.count('session_start')).toBe(1);
+    await bus.emit('session_start', { sessionId: 's1' });
+    expect(kept).toHaveBeenCalledTimes(1);
+  });
+
+  it('removeAll снимает и builtin (служебный путь для тестов)', () => {
+    bus.on('session_start', vi.fn(), { builtin: true });
+    bus.removeAll();
+    expect(bus.count('session_start')).toBe(0);
+  });
+
+  it('политика builtin не меняет priority/block/patch/изоляцию ошибок', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const order: string[] = [];
+    bus.on('pre_tool_use', () => { order.push('builtin-high'); return { patch: { agent: 'patched' } }; }, { priority: 10, builtin: true });
+    bus.on('pre_tool_use', () => { order.push('low'); }, { priority: 0 });
+    bus.on('pre_tool_use', () => { throw new Error('boom'); }, { priority: 5, builtin: true });
+
+    const result = await bus.emit('pre_tool_use', { tool: 'bash', input: {} });
+
+    expect(order).toEqual(['builtin-high', 'low']);
+    expect(result.context.agent).toBe('patched');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[HookBus] handler'));
+  });
+});

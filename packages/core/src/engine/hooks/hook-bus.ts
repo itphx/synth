@@ -22,9 +22,13 @@ export interface HookRegistrationOptions {
   /** Приоритет: больше — раньше. По умолчанию 0. При равенстве — порядок регистрации. */
   priority?: number;
   /**
-   * Метаданные: встроенный обработчик ядра. Снятие builtin-обработчиков
-   * зарезервировано под будущую политику (внешние плагины не должны снимать
-   * обработчики ядра); текущий `off` не отказывает, флаг только хранится.
+   * Метаданные: встроенный обработчик ядра (PROP-090 §10 — «плагин не может
+   * снять/подменить builtin-обработчики»).
+   *
+   * Защита fail-closed: такой обработчик **нельзя** снять через `off(name,
+   * handler)` и через возвращённую функцию отписки — попытка отклоняется
+   * (без исключения) и пишется в лог. Явный путь снятия — `offBuiltin()`
+   * (см. метод): его зовёт владелец регистрации (ядро), а не внешний код.
    */
   builtin?: boolean;
 }
@@ -59,7 +63,13 @@ export class HookBus {
   private _handlers = new Map<HookName, HookRegistration[]>();
   private _seq = 0;
 
-  /** Зарегистрировать обработчик. Возвращает функцию отписки. */
+  /**
+   * Зарегистрировать обработчик. Возвращает функцию отписки.
+   *
+   * Для builtin-регистрации (PROP-090 §10) функция отписки **не снимает**
+   * обработчик: попытка отклоняется (fail-closed, без исключения) и
+   * пишется в лог. Явный путь снятия — {@link HookBus.offBuiltin}.
+   */
   on<N extends HookName>(
     name: N,
     handler: HookHandler<N>,
@@ -83,13 +93,47 @@ export class HookBus {
     }
 
     return () => {
+      if (reg.builtin) {
+        console.warn(
+          `[HookBus] builtin handler for "${name}" cannot be unsubscribed (builtin policy) — use offBuiltin()`,
+        );
+        return;
+      }
       this._remove(name, (r) => r === reg);
     };
   }
 
-  /** Снять обработчик по ссылке. Builtin-обработчики тоже снимаются (политика — позже). */
+  /**
+   * Снять обработчик по ссылке.
+   *
+   * Builtin-обработчики **не снимаются** (PROP-090 §10: внешний код не должен
+   * отключать обработчики ядра): попытка отклоняется fail-closed (без
+   * исключения) и пишется в лог. Явный путь — {@link HookBus.offBuiltin}.
+   */
   off<N extends HookName>(name: N, handler: HookHandler<N>): void {
-    this._remove(name, (r) => r.handler === (handler as HookHandler<HookName>));
+    const target = handler as HookHandler<HookName>;
+    const handlers = this._handlers.get(name);
+    if (!handlers) return;
+    if (handlers.some((r) => r.handler === target && r.builtin)) {
+      console.warn(
+        `[HookBus] builtin handler for "${name}" cannot be removed via off() (builtin policy) — use offBuiltin()`,
+      );
+      return;
+    }
+    this._remove(name, (r) => r.handler === target);
+  }
+
+  /**
+   * Явный путь снятия builtin-обработчика — зовёт **владелец регистрации**
+   * (ядро: деактивация подсистемы, graceful shutdown), а не внешний код.
+   *
+   * Публичный `off` и функция отписки из `on` для builtin-регистраций
+   * отказывают (fail-closed). Метод не входит в фасад плагинов (Ф1): плагины
+   * работают через `SynthPlugin`, а не через сырую шину.
+   */
+  offBuiltin<N extends HookName>(name: N, handler: HookHandler<N>): void {
+    const target = handler as HookHandler<HookName>;
+    this._remove(name, (r) => r.handler === target);
   }
 
   /**
@@ -140,7 +184,10 @@ export class HookBus {
     }
   }
 
-  /** Полная очистка (для тестов). */
+  /**
+   * Полная очистка (для тестов): снимает **все** обработчики, включая
+   * builtin. Служебный метод — в фасад плагинов (Ф1) не попадает.
+   */
   removeAll(): void {
     this._handlers.clear();
   }

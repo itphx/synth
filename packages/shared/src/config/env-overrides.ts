@@ -75,6 +75,14 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'analytics', key: 'retentionDays', type: 'number' },
   // metrics (ADR-094): Helm ставит `SYNTH_METRICS_ENABLED` — имя должно совпадать.
   { section: 'metrics', key: 'enabled', type: 'boolean' },
+  // plugins (PROP-090 §10): политики слоя плагинов. Списки (allowlist/denylist/
+  // remoteAllowlist) — объектные, остаются в config.yaml.
+  { section: 'plugins', key: 'enabled', type: 'boolean' },
+  { section: 'plugins', key: 'runtimeInstall', type: 'string' },
+  { section: 'plugins', key: 'trustFloor', type: 'string' },
+  { section: 'plugins', key: 'scan', type: 'string' },
+  { section: 'plugins', key: 'exactHostExceptions', type: 'string' },
+  { section: 'plugins', key: 'promptBlockMaxChars', type: 'number' },
 ];
 
 /** camelCase → SNAKE_CASE (`autoBind` → `AUTO_BIND`, `ephemeralTtl` → `EPHEMERAL_TTL`). */

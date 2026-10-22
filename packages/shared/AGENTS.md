@@ -76,11 +76,21 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   совпадает с Helm-чартом). Токен в схеме **не хранится** (инвариант 13): env `SYNTH_METRICS_TOKEN` /
   `{dataDir}/secrets/metrics-token` резолвит core (`metrics/token.ts`). Тесты — `defaults.test.ts`
   (default `false`), `env-overrides.test.ts` (имя и применение), `types.test.ts` (схема).
-- **Env-оверрайды скалярных ключей секций** `events`/`scheduler`/`webhooks`/`decision`/`analytics`/`metrics` —
+- PROP-090 §10: секция `plugins` (`pluginsConfigSchema` + `PluginsConfig`) — политики слоя плагинов:
+  `enabled` (default `true`), `runtimeInstall` (`allow|deny`, default `deny`), `trustFloor`
+  (уровень доверия, default `trusted`), `scan` (`enabled|disabled`, default `enabled`),
+  `allowlist`/`denylist`/`remoteAllowlist` (списки имён, default `[]`), `exactHostExceptions`
+  (путь к файлу точных исключений семвер-гейта, default `''`), `promptBlockMaxChars`
+  (бюджет символов на блок промпта от плагина, default `4000`); скалярные env-оверрайды
+  `SYNTH_PLUGINS_*` (`enabled`/`runtimeInstall`/`trustFloor`/`scan`/`exactHostExceptions`/
+  `promptBlockMaxChars`) — списки остаются в `config.yaml`. Runtime-override в core —
+  `RuntimeSettings.plugins` + `mergePluginsConfig` (приоритет runtime > config > defaults).
+- **Env-оверрайды скалярных ключей секций** `events`/`scheduler`/`webhooks`/`decision`/`analytics`/`metrics`/`plugins` —
   реестр `ENV_OVERRIDES` (`src/config/env-overrides.ts`), применяется в `loadConfig`;
   имя `SYNTH_<SECTION>_<KEY>` (camelCase→SNAKE_CASE), невалидное значение → warn + игнор;
   приоритет `CLI > env > config.yaml > defaults` (ADR-023). Объектные/нескалярные ключи
-  (`events.identityMap`, `events.dedupStore`, `mcp.servers`, …) остаются в config.yaml.
+  (`events.identityMap`, `events.dedupStore`, `mcp.servers`, `plugins.allowlist`/`denylist`/`remoteAllowlist`, …)
+  остаются в config.yaml.
 - ADR-077: секция `execution` — **переключатель топологии исполнения** (`mode`:
   `inline`|`remote`; `remote.url`/`remote.timeoutMs`/`remote.concurrency`/`remote.failMode`/
   `remote.tokenSecret`); Zod `executionConfigSchema` + `ExecutionConfig`/`ExecutionMode`/
@@ -127,7 +137,9 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - `EventType` включает `fs.changed` (мутирующий тул ядра изменил workspace) и `session.moved` (перенос сессии между проектами); потребители — `transportStore` UI (ADR-024). ADR-101: типы событий движка пайплайнов — `pipeline.run.started`/`node_started`/`node_finished`/`awaiting_human`/`finished`/`failed` и `pipeline.completed` (выход `gateway`) в `types/bus-events.ts`; это **инстансные** события (прогон — не сессия) — публикуются в инстансный канал шины, новых транспортных каналов нет.
 - ADR-101: **движок пайплайнов** — `src/types/pipeline-engine.ts` (re-export из `src/types/index.ts`): `PipelineMode` (`plan`/`act`/`yolo`, `PIPELINE_MODES`), `PipelineNodeKind` (`agent`/`script`/`tool`/`human`), `PipelineExitKind` (`session`/`file`/`gateway`/`none`), `PipelineConditionOp` (`eq`/`ne`/`in`/`exists`/`gt`/`lt`), `PipelineCondition`, `PipelineTransition`, `PipelineNode`, `PipelineExit`, `PipelineSpec` (`id`/`name`/`version`/`status`/`mode`/`projectId?`/`io?`/`vars?`/`nodes`/`exits`), `PipelineRunTrigger` (`kind` = `user|gateway|schedule|tool|webhook|manual`, `source?`/`type?`/`payload?`/`dedupKey?`), `StepResult`, `PipelineRunStatus`, `PipelineRun`, `PipelineRunEventType`/`PipelineRunEvent` и `validatePipelineSpec(spec)` — валидатор графа (проблемы **строками**, без throw). Zod — `pipelineModeSchema`/`pipelineNodeKindSchema`/`pipelineExitKindSchema`/`pipelineConditionOpSchema`/`jsonSchemaLikeSchema`/`pipelineConditionSchema`/`pipelineSpecEdgeSchema`/`pipelineSpecNodeSchema`/`pipelineExitSchema`/`pipelineSpecSchema`/`pipelineRunTriggerSchema`/`pipelineStepResultSchema`/`pipelineRunStatusSchema`/`pipelineRunSchema`/`pipelineRunEventTypeSchema`/`pipelineRunEventSchema`. Имя `PipelineTrigger` занято legacy-контрактом ADR-100 (`types/pipeline.ts`) — не путать.
 - ADR-101: **i18n-ключи движка пайплайнов** — `src/i18n/index.ts`: `ENGINE_MESSAGE_KEYS` дополнены префиксом `pipeline.*` (`not_found`, `not_published`, `invalid_spec`, `loop_limit`, `cancelled`, `executor_missing`, `gate_rejected`, `gate_timeout`, `step_failed`, `step_timeout`, `run_not_found`, `invalid_state`, `tool_not_found`, `tool_failed`, `script_failed`, `script_no_command`, `permission_denied`, `agent_unavailable`, `provider_not_found`, `llm_failed`, `llm_unrecoverable`) с параметрами в `ENGINE_MESSAGE_PARAMS` (ADR-041: строки движка — только через ключи `shared/i18n`).
-- ADR-030/ADR-089: хуки — `HookName`/`HookMode`/`HookResult`/`HookContextMap` (`types/hooks.ts`); события — `SynthEvent`/`EventBinding`/`RouteDecision`/`SessionRequest`/`EventMode`/`EventDeliveryMode` и правила `EventRouteRule`/`EventRouteTarget`/`EventRouteMatch` (`types/events.ts`); Zod `synthEventSchema`, `eventBindingSchema`, `sessionRequestSchema`, `eventIngestSchema`, `eventBindingInputSchema`, `eventRouteRuleSchema`/`eventRouteRuleInputSchema`/`eventRouteRuleUpsertSchema`/`eventRouteTargetSchema`/`eventRouteMatchSchema`. Поля `Session.expiresAt`/`archivedAt` — ephemeral TTL/архив (ADR-089).
+- ADR-030/ADR-089: хуки — `HookName`/`HookMode`/`HookResult`/`HookContextMap` (`types/hooks.ts`), плюс
+  `MessageReceivedKind` (`user`/`scheduler`/`external`) и контексты `message_received`/`schedule_fired`
+  без текста сообщения/задания (PROP-090 Ф0); события — `SynthEvent`/`EventBinding`/`RouteDecision`/`SessionRequest`/`EventMode`/`EventDeliveryMode` и правила `EventRouteRule`/`EventRouteTarget`/`EventRouteMatch` (`types/events.ts`); Zod `synthEventSchema`, `eventBindingSchema`, `sessionRequestSchema`, `eventIngestSchema`, `eventBindingInputSchema`, `eventRouteRuleSchema`/`eventRouteRuleInputSchema`/`eventRouteRuleUpsertSchema`/`eventRouteTargetSchema`/`eventRouteMatchSchema`. Поля `Session.expiresAt`/`archivedAt` — ephemeral TTL/архив (ADR-089).
 - ADR-089/ADR-052: API-ключи привязок — типы `EventBindingApiKey` (поля `label` (обязательная, уникальная глобально по инстансу)/`description?`/`rateLimitPerMinute?`/`createdBy`/`prefix`/`lastUsedAt?`, `expiresAt?`/`revokedAt?`) и `EventBindingApiKeyCreated` (+ `key` — plaintext единожды), `EventKeyCredential` (в core); Zod `eventBindingApiKeySchema`/`eventBindingApiKeyCreateSchema` (`{label, description?, expiresAt?, rateLimitPerMinute?}`)/`eventBindingApiKeyUpdateSchema` (`null` — сброс поля)/`eventBindingApiKeyCreatedSchema` и `eventKeyIngestSchema` (`eventIngestSchema.partial({ source: true })` — приём по ключу).
 - ADR-052 (этап I): **service-key** — тип `ServiceApiKey` (`id` `svk_<uuid>`/`label`/`description?`/`roles: GlobalRole[]`/`scopes: string[]`/`allowedProjects?: string[]`/`rateLimitPerMinute?`/`expiresAt?`/`revokedAt?`/`createdBy`/`createdAt`/`lastUsedAt?`/`prefix`) и `ServiceApiKeyCreated` (+ `key` — plaintext единожды) (`types/service-keys.ts`, re-export из `types`); входные `CreateServiceApiKeyInput`/`UpdateServiceApiKeyPatch` (`null` — сброс поля). Реестры/матчер: `SERVICE_SCOPES` (точечные scope'ы, включая зонтичный `automation:install` — установщик пакетов расширений: агенты и их ролевые промпты, пайплайны, порождаемые пакетом правила маршрутизации и расписания), `SERVICE_SCOPE_FAMILIES` (wildcard-семейства, глобального `*` нет; `automation` в семейства **не** входит), `isKnownScope`/`hasServiceScope`, `SERVICE_SCOPE_SETS` (наборы «достаточно любого из»: `routesWrite`/`schedulesWrite`/`agentsWrite`) и матчер `hasAnyServiceScope`. Zod — `serviceApiKeySchema`/`serviceApiKeyCreateSchema`/`serviceApiKeyUpdateSchema`/`serviceApiKeyCreatedSchema` (валидация scope/role).
 - ADR-052 (этап II): **webhooks** — типы `WebhookSubscription` (`id` `whk_<uuid>`/`label` (уникальна)/`description?`/`url`/`events: string[]`/`enabled`/`secretPrefix`/`createdBy`/`createdAt`/`lastDeliveryAt?`/`lastStatus?`/`disabledAt?`) и `WebhookSubscriptionCreated` (+ `secret` — plaintext единожды), `WebhookDelivery` (`whd_<uuid>`/`subscriptionId`/`eventType`/`status`/`attempts`/`responseStatus?`/`error?`/`createdAt`/`completedAt?`), входные `CreateWebhookSubscriptionInput`/`UpdateWebhookSubscriptionPatch` (`types/webhooks.ts`, re-export из `types`); матчер `matchWebhookEvent(patterns, type)` (exact/`prefix.*`, пусто — `DEFAULT_WEBHOOK_EVENT_PATTERNS`), валидатор `isWebhookEventPattern`, префикс `WEBHOOK_SECRET_PREFIX` (`whsec_`). Zod — `webhookSubscriptionSchema`/`webhookSubscriptionCreateSchema`/`webhookSubscriptionUpdateSchema`/`webhookSubscriptionCreatedSchema`/`webhookDeliverySchema`/`webhookEventPatternSchema`/`webhookUrlSchema`.
@@ -142,7 +154,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `pipelineErrorPolicySchema`/`pipelineDefinitionSchema`/`pipelineInstanceStatusSchema`/`pipelineStepStatusSchema`/
   `pipelineStepStateSchema`/`pipelineTriggerSchema`/`pipelineInstanceSchema`. Ссылка на шаг пайплайна в
   цели правила маршрутизации — `PipelineRef` (`types/events.ts`) + `pipelineRefSchema` (`schemas`).
-- ADR-086 §5: **манифест пакета расширения** (`synth.pack`) — `PackKind`
+- ADR-086 §5 / PROP-090 §8: **манифест пакета расширения** (`synth.pack`) — `PackKind`
   (`plugin`/`gateway`/`addon`/`pack`/`storage`), `PackType` (тип контент-пака: `skills`/`agents`/`mcp`/
   `themes`/`i18n`/`providers`/`prompts`/`automation`/`policies`/`memory`/`ui`), `PackMcpProvide`/
   `PackSkillProvide`/`PackAgentProvide`/`PackPipelineProvide` и сводный `PackProvides` (что расширение
@@ -153,6 +165,26 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `packKindSchema`/`packTypeSchema`/`packNameSchema`/`packVersionSchema`/`packHostSchema`/
   `packMcpProvideSchema`/`packSkillProvideSchema`/`packAgentProvideSchema`/`packPipelineProvideSchema`/
   `packProvidesSchema`/`packManifestSchema`. Модули browser-safe (`zod` + локальные типы).
+- PROP-090 §8/§9: **вклады плагина в манифесте** — `provides.tools[]` (`packToolsProvideSchema`:
+  непустые имена, без дублей), `provides.promptBlocks[]` (`packPromptBlockProvideSchema`:
+  `{key, tier, order, title?, provenance?}`, `.strict()`; тир **только** `context`/`volatile` —
+  `stable` запрещён, граница prompt-cache ADR-070), `provides.llmFilters[]`
+  (`packLlmFilterProvideSchema`: `{id, phase, failMode?, timeoutMs?}`, `.strict()`, фазы
+  `pre_request`/`post_response`/`embedding`), плюс поля манифеста `mode` (`PACK_PLUGIN_MODES`:
+  `inline`/`remote`/`both`, только `kind: 'plugin'`), `permissions` (`packPermissionsSchema`:
+  `network`/`secrets`/`tools`/`hooks` — заявление, не разрешение) и `trust` (`packTrustSchema`:
+  `{level?, source?}`, заявленный уровень — верхняя граница, выше записи каталога не поднимает).
+  `validatePackManifest` — правила 12–14 (вклады плагина по явным схемам; `mode` только у плагина;
+  `trust.level` плагина не выше `trusted`). Сверка «объявлено ↔ зарегистрировано» — `diffPackProvides`.
+- PROP-090 §10: **семвер и доверие** — `types/semver.ts`: `SEMVER_RANGE_REGEX`, `isSemverRange`,
+  `parseSemver`, `satisfiesSemverRange` (операторы `^`/`~`/`>=`/`<=`/`>`/`<`/`=`, wildcard `x`/`*`,
+  конъюнкция пробелом; `||` не поддерживается — fail-closed); `PACK_HOST_RANGE_REGEX` ссылается на
+  `SEMVER_RANGE_REGEX`, `contracts` манифеста валидируются тем же матчером; гейт
+  `checkExtensionCompatibility` (порядок «контракт → host», вердикты `contract_mismatch`/`host_mismatch`,
+  `exactHostExceptions`). `types/trust.ts`: `CATALOG_TRUST_LEVELS`/`catalogTrustLevelSchema`/
+  `trustLevelRank` — единый перечень уровней (`builtin`/`verified`/`trusted`/`community`), общий для
+  каталога (`types/catalog.ts` реэкспортирует) и манифеста (модуль выделен из-за цикла
+  `catalog → pack`).
 - ADR-084: типы decision-моделей — `DecisionQuestion`/`DecisionAnswer` (варианты `noul`/`choice`/`score`),
   `DecisionRequest`/`DecisionResponse`/`DecisionUsage` и медиа-контракт `DecisionMediaInput`
   (`images?`/`videos?`, задел PROP-085) (`types/decision.ts`); Zod

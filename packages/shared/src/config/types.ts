@@ -17,6 +17,7 @@ import {
   MAX_UPLOAD_BYTES_LIMIT,
   ToolCapability,
 } from '../types/index.js';
+import { catalogTrustLevelSchema } from '../types/trust.js';
 
 const toolCapabilityValues = Object.values(ToolCapability) as [ToolCapability, ...ToolCapability[]];
 
@@ -566,6 +567,42 @@ export const webhooksConfigSchema = z.object({
   deliveryRetentionDays: z.number().int().min(0).default(30),
 });
 
+// --- Слой плагинов (PROP-090 §10) ---
+
+/**
+ * PROP-090 §10: конфигурация слоя плагинов (Extension API).
+ *
+ * - `enabled` — мастер-выключатель Extension API (по умолчанию включён: слой
+ *   Ф0–Ф2 ещё не исполняет код плагинов, но политики читаются);
+ * - `runtimeInstall` — установка плагинов во время работы инстанса
+ *   (`allow`/`deny`; по умолчанию `deny` — в managed установка только
+ *   deploy-time);
+ * - `trustFloor` — минимальный уровень доверия для **активации** плагина
+ *   (по умолчанию `trusted`: плагин ниже порога устанавливается, но не
+ *   активируется — PROP-090 §9);
+ * - `scan` — статический сканер содержимого расширения
+ *   (`enabled`/`disabled`; по умолчанию включён);
+ * - `allowlist`/`denylist` — списки имён расширений, которым разрешён/
+ *   запрещён запуск (пусто — политика не применяется);
+ * - `remoteAllowlist` — allow-list расширений для hybrid-контура (Ф7);
+ * - `exactHostExceptions` — путь к файлу точных исключений семвер-гейта
+ *   (формат файла — открытый вопрос PROP-090 §14);
+ * - `promptBlockMaxChars` — бюджет символов **на блок** системного промпта
+ *   от плагина (по умолчанию 4000; превышение — обрезка хостом с маркером
+ *   усечения, PROP-090 §5).
+ */
+export const pluginsConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  runtimeInstall: z.enum(['allow', 'deny']).default('deny'),
+  trustFloor: catalogTrustLevelSchema.default('trusted'),
+  scan: z.enum(['enabled', 'disabled']).default('enabled'),
+  allowlist: z.array(z.string().min(1)).default([]),
+  denylist: z.array(z.string().min(1)).default([]),
+  remoteAllowlist: z.array(z.string().min(1)).default([]),
+  exactHostExceptions: z.string().default(''),
+  promptBlockMaxChars: z.number().int().positive().default(4000),
+});
+
 // --- Egress-политика (shared формат tools/webhooks/MCP) ---
 
 /** Общий формат политики egress (`mode` + `list` + `exceptions`). */
@@ -1010,6 +1047,7 @@ export const synthConfigSchema = z.object({
   decision: decisionConfigSchema.default({}),
   analytics: analyticsConfigSchema.default({}),
   metrics: metricsConfigSchema.default({}),
+  plugins: pluginsConfigSchema.default({}),
   egress: egressConfigSchema.default({}),
   webhooks: webhooksConfigSchema.default({}),
   instructions: instructionsConfigSchema.default({}),
@@ -1053,6 +1091,8 @@ export type DecisionConfig = z.infer<typeof decisionConfigSchema>;
 export type AnalyticsConfig = z.infer<typeof analyticsConfigSchema>;
 /** ADR-094: секция `metrics` (`enabled`). */
 export type MetricsConfig = z.infer<typeof metricsConfigSchema>;
+/** PROP-090 §10: секция `plugins` — политики слоя плагинов. */
+export type PluginsConfig = z.infer<typeof pluginsConfigSchema>;
 export type WebhooksConfig = z.infer<typeof webhooksConfigSchema>;
 export type EgressPolicyConfig = z.infer<typeof egressPolicySchema>;
 export type WebhooksEgressPolicyConfig = z.infer<typeof webhooksEgressPolicySchema>;

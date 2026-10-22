@@ -540,8 +540,15 @@
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
 - `engine/hooks/*` — `HookBus` (ADR-030): ядровая in-process шина хуков
   (`on/off/emit/emitAsync`, priority, `sync`/`async`, `builtin`), отдельная от
-  session-`EventBus`; эмиты `pre_tool_use`/`post_tool_use`/`plan_approved`/
-  `permission_denied`/`agent_spawned|completed|failed`/`session_start|end`.
+  session-`EventBus`. Политика `builtin` (Ф0 PROP-090): регистрация ядра (`builtin: true`)
+  **не снимается** ни `off(name, handler)`, ни функцией отписки из `on` (отказ + лог, без
+  исключения); явный путь владельца регистрации — `offBuiltin(name, handler)`; `removeAll()` —
+  служебный (тесты). Пример — `analytics/hooks.ts` (подписки `builtin`, отписка `offBuiltin`).
+  Эмиты: `pre_tool_use`/`post_tool_use`/`plan_approved`/`plan_rejected` (`plan_exit` с ошибкой)/
+  `permission_denied`/`agent_spawned|completed|failed`/`session_start|end`/`session_requested`/
+  `external_event`/`message_received` (только `role: user`, первая попытка, без текста)/
+  `schedule_fired` (метаданные расписания, без текста задания). `callback` объявлен, но в core
+  не эмитится — нет точки «нажатие инлайн-кнопки» (контракт внешнего канала, ADR-087/ADR-103).
 - `engine/pipelines/*` — ADR-101: **второй движок** рядом с `ChatOrchestrator`
   (шаг пайплайна ≠ сессия; движок сам по себе не знает про HTTP/сессии/очередь).
   `engine.ts` — `PipelineEngine`: цикл прогона по опубликованной версии спецификации,
@@ -648,7 +655,10 @@
   `cron.ts` (5 полей UTC), `duration.ts` (`30s|15m|1h|24h`), `schedule-time.ts`,
   `leader.ts` (`SchedulerLeader`: `AlwaysLeader` default / `FileLeader` — file-лок
   `{dataDir}/scheduler/leader.lock`); публикует `{source:'cron', type:'schedule_fired'}`
-  через `EventIngress`. Тикер стартует только у лидера (`scheduler.leaderElection`).
+  через `EventIngress`, а перед публикацией (при наличии подписчиков) эмитит хук
+  `schedule_fired` (async, метаданные расписания — `scheduleId`/`name`/`target`/`cron`/`trigger`,
+  без текста задания; шина — `SchedulerServiceDeps.hooks`, ADR-030/Ф0 PROP-090).
+  Тикер стартует только у лидера (`scheduler.leaderElection`).
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
@@ -704,7 +714,10 @@
   (`events` + `mergeEventsConfig` — runtime-настройки раздела «События» (включая `identityMap` — **override**
   поверх основного источника — привязок в `ProfileData.identities[]`), ADR-089; `decision` +
   `mergeDecisionConfig` — runtime-настройки decision-слоя, ADR-084, включая `escalationProvider`/`escalationModel`;
-  `metrics` — runtime `metrics.enabled` (ADR-094), резолв — `resolveMetricsEnabled`),
+  `metrics` — runtime `metrics.enabled` (ADR-094), резолв — `resolveMetricsEnabled`;
+  `plugins` + `mergePluginsConfig` — runtime-настройки слоя плагинов (PROP-090 §10: `enabled`/
+  `runtimeInstall`/`trustFloor`/`scan`/`allowlist`/`denylist`/`remoteAllowlist`/`exactHostExceptions`/
+  `promptBlockMaxChars`; приоритет runtime > config > defaults; `getPlugins`/`setPlugins`/`clearPlugins`),
   `McpRegistryStore` (единый реестр MCP, ADR-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (ADR-046), `SSHKeyStore`
   (`secrets/ssh-keys`, шифрование at-rest, ADR-076),

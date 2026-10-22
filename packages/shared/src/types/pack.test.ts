@@ -6,6 +6,7 @@ import {
   packProvidesSchema,
   normalizePackProvides,
   validatePackManifest,
+  diffPackProvides,
 } from './pack.js';
 
 /**
@@ -309,7 +310,9 @@ describe('validatePackManifest — правила целостности', () =>
 
   it('сообщает о пустом provides', () => {
     const problems = validatePackManifest({ ...base, provides: {} });
-    expect(problems).toContain('provides: не заявлен ни один вклад (mcp/skills/agents/pipelines)');
+    expect(problems).toContain(
+      'provides: не заявлен ни один вклад (mcp/skills/agents/pipelines/tools/promptBlocks/llmFilters)',
+    );
   });
 
   it('сообщает об отсутствии packType у kind «pack»', () => {
@@ -478,6 +481,242 @@ describe('Реестры классов и типов расширений', () 
       'policies',
       'memory',
       'ui',
+    ]);
+  });
+});
+
+// --- PROP-090 §8/§9: поля плагина и явные схемы вкладов ---
+
+/** Валидный манифест плагина (все поля PROP-090 §8/§9). */
+const PLUGIN_MANIFEST = {
+  name: 'demo-plugin',
+  version: '1.0.0',
+  kind: 'plugin',
+  host: '^1.0.0',
+  contracts: { extensionApi: '^1' },
+  description: 'Демонстрационный плагин',
+  mode: 'inline',
+  permissions: {
+    network: ['api.example.com'],
+    secrets: ['demo-token'],
+    tools: ['read_file'],
+    hooks: ['message_received'],
+  },
+  trust: { level: 'trusted', source: 'local' },
+  provides: {
+    tools: ['memory_search'],
+    promptBlocks: [
+      { key: 'plugin.demo.memory', tier: 'context', order: 100, title: 'Память', provenance: 'plugin:demo-plugin' },
+    ],
+    llmFilters: [
+      { id: 'plugin:demo-plugin:pii', phase: 'pre_request', failMode: 'closed', timeoutMs: 500 },
+    ],
+  },
+} as const;
+
+describe('Манифест плагина — поля PROP-090 §8/§9 сохраняются (регрессия z.object)', () => {
+  it('mode/permissions/trust не выбрасываются при safeParse', () => {
+    const parsed = packManifestSchema.safeParse(PLUGIN_MANIFEST);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.mode).toBe('inline');
+    expect(parsed.data.permissions).toEqual(PLUGIN_MANIFEST.permissions);
+    expect(parsed.data.trust).toEqual(PLUGIN_MANIFEST.trust);
+  });
+
+  it('provides.tools/promptBlocks/llmFilters сохраняются и валидируются', () => {
+    const parsed = packManifestSchema.safeParse(PLUGIN_MANIFEST);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.provides.tools).toEqual(['memory_search']);
+    expect(parsed.data.provides.promptBlocks).toEqual(PLUGIN_MANIFEST.provides.promptBlocks);
+    expect(parsed.data.provides.llmFilters).toEqual(PLUGIN_MANIFEST.provides.llmFilters);
+  });
+
+  it('неизвестный режим исполнения отклоняется', () => {
+    const parsed = packManifestSchema.safeParse({ ...PLUGIN_MANIFEST, mode: 'sandbox' });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('неизвестный уровень доверия отклоняется схемой', () => {
+    const parsed = packManifestSchema.safeParse({
+      ...PLUGIN_MANIFEST,
+      trust: { level: 'root' },
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe('provides плагина — явные схемы (PROP-090 §8)', () => {
+  it('отклоняет пустое имя тула', () => {
+    const parsed = packManifestSchema.safeParse({
+      ...PLUGIN_MANIFEST,
+      provides: { tools: [''] },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('отклоняет дубли имён тулов', () => {
+    const parsed = packManifestSchema.safeParse({
+      ...PLUGIN_MANIFEST,
+      provides: { tools: ['memory_search', 'memory_search'] },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('отклоняет тир stable в promptBlocks (граница prompt-cache, ADR-070)', () => {
+    const parsed = packManifestSchema.safeParse({
+      ...PLUGIN_MANIFEST,
+      provides: {
+        promptBlocks: [{ key: 'plugin.demo.stable', tier: 'stable', order: 1 }],
+      },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('отклоняет неизвестное поле в promptBlocks (.strict())', () => {
+    const parsed = packManifestSchema.safeParse({
+      ...PLUGIN_MANIFEST,
+      provides: {
+        promptBlocks: [{ key: 'plugin.demo.block', tier: 'volatile', order: 1, tierr: 'x' }],
+      },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('отклоняет неизвестную фазу llmFilters', () => {
+    const parsed = packManifestSchema.safeParse({
+      ...PLUGIN_MANIFEST,
+      provides: {
+        llmFilters: [{ id: 'plugin:demo:x', phase: 'post_tool' }],
+      },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('отклоняет неизвестное поле в llmFilters (.strict())', () => {
+    const parsed = packManifestSchema.safeParse({
+      ...PLUGIN_MANIFEST,
+      provides: {
+        llmFilters: [{ id: 'plugin:demo:x', phase: 'pre_request', failmode: 'open' }],
+      },
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe('validatePackManifest — правила 12–14 (PROP-090 §8/§9)', () => {
+  it('валидный плагин не даёт проблем', () => {
+    expect(packManifestSchema.safeParse(PLUGIN_MANIFEST).success).toBe(true);
+    expect(validatePackManifest(PLUGIN_MANIFEST)).toEqual([]);
+  });
+
+  it('provides.tools снимает срабатывание правила «ни один вклад»', () => {
+    const problems = validatePackManifest({
+      ...PLUGIN_MANIFEST,
+      provides: { tools: ['memory_search'] },
+    });
+    expect(problems).toEqual([]);
+  });
+
+  it('сообщает о дубликате имени тула (правило 12)', () => {
+    const problems = validatePackManifest({
+      ...PLUGIN_MANIFEST,
+      provides: { tools: ['dup', 'dup'] },
+    });
+    expect(problems.some((problem) => problem.includes('дубликат имени тула'))).toBe(true);
+  });
+
+  it('сообщает о тире stable в promptBlocks', () => {
+    const problems = validatePackManifest({
+      ...PLUGIN_MANIFEST,
+      provides: { promptBlocks: [{ key: 'plugin.demo.x', tier: 'stable', order: 1 }] },
+    });
+    expect(problems.some((problem) => problem.startsWith('provides.promptBlocks[0]:'))).toBe(true);
+  });
+
+  it('сообщает о неизвестной фазе llmFilters', () => {
+    const problems = validatePackManifest({
+      ...PLUGIN_MANIFEST,
+      provides: { llmFilters: [{ id: 'plugin:demo:x', phase: 'nope' }] },
+    });
+    expect(problems.some((problem) => problem.startsWith('provides.llmFilters[0]:'))).toBe(true);
+  });
+
+  it('сообщает о дубликате id фильтра', () => {
+    const problems = validatePackManifest({
+      ...PLUGIN_MANIFEST,
+      provides: {
+        llmFilters: [
+          { id: 'plugin:demo:x', phase: 'pre_request' },
+          { id: 'plugin:demo:x', phase: 'post_response' },
+        ],
+      },
+    });
+    expect(problems.some((problem) => problem.includes('дубликат id фильтра'))).toBe(true);
+  });
+
+  it('mode допустим только у kind «plugin» (правило 13)', () => {
+    const problems = validatePackManifest({
+      ...PLUGIN_MANIFEST,
+      kind: 'addon',
+      provides: { skills: [{ name: 'demo', path: 'skills/demo' }] },
+    });
+    expect(problems.some((problem) => problem.startsWith('mode: допустим только'))).toBe(true);
+  });
+
+  it('trust.level плагина не выше trusted (правило 14)', () => {
+    for (const level of ['builtin', 'verified']) {
+      const problems = validatePackManifest({
+        ...PLUGIN_MANIFEST,
+        trust: { level },
+      });
+      expect(problems.some((problem) => problem.includes('выше trust-floor'))).toBe(true);
+    }
+  });
+
+  it('trust.level trusted/community допустим для плагина', () => {
+    for (const level of ['trusted', 'community']) {
+      const problems = validatePackManifest({
+        ...PLUGIN_MANIFEST,
+        trust: { level },
+      });
+      expect(problems).toEqual([]);
+    }
+  });
+
+  it('trust.level выше trusted у не-плагина допустим', () => {
+    const problems = validatePackManifest({
+      ...SYNTH_MEDIA_MANIFEST,
+      trust: { level: 'verified' },
+    });
+    expect(problems).toEqual([]);
+  });
+});
+
+describe('diffPackProvides — сверка объявленного и зарегистрированного', () => {
+  it('совпадение — пустой список', () => {
+    expect(
+      diffPackProvides(
+        { tools: ['a'], promptBlocks: [{ key: 'k' }], llmFilters: [{ id: 'f' }] },
+        { tools: ['a'], promptBlocks: ['k'], llmFilters: ['f'] },
+      ),
+    ).toEqual([]);
+  });
+
+  it('объявлено, но не зарегистрировано → missing; наоборот → unexpected', () => {
+    expect(
+      diffPackProvides(
+        { tools: ['declared-only'], promptBlocks: [{ key: 'k' }], llmFilters: [{ id: 'f' }] },
+        { tools: ['registered-only'], promptBlocks: ['k2'], llmFilters: ['f2'] },
+      ),
+    ).toEqual([
+      { kind: 'tool', name: 'declared-only', issue: 'missing' },
+      { kind: 'tool', name: 'registered-only', issue: 'unexpected' },
+      { kind: 'promptBlock', name: 'k', issue: 'missing' },
+      { kind: 'promptBlock', name: 'k2', issue: 'unexpected' },
+      { kind: 'llmFilter', name: 'f', issue: 'missing' },
+      { kind: 'llmFilter', name: 'f2', issue: 'unexpected' },
     ]);
   });
 });

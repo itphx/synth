@@ -1,6 +1,7 @@
 import type { Schedule, ScheduleJob, ScheduleJobTrigger } from '@itphx/synth-shared';
 import { generateId } from '@itphx/synth-shared';
 import type { EventIngress } from '../events/ingest.js';
+import type { HookBus } from '../hooks/hook-bus.js';
 import type { SchedulerJobMetrics } from '../../metrics/collectors/scheduler.js';
 import type { ScheduleRepository } from '../../storage/ports/schedule-repository.js';
 import type { JobRepository } from '../../storage/ports/job-repository.js';
@@ -30,6 +31,11 @@ export interface SchedulerServiceDeps {
   now?: () => Date;
   /** ADR-094: колбэк метрик завершённых Job (`ok`/`error`/`skipped`). */
   onJob?: SchedulerJobMetrics;
+  /**
+   * ADR-030 (Ф0 PROP-090): hook-шина для эмита `schedule_fired` (async).
+   * Не задана — хук не эмитится.
+   */
+  hooks?: HookBus;
 }
 
 /** Дефолтный период тика, если `tickMs` не задан. */
@@ -66,6 +72,7 @@ export class SchedulerService {
   private _isLeader = false;
   private _now: () => Date;
   private _onJob?: SchedulerJobMetrics;
+  private _hooks?: HookBus;
   private _timer?: ReturnType<typeof setInterval>;
   private _busy = false;
   /** Защита от параллельного запуска одного расписания. */
@@ -82,6 +89,7 @@ export class SchedulerService {
     this._leader = deps.leader ?? new AlwaysLeader();
     this._now = deps.now ?? (() => new Date());
     this._onJob = deps.onJob;
+    this._hooks = deps.hooks;
   }
 
   /**
@@ -336,6 +344,21 @@ export class SchedulerService {
         text: schedule.prompt ?? schedule.name,
       };
       if (opts?.force) payload.force = true;
+
+      // ADR-030 (Ф0 PROP-090): `schedule_fired` — неблокирующий эмит **до**
+      // публикации события: подписчики видят срабатывание раньше, чем Router
+      // материализует доставку. Ошибки/таймауты обработчиков изолирует
+      // `HookBus.emitAsync` (fire-and-forget), поэтому публикацию они не ломают.
+      // Текст задания (`payload`/`prompt`) в хук не передаётся — только метаданные.
+      if (this._hooks?.count('schedule_fired')) {
+        this._hooks.emitAsync('schedule_fired', {
+          scheduleId: schedule.id,
+          name: schedule.name,
+          target: schedule.target.mode,
+          ...(schedule.cron ? { cron: schedule.cron } : {}),
+          trigger,
+        });
+      }
 
       const { decision, session } = await this._ingress.ingest({
         source: 'cron',

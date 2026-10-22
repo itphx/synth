@@ -44,7 +44,9 @@
 (`packages/shared/src/types/pack.ts`; `PACK_KINDS` уже содержит `'plugin'`), порт `PackRepository`
 (`packages/core/src/storage/ports/pack-repository.ts`), файловая реализация `{dataDir}/packs.json`,
 роуты `/api/v2/packs` (`packages/core/src/server/routes/packs.ts`), установка/одобрение/снятие.
-Каталог расширений — отдельный репозиторий `synth-registry` (записи `kind: addon|gateway|storage|pack`).
+Каталог расширений — отдельный репозиторий `synth-registry` (записи `kind: addon|gateway|storage|pack`;
+плагины публикуются **в тот же** каталог — `kind: plugin`, решение владельца 2026-10-22, см. «Открытые вопросы»
+→ «Решено 2026-10-22»).
 Шина хуков `HookBus` ([ADR-030](./adr-030-hooks-agent-events.md)) — готовый in-process примитив с
 `on/off/emit/emitAsync`, priority и `sync`/`async`. Реестры тулов (`ToolRegistry`), MCP, агентов,
 скиллов, событий, расписаний. Паттерн core-фабрик роутов `createXxxRoutes(auth, deps, opts)`
@@ -54,12 +56,17 @@
 ([ADR-070](./adr-070-system-prompt-composer.md)). Gateway с guard'ами и аудитом.
 
 **Чего нет.** В коде **ноль** совпадений по: `PluginHost`, `SynthPlugin`, `@itphx/synth-plugin`,
-`definePlugin`, `plugins.lock.json`, `plugins.json`, `plugins.*` в конфиге, `RuntimeSettings.plugins`,
-`/api/v2/plugins*`, CLI `synth plugin *`, типов trust-уровней, матрицы install-policy,
+`definePlugin`, `plugins.lock.json`, `plugins.json`, `/api/v2/plugins*`, CLI `synth plugin *`, матрицы install-policy,
 `VERDICT_INDEX`, файлового security-сканера, квот сканера, `content_hash`, кэша сканов,
 `quarantine/`, реестра-аудита установок. Нет и **точек расширения** под новые сценарии: реестра
 провайдеров prompt-блоков (блоки собираются хардкодом через `extraBlocks.push(...)` в
 `packages/core/src/engine/context/composer.ts`), нет и реестра LLM-фильтров.
+
+**Появилось в Ф0 (2026-10-22) — уже есть в коде** (подробно — §«Статус реализации в коде (Ф0)»): секция `plugins.*`
+в конфиге и `RuntimeSettings.plugins`, единый перечень trust-уровней (`packages/shared/src/types/trust.ts`), явные
+Zod-схемы вкладов плагина и полей `mode`/`permissions`/`trust` (`types/pack.ts`), semver-матчер и семвер-гейт
+(`types/semver.ts`, `checkExtensionCompatibility`), политика `builtin` в `HookBus` и три эмита хуков. Исполнения
+кода плагинов (загрузчик, `import()`, фасад) по-прежнему нет — это Ф1+.
 
 **Почему не «просто форк ядра».** Форк разрывает обновления, не даёт аудита, не позволяет админу
 управлять набором расширений и превращает каталог в канал произвольного исполнения. Расширение
@@ -888,7 +895,7 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 - обойти `GatewayProvider` ([ADR-036](./adr-036-llm-gateway.md)) — любой LLM-вызов плагина идёт через него;
 - обойти порты хранилища ([ADR-096](./adr-096-storage-layer.md)) — запись в `$SYNTH_DATA_DIR` мимо порта запрещена;
 - читать секреты в обход API;
-- снять/подменить **builtin**-обработчики и builtin/management-плагины (политика `builtin`, остаток [ADR-030](./adr-030-hooks-agent-events.md));
+- снять/подменить **builtin**-обработчики и builtin/management-плагины (политика `builtin` — реализована в Ф0, см. [ADR-030](./adr-030-hooks-agent-events.md): `off`/функция отписки отказывают, снятие — только `HookBus.offBuiltin` силами ядра);
 - отключить существующие guard'ы gateway или изменить `config.enabled`;
 - добавить свои лейблы метрик (контракт [ADR-094](./adr-094-observability-metrics.md));
 - выдать свой ответ в обход gateway;
@@ -910,7 +917,7 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 
 | Фаза | Содержание | Критерий приёмки |
 |---|---|---|
-| **Ф0 — предпосылки** | Остаток [ADR-030](./adr-030-hooks-agent-events.md): политика `builtin` (защита builtin-обработчиков от снятия) + 4 недостающих эмита (`plan_rejected`, `message_received`, `callback`, `schedule_fired`); семвер-гейт `contracts`/`host` (semver-мажор контракта); явные Zod-схемы `provides.tools`/`provides.promptBlocks`/`provides.llmFilters` в `packages/shared/src/types/pack.ts` (без `.passthrough()`); `RuntimeSettings.plugins` + `plugins.*` в конфиге ([ADR-023](./adr-023-configuration.md)) | тест: builtin-обработчик нельзя снять через `off`; эмиты вызываются; `validatePackManifest` отклоняет `tier: 'stable'` в `provides.promptBlocks`, невалидный `provides.tools[]` (пустое имя/дубль) и расхождение `provides` — в т.ч. `provides.tools[]` ↔ фактические регистрации тулов; `pnpm --filter @itphx/synth-shared build` зелёный |
+| **Ф0 — предпосылки** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-layer`, коммитов нет) | Остаток [ADR-030](./adr-030-hooks-agent-events.md): политика `builtin` (защита builtin-обработчиков от снятия) + 4 недостающих эмита (`plan_rejected`, `message_received`, `callback`, `schedule_fired`); семвер-гейт `contracts`/`host` (semver-мажор контракта); явные Zod-схемы `provides.tools`/`provides.promptBlocks`/`provides.llmFilters` в `packages/shared/src/types/pack.ts` (без `.passthrough()`); `RuntimeSettings.plugins` + `plugins.*` в конфиге ([ADR-023](./adr-023-configuration.md)). **Сделано:** `builtin` (`off`/отписка отказывают, `offBuiltin` — путь владельца), 3 эмита (`callback` — обоснованно вне core, остаток ADR-030), semver-матчер + `checkExtensionCompatibility`, схемы вкладов + `mode`/`permissions`/`trust` + `diffPackProvides`, секция `plugins` + `mergePluginsConfig` | тест: builtin-обработчик нельзя снять через `off`; эмиты вызываются; `validatePackManifest` отклоняет `tier: 'stable'` в `provides.promptBlocks`, невалидный `provides.tools[]` (пустое имя/дубль) и расхождение `provides` — в т.ч. `provides.tools[]` ↔ фактические регистрации тулов; `pnpm --filter @itphx/synth-shared build` зелёный |
 | **Ф1 — манифест + `PluginHost`** | Схема манифеста плагина, `PluginHost`-пайплайн (§10), integrity, semver-гейт, реестр активаций, аудит активации. **Исполнение кода выключено по умолчанию**: только resolve/integrity/гейт/скан/аудит, без `import()` | тест: `PluginHost.activate` доходит до шага «import» и останавливается; несовпадение integrity → отказ; тест аудита: запись `activate`/`deactivate` в `audit/plugins.jsonl` |
 | **Ф2 — модель доверия** | Уровни trust, матрица install-policy с ячейкой `kind: "plugin"`, сканер (6+1 категорий, квоты, `content_hash`, кэш сканов, `.skillignore`, бинарные расширения), матрица `severity → verdict`, `quarantine/`, `plugins.lock.json`, порт `PluginAuditRepository` + `{dataDir}/audit/plugins.jsonl` | тест: вердикт по severity (`info\|low → safe`, `medium → caution`, `high\|critical → dangerous`); квоты → `caution`; бинарник → `dangerous`; `community` + `dangerous` → `block`; trust-floor: `community` устанавливается, но не активируется (`plugin.trust_below_floor`) |
 | **Ф3 — точки `promptBlocks` + `llmFilters`** | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный |
@@ -919,12 +926,67 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | **Ф6 — UI** | Раздел «Плагины»: список, карточка (trust/scan/hash/version/`contracts`/`host`/`provides`/режим), тумблеры enable/disable, install/update/remove, статус скана | тест UI: карточка показывает trust/scan/hash; переключатель enable вызывает API и обновляет список; i18n-паритет `ru.ts`/`en.ts` зелёный (`parity.test.ts`) |
 | **Ф7 — hybrid** | Allow-list сервера, форма политики, discovery (`/api/v2/settings/plugins` + сигнал в `/auth/oidc-meta`), server-scoped токены с `plugin_id`-scope (Уровень 2) | тест: плагин вне allow-list не активируется в hybrid; токен с чужим `plugin_id` отвергается сервером; локальный плагин без сервера — cooperative (помечено в UI/доках) |
 
+### Статус реализации в коде (Ф0, 2026-10-22)
+
+Ф0 закрыт в ветке `feature/plugin-layer`: появились предпосылки слоя, **исполнения кода плагинов нет** (Ф1+).
+Пути — фактические, проверены по коду.
+
+**Хуки ([ADR-030](./adr-030-hooks-agent-events.md) — остаток закрыт, кроме `callback`).**
+
+| Что | Где |
+|---|---|
+| Политика `builtin`: builtin-обработчик не снимается ни `off(name, handler)`, ни функцией отписки из `on`; явный путь — `offBuiltin(name, handler)` (зовёт владелец регистрации ядра), `removeAll()` — служебный | `packages/core/src/engine/hooks/hook-bus.ts` |
+| Отписка builtin-подписок аналитики через `offBuiltin` | `packages/core/src/analytics/hooks.ts` (`attachAnalyticsActivityHooks`) |
+| `message_received` — в начале `_processMessage`, под `count`, `async`, только `role: user` и `attempt <= 1`; payload — метаданные (`sessionId`/`agent`/`mode`/`kind`/`source`/`type`), **без текста** | `packages/core/src/engine/orchestrator.ts` |
+| `plan_rejected` — рядом с `plan_approved`; трактовка «неудачный `plan_exit`» (`reason: 'plan_exit_failed'`) | там же |
+| `schedule_fired` — в `_dispatch` **до** `EventIngress.ingest`, только при наличии подписчиков; метаданные расписания, без текста задания | `packages/core/src/engine/scheduler/scheduler.ts`; шина — `SchedulerServiceDeps.hooks` (`packages/core/src/server/app/deps.ts`, `packages/backend/src/app/deps.ts`) |
+| Формы контекстов `message_received`/`schedule_fired` + `MessageReceivedKind` (`user`/`scheduler`/`external`) | `packages/shared/src/types/hooks.ts` |
+| `callback` — **не реализован**: в core нет точки «нажатие инлайн-кнопки» (контракт внешнего канала [ADR-087](./adr-087-gateways.md)/[ADR-103](./adr-103-gateway-core-channel-contract.md)) | — |
+
+**Манифест `synth.pack` — вклады и поля плагина.**
+
+| Что | Где |
+|---|---|
+| `provides.tools[]` — явная схема (непустые имена, без дублей); `provides.promptBlocks[]` — `{key, tier, order, title?, provenance?}`, `.strict()`, тир `stable` **запрещён** (граница prompt-cache, [ADR-070](./adr-070-system-prompt-composer.md)); `provides.llmFilters[]` — `{id, phase, failMode?, timeoutMs?}`, `.strict()`, фазы `pre_request`/`post_response`/`embedding` | `packages/shared/src/types/pack.ts` |
+| Поля манифеста: `mode` (`inline`/`remote`/`both`, только `kind: plugin`), `permissions` (`network`/`secrets`/`tools`/`hooks` — заявление, не разрешение), `trust` (`{level?, source?}` — заявленный уровень = верхняя граница, фактический резолвится по источнику) | там же |
+| Правила `validatePackManifest` 12–14: вклады плагина по явным схемам; `mode` только у `plugin`; `trust.level` плагина не выше `trusted` (trust-floor, §9) | там же |
+| Сверка объявленного и зарегистрированного — `diffPackProvides` (`missing`/`unexpected` по `tool`/`promptBlock`/`llmFilter`) | там же |
+| Семвер-гейт — `checkExtensionCompatibility`: порядок «контракт → host», вердикты `contract_mismatch`/`host_mismatch`, точные исключения `exactHostExceptions`, имя контракта по умолчанию `DEFAULT_EXTENSION_CONTRACT = 'extensionApi'` | там же |
+
+**Semver и доверие (новые модули `shared`).**
+
+| Что | Где |
+|---|---|
+| semver-рандж-матчер без зависимостей: `SEMVER_RANGE_REGEX`, `isSemverRange`, `parseSemver`, `satisfiesSemverRange`; операторы `^ ~ >= <= > < =`, wildcard `x`/`*`, конъюнкция пробелом; `\|\|` **не поддерживается** (fail-closed). `PACK_HOST_RANGE_REGEX` теперь ссылается на `SEMVER_RANGE_REGEX`, а `contracts` манифеста валидируются тем же матчером | `packages/shared/src/types/semver.ts` |
+| Единый перечень уровней доверия `builtin`/`verified`/`trusted`/`community` + `trustLevelRank`; используется и каталогом (`catalog.ts` реэкспортирует), и манифестом (модуль выделен, чтобы не было цикла `catalog → pack`) | `packages/shared/src/types/trust.ts` |
+
+**Конфиг и runtime-настройки ([ADR-023](./adr-023-configuration.md)).**
+
+| Что | Где |
+|---|---|
+| Секция `plugins`: `enabled` (`true`), `runtimeInstall` (`allow\|deny`, `deny`), `trustFloor` (`trusted`), `scan` (`enabled\|disabled`, `enabled`), `allowlist`/`denylist`/`remoteAllowlist` (`[]`), `exactHostExceptions` (`''`), `promptBlockMaxChars` (`4000`) | `packages/shared/src/config/types.ts` (`pluginsConfigSchema` + `PluginsConfig`), `packages/shared/src/config/defaults.ts`; скалярные env `SYNTH_PLUGINS_*` — `packages/shared/src/config/env-overrides.ts` (списки остаются в `config.yaml`) |
+| `PluginsRuntimeSettings`, `RuntimeSettings.plugins`, `getPlugins`/`setPlugins`/`clearPlugins` и `mergePluginsConfig` (приоритет runtime > config > defaults; результат — полный `PluginsConfig`) | `packages/core/src/storage/runtime-settings.ts` |
+
+**Тесты Ф0.** `packages/core/src/engine/hooks/hook-bus.test.ts` (политика `builtin`: `off`, отписка, `offBuiltin`, `removeAll`;
+поведение priority/block/patch не изменилось), `packages/core/src/engine/orchestrator-hooks.test.ts` (`message_received`:
+один эмит на сообщение, без текста, ретрай не дублирует, `kind` для внешнего события и `Scheduler`; `plan_rejected`),
+`packages/core/src/engine/scheduler/scheduler.test.ts` (`schedule_fired` до публикации события, без текста задания),
+`packages/shared/src/types/pack.test.ts` (поля `mode`/`permissions`/`trust` не выбрасываются схемой, вклады плагина,
+правила 12–14, `diffPackProvides`), `packages/shared/src/types/semver.test.ts` (грамматика, операторы, fail-closed,
+`checkExtensionCompatibility`), `packages/shared/src/config/env-overrides.test.ts`, `packages/core/src/storage/runtime-settings.test.ts`.
+
+**Остаток после Ф0.** Загрузчик `PluginHost` и исполнение кода (Ф1), сканер/доверие/lock/аудит (Ф2), точки
+`promptBlocks`/`llmFilters` в композере и gateway (Ф3), два режима исполнения (Ф4), install/activate + API/CLI/UI
+(Ф5/Ф6), hybrid (Ф7); регистрация `/api/v2/settings/plugins` в HTTP-роутах ещё не сделана (сейчас есть только
+типы, схема и runtime-store).
+
 ## Открытые вопросы
 
 > Закрыто решениями владельца продукта 2026-10-22: форма out-of-process-протокола (HTTP/1.1 + JSON,
 > контракт — в `@itphx/synth-shared`, отдельный пакет не создаётся); место контракта
 > `MemoryProvider` (`@itphx/synth-shared`, реализации — плагинами); матрица `severity → verdict`
-> (каноническая таблица — PROP-068 §4.3); третья фаза `llmFilters` — `embedding`.
+> (каноническая таблица — PROP-068 §4.3); третья фаза `llmFilters` — `embedding`. Решения по каталогу и
+> маркету — ниже, «Решено 2026-10-22 — каталог и маркет».
 
 1. **Версии контракта расширений и окно deprecation.** Как версионируется контракт точки
    (`promptBlocks@1`, `llmFilters@1`), сколько релизов живёт старая мажорная версия, что делает
@@ -933,10 +995,15 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
    отдельный лимит для embedding-фазы (индексация — latency-чувствительный путь).
 3. **Hot-reload vs restart в managed** — где граница: всегда restart или отдельные плагины допускают
    reload (в managed перезапуск пода = `kubectl rollout restart`, инвариант 24).
-4. **Кто владелец каталога плагинов и ключ подписи** — CI каталога
-   [PROP-068](./prop-068-skills-agents-registry.md) или отдельный репозиторий; где живёт
-   `schema/catalog-entry.schema.json` (в master файла нет — схема невоспроизводима из кода) и как
-   в каталоге выглядит запись `kind: plugin` (сейчас таких записей нет).
+4. **Поддержка схемы каталога при изменении контракта.** Владелец каталога — мы: записи плагинов
+   публикуются **в общий** каталог [PROP-068](./prop-068-skills-agents-registry.md) `synth-registry`
+   (решение 2026-10-22, см. ниже). Схема записи — `packages/shared/src/types/catalog.ts` (**файл есть в
+   `master`**), JSON Schema каталога (`synth-registry/schema/catalog-entry.schema.json`) **генерируется из
+   неё** скриптом каталога `scripts/gen-schema.mjs` (`zod-to-json-schema`). Открытый вопрос теперь не «где
+   схема», а **как держать её в актуальном состоянии**: генерировать в CI монорепо при изменении контракта
+   (и публиковать артефакт) или обновлять вручную по чек-листу при каждом ломающем изменении `catalog.ts`.
+   Пока — ручной перезапуск генерации (известное ограничение каталога); при изменении контракта
+   `provides`/`trust` синхронизация обязательна.
 5. **Нужен ли `plugin_id`-scope поверх service-key** ([ADR-052](./adr-052-public-api-platform.md)) —
    точная механика выдачи/валидации для Уровня 2 (Ф7).
 6. **Транспортная обвязка `out-of-process`.** Контракт протокола живёт в `@itphx/synth-shared` (§7),
@@ -944,10 +1011,28 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
    (`packages/core/src/execution/remote.ts`) или отдельным пакетом по образцу
    `@itphx/synth-executor`? От ответа зависит, кто собирает `out-of-process`-плагин.
 
+### Решено 2026-10-22 — каталог и маркет
+
+Решения владельца продукта (касаются доставки плагинов; модель доверия — [PROP-068](./prop-068-skills-agents-registry.md) §4):
+
+1. **Плагины публикуются в общий каталог `synth-registry`** — отдельный репозиторий для плагинов не заводим:
+   одна запись = один `entries/<owner>__<repo>.yml` с `kind: plugin` ([PROP-068](./prop-068-skills-agents-registry.md) §2/§12).
+2. **`trust_level` записи каталога — истина** для доверия (каталогом управляем мы: запись проходит ревью/PR и CI).
+   Заявленный в манифесте `trust.level` — только **верхняя граница** (§9): манифест не может поднять доверие выше
+   записи каталога. В будущем — **локальные каталоги у заказчиков**: там доверенным для инстанса считается
+   **их** каталог (per-instance trust), а не наш; до этого — только наш каталог.
+3. **Отдельная CLI-команда `synth plugin *` принимается** (§«CLI»): класс Plugin отличается от Add-on по контуру —
+   код/доверие/скан/активация против декларативного контента; смешивать команды `synth addons install` и
+   `synth plugin install` в одну нельзя.
+4. **Витрина `synth-market` и шаблон каталога `synth-registry/templates/entry.yml` должны стать kind-aware**:
+   для `kind: plugin` — команда установки `synth plugin install <name>@<version>` и API-эквивалент
+   `POST /api/v2/plugins/install` (сейчас витрина и шаблон по умолчанию показывают `synth addons install` и
+   `POST /api/v2/packs`). Правка — в репозиториях каталога/витрины, не в ядре; эндпоинт появится в Ф5.
+
 ## Связи
 
 - [ADR-086](./adr-086-extensibility-plugins-editions.md) — зонтик «Классы расширений»; PROP-090 — детальный слой плагинов.
-- [ADR-030](./adr-030-hooks-agent-events.md) — hook-шина: точка `hooks`; остаток (политика `builtin`, 4 эмита) — Ф0.
+- [ADR-030](./adr-030-hooks-agent-events.md) — hook-шина: точка `hooks`; остаток ADR-030 закрыт в Ф0 (политика `builtin` + эмиты `message_received`/`plan_rejected`/`schedule_fired`; `callback` — контракт внешнего канала).
 - [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md) — порты и контрактный suite; новый порт `PluginAuditRepository` обязателен и в PG-драйвере.
 - [ADR-100](./adr-100-extension-packs-pipelines.md) — поставка `synth.pack`: манифест — общий для всех классов.
 - [ADR-103](./adr-103-gateway-core-channel-contract.md) — контракт внешнего канала: образец wire-протокола и семвера.
@@ -967,6 +1052,6 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 
 ## История
 
-- 2026-10-22 — возвращено в работу (🧩 Предложение, `Решение до: 2026-11-14`): полный in-process SDK + два режима исполнения (`inline`/`out-of-process`), две новые точки (`promptBlocks`, `llmFilters`), право вето только для trust ≥ `trusted`, модель доверия PROP-068 с trust-floor и отдельным журналом аудита, полный контур API/CLI/UI; фазы Ф0–Ф7 с критериями приёмки.
 - 2026-10-22 — уточнение контракта: в `PromptBlockContext` добавлен контекст текущего хода (`query`) и бюджет символов блока; в манифест добавлено `provides.tools[]` (нужно для тула `memory_search` плагина-памяти).
 - 2026-10-22 — решения владельца: wire-протокол `out-of-process` — HTTP/1.1 + JSON, контракт протокола в `@itphx/synth-shared` (отдельный пакет не создаётся); третья фаза `llmFilters` — `embedding` (эмбеддинги идут через gateway-контур, инвариант 3); матрица `severity → verdict` согласована — каноническая таблица в PROP-068 §4.3; бюджет символов блока — настраиваемый параметр (дефолт 4 000) в `plugins.*` и `GET/PUT/DELETE /api/v2/settings/plugins`; шов промпт-блоков — `PromptBlockProvider` (реализуется в Ф3; строка `packages/core/AGENTS.md:410` не соответствует коду и будет приведена в соответствие в Ф3).
+- 2026-10-22 — **Ф0 выполнен** (ветка `feature/plugin-layer`): политика `builtin` в `HookBus` (+ `offBuiltin`), эмиты `message_received`/`plan_rejected`/`schedule_fired` (`callback` — вне core, контракт внешнего канала), semver-матчер `types/semver.ts` + `checkExtensionCompatibility`, модуль `types/trust.ts`, явные схемы `provides.tools/promptBlocks/llmFilters` и поля `mode`/`permissions`/`trust` + `diffPackProvides`, секция `plugins.*` и `RuntimeSettings.plugins` + `mergePluginsConfig`; добавлен раздел «Статус реализации в коде (Ф0)». Решения по каталогу/маркету (общий `synth-registry`, `trust_level` записи = истина, `synth plugin *`, kind-aware витрина) — в «Открытые вопросы» → «Решено 2026-10-22».

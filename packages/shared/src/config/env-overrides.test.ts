@@ -174,6 +174,36 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(originalEvents.autoBind).toBe(false);
     expect(cfg.events).not.toBe(originalEvents);
   });
+
+  // PROP-090 §10: env-переопределения секции `plugins` (создаётся, если секции нет).
+  it('применяет env-оверрайды plugins.* (включая promptBlockMaxChars)', () => {
+    const cfg = applyEnvOverrides(makeConfig(), {
+      SYNTH_PLUGINS_ENABLED: 'false',
+      SYNTH_PLUGINS_RUNTIME_INSTALL: 'allow',
+      SYNTH_PLUGINS_TRUST_FLOOR: 'verified',
+      SYNTH_PLUGINS_SCAN: 'disabled',
+      SYNTH_PLUGINS_EXACT_HOST_EXCEPTIONS: '/etc/synth/plugin-hosts.txt',
+      SYNTH_PLUGINS_PROMPT_BLOCK_MAX_CHARS: '8000',
+    });
+
+    expect(cfg.plugins).toEqual({
+      enabled: false,
+      runtimeInstall: 'allow',
+      trustFloor: 'verified',
+      scan: 'disabled',
+      exactHostExceptions: '/etc/synth/plugin-hosts.txt',
+      promptBlockMaxChars: 8000,
+    });
+  });
+
+  it('plugins.*: невалидное число → warn + игнор', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyEnvOverrides(makeConfig(), { SYNTH_PLUGINS_PROMPT_BLOCK_MAX_CHARS: 'many' });
+
+    expect(cfg.plugins).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('SYNTH_PLUGINS_PROMPT_BLOCK_MAX_CHARS');
+  });
 });
 
 /**

@@ -9,6 +9,7 @@ import { JobStore } from '../../storage/job-store.js';
 import { MetricsRegistry } from '../../metrics/registry.js';
 import { createSchedulerMetrics } from '../../metrics/collectors/scheduler.js';
 import { SchedulerService } from './scheduler.js';
+import { HookBus } from '../hooks/hook-bus.js';
 
 /** Мок ingress: записывает входы, не ходит в Router. */
 function makeIngress(
@@ -75,6 +76,44 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     expect(after?.lastStatus).toBe('ok');
     expect(after?.lastRunAt).toBe('2026-01-01T01:00:00.000Z');
     expect(after?.nextRunAt).toBe('2026-01-01T02:00:00.000Z');
+  });
+
+  it('эмитит schedule_fired до публикации события и без текста задания (ADR-030 Ф0)', async () => {
+    let current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'hooks',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+      prompt: 'секретный текст задания',
+    });
+    const { ingress, ingest } = makeIngress();
+    const hooks = new HookBus();
+    const received: Array<Record<string, unknown>> = [];
+    hooks.on('schedule_fired', (ctx) => {
+      received.push(ctx as unknown as Record<string, unknown>);
+    }, { mode: 'async' });
+    const emitSpy = vi.spyOn(hooks, 'emitAsync');
+    const svc = new SchedulerService({ scheduleStore: store, ingress, hooks, now: () => current });
+
+    await svc.start();
+    svc.stop();
+    current = new Date('2026-01-01T01:00:00Z');
+    await svc.tick();
+
+    await vi.waitFor(() => {
+      expect(received).toHaveLength(1);
+    });
+    expect(received[0]).toEqual({
+      scheduleId: schedule.id,
+      name: 'hooks',
+      target: 'bound',
+      trigger: 'cron',
+    });
+    // Текст задания в хук не попадает — только метаданные расписания.
+    expect(JSON.stringify(received[0])).not.toContain('секретный текст задания');
+    // Вызов эмита стоит раньше публикации события (hook-подписчики видят срабатывание первыми).
+    expect(emitSpy.mock.invocationCallOrder[0]).toBeLessThan(ingest.mock.invocationCallOrder[0]!);
   });
 
   it('cron: срабатывание по выражению */5', async () => {

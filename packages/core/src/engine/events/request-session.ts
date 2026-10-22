@@ -287,7 +287,7 @@ function eventTitle(event: SynthEvent): string | undefined {
 }
 
 /**
- * ADR-089: единый funnel создания сессий.
+ * Единый funnel создания сессий.
  *
  * - `request` — явное создание (UI/CLI/агент): эмит `session_requested`, создание
  *   сессии (при `mode='ephemeral'` — с `expiresAt`). Без приёма/доставки события.

@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig } from '@itphx/synth-shared';
+import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig } from '@itphx/synth-shared';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 import type { SettingsRepository } from './ports/settings-repository.js';
@@ -81,6 +81,28 @@ export interface MetricsRuntimeSettings {
 }
 
 /**
+ * PROP-090 §10 / ADR-023: runtime-настройки секции `plugins` (слой плагинов),
+ * сохраняемые через UI. Состав ключей — ровно `pluginsConfigSchema`
+ * (`@itphx/synth-shared/config`): политики (`enabled`/`runtimeInstall`/
+ * `trustFloor`/`scan`), списки имён (`allowlist`/`denylist`/`remoteAllowlist`),
+ * путь файла исключений семвер-гейта и бюджет блока промпта.
+ *
+ * Эффективные значения = `mergePluginsConfig(config.plugins, runtime)`
+ * (приоритет runtime > config > defaults).
+ */
+export interface PluginsRuntimeSettings {
+  enabled?: boolean;
+  runtimeInstall?: 'allow' | 'deny';
+  trustFloor?: PluginsConfig['trustFloor'];
+  scan?: 'enabled' | 'disabled';
+  allowlist?: string[];
+  denylist?: string[];
+  remoteAllowlist?: string[];
+  exactHostExceptions?: string;
+  promptBlockMaxChars?: number;
+}
+
+/**
  * Модель по умолчанию инстанса — явная пара `provider` + `model`.
  *
  * Задаётся в UI (раздел «Модели») и хранится в runtime-настройках
@@ -144,6 +166,8 @@ export interface RuntimeSettings {
   decision?: DecisionRuntimeSettings;
   /** ADR-094: runtime-настройки наблюдаемости (`metrics.enabled`). */
   metrics?: MetricsRuntimeSettings;
+  /** PROP-090 §10: runtime-настройки секции `plugins` (админка, слой плагинов). */
+  plugins?: Partial<PluginsRuntimeSettings>;
   /**
    * ADR-099: runtime-override секции `proxy` (админка). Секретов не содержит:
    * пароль Basic — только `SYNTH_PROXY_PASSWORD`/`{dataDir}/secrets/proxy-password`.
@@ -290,6 +314,32 @@ export function mergeDecisionConfig(
     confidenceThreshold: r.confidenceThreshold ?? base?.confidenceThreshold ?? 0.6,
     escalationProvider: r.escalationProvider ?? base?.escalationProvider ?? '',
     escalationModel: r.escalationModel ?? base?.escalationModel ?? '',
+  };
+}
+
+/**
+ * PROP-090 §10 / ADR-023: мёржит runtime-настройки секции `plugins` поверх
+ * config.yaml. Runtime приоритетнее; отсутствие поля — значения из config,
+ * затем дефолты схемы `pluginsConfigSchema` (`defaults.ts`).
+ *
+ * Возвращает полный `PluginsConfig` (все ключи заданы) — потребитель
+ * (загрузчик плагинов Ф1, `SystemPromptComposer` Ф3) не различает источник.
+ */
+export function mergePluginsConfig(
+  base: PluginsConfig | undefined,
+  runtime: Partial<PluginsRuntimeSettings>,
+): PluginsConfig {
+  const r = runtime ?? {};
+  return {
+    enabled: r.enabled ?? base?.enabled ?? true,
+    runtimeInstall: r.runtimeInstall ?? base?.runtimeInstall ?? 'deny',
+    trustFloor: r.trustFloor ?? base?.trustFloor ?? 'trusted',
+    scan: r.scan ?? base?.scan ?? 'enabled',
+    allowlist: r.allowlist ?? base?.allowlist ?? [],
+    denylist: r.denylist ?? base?.denylist ?? [],
+    remoteAllowlist: r.remoteAllowlist ?? base?.remoteAllowlist ?? [],
+    exactHostExceptions: r.exactHostExceptions ?? base?.exactHostExceptions ?? '',
+    promptBlockMaxChars: r.promptBlockMaxChars ?? base?.promptBlockMaxChars ?? 4000,
   };
 }
 
@@ -682,6 +732,24 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.metrics;
+      return next;
+    });
+  }
+
+  /** PROP-090 §10: runtime-настройки слоя плагинов, {} — не заданы. */
+  async getPlugins(): Promise<Partial<PluginsRuntimeSettings>> {
+    const settings = await this.load();
+    return settings.plugins ?? {};
+  }
+
+  async setPlugins(config: Partial<PluginsRuntimeSettings>): Promise<void> {
+    await this._update((current) => ({ ...current, plugins: config }));
+  }
+
+  async clearPlugins(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.plugins;
       return next;
     });
   }

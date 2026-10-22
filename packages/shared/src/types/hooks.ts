@@ -1,9 +1,10 @@
 /**
- * ADR-030: контракты hook-шины событий агента и интеграций. Система хуков не
- * реализована в рантайме (Plugin SDK — отдельный этап), здесь только типы:
- * имена хуков, режим выполнения, результат и карта контекстов.
+ * ADR-030: контракты hook-шины событий агента и интеграций. Здесь только типы
+ * (имена хуков, режим выполнения, результат и карта контекстов); сама шина —
+ * `HookBus` в core, внешний фасад — Plugin SDK (PROP-090).
  */
 import type { SynthEvent, EventInitiator } from './events.js';
+import type { SessionMode } from './session.js';
 
 /** ADR-030: имена хуков жизненного цикла агента и интеграций (ADR-089). */
 export type HookName =
@@ -40,6 +41,14 @@ export interface HookAnalyticsAxes {
   projectId?: string;
 }
 
+/**
+ * ADR-030 / PROP-090 Ф0: вид входящего сообщения для `message_received`.
+ * - `user` — сообщение человека (UI/CLI/API);
+ * - `scheduler` — срабатывание расписания (автор `Scheduler`, ADR-051);
+ * - `external` — доставка внешнего события (webhook/шлюз, `metadata.source`).
+ */
+export type MessageReceivedKind = 'user' | 'scheduler' | 'external';
+
 /** ADR-030: карта контекста по имени хука (минимально необходимые поля). */
 export interface HookContextMap {
   pre_tool_use: { tool: string; input: unknown; agent?: string };
@@ -69,7 +78,23 @@ export interface HookContextMap {
   agent_failed: { agentId: string; error?: string; retries?: number };
   permission_denied: { tool: string; input?: unknown; reason?: string };
   external_event: { event: SynthEvent };
-  message_received: { source: string; chatKey?: string; threadKey?: string; from?: string; text?: string };
+  message_received: {
+    /** Сессия, в которую пришло сообщение. */
+    sessionId: string;
+    /** Эффективный агент хода (`message.agentRole` либо настройка сессии). */
+    agent?: string;
+    /** Режим сессии на момент приёма (`plan`/`act`/`yolo`). */
+    mode?: SessionMode;
+    /** Вид входящего сообщения (см. {@link MessageReceivedKind}). */
+    kind: MessageReceivedKind;
+    /** Внешний источник (`message.metadata.source`) для `kind: 'external'`. */
+    source?: string;
+    /** `message.metadata.type` — тип сообщения, если задан. */
+    type?: string;
+    // Текст сообщения намеренно НЕ передаётся: hook-подписчики (в т.ч.
+    // внешние) не должны получать содержимое диалога; для этого есть
+    // `external_event`/сессия.
+  };
   callback: { source: string; callbackId: string; data?: unknown; from?: string };
   session_requested: {
     reason?: string;
@@ -77,5 +102,16 @@ export interface HookContextMap {
     project?: string;
     initiator: EventInitiator;
   };
-  schedule_fired: { scheduleId: string; cron?: string; payload?: unknown };
+  schedule_fired: {
+    scheduleId: string;
+    /** Имя расписания (для логов/уведомлений). */
+    name?: string;
+    /** Режим цели расписания (`bound`/`ephemeral`/`queue`). */
+    target?: 'bound' | 'ephemeral' | 'queue';
+    /** Cron-выражение (если расписание задано через `cron`). */
+    cron?: string;
+    /** Триггер срабатывания (`cron`/`manual`/`catchup`). */
+    trigger?: 'cron' | 'manual' | 'catchup';
+    // Текст задания (`prompt`/`payload`) в хук НЕ передаётся — только метаданные.
+  };
 }

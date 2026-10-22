@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig } from './runtime-settings.js';
+import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig } from './runtime-settings.js';
 
 describe('RuntimeSettingsStore.clear* (ADR-072 Ф2)', () => {
   let tmpDir: string;
@@ -424,6 +424,119 @@ describe('mergeDecisionConfig (ADR-084)', () => {
       confidenceThreshold: 0.6,
       escalationProvider: '',
       escalationModel: '',
+    });
+  });
+});
+
+describe('RuntimeSettingsStore.plugins (PROP-090 §10)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-runtime-settings-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('getPlugins возвращает {} без runtime-настроек', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await store.getPlugins()).toEqual({});
+  });
+
+  it('set/getPlugins сохраняет патч и переживает рестарт', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setPlugins({
+      enabled: false,
+      runtimeInstall: 'allow',
+      trustFloor: 'verified',
+      promptBlockMaxChars: 8000,
+    });
+
+    const plugins = await store.getPlugins();
+    expect(plugins.enabled).toBe(false);
+    expect(plugins.runtimeInstall).toBe('allow');
+    expect(plugins.trustFloor).toBe('verified');
+    expect(plugins.promptBlockMaxChars).toBe(8000);
+
+    const restarted = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect((await restarted.getPlugins()).promptBlockMaxChars).toBe(8000);
+  });
+
+  it('clearPlugins удаляет только plugins', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setPlugins({ enabled: false });
+    await store.setMetrics({ enabled: true });
+    await store.clearPlugins();
+
+    const settings = await store.load();
+    expect(settings.plugins).toBeUndefined();
+    expect(settings.metrics).toEqual({ enabled: true });
+  });
+});
+
+describe('mergePluginsConfig (PROP-090 §10)', () => {
+  const base = {
+    enabled: false,
+    runtimeInstall: 'allow' as const,
+    trustFloor: 'community' as const,
+    scan: 'disabled' as const,
+    allowlist: ['a'],
+    denylist: ['b'],
+    remoteAllowlist: ['c'],
+    exactHostExceptions: '/etc/synth/base-hosts.txt',
+    promptBlockMaxChars: 1000,
+  };
+
+  it('runtime поверх base: каждое заданное поле перекрывает base', () => {
+    expect(
+      mergePluginsConfig(base, {
+        enabled: true,
+        runtimeInstall: 'deny',
+        trustFloor: 'builtin',
+        scan: 'enabled',
+        allowlist: [],
+        denylist: [],
+        remoteAllowlist: [],
+        exactHostExceptions: '/etc/synth/runtime-hosts.txt',
+        promptBlockMaxChars: 8000,
+      }),
+    ).toEqual({
+      enabled: true,
+      runtimeInstall: 'deny',
+      trustFloor: 'builtin',
+      scan: 'enabled',
+      allowlist: [],
+      denylist: [],
+      remoteAllowlist: [],
+      exactHostExceptions: '/etc/synth/runtime-hosts.txt',
+      promptBlockMaxChars: 8000,
+    });
+  });
+
+  it('частичный runtime: незаданные поля берутся из base', () => {
+    expect(mergePluginsConfig(base, { enabled: true, promptBlockMaxChars: 2000 })).toEqual({
+      ...base,
+      enabled: true,
+      promptBlockMaxChars: 2000,
+    });
+  });
+
+  it('при отсутствии runtime берётся base', () => {
+    expect(mergePluginsConfig(base, {})).toEqual(base);
+  });
+
+  it('при отсутствии обоих — дефолты схемы', () => {
+    expect(mergePluginsConfig(undefined, {})).toEqual({
+      enabled: true,
+      runtimeInstall: 'deny',
+      trustFloor: 'trusted',
+      scan: 'enabled',
+      allowlist: [],
+      denylist: [],
+      remoteAllowlist: [],
+      exactHostExceptions: '',
+      promptBlockMaxChars: 4000,
     });
   });
 });

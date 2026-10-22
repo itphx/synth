@@ -35,6 +35,7 @@ import {
   packVersionSchema,
   refinePackType,
 } from './pack.js';
+import { CATALOG_TRUST_LEVELS, catalogTrustLevelSchema } from './trust.js';
 
 /** Версия формата индекса каталога расширений. */
 export const CATALOG_INDEX_FORMAT = 1;
@@ -52,10 +53,16 @@ export type CatalogLocalizedText = z.infer<typeof catalogLocalizedTextSchema>;
 /**
  * Уровни доверия записи (PROP-068 §4.1). Для каталога расширений
  * `agent-created` не используется — записи каталога публикуются из репозиториев.
+ *
+ * Перечень живёт в `types/trust.ts` — он общий с манифестом `synth.pack`
+ * (`types/pack.ts`), который импортирует схемы каталога (цикл импортов
+ * `catalog → pack` не даёт импортировать каталог из `pack`).
  */
-export const CATALOG_TRUST_LEVELS = ['builtin', 'verified', 'trusted', 'community'] as const;
-export type CatalogTrustLevel = (typeof CATALOG_TRUST_LEVELS)[number];
-export const catalogTrustLevelSchema = z.enum(CATALOG_TRUST_LEVELS);
+export {
+  CATALOG_TRUST_LEVELS,
+  catalogTrustLevelSchema,
+  type CatalogTrustLevel,
+} from './trust.js';
 
 /**
  * Источник/адаптер происхождения записи (PROP-068 §3.1).

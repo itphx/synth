@@ -14,6 +14,8 @@ import { z } from 'zod';
 
 import type { AgentMode } from './agent.js';
 import { pipelineDefinitionSchema } from './pipeline.js';
+import { SEMVER_RANGE_REGEX, isSemverRange, satisfiesSemverRange } from './semver.js';
+import { CATALOG_TRUST_LEVELS, catalogTrustLevelSchema, trustLevelRank } from './trust.js';
 import { ToolCapability } from './tools.js';
 
 // --- Реестры классов и типов расширений ---
@@ -82,14 +84,15 @@ export const packVersionSchema = z
 /**
  * Диапазон версий host-приложения — semver-range, как `engines` в package.json
  * (`^0.9.0`, `~1.2.3`, `>=1.0.0 <2.0.0`, `1.x`).
+ *
+ * Грамматика — единая для `host` и `contracts` манифеста (PROP-090 §8):
+ * реализация и матчер — в `types/semver.ts`.
  */
-export const PACK_HOST_RANGE_REGEX =
-  /^(?:\^|~|>=|<=|>|<|=)?\d+(?:\.(?:\d+|[xX*])){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+export const PACK_HOST_RANGE_REGEX = SEMVER_RANGE_REGEX;
 
 /** Проверяет, что значение — корректный semver-диапазон (host-версия). */
 export function isPackHostRange(value: string): boolean {
-  const parts = value.trim().split(/\s+/).filter(Boolean);
-  return parts.length > 0 && parts.every((part) => PACK_HOST_RANGE_REGEX.test(part));
+  return isSemverRange(value);
 }
 
 export const packHostSchema = z
@@ -219,10 +222,133 @@ export const packMcpProvidesSchema = z
   .union([z.array(packMcpProvideSchema), packMcpProvideSchema])
   .transform((value) => (Array.isArray(value) ? value : [value]));
 
+// --- Вклады плагина (PROP-090 §8) ---
+
+/**
+ * PROP-090 §8: режим исполнения плагина — `inline` (код в процессе core) или
+ * `remote` (отдельный процесс), `both` — оба транспорта.
+ *
+ * Поле допустимо **только** для `kind: 'plugin'` (у остальных классов режим
+ * исполнения не задаётся — см. `validatePackManifest`).
+ */
+export const PACK_PLUGIN_MODES = ['inline', 'remote', 'both'] as const;
+export type PackPluginMode = (typeof PACK_PLUGIN_MODES)[number];
+export const packPluginModeSchema = z.enum(PACK_PLUGIN_MODES);
+
+/**
+ * PROP-090 §8: заявленные расширением доступы (`permissions`).
+ *
+ * - `network` — хосты, к которым плагин обращается (проверяются по
+ *   egress-политике, ADR-099);
+ * - `secrets` — имена секретов, которые плагин запрашивает через API
+ *   (at-rest по модели ADR-076; значение секрета в манифесте не хранится);
+ * - `tools` — имена встроенных тулов, которые плагин использует;
+ * - `hooks` — имена хуков, на которые плагин подписывается.
+ *
+ * Заявление прав — **не** само разрешение: фактический доступ определяется
+ * permission-слоем (ADR-025/ADR-028/ADR-029) и egress-политикой.
+ */
+export const packPermissionsSchema = z.object({
+  network: z.array(z.string().min(1)).default([]),
+  secrets: z.array(z.string().min(1)).default([]),
+  tools: z.array(z.string().min(1)).default([]),
+  hooks: z.array(z.string().min(1)).default([]),
+});
+export type PackPermissions = z.infer<typeof packPermissionsSchema>;
+
+/**
+ * PROP-090 §9: заявленный автором уровень/источник доверия.
+ *
+ * **Заявленный уровень — только верхняя граница:** фактический trust
+ * резолвится по источнику/реестру (PROP-068 §4.1), манифест не может его
+ * повысить. Для `kind: 'plugin'` уровень не должен быть выше `trusted`
+ * (trust-floor плагина, PROP-090 §9) — проверяется в `validatePackManifest`.
+ */
+export const packTrustSchema = z.object({
+  level: catalogTrustLevelSchema.optional(),
+  source: z.string().min(1).optional(),
+});
+export type PackTrust = z.infer<typeof packTrustSchema>;
+
+/**
+ * PROP-090 §8: `provides.tools[]` — имена тулов, которые регистрирует
+ * плагин (имя тула — `tool.name` в `ToolRegistry.register`).
+ *
+ * Имена уникальны в пределах манифеста; фактические регистрации обязаны
+ * совпадать с этим списком (сверка — `diffPackProvides`).
+ */
+export const packToolsProvideSchema = z
+  .array(z.string().min(1, 'имя тула: непустая строка'))
+  .superRefine((names, ctx) => {
+    const seen = new Set<string>();
+    names.forEach((name, index) => {
+      if (seen.has(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `дубликат имени тула «${name}»`,
+          path: [index],
+        });
+      }
+      seen.add(name);
+    });
+  });
+export type PackToolsProvide = z.infer<typeof packToolsProvideSchema>;
+
+/**
+ * PROP-090 §5/§8: `provides.promptBlocks[]` — описание плагинных блоков
+ * системного промпта.
+ *
+ * - `key` — ключ блока (для плагина — `plugin.<pluginName>.<slot>`);
+ * - `tier` — тир блока: **только** `context`/`volatile`; `stable` запрещён
+ *   (граница prompt-cache, ADR-070);
+ * - `order` — порядок внутри тира (число);
+ * - `title`/`provenance` — подпись для манифеста промпта и источник
+ *   (`provenance` для плагинного блока — `plugin:<name>`).
+ *
+ * Схема **строгая** (`.strict()`): неизвестное поле — ошибка, а не молчаливое
+ * проигнорирование (иначе опечатка в манифесте проходит незамеченной).
+ */
+export const packPromptBlockProvideSchema = z
+  .object({
+    key: z.string().min(1),
+    tier: z.enum(['context', 'volatile']),
+    order: z.number().int(),
+    title: z.string().min(1).optional(),
+    provenance: z.string().min(1).optional(),
+  })
+  .strict();
+export type PackPromptBlockProvide = z.infer<typeof packPromptBlockProvideSchema>;
+
+/**
+ * PROP-090 §6/§8: `provides.llmFilters[]` — описание фильтров LLM-вызовов.
+ *
+ * - `id` — идентификатор фильтра (`plugin:<pluginName>:<filterName>`);
+ * - `phase` — фаза: `pre_request` / `post_response` / `embedding`
+ *   (третья фаза — решение владельца 2026-10-22);
+ * - `failMode` — поведение при сбое/таймауте фильтра (`open` — пропустить,
+ *   `closed` — заблокировать); не задан — по классу фильтра (блокирующий —
+ *   `closed`, наблюдательный — `open`);
+ * - `timeoutMs` — бюджет времени на вызов фильтра (мс).
+ */
+export const packLlmFilterProvideSchema = z
+  .object({
+    id: z.string().min(1),
+    phase: z.enum(['pre_request', 'post_response', 'embedding']),
+    failMode: z.enum(['open', 'closed']).optional(),
+    timeoutMs: z.number().int().positive().optional(),
+  })
+  .strict();
+export type PackLlmFilterProvide = z.infer<typeof packLlmFilterProvideSchema>;
+
 /**
  * Набор вкладов расширения. Списки нормализованы (отсутствующий список —
  * пустой массив), неизвестные ключи сохраняются: виды вкладов расширяются
  * без изменения формата манифеста.
+ *
+ * Ключи `tools`/`promptBlocks`/`llmFilters` (PROP-090 §8) описаны **явными**
+ * схемами — без `.passthrough()`: иначе опечатка в манифесте (пустое имя тула,
+ * дубль, тир `stable`, неизвестная фаза фильтра) проходит молча, и правило
+ * «фактические регистрации обязаны совпадать с `provides`» нечем проверять.
  */
 export const packProvidesSchema = z
   .object({
@@ -230,6 +356,9 @@ export const packProvidesSchema = z
     skills: z.array(packSkillProvideSchema).default([]),
     agents: z.array(packAgentProvideSchema).default([]),
     pipelines: z.array(packPipelineProvideSchema).default([]),
+    tools: packToolsProvideSchema.default([]),
+    promptBlocks: z.array(packPromptBlockProvideSchema).default([]),
+    llmFilters: z.array(packLlmFilterProvideSchema).default([]),
   })
   .passthrough();
 export type PackProvides = z.infer<typeof packProvidesSchema>;
@@ -270,6 +399,10 @@ export function refinePackType(
  * - `kind: 'pack'` **требует** `packType`;
  * - `packType` запрещён у остальных `kind` (`addon`/`gateway`/`plugin`/
  *   `storage` — это классы кода/сервиса, а не контент-паки).
+ *
+ * Поля `mode`/`permissions`/`trust` (PROP-090 §8/§9) — опциональные и
+ * **явные**: `z.object` выбрасывает неизвестные ключи, поэтому без них
+ * эти поля молча терялись при разборе манифеста.
  */
 export const packManifestSchema = z
   .object({
@@ -281,14 +414,29 @@ export const packManifestSchema = z
     kind: packKindSchema,
     /** Диапазон версий host-приложения (semver-range). */
     host: packHostSchema.optional(),
-    /** Версии контрактов, которые расширение использует (напр. `apiV2: '^2'`). */
-    contracts: z.record(z.string(), z.string()).optional(),
+    /**
+     * Версии контрактов, которые расширение использует (напр. `apiV2: '^2'`).
+     * Значения — semver-диапазоны (та же грамматика, что у `host`).
+     */
+    contracts: z
+      .record(z.string(), z.string())
+      .optional()
+      .refine(
+        (contracts) => Object.values(contracts ?? {}).every((range) => isSemverRange(range)),
+        'contracts: значения — semver-диапазоны (например, "^1")',
+      ),
     /** Краткое описание (инспекция/каталог). */
     description: z.string().min(1),
     /** Что расширение регистрирует. */
     provides: packProvidesSchema,
     /** Тип контент-пака — только для `kind: 'pack'`. */
     packType: packTypeSchema.optional(),
+    /** PROP-090 §8: режим исполнения — только для `kind: 'plugin'`. */
+    mode: packPluginModeSchema.optional(),
+    /** PROP-090 §8: заявленные расширением доступы. */
+    permissions: packPermissionsSchema.optional(),
+    /** PROP-090 §9: заявленный уровень/источник доверия (верхняя граница). */
+    trust: packTrustSchema.optional(),
   })
   .superRefine(refinePackType);
 
@@ -333,6 +481,9 @@ export function normalizePackProvides(provides: unknown): PackProvides {
     skills: toList(source.skills) as PackSkillProvide[],
     agents: toList(source.agents) as PackAgentProvide[],
     pipelines: toList(source.pipelines) as PackPipelineProvide[],
+    tools: toList(source.tools) as string[],
+    promptBlocks: toList(source.promptBlocks) as PackPromptBlockProvide[],
+    llmFilters: toList(source.llmFilters) as PackLlmFilterProvide[],
   } as PackProvides;
 }
 
@@ -359,7 +510,11 @@ export function normalizePackProvides(provides: unknown): PackProvides {
  * 8. MCP без `name`/`transport`;
  * 9. скилл без `name`/`path`;
  * 10. пайплайн без `id`;
- * 11. `agents[].capabilities` — строки из известного набора `ToolCapability`.
+ * 11. `agents[].capabilities` — строки из известного набора `ToolCapability`;
+ * 12. вклады плагина (`provides.tools`/`promptBlocks`/`llmFilters`) — по
+ *     явным схемам PROP-090 §8;
+ * 13. `mode` — только для `kind: 'plugin'`;
+ * 14. `trust.level` плагина — не выше `trusted` (trust-floor, PROP-090 §9).
  */
 export function validatePackManifest(manifest: unknown): string[] {
   const problems: string[] = [];
@@ -398,7 +553,7 @@ export function validatePackManifest(manifest: unknown): string[] {
     return problems;
   }
 
-  for (const key of ['skills', 'agents', 'pipelines'] as const) {
+  for (const key of ['skills', 'agents', 'pipelines', 'tools', 'promptBlocks', 'llmFilters'] as const) {
     const value = rawProvides[key];
     if (value !== undefined && !Array.isArray(value)) {
       problems.push(`provides.${key}: ожидается массив`);
@@ -410,9 +565,18 @@ export function validatePackManifest(manifest: unknown): string[] {
   }
 
   const provides = normalizePackProvides(rawProvides);
-  const declared = provides.mcp.length + provides.skills.length + provides.agents.length + provides.pipelines.length;
+  const declared =
+    provides.mcp.length
+    + provides.skills.length
+    + provides.agents.length
+    + provides.pipelines.length
+    + provides.tools.length
+    + provides.promptBlocks.length
+    + provides.llmFilters.length;
   if (declared === 0) {
-    problems.push('provides: не заявлен ни один вклад (mcp/skills/agents/pipelines)');
+    problems.push(
+      'provides: не заявлен ни один вклад (mcp/skills/agents/pipelines/tools/promptBlocks/llmFilters)',
+    );
   }
 
   // MCP: имя + транспорт, дубликаты имён.
@@ -508,5 +672,290 @@ export function validatePackManifest(manifest: unknown): string[] {
     }
   });
 
+  // 12. Вклады плагина (PROP-090 §8): проверяются явными схемами — неизвестное
+  // поле, невалидный тир/фаза, пустое имя и дубль — проблема, а не молчаливый
+  // проход (иначе правило «регистрации обязаны совпадать с provides» нечем
+  // проверять).
+  problems.push(...validatePluginProvides(provides));
+
+  // 13. `mode` — режим исполнения, допустим только для плагина.
+  const mode = manifest.mode;
+  if (mode !== undefined && mode !== null) {
+    if (kind !== 'plugin') {
+      problems.push(`mode: допустим только для kind «plugin» (текущий kind — «${String(kind)}»)`);
+    } else if (typeof mode !== 'string' || !(PACK_PLUGIN_MODES as readonly string[]).includes(mode)) {
+      problems.push(
+        `mode: неизвестный режим исполнения «${String(mode)}» (допустимо: ${PACK_PLUGIN_MODES.join('|')})`,
+      );
+    }
+  }
+
+  // 14. `trust.level` — верхняя граница; для плагина — не выше trust-floor.
+  problems.push(...validateManifestTrust(manifest, kind));
+
   return problems;
+}
+
+/**
+ * Проверка вкладов плагина (`provides.tools`/`promptBlocks`/`llmFilters`) по
+ * явным схемам PROP-090 §8. Проблемы — строками (как остальные правила).
+ */
+function validatePluginProvides(provides: PackProvides): string[] {
+  const problems: string[] = [];
+
+  // Тулы: непустое имя, без дублей.
+  const toolNames = new Set<string>();
+  provides.tools.forEach((name, index) => {
+    if (typeof name !== 'string' || name.trim() === '') {
+      problems.push(`provides.tools[${index}]: пустое имя тула`);
+      return;
+    }
+    if (toolNames.has(name)) {
+      problems.push(`provides.tools[${index}]: дубликат имени тула «${name}»`);
+      return;
+    }
+    toolNames.add(name);
+  });
+
+  // Промпт-блоки: ключ/тир/порядок; тир `stable` запрещён (ADR-070).
+  const blockKeys = new Set<string>();
+  provides.promptBlocks.forEach((item, index) => {
+    const parsed = packPromptBlockProvideSchema.safeParse(item);
+    if (!parsed.success) {
+      problems.push(
+        `provides.promptBlocks[${index}]: ${describeZodIssues(parsed.error)}`,
+      );
+      return;
+    }
+    const key = parsed.data.key;
+    if (blockKeys.has(key)) {
+      problems.push(`provides.promptBlocks[${index}]: дубликат ключа блока «${key}»`);
+      return;
+    }
+    blockKeys.add(key);
+  });
+
+  // LLM-фильтры: id/фаза; id уникален.
+  const filterIds = new Set<string>();
+  provides.llmFilters.forEach((item, index) => {
+    const parsed = packLlmFilterProvideSchema.safeParse(item);
+    if (!parsed.success) {
+      problems.push(`provides.llmFilters[${index}]: ${describeZodIssues(parsed.error)}`);
+      return;
+    }
+    const id = parsed.data.id;
+    if (filterIds.has(id)) {
+      problems.push(`provides.llmFilters[${index}]: дубликат id фильтра «${id}»`);
+      return;
+    }
+    filterIds.add(id);
+  });
+
+  return problems;
+}
+
+/** Человекочитаемая сводка проблем zod-валидации (для списка проблем). */
+function describeZodIssues(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => {
+      const path = issue.path.join('.');
+      return path ? `${path}: ${issue.message}` : issue.message;
+    })
+    .join('; ');
+}
+
+/**
+ * Проверка заявленного доверия (PROP-090 §9).
+ *
+ * Заявленный уровень — **верхняя граница**: фактический trust резолвится по
+ * источнику/реестру, манифест не может его повысить. Для `kind: 'plugin'`
+ * уровень не должен быть выше `trusted` — trust-floor плагина и «право вето
+ * только у доверенных» (PROP-090 §6/§9).
+ */
+function validateManifestTrust(manifest: Record<string, unknown>, kind: unknown): string[] {
+  const problems: string[] = [];
+  const trust = manifest.trust;
+  if (trust === undefined || trust === null) return problems;
+  if (!isRecord(trust)) {
+    problems.push('trust: ожидается объект { level?, source? }');
+    return problems;
+  }
+  const level = trust.level;
+  if (level === undefined || level === null) return problems;
+  if (typeof level !== 'string' || !(CATALOG_TRUST_LEVELS as readonly string[]).includes(level)) {
+    problems.push(
+      `trust.level: неизвестный уровень доверия «${String(level)}» (допустимо: ${CATALOG_TRUST_LEVELS.join('|')})`,
+    );
+    return problems;
+  }
+  if (kind !== 'plugin') return problems;
+  const floor = 'trusted';
+  if (trustLevelRank(level as (typeof CATALOG_TRUST_LEVELS)[number]) < trustLevelRank(floor)) {
+    problems.push(
+      `trust.level: «${level}» выше trust-floor плагина «${floor}» (право вето — только у доверенных)`,
+    );
+  }
+  return problems;
+}
+
+// --- Сверка объявленных вкладов с фактическими регистрациями ---
+
+/** Вид вклада, по которому сверяются объявление и регистрация. */
+export type PackProvidesKind = 'tool' | 'promptBlock' | 'llmFilter';
+
+/**
+ * Расхождение между объявленным в манифесте вкладом и фактической
+ * регистрацией расширения.
+ *
+ * - `missing` — объявлено в `provides`, но не зарегистрировано;
+ * - `unexpected` — зарегистрировано, но не объявлено.
+ */
+export interface PackProvidesMismatch {
+  kind: PackProvidesKind;
+  /** Имя вклада (имя тула / ключ блока / id фильтра). */
+  name: string;
+  issue: 'missing' | 'unexpected';
+}
+
+/** Объявленные в манифесте вклады (из `provides`). */
+export interface DeclaredPackProvides {
+  tools?: readonly string[];
+  promptBlocks?: readonly { key: string }[];
+  llmFilters?: readonly { id: string }[];
+}
+
+/** Фактически зарегистрированные расширением вклады. */
+export interface RegisteredPackProvides {
+  tools?: readonly string[];
+  promptBlocks?: readonly string[];
+  llmFilters?: readonly string[];
+}
+
+/**
+ * PROP-090 §8: сверка объявленных в манифесте вкладов с фактическими
+ * регистрациями расширения.
+ *
+ * Правило: «фактические регистрации обязаны совпадать с `provides`» —
+ * расхождение (объявлено, но не зарегистрировано — и наоборот) означает
+ * несогласованную сборку и должно вести к отказу активации (Ф1/Ф3).
+ *
+ * Функция возвращает **список расхождений** (пустой — совпадение) и не
+ * бросает исключений: вызывающий (загрузчик `PluginHost`) сам решает, что
+ * с ними делать.
+ */
+export function diffPackProvides(
+  declared: DeclaredPackProvides,
+  registered: RegisteredPackProvides,
+): PackProvidesMismatch[] {
+  const mismatches: PackProvidesMismatch[] = [];
+
+  const diff = (
+    kind: PackProvidesKind,
+    declaredNames: readonly string[],
+    registeredNames: readonly string[],
+  ): void => {
+    const registeredSet = new Set(registeredNames);
+    const declaredSet = new Set(declaredNames);
+    for (const name of declaredNames) {
+      if (!registeredSet.has(name)) mismatches.push({ kind, name, issue: 'missing' });
+    }
+    for (const name of registeredNames) {
+      if (!declaredSet.has(name)) mismatches.push({ kind, name, issue: 'unexpected' });
+    }
+  };
+
+  diff('tool', declared.tools ?? [], registered.tools ?? []);
+  diff(
+    'promptBlock',
+    (declared.promptBlocks ?? []).map((block) => block.key),
+    registered.promptBlocks ?? [],
+  );
+  diff(
+    'llmFilter',
+    (declared.llmFilters ?? []).map((filter) => filter.id),
+    registered.llmFilters ?? [],
+  );
+
+  return mismatches;
+}
+
+// --- Семвер-гейт расширения (PROP-090 §10, шаг 3) ---
+
+/** Причина отказа семвер-гейта. */
+export type ExtensionCompatibilityReason = 'contract_mismatch' | 'host_mismatch';
+
+/**
+ * Машиночитаемый вердикт семвер-гейта: расширение совместимо с хостом или
+ * нет (и почему).
+ */
+export interface ExtensionCompatibilityVerdict {
+  ok: boolean;
+  /** Причина отказа (нет при `ok: true`). */
+  reason?: ExtensionCompatibilityReason;
+  /** Ожидаемое значение (диапазон контракта/host). */
+  expected?: string;
+  /** Фактическое значение (версия контракта/host). */
+  actual?: string;
+}
+
+/** Имя контракта Extension API по умолчанию (PROP-090 §8). */
+export const DEFAULT_EXTENSION_CONTRACT = 'extensionApi';
+
+/**
+ * PROP-090 §10 (шаг 3): семвер-гейт расширения против хоста.
+ *
+ * Проверяются два объявления манифеста:
+ * - `contracts.extensionApi` — semver-диапазон версии контракта точки
+ *   расширения, которую предоставляет хост (сейчас — мажор `1`);
+ * - `host` — semver-диапазон версий Synth, совместимых с расширением.
+ *
+ * Порядок проверок — как в пайплайне активации: сначала контракт, потом
+ * host. Точные исключения (`exactHostExceptions`) — список версий Synth,
+ * совместимых **вопреки** диапазону `host` (формат файла исключений —
+ * открытый вопрос PROP-090 §14; здесь — сам список).
+ *
+ * Вердикт — машиночитаемый: `{ ok, reason, expected, actual }`; загрузчик
+ * `PluginHost` (Ф1) переиспользует функцию как есть.
+ */
+export function checkExtensionCompatibility(input: {
+  /** Объявленные контракты расширения (`contracts` манифеста). */
+  contracts?: Record<string, string>;
+  /** Диапазон версий Synth (`host` манифеста). */
+  host?: string;
+  /** Версия Synth (хоста). */
+  hostVersion: string;
+  /** Версия контракта Extension API, который предоставляет хост (напр. `1`). */
+  contractVersion: string;
+  /** Ключ контракта в `contracts` (по умолчанию — `extensionApi`). */
+  contractName?: string;
+  /** Точные исключения семвер-гейта (версии host в обход диапазона `host`). */
+  exactHostExceptions?: readonly string[];
+}): ExtensionCompatibilityVerdict {
+  const contractName = input.contractName ?? DEFAULT_EXTENSION_CONTRACT;
+  const contractRange = input.contracts?.[contractName];
+  if (contractRange !== undefined) {
+    if (!satisfiesSemverRange(input.contractVersion, contractRange)) {
+      return {
+        ok: false,
+        reason: 'contract_mismatch',
+        expected: contractRange,
+        actual: input.contractVersion,
+      };
+    }
+  }
+
+  const hostRange = input.host;
+  if (hostRange !== undefined) {
+    const excepted = (input.exactHostExceptions ?? []).includes(input.hostVersion);
+    if (!excepted && !satisfiesSemverRange(input.hostVersion, hostRange)) {
+      return {
+        ok: false,
+        reason: 'host_mismatch',
+        expected: hostRange,
+        actual: input.hostVersion,
+      };
+    }
+  }
+
+  return { ok: true };
 }

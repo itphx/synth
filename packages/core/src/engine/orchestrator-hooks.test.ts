@@ -114,16 +114,25 @@ function makeEchoTool(): ToolDefinition {
 interface Harness {
   orchestrator: ChatOrchestrator;
   sessionManager: SessionManager;
+  toolRegistry: ReturnType<typeof createToolRegistry>;
   tmpDir: string;
   sessionId: string;
 }
 
-async function makeHarness(hooks: HookBus | undefined): Promise<Harness> {
+interface HarnessOptions {
+  /** Доп. поля/переопределения пользовательского сообщения сессии. */
+  message?: Partial<Message>;
+  /** Доп. инструменты (регистрируются поверх встроенных). */
+  tools?: ToolDefinition[];
+}
+
+async function makeHarness(hooks: HookBus | undefined, opts: HarnessOptions = {}): Promise<Harness> {
   const tmpDir = await mkdtemp(join(tmpdir(), 'synth-hooks-'));
   const store = new FileStore({ dataDir: tmpDir });
   const sessionManager = new SessionManager(store, {});
   const toolRegistry = createToolRegistry();
   toolRegistry.register(makeEchoTool());
+  for (const tool of opts.tools ?? []) toolRegistry.register(tool);
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus: new EventBus(),
@@ -139,16 +148,16 @@ async function makeHarness(hooks: HookBus | undefined): Promise<Harness> {
     title: 'Hooks',
     settings: { provider: 'hookscript', model: 'm', systemPrompt: 'test' },
   });
-  await sessionManager.addMessage(session.id, makeUserMessage());
-  return { orchestrator, sessionManager, tmpDir, sessionId: session.id };
+  await sessionManager.addMessage(session.id, { ...makeUserMessage(), ...(opts.message ?? {}) });
+  return { orchestrator, sessionManager, toolRegistry, tmpDir, sessionId: session.id };
 }
 
-async function run(h: Harness): Promise<Array<{ event: string; data: Record<string, unknown> }>> {
+async function run(h: Harness, attempt?: number): Promise<Array<{ event: string; data: Record<string, unknown> }>> {
   const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
   const processMessage = h.orchestrator.createProcessMessage();
   const fresh = (await h.sessionManager.getSession(h.sessionId))!;
   const userMsg = fresh.messages.find((m) => m.role === MessageRole.USER)!;
-  await processMessage(fresh, userMsg, new AbortController().signal, (event, data) => chunks.push({ event, data }));
+  await processMessage(fresh, userMsg, new AbortController().signal, (event, data) => chunks.push({ event, data }), attempt);
   return chunks;
 }
 
@@ -284,6 +293,134 @@ describe('ChatOrchestrator — ADR-030 hooks (Этап 2b)', () => {
     const chunks = await run(h);
     expect(executed).toBe(1);
     expect(toolResults(chunks)).toHaveLength(1);
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  // --- ADR-030 (Ф0 PROP-090): message_received ---
+
+  it('message_received: один эмит на сообщение, payload без текста сообщения', async () => {
+    const hooks = new HookBus();
+    const received: Array<Record<string, unknown>> = [];
+    hooks.on('message_received', (ctx) => { received.push(ctx as unknown as Record<string, unknown>); }, { mode: 'async' });
+
+    const h = await makeHarness(hooks);
+    await run(h);
+
+    await vi.waitFor(() => {
+      expect(received).toHaveLength(1);
+    });
+    expect(received[0]).toMatchObject({ sessionId: h.sessionId, kind: 'user', mode: 'act' });
+    // Текст диалога в хук не уходит (риск утечки) — только метаданные.
+    expect(received[0]).not.toHaveProperty('text');
+    expect(received[0]).not.toHaveProperty('content');
+    expect(JSON.stringify(received[0])).not.toContain('выполни hook_echo');
+
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('message_received: ретрай (attempt > 1) не дублирует эмит', async () => {
+    const hooks = new HookBus();
+    const received: Array<Record<string, unknown>> = [];
+    hooks.on('message_received', (ctx) => { received.push(ctx as unknown as Record<string, unknown>); }, { mode: 'async' });
+
+    const h = await makeHarness(hooks);
+    await run(h);
+    await run(h, 2);
+
+    await vi.waitFor(() => {
+      expect(received).toHaveLength(1);
+    });
+    // Даём микротаскам второй попытки выполниться — второго эмита нет.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(received).toHaveLength(1);
+
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('message_received не эмитится без подписчиков', async () => {
+    const hooks = new HookBus();
+    const spy = vi.spyOn(hooks, 'emitAsync');
+
+    const h = await makeHarness(hooks);
+    await run(h);
+
+    expect(spy.mock.calls.some(([name]) => name === 'message_received')).toBe(false);
+
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('message_received: внешнее событие → kind external + source', async () => {
+    const hooks = new HookBus();
+    const received: Array<Record<string, unknown>> = [];
+    hooks.on('message_received', (ctx) => { received.push(ctx as unknown as Record<string, unknown>); }, { mode: 'async' });
+
+    const h = await makeHarness(hooks, {
+      message: { metadata: { stream_id: generateId(), source: 'webhook', event_id: 'evt_1' } },
+    });
+    await run(h);
+
+    await vi.waitFor(() => {
+      expect(received).toHaveLength(1);
+    });
+    expect(received[0]).toMatchObject({ sessionId: h.sessionId, kind: 'external', source: 'webhook' });
+
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('message_received: сообщение Scheduler → kind scheduler', async () => {
+    const hooks = new HookBus();
+    const received: Array<Record<string, unknown>> = [];
+    hooks.on('message_received', (ctx) => { received.push(ctx as unknown as Record<string, unknown>); }, { mode: 'async' });
+
+    const h = await makeHarness(hooks, {
+      message: {
+        author: 'Scheduler',
+        metadata: { stream_id: generateId(), scheduler: true, schedule_id: 'sch_1', schedule_name: 'nightly' },
+      },
+    });
+    await run(h);
+
+    await vi.waitFor(() => {
+      expect(received).toHaveLength(1);
+    });
+    expect(received[0]).toMatchObject({ kind: 'scheduler' });
+
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  // --- ADR-030 (Ф0 PROP-090): plan_rejected ---
+
+  it('plan_rejected: неудачный plan_exit эмитит план-отклонение и не эмитит plan_approved', async () => {
+    ProviderFactory.register('hookscript', HookScriptProvider);
+    HookScriptProvider.calls = 0;
+    HookScriptProvider.toolName = 'plan_exit';
+    HookScriptProvider.toolArgs = {};
+
+    const hooks = new HookBus();
+    const rejected: Array<{ sessionId: string; reason?: string }> = [];
+    const approved: unknown[] = [];
+    hooks.on('plan_rejected', (ctx) => { rejected.push(ctx); }, { mode: 'async' });
+    hooks.on('plan_approved', (ctx) => { approved.push(ctx); }, { mode: 'async' });
+
+    const failingPlanExit: ToolDefinition = {
+      name: 'plan_exit',
+      description: 'plan_exit, всегда падающий (тест ветки отказа)',
+      parameters: z.object({}),
+      capabilities: [ToolCapability.RUNTIME],
+      async execute() {
+        throw new Error('plan not ready');
+      },
+    };
+
+    const h = await makeHarness(hooks, { tools: [failingPlanExit] });
+    await run(h);
+
+    await vi.waitFor(() => {
+      expect(rejected).toHaveLength(1);
+    });
+    expect(rejected[0]).toMatchObject({ sessionId: h.sessionId, reason: 'plan_exit_failed' });
+    expect(approved).toHaveLength(0);
+
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 });

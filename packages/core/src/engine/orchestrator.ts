@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -2365,6 +2365,38 @@ export class ChatOrchestrator {
     let sessionMode: SessionMode = session.mode ?? 'act';
     let planApproved = Boolean(session.planApproved);
 
+    // ADR-030 (Ф0 PROP-090): `message_received` — входящее сообщение в сессии.
+    // Один эмит на сообщение: только первая попытка (`attempt` 1-based; ретраи
+    // в `QueueProcessor` переиспользуют то же сообщение) и только `role: user`.
+    // Внутренние системные сообщения хода (суммаризация/отладка) и
+    // state-сообщения имеют `role: system` — «входящими» не считаются и хука
+    // не эмитят. Текст сообщения не передаётся (утечка содержимого диалога).
+    if (
+      (!attempt || attempt <= 1)
+      && message.role === MessageRole.USER
+      && this._hooks?.count('message_received')
+    ) {
+      const messageSource = typeof message.metadata?.source === 'string'
+        ? message.metadata.source
+        : undefined;
+      const messageType = typeof message.metadata?.type === 'string'
+        ? message.metadata.type
+        : undefined;
+      const kind: MessageReceivedKind = message.metadata?.scheduler === true || author === 'Scheduler'
+        ? 'scheduler'
+        : messageSource !== undefined
+          ? 'external'
+          : 'user';
+      this._hooks.emitAsync('message_received', {
+        sessionId: session.id,
+        ...(effectiveAgentRole ? { agent: effectiveAgentRole } : {}),
+        mode: sessionMode,
+        kind,
+        ...(messageSource ? { source: messageSource } : {}),
+        ...(messageType ? { type: messageType } : {}),
+      });
+    }
+
     // ADR-029: permissions — сессионный override приоритетнее глобального конфига.
     // Конфиг может быть расширен «разрешить в сессии» (once:false) в процессе
     // обработки, поэтому ссылка и эвалуатор пересоздаются.
@@ -3254,6 +3286,17 @@ export class ChatOrchestrator {
               this._hooks.emitAsync('plan_approved', {
                 sessionId: session.id,
                 planContent: buildPlanUpdatedContent(approvedProject?.plan ?? null),
+              });
+            }
+          } else if (toolResult.isError && toolName === 'plan_exit') {
+            // ADR-030 (Ф0 PROP-090): `plan_rejected` — утверждение плана не
+            // удалось (`plan_exit` вернул ошибку): план не утверждён, сессия
+            // остаётся в plan-режиме. Отдельного «отклонить план» в коде нет,
+            // поэтому точка — неудачное утверждение (ближайшая по смыслу).
+            if (this._hooks?.count('plan_rejected')) {
+              this._hooks.emitAsync('plan_rejected', {
+                sessionId: session.id,
+                reason: 'plan_exit_failed',
               });
             }
           }

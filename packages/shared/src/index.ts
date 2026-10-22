@@ -26,6 +26,8 @@ export {
   PACK_VERSION_REGEX,
   PACK_HOST_RANGE_REGEX,
   PACK_AGENT_MODES,
+  PACK_PLUGIN_MODES,
+  DEFAULT_EXTENSION_CONTRACT,
   packKindSchema,
   packTypeSchema,
   packNameSchema,
@@ -37,11 +39,19 @@ export {
   packAgentProvideSchema,
   packPipelineProvideSchema,
   packMcpProvidesSchema,
+  packPluginModeSchema,
+  packPermissionsSchema,
+  packTrustSchema,
+  packToolsProvideSchema,
+  packPromptBlockProvideSchema,
+  packLlmFilterProvideSchema,
   packProvidesSchema,
   packManifestSchema,
   isPackHostRange,
   normalizePackProvides,
   validatePackManifest,
+  diffPackProvides,
+  checkExtensionCompatibility,
 } from './types/pack.js';
 export type {
   PackKind,
@@ -53,7 +63,27 @@ export type {
   PackMcpProvide,
   PackPipelineProvide,
   PackAgentMode,
+  PackPluginMode,
+  PackPermissions,
+  PackTrust,
+  PackToolsProvide,
+  PackPromptBlockProvide,
+  PackLlmFilterProvide,
+  PackProvidesKind,
+  PackProvidesMismatch,
+  DeclaredPackProvides,
+  RegisteredPackProvides,
+  ExtensionCompatibilityReason,
+  ExtensionCompatibilityVerdict,
 } from './types/pack.js';
+// PROP-090 §8/§10: semver-матчер диапазонов версий (host/контракты расширения).
+export {
+  SEMVER_RANGE_REGEX,
+  isSemverRange,
+  parseSemver,
+  satisfiesSemverRange,
+} from './types/semver.js';
+export type { SemverParts } from './types/semver.js';
 // PROP-068 §3/§12: контракт индекса каталога расширений (`format: 1`) —
 // канонический документ, карточка записи и tolerant-парсер форм индекса.
 export {
@@ -197,6 +227,8 @@ export {
   type RouterSubagentConfig,
   type DecisionConfig,
   decisionConfigSchema,
+  type PluginsConfig,
+  pluginsConfigSchema,
   type WebhooksConfig,
   webhooksConfigSchema,
   type RemoteConfig,

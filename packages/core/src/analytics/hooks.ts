@@ -15,6 +15,7 @@
  */
 
 import type { HookBus } from '../engine/hooks/hook-bus.js';
+import type { HookContextMap } from '@itphx/synth-shared';
 import type { AnalyticsRecorder } from './recorder.js';
 
 /** Оси атрибуции события активности. */
@@ -36,6 +37,10 @@ export interface AttachAnalyticsHooksDeps {
 /**
  * Подписать сборщик `activity` на hook-шину. Возвращает функцию отписки —
  * вызывается на graceful shutdown/в тестах.
+ *
+ * Подписки — `builtin` (обработчики ядра, PROP-090 §10): снять их через
+ * обычный `off`/функцию отписки нельзя, поэтому отписка идёт через
+ * `offBuiltin` — явный путь владельца регистрации.
  */
 export function attachAnalyticsActivityHooks(
   hooks: HookBus,
@@ -55,81 +60,60 @@ export function attachAnalyticsActivityHooks(
     }
   };
 
-  const unsubscribers: Array<() => void> = [];
   const options = { mode: 'async' as const, builtin: true };
 
-  unsubscribers.push(
-    hooks.on(
-      'session_start',
-      async (ctx) => {
-        if (!recorder.enabled) return;
-        const axes = await resolveAxes(ctx.sessionId, {
-          userId: ctx.userId,
-          projectId: ctx.projectId,
-        });
-        await recorder.recordActivity('sessions_created', axes);
-      },
-      options,
-    ),
-  );
+  const onSessionStart = async (ctx: HookContextMap['session_start']) => {
+    if (!recorder.enabled) return;
+    const axes = await resolveAxes(ctx.sessionId, {
+      userId: ctx.userId,
+      projectId: ctx.projectId,
+    });
+    await recorder.recordActivity('sessions_created', axes);
+  };
 
-  unsubscribers.push(
-    hooks.on(
-      'session_end',
-      async (ctx) => {
-        // `session_end` эмитится и при удалении, и при архивации (ADR-030/ADR-089);
-        // мера `sessions_archived` — только архив.
-        if (!recorder.enabled || ctx.archived !== true) return;
-        const axes = await resolveAxes(ctx.sessionId, {
-          userId: ctx.userId,
-          projectId: ctx.projectId,
-        });
-        await recorder.recordActivity('sessions_archived', axes);
-      },
-      options,
-    ),
-  );
+  const onSessionEnd = async (ctx: HookContextMap['session_end']) => {
+    // `session_end` эмитится и при удалении, и при архивации (ADR-030/ADR-089);
+    // мера `sessions_archived` — только архив.
+    if (!recorder.enabled || ctx.archived !== true) return;
+    const axes = await resolveAxes(ctx.sessionId, {
+      userId: ctx.userId,
+      projectId: ctx.projectId,
+    });
+    await recorder.recordActivity('sessions_archived', axes);
+  };
 
-  unsubscribers.push(
-    hooks.on(
-      'post_tool_use',
-      async (ctx) => {
-        if (!recorder.enabled) return;
-        const axes = await resolveAxes(ctx.sessionId, {
-          userId: ctx.userId,
-          projectId: ctx.projectId,
-        });
-        await recorder.recordActivity('tool_calls', axes);
-      },
-      options,
-    ),
-  );
+  const onPostToolUse = async (ctx: HookContextMap['post_tool_use']) => {
+    if (!recorder.enabled) return;
+    const axes = await resolveAxes(ctx.sessionId, {
+      userId: ctx.userId,
+      projectId: ctx.projectId,
+    });
+    await recorder.recordActivity('tool_calls', axes);
+  };
 
-  unsubscribers.push(
-    hooks.on(
-      'agent_spawned',
-      async (ctx) => {
-        if (!recorder.enabled) return;
-        const axes = await resolveAxes(ctx.agentId);
-        await recorder.recordActivity('turns', axes);
-      },
-      options,
-    ),
-  );
+  const onAgentSpawned = async (ctx: HookContextMap['agent_spawned']) => {
+    if (!recorder.enabled) return;
+    const axes = await resolveAxes(ctx.agentId);
+    await recorder.recordActivity('turns', axes);
+  };
 
-  unsubscribers.push(
-    hooks.on(
-      'agent_failed',
-      async (ctx) => {
-        if (!recorder.enabled) return;
-        const axes = await resolveAxes(ctx.agentId);
-        await recorder.recordActivity('errors', axes);
-      },
-      options,
-    ),
-  );
+  const onAgentFailed = async (ctx: HookContextMap['agent_failed']) => {
+    if (!recorder.enabled) return;
+    const axes = await resolveAxes(ctx.agentId);
+    await recorder.recordActivity('errors', axes);
+  };
+
+  hooks.on('session_start', onSessionStart, options);
+  hooks.on('session_end', onSessionEnd, options);
+  hooks.on('post_tool_use', onPostToolUse, options);
+  hooks.on('agent_spawned', onAgentSpawned, options);
+  hooks.on('agent_failed', onAgentFailed, options);
 
   return () => {
-    for (const unsubscribe of unsubscribers) unsubscribe();
+    hooks.offBuiltin('session_start', onSessionStart);
+    hooks.offBuiltin('session_end', onSessionEnd);
+    hooks.offBuiltin('post_tool_use', onPostToolUse);
+    hooks.offBuiltin('agent_spawned', onAgentSpawned);
+    hooks.offBuiltin('agent_failed', onAgentFailed);
   };
 }

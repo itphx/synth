@@ -1,7 +1,17 @@
 # ADR-030: Hooks для событий агента
 
-> **Статус:** ⚠️ Частично — реализованы hook-шина `HookBus` и эмиты жизненного цикла; Plugin SDK/загрузка плагинов ([PROP-090](./prop-090-extension-api.md), вернулся в работу 2026-10-22), 4 эмита (`plan_rejected`/`message_received`/`callback`/`schedule_fired`) и политика `builtin` — нет
+> **Статус:** ⚠️ Частично — реализованы hook-шина `HookBus`, политика `builtin` (Ф0 [PROP-090](./prop-090-extension-api.md))
+> и 14 из 15 эмитов; нет Plugin SDK/загрузки плагинов ([PROP-090](./prop-090-extension-api.md)) и эмита `callback`
+> (в ядре нет точки «нажатие инлайн-кнопки» — это контракт внешнего канала [ADR-087](./adr-087-gateways.md)/[ADR-103](./adr-103-gateway-core-channel-contract.md))
+>
 > **Дата:** 2026-09-17
+> **Обновлено:** 2026-10-22 — **Ф0 [PROP-090](./prop-090-extension-api.md) закрыт**: политика `builtin` реализована
+> (builtin-обработчик не снимается ни через `off`, ни через функцию отписки; явный путь владельца регистрации —
+> `HookBus.offBuiltin`); добавлены три эмита — `message_received` (`engine/orchestrator.ts`, только `role: user`,
+> первая попытка), `plan_rejected` (неудачный `plan_exit`) и `schedule_fired`
+> (`engine/scheduler/scheduler.ts`, до `EventIngress.ingest`); `callback` в core **не реализуется** (контракт
+> внешнего канала [ADR-087](./adr-087-gateways.md)/[ADR-103](./adr-103-gateway-core-channel-contract.md)).
+> Эмитится **14 из 15** хуков.
 > **Обновлено:** 2026-10-22 — PROP-090 **вернулся в работу** (🧩 Предложение, срок решения 2026-11-14): фазы
 > перестроены в Ф0–Ф7; остаток ADR-030 (политика `builtin` + 4 недостающих эмита `plan_rejected`/`message_received`/
 > `callback`/`schedule_fired`) — **Ф0** в новой схеме фаз. §-номера прежней редакции PROP-090 больше не действительны —
@@ -47,7 +57,7 @@
 | `session_start` | Создание сессии | `{session_id, project, agent}` | Инициализация контекста, загрузка memory |
 | `session_end` | Завершение сессии | `{session_id, summary, usage}` | Очистка, сохранение контекста, нотификация |
 | `plan_approved` | План утверждён | `{plan_path, plan_content}` | Запуск verification, CI хуки, оповещение команды |
-| `plan_rejected` | План отклонён | `{plan_path, reason?}` | Нотификация, возврат в plan mode |
+| `plan_rejected` | Утверждение плана **не удалось** (неудачный `plan_exit`: план не утверждён, сессия остаётся в plan-режиме) | `{sessionId, reason: 'plan_exit_failed'}` | Нотификация, возврат в plan mode |
 | `agent_spawned` | Запуск саб-агента | `{agent_id, agent_type, parent_id}` | Настройка окружения, мониторинг |
 | `agent_completed` | Саб-агент завершён | `{agent_id, result, usage}` | Сбор результатов, цепочка dependent tasks |
 | `agent_failed` | Ошибка саб-агента | `{agent_id, error, retries}` | Алертинг, автоматический ретрай |
@@ -62,10 +72,10 @@
 | Событие | Момент | Контекст | Назначение |
 |---|---|---|---|
 | `external_event` | Нормализованное внешнее событие принято | `{event: SynthEvent}` | Точка входа Router ([ADR-089](./adr-089-external-events-automation.md)); позволяет плагинам наблюдать/дополнять событие |
-| `message_received` | Получено сообщение из внешнего канала | `{source, chatKey?, threadKey?, from, text?}` | Частный случай `external_event` для мессенджер-шлюзов ([ADR-087](./adr-087-gateways.md)/[ADR-089](./adr-089-external-events-automation.md)) |
-| `callback` | Нажатие кнопки/инлайн-действие во внешнем сервисе | `{source, callbackId, data, from}` | Обработка интерактивных действий (inline-кнопки, approve) |
+| `message_received` | Входящее сообщение в сессии (эмитится в `ChatOrchestrator._processMessage`: только `role: user`, только первая попытка) | `{sessionId, agent?, mode?, kind: 'user'\|'scheduler'\|'external', source?, type?}` — **без текста сообщения** | Наблюдение за входящим потоком (метрики, память, аудит); частный случай `external_event` — наблюдение со стороны сессии ([ADR-087](./adr-087-gateways.md)/[ADR-089](./adr-089-external-events-automation.md)) |
+| `callback` | Нажатие кнопки/инлайн-действие во внешнем сервисе | `{source, callbackId, data, from}` | Обработка интерактивных действий (inline-кнопки, approve). **В core не эмитится**: точки «нажатие кнопки» в ядре нет — это контракт внешнего канала ([ADR-087](./adr-087-gateways.md)/[ADR-103](./adr-103-gateway-core-channel-contract.md)) |
 | `session_requested` | Запрошено создание сессии | `{reason, agentTemplate?, project?, initiator}` | Создание сессии как событие ([ADR-089](./adr-089-external-events-automation.md)); может инициировать владелец, агент или внешний сервис |
-| `schedule_fired` | Сработал таймер/расписание | `{scheduleId, cron?, payload?}` | Cron/timer-триггеры ([ADR-051](./adr-051-scheduler-pipelines.md)) |
+| `schedule_fired` | Сработал таймер/расписание (эмитится `SchedulerService._dispatch` **до** `EventIngress.ingest`) | `{scheduleId, name?, target?, cron?, trigger?}` — **без текста задания** | Cron/timer-триггеры ([ADR-051](./adr-051-scheduler-pipelines.md)) |
 
 > **Инициатор хука — внешний или внутренний.** Hook может быть вызван как изнутри агента (как в примере
 > ниже), так и извне — через webhook/публичный API ([ADR-052](./adr-052-public-api-platform.md)), шедулер
@@ -102,8 +112,9 @@ export default function myPlugin(synth: SynthPlugin) {
 
 ## Статус реализации в коде
 
-**Реализовано частично:** hook-шина (`HookBus`) и эмиты жизненного цикла. Plugin SDK и загрузка плагинов — не реализованы;
-эмитится 11 из 15 объявленных хуков.
+**Реализовано частично:** hook-шина (`HookBus`), политика `builtin` (Ф0 [PROP-090](./prop-090-extension-api.md)) и
+эмиты жизненного цикла. Plugin SDK и загрузка плагинов — не реализованы; эмитится **14 из 15** объявленных хуков
+(не эмитится только `callback` — в ядре нет точки «нажатие инлайн-кнопки»).
 
 ### Реализовано
 
@@ -111,26 +122,36 @@ export default function myPlugin(synth: SynthPlugin) {
   - `sync` (по умолчанию) — последовательный вызов в `emit`, блокировка через `{block, reason}` (немедленно прерывает цепочку) и `{patch}` (поверхностный мерж в контекст);
   - `async` — fire-and-forget в `emitAsync` с таймаутом `HOOK_ASYNC_TIMEOUT_MS = 5000` (`unref` таймера).
   Ошибки и таймауты обработчиков изолированы (логируются, наружу не пробрасываются). Шина не зависит от session-`EventBus` (`events/bus.ts`).
-- **Типы** — `packages/shared/src/types/hooks.ts`: `HookName`, `HookMode`, `HookResult`, `HookContextMap` (карта контекстов всех объявленных хуков, включая события интеграций из ADR-089). Экспортируются через `@itphx/synth-shared`.
+- **Политика `builtin` (Ф0 PROP-090)** — `packages/core/src/engine/hooks/hook-bus.ts`: регистрация с `builtin: true`
+  (обработчик ядра) **не снимается** ни через `off(name, handler)`, ни через функцию отписки, возвращённую `on`
+  (попытка отклоняется без исключения и логируется). Явный путь снятия — `HookBus.offBuiltin(name, handler)` —
+  его зовёт **владелец регистрации** (ядро: деактивация подсистемы, graceful shutdown), а не внешний код; `removeAll()`
+  остаётся служебным путём для тестов. Пример использования — `packages/core/src/analytics/hooks.ts`
+  (`attachAnalyticsActivityHooks`: подписки `builtin`, отписка — `offBuiltin`).
+- **Типы** — `packages/shared/src/types/hooks.ts`: `HookName`, `HookMode`, `HookResult`, `HookContextMap` (карта контекстов всех объявленных хуков, включая события интеграций из ADR-089) и `MessageReceivedKind` (`user`/`scheduler`/`external`). Экспортируются через `@itphx/synth-shared`.
 - **Эмиты жизненного цикла:**
   - `session_start` — `packages/core/src/sessions/manager.ts` (`createSession`, после сохранения); `session_end` — там же (`deleteSession`, `archiveSession`), контекст `{ sessionId }`;
   - `pre_tool_use` (sync, блокирует исполнение → результат `hook.blocked`), `post_tool_use` (async, только для реально исполненных тулов), `permission_denied`, `plan_approved` — `packages/core/src/engine/orchestrator.ts`;
+  - `plan_rejected` (async) — там же: срабатывает, когда `plan_exit` вернул ошибку (утверждение плана не удалось, сессия остаётся в plan-режиме), `reason: 'plan_exit_failed'`;
+  - `message_received` (async) — там же, в начале `_processMessage`: только `role: user` и только первая попытка (`attempt <= 1`, ретраи очередь не дублируют эмит); `kind` выводится из сообщения (`scheduler` — автор `Scheduler`/`metadata.scheduler`, `external` — есть `metadata.source`, иначе `user`); текст сообщения в контекст **не передаётся**;
   - `agent_spawned`, `agent_completed`, `agent_failed` — `packages/core/src/engine/tools/task.ts` (эмитятся при наличии дочерней сессии саб-агента);
-  - `session_requested` (async) и `external_event` (sync, блокируемый → решение `drop`) — `packages/core/src/engine/events/request-session.ts`.
-- **Тесты** — `engine/hooks/hook-bus.test.ts`, `engine/orchestrator-hooks.test.ts`, `sessions/manager-hooks.test.ts`, `engine/events/request-session.test.ts`.
+  - `session_requested` (async) и `external_event` (sync, блокируемый → решение `drop`) — `packages/core/src/engine/events/request-session.ts`;
+  - `schedule_fired` (async) — `packages/core/src/engine/scheduler/scheduler.ts` (`SchedulerService._dispatch`, **до** `EventIngress.ingest`, только при наличии подписчиков): передаются метаданные расписания, текст задания (`prompt`/`payload`) в контекст **не передаётся**. Шина прокидывается через `SchedulerServiceDeps.hooks` (`server/app/deps.ts`, `backend/app/deps.ts`).
+- **Тесты** — `engine/hooks/hook-bus.test.ts` (в т.ч. политика `builtin`: `off`/отписка/`offBuiltin`/`removeAll`), `engine/orchestrator-hooks.test.ts` (в т.ч. `message_received` — один эмит на сообщение, без текста, ретрай не дублирует; `plan_rejected`), `engine/scheduler/scheduler.test.ts` (`schedule_fired` до публикации события, без текста задания), `sessions/manager-hooks.test.ts`, `engine/events/request-session.test.ts`.
 
 ### Остаток (не реализовано)
 
-Остаток ADR-030 сводится к **Ф0 [PROP-090](./prop-090-extension-api.md) §13 «Фазы»** (политика `builtin` + 4 недостающих
-эмита `plan_rejected`/`message_received`/`callback`/`schedule_fired`) и самому Plugin SDK. PROP-090 вернулся в работу
-2026-10-22: фазы перестроены в Ф0–Ф7, Ф0 остаётся первым шагом. §-номера прежней редакции PROP-090 (в т. ч. бывший
-§14) больше не действительны — актуальны разделы «Фазы» (§13) и «Модель доверия» (§9).
+Остаток ADR-030 после закрытия Ф0 сводится к двум пунктам:
 
 - **Plugin SDK и загрузка плагинов** — отсутствуют: нет `SynthPlugin`, `synth.hooks.on(...)`, конфига/загрузчика и публичной точки регистрации внешних обработчиков (спецификация — [PROP-090](./prop-090-extension-api.md), зонтик — [ADR-086](./adr-086-extensibility-plugins-editions.md)).
-- **Неэмитируемые хуки (Ф0 PROP-090)** — `plan_rejected`, `message_received`, `callback`, `schedule_fired` объявлены в `HookName`, но нигде не эмитятся. Эмитятся 11 из 15: `pre_tool_use`, `post_tool_use`, `session_start`, `session_end`, `plan_approved`, `permission_denied`, `agent_spawned`/`agent_completed`/`agent_failed`, `session_requested`, `external_event`.
-- **Политика `builtin` (Ф0 PROP-090)** — флаг `builtin` хранится в регистрации, но политики снятия (защита обработчиков ядра от внешних плагинов) нет: `off` снимает любой обработчик (`packages/core/src/engine/hooks/hook-bus.ts` — комментарий «Builtin-обработчики тоже снимаются (политика — позже)»).
-- **Неполные контексты** — `session_end` эмитится без `summary`/`usage`; в ветке жёсткого сбоя `agent_failed` не заполняет `retries`.
-- **Конфиг/API/UI/аудит хуков** — отсутствуют.
+- **Эмит `callback`** — объявлен в `HookName`, но **не реализуется в core осознанно**: в ядре нет точки «нажатие инлайн-кнопки» — интерактивные действия относятся к внешнему каналу (шлюз), а не к агенту. Контракт такого действия — [ADR-087](./adr-087-gateways.md)/[ADR-103](./adr-103-gateway-core-channel-contract.md); при появлении такого канала эмит добавит он (или фасад над ним), а не core.
+
+**Закрыто в Ф0 (2026-10-22):** политика `builtin` и три эмита из остатка — `plan_rejected`, `message_received`,
+`schedule_fired` (см. «Реализовано»); четвёртый, `callback`, снят с остатка как не относящийся к ядру.
+
+**Неполные контексты** (не входит в Ф0, остаётся): `session_end` эмитится без `summary`/`usage`; в ветке жёсткого сбоя `agent_failed` не заполняет `retries`.
+
+**Конфиг/API/UI/аудит хуков** — отсутствуют.
 
 ## Связи
 
@@ -150,4 +171,5 @@ ADR-030 — **фундамент** событийной модели Synth: hook
 ## История
 
 - 2026-10-22 — PROP-090 возвращён в работу; остаток ADR-030 закреплён за Ф0 новой схемы фаз.
+- 2026-10-22 — Ф0 PROP-090 закрыт: политика `builtin` (builtin-обработчик не снимается через `off`/функцию отписки, явный путь — `HookBus.offBuiltin`) и три эмита (`plan_rejected` — неудачный `plan_exit`, `message_received` — без текста сообщения, `schedule_fired` — до `EventIngress.ingest`); эмитится 14 из 15 хуков; `callback` снят с остатка — в core нет точки «нажатие инлайн-кнопки» (контракт внешнего канала [ADR-087](./adr-087-gateways.md)/[ADR-103](./adr-103-gateway-core-channel-contract.md)).
 

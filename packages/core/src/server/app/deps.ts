@@ -935,6 +935,8 @@ export async function createStandaloneDeps(
     defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
     catchUp: config.schedulerConfig?.catchUp ?? 'skip',
     jobRetentionDays: config.schedulerConfig?.jobRetentionDays ?? 30,
+    // ADR-030 (Ф0 PROP-090): хук `schedule_fired` (async, метаданные расписания).
+    hooks,
     // ADR-094: завершённые Job (outcome + дрейф cron).
     onJob: schedulerJobMetrics,
     // ADR-051/ADR-089/ADR-096: тикер стартует только у лидера (default —
