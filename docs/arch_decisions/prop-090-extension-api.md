@@ -720,6 +720,10 @@ round-robin по адресам, failover только при ошибке со�
 не выполняется**: `import()`-загрузчик не ходит в npm/registry. Для `out-of-process` — то же:
 процесс запускается из распакованного бандла, а не из npm-дерева.
 
+**Источник доставки этого не меняет.** npm-источник установки (§«Источники установки») — только
+упаковка: скачивается тарбол пакета и распаковывается; `npm install` для плагина **не** выполняется,
+`node_modules` не появляется, бандл остаётся self-contained.
+
 ## Модель доверия (PROP-068)
 
 Плагины **наследуют** модель доверия контента ([PROP-068](./prop-068-skills-agents-registry.md) §4) —
@@ -904,6 +908,48 @@ content_hash, ref, entry, installed_at, updated_at }`. **Pin обязателе�
 Реестры (`promptBlocks`/`llmFilters`/`tools`) обязаны быть теми же экземплярами, что у оркестратора и
 композера, — иначе вклады плагина попадут в «теневой» реестр и не подействуют.
 
+### Источники установки (Д1, 2026-10-22)
+
+Установщик принимает бандл не только из распакованного каталога, но и из **источника**: каталог,
+локальный архив, npm-пакет, https-URL. Резолвинг источника (`engine/plugins/sources.ts`) отдаёт
+локальный каталог бандла + провенанс для lock, дальше работает **тот же** `installFromDirectory` —
+политика доверия, скан, install-policy и раскладка не дублируются (`PluginInstaller.installFromSource`).
+
+| Вид | Откуда берётся | Проверка целостности | `source` / `identifier` / `ref` в lock |
+|---|---|---|---|
+| `dir` | каталог на диске (`synth.pack` обязателен) | нет — файлы читает сам установщик | `local` / абсолютный путь / — |
+| `archive` | локальный `.tar.gz`/`.tgz` | `ref` = `sha256:<hash архива>` (считается по факту) | `local` / абсолютный путь / `sha256:<hash>` |
+| `npm` | `GET https://registry.npmjs.org/<name>` → `dist.tarball` | **обязателен** `dist.integrity` (SRI `sha512-…`); `dist.shasum` — дополнительно; нет SRI → отказ | `npm` / имя пакета / точная версия |
+| `url` | `https:`-URL архива | **обязателен** pin `sha256` (64 hex) в запросе | `url` / URL / `sha256:<hash>` |
+
+**Архив разбирается своим кодом** (`engine/plugins/archive.ts`: `node:zlib` + разбор tar) — новых
+зависимостей нет. Поддержаны ustar, pax extended headers (`x`/`g`) и GNU long name; распаковываются
+только обычные файлы и каталоги. **Fail-closed отказы:** симлинк/hardlink/устройство/FIFO,
+абсолютный путь, `..`-сегмент, windows-диск (`C:`), NUL в пути, слишком длинный
+(> `maxPathLength`) или пустой путь файла, превышение лимитов (500 записей / 16 МиБ файл / 64 МиБ
+сумма), запись вне `stripPrefix` («неожиданная раскладка архива») и путь вне `destDir` (tar-slip).
+Лимиты проверяются **по заголовку** — до записи файла; сам `gunzip` ограничен `maxOutputLength`
+(защита от gzip-бомбы). Распаковка идёт в `mkdtemp(<tmp>/synth-plugin-)` и удаляется `cleanup()`;
+в `installed/`/`quarantine/` пишет только установщик.
+
+**npm-тарбол** упакован в `package/` — префикс срезается (`stripPrefix: 'package'`), запись вне него —
+отказ. Имя пакета валидируется (`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`): URL и путь
+npm-именем не считаются. Ставится **точная версия** (`ref`); `latest` — лишь как запрос к
+`dist-tags`, «всегда latest» нет (pin обязателен, §«Запись lock»).
+
+**Сеть — только через общий egress** (ADR-099): `egressFetch` (политика, прокси, TLS) либо инъекция
+`fetch` (`PluginSourceContext`, тесты/CLI). `redirect: 'manual'`, до 3 переходов, каждый — с повторной
+проверкой `https:` (переход на `http:` — отказ), не-2xx — отказ с кодом статуса, таймаут 30 с, предел
+скачивания 32 МиБ (стрим, с подсчётом байт).
+
+**Отказ источника** — новый код `plugin.source_unavailable` (аудит `install/rejected`): разбирать
+нечего, на диск ничего не пишется. HTTP: `400` для локальных (`dir`/`archive`), `502` для сетевых
+(`npm`/`url`) источников.
+
+**Managed.** `localInstall: false` запрещает только **локальные** источники (`dir`/`archive` → 403
+`LOCAL_INSTALL_DISABLED`): локальный путь с ФС хоста через установщик — чтение произвольного каталога.
+Сетевые (`npm`/`url`) разрешены: это доставка бандла с проверкой целостности, а не локальный путь.
+
 ### Пайплайн `PluginHost` (активация одного плагина)
 
 1. **resolve** — найти установленный бандл + манифест (по `plugins.lock.json`).
@@ -985,16 +1031,25 @@ content_hash, ref, entry, installed_at, updated_at }`. **Pin обязателе�
 |---|---|---|---|---|
 | GET | `/api/v2/plugins` | `requireAuth` / ADMIN | 200, 401, 403 | список установленных + статус активации |
 | GET | `/api/v2/plugins/:name` | `requireAuth` / ADMIN | 200, 401, 403, 404 | инспекция: манифест, trust, scan, hash, `provides` |
-| POST | `/api/v2/plugins/install` | `requireAuth` / ADMIN (+ scope `addons:install`) | 201, 202 (нужно подтверждение), 400, 403, 409 | pull → `quarantine/` → scan → policy → `installed/` |
+| POST | `/api/v2/plugins/install` | `requireAuth` / ADMIN (+ scope `addons:install`) | 201, 202 (нужно подтверждение), 400, 403, 409, 502 | установка из источника (`dir`/`archive`/`npm`/`url`): резолвинг → скан → policy → `quarantine/`/`installed/` |
 | POST | `/api/v2/plugins/:name/approve` | `requireAuth` / **ADMIN** | 200, 400, 404, 409 | Подтверждение `202`-установки: повторные гейты + сверка integrity → `installed/` → lock |
 | POST | `/api/v2/plugins/:name/enable` | `requireAuth` / ADMIN | 200, 400, 404, 409 | активация (шаги §10) |
 | POST | `/api/v2/plugins/:name/disable` | `requireAuth` / ADMIN | 200, 404, 409 | обратная прокрутка |
-| POST | `/api/v2/plugins/update` | `requireAuth` / ADMIN | **501** (Ф5б-3) | обновление по pinned ref/hash, явно — маршрут объявлен, реализации нет |
+| POST | `/api/v2/plugins/update` | `requireAuth` / ADMIN | **501** (долги Д2) | обновление по pinned ref/hash, явно — маршрут объявлен, реализации нет |
 | DELETE | `/api/v2/plugins/:name` | `requireAuth` / ADMIN | 204, 404, 409 | снятие по записи lock (идемпотентно) |
 | GET/PUT/DELETE | `/api/v2/settings/plugins` | `requireAuth` / ADMIN | 200, 400, 401, 403 | runtime-настройки: `enabled`, `runtimeInstall`, `trustFloor`, `scan`, `allowlist`, `denylist`, `promptBlockMaxChars` (бюджет символов блока, дефолт 4 000) |
 
 **Правило RBAC.** Managed — **ADMIN** (чтение и мутации; реестр плагинов — инстанс-уровневый).
 Standalone — владелец инстанса (в core `requireAuth` — единственный пользователь, [ADR-079](./adr-079-local-home-independent-instances.md)).
+
+**Тело `POST /install` (Д1).** Вид источника — `source` (`dir`|`archive`|`npm`|`url`) плюс ссылка:
+`path` (каталог или `.tgz`/`.tar.gz`), `name`+`version` (npm), `url`+`sha256` (https-архив с
+обязательным пином). Обратная совместимость: `{path}` без `source` — каталог, `.tgz`/`.tar.gz` —
+архив; старый `source`-как-метка больше не метка: **метка в lock** (`local`/`npm`/`url`) выводится из
+резолвинга и клиентом не задаётся. Неизвестный вид источника, отсутствующее обязательное поле,
+не-npm имя, не-`https:` URL и URL без `sha256` — `400 VALIDATION_ERROR` **до** сети. Отказ источника —
+`plugin.source_unavailable`: `400` для локальных, `502` для сетевых; локальные источники в managed —
+`403 LOCAL_INSTALL_DISABLED` (сетевые разрешены).
 **Тест-перепись.** Появится префикс `/api/v2/plugins/:name` — нужна **своя** матрица (негативная 403 +
 позитивная по ролям) по образцу `packages/backend/src/routes/session-idor-matrix.test.ts` (существующая
 матрица покрывает `sessions|messages|queue` — для плагинов она не применима).
@@ -1013,7 +1068,7 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | Команда | Флаги | Действие / коды выхода |
 |---|---|---|
 | `synth plugin list` | `--json`, `--data-dir`, `--config`, `--home` | установленные + статус активации (имя, версия, доверие, вердикт скана, `active`); `0` |
-| `synth plugin install <path>` | `--trust <level>` (по умолчанию `community`), `--source <s>`, `--activate`, `--yes`, пути | установка из локального каталога (манифест → скан → политика); `0` — установлено или в карантине, `1` — отказ (код причины в stderr) |
+| `synth plugin install <ref>` | `--source <dir\|archive\|npm\|url>` (по умолчанию — по `<ref>`), `--version <v>`, `--sha256 <hex>`, `--trust <level>` (по умолчанию `community`), `--activate`, `--yes`, пути | установка из источника: каталог, `.tgz`/`.tar.gz`, npm-пакет или https-URL (манифест → скан → политика); `0` — установлено или в карантине, `1` — отказ (код причины в stderr) |
 | `synth plugin approve <name>` | `--version`, `--activate`, `--yes`, пути | подтверждение бандла из карантина (повторные гейты + сверка integrity); `0`/`1` |
 | `synth plugin enable <name>` | пути | активация (пайплайн §10) в процессе CLI; `0` — активирован, `1` — отказ с причиной (`plugin.execution_disabled` → подсказка включить `plugins.executionEnabled` и перезапустить) |
 | `synth plugin disable <name>` | пути | обратная прокрутка; `0`/`1` |
@@ -1021,9 +1076,15 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | `synth plugin scan <path>` | `--json` | **dry-run**: манифест + вердикт сканера + находки + content-hash, ничего не пишет; `0` — safe/caution, `1` — dangerous/ошибка |
 
 Отличия от первоначального наброска (осознанно): `inspect` не выделен — деталь отдаёт
-`GET /api/v2/plugins/:name`, а в CLI достаточно `list --json`; `install` принимает **локальный путь**
-(установка из npm/архива/URL — отдельная задача, требующая скачивания/распаковки и egress-политики);
-`update` не объявлен в CLI (HTTP отдаёт `501` до появления источников обновления).
+`GET /api/v2/plugins/:name`, а в CLI достаточно `list --json`; `update` не объявлен в CLI (HTTP отдаёт
+`501` до появления обновления/отката).
+
+**Источники `<ref>` (Д1).** `<ref>` — путь (каталог; `.tgz`/`.tar.gz` — архив), npm-имя пакета
+(`name`/`@scope/name`) либо `https:`-URL архива. Вид источника: `--source` (приоритет) или вывод по
+строке (`https://…` → `url`; путь/архивное расширение → `dir`/`archive`; валидное npm-имя → `npm`).
+`--version` — точная версия npm (по умолчанию `latest`, в lock пишется **точная** версия);
+`--sha256` — **обязателен** для `url` (иначе команда падает с кодом 1 до сети). Отказ источника —
+`plugin.source_unavailable` (+ подсказка про путь/SRI/sha256 в stderr).
 
 **`install` из CLI — офлайн-операция оператора** на файлах инстанса: передаётся
 `installKind: 'deploy'`, поэтому политика `plugins.runtimeInstall` (`deny` по умолчанию) к ней не
@@ -1086,7 +1147,7 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | **Ф2 — модель доверия** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-trust`, коммитов нет) | Уровни trust, матрица install-policy с ячейкой `kind: "plugin"`, сканер (6+1 категорий, квоты, `content_hash`, кэш сканов, `.skillignore`, бинарные расширения), матрица `severity → verdict`, `quarantine/`, `plugins.lock.json`, порт `PluginAuditRepository` + `{dataDir}/audit/plugins.jsonl`. **Сделано:** встроенный статический сканер (`engine/plugins/scan/*`: правила, `.skillignore`, кэш, дефолтный хук скана), матрица install-policy одной функцией `installPolicyDecision` (`shared`, ячейка `kind: 'plugin'`), раскладка `<home>/plugin/` с карантином и `PLUGIN_INTEGRITY.json` (`engine/plugins/layout.ts`), порт `PluginLockRepository` (файл/память/PostgreSQL + миграция `007_plugin_lock`), аудит-событие `scan` (+ `plugin.approval_required`), шаг trust/scan в `PluginHost` — **trust-floor до install-policy** | тест: вердикт по severity (`info\|low → safe`, `medium → caution`, `high\|critical → dangerous`); квоты → `caution`; бинарник → `dangerous`; `community` + `dangerous` → `block`; trust-floor: `community` устанавливается, но не активируется (`plugin.trust_below_floor`) — **выполнено**, см. §«Статус реализации в коде (Ф2)» |
 | **Ф3 — точки `promptBlocks` + `llmFilters` + `tools`** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-points`): Ф3а — точка **`promptBlocks`**, Ф3б — точка **`llmFilters`**, Ф3в — точка **`tools`** и **контрактный suite расширений** | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений**. **Сделано (Ф3а):** контракт `PromptBlockProvider`/`PromptBlockContext` (`shared`, `types/prompt-blocks.ts`), реестр `PromptBlockRegistry` (`engine/context/prompt-block-registry.ts`), сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`), контекст хода (`query`/`turnId`), бюджет символов блока + обрезка (`status: 'truncated'`), инвалидация `promptStates` по блокам провайдеров (`provider: true`), фасад `PluginFacade.registerPromptBlock` (disposer снимает блок при деактивации), решение fail-closed `plugins.scan='disabled'` + `executionEnabled=true` (`plugin.scan_disabled_with_execution`), **версия правил сканера в ключе кэша сканов** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный — **по части `promptBlocks` выполнено**, см. §«Статус реализации в коде (Ф3а)»; критерии `llmFilters` — **выполнено, см. §«Статус реализации в коде (Ф3б)»**; точка `tools` (namespace, permission-слой, сверка `provides.tools[]`) и **контрактный suite расширений** — **выполнено, см. §«Статус реализации в коде (Ф3в)»** |
 | **Ф4 — два режима исполнения** — ⚠️ **частично: `inline` — выполнено (Ф4а), `out-of-process` — остаётся** | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация. **Сделано (Ф4а):** `inline`-загрузчик `createInlinePluginLoader` (`engine/plugins/inline-loader.ts`): containment по `realpath`, `.js`/`.mjs`, предел 8 МиБ, cache-busting `?v=<hash\|mtime>`, три формы модуля, новый код `plugin.module_invalid`; экспорт из `engine/plugins/index.ts` и `src/index.ts`. **Автоподключения в `server/app.ts`/`main.ts`/`backend/app/deps.ts` нет** — установка/активация и сканирование `plugins.lock.json` при старте появятся в Ф5 | тест: эталонный бандл (реальные `mkdtemp` + ESM-файл) активируется **через `PluginHost`** при `executionEnabled: true`, блок в `PromptBlockRegistry`, аудит `activate`; `export const x`/`export default 42` → `plugin.module_invalid`; бросок в модуле → `plugin.loader_unavailable`; `../evil.js`, абсолютный путь, симлинк наружу, `.ts`, превышение размера → отказ; перезапись бандла → новое содержимое — **выполнено (21 тест), см. §«Статус реализации в коде (Ф4а)»**. Критерии `out-of-process` (неверный токен → 401, недоступный процесс → деградация по `failMode`, suite на out-of-process реализации) — **остаются за Ф4б** |
-| **Ф5 — install/activate: сервис + runtime + API + CLI; managed deploy-time** — ⚠️ **частично**: `PluginInstaller` (Ф5а), `PluginRuntime` + старт-активация (Ф5б-1), HTTP API + RBAC (Ф5б-2) и **CLI `synth plugin *`** (Ф5б-3) — **сделано**; установка из npm/архива/URL и `update` — остаток (отдельная задача); managed deploy-time — Ф5в | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
+| **Ф5 — install/activate: сервис + runtime + API + CLI; managed deploy-time** — ⚠️ **частично**: `PluginInstaller` (Ф5а), `PluginRuntime` + старт-активация (Ф5б-1), HTTP API + RBAC (Ф5б-2) и **CLI `synth plugin *`** (Ф5б-3) и **источники установки** `dir`/`archive`/`npm`/`url` (долги Д1) — **сделано**; `update`/откат — остаток (долги Д2); managed deploy-time — Ф5в | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
 | **Ф6 — UI** | Раздел «Плагины»: список, карточка (trust/scan/hash/version/`contracts`/`host`/`provides`/режим), тумблеры enable/disable, install/update/remove, статус скана | тест UI: карточка показывает trust/scan/hash; переключатель enable вызывает API и обновляет список; i18n-паритет `ru.ts`/`en.ts` зелёный (`parity.test.ts`) |
 | **Ф7 — hybrid** | Allow-list сервера, форма политики, discovery (`/api/v2/settings/plugins` + сигнал в `/auth/oidc-meta`), server-scoped токены с `plugin_id`-scope (Уровень 2) | тест: плагин вне allow-list не активируется в hybrid; токен с чужим `plugin_id` отвергается сервером; локальный плагин без сервера — cooperative (помечено в UI/доках) |
 
@@ -1861,7 +1922,7 @@ backend, RBAC с **собственной** матрицей. Ветка `featur
 |---|---|
 | Подтверждение карантина | отдельный маршрут `POST /api/v2/plugins/:name/approve` (в исходной таблице спеки его не было — добавлен): `202` от install без него не «разрешается»; guard — **только ADMIN** (подтверждение снимает барьер доверия) |
 | `trustLevel` при установке с локального пути | тело может задать `trustLevel` (оператор ручается за бандл), по умолчанию — `community` (fail-closed); в managed локальная установка запрещена целиком (`403 LOCAL_INSTALL_DISABLED`) |
-| `POST /plugins/update` | `501 NOT_IMPLEMENTED`: контракт объявлен, реализация — вместе с установкой из npm/архива (Ф5б-3) |
+| `POST /plugins/install` (Д1) | тело `{source?, path?, name?, version?, url?, sha256?, trustLevel?}`: `dir`/`archive` — только standalone, `npm`/`url` — оба режима; `plugin.source_unavailable` → `400` (локальный) / `502` (сетевой); `POST /plugins/update` — `501 NOT_IMPLEMENTED` (долги Д2) |
 | Настройки и рестарт | `restartRequired: true` **всегда**: рантайм плагинов собирается при старте (инвариант 24), «живого» применения нет |
 | Дублирование лимитов | `enabled`/`runtimeInstall`/`trustFloor`/`scan` проверяются и в установщике, и в хосте (`PluginInstaller` не дублирует гейты активации: он их не отменяет, а дополняет своими) |
 
@@ -1923,6 +1984,53 @@ CLI `synth plugin *` и два улучшения установщика. Вет
 **Остаток после Ф5б-3.** Установка из **npm/архива/URL** (скачивание, распаковка, pin по
 `ref`/`content_hash`, egress-политика) и `update`/откат — отдельная задача; **Ф5в** — managed
 deploy-time политика (запрет снятия management-плагинов); **Ф6** — UI; **Ф4б** — `out-of-process`.
+
+### Статус реализации в коде (долги Д1 — 2026-10-22)
+
+Источники установки: локальный `.tgz`/архив, npm и https-URL. Ветка `feature/plugin-points`,
+коммитов нет (инвариант 12).
+
+**Код.**
+
+| Что | Где |
+|---|---|
+| Свой tar-ридер и распаковка: gzip (`node:zlib`, промис-форма; модуля `node:zlib/promises` в Node нет), ustar/pax (`x`/`g`)/GNU long name, только файлы и каталоги, лимиты 500/16 МиБ/64 МиБ/1024 символа, `stripPrefix`, `cleanup`, финальная проверка `resolve(destDir, rel)` | `packages/core/src/engine/plugins/archive.ts` |
+| Резолвинг источников `dir`/`archive`/`npm`/`url`: проверка `synth.pack` для каталога, SRI `sha512`+`shasum` для npm, обязательный `sha256` для URL, редиректы (до 3, каждый `https:`), лимит скачивания, `egressFetch` или инъекция | `packages/core/src/engine/plugins/sources.ts` |
+| `PluginInstaller.installFromSource(request)` — резолвинг → `installFromDirectory` → `cleanup()` в `finally`; ошибки резолвинга → `plugin.source_unavailable` + аудит | `packages/core/src/engine/plugins/installer.ts` |
+| Новый код отказа `plugin.source_unavailable` — `PLUGIN_AUDIT_REASONS` **24 → 25** | `packages/shared/src/types/plugin-audit.ts` |
+| `POST /api/v2/plugins/install`: тело `{source?, path?, name?, version?, url?, sha256?, trustLevel?}`; вид источника выводится из полей; локальные источники в managed → 403; сетевые разрешены; `source_unavailable` → 400 (локальный) / 502 (сетевой) | `packages/core/src/server/routes/plugins.ts` |
+| CLI `synth plugin install <ref>`: `--source`, `--version`, `--sha256`, `--trust`, `--activate`; вид источника выводится по строке, `--sha256` обязателен для `url` | `packages/core/src/cli/plugin-commands.ts` |
+| Тестовый сборщик tar (ustar/pax, без зависимостей) | `packages/core/src/test-helpers/tar-fixture.ts` |
+
+**Решения.**
+
+1. **Отдельный модуль, а не общий с ADR-091.** `maintenance/archive.ts` (бэкап) симлинки молча
+   пропускает, pax не разбирает и работает с путём к файлу; для чужого архива плагина нужен строгий
+   приём по байтам — второй набор правил осознанно не смешивается с первым.
+2. **`installFromSource`, а не union в `installFromDirectory`.** У `PluginInstallRequest` уже есть
+   `ref` (pin источника) — в union это поле означало бы и «ссылку источника», и «pin»; отдельный
+   запрос (`PluginInstallFromSourceRequest`) оставляет `installFromDirectory` без изменений по существу.
+3. **Метка источника в lock — результат резолвинга**, а не ввод клиента: `source_unavailable` не
+   позволяет «назвать» источник иначе, чем он есть.
+4. **HTTP-коды.** `plugin.source_unavailable` в таблице — 400; роут поднимает до **502** для
+   `npm`/`url` (сбой upstream). Так локальная ошибка (путь/архив) не выдаётся за сбой сервера.
+5. **Managed.** `localInstall: false` запрещает только `dir`/`archive`; `npm`/`url` разрешены —
+   локальный путь с ФС хоста остаётся закрыт, а сетевая доставка проверяется целостностью.
+
+**Тесты (61 новый).** `engine/plugins/archive.test.ts` (24 — обычный бандл, байты, каталог/пустой
+путь, pax, GNU long name, stripPrefix и «чужой» файл, симлинк/hardlink/FIFO, `../evil`, абсолютный
+путь, windows-диск, длинный/пустой путь, три лимита, не-gzip/обрезанный gzip, tar-slip, `cleanup`,
+`destDir`); `engine/plugins/sources.test.ts` (20 — dir ok/нет манифеста, archive с реальным tgz и
+`ref`-хешем, симлинк, npm с инъекцией fetch: SRI ok/несовпадение/нет SRI/`shasum`/scoped-имя/URL-вместо-
+имени/редирект на `http:`/https-редирект/404/лимит, url: pin обязателен, несовпадение, `http:`);
+`installer.test.ts` (+4 — dir, archive с `ref`, `source_unavailable`+аудит, симлинк в архиве);
+`routes/plugins.test.ts` (+9 — archive 201, вывод вида по `.tgz`, npm-имя обязательно, url без pin,
+неизвестный вид, тело-не-объект, 502 npm, managed 403 локально / 502 сетевой); `cli/plugin-commands.test.ts` (+4 —
+архив, url без `--sha256`, неизвестный `--source`, npm с URL → `source_unavailable`).
+
+**Остаток.** `update`/`rollback` по pinned ref/hash (долги **Д2**), `catalog`-источник и подписи
+(PROP-068), `post_response`-буферизация фильтров, **Ф5в** (managed deploy-time политика), **Ф6** (UI),
+**Ф4б** (`out-of-process`).
 
 ## Открытые вопросы
 
@@ -2099,3 +2207,4 @@ deploy-time политика (запрет снятия management-плагин�
 - 2026-10-22 — **Ф5б-1 выполнен** (ветка `feature/plugin-points`): **`PluginRuntime`** (`packages/core/src/engine/plugins/runtime.ts`) — сборка слоя плагинов на инстанс (раскладка, порты `pluginAudit`/`pluginLock` из `StorageContext`, `PluginHost`, inline-загрузчик, `PluginInstaller`) и **старт-активация** `activateInstalled()`: lock → дескриптор (с `files` для шага integrity) → активация в порядке имён, `executionEnabled=false` — no-op, сбой плагина не роняет старт; `list()`/`activate`/`deactivate`/`dispose`. **`OrchestratorOptions.promptBlocks`** прокинут в `SystemPromptComposer` — до этого композер создавал собственный `PromptBlockRegistry`, и блоки плагинов в промпт сессии **не попадали** (тесты точки были зелёными, потому что собирали реестр вручную). Проводка standalone и managed: один экземпляр реестра в оркестратор и рантайм, `pluginLockPath` из единственного резолвера `resolvePluginLayout`, `pluginRuntime` в хэндле приложения, старт-активация в `main.ts` и `dispose()` при остановке до закрытия хранилища. Тесты: `runtime.test.ts` (8 — персистентность, сломанный бандл рядом с рабочим, `dispose`, `list`), `orchestrator-prompt-blocks.test.ts` (3 — один экземпляр реестра).
 - 2026-10-22 — **Ф5б-2 выполнен** (ветка `feature/plugin-points`): **HTTP-контур плагинов** — `createPluginsRoutes` (`GET /api/v2/plugins`, деталь с манифестом и `PLUGIN_INTEGRITY.json`, `install`, `approve`, `enable`, `disable`, `DELETE`, `update` → `501`) и `createPluginSettingsRoutes` (`/api/v2/settings/plugins`: `enabled`/`executionEnabled`/`runtimeInstall`/`trustFloor`/`scan`/allow-deny/бюджеты, `restartRequired: true`), исчерпывающая таблица `PLUGIN_REASON_HTTP`; монтаж в core (`requireAuth`, `localInstall: true`) и backend (ADMIN; install/enable — scope `addons:install`; approve и DELETE — только ADMIN; `localInstall: false`); порт настроек расширен `getPlugins/setPlugins/clearPlugins` (файл/память/PG); эффективный конфиг — `mergePluginsConfig`. Тесты: `routes/plugins.test.ts` (20) и **своя** RBAC-матрица `backend/routes/plugins-rbac-matrix.test.ts` (8 — негативная USER/LEAD/AUDITOR → 403, позитивная ADMIN и service-key со scope). Попутно зафиксирована ловушка: backend использует `core/dist`, поэтому после правок роутов core нужен `core build` до backend-тестов.
 - 2026-10-22 — **Ф5б-3 выполнен** (ветка `feature/plugin-points`): **CLI `synth plugin *`** — `packages/core/src/cli/plugin-commands.ts` (`createPluginCommand`/`createPluginCliContext`), подключён в `core/main.ts` и `packages/synth/src/cli.ts` (точный subpath-экспорт `./cli/plugin-commands.js`): `list` (`--json`), `install <path>` (`--trust`/`--source`/`--activate`, `installKind: 'deploy'` — офлайн-операция, политика `runtimeInstall` к ней не применяется), `approve`, `enable`, `disable`, `remove` (без `--yes` — отказ), `scan` (dry-run, без записи); контекст — тем же путём, что `doctor`/`backup`, с `pluginLockPath` из раскладки. Установщик: **byte-copy бинарных ассетов** (`binaryFiles`/`sourceDir` в `stagePluginBundle`, containment) — закрыто ограничение Ф5а; **чистка каталога старой версии** после успешной установки (кроме активного плагина). Тесты: `cli/plugin-commands.test.ts` (20), `installer.test.ts`/`layout.test.ts` (+byte-copy, чистка). Ручная проверка: scan → install → list → enable (полный пайплайн активации) → remove на временном data-dir.
+- 2026-10-22 — **долги Д1 закрыты** (ветка `feature/plugin-points`): **источники установки** — `engine/plugins/archive.ts` (свой tar-ридер: `node:zlib` + разбор tar, ustar/pax `x`/`g`/GNU long name, только файлы и каталоги, лимиты 500 записей / 16 МиБ файл / 64 МиБ сумма / 1024 символа путь, `stripPrefix`, tar-slip-защита, `cleanup`) и `engine/plugins/sources.ts` (`dir`/`archive`/`npm`/`url`: обязательный SRI `sha512` (+`shasum`) для npm, обязательный `sha256` для URL, редиректы до 3 с повторной проверкой `https:`, лимит скачивания, только `egressFetch`/инъекция); `PluginInstaller.installFromSource` (резолвинг → тот же `installFromDirectory` → `cleanup` в `finally`); новый код отказа **`plugin.source_unavailable`** (`PLUGIN_AUDIT_REASONS` 24 → 25); `POST /api/v2/plugins/install` принимает `source`/`path`/`name`/`version`/`url`/`sha256` (вид источника выводится из полей; локальные в managed → 403, сетевые разрешены; отказ источника — 400 локально / 502 сетевой); CLI `install <ref>` с `--source`/`--version`/`--sha256`. Тесты: `archive.test.ts` (24), `sources.test.ts` (20), +4 установщика, +9 роутов, +4 CLI. Добавлен раздел «Статус реализации в коде (долги Д1)», подраздел «Источники установки (Д1)», обновлены §«Bundle-only»/§«HTTP API»/§«CLI».

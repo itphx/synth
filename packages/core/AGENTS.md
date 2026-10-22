@@ -653,7 +653,10 @@
   исключений семвер-гейта: **одна полная semver-версия host в строке**, `#` — комментарий,
   не-semver строка пропускается с предупреждением, недоступный файл → исключений нет
   (fail-closed)), `index.ts` — баррел. **Коды отказа** (`PLUGIN_AUDIT_REASONS`,
-  `shared/src/types/plugin-audit.ts`, всего **24**): `plugin.not_found`/`plugin.manifest_invalid` (resolve),
+  `shared/src/types/plugin-audit.ts`, всего **25**): `plugin.not_found` (resolve),
+  `plugin.source_unavailable` (Д1 — источник бандла недоступен или не прошёл проверку целостности:
+  локальный путь/архив не распакован, npm без SRI / с несовпадением SRI-sha512 или shasum, URL без pin
+  или с несовпадением sha256; отказ **до** гейтов установщика), `plugin.manifest_invalid` (resolve),
   `plugin.integrity_mismatch`/`plugin.integrity_unverifiable` (integrity),
   `plugin.contract_mismatch`/`plugin.host_mismatch` (semver), `plugin.trust_below_floor`/
   `plugin.scan_rejected`/`plugin.approval_required` (trust/scan), `plugin.disabled`/
@@ -757,8 +760,37 @@
   **кроме** случая, когда плагин активен (модуль загружен в процесс) — тогда остаётся + warning. Идемпотентность: lock —
   upsert по имени (`installed_at` иммутабелен, `updated_at` обновляется); другая версия заменяет
   запись, каталог прежней версии остаётся (известное ограничение, чистка — Ф5б).
+  **Д1 — `installFromSource(request)`** (`PluginInstallFromSourceRequest`: `kind`/`ref`/`version?`/
+  `sha256?` + `trustLevel`/`installKind?`/`activate?`/`actor?`/`sourceContext?`): резолвит источник
+  (`sources.ts`) → `installFromDirectory` с `source`/`identifier`/`ref` резолвера → `cleanup()` в
+  `finally` (ошибка уборки — warning); ошибка резолвинга → `plugin.source_unavailable` (аудит
+  `install/rejected`), на диск ничего не пишется.
+- `engine/plugins/archive.ts` — **Д1: свой tar-ридер и распаковка** `.tar.gz`/`.tgz` **без новых
+  зависимостей** (`node:zlib` + разбор tar; `node:zlib/promises` в Node нет — `promisify`).
+  `extractPluginArchive(bytes, {limits?, stripPrefix?, destDir?})` → `{dir, files, totalBytes, cleanup}`:
+  блоки 512, ustar/pax (`x`/`g`)/GNU long name (`L`), **только** обычные файлы (`0`/` `/`7`) и каталоги
+  (`5`); симлинки/hardlink/устройства/FIFO — отказ; путь нормализуется (`\`→`/`, `./`), отклоняются
+  абсолютный путь, `..`, windows-диск (`C:`), NUL, пустое имя файла, длина > `maxPathLength`; лимиты
+  **500 записей / 16 МиБ файл / 64 МиБ сумма** проверяются по заголовку до записи (плюс
+  `maxOutputLength` у `gunzip` — защита от бомбы); `stripPrefix` срезается только если **все** записи
+  под ним (иначе «неожиданная раскладка архива»); `destDir` по умолчанию `mkdtemp(<tmp>/synth-plugin-)`,
+  финальная проверка `resolve(destDir, rel)` на containment; `cleanup` идемпотентен. Модуль **не**
+  переиспользует `maintenance/archive.ts` (ADR-091): там симлинки пропускаются и pax не разбирается.
+- `engine/plugins/sources.ts` — **Д1: резолвинг источников установки** `dir`/`archive`/`npm`/`url`
+  (`PLUGIN_INSTALL_SOURCE_KINDS`, `inferPluginSourceKind`, `isValidNpmPackageName`,
+  `PluginSourceError` с `code: invalid_request|network|integrity|archive`). `dir` — обязательный
+  `synth.pack` (иначе отказ), `cleanup` — no-op; `archive` — лимит `maxDownloadBytes` (32 МиБ) и
+  `ref: sha256:<hash архива>`; `npm` — имя по
+  `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`, metadata `https://registry.npmjs.org/<name>`
+  (scoped → `@scope%2Fname`), **обязательный** `dist.integrity` (SRI `sha512`) + `dist.shasum` при
+  наличии, `stripPrefix: 'package'`, `ref` — точная версия; `url` — только `https:` и **обязательный**
+  `sha256` (64 hex), `ref: sha256:<hash>`. Сеть — **только** `ctx.fetch ?? egressFetch` (ADR-099),
+  `redirect: 'manual'`, до 3 переходов с повторной проверкой `https:`, не-2xx → отказ, таймаут 30 с,
+  тело читается стримом с подсчётом байт. В раскладку плагинов ничего не пишет — только tmp-каталог.
 - `cli/plugin-commands.ts` — **Ф5б-3: CLI `synth plugin *`**. `createPluginCommand` (группа `plugin`:
-  `list` (`--json`), `install <path>` (`--trust`/`--source`/`--activate`/`--yes`), `approve`, `enable`,
+  `list` (`--json`), `install <ref>` (`--source dir|archive|npm|url` — по умолчанию вид выводится по
+  `<ref>`; `--version`/`--sha256`/`--trust`/`--activate`/`--yes` — источник: каталог, `.tgz`/`.tar.gz`,
+  npm-имя или https-URL; `--sha256` обязателен для `url`), `approve`, `enable`,
   `disable`, `remove` (`--keep-files`/`--yes`), `scan <path>` (dry-run)) и `createPluginCliContext`
   (сборка: `loadConfig` → `resolveHome`/`resolveDataDir` → `resolvePluginLayout` → `buildStorageContext`
   с `pluginLockPath` из раскладки → `mergePluginsConfig(config, runtime)` → `PluginRuntime`; при
@@ -770,14 +802,19 @@
   `main.ts` **и** `packages/synth/src/cli.ts` (subpath-экспорт `./cli/plugin-commands.js` — точный путь,
   wildcard не резолвится TS).
 - `server/routes/plugins.ts` — **Ф5б-2: HTTP-контур плагинов**. `createPluginsRoutes(auth, deps, opts)`:
-  `GET /`, `GET /:name` (манифест + `PLUGIN_INTEGRITY.json` — best-effort, порча не даёт 500), `POST /install`
-  (`201`/`202`/`400`/`403`/`409`), `POST /:name/approve`, `/:name/enable`, `/:name/disable`, `DELETE /:name`
-  (идемпотентно), `POST /update` (**501**, Ф5б-3). Таблица `PLUGIN_REASON_HTTP` (причина → HTTP) и
+  `GET /`, `GET /:name` (манифест + `PLUGIN_INTEGRITY.json` — best-effort, порча не даёт 500),
+  `POST /install` (`201`/`202`/`400`/`403`/`409`/`502`; тело `{source?, path?, name?, version?, url?,
+  sha256?, trustLevel?}` — вид источника выводится из полей, старое `{path}` = `dir`; метка `source` в
+  lock — результат резолвинга; `plugin.source_unavailable` → `400` локально / `502` сетево),
+  `POST /:name/approve`, `/:name/enable`, `/:name/disable`, `DELETE /:name`
+  (идемпотентно), `POST /update` (**501**, долги Д2). Таблица `PLUGIN_REASON_HTTP` (причина → HTTP) и
   `httpStatusForRejection` — **единственное** место маппинга. `createPluginSettingsRoutes` —
   `/api/v2/settings/plugins` (`pluginsConfigSchema.partial().strict()`, неизвестный ключ → 400,
   `restartRequired: true` всегда — рантайм собирается при старте, инвариант 24). Монтаж: core —
   `requireAuth` + `localInstall: true`; managed — ADMIN, install/enable — scope `addons:install`, approve и
-  DELETE — только ADMIN, `localInstall: false`. ⚠️ Backend импортирует core из `dist` — после правок
+  DELETE — только ADMIN, `localInstall: false` (запрещает **только** локальные `dir`/`archive`;
+  сетевые `npm`/`url` разрешены — это не путь с ФС хоста). Опция `sourceContext` — инъекция
+  сети/лимитов источников (тесты). ⚠️ Backend импортирует core из `dist` — после правок
   `server/routes/*` обязателен `pnpm --filter @itphx/synth-core build` перед backend-тестами.
 - **Шаг trust/scan в `PluginHost` (Ф2).** Порядок: **trust-floor → скан → install-policy**.
   Trust-floor проверяется **до** install-policy (`plugins.trustFloor`; ниже порога — отказ

@@ -66,6 +66,13 @@ export type PluginScanVerdict = (typeof PLUGIN_SCAN_VERDICTS)[number];
 export const PLUGIN_AUDIT_REASONS = [
   /** Плагин не найден (resolve). */
   'plugin.not_found',
+  /**
+   * Д1 (2026-10-22): источник бандла недоступен или не прошёл проверку
+   * целостности — архив не распакован, npm-пакет не скачан/не совпал SRI,
+   * URL не ответил или sha256 не совпал, локальный путь не является бандлом.
+   * Отказ **до** гейтов установщика: разбирать нечего.
+   */
+  'plugin.source_unavailable',
   /** Манифест не прошёл проверку целостности (`validatePackManifest`). */
   'plugin.manifest_invalid',
   /** Content-hash бандла не совпал с ожидаемым. */

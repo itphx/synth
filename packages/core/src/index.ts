@@ -66,11 +66,31 @@ export {
 } from './engine/plugins/index.js';
 export type {
   CollectedBundle,
+  PluginInstallFromSourceRequest,
   PluginInstallOutcome,
   PluginInstallRequest,
   PluginInstallerDeps,
   PluginManifestReadResult,
   PluginUninstallResult,
+} from './engine/plugins/index.js';
+// PROP-090 §«Источники установки» (Д1): свой tar-ридер и резолвинг dir/archive/npm/url.
+export { extractPluginArchive, PluginArchiveError } from './engine/plugins/index.js';
+export type { ExtractedArchive, TarExtractLimits } from './engine/plugins/index.js';
+export {
+  DEFAULT_PLUGIN_DOWNLOAD_MAX_BYTES,
+  PLUGIN_INSTALL_SOURCE_KINDS,
+  PluginSourceError,
+  inferPluginSourceKind,
+  isPluginInstallSourceKind,
+  isValidNpmPackageName,
+  resolvePluginSource,
+} from './engine/plugins/index.js';
+export type {
+  PluginInstallSourceKind,
+  PluginSourceContext,
+  PluginSourceErrorCode,
+  PluginSourceRequest,
+  ResolvedPluginSource,
 } from './engine/plugins/index.js';
 // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного,
 // список со статусом активации, `dispose`.

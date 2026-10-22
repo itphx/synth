@@ -96,6 +96,8 @@ import {
 import type { PluginHost } from './plugin-host.js';
 import { createPluginScanHook } from './scan/hook.js';
 import { isBinaryContent } from './scan/scanner.js';
+import type { PluginSourceContext, PluginSourceRequest, ResolvedPluginSource } from './sources.js';
+import { resolvePluginSource } from './sources.js';
 
 /** Имя файла манифеста (`synth.pack`, ADR-086 §5). */
 const MANIFEST_FILE = 'synth.pack';
@@ -144,6 +146,29 @@ export interface PluginInstallRequest {
   activate?: boolean;
   /** Инициатор операции (`userId` API/UI, `'cli'`, `'startup'`). */
   actor?: string;
+}
+
+/**
+ * Запрос установки из **источника** (PROP-090 §«Источники установки», долги Д1):
+ * локальный каталог, локальный `.tar.gz`/`.tgz`, npm-пакет или https-URL.
+ *
+ * Источник резолвится до каталога бандла (`resolvePluginSource`), дальше работает
+ * обычный `installFromDirectory` — политика доверия, скан, install-policy и
+ * раскладка не дублируются. Поэтому здесь нет полей `dir`/`source`/`identifier`/
+ * `ref` установщика: они — **результат** резолвинга (что именно скачалось и с
+ * какой контрольной суммой), а не ввод клиента.
+ */
+export interface PluginInstallFromSourceRequest extends PluginSourceRequest {
+  /** Фактический уровень доверия (резолвится источником/оператором, не манифестом). */
+  trustLevel: CatalogTrustLevel;
+  /** `deploy` (бандл в образе) | `runtime` (по умолчанию). */
+  installKind?: 'deploy' | 'runtime';
+  /** Активировать после установки (по умолчанию `false`). */
+  activate?: boolean;
+  /** Инициатор операции (`userId` API/UI, `'cli'`, `'startup'`). */
+  actor?: string;
+  /** Инъекция сети/лимитов источника (тесты, CLI); по умолчанию — `egressFetch`. */
+  sourceContext?: PluginSourceContext;
 }
 
 /** Итог установки/подтверждения. */
@@ -701,6 +726,64 @@ export class PluginInstaller {
       contentHash,
       ...(activated ? { activated } : {}),
     };
+  }
+
+  /**
+   * Установить плагин из **источника** (Д1): `dir`/`archive`/`npm`/`url`.
+   *
+   * Резолвинг источника (`resolvePluginSource`) отдаёт каталог бандла и
+   * провенанс для lock-записи (`source`/`identifier`/`ref`), после чего
+   * вызывается {@link installFromDirectory} — все гейты (манифест, скан,
+   * trust-floor, install-policy, раскладка) остаются **теми же**, отдельной
+   * «упрощённой» ветки установки нет.
+   *
+   * **Fail-closed.** Любая ошибка резолвинга (сеть, реестр, SRI/sha256, разбор
+   * архива, локальный путь без `synth.pack`) — отказ `plugin.source_unavailable`
+   * с аудитом `install/rejected`: разбирать нечего, на диск ничего не пишется.
+   *
+   * **Временный каталог.** `cleanup()` источника вызывается **всегда** (`finally`),
+   * в том числе при отказе установки; ошибка уборки — предупреждение, не отказ
+   * (установка уже состоялась/отклонена по существу).
+   */
+  async installFromSource(request: PluginInstallFromSourceRequest): Promise<PluginInstallOutcome> {
+    const actor = request.actor ?? 'system';
+
+    let resolved: ResolvedPluginSource;
+    try {
+      resolved = await resolvePluginSource(request, request.sourceContext ?? {});
+    } catch (err) {
+      return this._rejectInstall({
+        actor,
+        reason: 'plugin.source_unavailable',
+        message:
+          `Не удалось получить бандл плагина из источника «${request.kind}» ` +
+          `(${request.ref}): ${err instanceof Error ? err.message : String(err)}`,
+        trustLevel: request.trustLevel,
+        source: request.kind,
+      });
+    }
+
+    try {
+      return await this.installFromDirectory({
+        dir: resolved.dir,
+        trustLevel: request.trustLevel,
+        source: resolved.source,
+        ...(resolved.identifier ? { identifier: resolved.identifier } : {}),
+        ...(resolved.ref ? { ref: resolved.ref } : {}),
+        ...(request.installKind ? { installKind: request.installKind } : {}),
+        ...(request.activate ? { activate: true } : {}),
+        actor,
+      });
+    } finally {
+      try {
+        await resolved.cleanup();
+      } catch (err) {
+        this._logger.warn(
+          `не удалось удалить временный каталог источника плагина «${request.ref}»: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   // ── Подтверждение ───────────────────────────────────────────────────

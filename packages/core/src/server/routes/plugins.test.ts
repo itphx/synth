@@ -14,7 +14,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,6 +29,8 @@ import { MemoryPluginLockRepository } from '../../storage/memory/plugin-lock.js'
 import { MemorySettingsRepository } from '../../storage/memory/settings.js';
 import { resolvePluginLayout } from '../../engine/plugins/layout.js';
 import { PluginRuntime } from '../../engine/plugins/runtime.js';
+import type { PluginSourceContext } from '../../engine/plugins/sources.js';
+import { buildTarGz } from '../../test-helpers/tar-fixture.js';
 import {
   PLUGIN_REASON_HTTP,
   createPluginSettingsRoutes,
@@ -129,7 +131,11 @@ interface Stand {
 }
 
 async function makeStand(
-  opts: { config?: PluginsConfig; localInstall?: boolean } = {},
+  opts: {
+    config?: PluginsConfig;
+    localInstall?: boolean;
+    sourceContext?: PluginSourceContext;
+  } = {},
 ): Promise<Stand> {
   const dataDir = await makeTempDir('synth-plugin-routes-data-');
   const cfg = opts.config ?? config();
@@ -152,6 +158,7 @@ async function makeStand(
     config: cfg,
     settings,
     localInstall: opts.localInstall ?? true,
+    ...(opts.sourceContext ? { sourceContext: opts.sourceContext } : {}),
   };
 
   const app = new Hono();
@@ -275,12 +282,12 @@ describe('Plugins API — жизненный цикл (PROP-090 Ф5б-2)', () =>
     expect((await errorOf(badTrust)).code).toBe('VALIDATION_ERROR');
   });
 
-  it('POST /plugins/install: манифест невалиден → 400 plugin.manifest_invalid', async () => {
+  it('POST /plugins/install: нет synth.pack → 400 plugin.source_unavailable (локальный источник)', async () => {
     const { app } = await makeStand();
     const bundle = await makeBundle({ omitManifest: true });
     const res = await jsonReq(app, 'POST', '/api/v2/plugins/install', { path: bundle });
     expect(res.status).toBe(400);
-    expect((await errorOf(res)).code).toBe('plugin.manifest_invalid');
+    expect((await errorOf(res)).code).toBe('plugin.source_unavailable');
   });
 
   it('POST /plugins/install: доверие ниже trust-floor → 403 plugin.trust_below_floor', async () => {
@@ -414,13 +421,13 @@ describe('Plugins API — жизненный цикл (PROP-090 Ф5б-2)', () =>
     expect(second.status).toBe(204);
   });
 
-  it('POST /plugins/update: 501 NOT_IMPLEMENTED (установка из npm/архива — Ф5б-3)', async () => {
+  it('POST /plugins/update: 501 NOT_IMPLEMENTED (обновление — долги Д2)', async () => {
     const { app } = await makeStand();
     const res = await jsonReq(app, 'POST', '/api/v2/plugins/update', { name: 'demo-plugin' });
     expect(res.status).toBe(501);
     const error = await errorOf(res);
     expect(error.code).toBe('NOT_IMPLEMENTED');
-    expect(error.message).toContain('Ф5б-3');
+    expect(error.message).toContain('Д2');
   });
 });
 
@@ -524,5 +531,135 @@ describe('Plugin settings API — /api/v2/settings/plugins (PROP-090 §10)', () 
     expect(body.isOverridden).toBe(false);
     expect(body.restartRequired).toBe(true);
     expect(body.defaults.scan).toBe('enabled');
+  });
+});
+
+describe('Plugins API — источники установки (Д1)', () => {
+  /** Каталог бандла → `.tgz` в отдельном временном каталоге (файл на диске). */
+  async function makeBundleArchive(name = 'demo-plugin'): Promise<string> {
+    const bundle = await makeBundle({ manifest: manifest({ name }) });
+    const pack = await readFile(join(bundle, 'synth.pack'), 'utf-8');
+    const code = await readFile(join(bundle, 'dist', 'index.js'), 'utf-8');
+    const dir = await makeTempDir('synth-plugin-routes-tgz-');
+    const path = join(dir, `${name}.tgz`);
+    await writeFile(
+      path,
+      buildTarGz([
+        { name: 'synth.pack', content: pack },
+        { name: 'dist/index.js', content: code },
+      ]),
+    );
+    return path;
+  }
+
+  it('POST /install {source:"archive", path} → 201, бандл распакован и установлен', async () => {
+    const { app, runtime } = await makeStand();
+    const archivePath = await makeBundleArchive();
+
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/install', {
+      source: 'archive',
+      path: archivePath,
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { outcome: string };
+    expect(body.outcome).toBe('installed');
+    expect((await runtime.list()).map((entry) => entry.name)).toEqual(['demo-plugin']);
+  });
+
+  it('{path} с расширением .tgz без source → вид выводится как archive (201)', async () => {
+    const { app } = await makeStand();
+    const archivePath = await makeBundleArchive('arch-plugin');
+
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/install', { path: archivePath });
+
+    expect(res.status).toBe(201);
+  });
+
+  it('{name:"https://…"} → 400 VALIDATION_ERROR (npm-имя обязательно)', async () => {
+    const { app } = await makeStand();
+
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/install', {
+      name: 'https://evil.example.com/plugin.tgz',
+    });
+
+    expect(res.status).toBe(400);
+    expect((await errorOf(res)).code).toBe('VALIDATION_ERROR');
+  });
+
+  it('{source:"url"} без sha256 → 400 (pin обязателен)', async () => {
+    const { app } = await makeStand();
+
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/install', {
+      source: 'url',
+      url: 'https://example.com/plugin.tgz',
+    });
+
+    expect(res.status).toBe(400);
+    expect((await errorOf(res)).message).toContain('sha256');
+  });
+
+  it('тело-не-объект (`null`) → 400, а не 500', async () => {
+    const { app } = await makeStand();
+
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/install', null);
+
+    expect(res.status).toBe(400);
+    expect((await errorOf(res)).code).toBe('VALIDATION_ERROR');
+  });
+
+  it('{source:"ftp"} (неизвестный вид) → 400', async () => {
+    const { app } = await makeStand();
+
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/install', {
+      source: 'ftp',
+      path: '/tmp/x',
+    });
+
+    expect(res.status).toBe(400);
+    expect((await errorOf(res)).code).toBe('VALIDATION_ERROR');
+  });
+
+  it('npm-источник, реестр ответил 404 → 502 plugin.source_unavailable', async () => {
+    const { app } = await makeStand({
+      sourceContext: { fetch: async () => new Response('not found', { status: 404 }) },
+    });
+
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/install', {
+      source: 'npm',
+      name: 'demo-plugin',
+    });
+
+    expect(res.status).toBe(502);
+    expect((await errorOf(res)).code).toBe('plugin.source_unavailable');
+  });
+
+  it('managed: локальный архив → 403 LOCAL_INSTALL_DISABLED', async () => {
+    const { app } = await makeStand({ localInstall: false });
+    const dir = await makeTempDir('synth-plugin-routes-managed-');
+    const archivePath = join(dir, 'demo.tgz');
+    await writeFile(archivePath, buildTarGz([{ name: 'synth.pack', content: '{}' }]));
+
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/install', {
+      source: 'archive',
+      path: archivePath,
+    });
+
+    expect(res.status).toBe(403);
+    expect((await errorOf(res)).code).toBe('LOCAL_INSTALL_DISABLED');
+  });
+
+  it('managed: сетевой источник разрешён (не 403; сбой реестра → 502)', async () => {
+    const { app } = await makeStand({
+      localInstall: false,
+      sourceContext: { fetch: async () => new Response('boom', { status: 500 }) },
+    });
+
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/install', {
+      source: 'npm',
+      name: 'demo-plugin',
+    });
+
+    expect(res.status).toBe(502);
   });
 });

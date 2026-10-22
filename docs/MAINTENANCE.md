@@ -1255,8 +1255,18 @@ graceful shutdown и завершается с кодом **75** (`EX_TEMPFAIL`)
 # 1. Проверить бандл без установки (ничего не пишет): вердикт сканера, находки, content-hash
 synth plugin scan ./synth-plugin-memory
 
-# 2. Установить (скан → trust-floor → install-policy). trust по умолчанию community
+# 2. Установить из каталога (скан → trust-floor → install-policy). trust по умолчанию community
 synth plugin install ./synth-plugin-memory --trust trusted
+
+# 2а. Из локального архива — вид источника выводится по расширению (.tgz/.tar.gz)
+synth plugin install ./dist/synth-plugin-memory-1.0.0.tgz --trust trusted
+
+# 2б. Из npm: имя пакета и точная версия (в lock пишется точная, «всегда latest» нет)
+synth plugin install @itphx/synth-plugin-memory --version 1.0.0 --trust trusted
+
+# 2в. По https-URL архива — обязателен pin sha256 (произвольный адрес не ставится)
+synth plugin install https://example.com/synth-plugin-memory-1.0.0.tgz \
+  --sha256 <64-hex> --trust trusted
 
 # 3. Список установленного и статус активации
 synth plugin list          # или --json
@@ -1269,6 +1279,14 @@ synth plugin disable synth-plugin-memory
 synth plugin remove synth-plugin-memory --yes          # --keep-files — оставить каталог бандла
 ```
 
+**Источники `install <ref>`:** путь (каталог), `.tgz`/`.tar.gz`, npm-имя (`name`/`@scope/name`) или
+`https:`-URL. Вид источника определяется по `<ref>` или задаётся `--source dir|archive|npm|url`.
+**Целостность:** npm — обязательный SRI `sha512` из реестра (`dist.integrity`; `shasum` — доп.
+проверка), нет SRI → отказ; URL — **обязательный** `--sha256` (pin), несовпадение → отказ; архив —
+`ref = sha256:<hash>` считается сам. Сеть — через общий egress-слой (прокси/TLS, ADR-099), редиректы
+проверяются на `https:` (переход на `http:` отклоняется). Отказ источника — код
+`plugin.source_unavailable` (путь/архив/реестр/целостность).
+
 `install` — **офлайн-операция оператора**: политика `plugins.runtimeInstall` к ней не применяется
 (передаётся `installKind: 'deploy'`), изменения вступают в силу после перезапуска инстанса.
 `enable`/`disable` в CLI работают в одноразовом процессе: они проверяют, что пайплайн активации
@@ -1280,14 +1298,19 @@ synth plugin remove synth-plugin-memory --yes          # --keep-files — ост
 |---|---|
 | Список | `GET /api/v2/plugins` |
 | Детали (манифест, integrity) | `GET /api/v2/plugins/:name` |
-| Установка из локального каталога (только standalone) | `POST /api/v2/plugins/install` `{path, trustLevel?, source?}` |
+| Установка из каталога (локально; только standalone) | `POST /api/v2/plugins/install` `{path}` |
+| Установка из архива (локально; только standalone) | `POST /api/v2/plugins/install` `{source:'archive', path}` |
+| Установка из npm (любой режим) | `POST /api/v2/plugins/install` `{source:'npm', name, version?}` |
+| Установка по URL (любой режим; `sha256` обязателен) | `POST /api/v2/plugins/install` `{source:'url', url, sha256}` |
 | Подтверждение карантина (`202`) | `POST /api/v2/plugins/:name/approve` |
 | Включить / выключить | `POST /api/v2/plugins/:name/enable` / `.../disable` |
 | Снять | `DELETE /api/v2/plugins/:name` (идемпотентно) |
 | Политика слоя | `GET/PUT/DELETE /api/v2/settings/plugins` (`restartRequired: true`) |
 
 RBAC managed: чтение и настройки — `ADMIN`; установка/активация — `ADMIN` или service-key со scope
-`addons:install`; подтверждение карантина и снятие — **только `ADMIN`**. Спецификация —
+`addons:install`; подтверждение карантина и снятие — **только `ADMIN`**. Локальные источники
+(`path`/архив) в managed запрещены (`403 LOCAL_INSTALL_DISABLED`), сетевые (`npm`/`url`) разрешены.
+Отказ источника: `400` (локальный) / `502` (сетевой) `plugin.source_unavailable`. Спецификация —
 [API_V2.md](./API_V2.md) §5.36.
 
 ### Где что лежит
@@ -1313,6 +1336,7 @@ RBAC managed: чтение и настройки — `ADMIN`; установка
 | `plugin.integrity_mismatch` | содержимое `installed/…` изменилось после установки — переустановите бандл |
 | `plugin.provides_mismatch` | манифест обещает вклад, которого плагин не регистрирует (или наоборот) — ошибка сборки плагина |
 | `plugin.scan_disabled_with_execution` | `plugins.scan=disabled` вместе с `executionEnabled=true` — включите скан (fail-closed) |
+| `plugin.source_unavailable` | источник не отдал бандл: нет пути/каталога, архив отклонён (симлинк, `..`, лимиты), npm-пакет без SRI или недоступен, URL без `--sha256`/несовпадение хеша; деталь — в сообщении отказа |
 | Плагин активен, но блока нет в промпте | блок объявлен и зарегистрирован? `GET /api/v2/plugins/:name` → `provides.promptBlocks`; бюджет `plugins.promptBlockMaxChars` (обрезка) |
 
 Полный сброс слоя (осторожно, деструктивно): `synth plugin remove <name> --yes` для каждого плагина

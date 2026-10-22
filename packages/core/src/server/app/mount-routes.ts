@@ -580,10 +580,10 @@ export function mountStandaloneRoutes(
   ));
 
   // PROP-090 §«HTTP API» (Ф5б-2): управление плагинами — список/деталь,
-  // установка из локального каталога (standalone: `localInstall: true`),
-  // подтверждение карантина, активация/деактивация и снятие. Standalone —
-  // дефолтные guard'ы (`requireAuth`; единственный пользователь инстанса —
-  // владелец, ADR-079). `update` — 501 (установка из npm/архива — Ф5б-3).
+  // установка из источника (standalone: `localInstall: true` — каталог/архив/
+  // npm/url), подтверждение карантина, активация/деактивация и снятие.
+  // Standalone — дефолтные guard'ы (`requireAuth`; единственный пользователь
+  // инстанса — владелец, ADR-079). `update` — 501 (долги Д2).
   app.route('/api/v2/plugins', createPluginsRoutes(
     auth,
     {

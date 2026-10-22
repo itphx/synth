@@ -21,6 +21,7 @@ import { dirname, join, sep } from 'node:path';
 import { Command } from 'commander';
 import type { PackManifest } from '@itphx/synth-shared';
 
+import { buildTarGz } from '../test-helpers/tar-fixture.js';
 import { createPluginCliContext, createPluginCommand } from './plugin-commands.js';
 
 /** Временные каталоги теста (убираются в `afterEach`). */
@@ -500,5 +501,67 @@ describe('synth plugin list', () => {
 
     expect(result.code).toBe(0);
     expect(result.out).toContain('Плагины не установлены');
+  });
+});
+
+describe('synth plugin install — источники установки (Д1)', () => {
+  it('архив .tgz (вид источника выводится по расширению) → 0, установлено', async () => {
+    const harness = await makeHarness();
+    const bundle = await makeBundle();
+    const pack = await readFile(join(bundle, 'synth.pack'), 'utf-8');
+    const code = await readFile(join(bundle, 'dist', 'index.js'), 'utf-8');
+    const root = await mkdtemp(join(tmpdir(), 'synth-plugin-cli-archive-'));
+    tempDirs.push(root);
+    const archivePath = join(root, 'cli-plugin.tgz');
+    await writeFile(
+      archivePath,
+      buildTarGz([
+        { name: 'synth.pack', content: pack },
+        { name: 'dist/index.js', content: code },
+      ]),
+    );
+
+    const result = await runPlugin(harness, ['install', archivePath, '--trust', 'trusted']);
+
+    expect(result.code).toBe(0);
+    expect(result.out).toContain('Установлен: cli-plugin@1.0.0');
+    expect((await readLock(harness))['cli-plugin']?.version).toBe('1.0.0');
+  });
+
+  it('--source url без --sha256 → 1 и требование pin', async () => {
+    const harness = await makeHarness();
+
+    const result = await runPlugin(harness, [
+      'install',
+      'https://example.com/cli-plugin.tgz',
+      '--source',
+      'url',
+    ]);
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('--sha256');
+  });
+
+  it('--source ftp → 1 (неизвестный вид источника)', async () => {
+    const harness = await makeHarness();
+
+    const result = await runPlugin(harness, ['install', './bundle', '--source', 'ftp']);
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('неизвестный вид источника');
+  });
+
+  it('--source npm с URL вместо имени → 1, код plugin.source_unavailable', async () => {
+    const harness = await makeHarness();
+
+    const result = await runPlugin(harness, [
+      'install',
+      'https://evil.example.com/cli-plugin.tgz',
+      '--source',
+      'npm',
+    ]);
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('plugin.source_unavailable');
   });
 });

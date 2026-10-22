@@ -10,6 +10,7 @@
  * `MemoryPluginAuditRepository`), часы — инъекция (`now`) для детерминизма.
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -18,6 +19,7 @@ import { dirname, join } from 'node:path';
 import type { PackManifest, PackProvides, PluginsConfig } from '@itphx/synth-shared';
 import { pluginsConfigSchema } from '@itphx/synth-shared';
 
+import { buildTarGz } from '../../test-helpers/tar-fixture.js';
 import { MemoryPluginAuditRepository } from '../../storage/memory/plugin-audit.js';
 import { MemoryPluginLockRepository } from '../../storage/memory/plugin-lock.js';
 import { PromptBlockRegistry } from '../context/prompt-block-registry.js';
@@ -766,5 +768,106 @@ describe('PluginInstaller: каталоги раскладки', () => {
     const files = await readdir(installedDist);
     expect(files.sort()).toEqual(['index.js', 'logo.png']);
     expect(await readFile(join(installedDist, 'logo.png'))).toEqual(png);
+  });
+});
+
+// ── Источники установки (Д1) ─────────────────────────────────────────────
+
+describe('PluginInstaller: установка из источника (dir/archive)', () => {
+  it('dir → установлено, source=local в lock, identifier — путь', async () => {
+    const dir = await makeBundle();
+    const { installer, lock } = await makeInstaller();
+
+    const result = await installer.installFromSource({
+      kind: 'dir',
+      ref: dir,
+      trustLevel: 'trusted',
+      installKind: 'deploy',
+      actor: 'tester',
+    });
+
+    expect(result.outcome).toBe('installed');
+    const entry = await lock.get('demo-plugin');
+    expect(entry?.source).toBe('local');
+    expect(entry?.identifier).toBe(dir);
+    expect(entry?.ref).toBeUndefined();
+  });
+
+  it('archive → распаковано и установлено, ref = sha256 архива, tmp убран', async () => {
+    const bundle = await makeBundle();
+    const pack = await readFile(join(bundle, 'synth.pack'), 'utf-8');
+    const code = await readFile(join(bundle, 'dist', 'index.js'), 'utf-8');
+    const tgz = buildTarGz([
+      { name: 'synth.pack', content: pack },
+      { name: 'dist/index.js', content: code },
+    ]);
+    const archivePath = join(await makeTempDir('synth-plugin-installer-tgz-'), 'demo.tgz');
+    await writeFile(archivePath, tgz);
+
+    const { installer, lock, layout } = await makeInstaller();
+    const result = await installer.installFromSource({
+      kind: 'archive',
+      ref: archivePath,
+      trustLevel: 'trusted',
+      installKind: 'deploy',
+      actor: 'tester',
+    });
+
+    expect(result.outcome).toBe('installed');
+    const entry = await lock.get('demo-plugin');
+    expect(entry?.source).toBe('local');
+    expect(entry?.identifier).toBe(archivePath);
+    expect(entry?.ref).toBe(
+      `sha256:${createHash('sha256').update(tgz).digest('hex')}`,
+    );
+    expect(existsSync(join(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'), 'synth.pack'))).toBe(
+      true,
+    );
+  });
+
+  it('источник недоступен → отказ plugin.source_unavailable + аудит install/rejected', async () => {
+    const { installer, audit, lock } = await makeInstaller();
+
+    const result = await installer.installFromSource({
+      kind: 'dir',
+      ref: join(await makeTempDir('synth-plugin-installer-missing-'), 'нет-такого'),
+      trustLevel: 'trusted',
+      installKind: 'deploy',
+      actor: 'tester',
+    });
+
+    expect(result.outcome).toBe('rejected');
+    if (result.outcome !== 'rejected') return;
+    expect(result.reason).toBe('plugin.source_unavailable');
+    expect(result.message).toContain('Не удалось получить бандл');
+    expect(await lock.list()).toEqual([]);
+
+    const rejected = (await audit.list({ action: 'install', outcome: 'rejected' }))[0];
+    expect(rejected?.reason).toBe('plugin.source_unavailable');
+    expect(rejected?.source).toBe('dir');
+  });
+
+  it('архив с симлинком → отказ source_unavailable (распаковка отклонена)', async () => {
+    const archivePath = join(await makeTempDir('synth-plugin-installer-evil-'), 'evil.tgz');
+    await writeFile(
+      archivePath,
+      buildTarGz([
+        { name: 'synth.pack', content: '{}' },
+        { name: 'link', type: '2', linkname: '/etc/passwd' },
+      ]),
+    );
+    const { installer } = await makeInstaller();
+
+    const result = await installer.installFromSource({
+      kind: 'archive',
+      ref: archivePath,
+      trustLevel: 'trusted',
+      installKind: 'deploy',
+    });
+
+    expect(result.outcome).toBe('rejected');
+    if (result.outcome !== 'rejected') return;
+    expect(result.reason).toBe('plugin.source_unavailable');
+    expect(result.message).toContain('символьную ссылку');
   });
 });

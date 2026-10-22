@@ -433,9 +433,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // ADMIN или service-key со scope `addons:install` (установка аддонов —
   // зонтичный scope реестра расширений), подтверждение карантина и снятие —
   // **только ADMIN** (снятие гасит код в процессе ядра). Установка из
-  // локального каталога запрещена (`localInstall: false` → 403
-  // `LOCAL_INSTALL_DISABLED`): путь с ФС хоста в managed не принимается,
-  // доставка бандла — deploy-time (образ/PVC).
+  // локального каталога/архива запрещена (`localInstall: false` → 403
+  // `LOCAL_INSTALL_DISABLED`): путь с ФС хоста в managed не принимается.
+  // Сетевые источники (`npm`/`url`) разрешены — это не локальный путь, а
+  // доставка бандла с проверкой целостности (SRI/sha256).
   app.route('/api/v2/plugins', createPluginsRoutes(
     { requireAuth: auth.requireAuth },
     {
