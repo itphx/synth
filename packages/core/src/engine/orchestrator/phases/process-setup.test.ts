@@ -171,7 +171,10 @@ describe('runProcessSetup', () => {
         compose: vi.fn(async () => composedBase),
       } as unknown as SystemPromptComposer,
       optimizer: null,
-      mcpManager: { ensureToolsLoaded: vi.fn(async () => {}) } as unknown as McpManager,
+      mcpManager: {
+        refreshExecutorServers: vi.fn(async () => {}),
+        ensureToolsLoaded: vi.fn(async () => {}),
+      } as unknown as McpManager,
       toolRegistry: {} as ToolRegistry,
       lazyInstructions: { seed: vi.fn() } as never,
       eventBus,
@@ -318,6 +321,47 @@ describe('runProcessSetup', () => {
     );
     expect((deps.mcpManager as unknown as { ensureToolsLoaded: ReturnType<typeof vi.fn> }).ensureToolsLoaded)
       .toHaveBeenCalledWith(['srv-on'], deps.toolRegistry);
+  });
+
+  it('состав серверов исполнителя обновляется ДО расчёта скоупа: найденный сервер попадает в подключаемые', async () => {
+    // ADR-077 (шаг B2): если состав исполнителя обновлялся уже внутри
+    // `ensureToolsLoaded`, сервер находился в этом ходе, но не попадал в
+    // список подключаемых — первый ход агента после раскатки исполнителя
+    // уходил без браузерных инструментов (тулы появлялись в следующем ходе).
+    const { id, message } = await makeSession();
+    let executorKnown = false;
+    const order: string[] = [];
+    const deps = makeDeps({
+      mcpManager: {
+        refreshExecutorServers: vi.fn(async () => {
+          order.push('refresh');
+          executorKnown = true;
+        }),
+        ensureToolsLoaded: vi.fn(async () => {
+          order.push('load');
+        }),
+      } as unknown as McpManager,
+      resolveMcpDecisions: vi.fn(() => {
+        order.push('scope');
+        return (executorKnown
+          ? [
+              { name: 'srv-on', level: 'system', enabled: true, origin: 'instance' },
+              { name: 'playwright-mcp', level: 'system', enabled: true, origin: 'instance' },
+            ]
+          : [{ name: 'srv-on', level: 'system', enabled: true, origin: 'instance' }]
+        ) as McpScopeDecision[];
+      }) as never,
+    });
+
+    const outcome = await runProcessSetup(await makeArgs(id, message), deps);
+    expect(outcome.failed).toBe(false);
+    if (outcome.failed) return;
+
+    // Порядок: обновление состава → расчёт скоупа → подключение тулов.
+    expect(order).toEqual(['refresh', 'scope', 'load']);
+    expect(outcome.state.activeMcpServers).toEqual(['srv-on', 'playwright-mcp']);
+    expect((deps.mcpManager as unknown as { ensureToolsLoaded: ReturnType<typeof vi.fn> }).ensureToolsLoaded)
+      .toHaveBeenCalledWith(['srv-on', 'playwright-mcp'], deps.toolRegistry);
   });
 
   it('без реестра инструментов tools не выставляются, MCP не грузится', async () => {

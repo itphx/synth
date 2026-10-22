@@ -114,6 +114,9 @@ function makeMockMcpManager(): McpManager {
         Object.keys(tools).map((name) => [name, { type: 'sse', url: `http://${name}/mcp` }]),
       );
     },
+    async refreshExecutorServers() {
+      // ADR-077 (шаг B2): состав исполнителя обновляется до расчёта скоупа.
+    },
     async ensureToolsLoaded(serverNames: string[], registry: { register(tool: ToolDefinition): void }) {
       for (const server of serverNames) {
         connected.add(server);

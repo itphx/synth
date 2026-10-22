@@ -45,6 +45,7 @@ import { agentKeyOf, buildPromptState, computeExpected, isBlockChanged, isPrefix
 import { sessionMessagesToLlm } from '../prompt-info.js';
 import { DEFAULT_CHARS_PER_TOKEN } from '../../context/token-ratio.js';
 import { t as sm } from '../../system-messages.js';
+import { warning } from '../../../logger.js';
 
 /** Результат фаз `_processMessage` (структурно = `ProcessMessageResult`). */
 export interface ProcessSetupResult {
@@ -274,6 +275,12 @@ export async function runProcessSetup(
   // ADR-071 §2.1/§2.4: эффективный набор MCP сессии — per-session скоуп:
   // (instance defaultOn ∪ project defaultOn ∪ session enabled) − opt-out.
   // Определяем до state-сообщений (unavailable-подсказки) и до сборки tools.
+  // ADR-077 (шаг B2): состав серверов исполнителя обновляется ДО расчёта
+  // скоупа. Иначе сервер, найденный в этом ходе, не попадает в список
+  // подключаемых (`ensureToolsLoaded` ниже) — и первый ход агента после
+  // раскатки исполнителя уходит без браузерных инструментов (тулы появляются
+  // только в следующем ходе, по TTL источника).
+  await refreshExecutorServers(deps);
   const mcpDecisions = deps.resolveMcpDecisions(session, projectForState);
   const activeMcpServers = mcpDecisions.filter((d) => d.enabled).map((d) => d.name);
   const activeMcpSet = new Set(activeMcpServers);
@@ -509,4 +516,28 @@ export async function runProcessSetup(
       cancelToken, toolAbortController,
     },
   };
+}
+
+/**
+ * Обновить состав MCP-серверов исполнителя (ADR-077, шаг B2) — до расчёта
+ * скоупа сессии.
+ *
+ * Источник ленивый (TTL 120 с, короткая пауза 15 с после неудачи), поэтому
+ * обновление внутри хода — обычное дело; в `inline` источника нет, и вызов
+ * ничего не делает (поведение прежнее).
+ *
+ * Ошибка не ломает ход: недоступный исполнитель не должен ронять сессию
+ * (сам режим проверяется fail-closed при старте порта исполнения).
+ */
+async function refreshExecutorServers(deps: ProcessSetupDeps): Promise<void> {
+  const manager = deps.mcpManager;
+  if (!manager) return;
+  try {
+    await manager.refreshExecutorServers(deps.toolRegistry ?? undefined);
+  } catch (err) {
+    warning(
+      'MCP',
+      `Не удалось обновить состав серверов исполнителя: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }

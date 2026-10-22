@@ -79,13 +79,16 @@ describe.skipIf(!live)(`ExecutorMcpSource + McpManager: живой исполн�
 
     expect(server, `состав исполнителя: ${JSON.stringify(servers)}`).toBeDefined();
     expect(server!.origin).toBe('executor');
+    // `idle` = «ещё не поднят»: discovery активирует сервер вызовом `/mcp/tools`
+    // (ленивый старт исполнителя) и перечитывает состояние — поэтому в снимке
+    // сервер уже `up`, без отдельного рефреша.
+    expect(server!.status).toBe('up');
+    expect(server!.toolCount).toBeGreaterThan(0);
     expect(manager.isExecutorServer(SERVER)).toBe(true);
     expect(manager.getExecutorServerNames()).toContain(SERVER);
 
     const refreshed = (await source.refresh()).find((item) => item.name === SERVER);
 
-    // Первый discovery шёл до ленивого старта браузера, поэтому в снимке
-    // `idle`; явный refresh (минуя TTL 120 с) должен увидеть поднятый сервер.
     expect(refreshed, `состав после refresh: ${JSON.stringify(source.listServers())}`).toBeDefined();
     expect(refreshed!.status).toBe('up');
     expect(refreshed!.toolCount).toBeGreaterThan(0);
