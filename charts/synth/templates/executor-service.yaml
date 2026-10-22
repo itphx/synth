@@ -11,6 +11,17 @@ metadata:
     app.kubernetes.io/component: executor
 spec:
   type: {{ .Values.executor.service.type }}
+  {{- /* Привязка клиента к поду пула: браузерные MCP-сессии живут внутри пода
+         исполнителя, а control plane ходит в пул по одному адресу (ClusterIP) —
+         балансировка per TCP-соединение, поэтому без привязки последовательные
+         вызовы одной сессии попадали бы на разные поды. "None" — дефолт
+         Kubernetes, поле не рендерим: дефолтный манифест Service не меняется
+         побайтово. */ -}}
+  {{- with .Values.executor.service.sessionAffinity }}
+  {{- if ne . "None" }}
+  sessionAffinity: {{ . }}
+  {{- end }}
+  {{- end }}
   ports:
     - port: {{ .Values.executor.service.port }}
       targetPort: {{ .Values.executor.service.targetPort }}

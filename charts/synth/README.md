@@ -145,6 +145,7 @@ ingress:
 | `executor.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
 | `executor.imagePullSecrets` | `[]` | Секреты для приватного реестра (нужны для `git.itphx.ru`) |
 | `executor.service.port` / `.targetPort` | `5100` / `5100` | Service исполнителя (его адрес — `SYNTH_EXECUTION_REMOTE_URL`) |
+| `executor.service.sessionAffinity` | `None` | Привязка клиента к поду пула: `None` \| `ClientIP`. Нужна при `executor.replicaCount > 1` — браузерные MCP-сессии живут внутри под'а (см. «Привязка клиента к поду пула исполнителей») |
 | `executor.resources` | `1000m/1Gi`, `200m/256Mi` | limits/requests исполнителя |
 | `executor.limits.maxConcurrency` / `.maxTimeoutMs` / `.maxOutputBytes` | `4` / `120000` / `10485760` | Лимиты исполнителя (env `SYNTH_EXECUTOR_MAX_*`) |
 | `executor.mcp.enabled` | `true` | MCP-хостинг в исполнителе; `false` → env `SYNTH_EXECUTOR_MCP_SERVERS=""` (серверов нет, дефолт образа отключён) |
@@ -898,6 +899,34 @@ kubectl exec -n synth deploy/synth-executor -- \
   sh -c 'wget -qO- --header="Authorization: Bearer $SYNTH_EXECUTOR_TOKEN" http://127.0.0.1:5100/mcp/servers' || true
 # → [{"name":"playwright-mcp","status":"up","toolCount":25}]  (status до первого обращения — "idle")
 ```
+
+### Привязка клиента к поду пула исполнителей
+
+Control plane ходит в пул исполнителей по **одному** адресу (ClusterIP Service
+`synth-executor`), а балансировку по репликам делает Kubernetes — **per
+TCP-соединение**. Браузерные MCP-сессии при этом живут **внутри пода**
+исполнителя: `browser_navigate` открыл страницу на одном поде, а
+`browser_evaluate` пришёл на другой — такой страницы там нет.
+
+Поэтому у Service пула есть привязка клиента — по образцу
+`backend.service.sessionAffinity` у control plane:
+
+```yaml
+executor:
+  replicaCount: 2
+  service:
+    sessionAffinity: ClientIP
+```
+
+По умолчанию `None` — обычная балансировка, поле в манифест Service не попадает
+(дефолтный рендер чарта не меняется побайтово).
+
+**Оговорка — это плата за целостность браузерных сессий:** при `ClientIP` трафик
+одного control plane закрепляется за **одним** подом пула, поэтому балансировка
+идёт между репликами control plane (у каждой свой clientIP ⇒ свой под
+исполнителя), а не между репликами пула. Полноценное решение — **внешний
+транспорт событий** (PROP-104) — отдельное предложение; привязка клиента его не
+заменяет.
 
 ### Ограничения и NetworkPolicy
 
