@@ -131,6 +131,7 @@ export const dict = {
   'settings.category.security': 'Security',
   'settings.category.network': 'Network',
   'settings.category.addons': 'Addons',
+  'settings.category.plugins': 'Plugins',
   'gateway.title': 'Security gateway',
   'gateway.description': 'Independent protection layer for LLM traffic: secrets (API keys, tokens, emails) are obfuscated to ⟦SYNTH_SECRET_N⟧ placeholders before sending to the model and revealed only at consumption points. Value reveal in the UI is audit-logged.',
   'toolsPolicy.title': 'Built-in tools policy',
@@ -3320,6 +3321,143 @@ export const dict = {
     'Registry of packages installed in the instance. A package awaiting approval has not delivered its artifacts yet — approving installs them.',
   'settings.help.addons.section.addons-pipelines':
     'Pipeline definitions delivered by packages and their runs: status, current step and attempt count.',
+
+  // --- Plugins (PROP-090, Ф6) ---
+  'plugins.title': 'Plugins',
+  'plugins.description':
+    'Instance plugin layer: installed extensions with their trust level and scanner verdict, activation, installation from a source and layer policy.',
+  'plugins.count': '{count, plural, one {# plugin} other {# plugins}}',
+  'plugins.forbidden': 'Administrator rights are required to view this section.',
+  'plugins.loadError': 'Failed to load plugins: {error}',
+  'plugins.list.title': 'Installed plugins',
+  'plugins.list.description':
+    'Plugins from plugins.lock.json: version, execution mode, trust, scanner verdict and content hash. A plugin installed by deployment (image/PVC) is marked as managed — it cannot be removed through the API.',
+  'plugins.list.empty': 'No plugins installed',
+  'plugins.pendingBadge': 'awaiting approval',
+  'plugins.pendingHint':
+    'The bundle passed the scan with warnings and was quarantined: its artifacts appear in the instance only after approval. Only an administrator can approve it.',
+  'plugins.approve': 'Approve installation',
+  'plugins.approveConfirmTitle': 'Approve plugin installation',
+  'plugins.approveConfirm':
+    'Install the plugin "{name}" from quarantine? Integrity, trust and scanner verdict are re-checked before installation.',
+  'plugins.approved': 'Plugin {name} approved and installed',
+  'plugins.approveError': 'Failed to approve the plugin {name}: {error}',
+  'plugins.enable': 'Enable',
+  'plugins.disable': 'Disable',
+  'plugins.enabled': 'Plugin {name} enabled',
+  'plugins.disabled': 'Plugin {name} disabled',
+  'plugins.enableError': 'Failed to enable the plugin {name}: {error}',
+  'plugins.disableError': 'Failed to disable the plugin {name}: {error}',
+  'plugins.remove': 'Remove',
+  'plugins.removeConfirmTitle': 'Remove plugin',
+  'plugins.removeConfirm':
+    'Remove the plugin "{name}"? It will be deactivated and its lock entry and installation directory deleted.',
+  'plugins.removed': 'Plugin {name} removed',
+  'plugins.removeError': 'Failed to remove the plugin {name}: {error}',
+  'plugins.update': 'Update',
+  'plugins.updated': 'Plugin {name} updated: {from} → {to}',
+  'plugins.upToDate': 'Plugin {name} is already up to date ({version})',
+  'plugins.updateError': 'Failed to update the plugin {name}: {error}',
+  'plugins.rollback': 'Roll back',
+  'plugins.rollbackHint':
+    'Roll back to the previous version (one step, reversible). If there is no previous step the server replies plugin.rollback_unavailable.',
+  'plugins.rollbackConfirmTitle': 'Roll back plugin',
+  'plugins.rollbackConfirm': 'Roll the plugin "{name}" back to the previous version?',
+  'plugins.rolledBack': 'Plugin {name} rolled back: {from} → {to}',
+  'plugins.rollbackError': 'Failed to roll back the plugin {name}: {error}',
+  'plugins.rollbackUnavailable': 'plugin {name} has no previous version to roll back to',
+  'plugins.source': 'Source',
+  'plugins.contentHash': 'Content hash',
+  'plugins.entry': 'Entry point',
+  'plugins.installedAt': 'Installed',
+  'plugins.updatedAt': 'Updated',
+  'plugins.managedBadge': 'managed',
+  'plugins.managedHint':
+    'The plugin is delivered by deployment (image or PVC): it cannot be removed or reinstalled through the API — its version changes with the image (plugin.managed_readonly).',
+  'plugins.trustLabel': 'Plugin trust level',
+  'plugins.scanLabel': 'Scanner verdict',
+  'plugins.trust.builtin': 'built-in',
+  'plugins.trust.verified': 'verified',
+  'plugins.trust.trusted': 'trusted',
+  'plugins.trust.community': 'community',
+  'plugins.scanVerdict.safe': 'safe',
+  'plugins.scanVerdict.caution': 'caution',
+  'plugins.scanVerdict.dangerous': 'dangerous',
+  'plugins.mode.inline': 'inline',
+  'plugins.mode.remote': 'remote',
+  'plugins.mode.both': 'both',
+  'plugins.state.active': 'active',
+  'plugins.state.inactive': 'disabled',
+  'plugins.install.title': 'Installation',
+  'plugins.install.description':
+    'Source: a directory or archive on disk (standalone), an npm package, or an https archive with a mandatory sha256 pin. Installation is an explicit owner/ADMIN action.',
+  'plugins.install.ref': 'Source',
+  'plugins.install.refHint':
+    'Directory path, .tgz/.tar.gz, npm package name (name or @scope/name), or an https archive URL. The source kind is inferred automatically.',
+  'plugins.install.refPlaceholder': '/opt/plugins/my-plugin or @scope/plugin',
+  'plugins.install.sha256': 'sha256 (for URL)',
+  'plugins.install.sha256Hint':
+    'Mandatory for an https archive: 64 hex characters. Not needed for local or npm sources.',
+  'plugins.install.sha256Placeholder': '64 hex characters',
+  'plugins.install.trust': 'Trust level',
+  'plugins.install.trustHint':
+    'Below the plugins.trustFloor threshold installation/activation is rejected. The builtin level is only issued by the image.',
+  'plugins.install.managedHint':
+    'In a managed instance local sources (directory or archive on disk) are unavailable — the server replies 403 LOCAL_INSTALL_DISABLED. Network sources (npm and https archive) are allowed.',
+  'plugins.install.installing': 'Installing…',
+  'plugins.install.submit': 'Install',
+  'plugins.install.refRequired': 'Specify an installation source',
+  'plugins.install.approvalRequired':
+    'Plugin {name} was quarantined: installation awaits administrator approval',
+  'plugins.installed': 'Plugin {name} {version} installed',
+  'plugins.settings.title': 'Layer policy',
+  'plugins.settings.description':
+    'Key policies of the plugin layer. They apply at instance startup: a restart is required after saving (except filter and prompt block budgets).',
+  'plugins.settings.loadError': 'Failed to load the plugin layer policy: {error}',
+  'plugins.settings.saved': 'Plugin layer policy saved',
+  'plugins.settings.saveError': 'Failed to save the plugin layer policy: {error}',
+  'plugins.settings.restartRequired':
+    'The policy takes effect after the instance restarts: the plugin runtime and host are assembled at startup.',
+  'plugins.settings.reset': 'Reset',
+  'plugins.settings.resetConfirmTitle': 'Reset plugin policy',
+  'plugins.settings.resetConfirm':
+    'Reset the plugin layer runtime settings to config.yaml values? Changes apply after a restart.',
+  'plugins.settings.enabled': 'Plugin layer enabled',
+  'plugins.settings.enabledHint': 'Master switch of the instance plugin layer.',
+  'plugins.settings.executionEnabled': 'Plugin code execution',
+  'plugins.settings.executionEnabledHint':
+    'Main switch for executing plugin code. Disabled by default: plugins are installed but not activated.',
+  'plugins.settings.runtimeInstall': 'Runtime installation',
+  'plugins.settings.runtimeInstallHint':
+    'Whether plugins may be installed through the API/UI (deny — only offline operator operations and the image).',
+  'plugins.settings.runtimeInstall.allow': 'allow — permitted',
+  'plugins.settings.runtimeInstall.deny': 'deny — forbidden',
+  'plugins.settings.trustFloor': 'Trust floor',
+  'plugins.settings.trustFloorHint':
+    'Minimum trust level: a plugin below the floor is neither installed nor activated.',
+  'plugins.settings.scan': 'Bundle scanning',
+  'plugins.settings.scanHint':
+    'Static scan before installation. Disabling the scan while execution is enabled is not allowed (fail-closed).',
+  'plugins.settings.scan.enabled': 'enabled',
+  'plugins.settings.scan.disabled': 'disabled',
+  'plugins.settings.promptBlockMaxChars': 'Prompt block budget',
+  'plugins.settings.promptBlockMaxCharsHint':
+    'Character limit per system prompt block from a plugin (the host truncates blocks over budget).',
+  'plugins.settings.llmFilterTimeoutMs': 'LLM filter timeout',
+  'plugins.settings.llmFilterTimeoutMsHint':
+    'Time budget for a single plugin filter call; after it expires the filter failMode applies.',
+  'plugins.restart.confirmTitle': 'Restart instance',
+  'plugins.restart.confirm':
+    'Restart the instance to apply the plugin layer policy? Active requests will be interrupted.',
+  'plugins.restart.button': 'Restart',
+  'plugins.restart.started': 'Restart started',
+  'plugins.restart.error': 'Failed to restart the instance: {error}',
+  'settings.help.plugins.section.plugins-list':
+    'Installed plugins: version, mode, trust, scanner verdict and content hash; actions — enable/disable, update, roll back, remove.',
+  'settings.help.plugins.section.plugins-install':
+    'Install from a source. Local paths and archives are available in standalone only; an https archive requires a sha256 pin.',
+  'settings.help.plugins.section.plugins-policy':
+    'Plugin layer policy: execution, trust floor, scanning and budgets. Applies after the instance restarts.',
 
   // --- Пайплайны проекта (ADR-101, Э7) ---
   'pipelines.empty': 'No pipelines in the projects you have access to',

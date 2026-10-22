@@ -76,4 +76,21 @@ describe('settings-catalog — searchSettings', () => {
     const byPipeline = searchSettings(tRu, 'пайплайны')
     expect(byPipeline.entries.map((entry) => entry.id)).toContain('addons.pipelines')
   })
+
+  it('находит админ-раздел «Плагины» по названию и синонимам', () => {
+    // PROP-090 Ф6: категория и записи слоя плагинов участвуют в поиске.
+    expect(searchSettings(t, 'plugins').categories.map((category) => category.id)).toContain(
+      'plugins',
+    )
+
+    const bySynonym = searchSettings(tRu, 'плагины')
+    expect(bySynonym.categories.map((category) => category.id)).toContain('plugins')
+
+    expect(searchSettings(tRu, 'порог доверия').entries.map((entry) => entry.id)).toContain(
+      'plugins.policy.trustFloor',
+    )
+    expect(searchSettings(t, 'install').entries.map((entry) => entry.id)).toContain(
+      'plugins.install',
+    )
+  })
 })

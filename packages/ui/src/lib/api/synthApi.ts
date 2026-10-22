@@ -43,6 +43,7 @@ import { instructionsApi } from './instructions'
 import { packsApi } from './packs'
 import { pipelinesApi } from './pipelines'
 import { pipelineProjectApi } from './pipeline-project'
+import { pluginsApi } from './plugins'
 
 export type { EntityOrigin } from './common'
 export type {
@@ -261,6 +262,26 @@ export type {
   PipelineMode,
   PipelineRunStatus,
 } from '@itphx/synth-shared/types'
+// PROP-090: слой плагинов (жизненный цикл и runtime-политика).
+export type {
+  PluginTrustLevel,
+  PluginScanVerdict,
+  PluginExecutionMode,
+  PluginInstallSourceKind,
+  PluginRuntimeEntry,
+  PluginsListResponse,
+  PluginDetailResponse,
+  PluginActivationSummary,
+  PluginActivationResponse,
+  PluginInstallInput,
+  PluginInstallResult,
+  PluginUpdateInput,
+  PluginUpdateResult,
+  PluginRollbackResult,
+  PluginsPolicyValues,
+  PluginsSettingsInfo,
+  PluginsPolicyPatch,
+} from './plugins'
 
 export const synthApi = {
   fetchJSON,
@@ -304,4 +325,5 @@ export const synthApi = {
   ...packsApi,
   ...pipelinesApi,
   ...pipelineProjectApi,
+  ...pluginsApi,
 }

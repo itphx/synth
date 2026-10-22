@@ -130,6 +130,7 @@ export const dict = {
   'settings.category.security': 'Безопасность',
   'settings.category.network': 'Сеть',
   'settings.category.addons': 'Аддоны',
+  'settings.category.plugins': 'Плагины',
   'gateway.title': 'Шлюз безопасности',
   'gateway.description': 'Независимый слой защиты LLM-трафика: секреты (API-ключи, токены, email) обфусцируются до плейсхолдеров ⟦SYNTH_SECRET_N⟧ перед отправкой в модель и раскрываются только в точках потребления. Раскрытие значений в интерфейсе логируется в аудит.',
   'toolsPolicy.title': 'Политика встроенных инструментов',
@@ -3656,6 +3657,143 @@ export const dict = {
     'Реестр пакетов, установленных в инстансе. Пакет, ждущий подтверждения, ещё не поставил артефакты — подтверждение выполняет установку.',
   'settings.help.addons.section.addons-pipelines':
     'Определения пайплайнов, принесённые пакетами, и их прогоны: статус, текущий шаг и число попыток.',
+
+  // --- Плагины (PROP-090, Ф6) ---
+  'plugins.title': 'Плагины',
+  'plugins.description':
+    'Слой плагинов инстанса: установленные расширения, их доверие и вердикт сканера, активация, установка из источника и политика слоя.',
+  'plugins.count': '{count, plural, one {# плагин} few {# плагина} many {# плагинов}}',
+  'plugins.forbidden': 'Для просмотра раздела нужны права администратора.',
+  'plugins.loadError': 'Не удалось загрузить плагины: {error}',
+  'plugins.list.title': 'Установленные плагины',
+  'plugins.list.description':
+    'Плагины из записи plugins.lock.json: версия, режим исполнения, доверие, вердикт сканера и content-hash. Плагин, поставленный развёртыванием (образ/PVC), помечен как управляемый — снять его через API нельзя.',
+  'plugins.list.empty': 'Плагины не установлены',
+  'plugins.pendingBadge': 'ждёт подтверждения',
+  'plugins.pendingHint':
+    'Бандл прошёл проверку с замечаниями и отправлен в карантин: артефакты появятся в инстансе только после подтверждения. Подтверждение доступно администратору.',
+  'plugins.approve': 'Подтвердить установку',
+  'plugins.approveConfirmTitle': 'Подтверждение установки плагина',
+  'plugins.approveConfirm':
+    'Установить плагин «{name}» из карантина? Перед установкой повторно проверяются целостность, доверие и вердикт сканера.',
+  'plugins.approved': 'Плагин {name} подтверждён и установлен',
+  'plugins.approveError': 'Не удалось подтвердить плагин {name}: {error}',
+  'plugins.enable': 'Включить',
+  'plugins.disable': 'Выключить',
+  'plugins.enabled': 'Плагин {name} включён',
+  'plugins.disabled': 'Плагин {name} выключен',
+  'plugins.enableError': 'Не удалось включить плагин {name}: {error}',
+  'plugins.disableError': 'Не удалось выключить плагин {name}: {error}',
+  'plugins.remove': 'Удалить',
+  'plugins.removeConfirmTitle': 'Снятие плагина',
+  'plugins.removeConfirm':
+    'Снять плагин «{name}»? Плагин будет деактивирован, его запись в lock и каталог установки удалены.',
+  'plugins.removed': 'Плагин {name} снят',
+  'plugins.removeError': 'Не удалось снять плагин {name}: {error}',
+  'plugins.update': 'Обновить',
+  'plugins.updated': 'Плагин {name} обновлён: {from} → {to}',
+  'plugins.upToDate': 'Плагин {name} уже актуален ({version})',
+  'plugins.updateError': 'Не удалось обновить плагин {name}: {error}',
+  'plugins.rollback': 'Откатить',
+  'plugins.rollbackHint':
+    'Откат на предыдущую версию (одна ступень, откат обратим). Если ступени нет, сервер ответит plugin.rollback_unavailable.',
+  'plugins.rollbackConfirmTitle': 'Откат плагина',
+  'plugins.rollbackConfirm': 'Откатить плагин «{name}» на предыдущую версию?',
+  'plugins.rolledBack': 'Плагин {name} откатан: {from} → {to}',
+  'plugins.rollbackError': 'Не удалось откатить плагин {name}: {error}',
+  'plugins.rollbackUnavailable': 'у плагина {name} нет предыдущей версии для отката',
+  'plugins.source': 'Источник',
+  'plugins.contentHash': 'Content-hash',
+  'plugins.entry': 'Точка входа',
+  'plugins.installedAt': 'Установлен',
+  'plugins.updatedAt': 'Обновлён',
+  'plugins.managedBadge': 'управляемый',
+  'plugins.managedHint':
+    'Плагин поставлен развёртыванием (образ или PVC): его нельзя снять или переустановить через API — версия меняется вместе с образом (plugin.managed_readonly).',
+  'plugins.trustLabel': 'Доверие плагина',
+  'plugins.scanLabel': 'Вердикт сканера',
+  'plugins.trust.builtin': 'встроенный',
+  'plugins.trust.verified': 'проверенный',
+  'plugins.trust.trusted': 'доверенный',
+  'plugins.trust.community': 'сообщества',
+  'plugins.scanVerdict.safe': 'safe',
+  'plugins.scanVerdict.caution': 'caution',
+  'plugins.scanVerdict.dangerous': 'dangerous',
+  'plugins.mode.inline': 'inline',
+  'plugins.mode.remote': 'remote',
+  'plugins.mode.both': 'both',
+  'plugins.state.active': 'активен',
+  'plugins.state.inactive': 'выключен',
+  'plugins.install.title': 'Установка',
+  'plugins.install.description':
+    'Источник: каталог или архив на диске (standalone), npm-пакет либо https-архив с обязательным пином sha256. Установка — явная операция владельца/ADMIN.',
+  'plugins.install.ref': 'Источник',
+  'plugins.install.refHint':
+    'Путь к каталогу, .tgz/.tar.gz, npm-имя пакета (name или @scope/name) либо https-URL архива. Вид источника выводится автоматически.',
+  'plugins.install.refPlaceholder': '/opt/plugins/my-plugin или @scope/plugin',
+  'plugins.install.sha256': 'sha256 (для URL)',
+  'plugins.install.sha256Hint':
+    'Обязателен для https-архива: 64 hex-символа. Для локальных и npm-источников не нужен.',
+  'plugins.install.sha256Placeholder': '64 hex-символа',
+  'plugins.install.trust': 'Уровень доверия',
+  'plugins.install.trustHint':
+    'Ниже порога plugins.trustFloor установка/активация отклоняется. Значение builtin выдаётся только образом.',
+  'plugins.install.managedHint':
+    'В managed-инстансе локальные источники (каталог или архив на диске) недоступны — сервер ответит 403 LOCAL_INSTALL_DISABLED. Сетевые источники (npm и https-архив) разрешены.',
+  'plugins.install.installing': 'Установка…',
+  'plugins.install.submit': 'Установить',
+  'plugins.install.refRequired': 'Укажите источник установки',
+  'plugins.install.approvalRequired':
+    'Плагин {name} помещён в карантин: установка ждёт подтверждения администратора',
+  'plugins.installed': 'Плагин {name} {version} установлен',
+  'plugins.settings.title': 'Политика слоя',
+  'plugins.settings.description':
+    'Ключевые политики слоя плагинов. Применяются при старте инстанса: после сохранения нужен перезапуск (кроме бюджетов фильтров и блоков промпта).',
+  'plugins.settings.loadError': 'Не удалось загрузить политику слоя плагинов: {error}',
+  'plugins.settings.saved': 'Политика слоя плагинов сохранена',
+  'plugins.settings.saveError': 'Не удалось сохранить политику слоя плагинов: {error}',
+  'plugins.settings.restartRequired':
+    'Политика вступит в силу после перезапуска инстанса: рантайм плагинов и хост собираются при старте.',
+  'plugins.settings.reset': 'Сбросить',
+  'plugins.settings.resetConfirmTitle': 'Сброс политики плагинов',
+  'plugins.settings.resetConfirm':
+    'Сбросить runtime-настройки слоя плагинов к значениям config.yaml? Изменения применятся после перезапуска.',
+  'plugins.settings.enabled': 'Слой плагинов включён',
+  'plugins.settings.enabledHint': 'Мастер-выключатель слоя плагинов инстанса.',
+  'plugins.settings.executionEnabled': 'Исполнение кода плагинов',
+  'plugins.settings.executionEnabledHint':
+    'Главный переключатель исполнения кода плагинов. По умолчанию выключен: плагины устанавливаются, но не активируются.',
+  'plugins.settings.runtimeInstall': 'Runtime-установка',
+  'plugins.settings.runtimeInstallHint':
+    'Разрешена ли установка плагинов через API/UI (deny — только офлайн-операции оператора и образ).',
+  'plugins.settings.runtimeInstall.allow': 'allow — разрешена',
+  'plugins.settings.runtimeInstall.deny': 'deny — запрещена',
+  'plugins.settings.trustFloor': 'Порог доверия',
+  'plugins.settings.trustFloorHint':
+    'Минимальный уровень доверия: плагин ниже порога не устанавливается и не активируется.',
+  'plugins.settings.scan': 'Сканирование бандлов',
+  'plugins.settings.scanHint':
+    'Статический скан перед установкой. Выключить скан при включённом исполнении нельзя (fail-closed).',
+  'plugins.settings.scan.enabled': 'enabled — включено',
+  'plugins.settings.scan.disabled': 'disabled — выключено',
+  'plugins.settings.promptBlockMaxChars': 'Бюджет блока промпта',
+  'plugins.settings.promptBlockMaxCharsHint':
+    'Предел символов на блок системного промпта от плагина (сверх бюджета хост обрезает блок).',
+  'plugins.settings.llmFilterTimeoutMs': 'Таймаут фильтра LLM-вызовов',
+  'plugins.settings.llmFilterTimeoutMsHint':
+    'Бюджет времени на один вызов фильтра плагина; по истечении применяется failMode фильтра.',
+  'plugins.restart.confirmTitle': 'Перезапуск инстанса',
+  'plugins.restart.confirm':
+    'Перезапустить инстанс, чтобы применить политику слоя плагинов? Активные запросы будут прерваны.',
+  'plugins.restart.button': 'Перезапустить',
+  'plugins.restart.started': 'Перезапуск запущен',
+  'plugins.restart.error': 'Не удалось перезапустить инстанс: {error}',
+  'settings.help.plugins.section.plugins-list':
+    'Установленные плагины: версия, режим, доверие, вердикт сканера и хеш содержимого; действия — включить/выключить, обновить, откатить, удалить.',
+  'settings.help.plugins.section.plugins-install':
+    'Установка из источника. Локальные пути и архивы доступны только в standalone; https-архиву обязателен пин sha256.',
+  'settings.help.plugins.section.plugins-policy':
+    'Политика слоя плагинов: исполнение, порог доверия, скан и бюджеты. Применяется после перезапуска инстанса.',
 
   // --- Пайплайны проекта (ADR-101, Э7) ---
   'pipelines.empty': 'В доступных проектах нет пайплайнов',

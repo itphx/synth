@@ -1216,6 +1216,25 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 `contracts`/`host`, **вердикт сканера**, перечень `provides`, режим исполнения (`inline`/`remote`) и
 результат последнего скана.
 
+**Реализация (Ф6, 2026-10-23).** Раздел «Плагины» (`plugins`) — админ-секция настроек рядом с
+«Аддонами» (`PluginsSettings.tsx`): список установленных плагинов с бейджами версии, режима
+(`inline`/`remote`/`both`), доверия, вердикта скана (`safe`/`caution`/`dangerous`), короткого
+content-hash и активности; признак **«управляемый»** (`source === 'deploy'`) с пояснением, что такой
+плагин меняется образом (`plugin.managed_readonly`), и без кнопок снятия/обновления. Действия:
+«Включить»/«Выключить» (`enable`/`disable`), «Подтвердить» — для установки, вернувшей `202`
+(бандл в карантине), «Удалить» (только через `confirm()`), «Обновить» (источник из lock) и
+«Откатить» (нет ступени — сервер отвечает `409 plugin.rollback_unavailable`, UI показывает
+понятный текст). Установка — поле источника (путь/архив/npm/URL, вид выводится автоматически),
+опциональный пин `sha256` для URL и выбор доверия (`trusted`/`verified`/`community`); в managed
+локальные источники запрещены — `403 LOCAL_INSTALL_DISABLED` показывается текстом ответа, а в форме
+есть постоянное пояснение. Секция «Политика слоя» показывает и правит ключевые значения
+(`executionEnabled`, `enabled`, `runtimeInstall`, `trustFloor`, `scan`, `promptBlockMaxChars`,
+`llmFilterTimeoutMs`) через `PUT/DELETE /settings/plugins`; `restartRequired` — баннер с кнопкой
+перезапуска (ADR-092), потому что рантайм плагинов собирается при старте (инвариант 24). Роли:
+раздел и политика — ADMIN; install/enable/disable доступны также service-key со scope
+`addons:install`, approve и DELETE — только ADMIN; UI лишь прячет недоступное, enforcement на
+сервере (403 → `plugins.forbidden`).
+
 ## Ограничения и «что не делаем»
 
 **Плагин не может ни при каких условиях:**
@@ -1251,7 +1270,7 @@ Standalone — владелец инстанса (в core `requireAuth` — ед
 | **Ф3 — точки `promptBlocks` + `llmFilters` + `tools`** — ✅ **выполнено 2026-10-22** (ветка `feature/plugin-points`): Ф3а — точка **`promptBlocks`**, Ф3б — точка **`llmFilters`**, Ф3в — точка **`tools`** и **контрактный suite расширений** | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений**. **Сделано (Ф3а):** контракт `PromptBlockProvider`/`PromptBlockContext` (`shared`, `types/prompt-blocks.ts`), реестр `PromptBlockRegistry` (`engine/context/prompt-block-registry.ts`), сборка блоков провайдеров в `SystemPromptComposer` (`_collectProviderBlocks`), контекст хода (`query`/`turnId`), бюджет символов блока + обрезка (`status: 'truncated'`), инвалидация `promptStates` по блокам провайдеров (`provider: true`), фасад `PluginFacade.registerPromptBlock` (disposer снимает блок при деактивации), решение fail-closed `plugins.scan='disabled'` + `executionEnabled=true` (`plugin.scan_disabled_with_execution`), **версия правил сканера в ключе кэша сканов** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный — **по части `promptBlocks` выполнено**, см. §«Статус реализации в коде (Ф3а)»; критерии `llmFilters` — **выполнено, см. §«Статус реализации в коде (Ф3б)»**; точка `tools` (namespace, permission-слой, сверка `provides.tools[]`) и **контрактный suite расширений** — **выполнено, см. §«Статус реализации в коде (Ф3в)»** |
 | **Ф4 — два режима исполнения** — ✅ **выполнено 2026-10-23** (ветка `feature/plugin-points`): `inline` (Ф4а) + `out-of-process` (Ф4б-1/2/3 — протокол, клиент/загрузчик, процесс и токен, выбор транспорта, точка `tools`); контрактный suite зелёный на **обоих** транспортах | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация. **Сделано (Ф4а):** `inline`-загрузчик `createInlinePluginLoader` (`engine/plugins/inline-loader.ts`): containment по `realpath`, `.js`/`.mjs`, предел 8 МиБ, cache-busting `?v=<hash\|mtime>`, три формы модуля, новый код `plugin.module_invalid`; экспорт из `engine/plugins/index.ts` и `src/index.ts`. **Автоподключения в `server/app.ts`/`main.ts`/`backend/app/deps.ts` нет** — установка/активация и сканирование `plugins.lock.json` при старте появятся в Ф5 | тест: эталонный бандл (реальные `mkdtemp` + ESM-файл) активируется **через `PluginHost`** при `executionEnabled: true`, блок в `PromptBlockRegistry`, аудит `activate`; `export const x`/`export default 42` → `plugin.module_invalid`; бросок в модуле → `plugin.loader_unavailable`; `../evil.js`, абсолютный путь, симлинк наружу, `.ts`, превышение размера → отказ; перезапись бандла → новое содержимое — **выполнено (21 тест), см. §«Статус реализации в коде (Ф4а)»**. **Сделано (Ф4б-1):** контракт `plugin-protocol.ts` в `shared` (версия/DTO/коды/`checkPluginCapabilities`), `RemotePluginClient` (loopback-only, Bearer, `AbortSignal.timeout`, токен не утекает в `message`) и `createRemotePluginLoader` (`mode: 'remote'\|'both'`, `descriptor.remote`, прокси-провайдеры `promptBlocks`/`llmFilters`); тесты — **17 shared + 20 client + 17 loader**, включая 401 без утечки токена, чужую версию протокола, закрытый порт. **Сделано (Ф4б-2):** `PluginProcessManager` (spawn без shell, ready-строка + `/health`, `SIGTERM`→`SIGKILL`, токен-файл `0600`), выбор транспорта в шаге `import`, `mode`/`remote_entry` в lock. **Сделано (Ф4б-3):** точка `tools` по протоколу (`points.tools[]`, вызов `{parameters, context}` → `{content, isError?}`, JSON-Schema из протокола) и контрактный suite на удалённой реализации (23 проверки × 2 транспорта); критерии «неверный токен → 401, недоступный процесс → деградация по `failMode`» покрыты на уровне клиента/загрузчика — **см. §«Статус реализации в коде (Ф4б, часть 3)»** |
 | **Ф5 — install/activate: сервис + runtime + API + CLI; managed deploy-time** — ✅ **выполнено 2026-10-23**: `PluginInstaller` (Ф5а), `PluginRuntime` + старт-активация (Ф5б-1), HTTP API + RBAC-матрица (Ф5б-2), CLI `synth plugin *` (Ф5б-3), источники установки + `update`/`rollback` (Д1–Д2), **managed deploy-time** (Ф5в: образ/PVC, установка при старте, неприкосновенность management-плагинов) | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
-| **Ф6 — UI** | Раздел «Плагины»: список, карточка (trust/scan/hash/version/`contracts`/`host`/`provides`/режим), тумблеры enable/disable, install/update/remove, статус скана | тест UI: карточка показывает trust/scan/hash; переключатель enable вызывает API и обновляет список; i18n-паритет `ru.ts`/`en.ts` зелёный (`parity.test.ts`) |
+| **Ф6 — UI** — ✅ **выполнено 2026-10-23** (ветка `feature/plugin-points`, worktree `wt-plugin-points`, коммитов нет) | Раздел «Плагины»: список, карточка (trust/scan/hash/version/`provides`/режим), тумблеры enable/disable, install/update/remove, статус скана | тест UI: карточка показывает trust/scan/hash; переключатель enable вызывает API и обновляет список; i18n-паритет `ru.ts`/`en.ts` зелёный (`parity.test.ts`) — **выполнено** (`PluginsSettings.test.tsx`, 18 тестов) |
 | **Ф7 — hybrid** | Allow-list сервера, форма политики, discovery (`/api/v2/settings/plugins` + сигнал в `/auth/oidc-meta`), server-scoped токены с `plugin_id`-scope (Уровень 2) | тест: плагин вне allow-list не активируется в hybrid; токен с чужим `plugin_id` отвергается сервером; локальный плагин без сервера — cooperative (помечено в UI/доках) |
 
 ### Статус реализации в коде (Ф0, 2026-10-22)
@@ -2433,6 +2452,62 @@ managedReadonly,deployVolume{enabled,existingClaim,mountPath,readOnly}}` — м�
 - Переустановка management-плагина новым содержимым при той же версии возможна (content-hash разошёлся);
   версия в lock не бампается — решение о требовании bump версии остаётся за владельцем.
 
+### Статус реализации в коде (Ф6 — 2026-10-23)
+
+**UI-раздел «Плагины»** — админ-секция настроек (PROP-090 §«UI»). Ветка `feature/plugin-points`,
+worktree `wt-plugin-points`, коммитов нет.
+
+**Файлы.**
+
+| Файл | Что сделано |
+|---|---|
+| `packages/ui/src/lib/api/plugins.ts` | новый домен `pluginsApi`: `listPlugins`/`getPlugin`/`installPlugin`/`approvePlugin`/`enablePlugin`/`disablePlugin`/`removePlugin`/`updatePlugin`/`rollbackPlugin`, `getPluginsSettings`/`updatePluginsSettings`/`resetPluginsSettings`; DTO — локально (core-типы в бандл не тянем); ошибки — `Error` с `status` и `code` из `{error:{code,message}}` (UI показывает текст ответа) |
+| `packages/ui/src/lib/api/synthApi.ts` | barrel: домен + экспорт типов; контрактный тест `synthApi.contract.test.ts` — 304 → **316** методов |
+| `packages/ui/src/components/settings/PluginsSettings.tsx` | раздел: список (имя, версия, режим, доверие, вердикт скана, короткий hash, активность, признак «управляемый»), действия, установка и политика слоя |
+| `packages/ui/src/components/settings/SettingsModal.tsx` | страница `plugins` рядом с `addons` |
+| `packages/ui/src/lib/settings-catalog.ts` | категория `plugins` (`icon: 'plug'`, `roles: ['ADMIN']`) и записи поиска (список/установка/политика) |
+| `packages/ui/src/components/icon/Icon.tsx` | иконка `plug` (`RiPlugLine`) |
+| `packages/ui/src/lib/i18n/messages/{ru,en}.ts` | ключи `plugins.*`, `settings.category.plugins`, `settings.help.plugins.*` — паритет |
+| `packages/ui/src/components/settings/PluginsSettings.test.tsx` | 18 тестов (вспомогательные функции, список/бейджи, пустое состояние, управляемый плагин, enable/disable, удаление через `confirm()`, update, установка и `403 LOCAL_INSTALL_DISABLED`, `202` → подтверждение, политика + `restartRequired`, сброс) |
+| `packages/ui/src/lib/settings-catalog.test.ts` | поиск категории и записей «Плагины» |
+
+**Матрица UI → API → роли.**
+
+| Элемент | Действие | Эндпоинт | Роли |
+|---|---|---|---|
+| Список плагинов | чтение | `GET /plugins` | core — `requireAuth`; managed — ADMIN |
+| «Включить»/«Выключить» | активация/деактивация | `POST /plugins/:name/enable\|disable` | ADMIN (managed — или service-key со scope `addons:install`) |
+| «Подтвердить» (карточка карантина) | подтверждение `202`-установки | `POST /plugins/:name/approve` | только ADMIN |
+| «Удалить» (через `confirm()`) | снятие | `DELETE /plugins/:name` | только ADMIN; управляемый (`source: 'deploy'`) → 403 `plugin.managed_readonly`, кнопка скрыта |
+| «Обновить»/«Откатить» | update/rollback | `POST /plugins/update`, `POST /plugins/:name/rollback` | ADMIN (или scope `addons:install`); управляемому — 403 |
+| Установка | install | `POST /plugins/install` | ADMIN (или scope `addons:install`); managed: локальные источники → 403 `LOCAL_INSTALL_DISABLED` (текст из ответа) |
+| Политика слоя | чтение/правка/сброс | `GET/PUT/DELETE /settings/plugins` | ADMIN |
+
+**Осознанные решения UI.**
+- `202` — не ошибка: карточка карантина с «Подтвердить». `GET /plugins` карантин не содержит,
+  поэтому состояние ожидания локальное — до подтверждения либо перезагрузки страницы.
+- `restartRequired` — баннер с кнопкой перезапуска (ADR-092): `/settings/plugins` возвращает `true`
+  всегда, рантайм и хост плагинов собираются при старте (инвариант 24).
+- «Управляемый» (`source === 'deploy'`) — кнопки снятия/обновления скрыты, показано пояснение про
+  `plugin.managed_readonly`.
+- «Откатить» показывается для неуправляемых плагинов, у которых `updatedAt !== installedAt` либо
+  известна ступень из ответа `update`; отсутствие ступени сервер сообщает `409
+  plugin.rollback_unavailable`.
+- Права в компоненте не хардкодятся: `canManage` по роли из `useAuthStore`; enforcement — на сервере
+  (403 без машинного кода → `plugins.forbidden`).
+
+**Остаток и вопросы к API (вне UI-фазы).**
+- `GET /plugins` не отдаёт ступень отката (`previous` из lock): UI не знает о ней до первого
+  `update` в сессии и опирается на эвристику `updatedAt !== installedAt`. Аддитивное поле
+  `previousVersion?` в `PluginRuntimeEntry` — кандидат на следующий шаг API.
+- Карточка не показывает `contracts`/`host`/`provides` манифеста: списочный DTO их не содержит,
+  а `GET /plugins/:name` — отдельный запрос на каждую карточку. При необходимости — ленивый detail
+  по раскрытию карточки.
+
+**Проверки.** `pnpm --filter @itphx/synth-ui test` (в т.ч. `PluginsSettings.test.tsx`,
+`settings-catalog.test.ts`, `parity.test.ts`, `synthApi.contract.test.ts`), `typecheck`, `lint`,
+`pnpm --filter @itphx/synth-ui build` — зелёные; `adr-check`/`docs-link-check` — зелёные.
+
 ## Открытые вопросы
 
 > Закрыто решениями владельца продукта 2026-10-22: форма out-of-process-протокола (HTTP/1.1 + JSON,
@@ -2616,3 +2691,4 @@ managedReadonly,deployVolume{enabled,existingClaim,mountPath,readOnly}}` — м�
 - 2026-10-23 — **Ф4б-2 выполнен** (ветка `feature/plugin-points`): **жизненный цикл удалённого процесса плагина** — `PluginProcessManager` (`engine/plugins/remote/process.ts`): spawn `process.execPath` без shell, env **ровно** `PATH`/`NODE_ENV`/`SYNTH_PLUGIN_PORT`/`SYNTH_PLUGIN_TOKEN` (наследования нет), готовность по строке `SYNTH_PLUGIN_READY port=<n>` + опрос `/health`, адрес только `127.0.0.1`, остановка `SIGTERM`→`SIGKILL`; токен-файл `{dataDir}/secrets/plugin-token` (`randomBytes(32).hex`, `0600`, каталог `0700`, атомарно, read-after-write ради общих PVC реплик, в лог/ошибки не попадает). **Выбор транспорта** — в шаге `import` хоста по `manifest.mode` (`inline`/`remote`/`both`; `both` → inline при наличии `dist/index.js`), `descriptor.remote` приоритетнее. В lock — `mode` и `remote_entry` (PostgreSQL: миграция `010_plugin_lock_mode`); `mode: remote` без `dist/server.js` → отказ `plugin.remote_entry_missing` (**27** кодов). Проводка: `PluginRuntime` получил `loaders`/`processManager` (`dispose()` гасит процессы), оба `deps.ts` создают менеджер и подключают загрузчики; `approve()` приводит к согласованности с установкой (режим в lock + отказ).
 - 2026-10-23 — **Ф4б, часть 3 (Ф4 закрыта)** (ветка `feature/plugin-points`, worktree `wt-plugin-points`): **точка `tools` по wire-протоколу** — `PLUGIN_PROTOCOL_POINTS` расширены `tools`, DTO `PluginCapabilitiesTool` (`name`/`description`/`parameters?` JSON-Schema/**обязательные** `capabilities: ToolCapability[]`), `PluginCapabilities.points.tools[]`, валидация в `checkPluginCapabilities` (непустые имя/описание, известные capabilities, дубли имён, `parameters` — объект) и вызов `POST /invoke {point:'tools', id:'<локальное имя>', input:{parameters, context:{sessionId, messageId, workingDir}}}` → `{content, isError?}`; `createRemotePluginLoader` регистрирует тулы через `facade.registerTool` с JSON-Schema из протокола (минимальная схема, если её нет; локальная zod — «проницаемая»), `isError: true` — ошибка тула без броска, сеть/таймаут — бросок. **Контрактный suite параметризован транспортом** (`PluginContractHarness.transport`, общая сборка `contract/harness.ts`): прогон на in-memory и на **реальном** HTTP-процессе-заглушке (`plugin-contract-remote.test.ts`: `/health`, `/capabilities`, `/invoke` по фикстуре, ленивый сервер на фикстуру, закрытие в `dispose()`) — 23 проверки зелёные на обоих, различие только в месте отказа невалидного вклада (реестр при регистрации vs `checkPluginCapabilities` на `/capabilities`, fail-closed).
 - 2026-10-23 — **Ф5в выполнен, Ф5 закрыта полностью** (ветка `feature/plugin-points`): **managed deploy-time** — конфиг `plugins.deployDir`/`plugins.deployTrust`/`plugins.managedReadonly` (+ env-оверрайды), модуль `engine/plugins/deploy.ts` (`listDeployPlugins`: битый манифест → запись пропущена с предупреждением), `PluginRuntime.installDeployPlugins()` (те же гейты, что у обычной установки; `source: 'deploy'`; повтор → `skipped`; ошибка одного бандла не ломает остальные и старт), порядок в `main.ts` обоих режимов: установка → активация. **Неприкосновенность** management-плагинов: `uninstall`/`update` → отказ `plugin.managed_readonly` (**28** кодов), API → 403, CLI → код 1. Образ: `docker/Dockerfile.backend` копирует `docker/plugins/` в `/opt/synth/plugins` + `ENV SYNTH_PLUGINS_DEPLOY_DIR`; чарт: `backend.plugins.*` (deployDir/deployTrust/managedReadonly/deployVolume) — дефолтный рендер не меняется. Тесты: `deploy.test.ts` (7), `installer.test.ts` (+4), routes (+2), CLI (+1), `helm lint`/`helm template` — ожидаемо.
+- 2026-10-23 — **Ф6 выполнена, слой плагинов закрыт полностью** (ветка `feature/plugin-points`, worktree `wt-plugin-points`): **UI-раздел «Плагины»** — домен `lib/api/plugins.ts` (`pluginsApi`: жизненный цикл + `/settings/plugins`; локальные DTO, ошибки с `status`/`code`), barrel `synthApi` (304 → 316 методов, контрактный тест), компонент `PluginsSettings.tsx` (список с бейджами версии/режима/доверия/вердикта скана/хеша/активности и признаком «управляемый»; «Включить»/«Выключить», «Подтвердить» для `202`, «Удалить» через `confirm()`, «Обновить», «Откатить»; установка из источника с пином `sha256` и выбором доверия, `403 LOCAL_INSTALL_DISABLED` — текстом ответа; политика слоя через `GET/PUT/DELETE /settings/plugins` с баннером `restartRequired` и кнопкой перезапуска), страница `plugins` в `SettingsModal`, категория и записи поиска в `settings-catalog`, иконка `plug`, ключи `plugins.*`/`settings.category.plugins`/`settings.help.plugins.*` в ru/en. Тесты: `PluginsSettings.test.tsx` (18), обновлён `settings-catalog.test.ts`, `parity.test.ts` и `synthApi.contract.test.ts` — зелёные. Остаток и вопросы к API (`previousVersion?` в списочном DTO, ленивый detail с `provides`/`contracts`/`host`) — в разделе «Статус реализации в коде (Ф6)».

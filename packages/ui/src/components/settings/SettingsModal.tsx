@@ -32,6 +32,7 @@ import { DecisionSettings } from "./DecisionSettings"
 import { ServiceKeysSettings } from "./ServiceKeysSettings"
 import { WebhooksSettings } from "./WebhooksSettings"
 import { AddonsSettings } from "./AddonsSettings"
+import { PluginsSettings } from "./PluginsSettings"
 import { MaintenanceSettings } from "./MaintenanceSettings"
 import { ObservabilitySettings } from "./ObservabilitySettings"
 import { DashboardPanel } from "../admin/DashboardPanel"
@@ -325,6 +326,7 @@ export const SettingsModal = () => {
             {activePage === "serviceKeys" && <ServiceKeysSettings />}
             {activePage === "webhooks" && <WebhooksSettings />}
             {activePage === "addons" && <AddonsSettings />}
+            {activePage === "plugins" && <PluginsSettings />}
             {activePage === "maintenance" && <MaintenanceSettings />}
             {activePage === "metrics" && <ObservabilitySettings />}
             {activePage === "security" && <SecuritySettings />}
