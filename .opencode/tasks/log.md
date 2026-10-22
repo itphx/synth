@@ -2,6 +2,30 @@
 
 > Архив: `log.1.md` (по 2026-08-31), `log.2.md` (2026-08-31 — 2026-09-16), `log.3.md` (2026-09-17 — 2026-10-07).
 
+## 2026-10-22 — Деплой исполнителя (split-режим) в test: образ full, RWX-том, execution.mode=remote
+- **Задача:** «Собери и задеплой test с full-образом экзекьютора» → сборка и публикация образов, развёртывание пула исполнителей в namespace `synth`, включение `execution.mode=remote`.
+- **Тип:** infra / deploy
+- **Исполнитель:** @orchestrator → @devops (сборка, публикация, деплой, проверки) → @fixer (фикс Dockerfile и .dockerignore)
+- **Результат:** PASS
+- **Где:** репозиторий `synth-deploy` (ветка `main`, коммиты запушены) + репозиторий `synth` (коммит `478277c4`); кластер K3s, namespace `synth`, релиз Helm `synth-test` ревизия 31, чарт `synth-0.11.4-6`.
+- **Что задеплоено:**
+  - Образы в приватный реестр Gitea `git.itphx.ru/itphx/*`: `synth-backend:0.11.4` (64 МБ), `synth-ui:0.11.4` (31 МБ), `synth-executor:0.11.4-full` (931 МБ, flavor `full`).
+  - Пул исполнителей в чарте (`executor.*`): Deployment + Service, общий RWX-том workspace (`executor.workspace.storageClass: nfs-rwx`, 10 ГБ, `accessMode: ReadWriteMany`), токен доверия — из отдельного SealedSecret `synth-executor` (backend читает файл `/etc/synth/executor/token`, исполнитель получает значение в env), `NetworkPolicy` выключен (на этом шаге).
+  - Пины: `backend-image-tag=0.11.4`, `ui-image-tag=0.11.4`, `executor-image-tag=0.11.4-full`, `chart-version=0.11.4-6`; чужые бандлы (`media`, `gateway-telegram`, `gateway-email`) не тронуты — в скрипт добавлен изолированный режим `--test-only`.
+  - Коммиты `synth-deploy`: `1c7184d` (исполнитель в test), `3690ea7` (включён `execution.mode=remote`), `1a97305` (ротация токена доверия).
+- **Проверки (живой кластер):**
+  - Поды `synth-backend`, `synth-executor` — Running, рестартов 0; PVC `synth-executor-workspace` — RWX на `nfs-rwx`.
+  - Исполнитель: `/health` 200; `/capabilities` без токена → 401, с токеном → 200 (`git`/`rg`/`python3`); `/exec` без токена → 401; `cwd` вне workspace → 400 `EWORKSPACE`.
+  - **Маршрутизация доказана**: tool-call `execute_shell` вернул hostname пода исполнителя и Debian bookworm (у control plane — Alpine) ⇒ команда выполнена в исполнителе.
+  - **Fail-closed проверен**: при `scale deploy/synth-executor --replicas=0` вызов вернул «исполнитель недоступен» — локального выполнения не было.
+  - Один и тот же claim смонтирован в оба пода по одному пути `/var/synth/data/workspaces`.
+- **Найдено и исправлено по ходу:**
+  - Образ control plane **не содержал** пакет `@itphx/synth-executor` — core подключает его динамическим `import()` (fail-closed), и без него `execution.mode=remote` не поднимается. Причина: `pnpm deploy` кладёт optional-зависимость в `.pnpm` и линкует в `node_modules` core, а не в корень приложения; Dockerfile теперь **собирает** пакет в образе. Проверено: `isExecutorPackageAvailable: true` по реальному runtime-пути (динамический `import()` из core).
+  - `.dockerignore` исключал только корневой `dist/` — вложенные `packages/*/dist/` попадали в контекст сборки, и образ работал **случайно** (локальный `dist` маскировал отсутствие пакета в сборке; на чистом checkout `isExecutorPackageAvailable` был бы `false`). Добавлено `**/dist/`; эмпирически: без правки Dockerfile образ даёт `false`, с правкой — `true`.
+  - Прежнее содержимое workspace (7 каталогов, 8 файлов) оказалось **непустым** и было затенено RWX-томом → сделан бэкап и содержимое восстановлено в общий том (владелец `node:node`); данные на прежнем RWO-PVC не тронуты.
+  - Токен доверия попал в stderr одной неудачной команды → **ротирован** (перезапечатан SealedSecret, поды перезапущены, старое значение недействительно — проверено 401).
+- **Осталось:** метрики исполнителя (`synth_executor_*`, шаг 7d плана ADR-077) — сейчас маршрутизация доказана отпечатком окружения, а не метрикой; включение `NetworkPolicy` исполнителя (нужен allowlist egress); per-arch сборка flavor'ов (QEMU/binfmt). Отдельно: доступность тулов в remote-режиме определяется пробой `git`/`rg`/`sh` через порт, но **не учитывает пул** (одна проба на произвольного исполнителя) и **не распространяется на MCP-тулы** — stdio MCP-серверы спавнятся в control plane, поэтому браузерные/тир-4 инструменты в split-режиме недоступны агенту (в all-in-one — доступны).
+
 ## 2026-10-22 — IDEA-002: регулярное детальное сравнение с конкурентами (первый разбор — Claude Duet)
 - **Задача:** оформить в `/mnt/data/Agent/dev/Synth/IDEAS.md` (инбокс идей) новую запись **IDEA-002** — практику регулярного детального разбора крупных релизов конкурентов (Claude Duet, OpenAI Dots, Meta Muse, xAI Grok Bot) как референса и источника направлений для Synth; первый разбор (Claude Duet по новости Anthropic от 21.10.2026) — уже готов, вошёл в ту же запись.
 - **Тип:** docs
