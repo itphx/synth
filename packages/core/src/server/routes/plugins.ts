@@ -11,24 +11,31 @@
  * ```text
  * GET    /plugins                — установленные + статус активации (runtime.list)
  * GET    /plugins/:name          — запись + манифест + PLUGIN_INTEGRITY.json
- * POST   /plugins/install        — установка из локального каталога (только standalone)
+ * POST   /plugins/install        — установка из источника (dir/archive/npm/url)
  * POST   /plugins/:name/approve   — подтверждение карантина (202-установка)
  * POST   /plugins/:name/enable    — активация (гейты §10)
  * POST   /plugins/:name/disable   — деактивация (обратная прокрутка disposers)
  * DELETE /plugins/:name           — снятие по записи lock (идемпотентно)
- * POST   /plugins/update          — 501: установка из npm/архива — Ф5б-3
+ * POST   /plugins/update          — 501: обновление по pinned ref/hash — Д2
  * ```
  *
  * **Почему `update` объявлен, но `501`.** Контракт нужен клиентам (UI/CLI) и
- * тест-переписи маршрутов; фактический `update` требует доставки бандла
- * (npm/архив/URL) — Ф5б-3. Заглушка, а не «тихое 404»: клиент видит, что
- * маршрут существует и ещё не реализован.
+ * тест-переписи маршрутов; фактический `update` требует сравнения версий и
+ * отката — отдельная задача (долги Д2). Заглушка, а не «тихое 404»: клиент
+ * видит, что маршрут существует и ещё не реализован.
  *
- * **Установка только из локального каталога.** `POST /install` принимает путь
- * `{path}` — это сценарий standalone-инстанса (владелец сам распаковал бандл).
- * В managed (`localInstall !== true`) путь с локальной ФС не принимается —
- * `403 LOCAL_INSTALL_DISABLED`: иначе ADMIN инстанса получил бы чтение
- * произвольного каталога хоста через установщик.
+ * **Источники установки (Д1).** `POST /install` принимает вид источника
+ * (`source: 'dir'|'archive'|'npm'|'url'`) и соответствующую ссылку: `path`
+ * (каталог/архив), `name`+`version` (npm), `url`+`sha256` (https-архив с
+ * обязательным пином). Обратная совместимость: `{path}` без `source` — каталог,
+ * `.tgz`/`.tar.gz` — архив. Метка источника в lock (`local`/`npm`/`url`)
+ * **выводится** из резолвинга: клиент не может назвать источник произвольно.
+ *
+ * **Локальные и сетевые источники в managed.** В managed (`localInstall !== true`)
+ * локальные (`dir`/`archive`) запрещены — `403 LOCAL_INSTALL_DISABLED`: иначе
+ * ADMIN инстанса получил бы чтение произвольного каталога хоста через
+ * установщик. Сетевые (`npm`/`url`) **разрешены** — это не локальный путь, а
+ * доставка бандла из реестра/по URL с проверкой целостности (SRI/sha256).
  *
  * **Маппинг причин → HTTP** — единая таблица {@link PLUGIN_REASON_HTTP}. Причина
  * (`PluginAuditReason`) приходит из установщика/хоста и уже пишется в журнал
@@ -47,6 +54,14 @@ import type { CatalogTrustLevel, PluginAuditReason, PluginsConfig } from '@itphx
 
 import { pluginInstalledDir } from '../../engine/plugins/layout.js';
 import type { PluginRuntime } from '../../engine/plugins/runtime.js';
+import {
+  isPluginInstallSourceKind,
+  isValidNpmPackageName,
+} from '../../engine/plugins/sources.js';
+import type {
+  PluginInstallSourceKind,
+  PluginSourceContext,
+} from '../../engine/plugins/sources.js';
 import type { PluginsRuntimeSettings } from '../../storage/runtime-settings.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
@@ -83,10 +98,16 @@ export interface PluginsRoutesDeps {
   /** Текущий пользователь (actor) — для журнала аудита плагинов. */
   resolveUserId?: (c: Context) => string | undefined;
   /**
-   * Разрешена ли установка из локального каталога (`{path}`).
+   * Разрешена ли установка из **локального** каталога/архива (`{path}`).
    * Standalone — `true`; managed — `false` (403 `LOCAL_INSTALL_DISABLED`).
+   * Сетевые источники (`npm`/`url`) разрешены в обоих режимах.
    */
   localInstall?: boolean;
+  /**
+   * Инъекция контекста источников (сеть/лимиты скачивания) — тесты и
+   * встраивание; по умолчанию источники используют `egressFetch` (ADR-099).
+   */
+  sourceContext?: PluginSourceContext;
 }
 
 /** Локализуемые сообщения (backend передаёт `t()`; core — русские литералы). */
@@ -116,10 +137,10 @@ const DEFAULT_MESSAGES: PluginsRouteMessages = {
   notActive: () => 'Плагин не активен',
   invalidBody: () => 'Некорректное тело запроса',
   localInstallDisabled: () =>
-    'Установка из локального каталога недоступна в этом режиме инстанса ' +
-    '(managed: доставка бандла — deploy-time)',
+    'Установка из локального каталога или архива недоступна в этом режиме инстанса ' +
+    '(managed: локальный путь с ФС хоста не принимается; сетевые источники npm/url разрешены)',
   updateNotImplemented: () =>
-    'Обновление плагинов появится вместе с установкой из npm/архива (Ф5б-3)',
+    'Обновление плагинов (сравнение версий и откат) ещё не реализовано — долги Д2',
 };
 
 /** Имя файла манифеста (`synth.pack`, ADR-086 §5). */
@@ -149,6 +170,9 @@ const INTEGRITY_FILE = 'PLUGIN_INTEGRITY.json';
  */
 export const PLUGIN_REASON_HTTP: Record<PluginAuditReason, number> = {
   'plugin.not_found': 404,
+  // Источник установки (Д1): по умолчанию «плохой запрос»; роут поднимает код
+  // до **502** для сетевых источников (`npm`/`url`) — registry/сеть не отвечают.
+  'plugin.source_unavailable': 400,
   'plugin.manifest_invalid': 400,
   'plugin.integrity_mismatch': 409,
   'plugin.integrity_unverifiable': 409,
@@ -208,11 +232,121 @@ async function readJsonObject(dir: string, file: string): Promise<Record<string,
   }
 }
 
-/** Тело установки из локального каталога (сырое). */
+/**
+ * Тело установки (сырое).
+ *
+ * `source` — **вид источника** (`dir`/`archive`/`npm`/`url`); при его
+ * отсутствии вид выводится из заполненного поля (`path`/`name`/`url`).
+ * Обратная совместимость: `{path}` без `source` — установка из каталога,
+ * `{path}` с `.tgz`/`.tar.gz` — из архива. Метка источника в lock
+ * (`local`/`npm`/`url`) теперь **выводится** из резолвинга, а не из тела:
+ * клиент не может «назвать» чужой источник.
+ */
 interface PluginInstallBody {
-  path?: unknown;
-  trustLevel?: unknown;
   source?: unknown;
+  path?: unknown;
+  name?: unknown;
+  version?: unknown;
+  url?: unknown;
+  sha256?: unknown;
+  trustLevel?: unknown;
+}
+
+/** Разобранный запрос установки (вид источника + ссылка + pin). */
+interface ParsedInstallRequest {
+  kind: PluginInstallSourceKind;
+  ref: string;
+  version?: string;
+  sha256?: string;
+}
+
+/** Разбор тела `/install`: успех либо текст ошибки валидации. */
+type InstallBodyParseResult =
+  | { ok: true; request: ParsedInstallRequest }
+  | { ok: false; message: string };
+
+/** Локальные источники (в managed запрещены: путь с ФС хоста). */
+const LOCAL_SOURCE_KINDS: ReadonlySet<PluginInstallSourceKind> = new Set<PluginInstallSourceKind>([
+  'dir',
+  'archive',
+]);
+
+/** Расширение архива (`.tgz`/`.tar.gz`) — вывод вида источника из пути. */
+const ARCHIVE_EXTENSION_REGEX = /\.(tgz|tar\.gz)$/i;
+
+/** Непустая строка из поля тела (иначе `undefined`). */
+function optionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Разобрать тело `POST /plugins/install` (fail-closed: неизвестный вид,
+ * отсутствующее обязательное поле, не-npm имя, не-https URL, URL без pin —
+ * отказ до любого сетевого вызова).
+ */
+function parseInstallBody(body: PluginInstallBody): InstallBodyParseResult {
+  const rawSource = body.source;
+  const explicitKind = isPluginInstallSourceKind(rawSource) ? rawSource : undefined;
+  if (typeof rawSource === 'string' && rawSource.trim() && !explicitKind) {
+    return {
+      ok: false,
+      message:
+        `неизвестный вид источника «${rawSource}»: ожидается ` +
+        'dir|archive|npm|url (метка источника в lock выводится автоматически)',
+    };
+  }
+
+  const path = optionalString(body.path);
+  const name = optionalString(body.name);
+  const url = optionalString(body.url);
+  const version = optionalString(body.version);
+  const sha256 = optionalString(body.sha256)?.toLowerCase();
+
+  let kind: PluginInstallSourceKind | undefined = explicitKind;
+  if (!kind) {
+    if (path) kind = ARCHIVE_EXTENSION_REGEX.test(path) ? 'archive' : 'dir';
+    else if (name) kind = 'npm';
+    else if (url) kind = 'url';
+  }
+  if (!kind) {
+    return {
+      ok: false,
+      message: 'нужно указать "path" (каталог/архив), "name" (npm) или "url", либо "source"',
+    };
+  }
+
+  switch (kind) {
+    case 'dir':
+    case 'archive': {
+      if (!path) return { ok: false, message: `для source="${kind}" поле "path" обязательно` };
+      return { ok: true, request: { kind, ref: path } };
+    }
+    case 'npm': {
+      if (!name) return { ok: false, message: 'для source="npm" поле "name" обязательно' };
+      if (!isValidNpmPackageName(name)) {
+        return {
+          ok: false,
+          message: `"name" — npm-имя пакета (name или @scope/name), получено «${name}»`,
+        };
+      }
+      return { ok: true, request: { kind, ref: name, ...(version ? { version } : {}) } };
+    }
+    case 'url': {
+      if (!url) return { ok: false, message: 'для source="url" поле "url" обязательно' };
+      if (!/^https:\/\//i.test(url)) {
+        return { ok: false, message: '"url" — только https-адрес архива' };
+      }
+      if (!sha256 || !/^[0-9a-f]{64}$/.test(sha256)) {
+        return {
+          ok: false,
+          message: 'для source="url" обязателен pin "sha256" (64 hex-символа)',
+        };
+      }
+      return { ok: true, request: { kind, ref: url, sha256 } };
+    }
+  }
 }
 
 /**
@@ -249,27 +383,32 @@ export function createPluginsRoutes(
     return c.json({ plugins });
   });
 
-  // POST /api/v2/plugins/install — установка из локального каталога.
+  // POST /api/v2/plugins/install — установка из источника (dir/archive/npm/url).
   // Объявлен до `/:name`-маршрутов: `/install` — статический сегмент.
   app.post('/install', writeGuard, async (c) => {
-    if (deps.localInstall !== true) {
+    const rawBody = (await c.req.json().catch(() => ({}))) as unknown;
+    // Тело — только объект: `null`/массив/скаляр не должны ронять обработчик.
+    const body: PluginInstallBody =
+      typeof rawBody === 'object' && rawBody !== null && !Array.isArray(rawBody)
+        ? (rawBody as PluginInstallBody)
+        : {};
+
+    const parsed = parseInstallBody(body);
+    if (!parsed.ok) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: `${messages.invalidBody(c)}: ${parsed.message}` } },
+        400,
+      );
+    }
+    const install = parsed.request;
+
+    // Локальные источники (`dir`/`archive`) в managed запрещены: путь с ФС
+    // хоста через установщик — чтение произвольного каталога. Сетевые
+    // (`npm`/`url`) разрешены: это не локальный путь (PROP-090 §«Источники»).
+    if (LOCAL_SOURCE_KINDS.has(install.kind) && deps.localInstall !== true) {
       return c.json(
         { error: { code: 'LOCAL_INSTALL_DISABLED', message: messages.localInstallDisabled(c) } },
         403,
-      );
-    }
-
-    const body = (await c.req.json().catch(() => ({}))) as PluginInstallBody;
-    const dir = typeof body.path === 'string' ? body.path.trim() : '';
-    if (!dir) {
-      return c.json(
-        {
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: `${messages.invalidBody(c)}: поле "path" обязательно`,
-          },
-        },
-        400,
       );
     }
 
@@ -288,13 +427,12 @@ export function createPluginsRoutes(
       );
     }
     const trustLevel: CatalogTrustLevel = trustParsed.data;
-    const source = typeof body.source === 'string' && body.source.trim() ? body.source.trim() : 'local';
 
-    const outcome = await deps.runtime.installer.installFromDirectory({
-      dir,
+    const outcome = await deps.runtime.installer.installFromSource({
+      ...install,
       trustLevel,
-      source,
       actor: actorOf(c),
+      ...(deps.sourceContext ? { sourceContext: deps.sourceContext } : {}),
     });
 
     if (outcome.outcome === 'installed') return c.json(outcome, 201);
@@ -309,9 +447,15 @@ export function createPluginsRoutes(
         202,
       );
     }
+    // Сетевой источник недоступен — 502 (сбой upstream), локальный — 400
+    // (неверный путь/архив). Остальные причины — по общей таблице.
+    const status =
+      outcome.reason === 'plugin.source_unavailable' && !LOCAL_SOURCE_KINDS.has(install.kind)
+        ? 502
+        : httpStatusForRejection(outcome.reason);
     return c.json(
       { error: { code: outcome.reason, message: outcome.message } },
-      httpStatusForRejection(outcome.reason) as 400,
+      status as 400,
     );
   });
 

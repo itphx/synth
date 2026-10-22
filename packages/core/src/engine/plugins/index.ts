@@ -50,12 +50,33 @@ export {
 } from './installer.js';
 export type {
   CollectedBundle,
+  PluginInstallFromSourceRequest,
   PluginInstallOutcome,
   PluginInstallRequest,
   PluginInstallerDeps,
   PluginManifestReadResult,
   PluginUninstallResult,
 } from './installer.js';
+
+// Д1 — источники установки: архив (свой tar-ридер) и резолвинг dir/archive/npm/url.
+export { extractPluginArchive, PluginArchiveError } from './archive.js';
+export type { ExtractedArchive, TarExtractLimits } from './archive.js';
+export {
+  DEFAULT_PLUGIN_DOWNLOAD_MAX_BYTES,
+  PLUGIN_INSTALL_SOURCE_KINDS,
+  PluginSourceError,
+  inferPluginSourceKind,
+  isPluginInstallSourceKind,
+  isValidNpmPackageName,
+  resolvePluginSource,
+} from './sources.js';
+export type {
+  PluginInstallSourceKind,
+  PluginSourceContext,
+  PluginSourceErrorCode,
+  PluginSourceRequest,
+  ResolvedPluginSource,
+} from './sources.js';
 
 // Ф5б-1 — рантайм плагинов: старт-активация из lock, список, dispose.
 export { PluginRuntime } from './runtime.js';

@@ -56,6 +56,12 @@ import type {
 import { computePluginContentHash } from '../engine/plugins/integrity.js';
 import type { PluginInstallOutcome } from '../engine/plugins/installer.js';
 import { collectBundleFiles, readPluginManifest } from '../engine/plugins/installer.js';
+import type { PluginInstallSourceKind } from '../engine/plugins/sources.js';
+import {
+  PLUGIN_INSTALL_SOURCE_KINDS,
+  inferPluginSourceKind,
+  isPluginInstallSourceKind,
+} from '../engine/plugins/sources.js';
 import type { PluginLayout } from '../engine/plugins/layout.js';
 import { resolvePluginLayout } from '../engine/plugins/layout.js';
 import type { PluginRuntimeEntry } from '../engine/plugins/runtime.js';
@@ -211,6 +217,12 @@ function writeReasonHint(reason: PluginAuditReason | undefined): void {
       break;
     case 'plugin.not_active':
       console.error('  Подсказка: плагин не активен в этом процессе.');
+      break;
+    case 'plugin.source_unavailable':
+      console.error(
+        '  Подсказка: источник недоступен — проверьте путь/архив, доступность npm-пакета ' +
+          'и совпадение контрольной суммы (SRI/sha256).',
+      );
       break;
     default:
       break;
@@ -399,25 +411,65 @@ function createListCommand(deps: PluginCommandDeps): Command {
   });
 }
 
-/** `synth plugin install <path>` — установка из локального каталога. */
+/** `synth plugin install <ref>` — установка из источника (dir/archive/npm/url). */
 function createInstallCommand(deps: PluginCommandDeps): Command {
   const cmd = new Command('install').description(
-    'Установить плагин из локального каталога (манифест → скан → install-policy)',
+    'Установить плагин из источника: каталог, .tgz/.tar.gz, npm-пакет или https-URL ' +
+      '(манифест → скан → install-policy)',
   );
   // `.argument()` до опций: commander ожидает аргументы в объявленном порядке.
-  cmd.argument('<path>', 'каталог распакованного бандла (synth.pack + dist/)');
+  cmd.argument('<ref>', 'путь (каталог или архив), npm-имя пакета либо https-URL архива');
   addCommonOptions(
     cmd
+      .option('--source <kind>', 'вид источника: dir | archive | npm | url (по умолчанию — по <ref>)')
+      .option('--version <version>', 'npm: точная версия или latest (по умолчанию latest)')
+      .option('--sha256 <hex>', 'url: обязательный pin — sha256 архива (64 hex-символа)')
       .option(
         '--trust <level>',
         'уровень доверия: builtin | verified | trusted | community',
         'community',
       )
-      .option('--source <source>', 'источник установки (local/npm/catalog/…)', 'local')
       .option('--activate', 'активировать после установки (исполняет код — спросит подтверждение)')
       .option('--yes', 'не спрашивать подтверждение активации'),
   );
-  return cmd.action(async (path: string, options: Record<string, unknown>) => {
+  return cmd.action(async (ref: string, options: Record<string, unknown>) => {
+    const rawRef = typeof ref === 'string' ? ref.trim() : '';
+    if (!rawRef) {
+      console.error('Ошибка: укажите источник — путь, npm-имя пакета или https-URL.');
+      process.exitCode = 1;
+      return;
+    }
+
+    // Вид источника: явный `--source` или вывод по ссылке (путь → dir/archive,
+    // https → url, иначе npm-имя; не опознали — dir: ошибка будет про манифест).
+    let kind: PluginInstallSourceKind;
+    if (options.source !== undefined) {
+      if (!isPluginInstallSourceKind(options.source)) {
+        console.error(
+          `Ошибка: неизвестный вид источника «${String(options.source)}» — ожидается ` +
+            `${PLUGIN_INSTALL_SOURCE_KINDS.join(' | ')}.`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      kind = options.source;
+    } else {
+      kind = inferPluginSourceKind(rawRef);
+    }
+    // Локальные источники — абсолютный путь (одинаково для CLI и lock-записи).
+    const sourceRef =
+      kind === 'dir' || kind === 'archive' ? resolve(rawRef) : rawRef;
+
+    const sha256 = typeof options.sha256 === 'string' ? options.sha256.trim().toLowerCase() : '';
+    if (kind === 'url' && !/^[0-9a-f]{64}$/.test(sha256)) {
+      console.error(
+        'Ошибка: для источника url обязателен pin --sha256 <hex> (64 hex-символа) — ' +
+          'произвольный адрес без контрольной суммы не устанавливается.',
+      );
+      process.exitCode = 1;
+      return;
+    }
+
     const trustParsed = catalogTrustLevelSchema.safeParse(options.trust);
     if (!trustParsed.success) {
       console.error(
@@ -428,20 +480,20 @@ function createInstallCommand(deps: PluginCommandDeps): Command {
       return;
     }
     const trustLevel: CatalogTrustLevel = trustParsed.data;
-    const source = typeof options.source === 'string' && options.source.trim()
-      ? options.source.trim()
-      : 'local';
+    const version = typeof options.version === 'string' ? options.version.trim() : '';
     const activate = options.activate === true;
-    if (activate && !(await confirmActivation(resolve(path), options.yes === true))) {
+    if (activate && !(await confirmActivation(sourceRef, options.yes === true))) {
       console.error('Отменено: активация не подтверждена.');
       process.exitCode = 1;
       return;
     }
     await withContext(deps, options, async ({ runtime }) => {
-      const outcome = await runtime.installer.installFromDirectory({
-        dir: resolve(path),
+      const outcome = await runtime.installer.installFromSource({
+        kind,
+        ref: sourceRef,
+        ...(version ? { version } : {}),
+        ...(sha256 ? { sha256 } : {}),
         trustLevel,
-        source,
         // CLI — офлайн-операция оператора на файлах инстанса, а не установка
         // «во время работы» через API: политика `plugins.runtimeInstall`
         // (`deny` по умолчанию) к ней не применяется — иначе CLI был бы
