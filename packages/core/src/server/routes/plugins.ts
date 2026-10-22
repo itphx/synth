@@ -17,8 +17,15 @@
  * POST   /plugins/:name/disable   — деактивация (обратная прокрутка disposers)
  * POST   /plugins/:name/rollback  — откат на предыдущую версию (ступень lock)
  * POST   /plugins/update          — обновление из источника записи lock
- * DELETE /plugins/:name           — снятие по записи lock (идемпотентно)
+ * DELETE /plugins/:name           — снятие по записи lock (идемпотентно;
+ *                                   management-плагин → 403 plugin.managed_readonly)
  * ```
+ *
+ * **Management-плагины (Ф5в).** Плагин, поставленный развёртыванием
+ * (`plugins.deployDir`, lock `source: 'deploy'`), при `plugins.managedReadonly:
+ * true` (дефолт) не снимается (`DELETE`) и не переустанавливается (`update`):
+ * `403 plugin.managed_readonly`. Это политика инстанса, поэтому код ответа —
+ * 403, а не 404/409; сообщение объясняет, что плагин меняется образом.
  *
  * **Обновление и откат (долги Д2).** `update` — явная операция: источник
  * берётся **из lock** (`npm`/`local`/`url`), «всегда latest» нет; совпадение
@@ -206,6 +213,9 @@ export const PLUGIN_REASON_HTTP: Record<PluginAuditReason, number> = {
   'plugin_filter.denied': 400,
   'plugin_filter.deny_downgraded': 400,
   'plugin_filter.unavailable': 400,
+  // Ф5в: плагин управляется развёртыванием (образ/PVC) — снятие/переустановка
+  // запрещены политикой инстанса (`plugins.managedReadonly`), а не «плохой запрос».
+  'plugin.managed_readonly': 403,
 };
 
 /**
@@ -652,9 +662,18 @@ export function createPluginsRoutes(
   });
 
   // DELETE /api/v2/plugins/:name — снятие по записи lock. Идемпотентно:
-  // нет записи — тоже 204 (снимать нечего).
+  // нет записи — тоже 204 (снимать нечего). Management-плагин (Ф5в) не
+  // снимается: 403 `plugin.managed_readonly` (это политика, не конфликт).
   app.delete('/:name', uninstallGuard, async (c) => {
-    await deps.runtime.installer.uninstall(c.req.param('name'), { actor: actorOf(c) });
+    const result = await deps.runtime.installer.uninstall(c.req.param('name'), {
+      actor: actorOf(c),
+    });
+    if (result.rejected) {
+      return c.json(
+        { error: { code: result.rejected.reason, message: result.rejected.message } },
+        httpStatusForRejection(result.rejected.reason) as 403,
+      );
+    }
     return c.body(null, 204);
   });
 

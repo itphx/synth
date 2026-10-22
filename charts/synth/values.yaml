@@ -127,6 +127,42 @@ backend:
   # Если задан caCert, чарт сам добавляет NODE_EXTRA_CA_CERTS — вручную дублировать не нужно.
   extraEnv: {}
 
+  # ───────────────────────────────────────────────────────────────────────────
+  # Плагины (PROP-090). Управление — API /api/v2/plugins* и `synth plugin *`.
+  #
+  # deployDir — каталог с бандлами, поставленными образом/PVC: каждый
+  # подкаталог = бандл (`synth.pack` + `dist/`). Backend ставит их при старте
+  # (манифест → скан → trust-floor → install-policy), затем активирует из lock.
+  # В образе `synth-backend` каталог `/opt/synth/plugins` уже есть и
+  # `SYNTH_PLUGINS_DEPLOY_DIR` выставлен Dockerfile'ом; при сборке образа
+  # бандлы кладут в `docker/plugins/` (см. docs/MAINTENANCE.md).
+  #
+  # deployVolume — монтирование каталога плагинов из PVC: плагины обновляются
+  # без пересборки образа (нужен существующий claim — содержимое PVC Helm не
+  # создаёт). readOnly по умолчанию true: backend читает бандлы, но не меняет.
+  #
+  # managedReadonly: management-плагин нельзя снять/переустановить через
+  # API/CLI (403 plugin.managed_readonly) — он меняется только развёртыванием.
+  #
+  # deployTrust: уровень доверия deploy-бандлов (builtin|verified|trusted|
+  # community). Ниже plugins.trustFloor инстанса — бандл не ставится
+  # (plugin.trust_below_floor); сканирование содержимого выполняется всегда.
+  # ───────────────────────────────────────────────────────────────────────────
+  plugins:
+    # Путь внутри контейнера. Пусто → deploy-плагинов нет (у образа дефолт
+    # /opt/synth/plugins задан env, сюда его дублировать не нужно).
+    deployDir: ""
+    # Пусто → дефолт backend (`verified`).
+    deployTrust: ""
+    # true (дефолт backend) → management-плагины «неприкосновенны».
+    managedReadonly: true
+    deployVolume:
+      enabled: false
+      # Обязателен при enabled: true (PVC создаётся вне чарта).
+      existingClaim: ""
+      mountPath: /opt/synth/plugins
+      readOnly: true
+
   # Декларативный config.yaml backend (ADR-023). Непустой объект →
   # ConfigMap <release>-config, монтируется в backend как /etc/synth/config.yaml
   # (штатный путь поиска config backend, SYSTEM_CONFIG_PATH).

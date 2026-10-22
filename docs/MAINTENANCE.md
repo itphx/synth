@@ -1373,6 +1373,46 @@ admin-отключению), `mcp`/`runtime` зарезервированы. `is
 `plugin_filter.denied`) и в аудите шлюза (`{dataDir}/audit/llm-gateway.jsonl`, событие
 `plugin_filter`); пользователю возвращается «LLM request denied by an extension filter (…)».
 
+### Плагины из образа (managed deploy-time, Ф5в)
+
+Плагины можно поставлять **вместе с инстансом** — образом или томом, — а не ставить вручную.
+Каталог задаётся `plugins.deployDir` (в образе `synth-backend` — `/opt/synth/plugins`), каждый
+подкаталог — обычный бандл (`synth.pack` + `dist/`):
+
+```text
+/opt/synth/plugins/
+├── analytics/synth.pack + dist/index.js
+└── notes/synth.pack + dist/index.js
+```
+
+**Как положить бандл в образ.** Соберите каталоги бандлов в `docker/plugins/` репозитория (или
+`docker/deploy-plugins/`) — Dockerfile backend скопирует их в `/opt/synth/plugins` и выставит
+`SYNTH_PLUGINS_DEPLOY_DIR`; если каталога в контексте сборки нет, образ собирается как раньше
+(каталог пуст, deploy-установка — no-op). В Helm-чарте: `backend.plugins.deployDir` (путь внутри
+контейнера), `backend.plugins.deployTrust` (доверие бандлов, по умолчанию `verified`) и
+`backend.plugins.deployVolume.*` — монтирование каталога из **существующего PVC** (плагины
+обновляются без пересборки образа).
+
+**Что происходит при старте.** Backend сначала **ставит** бандлы из каталога и только потом
+активирует установленное из `plugins.lock.json`. Установка идёт тем же конвейером, что ручная:
+манифест → fail-closed (скан выключен + исполнение включено) → trust-floor → скан содержимого →
+runtime-install (не применяется, `installKind: 'deploy'`) → install-policy. **Образ — доверенный
+источник кода, но не повод отключать проверку содержимого:** скан и `allowlist`/`denylist`
+применяются к deploy-бандлам так же, как к остальным. Доверие ниже `plugins.trustFloor` —
+штатный отказ `plugin.trust_below_floor`.
+
+- **Идемпотентность.** Совпадение версии **и** `content_hash` с записью lock — бандл не
+  переустанавливается; ошибка одного бандла (битый манифест, скан, доверие) **не мешает** остальным
+  и не роняет старт: причина — в логе (`[plugins]`), в журнале плагинов и в аудите установки.
+- **«Неприкосновенность» management-плагина.** Плагин, поставленный развёртыванием
+  (`plugins.deployDir`; lock `source: 'deploy'`), при `plugins.managedReadonly: true` (дефолт)
+  нельзя снять (`DELETE /api/v2/plugins/:name`, `synth plugin remove`) или переустановить
+  (`POST /api/v2/plugins/update`, `synth plugin update`) — `403`/код `1` с причиной
+  `plugin.managed_readonly`. Это защита от «тихого» расхождения: снятый вручную плагин вернулся бы
+  при следующем старте, а `update` подменил бы поставку образа. Изменение такого плагина —
+  **новый образ или переразвёртывание каталога**. Ключ действует независимо от режима инстанса;
+  `managedReadonly: false` разрешает ручное управление (осознанный выбор оператора).
+
 ### Где что лежит
 
 ```text

@@ -18,7 +18,10 @@
 {{- $executionRemote := include "synth.execution.isRemote" . -}}
 {{- /* Общий том workspace смонтирован в control plane (тот же, что у пула). */ -}}
 {{- $sharedWorkspace := and ((.Values.executor | default dict).enabled) (include "synth.executor.workspaceEnabled" .) -}}
-{{- $needEnv := or .Values.backend.oidc.enabled $authApiKey.enabled $providerKeys .Values.caCert .Values.installerKey.enabled (include "synth.storage.isPostgres" .) .Values.backend.restartMode .Values.metrics.enabled (include "synth.execution.isRemote" .) $sharedWorkspace -}}
+{{- /* PROP-090 Ф5в: env секции plugins (deploy-каталог/доверие/управляемость). */ -}}
+{{- $plugins := (.Values.backend.plugins | default dict) -}}
+{{- $pluginsVolume := ($plugins.deployVolume | default dict) -}}
+{{- $needEnv := or .Values.backend.oidc.enabled $authApiKey.enabled $providerKeys .Values.caCert .Values.installerKey.enabled (include "synth.storage.isPostgres" .) .Values.backend.restartMode .Values.metrics.enabled (include "synth.execution.isRemote" .) $sharedWorkspace (include "synth.plugins.envNeeded" .) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -171,6 +174,23 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
+            {{- /* PROP-090 Ф5в: deploy-плагины (образ/PVC). Env — часть
+                   конфигурации запуска: каталог, доверие бандлов и снятие
+                   «неприкосновенности» management-плагинов. */}}
+            {{- if include "synth.plugins.envNeeded" . }}
+            {{- with include "synth.plugins.deployDir" . }}
+            - name: SYNTH_PLUGINS_DEPLOY_DIR
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $plugins.deployTrust }}
+            - name: SYNTH_PLUGINS_DEPLOY_TRUST
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if eq $plugins.managedReadonly false }}
+            - name: SYNTH_PLUGINS_MANAGED_READONLY
+              value: "false"
+            {{- end }}
+            {{- end }}
           {{- end }}
           volumeMounts:
             - name: data
@@ -204,6 +224,13 @@ spec:
             - name: executor-token
               mountPath: {{ include "synth.execution.tokenMountDir" . }}
               readOnly: true
+            {{- end }}
+            {{- /* PROP-090 Ф5в: каталог deploy-плагинов из PVC (обновление
+                   плагинов без пересборки образа; содержимое — из claim). */}}
+            {{- if $pluginsVolume.enabled }}
+            - name: plugin-deploy
+              mountPath: {{ include "synth.plugins.deployDir" . }}
+              readOnly: {{ if hasKey $pluginsVolume "readOnly" }}{{ $pluginsVolume.readOnly }}{{ else }}true{{ end }}
             {{- end }}
           {{- with .Values.backend.probes.liveness }}
           livenessProbe:
@@ -271,4 +298,11 @@ spec:
             items:
               - key: {{ include "synth.execution.tokenKey" . }}
                 path: token
+        {{- end }}
+        {{- /* PROP-090 Ф5в: PVC с deploy-плагинами. Claim обязателен: чарт не
+               знает, что должно лежать в каталоге (бандлы кладёт оператор). */}}
+        {{- if $pluginsVolume.enabled }}
+        - name: plugin-deploy
+          persistentVolumeClaim:
+            claimName: {{ required "backend.plugins.deployVolume.existingClaim обязателен при enabled: true" $pluginsVolume.existingClaim }}
         {{- end }}

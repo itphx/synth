@@ -14,7 +14,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 
@@ -47,7 +47,9 @@ interface Harness {
   configPath: string;
 }
 
-async function makeHarness(over: { executionEnabled?: boolean } = {}): Promise<Harness> {
+async function makeHarness(
+  over: { executionEnabled?: boolean; deployDir?: string } = {},
+): Promise<Harness> {
   const root = await mkdtemp(join(tmpdir(), 'synth-plugin-cli-'));
   tempDirs.push(root);
   const configPath = join(root, 'config.yaml');
@@ -58,6 +60,7 @@ async function makeHarness(over: { executionEnabled?: boolean } = {}): Promise<H
       '  runtimeInstall: allow',
       '  trustFloor: community',
       `  executionEnabled: ${over.executionEnabled === true ? 'true' : 'false'}`,
+      ...(over.deployDir ? [`  deployDir: ${JSON.stringify(over.deployDir)}`] : []),
       '',
     ].join('\n'),
     'utf-8',
@@ -407,6 +410,29 @@ describe('synth plugin remove', () => {
 
     expect(result.code).toBe(0);
     expect(result.out).toContain('не установлен');
+  });
+
+  // ── Ф5в: management-плагин ───────────────────────────────────────────
+  it('management-плагин (identifier внутри plugins.deployDir) → 1 и plugin.managed_readonly', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'synth-plugin-cli-deploy-'));
+    tempDirs.push(root);
+    const harness = await makeHarness({ deployDir: root });
+    const bundle = await makeBundle();
+    const target = join(root, 'cli-plugin');
+    await cp(bundle, target, { recursive: true });
+    const installed = await runPlugin(harness, ['install', target, '--trust', 'verified']);
+    expect(installed.code).toBe(0);
+
+    const removed = await runPlugin(harness, ['remove', 'cli-plugin', '--yes']);
+    expect(removed.code).toBe(1);
+    expect(removed.err).toContain('plugin.managed_readonly');
+    expect(removed.err).toContain('управляется развёртыванием');
+    expect(existsSync(target)).toBe(true);
+    expect(await readLock(harness)).toHaveProperty('cli-plugin');
+
+    const updated = await runPlugin(harness, ['update', 'cli-plugin']);
+    expect(updated.code).toBe(1);
+    expect(updated.err).toContain('plugin.managed_readonly');
   });
 });
 

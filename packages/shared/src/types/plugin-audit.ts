@@ -173,6 +173,14 @@ export const PLUGIN_AUDIT_REASONS = [
    * по `failMode` вызов либо заблокирован (`closed`), либо прошёл (`open`).
    */
   'plugin_filter.unavailable',
+  /**
+   * Ф5в: плагин управляется развёртыванием (`plugins.deployDir`; lock-запись
+   * с `source: 'deploy'` или `identifier` внутри deploy-каталога) — снятие и
+   * переустановка через API/CLI запрещены (`plugins.managedReadonly`, дефолт
+   * `true`). Состояние не изменилось: плагин меняется только новым образом/
+   * переразвёртыванием каталога.
+   */
+  'plugin.managed_readonly',
 ] as const;
 export type PluginAuditReason = (typeof PLUGIN_AUDIT_REASONS)[number];
 

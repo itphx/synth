@@ -594,7 +594,20 @@ export const webhooksConfigSchema = z.object({
  * - `executionEnabled` — **главный переключатель исполнения кода плагинов**
  *   (по умолчанию `false`: в Ф1 загрузчик доводит плагин до шага `import` и
  *   останавливается — `plugin.execution_disabled`; в Ф3/Ф4 включает `inline`/
- *   `out-of-process`).
+ *   `out-of-process`);
+ * - `deployDir` — каталог с бандлами, поставленными **образом/развёртыванием**
+ *   (например `/opt/synth/plugins/<name>/` с `synth.pack` + `dist/`). Пусто —
+ *   не задан (deploy-time установки нет). Ставится при старте инстанса
+ *   (`PluginRuntime.installDeployPlugins`, PROP-090 §«Managed deploy-time», Ф5в);
+ * - `deployTrust` — уровень доверия, с которым ставятся бандлы `deployDir`
+ *   (default `trusted`: бандл из образа доверен ровно настолько, насколько
+ *   доверен сам образ; при `trustFloor: trusted` (дефолт) установка проходит).
+ *   Не выше доверия инстанса: ниже `trustFloor` — установка отклоняется
+ *   штатно (`plugin.trust_below_floor`);
+ * - `managedReadonly` — management-плагин (из `deployDir`, `lock.source ===
+ *   'deploy'`) **нельзя** снять или переустановить через API/CLI (default
+ *   `true`; отказ `plugin.managed_readonly`). Действует независимо от режима
+ *   инстанса.
  */
 export const pluginsConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -614,6 +627,22 @@ export const pluginsConfigSchema = z.object({
    * `open` → вызов идёт, факт — в аудите).
    */
   llmFilterTimeoutMs: z.number().int().positive().default(DEFAULT_LLM_FILTER_TIMEOUT_MS),
+  /**
+   * Ф5в: каталог с бандлами, поставленными образом/развёртыванием. Пусто — не
+   * задан (deploy-time установки нет). Каждый подкаталог — бандл
+   * (`synth.pack` + `dist/`), ставится при старте инстанса.
+   */
+  deployDir: z.string().default(''),
+  /**
+   * Ф5в: уровень доверия deploy-бандлов (не выше доверия инстанса: ниже
+   * `trustFloor` — штатный отказ `plugin.trust_below_floor`).
+   */
+  deployTrust: catalogTrustLevelSchema.default('trusted'),
+  /**
+   * Ф5в: management-плагин «неприкосновенен» — снятие/переустановка через
+   * API/CLI запрещены (`plugin.managed_readonly`). Управляется развёртыванием.
+   */
+  managedReadonly: z.boolean().default(true),
 });
 
 // --- Egress-политика (shared формат tools/webhooks/MCP) ---

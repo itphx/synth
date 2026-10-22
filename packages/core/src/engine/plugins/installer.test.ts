@@ -598,6 +598,112 @@ describe('PluginInstaller: uninstall', () => {
     // Идемпотентность: снимать больше нечего.
     expect(await installer.uninstall('demo-plugin')).toEqual({ removed: false });
   });
+
+  // ── Ф5в: management-плагин ───────────────────────────────────────────
+  it('management-плагин (source: deploy) при managedReadonly → отказ plugin.managed_readonly, lock и каталог целы', async () => {
+    const dir = await makeBundle();
+    const { installer, layout, lock, audit } = await makeInstaller();
+    const installed = await installer.installFromDirectory({
+      dir,
+      trustLevel: 'verified',
+      source: 'deploy',
+      identifier: dir,
+      installKind: 'deploy',
+      actor: 'startup',
+    });
+    expect(installed.outcome).toBe('installed');
+    const installedDir = pluginInstalledDir(layout, 'demo-plugin', '1.0.0');
+
+    const result = await installer.uninstall('demo-plugin', { actor: 'admin' });
+
+    expect(result.removed).toBe(false);
+    expect(result.rejected?.reason).toBe('plugin.managed_readonly');
+    expect(result.rejected?.message).toContain('управляется развёртыванием');
+    // Состояние не изменилось: lock и файлы на диске целы.
+    expect((await lock.get('demo-plugin'))?.version).toBe('1.0.0');
+    expect(existsSync(join(installedDir, 'synth.pack'))).toBe(true);
+    const rejected = (await audit.list({ action: 'uninstall' }))[0];
+    expect(rejected?.outcome).toBe('rejected');
+    expect(rejected?.reason).toBe('plugin.managed_readonly');
+  });
+
+  it('managedReadonly=false → management-плагин снимается штатно', async () => {
+    const dir = await makeBundle();
+    const { installer, layout, lock } = await makeInstaller({
+      config: config({ managedReadonly: false }),
+    });
+    expect(
+      (
+        await installer.installFromDirectory({
+          dir,
+          trustLevel: 'verified',
+          source: 'deploy',
+          identifier: dir,
+          installKind: 'deploy',
+        })
+      ).outcome,
+    ).toBe('installed');
+
+    const result = await installer.uninstall('demo-plugin');
+
+    expect(result).toEqual({ removed: true });
+    expect(await lock.list()).toEqual([]);
+    expect(existsSync(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'))).toBe(false);
+  });
+
+  it('управляемость по identifier внутри plugins.deployDir (source: local) → тоже отказ', async () => {
+    const deployDir = await makeTempDir('synth-plugin-deploy-root-');
+    const bundle = await makeBundle();
+    const target = join(deployDir, 'demo');
+    await mkdir(target, { recursive: true });
+    await writeFile(join(target, 'synth.pack'), await readFile(join(bundle, 'synth.pack'), 'utf-8'));
+    await mkdir(join(target, 'dist'), { recursive: true });
+    await writeFile(
+      join(target, 'dist', 'index.js'),
+      await readFile(join(bundle, 'dist', 'index.js'), 'utf-8'),
+    );
+    const { installer, lock } = await makeInstaller({ config: config({ deployDir }) });
+    expect(
+      (
+        await installer.installFromDirectory({
+          dir: target,
+          trustLevel: 'verified',
+          source: 'local',
+          identifier: target,
+          installKind: 'deploy',
+        })
+      ).outcome,
+    ).toBe('installed');
+
+    const result = await installer.uninstall('demo-plugin');
+
+    expect(result.removed).toBe(false);
+    expect(result.rejected?.reason).toBe('plugin.managed_readonly');
+    expect((await lock.get('demo-plugin'))?.version).toBe('1.0.0');
+  });
+
+  it('update management-плагина → отказ plugin.managed_readonly (состояние не меняется)', async () => {
+    const dir = await makeBundle();
+    const { installer, lock } = await makeInstaller();
+    expect(
+      (
+        await installer.installFromDirectory({
+          dir,
+          trustLevel: 'verified',
+          source: 'deploy',
+          identifier: dir,
+          installKind: 'deploy',
+        })
+      ).outcome,
+    ).toBe('installed');
+
+    const outcome = await installer.update('demo-plugin');
+
+    expect(outcome.outcome).toBe('rejected');
+    if (outcome.outcome !== 'rejected') return;
+    expect(outcome.reason).toBe('plugin.managed_readonly');
+    expect((await lock.get('demo-plugin'))?.version).toBe('1.0.0');
+  });
 });
 
 // ── Манифест ─────────────────────────────────────────────────────────────

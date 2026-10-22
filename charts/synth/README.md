@@ -503,6 +503,41 @@ kubectl -n synth rollout restart deployment/<release>-synth-backend
 
 Запрос рестарта фиксируется в журнале обслуживания (аудит `restart.requested`).
 
+## Плагины: deploy-time каталог и управляемость (PROP-090, Ф5в)
+
+Плагины, поставленные **образом или PVC**, ставятся и поднимаются при старте инстанса; такой
+плагин нельзя снять или переустановить через API/CLI.
+
+| Значение | Смысл | По умолчанию |
+|---|---|---|
+| `backend.plugins.deployDir` | каталог с бандлами внутри контейнера (например `/opt/synth/plugins`) | `''` (не задан) |
+| `backend.plugins.deployTrust` | доверие образных бандлов (`builtin`/`verified`/`trusted`/`community`); ниже `plugins.trustFloor` — установка отклоняется | `trusted` |
+| `backend.plugins.managedReadonly` | management-плагин (`source: 'deploy'`) нельзя снять/переустановить через API и CLI | `true` |
+| `backend.plugins.deployVolume.enabled` | монтировать каталог плагинов из PVC | `false` |
+| `backend.plugins.deployVolume.existingClaim` | **обязателен** при `enabled` — имя существующего PVC (класс хранения должен быть RWX, если реплик несколько) | `''` |
+| `backend.plugins.deployVolume.mountPath` | точка монтирования в контейнере | `/opt/synth/plugins` |
+| `backend.plugins.deployVolume.readOnly` | монтирование только на чтение | `true` |
+
+```yaml
+backend:
+  plugins:
+    deployDir: /opt/synth/plugins
+    deployTrust: trusted
+    managedReadonly: true
+    deployVolume:
+      enabled: true
+      existingClaim: synth-plugin-deploy
+      mountPath: /opt/synth/plugins
+      readOnly: true
+```
+
+При `deployVolume.enabled` без `existingClaim` рендер **падает** с понятным сообщением — существующий
+PVC обязателен (чарт не создаёт том под плагины сам: содержимое плагинов — под ответственностью
+развёртывания). При выключенном `deployVolume` каталог берётся из образа (`/opt/synth/plugins`).
+
+Образные плагины проходят **те же** проверки, что и обычные (манифест, доверие, скан, install-policy):
+образ — доверенный источник кода, но не повод отключать проверку содержимого.
+
 ## Прокси с профилями и правилами
 
 Прокси-конфигурация (включая `mode`/`profiles`/`rules`, ADR-099 п. 27) задаётся декларативно через

@@ -85,6 +85,10 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'plugins', key: 'promptBlockMaxChars', type: 'number' },
   { section: 'plugins', key: 'executionEnabled', type: 'boolean' },
   { section: 'plugins', key: 'llmFilterTimeoutMs', type: 'number' },
+  // Ф5в: деплой-каталог из образа/PVC и «неприкосновенность» management-плагинов.
+  { section: 'plugins', key: 'deployDir', type: 'string' },
+  { section: 'plugins', key: 'deployTrust', type: 'string' },
+  { section: 'plugins', key: 'managedReadonly', type: 'boolean' },
 ];
 
 /** camelCase → SNAKE_CASE (`autoBind` → `AUTO_BIND`, `ephemeralTtl` → `EPHEMERAL_TTL`). */

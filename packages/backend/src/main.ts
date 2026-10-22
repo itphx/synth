@@ -29,6 +29,23 @@ const { app, dataDir, port, config, auth, eventHub, queueManager, sessionManager
 // `plugins.lock.json` — источник истины; `plugins.executionEnabled=false`
 // (дефолт) → no-op. Ошибка плагина/рантайма **не роняет старт** (только
 // предупреждение); тексты плагинов в лог не попадают (инвариант 13).
+//
+// Ф5в: **сначала** установка deploy-плагинов (образ/PVC, `plugins.deployDir`),
+// затем активация — иначе поставленный образом плагин не попал бы в
+// `plugins.lock.json` и не активировался при первом старте.
+try {
+  const deploy = await handle.pluginRuntime.installDeployPlugins({ actor: 'startup' });
+  if (deploy.installed.length > 0 || deploy.failed.length > 0) {
+    console.log(
+      `[plugins] deploy: установлено ${deploy.installed.length}, ` +
+        `пропущено ${deploy.skipped.length}, ошибок ${deploy.failed.length}`,
+    );
+  }
+} catch (err) {
+  console.warn(
+    `[plugins] установка deploy-плагинов не выполнена: ${err instanceof Error ? err.message : String(err)}`,
+  );
+}
 try {
   const results = await handle.pluginRuntime.activateInstalled({ actor: 'startup' });
   if (results.length > 0) {

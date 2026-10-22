@@ -186,6 +186,27 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if eq ($s.backend | default "file") "postgres" -}}true{{- end -}}
 {{- end -}}
 
+{{- /* PROP-090 Ф5в: каталог deploy-плагинов внутри контейнера.
+       Приоритет — backend.plugins.deployDir; если он пуст, но включён
+       backend.plugins.deployVolume — путь монтирования тома (иначе плагины
+       лежали бы вне каталога, который читает backend). */ -}}
+{{- define "synth.plugins.deployDir" -}}
+{{- $p := ((.Values.backend | default dict).plugins | default dict) -}}
+{{- $vol := ($p.deployVolume | default dict) -}}
+{{- if $p.deployDir -}}
+{{- $p.deployDir -}}
+{{- else if $vol.enabled -}}
+{{- $vol.mountPath | default "/opt/synth/plugins" -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* PROP-090 Ф5в: нужны ли env-переменные секции plugins (deploy-каталог,
+       доверие deploy-бандлов, снятие «неприкосновенности»). */ -}}
+{{- define "synth.plugins.envNeeded" -}}
+{{- $p := ((.Values.backend | default dict).plugins | default dict) -}}
+{{- if or (include "synth.plugins.deployDir" .) $p.deployTrust (eq $p.managedReadonly false) -}}true{{- end -}}
+{{- end -}}
+
 {{- /* ADR-099: каталог монтирования Secret с CA/клиентскими сертификатами. */ -}}
 {{- define "synth.backend.tlsMountDir" -}}
 /etc/synth/tls
