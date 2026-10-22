@@ -6,7 +6,7 @@ import { generateId, AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-
 import type { EventKeyCredential } from '../engine/events/credential.js';
 import type { EventApiKeyRepository } from './ports/event-api-key-repository.js';
 
-/** ADR-089/ADR-052: версия схемы файла API-ключей привязок (для миграции PROP-032). */
+/** ADR-089/ADR-052: версия схемы файла API-ключей привязок (для миграции ADR-096). */
 export const EVENT_API_KEYS_SCHEMA_VERSION = 1;
 
 export interface EventApiKeyStoreConfig {
@@ -84,7 +84,7 @@ function hashSecret(secret: string): string {
  * Хранится одним JSON-файлом `{dataDir}/events/api-keys.json` (ADR-005,
  * атомарная запись tmp→rename). Plaintext-секрет не сохраняется — только
  * `sha256`-хеш; секрет возвращается единственный раз в `create`. Модель PG-ready
- * (PROP-032): плоские записи со стабильным `id` и `schemaVersion`.
+ * (ADR-096): плоские записи со стабильным `id` и `schemaVersion`.
  */
 export class EventApiKeyStore implements EventApiKeyRepository {
   private _lock = new AsyncLock();
@@ -192,7 +192,7 @@ export class EventApiKeyStore implements EventApiKeyRepository {
 
   /**
    * Полные записи (включая `hash`) — только для переноса между backend'ами
-   * (`synth storage migrate`, PROP-032); публичный API использует `listByBinding`.
+   * (`synth storage migrate`, ADR-097); публичный API использует `listByBinding`.
    */
   async exportAll(): Promise<EventApiKeyRecord[]> {
     const file = await this._load();

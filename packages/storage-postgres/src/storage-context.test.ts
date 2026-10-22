@@ -1,5 +1,5 @@
 /**
- * Герметичные тесты сборки `StorageContext` PostgreSQL-драйвера (PROP-032).
+ * Герметичные тесты сборки `StorageContext` PostgreSQL-драйвера (ADR-097).
  *
  * Регресс: `buildContentPorts` запускает прогрев синхронных кэшей
  * (`secretPatterns`/`protectedPaths`/`dictionaries`) fire-and-forget. Если

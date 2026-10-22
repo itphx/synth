@@ -1,5 +1,5 @@
 /**
- * PG-реализация портов планировщика (PROP-032, волна 3b): `schedules`/`jobs`.
+ * PG-реализация портов планировщика (ADR-097, волна 3b): `schedules`/`jobs`.
  *
  * Семантика повторяет файловые реализации core (`ScheduleStore`, `JobStore`):
  * id `sch_<uuid>`, `updatedAt` при правке; `hasEnabledTargetFor` учитывает

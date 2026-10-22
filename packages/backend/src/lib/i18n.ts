@@ -67,7 +67,7 @@ const en: Dictionary = {
   'errors.conflict.pipelineRunFinished': 'The run is already finished',
   'errors.conflict.pipelineTemplateUnsupported': 'The template cannot be instantiated as a pipeline',
 
-  // PROP-102: отчёты аналитики (только чтение)
+  // ADR-102: отчёты аналитики (только чтение)
   'errors.validation.invalidAnalyticsPeriod': 'Invalid period: expected a date in YYYY-MM-DD (UTC)',
   'errors.validation.invalidAnalyticsRange': 'Period start is later than period end',
   'errors.validation.invalidAnalyticsGroupBy': 'Invalid grouping axis (groupBy)',
@@ -205,7 +205,7 @@ const ru: Dictionary = {
   'errors.conflict.pipelineRunFinished': 'Прогон уже завершён',
   'errors.conflict.pipelineTemplateUnsupported': 'Шаблон нельзя инстанцировать в пайплайн',
 
-  // PROP-102: отчёты аналитики (только чтение)
+  // ADR-102: отчёты аналитики (только чтение)
   'errors.validation.invalidAnalyticsPeriod': 'Некорректный период: ожидается дата YYYY-MM-DD (UTC)',
   'errors.validation.invalidAnalyticsRange': 'Начало периода позже конца периода',
   'errors.validation.invalidAnalyticsGroupBy': 'Некорректная ось группировки (groupBy)',

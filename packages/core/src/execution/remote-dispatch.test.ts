@@ -1,5 +1,5 @@
 /**
- * Фаза 1 матрицы PROP-077: в remote-режиме агентские команды уходят
+ * Фаза 1 матрицы ADR-077: в remote-режиме агентские команды уходят
  * **исполнителю**, а не выполняются локально в control plane.
  *
  * Матрица фазы 1: `execute_shell` / `grep_files` / `python` (python — через
@@ -86,7 +86,7 @@ function makeCtx(port: ExecutionPort, workingDir: string): ToolContext {
 const EXECUTOR_AVAILABLE = await isExecutorPackageAvailable();
 
 describe.skipIf(!EXECUTOR_AVAILABLE)(
-  'PROP-077 фаза 1: в remote-режиме команды уходят исполнителю',
+  'ADR-077 фаза 1: в remote-режиме команды уходят исполнителю',
   () => {
     let workspace: string;
     /** Каталог проекта внутри workspace исполнителя — валидный `cwd`. */
@@ -171,7 +171,7 @@ describe.skipIf(!EXECUTOR_AVAILABLE)(
 );
 
 describe.skipIf(!EXECUTOR_AVAILABLE)(
-  'PROP-077 фаза 1: без исполнителя локального исполнения нет (fail-closed)',
+  'ADR-077 фаза 1: без исполнителя локального исполнения нет (fail-closed)',
   () => {
     let outsideDir: string;
     let port: ExecutionPort;

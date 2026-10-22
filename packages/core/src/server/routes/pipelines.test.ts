@@ -32,7 +32,7 @@ function definition(id: string, overrides: Partial<PipelineDefinitionRecord> = {
   };
 }
 
-describe('Pipelines API Routes (ADR-051/PROP-059)', () => {
+describe('Pipelines API Routes (ADR-051/ADR-100)', () => {
   let tmpDir: string;
   let store: FilePipelineStore;
 

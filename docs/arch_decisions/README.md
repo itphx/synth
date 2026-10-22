@@ -47,7 +47,7 @@
 | ADR-078 | Авто-отключение инструментов при отсутствии внешней зависимости (детект `git`/`rg`/`sh`, `unavailable(dependency)`, пояснение модели и UI) | ✅ Реализовано | [adr-078-runtime-dependency-availability.md](./adr-078-runtime-dependency-availability.md) |
 | ADR-079 | Локальный home-каталог (`--home`/`SYNTH_HOME`): плоская раскладка config/data/profiles/credentials, приоритеты путей, независимые инстансы standalone и hybrid | ✅ Реализовано | [adr-079-local-home-independent-instances.md](./adr-079-local-home-independent-instances.md) |
 | ADR-084 | Decision-модели (Clef/Clef-Flash): `DecisionProvider` (контракт `state + questions → answers`: `noul`/`choice`/`score`; транспорты RouterAI и Ollama; вызов через `GatewayProvider`) + decision-слой в «Быстрых ответах» (уровень микро-каскада ADR-035, per-session `decisionFirst`), «Маршрутизации» (классификатор категории ADR-034) и внешних событиях (ADR-089, `events.decisionRouting`); эскалация `primary → escalation`, агрегатные метрики (`GET/DELETE /settings/decision/metrics`), мультимодальный контракт (`images`/`videos`; источник — PROP-085); runtime-настройки `GET/PUT/DELETE /settings/decision` + UI-раздел «Decision-модели» | ✅ Реализовано | [adr-084-decision-models-clef.md](./adr-084-decision-models-clef.md) |
-| ADR-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, keys, journal)/UI, источник ADR-051 (cron), API-ключи привязок (label/лимит/revoke + per-key rate limit), retention журнала, runtime-настройки «События», auto-bind (`events.autoBind`); ADR-052 ✅ (этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK, перевод шлюза); первый add-on — Telegram-шлюз — реализован; вне объёма — Plugin SDK (PROP-090, отложен 2026-10-19), пайплайны (PROP-059), HA/второй канал (ADR-087) | ✅ Реализовано | [adr-089-external-events-automation.md](./adr-089-external-events-automation.md) |
+| ADR-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, keys, journal)/UI, источник ADR-051 (cron), API-ключи привязок (label/лимит/revoke + per-key rate limit), retention журнала, runtime-настройки «События», auto-bind (`events.autoBind`); ADR-052 ✅ (этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK, перевод шлюза); первый add-on — Telegram-шлюз — реализован; вне объёма — Plugin SDK (PROP-090, вернулся в работу 2026-10-22), пайплайны (ADR-101), HA/второй канал (ADR-087) | ✅ Реализовано | [adr-089-external-events-automation.md](./adr-089-external-events-automation.md) |
 | ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ✅ Реализовано | [adr-095-god-object-decomposition.md](./adr-095-god-object-decomposition.md) |
 | ADR-096 | Единый слой хранения — доменные порты с взаимозаменяемыми backend'ами | ✅ Реализовано | [adr-096-storage-layer.md](./adr-096-storage-layer.md) |
 | ADR-101 | Pipeline Engine: пайплайн как второй движок рядом с оркестратором | ✅ Реализовано | [adr-101-pipeline-engine.md](./adr-101-pipeline-engine.md) |
@@ -57,10 +57,11 @@
 | ID | Тема | Статус | Файл |
 |----|------|--------|------|
 | ADR-018 | Выбор AI-движка на уровне сессии (выбор движка персистится, механика — в работе) | ⚠️ Частично | [adr-018-session-engine-selection.md](./adr-018-session-engine-selection.md) |
-| ADR-030 | Hooks для событий агента: hook-шина `HookBus` + эмиты жизненного цикла (`session_requested`, `external_event`); Plugin SDK и загрузка плагинов (PROP-090 — отложен 2026-10-19), 4 эмита (`plan_rejected`/`message_received`/`callback`/`schedule_fired`) и политика `builtin` (Ф0 PROP-090) — нет | ⚠️ Частично | [adr-030-hooks-agent-events.md](./adr-030-hooks-agent-events.md) |
+| ADR-030 | Hooks для событий агента: hook-шина `HookBus` + эмиты жизненного цикла (`session_requested`, `external_event`); Plugin SDK и загрузка плагинов (PROP-090 — вернулся в работу 2026-10-22), 4 эмита (`plan_rejected`/`message_received`/`callback`/`schedule_fired`) и политика `builtin` (Ф0 PROP-090) — нет | ⚠️ Частично | [adr-030-hooks-agent-events.md](./adr-030-hooks-agent-events.md) |
 | ADR-046 | Скиллы и slash-команды: формат `SKILL.md`, discovery, progressive disclosure, core-тул `skill`, команды/bundles, scope-API, UI; Фаза 3 — trust-гейт проектных команд, inline shell, `skills.urls` read-only, внешние каталоги, builtin `skill-creator`; остаток — install/trust/подписи/`lock.json` и backend-админка каталога (PROP-068) | ⚠️ Частично | [adr-046-skills-and-slash-commands.md](./adr-046-skills-and-slash-commands.md) |
 | ADR-051 | Шедулер: `SchedulerService` (cron/interval) + источник `schedule_fired` через Router (ADR-089), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск, API/UI расписаний и истории; пайплайны вынесены в ADR-100/ADR-101 (движок реализован), размещение в гибриде — нет; мульти-инстанс — семы file-based (default OFF) | ⚠️ Частично | [adr-051-scheduler-pipelines.md](./adr-051-scheduler-pipelines.md) |
-| ADR-086 | Расширяемость Synth (зонтик «Классы расширений»): Plugin (PROP-090), **Gateway** (ADR-087), Add-on, контент-паки (PROP-068), Editions, Contribution flow; единый манифест `synth.pack`; первый add-on/gateway — Telegram-шлюз — реализован и мультитенантен; Plugin SDK/editions/contribution — нет | ⚠️ Частично | [adr-086-extensibility-plugins-editions.md](./adr-086-extensibility-plugins-editions.md) |
+| ADR-077 | Инструментальное окружение исполнения (toolchain и executor): thin backend + сервис-executor, общий volume для workspace, S3; реализуется после ADR-097 (PostgreSQL) | ⚠️ Частично | [adr-077-runtime-toolchain.md](./adr-077-runtime-toolchain.md) |
+| ADR-086 | Расширяемость Synth (зонтик «Классы расширений»): Plugin (PROP-090), **Gateway** (ADR-087), Add-on, контент-паки (PROP-068), Editions, Contribution flow; единый манифест `synth.pack`; первый add-on/gateway — Telegram-шлюз — реализован и мультитенантен; Plugin SDK (PROP-090 — в работе, в коде нет; два режима исполнения: inline/out-of-process)/editions/contribution — нет | ⚠️ Частично | [adr-086-extensibility-plugins-editions.md](./adr-086-extensibility-plugins-editions.md) |
 | ADR-087 | **Шлюзы (gateways)** — отдельный класс расширений (внешний сервис-транспорт внешний мир ↔ Synth, двусторонний обмен): контракт (приём через `POST /api/v2/events`, доставка наружу через SSE-watcher, MCP-часть, Binding, identity/claim-flow, allowlist, вложения, дедуп, прокси/egress, секреты at-rest); Telegram-шлюз (`addons/synth-gateway-telegram`) реализован и **мультитенантен** («несколько ботов → несколько сред», `tenants.json`); публикация в канал — агентом через MCP шлюза (ADR-089); HA через leader election, webhook-транспорт, второй канал — нет | ⚠️ Частично | [adr-087-gateways.md](./adr-087-gateways.md) |
 | ADR-091 | Бэкап, восстановление и диагностика инстанса — свой контур `backup`/`restore`/`doctor` | ⚠️ Частично | [adr-091-backup-restore-transfer.md](./adr-091-backup-restore-transfer.md) |
 | ADR-092 | Обслуживание инстанса — версия схемы данных, миграции и удаление | ⚠️ Частично | [adr-092-instance-lifecycle-maintenance.md](./adr-092-instance-lifecycle-maintenance.md) |
@@ -69,6 +70,7 @@
 | ADR-098 | Деградированный режим и восстановление хранилища | ⚠️ Частично | [adr-098-storage-degraded-recovery.md](./adr-098-storage-degraded-recovery.md) |
 | ADR-099 | Единый egress-слой: доверие TLS/CA (mTLS, bootstrap `security-tls.json`, per-host профили, UI), адресная политика (`egress.tools`/`egress.webhooks`, `mcp.networkPolicy`) и HTTP/HTTPS/SOCKS5-прокси (`proxy.*`, Basic, `no_proxy`, proxied-режим, runtime-настройка из админ-UI, аудит и журнал); доменная аутентификация прокси (NTLM/Negotiate/Kerberos) — вне scope, делегируется egress-шлюзу | ⚠️ Частично | [adr-099-egress-tls-trust.md](./adr-099-egress-tls-trust.md) |
 | ADR-100 | Пакет расширения и пайплайн в ядре: единый контракт доставки (`synth.pack`) и учёт прогонов | ⚠️ Частично | [adr-100-extension-packs-pipelines.md](./adr-100-extension-packs-pipelines.md) |
+| ADR-102 | Аналитика и отчётность инстанса | ⚠️ Частично | [adr-102-analytics-reports.md](./adr-102-analytics-reports.md) |
 | ADR-103 | Ядро шлюзов (`@itphx/synth-gateway-core`) и контракт канала | ⚠️ Частично | [adr-103-gateway-core-channel-contract.md](./adr-103-gateway-core-channel-contract.md) |
 
 ## Предложения
@@ -76,7 +78,6 @@
 | ID | Тема | Статус | Файл |
 |----|------|--------|------|
 | PROP-031 | Verification синт | 🧩 Предложение | [prop-031-verification-agent.md](./prop-031-verification-agent.md) |
-| PROP-032 | Второй вариант хранения — БД (PostgreSQL) за единым слоем (порты/контрактный suite — ADR-096) | 🧩 Предложение | [prop-032-history-storage-postgresql.md](./prop-032-history-storage-postgresql.md) |
 | PROP-037 | Security step перед коммитом | 🧩 Предложение | [prop-037-commit-security-step.md](./prop-037-commit-security-step.md) |
 | PROP-048 | Self-help скиллы и admin-MCP: dogfooding, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN | 🧩 Предложение | [prop-048-self-help-skills-admin-mcp.md](./prop-048-self-help-skills-admin-mcp.md) |
 | PROP-049 | Git worktrees: тулы `git_worktree_*`, per-session cwd, детект secondary worktree, UI | 🧩 Предложение | [prop-049-git-worktrees.md](./prop-049-git-worktrees.md) |
@@ -91,12 +92,12 @@
 | PROP-068 | Реестр и каталог скиллов и агентов: свой репозиторий, индекс, trust/guard, install-policy, agent-packs | 🧩 Предложение | [prop-068-skills-agents-registry.md](./prop-068-skills-agents-registry.md) |
 | PROP-073 | Целостность клиента в гибриде: клиент недоверенный, enforcement на сервере; сигналы (подписи, DPoP/mTLS) опционально | 🧩 Предложение | [prop-073-client-integrity-hybrid.md](./prop-073-client-integrity-hybrid.md) |
 | PROP-074 | Скрытие вместо удаления: soft-delete проектов/сессий/сообщений, исключение из LLM-контекста, read-only режим ADMIN/AUDITOR, restore/purge — ADMIN | 🧩 Предложение | [prop-074-soft-delete-retention.md](./prop-074-soft-delete-retention.md) |
-| PROP-077 | Инструментальное окружение исполнения (toolchain и executor): thin backend + сервис-executor, общий volume для workspace, S3; реализуется после PROP-032 (PostgreSQL) | 🧩 Предложение | [prop-077-runtime-toolchain.md](./prop-077-runtime-toolchain.md) |
 | PROP-080 | Управляемый гибрид: режимы-полюса, идентичность и установка локально: режим — параметр запуска, без runtime-переключения, standalone=ADMIN / hybrid=роли сервера, «Установить локально» | 🧩 Предложение | [prop-080-managed-hybrid-modes.md](./prop-080-managed-hybrid-modes.md) |
 | PROP-081 | Политики гибрида и защита от утечек: серверные политики (forbidden/remote-only/full, publish/fork allow | 🧩 Предложение | [prop-081-hybrid-policy-leak-protection.md](./prop-081-hybrid-policy-leak-protection.md) |
 | PROP-082 | Flavor-образы с toolchain: `slim`/`core`/`dev`/`devops`/`browser`/`full` (alpine + debian) для local containerized и managed single-instance | 🧩 Предложение | [prop-082-full-images-deployment.md](./prop-082-full-images-deployment.md) |
 | PROP-083 | Кастомизация инстанса и брендинг: приветственное окно (+повторный вызов), конфиг брендинга (название/лого-подпись/ватермарка), серверная выдача; на потом — locked settings | 🧩 Предложение | [prop-083-instance-customization-branding.md](./prop-083-instance-customization-branding.md) |
 | PROP-085 | Мультимодальный ввод (звук, изображения, видео): типы `Part`, blob-хранилище вложений, предобработка (ASR/OCR/кадры), UI-композер | 🧩 Предложение | [prop-085-multimodal-input.md](./prop-085-multimodal-input.md) |
+| PROP-090 | Extension API v1 — слой плагинов: манифест `synth.pack` (`kind: plugin`), `PluginHost`, фасад `@itphx/synth-plugin`, 14 точек расширения (включая новые `promptBlocks` и `llmFilters`), два режима исполнения (`inline` / `out-of-process`), модель доверия и trust/scan по PROP-068, install/activate (`plugins.lock.json`/`plugins.json`), API/CLI/UI; **решение до 2026-11-14** | 🧩 Предложение | [prop-090-extension-api.md](./prop-090-extension-api.md) |
 | PROP-093 | Версионирование документации: версионные подкаталоги портала + селектор (вариант A под текущий nginx-деплой) или `mike` (вариант B при GitHub Pages), тегирование `synth-docs`, политика хранения | 🧩 Предложение | [prop-093-docs-versioning.md](./prop-093-docs-versioning.md) |
 | PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | 🧩 Предложение | [prop-096-background-subagent-sessions.md](./prop-096-background-subagent-sessions.md) |
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097-background-processes-registry.md](./prop-097-background-processes-registry.md) |
@@ -104,8 +105,6 @@
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099-memory-footprint-optimization.md](./prop-099-memory-footprint-optimization.md) |
 | PROP-100 | SSRF и TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению (дефекты 1–3 закрыты; остаток — пиннинг) | 🧩 Предложение | [prop-100-ssrf-dns-rebinding.md](./prop-100-ssrf-dns-rebinding.md) |
 | PROP-101 | Локальные инсталляторы и платформенная дистрибуция (Windows / macOS / Linux) | 🧩 Предложение | [prop-101-local-installers-platforms.md](./prop-101-local-installers-platforms.md) |
-| PROP-102 | Аналитика и отчётность инстанса | 🧩 Предложение | [prop-102-analytics-reports.md](./prop-102-analytics-reports.md) |
-| PROP-090 | Extension API v1: манифест, загрузка, установка и активация плагинов: 4 класса (Plugin / Gateway / Add-on / контент-пак), определение Plugin (код в процессе ядра), таксономия влияния (contribution / interception / observation), единый манифест `synth.pack` (`kind`/`contracts`/`provides`), точки расширения, `@itphx/synth-plugin`, bundle-only, install/activate, trust/scan (PROP-068), плагины в managed (ADMIN: deploy-time + runtime-опция) и hybrid (allow-list + server-scoped токены); **отложен 2026-10-19** (🧊 Icebox), Ф0–Ф5 не начаты | 🧊 Icebox | [prop-090-extension-api.md](./prop-090-extension-api.md) |
 
 ## Vision
 
@@ -115,17 +114,10 @@
 | PROP-055 | Обмен между инстансами Synth: идемпотентный upsert/дельта, peer-auth, обмен памятью, live-сессии | 🧩 Предложение (vision) | [prop-055-instance-exchange.md](./prop-055-instance-exchange.md) |
 | PROP-057 | Loop Engine и Loop Design Wizard: `/design-loop`, Verification Rubric, LoopRunner, termination guards | 🧩 Предложение (vision) | [prop-057-loop-engine.md](./prop-057-loop-engine.md) |
 | PROP-058 | Служебные агенты и консилиум (Council): panel/consensus/debate/verifier/judge, Council Gate; включает PROP-031 | 🧩 Предложение (vision) | [prop-058-service-agents-council.md](./prop-058-service-agents-council.md) |
-| PROP-059 | Pipeline Automation: цепочки loops, артефакты между шагами, rollback, HITL, мониторинг | 🧩 Предложение (vision) | [prop-059-pipeline-automation.md](./prop-059-pipeline-automation.md) |
 | PROP-060 | Мультиконтурная архитектура (Contour Bridge): шлюз между контурами, обезличивание, аудит | 🧩 Предложение (vision) | [prop-060-multi-contour-bridge.md](./prop-060-multi-contour-bridge.md) |
 | PROP-061 | Многослойная безопасность LLM: сканеры промптов/вывода, лимиты, HITL, аудит, неизменяемость аудита | 🧩 Предложение (vision) | [prop-061-llm-security-layers.md](./prop-061-llm-security-layers.md) |
 | PROP-063 | Обучение пользователя и метрики: Pre-PR check, анализ сессий, дашборд без рейтингов | 🧩 Предложение (vision) | [prop-063-user-learning-metrics.md](./prop-063-user-learning-metrics.md) |
 | PROP-067 | «Впитывание» организационных гайдлайнов → дефолты инстанса: ingestion, scope, версионирование/аудит | 🧩 Предложение (vision) | [prop-067-org-guidelines-defaults.md](./prop-067-org-guidelines-defaults.md) |
-
-## Заменено
-
-| ID | Тема | Статус | Файл |
-|----|------|--------|------|
-| PROP-088 | Работа через HTTP-прокси (остаток egress-слоя): прокси/`no_proxy`/Basic/SOCKS5 и runtime-UI реализованы (D1+D2), TLS/CA с per-host профилями и UI — в ADR-099; Kerberos/NTLM — вне scope → egress-шлюз (ADR-099 п. 25), SOCKS5 — best-effort (п. 26); остаток — runtime-reload | ⛔ Заменено | [prop-088-http-proxy.md](./prop-088-http-proxy.md) |
 
 ## Legacy
 
@@ -135,4 +127,4 @@
 
 ---
 
-Всего документов: 95 (Решения: 39, Частично: 14, Предложения: 30, Vision: 9, Icebox: 1, Legacy: 1).
+Всего документов: 92 (Решения: 39, Частично: 16, Предложения: 28, Vision: 8, Icebox: 0, Legacy: 1).

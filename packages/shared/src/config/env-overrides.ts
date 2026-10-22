@@ -71,7 +71,7 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'decision', key: 'confidenceThreshold', type: 'number' },
   { section: 'decision', key: 'escalationProvider', type: 'string' },
   { section: 'decision', key: 'escalationModel', type: 'string' },
-  // analytics (PROP-102)
+  // analytics (ADR-102)
   { section: 'analytics', key: 'retentionDays', type: 'number' },
   // metrics (ADR-094): Helm ставит `SYNTH_METRICS_ENABLED` — имя должно совпадать.
   { section: 'metrics', key: 'enabled', type: 'boolean' },

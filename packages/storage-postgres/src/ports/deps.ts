@@ -1,6 +1,6 @@
 /**
  * Общие зависимости сборки доменных портов PostgreSQL-драйвера
- * (PROP-032, волна 3b).
+ * (ADR-097, волна 3b).
  *
  * Один объект `PortDeps` передаётся во все четыре файла-группы
  * (`sessions`/`principals`/`events`/`content`), чтобы каждая группа брала только
@@ -54,7 +54,7 @@ export interface PortDeps {
   systemDictionariesDir?: string;
   /** Корень пользовательских промптов/ролей (по умолчанию `{dataDir}/context`). */
   contextUserDataDir?: string;
-  /** ADR-097/PROP-032: инъекция sync-данных core (см. `CoreSyncDeps`). */
+  /** ADR-097: инъекция sync-данных core (см. `CoreSyncDeps`). */
   coreSync: CoreSyncDeps;
   /**
    * Регистрация фоновой задачи сборки, которую владелец контекста обязан

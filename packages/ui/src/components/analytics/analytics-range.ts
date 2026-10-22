@@ -1,10 +1,10 @@
 /**
- * PROP-102: период отчёта аналитики. Единица роллапа — **сутки UTC**, поэтому
+ * ADR-102: период отчёта аналитики. Единица роллапа — **сутки UTC**, поэтому
  * границы считаются по UTC-дате (`YYYY-MM-DD`), а не по часовому поясу браузера:
  * `toISOString()` даёт UTC независимо от TZ.
  */
 
-/** Пресеты периода в UI (PROP-102 §5). */
+/** Пресеты периода в UI (ADR-102 §5). */
 export const ANALYTICS_PRESETS = ['7d', '30d', '90d', 'custom'] as const
 export type AnalyticsPreset = (typeof ANALYTICS_PRESETS)[number]
 

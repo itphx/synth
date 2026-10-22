@@ -1,6 +1,6 @@
 # ADR-051: Шедулер и пайплайны (облегчённый n8n)
 
-> **Статус:** ⚠️ Частично — реализованы минимальный срез (cron/interval-источник `schedule_fired` через ADR-089, идентичность сообщений `Scheduler`), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск (rate limit) и мульти-инстанс (`events.dedupStore`, `scheduler.leaderElection` — `none`/`file`/`postgres`, `scheduler.crossProcessLocks`; default OFF), в т.ч. PG advisory-lock лидер-выбор (PROP-032); **пайплайны реализованы как декларация + учёт прогона** (объект, экземпляры, гейты через события, артефакт = payload события — [ADR-100](./adr-100-extension-packs-pipelines.md)); **движок пайплайна принят как решение [ADR-101](./adr-101-pipeline-engine.md)** (**реализован**, этапы Э1–Э7 закрыты 2026-10-21), Loop Engine (PROP-057) — вне объёма, rollback/exit-стратегия и мониторинг-дашборд (PROP-059), размещение в гибриде, K8s Lease и разные dataDir на реплику — нет
+> **Статус:** ⚠️ Частично — реализованы минимальный срез (cron/interval-источник `schedule_fired` через ADR-089, идентичность сообщений `Scheduler`), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск (rate limit) и мульти-инстанс (`events.dedupStore`, `scheduler.leaderElection` — `none`/`file`/`postgres`, `scheduler.crossProcessLocks`; default OFF), в т.ч. PG advisory-lock лидер-выбор (ADR-097); **пайплайны реализованы как декларация + учёт прогона** (объект, экземпляры, гейты через события, артефакт = payload события — [ADR-100](./adr-100-extension-packs-pipelines.md)); **движок пайплайна принят как решение [ADR-101](./adr-101-pipeline-engine.md)** (**реализован**, этапы Э1–Э7 закрыты 2026-10-21), Loop Engine (PROP-057) — вне объёма, rollback/exit-стратегия и мониторинг-дашборд (ADR-101), размещение в гибриде, K8s Lease и разные dataDir на реплику — нет
 > **Дата:** 2026-09-16
 > **Обновлено:** 2026-10-21 — **движок пайплайна ([ADR-101](./adr-101-pipeline-engine.md)) реализован** (этапы Э1–Э7 закрыты); ADR-051 остаётся владельцем шедулера и запуска по расписанию (источник запуска `schedule` для пайплайна).
 > **Обновлено:** 2026-10-21 — **движок пайплайна принят как [ADR-101](./adr-101-pipeline-engine.md)** («пайплайн как второй движок»); ADR-051 остаётся владельцем шедулера и запуска по расписанию (источник запуска `schedule` для пайплайна), остаток ADR-051 — размещение в гибриде, K8s Lease и разные dataDir на реплику.
@@ -11,7 +11,7 @@
 > [ADR-042](./adr-042-hybrid-mode.md), [ADR-089](./adr-089-external-events-automation.md),
 > [ADR-100](./adr-100-extension-packs-pipelines.md),
 > [ADR-101](./adr-101-pipeline-engine.md),
-> [PROP-059](./prop-059-pipeline-automation.md), [PROP-057](./prop-057-loop-engine.md).
+> [PROP-057](./prop-057-loop-engine.md).
 
 **Решение:** ввести `SchedulerService` — планировщик запуска промптов и циклов по расписанию:
 
@@ -22,7 +22,7 @@
 
 Запуск выполняется **событиями через событийный роутер** ([ADR-089](./adr-089-external-events-automation.md)):
 шедулер не дёргает исполнителей напрямую, а публикует события, которые маршрутизируются к подписчикам.
-Далее — **Pipeline** ([PROP-059](./prop-059-pipeline-automation.md)) как композиция шагов.
+Далее — **Pipeline** ([ADR-101](./adr-101-pipeline-engine.md)) как композиция шагов.
 
 ## Контекст
 
@@ -36,7 +36,7 @@
 
 Периодические задачи (обновление индексов, проверки, запуск циклов по расписанию, регулярные промпты)
 сегодня можно инициировать только вручную. Нет модели расписаний, их персистентности, API и UI. Это также
-фундамент для автоматизации пайплайнов (D14/PROP-059) и для событийно-ориентированной автоматизации
+фундамент для автоматизации пайплайнов (D14/ADR-101) и для событийно-ориентированной автоматизации
 (ADR-089/ADR-030).
 
 ## Детали
@@ -45,7 +45,7 @@
 
 - `Schedule`: cron-выражение / интервал, часовой пояс, включён/выключен, политика catch-up, target.
 - `Job`: конкретный запуск (снимок target, статус, результат/ошибка, время старта/финиша, история).
-- Персистентность — JSON/FileStore (ADR-005), переход на PostgreSQL — PROP-032.
+- Персистентность — JSON/FileStore (ADR-005), переход на PostgreSQL — ADR-097.
 
 ### Воркер
 
@@ -62,7 +62,7 @@
 
 - Триггер запускает промпт/цикл, публикуя событие в роутер ([ADR-089](./adr-089-external-events-automation.md));
   (позже) — по событиям хуков [ADR-030](./adr-030-hooks-agent-events.md).
-- Pipeline (D14/PROP-059) — следующая ступень: расписание запускает цепочку шагов, а не одиночный промпт.
+- Pipeline (D14/ADR-101) — следующая ступень: расписание запускает цепочку шагов, а не одиночный промпт.
 
 ## Статус реализации в коде
 
@@ -110,7 +110,7 @@ Job-история, catch-up и принудительный (force) запус�
 - **Пайплайны** — база реализована (декларация + учёт прогона, [ADR-100](./adr-100-extension-packs-pipelines.md));
   остаток — собственный **движок шагов** (loop'и, верификация, termination guards —
   [PROP-057](./prop-057-loop-engine.md)), rollback/exit-стратегия и мониторинг-дашборд
-  ([PROP-059](./prop-059-pipeline-automation.md)), автоматическое закрытие шага по факту окончания хода.
+  ([ADR-101](./adr-101-pipeline-engine.md)), автоматическое закрытие шага по факту окончания хода.
 - Где живёт планировщик в гибриде (сервер vs локальный core, ADR-042).
 - **Мульти-инстанс/идемпотентность** — см. раздел «Технический долг» ниже.
 
@@ -141,7 +141,7 @@ Job-история, catch-up и принудительный (force) запус�
   следующем событии пайплайна (хука «ход завершён» на уровне funnel нет — ограничение зафиксировано
   в коде).
 - **Что не реализовано:** собственный движок шагов (PROP-057), rollback/exit-стратегия и
-  мониторинг-дашборд (PROP-059), автоматическое закрытие шага по факту окончания хода.
+  мониторинг-дашборд (ADR-101), автоматическое закрытие шага по факту окончания хода.
 
 ### Job-история, catch-up и force-запуск
 
@@ -228,7 +228,7 @@ Job-история, catch-up и принудительный (force) запус�
    `{dataDir}/scheduler/leader.lock`, stale `3×tick`); `SchedulerService.start()` стартует
    тикер только у лидера, `tick()` — heartbeat, `stop()` — release. Режим —
    `scheduler.leaderElection: none|file|postgres` (default `none`). `postgres`
-   (PROP-032) — `PgLeader` драйвера `@itphx/synth-storage-postgres`: session-level
+   (ADR-097) — `PgLeader` драйвера `@itphx/synth-storage-postgres`: session-level
    advisory-lock на удерживаемом соединении; доступен при `storage.backend=postgres`,
    потеря соединения явно снимает лидерство (heartbeat не нужен).
 3. **Межпроцессная сериализация мутаций `ScheduleStore`** — `FileMutex`
@@ -237,14 +237,14 @@ Job-история, catch-up и принудительный (force) запус�
    Режим — `scheduler.crossProcessLocks: boolean` (default `false`). При
    `storage.backend=postgres` мьютекс не нужен: мутации `schedules` — атомарные
    одиночные `INSERT/UPDATE/DELETE`, файловый лок не создаётся (`Mutex`-шов —
-   `PgMutex` при необходимости, PROP-032).
+   `PgMutex` при необходимости, ADR-097).
 
 Все три флага по умолчанию **OFF** — поведение single-process (`replicaCount: 1`) не меняется.
 File-based реализация рассчитана на **общий `dataDir` на одном хосте/FS** и **не** решает
 задачу для разных dataDir/хостов.
 
 **Статус:** ✅ реализованы семы `DedupStore`/`SchedulerLeader` и file-based `FileDedupStore`/
-`FileLeader`/`FileMutex` (default OFF, тесты); PROP-032: PG advisory-lock лидер-выбор
+`FileLeader`/`FileMutex` (default OFF, тесты); ADR-097: PG advisory-lock лидер-выбор
 (`PgLeader`) и мьютекс (`PgMutex`) при `storage.backend=postgres`. ⏳ Остаётся будущим:
 K8s `Lease` (`coordination.k8s.io`), отдельный Deployment планировщика (`replicas: 1`),
 Postgres unique-index/`FOR UPDATE`-семы при нескольких репликах (частично закрыто PG
@@ -262,7 +262,7 @@ advisory-локом), а также решение для разных dataDir �
 - [ADR-089](./adr-089-external-events-automation.md) «Внешние события и автоматизация» — событийный роутер,
   через который шедулер «стреляет» запусками (D6 → ADR-089).
 - [ADR-030](./adr-030-hooks-agent-events.md) «Hooks для событий агента» — событийные триггеры и фундамент.
-- [PROP-059](./prop-059-pipeline-automation.md) «Pipeline Automation» — композиция шагов поверх шедулера (D14).
+- [ADR-101](./adr-101-pipeline-engine.md) «Pipeline Automation» — композиция шагов поверх шедулера (D14).
 - [ADR-100](./adr-100-extension-packs-pipelines.md) «Пакет расширения и пайплайн в ядре» — объект пайплайна, экземпляры, триггер/гейты, артефакт = payload события; установка пакета расширения как источник определений.
 - [PROP-057](./prop-057-loop-engine.md) «Loop Engine» — исполняемая единица, запускаемая по расписанию (D12).
 - [ADR-017](./adr-017-api-v2-hono.md) «API v2» — CRUD-роуты расписаний.
@@ -288,6 +288,6 @@ advisory-локом), а также решение для разных dataDir �
 
 - 2026-10-21 — движок пайплайна ([ADR-101](./adr-101-pipeline-engine.md)) реализован (Э1–Э7 закрыты); остаток ADR-051 прежний.
 - 2026-10-21 — движок пайплайна принят как [ADR-101](./adr-101-pipeline-engine.md); ADR-051 остаётся владельцем шедулера.
-- 2026-10-20 — пайплайны: база реализована (декларация + экземпляры + гейты по событиям), решение вынесено в [ADR-100](./adr-100-extension-packs-pipelines.md); остаток — движок шагов (PROP-057) и rollback/дашборд (PROP-059).
+- 2026-10-20 — пайплайны: база реализована (декларация + экземпляры + гейты по событиям), решение вынесено в [ADR-100](./adr-100-extension-packs-pipelines.md); остаток — движок шагов (PROP-057) и rollback/дашборд (ADR-101).
 - 2026-10-12 — добавлены мульти-инстанс-механизмы: семы (`DedupStore`), выбор лидера (`SchedulerLeader`), межпроцессная сериализация `ScheduleStore` (`FileMutex`).
 - 2026-10-02 — добавлены Job-история, catch-up и force-запуск.

@@ -2293,7 +2293,7 @@ export const dict = {
   'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
   'git.repo_exists': 'Repository already exists at "{path}"',
 
-  // --- Execution (PROP-077) ---
+  // --- Execution (ADR-077) ---
   'execution.remote_url_required':
     'Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
   'execution.remote_unavailable':
@@ -2900,7 +2900,7 @@ export const dict = {
 
   'sessionCreate.project': 'Project',
 
-  // --- PROP-102: аналитика и отчёты (UI, волна 2) ---
+  // --- ADR-102: аналитика и отчёты (UI, волна 2) ---
   'analytics.title': 'Analytics & reports',
   'analytics.description': 'Reports from pre-aggregated daily rollups (UTC)',
   'analytics.tab.usage': 'Usage & cost',
@@ -3260,7 +3260,7 @@ export const dict = {
   'settings.help.debug.section.debug-service': 'Instance service groups: routes, storage, WebSocket, and the debug output itself.',
   'settings.help.debug.levels': 'NONE — off, DEBUG — verbose, INFO — regular events, WARNING — problems, ERROR — errors only.',
 
-  // --- Addons (ADR-086 §5, ADR-051/PROP-059) ---
+  // --- Addons (ADR-086 §5, ADR-051/ADR-100) ---
   'addons.title': 'Addons',
   'addons.description':
     'Extension packages installed in this instance and the pipelines they bring. A package that grants capabilities waits for administrator approval: its agents, skills, MCP servers and pipelines appear in the instance only after the confirmation.',

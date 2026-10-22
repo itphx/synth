@@ -28,7 +28,7 @@ export interface SessionManagerOptions {
    */
   hooks?: HookBus;
   /**
-   * PROP-102: сборщик аналитики — точка персиста сообщения инкрементирует
+   * ADR-102: сборщик аналитики — точка персиста сообщения инкрементирует
    * `messages_assistant`/`messages_tool` (семейство `activity`). Не задан —
    * запись не выполняется (поведение прежнее).
    */
@@ -223,7 +223,7 @@ export class SessionManager {
       sessionId: session.id,
       ...(data.projectId ? { projectId: data.projectId } : {}),
       ...(session.settings.agentRole ? { agent: session.settings.agentRole } : {}),
-      // PROP-102: ось `user` для сборщика `activity` — значение уже под рукой.
+      // ADR-102: ось `user` для сборщика `activity` — значение уже под рукой.
       ...(session.userId ? { userId: session.userId } : {}),
     });
     return session;
@@ -329,7 +329,7 @@ export class SessionManager {
     session.archivedAt = nowISO();
     session.updatedAt = nowISO();
     await this.store.save(session);
-    // PROP-102: `archived:true` отличает архив от удаления (мера `sessions_archived`).
+    // ADR-102: `archived:true` отличает архив от удаления (мера `sessions_archived`).
     this._options.hooks?.emitAsync('session_end', {
       sessionId,
       archived: true,
@@ -430,7 +430,7 @@ export class SessionManager {
       session.messages.push(message);
       session.updatedAt = nowISO();
       await this.store.save(session);
-      // PROP-102: точка персиста сообщения — инкремент `activity`
+      // ADR-102: точка персиста сообщения — инкремент `activity`
       // (`messages_assistant`/`messages_tool`); пользовательские сообщения
       // персистит `QueueProcessor` (своя точка записи). Скрытые промежуточные
       // assistant-сообщения tool-chain не считаем (паритет с `computeSessionStats`).
@@ -445,7 +445,7 @@ export class SessionManager {
   }
 
   /**
-   * PROP-032: точечная дозапись сообщения (без чтения/перезаписи всей истории).
+   * ADR-096: точечная дозапись сообщения (без чтения/перезаписи всей истории).
    * `id`/`seq`/`origin` назначает порт (`SessionRepository.appendMessage`),
    * здесь — NUL-санитайзинг и best-effort аналитика (та же, что в `addMessage`).
    */
@@ -469,7 +469,7 @@ export class SessionManager {
   }
 
   /**
-   * PROP-032: точечное обновление существующего сообщения (без перезаписи
+   * ADR-096: точечное обновление существующего сообщения (без перезаписи
    * истории). По умолчанию аналитика не инкрементируется — нового сообщения
    * нет. `recordActivity` нужен финализации черновика частичного стрима
    * (шаг 2б): само сообщение уже создано `appendMessage` (там активность не
@@ -561,7 +561,7 @@ export class SessionManager {
   }
 
   /**
-   * PROP-102: `activity` для дозаписанного сообщения. Оси `user`/`project`
+   * ADR-102: `activity` для дозаписанного сообщения. Оси `user`/`project`
    * берутся из **метаданных** сессии (`loadLight`), а не из полной истории:
    * запись остаётся дешёвой и best-effort — ошибки чтения/рекордера не всплывают.
    */

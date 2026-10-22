@@ -193,7 +193,7 @@ export const packAgentProvideSchema = z.object({
 export type PackAgentProvide = z.infer<typeof packAgentProvideSchema>;
 
 /**
- * Пайплайн-предоставление (ADR-051/PROP-059): описание автомата. Либо файл
+ * Пайплайн-предоставление (ADR-051/ADR-100): описание автомата. Либо файл
  * (`path`), либо inline-определение (`definition` — тот же контракт, что и
  * `pipelineDefinitionSchema`).
  */
@@ -237,6 +237,33 @@ export type PackProvides = z.infer<typeof packProvidesSchema>;
 // --- Манифест ---
 
 /**
+ * Инвариант `packType` — общий для манифеста (`packManifestSchema`) и карточки
+ * каталога расширений (`catalogEntrySchema`, PROP-068 §12):
+ * - `kind: 'pack'` **требует** `packType`;
+ * - `packType` запрещён у остальных `kind` (`addon`/`gateway`/`plugin`/
+ *   `storage` — это классы кода/сервиса, а не контент-паки).
+ */
+export function refinePackType(
+  value: { kind: PackKind; packType?: PackType },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.kind === 'pack' && value.packType === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'packType обязателен для kind «pack»',
+      path: ['packType'],
+    });
+  }
+  if (value.kind !== 'pack' && value.packType !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `packType допустим только для kind «pack» (kind: «${value.kind}»)`,
+      path: ['packType'],
+    });
+  }
+}
+
+/**
  * Единый манифест расширения `synth.pack` (ADR-086 §5).
  *
  * Инварианты, зашитые в схему:
@@ -263,22 +290,7 @@ export const packManifestSchema = z
     /** Тип контент-пака — только для `kind: 'pack'`. */
     packType: packTypeSchema.optional(),
   })
-  .superRefine((manifest, ctx) => {
-    if (manifest.kind === 'pack' && manifest.packType === undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'packType обязателен для kind «pack»',
-        path: ['packType'],
-      });
-    }
-    if (manifest.kind !== 'pack' && manifest.packType !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `packType допустим только для kind «pack» (kind: «${manifest.kind}»)`,
-        path: ['packType'],
-      });
-    }
-  });
+  .superRefine(refinePackType);
 
 export type PackManifest = z.infer<typeof packManifestSchema>;
 

@@ -63,9 +63,9 @@ MVP: `background` у `task` + уведомление о завершении + �
 
 1. Уведомление родителя — только историей (человек/родитель реагирует в следующем ходе) или автозапуск хода родителя? (по умолчанию — безопаснее «только уведомление»).
 2. Лимит одновременных детей — на сессию, на проект или на инстанс?
-3. Как фоновые дети ведут себя в **гибриде** (ребёнок локально, родитель на сервере) и в managed (executor, PROP-077)?
+3. Как фоновые дети ведут себя в **гибриде** (ребёнок локально, родитель на сервере) и в managed (executor, ADR-077)?
 4. Нужны ли приоритеты/пул воркеров для фоновых прогонов (иначе N детей = N параллельных LLM-вызовов)?
 
 ## Связи
 
-- [ADR-026](./adr-026-subagent-context-modes.md), [ADR-033](./adr-033-session-branching-merge.md), [ADR-089](./adr-089-external-events-automation.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-070](./adr-070-system-prompt-composer.md), [PROP-097](./prop-097-background-processes-registry.md), [PROP-077](./prop-077-runtime-toolchain.md).
+- [ADR-026](./adr-026-subagent-context-modes.md), [ADR-033](./adr-033-session-branching-merge.md), [ADR-089](./adr-089-external-events-automation.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-070](./adr-070-system-prompt-composer.md), [PROP-097](./prop-097-background-processes-registry.md), [ADR-077](./adr-077-runtime-toolchain.md).

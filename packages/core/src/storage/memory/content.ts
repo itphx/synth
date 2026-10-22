@@ -1,6 +1,6 @@
 /**
  * In-memory реализации «контентных» портов: скиллы, bundles, файлы контекста,
- * blob-хранилище и SSH-ключи (PROP-032, шаг W2.2).
+ * blob-хранилище и SSH-ключи (ADR-096, шаг W2.2).
  *
  * Чистая реализация без модулей ФС (`fs`/`path`): файловые деревья моделируются
  * `Map`, виртуальные пути — строки (`/memory/skills/<name>`, `/memory/prompts`).
@@ -512,7 +512,7 @@ export class MemorySSHKeyRepository implements SSHKeyRepository {
 
 /**
  * Порт пайплайнов (определения + экземпляры) поверх `Map`
- * (ADR-051/PROP-059, реализация — `FilePipelineStore`).
+ * (ADR-051/ADR-100, реализация — `FilePipelineStore`).
  *
  * Семантика повторяет файловую реализацию: upsert определения по `id`
  * (`createdAt` сохраняется, `updatedAt` монотонно обновляется), детерминированный

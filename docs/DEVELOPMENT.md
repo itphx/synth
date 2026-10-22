@@ -254,7 +254,7 @@ node packages/core/dist/main.js config
 
 ## Локальные сценарии: all-in-one и split (docker compose)
 
-`docker-compose.yml` содержит четыре сценария. Кроме прежнего standalone (`synth`) и профилей `ollama`/`postgres` добавлены два (PROP-077/PROP-082):
+`docker-compose.yml` содержит четыре сценария. Кроме прежнего standalone (`synth`) и профилей `ollama`/`postgres` добавлены два (ADR-077/PROP-082):
 
 | Профиль | Состав | Режим исполнения |
 |---|---|---|
@@ -339,7 +339,7 @@ synth/
 ├── packages/
 │   ├── shared/   → @itphx/synth-shared    # Типы, Zod-схемы, протоколы, конфигурация
 │   ├── core/     → @itphx/synth-core      # Движок, CLI, HTTP API v2, MCP, FileStore
-│   ├── storage-postgres/ → @itphx/synth-storage-postgres  # Опциональный БД-драйвер слоя хранения (ADR-097/PROP-032)
+│   ├── storage-postgres/ → @itphx/synth-storage-postgres  # Опциональный БД-драйвер слоя хранения (ADR-097)
 │   ├── backend/  → @itphx/synth-backend   # Hono API Hub: OIDC, RBAC, Runner Registry
 │   ├── ui/       → @itphx/synth-ui        # React 19 SPA + админка (Vite)
 │   ├── sdk/      → @itphx/synth-sdk       # Типизированный клиент публичного API (ADR-052)

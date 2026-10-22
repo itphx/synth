@@ -110,7 +110,7 @@ const noTokenProbe: ExecutionEnvironmentProbe = {
   },
 };
 
-describe('checkExecutionMode (PROP-077, шаги 3 и 7b)', () => {
+describe('checkExecutionMode (ADR-077, шаги 3 и 7b)', () => {
   it('inline — старт разрешён (прежнее поведение)', async () => {
     const check = await checkExecutionMode(execution({ mode: 'inline' }));
     expect(check.ok).toBe(true);
@@ -164,7 +164,7 @@ describe('checkExecutionMode (PROP-077, шаги 3 и 7b)', () => {
   });
 });
 
-describe('assertExecutionModeSupported (PROP-077, шаги 3 и 7b)', () => {
+describe('assertExecutionModeSupported (ADR-077, шаги 3 и 7b)', () => {
   it('inline — не бросает', async () => {
     await expect(assertExecutionModeSupported(execution({ mode: 'inline' }))).resolves.toBeUndefined();
   });
@@ -185,7 +185,7 @@ describe('assertExecutionModeSupported (PROP-077, шаги 3 и 7b)', () => {
   });
 });
 
-describe('CLI-флаг --execution-mode (PROP-077)', () => {
+describe('CLI-флаг --execution-mode (ADR-077)', () => {
   it('CLI важнее env (ADR-023)', () => {
     const resolved = resolveExecutionConfig(cfg, { SYNTH_EXECUTION_MODE: 'inline' }, { mode: 'remote' });
     expect(resolved.mode).toBe('remote');
@@ -198,7 +198,7 @@ describe('CLI-флаг --execution-mode (PROP-077)', () => {
   });
 });
 
-describe('CLI: synth serve --execution-mode (PROP-077, шаг 7b)', () => {
+describe('CLI: synth serve --execution-mode (ADR-077, шаг 7b)', () => {
   function runServe(args: string[], env: NodeJS.ProcessEnv = {}): {
     status: number | null;
     output: string;

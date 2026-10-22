@@ -1,5 +1,5 @@
 /**
- * Загрузчик удалённого порта (PROP-077, шаг 7b) — fail-closed и секреты.
+ * Загрузчик удалённого порта (ADR-077, шаг 7b) — fail-closed и секреты.
  *
  * Проверяется:
  * - токен читается из файла, указанного в `execution.remote.tokenSecret`
@@ -45,7 +45,7 @@ function execution(overrides: { mode?: 'inline' | 'remote'; url?: string[]; toke
   );
 }
 
-describe('PROP-077: чтение токена исполнителя', () => {
+describe('ADR-077: чтение токена исполнителя', () => {
   it('читает значение из файла и обрезает пробелы', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'synth-exec-token-'));
     try {
@@ -86,7 +86,7 @@ describe('PROP-077: чтение токена исполнителя', () => {
   });
 });
 
-describe('PROP-077: загрузчик удалённого порта — fail-closed', () => {
+describe('ADR-077: загрузчик удалённого порта — fail-closed', () => {
   it('пустой список адресов — ошибка (не молчаливый inline)', async () => {
     const err = await createRemoteExecutionPortFromConfig(execution({ mode: 'remote' })).catch(
       (e: unknown) => e,
@@ -112,7 +112,7 @@ describe('PROP-077: загрузчик удалённого порта — fail-
   });
 });
 
-describe('PROP-077: фабрика выбора порта по режиму', () => {
+describe('ADR-077: фабрика выбора порта по режиму', () => {
   it('inline — исполнение в процессе (прежнее поведение)', async () => {
     const port = await createExecutionPortForConfig(execution({ mode: 'inline' }));
     expect(port).toBeInstanceOf(InlineExecutionPort);
@@ -129,7 +129,7 @@ describe('PROP-077: фабрика выбора порта по режиму', (
  * (`@itphx/synth-executor` — опциональная зависимость core). Без собранного
  * пакета блок пропускается явно.
  */
-describe.skipIf(!(await isExecutorPackageAvailable()))('PROP-077: фабрика в remote-режиме', () => {
+describe.skipIf(!(await isExecutorPackageAvailable()))('ADR-077: фабрика в remote-режиме', () => {
   it('remote — порт не inline (исполнение уходит к исполнителю)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'synth-exec-token-'));
     try {

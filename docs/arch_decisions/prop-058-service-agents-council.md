@@ -8,7 +8,7 @@
 > **Связано:** [ADR-026](./adr-026-subagent-context-modes.md), [ADR-029](./adr-029-granular-permissions.md),
 > [ADR-030](./adr-030-hooks-agent-events.md), [PROP-031](./prop-031-verification-agent.md),
 > [ADR-034](./adr-034-model-routing.md), [PROP-057](./prop-057-loop-engine.md),
-> [PROP-059](./prop-059-pipeline-automation.md), [ADR-084](./adr-084-decision-models-clef.md).
+> [ADR-101](./adr-101-pipeline-engine.md), [ADR-084](./adr-084-decision-models-clef.md).
 
 **Решение:** расширить набор служебных агентов Synth до полноценного **консилиума** и ввести
 **Council Gate** — кросс-модельную/кросс-агентную верификацию.
@@ -62,7 +62,7 @@
 
 Кросс-модельная верификация: результат, полученный моделью A, проверяется моделью B (другой
 вендор/класс). Результат — вердикт и/или оценка. Встраивается в гейты циклов
-([PROP-057](./prop-057-loop-engine.md)) и пайплайнов ([PROP-059](./prop-059-pipeline-automation.md)).
+([PROP-057](./prop-057-loop-engine.md)) и пайплайнов ([ADR-101](./adr-101-pipeline-engine.md)).
 
 ### 3. Интеграция с PROP-031 (verifier)
 
@@ -118,5 +118,5 @@
 - [ADR-034](./adr-034-model-routing.md), [ADR-084](./adr-084-decision-models-clef.md) — выбор моделей для
   panel/judge/consensus.
 - [PROP-057](./prop-057-loop-engine.md) «Loop Engine» — рубрика `judge` в цикле, интеграция с гейтами.
-- [PROP-059](./prop-059-pipeline-automation.md) «Pipeline Automation» — верификация на шагах пайплайна.
+- [ADR-101](./adr-101-pipeline-engine.md) «Pipeline Engine» — верификация на шагах пайплайна.
 - [PROP-061](./prop-061-llm-security-layers.md) «Многослойная безопасность LLM» — лимиты и HITL.

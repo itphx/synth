@@ -186,7 +186,7 @@ export class PermissionEvaluator {
       ? (typeof params.cwd === 'string' && params.cwd.trim() !== '' ? resolvePath(params.cwd, workingDir) : workingDir)
       : workingDir;
 
-    // PROP-032 (W5): деградированное хранилище — строгий read-only. Доступны
+    // ADR-098 (W5): деградированное хранилище — строгий read-only. Доступны
     // только безопасные тулы (скиллы/веб) — паритет с осью доступности
     // (`computeToolAvailability` → `unavailable(storage)`); прочие жёстко `deny`
     // (доменные мутации в файловом фоллбеке → split-brain).

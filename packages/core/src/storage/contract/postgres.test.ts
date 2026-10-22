@@ -47,7 +47,7 @@ import type { StorageContext } from '../storage-context.js';
 
 /**
  * Контрактный прогон доменных портов на PostgreSQL-драйвере
- * (PROP-032, волна 3b-lifecycle) — рядом с `file.test.ts`/`memory.test.ts`.
+ * (ADR-097, волна 3b-lifecycle) — рядом с `file.test.ts`/`memory.test.ts`.
  *
  * Гейт по env `SYNTH_TEST_POSTGRES_DSN`: без него весь файл `describe.skip`
  * (герметичный запуск без БД). С DSN каждый `make()` создаёт **уникальную схему**
@@ -190,7 +190,7 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   describeSkillBundleRepository('PG → SkillBundleRepository', () => makePort('skillBundles'));
   describeDictionaryRepository('PG → DictionaryRepository', () => makePort('dictionaries'));
 
-  // PROP-032 (W2.4): конфигурационные словари (провайдеры/модели/агенты) — один порт-провайдер.
+  // ADR-096 (W2.4): конфигурационные словари (провайдеры/модели/агенты) — один порт-провайдер.
   describeDocumentRepository<ProviderConfig>(
     'PG → DocumentRepository (providers)',
     () => makePort('providers'),
@@ -204,7 +204,7 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   describeBlobStore('PG → BlobStore (file-backed)', () => makePort('blobs'));
   describeDefaultsRepository('PG → DefaultsRepository', () => makePort('defaults'));
 
-  // ADR-051/PROP-059 + ADR-086 §5: переходно файловые порты драйвера.
+  // ADR-051/ADR-100 + ADR-086 §5: переходно файловые порты драйвера.
   describePipelineRepository('PG → PipelineRepository (file-backed)', () => makePort('pipelines'));
   describePackRepository('PG → PackRepository (file-backed)', () => makePort('packs'));
 

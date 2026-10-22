@@ -119,7 +119,7 @@ export function createAgentRegistry(
  *
  * Зачем: `createAgentRegistry` читает **только файловый каталог** `overridesDir`
  * (`{dataDir}/agents/*.json`), а стор агентов при `storage.backend=postgres`
- * (ADR-096/PROP-032) — это **БД**, а не файлы. Поэтому агент, поставленный
+ * (ADR-096) — это **БД**, а не файлы. Поэтому агент, поставленный
  * пакетом расширения (ADR-086 §5, `POST /api/v2/packs`), после рестарта
  * процесса не попадал в реестр: Router не резолвил `agentTemplate`
  * (`resolveAgentTemplate` → `null`), и сессия не создавалась.

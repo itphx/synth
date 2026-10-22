@@ -52,13 +52,13 @@ export interface DoctorOptions {
   /** `synth.security.secretKey`, если задан в config. */
   configSecretKey?: string;
   /**
-   * PROP-032: физический backend хранения (`storage.backend`); по умолчанию
+   * ADR-096: физический backend хранения (`storage.backend`); по умолчанию
    * `file`. При `postgres` файловые проверки помечаются `skipped`, добавляются
    * `db-connection`/`db-schema`.
    */
   storageBackend?: StorageBackendKind;
   /**
-   * PROP-032: read-only проба БД (`postgres`) — соединение (latency) и версия
+   * ADR-097: read-only проба БД (`postgres`) — соединение (latency) и версия
    * схемы. Реализуется драйвером (`StorageContext.health`). Не задана, а
    * backend=`postgres` — проверка `db-connection` падает с понятной причиной.
    */
@@ -359,7 +359,7 @@ async function _checkLocks(dataDir: string): Promise<DoctorCheck> {
   return { ...base, status: 'ok', ...(count > 0 ? { detail: `локов: ${count}` } : {}) };
 }
 
-/** Помечает проверку неприменимой к текущему backend'у (ADR-091/PROP-032). */
+/** Помечает проверку неприменимой к текущему backend'у (ADR-091/ADR-096). */
 function _skippedCheck(id: string, title: string, detail = 'неприменимо (backend=postgres)'): DoctorCheck {
   return { id, title, status: 'skipped', detail };
 }
@@ -393,7 +393,7 @@ async function _checkDbConnection(getHealth: () => Promise<StorageHealth>): Prom
 }
 
 /**
- * Проверка схемы БД (PROP-032): сравнение версии БД с ожидаемой драйвером.
+ * Проверка схемы БД (ADR-097): сравнение версии БД с ожидаемой драйвером.
  * Схема новее → `fail` (понижение версии не мигрирует назад); отстаёт/нет → `warn`
  * (`synth migrate`); нет соединения — `skipped` (не вводим в заблуждение).
  */
@@ -467,7 +467,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorResult> {
     { id: 'data-dir', title: 'Каталог данных', run: () => _checkDataDir(opts.dataDir) },
   ];
   if (postgres) {
-    // ADR-091/PROP-032: при backend=postgres данные в БД — файловые проверки
+    // ADR-091/ADR-097: при backend=postgres данные в БД — файловые проверки
     // неприменимы (`skipped`), вместо них проба соединения и версия схемы БД.
     specs.push(
       { id: 'db-connection', title: 'Подключение к БД', run: () => _checkDbConnection(getHealth) },

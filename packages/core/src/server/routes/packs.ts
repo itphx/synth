@@ -133,7 +133,7 @@ export interface PackAgentsPort {
 export interface PacksRoutesDeps {
   /** Реестр установок пакетов (ADR-086 §5). */
   packs: PackRepository;
-  /** Реестр пайплайнов (ADR-051/PROP-059). */
+  /** Реестр пайплайнов (ADR-051/ADR-100). */
   pipelines: PipelineRepository;
   /** Скиллы инстанса (ADR-046). */
   skills: PackSkillsPort;
@@ -442,7 +442,7 @@ function parsePipelineFile(
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return { problem: 'определение пайплайна — не объект' };
   }
-  // Контракт определения — общий (`pipelineDefinitionSchema`, ADR-051/PROP-059).
+  // Контракт определения — общий (`pipelineDefinitionSchema`, ADR-051/ADR-100).
   const parsed = pipelineDefinitionSchema.safeParse(data);
   if (!parsed.success) {
     const first = parsed.error.issues[0];

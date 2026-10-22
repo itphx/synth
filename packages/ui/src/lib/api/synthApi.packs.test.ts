@@ -3,7 +3,7 @@ import { synthApi } from './synthApi'
 
 /**
  * Домены `packs` (`lib/api/packs.ts`, ADR-086 §5) и `pipelines`
- * (`lib/api/pipelines.ts`, ADR-051/PROP-059): реестр установок пакетов
+ * (`lib/api/pipelines.ts`, ADR-051/ADR-100): реестр установок пакетов
  * расширений и пайплайны инстанса.
  *
  * Ценно — пути/методы, разворачивание конвертов ответа (`{packs}`/`{pipelines}`/
@@ -137,7 +137,7 @@ describe('packsApi — реестр пакетов расширений (ADR-086
   })
 })
 
-describe('pipelinesApi — пайплайны инстанса (ADR-051/PROP-059)', () => {
+describe('pipelinesApi — пайплайны инстанса (ADR-051/ADR-100)', () => {
   it('getPipelines: GET /pipelines и разворачивание конверта {pipelines}', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ pipelines: [PIPELINE] }))
 

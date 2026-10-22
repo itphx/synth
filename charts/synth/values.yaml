@@ -127,11 +127,11 @@ backend:
   # Приоритет: CLI-флаги > SYNTH_* env > config.yaml > defaults; runtime-настройки
   # из UI/API (settings.json) применяются поверх файла.
   # Пример: { events: { autoBind: true } }.
-  # Секция `storage` ниже домержится в этот же config.yaml (PROP-032).
+  # Секция `storage` ниже домержится в этот же config.yaml (ADR-096).
   config: {}
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Слой хранения (PROP-032, ADR-096/ADR-097) — instance-wide для backend.
+# Слой хранения (ADR-096, ADR-096/ADR-097) — instance-wide для backend.
 # ─────────────────────────────────────────────────────────────────────────────
 # Всё, кроме пароля, рендерится в config.yaml (ConfigMap <release>-config) и
 # монтируется в backend как /etc/synth/config.yaml. Пароль БД в values НЕ
@@ -170,7 +170,7 @@ storage:
   fallbackDir: ""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Топология исполнения (PROP-077, шаг 7c) — split-режим «control plane +
+# Топология исполнения (ADR-077, шаг 7c) — split-режим «control plane +
 # отдельные исполнители (executor/worker)».
 #
 # По умолчанию всё выключено: `execution.mode: inline` — команды агентских
@@ -208,11 +208,11 @@ execution:
     failMode: fail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Исполнитель (executor/worker) — пул контейнеров с toolchain'ом (PROP-077).
+# Исполнитель (executor/worker) — пул контейнеров с toolchain'ом (ADR-077).
 #
 # Включается `executor.enabled: true` (вместе с `execution.mode: remote`).
 # Требования к окружению:
-#   - образ `synth-executor` (публикация образов — шаг 6 плана PROP-077);
+#   - образ `synth-executor` (публикация образов — шаг 6 плана ADR-077);
 #     для приватного реестра — `executor.imagePullSecrets`;
 #   - RWX-том (NFS/CephFS/…) под общий workspace: том должен быть виден и
 #     control plane, и всем репликам исполнителя. Если в кластере нет RWX-класса
@@ -321,7 +321,7 @@ executor:
     backendWorkspacesRoot: ""
 
   networkPolicy:
-    # NetworkPolicy для пула (PROP-077 «Изоляция, лимиты и квоты»).
+    # NetworkPolicy для пула (ADR-077 «Изоляция, лимиты и квоты»).
     # false → объект не рендерится (сеть кластера как есть).
     enabled: false
     # Дополнительные egress-правила (формат networking.k8s.io/v1). По умолчанию

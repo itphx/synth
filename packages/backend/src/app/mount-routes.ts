@@ -135,7 +135,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     { requireAuth: auth.requireAuth },
     {
       dataDir,
-      // PROP-032: экспорт/импорт проекта работают через контекст хранения
+      // ADR-096: экспорт/импорт проекта работают через контекст хранения
       // инстанса (иначе — свой файловый контекст, а на `backend=postgres`
       // проект не найден бы).
       storage: deps.storageContext,
@@ -341,7 +341,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
   ));
 
-  // ADR-051/PROP-059: API пайплайнов — определения (ставит установщик пакета),
+  // ADR-051/ADR-100: API пайплайнов — определения (ставит установщик пакета),
   // экземпляры и ручной запуск. Чтение — ADMIN (реестр автоматов инстанса),
   // ручной запуск — ADMIN или service-key со scope `automation:install`.
   app.route('/api/v2/pipelines', createPipelinesRoutes(
@@ -477,7 +477,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // ADR-091/ADR-092: обслуживание инстанса (backup/restore/doctor/migrate).
   // Managed RBAC: только ADMIN — операции меняют/отдают данные всего инстанса
   // (архивы могут содержать секреты), i18n.
-  // PROP-032: при backend=postgres doctor/migrations ходят в БД через read-only
+  // ADR-097: при backend=postgres doctor/migrations ходят в БД через read-only
   // пробу (контекст в режиме `skip` — миграции не применяются).
   const maintenanceBackend = resolveStorageBackend(config.synth, process.env);
   const withPostgresContext = maintenanceBackend === 'postgres'
@@ -850,7 +850,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     readGuard: auth.requirePermission('ADMIN', 'AUDITOR'),
   }));
 
-  // PROP-102 (волна 1): отчёты аналитики — только чтение, данных без локализации.
+  // ADR-102 (волна 1): отчёты аналитики — только чтение, данных без локализации.
   // Managed RBAC (§7): ADMIN/LEAD — сквозной обзор; AUDITOR — чтение всех отчётов;
   // обычный USER — принудительный фильтр оси `user` по себе (+ 403 на `decision`/`summary`).
   app.route('/api/v2/analytics', createAnalyticsRoutes(
@@ -893,7 +893,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       trustedProjectDirs: config.synth.skills.trustedProjectDirs,
       // ADR-069 R3: авто-trust workspace внутри workspacesRoot (managed-каталоги).
       workspacesRoot: config.workspacesRoot,
-      // PROP-077: `git rev-parse` — через порт исполнения (тот же, что у тулов).
+      // ADR-077: `git rev-parse` — через порт исполнения (тот же, что у тулов).
       execution: deps.executionPort,
     }),
     config.synth.instructions,

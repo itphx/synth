@@ -118,14 +118,14 @@ describe('defaultConfig', () => {
     expect(defaultConfig.storage.maxUploadBytes).toBe(100 * 1024 * 1024);
   });
 
-  it('storage.backend по умолчанию file, postgres пуст, degradedMode fallback-file (PROP-032)', () => {
+  it('storage.backend по умолчанию file, postgres пуст, degradedMode fallback-file (ADR-096)', () => {
     expect(defaultConfig.storage.backend).toBe('file');
     expect(defaultConfig.storage.postgres).toEqual({});
     expect(defaultConfig.storage.degradedMode).toBe('fallback-file');
     expect(defaultConfig.storage.fallbackDir).toBe('');
   });
 
-  it('execution по умолчанию: inline, без адресов, 30 с, fail, concurrency = число CPU (PROP-077)', () => {
+  it('execution по умолчанию: inline, без адресов, 30 с, fail, concurrency = число CPU (ADR-077)', () => {
     expect(defaultConfig.execution.mode).toBe('inline');
     expect(defaultConfig.execution.remote.url).toEqual([]);
     expect(defaultConfig.execution.remote.timeoutMs).toBe(30_000);
@@ -185,7 +185,7 @@ describe('defaultConfig', () => {
     });
   });
 
-  it('analytics по умолчанию: retention суточных роллапов 400 дней (PROP-102)', () => {
+  it('analytics по умолчанию: retention суточных роллапов 400 дней (ADR-102)', () => {
     expect(defaultConfig.analytics).toEqual({
       retentionDays: 400,
     });

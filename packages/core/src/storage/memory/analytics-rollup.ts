@@ -1,5 +1,5 @@
 /**
- * In-memory реализация порта `AnalyticsRollupRepository` (PROP-102).
+ * In-memory реализация порта `AnalyticsRollupRepository` (ADR-102).
  *
  * Семантика повторяет файловую (`AnalyticsRollupStore`): бакеты держатся в
  * массиве, ключ/инкремент/агрегация — общие (`analytics-rollup-helpers.ts`).

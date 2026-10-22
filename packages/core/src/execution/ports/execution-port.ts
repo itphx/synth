@@ -1,5 +1,5 @@
 /**
- * Порт исполнения команд (PROP-077, шаг 1).
+ * Порт исполнения команд (ADR-077, шаг 1).
  *
  * Домен (тулы `execute_shell`/`grep_files`, git-тулы, inline-shell, детект
  * внешних зависимостей) работает через интерфейс, а не через прямой вызов
@@ -73,7 +73,7 @@ export interface ExecResult {
 
 /**
  * Порт исполнения команд. Реализации: `InlineExecutionPort` (в процессе) и
- * `RemoteExecutionPort` (HTTP к исполнителю, шаг 7 плана PROP-077).
+ * `RemoteExecutionPort` (HTTP к исполнителю, шаг 7 плана ADR-077).
  */
 export interface ExecutionPort {
   execute(req: ExecRequest): Promise<ExecResult>;
@@ -122,7 +122,7 @@ export interface ExecutionErrorInit {
 }
 
 /**
- * Типизированная ошибка исполнения (PROP-077). Несёт те же поля, что и
+ * Типизированная ошибка исполнения (ADR-077). Несёт те же поля, что и
  * ошибка `execFile` (`code`/`stdout`/`stderr`/`killed`/`message`), поэтому
  * тексты, которые видит модель, не меняются.
  */

@@ -9,7 +9,7 @@ import {
   pipelineStepStateSchema,
 } from './pipeline.js';
 
-describe('Контракт пайплайна (ADR-051 / PROP-059)', () => {
+describe('Контракт пайплайна (ADR-051 / ADR-100)', () => {
   it('принимает валидное определение пайплайна', () => {
     const parsed = pipelineDefinitionSchema.safeParse({
       id: 'release-flow',

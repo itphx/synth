@@ -1,5 +1,5 @@
 /**
- * Общая заглушка портов PostgreSQL-драйвера (PROP-032, волна 3b).
+ * Общая заглушка портов PostgreSQL-драйвера (ADR-097, волна 3b).
  *
  * Пока доменный порт не реализован поверх SQL, драйвер отдаёт `notImplementedPort`
  * (прокси, любой доступ к методу которого бросает
@@ -25,7 +25,7 @@ export function notImplementedPort<T>(port: string): T {
         if (!method) {
           method = () => {
             throw new PostgresStorageNotImplementedError(
-              `Порт '${port}' ещё не реализован в PostgreSQL-драйвере (PROP-032, волна реализации портов).`,
+              `Порт '${port}' ещё не реализован в PostgreSQL-драйвере (ADR-097, волна реализации портов).`,
             );
           };
           methods.set(prop, method);

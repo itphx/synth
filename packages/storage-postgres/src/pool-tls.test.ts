@@ -1,5 +1,5 @@
 /**
- * ADR-099 × PROP-032: маппинг TLS-настроек в `pg.Pool` (`buildPoolConfig`) —
+ * ADR-099 × ADR-097: маппинг TLS-настроек в `pg.Pool` (`buildPoolConfig`) —
  * единый источник доверия (`storage.postgres.sslmode` + `security.tls`),
  * fail-closed без CA и защита от «тихого» DSN.
  */

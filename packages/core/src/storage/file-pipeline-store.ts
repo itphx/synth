@@ -20,7 +20,7 @@ const DEFINITIONS_KEY = 'definitions';
 const INSTANCES_KEY = 'instances';
 
 /**
- * ADR-051/PROP-059: файловая реализация порта пайплайнов (ADR-096 — слой
+ * ADR-051/ADR-100: файловая реализация порта пайплайнов (ADR-096 — слой
  * хранения; ADR-005 — JSON + атомарная запись tmp→rename).
  *
  * Физическое расположение:

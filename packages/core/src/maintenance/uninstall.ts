@@ -25,17 +25,17 @@ export interface UninstallCommandOptions {
   /** Удалить каталог данных (необратимо; требует `--yes`). */
   purge?: boolean;
   /**
-   * PROP-032: явно удалить **схему БД** (`DROP SCHEMA … CASCADE`) при
+   * ADR-097: явно удалить **схему БД** (`DROP SCHEMA … CASCADE`) при
    * `storage.backend=postgres` (флаг `--purge-db`; требует `--purge` и `--yes`).
    * По умолчанию данные БД не трогаются.
    */
   purgeDb?: boolean;
   /**
-   * PROP-032: шов удаления схемы БД (`StorageContext.purgeSchema`). Задан только
+   * ADR-097: шов удаления схемы БД (`StorageContext.purgeSchema`). Задан только
    * при backend=postgres; `--purge-db` без шва → понятная ошибка.
    */
   purgeSchema?: () => Promise<void>;
-  /** PROP-032: физический backend хранения (по умолчанию `file`). */
+  /** ADR-096: физический backend хранения (по умолчанию `file`). */
   storageBackend?: StorageBackendKind;
   /** Показать план без удаления. */
   dryRun?: boolean;
@@ -186,7 +186,7 @@ export async function runUninstallCommand(opts: UninstallCommandOptions): Promis
     return 1;
   }
 
-  // PROP-032: `--purge-db` осмыслен только при `storage.backend=postgres` (удаление
+  // ADR-097: `--purge-db` осмыслен только при `storage.backend=postgres` (удаление
   // схемы БД). Fail-closed: явная ошибка вместо молчаливого no-op — иначе флаг
   // создавал бы иллюзию, что данные БД удалены.
   if (purgeDb && !postgres) {
@@ -236,7 +236,7 @@ export async function runUninstallCommand(opts: UninstallCommandOptions): Promis
     return 1;
   }
 
-  // PROP-032: backend=postgres — данные БД по умолчанию не трогаем; удаление
+  // ADR-097: backend=postgres — данные БД по умолчанию не трогаем; удаление
   // схемы БД только по явному --purge-db (отдельное подтверждение).
   if (postgres) {
     log('');
@@ -287,7 +287,7 @@ export async function runUninstallCommand(opts: UninstallCommandOptions): Promis
   );
 
   try {
-    // PROP-032: при `--purge-db` сначала удаляем схему БД; ошибка → dataDir не
+    // ADR-097: при `--purge-db` сначала удаляем схему БД; ошибка → dataDir не
     // трогаем (пользователь может повторить/разобраться).
     if (purgeDb) {
       if (!opts.purgeSchema) {

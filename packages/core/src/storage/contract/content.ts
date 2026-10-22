@@ -139,7 +139,7 @@ export function describeDictionaryRepository(
 }
 
 /**
- * Паспорт порта `DocumentRepository<T>` (PROP-032, W2.4): round-trip по ключу,
+ * Паспорт порта `DocumentRepository<T>` (ADR-096, W2.4): round-trip по ключу,
  * `list`/`delete`, вложенные ключи (`provider/model`), независимость значений.
  */
 export function describeDocumentRepository<T>(

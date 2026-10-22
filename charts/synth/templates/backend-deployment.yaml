@@ -12,7 +12,7 @@
 {{- if and $authApiKey.enabled .Values.backend.oidc.enabled -}}
 {{- fail "backend.auth.apiKey.enabled и backend.oidc.enabled взаимоисключающие: включите либо API-key (SYNTH_API_KEY), либо OIDC, но не оба" -}}
 {{- end -}}
-{{- /* PROP-077: split-режим — control plane получает адрес пула исполнителей
+{{- /* ADR-077: split-режим — control plane получает адрес пула исполнителей
        и ПУТЬ к файлу с токеном (значение токена в env/ConfigMap не попадает,
        инвариант 13). */ -}}
 {{- $executionRemote := include "synth.execution.isRemote" . -}}
@@ -130,7 +130,7 @@ spec:
                   optional: {{ .Values.metrics.tokenOptional }}
             {{- end }}
             {{- end }}
-            {{- /* PROP-032: пароль БД — только env из Secret (в config.yaml не
+            {{- /* ADR-097: пароль БД — только env из Secret (в config.yaml не
                    попадает, инвариант 13). Пустой/отсутствующий ключ → core
                    попробует файл {dataDir}/secrets/postgres-password. */}}
             {{- if include "synth.storage.isPostgres" . }}
@@ -141,7 +141,7 @@ spec:
                   key: {{ .Values.storage.postgres.secretPasswordKey }}
                   optional: true
             {{- end }}
-            {{- /* PROP-077: split-режим (execution.mode=remote). Адреса
+            {{- /* ADR-077: split-режим (execution.mode=remote). Адреса
                    исполнителей — список через запятую; пусто + executor.enabled
                    → адрес Service пула. Токен — путь к файлу (Secret смонтирован
                    ниже), не значение. */}}
@@ -161,7 +161,7 @@ spec:
             - name: SYNTH_EXECUTION_FAIL_MODE
               value: {{ include "synth.execution.failMode" . | quote }}
             {{- end }}
-            {{- /* PROP-077: каталог workspace на стороне backend'а. Задаётся,
+            {{- /* ADR-077: каталог workspace на стороне backend'а. Задаётся,
                    только если отличается от дефолта {dataDir}/workspaces —
                    иначе backend создал бы каталоги проектов вне общего тома,
                    и исполнитель их не увидит. */}}
@@ -192,13 +192,13 @@ spec:
               mountPath: {{ include "synth.backend.tlsMountDir" . }}
               readOnly: true
             {{- end }}
-            {{- /* PROP-077: общий том workspace — те же файлы, что у пула
+            {{- /* ADR-077: общий том workspace — те же файлы, что у пула
                    исполнителей (иначе исполнитель их не увидит). */}}
             {{- if $sharedWorkspace }}
             - name: executor-workspace
               mountPath: {{ .Values.executor.workspace.mountPath }}
             {{- end }}
-            {{- /* PROP-077: токен исполнителя — файлом (0400); в env backend'а
+            {{- /* ADR-077: токен исполнителя — файлом (0400); в env backend'а
                    идёт путь, а не значение (инвариант 13). */}}
             {{- if $executionRemote }}
             - name: executor-token
@@ -255,13 +255,13 @@ spec:
             secretName: {{ .Values.security.tls.existingSecret }}
             defaultMode: 0400
         {{- end }}
-        {{- /* PROP-077: общий том workspace (control plane ↔ исполнители). */}}
+        {{- /* ADR-077: общий том workspace (control plane ↔ исполнители). */}}
         {{- if $sharedWorkspace }}
         - name: executor-workspace
           persistentVolumeClaim:
             claimName: {{ include "synth.executor.workspaceClaim" . }}
         {{- end }}
-        {{- /* PROP-077: Secret с токеном исполнителя — ключ спроецирован в файл
+        {{- /* ADR-077: Secret с токеном исполнителя — ключ спроецирован в файл
                `token` (0400); backend читает токен по этому пути. */}}
         {{- if $executionRemote }}
         - name: executor-token

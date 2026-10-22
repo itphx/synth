@@ -1,5 +1,5 @@
 /**
- * PROP-032: тесты БД-механизмов координации (`PgMutex`/`PgLeader`, advisory-локи).
+ * ADR-097: тесты БД-механизмов координации (`PgMutex`/`PgLeader`, advisory-локи).
  *
  * Гейт по env `SYNTH_TEST_POSTGRES_DSN`: без него весь блок `describe.skip`.
  * Advisory-локи не требуют схемы/миграций — тесты берут соединение и работают
@@ -76,7 +76,7 @@ async function assertSerializes(a: TestMutex, b: TestMutex): Promise<void> {
   expect(order.indexOf('b:start')).toBeGreaterThan(order.indexOf('a:end'));
 }
 
-describePg('PostgreSQL advisory-локи (PROP-032)', () => {
+describePg('PostgreSQL advisory-локи (ADR-097)', () => {
   let conn: PostgresConnection;
 
   beforeEach(() => {

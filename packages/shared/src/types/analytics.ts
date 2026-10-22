@@ -1,5 +1,5 @@
 /**
- * PROP-102: аналитика и отчётность инстанса — контракт пред-агрегированных
+ * ADR-102: аналитика и отчётность инстанса — контракт пред-агрегированных
  * суточных роллапов.
  *
  * Единица роллапа — **сутки в UTC**. Хранилище держит **сырые счётчики**
@@ -8,7 +8,7 @@
  * сообщений, содержимого промптов, ключей и PII в значениях нет.
  */
 
-/** Семейства роллапов (PROP-102 §2). */
+/** Семейства роллапов (ADR-102 §2). */
 export const ANALYTICS_FAMILIES = ['usage', 'activity', 'decision', 'prompt'] as const;
 export type AnalyticsFamily = (typeof ANALYTICS_FAMILIES)[number];
 
@@ -93,7 +93,7 @@ export interface AnalyticsRollupRow {
 
 /**
  * Дериваты, которые сервис считает **на чтении** из сырых счётчиков (не
- * персистятся, PROP-102 §2). В строке отчёта лежат рядом с сырыми мерами; при
+ * персистятся, ADR-102 §2). В строке отчёта лежат рядом с сырыми мерами; при
  * экспорте выносятся отдельными колонками после сырых мер.
  */
 export const ANALYTICS_DERIVED_MEASURES = [
@@ -104,7 +104,7 @@ export const ANALYTICS_DERIVED_MEASURES = [
 ] as const;
 export type AnalyticsDerivedMeasure = (typeof ANALYTICS_DERIVED_MEASURES)[number];
 
-/** Идентификатор отчёта — совпадает с семейством роллапов (PROP-102 §4). */
+/** Идентификатор отчёта — совпадает с семейством роллапов (ADR-102 §4). */
 export type AnalyticsReportKind = AnalyticsFamily;
 
 /** Строка отчёта: оси группировки + меры (в т.ч. дериваты) + стоимость. */
@@ -117,7 +117,7 @@ export interface AnalyticsReportRow {
   costByCurrency?: Record<string, number>;
 }
 
-/** Отчёт по семейству за период (только чтение, PROP-102 §4). */
+/** Отчёт по семейству за период (только чтение, ADR-102 §4). */
 export interface AnalyticsReport {
   report: AnalyticsReportKind;
   /** Начало периода включительно (`YYYY-MM-DD`, UTC). */
@@ -129,7 +129,7 @@ export interface AnalyticsReport {
   rows: AnalyticsReportRow[];
 }
 
-/** Формат выгрузки отчёта (server-side, только данные — PROP-102 §6). */
+/** Формат выгрузки отчёта (server-side, только данные — ADR-102 §6). */
 export const ANALYTICS_EXPORT_FORMATS = ['csv', 'json'] as const;
 export type AnalyticsExportFormat = (typeof ANALYTICS_EXPORT_FORMATS)[number];
 

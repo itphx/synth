@@ -54,7 +54,7 @@ COPY . .
 # storage-postgres → backend.
 #
 # `@itphx/synth-storage-postgres` — опциональный БД-драйвер слоя хранения
-# (PROP-032/ADR-097), обязательный для `storage.backend=postgres`. Его нужно и
+# (ADR-096/ADR-097), обязательный для `storage.backend=postgres`. Его нужно и
 # установить, и собрать: `pnpm deploy` переносит workspace-пакеты по их `files`
 # (только `dist`), поэтому непособанный пакет уехал бы в образ без кода.
 # `--prod`/`--legacy` (ниже) optional-зависимости не выкидывают; `--no-optional`
@@ -67,7 +67,7 @@ RUN pnpm install --filter @itphx/synth-backend --filter @itphx/synth-core --filt
 
 # pnpm deploy создаёт самодостаточную папку с реальными node_modules (без symlinks),
 # включая транзитивные runtime-зависимости (@itphx/synth-core, ws и т.д.) и
-# optionalDependencies (@itphx/synth-storage-postgres + pg — PROP-032).
+# optionalDependencies (@itphx/synth-storage-postgres + pg — ADR-096).
 RUN mkdir -p /out && pnpm --filter @itphx/synth-backend deploy --prod --legacy /out/app
 
 # Права чиним здесь, на платформе билдера: файлы pnpm deploy имеют mode 770

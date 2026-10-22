@@ -106,7 +106,7 @@ describe('backend: контракт монтирования роутов (mount
       'GET /api/v2/maintenance/status',
       'GET /api/v2/mcp/registry',
       'GET /api/v2/audit',
-      // PROP-102: аналитика (только чтение)
+      // ADR-102: аналитика (только чтение)
       'GET /api/v2/analytics/summary',
       'GET /api/v2/analytics/usage',
       'GET /api/v2/analytics/export',
@@ -205,7 +205,7 @@ describe('backend: контракт монтирования роутов (mount
     '/api/v2/admin/debug/config',
     '/api/v2/openapi.json',
     '/api/v2/events',
-    // PROP-102: аналитика — только чтение, но под requireAuth
+    // ADR-102: аналитика — только чтение, но под requireAuth
     '/api/v2/analytics/summary',
     '/api/v2/analytics/usage',
     '/api/v2/analytics/export?report=usage&format=csv',
@@ -352,7 +352,7 @@ describe('backend: контракт монтирования роутов (mount
     }
   });
 
-  it('PROP-102: аналитика — elevated/auditor сквозной обзор; USER → свой скоуп + 403 на сквозные', async () => {
+  it('ADR-102: аналитика — elevated/auditor сквозной обзор; USER → свой скоуп + 403 на сквозные', async () => {
     // ADMIN/LEAD/AUDITOR — сквозной обзор: сводка и любые отчёты 200.
     for (const token of [ADMIN, LEAD, AUDITOR]) {
       expect((await req('/api/v2/analytics/summary', {}, token)).status, `summary ${token}`).toBe(200);

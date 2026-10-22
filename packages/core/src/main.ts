@@ -33,7 +33,7 @@ async function initTls(
 }
 
 /**
- * PROP-032: единый контекст хранения для CLI-команд — resolved backend
+ * ADR-096: единый контекст хранения для CLI-команд — resolved backend
  * (`file`/`memory`/`postgres`) из конфига инстанса. Хелпер, чтобы не дублировать
  * резолвинг по всем командам (у CLI нет `StandaloneConfig`).
  *
@@ -57,7 +57,7 @@ async function buildCliStorage(
 }
 
 /**
- * PROP-077: режим исполнения — **параметр запуска** (инвариант 24: смена режима
+ * ADR-077: режим исполнения — **параметр запуска** (инвариант 24: смена режима
  * — только рестартом). Fail-closed:
  * - неизвестное значение `mode`/`failMode` (env/CLI/config) — ошибка с текстом;
  * - `remote` без адресов исполнителей — «требуется хотя бы один адрес»;
@@ -116,7 +116,7 @@ program
   )
   .option(
     '--execution-mode <mode>',
-    'топология исполнения: inline (по умолчанию) | remote (PROP-077; удалённый исполнитель ещё не реализован)',
+    'топология исполнения: inline (по умолчанию) | remote (ADR-077; удалённый исполнитель ещё не реализован)',
   )
   .option('--ui <path>', 'путь к собранному UI (dist)')
   .option('--ignore-rules', 'не грузить проектные инструкции (AGENTS.md) — нейтральная сессия')
@@ -129,7 +129,7 @@ program
         port: parseInt(options.port, 10),
         apiKey: options.apiKey,
       },
-      // PROP-032: частичный override — `deepMerge` на рантайме дошлёт дефолты
+      // ADR-096: частичный override — `deepMerge` на рантайме дошлёт дефолты
       // `storage` (`postgres`/`degradedMode`/`fallbackDir`/…); тип требует
       // полную `StorageConfig`, поэтому сужаем кастом (как для `remote` ниже).
       storage: options.dataDir ? ({ dataDir: options.dataDir } as SynthConfig['storage']) : undefined,
@@ -154,7 +154,7 @@ program
       overrides,
     });
 
-    // PROP-077: топология исполнения (параметр запуска) — fail-closed на
+    // ADR-077: топология исполнения (параметр запуска) — fail-closed на
     // неверном `mode` и на недоступном удалённом исполнителе.
     const execution = await resolveExecutionStartup(synth, options.executionMode);
 
@@ -203,7 +203,7 @@ program
       port,
       dataDir,
       apiKey,
-      // PROP-032: физический backend хранения (env > config.yaml > file).
+      // ADR-096: физический backend хранения (env > config.yaml > file).
       storageBackend: resolveStorageBackend(synth, process.env),
       postgresConfig: resolvePostgresConfig(synth, process.env),
       postgresPassword: resolvePostgresPassword({ dataDir }, process.env),
@@ -211,7 +211,7 @@ program
       fallbackDir: resolveStorageFallbackDir(synth, process.env, home),
       workspacesRoot: resolveWorkspacesRoot(synth, undefined, home),
       defaultWorkingDir: resolveDefaultWorkspace(synth, undefined, home),
-      // PROP-077: режим исполнения и параметры удалённого исполнителя —
+      // ADR-077: режим исполнения и параметры удалённого исполнителя —
       // порт собирается по ним (параметр запуска, инвариант 24).
       executionConfig: execution,
       maxUploadBytes: resolveMaxUploadBytes(synth),
@@ -247,7 +247,7 @@ program
       schedulerConfig: synth.scheduler,
       // ADR-084: конфигурация decision-слоя микро-каскада.
       decisionConfig: synth.decision,
-      // PROP-102: конфигурация аналитики (retention суточных роллапов).
+      // ADR-102: конфигурация аналитики (retention суточных роллапов).
       analyticsConfig: synth.analytics,
       // ADR-094: конфигурация метрик (`metrics.enabled`, env SYNTH_METRICS_ENABLED).
       metricsConfig: synth.metrics,
@@ -293,7 +293,7 @@ program
       // ADR-089: остановить retention-очистку журнала событий.
       appHandle.stopEventJournalPruner?.();
 
-      // PROP-102: остановить retention-очистку роллапов аналитики.
+      // ADR-102: остановить retention-очистку роллапов аналитики.
       appHandle.stopAnalyticsRollupPruner?.();
 
       // ADR-094: снять readiness до остановки коллекторов — скрейп в момент
@@ -311,7 +311,7 @@ program
       // ADR-051 (срез): остановить планировщик расписаний.
       appHandle.stopScheduler?.();
 
-      // PROP-032: закрыть backend хранения (пул соединений PG); `file`/`memory`
+      // ADR-097: закрыть backend хранения (пул соединений PG); `file`/`memory`
       // ресурсов не держат — вызов no-op (см. `StorageContext.close?`).
       if (appHandle.closeStorage) {
         await appHandle.closeStorage().catch(() => {});
@@ -493,7 +493,7 @@ projectCmd
     const { SessionManager } = await import('./sessions/manager.js');
     const { syncProjectToRemote, resolveLocalWorkspace } = await import('./remote/transfer.js');
 
-    // PROP-032: хранилища — из единого контекста (resolved backend).
+    // ADR-096: хранилища — из единого контекста (resolved backend).
     const storage = await buildCliStorage(synth, dataDir, home);
     const project = await storage.projects.load(projectId);
     if (!project) {
@@ -564,7 +564,7 @@ projectCmd
     const { SessionManager } = await import('./sessions/manager.js');
     const { forkProjectToLocal } = await import('./remote/transfer.js');
 
-    // PROP-032: хранилища — из единого контекста (resolved backend).
+    // ADR-096: хранилища — из единого контекста (resolved backend).
     const storage = await buildCliStorage(synth, dataDir, home);
     const session = await ensureRemoteSession(options, synth, home);
     const remoteClient = session.getClient();
@@ -1287,7 +1287,7 @@ program
 
 program
   .command('storage')
-  .description('Управление физическим слоем хранения (PROP-032)')
+  .description('Управление физическим слоем хранения (ADR-096)')
   .addCommand(
     new Command('migrate')
       .description('Перенести данные инстанса между backend\'ами хранения (file ↔ postgres), идемпотентно')
@@ -1325,7 +1325,7 @@ program
 
 program
   .command('analytics')
-  .description('Аналитика и отчётность инстанса (PROP-102)')
+  .description('Аналитика и отчётность инстанса (ADR-102)')
   .addCommand(
     new Command('rebuild')
       .description('Идемпотентно пересобрать суточные роллапы аналитики из истории (usage/activity)')
@@ -1343,7 +1343,7 @@ program
         const auditPath = synth.llmGateway.audit.logPath || join(dataDir, 'audit', 'llm-gateway.jsonl');
 
         const { runAnalyticsRebuildCommand } = await import('./analytics/rebuild-command.js');
-        // PROP-032: контекст собирается под выбранный backend и закрывается в `finally`
+        // ADR-096: контекст собирается под выбранный backend и закрывается в `finally`
         // (pool PG); схема не мигрируется — это контур `synth migrate`.
         const storage = await buildCliStorage(synth, dataDir, home, { postgresSchemaMode: 'skip' });
         let code = 1;
@@ -1378,7 +1378,7 @@ program
 
     const { runDoctorCommand } = await import('./maintenance/doctor.js');
     const backend = resolveStorageBackend(synth, process.env);
-    // PROP-032: при backend=postgres — read-only проба БД (контекст в режиме
+    // ADR-097: при backend=postgres — read-only проба БД (контекст в режиме
     // `skip`, миграции не применяются); ошибка сборки → fail `db-connection`.
     let dbHealth: (() => Promise<import('./storage/storage-context.js').StorageHealth>) | undefined;
     if (backend === 'postgres') {

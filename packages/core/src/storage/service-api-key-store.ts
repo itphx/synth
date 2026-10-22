@@ -8,7 +8,7 @@ import type { CreateServiceApiKeyInput, UpdateServiceApiKeyPatch } from '@itphx/
 import type { ServiceKeyRepository } from './ports/service-key-repository.js';
 import { info, warning } from '../logger.js';
 
-/** ADR-052 (этап I): версия схемы файла service-key (для будущей миграции PROP-032). */
+/** ADR-052 (этап I): версия схемы файла service-key (для будущей миграции ADR-096). */
 export const SERVICE_API_KEYS_SCHEMA_VERSION = 1;
 
 /**
@@ -102,7 +102,7 @@ export type ServiceKeyEnsureStatus = 'created' | 'updated' | 'unchanged';
  *
  * Хранится одним JSON-файлом `{dataDir}/service-keys.json` (ADR-005, атомарная
  * запись tmp→rename). Plaintext-секрет не сохраняется — только sha256-хеш;
- * секрет возвращается единственный раз в `create`. Модель PG-ready (PROP-032):
+ * секрет возвращается единственный раз в `create`. Модель PG-ready (ADR-097):
  * плоские записи со стабильным `id` и `schemaVersion`.
  */
 export class ServiceApiKeyStore implements ServiceKeyRepository {
@@ -199,7 +199,7 @@ export class ServiceApiKeyStore implements ServiceKeyRepository {
 
   /**
    * Полные записи (включая `hash`) — только для переноса между backend'ами
-   * (`synth storage migrate`, PROP-032); публичный API использует `list()`.
+   * (`synth storage migrate`, ADR-097); публичный API использует `list()`.
    */
   async exportAll(): Promise<ServiceApiKeyRecord[]> {
     const file = await this._load();

@@ -5,7 +5,7 @@
 #        docker compose up -d
 #      Поднимается только `synth`; данные — в томе `synth-data`.
 #
-#   2) PostgreSQL как backend хранения (PROP-032, ADR-096/ADR-097):
+#   2) PostgreSQL как backend хранения (ADR-097, ADR-096/ADR-097):
 #      задайте в .env рядом с этим файлом (минимум — пароль БД):
 #        SYNTH_STORAGE_BACKEND=postgres
 #        SYNTH_POSTGRES_PASSWORD=<пароль>          # секрет, в git не коммитить
@@ -24,7 +24,7 @@
 #      (дефолт): `SYNTH_EXECUTION_MODE` не задаётся, команды идут в процесс
 #      control plane. Данные — в томе `synth-data`.
 #
-#   4) Split (PROP-077/PROP-082): control plane БЕЗ toolchain'а + отдельные
+#   4) Split (ADR-077/PROP-082): control plane БЕЗ toolchain'а + отдельные
 #      исполнители.
 #        docker compose --profile split up -d
 #      Поднимаются `synth-backend-split` (slim — только control plane),
@@ -63,7 +63,7 @@ services:
       - SYNTH_PROVIDER_OLLAMA_URL=${SYNTH_PROVIDER_OLLAMA_URL:-http://ollama:11434}
       - SYNTH_PROVIDER_OLLAMA_MODEL=${SYNTH_PROVIDER_OLLAMA_MODEL:-qwen3.8:27b}
       - SYNTH_PROVIDER_OLLAMA_TYPE=ollama
-      # --- Слой хранения (PROP-032, ADR-096/ADR-097) ---
+      # --- Слой хранения (ADR-096, ADR-096/ADR-097) ---
       # backend: file (дефолт) | memory (данные НЕ сохраняются) | postgres.
       # При postgres поднимите профиль `postgres` (сервис ниже) — иначе хост
       # `postgres` не разрешится в DNS Docker-сети.
@@ -127,7 +127,7 @@ services:
     profiles:
       - ollama
 
-  # PostgreSQL — backend хранения (PROP-032). Профиль `postgres`: без него
+  # PostgreSQL — backend хранения (ADR-097). Профиль `postgres`: без него
   # `docker compose up` остаётся файловым (сервис и том не создаются).
   # Требуется SYNTH_POSTGRES_PASSWORD (см. шапку файла) — пароль попадает в
   # контейнер БД через env, в git/compose-файл не хардкодится.
@@ -184,7 +184,7 @@ services:
       - SYNTH_PORT=5000
       - SYNTH_DATA_DIR=/var/synth/data
       - SYNTH_RESTART_MODE=${SYNTH_RESTART_MODE:-process}
-      # Слой хранения — как у standalone-сценария (PROP-032, ADR-096).
+      # Слой хранения — как у standalone-сценария (ADR-096, ADR-096).
       - SYNTH_STORAGE_BACKEND=${SYNTH_STORAGE_BACKEND:-file}
       - SYNTH_POSTGRES_HOST=${SYNTH_POSTGRES_HOST:-postgres}
       - SYNTH_POSTGRES_PORT=${SYNTH_POSTGRES_PORT:-5432}
@@ -207,11 +207,11 @@ services:
       - all-in-one
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Split (PROP-077/PROP-082): control plane (slim) + исполнители (worker'ы)
+  # Split (ADR-077/PROP-082): control plane (slim) + исполнители (worker'ы)
   # ─────────────────────────────────────────────────────────────────────────────
   #
   # Control plane — slim-образ (без toolchain'а): команды агентских тулов
-  # уходят исполнителю по HTTP (PROP-077), поэтому в control plane НИКАКОГО
+  # уходят исполнителю по HTTP (ADR-077), поэтому в control plane НИКАКОГО
   # toolchain'а не нужно — изоляция достигается именно этим.
   #
   # Имя сервиса — `synth-backend-split`, но сетевой алиас `synth-backend`
@@ -230,7 +230,7 @@ services:
       - SYNTH_PORT=5000
       - SYNTH_DATA_DIR=/var/synth/data
       - SYNTH_RESTART_MODE=${SYNTH_RESTART_MODE:-process}
-      # --- Топология исполнения (PROP-077) ---
+      # --- Топология исполнения (ADR-077) ---
       # Переключатель — параметр запуска (инвариант 24): смена режима требует
       # рестарта процесса, а не runtime-настройки.
       - SYNTH_EXECUTION_MODE=remote
@@ -242,7 +242,7 @@ services:
       # локально. `inline-fallback` — осознанный обход изоляции, в managed-
       # контуре не включать.
       - SYNTH_EXECUTION_FAIL_MODE=${SYNTH_EXECUTION_FAIL_MODE:-fail}
-      # Слой хранения — как у standalone-сценария (PROP-032, ADR-096).
+      # Слой хранения — как у standalone-сценария (ADR-096, ADR-096).
       - SYNTH_STORAGE_BACKEND=${SYNTH_STORAGE_BACKEND:-file}
       - SYNTH_POSTGRES_HOST=${SYNTH_POSTGRES_HOST:-postgres}
       - SYNTH_POSTGRES_PORT=${SYNTH_POSTGRES_PORT:-5432}
@@ -277,7 +277,7 @@ services:
     profiles:
       - split
 
-  # Исполнитель (worker) — отдельный процесс с toolchain'ом (PROP-077).
+  # Исполнитель (worker) — отдельный процесс с toolchain'ом (ADR-077).
   # В образе НЕТ control plane: ни OIDC/RBAC, ни LLM-ключей.
   synth-executor:
     build:

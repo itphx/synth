@@ -128,7 +128,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       model: 'clef-flash',
       confidenceThreshold: 0.9,
     });
-    // PROP-102: retention суточных роллапов аналитики.
+    // ADR-102: retention суточных роллапов аналитики.
     expect(cfg.analytics).toEqual({ retentionDays: 30 });
     // ADR-094: Helm ставит SYNTH_METRICS_ENABLED — имя env должно совпадать.
     expect(cfg.metrics).toEqual({ enabled: true });

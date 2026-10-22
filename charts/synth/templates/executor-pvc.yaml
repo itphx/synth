@@ -1,4 +1,4 @@
-{{- /* PROP-077, шаг 7c: общий том workspace (control plane ↔ исполнители).
+{{- /* ADR-077, шаг 7c: общий том workspace (control plane ↔ исполнители).
        Claim создаётся чартом, только если пользователь не принёс свой
        (`executor.workspace.existingClaim` / `claimName`). */ -}}
 {{- if and .Values.executor.enabled (include "synth.executor.workspaceEnabled" .) }}

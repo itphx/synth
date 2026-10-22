@@ -1,5 +1,5 @@
 /**
- * Контрактный suite портов хранения (PROP-032, W2.1).
+ * Контрактный suite портов хранения (ADR-096, W2.1).
  *
  * Каждая функция `describeXxxRepository(name, make)` — компактный «паспорт»
  * порта: ключевые операции (создание/чтение/список/удаление/идемпотентность) и
@@ -48,7 +48,7 @@ export { describeProtectedPathsRepository } from './content.js';
 export { describeBlobStore } from './misc.js';
 export { describeDefaultsRepository } from './misc.js';
 
-// ADR-051/PROP-059 (пайплайны) и ADR-086 §5 (реестр установок пакетов).
+// ADR-051/ADR-100 (пайплайны) и ADR-086 §5 (реестр установок пакетов).
 export { describePipelineRepository } from './pipeline-repository.contract.js';
 export { describePackRepository } from './pack-repository.contract.js';
 

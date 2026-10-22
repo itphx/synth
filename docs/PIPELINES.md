@@ -5,7 +5,7 @@
 > [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) (пайплайн как второй движок);
 > поставка расширений — в [ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md);
 > остаток (rollback/exit-стратегия, дашборд, отдельное хранилище артефактов) —
-> [PROP-059](./arch_decisions/prop-059-pipeline-automation.md).
+> [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) §«Открытые вопросы».
 >
 > **Статус документа:** часть I — **legacy-контур ADR-100** («декларация + учёт прогона»), он
 > остаётся рабочим; часть II — **движок пайплайнов по ADR-101, реализован** (этапы Э1–Э7 закрыты
@@ -730,7 +730,7 @@ containment'а файла (ADR-075) и санитизацией наружу (AD
 **Хранилище.** Черновики и версии — порт `ProjectPipelineRepository`
 (`{dataDir}/pipelines/{pipelines,versions}.json`), прогоны и журнал — `PipelineRunRepository`
 (`{dataDir}/pipelines/{runs.json,run-events.jsonl}`); при `storage.backend=postgres` — драйвер
-`@itphx/synth-storage-postgres` (PROP-032).
+`@itphx/synth-storage-postgres` (ADR-097).
 
 #### UI (Э7)
 
@@ -758,7 +758,7 @@ containment'а файла (ADR-075) и санитизацией наружу (AD
 | Что | Где |
 |---|---|
 | Loop Engine (loop'и, верификация, termination guards) | [PROP-057](./arch_decisions/prop-057-loop-engine.md) — вне объёма, не трогаем |
-| Rollback/exit-стратегия, мониторинг-дашборд, отдельное хранилище артефактов | [PROP-059](./arch_decisions/prop-059-pipeline-automation.md) — остаётся там |
+| Rollback/exit-стратегия, мониторинг-дашборд, отдельное хранилище артефактов | [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) — остаётся там |
 | Визуальный редактор | `@xyflow/react` (зависимость разрешена владельцем; **реализован, Э7**); **IR — `PipelineSpec`**, формат React Flow не является источником истины |
 | Plugin SDK, каталог пакетов, trust | [PROP-090](./arch_decisions/prop-090-extension-api.md), [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md) |
 
@@ -775,6 +775,6 @@ containment'а файла (ADR-075) и санитизацией наружу (AD
 - [ADR-070](./arch_decisions/adr-070-system-prompt-composer.md) — сборка промпта (агентский шаг).
 - [ADR-025](./arch_decisions/adr-025-plan-act-toggle.md)/[ADR-028](./arch_decisions/adr-028-plan-build-strictness.md)/[ADR-029](./arch_decisions/adr-029-granular-permissions.md) — разрешения.
 - [ADR-094](./arch_decisions/adr-094-observability-metrics.md) — метрики.
-- [PROP-059](./arch_decisions/prop-059-pipeline-automation.md) — остаток визионного предложения.
+- [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) §«Открытые вопросы» — остаток визионного предложения.
 - [PROP-057](./arch_decisions/prop-057-loop-engine.md) — Loop Engine (вне объёма).
 - HTTP-контракт — [API_V2.md](./API_V2.md) §5.33–§5.35.

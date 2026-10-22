@@ -169,7 +169,7 @@ export interface ProjectInstructionsDeps {
   /** Подменяемый git-раннер (тесты). */
   runGitFn?: (args: string[], cwd: string, signal?: AbortSignal) => Promise<{ stdout: string; stderr: string }>;
   /**
-   * PROP-077: порт исполнения для `git rev-parse --show-toplevel` (поиск корня
+   * ADR-077: порт исполнения для `git rev-parse --show-toplevel` (поиск корня
    * репозитория для merged chain). Не задан — inline-исполнение в процессе
    * (прежнее поведение); задан — вызов уходит в исполнителя (split-режим).
    */
@@ -541,7 +541,7 @@ export class ProjectInstructionsResolver {
   constructor(deps: ProjectInstructionsDeps) {
     this._config = deps.config;
     this._dictionaryStore = deps.dictionaryStore ?? null;
-    // PROP-077: git-исполнение — через порт (`deps.execution`), иначе inline.
+    // ADR-077: git-исполнение — через порт (`deps.execution`), иначе inline.
     this._runGit =
       deps.runGitFn ?? ((args, cwd, signal) => runGit(args, cwd, signal, undefined, deps.execution));
     this._trustedProjectDirs = deps.trustedProjectDirs ?? [];

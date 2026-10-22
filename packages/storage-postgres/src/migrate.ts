@@ -1,5 +1,5 @@
 /**
- * Применение и проверка миграций схемы PostgreSQL (PROP-032, волна 3a).
+ * Применение и проверка миграций схемы PostgreSQL (ADR-097, волна 3a).
  *
  * Свой контур версионирования (НЕ `meta.json`/ADR-092): таблица
  * `synth_schema_migrations(version int PK, id text, applied_at timestamptz)` в

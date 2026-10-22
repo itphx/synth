@@ -1,4 +1,4 @@
-{{- /* PROP-077, шаг 7c: Service пула исполнителей. Control plane ходит по
+{{- /* ADR-077, шаг 7c: Service пула исполнителей. Control plane ходит по
        этому адресу (SYNTH_EXECUTION_REMOTE_URL); балансировку по репликам
        делает Kubernetes. */ -}}
 {{- if .Values.executor.enabled }}

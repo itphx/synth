@@ -29,7 +29,7 @@ export interface MaintenanceBackupInfo {
   withSecrets: boolean
   /** Архив содержит `workspaces/`. */
   withWorkspace: boolean
-  /** PROP-032: backend хранения в архиве (`postgres` — данных БД внутри нет). */
+  /** ADR-097: backend хранения в архиве (`postgres` — данных БД внутри нет). */
   storageBackend?: string
   /** Число записей в манифесте. */
   entries: number
@@ -74,7 +74,7 @@ export interface MigrationPlan {
 }
 
 /**
- * ADR-091/PROP-032: статус отдельной проверки `synth doctor`. `skipped` —
+ * ADR-091/ADR-096: статус отдельной проверки `synth doctor`. `skipped` —
  * проверка неприменима к выбранному backend'у хранения (напр. файловые
  * проверки при `storage.backend=postgres`).
  */
@@ -130,7 +130,7 @@ export interface RestoreArchiveManifest {
   instanceVersion: string
   withSecrets: boolean
   withWorkspace: boolean
-  /** PROP-032: backend хранения в архиве (`postgres` — данных БД внутри нет). */
+  /** ADR-097: backend хранения в архиве (`postgres` — данных БД внутри нет). */
   storageBackend?: string
   entries: number
   createdAt: string

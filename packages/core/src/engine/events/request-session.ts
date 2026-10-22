@@ -140,7 +140,7 @@ export interface RequestSessionServiceDeps {
    */
   issueIdentityClaim?: (event: SynthEvent) => Promise<IdentityClaimHint | null>;
   /**
-   * ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059). Решение Router'а
+   * ADR-089/ADR-051: учёт экземпляров пайплайна (ADR-100). Решение Router'а
    * с `pipeline: {id, step}` означает «событие `waitsFor` продвинуло автомат
    * пайплайна `id` к шагу `step`» — трекер ведёт экземпляр (создание либо
    * продвижение) в ядре, а add-on отдаёт артефакт по id.
@@ -586,7 +586,7 @@ export class RequestSessionService {
 
   /**
    * ADR-089/ADR-051: учёт экземпляра пайплайна для решения с
-   * `pipeline: {id, step}` (PROP-059). Ссылка на шаг есть только у решений
+   * `pipeline: {id, step}` (ADR-101). Ссылка на шаг есть только у решений
    * `ephemeral`/`bind` — там, где решение порождает сессию; в `bound`/`queue`
    * поля нет (его отвергает схема цели).
    *

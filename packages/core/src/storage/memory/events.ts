@@ -1,6 +1,6 @@
 /**
  * In-memory реализации портов событий, ключей привязок/service-key, реестра MCP,
- * claim-кодов и дедупа (PROP-032, шаг W2.2).
+ * claim-кодов и дедупа (ADR-096, шаг W2.2).
  *
  * Чистая реализация без модулей ФС (`fs`/`path`): состояние — в `Map`/массивах.
  * Семантика повторяет файловую (ADR-051/ADR-071/ADR-089/ADR-052): append-журнал
@@ -231,7 +231,7 @@ export class MemoryEventApiKeyRepository implements EventApiKeyRepository {
   }
 
   /**
-   * Импорт готовой записи как есть (PROP-032): `id`/`prefix`/`hash` сохраняются.
+   * Импорт готовой записи как есть (ADR-096): `id`/`prefix`/`hash` сохраняются.
    * Идемпотентно: при совпадении `id`, метки или хеша возвращается существующая.
    */
   async importExisting(record: EventApiKeyRecord): Promise<EventBindingApiKey> {
@@ -673,7 +673,7 @@ export class MemoryServiceKeyRepository implements ServiceKeyRepository {
   }
 
   /**
-   * Импорт готовой записи как есть (PROP-032): `id`/`prefix`/`hash` сохраняются.
+   * Импорт готовой записи как есть (ADR-096): `id`/`prefix`/`hash` сохраняются.
    * Идемпотентно: при совпадении `id`, метки или хеша возвращается существующая.
    */
   async importExisting(record: ServiceApiKeyRecord): Promise<ServiceApiKey> {

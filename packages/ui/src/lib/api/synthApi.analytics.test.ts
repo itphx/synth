@@ -3,7 +3,7 @@ import { synthApi } from './synthApi'
 import { filenameFromContentDisposition } from './analytics'
 
 /**
- * Домен `analytics` (PROP-102 §4/§6): пути/query отчётов и выгрузки, разбор
+ * Домен `analytics` (ADR-102 §4/§6): пути/query отчётов и выгрузки, разбор
  * `Content-Disposition` и контракт ошибок (403 `FORBIDDEN` без особого типа).
  */
 

@@ -1,4 +1,4 @@
-# Образ synth-executor — исполнитель агентских команд (PROP-077 шаг 7a,
+# Образ synth-executor — исполнитель агентских команд (ADR-077 шаг 7a,
 # PROP-082 шаг 5). Worker в split-топологии: control plane (backend) в одном
 # контейнере, исполнитель — в отдельном; связь — HTTP по протоколу
 # `ExecutionPort` с bearer-токеном.

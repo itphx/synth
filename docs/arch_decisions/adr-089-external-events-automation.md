@@ -1,12 +1,14 @@
 # ADR-089: Synth как платформа внешних событий и автоматизации
 
 > **Статус:** ✅ Реализовано (ядро) — Event/Binding/Router, единый funnel, API/UI, источник cron ([ADR-051](./adr-051-scheduler-pipelines.md)), API-ключи привязок, runtime-настройки «События», decision-маршрутизация ([ADR-084](./adr-084-decision-models-clef.md), opt-in), auto-bind, идентичности профиля + claim-flow, права внешних отправителей (fail-closed), надёжный Stop, живая доставка ответа наружу (сделана на стороне шлюза, [ADR-087](./adr-087-gateways.md)).
-> **Вне объёма ADR:** Plugin SDK ([PROP-090](./prop-090-extension-api.md) — отложен 2026-10-19), пайплайны ([PROP-059](./prop-059-pipeline-automation.md)), HA/второй канал ([ADR-087](./adr-087-gateways.md)).
+> **Вне объёма ADR:** Plugin SDK ([PROP-090](./prop-090-extension-api.md) — вне объёма; вернулся в работу 2026-10-22), пайплайны ([ADR-101](./adr-101-pipeline-engine.md)), HA/второй канал ([ADR-087](./adr-087-gateways.md)).
 > **Дата:** 2026-10-08 (as-built вынесено в spec — 2026-10-15).
+> **Обновлено:** 2026-10-22 — PROP-090 **вернулся в работу** (🧩 Предложение, срок решения 2026-11-14); Plugin SDK
+> остаётся **вне объёма ADR-089** — это отдельный документ (собственный объём, фазы и API).
 > **Обновлено:** 2026-10-19 — объём решения реализован и покрыт тестами → статус `✅ Реализовано (ядро)`; Plugin SDK/пайплайны/HA
 > вынесены за объём ADR (в свои документы); закрыт вопрос транспорта приёма; зафиксирована модель публикации внешним Add-on'ом.
 > **Парные документы (as-built):** [ARCHITECTURE.md](../ARCHITECTURE.md) «Внешние события и хуки» · [API_V2.md](../API_V2.md) §5.5/§5.14.1/§5.21/§5.26 · [CONFIGURATION.md](../CONFIGURATION.md) (`events`) · `packages/{core,backend,shared}/AGENTS.md`.
-> **Связано:** [ADR-030](./adr-030-hooks-agent-events.md) (фундамент hook-шины), [ADR-034](./adr-034-model-routing.md)/[ADR-035](./adr-035-micro-model-first.md) (слой решения), [ADR-033](./adr-033-session-branching-merge.md) (создание/ветвление сессий), [ADR-026](./adr-026-subagent-context-modes.md) (контекст саб-агента), [ADR-051](./adr-051-scheduler-pipelines.md), [ADR-052](./adr-052-public-api-platform.md) (service-key/webhooks), [ADR-087](./adr-087-gateways.md) (Gateway), [ADR-086](./adr-086-extensibility-plugins-editions.md) (Add-on), [ADR-029](./adr-029-granular-permissions.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-071](./adr-071-mcp-servers-prompt.md), [ADR-042](./adr-042-hybrid-mode.md)/[ADR-045](./adr-045-hybrid-server-profiles.md), [PROP-056](./prop-056-synth-mcp-server.md), [PROP-085](./prop-085-multimodal-input.md), [PROP-088](./prop-088-http-proxy.md).
+> **Связано:** [ADR-030](./adr-030-hooks-agent-events.md) (фундамент hook-шины), [ADR-034](./adr-034-model-routing.md)/[ADR-035](./adr-035-micro-model-first.md) (слой решения), [ADR-033](./adr-033-session-branching-merge.md) (создание/ветвление сессий), [ADR-026](./adr-026-subagent-context-modes.md) (контекст саб-агента), [ADR-051](./adr-051-scheduler-pipelines.md), [ADR-052](./adr-052-public-api-platform.md) (service-key/webhooks), [ADR-087](./adr-087-gateways.md) (Gateway), [ADR-086](./adr-086-extensibility-plugins-editions.md) (Add-on), [ADR-029](./adr-029-granular-permissions.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-071](./adr-071-mcp-servers-prompt.md), [ADR-042](./adr-042-hybrid-mode.md)/[ADR-045](./adr-045-hybrid-server-profiles.md), [PROP-056](./prop-056-synth-mcp-server.md), [PROP-085](./prop-085-multimodal-input.md), [ADR-099](./adr-099-egress-tls-trust.md).
 
 ## Контекст
 
@@ -40,7 +42,7 @@ Synth — **агентный рантайм для внешних событий
 - (+) Внешние отправители больше не действуют с правами машинного аккаунта шлюза (fail-closed).
 - (−) `autoBind` может плодить сессии — контур защиты: флаг off, `allowedSources`, per-key rate limit.
 - (−) Approve-gate в модели публикации внешним Add-on'ом — **процедурный на этапе отправки** (см. «Слои и границы»): принудительным закрыт только этап записи публикации.
-- Вне объёма ADR: Plugin SDK ([PROP-090](./prop-090-extension-api.md) — отложен 2026-10-19), пайплайны ([PROP-059](./prop-059-pipeline-automation.md)), HA/второй канал [ADR-087](./adr-087-gateways.md). «Стриминг ответа наружу» (edit-in-place/typing) остатком ADR-089 **не является**: закрыт на стороне шлюза ([ADR-087](./adr-087-gateways.md)).
+- Вне объёма ADR: Plugin SDK ([PROP-090](./prop-090-extension-api.md) — вне объёма; вернулся в работу 2026-10-22), пайплайны ([ADR-101](./adr-101-pipeline-engine.md)), HA/второй канал [ADR-087](./adr-087-gateways.md). «Стриминг ответа наружу» (edit-in-place/typing) остатком ADR-089 **не является**: закрыт на стороне шлюза ([ADR-087](./adr-087-gateways.md)).
 
 ## Статус реализации
 
@@ -52,6 +54,6 @@ Synth — **агентный рантайм для внешних событий
 
 ## История
 
+- 2026-10-22 — PROP-090 вернулся в работу; Plugin SDK остаётся вне объёма ADR-089 (отдельный документ).
 - 2026-10-19 — статус → `✅ Реализовано (ядро)`: объём решения реализован и покрыт тестами; Plugin SDK/пайплайны/HA — вне объёма; закрыт вопрос транспорта приёма; зафиксирована модель публикации внешним Add-on'ом.
 - 2026-10-15 — сжатие до одной страницы: as-built вынесено в spec ([ARCHITECTURE.md](../ARCHITECTURE.md), [API_V2.md](../API_V2.md), [CONFIGURATION.md](../CONFIGURATION.md), `packages/{core,backend,shared}/AGENTS.md`).
-- 2026-10-13 — синхронизация статусов: ADR-052 закрыт целиком (этапы I–IV), Telegram-шлюз реализован.

@@ -3,7 +3,7 @@
 > Точечные правила пакета. Общие инварианты, команды и стиль — в корневом
 > [AGENTS.md](../../AGENTS.md); класс расширения и форма поставки —
 > [ADR-097](../../docs/arch_decisions/adr-097-storage-provider-class.md),
-> [PROP-032](../../docs/arch_decisions/prop-032-history-storage-postgresql.md);
+> [ADR-097](../../docs/arch_decisions/adr-097-storage-provider-class.md);
 > единый слой хранения — [ADR-096](../../docs/arch_decisions/adr-096-storage-layer.md).
 
 ## Роль и границы
@@ -14,7 +14,7 @@ ADR-097): реализация доменных портов `StorageContext` (`
 (`file` остаётся дефолтом standalone/локального home, ADR-005).
 
 - Публичная функция — `createPostgresStorage(config): Promise<StorageContext>`
-  (форма — PROP-032 §«Решение»). Как и `createStorageContext`, она **не** создаёт
+  (форма — ADR-096 §«Решение»). Как и `createStorageContext`, она **не** создаёт
   модульных синглтонов: каждый вызов возвращает собранный контекст.
 - `@itphx/synth-shared` — **обычная зависимость** (`dependencies`): доменные типы
   и утилиты (`Session`/`Message`/`Project`/`ProfileData`, `generateId`/`nowISO`,
@@ -58,7 +58,7 @@ ADR-097): реализация доменных портов `StorageContext` (`
 dev-Postgres). Проводка домена — через `storage.backend = postgres`.
 
 **Текущий статус (сводно).** Реализованы: все 34 доменных порта (группы
-`ports/*`; включая `analyticsRollups` — PROP-102 и `projectPipelines`/`pipelineRuns` —
+`ports/*`; включая `analyticsRollups` — ADR-102 и `projectPipelines`/`pipelineRuns` —
 ADR-101, SQL-реализация поверх `pipeline_specs`/`pipeline_versions`/`pipeline_runs`/
 `pipeline_run_events`), лёгкие выборки `@future-backend` (в т.ч. `listLight`/`loadLight` — метаданные
 сессий без истории, `ports/sessions.ts`), точечная запись сообщений `appendMessage`/`updateMessage`
@@ -95,7 +95,7 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
   ожидаемой (`STORAGE_POSTGRES_SCHEMA_TOO_NEW`). `migrate:false` (DBA-режим) —
   `assertSchemaCurrent` без применения: схема отстаёт/отсутствует →
   `STORAGE_POSTGRES_SCHEMA_OUTDATED`. `readSchemaVersion` — текущая версия.
-- **Координация (`locks.ts`, PROP-032 волна 4).** `PgMutex implements Mutex` и
+- **Координация (`locks.ts`, ADR-097 волна 4).** `PgMutex implements Mutex` и
   `PgLeader implements SchedulerLeader` (типы — `@itphx/synth-core`, только
   `import type`) поверх session-level advisory-локов на выделенном соединении;
   ключ — детерминированный 64-битный хеш namespaced-имени (`synth:` + имя,
@@ -124,7 +124,7 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
     `maintenanceAudit`;
   - `ports/audit.ts` → `buildAuditPorts(deps)` → `securityAudit`/`egressRequests`;
   - `ports/analytics.ts` → `buildAnalyticsPorts(deps)` → `analyticsRollups`
-    (PROP-102: таблица `analytics_rollups`, миграция 003 — PK
+    (ADR-102: таблица `analytics_rollups`, миграция 003 — PK
     `(family, day, dimensions)`, атомарный `INSERT … ON CONFLICT … DO UPDATE`
     с суммированием `jsonb`-мер без advisory-локов).
   - `ports/pipelines.ts` → `buildPipelinePorts(deps)` → `projectPipelines`/`pipelineRuns`
@@ -208,7 +208,7 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
   Все времена — `timestamptz`; FK — только внутри инстанса (по `user_id`/`owner_id` FK нет);
   FK событийно-зависимых таблиц, мешавшие паритету, сняты — см. «Схема — источник истины».
 
-## TLS соединения с PostgreSQL (ADR-099 × PROP-032)
+## TLS соединения с PostgreSQL (ADR-099 × ADR-097)
 
 Единый источник доверия — `security.tls` (ADR-099); драйвер **не** читает конфиг
 сам, а получает уже собранные `ssl`-опции `pg` из shared-хелпера

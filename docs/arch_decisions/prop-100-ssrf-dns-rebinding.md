@@ -12,7 +12,7 @@
 > [ADR-099](./adr-099-egress-tls-trust.md) п. 8–11) — обычный коммит, отдельного ADR не требует.
 > **Связано:** [ADR-099](./adr-099-egress-tls-trust.md) (единый egress-слой: адресная политика, аудит,
 > журнал), [ADR-071](./adr-071-mcp-servers-prompt.md) §2.3.1 (сетевой доступ MCP), [ADR-052](./adr-052-public-api-platform.md)
-> (webhooks), [PROP-088](./prop-088-http-proxy.md) (прокси-остаток), [ADR-041](./adr-041-llm-error-taxonomy.md)
+> (webhooks), [ADR-099](./adr-099-egress-tls-trust.md) (прокси-часть egress-слоя), [ADR-041](./adr-041-llm-error-taxonomy.md)
 > (ключи ошибок), [ADR-036](./adr-036-llm-gateway.md), [ADR-094](./adr-094-observability-metrics.md)
 > (детект ребиндинга как метрика), [AUDIT-CHECKLIST](../security/AUDIT-CHECKLIST.md) §3 п.4 «SSRF / egress».
 
@@ -161,7 +161,7 @@
    ответственность — на прокси/allowlist); `POST /settings/egress/check` отдаёт `proxied`/
    `addressChecksActive`, журнал — `via`. Остаток пиннинга актуален для запросов **direct** и хостов из
    `proxy.noProxy` (там проверка полная, DNS/CIDR per-hop). Открыто: как это показывать в UI политики и как
-   сочетать с политиками гибрида ([PROP-088](./prop-088-http-proxy.md)).
+   сочетать с политиками гибрида ([ADR-099](./adr-099-egress-tls-trust.md)).
 6. **Флаг пиннинга** — нужен ли вообще, или пиннинг безусловен? Если нужен — где: `egress.tools.pinDns`
    (общий формат `egress.*`), а не `network.*`? Кто и как диагностирует «сайт перестал открываться»?
 7. **Детект и лимиты:** считать ли flip-flop инцидентом (лог/событие/алерт) и не блокировать ли имя при повторных попытках?
@@ -174,7 +174,7 @@
 - [ADR-099](./adr-099-egress-tls-trust.md) — единый egress-слой: адресная политика (`egress.*`/`mcp.networkPolicy`), аудит изменений, журнал запросов, правило при прокси.
 - [ADR-071](./adr-071-mcp-servers-prompt.md) §2.3.1 — дом сетевой политики MCP и её применение к HTTP-транспортам.
 - [ADR-052](./adr-052-public-api-platform.md) этап II — webhooks, политика egress цели доставки (`egress.webhooks`).
-- [PROP-088](./prop-088-http-proxy.md) — прокси реализован (D1+D2); доменная аутентификация (NTLM/Negotiate/Kerberos) — вне scope приложения (egress-шлюз, ADR-099 п. 25); в proxied-режиме адресную проверку выполняет прокси.
+- [ADR-099](./adr-099-egress-tls-trust.md) — прокси реализован (D1+D2); доменная аутентификация (NTLM/Negotiate/Kerberos) — вне scope приложения (egress-шлюз, п. 25); в proxied-режиме адресную проверку выполняет прокси.
 - [ADR-041](./adr-041-llm-error-taxonomy.md) — ключи ошибок отказа политики.
 - [ADR-094](./adr-094-observability-metrics.md) — детект ребиндинга как метрика/алерт.
 - [AUDIT-CHECKLIST](../security/AUDIT-CHECKLIST.md) §3 п.4 «SSRF / egress», [docs/security/README.md](../security/README.md) — класс уязвимостей и запись аудита.

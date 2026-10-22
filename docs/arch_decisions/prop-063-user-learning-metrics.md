@@ -4,7 +4,7 @@
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D18, «Обучение пользователя и метрики», Roadmap Фаза 3/4;
 > Obsidian `User-Skills-Learning-Metrics.md`, `Fear-of-Replacement.md`).
-> **Связано:** [PROP-057](./prop-057-loop-engine.md), [PROP-059](./prop-059-pipeline-automation.md),
+> **Связано:** [PROP-057](./prop-057-loop-engine.md), [ADR-101](./adr-101-pipeline-engine.md),
 > [PROP-047](./prop-047-memory-gbrain.md), [PROP-054](./prop-054-kanban-backlog.md),
 > [ADR-036](./adr-036-llm-gateway.md), [PROP-083](./prop-083-instance-customization-branding.md).
 
@@ -37,7 +37,7 @@ Roadmap Фаза 3/4 фиксирует разворот от «скорость
 - аудит LLM-вызовов JSONL ([ADR-036](./adr-036-llm-gateway.md));
 - `DebugCollector` (`packages/core/src/debug.ts`) — технический слой метрик (микро-слой, промпт);
 - память/индексы ([PROP-047](./prop-047-memory-gbrain.md)) — для анализа истории;
-- loops/pipelines ([PROP-057](./prop-057-loop-engine.md), [PROP-059](./prop-059-pipeline-automation.md)) —
+- loops/pipelines ([PROP-057](./prop-057-loop-engine.md), [ADR-101](./adr-101-pipeline-engine.md)) —
   источники данных о прогонах;
 - задачи/backlog ([PROP-054](./prop-054-kanban-backlog.md)) — привязка метрик к задачам.
 
@@ -54,11 +54,11 @@ rework rate, automation coverage, context freshness, guardrail hit rate. Явн�
 `understanding score`. Цель — обучение и осознанность, **не блокирующий аудит**.
 
 Возможные точки встраивания: git-flow ([ADR-076](./adr-076-git-repo-registry-ssh.md)), pipelines
-([PROP-059](./prop-059-pipeline-automation.md)), скиллы ([ADR-046](./adr-046-skills-and-slash-commands.md)).
+([ADR-101](./adr-101-pipeline-engine.md)), скиллы ([ADR-046](./adr-046-skills-and-slash-commands.md)).
 
 ### 2. Анализ сессий
 
-Периодический разбор истории сессий ([ADR-005](./adr-005-json-storage.md) → [PROP-032](./prop-032-history-storage-postgresql.md),
+Периодический разбор истории сессий ([ADR-005](./adr-005-json-storage.md) → [ADR-097](./adr-097-storage-provider-class.md),
 память [PROP-047](./prop-047-memory-gbrain.md)): частые ошибки, повторяющиеся запросы, неиспользуемые
 возможности. Учитывать приватность: анализ — для самого пользователя.
 
@@ -75,7 +75,7 @@ rework rate, automation coverage, context freshness, guardrail hit rate. Явн�
 ### 5. Дашборд метрик
 
 Агрегаты и тренды по команде. Хранение — JSON/`FileStore` ([ADR-005](./adr-005-json-storage.md)) до
-[PROP-032](./prop-032-history-storage-postgresql.md). UI — раздел статистики; на мобильных (ADR-044) —
+[ADR-097](./adr-097-storage-provider-class.md). UI — раздел статистики; на мобильных (ADR-044) —
 упрощённый вид.
 
 ### 6. Антипаттерны (жёстко)
@@ -98,17 +98,17 @@ rework rate, automation coverage, context freshness, guardrail hit rate. Явн�
 
 ## Открытые вопросы
 
-- Где хранить агрегаты метрик — JSON/`FileStore` или PostgreSQL ([PROP-032](./prop-032-history-storage-postgresql.md))?
+- Где хранить агрегаты метрик — JSON/`FileStore` или PostgreSQL ([ADR-097](./adr-097-storage-provider-class.md))?
 - Как на уровне дизайна не скатиться к «метрикам ради метрик»?
 - Приватность: персональные рекомендации видны только пользователю? Тренды — кому?
 - Достаточно ли эвристик/`DebugCollector` или нужен отдельный аналитический слой?
 - Как соотносится с аудитом [ADR-036](./adr-036-llm-gateway.md) (тоже хранит историю вызовов)?
 - Как учитывать данные loops/pipelines, которые ещё не реализованы
-  ([PROP-057](./prop-057-loop-engine.md)/[PROP-059](./prop-059-pipeline-automation.md))?
+  ([PROP-057](./prop-057-loop-engine.md)/[ADR-101](./adr-101-pipeline-engine.md))?
 
 ## Связи
 
-- [PROP-057](./prop-057-loop-engine.md) «Loop Engine» / [PROP-059](./prop-059-pipeline-automation.md)
+- [PROP-057](./prop-057-loop-engine.md) «Loop Engine» / [ADR-101](./adr-101-pipeline-engine.md)
   «Pipeline Automation» — источники `loop success rate`, `rework rate`, `automation coverage`.
 - [PROP-047](./prop-047-memory-gbrain.md) «Память Synth» — анализ сессий и долгосрочный контекст.
 - [PROP-054](./prop-054-kanban-backlog.md) «Kanban/backlog» — привязка метрик к задачам; просмотр из UI
@@ -116,6 +116,6 @@ rework rate, automation coverage, context freshness, guardrail hit rate. Явн�
 - [ADR-036](./adr-036-llm-gateway.md) «LLM Gateway» — аудит как источник данных (с учётом приватности).
 - [PROP-083](./prop-083-instance-customization-branding.md) «Кастомизация/онбординг» — приветственное окно,
   онбординг-тур.
-- [ADR-005](./adr-005-json-storage.md) «JSON-хранилище», [PROP-032](./prop-032-history-storage-postgresql.md)
+- [ADR-005](./adr-005-json-storage.md) «JSON-хранилище», [ADR-097](./adr-097-storage-provider-class.md)
   «PostgreSQL» — хранение агрегатов.
 - [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md) «Мобильный UI» — адаптация дашборда.

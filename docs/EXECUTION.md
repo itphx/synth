@@ -1,29 +1,25 @@
-# PROP-077: Инструментальное окружение исполнения (toolchain и executor)
+# Исполнение команд — порт, топологии и развёртывание (Spec)
 
-> **Статус:** 🧩 Предложение — split-топология: control plane + отдельные контейнеры-исполнители (worker/executor); all-in-one — PROP-082; общий переключатель `execution.mode`
-> **Решение до:** 2026-11-14
-> **Дата:** 2026-10-21
-> **Источник:** переработано 2026-10-21 (проработка двух топологий развёртывания: отдельные контейнеры-исполнители vs all-in-one)
-> **Ближайший шаг:** шаг 7d плана реализации — метрики `synth_executor_*` и runbook (переключение топологии, диагностика «исполнитель недоступен»); образы worker'а и публикация flavor'ов — [PROP-082](./prop-082-full-images-deployment.md) (шаги 4–6).
+> **Назначение:** «как устроено, точно и полно» — контракт порта исполнения, топологии развёртывания,
+> exec-API, доверенная граница, матрица «что уезжает в исполнитель», развёртывание и миграция
+> (класс **Spec** по [ARCH_DECISIONS.md](./ARCH_DECISIONS.md) §1). Решение — в
+> [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (единый порт `ExecutionPort` и режим `remote`);
+> образы и flavor'ы — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md);
+> конфигурация — [docs/CONFIGURATION.md](./CONFIGURATION.md) §«Исполнение (топология)».
+>
+> **Статус документа:** порт `ExecutionPort`, обе реализации (inline/remote), секция `execution` в конфигурации,
+> пакет исполнителя `@itphx/synth-executor`, подключение по `execution.mode=remote` и чарт
+> split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том
+> workspace, `NetworkPolicy` пула) — **реализованы**; остаток — метрики `synth_executor_*` и runbook
+> переключения топологии (шаг 7d) и перенос `simple-git` и MCP-stdio в исполнитель (шаги 8–9).
 
-**Решение:** инструментальное окружение исполнения (toolchain) и сам механизм исполнения команд
-выносятся из процесса backend'а в **отдельный сервис-исполнитель (executor/worker)** — это
-**split-топология**: backend становится тонким control plane (сессии, история, контекст, permissions,
-RBAC/OIDC, LLM Gateway, API v2), а команды агентских тулов (`execute_shell`, `grep_files`, git-тулы)
-выполняются в отдельных контейнерах с toolchain'ом. Исполнение за этим швом скрыто **портом
-исполнения** (`ExecutionPort`) — по образцу портов слоя хранения ([ADR-096](./adr-096-storage-layer.md),
-[ADR-097](./adr-097-storage-provider-class.md)): две взаимозаменяемые реализации, `InlineExecutionPort`
-(нынешнее in-process исполнение) и `RemoteExecutionPort` (HTTP к исполнителю), и один контрактный
-suite на обе. Топология выбирается **одним параметром запуска** — `execution.mode`
-(`inline` — дефолт, обратная совместимость; `remote` — split), а не runtime-настройкой: смена режима
-требует перезапуска процесса, как и остальные process-глобальные решения ([ADR-092](./adr-092-instance-lifecycle-maintenance.md)).
-**All-in-one топология** (один образ: control plane + toolchain + рантайм исполнителя) — предмет
-[PROP-082](./prop-082-full-images-deployment.md); здесь она только упоминается как второй режим той же
-конфигурации, а код исполнителя — общий.
+---
 
-## Топологии развёртывания: split и all-in-one
+## 1. Топологии развёртывания
 
-Две топологии — **два режима одной конфигурации**, а не две разных систем. Разница — только в том,
+### 1.1. Split и all-in-one — два режима одной конфигурации
+
+Две топологии — **два режима одной конфигурации**, а не две разных системы. Разница — только в том,
 **где физически живёт исполнитель**; код домена, порт исполнения и контракт — одни и те же.
 
 | Режим | `execution.mode` | Где исполняется | Образы |
@@ -32,20 +28,20 @@ suite на обе. Топология выбирается **одним пара
 | **Remote (split)** | `remote` | в отдельных контейнерах-исполнителях | `synth-backend` (control plane, без toolchain) + `synth-executor` (worker) |
 
 Разделение по образу — не «выключатель», а следствие режима: в `inline` backend'у нужен toolchain
-(образ с flavor'ом — [PROP-082](./prop-082-full-images-deployment.md)), в `remote` — не нужен, зато
+(образ с flavor'ом — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md)), в `remote` — не нужен, зато
 нужен отдельный образ worker'а.
 
-### Единый переключатель execution.mode
+### 1.2. Единый переключатель `execution.mode`
 
 - Переключатель — **параметр запуска, не runtime**: секция `execution` в `config.yaml`, env
   `SYNTH_EXECUTION_MODE`, CLI-флаг `--execution-mode`.
 - Смена — **только перезапуск процесса**. Обоснование — тот же класс, что у `storage.backend`
-  (выбор физического backend'а хранилища, `packages/core/src/storage/storage-context.ts:134`) и у
-  режимов-полюсов гибрида ([PROP-080](./prop-080-managed-hybrid-modes.md)): process-глобальные
-  singleton'ы (TLS-диспетчер, пул PG, MCP, шедулер) не переинициализируются на лету — только рестарт
+  (выбор физического backend'а хранилища, `packages/core/src/storage/storage-context.ts`) и у режимов-полюсов
+  гибрида ([PROP-080](./arch_decisions/prop-080-managed-hybrid-modes.md)): process-глобальные singleton'ы
+  (TLS-диспетчер, пул PG, MCP, шедулер) не переинициализируются на лету — только рестарт
   (инвариант 24 корневого `AGENTS.md`; graceful shutdown с exit code 75 —
-  `packages/core/src/server/restart.ts:23`).
-- Приоритет — как у всей конфигурации ([ADR-023](./adr-023-configuration.md)): **CLI-флаг > env >
+  `packages/core/src/server/restart.ts`).
+- Приоритет — как у всей конфигурации ([ADR-023](./arch_decisions/adr-023-configuration.md)): **CLI-флаг > env >
   `config.yaml` > дефолт**.
 - Дефолт `inline` — обратная совместимость: нынешнее поведение (исполнение в процессе backend'а)
   сохраняется без изменений; новая секция в конфиге отсутствует у всех существующих установок.
@@ -53,40 +49,41 @@ suite на обе. Топология выбирается **одним пара
   старт, а не молча выбирает дефолт (как `storage.backend` — «fail-closed на неизвестном явном
   значении»).
 
-### Что где исполняется (таблица компонентов)
+### 1.3. Что где исполняется
 
 | Компонент | Inline (`inline`) | Remote (`remote`) |
 |---|---|---|
 | **Control plane** (сессии, история, контекст, permissions, RBAC/OIDC, LLM Gateway, API v2) | в процессе backend'а | в процессе backend'а (1+ реплики — при PostgreSQL) |
-| **Хранилище** | файловое (`{dataDir}`) или PostgreSQL | PostgreSQL (предпосылка: см. «Зависимости») |
-| **Workspace проекта** (`project.workspace`, [ADR-075](./adr-075-project-workspace-provisioning.md)) | локальный каталог backend'а | общий том (backend ↔ исполнители), см. «Доступ к workspace» |
+| **Хранилище** | файловое (`{dataDir}`) или PostgreSQL | PostgreSQL (предпосылка — см. «Миграция между топологиями») |
+| **Workspace проекта** (`project.workspace`, [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md)) | локальный каталог backend'а | общий том (backend ↔ исполнители), см. «Доступ к workspace» |
 | **Toolchain** (`git`, `ripgrep`, `python3`, `openssh-client`) | в образе backend'а (flavor — PROP-082) | в образе worker'а (`synth-executor`) |
-| **Исполнитель** (spawn/timeout/kill, лимиты вывода) | `InlineExecutionPort` — вызов `execFile` в процессе | `RemoteExecutionPort` — HTTP к `synth-executor` |
+| **Исполнитель** (spawn/timeout/kill, лимиты вывода) | `InlineExecutionPort` — вызов `execFile` в процессе | удалённый порт — HTTP к `synth-executor` |
 | **Исполняемые команды** (shell, grep, git) | в процессе backend'а | в контейнере worker'а |
 | **FS-роуты** (чтение/запись файлов через HTTP) | backend | backend (не уезжают — см. матрицу) |
 | **Provisioning workspace** | backend (`engine/workspace-provision.ts`) | backend (тот же модуль) |
-| **Git-реестр** (`project.repos`, [ADR-076](./adr-076-git-repo-registry-ssh.md)) | backend | backend (реестр и SSH-материал — в backend'е) |
-| **LLM-вызовы** (через `GatewayProvider`, [ADR-036](./adr-036-llm-gateway.md)) | backend | backend (в исполнителе LLM-ключей нет) |
+| **Git-реестр** (`project.repos`, [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md)) | backend | backend (реестр и SSH-материал — в backend'е) |
+| **LLM-вызовы** (через `GatewayProvider`, [ADR-036](./arch_decisions/adr-036-llm-gateway.md)) | backend | backend (в исполнителе LLM-ключей нет) |
 | **Permission-слой** (`plan`/`act`/`yolo`, allow/deny/ask) | backend | backend (решение о допуске — до вызова порта) |
 | **MCP stdio-серверы** | в процессе backend'а (spawn через `StdioClientTransport`) | в процессе backend'а на фазе 1; в исполнителе — на фазе 3 |
 | **Наблюдаемость** | `/metrics` backend'а | `/metrics` backend'а + `/metrics` исполнителя (агрегация) |
 
-## Режим исполнения в конфигурации
+---
 
-Секция `execution` — **реализована (шаг 3 плана реализации)**: Zod-схема `executionConfigSchema` и
-типы `ExecutionConfig`/`ExecutionMode`/`ExecutionFailMode` (`packages/shared/src/config/types.ts`),
-дефолты — `packages/shared/src/config/defaults.ts`, резолверы `resolveExecutionConfig`/
-`resolveExecutionMode` (`packages/shared/src/config/execution.ts`). В `config.yaml` секция
-**необязательна** (дефолт `inline` — прежнее поведение). Состав:
+## 2. Режим исполнения в конфигурации
+
+Секция `execution` — **реализована**: Zod-схема `executionConfigSchema` и типы `ExecutionConfig`/`ExecutionMode`/
+`ExecutionFailMode` (`packages/shared/src/config/types.ts`), дефолты — `packages/shared/src/config/defaults.ts`,
+резолверы `resolveExecutionConfig`/`resolveExecutionMode` (`packages/shared/src/config/execution.ts`). В `config.yaml`
+секция **необязательна** (дефолт `inline` — прежнее поведение). Состав:
 
 | Поле | Тип / значения | Дефолт | Смысл |
 |---|---|---|---|
-| `execution.mode` | `inline` \| `remote` | `inline` | Топология (см. «Единый переключатель»). |
+| `execution.mode` | `inline` \| `remote` | `inline` | Топология (см. §1.2). |
 | `execution.remote.url` | список адресов исполнителей | `[]` | Куда ходить за исполнением (K8s Service `synth-executor`, `http://…`); пусто при `remote` → fail-closed на старте. |
-| `execution.remote.timeoutMs` | число | 30 000 | Таймаут exec-вызова. По умолчанию — как у нынешних тулов: 30 с (`packages/core/src/engine/tools/shell.ts:14`, `packages/core/src/engine/tools/search.ts:50`, `packages/core/src/engine/tools/git.ts:30`); для shell разрешён больший таймаут (до 120 с — `packages/core/src/engine/tools/shell.ts:22`) — отдельным значением в самом туле, не в конфиге. |
+| `execution.remote.timeoutMs` | число | 30 000 | Таймаут exec-вызова. По умолчанию — как у нынешних тулов: 30 с (`packages/core/src/engine/tools/shell.ts`, `packages/core/src/engine/tools/search.ts`, `packages/core/src/engine/tools/git.ts`); для shell разрешён больший таймаут (до 120 с) — отдельным значением в самом туле, не в конфиге. |
 | `execution.remote.concurrency` | число | число CPU backend'а | Лимит одновременных exec-вызовов на backend; превышение → очередь с ожиданием (см. `synth_executor_wait_seconds`). |
 | `execution.remote.failMode` | `fail` \| `inline-fallback` | `fail` | Поведение при недоступном исполнителе. **`fail` — fail-closed**: инструмент недоступен с явной причиной (`unavailable(dependency)`-подобный статус), fallback на локальное исполнение — только явной настройкой. |
-| `execution.remote.tokenSecret` | путь/ссылка на токен | — | **Путь/ссылка, не значение** (инвариант 13): путь к файлу с токеном или `existingSecret`/`tokenKey` (как у `security.tls` в чарте). Сам токен — `synth_exec_…` (формат по образцу service-key, `packages/core/src/storage/service-api-key-store.ts:19`). |
+| `execution.remote.tokenSecret` | путь/ссылка на токен | — | **Путь/ссылка, не значение** (инвариант 13): путь к файлу с токеном или `existingSecret`/`tokenKey` (как у `security.tls` в чарте). Сам токен — `synth_exec_…` (формат по образцу service-key, `packages/core/src/storage/service-api-key-store.ts`). |
 
 Фактические дефолты (как в `packages/shared/src/config/defaults.ts`): `mode: inline`,
 `remote.url: []`, `remote.timeoutMs: 30000`, `remote.concurrency` — число CPU процесса
@@ -96,7 +93,7 @@ Env-имена (по одному на поле; **зафиксированы и
 `SYNTH_EXECUTION_REMOTE_URL` (список через запятую), `SYNTH_EXECUTION_TOKEN` (путь/ссылка на
 токен, НЕ значение — инвариант 13), `SYNTH_EXECUTION_TIMEOUT_MS`, `SYNTH_EXECUTION_CONCURRENCY`,
 `SYNTH_EXECUTION_FAIL_MODE`. Приоритет — CLI-флаг > env > `config.yaml` > дефолт
-([ADR-023](./adr-023-configuration.md)).
+([ADR-023](./arch_decisions/adr-023-configuration.md)).
 
 CLI-флаг: `--execution-mode inline|remote` (рядом с `--restart-mode`,
 `packages/core/src/main.ts:106`; **реализован**); в managed этот флаг задаётся через env/ConfigMap чарта
@@ -129,11 +126,13 @@ core подключает пакет `@itphx/synth-executor` **динамиче�
 а не значение (инвариант 13): значение читается из файла и не попадает ни в логи, ни в
 текст ошибок.
 
-## Контракт исполнения (порт)
+---
 
-Исполнение — **порт**, по образцу портов слоя хранения ([ADR-096](./adr-096-storage-layer.md)):
+## 3. Контракт порта исполнения
+
+Исполнение — **порт**, по образцу портов слоя хранения ([ADR-096](./arch_decisions/adr-096-storage-layer.md)):
 домен работает через интерфейс, физический backend — взаимозаменяем. Реализовано в
-`packages/core/src/execution/` (шаг 1 плана реализации).
+`packages/core/src/execution/` (`ports/execution-port.ts`).
 
 ```ts
 // packages/core/src/execution/ports/execution-port.ts
@@ -183,24 +182,23 @@ interface ExecutionPort {
   в тулах — порт не знает про i18n-ключи.
 - **`stdin` не реализован.** Потребности в неинтерактивном вводе у домена нет: exec-API
   обслуживает только неинтерактивные команды (PTY/attach — вне объёма этой версии,
-  [PROP-064](./prop-064-ui-browser-terminal.md)). Поле не добавлено «на будущее» — при
+  [PROP-064](./arch_decisions/prop-064-ui-browser-terminal.md)). Поле не добавлено «на будущее» — при
   реальной потребности контракт изменится осознанно.
 - **Два лимита вывода — это разные вещи.** `maxOutputBytes` — лимит **порта** (буфер
   процесса; по умолчанию 10 МБ — как прежний `maxBuffer`); превышение → ошибка с
   `reason: 'max_output'` и `truncated: true`. Обрезка **текста, который видит модель**, —
   на уровне тула и в контракт порта не входит: shell — 100 КБ (`MAX_OUTPUT_LENGTH`,
-  `packages/core/src/engine/tools/shell.ts:11`), git — 20 КБ (`MAX_GIT_OUTPUT`,
-  `packages/core/src/engine/tools/git.ts:15`), `rg` — 200 строк
-  (`packages/core/src/engine/tools/search.ts:59`).
+  `packages/core/src/engine/tools/shell.ts`), git — 20 КБ (`MAX_GIT_OUTPUT`,
+  `packages/core/src/engine/tools/git.ts`), `rg` — 200 строк
+  (`packages/core/src/engine/tools/search.ts`).
 - **Реализации:** `InlineExecutionPort` — исполнение в процессе поверх прежних
-  `execFileAsync` (`packages/core/src/engine/tools/shell.ts:46`,
-  `packages/core/src/engine/tools/search.ts:50`, `packages/core/src/engine/tools/git.ts:33`,
-  `packages/core/src/engine/commands/inline-shell.ts:43`,
-  `packages/core/src/engine/tools/runtime-deps.ts:93`); `RemoteExecutionPort` — HTTP к
+  `execFileAsync` (`packages/core/src/engine/tools/shell.ts`, `packages/core/src/engine/tools/search.ts`,
+  `packages/core/src/engine/tools/git.ts`, `packages/core/src/engine/commands/inline-shell.ts`,
+  `packages/core/src/engine/tools/runtime-deps.ts`); удалённая — HTTP к
   исполнителю (шаг 7b; пакет `@itphx/synth-executor`, клиент — экспорт `./client`).
-- **Контрактный suite** — как у storage-драйвера ([ADR-097](./adr-097-storage-provider-class.md)):
+- **Контрактный suite** — как у storage-драйвера ([ADR-097](./arch_decisions/adr-097-storage-provider-class.md)):
   один набор тестов на любую реализацию (`packages/core/src/execution/contract/execution.ts` —
-  «паспорт» порта; образец — `packages/core/src/storage/contract/index.ts:1`). Проверяется:
+  «паспорт» порта; образец — `packages/core/src/storage/contract/index.ts`). Проверяется:
   разделение stdout/stderr, обе формы команды, ненулевой код выхода (ошибка с кодом и
   частичным выводом), `cwd`, мердж `env` (окружение не заменяется целиком), таймаут, отмена
   (`AbortSignal`), превышение лимита вывода, отсутствующий бинарник (`ENOENT`), заполненный
@@ -222,7 +220,9 @@ interface ExecutionPort {
   не через собственный inline-экземпляр — иначе в split-режиме они остались бы в control
   plane.
 
-## Executor: сервис и разделение ответственности
+---
+
+## 4. Executor: сервис и разделение ответственности
 
 **Executor (worker) — тот же код, что и inline-рантайм исполнителя.** Исполнитель умеет работать и
 отдельным сервисом (слушает exec-API), и локально внутри backend'а (inline). Это исключает расхождение
@@ -233,52 +233,52 @@ interface ExecutionPort {
 | В backend'е (control plane) | В исполнителе (worker) |
 |---|---|
 | Сессии, история, контекст, LLM-вызовы, permissions, RBAC/OIDC | Выполнение команды, разбор env, лимиты вывода, таймаут |
-| Provisioning workspace ([ADR-075](./adr-075-project-workspace-provisioning.md)) | Чтение/запись файлов **в пределах переданного `cwd`** |
-| Git-реестр `project.repos` и SSH-ключи ([ADR-076](./adr-076-git-repo-registry-ssh.md)) | Никаких LLM-ключей, OIDC-секретов и чужих workspace |
+| Provisioning workspace ([ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md)) | Чтение/запись файлов **в пределах переданного `cwd`** |
+| Git-реестр `project.repos` и SSH-ключи ([ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md)) | Никаких LLM-ключей, OIDC-секретов и чужих workspace |
 | Решение о допуске тула и о режиме (`plan`/`act`/`yolo`) | Изоляция, квоты, лимиты ресурсов |
 | Очередь вызовов, ретраи, `failMode` | Никакого доступа к API v2 |
 
-### Упаковка: отдельный in-tree пакет `@itphx/synth-executor`
+### 4.1. Упаковка: отдельный in-tree пакет `@itphx/synth-executor`
 
 Исполнитель поставляется **отдельным npm-пакетом** `@itphx/synth-executor`
 (`packages/executor`) — ровно по модели драйвера слоя хранения
-([ADR-097](./adr-097-storage-provider-class.md), [ADR-096](./adr-096-storage-layer.md)):
+([ADR-097](./arch_decisions/adr-097-storage-provider-class.md), [ADR-096](./arch_decisions/adr-096-storage-layer.md)):
 «физический backend' порта» лежит в своём пакете, а core подключает его по
 конфигурации, а не тянет в свою сборку.
 
 - **Манифест пакета** — как у `@itphx/synth-storage-postgres`
-  (`packages/storage-postgres/package.json:25-36`): `dependencies` —
+  (`packages/storage-postgres/package.json`): `dependencies` —
   `@itphx/synth-shared` (`workspace:*`), `peerDependencies` — `@itphx/synth-core`
   (`workspace:*`), `devDependencies` — core, `@types/node`, `typescript`;
   `files: ["dist"]`.
 - **Импорт типов портов из core — только `import type`.** Runtime-импорт core —
   точечный и только по образцу драйвера хранилища (`createFileStorage` в
-  `packages/core/src/storage/storage-context.ts:467`): исполнитель переиспользует
-  `InlineExecutionPort` (`packages/core/src/execution/inline-execution-port.ts:1`),
+  `packages/core/src/storage/storage-context.ts`): исполнитель переиспользует
+  `InlineExecutionPort` (`packages/core/src/execution/inline-execution-port.ts`),
   чтобы **семантика исполнения не расходилась** с control plane — один рантайм
-  команд в обеих топологиях (иначе «один код — два режима» из «Жизненного цикла»
+  команд в обеих топологиях (иначе «один код — два режима» из §4.5
   превратился бы в двух реализаций).
 - **Цикл `core ↔ @itphx/synth-executor` — намеренный**, разрешённый
-  `ignoreWorkspaceCycles: true` в `pnpm-workspace.yaml:14` (как у
+  `ignoreWorkspaceCycles: true` в `pnpm-workspace.yaml` (как у
   `@itphx/synth-storage-postgres`): core подключает пакет динамическим `import()`,
   пакет — `peer`/`dev`-зависимость на core.
 - **Контрактный suite — в core** (`packages/core/src/execution/contract/`), прогон
   против исполнителя — тоже в core (как
-  `packages/core/src/storage/contract/postgres.test.ts:1`): «паспорт» порта
+  `packages/core/src/storage/contract/postgres.test.ts`): «паспорт» порта
   принадлежит порту, а не реализации.
 - **Собственный release-цикл:** пакет публикуется в npm вместе с остальными
-  ([ADR-038](./adr-038-npm-packages.md)) — пакетов в монорепо становится **8**;
+  ([ADR-038](./arch_decisions/adr-038-npm-packages.md)) — пакетов в монорепо становится **8**;
   порядок сборки — `shared → core → executor → …`.
 - **Подключение из core** — динамическим `import()` по
   `execution.mode === 'remote'` (как драйвер БД по `storage.backend === 'postgres'`).
   При недоступности пакета — **fail-closed**: процесс не поднимается, без
   молчаливого отката в inline.
 
-### Транспорт и exec-API
+### 4.2. Транспорт и exec-API
 
 Транспорт — **HTTP/1.1 + JSON**: тот же стек, что весь Synth (сервер — Hono,
 клиент — исходящие вызовы через `egressFetch`,
-[ADR-099](./adr-099-egress-tls-trust.md)). Без gRPC и без новых зависимостей.
+[ADR-099](./arch_decisions/adr-099-egress-tls-trust.md)). Без gRPC и без новых зависимостей.
 
 | Метод | Путь | Назначение |
 |---|---|---|
@@ -287,11 +287,10 @@ interface ExecutionPort {
 | `GET` | `/health` | живость исполнителя |
 
 - Тело `/exec` — проекция `ExecRequest`
-  (`packages/core/src/execution/ports/execution-port.ts:36`) **без** поля `signal`:
+  (`packages/core/src/execution/ports/execution-port.ts`) **без** поля `signal`:
   отмена передаётся разрывом HTTP-запроса, а не полем запроса.
-- Тело ошибки **зеркалит `ExecutionError`**
-  (`packages/core/src/execution/ports/execution-port.ts:129`): `reason`
-  (`timeout`/`aborted`/`spawn_failed`/`nonzero_exit`/`max_output`), `code`,
+- Тело ошибки **зеркалит `ExecutionError`**:
+  `reason` (`timeout`/`aborted`/`spawn_failed`/`nonzero_exit`/`max_output`), `code`,
   `message`, частичные `stdout`/`stderr`, `killed`, `signal`, `truncated`,
   `durationMs` — клиент восстанавливает типизированную ошибку, не разбирая текст
   (тексты ошибок тулов — контракт, их переписывать нельзя).
@@ -299,18 +298,18 @@ interface ExecutionPort {
   Семантика «Стоп» (ADR-005) сохраняется: клиентский `AbortSignal` доезжает до
   исполнителя тем же эффектом, что и в inline-режиме.
 
-### Пул адресов, отказ и параллелизм
+### 4.3. Пул адресов, отказ и параллелизм
 
 - **Адреса — список** (`execution.remote.url`): клиент выбирает адрес **по кругу**;
   при ошибке соединения пробует следующий.
 - **Все адреса недоступны** → поведение по `execution.remote.failMode`: `fail`
   (fail-closed, по умолчанию) либо `inline-fallback` (явная настройка; backend
-  исполняет команду сам — см. «Падение исполнителя»).
+  исполняет команду сам — см. §4.5).
 - **Лимит одновременных вызовов** — `execution.remote.concurrency`: превышение →
   очередь с ожиданием; время ожидания измеряется метрикой
-  `synth_executor_wait_seconds` (см. «Наблюдаемость»).
+  `synth_executor_wait_seconds` (см. §9).
 
-### Способы размещения в Kubernetes (таблица сравнения)
+### 4.4. Способы размещения в Kubernetes
 
 | Способ | Как выглядит | RBAC | Изоляция | Стоимость | HA | Оценка |
 |---|---|---|---|---|---|---|
@@ -319,12 +318,12 @@ interface ExecutionPort {
 | **(в) CRD-оператор** | Свой CRD `ExecutorPool` + оператор, решающий lifecycle | Нужен `Role` на CRD + оператор в кластере | Лучше всех (оператор может творить namespaces, квоты, поды) | Очень дорого: отдельный сервис в кластере, CRD, версионирование API | Да (оператор — HA-компонент) | Оставить на будущее: нужен отдельный релизный цикл и свой AD; перебор для первой версии |
 
 **Рекомендация — (а).** Обоснование: у backend'а сейчас **нет** `Role`/`RoleBinding` (в чарте создаются
-только ServiceAccount'ы — `charts/synth/templates/serviceaccount.yaml:1`), и выдавать control plane
+только ServiceAccount'ы — `charts/synth/templates/serviceaccount.yaml`), и выдавать control plane
 право создавать pod'ы — заметное расширение поверхности. Статический пул не требует прав создания
 pod'ов вовсе, не требует CRD и не добавляет в кластер новый контроллер. Способы (б) и (в) оставлены
-как эволюция (вопросы — в «Открытые вопросы»).
+как эволюция (вопросы — в §12).
 
-### Жизненный цикл
+### 4.5. Жизненный цикл
 
 - **Spawn.** В split-режиме worker'ы **статические** и поднимаются вместе с чартом (вариант (а));
   «ленивый spawn на сессию» в нём не нужен — задержки холодного старта нет. В вариантах (б)/(в)
@@ -335,44 +334,45 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
 - **Max-lifetime.** Максимальное время жизни экземпляра исполнителя (для динамических pod'ов — TTL).
 - **Graceful kill.** По завершении сессии/очереди: сначала SIGTERM, затем SIGKILL по таймауту; активные
   exec-вызовы получают статус «прервано» (не «упало»).
-- **Лимиты вывода.** Единые для обеих топологий: сейчас обрезка `MAX_OUTPUT_LENGTH = 100_000`
-  (`packages/core/src/engine/tools/shell.ts:13`) и `maxBuffer 10 МБ`
-  (`packages/core/src/engine/tools/shell.ts:51`); для git — `MAX_GIT_OUTPUT = 20_000`
-  (`packages/core/src/engine/tools/git.ts:16`); для `rg` — 200 строк
-  (`packages/core/src/engine/tools/search.ts:57`). В remote-режиме лимит применяется **на стороне
+- **Лимиты вывода.** Единые для обеих топологий: обрезка `MAX_OUTPUT_LENGTH = 100_000` и `maxBuffer 10 МБ`
+  (`packages/core/src/engine/tools/shell.ts`); для git — `MAX_GIT_OUTPUT = 20_000`
+  (`packages/core/src/engine/tools/git.ts`); для `rg` — 200 строк
+  (`packages/core/src/engine/tools/search.ts`). В remote-режиме лимит применяется **на стороне
   исполнителя** (он владеет буфером) и дублируется на клиенте (защита от обхода лимита через прямой
   exec-API).
 - **Рестарт backend'а (exit 75).** Живые exec-вызовы **не выживают**: backend уходит через graceful
-  shutdown (`packages/core/src/server/restart.ts:23`), активные HTTP-вызовы к исполнителю обрываются,
+  shutdown (`packages/core/src/server/restart.ts`), активные HTTP-вызовы к исполнителю обрываются,
   команды в worker'ах остаются выполняться до их таймаута — их результат никому не доставится.
   Следствие: restart в remote-режиме должен быть **менее частым**; либо — принудительное завершение
-  вызовов на исполнителе по сигналу (отдельный endpoint отмены, см. «Открытые вопросы»).
+  вызовов на исполнителе по сигналу (отдельный endpoint отмены, см. §12).
 - **Падение исполнителя.** Поведение определяется `execution.remote.failMode`: `fail` (дефолт) — вызов
   возвращает явную ошибку «исполнитель недоступен», инструмент помечается недоступным с причиной
   (по аналогии с `unavailable(dependency)`,
-  `packages/core/src/engine/permission/availability.ts:147`); `inline-fallback` — backend выполняет
+  `packages/core/src/engine/permission/availability.ts`); `inline-fallback` — backend выполняет
   команду сам.
 - **Очистка orphan-процессов.** Процессы, оставшиеся после падения исполнителя, — в зоне K8s
   (kubelet дочищает контейнер после смерти pod'а) и в зоне worker'а (собственный reaper: при старте
   worker убивает процессы предыдущего экземпляра, если они пережили перезапуск; `execute_shell` уже
-  убивает процесс по SIGTERM при «Стопе», `packages/core/src/engine/tools/shell.ts:45`).
+  убивает процесс по SIGTERM при «Стопе», `packages/core/src/engine/tools/shell.ts`).
 - **Интерактивность.** PTY/attach-режим — вне объёма этой версии (референс — PROP-064
   «UI-терминал»); exec-API — только неинтерактивные команды.
 
-## Доверенная граница backend → исполнитель
+---
+
+## 5. Доверенная граница backend → исполнитель
 
 Граница «control plane → исполнитель» — **граница доверия**, и она строится по образцу
-[ADR-099](./adr-099-egress-tls-trust.md) и [ADR-052](./adr-052-public-api-platform.md).
+[ADR-099](./arch_decisions/adr-099-egress-tls-trust.md) и [ADR-052](./arch_decisions/adr-052-public-api-platform.md).
 
-- **TLS.** Общий транспорт исходящих вызовов — `egressFetch` (`packages/core/src/security/tls.ts:302`),
-  глобальный undici-диспетчер, `initTlsTrust` при старте (`packages/core/src/security/tls.ts:241`).
+- **TLS.** Общий транспорт исходящих вызовов — `egressFetch` (`packages/core/src/security/tls.ts`),
+  глобальный undici-диспетчер, `initTlsTrust` при старте (`packages/core/src/security/tls.ts`).
   Подсистема **не создаёт** собственных
   HTTP-агентов и не полагается на `NODE_EXTRA_CA_CERTS` как на конфигурацию (инвариант 22).
   Доверие к сертификату исполнителя — секция `security.tls` + per-host mapping для его адреса
   (ADR-099); CA-материалы — в Secret, в config.yaml попадают только пути
   (`charts/synth/values.yaml:332` — комментарий «в config.yaml попадают ТОЛЬКО пути внутри контейнера»).
 - **Аутентификация.** Статический токен `synth_exec_…` — по образцу service-key
-  (`packages/core/src/storage/service-api-key-store.ts:19`): хранится в Secret, в конфиг/ConfigMap
+  (`packages/core/src/storage/service-api-key-store.ts`): хранится в Secret, в конфиг/ConfigMap
   не попадает (инвариант 13); передаётся как bearer-заголовок. Значение токена берётся
   **только из Secret/файла** (`execution.remote.tokenSecret` — путь/ссылка, а не значение);
   сравнение — **timing-safe**, без корректного токена — **401**. Опционально — **mTLS**
@@ -380,7 +380,7 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
 - **Containment на стороне исполнителя.** Исполнитель **сам** проверяет `cwd`: переданный
   каталог обязан лежать внутри его workspace-корня (симлинк-aware — по образцу
   `resolveRepoCwd`/`isInsideReal` в git-тулах,
-  `packages/core/src/engine/tools/git.ts:63`, `packages/core/src/engine/tools/path-utils.ts:102`);
+  `packages/core/src/engine/tools/git.ts`, `packages/core/src/engine/tools/path-utils.ts`);
   выход за пределы → ошибка. Это **доверительная граница**, а не косметика: без неё
   удалённый порт превращается в выполнение команд в произвольном каталоге.
 - **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 1`) и
@@ -388,7 +388,7 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   детекта внешних зависимостей в split-режиме (ADR-078): backend не должен считать
   `git`/`rg` доступными там, где их нет.
 - **Egress-политика.** Обращения backend'а к исполнителю проходят через политику встроенных
-  инструментов (`egress.tools`, `packages/shared/src/config/types.ts:534`) — адрес исполнителя должен
+  инструментов (`egress.tools`, `packages/shared/src/config/types.ts`) — адрес исполнителя должен
   быть разрешён; `POST /api/v2/settings/egress/check` (ADR-099) — offline-проверка без запроса.
 - **В исполнителе нет** LLM-ключей, OIDC-секретов, ключей API провайдеров и чужих workspace. В
   split-режиме образ worker'а собирается отдельно от образа backend'а — это и есть главный
@@ -399,9 +399,11 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   исполнителе; в журнал аудита (`{dataDir}/audit/`) попадает факт вызова, но **не** содержимое вывода
   (может содержать секреты).
 
-## Доступ к workspace
+---
 
-Workspace проекта (`project.workspace`, [ADR-075](./adr-075-project-workspace-provisioning.md)) — то,
+## 6. Доступ к workspace
+
+Workspace проекта (`project.workspace`, [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md)) — то,
 что делает split-топологию нетривиальной: backend и исполнитель должны видеть **одни и те же файлы**.
 
 - **Кто владеет provisioning'ом** — backend, всегда: `resolveWorkspaceForLocalProject`
@@ -428,18 +430,20 @@ Workspace проекта (`project.workspace`, [ADR-075](./adr-075-project-works
   общего тома под workspace.
 - **Containment.** Границы путей не ослабляются: относительные пути — только внутри
   `project.workspace`; для git — `resolveRepoCwd` с проверкой симлинков
-  (`packages/core/src/engine/tools/git.ts:52`); общий `cwd` исполнителя — корень workspace
+  (`packages/core/src/engine/tools/git.ts`); общий `cwd` исполнителя — корень workspace
   конкретного проекта, переданный в запросе, и ничего шире.
 - **Альтернатива общему тому** — per-worker копия workspace (workspace-v2) или объектное хранилище:
-  это шаг 11 «Порядка реализации» и открытый вопрос (см. «Открытые вопросы»).
+  это шаг 11 «Порядка реализации» и открытый вопрос (см. §12).
 
-## Матрица: что уезжает в исполнитель (по фазам)
+---
+
+## 7. Матрица: что уезжает в исполнитель (по фазам)
 
 | Фаза | Что уезжает | Что остаётся в backend'е | Обоснование |
 |---|---|---|---|
-| **1** | `execute_shell` (`packages/core/src/engine/tools/shell.ts:45`), `grep_files`/`rg` (`packages/core/src/engine/tools/search.ts:49`), python через shell | FS-роуты, provisioning workspace, git-реестр, хранение, LLM-вызовы, permission-слой, MCP stdio | Минимальный шов, максимальный выигрыш: shell — самая «тяжёлая» и самая частая операция; git и MCP требуют доставки ключей/реестров, поэтому идут позже |
-| **2** | git-тулы (`packages/core/src/engine/tools/git.ts:30`) + доставка SSH-материала | git-реестр `project.repos` (в backend'е), расшифровка и выдача ключей (в backend'е) | SSH-ключи per-agent шифрованы at-rest (`enc:v1:…`, AES-256-GCM) в `{dataDir}/secrets/ssh-keys/` (`packages/core/src/storage/ssh-key-store.ts:15`, `:71`); их доставка исполнителю — отдельный протокол (открытый вопрос) |
-| **3** | MCP stdio-серверы (`packages/core/src/engine/mcp/client.ts:169`) и inline-shell (`packages/core/src/engine/commands/inline-shell.ts:39`) | MCP-реестр и политики ([ADR-071](./adr-071-mcp-servers-prompt.md)), конфигурация серверов | MCP stdio — это `spawn` с окружением; в исполнителе нужен свой реестр бинарей и своя доставка конфигурации |
+| **1** | `execute_shell` (`packages/core/src/engine/tools/shell.ts`), `grep_files`/`rg` (`packages/core/src/engine/tools/search.ts`), python через shell | FS-роуты, provisioning workspace, git-реестр, хранение, LLM-вызовы, permission-слой, MCP stdio | Минимальный шов, максимальный выигрыш: shell — самая «тяжёлая» и самая частая операция; git и MCP требуют доставки ключей/реестров, поэтому идут позже |
+| **2** | git-тулы (`packages/core/src/engine/tools/git.ts`) + доставка SSH-материала | git-реестр `project.repos` (в backend'е), расшифровка и выдача ключей (в backend'е) | SSH-ключи per-agent шифрованы at-rest (`enc:v1:…`, AES-256-GCM) в `{dataDir}/secrets/ssh-keys/` (`packages/core/src/storage/ssh-key-store.ts`); их доставка исполнителю — отдельный протокол (открытый вопрос) |
+| **3** | MCP stdio-серверы (`packages/core/src/engine/mcp/client.ts`) и inline-shell (`packages/core/src/engine/commands/inline-shell.ts`) | MCP-реестр и политики ([ADR-071](./arch_decisions/adr-071-mcp-servers-prompt.md)), конфигурация серверов | MCP stdio — это `spawn` с окружением; в исполнителе нужен свой реестр бинарей и своя доставка конфигурации |
 
 **Что не уезжает ни в одной фазе:**
 
@@ -447,17 +451,19 @@ Workspace проекта (`project.workspace`, [ADR-075](./adr-075-project-works
   команды; backend остаётся точкой доступа.
 - **Provisioning workspace** — владелец путей и политик — backend (ADR-075).
 - **Git-реестр** (`project.repos`) — состояние проекта, а не исполнение.
-- **Хранилище** — сессии/история/проекты ([ADR-096](./adr-096-storage-layer.md)).
+- **Хранилище** — сессии/история/проекты ([ADR-096](./arch_decisions/adr-096-storage-layer.md)).
 - **LLM-вызовы** — через `GatewayProvider` (инвариант 3; ADR-036): в исполнителе LLM-ключей нет.
 - **Permission-слой** — `plan`/`act`/`yolo`, allow/deny/ask (ADR-025/ADR-028/ADR-029): решение о
   допуске принимается **до** вызова порта, в backend'е.
 - **MCP stdio на фазе 1** — остаётся в backend'е (исполнитель без собственного MCP-реестра).
 - **Детект зависимостей** (ADR-078) — на фазе 1 детект остаётся локальным
-  (`packages/core/src/engine/tools/runtime-deps.ts:77`); в split-режиме детект должен спрашивать
+  (`packages/core/src/engine/tools/runtime-deps.ts`); в split-режиме детект должен спрашивать
   исполнителя (перенос — вместе с фазой 1, иначе backend будет считать `git`/`rg` доступными там,
   где их нет).
 
-## Изоляция, лимиты и квоты
+---
+
+## 8. Изоляция, лимиты и квоты
 
 | Механизм | Значение | Где применяется |
 |---|---|---|
@@ -466,7 +472,7 @@ Workspace проекта (`project.workspace`, [ADR-075](./adr-075-project-works
 | Idle-timeout / max-lifetime | для динамических pod'ов (варианты (б)/(в)) | исполнитель / оператор |
 | Лимит одновременных команд | `execution.remote.concurrency` (backend) + лимит на worker'а | backend + worker |
 | Лимит вывода | 100 КБ (shell), 20 КБ (git), 200 строк (rg), `maxBuffer` 10 МБ | порт/исполнитель |
-| `runAsNonRoot`, `allowPrivilegeEscalation: false` | как у backend'а (`charts/synth/values.yaml:116`, `:118`) | pod worker'а |
+| `runAsNonRoot`, `allowPrivilegeEscalation: false` | как у backend'а (`charts/synth/values.yaml`) | pod worker'а |
 | seccomp / capabilities | дефолтный seccomp-профиль K8s, `capabilities.drop: [ALL]` | pod worker'а |
 | **Без `docker.sock`** | docker socket в worker'е не монтируется **никогда** | pod worker'а |
 | NetworkPolicy | дефолтно — ограниченный egress (только нужные адреса) | pod worker'а |
@@ -478,9 +484,11 @@ control plane (тот же namespace) на порт исполнителя, egre
 (доп. правила — `executor.networkPolicy.allowedEgress`). `Role`/`RoleBinding` и
 `ResourceQuota`/`LimitRange` в чарте по-прежнему отсутствуют — это часть «Дельты» (шаг 10).
 
-## Наблюдаемость
+---
 
-Имена — по контракту [ADR-094](./adr-094-observability-metrics.md) (префикс `synth_` фиксирован,
+## 9. Наблюдаемость
+
+Имена — по контракту [ADR-094](./arch_decisions/adr-094-observability-metrics.md) (префикс `synth_` фиксирован,
 лейблы из закрытого списка; `session_id`/`user_id`/сырые пути запрещены).
 
 | Метрика | Тип | Лейблы | Где | Смысл |
@@ -491,28 +499,27 @@ control plane (тот же namespace) на порт исполнителя, egre
 | `synth_executor_commands_total` | counter | `outcome` | backend + исполнитель | Выполненных команд по исходу (`ok`/`error`/`timeout`/`cancelled`) |
 
 - **Исполнитель отдаёт свой `/metrics`** — тем же реестром, что и backend
-  (`packages/core/src/metrics/registry.ts:245`), тем же рендером 0.0.4
+  (`packages/core/src/metrics/registry.ts`), тем же рендером 0.0.4
   (`packages/core/src/metrics/renderer.ts`), тем же middleware (`packages/core/src/metrics/http.ts`).
   Backend **агрегирует** метрики пула (gauge по пулу) и отдаёт свои; метрики исполнения с
   лейблом `outcome` агрегируются в счётчик backend'а, чтобы не было двойного счёта при скрейпе обоих
   эндпоинтов.
 - **Формат и правила** — как у остальных: `/metrics` вне `/api/v2`, 404 при выключенном, 401 при
-  токене, `no-store` (`packages/core/src/server/routes/metrics.ts:52`, `:56`, `:63`, `:82`).
+  токене, `no-store` (`packages/core/src/server/routes/metrics.ts`).
   Существующие `synth_sessions_active`/`synth_queue_pending`
-  (`packages/core/src/metrics/collectors/sessions.ts:26`, `:30`) — про сессии и очередь **сообщений**,
+  (`packages/core/src/metrics/collectors/sessions.ts`) — про сессии и очередь **сообщений**,
   не про исполнение; дублировать их нельзя.
 - **Лимит серий** — 2000 на метрику, при переполнении `synth_metrics_series_dropped_total`
-  (`packages/core/src/metrics/registry.ts:19`, `:27`). Лейблов у метрик выше — ноль или один, риск
+  (`packages/core/src/metrics/registry.ts`). Лейблов у метрик выше — ноль или один, риск
   кардинальности отсутствует.
 - **Health/ready.** У backend'а `GET /health` и `GET /ready`
-  (`packages/core/src/server/routes/health.ts:63`, `:65`). В split-режиме **живость control plane и
+  (`packages/core/src/server/routes/health.ts`). В split-режиме **живость control plane и
   готовность пула разойдутся**: backend готов, когда готов сам (даже если пул пуст), а «исполнители
   недоступны» — отдельный сигнал (`synth_executor_workers_busy` + счётчик ошибок + алерт). Проба
   backend'а в чарте — `GET /health` для liveness и readiness
-  (`charts/synth/values.yaml:103`, `:107`) — её **не** меняем: деградация БД — штатный сценарий
-  (комментарий в `charts/synth/values.yaml:97`).
+  (`charts/synth/values.yaml`) — её **не** меняем: деградация БД — штатный сценарий.
 
-## Развёртывание: чарт, образы, CI
+---
 
 ### Значения чарта (реализовано — шаг 7c)
 
@@ -548,60 +555,58 @@ worker — **значением** в env (`SYNTH_EXECUTOR_TOKEN`, `secretKeyRef`
 никаких значений (инвариант 13). При `executor.enabled: false` рендер чарта
 **побайтово не меняется**.
 
-### Образы
+### 10.2. Образы
 
 - `synth-backend` — control plane, **без** toolchain в split-режиме (сегодня образ и так его не
-  содержит: `docker/Dockerfile.backend:48` — `FROM node:22-alpine`, `apk add` отсутствует).
-- `synth-executor` — **новый** образ: toolchain + рантайм исполнителя. В репозитории его нет
-  (`docker/Dockerfile`, `docker/Dockerfile.backend`, `docker/Dockerfile.ui` — три файла; нового
-  Dockerfile'а исполнителя нет). Содержимое toolchain'а — пересечение с flavor'ами PROP-082
-  (hard deps: `git`, `ripgrep`, `python3`, `openssh-client`, `ca-certificates`).
+  содержит: `docker/Dockerfile.backend` — `FROM node:22-alpine`, `apk add` отсутствует).
+- `synth-executor` — **новый** образ: toolchain + рантайм исполнителя. Содержимое toolchain'а —
+  пересечение с flavor'ами PROP-082 (hard deps: `git`, `ripgrep`, `python3`, `openssh-client`,
+  `ca-certificates`).
 - **Один код — два режима:** образ исполнителя содержит тот же рантайм, что и inline-исполнитель в
   backend'е; различается только точка входа (слушает exec-API против вызова in-process).
 
-### CI
+### 10.3. CI
 
 - Сборка и публикация образов — kaniko в джобе `build-docker`
-  (`.gitverse/workflows/release.yaml:321`): три отдельных шага на `synth`
-  (`.gitverse/workflows/release.yaml:377`), `synth-backend` (`:392`) и `synth-ui` (`:407`),
-  push в `gitverse.ru` + `ghcr.io`, `--push-retry=3` (`:389`, `:404`, `:419`).
-- **Что нужно изменить:** добавить шаг на `synth-executor`; **registry-cache не включён** — при
-  сборке образа с toolchain это критично (повторная установка пакетов на каждой сборке);
-  **smoke-тестов образов нет** — для worker'а они обязательны (иначе сломанный toolchain едет в
-  прод).
+  (`.gitverse/workflows/release.yaml`): отдельные шаги на `synth`, `synth-backend`, `synth-ui` и
+  `synth-executor`; push в `gitverse.ru` + `ghcr.io`, `--push-retry=3`.
+- **Что нужно изменить:** **registry-cache не включён** — при сборке образа с toolchain это критично
+  (повторная установка пакетов на каждой сборке); **smoke-тестов образов нет** — для worker'а они
+  обязательны (иначе сломанный toolchain едет в прод).
 - **Квота реестра:** публикуются **только версионные теги** — на 0.9.0 вышло 607,4 МБ из лимита
-  500 МБ (`.gitverse/workflows/release.yaml:308`). Четвёртый образ в тот же реестр — риск; worker'а
+  500 МБ (`.gitverse/workflows/release.yaml`). Четвёртый образ в тот же реестр — риск; worker'а
   имеет смысл публиковать в отдельный репозиторий (как flavor'ы в PROP-082) либо в Docker Hub.
-- multi-arch: amd64 — kaniko, arm64 — buildx (`.gitverse/workflows/release.yaml:316`); Dockerfile'ы
-  кросс-собираются без QEMU — в runtime-стадии нет ни одного `RUN` (например
-  `docker/Dockerfile.backend:48` — `FROM node:22-alpine` сразу, вся подготовка в builder'е). Для
+- multi-arch: amd64 — kaniko, arm64 — buildx (`.gitverse/workflows/release.yaml`); Dockerfile'ы
+  кросс-собираются без QEMU — в runtime-стадии нет ни одного `RUN`. Для
   worker'а с toolchain это ограничение сохраняется: **`apk add` в runtime-стадии сломает arm64-сборку
   без QEMU** — установку надо делать в builder-стадии (или принять QEMU).
 
-## Миграция между топологиями
+---
 
-### all-in-one (`inline`) → split (`remote`)
+## 11. Миграция между топологиями
+
+### 11.1. all-in-one (`inline`) → split (`remote`)
 
 1. **Подготовить хранилище.** Если состояние в JSON-файлах (`{dataDir}`) — перевести на PostgreSQL
-   (`synth storage migrate --to postgres`, [PROP-032](./prop-032-history-storage-postgresql.md)):
+   (`synth storage migrate --to postgres`, [ADR-097](./arch_decisions/adr-097-storage-provider-class.md)):
    файловое хранилище не масштабируется на несколько реплик backend'а
-   (`charts/synth/values.yaml:11`).
+   (`charts/synth/values.yaml`).
 2. **Подготовить общий том workspace** с RWX-классом: текущий PVC — RWO
-   (`charts/synth/values.yaml:45`), RWX-варианта в чарте нет. Данные workspace **не мигрируют** —
+   (`charts/synth/values.yaml`), RWX-варианта в чарте нет. Данные workspace **не мигрируют** —
    том подключается к прежнему каталогу (тот же `project.workspace`).
 3. **Собрать и опубликовать образ `synth-executor`**; задеплоить пул (Deployment + Service) с
    ограниченным egress и без `docker.sock`.
 4. **Выпустить токен** `synth_exec_…` в Secret; backend'у — адреса исполнителей.
 5. **Переключить режим:** `execution.mode=remote` (config.yaml/env/CLI) → **рестарт** backend'а
    (переключатель — параметр запуска; рестарт — через graceful shutdown с exit 75,
-   `packages/core/src/server/restart.ts:23`).
+   `packages/core/src/server/restart.ts`).
 6. **Проверить:** exec-вызовы идут в исполнитель (метрики `synth_executor_*`), файлы в workspace
    те же, git-тулы работают (фаза 2 — после включения), MCP stdio (фаза 3) — по плану.
 
 **Обратимо:** да — возврат `execution.mode=inline` + рестарт возвращает исполнение в процесс
 backend'а. Данные не затронуты (workspace — тот же том, состояние — та же БД).
 
-### split (`remote`) → all-in-one (`inline`)
+### 11.2. split (`remote`) → all-in-one (`inline`)
 
 1. Остановить/смасштабировать в ноль пул worker'ов (или оставить — они просто простаивают).
 2. `execution.mode=inline` → рестарт backend'а. Backend должен иметь toolchain в образе — то есть
@@ -611,13 +616,17 @@ backend'а. Данные не затронуты (workspace — тот же то
 **Обратимо:** да. **Необратимо** на этом этапе — ничего: формат данных не меняется, миграции схемы не
 нужны.
 
-### Что необратимо
+### 11.3. Что необратимо
 
 На текущем этапе — **ничего**. Обратимость ломается только если дойти до workspace-v2/объектного
 хранилища (шаг 11): перенос workspace в объектное хранилище — миграция данных с обратной
 совместимостью (нужен dual-read/dual-write или явная миграция проекта).
 
-## Что уже есть
+---
+
+## 12. Что уже есть и открытые вопросы
+
+### 12.1. Что уже есть
 
 | Факт | Где |
 |---|---|
@@ -645,7 +654,7 @@ backend'а. Данные не затронуты (workspace — тот же то
 | `synth_sessions_active` / `synth_queue_pending` — про сессии и очередь **сообщений**, не про исполнение | `packages/core/src/metrics/collectors/sessions.ts:26`, `:30` |
 | Порт исполнения: `ExecutionPort` + `InlineExecutionPort` + контрактный suite (шаг 1) | `packages/core/src/execution/ports/execution-port.ts:1`, `packages/core/src/execution/inline-execution-port.ts:1`, `packages/core/src/execution/contract/execution.ts:1` |
 | Секция `execution` в конфиге, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed на старте (шаг 3) | `packages/shared/src/config/execution.ts:1`, `packages/shared/src/config/types.ts:178`, `packages/shared/src/config/defaults.ts:32`, `packages/core/src/execution/startup.ts:1`, `packages/core/src/main.ts:110` |
-| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…`, метрики `synth_executor_*`, образ `synth-executor` — **нет в репозитории** (шаги 7a–7d и далее) | — |
+| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); осталось: метрики `synth_executor_*` + runbook (7d), образ worker'а и flavor'ы — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) (шаги 4–6) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
 | Слой хранения — образец портов: 30 доменных портов, контрактный suite, `createFileStorage`/`createMemoryStorage`/`createPostgresStorage`/`createStorageContextAsync`/`buildStorageContext` | `packages/core/src/storage/ports/`, `packages/core/src/storage/contract/index.ts:1`, `packages/core/src/storage/storage-context.ts:467`, `:529`, `:599`, `:847`, `:917` |
 | Ограничения >1 реплики: файловая БД не масштабируется; RWO PVC; `FileMutex` (эксклюзивный `mkdir` + stale-takeover) работает только на общем FS; `scheduler.leaderElection: none`, `crossProcessLocks: false` (в PG — `PgMutex`/`PgLeader`) | `charts/synth/values.yaml:11`, `:45`; `packages/core/src/storage/file-mutex.ts:33`, `:48`; `packages/core/src/storage/mutex.ts:7`; `packages/shared/src/config/defaults.ts:155` |
 | Рестарт инстанса — graceful shutdown с exit code 75, режимы `disabled`/`process`/`supervisor` | `packages/core/src/server/restart.ts:20`, `:23`; `packages/core/src/main.ts:81` |
@@ -654,46 +663,77 @@ backend'а. Данные не затронуты (workspace — тот же то
 | Локальные режимы: `dev.sh` — `SYNTH_RESTART_MODE=supervisor`, `SYNTH_DATA_DIR`, порты 5000/4300/5002, `SYNTH_CONFIG=packages/backend/config.yaml`; `standalone.sh` — порт 4400, host 127.0.0.1 | `scripts/dev.sh:30`, `:39`, `:46`, `:50`; `scripts/standalone.sh:74` |
 | `docker-compose.yml` — только standalone-образ `synth` (+ профили `ollama`, `postgres`); backend и UI в compose не разведены | `docker-compose.yml:21`, `:91`, `:114` |
 | S3/объектного хранилища нет | — |
-| Корневого `config.yaml` в репозитории нет; есть `packages/backend/config.yaml` (18 строк: `mcp.servers`, `llm.default*`, `storage.backend: postgres`, `storage.degradedMode: halt`) | `packages/backend/config.yaml:1` |
+| Корневого `config.yaml` в репозитории нет; есть `packages/backend/config.yaml` (`mcp.servers`, `llm.default*`, `storage.backend: postgres`, `storage.degradedMode: halt`) | `packages/backend/config.yaml` |
 
-## Дельта
+### 12.2. Дельта (что нужно сделать)
 
 1. **Порт исполнения** в core: `ExecutionPort` / `ExecRequest` / `ExecResult`, реализации
-   `InlineExecutionPort` и `RemoteExecutionPort`; контрактный suite на обе (по образцу
-   `packages/core/src/storage/contract/index.ts:1`).
-2. **Рефакторинг 5+ точек исполнения** на порт без изменения поведения: `shell.ts:45`,
-   `search.ts:49`, `git.ts:30`, `inline-shell.ts:39`, `runtime-deps.ts:79`.
+   `InlineExecutionPort` и удалённой; контрактный suite на обе (по образцу
+   `packages/core/src/storage/contract/index.ts`). — **сделано**
+2. **Рефакторинг 5+ точек исполнения** на порт без изменения поведения: `shell.ts`, `search.ts`,
+   `git.ts`, `inline-shell.ts`, `runtime-deps.ts`. — **сделано**
 3. **Секция `execution` в конфиге** (`packages/shared/src/config/types.ts` + `defaults.ts` +
    `env-overrides.ts`): `mode`, `remote.url`, `remote.timeoutMs`, `remote.concurrency`,
    `remote.failMode`, `remote.tokenSecret`; env `SYNTH_EXECUTION_*`; CLI `--execution-mode`;
-   fail-closed на неизвестном `mode`.
+   fail-closed на неизвестном `mode`. — **сделано**
 4. **Executor-сервис**: отдельный in-tree пакет `@itphx/synth-executor`
    (`packages/executor`, по образцу драйвера хранилища — ADR-097/ADR-096) с
    exec-API (HTTP/1.1 + JSON: `/exec`, `/capabilities`, `/health`), тем же рантаймом,
-   что и inline; клиент `RemoteExecutionPort` — через `egressFetch` (ADR-099), bearer
-   `synth_exec_…`, опционально mTLS; containment `cwd` — на стороне исполнителя.
+   что и inline; клиент удалённого порта — через `egressFetch` (ADR-099), bearer
+   `synth_exec_…`, опционально mTLS; containment `cwd` — на стороне исполнителя. — **сделано**
 5. **Токен исполнителя**: формат `synth_exec_…`, хранение — Secret/файл (инвариант 13), выдача —
-   через существующий контур секретов; в UI — write-only (по образцу `SYNTH_METRICS_TOKEN`).
+   через существующий контур секретов; в UI — write-only (по образцу `SYNTH_METRICS_TOKEN`). —
+   **сделано** (чтение из файла по `execution.remote.tokenSecret`)
 6. **Образ `synth-executor`**: новый Dockerfile с toolchain'ом (пересечение с flavor'ами PROP-082);
-   arm64-сборка без QEMU (установка пакетов — в builder-стадии).
+   arm64-сборка без QEMU (установка пакетов — в builder-стадии). — **остаток**
 7. **CI**: шаг сборки `synth-executor`, registry-cache, smoke-тест образа worker'а; решение по
-   реестру (квота 500 МБ) — отдельный репозиторий или Docker Hub.
+   реестру (квота 500 МБ) — отдельный репозиторий или Docker Hub. — **остаток**
 8. **Чарт**: значения `execution.*` и `executor.*`; шаблоны `executor-deployment.yaml`,
    `executor-service.yaml`, PVC общего workspace (RWX), `NetworkPolicy` для worker'а, токен из
    Secret; `executor.enabled` — переключатель split-развёртывания. — **реализовано (шаг 7c)**
 9. **Наблюдаемость**: метрики `synth_executor_queue_depth`, `synth_executor_workers_busy`,
    `synth_executor_wait_seconds`, `synth_executor_commands_total{outcome}`; `/metrics` исполнителя;
-   агрегация на backend'е; алерты в `charts/synth/files/alerts/`.
+   агрегация на backend'е; алерты в `charts/synth/files/alerts/`. — **остаток**
 10. **Детект зависимостей (ADR-078)** в split-режиме — спрашивать исполнителя, а не локальный
-    `execFile` (иначе backend считает `git`/`rg` доступными там, где их нет).
+     `execFile` (иначе backend считает `git`/`rg` доступными там, где их нет). — **остаток**
 11. **Миграции**: `synth storage migrate --to postgres` (уже есть) + процедура переключения
-    топологии в `docs/MAINTENANCE.md`; миграции схемы БД для порта исполнения не требуются (состояние
-    исполнителя эфемерно).
+     топологии в `docs/MAINTENANCE.md`; миграции схемы БД для порта исполнения не требуются (состояние
+     исполнителя эфемерно). — **остаток** (runbook)
 12. **Документация**: `docs/CONFIGURATION.md` (секция `execution`), `docs/API_V2.md` (если exec-API
-    станет публичным — не планируется), `docs/OBSERVABILITY.md` (новые метрики), `charts/synth/README.md`
-    (примеры split-развёртывания), `docs/TROUBLESHOOTING.md` (исполнитель недоступен).
+     станет публичным — не планируется), `docs/OBSERVABILITY.md` (новые метрики), `charts/synth/README.md`
+     (примеры split-развёртывания), `docs/TROUBLESHOOTING.md` (исполнитель недоступен). — **частично**
 
-## Открытые вопросы
+### 12.3. Порядок реализации
+
+План **общий с [PROP-082](./arch_decisions/prop-082-full-images-deployment.md)** — нумерация шагов единая;
+владелец шага указан в таблице.
+
+| Шаг | Содержание | Владелец | Зависимость от PostgreSQL |
+|---|---|---|---|
+| **1** | Порт исполнения `ExecutionPort` + `InlineExecutionPort`: вынести 5+ точек исполнения за порт **без изменения поведения**; контрактный suite | общий | не нужна |
+| **2** | Multistage Dockerfile + distro-aware скрипты тиров + flavor `core` → all-in-one образ `synth-backend:<v>-core` | PROP-082 | не нужна |
+| **3** | Секция `execution` в конфиге (`mode`, `remote.*`), env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed на неизвестном `mode` | общий | не нужна |
+| **4** | Flavor'ы `dev`/`devops` (alpine-ветка) | PROP-082 | не нужна |
+| **5** | Flavor'ы `browser`/`full` (debian-ветка, Playwright) + образ worker'а `synth-executor:<v>-<flavor>` | PROP-082 | не нужна |
+| **6** | CI: публикация (лёгкие образы — `gitverse.ru`/`ghcr.io`, тяжёлые — Docker Hub), registry-cache, smoke-тесты на каждый flavor, `scripts/docker-cleanup.mjs` под новые репозитории | PROP-082 | не нужна |
+| **7a** | Executor-сервис: пакет `@itphx/synth-executor` (`packages/executor`, по образцу драйвера хранилища — ADR-097/ADR-096) с exec-API (HTTP/1.1 + JSON: `/exec`, `/capabilities`, `/health`, containment `cwd`, токен `synth_exec_…`) + клиент удалённого порта (`egressFetch`, ADR-099) + прогон контрактного suite порта против исполнителя (в core, `packages/core/src/execution/contract/`) | ADR-077 | не нужна |
+| **7b** | Подключение по `execution.mode=remote`: динамический `import()` пакета (fail-closed), `execution.remote.failMode`/`concurrency`, пул адресов (выбор по кругу, проба следующего при ошибке соединения) | ADR-077 | не нужна (нужна для >1 реплики control plane) |
+| **7c** | Helm: значения `executor.*` (Deployment/Service/пул), RWX-том общего workspace, токен — из Secret, `NetworkPolicy` для worker'а; **фаза 1** матрицы (`execute_shell`/`grep_files`/`python`) | ADR-077 | не нужна |
+| **7d** | Метрики `synth_executor_*` (+ `/metrics` исполнителя) и runbook (переключение топологии, диагностика «исполнитель недоступен») | ADR-077 | не нужна |
+| **8** | **Фаза 2** матрицы: git-тулы + доставка SSH-материала в исполнителя | ADR-077 | не нужна |
+| **9** | **Фаза 3** матрицы: MCP stdio-серверы и inline-shell | ADR-077 | не нужна |
+| **10** | Изоляция и квоты (`NetworkPolicy`, `ResourceQuota`/`LimitRange`, лимиты worker'а, без `docker.sock`); наблюдаемость: метрики `synth_executor_*`, `/metrics` исполнителя, алерты; детект зависимостей (ADR-078) на стороне исполнителя | ADR-077 | не нужна |
+| **11** | Workspace-v2: per-worker копия или S3-совместимое объектное хранилище (снимает «один RWX-том на всех») | ADR-077 | желательна |
+| **12** | Миграции и документация: переключение топологии (runbook — `docs/MAINTENANCE.md`), секция `execution` в `docs/CONFIGURATION.md`, метрики в `docs/OBSERVABILITY.md`, примеры в `charts/synth/README.md`, диагностика в `docs/TROUBLESHOOTING.md`; compose-сценарии all-in-one/split | общий | не нужна |
+
+Шаги 1–3 и 6 не требуют PostgreSQL и могут идти до перехода на БД; подшаг **7b** — первый,
+где PG нужна для полного эффекта (несколько реплик control plane); шаги 1, 2, 3, 4, 5, 6, 7a, 7c,
+7d, 10, 12 от PG не зависят. Шаги 8–12 идут после 7a–7d: 8 и 9 — фазы 2 и 3 матрицы, 10 —
+изоляция/квоты и наблюдаемость, 11 — workspace-v2, 12 — миграции и документация.
+
+Split-топология технически возможна и при одной реплике control plane (пул worker'ов масштабируется независимо); PostgreSQL обязателен для масштабирования самого control plane — больше одной реплики.
+
+### 12.4. Открытые вопросы
 
 **Закрыто решениями выше** (не открытые):
 
@@ -709,8 +749,8 @@ backend'а. Данные не затронуты (workspace — тот же то
 
 - **Доставка расшифрованного SSH-материала в исполнитель** (фаза 2). Ключи per-agent шифрованы
   at-rest (`enc:v1:…`, AES-256-GCM) в `{dataDir}/secrets/ssh-keys/`
-  (`packages/core/src/storage/ssh-key-store.ts:15`, `:71`), мастер-ключ — `{dataDir}/secrets/master.key`
-  (`packages/core/src/security/crypto.ts:113`); исполнитель
+  (`packages/core/src/storage/ssh-key-store.ts`), мастер-ключ — `{dataDir}/secrets/master.key`
+  (`packages/core/src/security/crypto.ts`); исполнитель
   такого ключа не имеет. Варианты: одноразовый токен на операцию; расшифровка на стороне backend'а и
   передача «используемого» `GIT_SSH_COMMAND` с временным файлом ключа; проброс мастер-ключа в
   исполнитель (нежелательно — расширяет круг доверия). Требует отдельного AD по границе доверия.
@@ -736,89 +776,50 @@ backend'а. Данные не затронуты (workspace — тот же то
   ли per-tenant лимит и учёт в метриках (лейблы `tenant`/`project` в ADR-094 **запрещены** для
   session_id/user_id — как считать квоты без лейблов).
 
-## Зависимости
-
-- **PROP-082** — all-in-one образ с toolchain (ближайший шаг; flavor'ы). Исполнитель и inline-рантайм
-  — **один код**; образ worker'а переиспользует состав toolchain'а из PROP-082.
-- **PROP-032** — PostgreSQL: **предпосылка** для нескольких реплик backend'а в split-режиме
-  (файловая БД не масштабируется, `charts/synth/values.yaml:11`). Обязательна для масштабирования
-  control plane (шаг 7+ — executor-сервис), не нужна для шагов 1–6 (порт, образы, секция
-  `execution`).
-- **ADR-096 / ADR-097** — образец портов и контрактного suite для порта исполнения.
-- **ADR-092** — graceful restart (exit 75) и режимы рестарта: параметр запуска, не runtime.
-- **ADR-094** — контракт имён метрик и правила экспорта.
-- **ADR-099** — единый egress-слой: TLS/CA, прокси, per-host mapping для адреса исполнителя.
-- **ADR-052** — образец машинных ключей (`synth_svc_…`) для токена `synth_exec_…`.
-- **ADR-075** — workspace: provisioning, `workspaceOutsideRoot`, managed-пути.
-- **ADR-076** — git-реестр и SSH-ключи (доставка материала в исполнителя, фаза 2).
-- **ADR-078** — детект внешних зависимостей: в split-режиме источник детекта — исполнитель.
-- **ADR-022** — stateless-движки (Runner) — концептуальная база отдельного исполняющего сервиса;
-  прецедент — [PROP-050](./prop-050-external-engines-runner.md).
-- **ADR-036** — LLM Gateway: в исполнителе LLM-ключей нет; границы обфускации/аудита сохраняются.
-- **ADR-038** — сборка/публикация образов и пакетов (npm/Docker/Helm).
-- **PROP-097** — реестр фоновых процессов: общий механизм исполнения (открытый вопрос выше).
-- **PROP-049** — git worktrees: per-session cwd — естественный кандидат на будущую «выделенную
-  рабочую копию на исполнителя».
-- **PROP-080 / PROP-081** — гибрид: режимы-полюса и политики утечек (где исполняется local vs managed).
+---
 
 ## Связи
 
-- [PROP-082](./prop-082-full-images-deployment.md) «Full-образы и базовое развёртывание (flavor'ы с toolchain)» — all-in-one топология и состав образов.
-- [PROP-032](./prop-032-history-storage-postgresql.md) «Второй вариант хранения — БД (PostgreSQL) за единым слоем» — предпосылка масштабирования control plane.
-- [PROP-050](./prop-050-external-engines-runner.md) «Внешние движки (opencode/cline) — Runner» — прецедент отдельного исполняющего сервиса.
-- [PROP-097](./prop-097-background-processes-registry.md) «Фоновые процессы — реестр и контроль через UI» — общий реестр фоновых процессов.
-- [PROP-049](./prop-049-git-worktrees.md) «Git worktrees» — персональный cwd как будущая единица работы на исполнителя.
-- [PROP-080](./prop-080-managed-hybrid-modes.md) «Управляемый гибрид: режимы-полюса, идентичность и установка локально» — прецедент «режим — параметр запуска».
-- [ADR-023](./adr-023-configuration.md) «Конфигурация» — приоритет CLI > env > config.yaml > defaults.
-- [ADR-036](./adr-036-llm-gateway.md) «LLM Gateway — независимый слой безопасности» — в исполнителе LLM-ключей нет.
-- [ADR-038](./adr-038-npm-packages.md) «Монорепо как набор публикуемых npm-пакетов» — сборка/публикация.
-- [ADR-075](./adr-075-project-workspace-provisioning.md) «Окружение проекта: рабочий каталог (создание и выбор)» — provisioning остаётся в backend'е.
-- [ADR-076](./adr-076-git-repo-registry-ssh.md) «Реестр git-репозиториев и доступ (SSH)» — фаза 2 и доставка SSH-материала.
-- [ADR-078](./adr-078-runtime-dependency-availability.md) «Авто-отключение инструментов при отсутствии внешней зависимости» — детект на стороне исполнителя.
-- [ADR-092](./adr-092-instance-lifecycle-maintenance.md) «Обслуживание инстанса — версия схемы данных, миграции и удаление» — рестарт (exit 75), режимы рестарта.
-- [ADR-094](./adr-094-observability-metrics.md) «Наблюдаемость — Prometheus-метрики, liveness/readiness и эксплуатационные алерты» — контракт имён метрик.
-- [ADR-096](./adr-096-storage-layer.md) «Единый слой хранения — доменные порты с взаимозаменяемыми backend'ами» — образец порта.
-- [ADR-097](./adr-097-storage-provider-class.md) «Класс расширения «хранилище» (storage)» — образец контрактного suite.
-- [ADR-099](./adr-099-egress-tls-trust.md) «Единый egress-слой — доверие TLS/CA (mTLS), адресная политика и прокси» — доверие к исполнителю.
-- [docs/CONFIGURATION.md](../CONFIGURATION.md) — конфигурация (сюда попадёт секция `execution`).
-- [docs/OBSERVABILITY.md](../OBSERVABILITY.md) — каталог метрик (сюда попадут `synth_executor_*`).
-- [docs/PUBLISHING.md](../PUBLISHING.md) — сборка Docker/Helm.
-- [docs/MAINTENANCE.md](../MAINTENANCE.md) — runbook (сюда попадёт процедура переключения топологии).
-
-## Порядок реализации
-
-План **общий с [PROP-082](./prop-082-full-images-deployment.md)** — нумерация шагов единая; владелец шага указан в таблице.
-
-| Шаг | Содержание | Владелец | Зависимость от PostgreSQL (PROP-032) |
-|---|---|---|---|
-| **1** | Порт исполнения `ExecutionPort` + `InlineExecutionPort`: вынести 5+ точек исполнения за порт **без изменения поведения**; контрактный suite | общий | не нужна |
-| **2** | Multistage Dockerfile + distro-aware скрипты тиров + flavor `core` → all-in-one образ `synth-backend:<v>-core` | PROP-082 | не нужна |
-| **3** | Секция `execution` в конфиге (`mode`, `remote.*`), env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed на неизвестном `mode` | общий | не нужна |
-| **4** | Flavor'ы `dev`/`devops` (alpine-ветка) | PROP-082 | не нужна |
-| **5** | Flavor'ы `browser`/`full` (debian-ветка, Playwright) + образ worker'а `synth-executor:<v>-<flavor>` | PROP-082 | не нужна |
-| **6** | CI: публикация (лёгкие образы — `gitverse.ru`/`ghcr.io`, тяжёлые — Docker Hub), registry-cache, smoke-тесты на каждый flavor, `scripts/docker-cleanup.mjs` под новые репозитории | PROP-082 | не нужна |
-| **7a** | Executor-сервис: пакет `@itphx/synth-executor` (`packages/executor`, по образцу драйвера хранилища — ADR-097/ADR-096) с exec-API (HTTP/1.1 + JSON: `/exec`, `/capabilities`, `/health`, containment `cwd`, токен `synth_exec_…`) + клиент `RemoteExecutionPort` (`egressFetch`, ADR-099) + прогон контрактного suite порта против исполнителя (в core, `packages/core/src/execution/contract/`) | PROP-077 | не нужна |
-| **7b** | Подключение по `execution.mode=remote`: динамический `import()` пакета (fail-closed), `execution.remote.failMode`/`concurrency`, пул адресов (выбор по кругу, проба следующего при ошибке соединения) | PROP-077 | не нужна (нужна для >1 реплики control plane) |
-| **7c** | Helm: значения `executor.*` (Deployment/Service/пул), RWX-том общего workspace, токен — из Secret, `NetworkPolicy` для worker'а; **фаза 1** матрицы (`execute_shell`/`grep_files`/`python`) | PROP-077 | не нужна |
-| **7d** | Метрики `synth_executor_*` (+ `/metrics` исполнителя) и runbook (переключение топологии, диагностика «исполнитель недоступен») | PROP-077 | не нужна |
-| **8** | **Фаза 2** матрицы: git-тулы + доставка SSH-материала в исполнителя | PROP-077 | не нужна |
-| **9** | **Фаза 3** матрицы: MCP stdio-серверы и inline-shell | PROP-077 | не нужна |
-| **10** | Изоляция и квоты (`NetworkPolicy`, `ResourceQuota`/`LimitRange`, лимиты worker'а, без `docker.sock`); наблюдаемость: метрики `synth_executor_*`, `/metrics` исполнителя, алерты; детект зависимостей (ADR-078) на стороне исполнителя | PROP-077 | не нужна |
-| **11** | Workspace-v2: per-worker копия или S3-совместимое объектное хранилище (снимает «один RWX-том на всех») | PROP-077 | желательна |
-| **12** | Миграции и документация: переключение топологии (runbook — `docs/MAINTENANCE.md`), секция `execution` в `docs/CONFIGURATION.md`, метрики в `docs/OBSERVABILITY.md`, примеры в `charts/synth/README.md`, диагностика в `docs/TROUBLESHOOTING.md`; compose-сценарии all-in-one/split | общий | не нужна |
-
-Шаги 1–3 и 6 не требуют PostgreSQL и могут идти до перехода на БД; подшаг **7b** — первый,
-где PG нужна для полного эффекта (несколько реплик control plane); шаги 1, 2, 3, 4, 5, 6, 7a, 7c,
-7d, 10, 12 от PG не зависят. Шаги 8–12 идут после 7a–7d: 8 и 9 — фазы 2 и 3 матрицы, 10 —
-изоляция/квоты и наблюдаемость, 11 — workspace-v2, 12 — миграции и документация.
-
-Split-топология технически возможна и при одной реплике control plane (пул worker'ов масштабируется независимо); PostgreSQL обязателен для масштабирования самого control plane — больше одной реплики.
+- [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) «Инструментальное окружение исполнения» — решение:
+  порт `ExecutionPort`, режим `remote`, fail-closed.
+- [ADR-096](./arch_decisions/adr-096-storage-layer.md) «Единый слой хранения» — образец доменного порта.
+- [ADR-097](./arch_decisions/adr-097-storage-provider-class.md) «Класс расширения «хранилище»» — образец
+  контрактного suite и optional-пакета с динамическим `import()`.
+- [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md) «Единый egress-слой» — доверие к исполнителю, транспорт.
+- [ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md) «Обслуживание инстанса» — рестарт (exit 75).
+- [ADR-094](./arch_decisions/adr-094-observability-metrics.md) «Наблюдаемость» — контракт имён метрик.
+- [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md) «Окружение проекта» — provisioning остаётся в backend'е.
+- [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md) «Реестр git-репозиториев и доступ (SSH)» — фаза 2.
+- [ADR-078](./arch_decisions/adr-078-runtime-dependency-availability.md) «Авто-отключение инструментов» — детект на стороне исполнителя.
+- [ADR-071](./arch_decisions/adr-071-mcp-servers-prompt.md) «MCP» — MCP-реестр остаётся в control plane.
+- [ADR-036](./arch_decisions/adr-036-llm-gateway.md) «LLM Gateway» — в исполнителе LLM-ключей нет.
+- [ADR-038](./arch_decisions/adr-038-npm-packages.md) «Монорепо как набор npm-пакетов» — сборка/публикация.
+- [ADR-023](./arch_decisions/adr-023-configuration.md) «Конфигурация» — приоритет CLI > env > config.yaml > defaults.
+- [ADR-052](./arch_decisions/adr-052-public-api-platform.md) «Публичная API-платформа» — образец машинных ключей.
+- [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) «Full-образы и базовое развёртывание» — all-in-one топология и состав образов.
+- [PROP-097](./arch_decisions/prop-097-background-processes-registry.md) «Фоновые процессы» — общий реестр фоновых процессов.
+- [PROP-049](./arch_decisions/prop-049-git-worktrees.md) «Git worktrees» — персональный cwd как будущая единица работы на исполнителе.
+- [PROP-080](./arch_decisions/prop-080-managed-hybrid-modes.md) / [PROP-081](./arch_decisions/prop-081-hybrid-policy-leak-protection.md) — гибрид: где исполняется local vs managed.
+- [PROP-064](./arch_decisions/prop-064-ui-browser-terminal.md) «UI-терминал» — PTY/attach вне объёма.
+- [PROP-050](./arch_decisions/prop-050-external-engines-runner.md) «Внешние движки» — прецедент отдельного исполняющего сервиса.
+- [docs/CONFIGURATION.md](./CONFIGURATION.md) — конфигурация (секция `execution`).
+- [docs/OBSERVABILITY.md](./OBSERVABILITY.md) — каталог метрик (`synth_executor_*`).
+- [docs/PUBLISHING.md](./PUBLISHING.md) — сборка Docker/Helm.
+- [docs/MAINTENANCE.md](./MAINTENANCE.md) — runbook (процедура переключения топологии).
 
 ## История
 
-- 2026-10-21 — переработано: split-топология (control plane + отдельные контейнеры-исполнители) как предмет PROP-077, единый переключатель `execution.mode`, порт `ExecutionPort`, all-in-one вынесен в PROP-082; упаковка исполнителя — отдельный in-tree пакет `@itphx/synth-executor` по образцу слоя хранения (ADR-097), транспорт — HTTP/1.1 + JSON (exec-API `/exec`/`/capabilities`/`/health`), containment `cwd` — на исполнителе; шаг 7 разбит на 7a–7d.
-- 2026-10-21 — шаг 1: порт исполнения реализован (union shell/argv вместо строки, типизированная ExecutionError, inline-реализация + контрактный suite); эскиз порта уточнён.
-- 2026-10-21 — шаг 3: секция `execution` в конфиге (mode/remote.*, env SYNTH_EXECUTION_*, CLI --execution-mode, fail-closed); `remote` — fail-closed до шага 7.
-- 2026-10-21 — шаг 7a: пакет исполнителя `@itphx/synth-executor` (exec-API `/exec`/`/capabilities`/`/health`, containment `cwd`, клиент удалённого порта `./client`).
-- 2026-10-21 — шаг 7b: подключение по `execution.mode=remote` — динамический `import()` пакета в core (fail-closed, по образцу драйвера хранилища), чтение токена из файла по `execution.remote.tokenSecret` (путь, не значение; значение не логируется), фабрика выбора порта по режиму, стартовая проверка режима (пакет доступен + токен читается); контрактный suite прогоняется против живого исполнителя в core, разделение проверок `cwd` на inline-only/remote-only (containment `EWORKSPACE`).
-- 2026-10-22 — шаг 7c: чарт — значения `execution.*` и `executor.*`, шаблоны `executor-deployment.yaml`/`executor-service.yaml`/`executor-pvc.yaml`/`executor-networkpolicy.yaml`, общий том workspace (RWX) в backend и в пуле, токен из Secret (backend — файлом, worker — значением), fail-closed проверки рендера (неизвестный `mode`/`failMode`, отсутствие адреса, `executor.enabled` без workspace, accessMode ≠ RWX); при `executor.enabled: false` рендер не меняется.
+- 2026-10-21 — переработано: split-топология (control plane + отдельные контейнеры-исполнители) как предмет
+  ADR-077, единый переключатель `execution.mode`, порт `ExecutionPort`, all-in-one вынесен в PROP-082;
+  упаковка исполнителя — отдельный in-tree пакет `@itphx/synth-executor` по образцу слоя хранения
+  (ADR-097), транспорт — HTTP/1.1 + JSON (exec-API `/exec`/`/capabilities`/`/health`), containment `cwd` —
+  на исполнителе; шаг 7 разбит на 7a–7d.
+- 2026-10-21 — шаги 1, 3, 7a, 7b: порт исполнения (union shell/argv, типизированная `ExecutionError`,
+  inline-реализация + контрактный suite), секция `execution` в конфиге (fail-closed), пакет исполнителя
+  (exec-API, containment `cwd`, клиент удалённого порта `./client`), подключение по `execution.mode=remote`
+  (динамический `import()`, чтение токена из файла, стартовая проверка режима).
+- 2026-10-22 — шаг 7c: чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны
+  `executor-deployment.yaml`/`executor-service.yaml`/`executor-pvc.yaml`/`executor-networkpolicy.yaml`,
+  общий том workspace (RWX) в backend и в пуле, токен из Secret — backend файлом, worker значением,
+  fail-closed проверки рендера; при `executor.enabled: false` рендер не меняется); документ переведён в
+  класс **Spec** — решение в ADR-077, детали здесь.

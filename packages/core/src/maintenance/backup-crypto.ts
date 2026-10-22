@@ -126,7 +126,7 @@ export interface BackupEncryptedMeta {
   createdAt: string;
   withSecrets: boolean;
   withWorkspace: boolean;
-  /** PROP-032: физический backend хранения на момент снятия (см. `BackupManifest`). */
+  /** ADR-096: физический backend хранения на момент снятия (см. `BackupManifest`). */
   storageBackend?: string;
   /** Число записей манифеста (без путей/хешей). */
   entries: number;

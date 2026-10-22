@@ -1,6 +1,6 @@
 /**
  * PG-реализация портов привязок, правил маршрутизации и API-ключей привязок
- * (PROP-032, волна 3b): `eventBindings`/`eventRoutes`/`eventApiKeys`.
+ * (ADR-097, волна 3b): `eventBindings`/`eventRoutes`/`eventApiKeys`.
  *
  * Семантика повторяет файловые реализации core (`EventBindingStore`,
  * `RouteRuleStore`, `EventApiKeyStore`): upsert по `id`, приоритет `threadKey`
@@ -307,7 +307,7 @@ export class PgEventApiKeyRepository {
   }
 
   /**
-   * Импорт готовой записи как есть (PROP-032): `id`/`bindingId`/`prefix`/
+   * Импорт готовой записи как есть (ADR-097): `id`/`bindingId`/`prefix`/
    * `secret_hash` сохраняются. `ON CONFLICT DO NOTHING` — идемпотентно; при
    * конфликте возвращается существующая строка (по `id`, метке или хешу).
    */

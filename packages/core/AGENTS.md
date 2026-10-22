@@ -18,7 +18,7 @@
 - `src/main.ts` — точка входа CLI (внутренний инструмент: `serve`, `chat`,
   `connect`, `project publish|fork`, `config`, `session`, `audit`, `update`,
   `storage migrate` — перенос данных между backend'ами, `analytics rebuild` —
-  бэкфилл роллапов аналитики, PROP-032/PROP-102).
+  бэкфилл роллапов аналитики, ADR-096/ADR-102).
   Публичный CLI `synth` — это пакет `@itphx/synth`, не core.
 
 ## Инварианты core
@@ -87,14 +87,14 @@
   ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя.
 - Исполнение агентских команд — **только через порт** `ExecutionPort` (`execution/ports`), а не
   прямым `execFile`; реализация по умолчанию — `InlineExecutionPort` (в процессе), удалённая —
-  шаг 7b плана PROP-077 (пакет `@itphx/synth-executor`, динамический `import()`). Выбор
+  шаг 7b плана ADR-077 (пакет `@itphx/synth-executor`, динамический `import()`). Выбор
   реализации — `execution/factory.ts` (`createExecutionPortForConfig`) при старте процесса;
   шов внедрения — `ctx.extra.executionPort` (`resolveExecutionPort(ctx)`);
   не-туловые точки (резолвер проектных инструкций, детект зависимостей, inline-shell) берут
   тот же порт через композицию. Вне порта остаются операции, не относящиеся к агентским
   командам: `simple-git` (`git/git-service.ts` — clone/fetch/init с SSH/CA-окружением), MCP
   stdio (`engine/mcp/client.ts`), обслуживание (`maintenance/update.ts`) — они уезжают в
-  исполнитель по фазам 2–3 плана PROP-077.
+  исполнитель по фазам 2–3 плана ADR-077.
 - Конфиг — через `@itphx/synth-shared/config` (ADR-023); приоритет
   CLI-флаги > `SYNTH_*` env > config.yaml > defaults.
 - **Доверие TLS/CA исходящих соединений — единый слой (ADR-099).**
@@ -224,7 +224,7 @@
 ## Карта модулей
 
 - `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, `analytics rebuild`, …).
-- `execution/` — PROP-077 (шаги 1, 3, 7b): порт исполнения команд, выбор реализации по
+- `execution/` — ADR-077 (шаги 1, 3, 7b): порт исполнения команд, выбор реализации по
   режиму и проверка режима при старте —
   `ports/execution-port.ts`
   (`ExecutionPort`, `ExecRequest`, `ExecResult`, `ExecCommand` — union `shell`/`argv`,
@@ -291,7 +291,7 @@
   `backup`/`restore`/`migrate`/`update`/`rollback`/`uninstall`, ADR-092; порт
   `MaintenanceAuditRepository`). HTTP-фабрика — `server/routes/maintenance.ts`
   (`createMaintenanceRoutes`).
-- `analytics/*` — PROP-102: аналитика и отчётность инстанса. `recorder.ts` — `AnalyticsRecorder`
+- `analytics/*` — ADR-102: аналитика и отчётность инстанса. `recorder.ts` — `AnalyticsRecorder`
   (best-effort инкремент бакетов `usage`/`activity`/`decision` через порт `AnalyticsRollupRepository`,
   ошибки порта не пробрасываются), `hooks.ts` — `attachAnalyticsActivityHooks` (жизненный цикл
   сессии/инструментов/саб-агентов → `activity`), `prune.ts` — `startAnalyticsRollupPruner`
@@ -624,7 +624,7 @@
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`). ADR-099: доверие CA для
   git-over-https — `simpleGit({ config: ['http.sslCAInfo=<path>'] })` из
   `gitCaConfig()` (путь берётся из уже инициализированного `initTlsTrust`).
-- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (34; `AnalyticsRollupRepository` — суточные роллапы аналитики, PROP-102; `DocumentRepository<T>` —
+- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (34; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102; `DocumentRepository<T>` —
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
   запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/
@@ -648,7 +648,7 @@
   контрактные suite — `storage/contract/{project-pipeline-repository,pipeline-run-repository}.contract.ts`.
   Точка сборки standalone —
   `createStandaloneStorage` (`server/app/deps.ts`, строится до `auth`: реестр `serviceKeys` нужен
-  резолверу ключа). Опциональный БД-драйвер (ADR-097/ADR-096, PROP-032) — отдельный in-tree пакет
+  резолверу ключа). Опциональный БД-драйвер (ADR-097/ADR-096) — отдельный in-tree пакет
   `@itphx/synth-storage-postgres` (`createPostgresStorage(config): Promise<StorageContext>`), объявлен
   в `optionalDependencies` core и подключается динамическим `import()` по `storage.backend === 'postgres'`
   (`pg` — optional у драйвера, core его рантаймом не тянет); драйвер применяет/проверяет схему и
@@ -668,7 +668,7 @@
   `FileMutex` (`file-mutex.ts`, ADR-051/ADR-089: `mkdir`-лок + stale takeover для общего
   `dataDir`; `ScheduleStore.crossProcess` сериализует мутации) — реализация интерфейса
   `Mutex` (`mutex.ts`: `withLock(fn, opts?)`; `ScheduleStore`/лок миграций зависят от
-  интерфейса, а не класса; PROP-032 — при `storage.backend=postgres` подставляется
+  интерфейса, а не класса; ADR-097 — при `storage.backend=postgres` подставляется
   `PgMutex` драйвера через `StorageContext.locks`), `RuntimeSettingsStore`
   (`events` + `mergeEventsConfig` — runtime-настройки раздела «События» (включая `identityMap` — **override**
   поверх основного источника — привязок в `ProfileData.identities[]`), ADR-089; `decision` +
@@ -751,7 +751,7 @@
   `createServiceKeyRoutes` (ADR-052 этап I: CRUD service-key, `writeGuard`/`readGuard`/`messages`),
   `createMaintenanceRoutes` (ADR-091/ADR-092: admin-API обслуживания — status/doctor/migrations/
   backups/restore/**restart**; `writeGuard`/`readGuard`/`messages`/`maxUploadBytes`, восстановление — офлайн).
-  `createAnalyticsRoutes` (PROP-102: только чтение — summary/usage/activity/decision/prompt/export;
+  `createAnalyticsRoutes` (ADR-102: только чтение — summary/usage/activity/decision/prompt/export;
   RBAC через `resolveElevated`/`resolveAuditor`/`resolveUserId`, `messages` — i18n).
   `createSessionRoutes`/`createEventRoutes`/`createSchedulerRoutes` принимают опции
   `scopeGuard`/`serviceProjectProjection` (ADR-052; core-дефолты — `requireScope`/`checkServiceProjectProjection`).

@@ -99,7 +99,7 @@ export interface StandaloneDepsAccessors extends HybridMirrorAccessors {
 }
 
 /**
- * PROP-032 (W2.4): единая точка сборки слоя хранения standalone — `app.ts`
+ * ADR-096 (W2.4): единая точка сборки слоя хранения standalone — `app.ts`
  * строит её до `auth` (реестр `serviceKeys` нужен резолверу ключа), а
  * `createStandaloneDeps` переиспользует тот же инстанс (один контекст, а не
  * россыпь конкретных классов по `main.ts`/`chat.ts`/`app.ts`).
@@ -137,7 +137,7 @@ export async function createStandaloneDeps(
 ) {
   const storageContext = storage ?? (await createStandaloneStorage(config));
   const dataDir = config.dataDir;
-  // PROP-032 (W5): деградированное хранилище (postgres недоступен → файловый
+  // ADR-098 (W5): деградированное хранилище (postgres недоступен → файловый
   // фоллбек, read-only). Фоновые ПИСАТЕЛИ (миграции, провайдеры из env, шедулер,
   // webhooks, sweeper/ephemeral, retention-прунеры) отключаются, чтобы не
   // создавать доменные данные в фоллбеке (split-brain).
@@ -155,7 +155,7 @@ export async function createStandaloneDeps(
   // страховочной копией ниже (`applyStartupMigrations`), после сборки стораджей.
   await assertInstanceDataNotTooNew(dataDir);
 
-  // PROP-032 (W2.3/W2.4): единый контекст хранения — домен получает порты из
+  // ADR-096 (W2.3/W2.4): единый контекст хранения — домен получает порты из
   // одного места (по умолчанию собирается `createStandaloneStorage`, можно
   // передать готовый — паритет с `app.ts`, где `serviceKeys` нужен до `auth`).
   // `file` (дефолт) собирает те же реализации/аргументы, что были здесь раньше
@@ -189,7 +189,7 @@ export async function createStandaloneDeps(
     securityAudit,
     egressRequests,
     analyticsRollups,
-    // ADR-051/PROP-059: реестр пайплайнов; ADR-086 §5: реестр установок пакетов.
+    // ADR-051/ADR-100: реестр пайплайнов; ADR-086 §5: реестр установок пакетов.
     pipelines: pipelineStore,
     packs: packStore,
     // ADR-071 §2.5: единый реестр MCP-серверов (установщик пакета пишет в него).
@@ -199,7 +199,7 @@ export async function createStandaloneDeps(
   // Egress: живой резолвер политики (settings.json → config.yaml → дефолт) и
   // журнал внешних запросов. Резолвер читает стор на каждый запрос — без
   // стартового снимка/кэша (live-применение без рестарта).
-  // PROP-102: сборщик роллапов аналитики (write-path) — только через порт слоя
+  // ADR-102: сборщик роллапов аналитики (write-path) — только через порт слоя
   // хранения; в деградации выключен (чтоб не писать домен в файловый фоллбек).
   const analytics = storageDegraded ? undefined : new AnalyticsRecorder({ repo: analyticsRollups });
   const egressResolver = createEgressPolicyResolver(settingsStore, {
@@ -268,7 +268,7 @@ export async function createStandaloneDeps(
     mcpSettingsProvider: () => settingsStore.getMcpSettings(),
     projectStore,
     hooks,
-    // PROP-102: точка персиста сообщения инкрементирует `activity`
+    // ADR-102: точка персиста сообщения инкрементирует `activity`
     // (`messages_assistant`/`messages_tool`); пользовательские — в процессоре.
     analytics,
     // ADR-071 §2.4 / ADR-046 §4.5: системные дефолты для сессий без проекта.
@@ -286,7 +286,7 @@ export async function createStandaloneDeps(
   // (тесты/короткоживущие процессы не держатся); остановка — на shutdown
   // через возвращаемый хэндл `stopEphemeralSweeper`.
   const stopEphemeralSweeper = storageDegraded ? () => {} : startEphemeralSweeper(sessionManager);
-  // PROP-102: шов записи `activity` через hook-шину (ADR-030): жизненный цикл
+  // ADR-102: шов записи `activity` через hook-шину (ADR-030): жизненный цикл
   // сессии/инструментов/саб-агентов → инкременты роллапов. Оси `user`/`project`
   // берутся из контекста хука либо резолвятся по id сессии.
   const detachAnalyticsHooks = analytics
@@ -296,7 +296,7 @@ export async function createStandaloneDeps(
           sessionAxes(await sessionManager.getSession(sessionId)),
       })
     : () => {};
-  // PROP-102 §8: retention суточных роллапов (сразу + каждые 6 ч, `unref`).
+  // ADR-102 §8: retention суточных роллапов (сразу + каждые 6 ч, `unref`).
   const stopAnalyticsRollupPruner =
     storageDegraded || !analytics
       ? () => {}
@@ -315,7 +315,7 @@ export async function createStandaloneDeps(
 
   const eventBus = new EventBus();
   const queueManager = new QueueProcessorManager();
-  // PROP-102: процессор очереди персистит пользовательские сообщения — его
+  // ADR-102: процессор очереди персистит пользовательские сообщения — его
   // точка записи инкрементирует `activity.messages_user`.
   queueManager.setAnalytics(analytics);
 
@@ -454,7 +454,7 @@ export async function createStandaloneDeps(
   const toolRegistry = createToolRegistry();
   const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
-  // ADR-096/PROP-032 + ADR-086 §5: агенты из **стора** — в реестр при старте.
+  // ADR-096 + ADR-086 §5: агенты из **стора** — в реестр при старте.
   // `createAgentRegistry` читает только файловый каталог `{dataDir}/agents`,
   // а при `storage.backend=postgres` стор агентов — это БД: агент, поставленный
   // пакетом расширения, после рестарта не попадал в реестр → Router не
@@ -486,7 +486,7 @@ export async function createStandaloneDeps(
   // миграция реестра (`session-scope-snapshots-v1`, маркер внутри сохранён → no-op
   // при повторном запуске), отдельный прямой вызов больше не нужен.
   // Fail-closed: ошибка копии/миграции не глушится — старт прерывается.
-  // PROP-032 (W5): в деградации миграции не применяем — фоллбек-каталог пуст,
+  // ADR-098 (W5): в деградации миграции не применяем — фоллбек-каталог пуст,
   // а страховочная копия/миграция были бы доменной записью в фоллбек.
   if (!storageDegraded) {
     await applyStartupMigrations({
@@ -494,7 +494,7 @@ export async function createStandaloneDeps(
       settingsStore,
       sessionManager,
       projectStore,
-      // PROP-032: под PG — advisory-лок драйвера вместо файлового `{dataDir}/migrate`.
+      // ADR-097: под PG — advisory-лок драйвера вместо файлового `{dataDir}/migrate`.
       ...(storageContext.locks
         ? { mutex: storageContext.locks.createMutex({ name: 'startup-migrate' }) }
         : {}),
@@ -528,7 +528,7 @@ export async function createStandaloneDeps(
     bundleStore,
   });
 
-  // PROP-077: порт исполнения команд. Режим (`inline`/`remote`) — параметр
+  // ADR-077: порт исполнения команд. Режим (`inline`/`remote`) — параметр
   // запуска процесса (инвариант 24), поэтому порт собирается здесь, при
   // старте, и не переинициализируется на лету. Выбор режима — фабрика
   // `execution/factory.ts` (`remote` → удалённый порт, fail-closed).
@@ -539,7 +539,7 @@ export async function createStandaloneDeps(
   // первый же запрос видел корректную доступность. Общий для оркестратора и
   // движка пайплайнов (контекст шага, ADR-101 §10).
   //
-  // PROP-077: проба бинарников идёт **через порт исполнения** — в split-режиме
+  // ADR-077: проба бинарников идёт **через порт исполнения** — в split-режиме
   // они ищутся в окружении исполнителя. Порт передаётся здесь: кэш детекции
   // модульный, порт берётся из первого вызова (fail-closed в remote-режиме).
   const runtimeDeps = await detectRuntimeDeps(executionPort);
@@ -548,12 +548,12 @@ export async function createStandaloneDeps(
     sessionManager,
     eventBus,
     hooks,
-    // PROP-077: порт исполнения команд (inline — исполнение в процессе;
+    // ADR-077: порт исполнения команд (inline — исполнение в процессе;
     // режим — параметр запуска, инвариант 24). Тот же порт получает и
     // детект внешних зависимостей (ниже) — иначе они смотрели бы в разные
     // места окружения.
     executionPort,
-    // PROP-102: сборщик `usage`/`decision` роллапов (write-path).
+    // ADR-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
     contextBuilder,
     contextConfig,
@@ -568,7 +568,7 @@ export async function createStandaloneDeps(
     profilesStore,
     // ADR-076 §T6: тот же store, что у git-роутов — без дублей инстансов.
     sshKeyStore,
-    // PROP-032 (W2.4): словари классификации — порт из контекста хранения.
+    // ADR-096 (W2.4): словари классификации — порт из контекста хранения.
     dictionaryStore,
     defaultWorkingDir,
     workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
@@ -593,7 +593,7 @@ export async function createStandaloneDeps(
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте,
     // fail-open при ошибке. Пробинг идёт до сборки оркестратора, чтобы первый
     // же запрос видел корректную доступность.
-    // Проба бинарников — через тот же порт исполнения (PROP-077).
+    // Проба бинарников — через тот же порт исполнения (ADR-077).
     runtimeDeps: await detectRuntimeDeps(executionPort),
     // ADR-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
@@ -683,7 +683,7 @@ export async function createStandaloneDeps(
           displayName: agent.displayName,
           description: agent.description,
         })),
-      // PROP-102: персистентные decision-метрики (ось provider/model).
+      // ADR-102: персистентные decision-метрики (ось provider/model).
       analytics,
     }),
   );
@@ -707,7 +707,7 @@ export async function createStandaloneDeps(
     getIdentityMap: () => effectiveEventsSettings.identityMap,
     localUserId: 'local',
   });
-  // ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059) — состояние
+  // ADR-089/ADR-051: учёт экземпляров пайплайна (ADR-100) — состояние
   // автомата публикации живёт в ядре (решение владельца), add-on отдаёт
   // артефакт по id. Трекер работает через порт `storage.pipelines`.
   const pipelineTracker = new PipelineTracker({ repository: pipelineStore });
@@ -768,7 +768,7 @@ export async function createStandaloneDeps(
     // бейдж агента (паритет с `POST /api/v2/sessions`). Источник — админка
     // «Агенты» (`getDefaultAgentId`) поверх `DEFAULT_AGENT_ID`.
     resolveDefaultAgent: getDefaultAgentId,
-    // ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059) — решение с
+    // ADR-089/ADR-051: учёт экземпляров пайплайна (ADR-100) — решение с
     // `pipeline: {id, step}` продвигает автомат пайплайна; учёт best-effort.
     pipelineTracker,
     // ADR-089: standalone-паритет с managed — уведомляем WS-хаб (`/ws/events`) о
@@ -919,7 +919,7 @@ export async function createStandaloneDeps(
   // ADR-051 (срез) / ADR-089: планировщик публикует cron-события через ingress.
   // `start()` гейтится конфигом; остановка — на shutdown (`stopScheduler`).
   const schedulerTickMs = (config.schedulerConfig?.tickSec ?? 60) * 1000;
-  // PROP-032: `leaderElection=postgres` требует advisory-локов backend'а
+  // ADR-097: `leaderElection=postgres` требует advisory-локов backend'а
   // (`storage.backend=postgres`); иначе — предупреждение и AlwaysLeader.
   if (config.schedulerConfig?.leaderElection === 'postgres' && !storageContext.locks) {
     console.warn(
@@ -937,7 +937,7 @@ export async function createStandaloneDeps(
     jobRetentionDays: config.schedulerConfig?.jobRetentionDays ?? 30,
     // ADR-094: завершённые Job (outcome + дрейф cron).
     onJob: schedulerJobMetrics,
-    // ADR-051/ADR-089/PROP-032: тикер стартует только у лидера (default —
+    // ADR-051/ADR-089/ADR-096: тикер стартует только у лидера (default —
     // AlwaysLeader). `file` — файловый лок на общем dataDir, `postgres` —
     // session-level advisory-lock драйвера (доступен только при PG-backend).
     leader:
@@ -955,7 +955,7 @@ export async function createStandaloneDeps(
 
   return {
     dataDir,
-    // PROP-032: контекст хранения инстанса — для операций, которым нужен
+    // ADR-096: контекст хранения инстанса — для операций, которым нужен
     // целиком (напр. портативный экспорт/импорт проекта, ADR-091).
     storageContext,
     // ADR-094: реестр метрик (доменные коллекторы подключены выше).
@@ -963,7 +963,7 @@ export async function createStandaloneDeps(
     // ADR-094: остановка фоновых коллекторов (graceful shutdown).
     stopMetricsCollectors,
     settingsStore,
-    // PROP-032 (W2.3): умолчания оформления из контекста хранения (паритет с backend).
+    // ADR-096 (W2.3): умолчания оформления из контекста хранения (паритет с backend).
     defaultsStore,
     getDefaultAgentId,
     defaultWorkingDir,
@@ -975,7 +975,7 @@ export async function createStandaloneDeps(
     stopEphemeralSweeper,
     // ADR-076: тот же store, что у git-роутов и оркестратора — без дублей инстансов.
     sshKeyStore,
-    // PROP-032 (W2.4): конфигурационные словари и реестр service-key — из контекста.
+    // ADR-096 (W2.4): конфигурационные словари и реестр service-key — из контекста.
     dictionaries: dictionaryStore,
     serviceApiKeyStore,
     providerStore,
@@ -990,9 +990,9 @@ export async function createStandaloneDeps(
     egressLogConfig,
     securityAudit,
     egressRequests,
-    // PROP-102 (волна 1): порт пред-агрегированных роллапов аналитики — для роутов отчётов.
+    // ADR-102 (волна 1): порт пред-агрегированных роллапов аналитики — для роутов отчётов.
     analyticsRollups,
-    // PROP-102: write-path — сборщик роллапов (+ остановка детачей hook-подписки и pruner'а).
+    // ADR-102: write-path — сборщик роллапов (+ остановка детачей hook-подписки и pruner'а).
     analytics,
     detachAnalyticsHooks,
     stopAnalyticsRollupPruner,
@@ -1017,7 +1017,7 @@ export async function createStandaloneDeps(
     skillService,
     bundleStore,
     commandService,
-    // ADR-051/PROP-059: порт реестра пайплайнов (определения + экземпляры).
+    // ADR-051/ADR-100: порт реестра пайплайнов (определения + экземпляры).
     pipelines: pipelineStore,
     // ADR-101 (Э5): движок пайплайнов (второй движок) — HTTP-роутов нет (Э6).
     pipelineEngine,
@@ -1026,7 +1026,7 @@ export async function createStandaloneDeps(
     // ADR-071 §2.5: единый реестр MCP-серверов (установщик пакета пишет в него).
     mcpRegistryStore,
     orchestrator,
-    // PROP-077: порт исполнения — тот же инстанс, что у оркестратора и тулов
+    // ADR-077: порт исполнения — тот же инстанс, что у оркестратора и тулов
     // (резолвер проектных инструкций берёт его для `git rev-parse`).
     executionPort,
     processMessage,

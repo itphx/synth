@@ -7,7 +7,7 @@ import { MemoryDocumentRepository } from '../../storage/memory/document-reposito
 import type { AgentDefinition } from '@itphx/synth-shared';
 
 /**
- * ADR-096/PROP-032 + ADR-086 §5: стор агентов — не обязательно файлы в
+ * ADR-096 + ADR-086 §5: стор агентов — не обязательно файлы в
  * `{dataDir}/agents` (при `storage.backend=postgres` это БД), а `createAgentRegistry`
  * читает только файловый каталог. `registerStoredAgents` — общий шов: определения
  * из стора попадают в реестр с той же семантикой merge, что и в

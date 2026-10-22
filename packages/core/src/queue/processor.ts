@@ -50,7 +50,7 @@ export class QueueProcessor {
     private eventBus: EventBus,
     private processMessage: ProcessMessageFn,
     private contextOptimizer?: ContextOptimizer,
-    /** PROP-102: сборщик аналитики — точка персиста пользовательского сообщения. */
+    /** ADR-102: сборщик аналитики — точка персиста пользовательского сообщения. */
     private analytics?: AnalyticsRecorder,
   ) {}
 
@@ -335,7 +335,7 @@ export class QueueProcessor {
             agent_role: message.agentRole,
             metadata: message.metadata || undefined,
           });
-          // PROP-102: точка персиста пользовательского сообщения (ось `user`).
+          // ADR-102: точка персиста пользовательского сообщения (ось `user`).
           void this.analytics?.recordActivity('messages_user', sessionAxes(session));
         }
 
@@ -579,14 +579,14 @@ export class QueueProcessor {
 export class QueueProcessorManager {
   private _processors = new Map<string, QueueProcessor>();
   private _contextOptimizer?: ContextOptimizer;
-  /** PROP-102: сборщик аналитики — прокидывается в создаваемые процессоры. */
+  /** ADR-102: сборщик аналитики — прокидывается в создаваемые процессоры. */
   private _analytics?: AnalyticsRecorder;
 
   setContextOptimizer(optimizer: ContextOptimizer): void {
     this._contextOptimizer = optimizer;
   }
 
-  /** PROP-102: включить запись `activity` из точек персиста сообщений. */
+  /** ADR-102: включить запись `activity` из точек персиста сообщений. */
   setAnalytics(analytics: AnalyticsRecorder | undefined): void {
     this._analytics = analytics;
   }

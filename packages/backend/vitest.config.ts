@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     name: '@itphx/synth-backend',
     include: ['src/**/*.test.ts'],
-    // PROP-032: локальный (ignored) `packages/backend/config.yaml` — dev-настройка
+    // ADR-096: локальный (ignored) `packages/backend/config.yaml` — dev-настройка
     // разработчика и может указывать `storage.backend: postgres`; тесты не должны
     // зависеть от окружения. Фиксируем файловый backend: контракт PG гоняется
     // отдельно (`@itphx/synth-storage-postgres`, `SYNTH_TEST_POSTGRES_DSN`).

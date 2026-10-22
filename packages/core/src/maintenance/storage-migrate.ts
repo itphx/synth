@@ -1,4 +1,4 @@
-// PROP-032 (волна 5): `synth storage migrate` — идемпотентный перенос данных
+// ADR-097 (волна 5): `synth storage migrate` — идемпотентный перенос данных
 // инстанса между физическими backend'ами хранения (`file` ↔ `postgres`).
 //
 // Копирование идёт **только через доменные порты** `StorageContext` (ADR-096),
@@ -32,7 +32,7 @@
 //
 // `eventApiKeys`/`serviceKeys`, наоборот, переносятся **как есть** (`importExisting`):
 // сохраняются `id`, `prefix` и at-rest sha256-хеш, поэтому выданные ранее токены
-// продолжают работать (PROP-032, регрессия «401 после миграции»).
+// продолжают работать (ADR-096, регрессия «401 после миграции»).
 import { readdir } from 'node:fs/promises';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { resolveStorageBackend } from '@itphx/synth-shared';

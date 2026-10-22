@@ -1,4 +1,4 @@
-{{- /* PROP-077, шаг 7c: NetworkPolicy пула исполнителей.
+{{- /* ADR-077, шаг 7c: NetworkPolicy пула исполнителей.
        ingress — только от pod'ов control plane (тот же namespace чарта) на порт
        исполнителя; egress — по умолчанию ограничен (DNS), без открытого
        доступа в интернет. Доп. правила — `executor.networkPolicy.allowedEgress`. */ -}}

@@ -13,7 +13,7 @@ import { requireScopeOrAdminRole } from '../service-scope.js';
 import type { ScopeGuardFactory } from '../service-scope.js';
 
 /**
- * ADR-051/PROP-059: HTTP-контур пайплайнов инстанса.
+ * ADR-051/ADR-100: HTTP-контур пайплайнов инстанса.
  *
  * Фабрика общая для core (standalone) и backend (managed): RBAC и scope-гейты
  * задаются через `opts`.

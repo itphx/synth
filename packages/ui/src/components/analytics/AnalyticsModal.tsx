@@ -44,7 +44,7 @@ interface TabMeta {
   icon: IconName
 }
 
-/** PROP-102 §5: четыре вкладки отчёта (состояние внутри модалки, не роут). */
+/** ADR-102 §5: четыре вкладки отчёта (состояние внутри модалки, не роут). */
 const TAB_META: Record<AnalyticsTab, TabMeta> = {
   usage: { labelKey: 'analytics.tab.usage', icon: 'chart-line' },
   activity: { labelKey: 'analytics.tab.activity', icon: 'bar-chart-2' },
@@ -105,7 +105,7 @@ function groupByDimensions(tab: AnalyticsTab, value: string): AnalyticsDimension
 
 /**
  * Query текущего отчёта: фильтры отправляются только для применимых к семейству
- * осей (PROP-102 §2) — иначе сервер получил бы бессмысленный фильтр.
+ * осей (ADR-102 §2) — иначе сервер получил бы бессмысленный фильтр.
  */
 function buildQuery(
   tab: AnalyticsTab,
@@ -237,7 +237,7 @@ function ForbiddenNotice() {
 }
 
 /**
- * PROP-102 §5 (волна 2): модальное окно «Аналитика и отчёты». Лениво
+ * ADR-102 §5 (волна 2): модальное окно «Аналитика и отчёты». Лениво
  * монтируется из `App.tsx` при первом открытии (по образцу `LogsModal`).
  *
  * Вкладки — состояние внутри окна; данные читаются с сервера по фильтрам.

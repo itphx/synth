@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
 import type { AppearanceDefaults, DefaultsRepository } from './ports/index.js';
 
-// PROP-032 (W2.3): реализация перенесена из backend (`lib/defaults-store.ts`) —
+// ADR-096 (W2.3): реализация перенесена из backend (`lib/defaults-store.ts`) —
 // это `{dataDir}/defaults.json` + атомарная запись, без backend-специфики.
 // Backend оставляет реэкспорт для обратной совместимости импортов.
 

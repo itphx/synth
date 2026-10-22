@@ -1,13 +1,13 @@
 # PROP-082: Full-образы и базовое развёртывание (flavor'ы с toolchain)
 
-> **Статус:** 🧩 Предложение — all-in-one образ (control plane + toolchain + исполнитель) и образы worker'ов; flavor'ы `slim`/`core`/`dev`/`devops`/`browser`/`full`; переключатель топологии — `execution.mode` (PROP-077)
+> **Статус:** 🧩 Предложение — all-in-one образ (control plane + toolchain + исполнитель) и образы worker'ов; flavor'ы `slim`/`core`/`dev`/`devops`/`browser`/`full`; переключатель топологии — `execution.mode` (ADR-077)
 > **Решение до:** 2026-11-14
 > **Дата:** 2026-10-21
 > **Источник:** переработано 2026-10-21 (проработка двух топологий развёртывания: all-in-one vs отдельные контейнеры-исполнители)
 > **Согласовано:** Debian для `browser`/`full`; `buildah` вместо `kaniko`; docker — только CLI (без socket); `lite` → `core`; публикация flavor'ов — в **приватный реестр Gitea** `git.itphx.ru` (не в Docker Hub).
-> **Ближайший шаг:** split-топология (PROP-077, шаги 7–10). Шаги 1–6 сделаны.
+> **Ближайший шаг:** split-топология (ADR-077, шаги 7–10). Шаги 1–6 сделаны.
 
-**Решение:** развёртывание Synth описывается **двумя топологиями одной конфигурации**. По умолчанию (`execution.mode: inline`) работает **all-in-one** — один контейнер, в котором рядом живут control plane (backend), toolchain (набор инструментов для агентских тулов) и рантайм исполнителя. Вторая топология (`execution.mode: remote`) — **split**: control plane без toolchain'а (`synth-backend:<v>`) плюс отдельные контейнеры-исполнители (`synth-executor:<v>-<flavor>`). Переключатель — **параметр запуска** (секция `execution` в `config.yaml`, env `SYNTH_EXECUTION_MODE`, CLI `--execution-mode`), смена топологии — только перезапуск процесса. Исполнитель и all-in-one образ — **один и тот же код**: он умеет работать и отдельным сервисом, и локально внутри backend'а; различает их только порт исполнения `ExecutionPort` (в репозитории есть — шаг 1 плана реализации; см. «Дельта», п. 1). Split-топология, доверенная граница backend → исполнитель, S3 и жизненный цикл worker'ов — предмет [PROP-077](./prop-077-runtime-toolchain.md); здесь фиксируются all-in-one, flavor-матрица образов и единая модель переключения.
+**Решение:** развёртывание Synth описывается **двумя топологиями одной конфигурации**. По умолчанию (`execution.mode: inline`) работает **all-in-one** — один контейнер, в котором рядом живут control plane (backend), toolchain (набор инструментов для агентских тулов) и рантайм исполнителя. Вторая топология (`execution.mode: remote`) — **split**: control plane без toolchain'а (`synth-backend:<v>`) плюс отдельные контейнеры-исполнители (`synth-executor:<v>-<flavor>`). Переключатель — **параметр запуска** (секция `execution` в `config.yaml`, env `SYNTH_EXECUTION_MODE`, CLI `--execution-mode`), смена топологии — только перезапуск процесса. Исполнитель и all-in-one образ — **один и тот же код**: он умеет работать и отдельным сервисом, и локально внутри backend'а; различает их только порт исполнения `ExecutionPort` (в репозитории есть — шаг 1 плана реализации; см. «Дельта», п. 1). Split-топология, доверенная граница backend → исполнитель, S3 и жизненный цикл worker'ов — предмет [ADR-077](./adr-077-runtime-toolchain.md); здесь фиксируются all-in-one, flavor-матрица образов и единая модель переключения.
 
 ## Две топологии развёртывания: all-in-one и split
 
@@ -22,7 +22,7 @@
 
 - **Control plane** — процесс `@itphx/synth-backend`: OIDC/RBAC, API v2, LLM Gateway. Сегодня это ровно образ `docker/Dockerfile.backend` (сборка из исходников монорепо — `docker/Dockerfile.backend:1-3`, запуск `node dist/main.js` — `docker/Dockerfile.backend:69`).
 - **Toolchain** — инструменты, которые нужны агентским тулам: `git`, `ripgrep`, `python3`, `openssh-client` и далее по тирам (см. «Общий состав» и «Тиры инструментов»). В **базовом** образе control plane (`slim`) пакетов **нет ни одного** — только `COPY`/`ENV`/`CMD`, без `apk add` (`docker/Dockerfile:62-95`, `docker/Dockerfile.ui:25-43`); toolchain'а добавляют flavor-стадии `core`/`dev`/`devops`/`browser`/`full` (шаги 2, 4, 5).
-- **Рантайм исполнителя** — тот же код, что и в образе worker'а (`synth-executor`), но запущенный локально: отдельный процесс (или изолированный поток) внутри контейнера, а не смешанный с процессом backend'а. Именно он — «исполнитель» из [PROP-077](./prop-077-runtime-toolchain.md), только встроенный, а не отдельный сервис.
+- **Рантайм исполнителя** — тот же код, что и в образе worker'а (`synth-executor`), но запущенный локально: отдельный процесс (или изолированный поток) внутри контейнера, а не смешанный с процессом backend'а. Именно он — «исполнитель» из [ADR-077](./adr-077-runtime-toolchain.md), только встроенный, а не отдельный сервис.
 - **Workspace и кэши** — рабочий каталог проекта и кэши инструментов живут на том же volume'е, что и данные инстанса: PVC `data` → `/var/synth/data` (`charts/synth/templates/backend-deployment.yaml:133-135`, `charts/synth/values.yaml:39-50`), provisioning workspace — `packages/core/src/engine/workspace-provision.ts` (ADR-075).
 
 **Почему это не «просто большой backend».** Границы остаются теми же, что и в split-топологии:
@@ -45,7 +45,7 @@
 
 Отсюда правила: `docker.sock` **не монтируется ни в одном flavor'е**; docker — только CLI (без демона); исполнение изолируется пользователем ОС и лимитами; сеть исполнителя ограничивается egress-политикой.
 
-### Переключатель execution.mode (кратко, отсылка к PROP-077)
+### Переключатель execution.mode (кратко, отсылка к ADR-077)
 
 Секция `execution` в `config.yaml`:
 
@@ -329,7 +329,7 @@ buildah --root "$HOME/.local/share/containers/storage" \
 Шаг 5 закрывает две вещи:
 
 1. **debian-ветка flavor'ов** `browser`/`full` — там, где нужен Playwright/Chromium: под musl (alpine) готовых сборок браузеров нет, поэтому база этих flavor'ов — glibc (`node:22-bookworm-slim`);
-2. **образы исполнителей** `synth-executor:<v>-<flavor>` — worker'ы split-топологии ([PROP-077](./prop-077-runtime-toolchain.md)): toolchain + рантайм исполнителя, без control plane.
+2. **образы исполнителей** `synth-executor:<v>-<flavor>` — worker'ы split-топологии ([ADR-077](./adr-077-runtime-toolchain.md)): toolchain + рантайм исполнителя, без control plane.
 
 Реализовано в `docker/Dockerfile.backend` (стадии `browser`/`full`) и в новом `docker/Dockerfile.executor` (все пять flavor'ев). Списки пакетов **не дублируются** — обе ветки используют одни и те же distro-aware скрипты `docker/install-*.sh`.
 
@@ -676,7 +676,7 @@ slim   (целевая платформа, без RUN) — control plane без 
 
 MCP остаётся **конфигурацией реестра** (ADR-071); flavor'ы несут только рантаймы/бинари (tier 3–4). Бинари MCP-серверов **пекутся в образ** (pin + checksum; supply-chain — референс PROP-068), а не устанавливаются в рантайме. Токены хостингов — из секрет-стора Synth (по образцу ADR-076), инъекция при спавне, обфускация guard'ом (ADR-036), **не в образ**.
 
-Следствие для worker'а: MCP stdio-клиент сейчас спавнится в процессе control plane (`packages/core/src/engine/mcp/client.ts:169-170`), поэтому в split-топологии stdio-серверы либо остаются у control plane, либо переезжают в worker вместе с командой — это решается в [PROP-077](./prop-077-runtime-toolchain.md).
+Следствие для worker'а: MCP stdio-клиент сейчас спавнится в процессе control plane (`packages/core/src/engine/mcp/client.ts:169-170`), поэтому в split-топологии stdio-серверы либо остаются у control plane, либо переезжают в worker вместе с командой — это решается в [ADR-077](./adr-077-runtime-toolchain.md).
 
 ## Локальный containerized: docker-compose
 
@@ -693,7 +693,7 @@ MCP остаётся **конфигурацией реестра** (ADR-071); fl
 
 Managed-деплой сегодня — **одна** реплика backend'а, потому что JSON-хранилище не масштабируется (`charts/synth/values.yaml:16`), с PVC `data` (`charts/synth/values.yaml:39-50`), probes `GET /health` (`charts/synth/values.yaml:103-110`), `runAsUser: 1000` / `allowPrivilegeEscalation: false` (`charts/synth/values.yaml:112-118`). В чарте **нет** `Role`/`RoleBinding` и **нет** `NetworkPolicy` (каталог шаблонов: `charts/synth/templates/` — `serviceaccount.yaml`, `backend-deployment.yaml`, `backend-pvc.yaml`, …; произвольные объекты добавляются через `extraObjects: []` — `charts/synth/values.yaml:427`).
 
-**Переход single-instance → split** (split-топология технически возможна и при одной реплике control plane — пул worker'ов масштабируется независимо; PostgreSQL обязателен для масштабирования самого control plane, т.е. >1 реплики — ADR-096/PROP-032):
+**Переход single-instance → split** (split-топология технически возможна и при одной реплике control plane — пул worker'ов масштабируется независимо; PostgreSQL обязателен для масштабирования самого control plane, т.е. >1 реплики — ADR-096):
 
 1. `execution.mode: remote` в config.yaml (или `SYNTH_EXECUTION_MODE=remote`) + перезапуск;
 2. отдельный Deployment `synth-executor` (`executor.replicaCount`, `executor.image.*`, `executor.resources`);
@@ -740,7 +740,7 @@ Managed-деплой сегодня — **одна** реплика backend'а, 
 | Единый egress-транспорт `egressFetch` + секция `security.tls` в чарте | `packages/core/src/security/tls.ts:302`, `charts/synth/values.yaml:195-209` |
 | Порт исполнения `ExecutionPort` + `InlineExecutionPort` + контрактный suite (шаг 1); секция `execution` в конфиге, env `SYNTH_EXECUTION_*`, CLI `--execution-mode` (шаг 3) — **реализованы** | `packages/core/src/execution/`, `packages/shared/src/config/execution.ts:1`, `packages/core/src/execution/startup.ts:1` |
 | Flavor'ы `core`/`dev`/`devops` (alpine) — стадии `core`/`dev`/`devops` в `docker/Dockerfile.backend`, tier-скрипты в `docker/install-*.sh`; измерены 101,6 / 320,1 / 508,5 МБ (шаги 2 и 4) — **реализованы** | `docker/Dockerfile.backend:81-193`, `docker/install-lib.sh:42-236`, `docker/install-tier-1.sh:48-61`, `docker/install-tier-2.sh:50-94`, `docker/install-tier-4.sh:53-73`, `docker/install-db-clients.sh:47-54`, `docker/install-diag.sh:39-47`, `docker/install-buildah.sh:88-113`, `docker/install-docker-cli.sh:24-40` |
-| `RemoteExecutionPort` (control plane → исполнитель), пакет `@itphx/synth-executor` и образы `synth-executor` — **реализованы** (PROP-077, шаг 7a + PROP-082, шаг 5); метрики `synth_executor_*` и развёртывание split-топологии в чарте — шаг 10 и далее | `packages/core/src/execution/remote.ts`, `packages/executor/`, `docker/Dockerfile.executor` |
+| `RemoteExecutionPort` (control plane → исполнитель), пакет `@itphx/synth-executor` и образы `synth-executor` — **реализованы** (ADR-077, шаг 7a + PROP-082, шаг 5); метрики `synth_executor_*` и развёртывание split-топологии в чарте — шаг 10 и далее | `packages/core/src/execution/remote.ts`, `packages/executor/`, `docker/Dockerfile.executor` |
 | Flavor'ы `browser`/`full` (debian-ветка) + образы исполнителей — стадии `browser`/`full` в `docker/Dockerfile.backend` и `docker/Dockerfile.executor`; измерены 674,9 / 925,5 МБ (backend) и 107,0 / 930,8 МБ (executor) — **реализованы** (шаг 5) | `docker/Dockerfile.backend:219-310`, `docker/Dockerfile.executor:182-256`, `docker/install-tier-3.sh` |
 
 ## Дельта
@@ -749,7 +749,7 @@ Managed-деплой сегодня — **одна** реплика backend'а, 
 2. **Секция `execution`** в конфиге: `packages/shared/src/config/types.ts` + `defaults.ts` + `resolve.ts` — `mode`, `remote.url`, `remote.timeoutMs`, `remote.concurrency`, `remote.failMode`, `remote.tokenSecret`; env `SYNTH_EXECUTION_*`; CLI-флаг `--execution-mode`; **fail-closed** на неизвестном `mode` (образец — `packages/shared/src/config/resolve.ts:283-306`); значение токена в конфиге не хранится (инвариант 13).
 3. **Multistage Dockerfile** с flavor-таргетами (`slim`/`core`/`dev`/`devops`/`browser`/`full`) и distro-aware скриптами тиров `docker/install-tier-N.sh` (единый список пакетов на тир, выбор `apk`/`apt`). *Шаги 2, 4 и 5 (сделано): `docker/Dockerfile.backend` (стадии `build`/`core`/`dev`/`devops`/`browser`/`full`/`slim`), `docker/Dockerfile.executor` (стадии `build`/`core`/`dev`/`devops`/`browser`/`full`), `docker/install-lib.sh`, `docker/install-hard-deps.sh`, `docker/install-tier-0.sh`, `docker/install-tier-1.sh`, `docker/install-tier-2.sh`, `docker/install-tier-3.sh`, `docker/install-tier-4.sh`, `docker/install-db-clients.sh`, `docker/install-diag.sh`, `docker/install-buildah.sh`, `docker/install-docker-cli.sh`.*
 4. **All-in-one образ** `synth-backend:<v>-<flavor>`: control plane + toolchain + рантайм исполнителя в одном контейнере; исполнитель — отдельный процесс с собственным `HOME`/env/лимитами.
-5. **Образ worker'а** `synth-executor:<v>-<flavor>`: toolchain-слои + рантайм исполнителя, без control plane и без UI; entrypoint — рантайм исполнителя (PROP-077). *Уточнение шага 5: в образ также входит `dist` core — `@itphx/synth-core` объявлен peer-зависимостью исполнителя и импортируется в рантайме (см. раздел шага 5).*
+5. **Образ worker'а** `synth-executor:<v>-<flavor>`: toolchain-слои + рантайм исполнителя, без control plane и без UI; entrypoint — рантайм исполнителя (ADR-077). *Уточнение шага 5: в образ также входит `dist` core — `@itphx/synth-core` объявлен peer-зависимостью исполнителя и импортируется в рантайме (см. раздел шага 5).*
 6. **Реестры и публикация**: **все** flavor-образы обоих образов — в **приватный Gitea** `git.itphx.ru/itphx/…` (версионные теги, без `latest`); базовые образы — как раньше, в `gitverse.ru`/`ghcr.io`; секрет `GV_GITEA_TOKEN` (fail-closed без токена); последовательный push с ретраями; `imagePullSecrets` для backend'а и worker'а. *Реализовано (шаг 6): `scripts/publish-images.sh` (сборка всех flavor'ов + push + сводка), `scripts/docker-auth-gitea.sh` (авторизация), джоба `publish-images-gitea` в `.gitverse/workflows/release.yaml` (по тегу релиза, отдельный kaniko-шаг на flavor с registry-кэшем), smoke-тесты `scripts/smoke-image.sh` + `scripts/ci-images.sh` и джоба `images` в `.gitverse/workflows/ci.yaml` (публикации нет).* Осталось: расширить `scripts/docker-cleanup.mjs` на репозитории Gitea.
 7. **CI**: registry-cache (`--cache=true`), **smoke-тесты на каждый flavor** (`git --version`, `rg --version`, `python3 --version`, `kubectl version --client`, `playwright --version`) — ловят проблемы базы (glibc/musl); перевод билдера с `kaniko` на `buildah`; per-arch сборка flavor'ев.
 8. **Helm**: `execution.mode`, `execution.remote.url`, `execution.remote.existingSecret`/`execution.remote.tokenKey`, `execution.remote.timeoutMs`, `execution.remote.concurrency`, `execution.remote.failMode`, `executor.enabled`, `executor.image.repository`/`.tag`/`.pullPolicy`, `executor.replicaCount`, `executor.resources`, `executor.workspace.claimName`/`.mountPath`, `executor.podSecurityContext`/`executor.containerSecurityContext`, `executor.networkPolicy`; RWX-claim для workspace в split-режиме.
@@ -778,21 +778,21 @@ Managed-деплой сегодня — **одна** реплика backend'а, 
 - **Версии тулов** — `kubectl`/`helm`/`terraform` версионно-зависимы от целевого кластера/проекта: фиксировать в образе или делать настраиваемыми (и как — отдельный flavor на версию или подстановка в volume)? *Для alpine-ветки пины уже зафиксированы в образе* (`kubectl` 1.37.1, `helm` 3.22.1, `kustomize` 5.8.3, OpenTofu 1.13.1, `hadolint` 2.15.1 — `docker/install-tier-2.sh:79-85`); открытым остаётся, только ли это нерасширяемый набор, или база для настраиваемых версий.
 - **`uv`/`uvx`** — включать в образ (python-MCP, быстрые установки) или ограничиться `pip`/`venv`?
 - **Node-версии** — нужен ли version manager (`fnm`/`volta`) в образе или остаётся одна версия 22 (`docker/Dockerfile:27`)?
-- **`buildah` в контейнере** — в образе зафиксированы только клиентские части; полноценная сборка образов из сессии требует прав, недоступных в типовом pod'е: `CAP_SYS_ADMIN`/`CAP_SYS_RESOURCE`, `/dev/fuse`, `TMPDIR` не на overlayfs, а для rootless — ещё и writable `--root`/`--runroot` (рецепты и причины падений — в разделе «Ограничения buildah в контейнере»). Ограничение надо связать с решением по образу worker'а: либо worker получает отдельный профиль capability (`executor.podSecurityContext`, PROP-077), либо сборка образов из сессии выносится из образов Synth вообще (отдельный сервис-билдер).
+- **`buildah` в контейнере** — в образе зафиксированы только клиентские части; полноценная сборка образов из сессии требует прав, недоступных в типовом pod'е: `CAP_SYS_ADMIN`/`CAP_SYS_RESOURCE`, `/dev/fuse`, `TMPDIR` не на overlayfs, а для rootless — ещё и writable `--root`/`--runroot` (рецепты и причины падений — в разделе «Ограничения buildah в контейнере»). Ограничение надо связать с решением по образу worker'а: либо worker получает отдельный профиль capability (`executor.podSecurityContext`, ADR-077), либо сборка образов из сессии выносится из образов Synth вообще (отдельный сервис-билдер).
 - **MCP-серверы tier 4** — версии зафиксированы в образе (`docker/install-tier-4.sh:53-58`): обновление = пересборка образа (supply-chain — референс PROP-068). Нужно решить, как обновляются зафиксированные версии (автоматический PR на bump + пересборка в CI или ручной bump) и допускается ли в образе «плавающая» версия.
 - **Размер и pull-time** — приемлемый бюджет для all-in-one/worker-образов; локальные кэши и `docker save`-бандлы (для закрытого контура) против `docker pull` из сети; `offline-images` уже собирает бандлы только для базовых образов (`.gitverse/workflows/release.yaml:772-775`).
-- **Кастомные образы и доверие к ним** — кто может подменить toolchain (digest'ы, подпись, admission-проверка) — референс PROP-068 и «Изоляция/квоты» в PROP-077.
+- **Кастомные образы и доверие к ним** — кто может подменить toolchain (digest'ы, подпись, admission-проверка) — референс PROP-068 и «Изоляция/квоты» в ADR-077.
 - **Отдельный ли репозиторий/пакет для `synth-executor`** — *закрыто на шаге 5*: **отдельный npm-пакет в монорепо** — `@itphx/synth-executor` (`packages/executor`, публикуется вместе с остальными пакетами, ADR-038) + собственный `docker/Dockerfile.executor`; образы worker'ов собираются из исходников монорепо, как `synth-backend`.
 - **Взаимодействие с PROP-068 (trust/scan)** — как бинари, запечённые в образ (MCP-серверы, tier-инструменты), проходят регистрацию/сканирование реестра скиллов и агентов?
 
 ## Зависимости
 
-- **PROP-077** — split-топология, доверенная граница, жизненный цикл и S3; здесь — all-in-one и единый переключатель топологии.
-- **PROP-032** — предпосылка масштабирования control plane (несколько реплик ⇒ PostgreSQL); на all-in-one не влияет.
+- **ADR-077** — split-топология, доверенная граница, жизненный цикл и S3; здесь — all-in-one и единый переключатель топологии.
+- **ADR-097** — предпосылка масштабирования control plane (несколько реплик ⇒ PostgreSQL); на all-in-one не влияет.
 - **ADR-038** — сборка/публикация образов и npm-пакетов (образы публикуются только по тегу релиза).
 - **ADR-023** — приоритет конфигурации `CLI > env > config.yaml > defaults` (секция `execution`).
 - **ADR-075** — workspace проекта: provisioning, `workspaceOutsideRoot`; в split-топологии workspace — общий том.
-- **ADR-076** — git-репозитории и SSH-ключи (`openssh-client` в образе; доставка SSH-материала в worker'а — PROP-077).
+- **ADR-076** — git-репозитории и SSH-ключи (`openssh-client` в образе; доставка SSH-материала в worker'а — ADR-077).
 - **ADR-078** — детект отсутствующих бинарников: в worker'е детект должен делать исполнитель, а не локальный `execFile`.
 - **ADR-071** — MCP: реестр и политики; flavor'ы несут только рантаймы/бинари.
 - **ADR-094** — контракт наблюдаемости (имена `synth_*`, запрет сырых путей и `session_id`).
@@ -807,8 +807,8 @@ Managed-деплой сегодня — **одна** реплика backend'а, 
 
 ## Связи
 
-- [PROP-077](./prop-077-runtime-toolchain.md) «Инструментальное окружение исполнения (toolchain и executor)» — split-топология, доверенная граница, S3.
-- [PROP-032](./prop-032-history-storage-postgresql.md) «Второй вариант хранения — БД (PostgreSQL) за единым слоем» — предпосылка масштабирования control plane.
+- [ADR-077](./adr-077-runtime-toolchain.md) «Инструментальное окружение исполнения (toolchain и executor)» — split-топология, доверенная граница, S3.
+- [ADR-097](./adr-097-storage-provider-class.md) «Второй вариант хранения — БД (PostgreSQL) за единым слоем» — предпосылка масштабирования control plane.
 - [ADR-023](./adr-023-configuration.md) «Конфигурация» — приоритет CLI/env/config.yaml.
 - [ADR-038](./adr-038-npm-packages.md) «Монорепо как набор публикуемых npm-пакетов» — сборка и публикация образов.
 - [ADR-075](./adr-075-project-workspace-provisioning.md) «Окружение проекта: рабочий каталог (создание и выбор)» — workspace и его provisioning.
@@ -826,9 +826,9 @@ Managed-деплой сегодня — **одна** реплика backend'а, 
 
 ## Порядок реализации
 
-План **общий с [PROP-077](./prop-077-runtime-toolchain.md)** — нумерация шагов единая; владелец шага указан в таблице.
+План **общий с [ADR-077](./adr-077-runtime-toolchain.md)** — нумерация шагов единая; владелец шага указан в таблице.
 
-| Шаг | Содержание | Владелец | Зависимость от PostgreSQL (PROP-032) |
+| Шаг | Содержание | Владелец | Зависимость от PostgreSQL (ADR-097) |
 |---|---|---|---|
 | **1** | Порт исполнения `ExecutionPort` + `InlineExecutionPort`: вынести 5+ точек исполнения за порт **без изменения поведения**; контрактный suite — **сделано** | общий | не нужна |
 | **2** | Multistage Dockerfile + distro-aware скрипты тиров + flavor `core` → all-in-one образ `synth-backend:<v>-core` — **сделано** | PROP-082 | не нужна |
@@ -836,11 +836,11 @@ Managed-деплой сегодня — **одна** реплика backend'а, 
 | **4** | Flavor'ы `dev`/`devops` (alpine-ветка) — **сделано** | PROP-082 | не нужна |
 | **5** | Flavor'ы `browser`/`full` (debian-ветка, Playwright) + образ worker'а `synth-executor:<v>-<flavor>` — **сделано** | PROP-082 | не нужна |
 | **6** | CI: публикация **всех** flavor'ов обоих образов в **приватный Gitea** `git.itphx.ru/itphx/…` (версионные теги, секрет `GV_GITEA_TOKEN`, последовательный push с ретраями), registry-cache, smoke-тесты на каждый flavor (`scripts/smoke-image.sh` + `scripts/ci-images.sh`), `scripts/docker-cleanup.mjs` под новые репозитории — **сделано** (осталось расширить cleanup на репозитории Gitea) | PROP-082 | не нужна |
-| **7** | Executor-сервис: exec-API, `RemoteExecutionPort`, токен `synth_exec_…`, чарт `executor.*` (Deployment/Service/пул), **фаза 1** матрицы (`execute_shell`/`grep_files`/`python`) | PROP-077 | нужна для >1 реплики control plane; при 1 реплике — нет |
-| **8** | **Фаза 2** матрицы: git-тулы + доставка SSH-материала в исполнителя | PROP-077 | не нужна |
-| **9** | **Фаза 3** матрицы: MCP stdio-серверы и inline-shell | PROP-077 | не нужна |
-| **10** | Изоляция и квоты (`NetworkPolicy`, `ResourceQuota`/`LimitRange`, лимиты worker'а, без `docker.sock`); наблюдаемость: метрики `synth_executor_*`, `/metrics` исполнителя, алерты; детект зависимостей (ADR-078) на стороне исполнителя | PROP-077 | не нужна |
-| **11** | Workspace-v2: per-worker копия или S3-совместимое объектное хранилище (снимает «один RWX-том на всех») | PROP-077 | желательна |
+| **7** | Executor-сервис: exec-API, `RemoteExecutionPort`, токен `synth_exec_…`, чарт `executor.*` (Deployment/Service/пул), **фаза 1** матрицы (`execute_shell`/`grep_files`/`python`) | ADR-077 | нужна для >1 реплики control plane; при 1 реплике — нет |
+| **8** | **Фаза 2** матрицы: git-тулы + доставка SSH-материала в исполнителя | ADR-077 | не нужна |
+| **9** | **Фаза 3** матрицы: MCP stdio-серверы и inline-shell | ADR-077 | не нужна |
+| **10** | Изоляция и квоты (`NetworkPolicy`, `ResourceQuota`/`LimitRange`, лимиты worker'а, без `docker.sock`); наблюдаемость: метрики `synth_executor_*`, `/metrics` исполнителя, алерты; детект зависимостей (ADR-078) на стороне исполнителя | ADR-077 | не нужна |
+| **11** | Workspace-v2: per-worker копия или S3-совместимое объектное хранилище (снимает «один RWX-том на всех») | ADR-077 | желательна |
 | **12** | Миграции и документация: переключение топологии (runbook — `docs/MAINTENANCE.md`), секция `execution` в `docs/CONFIGURATION.md`, метрики в `docs/OBSERVABILITY.md`, примеры в `charts/synth/README.md`, диагностика в `docs/TROUBLESHOOTING.md`; compose-сценарии all-in-one/split | общий | не нужна |
 
 Шаги 1–3 и 6 не требуют PostgreSQL и могут идти до перехода на БД; шаг 7 — первый, где PG нужна для полного эффекта (несколько реплик control plane); шаги 1, 2, 3, 4, 5, 6, 10, 12 от PG не зависят.
@@ -849,6 +849,6 @@ Split-топология технически возможна и при одн�
 
 ## История
 
-- 2026-10-21 — переработано: all-in-one образ (control plane + toolchain + исполнитель), образы worker'ов, flavor-матрица и единый переключатель топологии `execution.mode` (PROP-077).
+- 2026-10-21 — переработано: all-in-one образ (control plane + toolchain + исполнитель), образы worker'ов, flavor-матрица и единый переключатель топологии `execution.mode` (ADR-077).
 - 2026-10-21 — шаг 2: multistage `docker/Dockerfile.backend` (стадии `build`/`core`/`slim`), distro-aware скрипты тиров, flavor `core` (hard deps + tier 0) — решение по arm64: **вариант A** (per-arch, QEMU/binfmt для flavor'ов; `slim` без `RUN` — multi-arch без эмуляции).
 - 2026-10-21 — шаги 4–5: flavor'ы dev/devops (alpine) и browser/full (debian) + образы исполнителей; замеры и решения по yq/docker-CLI/Playwright; 2026-10-22 — шаг 6: решение владельца — **все** flavor'ы публикуются в приватный Gitea `git.itphx.ru/itphx/…` (в `gitverse.ru`/`ghcr.io` — только базовые образы, Docker Hub не используется).

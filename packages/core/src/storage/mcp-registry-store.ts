@@ -41,7 +41,7 @@ interface RegistryFile {
  * ADR-071 §2.5: единый реестр MCP-серверов.
  *
  * Хранится одним JSON-файлом `{dataDir}/mcp/registry.json` (ADR-005, атомарная
- * запись tmp→rename). Логическая модель PG-ready (PROP-032): плоские записи со
+ * запись tmp→rename). Логическая модель PG-ready (ADR-097): плоские записи со
  * стабильным `id`, `schemaVersion`, timestamps; instance/пользовательские
  * записи различаются полем `origin`.
  *

@@ -85,14 +85,14 @@ export interface MaintenanceRoutesDeps {
    */
   audit?: MaintenanceAuditRepository;
   /**
-   * PROP-032: физический backend хранения (`storage.backend`; по умолчанию
+   * ADR-096: физический backend хранения (`storage.backend`; по умолчанию
    * `file`). При `postgres` `doctor`/`migrations`/`backups` работают с БД.
    */
   storageBackend?: StorageBackendKind;
-  /** PROP-032: read-only проба БД (`postgres`) — соединение + версия схемы. */
+  /** ADR-097: read-only проба БД (`postgres`) — соединение + версия схемы. */
   dbHealth?: () => Promise<StorageHealth>;
   /**
-   * PROP-032: миграции схемы БД (`postgres`) — план/применение. Не задано —
+   * ADR-097: миграции схемы БД (`postgres`) — план/применение. Не задано —
    * используется файловый контур `meta.json` (ADR-092).
    */
   schemaMigrations?: (opts?: { dryRun?: boolean }) => Promise<StorageSchemaMigrationResult>;
@@ -314,7 +314,7 @@ export function createMaintenanceRoutes(
   });
 
   // GET /api/v2/maintenance/migrations — состояние схемы данных (ADR-092).
-  // PROP-032: при backend=postgres — состояние SQL-схемы БД (read-only план).
+  // ADR-097: при backend=postgres — состояние SQL-схемы БД (read-only план).
   app.get('/migrations', readGuard, async (c) => {
     if (deps.storageBackend === 'postgres' && deps.schemaMigrations) {
       const plan = await deps.schemaMigrations({ dryRun: true });
@@ -352,7 +352,7 @@ export function createMaintenanceRoutes(
     const body = await c.req.json().catch(() => ({}));
     if ((body as { confirm?: unknown }).confirm !== true) return confirmRequired(c);
 
-    // PROP-032: backend=postgres — мигрируется SQL-схема БД (контур драйвера).
+    // ADR-097: backend=postgres — мигрируется SQL-схема БД (контур драйвера).
     if (deps.storageBackend === 'postgres' && deps.schemaMigrations) {
       try {
         const result = await deps.schemaMigrations({ dryRun: false });

@@ -1,5 +1,5 @@
 /**
- * StorageContext — единая точка сборки слоя хранения (PROP-032, шаг W2.3).
+ * StorageContext — единая точка сборки слоя хранения (ADR-096, шаг W2.3).
  *
  * Делает шов реальным: домен (composition root — `server/app/deps.ts`,
  * `backend/app/deps.ts`) получает порты из одного места, а не собирает
@@ -146,7 +146,7 @@ import {
 export type StorageBackendKind = 'file' | 'memory' | 'postgres';
 
 /**
- * PROP-032: backend-специфичные примитивы межпроцессной координации
+ * ADR-097: backend-специфичные примитивы межпроцессной координации
  * (advisory-локи БД). Предоставляется backend'ом, у которого есть механизм
  * блокировки за пределами общего FS (сейчас — только `postgres`); file/memory
  * `locks` не задают, и домен использует `FileMutex`/`FileLeader` напрямую.
@@ -159,7 +159,7 @@ export interface StorageLocks {
 }
 
 /**
- * PROP-032/ADR-091: снимок здоровья backend'а хранения — диагностика
+ * ADR-097/ADR-091: снимок здоровья backend'а хранения — диагностика
  * `synth doctor` и admin-API. Для `postgres` — реальный пробный запрос
  * (`latencyMs`) и версия схемы БД; файловые backend'ы шов не задают.
  */
@@ -177,7 +177,7 @@ export interface StorageHealth {
 }
 
 /**
- * PROP-032/ADR-092: план/применение миграций схемы **backend'а** (postgres).
+ * ADR-097/ADR-092: план/применение миграций схемы **backend'а** (postgres).
  * Отдельный контур от файлового `meta.json` (ADR-092) — версия живёт в БД.
  */
 export interface StorageSchemaMigrationResult {
@@ -192,7 +192,7 @@ export interface StorageSchemaMigrationResult {
 }
 
 /**
- * PROP-032: режим работы со схемой БД при сборке контекста (`postgres`):
+ * ADR-097: режим работы со схемой БД при сборке контекста (`postgres`):
  * `apply` (дефолт) — применить недостающие миграции; `assert` — проверить
  * актуальность (fail-closed, DBA-режим); `skip` — не трогать схему
  * (диагностика `synth doctor` и CLI-команды, которые управляют миграциями сами).
@@ -200,7 +200,7 @@ export interface StorageSchemaMigrationResult {
 export type PostgresSchemaMode = 'apply' | 'assert' | 'skip';
 
 /**
- * PROP-032 (W5): снимок пробного подключения к недоступному backend'у
+ * ADR-098 (W5): снимок пробного подключения к недоступному backend'у
  * (диагностика деградированного режима — `/api/v2/storage/status`).
  */
 export interface StorageBackendProbe {
@@ -213,7 +213,7 @@ export interface StorageBackendProbe {
 }
 
 /**
- * PROP-032 (W5): деградированный режим хранилища. Возникает, когда выбранный
+ * ADR-098 (W5): деградированный режим хранилища. Возникает, когда выбранный
  * backend (`postgres`) недоступен на старте, а `storage.degradedMode`
  * `fallback-file`: сервис поднимается на файловом хранилище в `fallbackDir`,
  * **строго read-only** (мутации отклоняются, `503 STORAGE_DEGRADED_READONLY`).
@@ -245,34 +245,34 @@ export interface StorageDegradedInfo {
 export interface StorageContext {
   kind: StorageBackendKind;
   /**
-   * PROP-032 (W5): сервис работает на файловом фоллбеке, т.к. выбранный backend
+   * ADR-098 (W5): сервис работает на файловом фоллбеке, т.к. выбранный backend
    * (`postgres`) недоступен. Задано только в деградированном режиме.
    */
   degraded?: StorageDegradedInfo;
   /**
-   * PROP-032: освобождение ресурсов backend'а (пул соединений и т.п.).
+   * ADR-097: освобождение ресурсов backend'а (пул соединений и т.п.).
    * Опционально: `file`/`memory` его не задают (ресурсов процесса нет), драйвер
    * БД удерживает соединение в контексте и закрывает его здесь. Домен зовёт
    * `close()` на graceful shutdown (`synth serve`).
    */
   close?(): Promise<void>;
   /**
-   * PROP-032: примитивы координации БД (advisory-локи). Не задано для
+   * ADR-097: примитивы координации БД (advisory-локи). Не задано для
    * file/memory — домен тогда использует файловые `FileMutex`/`FileLeader`.
    */
   locks?: StorageLocks;
   /**
-   * PROP-032/ADR-091: диагностика backend'а (probe БД + версия схемы). Не задано
+   * ADR-097/ADR-091: диагностика backend'а (probe БД + версия схемы). Не задано
    * для file/memory — контур `doctor` тогда работает по файловому каталогу.
    */
   health?(): Promise<StorageHealth>;
   /**
-   * PROP-032/ADR-092: миграции схемы backend'а (`postgres`) — план (`dryRun`) или
+   * ADR-097/ADR-092: миграции схемы backend'а (`postgres`) — план (`dryRun`) или
    * применение. Не задано для file/memory (там `meta.json`/`runMigrations` core).
    */
   schemaMigrations?(opts?: { dryRun?: boolean }): Promise<StorageSchemaMigrationResult>;
   /**
-   * PROP-032: удаление схемы backend'а (`postgres`) — `synth uninstall --purge-db`.
+   * ADR-097: удаление схемы backend'а (`postgres`) — `synth uninstall --purge-db`.
    * По умолчанию данные БД не трогаются; вызывается только по явному флагу.
    */
   purgeSchema?(): Promise<void>;
@@ -284,7 +284,7 @@ export interface StorageContext {
   secretPatterns: SecretPatternRepository;
   protectedPaths: ProtectedPathsRepository;
   dictionaries: DictionaryRepository;
-  /** Конфигурационные словари (PROP-032, W2.4): `providers`/`models`/`agents`. */
+  /** Конфигурационные словари (ADR-096, W2.4): `providers`/`models`/`agents`. */
   providers: DocumentRepository<ProviderConfig>;
   models: DocumentRepository<ModelConfig>;
   agents: DocumentRepository<AgentDefinition>;
@@ -304,7 +304,7 @@ export interface StorageContext {
   securityAudit: SecurityAuditRepository;
   /** Журнал внешних запросов (append-only, retention-прунер). */
   egressRequests: EgressRequestLogRepository;
-  /** PROP-102: пред-агрегированные суточные роллапы аналитики. */
+  /** ADR-102: пред-агрегированные суточные роллапы аналитики. */
   analyticsRollups: AnalyticsRollupRepository;
   dedup: DedupRepository;
   skills: SkillRepository;
@@ -312,7 +312,7 @@ export interface StorageContext {
   contextFiles: ContextFileRepository;
   sshKeys: SSHKeyRepository;
   blobs: BlobStore;
-  /** ADR-051/PROP-059: определения и экземпляры пайплайнов. */
+  /** ADR-051/ADR-100: определения и экземпляры пайплайнов. */
   pipelines: PipelineRepository;
   /** ADR-086 §5: реестр установок пакетов расширений. */
   packs: PackRepository;
@@ -344,7 +344,7 @@ export interface StorageContextConfig {
   /** Каталог встроенных промптов (`StandaloneConfig.systemPromptsDir`). */
   systemPromptsDir?: string;
   /**
-   * PROP-032: параметры PostgreSQL (используются при `kind: 'postgres'`); пароль
+   * ADR-097: параметры PostgreSQL (используются при `kind: 'postgres'`); пароль
    * сюда НЕ входит — отдельное поле `postgresPassword` (инвариант 13).
    */
   postgres?: PostgresStorageConfig;
@@ -359,18 +359,18 @@ export interface StorageContextConfig {
    * подключения к PostgreSQL.
    */
   tlsRuntime?: TlsRuntimeSettings;
-  /** PROP-032: пароль PostgreSQL (env/файл, не config.yaml). */
+  /** ADR-097: пароль PostgreSQL (env/файл, не config.yaml). */
   postgresPassword?: string;
-  /** PROP-032: режим работы со схемой БД при сборке (см. `PostgresSchemaMode`). */
+  /** ADR-097: режим работы со схемой БД при сборке (см. `PostgresSchemaMode`). */
   postgresSchemaMode?: PostgresSchemaMode;
-  /** PROP-032 (задел W5): политика при недоступности backend. */
+  /** ADR-098 (задел W5): политика при недоступности backend. */
   degradedMode?: 'fallback-file' | 'halt';
-  /** PROP-032 (задел W5): каталог файлового фоллбека при деградации. */
+  /** ADR-098 (задел W5): каталог файлового фоллбека при деградации. */
   fallbackDir?: string;
 }
 
 /**
- * PROP-032/ADR-078: выбранный внешний backend недоступен (нет пакета-драйвера
+ * ADR-097/ADR-078: выбранный внешний backend недоступен (нет пакета-драйвера
  * или он не экспортирует фабрику). Ошибка «внешняя зависимость недоступна» —
  * потребитель показывает понятное сообщение, а не сырой трейс `import()`.
  */
@@ -387,7 +387,7 @@ export class StorageBackendUnavailableError extends Error {
 }
 
 /**
- * PROP-032 (W5): выбранный backend (`postgres`) недоступен, а политика
+ * ADR-098 (W5): выбранный backend (`postgres`) недоступен, а политика
  * `storage.degradedMode='halt'` запрещает файловый фоллбек — старт остановлен.
  * Ошибка с внятным текстом (что не так и что делать), а не сырой трейс драйвера.
  */
@@ -405,7 +405,7 @@ export class StorageUnavailableError extends Error {
 
 /**
  * Конфиг, передаваемый драйверу `@itphx/synth-storage-postgres` — форма драйвера
- * (ADR-097/PROP-032): `connectionString` либо `pool.{host, database}`. Резолвер
+ * (ADR-097): `connectionString` либо `pool.{host, database}`. Резолвер
  * `resolvePostgresConfig` отдаёт «плоскую» форму (`dsn`/`host`/…), поэтому
  * `createPostgresStorage` мапит её в этот контракт (иначе драйвер не получал бы
  * способа подключения и падал на валидации).
@@ -425,7 +425,7 @@ export interface PostgresStorageDriverConfig {
     /** Максимальный размер пула (`storage.postgres.poolMax`). */
     max?: number;
     /**
-     * ADR-099/PROP-032: TLS-режим (`storage.postgres.sslmode`, нормализованный;
+     * ADR-099/ADR-097: TLS-режим (`storage.postgres.sslmode`, нормализованный;
      * `verify-ca` → `verify-full`). Не задан — используется legacy `ssl`.
      */
     sslmode?: PostgresSslMode;
@@ -446,12 +446,12 @@ export interface PostgresStorageDriverConfig {
   /** Пароль БД (инвариант 13: не из config.yaml; env/файл). */
   password?: string;
   /**
-   * PROP-032: режим работы со схемой при сборке контекста (`apply`/`assert`/`skip`).
+   * ADR-097: режим работы со схемой при сборке контекста (`apply`/`assert`/`skip`).
    * `skip` — только подключение (диагностика/CLI, управляющие миграциями сами).
    */
   schemaMode?: PostgresSchemaMode;
   /**
-   * ADR-097/PROP-032: инъекция синхронных данных core в драйвер — sync-геттеры
+   * ADR-097: инъекция синхронных данных core в драйвер — sync-геттеры
    * портов (`secretPatterns`/`protectedPaths`/`dictionaries`) не могут ждать I/O
    * или ленивый `import()`. Core собирает значения у себя (ассеты/реестры) и
    * передаёт драйверу вместо обхода его `exports`-карты.
@@ -477,7 +477,7 @@ interface PostgresStorageDriverModule {
 }
 
 /**
- * PROP-032: имя пакета-драйвера. Аннотация `string` намеренная — путь не должен
+ * ADR-097: имя пакета-драйвера. Аннотация `string` намеренная — путь не должен
  * резолвиться TypeScript'ом на этапе типов (пакет опционален), `import()`
  * выполняется только в рантайме.
  */
@@ -502,7 +502,7 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     // Словари: системные — из пакета core (или заданного каталога), пользовательские —
     // `{dataDir}/dictionaries` (позиционный ctor `(userDataDir, systemDir?)`).
     dictionaries: new DictionaryStore(dataDir, config.systemDictionariesDir),
-    // PROP-032 (W2.4): провайдеры/модели/агенты — «ключ → JSON-документ».
+    // ADR-096 (W2.4): провайдеры/модели/агенты — «ключ → JSON-документ».
     providers: new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' }),
     models: new JsonStore<ModelConfig>({ dataDir, subdir: 'models' }),
     agents: new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' }),
@@ -542,7 +542,7 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
       env: config.env,
     }),
     blobs: new FileBlobStore({ root: dataDir }),
-    // ADR-051/PROP-059: пайплайны — определения (`pipelines/definitions.json`)
+    // ADR-051/ADR-100: пайплайны — определения (`pipelines/definitions.json`)
     // и экземпляры (`pipelines/instances.json`).
     pipelines: new FilePipelineStore({ dataDir }),
     // ADR-086 §5: реестр установок пакетов расширений (`packs.json`).
@@ -603,7 +603,7 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
 }
 
 /**
- * PROP-032: диспетчер backend'а по `storage.backend`. Синхронный — только для
+ * ADR-096: диспетчер backend'а по `storage.backend`. Синхронный — только для
  * `file`/`memory` (обратная совместимость тестов). `postgres` требует
  * асинхронной сборки (динамический `import()` драйвера) — используйте
  * `createStorageContextAsync`. Домен должен вызывать async-версию.
@@ -628,7 +628,7 @@ export function createStorageContext(
 }
 
 /**
- * PROP-032: сборка PostgreSQL-backend через динамический `import()` опционального
+ * ADR-097: сборка PostgreSQL-backend через динамический `import()` опционального
  * пакета-драйвера. Пакет не резолвится на этапе типов (см. `POSTGRES_DRIVER_PACKAGE`).
  * Нет пакета/`pg` — понятная ошибка `StorageBackendUnavailableError` (ADR-078),
  * а не сырой трейс `import()`.
@@ -678,7 +678,7 @@ export async function createPostgresStorage(config: StorageContextConfig): Promi
     ...(config.env ? { env: config.env } : {}),
     ...(config.postgresPassword ? { password: config.postgresPassword } : {}),
     ...(config.postgresSchemaMode ? { schemaMode: config.postgresSchemaMode } : {}),
-    // ADR-097/PROP-032: core собирает sync-данные портов (ассеты/реестры) сам и
+    // ADR-097: core собирает sync-данные портов (ассеты/реестры) сам и
     // инъектирует их драйверу — тот не обходит `exports`-карту core.
     coreSync: buildPostgresCoreSyncDeps(mod, config),
   };
@@ -686,7 +686,7 @@ export async function createPostgresStorage(config: StorageContextConfig): Promi
 }
 
 /**
- * PROP-032/ADR-097: собрать синхронные данные core для драйвера (инъекция).
+ * ADR-097: собрать синхронные данные core для драйвера (инъекция).
  *
  * Sync-геттеры портов драйвера (`secretPatterns`/`protectedPaths`/`dictionaries`)
  * работают на горячем пути и не могут ждать I/O: core отдаёт готовые значения
@@ -713,7 +713,7 @@ function buildPostgresCoreSyncDeps(
 }
 
 /**
- * PROP-032 (W5): коды ошибок хранения, при которых файловый фоллбек **запрещён**
+ * ADR-098 (W5): коды ошибок хранения, при которых файловый фоллбек **запрещён**
  * (fail-closed) — см. матрицу у `createPostgresStorageWithFallback`.
  */
 const FAIL_CLOSED_STORAGE_CODES: ReadonlySet<string> = new Set([
@@ -755,7 +755,7 @@ function isSchemaOutdatedError(err: unknown): boolean {
 }
 
 /**
- * PROP-032 (W5): политика при недоступности backend'а (`storage.degradedMode`).
+ * ADR-098 (W5): политика при недоступности backend'а (`storage.degradedMode`).
  * `fallback-file` (default) — подняться на файловом фоллбеке в `fallbackDir`
  * (отдельный каталог!), `halt` — остановить старт с внятной ошибкой.
  *
@@ -827,7 +827,7 @@ async function createPostgresStorageWithFallback(
         ? config.fallbackDir
         : join(config.dataDir, 'fallback');
 
-    // Громкое предупреждение (PROP-032 W5): сервис поднимается в аварийном read-only.
+    // Громкое предупреждение (ADR-098 W5): сервис поднимается в аварийном read-only.
     console.error('[storage] ⚠️  PostgreSQL недоступен — переход в ДЕГРАДИРОВАННЫЙ режим (fallback-file)');
     console.error(`[storage]   причина: ${reason}`);
     console.error(`[storage]   файловый фоллбек: ${fallbackDir}`);
@@ -852,7 +852,7 @@ async function createPostgresStorageWithFallback(
   }
 }
 
-/** PROP-032 (W5): пробное подключение к исходному postgres-backend'у (диагностика). */
+/** ADR-098 (W5): пробное подключение к исходному postgres-backend'у (диагностика). */
 async function probePostgresBackend(config: StorageContextConfig): Promise<StorageBackendProbe> {
   try {
     const ctx = await createPostgresStorage({ ...config, postgresSchemaMode: 'skip' });
@@ -868,11 +868,11 @@ async function probePostgresBackend(config: StorageContextConfig): Promise<Stora
 }
 
 /**
- * PROP-032: единый **асинхронный** каскад сборки слоя хранения. `file`/`memory` —
+ * ADR-096: единый **асинхронный** каскад сборки слоя хранения. `file`/`memory` —
  * существующие синхронные фабрики, `postgres` — динамическая загрузка драйвера.
  * Именно эту функцию должен вызывать домен (composition root).
  *
- * PROP-032 (W5): при недоступности `postgres` применяется `storage.degradedMode`
+ * ADR-098 (W5): при недоступности `postgres` применяется `storage.degradedMode`
  * (`fallback-file` → файловый фоллбек в `fallbackDir`, `halt` → ошибка старта).
  * Диагностический режим `postgresSchemaMode: 'skip'` (doctor/CLI-миграции) политику
  * деградации не применяет — ошибка подключения пробрасывается наверх, а
@@ -941,12 +941,12 @@ export interface BuildStorageContextOptions {
   bundlesPath?: string;
   contextUserDataDir?: string;
   systemDictionariesDir?: string;
-  /** PROP-032: режим работы со схемой БД при сборке (`postgres`). */
+  /** ADR-097: режим работы со схемой БД при сборке (`postgres`). */
   postgresSchemaMode?: PostgresSchemaMode;
 }
 
 /**
- * PROP-032: собрать слой хранения из конфига инстанса — resolved backend +
+ * ADR-096: собрать слой хранения из конфига инстанса — resolved backend +
  * параметры PG + пароль (env/файл) + задел деградации. Общий хелпер для мест без
  * `StandaloneConfig` (CLI-команды, `chat.ts`, maintenance), чтобы не дублировать
  * резолвинг. Домен должен предпочитать этот хелпер / `createStorageContextAsync`.

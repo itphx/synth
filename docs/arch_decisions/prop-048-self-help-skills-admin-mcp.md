@@ -8,7 +8,7 @@
 > [PROP-037](./prop-037-commit-security-step.md), [PROP-056](./prop-056-synth-mcp-server.md),
 > [ADR-023](./adr-023-configuration.md), [ADR-029](./adr-029-granular-permissions.md),
 > [ADR-079](./adr-079-local-home-independent-instances.md), [ADR-091](./adr-091-backup-restore-transfer.md),
-> [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [PROP-032](./prop-032-history-storage-postgresql.md).
+> [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [ADR-097](./adr-097-storage-provider-class.md).
 
 **Решение:** использовать Synth для развёртывания и сопровождения самого Synth (**dogfooding**): админ
 поднимает локальный Synth и **с его помощью** разворачивает сервер, управляет им и диагностирует проблемы.
@@ -16,7 +16,7 @@
 Synth (здоровье, версии, состояние деплоя) + deploy-тулы, с **явным гейтингом ADMIN**.
 
 Тот же dogfooding покрывает **эксплуатацию** ([ADR-091](./adr-091-backup-restore-transfer.md),
-[ADR-092](./adr-092-instance-lifecycle-maintenance.md), хранилище — [PROP-032](./prop-032-history-storage-postgresql.md)):
+[ADR-092](./adr-092-instance-lifecycle-maintenance.md), хранилище — [ADR-097](./adr-097-storage-provider-class.md)):
 ops-скиллы автоматизируют **через локальный Synth** первичную настройку, `doctor`/проверку,
 бэкап/восстановление, экспорт/импорт, миграцию/откат (см. «Ops-скиллы» ниже).
 
@@ -48,7 +48,7 @@ ops-скиллы автоматизируют **через локальный Sy
 
 ### Ops-скиллы (эксплуатация через локальный Synth)
 
-Эксплуатационный контур ([ADR-091](./adr-091-backup-restore-transfer.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md), хранилище — [PROP-032](./prop-032-history-storage-postgresql.md)) автоматизируется **через локальный Synth** (dogfooding): поднятый локально инстанс своими скиллами и утилитами проходит шаги сопровождения.
+Эксплуатационный контур ([ADR-091](./adr-091-backup-restore-transfer.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md), хранилище — [ADR-097](./adr-097-storage-provider-class.md)) автоматизируется **через локальный Synth** (dogfooding): поднятый локально инстанс своими скиллами и утилитами проходит шаги сопровождения.
 
 - **Первичная настройка** — bootstrap (данные/`--home`, ключи, провайдеры, workspace, первый вход).
 - **`doctor`/проверка** — health, целостность данных, доступность ключей/мастера, провайдеры, write-доступ к `dataDir`, миграции; после `restore` — обязательна.

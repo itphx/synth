@@ -6,7 +6,7 @@ import { FileMutex } from './file-mutex.js';
 import type { Mutex } from './mutex.js';
 import type { ScheduleRepository } from './ports/schedule-repository.js';
 
-/** ADR-051: версия схемы файла расписаний — для будущей миграции (PROP-032). */
+/** ADR-051: версия схемы файла расписаний — для будущей миграции (ADR-096). */
 export const SCHEDULES_SCHEMA_VERSION = 1;
 
 export interface ScheduleStoreConfig {
@@ -18,7 +18,7 @@ export interface ScheduleStoreConfig {
    */
   crossProcess?: boolean;
   /**
-   * PROP-032: внешний мьютекс (file/PG) — приоритетнее `crossProcess`. Позволяет
+   * ADR-096: внешний мьютекс (file/PG) — приоритетнее `crossProcess`. Позволяет
    * composition root'у подставить backend-специфичную реализацию; не задан и
    * `crossProcess` — мутации идут только под in-process `AsyncLock`.
    */
@@ -53,7 +53,7 @@ function isSchedule(value: unknown): value is Schedule {
  * ADR-051/ADR-089: реестр расписаний планировщика.
  *
  * Хранится одним JSON-файлом `{dataDir}/schedules.json` (ADR-005, атомарная
- * запись tmp→rename). Модель PG-ready (PROP-032): плоские записи со стабильным
+ * запись tmp→rename). Модель PG-ready (ADR-097): плоские записи со стабильным
  * `id` и `schemaVersion`.
  */
 export class ScheduleStore implements ScheduleRepository {

@@ -43,7 +43,7 @@ jobs:
       - name: Установка зависимостей
         run: pnpm install --frozen-lockfile
 
-      # Исполнитель (PROP-077) собирается здесь же: его типы ссылаются на
+      # Исполнитель (ADR-077) собирается здесь же: его типы ссылаются на
       # dist core (`@itphx/synth-core` — peer-dep), иначе typecheck не найдёт типы.
       - name: Сборка @itphx/synth-shared, @itphx/synth-core и @itphx/synth-executor
         run: |
@@ -92,7 +92,7 @@ jobs:
       - name: Тесты
         run: pnpm --filter @itphx/synth-core test
 
-  # Исполнитель (PROP-077). Тесты пакета импортируют `@itphx/synth-core` в
+  # Исполнитель (ADR-077). Тесты пакета импортируют `@itphx/synth-core` в
   # рантайме (ExecutionError/egressFetch/InlineExecutionPort), поэтому dist core
   # должен быть собран до прогона — сборка самого пакета для тестов не нужна
   # (vitest исполняет исходники).
@@ -128,7 +128,7 @@ jobs:
       - name: Тесты
         run: pnpm --filter @itphx/synth-storage-postgres test
 
-  # Гейт «контрактный suite на живой PostgreSQL» (PROP-032, волна 4).
+  # Гейт «контрактный suite на живой PostgreSQL» (ADR-097, волна 4).
   # Контрактный suite портов (packages/core/src/storage/contract/postgres.test.ts) и
   # smoke-тест драйвера включаются только при SYNTH_TEST_POSTGRES_DSN — здесь его
   # резолвит scripts/ci-postgres.sh по цепочке: секрет GV_TEST_POSTGRES_DSN →
@@ -140,7 +140,7 @@ jobs:
   # печатает крупный ПРОПУСК-предупреждение и не валит джобу. Жёсткий режим —
   # SYNTH_PG_REQUIRE: '1' (после подтверждения, что БД поднимается на раннере).
   test-postgres:
-    name: Контрактный suite на живой PostgreSQL (PROP-032)
+    name: Контрактный suite на живой PostgreSQL (ADR-097)
     runs-on: ubuntu-latest
     needs: test-shared
     timeout-minutes: 20

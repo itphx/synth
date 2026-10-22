@@ -5,8 +5,8 @@
 # Собирает все пакеты монорепозитория в production-режиме:
 #   1. @itphx/synth-shared            — типы, схемы, утилиты (фундамент)
 #   2. @itphx/synth-core              — движок, провайдеры, HTTP API, CLI
-#   3. @itphx/synth-executor          — исполнитель агентских команд (PROP-077)
-#   4. @itphx/synth-storage-postgres  — опциональный БД-драйвер слоя хранения (ADR-097/PROP-032)
+#   3. @itphx/synth-executor          — исполнитель агентских команд (ADR-077)
+#   4. @itphx/synth-storage-postgres  — опциональный БД-драйвер слоя хранения (ADR-097)
 #   5. @itphx/synth-ui                — React SPA (Vite production build)
 #   6. @itphx/synth-sdk               — типизированный клиент публичного API (ADR-052)
 #   7. @itphx/synth                   — npm-пакет: бандл CLI + UI + промпты

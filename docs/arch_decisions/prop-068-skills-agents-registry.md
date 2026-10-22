@@ -299,11 +299,26 @@ Trust резолвится по источнику и по репозитори�
 совпадение — finding `{category, severity, file, line, description}`; вердикт
 `safe | caution | dangerous` = максимум severity по `VERDICT_INDEX`.
 
-- **Лимиты структуры:** `MAX_FILE_COUNT=50`, `MAX_TOTAL_SIZE_KB=1024`,
-  `MAX_SINGLE_FILE_KB=256`; превышение → `caution`/`dangerous`.
-- **Невидимый unicode:** zero-width/bidi/invisible-символы → finding `invisible_unicode`
-  (сокрытие инструкций для LLM).
-- **Бинарные расширения:** исключаются/флагуются, содержимое не исполняется.
+**Границы `severity → verdict`** — согласовано с владельцем продукта 2026-10-22;
+**каноническая таблица здесь**, на неё ссылается
+[PROP-090](./prop-090-extension-api.md) §9 (сканер плагинов — тот же сканер):
+
+| `severity` | Вердикт |
+|---|---|
+| `info`, `low` | `safe` |
+| `medium` | `caution` |
+| `high`, `critical` | `dangerous` |
+
+- **Лимиты структуры:** `MAX_FILE_COUNT=50`, `MAX_TOTAL_SIZE_KB=1024` — превышение
+  → минимум `caution`; `MAX_SINGLE_FILE_KB=256` — превышение лимита одного файла →
+  `dangerous`.
+- **Бинарный исполняемый файл** в бандле → `dangerous`; прочие бинарные расширения
+  исключаются/флагуются, содержимое не исполняется.
+- **Невидимый unicode:** zero-width/bidi/invisible-символы → finding
+  `invisible_unicode` (сокрытие инструкций для LLM); вердикт **не ниже** `caution`.
+- Значения квот — из этого §4.3; при изменении — правка обоих документов.
+
+Остальные правила сканера:
 - **Inline shell** (`` !`cmd` ``): конструкция механизма [ADR-046](./adr-046-skills-and-slash-commands.md), по умолчанию **выключена** (`skills.inlineShell: false`); сканер независимо флагует shell-конструкции категориями `injection`/`destructive`.
 - **`content_hash`:** sha256 отсортированного набора файлов; фиксируется в lock.
 - **Кэш сканов:** ключ `sha256(source\0source_url)` + `content_hash` — повторный скан
@@ -619,8 +634,11 @@ ADR-042/045 (гибрид/dataDir).
 
 ## История
 
-- 2026-09-17 — предложение заведено (реестр и каталог скиллов и агентов).
 - 2026-10-16 — §2.1 приведён к единому манифесту `synth.pack`; в список `kind` добавлен `storage`
   ([ADR-097](./adr-097-storage-provider-class.md)).
 - 2026-10-16 — добавлен §12: зафиксирован формат и модель **портала распространения (маркетплейса)**
   (референс — dshmarket.com); реализация отложена.
+- 2026-10-22 — §4.3: прописана каноническая матрица `severity → verdict` (`info|low → safe`,
+  `medium → caution`, `high|critical → dangerous`) и правила квот (превышение структуры → минимум
+  `caution`, бинарный исполняемый файл/превышение лимита одного файла → `dangerous`, невидимый
+  unicode → не ниже `caution`); согласовано с [PROP-090](./prop-090-extension-api.md) §9.

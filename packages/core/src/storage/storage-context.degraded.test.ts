@@ -1,4 +1,4 @@
-// PROP-032 (W5): деградированный режим слоя хранения.
+// ADR-098 (W5): деградированный режим слоя хранения.
 // - `halt` → старт падает `StorageUnavailableError` с внятным текстом;
 // - `fallback-file` → файловый контекст в ОТДЕЛЬНОМ `fallbackDir` + `StorageDegradedInfo`;
 // - рантайм-состояние публикуется в ось доступности тулов;
@@ -28,7 +28,7 @@ import {
 } from '../engine/permission/storage-state.js';
 
 /**
- * PROP-032 (W5): драйвер прогревается один раз на модуль — до первого теста.
+ * ADR-098 (W5): драйвер прогревается один раз на модуль — до первого теста.
  *
  * Динамический `import()` внутри `createStorageContextAsync` (код под тестом)
  * иначе грузит модуль-драйвер **в теле теста**: загрузка (трансформация
@@ -51,7 +51,7 @@ const DSN = process.env.SYNTH_TEST_POSTGRES_DSN;
 /** Заведомо недоступный PG (порт ничего не слушает → соединение отклоняется). */
 const UNREACHABLE_PG = { host: '127.0.0.1', port: 5433, database: 'synth', user: 'synth' } as const;
 
-describe('деградация хранилища: политика при недоступном postgres (PROP-032 W5)', () => {
+describe('деградация хранилища: политика при недоступном postgres (ADR-098 W5)', () => {
   let dataDir: string;
 
   beforeEach(async () => {

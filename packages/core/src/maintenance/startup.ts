@@ -117,7 +117,7 @@ export interface ApplyStartupMigrationsOptions {
    */
   actor?: string;
   /**
-   * PROP-032: межпроцессный мьютекс для шага миграций. Не задан — файловый лок
+   * ADR-096: межпроцессный мьютекс для шага миграций. Не задан — файловый лок
    * `{dataDir}/migrate` (поведение file-backend). При `storage.backend=postgres`
    * composition root передаёт advisory-мьютекс драйвера.
    */

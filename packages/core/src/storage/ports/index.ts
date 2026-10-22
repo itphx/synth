@@ -1,11 +1,11 @@
 /**
- * Доменные порты слоя хранения (PROP-032, шаг W2.1).
+ * Доменные порты слоя хранения (ADR-096, шаг W2.1).
  *
  * ## Почему доменные порты, а не generic-KV
  *
  * Единый абстрактный слой хранения должен допускать «второй вариант хранения»
  * поверх того же контракта: сегодня — файловый backend (JSON + атомарная запись,
- * ADR-005), позже — БД (Postgres/SQLite, PROP-032), при этом standalone остаётся
+ * ADR-005), позже — БД (Postgres/SQLite, ADR-097), при этом standalone остаётся
  * на файлах без внешних зависимостей. Универсальный `get/put/list(key)`-KV такой
  * переход не тянет: он не выражает видимость сессий, «лёгкие метаданные без
  * messages», поиск, пагинацию и уникальность метки — а SQL может.
@@ -72,7 +72,7 @@ export type { ContextFileRepository } from './context-file-repository.js';
 export type { SSHKeyRepository } from './ssh-key-repository.js';
 export type { BlobStore } from './blob-store.js';
 export type { DefaultsRepository, AppearanceDefaults } from './defaults-repository.js';
-// ADR-051/PROP-059: пайплайны (определения + экземпляры).
+// ADR-051/ADR-100: пайплайны (определения + экземпляры).
 export type {
   PipelineRepository,
   PipelineDefinitionRecord,

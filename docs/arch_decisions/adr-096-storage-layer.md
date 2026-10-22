@@ -2,7 +2,7 @@
 
 > **Статус:** ✅ Реализовано
 > **Дата:** 2026-10-16
-> **Связано:** [ADR-005](./adr-005-json-storage.md), [ADR-095](./adr-095-god-object-decomposition.md), [PROP-032](./prop-032-history-storage-postgresql.md), [PROP-077](./prop-077-runtime-toolchain.md); [docs/ARCH_DECISIONS.md](../ARCH_DECISIONS.md).
+> **Связано:** [ADR-005](./adr-005-json-storage.md), [ADR-095](./adr-095-god-object-decomposition.md), [ADR-097](./adr-097-storage-provider-class.md), [ADR-077](./adr-077-runtime-toolchain.md); [docs/ARCH_DECISIONS.md](../ARCH_DECISIONS.md).
 
 ## Контекст
 
@@ -10,7 +10,7 @@
 `FileProfileStore`, `RuntimeSettingsStore`, `EventBindingStore`, `WebhookStore`, `ServiceApiKeyStore`,
 `ScheduleStore`, …) собирались россыпью в composition root (`server/app/deps.ts`, `backend/app/deps.ts`) и
 протекали конкретными классами в роуты и движок. Смена **физического уровня** (например, переход на
-PostgreSQL, PROP-032) без шва означала бы ревизию всех call-sites: домен знал бы о файлах, путях и
+PostgreSQL, ADR-097) без шва означала бы ревизию всех call-sites: домен знал бы о файлах, путях и
 атомарной записи, а «второй вариант хранения» стал бы переписыванием всего, что читает/пишет данные.
 
 При этом standalone-инсталляция должна остаться работоспособной **без внешних зависимостей** — файловый
@@ -27,7 +27,7 @@ backend с JSON + атомарной записью ([ADR-005](./adr-005-json-st
    выражает этих операций — и потому не выбран.
 2. **Реализации за одним контрактом:** файловая (default; standalone и локальный home; JSON + атомарная
    запись tmp→rename, ADR-005), in-memory (`storage/memory/*`; герметичные тесты без ФС, эталон
-   семантики), БД (следующий шаг — [PROP-032](./prop-032-history-storage-postgresql.md)).
+   семантики), БД (следующий шаг — [ADR-097](./adr-097-storage-provider-class.md)).
 3. **Единая точка сборки — `StorageContext`** (`storage/storage-context.ts`): `createFileStorage`/
    `createMemoryStorage`/`createStorageContext`. Выбор backend'а — `storage.backend` (`file`|`memory`;
    env `SYNTH_STORAGE_BACKEND`). Домен получает порты из одного места, а не собирает конкретные классы.
@@ -69,7 +69,7 @@ backend с JSON + атомарной записью ([ADR-005](./adr-005-json-st
 - `storage/storage-context.ts` — `StorageContext` (в т.ч. опциональные `close?`/`locks?`/`health?`/`schemaMigrations?`/`purgeSchema?`/`degraded?`) + `createFileStorage`/`createMemoryStorage`/`createStorageContext` и **async-каскад** `createStorageContextAsync`/`buildStorageContext`; деградация — [ADR-098](./adr-098-storage-degraded-recovery.md).
 - `storage/file-blob-store.ts` — `FileBlobStore` (порт `BlobStore`); `storage/defaults-store.ts` —
   `DefaultsStore` (перенесён в core; backend оставляет реэкспорт).
-- **Драйвер БД** — опциональный in-tree пакет `@itphx/synth-storage-postgres` (`peer-dep` core, `pg` — optional, ленивый `import()`): реализует все 30 портов поверх SQL ([ADR-097](./adr-097-storage-provider-class.md)/[PROP-032](./prop-032-history-storage-postgresql.md)).
+- **Драйвер БД** — опциональный in-tree пакет `@itphx/synth-storage-postgres` (`peer-dep` core, `pg` — optional, ленивый `import()`): реализует все 30 портов поверх SQL ([ADR-097](./adr-097-storage-provider-class.md)).
 
 Точки сборки (composition root): `packages/core/src/server/app/deps.ts` → `createStandaloneStorage`
 (строится до `auth` — реестр `serviceKeys` нужен резолверу ключа); `packages/backend/src/app/deps.ts` →
@@ -77,7 +77,22 @@ backend с JSON + атомарной записью ([ADR-005](./adr-005-json-st
 
 Тесты: `storage/storage-context.test.ts`, `storage/contract/*.test.ts`, `storage/memory/*.test.ts`.
 
+- **CA/TLS к соединению с БД** — единый источник доверия — секция `security.tls` + `storage.postgres.sslmode`
+  ([ADR-099](./adr-099-egress-tls-trust.md)): TLS-параметры в DSN запрещены, `pg.Pool` собирается через
+  `buildPoolConfig` (`packages/storage-postgres/src/pool.ts`), per-host профиль БД — в mappings ADR-099.
+- **Документы** — эксплуатационный runbook БД-backend'а готов ([docs/MAINTENANCE.md](../MAINTENANCE.md));
+  страницы портала `docs.synth.itphx.ru` — отдельно (вне репозитория).
+
+## Открытые вопросы
+
+- **Авто-возврат к БД без рестарта** и DB-aware `/ready`-проба/метрики — [ADR-098](./adr-098-storage-degraded-recovery.md)
+  (возврат — рестартом; проба и метрики — [ADR-094](./adr-094-observability-metrics.md)).
+- **`kind: "storage"` в манифесте `synth.pack` и установка сторонних драйверов** — [ADR-097](./adr-097-storage-provider-class.md)
+  (класс расширения; реестр/trust/install — [PROP-068](./prop-068-skills-agents-registry.md)).
+- **Страницы портала** по БД-backend'у — отдельно от репозитория.
+
 ## История
 
 - 2026-10-16 — решение принято; единый слой хранения введён (порты, файловая/memory-реализации, контрактный suite, `StorageContext`).
-- 2026-10-16 — добавлен второй backend: драйвер `postgres` (все 27 портов), async-каскад сборки (`createStorageContextAsync`/`buildStorageContext`) и деградированный режим ([ADR-097](./adr-097-storage-provider-class.md)/[ADR-098](./adr-098-storage-degraded-recovery.md), PROP-032).
+- 2026-10-16 — добавлен второй backend: драйвер `postgres` (все 27 портов), async-каскад сборки (`createStorageContextAsync`/`buildStorageContext`) и деградированный режим ([ADR-097](./adr-097-storage-provider-class.md)/[ADR-098](./adr-098-storage-degraded-recovery.md)).
+- 2026-10-22 — материал предложения «второй вариант хранения — БД за единым слоем» перенесён сюда и в ADR-097/ADR-098; остаток (CA/TLS к БД — закрыт ADR-099; авто-возврат — ADR-098; документы — runbook/портал) зафиксирован выше.

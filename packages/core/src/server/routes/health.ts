@@ -18,7 +18,7 @@ export interface ReadinessState {
 
 export interface HealthRoutesOptions {
   /**
-   * PROP-032 (W5): текущее состояние деградации хранилища. Не задано/`null` —
+   * ADR-098 (W5): текущее состояние деградации хранилища. Не задано/`null` —
    * `{status:'healthy'}` (прежний контракт). При деградации — `status:'degraded'`
    * + `storage:{…}` (аддитивно к `{status, version, time}`).
    */

@@ -87,7 +87,7 @@ export interface DecideChoiceCascadeOptions {
   /** Сборщик метрик; по умолчанию — process-wide синглтон. */
   metrics?: DecisionMetrics;
   /**
-   * PROP-102: сборщик персистентных decision-роллапов (ось `provider`/`model`) —
+   * ADR-102: сборщик персистентных decision-роллапов (ось `provider`/`model`) —
    * зеркало счётчиков `decisionMetrics`. Не задан — запись не выполняется.
    */
   analytics?: AnalyticsRecorder;

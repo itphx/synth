@@ -16,7 +16,7 @@ PostgreSQL) и
 |---|---|---|---|
 | `backend` | `gitverse.ru/itphx/synth-backend` | 5000 | API Hub: OIDC + RBAC + движок; данные — JSON в PVC (по умолчанию) или PostgreSQL (`storage.backend: postgres`) |
 | `ui` | `gitverse.ru/itphx/synth-ui` | 8080 | React SPA под nginx; проксирует API на backend |
-| `executor` | `git.itphx.ru/itphx/synth-executor` | 5100 | Опционально (PROP-077, split-режим): пул исполнителей с toolchain'ом; включается `executor.enabled: true` + `execution.mode: remote` |
+| `executor` | `git.itphx.ru/itphx/synth-executor` | 5100 | Опционально (ADR-077, split-режим): пул исполнителей с toolchain'ом; включается `executor.enabled: true` + `execution.mode: remote` |
 
 Backend самодостаточен (встроенный движок + хранилище), поэтому отдельный runner
 не разворачивается. Backend всегда 1 реплика (`backend.replicaCount`), чарт не
@@ -35,7 +35,7 @@ Backend самодостаточен (встроенный движок + хра
   паролем БД — см. раздел «PostgreSQL как backend хранения».
 - (Опционально, split-режим) RWX-том под общий workspace, образ
   `synth-executor` и Secret с токеном доверия — см. раздел «Исполнитель
-  (split-режим, PROP-077)».
+  (split-режим, ADR-077)».
 
 ## Установка
 
@@ -118,7 +118,7 @@ ingress:
 | `backend.extraEnv` | `{}` | Доп. env для backend |
 | `backend.restartMode` | `process` | Restart из UI: `process` \| `supervisor` \| `disabled` (env `SYNTH_RESTART_MODE`, см. «Перезапуск инстанса из UI») |
 | `backend.config` | `{}` | Декларативный `config.yaml` backend (монтируется в `/etc/synth`); сюда же домерживается секция `storage` из значений ниже |
-| `storage.backend` | `file` | Backend хранения (PROP-032): `file` \| `memory` \| `postgres` |
+| `storage.backend` | `file` | Backend хранения (ADR-097): `file` \| `memory` \| `postgres` |
 | `storage.postgres.host` | `""` | Хост БД (при `backend: postgres`) |
 | `storage.postgres.port` | `5432` | Порт БД |
 | `storage.postgres.database` | `""` | Имя БД |
@@ -130,7 +130,7 @@ ingress:
 | `storage.postgres.secretPasswordKey` | `SYNTH_POSTGRES_PASSWORD` | Ключ внутри Secret с паролем БД |
 | `storage.degradedMode` | `""` | Задел деградации: `fallback-file` \| `halt` (пусто → дефолт core) |
 | `storage.fallbackDir` | `""` | Каталог файлового фоллбека (пусто → `{dataDir}/fallback`) |
-| `execution.mode` | `inline` | Топология исполнения (PROP-077): `inline` (в процессе backend'а) \| `remote` (пул исполнителей); переключатель — параметр запуска, смена — рестарт |
+| `execution.mode` | `inline` | Топология исполнения (ADR-077): `inline` (в процессе backend'а) \| `remote` (пул исполнителей); переключатель — параметр запуска, смена — рестарт |
 | `execution.remote.url` | `[]` | Адреса исполнителей (список); пусто + `executor.enabled: true` → адрес Service пула |
 | `execution.remote.timeoutMs` | `30000` | Таймаут exec-вызова (env `SYNTH_EXECUTION_TIMEOUT_MS`) |
 | `execution.remote.concurrency` | `0` | Лимит одновременных exec-вызовов; `0` → env не выставляется (дефолт — число CPU) |
@@ -489,7 +489,7 @@ helm install synth synth/synth -f charts/synth/examples/values-apikey.yaml \
 
 ## PostgreSQL как backend хранения (`storage.backend: postgres`)
 
-PROP-032 / ADR-096 / ADR-097: физический backend хранения выбирается значением
+ADR-096 / ADR-097: физический backend хранения выбирается значением
 `storage.backend` — `file` (JSON-файлы в PVC, по умолчанию), `memory` (данные не
 сохраняются — тесты/эмуляция), `postgres` (БД). Драйвер
 `@itphx/synth-storage-postgres` и `pg` входят в образ backend (optionalDependencies
@@ -607,11 +607,11 @@ PVC (`backend.persistence.*`) остаётся смонтированным в `
 
 `fallback-file` (дефолт core) — при недоступности БД инстанс переходит на файловое
 хранилище в `storage.fallbackDir` (пусто → `{dataDir}/fallback`); `halt` — старт не
-выполняется. Реализация — параллельная волна PROP-032; чарт лишь доводит значения
+выполняется. Реализация — параллельная волна ADR-096; чарт лишь доводит значения
 до `config.yaml` (env-переменных у этих ключей нет). Значение `storage.backend`
 валидируется приложением (при неизвестном — ошибка старта), чарт его не проверяет.
 
-## Исполнитель (split-режим, PROP-077)
+## Исполнитель (split-режим, ADR-077)
 
 По умолчанию Synth работает в **all-in-one** режиме: команды агентских тулов
 (`execute_shell`, `grep_files`, python) исполняются в процессе backend'а

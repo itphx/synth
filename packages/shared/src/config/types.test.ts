@@ -164,7 +164,7 @@ describe('instructionsConfigSchema (ADR-069)', () => {
   });
 });
 
-describe('executionConfigSchema (PROP-077)', () => {
+describe('executionConfigSchema (ADR-077)', () => {
   it('дефолты: mode=inline, remote без адресов, 30 с, fail-closed', () => {
     const parsed = executionConfigSchema.parse({});
     expect(parsed.mode).toBe('inline');

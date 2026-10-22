@@ -14,7 +14,7 @@ import {
 
 const host = process.env.SYNTH_HOST || '0.0.0.0';
 
-// PROP-077: fail-closed на старте (неверный `execution.mode` или `remote` —
+// ADR-077: fail-closed на старте (неверный `execution.mode` или `remote` —
 // удалённый исполнитель ещё не реализован, шаг 7 плана) — с понятным текстом.
 let handle: Awaited<ReturnType<typeof createBackendApp>>;
 try {
@@ -57,7 +57,7 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   // ADR-089: остановить retention-очистку журнала событий.
   stopEventJournalPruner();
 
-  // PROP-102: остановить retention-очистку роллапов аналитики.
+  // ADR-102: остановить retention-очистку роллапов аналитики.
   stopAnalyticsRollupPruner();
 
   // ADR-094: остановить процессные метрики и фоновые доменные коллекторы

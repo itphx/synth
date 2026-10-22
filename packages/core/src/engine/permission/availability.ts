@@ -35,7 +35,7 @@ const WORKSPACE_CAPABILITIES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * PROP-032 (W5): тулы, остающиеся доступными при деградированном хранилище
+ * ADR-098 (W5): тулы, остающиеся доступными при деградированном хранилище
  * (строгий read-only). Деградация — аварийный режим диагностики: доступны только
  * загрузка скиллов (`skill` — runbook восстановления) и веб-поиск/чтение
  * (`web_fetch`/`web_search`) — они не трогают доменное хранилище.
@@ -80,7 +80,7 @@ export interface ToolAvailabilityOptions {
    */
   workspaceReady?: boolean;
   /**
-   * PROP-032 (W5): хранилище в деградированном read-only режиме. Не задано —
+   * ADR-098 (W5): хранилище в деградированном read-only режиме. Не задано —
    * берётся рантайм-состояние (`isStorageDegraded`). `true` — доступны только
    * безопасные тулы (`isToolAvailableInDegradedMode`), прочие `unavailable(storage)`.
    */

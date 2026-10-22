@@ -72,7 +72,7 @@ export function createSessionRoutes(
    * Не задан — core-фабрика использует прямой `SessionManager.createSession`.
    */
   requestSessionService?: RequestSessionService,
-  /** PROP-102: сборщик `activity` (меры `aborts`/`messages_*`) для core-фабрики. */
+  /** ADR-102: сборщик `activity` (меры `aborts`/`messages_*`) для core-фабрики. */
   analytics?: AnalyticsRecorder,
 ): Hono {
   const app = new Hono();

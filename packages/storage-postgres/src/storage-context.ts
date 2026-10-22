@@ -1,5 +1,5 @@
 /**
- * Сборка `StorageContext` PostgreSQL-драйвера (PROP-032, волна 3b-каркас).
+ * Сборка `StorageContext` PostgreSQL-драйвера (ADR-097, волна 3b-каркас).
  *
  * Контекст собирается из независимых файлов-групп портов
  * (`src/ports/{sessions,principals,events,content,audit,analytics}.ts`) — по одной
@@ -15,7 +15,7 @@
  *     `skillBundles`/`dictionaries`/`secretPatterns`/`protectedPaths`/
  *     `maintenanceAudit`;
  *   - `buildAuditPorts(deps)`     → `securityAudit`/`egressRequests`;
- *   - `buildAnalyticsPorts(deps)` → `analyticsRollups` (PROP-102);
+ *   - `buildAnalyticsPorts(deps)` → `analyticsRollups` (ADR-102);
  *   - `buildPipelinePorts(deps)`  → `projectPipelines`/`pipelineRuns` (ADR-101).
  *
  * Все доменные порты реализованы поверх SQL; FS/package-bound порты (`skills`,
@@ -58,11 +58,11 @@ export interface BuildPostgresContextOptions {
   /** Корень пользовательских промптов/ролей (файловый порт `contextFiles`). */
   contextUserDataDir?: string;
   /**
-   * PROP-032: живое соединение драйвера — удерживается в контексте, порты БД
+   * ADR-097: живое соединение драйвера — удерживается в контексте, порты БД
    * ходят через него; `close()` контекста закрывает пул.
    */
   connection: PostgresConnection;
-  /** ADR-097/PROP-032: синхронные данные/хелперы core (см. `CoreSyncDeps`). */
+  /** ADR-097: синхронные данные/хелперы core (см. `CoreSyncDeps`). */
   coreSync: CoreSyncDeps;
 }
 
@@ -95,7 +95,7 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
 
   return {
     kind: 'postgres',
-    // PROP-032: соединение живёт в контексте; `close()` закрывает пул (graceful
+    // ADR-097: соединение живёт в контексте; `close()` закрывает пул (graceful
     // shutdown домена). Перед закрытием дожидаемся фоновых задач сборки
     // (best-effort прогрев синхронных кэшей `content`): warm-запросы не должны
     // попадать в уже закрытый пул — иначе диагностика/`backup`/`migrate` видят
@@ -104,7 +104,7 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
       await Promise.allSettled(background);
       await opts.connection.end();
     },
-    // PROP-032/ADR-091: диагностика backend'а — реальный probe БД + версия схемы
+    // ADR-097/ADR-091: диагностика backend'а — реальный probe БД + версия схемы
     // (read-only, без применения миграций) для `synth doctor`/admin-API.
     health: async (): Promise<StorageHealth> => {
       const started = Date.now();
@@ -125,7 +125,7 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
         };
       }
     },
-    // PROP-032/ADR-092: миграции схемы БД — план (`dryRun`) или применение
+    // ADR-097/ADR-092: миграции схемы БД — план (`dryRun`) или применение
     // (лок/транзакции берёт `runMigrations`).
     schemaMigrations: async (migrationOpts?: { dryRun?: boolean }): Promise<StorageSchemaMigrationResult> => {
       if (migrationOpts?.dryRun) {
@@ -140,9 +140,9 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
         applied: result.applied,
       };
     },
-    // PROP-032: удаление схемы БД — только по явному `uninstall --purge-db`.
+    // ADR-097: удаление схемы БД — только по явному `uninstall --purge-db`.
     purgeSchema: () => opts.connection.dropSchema(),
-    // PROP-032: примитивы координации БД (advisory-локи) — composition root
+    // ADR-097: примитивы координации БД (advisory-локи) — composition root
     // подставляет их вместо файловых `FileMutex`/`FileLeader`.
     locks: createPostgresLocks(opts.connection),
     ...buildSessionPorts(deps),
@@ -150,7 +150,7 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     ...buildEventPorts(deps),
     ...buildContentPorts(deps),
     ...buildAuditPorts(deps),
-    // PROP-102: порт роллапов аналитики — пред-агрегированные суточные бакеты
+    // ADR-102: порт роллапов аналитики — пред-агрегированные суточные бакеты
     // (`analytics_rollups`, миграция 003) с атомарным `ON CONFLICT … DO UPDATE`.
     ...buildAnalyticsPorts(deps),
     // ADR-101: спецификации пайплайнов, прогоны и журнал выполнения
@@ -161,7 +161,7 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     skills: file.skills,
     contextFiles: file.contextFiles,
     blobs: file.blobs,
-    // ADR-051/PROP-059 (пайплайны) и ADR-086 §5 (реестр установок пакетов) —
+    // ADR-051/ADR-100 (пайплайны) и ADR-086 §5 (реестр установок пакетов) —
     // переходно файловые (тот же FS/package-bound класс портов, что и выше):
     // SQL-реализация этих двух портов в драйвере ещё не заведена, домен к ним
     // ещё не подключён (PROP-090 отложен). Контрактный suite проходит и на них

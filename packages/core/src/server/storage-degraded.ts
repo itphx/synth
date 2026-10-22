@@ -1,5 +1,5 @@
 /**
- * PROP-032 (W5): HTTP-слой деградированного хранилища.
+ * ADR-098 (W5): HTTP-слой деградированного хранилища.
  *
  * Общий модуль для standalone-core (`server/app.ts`) и managed backend
  * (`backend/src/app.ts`): guard (ADMIN-only + strict read-only) и диагностический
@@ -45,7 +45,7 @@ export function storageHealthFields(
       fallbackDir: degraded.fallbackDir,
       reason: degraded.reason,
       since: degraded.since,
-      // PROP-032 (W5): возврат к БД не автоматический — нужен рестарт; те же
+      // ADR-098 (W5): возврат к БД не автоматический — нужен рестарт; те же
       // признаки, что и у `GET /api/v2/storage/status` (recovery.restartRequired).
       restartRequired: true,
       autoRecovery: false,
@@ -79,7 +79,7 @@ const DEFAULT_READONLY_MESSAGE =
   'Хранилище недоступно: сервис работает в аварийном read-only режиме. Изменяющие операции запрещены до восстановления БД и перезапуска.';
 
 /**
- * PROP-032 (W5): guard деградированного хранилища.
+ * ADR-098 (W5): guard деградированного хранилища.
  *
  * - хранилище в норме → `next()`;
  * - не-администратор → `503 STORAGE_DEGRADED`;
@@ -126,7 +126,7 @@ export interface StorageStatusRoutesOptions {
 }
 
 /**
- * PROP-032 (W5): диагностический эндпоинт `GET /api/v2/storage/status`.
+ * ADR-098 (W5): диагностический эндпоинт `GET /api/v2/storage/status`.
  *
  * Авто-возврата к БД нет (контекст хранилища замкнут в deps) — возврат требует
  * рестарта; эндпоинт **проверяет** соединение с исходным backend'ом и сообщает,

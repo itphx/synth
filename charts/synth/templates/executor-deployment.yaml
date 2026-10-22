@@ -1,11 +1,11 @@
-{{- /* PROP-077, шаг 7c: пул исполнителей (executor/worker) — отдельные
+{{- /* ADR-077, шаг 7c: пул исполнителей (executor/worker) — отдельные
        контейнеры с toolchain'ом. Backend в split-режиме — тонкий control
        plane: команды агентских тулов уходят сюда по HTTP (exec-API). */ -}}
 {{- if .Values.executor.enabled }}
 {{- /* Fail-closed: исполнителю обязателен корень workspace
        (SYNTH_EXECUTOR_WORKSPACE — без него процесс не стартует). */ -}}
 {{- if not (include "synth.executor.workspaceEnabled" .) }}
-{{- fail "executor.enabled: true требует executor.workspace.enabled: true — исполнитель работает в общем томе workspace (PROP-077)" }}
+{{- fail "executor.enabled: true требует executor.workspace.enabled: true — исполнитель работает в общем томе workspace (ADR-077)" }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment

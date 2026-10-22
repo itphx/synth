@@ -140,7 +140,7 @@ export interface ExportProjectOptions {
   /** ADR-092: аудит-журнал обслуживания (best-effort; ошибка записи не ломает операцию). */
   audit?: MaintenanceAuditRepository;
   /**
-   * PROP-032: готовый контекст хранения (иначе — `file`-контекст по `dataDir`).
+   * ADR-096: готовый контекст хранения (иначе — `file`-контекст по `dataDir`).
    * Позволяет экспорту работать на выбранном backend (напр. `postgres`).
    */
   storage?: StorageContext;
@@ -186,7 +186,7 @@ export interface ImportProjectOptions {
   /** ADR-092: аудит-журнал обслуживания (best-effort). */
   audit?: MaintenanceAuditRepository;
   /**
-   * PROP-032: готовый контекст хранения (иначе — `file`-контекст по `dataDir`).
+   * ADR-096: готовый контекст хранения (иначе — `file`-контекст по `dataDir`).
    * Позволяет импорту работать на выбранном backend (напр. `postgres`).
    */
   storage?: StorageContext;
@@ -377,7 +377,7 @@ async function _exportProject(opts: ExportProjectOptions): Promise<ExportProject
   const dataDir = resolve(opts.dataDir);
   const withWorkspace = !!opts.withWorkspace;
   const workspacesRoot = opts.workspacesRoot ? resolve(opts.workspacesRoot) : join(dataDir, 'workspaces');
-  // PROP-032: готовый контекст (любой backend) либо `file`-контекст по `dataDir`.
+  // ADR-096: готовый контекст (любой backend) либо `file`-контекст по `dataDir`.
   const storage = opts.storage ?? createFileStorage({ dataDir });
 
   const project = await storage.projects.load(opts.projectId);
@@ -660,7 +660,7 @@ async function _importProject(opts: ImportProjectOptions): Promise<ImportProject
     0,
   );
 
-  // PROP-032: готовый контекст (любой backend) либо `file`-контекст по `dataDir`.
+  // ADR-096: готовый контекст (любой backend) либо `file`-контекст по `dataDir`.
   const storage = opts.storage ?? createFileStorage({ dataDir });
 
   // Целевой проект: существующий (`--merge-into`) либо новый.

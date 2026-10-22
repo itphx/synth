@@ -1,4 +1,4 @@
-// PROP-032 (W5): деградированное хранилище и ось доступности тулов.
+// ADR-098 (W5): деградированное хранилище и ось доступности тулов.
 // file/shell/git/`task`/plan/todo → `unavailable(storage)` (плюс жёсткий `deny`
 // в permission-слое); безопасные тулы (`skill`/`web_fetch`/`web_search`) — доступны;
 // схлопнутая подсказка рендерится в state-сообщении.
@@ -20,7 +20,7 @@ import {
 
 afterEach(() => setStorageDegradedState(null));
 
-describe('computeToolAvailability — degraded storage (PROP-032 W5)', () => {
+describe('computeToolAvailability — degraded storage (ADR-098 W5)', () => {
   const unavailableCases: Array<[string, string[]]> = [
     ['read_file', ['file_read']],
     ['write_file', ['file_write']],
@@ -92,7 +92,7 @@ describe('computeToolAvailability — degraded storage (PROP-032 W5)', () => {
   });
 });
 
-describe('PermissionEvaluator — degraded storage (PROP-032 W5)', () => {
+describe('PermissionEvaluator — degraded storage (ADR-098 W5)', () => {
   const evaluator = new PermissionEvaluator({} as PermissionConfig);
   const base = { params: {}, workingDir: '/ws' };
 
@@ -117,7 +117,7 @@ describe('PermissionEvaluator — degraded storage (PROP-032 W5)', () => {
   });
 });
 
-describe('storage-state — рантайм-флаг (PROP-032 W5)', () => {
+describe('storage-state — рантайм-флаг (ADR-098 W5)', () => {
   it('set/is/get: норма ↔ деградация', () => {
     setStorageDegradedState(null);
     expect(isStorageDegraded()).toBe(false);
@@ -134,7 +134,7 @@ describe('storage-state — рантайм-флаг (PROP-032 W5)', () => {
   });
 });
 
-describe('state-messages — схлопнутая подсказка деградации (PROP-032 W5)', () => {
+describe('state-messages — схлопнутая подсказка деградации (ADR-098 W5)', () => {
   const unavailable: UnavailableTool[] = [
     { name: 'read_file', reason: 'storage' },
     { name: 'execute_shell', reason: 'storage' },

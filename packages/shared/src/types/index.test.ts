@@ -10,7 +10,7 @@ import {
   type PipelineRun,
   type PipelineRunEvent,
   type StepResult,
-  // ADR-051/PROP-059: legacy-контракты не должны исчезнуть из барреля.
+  // ADR-051/ADR-100: legacy-контракты не должны исчезнуть из барреля.
   pipelineInstanceSchema,
   pipelineDefinitionSchema,
   type PipelineTrigger,
@@ -26,7 +26,7 @@ describe('Баррель типов (@itphx/synth-shared/types)', () => {
     expect(typeof validatePipelineSpec).toBe('function');
   });
 
-  it('сохраняет legacy-контракты ADR-051/PROP-059', () => {
+  it('сохраняет legacy-контракты ADR-051/ADR-100', () => {
     expect(pipelineDefinitionSchema).toBeDefined();
     expect(pipelineInstanceSchema).toBeDefined();
   });

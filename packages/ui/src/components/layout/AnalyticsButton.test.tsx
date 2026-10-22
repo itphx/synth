@@ -78,7 +78,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('AnalyticsButton (PROP-102)', () => {
+describe('AnalyticsButton (ADR-102)', () => {
   it('открывает модалку аналитики и сохраняет подпись/иконку', async () => {
     const host = await renderButton()
     const button = host.querySelector('[data-testid="header-analytics"]') as HTMLButtonElement

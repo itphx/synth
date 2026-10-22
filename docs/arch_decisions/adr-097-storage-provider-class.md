@@ -2,7 +2,7 @@
 
 > **Статус:** ⚠️ Частично — класс `storage` выделен, контракт класса (доменные порты + suite) и драйверы `file`/`memory`/`postgres` есть; `kind: "storage"` в манифесте и установка сторонних драйверов — нет
 > **Дата:** 2026-10-16
-> **Связано:** [ADR-096](./adr-096-storage-layer.md), [ADR-086](./adr-086-extensibility-plugins-editions.md), [ADR-005](./adr-005-json-storage.md), [ADR-023](./adr-023-configuration.md), [ADR-038](./adr-038-npm-packages.md), [ADR-091](./adr-091-backup-restore-transfer.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [PROP-032](./prop-032-history-storage-postgresql.md), [PROP-090](./prop-090-extension-api.md), [PROP-068](./prop-068-skills-agents-registry.md).
+> **Связано:** [ADR-096](./adr-096-storage-layer.md), [ADR-086](./adr-086-extensibility-plugins-editions.md), [ADR-005](./adr-005-json-storage.md), [ADR-023](./adr-023-configuration.md), [ADR-038](./adr-038-npm-packages.md), [ADR-091](./adr-091-backup-restore-transfer.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [PROP-090](./prop-090-extension-api.md), [PROP-068](./prop-068-skills-agents-registry.md).
 
 ## Контекст
 
@@ -10,7 +10,7 @@
 контрактный suite («паспорт порта», `storage/contract/*`) и точку сборки `StorageContext`
 (`storage.backend` = `file`|`memory`). Драйверы `file`/`memory` живут in-tree.
 
-Следующий шаг — БД ([PROP-032](./prop-032-history-storage-postgresql.md), PostgreSQL) — по форме поставки не
+Следующий шаг — БД (PostgreSQL, драйвер из коробки — этот ADR) — по форме поставки не
 укладывается ни в один существующий класс расширений [ADR-086](./adr-086-extensibility-plugins-editions.md):
 это не Plugin, не Gateway/Add-on/контент-пак, а **подмена физического backend'а под портами**.
 
@@ -30,7 +30,7 @@ singleton-слой хранения против disposer-модели плаг�
    без внешних зависимостей (standalone/локальный home не тянут БД).
 3. **БД-драйвер — опциональный in-tree npm-пакет** (рабочее имя `@itphx/synth-storage-postgres`),
    подключаемый из `createStorageContext` **динамическим `import()`** по `storage.backend === 'postgres'`;
-   `pg` — **optional dependency**. Форма поставки — [PROP-032](./prop-032-history-storage-postgresql.md) §«Решение».
+   `pg` — **optional dependency**. Форма поставки — §«Решение» этого ADR (in-tree пакет + динамический `import()`).
 4. **Выбор драйвера** — стандартно через `storage.backend` (`file`|`memory`|`postgres`; env
    `SYNTH_STORAGE_BACKEND`), приоритеты конфига — [ADR-023](./adr-023-configuration.md).
 5. **Манифест `synth.pack`** получает `kind: "storage"` (для инспекции/реестра/trust); установка сторонних
@@ -57,7 +57,7 @@ singleton-слой хранения против disposer-модели плаг�
 - **Есть:** порты (27) + suite + драйверы `file`/`memory` + `StorageContext` ([ADR-096](./adr-096-storage-layer.md));
   `StorageBackendKind = 'file' | 'memory' | 'postgres'`, `storageConfigSchema.backend: z.enum(['file','memory','postgres'])`,
   `resolveStorageBackend` (env `SYNTH_STORAGE_BACKEND` > config > `'file'`; **fail-closed** на неизвестном явном значении).
-- **Драйвер БД реализован:** `@itphx/synth-storage-postgres` ([PROP-032](./prop-032-history-storage-postgresql.md)) —
+- **Драйвер БД реализован:** `@itphx/synth-storage-postgres` (ADR-097) —
   in-tree опциональный пакет (`peerDependencies: @itphx/synth-core`, `pg` — `optionalDependencies`, ленивый `import()`),
   подключается async-каскадом `createStorageContextAsync`/`buildStorageContext` по `storage.backend === 'postgres'`;
   все 27 портов реализованы и проходят контрактный suite (гейт env `SYNTH_TEST_POSTGRES_DSN`). Деградация при
@@ -68,5 +68,5 @@ singleton-слой хранения против disposer-модели плаг�
 
 ## История
 
-- 2026-10-16 — ADR заведён: класс «хранилище» выделен из класса Plugin; PostgreSQL — in-tree драйвер из коробки ([PROP-032](./prop-032-history-storage-postgresql.md)).
+- 2026-10-16 — ADR заведён: класс «хранилище» выделен из класса Plugin; PostgreSQL — in-tree драйвер из коробки (ADR-097).
 - 2026-10-16 — драйвер `postgres` реализован (все 27 портов, async-каскад сборки, деградация — [ADR-098](./adr-098-storage-degraded-recovery.md)); остаток — `kind: "storage"` в манифесте и установка сторонних драйверов.

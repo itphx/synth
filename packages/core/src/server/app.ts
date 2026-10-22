@@ -50,18 +50,18 @@ export interface StandaloneConfig {
   dataDir: string;
   apiKey: string;
   /**
-   * PROP-032: физический backend хранения (`storage.backend`; env
+   * ADR-096: физический backend хранения (`storage.backend`; env
    * `SYNTH_STORAGE_BACKEND` > config.yaml > `file`). Не задан — `file`.
    * `memory` — энергонезависимо (герметичные тесты); `postgres` — БД.
    */
   storageBackend?: StorageBackendKind;
-  /** PROP-032: параметры PostgreSQL (при `storageBackend: 'postgres'`). */
+  /** ADR-097: параметры PostgreSQL (при `storageBackend: 'postgres'`). */
   postgresConfig?: PostgresStorageConfig;
-  /** PROP-032: пароль PostgreSQL (env/файл; не config.yaml — инвариант 13). */
+  /** ADR-097: пароль PostgreSQL (env/файл; не config.yaml — инвариант 13). */
   postgresPassword?: string;
-  /** PROP-032 (задел W5): политика при недоступности backend. */
+  /** ADR-098 (задел W5): политика при недоступности backend. */
   degradedMode?: 'fallback-file' | 'halt';
-  /** PROP-032 (задел W5): каталог файлового фоллбека при деградации. */
+  /** ADR-098 (задел W5): каталог файлового фоллбека при деградации. */
   fallbackDir?: string;
   workspacesRoot?: string;
   /** Рабочий каталог по умолчанию для сессий без проекта. Дефолт: {dataDir}/workspaces/default. */
@@ -125,12 +125,12 @@ export interface StandaloneConfig {
   schedulerConfig?: SynthConfig['scheduler'];
   /** ADR-084: конфигурация decision-слоя из config.yaml `decision`. */
   decisionConfig?: SynthConfig['decision'];
-  /** PROP-102: конфигурация аналитики (`analytics.retentionDays`) из config.yaml. */
+  /** ADR-102: конфигурация аналитики (`analytics.retentionDays`) из config.yaml. */
   analyticsConfig?: SynthConfig['analytics'];
   /** ADR-094: конфигурация метрик (`metrics.enabled`) из config.yaml/env. */
   metricsConfig?: SynthConfig['metrics'];
   /**
-   * PROP-077: эффективная секция `execution` (режим исполнения + параметры
+   * ADR-077: эффективная секция `execution` (режим исполнения + параметры
    * удалённого исполнителя). Не задана — `inline` (прежнее поведение).
    * Секция — **параметр запуска** (инвариант 24): смена режима — только
    * рестартом процесса.
@@ -208,7 +208,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     { dataDir: config.dataDir },
   );
   const app = new Hono();
-  // PROP-032 (W2.4): единый контекст хранения собирается здесь — реестр
+  // ADR-096 (W2.4): единый контекст хранения собирается здесь — реестр
   // service-key (`storage.serviceKeys`) нужен аутентификации до сборки
   // зависимостей; тот же инстанс переиспользует `createStandaloneDeps`.
   const storage = await createStandaloneStorage(config);
@@ -351,7 +351,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.use('/api/*', auth.requireAuth);
   app.use('/ws/*', auth.requireAuth);
 
-  // PROP-032 (W5): деградированное хранилище — ADMIN-only + строгий read-only.
+  // ADR-098 (W5): деградированное хранилище — ADMIN-only + строгий read-only.
   // Guard идёт после `requireAuth` (нужен `user` для admin-проверки) и до роутов.
   // Ремонтные операции (maintenance: doctor/бэкап/выгрузка-перенос данных) не
   // блокируются — их нужно успеть выполнить до рестарта.
@@ -361,7 +361,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     mutationAllowlist: ['/api/v2/maintenance'],
   }));
 
-  // PROP-032 (W5): диагностика деградации — проверка соединения с БД и признак
+  // ADR-098 (W5): диагностика деградации — проверка соединения с БД и признак
   // «нужен рестарт» (авто-возврат не реализован). Монтируется после guard'а:
   // не-администраторы получают 503 ещё до хендлера.
   app.route('/', createStorageStatusRoutes({ getDegraded: () => storage.degraded ?? null }));
@@ -561,7 +561,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     stopEphemeralSweeper: deps.stopEphemeralSweeper,
     // ADR-089: остановка периодической retention-очистки журнала событий.
     stopEventJournalPruner: deps.stopEventJournalPruner,
-    // PROP-102: остановка retention-очистки суточных роллапов аналитики.
+    // ADR-102: остановка retention-очистки суточных роллапов аналитики.
     stopAnalyticsRollupPruner: deps.stopAnalyticsRollupPruner,
     // ADR-052 (этап II): остановка движка webhooks и retention-очистки доставок.
     stopWebhookService: () => deps.webhookService.stop(),
@@ -573,7 +573,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     webhookService: deps.webhookService,
     // ADR-051 (срез): остановка планировщика (на graceful shutdown).
     stopScheduler: () => deps.schedulerService.stop(),
-    // PROP-032: освобождение ресурсов backend'а хранения (пул соединений PG);
+    // ADR-097: освобождение ресурсов backend'а хранения (пул соединений PG);
     // `file`/`memory` `close` не задают — вызов безопасен (optional).
     closeStorage: async () => {
       await storage.close?.();

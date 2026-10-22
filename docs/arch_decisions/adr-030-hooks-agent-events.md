@@ -1,7 +1,11 @@
 # ADR-030: Hooks для событий агента
 
-> **Статус:** ⚠️ Частично — реализованы hook-шина `HookBus` и эмиты жизненного цикла; Plugin SDK/загрузка плагинов ([PROP-090](./prop-090-extension-api.md), отложен 2026-10-19), 4 эмита (`plan_rejected`/`message_received`/`callback`/`schedule_fired`) и политика `builtin` — нет
+> **Статус:** ⚠️ Частично — реализованы hook-шина `HookBus` и эмиты жизненного цикла; Plugin SDK/загрузка плагинов ([PROP-090](./prop-090-extension-api.md), вернулся в работу 2026-10-22), 4 эмита (`plan_rejected`/`message_received`/`callback`/`schedule_fired`) и политика `builtin` — нет
 > **Дата:** 2026-09-17
+> **Обновлено:** 2026-10-22 — PROP-090 **вернулся в работу** (🧩 Предложение, срок решения 2026-11-14): фазы
+> перестроены в Ф0–Ф7; остаток ADR-030 (политика `builtin` + 4 недостающих эмита `plan_rejected`/`message_received`/
+> `callback`/`schedule_fired`) — **Ф0** в новой схеме фаз. §-номера прежней редакции PROP-090 больше не действительны —
+> ссылки ведут на разделы «Фазы» (§13) и «Модель доверия» (§9).
 > **Обновлено:** 2026-10-19 — остаток сведён к **Ф0 [PROP-090](./prop-090-extension-api.md) §14** (политика `builtin` +
 > недостающие эмиты) и зафиксировано, что Ф0 **не делается отдельно**: PROP-090 решением 2026-10-19 отложен целиком
 > (🧊 Icebox), фазы Ф0–Ф5 не начаты.
@@ -117,9 +121,10 @@ export default function myPlugin(synth: SynthPlugin) {
 
 ### Остаток (не реализовано)
 
-Остаток ADR-030 сводится к **Ф0 [PROP-090](./prop-090-extension-api.md) §14** (политика `builtin` + недостающие эмиты)
-и самому Plugin SDK. Ф0 **не делается отдельно**: решением 2026-10-19 [PROP-090](./prop-090-extension-api.md) отложен
-целиком (🧊 Icebox) — фазы Ф0–Ф5 не начаты; при возврате PROP-090 в работу Ф0 идёт первым шагом.
+Остаток ADR-030 сводится к **Ф0 [PROP-090](./prop-090-extension-api.md) §13 «Фазы»** (политика `builtin` + 4 недостающих
+эмита `plan_rejected`/`message_received`/`callback`/`schedule_fired`) и самому Plugin SDK. PROP-090 вернулся в работу
+2026-10-22: фазы перестроены в Ф0–Ф7, Ф0 остаётся первым шагом. §-номера прежней редакции PROP-090 (в т. ч. бывший
+§14) больше не действительны — актуальны разделы «Фазы» (§13) и «Модель доверия» (§9).
 
 - **Plugin SDK и загрузка плагинов** — отсутствуют: нет `SynthPlugin`, `synth.hooks.on(...)`, конфига/загрузчика и публичной точки регистрации внешних обработчиков (спецификация — [PROP-090](./prop-090-extension-api.md), зонтик — [ADR-086](./adr-086-extensibility-plugins-editions.md)).
 - **Неэмитируемые хуки (Ф0 PROP-090)** — `plan_rejected`, `message_received`, `callback`, `schedule_fired` объявлены в `HookName`, но нигде не эмитятся. Эмитятся 11 из 15: `pre_tool_use`, `post_tool_use`, `session_start`, `session_end`, `plan_approved`, `permission_denied`, `agent_spawned`/`agent_completed`/`agent_failed`, `session_requested`, `external_event`.
@@ -139,6 +144,10 @@ ADR-030 — **фундамент** событийной модели Synth: hook
 - [ADR-086](./adr-086-extensibility-plugins-editions.md) «Классы расширений» — add-on'ы
   и gateway-события (External API/hooks как точки расширения).
 - [PROP-090](./prop-090-extension-api.md) «Extension API v1» — загрузчик/манифест (`synth.pack`) и регистрация
-  внешних обработчиков над hook-шиной (spec Extension API; вынесен из ADR-086; отложен 2026-10-19 — 🧊 Icebox).
+  внешних обработчиков над hook-шиной (spec Extension API; вынесен из ADR-086; вернулся в работу 2026-10-22).
 - [ADR-087](./adr-087-gateways.md) «Шлюзы (gateways)» — класс Gateway; hook `message_received`.
+
+## История
+
+- 2026-10-22 — PROP-090 возвращён в работу; остаток ADR-030 закреплён за Ф0 новой схемы фаз.
 

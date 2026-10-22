@@ -75,7 +75,7 @@
 точки:
 - отдельный тул/скилл, вызываемый агентом;
 - хук (когда появится [ADR-030](./adr-030-hooks-agent-events.md)) на запись docs-файлов;
-- проверка в pipeline ([PROP-059](./prop-059-pipeline-automation.md)) / `pre-commit`.
+- проверка в pipeline ([ADR-101](./adr-101-pipeline-engine.md)) / `pre-commit`.
 
 ### 5. Где хранить
 
@@ -102,7 +102,7 @@
 - Связь с памятью/шаблонами ([PROP-047](./prop-047-memory-gbrain.md), [PROP-068](./prop-068-skills-agents-registry.md))?
 - Как не дублировать `synth-docs`/`synth-agents-md` (dev-скиллы) и продуктовый каталог?
 - Линтер — отдельный тул, хук ([ADR-030](./adr-030-hooks-agent-events.md)) или шаг pipeline
-  ([PROP-059](./prop-059-pipeline-automation.md))?
+  ([ADR-101](./adr-101-pipeline-engine.md))?
 - Формализовать ли машинно-проверяемую часть (схема front-matter)?
 
 ## Связи

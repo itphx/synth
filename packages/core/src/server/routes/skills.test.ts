@@ -56,7 +56,7 @@ describe('/api/v2/skills (ADR-046 §9.1)', () => {
     expect(body.skills[0].level).toBe('system');
     expect(body.skills[1].trusted).toBe(true);
     expect(body.skills[1].requiresCapabilities).toEqual(['file_read', 'search', 'file_write']);
-    // PROP-032 (W5): builtin-руководство по восстановлению хранилища — read-only
+    // ADR-098 (W5): builtin-руководство по восстановлению хранилища — read-only
     // (диагностика через HTTP/CLI), файловых capabilities не требует.
     expect(body.skills[2].trusted).toBe(true);
     expect(body.skills[2].requiresCapabilities).toEqual([]);

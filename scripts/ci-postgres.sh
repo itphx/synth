@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # ci-postgres.sh — поднять PostgreSQL для контрактного suite драйвера хранения
-# (PROP-032, волна 4) и прогнать тесты против живой БД.
+# (ADR-097, волна 4) и прогнать тесты против живой БД.
 #
 # Зачем: контрактный suite портов (packages/core/src/storage/contract/postgres.test.ts)
 # и smoke-тест драйвера (packages/storage-postgres/**) включаются только при заданном

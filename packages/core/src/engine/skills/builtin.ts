@@ -25,7 +25,7 @@ export const SYNTH_AGENTS_MD_NAME = 'synth-agents-md';
 export const SYNTH_AGENTS_MD_COMMAND = 'agents-md';
 
 /**
- * PROP-032 (W5): имя встроенного скилла-руководства по восстановлению
+ * ADR-098 (W5): имя встроенного скилла-руководства по восстановлению
  * недоступного хранилища (деградированный режим). Read-only по природе — доступен
  * и в обычном режиме (профилактика/диагностика), и в аварийном.
  */
@@ -174,7 +174,7 @@ export function buildSynthAgentsMdMeta(): SkillMeta {
   };
 }
 
-/** Тело встроенного `synth-storage-recovery` (модель-facing runbook, PROP-032 W5). */
+/** Тело встроенного `synth-storage-recovery` (модель-facing runbook, ADR-098 W5). */
 const SYNTH_STORAGE_RECOVERY_BODY = `# Storage recovery (degraded mode)
 
 Runbook for restoring Synth storage: the configured backend (\`storage.backend=postgres\`)
@@ -222,7 +222,7 @@ underlying problem is fixed.
 - \`GET /api/v2/health\` → \`status: "healthy"\` (no \`storage\` block).
 - \`GET /api/v2/storage/status\` → \`status: "healthy"\`.`;
 
-/** `SkillMeta` встроенного `synth-storage-recovery` (PROP-032 W5). */
+/** `SkillMeta` встроенного `synth-storage-recovery` (ADR-098 W5). */
 export function buildSynthStorageRecoveryMeta(): SkillMeta {
   return {
     name: SYNTH_STORAGE_RECOVERY_NAME,

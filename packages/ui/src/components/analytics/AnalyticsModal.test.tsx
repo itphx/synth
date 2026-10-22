@@ -178,7 +178,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('AnalyticsModal (PROP-102, волна 2)', () => {
+describe('AnalyticsModal (ADR-102, волна 2)', () => {
   it('рендерит четыре вкладки и отчёт «Расход и стоимость» с итоговой строкой', async () => {
     await renderModal()
 

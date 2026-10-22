@@ -170,7 +170,7 @@ $SYNTH_DATA_DIR/secrets/ssh-keys/<id>.json    # SSHKey, секреты заши�
 
 - [ADR-014](./adr-014-project-container.md) «Проект как контейнер» — `project.repos`.
 - [ADR-075](./adr-075-project-workspace-provisioning.md) «Окружение проекта: рабочий каталог».
-- [PROP-077](./prop-077-runtime-toolchain.md) «Инструментальное окружение исполнения» — нативный `git`/`ssh` обязателен.
+- [ADR-077](./adr-077-runtime-toolchain.md) «Инструментальное окружение исполнения» — нативный `git`/`ssh` обязателен.
 - [ADR-036](./adr-036-llm-gateway.md) «LLM Gateway» — обфускация и аудит.
 
 ## Порядок реализации (выполнено 2026-09-24)

@@ -1,4 +1,4 @@
-// PROP-032 (W2.3): единая точка сборки слоя хранения — контрактные проверки
+// ADR-096 (W2.3): единая точка сборки слоя хранения — контрактные проверки
 // `createFileStorage`/`createMemoryStorage`/`createStorageContext`.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync } from 'node:fs';
@@ -26,7 +26,7 @@ const PORT_KEYS = [
   'projectPipelines', 'pipelineRuns',
 ] as const satisfies readonly (keyof StorageContext)[];
 
-describe('StorageContext (PROP-032, W2.3)', () => {
+describe('StorageContext (ADR-096, W2.3)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -130,7 +130,7 @@ describe('StorageContext (PROP-032, W2.3)', () => {
       expect(ctx[key], `поле ${key} не определено`).toBeDefined();
     }
 
-    // PROP-032 (W2.4): конфигурационные словари (providers/models/agents) — в памяти,
+    // ADR-096 (W2.4): конфигурационные словари (providers/models/agents) — в памяти,
     // на диск ничего не пишется (иначе `storage.backend=memory` протекал бы на ФС).
     await ctx.providers.save('ollama', { name: 'ollama', type: 'ollama' } as never);
     await ctx.models.save('ollama/llama3', { id: 'ollama/llama3', provider: 'ollama' } as never);

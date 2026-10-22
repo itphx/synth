@@ -54,7 +54,41 @@ export type {
   PackPipelineProvide,
   PackAgentMode,
 } from './types/pack.js';
-// ADR-051/PROP-059: контракт пайплайна (определение, шаг, состояние, экземпляр).
+// PROP-068 §3/§12: контракт индекса каталога расширений (`format: 1`) —
+// канонический документ, карточка записи и tolerant-парсер форм индекса.
+export {
+  CATALOG_INDEX_FORMAT,
+  CATALOG_TRUST_LEVELS,
+  CATALOG_SOURCES,
+  CATALOG_UNKNOWN_LICENSE,
+  CATALOG_DEFAULT_SKILL_CATEGORY,
+  CATALOG_UNKNOWN_VERSION,
+  catalogLocalizedTextSchema,
+  catalogTrustLevelSchema,
+  catalogSourceSchema,
+  catalogSourceAdapterSchema,
+  catalogTimestampSchema,
+  catalogVersionSchema,
+  catalogEntrySchema,
+  catalogCategorySchema,
+  catalogLabelSchema,
+  catalogIndexSchema,
+  isCatalogSkillEntry,
+  isCatalogIndexDocument,
+  parseCatalogEntries,
+} from './types/catalog.js';
+export type {
+  CatalogLocalizedText,
+  CatalogTrustLevel,
+  CatalogSource,
+  CatalogSourceAdapter,
+  CatalogVersion,
+  CatalogEntry,
+  CatalogCategory,
+  CatalogLabel,
+  CatalogIndex,
+} from './types/catalog.js';
+// ADR-051/ADR-100: контракт пайплайна (определение, шаг, состояние, экземпляр).
 export {
   pipelineStepKindSchema,
   eventMatchSchema,
@@ -180,7 +214,7 @@ export { defaultConfig, loadConfig } from './config/index.js';
 export { resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveDefaultWorkspace, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveIgnoreRules, resolveHome, resolveProfilesPath, resolveCredentialsPath, ensureDataDir, createDefaultConfig, resolveDeployMode, findConfigPath, defaultConfigPath, ensureConfigFile, ensureFirstRun, resolveDecisionProvider, resolveDecisionModel, resolveMaxUploadBytes } from './config/index.js';
 export type { StorageBackend, ResolvedPostgresConfig } from './config/index.js';
 export { applyEnvOverrides, envOverrideName, toSnakeCase, parseEnvValue, ENV_OVERRIDES } from './config/index.js';
-// PROP-077: секция `execution` — топология исполнения (переключатель запуска).
+// ADR-077: секция `execution` — топология исполнения (переключатель запуска).
 export {
   resolveExecutionConfig,
   resolveExecutionMode,
@@ -316,7 +350,7 @@ export {
   PROXY_MODES,
   PROXY_PROFILE_NAME_RE,
 } from './config/index.js';
-// ADR-099 × PROP-032: единый построитель TLS-опций PostgreSQL (sslmode + security.tls).
+// ADR-099 × ADR-097: единый построитель TLS-опций PostgreSQL (sslmode + security.tls).
 export {
   buildPostgresSslOptions,
   findDsnTlsParams,

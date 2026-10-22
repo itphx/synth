@@ -1,6 +1,13 @@
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { atomicWrite, type SkillDiagnostic } from '@itphx/synth-shared';
+import {
+  atomicWrite,
+  isCatalogIndexDocument,
+  isCatalogSkillEntry,
+  parseCatalogEntries,
+  type CatalogEntry,
+  type SkillDiagnostic,
+} from '@itphx/synth-shared';
 import { TEMPLATE_FILE_MAX_BYTES } from '../commands/template.js';
 import { buildUrlSource } from './discovery.js';
 import type { SkillSource } from './types.js';
@@ -23,11 +30,23 @@ export {
 /**
  * ADR-046 §4.2/§4.3: read-only индексация удалённых каталогов (`skills.urls`).
  *
- * Скачиваем opencode-совместимый `index.json` + `<base>/<path||name>/SKILL.md`
+ * Скачиваем внешний индекс каталога + `<base>/<path||name>/SKILL.md`
  * в детерминированный кэш `{cacheDir}/urls/<sha1(url)[:16]>`. Скиллы из кэша
  * имеют `trusted: false` (см. `buildUrlSource`) — они видны в реестре/диагностике,
  * но не попадают в каталог для модели и не грузятся. Установка/доверие/подписи/
  * `lock.json` — PROP-068, здесь не реализуются.
+ *
+ * **Формат индекса** — общий контракт каталога расширений (`format: 1`,
+ * `@itphx/synth-shared`: `catalogIndexSchema`/`parseCatalogEntries`):
+ * канонический `{ format: 1, plugins: [...] }`, а также legacy-формы
+ * `{ skills: [...] }` и голый массив `[{ name, path? }]`. Загрузчик скиллов
+ * берёт из индекса **только скиллы** (`kind: 'pack'` + `packType: 'skills'`);
+ * записи других классов (`plugin`/`gateway`/`addon`/`storage` и пакеты других
+ * `packType`) игнорируются.
+ *
+ * Путь скилла внутри каталога: явное поле `path` карточки (каноническая форма,
+ * контент-паки вендорены в каталоге) → `extra.path` (legacy-формы) →
+ * фрагмент `identifier` после `#` → имя записи.
  *
  * Сеть: только `http:`/`https:`; блокируются loopback/private/link-local/ULA,
  * `*.local`/`*.internal` и IPv4-mapped IPv6 (SSRF-guard, проверяются исходный URL
@@ -39,7 +58,11 @@ export {
 export const REMOTE_INDEX_TIMEOUT_MS = 5000;
 /** Лимит размера `index.json`, байт (~1 MB). */
 export const REMOTE_INDEX_MAX_BYTES = 1024 * 1024;
-/** Лимит числа записей в `index.json`. */
+/**
+ * Лимит числа записей каталога, обрабатываемых за проход (по умолчанию 200).
+ * Переопределяется опцией `maxSkills` (`RefreshRemoteCatalogsOptions`) — портал
+ * расширений сможет поднять лимит, не меняя поведение по умолчанию.
+ */
 export const REMOTE_MAX_SKILLS = 200;
 /** Лимит одного `SKILL.md`, байт (как `TEMPLATE_FILE_MAX_BYTES`). */
 export const REMOTE_FILE_MAX_BYTES = TEMPLATE_FILE_MAX_BYTES;
@@ -55,6 +78,11 @@ export interface RefreshRemoteCatalogsOptions {
   fetchImpl?: FetchLike;
   timeoutMs?: number;
   maxIndexBytes?: number;
+  /**
+   * Лимит числа обрабатываемых записей-скиллов за проход (по умолчанию
+   * `REMOTE_MAX_SKILLS` = 200). Записи других классов каталога в лимит не
+   * входят — они игнорируются загрузчиком скиллов.
+   */
   maxSkills?: number;
   maxHops?: number;
   /** Инъекция DNS-резолвера SSRF-проверки (тесты). */
@@ -76,46 +104,40 @@ export function resolveRemoteIndexUrl(base: URL): URL {
   return new URL('index.json', text.endsWith('/') ? text : `${text}/`);
 }
 
+/** Запись каталога, из которой загрузчик скиллов берёт имя и путь. */
 interface RemoteIndexEntry {
   name: string;
   path?: string;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+/**
+ * Путь скилла внутри каталога (относительно базового URL индекса).
+ *
+ * Порядок источников:
+ * 1. `path` — явное поле карточки (каноническая форма: путь к вендоренному
+ *    контенту, `kind: 'pack'`);
+ * 2. `extra.path` — legacy-формы и прежние карточки (`{ skills: [...] }`);
+ * 3. фрагмент `identifier` после `#` (устойчивый id `owner/repo#path`);
+ * 4. иначе — undefined (loader возьмёт имя записи как путь).
+ */
+export function resolveCatalogSkillPath(entry: CatalogEntry): string | undefined {
+  const explicit = entry.path?.trim();
+  if (explicit) return explicit;
+  const extra = entry.extra;
+  const extraPath = extra && typeof extra === 'object' ? extra['path'] : undefined;
+  if (typeof extraPath === 'string' && extraPath.trim().length > 0) return extraPath.trim();
+  const hash = entry.identifier.indexOf('#');
+  if (hash >= 0) {
+    const fragment = entry.identifier.slice(hash + 1).trim();
+    if (fragment.length > 0) return fragment;
+  }
+  return undefined;
 }
 
-/**
- * Tolerant-parse `index.json`: массив `{name, description?, path?}` либо
- * `{skills: [...]}`. Невалидные записи пропускаются, не роняя разбор.
- */
-export function parseRemoteIndex(text: string): { entries: RemoteIndexEntry[] } | { error: string } {
-  let data: unknown;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    return { error: 'index.json: некорректный JSON' };
-  }
-  let raw: unknown[];
-  if (Array.isArray(data)) {
-    raw = data;
-  } else if (isRecord(data) && Array.isArray(data.skills)) {
-    raw = data.skills;
-  } else {
-    return { error: 'index.json: ожидается массив или { skills: [...] }' };
-  }
-
-  const entries: RemoteIndexEntry[] = [];
-  for (const item of raw) {
-    if (!isRecord(item)) continue;
-    const name = typeof item.name === 'string' ? item.name.trim() : '';
-    if (!name) continue;
-    const path = typeof item.path === 'string' && item.path.trim().length > 0
-      ? item.path.trim()
-      : undefined;
-    entries.push(path ? { name, path } : { name });
-  }
-  return { entries };
+/** Запись каталога → запись загрузчика (имя + путь внутри источника). */
+function toRemoteIndexEntry(entry: CatalogEntry): RemoteIndexEntry {
+  const path = resolveCatalogSkillPath(entry);
+  return path ? { name: entry.name, path } : { name: entry.name };
 }
 
 /** Безопасное имя каталога кэша (одиночный сегмент без разделителей и `..`). */
@@ -209,22 +231,45 @@ export async function refreshRemoteCatalogs(
       continue;
     }
 
-    const parsed = parseRemoteIndex(index.text);
-    if ('error' in parsed) {
-      diagnostics.push({ level: 'error', code: 'remote', dir: source.dir, message: parsed.error });
+    let document: unknown;
+    try {
+      document = JSON.parse(index.text);
+    } catch {
+      diagnostics.push({
+        level: 'error',
+        code: 'remote',
+        dir: source.dir,
+        message: 'index.json: некорректный JSON',
+      });
+      continue;
+    }
+    if (!isCatalogIndexDocument(document)) {
+      diagnostics.push({
+        level: 'error',
+        code: 'remote',
+        dir: source.dir,
+        message: 'index.json: ожидается каталог расширений (format: 1, { skills: [...] } или массив записей)',
+      });
       continue;
     }
 
-    if (parsed.entries.length > maxSkills) {
+    // Формат индекса — общий контракт каталога (shared, PROP-068 §3/§12).
+    // Загрузчик скиллов берёт только записи-скиллы (`kind: 'pack'` +
+    // `packType: 'skills'`); записи других классов игнорируются.
+    const skills = parseCatalogEntries(document)
+      .filter((entry) => isCatalogSkillEntry(entry))
+      .map((entry) => toRemoteIndexEntry(entry));
+
+    if (skills.length > maxSkills) {
       diagnostics.push({
         level: 'warning',
         code: 'remote',
         dir: source.dir,
-        message: `index.json: ${parsed.entries.length} записей, обрабатываются первые ${maxSkills}`,
+        message: `index.json: ${skills.length} записей скиллов, обрабатываются первые ${maxSkills}`,
       });
     }
 
-    for (const entry of parsed.entries.slice(0, maxSkills)) {
+    for (const entry of skills.slice(0, maxSkills)) {
       const fileUrl = resolveSkillFileUrl(indexUrl, entry);
       if (!fileUrl) {
         diagnostics.push({

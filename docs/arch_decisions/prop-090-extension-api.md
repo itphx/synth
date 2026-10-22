@@ -1,554 +1,972 @@
-# PROP-090: Extension API v1 — плагины, точки расширения и загрузчик
+# PROP-090: Extension API v1 — слой плагинов: контракты, доверие, два режима исполнения
 
-> **Статус:** 🧊 Icebox — Extension API v1: плагины, точки расширения, загрузчик, манифест `synth.pack`, trust/scan.
-> **Решение 2026-10-19 — отложено целиком:** фазы Ф0–Ф5 **не начаты** (в коде Synth нет ни `PluginHost`, ни
-> `@itphx/synth-plugin`, ни `plugins.lock.json`/`plugins.json`, ни `/api/v2/plugins*`, ни CLI `synth plugin *`);
-> срок `Решение до: 2026-11-14` **снят** — новая дата назначается при возврате в работу.
+> **Статус:** 🧩 Предложение
+> **Решение до:** 2026-11-14
 > **Дата:** 2026-10-12
-> **Обновлено:** 2026-10-19 — зафиксировано решение об отложении (🧊 Icebox): Ф0 (политика `builtin` + 4 эмита
-> [ADR-030](./adr-030-hooks-agent-events.md)) не делается отдельно и переносится в остаток PROP-090.
+> **Обновлено:** 2026-10-22 — документ переписан по решениям владельца продукта. Слой плагинов возвращён
+> в работу (полный in-process SDK, форма прежняя), добавлены **два режима исполнения** (`inline` /
+> `out-of-process`), **две новые точки расширения** (`promptBlocks`, `llmFilters`), **модель доверия**
+> (PROP-068) и **полный контур управления** (API/CLI/UI). Прежняя редакция (🧊 Icebox, отложено
+> 2026-10-19) заменена; фазы перестроены в Ф0–Ф7 с критериями приёмки.
 > **Источник:** вынесено из зонтика [ADR-086](./adr-086-extensibility-plugins-editions.md) — Extension API
 > проектировался там как первый из четырёх столпов (плагины, editions, contribution flow, add-on'ы);
-> здесь он выделен в отдельный AD и детализирован.
+> здесь он выделен в отдельный документ и детализирован.
 > **Связано:** [ADR-086](./adr-086-extensibility-plugins-editions.md) (зонтик «Классы расширений»),
-> [ADR-087](./adr-087-gateways.md) (класс Gateway), [ADR-030](./adr-030-hooks-agent-events.md)
-> (hooks/Plugin SDK), [ADR-038](./adr-038-npm-packages.md) (npm-пакеты), [ADR-046](./adr-046-skills-and-slash-commands.md)
-> (скиллы/команды), [PROP-068](./prop-068-skills-agents-registry.md) (реестр/каталог/trust), [ADR-071](./adr-071-mcp-servers-prompt.md)
-> (MCP), [ADR-089](./adr-089-external-events-automation.md) (внешние события), [ADR-023](./adr-023-configuration.md)
-> (конфиг), [ADR-025](./adr-025-plan-act-toggle.md)/[ADR-028](./adr-028-plan-build-strictness.md)/[ADR-029](./adr-029-granular-permissions.md)
-> (permissions), [ADR-036](./adr-036-llm-gateway.md) (Gateway), [ADR-042](./adr-042-hybrid-mode.md)/[PROP-073](./prop-073-client-integrity-hybrid.md)/[PROP-080](./prop-080-managed-hybrid-modes.md)/[PROP-081](./prop-081-hybrid-policy-leak-protection.md)
-> (гибрид/политики), [ADR-052](./adr-052-public-api-platform.md) (service-key/scopes), [PROP-082](./prop-082-full-images-deployment.md)
-> (flavor-образы), [PROP-077](./prop-077-runtime-toolchain.md) (executor).
-
-**Решение:** ввести **Extension API v1** — версионированный контракт для расширения Synth кодом **без форка
-ядра**. Extension API — это четыре части: **манифест** плагина (единый файл `synth.pack`), **загрузчик**
-(`PluginHost`: resolve → integrity → semver-гейт → trust/scan → политика режима → `import` → facade → сбор
-disposers → аудит), **модель доверия** (переиспользуется из [PROP-068](./prop-068-skills-agents-registry.md):
-trust-уровни, install-policy, статический сканер, quarantine) и **install/activate** (раскладка в
-`<home>/plugin/`, `plugins.lock.json`, `plugins.json`, CLI/API).
-
-**Четыре класса расширений жёстко разведены:** **Plugin** — код, исполняемый **в процессе core**, встроенный
-в его поток обработки; **Gateway** — **внешний сервис-транспорт** внешнего мира (мессенджеры/чаты/боты),
-двусторонний обмен ([ADR-087](./adr-087-gateways.md)); **Add-on** — **внешний сервис** иного назначения в своём
-процессе/контейнере, общающийся по API v2 / MCP / внешним событиям (эталон — `synth-media`); **контент-пак**
-(Declarative) — контент без кода (скиллы, команды, агенты, MCP-сервера, маршруты, расписания, темы, i18n,
-провайдеры, промпты, policies, memory, ui). Каждый класс имеет свой «носитель» и свой контракт, и они не
-смешиваются: add-on — **не** плагин, **gateway — не подвид add-on'а**.
-
-**Плагины разрешены во всех режимах** (standalone, hybrid, managed). Ограничение «плагин только standalone»
-снято: вопрос не «где запрещено», а «**кто ставит + какая политика + сила энфорса**». В managed установку
-выполняет **ADMIN** (deploy-time по умолчанию, runtime-install — опция `deny` по умолчанию); в hybrid
-действует **allow-list сервера**, усиливаемый в Уровне 2 **server-scoped токенами**.
-
-**Основной безопасный путь расширения — Gateway/Add-on**, а не in-process плагин: вынесенный сервис общается по уже
-отлаженным границам (API v2/MCP/события) и не требует компромисса «сторонний код в процессе ядра». Плагин —
-для тех, кому действительно нужны in-process точки расширения (см. правило выбора, §1); он идёт через
-trust/scan/install-policy и подчиняется тем же инвариантам (permissions через `PermissionEvaluator`, LLM через
-`GatewayProvider`, хранилище через `FileStore`).
-
-> **Вердикт по сроку — 2026-10-19: отложено целиком (🧊 Icebox).** Ни одна из фаз Ф0–Ф5 не начата: в коде Synth нет
-> ни `PluginHost`, ни `@itphx/synth-plugin`, ни `plugins.lock.json`/`plugins.json`, ни `/api/v2/plugins*`, ни CLI
-> `synth plugin *`. Ф0 (политика `builtin` + недостающие эмиты — [ADR-030](./adr-030-hooks-agent-events.md))
-> **не делается отдельно** и переносится в остаток PROP-090: при возврате в работу Ф0 идёт первым шагом.
-> Спецификация ниже сохраняется как есть — она остаётся основой решения, когда PROP-090 вернётся в работу.
+> [ADR-030](./adr-030-hooks-agent-events.md) (hooks), [ADR-096](./adr-096-storage-layer.md)/
+> [ADR-097](./adr-097-storage-provider-class.md) (порты и контрактный suite),
+> [ADR-100](./adr-100-extension-packs-pipelines.md) (поставка `synth.pack`),
+> [ADR-103](./adr-103-gateway-core-channel-contract.md) (контракт внешнего канала — образец wire-протокола),
+> [ADR-036](./adr-036-llm-gateway.md) (Gateway), [ADR-070](./adr-070-system-prompt-composer.md) (сборка промпта),
+> [ADR-023](./adr-023-configuration.md) (конфиг), [ADR-029](./adr-029-granular-permissions.md) (permissions),
+> [ADR-052](./adr-052-public-api-platform.md) (service-key/scopes),
+> [ADR-079](./adr-079-local-home-independent-instances.md) (home-раскладка),
+> [ADR-094](./adr-094-observability-metrics.md) (контракт метрик),
+> [ADR-099](./adr-099-egress-tls-trust.md) (egress/CA),
+> [PROP-068](./prop-068-skills-agents-registry.md) (модель доверия),
+> [PROP-047](./prop-047-memory-gbrain.md) (память как плагин),
+> [ADR-077](./adr-077-runtime-toolchain.md) (исполнитель — образец двух режимов),
+> [PROP-082](./prop-082-full-images-deployment.md) (образы),
+> [PROP-100](./prop-100-ssrf-dns-rebinding.md) (SSRF).
 
 ## Контекст
 
-Расширить Synth сегодня можно только форком ядра. При этом **фундамент уже есть**: hook-шина `HookBus`
-([ADR-030](./adr-030-hooks-agent-events.md)) — ядровый in-process примитив с `on`/`off`/`emit`/`emitAsync`,
-priority, `sync`/`async` и флагом `builtin`; реестры тулов (`ToolRegistry`, [ADR-071](./adr-071-mcp-servers-prompt.md)),
-MCP (`McpRegistryStore`/`McpManager`), агентов (`AgentRegistry`), скиллов/команд ([ADR-046](./adr-046-skills-and-slash-commands.md)),
-событий (`EventIngress`/`EventRouter`/`RouteRuleProvider`, [ADR-089](./adr-089-external-events-automation.md)),
-расписаний (`SchedulerService`/`SchedulerRuleProvider`, [ADR-051](./adr-051-scheduler-pipelines.md)); паттерн
-core-фабрик HTTP-роутов `createXxxRoutes(auth, deps, opts)` ([ADR-017](./adr-017-api-v2-hono.md)); паттерн
-runtime-настроек `GET/PUT/DELETE /api/v2/settings/<x>` + guard + live-apply ([ADR-089](./adr-089-external-events-automation.md)/[ADR-084](./adr-084-decision-models-clef.md));
-контент-платформа с trust/scan/install-policy ([PROP-068](./prop-068-skills-agents-registry.md)).
+Два запроса владельца продукта определяют, зачем нужен слой плагинов:
 
-**Чего нет:** Plugin SDK `SynthPlugin`, конфига/загрузчика плагинов, публичной точки регистрации внешних
-обработчиков и install/activate-механизма. Остаток [ADR-030](./adr-030-hooks-agent-events.md): нет политики
-`builtin` (любой может снять builtin-обработчик через `off`), часть хуков (`plan_rejected`, `message_received`,
-`callback`, `schedule_fired`) объявлена, но не эмитится. Обе позиции входят в **Ф0 (§14)**, который по решению
-2026-10-19 не делается отдельно — PROP-090 отложен целиком.
+1. **Память как расширение.** Синтез памяти ([PROP-047](./prop-047-memory-gbrain.md)) должен приходить
+   плагином: `MemoryProvider` — это контракт, который доставляется плагином, а не подсистемой ядра.
+   Аргумент «не через Plugin SDK, потому что PROP-090 в Icebox» **больше не действует** — слой возвращён в работу.
+2. **Фильтрация вызовов к провайдеру.** Сторонним системам (мониторинг, аналитика, антивирусы, DLP)
+   нужен вход в поток LLM-вызовов: увидеть запрос и ответ, при необходимости — заблокировать вызов.
+   Сегодня такого входа нет: `GatewayProvider` ([ADR-036](./adr-036-llm-gateway.md)) — закрытый
+   слой обфускации/rate-limit/guard'ов/аудита без публичной точки вмешательства.
 
-**Почему не берём модель «всё в одном процессе без изоляции».** Сторонний JS-код в процессе ядра получает
-доступ ко всем internals (сессии, `FileStore`, `GatewayProvider`, permissions). Это ломает инварианты
-(permissions, Gateway, storage) и превращает каталог плагинов в канал произвольного исполнения — тот же
-класс риска, что открытый каталог контента без guard'а ([PROP-068](./prop-068-skills-agents-registry.md), инцидент
-ClawHavoc). Поэтому: (а) код — только через версионированный Extension API с явными permission-границами;
-(б) доверие/скан/install-policy — обязательны; (в) основной безопасный путь — **add-on** (внешний сервис),
-а не in-process плагин; (г) в гибриде/managed — allow-list/ADMIN и честная сила энфорса.
+**Что уже есть в коде.** Пакетный контур расширений: манифест `synth.pack`
+(`packages/shared/src/types/pack.ts`; `PACK_KINDS` уже содержит `'plugin'`), порт `PackRepository`
+(`packages/core/src/storage/ports/pack-repository.ts`), файловая реализация `{dataDir}/packs.json`,
+роуты `/api/v2/packs` (`packages/core/src/server/routes/packs.ts`), установка/одобрение/снятие.
+Каталог расширений — отдельный репозиторий `synth-registry` (записи `kind: addon|gateway|storage|pack`).
+Шина хуков `HookBus` ([ADR-030](./adr-030-hooks-agent-events.md)) — готовый in-process примитив с
+`on/off/emit/emitAsync`, priority и `sync`/`async`. Реестры тулов (`ToolRegistry`), MCP, агентов,
+скиллов, событий, расписаний. Паттерн core-фабрик роутов `createXxxRoutes(auth, deps, opts)`
+([ADR-017](./adr-017-api-v2-hono.md)). Паттерн runtime-настроек `GET/PUT/DELETE /api/v2/settings/<x>`.
+Контрактные порты хранилища (34 порта + контрактный suite, [ADR-096](./adr-096-storage-layer.md)).
+Сборка системного промпта — единственная точка `SystemPromptComposer`
+([ADR-070](./adr-070-system-prompt-composer.md)). Gateway с guard'ами и аудитом.
 
-## 1. Терминология: Plugin / Gateway / Add-on / контент-пак
+**Чего нет.** В коде **ноль** совпадений по: `PluginHost`, `SynthPlugin`, `@itphx/synth-plugin`,
+`definePlugin`, `plugins.lock.json`, `plugins.json`, `plugins.*` в конфиге, `RuntimeSettings.plugins`,
+`/api/v2/plugins*`, CLI `synth plugin *`, типов trust-уровней, матрицы install-policy,
+`VERDICT_INDEX`, файлового security-сканера, квот сканера, `content_hash`, кэша сканов,
+`quarantine/`, реестра-аудита установок. Нет и **точек расширения** под новые сценарии: реестра
+провайдеров prompt-блоков (блоки собираются хардкодом через `extraBlocks.push(...)` в
+`packages/core/src/engine/context/composer.ts`), нет и реестра LLM-фильтров.
+
+**Почему не «просто форк ядра».** Форк разрывает обновления, не даёт аудита, не позволяет админу
+управлять набором расширений и превращает каталог в канал произвольного исполнения. Расширение
+должно быть: (а) версионированным контрактом, (б) с явной границей прав, (в) с обязательным
+trust/scan, (г) с проверяемым составом вкладов.
+
+## Решение
+
+1. **Форма слоя — полный in-process SDK.** Манифест `synth.pack` (`kind: "plugin"`), загрузчик
+   `PluginHost` (resolve → integrity → semver-гейт → trust/scan → политика режима → import → facade →
+   сбор disposers → аудит), фасад `@itphx/synth-plugin` с disposer-моделью, bundle-only дистрибуция,
+   trust/scan по [PROP-068](./prop-068-skills-agents-registry.md). Плагин — код в процессе core.
+2. **Два режима исполнения.** `inline` (код в процессе core) **и** `out-of-process` (отдельный
+   процесс, локальный HTTP-протокол). Один контракт точки расширения — два транспорта. Образец в
+   коде — `ExecutionPort` ([ADR-077](./adr-077-runtime-toolchain.md)): порт в core, реализации
+   `InlineExecutionPort` и удалённая через `@itphx/synth-executor` (HTTP/1.1 + JSON, bearer-токен из
+   файла, `POST /exec` / `GET /capabilities` / `GET /health`, `EXECUTOR_PROTOCOL_VERSION = 1`).
+   **Wire-протокол плагина — HTTP/1.1 + JSON** (по образцу исполнителя), а **контракт протокола
+   живёт в `@itphx/synth-shared`**; отдельный пакет `@itphx/synth-plugin-protocol` **не создаётся**
+   (§7).
+3. **Право вето — только у доверенных.** Фильтр с вердиктом `deny` разрешён только плагинам с
+   trust ≥ `trusted` (или `builtin`). Плагины уровня `community` могут только наблюдать (аудит,
+   метрики, сигнал), но не блокировать.
+4. **Первая волна — полный контур.** Каркас (манифест + загрузчик + реестр + аудит активации), две
+   новые точки расширения (`promptBlocks`, `llmFilters`), контрактный suite расширений, модель
+   доверия ([PROP-068](./prop-068-skills-agents-registry.md)), API/CLI/UI управления плагинами.
+5. **[PROP-047](./prop-047-memory-gbrain.md) переписывается под слой плагинов** (отдельная задача):
+   `MemoryProvider` — контракт, доставляемый плагином.
+6. **Работа ведётся в ветке `feature/plugin-layer`** (worktree `wt-plugins`, от `master`).
+
+### Что меняется против прежней редакции
+
+| Аспект | Было (2026-10-12, отложено 2026-10-19) | Стало (2026-10-22) |
+|---|---|---|
+| Статус/срок | 🧊 Icebox, срок снят | 🧩 Предложение, `Решение до: 2026-11-14` |
+| Форма | in-process SDK | in-process SDK **+** out-of-process (второй транспорт) |
+| Точки | 12 (11 с seam'ом + отложенный UI-slot) | **14**: 12 прежних + `promptBlocks` + `llmFilters` |
+| Доверие | «наследует модель контента», свой части нет | Явная иерархия, матрица install-policy с ячейкой `kind: "plugin"`, trust-floor `trusted`, отдельный журнал аудита плагинов |
+| Семвер-гейт | `contracts: "1"` (строка) | `contracts` — semver-мажор контракта точки расширения |
+| Аудит | «в audit log PROP-068» | Отдельный порт `PluginAuditRepository` + `{dataDir}/audit/plugins.jsonl` (семантика `SECURITY_AUDIT_SCOPES` — «изменение политики» — не подходит) |
+| Манифест | `provides` без описания новых видов вкладов | `provides.tools[]`, `provides.promptBlocks[]`, `provides.llmFilters[]`, `mode`, `permissions`, `trust` — явными Zod-схемами |
+| Фазы | Ф0–Ф5 (Ф0 отдельно не делался) | Ф0–Ф7 с критерием приёмки для каждой |
+| Гибрид | Уровень 2 «проектируем сразу» | Уровень 2 — **вне первой волны** (Ф7) |
+
+## Классы расширений
+
+Классы разведены в [ADR-086](./adr-086-extensibility-plugins-editions.md) (§1) — здесь только
+отличие плагина, без дублирования.
 
 | Класс | Что запускается | Носитель | Контракт с Synth |
 |---|---|---|---|
-| **Plugin** | код **в процессе core**, встроенный в его поток обработки | self-contained bundle (JS), грузится `import()` | Extension API v1: манифест `synth.pack`, интерфейс `SynthPlugin`, точки расширения; подчиняется permission-слою/Gateway/FileStore |
+| **Plugin** | код, исполняемый **в процессе core** — `inline` **или** отдельный процесс (`out-of-process`) | self-contained bundle (JS) + манифест | Extension API v1: манифест `synth.pack`, интерфейс `SynthPlugin`, точки расширения; подчиняется permission-слою/Gateway/портам хранилища |
 | **Gateway** | **внешний сервис-транспорт** внешний мир ↔ Synth (двусторонний) | образ + `docker-compose`/Helm | API v2 / MCP / внешние события ([ADR-089](./adr-089-external-events-automation.md)); контракт — [ADR-087](./adr-087-gateways.md) |
-| **Add-on** | **внешний сервис** иного назначения — свой процесс/контейнер/репозиторий | образ + `docker-compose`/Helm | API v2 / MCP / внешние события ([ADR-089](./adr-089-external-events-automation.md)); эталон — `synth-media` |
-| **Контент-пак** (Declarative) | ничего (данные, без кода) | файлы контента + `synth.pack` | скиллы/команды ([ADR-046](./adr-046-skills-and-slash-commands.md)), агенты, MCP-сервера ([ADR-071](./adr-071-mcp-servers-prompt.md)), темы/i18n/провайдеры/промпты/automation/policies/memory/ui ([PROP-068](./prop-068-skills-agents-registry.md)) |
+| **Add-on** | **внешний сервис** иного назначения — свой процесс/контейнер | образ + `docker-compose`/Helm | API v2 / MCP / внешние события; эталон — `synth-media` |
+| **Storage-драйвер** | драйвер слоя хранения | пакет | порты [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md) |
+| **Контент-пак** (Declarative) | ничего (данные, без кода) | файлы контента + `synth.pack` | скиллы/команды, агенты, MCP-серверы, темы/i18n/провайдеры/промпты/policies ([PROP-068](./prop-068-skills-agents-registry.md)) |
+| **Edition** | сборка/дистрибутив продукта | репозиторий + образ | contribution flow — вне первой волны |
 
-**Определение Plugin (уточнено).** Plugin — код, исполняемый **в процессе ядра**, встроенный в его поток
-обработки; меняет поведение **синхронно, изнутри**, подчиняясь инвариантам (permissions через
-`PermissionEvaluator`, LLM через `GatewayProvider`, хранилище через `FileStore`). Это — ядро критерия выбора:
-Plugin берётся только когда изменение **обязано** быть in-process.
+**Отличие плагина от остальных — два режима исполнения.** Остальные классы не исполняются в процессе
+ядра вовсе. Плагин умеет и встраиваться в поток (`inline`), и выноситься в отдельный процесс
+(`out-of-process`) — при одном и том же контракте точки расширения.
 
-> **Gateway — не подвид Add-on'а.** Gateway — **отдельный класс** (не add-on): двусторонний транспорт внешнего
-> мира со своим контрактом адресации (`Binding`), идентичности (claim-flow, роли только сужаются), топологии
-> (один поллер на бота → `409 Conflict`; HA только через leader election) и жизненным циклом — см.
-> [ADR-087](./adr-087-gateways.md).
+## Точки расширения
 
-> **Add-on — не плагин.** Внешний сервис **не** монтируется в процесс ядра и **не** получает точек расширения
-> через Extension API: он потребляет публичные контракты (API v2/MCP/события) и не имеет доступа к internals
-> по определению. Плагин, наоборот, исполняется в процессе core и потому обязан проходить trust/scan/policy.
-> Смешение понятий («плагин-сервис», «add-on как npm-плагин», «gateway как add-on») запрещено — от него
-> расходятся модель угроз, способ установки и энфорс.
+Точки расширения — вклад **в существующие seam'ы** ядра, а не новый рантайм.
 
-**Таксономия влияния плагинов** (что именно делает in-process код):
+| # | Точка | Вклад | Seam в коде | Статус |
+|---|---|---|---|---|
+| 1 | hooks | обработчики жизненного цикла | `HookBus.on/off/emit/emitAsync` (`engine/hooks/hook-bus.ts`, [ADR-030](./adr-030-hooks-agent-events.md)) | ✅ шина есть; SDK-фасада нет |
+| 2 | tools | новые инструменты | `ToolRegistry.register/deregister/deregisterByCapability` (`engine/tools/registry.ts`) | ✅ реестр есть |
+| 3 | providers | LLM/decision-провайдеры | `ProviderFactory`/`BaseProvider` (`providers/*`), вызов только через `GatewayProvider` ([ADR-036](./adr-036-llm-gateway.md)) | ✅ фабрика есть |
+| 4 | routes | HTTP-роуты API v2 | core-фабрики `createXxxRoutes(auth, deps, opts)` ([ADR-017](./adr-017-api-v2-hono.md)) | ✅ паттерн есть |
+| 5 | commands | slash-команды/bundles | `engine/commands/*` ([ADR-046](./adr-046-skills-and-slash-commands.md)) | ✅ |
+| 6 | skills | скиллы (механизм/каталог) | `engine/skills/*`, каталог [PROP-068](./prop-068-skills-agents-registry.md) | ✅ механизм; каталог — нет |
+| 7 | agents | определения агентов | `AgentRegistry` (`engine/agents/*`) | ✅ |
+| 8 | mcp | MCP-серверы (stdio/HTTP) | `McpRegistryStore`/`McpManager` (`engine/mcp/*`, [ADR-071](./adr-071-mcp-servers-prompt.md)) | ✅ |
+| 9 | events | источники/правила/доставка событий | `EventIngress`/`EventRouter`/`RouteRuleProvider` (`engine/events/*`, [ADR-089](./adr-089-external-events-automation.md)) | ✅ |
+| 10 | schedules | источники-расписания | `SchedulerService`/`SchedulerRuleProvider` (`engine/scheduler/*`, [ADR-051](./adr-051-scheduler-pipelines.md)) | ✅ (частично) |
+| 11 | settings | свои настройки/секция | `RuntimeSettingsStore`, паттерн `GET/PUT/DELETE /api/v2/settings/<x>` | ✅ паттерн есть |
+| 12 | UI-slot | панели/вкладки в SPA | — (seam отсутствует) | ⏳ отложено |
+| **13** | **promptBlocks** | **блоки системного промпта** | **`SystemPromptComposer._collectBlocks` (`engine/context/composer.ts:426-646`)** | **🆕 новая точка (в прежней таблице §2 её не было)** |
+| **14** | **llmFilters** | **наблюдение/фильтрация LLM-вызовов** | **`GatewayProvider._prepare` (`:377`) и `_auditCompletion` (`:453`)** | **🆕 новая точка** |
 
-1. **Contribution** — новые возможности: протокол провайдера, тул, роут, агент, команда.
-2. **Interception/transform** — вклинивание в поток: pre/post tool use, фильтр промпта/вывода, политика,
-   мультипровайдерная балансировка.
-3. **Observation/egress** — наблюдение и вывод наружу: метрики, логи, аудит.
+12 существующих точек покрывают 11 seam'ов в коде (UI-slot отложен — в SPA нет стабильной точки
+монтирования сторонних React-компонентов). Две новые точки закрывают оба запроса владельца
+(память → `promptBlocks`; фильтрация вызовов → `llmFilters`).
 
-**Примеры выбора класса:**
+## Точка `promptBlocks`
 
-| Сценарий | Класс | Почему |
-|---|---|---|
-| Новый тип провайдера (несовместимый протокол) | **Plugin** | нужен in-process транспорт/парсинг протокола в потоке ядра |
-| OpenAI-совместимый провайдер | **декларативная запись** (не плагин) | достаточно конфигурации провайдера/модели |
-| Внешний фильтр/антивирус | **Plugin** | синхронная трансформация потока (interception) |
-| Мультипровайдерный балансировщик | **Plugin** | вклинивание в выбор провайдера внутри ядра (для чисто сетевого egress-прокси — [PROP-088](./prop-088-http-proxy.md), не плагин) |
-| Экспорт логов и метрик | **Plugin** | always-on egress из процесса ядра, настроен админом (не опциональный внешний процесс); приёмник/коллектор — внешний **Add-on**-сервис |
-| Кастомный context-optimizer / guard / policy-provider / executor | **Plugin** | внутренние реестры и синхронная логика ядра |
+**Зачем.** Единственная точка сборки system-промпта — `SystemPromptComposer`
+(`packages/core/src/engine/context/composer.ts:277`): публичные `compose()` (`:294`) и
+`manifest()` (`:326`), приватный `_collectBlocks()` (`:426-646`). Модель блока —
+`packages/core/src/engine/context/prompt-blocks.ts:12-23`:
+`PromptBlock { key, tier: 'stable'|'context'|'volatile', order, content, provenance?, status? }`,
+тиры `TIER_ORDER` (`:25-29`), сортировка `sortPromptBlocks` (`:35`), склейка `joinPromptBlocks` (`:45`).
+Сейчас блоки собираются **хардкодом** (`extraBlocks.push({ key, tier, order, content, provenance })`),
+реестра провайдеров нет.
 
-**Правило выбора:** **по умолчанию — Gateway/Add-on** (внешний сервис); **Plugin — только если нужен in-process**
-(синхронная трансформация потока, внутренние реестры, производительность).
-
-## 2. Точки расширения
-
-Точки расширения Extension API v1 — вклад **в существующие seam'ы** ядра, а не новый рантайм:
-
-| Точка | Вклад | Существующий seam в коде | Статус |
-|---|---|---|---|
-| hooks | обработчики жизненного цикла | `HookBus.on/off/emit/emitAsync` (`engine/hooks/hook-bus.ts`, [ADR-030](./adr-030-hooks-agent-events.md)) | ✅ шина есть; SDK-фасада нет |
-| tools | новые инструменты | `ToolRegistry.register/deregister/deregisterByCapability` (`engine/tools/registry.ts`), `source: 'builtin'\|'mcp'` | ✅ реестр есть |
-| providers | LLM/decision-провайдеры | `ProviderFactory`/`BaseProvider` (`providers/*`), вызов только через `GatewayProvider` ([ADR-036](./adr-036-llm-gateway.md)) | ✅ фабрика есть |
-| routes | HTTP-роуты API v2 | core-фабрики `createXxxRoutes(auth, deps, opts)`, монтирование `server/app.ts` ([ADR-017](./adr-017-api-v2-hono.md)) | ✅ паттерн есть |
-| commands | slash-команды/bundles | `engine/commands/*` ([ADR-046](./adr-046-skills-and-slash-commands.md)) | ✅ |
-| skills | скиллы (механизм/каталог) | `engine/skills/*` ([ADR-046](./adr-046-skills-and-slash-commands.md)), каталог [PROP-068](./prop-068-skills-agents-registry.md) | ✅ механизм; каталог — нет |
-| agents | определения агентов | `AgentRegistry` (`engine/agents/*`) | ✅ |
-| mcp | MCP-серверы (stdio/HTTP) | `McpRegistryStore`/`McpManager` (`engine/mcp/*`, [ADR-071](./adr-071-mcp-servers-prompt.md)) | ✅ |
-| events | источники/правила/доставка событий | `EventIngress`/`EventRouter`/`RouteRuleProvider` (`engine/events/*`, [ADR-089](./adr-089-external-events-automation.md)) | ✅ |
-| schedules | источники-расписания | `SchedulerService`/`SchedulerRuleProvider` (`engine/scheduler/*`, [ADR-051](./adr-051-scheduler-pipelines.md)) | ✅ (частично) |
-| settings | свои настройки/секция | `RuntimeSettingsStore`, паттерн `GET/PUT/DELETE /api/v2/settings/<x>` + guard + live-apply | ✅ паттерн есть |
-| UI-slot | панели/вкладки в SPA | — (seam отсутствует) | ⏳ отложено |
-
-**Вывод:** **11 из 12** точек уже имеют seam в коде. Значит, Extension API v1 нужен **манифест + загрузчик +
-trust/install/activate**, а не новый рантайм: плагин — это упорядоченный набор регистраций через фасад над
-существующими реестрами. UI-slot осознанно отложен (в SPA нет стабильной точки монтирования сторонних
-React-компонентов; до неё — только декларативные вклады и админ-секции).
-
-## 3. Манифест плагина — единый `synth.pack`
-
-Манифест — файл **`synth.pack`** (JSON) в корне репозитория расширения (единый формат для всех классов;
-для плагина `kind: "plugin"`). npm-плагин кладёт `synth.pack` в `files` пакета, чтобы он попал в публикуемый
-артефакт; `package.json` остаётся обычным npm-манифестом и **не** является каноническим манифестом расширения
-(поле `synth` в `package.json` больше не используется).
-
-```json
-{
-  "name": "@acme/synth-plugin-slack",
-  "version": "1.2.0",
-  "kind": "plugin",
-  "host": "^0.9.0",
-  "contracts": "1",
-  "description": "Slack-интеграция: тул, команда, хуки, settings-секция",
-  "provides": {
-    "hooks": ["pre_tool_use", "post_tool_use", "session_end"],
-    "tools": ["slack_notify"],
-    "commands": ["slack-post"],
-    "routes": false,
-    "providers": false,
-    "settings": ["slack"]
-  },
-  "permissions": {
-    "tools": ["slack_notify"],
-    "hooks": ["pre_tool_use"],
-    "settings": ["slack"],
-    "network": ["hooks.slack.com"]
-  }
-}
-```
-
-| Поле | Смысл |
-|---|---|
-| `name` | Имя расширения (npm-имя для плагина; идентификатор для остальных классов) |
-| `version` | SemVer расширения |
-| `kind` | Класс: `plugin` \| `gateway` \| `addon` \| `pack` \| `storage` (для `pack` дополнительно `packType`; `storage` — драйвер слоя хранения, [ADR-097](./adr-097-storage-provider-class.md)) |
-| `host` | Диапазон версий Synth (host-приложения), semver-range — как `engines` |
-| `contracts` | Версия контракта Extension API (semver-major-совместимость; сейчас `"1"`) |
-| `description` | Краткое описание (инспекция/каталог) |
-| `provides` | Декларация вкладов (что регистрирует) — для инспекции/аудита и permission-резолвинга |
-| `permissions` | Явные запросы (тулы, хуки, настройки, сеть); **без** совпадения с фактическими регистрациями плагин отвергается |
-
-`peerDependencies` с `@itphx/synth-plugin` остаётся в `package.json`: типы SDK и рантайм-фасад берутся из хоста.
-
-**Bundle-only (обязательно).** Плагин распространяется как **self-contained бандл** (сборка `esbuild`/`tsup`):
-все зависимости, кроме `@itphx/*`, вшиты в бандл. `@itphx/*` — **external (peer)**: типы и рантайм-фасад
-приходят из процесса core, дублировать их в бандле нельзя. **Runtime-резолв npm-зависимостей не выполняется**:
-ноль runtime-пакетного менеджера — `import()`-загрузчик не ходит в npm/registry за зависимостями. Это
-исключает «плагин как зависимость, которая тянет транзитивное дерево» и делает установку воспроизводимой
-(один файл-бандл + манифест + хеш).
-
-## 4. SDK: `@itphx/synth-plugin`
-
-Публичный SDK — отдельный пакет (`@itphx/synth-plugin`, [ADR-038](./adr-038-npm-packages.md)), тонкий фасад
-над точками расширения core:
+### Контракт `PromptBlockProvider`
 
 ```typescript
-// @itphx/synth-plugin (скетч)
-export interface SynthPlugin {
-  readonly apiVersion: 1;
-  readonly log: PluginLogger;                       // scoped-логгер (префикс plugin:<name>)
-  hooks: {
-    on<K extends HookName>(name: K, handler: HookHandler<K>, opts?: { priority?: number; mode?: HookMode }): Disposer;
-  };
-  tools: { register(def: PluginToolDefinition): Disposer };
-  commands: { register(def: PluginCommandDefinition): Disposer };
-  routes: { register(def: PluginRouteDefinition): Disposer };
-  providers: { register(def: PluginProviderDefinition): Disposer };
-  settings: { register(section: PluginSettingsSection): Disposer };
-  events: { registerSource(def: PluginEventSourceDefinition): Disposer };
+/** Провайдер блока системного промпта (точка расширения `promptBlocks`). */
+export interface PromptBlockProvider {
+  /** Ключ блока. Уникален в инстансе; для плагина — `plugin.<pluginName>.<slot>`. */
+  readonly key: string;
+  /** Тир блока. `stable` ЗАПРЕЩЁН (граница prompt-cache, см. ниже). */
+  readonly tier: 'context' | 'volatile';
+  /** Порядок внутри тира. */
+  readonly order: number;
+  /** Человекочитаемая подпись для манифеста промпта (в `PROMPT_BLOCK_LABELS`). */
+  readonly title?: string;
+  /** Содержимое блока. `null`/`''` — блок пуст (в манифесте `status: 'empty'`). */
+  load(ctx: PromptBlockContext): Promise<PromptBlockContent | null> | PromptBlockContent | null;
 }
 
-export type Disposer = () => void | Promise<void>;
-
-export interface PluginToolDefinition {
-  name: string;                                     // обязателен префикс/namespace (напр. slack_notify)
-  description: string;
-  parameters: z.ZodTypeAny;                         // zod, как у встроенных тулов
-  capabilities: ToolCapability[];                   // доступность — по capability (ADR-071)
-  execute: (params: unknown, ctx: ToolContext) => Promise<ToolResult>;
+/** Узкий контекст вызова — без портов и функций (см. §7). */
+export interface PromptBlockContext {
+  readonly sessionId: string;
+  readonly agentRole: string;
+  readonly language: string;
+  readonly projectId?: string;
+  readonly mode: 'plan' | 'act' | 'yolo';
+  /**
+   * Текст последнего сообщения пользователя — то, по чему идёт retrieval.
+   * Не задан — «вопроса хода» нет (саб-агент `task`, шаг пайплайна).
+   */
+  readonly query?: string;
+  /** Идентификатор хода (`streamId`) — для мемоизации/кэша провайдера. */
+  readonly turnId?: string;
+  /** Метка времени хода (ISO 8601) — для оценки «свежести» фактов. */
+  readonly timestamp?: string;
 }
 
-/** definePlugin — точка входа: apply вызывается загрузчиком один раз при активации. */
-export function definePlugin(apply: (synth: SynthPlugin) => void | Promise<void>): PluginModule;
-
-export interface PluginModule { apply: (synth: SynthPlugin) => void | Promise<void>; }
+export interface PromptBlockContent {
+  content: string;
+  provenance?: string;
+  status?: 'loaded' | 'empty' | 'truncated';
+}
 ```
 
-Правило: **каждый `register()`/`on()` возвращает disposer** — ровно как `HookBus.on → off`. Загрузчик
-накапливает disposers и при выключении/reload вызывает их **в обратном порядке** (обратная прокрутка),
-гарантируя, что плагин не оставит за собой зарегистрированных тулов/хуков/роутов.
+### Откуда берётся `query` (контекст текущего хода)
 
-**Чего SDK НЕ выдаёт.** Фасад намеренно узкий — плагин **не получает**:
-- прямой `FileStore`/`JsonStore`/`ProjectStore`/`SessionManager` (доступ к данным — только через свои
-  точки и permission-слой; запись в `$SYNTH_DATA_DIR` мимо `FileStore` запрещена, [ADR-005](./adr-005-json-storage.md));
-- прямой `GatewayProvider`/`ProviderFactory` «в обход» (LLM-вызовы плагина, если он их делает, идут только
-  через `GatewayProvider`, [ADR-036](./adr-036-llm-gateway.md));
-- `PermissionEvaluator` (нельзя «одобрить» тул в обход permission-слоя, [ADR-025](./adr-025-plan-act-toggle.md)/[ADR-028](./adr-028-plan-build-strictness.md)/[ADR-029](./adr-029-granular-permissions.md));
-- произвольный доступ к реестрам ядра и внутренним модулям (`engine/*`, `server/*`) — только объявленные
-  методы фасада.
+**Проблема, которую закрывает `query`.** Блок тира `volatile` объявлен как «релевантное текущему
+ходу», но без текста текущего сообщения пользователя провайдер не может ни понять, что релевантно,
+ни выполнить retrieval — сценарий плагина-памяти «подкинуть агенту факты по текущему вопросу»
+([PROP-047](./prop-047-memory-gbrain.md)) на тире `volatile` без `query` нерабочий. Поэтому `query` —
+**часть контракта**, а не деталь реализации.
 
-## 5. Установка (install)
+**Источник в коде.** Ход инициируется сообщением: это `message` в `ProcessSetupArgs`
+(`packages/core/src/engine/orchestrator/phases/process-setup.ts:66`), далее
+`_processMessage(session, message, …)` (`packages/core/src/engine/orchestrator.ts:2331-2337`).
+Текст — `Message.content` (`packages/shared/src/types/message.ts:47`); в LLM уходит **тот же**
+текст: история для запроса формируется `ChatOrchestrator._sessionMessagesToLlm`
+(`packages/core/src/engine/orchestrator.ts:3711` → `sessionMessagesToLlm`,
+`packages/core/src/engine/orchestrator/prompt-info.ts:26-130`, `msg.content`) и собирается в
+`process-setup.ts:463-464`. Контекст Composer'а собирается в той же фазе setup:
+`deps.buildComposerContext({…})` (`process-setup.ts:388-409`) →
+`ChatOrchestrator._buildComposerContext` (`packages/core/src/engine/orchestrator.ts:1117-1181`) →
+`deps.composer.compose(composerCtx)` (`process-setup.ts:410`); там же `message` уже используется
+для `interviewEligible` (`:404`) и `schedulerCurrentTurn` (`:408`) — то есть **для контекста хода
+сообщение доступно без новых источников**.
 
-Раскладка (home-модель [ADR-079](./adr-079-local-home-independent-instances.md); без home — `{dataDir}/plugin/`):
+**Что уходит в провайдера.** Только узкий DTO (`PromptBlockContext`); история сессии
+(`ComposerContext.historyMessages`, `orchestrator.ts:1156`) наружу не отдаётся — иначе контракт
+перестаёт быть сериализуемым (§7) и провайдер получал бы весь диалог вместо вопроса.
 
-```
-<home>/plugin/
-├── installed/
-│   └── <name>@<version>/          # распакованный self-contained бандл + манифест
-│       ├── synth.pack             # манифест расширения (kind: plugin)
-│       ├── dist/index.js          # бандл (все зависимости внутри, @itphx/* — external)
-│       └── PLUGIN_INTEGRITY.json   # {sha256, source, fetched_at}
-├── plugins.lock.json               # провенанс (источник истины для update/uninstall)
-└── plugins.json                    # runtime-override включения/настроек (см. §6)
-```
+### Реестр в `SystemPromptComposer`
 
-**Источники установки:**
+- **Где.** Новая приватная коллекция провайдеров в `SystemPromptComposer` + вызов из
+  `_collectBlocks()` — **перед** `return [...baseBlocks, ...extraBlocks];`
+  (`packages/core/src/engine/context/composer.ts:645`). Блоки плагинов попадают в тот же массив,
+  что и builtin-блоки, и проходят тот же `sortPromptBlocks` → один манифест, одна склейка.
+- **Порядок обхода.** Провайдеры обходятся в порядке регистрации; итоговый порядок определяется
+  `sortPromptBlocks` (тир → `order`). При равных `order` порядок регистрации сохраняется (сортировка
+  стабильная) — поэтому регистрация должна быть детерминированной.
+- **Подпись в манифесте.** `PROMPT_BLOCK_LABELS` (`composer.ts:37-62`) сейчас **не экспортируется**;
+  при неизвестном ключе подставляется сам `key` (`composer.ts:335`). Для плагинных блоков добавляется
+  явная запись (`plugin.<name>`), иначе в манифесте будет сырой ключ. Тип `PromptManifestStatus`
+  переиспользуется (`packages/shared`), новых статусов не вводится.
+- **Регистрация.** Провайдер регистрируется через фасад (`synth.promptBlocks.register(...)`) и
+  возвращает disposer. Регистрация с `tier: 'stable'` — **отказ** (ошибка активации, не тихое
+  понижение до `context`).
 
-| Источник | Описание | Trust-дефолт |
+### Шов `PromptBlockProvider` — проектируется и реализуется
+
+**Шов проектируется как `PromptBlockProvider`** — реестр провайдеров в `SystemPromptComposer`
+(см. §«Реестр в `SystemPromptComposer» выше); реализация — **Ф3** (контракт, реестр, правила
+тиров/порядка/инвалидации/деградации). Это **не** отдельная точка расширения: `PromptBlockProvider` —
+контракт **внутри** точки `promptBlocks`, а не шестая/пятнадцатая точка.
+
+**Расхождение в документации пакета — правится в Ф3.** Строка `packages/core/AGENTS.md:410`
+утверждает, что в `composer.ts` есть «`ContextSource`-шов `{ key, load(ctx) }`». **Это не
+соответствует коду:**
+
+| Что | Где | Что там на самом деле |
 |---|---|---|
-| `npm` | опубликованный пакет (pull бандла; **не** резолвит зависимости) | по записи/источнику ([PROP-068](./prop-068-skills-agents-registry.md)) |
-| `local` | локальный каталог/бандл | `community` |
-| `builtin` | в составе поставки Synth (management/core-плагины) | `builtin` |
-| `catalog` | каталог плагинов [PROP-068](./prop-068-skills-agents-registry.md) (индекс, провенанс, подписи) | по trust-уровню записи |
+| `ContextSource` | `packages/shared/src/types/provider.ts:64` | **метаданные модели**: `'api' \| 'reference' \| 'manual' \| 'unknown'` — к промпт-блокам отношения не имеет |
+| Шов промпт-блоков | `packages/core/src/engine/context/composer.ts` | **реестра нет**: блоки собираются хардкодом (`extraBlocks.push(...)`), `_collectBlocks` (`:426-646`) — приватный метод без внешней точки регистрации |
 
-**Integrity:** sha256 содержимого бандла фиксируется при install (`PLUGIN_INTEGRITY.json` + запись в
-`plugins.lock.json`); на активации хеш перепроверяется. Несовпадение — отказ.
+То есть шов `{ key, load(ctx) }` в коде **отсутствует**, а имя `ContextSource` уже занято другим
+типом. Поэтому: контракт точки — **`PromptBlockProvider`** (имя не переиспользует `ContextSource`),
+реализуется в **Ф3**, а строка `packages/core/AGENTS.md:410` приводится в соответствие **в рамках
+Ф3** (правка инструкций согласовывается с владельцем отдельно — на момент написания документа
+она не внесена).
 
-**Lock — источник истины.** `plugins.lock.json` хранит на плагин: `{name, version, source, identifier,
-trust_level, scan_verdict, content_hash, ref, entry, installed_at, updated_at}` — update/uninstall идут
-только по записи lock (pin обязателен, §15). **CLI:**
+### Правила
 
+| Правило | Формулировка |
+|---|---|
+| Тир `stable` | **Запрещён.** `stablePrefix` = склейка **только** stable-блоков (`composer.ts:297-299`); вторая граница кэша — `stableToolCount` (`engine/orchestrator/phases/process-setup.ts:478`). Плагинный блок в `stable` ломал бы prompt-cache и инвалидировал бы префикс на каждой сборке. |
+| Тиры `context`/`volatile` | Разрешены. `context` — зависит от проекта/сессии (инструкции, память), `volatile` — меняется каждый ход (сводка, состояние). |
+| Контекст хода (`query`) | `query` — **текст последнего сообщения пользователя**, по которому идёт retrieval. Заполняет хост: сообщение, которым инициирован ход (`ProcessSetupArgs.message`, `engine/orchestrator/phases/process-setup.ts:66`; текст — `Message.content`, `shared/src/types/message.ts:47`), ровно тот же текст, что уходит в LLM (`sessionMessagesToLlm`, `process-setup.ts:464` → `engine/orchestrator/prompt-info.ts:26-130`). История в контекст **не** попадает — провайдер получает вопрос, а не диалог. `turnId`/`timestamp` — метки хода (для мемоизации и «свежести» фактов), опциональны. |
+| `query` отсутствует | Саб-агент (`task` — промпт мимо Composer) и шаг пайплайна — «вопроса хода» нет. Правило: блок тира `volatile` без `query` — **пуст** (`content: ''`, `status: 'empty'`); хост **не** подставляет заглушку и **не** требует `query`. Провайдер вправе решить иначе (например, вернуть общий свод по сессии) — retrieval «по текущему вопросу» без `query` невозможен, и хост этого не проверяет. |
+| Бюджет символов блока | Retrieval может вернуть много — нужен предел. Бюджет — **в символах на блок** и это **настраиваемый параметр: по умолчанию 4 000** (`plugins.promptBlockMaxChars`; в токены переводит движок, chars-per-token). Задаётся в секции `plugins.*` конфига ([ADR-023](./adr-023-configuration.md)) **и** в runtime-настройках `GET/PUT/DELETE /api/v2/settings/plugins` (§11) — runtime-override приоритетнее конфига. Провайдер **обязан** уложиться; не уложился — **хост** обрезает (голова+хвост, маркер усечения) и ставит `status: 'truncated'` (статус уже есть в `PromptBlockContent`). Образец — `ContextBuilder`: `waterFillAllocate` (`engine/context/instructions.ts:373`) + `truncateHeadTail` (`:426`) + маркер `buildTruncationMarker` (`:418`). |
+| Порядок | `order` — число внутри тира; tie-break — порядок регистрации. Встроенные блоки занимают `order` 5–90 (`role` 10, `additional` 20, `profile` 10, `project.info` 20, `sticky` 10, `participants` 20, `summary` 30, `interview` 90 — `engine/context/builder.ts:137-144`; в `_collectBlocks`: `override` 5, `gateway` 30, `plan.guide` 40, `mode.policy` 45, `skills.catalog` 35, `skills.catalog.session` 55, `instructions` 15, `scheduler` 16, `scheduler.turn` 40, `mcp.servers` 50, `mcp.status` 70, `tools.guide` 25, `classification` 80, `session.info` 30). Плагинные блоки рекомендуется ставить в `order ≥ 100`, чтобы не спорить со встроенными. |
+| `provenance` | **Обязателен** для плагинного блока (рекомендуемое значение `plugin:<name>`) — по нему видно источник в манифесте и в `debug`-сборке. |
+| Инвалидация состояния | Плагинный блок учитывается в `session.promptStates[agentKey]` (`engine/context/prompt-state.ts`: `agentKeyOf:21`, `buildPromptState:41`, `isPrefixUnchanged:67`, `isBlockChanged:84`). Так как блок лежит вне `stable`, смена его содержимого не видна `isPrefixUnchanged` — нужен **отдельный** трек по образцу `instructions`: `isBlockChanged(prev, blocks, key)` (`process-setup.ts:440`) с добавлением плагинных ключей в отслеживаемые. Запись состояния — только при смене generation (`reason` = `init\|generation-change\|override`, `process-setup.ts:427-453`). |
+| Деградация | Ошибка провайдера (`throw`) → `warning` в лог → блок пуст (`content: ''`), **ход не падает**. Образец: `orchestrator.ts:1399-1402` (warn → `undefined`). |
+| Override `session.settings.systemPrompt` | Override **заменяет базу целиком** (`composer.ts:435-449`): при нём не добавляются `skills.catalog*`, `instructions`, `scheduler*`. Плагинные блоки в override-режиме **тоже не добавляются** (то же правило: пользовательский промпт заменяет всё). В провайдер уходит `stablePrefix: undefined` (`process-setup.ts:414-420`). |
+| Саб-агент `task` | **Известное ограничение.** Тул `task` собирает промпт **мимо Composer** (`engine/tools/task/tool.ts:114-218`, `engine/tools/task/prompt.ts:21`) — плагинная память в саб-агента не попадёт без отдельной правки (вне Ф3). |
+| Шаг пайплайна | Идёт **через Composer**, но с суженным контрактом `ComposerSessionLike = { settings: { agentRole, language }, promptStates: {}, projectId? }` (`engine/pipelines/executors/agent-step.ts:534-559`, `buildStepSessionLike` `:799-809`). Провайдер, которому нужен `sessionId`/полный `Session`, в шаге пайплайна получит суженный контекст: `sessionId` — идентификатор шага `pipeline:<runId>:<nodeId>` (тот же, что в `cacheKey`, `agent-step.ts:565`), `mode` — режим шага `ctx.mode` = `spec.mode` (`plan`/`act`/`yolo`, `engine/pipelines/step-context.ts:139`), `agentRole`/`language`/`projectId` — из контекста шага; **`query`/`turnId`/`timestamp` не заполняются** — у шага нет «сообщения пользователя» (задание узла + вход шага — не запрос), см. правило «`query` отсутствует». |
+| Паритет «манифест ↔ байты» | Покрыт тестом `engine/context/composer.test.ts:315-345` — новый путь не должен его ломать. |
+
+### Критерии приёмки точки
+
+1. Плагин с одним `promptBlocks`-провайдером подключается, и его блок виден в `compose().blocks` и в
+   `manifest()` (запись `source: 'system'`, `provenance: 'plugin:<name>'`).
+2. Провайдер с `tier: 'stable'` отклоняется на регистрации с понятной причиной; активация плагина
+   при этом не «падает вслед» — остальные точки регистрируются, плагин помечается частично-активным.
+3. Ошибка провайдера не роняет ход: в лог — `warning`, блок пуст, `compose()` отдаёт результат.
+4. Смена содержимого блока инвалидирует `promptStates` (проверяется тестом на `isBlockChanged` по
+   образцу `instructions`).
+5. При `session.settings.systemPrompt` блок плагина в промпт не попадает, `stablePrefix` в провайдер
+   не уходит.
+6. Тест паритета «манифест ↔ отправленные байты» (`composer.test.ts:315-345`) остаётся зелёным.
+7. `query` доходит до провайдера: тест, что в `PromptBlockContext` есть текст последнего
+   сообщения пользователя (источник — `ProcessSetupArgs.message`); при его отсутствии (шаг
+   пайплайна, саб-агент) поведение согласовано — блок `volatile` пуст, ход не падает.
+8. Блок длиннее бюджета символов обрезается с маркером усечения и `status: 'truncated'`
+   (образец — `truncateHeadTail`, `engine/context/instructions.ts:426`).
+
+## Точка `llmFilters`
+
+**Зачем.** Сторонним системам (мониторинг, аналитика, антивирус, DLP) нужен наблюдаемый вход в
+поток LLM-вызовов. Сегодня `GatewayProvider` — закрытый слой: `chat` (`:128`), `chatAsync` (`:189`),
+`embed` (`:269`), `decide` (`:280`), `listModels` (`:369`); публичной точки вмешательства нет.
+
+### Контракт `LlmCallFilter`
+
+```typescript
+/** Фильтр LLM-вызовов (точка расширения `llmFilters`). */
+export interface LlmCallFilter {
+  /** Идентификатор фильтра: `plugin:<pluginName>:<filterName>`. */
+  readonly id: string;
+  /** Фаза: до запроса провайдеру, после ответа или эмбеддинги. */
+  readonly phase: 'pre_request' | 'post_response' | 'embedding';
+  /** Поведение при ошибке/таймауте: `closed` — блокировать, `open` — пропустить. */
+  readonly failMode: 'open' | 'closed';
+  /** Бюджет времени на вызов, мс. Не задан — берётся из политики плагинов. */
+  readonly timeoutMs?: number;
+  /** Проверка. Возвращает вердикт. */
+  inspect(input: LlmFilterInput): Promise<LlmFilterVerdict> | LlmFilterVerdict;
+}
+
+/** Вход фильтра — узкий DTO (без портов и функций). */
+export interface LlmFilterInput {
+  readonly phase: 'pre_request' | 'post_response' | 'embedding';
+  readonly provider: string;
+  readonly model: string;
+  readonly sessionId?: string;
+  /** `pre_request`: сообщения запроса. */
+  readonly messages?: readonly LLMMessage[];
+  /** `pre_request`: системный промпт. */
+  readonly systemPrompt?: string;
+  /** `post_response`: полный текст ответа. */
+  readonly content?: string;
+  /** `post_response`: расход токенов. */
+  readonly usage?: TokenUsage;
+  /** `embedding`: тексты, уходящие в эмбеддинг (для одиночного вызова — массив из одного). */
+  readonly texts?: readonly string[];
+}
+
+export interface LlmFilterVerdict {
+  /** `allow` — пропустить; `deny` — заблокировать вызов; `redact` — заменить содержимое. */
+  readonly verdict: 'allow' | 'deny' | 'redact';
+  /** Человекочитаемая причина (попадает в аудит и в текст ошибки). */
+  readonly reason?: string;
+  /** Машиночитаемый код причины. */
+  readonly code?: string;
+  /** Новое содержимое — только для `redact` в `post_response`. */
+  readonly redactedContent?: string;
+  /** Новые тексты — только для `redact` в `embedding`. */
+  readonly redactedTexts?: readonly string[];
+}
 ```
-synth plugin install <id> [--ref <sha|tag>] [--force]
-synth plugin enable <name>
-synth plugin disable <name>
-synth plugin list
-synth plugin inspect <name>          # манифест, trust, scan, hash, contributes
-synth plugin update [<name>]         # по pinned ref/hash; явно
-synth plugin remove <name>
-```
 
-## 6. Активация (activate) и жизненный цикл
+Типы `LLMMessage`/`SystemPromptInput`/`SystemPromptPayload`/`CancellationToken` —
+`packages/core/src/providers/base.ts:151-231`; `LLMChunk`/`LLMResponse`/`TokenUsage` —
+`packages/shared/src/types/llm.ts:11-36`.
 
-**Включение:** `plugins.json` (runtime-override, как settings-снапшоты) + `config.plugins[]` (дефолты из
-config/Helm). Эффективный набор = merge (runtime > config > дефолт); мастер-флаг `plugins.enabled` —
-глобальный выключатель.
+### Где вклинивается
 
-**Пайплайн `PluginHost`** (активация одного плагина):
+| Фаза | Seam | Что видит фильтр | Влияние на вызов |
+|---|---|---|---|
+| `pre_request` | `GatewayProvider._prepare` (`packages/core/src/engine/gateway/gateway-provider.ts:377-435`) — **после** карты обфускации (`:386` rate-limit по user, `:390` rate-limit по provider, `:395` `runInputGuard`, `:411` сохранение карты, `:415-425` blocked) | обфусцированные сообщения, системный промпт, tools, `provider`/`model`/`sessionId` | `deny` → вызов не уходит провайдеру; причина — в аудит gateway и в текст ошибки |
+| `post_response` | `GatewayProvider._auditCompletion` (`:453-492`) — **после** output-guard | полный текст ответа, `usage` | первая волна — **только аудит/наблюдение**, блокировки нет (см. ограничение по стриму) |
+| `embedding` | `GatewayProvider.embed` (`:269`) — **новая ветка `_prepareEmbedding`**, до `_inner.embed` | тексты к эмбеддингу (`texts`), `provider`/`model` | `deny` → эмбеддинг не уходит провайдеру; `redact` → тексты заменяются на `redactedTexts` до вызова |
 
-1. **resolve** — найти установленный бандл + манифест (по `plugins.lock.json`).
-2. **integrity** — сверить sha256 с lock/`PLUGIN_INTEGRITY.json`.
-3. **semver-гейт** — `synth.pack`-поле `contracts` совместимо и `host` покрывает текущую версию Synth; иначе —
-   отказ с причиной `plugin.host_incompatible`. Файл **exact-исключений** (аналог peer-gate) позволяет
-   точечно разрешить конкретную пару `plugin@version ↔ host@version` (формат — открытый вопрос, §16).
-4. **trust/scan** — trust-резолвинг и статический сканер ([PROP-068](./prop-068-skills-agents-registry.md));
-   вердикт → install-policy (default-политика плагинов, §10).
-5. **политика режима** — standalone/hybrid/managed решают, **можно ли** активировать (§7–§9); в managed/
-   hybrid — allow-list/ADMIN.
-6. **import** — динамический `import()` ESM-бандла в процессе core.
-7. **facade** — `definePlugin(apply)` вызывается с фасадом `SynthPlugin`; плагин регистрирует вклады,
-   каждый возвращает disposer.
-8. **сбор disposers** — накопление в порядке регистрации.
-9. **аудит** — запись `plugin.activate` (кто, что, trust, scan, версия) в audit log ([PROP-068](./prop-068-skills-agents-registry.md)).
+Точки вызова провайдера в движке идут через `GatewayProvider` (основной ход — `orchestrator.ts:2534`,
+эскалация — `orchestrator/phases/process-finalize.ts:253`, авто-заголовок — `sessions/auto-title.ts:80`,
+debug — `orchestrator/debug.ts:92`, суммаризация — `orchestrator/summarization.ts:97` и
+`context/optimizer.ts:243,292`, субагент — `engine/tools/task/run-cycle.ts:387,1040`, шаг пайплайна —
+`engine/pipelines/executors/agent-step.ts:589`, micro-LLM — `router/micro/models/micro-llm-model.ts:61`,
+quality-check — `router/quality-checker.ts:99`, decision — `router/decision-cascade.ts:139`,
+LLM Proxy — `packages/backend/src/routes/llm.ts:283,355`).
+Точка подключения — общая, поэтому фильтр видит **все** вызовы, а не только основной ход.
 
-**Выключение/reload** — **обратная прокрутка**: вызвать все disposers в обратном порядке (снять тулы/хуки/
-роуты), затем аудит `plugin.deactivate`. Ошибка disposer не прерывает остальные (изолируется, логируется).
+**Эмбеддинги — исключение, которое закрывается в Ф3.** `GatewayProvider.embed` (`:269`) сегодня —
+прямой вызов `_inner.embed` **без** `_prepare`/`_auditCompletion` (guard, rate-limit, обфускация,
+аудит не применяются), а микро-слой (`router/micro/models/embedding-model.ts:200,218`) зовёт
+`provider.embed` напрямую через duck-типизированный `ProviderPool` — **мимо gateway вовсе**.
+Поэтому embedding-фаза фильтров без правки этих путей не заработает: см. §«Фаза `embedding`».
 
-**Hot-reload vs restart.** В standalone допустим hot-reload (deactivate → integrity/scan → activate).
-В **managed безопаснее restart** процесса/пода: активация на старте, выключение — деплоем/рестартом, без
-смены кода в живом процессе (интеграция с [PROP-082](./prop-082-full-images-deployment.md)/[PROP-077](./prop-077-runtime-toolchain.md)).
+### Фаза `embedding`
 
-## 7. Матрица режимов
+**Решение владельца (2026-10-22): эмбеддинги идут через фильтры.** Третья фаза `llmFilters` —
+`embedding`; отдельный пакет/точка расширения не нужны.
 
-| Режим | Контент-пак | Plugin | Gateway | Add-on | Кто ставит плагин | Сила энфорса |
-|---|---|---|---|---|---|---|
-| **standalone** | ✅ | ✅ | ✅ | ✅ | владелец инстанса | плагин — локальный процесс владельца; full trust-контроль локально |
-| **hybrid** | ✅ | ✅ (allow-list сервера для серверного контура; локальный — по политике) | ✅ | ✅ | владелец локально + allow-list сервера | серверный трафик — 🟢; локальный плагин — 🔴 кооперативно (§9) |
-| **managed** | ✅ | ✅ (deploy-time default; runtime-install — опция `deny` default) | ✅ | ✅ | **ADMIN** | deploy-time — 🟢 (бандл в образе/PVC); runtime-install — только ADMIN + allow-политика |
+**Seam.** Новая приватная ветка в `GatewayProvider` — `_prepareEmbedding(texts)`, вызывается из
+`embed()` **до** `_inner.embed`. В Ф3 `embed` перестаёт быть прямым вызовом `_inner.embed` и проходит
+**тот же gateway-контур**, что и chat-пути (rate-limit, guard там, где он применим к эмбеддингам,
+аудит вызова), а микро-слой перестаёт звать `provider.embed` напрямую — только
+`GatewayProvider.embed`. Иначе фильтр не увидит вызов, а инвариант 3 («любой LLM-вызов — через
+`GatewayProvider`») остался бы дырой: сегодня эмбеддинги обходят guard полностью.
 
-## 8. Managed: deploy-time и runtime-install
+**Что видит фильтр.** Тексты, уходящие в эмбеддинг (`texts` — массив; для одиночного
+`GatewayProvider.embed(text)` — массив из одного элемента), `provider`, `model`, `sessionId?`.
+Системного промпта и истории в embedding-вызове нет.
 
-Два способа поставить плагин в managed:
+**Вердикты.**
 
-**(a) deploy-time — дефолт.** Плагины перечислены в Helm-values/config, бандлы — в образе (flavor [PROP-082](./prop-082-full-images-deployment.md)) или на PVC. Активация — на старте; смена набора — деплоем.
-Это рекомендуемый путь: код плагина фиксирован вместе с деплоем, воспроизводим, аудируем.
+| Вердикт | Действие |
+|---|---|
+| `allow` | вызов идёт провайдеру как есть |
+| `deny` | эмбеддинг **не** уходит провайдеру; причина — в аудит gateway и в текст ошибки (как в `pre_request`) |
+| `redact` | тексты заменяются на `redactedTexts` **до** вызова провайдера (маскирование PII/секретов в корпусе); при несовпадении длины массивов — `deny` (fail-closed) |
 
-**(b) runtime-install — опция, по умолчанию `deny`.** Установка через API при `plugins.runtimeInstall: allow`.
-RBAC — **ADMIN**; запись под guarded `pluginsWriteGuard` (по образцу `eventsWriteGuard`/`decisionWriteGuard`,
-[ADR-089](./adr-089-external-events-automation.md)); каждая операция (install/enable/disable/update/remove) —
-в аудит. Без явного `allow` runtime-install недоступен.
+**Правило вето распространяется и сюда.** `deny`/`redact` разрешены только плагинам с trust ≥
+`trusted` — как в `pre_request` (см. §«Кто вправе блокировать»): фильтр с trust ниже порога,
+вернувший блокирующий вердикт, **понижается хостом до `allow`**, факт — в аудит.
 
-Ограничения managed:
-- **Запрет снятия builtin/management-плагинов** — аналог `protectedModules`: плагины, помеченные `builtin`
-  (в поставке) и management (нужные самому инстансу), нельзя disable/remove через API; только деплой.
-- **Reload/restart** — в managed по умолчанию **restart** (не hot-reload живого процесса): безопаснее для
-  контроля кода и воспроизводимости.
-- **Плагин — инстанс-уровневый, не per-user.** Набор плагинов один на инстанс; per-user включения нет
-  (в отличие от скиллов/scope). Доступность разделов/тулов конкретному пользователю — через RBAC/permissions,
-  а не через «личные плагины».
-- **Egress** — сетевые вызовы плагинов идут через единый egress-слой ([PROP-088](./prop-088-http-proxy.md)).
-- **Секреты** — плагин **не** читает `$SYNTH_DATA_DIR/secrets/*` напрямую; секреты выдаются через API
-  (scoped, по запросу настроек плагина), at-rest — по модели [ADR-076](./adr-076-git-repo-registry-ssh.md).
+**Деградация.** Семантика `failMode`/`timeoutMs` — общая с остальными фазами: блокирующий фильтр по
+умолчанию `failMode: 'closed'` (сбой/таймаут → эмбеддинг не выполняется, причина
+`plugin_filter_unavailable`/`plugin_filter_timeout`), наблюдательный — `'open'`.
 
-## 9. Hybrid: allow-list
+### Кто вправе блокировать
 
-В гибриде сервер и локальный core — два мира. Плагин должен явно объявлять, **какому миру он служит**
-(локальные сессии vs серверные); «мостовой» плагин, ходящий в сервер, требует серверной авторизации.
+**Решение владельца (2026-10-22): право вето — только у доверенных.**
 
-**Три уровня силы.**
+| Trust плагина | `deny` в `pre_request` | `redact` в `post_response` | `deny`/`redact` в `embedding` | Наблюдение (аудит/метрики/сигнал) |
+|---|---|---|---|---|
+| `builtin` | ✅ | ✅ | ✅ | ✅ |
+| `verified` | ✅ | ✅ | ✅ | ✅ |
+| `trusted` | ✅ | ✅ | ✅ | ✅ |
+| `community` | ❌ | ❌ | ❌ | ✅ |
+| `agent-created` | ❌ | ❌ | ❌ | ✅ |
 
-| Уровень | Что делает | Сила |
+Энфорс на стороне хоста, а не плагина: фильтр `community`-плагина, вернувший `deny`, **понижается
+хостом до `allow`**, а факт понижения пишется в аудит (`plugin_filter.deny_downgraded`) — плагин
+не может «накрутить» свой trust, потому что уровень задаёт источник/реестр
+([PROP-068](./prop-068-skills-agents-registry.md) §4.1), а не манифест. **Правило вето одинаково
+для всех трёх фаз**, включая `embedding`: блокирующий вердикт фильтра с trust ниже `trusted`
+понижается хостом до `allow` так же, как в `pre_request`.
+
+### Семантика отказа и таймаут
+
+- **По умолчанию** `failMode: 'closed'` для фильтра, который умеет `deny` (блокирующий класс): сбой
+  или таймаут → вызов **не** уходит провайдеру, причина `plugin_filter_unavailable`.
+- Для **наблюдательного** фильтра (только аудит/метрики) `failMode` по умолчанию `'open'`: сбой не
+  влияет на вызов, факт фиксируется в аудите.
+- **Таймаут** — отдельный бюджет на вызов фильтра (по умолчанию — из политики плагинов; значение
+  открытый вопрос, §14). По истечении таймаута применяется `failMode`: `closed` → блокировка с
+  причиной `plugin_filter_timeout`; `open` → вызов идёт, в аудит — `plugin_filter.timeout`.
+- **`embed` сегодня обходит guard полностью** (`gateway-provider.ts:269` — прямой вызов `_inner.embed`):
+  это дыра инварианта 3, и она **закрывается в Ф3** — `embed` получает ветку `_prepareEmbedding`,
+  embedding-фазу фильтров и общий gateway-контур (rate-limit/аудит), а микро-слой перестаёт звать
+  `provider.embed` напрямую. До Ф3 embedding-фаза фильтров **не работает** — эмбеддинги не видны
+  фильтру (см. §«Фаза `embedding`»).
+- **`config.enabled === false`** → `chat`/`chatAsync` идут в `_inner` напрямую
+  (`gateway-provider.ts:140-144`, `:201-213`): обфускация, rate-limit, аудит и payload-лог
+  **не выполняются**. Плагинные фильтры в этом режиме тоже не выполняются (единое правило: выключен
+  gateway — нет его слоёв).
+
+### Ограничение по стриму
+
+В стриме чанки отдаются как есть (`yield chunk`, `gateway-provider.ts:248`), полный текст копится в
+`accumulated` (`:246`) **только для аудита**. Блокировка или правка ответа в стриме **невозможна без
+буферизации**, а [ADR-036](./adr-036-llm-gateway.md) прямо запрещает буферы и задержки
+(«никаких буферов и задержек»). Отсюда решение первой волны:
+
+- `deny` — **только** в `pre_request` и `embedding` (в `embedding` потока нет — эмбеддинг не стримится,
+  блокировка до отправки провайдеру);
+- `post_response` — **аудит без блокировки** (наблюдение, метрики, сигнал);
+- буферизация ответа — **явная опция** (`redact`/блокировка в `post_response`) с явной ценой:
+  буферизация всего ответа + задержка первого чанка; включается только плагином с trust ≥ `trusted`
+  и только для конкретного вызова, по умолчанию **выключена**.
+
+### Чего фильтр не может
+
+- Отключить или обойти существующие guard'ы (`runInputGuard`/`runOutputGuard`).
+- Вызвать эмбеддинг мимо gateway-контура (embedding-фаза — часть gateway, инвариант 3).
+- Изменить `config.enabled` gateway.
+- Изменить карту обфускации или rate-limit.
+- Добавить свои лейблы метрик: набор имён и лейблов зафиксирован контрактом
+  [ADR-094](./adr-094-observability-metrics.md); метрики фильтра — только существующие серии
+  (`synth_llm_requests_total{provider,model,outcome}`,
+  `synth_llm_duration_seconds{provider,model}`,
+  `synth_llm_tokens_total{provider,model,kind}` — `packages/core/src/metrics/collectors/llm.ts:25-39`),
+  а факт срабатывания — в аудит и журнал плагинов.
+- Выдать свой ответ в обход gateway.
+
+### Критерии приёмки точки
+
+1. Фильтр с `phase: 'pre_request'` от плагина с trust ≥ `trusted` видит запрос (сообщения, системный
+   промпт, `provider`/`model`); `deny` не даёт вызову уйти провайдеру, причина — в аудит gateway и
+   в текст ошибки.
+2. Фильтр с trust ниже `trusted`, вернувший `deny`, **понижается хостом до `allow`**, в аудит — факт
+   понижения (`plugin_filter.deny_downgraded`); вызов уходит провайдеру.
+3. `post_response`: фильтр видит полный текст ответа и `usage`; блокировки в стриме нет (буферизация
+   ответа — явная опция, по умолчанию выключена).
+4. `embedding`: вызов идёт через `GatewayProvider.embed` → `_prepareEmbedding` (микро-слой не зовёт
+   `provider.embed` напрямую); фильтр видит `texts`/`provider`/`model`; `deny` — эмбеддинг не уходит
+   провайдеру; `redact` — тексты заменены на `redactedTexts` (несовпадение длины массивов → `deny`,
+   fail-closed).
+5. Сбой/таймаут фильтра: `failMode: 'closed'` → вызов блокируется с причиной
+   `plugin_filter_unavailable`/`plugin_filter_timeout`; `failMode: 'open'` → вызов идёт, факт — в аудите.
+6. `config.enabled === false` gateway — фильтры не выполняются (единое правило: выключен gateway — нет
+   его слоёв).
+
+## Два режима исполнения
+
+Один контракт точки расширения — два транспорта. Образец в коде — порт `ExecutionPort`
+(`packages/core/src/execution/ports/execution-port.ts:78-80`, один метод
+`execute(req): Promise<ExecResult>`; `ExecRequest` `:36-55`, `ExecResult` `:57-72`,
+`ExecutionError.reason ∈ timeout|aborted|spawn_failed|nonzero_exit|max_output` `:83-154`,
+`DEFAULT_MAX_OUTPUT_BYTES = 10 МБ` `:99`).
+
+### `inline`
+
+Код плагина исполняется **в процессе core**. Загрузчик делает `import()` ESM-бандла и вызывает
+`definePlugin(apply)` с фасадом; плагин регистрирует вклады, каждый возвращает disposer. Изоляции
+нет: плагин видит internals процесса — компромисс, закрытый trust/scan'ом, install-policy и
+trust-floor'ом.
+
+### `out-of-process`
+
+Плагин исполняется в **отдельном процессе**; Synth общается с ним по локальному HTTP. Транспорт —
+**HTTP/1.1 + JSON**, по образцу `@itphx/synth-executor`
+(`packages/executor/src/protocol.ts`: `POST /exec`, `GET /capabilities`, `GET /health` без токена,
+`EXECUTOR_PROTOCOL_VERSION = 1`, тело ошибки `{error:{reason,code,message,…}}`, коды 400/401/429/500,
+сравнение bearer timing-safe по SHA-256 — `packages/executor/src/auth.ts:36-53`; клиент —
+round-robin по адресам, failover только при ошибке соединения, лимит конкурентности с очередью,
+отмена через `AbortSignal` — `packages/executor/src/client.ts`).
+
+**Решение владельца (2026-10-22): wire-протокол — HTTP/1.1 + JSON, отдельный npm-пакет не нужен.**
+Контракт протокола (DTO запроса/ответа, `PLUGIN_PROTOCOL_VERSION`) живёт в **`@itphx/synth-shared`** —
+рядом с остальными контрактами типов. Отдельный пакет `@itphx/synth-plugin-protocol`
+**не создаётся**: контракт нужен только ядру и плагинам, а оба уже зависят от `shared`
+(ADR-038) — девятый пакет монорепо ради одного контракта был бы лишним. Плагин, пишущий
+`out-of-process`-сторону, ставит `@itphx/synth-shared` в `peerDependencies` (bundle-only правило
+§8 сохраняется: `@itphx/*` — external).
+
+| Элемент | Значение |
+|---|---|
+| Версия протокола | `PLUGIN_PROTOCOL_VERSION = 1` (аналог `EXECUTOR_PROTOCOL_VERSION`) |
+| Где живёт контракт | `@itphx/synth-shared` (рядом с контрактами типов) — отдельный пакет `@itphx/synth-plugin-protocol` не создаётся |
+| Методы | `POST /invoke` (вызов точки расширения), `GET /capabilities` (список поддерживаемых точек + версия), `GET /health` (без токена) |
+| Транспорт | HTTP/1.1 + JSON, только `127.0.0.1` (никакого внешнего bind'а) |
+| Аутентификация | bearer-токен из файла (`{dataDir}/secrets/plugin-token`, `0600`) — по образцу `execution.remote.tokenSecret` (`packages/core/src/execution/remote.ts:95`); значение не логируется; сравнение timing-safe по SHA-256 |
+| Fail-closed | Порядок проверок — как в `execution/remote.ts:146-186`: адрес → токен → пакет; при недоступности пакета/протокола — `RemotePluginUnavailableError`-подобная ошибка, а не «работаем без плагина» |
+| Запуск процесса | порт запуска/остановки — по образу `packages/core/src/execution/startup.ts:73-106` |
+
+### Сравнение режимов
+
+| Аспект | `inline` | `out-of-process` |
 |---|---|---|
-| **Уровень 1 — cooperative** | allow-list как политика соответствия: локальный core сам решает, какие плагины включать | 🔴 кооперативная (модифицированный клиент соврёт, [PROP-073](./prop-073-client-integrity-hybrid.md)/[PROP-081](./prop-081-hybrid-policy-leak-protection.md)) |
-| **Уровень 2 — tokens (проектируем сразу)** | allow-list усиливается **server-scoped токенами**: плагин получает доступ к серверу только с `plugin_id`-scoped токеном; сервер применяет политику и отвергает несоответствия | 🟢 сильная граница для всего, что ходит на сервер |
-| **Уровень 3 — attestation (будущее усиление)** | подписанный манифест плагина/аттестация бандла на сервере | 🟢 (усиление на будущее) |
+| Изоляция | нет (код в процессе core) | процессовая (падение/утечка памяти не роняют core) |
+| Латентность | ~0 (прямой вызов) | round-trip HTTP на каждый вызов точки расширения |
+| Применимость | `llmFilters` (горячий путь каждого LLM-вызова), быстрые `promptBlocks` | тяжёлые `llmFilters` (ML-классификатор, антивирус, DLP), `promptBlocks` с тяжёлой загрузкой |
+| Доступ к internals | прямой (ограничен фасадом) | только сериализуемые DTO |
+| Требования к доверию | trust ≥ `trusted` для блокирующих прав | те же; для `out-of-process` — плюс контроль процесса (лимиты CPU/памяти — вне первой волны) |
+| Что ломается при падении | исключение в процессе core → деградация точки (warn → пустой блок / fail-по-`failMode`) | процесс упал → фильтр недоступен → применяется `failMode`; ход не падает для наблюдательных фильтров |
 
-**Форма политики** (сервер, источник истины):
+**Правило по умолчанию.** `llmFilters` — **inline** (иначе каждый LLM-вызов платит round-trip);
+`out-of-process` для фильтра — только явное решение плагина, с явным таймаутом и бюджетом.
+`promptBlocks` — раз в ход: `out-of-process` допустим.
+
+### Что пересекает границу
+
+Через границу идут **только сериализуемые DTO**. `ComposerContext` (с портами и функциями)
+**наружу не отдаётся** — вместо него наружу уходит узкий DTO запроса:
+
+- `promptBlocks` → `PromptBlockContext` (`sessionId`, `agentRole`, `language`, `projectId?`, `mode`,
+  `query?`, `turnId?`, `timestamp?`) и обратно `{ content, provenance?, status? }`;
+- `llmFilters` → `LlmFilterInput` / `LlmFilterVerdict` (см. §6).
+
+Всё, что не сериализуется (порты хранилища, `GatewayProvider`, реестры ядра), остаётся внутри
+процесса core — фасад `out-of-process`-плагина состоит из «чистых» DTO-обменов. Это делает
+контракт точки расширения переносимым между транспортами: один и тот же плагин работает в обоих
+режимах, меняется только транспорт.
+
+## Манифест `synth.pack` (`kind: "plugin"`)
+
+Манифест — файл **`synth.pack`** (JSON) в корне расширения; единый формат для всех классов
+([ADR-086](./adr-086-extensibility-plugins-editions.md) §5, [ADR-100](./adr-100-extension-packs-pipelines.md)).
+`package.json` остаётся обычным npm-манифестом и **не** является каноническим манифестом расширения.
+
+### Что добавляется к текущей схеме
+
+Текущая схема `packages/shared/src/types/pack.ts`: `PACK_KINDS = ['plugin','gateway','addon','pack','storage']`
+(`:29`) — `'plugin'` уже в списке; `contracts` — `z.record(z.string(), z.string())` (`:247+`);
+`provides` — `packProvidesSchema` (`:227`) с `.passthrough()` (`:234`), то есть **новые виды
+вкладов проходят валидацию молча**: тип элемента не проверяется, ключ не виден в инспекции.
+Поэтому `tools`/`promptBlocks`/`llmFilters` должны быть описаны **явными Zod-схемами** (без
+`.passthrough()` для этих ключей) — иначе правило «фактические регистрации обязаны совпадать с
+`provides`» (§8) нечем проверять, а опечатка в манифесте проходит незамеченной.
+
+| Поле/ключ | Что добавляется | Правило |
+|---|---|---|
+| `provides.tools[]` | массив имён тулов плагина | **новая Zod-схема**: `z.array(z.string().min(1))` (без пустых имён и дублей); имя тула — `tool.name` в `ToolRegistry.register` (`engine/tools/registry.ts:7-13`); фактические регистрации тулов должны совпадать с этим списком — иначе отказ активации |
+| `provides.promptBlocks[]` | массив описаний плагинных блоков промпта | **новая Zod-схема** в `pack.ts` (не `.passthrough()`): `{ key, tier: 'context'\|'volatile', order, title? }`; `tier: 'stable'` — невалидно (запрещён, §5) |
+| `provides.llmFilters[]` | массив описаний фильтров | **новая Zod-схема**: `{ id, phase: 'pre_request'\|'post_response', failMode: 'open'\|'closed', timeoutMs? }` |
+| `contracts` | версии контрактов, которые плагин использует | `contracts: { extensionApi: "^1", promptBlocks: "^1", llmFilters: "^1" }`; semver-**мажор** контракта (расхождение мажора — отказ) |
+| `host` | диапазон версий Synth | уже есть в схеме (`packHostSchema`) — semver-range, как `engines` |
+| `mode` | режим исполнения | **новое поле**: `inline` \| `remote` \| `both`; по умолчанию — `inline`; `remote` требует явного `mode` и описания точки в `capabilities` |
+| `permissions` | явные запросы | **новое поле**: `{ network?: string[], secrets?: string[], tools?: string[], hooks?: string[] }`; сетевые хосты — по egress-политике ([ADR-099](./adr-099-egress-tls-trust.md)), секреты — только через API, at-rest по модели [ADR-076](./adr-076-git-repo-registry-ssh.md) |
+| `trust` | заявленный уровень/источник | **новое поле**: `{ level?: 'builtin'\|'verified'\|'trusted'\|'community'\|'agent-created', source?: string }`; **заявленный** уровень — только верхняя граница: фактический trust резолвится по источнику ([PROP-068](./prop-068-skills-agents-registry.md) §4.1), манифест не может его повысить |
+
+### Пример манифеста
 
 ```json
 {
-  "plugins": {
-    "mode": "allowlist",
-    "allowed": ["@itphx/synth-plugin-*", "@acme/synth-plugin-slack@^1"],
-    "denied": ["@evil/*"],
-    "byRole": { "ADMIN": ["*"], "USER": ["@itphx/*"] },
-    "trustFloor": "trusted",
-    "enforce": "tokens"
-  }
+  "name": "@acme/synth-plugin-memory",
+  "version": "1.2.0",
+  "kind": "plugin",
+  "description": "Провайдер памяти: блок контекста памяти + фильтр запросов к провайдеру",
+  "host": "^0.11.0",
+  "contracts": { "extensionApi": "^1", "promptBlocks": "^1", "llmFilters": "^1" },
+  "mode": "both",
+  "provides": {
+    "tools": ["memory_search"],
+    "promptBlocks": [
+      { "key": "plugin.memory.recall", "tier": "context", "order": 120, "title": "Memory recall" }
+    ],
+    "llmFilters": [
+      { "id": "plugin.memory.dlp", "phase": "pre_request", "failMode": "closed", "timeoutMs": 200 }
+    ],
+    "mcp": [],
+    "skills": [],
+    "agents": [],
+    "pipelines": []
+  },
+  "permissions": {
+    "network": ["api.vault.example"],
+    "secrets": ["memory-token"]
+  },
+  "trust": { "level": "trusted", "source": "catalog" }
 }
 ```
 
-Матчинг — **glob + semver + trust-floor + роль**: запись разрешена, если имя совпадает с `allowed`
-(и не попадает в `denied`), версия удовлетворяет semver-выражению, trust ≥ `trustFloor` и роль вызывающего
-допускает. `enforce: "cooperative"|"tokens"` выбирает Уровень 1/2.
+### Правило соответствия
 
-**Discovery:** `GET /api/v2/settings/plugins` (auth) отдаёт эффективную политику; сигнал `plugins_allowed`
-добавляется в `/auth/oidc-meta` (public, [ADR-043](./adr-043-unified-identity-login.md)) — чтобы локальный core
-решал, предлагать ли серверные плагины, без 401-циклов (по образцу `hybrid_allowed`, [PROP-081](./prop-081-hybrid-policy-leak-protection.md)).
+**Фактические регистрации обязаны совпадать с `provides`** — иначе активация отклоняется. Плагин,
+заявивший `provides.llmFilters` и не зарегистрировавший их (или зарегистрировавший незаявленные),
+не активируется: расхождение — признак несогласованной сборки, а не «мелочь». Проверка идёт после
+`import()`/вызова `apply()` и **до** фиксации активации в аудите; расхождение перечисляется
+поимённо.
 
-**Ось «кому служит плагин».** Локальный плагин, не ходящий на сервер, — 🔴 кооперативная политика (сервер
-его не видит и не может проконтролировать). Плагин, ходящий на сервер, — под server-scoped токеном Уровня 2:
-сервер проверяет `plugin_id`-scope и отвергает вне политики.
+**Тулы — тоже.** Фактические регистрации тулов плагина должны совпадать с `provides.tools[]` —
+иначе **отказ активации**. Это не формальность: точка `tools` есть в таблице точек расширения
+(§4), но без `provides.tools[]` в манифесте она не выразима, и плагин-память с тулом
+`memory_search` ([PROP-047](./prop-047-memory-gbrain.md)) попал бы в «несовпадение» и не
+активировался бы. Поэтому `provides.tools[]` — **обязательный** элемент манифеста плагина,
+регистрирующего тулы (пустой список допустим, если тул не зарегистрирован).
 
-**Честная таблица силы энфорса:**
+### Bundle-only (обязательно)
 
-| Политика | Как энфорсится | Сила |
+Плагин распространяется как **self-contained бандл** (сборка `esbuild`/`tsup`): все зависимости,
+кроме `@itphx/*`, вшиты в бандл; `@itphx/*` — external (peer). **Runtime-резолв npm-зависимостей
+не выполняется**: `import()`-загрузчик не ходит в npm/registry. Для `out-of-process` — то же:
+процесс запускается из распакованного бандла, а не из npm-дерева.
+
+## Модель доверия (PROP-068)
+
+Плагины **наследуют** модель доверия контента ([PROP-068](./prop-068-skills-agents-registry.md) §4) —
+отдельной модели PROP-090 не вводится. Ниже — резюме и три решения сессии.
+
+### Уровни и матрица install-policy
+
+Иерархия (`PROP-068` §4.1): `builtin` → `verified` → `trusted` → `community` → `agent-created`.
+Матрица `trust × вердикт` (`PROP-068` §4.2) — с **новой ячейкой для `kind: "plugin"`**:
+
+| Trust \ Вердикт | `safe` | `caution` | `dangerous` |
+|---|---|---|---|
+| `builtin` | allow | allow | allow |
+| `verified` | allow | allow | block |
+| `trusted` | allow | allow | block |
+| `community` | allow | block | block |
+| `agent-created` | allow | allow | ask |
+| **`kind: "plugin"` (любой trust)** | **установка — allow** | **установка — ask** | **установка — block** |
+
+Отличие от контента: для плагина блокирующий вердикт — `dangerous`, а `caution` требует
+подтверждения (`ask`), потому что за плагином стоит исполняемый код. Trust-floor (см. ниже)
+действует независимо от install-policy.
+
+### Три решения сессии (2026-10-22)
+
+**1. Матрица `severity → verdict` — согласовано 2026-10-22, таблица — в PROP-068 §4.3.** Границы
+`severity → verdict` и пороги квот заданы в [PROP-068](./prop-068-skills-agents-registry.md) §4.3 —
+**каноническая таблица там** (здесь не дублируется, чтобы таблицы не разъехались). Напоминание
+правил: `info|low → safe`, `medium → caution`, `high|critical → dangerous`; превышение квот
+структуры (число файлов `MAX_FILE_COUNT=50`, общий размер `MAX_TOTAL_SIZE_KB=1024`) → минимум
+`caution`; **бинарный исполняемый файл** или превышение `MAX_SINGLE_FILE_KB=256` → `dangerous`;
+невидимый unicode (`invisible_unicode`) → не ниже `caution`. При изменении значений — правка обоих
+документов.
+
+**2. Trust-floor плагина = `trusted`.** Плагин ниже порога **устанавливается** (скан и вердикт видны,
+запись в `plugins.lock.json` есть), но **не активируется** — отказ с причиной
+`plugin.trust_below_floor`. Ключ конфига — `plugins.trustFloor` (дефолт `trusted`); в managed —
+политика сервера. Следствие: плагины уровня `community` в инстансе **живут и наблюдают** (аудит,
+метрики, сигнал), но **не блокируют** — это и есть право вето только у доверенных (§6).
+
+**3. Аудит плагинов — отдельный журнал.** Не расширение `SECURITY_AUDIT_SCOPES`
+(`packages/shared/src/types/egress.ts:131` — scope-enum + action `update|reset`, семантика
+«изменение политики»), а **свой порт** `PluginAuditRepository` (по образцу
+`MaintenanceAuditRepository`, `packages/core/src/storage/maintenance-audit-store.ts`) и файл
+`{dataDir}/audit/plugins.jsonl` (append-only JSONL). События:
+`install | uninstall | enable | disable | activate | deactivate | scan | trust_change`.
+Секреты в журнал не пишутся (инвариант 13).
+
+### Что переиспользуется из кода
+
+| Что | Где | Как используется |
 |---|---|---|
-| server-scoped токен (`enforce: tokens`) | сервер проверяет `plugin_id`-scope на каждом вызове | 🟢 сильная |
-| allow-list серверных плагинов | сервер выдаёт/не выдаёт токен и применяет политику | 🟢 сильная (для серверного трафика) |
-| `denied` (сервер) | сервер отвергает токен/вызов | 🟢 сильная (для серверного трафика) |
-| `mode: allowlist` (локальный плагин без сервера) | локальный core фильтрует включение | 🔴 кооперативная (модифицированный core соврёт) |
-| `byRole` | claims IdP на сервере; локально — по данным пользователя | 🟢 сервер / 🔴 локально |
+| Детект prompt-injection по словарю | `packages/core/src/engine/security/prompt-injection.ts` (`detectPromptInjection:61`, `applyPolicy:89`, режимы `flag\|sanitize\|block`, квота 5 совпадений) | один из сканеров плагина (категория `injection`) |
+| Threat-scan проектных инструкций | `packages/core/src/engine/context/instructions.ts` (`_scan:1158`, `DIAGNOSTIC_META:1199`) | образец построения finding'ов `{category, severity, file, line, description}` |
+| Install-tree guard | там же (`_isInstallTree:861`, `_guard:878`) | запрет вкладов из install-дерева |
+| Project-trust | `packages/core/src/engine/skills/trust.ts` | ортогонален доверию реестра — не смешивать |
+| Trust результатов тулов | `packages/core/src/engine/security/trust.ts` | отдельная ось, не участвует в install-policy |
+| Egress-политика | `packages/core/src/engine/net/egress-guard.ts`, `egress-policy.ts` | сетевые вызовы плагина — через общий egress-слой ([ADR-099](./adr-099-egress-tls-trust.md)) |
 
-Правило: всё, что ходит на сервер, — настоящая граница (🟢); чисто локальный плагин — кооперативная
-политика соответствия (🔴), в UI/доке подаётся именно так.
+### Что дописывается
 
-## 10. Политики и конфиг
+- Категории сканера: 6 базовых (`exfiltration`, `injection`, `destructive`, `persistence`,
+  `network`, `obfuscation`) + `invisible_unicode`; для плагинов — расширенный набор
+  (исполняемые файлы, `child_process`/`eval`, запись в `process.env`, сетевые вызовы).
+- Квоты `MAX_FILE_COUNT=50`, `MAX_TOTAL_SIZE_KB=1024`, `MAX_SINGLE_FILE_KB=256` — по
+  [PROP-068](./prop-068-skills-agents-registry.md) §4.3.
+- `content_hash` — sha256 отсортированного набора файлов; фиксируется в lock.
+- Кэш сканов — ключ `sha256(source\0source_url)` + `content_hash`; повторный скан идентичного
+  содержимого не выполняется.
+- `.skillignore` — исключения при подсчёте структуры.
+- Бинарные расширения — исключаются/флагуются, содержимое не исполняется; исполняемый файл —
+  `dangerous`.
+- **`quarantine/`** — всё скачанное распаковывается и сканируется здесь; при провале — изолируется
+  и в `installed/` не попадает.
+- **`plugins.lock.json`** — источник истины для update/uninstall (модель `lock.json` из
+  [PROP-068](./prop-068-skills-agents-registry.md) §4.4).
+- **Подписи** — статус «вне первой волны»: verifiability/catalog-signature — задача [PROP-068](./prop-068-skills-agents-registry.md).
 
-Секция `plugins` ([ADR-023](./adr-023-configuration.md), приоритет CLI > env > config.yaml > defaults):
+## Установка и активация
 
-| Ключ | Значение | Дефолт |
-|---|---|---|
-| `plugins.enabled` | глобальный мастер-выключатель Extension API | `true` (но без установленных плагинов ничего не активируется) |
-| `plugins.runtimeInstall` | `allow`\|`deny` — runtime-установка через API (managed) | `deny` |
-| `plugins.trustFloor` | минимальный trust для активации | `trusted` |
-| `plugins.scan` | `enabled`\|`disabled` — статический сканер на активации | `enabled` |
-| `plugins.allowlist` / `plugins.denylist` | глобальные списки имён (локальный режим) | `[]` |
-| `plugins.remoteAllowlist` | серверный allow-list (hybrid, §9) | — |
-| `plugins.exactHostExceptions` | файл точных исключений semver-гейта (§6) | пусто |
+### Раскладка
 
-**Runtime-настройки:** `RuntimeSettingsStore.plugins` ([ADR-005](./adr-005-json-storage.md), атомарно) +
-**endpoints** `GET/PUT/DELETE /api/v2/settings/plugins` (по паттерну [ADR-089](./adr-089-external-events-automation.md),
-мутации — ADMIN в managed через `pluginsWriteGuard`, в core — `requireAuth`) и CRUD-эндпоинты
-`GET/POST/DELETE /api/v2/plugins*` (§13).
+Home-модель ([ADR-079](./adr-079-local-home-independent-instances.md)); без home — `{dataDir}/plugin/`:
 
-## 11. Ограничения и возможности
+```text
+<home>/plugin/
+├── installed/
+│   └── <name>@<version>/
+│       ├── synth.pack            # манифест (kind: plugin)
+│       ├── dist/index.js         # бандл (все зависимости внутри, @itphx/* — external)
+│       └── PLUGIN_INTEGRITY.json # { sha256, source, fetched_at }
+├── plugins.lock.json             # провенанс — источник истины для update/uninstall
+└── plugins.json                  # runtime-override включения/настроек
+```
 
-**Плагин может:** регистрировать хуки/тулы/команды/роуты/провайдеры/настройки/источники событий через
-фасад (§4); читать/писать свои настройки через SDK; логировать через scoped-логгер.
+### Запись lock
+
+`plugins.lock.json` — на плагин: `{ name, version, source, identifier, trust_level, scan_verdict,
+content_hash, ref, entry, installed_at, updated_at }`. **Pin обязателен**: `ref` (sha/тег) +
+`content_hash`; update — только явная операция, «всегда latest» нет.
+
+### Пайплайн `PluginHost` (активация одного плагина)
+
+1. **resolve** — найти установленный бандл + манифест (по `plugins.lock.json`).
+2. **integrity** — сверить sha256 с lock и `PLUGIN_INTEGRITY.json`; несовпадение — отказ.
+3. **semver-гейт** — `contracts` (semver-мажор) совместим и `host` покрывает текущую версию Synth;
+   иначе — `plugin.host_incompatible`. Файл **exact-исключений** (аналог peer-gate) — формат
+   открытый вопрос (§14).
+4. **trust/scan** — резолв trust по источнику; статический сканер → вердикт (`severity → verdict`,
+   §9); install-policy; **trust-floor** (`plugins.trustFloor`, дефолт `trusted`) — ниже порога:
+   `plugin.trust_below_floor`, активация не выполняется.
+5. **политика режима** — standalone/hybrid/managed решают, можно ли активировать (§10);
+   в managed/hybrid — allow-list/ADMIN.
+6. **import** — `import()` ESM-бандла в процессе core (`inline`) либо запуск/проверка внешнего
+   процесса (`out-of-process`).
+7. **facade** — `definePlugin(apply)` вызывается с фасадом `SynthPlugin`; плагин регистрирует вклады,
+   каждый возвращает disposer. Проверка соответствия фактических регистраций `provides` — здесь же.
+8. **сбор disposers** — накопление в порядке регистрации.
+9. **аудит** — запись `activate` (кто, что, trust, scan, версия, режим) в `{dataDir}/audit/plugins.jsonl`.
+
+### Выключение/reload
+
+**Обратная прокрутка**: вызвать все disposers в обратном порядке (снять блоки/фильтры/тулы/хуки/
+роуты), затем аудит `deactivate`. Ошибка disposer не прерывает остальные (изолируется, логируется).
+
+**Hot-reload vs restart.** В standalone допустим hot-reload (deactivate → integrity/scan → activate).
+В **managed — restart**: активация на старте, выключение — деплоем/рестартом, без смены кода в живом
+процессе (согласовано с [PROP-082](./prop-082-full-images-deployment.md)/
+[ADR-077](./adr-077-runtime-toolchain.md) и инвариантом 24).
+
+### Матрица режимов
+
+| Режим | Plugin | Кто ставит | Сила энфорса |
+|---|---|---|---|
+| **standalone** | ✅ (`inline` + `out-of-process`) | владелец инстанса | локальный процесс владельца; полный trust-контроль локально |
+| **hybrid** | ✅ (allow-list сервера для серверного контура; локальный — по политике) | владелец локально + allow-list сервера | серверный трафик — 🟢; локальный плагин — 🔴 кооперативно |
+| **managed** | ✅ (deploy-time по умолчанию; runtime-install — `deny` по умолчанию) | **ADMIN** | deploy-time — 🟢 (бандл в образе/PVC); runtime-install — только ADMIN + allow-политика |
+
+### Managed: deploy-time и runtime-install
+
+**(a) deploy-time — дефолт.** Плагины перечислены в Helm-values/config, бандлы — в образе (flavor
+[PROP-082](./prop-082-full-images-deployment.md)) или на PVC; активация — на старте; смена набора —
+деплоем. Код плагина фиксируется вместе с деплоем — воспроизводимо и аудируемо.
+
+**(b) runtime-install — опция, по умолчанию `deny`.** Установка через API при
+`plugins.runtimeInstall: allow`; RBAC — **ADMIN**; запись под guarded-guard'ом (по образцу
+`eventsWriteGuard`/`decisionWriteGuard`, [ADR-089](./adr-089-external-events-automation.md)); каждая
+операция — в аудит плагинов.
+
+Ограничения managed:
+- **Запрет снятия builtin/management-плагинов** (аналог `protectedModules`).
+- **Reload/restart** — в managed по умолчанию **restart**.
+- **Плагин — инстанс-уровневый, не per-user** (в отличие от скиллов/scope).
+- **Egress** — сетевые вызовы плагинов идут через единый egress-слой ([ADR-099](./adr-099-egress-tls-trust.md)).
+- **Секреты** — плагин **не** читает `$SYNTH_DATA_DIR/secrets/*` напрямую; секреты выдаются через
+  API (scoped, по запросу настроек плагина), at-rest — по модели [ADR-076](./adr-076-git-repo-registry-ssh.md).
+
+### Гибрид
+
+Сервер и локальный core — два мира; плагин должен явно объявлять, какому миру служит. Уровни силы —
+как в прежней редакции: **Уровень 1 — cooperative** (allow-list как политика соответствия, 🔴),
+**Уровень 2 — server-scoped токены** (плагин получает доступ к серверу только с `plugin_id`-scoped
+токеном; сервер применяет политику, 🟢), **Уровень 3 — attestation** (будущее усиление).
+**Уровень 2 — вне первой волны** (Ф7): `plugin_id`-scope поверх service-key
+([ADR-052](./adr-052-public-api-platform.md)) — открытый вопрос (§14).
+
+## API / CLI / UI
+
+### HTTP API (`/api/v2/plugins*`)
+
+По образцу `/api/v2/packs` (`packages/core/src/server/routes/packs.ts`): core-фабрика
+`createPluginsRoutes(auth, deps, opts)`, `auth` = `{ requireAuth: Middleware }`, `opts` =
+`readGuard?/writeGuard?/approveGuard?/uninstallGuard?/scopeGuard?/messages?`; guard-формула —
+`opts.readGuard ?? auth.requireAuth` (`packs.ts:464-469`); ошибки — `{ error: { code, message } }`.
+
+| Метод | Путь | Guard (core / managed) | Коды | Назначение |
+|---|---|---|---|---|
+| GET | `/api/v2/plugins` | `requireAuth` / ADMIN | 200, 401, 403 | список установленных + статус активации |
+| GET | `/api/v2/plugins/:name` | `requireAuth` / ADMIN | 200, 401, 403, 404 | инспекция: манифест, trust, scan, hash, `provides` |
+| POST | `/api/v2/plugins/install` | `requireAuth` / ADMIN (+ scope `addons:install`) | 201, 202 (нужно подтверждение), 400, 403, 409 | pull → `quarantine/` → scan → policy → `installed/` |
+| POST | `/api/v2/plugins/:name/enable` | `requireAuth` / ADMIN | 200, 400, 404, 409 | активация (шаги §10) |
+| POST | `/api/v2/plugins/:name/disable` | `requireAuth` / ADMIN | 200, 404, 409 | обратная прокрутка |
+| POST | `/api/v2/plugins/update` | `requireAuth` / ADMIN | 200, 400, 404 | обновление по pinned ref/hash, явно |
+| DELETE | `/api/v2/plugins/:name` | `requireAuth` / ADMIN | 204, 404, 409 | снятие по записи lock (идемпотентно) |
+| GET/PUT/DELETE | `/api/v2/settings/plugins` | `requireAuth` / ADMIN | 200, 400, 401, 403 | runtime-настройки: `enabled`, `runtimeInstall`, `trustFloor`, `scan`, `allowlist`, `denylist`, `promptBlockMaxChars` (бюджет символов блока, дефолт 4 000) |
+
+**Правило RBAC.** Managed — **ADMIN** (чтение и мутации; реестр плагинов — инстанс-уровневый).
+Standalone — владелец инстанса (в core `requireAuth` — единственный пользователь, [ADR-079](./adr-079-local-home-independent-instances.md)).
+**Тест-перепись.** Появится префикс `/api/v2/plugins/:name` — нужна **своя** матрица (негативная 403 +
+позитивная по ролям) по образцу `packages/backend/src/routes/session-idor-matrix.test.ts` (существующая
+матрица покрывает `sessions|messages|queue` — для плагинов она не применима).
+
+### CLI (`synth plugin *`)
+
+Команды объявляются **параллельно в двух местах**: `packages/core/src/main.ts` (dev/standalone CLI,
+`commander`, группы через `.addCommand(new Command('…'))`) **и** `packages/synth/src/cli.ts`
+(публичная обёртка, реализация — прямым импортом из `@itphx/synth-core`, ADR-038). Правило: «не
+добавлять в core команды, которых нет в `src/main.ts`» — значит `synth plugin *` объявляется в обоих.
+Режим `--json` — как у остальных команд.
+
+| Команда | Действие |
+|---|---|
+| `synth plugin list` | список установленных + статус |
+| `synth plugin inspect <name>` | манифест, trust, scan, hash, `provides` |
+| `synth plugin install <id> [--ref <sha\|tag>] [--force]` | установка (карантин → скан → политика) |
+| `synth plugin enable <name>` / `disable <name>` | вкл/выкл (активация/обратная прокрутка) |
+| `synth plugin update [<name>]` | обновление по pinned ref/hash, явно |
+| `synth plugin remove <name>` | снятие по записи lock |
+| `synth plugin scan <name>` | повторный скан без установки |
+
+### UI
+
+Админ-раздел **«Плагины»** — по образцу «Аддоны»
+(`packages/ui/src/components/settings/AddonsSettings.tsx`: `canManage` по роли, `confirm()` из
+`@/lib/confirm`, `notify`, `data-testid`, карточка `<li>` с бейджами статуса, `InfoField`).
+
+| Файл | Действие |
+|---|---|
+| `packages/ui/src/lib/settings-catalog.ts` | **изменить** — категория `{ id: 'plugins', group: 'adminIntegrations', labelKey: 'settings.category.plugins', icon: 'puzzle-piece', roles: ['ADMIN'] }` |
+| `packages/ui/src/components/settings/PluginsSettings.tsx` | **создать** — список, карточка (trust/scan/hash/version/`contracts`/`host`/`provides`), тумблеры enable/disable, кнопки install/update/remove |
+| `packages/ui/src/components/settings/SettingsModal.tsx` | **изменить** — рендер `{activePage === 'plugins' && <PluginsSettings />}` (по образцу `addons`, `:327`) |
+| `packages/ui/src/lib/api/plugins.ts` | **создать** — домен `pluginsApi` (по образцу `lib/api/packs.ts`, 97 стр.) |
+| `packages/ui/src/lib/api/synthApi.ts` | **изменить** — barrel + экспорт домена (контрактный тест `synthApi.contract.test.ts`) |
+| `packages/ui/src/lib/i18n/messages/ru.ts` / `en.ts` | **изменить** — ключи `settings.category.plugins` и строки раздела (в **оба** словаря; тест паритета `parity.test.ts`) |
+
+Карточка плагина обязана показывать: **trust-уровень**, **источник**, **content hash**, версию,
+`contracts`/`host`, **вердикт сканера**, перечень `provides`, режим исполнения (`inline`/`remote`) и
+результат последнего скана.
+
+## Ограничения и «что не делаем»
 
 **Плагин не может ни при каких условиях:**
-- обойти `PermissionEvaluator` ([ADR-025](./adr-025-plan-act-toggle.md)/[ADR-028](./adr-028-plan-build-strictness.md)/[ADR-029](./adr-029-granular-permissions.md)) — доступ к тулам/ресурсам идёт только через permission-слой;
-- обойти `GatewayProvider` ([ADR-036](./adr-036-llm-gateway.md)) — любой LLM-вызов через gateway;
-- обойти `FileStore` ([ADR-005](./adr-005-json-storage.md)) — запись в `$SYNTH_DATA_DIR` мимо FileStore запрещена;
-- снять/подменить **builtin**-обработчики и builtin/management-плагины (политика `builtin`, закрывает остаток
-  [ADR-030](./adr-030-hooks-agent-events.md); в managed — `protectedModules`);
-- читать секреты в обход API (см. §8);
-- выполнять runtime-резолв npm-зависимостей (bundle-only, §3).
+- обойти `PermissionEvaluator` ([ADR-025](./adr-025-plan-act-toggle.md)/[ADR-028](./adr-028-plan-build-strictness.md)/[ADR-029](./adr-029-granular-permissions.md));
+- обойти `GatewayProvider` ([ADR-036](./adr-036-llm-gateway.md)) — любой LLM-вызов плагина идёт через него;
+- обойти порты хранилища ([ADR-096](./adr-096-storage-layer.md)) — запись в `$SYNTH_DATA_DIR` мимо порта запрещена;
+- читать секреты в обход API;
+- снять/подменить **builtin**-обработчики и builtin/management-плагины (политика `builtin`, остаток [ADR-030](./adr-030-hooks-agent-events.md));
+- отключить существующие guard'ы gateway или изменить `config.enabled`;
+- добавить свои лейблы метрик (контракт [ADR-094](./adr-094-observability-metrics.md));
+- выдать свой ответ в обход gateway;
+- выполнить runtime-резолв npm-зависимостей (bundle-only);
+- заявить trust выше фактического (trust резолвится по источнику).
 
-**Квоты/лимиты:** число регистраций на плагин (тулы/хуки/роуты/источники) ограничено; таймауты на `apply`
-и на async-обработчики (по образцу `HOOK_ASYNC_TIMEOUT_MS = 5000`, [ADR-030](./adr-030-hooks-agent-events.md));
-лимит на объём бандла и на число находок сканера. Точные значения — открытый вопрос (§16).
-
-## 12. Связь с PROP-068
-
-Каталог [PROP-068](./prop-068-skills-agents-registry.md) закладывается **сразу** как источник плагинов —
-переиспользуется, а не изобретается заново:
-- **trust-уровни** (`builtin → verified → trusted → community`) — для записей каталога плагинов;
-- **install-policy** (матрица trust × verdict) — для установки/активации;
-- **статический сканер** (категории, лимиты, невидимый unicode, кэш) — на активации плагина;
-- **quarantine** — распаковка/скан до попадания в `installed/`;
-- **`lock.json`**-модель → `plugins.lock.json` (провенанс, pin, откат);
-- **audit log** — операции плагинов;
-- **провенанс** (источник/identifier/ref/хеш) и подписи — для `verified`-плагинов.
-
-Плагины **наследуют** trust/guard-модель контента; отдельной модели доверия PROP-090 не вводит.
-
-## 13. API / CLI / UI
-
-| Операция | API | CLI | UI | Назначение |
-|---|---|---|---|---|
-| list | `GET /api/v2/plugins` | `synth plugin list` | Список | Установленные + статус активации |
-| inspect | `GET /api/v2/plugins/:name` | `synth plugin inspect <name>` | Карточка | Манифест, trust, scan, hash, contributes |
-| install | `POST /api/v2/plugins/install` | `synth plugin install <id> [--ref --force]` | Кнопка (ADMIN в managed) | pull → quarantine → scan → policy → `installed/` |
-| enable | `POST /api/v2/plugins/:name/enable` | `synth plugin enable <name>` | Тумблер | Активация (§6) |
-| disable | `POST /api/v2/plugins/:name/disable` | `synth plugin disable <name>` | Тумблер | Обратная прокрутка |
-| update | `POST /api/v2/plugins/update` | `synth plugin update [<name>]` | Обновить | По pinned ref/hash; явно |
-| remove | `DELETE /api/v2/plugins/:name` | `synth plugin remove <name>` | Удалить | По записи lock |
-| policy | `GET/PUT/DELETE /api/v2/settings/plugins` | `synth config` | Секция настроек (ADMIN) | Политика/дефолты (§9–§10) |
-
-Карточка плагина в UI обязана показывать: **trust-уровень**, **источник**, **content hash**, версию,
-`contracts`/`host`, вердикт сканера, перечень `provides`. RBAC: list/inspect — `requireAuth`;
-install/enable/disable/update/remove/policy — ADMIN (managed) / владелец (standalone). UI-объём —
-открытый вопрос (§16).
-
-## 14. Фазы реализации
-
-**Статус фаз (2026-10-19): не начаты.** PROP-090 отложен целиком (🧊 Icebox); фазы ниже сохраняются как план
-возврата в работу — порядок и содержание не меняются.
-
-- **Ф0 — предпосылки.** Остаток [ADR-030](./adr-030-hooks-agent-events.md): политика `builtin` (защита
-  builtin-обработчиков от снятия) и недостающие эмиты (`plan_rejected`, `message_received`, `callback`,
-  `schedule_fired`); конфиг включённых плагинов ([ADR-023](./adr-023-configuration.md)). Кода плагинов ещё нет.
-- **Ф1 — манифест + `PluginHost` + trust/scan.** Схема манифеста, `PluginHost`-пайплайн (§6), integrity,
-  semver-гейт, trust/scan ([PROP-068](./prop-068-skills-agents-registry.md)). **Исполнение кода выключено по
-  умолчанию** — только резолв/integrity/гейт/скан/аудит, без `import()`.
-- **Ф2 — install/activate CLI/API + managed deploy-time.** Раскладка `<home>/plugin/`, `plugins.lock.json`,
-  `plugins.json`, установка из `local`/`npm`/`builtin`, CLI/API (§13), активация (фактический `import()`),
-  managed deploy-time (бандлы в образе/PVC, [PROP-082](./prop-082-full-images-deployment.md)).
-- **Ф3 — hybrid allow-list + scoped-токены.** Уровни 1/2 (§9), форма политики, discovery
-  (`/settings/plugins` + `/auth/oidc-meta`), server-scoped токены на `plugin_id`.
-- **Ф4 — managed runtime-install.** `plugins.runtimeInstall: allow`, `pluginsWriteGuard`, аудит, запрет снятия
-  builtin/management-плагинов, restart-модель.
-- **Ф5 — UI.** Список/карточка/тумблеры, секция настроек, статус сканера/trust (объём — §16).
-
-## 15. Что НЕ делаем
-
-- **Runtime npm-резолв** — bundle-only: загрузчик не ходит за зависимостями (§3).
-- **pnpm-в-рантайме** как основной механизм установки плагинов — нет.
-- **In-process без trust/scan** — не активируем код мимо trust/скана/install-policy.
-- **Снятие builtin** — builtin-обработчики и builtin/management-плагины защищены.
+**Чего нет в слое:**
+- **Runtime npm-резолв** — загрузчик не ходит за зависимостями.
+- **pnpm-в-рантайме** как основной механизм установки.
+- **In-process без trust/scan** — код не активируется мимо trust/скана/install-policy/trust-floor.
 - **Авто-установка без явного действия** — установка только явной операцией владельца/ADMIN.
 - **«Всегда latest»** — pin обязателен (`ref`/`content_hash`), update — явно.
-- **Доверие по звёздам** — звёзды не критерий (как [PROP-068](./prop-068-skills-agents-registry.md)).
-- **Gateway как Add-on / Add-on как «плагин»** — смешение классов запрещено (§1).
+- **Доверие по звёздам** — звёзды не критерий ([PROP-068](./prop-068-skills-agents-registry.md)).
+- **Смешение классов** — Gateway ≠ Add-on ≠ Plugin.
 
-## 16. Открытые вопросы
+## Фазы
 
-1. **Hot-reload vs restart в managed** — где граница: всегда restart или отдельные плагины допускают reload?
-2. **Лимиты квот** — число регистраций, таймауты `apply`, объём бандла, лимит находок сканера.
-3. **Формат файла exact-исключений** semver-гейта (`plugins.exactHostExceptions`).
-4. **Кто владеет каталогом плагинов** — CI каталога [PROP-068](./prop-068-skills-agents-registry.md) или отдельный
-   репозиторий; ключ подписи и ротация.
-5. **UI-объём Ф5** — что показываем в карточке/секции, где ставим тумблеры.
-6. **Scoped-токены Уровня 2** — точная механика выдачи/валидации `plugin_id`-scope (взаимосвязь с
-   [ADR-052](./adr-052-public-api-platform.md): service-key/scopes реализованы — этап I; остаётся
-   `plugin_id`-scope поверх).
-7. **Эмиты остатка [ADR-030](./adr-030-hooks-agent-events.md)** — порядок и приоритет доделки недостающих хуков.
+Каждая фаза — с критерием приёмки (тест/команда).
 
-## Последствия
+| Фаза | Содержание | Критерий приёмки |
+|---|---|---|
+| **Ф0 — предпосылки** | Остаток [ADR-030](./adr-030-hooks-agent-events.md): политика `builtin` (защита builtin-обработчиков от снятия) + 4 недостающих эмита (`plan_rejected`, `message_received`, `callback`, `schedule_fired`); семвер-гейт `contracts`/`host` (semver-мажор контракта); явные Zod-схемы `provides.tools`/`provides.promptBlocks`/`provides.llmFilters` в `packages/shared/src/types/pack.ts` (без `.passthrough()`); `RuntimeSettings.plugins` + `plugins.*` в конфиге ([ADR-023](./adr-023-configuration.md)) | тест: builtin-обработчик нельзя снять через `off`; эмиты вызываются; `validatePackManifest` отклоняет `tier: 'stable'` в `provides.promptBlocks`, невалидный `provides.tools[]` (пустое имя/дубль) и расхождение `provides` — в т.ч. `provides.tools[]` ↔ фактические регистрации тулов; `pnpm --filter @itphx/synth-shared build` зелёный |
+| **Ф1 — манифест + `PluginHost`** | Схема манифеста плагина, `PluginHost`-пайплайн (§10), integrity, semver-гейт, реестр активаций, аудит активации. **Исполнение кода выключено по умолчанию**: только resolve/integrity/гейт/скан/аудит, без `import()` | тест: `PluginHost.activate` доходит до шага «import» и останавливается; несовпадение integrity → отказ; тест аудита: запись `activate`/`deactivate` в `audit/plugins.jsonl` |
+| **Ф2 — модель доверия** | Уровни trust, матрица install-policy с ячейкой `kind: "plugin"`, сканер (6+1 категорий, квоты, `content_hash`, кэш сканов, `.skillignore`, бинарные расширения), матрица `severity → verdict`, `quarantine/`, `plugins.lock.json`, порт `PluginAuditRepository` + `{dataDir}/audit/plugins.jsonl` | тест: вердикт по severity (`info\|low → safe`, `medium → caution`, `high\|critical → dangerous`); квоты → `caution`; бинарник → `dangerous`; `community` + `dangerous` → `block`; trust-floor: `community` устанавливается, но не активируется (`plugin.trust_below_floor`) |
+| **Ф3 — точки `promptBlocks` + `llmFilters`** | Контракты `PromptBlockProvider`/`LlmCallFilter` (в т.ч. третья фаза `embedding`), реестры в `SystemPromptComposer` и `GatewayProvider`, правила тиров/порядка/инвалидации/деградации, контекст хода (`query`/`turnId`/`timestamp`) и бюджет символов блока (`plugins.promptBlockMaxChars`, дефолт 4 000), право вето только для trust ≥ `trusted` (во всех фазах, включая `embedding`), **эмбеддинги через gateway-контур** (`GatewayProvider.embed` → `_prepareEmbedding`; микро-слой — только через gateway), приведение `packages/core/AGENTS.md:410` в соответствие (шов — `PromptBlockProvider`, а не `ContextSource`), **контрактный suite расширений** | контрактный suite расширений зелёный (по образцу `packages/core/src/storage/contract/*`): `stable`-тир отклоняется; ошибка провайдера не роняет ход; `deny` от `community`-плагина понижается до `allow` + аудит (во всех фазах, включая `embedding`); `query` доходит до провайдера, при его отсутствии блок `volatile` пуст; блок длиннее бюджета обрезан с `status: 'truncated'`; embedding-вызов идёт через `GatewayProvider.embed` и виден фильтру (`deny` → эмбеддинг не уходит провайдеру, `redact` → тексты заменены на `redactedTexts`); фактические регистрации тулов сверены с `provides.tools[]` (расхождение → отказ активации); тест паритета «манифест ↔ байты» (`composer.test.ts:315-345`) зелёный |
+| **Ф4 — два режима исполнения** | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация | тест: плагин в `out-of-process` регистрирует `promptBlocks` и отдаёт блок; неверный токен → 401; недоступный процесс → деградация по `failMode`; контрактный suite порта расширений зелёный |
+| **Ф5 — install/activate: CLI + API + managed deploy-time** | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
+| **Ф6 — UI** | Раздел «Плагины»: список, карточка (trust/scan/hash/version/`contracts`/`host`/`provides`/режим), тумблеры enable/disable, install/update/remove, статус скана | тест UI: карточка показывает trust/scan/hash; переключатель enable вызывает API и обновляет список; i18n-паритет `ru.ts`/`en.ts` зелёный (`parity.test.ts`) |
+| **Ф7 — hybrid** | Allow-list сервера, форма политики, discovery (`/api/v2/settings/plugins` + сигнал в `/auth/oidc-meta`), server-scoped токены с `plugin_id`-scope (Уровень 2) | тест: плагин вне allow-list не активируется в hybrid; токен с чужим `plugin_id` отвергается сервером; локальный плагин без сервера — cooperative (помечено в UI/доках) |
 
-**Плюсы:** расширять Synth без форка ядра; единая контент-платформа с trust/guard ([PROP-068](./prop-068-skills-agents-registry.md));
-11 из 12 точек уже имеют seam — дешёвый вход; add-on как основной безопасный путь; плагины во всех режимах
-с понятной моделью «кто ставит + политика + сила энфорса»; воспроизводимость (bundle-only + pin + lock).
+## Открытые вопросы
 
-**Минусы/риски:** in-process код — доверенный после trust/скана (компромисса «полная изоляция» не даём);
-hot-reload в managed рискован (отсюда restart-модель); серверный allow-list для чисто локальных плагинов —
-кооперативен; зависимость от [PROP-068](./prop-068-skills-agents-registry.md) и остатка [ADR-052](./adr-052-public-api-platform.md);
-UI-slot отложен — часть расширений (панели) пока недоступна.
+> Закрыто решениями владельца продукта 2026-10-22: форма out-of-process-протокола (HTTP/1.1 + JSON,
+> контракт — в `@itphx/synth-shared`, отдельный пакет не создаётся); место контракта
+> `MemoryProvider` (`@itphx/synth-shared`, реализации — плагинами); матрица `severity → verdict`
+> (каноническая таблица — PROP-068 §4.3); третья фаза `llmFilters` — `embedding`.
 
-**Связи:**
+1. **Версии контракта расширений и окно deprecation.** Как версионируется контракт точки
+   (`promptBlocks@1`, `llmFilters@1`), сколько релизов живёт старая мажорная версия, что делает
+   плагин на несовместимом контракте (отказ активации vs «мягкий» режим).
+2. **Бюджет времени фильтра.** Значение по умолчанию для `timeoutMs` плагинных фильтров и
+   отдельный лимит для embedding-фазы (индексация — latency-чувствительный путь).
+3. **Hot-reload vs restart в managed** — где граница: всегда restart или отдельные плагины допускают
+   reload (в managed перезапуск пода = `kubectl rollout restart`, инвариант 24).
+4. **Кто владелец каталога плагинов и ключ подписи** — CI каталога
+   [PROP-068](./prop-068-skills-agents-registry.md) или отдельный репозиторий; где живёт
+   `schema/catalog-entry.schema.json` (в master файла нет — схема невоспроизводима из кода) и как
+   в каталоге выглядит запись `kind: plugin` (сейчас таких записей нет).
+5. **Нужен ли `plugin_id`-scope поверх service-key** ([ADR-052](./adr-052-public-api-platform.md)) —
+   точная механика выдачи/валидации для Уровня 2 (Ф7).
+6. **Транспортная обвязка `out-of-process`.** Контракт протокола живёт в `@itphx/synth-shared` (§7),
+   но где лежит реализация клиента/сервера: в core рядом с `execution/remote.ts`
+   (`packages/core/src/execution/remote.ts`) или отдельным пакетом по образцу
+   `@itphx/synth-executor`? От ответа зависит, кто собирает `out-of-process`-плагин.
 
-- [ADR-086](./adr-086-extensibility-plugins-editions.md) — зонтик «Классы расширений»; PROP-090 — вынесенный детальный Extension API.
-- [ADR-087](./adr-087-gateways.md) — класс Gateway (внешний сервис-транспорт): отдельный от Plugin/Add-on класс, единый манифест `synth.pack`.
-- [ADR-030](./adr-030-hooks-agent-events.md) — hook-шина: фундамент точки `hooks`; остаток (политика `builtin`, эмиты) — предпосылка Ф0 (в Ф0 не делается отдельно — см. §14).
-- [ADR-038](./adr-038-npm-packages.md) — npm-пакеты: `@itphx/synth-plugin` и распространение плагинов.
-- [ADR-046](./adr-046-skills-and-slash-commands.md) — скиллы/команды: точки `skills`/`commands`.
-- [PROP-068](./prop-068-skills-agents-registry.md) — trust/scan/install-policy/quarantine/lock/audit: переиспользуемая инфраструктура.
-- [ADR-071](./adr-071-mcp-servers-prompt.md) — MCP-серверы: точка `mcp`; разделение слоёв `tools`/`mcp.tools`.
-- [ADR-089](./adr-089-external-events-automation.md) — внешние события: точка `events`; паттерн settings-API.
-- [ADR-023](./adr-023-configuration.md) — конфиг: секция `plugins.*`.
+## Связи
+
+- [ADR-086](./adr-086-extensibility-plugins-editions.md) — зонтик «Классы расширений»; PROP-090 — детальный слой плагинов.
+- [ADR-030](./adr-030-hooks-agent-events.md) — hook-шина: точка `hooks`; остаток (политика `builtin`, 4 эмита) — Ф0.
+- [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md) — порты и контрактный suite; новый порт `PluginAuditRepository` обязателен и в PG-драйвере.
+- [ADR-100](./adr-100-extension-packs-pipelines.md) — поставка `synth.pack`: манифест — общий для всех классов.
+- [ADR-103](./adr-103-gateway-core-channel-contract.md) — контракт внешнего канала: образец wire-протокола и семвера.
+- [ADR-036](./adr-036-llm-gateway.md) — Gateway: точка `llmFilters` встраивается в `_prepare`/`_auditCompletion`; буферы/задержки запрещены.
+- [ADR-070](./adr-070-system-prompt-composer.md) — сборка промпта: точка `promptBlocks`; тиры, `stablePrefix`, `promptStates`.
+- [ADR-023](./adr-023-configuration.md) — конфиг: секция `plugins.*`, `RuntimeSettings.plugins`.
 - [ADR-025](./adr-025-plan-act-toggle.md)/[ADR-028](./adr-028-plan-build-strictness.md)/[ADR-029](./adr-029-granular-permissions.md) — permissions: плагин не обходит permission-слой.
-- [ADR-036](./adr-036-llm-gateway.md) — Gateway: любой LLM-вызов плагина — через него.
-- [ADR-042](./adr-042-hybrid-mode.md)/[PROP-073](./prop-073-client-integrity-hybrid.md)/[PROP-080](./prop-080-managed-hybrid-modes.md)/[PROP-081](./prop-081-hybrid-policy-leak-protection.md) — гибрид/политики: allow-list, честная сила энфорса, недоверенный клиент.
-- [ADR-052](./adr-052-public-api-platform.md) — service-key/scopes: основа server-scoped токенов Уровня 2.
+- [ADR-052](./adr-052-public-api-platform.md) — service-key/scopes: основа server-scoped токенов (Ф7).
+- [ADR-079](./adr-079-local-home-independent-instances.md) — home-раскладка: `<home>/plugin/`.
+- [ADR-094](./adr-094-observability-metrics.md) — контракт метрик: плагин не добавляет лейблы.
+- [ADR-099](./adr-099-egress-tls-trust.md) — egress/CA: сетевые вызовы плагинов.
+- [PROP-068](./prop-068-skills-agents-registry.md) — модель доверия: уровни, install-policy, сканер, карантин, lock, провенанс, подписи.
+- [PROP-047](./prop-047-memory-gbrain.md) — память: `MemoryProvider` доставляется плагином (переписывается отдельно).
+- [ADR-077](./adr-077-runtime-toolchain.md) — `ExecutionPort` и исполнитель: образец двух режимов и wire-протокола.
 - [PROP-082](./prop-082-full-images-deployment.md) — flavor-образы: бандлы плагинов в образе (managed deploy-time).
-- [PROP-077](./prop-077-runtime-toolchain.md) — executor/toolchain: размещение и запуск в managed.
-- [PROP-088](./prop-088-http-proxy.md) — egress: сетевые вызовы плагинов.
+- [PROP-100](./prop-100-ssrf-dns-rebinding.md) — SSRF: адресная политика для сетевых вызовов плагинов.
 
 ## История
 
-- 2026-10-19 — решение по сроку: **отложено целиком** (🧊 Icebox); фазы Ф0–Ф5 не начаты, срок `Решение до: 2026-11-14` снят; Ф0 (политика `builtin` + 4 эмита [ADR-030](./adr-030-hooks-agent-events.md)) не делается отдельно и переносится в остаток PROP-090.
+- 2026-10-22 — возвращено в работу (🧩 Предложение, `Решение до: 2026-11-14`): полный in-process SDK + два режима исполнения (`inline`/`out-of-process`), две новые точки (`promptBlocks`, `llmFilters`), право вето только для trust ≥ `trusted`, модель доверия PROP-068 с trust-floor и отдельным журналом аудита, полный контур API/CLI/UI; фазы Ф0–Ф7 с критериями приёмки.
+- 2026-10-22 — уточнение контракта: в `PromptBlockContext` добавлен контекст текущего хода (`query`) и бюджет символов блока; в манифест добавлено `provides.tools[]` (нужно для тула `memory_search` плагина-памяти).
+- 2026-10-22 — решения владельца: wire-протокол `out-of-process` — HTTP/1.1 + JSON, контракт протокола в `@itphx/synth-shared` (отдельный пакет не создаётся); третья фаза `llmFilters` — `embedding` (эмбеддинги идут через gateway-контур, инвариант 3); матрица `severity → verdict` согласована — каноническая таблица в PROP-068 §4.3; бюджет символов блока — настраиваемый параметр (дефолт 4 000) в `plugins.*` и `GET/PUT/DELETE /api/v2/settings/plugins`; шов промпт-блоков — `PromptBlockProvider` (реализуется в Ф3; строка `packages/core/AGENTS.md:410` не соответствует коду и будет приведена в соответствие в Ф3).

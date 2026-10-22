@@ -272,7 +272,7 @@ export function resolveMaxUploadBytes(config: SynthConfig, env?: NodeJS.ProcessE
 }
 
 /**
- * PROP-032: физический backend хранения. Приоритет (ADR-023): env
+ * ADR-096: физический backend хранения. Приоритет (ADR-023): env
  * `SYNTH_STORAGE_BACKEND` > `config.storage.backend` > `'file'`.
  *
  * **Fail-closed**: если значение задано явно (env или config) и не входит в
@@ -305,7 +305,7 @@ export function resolveStorageBackend(
   return 'file';
 }
 
-/** Поддерживаемые физические backend'ы хранения (PROP-032). */
+/** Поддерживаемые физические backend'ы хранения (ADR-096). */
 export type StorageBackend = 'file' | 'memory' | 'postgres';
 
 const STORAGE_BACKENDS: readonly StorageBackend[] = ['file', 'memory', 'postgres'];
@@ -314,7 +314,7 @@ function isStorageBackend(value: unknown): value is StorageBackend {
   return typeof value === 'string' && (STORAGE_BACKENDS as readonly string[]).includes(value);
 }
 
-/** PROP-032: эффективные параметры PostgreSQL-backend (без пароля — инвариант 13). */
+/** ADR-097: эффективные параметры PostgreSQL-backend (без пароля — инвариант 13). */
 export interface ResolvedPostgresConfig {
   dsn?: string;
   host?: string;
@@ -322,7 +322,7 @@ export interface ResolvedPostgresConfig {
   database?: string;
   user?: string;
   schema?: string;
-  /** ADR-099/PROP-032: эффективный TLS-режим (нормализованный; `verify-ca` → `verify-full`). */
+  /** ADR-099/ADR-097: эффективный TLS-режим (нормализованный; `verify-ca` → `verify-full`). */
   sslmode?: PostgresSslMode;
   /** Legacy-флаг TLS (когда `sslmode` не задан). */
   ssl?: boolean;
@@ -330,7 +330,7 @@ export interface ResolvedPostgresConfig {
 }
 
 /**
- * PROP-032: параметры PostgreSQL-backend. Приоритет (ADR-023): env
+ * ADR-097: параметры PostgreSQL-backend. Приоритет (ADR-023): env
  * (`SYNTH_POSTGRES_*`) > `config.storage.postgres`. **Пароль не включается**
  * (инвариант 13) — см. `resolvePostgresPassword`. Некорректное env-значение
  * (не число/булево) — warn и фолбэк на config (fail-soft, как прочие
@@ -373,7 +373,7 @@ export function resolvePostgresConfig(
   const ssl = resolveBooleanEnv(e.SYNTH_POSTGRES_SSL, cfg.ssl, 'SYNTH_POSTGRES_SSL');
   if (ssl !== undefined) result.ssl = ssl;
 
-  // ADR-099/PROP-032: sslmode (env `SYNTH_POSTGRES_SSLMODE` > config); `verify-ca`
+  // ADR-099/ADR-097: sslmode (env `SYNTH_POSTGRES_SSLMODE` > config); `verify-ca`
   // — алиас `verify-full` (warn). Невалидное env-значение — warn + фолбэк на
   // config (fail-soft, как прочие env-резолверы).
   const rawEnvSslmode = e.SYNTH_POSTGRES_SSLMODE;
@@ -429,7 +429,7 @@ function resolveBooleanEnv(
 }
 
 /**
- * PROP-032: пароль PostgreSQL. **Только** env `SYNTH_POSTGRES_PASSWORD` →
+ * ADR-097: пароль PostgreSQL. **Только** env `SYNTH_POSTGRES_PASSWORD` →
  * файл `{dataDir}/secrets/postgres-password` (инвариант 13: в config.yaml
  * секретов нет). Файла нет — `undefined` (решение об ошибке принимает драйвер:
  * для peer/trust-аутентификации пароль не нужен). Читается только, не создаётся.
@@ -449,7 +449,7 @@ export function resolvePostgresPassword(
   return undefined;
 }
 
-/** PROP-032 (W5): допустимые политики при недоступности backend'а. */
+/** ADR-098 (W5): допустимые политики при недоступности backend'а. */
 const DEGRADED_MODES: readonly ('fallback-file' | 'halt')[] = ['fallback-file', 'halt'];
 
 function isDegradedMode(value: unknown): value is 'fallback-file' | 'halt' {
@@ -457,7 +457,7 @@ function isDegradedMode(value: unknown): value is 'fallback-file' | 'halt' {
 }
 
 /**
- * PROP-032 (W5): политика при недоступности выбранного backend —
+ * ADR-098 (W5): политика при недоступности выбранного backend —
  * `fallback-file` (default) | `halt`. Читать через этот резолвер.
  *
  * Приоритет (ADR-023): env `SYNTH_DEGRADED_MODE` > `config.storage.degradedMode` >
@@ -480,7 +480,7 @@ export function resolveDegradedMode(
 }
 
 /**
- * PROP-032 (W5): каталог файлового фоллбека. Приоритет (ADR-023): env
+ * ADR-098 (W5): каталог файлового фоллбека. Приоритет (ADR-023): env
  * `SYNTH_STORAGE_FALLBACK_DIR` > явный `config.storage.fallbackDir` → `''`
  * (эффективно `{dataDir}/fallback`).
  */

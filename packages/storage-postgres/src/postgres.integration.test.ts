@@ -1,5 +1,5 @@
 /**
- * Интеграционный smoke-тест PostgreSQL-драйвера (PROP-032, волна 3a).
+ * Интеграционный smoke-тест PostgreSQL-драйвера (ADR-097, волна 3a).
  *
  * Гейт по env `SYNTH_TEST_POSTGRES_DSN`: без него весь блок `describe.skip`
  * (герметичный запуск без БД). С DSN — прогон против dev-Postgres.
@@ -103,7 +103,7 @@ describePg('PostgreSQL-драйвер: smoke (подключение, мигра
     expect(typeof ctx.blobs.read).toBe('function');
     expect(typeof ctx.skills.listNames).toBe('function');
     expect(typeof ctx.contextFiles.listAllFiles).toBe('function');
-    // PROP-032: соединение удерживается в контексте — закрываем явно.
+    // ADR-097: соединение удерживается в контексте — закрываем явно.
     await ctx.close?.();
   });
 });

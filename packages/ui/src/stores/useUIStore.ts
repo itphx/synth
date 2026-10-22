@@ -123,7 +123,7 @@ interface UIStore {
   logsPage: string
   setLogsPage: (page: string) => void
 
-  /** PROP-102: модальное окно «Аналитика и отчёты» (открытие — меню пользователя / правая панель). */
+  /** ADR-102: модальное окно «Аналитика и отчёты» (открытие — меню пользователя / правая панель). */
   isAnalyticsDialogOpen: boolean
   setAnalyticsDialogOpen: (open: boolean) => void
 
