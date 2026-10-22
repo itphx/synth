@@ -105,6 +105,10 @@
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099-memory-footprint-optimization.md](./prop-099-memory-footprint-optimization.md) |
 | PROP-100 | SSRF и TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению (дефекты 1–3 закрыты; остаток — пиннинг) | 🧩 Предложение | [prop-100-ssrf-dns-rebinding.md](./prop-100-ssrf-dns-rebinding.md) |
 | PROP-101 | Локальные инсталляторы и платформенная дистрибуция (Windows / macOS / Linux) | 🧩 Предложение | [prop-101-local-installers-platforms.md](./prop-101-local-installers-platforms.md) |
+| PROP-104 | Внешний транспорт событий: публикация между репликами control plane | 🧩 Предложение | [prop-104-external-event-transport.md](./prop-104-external-event-transport.md) |
+| PROP-105 | Координация в нескольких репликах: сессии, очередь, общее состояние | 🧩 Предложение | [prop-105-multi-replica-coordination.md](./prop-105-multi-replica-coordination.md) |
+| PROP-106 | Файловые порты инстанса в SQL: единое состояние при нескольких репликах | 🧩 Предложение | [prop-106-file-ports-to-sql.md](./prop-106-file-ports-to-sql.md) |
+| PROP-107 | OAuth-хранилище и слой доступа к внешним сервисам (коннекторы): креды шифруются мастер-ключом, токен подставляет транспорт — агент его не видит | 🧩 Предложение | [prop-107-oauth-credential-layer.md](./prop-107-oauth-credential-layer.md) |
 
 ## Vision
 
@@ -127,4 +131,4 @@
 
 ---
 
-Всего документов: 92 (Решения: 39, Частично: 16, Предложения: 28, Vision: 8, Icebox: 0, Legacy: 1).
+Всего документов: 96 (Решения: 39, Частично: 16, Предложения: 32, Vision: 8, Icebox: 0, Legacy: 1).
