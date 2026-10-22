@@ -93,8 +93,25 @@ paths = [
   '''packages/core/src/engine/tools/git-ssh\.test\.ts$''',
   '''packages/core/src/server/app\.fs-upload-limit\.test\.ts$''',
   '''packages/core/src/server/app\.legacy-local-owner\.test\.ts$''',
+  '''packages/core/src/engine/mcp/manager\.executor\.test\.ts$''',
+  '''packages/core/src/execution/contract/remote\.test\.ts$''',
+  '''packages/core/src/execution/remote-dispatch\.test\.ts$''',
+  '''packages/executor/src/client\.test\.ts$''',
+  '''packages/executor/src/mcp-routes\.test\.ts$''',
+  '''packages/executor/src/server\.test\.ts$''',
+  '''packages/core/src/engine/plugins/remote/loader\.test\.ts$''',
+  '''packages/core/src/engine/plugins/remote/client\.test\.ts$''',
+  '''packages/core/src/engine/plugins/plugin-contract-remote\.test\.ts$''',
 ]
 regexes = [
+  '''manager-executor-token''',
+  '''plugin-remote-loader-token''',
+  '''plugin-client-token-test''',
+  '''plugin-contract-remote-token''',
+  '''executor-contract-token''',
+  '''executor-matrix-token''',
+  '''executor-client-token-test''',
+  '''executor-token-test''',
   '''backend-secret''',
   '''test-key-material''',
   '''SECRET_MARKER''',
@@ -103,6 +120,23 @@ regexes = [
   '''synth_svc_external[-]secret-123''',
   '''fs-upload-limit-test-key''',
   '''legacy-local-owner-key''',
+]
+regexTarget = "line"
+
+# 3.1. Имена env-переменных как плейсхолдер значения токена (ADR-077, ADR-052):
+#      в примерах конфигурации executor'а и в схеме конфигурации ядра значение
+#      токена — это ИМЯ переменной (`SYNTH_EXECUTOR_TOKEN`), а не секрет.
+#      Подавление строго по двум путям и по имени переменной; реальный секрет
+#      в этих файлах остаётся находкой.
+[[allowlists]]
+description = "имена env-переменных как плейсхолдер значения токена (не секрет)"
+paths = [
+  '''packages/executor/src/config\.ts$''',
+  '''packages/shared/src/config/execution\.ts$''',
+]
+regexes = [
+  '''SYNTH_EXECUTOR_TOKEN''',
+  '''SYNTH_EXECUTION_TOKEN''',
 ]
 regexTarget = "line"
 
