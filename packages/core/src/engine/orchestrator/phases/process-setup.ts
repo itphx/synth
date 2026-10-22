@@ -506,8 +506,16 @@ export async function runProcessSetup(
   // модель получает НИКАКИХ инструментов (safety-fallback).
   // `select()` — после ensureToolsLoaded (реестр уже содержит MCP-тулы).
   const toolSelection = select();
+  // PROP-090 §«Точка `tools`»: порядок слоёв — встроенные → плагинные → MCP.
+  // `stableToolCount` считает только встроенные: плагинные и MCP-тулы меняются
+  // в runtime (активация/деактивация, серверы сессии) и вне stable-префикса.
   const tools = deps.toolRegistry
-    ? [...toolSelection.builtin, ...toolSelection.mcp]
+    ? [
+      ...toolSelection.builtin,
+      // Мок/внешняя реализация реестра может не отдавать слой `plugin`.
+      ...(toolSelection.plugin ?? []),
+      ...toolSelection.mcp,
+    ]
     : undefined;
   // ADR-071 §2.1: граница stable-слоя инструментов для кэш-брейкпоинта
   // (Anthropic) — после встроенных, до MCP. MCP после границы не кэшируется.

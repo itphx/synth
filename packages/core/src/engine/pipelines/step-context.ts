@@ -58,6 +58,11 @@ export interface PipelineProjectStoreLike {
 export interface PipelineToolRegistryLike {
   /** Встроенные инструменты (слой `tools`). */
   listBuiltin(): ToolDefinition[];
+  /**
+   * PROP-090 §«Точка `tools`»: инструменты плагинов (инстанс-локальный слой).
+   * Не задан — плагинных инструментов в шаге нет (совместимость с моками).
+   */
+  listPlugin?(pluginName?: string): ToolDefinition[];
   /** MCP-инструменты указанных серверов (per-scope выборка). */
   listMcp(serverNames: Iterable<string>): ToolDefinition[];
 }
@@ -283,13 +288,20 @@ function resolveMcpDecisions(
   return resolveMcpProjectScope(servers, project?.mcp);
 }
 
-/** Все тулы шага: встроенные + MCP активных серверов проекта. */
+/**
+ * Все тулы шага: встроенные + плагинные (PROP-090, Ф3в) + MCP активных
+ * серверов проекта. Порядок тот же, что у сессии (`selectForSession`).
+ */
 function collectTools(
   registry: PipelineToolRegistryLike | null | undefined,
   mcpServers: string[],
 ): ToolDefinition[] {
   if (!registry) return [];
-  return [...registry.listBuiltin(), ...registry.listMcp(mcpServers)];
+  return [
+    ...registry.listBuiltin(),
+    ...(registry.listPlugin?.() ?? []),
+    ...registry.listMcp(mcpServers),
+  ];
 }
 
 /**

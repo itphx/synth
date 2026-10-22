@@ -1162,14 +1162,18 @@ export class ChatOrchestrator {
       ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef, workspaceReady)
       : undefined;
     // ADR-071 §2.6: admin-disabled исключаются всегда, независимо от политики.
+    // PROP-090 §«Точка `tools`»: плагинные инструменты — инстанс-локальный слой;
+    // политика у них та же, что у встроенных (`tools.policy`), отдельного
+    // `plugins.policy` нет. Admin-отключение (`tools.disabled`) действует всегда.
     const toolPredicates = {
       builtin: this._toolPredicate(toolsPolicy === 'available' ? availabilityPredicate : undefined),
+      plugin: this._toolPredicate(toolsPolicy === 'available' ? availabilityPredicate : undefined),
       mcp: this._toolPredicate(mcpPolicy === 'available' ? availabilityPredicate : undefined),
     };
     const select = (): ReturnType<ToolRegistry['selectForSession']> =>
       (this._toolRegistry && agentDef && effectiveAgentRole
         ? this._toolRegistry.selectForSession(activeMcpServers, toolPredicates)
-        : { builtin: [], mcp: [] });
+        : { builtin: [], plugin: [], mcp: [] });
     return { toolsPolicy, mcpPolicy, select };
   }
 
@@ -2950,6 +2954,9 @@ export class ChatOrchestrator {
             params: toolArgs,
             workingDir,
             capabilities: toolDef?.capabilities,
+            // PROP-090 §«Точка `tools`»: источник тула — плагинные инструменты
+            // адресуются группой `plugin` в permission-правилах.
+            toolSource: toolDef?.source,
             agentCapabilities: agentDef?.capabilities,
             sessionMode,
             planMode,
@@ -3417,7 +3424,13 @@ export class ChatOrchestrator {
               sessionMode, planMode, planApproved, workspaceReady,
             });
             const rebuiltSelection = rebuilt.select();
-            tools = this._toolRegistry ? [...rebuiltSelection.builtin, ...rebuiltSelection.mcp] : undefined;
+            tools = this._toolRegistry
+              ? [
+                ...rebuiltSelection.builtin,
+                ...(rebuiltSelection.plugin ?? []),
+                ...rebuiltSelection.mcp,
+              ]
+              : undefined;
             finalSystemPrompt.stableToolCount = rebuiltSelection.builtin.length;
           }
 

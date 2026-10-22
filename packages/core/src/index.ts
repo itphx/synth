@@ -17,7 +17,10 @@ export type { HookHandler, HookRegistrationOptions, HookEmitResult } from './eng
 export { PluginHost, DEFAULT_EXTENSION_CONTRACT_VERSION } from './engine/plugins/index.js';
 export {
   PLUGIN_ACTIVATION_STEPS,
+  DEFAULT_PLUGIN_CONTRACT_REFERENCE,
+  PLUGIN_CONTRACT_FIXTURES,
   computePluginContentHash,
+  describePluginContract,
   verifyPluginIntegrity,
   readExactHostExceptions,
 } from './engine/plugins/index.js';
@@ -36,6 +39,11 @@ export type {
   PluginScanHook,
   PluginScanResult,
   PluginIntegrityVerdict,
+  PluginContractFixtureName,
+  PluginContractHarness,
+  PluginContractHarnessFactory,
+  PluginContractReference,
+  PluginToolDefinition,
 } from './engine/plugins/index.js';
 // PROP-068 §4.3 / PROP-090 §9 (Ф2): статический сканер расширений — правила,
 // квоты, `.skillignore`, кэш сканов и дефолтный хук скана.

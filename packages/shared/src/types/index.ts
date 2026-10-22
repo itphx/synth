@@ -13,6 +13,8 @@ export * from './prompt.js';
 export * from './prompt-blocks.js';
 // PROP-090 §«Точка llmFilters»: контракт фильтра LLM-вызовов
 export * from './llm-filters.js';
+// PROP-090 §«Точка tools»: namespace инструментов плагина (plugin_<ns>_<tool>)
+export * from './plugin-tools.js';
 // MCP: реестр серверов, сетевой доступ, уровни/эффективный набор (ADR-071)
 export * from './mcp.js';
 // Проекты, workspace-политика, иконки/цвета, план (ADR-039/075)

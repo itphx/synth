@@ -1,4 +1,4 @@
-import { ToolCapability } from '@itphx/synth-shared';
+import { ToolCapability, type ToolSource } from '@itphx/synth-shared';
 
 /**
  * ADR-029: соответствие групп permissions → конкретные имена тулов.
@@ -46,6 +46,7 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   git: GIT_TOOLS,
   task: ['task'],
   mcp: [],
+  plugin: [],
   runtime: RUNTIME_TOOLS,
   user: ['profile_update'],
   [ToolCapability.FILE_READ]: READ_TOOLS,
@@ -64,6 +65,7 @@ export const PERMISSION_GROUP_ORDER: string[] = [
   'git',
   'task',
   'mcp',
+  'plugin',
   'runtime',
   'user',
   ToolCapability.FILE_READ,
@@ -97,7 +99,20 @@ export const TOOL_PATH_PARAMS: Record<string, string[]> = {
 };
 
 /** Группы, к которым принадлежит тул (по имени и по capabilities). */
-export function getToolGroups(toolName: string, capabilities?: readonly string[]): string[] {
+export function getToolGroups(
+  toolName: string,
+  capabilities?: readonly string[],
+  /**
+   * Источник тула (`ToolDefinition.source`, ADR-071 §2.1 + PROP-090 §«Точка
+   * `tools`»). Не задан — считается встроенным.
+   *
+   * Нужен для групп, которые **не выражаются** именем или capability:
+   * MCP-инструменты матчатся по capability `mcp`, а инструменты плагинов —
+   * по источнику `plugin` (у них свои, содержательные capabilities вроде
+   * `file_read`, и группа `plugin` должна срабатывать поверх них).
+   */
+  source?: ToolSource,
+): string[] {
   const result: string[] = [];
   for (const group of PERMISSION_GROUP_ORDER) {
     const tools = PERMISSION_GROUPS[group];
@@ -108,6 +123,12 @@ export function getToolGroups(toolName: string, capabilities?: readonly string[]
     }
     // Динамические MCP-инструменты не имеют фиксированного имени — матчим по capability
     if (group === 'mcp' && capabilities?.includes(ToolCapability.MCP)) {
+      result.push(group);
+      continue;
+    }
+    // Инструменты плагинов (PROP-090, Ф3в): группа по источнику, а не по
+    // capability — плагин не может «выписаться» из правила `plugin`.
+    if (group === 'plugin' && source === 'plugin') {
       result.push(group);
       continue;
     }

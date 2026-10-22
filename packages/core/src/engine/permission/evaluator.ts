@@ -1,6 +1,6 @@
 import { relative } from 'node:path';
 import { globMatch, ToolCapability } from '@itphx/synth-shared';
-import type { PermissionAction, PermissionConfig, PermissionDecision, PermissionRule, PlanMode, SessionMode, McpServerToolSettings, McpToolAvailability } from '@itphx/synth-shared';
+import type { PermissionAction, PermissionConfig, PermissionDecision, PermissionRule, PlanMode, SessionMode, McpServerToolSettings, McpToolAvailability, ToolSource } from '@itphx/synth-shared';
 import { resolvePath, isLexicallyInside, isInsideReal } from '../tools/path-utils.js';
 import { t as sm } from '../system-messages.js';
 import { computeToolAvailability, isWorkspaceDependentTool, isToolAvailableInDegradedMode } from './availability.js';
@@ -23,6 +23,13 @@ export interface PermissionCheckInput {
   params: Record<string, unknown>;
   workingDir: string;
   capabilities?: readonly string[];
+  /**
+   * PROP-090 §«Точка `tools`»: источник тула (`ToolDefinition.source`).
+   * `plugin` — инструмент плагина, попадает в группу `plugin` (правило
+   * `permission.rules.plugin` запрещает все плагинные инструменты сразу).
+   * Не задан — встроенный/MCP (поведение прежнее).
+   */
+  toolSource?: ToolSource;
   /** Текущий runtime-режим сессии (ADR-025): 'plan' — только чтение. */
   sessionMode?: SessionMode;
   /** Строгость цикла Plan→Build (ADR-028): auto | strict | off. */
@@ -175,7 +182,7 @@ export class PermissionEvaluator {
   }
 
   private _computeDecision(input: PermissionCheckInput): PermissionDecision {
-    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy, protectedPaths, protectedPathsEnabled, runtimeDeps, workspaceReady } = input;
+    const { toolName, params, workingDir, capabilities, toolSource, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy, protectedPaths, protectedPathsEnabled, runtimeDeps, workspaceReady } = input;
     const paths = extractPaths(toolName, params, workingDir);
     const isFile = paths.length > 0;
 
@@ -367,7 +374,7 @@ export class PermissionEvaluator {
     }
 
     // 3. Групповые правила
-    for (const group of getToolGroups(toolName, capabilities)) {
+    for (const group of getToolGroups(toolName, capabilities, toolSource)) {
       const groupRule = this._rules[group];
       if (groupRule === undefined) continue;
       // Для execute_shell правила группы shell матчатся по КОМАНДЕ (префиксы

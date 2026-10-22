@@ -457,7 +457,10 @@
   `filters` прокидывается из оркестратора (`Options.llmFilters`/`llmFilterTimeoutMs`, шов
   `getLlmFilters()`) в пул, decision- и optimizer-gateway; пустой реестр — поведение прежнее.
 - `engine/router/*` — routing моделей и micro-model слой (ADR-034/035); decision-слой — `DecisionContentClassifier` (`decision-content-classifier.ts`, ADR-084), `DecisionModel` в `micro/models/` (`kind='decision'`, per-session `decisionFirst`), единый каскад `decision-cascade.ts` (`decideChoiceCascade`: `primary → escalation` по необязательной паре `escalationProvider`/`escalationModel`, fail-safe) и агрегатные метрики `decision-metrics.ts` (синглтон `decisionMetrics`: `calls`/`handled`/`fallback`/`escalated`/`attempts`/`rejected`/`by_model`). Мультимодальный контракт (задел PROP-085): `MicroInput.images`/`videos`, `ClassifyRequest.images`/`videos`, `DecisionProvider.decide(opts.images/videos)` — добавляются в тело запроса только если непусты.
-- `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
+- `engine/permission/*` — permissions (`PERMISSION_GROUPS`; группа `plugin` — PROP-090 Ф3в: матчится
+  **по источнику** `ToolSource` (`getToolGroups(toolName, capabilities, source?)`,
+  `PermissionCheckInput.toolSource`), а не по capability, — плагин с `file_read`/`search` не
+  «выписывается» из правила `plugin`); `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
   Системный промпт (ADR-070): `composer.ts` — `SystemPromptComposer` (единственная точка сборки
   промпта основной сессии и саб-агентов: `compose()` идемпотентно собирает из состояния, `manifest()` —
@@ -567,7 +570,17 @@
   (`` !`cmd` ``) — opt-in через `execute_shell`; встроенная `/init` (ADR-069) —
   prompt-команда генерации/обновления `AGENTS.md` (`INIT_INSTRUCTION_PATH`). Тесты — `engine/commands/*.test.ts`.
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
-  plan, todo, project, task, skill, profile_update); git-тулы принимают необязательный `repo_path`
+  plan, todo, project, task, skill, profile_update). Реестр держит **три слоя** по
+  `ToolDefinition.source` (`builtin` | `mcp` | `plugin`, ADR-071 §2.1 + PROP-090 §«Точка `tools`»):
+  `registerPlugin(tool, pluginName)` — единственный путь регистрации плагинного тула, **атомарная**
+  валидация с отказом `invalid_name`/`invalid_definition`/`invalid_capability`/`name_conflict`;
+  имя всегда `plugin_<ns>_<tool>` (namespace — из `manifest.name`, хелперы в
+  `shared/types/plugin-tools.ts`: `pluginToolFullName`/`pluginToolLocalName`), capability `mcp`
+  (слой MCP) и `runtime` (примитивы ядра неотключаемы админом) зарезервированы, пустой набор
+  capabilities — отказ. Выборка по слоям — `selectForSession` → `{ builtin, plugin, mcp }`
+  (склейка промпта — `builtin → plugin → mcp`), `listPlugin(pluginName?)`/`pluginLocalNames()`;
+  `deregister`/`deregisterByCapability` работают с плагинными как с обычными.
+  git-тулы принимают необязательный `repo_path`
   (containment внутри `project.workspace`), SSH-окружение — `engine/tools/git-ssh.ts`
   (ADR-076; ошибки — `sshkey.env_failed`). Тул `task` (ADR-095 шаг 5) разбит на
   `engine/tools/task/*`: `tool.ts` (`taskTool`), `fork.ts` (fork/контекст-режимы ADR-026 +
@@ -646,15 +659,31 @@
   (**Ф3а — `registerPromptBlock`**: регистрация провайдера блока промпта с возвратом disposer'а;
   **Ф3б — `registerLlmFilter`**: регистрация фильтра LLM-вызовов от имени плагина — хост подставляет
   `pluginName`/`pluginVersion` и **фактическое** доверие активации, `onAudit` пишет в журнал плагинов;
-  отказ любой точки — предупреждение в лог, активация плагина не падает).
+  **Ф3в — `registerTool(def: PluginToolDefinition)`**: инструмент плагина под namespace-именем
+  `plugin_<ns>_<tool>` (имя составляет **хост**, плагин передаёт локальное); отказ любой точки —
+  предупреждение в лог, активация плагина не падает).
   **Сверка `provides` (Ф3б).** После `apply()` и **до** фиксации активации `PluginHost` сверяет
   `provides.promptBlocks[]`/`provides.llmFilters[]` с фактическими регистрациями (`diffPackProvides`):
   расхождение в любую сторону (`missing`/`unexpected`) → **отказ** `plugin.provides_mismatch` с обратной
-  прокруткой disposers (отклонённый плагин не оставляет блоков/фильтров в живых реестрах). Отклонённая
-  регистрация (например, тир `stable`) «зарегистрированной» не считается. `provides.tools[]` войдёт в
-  сверку вместе с точкой `tools` (Ф3в). Опции хоста: `promptBlocks` (**Ф3а**) и `llmFilters` (**Ф3б**,
-  тот же экземпляр, что у `GatewayProvider`, — `orchestrator.getLlmFilters()`); не переданы — точка
-  недоступна (предупреждение, no-op).
+  прокруткой disposers (отклонённый плагин не оставляет блоков/фильтров/тулов в живых реестрах).
+  Отклонённая регистрация (например, тир `stable`) «зарегистрированной» не считается.
+  **Ф3в:** сверяются все три вида — `provides.promptBlocks[]`, `provides.llmFilters[]`,
+  `provides.tools[]`; тулы — по **локальным** именам (в манифесте `"tools": ["memory_search"]`, в реестре
+  `plugin_<ns>_memory_search`). Опции хоста: `promptBlocks` (**Ф3а**), `llmFilters` (**Ф3б**, тот же
+  экземпляр, что у `GatewayProvider`, — `orchestrator.getLlmFilters()`), `tools` (**Ф3в**, общий
+  `ToolRegistry` — тот же, что у оркестратора и permission-слоя); не переданы — точка недоступна
+  (предупреждение, no-op).
+  **Контрактный suite расширений (Ф3в).** `engine/plugins/contract/*` — «паспорт» плагина по образцу
+  `storage/contract/*`: `describePluginContract(name, make)` + `PluginContractHarness` (операции:
+  `activate`/`deactivate`/`composeSystem`/`manifest`/`runPreRequest`/`checkPermission`/списки реестров) +
+  8 фикстур (`fixtures.ts`: эталон с блоком/пустым блоком/двумя фильтрами/тулом и «плохие» —
+  `stable-block`, `bad-phase`, `bad-verdict`, `provides-mismatch`, `unknown-capability`,
+  `reserved-tool-name`, `untrusted-deny`). Проверки: тир/ключи/бюджет блоков; порядок и `failMode`
+  фильтров; namespace, источник `plugin` и **прохождение через permission-слой** тулов; сверка
+  `provides` (все три вида); **dispose-дисциплина** (после `deactivate()` ни одной регистрации);
+  запрет обхода (неизвестная/зарезервированная capability, заявленный trust не повышает фактический).
+  Suite работает только через операции харнесса — тот же набор обязан пройти на `out-of-process`
+  реализации (Ф4). Прогон — `engine/plugins/plugin-contract.test.ts` (21 тест).
 - `engine/plugins/scan/*` — PROP-090 §9 / PROP-068 §4.3: встроенный статический сканер расширений
   (**advisory**: код не исполняется, сканер лишь выносит вердикт; блокирует матрица install-policy).
   Файлы: `rules.ts` (таблица правил `PLUGIN_SCAN_RULES` по 7 категориям — 6 базовых + `invisible_unicode`;
