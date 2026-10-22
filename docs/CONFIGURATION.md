@@ -1271,6 +1271,44 @@ scheduler:
   crossProcessLocks: false
 ```
 
+### Плагины (`plugins.*`, PROP-090)
+
+Секция задаёт политику слоя плагинов (Extension API v1): доверие, скан, установку и бюджеты точек
+расширения. Runtime-override этих ключей — `GET/PUT/DELETE /api/v2/settings/plugins`
+([API_V2.md](./API_V2.md) §5.36); **изменения применяются после перезапуска** (инвариант 24) —
+рантайм плагинов (хост, загрузчик, эффективный конфиг) собирается при старте.
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `plugins.enabled` | Мастер-выключатель слоя плагинов | `true` |
+| `plugins.executionEnabled` | **Исполнение кода плагинов.** `false` — активация останавливается на шаге `import` (`plugin.execution_disabled`); установка/снятие и скан работают | `false` |
+| `plugins.runtimeInstall` | Установка во время работы (`allow`/`deny`); `deny` — только deploy-time | `deny` |
+| `plugins.trustFloor` | Минимальное доверие для **активации** (`builtin`/`verified`/`trusted`/`community`); ниже порога плагин устанавливается, но не активируется | `trusted` |
+| `plugins.scan` | Статический скан содержимого (`enabled`/`disabled`). `disabled` вместе с `executionEnabled: true` — **fail-closed** (`plugin.scan_disabled_with_execution`) | `enabled` |
+| `plugins.allowlist`/`plugins.denylist` | Имена расширений, которым разрешён/запрещён запуск (пусто — политика не применяется) | `[]` |
+| `plugins.remoteAllowlist` | Allow-list для hybrid-контура (Ф7) | `[]` |
+| `plugins.exactHostExceptions` | Путь к файлу точных исключений семвер-гейта (`host`, одна версия в строке) | `''` |
+| `plugins.promptBlockMaxChars` | Бюджет символов **на блок** системного промпта от плагина (превышение — обрезка с маркером, `status: 'truncated'`) | `4000` |
+| `plugins.llmFilterTimeoutMs` | Бюджет времени на один вызов фильтра LLM-вызовов; по истечении — `failMode` фильтра | `1000` |
+
+```yaml
+plugins:
+  executionEnabled: false   # включить после установки и проверки плагинов
+  runtimeInstall: deny
+  trustFloor: trusted
+  promptBlockMaxChars: 4000
+  llmFilterTimeoutMs: 1000
+```
+
+- **Где живут плагины**: `<home>/plugin/` (ADR-079) или `{dataDir}/plugin/` — `installed/<name>@<version>/`,
+  `quarantine/` (ожидают подтверждения), `plugins.lock.json` (провенанс — источник истины для
+  update/uninstall). Журнал — `{dataDir}/audit/plugins.jsonl`.
+- **Bundle-only**: плагин — self-contained ESM-бандл (`dist/index.js`); npm-зависимости не
+  резолвятся, `@itphx/*` — external (peer).
+- **Порядок гейтов** (установка и активация): манифест → fail-closed (`scan=disabled` +
+  `executionEnabled`) → trust-floor → скан → `runtimeInstall` → install-policy
+  (`safe→allow`, `caution→ask` = карантин, `dangerous→block`).
+
 ### Аналитика и отчётность (`analytics.*`, ADR-102)
 
 Секция задаёт только срок хранения **пред-агрегированных суточных роллапов**

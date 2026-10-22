@@ -16,6 +16,7 @@ import type {
   EventsRuntimeSettings,
   LlmGatewayRuntimeSettings,
   MetricsRuntimeSettings,
+  PluginsRuntimeSettings,
   RuntimeSettings,
   SecurityRuntimeSettings,
 } from '../runtime-settings.js';
@@ -112,6 +113,15 @@ export interface SettingsRepository {
   getMetrics(): Promise<Partial<MetricsRuntimeSettings>>;
   setMetrics(config: Partial<MetricsRuntimeSettings>): Promise<void>;
   clearMetrics(): Promise<void>;
+
+  /**
+   * PROP-090 §10: runtime-настройки слоя плагинов (секция `plugins`).
+   * Применяются при старте процесса (рантайм плагинов и хост собираются на
+   * старте) — `restartRequired` в API, инвариант 24.
+   */
+  getPlugins(): Promise<Partial<PluginsRuntimeSettings>>;
+  setPlugins(config: Partial<PluginsRuntimeSettings>): Promise<void>;
+  clearPlugins(): Promise<void>;
 
   /** ADR-099: runtime-override секции `proxy` (без секретов). */
   getProxySettings(): Promise<Partial<ProxyConfig> | undefined>;

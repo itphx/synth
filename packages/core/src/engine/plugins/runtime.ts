@@ -144,15 +144,23 @@ export class PluginRuntime {
   readonly host: PluginHost;
   /** Сервис установки/подтверждения/снятия (с тем же хостом). */
   readonly installer: PluginInstaller;
+  /**
+   * Раскладка слоя плагинов (`installed/`/`quarantine/`/lock) — нужна HTTP API
+   * для чтения манифеста и `PLUGIN_INTEGRITY.json` каталога установки (Ф5б-2).
+   */
+  readonly layout: PluginLayout;
+  /**
+   * Эффективная конфигурация слоя, с которой собран этот рантайм (на старте
+   * процесса). API настроек отдаёт её как `running` (применение — рестартом).
+   */
+  readonly config: PluginsConfig;
 
-  private readonly _layout: PluginLayout;
-  private readonly _config: PluginsConfig;
   private readonly _lock: PluginLockRepository;
   private readonly _logger: PluginLogger;
 
   constructor(deps: PluginRuntimeDeps) {
-    this._layout = deps.layout;
-    this._config = deps.config;
+    this.layout = deps.layout;
+    this.config = deps.config;
     this._lock = deps.lock;
     this._logger = deps.logger ?? {
       warn: (message: string) => {
@@ -197,7 +205,7 @@ export class PluginRuntime {
    */
   async activateInstalled(opts: { actor?: string } = {}): Promise<PluginActivationResult[]> {
     // Исполнение кода выключено политикой — ожидаемый no-op, не ошибка.
-    if (!this._config.executionEnabled) return [];
+    if (!this.config.executionEnabled) return [];
 
     const actor = opts.actor ?? 'startup';
     let entries: PluginLockEntry[];
@@ -337,7 +345,7 @@ export class PluginRuntime {
     entry: PluginLockEntry,
     actor: string,
   ): Promise<PluginActivationResult> {
-    const rootDir = pluginInstalledDir(this._layout, entry.name, entry.version);
+    const rootDir = pluginInstalledDir(this.layout, entry.name, entry.version);
     const manifest = await this._readManifest(rootDir);
     if (!manifest) {
       // Манифеста нет/он битый: дескриптор не собрать (манифест — обязательное

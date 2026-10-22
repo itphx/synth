@@ -11,7 +11,7 @@ import {
   getPublicOpenApiDocument,
   createFsRoutes, createGitRoutes, createSshKeyRoutes, createAgentSshKeyRoutes,
   createEventRoutes, createSchedulerRoutes, createServiceKeyRoutes, createWebhookRoutes,
-  mergeLlmGatewayConfig, mergeSecurityConfig,
+  mergeLlmGatewayConfig, mergeSecurityConfig, mergePluginsConfig,
   createSkillRoutes, createCommandRoutes, createSkillBundleRoutes,
   createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes,
   createIdentityRoutes,
@@ -25,6 +25,7 @@ import {
   createMetricsSettingsRoutes,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
+  createPluginsRoutes, createPluginSettingsRoutes,
   resolveProjectWorkspace,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext } from '@itphx/synth-core';
@@ -424,6 +425,50 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       approveGuard: auth.requirePermission('ADMIN'),
       uninstallGuard: auth.requirePermission('ADMIN'),
       scopeGuard,
+    },
+  ));
+
+  // PROP-090 §«HTTP API» (Ф5б-2): управление плагинами инстанса. Managed RBAC:
+  // чтение — ADMIN (реестр инстанса), установка/активация/деактивация —
+  // ADMIN или service-key со scope `addons:install` (установка аддонов —
+  // зонтичный scope реестра расширений), подтверждение карантина и снятие —
+  // **только ADMIN** (снятие гасит код в процессе ядра). Установка из
+  // локального каталога запрещена (`localInstall: false` → 403
+  // `LOCAL_INSTALL_DISABLED`): путь с ФС хоста в managed не принимается,
+  // доставка бандла — deploy-time (образ/PVC).
+  app.route('/api/v2/plugins', createPluginsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      runtime: deps.pluginRuntime,
+      config: mergePluginsConfig(config.synth.plugins, {}),
+      settings: settingsStore,
+      localInstall: false,
+      resolveUserId: (c) => {
+        const user = c.get('user') as { id?: string } | undefined;
+        return user?.id;
+      },
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: requireAdminRoleOrScope('addons:install'),
+      approveGuard: auth.requirePermission('ADMIN'),
+      uninstallGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
+
+  // PROP-090 §10 (Ф5б-2): runtime-настройки слоя плагинов. Managed RBAC —
+  // ADMIN (чтение и запись): политика доверия/скана/исполнения — инстанс-уровневая.
+  // `restartRequired` — всегда true (рантайм собирается при старте, инвариант 24).
+  app.route('/api/v2/settings', createPluginSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      config: mergePluginsConfig(config.synth.plugins, {}),
+      settings: settingsStore,
+      running: deps.pluginRuntime.config,
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
     },
   ));
 

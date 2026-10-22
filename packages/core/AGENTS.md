@@ -754,6 +754,16 @@
   копирование ассетов — Ф5б) — поэтому хеш совпадает с `scanPluginDirectory`. Идемпотентность: lock —
   upsert по имени (`installed_at` иммутабелен, `updated_at` обновляется); другая версия заменяет
   запись, каталог прежней версии остаётся (известное ограничение, чистка — Ф5б).
+- `server/routes/plugins.ts` — **Ф5б-2: HTTP-контур плагинов**. `createPluginsRoutes(auth, deps, opts)`:
+  `GET /`, `GET /:name` (манифест + `PLUGIN_INTEGRITY.json` — best-effort, порча не даёт 500), `POST /install`
+  (`201`/`202`/`400`/`403`/`409`), `POST /:name/approve`, `/:name/enable`, `/:name/disable`, `DELETE /:name`
+  (идемпотентно), `POST /update` (**501**, Ф5б-3). Таблица `PLUGIN_REASON_HTTP` (причина → HTTP) и
+  `httpStatusForRejection` — **единственное** место маппинга. `createPluginSettingsRoutes` —
+  `/api/v2/settings/plugins` (`pluginsConfigSchema.partial().strict()`, неизвестный ключ → 400,
+  `restartRequired: true` всегда — рантайм собирается при старте, инвариант 24). Монтаж: core —
+  `requireAuth` + `localInstall: true`; managed — ADMIN, install/enable — scope `addons:install`, approve и
+  DELETE — только ADMIN, `localInstall: false`. ⚠️ Backend импортирует core из `dist` — после правок
+  `server/routes/*` обязателен `pnpm --filter @itphx/synth-core build` перед backend-тестами.
 - **Шаг trust/scan в `PluginHost` (Ф2).** Порядок: **trust-floor → скан → install-policy**.
   Trust-floor проверяется **до** install-policy (`plugins.trustFloor`; ниже порога — отказ
   `plugin.trust_below_floor` **при любом вердикте**). Скан — встроенный или подключённый хук
