@@ -58,12 +58,18 @@ export {
 } from './engine/plugins/index.js';
 export type { InlinePluginLoaderOptions } from './engine/plugins/index.js';
 // PROP-090 §5/§9 (Ф5а): сервис установки/подтверждения/снятия плагина.
-export { PluginInstaller, collectBundleFiles, resolvePluginEntry } from './engine/plugins/index.js';
+export {
+  PluginInstaller,
+  collectBundleFiles,
+  readPluginManifest,
+  resolvePluginEntry,
+} from './engine/plugins/index.js';
 export type {
   CollectedBundle,
   PluginInstallOutcome,
   PluginInstallRequest,
   PluginInstallerDeps,
+  PluginManifestReadResult,
   PluginUninstallResult,
 } from './engine/plugins/index.js';
 // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного,

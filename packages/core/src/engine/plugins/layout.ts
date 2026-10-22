@@ -24,8 +24,8 @@
  * попадает** (PROP-090 §5). Сам путь скачивания/доставки — Ф5; здесь только
  * раскладка и запись lock.
  */
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { copyFile, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve, sep } from 'node:path';
 
 import type { CatalogTrustLevel, InstallPolicyAction } from '@itphx/synth-shared';
 import { resolveHome } from '@itphx/synth-shared/config';
@@ -123,6 +123,18 @@ export interface PluginBundleStageInput {
   version: string;
   /** Файлы бандла (относительный путь → содержимое). */
   files: Record<string, string>;
+  /**
+   * Ф5б-3: бинарные файлы бандла (относительные пути внутри `sourceDir`) —
+   * копируются **байт-в-байт** (`copyFile`). Текстовое содержимое нельзя
+   * представить без порчи, поэтому в `files` они не попадают; content-hash
+   * по-прежнему считается только по текстовым файлам (как у сканера).
+   */
+  binaryFiles?: string[];
+  /**
+   * Ф5б-3: каталог-источник бандла — откуда копируются `binaryFiles`.
+   * Обязателен, если заданы `binaryFiles`.
+   */
+  sourceDir?: string;
   /** Решение install-policy (`allow` → в `installed/`, иначе — карантин). */
   action: InstallPolicyAction;
   /** Источник установки (пишется в `PLUGIN_INTEGRITY.json`). */
@@ -154,10 +166,39 @@ export interface PluginBundleStageResult {
 }
 
 /**
+ * Проверить и нормализовать относительный путь файла внутри бандла.
+ *
+ * Containment (Ф5б-3): принимаются только относительные пути без `..`/`.`,
+ * без абсолютного префикса (в т.ч. `C:\`) и пустых сегментов — иначе
+ * `copyFile` мог бы прочитать файл вне каталога-источника.
+ */
+function normalizeBundleRelativePath(relPath: string): string {
+  const normalized = relPath.replace(/\\/g, '/');
+  const segments = normalized.split('/');
+  const invalid =
+    !normalized ||
+    normalized.startsWith('/') ||
+    /^[a-zA-Z]:/.test(normalized) ||
+    segments.some((segment) => segment === '' || segment === '.' || segment === '..');
+  if (invalid) {
+    throw new Error(
+      `Недопустимый путь файла бандла «${relPath}»: ожидается относительный путь ` +
+        'внутри каталога бандла (без «..», без абсолютного пути).',
+    );
+  }
+  return segments.join('/');
+}
+
+/**
  * Разложить бандл по раскладке.
  *
  * `allow` → бандл уезжает в `installed/<name>@<version>/`; `ask`/`block` →
  * остаётся в `quarantine/<name>@<version>/` (в `installed/` не попадает).
+ *
+ * Текстовые файлы пишутся из `files`, бинарные (`binaryFiles`) копируются
+ * байтами из `sourceDir`: иначе установленный бандл терял бы ассеты (иконки,
+ * wasm, картинки). Ошибка копирования **бросается** — установка не должна
+ * «тихо» ставить неполный бандл.
  *
  * Файл `PLUGIN_INTEGRITY.json` пишется в обоих случаях — он нужен и для
  * разбора карантина, и для сверки целостности при активации.
@@ -181,6 +222,35 @@ export async function stagePluginBundle(
     const target = join(dir, relPath);
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, content, 'utf-8');
+  }
+
+  // Бинарные ассеты — байт-в-байт (Ф5б-3). Ошибка копирования не глушится:
+  // неполный бандл хуже отказа установки.
+  const binaryFiles = input.binaryFiles ?? [];
+  if (binaryFiles.length > 0 && !input.sourceDir) {
+    throw new Error(
+      `Бандл «${input.name}@${input.version}»: переданы бинарные файлы ` +
+        `(${binaryFiles.join(', ')}) без sourceDir — копировать неоткуда.`,
+    );
+  }
+  const root = resolve(dir);
+  for (const relPath of binaryFiles) {
+    const relative = normalizeBundleRelativePath(relPath);
+    const target = join(dir, relative);
+    if (!resolve(target).startsWith(`${root}${sep}`)) {
+      throw new Error(
+        `Недопустимый путь файла бандла «${relPath}»: выходит за пределы каталога установки.`,
+      );
+    }
+    await mkdir(dirname(target), { recursive: true });
+    try {
+      await copyFile(join(input.sourceDir as string, relative), target);
+    } catch (err) {
+      throw new Error(
+        `Не удалось скопировать бинарный файл бандла «${relative}» ` +
+          `(«${input.name}@${input.version}»): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   const integrity: PluginIntegrityFile = {

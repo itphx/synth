@@ -42,12 +42,18 @@ export { computePluginContentHash, verifyPluginIntegrity } from './integrity.js'
 export type { PluginIntegrityVerdict } from './integrity.js';
 
 // Ф5а — сервис установки: манифест → скан → политика → раскладка/lock → аудит.
-export { PluginInstaller, collectBundleFiles, resolvePluginEntry } from './installer.js';
+export {
+  PluginInstaller,
+  collectBundleFiles,
+  readPluginManifest,
+  resolvePluginEntry,
+} from './installer.js';
 export type {
   CollectedBundle,
   PluginInstallOutcome,
   PluginInstallRequest,
   PluginInstallerDeps,
+  PluginManifestReadResult,
   PluginUninstallResult,
 } from './installer.js';
 

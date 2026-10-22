@@ -7,6 +7,7 @@ import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
 import { JsonStore } from '@itphx/synth-core/storage/json-store.js';
 import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey, initTlsTrust, setSynthReady } from '@itphx/synth-core';
+import { createPluginCliContext, createPluginCommand } from '@itphx/synth-core/cli/plugin-commands.js';
 
 const require = createRequire(import.meta.url);
 
@@ -618,6 +619,10 @@ projectCmd
   });
 
 program.addCommand(projectCmd);
+
+// PROP-090 §«CLI (`synth plugin *`)» (Ф5б-3): та же группа, что в core-`main.ts`
+// (реализация — общий модуль `@itphx/synth-core/cli/plugin-commands.js`).
+program.addCommand(createPluginCommand({ createContext: createPluginCliContext }));
 
 program
   .command('chat')

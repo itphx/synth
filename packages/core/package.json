@@ -48,6 +48,10 @@
       "types": "./dist/auth/local.d.ts",
       "import": "./dist/auth/local.js"
     },
+    "./cli/plugin-commands.js": {
+      "types": "./dist/cli/plugin-commands.d.ts",
+      "import": "./dist/cli/plugin-commands.js"
+    },
     "./engine/gateway/index.js": {
       "types": "./dist/engine/gateway/index.d.ts",
       "import": "./dist/engine/gateway/index.js"

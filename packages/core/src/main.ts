@@ -8,6 +8,7 @@ import { initTlsTrust } from './security/tls.js';
 import { configureRestart, resolveRestartMode, RESTART_EXIT_CODE } from './server/restart.js';
 import { checkExecutionMode } from './execution/startup.js';
 import { setSynthReady } from './metrics/collectors/ready.js';
+import { createPluginCliContext, createPluginCommand } from './cli/plugin-commands.js';
 
 const program = new Command();
 
@@ -723,6 +724,10 @@ projectCmd
   });
 
 program.addCommand(projectCmd);
+
+// PROP-090 §«CLI (`synth plugin *`)» (Ф5б-3): группа объявляется и здесь, и в
+// `packages/synth/src/cli.ts` — обе обёртки используют один модуль команд.
+program.addCommand(createPluginCommand({ createContext: createPluginCliContext }));
 
 program
   .command('chat')
