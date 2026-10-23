@@ -1,7 +1,7 @@
 import type { Message, Session } from '@itphx/synth-shared';
-import { nowISO, generateStreamId, generateId, MessageRole } from '@itphx/synth-shared';
+import { nowISO, generateStreamId, generateId, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY } from '@itphx/synth-shared';
 import type { SessionManager } from '../sessions/manager.js';
-import { t as sm } from '../engine/system-messages.js';
+import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { EventBus } from '../events/bus.js';
 import type { ContextOptimizer } from '../engine/context/optimizer.js';
 import { isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../engine/llm-error.js';
@@ -670,6 +670,60 @@ export class QueueProcessorManager {
     }
     return null;
   }
+}
+
+/**
+ * Результат постановки сообщения в очередь инъекций (PROP-098).
+ */
+export interface SteerEnqueueResult {
+  /** Сообщение принято в очередь инъекций. */
+  accepted: boolean;
+  /** Причина отказа: превышен лимит инъекций на ход. */
+  reason?: 'limit';
+  /** Сколько сообщений ждёт в очереди инъекций. */
+  pending: number;
+}
+
+/**
+ * PROP-098: поставить сообщение в очередь инъекций (`steerInbox`) — отправка
+ * во время активного хода (`mode: 'steer'`).
+ *
+ * Очередь отдельна от `pendingMessages`: её вычитывает оркестратор на границе
+ * шага и вплетает сообщения в текущий ход (генерация не прерывается).
+ *
+ * Превышение лимита инъекций на ход — не 500: публикуется `steer.dropped`,
+ * вызывающий отвечает понятной ошибкой API (`STEER_LIMIT_EXCEEDED`).
+ */
+export async function enqueueSteerMessage(
+  sessionManager: SessionManager,
+  eventBus: EventBus,
+  sessionId: string,
+  message: Message,
+  maxInjections: number = MAX_STEER_INJECTIONS_PER_TURN,
+  obfuscate?: (sessionId: string, message: Message) => Promise<Message>,
+): Promise<SteerEnqueueResult> {
+  // ADR-036: обфускация user-сообщения ДО постановки в очередь — в историю
+  // попадёт плейсхолдер, а не реальный секрет.
+  if (obfuscate && message.role === MessageRole.USER) {
+    message = await obfuscate(sessionId, message);
+  }
+  // Признак инъекции — на самом сообщении (PROP-098): UI рисует маркер
+  // «вмешательство в ход», а оркестратор персистит его как есть.
+  message.metadata = { ...(message.metadata ?? {}), [STEER_METADATA_KEY]: true };
+
+  const result = await sessionManager.enqueueSteerMessage(sessionId, message, maxInjections);
+  if (!result.accepted) {
+    eventBus.publish(sessionId, 'steer.dropped', {
+      reason: 'limit',
+      limit: maxInjections,
+      pending_count: result.pending,
+      error: sm('steer.limit_exceeded', { limit: String(maxInjections) }),
+      i18n: i18nMeta('steer.limit_exceeded', { limit: String(maxInjections) }),
+    });
+    return { accepted: false, reason: 'limit', pending: result.pending };
+  }
+
+  return { accepted: true, pending: result.pending };
 }
 
 /**

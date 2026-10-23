@@ -5,11 +5,12 @@ import { createServer, IncomingMessage } from 'node:http';
 import { Readable } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { Hono } from 'hono';
-import { enqueueUserMessage, isSessionVisible } from '@itphx/synth-core';
+import { enqueueUserMessage, enqueueSteerMessage, isSessionVisible } from '@itphx/synth-core';
 import type { EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository, MetricsRegistry } from '@itphx/synth-core';
-import { nowISO, MessageRole, generateStreamId } from '@itphx/synth-shared';
+import { nowISO, MessageRole, generateStreamId, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { AuthKit } from '../auth/middleware.js';
 import type { EventClient, EventHub } from '../events/hub.js';
+import { t } from '../lib/i18n.js';
 
 /**
  * Вспомогательная функция для конвертации Node Request в Web Request.
@@ -211,6 +212,25 @@ export function createBackendListen(deps: BackendListenDeps) {
 
                 const streamId = msg.stream_id || generateStreamId();
 
+                // PROP-098: режим отправки. `interrupt` — этап 2: молчаливого
+                // приёма нет, отвечаем ошибкой с машинным кодом.
+                const mode = isSteerMode(msg.mode) ? msg.mode : DEFAULT_STEER_MODE;
+                if (mode === 'interrupt') {
+                  ws.send(JSON.stringify({
+                    type: 'error',
+                    session_id: sid,
+                    data: {
+                      error: t('errors.chat.steerInterruptUnsupported'),
+                      code: STEERING_ERROR_CODES.interruptUnsupported,
+                    },
+                    timestamp: nowISO(),
+                  }));
+                  return;
+                }
+                // Для `steer` подтверждение уходит после приёма сообщения
+                // (иначе «queued» означало бы принятое, но отброшенное).
+                const steerMode = mode === 'steer';
+
                 (async () => {
                   const session = await loadVisibleSession(sid);
                   if (!session) {
@@ -223,12 +243,14 @@ export function createBackendListen(deps: BackendListenDeps) {
                     return;
                   }
 
-                  ws.send(JSON.stringify({
-                    type: 'queued',
-                    session_id: sid,
-                    stream_id: streamId,
-                    timestamp: nowISO(),
-                  }));
+                  if (!steerMode) {
+                    ws.send(JSON.stringify({
+                      type: 'queued',
+                      session_id: sid,
+                      stream_id: streamId,
+                      timestamp: nowISO(),
+                    }));
+                  }
 
                   const message: import('@itphx/synth-shared').Message = {
                     id: streamId,
@@ -247,6 +269,34 @@ export function createBackendListen(deps: BackendListenDeps) {
                     model: msg.model || session.settings.model,
                     metadata: { stream_id: streamId },
                   };
+
+                  // PROP-098: `steer` — вмешательство в активный ход. Если хода
+                  // нет — обычная очередь (сообщение начнёт новый ход).
+                  if (steerMode && (session.status?.blocked || queueManager.isRunning(sid))) {
+                    const steerResult = await enqueueSteerMessage(
+                      sessionManager, eventBus, sid, message, MAX_STEER_INJECTIONS_PER_TURN,
+                      (msgSid, steerMsg) => orchestrator.obfuscateUserMessageForHistory(msgSid, steerMsg),
+                    );
+                    if (!steerResult.accepted) {
+                      ws.send(JSON.stringify({
+                        type: 'error',
+                        session_id: sid,
+                        data: {
+                          error: t('errors.chat.steerLimitExceeded', { max: MAX_STEER_INJECTIONS_PER_TURN }),
+                          code: STEERING_ERROR_CODES.limitExceeded,
+                        },
+                        timestamp: nowISO(),
+                      }));
+                      return;
+                    }
+                    ws.send(JSON.stringify({
+                      type: 'queued',
+                      session_id: sid,
+                      stream_id: streamId,
+                      timestamp: nowISO(),
+                    }));
+                    return;
+                  }
 
                   const result = await enqueueUserMessage(
                     sessionManager, eventBus, sid, message, queueManager, processMessage,
