@@ -12,7 +12,7 @@
  *
  * Миграция идемпотентна (`IF NOT EXISTS`).
  */
-export const MIGRATION_011_EXTERNAL_CREDENTIALS = `
+export const MIGRATION_012_EXTERNAL_CREDENTIALS = `
 CREATE TABLE IF NOT EXISTS external_credentials (
   id             text PRIMARY KEY,
   provider       text NOT NULL,
