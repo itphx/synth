@@ -16,6 +16,7 @@
  *     `maintenanceAudit`;
  *   - `buildAuditPorts(deps)`     → `securityAudit`/`egressRequests`;
  *   - `buildAnalyticsPorts(deps)` → `analyticsRollups` (ADR-102);
+ *   - `buildAuthorityPorts(deps)` → `authorityPolicy`/`authorityDecisions` (ADR-106 Ф0/Ф1);
  *   - `buildExternalCredentialPorts(deps)` → `externalCredentials` (ADR-105 Ф1);
  *   - `buildPipelinePorts(deps)`  → `projectPipelines`/`pipelineRuns` (ADR-101).
  *
@@ -42,6 +43,7 @@ import { planMigrations, readSchemaVersion, runMigrations } from './migrate.js';
 import { buildContentPorts } from './ports/content.js';
 import { buildAuditPorts } from './ports/audit.js';
 import { buildAnalyticsPorts } from './ports/analytics.js';
+import { buildAuthorityPorts } from './ports/authority.js';
 import { buildExternalCredentialPorts } from './ports/external-credentials.js';
 import type { CoreSyncDeps, PortDeps } from './ports/deps.js';
 import { buildEventPorts } from './ports/events.js';
@@ -153,6 +155,10 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     ...buildEventPorts(deps),
     ...buildContentPorts(deps),
     ...buildAuditPorts(deps),
+    // ADR-106 (Ф0/Ф1): порты Authority-слоя — политика полномочий инстанса
+    // (`authority_policy`, миграция 014) и append-only журнал решений
+    // (`authority_decisions`).
+    ...buildAuthorityPorts(deps),
     // ADR-105 (Ф1): внешние доступы к коннекторам (таблица `external_credentials`,
     // миграция 011). Токены шифруются core-хелперами (ленивый `import()`), в БД
     // лежит готовый `enc:v1:…`; наружу отдаются только метаданные с маской.

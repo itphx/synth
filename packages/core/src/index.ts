@@ -579,6 +579,10 @@ export type {
   PipelineRunEventRecord,
   PipelineRunFilter,
   PipelineRunEventListOptions,
+  // ADR-106 (Ф0/Ф1): порты Authority-слоя — политика инстанса и журнал решений.
+  AuthorityPolicyRepository,
+  AuthorityDecisionJournal,
+  AuthorityDecisionListOptions,
 } from './storage/ports/index.js';
 // ADR-105 (Ф0/Ф1): доменная ошибка хранилища внешних доступов — значение
 // (не только тип): её бросают реализации порта, в т.ч. PostgreSQL-драйвер

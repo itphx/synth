@@ -9,6 +9,8 @@ vi.setConfig({ testTimeout: 30000 });
 import {
   createTmpDir,
   describeAnalyticsRollupRepository,
+  describeAuthorityDecisionJournal,
+  describeAuthorityPolicyRepository,
   describeBlobStore,
   describeContextFileRepository,
   describeDefaultsRepository,
@@ -216,6 +218,23 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   describeExternalCredentialRepository('PG → ExternalCredentialRepository', () =>
     makePort('externalCredentials'),
   );
+
+  // ADR-106 (Ф0/Ф1): порты Authority-слоя — политика полномочий инстанца
+  // (таблица `authority_policy`) и append-only журнал решений
+  // (`authority_decisions`); миграция 014.
+  describeAuthorityPolicyRepository('PG → AuthorityPolicyRepository', async () => {
+    const { ctx, dispose } = await makeContext();
+    const repo = ctx.authorityPolicy;
+    if (!repo) throw new Error('Порт authorityPolicy не подключён драйвером PostgreSQL');
+    return { repo, dispose };
+  });
+
+  describeAuthorityDecisionJournal('PG → AuthorityDecisionJournal', async () => {
+    const { ctx, dispose } = await makeContext();
+    const repo = ctx.authorityDecisions;
+    if (!repo) throw new Error('Порт authorityDecisions не подключён драйвером PostgreSQL');
+    return { repo, dispose };
+  });
 
   // ADR-051/ADR-100 + ADR-086 §5: переходно файловые порты драйвера.
   describePipelineRepository('PG → PipelineRepository (file-backed)', () => makePort('pipelines'));
