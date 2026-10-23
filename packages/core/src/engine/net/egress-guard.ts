@@ -61,6 +61,70 @@ export const PRIVATE_EGRESS_POLICY: EgressPolicy = {
 export const DEFAULT_EGRESS_MAX_HOPS = 5;
 
 /**
+ * Заголовки-секреты: при редиректе на хост с **другим origin** они не
+ * пересылаются (PROP-107 §7 — host-binding заголовков).
+ *
+ * Список закрытый и общий для всех режимов: `authorization`,
+ * `proxy-authorization`, `x-api-key`, `cookie`. Остальные заголовки
+ * (в т.ч. `content-type`) пересылаются как раньше — режим меняет только
+ * поведение секретных заголовков.
+ */
+export const SECRET_REDIRECT_HEADERS = [
+  'authorization',
+  'proxy-authorization',
+  'x-api-key',
+  'cookie',
+] as const;
+
+/** `true`, если заголовок — секретный (на чужой origin не пересылается). */
+export function isSecretHeader(name: string): boolean {
+  return (SECRET_REDIRECT_HEADERS as readonly string[]).includes(name.trim().toLowerCase());
+}
+
+/**
+ * Форма заголовков запроса (`HeadersInit` из `undici` в типах Node).
+ *
+ * Отдельного глобального типа `HeadersInit` нет (в `tsconfig.base.json`
+ * `lib: ["ES2024"]`, без DOM), поэтому берём его из `RequestInit`.
+ */
+export type HeaderInit = NonNullable<RequestInit['headers']>;
+
+/** Нормализация заголовков в список пар (порядок сохраняется). */
+function headerEntries(headers: RequestInit['headers']): Array<[string, string]> {
+  if (!headers) return [];
+  if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+    return [...headers.entries()];
+  }
+  if (Array.isArray(headers)) {
+    return headers.map((entry) => [String(entry[0]), String(entry[1])] as [string, string]);
+  }
+  return Object.entries(headers as Record<string, string>).map(
+    ([name, value]) => [name, String(value)] as [string, string],
+  );
+}
+
+/**
+ * Заголовки без секретных — для хопа на чужой origin. Остальные заголовки
+ * сохраняются как есть; если секретных не было, возвращается `undefined`
+ * (заголовков не было — добавлять нечего).
+ */
+export function stripSecretHeaders(
+  headers: RequestInit['headers'],
+): RequestInit['headers'] {
+  const entries = headerEntries(headers).filter(([name]) => !isSecretHeader(name));
+  return entries.length > 0 ? entries : undefined;
+}
+
+/** Origin URL (scheme+host+port); `undefined` — для нечитаемого URL. */
+function originOf(url: string): string | undefined {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * `true`, если IP-литерал входит в запрещённый диапазон.
  *
  * **Единый источник истины** — `DEFAULT_MCP_PRIVATE_CIDRS` (`@itphx/synth-shared`):
@@ -284,6 +348,15 @@ export interface EgressFetchOptions {
   log?: EgressLogSink;
   /** Источник времени (тесты). */
   now?: () => number;
+  /**
+   * Host-binding секретных заголовков (PROP-107 §7): при редиректе на хост с
+   * **другим origin** заголовки `authorization`/`proxy-authorization`/
+   * `x-api-key`/`cookie` не пересылаются (сравнение — по origin исходного
+   * URL). Прочие заголовки пересылаются как раньше.
+   *
+   * По умолчанию выключено: поведение существующих потребителей не меняется.
+   */
+  bindSecretHeaders?: boolean;
 }
 
 /** Безопасное извлечение host/url без query/userinfo (тела/заголовки не пишутся). */
@@ -319,6 +392,30 @@ async function recordEgress(options: EgressFetchOptions, event: Omit<EgressLogEv
 }
 
 /**
+ * `init` для конкретного хопа редиректа.
+ *
+ * Ручное следование редиректам (`redirect: 'manual'`) — как и раньше. В
+ * режиме host-binding (PROP-107 §7) секретные заголовки снимаются, если
+ * origin хопа отличается от origin исходного URL; остальные заголовки и тело
+ * запроса — без изменений.
+ */
+function buildHopInit(
+  init: RequestInit,
+  currentUrl: string,
+  originalOrigin: string | undefined,
+  bindSecretHeaders: boolean,
+): RequestInit {
+  const hopInit: RequestInit = { ...init, redirect: 'manual' };
+  if (!bindSecretHeaders || originalOrigin === undefined) return hopInit;
+  const currentOrigin = originOf(currentUrl);
+  if (currentOrigin === undefined || currentOrigin === originalOrigin) return hopInit;
+  const headers = stripSecretHeaders(init.headers);
+  if (headers === undefined) delete hopInit.headers;
+  else hopInit.headers = headers;
+  return hopInit;
+}
+
+/**
  * `fetch` с отключёнными автопереходами: **каждый** хоп редиректа проверяется
  * политикой (`checkEgressUrl`); первый запрещённый хоп → `EgressBlockedError`.
  * Гарантирует, что ни один запрос не уйдёт на непроверенный адрес.
@@ -340,6 +437,10 @@ export async function fetchWithEgressGuard(
   const now = options.now ?? Date.now;
   const method = init.method ?? 'GET';
   let current = rawUrl;
+  // PROP-107 §7: host-binding секретных заголовков. Origin исходного URL —
+  // точка отсчёта: на хоп с другим origin секретные заголовки снимаются.
+  const bindSecretHeaders = options.bindSecretHeaders === true;
+  const originalOrigin = bindSecretHeaders ? originOf(rawUrl) : undefined;
 
   for (let hop = 0; hop <= maxHops; hop++) {
     const started = now();
@@ -348,7 +449,7 @@ export async function fetchWithEgressGuard(
     // идёт напрямую (полная DNS/CIDR-проверка), проксируемый — только hostname.
     const proxied = shouldProxyUrl(current);
     currentVia = proxied ? 'proxy' : 'direct';
-    if (options.skipPolicy) {
+    if (options.skipPolicy && !bindSecretHeaders) {
       // `off` (dev): проверок нет, редиректы обрабатывает транспорт.
       const response = await fetchImpl(current, { ...init });
       await recordEgress(options, {
@@ -362,28 +463,31 @@ export async function fetchWithEgressGuard(
       });
       return response;
     }
-    const check = await checkEgressUrl(current, options.policy, {
-      resolveHost: options.resolveHost,
-      requireHttps: options.requireHttps,
-      proxied,
-    });
-    if (!check.allowed) {
-      await recordEgress(options, {
-        host: target.host,
-        url: target.url,
-        method,
-        status: 'blocked',
-        via: currentVia,
-        reason: check.reason,
-        matchedRule: check.matchedRule,
-        durationMs: Math.max(0, now() - started),
+    let check: EgressCheckResult | undefined;
+    if (!options.skipPolicy) {
+      check = await checkEgressUrl(current, options.policy, {
+        resolveHost: options.resolveHost,
+        requireHttps: options.requireHttps,
+        proxied,
       });
-      throw new EgressBlockedError(check.reason, check.matchedRule);
+      if (!check.allowed) {
+        await recordEgress(options, {
+          host: target.host,
+          url: target.url,
+          method,
+          status: 'blocked',
+          via: currentVia,
+          reason: check.reason,
+          matchedRule: check.matchedRule,
+          durationMs: Math.max(0, now() - started),
+        });
+        throw new EgressBlockedError(check.reason, check.matchedRule);
+      }
     }
 
     let response: Response;
     try {
-      response = await fetchImpl(current, { ...init, redirect: 'manual' });
+      response = await fetchImpl(current, buildHopInit(init, current, originalOrigin, bindSecretHeaders));
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       await recordEgress(options, {
@@ -422,7 +526,7 @@ export async function fetchWithEgressGuard(
         durationMs: Math.max(0, now() - started),
       });
       try {
-        current = new URL(location, check.url).toString();
+        current = new URL(location, check?.allowed ? check.url : current).toString();
       } catch {
         throw new EgressBlockedError(`некорректный Location: ${location}`);
       }

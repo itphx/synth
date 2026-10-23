@@ -94,8 +94,9 @@ export interface ExternalCredentialRepository {
   reveal(id: string): Promise<{ accessToken: string; refreshToken?: string } | null>;
   /**
    * Сырые записи, ВКЛЮЧАЯ зашифрованные токены — только для админских
-   * операций хранилища (ротация мастер-ключа, Ф4), не для HTTP/обычных путей
-   * чтения.
+   * операций хранилища (ротация мастер-ключа, Ф4) и для CAS-сверки
+   * `refreshEnc` в OAuth-сервисе (PROP-107 Ф2: «кто первый обновил — тот и
+   * записал»), не для HTTP/обычных путей чтения.
    */
   listRaw(): Promise<ExternalCredential[]>;
 }

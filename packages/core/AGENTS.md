@@ -127,6 +127,13 @@
   git-CA (`git/git-service.ts`): `simpleGit({ config: ['http.sslCAInfo=…'] })` —
   env-канал `GIT_SSL_CAINFO` недоступен (`sanitizeGitEnv`/`allowEnvironment`),
   CA передаётся только пер-вызовом; `caFile` (путь), не `caPem`.
+- **Host-binding секретных заголовков (PROP-107 §7).**
+  `engine/net/egress-guard.ts`: режим `fetchWithEgressGuard(..., { bindSecretHeaders: true })` —
+  при редиректе на **другой origin** (сравнение scheme+host+port) заголовки
+  `authorization`/`proxy-authorization`/`x-api-key`/`cookie` не пересылаются,
+  остальные — как раньше; без редиректов поведение не меняется. Режим **выключен
+  по умолчанию** (поведение существующих потребителей не затронуто) — включают
+  те, кто несёт токен наружу (OAuth-вызовы, Ф3).
 - **TLS runtime и профили (ADR-099).** `security/tls.ts`: `initTlsTrust` читает bootstrap
   (`tlsRuntime`/`dataDir`) до PG, строит `EgressDispatcher` с `tlsProfiles`; `getTlsStatus` — статус без
   PEM/ключей (ca count/subjects, client/mapping subjects, `running`/`saved`, `restartRequired`).
@@ -409,6 +416,22 @@
   `X-Synth-Signature: t=…,v1=…`, окно 300 c), `network.ts` (`evaluateWebhookTarget` —
   SSRF-политика над `engine/mcp/network-policy.ts`, https + запрет private/loopback),
   `prune.ts` (`startWebhookDeliveryPruner` — retention журнала доставок, раз в 6 ч).
+- `engine/oauth/*` — PROP-107 Ф2: OAuth-клиент и сервис слоя внешних доступов.
+  `types.ts` (описание провайдера — **данные**: authorize/token/revoke URL, `client_id`,
+  scope'ы; `OAuthError` с машинным кодом), `pkce.ts` (PKCE S256 по RFC 7636,
+  `buildAuthorizationUrl`), `client-secret.ts` (`client_secret` — только env
+  `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` или файл
+  `{dataDir}/secrets/oauth/<provider>.client_secret`, `0600`; в конфиге его нет и
+  в логах он не появляется), `client.ts` (`OAuthClient`: обмен кода RFC 6749 §4.1.3,
+  refresh §6, revoke RFC 7009 — best-effort; сеть — **только** `egressFetch`,
+  ADR-099), `service.ts` (`OAuthCredentialService` — обмен кода + запись доступа,
+  refresh, отзыв; единственный путь записи — порт `ExternalCredentialRepository`,
+  прямой записи в `{dataDir}` нет). Гонка refresh: **один** сетевой вызов при
+  параллельном refresh (single-flight) + **CAS по `refreshEnc`** (кто первый
+  обновил — тот и записал); `invalid_grant` → доступ в `status:'error'` через порт.
+  Device Flow не дублируется — обобщён `remote/device-flow.ts` (`postFormDetailed`:
+  HTTP-статус + тело, инъекция транспорта для тестов). Ф3–Ф4 (биндинг к MCP,
+  роуты/UI/аудит) — не реализованы.
 - `server/chat.ts`, `server/proxy.ts`, `server/serialize.ts`,
   `server/connection-watcher.ts` — одиночный чат, проксирование remote, сериализация,
   watcher подключения. Проксирование — `REMOTE_PROXY_PREFIXES` (простые префиксы) +

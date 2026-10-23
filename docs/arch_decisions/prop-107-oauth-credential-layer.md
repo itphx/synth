@@ -1,6 +1,6 @@
 # PROP-107: OAuth-хранилище и слой доступа к внешним сервисам
 
-> **Статус:** ⚠️ Частично — Ф0+Ф1 реализованы (контракты `ExternalCredential`/`ExternalCredentialRepository`, шифрование at-rest `enc:v1:…`, маскирование, файловая, in-memory и PostgreSQL-реализации с миграцией `012`, контрактный suite, `auth` в схеме MCP-сервера); остаток — Ф2–Ф4 (OAuth-клиент, биндинг к MCP, роуты/UI/аудит, ротация мастер-ключа)
+> **Статус:** ⚠️ Частично — Ф0+Ф1+Ф2 реализованы (контракты `ExternalCredential`/`ExternalCredentialRepository`, шифрование at-rest `enc:v1:…`, маскирование, файловая, in-memory и PostgreSQL-реализации с миграцией `012`, контрактный suite, `auth` в схеме MCP-сервера; OAuth-клиент — PKCE/refresh/revoke через `egressFetch`, host-binding секретных заголовков при редиректах); остаток — Ф3–Ф4 (биндинг к MCP, роуты/UI/аудит, ротация мастер-ключа)
 > **Решение до:** 2026-11-14
 > **Дата:** 2026-10-22
 > **Парные документы:**
@@ -294,10 +294,12 @@ UI: раздел **«Доступы»** — рядом с «MCP» (`personal`, `
 не отложено на Ф4.
 
 **Ф1 — хранилище.** Реализации file/memory/PG + контрактный suite; шифрование `enc:v1:`; маскирование; тест
-«в реестре, в бэкапе и в логах нет plaintext-токена». → *file/memory — сделано (2026-10-23), PG — остаток.*
+«в реестре, в бэкапе и в логах нет plaintext-токена». → *file/memory/PG — сделано (2026-10-23).*
 
 **Ф2 — OAuth-клиент.** Выдача кода (PKCE и/или device flow), refresh, revoke; **всё через `egressFetch`**
-(ADR-099); тест «заголовок `Authorization` не уходит на redirect-хост».
+(ADR-099); тест «заголовок `Authorization` не уходит на redirect-хост». → *сделано (2026-10-23): клиент
+Authorization Code + PKCE (S256), refresh (RFC 6749 §6) с CAS по `refreshEnc`, revoke (RFC 7009, best-effort),
+host-binding секретных заголовков в `egress-guard.ts`; см. «История».*
 
 **Ф3 — биндинг к MCP.** Коннектор ссылается на доступ; запрет plaintext-`Authorization` в `headers`
 (валидация + миграция существующих записей); refresh пересоздаёт транспорт; `probe` использует доступ.
@@ -394,7 +396,26 @@ UI: раздел **«Доступы»** — рядом с «MCP» (`personal`, `
 - 2026-10-23 — **Ф0 и Ф1 реализованы**: контракты в `@itphx/synth-shared` (`ExternalCredential` + zod, метаданные
   без секрета и маска), поле `auth` в `mcpServerConfigSchema` (аддитивно), доменный порт
   `ExternalCredentialRepository`, файловая реализация (`{dataDir}/secrets/oauth/credentials.json`, `0600`,
-  `enc:v1:…`) и in-memory реализация, контрактный suite (file/memory). Принятые решения Ф0 — в §15
-  (аудит — вариант Б; место хранения — `secrets/`; наружу — только метаданные). **Остаётся:** PG-порт
-  хранилища, Ф2 (OAuth-клиент), Ф3 (биндинг к MCP и запрет plaintext-заголовков), Ф4 (роуты `createOAuthRoutes`,
+  `enc:v1:…`), in-memory реализация и PostgreSQL-порт (миграция `012`), контрактный suite (file/memory).
+  Принятые решения Ф0 — в §15 (аудит — вариант Б; место хранения — `secrets/`; наружу — только метаданные).
+  **Остаётся:** Ф3 (биндинг к MCP и запрет plaintext-заголовков), Ф4 (роуты `createOAuthRoutes`,
   UI-раздел «Доступы», журнал аудита, ротация мастер-ключа).
+- 2026-10-23 — **Ф2 реализована**: OAuth-клиент в `packages/core/src/engine/oauth/` — Authorization Code + PKCE
+  (S256, RFC 7636), обмен кода (RFC 6749 §4.1.3), refresh (RFC 6749 §6), revoke (RFC 7009, best-effort).
+  Описание провайдера — **данные** (authorize/token/revoke URL, `client_id`, scope'ы; §13, вариант «А»);
+  `client_secret` — только env `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` или файл
+  `{dataDir}/secrets/oauth/<provider>.client_secret` (`0600`): в конфиге его нет, в логах и в текстах ошибок
+  он не появляется. Сеть — **только** `egressFetch` (ADR-099); Device Flow не дублирован, а обобщён
+  `remote/device-flow.ts` (`postFormDetailed` — HTTP-статус + тело, инъекция транспорта для тестов).
+  Refresh защищён от гонки: при параллельном refresh одного доступа — **ровно один** сетевой вызов
+  (single-flight в процессе), а запись — по **CAS по `refreshEnc`** (кто первый обновил — тот и записал;
+  второй перечитывает и использует уже записанные токены). `invalid_grant` (refresh-токен отозван/истёк)
+  переводит доступ в `status:'error'` **через порт** `ExternalCredentialRepository` — прямой записи в
+  `{dataDir}` нет. **Host-binding заголовков** (§7): в `engine/net/egress-guard.ts` появился режим
+  `bindSecretHeaders` — при редиректе на **другой origin** (сравнение scheme+host+port) секретные заголовки
+  (`authorization`, `proxy-authorization`, `x-api-key`, `cookie`) не пересылаются, остальные пересылаются как
+  раньше; без редиректов поведение не меняется, режим по умолчанию выключен (поведение существующих
+  потребителей не затронуто). Тесты — `engine/oauth/*.test.ts` и `engine/net/egress-guard-secret-headers.test.ts`.
+  **Остаётся:** Ф3 (коннектор ссылается на доступ; запрет plaintext-`Authorization` в `headers`; refresh
+  пересоздаёт транспорт; `probe` использует доступ) и Ф4 (роуты `createOAuthRoutes`, UI-раздел «Доступы»,
+  журнал credential-операций, ротация мастер-ключа, правила бэкапа и переноса проекта).
