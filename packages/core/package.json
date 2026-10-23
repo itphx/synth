@@ -55,6 +55,10 @@
     "./engine/gateway/index.js": {
       "types": "./dist/engine/gateway/index.d.ts",
       "import": "./dist/engine/gateway/index.js"
+    },
+    "./engine/plugins/contract.js": {
+      "types": "./dist/engine/plugins/contract/index.d.ts",
+      "import": "./dist/engine/plugins/contract/index.js"
     }
   },
   "scripts": {
