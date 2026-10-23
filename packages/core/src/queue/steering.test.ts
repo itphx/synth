@@ -103,6 +103,25 @@ describe('PROP-098: очередь инъекций (steerInbox)', () => {
     expect(session.steerInbox?.[0]?.metadata?.steer).toBe(true);
   });
 
+  it('режим interrupt: маркер metadata.interrupt (прерывание хода)', async () => {
+    await enqueueSteerMessage(
+      sessionManager, eventBus, sessionId, makeSteerMessage('прерви и сделай иначе'),
+      undefined, undefined, { interrupt: true },
+    );
+    const session = (await sessionManager.getSession(sessionId))!;
+    // Оба маркера: `steer` — инъекция в ход, `interrupt` — обрыв текущей
+    // генерации (UI рисует «прерывание хода»).
+    expect(session.steerInbox?.[0]?.metadata?.steer).toBe(true);
+    expect(session.steerInbox?.[0]?.metadata?.interrupt).toBe(true);
+  });
+
+  it('без режима interrupt маркера metadata.interrupt нет', async () => {
+    await enqueueSteerMessage(sessionManager, eventBus, sessionId, makeSteerMessage('вмешательство'));
+    const session = (await sessionManager.getSession(sessionId))!;
+    expect(session.steerInbox?.[0]?.metadata?.steer).toBe(true);
+    expect(session.steerInbox?.[0]?.metadata?.interrupt).toBeUndefined();
+  });
+
   it('вычитка сверх лимита: остаток возвращается как dropped (не теряется молча)', async () => {
     // Ставим 7 сообщений напрямую (лимит store не мешает при своём max),
     // затем вычитываем с лимитом хода — 5 забираются, 2 отбрасываются.

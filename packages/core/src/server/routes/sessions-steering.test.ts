@@ -150,6 +150,7 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (PROP
     expect(res.status).toBe(202);
     const body = (await res.json()) as SteeredBody;
     expect(body.status).toBe('interrupted');
+    expect(body.stream_id).toBeTruthy();
     expect(body.pending_count).toBe(1);
 
     const fresh = (await sessionManager.getSession(session.id))!;
@@ -160,6 +161,8 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (PROP
     // Маркер режима: `steer` + `interrupt` (UI рисует «прерывание хода»).
     expect(fresh.steerInbox![0]!.metadata?.steer).toBe(true);
     expect(fresh.steerInbox![0]!.metadata?.interrupt).toBe(true);
+    // `stream_id` ответа — id стрима вплетаемого сообщения (как при `steer`).
+    expect(fresh.steerInbox![0]!.metadata?.stream_id).toBe(body.stream_id);
 
     // Текущая генерация прервана — ход при этом НЕ завершается.
     expect(orchestrator.interrupt).toHaveBeenCalledWith('stream-live-1');
