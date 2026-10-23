@@ -252,6 +252,8 @@ program
       analyticsConfig: synth.analytics,
       // ADR-094: конфигурация метрик (`metrics.enabled`, env SYNTH_METRICS_ENABLED).
       metricsConfig: synth.metrics,
+      // PROP-108 Ф1: Authority-слой (по умолчанию выключен).
+      authorityConfig: synth.authority,
       // PROP-090 §10: конфигурация слоя плагинов (политики + бюджеты).
       pluginsConfig: synth.plugins,
       // ADR-052 (этап II): конфигурация исходящих webhooks (enabled/retry).

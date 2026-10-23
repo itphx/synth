@@ -12,6 +12,7 @@ import type { RemoteConnection } from '../../remote/connection.js';
 import type { LocalAuthKit } from '../../auth/local.js';
 import { isRemoteRef, toLocalId } from '../../remote/aggregate.js';
 import { extractChildSessionId, extractCreatedSession } from '../../events/child-session.js';
+import { parsePermissionPrincipal } from '../../engine/permission/approval.js';
 import { INSTANCE_EVENT_CHANNEL } from '../../events/bus.js';
 import { LOCAL_USER_ID } from '../local-owner.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
@@ -446,12 +447,19 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
               // Новый формат: { action: 'allow'|'deny', once?: boolean }.
               // Старый формат { approved: boolean } остаётся совместимым.
               const action = msg.action === 'allow' || msg.action === 'deny' ? msg.action : undefined;
+              // PROP-108 Ф0: аддитивные поля `principal`/`turn_id` — ответ
+              // привязывается к принципалу и ходу. Невалидные/отсутствующие →
+              // поля не публикуются, поведение прежнее.
+              const principal = parsePermissionPrincipal(msg.principal);
+              const turnId = typeof msg.turn_id === 'string' && msg.turn_id.trim() !== '' ? msg.turn_id : undefined;
               eventBus.publish(sid, 'permission.replied', {
                 approval_id: approvalId,
                 session_id: sid,
                 approved: action !== undefined ? action === 'allow' : msg.approved === true,
                 ...(action ? { action } : {}),
                 ...(typeof msg.once === 'boolean' ? { once: msg.once } : {}),
+                ...(principal ? { principal } : {}),
+                ...(turnId ? { turn_id: turnId } : {}),
               });
             }
           } catch { /* ignore parse errors */ }

@@ -65,6 +65,7 @@ import type { ProtectedPathsPolicy } from './security/protected-paths.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, DISABLED_GATEWAY_CONFIG, LlmFilterRegistry } from './gateway/index.js';
 import type { SecretPatternRepository } from '../storage/ports/secret-pattern-repository.js';
 import type { MetricsRegistry } from '../metrics/registry.js';
+import type { AuthorityShadowHook } from './authority/hook.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
@@ -236,6 +237,12 @@ export interface OrchestratorOptions {
    * (`synth_llm_requests_total`/`..._duration_seconds`/`..._tokens_total`).
    */
   metrics?: MetricsRegistry;
+  /**
+   * PROP-108 Ф1: шов shadow-наблюдения Authority-слоя. Задан — решения
+   * permission-слоя дополнительно считаются моделью «действие × цель» и
+   * пишутся в журнал решений; **решение прав не меняется**.
+   */
+  authorityShadow?: AuthorityShadowHook;
   /** ADR-070 §2.2: политика prompt-cache (config llm.cache). Дефолт — auto. */
   cachePolicy?: CachePolicy;
   /**
@@ -428,6 +435,8 @@ export class ChatOrchestrator {
   private readonly _gatewayPatternStore: SecretPatternRepository | null;
   /** ADR-094: реестр метрик (LLM-вызовы; временные метрики подключаются приложением). */
   private readonly _metrics: MetricsRegistry | null;
+  /** PROP-108 Ф1: шов shadow-наблюдения Authority-слоя (не меняет решения прав). */
+  private readonly _authorityShadow: AuthorityShadowHook | undefined;
   /**
    * PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов (мутабельный;
    * общий для всех gateway-точек — см. `getLlmFilters()`).
@@ -733,6 +742,8 @@ export class ChatOrchestrator {
     }
     this._gatewayPatternStore = options.gatewayPatternStore ?? null;
     this._metrics = options.metrics ?? null;
+    // PROP-108 Ф1: shadow-наблюдение Authority-слоя (решение прав не меняется).
+    this._authorityShadow = options.authorityShadow;
     // PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов. Экземпляр
     // может прийти извне (общий с фасадом плагинов); иначе создаём пустой —
     // бюджет времени из `plugins.llmFilterTimeoutMs`.
@@ -1586,6 +1597,17 @@ export class ChatOrchestrator {
         sessionMode,
         planMode,
         planApproved,
+        // PROP-108 Ф1: контекст хода для shadow-наблюдения (на решение не влияет).
+        authorityContext: {
+          sessionId: session.id,
+          principal: {
+            kind: 'user',
+            id: session.ownerId ?? session.userId ?? 'local',
+            roles: [],
+          },
+          ...(effectiveAgentRole ? { agentId: effectiveAgentRole } : {}),
+          turnId: streamId,
+        },
         shellPolicy: this._getProtectedPaths() ?? undefined,
         protectedPaths: this._getProtectedPaths() ?? undefined,
         protectedPathsEnabled: this._getProtectedPathsEnabled(),
@@ -2538,7 +2560,9 @@ export class ChatOrchestrator {
     // Конфиг может быть расширен «разрешить в сессии» (once:false) в процессе
     // обработки, поэтому ссылка и эвалуатор пересоздаются.
     let effectivePermissionConfig = session.settings.permission ?? this._permissionConfig;
-    let permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig);
+    let permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig, {
+      authorityShadow: this._authorityShadow,
+    });
 
     const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
     const agentMaxSteps = agentDef?.maxSteps;
@@ -3015,6 +3039,17 @@ export class ChatOrchestrator {
             params: toolArgs,
             workingDir,
             capabilities: toolDef?.capabilities,
+            // PROP-108 Ф1: контекст хода для shadow-наблюдения (на решение не влияет).
+            authorityContext: {
+              sessionId: session.id,
+              principal: {
+                kind: 'user',
+                id: session.ownerId ?? session.userId ?? 'local',
+                roles: [],
+              },
+              ...(effectiveAgentRole ? { agentId: effectiveAgentRole } : {}),
+              turnId: streamId,
+            },
             // PROP-090 §«Точка `tools`»: источник тула — плагинные инструменты
             // адресуются группой `plugin` в permission-правилах.
             toolSource: toolDef?.source,
@@ -3101,6 +3136,15 @@ export class ChatOrchestrator {
                 arguments: toolArgs,
                 reason: this._securityMessage(permissionDecision, 'en')
                   ?? permissionDecision.reason,
+                // PROP-108 Ф0: принципал и ход запроса (аддитивные поля
+                // события `permission.asked`). Полный учёт принципала хода —
+                // Ф4; здесь фиксируется текущий владелец сессии.
+                principal: {
+                  kind: 'user',
+                  id: session.ownerId ?? session.userId ?? 'local',
+                  roles: [],
+                },
+                turnId: streamId,
               },
               effectivePermissionConfig.askTimeoutMs,
             );
@@ -3110,7 +3154,9 @@ export class ChatOrchestrator {
               // тула в permission-конфиг сессии, чтобы не спрашивать повторно.
               if (approval.once === false) {
                 effectivePermissionConfig = await this._grantSessionToolAllow(session, toolName, toolArgs, workingDir);
-                permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig);
+                permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig, {
+                  authorityShadow: this._authorityShadow,
+                });
               }
             } else {
               const why = approval.timeout

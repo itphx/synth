@@ -13,7 +13,7 @@ import { createStandaloneApp } from './app.js';
 const API_KEY = 'test-key-123';
 
 async function withApp<T>(
-  opts: { metricsEnabled?: boolean },
+  opts: { metricsEnabled?: boolean; authorityEnabled?: boolean },
   fn: (app: Awaited<ReturnType<typeof createStandaloneApp>>) => Promise<T>,
 ): Promise<T> {
   const dataDir = await mkdtemp(join(tmpdir(), 'synth-core-metrics-'));
@@ -23,6 +23,8 @@ async function withApp<T>(
     apiKey: API_KEY,
     storageBackend: 'memory',
     metricsConfig: { enabled: opts.metricsEnabled ?? false },
+    // PROP-108 Ф1: секция `authority` (слой выключен по умолчанию).
+    authorityConfig: { enabled: opts.authorityEnabled ?? false, shadow: true },
   });
   try {
     return await fn(app);
@@ -72,6 +74,18 @@ describe('createStandaloneApp: ADR-094 (metrics/ready)', () => {
       expect(body).toContain('# TYPE synth_sessions_active gauge');
       expect(body).toContain('# TYPE synth_decision_calls_total counter');
       expect(body).toContain('# TYPE synth_hybrid_connected gauge');
+    });
+  });
+
+  it('PROP-108 Ф1: счётчик решений Authority-слоя подключён при metrics.enabled=true', async () => {
+    await withApp({ metricsEnabled: true, authorityEnabled: true }, async (app) => {
+      const res = await app.app.request('/metrics');
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      expect(body).toContain('# TYPE synth_authority_decisions_total counter');
+      // Лейблы — только action/effect/source (без id).
+      expect(body).not.toContain('session_id');
+      expect(body).not.toContain('user_id');
     });
   });
 });

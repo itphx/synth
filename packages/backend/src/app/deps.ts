@@ -52,6 +52,10 @@ import {
   createSchedulerMetrics,
   createWebhookMetrics,
   createEventMetrics,
+  // PROP-108 Ф1: счётчик решений Authority-слоя (`synth_authority_decisions_total`)
+  // и shadow-интеграция (решение считается, но не применяется).
+  createAuthorityMetrics,
+  AuthorityShadowRecorder,
   startEventJournalMetrics,
   // ADR-101 (Э5): движок пайплайнов, исполнители шагов, обработчики выходов.
   PipelineEngine,
@@ -310,6 +314,9 @@ export async function createBackendDeps(
   const schedulerJobMetrics = metrics ? createSchedulerMetrics(metrics) : undefined;
   const webhookDeliveryMetrics = metrics ? createWebhookMetrics(metrics) : undefined;
   const eventMetrics = metrics ? createEventMetrics(metrics) : undefined;
+  // PROP-108 Ф1: решения Authority-слоя (`synth_authority_decisions_total`) —
+  // лейблы только `action`/`effect`/`source`, без id (ADR-094).
+  const authorityMetrics = metrics ? createAuthorityMetrics(metrics) : undefined;
   if (metrics) {
     stopMetricsCollectors.push(attachBusMetrics(metrics, eventBus));
     stopMetricsCollectors.push(startSessionMetrics(metrics, sessionManager));
@@ -542,10 +549,28 @@ export async function createBackendDeps(
   // модульный, порт берётся из первого вызова (fail-closed в remote-режиме).
   const runtimeDeps = await detectRuntimeDeps(executionPort);
 
+  // PROP-108 Ф1: shadow-наблюдение Authority-слоя. Решение считается и пишется
+  // в журнал (`{dataDir}/audit/authority.jsonl` через порт), но **не
+  // применяется** — права не меняются (миграция «двойное чтение»). Секция
+  // `authority` выключена по умолчанию: слой считает решения только когда его
+  // явно включили.
+  const authorityShadow = config.synth.authority?.enabled
+    ? new AuthorityShadowRecorder({
+        enabled: true,
+        shadow: config.synth.authority.shadow,
+        journal: storageContext.authorityDecisions,
+        policy: (await storageContext.authorityPolicy?.getPolicy()) ?? null,
+        // ADR-094: счётчик решений Authority-слоя (`synth_authority_decisions_total`).
+        onDecision: authorityMetrics?.onDecision,
+      })
+    : undefined;
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
     hooks,
+    // PROP-108 Ф1: shadow-наблюдение (решение прав не меняется).
+    authorityShadow: authorityShadow?.record,
     // ADR-077: порт исполнения команд (inline — исполнение в процессе).
     executionPort,
     // ADR-102: сборщик `usage`/`decision` роллапов (write-path).

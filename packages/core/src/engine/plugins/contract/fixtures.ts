@@ -91,6 +91,8 @@ function baseManifest(name: string, over: Partial<PackManifest> = {}): PackManif
       tools: [],
       promptBlocks: [],
       llmFilters: [],
+      // PROP-108: контент полномочий в фикстурах пуст (роли приезжают пакетами).
+      authority: { roles: [], actions: [], targets: [], agents: [] },
     },
     ...over,
   } as PackManifest;
@@ -168,6 +170,7 @@ const referenceFixture: PluginFixture = {
         { id: REFERENCE_REQUEST_FILTER, phase: 'pre_request' },
         { id: REFERENCE_RESPONSE_FILTER, phase: 'post_response' },
       ],
+      authority: { roles: [], actions: [], targets: [], agents: [] },
     },
   } as Partial<PackManifest>),
   apply: (facade) => {
@@ -236,6 +239,7 @@ const badVerdictFixture: PluginFixture = {
       tools: [],
       promptBlocks: [],
       llmFilters: [{ id: 'plugin:contract-bad-verdict:x', phase: 'pre_request' }],
+      authority: { roles: [], actions: [], targets: [], agents: [] },
     },
   } as Partial<PackManifest>),
   apply: (facade) => {
@@ -266,6 +270,7 @@ const providesMismatchFixture: PluginFixture = {
       tools: ['declared_only'],
       promptBlocks: [],
       llmFilters: [],
+      authority: { roles: [], actions: [], targets: [], agents: [] },
     },
   } as Partial<PackManifest>),
   apply: (facade) => {
@@ -293,6 +298,7 @@ const unknownCapabilityFixture: PluginFixture = {
       tools: ['bypass'],
       promptBlocks: [],
       llmFilters: [],
+      authority: { roles: [], actions: [], targets: [], agents: [] },
     },
   } as Partial<PackManifest>),
   apply: (facade) => {
@@ -320,6 +326,7 @@ const reservedToolNameFixture: PluginFixture = {
       tools: ['plugin_victim_tool'],
       promptBlocks: [],
       llmFilters: [],
+      authority: { roles: [], actions: [], targets: [], agents: [] },
     },
   } as Partial<PackManifest>),
   apply: (facade) => {
@@ -354,6 +361,7 @@ const untrustedDenyFixture: PluginFixture = {
       tools: [],
       promptBlocks: [],
       llmFilters: [{ id: 'plugin:contract-untrusted:block', phase: 'pre_request' }],
+      authority: { roles: [], actions: [], targets: [], agents: [] },
     },
   } as Partial<PackManifest>),
   apply: (facade) => {

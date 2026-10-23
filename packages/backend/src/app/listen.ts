@@ -5,7 +5,7 @@ import { createServer, IncomingMessage } from 'node:http';
 import { Readable } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { Hono } from 'hono';
-import { enqueueUserMessage, enqueueSteerMessage, isSessionVisible } from '@itphx/synth-core';
+import { enqueueUserMessage, enqueueSteerMessage, isSessionVisible, parsePermissionPrincipal } from '@itphx/synth-core';
 import type { EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository, MetricsRegistry } from '@itphx/synth-core';
 import { nowISO, MessageRole, generateStreamId, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { AuthKit } from '../auth/middleware.js';
@@ -332,6 +332,9 @@ export function createBackendListen(deps: BackendListenDeps) {
                 const action = msg.action === 'allow' || msg.action === 'deny' ? msg.action : undefined;
                 const approved = action !== undefined ? action === 'allow' : msg.approved === true;
                 const once = typeof msg.once === 'boolean' ? msg.once : undefined;
+                // PROP-108 Ф0: аддитивные поля `principal`/`turn_id`.
+                const principal = parsePermissionPrincipal(msg.principal);
+                const turnId = typeof msg.turn_id === 'string' && msg.turn_id.trim() !== '' ? msg.turn_id : undefined;
 
                 (async () => {
                   // ADR-089 (P0): подтверждать права можно только в своей сессии.
@@ -343,6 +346,8 @@ export function createBackendListen(deps: BackendListenDeps) {
                     approved,
                     ...(action ? { action } : {}),
                     ...(once !== undefined ? { once } : {}),
+                    ...(principal ? { principal } : {}),
+                    ...(turnId ? { turn_id: turnId } : {}),
                   });
                 })().catch(() => {});
               } else if (msg.type === 'permission_hold') {

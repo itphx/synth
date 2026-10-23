@@ -243,6 +243,22 @@ Probes Helm: liveness — `/health` (или `/ready` с большим `failureT
 `synth_pipeline_steps_total` тоже не попадает — он учитывается, когда завершится (после решения
 оператора).
 
+### Authority-слой (PROP-108)
+
+Решения Authority-слоя (PROP-108 Ф1). Лейблы — `action`/`effect`/`source` (аддитивное
+расширение списка лейблов ADR-094 двумя именами); идентификаторов принципала, хода, сессии и
+цели в лейблах нет — значения приведены к конечным наборам (неизвестное → `other`), поэтому
+кардинальность серий ограничена. Ошибка метрик не влияет на ход.
+
+| Метрика | Тип | Лейблы | Смысл / обновление |
+|---|---|---|---|
+| `synth_authority_decisions_total` | counter | `action` (`read`/`write`/`execute`/`commit`/`publish`/`approve`/`sign`/`delegate`/`other`), `effect` (`allow`/`ask`/`deny`/`other`), `source` (`user`/`agent`/`session`/`pack`/`instance`/`other`) | Посчитанные решения Authority-слоя (в режиме shadow — считаются, но не применяются) |
+
+Счётчик пополняется **после** записи решения в журнал решений Authority-слоя
+(`{dataDir}/audit/authority.jsonl`); ошибка записи в журнал метрику **не** гасит (решение-то
+посчитано). Доменные действия (из контента пакета, `provides.authority`) поимённо в метрику не
+попадают — иначе кардинальность не ограничена; они сводятся к `other`.
+
 ### Служебные (self-metrics)
 
 | Метрика | Тип | Лейблы | Смысл |
@@ -257,7 +273,8 @@ Probes Helm: liveness — `/health` (или `/ready` с большим `failureT
 Контракт, а не соглашение (ADR-094 п. 5):
 
 - Лейблы — только `method`, `route`, `status`, `provider`, `model`, `kind`, `outcome`, `source`, `op`,
-  `currency`, `backend`, `store`, `metric`.
+  `currency`, `backend`, `store`, `metric`, а также `action`/`effect` — только для метрик
+  Authority-слоя (PROP-108 Ф1: `synth_authority_decisions_total`).
 - **`route` — шаблон маршрута**, не сырой путь. Неизвестный/catch-all маршрут сводится к `other`.
 - **Нет** `session_id`, `user_id`, query-строк, сырых путей, текстов сообщений — это и PII, и
   неограниченная кардинальность.

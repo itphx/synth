@@ -84,6 +84,9 @@ export * from './plugin-lock.js';
 export * from './plugin-runtime.js';
 // PROP-068 §3/§12: контракт индекса каталога расширений (format: 1) — типы, zod-схемы, tolerant-парсер
 export * from './catalog.js';
+// PROP-108 Ф0: модель Authority-слоя — полномочия пользователей и агентов
+// как контент (Principal/Action/Target/Grant/Role/Ceiling/Turn/Approval).
+export * from './authority.js';
 // ADR-051/ADR-100: контракт пайплайна (определение, шаг, экземпляр)
 export * from './pipeline.js';
 // ADR-101: контракты пайплайна как второго движка (спецификация, узлы,

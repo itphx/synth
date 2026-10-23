@@ -13,6 +13,7 @@ import {
   type RuntimeDeps,
 } from '../tools/runtime-deps.js';
 import { getToolGroups, TOOL_PATH_PARAMS } from './groups.js';
+import type { AuthorityShadowHook, AuthorityShadowContext } from '../authority/hook.js';
 import { checkShellCommand, isMutatingCommand, tokenizeCommand, matchShellCommandPattern } from '../security/shell-guard.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
 import { checkPath } from '../security/protected-paths.js';
@@ -62,6 +63,14 @@ export interface PermissionCheckInput {
    * базы). `true`/`undefined` — fail-open (обратная совместимость).
    */
   workspaceReady?: boolean;
+  /**
+   * PROP-108 Ф1: контекст хода для shadow-наблюдения Authority-слоя
+   * (принципал/сессия/агент/ход). Не задан — наблюдение не ведётся.
+   *
+   * На решение permission-слоя поля **не влияют** — они нужны только для
+   * записи shadow-решения в журнал.
+   */
+  authorityContext?: AuthorityShadowContext;
 }
 
 /**
@@ -132,7 +141,15 @@ export function getMcpToolAvailability(
  * использовать как простые паттерны вида `*.env`, так и абсолютные `/tmp/*`.
  */
 export class PermissionEvaluator {
-  constructor(private readonly _config: PermissionConfig) {}
+  constructor(
+    private readonly _config: PermissionConfig,
+    /**
+     * PROP-108 Ф1: шов shadow-наблюдения Authority-слоя. Задан — решение
+     * дополнительно считается моделью «действие × цель» и пишется в журнал
+     * (`{dataDir}/audit/authority.jsonl`), но **не меняет** решение слоя.
+     */
+    private readonly _options: { authorityShadow?: AuthorityShadowHook } = {},
+  ) {}
 
   get config(): PermissionConfig {
     return this._config;
@@ -148,6 +165,44 @@ export class PermissionEvaluator {
   }
 
   check(input: PermissionCheckInput): PermissionDecision {
+    const decision = this._checkInternal(input);
+    // PROP-108 Ф1: shadow-наблюдение. Решение **не меняется** — считается
+    // параллельное authority-решение и пишется в журнал решений.
+    this._recordShadow(input, decision);
+    return decision;
+  }
+
+  /**
+   * PROP-108 Ф1: передать решение в shadow-слой (если он подключён).
+   *
+   * Ошибка shadow-не должна ломать ход — вызов защищён.
+   */
+  private _recordShadow(input: PermissionCheckInput, decision: PermissionDecision): void {
+    const hook = this._options.authorityShadow;
+    if (!hook) return;
+    try {
+      hook({
+        toolName: input.toolName,
+        params: input.params,
+        workingDir: input.workingDir,
+        capabilities: input.capabilities,
+        toolSource: input.toolSource,
+        sessionMode: input.sessionMode,
+        planMode: input.planMode,
+        planApproved: input.planApproved,
+        sessionId: input.authorityContext?.sessionId,
+        principal: input.authorityContext?.principal,
+        agentId: input.authorityContext?.agentId,
+        turnId: input.authorityContext?.turnId,
+        config: this._config,
+        decision,
+      });
+    } catch {
+      // Shadow-ошибка не влияет на решение прав.
+    }
+  }
+
+  private _checkInternal(input: PermissionCheckInput): PermissionDecision {
     // ADR-070 §2.9.1: ролевая недоступность — приоритетнее прочих правил. Тул
     // виден модели (список тулов постоянен), но недоступен текущему агенту;
     // отказ несёт подсказку делегировать задачу другому агенту через `@`.
@@ -180,7 +235,6 @@ export class PermissionEvaluator {
     }
     return decision;
   }
-
   private _computeDecision(input: PermissionCheckInput): PermissionDecision {
     const { toolName, params, workingDir, capabilities, toolSource, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy, protectedPaths, protectedPathsEnabled, runtimeDeps, workspaceReady } = input;
     const paths = extractPaths(toolName, params, workingDir);

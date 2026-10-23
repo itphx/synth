@@ -343,6 +343,7 @@ function referenceManifest(): PackManifest {
       tools: [],
       promptBlocks: [{ key: 'plugin.demo.e2e', tier: 'volatile', order: 10 }],
       llmFilters: [],
+      authority: { roles: [], actions: [], targets: [], agents: [] },
     },
   } as Partial<PackManifest>);
 }

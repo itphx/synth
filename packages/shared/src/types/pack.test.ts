@@ -311,7 +311,7 @@ describe('validatePackManifest — правила целостности', () =>
   it('сообщает о пустом provides', () => {
     const problems = validatePackManifest({ ...base, provides: {} });
     expect(problems).toContain(
-      'provides: не заявлен ни один вклад (mcp/skills/agents/pipelines/tools/promptBlocks/llmFilters)',
+      'provides: не заявлен ни один вклад (mcp/skills/agents/pipelines/tools/promptBlocks/llmFilters/authority)',
     );
   });
 

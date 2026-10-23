@@ -341,11 +341,44 @@ export type { EgressLogSinkOptions, EgressLogPrunerOptions } from './engine/net/
 export {
   PermissionEvaluator,
   PermissionApprovalManager,
+  computePermissionDigest,
+  parsePermissionPrincipal,
   deriveSubagentPermission,
   emptyPermissionConfig,
   getToolGroups,
 } from './engine/permission/index.js';
 export type { PermissionCheckInput, ApprovalRequest, ApprovalDecision } from './engine/permission/index.js';
+
+// PROP-108 Ф1: движок Authority-слоя — резолвер решений «действие × цель».
+export {
+  AuthorityResolver,
+  computeAuthorityApprovalDigest,
+  deriveAuthorityTarget,
+  authorityActionForTool,
+  authorityTargetKindForTool,
+  isCoreAuthorityAction,
+  AUTHORITY_CORE_ACTIONS,
+  compileAuthorityGrantsForTool,
+  AuthorityShadowRecorder,
+} from './engine/authority/index.js';
+export type {
+  AuthorityAxis,
+  AuthorityAxisSource,
+  AuthorityApprovalOutcome,
+  AuthorityApprovalReason,
+  AuthorityDecision,
+  AuthorityDecisionEffect,
+  AuthorityDecisionReason,
+  AuthorityEffective,
+  AuthorityResolverOptions,
+  AuthorityTargetInput,
+  DerivedAuthorityTarget,
+  AuthorityRuleCompilationInput,
+  AuthorityShadowContext,
+  AuthorityShadowHook,
+  AuthorityShadowInput,
+  AuthorityShadowRecorderOptions,
+} from './engine/authority/index.js';
 
 export {
   loadProtectedPaths,
@@ -1384,6 +1417,11 @@ export {
   createWebhookMetrics,
   createEventMetrics,
   createPipelineMetrics,
+  // PROP-108 Ф1: решения Authority-слоя (`synth_authority_decisions_total`).
+  createAuthorityMetrics,
+  normalizeAuthorityAction,
+  normalizeAuthorityEffect,
+  normalizeAuthoritySource,
   normalizePipelineRunStatus,
   normalizePipelineStepOutcome,
   normalizePipelineNodeKind,
@@ -1414,6 +1452,11 @@ export type {
   WebhookDeliveryMetrics,
   WebhookDeliveryOutcome,
   EventMetricsHooks,
+  // PROP-108 Ф1: хуки метрик Authority-слоя.
+  AuthorityMetricAction,
+  AuthorityMetricEffect,
+  AuthorityMetricSource,
+  AuthorityMetricsHooks,
   PipelineGateMetricKind,
   PipelineMetricsHooks,
   PipelineNodeMetricKind,

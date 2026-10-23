@@ -36,6 +36,8 @@ import {
   createSchedulerMetrics,
   createWebhookMetrics,
   createEventMetrics,
+  // PROP-108 Ф1: счётчик решений Authority-слоя (`synth_authority_decisions_total`).
+  createAuthorityMetrics,
   startEventJournalMetrics,
   createEgressPolicyResolver,
   createEgressLogSink,
@@ -71,6 +73,7 @@ import {
   mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
+import { AuthorityShadowRecorder } from '../../engine/authority/shadow.js';
 import { applyStartupMigrations, applyPendingRestore } from '../../maintenance/startup.js';
 import { SkillService } from '../../engine/skills/service.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
@@ -343,6 +346,9 @@ export async function createStandaloneDeps(
   const schedulerJobMetrics = metrics ? createSchedulerMetrics(metrics) : undefined;
   const webhookDeliveryMetrics = metrics ? createWebhookMetrics(metrics) : undefined;
   const eventMetrics = metrics ? createEventMetrics(metrics) : undefined;
+  // PROP-108 Ф1: решения Authority-слоя (`synth_authority_decisions_total`) —
+  // лейблы только `action`/`effect`/`source`, без id (ADR-094).
+  const authorityMetrics = metrics ? createAuthorityMetrics(metrics) : undefined;
   if (metrics) {
     stopMetricsCollectors.push(attachBusMetrics(metrics, eventBus));
     stopMetricsCollectors.push(startSessionMetrics(metrics, sessionManager));
@@ -580,10 +586,26 @@ export async function createStandaloneDeps(
     await settingsStore.getPlugins(),
   );
 
+  // PROP-108 Ф1: shadow-наблюдение Authority-слоя. Решение считается и пишется
+  // в журнал (`{dataDir}/audit/authority.jsonl` через порт), но **не
+  // применяется** — права не меняются (миграция «двойное чтение»).
+  const authorityShadow = config.authorityConfig?.enabled
+    ? new AuthorityShadowRecorder({
+        enabled: true,
+        shadow: config.authorityConfig.shadow,
+        journal: storageContext.authorityDecisions,
+        policy: (await storageContext.authorityPolicy?.getPolicy()) ?? null,
+        // ADR-094: счётчик решений Authority-слоя (`synth_authority_decisions_total`).
+        onDecision: authorityMetrics?.onDecision,
+      })
+    : undefined;
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
     hooks,
+    // PROP-108 Ф1: shadow-наблюдение (решение прав не меняется).
+    authorityShadow: authorityShadow?.record,
     // ADR-077: порт исполнения команд (inline — исполнение в процессе;
     // режим — параметр запуска, инвариант 24). Тот же порт получает и
     // детект внешних зависимостей (ниже) — иначе они смотрели бы в разные

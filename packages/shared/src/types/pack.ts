@@ -13,6 +13,12 @@
 import { z } from 'zod';
 
 import type { AgentMode } from './agent.js';
+import {
+  authorityActionSchema,
+  authorityRoleSchema,
+  authorityTargetDeclarationSchema,
+  validateAuthorityContent,
+} from './authority.js';
 import { pipelineDefinitionSchema } from './pipeline.js';
 import { SEMVER_RANGE_REGEX, isSemverRange, satisfiesSemverRange } from './semver.js';
 import { CATALOG_TRUST_LEVELS, catalogTrustLevelSchema, trustLevelRank } from './trust.js';
@@ -341,6 +347,64 @@ export const packLlmFilterProvideSchema = z
 export type PackLlmFilterProvide = z.infer<typeof packLlmFilterProvideSchema>;
 
 /**
+ * PROP-108 §«Доменная нейтральность и доставка контентом»: агент, которому
+ * пакет поставляет роли и потолок.
+ *
+ * `roles[]` — роли агента (id из `provides.authority.roles[]`), `ceiling[]` —
+ * потолок агента (id действий из `provides.authority.actions[]`). Оба списка
+ * проверяются на объявленность — неизвестная роль/действие → отказ установки.
+ */
+export const packAuthorityAgentProvideSchema = z
+  .object({
+    /** Идентификатор агента (уникален в пределах пака). */
+    id: z.string().min(1).max(128),
+    /** Роли агента (id из `provides.authority.roles[]`). */
+    roles: z.array(z.string().min(1).max(128)).default([]),
+    /** Потолок агента — идентификаторы действий. */
+    ceiling: z.array(z.string().min(1).max(64)).default([]),
+  })
+  .strict();
+export type PackAuthorityAgentProvide = z.infer<typeof packAuthorityAgentProvideSchema>;
+
+/**
+ * PROP-108: `provides.authority` — **контент** полномочий: роли, действия,
+ * цели и агенты с ролями.
+ *
+ * Схема **строгая** (`.strict()`): неизвестное поле — ошибка, а не молчаливое
+ * игнорирование. Кросс-ссылки проверяются на разборе: грант на
+ * необъявленное действие, агент на необъявленную роль, шаблон цели на
+ * неизвестный вид цели → **отказ** (PROP-108 §«Валидация, а не каст»).
+ *
+ * Пакет **не выдаёт права сам себе**: объявленные роли становятся активными
+ * только после одобрения ADMIN и пересечения с политикой инстанса
+ * (PROP-108 §«Пересечение, не дарование»).
+ */
+export const packAuthorityProvidesSchema = z
+  .object({
+    /** Роли (именованные наборы грантов). */
+    roles: z.array(authorityRoleSchema).default([]),
+    /** Объявленные доменные действия. */
+    actions: z.array(authorityActionSchema).default([]),
+    /** Виды целей, которые пакет вводит (доменные). */
+    targets: z.array(authorityTargetDeclarationSchema).default([]),
+    /** Агенты с ролями и потолком. */
+    agents: z.array(packAuthorityAgentProvideSchema).default([]),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const problems = validateAuthorityContent({
+      actions: value.actions,
+      roles: value.roles,
+      targets: value.targets,
+      agents: value.agents,
+    });
+    for (const problem of problems) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+    }
+  });
+export type PackAuthorityProvides = z.infer<typeof packAuthorityProvidesSchema>;
+
+/**
  * Набор вкладов расширения. Списки нормализованы (отсутствующий список —
  * пустой массив), неизвестные ключи сохраняются: виды вкладов расширяются
  * без изменения формата манифеста.
@@ -349,6 +413,9 @@ export type PackLlmFilterProvide = z.infer<typeof packLlmFilterProvideSchema>;
  * схемами — без `.passthrough()`: иначе опечатка в манифесте (пустое имя тула,
  * дубль, тир `stable`, неизвестная фаза фильтра) проходит молча, и правило
  * «фактические регистрации обязаны совпадать с `provides`» нечем проверять.
+ *
+ * `authority` (PROP-108) — тоже **явная** схема: контент полномочий не
+ * проходит «как есть» (неизвестное действие/цель/роль → отказ разбора).
  */
 export const packProvidesSchema = z
   .object({
@@ -359,6 +426,7 @@ export const packProvidesSchema = z
     tools: packToolsProvideSchema.default([]),
     promptBlocks: z.array(packPromptBlockProvideSchema).default([]),
     llmFilters: z.array(packLlmFilterProvideSchema).default([]),
+    authority: packAuthorityProvidesSchema.default({}),
   })
   .passthrough();
 export type PackProvides = z.infer<typeof packProvidesSchema>;
@@ -484,6 +552,14 @@ export function normalizePackProvides(provides: unknown): PackProvides {
     tools: toList(source.tools) as string[],
     promptBlocks: toList(source.promptBlocks) as PackPromptBlockProvide[],
     llmFilters: toList(source.llmFilters) as PackLlmFilterProvide[],
+    // PROP-108: контент полномочий нормализуется так же (списки вместо
+    // отсутствия). Содержимое проверяет `packAuthorityProvidesSchema`.
+    authority: {
+      roles: toList((source.authority as Record<string, unknown> | undefined)?.roles) as PackAuthorityProvides['roles'],
+      actions: toList((source.authority as Record<string, unknown> | undefined)?.actions) as PackAuthorityProvides['actions'],
+      targets: toList((source.authority as Record<string, unknown> | undefined)?.targets) as PackAuthorityProvides['targets'],
+      agents: toList((source.authority as Record<string, unknown> | undefined)?.agents) as PackAuthorityProvides['agents'],
+    },
   } as PackProvides;
 }
 
@@ -514,7 +590,10 @@ export function normalizePackProvides(provides: unknown): PackProvides {
  * 12. вклады плагина (`provides.tools`/`promptBlocks`/`llmFilters`) — по
  *     явным схемам PROP-090 §8;
  * 13. `mode` — только для `kind: 'plugin'`;
- * 14. `trust.level` плагина — не выше `trusted` (trust-floor, PROP-090 §9).
+ * 14. `trust.level` плагина — не выше `trusted` (trust-floor, PROP-090 §9);
+ * 15. контент полномочий (`provides.authority`) — строгая схема + кросс-ссылки
+ *     (PROP-108 §«Валидация, а не каст»): неизвестное действие/цель/роль —
+ *     проблема, а не молчаливый проход.
  */
 export function validatePackManifest(manifest: unknown): string[] {
   const problems: string[] = [];
@@ -563,8 +642,17 @@ export function validatePackManifest(manifest: unknown): string[] {
   if (rawMcp !== undefined && !Array.isArray(rawMcp) && !isRecord(rawMcp)) {
     problems.push('provides.mcp: ожидается объект или массив объектов');
   }
+  const rawAuthority = rawProvides.authority;
+  if (rawAuthority !== undefined && !isRecord(rawAuthority)) {
+    problems.push('provides.authority: ожидается объект { roles[], actions[], targets[], agents[] }');
+  }
 
   const provides = normalizePackProvides(rawProvides);
+  const authorityCount =
+    provides.authority.roles.length
+    + provides.authority.actions.length
+    + provides.authority.targets.length
+    + provides.authority.agents.length;
   const declared =
     provides.mcp.length
     + provides.skills.length
@@ -572,10 +660,11 @@ export function validatePackManifest(manifest: unknown): string[] {
     + provides.pipelines.length
     + provides.tools.length
     + provides.promptBlocks.length
-    + provides.llmFilters.length;
+    + provides.llmFilters.length
+    + authorityCount;
   if (declared === 0) {
     problems.push(
-      'provides: не заявлен ни один вклад (mcp/skills/agents/pipelines/tools/promptBlocks/llmFilters)',
+      'provides: не заявлен ни один вклад (mcp/skills/agents/pipelines/tools/promptBlocks/llmFilters/authority)',
     );
   }
 
@@ -678,6 +767,10 @@ export function validatePackManifest(manifest: unknown): string[] {
   // проверять).
   problems.push(...validatePluginProvides(provides));
 
+  // 15. Контент полномочий (PROP-108): та же строгая схема + кросс-ссылки —
+  // неизвестное действие/цель/роль → отказ (не passthrough).
+  problems.push(...validateAuthorityProvides(provides));
+
   // 13. `mode` — режим исполнения, допустим только для плагина.
   const mode = manifest.mode;
   if (mode !== undefined && mode !== null) {
@@ -762,6 +855,29 @@ function describeZodIssues(error: z.ZodError): string {
       return path ? `${path}: ${issue.message}` : issue.message;
     })
     .join('; ');
+}
+
+/**
+ * Проверка контента полномочий (`provides.authority`, PROP-108).
+ *
+ * Схема строгая (`.strict()`) — неизвестное поле, неизвестное действие,
+ * неизвестная цель или неизвестная роль дают проблему, а не «проскочивший»
+ * passthrough. Проблемы — строками (как остальные правила манифеста).
+ */
+function validateAuthorityProvides(provides: PackProvides): string[] {
+  const problems: string[] = [];
+  const authority = provides.authority;
+  const parsed = packAuthorityProvidesSchema.safeParse(authority);
+  if (!parsed.success) {
+    problems.push(`provides.authority: ${describeZodIssues(parsed.error)}`);
+    return problems;
+  }
+  return validateAuthorityContent({
+    actions: parsed.data.actions,
+    roles: parsed.data.roles,
+    targets: parsed.data.targets,
+    agents: parsed.data.agents,
+  });
 }
 
 /**

@@ -29,6 +29,11 @@ export { describeMaintenanceAuditRepository } from './maintenance.js';
 export { describePluginAuditRepository } from './plugin-audit-repository.contract.js';
 // PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов.
 export { describePluginLockRepository } from './plugin-lock-repository.contract.js';
+// PROP-108: порты Authority-слоя (политика инстанса + журнал решений).
+export {
+  describeAuthorityPolicyRepository,
+  describeAuthorityDecisionJournal,
+} from './authority-policy-repository.contract.js';
 export {
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,

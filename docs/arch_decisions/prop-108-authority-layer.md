@@ -347,3 +347,33 @@ flavor-роли, каталог (PROP-068), UI-раздел «Полномочи
 ## История
 
 - 2026-10-23 — документ создан; номер PROP-108, срок решения 2026-11-14
+- 2026-10-23 — **Ф0 выполнен** (ветка `feat/prop-108-authority`): модель Authority-слоя в
+  `@itphx/synth-shared` (`packages/shared/src/types/authority.ts`) — принципал, действие, цель, грант,
+  роль, потолок, ход, подтверждение; строгая схема `provides.authority` в манифесте пакета
+  (`types/pack.ts`) + кросс-валидация `validateAuthorityContent` (неизвестное действие/цель/роль →
+  отказ установки); порты `AuthorityPolicyRepository` (политика инстанса) и `AuthorityDecisionJournal`
+  (журнал решений) — файловые и in-memory реализации, контрактный suite, подключение в
+  `StorageContext`; аддитивные поля `principal`/`turn_id`/`digest` в `permission.asked`/`replied`.
+- 2026-10-23 — **Ф1 выполнен** (ветка `feat/prop-108-authority`): резолвер решений
+  (`engine/authority/resolve.ts`) — `effective(turn)` как пересечение осей «пользователь / агент /
+  потолок сессии / потолок пакета / политика инстанса», `decide(turn, action, target)` — неизвестное
+  действие/цель → `deny('unknown')`, явный запрет → `deny('explicit')`, нет гранта →
+  `deny('no_grant')`, `ask`/`requireConfirm` → `ask`, иначе `allow`; `approve()` — одноразовое
+  подтверждение носителем покрывающего гранта с проверкой хода и отпечатка; мост миграции —
+  отображение оси тулов на «действие × цель» (`engine/authority/actions.ts`) и вывод цели
+  (`engine/authority/target.ts` — относительные пути внутри workspace, без секретов); компиляция
+  правил permission-слоя в гранты (`engine/authority/compile.ts`); shadow-интеграция
+  (`engine/authority/shadow.ts` + шов в `PermissionEvaluator`): решение **считается** и пишется в
+  журнал решений (`{dataDir}/audit/authority.jsonl`), но **не применяется** — права не меняются;
+  секция конфига `authority` (`enabled`/`shadow`, слой выключен по умолчанию); метрика
+  `synth_authority_decisions_total{action,effect,source}` (ADR-094 — без `user_id`/`session_id`,
+  значения приведены к конечным наборам, неизвестное → `other`); тесты — паритет shadow-решения с
+  решением permission-слоя на существующих тулах + задокументированные расхождения Ф1, «новый тул без
+  маппинга → `deny('unknown')`», схема `provides.authority` на трёх доменных примерах, контракт
+  метрики.
+- Остаток (не начато): **Ф2** — принуждение в движке (Authority-guard в `PermissionEvaluator`,
+  ограничение `yolo` потолком, `deny` для неизвестных действий); **Ф3** — границы и подтверждения
+  (WS-путь, ответ только носителем гранта, одноразовость подтверждения); **Ф4** —
+  многопользовательские сессии (`Turn.principal` в очереди и steering, участники сессии, ограничение
+  `PATCH mode`); **Ф5** — контент и дистрибуция (`provides.authority` при установке пакета,
+  `pending_approval` по существу, flavor-роли, каталог PROP-068, UI-раздел «Полномочия»).
