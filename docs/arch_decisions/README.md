@@ -68,12 +68,12 @@
 | ADR-094 | Наблюдаемость — Prometheus-метрики, liveness/readiness и эксплуатационные алерты | ⚠️ Частично | [adr-094-observability-metrics.md](./adr-094-observability-metrics.md) |
 | ADR-097 | Класс расширения «хранилище» (storage) — контракт портов, драйверы из коробки | ⚠️ Частично | [adr-097-storage-provider-class.md](./adr-097-storage-provider-class.md) |
 | ADR-098 | Деградированный режим и восстановление хранилища | ⚠️ Частично | [adr-098-storage-degraded-recovery.md](./adr-098-storage-degraded-recovery.md) |
-| PROP-098 | Форсированная отправка сообщения во время хода (steering) | ⚠️ Частично | [prop-098-mid-turn-steering.md](./prop-098-mid-turn-steering.md) |
 | ADR-099 | Единый egress-слой: доверие TLS/CA (mTLS, bootstrap `security-tls.json`, per-host профили, UI), адресная политика (`egress.tools`/`egress.webhooks`, `mcp.networkPolicy`) и HTTP/HTTPS/SOCKS5-прокси (`proxy.*`, Basic, `no_proxy`, proxied-режим, runtime-настройка из админ-UI, аудит и журнал); доменная аутентификация прокси (NTLM/Negotiate/Kerberos) — вне scope, делегируется egress-шлюзу | ⚠️ Частично | [adr-099-egress-tls-trust.md](./adr-099-egress-tls-trust.md) |
 | ADR-100 | Пакет расширения и пайплайн в ядре: единый контракт доставки (`synth.pack`) и учёт прогонов | ⚠️ Частично | [adr-100-extension-packs-pipelines.md](./adr-100-extension-packs-pipelines.md) |
 | ADR-102 | Аналитика и отчётность инстанса | ⚠️ Частично | [adr-102-analytics-reports.md](./adr-102-analytics-reports.md) |
 | ADR-103 | Ядро шлюзов (`@itphx/synth-gateway-core`) и контракт канала | ⚠️ Частично | [adr-103-gateway-core-channel-contract.md](./adr-103-gateway-core-channel-contract.md) |
-| PROP-107 | OAuth-хранилище и слой доступа к внешним сервисам (коннекторы): креды шифруются мастер-ключом, токен подставляет транспорт — агент его не видит | ⚠️ Частично | [prop-107-oauth-credential-layer.md](./prop-107-oauth-credential-layer.md) |
+| ADR-104 | Вмешательство в ход посреди генерации (steering) | ⚠️ Частично | [adr-104-mid-turn-steering.md](./adr-104-mid-turn-steering.md) |
+| ADR-105 | Внешние доступы — единый слой доступа к внешним сервисам (OAuth-коннекторы) | ⚠️ Частично | [adr-105-external-credentials.md](./adr-105-external-credentials.md) |
 | PROP-108 | Authority-слой — полномочия пользователей и агентов как контент | ⚠️ Частично | [prop-108-authority-layer.md](./prop-108-authority-layer.md) |
 
 ## Предложения

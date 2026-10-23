@@ -12,8 +12,8 @@
 > - [ADR-101](./adr-101-pipeline-engine.md) «Pipeline Engine» — второй движок исполнения, который обязан подчиняться тем же правам;
 > - [ADR-096](./adr-096-storage-layer.md) «Слой хранения» — доменный порт политики полномочий;
 > - [ADR-094](./adr-094-observability-metrics.md) «Наблюдаемость» — метрики решений без идентификаторов;
-> - [PROP-098](./prop-098-mid-turn-steering.md) «Steering» — смена ввода посреди хода (и, значит, принципала хода);
-> - [PROP-107](./prop-107-oauth-credential-layer.md) «OAuth-хранилище» — параллельный пример «слой вместо поля конфигурации».
+> - [ADR-104](./adr-104-mid-turn-steering.md) «Steering» — смена ввода посреди хода (и, значит, принципала хода);
+> - [ADR-105](./adr-105-external-credentials.md) «OAuth-хранилище» — параллельный пример «слой вместо поля конфигурации».
 
 ## Решение
 
@@ -170,7 +170,7 @@ Shell-guard сам фиксирует предел: токенизация shlex
 
 **Асинхронные ходы.** Очередь исполняет ходы последовательно, но принципал у каждого свой; фоновые сессии
 саб-агентов ([PROP-096](./prop-096-background-subagent-sessions.md)) наследуют потолок родителя, а не
-пользователя «по умолчанию». Steering ([PROP-098](./prop-098-mid-turn-steering.md)) — единственный законный
+пользователя «по умолчанию». Steering ([ADR-104](./adr-104-mid-turn-steering.md)) — единственный законный
 способ сменить ввод посреди хода; он несёт принципала и либо сохраняет потолок, либо понижает его.
 
 **Три сегодняшние дыры** (все подтверждены кодом):
@@ -320,7 +320,7 @@ flavor-роли, каталог (PROP-068), UI-раздел «Полномочи
 
 ## Открытые вопросы
 
-1. **Гранулярность цели** — `path:` (относительный путь), `resource:<type>/<id>` или оба? Кто резолвит `external:*` — ядро или коннектор ([PROP-107](./prop-107-oauth-credential-layer.md))?
+1. **Гранулярность цели** — `path:` (относительный путь), `resource:<type>/<id>` или оба? Кто резолвит `external:*` — ядро или коннектор ([ADR-105](./adr-105-external-credentials.md))?
 2. **Где живёт политика инстанса** — `config.yaml` (секция `security.authority`), runtime-настройки (UI) или порт хранилища (ADR-096)? Нужен ли отдельный журнал изменений политики?
 3. **Принципал нечеловеческих входов** — как выражается потолок для `scheduler`, `event:<source>`, `service:<keyId>`; наследуют ли они права владельца привязки (ADR-089) или имеют собственные роли?
 4. **Подтверждения** — кто вправе подтвердить: любой носитель гранта, только инициатор, только `approve`-роль? Нужны ли TTL, эскалация и делегирование подтверждения?
@@ -339,8 +339,8 @@ flavor-роли, каталог (PROP-068), UI-раздел «Полномочи
 
 - **Права и режимы:** [ADR-025](./adr-025-plan-act-toggle.md) (режим → потолок), [ADR-028](./adr-028-plan-build-strictness.md) (где уместен `ask`), [ADR-029](./adr-029-granular-permissions.md) (существующая ось), [ADR-070](./adr-070-system-prompt-composer.md) (почему права не в промпте), [PROP-074](./prop-074-soft-delete-retention.md) (`restore` — отдельный грант).
 - **Ресурсы и границы:** [ADR-014](./adr-014-project-container.md) (проект как контейнер), [ADR-071](./adr-071-mcp-servers-prompt.md) (цель `mcp:<server>/<tool>`), [ADR-075](./adr-075-project-workspace-provisioning.md) (workspace как цель), [ADR-099](./adr-099-egress-tls-trust.md) (достижимость внешних целей), [ADR-103](./adr-103-gateway-core-channel-contract.md) (действия канала).
-- **Исполнение:** [ADR-077](./adr-077-runtime-toolchain.md) (`ExecutionPort`), [ADR-078](./adr-078-runtime-dependency-availability.md) (`unavailable` ≠ `deny`), [ADR-101](./adr-101-pipeline-engine.md) (пайплайн — те же права), [PROP-096](./prop-096-background-subagent-sessions.md) (наследование потолка), [PROP-098](./prop-098-mid-turn-steering.md) (смена принципала посреди хода).
-- **Владелец и внешний мир:** [ADR-052](./adr-052-public-api-platform.md) (service-key/scopes), [ADR-089](./adr-089-external-events-automation.md) (идентичности и роли отправителя), [PROP-107](./prop-107-oauth-credential-layer.md) (`external:*` и владелец доступа).
+- **Исполнение:** [ADR-077](./adr-077-runtime-toolchain.md) (`ExecutionPort`), [ADR-078](./adr-078-runtime-dependency-availability.md) (`unavailable` ≠ `deny`), [ADR-101](./adr-101-pipeline-engine.md) (пайплайн — те же права), [PROP-096](./prop-096-background-subagent-sessions.md) (наследование потолка), [ADR-104](./adr-104-mid-turn-steering.md) (смена принципала посреди хода).
+- **Владелец и внешний мир:** [ADR-052](./adr-052-public-api-platform.md) (service-key/scopes), [ADR-089](./adr-089-external-events-automation.md) (идентичности и роли отправителя), [ADR-105](./adr-105-external-credentials.md) (`external:*` и владелец доступа).
 - **Доставка контента:** [ADR-086](./adr-086-extensibility-plugins-editions.md) (классы расширений), [ADR-100](./adr-100-extension-packs-pipelines.md) (`synth.pack`), [PROP-068](./prop-068-skills-agents-registry.md) (каталог и trust), [PROP-082](./prop-082-full-images-deployment.md) (flavor-образы), [PROP-090](./prop-090-extension-api.md) (резолверы целей в плагинах).
 - **Инфраструктура:** [ADR-005](./adr-005-json-storage.md) (JSON и атомарная запись), [ADR-030](./adr-030-hooks-agent-events.md) (хуки как точка аудита), [ADR-036](./adr-036-llm-gateway.md) (аудит без утечки секретов), [ADR-094](./adr-094-observability-metrics.md) (метрики без идентификаторов), [ADR-096](./adr-096-storage-layer.md) (порт политики и контрактный suite).
 

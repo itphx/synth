@@ -541,7 +541,6 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | ADR-097 | Класс расширения «хранилище» (storage) — контракт портов, драйверы из коробки | ⚠️ Частично | [adr-097](./docs/arch_decisions/adr-097-storage-provider-class.md) |
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097](./docs/arch_decisions/prop-097-background-processes-registry.md) |
 | ADR-098 | Деградированный режим и восстановление хранилища | ⚠️ Частично | [adr-098](./docs/arch_decisions/adr-098-storage-degraded-recovery.md) |
-| PROP-098 | Форсированная отправка сообщения во время хода (steering) | ⚠️ Частично | [prop-098](./docs/arch_decisions/prop-098-mid-turn-steering.md) |
 | ADR-099 | Единый egress-слой — доверие TLS/CA (и mTLS) для исходящих соединений | ⚠️ Частично | [adr-099](./docs/arch_decisions/adr-099-egress-tls-trust.md) |
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099](./docs/arch_decisions/prop-099-memory-footprint-optimization.md) |
 | ADR-100 | Пакет расширения и пайплайн в ядре: единый контракт доставки (`synth.pack`) и учёт прогонов | ⚠️ Частично | [adr-100](./docs/arch_decisions/adr-100-extension-packs-pipelines.md) |
@@ -550,10 +549,11 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | PROP-101 | Локальные инсталляторы и платформенная дистрибуция (Windows / macOS / Linux) | 🧩 Предложение | [prop-101](./docs/arch_decisions/prop-101-local-installers-platforms.md) |
 | ADR-102 | Аналитика и отчётность инстанса | ⚠️ Частично | [adr-102](./docs/arch_decisions/adr-102-analytics-reports.md) |
 | ADR-103 | Ядро шлюзов (`@itphx/synth-gateway-core`) и контракт канала | ⚠️ Частично | [adr-103](./docs/arch_decisions/adr-103-gateway-core-channel-contract.md) |
+| ADR-104 | Вмешательство в ход посреди генерации (steering) | ⚠️ Частично | [adr-104](./docs/arch_decisions/adr-104-mid-turn-steering.md) |
 | PROP-104 | Внешний транспорт событий: публикация между репликами control plane | 🧩 Предложение | [prop-104](./docs/arch_decisions/prop-104-external-event-transport.md) |
+| ADR-105 | Внешние доступы — единый слой доступа к внешним сервисам (OAuth-коннекторы) | ⚠️ Частично | [adr-105](./docs/arch_decisions/adr-105-external-credentials.md) |
 | PROP-105 | Координация в нескольких репликах: сессии, очередь, общее состояние | 🧩 Предложение | [prop-105](./docs/arch_decisions/prop-105-multi-replica-coordination.md) |
 | PROP-106 | Файловые порты инстанса в SQL: единое состояние при нескольких репликах | 🧩 Предложение | [prop-106](./docs/arch_decisions/prop-106-file-ports-to-sql.md) |
-| PROP-107 | OAuth-хранилище и слой доступа к внешним сервисам (коннекторы): креды шифруются мастер-ключом, токен подставляет транспорт — агент его не видит | ⚠️ Частично | [prop-107](./docs/arch_decisions/prop-107-oauth-credential-layer.md) |
 | PROP-108 | Authority-слой — полномочия пользователей и агентов как контент | ⚠️ Частично | [prop-108](./docs/arch_decisions/prop-108-authority-layer.md) |
 <!-- ad-index:end -->
 
@@ -576,7 +576,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | саб-агенты / контекст | [ADR-026](./docs/arch_decisions/adr-026-subagent-context-modes.md), [ADR-033](./docs/arch_decisions/adr-033-session-branching-merge.md) |
 | permissions / plan-act | [ADR-025](./docs/arch_decisions/adr-025-plan-act-toggle.md), [ADR-028](./docs/arch_decisions/adr-028-plan-build-strictness.md), [ADR-029](./docs/arch_decisions/adr-029-granular-permissions.md) |
 | полномочия / роли / среды / «кто что может через агента» | [PROP-108](./docs/arch_decisions/prop-108-authority-layer.md), [ADR-025](./docs/arch_decisions/adr-025-plan-act-toggle.md), [ADR-029](./docs/arch_decisions/adr-029-granular-permissions.md), [ADR-089](./docs/arch_decisions/adr-089-external-events-automation.md) (права внешних отправителей) |
-| внешние доступы / OAuth-коннекторы / токены внешних сервисов | [PROP-107](./docs/arch_decisions/prop-107-oauth-credential-layer.md) |
+| внешние доступы / OAuth-коннекторы / токены внешних сервисов | [ADR-105](./docs/arch_decisions/adr-105-external-credentials.md), [docs/EXTERNAL_ACCESS.md](./docs/EXTERNAL_ACCESS.md) |
 | конфиг | [ADR-023](./docs/arch_decisions/adr-023-configuration.md), [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
 | routing / микро-слой | [ADR-034](./docs/arch_decisions/adr-034-model-routing.md), [ADR-035](./docs/arch_decisions/adr-035-micro-model-first.md), [ADR-084](./docs/arch_decisions/adr-084-decision-models-clef.md), [docs/ROUTING.md](./docs/ROUTING.md) |
 | безопасность / gateway | [ADR-036](./docs/arch_decisions/adr-036-llm-gateway.md) |
