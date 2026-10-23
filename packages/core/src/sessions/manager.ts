@@ -1,5 +1,5 @@
 import type { Session, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings, Project } from '@itphx/synth-shared';
-import { getForkedTitle, MessageRole } from '@itphx/synth-shared';
+import { getForkedTitle, MessageRole, MAX_STEER_INJECTIONS_PER_TURN } from '@itphx/synth-shared';
 import { nowISO, generateId, makeTextPart, makePart, stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { SessionRepository } from '../storage/ports/session-repository.js';
@@ -589,6 +589,57 @@ export class SessionManager {
       session.updatedAt = nowISO();
       await this.store.save(session);
       return session;
+    });
+  }
+
+  /**
+   * PROP-098: поставить сообщение в очередь инъекций (`steerInbox`) — отправка
+   * во время активного хода (`mode: 'steer'`). Очередь отдельна от
+   * `pendingMessages`: её вычитывает оркестратор на границе шага.
+   *
+   * `accepted: false` — превышен лимит инъекций на ход (`maxInjections`).
+   */
+  async enqueueSteerMessage(
+    sessionId: string,
+    message: Message,
+    maxInjections = MAX_STEER_INJECTIONS_PER_TURN,
+  ): Promise<{ accepted: boolean; pending: number }> {
+    return this.withLock(sessionId, async (session) => {
+      const inbox = session.steerInbox ?? [];
+      if (inbox.length >= maxInjections) {
+        return { accepted: false, pending: inbox.length };
+      }
+      if (!message.id) message.id = generateId();
+      if (!message.origin) message.origin = 'local';
+      if (!message.parts || message.parts.length === 0) {
+        message.parts = [makeTextPart(message.content)];
+      }
+      sanitizeMessageNullBytes(message);
+      inbox.push(message);
+      session.steerInbox = inbox;
+      session.updatedAt = nowISO();
+      await this.store.save(session);
+      return { accepted: true, pending: inbox.length };
+    });
+  }
+
+  /**
+   * PROP-098: забрать сообщения инъекций из очереди (FIFO) для вплетения в
+   * текущий ход. Забираются не больше `maxInjections` — остальные остаются в
+   * очереди (лишние отбрасывает оркестратор отдельным событием).
+   */
+  async takeSteerMessages(
+    sessionId: string,
+    maxInjections = MAX_STEER_INJECTIONS_PER_TURN,
+  ): Promise<Message[]> {
+    return this.withLock(sessionId, async (session) => {
+      const inbox = session.steerInbox ?? [];
+      if (inbox.length === 0) return [];
+      const taken = inbox.splice(0, Math.max(0, maxInjections));
+      session.steerInbox = inbox;
+      session.updatedAt = nowISO();
+      await this.store.save(session);
+      return taken;
     });
   }
 

@@ -94,6 +94,7 @@ const SESSION_FIELDS = [
   'settings',
   'mcp_servers',
   'pending_messages',
+  'steer_inbox',
   'current_stream',
   'summarization_pending',
   'can_summarize',
@@ -122,6 +123,7 @@ const SESSION_JSON_FIELDS: ReadonlySet<string> = new Set([
   'settings',
   'mcp_servers',
   'pending_messages',
+  'steer_inbox',
   'current_stream',
 ]);
 

@@ -11,6 +11,8 @@ import {
   ANALYTICS_FAMILIES,
   ANALYTICS_DIMENSIONS,
   ANALYTICS_EXPORT_FORMATS,
+  STEER_MODES,
+  DEFAULT_STEER_MODE,
 } from '../types/index.js';
 import type { GitRepoConfig, ProjectIconKey, ProjectColorKey } from '../types/index.js';
 import { ToolCapability } from '../types/tools.js';
@@ -204,6 +206,11 @@ export const promptRequestSchema = z.object({
   provider: z.string().optional(),
   agent: z.string().optional(),
   system: z.string().optional(),
+  /**
+   * PROP-098: режим отправки. `queue` (по умолчанию) — прежнее поведение;
+   * `steer` — инъекция в активный ход; `interrupt` — этап 2 (пока 400).
+   */
+  mode: z.enum(STEER_MODES).default(DEFAULT_STEER_MODE),
 });
 
 export const spaLoginSchema = z.object({

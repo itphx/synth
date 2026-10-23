@@ -241,6 +241,13 @@ export interface Session {
   projectId?: string;
   messages: Message[];
   pendingMessages: Message[];
+  /**
+   * PROP-098: очередь инъекций (steering) — сообщения, отправленные во время
+   * активного хода (`mode: 'steer'`). Отдельно от `pendingMessages`: оркестратор
+   * вычитывает её на границе шага и вплетает в контекст текущего хода.
+   * Необязательное поле — сессии, созданные до PROP-098, его не имеют.
+   */
+  steerInbox?: Message[];
   status: SessionStatus;
   settings: SessionSettings;
   mcpServers?: string[];

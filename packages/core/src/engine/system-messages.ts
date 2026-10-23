@@ -357,6 +357,13 @@ export const SYSTEM_MESSAGES = {
   'event.duplicate': 'Duplicate event ignored: {dedupKey}',
   'hook.blocked': 'Hook "{hook}" blocked execution: {reason}',
 
+  // --- Steering: форсированная отправка во время хода (PROP-098) ---
+  'steer.injected': 'Message injected into the running turn',
+  'steer.limit_exceeded':
+    'Steering limit reached: at most {limit} injected messages per turn',
+  'steer.interrupt_unsupported':
+    'Interrupt mode is not supported yet — use "steer" or "queue"',
+
   // --- Профиль пользователя и онбординг ---
   'profile.deps_unavailable': 'Error: session manager or profiles store unavailable for {tool}',
   'profile.session_read_error': 'Error: failed to read the session',

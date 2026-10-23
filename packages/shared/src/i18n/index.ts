@@ -289,6 +289,10 @@ export const ENGINE_MESSAGE_KEYS = [
   'event.source_not_allowed',
   'event.duplicate',
   'hook.blocked',
+  // --- Steering: форсированная отправка во время хода (PROP-098) ---
+  'steer.injected',
+  'steer.limit_exceeded',
+  'steer.interrupt_unsupported',
   // --- Профиль пользователя и онбординг ---
   'profile.deps_unavailable',
   'profile.session_read_error',
@@ -604,6 +608,10 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'event.source_not_allowed': ["source"],
   'event.duplicate': ["dedupKey"],
   'hook.blocked': ["hook","reason"],
+  // --- Steering: форсированная отправка во время хода (PROP-098) ---
+  'steer.injected': [],
+  'steer.limit_exceeded': ["limit"],
+  'steer.interrupt_unsupported': [],
   // --- Профиль пользователя и онбординг ---
   'profile.deps_unavailable': ["tool"],
   'profile.session_read_error': [],
