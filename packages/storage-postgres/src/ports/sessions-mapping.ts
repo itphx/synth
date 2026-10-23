@@ -46,6 +46,8 @@ export interface SessionRow {
   branch_point: string | null;
   plan_approved: boolean | null;
   mode: string | null;
+  /** ADR-106 Ф4 (шаг C): режим по принципалу (переопределения режима сессии). */
+  mode_by_principal: unknown;
   user_id: string | null;
   owner_id: string | null;
   project_id: string | null;
@@ -419,6 +421,7 @@ export function serializeSession(session: Session): Record<string, unknown> {
     branch_point: session.branchPoint ?? null,
     plan_approved: session.planApproved ?? null,
     mode: session.mode ?? null,
+    mode_by_principal: session.modeByPrincipal ?? null,
     user_id: session.userId ?? null,
     owner_id: session.ownerId ?? null,
     project_id: session.projectId ?? null,
@@ -557,6 +560,10 @@ export function deserializeSession(
     branchPoint: row.branch_point ?? undefined,
     planApproved: row.plan_approved ?? undefined,
     mode: (row.mode ?? undefined) as Session['mode'],
+    // ADR-106 Ф4 (шаг C): режим по принципалу.
+    ...(row.mode_by_principal && Object.keys(row.mode_by_principal as Record<string, unknown>).length > 0
+      ? { modeByPrincipal: row.mode_by_principal as Session['modeByPrincipal'] }
+      : {}),
     todos: (row.todos ?? undefined) as Session['todos'],
     promptStates: (row.prompt_states ?? undefined) as Session['promptStates'],
     obfuscationMap: (row.obfuscation_map ?? undefined) as Session['obfuscationMap'],

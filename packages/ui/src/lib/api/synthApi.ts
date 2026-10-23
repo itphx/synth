@@ -222,6 +222,11 @@ export type { FileEntry, DirectoryListResult, FileReadResult } from '@itphx/synt
 export type {
   PackInstallationStatus,
   PackProvides,
+  PackAuthoritySummaryRole,
+  PackAuthoritySummaryAction,
+  PackAuthoritySummaryTarget,
+  PackAuthoritySummaryAgent,
+  PackAuthoritySummary,
   PackInstallation,
   PacksListResponse,
   PackApprovalResult,

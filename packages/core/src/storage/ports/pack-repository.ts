@@ -11,6 +11,7 @@
  * `@itphx/synth-shared` (`packNameSchema`/`packVersionSchema`/`PackManifest`);
  * здесь они не дублируются.
  */
+import type { CatalogTrustLevel } from '@itphx/synth-shared';
 
 /** Статус установки пакета в инстансе. */
 export type PackInstallationStatus = 'active' | 'pending_approval' | 'disabled';
@@ -51,6 +52,13 @@ export interface PackInstallation {
   requiresApproval: boolean;
   /** Что этот пакет поставил в инстанс (id'ы) — нужно для удаления. */
   provides: PackInstallationProvides;
+  /**
+   * ADR-106 Ф5: фактическое доверие пакета (PROP-068 §4.1) — верхняя граница
+   * по заявленному в манифесте уровню. Запоминается при установке, потому что
+   * одобрение приходит **отдельным** запросом: trust-floor мутирующих грантов
+   * считается по нему, а не по манифесту в момент одобрения.
+   */
+  trustLevel?: CatalogTrustLevel;
   /** Сырой манифест — для аудита и «показать детали» в UI (обычно `PackManifest`). */
   manifest?: unknown;
   /**

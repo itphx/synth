@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-23 (ADR-090, §5.36 «Плагины» — переведено); перевод отстаёт (кроме раздела про плагины): §5.32 «Аналитика и отчётность» (ADR-102), §5.33 «Пакеты расширений», §5.34 «Пайплайны» (ADR-100), §5.35 «Пайплайны проекта, прогоны и шаблоны» (ADR-101).
+> ⚠️ RU-версия обновлена 2026-10-24 (ADR-106 Ф5: §5.33 «Пакеты расширений» — сводка `authority`, `pending_approval` по существу, `authorityActivation`; ADR-090 §5.36 «Плагины» — переведено); перевод отстаёт (§5.32 «Аналитика и отчётность» — ADR-102, §5.34 «Пайплайны» — ADR-100, §5.35 — ADR-101).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.

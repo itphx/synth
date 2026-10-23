@@ -553,7 +553,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | PROP-104 | Внешний транспорт событий: публикация между репликами control plane | 🧩 Предложение | [prop-104](./docs/arch_decisions/prop-104-external-event-transport.md) |
 | ADR-105 | Внешние доступы — единый слой доступа к внешним сервисам (OAuth-коннекторы) | ⚠️ Частично | [adr-105](./docs/arch_decisions/adr-105-external-credentials.md) |
 | PROP-105 | Координация в нескольких репликах: сессии, очередь, общее состояние | 🧩 Предложение | [prop-105](./docs/arch_decisions/prop-105-multi-replica-coordination.md) |
-| ADR-106 | Authority-слой — полномочия пользователей и агентов как контент | ⚠️ Частично | [adr-106](./docs/arch_decisions/adr-106-authority-layer.md) |
+| ADR-106 | Authority-слой — полномочия пользователей и агентов как контент; Ф0–Ф5 реализованы (остаток — UI «Полномочия» и flavor-роли) | ⚠️ Частично | [adr-106](./docs/arch_decisions/adr-106-authority-layer.md) |
 | PROP-106 | Файловые порты инстанса в SQL: единое состояние при нескольких репликах | 🧩 Предложение | [prop-106](./docs/arch_decisions/prop-106-file-ports-to-sql.md) |
 <!-- ad-index:end -->
 

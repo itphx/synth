@@ -14,9 +14,13 @@ import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorT
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import { requireScope, checkServiceProjectProjection } from '../service-scope.js';
+import { resolveUserPrincipal } from '../../engine/authority/principal.js';
 import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../service-scope.js';
 import { createSessionAccessGuard, createSessionAccessPredicate } from '../session-access-guard.js';
 import type { SessionAccessKind } from '../session-access-guard.js';
+import { createSessionModeGuard, getSessionModeDecision } from '../session-mode-guard.js';
+import { deriveSessionParticipants } from '../../engine/authority/participants.js';
+import { applySessionMode } from '../../engine/authority/mode.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
 import type { AnalyticsRecorder } from '../../analytics/recorder.js';
 import { sessionAxes } from '../../analytics/recorder.js';
@@ -309,6 +313,31 @@ export function createSessionRoutes(
   }
 
   /**
+   * ADR-106 Ф4 (шаг C): смена режима сессии — **вторая** привилегия, отдельная
+   * от доступа к сессии (доступ решает prefix-guard выше). Guard решает, чей это
+   * режим: одиночная сессия — общий режим (прежнее поведение), многопользовательская
+   * — режим только того, кто его выставил (`modeByPrincipal`), иначе смена
+   * режима одним участником меняла бы решения для ходов другого.
+   *
+   * Проверка — на границе (инвариант 16): обработчик только применяет решение.
+   */
+  const sessionModeGuard = createSessionModeGuard({
+    param: 'id',
+    resolveSession: (id) => sessionManager.getSession(id),
+    resolveUserId,
+    resolveParticipants: async (session) => {
+      if (!session.projectId || !deps.projectStore) {
+        return deriveSessionParticipants(session, null);
+      }
+      const project = await deps.projectStore.load(session.projectId).catch(() => null);
+      return deriveSessionParticipants(session, project);
+    },
+    resolveElevated: async (c) => (await opts.resolveElevated?.(c)) ?? false,
+    messages: { sessionNotFound: messages.sessionNotFound, forbidden: messages.forbidden },
+    skipForId: (id) => hasRemoteGetter && isRemoteRef(id),
+  });
+
+  /**
    * ADR-036: право раскрыть реальные значения секретов читателю сессии.
    *
    * Политика задаётся backend'ом (`opts.canRevealSecrets`); дефолт — только
@@ -517,7 +546,7 @@ export function createSessionRoutes(
     return c.json(await serializeForReader(c, session));
   });
 
-  app.patch('/:id', auth.requireAuth, scoped('sessions:prompt'), async (c) => {
+  app.patch('/:id', auth.requireAuth, scoped('sessions:prompt'), sessionModeGuard, async (c) => {
     const id = c.req.param('id');
     if (hasRemoteGetter && isRemoteRef(id)) {
       const remoteClient = resolveClient();
@@ -606,7 +635,13 @@ export function createSessionRoutes(
       }
       if (body.icon !== undefined) s.icon = parsed.data.icon ?? undefined;
       if (body.color !== undefined) s.color = parsed.data.color ?? undefined;
-      if (body.mode !== undefined) s.mode = body.mode;
+      if (body.mode !== undefined) {
+        // ADR-106 Ф4 (шаг C): область режима решает граничный guard — общий
+        // режим сессии (одиночная сессия) или режим только этого принципала
+        // (многопользовательская сессия: чужие ходы не меняются).
+        const modeDecision = getSessionModeDecision(c);
+        applySessionMode(s, body.mode, modeDecision?.scope ?? { kind: 'session' });
+      }
       if (parsed.data.settings !== undefined) {
         s.settings = { ...s.settings, ...parsed.data.settings };
       }
@@ -775,6 +810,10 @@ export function createSessionRoutes(
 
     const streamId = body.messageId || generateStreamId();
     const author = await resolveAuthor(c);
+    // ADR-106 Ф4: принципал ввода фиксируется **при приёме ввода** (здесь —
+    // на постановке в очередь). Не аутентифицирован → не задан → fallback
+    // на владельца сессии (совместимость).
+    const turnPrincipal = resolveUserPrincipal(await resolveUserId(c));
 
     const message: Message = {
       id: promptMessageId === 'stream' ? streamId : generateStreamId(),
@@ -803,7 +842,7 @@ export function createSessionRoutes(
       const steerResult = await enqueueSteerMessage(
         sessionManager, eventBus, sessionId, message, MAX_STEER_INJECTIONS_PER_TURN,
         (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
-        { interrupt: interruptMode },
+        { interrupt: interruptMode, ...(turnPrincipal ? { principal: turnPrincipal } : {}) },
       );
       if (!steerResult.accepted) {
         return c.json({
@@ -835,6 +874,7 @@ export function createSessionRoutes(
     const result = await enqueueUserMessage(
       sessionManager, eventBus, sessionId, message, queueManager, processMessage,
       (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
+      turnPrincipal ? { principal: turnPrincipal } : undefined,
     );
 
     if (!result) {
@@ -1052,7 +1092,14 @@ export function createSessionRoutes(
       metadata: { type: 'summarization_request', reason: 'manual', stream_id: streamId },
     };
 
-    const result = await enqueueUserMessage(sessionManager, eventBus, session.id, sysMsg, queueManager, processMessage);
+    // ADR-106 Ф4: принципал инициатора (ручная суммаризация — ввод от
+    // пользователя, а не системный ход).
+    const summarizerPrincipal = resolveUserPrincipal(await resolveUserId(c));
+    const result = await enqueueUserMessage(
+      sessionManager, eventBus, session.id, sysMsg, queueManager, processMessage,
+      undefined,
+      summarizerPrincipal ? { principal: summarizerPrincipal } : undefined,
+    );
     if (!result) {
       return c.json({ error: { code: 'QUEUE_FULL', message: 'Queue is full' } }, 429);
     }

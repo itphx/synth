@@ -99,15 +99,21 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
   (`src/migrations/001-init.ts`, `002-egress-audit.ts`, `003-analytics-rollups.ts`,
   `004-pipeline-engine.ts`, `005-pipeline-provenance.ts`, `006-plugin-audit.ts`,
   `007-plugin-lock.ts`, `008-plugin-audit-scan.ts`, `009-plugin-lock-previous.ts`,
-  `010-plugin-lock-mode.ts`, `011-external-credentials.ts`) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
-  Миграции **006–009** — слой плагинов (ADR-090): `006_plugin_audit` (таблица `plugin_audit`,
+  `010-plugin-lock-mode.ts`, `011-session-steer-inbox.ts`, `012-external-credentials.ts`,
+  `014-session-mode-by-principal.ts`, `015-authority.ts`) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
+  Миграции **006–009** — слой плагинов (PROP-090): `006_plugin_audit` (таблица `plugin_audit`,
   `seq bigserial` — порядок «свежие первыми»), `007_plugin_lock` (таблица `plugin_lock`, PK — имя
   плагина; upsert — `ON CONFLICT`; `installed_at` при перезаписи сохраняется),
   `008_plugin_audit_scan` (`ALTER TABLE plugin_audit ADD COLUMN IF NOT EXISTS scan_performed boolean /
   scan_findings integer` — Ф2). `009_plugin_lock_previous` (долги Д2) — колонка `previous jsonb` (ступень отката версии в lock).
-  `010_plugin_lock_mode` — колонка `mode` в `plugin_lock` (ADR-090).
-  `011_external_credentials` — таблица `external_credentials` (ADR-105 Ф1: владелец/статус/срок/отзыв
-  и колонки `secret_enc`/`refresh_enc` с готовым `enc:v1:…`). Все идемпотентны.
+  `010_plugin_lock_mode` — колонка `mode` в `plugin_lock` (PROP-090 §«Managed deploy-time»).
+  `012_external_credentials` — таблица `external_credentials` (ADR-105 Ф1: владелец/статус/срок/отзыв
+  и колонки `secret_enc`/`refresh_enc` с готовым `enc:v1:…`). `014_session_mode_by_principal` —
+  колонка `mode_by_principal jsonb` в `sessions` (ADR-106 Ф4: режим хода по принципалу).
+  `015_authority` — таблицы Authority-слоя (ADR-106 Ф0/Ф1): `authority_policy` (одна строка
+  `id='instance'`, документ политики — `jsonb`) и `authority_decisions` (append-only,
+  `seq bigserial` — порядок «свежие первыми»; индексы по `action`/`effect`/`source`).
+  Все идемпотентны.
   `runMigrations(conn, { schema })`: `CREATE SCHEMA IF NOT EXISTS` → advisory-лок
   (`synth:migrate:<schema>`) → применение по возрастанию версии (каждая миграция —
   в транзакции с записью версии). **Fail-closed**, если версия в БД **больше**
@@ -157,17 +163,24 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
     (PROP-068 §4.4 / ADR-090: таблица `plugin_lock`, миграция 007; ключ — имя
     плагина, `save` — upsert с сохранением `installed_at`, `list` — `ORDER BY name ASC`).
   - `ports/external-credentials.ts` → `buildExternalCredentialPorts(deps)` →
-    `externalCredentials` (ADR-105 Ф1: таблица `external_credentials`, миграция 011;
+    `externalCredentials` (ADR-105 Ф1: таблица `external_credentials`, миграция 012;
     `secret_enc`/`refresh_enc` — готовый `enc:v1:…`; шифрование только core-хелперами
     через ленивый `import()`, как у SSH-ключей в `content.ts`).
+  - `ports/authority.ts` → `buildAuthorityPorts(deps)` → `authorityPolicy`/
+    `authorityDecisions` (ADR-106 Ф0/Ф1: таблицы `authority_policy` (одна строка
+    `id='instance'`, документ — `jsonb`; upsert `ON CONFLICT`) и `authority_decisions`
+    (append-only, `seq bigserial`; выборка «свежие первыми» с фильтрами
+    `action`/`effect`/`source` и `limit`). Валидация документа — схема
+    `authorityPolicySchema` из shared; невалидный документ читается как **отсутствие
+    политики** (fail-closed на оси «user»).
 
   Общий тип зависимостей — `PortDeps` (`ports/deps.ts`): `connection` (живой
   `PostgresConnection`), `dataDir`, `secretKey?`, `env?`, `systemDictionariesDir?`,
   `contextUserDataDir?`. `buildPostgresStorageContext` собирает контекст как
   `{ kind:'postgres', ...buildSessionPorts, ...buildPrincipalPorts,
   ...buildEventPorts, ...buildContentPorts, ...buildAuditPorts, ...buildAnalyticsPorts,
-  ...buildExternalCredentialPorts, ...buildPipelinePorts, skills/contextFiles/blobs,
-  pipelines, packs, close }`;
+  ...buildAuthorityPorts, ...buildExternalCredentialPorts, ...buildPipelinePorts,
+  skills/contextFiles/blobs, pipelines, packs, close }`;
   `skills`/`contextFiles`/`blobs` — **файловые** реализации `createFileStorage`
   (FS/package-bound, см. исключение выше); `pipelines`/`packs` (ADR-100/ADR-086 §5) —
   тоже **файловые** (SQL-реализации этих портов в драйвере пока нет). `ports/stub.ts`

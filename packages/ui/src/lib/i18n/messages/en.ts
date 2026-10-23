@@ -120,6 +120,7 @@ export const dict = {
   'settings.category.commands': 'Commands',
   'settings.category.events': 'Events',
   'settings.category.eventsConfig': 'Event settings',
+  'settings.category.authority': 'Authority',
   'settings.category.decision': 'Decision models',
   'settings.category.serviceKeys': 'Service keys',
   'settings.category.webhooks': 'Webhooks',
@@ -3593,4 +3594,60 @@ export const dict = {
   'pwa.updateAvailable': 'A new app version is available',
   'pwa.updateNow': 'Update',
   'pwa.updateLater': 'Later',
+
+  // --- Authority (ADR-106 §11) — read-only раздел «Полномочия» ---
+  'authority.title': 'Authority',
+  'authority.description':
+    'Full authorities of users and agents: instance policy, roles with grants and agent bindings. The section is read-only.',
+  'authority.mode.title': 'Layer mode',
+  'authority.mode.description':
+    'The Authority layer narrows the decision of the permission layer: deny and ask stay stronger than allow.',
+  'authority.mode.current': 'Current mode',
+  'authority.mode.unknown': 'Not exposed by the API — set in the instance config',
+  'authority.mode.states': 'Possible states',
+  'authority.mode.state.enforced': 'Enforcement',
+  'authority.mode.state.enforcedHint':
+    'Enabled without shadow — deny and ask narrow the permission-layer decision',
+  'authority.mode.state.shadow': 'Log only',
+  'authority.mode.state.shadowHint':
+    'Enabled with shadow — the decision is counted and logged, but not applied',
+  'authority.mode.state.disabled': 'Disabled',
+  'authority.mode.state.disabledHint':
+    'Disabled by default — the layer makes no decisions and does not write to the journal',
+  'authority.mode.configHint':
+    'Config keys: synth.authority.enabled and synth.authority.shadow — see docs/AUTHORITY.md §4',
+  'authority.policy.title': 'Instance policy',
+  'authority.policy.description':
+    'The instance policy is the upper bound of all authority axes; a package never grants rights to itself.',
+  'authority.policy.stub':
+    'The instance policy (roles and instance ceiling) is available only through the config and the data directory — the API does not return it. Below is the composition contributed by the installed packages.',
+  'authority.policy.roles': 'Roles',
+  'authority.policy.actions': 'Actions',
+  'authority.policy.targets': 'Targets',
+  'authority.policy.agents': 'Agents',
+  'authority.policy.grants': 'Grants',
+  'authority.policy.mutating': 'mutating',
+  'authority.roles.title': 'Roles and grants',
+  'authority.roles.description':
+    'A grant is an "action × target" with an effect: allow, ask or deny. The source of a grant is shown next to it.',
+  'authority.roles.empty': 'No packages with authority content are installed',
+  'authority.roles.domain': 'Domain',
+  'authority.roles.grantsCount': '{count, plural, one {# grant} other {# grants}}',
+  'authority.roles.noGrants': 'The package content declares no grants for this role',
+  'authority.roles.sourcePack': 'package',
+  'authority.effect.allow': 'Allow',
+  'authority.effect.ask': 'Ask',
+  'authority.effect.deny': 'Deny',
+  'authority.pack.status.active': 'active',
+  'authority.pack.status.pending_approval': 'awaiting approval',
+  'authority.pack.status.disabled': 'disabled',
+  'authority.agents.title': 'Agent bindings',
+  'authority.agents.description':
+    'Roles carried by an agent and its ceiling — the actions the agent may not exceed.',
+  'authority.agents.empty': 'No agent bindings',
+  'authority.agents.roles': 'Roles',
+  'authority.agents.ceiling': 'Ceiling',
+  'authority.agents.source': 'Source',
+  'authority.loadError': 'Failed to load authority data: {error}',
+  'authority.forbidden': 'Reading the package registry requires administrator rights',
 };

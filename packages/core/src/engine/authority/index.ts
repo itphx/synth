@@ -33,12 +33,18 @@ export type {
   AuthorityApprovalReason,
   AuthorityAxis,
   AuthorityAxisSource,
+  AuthorityDecideOptions,
   AuthorityDecision,
   AuthorityDecisionEffect,
   AuthorityDecisionReason,
   AuthorityEffective,
   AuthorityResolverOptions,
 } from './resolve.js';
+
+export { createAuthorityTurnContext } from './turn.js';
+export type { AuthorityTurnContext } from './turn.js';
+
+export { deriveSessionParticipants, resolveParticipantRole } from './participants.js';
 
 export { compileAuthorityGrantsForTool } from './compile.js';
 export type { AuthorityRuleCompilationInput } from './compile.js';

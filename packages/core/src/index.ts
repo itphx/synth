@@ -438,6 +438,7 @@ export type {
   AuthorityAxisSource,
   AuthorityApprovalOutcome,
   AuthorityApprovalReason,
+  AuthorityDecideOptions,
   AuthorityDecision,
   AuthorityDecisionEffect,
   AuthorityDecisionReason,
@@ -454,6 +455,41 @@ export type {
   AuthorityGateResult,
   AuthorityGuardOptions,
 } from './engine/authority/index.js';
+
+// ADR-106 Ф4: контекст хода и потолок хода (считаются один раз на ход).
+export {
+  createAuthorityTurnContext,
+  deriveSessionParticipants,
+  resolveParticipantRole,
+} from './engine/authority/index.js';
+export type { AuthorityTurnContext } from './engine/authority/index.js';
+
+// ADR-106 Ф4 (шаг C): режим сессии как потолок — режим по принципалу.
+export {
+  resolveTurnMode,
+  decideSessionModeScope,
+  applySessionMode,
+  DEFAULT_SESSION_MODE,
+} from './engine/authority/mode.js';
+export type {
+  SessionModeScope,
+  SessionModeScopeDecision,
+  SessionModeScopeReason,
+} from './engine/authority/mode.js';
+
+// ADR-106 Ф4: принципал хода (фиксируется при приёме ввода).
+export {
+  principalRef,
+  parsePrincipalRef,
+  samePrincipal,
+  sessionOwnerPrincipal,
+  resolveTurnPrincipal,
+  resolveUserPrincipal,
+  userPrincipal,
+  agentPrincipal,
+  eventPrincipal,
+  schedulerPrincipal,
+} from './engine/authority/principal.js';
 
 export {
   loadProtectedPaths,
@@ -550,6 +586,10 @@ export type {
   PipelineRunEventRecord,
   PipelineRunFilter,
   PipelineRunEventListOptions,
+  // ADR-106 (Ф0/Ф1): порты Authority-слоя — политика инстанса и журнал решений.
+  AuthorityPolicyRepository,
+  AuthorityDecisionJournal,
+  AuthorityDecisionListOptions,
 } from './storage/ports/index.js';
 // ADR-105 (Ф0/Ф1): доменная ошибка хранилища внешних доступов — значение
 // (не только тип): её бросают реализации порта, в т.ч. PostgreSQL-драйвер
@@ -859,6 +899,17 @@ export type {
   SessionExportDecision,
   SessionExportMessages,
 } from './server/session-export-guard.js';
+// ADR-106 Ф4 (шаг C): смена режима сессии — привилегия на границе (guard).
+export {
+  createSessionModeGuard,
+  getSessionModeDecision,
+  SESSION_MODE_CONTEXT_KEY,
+} from './server/session-mode-guard.js';
+export type {
+  SessionModeGuardOptions,
+  SessionModeDecision,
+  SessionModeMessages,
+} from './server/session-mode-guard.js';
 export { createServiceKeyRoutes } from './server/routes/service-keys.js';
 export type {
   ServiceKeyRoutesAuth,

@@ -21,6 +21,7 @@ import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shar
 import type { DebugCollector } from '../../../debug.js';
 import type { SessionManager } from '../../../sessions/manager.js';
 import type { PermissionEvaluator } from '../../permission/evaluator.js';
+import type { AuthorityTurnContext } from '../../authority/turn.js';
 import type { MicroPipeline } from '../../router/micro/index.js';
 import { info } from '../../../logger.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
@@ -47,6 +48,12 @@ export interface ProcessCommandArgs {
   planMode: PlanMode;
   planApproved: boolean;
   attempt?: number;
+  /**
+   * ADR-106 Ф4 (шаг B2): контекст хода (потолок + оси, посчитанные один раз
+   * на ход). Inline shell проверяется тем же permission-слоем, что и обычные
+   * тулы, — потолок хода для него такой же.
+   */
+  authorityTurn?: AuthorityTurnContext;
 }
 
 /** Зависимости `runProcessEarly`. */
@@ -108,6 +115,11 @@ export interface ProcessEarlyArgs {
   planApproved: boolean;
   /** ADR-070 §2.6: старт прогона (для `duration_ms` локального ответа). */
   streamStartedAt: number;
+  /**
+   * ADR-106 Ф4 (шаг B2): контекст хода (потолок + оси, посчитанные один раз
+   * на ход) — передаётся в резолвинг `/`-команды (inline shell).
+   */
+  authorityTurn?: AuthorityTurnContext;
 }
 
 /**
@@ -123,6 +135,7 @@ export async function runProcessEarly(
     session, message, signal, publishChunk, debugCollector, streamId,
     effectiveAgentRole, effectiveReasoningLevel, workingDir, attempt,
     permissionEvaluator, sessionMode, planMode, planApproved, streamStartedAt,
+    authorityTurn,
   } = args;
 
   // --- Обработка системных сообщений (суммаризация, шедулер, etc.) ---
@@ -139,6 +152,7 @@ export async function runProcessEarly(
       session, message, signal, publishChunk, debugCollector, streamId,
       effectiveAgentRole, workingDir, attempt,
       permissionEvaluator, sessionMode, planMode, planApproved,
+      authorityTurn,
     });
     if (commandResult) return commandResult;
     // prompt-команда (template/skill/bundle): сообщение заменено, идём в LLM.

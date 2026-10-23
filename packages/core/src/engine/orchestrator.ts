@@ -68,6 +68,10 @@ import type { MetricsRegistry } from '../metrics/registry.js';
 import type { AuthorityGateHook, AuthorityShadowHook } from './authority/hook.js';
 import { authorityActionForTool } from './authority/actions.js';
 import { deriveAuthorityTarget } from './authority/target.js';
+import { resolveTurnPrincipal } from './authority/principal.js';
+import { deriveSessionParticipants } from './authority/participants.js';
+import { resolveTurnMode } from './authority/mode.js';
+import { createAuthorityTurnContext, type AuthorityTurnContext } from './authority/turn.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
@@ -1604,9 +1608,14 @@ export class ChatOrchestrator {
     planMode: PlanMode;
     planApproved: boolean;
     attempt?: number;
+    /**
+     * ADR-106 Ф4 (шаг B2): контекст хода (потолок + оси, посчитанные один раз
+     * на ход) — для inline shell (тот же permission-слой, тот же потолок).
+     */
+    authorityTurn?: AuthorityTurnContext;
   }): Promise<ProcessMessageResult | null> {
     if (!this._commandRuntime) return null;
-    const { session, message, signal, publishChunk, debugCollector, streamId, effectiveAgentRole, workingDir, permissionEvaluator, sessionMode, planMode, planApproved, attempt } = args;
+    const { session, message, signal, publishChunk, debugCollector, streamId, effectiveAgentRole, workingDir, permissionEvaluator, sessionMode, planMode, planApproved, attempt, authorityTurn } = args;
     const input = (message.content ?? '').trim();
     if (!input.startsWith('/')) return null;
 
@@ -1629,13 +1638,13 @@ export class ChatOrchestrator {
         // ADR-106 Ф1: контекст хода для shadow-наблюдения (на решение не влияет).
         authorityContext: {
           sessionId: session.id,
-          principal: {
-            kind: 'user',
-            id: session.ownerId ?? session.userId ?? 'local',
-            roles: [],
-          },
+          // ADR-106 Ф4: принципал хода — зафиксирован при приёме ввода
+          // (на сообщении); для старых сообщений — владелец сессии.
+          principal: resolveTurnPrincipal(session, args.message),
           ...(effectiveAgentRole ? { agentId: effectiveAgentRole } : {}),
           turnId: streamId,
+          // ADR-106 Ф4 (шаг B2): потолок хода — один раз на ход.
+          ...(authorityTurn ? { turnContext: authorityTurn } : {}),
         },
         shellPolicy: this._getProtectedPaths() ?? undefined,
         protectedPaths: this._getProtectedPaths() ?? undefined,
@@ -2528,6 +2537,11 @@ export class ChatOrchestrator {
     const streamId = (message.metadata?.stream_id as string) || 'unknown';
     const effectiveAgentRole = message.agentRole || session.settings.agentRole;
     const author = message.author || 'unknown';
+    // ADR-106 Ф4: принципал хода — зафиксирован **при приёме ввода**
+    // (постановка сообщения в очередь). При исполнении из `pendingMessages`
+    // он не пересчитывается «от текущего» владельца сессии; для старых
+    // сообщений без принципала — совместимый fallback (владелец сессии).
+    const turnPrincipal = resolveTurnPrincipal(session, message);
     // ADR-071 §2.4: проект сессии — носитель project-скоупа MCP; загружаем один
     // раз: нужен рабочему каталогу, state-сообщениям, резолвингу MCP и Composer.
     let projectForState: Project | null = null;
@@ -2538,6 +2552,17 @@ export class ChatOrchestrator {
         projectForState = null;
       }
     }
+    // ADR-106 Ф4 (шаг B2): контекст хода — **один раз на ход**. Вместе с
+    // принципалом (шаг A) он несёт участников сессии и роль принципала среди
+    // них: потолок сессии зависит от роли, а считается один раз на ход —
+    // сообщение другого участника потолок начатого хода не меняет.
+    const authorityTurn: AuthorityTurnContext = createAuthorityTurnContext({
+      sessionId: session.id,
+      principal: turnPrincipal,
+      turnId: streamId,
+      ...(effectiveAgentRole ? { agentId: effectiveAgentRole } : {}),
+      participants: deriveSessionParticipants(session, projectForState),
+    });
     let workingDir = await this._resolveWorkingDir(session, projectForState);
     // ADR-075: permission-гейт `workspace` — file/shell/git-тулы блокируются,
     // пока у проекта не задан рабочий каталог. `workingDir` при этом всё равно
@@ -2550,7 +2575,11 @@ export class ChatOrchestrator {
 
     // ADR-025: режим Plan/Act — runtime-состояние сессии + строгость из настроек
     const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
-    let sessionMode: SessionMode = session.mode ?? 'act';
+    // ADR-106 Ф4 (шаг C): режим — свойство **принципала хода**: переопределение
+    // участника (`modeByPrincipal`) → базовый режим сессии. `yolo`, выставленный
+    // одним участником, действует только на его ходы и не снимает подтверждения
+    // у других (прежнее поведение — базовый режим сессии).
+    let sessionMode: SessionMode = resolveTurnMode(session, turnPrincipal);
     let planApproved = Boolean(session.planApproved);
 
     // ADR-030 (Ф0 ADR-090): `message_received` — входящее сообщение в сессии.
@@ -2620,6 +2649,7 @@ export class ChatOrchestrator {
       session, message, signal, publishChunk, debugCollector, streamId,
       effectiveAgentRole, effectiveReasoningLevel, workingDir, attempt,
       permissionEvaluator, sessionMode, planMode, planApproved, streamStartedAt,
+      authorityTurn,
     }, this._processEarlyDeps());
     if (earlyResult) return earlyResult;
 
@@ -3126,13 +3156,13 @@ export class ChatOrchestrator {
             // ADR-106 Ф1: контекст хода для shadow-наблюдения (на решение не влияет).
             authorityContext: {
               sessionId: session.id,
-              principal: {
-                kind: 'user',
-                id: session.ownerId ?? session.userId ?? 'local',
-                roles: [],
-              },
+              // ADR-106 Ф4: принципал хода — зафиксирован при приёме ввода
+              // (на сообщении); для старых сообщений — владелец сессии.
+              principal: turnPrincipal,
               ...(effectiveAgentRole ? { agentId: effectiveAgentRole } : {}),
               turnId: streamId,
+              // ADR-106 Ф4 (шаг B2): потолок хода — один раз на ход.
+              turnContext: authorityTurn,
             },
             // ADR-090: источник тула — плагинные инструменты
             // адресуются группой `plugin` в permission-правилах.
@@ -3233,13 +3263,10 @@ export class ChatOrchestrator {
                 reason: this._securityMessage(permissionDecision, 'en')
                   ?? permissionDecision.reason,
                 // ADR-106 Ф0: принципал и ход запроса (аддитивные поля
-                // события `permission.asked`). Полный учёт принципала хода —
-                // Ф4; здесь фиксируется текущий владелец сессии.
-                principal: {
-                  kind: 'user',
-                  id: session.ownerId ?? session.userId ?? 'local',
-                  roles: [],
-                },
+                // события `permission.asked`). ADR-106 Ф4: принципал хода —
+                // зафиксированный при приёме ввода (на сообщении), а не
+                // «текущий владелец сессии».
+                principal: turnPrincipal,
                 turnId: streamId,
                 // ADR-106 Ф3: привязка к действию и цели.
                 ...(bindingAction ? { action: bindingAction } : {}),

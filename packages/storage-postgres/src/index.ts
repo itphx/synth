@@ -62,6 +62,10 @@ export { buildEventPorts } from './ports/events.js';
 export type { EventPorts } from './ports/events.js';
 export { buildContentPorts } from './ports/content.js';
 export type { ContentPorts } from './ports/content.js';
+// ADR-106 (Ф0/Ф1): порты Authority-слоя — политика инстанца (`authority_policy`)
+// и append-only журнал решений (`authority_decisions`); миграция 014.
+export { buildAuthorityPorts } from './ports/authority.js';
+export type { AuthorityPorts } from './ports/authority.js';
 // ADR-105 (Ф1): внешние доступы к коннекторам (таблица `external_credentials`,
 // миграция 011; шифрование токенов — core-хелперами через ленивый `import()`).
 export { buildExternalCredentialPorts } from './ports/external-credentials.js';

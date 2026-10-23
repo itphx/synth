@@ -1464,16 +1464,44 @@ RBAC/скоуп и i18n задаются через `opts` (`readGuard`/`writeGu
 
 | Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|---|
-| GET | `/api/v2/packs` | оба | ADMIN / auth | Список установок `{packs}`: имя, версия, `kind`, `status` (`active\|pending_approval\|disabled`), `requiresApproval`, `provides` (id'ы агентов/скиллов/MCP/пайплайнов), `installedBy` |
-| GET | `/api/v2/packs/:name` | оба | ADMIN / auth | Одна установка (включая сырой манифест и файлы пакета) |
-| POST | `/api/v2/packs` | оба | ADMIN **или** scope `automation:install` | Установка: тело `{manifest, files}` (манифест + карта файлов пакета). Некорректный манифест → 400 `VALIDATION_ERROR` со списком `problems`; нехватка файлов → 400. → **201** `{installed: true, requiresApproval: false, name, version, provides}`; пакет с capability-грантами → **202** `{installed: false, requiresApproval: true, …}` (фактическая установка **не** выполняется) |
-| POST | `/api/v2/packs/:name/approve` | оба | **только ADMIN** | Одобрение пакета в статусе `pending_approval` → 200 `{installed: true, …}`; нет записи → 404; статус не `pending_approval` → 409 `CONFLICT` |
-| DELETE | `/api/v2/packs/:name` | оба | **только ADMIN** | Снятие установки вместе с поставленными артефактами (агент + роль, скилл, MCP-запись, определение пайплайна, порождённые правила) → 204; идемпотентно (нет пакета — тоже 204) |
+| GET | `/api/v2/packs` | оба | ADMIN / auth | Список установок `{packs}`: имя, версия, `kind`, `status` (`active\|pending_approval\|disabled`), `requiresApproval`, `provides` (id'ы агентов/скиллов/MCP/пайплайнов), `installedBy`, `authority` (сводка контента полномочий — если пакет приносит `provides.authority`) |
+| GET | `/api/v2/packs/:name` | оба | ADMIN / auth | Одна установка (включая сырой манифест и файлы пакета); `authority` — сводка контента полномочий |
+| POST | `/api/v2/packs` | оба | ADMIN **или** scope `automation:install` | Установка: тело `{manifest, files}` (манифест + карта файлов пакета). Некорректный манифест → 400 `VALIDATION_ERROR` со списком `problems`; нехватка файлов → 400. → **201** `{installed: true, requiresApproval: false, name, version, provides}`; пакет с capability-грантами, пайплайнами, расписаниями или **контентом полномочий** (`provides.authority`) → **202** `{installed: false, requiresApproval: true, authority?, …}` (фактическая установка **не** выполняется) |
+| POST | `/api/v2/packs/:name/approve` | оба | **только ADMIN** | Одобрение пакета в статусе `pending_approval` → 200 `{installed: true, authority?, authorityActivation?, …}`; нет записи → 404; статус не `pending_approval` → 409 `CONFLICT` |
+| DELETE | `/api/v2/packs/:name` | оба | **только ADMIN** | Снятие установки вместе с поставленными артефактами (агент + роль, скилл, MCP-запись, определение пайплайна, порождённые правила) → 204; идемпотентно (нет пакета — тоже 204). Из политики полномочий инстанса убираются **роли и привязки агентов**, принесённые пакетом (идемпотентно) |
 
 **Одобрение.** Пакет требует подтверждения администратора, если он выдаёт агенту непустые
-`capabilities`, объявляет пайплайны (порождаемые правила маршрутизации) или расписания. Ответ
+`capabilities`, объявляет пайплайны (порождаемые правила маршрутизации), расписания или приносит
+**контент полномочий** (`provides.authority` — роли/действия/цели/агенты; ADR-106 Ф5). Ответ
 **202** — не ошибка: фактическую установку выполняет `POST /api/v2/packs/:name/approve` (по
 сохранённым в реестре манифесту и файлам — обойти проверку целостности манифеста нельзя).
+
+**Контент полномочий (ADR-106 Ф5).** Пакет с ролями идёт на одобрение **по существу**: администратор
+видит, **что** пакет приносит. В ответах (`GET /packs`, `GET /packs/:name`, `POST /packs` (202),
+`POST /packs/:name/approve`) — сводка `authority` (`PackAuthoritySummary`):
+
+| Поле | Смысл |
+|---|---|
+| `roles[]` | id, `displayName`, `domain`, `grants` (число), `mutatingGrants` (число мутирующих) |
+| `actions[]` | id, `mutating` (информационный признак) |
+| `targets[]` | вид цели (`kind`), `resolver` |
+| `agents[]` | id агента, `roles[]`, `ceiling[]` |
+| `totals` | `roles`/`actions`/`targets`/`agents`/`grants`/`mutatingGrants` |
+
+При одобрении контент **активируется** в политике полномочий инстанса (порт
+`AuthorityPolicyRepository`): пересечение с потолком инстанса (не дарование), trust-floor
+(мутирующие гранты — только при trust ≥ `trusted`; `community` — только чтение), роль, уже
+объявленная в политике, не перезаписывается. Ответ `approve` несёт `authorityActivation` —
+что активировано и что пропущено:
+
+```json
+{ "activated": { "actions": [], "roles": [], "targets": [], "agents": [] },
+  "skipped": [ { "kind": "grant", "id": "write", "reason": "trust_floor", "detail": "…" } ] }
+```
+
+Причины пропуска: `trust_floor`, `instance_deny`, `instance_not_allowed`, `role_exists`,
+`unknown_role`. Политика читается снимком при старте процесса — эффект активации виден после
+рестарта. Устройство слоя — [docs/AUTHORITY.md](./AUTHORITY.md) §10.
 
 **Скоупы (ADR-052).** Зонутный `automation:install` — установщик пакетов расширений: агенты и их
 ролевые промпты, пайплайны, порождаемые пакетом правила маршрутизации и расписания (на

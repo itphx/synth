@@ -104,6 +104,33 @@ export const authorityActionIdSchema = z
   .max(64)
   .regex(AUTHORITY_ACTION_ID_REGEX, 'действие: строчные латинские буквы/цифры (a-z0-9._-)');
 
+/**
+ * Действия, **не** меняющие состояние (ADR-106 Ф5, trust-floor).
+ *
+ * Мутирующим считается **всё, кроме `read`** (fail-closed): доменные действия
+ * по умолчанию мутирующие. Признак `mutating` в манифесте пакета —
+ * **информационный**: ему не доверяют, иначе пакет объявил бы своё мутирующее
+ * действие «безобидным» и обошёл бы trust-floor (мутирующие гранты
+ * активируются только при trust ≥ `trusted`).
+ */
+export const AUTHORITY_READ_ONLY_ACTIONS = ['read'] as const;
+
+/** Ядровые мутирующие действия (перечислены для документации и UI). */
+export const AUTHORITY_MUTATING_ACTIONS = [
+  'write',
+  'execute',
+  'commit',
+  'publish',
+  'approve',
+  'sign',
+  'delegate',
+] as const;
+
+/** true — действие мутирующее (меняет состояние). */
+export function isAuthorityMutatingAction(id: string): boolean {
+  return !(AUTHORITY_READ_ONLY_ACTIONS as readonly string[]).includes(id);
+}
+
 // --- Цели и шаблоны целей ---
 
 /**
@@ -281,6 +308,27 @@ export const authorityTargetDeclarationSchema = z
 export type AuthorityTargetDeclaration = z.infer<typeof authorityTargetDeclarationSchema>;
 
 /**
+ * Привязка агента к ролям и потолку (ADR-106 Ф5): контент пакета объявляет,
+ * какие роли носит агент (`roles[]`) и какие действия ему потолок
+ * (`ceiling[]` — идентификаторы действий).
+ *
+ * Роли — из `policy.roles` (их гранты уже прошли пересечение с политикой
+ * инстанса и trust-floor), потолок — **запись** о намерении пакета; принуждение
+ * оси `pack` по нему — остаток (ADR-106 §11).
+ */
+export const authorityPolicyAgentSchema = z
+  .object({
+    /** id агента. */
+    id: z.string().min(1).max(128),
+    /** Роли агента (id из `policy.roles`). */
+    roles: z.array(z.string().min(1).max(128)).default([]),
+    /** Потолок агента — идентификаторы действий. */
+    ceiling: z.array(z.string().min(1).max(64)).default([]),
+  })
+  .strict();
+export type AuthorityPolicyAgent = z.infer<typeof authorityPolicyAgentSchema>;
+
+/**
  * Политика полномочий инстанса — верхняя граница (ADR-106 §«Точки
  * принуждения», уровень 4). Хранится через порт `AuthorityPolicyRepository`
  * (ADR-096).
@@ -295,6 +343,8 @@ export const authorityPolicySchema = z
     targets: z.array(authorityTargetDeclarationSchema).default([]),
     /** Потолок инстанса. */
     ceilings: z.array(authorityCeilingSchema).default([]),
+    /** Привязки агентов к ролям и потолку (ADR-106 Ф5). */
+    agents: z.array(authorityPolicyAgentSchema).default([]),
   })
   .strict();
 export type AuthorityPolicy = z.infer<typeof authorityPolicySchema>;

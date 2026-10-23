@@ -5,7 +5,7 @@ import { createServer, IncomingMessage } from 'node:http';
 import { Readable } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { Hono } from 'hono';
-import { enqueueUserMessage, enqueueSteerMessage, isSessionVisible, parsePermissionPrincipal } from '@itphx/synth-core';
+import { enqueueUserMessage, enqueueSteerMessage, isSessionVisible, parsePermissionPrincipal, resolveUserPrincipal } from '@itphx/synth-core';
 import type { EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository, MetricsRegistry, ApprovalRegistry } from '@itphx/synth-core';
 import { nowISO, MessageRole, generateStreamId, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { AuthorityPrincipal } from '@itphx/synth-shared';
@@ -270,6 +270,11 @@ export function createBackendListen(deps: BackendListenDeps) {
                     metadata: { stream_id: streamId },
                   };
 
+                  // ADR-106 Ф4: принципал ввода фиксируется **при приёме ввода**
+                  // (постановка в очередь) — не пересчитывается при исполнении.
+                  // service-key (`service:<keyId>`) — отдельный вид принципала.
+                  const turnPrincipal = resolveUserPrincipal(user.id);
+
                   // ADR-104: `steer` — вмешательство в активный ход, `interrupt` —
                   // прерывание текущей генерации (ход НЕ завершается). Если хода
                   // нет — обычная очередь (сообщение начнёт новый ход).
@@ -278,7 +283,12 @@ export function createBackendListen(deps: BackendListenDeps) {
                     const steerResult = await enqueueSteerMessage(
                       sessionManager, eventBus, sid, message, MAX_STEER_INJECTIONS_PER_TURN,
                       (msgSid, steerMsg) => orchestrator.obfuscateUserMessageForHistory(msgSid, steerMsg),
-                      { interrupt: interruptMode },
+                      // ADR-106 Ф4: принципал ввода; инъекция не создаёт новый
+                      // ход (ADR-104) — принципал текущего хода не меняется.
+                      {
+                        interrupt: interruptMode,
+                        ...(turnPrincipal ? { principal: turnPrincipal } : {}),
+                      },
                     );
                     if (!steerResult.accepted) {
                       ws.send(JSON.stringify({
@@ -314,6 +324,7 @@ export function createBackendListen(deps: BackendListenDeps) {
                   const result = await enqueueUserMessage(
                     sessionManager, eventBus, sid, message, queueManager, processMessage,
                     (msgSid, msg) => orchestrator.obfuscateUserMessageForHistory(msgSid, msg),
+                    turnPrincipal ? { principal: turnPrincipal } : undefined,
                   );
 
                   if (!result) {

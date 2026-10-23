@@ -1,4 +1,4 @@
-import type { Message, Session } from '@itphx/synth-shared';
+import type { AuthorityPrincipal, Message, Session } from '@itphx/synth-shared';
 import { nowISO, generateStreamId, generateId, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY, STEER_INTERRUPT_METADATA_KEY, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { SessionManager } from '../sessions/manager.js';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
@@ -695,6 +695,12 @@ export interface SteerEnqueueOptions {
    * по нему UI рисует «прерывание хода» вместо «вмешательства».
    */
   interrupt?: boolean;
+  /**
+   * ADR-106 Ф4: принципал ввода (кто отправил сообщение). Фиксируется **при
+   * постановке в очередь** — инъекция не создаёт новый ход (ADR-104), поэтому
+   * принципал текущего хода не меняется.
+   */
+  principal?: AuthorityPrincipal;
 }
 
 /**
@@ -720,6 +726,12 @@ export async function enqueueSteerMessage(
   // попадёт плейсхолдер, а не реальный секрет.
   if (obfuscate && message.role === MessageRole.USER) {
     message = await obfuscate(sessionId, message);
+  }
+  // ADR-106 Ф4: принципал ввода фиксируется **при приёме ввода** — после
+  // обфускации (она подменяет объект сообщения) и до постановки в очередь.
+  // Инъекция не создаёт новый ход (ADR-104): принципал текущего хода не меняется.
+  if (!message.principal && options?.principal) {
+    message.principal = options.principal;
   }
   // Признак инъекции — на самом сообщении (ADR-104): UI рисует маркер
   // «вмешательство в ход», а оркестратор персистит его как есть.
@@ -749,6 +761,18 @@ export async function enqueueSteerMessage(
 }
 
 /**
+ * Опции постановки сообщения в очередь (ADR-106 Ф4).
+ */
+export interface EnqueueOptions {
+  /**
+   * ADR-106 Ф4: принципал ввода (кто отправил сообщение). Фиксируется **при
+   * постановке в очередь** — с этого момента автор хода не пересчитывается
+   * (ни при отложенном исполнении, ни после перезапуска).
+   */
+  principal?: AuthorityPrincipal;
+}
+
+/**
  * Постановка сообщения в очередь (AD-011).
  */
 export async function enqueueUserMessage(
@@ -759,6 +783,7 @@ export async function enqueueUserMessage(
   processorManager: QueueProcessorManager,
   processMessage: ProcessMessageFn,
   obfuscate?: (sessionId: string, message: Message) => Promise<Message>,
+  options?: EnqueueOptions,
 ): Promise<Session | null> {
   if (!message.metadata) message.metadata = {};
   if (!message.metadata.stream_id) message.metadata.stream_id = generateStreamId();
@@ -770,6 +795,14 @@ export async function enqueueUserMessage(
   // (обратная совместимость).
   if (obfuscate && message.role === MessageRole.USER) {
     message = await obfuscate(sessionId, message);
+  }
+  // ADR-106 Ф4: принципал хода фиксируется **при приёме ввода** (постановка в
+  // очередь) — после обфускации (она подменяет объект сообщения) и до записи
+  // в очередь. Дальше он не пересчитывается: при исполнении из
+  // `pendingMessages` берётся принципал сообщения, а не текущий владелец
+  // сессии. Не задан — fallback на владельца сессии (совместимость).
+  if (!message.principal && options?.principal) {
+    message.principal = options.principal;
   }
 
   const session = await sessionManager.addPendingMessage(sessionId, message, MAX_PENDING);

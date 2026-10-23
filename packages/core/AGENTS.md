@@ -518,7 +518,71 @@
   Профиль/интервью в промпте резолвит единый `_resolveProfile(userId)` (`loadProfile(userId) ??
   getProfileByUsername(userId)`; `session.userId` — username, профиль ключуется по id-UUID); `profilesStore`
   проброшен и в standalone `ContextBuilder` (`server/app.ts`, `server/chat.ts`).
-  **Реестр блоков промпта (ADR-090 пустой состав на весь TTL; успешный
+  **Реестр блоков промпта (PROP-090 §«Точка `promptBlocks``, Ф3а).**
+  `engine/context/prompt-block-registry.ts` — `PromptBlockRegistry`: реестр провайдеров блоков
+  системного промпта; `register()` — **fail-closed** (пустой ключ / нечисловой `order` / занятый ключ /
+  тир `stable` → `PromptBlockRegistrationError`), возвращает **disposer** (идемпотентный);
+  `unregister`/`get`/`list`/`size`/`clear`. Провайдер (`PromptBlockProvider`,
+  `shared/src/types/prompt-blocks.ts`) вызывается композером **раз в ход**; тир ограничен
+  `context`/`volatile` **на уровне типа** — `stable` запрещён (граница prompt-cache, ADR-070 §2.1).
+  Блоки провайдеров добавляются в `SystemPromptComposer._collectProviderBlocks` — **тот же** массив
+  блоков, что и встроенные (один манифест, одна склейка, одна сортировка по тирам); при
+  `session.settings.systemPrompt` (override) блоки **не добавляются**.
+  Правила: ошибка провайдера → `warning` в лог, блок пуст, **ход не падает**; пустой результат →
+  `status: 'empty'`; содержимое длиннее бюджета → хост обрезает (голова+хвост, свой маркер усечения
+  без `read_file`) и ставит `status: 'truncated'`. **Бюджет символов блока** —
+  `plugins.promptBlockMaxChars` (дефолт 4 000 — `DEFAULT_PROMPT_BLOCK_MAX_CHARS` в `shared`).
+  **Контекст хода** (`PromptBlockContext`): `sessionId`/`agentRole`/`language`/`projectId?`/`mode` +
+  `query?`/`turnId?`/`timestamp?`; `query` — **только текст сообщения пользователя** (не системные и не
+  state-сообщения, не отключённые — `resolveTurnQuery`, `engine/orchestrator/prompt-info.ts`); история
+  сессии наружу не отдаётся. Инвалидация состояния промпта: блоки провайдеров лежат вне тира
+  `stable`, поэтому трек ведётся отдельно (`PromptBlock.source='provider'` →
+  `PromptBlockState.provider`, `isBlockChanged` — как у блока `instructions`).
+  Регистрация из плагина — `PluginFacade.registerPromptBlock` (`engine/plugins/activation.ts`,
+  реализация — `PluginHost`): при отказе — предупреждение в лог, активация плагина не падает.
+  Проектные инструкции (ADR-069): `instructions.ts` — `ProjectInstructionsResolver`
+  (merged chain `git root → … → workspace`, кандидаты `AGENTS.override.md` > `AGENTS.md` >
+  `agents.md` > `CLAUDE.md` (opt-in) > `CONTEXT.md` (deprecated); дедуп sha256;
+  provenance `--- from … ---`; `waterFillAllocate` + `truncateHeadTail` с маркером `read_file`;
+  `resolveInstructionsCap` — динамический кап; `config.sources` `before`/`after` + URL-fetch
+  с TTL-кэшем `{dataDir}/instructions-cache`; `project-trust` (`skills.trustedProjectDirs` +
+  авто-trust `workspacesRoot`) и install-tree guard; блочный резолвер `buildInstructionsInfo`/
+  `createInstructionsInfoResolver` — снимок для `GET /api/v2/context/instructions`),
+  `lazy-instructions.ts` — `LazyInstructionsLoader` (tool-result догрузка: `LAZY_TRIGGER_TOOLS`,
+  `extractLazyTargetDir`/`extractShellDir`, ≤`lazy.maxAncestors` внутри workspace,
+  `LAZY_INSTRUCTIONS_PREFIX`, реестры `loaded`/`claims` + sha256; резолвер stateless,
+  состояние per-session — в оркестраторе, `seed()` инициализирует `loaded` из merged chain).
+  Резолвится оркестратором и отдаётся composer'у как блок `instructions` тира `context`
+  (ADR-070); per-turn мемоизация — `_resolveProjectInstructions(turnId)` в `engine/orchestrator.ts`.
+- `engine/file-signature.ts` — ADR-069 (R5) / ADR-046: `filesSignature`/`dirsSignature`
+  (`id:floor(mtimeMs):size`, отсутствующий кандидат — маркер `!`) для ленивой инвалидации
+  кэшей (общий со скиллами).
+- `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация;
+  `createAgentRegistry(toolRegistry, overridesDir)` — встроенные агенты + merge с файловым
+  каталогом `{dataDir}/agents`; `registerStoredAgents(registry, agents)` — регистрация
+  агентов из **стора** (ADR-096) в реестр при старте (merge как в `GET /api/v2/agents`:
+  override встроенного выигрывает, custom регистрируется, `isOverridden: true`). Нужно,
+  потому что при `storage.backend=postgres` стор агентов — БД, а `createAgentRegistry`
+  читает только каталог: без этого агент, поставленный пакетом расширения (ADR-086),
+  после рестарта не резолвился в Router (`agentTemplate` → `null`, сессия не создавалась).
+  Вызывается в `server/app/deps.ts` и `backend/app/deps.ts` (обе сборки — async).
+- `engine/authority/*` — ADR-106: слой полномочий (модель — `shared/types/authority.ts`).
+  **`activation.ts`** — активация контента `provides.authority` пакета в **политику инстанса**
+  (чистые функции; запись делает `server/routes/packs.ts`): активация — при одобрении пакета
+  (`POST /packs/:name/approve`), снятие — при `DELETE /packs/:name` (идемпотентно, роли/привязки
+  другого пакета остаются). Правила: **пересечение** с потолком инстанса (не дарование),
+  **trust-floor** (мутирующие гранты — только при trust ≥ `trusted`; мутирующим считается всё,
+  кроме `read` — признаку пакета не доверяют), **политика — источник истины** (роль из политики
+  контентом не перезаписывается), **валидация, а не каст** (манифест проверяется до активации).
+  Ось `agent` резолвера берёт роли агента из `policy.agents[]` (связи из контента пакета).
+  **Политика — снимок при старте процесса**: резолвер собирается в `server/app/deps.ts` /
+  `backend/app/deps.ts` из прочитанной политики; изменение после старта (в т.ч. активация
+  контента) видно **только после рестарта** (инвариант 24).
+- `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP; `executor-mcp-source.ts` +
+  `executor-mcp-client.ts` — состав MCP-серверов пула исполнителей и вызовы их инструментов
+  поверх HTTP API исполнителя (ADR-077, шаг B2): TTL снимка 120 с, а **неудачный** discovery
+  (404/сеть/таймаут) повторяется через `EXECUTOR_MCP_SOURCE_RETRY_MS` (15 с) — иначе backend,
+  стартовавший раньше пода исполнителя, «запоминал» пустой состав на весь TTL; успешный
   пустой ответ — валидный снимок и живёт до TTL.
   **`idle` = «ещё не поднят», а не «недоступен»** (ленивый старт исполнителя: сервер
   поднимает `GET /mcp/tools`, а `GET /mcp/servers` только показывает состояние): источник
@@ -1022,7 +1086,10 @@
   `ExternalCredentialRepository` — внешние доступы к коннекторам (ADR-105 Ф1; файловое/в-памяти
   хранилища — `ExternalCredentialStore`, контракт — `storage/contract/external-credential-repository.contract.ts`);
   `AuthorityPolicyRepository`/`AuthorityDecisionJournal` — политика полномочий и журнал решений
-  Authority-слоя (ADR-106 Ф1);
+  Authority-слоя (ADR-106 Ф1; PostgreSQL — `packages/storage-postgres/src/ports/authority.ts`,
+  миграция `014` — контрактный suite гоняется на **живой** БД, гейт `SYNTH_TEST_POSTGRES_DSN`);
+  контент `provides.authority` пакета активируется в `authorityPolicy` при одобрении пакета и
+  снимается при снятии установки (см. `engine/authority/activation.ts`));
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
   запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/

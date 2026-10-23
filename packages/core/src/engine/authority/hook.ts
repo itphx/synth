@@ -24,6 +24,7 @@ import type {
 } from '@itphx/synth-shared';
 
 import type { AuthorityAxisSource } from './resolve.js';
+import type { AuthorityTurnContext } from './turn.js';
 
 /** Контекст хода для решения Authority-слоя (принципал, сессия, агент, ход). */
 export interface AuthorityShadowContext {
@@ -35,6 +36,13 @@ export interface AuthorityShadowContext {
   agentId?: string;
   /** Идентификатор хода (`turn_id`). */
   turnId?: string;
+  /**
+   * ADR-106 Ф4 (шаг B2): контекст хода — потолок хода и оси, посчитанные
+   * **один раз на ход**. Задан → guard считает потолок и оси один раз и
+   * кладёт их в контекст; сообщение другого участника потолок начатого хода
+   * не меняет. Не задан → прежнее поведение (потолок считается на вызов).
+   */
+  turnContext?: AuthorityTurnContext;
 }
 
 /** Вход решения Authority-слоя (собирается permission-слоем). */

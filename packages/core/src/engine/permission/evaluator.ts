@@ -250,6 +250,9 @@ export class PermissionEvaluator {
         principal: input.authorityContext?.principal,
         agentId: input.authorityContext?.agentId,
         turnId: input.authorityContext?.turnId,
+        // ADR-106 Ф4 (шаг B2): контекст хода (потолок + оси, посчитанные один
+        // раз на ход).
+        turnContext: input.authorityContext?.turnContext,
         config: this._config,
         decision,
       });
@@ -326,6 +329,9 @@ export class PermissionEvaluator {
         principal: input.authorityContext?.principal,
         agentId: input.authorityContext?.agentId,
         turnId: input.authorityContext?.turnId,
+        // ADR-106 Ф4 (шаг B2): контекст хода (потолок + оси, посчитанные один
+        // раз на ход).
+        turnContext: input.authorityContext?.turnContext,
         config: this._config,
         decision,
       });

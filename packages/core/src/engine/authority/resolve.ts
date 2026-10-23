@@ -128,6 +128,20 @@ export interface AuthorityResolverOptions {
   knownTargetKinds?: readonly string[];
 }
 
+/** Опции решения (дополнительные гранты оси «пользователь»). */
+export interface AuthorityDecideOptions {
+  /**
+   * Гранты оси «пользователь», посчитанные **для конкретного вызова**
+   * (правила сессии, скомпилированные под конкретный тул). Сливаются с осью
+   * «пользователь» хода: ось только сужает, но не расширяет.
+   *
+   * Вынесены из опций резолвера потому, что зависят от вызова, а ход — один:
+   * оси хода считаются один раз на ход (ADR-106 Ф4, шаг B2), а правила
+   * сессии — на каждый вызов тула.
+   */
+  principalGrants?: readonly AuthorityGrant[];
+}
+
 /**
  * Резолвер решений Authority-слоя.
  *
@@ -139,6 +153,13 @@ export class AuthorityResolver {
   private readonly _options: AuthorityResolverOptions;
   /** Одноразовость подтверждений: id уже использованных подтверждений. */
   private readonly _consumed = new Set<string>();
+  /**
+   * Оси хода — считаются **один раз на ход** (ADR-106 Ф4, шаг B2): резолвер
+   * живёт дольше одного вызова (экземпляр на ход), а результат кэшируется по
+   * ходу. Оси, зависящие от вызова (правила сессии), в `effective` не входят —
+   * они сливаются в ось «пользователь» при `decide`.
+   */
+  private _effective: { turn: AuthorityTurn; value: AuthorityEffective } | undefined;
 
   constructor(options: AuthorityResolverOptions = {}) {
     this._options = options;
@@ -146,6 +167,14 @@ export class AuthorityResolver {
 
   /** Применимые оси хода (пересечение прав). */
   effective(turn: AuthorityTurn): AuthorityEffective {
+    if (this._effective?.turn === turn) return this._effective.value;
+    const value = this._computeEffective(turn);
+    this._effective = { turn, value };
+    return value;
+  }
+
+  /** Оси хода (вычисление). */
+  private _computeEffective(turn: AuthorityTurn): AuthorityEffective {
     const axes: AuthorityAxis[] = [];
 
     // Ось `user` — база прав: права принципала. Всегда применима: если у
@@ -165,6 +194,9 @@ export class AuthorityResolver {
       const agentGrants = [
         ...(this._options.agentGrants ?? []),
         ...this._grantsOfRoles(this._options.agentRoles ?? []),
+        // ADR-106 Ф5: роли агента, объявленные контентом пакета и записанные
+        // в политику инстанца (`policy.agents`).
+        ...this._grantsOfRoles(this._policyAgentRoles(turn.agentId)),
       ];
       if (agentGrants.length > 0) axes.push({ source: 'agent', grants: agentGrants });
     }
@@ -202,6 +234,7 @@ export class AuthorityResolver {
     action: string,
     target: AuthorityTarget,
     altRefs?: readonly string[],
+    opts?: AuthorityDecideOptions,
   ): AuthorityDecision {
     if (!this.isKnownAction(action)) {
       return { effect: 'deny', reason: 'unknown', source: 'instance' };
@@ -211,12 +244,13 @@ export class AuthorityResolver {
     }
 
     const effective = this.effective(turn);
+    const axes = withPrincipalGrants(effective.axes, opts?.principalGrants);
 
     let explicitDeny: { axis: AuthorityAxis; grant: AuthorityGrant } | undefined;
     let askAxis: { axis: AuthorityAxis; grant: AuthorityGrant } | undefined;
     let missingAxis: AuthorityAxis | undefined;
 
-    for (const axis of effective.axes) {
+    for (const axis of axes) {
       const matching = axis.grants.filter(
         (grant) =>
           grant.action === action &&
@@ -350,6 +384,19 @@ export class AuthorityResolver {
     return grants;
   }
 
+  /**
+   * Роли агента, объявленные в политике инстанса (ADR-106 Ф5).
+   *
+   * Контент пакета (`provides.authority.agents[]`) связывает агента с ролями;
+   * активация пакета записывает связь в `policy.agents`, и ось `agent` хода
+   * получает гранты этих ролей (уже прошедших пересечение с политикой
+   * инстанса и trust-floor).
+   */
+  private _policyAgentRoles(agentId: string): string[] {
+    const binding = (this._options.policy?.agents ?? []).find((agent) => agent.id === agentId);
+    return binding?.roles ?? [];
+  }
+
   /** Потолок хода указанного источника (если задан). */
   private _ceiling(turn: AuthorityTurn, source: AuthorityCeiling['source']): AuthorityCeiling | undefined {
     return turn.ceiling.find((ceiling) => ceiling.source === source);
@@ -359,6 +406,28 @@ export class AuthorityResolver {
   private _ceilingGrants(turn: AuthorityTurn, source: AuthorityCeiling['source']): AuthorityGrant[] {
     return this._ceiling(turn, source)?.grants ?? [];
   }
+}
+
+/**
+ * Слить гранты оси «пользователь» (правила сессии, посчитанные под вызов)
+ * в оси хода.
+ *
+ * Ось «пользователь» всегда применима, поэтому гранты добавляются в неё
+ * же: правила сессии **сужают** права принципала, но не расширяют их.
+ */
+function withPrincipalGrants(
+  axes: readonly AuthorityAxis[],
+  extra?: readonly AuthorityGrant[],
+): readonly AuthorityAxis[] {
+  if (!extra || extra.length === 0) return axes;
+  let merged = false;
+  const result = axes.map((axis) => {
+    if (axis.source !== 'user') return axis;
+    merged = true;
+    return { ...axis, grants: [...axis.grants, ...extra] };
+  });
+  if (merged) return result;
+  return [...axes, { source: 'user', grants: [...extra] }];
 }
 
 /**

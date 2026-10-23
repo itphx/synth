@@ -580,6 +580,9 @@ export function mountStandaloneRoutes(
       agents: agentStore,
       roleFiles: deps.contextFiles,
       routes: routeRuleStore,
+      // ADR-106 Ф5: контент полномочий пакета активируется в политике
+      // инстанса при одобрении и снимается при снятии установки.
+      authorityPolicy: deps.storageContext.authorityPolicy,
       registerAgent: (agent) => agentRegistry.register(agent),
       unregisterAgent: (id) => agentRegistry.unregister(id),
     },

@@ -359,13 +359,13 @@ export interface StorageContext {
   /** ADR-101: прогоны пайплайнов и журнал выполнения (append-only). */
   pipelineRuns: PipelineRunRepository;
   /**
-   * ADR-106 Ф0: политика полномочий инстанса (потолок инстанса). Не задана
-   * драйвером PostgreSQL — остаток (ADR-097, см. комментарий в `buildStorageContext`).
+   * ADR-106 Ф0: политика полномочий инстанса (потолок инстанса). Реализована
+   * файловым/ин-памяти/драйвером PostgreSQL (`authority_policy`, миграция 014).
    */
   authorityPolicy?: AuthorityPolicyRepository;
   /**
    * ADR-106 Ф1: append-only журнал решений Authority-слоя
-   * (`{dataDir}/audit/authority.jsonl`). Не задан драйвером PostgreSQL — остаток.
+   * (`{dataDir}/audit/authority.jsonl`; PostgreSQL — `authority_decisions`).
    */
   authorityDecisions?: AuthorityDecisionJournal;
 }

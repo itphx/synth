@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Session, Message, SessionStatus, SessionSettings, Part, SessionOrigin, SessionReference, PromptState, PromptMeta } from '@itphx/synth-shared';
-import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
+import type { Session, Message, SessionStatus, SessionSettings, SessionMode, Part, SessionOrigin, SessionReference, PromptState, PromptMeta, AuthorityPrincipal } from '@itphx/synth-shared';
+import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey, normalizeSessionParticipantRole, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
 import type { SessionFilter, SessionRepository } from './ports/session-repository.js';
 import { findMessageIndex, prepareMessageForAppend, prepareMessageForUpdate } from './message-write.js';
 
@@ -49,6 +49,12 @@ interface SerializedMessage {
   source?: string;
   author?: string;
   agent_role?: string;
+  /**
+   * ADR-106 Ф4: принципал ввода (кто отправил сообщение). Хранится вместе с
+   * сообщением, чтобы автор хода не пересчитывался при исполнении (очередь
+   * читается с диска — без сохранения принципал терялся бы).
+   */
+  principal?: AuthorityPrincipal;
   metadata?: Record<string, unknown>;
   /** ADR-070 §2.4: предсказание/валидация prompt-cache (camelCase внутри). */
   prompt_meta?: PromptMeta;
@@ -66,6 +72,12 @@ interface SerializedSessionReference {
   created_at: string;
 }
 
+interface SerializedSessionParticipant {
+  user_id: string;
+  role: string;
+  added_at?: string;
+}
+
 interface SerializedSession {
   id: string;
   title?: string;
@@ -75,6 +87,8 @@ interface SerializedSession {
   branch_point?: string;
   plan_approved?: boolean;
   mode?: string;
+  /** ADR-106 Ф4 (шаг C): режим по принципалу (переопределения режима сессии). */
+  mode_by_principal?: Record<string, SessionMode>;
   todos?: unknown[];
   /** ADR-070 §2.4/§2.7: состояние промпта per-agent. */
   prompt_states?: Record<string, PromptState>;
@@ -84,6 +98,8 @@ interface SerializedSession {
   user_id?: string;
   owner_id?: string;
   project_id?: string;
+  /** ADR-106 Ф4: участники сессии (потолок хода по роли). */
+  participants?: SerializedSessionParticipant[];
   messages: SerializedMessage[];
   pending_messages: SerializedMessage[];
   /** ADR-104: очередь инъекций (steering) — отдельно от `pending_messages`. */
@@ -179,6 +195,7 @@ function serializeMessage(msg: Message): SerializedMessage {
     source: msg.source,
     author: msg.author,
     agent_role: msg.agentRole,
+    principal: msg.principal,
     metadata: msg.metadata,
     prompt_meta: msg.promptMeta,
     summary_of: msg.summaryOf,
@@ -253,6 +270,8 @@ function deserializeMessage(data: SerializedMessage): Message {
     source: data.source as Message['source'],
     author: data.author,
     agentRole: data.agent_role,
+    // ADR-106 Ф4: принципал ввода — legacy-сообщения без поля → undefined.
+    principal: data.principal,
     metadata: data.metadata,
     promptMeta: data.prompt_meta,
     summaryOf: data.summary_of,
@@ -272,6 +291,8 @@ function serializeSession(session: Session): SerializedSession {
     branch_point: session.branchPoint,
     plan_approved: session.planApproved,
     mode: session.mode,
+    // ADR-106 Ф4 (шаг C): режим по принципалу — не теряется при reload.
+    mode_by_principal: session.modeByPrincipal,
     todos: session.todos,
     prompt_states: session.promptStates,
     obfuscation_map: session.obfuscationMap,
@@ -279,6 +300,12 @@ function serializeSession(session: Session): SerializedSession {
     user_id: session.userId,
     owner_id: session.ownerId,
     project_id: session.projectId,
+    // ADR-106 Ф4: участники сессии — не теряются при reload.
+    participants: (session.participants ?? []).map((participant) => ({
+      user_id: participant.userId,
+      role: participant.role,
+      ...(participant.addedAt ? { added_at: participant.addedAt } : {}),
+    })),
     messages: session.messages.map(serializeMessage),
     pending_messages: session.pendingMessages.map(serializeMessage),
     steer_inbox: (session.steerInbox ?? []).map(serializeMessage),
@@ -344,6 +371,10 @@ function deserializeSession(data: SerializedSession): Session {
     branchPoint: data.branch_point,
     planApproved: data.plan_approved,
     mode: data.mode as Session['mode'],
+    // ADR-106 Ф4 (шаг C): режим по принципалу.
+    ...(data.mode_by_principal && Object.keys(data.mode_by_principal).length > 0
+      ? { modeByPrincipal: data.mode_by_principal }
+      : {}),
     todos: data.todos as Session['todos'],
     promptStates: data.prompt_states,
     obfuscationMap: data.obfuscation_map,
@@ -351,6 +382,16 @@ function deserializeSession(data: SerializedSession): Session {
     userId: data.user_id,
     ownerId: data.owner_id,
     projectId: data.project_id,
+    // ADR-106 Ф4: участники сессии (потолок хода по роли).
+    ...(data.participants && data.participants.length > 0
+      ? {
+          participants: data.participants.map((participant) => ({
+            userId: participant.user_id,
+            role: normalizeSessionParticipantRole(participant.role),
+            ...(participant.added_at ? { addedAt: participant.added_at } : {}),
+          })),
+        }
+      : {}),
     messages: data.messages.map(deserializeMessage),
     pendingMessages: data.pending_messages.map(deserializeMessage),
     steerInbox: (data.steer_inbox ?? []).map(deserializeMessage),

@@ -17,6 +17,7 @@ import {
   authorityActionSchema,
   authorityRoleSchema,
   authorityTargetDeclarationSchema,
+  isAuthorityMutatingAction,
   validateAuthorityContent,
 } from './authority.js';
 import { pipelineDefinitionSchema } from './pipeline.js';
@@ -403,6 +404,186 @@ export const packAuthorityProvidesSchema = z
     }
   });
 export type PackAuthorityProvides = z.infer<typeof packAuthorityProvidesSchema>;
+
+/**
+ * ADR-106 Ф5: сводка контента полномочий пакета (`provides.authority`) —
+ * «**что именно** пакет приносит инстанцу».
+ *
+ * Сводка — **данные**, а не текст: показывает администратору состав пакета
+ * (`pending_approval` по существу — не только факт «есть capabilities»), и из
+ * неё же считается, что пакет добавит в политику инстанса. Мутирующие
+ * гранты помечены отдельно — по ним виден trust-floor (мутирующие роли
+ * активируются только при trust ≥ `trusted`).
+ */
+
+/** Роль пакета в сводке. */
+export interface PackAuthoritySummaryRole {
+  /** id роли (уникален в пределах пакета). */
+  id: string;
+  /** Отображаемое имя роли (если объявлено). */
+  displayName?: string;
+  /** Домен роли (`domain`). */
+  domain: string;
+  /** Число грантов роли. */
+  grants: number;
+  /** Число **мутирующих** грантов роли (действие меняет состояние). */
+  mutatingGrants: number;
+}
+
+/** Действие пакета в сводке. */
+export interface PackAuthoritySummaryAction {
+  /** id доменного действия. */
+  id: string;
+  /** Заявленный признак мутирующего действия (информационный). */
+  mutating: boolean;
+}
+
+/** Вид цели пакета в сводке. */
+export interface PackAuthoritySummaryTarget {
+  /** Вид цели (`kind`). */
+  kind: string;
+  /** Имя резолвера цели (если объявлен). */
+  resolver?: string;
+}
+
+/** Агент пакета в сводке (роли + потолок). */
+export interface PackAuthoritySummaryAgent {
+  /** id агента. */
+  id: string;
+  /** Роли агента (id из `provides.authority.roles[]`). */
+  roles: string[];
+  /** Потолок агента (id действий из `provides.authority.actions[]`). */
+  ceiling: string[];
+}
+
+/** Сводка контента полномочий пакета. */
+export interface PackAuthoritySummary {
+  /** Роли, которые пакет приносит. */
+  roles: PackAuthoritySummaryRole[];
+  /** Доменные действия, которые пакет объявляет. */
+  actions: PackAuthoritySummaryAction[];
+  /** Виды целей, которые пакет вводит. */
+  targets: PackAuthoritySummaryTarget[];
+  /** Агенты с ролями и потолком. */
+  agents: PackAuthoritySummaryAgent[];
+  /** Итоги — «сколько чего приносит пакет». */
+  totals: {
+    roles: number;
+    actions: number;
+    targets: number;
+    agents: number;
+    grants: number;
+    mutatingGrants: number;
+  };
+}
+
+/** true — значение — объект (не массив, не null). */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Список строк из «сырого» значения (только строки). */
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string');
+}
+
+/**
+ * Сводка контента полномочий пакета (`provides.authority`).
+ *
+ * Принимает **сырой** `provides` (как в сохранённом манифесте) — разбор
+ * defensive: неизвестные/битые элементы пропускаются, а не роняют ответ.
+ * Пустой контент → пустая сводка (нулевые итоги).
+ */
+export function summarizePackAuthority(provides: unknown): PackAuthoritySummary {
+  const authority = isPlainObject(provides) && isPlainObject(provides.authority)
+    ? provides.authority
+    : {};
+
+  const rawRoles = Array.isArray(authority.roles) ? authority.roles : [];
+  const roles: PackAuthoritySummaryRole[] = [];
+  for (const raw of rawRoles) {
+    if (!isPlainObject(raw)) continue;
+    const id = typeof raw.id === 'string' ? raw.id : '';
+    if (!id) continue;
+    const grants = Array.isArray(raw.grants) ? raw.grants : [];
+    const mutatingGrants = grants.filter((grant) => {
+      if (!isPlainObject(grant)) return false;
+      const action = typeof grant.action === 'string' ? grant.action : '';
+      return action !== '' && isAuthorityMutatingAction(action);
+    }).length;
+    roles.push({
+      id,
+      ...(typeof raw.displayName === 'string' ? { displayName: raw.displayName } : {}),
+      domain: typeof raw.domain === 'string' ? raw.domain : '',
+      grants: grants.length,
+      mutatingGrants,
+    });
+  }
+
+  const rawActions = Array.isArray(authority.actions) ? authority.actions : [];
+  const actions: PackAuthoritySummaryAction[] = [];
+  for (const raw of rawActions) {
+    if (!isPlainObject(raw)) continue;
+    const id = typeof raw.id === 'string' ? raw.id : '';
+    if (!id) continue;
+    actions.push({ id, mutating: raw.mutating === true });
+  }
+
+  const rawTargets = Array.isArray(authority.targets) ? authority.targets : [];
+  const targets: PackAuthoritySummaryTarget[] = [];
+  for (const raw of rawTargets) {
+    if (!isPlainObject(raw)) continue;
+    const kind = typeof raw.kind === 'string' ? raw.kind : '';
+    if (!kind) continue;
+    targets.push({
+      kind,
+      ...(typeof raw.resolver === 'string' ? { resolver: raw.resolver } : {}),
+    });
+  }
+
+  const rawAgents = Array.isArray(authority.agents) ? authority.agents : [];
+  const agents: PackAuthoritySummaryAgent[] = [];
+  for (const raw of rawAgents) {
+    if (!isPlainObject(raw)) continue;
+    const id = typeof raw.id === 'string' ? raw.id : '';
+    if (!id) continue;
+    agents.push({
+      id,
+      roles: stringList(raw.roles),
+      ceiling: stringList(raw.ceiling),
+    });
+  }
+
+  const grants = roles.reduce((sum, role) => sum + role.grants, 0);
+  const mutatingGrants = roles.reduce((sum, role) => sum + role.mutatingGrants, 0);
+
+  return {
+    roles,
+    actions,
+    targets,
+    agents,
+    totals: {
+      roles: roles.length,
+      actions: actions.length,
+      targets: targets.length,
+      agents: agents.length,
+      grants,
+      mutatingGrants,
+    },
+  };
+}
+
+/** Контент полномочий пакета непустой? (пустой контент — нечего активировать). */
+export function hasPackAuthorityContent(provides: unknown): boolean {
+  const summary = summarizePackAuthority(provides);
+  return (
+    summary.totals.roles > 0 ||
+    summary.totals.actions > 0 ||
+    summary.totals.targets > 0 ||
+    summary.totals.agents > 0
+  );
+}
 
 /**
  * Набор вкладов расширения. Списки нормализованы (отсутствующий список —
