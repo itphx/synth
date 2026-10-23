@@ -18,7 +18,7 @@
  *    мутирующий тул; владелец сессии подтверждает; повторный ответ — отказ
  *    (`already_consumed`); посторонний (сессия не видна) — ответа нет вовсе.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { readdir, readFile, rm, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
@@ -85,11 +85,18 @@ interface Sandbox {
   registry: ApprovalRegistry;
   sessionManager: SessionManager;
   sessionId: string;
+  /** Оркестратор (стаб): `interrupt` — прерывание текущей генерации. */
+  orchestrator: { interrupt: ReturnType<typeof vi.fn> };
   close: () => Promise<void>;
 }
 
 let tmpDir: string;
 let sandbox: Sandbox;
+/**
+ * Id сессии с «живым ходом» — для стаба `queueManager.isRunning`.
+ * `null` — активного хода нет (обычное состояние).
+ */
+let runningSessionId: string | null = null;
 
 beforeAll(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'synth-approval-ws-'));
@@ -131,8 +138,9 @@ beforeAll(async () => {
     await next();
   });
 
+  // Сессия с «живым ходом» — её id задаёт тест (см. `runningSessionId`).
   const queueManager = {
-    isRunning: () => false,
+    isRunning: (sid: string) => sid === runningSessionId,
     stop: () => {},
     createProcessor: () => {},
     requestStop: () => false,
@@ -141,7 +149,11 @@ beforeAll(async () => {
   };
 
   const orchestrator = {
-    obfuscateUserMessageForHistory: async () => ({ content: '' }),
+    // Обфускация LLM Gateway (ADR-036) сохраняет сообщение, подменяя только
+    // секреты в содержимом — текст в тесте не искажается.
+    obfuscateUserMessageForHistory: async (_sid: string, m: { content: string }) => ({ ...m }),
+    // Прерывание текущей генерации (ADR-104, режим `interrupt`).
+    interrupt: vi.fn(() => false),
   };
 
   const listen = createBackendListen({
@@ -166,6 +178,7 @@ beforeAll(async () => {
     registry,
     sessionManager,
     sessionId: session.id,
+    orchestrator,
     close: async () => {
       await closeTestServer(started.server);
     },
@@ -192,7 +205,7 @@ function openBinding(approvalId = APPROVAL_ID): string {
 
 interface WsFrame {
   type?: string;
-  data?: { code?: string; error?: string };
+  data?: { code?: string; error?: string } & Record<string, unknown>;
 }
 
 /** Клиент `/ws/events`: кадры собираются в массив. */
@@ -394,7 +407,15 @@ describe('ADR-106 Ф3: WS-ответ на подтверждение — тол�
 // ---------------------------------------------------------------------------
 
 describe('ADR-104: interrupt не создаёт новый ход', () => {
-  it('режим interrupt отклонён машинным кодом, ход не создан', async () => {
+  it('без активного хода interrupt ведёт себя как queue: сообщение в очереди, новый ход не создан', async () => {
+    // Подтверждение привязано к текущему ходу (`turn_id`) — interrupt нового
+    // хода не открывает: привязка остаётся прежней.
+    openBinding();
+
+    const before = await sandbox.sessionManager.getSession(sandbox.sessionId);
+    const pendingBefore = before?.pendingMessages?.length ?? 0;
+    const messagesBefore = before?.messages.length ?? 0;
+
     const client = connect('owner');
     await client.ready;
     await waitForFrame(client.frames, (f) => f.type === 'connected');
@@ -407,13 +428,90 @@ describe('ADR-104: interrupt не создаёт новый ход', () => {
       }),
     );
 
-    const err = await waitForFrame(client.frames, (f) => f.type === 'error');
-    expect(err?.data?.code).toBe('STEERING_INTERRUPT_UNSUPPORTED');
+    // Машинного кода отказа `STEERING_INTERRUPT_UNSUPPORTED` больше нет (удалён
+    // вместе с этапом 2): `interrupt` реализован, отказа не бывает.
+    const queued = await waitForFrame(client.frames, (f) => f.type === 'message.queued');
+    expect(queued, 'сообщение должно встать в очередь').toBeDefined();
+    expect(queued?.data?.message, 'в очередь легла именно наша реплика').toBe('перебить');
+    await sleep(100);
+    expect(client.frames.filter((f) => f.type === 'error'), 'ошибки быть не должно').toHaveLength(0);
 
-    // Ход не создан: поток прежний, в очередь ничего не встало.
+    // Сообщение легло в обычную очередь — как при `mode: 'queue'`.
     const session = await sandbox.sessionManager.getSession(sandbox.sessionId);
+    expect(session?.pendingMessages?.length ?? 0).toBe(pendingBefore + 1);
+    expect(session?.pendingMessages?.[pendingBefore]?.content).toBe('перебить');
+    // В очередь инъекций не попало — активного хода нет.
+    expect(session?.steerInbox ?? []).toHaveLength(0);
+    // Прерывать нечего — оркестратор не дёргали.
+    expect(sandbox.orchestrator.interrupt).not.toHaveBeenCalled();
+
+    // Новый ход/стрим не созданы: поток не появился, история не изменилась.
     expect(session?.currentStream).toBeUndefined();
-    expect(session?.pendingMessages?.length ?? 0).toBe(0);
+    expect(session?.messages.length ?? 0).toBe(messagesBefore);
+    // Ход, к которому привязано подтверждение, не сменился.
+    expect(sandbox.registry.get(APPROVAL_ID)?.turnId).toBe(TURN_ID);
     client.ws.close();
+  });
+
+  it('при живом стриме interrupt обрывает генерацию, но ход продолжается', async () => {
+    const LIVE_STREAM_ID = 'stream-live-1';
+    // Живой ход: очередь занята (`isRunning`) и у сессии есть текущий стрим.
+    runningSessionId = sandbox.sessionId;
+    await sandbox.sessionManager.withLock(sandbox.sessionId, async (s) => {
+      s.currentStream = {
+        streamId: LIVE_STREAM_ID,
+        message: 'работа',
+        agentRole: undefined,
+        startedAt: new Date().toISOString(),
+        cancelled: false,
+      };
+      await sandbox.sessionManager.saveSession(s);
+    });
+    sandbox.orchestrator.interrupt.mockClear();
+
+    const pendingBefore = (await sandbox.sessionManager.getSession(sandbox.sessionId))?.pendingMessages
+      ?.length ?? 0;
+
+    try {
+      const client = connect('owner');
+      await client.ready;
+      await waitForFrame(client.frames, (f) => f.type === 'connected');
+      client.ws.send(
+        JSON.stringify({
+          type: 'send_message',
+          session_id: sandbox.sessionId,
+          content: 'перервать',
+          mode: 'interrupt',
+        }),
+      );
+
+      const queued = await waitForFrame(client.frames, (f) => f.type === 'queued');
+      expect(queued, 'сообщение принято').toBeDefined();
+      await sleep(100);
+      expect(client.frames.filter((f) => f.type === 'error'), 'ошибки быть не должно').toHaveLength(0);
+
+      const session = await sandbox.sessionManager.getSession(sandbox.sessionId);
+      // Сообщение — в очередь инъекций (в ход), а не в общую очередь.
+      expect(session?.steerInbox ?? []).toHaveLength(1);
+      expect(session?.steerInbox?.[0]?.content).toBe('перервать');
+      // Маркеры режима: `steer` — вмешательство, `interrupt` — прерывание хода.
+      expect(session?.steerInbox?.[0]?.metadata?.steer).toBe(true);
+      expect(session?.steerInbox?.[0]?.metadata?.interrupt).toBe(true);
+      // В общую очередь не попало — сообщение вплетается в текущий ход.
+      expect(session?.pendingMessages?.length ?? 0).toBe(pendingBefore);
+
+      // Текущая генерация прервана — ход при этом НЕ завершается.
+      expect(sandbox.orchestrator.interrupt).toHaveBeenCalledWith(LIVE_STREAM_ID);
+      expect(session?.currentStream?.streamId).toBe(LIVE_STREAM_ID);
+      client.ws.close();
+    } finally {
+      runningSessionId = null;
+      sandbox.orchestrator.interrupt.mockClear();
+      await sandbox.sessionManager.withLock(sandbox.sessionId, async (s) => {
+        s.currentStream = undefined;
+        s.steerInbox = [];
+        await sandbox.sessionManager.saveSession(s);
+      });
+    }
   });
 });
