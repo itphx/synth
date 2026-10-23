@@ -35,6 +35,7 @@ import type {
   EventBindingRepository,
   EventJournalRepository,
   EventRouteRepository,
+  ExternalCredentialRepository,
   IdentityClaimRepository,
   JobRepository,
   MaintenanceAuditRepository,
@@ -91,6 +92,10 @@ import { MaintenanceAuditStore } from './maintenance-audit-store.js';
 import { FilePluginAuditStore } from './file-plugin-audit-store.js';
 import { FilePluginLockStore, defaultPluginLockPath } from './file-plugin-lock-store.js';
 import { SecurityAuditStore } from './security-audit-store.js';
+// PROP-107 (Ф1): внешние доступы (OAuth-креды к коннекторам) —
+// `{dataDir}/secrets/oauth/credentials.json` (в `secrets/` — чтобы обычный
+// бэкап без `--with-secrets` их не захватывал, PROP-107 §10).
+import { ExternalCredentialStore } from './external-credential-store.js';
 import { applyStartupProxyConfig } from '../security/proxy-startup.js';
 import { EgressRequestLogStore } from './egress-request-log-store.js';
 import { AnalyticsRollupStore } from './analytics-rollup-store.js';
@@ -120,6 +125,7 @@ import {
   MemoryEventBindingRepository,
   MemoryEventJournalRepository,
   MemoryEventRouteRepository,
+  MemoryExternalCredentialRepository,
   MemoryIdentityClaimRepository,
   MemoryJobRepository,
   MemoryMaintenanceAuditRepository,
@@ -329,6 +335,11 @@ export interface StorageContext {
   skillBundles: SkillBundleRepository;
   contextFiles: ContextFileRepository;
   sshKeys: SSHKeyRepository;
+  /**
+   * PROP-107 (Ф1): внешние доступы к коннекторам (OAuth-креды). Порт хранит
+   * метаданные и зашифрованные токены; plaintext наружу не отдаётся.
+   */
+  externalCredentials: ExternalCredentialRepository;
   blobs: BlobStore;
   /** ADR-051/ADR-100: определения и экземпляры пайплайнов. */
   pipelines: PipelineRepository;
@@ -573,6 +584,13 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
       secretKey: config.secretKey,
       env: config.env,
     }),
+    // PROP-107 (Ф1): доступы к внешним сервисам — `secrets/oauth/credentials.json`
+    // (шифрование мастер-ключом, 0600).
+    externalCredentials: new ExternalCredentialStore({
+      dataDir,
+      secretKey: config.secretKey,
+      env: config.env,
+    }),
     blobs: new FileBlobStore({ root: dataDir }),
     // ADR-051/ADR-100: пайплайны — определения (`pipelines/definitions.json`)
     // и экземпляры (`pipelines/instances.json`).
@@ -628,6 +646,7 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     skillBundles: new MemorySkillBundleRepository(),
     contextFiles: new MemoryContextFileRepository(),
     sshKeys: new MemorySSHKeyRepository(),
+    externalCredentials: new MemoryExternalCredentialRepository(),
     blobs: new MemoryBlobStore(),
     pipelines: new MemoryPipelineRepository(),
     packs: new MemoryPackRepository(),
