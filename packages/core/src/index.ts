@@ -341,6 +341,8 @@ export type { EgressLogSinkOptions, EgressLogPrunerOptions } from './engine/net/
 export {
   PermissionEvaluator,
   PermissionApprovalManager,
+  computePermissionDigest,
+  parsePermissionPrincipal,
   deriveSubagentPermission,
   emptyPermissionConfig,
   getToolGroups,

@@ -122,3 +122,9 @@ export {
   COLLECTION_LIMIT_MAX,
   resolveCollectionLimit,
 } from './collection-limit.js';
+// PROP-108: порты Authority-слоя (политика инстанса + журнал решений).
+export type { AuthorityPolicyRepository } from './authority-policy-repository.js';
+export type {
+  AuthorityDecisionJournal,
+  AuthorityDecisionListOptions,
+} from './authority-decision-journal.js';

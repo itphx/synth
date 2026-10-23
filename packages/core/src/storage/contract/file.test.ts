@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import {
   createTmpDir,
   describeAnalyticsRollupRepository,
+  describeAuthorityDecisionJournal,
+  describeAuthorityPolicyRepository,
   describeBlobStore,
   describeContextFileRepository,
   describeDedupRepository,
@@ -75,6 +77,8 @@ import { FilePipelineStore } from '../file-pipeline-store.js';
 import { FilePackStore } from '../file-pack-store.js';
 import { FileProjectPipelineStore } from '../file-project-pipeline-store.js';
 import { FilePipelineRunStore } from '../file-pipeline-run-store.js';
+import { FileAuthorityPolicyStore } from '../file-authority-policy-store.js';
+import { FileAuthorityDecisionJournal } from '../file-authority-decision-journal.js';
 
 /** Мастер-ключ для шифрующих хранилищ (base64, 32 байта) — файл master.key не создаётся. */
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
@@ -292,6 +296,29 @@ describe('контрактные тесты файловых реализаци�
       pipelines: new FileProjectPipelineStore({ dataDir: dir }),
     };
   });
+
+  // PROP-108: порты Authority-слоя (политика инстанса + журнал решений).
+  describeAuthorityPolicyRepository(
+    'FileAuthorityPolicyStore → AuthorityPolicyRepository',
+    async () => {
+      const dir = await tmp();
+      return {
+        repo: new FileAuthorityPolicyStore({ dataDir: dir }),
+        filePath: join(dir, 'authority', 'policy.json'),
+      };
+    },
+  );
+
+  describeAuthorityDecisionJournal(
+    'FileAuthorityDecisionJournal → AuthorityDecisionJournal',
+    async () => {
+      const dir = await tmp();
+      return {
+        repo: new FileAuthorityDecisionJournal({ dataDir: dir }),
+        filePath: join(dir, 'audit', 'authority.jsonl'),
+      };
+    },
+  );
 });
 
 // `DefaultsRepository` реализуется в backend (`DefaultsStore`) — его контрактный

@@ -319,6 +319,7 @@ describe('PluginRuntime: список и деактивация', () => {
       tools: ['ping'],
       promptBlocks: [{ key: `plugin.${multiName}.tip`, tier: 'context', order: 10 }],
       llmFilters: [{ id: `${multiName}.filter`, phase: 'pre_request' }],
+      authority: { roles: [], actions: [], targets: [], agents: [] },
     };
     const code =
       'export function apply(facade) {\n' +

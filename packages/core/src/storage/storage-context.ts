@@ -25,6 +25,8 @@ import {
 } from '@itphx/synth-shared';
 import type {
   AnalyticsRollupRepository,
+  AuthorityDecisionJournal,
+  AuthorityPolicyRepository,
   BlobStore,
   ContextFileRepository,
   DedupRepository,
@@ -91,6 +93,8 @@ import { MaintenanceAuditStore } from './maintenance-audit-store.js';
 import { FilePluginAuditStore } from './file-plugin-audit-store.js';
 import { FilePluginLockStore, defaultPluginLockPath } from './file-plugin-lock-store.js';
 import { SecurityAuditStore } from './security-audit-store.js';
+import { FileAuthorityPolicyStore } from './file-authority-policy-store.js';
+import { FileAuthorityDecisionJournal } from './file-authority-decision-journal.js';
 import { applyStartupProxyConfig } from '../security/proxy-startup.js';
 import { EgressRequestLogStore } from './egress-request-log-store.js';
 import { AnalyticsRollupStore } from './analytics-rollup-store.js';
@@ -111,6 +115,8 @@ import { setStorageDegradedState } from '../engine/permission/storage-state.js';
 // ── In-memory реализации ───────────────────────────────────────────────
 import {
   MemoryAnalyticsRollupRepository,
+  MemoryAuthorityDecisionJournal,
+  MemoryAuthorityPolicyRepository,
   MemoryBlobStore,
   MemoryContextFileRepository,
   MemoryDefaultsRepository,
@@ -341,6 +347,16 @@ export interface StorageContext {
   projectPipelines: ProjectPipelineRepository;
   /** ADR-101: прогоны пайплайнов и журнал выполнения (append-only). */
   pipelineRuns: PipelineRunRepository;
+  /**
+   * PROP-108 Ф0: политика полномочий инстанса (потолок инстанса). Не задана
+   * драйвером PostgreSQL — остаток (ADR-097, см. комментарий в `buildStorageContext`).
+   */
+  authorityPolicy?: AuthorityPolicyRepository;
+  /**
+   * PROP-108 Ф1: append-only журнал решений Authority-слоя
+   * (`{dataDir}/audit/authority.jsonl`). Не задан драйвером PostgreSQL — остаток.
+   */
+  authorityDecisions?: AuthorityDecisionJournal;
 }
 
 /** Параметры сборки слоя хранения (общие для file/memory). */
@@ -584,6 +600,10 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     // append-only `pipelines/run-events.jsonl`).
     projectPipelines: new FileProjectPipelineStore({ dataDir }),
     pipelineRuns: new FilePipelineRunStore({ dataDir }),
+    // PROP-108: политика полномочий инстанса (`authority/policy.json`) и
+    // append-only журнал решений (`audit/authority.jsonl`).
+    authorityPolicy: new FileAuthorityPolicyStore({ dataDir }),
+    authorityDecisions: new FileAuthorityDecisionJournal({ dataDir }),
   };
 }
 
@@ -633,6 +653,9 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     packs: new MemoryPackRepository(),
     projectPipelines: new MemoryProjectPipelineRepository(),
     pipelineRuns: new MemoryPipelineRunRepository(),
+    // PROP-108: порты Authority-слоя (политика + журнал решений).
+    authorityPolicy: new MemoryAuthorityPolicyRepository(),
+    authorityDecisions: new MemoryAuthorityDecisionJournal(),
   };
 }
 

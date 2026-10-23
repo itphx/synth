@@ -37,6 +37,9 @@ export { MemoryPluginAuditRepository } from './plugin-audit.js';
 // PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов.
 export { MemoryPluginLockRepository } from './plugin-lock.js';
 export { MemorySecurityAuditRepository, MemoryEgressRequestLogRepository } from './security-audit.js';
+// PROP-108: порты Authority-слоя (политика инстанса + журнал решений).
+export { MemoryAuthorityPolicyRepository } from './authority-policy.js';
+export { MemoryAuthorityDecisionJournal } from './authority-decision-journal.js';
 export { MemoryAnalyticsRollupRepository } from './analytics-rollup.js';
 
 export {

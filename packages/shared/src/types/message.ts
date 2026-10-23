@@ -1,5 +1,6 @@
 import type { TokenUsage } from './llm.js';
 import type { PromptMeta } from './prompt.js';
+import type { AuthorityPrincipal } from './authority.js';
 
 // --- Message role ---
 
@@ -64,6 +65,12 @@ export interface Message {
   reasoning?: string;
   source?: 'web' | 'cli' | 'api';
   author?: string;
+  /**
+   * PROP-108 Ф0: принципал ввода (аддитивное поле). `author` остаётся
+   * display-строкой для UI — принципал даёт машиночитаемую атрибуцию
+   * («кто это сделал») без изменения существующих потребителей.
+   */
+  principal?: AuthorityPrincipal;
   agentRole?: string;
   metadata?: Record<string, unknown>;
   /** ADR-070 §2.4: предсказание/валидация prompt-cache для этого хода. */

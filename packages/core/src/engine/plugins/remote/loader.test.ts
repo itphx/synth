@@ -561,6 +561,7 @@ describe('createRemotePluginLoader: отказы объявления точки
             tools: ['plugin_victim_tool'],
             promptBlocks: [],
             llmFilters: [],
+            authority: { roles: [], actions: [], targets: [], agents: [] },
           },
         } as Partial<PackManifest>),
       }),

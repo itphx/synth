@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   describeAnalyticsRollupRepository,
+  describeAuthorityDecisionJournal,
+  describeAuthorityPolicyRepository,
   describeBlobStore,
   describeContextFileRepository,
   describeDefaultsRepository,
@@ -40,6 +42,8 @@ import {
 } from './index.js';
 import {
   MemoryAnalyticsRollupRepository,
+  MemoryAuthorityDecisionJournal,
+  MemoryAuthorityPolicyRepository,
   MemoryBlobStore,
   MemoryContextFileRepository,
   MemoryDefaultsRepository,
@@ -145,6 +149,17 @@ describe('контрактные тесты in-memory реализаций по�
   describePluginLockRepository(
     'MemoryPluginLockRepository → PluginLockRepository',
     async () => ({ repo: new MemoryPluginLockRepository() }),
+  );
+
+  // PROP-108: порты Authority-слоя (политика инстанса + журнал решений).
+  describeAuthorityPolicyRepository(
+    'MemoryAuthorityPolicyRepository → AuthorityPolicyRepository',
+    async () => ({ repo: new MemoryAuthorityPolicyRepository() }),
+  );
+
+  describeAuthorityDecisionJournal(
+    'MemoryAuthorityDecisionJournal → AuthorityDecisionJournal',
+    async () => ({ repo: new MemoryAuthorityDecisionJournal() }),
   );
 
   describeSecurityAuditRepository(

@@ -3093,6 +3093,15 @@ export class ChatOrchestrator {
                 arguments: toolArgs,
                 reason: this._securityMessage(permissionDecision, 'en')
                   ?? permissionDecision.reason,
+                // PROP-108 Ф0: принципал и ход запроса (аддитивные поля
+                // события `permission.asked`). Полный учёт принципала хода —
+                // Ф4; здесь фиксируется текущий владелец сессии.
+                principal: {
+                  kind: 'user',
+                  id: session.ownerId ?? session.userId ?? 'local',
+                  roles: [],
+                },
+                turnId: streamId,
               },
               effectivePermissionConfig.askTimeoutMs,
             );
