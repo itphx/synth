@@ -554,6 +554,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | PROP-105 | Координация в нескольких репликах: сессии, очередь, общее состояние | 🧩 Предложение | [prop-105](./docs/arch_decisions/prop-105-multi-replica-coordination.md) |
 | PROP-106 | Файловые порты инстанса в SQL: единое состояние при нескольких репликах | 🧩 Предложение | [prop-106](./docs/arch_decisions/prop-106-file-ports-to-sql.md) |
 | PROP-107 | OAuth-хранилище и слой доступа к внешним сервисам (коннекторы): креды шифруются мастер-ключом, токен подставляет транспорт — агент его не видит | 🧩 Предложение | [prop-107](./docs/arch_decisions/prop-107-oauth-credential-layer.md) |
+| PROP-108 | Authority-слой — полномочия пользователей и агентов как контент | 🧩 Предложение | [prop-108](./docs/arch_decisions/prop-108-authority-layer.md) |
 <!-- ad-index:end -->
 
 Правило: `docs/arch_decisions/` — единственный дом ADR/PROP; номера и файлы стабильны (ссылок на id по репозиторию — тысячи), файлы не переносятся и не удаляются.
@@ -574,6 +575,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | UI / React / PWA | [ADR-019](./docs/arch_decisions/adr-019-react-spa.md), [ADR-044](./docs/arch_decisions/adr-044-mobile-adaptive-ui-pwa.md), [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) |
 | саб-агенты / контекст | [ADR-026](./docs/arch_decisions/adr-026-subagent-context-modes.md), [ADR-033](./docs/arch_decisions/adr-033-session-branching-merge.md) |
 | permissions / plan-act | [ADR-025](./docs/arch_decisions/adr-025-plan-act-toggle.md), [ADR-028](./docs/arch_decisions/adr-028-plan-build-strictness.md), [ADR-029](./docs/arch_decisions/adr-029-granular-permissions.md) |
+| полномочия / роли / среды / «кто что может через агента» | [PROP-108](./docs/arch_decisions/prop-108-authority-layer.md), [ADR-025](./docs/arch_decisions/adr-025-plan-act-toggle.md), [ADR-029](./docs/arch_decisions/adr-029-granular-permissions.md), [ADR-089](./docs/arch_decisions/adr-089-external-events-automation.md) (права внешних отправителей) |
 | конфиг | [ADR-023](./docs/arch_decisions/adr-023-configuration.md), [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
 | routing / микро-слой | [ADR-034](./docs/arch_decisions/adr-034-model-routing.md), [ADR-035](./docs/arch_decisions/adr-035-micro-model-first.md), [ADR-084](./docs/arch_decisions/adr-084-decision-models-clef.md), [docs/ROUTING.md](./docs/ROUTING.md) |
 | безопасность / gateway | [ADR-036](./docs/arch_decisions/adr-036-llm-gateway.md) |
