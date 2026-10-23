@@ -651,6 +651,23 @@ describe('PluginInstaller: uninstall', () => {
     expect(existsSync(pluginInstalledDir(layout, 'demo-plugin', '1.0.0'))).toBe(false);
   });
 
+  it('относительный identifier (имя npm-пакета) НЕ делает плагин управляемым', async () => {
+    // Регрессия: при непустом deployDir (дефолт /opt/synth/plugins) относительный
+    // identifier резолвился от deployDir — и любой плагин из npm считался
+    // управляемым (update/uninstall запрещены).
+    const { installer, lock } = await makeInstaller({ config: config({ deployDir: '/opt/synth/plugins' }) });
+    await installer.installFromDirectory({
+      dir: await makeBundle(),
+      trustLevel: 'verified',
+      source: 'npm',
+      identifier: 'demo-plugin',
+    });
+    const entry = (await lock.list())[0];
+    expect(entry?.identifier).toBe('demo-plugin');
+    const result = await installer.uninstall('demo-plugin', { removeFiles: false });
+    expect(result.removed).toBe(true);
+  });
+
   it('управляемость по identifier внутри plugins.deployDir (source: local) → тоже отказ', async () => {
     const deployDir = await makeTempDir('synth-plugin-deploy-root-');
     const bundle = await makeBundle();
