@@ -1646,10 +1646,14 @@ export class PluginInstaller {
     const deployDir = (this._config.deployDir ?? '').trim();
     const identifier = entry.identifier?.trim();
     if (!deployDir || !identifier) return false;
-    // Относительный identifier резолвим от deployDir: в lock может лежать
-    // `<name>` (относительно каталога) или абсолютный путь.
+    // **Только абсолютный путь внутри deployDir.** Относительный identifier —
+    // это имя npm-пакета или URL, а не путь в каталоге развёртывания: если
+    // резолвить его от deployDir, любой плагин из npm получал бы «каталог
+    // развёртывания» и блокировался бы на update/uninstall (Ф5в, Д2).
+    // Deploy-установка (Ф5в) кладёт в lock абсолютный путь каталога.
+    if (!isAbsolute(identifier)) return false;
     const root = resolve(deployDir);
-    const bundle = isAbsolute(identifier) ? resolve(identifier) : resolve(root, identifier);
+    const bundle = resolve(identifier);
     const rel = relative(root, bundle);
     return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
   }

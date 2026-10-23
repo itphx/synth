@@ -339,6 +339,9 @@ export function mergeDecisionConfig(
   };
 }
 
+/** Конвенциональный каталог deploy-плагинов в образе (Ф5в). */
+export const DEFAULT_PLUGIN_DEPLOY_DIR = '/opt/synth/plugins';
+
 /**
  * PROP-090 §10 / ADR-023: мёржит runtime-настройки секции `plugins` поверх
  * config.yaml. Runtime приоритетнее; отсутствие поля — значения из config,
@@ -365,7 +368,7 @@ export function mergePluginsConfig(
     executionEnabled: r.executionEnabled ?? base?.executionEnabled ?? false,
     llmFilterTimeoutMs: r.llmFilterTimeoutMs ?? base?.llmFilterTimeoutMs ?? DEFAULT_LLM_FILTER_TIMEOUT_MS,
     // Ф5в: deploy-каталог/PVC (путь внутри контейнера) и доверие deploy-бандлов.
-    deployDir: r.deployDir ?? base?.deployDir ?? '',
+    deployDir: r.deployDir ?? base?.deployDir ?? DEFAULT_PLUGIN_DEPLOY_DIR,
     // Дефолт — как в схеме (`pluginsConfigSchema`): образные бандлы доверены
     // ровно настолько, насколько доверен образ; при trustFloor=trusted (дефолт)
     // установка проходит.

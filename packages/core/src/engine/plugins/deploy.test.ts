@@ -150,8 +150,8 @@ describe('listDeployPlugins: разбор deploy-каталога', () => {
 // ── Установка при старте ─────────────────────────────────────────────────
 
 describe('PluginRuntime.installDeployPlugins (Ф5в)', () => {
-  it('deployDir не задан → no-op (пустой результат, lock пуст)', async () => {
-    const { runtime, lock } = await makeRuntime();
+  it('deployDir не задан (пустая строка) → no-op (пустой результат, lock пуст)', async () => {
+    const { runtime, lock } = await makeRuntime({ deployDir: '' });
 
     const result = await runtime.installDeployPlugins({ actor: 'startup' });
 

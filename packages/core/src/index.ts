@@ -18,11 +18,8 @@ export type { HookHandler, HookRegistrationOptions, HookEmitResult } from './eng
 export { PluginHost, DEFAULT_EXTENSION_CONTRACT_VERSION } from './engine/plugins/index.js';
 export {
   PLUGIN_ACTIVATION_STEPS,
-  DEFAULT_PLUGIN_CONTRACT_REFERENCE,
-  PLUGIN_CONTRACT_FIXTURES,
   PluginLoadError,
   computePluginContentHash,
-  describePluginContract,
   pluginLoadFailureReason,
   verifyPluginIntegrity,
   readExactHostExceptions,
@@ -43,10 +40,6 @@ export type {
   PluginScanHook,
   PluginScanResult,
   PluginIntegrityVerdict,
-  PluginContractFixtureName,
-  PluginContractHarness,
-  PluginContractHarnessFactory,
-  PluginContractReference,
   PluginToolDefinition,
 } from './engine/plugins/index.js';
 // PROP-090 §«inline» (Ф4а): загрузчик кода плагина из распакованного бандла.

@@ -1290,8 +1290,8 @@ scheduler:
 | `plugins.exactHostExceptions` | Путь к файлу точных исключений семвер-гейта (`host`, одна версия в строке) | `''` |
 | `plugins.promptBlockMaxChars` | Бюджет символов **на блок** системного промпта от плагина (превышение — обрезка с маркером, `status: 'truncated'`) | `4000` |
 | `plugins.llmFilterTimeoutMs` | Бюджет времени на один вызов фильтра LLM-вызовов; по истечении — `failMode` фильтра | `1000` |
-| `plugins.deployDir` | Каталог бандлов, поставленных **образом/развёртыванием** (каждый подкаталог — бандл с `synth.pack` + `dist/`). Ставится при старте инстанса (манифест → скан → trust-floor → install-policy), затем активируется из lock. Пусто — deploy-плагинов нет | `''` |
-| `plugins.deployTrust` | Уровень доверия deploy-бандлов (`builtin`/`trusted`/`trusted`/`community`). Ниже `trustFloor` — штатный отказ `plugin.trust_below_floor`; скан содержимого выполняется всегда | `trusted` |
+| `plugins.deployDir` | Каталог бандлов, поставленных **образом/развёртыванием** (каждый подкаталог — бандл с `synth.pack` + `dist/`). Ставится при старте инстанса (манифест → скан → trust-floor → install-policy), затем активируется из lock. Пусто — deploy-плагинов нет | `/opt/synth/plugins` |
+| `plugins.deployTrust` | Уровень доверия deploy-бандлов (`builtin`/`verified`/`trusted`/`community`). Ниже `trustFloor` — штатный отказ `plugin.trust_below_floor`; скан содержимого выполняется всегда | `verified` |
 | `plugins.managedReadonly` | Management-плагин (`deployDir`, lock `source: 'deploy'`) **нельзя** снять или переустановить через API/CLI — `403 plugin.managed_readonly`. Меняется только новым образом/переразвёртыванием. Действует независимо от режима инстанса | `true` |
 
 ```yaml
@@ -1303,7 +1303,7 @@ plugins:
   llmFilterTimeoutMs: 1000
   # Managed deploy-time (Ф5в): бандлы из образа/PVC.
   deployDir: /opt/synth/plugins
-  deployTrust: verified
+  deployTrust: trusted
   managedReadonly: true
 ```
 

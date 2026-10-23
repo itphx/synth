@@ -163,15 +163,8 @@ export type {
   PluginLayout,
 } from './layout.js';
 
-// Ф3в — контрактный suite расширений («паспорт» плагина).
-export {
-  DEFAULT_PLUGIN_CONTRACT_REFERENCE,
-  describePluginContract,
-  PLUGIN_CONTRACT_FIXTURES,
-} from './contract/index.js';
-export type {
-  PluginContractFixtureName,
-  PluginContractHarness,
-  PluginContractHarnessFactory,
-  PluginContractReference,
-} from './contract/index.js';
+// Ф3в — контрактный suite расширений («паспорт» плагина) **внутрь не
+// экспортируется**: модуль тянет `vitest`, а публичная поверхность пакета
+// грузится в прод-образе, где dev-зависимостей нет (прецедент —
+// `storage/contract/*`: контрактные suite'ы тоже внутренние). Suite доступен
+// тестам по прямому пути `engine/plugins/contract/*`.
