@@ -26,6 +26,7 @@ import {
   describePluginLockRepository,
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
+  describeExternalCredentialRepository,
   describeMcpRegistryRepository,
   describePackRepository,
   describePipelineRepository,
@@ -209,6 +210,12 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
 
   describeBlobStore('PG → BlobStore (file-backed)', () => makePort('blobs'));
   describeDefaultsRepository('PG → DefaultsRepository', () => makePort('defaults'));
+
+  // PROP-107 (Ф1): внешние доступы к коннекторам (таблица `external_credentials`,
+  // миграция 011; шифрование токенов — core-хелперами, мастер-ключ в `{dataDir}`).
+  describeExternalCredentialRepository('PG → ExternalCredentialRepository', () =>
+    makePort('externalCredentials'),
+  );
 
   // ADR-051/ADR-100 + ADR-086 §5: переходно файловые порты драйвера.
   describePipelineRepository('PG → PipelineRepository (file-backed)', () => makePort('pipelines'));
