@@ -49,6 +49,7 @@ const en: Dictionary = {
   // ADR-052 (этап I): service-key
   'errors.validation.invalidServiceKey': 'Invalid service key payload',
   'errors.notFound.serviceKey': 'Service key not found',
+  'errors.notFound.credential': 'External access not found',
   'errors.conflict.serviceKeyLabel': 'Service key label is already used',
   'errors.forbidden.scopeRequired': 'Insufficient permissions: required scope is missing',
   'errors.forbidden.projectForbidden': 'Project is not available for this service key',
@@ -191,6 +192,8 @@ const ru: Dictionary = {
   // ADR-052 (этап I): service-key
   'errors.validation.invalidServiceKey': 'Некорректное тело service-key',
   'errors.notFound.serviceKey': 'Service-key не найден',
+  // ADR-105 (Ф3): внешний доступ (OAuth-кред) не найден.
+  'errors.notFound.credential': 'Внешний доступ не найден',
   'errors.conflict.serviceKeyLabel': 'Метка service-key уже используется',
   'errors.forbidden.scopeRequired': 'Недостаточно прав: отсутствует требуемый scope',
   'errors.forbidden.projectForbidden': 'Проект недоступен для этого service-key',

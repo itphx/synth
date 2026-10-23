@@ -312,6 +312,7 @@ export {
   resolveOAuthClientSecret,
   oauthClientSecretEnv,
   oauthClientSecretPath,
+  evaluateCredentialBind,
 } from './engine/oauth/index.js';
 export type {
   OAuthClientAuthMethod,
@@ -326,6 +327,9 @@ export type {
   OAuthProviderRegistration,
   RegisterOAuthProvidersOptions,
   ResolveClientSecretOptions,
+  CredentialBindActor,
+  CredentialBindDecision,
+  CredentialBindInput,
 } from './engine/oauth/index.js';
 
 // PROP-100 / ADR-071 §2.3.1: единый SSRF/egress-guard исходящих запросов
@@ -822,6 +826,13 @@ export type {
   SessionAccessPredicateOptions,
   SessionAccessMessages,
 } from './server/session-access-guard.js';
+// ADR-105 (Ф3): право привязки внешнего доступа к коннектору — на границе.
+export { createCredentialBindGuard } from './server/credential-bind-guard.js';
+export type {
+  CredentialBindGuardMessages,
+  CredentialBindGuardOptions,
+  CredentialBindViolation,
+} from './server/credential-bind-guard.js';
 // ADR-036: привилегия карты обфускации при экспорте сессии — route-level guard
 // (решение — в контексте Hono, в обработчике проверок доступа нет).
 export {
