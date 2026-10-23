@@ -57,7 +57,7 @@ ADR-097): реализация доменных портов `StorageContext` (`
 (`packages/core/src/storage/contract/postgres.test.ts` → 132/132 против
 живого PostgreSQL 17). Проводка домена — через `storage.backend = postgres`.
 
-**Текущий статус (сводно).** Реализованы: все 38 доменных порта (группы
+**Текущий статус (сводно).** Реализованы: 38 из 39 доменных портов (группы
 `ports/*`; включая `analyticsRollups` — ADR-102 и `projectPipelines`/`pipelineRuns` —
 ADR-101, SQL-реализация поверх `pipeline_specs`/`pipeline_versions`/`pipeline_runs`/
 `pipeline_run_events`, а также `pluginAudit` — PROP-090 §9 и `pluginLock` — PROP-068 §4.4 /
@@ -70,7 +70,10 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
 перенос данных между backend'ами (`synth storage migrate`) и деградированный
 режим (надстройка core, ADR-098). **Остаток:** `kind:"storage"` в едином
 манифесте расширений (ADR-097) и установка сторонних драйверов-хранилищ
-(сейчас in-tree-драйвер из коробки).
+(сейчас in-tree-драйвер из коробки); **порт внешних доступов**
+(`ExternalCredentialRepository`, PROP-107 Ф1 — таблица с колонками `*_enc`,
+шифрование только core-хелперами `encryptSecret`/`decryptSecret` через ленивый
+`import()`, как у SSH-ключей; в file/memory-реализациях порт уже есть).
 
 - **Подключение (`pool.ts`).** `createPostgresConnection(config)` → `PostgresConnection`
   с ленивым `pg.Pool` (модуль `pg` не required на импорте). Дефолты: `poolMax=10`
