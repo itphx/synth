@@ -1,5 +1,5 @@
 import type { Message, Session } from '@itphx/synth-shared';
-import { nowISO, generateStreamId, generateId, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY } from '@itphx/synth-shared';
+import { nowISO, generateStreamId, generateId, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { SessionManager } from '../sessions/manager.js';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { EventBus } from '../events/bus.js';
@@ -715,6 +715,8 @@ export async function enqueueSteerMessage(
   if (!result.accepted) {
     eventBus.publish(sessionId, 'steer.dropped', {
       reason: 'limit',
+      // Машинный код — тот же, что отдаёт API (429 STEER_LIMIT_EXCEEDED).
+      code: STEERING_ERROR_CODES.limitExceeded,
       limit: maxInjections,
       pending_count: result.pending,
       error: sm('steer.limit_exceeded', { limit: String(maxInjections) }),

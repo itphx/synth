@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
@@ -3973,6 +3973,8 @@ export class ChatOrchestrator {
     if (dropped.length > 0) {
       publishChunk('steer.dropped', {
         reason: 'limit',
+        // Машинный код — тот же, что отдаёт API (429 STEER_LIMIT_EXCEEDED).
+        code: STEERING_ERROR_CODES.limitExceeded,
         limit: MAX_STEER_INJECTIONS_PER_TURN,
         dropped_count: dropped.length,
         error: sm('steer.limit_exceeded', { limit: String(MAX_STEER_INJECTIONS_PER_TURN) }),
