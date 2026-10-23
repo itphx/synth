@@ -566,6 +566,18 @@
   читает только каталог: без этого агент, поставленный пакетом расширения (ADR-086),
   после рестарта не резолвился в Router (`agentTemplate` → `null`, сессия не создавалась).
   Вызывается в `server/app/deps.ts` и `backend/app/deps.ts` (обе сборки — async).
+- `engine/authority/*` — ADR-106: слой полномочий (модель — `shared/types/authority.ts`).
+  **`activation.ts`** — активация контента `provides.authority` пакета в **политику инстанса**
+  (чистые функции; запись делает `server/routes/packs.ts`): активация — при одобрении пакета
+  (`POST /packs/:name/approve`), снятие — при `DELETE /packs/:name` (идемпотентно, роли/привязки
+  другого пакета остаются). Правила: **пересечение** с потолком инстанса (не дарование),
+  **trust-floor** (мутирующие гранты — только при trust ≥ `trusted`; мутирующим считается всё,
+  кроме `read` — признаку пакета не доверяют), **политика — источник истины** (роль из политики
+  контентом не перезаписывается), **валидация, а не каст** (манифест проверяется до активации).
+  Ось `agent` резолвера берёт роли агента из `policy.agents[]` (связи из контента пакета).
+  **Политика — снимок при старте процесса**: резолвер собирается в `server/app/deps.ts` /
+  `backend/app/deps.ts` из прочитанной политики; изменение после старта (в т.ч. активация
+  контента) видно **только после рестарта** (инвариант 24).
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP; `executor-mcp-source.ts` +
   `executor-mcp-client.ts` — состав MCP-серверов пула исполнителей и вызовы их инструментов
   поверх HTTP API исполнителя (ADR-077, шаг B2): TTL снимка 120 с, а **неудачный** discovery
@@ -1056,7 +1068,10 @@
   `ExternalCredentialRepository` — внешние доступы к коннекторам (ADR-105 Ф1; файловое/в-памяти
   хранилища — `ExternalCredentialStore`, контракт — `storage/contract/external-credential-repository.contract.ts`);
   `AuthorityPolicyRepository`/`AuthorityDecisionJournal` — политика полномочий и журнал решений
-  Authority-слоя (ADR-106 Ф1);
+  Authority-слоя (ADR-106 Ф1; PostgreSQL — `packages/storage-postgres/src/ports/authority.ts`,
+  миграция `014` — контрактный suite гоняется на **живой** БД, гейт `SYNTH_TEST_POSTGRES_DSN`);
+  контент `provides.authority` пакета активируется в `authorityPolicy` при одобрении пакета и
+  снимается при снятии установки (см. `engine/authority/activation.ts`));
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
   запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/

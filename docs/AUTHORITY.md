@@ -4,8 +4,9 @@
 > журнал решений, метрика и явная граница «реализовано / план».
 > Решение — [ADR-106](./arch_decisions/adr-106-authority-layer.md) «Authority-слой — полномочия пользователей
 > и агентов как контент». Правила ведения документов — [ARCH_DECISIONS.md](./ARCH_DECISIONS.md).
-> **Состояние:** Ф0–Ф3 (контракты, резолвер, принуждение, подтверждения) — **реализованы**; Ф4–Ф5 —
-> **план**, перечислены в §11 и нигде не выдаются за работающие.
+> **Состояние:** Ф0–Ф5 (контракты, резолвер, принуждение, подтверждения, многопользовательские
+> сессии, контент и дистрибуция) — **реализованы**; остаток — UI-раздел «Полномочия» (read-only)
+> и flavor-роли (PROP-082), перечислены в §11 и нигде не выдаются за работающие.
 
 ## 1. Назначение
 
@@ -85,7 +86,7 @@ permission-слоя.
 | Ось | Источник грантов | Когда применима |
 |---|---|---|
 | `user` | права принципала + роли из политики | всегда (нет грантов — нет права) |
-| `agent` | роли/гранты агента хода | агент объявлен и у него есть гранты |
+| `agent` | роли/гранты агента хода + роли агента из `policy.agents` (контент пакета, §10) | агент объявлен и у него есть гранты |
 | `session` | потолок сессии | потолок задан |
 | `pack` | потолок пакета (контента) | потолок задан |
 | `instance` | политика инстанса | политика или её потолки заданы |
@@ -238,8 +239,8 @@ shadow/выключенном режиме ответ принимается п�
 
 | Порт | Файл | Файловое | In-memory | PostgreSQL |
 |---|---|---|---|---|
-| `AuthorityPolicyRepository` | `packages/core/src/storage/ports/authority-policy-repository.ts` | `storage/file-authority-policy-store.ts` | `storage/memory/authority-policy.ts` | **не реализован** (остаток) |
-| `AuthorityDecisionJournal` | `packages/core/src/storage/ports/authority-decision-journal.ts` | `storage/file-authority-decision-journal.ts` | `storage/memory/authority-decision-journal.ts` | **не реализован** (остаток) |
+| `AuthorityPolicyRepository` | `packages/core/src/storage/ports/authority-policy-repository.ts` | `storage/file-authority-policy-store.ts` | `storage/memory/authority-policy.ts` | `packages/storage-postgres/src/ports/authority.ts` (миграция `014`) |
+| `AuthorityDecisionJournal` | `packages/core/src/storage/ports/authority-decision-journal.ts` | `storage/file-authority-decision-journal.ts` | `storage/memory/authority-decision-journal.ts` | `packages/storage-postgres/src/ports/authority.ts` (миграция `014`) |
 
 Подключение — `StorageContext.authorityPolicy` / `StorageContext.authorityDecisions`
 (`packages/core/src/storage/storage-context.ts`); guard и реестр собираются в
@@ -247,7 +248,10 @@ shadow/выключенном режиме ответ принимается п�
 
 Оба порта покрыты контрактным suite («паспорт порта», ADR-096):
 `packages/core/src/storage/contract/authority-policy-repository.contract.ts` — прогоняется в
-`storage/contract/{file,memory}.test.ts`.
+`storage/contract/{file,memory}.test.ts`. **Драйвер PostgreSQL** (`buildAuthorityPorts`, таблицы
+`authority_policy`/`authority_decisions`, миграция `014`) прогоняется на **живой** БД в
+`storage/contract/postgres.test.ts` — этот прогон гейтится env `SYNTH_TEST_POSTGRES_DSN`
+(задача `test-postgres` в CI), локально без него порты Authority в PG не проверяются (§11).
 
 ## 10. Контент `provides.authority`
 
@@ -257,27 +261,94 @@ shadow/выключенном режиме ответ принимается п�
 (`packages/shared/src/types/authority.ts`): неизвестное действие, неизвестный вид цели или неизвестная роль —
 **проблема манифеста** → отказ установки (правило 15 `validatePackManifest`).
 
-Правила безопасности контента (Ф5, план): **декларация, а не код** (резолверы целей регистрирует ядро или
-плагин — PROP-090); **пересечение, а не дарование** (контент всегда пересекается с политикой инстанса);
-**одобрение по существу** (пакет с непустым `provides.authority` попадает в `pending_approval`, и ADMIN видит,
-**какие** роли и действия приносит пакет); **trust-floor** (мутирующие роли — только при trust ≥ `trusted`,
-модель доверия — PROP-068); **валидация, а не каст**; **flavor-дистрибутив** (доменные роли едут в
-flavor-образах, не в ядре); **каталог** (роли/действия/цели — объекты каталога PROP-068).
+Контент — **декларация**: он объявляет, но **не выдаёт права сам себе**. В инстанс попадает **только
+после одобрения ADMIN** и **пересекается** с политикой инстанса.
 
-Сегодня работает **только валидация** манифеста: `needsApproval` в `packages/core/src/server/routes/packs.ts`
-учитывает `capabilities` агентов, пайплайны и расписания — пакет с `provides.authority` в `pending_approval`
-**не попадает**, а его роли **не активируются** в политике инстанса.
+### 10.1 Одобрение по существу — `pending_approval`
 
-## 11. Что не реализовано (план, Ф4–Ф5)
+Пакет с непустым `provides.authority` — наравне с пакетом, выдающим capability-гранты, объявляющим
+пайплайны или расписания, — идёт **на одобрение ADMIN**: `POST /api/v2/packs` → **202**
+`{installed: false, requiresApproval: true, …}`, фактическая установка **не** выполняется. Администратор
+видит **что** пакет приносит, а не только факт «есть гранты»: ответы `GET /packs`,
+`GET /packs/:name`, `POST /packs` (202) и `POST /packs/:name/approve` несут сводку `authority`
+(`PackAuthoritySummary`, `packages/shared/src/types/pack.ts`):
 
-| Этап | Что | Статус |
-|---|---|---|
-| Ф4 | `Turn.principal` в очереди и в steering (ADR-104): принципал фиксируется при приёме ввода, а не при исполнении; `Session.participants` (участники сессии) и потолок сессии; ограничение `PATCH /sessions/:id` — смена режима не поднимает потолок другому участнику | **план** |
-| Ф5 | поставка `provides.authority` при установке пакета (роли/действия/цели/агенты → политика инстанса) и активация по политике; `pending_approval` по существу (пакет с ролями — на одобрение ADMIN); trust-floor для мутирующих ролей; flavor-роли; каталог ролей (PROP-068); UI-раздел «Полномочия» (read-only для не-ADMIN); порты authority в драйвере PostgreSQL | **план** |
+| Поле | Смысл |
+|---|---|
+| `roles[]` | id, `displayName`, `domain`, `grants` (число), `mutatingGrants` (число мутирующих) |
+| `actions[]` | id, `mutating` (информационный признак) |
+| `targets[]` | вид цели (`kind`), `resolver` |
+| `agents[]` | id агента, `roles[]`, `ceiling[]` |
+| `totals` | `roles`/`actions`/`targets`/`agents`/`grants`/`mutatingGrants` |
 
-Текущее поведение, важное для понимания остатка: принципал в permission-слое — это **владелец сессии**
-(`session.ownerId ?? session.userId ?? 'local'`), а не автор ввода; `Session.mode` — общий переключатель
-сессии; участников сессии нет.
+### 10.2 Активация в политике инстанса — при `approve`
+
+Активация — `activatePackAuthority` (`packages/core/src/engine/authority/activation.ts`, **чистые
+функции**; запись в порт делает вызывающий — `server/routes/packs.ts`). Политика инстанса — порт
+`AuthorityPolicyRepository` (`{dataDir}/authority/policy.json`; PostgreSQL — `authority_policy`).
+
+Правила активации:
+
+1. **Пересечение, а не дарование.** Эффективные гранты роли = гранты пакета ∩ гранты, разрешённые
+   политикой инстанца. Явный запрет инстанца (`deny`) — сильнее; область, которую инстанс не
+   разрешает, — не разрешается и пакетом. Если у инстанса потолок не задан (ось инстанса не
+   применима) — ограничений нет, гранты пакета сохраняются.
+2. **Trust-floor** (PROP-068 §4.1): мутирующие гранты активируются **только при доверии ≥ `trusted`**;
+   пакет уровня `community` **объявляет** роли, но **не получает** их мутирующую часть (только
+   чтение). Мутирующим считается **всё, кроме `read`** (fail-closed: признак `mutating` в манифесте
+   пакета **не доверяют** — иначе пакет объявил бы своё мутирующее действие «безобидным» и обошёл бы
+   trust-floor).
+3. **Политика — источник истины**: роль, уже объявленная в политике инстанца, контентом пакета **не
+   перезаписывается** (`role_exists`).
+4. **Валидация, а не каст**: неизвестное действие/цель/роль — отказ на разборе манифеста
+   (`validateAuthorityContent`), до активации дело не доходит.
+5. **Ось `agent`**: контент `provides.authority.agents[]` связывает агента с ролями и потолком;
+   активация пишет связь в `policy.agents[]`, а ось `agent` резолвера берёт роли агента **из политики
+   инстанса** (они уже прошли пересечение и trust-floor). Привязка к неактивированной роли
+   пропускается (`unknown_role`).
+
+Ответ `POST /packs/:name/approve` несёт `authorityActivation` — что активировано и что нет:
+
+```json
+{ "activated": { "actions": [], "roles": [], "targets": [], "agents": [] },
+  "skipped": [ { "kind": "grant", "id": "write", "reason": "trust_floor", "detail": "…" } ] }
+```
+
+Причины пропуска (машиночитаемые): `trust_floor`, `instance_deny`, `instance_not_allowed`,
+`role_exists`, `unknown_role`.
+
+### 10.3 Снятие пакета
+
+`DELETE /api/v2/packs/:name` убирает из политики **роли и привязки агентов**, принесённые пакетом
+(`deactivatePackAuthority`): **идемпотентно** (снятие отсутствующего пакета/роли — пустая операция);
+роли и агенты, которые приносит **другой** установленный пакет, остаются. Объявления действий и видов
+целей остаются: они не дают прав, а их удаление сломало бы ссылки из других пакетов (и уже
+активированных ролей).
+
+### 10.4 Ограничение: политика — снимок при старте
+
+Политика читается **снимком при старте процесса** (`getPolicy()` при сборке guard'а —
+`server/app/deps.ts` / `backend/app/deps.ts`). Изменение после старта не применяется к уже
+собранному резолверу: **активация становится видна после рестарта** (инвариант 24).
+
+## 11. Что не реализовано (остаток) и известные ограничения
+
+| Что | Статус |
+|---|---|
+| UI-раздел «Полномочия» — просмотр политики/ролей инстанса (read-only, не-ADMIN) | **план** |
+| Flavor-роли — доменные роли в flavor-образах (`synth-backend:<v>-<flavor>`, PROP-082) | **план** |
+
+Ограничения as-built (не остаток функционала, а свойства текущей реализации):
+
+- **Политика читается снимком при старте процесса.** Резолвер собирается на старте
+  (`server/app/deps.ts` / `backend/app/deps.ts`) из политики, прочитанной в тот момент; изменение
+  политики после старта (в т.ч. активация контента пакета) не применяется к уже собранному
+  резолверу — **эффект виден после рестарта** (инвариант 24).
+- **PG-контракт портов Authority прогоняется только в CI.** Драйвер PostgreSQL
+  (`packages/storage-postgres/src/ports/authority.ts`, миграция `014`) проверяется контрактным suite
+  на **живой** БД (`storage/contract/postgres.test.ts`), прогон гейтится env
+  `SYNTH_TEST_POSTGRES_DSN` — локальный `pnpm test` без этой переменной порты Authority в PG не
+  проверяет (файловое и in-memory хранилища проверяются всегда).
 
 ## 12. Ключевые файлы
 
@@ -293,10 +364,12 @@ flavor-образах, не в ядре); **каталог** (роли/дейс�
 | `packages/core/src/engine/authority/guard.ts` | guard: решение, журнал, потолок сессии, режимы shadow/enforced |
 | `packages/core/src/engine/authority/hook.ts` | шов `authorityGate`/`authorityShadow` (типы, без побочных эффектов) |
 | `packages/core/src/engine/authority/approval.ts` | покрытие подтверждения: профиль носителя и гранты |
+| `packages/core/src/engine/authority/activation.ts` | активация/снятие контента `provides.authority` в политику инстанса (ADR-106 Ф5) |
 | `packages/core/src/engine/permission/approval.ts` | `ApprovalRegistry`, `ApprovalBinding`, `ApprovalClaimReason` |
 | `packages/core/src/engine/permission/evaluator.ts` | принуждение: `_applyAuthority`, `_yoloLift`, швы решения/наблюдения |
 | `packages/core/src/storage/ports/authority-*.ts` | порты политики и журнала решений (ADR-096) |
 | `packages/core/src/storage/file-authority-*.ts`, `storage/memory/authority-*.ts` | файловые и in-memory реализации |
+| `packages/storage-postgres/src/ports/authority.ts` | порты Authority в PostgreSQL (`authority_policy`/`authority_decisions`, миграция `014`) |
 | `packages/core/src/metrics/collectors/authority.ts` | `synth_authority_decisions_total{action,effect,source}` |
 | `packages/core/src/server/app/deps.ts`, `packages/backend/src/app/deps.ts` | сборка guard'а и реестра подтверждений |
 | `packages/core/src/server/app/ws-events.ts`, `packages/backend/src/app/listen.ts` | WS-приём `permission_reply` с проверкой покрытия |

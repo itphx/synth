@@ -74,7 +74,7 @@
 | ADR-103 | Ядро шлюзов (`@itphx/synth-gateway-core`) и контракт канала | ⚠️ Частично | [adr-103-gateway-core-channel-contract.md](./adr-103-gateway-core-channel-contract.md) |
 | ADR-104 | Вмешательство в ход посреди генерации (steering) | ⚠️ Частично | [adr-104-mid-turn-steering.md](./adr-104-mid-turn-steering.md) |
 | ADR-105 | Внешние доступы — единый слой доступа к внешним сервисам (OAuth-коннекторы) | ⚠️ Частично | [adr-105-external-credentials.md](./adr-105-external-credentials.md) |
-| ADR-106 | Authority-слой — полномочия пользователей и агентов как контент | ⚠️ Частично | [adr-106-authority-layer.md](./adr-106-authority-layer.md) |
+| ADR-106 | Authority-слой — полномочия пользователей и агентов как контент; Ф0–Ф5 реализованы (остаток — UI «Полномочия» и flavor-роли) | ⚠️ Частично | [adr-106-authority-layer.md](./adr-106-authority-layer.md) |
 
 ## Предложения
 

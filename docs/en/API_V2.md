@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-21 (ADR-101: §5.35 «Пайплайны проекта, прогоны и шаблоны» — новый контур пайплайнов, UI реализован; §5.34 помечен как устаревающий, legacy-эндпоинты остаются рабочими); перевод отстаёт (ADR-102 §5.32 «Аналитика и отчётность», §5.33 «Пакеты расширений», §5.34 «Пайплайны» — ADR-100).
+> ⚠️ RU-версия обновлена 2026-10-24 (ADR-106 Ф5: §5.33 «Пакеты расширений» — сводка `authority`, `pending_approval` по существу, `authorityActivation`); перевод отстаёт (§5.32 «Аналитика и отчётность» — ADR-102, §5.34 «Пайплайны» — ADR-100, §5.35–§5.36 — ADR-101/ADR-090).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -1336,6 +1336,60 @@ endpoints (`packages/ui/src/components/settings/MaintenanceSettings.tsx`, the AP
 restore, and **"Restart"** (mode status, confirmation, an overlay and polling `GET /health` until
 `startedAt` changes, then a reload). Procedures and security rules —
 [docs/MAINTENANCE.md](../MAINTENANCE.md) (in Russian).
+
+---
+
+### 5.33 Extension packs — `/api/v2/packs` (both, ADR-100)
+
+> ⚠️ The translation of this section covers the **authority content** part (ADR-106 F5); the RU
+> reference ([docs/API_V2.md](../API_V2.md) §5.33) is canonical.
+
+The registry of **extension package installations** (manifest `synth.pack`, ADR-086 §5). One
+factory — `createPacksRoutes` — for core and backend; RBAC/scope and i18n are passed via `opts`
+(`readGuard`/`writeGuard`/`approveGuard`/`uninstallGuard`/`scopeGuard`/`messages`). Storage — the
+`PackRepository` port (`{dataDir}/packs.json`).
+
+| Method | Path | Build | RBAC (managed) | Purpose / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/packs` | both | ADMIN / auth | List of installations `{packs}`: name, version, `kind`, `status` (`active\|pending_approval\|disabled`), `requiresApproval`, `provides` (agent/skill/MCP/pipeline ids), `installedBy`, `authority` (summary of the authority content, if the pack brings `provides.authority`) |
+| GET | `/api/v2/packs/:name` | both | ADMIN / auth | One installation (including the raw manifest and the pack files); `authority` — summary of the authority content |
+| POST | `/api/v2/packs` | both | ADMIN **or** scope `automation:install` | Install: body `{manifest, files}` (manifest + map of pack files). Invalid manifest → 400 `VALIDATION_ERROR` with a `problems` list; missing files → 400. → **201** `{installed: true, requiresApproval: false, name, version, provides}`; a pack with capability grants, pipelines, schedules or **authority content** (`provides.authority`) → **202** `{installed: false, requiresApproval: true, authority?, …}` (the actual installation is **not** performed) |
+| POST | `/api/v2/packs/:name/approve` | both | **ADMIN only** | Approve a pack in `pending_approval` → 200 `{installed: true, authority?, authorityActivation?, …}`; no record → 404; status is not `pending_approval` → 409 `CONFLICT` |
+| DELETE | `/api/v2/packs/:name` | both | **ADMIN only** | Remove the installation together with the delivered artifacts (agent + role, skill, MCP record, pipeline definition, derived rules) → 204; idempotent (no pack → 204 as well). The **roles and agent bindings** brought by the pack are also removed from the instance authority policy (idempotently) |
+
+**Approval.** A pack requires administrator confirmation if it grants non-empty `capabilities` to an
+agent, declares pipelines (derived routing rules) or schedules, or brings **authority content**
+(`provides.authority` — roles/actions/targets/agents; ADR-106 F5). The **202** response is not an
+error: the actual installation is performed by `POST /api/v2/packs/:name/approve` (from the manifest
+and the files kept in the registry — the manifest integrity check cannot be bypassed).
+
+**Authority content (ADR-106 F5).** A pack with roles goes for approval **on the merits**: the
+administrator sees **what** the pack brings. The responses (`GET /packs`, `GET /packs/:name`,
+`POST /packs` (202), `POST /packs/:name/approve`) carry the `authority` summary
+(`PackAuthoritySummary`):
+
+| Field | Meaning |
+|---|---|
+| `roles[]` | id, `displayName`, `domain`, `grants` (count), `mutatingGrants` (mutating count) |
+| `actions[]` | id, `mutating` (informational flag) |
+| `targets[]` | target kind (`kind`), `resolver` |
+| `agents[]` | agent id, `roles[]`, `ceiling[]` |
+| `totals` | `roles`/`actions`/`targets`/`agents`/`grants`/`mutatingGrants` |
+
+On approval the content is **activated** in the instance authority policy (the
+`AuthorityPolicyRepository` port): intersection with the instance ceiling (not a grant), trust-floor
+(mutating grants only at trust ≥ `trusted`; `community` — read only), a role already declared in the
+policy is not overwritten. The `approve` response carries `authorityActivation` — what was activated
+and what was skipped:
+
+```json
+{ "activated": { "actions": [], "roles": [], "targets": [], "agents": [] },
+  "skipped": [ { "kind": "grant", "id": "write", "reason": "trust_floor", "detail": "…" } ] }
+```
+
+Skip reasons: `trust_floor`, `instance_deny`, `instance_not_allowed`, `role_exists`, `unknown_role`.
+The policy is read as a snapshot at process start — the effect of an activation becomes visible
+after a restart. The subsystem — [docs/AUTHORITY.md](../AUTHORITY.md) §10 (in Russian).
 
 ---
 
