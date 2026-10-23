@@ -36,6 +36,7 @@ import {
   type AuthorityPrincipal,
   type AuthorityTurn,
   type PermissionConfig,
+  type SessionParticipantRole,
 } from '@itphx/synth-shared';
 
 import type { AuthorityDecisionJournal } from '../../storage/ports/authority-decision-journal.js';
@@ -50,6 +51,7 @@ import type {
 } from './hook.js';
 import { AuthorityResolver, type AuthorityDecision } from './resolve.js';
 import { deriveAuthorityTarget } from './target.js';
+import type { AuthorityTurnContext } from './turn.js';
 
 /** Опции guard'а Authority-слоя. */
 export interface AuthorityGuardOptions {
@@ -78,6 +80,15 @@ interface ComputedAuthorityDecision {
 }
 
 /**
+ * Состояние хода (ADR-106 Ф4, шаг B2): потолок и оси считаются **один раз на
+ * ход** и переиспользуются всеми вызовами этого хода.
+ */
+interface TurnState {
+  turn: AuthorityTurn;
+  resolver: AuthorityResolver;
+}
+
+/**
  * Guard Authority-слоя: считает решения и (в enforced-режиме) применяет их.
  *
  * Экземпляр — **на инстанс**: состояние (использованные подтверждения) живёт
@@ -86,6 +97,11 @@ interface ComputedAuthorityDecision {
 export class AuthorityGuard {
   /** Очередь записей — записи журнала идут последовательно. */
   private _queue: Promise<void> = Promise.resolve();
+  /**
+   * Состояние ходов: потолок и оси считаются один раз на ход (ADR-106 Ф4,
+   * шаг B2). Ключ — контекст хода (создаётся один раз на ход в оркестраторе).
+   */
+  private readonly _turns = new WeakMap<AuthorityTurnContext, TurnState>();
 
   constructor(private readonly _options: AuthorityGuardOptions) {}
 
@@ -170,27 +186,12 @@ export class AuthorityGuard {
       sessionMode: input.sessionMode,
     });
 
-    const principal: AuthorityPrincipal = input.principal ?? {
-      kind: 'user',
-      id: 'local',
-      roles: [],
-    };
-
-    const turn: AuthorityTurn = {
-      id: input.turnId ?? `turn:${input.sessionId ?? 'session'}`,
-      sessionId: input.sessionId ?? '',
-      principal,
-      ...(input.agentId ? { agentId: input.agentId } : {}),
-      ceiling: this._sessionCeiling(input, action, target.kind),
-      startedAt: new Date().toISOString(),
-    };
-
-    const resolver = new AuthorityResolver({
+    // ADR-106 Ф4 (шаг B2): ход (потолок + оси) — один раз на ход; правила
+    // сессии (гранты оси «пользователь») считаются на каждый вызов.
+    const state = this._turnState(input);
+    const decision = state.resolver.decide(state.turn, action, target, derived.altRefs, {
       principalGrants: grants,
-      policy: this._options.policy ?? null,
     });
-
-    const decision = resolver.decide(turn, action, target, derived.altRefs);
 
     return {
       decision,
@@ -202,32 +203,94 @@ export class AuthorityGuard {
   }
 
   /**
+   * Состояние хода: потолок и оси считаются **один раз на ход**.
+   *
+   * С контекстом хода (`authorityContext.turnContext`) — состояние живёт в
+   * контексте: потолок (по роли участника) и оси кладутся туда и
+   * переиспользуются всеми вызовами хода. Без контекста — прежнее
+   * поведение: потолок считается на каждый вызов (совместимость).
+   */
+  private _turnState(input: AuthorityShadowInput): TurnState {
+    const context = input.turnContext;
+    if (!context) {
+      const principal: AuthorityPrincipal = input.principal ?? {
+        kind: 'user',
+        id: 'local',
+        roles: [],
+      };
+      const turn: AuthorityTurn = {
+        id: input.turnId ?? `turn:${input.sessionId ?? 'session'}`,
+        sessionId: input.sessionId ?? '',
+        principal,
+        ...(input.agentId ? { agentId: input.agentId } : {}),
+        ceiling: this._sessionCeiling(input),
+        startedAt: new Date().toISOString(),
+      };
+      return { turn, resolver: new AuthorityResolver({ policy: this._options.policy ?? null }) };
+    }
+
+    const cached = this._turns.get(context);
+    if (cached) return cached;
+
+    const ceiling = context.ceiling ?? this._sessionCeiling(input, context.participantRole);
+    context.ceiling = ceiling;
+    const turn: AuthorityTurn = {
+      id: context.id,
+      sessionId: context.sessionId,
+      principal: context.principal,
+      ...(context.agentId ? { agentId: context.agentId } : {}),
+      ceiling,
+      startedAt: context.startedAt,
+    };
+    const resolver = new AuthorityResolver({ policy: this._options.policy ?? null });
+    // Оси хода — считаются один раз и кладутся в контекст хода.
+    context.effective = resolver.effective(turn);
+    const state: TurnState = { turn, resolver };
+    this._turns.set(context, state);
+    return state;
+  }
+
+  /**
    * Потолок сессии (ось `session`).
    *
    * - `plan` (или strict без утверждённого плана) — только чтение;
-   * - обычный режим — «разрешено всё» + требование подтверждения для цели
-   *   вне рабочего каталога (fail-closed дефолт `external_directory`).
+   * - роль участника `viewer` — только чтение (ADR-106 Ф4: потолок хода по
+   *   роли; право чтения не расширяет права на изменение — инвариант 21);
+   * - обычный режим — «разрешено всё, кроме подтверждённого выхода за рабочий
+   *   каталог»: fail-closed дефолт `external_directory` требует подтверждения,
+   *   и `yolo` его **не снимает** (ADR-106 §«Многопользовательская сессия»).
+   *
+   * Потолок **не зависит от конкретного вызова**: требование подтверждения
+   * для цели `outside` объявляется для всех действий сразу — иначе потолок
+   * нельзя было бы посчитать один раз на ход (ADR-106 Ф4, шаг B2).
    */
   private _sessionCeiling(
     input: AuthorityShadowInput,
-    action: string,
-    targetKind: string,
+    participantRole?: SessionParticipantRole,
   ): AuthorityCeiling[] {
     if (isPlanRestricted(input.sessionMode, input.planMode, input.planApproved)) {
       return [{ source: 'session', grants: readOnlyCeilingGrants() }];
     }
-
-    const grants: AuthorityGrant[] = this._allowAllCeilingGrants();
-    if (targetKind === 'outside' && !hasExternalDirectoryRule(input.config)) {
-      // Fail-closed дефолт: путь вне рабочего каталога — только после
-      // подтверждения. `yolo` это требование **не снимает** (потолок сессии).
-      grants.push({ action, targetPattern: 'outside:**', effect: 'ask' });
+    // ADR-106 Ф4: `viewer` — потолок только на чтение.
+    if (participantRole === 'viewer') {
+      return [{ source: 'session', grants: readOnlyCeilingGrants() }];
     }
+
+    const grants: AuthorityGrant[] = this._allowAllCeilingGrants(
+      !hasExternalDirectoryRule(input.config),
+    );
     return [{ source: 'session', grants }];
   }
 
-  /** «Разрешено всё» — потолок по умолчанию (ядро + объявленный контент). */
-  private _allowAllCeilingGrants(): AuthorityGrant[] {
+  /**
+   * «Разрешено всё» — потолок по умолчанию (ядро + объявленный контент).
+   *
+   * `askOutside` — fail-closed дефолт для цели `outside`: путь вне рабочего
+   * каталога — только после подтверждения (`yolo` это требование **не
+   * снимает**). Требование объявляется для всех действий сразу — потолок
+   * считается один раз на ход и не зависит от вызова.
+   */
+  private _allowAllCeilingGrants(askOutside: boolean): AuthorityGrant[] {
     const actions = [
       ...AUTHORITY_CORE_ACTIONS,
       ...(this._options.policy?.actions ?? []).map((declared) => declared.id),
@@ -239,7 +302,8 @@ export class AuthorityGuard {
     const grants: AuthorityGrant[] = [];
     for (const action of actions) {
       for (const kind of kinds) {
-        grants.push({ action, targetPattern: `${kind}:**`, effect: 'allow' });
+        const effect = askOutside && kind === 'outside' ? 'ask' : 'allow';
+        grants.push({ action, targetPattern: `${kind}:**`, effect });
       }
     }
     return grants;

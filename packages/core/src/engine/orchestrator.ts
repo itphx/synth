@@ -69,6 +69,8 @@ import type { AuthorityGateHook, AuthorityShadowHook } from './authority/hook.js
 import { authorityActionForTool } from './authority/actions.js';
 import { deriveAuthorityTarget } from './authority/target.js';
 import { resolveTurnPrincipal } from './authority/principal.js';
+import { deriveSessionParticipants } from './authority/participants.js';
+import { createAuthorityTurnContext, type AuthorityTurnContext } from './authority/turn.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
@@ -1605,9 +1607,14 @@ export class ChatOrchestrator {
     planMode: PlanMode;
     planApproved: boolean;
     attempt?: number;
+    /**
+     * ADR-106 Ф4 (шаг B2): контекст хода (потолок + оси, посчитанные один раз
+     * на ход) — для inline shell (тот же permission-слой, тот же потолок).
+     */
+    authorityTurn?: AuthorityTurnContext;
   }): Promise<ProcessMessageResult | null> {
     if (!this._commandRuntime) return null;
-    const { session, message, signal, publishChunk, debugCollector, streamId, effectiveAgentRole, workingDir, permissionEvaluator, sessionMode, planMode, planApproved, attempt } = args;
+    const { session, message, signal, publishChunk, debugCollector, streamId, effectiveAgentRole, workingDir, permissionEvaluator, sessionMode, planMode, planApproved, attempt, authorityTurn } = args;
     const input = (message.content ?? '').trim();
     if (!input.startsWith('/')) return null;
 
@@ -1635,6 +1642,8 @@ export class ChatOrchestrator {
           principal: resolveTurnPrincipal(session, args.message),
           ...(effectiveAgentRole ? { agentId: effectiveAgentRole } : {}),
           turnId: streamId,
+          // ADR-106 Ф4 (шаг B2): потолок хода — один раз на ход.
+          ...(authorityTurn ? { turnContext: authorityTurn } : {}),
         },
         shellPolicy: this._getProtectedPaths() ?? undefined,
         protectedPaths: this._getProtectedPaths() ?? undefined,
@@ -2542,6 +2551,17 @@ export class ChatOrchestrator {
         projectForState = null;
       }
     }
+    // ADR-106 Ф4 (шаг B2): контекст хода — **один раз на ход**. Вместе с
+    // принципалом (шаг A) он несёт участников сессии и роль принципала среди
+    // них: потолок сессии зависит от роли, а считается один раз на ход —
+    // сообщение другого участника потолок начатого хода не меняет.
+    const authorityTurn: AuthorityTurnContext = createAuthorityTurnContext({
+      sessionId: session.id,
+      principal: turnPrincipal,
+      turnId: streamId,
+      ...(effectiveAgentRole ? { agentId: effectiveAgentRole } : {}),
+      participants: deriveSessionParticipants(session, projectForState),
+    });
     let workingDir = await this._resolveWorkingDir(session, projectForState);
     // ADR-075: permission-гейт `workspace` — file/shell/git-тулы блокируются,
     // пока у проекта не задан рабочий каталог. `workingDir` при этом всё равно
@@ -2624,6 +2644,7 @@ export class ChatOrchestrator {
       session, message, signal, publishChunk, debugCollector, streamId,
       effectiveAgentRole, effectiveReasoningLevel, workingDir, attempt,
       permissionEvaluator, sessionMode, planMode, planApproved, streamStartedAt,
+      authorityTurn,
     }, this._processEarlyDeps());
     if (earlyResult) return earlyResult;
 
@@ -3135,6 +3156,8 @@ export class ChatOrchestrator {
               principal: turnPrincipal,
               ...(effectiveAgentRole ? { agentId: effectiveAgentRole } : {}),
               turnId: streamId,
+              // ADR-106 Ф4 (шаг B2): потолок хода — один раз на ход.
+              turnContext: authorityTurn,
             },
             // PROP-090 §«Точка `tools`»: источник тула — плагинные инструменты
             // адресуются группой `plugin` в permission-правилах.

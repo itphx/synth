@@ -431,6 +431,7 @@ export type {
   AuthorityAxisSource,
   AuthorityApprovalOutcome,
   AuthorityApprovalReason,
+  AuthorityDecideOptions,
   AuthorityDecision,
   AuthorityDecisionEffect,
   AuthorityDecisionReason,
@@ -447,6 +448,14 @@ export type {
   AuthorityGateResult,
   AuthorityGuardOptions,
 } from './engine/authority/index.js';
+
+// ADR-106 Ф4: контекст хода и потолок хода (считаются один раз на ход).
+export {
+  createAuthorityTurnContext,
+  deriveSessionParticipants,
+  resolveParticipantRole,
+} from './engine/authority/index.js';
+export type { AuthorityTurnContext } from './engine/authority/index.js';
 
 // ADR-106 Ф4: принципал хода (фиксируется при приёме ввода).
 export {
