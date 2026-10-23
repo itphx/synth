@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-10-23 (ADR-106, секция `authority`; ADR-105, секреты внешних доступов; ADR-090, секция `plugins` — слой плагинов); перевод отстаёт (ADR-102, `analytics`).
+> ⚠️ RU-версия обновлена 2026-10-23 (ADR-090, секция `plugins` — слой плагинов — переведена); перевод отстаёт (кроме секции про плагины `plugins.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -1332,6 +1332,81 @@ scheduler:
   leaderElection: none
   crossProcessLocks: false
 ```
+
+### Plugins (`plugins.*`, ADR-090)
+
+The section sets the policy of the plugin layer (Extension API v1): trust, scan, installation and
+the budgets of the extension points. A runtime override of these keys —
+`GET/PUT/DELETE /api/v2/settings/plugins` ([API_V2.md](./API_V2.md) §5.36); **the changes are
+applied after a restart** (invariant 24) — the plugin runtime (the host, the loader, the effective
+config) is assembled at the start.
+
+| Field | Purpose | Default |
+|------|-----------|--------------|
+| `plugins.enabled` | Master switch of the plugin layer | `true` |
+| `plugins.executionEnabled` | **Execution of plugin code.** `false` — activation stops at the `import` step (`plugin.execution_disabled`); installation/removal and the scan work | `false` |
+| `plugins.runtimeInstall` | Installation at runtime (`allow`/`deny`); `deny` — deploy-time only | `deny` |
+| `plugins.trustFloor` | The minimum trust for **installation and activation** (`builtin`/`verified`/`trusted`/`community`); below the floor the installer **refuses the installation** (`plugin.trust_below_floor`) | `trusted` |
+| `plugins.scan` | The static scan of the content (`enabled`/`disabled`). `disabled` together with `executionEnabled: true` — **fail-closed** (`plugin.scan_disabled_with_execution`) | `enabled` |
+| `plugins.allowlist`/`plugins.denylist` | The names of the extensions that are allowed/forbidden to run (empty — the policy is not applied) | `[]` |
+| `plugins.remoteAllowlist` | The allowlist for the hybrid contour (F7) | `[]` |
+| `plugins.exactHostExceptions` | The path to the file with the exact exceptions of the semver gate (`host`, one version per line) | `''` |
+| `plugins.promptBlockMaxChars` | The character budget **per block** of the system prompt from a plugin (exceeding it — truncation with a marker, `status: 'truncated'`) | `4000` |
+| `plugins.llmFilterTimeoutMs` | The time budget for a single call of a plugin LLM filter; after it expires — the `failMode` of the filter | `1000` |
+| `plugins.deployDir` | The directory of the bundles delivered **by the image/deployment** (each subdirectory is a bundle with `synth.pack` + `dist/`). It is installed at the instance start (manifest → scan → trust-floor → install-policy), then activated from the lock. Empty — there are no deploy plugins | `/opt/synth/plugins` |
+| `plugins.deployTrust` | The trust level of the deploy bundles (`builtin`/`verified`/`trusted`/`community`). Below `trustFloor` — a regular refusal `plugin.trust_below_floor`; the content scan is always performed | `verified` |
+| `plugins.managedReadonly` | A management plugin (`deployDir`, lock `source: 'deploy'`) **cannot** be removed or reinstalled through the API/CLI — `403 plugin.managed_readonly`. It changes only with a new image/redeployment. It applies regardless of the instance mode | `true` |
+| `plugins.hybrid.mode` | The mode of the **server-side plugin policy in hybrid mode** (F7): `off` — the server **does not restrict** plugins; `allowlist` — only the plugins from `plugins.hybrid.allow` are allowed (an empty list — nobody is allowed) | `off` |
+| `plugins.hybrid.allow` | The names of the plugins the server allows to run (relevant only when `mode: 'allowlist'`) | `[]` |
+
+```yaml
+plugins:
+  executionEnabled: false   # enable after the plugins are installed and checked
+  runtimeInstall: deny
+  trustFloor: trusted
+  promptBlockMaxChars: 4000
+  llmFilterTimeoutMs: 1000
+  # Managed deploy-time (F5c — the deploy-time variant of phase F5): bundles from the image/PVC.
+  deployDir: /opt/synth/plugins
+  deployTrust: trusted
+  managedReadonly: true
+  # F7: the server-side plugin policy in hybrid mode.
+  hybrid:
+    mode: off        # off (default) | allowlist
+    allow: []        # the names of the allowed plugins (only with allowlist)
+```
+
+- **Live keys.** `promptBlockMaxChars` and `llmFilterTimeoutMs` are applied **without a restart**
+  (the first — from the next turn, the second — to the subsequent filter registrations); the other
+  keys of the section (`executionEnabled`, `trustFloor`, `scan`, `runtimeInstall`, allow/deny) take
+  effect **after an instance restart** (invariant 24).
+- **Where the plugins live**: `<home>/plugin/` (ADR-079) or `{dataDir}/plugin/` —
+  `installed/<name>@<version>/`, `quarantine/` (awaiting approval), `plugins.lock.json` (the
+  provenance is the source of truth for update/uninstall). The journal —
+  `{dataDir}/audit/plugins.jsonl`.
+- **Bundle-only**: a plugin is a self-contained ESM bundle (`dist/index.js`); npm dependencies are
+  not resolved, `@itphx/*` — external (peer).
+- **The order of the gates** (installation and activation): manifest → fail-closed (`scan=disabled` +
+  `executionEnabled`) → trust-floor → scan → `runtimeInstall` → install-policy
+  (`safe→allow`, `caution→ask` = quarantine, `dangerous→block`).
+- **Deploy plugins (image/PVC, F5c).** `deployDir` is read at the start: each subdirectory is a
+  bundle; a broken manifest is skipped with a warning (the start does not fail), a match of the
+  version and the `content_hash` with the lock — "skipped" (it is not reinstalled). The scan and the
+  install-policy are **the same** as for a manual installation (the image is a trusted source of
+  code, but not a reason to skip the content check). `managedReadonly: true` forbids removing/updating
+  such a plugin through the API/CLI: it changes with a new image or a redeployment of the
+  directory. The env equivalents — `SYNTH_PLUGINS_DEPLOY_DIR`, `SYNTH_PLUGINS_DEPLOY_TRUST`,
+  `SYNTH_PLUGINS_MANAGED_READONLY`.
+- **The hybrid policy (F7).** `plugins.hybrid.mode`/`plugins.hybrid.allow` — the server-side plugin
+  policy: the local core in hybrid mode is checked against it **before the activation** of a plugin
+  (the `allowlist` mode and the plugin is not in the list → `403 plugin.hybrid_not_allowed`), and the
+  server rejects the server-scoped token of a plugin whose `plugin_id` is outside the list
+  (`403 PLUGIN_NOT_ALLOWED`). With `mode: 'off'` the **server does not restrict** plugins: the
+  allowlist check is not applied, but the `X-Synth-Plugin-Id` header binding and the scope
+  `plugins:invoke` always apply. The client fetches the full allowlist with an authenticated
+  request `GET /api/v2/settings/plugins` (the `hybrid` block); the public signal of the mode is in
+  `GET /auth/oidc-meta` (`plugins: {enabled, mode}`, without the list of names). The env equivalent
+  of the mode — `SYNTH_PLUGINS_HYBRID_MODE`; the list of names stays in `config.yaml`.
 
 ### Observability (`metrics.*`, ADR-094)
 

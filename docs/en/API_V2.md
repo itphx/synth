@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-21 (ADR-101: §5.35 «Пайплайны проекта, прогоны и шаблоны» — новый контур пайплайнов, UI реализован; §5.34 помечен как устаревающий, legacy-эндпоинты остаются рабочими); перевод отстаёт (ADR-102 §5.32 «Аналитика и отчётность», §5.33 «Пакеты расширений», §5.34 «Пайплайны» — ADR-100).
+> ⚠️ RU-версия обновлена 2026-10-23 (ADR-090, §5.36 «Плагины» — переведено); перевод отстаёт (кроме раздела про плагины): §5.32 «Аналитика и отчётность» (ADR-102), §5.33 «Пакеты расширений», §5.34 «Пайплайны» (ADR-100), §5.35 «Пайплайны проекта, прогоны и шаблоны» (ADR-101).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -1339,6 +1339,119 @@ restore, and **"Restart"** (mode status, confirmation, an overlay and polling `G
 
 ---
 
+### 5.36 Plugins — `/api/v2/plugins*` and `/api/v2/settings/plugins` (both, ADR-090)
+
+The plugin layer (ADR-090, Extension API v1): installation of a `synth.pack` bundle
+(`kind: 'plugin'`), the trust/scan/install-policy model (PROP-068), activation through
+`PluginHost` and the extension points (`promptBlocks`, `llmFilters`, `tools`). A single factory
+`createPluginsRoutes` for core and backend; `plugins.lock.json` is the source of truth (what is
+installed), `installed/<name>@<version>/` is the bundle, `quarantine/` holds the ones awaiting
+approval, the journal is `{dataDir}/audit/plugins.jsonl`.
+
+**Code execution is disabled by default** (`plugins.executionEnabled: false`): installation and
+removal work, activation stops at the `import` step (`plugin.execution_disabled`). Enabling it —
+via `PUT /api/v2/settings/plugins` + an **instance restart**.
+
+| Method | Path | Build | RBAC (backend / core) | Purpose / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/plugins` | both | ADMIN / auth | `{plugins: PluginRuntimeEntry[]}` — the installed lock records plus `active`/`mode`; the quarantine is not part of the list |
+| GET | `/api/v2/plugins/:name` | both | ADMIN / auth | `{plugin, manifest?, integrity?}`: the manifest from the installed bundle and `PLUGIN_INTEGRITY.json` (best-effort — a corrupted file does not produce a 500); not in the lock → 404 `plugin.not_found` |
+| POST | `/api/v2/plugins/install` | both | ADMIN or service-key `addons:install` / auth | **Installation from a source** (see "Installation sources" below): `201` — installed, `202` — approval required (`plugin.approval_required`, the bundle is in quarantine), `400` `VALIDATION_ERROR` (body/pin/name) or `plugin.source_unavailable` for a local source, `400` `plugin.manifest_invalid`, `403` `plugin.trust_below_floor`/`plugin.runtime_install_denied`/`plugin.scan_disabled_with_execution`, `409` `plugin.scan_rejected`, `502` `plugin.source_unavailable` for a network source (the registry/URL did not answer). **Managed**: local sources (`dir`/`archive`) are forbidden → `403 LOCAL_INSTALL_DISABLED`; network sources (`npm`/`url`) are allowed |
+| POST | `/api/v2/plugins/:name/approve` | both | **ADMIN** / auth | Approve the quarantine (the `202` installation): the gates are re-run + the integrity is re-checked → `200` installed; `404` `plugin.not_found`, `409` `plugin.scan_rejected` |
+| POST | `/api/v2/plugins/:name/enable` | both | ADMIN or `addons:install` / auth | Activation (the ADR-090 pipeline) → `200 {activation}`; a gate refusal (`plugin.execution_disabled`/`trust_below_floor`/`scan_rejected`/`approval_required`) → `409` with `reason`; not in the lock → `404` |
+| POST | `/api/v2/plugins/:name/disable` | both | ADMIN or `addons:install` / auth | The reverse rollback of the disposers → `200 {deactivation}`; not active → `404 plugin.not_active` |
+| DELETE | `/api/v2/plugins/:name` | both | **ADMIN** / auth | Removal: deactivation → `lock.delete` → deletion of the version directory; **idempotent** → `204` even if there was no record |
+| POST | `/api/v2/plugins/:name/rollback` | both | ADMIN or `addons:install` / auth | Rollback to the `previous` step: `200 {outcome:'rolled_back', version, previousVersion, activated?}`; no step/directory → `409 plugin.rollback_unavailable`, no record → `404 plugin.not_found` |
+| POST | `/api/v2/plugins/token` | both | **ADMIN** / auth | **Issuing a server-scoped token to a plugin** (ADR-090 F7, Level 2): the body `{pluginId, scopes?, expiresInSec?}` → `201 {token, pluginId, scopes, expiresAt}`; the secret is returned **once** (at-rest — sha256, the format `synth_svc_…`), the scope `plugins:invoke` is always added. Errors: `400 VALIDATION_ERROR` (no `pluginId`/an unknown scope/an invalid `expiresInSec`), `403 PLUGIN_NOT_ALLOWED` (the plugin is outside the server allowlist when `plugins.hybrid.mode=allowlist`), `404 plugin.not_found` (the plugin is unknown to the server: neither installed nor allowed by the allowlist), `501 NOT_IMPLEMENTED` (the service-key registry is not wired) |
+| POST | `/api/v2/plugins/update` | both | ADMIN or `addons:install` / auth | **Update from the source of the lock record**: `200 {outcome:'unchanged'|'updated', ...}`; `400 VALIDATION_ERROR` (no `name`/an invalid `sha256`) or `plugin.source_unavailable` for a local source, `404 plugin.not_found`, `409 plugin.approval_required`/`scan_rejected`/`integrity_*`, `502 plugin.source_unavailable` for a network source. The body `{name, version?, sha256?, activate?}`; the source is not chosen by the client |
+
+**Installation sources (`POST /plugins/install`).** The body:
+`{source?: 'dir'|'archive'|'npm'|'url', path?, name?, version?, url?, sha256?, trustLevel?}`.
+
+| Source | Fields | Integrity | `source`/`identifier`/`ref` in the lock |
+|---|---|---|---|
+| `dir` | `path` — a directory with `synth.pack` | — | `local` / the absolute path / — |
+| `archive` | `path` — a `.tgz`/`.tar.gz` | `ref` = `sha256:<archive hash>` | `local` / the absolute path / `sha256:<hash>` |
+| `npm` | `name` (`name`/`@scope/name`), `version?` (default `latest`) | **`dist.integrity` is mandatory** (SRI `sha512`), `shasum` — additionally | `npm` / the name / the exact version |
+| `url` | `url` (`https:` only) + a **mandatory** `sha256` (64 hex) | the `sha256` check | `url` / the URL / `sha256:<hash>` |
+
+The source kind is derived from the fields when `source` is not set (`path` with `.tgz`/`.tar.gz` — an
+archive, otherwise a directory; `name` — npm; `url` — a URL) — the old body `{path}` works as
+before. The `source` label in the lock is derived from the resolution: the client does not set it.
+An archive is unpacked into a temporary directory (limits: 500 files / 16 MiB per file / 64 MiB in
+total; symlinks, hardlinks, devices, absolute paths, `..` and Windows drives are rejected); only the
+installer writes into `installed/`/`quarantine/`. Resolution errors — `plugin.source_unavailable`:
+`400` for local sources, `502` for network ones.
+
+**Update and rollback (`POST /update`, `POST /:name/rollback`).** The update source is taken **from
+the lock record** (`source`/`identifier`/`ref`), not from the body: `npm` — the `name` from the
+lock, the `version` from the body (default `latest`); `local` — the directory or the
+`.tgz`/`.tar.gz` from the lock; `url` — the address from the lock + a **mandatory new** `sha256`
+(pin). If the `content_hash` matches — `200 {outcome:'unchanged'}` (nothing is written).
+Otherwise — a regular installation with the same gates (scan/trust-floor/install-policy), the
+trust is taken from the lock, the directory of the previous version is kept, `previous` is written
+to the lock (one rollback step). Activation: if it was active — the new version is activated after
+the old one is deactivated; `activate: false` — do not activate, not set — keep the state.
+`rollback` swaps the current and the previous versions (reversible); the `installed_at` of the
+record does not change. Managed: a lock record with `source: 'local'` is rejected on update
+(`403 LOCAL_INSTALL_DISABLED`) — otherwise the update would bypass the local installation ban.
+
+**The server-scoped plugin token (Level 2, F7).** A key issued by `POST /api/v2/plugins/token` is
+bound to `plugin_id` (the internal service-key model; the public `/api/v2/service-keys` contract is
+not extended). The server accepts such a key **only** if three conditions are met (the
+**fail-closed** rule, checked at the boundary — after the service credential is resolved, so it
+applies to **all** server APIs, not only to the plugin routes):
+
+1. the request carries the `X-Synth-Plugin-Id` header **and** its value matches the `plugin_id` of
+   the key — otherwise `403 PLUGIN_ID_MISMATCH`;
+2. the key has the scope `plugins:invoke` — otherwise `403 SCOPE_REQUIRED`;
+3. the `plugin_id` is in the server allowlist (`plugins.hybrid.allow`) when
+   `plugins.hybrid.mode: 'allowlist'` — otherwise `403 PLUGIN_NOT_ALLOWED`.
+
+In the `off` mode the server does not restrict plugins (the allowlist check is not applied), but
+the header binding and the scope requirement always apply. A regular service key (without
+`plugin_id`) and interactive credentials are not restricted by this check.
+
+**The mapping of failure reasons → HTTP** (the exhaustive `PLUGIN_REASON_HTTP` table in
+`packages/core/src/server/routes/plugins.ts`): `400` — `manifest_invalid`, `contract_mismatch`,
+`host_mismatch`, `module_invalid`, `provides_mismatch`, `source_unavailable` (a local source);
+`403` — `trust_below_floor`, `disabled`, `not_allowlisted`, `denylisted`,
+`runtime_install_denied`, `scan_disabled_with_execution`, `managed_readonly`, `hybrid_not_allowed`
+(the server-side hybrid policy forbids the plugin to run); `404` — `not_found`, `not_active`;
+`409` — `scan_rejected`, `integrity_mismatch`, `integrity_unverifiable`, `execution_disabled`,
+`rollback_unavailable`; `202` — `approval_required`; `500` — `loader_unavailable`,
+`disposer_failed` (a host failure, not a client one); `502` — `source_unavailable` for a network
+source. On activation `execution_disabled`/`trust_below_floor`/`scan_rejected`/`approval_required`
+→ `409`, `not_found` → `404`, other refusals → `200 {activation: {outcome: 'rejected', reason}}`.
+
+**Settings — `/api/v2/settings/plugins`.** A runtime override on top of `config.yaml`
+(`settings.json` / PG, the settings port): `enabled`, `executionEnabled`, `runtimeInstall`
+(`allow|deny`), `trustFloor`, `scan` (`enabled|disabled`), `allowlist`/`denylist`/`remoteAllowlist`,
+`exactHostExceptions`, `promptBlockMaxChars` (the block character budget, default 4 000),
+`llmFilterTimeoutMs` (the filter budget, default 1 000), `hybrid` (`mode: off|allowlist` +
+`allow: string[]` — the server-side plugin policy in hybrid mode, F7).
+
+| Method | Path | RBAC (backend / core) | Purpose |
+|---|---|---|---|
+| GET | `/api/v2/settings/plugins` | ADMIN / auth | `{plugins (runtime), defaults (config), isOverridden, restartRequired: true, running, hybrid: {mode, allow}}` — the `hybrid` block is the server-side plugin policy in hybrid mode (ADR-090 F7); the `allow` list is returned **only** when `mode: 'allowlist'`, in the `off` mode — `{mode: 'off', allow: []}` |
+| PUT | `/api/v2/settings/plugins` | ADMIN / auth | Partial update (`pluginsConfigSchema.partial().strict()`): an unknown key/an invalid value → `400 VALIDATION_ERROR`; the response is the same as for `GET` |
+| DELETE | `/api/v2/settings/plugins` | ADMIN / auth | Reset the override to `config.yaml`/the defaults; the response is the same as for `GET` |
+
+**`restartRequired: true`** (invariant 24): the plugin runtime (the host, the loader, the
+effective config) is assembled at the instance start, so a change of the **policy** is applied after
+a restart (`POST /api/v2/maintenance/restart`). The exception — the **live budgets**:
+`promptBlockMaxChars` (from the next turn) and `llmFilterTimeoutMs` (for the subsequent filter
+registrations) are applied immediately. The value priority — `SYNTH_*` env > runtime (this
+section) > `config.yaml` > the defaults (ADR-023).
+
+**RBAC.** Managed (backend): reads and settings — `ADMIN`; installation/activation/deactivation —
+`ADMIN` **or** a service key with the scope `addons:install`; the quarantine approval and the
+removal — **only `ADMIN`**. Core (standalone): a single `requireAuth` (the instance owner,
+ADR-079). Its own matrix — `packages/backend/src/routes/plugins-rbac-matrix.test.ts` (negative:
+`USER`/`LEAD`/`AUDITOR` → 403; positive: `ADMIN`, a service key with and without the scope).
+
+---
+
 ## 6. Sources
 
 | Component | File |
@@ -1352,6 +1465,7 @@ restore, and **"Restart"** (mode status, confirmation, an overlay and polling `G
 | Public API SDK (ADR-052, stage III) | `packages/sdk/*` (`@itphx/synth-sdk`) |
 | Webhooks store/journal/routes/engine (ADR-052) | `packages/core/src/storage/webhook-store.ts`, `packages/core/src/storage/webhook-delivery-store.ts`, `packages/core/src/server/routes/webhooks.ts`, `packages/core/src/engine/webhooks/*` |
 | Instance maintenance admin API (ADR-091/ADR-092) | `packages/core/src/server/routes/maintenance.ts`, `packages/core/src/maintenance/*` |
+| Plugins (ADR-090) | `packages/core/src/server/routes/plugins.ts`, `packages/core/src/engine/plugins/*` (the host, the loader, the installer, the runtime), `packages/shared/src/types/{pack,plugin-audit,plugin-lock,plugin-scan,prompt-blocks,llm-filters,plugin-tools}.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

@@ -2,8 +2,6 @@
 
 > 🌐 **English** · [Russian](../HYBRID.md)
 
-> ⚠️ RU-версия обновлена 2026-10-23 (ADR-090, §7 «Плагины в гибриде» — серверная политика, allow-list и server-scoped токены); перевод отстаёт.
-
 > [!NOTE]
 > A user how-to on hybrid mode is available in the documentation portal:
 > https://docs.synth.itphx.ru/deploy/hybrid/.
@@ -184,6 +182,37 @@ synth project fork <remote-id> --local
   → clone the project from the server into the local world
   → (optionally) clone the git repository, download the workspace
 ```
+
+### 7. Plugins in hybrid mode
+
+The plugin layer in hybrid mode is split into two sides ([ADR-090](../arch_decisions/adr-090-extension-api.md)
+F7, the “Hybrid” decision).
+
+**The server policy.** The `plugins.hybrid` section in the server config (and in the runtime
+settings `/api/v2/settings/plugins`): `mode: off | allowlist` (the default `off` — the server does
+not restrict plugins) and `allow` — the names of the allowed plugins. With `allowlist` an empty
+list means “nobody is allowed”.
+
+**What the client does (the local core).** On connecting to the server it learns the public signal
+`plugins: { enabled, mode }` (`GET /auth/oidc-meta`) and — with an authenticated request — the full
+allowlist (`GET /api/v2/settings/plugins`, the `hybrid` block). Before the **activation** of a
+plugin it is checked against the policy: the `allowlist` mode and the plugin is not in the list →
+refusal `plugin.hybrid_not_allowed`. The server is unreachable or the policy is unknown → the plugin
+runs, but it is marked “not verified by the server” (the cooperative mode, Level 1). The gate
+applies to the activation, not to the installation.
+
+**What the server does.** It issues the plugin a **server-scoped token**
+(`POST /api/v2/plugins/token`, ADMIN): a service key bound to `plugin_id`. The server accepts such
+a key only with the `X-Synth-Plugin-Id` header and the same value, with the scope
+`plugins:invoke` and — with `allowlist` — with the plugin name in the allowlist (Level 2; the
+refusals are 403 `PLUGIN_ID_MISMATCH`/`SCOPE_REQUIRED`/`PLUGIN_NOT_ALLOWED`, fail-closed, the rule
+applies to all server APIs).
+
+**What stays with the owner of the local contour.** Level 1 is a compliance policy, not
+enforcement: the server cannot verify that the client core really checked the policy, and the
+plugin code executed on the client remains the responsibility of the owner of the local machine.
+The guarantee on the server side is given by Level 2 (the bound token). Level 3 (attestation) — out
+of scope.
 
 ## Current state (what already exists)
 

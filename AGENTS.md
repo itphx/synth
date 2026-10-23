@@ -611,6 +611,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | шедулер / пайплайны | [ADR-051](./docs/arch_decisions/adr-051-scheduler-pipelines.md), [ADR-100](./docs/arch_decisions/adr-100-extension-packs-pipelines.md) (поставка `synth.pack`), [ADR-101](./docs/arch_decisions/adr-101-pipeline-engine.md) (пайплайн как второй движок), [docs/PIPELINES.md](./docs/PIPELINES.md) (формат и устройство), [PROP-057](./docs/arch_decisions/prop-057-loop-engine.md) |
 | MCP-сервер Synth | [PROP-056](./docs/arch_decisions/prop-056-synth-mcp-server.md), [PROP-048](./docs/arch_decisions/prop-048-self-help-skills-admin-mcp.md) |
 | внешние add-on сервисы / шлюзы / плагины / editions | [ADR-086](./docs/arch_decisions/adr-086-extensibility-plugins-editions.md), [ADR-087](./docs/arch_decisions/adr-087-gateways.md), [ADR-100](./docs/arch_decisions/adr-100-extension-packs-pipelines.md), [ADR-090](./docs/arch_decisions/adr-090-extension-api.md), [PROP-068](./docs/arch_decisions/prop-068-skills-agents-registry.md), [ADR-030](./docs/arch_decisions/adr-030-hooks-agent-events.md) |
+| плагины (слой расширений, автор расширения) | [docs/PLUGINS.md](./docs/PLUGINS.md) (руководство автора), [ADR-090](./docs/arch_decisions/adr-090-extension-api.md), [docs/API_V2.md](./docs/API_V2.md) §5.36 (HTTP-контур), [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) §«Плагины (`plugins.*`)» |
 | релиз / новый AD / публикации о Synth | скилл `media-hub` + агент `publisher` (поставляются **пакетом** `synth-media`; ядро их не содержит) |
 | прокси / egress / TLS / доверенные CA / адресная политика | [ADR-099](./docs/arch_decisions/adr-099-egress-tls-trust.md), [PROP-100](./docs/arch_decisions/prop-100-ssrf-dns-rebinding.md), [ADR-071](./docs/arch_decisions/adr-071-mcp-servers-prompt.md) §2.3.1, [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) (`security.tls`/bootstrap, `egress.*`, `proxy.*` — профили/правила, раздел «Сеть») |
 | бэкап / восстановление / экспорт / импорт данных | [ADR-091](./docs/arch_decisions/adr-091-backup-restore-transfer.md), [ADR-005](./docs/arch_decisions/adr-005-json-storage.md), [PROP-055](./docs/arch_decisions/prop-055-instance-exchange.md) |
@@ -649,6 +650,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | [docs/LLM_PROVIDERS.md](./docs/LLM_PROVIDERS.md) | Провайдеры LLM для разработки |
 | [docs/PUBLISHING.md](./docs/PUBLISHING.md) | Сборка, публикация npm, Docker, Helm, релиз |
 | [docs/PIPELINES.md](./docs/PIPELINES.md) | Пайплайны: формат и устройство (ADR-101 — пайплайн как второй движок; ADR-100 — поставка `synth.pack`) |
+| [docs/PLUGINS.md](./docs/PLUGINS.md) | Плагины: руководство автора расширения (ADR-090) |
 | [docs/QUICKSTART.md](./docs/QUICKSTART.md) | Быстрый старт |
 | [docs/ROUTING.md](./docs/ROUTING.md) | Routing и микро-слой |
 | [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) | Диагностика проблем |
