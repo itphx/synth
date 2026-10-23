@@ -96,9 +96,9 @@ export function ChatTab({ tab }: ChatTabProps) {
   const isReadOnly = isSubagent
   const [inputExpanded, setInputExpanded] = useState(false)
 
-  // PROP-098: режим отправки сообщения. UI-селектора пока нет (этап 2
-  // PROP-098) — режим доступен из API/WS, в UI есть только маркер
-  // вмешательства в ленте. Точка подключения селектора — здесь.
+  // PROP-098: режим отправки сообщения по умолчанию для композера. Выбор
+  // пользователя (`queue`/`steer`) делает селектор композера — он виден только
+  // при активном ходе; без хода сообщение уходит обычной очередью.
   const sendMode: SteerMode = DEFAULT_STEER_MODE
 
   const agentsRef = useRef<AgentInfo[]>([])

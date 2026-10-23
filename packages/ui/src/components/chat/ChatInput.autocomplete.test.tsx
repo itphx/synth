@@ -191,6 +191,66 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
   })
 })
 
+describe('ChatInput — селектор режима отправки (PROP-098)', () => {
+  it('при активном ходе селектор режима виден (queue|steer)', async () => {
+    const container = await renderInput({ isStreaming: true })
+
+    expect(container.querySelector('[data-testid="send-mode-selector"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="send-mode-queue"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="send-mode-steer"]')).not.toBeNull()
+  })
+
+  it('выбор «вмешаться» уходит третьим аргументом onSend', async () => {
+    const container = await renderInput({ isStreaming: true })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      (container.querySelector('[data-testid="send-mode-steer"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      setTextareaValue(textarea, 'остановись на шаге 2')
+    })
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+
+    expect(mocks.onSend).toHaveBeenCalledWith('остановись на шаге 2', undefined, 'steer')
+  })
+
+  it('без активного хода селектора нет и режим в запрос не уходит', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    expect(container.querySelector('[data-testid="send-mode-selector"]')).toBeNull()
+
+    await act(async () => {
+      setTextareaValue(textarea, 'обычное сообщение')
+    })
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+
+    // Третьим аргументом `mode` не уходит — в теле запроса поля `mode` нет.
+    expect(mocks.onSend).toHaveBeenCalledWith('обычное сообщение', undefined, undefined)
+  })
+
+  it('в режиме «в очередь» mode уходит как queue (в тело запроса не попадает)', async () => {
+    const container = await renderInput({ isStreaming: true, sendMode: 'queue' })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, 'дождись конца хода')
+    })
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+
+    expect(mocks.onSend).toHaveBeenCalledWith('дождись конца хода', undefined, 'queue')
+    // `queue` отбрасывается API-слоем — поле `mode` в тело запроса не уходит
+    // (`lib/api/sessions.ts`; покрыто в `lib/api/synthApi.sessions.test.ts`).
+  })
+})
+
 function makeAgent(id: string, color: string | null = null): AgentInfo {
   return {
     id,

@@ -11,9 +11,10 @@ import { ModelSelector } from './ModelSelector'
 import { AgentModeSelector } from './AgentModeSelector'
 import { PlanActModeToggle } from './PlanActModeToggle'
 import { ReasoningLevelSelector } from './ReasoningLevelSelector'
+import { SendModeSelector } from './SendModeSelector'
 import type { AgentInfo } from '@/lib/api/synthApi'
 import type { CommandSummary } from '@itphx/synth-shared'
-import type { SteerMode } from '@itphx/synth-shared/types'
+import { DEFAULT_STEER_MODE, type SteerMode } from '@itphx/synth-shared/types'
 
 interface ChatInputProps {
   sessionId: string
@@ -25,9 +26,9 @@ interface ChatInputProps {
    */
   onSend: (text: string, agentRole?: string, mode?: SteerMode) => Promise<void>
   /**
-   * PROP-098: режим отправки по умолчанию для этого композера. UI-селектора
-   * режима пока нет (этап 2 PROP-098): режим доступен из API/WS, а в UI есть
-   * только маркер вмешательства в ленте. Значение задаёт вызывающий код.
+   * PROP-098: режим отправки по умолчанию для этого композера (значение задаёт
+   * вызывающий код). В UI режим выбирается селектором композера — только при
+   * активном ходе; без хода вмешаться некуда, и сообщение уходит очередью.
    */
   sendMode?: SteerMode
   onStop: () => void
@@ -154,6 +155,9 @@ export function ChatInput({
   // касается десктопов с тачскрином (isTouch = pointer: coarse).
   const { isTouch } = useDevice()
   const [value, setValue] = useState('')
+  // PROP-098: режим отправки, выбранный в селекторе композера (виден только
+  // при активном ходе). Начальное значение — `sendMode` вызывающего кода.
+  const [selectedMode, setSelectedMode] = useState<SteerMode>(sendMode ?? DEFAULT_STEER_MODE)
   const retryText = useChatStore((s) => s.retryInputBySession[sessionId])
   const [mentionState, setMentionState] = useState<{
     query: string
@@ -187,6 +191,19 @@ export function ChatInput({
   useEffect(() => {
     autoResize()
   }, [value, autoResize])
+
+  // Смена режима по умолчанию от вызывающего кода — сбрасывает выбор селектора.
+  useEffect(() => {
+    setSelectedMode(sendMode ?? DEFAULT_STEER_MODE)
+  }, [sendMode])
+
+  /**
+   * Режим отправки, который уходит в запрос. Во время активного хода — выбранный
+   * в селекторе (`queue`/`steer`); без хода — режим вызывающего кода (в UI это
+   * `queue`, поле `mode` в теле запроса не появляется — его отбрасывает
+   * `lib/api/sessions.ts`).
+   */
+  const effectiveMode: SteerMode | undefined = isStreaming ? selectedMode : sendMode
 
   useEffect(() => {
     if (retryText) {
@@ -295,13 +312,13 @@ export function ChatInput({
     }
 
     if (!parts) {
-      await onSend(text, undefined, sendMode)
+      await onSend(text, undefined, effectiveMode)
     } else {
       for (const part of parts) {
-        await onSend(part.text, part.agentRole, sendMode)
+        await onSend(part.text, part.agentRole, effectiveMode)
       }
     }
-  }, [value, agents, onSend, sendMode])
+  }, [value, agents, onSend, effectiveMode])
 
   const handleEnqueue = useCallback(async () => {
     const text = value.trim()
@@ -325,17 +342,17 @@ export function ChatInput({
       textareaRef.current.style.height = 'auto'
     }
 
-    // Явное «Добавить в очередь» (PROP-098): режим отправки — общий для
-    // композера (`sendMode`; сейчас это всегда `queue` — селектора режима в UI
-    // ещё нет), как и в основном пути отправки.
+    // Отправка во время активного хода (PROP-098): режим — общий для
+    // композера (`effectiveMode`): `queue` — в очередь, `steer` — вмешаться
+    // в текущий ход (выбор делает селектор композера).
     if (!parts) {
-      await onSend(text, undefined, sendMode)
+      await onSend(text, undefined, effectiveMode)
     } else {
       for (const part of parts) {
-        await onSend(part.text, part.agentRole, sendMode)
+        await onSend(part.text, part.agentRole, effectiveMode)
       }
     }
-  }, [value, agents, onSend, sendMode])
+  }, [value, agents, onSend, effectiveMode])
 
   const handleCreateNote = () => {
     const text = value.trim()
@@ -481,11 +498,12 @@ export function ChatInput({
 
             {isStreaming ? (
               <div className="flex shrink-0 items-center gap-0.5">
+                <SendModeSelector value={selectedMode} onChange={setSelectedMode} />
                 <button
                   onClick={handleEnqueue}
                   disabled={!value.trim()}
                   className="inline-flex items-center justify-center rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                  title={t('chat.input.enqueue')}
+                  title={effectiveMode === 'steer' ? t('chat.steer.mode.steer') : t('chat.input.enqueue')}
                 >
                   <Icon name="arrow-up" className="size-5" />
                 </button>
