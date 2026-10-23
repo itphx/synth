@@ -94,15 +94,12 @@ import { MaintenanceAuditStore } from './maintenance-audit-store.js';
 import { FilePluginAuditStore } from './file-plugin-audit-store.js';
 import { FilePluginLockStore, defaultPluginLockPath } from './file-plugin-lock-store.js';
 import { SecurityAuditStore } from './security-audit-store.js';
-<<<<<<< HEAD
 // PROP-107 (Ф1): внешние доступы (OAuth-креды к коннекторам) —
 // `{dataDir}/secrets/oauth/credentials.json` (в `secrets/` — чтобы обычный
 // бэкап без `--with-secrets` их не захватывал, PROP-107 §10).
 import { ExternalCredentialStore } from './external-credential-store.js';
-=======
 import { FileAuthorityPolicyStore } from './file-authority-policy-store.js';
 import { FileAuthorityDecisionJournal } from './file-authority-decision-journal.js';
->>>>>>> feat/prop-108-authority
 import { applyStartupProxyConfig } from '../security/proxy-startup.js';
 import { EgressRequestLogStore } from './egress-request-log-store.js';
 import { AnalyticsRollupStore } from './analytics-rollup-store.js';
