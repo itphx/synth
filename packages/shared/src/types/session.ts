@@ -213,6 +213,32 @@ export interface SessionReference {
   createdAt: string;
 }
 
+/**
+ * ADR-106 Ф4: роль участника сессии — потолок хода по роли.
+ *
+ * Значения совпадают с ролями участника проекта (`ProjectRole`): `owner`
+ * мутирует всё, `editor` мутирует, `viewer` — только чтение (инвариант 21:
+ * право чтения не расширяет права на изменение).
+ */
+export type SessionParticipantRole = 'viewer' | 'editor' | 'owner';
+
+/**
+ * ADR-106 Ф4: участник сессии.
+ *
+ * Поле **аддитивное**: его отсутствие = прежнее поведение (участников нет,
+ * потолок хода не сужается по роли). Для проектной сессии участники
+ * **выводятся** из проекта (владелец + участники) при чтении — дублировать
+ * вручную не нужно; для личной сессии участник — только владелец.
+ */
+export interface SessionParticipant {
+  /** Идентификатор пользователя (тот же id, что у владельца сессии/проекта). */
+  userId: string;
+  /** Роль участника (потолок хода). */
+  role: SessionParticipantRole;
+  /** ISO-8601 — когда участник добавлен (для явного списка). */
+  addedAt?: string;
+}
+
 export interface Session {
   id: string;
   title?: string;
@@ -239,6 +265,12 @@ export interface Session {
   userId?: string;
   ownerId?: string;
   projectId?: string;
+  /**
+   * ADR-106 Ф4: участники сессии (потолок хода по роли). Аддитивное поле:
+   * отсутствие = прежнее поведение. Для проектной сессии участники выводятся
+   * из проекта при чтении (`engine/authority/participants.ts`).
+   */
+  participants?: SessionParticipant[];
   messages: Message[];
   pendingMessages: Message[];
   /**

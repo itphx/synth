@@ -14,7 +14,7 @@ import {
   STEER_MODES,
   DEFAULT_STEER_MODE,
 } from '../types/index.js';
-import type { GitRepoConfig, ProjectIconKey, ProjectColorKey } from '../types/index.js';
+import type { GitRepoConfig, ProjectIconKey, ProjectColorKey, SessionParticipantRole } from '../types/index.js';
 import { ToolCapability } from '../types/tools.js';
 
 export const messageRoleSchema = z.nativeEnum(MessageRole);
@@ -50,6 +50,15 @@ export function normalizeIconKey(value: unknown): ProjectIconKey | undefined {
  */
 export function normalizeColorKey(value: unknown): ProjectColorKey | undefined {
   return isProjectColorKey(value) ? value : undefined;
+}
+
+/**
+ * ADR-106 Ф4: нормализация роли участника сессии. Каноническая роль → как
+ * есть; всё прочее — **fail-closed** (`viewer`, только чтение).
+ */
+export function normalizeSessionParticipantRole(value: unknown): SessionParticipantRole {
+  if (value === 'owner' || value === 'editor' || value === 'viewer') return value;
+  return 'viewer';
 }
 
 export const tokenUsageSchema = z.object({

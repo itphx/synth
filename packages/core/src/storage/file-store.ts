@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { Session, Message, SessionStatus, SessionSettings, Part, SessionOrigin, SessionReference, PromptState, PromptMeta, AuthorityPrincipal } from '@itphx/synth-shared';
-import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
+import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey, normalizeSessionParticipantRole, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
 import type { SessionFilter, SessionRepository } from './ports/session-repository.js';
 import { findMessageIndex, prepareMessageForAppend, prepareMessageForUpdate } from './message-write.js';
 
@@ -72,6 +72,12 @@ interface SerializedSessionReference {
   created_at: string;
 }
 
+interface SerializedSessionParticipant {
+  user_id: string;
+  role: string;
+  added_at?: string;
+}
+
 interface SerializedSession {
   id: string;
   title?: string;
@@ -90,6 +96,8 @@ interface SerializedSession {
   user_id?: string;
   owner_id?: string;
   project_id?: string;
+  /** ADR-106 Ф4: участники сессии (потолок хода по роли). */
+  participants?: SerializedSessionParticipant[];
   messages: SerializedMessage[];
   pending_messages: SerializedMessage[];
   /** ADR-104: очередь инъекций (steering) — отдельно от `pending_messages`. */
@@ -288,6 +296,12 @@ function serializeSession(session: Session): SerializedSession {
     user_id: session.userId,
     owner_id: session.ownerId,
     project_id: session.projectId,
+    // ADR-106 Ф4: участники сессии — не теряются при reload.
+    participants: (session.participants ?? []).map((participant) => ({
+      user_id: participant.userId,
+      role: participant.role,
+      ...(participant.addedAt ? { added_at: participant.addedAt } : {}),
+    })),
     messages: session.messages.map(serializeMessage),
     pending_messages: session.pendingMessages.map(serializeMessage),
     steer_inbox: (session.steerInbox ?? []).map(serializeMessage),
@@ -360,6 +374,16 @@ function deserializeSession(data: SerializedSession): Session {
     userId: data.user_id,
     ownerId: data.owner_id,
     projectId: data.project_id,
+    // ADR-106 Ф4: участники сессии (потолок хода по роли).
+    ...(data.participants && data.participants.length > 0
+      ? {
+          participants: data.participants.map((participant) => ({
+            userId: participant.user_id,
+            role: normalizeSessionParticipantRole(participant.role),
+            ...(participant.added_at ? { addedAt: participant.added_at } : {}),
+          })),
+        }
+      : {}),
     messages: data.messages.map(deserializeMessage),
     pendingMessages: data.pending_messages.map(deserializeMessage),
     steerInbox: (data.steer_inbox ?? []).map(deserializeMessage),
