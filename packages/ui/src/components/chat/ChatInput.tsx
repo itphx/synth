@@ -325,16 +325,17 @@ export function ChatInput({
       textareaRef.current.style.height = 'auto'
     }
 
-    // Явное «Добавить в очередь» — режим всегда `queue` (PROP-098): вмешательство
-    // в ход пользователь здесь не просил.
+    // Явное «Добавить в очередь» (PROP-098): режим отправки — общий для
+    // композера (`sendMode`; сейчас это всегда `queue` — селектора режима в UI
+    // ещё нет), как и в основном пути отправки.
     if (!parts) {
-      await onSend(text)
+      await onSend(text, undefined, sendMode)
     } else {
       for (const part of parts) {
-        await onSend(part.text, part.agentRole)
+        await onSend(part.text, part.agentRole, sendMode)
       }
     }
-  }, [value, agents, onSend])
+  }, [value, agents, onSend, sendMode])
 
   const handleCreateNote = () => {
     const text = value.trim()

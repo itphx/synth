@@ -22,6 +22,7 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { ChatInput, splitMessageWithTags } from './ChatInput'
 import type { AgentInfo } from '@/lib/api/synthApi'
+import type { SteerMode } from '@itphx/synth-shared/types'
 import { useChatStore } from '@/stores/chatStore'
 import { useSkillsStore } from '@/stores/skillsStore'
 
@@ -29,7 +30,10 @@ import { useSkillsStore } from '@/stores/skillsStore'
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
 
-async function renderInput(): Promise<HTMLElement> {
+async function renderInput(props?: {
+  sendMode?: SteerMode
+  isStreaming?: boolean
+}): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -41,8 +45,9 @@ async function renderInput(): Promise<HTMLElement> {
         <ChatInput
           sessionId="s1"
           agents={[]}
-          isStreaming={false}
+          isStreaming={props?.isStreaming ?? false}
           onSend={mocks.onSend}
+          sendMode={props?.sendMode}
           onStop={mocks.onStop}
           onCreateNote={mocks.onCreateNote}
         />
@@ -134,7 +139,40 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
-    expect(mocks.onSend).toHaveBeenCalledWith('/help')
+    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, undefined)
+  })
+
+  it('после подстановки Enter передаёт режим отправки композера (PROP-098)', async () => {
+    const container = await renderInput({ sendMode: 'steer' })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '/he')
+    })
+    await act(async () => {})
+    await act(async () => {
+      (container.querySelector('[data-testid="command-autocomplete-item-help"]') as HTMLButtonElement).click()
+    })
+
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+
+    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, 'steer')
+  })
+
+  it('«Добавить в очередь» во время стрима передаёт тот же контракт onSend (PROP-098)', async () => {
+    const container = await renderInput({ isStreaming: true, sendMode: 'queue' })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '/help ')
+    })
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+
+    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, 'queue')
   })
 
   it('поповер имеет фиксированный зазор над рамкой композера (не зависит от высоты textarea)', async () => {
