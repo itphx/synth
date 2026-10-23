@@ -236,6 +236,12 @@ export const defaultConfig: SynthConfig = {
     deployTrust: 'trusted',
     // Ф5в: management-плагин нельзя снять/переустановить через API/CLI.
     managedReadonly: true,
+    // Ф7: серверная политика плагинов в гибриде. По умолчанию сервер не
+    // ограничивает плагины (`off`); allow-list включается явно.
+    hybrid: {
+      mode: 'off',
+      allow: [],
+    },
   },
   egress: {
     // Политика встроенных инструментов: deny приватных/служебных диапазонов.

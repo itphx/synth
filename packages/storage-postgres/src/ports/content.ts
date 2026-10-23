@@ -38,7 +38,6 @@ import { join, normalize } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 
 import {
-  type CreateServiceApiKeyInput,
   type McpRegistryEntry,
   type McpServerConfig,
   type MaintenanceAuditEntry,
@@ -56,6 +55,7 @@ import {
   nowISO,
 } from '@itphx/synth-shared';
 import type {
+  CreatePluginServiceKeyInput,
   DictionaryRepository,
   EnsureServiceKeyInput,
   MaintenanceAuditListOptions,
@@ -263,6 +263,8 @@ interface ServiceKeyRow extends Row {
   last_used_at: Date | string | null;
   expires_at: Date | string | null;
   revoked_at: Date | string | null;
+  /** Ф7 (PROP-090): привязка ключа к плагину (server-scoped токен). */
+  plugin_id?: string | null;
 }
 
 function serviceKeyToPublic(row: ServiceKeyRow): ServiceApiKey {
@@ -289,7 +291,11 @@ function serviceKeyToPublic(row: ServiceKeyRow): ServiceApiKey {
 
 /** Внутренняя запись для переноса между backend'ами: публичные поля + sha256-хеш. */
 function serviceKeyToRecord(row: ServiceKeyRow): ServiceApiKeyRecord {
-  return { ...serviceKeyToPublic(row), hash: row.secret_hash };
+  const record: ServiceApiKeyRecord = { ...serviceKeyToPublic(row), hash: row.secret_hash };
+  // Ф7 (PROP-090): привязка к плагину переносится вместе с записью — иначе
+  // ключ потерял бы привязку и стал бы обычным service-key (fail-open).
+  if (row.plugin_id) record.pluginId = row.plugin_id;
+  return record;
 }
 
 /** Порт реестра service-key инстанса поверх таблицы `service_keys`. */
@@ -335,8 +341,9 @@ class PostgresServiceKeyRepository implements ServiceKeyRepository {
     const inserted = await this._db().query<ServiceKeyRow>(
       `INSERT INTO service_keys
          (id, label, description, roles, scopes, allowed_projects, rate_limit_per_minute,
-          secret_hash, prefix, created_by, created_at, last_used_at, expires_at, revoked_at)
-       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14)
+          secret_hash, prefix, created_by, created_at, last_used_at, expires_at, revoked_at,
+          plugin_id)
+       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
@@ -354,6 +361,8 @@ class PostgresServiceKeyRepository implements ServiceKeyRepository {
         record.lastUsedAt ?? null,
         record.expiresAt ?? null,
         record.revokedAt ?? null,
+        // Ф7 (PROP-090): привязка к плагину переносится вместе с записью.
+        record.pluginId ?? null,
       ],
     );
     if (inserted[0]) return serviceKeyToPublic(inserted[0]);
@@ -380,7 +389,7 @@ class PostgresServiceKeyRepository implements ServiceKeyRepository {
     }
   }
 
-  async create(input: CreateServiceApiKeyInput, createdBy: string): Promise<ServiceApiKeyCreated> {
+  async create(input: CreatePluginServiceKeyInput, createdBy: string): Promise<ServiceApiKeyCreated> {
     const { SERVICE_KEY_SECRET_PREFIX } = await loadCore();
     const label = input.label?.trim() ?? '';
     if (!label) throw new Error('label обязателен');
@@ -405,8 +414,8 @@ class PostgresServiceKeyRepository implements ServiceKeyRepository {
       await this._db().query(
         `INSERT INTO service_keys
            (id, label, description, roles, scopes, allowed_projects, rate_limit_per_minute,
-            secret_hash, prefix, created_by, created_at, expires_at)
-         VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12)`,
+            secret_hash, prefix, created_by, created_at, expires_at, plugin_id)
+         VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12,$13)`,
         [
           record.id,
           record.label,
@@ -420,6 +429,8 @@ class PostgresServiceKeyRepository implements ServiceKeyRepository {
           record.createdBy,
           record.createdAt,
           record.expiresAt ?? null,
+          // Ф7 (PROP-090): привязка к плагину (server-scoped токен).
+          input.pluginId ?? null,
         ],
       );
     } catch (err) {
@@ -586,6 +597,9 @@ class PostgresServiceKeyRepository implements ServiceKeyRepository {
     };
     if (key.allowedProjects) credential.allowedProjects = [...key.allowedProjects];
     if (key.rateLimitPerMinute !== undefined) credential.rateLimitPerMinute = key.rateLimitPerMinute;
+    // Ф7 (PROP-090): привязка к плагину — по ней сервер проверяет заголовок
+    // `X-Synth-Plugin-Id` и серверный allow-list (fail-closed).
+    if (row.plugin_id) credential.pluginId = row.plugin_id;
     return { key, credential };
   }
 

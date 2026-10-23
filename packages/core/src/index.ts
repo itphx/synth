@@ -97,6 +97,13 @@ export type {
 // PROP-090 §«Источники установки» (Д1): свой tar-ридер и резолвинг dir/archive/npm/url.
 export { extractPluginArchive, PluginArchiveError } from './engine/plugins/index.js';
 export type { ExtractedArchive, TarExtractLimits } from './engine/plugins/index.js';
+// PROP-090 Ф7: серверная политика плагинов в гибридном режиме (allow-list,
+// статусы проверки сервером) — ядро enforcement'а.
+export {
+  resolvePluginServerPolicy,
+  describePluginServerPolicy,
+  pluginServerPolicyStatus,
+} from './engine/plugins/hybrid-policy.js';
 export {
   DEFAULT_PLUGIN_DOWNLOAD_MAX_BYTES,
   PLUGIN_INSTALL_SOURCE_KINDS,
@@ -752,6 +759,8 @@ export type {
   EnsureServiceKeyInput,
   ServiceKeyEnsureStatus,
   BootstrapServiceKeyEntry,
+  // Ф7 (PROP-090): вход создания ключа с привязкой к плагину (Уровень 2).
+  CreatePluginServiceKeyInput,
 } from './storage/service-api-key-store.js';
 export {
   requireScope,
@@ -760,6 +769,10 @@ export {
   checkProjectAccess,
   getServiceCredential,
   isProjectAllowed,
+  // Ф7 (PROP-090): server-scoped токен плагина (Уровень 2) — проверка привязки.
+  checkPluginTokenBinding,
+  requirePluginTokenBinding,
+  PLUGIN_TOKEN_ERROR_CODES,
 } from './server/service-scope.js';
 export type {
   ScopeGuardFactory,

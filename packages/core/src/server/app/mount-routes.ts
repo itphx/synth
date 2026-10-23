@@ -32,6 +32,7 @@ import type { MetricsReadiness } from '../routes/metrics-settings.js';
 import { createProjectTransferRoutes } from '../routes/project-transfer.js';
 import { createUpdateRoutes } from '../routes/updates.js';
 import { ProjectInstructionsResolver, createInstructionsInfoResolver } from '../../engine/context/instructions.js';
+import { resolvePluginServerPolicy } from '../../engine/plugins/hybrid-policy.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
 import { mergeLlmGatewayConfig, mergeSecurityConfig, mergePluginsConfig } from '../../storage/runtime-settings.js';
 import type { DefaultModelPair } from '../../storage/runtime-settings.js';
@@ -596,6 +597,11 @@ export function mountStandaloneRoutes(
       config: mergePluginsConfig(config.pluginsConfig, {}),
       settings: settingsStore,
       localInstall: true,
+      // Ф7 (PROP-090): реестр service-key — для выдачи server-scoped токена
+      // плагину (`POST /api/v2/plugins/token`).
+      serviceKeys: deps.storageContext.serviceKeys,
+      // Ф7: серверная политика (allow-list) из работающего рантайма.
+      serverPolicy: () => resolvePluginServerPolicy(deps.pluginRuntime.config),
     },
   ));
 

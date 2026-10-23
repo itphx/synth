@@ -47,6 +47,8 @@ import type {
   PluginLockEntry,
   PluginScanVerdict,
   PluginsConfig,
+  PluginServerPolicy,
+  PluginServerPolicyStatus,
 } from '@itphx/synth-shared';
 
 import type { PluginAuditRepository } from '../../storage/ports/plugin-audit-repository.js';
@@ -120,6 +122,15 @@ export interface PluginRuntimeDeps {
   processManager?: { stopAll(): Promise<void> };
   /** Скан/проверка доверия (не задан — встроенный сканер `engine/plugins/scan/`). */
   scan?: PluginScanHook;
+  /**
+   * Ф7 (PROP-090): резолвер серверной политики плагинов в гибридном режиме.
+   *
+   * `undefined` — сервера нет/недоступен/политика неизвестна: плагины
+   * работают в режиме cooperative и помечаются «не проверен сервером».
+   * Политика `allowlist` без плагина в списке → активация отклоняется
+   * (`plugin.hybrid_not_allowed`).
+   */
+  serverPolicy?: () => PluginServerPolicy | undefined | Promise<PluginServerPolicy | undefined>;
   /** Логгер (по умолчанию — `console.warn` с префиксом `[plugin-runtime]`). */
   logger?: PluginLogger;
   /** Инъекция часов — для детерминированных тестов (ISO-8601). */
@@ -153,6 +164,14 @@ export interface PluginRuntimeEntry {
   active: boolean;
   /** Режим из активации (`inline`/`remote`/`both`), если активен. */
   mode?: PackPluginMode;
+  /**
+   * Ф7 (PROP-090): статус проверки сервером.
+   *
+   * `allowed` — сервер подтвердил (политика `off` или плагин в allow-list);
+   * `denied` — сервер запретил; `unverified` — сервер недоступен или политика
+   * неизвестна (cooperative: плагин работает, но сервер его не подтвердил).
+   */
+  serverPolicy: PluginServerPolicyStatus;
 }
 
 /**
@@ -205,6 +224,7 @@ export class PluginRuntime {
       llmFilters: deps.llmFilters,
       tools: deps.tools,
       ...(deps.scan ? { scan: deps.scan } : {}),
+      ...(deps.serverPolicy ? { serverPolicy: deps.serverPolicy } : {}),
       logger: this._logger,
     });
     this.installer = new PluginInstaller({
@@ -367,9 +387,10 @@ export class PluginRuntime {
    */
   async list(): Promise<PluginRuntimeEntry[]> {
     const entries = await this._installedEntries();
-    return entries.map((entry) => {
+    const result: PluginRuntimeEntry[] = [];
+    for (const entry of entries) {
       const activation = this.host.getActivation(entry.name);
-      return {
+      result.push({
         name: entry.name,
         version: entry.version,
         source: entry.source,
@@ -381,8 +402,11 @@ export class PluginRuntime {
         updatedAt: entry.updated_at,
         active: activation !== undefined,
         ...(activation?.mode ? { mode: activation.mode } : {}),
-      };
-    });
+        // Ф7: статус проверки сервером (cooperative-маркер для UI/CLI).
+        serverPolicy: await this.host.serverPolicyStatus(entry.name),
+      });
+    }
+    return result;
   }
 
   /**
@@ -409,6 +433,18 @@ export class PluginRuntime {
   /** Деактивировать плагин (обратная прокрутка disposers, аудит). */
   async deactivate(name: string, opts: { actor?: string } = {}): Promise<PluginDeactivationResult> {
     return this.host.deactivate(name, { actor: opts.actor ?? DEFAULT_ACTOR });
+  }
+
+  /**
+   * Запись в журнал аудита плагинов: выдача server-scoped токена (Ф7,
+   * Уровень 2). Действие `token`; секрет токена не пишется (инвариант 13).
+   */
+  async recordTokenIssued(input: {
+    plugin: string;
+    version?: string;
+    actor?: string;
+  }): Promise<void> {
+    await this.host.recordTokenIssued(input);
   }
 
   /**

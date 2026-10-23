@@ -1,6 +1,8 @@
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { hasAnyServiceScope, hasServiceScope, GlobalRole } from '@itphx/synth-shared';
+import type { PluginServerPolicy } from '@itphx/synth-shared';
+import { PLUGIN_ID_HEADER, PLUGIN_INVOKE_SCOPE } from '@itphx/synth-shared';
 import type { ServiceKeyCredential } from '../storage/service-api-key-store.js';
 
 /**
@@ -123,3 +125,106 @@ export function checkServiceProjectProjection(c: Context, projectId?: string): R
 
 /** @deprecated Переименовано в `checkServiceProjectProjection` (честное имя). */
 export const checkProjectAccess = checkServiceProjectProjection;
+
+// ── Ф7 (PROP-090): server-scoped токен плагина (Уровень 2) ─────────────────
+
+/**
+ * Коды отказа проверки plugin-bound service-key (Ф7, Уровень 2).
+ *
+ * - `PLUGIN_ID_MISMATCH` — заголовок `X-Synth-Plugin-Id` отсутствует или не
+ *   совпадает с `plugin_id` ключа (fail-closed: ключ с привязкой без
+ *   корректного заголовка отвергается **всегда**);
+ * - `SCOPE_REQUIRED` — у ключа нет scope `plugins:invoke`;
+ * - `PLUGIN_NOT_ALLOWED` — `plugin_id` вне серверного allow-list
+ *   (`plugins.hybrid.allow` при `plugins.hybrid.mode='allowlist'`).
+ */
+export const PLUGIN_TOKEN_ERROR_CODES = {
+  idMismatch: 'PLUGIN_ID_MISMATCH',
+  scopeRequired: 'SCOPE_REQUIRED',
+  notAllowed: 'PLUGIN_NOT_ALLOWED',
+} as const;
+
+/**
+ * Проверка plugin-bound service-key (Ф7, Уровень 2): ключ, привязанный к
+ * плагину (`plugin_id`), принимается сервером только если:
+ *
+ * 1. запрос несёт заголовок `X-Synth-Plugin-Id` **и** его значение совпадает
+ *    с `plugin_id` ключа (иначе `403 PLUGIN_ID_MISMATCH`);
+ * 2. у ключа есть scope `plugins:invoke` (иначе `403 SCOPE_REQUIRED`);
+ * 3. `plugin_id` входит в серверный allow-list — проверяется при
+ *    `plugins.hybrid.mode='allowlist'` (в режиме `off` сервер не ограничивает
+ *    плагины; иначе `403 PLUGIN_NOT_ALLOWED`).
+ *
+ * Ключ **без** `plugin_id` — обычный service-key, проверка не применяется
+ * (no-op для интерактивных кредов — тоже no-op).
+ *
+ * Правило **fail-closed**: неизвестное/несоответствие → 403.
+ */
+export function checkPluginTokenBinding(
+  c: Context,
+  policy?: PluginServerPolicy,
+): Response | undefined {
+  const cred = getServiceCredential(c);
+  if (!cred?.pluginId) return undefined;
+
+  const header = c.req.header(PLUGIN_ID_HEADER);
+  if (!header || header !== cred.pluginId) {
+    return c.json(
+      {
+        error: {
+          code: PLUGIN_TOKEN_ERROR_CODES.idMismatch,
+          message:
+            `Заголовок ${PLUGIN_ID_HEADER} должен совпадать с plugin_id ключа ` +
+            '(server-scoped токен плагина).',
+        },
+      },
+      403,
+    );
+  }
+
+  if (!hasServiceScope(cred.scopes, PLUGIN_INVOKE_SCOPE)) {
+    return c.json(
+      {
+        error: {
+          code: PLUGIN_TOKEN_ERROR_CODES.scopeRequired,
+          message: `Недостаточно прав: требуется scope ${PLUGIN_INVOKE_SCOPE}`,
+        },
+      },
+      403,
+    );
+  }
+
+  if (policy?.mode === 'allowlist' && !policy.allow.includes(cred.pluginId)) {
+    return c.json(
+      {
+        error: {
+          code: PLUGIN_TOKEN_ERROR_CODES.notAllowed,
+          message:
+            `Плагин «${cred.pluginId}» не входит в серверный allow-list ` +
+            '(plugins.hybrid.allow) — доступ запрещён.',
+        },
+      },
+      403,
+    );
+  }
+
+  return undefined;
+}
+
+/**
+ * Гейт plugin-bound токена (Ф7, Уровень 2) — middleware **на границе**:
+ * вешается после `requireAuth`/резолва service-креда и до роутов, поэтому
+ * правило действует на **все** серверные API, а не только на плагинные.
+ *
+ * `getPolicy` — живой серверный allow-list (`plugins.hybrid`); политика
+ * меняется рестартом (инвариант 24), поэтому берётся из работающего рантайма.
+ */
+export function requirePluginTokenBinding(
+  getPolicy: () => PluginServerPolicy | undefined,
+): Middleware {
+  return createMiddleware(async (c, next) => {
+    const denied = checkPluginTokenBinding(c as unknown as Context, getPolicy());
+    if (denied) return denied;
+    await next();
+  });
+}

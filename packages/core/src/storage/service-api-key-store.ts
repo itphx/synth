@@ -49,6 +49,15 @@ export interface ServiceKeyCredential {
   rateLimitPerMinute?: number;
   /** Задел ADR-052/PROP-090: идентичность отправителя/сервиса. */
   principalId?: string;
+  /**
+   * Ф7 (PROP-090, Уровень 2): привязка ключа к плагину (`plugin_id`).
+   *
+   * Ключ с привязкой — **server-scoped токен** плагина: сервер принимает его
+   * только с заголовком `X-Synth-Plugin-Id` и тем же значением, с scope
+   * `plugins:invoke` и — при `plugins.hybrid.mode='allowlist'` — с именем
+   * плагина в серверном allow-list. Без привязки ключ — обычный service-key.
+   */
+  pluginId?: string;
 }
 
 /**
@@ -68,7 +77,25 @@ export class ServiceApiKeyConflictError extends Error {
  */
 export interface ServiceApiKeyRecord extends ServiceApiKey {
   hash: string;
+  /**
+   * Ф7 (PROP-090, Уровень 2): привязка ключа к плагину (`plugin_id`).
+   *
+   * Поле **внутреннее**: публичный контракт `/api/v2/service-keys` не меняется
+   * (ключ с привязкой выдаётся отдельным роутом `POST /api/v2/plugins/token`).
+   */
+  pluginId?: string;
 }
+
+/**
+ * Вход создания ключа с привязкой к плагину (Ф7, Уровень 2).
+ *
+ * Расширение входного типа service-key полем `pluginId` — публичная схема
+ * тела `POST /api/v2/service-keys` не меняется (в shared нет такого поля).
+ */
+export type CreatePluginServiceKeyInput = CreateServiceApiKeyInput & {
+  /** Имя плагина, которому выдаётся токен (`plugin_id`). */
+  pluginId?: string;
+};
 
 interface ServiceKeysFile {
   schemaVersion: number;
@@ -253,7 +280,7 @@ export class ServiceApiKeyStore implements ServiceKeyRepository {
    * (единственный раз). Метка `label` обязательна и уникальна глобально по
    * инстансу (регистронезависимо) — иначе `ServiceApiKeyConflictError`.
    */
-  async create(input: CreateServiceApiKeyInput, createdBy: string): Promise<ServiceApiKeyCreated> {
+  async create(input: CreatePluginServiceKeyInput, createdBy: string): Promise<ServiceApiKeyCreated> {
     const label = this._normalizeLabel(input.label);
     await this._lock.acquire();
     try {
@@ -267,6 +294,8 @@ export class ServiceApiKeyStore implements ServiceKeyRepository {
         ...(input.allowedProjects !== undefined ? { allowedProjects: [...input.allowedProjects] } : {}),
         ...(input.rateLimitPerMinute !== undefined ? { rateLimitPerMinute: input.rateLimitPerMinute } : {}),
         ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+        // Ф7 (Уровень 2): привязка к плагину (server-scoped токен).
+        ...(input.pluginId ? { pluginId: input.pluginId } : {}),
         createdBy,
         createdAt: new Date().toISOString(),
         prefix: `${secret.slice(0, SECRET_PREFIX_VISIBLE)}…`,
@@ -471,6 +500,9 @@ export class ServiceApiKeyStore implements ServiceKeyRepository {
         ...(key.rateLimitPerMinute !== undefined
           ? { rateLimitPerMinute: key.rateLimitPerMinute }
           : {}),
+        // Ф7 (Уровень 2): привязка к плагину — по ней сервер проверяет
+        // заголовок `X-Synth-Plugin-Id` и allow-list.
+        ...(record.pluginId ? { pluginId: record.pluginId } : {}),
       },
     };
   }

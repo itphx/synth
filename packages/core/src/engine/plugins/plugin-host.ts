@@ -44,6 +44,8 @@ import type {
   PluginAuditReason,
   PluginScanVerdict,
   PluginsConfig,
+  PluginServerPolicy,
+  PluginServerPolicyStatus,
 } from '@itphx/synth-shared';
 import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
 import type { PluginAuditRepository } from '../../storage/ports/plugin-audit-repository.js';
@@ -64,6 +66,7 @@ import type {
 } from './activation.js';
 import { pluginLoadFailureReason } from './activation.js';
 import { readExactHostExceptions } from './exact-host-exceptions.js';
+import { evaluatePluginServerPolicy } from './hybrid-policy.js';
 import { verifyPluginIntegrity } from './integrity.js';
 import { DEFAULT_PLUGIN_ENTRY } from './inline-loader.js';
 import { createPluginScanHook } from './scan/hook.js';
@@ -182,6 +185,22 @@ export interface PluginHostOptions {
    * с предупреждением в лог, активация не падает).
    */
   tools?: ToolRegistry;
+  /**
+   * Ф7 (PROP-090, Уровень 1 — cooperative): серверная политика плагинов в
+   * гибридном режиме.
+   *
+   * Резолвер вызывается **перед активацией** плагина: серверная allow-list
+   * (`plugins.hybrid` на сервере) — политика соответствия. Политика
+   * `allowlist`, а плагина нет в списке → активация отклоняется с
+   * `plugin.hybrid_not_allowed` (HTTP 403).
+   *
+   * Политика **неизвестна** (сервера нет, он недоступен или старый — без
+   * сигнала) → плагин работает (cooperative), а в API/UI помечается
+   * «не проверен сервером» (`serverPolicy: 'unverified'`).
+   *
+   * Не задан — политика сервера не проверяется (standalone, тесты).
+   */
+  serverPolicy?: () => PluginServerPolicy | undefined | Promise<PluginServerPolicy | undefined>;
   /** Логгер (по умолчанию — `console.warn`). */
   logger?: PluginLogger;
 }
@@ -211,6 +230,8 @@ export class PluginHost {
   private readonly _llmFilters: LlmFilterRegistry | undefined;
   /** Ф3в: общий реестр инструментов (точка `tools`). */
   private readonly _tools: ToolRegistry | undefined;
+  /** Ф7: резолвер серверной политики плагинов (гибрид; Уровень 1 — cooperative). */
+  private readonly _serverPolicy: PluginHostOptions['serverPolicy'];
   private readonly _logger: PluginLogger;
   /** Реестр активных плагинов: имя → дескриптор активации. */
   private readonly _activations = new Map<string, PluginActivationHandle>();
@@ -233,6 +254,7 @@ export class PluginHost {
     this._promptBlocks = options.promptBlocks;
     this._llmFilters = options.llmFilters;
     this._tools = options.tools;
+    this._serverPolicy = options.serverPolicy;
     this._explicitExceptions = options.exactHostExceptions;
     this._logger = options.logger ?? {
       warn: (message: string) => {
@@ -340,7 +362,7 @@ export class PluginHost {
     }
 
     // ── Шаг 5: политика режима ────────────────────────────────────────
-    const policy = this._checkPolicy(ready);
+    const policy = await this._checkPolicy(ready);
     if (!policy.ok) {
       return failure('policy', policy.reason, policy.message);
     }
@@ -858,9 +880,9 @@ export class PluginHost {
   }
 
   /** Шаг 5: политика режима — мастер-выключатель, списки имён, runtime-install. */
-  private _checkPolicy(
+  private async _checkPolicy(
     descriptor: PluginActivationDescriptor,
-  ): { ok: true } | { ok: false; reason: PluginAuditReason; message: string } {
+  ): Promise<{ ok: true } | { ok: false; reason: PluginAuditReason; message: string }> {
     if (!this._config.enabled) {
       return {
         ok: false,
@@ -883,6 +905,21 @@ export class PluginHost {
           `Плагин «${descriptor.name}» не входит в plugins.allowlist — активация запрещена.`,
       };
     }
+    // Ф7 (Уровень 1 — cooperative): серверная allow-list в гибриде. Проверка
+    // идёт **после** локальной политики имён и **до** runtime-install: сервер —
+    // внешний источник запрета, его решение приоритетнее локального.
+    // Политика неизвестна (сервера нет/недоступен/старый) — проверка не
+    // применяется: плагин работает, но помечается «не проверен сервером».
+    const serverPolicy = await this._resolveServerPolicy();
+    if (serverPolicy && evaluatePluginServerPolicy(serverPolicy, descriptor.name) === 'denied') {
+      return {
+        ok: false,
+        reason: 'plugin.hybrid_not_allowed',
+        message:
+          `Плагин «${descriptor.name}» не разрешён серверной политикой гибрида ` +
+          '(plugins.hybrid.mode=allowlist) — активация отклонена.',
+      };
+    }
     if (descriptor.installKind === 'runtime' && this._config.runtimeInstall === 'deny') {
       return {
         ok: false,
@@ -893,6 +930,57 @@ export class PluginHost {
       };
     }
     return { ok: true };
+  }
+
+  /**
+   * Текущая серверная политика плагинов (Ф7): `undefined` — сервера нет,
+   * он недоступен или политика неизвестна (cooperative).
+   *
+   * Резолвер не бросает: сбой опроса сервера — «политика неизвестна», а не
+   * отказ активации (Уровень 1 — политика соответствия, не запрет).
+   */
+  private async _resolveServerPolicy(): Promise<PluginServerPolicy | undefined> {
+    if (!this._serverPolicy) return undefined;
+    try {
+      return await this._serverPolicy();
+    } catch (err) {
+      this._logger.warn(
+        `не удалось получить серверную политику плагинов — активация не проверяется сервером: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * Статус проверки плагина сервером (Ф7) — для API/UI: маркер
+   * «не проверен сервером» (cooperative) либо «запрещён сервером».
+   */
+  async serverPolicyStatus(plugin: string): Promise<PluginServerPolicyStatus> {
+    const policy = await this._resolveServerPolicy();
+    return evaluatePluginServerPolicy(policy, plugin);
+  }
+
+  /**
+   * Запись события в журнал аудита плагинов извне (Ф7 — выдача
+   * server-scoped токена плагину, действие `token`).
+   *
+   * Секрет токена в журнал не пишется (инвариант 13) — только имя плагина и
+   * факт выдачи.
+   */
+  async recordTokenIssued(input: {
+    plugin: string;
+    version?: string;
+    actor?: string;
+  }): Promise<void> {
+    await this._writeAudit({
+      action: 'token',
+      plugin: input.plugin,
+      version: input.version ?? '',
+      outcome: 'ok',
+      ...(input.actor ? { actor: input.actor } : {}),
+    });
   }
 
   // ── Вспомогательное ────────────────────────────────────────────────

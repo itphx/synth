@@ -21,6 +21,7 @@ import { MIGRATION_009_PLUGIN_LOCK_PREVIOUS } from './009-plugin-lock-previous.j
 import { MIGRATION_010_PLUGIN_LOCK_MODE } from './010-plugin-lock-mode.js';
 import { MIGRATION_011_SESSION_STEER_INBOX } from './011-session-steer-inbox.js';
 import { MIGRATION_012_EXTERNAL_CREDENTIALS } from './012-external-credentials.js';
+import { MIGRATION_013_SERVICE_KEY_PLUGIN_ID } from './013-service-key-plugin-id.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -46,6 +47,7 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 10, id: '010_plugin_lock_mode', sql: MIGRATION_010_PLUGIN_LOCK_MODE },
   { version: 11, id: '011_session_steer_inbox', sql: MIGRATION_011_SESSION_STEER_INBOX },
   { version: 12, id: '012_external_credentials', sql: MIGRATION_012_EXTERNAL_CREDENTIALS },
+  { version: 13, id: '013_service_key_plugin_id', sql: MIGRATION_013_SERVICE_KEY_PLUGIN_ID },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

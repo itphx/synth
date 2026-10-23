@@ -31,7 +31,6 @@ import type {
   McpServerConfig,
   ServiceApiKey,
   ServiceApiKeyCreated,
-  CreateServiceApiKeyInput,
   UpdateServiceApiKeyPatch,
 } from '@itphx/synth-shared';
 import { GlobalRole, MCP_REGISTRY_SCHEMA_VERSION, generateId, nowISO } from '@itphx/synth-shared';
@@ -60,6 +59,7 @@ import { EVENT_API_KEY_SECRET_PREFIX, EventApiKeyConflictError } from '../event-
 import type { IdentityClaimRecord } from '../identity-claim-store.js';
 import type { AddMcpRegistryEntryInput, UpdateMcpRegistryEntryInput } from '../mcp-registry-store.js';
 import type {
+  CreatePluginServiceKeyInput,
   EnsureServiceKeyInput,
   ServiceApiKeyRecord,
   ServiceKeyCredential,
@@ -629,9 +629,16 @@ export class MemoryMcpRegistryRepository implements McpRegistryRepository {
   }
 }
 
-/** Внутренняя запись service-key: публичные поля + sha256-хеш секрета. */
+/**
+ * Внутренняя запись service-key: публичные поля + sha256-хеш секрета.
+ *
+ * Ф7 (PROP-090, Уровень 2): `pluginId` — привязка ключа к плагину
+ * (server-scoped токен). Поле внутреннее: публичный DTO service-key его
+ * не содержит.
+ */
 interface MemoryServiceKeyRecord extends ServiceApiKey {
   hash: string;
+  pluginId?: string;
 }
 
 /** Порт service-key поверх `Map` (семантика `ServiceApiKeyStore`). */
@@ -697,7 +704,7 @@ export class MemoryServiceKeyRepository implements ServiceKeyRepository {
     return this._toPublic(stored);
   }
 
-  async create(input: CreateServiceApiKeyInput, createdBy: string): Promise<ServiceApiKeyCreated> {
+  async create(input: CreatePluginServiceKeyInput, createdBy: string): Promise<ServiceApiKeyCreated> {
     const label = normalizeLabel(input.label);
     const secret = `${SERVICE_KEY_SECRET_PREFIX}${randomBytes(24).toString('base64url')}`;
     const record: MemoryServiceKeyRecord = {
@@ -709,6 +716,8 @@ export class MemoryServiceKeyRepository implements ServiceKeyRepository {
       ...(input.allowedProjects !== undefined ? { allowedProjects: [...input.allowedProjects] } : {}),
       ...(input.rateLimitPerMinute !== undefined ? { rateLimitPerMinute: input.rateLimitPerMinute } : {}),
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+      // Ф7 (Уровень 2): привязка к плагину (server-scoped токен).
+      ...(input.pluginId ? { pluginId: input.pluginId } : {}),
       createdBy,
       createdAt: new Date().toISOString(),
       prefix: `${secret.slice(0, SECRET_PREFIX_VISIBLE)}…`,
@@ -833,6 +842,9 @@ export class MemoryServiceKeyRepository implements ServiceKeyRepository {
       scopes: [...key.scopes],
       ...(key.allowedProjects ? { allowedProjects: [...key.allowedProjects] } : {}),
       ...(key.rateLimitPerMinute !== undefined ? { rateLimitPerMinute: key.rateLimitPerMinute } : {}),
+      // Ф7 (Уровень 2): привязка к плагину — по ней сервер проверяет
+      // заголовок `X-Synth-Plugin-Id` и allow-list.
+      ...(found.pluginId ? { pluginId: found.pluginId } : {}),
     };
     return { key, credential };
   }

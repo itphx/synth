@@ -38,7 +38,10 @@ export type ServiceScopeFamily = (typeof SERVICE_SCOPE_FAMILIES)[number];
  *   `addons:install`, `routes:write` и `schedules:write` (см. `SERVICE_SCOPE_SETS`);
  *   `addons:install` при этом **не** открывает создание агентов;
  * - `users:read` — чтение пользователей/идентичностей машинной кредой
- *   (консент-сервисы аддонов).
+ *   (консент-сервисы аддонов);
+ * - `plugins:invoke` — server-scoped токен плагина (PROP-090 Ф7, Уровень 2):
+ *   ключ, привязанный к `plugin_id`; без этого scope сервер отвергает такой
+ *   ключ (fail-closed).
  */
 export const SERVICE_SCOPES = [
   'events:ingest',
@@ -58,6 +61,7 @@ export const SERVICE_SCOPES = [
   'addons:install',
   'automation:install',
   'users:read',
+  'plugins:invoke',
 ] as const;
 
 export type ServiceScope = (typeof SERVICE_SCOPES)[number];

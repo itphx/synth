@@ -59,10 +59,23 @@ import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
-import { catalogTrustLevelSchema, pluginsConfigSchema } from '@itphx/synth-shared';
-import type { CatalogTrustLevel, PluginAuditReason, PluginsConfig } from '@itphx/synth-shared';
+import {
+  catalogTrustLevelSchema,
+  generateId,
+  isKnownScope,
+  pluginsConfigSchema,
+  PLUGIN_INVOKE_SCOPE,
+} from '@itphx/synth-shared';
+import type {
+  CatalogTrustLevel,
+  PluginAuditReason,
+  PluginsConfig,
+  PluginServerPolicy,
+  ServiceApiKeyCreated,
+} from '@itphx/synth-shared';
 
 import { pluginInstalledDir } from '../../engine/plugins/layout.js';
+import { describePluginServerPolicy, resolvePluginServerPolicy } from '../../engine/plugins/hybrid-policy.js';
 import type { PluginRuntime } from '../../engine/plugins/runtime.js';
 import {
   isPluginInstallSourceKind,
@@ -95,6 +108,24 @@ export interface PluginSettingsStoreLike {
   clearPlugins(): Promise<void>;
 }
 
+/**
+ * Порт реестра service-key для выдачи server-scoped токена плагину (Ф7).
+ *
+ * Структурно совместим с `ServiceKeyRepository` (ADR-096): фабрике нужен
+ * только `create` с полем `pluginId` (привязка к плагину).
+ */
+export interface PluginTokenStore {
+  create(
+    input: {
+      label: string;
+      scopes: string[];
+      expiresAt?: string;
+      pluginId?: string;
+    },
+    createdBy: string,
+  ): Promise<ServiceApiKeyCreated>;
+}
+
 /** Зависимости фабрики жизненного цикла плагинов. */
 export interface PluginsRoutesDeps {
   /** Рантайм плагинов (Ф5б-1): список, активация, установщик. */
@@ -106,6 +137,19 @@ export interface PluginsRoutesDeps {
   config: PluginsConfig;
   /** Runtime-override настроек (`settings.json`/PG) — для `/settings/plugins`. */
   settings: PluginSettingsStoreLike;
+  /**
+   * Реестр service-key — для выдачи server-scoped токена плагину (Ф7,
+   * Уровень 2). Не задан — роут `POST /plugins/token` отдаёт 501.
+   */
+  serviceKeys?: PluginTokenStore;
+  /**
+   * Серверная политика плагинов в гибриде (Ф7): allow-list, по которой
+   * сервер решает, можно ли плагину иметь server-scoped токен.
+   *
+   * Берётся из **работающего** рантайма (политика меняется рестартом,
+   * инвариант 24). Не задан — проверка allow-list не применяется.
+   */
+  serverPolicy?: () => PluginServerPolicy | undefined;
   /** Текущий пользователь (actor) — для журнала аудита плагинов. */
   resolveUserId?: (c: Context) => string | undefined;
   /**
@@ -140,6 +184,12 @@ export interface PluginsRoutesOptions {
   approveGuard?: Middleware;
   /** Guard снятия (managed — только ADMIN). */
   uninstallGuard?: Middleware;
+  /**
+   * Guard выдачи server-scoped токена плагину (Ф7, Уровень 2).
+   * Managed — только ADMIN (токен даёт машинный доступ к серверу);
+   * core — по умолчанию `auth.requireAuth`.
+   */
+  tokenGuard?: Middleware;
   messages?: Partial<PluginsRouteMessages>;
 }
 
@@ -216,6 +266,9 @@ export const PLUGIN_REASON_HTTP: Record<PluginAuditReason, number> = {
   // Ф5в: плагин управляется развёртыванием (образ/PVC) — снятие/переустановка
   // запрещены политикой инстанса (`plugins.managedReadonly`), а не «плохой запрос».
   'plugin.managed_readonly': 403,
+  // Ф7: серверная политика гибрида запретила плагину работать (Уровень 1 —
+  // cooperative: сервер известен и запретил) — запрет политикой, не вводом.
+  'plugin.hybrid_not_allowed': 403,
 };
 
 /**
@@ -385,6 +438,7 @@ export function createPluginsRoutes(
   const writeGuard: Middleware = opts.writeGuard ?? auth.requireAuth;
   const approveGuard: Middleware = opts.approveGuard ?? auth.requireAuth;
   const uninstallGuard: Middleware = opts.uninstallGuard ?? auth.requireAuth;
+  const tokenGuard: Middleware = opts.tokenGuard ?? auth.requireAuth;
 
   /** Актор операции для журнала аудита (`userId` API/UI, иначе `api`). */
   const actorOf = (c: Context): string => deps.resolveUserId?.(c) ?? 'api';
@@ -549,6 +603,162 @@ export function createPluginsRoutes(
           ? 409
           : httpStatusForRejection(outcome.reason);
     return c.json({ error: { code: outcome.reason, message: outcome.message } }, status as 400);
+  });
+
+  // POST /api/v2/plugins/token — выдача server-scoped токена плагину (Ф7,
+  // Уровень 2). Ключ привязан к `plugin_id`: сервер принимает его только с
+  // заголовком `X-Synth-Plugin-Id` и тем же значением, со scope
+  // `plugins:invoke` и — при `plugins.hybrid.mode='allowlist'` — с именем
+  // плагина в серверном allow-list. Секрет отдаётся **единожды** (at-rest —
+  // sha256, как у service-key).
+  app.post('/token', tokenGuard, async (c) => {
+    const store = deps.serviceKeys;
+    if (!store) {
+      return c.json(
+        {
+          error: {
+            code: 'NOT_IMPLEMENTED',
+            message: 'Выдача server-scoped токена плагину недоступна (реестр service-key не подключён)',
+          },
+        },
+        501,
+      );
+    }
+
+    const rawBody = (await c.req.json().catch(() => ({}))) as unknown;
+    const body: Record<string, unknown> =
+      typeof rawBody === 'object' && rawBody !== null && !Array.isArray(rawBody)
+        ? (rawBody as Record<string, unknown>)
+        : {};
+
+    const pluginId = optionalString(body.pluginId);
+    if (!pluginId) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: `${messages.invalidBody(c)}: поле "pluginId" обязательно` } },
+        400,
+      );
+    }
+
+    // Scopes: к запрошенным добавляется обязательный `plugins:invoke`
+    // (без него сервер отвергнет токен — fail-closed).
+    const scopes: string[] = [PLUGIN_INVOKE_SCOPE];
+    const requested = body.scopes;
+    if (requested !== undefined) {
+      if (!Array.isArray(requested)) {
+        return c.json(
+          { error: { code: 'VALIDATION_ERROR', message: `${messages.invalidBody(c)}: "scopes" — массив строк` } },
+          400,
+        );
+      }
+      for (const raw of requested) {
+        const value = optionalString(raw);
+        if (!value || !isKnownScope(value)) {
+          return c.json(
+            {
+              error: {
+                code: 'VALIDATION_ERROR',
+                message: `${messages.invalidBody(c)}: "scopes" — неизвестный scope «${String(raw)}»`,
+              },
+            },
+            400,
+          );
+        }
+        if (!scopes.includes(value)) scopes.push(value);
+      }
+    }
+
+    // Срок жизни: не задан — бессрочный ключ (отзыв — как у service-key).
+    let expiresAt: string | undefined;
+    if (body.expiresInSec !== undefined) {
+      const sec = body.expiresInSec;
+      if (typeof sec !== 'number' || !Number.isInteger(sec) || sec <= 0) {
+        return c.json(
+          {
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: `${messages.invalidBody(c)}: "expiresInSec" — положительное целое число секунд`,
+            },
+          },
+          400,
+        );
+      }
+      expiresAt = new Date(Date.now() + sec * 1000).toISOString();
+    }
+
+    // Серверный allow-list (Ф7): при `plugins.hybrid.mode='allowlist'` плагин
+    // вне списка токен не получает — иначе сервер отверг бы его при первом
+    // же обращении.
+    const policy = deps.serverPolicy?.();
+    if (policy?.mode === 'allowlist' && !policy.allow.includes(pluginId)) {
+      return c.json(
+        {
+          error: {
+            code: 'PLUGIN_NOT_ALLOWED',
+            message:
+              `Плагин «${pluginId}» не входит в серверный allow-list ` +
+              '(plugins.hybrid.allow) — токен не выдаётся.',
+          },
+        },
+        403,
+      );
+    }
+
+    // Плагин должен быть серверу известен: установлен на инстансе либо явно
+    // разрешён allow-list'ом (в режиме 'allowlist' сам список — разрешение).
+    // Неизвестный плагин → 404: привязывать токен не к чему.
+    if (policy?.mode !== 'allowlist') {
+      const installed = (await deps.runtime.list()).some((entry) => entry.name === pluginId);
+      if (!installed) {
+        return c.json(
+          {
+            error: {
+              code: 'plugin.not_found',
+              message:
+                `Плагин «${pluginId}» неизвестен серверу (не установлен и не разрешён ` +
+                'allow-list\'ом) — токен не выдаётся.',
+            },
+          },
+          404,
+        );
+      }
+    }
+
+    let created: ServiceApiKeyCreated;
+    try {
+      created = await store.create(
+        {
+          label: `plugin:${pluginId}:${generateId().slice(0, 8)}`,
+          scopes,
+          ...(expiresAt ? { expiresAt } : {}),
+          pluginId,
+        },
+        actorOf(c),
+      );
+    } catch (err) {
+      return c.json(
+        {
+          error: {
+            code: 'INTERNAL_ERROR',
+            message: `Не удалось выдать токен плагину: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        },
+        500,
+      );
+    }
+
+    // Аудит плагинов (действие `token`): имя плагина и факт выдачи; секрет
+    // токена в журнал не пишется (инвариант 13).
+    await deps.runtime.recordTokenIssued({ plugin: pluginId, actor: actorOf(c) });
+
+    return c.json(
+      {
+        token: created.key,
+        pluginId,
+        scopes,
+        expiresAt: expiresAt ?? null,
+      },
+      201,
+    );
   });
 
   // GET /api/v2/plugins/:name — деталь: запись lock + манифест + целостность.
@@ -731,6 +941,14 @@ interface PluginsSettingsView {
   /** Всегда `true`: рантайм плагинов и хост собираются при старте (инвариант 24). */
   restartRequired: boolean;
   running: PluginsConfig;
+  /**
+   * Ф7: серверная политика плагинов в гибриде (allow-list).
+   *
+   * Список имён отдаётся **только** при `mode: 'allowlist'` (в режиме `off`
+   * сервер не ограничивает плагины, список не имеет силы и не публикуется).
+   * В standalone и при `mode: 'off'` — `{ mode: 'off', allow: [] }`.
+   */
+  hybrid: { mode: 'off' | 'allowlist'; allow: string[] };
 }
 
 /**
@@ -757,6 +975,9 @@ export function createPluginSettingsRoutes(
   /** Снимок: runtime-override, дефолты из config, признак override, running. */
   const buildView = async (): Promise<PluginsSettingsView> => {
     const runtime = await deps.settings.getPlugins();
+    // Эффективная политика (runtime > config > defaults) — её и показываем
+    // в блоке `hybrid` (Ф7): серверная allow-list в гибриде.
+    const effective = mergePluginsConfig(deps.config, runtime);
     return {
       plugins: runtime,
       defaults: deps.config,
@@ -764,6 +985,7 @@ export function createPluginSettingsRoutes(
       // Инвариант 24: рантайм плагинов собирается при старте — только рестарт.
       restartRequired: true,
       running: deps.running ?? deps.config,
+      hybrid: describePluginServerPolicy(resolvePluginServerPolicy(effective)),
     };
   };
 

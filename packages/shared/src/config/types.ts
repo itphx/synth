@@ -19,6 +19,7 @@ import {
   ToolCapability,
 } from '../types/index.js';
 import { catalogTrustLevelSchema } from '../types/trust.js';
+import { PLUGIN_HYBRID_MODES } from '../types/plugin-hybrid.js';
 
 const toolCapabilityValues = Object.values(ToolCapability) as [ToolCapability, ...ToolCapability[]];
 
@@ -610,6 +611,18 @@ export const webhooksConfigSchema = z.object({
 // --- Слой плагинов (PROP-090 §10) ---
 
 /**
+ * Ф7 (PROP-090): форма серверной политики плагинов для гибридного режима —
+ * `plugins.hybrid` (конфиг + runtime-настройки).
+ *
+ * `mode: 'off'` — сервер не ограничивает плагины; `mode: 'allowlist'` —
+ * разрешены только плагины из `allow` (пустой список — не разрешён никто).
+ */
+export const pluginsHybridConfigSchema = z.object({
+  mode: z.enum(PLUGIN_HYBRID_MODES).default('off'),
+  allow: z.array(z.string().min(1)).default([]),
+});
+
+/**
  * PROP-090 §10: конфигурация слоя плагинов (Extension API).
  *
  * - `enabled` — мастер-выключатель Extension API (по умолчанию включён: слой
@@ -686,6 +699,21 @@ export const pluginsConfigSchema = z.object({
    * API/CLI запрещены (`plugin.managed_readonly`). Управляется развёртыванием.
    */
   managedReadonly: z.boolean().default(true),
+  /**
+   * Ф7: серверная политика плагинов для гибридного режима.
+   *
+   * - `mode` — `off` (дефолт): сервер **не ограничивает** плагины;
+   *   `allowlist`: сервер ограничивает, разрешены только плагины из `allow`
+   *   (пустой список при `allowlist` — не разрешён никто);
+   * - `allow` — имена плагинов, которым сервер разрешает работать
+   *   (релевантно только при `mode: 'allowlist'`).
+   *
+   * Политика применяется на двух сторонах: локальный core в гибриде сверяется
+   * с ней **перед активацией** плагина (Уровень 1, cooperative), а сервер
+   * отвергает server-scoped токен плагина, чей `plugin_id` вне списка
+   * (Уровень 2, server-scoped токены).
+   */
+  hybrid: pluginsHybridConfigSchema.default({}),
 });
 
 // --- Egress-политика (shared формат tools/webhooks/MCP) ---

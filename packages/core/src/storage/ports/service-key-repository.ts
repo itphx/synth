@@ -1,6 +1,7 @@
 import type { ServiceApiKey, ServiceApiKeyCreated } from '@itphx/synth-shared';
-import type { CreateServiceApiKeyInput, UpdateServiceApiKeyPatch } from '@itphx/synth-shared';
+import type { UpdateServiceApiKeyPatch } from '@itphx/synth-shared';
 import type {
+  CreatePluginServiceKeyInput,
   EnsureServiceKeyInput,
   ServiceApiKeyRecord,
   ServiceKeyCredential,
@@ -27,7 +28,13 @@ export interface ServiceKeyResolution {
 export interface ServiceKeyRepository {
   list(): Promise<ServiceApiKey[]>;
   get(id: string): Promise<ServiceApiKey | null>;
-  create(input: CreateServiceApiKeyInput, createdBy: string): Promise<ServiceApiKeyCreated>;
+  /**
+   * Создать ключ. `pluginId` (Ф7, Уровень 2) — привязка к плагину: ключ
+   * становится server-scoped токеном (заголовок `X-Synth-Plugin-Id` +
+   * scope `plugins:invoke` + серверный allow-list). Поле внутреннее: публичный
+   * контракт `/api/v2/service-keys` не расширяется.
+   */
+  create(input: CreatePluginServiceKeyInput, createdBy: string): Promise<ServiceApiKeyCreated>;
   ensure(input: EnsureServiceKeyInput): Promise<{ status: ServiceKeyEnsureStatus; key: ServiceApiKey }>;
   update(id: string, patch: UpdateServiceApiKeyPatch): Promise<ServiceApiKey | null>;
   remove(id: string): Promise<boolean>;

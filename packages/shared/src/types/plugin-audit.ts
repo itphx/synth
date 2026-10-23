@@ -28,10 +28,13 @@ import type { CatalogTrustLevel } from './trust.js';
  * раскладка → lock) и снятия (деактивация → lock → каталог). Долги Д2
  * добавили `rollback` — явный откат на предыдущую версию (в журнале он
  * отличается от установки: `install` фиксирует новую версию, `rollback` —
- * возврат).
+ * возврат). Ф7 добавил `token` — выдача server-scoped токена плагину (Уровень 2
+ * гибридного режима): в журнале — имя плагина и факт выдачи, секрет токена не
+ * пишется (инвариант 13).
  *
  * Порядок — жизненный цикл расширения: установка → активация → деактивация →
- * откат версии → снятие, затем диагностические действия (`scan`/`filter`).
+ * откат версии → снятие, затем диагностические действия (`scan`/`filter`) и
+ * выдача токена (`token`).
  */
 export const PLUGIN_AUDIT_ACTIONS = [
   'install',
@@ -41,6 +44,7 @@ export const PLUGIN_AUDIT_ACTIONS = [
   'uninstall',
   'scan',
   'filter',
+  'token',
 ] as const;
 export type PluginAuditAction = (typeof PLUGIN_AUDIT_ACTIONS)[number];
 
@@ -181,6 +185,14 @@ export const PLUGIN_AUDIT_REASONS = [
    * переразвёртыванием каталога.
    */
   'plugin.managed_readonly',
+  /**
+   * Ф7 (2026-10-23): серверная политика гибридного режима запрещает плагину
+   * работать — режим `plugins.hybrid.mode='allowlist'`, а плагина нет в
+   * `plugins.hybrid.allow`. Локальный core в гибриде сверяется с политикой
+   * сервера **перед активацией** и отклоняет активацию (Уровень 1 —
+   * cooperative: сервер известен и запретил).
+   */
+  'plugin.hybrid_not_allowed',
 ] as const;
 export type PluginAuditReason = (typeof PLUGIN_AUDIT_REASONS)[number];
 

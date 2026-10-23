@@ -92,6 +92,9 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'plugins', key: 'deployDir', type: 'string' },
   { section: 'plugins', key: 'deployTrust', type: 'string' },
   { section: 'plugins', key: 'managedReadonly', type: 'boolean' },
+  // Ф7: режим серверной политики плагинов в гибриде (`off`|`allowlist`).
+  // Список имён (`plugins.hybrid.allow`) — объектный, остаётся в config.yaml.
+  { section: 'plugins', key: 'hybrid.mode', type: 'string' },
 ];
 
 /** camelCase → SNAKE_CASE (`autoBind` → `AUTO_BIND`, `ephemeralTtl` → `EPHEMERAL_TTL`). */

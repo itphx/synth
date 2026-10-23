@@ -122,6 +122,16 @@ export interface PluginsRuntimeSettings {
   deployTrust?: PluginsConfig['deployTrust'];
   /** PROP-090 Ф5в: management-плагин нельзя снять/переустановить через API/CLI. */
   managedReadonly?: boolean;
+  /**
+   * PROP-090 Ф7: серверная политика плагинов для гибридного режима.
+   *
+   * `mode` — `off` (сервер не ограничивает) | `allowlist` (разрешены только
+   * плагины из `allow`); `allow` — имена разрешённых плагинов.
+   */
+  hybrid?: {
+    mode?: PluginsConfig['hybrid']['mode'];
+    allow?: string[];
+  };
 }
 
 /**
@@ -374,6 +384,12 @@ export function mergePluginsConfig(
     // установка проходит.
     deployTrust: r.deployTrust ?? base?.deployTrust ?? 'trusted',
     managedReadonly: r.managedReadonly ?? base?.managedReadonly ?? true,
+    // Ф7: серверная политика плагинов в гибриде. Режим и список мержатся
+    // по отдельности (runtime может переключить режим, не затирая список).
+    hybrid: {
+      mode: r.hybrid?.mode ?? base?.hybrid?.mode ?? 'off',
+      allow: r.hybrid?.allow ?? base?.hybrid?.allow ?? [],
+    },
   };
 }
 

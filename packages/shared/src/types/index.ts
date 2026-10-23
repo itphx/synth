@@ -82,6 +82,9 @@ export * from './plugin-scan.js';
 export * from './plugin-lock.js';
 // PROP-090 §5: runtime-override плагинов (`plugins.json`).
 export * from './plugin-runtime.js';
+// PROP-090 Ф7: контракт гибридной политики плагинов (сигнал дискавери,
+// allow-list, статусы проверки сервером, заголовок `plugin_id`).
+export * from './plugin-hybrid.js';
 // PROP-068 §3/§12: контракт индекса каталога расширений (format: 1) — типы, zod-схемы, tolerant-парсер
 export * from './catalog.js';
 // ADR-106 Ф0: модель Authority-слоя — полномочия пользователей и агентов
