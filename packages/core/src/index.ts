@@ -349,6 +349,30 @@ export {
 } from './engine/permission/index.js';
 export type { PermissionCheckInput, ApprovalRequest, ApprovalDecision } from './engine/permission/index.js';
 
+// PROP-108 Ф1: движок Authority-слоя — резолвер решений «действие × цель».
+export {
+  AuthorityResolver,
+  computeAuthorityApprovalDigest,
+  deriveAuthorityTarget,
+  authorityActionForTool,
+  authorityTargetKindForTool,
+  isCoreAuthorityAction,
+  AUTHORITY_CORE_ACTIONS,
+} from './engine/authority/index.js';
+export type {
+  AuthorityAxis,
+  AuthorityAxisSource,
+  AuthorityApprovalOutcome,
+  AuthorityApprovalReason,
+  AuthorityDecision,
+  AuthorityDecisionEffect,
+  AuthorityDecisionReason,
+  AuthorityEffective,
+  AuthorityResolverOptions,
+  AuthorityTargetInput,
+  DerivedAuthorityTarget,
+} from './engine/authority/index.js';
+
 export {
   loadProtectedPaths,
   checkPath,
