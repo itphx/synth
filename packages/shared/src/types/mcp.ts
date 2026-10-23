@@ -221,3 +221,44 @@ export interface McpServerEffective {
   /** ADR-071 §2.6: пер-тульные chars/estTokens/ratio + признак admin_disabled. */
   toolDetails?: McpToolDetail[];
 }
+
+// --- ADR-105 (Ф3): запрет plaintext-секретов в заголовках MCP-коннектора ---
+
+/**
+ * Машинно-читаемый код ошибки записи реестра MCP с plaintext-секретом
+ * в заголовках (ADR-105 §5, Ф3).
+ *
+ * HTTP: `400` с `error.code = "MCP_SECRET_HEADER_FORBIDDEN"`.
+ */
+export const MCP_SECRET_HEADER_ERROR_CODE = 'MCP_SECRET_HEADER_FORBIDDEN';
+
+/**
+ * Заголовки, значение которых — **секрет**. В реестре MCP (и в конфиге
+ * коннектора) им не место: токен лежит в слое внешних доступов
+ * (`ExternalCredential`, ADR-105), а коннектор ссылается на него по id
+ * (`auth: { kind: 'credential', credentialId }`).
+ *
+ * Сравнение — регистронезависимое (HTTP-заголовки нечувствительны к регистру).
+ */
+export const FORBIDDEN_MCP_SECRET_HEADERS = [
+  'authorization',
+  'proxy-authorization',
+  'x-api-key',
+  'cookie',
+] as const;
+
+export type ForbiddenMcpSecretHeader = (typeof FORBIDDEN_MCP_SECRET_HEADERS)[number];
+
+/**
+ * Найти запрещённые (секретные) заголовки в словаре `headers`.
+ *
+ * Возвращает **исходные имена** заголовков (как их записал пользователь) —
+ * они уходят в сообщение об ошибке (значения — никогда).
+ */
+export function findForbiddenMcpSecretHeaders(
+  headers: Record<string, string> | undefined | null,
+): string[] {
+  if (!headers) return [];
+  const forbidden = new Set<string>(FORBIDDEN_MCP_SECRET_HEADERS);
+  return Object.keys(headers).filter((name) => forbidden.has(name.trim().toLowerCase()));
+}

@@ -43,6 +43,10 @@ import {
   createEgressLogSink,
   configureEgressRuntime,
   startEgressLogPruner,
+  // ADR-105 (Ф3): источник access-токена для MCP-коннекторов + OAuth-сервис.
+  OAuthCredentialService,
+  OAuthProviderRegistry,
+  createRepositoryCredentialSource,
   // ADR-101 (Э5): движок пайплайнов, исполнители шагов, обработчики выходов.
   PipelineEngine,
   createToolStepExecutor,
@@ -332,6 +336,22 @@ export async function createStandaloneDeps(
   // ADR-071 §2.3.1: политика сетевого доступа MCP резолвится при каждом
   // подключении/probe (live; живые соединения остаются на политике коннекта).
   mcpManager.setNetworkPolicyResolver(() => egressResolver.resolveMcp());
+
+  // ADR-105 (Ф3): коннекторы с `auth.kind='credential'` авторизуются токеном
+  // из слоя доступов (подстановка в транспорт, refresh при 401).
+  const oauthProviders = new OAuthProviderRegistry();
+  const oauthCredentialService = new OAuthCredentialService({
+    repo: storageContext.externalCredentials,
+    clientFor: (provider: string) => oauthProviders.clientFor(provider),
+  });
+  mcpManager.setCredentialSource(
+    createRepositoryCredentialSource({
+      repo: storageContext.externalCredentials,
+      refresh: async (credentialId: string) => {
+        await oauthCredentialService.refresh(credentialId);
+      },
+    }),
+  );
 
   // Парсим провайдеров из переменных окружения (в деградации — не пишем в фоллбек).
   if (!storageDegraded) await syncProvidersFromEnv(providerStore, modelStore);

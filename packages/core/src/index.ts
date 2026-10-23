@@ -274,7 +274,18 @@ export {
 export type { RuntimeDeps, RuntimeDependency } from './engine/tools/runtime-deps.js';
 export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, normalizeAgentModes, isModeApplicable, DEFAULT_AGENT_ID, registerStoredAgents } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
-export type { McpToolDef, McpToolResult } from './engine/mcp/index.js';
+export type { McpToolDef, McpToolResult, McpClientOptions } from './engine/mcp/index.js';
+export {
+  McpCredentialError,
+  createCredentialFetch,
+  createRepositoryCredentialSource,
+} from './engine/mcp/index.js';
+export type {
+  McpCredentialErrorCode,
+  McpCredentialSource,
+  RepositoryCredentialSourceDeps,
+  CredentialFetchOptions,
+} from './engine/mcp/index.js';
 export { resolveMcpScope, resolveMcpProjectScope } from './engine/mcp/index.js';
 export type { McpScopeServer, McpScopeSession, McpScopeDecision } from './engine/mcp/index.js';
 export {
@@ -290,6 +301,29 @@ export {
   mappedIpv4,
 } from './engine/mcp/index.js';
 export type { McpNetworkCheckResult, HostResolver } from './engine/mcp/index.js';
+
+// ADR-105 (Ф2/Ф3): OAuth-клиент, сервис слоя доступов, реестр провайдеров.
+export {
+  OAuthError,
+  OAuthClient,
+  OAuthCredentialService,
+  OAuthProviderRegistry,
+  resolveOAuthClientSecret,
+  oauthClientSecretEnv,
+  oauthClientSecretPath,
+} from './engine/oauth/index.js';
+export type {
+  OAuthClientAuthMethod,
+  OAuthProviderDescription,
+  OAuthRevokeResult,
+  OAuthTokenSet,
+  OAuthErrorCode,
+  ExchangeAndStoreInput,
+  OAuthCredentialServiceDeps,
+  RevokeResult,
+  OAuthProviderRegistration,
+  ResolveClientSecretOptions,
+} from './engine/oauth/index.js';
 
 // PROP-100 / ADR-071 §2.3.1: единый SSRF/egress-guard исходящих запросов
 // (схема + DNS-резолв всех A/AAAA + приватные CIDR + проверка каждого хопа редиректа).

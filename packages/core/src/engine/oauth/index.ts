@@ -48,3 +48,7 @@ export {
   type OAuthCredentialServiceDeps,
   type RevokeResult,
 } from './service.js';
+export {
+  OAuthProviderRegistry,
+  type OAuthProviderRegistration,
+} from './registry.js';
