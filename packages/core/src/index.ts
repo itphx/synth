@@ -538,6 +538,9 @@ export type {
   // ADR-105 (Ф0/Ф1): внешние доступы (OAuth-креды к коннекторам).
   ExternalCredentialRepository,
   ExternalCredentialErrorCode,
+  // ADR-105 (Ф4): ротация мастер-ключа для внешних доступов.
+  RotateExternalCredentialKeyOptions,
+  RotateExternalCredentialKeyResult,
   // ADR-105 (Ф4): журнал операций со слоем доступов (append-only).
   CredentialAuditRepository,
   CredentialAuditListOptions,

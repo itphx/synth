@@ -39,7 +39,32 @@ export type ExternalCredentialErrorCode =
   /** Мастер-ключ недоступен/некорректен — запись секрета невозможна. */
   | 'encryption_unavailable'
   /** Некорректный вход (пустой токен, пустой provider и т.п.). */
-  | 'invalid';
+  | 'invalid'
+  /**
+   * Preflight ротации не пройден: запись не расшифровывается ни старым, ни новым
+   * мастер-ключом — операция прервана ДО записи (ADR-105 Ф4).
+   */
+  | 'preflight_failed';
+
+/** Опции ротации мастер-ключа (ADR-105 Ф4). */
+export interface RotateExternalCredentialKeyOptions {
+  /** Предпросмотр: счётчики считаются, записи не сохраняются. */
+  dryRun?: boolean;
+}
+
+/** Результат ротации мастер-ключа: счётчики записей и id изменённых. */
+export interface RotateExternalCredentialKeyResult {
+  /** Всего записей в хранилище. */
+  total: number;
+  /** Записей, где хотя бы одно поле перешифровано старым→новым ключом. */
+  rotated: number;
+  /** Записей, где plaintext-поле зашифровано новым ключом («апгрейд»). */
+  upgraded: number;
+  /** Записей, уже зашифрованных новым ключом (ничего не изменено). */
+  skipped: number;
+  /** id записей, которые были бы/были изменены (rotated + upgraded). */
+  ids: string[];
+}
 
 /** Типизированная ошибка хранилища доступов (секрет в тексте ошибки не фигурирует). */
 export class ExternalCredentialStoreError extends Error {
@@ -99,4 +124,19 @@ export interface ExternalCredentialRepository {
    * записал»), не для HTTP/обычных путей чтения.
    */
   listRaw(): Promise<ExternalCredential[]>;
+  /**
+   * Ротация мастер-ключа (one-shot, ADR-105 Ф4): перешифровка `secretEnc`/
+   * `refreshEnc` старым ключом на новый.
+   *
+   * Порядок — как у `SSHKeyRepository.rotateMasterKey`: сначала preflight по
+   * **всем** записям (каждое зашифрованное поле должно расшифровываться новым
+   * либо старым ключом; иначе `preflight_failed` со списком id и **ничего не
+   * записывается**), затем перешифровка (идемпотентно: уже новые — `skipped`),
+   * plaintext-поля «апгрейдятся» новым ключом. `dryRun` — без записи.
+   */
+  rotateMasterKey(
+    oldKey: Buffer,
+    newKey: Buffer,
+    opts?: RotateExternalCredentialKeyOptions,
+  ): Promise<RotateExternalCredentialKeyResult>;
 }

@@ -4,6 +4,8 @@ import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SSHKeyStore, SSHKeyStoreError } from '../storage/ssh-key-store.js';
+import { ExternalCredentialStore } from '../storage/external-credential-store.js';
+import { ExternalCredentialStoreError } from '../storage/ports/external-credential-repository.js';
 import { clearMasterKeyCache, decryptSecret, masterKeyFilePath } from './crypto.js';
 import { rotateSecretsMasterKey } from './rotate.js';
 
@@ -237,5 +239,135 @@ describe('rotateSecretsMasterKey (ADR-076)', () => {
     const metas = await store.list();
     expect(metas).toHaveLength(1);
     expect(metas[0] && 'privateKey' in metas[0]).toBe(false);
+  });
+});
+
+describe('rotateSecretsMasterKey — внешние доступы (ADR-105 Ф4)', () => {
+  const ACCESS_TOKEN = 'ya29.access-token-must-not-leak';
+  const REFRESH_TOKEN = 'refresh-token-must-not-leak';
+
+  let tmpDir: string;
+  let oldKey: Buffer;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-rotate-oauth-'));
+    oldKey = randomBytes(32);
+    await mkdir(join(tmpDir, 'secrets'), { recursive: true });
+    await writeFile(masterKeyFilePath(tmpDir), oldKey.toString('base64'), { mode: 0o600 });
+    clearMasterKeyCache();
+  });
+
+  afterEach(async () => {
+    clearMasterKeyCache();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Store доступов поверх файла master.key (env пуст, secretKey не задан). */
+  function credentialStore(): ExternalCredentialStore {
+    return new ExternalCredentialStore({ dataDir: tmpDir, env: {} });
+  }
+
+  /** Создать доступ (access+refresh) мастер-ключом из файла. */
+  async function seed(): Promise<string> {
+    const created = await credentialStore().create({
+      provider: 'google',
+      clientId: 'client-123',
+      owner: { kind: 'local', id: 'local' },
+      accessToken: ACCESS_TOKEN,
+      refreshToken: REFRESH_TOKEN,
+      createdBy: 'local',
+    });
+    return created.id;
+  }
+
+  function credentialsPath(): string {
+    return join(tmpDir, 'secrets', 'oauth', 'credentials.json');
+  }
+
+  it('перешифровывает доступы новым мастер-ключом: новый ключ читает, старый — decrypt_failed', async () => {
+    const id = await seed();
+    const newKey = randomBytes(32);
+
+    const result = await rotateSecretsMasterKey({
+      dataDir: tmpDir,
+      newKey: newKey.toString('base64'),
+      env: {},
+    });
+
+    expect(result.credentials.total).toBe(1);
+    expect(result.credentials.rotated).toBe(1);
+    expect(result.credentials.upgraded).toBe(0);
+    expect(result.credentials.skipped).toBe(0);
+    expect(result.credentials.ids).toEqual([id]);
+
+    // Файл master.key перезаписан новым ключом.
+    const stored = Buffer.from(
+      (await readFile(masterKeyFilePath(tmpDir), 'utf-8')).trim(),
+      'base64',
+    );
+    expect(stored.equals(newKey)).toBe(true);
+
+    // На диске — только шифр.
+    const raw = await readFile(credentialsPath(), 'utf-8');
+    expect(raw).toContain('enc:v1:');
+    expect(raw).not.toContain(ACCESS_TOKEN);
+    expect(raw).not.toContain(REFRESH_TOKEN);
+
+    // Новый инстанс читает токены новым ключом.
+    clearMasterKeyCache();
+    const reopened = credentialStore();
+    expect(await reopened.reveal(id)).toEqual({
+      accessToken: ACCESS_TOKEN,
+      refreshToken: REFRESH_TOKEN,
+    });
+
+    // Старым ключом — decrypt_failed.
+    clearMasterKeyCache();
+    const withOld = new ExternalCredentialStore({
+      dataDir: tmpDir,
+      secretKey: oldKey.toString('base64'),
+    });
+    await expect(withOld.reveal(id)).rejects.toMatchObject({ code: 'decrypt_failed' });
+  });
+
+  it('dry-run ничего не меняет (доступы и master.key)', async () => {
+    const id = await seed();
+    const before = await readFile(credentialsPath(), 'utf-8');
+    const beforeMaster = await readFile(masterKeyFilePath(tmpDir), 'utf-8');
+
+    const result = await rotateSecretsMasterKey({
+      dataDir: tmpDir,
+      newKey: randomBytes(32).toString('base64'),
+      dryRun: true,
+      env: {},
+    });
+
+    expect(result.dryRun).toBe(true);
+    expect(result.credentials.rotated).toBe(1);
+    expect(result.credentials.ids).toEqual([id]);
+    expect(await readFile(credentialsPath(), 'utf-8')).toBe(before);
+    expect(await readFile(masterKeyFilePath(tmpDir), 'utf-8')).toBe(beforeMaster);
+
+    // Старый ключ всё ещё работает.
+    expect((await credentialStore().reveal(id))?.accessToken).toBe(ACCESS_TOKEN);
+  });
+
+  it('неверный старый ключ → preflight-отказ, ничего не изменено', async () => {
+    const id = await seed();
+    const before = await readFile(credentialsPath(), 'utf-8');
+    const beforeMaster = await readFile(masterKeyFilePath(tmpDir), 'utf-8');
+
+    const err = await rotateSecretsMasterKey({
+      dataDir: tmpDir,
+      oldKey: randomBytes(32).toString('base64'),
+      newKey: randomBytes(32).toString('base64'),
+      env: {},
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ExternalCredentialStoreError);
+    expect((err as ExternalCredentialStoreError).code).toBe('preflight_failed');
+    expect((err as ExternalCredentialStoreError).message).toContain(id);
+    expect(await readFile(credentialsPath(), 'utf-8')).toBe(before);
+    expect(await readFile(masterKeyFilePath(tmpDir), 'utf-8')).toBe(beforeMaster);
   });
 });

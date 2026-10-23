@@ -10,14 +10,19 @@ import {
   readMasterKeyFile,
 } from './crypto.js';
 import { SSHKeyStore, type RotateMasterKeyResult } from '../storage/ssh-key-store.js';
+import { ExternalCredentialStore } from '../storage/external-credential-store.js';
+import type { RotateExternalCredentialKeyResult } from '../storage/ports/external-credential-repository.js';
 
 /**
- * ADR-076: one-shot ротация мастер-ключа шифрования SSH-ключей.
+ * ADR-076/ADR-105: one-shot ротация мастер-ключа шифрования секретов.
  *
- * Хелпер не читает `$SYNTH_DATA_DIR` в обход `SSHKeyStore`: перешифровка идёт
- * через `store.rotateMasterKey` (атомарные записи `JsonStore`), а файл
+ * Хелпер не читает `$SYNTH_DATA_DIR` в обход стора: перешифровка идёт
+ * через `store.rotateMasterKey` (атомарные записи), а файл
  * `{dataDir}/secrets/master.key` перезаписывается тем же форматом, что и
  * `resolveMasterKey` (0600, каталог 0700, tmp→rename).
+ *
+ * Перешифровываются **две** точки: SSH-ключи агентов (ADR-076) и внешние
+ * доступы к коннекторам (ADR-105 Ф4: `secretEnc`/`refreshEnc`).
  */
 
 export type MasterKeyRotationErrorCode =
@@ -62,20 +67,25 @@ export interface RotateSecretsMasterKeyResult extends RotateMasterKeyResult {
   newKeySource: 'explicit' | 'generated';
   /** Предупреждения для показа пользователю (ключ из env/config и т.п.). */
   warnings: string[];
+  /** Сводка по внешним доступам (ADR-105 Ф4): те же счётчики, что и по SSH-ключам. */
+  credentials: RotateExternalCredentialKeyResult;
 }
 
 /**
- * Ротация мастер-ключа SSH-ключей.
+ * Ротация мастер-ключа секретов (SSH-ключи + внешние доступы).
  *
  * Старый ключ: явный материал (`oldKey`/`oldKeyFile`) → env `SYNTH_SECRET_KEY`/
  * `secretKey` (env/config) → файл `{dataDir}/secrets/master.key`. Отсутствие
  * файла — явная ошибка (`master_key_missing`), НЕ генерация нового ключа.
  * Новый ключ: явный материал либо `randomBytes(32)`.
  *
- * После успешной не-dry-run операции файл `master.key` перезаписывается (0600)
- * и кэш мастер-ключа сбрасывается. Если эффективный ключ задан через env/config,
- * файл всё равно пишется, но добавляется предупреждение: при старте он будет
- * проигнорирован — ключ нужно обновить в env/config.
+ * Порядок: сначала **preflight обеих точек** (сухой прогон — план без записи):
+ * запись, которая не расшифровывается ни старым, ни новым ключом, прерывает
+ * операцию ДО первой записи. Затем перешифровка SSH-ключей и внешних доступов,
+ * и только потом — перезапись файла `master.key` (0600) и сброс кэша
+ * мастер-ключа. Если эффективный ключ задан через env/config, файл всё равно
+ * пишется, но добавляется предупреждение: при старте он будет проигнорирован —
+ * ключ нужно обновить в env/config.
  */
 export async function rotateSecretsMasterKey(
   opts: RotateSecretsMasterKeyOptions,
@@ -104,15 +114,41 @@ export async function rotateSecretsMasterKey(
   // ADR-096 (W2.4): конструирование намеренно — one-shot утилита ротации
   // работает по явному `--data-dir` вне жизненного цикла инстанса (нет
   // собранного `StorageContext`, ротация запускается из CLI/скрипта).
-  const store = new SSHKeyStore({ dataDir: opts.dataDir });
-  const summary = await store.rotateMasterKey(oldKey, newKey, { dryRun });
+  const sshStore = new SSHKeyStore({ dataDir: opts.dataDir });
+  const credentialStore = new ExternalCredentialStore({ dataDir: opts.dataDir });
 
-  if (!dryRun) {
-    await writeMasterKeyFile(opts.dataDir, newKey);
-    clearMasterKeyCache();
+  // Preflight обеих точек ДО первой записи: сухой прогон считает план и
+  // проверяет, что каждая запись расшифровывается новым либо старым ключом.
+  // Иначе частичная ротация оставила бы данные нечитаемыми (в `master.key`
+  // ещё старый ключ).
+  const sshPlan = await sshStore.rotateMasterKey(oldKey, newKey, { dryRun: true });
+  const credentialPlan = await credentialStore.rotateMasterKey(oldKey, newKey, { dryRun: true });
+
+  if (dryRun) {
+    return {
+      ...sshPlan,
+      credentials: credentialPlan,
+      dryRun: true,
+      oldKeySource,
+      newKeySource,
+      warnings,
+    };
   }
 
-  return { ...summary, dryRun, oldKeySource, newKeySource, warnings };
+  const summary = await sshStore.rotateMasterKey(oldKey, newKey);
+  const credentialSummary = await credentialStore.rotateMasterKey(oldKey, newKey);
+
+  await writeMasterKeyFile(opts.dataDir, newKey);
+  clearMasterKeyCache();
+
+  return {
+    ...summary,
+    credentials: credentialSummary,
+    dryRun,
+    oldKeySource,
+    newKeySource,
+    warnings,
+  };
 }
 
 async function resolveOldKeyMaterial(

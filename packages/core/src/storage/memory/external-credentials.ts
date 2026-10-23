@@ -25,6 +25,8 @@ import { CryptoError, decryptSecret, encryptSecret, isEncrypted } from '../../se
 import {
   ExternalCredentialStoreError,
   type ExternalCredentialRepository,
+  type RotateExternalCredentialKeyOptions,
+  type RotateExternalCredentialKeyResult,
 } from '../ports/external-credential-repository.js';
 import { EXTERNAL_CREDENTIAL_ID_PREFIX, matchesFilter, sortCredentials } from '../external-credential-store.js';
 
@@ -155,5 +157,23 @@ export class MemoryExternalCredentialRepository implements ExternalCredentialRep
 
   async listRaw(): Promise<ExternalCredential[]> {
     return sortCredentials([...this._credentials.values()]).map((credential) => ({ ...credential }));
+  }
+
+  /**
+   * Ротация мастер-ключа — валидная no-op-обёртка (как у
+   * `MemorySSHKeyRepository`): в памяти токены зашифрованы **эфемерным** ключом
+   * экземпляра (at-rest нет), перешифровывать нечего. Счётчики: `total`/
+   * `skipped` — число записей, `rotated`/`upgraded` — 0.
+   */
+  async rotateMasterKey(
+    oldKey: Buffer,
+    newKey: Buffer,
+    opts?: RotateExternalCredentialKeyOptions,
+  ): Promise<RotateExternalCredentialKeyResult> {
+    void oldKey;
+    void newKey;
+    void opts;
+    const total = this._credentials.size;
+    return { total, rotated: 0, upgraded: 0, skipped: total, ids: [] };
   }
 }

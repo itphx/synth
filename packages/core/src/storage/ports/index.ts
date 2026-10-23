@@ -83,6 +83,8 @@ export {
   ExternalCredentialStoreError,
   type ExternalCredentialRepository,
   type ExternalCredentialErrorCode,
+  type RotateExternalCredentialKeyOptions,
+  type RotateExternalCredentialKeyResult,
 } from './external-credential-repository.js';
 // ADR-105 (Ф4): журнал операций со слоем доступов (append-only).
 export type {

@@ -9,6 +9,10 @@ import { ExternalCredentialStoreError } from './ports/external-credential-reposi
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 /** Другой мастер-ключ — расшифровка чужого токена должна падать. */
 const OTHER_MASTER_KEY = Buffer.alloc(32, 9).toString('base64');
+/** Ключ, на который ротируем (ADR-105 Ф4). */
+const NEW_MASTER_KEY = Buffer.alloc(32, 11).toString('base64');
+/** Ещё один ключ — «совсем чужой», им ничего не расшифровывается. */
+const WRONG_MASTER_KEY = Buffer.alloc(32, 13).toString('base64');
 
 const disposers: Array<() => Promise<void>> = [];
 afterAll(async () => {
@@ -127,5 +131,157 @@ describe('ExternalCredentialStore (ADR-105 Ф1)', () => {
         createdBy: 'local',
       }),
     ).rejects.toMatchObject({ code: 'invalid' });
+  });
+});
+
+describe('ExternalCredentialStore.rotateMasterKey (ADR-105 Ф4)', () => {
+  /** Создать доступ с access/refresh-токенами (запись на диске — `enc:v1:…`). */
+  async function seed(dir: string): Promise<string> {
+    const store = new ExternalCredentialStore({ dataDir: dir, secretKey: MASTER_KEY });
+    const created = await store.create({
+      provider: 'google',
+      clientId: 'client-123',
+      owner: { kind: 'local', id: 'local' },
+      accessToken: ACCESS_TOKEN,
+      refreshToken: 'refresh-plain-token',
+      createdBy: 'local',
+    });
+    return created.id;
+  }
+
+  it('перешифровывает токены новым ключом: новый ключ читает, старый — decrypt_failed', async () => {
+    const dir = await tmp();
+    const id = await seed(dir);
+    const store = new ExternalCredentialStore({ dataDir: dir, secretKey: MASTER_KEY });
+
+    const result = await store.rotateMasterKey(
+      Buffer.from(MASTER_KEY, 'base64'),
+      Buffer.from(NEW_MASTER_KEY, 'base64'),
+    );
+
+    expect(result.total).toBe(1);
+    expect(result.rotated).toBe(1);
+    expect(result.upgraded).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(result.ids).toEqual([id]);
+
+    // На диске — новый шифр, plaintext-токенов нет.
+    const raw = await readFile(join(dir, 'secrets', 'oauth', 'credentials.json'), 'utf-8');
+    expect(raw).toContain('enc:v1:');
+    expect(raw).not.toContain(ACCESS_TOKEN);
+    expect(raw).not.toContain('refresh-plain-token');
+
+    // Новым ключом токены читаются.
+    const withNew = new ExternalCredentialStore({ dataDir: dir, secretKey: NEW_MASTER_KEY });
+    expect(await withNew.reveal(id)).toEqual({
+      accessToken: ACCESS_TOKEN,
+      refreshToken: 'refresh-plain-token',
+    });
+
+    // Старым ключом — уже нет.
+    const withOld = new ExternalCredentialStore({ dataDir: dir, secretKey: MASTER_KEY });
+    await expect(withOld.reveal(id)).rejects.toMatchObject({ code: 'decrypt_failed' });
+  });
+
+  it('dry-run ничего не меняет (файл и счётчики)', async () => {
+    const dir = await tmp();
+    const id = await seed(dir);
+    const store = new ExternalCredentialStore({ dataDir: dir, secretKey: MASTER_KEY });
+    const path = join(dir, 'secrets', 'oauth', 'credentials.json');
+    const before = await readFile(path, 'utf-8');
+
+    const result = await store.rotateMasterKey(
+      Buffer.from(MASTER_KEY, 'base64'),
+      Buffer.from(NEW_MASTER_KEY, 'base64'),
+      { dryRun: true },
+    );
+
+    expect(result.rotated).toBe(1);
+    expect(result.ids).toEqual([id]);
+    expect(await readFile(path, 'utf-8')).toBe(before);
+
+    // Старый ключ всё ещё работает — запись не тронута.
+    expect((await store.reveal(id))?.accessToken).toBe(ACCESS_TOKEN);
+  });
+
+  it('неверный старый ключ → preflight-отказ, файл не изменён', async () => {
+    const dir = await tmp();
+    const id = await seed(dir);
+    const store = new ExternalCredentialStore({ dataDir: dir, secretKey: MASTER_KEY });
+    const path = join(dir, 'secrets', 'oauth', 'credentials.json');
+    const before = await readFile(path, 'utf-8');
+
+    const err = await store
+      .rotateMasterKey(
+        Buffer.from(WRONG_MASTER_KEY, 'base64'),
+        Buffer.from(NEW_MASTER_KEY, 'base64'),
+      )
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ExternalCredentialStoreError);
+    expect((err as ExternalCredentialStoreError).code).toBe('preflight_failed');
+    expect((err as ExternalCredentialStoreError).message).toContain(id);
+    expect(await readFile(path, 'utf-8')).toBe(before);
+  });
+
+  it('повторный прогон идемпотентен: уже новые записи — skipped', async () => {
+    const dir = await tmp();
+    await seed(dir);
+    const store = new ExternalCredentialStore({ dataDir: dir, secretKey: MASTER_KEY });
+    const oldKey = Buffer.from(MASTER_KEY, 'base64');
+    const newKey = Buffer.from(NEW_MASTER_KEY, 'base64');
+
+    const first = await store.rotateMasterKey(oldKey, newKey);
+    expect(first.rotated).toBe(1);
+
+    const second = await store.rotateMasterKey(oldKey, newKey);
+    expect(second.total).toBe(1);
+    expect(second.rotated).toBe(0);
+    expect(second.upgraded).toBe(0);
+    expect(second.skipped).toBe(1);
+    expect(second.ids).toEqual([]);
+  });
+
+  it('plaintext-поля апгрейдятся новым ключом', async () => {
+    const dir = await tmp();
+    const path = join(dir, 'secrets', 'oauth', 'credentials.json');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(
+      path,
+      JSON.stringify({
+        schemaVersion: 1,
+        credentials: [
+          {
+            id: 'extc_plain',
+            provider: 'google',
+            clientId: 'client-123',
+            scopes: [],
+            owner: { kind: 'local', id: 'local' },
+            secretEnc: ACCESS_TOKEN,
+            status: 'active',
+            createdBy: 'local',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      }),
+      'utf-8',
+    );
+
+    const store = new ExternalCredentialStore({ dataDir: dir, secretKey: NEW_MASTER_KEY });
+    const result = await store.rotateMasterKey(
+      Buffer.from(MASTER_KEY, 'base64'),
+      Buffer.from(NEW_MASTER_KEY, 'base64'),
+    );
+
+    expect(result.total).toBe(1);
+    expect(result.rotated).toBe(0);
+    expect(result.upgraded).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(result.ids).toEqual(['extc_plain']);
+
+    const raw = await readFile(path, 'utf-8');
+    expect(raw).toContain('enc:v1:');
+    expect(raw).not.toContain(ACCESS_TOKEN);
+    expect((await store.reveal('extc_plain'))?.accessToken).toBe(ACCESS_TOKEN);
   });
 });
