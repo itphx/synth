@@ -29,6 +29,8 @@
 (`defaultConfig`), `merge.ts` (`deepMerge`), `loader.ts` (`loadConfig`, приоритет
 defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureDataDir`).
 - **Добавление поля = `types.ts` + `defaults.ts` + тест** (`defaults.test.ts`).
+- Дефолты `plugins.*` сверяются тестом (`src/config/plugins-docs-defaults.test.ts`) с
+  `docs/CONFIGURATION.md` (RU и EN) — расхождение с кодом ломает сборку.
 - Читать только через `@itphx/synth-shared/config` (корневой инвариант 10).
 - ADR-046: секции `skills` (`paths`/`trustedProjectDirs`/`inlineShell`/`toolsets`) и
   `commands` (`paths`/`bundlesPath`/`conflict`/лимиты); типы команд/бандлов —

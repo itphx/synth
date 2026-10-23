@@ -1341,6 +1341,9 @@ the budgets of the extension points. A runtime override of these keys —
 applied after a restart** (invariant 24) — the plugin runtime (the host, the loader, the effective
 config) is assembled at the start.
 
+> The default values are checked against the code automatically (`packages/shared` — the `plugins.*`
+> defaults test): a discrepancy with `packages/shared/src/config/defaults.ts` breaks the build.
+
 | Field | Purpose | Default |
 |------|-----------|--------------|
 | `plugins.enabled` | Master switch of the plugin layer | `true` |
