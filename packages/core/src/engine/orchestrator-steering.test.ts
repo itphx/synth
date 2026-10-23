@@ -256,4 +256,44 @@ describe('ChatOrchestrator: инъекции в активный ход (ADR-104
 
     await rm(h.tmpDir, { recursive: true, force: true });
   });
+
+  it('приоритет (этап 3): interrupt вплетается в контекст раньше steer, внутри класса — FIFO', async () => {
+    const h = await makeHarness();
+    // Порядок постановки: steer → interrupt → steer. В контексте хода
+    // инъекции должны лечь: interrupt, затем steer'ы (FIFO внутри класса).
+    MockSteerProvider.onCall = async (n) => {
+      if (n === 0) {
+        await enqueueSteerMessage(
+          h.sessionManager, h.eventBus, h.sessionId, makeMessage('вмешательство 1'),
+        );
+        await enqueueSteerMessage(
+          h.sessionManager, h.eventBus, h.sessionId, makeMessage('прерывание 1'),
+          undefined, undefined, { interrupt: true },
+        );
+        await enqueueSteerMessage(
+          h.sessionManager, h.eventBus, h.sessionId, makeMessage('вмешательство 2'),
+        );
+      }
+    };
+
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    await run(h, (event, data) => chunks.push({ event, data }));
+
+    const second = MockSteerProvider.captures[1]!;
+    const injectedOrder = second
+      .filter((m) => m.role === 'user' && (
+        m.content.includes('вмешательство') || m.content.includes('прерывание')
+      ))
+      .map((m) => m.content);
+    expect(injectedOrder).toEqual(['прерывание 1', 'вмешательство 1', 'вмешательство 2']);
+
+    // Порядок сохраняется и в истории сессии.
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const injected = session.messages.filter((m) => m.metadata?.steer === true);
+    expect(injected.map((m) => m.content)).toEqual([
+      'прерывание 1', 'вмешательство 1', 'вмешательство 2',
+    ]);
+
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
 });

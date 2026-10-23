@@ -1,5 +1,5 @@
 import type { Session, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings, Project } from '@itphx/synth-shared';
-import { getForkedTitle, MessageRole, MAX_STEER_INJECTIONS_PER_TURN } from '@itphx/synth-shared';
+import { getForkedTitle, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, orderSteerInjections } from '@itphx/synth-shared';
 import { nowISO, generateId, makeTextPart, makePart, stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { SessionRepository } from '../storage/ports/session-repository.js';
@@ -624,9 +624,12 @@ export class SessionManager {
   }
 
   /**
-   * ADR-104: забрать сообщения инъекций из очереди (FIFO) для вплетения в
+   * ADR-104: забрать сообщения инъекций из очереди для вплетения в
    * текущий ход. Забираются не больше `maxInjections` — остальные возвращаются
    * как `dropped` (лимит инъекций на ход; вызывающий публикует `steer.dropped`).
+   *
+   * Этап 3: порядок применения — сначала класс `interrupt` (прерывание
+   * генерации), затем `steer`; внутри класса — FIFO (порядок постановки).
    */
   async takeSteerMessages(
     sessionId: string,
@@ -636,9 +639,10 @@ export class SessionManager {
       const inbox = session.steerInbox ?? [];
       if (inbox.length === 0) return { messages: [], dropped: [] };
       const limit = Math.max(0, maxInjections);
-      const messages = inbox.splice(0, limit);
-      const dropped = inbox.splice(0);
-      session.steerInbox = inbox;
+      const ordered = orderSteerInjections(inbox);
+      const messages = ordered.slice(0, limit);
+      const dropped = ordered.slice(limit);
+      session.steerInbox = [];
       session.updatedAt = nowISO();
       await this.store.save(session);
       return { messages, dropped };

@@ -12,6 +12,8 @@ import {
   STEER_INTERRUPT_METADATA_KEY,
   STEER_INTERRUPTED_METADATA_KEY,
   isSteerMode,
+  steerInjectionClass,
+  orderSteerInjections,
 } from './steering.js';
 import { promptRequestSchema } from '../schemas/index.js';
 
@@ -49,6 +51,36 @@ describe('ADR-104: типы режима отправки (steering)', () => {
   it('признаки режима interrupt в metadata', () => {
     expect(STEER_INTERRUPT_METADATA_KEY).toBe('interrupt');
     expect(STEER_INTERRUPTED_METADATA_KEY).toBe('interrupted');
+  });
+});
+
+describe('ADR-104 этап 3: приоритет инъекций', () => {
+  it('класс инъекции — по маркеру metadata.interrupt', () => {
+    expect(steerInjectionClass({ metadata: { interrupt: true } })).toBe('interrupt');
+    expect(steerInjectionClass({ metadata: { steer: true } })).toBe('steer');
+    expect(steerInjectionClass({})).toBe('steer');
+    expect(steerInjectionClass({ metadata: { interrupt: 'yes' } })).toBe('steer');
+  });
+
+  it('порядок: сначала interrupt, внутри класса — FIFO; вход не мутируется', () => {
+    const input = [
+      { content: 'steer 1' },
+      { content: 'interrupt 1', metadata: { interrupt: true } },
+      { content: 'steer 2' },
+      { content: 'interrupt 2', metadata: { interrupt: true } },
+    ];
+    const ordered = orderSteerInjections(input);
+    expect(ordered.map((m) => m.content)).toEqual([
+      'interrupt 1', 'interrupt 2', 'steer 1', 'steer 2',
+    ]);
+    // Вход не переставлен — функция возвращает новый массив.
+    expect(input.map((m) => m.content)).toEqual([
+      'steer 1', 'interrupt 1', 'steer 2', 'interrupt 2',
+    ]);
+  });
+
+  it('пустая очередь — пустой результат', () => {
+    expect(orderSteerInjections([])).toEqual([]);
   });
 });
 
