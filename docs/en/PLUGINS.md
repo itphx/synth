@@ -832,8 +832,8 @@ the install policy matrix blocks the installation (§7). The categories of findi
 | `obfuscation` | encoded strings, `eval`, dynamic imports |
 | `invisible_unicode` | zero-width, bidi, unicode tags, soft hyphen |
 
-The `severity → verdict` boundaries: `info|low → safe`, `medium → caution`, `high|critical →
-dangerous`. The verdict of the bundle is the maximum over the findings.
+The `severity → verdict` boundaries: `info|low → safe`, `medium → caution`,
+`high|critical → dangerous`. The verdict of the bundle is the maximum over the findings.
 
 The structural quotas: **50** files, **1024 KiB** in total → no higher than `caution`; **256 KiB** per
 file or an executable binary → `dangerous`. The exceptions are `.skillignore` files in the gitignore
