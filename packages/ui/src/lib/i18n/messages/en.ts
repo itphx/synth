@@ -1056,6 +1056,15 @@ export const dict = {
   'chat.input.mentionHint': 'Mention an agent with @',
   'chat.input.enqueue': 'Enqueue',
 
+  // --- Steering: intervention in the running turn (PROP-098) ---
+  'chat.steer.marker': 'Intervened in turn',
+  'chat.steer.mode.label': 'Send mode',
+  'chat.steer.mode.queue': 'Queue',
+  'chat.steer.mode.steer': 'Intervene',
+  'chat.steer.mode.title': 'How to send a message while the agent is working',
+  'chat.steer.mode.queueHint': 'The message will be processed after the current turn ends',
+  'chat.steer.mode.steerHint': 'The message will be injected into the current turn at the next step boundary',
+
   'chat.actions.copy': 'Copy',
   'chat.actions.toggleOff': 'Disable',
   'chat.actions.toggleOn': 'Enable',

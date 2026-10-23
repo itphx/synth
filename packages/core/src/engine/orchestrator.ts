@@ -3990,7 +3990,7 @@ export class ChatOrchestrator {
           stream_id: (injected.metadata?.stream_id as string) || streamId,
         },
       };
-      await this._sessionManager.appendMessage(session.id, persisted);
+      const stored = await this._sessionManager.appendMessage(session.id, persisted);
 
       // В контекст LLM — тем же маппингом, что и история сессии
       // (`sessionMessagesToLlm`), чтобы атрибуция совпадала.
@@ -4000,8 +4000,11 @@ export class ChatOrchestrator {
 
       publishChunk('message.injected', {
         stream_id: streamId,
+        // Позиция сообщения в истории (0-based) — как в `GET /:id/messages`,
+        // чтобы UI мог добавить его в ленту без полной перезагрузки.
+        message_index: (stored?.seq ?? persisted.seq) - 1,
         message_id: persisted.id,
-        content: persisted.content.slice(0, 500),
+        content: persisted.content,
         author: persisted.author,
         agent_role: persisted.agentRole,
         metadata: persisted.metadata,

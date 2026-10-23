@@ -18,6 +18,7 @@ import { StreamErrorPanel } from './StreamErrorPanel'
 import { SubagentResumeBar, type SubagentSessionError } from './SubagentResumeBar'
 import type { CenterTab } from '@/stores/useUIStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { DEFAULT_STEER_MODE, type SteerMode } from '@itphx/synth-shared/types'
 
 interface ChatTabProps {
   tab: CenterTab
@@ -94,6 +95,11 @@ export function ChatTab({ tab }: ChatTabProps) {
   const isSubagent = sessionOrigin === 'subagent'
   const isReadOnly = isSubagent
   const [inputExpanded, setInputExpanded] = useState(false)
+
+  // PROP-098: режим отправки сообщения. UI-селектора пока нет (этап 2
+  // PROP-098) — режим доступен из API/WS, в UI есть только маркер
+  // вмешательства в ленте. Точка подключения селектора — здесь.
+  const sendMode: SteerMode = DEFAULT_STEER_MODE
 
   const agentsRef = useRef<AgentInfo[]>([])
   const forkingRef = useRef(false)
@@ -189,7 +195,7 @@ export function ChatTab({ tab }: ChatTabProps) {
   )
 
   const handleSend = useCallback(
-    async (text: string, agentRole?: string) => {
+    async (text: string, agentRole?: string, mode?: SteerMode) => {
       const { activeAgentId, defaultAgentId } = useAgentsStore.getState()
       const effectiveAgentRole = agentRole || activeAgentId || defaultAgentId || undefined
 
@@ -199,7 +205,7 @@ export function ChatTab({ tab }: ChatTabProps) {
       try {
         const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
         useChatStore.getState().setStreamRetry(sessionId, null)
-        await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined)
+        await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode)
         notify({ text: t('chat.message.sent'), type: 'info', category: 'message', sessionId })
       } catch (e) {
         notify({ text: `${t('chat.error.sendFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
@@ -618,6 +624,7 @@ export function ChatTab({ tab }: ChatTabProps) {
             agents={agentsRef.current}
             isStreaming={isStreaming}
             onSend={handleSend}
+            sendMode={sendMode}
             onStop={handleStop}
             onStopQueue={handleStopAll}
             onCreateNote={handleCreateNote}
@@ -693,6 +700,7 @@ export function ChatTab({ tab }: ChatTabProps) {
               agents={agentsRef.current}
               isStreaming={isStreaming}
               onSend={handleSend}
+              sendMode={sendMode}
               onStop={handleStop}
               onStopQueue={handleStopAll}
               onCreateNote={handleCreateNote}

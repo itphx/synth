@@ -13,12 +13,23 @@ import { PlanActModeToggle } from './PlanActModeToggle'
 import { ReasoningLevelSelector } from './ReasoningLevelSelector'
 import type { AgentInfo } from '@/lib/api/synthApi'
 import type { CommandSummary } from '@itphx/synth-shared'
+import type { SteerMode } from '@itphx/synth-shared/types'
 
 interface ChatInputProps {
   sessionId: string
   agents: AgentInfo[]
   isStreaming: boolean
-  onSend: (text: string, agentRole?: string) => Promise<void>
+  /**
+   * PROP-098: отправка сообщения. Третий аргумент — режим отправки
+   * (`queue` по умолчанию, `steer` — вмешательство в активный ход).
+   */
+  onSend: (text: string, agentRole?: string, mode?: SteerMode) => Promise<void>
+  /**
+   * PROP-098: режим отправки по умолчанию для этого композера. UI-селектора
+   * режима пока нет (этап 2 PROP-098): режим доступен из API/WS, а в UI есть
+   * только маркер вмешательства в ленте. Значение задаёт вызывающий код.
+   */
+  sendMode?: SteerMode
   onStop: () => void
   onStopQueue?: () => void
   onCreateNote: (text: string) => void
@@ -130,6 +141,7 @@ export function ChatInput({
   agents,
   isStreaming,
   onSend,
+  sendMode,
   onStop,
   onStopQueue,
   onCreateNote,
@@ -283,13 +295,13 @@ export function ChatInput({
     }
 
     if (!parts) {
-      await onSend(text)
+      await onSend(text, undefined, sendMode)
     } else {
       for (const part of parts) {
-        await onSend(part.text, part.agentRole)
+        await onSend(part.text, part.agentRole, sendMode)
       }
     }
-  }, [value, agents, onSend])
+  }, [value, agents, onSend, sendMode])
 
   const handleEnqueue = useCallback(async () => {
     const text = value.trim()
@@ -313,6 +325,8 @@ export function ChatInput({
       textareaRef.current.style.height = 'auto'
     }
 
+    // Явное «Добавить в очередь» — режим всегда `queue` (PROP-098): вмешательство
+    // в ход пользователь здесь не просил.
     if (!parts) {
       await onSend(text)
     } else {

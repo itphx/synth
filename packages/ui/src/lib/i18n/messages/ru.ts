@@ -1036,6 +1036,15 @@ export const dict = {
   'chat.input.mentionHint': 'Упомяните агента через @',
   'chat.input.enqueue': 'Добавить в очередь',
 
+  // --- Steering: вмешательство в активный ход (PROP-098) ---
+  'chat.steer.marker': 'Вмешательство в ход',
+  'chat.steer.mode.label': 'Режим отправки',
+  'chat.steer.mode.queue': 'В очередь',
+  'chat.steer.mode.steer': 'Вмешаться',
+  'chat.steer.mode.title': 'Как отправить сообщение во время работы агента',
+  'chat.steer.mode.queueHint': 'Сообщение будет обработано после окончания текущего хода',
+  'chat.steer.mode.steerHint': 'Сообщение будет вброшено в текущий ход на ближайшей границе шага',
+
   'chat.actions.copy': 'Копировать',
   'chat.actions.toggleOff': 'Выключить',
   'chat.actions.toggleOn': 'Включить',

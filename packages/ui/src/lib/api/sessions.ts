@@ -9,7 +9,7 @@ import type {
   SessionStats,
   TodoItem,
 } from '@itphx/synth-shared'
-import type { SessionMode } from '@itphx/synth-shared/types'
+import type { SessionMode, SteerMode } from '@itphx/synth-shared/types'
 import type { EntityOrigin } from './common'
 import { BASE_URL, fetchJSON } from './base'
 
@@ -214,6 +214,12 @@ export const sessionsApi = {
     streamId?: string
     provider?: string
     model?: string
+    /**
+     * PROP-098: режим отправки (`queue` по умолчанию, `steer` — вмешательство
+     * в активный ход, `interrupt` — этап 2 и сейчас отклоняется сервером).
+     * `queue`/не задано — поле не уходит (обратная совместимость).
+     */
+    mode?: SteerMode
   }): Promise<void> {
     const body: Record<string, unknown> = {
       content: message,
@@ -222,6 +228,7 @@ export const sessionsApi = {
       provider: options?.provider,
       model: options?.model,
       messageId: options?.streamId || `stream-${Date.now()}`,
+      ...(options?.mode && options.mode !== 'queue' ? { mode: options.mode } : {}),
     }
 
     const response = await fetch(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`, {
