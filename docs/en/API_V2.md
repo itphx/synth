@@ -200,6 +200,57 @@ interface BusEvent { type: EventType; sessionId: string; data: Record<string, un
 > Event transport — only WS `/ws/events` and SSE `GET /api/v2/events`.
 > Do not create new channels (ADR-008/009/024).
 
+### 3.1. Permission approvals (PROP-108 F3)
+
+The approval request (`permission.asked`) and the reply to it (`permission.replied`) travel over
+WS `/ws/events`. A reply is accepted only from the **holder of a covering grant** (session owner,
+project `EDITOR`/`OWNER`, `ADMIN`/`LEAD`, service key with a matching role) — **not** from "whoever
+can see the session": a `VIEWER` (read-only access) cannot approve a mutating tool.
+
+**`permission.asked` event** (approval request) — additional fields:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `principal` | `{kind, id, roles}` | the turn principal the request is addressed to (PROP-108 F0) |
+| `turn_id` | string | the turn (`streamId`) the request belongs to |
+| `digest` | string | binding fingerprint "turn + action + target" (sha256) |
+
+**Client message `permission_reply`**:
+
+```json
+{ "type": "permission_reply", "session_id": "<sid>", "approval_id": "<aid>",
+  "action": "allow" | "deny", "once": true | false,
+  "turn_id": "<turn>", "digest": "<digest>" }
+```
+
+- `action` — the decision (`allow`/`deny`); the legacy `{approved: boolean}` form is still supported;
+- `turn_id`/`digest` — optional: a mismatch with the binding rejects the reply
+  (`turn_mismatch`/`digest_mismatch`);
+- the client is never trusted: the replying principal is taken from the **authenticated** WS connection.
+
+**`permission.replied` event** — on an accepted reply: `approved`, `action`, `principal`, `turn_id`,
+`digest` (the binding comes from the server-side registry). On a **rejection** — `approved: false`,
+`action: 'deny'` and a `reason` field:
+
+| `reason` | Rejection cause |
+|---|---|
+| `no_grant` | the replier does not hold a covering grant (incl. a `VIEWER` on a mutation) |
+| `already_consumed` | a repeated reply to the same `approval_id` (an approval is one-shot) |
+| `turn_mismatch` | a reply with a foreign `turn_id` (another turn) |
+| `digest_mismatch` | a reply with a foreign `digest` (binding substitution) |
+| `unknown_approval` | unknown `approval_id` |
+
+At the same time the client receives an error frame:
+
+```json
+{ "type": "error", "session_id": "<sid>",
+  "data": { "error": "<text>", "code": "APPROVAL_DENIED" }, "timestamp": "<ISO>" }
+```
+
+The approval registry only exists in the Authority layer's **enforced** mode (`authority.enabled`
+without `authority.shadow`); in shadow/disabled mode the reply is accepted as before (by session
+visibility) — see [PROP-108](../arch_decisions/prop-108-authority-layer.md) (in Russian).
+
 ---
 
 ## 4. LLM Proxy
