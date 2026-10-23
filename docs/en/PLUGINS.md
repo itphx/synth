@@ -974,7 +974,7 @@ const audit = {
   async clear() { this.entries = []; return 0; },
 } as never;
 
-describe('the my-plugin plugin contract', () => {
+describe('the my-plugin contract', () => {
   let host: PluginHost;
   let tools: ToolRegistry;
   let promptBlocks: PromptBlockRegistry;
