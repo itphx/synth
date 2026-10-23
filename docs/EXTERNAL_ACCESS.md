@@ -4,8 +4,8 @@
 > секретов и явная граница «реализовано / план».
 > Решение — [ADR-105](./arch_decisions/adr-105-external-credentials.md) «Внешние доступы — единый слой
 > доступа к внешним сервисам (OAuth-коннекторы)». Правила ведения документов — [ARCH_DECISIONS.md](./ARCH_DECISIONS.md).
-> **Состояние:** Ф0–Ф2 (контракты, хранилище, OAuth-клиент) — **реализованы**; Ф3–Ф4 — **план**, перечислены
-> в §10 и нигде не выдаются за работающие.
+> **Состояние:** Ф0–Ф3 (контракты, хранилище, OAuth-клиент, MCP-транспорт) — **реализованы**; Ф4 — **план**,
+> перечислен в §10 и нигде не выдаётся за работающий.
 
 ## 1. Назначение
 
@@ -159,8 +159,8 @@ HTTP-статус + тело, инъекция транспорта для те�
 при редиректе на **другой origin** (сравнение scheme+host+port) заголовки `authorization`,
 `proxy-authorization`, `x-api-key`, `cookie` **не пересылаются**; остальные заголовки пересылаются как
 раньше. Без редиректов поведение не меняется. Режим **выключен по умолчанию** (поведение существующих
-потребителей не затронуто) — включают те, кто несёт токен наружу (OAuth-вызовы; подстановка в MCP-транспорт —
-Ф3).
+потребителей не затронуто) — включают те, кто несёт токен наружу (OAuth-вызовы; в MCP-транспорте токен
+добавляется сам — §9.1).
 
 ## 9. Биндинг к MCP (коннектор → доступ)
 
@@ -173,21 +173,73 @@ auth?: { kind: 'credential'; credentialId: string };
 - `mcpServerAuthSchema` (`z.literal('credential')` + непустой `credentialId`); поле опционально — записи
   без `auth` (все существующие) валидны.
 - Коннектор ссылается на доступ **по id**; сам токен в реестре/конфиге не лежит.
-- **Реализовано:** только схема и валидация. **Не реализовано (Ф3):** подстановка токена в транспорт
-  MCP-клиента (`engine/mcp/client.ts` сейчас прокидывает статичные `config.headers`), пересоздание
-  транспорта после refresh, использование доступа в `POST /api/v2/mcp/probe`, запрет plaintext-заголовков
-  (`authorization`/`proxy-authorization`/`x-api-key`/`cookie`) в `headers` при записи реестра и миграция
-  существующих записей.
 
-## 10. Что не реализовано (план, Ф3–Ф4)
+### 9.1 Подстановка токена в транспорт (Ф3)
+
+`packages/core/src/engine/mcp/credential-auth.ts`:
+
+- **Источник токена** — `McpCredentialSource` (`getAccessToken`/`refreshAccessToken`): узкая абстракция, порт
+  и провайдер в транспорт не заглядывают. Реализация поверх порта — `reveal()` (только чтение секрета,
+  наружу токен не отдаётся) и refresh через `OAuthCredentialService`.
+- **Каждый HTTP-запрос** коннектора с `auth.kind='credential'` несёт заголовок `Authorization: Bearer <token>`;
+  значение токена не попадает в конфиг/реестр MCP, не логируется и не фигурирует в текстах ошибок.
+- **Refresh по `401`**: ответ `401` один раз обновляет токен (refresh через `OAuthCredentialService`, CAS
+  внутри) и запрос повторяется. **Ровно один refresh на запрос**: если и после обновления токена сервер
+  отвечает `401`, запрос возвращается как есть.
+- Ошибки доступа машинно-читаемы (`McpCredentialError.code`): `not_found`, `revoked`,
+  `reauthorization_required` (провайдер отозвал refresh-токен — доступ переведён в `status:'error'`),
+  `no_refresh`, `unavailable`.
+- `POST /api/v2/mcp/probe` использует тот же источник доступа — коннектор с `auth` проверяется так же,
+  как и в бою.
+
+### 9.2 Запрет plaintext-заголовков (Ф3)
+
+`authorization`, `proxy-authorization`, `x-api-key`, `cookie` в `headers` MCP-коннектора **запрещены**:
+
+- запись реестра (`POST/PUT /api/v2/mcp/registry`, `POST/PUT /api/v2/mcp/servers`) → **400**
+  `MCP_SECRET_HEADER_FORBIDDEN` (не 500);
+- `POST /api/v2/mcp/probe` — тот же код;
+- существующие записи реестра с такими заголовками переводятся на новую схему **явной миграцией**
+  (`migrateMcpRegistrySecrets`, `storage/mcp-registry-migration.ts`): значение заголовка становится токеном
+  доступа (через порт), заголовок удаляется, коннектор получает ссылку
+  `auth: { kind: 'credential', credentialId }`; миграция одноразовая и идемпотентная, значение заголовка в
+  отчёт не попадает (только имена коннекторов и id созданных доступов);
+- сид из `config.yaml` (`seedFromConfig`) такой заголовок в реестр **не переносит** — он отбрасывается с
+  предупреждением в лог (только имя заголовка).
+
+### 9.3 Право привязки (Ф3)
+
+Привязка выдаёт коннектору право действовать от имени доступа, поэтому она проверяется **на границе**
+(инвариант 16): правило — в core (`engine/oauth/credential-binding.ts`), сбор актора и маппинг решения в
+код ответа — в `server/credential-bind-guard.ts`.
+
+| Доступ | Кто может привязать |
+|---|---|
+| свой (`owner.kind='user'`/`'local'`) | владелец доступа |
+| инстансный (`owner.kind='instance'`) | `ADMIN`/`LEAD` |
+| уровня проекта (`projectId` задан) | участник проекта с правом **изменения** содержимого (`OWNER`/`EDITOR`, а также `LEAD`/`ADMIN`) |
+| остальное | никто (403) |
+
+Доступа нет — **404**; доступ есть, но права нет — **403**. Матрица — `packages/backend/src/routes/mcp-credential-bind.test.ts`.
+
+### 9.4 Каталог OAuth-провайдеров (Ф3)
+
+`oauth.providers` в `config.yaml` (env-оверрайд `SYNTH_OAUTH_PROVIDERS`) — каталог описаний провайдеров
+(`authorizeUrl`/`tokenUrl`/`revokeUrl?`/`clientId`/`scopes?`/`clientAuth?`/`redirectUri?`). Описание —
+**данные**: кода провайдера в ядре нет. На старте описания регистрируются в
+`OAuthProviderRegistry` (`engine/oauth/registry.ts`) — это то, из чего `OAuthCredentialService` строит
+клиент для **refresh**. `client_secret` в каталоге нет — только env `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET`
+или файл `{dataDir}/secrets/oauth/<provider>.client_secret` (§7).
+
+## 10. Что не реализовано (план, Ф4)
 
 | Этап | Что | Статус |
 |---|---|---|
-| Ф3 | подстановка токена в MCP-транспорт; запрет plaintext-`Authorization` в `headers` (+ валидация и миграция существующих записей реестра); refresh пересоздаёт транспорт; `probe` использует доступ | **план** |
+| Ф3 | подстановка токена в MCP-транспорт; запрет plaintext-`Authorization` в `headers` (+ валидация и миграция существующих записей реестра); refresh пересоздаёт транспорт; `probe` использует доступ; каталог `oauth.providers`; право привязки доступа к коннектору | **✅ закрыт (2026-10-23)** |
 | Ф4 | HTTP-роуты `createOAuthRoutes` (`POST/GET /api/v2/oauth/credentials`, `POST …/:id/refresh`, `DELETE …/:id`, `POST …/:id/bind`) и монтирование в backend; раздел UI «Доступы»; журнал credential-операций (отдельный append-only, `SECURITY_AUDIT_SCOPES` в `shared` **не расширяется**); включение порта в `synth secrets rotate` (preflight, `--dry-run`, счётчики); правила бэкапа и переноса проекта (доступы инстанс-локальны, как binding-key) | **план** |
 
-Пока Ф3–Ф4 не сделаны, доступ заводится и обновляется **только кодом** (через порт), HTTP-контракта у слоя
-доступов нет.
+Пока Ф4 не сделан, доступ заводится и обновляется **только кодом** (через порт), HTTP-контракта у слоя
+доступов нет; коннекторы привязывают уже заведённые доступы по `credentialId` (см. §9.3).
 
 ## 11. Ключевые файлы
 
@@ -197,10 +249,15 @@ auth?: { kind: 'credential'; credentialId: string };
 | `packages/shared/src/config/types.ts` | `mcpServerAuthSchema` и поле `auth` в `mcpServerConfigSchema` |
 | `packages/core/src/storage/ports/external-credential-repository.ts` | доменный порт |
 | `packages/core/src/storage/external-credential-store.ts` | файловая реализация (`{dataDir}/secrets/oauth/credentials.json`) |
+| `packages/core/src/storage/mcp-registry-migration.ts` | миграция существующих записей реестра: plaintext-заголовок → внешний доступ (одноразовая, идемпотентная) |
 | `packages/core/src/storage/memory/external-credentials.ts` | in-memory реализация |
 | `packages/core/src/storage/contract/external-credential-repository.contract.ts` | контрактный suite (паспорт порта) |
 | `packages/core/src/storage/storage-context.ts` | подключение `StorageContext.externalCredentials` |
 | `packages/core/src/engine/oauth/*` | OAuth-клиент и сервис слоя доступов |
+| `packages/core/src/engine/oauth/registry.ts` | реестр описаний OAuth-провайдеров (каталог `oauth.providers`) |
+| `packages/core/src/engine/mcp/credential-auth.ts` | источник токена для MCP-транспорта (`McpCredentialSource`) и `createCredentialFetch` (подстановка + refresh по 401) |
+| `packages/core/src/engine/oauth/credential-binding.ts` | правило права привязки доступа к коннектору (ADR-105 Ф3) |
+| `packages/core/src/server/credential-bind-guard.ts` | guard привязки на границе (инвариант 16) |
 | `packages/core/src/remote/device-flow.ts` | обобщённый device flow (`postFormDetailed`) |
 | `packages/core/src/engine/net/egress-guard.ts` | `bindSecretHeaders` — host-binding секретных заголовков |
 | `packages/core/src/security/crypto.ts` | `encryptSecret`/`decryptSecret`, формат `enc:v1:…` |
