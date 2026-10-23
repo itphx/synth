@@ -321,3 +321,333 @@ role.
 4. **Status and journal.** `GET /api/v2/plugins` (or the "Plugins" section) shows the version, mode,
    trust, scan verdict, content-hash and activity; the operations journal is
    `{dataDir}/audit/plugins.jsonl`.
+
+---
+
+## 3. `synth.pack` manifest reference
+
+`synth.pack` is JSON in the bundle root. Parsing: `packManifestSchema` + `validatePackManifest`
+(`packages/shared/src/types/pack.ts`). The schema is **strict** where it matters: for
+`provides.promptBlocks[]`/`provides.llmFilters[]` an unknown field is an error, not a silent pass.
+
+| Field | Required | What it is | Rules |
+|---|---|---|---|
+| `name` | yes | the plugin name | slug (`my-plugin`) or a scoped npm name (`@acme/synth-plugin-x`); lowercase Latin letters/digits, the separator is `-`; ≤ 214 characters. The tool namespace is derived from it |
+| `version` | yes | the plugin version | semver `MAJOR.MINOR.PATCH` (+ prerelease/build) |
+| `kind` | yes | the extension class | for a plugin — strictly `"plugin"` |
+| `description` | yes | a short description | a non-empty string; visible in the inspection/catalog |
+| `host` | no | a range of Synth versions | a semver range, a conjunction separated by a space (`>=0.11.0 <0.13.0`); `\|\|` is not supported. A mismatch — `plugin.host_mismatch` |
+| `contracts` | no | contract versions | the values are semver ranges. **Only `contracts.extensionApi` is checked** (the major of the host contract; it is `1` now, the host declares `1.0.0`). The `promptBlocks`/`llmFilters`/`tools` keys are a declaration for the reader and for future checks. A major mismatch — `plugin.contract_mismatch` |
+| `mode` | no | the execution mode | `inline` \| `remote` \| `both`; `inline` by default. The field is allowed only for `kind: "plugin"` |
+| `provides` | yes | the declared contributions | see below; an empty `provides` is an invalid manifest |
+| `permissions` | no | the declared accesses | `{ network: string[], secrets: string[], tools: string[], hooks: string[] }`. This is a **declaration**, not a permission: the actual access is decided by the permission layer and the egress policy |
+| `trust` | no | the declared level/source | `{ level?: 'builtin'\|'verified'\|'trusted'\|'community', source?: string }`. An upper bound, never an increase: the actual level is resolved by the source. A plugin with a `level` above `trusted` (`builtin`/`verified`) is a **manifest error**; `trusted` and `community` are allowed |
+
+### 3.1. `provides` — what exactly is validated
+
+```json
+"provides": {
+  "tools": ["notes_search"],
+  "promptBlocks": [{ "key": "plugin.my-plugin.notes", "tier": "context", "order": 120, "title": "Project notes" }],
+  "llmFilters": [{ "id": "plugin:my-plugin:dlp", "phase": "pre_request", "failMode": "closed", "timeoutMs": 200 }]
+}
+```
+
+| Key | Shape | Rules |
+|---|---|---|
+| `tools[]` | an array of strings | non-empty, without duplicates; **local** names (without the `plugin_` prefix) |
+| `promptBlocks[]` | `{ key, tier, order, title?, provenance? }` | `tier` — only `context`/`volatile`; `stable` is invalid; `key` is unique within the array; `order` is an integer; extra fields are forbidden |
+| `llmFilters[]` | `{ id, phase, failMode?, timeoutMs? }` | `phase` — `pre_request`/`post_response`/`embedding`; `timeoutMs` is a positive integer; extra fields are forbidden |
+
+The `mcp`/`skills`/`agents`/`pipelines` keys are usually empty for a plugin: they belong to other
+extension classes. If a plugin declares `tools`/`promptBlocks`/`llmFilters`, the **actual
+registrations must match the declaration by name** — otherwise activation is rejected with
+`plugin.provides_mismatch` (§4.4).
+
+> **An empty `provides` is invalid.** A plugin without a single contribution will not install:
+> `validatePackManifest` requires at least one element.
+
+---
+
+## 4. Extension points
+
+The contract of all three points lives in `@itphx/synth-shared` (browser-safe: only types and pure
+functions). The facade is `PluginFacade` from `@itphx/synth-core`; on activation the host calls
+`apply(facade)`.
+
+```typescript
+export type PluginDisposer = () => void | Promise<void>;
+
+export interface PluginFacade {
+  registerDisposer(disposer: PluginDisposer): void;
+  registerPromptBlock(provider: PromptBlockProvider, opts?: { title?: string }): PluginDisposer;
+  registerLlmFilter(filter: LlmCallFilter, opts?: { failMode?: 'open' | 'closed'; timeoutMs?: number }): PluginDisposer;
+  registerTool(def: PluginToolDefinition): PluginDisposer;
+}
+```
+
+Every registration returns a **disposer** — the inverse operation. On deactivation the host calls
+the disposers **in the reverse order of registration**; a failure of one does not interrupt the
+others. A `disposer` is idempotent — a repeated call does nothing.
+
+A refused registration (a taken key, the tier `stable`, a reserved capability) **does not fail
+activation**: the host writes a warning and returns a no-op disposer. But if such a contribution
+was declared in `provides`, the reconciliation turns it into an activation failure.
+
+### 4.1. `promptBlocks` — a system prompt block
+
+```typescript
+export const PROMPT_BLOCK_PROVIDER_TIERS = ['context', 'volatile'] as const;
+
+export interface PromptBlockProvider {
+  readonly key: string;
+  readonly tier: 'context' | 'volatile';
+  readonly order: number;
+  readonly title?: string;
+  load(ctx: PromptBlockContext): Promise<PromptBlockContent | string | null> | PromptBlockContent | string | null;
+}
+
+export interface PromptBlockContext {
+  readonly sessionId: string;
+  readonly agentRole: string;
+  readonly language: string;
+  readonly projectId?: string;
+  readonly mode: 'plan' | 'act' | 'yolo';
+  readonly query?: string;   // the text of the last user message
+  readonly turnId?: string;  // the turn identifier
+  readonly timestamp?: string;
+}
+```
+
+**Where the block lands.** `SystemPromptComposer` walks the providers while assembling the prompt
+and puts their blocks into **the same** array as the built-in ones: one sort (tier → `order`), one
+concatenation, one manifest. In the manifest (`GET /api/v2/sessions/:id/prompt`) an entry looks like
+`{ key, tier, order, source: "system", provenance: "plugin:<name>", status }`.
+
+**Rules and restrictions.**
+
+| Rule | Details |
+|---|---|
+| the tier `stable` is forbidden | `stablePrefix` is the prompt-cache boundary (ADR-070); a registration with `stable` is rejected, there is no silent downgrade to `context` |
+| the key is unique within the instance | the recommended form is `plugin.<pluginName>.<slot>`; a taken key → a refused registration |
+| `order` | a number inside the tier; for plugins `order ≥ 100` is recommended, so as not to compete with the built-in blocks (they occupy 5–90) |
+| `provenance` | the host substitutes `plugin:<name>` automatically; it can be overridden in the returned object |
+| character budget | `plugins.promptBlockMaxChars` (4 000 by default). If it does not fit — the **host** truncates the block (head + tail with a `[TRUNCATED: …]` marker) and sets `status: "truncated"` |
+| degradation | an exception from `load()` → a `warning` in the log, the block is empty, the **turn does not fail** |
+| no turn question | `query` is not set for the `task` subagent and for a pipeline step; a `volatile` block should sensibly stay empty in that case (the host does not require it) |
+| prompt override | if the session has `settings.systemPrompt`, plugin blocks are **not added** (the user prompt replaces everything) |
+| the `task` subagent | a known limitation: the subagent prompt is assembled outside the Composer, so a plugin block does not get there |
+| a pipeline step | it goes through the Composer, but with a narrowed context: `sessionId` = `pipeline:<runId>:<nodeId>`, `query`/`turnId`/`timestamp` are not filled in |
+
+**Example: a block with retrieval against the turn's question.**
+
+```typescript
+import type { PromptBlockProvider } from '@itphx/synth-shared';
+
+const provider: PromptBlockProvider = {
+  key: 'plugin.my-plugin.facts',
+  tier: 'volatile',           // changes every turn
+  order: 110,
+  title: 'Facts for the question',
+  async load(ctx) {
+    if (!ctx.query) return { content: '', status: 'empty' };
+    const facts = await searchFacts(ctx.query, { projectId: ctx.projectId });
+    if (facts.length === 0) return null;           // an empty block
+    const text = facts.map((f) => `- ${f.text}`).join('\n');
+    return { content: text, status: 'loaded' };     // longer than the budget — the host truncates it
+  },
+};
+```
+
+`searchFacts` is your code: the network only through the allowed hosts (`permissions.network` + the
+instance egress policy, ADR-099), secrets — not from files, but through the instance API.
+
+### 4.2. `llmFilters` — an LLM call filter
+
+```typescript
+export const LLM_FILTER_PHASES = ['pre_request', 'post_response', 'embedding'] as const;
+
+export interface LlmCallFilter {
+  readonly id: string;
+  readonly phase: 'pre_request' | 'post_response' | 'embedding';
+  readonly failMode?: 'open' | 'closed';
+  readonly timeoutMs?: number;
+  inspect(input: LlmFilterInput): Promise<LlmFilterVerdict> | LlmFilterVerdict;
+}
+
+export interface LlmFilterVerdict {
+  readonly verdict: 'allow' | 'deny' | 'redact';
+  readonly reason?: string;
+  readonly code?: string;
+  readonly redactedContent?: string;   // only `redact` in post_response (not supported in v1)
+  readonly redactedTexts?: readonly string[]; // only `redact` in embedding
+}
+```
+
+**What the filter sees.**
+
+| Phase | Data | Effect on the call |
+|---|---|---|
+| `pre_request` | `messages` (**the whole session history**), `systemPrompt`, `tools`, `provider`, `model`, `sessionId` | a `deny` from a trusted filter — the call does not reach the provider; `redact` is **not supported** (the host records `plugin_filter.redact_unsupported` and continues) |
+| `post_response` | the full response text (`content`), `usage` | observation only: `deny`/`redact` are rejected by the host (`plugin_filter.buffering_required`) — buffering the response is forbidden (ADR-036) |
+| `embedding` | `texts` (an array) | `deny` — the embedding does not go out; `redact` — the texts are replaced with `redactedTexts` (the array lengths must match, otherwise fail-closed `deny`) |
+
+**The text is already obfuscated.** `pre_request` is called **after** the obfuscation map: the filter
+sees the request in the form in which it will go to the provider (the secrets are replaced with
+placeholders).
+
+**The gateway requirement.** The filters live inside `GatewayProvider`, therefore they apply **only
+when `llmGateway.enabled: true`**. With the gateway disabled the call goes around the gateway
+contour and the filters are not called — that is not a plugin error.
+
+**The right to veto.** `deny`/`redact` act only for a plugin whose actual trust is ≥ `trusted`
+(`builtin`/`verified`/`trusted`). For `community` the host downgrades the verdict to `allow` and
+writes `plugin_filter.deny_downgraded` to the plugin journal. Anyone may observe (audit, metrics, a
+signal).
+
+**Failure and timeout.** `failMode` applies:
+
+- `closed` — the call does **not** go to the provider (the reason is `plugin_filter.unavailable`,
+  in the error text — `plugin_filter.timeout`/`plugin_filter.error`);
+- `open` — the call goes through, the failure is recorded in the gateway audit.
+
+The default: for a blocking phase (`pre_request`/`embedding`) with the right to veto — `closed`,
+otherwise `open`. The filter's `timeoutMs` takes priority over the instance's
+`plugins.llmFilterTimeoutMs` (1 000 ms by default). An unknown verdict (a typo in `verdict`) is
+treated as a failure — that is, per `failMode`.
+
+**Order.** The filters are traversed in registration order; the first `deny` from a trusted filter
+stops the call (the remaining filters of that phase are not called).
+
+**Example: a DLP filter with a veto.**
+
+```typescript
+import type { LlmCallFilter } from '@itphx/synth-shared';
+
+const filter: LlmCallFilter = {
+  id: 'plugin:my-plugin:secrets',   // the convention is: plugin:<name>:<filter>
+  phase: 'pre_request',
+  failMode: 'closed',
+  timeoutMs: 150,
+  inspect({ systemPrompt, messages }) {
+    const text = [systemPrompt ?? '', ...(messages ?? []).map((m) => m.content)].join('\n');
+    if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text)) {
+      return { verdict: 'deny', code: 'private_key', reason: 'a private key was found in the request' };
+    }
+    return { verdict: 'allow' };
+  },
+};
+```
+
+**Example: masking embedding texts.**
+
+```typescript
+const embeddingFilter: LlmCallFilter = {
+  id: 'plugin:my-plugin:embed-pii',
+  phase: 'embedding',
+  failMode: 'closed',
+  inspect({ texts }) {
+    const redacted = (texts ?? []).map((text) => text.replace(/\b\d{12}\b/g, '<ID>'));
+    return { verdict: 'redact', redactedTexts: redacted };
+  },
+};
+```
+
+> **The streaming restriction.** In a stream the chunks go out as they are; `post_response` receives
+> the already-sent response. Blocking/editing the response is deliberately not supported in v1.
+
+### 4.3. `tools` — a tool for the model
+
+```typescript
+export interface PluginToolDefinition {
+  name: string;                       // the local name, without `plugin_`
+  description: string;                // the description for the model
+  parameters: z.ZodTypeAny;           // a zod schema (the host validates the arguments)
+  capabilities: ToolCapability[];     // mandatory
+  execute: ToolExecutor;              // (params, ctx) => ToolResult
+  jsonSchema?: Record<string, unknown>; // the schema for the model (otherwise converted from parameters)
+}
+```
+
+**The namespace.** The name in the shared registry is composed by the **host**:
+`plugin_<namespace>_<localName>`, where the namespace is the plugin name in lower case with
+non-alphanumeric characters replaced by `_` (`my-plugin` → `my_plugin`). The manifest declares the
+**local** name (`notes_search`) — so `provides.tools[]` does not depend on the namespace details. The
+local name: `^[A-Za-z0-9][A-Za-z0-9_-]*$`, the `plugin_` prefix is forbidden (otherwise the
+`provides` reconciliation would be ambiguous).
+
+**The capabilities.** Mandatory and non-empty, the values are from `ToolCapability`: `file_read`,
+`file_write`, `shell`, `search`, `web`, `git_read`, `git_write`, `task`, `user` (`mcp` and `runtime`
+are **reserved**: the first is the MCP layer, the second is core primitives that an admin cannot
+disable). Without capabilities the tool would be invisible to the permission layer and to the
+admin's disabling, therefore the registration is rejected.
+
+**Availability.** It is decided by the permission layer (ADR-029), not by the tool: plugin tools are
+addressed by the `plugin` group (matched **by source** `plugin`, not by capability) and obey the
+session mode. In `plan` mode the mutating capabilities (`file_write`, `shell`, `git_write`) get
+`deny` (ADR-025), in `act` — by the rules (`allow`/`ask`/`deny`); `search`/`file_read` are available
+in `plan`. The instance can disable the tool by name (`plugin_<ns>_<tool>`) or by capability via
+`PUT /api/v2/settings/tools-disabled` — but that will also disable the built-in tools with the same
+capability.
+
+**What arrives in `execute`.** `(params, ctx)`, where `ctx.sessionId`, `ctx.messageId`,
+`ctx.workingDir`, `ctx.agentRole?`, `ctx.abortSignal?`. Do not rely on `ctx.extra` — it is an
+internal core object, its composition is not part of the contract and may change.
+
+**Why you should set `jsonSchema`.** `parameters` is your zod schema; the host validates the
+arguments with it (`safeParse`). But for the model the schema is converted by the host into JSON
+Schema, and the converter recognizes the classes of **its own** copy of zod. The built bundle
+carries its own copy — therefore an explicit `jsonSchema` (what the model sees) is safer and more
+predictable.
+
+**Example: a tool that returns an error without an exception.**
+
+```typescript
+import { z } from 'zod';
+import type { PluginFacade } from '@itphx/synth-core';
+
+const tool: Parameters<PluginFacade['registerTool']>[0] = {
+  name: 'notes_search',
+  description: 'Searches for a note by keyword.',
+  parameters: z.object({ query: z.string().min(1) }),
+  jsonSchema: {
+    type: 'object',
+    properties: { query: { type: 'string' } },
+    required: ['query'],
+  },
+  capabilities: ['search'],
+  async execute(params) {
+    const { query } = params as { query: string };
+    if (query.length < 2) {
+      // An ordinary tool error: the content goes to the model as is, the turn does not fail.
+      return { content: 'The query is too short: the minimum is 2 characters.', isError: true };
+    }
+    return { content: `Found for "${query}": 0 notes.` };
+  },
+};
+```
+
+### 4.4. Reconciling "declared ↔ registered"
+
+After `apply()` and **before** the activation is committed, the host compares `provides` with the
+actual registrations across all three points:
+
+- `promptBlocks` — by `key`;
+- `llmFilters` — by `id`;
+- `tools` — by the local name.
+
+A mismatch in either direction (`missing` — declared but not registered; `unexpected` — registered
+but not declared) → an **activation refusal** `plugin.provides_mismatch` with a rollback of the
+registrations already made. This is not nitpicking: it is how an inconsistent build is caught (for
+example, the manifest has a new version of a block, while the bundle has the old one).
+
+Typical causes:
+
+| Symptom | Cause |
+|---|---|
+| `missing: plugin.my-plugin.notes` | the name/key in the manifest and in the code diverged (a typo, a different case) |
+| `unexpected: notes_search` | the tool was forgotten in `provides.tools` (or an old name was declared) |
+| `missing: plugin:my-plugin:dlp` | the filter was not registered because of a refusal (an unknown phase), while `provides` still lists it |
+
+A rejected registration does not count as "registered": for example, a block with the tier `stable`
+is rejected, and if it was declared in `provides`, the activation fails with `provides_mismatch`.
