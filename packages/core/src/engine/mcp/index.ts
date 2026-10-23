@@ -1,5 +1,16 @@
 export { McpClient, MAX_TOOL_RESULT_CHARS } from './client.js';
-export type { McpToolDef, McpToolResult, McpClientLike } from './client.js';
+export type { McpToolDef, McpToolResult, McpClientLike, McpClientOptions } from './client.js';
+export {
+  McpCredentialError,
+  createCredentialFetch,
+  createRepositoryCredentialSource,
+} from './credential-auth.js';
+export type {
+  McpCredentialErrorCode,
+  McpCredentialSource,
+  RepositoryCredentialSourceDeps,
+  CredentialFetchOptions,
+} from './credential-auth.js';
 export { McpManager } from './manager.js';
 export type { McpManagerOptions } from './manager.js';
 export {

@@ -134,4 +134,46 @@ describe('ADR-104: очередь инъекций (steerInbox)', () => {
     expect(messages.map((m) => m.content)).toEqual(['m0', 'm1', 'm2', 'm3', 'm4']);
     expect(dropped.map((m) => m.content)).toEqual(['m5', 'm6']);
   });
+
+  it('приоритет (этап 3): interrupt вплетается раньше steer, внутри класса — FIFO', async () => {
+    // Порядок постановки: steer, interrupt, steer, interrupt.
+    await enqueueSteerMessage(
+      sessionManager, eventBus, sessionId, makeSteerMessage('вмешательство 1'),
+    );
+    await enqueueSteerMessage(
+      sessionManager, eventBus, sessionId, makeSteerMessage('прерывание 1'),
+      undefined, undefined, { interrupt: true },
+    );
+    await enqueueSteerMessage(
+      sessionManager, eventBus, sessionId, makeSteerMessage('вмешательство 2'),
+    );
+    await enqueueSteerMessage(
+      sessionManager, eventBus, sessionId, makeSteerMessage('прерывание 2'),
+      undefined, undefined, { interrupt: true },
+    );
+
+    const { messages } = await sessionManager.takeSteerMessages(sessionId);
+    // Сначала оба `interrupt` (в порядке постановки), затем оба `steer`.
+    expect(messages.map((m) => m.content)).toEqual([
+      'прерывание 1', 'прерывание 2', 'вмешательство 1', 'вмешательство 2',
+    ]);
+  });
+
+  it('приоритет (этап 3): лимит хода считает оба класса, при переполнении первыми отбрасываются steer', async () => {
+    // 4 инъекции: 2 interrupt + 2 steer; лимит 3 → лишняя (низший приоритет) отбрасывается.
+    for (const [content, interrupt] of [
+      ['steer 1', false], ['interrupt 1', true], ['steer 2', false], ['interrupt 2', true],
+    ] as const) {
+      await enqueueSteerMessage(
+        sessionManager, eventBus, sessionId, makeSteerMessage(content),
+        undefined, undefined, { interrupt },
+      );
+    }
+
+    const { messages, dropped } = await sessionManager.takeSteerMessages(
+      sessionId, 3,
+    );
+    expect(messages.map((m) => m.content)).toEqual(['interrupt 1', 'interrupt 2', 'steer 1']);
+    expect(dropped.map((m) => m.content)).toEqual(['steer 2']);
+  });
 });

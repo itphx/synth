@@ -51,6 +51,45 @@ export const STEER_INTERRUPT_METADATA_KEY = 'interrupt';
  */
 export const STEER_INTERRUPTED_METADATA_KEY = 'interrupted';
 
+/**
+ * Классы инъекций по приоритету применения (ADR-104, этап 3).
+ *
+ * Порядок классов — это порядок применения: `interrupt` (прерывание
+ * генерации) вплетается раньше `steer` (вмешательство без прерывания);
+ * внутри класса порядок — FIFO (порядок постановки в очередь).
+ */
+export const STEER_INJECTION_CLASSES = ['interrupt', 'steer'] as const;
+
+/** Класс инъекции (`interrupt` | `steer`). */
+export type SteerInjectionClass = (typeof STEER_INJECTION_CLASSES)[number];
+
+/** Минимальный вид сообщения, по которому определяется класс инъекции. */
+export interface SteerInjectionLike {
+  metadata?: Record<string, unknown> | undefined;
+}
+
+/**
+ * Класс инъекции по маркеру `metadata.interrupt` (ADR-104, этап 3).
+ * Всё, что не помечено как прерывание, — обычное вмешательство (`steer`).
+ */
+export function steerInjectionClass(message: SteerInjectionLike): SteerInjectionClass {
+  return message.metadata?.[STEER_INTERRUPT_METADATA_KEY] === true ? 'interrupt' : 'steer';
+}
+
+/**
+ * Порядок применения инъекций (ADR-104, этап 3): сначала класс `interrupt`,
+ * затем `steer`; внутри класса — FIFO. Возвращает НОВЫЙ массив (вход не
+ * мутируется) — порядок предсказуем и не зависит от момента постановки.
+ */
+export function orderSteerInjections<T extends SteerInjectionLike>(messages: readonly T[]): T[] {
+  const interrupts: T[] = [];
+  const steers: T[] = [];
+  for (const message of messages) {
+    (steerInjectionClass(message) === 'interrupt' ? interrupts : steers).push(message);
+  }
+  return [...interrupts, ...steers];
+}
+
 /** Машинные коды ошибок steering (контракт ошибок API v2). */
 export const STEERING_ERROR_CODES = {
   /** Превышен лимит инъекций на ход. */

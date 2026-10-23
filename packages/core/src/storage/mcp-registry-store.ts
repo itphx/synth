@@ -1,8 +1,66 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { McpServerConfig, McpRegistryEntry, McpRegistryAuthor, McpRegistryOrigin, McpRegistryTrust } from '@itphx/synth-shared';
-import { MCP_REGISTRY_SCHEMA_VERSION, generateId, nowISO, AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-shared';
+import { MCP_REGISTRY_SCHEMA_VERSION, generateId, nowISO, AsyncLock, atomicWrite, safeJsonParse, findForbiddenMcpSecretHeaders, mcpSecretHeaderErrorMessage, MCP_SECRET_HEADER_ERROR_CODE } from '@itphx/synth-shared';
 import type { McpRegistryRepository } from './ports/mcp-registry-repository.js';
+import { warning } from '../logger.js';
+
+/**
+ * ADR-105 (Ф3): ошибка валидации записи реестра MCP.
+ *
+ * `code` — машинно-читаемый (в HTTP отдаётся как `error.code`); текст —
+ * для оператора. Значения заголовков в тексте **нет** (только их имена).
+ */
+export class McpRegistryValidationError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'McpRegistryValidationError';
+  }
+}
+
+/**
+ * ADR-105 (Ф3): запрет plaintext-секретов в заголовках коннектора.
+ *
+ * Значения `authorization`/`proxy-authorization`/`x-api-key`/`cookie` в реестре
+ * MCP не принимаются: секрет живёт в слое внешних доступов
+ * (`ExternalCredential`), а коннектор ссылается на него по id
+ * (`auth: { kind: 'credential', credentialId }`).
+ *
+ * Бросает `McpRegistryValidationError` с кодом `MCP_SECRET_HEADER_FORBIDDEN`.
+ */
+export function assertNoMcpSecretHeaders(config: McpServerConfig): void {
+  const forbidden = findForbiddenMcpSecretHeaders(config.headers);
+  if (forbidden.length === 0) return;
+  throw new McpRegistryValidationError(
+    MCP_SECRET_HEADER_ERROR_CODE,
+    mcpSecretHeaderErrorMessage(forbidden),
+  );
+}
+
+/**
+ * ADR-105 (Ф3): убрать из конфига коннектора заголовки с plaintext-секретом.
+ *
+ * Используется при сиде из `config.yaml` (legacy-путь): секрет не попадает в
+ * реестр (и в бэкап), в лог уходит **только имя** заголовка.
+ */
+export function stripMcpSecretHeaders(config: McpServerConfig, serverName: string): McpServerConfig {
+  const forbidden = findForbiddenMcpSecretHeaders(config.headers);
+  if (forbidden.length === 0) return config;
+  const headers = { ...(config.headers ?? {}) };
+  for (const name of Object.keys(headers)) {
+    if (forbidden.some((f) => f.toLowerCase() === name.trim().toLowerCase())) {
+      delete headers[name];
+    }
+  }
+  warning(
+    'MCP',
+    `У коннектора "${serverName}" из конфига убраны заголовки с секретами (${forbidden.join(', ')}) — используйте auth.kind='credential'`,
+  );
+  return { ...config, headers };
+}
 
 export interface McpRegistryStoreConfig {
   dataDir: string;
@@ -108,6 +166,8 @@ export class McpRegistryStore implements McpRegistryRepository {
   async add(input: AddMcpRegistryEntryInput): Promise<McpRegistryEntry> {
     await this._lock.acquire();
     try {
+      // ADR-105 (Ф3): plaintext-секрет в заголовках не принимается.
+      assertNoMcpSecretHeaders(input.config);
       const file = await this._load();
       if (file.entries.some((e) => e.name === input.name)) {
         throw new Error(`MCP-сервер "${input.name}" уже существует в реестре`);
@@ -137,6 +197,8 @@ export class McpRegistryStore implements McpRegistryRepository {
   async update(id: string, patch: UpdateMcpRegistryEntryInput): Promise<McpRegistryEntry | null> {
     await this._lock.acquire();
     try {
+      // ADR-105 (Ф3): plaintext-секрет в заголовках не принимается.
+      if (patch.config) assertNoMcpSecretHeaders(patch.config);
       const file = await this._load();
       const index = file.entries.findIndex((e) => e.id === id);
       if (index === -1) return null;
@@ -182,14 +244,22 @@ export class McpRegistryStore implements McpRegistryRepository {
   /**
    * Сид instance-серверов из `config.mcp.servers`. Существующие записи по имени
    * не дублируются. Возвращает число добавленных записей.
+   *
+   * ADR-105 (Ф3): конфиг из `config.yaml` может содержать legacy-plaintext
+   * секрет в заголовках. Такой заголовок **не переносится** в реестр (иначе
+   * секрет уедет в бэкап и в выдачу реестра) — он отбрасывается с
+   * предупреждением в лог (только имя заголовка, значение не логируется).
+   * Авторизация такого коннектора задаётся через
+   * `auth: { kind: 'credential', credentialId }` (слой внешних доступов).
    */
   async seedFromConfig(servers: Record<string, McpServerConfig>): Promise<number> {
     await this._lock.acquire();
     try {
       const file = await this._load();
       let added = 0;
-      for (const [name, config] of Object.entries(servers)) {
+      for (const [name, rawConfig] of Object.entries(servers)) {
         if (file.entries.some((e) => e.name === name)) continue;
+        const config = stripMcpSecretHeaders(rawConfig, name);
         const now = nowISO();
         file.entries.push({
           schemaVersion: MCP_REGISTRY_SCHEMA_VERSION,

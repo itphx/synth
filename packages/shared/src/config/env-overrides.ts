@@ -10,7 +10,7 @@
  *
  * Приоритет (ADR-023): CLI-флаги (`overrides`) > env (`SYNTH_*`) > config.yaml > defaults.
  */
-import { bootstrapServiceKeysSchema } from './types.js';
+import { bootstrapServiceKeysSchema, oauthProvidersSchema } from './types.js';
 
 export type EnvOverrideType = 'boolean' | 'number' | 'string';
 
@@ -200,6 +200,48 @@ export function applyEnvOverrides<T extends Record<string, unknown>>(
 }
 
 /**
+ * ADR-105 (Ф3): env-оверрайд каталога OAuth-провайдеров (`oauth.providers`).
+ *
+ * Значение — JSON-объект «имя → описание». Провайдер из env заменяет
+ * одноимённого из config.yaml; остальные записи config.yaml сохраняются.
+ * Невалидный JSON/набор — warn в console и игнор (fail-soft: кривой каталог
+ * не должен ронять старт инстанса — доступы просто не обновятся).
+ */
+function applyOAuthProvidersEnvOverride<T extends Record<string, unknown>>(
+  config: T,
+  env: NodeJS.ProcessEnv,
+): void {
+  const raw = env[OAUTH_PROVIDERS_ENV];
+  if (raw === undefined || raw === '') return;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.warn(`[config] невалидный JSON ${OAUTH_PROVIDERS_ENV} — игнорируется`);
+    return;
+  }
+
+  const validated = oauthProvidersSchema.safeParse(parsed);
+  if (!validated.success) {
+    console.warn(`[config] ${OAUTH_PROVIDERS_ENV} не прошёл валидацию — игнорируется`);
+    return;
+  }
+
+  const current = config.oauth;
+  const oauth =
+    current !== null && typeof current === 'object' && !Array.isArray(current)
+      ? { ...(current as Record<string, unknown>) }
+      : {};
+  const providers =
+    oauth.providers !== null && typeof oauth.providers === 'object' && !Array.isArray(oauth.providers)
+      ? { ...(oauth.providers as Record<string, unknown>) }
+      : {};
+  oauth.providers = { ...providers, ...validated.data };
+  (config as Record<string, unknown>).oauth = oauth;
+}
+
+/**
  * ADR-052/O1: env-имя JSON-списка installer service-key'ев
  * (`security.bootstrapServiceKeys`). Значение — JSON-массив объектов
  * `{ label, secret, scopes, roles?, description? }`. Приоритет — как у
@@ -208,6 +250,20 @@ export function applyEnvOverrides<T extends Record<string, unknown>>(
  * (передаётся из env/Secret).
  */
 export const BOOTSTRAP_SERVICE_KEYS_ENV = 'SYNTH_BOOTSTRAP_SERVICE_KEYS';
+
+/**
+ * ADR-105 (Ф3): env-имя JSON-каталога OAuth-провайдеров (`oauth.providers`).
+ *
+ * Значение — JSON-объект «имя провайдера → описание»
+ * (`{ authorizeUrl, tokenUrl, revokeUrl?, deviceAuthorizationUrl?, clientId, scopes[] }`).
+ * Приоритет — как у скалярных env-оверрайдов: env > config.yaml (ADR-023),
+ * но ниже CLI-overrides. Провайдер из env **заменяет** одноимённого из
+ * config.yaml (описание целиком), остальные записи config.yaml сохраняются.
+ *
+ * Секрета здесь нет: `client_secret` — только env `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET`
+ * или файл `{dataDir}/secrets/oauth/<provider>.client_secret` (инвариант 13).
+ */
+export const OAUTH_PROVIDERS_ENV = 'SYNTH_OAUTH_PROVIDERS';
 
 /**
  * Применяет объектные env-оверрайды, у которых нет плоского строкового
@@ -223,6 +279,8 @@ export function applyObjectEnvOverrides<T extends Record<string, unknown>>(
   config: T,
   env: NodeJS.ProcessEnv = process.env,
 ): T {
+  applyOAuthProvidersEnvOverride(config, env);
+
   const raw = env[BOOTSTRAP_SERVICE_KEYS_ENV];
   if (raw === undefined || raw === '') return config;
 

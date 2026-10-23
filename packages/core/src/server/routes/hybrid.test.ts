@@ -293,6 +293,70 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
     });
   });
 
+  describe('POST /api/v2/sessions/:id/prompt — контракт режима (ADR-104 этап 3)', () => {
+    it('mode доезжает до удалённой стороны (тело пробрасывается как есть)', async () => {
+      const { app, remote } = createTestApp(createFakeRemoteClient(), tmpDir);
+      await app.request('/api/v2/sessions/remote:rs-1/prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'привет', mode: 'steer' }),
+      });
+      expect(remote.promptSession).toHaveBeenCalledWith(
+        'rs-1',
+        expect.objectContaining({ content: 'привет', mode: 'steer' }),
+        expect.anything(),
+      );
+    });
+
+    it('удалённая сторона применила режим (202) → mode_applied: true', async () => {
+      const remote = createFakeRemoteClient({
+        promptSession: vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ status: 'steered', stream_id: 'st-1', pending_count: 1 }), {
+            status: 202,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        ),
+      });
+      const { app } = createTestApp(remote, tmpDir);
+      const res = await app.request('/api/v2/sessions/remote:rs-1/prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'привет', mode: 'steer' }),
+      });
+      expect(res.status).toBe(202);
+      const body: any = await res.json();
+      expect(body.status).toBe('steered');
+      expect(body.mode_applied).toBe(true);
+    });
+
+    it('удалённая сторона НЕ применила режим (обычная очередь) → mode_applied: false', async () => {
+      const { app } = createTestApp(createFakeRemoteClient(), tmpDir);
+      const res = await app.request('/api/v2/sessions/remote:rs-1/prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'привет', mode: 'steer', messageId: 'st-9' }),
+      });
+      expect(res.status).toBe(202);
+      const body: any = await res.json();
+      expect(body.mode_applied).toBe(false);
+      expect(body.status).toBe('queued');
+      expect(body.stream_id).toBe('st-9');
+    });
+
+    it('режим queue — поведение прежнее: upstream Response проксируется как есть', async () => {
+      const { app } = createTestApp(createFakeRemoteClient(), tmpDir);
+      const res = await app.request('/api/v2/sessions/remote:rs-1/prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'привет' }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toBe('text/event-stream');
+      const text = await res.text();
+      expect(text).toContain('stream.done');
+    });
+  });
+
   describe('GET /api/v2/projects', () => {
     it('возвращает объединение проектов с origin', async () => {
       const { app, projectStore, remote } = createTestApp(createFakeRemoteClient(), tmpDir);

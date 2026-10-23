@@ -724,8 +724,27 @@ export function createSessionRoutes(
         return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
       }
       const body = await c.req.json().catch(() => ({}));
+      // ADR-104 (этап 3): режим отправки доезжает до удалённой стороны (тело
+      // пробрасывается как есть) и клиент получает явный ответ, если удалённая
+      // сторона режим НЕ применила.
+      const mode = isSteerMode(body.mode) ? body.mode : DEFAULT_STEER_MODE;
       try {
-        return await remoteClient.promptSession(toLocalId(sessionId), body, { signal: c.req.raw.signal });
+        const response = await remoteClient.promptSession(toLocalId(sessionId), body, { signal: c.req.raw.signal });
+        if (mode === 'queue') return response;
+        // Удалённая сторона применила режим → отвечает `202` (ack без
+        // SSE-тела). Иначе режим не применён (нет активного хода на удалённой
+        // стороне или удалённая версия режим не знает) — сообщение ушло
+        // обычной очередью, отвечаем явным ack'ом.
+        if (response.status === 202) {
+          const payload = await response.json().catch(() => ({}));
+          return c.json({ ...(payload as Record<string, unknown>), mode_applied: true }, 202);
+        }
+        await response.body?.cancel().catch(() => {});
+        return c.json({
+          status: 'queued',
+          mode_applied: false,
+          stream_id: typeof body.messageId === 'string' ? body.messageId : undefined,
+        }, 202);
       } catch (err) {
         const mapped = mapRemoteError(c, err);
         if (mapped) return mapped;
@@ -808,6 +827,8 @@ export function createSessionRoutes(
         status: interruptMode ? 'interrupted' : 'steered',
         stream_id: streamId,
         pending_count: steerResult.pending,
+        // ADR-104 (этап 3): локальная сторона применила режим сама.
+        mode_applied: true,
       }, 202);
     }
 

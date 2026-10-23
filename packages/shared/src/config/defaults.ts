@@ -187,6 +187,11 @@ export const defaultConfig: SynthConfig = {
     escalationProvider: '',
     escalationModel: '',
   },
+  oauth: {
+    // ADR-105 (Ф3): каталога OAuth-провайдеров нет — описания задаёт оператор
+    // (`oauth.providers` в config.yaml или env `SYNTH_OAUTH_PROVIDERS`).
+    providers: {},
+  },
   analytics: {
     // ADR-102: срок хранения суточных роллапов — 400 дней (<= 0 — без ограничения).
     retentionDays: 400,

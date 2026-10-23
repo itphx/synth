@@ -608,6 +608,17 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     registry: mcpRegistryStore,
     // Политика резолвится на каждый запрос (live; исключения/режим — из стора).
     getNetworkPolicy: () => egressResolver.resolveMcp(),
+    // ADR-105 (Ф3): порт слоя внешних доступов — право привязать доступ
+    // к коннектору проверяется на границе (инвариант 16).
+    credentials: deps.storageContext.externalCredentials,
+    // ADR-105 (Ф3): проектный доступ привязывает участник проекта с правом
+    // изменения содержимого (OWNER/EDITOR + LEAD/ADMIN; VIEWER — нет).
+    canEditProject: async (c, projectId) => {
+      const user = c.get('user') as { id?: string } | undefined;
+      if (!user?.id) return false;
+      const project = await projectStore.load(projectId);
+      return project ? projectAccess.canEditProjectContent(c as never, project, user.id) : false;
+    },
   }));
 
   // Скиллы (ADR-046 §9.1/§9.2): core-фабрика + RBAC ADMIN на запись.

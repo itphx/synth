@@ -146,6 +146,7 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; master switch of the authority layer) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — observation, `false` — enforcement) |
 | `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` | string (secret) | `client_secret` of an OAuth provider: `google` → `SYNTH_OAUTH_GOOGLE_CLIENT_SECRET` (never stored in config; the alternative is a file `{dataDir}/secrets/oauth/<provider>.client_secret`, see below) |
+| `SYNTH_OAUTH_PROVIDERS` | JSON object | `oauth.providers` — the OAuth provider catalog (object env override, ADR-105 stage 3; see below) |
 | `SYNTH_TLS_CA_FILE` | ADR-099: path to a PEM file with the trusted CA (corporate CA); mutually exclusive with `SYNTH_TLS_CA_PEM` | — |
 | `SYNTH_TLS_CA_PEM` | ADR-099: PEM of the trusted CA (e.g. from a Secret); mutually exclusive with `SYNTH_TLS_CA_FILE` | — |
 | `SYNTH_TLS_CERT_FILE` | ADR-099: path to the PEM file of the client certificate (mTLS) | — |
@@ -325,6 +326,11 @@ mcp:
   # servers — see packages/shared/src/config/types.ts
   # networkPolicy — the MCP address policy {mode, list, exceptions} (the same format as egress.*),
   # see "Address policy for outbound requests (`egress.*`, ADR-099)"
+
+oauth:
+  providers: {}                    # ADR-105 stage 3: the instance OAuth provider catalog —
+                                  # "name → description" (data only, no secrets);
+                                  # see "OAuth provider catalog (`oauth.providers`, ADR-105 stage 3)"
 
 tools:
   policy: "auto"                  # ADR-071 §2.3: policy for enabling BUILT-IN tools
@@ -981,6 +987,46 @@ External access secrets (OAuth connectors) are **never stored in `config.yaml`**
 - Tokens are **encrypted** at rest with the master key (`enc:v1:…`, ADR-076) — plaintext never appears on disk; only metadata with a mask is exposed.
 - **Backup**: the `secrets/` directory is excluded from the `synth backup` archive without `--with-secrets` — the credential tokens are excluded with it. The project export/import (ADR-091) does not carry credentials over: they are instance-local.
 - The subsystem description — [EXTERNAL_ACCESS.md](../EXTERNAL_ACCESS.md) (RU); the decision — [ADR-105](../arch_decisions/adr-105-external-credentials.md).
+
+### OAuth provider catalog (`oauth.providers`, ADR-105 stage 3)
+
+The catalog describes the **data** of the external OAuth providers of the instance: endpoints, `client_id`, scopes.
+The core builds the OAuth client (code exchange, refresh, revoke) for the credential records from that description.
+An empty catalog is a normal state: credentials created by code work, but there is nothing to **refresh** a token
+with without a provider description (refresh returns a clear "provider is not registered" error).
+
+```yaml
+oauth:
+  providers:
+    github:
+      authorizeUrl: "https://github.com/login/oauth/authorize"
+      tokenUrl: "https://github.com/login/oauth/access_token"
+      revokeUrl: "https://api.github.com/applications/token"
+      clientId: "synth-client"
+      scopes: ["repo", "read:user"]
+      clientAuth: "none"           # none (PKCE, public client) | client_secret_post | client_secret_basic
+    google:
+      authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth"
+      tokenUrl: "https://oauth2.googleapis.com/token"
+      clientId: "synth-client"
+      scopes: ["https://www.googleapis.com/auth/calendar.readonly"]
+      clientAuth: "client_secret_post"
+```
+
+| Field | Required | Purpose |
+|------|----------|---------|
+| `authorizeUrl` | yes | authorization endpoint (RFC 6749 §3.1) |
+| `tokenUrl` | yes | token endpoint (code exchange and refresh, RFC 6749 §3.2/§6) |
+| `revokeUrl` | no | token revocation endpoint (RFC 7009) |
+| `deviceAuthorizationUrl` | no | device authorization endpoint (RFC 8628 §3.1) |
+| `clientId` | yes | public `client_id` of the application (not a secret) |
+| `scopes` | no | default scopes (default `[]`) |
+| `clientAuth` | no | client authentication method: `none` (PKCE, default) / `client_secret_post` / `client_secret_basic` |
+| `redirectUri` | no | default `redirect_uri` |
+
+- **Env override**: `SYNTH_OAUTH_PROVIDERS` — a JSON object "name → description" (the same format). A provider from env **replaces** the same-named one from `config.yaml`; the other entries are kept. Invalid JSON, or a set that fails validation, → a warning in the log and **ignore**: a broken catalog must not break the instance start (the credentials simply are not refreshed).
+- **The catalog holds no `client_secret`** (invariant 13) — only env `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` or the file `{dataDir}/secrets/oauth/<provider>.client_secret`; see the section "External access secrets (OAuth, ADR-105)" above.
+- The catalog key matches the `provider` field of the credential record; the subsystem description — [EXTERNAL_ACCESS.md](../EXTERNAL_ACCESS.md) (RU).
 
 ### Installer service key (`security.bootstrapServiceKeys`, ADR-052/O1)
 

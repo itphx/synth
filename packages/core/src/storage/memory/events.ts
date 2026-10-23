@@ -58,6 +58,7 @@ import type {
 import { EVENT_API_KEY_SECRET_PREFIX, EventApiKeyConflictError } from '../event-api-key-store.js';
 import type { IdentityClaimRecord } from '../identity-claim-store.js';
 import type { AddMcpRegistryEntryInput, UpdateMcpRegistryEntryInput } from '../mcp-registry-store.js';
+import { assertNoMcpSecretHeaders, stripMcpSecretHeaders } from '../mcp-registry-store.js';
 import type {
   CreatePluginServiceKeyInput,
   EnsureServiceKeyInput,
@@ -497,6 +498,8 @@ export class MemoryMcpRegistryRepository implements McpRegistryRepository {
   }
 
   async add(input: AddMcpRegistryEntryInput): Promise<McpRegistryEntry> {
+    // ADR-105 (Ф3): plaintext-секрет в заголовках не принимается (паритет с файловым стором).
+    assertNoMcpSecretHeaders(input.config);
     for (const entry of this._entries.values()) {
       if (entry.name === input.name) throw new Error(`MCP-сервер "${input.name}" уже существует в реестре`);
     }
@@ -521,6 +524,8 @@ export class MemoryMcpRegistryRepository implements McpRegistryRepository {
   async update(id: string, patch: UpdateMcpRegistryEntryInput): Promise<McpRegistryEntry | null> {
     const current = this._entries.get(id);
     if (!current) return null;
+    // ADR-105 (Ф3): plaintext-секрет в заголовках не принимается (паритет с файловым стором).
+    if (patch.config) assertNoMcpSecretHeaders(patch.config);
     if (patch.name && patch.name !== current.name) {
       for (const entry of this._entries.values()) {
         if (entry.id !== id && entry.name === patch.name) {
@@ -549,8 +554,10 @@ export class MemoryMcpRegistryRepository implements McpRegistryRepository {
 
   async seedFromConfig(servers: Record<string, McpServerConfig>): Promise<number> {
     let added = 0;
-    for (const [name, config] of Object.entries(servers)) {
+    for (const [name, rawConfig] of Object.entries(servers)) {
       if ([...this._entries.values()].some((e) => e.name === name)) continue;
+      // ADR-105 (Ф3): секретные заголовки из конфига не переносятся в реестр.
+      const config = stripMcpSecretHeaders(rawConfig, name);
       const now = nowISO();
       const id = generateId();
       this._entries.set(id, {

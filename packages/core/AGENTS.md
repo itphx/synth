@@ -133,7 +133,8 @@
   `authorization`/`proxy-authorization`/`x-api-key`/`cookie` не пересылаются,
   остальные — как раньше; без редиректов поведение не меняется. Режим **выключен
   по умолчанию** (поведение существующих потребителей не затронуто) — включают
-  те, кто несёт токен наружу (OAuth-вызовы, Ф3).
+  те, кто несёт токен наружу (OAuth-вызовы; в MCP-транспорте токен добавляется
+  сам — `engine/mcp/credential-auth.ts`).
 - **TLS runtime и профили (ADR-099).** `security/tls.ts`: `initTlsTrust` читает bootstrap
   (`tlsRuntime`/`dataDir`) до PG, строит `EgressDispatcher` с `tlsProfiles`; `getTlsStatus` — статус без
   PEM/ключей (ca count/subjects, client/mapping subjects, `running`/`saved`, `restartRequired`).
@@ -430,8 +431,20 @@
   параллельном refresh (single-flight) + **CAS по `refreshEnc`** (кто первый
   обновил — тот и записал); `invalid_grant` → доступ в `status:'error'` через порт.
   Device Flow не дублируется — обобщён `remote/device-flow.ts` (`postFormDetailed`:
-  HTTP-статус + тело, инъекция транспорта для тестов). Ф3–Ф4 (биндинг к MCP,
-  роуты/UI/аудит) — не реализованы.
+  HTTP-статус + тело, инъекция транспорта для тестов). ADR-105 Ф3: `registry.ts`
+  (реестр описаний OAuth-провайдеров инстанца — источник каталога `oauth.providers`
+  в конфиге; описание — **данные**, кода провайдера в ядре нет; из описания строится
+  клиент для refresh), `credential-binding.ts` (правило права привязки доступа к
+  коннектору), `server/credential-bind-guard.ts` (guard привязки на границе —
+  инвариант 16). Ф4 (роуты/UI/аудит/ротация/бэкап) — не реализован.
+- `engine/mcp/credential-auth.ts` — ADR-105 Ф3: источник access-токена для
+  MCP-транспорта (`McpCredentialSource`: `getAccessToken`/`refreshAccessToken`;
+  реализация поверх порта — `reveal()`, наружу токен не отдаётся) и
+  `createCredentialFetch` — добавляет `Authorization: Bearer <token>` в **каждый**
+  HTTP-запрос коннектора с `auth: { kind: 'credential' }` и обновляет токен по
+  `401` (refresh — **ровно один** на запрос; повторный `401` возвращается как есть).
+  Ошибки — `McpCredentialError` (`not_found`/`revoked`/`reauthorization_required`/
+  `no_refresh`/`unavailable`); значение токена в текстах ошибок не появляется.
 - `server/chat.ts`, `server/proxy.ts`, `server/serialize.ts`,
   `server/connection-watcher.ts` — одиночный чат, проксирование remote, сериализация,
   watcher подключения. Проксирование — `REMOTE_PROXY_PREFIXES` (простые префиксы) +
@@ -1298,6 +1311,26 @@
   адреса) — раньше литерал проходил валидатор, но не срабатывал никогда, и
   deny-список вроде `['169.254.169.254']` не блокировал адрес метаданных (fail-open).
   Пустая политика (`undefined`) — fail-closed (запрет), а не «разрешено всё».
+- **Внешний доступ в транспорте (ADR-105 Ф3)** — коннектор с
+  `auth: { kind: 'credential', credentialId }` не несёт токен в заголовках: access-токен берётся
+  из порта доступов и подставляется в **каждый** HTTP-запрос (`engine/mcp/credential-auth.ts`,
+  `McpCredentialSource` + `createCredentialFetch`), `401` обновляет токен (refresh) и повторяет
+  запрос — **ровно один refresh на запрос**. Токен не попадает в конфиг/реестр MCP, логи и тексты
+  ошибок; агент и модель его не видят.
+- **Plaintext-секрет в коннекторе запрещён (ADR-105 Ф3)** — `authorization`/
+  `proxy-authorization`/`x-api-key`/`cookie` в `headers`: запись реестра и `POST /api/v2/mcp/probe`
+  → **400** `MCP_SECRET_HEADER_FORBIDDEN` (`MCP_SECRET_HEADER_ERROR_CODE` в `shared`); существующие
+  записи реестра мигрируются в ссылку на доступ. `client_secret` OAuth-провайдера — только env
+  `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` или файл `{dataDir}/secrets/oauth/<provider>.client_secret`.
+- **Каталог OAuth-провайдеров** — `oauth.providers` в конфиге (env-оверрайд
+  `SYNTH_OAUTH_PROVIDERS`) → описания в `OAuthProviderRegistry` (`engine/oauth/registry.ts`);
+  описания — **данные**, из них `OAuthCredentialService` строит клиент для refresh.
+- **Право привязки доступа к коннектору (ADR-105 Ф3)** — проверка **на границе** (инвариант 16):
+  правило — `engine/oauth/credential-binding.ts`, guard — `server/credential-bind-guard.ts`.
+  Свой доступ (`owner.kind='user'`/`'local'`) — его владелец; инстансный — `ADMIN`/`LEAD`;
+  проектный (`projectId`) — участник проекта с правом **изменения** содержимого (`OWNER`/`EDITOR`,
+  а также `LEAD`/`ADMIN`); нет доступа — 404, нет права — 403. Матрица тестов —
+  `packages/backend/src/routes/mcp-credential-bind.test.ts`.
 
 ## Тесты и запуск
 

@@ -185,6 +185,10 @@ describe('defaultConfig', () => {
     });
   });
 
+  it('oauth по умолчанию: каталог OAuth-провайдеров пуст (ADR-105 Ф3)', () => {
+    expect(defaultConfig.oauth).toEqual({ providers: {} });
+  });
+
   it('analytics по умолчанию: retention суточных роллапов 400 дней (ADR-102)', () => {
     expect(defaultConfig.analytics).toEqual({
       retentionDays: 400,

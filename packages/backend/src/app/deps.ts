@@ -26,6 +26,9 @@ import {
   mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig,
   createEgressPolicyResolver, createEgressLogSink,
   configureEgressRuntime, startEgressLogPruner,
+  // ADR-105 (Ф3): источник access-токена для MCP-коннекторов + OAuth-сервис.
+  OAuthCredentialService, OAuthProviderRegistry, registerOAuthProvidersFromConfig,
+  createRepositoryCredentialSource,
   SkillService, resolveProjectSkillSeed,
   CommandService,
   detectRuntimeDeps, syncProvidersFromEnv,
@@ -299,6 +302,27 @@ export async function createBackendDeps(
   // ADR-071 §2.3.1: политика сетевого доступа HTTP-серверов (SSRF/egress)
   // резолвится при каждом connect/probe (live; без стартового снимка).
   mcpManager.setNetworkPolicyResolver(() => egressResolver.resolveMcp());
+
+  // ADR-105 (Ф3): коннекторы с `auth.kind='credential'` авторизуются токеном
+  // из слоя доступов (подстановка в транспорт, refresh при 401).
+  const oauthProviders = new OAuthProviderRegistry();
+  // Каталог OAuth-провайдеров из конфига инстанса (`oauth.providers`): без него
+  // refresh живого доступа не работает — провайдера не найти.
+  await registerOAuthProvidersFromConfig(oauthProviders, config.synth.oauth.providers, {
+    dataDir,
+  });
+  const oauthCredentialService = new OAuthCredentialService({
+    repo: storageContext.externalCredentials,
+    clientFor: (provider: string) => oauthProviders.clientFor(provider),
+  });
+  mcpManager.setCredentialSource(
+    createRepositoryCredentialSource({
+      repo: storageContext.externalCredentials,
+      refresh: async (credentialId: string) => {
+        await oauthCredentialService.refresh(credentialId);
+      },
+    }),
+  );
 
   // Сидирование тестовых пользователей (debug mode) — до построения рантайма
   // (паритет с прежним `app.ts`: сид стоял между хранилищами и рантаймом).

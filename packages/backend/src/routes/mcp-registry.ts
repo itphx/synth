@@ -2,12 +2,26 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { z } from 'zod';
 import type { AuthKit } from '../auth/middleware.js';
-import type { SessionManager, McpManager, McpRegistryRepository } from '@itphx/synth-core';
-import { evaluateMcpNetworkAccess, getServiceCredential } from '@itphx/synth-core';
-import type { McpServerConfig, McpNetworkPolicy, User } from '@itphx/synth-shared';
-import { sessionMcpScopeSchema, hasServiceScope } from '@itphx/synth-shared';
+import type {
+  SessionManager, McpManager, McpRegistryRepository, ExternalCredentialRepository,
+} from '@itphx/synth-core';
+import {
+  createCredentialBindGuard,
+  evaluateMcpNetworkAccess,
+  getServiceCredential,
+  McpRegistryValidationError,
+} from '@itphx/synth-core';
+import type { McpServerConfig, McpNetworkPolicy, McpRegistryEntry, User } from '@itphx/synth-shared';
+import {
+  sessionMcpScopeSchema,
+  hasServiceScope,
+  findForbiddenMcpSecretHeaders,
+  mcpSecretHeaderErrorMessage,
+  MCP_SECRET_HEADER_ERROR_CODE,
+} from '@itphx/synth-shared';
 import { mcpServerConfigSchema } from '@itphx/synth-shared/config';
 import { requireAdminOrScope, requireScopeForServiceKey } from '../auth/guards.js';
+import { t } from '../lib/i18n.js';
 
 // Backend-only MCP-роуты (ADR-071 §2.5): legacy `/servers*`, `/session/:id` и
 // единый реестр `/registry*`. Probe (`POST /probe`) — общая логика core,
@@ -49,6 +63,42 @@ export interface McpRoutesOptions {
    * Приоритетнее статической `networkPolicy`; читается на каждый запрос.
    */
   getNetworkPolicy?: () => Promise<McpNetworkPolicy | undefined>;
+  /**
+   * ADR-105 (Ф3): порт слоя внешних доступов — право привязать доступ
+   * к коннектору проверяется на границе (инвариант 16). Не задан — привязка
+   * запрещена (fail-closed).
+   */
+  credentials?: ExternalCredentialRepository;
+  /**
+   * ADR-105 (Ф3): право участника проекта **изменять содержимое** проекта
+   * (`OWNER`/`EDITOR`, а также `LEAD`/`ADMIN`) — для доступа уровня проекта.
+   */
+  canEditProject?: (c: Context, projectId: string) => boolean | Promise<boolean>;
+}
+
+/**
+ * ADR-105 (Ф3): plaintext-секрет в заголовках коннектора запрещён —
+ * авторизация только через слой внешних доступов (`auth.kind='credential'`).
+ *
+ * Значений заголовков в тексте ошибки нет — только их имена.
+ */
+function secretHeaderError(
+  config: McpServerConfig | undefined | null,
+): { code: string; message: string } | null {
+  const forbidden = findForbiddenMcpSecretHeaders(config?.headers);
+  if (forbidden.length === 0) return null;
+  return { code: MCP_SECRET_HEADER_ERROR_CODE, message: mcpSecretHeaderErrorMessage(forbidden) };
+}
+
+/**
+ * ADR-105 (Ф3): хранилище реестра — последний рубеж запрета plaintext-секрета.
+ * Ошибка валидации → 400 с тем же кодом (иначе роут отдал бы 500).
+ */
+function secretHeaderStoreError(err: unknown): { code: string; message: string } | null {
+  if (err instanceof McpRegistryValidationError && err.code === MCP_SECRET_HEADER_ERROR_CODE) {
+    return { code: err.code, message: err.message };
+  }
+  return null;
 }
 
 export function createMcpRegistryRoutes(
@@ -79,6 +129,26 @@ export function createMcpRegistryRoutes(
 
   const currentUser = (c: { get(key: 'user'): unknown }): User | null =>
     (c.get('user') as User | undefined) ?? null;
+
+  /**
+   * ADR-105 (Ф3): граница проверки права привязки внешнего доступа к коннектору
+   * (инвариант 16 — проверка не в обработчике, правило — в core).
+   *
+   * Актор — пользователь запроса (для service-key — синтетический
+   * `service:<keyId>` с ролями ключа, ADR-052).
+   */
+  const checkCredentialBinding = createCredentialBindGuard({
+    ...(options.credentials ? { credentials: options.credentials } : {}),
+    resolveActor: (c) => {
+      const user = currentUser(c);
+      return { userId: user?.id ?? '', roles: user?.roles ?? [] };
+    },
+    ...(options.canEditProject ? { canEditProject: options.canEditProject } : {}),
+    messages: {
+      notFound: (c) => t('errors.notFound.credential', undefined, c),
+      forbidden: (c) => t('auth.forbidden', undefined, c),
+    },
+  });
 
   /**
    * ADR-052/O1: запрос от installer-service-key (scope `addons:install`).
@@ -132,6 +202,18 @@ export function createMcpRegistryRoutes(
       return c.json({ error: { code: 'CONFLICT', message: `Сервер "${name}" уже существует` } }, 409);
     }
 
+    // ADR-105 (Ф3): plaintext-секрет в заголовках → 400 (не 500).
+    const secretError = secretHeaderError(config);
+    if (secretError) {
+      return c.json({ error: secretError }, 400);
+    }
+
+    // ADR-105 (Ф3): право привязать внешний доступ к коннектору (граница).
+    const bindError = await checkCredentialBinding(c, config);
+    if (bindError) {
+      return c.json({ error: bindError }, bindError.code === 'NOT_FOUND' ? 404 : 403);
+    }
+
     const networkError = await checkNetwork(config, 'instance');
     if (networkError) {
       return c.json({ error: networkError }, 400);
@@ -166,6 +248,22 @@ export function createMcpRegistryRoutes(
     const parsed = updateServerSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
+    }
+
+    // ADR-105 (Ф3): plaintext-секрет в заголовках → 400 (не 500).
+    const secretError = secretHeaderError(parsed.data);
+    if (secretError) {
+      return c.json({ error: secretError }, 400);
+    }
+
+    // ADR-105 (Ф3): право привязать внешний доступ к коннектору (граница).
+    const bindError = await checkCredentialBinding(
+      c,
+      parsed.data,
+      entry.config.auth?.kind === 'credential' ? entry.config.auth.credentialId : undefined,
+    );
+    if (bindError) {
+      return c.json({ error: bindError }, bindError.code === 'NOT_FOUND' ? 404 : 403);
     }
 
     const networkError = await checkNetwork(parsed.data, entry.origin);
@@ -213,6 +311,12 @@ export function createMcpRegistryRoutes(
 
     if (!config) {
       return c.json({ error: { code: 'NOT_FOUND', message: `Сервер "${name}" не найден` } }, 404);
+    }
+
+    // ADR-105 (Ф3): probe/тест не подключается к коннектору с plaintext-секретом.
+    const secretError = secretHeaderError(config);
+    if (secretError) {
+      return c.json({ error: secretError }, 400);
     }
 
     if (!mcpManager) {
@@ -347,6 +451,19 @@ export function createMcpRegistryRoutes(
 
     const { name, config, enabled, enabledByDefault, origin } = parsed.data;
     const admin = kit.isAdmin(c);
+
+    // ADR-105 (Ф3): plaintext-секрет в заголовках → 400 (не 500).
+    const secretError = secretHeaderError(config);
+    if (secretError) {
+      return c.json({ error: secretError }, 400);
+    }
+
+    // ADR-105 (Ф3): право привязать внешний доступ к коннектору (граница).
+    const bindError = await checkCredentialBinding(c, config);
+    if (bindError) {
+      return c.json({ error: bindError }, bindError.code === 'NOT_FOUND' ? 404 : 403);
+    }
+
     // ADR-052/O1: installer-ключ (scope `addons:install`) создаёт instance-записи
     // даже без роли ADMIN — это общие записи инстанса (а не персональные).
     const isInstaller = isInstallerKey(c);
@@ -380,15 +497,23 @@ export function createMcpRegistryRoutes(
     const user = currentUser(c);
     const author = user ? { userId: user.id, username: user.username } : null;
 
-    const entry = await registry.add({
-      name,
-      config,
-      origin: entryOrigin,
-      trust,
-      author,
-      enabled,
-      enabledByDefault,
-    });
+    let entry: McpRegistryEntry;
+    try {
+      entry = await registry.add({
+        name,
+        config,
+        origin: entryOrigin,
+        trust,
+        author,
+        enabled,
+        enabledByDefault,
+      });
+    } catch (err) {
+      // ADR-105 (Ф3): запрет plaintext-секрета → 400, а не 500.
+      const storeError = secretHeaderStoreError(err);
+      if (storeError) return c.json({ error: storeError }, 400);
+      throw err;
+    }
     await syncManagerConfig();
     return c.json(entry, 201);
   });
@@ -423,6 +548,22 @@ export function createMcpRegistryRoutes(
       return c.json({ error: { code: 'FORBIDDEN', message: 'stdio-серверы может изменять только ADMIN' } }, 403);
     }
 
+    // ADR-105 (Ф3): plaintext-секрет в заголовках → 400 (не 500).
+    const secretError = secretHeaderError(nextConfig);
+    if (secretError) {
+      return c.json({ error: secretError }, 400);
+    }
+
+    // ADR-105 (Ф3): право привязать внешний доступ к коннектору (граница).
+    const bindError = await checkCredentialBinding(
+      c,
+      nextConfig,
+      existing.config.auth?.kind === 'credential' ? existing.config.auth.credentialId : undefined,
+    );
+    if (bindError) {
+      return c.json({ error: bindError }, bindError.code === 'NOT_FOUND' ? 404 : 403);
+    }
+
     const networkError = await checkNetwork(nextConfig, existing.origin);
     if (networkError) {
       return c.json({ error: networkError }, 400);
@@ -438,7 +579,15 @@ export function createMcpRegistryRoutes(
       }, 409);
     }
 
-    const updated = await registry.update(id, parsed.data);
+    let updated: McpRegistryEntry | null;
+    try {
+      updated = await registry.update(id, parsed.data);
+    } catch (err) {
+      // ADR-105 (Ф3): запрет plaintext-секрета → 400, а не 500.
+      const storeError = secretHeaderStoreError(err);
+      if (storeError) return c.json({ error: storeError }, 400);
+      throw err;
+    }
     await syncManagerConfig();
     return c.json(updated);
   });
