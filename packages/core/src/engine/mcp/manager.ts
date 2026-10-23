@@ -4,6 +4,7 @@ import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext, ToolResult } from '@itphx/synth-shared';
 import { McpClient, type McpClientLike } from './client.js';
+import type { McpCredentialSource } from './credential-auth.js';
 import type { ExecutorMcpSource } from './executor-mcp-source.js';
 import { evaluateMcpNetworkAccess, hostFromUrl, isHttpMcpConfig } from './network-policy.js';
 import { currentEgressLog } from '../net/egress-runtime.js';
@@ -66,6 +67,11 @@ export class McpManager {
   private _executorServers = new Set<string>();
   /** Источник состава серверов исполнителя (только `execution.mode=remote`). */
   private _executorSource: ExecutorMcpSource | null = null;
+  /**
+   * ADR-105 (Ф3): источник access-токена внешнего доступа — для коннекторов
+   * с `auth: { kind: 'credential' }` (подстановка в транспорт).
+   */
+  private _credentialSource: McpCredentialSource | undefined;
 
   constructor(opts: McpManagerOptions = {}) {
     this._createClientFactory = opts.createClient;
@@ -189,7 +195,15 @@ export class McpManager {
       return this._executorSource.createClient(name);
     }
     if (this._createClientFactory) return this._createClientFactory(name, config);
-    return new McpClient(name, config);
+    return new McpClient(name, config, { credentialSource: this._credentialSource });
+  }
+
+  /**
+   * ADR-105 (Ф3): источник access-токена для коннекторов с
+   * `auth: { kind: 'credential' }`. Без него такой коннектор не подключится.
+   */
+  setCredentialSource(source: McpCredentialSource | null): void {
+    this._credentialSource = source ?? undefined;
   }
 
   setConfig(servers: Record<string, McpServerConfig>): void {

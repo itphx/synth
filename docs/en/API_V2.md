@@ -733,6 +733,14 @@ Codes: `sshkey.not_found` (404), `sshkey.name_exists` (409), `sshkey.decrypt_fai
 | DELETE | `/api/v2/mcp/registry/:id` | backend | author/ADMIN | Delete an entry |
 
 > MCP per-item resolution (ADR-071 §2.4): `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`; the default is opt-in (off). The registry master `enabled` and the project `enabled` are a live hard-gate (including old sessions and system servers); `enabledByDefault`/`project.defaultOn` are a snapshot (`mcpDefaultOn`). Reasons: `system_disabled\|project_disabled\|session_optout\|not_default`. `McpServerConfig.enabled` is only the seed of a registry entry (`seedFromConfig`) and does not participate in resolution. A missing `project.mcp` means no gate is set (legacy).
+>
+> `config.auth` (ADR-105 F0/F3) — a reference to an external access: `{kind:'credential', credentialId}`; the connector is authorized with a token from the access layer, the token itself never lives in the registry/config. The field is additive — entries without `auth` are valid. The transport injects the token (`Authorization: Bearer <token>` on every HTTP request); on `401` it refreshes the token and repeats the request — **exactly one refresh per request**. Issuing/rotating accesses is F4 (`/api/v2/oauth/credentials`, not implemented yet); until then an access is created in code (through the port) and connectors reference it by `credentialId`.
+>
+> **Plaintext secrets are forbidden (ADR-105 F3).** The headers `authorization`/`proxy-authorization`/`x-api-key`/`cookie` in `config.headers` are forbidden: registry writes (`POST/PUT /api/v2/mcp/registry`, `POST/PUT /api/v2/mcp/servers`) and `POST /api/v2/mcp/probe` → **400** `MCP_SECRET_HEADER_FORBIDDEN`; existing registry entries are migrated to `auth: { kind: 'credential', credentialId }`.
+>
+> **Binding rights (ADR-105 F3).** Binding an access to a connector is checked at the boundary: an own access (`owner.kind='user'`/`'local'`) — its owner; an instance access (`owner.kind='instance'`) — `ADMIN`/`LEAD`; a project access (`projectId`) — a project member with the right to **modify** content (`OWNER`/`EDITOR`, and also `LEAD`/`ADMIN`); no access — **404** (`NOT_FOUND`), no right — **403** (`FORBIDDEN`). The matrix — `packages/backend/src/routes/mcp-credential-bind.test.ts`.
+>
+> **OAuth provider catalog.** Provider descriptions (`authorizeUrl`/`tokenUrl`/`clientId`/`scopes?`/…) live in the config section `oauth.providers` (env override `SYNTH_OAUTH_PROVIDERS`); a `client_secret` is only an env `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` or the file `{dataDir}/secrets/oauth/<provider>.client_secret`. The client used to refresh an access token is built from the description.
 
 ### 5.17 Skills — `/api/v2/skills` (both, ADR-046 Phase 1)
 

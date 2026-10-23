@@ -146,6 +146,7 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; мастер-выключатель слоя полномочий) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — наблюдение, `false` — принуждение) |
 | `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` | string (секрет) | `client_secret` OAuth-провайдера: `google` → `SYNTH_OAUTH_GOOGLE_CLIENT_SECRET` (в config не хранится; альтернатива — файл `{dataDir}/secrets/oauth/<provider>.client_secret`, см. ниже) |
+| `SYNTH_OAUTH_PROVIDERS` | JSON-объект | `oauth.providers` — каталог OAuth-провайдеров (объектный env-оверрайд, ADR-105 Ф3; см. ниже) |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON-массив | `security.bootstrapServiceKeys` (объектный env-оверрайд, ADR-052/O1; см. ниже) |
 | `SYNTH_TLS_CA_FILE` | ADR-099: путь к PEM-файлу доверенного CA (корпоративный CA); взаимоисключающ с `SYNTH_TLS_CA_PEM` | — |
 | `SYNTH_TLS_CA_PEM` | ADR-099: PEM доверенного CA (например из Secret); взаимоисключающ с `SYNTH_TLS_CA_FILE` | — |
@@ -327,6 +328,11 @@ mcp:
   #   Поле аддитивно: записи без auth валидны.
   # networkPolicy — адресная политика MCP {mode, list, exceptions} (тот же формат, что egress.*),
   # см. «Адресная политика исходящих запросов (`egress.*`, ADR-099)»
+
+oauth:
+  providers: {}                    # ADR-105 Ф3: каталог OAuth-провайдеров инстанса —
+                                  # «имя → описание» (данные, без секретов);
+                                  # подробности — «Каталог OAuth-провайдеров (`oauth.providers`, ADR-105 Ф3)»
 
 tools:
   policy: "auto"                  # ADR-071 §2.3: политика включения ВСТРОЕННЫХ инструментов
@@ -987,6 +993,46 @@ proxy:
 - Токены at-rest **зашифрованы** мастер-ключом (`enc:v1:…`, ADR-076) — plaintext на диске не появляется; наружу отдаются только метаданные с маской.
 - **Бэкап**: каталог `secrets/` исключается из архива `synth backup` без `--with-secrets` — вместе с ним исключаются и токены доступов. Экспорт/импорт проекта (ADR-091) доступы не переносит: они инстанс-локальны.
 - Устройство подсистемы — [EXTERNAL_ACCESS.md](./EXTERNAL_ACCESS.md); решение — [ADR-105](./arch_decisions/adr-105-external-credentials.md).
+
+### Каталог OAuth-провайдеров (`oauth.providers`, ADR-105 Ф3)
+
+Каталог описывает **данные** внешних OAuth-провайдеров инстанса: endpoint'ы, `client_id`, scope'ы.
+По этому описанию ядро строит OAuth-клиент (обмен кода, refresh, отзыв) для записей слоя доступов.
+Пустой каталог — штатное состояние: доступы, созданные кодом, работают, но **обновить** токен без описания
+провайдера нечем (refresh вернёт понятную ошибку «провайдер не зарегистрирован»).
+
+```yaml
+oauth:
+  providers:
+    github:
+      authorizeUrl: "https://github.com/login/oauth/authorize"
+      tokenUrl: "https://github.com/login/oauth/access_token"
+      revokeUrl: "https://api.github.com/applications/token"
+      clientId: "synth-client"
+      scopes: ["repo", "read:user"]
+      clientAuth: "none"           # none (PKCE, публичный клиент) | client_secret_post | client_secret_basic
+    google:
+      authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth"
+      tokenUrl: "https://oauth2.googleapis.com/token"
+      clientId: "synth-client"
+      scopes: ["https://www.googleapis.com/auth/calendar.readonly"]
+      clientAuth: "client_secret_post"
+```
+
+| Поле | Обязательно | Назначение |
+|------|-------------|------------|
+| `authorizeUrl` | да | endpoint выдачи кода (RFC 6749 §3.1) |
+| `tokenUrl` | да | endpoint обмена кода и refresh (RFC 6749 §3.2/§6) |
+| `revokeUrl` | нет | endpoint отзыва токена (RFC 7009) |
+| `deviceAuthorizationUrl` | нет | endpoint device flow (RFC 8628 §3.1) |
+| `clientId` | да | публичный `client_id` приложения (не секрет) |
+| `scopes` | нет | scope'ы по умолчанию (дефолт `[]`) |
+| `clientAuth` | нет | способ подтверждения клиента: `none` (PKCE, дефолт) / `client_secret_post` / `client_secret_basic` |
+| `redirectUri` | нет | `redirect_uri` по умолчанию |
+
+- **Env-оверрайд**: `SYNTH_OAUTH_PROVIDERS` — JSON-объект «имя → описание» (тот же формат). Провайдер из env **заменяет** одноимённого из `config.yaml`, остальные записи сохраняются. Невалидный JSON или набор, не прошедший валидацию, → предупреждение в журнале и **игнор**: кривой каталог не роняет старт инстанса (доступы просто не обновятся).
+- **`client_secret` в каталоге нет** (инвариант 13) — только env `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` или файл `{dataDir}/secrets/oauth/<provider>.client_secret`; см. раздел «Секреты внешних доступов (OAuth, ADR-105)» выше.
+- Ключ карты совпадает с полем `provider` записи доступа; устройство подсистемы — [EXTERNAL_ACCESS.md](./EXTERNAL_ACCESS.md).
 
 ### Installer service-key (`security.bootstrapServiceKeys`, ADR-052/O1)
 

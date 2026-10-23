@@ -274,7 +274,18 @@ export {
 export type { RuntimeDeps, RuntimeDependency } from './engine/tools/runtime-deps.js';
 export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, normalizeAgentModes, isModeApplicable, DEFAULT_AGENT_ID, registerStoredAgents } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
-export type { McpToolDef, McpToolResult } from './engine/mcp/index.js';
+export type { McpToolDef, McpToolResult, McpClientOptions } from './engine/mcp/index.js';
+export {
+  McpCredentialError,
+  createCredentialFetch,
+  createRepositoryCredentialSource,
+} from './engine/mcp/index.js';
+export type {
+  McpCredentialErrorCode,
+  McpCredentialSource,
+  RepositoryCredentialSourceDeps,
+  CredentialFetchOptions,
+} from './engine/mcp/index.js';
 export { resolveMcpScope, resolveMcpProjectScope } from './engine/mcp/index.js';
 export type { McpScopeServer, McpScopeSession, McpScopeDecision } from './engine/mcp/index.js';
 export {
@@ -290,6 +301,36 @@ export {
   mappedIpv4,
 } from './engine/mcp/index.js';
 export type { McpNetworkCheckResult, HostResolver } from './engine/mcp/index.js';
+
+// ADR-105 (Ф2/Ф3): OAuth-клиент, сервис слоя доступов, реестр провайдеров.
+export {
+  OAuthError,
+  OAuthClient,
+  OAuthCredentialService,
+  OAuthProviderRegistry,
+  registerOAuthProvidersFromConfig,
+  resolveOAuthClientSecret,
+  oauthClientSecretEnv,
+  oauthClientSecretPath,
+  evaluateCredentialBind,
+} from './engine/oauth/index.js';
+export type {
+  OAuthClientAuthMethod,
+  OAuthProviderDescription,
+  OAuthRevokeResult,
+  OAuthTokenSet,
+  OAuthErrorCode,
+  ExchangeAndStoreInput,
+  OAuthCredentialServiceDeps,
+  RevokeResult,
+  OAuthProviderCatalogEntry,
+  OAuthProviderRegistration,
+  RegisterOAuthProvidersOptions,
+  ResolveClientSecretOptions,
+  CredentialBindActor,
+  CredentialBindDecision,
+  CredentialBindInput,
+} from './engine/oauth/index.js';
 
 // PROP-100 / ADR-071 §2.3.1: единый SSRF/egress-guard исходящих запросов
 // (схема + DNS-резолв всех A/AAAA + приватные CIDR + проверка каждого хопа редиректа).
@@ -714,11 +755,22 @@ export type { SshKeyRoutesAuth, SshKeyRoutesOptions } from './server/routes/ssh-
 export { ProjectStore } from './storage/project-store.js';
 export type { ProjectStoreConfig, ProjectStoreLike } from './storage/project-store.js';
 export { McpRegistryStore } from './storage/mcp-registry-store.js';
+export {
+  McpRegistryValidationError,
+  assertNoMcpSecretHeaders,
+  stripMcpSecretHeaders,
+} from './storage/mcp-registry-store.js';
 export type {
   McpRegistryStoreConfig,
   AddMcpRegistryEntryInput,
   UpdateMcpRegistryEntryInput,
 } from './storage/mcp-registry-store.js';
+// ADR-105 (Ф3): миграция plaintext-секретов из заголовков реестра в слой доступов.
+export { migrateMcpRegistrySecrets } from './storage/mcp-registry-migration.js';
+export type {
+  MigrateMcpRegistrySecretsDeps,
+  MigrateMcpRegistrySecretsResult,
+} from './storage/mcp-registry-migration.js';
 // ADR-089: реестр биндингов внешних событий и журнал обработки/решений Router.
 export { EventBindingStore, EVENT_BINDINGS_SCHEMA_VERSION } from './storage/event-binding-store.js';
 export type { EventBindingStoreConfig, UpsertEventBindingInput } from './storage/event-binding-store.js';
@@ -774,6 +826,13 @@ export type {
   SessionAccessPredicateOptions,
   SessionAccessMessages,
 } from './server/session-access-guard.js';
+// ADR-105 (Ф3): право привязки внешнего доступа к коннектору — на границе.
+export { createCredentialBindGuard } from './server/credential-bind-guard.js';
+export type {
+  CredentialBindGuardMessages,
+  CredentialBindGuardOptions,
+  CredentialBindViolation,
+} from './server/credential-bind-guard.js';
 // ADR-036: привилегия карты обфускации при экспорте сессии — route-level guard
 // (решение — в контексте Hono, в обработчике проверок доступа нет).
 export {

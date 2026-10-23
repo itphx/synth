@@ -729,7 +729,13 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 
 > Резолвинг MCP per-item (ADR-071 §2.4): `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`; дефолт — opt-in (off). Мастер `enabled` (реестр) и проектный `enabled` — live hard-gate (в т.ч. старые сессии и системные серверы), `enabledByDefault`/`project.defaultOn` — snapshot (`mcpDefaultOn`). Причины: `system_disabled\|project_disabled\|session_optout\|not_default`. `McpServerConfig.enabled` — только сид записи реестра (`seedFromConfig`), в резолвинге не участвует. Отсутствие `project.mcp` — гейт не задан (legacy).
 
-> `config.auth` (ADR-105 Ф0) — ссылка на внешний доступ: `{kind:'credential', credentialId}`; коннектор авторизуется токеном из слоя доступов, сам токен в реестре/конфиге не лежит. Поле аддитивно — записи без `auth` валидны. Выдача/ротация доступов — Ф4 (`/api/v2/oauth/credentials`, ещё не реализовано).
+> `config.auth` (ADR-105 Ф0/Ф3) — ссылка на внешний доступ: `{kind:'credential', credentialId}`; коннектор авторизуется токеном из слоя доступов, сам токен в реестре/конфиге не лежит. Поле аддитивно — записи без `auth` валидны. Токен подставляет транспорт (`Authorization: Bearer <token>` в каждом HTTP-запросе), при `401` он обновляется (refresh) и запрос повторяется — **ровно один refresh на запрос**. Выдача/ротация доступов — Ф4 (`/api/v2/oauth/credentials`, ещё не реализовано); до этого доступ заводится кодом (через порт), а коннектор ссылается на него по `credentialId`.
+>
+> **Запрет plaintext-секретов (ADR-105 Ф3).** Заголовки `authorization`/`proxy-authorization`/`x-api-key`/`cookie` в `config.headers` запрещены: запись реестра (`POST/PUT /api/v2/mcp/registry`, `POST/PUT /api/v2/mcp/servers`) и `POST /api/v2/mcp/probe` → **400** `MCP_SECRET_HEADER_FORBIDDEN`; существующие записи реестра мигрируются в `auth: { kind: 'credential', credentialId }`.
+>
+> **Право привязки (ADR-105 Ф3).** Привязка доступа к коннектору проверяется на границе: свой доступ (`owner.kind='user'`/`'local'`) — его владелец; инстансный (`owner.kind='instance'`) — `ADMIN`/`LEAD`; проектный (`projectId`) — участник проекта с правом **изменения** содержимого (`OWNER`/`EDITOR`, а также `LEAD`/`ADMIN`); нет доступа — **404** (`NOT_FOUND`), нет права — **403** (`FORBIDDEN`). Матрица — `packages/backend/src/routes/mcp-credential-bind.test.ts`.
+>
+> **Каталог OAuth-провайдеров.** Описания провайдеров (`authorizeUrl`/`tokenUrl`/`clientId`/`scopes?`/…) живут в конфиге `oauth.providers` (env-оверрайд `SYNTH_OAUTH_PROVIDERS`); `client_secret` — только env `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` или файл `{dataDir}/secrets/oauth/<provider>.client_secret`. Из описания строится клиент для refresh токена доступа.
 
 ### 5.17 Skills — `/api/v2/skills` (оба, ADR-046 Фаза 1)
 

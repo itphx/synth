@@ -7,6 +7,7 @@ import { SYNTH_VERSION } from '@itphx/synth-shared';
 import { info, warning, error } from '../../logger.js';
 import { egressFetch, getTlsCaPath } from '../../security/tls.js';
 import { mcpProxyEnv } from '../../security/proxy-state.js';
+import { createCredentialFetch, type McpCredentialSource } from './credential-auth.js';
 
 export interface McpToolDef {
   name: string;
@@ -21,6 +22,16 @@ export interface McpToolResult {
 
 /** Потолок длины текста результата MCP-вызова, символов (общий с исполнителем). */
 export const MAX_TOOL_RESULT_CHARS = 30_000;
+
+/** Параметры MCP-клиента. */
+export interface McpClientOptions {
+  /**
+   * ADR-105 (Ф3): источник access-токена для коннектора с
+   * `auth: { kind: 'credential' }`. Без него такой коннектор не подключится
+   * (явная ошибка, а не молчаливая работа без авторизации).
+   */
+  credentialSource?: McpCredentialSource | undefined;
+}
 
 /**
  * Поверхность MCP-клиента (ADR-077, шаг B2).
@@ -55,11 +66,14 @@ export class McpClient {
   private _toolTimeout: number;
   /** ADR-071 §2.2: `instructions` из MCP initialize (getInstructions()). */
   private _instructions: string | undefined;
+  /** ADR-105 (Ф3): источник токена доступа (для `auth.kind='credential'`). */
+  private readonly _credentialSource: McpCredentialSource | undefined;
 
-  constructor(name: string, config: McpServerConfig) {
+  constructor(name: string, config: McpServerConfig, opts: McpClientOptions = {}) {
     this._name = name;
     this._config = config;
     this._toolTimeout = (config.timeout || 120) * 1000;
+    this._credentialSource = opts.credentialSource;
   }
 
   get name(): string {
@@ -221,8 +235,31 @@ export class McpClient {
     // к MCP-серверу не применялась бы.
     const headers = this._config.headers;
     const hasHeaders = !!headers && Object.keys(headers).length > 0;
+    const auth = this._config.auth;
+
+    // ADR-105 (Ф3): коннектор с `auth.kind='credential'` авторизуется токеном
+    // из слоя доступов — он подставляется в **каждый** запрос транспорта
+    // (не в статический `requestInit`), при `401` токен обновляется один раз
+    // и запрос повторяется. Значение токена не логируется.
+    let fetchImpl: typeof fetch = egressFetch;
+    if (auth?.kind === 'credential') {
+      if (!this._credentialSource) {
+        throw new Error(
+          `MCP-сервер "${this._name}": доступ "${auth.credentialId}" задан, но источник токена недоступен`,
+        );
+      }
+      fetchImpl = createCredentialFetch({
+        source: this._credentialSource,
+        credentialId: auth.credentialId,
+        serverName: this._name,
+        baseFetch: egressFetch,
+        onRefresh: ({ serverName, credentialId }) =>
+          info('MCP', `Токен доступа "${credentialId}" обновлён для сервера "${serverName}"`),
+      });
+    }
+
     const transport = new StreamableHTTPClientTransport(new URL(url), {
-      fetch: egressFetch,
+      fetch: fetchImpl,
       ...(hasHeaders ? { requestInit: { headers: { ...headers } } } : {}),
     });
 

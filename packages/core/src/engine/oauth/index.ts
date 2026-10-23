@@ -48,3 +48,16 @@ export {
   type OAuthCredentialServiceDeps,
   type RevokeResult,
 } from './service.js';
+export {
+  OAuthProviderRegistry,
+  registerOAuthProvidersFromConfig,
+  type OAuthProviderCatalogEntry,
+  type OAuthProviderRegistration,
+  type RegisterOAuthProvidersOptions,
+} from './registry.js';
+export {
+  evaluateCredentialBind,
+  type CredentialBindActor,
+  type CredentialBindDecision,
+  type CredentialBindInput,
+} from './credential-binding.js';

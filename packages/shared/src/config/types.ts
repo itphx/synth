@@ -540,6 +540,51 @@ export const decisionConfigSchema = z.object({
   escalationModel: z.string().default(''),
 });
 
+// --- Внешние доступы: каталог OAuth-провайдеров (ADR-105) ---
+
+/**
+ * ADR-105 (Ф3): описание OAuth-провайдера в конфиге инстанса — **данные**.
+ *
+ * Секрета здесь нет (инвариант 13): `client_secret` живёт только в env
+ * `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` или в файле
+ * `{dataDir}/secrets/oauth/<provider>.client_secret`.
+ */
+export const oauthProviderConfigSchema = z.object({
+  /** Endpoint выдачи кода (authorization endpoint, RFC 6749 §3.1). */
+  authorizeUrl: z.string().min(1),
+  /** Endpoint обмена кода и обновления токена (RFC 6749 §3.2/§6). */
+  tokenUrl: z.string().min(1),
+  /** Endpoint отзыва токена (RFC 7009) — необязателен. */
+  revokeUrl: z.string().min(1).optional(),
+  /** Endpoint device flow (RFC 8628 §3.1) — необязателен. */
+  deviceAuthorizationUrl: z.string().min(1).optional(),
+  /** `client_id` приложения (публичное значение, не секрет). */
+  clientId: z.string().min(1),
+  /** Scope'ы по умолчанию. */
+  scopes: z.array(z.string()).default([]),
+  /** Способ подтверждения клиента (по умолчанию — `none`, т.е. PKCE). */
+  clientAuth: z.enum(['none', 'client_secret_post', 'client_secret_basic']).optional(),
+  /** `redirect_uri` по умолчанию. */
+  redirectUri: z.string().min(1).optional(),
+});
+
+/**
+ * ADR-105 (Ф3): каталог OAuth-провайдеров инстанса — карта «имя → описание».
+ */
+export const oauthProvidersSchema = z.record(z.string().min(1), oauthProviderConfigSchema);
+
+/**
+ * ADR-105 (Ф3): секция `oauth` — каталог OAuth-провайдеров инстанса.
+ *
+ * `providers` — карта «имя провайдера → описание». Ключ совпадает с полем
+ * `provider` записи внешнего доступа (`ExternalCredential`). Пусто — каталога
+ * нет: доступ, созданный кодом, работает, но обновить токен без описания
+ * провайдера нечем (refresh вернёт понятную ошибку).
+ */
+export const oauthConfigSchema = z.object({
+  providers: oauthProvidersSchema.default({}),
+});
+
 // --- Аналитика и отчётность (ADR-102) ---
 
 /**
@@ -1130,6 +1175,7 @@ export const synthConfigSchema = z.object({
   events: eventsConfigSchema.default({}),
   scheduler: schedulerConfigSchema.default({}),
   decision: decisionConfigSchema.default({}),
+  oauth: oauthConfigSchema.default({}),
   analytics: analyticsConfigSchema.default({}),
   metrics: metricsConfigSchema.default({}),
   authority: authorityConfigSchema.default({}),
@@ -1176,6 +1222,10 @@ export type CommandsConfig = z.infer<typeof commandsConfigSchema>;
 export type EventsConfig = z.infer<typeof eventsConfigSchema>;
 export type SchedulerConfig = z.infer<typeof schedulerConfigSchema>;
 export type DecisionConfig = z.infer<typeof decisionConfigSchema>;
+/** ADR-105 (Ф3): описание OAuth-провайдера в конфиге инстанса. */
+export type OAuthProviderConfig = z.infer<typeof oauthProviderConfigSchema>;
+/** ADR-105 (Ф3): секция `oauth` (каталог провайдеров). */
+export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
 export type AnalyticsConfig = z.infer<typeof analyticsConfigSchema>;
 /** ADR-094: секция `metrics` (`enabled`). */
 export type MetricsConfig = z.infer<typeof metricsConfigSchema>;

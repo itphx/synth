@@ -1,6 +1,11 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
+import {
+  findForbiddenMcpSecretHeaders,
+  mcpSecretHeaderErrorMessage,
+  MCP_SECRET_HEADER_ERROR_CODE,
+} from '@itphx/synth-shared';
 import type { McpManager } from '../../engine/mcp/index.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
@@ -36,6 +41,8 @@ const DEFAULT_MESSAGES: McpRouteMessages = {
  *
  * POST /api/v2/mcp/probe body { name } → 200 { name, tools: [{ name, description }] }.
  * Сервер не настроен → 400 VALIDATION_ERROR, ошибка подключения → 500 MCP_CONNECT_ERROR.
+ * Коннектор с plaintext-секретом в заголовках → 400 MCP_SECRET_HEADER_FORBIDDEN
+ * (ADR-105 Ф3: авторизация — только через слой внешних доступов).
  * Общая логика для core (standalone) и backend (монтирует probe из этой фабрики).
  */
 export function createMcpRoutes(auth: McpRoutesAuth, deps: McpRoutesDeps): Hono {
@@ -63,6 +70,20 @@ export function createMcpRoutes(auth: McpRoutesAuth, deps: McpRoutesDeps): Hono 
     if (!deps.mcpManager.isServerConfigured(name)) {
       return c.json({
         error: { code: 'VALIDATION_ERROR', message: messages.serverNotConfigured(c, name) },
+      }, 400);
+    }
+
+    // ADR-105 (Ф3): probe не подключается к коннектору с plaintext-секретом
+    // в заголовках — авторизация только через слой внешних доступов
+    // (`auth.kind='credential'`), иначе секрет ушёл бы в чужой origin.
+    const serverConfig = deps.mcpManager.getServerConfig(name);
+    const forbidden = findForbiddenMcpSecretHeaders(serverConfig?.headers);
+    if (forbidden.length > 0) {
+      return c.json({
+        error: {
+          code: MCP_SECRET_HEADER_ERROR_CODE,
+          message: mcpSecretHeaderErrorMessage(forbidden),
+        },
       }, 400);
     }
 

@@ -28,6 +28,8 @@ export interface OAuthProviderDescription {
   tokenUrl: string;
   /** Endpoint отзыва токена (RFC 7009) — необязателен. */
   revokeUrl?: string;
+  /** Endpoint device flow (RFC 8628 §3.1) — необязателен. */
+  deviceAuthorizationUrl?: string;
   /** `client_id` приложения (публичное значение, не секрет). */
   clientId: string;
   /** Scope'ы по умолчанию для этого провайдера. */

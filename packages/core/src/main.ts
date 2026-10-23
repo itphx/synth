@@ -248,6 +248,8 @@ program
       schedulerConfig: synth.scheduler,
       // ADR-084: конфигурация decision-слоя микро-каскада.
       decisionConfig: synth.decision,
+      // ADR-105 (Ф3): каталог OAuth-провайдеров (описания внешних доступов).
+      oauthProviders: synth.oauth.providers,
       // ADR-102: конфигурация аналитики (retention суточных роллапов).
       analyticsConfig: synth.analytics,
       // ADR-094: конфигурация метрик (`metrics.enabled`, env SYNTH_METRICS_ENABLED).
