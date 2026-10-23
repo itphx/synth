@@ -417,7 +417,6 @@ export type {
   // PROP-107 (Ф0/Ф1): внешние доступы (OAuth-креды к коннекторам).
   ExternalCredentialRepository,
   ExternalCredentialErrorCode,
-  ExternalCredentialStoreError,
   BlobStore,
   DefaultsRepository,
   AppearanceDefaults,
@@ -444,6 +443,10 @@ export type {
   PipelineRunFilter,
   PipelineRunEventListOptions,
 } from './storage/ports/index.js';
+// PROP-107 (Ф0/Ф1): доменная ошибка хранилища внешних доступов — значение
+// (не только тип): её бросают реализации порта, в т.ч. PostgreSQL-драйвер
+// (`@itphx/synth-storage-postgres`) через ленивый `import()` core.
+export { ExternalCredentialStoreError } from './storage/ports/external-credential-repository.js';
 // ADR-096 (W2.2): in-memory реализации портов хранения (второй backend за единым слоем).
 export {
   MemorySessionRepository,
