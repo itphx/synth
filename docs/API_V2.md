@@ -247,7 +247,7 @@ interface BusEvent { type: EventType; sessionId: string; data: Record<string, un
 
 Реестр подтверждений живёт только в **enforced-режиме** Authority-слоя (`authority.enabled` без
 `authority.shadow`); в shadow/выключенном режиме ответ принимается по-старому (по видимости сессии) —
-см. [PROP-108](./arch_decisions/prop-108-authority-layer.md).
+см. [ADR-106](./arch_decisions/adr-106-authority-layer.md).
 
 ---
 

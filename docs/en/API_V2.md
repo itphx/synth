@@ -249,7 +249,7 @@ At the same time the client receives an error frame:
 
 The approval registry only exists in the Authority layer's **enforced** mode (`authority.enabled`
 without `authority.shadow`); in shadow/disabled mode the reply is accepted as before (by session
-visibility) — see [PROP-108](../arch_decisions/prop-108-authority-layer.md) (in Russian).
+visibility) — see [ADR-106](../arch_decisions/adr-106-authority-layer.md) (in Russian).
 
 ---
 
