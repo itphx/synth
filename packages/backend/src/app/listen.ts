@@ -244,6 +244,10 @@ export function createBackendListen(deps: BackendListenDeps) {
                       type: 'queued',
                       session_id: sid,
                       stream_id: streamId,
+                      mode,
+                      // ADR-104 (этап 3): единый контракт режима — клиенту
+                      // видно, какой режим применён и применился ли он.
+                      mode_applied: true,
                       timestamp: nowISO(),
                     }));
                   }
@@ -299,6 +303,9 @@ export function createBackendListen(deps: BackendListenDeps) {
                       type: 'queued',
                       session_id: sid,
                       stream_id: streamId,
+                      mode,
+                      // ADR-104 (этап 3): локальная сторона применила режим сама.
+                      mode_applied: true,
                       timestamp: nowISO(),
                     }));
                     return;
