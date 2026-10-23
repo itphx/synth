@@ -748,11 +748,22 @@ export type { SshKeyRoutesAuth, SshKeyRoutesOptions } from './server/routes/ssh-
 export { ProjectStore } from './storage/project-store.js';
 export type { ProjectStoreConfig, ProjectStoreLike } from './storage/project-store.js';
 export { McpRegistryStore } from './storage/mcp-registry-store.js';
+export {
+  McpRegistryValidationError,
+  assertNoMcpSecretHeaders,
+  stripMcpSecretHeaders,
+} from './storage/mcp-registry-store.js';
 export type {
   McpRegistryStoreConfig,
   AddMcpRegistryEntryInput,
   UpdateMcpRegistryEntryInput,
 } from './storage/mcp-registry-store.js';
+// ADR-105 (Ф3): миграция plaintext-секретов из заголовков реестра в слой доступов.
+export { migrateMcpRegistrySecrets } from './storage/mcp-registry-migration.js';
+export type {
+  MigrateMcpRegistrySecretsDeps,
+  MigrateMcpRegistrySecretsResult,
+} from './storage/mcp-registry-migration.js';
 // ADR-089: реестр биндингов внешних событий и журнал обработки/решений Router.
 export { EventBindingStore, EVENT_BINDINGS_SCHEMA_VERSION } from './storage/event-binding-store.js';
 export type { EventBindingStoreConfig, UpsertEventBindingInput } from './storage/event-binding-store.js';
