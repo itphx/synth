@@ -27,7 +27,8 @@ import {
   createEgressPolicyResolver, createEgressLogSink,
   configureEgressRuntime, startEgressLogPruner,
   // ADR-105 (Ф3): источник access-токена для MCP-коннекторов + OAuth-сервис.
-  OAuthCredentialService, OAuthProviderRegistry, createRepositoryCredentialSource,
+  OAuthCredentialService, OAuthProviderRegistry, registerOAuthProvidersFromConfig,
+  createRepositoryCredentialSource,
   SkillService, resolveProjectSkillSeed,
   CommandService,
   detectRuntimeDeps, syncProvidersFromEnv,
@@ -305,6 +306,11 @@ export async function createBackendDeps(
   // ADR-105 (Ф3): коннекторы с `auth.kind='credential'` авторизуются токеном
   // из слоя доступов (подстановка в транспорт, refresh при 401).
   const oauthProviders = new OAuthProviderRegistry();
+  // Каталог OAuth-провайдеров из конфига инстанса (`oauth.providers`): без него
+  // refresh живого доступа не работает — провайдера не найти.
+  await registerOAuthProvidersFromConfig(oauthProviders, config.synth.oauth.providers, {
+    dataDir,
+  });
   const oauthCredentialService = new OAuthCredentialService({
     repo: storageContext.externalCredentials,
     clientFor: (provider: string) => oauthProviders.clientFor(provider),

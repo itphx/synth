@@ -50,5 +50,8 @@ export {
 } from './service.js';
 export {
   OAuthProviderRegistry,
+  registerOAuthProvidersFromConfig,
+  type OAuthProviderCatalogEntry,
   type OAuthProviderRegistration,
+  type RegisterOAuthProvidersOptions,
 } from './registry.js';

@@ -125,6 +125,8 @@ export interface StandaloneConfig {
   schedulerConfig?: SynthConfig['scheduler'];
   /** ADR-084: конфигурация decision-слоя из config.yaml `decision`. */
   decisionConfig?: SynthConfig['decision'];
+  /** ADR-105 (Ф3): каталог OAuth-провайдеров инстанца (`oauth.providers`). */
+  oauthProviders?: SynthConfig['oauth']['providers'];
   /** ADR-102: конфигурация аналитики (`analytics.retentionDays`) из config.yaml. */
   analyticsConfig?: SynthConfig['analytics'];
   /** ADR-094: конфигурация метрик (`metrics.enabled`) из config.yaml/env. */

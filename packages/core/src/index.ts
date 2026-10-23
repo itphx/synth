@@ -308,6 +308,7 @@ export {
   OAuthClient,
   OAuthCredentialService,
   OAuthProviderRegistry,
+  registerOAuthProvidersFromConfig,
   resolveOAuthClientSecret,
   oauthClientSecretEnv,
   oauthClientSecretPath,
@@ -321,7 +322,9 @@ export type {
   ExchangeAndStoreInput,
   OAuthCredentialServiceDeps,
   RevokeResult,
+  OAuthProviderCatalogEntry,
   OAuthProviderRegistration,
+  RegisterOAuthProvidersOptions,
   ResolveClientSecretOptions,
 } from './engine/oauth/index.js';
 

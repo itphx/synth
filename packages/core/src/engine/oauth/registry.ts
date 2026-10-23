@@ -13,6 +13,7 @@
  * ошибкой (`OAuthError('not_found')`), а не «тихим» отказом.
  */
 import { OAuthClient, type OAuthClientOptions } from './client.js';
+import { resolveOAuthClientSecret } from './client-secret.js';
 import { OAuthError, type OAuthProviderDescription } from './types.js';
 
 /** Запись реестра: описание провайдера и (необязательно) готовый клиент. */
@@ -75,4 +76,93 @@ export class OAuthProviderRegistry {
       ...(item.clientOptions ?? {}),
     });
   }
+}
+
+/**
+ * ADR-105 (Ф3): описание провайдера в конфиге инстанса (`oauth.providers`).
+ *
+ * Поля совпадают с `OAuthProviderDescription`, кроме `provider` — он берётся
+ * из ключа карты. Секрета здесь нет (инвариант 13).
+ */
+export interface OAuthProviderCatalogEntry {
+  authorizeUrl: string;
+  tokenUrl: string;
+  revokeUrl?: string;
+  deviceAuthorizationUrl?: string;
+  clientId: string;
+  scopes?: string[];
+  clientAuth?: OAuthProviderDescription['clientAuth'];
+  redirectUri?: string;
+}
+
+/** Опции наполнения реестра провайдерами из конфига. */
+export interface RegisterOAuthProvidersOptions {
+  /** Каталог данных инстанса — файл `client_secret` (`{dataDir}/secrets/oauth/…`). */
+  dataDir?: string;
+  /** Окружение (env-`client_secret`); по умолчанию — `process.env`. */
+  env?: NodeJS.ProcessEnv;
+  /**
+   * Резолвер `client_secret` (для тестов). По умолчанию — штатный
+   * `resolveOAuthClientSecret` (env → файл).
+   */
+  resolveClientSecret?: (
+    provider: string,
+  ) => Promise<string | undefined> | string | undefined;
+}
+
+/**
+ * Наполнить реестр описаниями провайдеров из конфига инстанса.
+ *
+ * Возвращает число зарегистрированных провайдеров. Пустой каталог — не
+ * ошибка: доступы, созданные кодом, работают, но refresh без описания
+ * провайдера вернёт понятную ошибку `not_found`.
+ *
+ * `client_secret` подтягивается отдельно (env/файл) и в реестр не пишется.
+ */
+export async function registerOAuthProvidersFromConfig(
+  registry: OAuthProviderRegistry,
+  providers: Record<string, OAuthProviderCatalogEntry> | undefined | null,
+  options: RegisterOAuthProvidersOptions = {},
+): Promise<number> {
+  if (!providers) return 0;
+  let count = 0;
+  for (const [provider, entry] of Object.entries(providers)) {
+    const name = provider.trim();
+    if (!name) continue;
+
+    const description: OAuthProviderDescription = {
+      provider: name,
+      authorizeUrl: entry.authorizeUrl,
+      tokenUrl: entry.tokenUrl,
+      clientId: entry.clientId,
+      ...(entry.revokeUrl ? { revokeUrl: entry.revokeUrl } : {}),
+      ...(entry.deviceAuthorizationUrl ? { deviceAuthorizationUrl: entry.deviceAuthorizationUrl } : {}),
+      ...(entry.scopes && entry.scopes.length > 0 ? { scopes: [...entry.scopes] } : {}),
+      ...(entry.clientAuth ? { clientAuth: entry.clientAuth } : {}),
+      ...(entry.redirectUri ? { redirectUri: entry.redirectUri } : {}),
+    };
+
+    const clientSecret = await resolveProviderClientSecret(name, options);
+    registry.register({
+      description,
+      ...(clientSecret ? { clientSecret } : {}),
+    });
+    count += 1;
+  }
+  return count;
+}
+
+/** `client_secret` провайдера: штатный резолвер (env → файл) или инъекция. */
+async function resolveProviderClientSecret(
+  provider: string,
+  options: RegisterOAuthProvidersOptions,
+): Promise<string | undefined> {
+  if (options.resolveClientSecret) {
+    return await options.resolveClientSecret(provider);
+  }
+  return await resolveOAuthClientSecret({
+    provider,
+    ...(options.dataDir ? { dataDir: options.dataDir } : {}),
+    ...(options.env ? { env: options.env } : {}),
+  });
 }

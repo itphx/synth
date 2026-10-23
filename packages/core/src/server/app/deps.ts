@@ -46,6 +46,7 @@ import {
   // ADR-105 (Ф3): источник access-токена для MCP-коннекторов + OAuth-сервис.
   OAuthCredentialService,
   OAuthProviderRegistry,
+  registerOAuthProvidersFromConfig,
   createRepositoryCredentialSource,
   // ADR-101 (Э5): движок пайплайнов, исполнители шагов, обработчики выходов.
   PipelineEngine,
@@ -340,6 +341,9 @@ export async function createStandaloneDeps(
   // ADR-105 (Ф3): коннекторы с `auth.kind='credential'` авторизуются токеном
   // из слоя доступов (подстановка в транспорт, refresh при 401).
   const oauthProviders = new OAuthProviderRegistry();
+  // Каталог OAuth-провайдеров из конфига инстанса (`oauth.providers`): без него
+  // refresh живого доступа не работает — провайдера не найти.
+  await registerOAuthProvidersFromConfig(oauthProviders, config.oauthProviders, { dataDir });
   const oauthCredentialService = new OAuthCredentialService({
     repo: storageContext.externalCredentials,
     clientFor: (provider: string) => oauthProviders.clientFor(provider),

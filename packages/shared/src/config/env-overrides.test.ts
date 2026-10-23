@@ -4,6 +4,7 @@ import {
   applyEnvOverrides,
   applyObjectEnvOverrides,
   BOOTSTRAP_SERVICE_KEYS_ENV,
+  OAUTH_PROVIDERS_ENV,
   envOverrideName,
   parseEnvValue,
   toSnakeCase,
@@ -291,5 +292,77 @@ describe('applyObjectEnvOverrides (ADR-052/O1)', () => {
     });
     expect(original.bootstrapServiceKeys).toEqual([]);
     expect(cfg.security).not.toBe(original);
+  });
+});
+
+/**
+ * ADR-105 (Ф3): каталог OAuth-провайдеров из env (`SYNTH_OAUTH_PROVIDERS`,
+ * JSON). Описания провайдеров — данные (endpoint'ы, `client_id`, scope'ы);
+ * секрета в каталоге нет (инвариант 13) — `client_secret` только env/файл.
+ */
+describe('applyObjectEnvOverrides — oauth.providers (ADR-105 Ф3)', () => {
+  function makeConfig(): Record<string, unknown> {
+    return { oauth: { providers: {} } };
+  }
+
+  function providersOf(cfg: Record<string, unknown>): Record<string, unknown> {
+    return ((cfg.oauth as Record<string, unknown>).providers ?? {}) as Record<string, unknown>;
+  }
+
+  const github = {
+    authorizeUrl: 'https://github.com/login/oauth/authorize',
+    tokenUrl: 'https://github.com/login/oauth/access_token',
+    clientId: 'synth-client',
+    scopes: ['repo'],
+  };
+
+  it('валидный JSON применяется в oauth.providers', () => {
+    const cfg = applyObjectEnvOverrides(makeConfig(), {
+      [OAUTH_PROVIDERS_ENV]: JSON.stringify({ github }),
+    });
+    expect(providersOf(cfg)).toEqual({ github });
+  });
+
+  it('провайдер из env заменяет одноимённого из config.yaml, остальные сохраняются', () => {
+    const cfg: Record<string, unknown> = {
+      oauth: { providers: { github: { clientId: 'old' }, gitlab: { clientId: 'keep' } } },
+    };
+    const out = applyObjectEnvOverrides(cfg, {
+      [OAUTH_PROVIDERS_ENV]: JSON.stringify({ github }),
+    });
+    expect(providersOf(out).github).toEqual(github);
+    expect(providersOf(out).gitlab).toEqual({ clientId: 'keep' });
+  });
+
+  it('пустая строка → тихий игнор (без warn)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyObjectEnvOverrides(makeConfig(), { [OAUTH_PROVIDERS_ENV]: '' });
+    expect(providersOf(cfg)).toEqual({});
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('невалидный JSON → warn + игнор (доступы просто не обновятся)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyObjectEnvOverrides(makeConfig(), {
+      [OAUTH_PROVIDERS_ENV]: '{not json',
+    });
+    expect(providersOf(cfg)).toEqual({});
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain(OAUTH_PROVIDERS_ENV);
+  });
+
+  it('набор не проходит валидацию → warn + игнор (fail-soft)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyObjectEnvOverrides(makeConfig(), {
+      [OAUTH_PROVIDERS_ENV]: JSON.stringify({ github: { authorizeUrl: 'https://x' } }),
+    });
+    expect(providersOf(cfg)).toEqual({});
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('env не задан → каталог не меняется', () => {
+    const cfg = makeConfig();
+    const out = applyObjectEnvOverrides(cfg, {});
+    expect(providersOf(out)).toEqual({});
   });
 });
