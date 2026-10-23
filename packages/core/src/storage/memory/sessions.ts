@@ -85,6 +85,7 @@ export class MemorySessionRepository implements SessionRepository {
     const clone = this._normalize(session);
     clone.messages = [];
     clone.pendingMessages = [];
+    clone.steerInbox = [];
     clone.checkpoints = [];
     return clone;
   }
@@ -123,7 +124,7 @@ export class MemorySessionRepository implements SessionRepository {
    */
   async listLight(filter?: SessionFilter): Promise<Session[]> {
     const sessions = await this.list(filter);
-    return sessions.map((s) => ({ ...s, messages: [], pendingMessages: [], checkpoints: [] }));
+    return sessions.map((s) => ({ ...s, messages: [], pendingMessages: [], steerInbox: [], checkpoints: [] }));
   }
 
   async search(query: string, filter?: SessionFilter): Promise<Session[]> {

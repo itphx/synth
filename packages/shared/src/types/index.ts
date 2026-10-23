@@ -33,6 +33,8 @@ export * from './provider.js';
 export * from './llm.js';
 // EventType/BusEvent — шина событий сессии (ADR-009/024)
 export * from './bus-events.js';
+// PROP-098: режимы отправки сообщения во время хода (steering)
+export * from './steering.js';
 // Файловая система (FS API v2)
 export * from './fs.js';
 

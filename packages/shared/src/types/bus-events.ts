@@ -14,6 +14,13 @@ export type EventType =
   | 'fs.changed'
   | 'message.added'
   | 'message.updated'
+  // PROP-098: форсированная отправка сообщения во время хода (steering).
+  // `message.injected` — инъекция применена на границе шага; `steer.dropped` —
+  // сообщение отброшено (лимит инъекций на ход); `stream.interrupted` —
+  // задел режима `interrupt` (этап 2), пока не эмитится.
+  | 'message.injected'
+  | 'steer.dropped'
+  | 'stream.interrupted'
   | 'child.message.added'
   | 'child.session.updated'
   | 'stream.start'

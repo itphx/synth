@@ -1036,6 +1036,15 @@ export const dict = {
   'chat.input.mentionHint': 'Упомяните агента через @',
   'chat.input.enqueue': 'Добавить в очередь',
 
+  // --- Steering: вмешательство в активный ход (PROP-098) ---
+  'chat.steer.marker': 'Вмешательство в ход',
+  'chat.steer.mode.label': 'Режим отправки',
+  'chat.steer.mode.queue': 'В очередь',
+  'chat.steer.mode.steer': 'Вмешаться',
+  'chat.steer.mode.title': 'Как отправить сообщение во время работы агента',
+  'chat.steer.mode.queueHint': 'Сообщение будет обработано после окончания текущего хода',
+  'chat.steer.mode.steerHint': 'Сообщение будет вброшено в текущий ход на ближайшей границе шага',
+
   'chat.actions.copy': 'Копировать',
   'chat.actions.toggleOff': 'Выключить',
   'chat.actions.toggleOn': 'Включить',
@@ -2598,6 +2607,13 @@ export const dict = {
   'event.source_not_allowed': 'Источник события «{source}» не разрешён',
   'event.duplicate': 'Дубликат события проигнорирован: {dedupKey}',
   'hook.blocked': 'Хук «{hook}» заблокировал выполнение: {reason}',
+
+  // --- Steering: форсированная отправка во время хода (PROP-098) ---
+  'steer.injected': 'Сообщение вброшено в текущий ход',
+  'steer.limit_exceeded':
+    'Достигнут лимит вмешательств: не более {limit} сообщений на ход',
+  'steer.interrupt_unsupported':
+    'Режим «прервать» пока не поддерживается — используйте «вмешаться» или «в очередь»',
 
   // --- Профиль пользователя и онбординг ---
   'profile.deps_unavailable': 'Ошибка: менеджер сессий или хранилище профилей недоступны для {tool}',

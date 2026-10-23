@@ -11,6 +11,8 @@ import {
   ANALYTICS_FAMILIES,
   ANALYTICS_DIMENSIONS,
   ANALYTICS_EXPORT_FORMATS,
+  STEER_MODES,
+  DEFAULT_STEER_MODE,
 } from '../types/index.js';
 import type { GitRepoConfig, ProjectIconKey, ProjectColorKey } from '../types/index.js';
 import { ToolCapability } from '../types/tools.js';
@@ -204,6 +206,11 @@ export const promptRequestSchema = z.object({
   provider: z.string().optional(),
   agent: z.string().optional(),
   system: z.string().optional(),
+  /**
+   * PROP-098: режим отправки. `queue` (по умолчанию) — прежнее поведение;
+   * `steer` — инъекция в активный ход; `interrupt` — этап 2 (пока 400).
+   */
+  mode: z.enum(STEER_MODES).default(DEFAULT_STEER_MODE),
 });
 
 export const spaLoginSchema = z.object({
@@ -410,6 +417,11 @@ export type ProjectUpdateRequest = z.infer<typeof projectUpdateSchema>;
 export type SSHKeyCreateRequest = z.infer<typeof sshKeyCreateSchema>;
 export type SSHKeyUpdateRequest = z.infer<typeof sshKeyUpdateSchema>;
 export type PromptRequest = z.infer<typeof promptRequestSchema>;
+/**
+ * Форма ВХОДА схемы промпта: поля с серверным `default` (`stream`, `mode`)
+ * необязательны — сервер подставит значение. Для тела запроса SDK.
+ */
+export type PromptRequestInput = z.input<typeof promptRequestSchema>;
 export type SpaLoginRequest = z.infer<typeof spaLoginSchema>;
 export type FsListQuery = z.infer<typeof fsListQuerySchema>;
 export type FsReadQuery = z.infer<typeof fsReadQuerySchema>;

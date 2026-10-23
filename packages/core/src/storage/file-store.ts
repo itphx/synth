@@ -86,6 +86,8 @@ interface SerializedSession {
   project_id?: string;
   messages: SerializedMessage[];
   pending_messages: SerializedMessage[];
+  /** PROP-098: очередь инъекций (steering) — отдельно от `pending_messages`. */
+  steer_inbox?: SerializedMessage[];
   status: Record<string, unknown>;
   settings: Record<string, unknown>;
   references: SerializedSessionReference[];
@@ -279,6 +281,7 @@ function serializeSession(session: Session): SerializedSession {
     project_id: session.projectId,
     messages: session.messages.map(serializeMessage),
     pending_messages: session.pendingMessages.map(serializeMessage),
+    steer_inbox: (session.steerInbox ?? []).map(serializeMessage),
     status: session.status as unknown as Record<string, unknown>,
     settings: session.settings as unknown as Record<string, unknown>,
     references: (session.references || []).map((ref) => ({
@@ -350,6 +353,7 @@ function deserializeSession(data: SerializedSession): Session {
     projectId: data.project_id,
     messages: data.messages.map(deserializeMessage),
     pendingMessages: data.pending_messages.map(deserializeMessage),
+    steerInbox: (data.steer_inbox ?? []).map(deserializeMessage),
     status: data.status as unknown as SessionStatus,
     settings: data.settings as unknown as SessionSettings,
     checkpoints: (data.checkpoints || []).map((c: SerializedCheckpoint) => ({
@@ -516,7 +520,7 @@ export class FileStore implements SessionRepository {
   async loadLight(sessionId: string): Promise<Session | null> {
     const session = await this.load(sessionId);
     return session
-      ? { ...session, messages: [], pendingMessages: [], checkpoints: [] }
+      ? { ...session, messages: [], pendingMessages: [], steerInbox: [], checkpoints: [] }
       : null;
   }
 
@@ -579,7 +583,7 @@ export class FileStore implements SessionRepository {
    */
   async listLight(filter?: SessionFilter): Promise<Session[]> {
     const sessions = await this.list(filter);
-    return sessions.map((s) => ({ ...s, messages: [], pendingMessages: [], checkpoints: [] }));
+    return sessions.map((s) => ({ ...s, messages: [], pendingMessages: [], steerInbox: [], checkpoints: [] }));
   }
 
   async exists(sessionId: string): Promise<boolean> {

@@ -4,10 +4,10 @@ import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer, RequestSessionService } from '../../index.js';
 import type { SessionTree } from '../../sessions/manager.js';
-import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, createResolveAuthorName, PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS, isProjectIconKey, isProjectColorKey } from '@itphx/synth-shared';
+import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, createResolveAuthorName, PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS, isProjectIconKey, isProjectColorKey, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { Message, Session } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
-import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
+import { enqueueUserMessage, enqueueSteerMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
 import { serializeSession, serializeMessage, redactSessionSecretValues } from '../serialize.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
@@ -65,6 +65,10 @@ export interface SessionRouteMessages {
   forbidden: (c: Context) => string;
   contentRequired: (c: Context) => string;
   queueFull: (c: Context, max: number) => string;
+  /** PROP-098: превышен лимит инъекций на ход (`mode: 'steer'`). */
+  steerLimitExceeded: (c: Context, max: number) => string;
+  /** PROP-098: режим `interrupt` пока не поддерживается (этап 2). */
+  steerInterruptUnsupported: (c: Context) => string;
 }
 
 export interface SessionRoutesOptions {
@@ -169,11 +173,26 @@ const DEFAULT_MESSAGES: SessionRouteMessages = {
   forbidden: () => 'Доступ к сессии запрещён',
   contentRequired: () => 'Контент обязателен',
   queueFull: (_c: Context, max: number) => `Очередь сообщений заполнена (макс. ${max})`,
+  steerLimitExceeded: (_c: Context, max: number) =>
+    `Достигнут лимит вмешательств в ход (макс. ${max} сообщений на ход)`,
+  steerInterruptUnsupported: () =>
+    'Режим «прерывание хода» пока не поддерживается — используйте «вмешаться» или «в очередь»',
 };
 
 /** Сообщение о недопустимом значении метаданных с перечнем допустимых ключей. */
 function invalidMetaMessage(label: 'icon' | 'color', value: unknown, allowed: readonly string[]): string {
   return `Недопустимое значение ${label}: "${String(value)}". Допустимые: ${allowed.join(', ')}`;
+}
+
+/**
+ * PROP-098: идёт ли сейчас ход сессии (есть чему вмешиваться).
+ *
+ * `status.blocked` ставит процессор очереди на время хода, `isRunning` —
+ * живой процессор сессии. Оба признака нужны: между фазами процессора флаг
+ * `blocked` может быть ещё не выставлен.
+ */
+function isTurnActive(session: Session, queueManager: QueueProcessorManager): boolean {
+  return !!session.status?.blocked || queueManager.isRunning(session.id);
 }
 
 /**
@@ -725,6 +744,19 @@ export function createSessionRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.contentRequired(c) } }, 400);
     }
 
+    // PROP-098: режим отправки. Неизвестное значение — как `queue` (обратная
+    // совместимость: поле необязательное). `interrupt` — этап 2, молчаливого
+    // приёма нет: понятная 400 с машинным кодом.
+    const mode = isSteerMode(body.mode) ? body.mode : DEFAULT_STEER_MODE;
+    if (mode === 'interrupt') {
+      return c.json({
+        error: {
+          code: STEERING_ERROR_CODES.interruptUnsupported,
+          message: messages.steerInterruptUnsupported(c),
+        },
+      }, 400);
+    }
+
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
@@ -755,6 +787,31 @@ export function createSessionRoutes(
       model: body.model || session.settings.model,
       metadata: { ...(body.metadata || {}), stream_id: streamId },
     };
+
+    // PROP-098: `steer` — вмешательство в активный ход (без прерывания
+    // генерации). Если активного хода нет — ведём себя как обычная очередь
+    // (сообщение начнёт новый ход).
+    if (mode === 'steer' && isTurnActive(session, queueManager)) {
+      const steerResult = await enqueueSteerMessage(
+        sessionManager, eventBus, sessionId, message, MAX_STEER_INJECTIONS_PER_TURN,
+        (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
+      );
+      if (!steerResult.accepted) {
+        return c.json({
+          error: {
+            code: STEERING_ERROR_CODES.limitExceeded,
+            message: messages.steerLimitExceeded(c, MAX_STEER_INJECTIONS_PER_TURN),
+          },
+        }, 429);
+      }
+      // Отдельный стрим не запускается — сообщение вплетается в текущий ход,
+      // поэтому отвечаем статусом без SSE.
+      return c.json({
+        status: 'steered',
+        stream_id: streamId,
+        pending_count: steerResult.pending,
+      }, 202);
+    }
 
     const result = await enqueueUserMessage(
       sessionManager, eventBus, sessionId, message, queueManager, processMessage,

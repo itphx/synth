@@ -115,6 +115,9 @@ function ChatMessageInner({
   // ADR-051: сообщения планировщика (source:'cron') приходят как role:'user' с
   // metadata.scheduler === true — рисуем их служебным Notice, а не user-пузырём.
   const isScheduler = isUser && message.metadata?.scheduler === true
+  // PROP-098: инъекция во время активного хода (metadata.steer === true) —
+  // помечаем маркером «вмешательство в ход».
+  const isSteered = isUser && message.metadata?.steer === true
   const canRetry = isUser
   const hasDebug = !!message.debug_data && Object.keys(message.debug_data).length > 0
 
@@ -499,6 +502,16 @@ function ChatMessageInner({
         </div>
       )}
       <div className={bubbleClass}>
+        {isSteered && (
+          <span
+            className="mb-1 inline-flex items-center gap-1 self-end rounded-sm bg-primary/10 px-1.5 py-0.5 text-[11px] leading-4 text-primary"
+            title={t('chat.steer.marker')}
+          >
+            <Icon name="send-plane" className="size-3" />
+            {t('chat.steer.marker')}
+          </span>
+        )}
+
         {isAssistant && (
           <MessageHeader message={message} isSubagent={isSubagent} onOriginClick={handleOriginClick} />
         )}

@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
@@ -2671,6 +2671,14 @@ export class ChatOrchestrator {
           break;
         }
 
+        // PROP-098: вычитка очереди инъекций — на границе шага (здесь же, где
+        // проверяется отмена). Инъекция НИКОГДА не попадает внутрь шага:
+        // результаты инструментов предыдущей итерации уже в `currentMessages`,
+        // поэтому пары toolUse/toolResult не рвутся.
+        await this._applySteerInjections(
+          session, currentMessages, publishChunk, effectiveAgentRole, author, streamId,
+        );
+
         let accumulatedContent = '';
         let accumulatedReasoning = '';
         let toolCalls: Record<string, unknown>[] | undefined = [];
@@ -3934,6 +3942,76 @@ export class ChatOrchestrator {
       modelPriceLoader: this._modelPriceLoader,
       analytics: this._analytics ?? undefined,
     };
+  }
+
+  /**
+   * PROP-098: применить очередь инъекций (steering) на границе шага.
+   *
+   * Вызывается в начале итерации цикла Tool Use — МЕЖДУ шагами: результаты
+   * инструментов предыдущей итерации к этому моменту уже дописаны в
+   * `currentMessages`, поэтому пары `toolUse`/`toolResult` не рвутся и модель
+   * получает цепочку инструментов без «висячих» вызовов.
+   *
+   * Инъекция персистится как обычное user-сообщение с `metadata.steer=true`
+   * (автор, время) — значит, она видна в истории и попадает в LLM-контекст
+   * следующих ходов штатно. Текущий ход получает её через `currentMessages`.
+   */
+  private async _applySteerInjections(
+    session: Session,
+    currentMessages: LLMMessage[],
+    publishChunk: (event: string, data: Record<string, unknown>) => void,
+    agentRole: string | undefined,
+    author: string,
+    streamId: string,
+  ): Promise<void> {
+    const { messages, dropped } = await this._sessionManager.takeSteerMessages(
+      session.id, MAX_STEER_INJECTIONS_PER_TURN,
+    );
+
+    // Лимит инъекций на ход: лишние сообщения отбрасываются (событие
+    // `steer.dropped`), а не копятся и не рвут tool-цепочку.
+    if (dropped.length > 0) {
+      publishChunk('steer.dropped', {
+        reason: 'limit',
+        // Машинный код — тот же, что отдаёт API (429 STEER_LIMIT_EXCEEDED).
+        code: STEERING_ERROR_CODES.limitExceeded,
+        limit: MAX_STEER_INJECTIONS_PER_TURN,
+        dropped_count: dropped.length,
+        error: sm('steer.limit_exceeded', { limit: String(MAX_STEER_INJECTIONS_PER_TURN) }),
+        i18n: i18nMeta('steer.limit_exceeded', { limit: String(MAX_STEER_INJECTIONS_PER_TURN) }),
+      });
+    }
+
+    for (const injected of messages) {
+      const persisted: Message = {
+        ...injected,
+        role: MessageRole.USER,
+        metadata: {
+          ...(injected.metadata ?? {}),
+          [STEER_METADATA_KEY]: true,
+          stream_id: (injected.metadata?.stream_id as string) || streamId,
+        },
+      };
+      const stored = await this._sessionManager.appendMessage(session.id, persisted);
+
+      // В контекст LLM — тем же маппингом, что и история сессии
+      // (`sessionMessagesToLlm`), чтобы атрибуция совпадала.
+      for (const llmMessage of sessionMessagesToLlmFn([persisted], agentRole, author)) {
+        currentMessages.push(llmMessage);
+      }
+
+      publishChunk('message.injected', {
+        stream_id: streamId,
+        // Позиция сообщения в истории (0-based) — как в `GET /:id/messages`,
+        // чтобы UI мог добавить его в ленту без полной перезагрузки.
+        message_index: (stored?.seq ?? persisted.seq) - 1,
+        message_id: persisted.id,
+        content: persisted.content,
+        author: persisted.author,
+        agent_role: persisted.agentRole,
+        metadata: persisted.metadata,
+      });
+    }
   }
 
   /**

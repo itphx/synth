@@ -136,6 +136,10 @@ const en: Dictionary = {
 
   // Chat
   'errors.chat.queueFull': 'Queue is full (max {max} messages)',
+  'errors.chat.steerLimitExceeded':
+    'Steering limit reached (max {max} injected messages per turn)',
+  'errors.chat.steerInterruptUnsupported':
+    'Interrupt mode is not supported yet — use "steer" or "queue"',
 
   // Stub
   'stub.llmNotConnected': '[Stub] You said: "{content}". LLM engine is not connected yet.',
@@ -274,6 +278,10 @@ const ru: Dictionary = {
 
   // Chat
   'errors.chat.queueFull': 'Очередь переполнена (максимум {max} сообщений)',
+  'errors.chat.steerLimitExceeded':
+    'Достигнут лимит вмешательств в ход (максимум {max} сообщений на ход)',
+  'errors.chat.steerInterruptUnsupported':
+    'Режим «прерывание хода» пока не поддерживается — используйте «вмешаться» или «в очередь»',
 
   // Stub
   'stub.llmNotConnected': '[Заглушка] Вы сказали: "{content}". LLM-движок ещё не подключён.',

@@ -56,6 +56,8 @@ export interface SessionRow {
   settings: unknown;
   mcp_servers: unknown;
   pending_messages: unknown;
+  /** PROP-098: очередь инъекций (steering) — отдельно от `pending_messages`. */
+  steer_inbox: unknown;
   current_stream: unknown;
   summarization_pending: boolean;
   can_summarize: boolean;
@@ -427,6 +429,7 @@ export function serializeSession(session: Session): Record<string, unknown> {
     settings: session.settings ?? {},
     mcp_servers: session.mcpServers ?? null,
     pending_messages: (session.pendingMessages ?? []).map((msg) => serializeMessage(msg)),
+    steer_inbox: (session.steerInbox ?? []).map((msg) => serializeMessage(msg)),
     current_stream: session.currentStream
       ? {
           stream_id: session.currentStream.streamId,
@@ -563,6 +566,7 @@ export function deserializeSession(
     projectId: row.project_id ?? undefined,
     messages: children.messages.map(deserializeMessage),
     pendingMessages: ((row.pending_messages as MessageRow[] | null) ?? []).map(deserializeMessage),
+    steerInbox: ((row.steer_inbox as MessageRow[] | null) ?? []).map(deserializeMessage),
     status: (row.status ?? {}) as Session['status'],
     settings: (row.settings ?? {}) as Session['settings'],
     mcpServers: (row.mcp_servers ?? undefined) as Session['mcpServers'],

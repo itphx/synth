@@ -192,6 +192,19 @@ describe('sessionsApi — очередь промпта (прямой fetch)', (
     expect('agent' in body).toBe(false)
   })
 
+  it('enqueueMessage: mode=steer уходит в тело, mode=queue не уходит (PROP-098)', async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 202, json: async () => ({}) } as unknown as Response)
+
+    await synthApi.enqueueMessage('s1', 'вмешательство', { streamId: 'sid-3', mode: 'steer' })
+    let body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.mode).toBe('steer')
+
+    fetchMock.mockClear()
+    await synthApi.enqueueMessage('s1', 'в очередь', { streamId: 'sid-4', mode: 'queue' })
+    body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect('mode' in body).toBe(false)
+  })
+
   it('enqueueMessage: ошибка → Error из detail', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ detail: 'сессия занята' }, 409))
 

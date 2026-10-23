@@ -1,3 +1,5 @@
+import type { SteerMode } from '@itphx/synth-shared/types'
+
 export interface WSEvent {
   type: string
   session_id?: string
@@ -62,7 +64,7 @@ export class TransportClient {
     return this.backendReady
   }
 
-  async sendMessage(sessionId: string, text: string, agentRole?: string, provider?: string, model?: string): Promise<void> {
+  async sendMessage(sessionId: string, text: string, agentRole?: string, provider?: string, model?: string, mode?: SteerMode): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket not connected')
     }
@@ -81,6 +83,9 @@ export class TransportClient {
         agent_role: agentRole,
         provider,
         model,
+        // PROP-098: режим отправки (`queue` по умолчанию, `steer` — вмешательство
+        // в активный ход). Не задан — сервер трактует как `queue`.
+        ...(mode && mode !== 'queue' ? { mode } : {}),
       }))
     })
   }

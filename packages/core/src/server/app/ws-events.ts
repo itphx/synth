@@ -4,9 +4,9 @@
 // Вынесено из `server/app.ts` (ADR-095, шаг 4a) — «вынос по швам», без изменения поведения.
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
-import { MessageRole, generateStreamId, nowISO, makeTextPart } from '@itphx/synth-shared';
+import { MessageRole, generateStreamId, nowISO, makeTextPart, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { BusEvent, Message } from '@itphx/synth-shared';
-import { enqueueUserMessage } from '../../index.js';
+import { enqueueUserMessage, enqueueSteerMessage } from '../../index.js';
 import type { EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator } from '../../index.js';
 import type { RemoteConnection } from '../../remote/connection.js';
 import type { LocalAuthKit } from '../../auth/local.js';
@@ -283,12 +283,33 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
 
               const streamId = msg.stream_id || generateStreamId();
 
-              ws.send(JSON.stringify({
-                type: 'queued',
-                session_id: sid,
-                stream_id: streamId,
-                timestamp: nowISO(),
-              }));
+              // PROP-098: режим отправки. `interrupt` — этап 2: молчаливого
+              // приёма нет, отвечаем ошибкой с машинным кодом.
+              const mode = isSteerMode(msg.mode) ? msg.mode : DEFAULT_STEER_MODE;
+              if (mode === 'interrupt') {
+                ws.send(JSON.stringify({
+                  type: 'error',
+                  session_id: sid,
+                  data: {
+                    error: 'Режим «прерывание хода» пока не поддерживается',
+                    code: STEERING_ERROR_CODES.interruptUnsupported,
+                  },
+                  timestamp: nowISO(),
+                }));
+                return;
+              }
+              // Для `steer` подтверждение уходит после приёма сообщения
+              // (иначе «queued» означало бы принятое, но отброшенное).
+              const steerMode = mode === 'steer';
+
+              if (!steerMode) {
+                ws.send(JSON.stringify({
+                  type: 'queued',
+                  session_id: sid,
+                  stream_id: streamId,
+                  timestamp: nowISO(),
+                }));
+              }
 
               (async () => {
                 // Гибрид: remote-сессия (`remote:<id>`) — промпт уходит на удалённый
@@ -352,6 +373,34 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
                   model: msg.model || session.settings.model,
                   metadata: { stream_id: streamId },
                 };
+
+                // PROP-098: `steer` — вмешательство в активный ход. Если хода
+                // нет — обычная очередь (сообщение начнёт новый ход).
+                if (steerMode && (session.status?.blocked || queueManager.isRunning(sid))) {
+                  const steerResult = await enqueueSteerMessage(
+                    sessionManager, eventBus, sid, message, MAX_STEER_INJECTIONS_PER_TURN,
+                    (msgSid, steerMsg) => orchestrator.obfuscateUserMessageForHistory(msgSid, steerMsg),
+                  );
+                  if (!steerResult.accepted) {
+                    ws.send(JSON.stringify({
+                      type: 'error',
+                      session_id: sid,
+                      data: {
+                        error: `Достигнут лимит вмешательств в ход (макс. ${MAX_STEER_INJECTIONS_PER_TURN})`,
+                        code: STEERING_ERROR_CODES.limitExceeded,
+                      },
+                      timestamp: nowISO(),
+                    }));
+                    return;
+                  }
+                  ws.send(JSON.stringify({
+                    type: 'queued',
+                    session_id: sid,
+                    stream_id: streamId,
+                    timestamp: nowISO(),
+                  }));
+                  return;
+                }
 
                 const result = await enqueueUserMessage(
                   sessionManager, eventBus, sid, message, queueManager, processMessage,

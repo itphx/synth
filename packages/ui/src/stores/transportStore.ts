@@ -16,6 +16,7 @@ import { synthApi } from '@/lib/api/synthApi'
 import type { SessionData } from '@/lib/api/synthApi'
 import { notifyMessage } from '@/hooks/useNotification'
 import { i18nText } from '@/lib/i18n/text'
+import type { SteerMode } from '@itphx/synth-shared/types'
 
 type EventDispatcher = (event: WSEvent) => void
 
@@ -82,7 +83,8 @@ interface TransportState {
   connect: (mode: TransportMode, override?: 'ws' | 'sse') => void
   disconnect: () => void
   setTransportMode: (mode: TransportMode) => void
-  sendMessage: (sessionId: string, text: string, agentRole?: string, provider?: string, model?: string) => Promise<void>
+  /** `mode` — PROP-098: режим отправки (`queue` по умолчанию, `steer` — вмешательство). */
+  sendMessage: (sessionId: string, text: string, agentRole?: string, provider?: string, model?: string, mode?: SteerMode) => Promise<void>
   cancel: (sessionId: string) => void
   sendPermissionReply: (sessionId: string, approvalId: string, approved: boolean, once?: boolean) => void
   sendPermissionHold: (sessionId: string, approvalId: string) => void
@@ -180,6 +182,32 @@ export function createDispatcher(): EventDispatcher {
         // подстраховка к stream.ended: снимаем usage-only live-плейсхолдер, чтобы
         // после сохранения сообщения панель показывала его итоговую статистику.
         if (usage) clearUsageStream(sid)
+        break
+      }
+
+      // PROP-098: инъекция во время активного хода — сообщение пользователя,
+      // вброшенное оркестратором на границе шага. Добавляем в ленту с
+      // маркером «вмешательство в ход» (metadata.steer).
+      case 'message_injected':
+      case 'message.injected': {
+        const metadata = {
+          ...((payload.metadata as Record<string, unknown> | undefined) ?? {}),
+          steer: true,
+        }
+        const msg: MessageData = {
+          index: (payload.message_index as number) ?? -1,
+          id: (payload.message_id as string) || undefined,
+          role: 'user',
+          content: (payload.content as string) || '',
+          agent_role: (payload.agent_role as string) || undefined,
+          author: (payload.author as string) || undefined,
+          metadata,
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          created_at: new Date().toISOString(),
+        }
+        addMessage(sid, msg)
         break
       }
 
@@ -940,13 +968,13 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     get().connect(mode)
   },
 
-  sendMessage: async (sessionId, text, agentRole, provider, model) => {
+  sendMessage: async (sessionId, text, agentRole, provider, model, mode) => {
     if (transport && transportReady && transport.getTransport() === 'ws') {
       console.debug('[TransportStore] sendMessage via WS:', sessionId)
-      await transport.sendMessage(sessionId, text, agentRole, provider, model)
+      await transport.sendMessage(sessionId, text, agentRole, provider, model, mode)
     } else {
       console.debug('[TransportStore] sendMessage via HTTP POST:', sessionId, `(ready=${transportReady}, transport=${transport?.getTransport()})`)
-      await synthApi.enqueueMessage(sessionId, text, { agentRole, model, provider })
+      await synthApi.enqueueMessage(sessionId, text, { agentRole, model, provider, mode })
     }
   },
 
