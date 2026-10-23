@@ -143,6 +143,38 @@ describe('createBackup', () => {
     expect(new Set(paths).size).toBe(paths.length);
   });
 
+  it('ADR-105 Ф4: доступы (secrets/oauth/) не попадают в обычный бэкап, но попадают с --with-secrets', async () => {
+    // Файл доступов к коннекторам (ADR-105 Ф1) — в `secrets/oauth/`.
+    const oauthDir = join(dataDir, 'secrets', 'oauth');
+    await mkdir(oauthDir, { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(oauthDir, 'credentials.json'),
+      JSON.stringify({ schemaVersion: 1, credentials: [{ id: 'extc_1', secretEnc: 'enc:v1:xxx' }] }),
+      'utf-8',
+    );
+
+    const plain = await createBackup({ dataDir, out: join(tmpDir, 'plain.tar.gz') });
+    const plainPaths = plain.manifest.entries.map((entry) => entry.path);
+    expect(plainPaths.some((p) => p === 'secrets/oauth' || p.startsWith('secrets/oauth/'))).toBe(false);
+    expect(plainPaths.some((p) => p === 'secrets' || p.startsWith('secrets/'))).toBe(false);
+    expect(plain.manifest.excluded).toContain('secrets/');
+    // В архиве по-настоящему нет файла доступов.
+    const listed = (await listTarGz(plain.path)).map((entry) => entry.path);
+    expect(listed.some((p) => p.includes('oauth'))).toBe(false);
+
+    const full = await createBackup({
+      dataDir,
+      out: join(tmpDir, 'with-secrets.tar.gz'),
+      withSecrets: true,
+    });
+    const fullPaths = full.manifest.entries.map((entry) => entry.path);
+    expect(fullPaths).toContain('secrets/oauth/credentials.json');
+    expect(full.manifest.excluded).not.toContain('secrets/');
+    expect(
+      (await listTarGz(full.path)).some((entry) => entry.path === 'secrets/oauth/credentials.json'),
+    ).toBe(true);
+  });
+
   it('имя по умолчанию содержит instanceVersion и метку времени', async () => {
     const now = new Date('2026-07-08T09:10:11');
     const result = await createBackup({ dataDir, out: tmpDir, now });
