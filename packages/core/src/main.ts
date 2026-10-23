@@ -1271,7 +1271,7 @@ program
   .description('Управление секретами шифрования (ADR-076, ADR-105)')
   .addCommand(
     new Command('rotate')
-      .description('Перешифровать секреты (SSH-ключи, внешние доступы) новым мастер-ключом (one-shot)')
+      .description('Перешифровать секреты (SSH-ключи, внешние доступы, вебхуки) новым мастер-ключом (one-shot)')
       .option('--data-dir <path>', 'каталог данных')
       .option('--config <path>', 'путь к config.yaml')
       .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
@@ -1307,7 +1307,7 @@ program
             dryRun,
           });
 
-          console.log(`${dryRun ? '[dry-run] ' : ''}Ротация мастер-ключа (SSH-ключи, внешние доступы) (${dataDir})`);
+          console.log(`${dryRun ? '[dry-run] ' : ''}Ротация мастер-ключа (SSH-ключи, внешние доступы, вебхуки) (${dataDir})`);
           console.log(`  всего записей: ${result.total}`);
           console.log(`  перешифровано: ${result.rotated}`);
           console.log(`  апгрейд plaintext: ${result.upgraded}`);
@@ -1315,6 +1315,8 @@ program
           if (result.ids.length > 0) console.log(`  id: ${result.ids.join(', ')}`);
           const creds = result.credentials;
           console.log(`  внешние доступы: всего ${creds.total}, перешифровано ${creds.rotated}, апгрейд ${creds.upgraded}, пропущено ${creds.skipped}`);
+          const hooks = result.webhooks;
+          console.log(`  вебхуки: всего ${hooks.total}, перешифровано ${hooks.rotated}, апгрейд ${hooks.upgraded}, пропущено ${hooks.skipped}`);
           for (const warning of result.warnings) console.warn(`  Предупреждение: ${warning}`);
           if (dryRun) console.log('  (dry-run: изменения не записаны)');
         } catch (err) {

@@ -12,17 +12,19 @@ import {
 import { SSHKeyStore, type RotateMasterKeyResult } from '../storage/ssh-key-store.js';
 import { ExternalCredentialStore } from '../storage/external-credential-store.js';
 import type { RotateExternalCredentialKeyResult } from '../storage/ports/external-credential-repository.js';
+import { WebhookStore, type RotateWebhookKeyResult } from '../storage/webhook-store.js';
 
 /**
- * ADR-076/ADR-105: one-shot ротация мастер-ключа шифрования секретов.
+ * ADR-076/ADR-105/ADR-052: one-shot ротация мастер-ключа шифрования секретов.
  *
  * Хелпер не читает `$SYNTH_DATA_DIR` в обход стора: перешифровка идёт
  * через `store.rotateMasterKey` (атомарные записи), а файл
  * `{dataDir}/secrets/master.key` перезаписывается тем же форматом, что и
  * `resolveMasterKey` (0600, каталог 0700, tmp→rename).
  *
- * Перешифровываются **две** точки: SSH-ключи агентов (ADR-076) и внешние
- * доступы к коннекторам (ADR-105 Ф4: `secretEnc`/`refreshEnc`).
+ * Перешифровываются **три** точки: SSH-ключи агентов (ADR-076), внешние
+ * доступы к коннекторам (ADR-105 Ф4: `secretEnc`/`refreshEnc`) и
+ * signing-секреты подписок исходящих webhooks (ADR-052 этап II: `secret`).
  */
 
 export type MasterKeyRotationErrorCode =
@@ -69,23 +71,25 @@ export interface RotateSecretsMasterKeyResult extends RotateMasterKeyResult {
   warnings: string[];
   /** Сводка по внешним доступам (ADR-105 Ф4): те же счётчики, что и по SSH-ключам. */
   credentials: RotateExternalCredentialKeyResult;
+  /** Сводка по signing-секретам webhooks (ADR-052 этап II): те же счётчики. */
+  webhooks: RotateWebhookKeyResult;
 }
 
 /**
- * Ротация мастер-ключа секретов (SSH-ключи + внешние доступы).
+ * Ротация мастер-ключа секретов (SSH-ключи + внешние доступы + вебхуки).
  *
  * Старый ключ: явный материал (`oldKey`/`oldKeyFile`) → env `SYNTH_SECRET_KEY`/
  * `secretKey` (env/config) → файл `{dataDir}/secrets/master.key`. Отсутствие
  * файла — явная ошибка (`master_key_missing`), НЕ генерация нового ключа.
  * Новый ключ: явный материал либо `randomBytes(32)`.
  *
- * Порядок: сначала **preflight обеих точек** (сухой прогон — план без записи):
- * запись, которая не расшифровывается ни старым, ни новым ключом, прерывает
- * операцию ДО первой записи. Затем перешифровка SSH-ключей и внешних доступов,
- * и только потом — перезапись файла `master.key` (0600) и сброс кэша
- * мастер-ключа. Если эффективный ключ задан через env/config, файл всё равно
- * пишется, но добавляется предупреждение: при старте он будет проигнорирован —
- * ключ нужно обновить в env/config.
+ * Порядок: сначала **preflight всех трёх точек** (сухой прогон — план без
+ * записи): запись, которая не расшифровывается ни старым, ни новым ключом,
+ * прерывает операцию ДО первой записи. Затем перешифровка SSH-ключей, внешних
+ * доступов и signing-секретов webhooks, и только потом — перезапись файла
+ * `master.key` (0600) и сброс кэша мастер-ключа. Если эффективный ключ задан
+ * через env/config, файл всё равно пишется, но добавляется предупреждение: при
+ * старте он будет проигнорирован — ключ нужно обновить в env/config.
  */
 export async function rotateSecretsMasterKey(
   opts: RotateSecretsMasterKeyOptions,
@@ -116,18 +120,21 @@ export async function rotateSecretsMasterKey(
   // собранного `StorageContext`, ротация запускается из CLI/скрипта).
   const sshStore = new SSHKeyStore({ dataDir: opts.dataDir });
   const credentialStore = new ExternalCredentialStore({ dataDir: opts.dataDir });
+  const webhookStore = new WebhookStore({ dataDir: opts.dataDir });
 
-  // Preflight обеих точек ДО первой записи: сухой прогон считает план и
+  // Preflight всех трёх точек ДО первой записи: сухой прогон считает план и
   // проверяет, что каждая запись расшифровывается новым либо старым ключом.
   // Иначе частичная ротация оставила бы данные нечитаемыми (в `master.key`
   // ещё старый ключ).
   const sshPlan = await sshStore.rotateMasterKey(oldKey, newKey, { dryRun: true });
   const credentialPlan = await credentialStore.rotateMasterKey(oldKey, newKey, { dryRun: true });
+  const webhookPlan = await webhookStore.rotateMasterKey(oldKey, newKey, { dryRun: true });
 
   if (dryRun) {
     return {
       ...sshPlan,
       credentials: credentialPlan,
+      webhooks: webhookPlan,
       dryRun: true,
       oldKeySource,
       newKeySource,
@@ -137,6 +144,7 @@ export async function rotateSecretsMasterKey(
 
   const summary = await sshStore.rotateMasterKey(oldKey, newKey);
   const credentialSummary = await credentialStore.rotateMasterKey(oldKey, newKey);
+  const webhookSummary = await webhookStore.rotateMasterKey(oldKey, newKey);
 
   await writeMasterKeyFile(opts.dataDir, newKey);
   clearMasterKeyCache();
@@ -144,6 +152,7 @@ export async function rotateSecretsMasterKey(
   return {
     ...summary,
     credentials: credentialSummary,
+    webhooks: webhookSummary,
     dryRun,
     oldKeySource,
     newKeySource,

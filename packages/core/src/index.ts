@@ -890,9 +890,16 @@ export type {
 export {
   WebhookStore,
   WebhookConflictError,
+  WebhookStoreError,
   WEBHOOKS_SCHEMA_VERSION,
 } from './storage/webhook-store.js';
-export type { WebhookStoreConfig, WebhookRecord } from './storage/webhook-store.js';
+export type {
+  WebhookStoreConfig,
+  WebhookRecord,
+  WebhookStoreErrorCode,
+  RotateWebhookKeyOptions,
+  RotateWebhookKeyResult,
+} from './storage/webhook-store.js';
 export { WebhookDeliveryStore } from './storage/webhook-delivery-store.js';
 export type { WebhookDeliveryStoreConfig } from './storage/webhook-delivery-store.js';
 export {

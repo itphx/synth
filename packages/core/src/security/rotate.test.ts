@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { SSHKeyStore, SSHKeyStoreError } from '../storage/ssh-key-store.js';
 import { ExternalCredentialStore } from '../storage/external-credential-store.js';
 import { ExternalCredentialStoreError } from '../storage/ports/external-credential-repository.js';
+import { WebhookStore, WebhookStoreError } from '../storage/webhook-store.js';
 import { clearMasterKeyCache, decryptSecret, masterKeyFilePath } from './crypto.js';
 import { rotateSecretsMasterKey } from './rotate.js';
 
@@ -368,6 +369,118 @@ describe('rotateSecretsMasterKey — внешние доступы (ADR-105 Ф4)
     expect((err as ExternalCredentialStoreError).code).toBe('preflight_failed');
     expect((err as ExternalCredentialStoreError).message).toContain(id);
     expect(await readFile(credentialsPath(), 'utf-8')).toBe(before);
+    expect(await readFile(masterKeyFilePath(tmpDir), 'utf-8')).toBe(beforeMaster);
+  });
+});
+
+describe('rotateSecretsMasterKey — signing-секреты вебхуков (ADR-052 этап II)', () => {
+  let tmpDir: string;
+  let oldKey: Buffer;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-rotate-webhooks-'));
+    oldKey = randomBytes(32);
+    await mkdir(join(tmpDir, 'secrets'), { recursive: true });
+    await writeFile(masterKeyFilePath(tmpDir), oldKey.toString('base64'), { mode: 0o600 });
+    clearMasterKeyCache();
+  });
+
+  afterEach(async () => {
+    clearMasterKeyCache();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Store подписок поверх файла master.key (env пуст, secretKey не задан). */
+  function webhookStore(): WebhookStore {
+    return new WebhookStore({ dataDir: tmpDir, env: {} });
+  }
+
+  function subscriptionsPath(): string {
+    return join(tmpDir, 'webhooks', 'subscriptions.json');
+  }
+
+  /** Создать подписку (signing-секрет шифруется мастер-ключом из файла). */
+  async function seed(): Promise<{ id: string; secret: string }> {
+    const created = await webhookStore().create(
+      { label: 'billing', url: 'https://example.com/hooks', events: ['session.created'] },
+      'local',
+    );
+    return { id: created.id, secret: created.secret };
+  }
+
+  it('перешифровывает signing-секрет: новый ключ отдаёт прежнее значение, старый — ошибка', async () => {
+    const { id, secret } = await seed();
+    const newKey = randomBytes(32);
+
+    const result = await rotateSecretsMasterKey({
+      dataDir: tmpDir,
+      newKey: newKey.toString('base64'),
+      env: {},
+    });
+
+    expect(result.webhooks.total).toBe(1);
+    expect(result.webhooks.rotated).toBe(1);
+    expect(result.webhooks.upgraded).toBe(0);
+    expect(result.webhooks.skipped).toBe(0);
+    expect(result.webhooks.ids).toEqual([id]);
+
+    // На диске — только шифр (plaintext секрета нет).
+    const raw = await readFile(subscriptionsPath(), 'utf-8');
+    expect(raw).toContain('enc:v1:');
+    expect(raw).not.toContain(secret);
+
+    // Новый мастер-ключ читает прежнее значение секрета.
+    clearMasterKeyCache();
+    expect(await webhookStore().getSecret(id)).toBe(secret);
+
+    // Старым ключом — decrypt_failed.
+    clearMasterKeyCache();
+    const withOld = new WebhookStore({
+      dataDir: tmpDir,
+      secretKey: oldKey.toString('base64'),
+      env: {},
+    });
+    await expect(withOld.getSecret(id)).rejects.toMatchObject({ code: 'decrypt_failed' });
+  });
+
+  it('dry-run ничего не меняет (подписки и master.key)', async () => {
+    const { id, secret } = await seed();
+    const before = await readFile(subscriptionsPath(), 'utf-8');
+    const beforeMaster = await readFile(masterKeyFilePath(tmpDir), 'utf-8');
+
+    const result = await rotateSecretsMasterKey({
+      dataDir: tmpDir,
+      newKey: randomBytes(32).toString('base64'),
+      dryRun: true,
+      env: {},
+    });
+
+    expect(result.dryRun).toBe(true);
+    expect(result.webhooks.rotated).toBe(1);
+    expect(result.webhooks.ids).toEqual([id]);
+    expect(await readFile(subscriptionsPath(), 'utf-8')).toBe(before);
+    expect(await readFile(masterKeyFilePath(tmpDir), 'utf-8')).toBe(beforeMaster);
+
+    // Старый ключ всё ещё работает.
+    expect(await webhookStore().getSecret(id)).toBe(secret);
+  });
+
+  it('неверный старый ключ → preflight-отказ, ничего не изменено', async () => {
+    const { id } = await seed();
+    const before = await readFile(subscriptionsPath(), 'utf-8');
+    const beforeMaster = await readFile(masterKeyFilePath(tmpDir), 'utf-8');
+
+    const err = await rotateSecretsMasterKey({
+      dataDir: tmpDir,
+      oldKey: randomBytes(32).toString('base64'),
+      newKey: randomBytes(32).toString('base64'),
+      env: {},
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(WebhookStoreError);
+    expect((err as WebhookStoreError).code).toBe('preflight_failed');
+    expect((err as WebhookStoreError).message).toContain(id);
+    expect(await readFile(subscriptionsPath(), 'utf-8')).toBe(before);
     expect(await readFile(masterKeyFilePath(tmpDir), 'utf-8')).toBe(beforeMaster);
   });
 });
