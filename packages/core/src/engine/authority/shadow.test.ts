@@ -151,15 +151,16 @@ describe('Authority-shadow — паритет с permission-слоем', () => {
 });
 
 /**
- * Задокументированные расхождения Ф1.
+ * Задокументированные расхождения Ф1 — **закрыты в Ф2**.
  *
  * Критерий Ф1 PROP-108: «shadow-решения совпадают с текущими, **кроме
- * перечисленных расхождений**». Ниже — перечень известных расхождений
- * (миграции), а не дефекты резолвера: править под них политику нельзя
- * (PROP-108 §«Совместимость и миграция»).
+ * перечисленных расхождений**». Ф2 закрыл оба расхождения **в компиляции и
+ * выводе цели** (PROP-108 §«Совместимость и миграция»: «Расхождение
+ * shadow-решения с текущим — дефект миграции, а не повод «подкрутить»
+ * политику»), поэтому ниже — уже **паритет**.
  */
-describe('Authority-shadow — задокументированные расхождения Ф1', () => {
-  it('РАСХОЖДЕНИЕ: правило группы shell по команде не компилируется в гранты', async () => {
+describe('Authority-shadow — расхождения Ф1 закрыты (Ф2)', () => {
+  it('правило группы shell по команде компилируется в гранты (паритет)', async () => {
     const { journal, recorder } = makeRecorder();
     const config: PermissionConfig = {
       rules: { '*': 'allow', shell: { 'rm -rf *': 'deny' } },
@@ -178,21 +179,19 @@ describe('Authority-shadow — задокументированные расхо
     // Permission-слой: правило группы `shell` объектом матчится по КОМАНДЕ.
     expect(decision.action).toBe('deny');
 
-    // Shadow: грант — это «действие × цель», а цель `execute_shell` — это
-    // `workspace:.`, а не текст команды; командные паттерны в Ф1 не
-    // переносятся в гранты, поэтому shadow считает `allow`. Это известное
-    // расхождение миграции, а не ошибка резолвера.
+    // Ф2: командный паттерн перенесён в гранты (тем же матчером), грант —
+    // «действие `execute` × цель `workspace`» (текст команды целью не
+    // является) → паритет с решением permission-слоя.
     const entries = await journal.list();
     expect(entries[0]!.action).toBe('execute');
-    expect(entries[0]!.effect).toBe('allow');
+    expect(entries[0]!.effect).toBe('deny');
+    expect(entries[0]!.reason).toBe('explicit');
     expect(entries[0]!.permissionEffect).toBe('deny');
   });
 
-  it('РАСХОЖДЕНИЕ: путь вне workspace → shadow deny(unknown), permission ask', async () => {
-    // Цель вне workspace относительным путём не выразить → shadow считает
-    // цель неизвестной и даёт fail-closed `deny('unknown')`; permission-слой
-    // по умолчанию спрашивает (`external_directory`). Расхождение зафиксировано
-    // (shadow строже — направление Ф2).
+  it('путь вне workspace → отдельный вид цели `outside` (паритет: ask)', async () => {
+    // Ф2: путь вне workspace выражается видом цели `outside` (ссылка —
+    // неразличимый токен), поэтому shadow больше не считает цель неизвестной.
     const { journal, recorder } = makeRecorder();
     const evaluator = new PermissionEvaluator(ALLOW_ALL, { authorityShadow: recorder.record });
 
@@ -207,9 +206,12 @@ describe('Authority-shadow — задокументированные расхо
     expect(decision.action).toBe('ask');
     const entries = await journal.list();
     expect(entries[0]!.action).toBe('read');
-    expect(entries[0]!.effect).toBe('deny');
-    expect(entries[0]!.reason).toBe('unknown');
+    expect(entries[0]!.effect).toBe('ask');
+    expect(entries[0]!.source).toBe('user');
     expect(entries[0]!.permissionEffect).toBe('ask');
+    // Сырой абсолютный путь в журнал не попадает (инвариант 25/ADR-094).
+    expect(entries[0]!.target.startsWith('outside:')).toBe(true);
+    expect(entries[0]!.target).not.toContain('/etc/passwd');
   });
 });
 
