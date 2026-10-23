@@ -358,6 +358,8 @@ export {
   authorityTargetKindForTool,
   isCoreAuthorityAction,
   AUTHORITY_CORE_ACTIONS,
+  compileAuthorityGrantsForTool,
+  AuthorityShadowRecorder,
 } from './engine/authority/index.js';
 export type {
   AuthorityAxis,
@@ -371,6 +373,11 @@ export type {
   AuthorityResolverOptions,
   AuthorityTargetInput,
   DerivedAuthorityTarget,
+  AuthorityRuleCompilationInput,
+  AuthorityShadowContext,
+  AuthorityShadowHook,
+  AuthorityShadowInput,
+  AuthorityShadowRecorderOptions,
 } from './engine/authority/index.js';
 
 export {

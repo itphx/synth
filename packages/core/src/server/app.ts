@@ -130,6 +130,11 @@ export interface StandaloneConfig {
   /** ADR-094: конфигурация метрик (`metrics.enabled`) из config.yaml/env. */
   metricsConfig?: SynthConfig['metrics'];
   /**
+   * PROP-108 Ф1: секция `authority` (мастер-выключатель слоя + режим
+   * наблюдения). Не задана/выключена — Authority-слой не считает решения.
+   */
+  authorityConfig?: SynthConfig['authority'];
+  /**
    * PROP-090 §10: конфигурация слоя плагинов из config.yaml `plugins`
    * (`enabled`/`trustFloor`/`scan`/… и бюджеты: `promptBlockMaxChars`,
    * `llmFilterTimeoutMs`).

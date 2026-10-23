@@ -316,6 +316,12 @@ export const authorityDecisionEntrySchema = z
     reason: z.string().min(1).max(64).nullable(),
     /** Режим: `shadow` — решение посчитано, но не применено (Ф1). */
     mode: z.enum(['shadow', 'enforced']).default('shadow'),
+    /**
+     * PROP-108 Ф1: решение permission-слоя на момент shadow-записи. Нужно для
+     * разбора расхождений миграции («shadow-решение не совпало с текущим —
+     * это дефект миграции»). В enforced-режиме поле отсутствует.
+     */
+    permissionEffect: z.enum(['allow', 'ask', 'deny']).optional(),
   })
   .strict();
 export type AuthorityDecisionEntry = z.infer<typeof authorityDecisionEntrySchema>;

@@ -75,6 +75,9 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'analytics', key: 'retentionDays', type: 'number' },
   // metrics (ADR-094): Helm ставит `SYNTH_METRICS_ENABLED` — имя должно совпадать.
   { section: 'metrics', key: 'enabled', type: 'boolean' },
+  // authority (PROP-108 Ф1): мастер-выключатель слоя и режим наблюдения.
+  { section: 'authority', key: 'enabled', type: 'boolean' },
+  { section: 'authority', key: 'shadow', type: 'boolean' },
   // plugins (PROP-090 §10): политики слоя плагинов. Списки (allowlist/denylist/
   // remoteAllowlist) — объектные, остаются в config.yaml.
   { section: 'plugins', key: 'enabled', type: 'boolean' },

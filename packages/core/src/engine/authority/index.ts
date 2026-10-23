@@ -8,7 +8,13 @@
  * - `target.ts` — вывод цели из вызова тула (относительные пути, без
  *   секретов);
  * - `resolve.ts` — резолвер: пересечение осей, решение по паре
- *   «действие × цель», одноразовое подтверждение.
+ *   «действие × цель», одноразовое подтверждение;
+ * - `compile.ts` — компиляция правил permission-слоя в гранты «действие ×
+ *   цель» (таблица совместимости PROP-108: «`PermissionConfig.rules` — …;
+ *   компилируется в гранты при чтении»);
+ * - `hook.ts` — шов shadow-интеграции (только типы, без побочных эффектов);
+ * - `shadow.ts` — shadow-интеграция: решение считается и пишется в журнал,
+ *   но **не применяется** (решение прав не меняется).
  */
 export {
   AUTHORITY_CORE_ACTIONS,
@@ -33,3 +39,15 @@ export type {
   AuthorityEffective,
   AuthorityResolverOptions,
 } from './resolve.js';
+
+export { compileAuthorityGrantsForTool } from './compile.js';
+export type { AuthorityRuleCompilationInput } from './compile.js';
+
+export type {
+  AuthorityShadowContext,
+  AuthorityShadowHook,
+  AuthorityShadowInput,
+} from './hook.js';
+
+export { AuthorityShadowRecorder } from './shadow.js';
+export type { AuthorityShadowRecorderOptions } from './shadow.js';

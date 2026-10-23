@@ -534,6 +534,27 @@ export const analyticsConfigSchema = z.object({
   retentionDays: z.number().int().default(400),
 });
 
+// --- Authority-слой (PROP-108) ---
+
+/**
+ * PROP-108 Ф1: конфигурация Authority-слоя.
+ *
+ * - `enabled` — мастер-выключатель слоя (по умолчанию **выключен**):
+ *   Authority-слой не влияет на решения прав, пока его не включили
+ *   (Ф2 — принуждение; до этого слой только считает решения);
+ * - `shadow` — режим **наблюдения**: решение Authority считается и пишется
+ *   в журнал (`{dataDir}/audit/authority.jsonl`), но **не применяется** —
+ *   поведение прав не меняется (PROP-108 §«Совместимость и миграция»:
+ *   «Ф0–Ф1: authority-резолвер работает в режиме shadow»).
+ *
+ * По умолчанию `shadow: true` — при включении слоя он сначала наблюдает, а
+ * не enforced.
+ */
+export const authorityConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  shadow: z.boolean().default(true),
+});
+
 // --- Наблюдаемость: Prometheus-метрики (ADR-094) ---
 
 /**
@@ -1093,6 +1114,7 @@ export const synthConfigSchema = z.object({
   decision: decisionConfigSchema.default({}),
   analytics: analyticsConfigSchema.default({}),
   metrics: metricsConfigSchema.default({}),
+  authority: authorityConfigSchema.default({}),
   plugins: pluginsConfigSchema.default({}),
   egress: egressConfigSchema.default({}),
   webhooks: webhooksConfigSchema.default({}),
@@ -1137,6 +1159,8 @@ export type DecisionConfig = z.infer<typeof decisionConfigSchema>;
 export type AnalyticsConfig = z.infer<typeof analyticsConfigSchema>;
 /** ADR-094: секция `metrics` (`enabled`). */
 export type MetricsConfig = z.infer<typeof metricsConfigSchema>;
+/** PROP-108 Ф1: секция `authority` (`enabled`/`shadow`). */
+export type AuthorityConfig = z.infer<typeof authorityConfigSchema>;
 /** PROP-090 §10: секция `plugins` — политики слоя плагинов. */
 export type PluginsConfig = z.infer<typeof pluginsConfigSchema>;
 export type WebhooksConfig = z.infer<typeof webhooksConfigSchema>;
