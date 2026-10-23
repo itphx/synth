@@ -53,12 +53,6 @@ export const STEER_INTERRUPTED_METADATA_KEY = 'interrupted';
 
 /** Машинные коды ошибок steering (контракт ошибок API v2). */
 export const STEERING_ERROR_CODES = {
-  /**
-   * `mode: 'interrupt'` — этап 2 PROP-098: движок умеет прерывать генерацию,
-   * но HTTP-контур ещё не открывает режим (гейт снимается в том же этапе,
-   * вместе с веткой `interrupt` в `/prompt`).
-   */
-  interruptUnsupported: 'STEERING_INTERRUPT_UNSUPPORTED',
   /** Превышен лимит инъекций на ход. */
   limitExceeded: 'STEER_LIMIT_EXCEEDED',
 } as const;

@@ -1,5 +1,5 @@
 import type { Message, Session } from '@itphx/synth-shared';
-import { nowISO, generateStreamId, generateId, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY, STEERING_ERROR_CODES } from '@itphx/synth-shared';
+import { nowISO, generateStreamId, generateId, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY, STEER_INTERRUPT_METADATA_KEY, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { SessionManager } from '../sessions/manager.js';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { EventBus } from '../events/bus.js';
@@ -685,6 +685,19 @@ export interface SteerEnqueueResult {
 }
 
 /**
+ * Опции постановки сообщения в очередь инъекций (PROP-098).
+ */
+export interface SteerEnqueueOptions {
+  /**
+   * Этап 2 — режим `interrupt`: сообщение не только вплетается в ход, но и
+   * обрывает текущую генерацию (ход при этом НЕ завершается). На сообщение
+   * ставится маркер `metadata.interrupt = true` (вместе с `metadata.steer`) —
+   * по нему UI рисует «прерывание хода» вместо «вмешательства».
+   */
+  interrupt?: boolean;
+}
+
+/**
  * PROP-098: поставить сообщение в очередь инъекций (`steerInbox`) — отправка
  * во время активного хода (`mode: 'steer'`).
  *
@@ -701,6 +714,7 @@ export async function enqueueSteerMessage(
   message: Message,
   maxInjections: number = MAX_STEER_INJECTIONS_PER_TURN,
   obfuscate?: (sessionId: string, message: Message) => Promise<Message>,
+  options?: SteerEnqueueOptions,
 ): Promise<SteerEnqueueResult> {
   // ADR-036: обфускация user-сообщения ДО постановки в очередь — в историю
   // попадёт плейсхолдер, а не реальный секрет.
@@ -709,7 +723,13 @@ export async function enqueueSteerMessage(
   }
   // Признак инъекции — на самом сообщении (PROP-098): UI рисует маркер
   // «вмешательство в ход», а оркестратор персистит его как есть.
-  message.metadata = { ...(message.metadata ?? {}), [STEER_METADATA_KEY]: true };
+  // В режиме `interrupt` (этап 2) добавляется второй маркер — «прерывание
+  // хода»: UI отличает его от обычного вмешательства.
+  message.metadata = {
+    ...(message.metadata ?? {}),
+    [STEER_METADATA_KEY]: true,
+    ...(options?.interrupt ? { [STEER_INTERRUPT_METADATA_KEY]: true } : {}),
+  };
 
   const result = await sessionManager.enqueueSteerMessage(sessionId, message, maxInjections);
   if (!result.accepted) {

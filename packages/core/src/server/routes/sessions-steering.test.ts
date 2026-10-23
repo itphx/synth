@@ -1,7 +1,7 @@
 /**
  * PROP-098: HTTP-контур режима отправки (`POST /api/v2/sessions/:id/prompt`):
  * `queue` (по умолчанию), `steer` (вмешательство в активный ход) и
- * `interrupt` (этап 2 — понятный отказ 400).
+ * `interrupt` (прерывание текущей генерации — ход продолжается, этап 2).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
@@ -48,6 +48,8 @@ function createMockOrchestrator() {
   return {
     createProcessMessage: () => processMessage,
     cancel: vi.fn(),
+    // PROP-098 (этап 2): прерывание текущей генерации без завершения хода.
+    interrupt: vi.fn().mockReturnValue(true),
     // ADR-036: обфускация user-сообщения перед постановкой в очередь.
     obfuscateUserMessageForHistory: vi.fn(async (_sid: string, message: Message) => message),
     getPromptInfo: vi.fn().mockResolvedValue({
@@ -89,7 +91,7 @@ function createTestApp(tmpDir: string, opts?: { running?: boolean }) {
   );
 
   app.route('/api/v2/sessions', sessionRoutes);
-  return { app, sessionManager, eventBus, queueManager };
+  return { app, sessionManager, eventBus, queueManager, orchestrator };
 }
 
 function makeSteerMessage(content: string): Message {
@@ -125,23 +127,84 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (PROP
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('mode=interrupt → 400 STEERING_INTERRUPT_UNSUPPORTED (этап 2)', async () => {
-    const { app, sessionManager } = createTestApp(tmpDir);
+  it('mode=interrupt при активном ходе → 202 interrupted, сообщение в очереди инъекций', async () => {
+    const { app, sessionManager, orchestrator } = createTestApp(tmpDir, { running: true });
     const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    // Живой стрим хода — `currentStream.streamId` (его прерывает оркестратор).
+    await sessionManager.withLock(session.id, async (s) => {
+      s.currentStream = {
+        streamId: 'stream-live-1',
+        message: 'работа',
+        agentRole: undefined,
+        startedAt: new Date().toISOString(),
+        cancelled: false,
+      };
+      await sessionManager.saveSession(s);
+    });
+
     const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: 'остановись', mode: 'interrupt' }),
+      body: JSON.stringify({ content: 'прерви и сделай иначе', mode: 'interrupt' }),
     });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as ErrorBody;
-    expect(body.error.code).toBe(STEERING_ERROR_CODES.interruptUnsupported);
-    expect(typeof body.error.message).toBe('string');
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as SteeredBody;
+    expect(body.status).toBe('interrupted');
+    expect(body.pending_count).toBe(1);
 
-    // Сообщение не попало ни в очередь, ни в очередь инъекций.
     const fresh = (await sessionManager.getSession(session.id))!;
+    // В обычную очередь сообщение не попало — оно ждёт вплетения в ход.
     expect(fresh.pendingMessages).toHaveLength(0);
+    expect(fresh.steerInbox).toHaveLength(1);
+    expect(fresh.steerInbox![0]!.content).toBe('прерви и сделай иначе');
+    // Маркер режима: `steer` + `interrupt` (UI рисует «прерывание хода»).
+    expect(fresh.steerInbox![0]!.metadata?.steer).toBe(true);
+    expect(fresh.steerInbox![0]!.metadata?.interrupt).toBe(true);
+
+    // Текущая генерация прервана — ход при этом НЕ завершается.
+    expect(orchestrator.interrupt).toHaveBeenCalledWith('stream-live-1');
+  });
+
+  it('mode=interrupt без активного хода → обычная очередь (сообщение начнёт новый ход)', async () => {
+    const { app, sessionManager, orchestrator } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    const controller = new AbortController();
+    const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'обычное сообщение', mode: 'interrupt' }),
+      signal: controller.signal,
+    });
+    expect(res.status).toBe(200);
+    controller.abort();
+
+    const fresh = (await sessionManager.getSession(session.id))!;
+    expect(fresh.pendingMessages).toHaveLength(1);
     expect(fresh.steerInbox ?? []).toHaveLength(0);
+    // Прерывать нечего — оркестратор не дёргали.
+    expect(orchestrator.interrupt).not.toHaveBeenCalled();
+  });
+
+  it('mode=interrupt сверх лимита инъекций → 429 STEER_LIMIT_EXCEEDED', async () => {
+    const { app, sessionManager, orchestrator } = createTestApp(tmpDir, { running: true });
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    for (let i = 0; i < MAX_STEER_INJECTIONS_PER_TURN; i++) {
+      await sessionManager.enqueueSteerMessage(session.id, makeSteerMessage(`инъекция ${i}`));
+    }
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'лишняя', mode: 'interrupt' }),
+    });
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as ErrorBody;
+    expect(body.error.code).toBe(STEERING_ERROR_CODES.limitExceeded);
+    // Генерацию не прерываем — сообщение не принято.
+    expect(orchestrator.interrupt).not.toHaveBeenCalled();
+
+    const fresh = (await sessionManager.getSession(session.id))!;
+    expect(fresh.steerInbox).toHaveLength(MAX_STEER_INJECTIONS_PER_TURN);
   });
 
   it('без mode → обычная очередь (обратная совместимость)', async () => {

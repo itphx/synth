@@ -284,24 +284,13 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
 
               const streamId = msg.stream_id || generateStreamId();
 
-              // PROP-098: режим отправки. `interrupt` — этап 2: молчаливого
-              // приёма нет, отвечаем ошибкой с машинным кодом.
+              // PROP-098: режим отправки. `steer` — вмешательство в активный
+              // ход, `interrupt` — прерывание текущей генерации (ход при этом
+              // НЕ завершается).
               const mode = isSteerMode(msg.mode) ? msg.mode : DEFAULT_STEER_MODE;
-              if (mode === 'interrupt') {
-                ws.send(JSON.stringify({
-                  type: 'error',
-                  session_id: sid,
-                  data: {
-                    error: 'Режим «прерывание хода» пока не поддерживается',
-                    code: STEERING_ERROR_CODES.interruptUnsupported,
-                  },
-                  timestamp: nowISO(),
-                }));
-                return;
-              }
-              // Для `steer` подтверждение уходит после приёма сообщения
-              // (иначе «queued» означало бы принятое, но отброшенное).
-              const steerMode = mode === 'steer';
+              // Для `steer`/`interrupt` подтверждение уходит после приёма
+              // сообщения (иначе «queued» означало бы принятое, но отброшенное).
+              const steerMode = mode !== 'queue';
 
               if (!steerMode) {
                 ws.send(JSON.stringify({
@@ -375,12 +364,15 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
                   metadata: { stream_id: streamId },
                 };
 
-                // PROP-098: `steer` — вмешательство в активный ход. Если хода
+                // PROP-098: `steer` — вмешательство в активный ход, `interrupt` —
+                // прерывание текущей генерации (ход НЕ завершается). Если хода
                 // нет — обычная очередь (сообщение начнёт новый ход).
                 if (steerMode && (session.status?.blocked || queueManager.isRunning(sid))) {
+                  const interruptMode = mode === 'interrupt';
                   const steerResult = await enqueueSteerMessage(
                     sessionManager, eventBus, sid, message, MAX_STEER_INJECTIONS_PER_TURN,
                     (msgSid, steerMsg) => orchestrator.obfuscateUserMessageForHistory(msgSid, steerMsg),
+                    { interrupt: interruptMode },
                   );
                   if (!steerResult.accepted) {
                     ws.send(JSON.stringify({
@@ -393,6 +385,13 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
                       timestamp: nowISO(),
                     }));
                     return;
+                  }
+                  if (interruptMode) {
+                    // Прерываем текущую генерацию (ход продолжается) — сообщение
+                    // уже в очереди инъекций, поэтому инъекция гарантированно
+                    // попадёт в ход на ближайшей границе шага.
+                    const liveStreamId = session.currentStream?.streamId;
+                    if (liveStreamId) orchestrator.interrupt(liveStreamId);
                   }
                   ws.send(JSON.stringify({
                     type: 'queued',

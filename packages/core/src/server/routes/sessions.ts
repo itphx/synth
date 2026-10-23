@@ -65,10 +65,8 @@ export interface SessionRouteMessages {
   forbidden: (c: Context) => string;
   contentRequired: (c: Context) => string;
   queueFull: (c: Context, max: number) => string;
-  /** PROP-098: превышен лимит инъекций на ход (`mode: 'steer'`). */
+  /** PROP-098: превышен лимит инъекций на ход (`mode: 'steer'`/`'interrupt'`). */
   steerLimitExceeded: (c: Context, max: number) => string;
-  /** PROP-098: режим `interrupt` пока не поддерживается (этап 2). */
-  steerInterruptUnsupported: (c: Context) => string;
 }
 
 export interface SessionRoutesOptions {
@@ -175,8 +173,6 @@ const DEFAULT_MESSAGES: SessionRouteMessages = {
   queueFull: (_c: Context, max: number) => `Очередь сообщений заполнена (макс. ${max})`,
   steerLimitExceeded: (_c: Context, max: number) =>
     `Достигнут лимит вмешательств в ход (макс. ${max} сообщений на ход)`,
-  steerInterruptUnsupported: () =>
-    'Режим «прерывание хода» пока не поддерживается — используйте «вмешаться» или «в очередь»',
 };
 
 /** Сообщение о недопустимом значении метаданных с перечнем допустимых ключей. */
@@ -745,17 +741,8 @@ export function createSessionRoutes(
     }
 
     // PROP-098: режим отправки. Неизвестное значение — как `queue` (обратная
-    // совместимость: поле необязательное). `interrupt` — этап 2, молчаливого
-    // приёма нет: понятная 400 с машинным кодом.
+    // совместимость: поле необязательное).
     const mode = isSteerMode(body.mode) ? body.mode : DEFAULT_STEER_MODE;
-    if (mode === 'interrupt') {
-      return c.json({
-        error: {
-          code: STEERING_ERROR_CODES.interruptUnsupported,
-          message: messages.steerInterruptUnsupported(c),
-        },
-      }, 400);
-    }
 
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
@@ -789,12 +776,15 @@ export function createSessionRoutes(
     };
 
     // PROP-098: `steer` — вмешательство в активный ход (без прерывания
-    // генерации). Если активного хода нет — ведём себя как обычная очередь
+    // генерации), `interrupt` — прерывание текущей генерации с продолжением
+    // хода. Если активного хода нет — ведём себя как обычная очередь
     // (сообщение начнёт новый ход).
-    if (mode === 'steer' && isTurnActive(session, queueManager)) {
+    if (mode !== 'queue' && isTurnActive(session, queueManager)) {
+      const interruptMode = mode === 'interrupt';
       const steerResult = await enqueueSteerMessage(
         sessionManager, eventBus, sessionId, message, MAX_STEER_INJECTIONS_PER_TURN,
         (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
+        { interrupt: interruptMode },
       );
       if (!steerResult.accepted) {
         return c.json({
@@ -804,10 +794,18 @@ export function createSessionRoutes(
           },
         }, 429);
       }
+      if (interruptMode) {
+        // Прерываем текущую генерацию: ход НЕ завершается («Стоп» — отдельный
+        // механизм, ADR-005) — обрывается только стрим, а сообщение
+        // вплетается на ближайшей границе шага. Порядок важен: сообщение уже
+        // в очереди инъекций, поэтому инъекция гарантированно попадёт в ход.
+        const liveStreamId = session.currentStream?.streamId;
+        if (liveStreamId) orchestrator.interrupt(liveStreamId);
+      }
       // Отдельный стрим не запускается — сообщение вплетается в текущий ход,
       // поэтому отвечаем статусом без SSE.
       return c.json({
-        status: 'steered',
+        status: interruptMode ? 'interrupted' : 'steered',
         stream_id: streamId,
         pending_count: steerResult.pending,
       }, 202);
