@@ -10,7 +10,8 @@
  * │       └── PLUGIN_INTEGRITY.json # { sha256, source, fetched_at }
  * ├── quarantine/                   # всё скачанное распаковывается и сканируется здесь
  * ├── plugins.lock.json             # провенанс — источник истины для update/uninstall
- * └── plugins.json                  # runtime-override включений/настроек
+ * ├── plugins.json                  # runtime-override включений/настроек
+ * └── plugin-approvals.json         # подтверждения установки (content-hash + срок 24 ч, ADR-090 п. 9)
  * ```
  *
  * Приоритет корня (ADR-079, home-модель): явный флаг home > env `SYNTH_HOME` >
@@ -44,6 +45,17 @@ export interface PluginLayout {
   lockPath: string;
   /** Путь к файлу runtime-override (`plugins.json`). */
   settingsPath: string;
+  /**
+   * Путь к файлу подтверждений установки (`plugin-approvals.json`).
+   *
+   * ADR-090 п. 9: подтверждение `caution` привязано к content-hash бандла и
+   * живёт 24 ч — значит, оно должно **переживать рестарт** процесса. Файл лежит
+   * в корне раскладки (рядом с `plugins.lock.json`), а **не** внутри каталога
+   * бандла: карантин — это каталог, и его замена (переустановка бандла) не должна
+   * стирать выданное подтверждение — иначе подменённый бандл прошёл бы под
+   * старым подтверждением.
+   */
+  approvalsPath: string;
 }
 
 /**
@@ -66,6 +78,7 @@ export function resolvePluginLayout(opts: {
     quarantineDir: join(root, 'quarantine'),
     lockPath: join(root, 'plugins.lock.json'),
     settingsPath: join(root, 'plugins.json'),
+    approvalsPath: join(root, 'plugin-approvals.json'),
   };
 }
 

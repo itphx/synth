@@ -25,6 +25,12 @@
  * `update` без `name` → 400 `VALIDATION_ERROR`, `enable`/`rollback`
  * несуществующего → 404 `plugin.not_found`, снятие несуществующего → 204
  * (идемпотентно).
+ *
+ * **Подтверждение установки (ADR-090 п. 9).** Вердикт скана `caution` →
+ * бандл в карантине, выдаётся подтверждение, привязанное к content-hash и
+ * действующее 24 ч; **подтверждать** (то есть выполнять `approve`) может
+ * **только ADMIN** — approve под `requirePermission('ADMIN')`, поэтому scope
+ * `addons:install` (и роль `USER` у ключа) под этот guard не подходят. Проверяется и негативная, и позитивная сторона.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -278,6 +284,37 @@ describe('backend: RBAC-матрица контура плагинов (ADR-090 
     const rollback = await json('/api/v2/plugins/absent/rollback', {}, key);
     expect(rollback.status).toBe(403);
     expect(await errorCode(rollback)).toBe('SCOPE_REQUIRED');
+  });
+
+  // -------------------------------------------------------------------------
+  // 4. Подтверждение установки — только ADMIN (ADR-090 п. 9)
+  // -------------------------------------------------------------------------
+  it('approve (подтверждение установки) — только ADMIN: не-ADMIN → 403, ADMIN проходит', async () => {
+    // Решение владельца (ADR-090 п. 9): подтверждение `caution` выдаёт ADMIN.
+    // Проверка роли — на границе роута (`approveGuard: requirePermission('ADMIN')`),
+    // поэтому в матрице, а не в обработчике.
+    for (const token of [USER, LEAD, AUDITOR]) {
+      const res = await json('/api/v2/plugins/demo-plugin/approve', {}, token);
+      expect(res.status, `${token} на approve`).toBe(403);
+    }
+
+    // ADMIN проходит guard: дальше — код обработчика (плагина нет → 404).
+    const admin = await json('/api/v2/plugins/absent/approve', {}, ADMIN);
+    expect(admin.status).toBe(404);
+    expect(await errorCode(admin)).toBe('plugin.not_found');
+  });
+
+  it('service-key со scope addons:install не подтверждает установку (нужна роль ADMIN)', async () => {
+    // Scope `addons:install` открывает установку/активацию, но **не**
+    // подтверждение карантина: approve под `requirePermission('ADMIN')`, а у
+    // ключа роли `USER` — scope задачи не заменяет роль.
+    const key = await createServiceKey({
+      label: 'plugins-scoped-approve',
+      roles: ['USER'],
+      scopes: ['addons:install'],
+    });
+    const approve = await json('/api/v2/plugins/demo-plugin/approve', {}, key);
+    expect(approve.status).toBe(403);
   });
 
   it('service-key с ролью ADMIN (без scope) проходит writeGuard установки', async () => {

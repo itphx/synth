@@ -265,7 +265,8 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (management-плагин нельзя снять через API/CLI, дефолт `true`); env-оверрайды
   `SYNTH_PLUGINS_DEPLOY_DIR`/`SYNTH_PLUGINS_DEPLOY_TRUST`/`SYNTH_PLUGINS_MANAGED_READONLY`.
   Новый код отказа `plugin.managed_readonly` (**28** кодов на тот момент; Ф7 добавил
-  `plugin.hybrid_not_allowed` — **29**).
+  `plugin.hybrid_not_allowed` — **29**; п. 9 ADR-090 добавил `plugin.approval_expired` и
+  `plugin.approval_stale` — **31**).
 - ADR-090: **журнал аудита плагинов** — `types/plugin-audit.ts` (re-export из `types`):
   `PluginAuditEntry` (`id` `pa_<uuid>`/`ts`/`actor`/`scope: 'plugin'`/`action`/`plugin`/`version`/
   `trustLevel?`/`scanVerdict?`/`scanFindings?`/`scanPerformed?`/`contentHash?`/`mode?`/`outcome`/
@@ -273,7 +274,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `scan`/`filter` — `filter` добавлено Ф3б: события решений фильтров LLM-вызовов, `install`/`uninstall` —
   Ф5а: установка и снятие плагина `PluginInstaller`, `token` — Ф7: выдача server-scoped токена плагину),
   `PLUGIN_AUDIT_OUTCOMES` (`ok`/`rejected`), `PLUGIN_SCAN_VERDICTS` (`safe`/`caution`/`dangerous`),
-  `PLUGIN_AUDIT_REASONS` — **закрытый** список **29** кодов отказа (по одному на гейт пайплайна
+  `PLUGIN_AUDIT_REASONS` — **закрытый** список **31** кода отказа (по одному на гейт пайплайна
   активации; Д1 добавил `plugin.source_unavailable` — источник установки недоступен или не прошёл
   проверку целостности: локальный путь/архив, npm без SRI или с несовпадением, URL без pin/с
   несовпадением sha256; Ф2 добавил `plugin.scan_rejected` и `plugin.approval_required`, Ф3а —
@@ -281,7 +282,9 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `plugins.executionEnabled=true`), Ф3б — `plugin.provides_mismatch` (расхождение объявленных
   `provides.promptBlocks[]`/`provides.llmFilters[]` с фактическими регистрациями) и три
   канонических кода фильтров `plugin_filter.denied`/`.deny_downgraded`/`.unavailable`, Ф4а —
-  `plugin.module_invalid` (модуль загружен, но не выполнил контракт `PluginModule` — нет `apply`), Ф7 — `plugin.hybrid_not_allowed` (серверная allow-list гибрида запрещает активацию);
+  `plugin.module_invalid` (модуль загружен, но не выполнил контракт `PluginModule` — нет `apply`), Ф7 — `plugin.hybrid_not_allowed` (серверная allow-list гибрида запрещает активацию),
+  ADR-090 п. 9 — `plugin.approval_expired` (подтверждение установки истекло: срок 24 ч) и
+  `plugin.approval_stale` (бандл в карантине изменён после выдачи подтверждения);
   неканонические коды хоста (`allowed`/`timeout`/`error`/`redact_unsupported`/`buffering_required`/
   `redact_invalid`) живут **только** в аудите gateway, в журнал плагинов не попадают; источник
   истины — `PluginHost`, `packages/core/src/engine/plugins/plugin-host.ts`). Журнал **отдельный**:

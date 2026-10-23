@@ -89,6 +89,12 @@ import type {
   PluginScanHook,
   PluginScanResult,
 } from './activation.js';
+import {
+  buildPluginApproval,
+  isPluginApprovalExpired,
+  PLUGIN_APPROVAL_TTL_HOURS,
+} from './approval.js';
+import type { PluginApprovalStore } from './approval.js';
 import { DEFAULT_PLUGIN_ENTRY } from './inline-loader.js';
 import { computePluginContentHash } from './integrity.js';
 import type { PluginIntegrityFile, PluginLayout } from './layout.js';
@@ -136,6 +142,15 @@ export interface PluginInstallerDeps {
   scan?: PluginScanHook;
   /** Хост плагинов — нужен для деактивации при `uninstall` и активации после установки. */
   host?: PluginHost;
+  /**
+   * Хранилище подтверждений установки (ADR-090 п. 9).
+   *
+   * Подтверждение привязано к **content-hash** бандла и живёт **24 ч**; оно
+   * персистентно (файл в раскладке слоя плагинов), поэтому переживает рестарт
+   * процесса. Пока подтверждение не выдано, проверки при `approve` не
+   * применяются (сравнивать не с чем) — остальные гейты работают как прежде.
+   */
+  approvals: PluginApprovalStore;
   /** Логгер (по умолчанию — `console.warn`). */
   logger?: PluginLogger;
   /** Инъекция часов — для детерминированных тестов (ISO-8601). */
@@ -582,6 +597,8 @@ export class PluginInstaller {
   private readonly _config: PluginsConfig;
   private readonly _host: PluginHost | undefined;
   private readonly _scan: PluginScanHook | undefined;
+  /** Хранилище подтверждений установки (ADR-090 п. 9: content-hash + срок 24 ч). */
+  private readonly _approvals: PluginApprovalStore;
   /** Встроенный сканер (Ф2) — используется, когда явный хук не задан. */
   private readonly _builtinScan: PluginScanHook;
   private readonly _logger: PluginLogger;
@@ -594,6 +611,7 @@ export class PluginInstaller {
     this._config = deps.config;
     this._host = deps.host;
     this._scan = deps.scan;
+    this._approvals = deps.approvals;
     this._builtinScan = createPluginScanHook();
     this._logger = deps.logger ?? {
       warn: (message: string) => {
@@ -796,6 +814,11 @@ export class PluginInstaller {
     });
 
     if (action === 'ask') {
+      // ADR-090 п. 9: бандл в карантине получает **подтверждение** — запись,
+      // привязанную к content-hash, срок 24 ч. Именно её потом проверяет
+      // `approve`: бандл, изменённый после выдачи, под старым подтверждением
+      // проходить не должен.
+      await this._writeApproval({ name, version, contentHash, actor });
       await this._writeAudit({
         action: 'install',
         plugin: name,
@@ -1346,7 +1369,52 @@ export class PluginInstaller {
     const contentHash = computePluginContentHash(files);
     const entry = resolvePluginEntry(files);
 
+    // Провенанс карантина (доверие/источник/вид установки) — из
+    // `PLUGIN_INTEGRITY.json`; нужен и для аудита, и для повторных гейтов.
     const integrity = await readIntegrityFile(qdir);
+    const trustLevel: CatalogTrustLevel = integrity?.trust_level ?? 'community';
+    const source = integrity?.source ?? 'unknown';
+
+    // ── Подтверждение (ADR-090 п. 9): привязка к content-hash, срок 24 ч ──
+    // Подтверждение выдано при постановке бандла в карантин и лежит **вне**
+    // каталога бандла (`plugin-approvals.json` в корне раскладки) — поэтому оно
+    // переживает замену бандла, и расхождение хешей видно. Проверки идут
+    // первыми: подтверждение к другому содержимому не относится, даже если
+    // остальные гейты пройдены.
+    const approval = await this._approvals.get(name, version);
+    if (approval) {
+      if (isPluginApprovalExpired(approval, this._now())) {
+        return this._rejectInstall({
+          name,
+          version,
+          actor,
+          reason: 'plugin.approval_expired',
+          message:
+            `Подтверждение установки плагина «${name}@${version}» истекло ` +
+            `(выдано ${approval.approvedAt}, срок ${PLUGIN_APPROVAL_TTL_HOURS} ч) — ` +
+            'подтверждение отклонено: поставьте бандл заново и подтвердите его.',
+          trustLevel,
+          source,
+          contentHash,
+        });
+      }
+      if (approval.contentHash !== contentHash) {
+        return this._rejectInstall({
+          name,
+          version,
+          actor,
+          reason: 'plugin.approval_stale',
+          message:
+            `Содержимое бандла «${name}@${version}» в карантине изменилось после выдачи ` +
+            'подтверждения (content-hash не совпал) — подтверждение к этому содержимому ' +
+            'не относится, установка отклонена.',
+          trustLevel,
+          source,
+          contentHash,
+        });
+      }
+    }
+
     if (!integrity) {
       return this._rejectInstall({
         name,
@@ -1367,12 +1435,13 @@ export class PluginInstaller {
         message:
           `content-hash карантина «${name}@${version}» не совпал с записанным в ` +
           `${INTEGRITY_FILE} (файлы изменены после сканирования) — подтверждение отклонено.`,
+        trustLevel,
+        source,
+        contentHash,
       });
     }
 
-    const trustLevel: CatalogTrustLevel = integrity.trust_level ?? 'community';
     const installKind = integrity.install_kind ?? 'runtime';
-    const source = integrity.source ?? 'unknown';
 
     // ── Повторные гейты (те же, что при установке) ────────────────────
     if (this._config.scan === 'disabled' && this._config.executionEnabled) {
@@ -1766,6 +1835,45 @@ export class PluginInstaller {
       return (await stat(path)).isDirectory();
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Выдать подтверждение установки (ADR-090 п. 9).
+   *
+   * Вызывается на пути `install-policy: ask` — когда бандл ушёл в карантин.
+   * Подтверждение привязано к **content-hash** бандла и действует **24 ч** с
+   * момента выдачи; хранится персистентно (файл в корне раскладки слоя
+   * плагинов), поэтому переживает рестарт процесса и замену бандла в
+   * карантине (тогда срабатывает `plugin.approval_stale`).
+   *
+   * Сбой записи подтверждения **не ломает установку** — предупреждение в лог
+   * (как запись аудита): карантин без подтверждения всё равно требует
+   * подтверждения администратора, а вот молча потерянная запись скрыла бы
+   * решение владельца.
+   */
+  private async _writeApproval(input: {
+    name: string;
+    version: string;
+    contentHash: string;
+    actor: string;
+  }): Promise<void> {
+    const approvedAt = this._now();
+    try {
+      await this._approvals.save(
+        buildPluginApproval({
+          name: input.name,
+          version: input.version,
+          contentHash: input.contentHash,
+          approvedBy: input.actor,
+          approvedAt,
+        }),
+      );
+    } catch (err) {
+      this._logger.warn(
+        `не удалось сохранить подтверждение установки плагина «${input.name}@${input.version}»: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 

@@ -1640,13 +1640,34 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 | GET | `/api/v2/plugins` | оба | ADMIN / auth | `{plugins: PluginRuntimeEntry[]}` — установленные записи lock + `active`/`mode`; карантин в список не входит |
 | GET | `/api/v2/plugins/:name` | оба | ADMIN / auth | `{plugin, manifest?, integrity?}`: манифест из установленного бандла и `PLUGIN_INTEGRITY.json` (best-effort — порча файла не даёт 500); нет в lock → 404 `plugin.not_found` |
 | POST | `/api/v2/plugins/install` | оба | ADMIN или service-key `addons:install` / auth | **Установка из источника** (см. «Источники установки» ниже): `201` — установлено, `202` — нужно подтверждение (`plugin.approval_required`, бандл в карантине), `400` `VALIDATION_ERROR` (тело/pin/имя) или `plugin.source_unavailable` для локального источника, `400` `plugin.manifest_invalid`, `403` `plugin.trust_below_floor`/`plugin.runtime_install_denied`/`plugin.scan_disabled_with_execution`, `409` `plugin.scan_rejected`, `502` `plugin.source_unavailable` для сетевого источника (registry/URL не ответили). **Managed**: локальные источники (`dir`/`archive`) запрещены → `403 LOCAL_INSTALL_DISABLED`; сетевые (`npm`/`url`) разрешены |
-| POST | `/api/v2/plugins/:name/approve` | оба | **ADMIN** / auth | Подтвердить карантин (`202`-установку): повторные гейты + сверка integrity → `200` установлено; `404` `plugin.not_found`, `409` `plugin.scan_rejected` |
+| POST | `/api/v2/plugins/:name/approve` | оба | **ADMIN** / auth | Подтвердить карантин (`202`-установку): проверка подтверждения (content-hash + срок 24 ч, ADR-090 п. 9) → повторные гейты + сверка integrity → `200` установлено; `404` `plugin.not_found`, `409` `plugin.scan_rejected`, `409` `plugin.approval_expired` (подтверждение истекло — 24 ч с момента выдачи), `409` `plugin.approval_stale` (бандл в карантине изменён после выдачи подтверждения) |
 | POST | `/api/v2/plugins/:name/enable` | оба | ADMIN или `addons:install` / auth | Активация (пайплайн ADR-090) → `200 {activation}`; отказ по гейту (`plugin.execution_disabled`/`trust_below_floor`/`scan_rejected`/`approval_required`) → `409` с `reason`; нет в lock → `404` |
 | POST | `/api/v2/plugins/:name/disable` | оба | ADMIN или `addons:install` / auth | Обратная прокрутка disposers → `200 {deactivation}`; не активен → `404 plugin.not_active` |
 | DELETE | `/api/v2/plugins/:name` | оба | **ADMIN** / auth | Снятие: деактивация → `lock.delete` → удаление каталога версии; **идемпотентно** → `204` даже если записи не было |
 | POST | `/api/v2/plugins/:name/rollback` | оба | ADMIN или `addons:install` / auth | Откат на ступень `previous`: `200 {outcome:'rolled_back', version, previousVersion, activated?}`; нет ступени/каталога → `409 plugin.rollback_unavailable`, нет записи → `404 plugin.not_found` |
 | POST | `/api/v2/plugins/token` | оба | **ADMIN** / auth | **Выдача server-scoped токена плагину** (ADR-090 Ф7, Уровень 2): тело `{pluginId, scopes?, expiresInSec?}` → `201 {token, pluginId, scopes, expiresAt}`; секрет отдаётся **единожды** (at-rest — sha256, формат `synth_svc_…`), scope `plugins:invoke` добавляется всегда. Ошибки: `400 VALIDATION_ERROR` (нет `pluginId`/неизвестный scope/неверный `expiresInSec`), `403 PLUGIN_NOT_ALLOWED` (плагин вне серверного allow-list при `plugins.hybrid.mode=allowlist`), `404 plugin.not_found` (плагин серверу неизвестен: не установлен и не разрешён allow-list'ом), `501 NOT_IMPLEMENTED` (реестр service-key не подключён) |
 | POST | `/api/v2/plugins/update` | оба | ADMIN или `addons:install` / auth | **Обновление из источника записи lock**: `200 {outcome:'unchanged'|'updated', ...}`; `400 VALIDATION_ERROR` (нет `name`/невалидный `sha256`) или `plugin.source_unavailable` для локального источника, `404 plugin.not_found`, `409 plugin.approval_required`/`scan_rejected`/`integrity_*`, `502 plugin.source_unavailable` для сетевого источника. Тело `{name, version?, sha256?, activate?}`; источник клиентом не выбирается |
+
+**Подтверждение установки (`POST /plugins/:name/approve`, ADR-090 п. 9).** Вердикт скана `caution` →
+бандл уходит в `quarantine/<name>@<version>/` (ответ `202`, `plugin.approval_required`) и вместе с
+ним выдаётся **подтверждение**: привязанное к **content-hash** бандла, с **кем** и **когда** выдано,
+**срок — 24 ч** (`PLUGIN_APPROVAL_TTL_MS`). Состояние персистентно: `plugin-approvals.json` в корне
+раскладки слоя плагинов (`<home>/plugin/` или `{dataDir}/plugin/`) — рядом с `plugins.lock.json`, но
+**вне** каталога бандла (замена бандла в карантине не стирает подтверждение).
+
+При `approve` подтверждение проверяется **первым**:
+
+| Условие | Ответ |
+|---|---|
+| подтверждения нет (бандл поставлен в карантин вручную) | проверки не применяются — остальные гейты как прежде |
+| срок 24 ч истёк | `409` `plugin.approval_expired` |
+| content-hash бандла не совпал с подтверждённым (бандл заменён) | `409` `plugin.approval_stale` |
+| иначе | повторные гейты → `200` установлено |
+
+Подтверждать (то есть выполнять `approve`) в managed может **только `ADMIN`** (`approveGuard:
+requirePermission('ADMIN')`); scope `addons:install` открывает установку/активацию, но не
+подтверждение. В core (standalone) — единый `requireAuth`. Отдельного API отзыва нет: подтверждение
+перестаёт действовать, когда перестаёт совпадать хеш (`plugin.approval_stale`) или истекает срок.
 
 **Источники установки (`POST /plugins/install`).** Тело:
 `{source?: 'dir'|'archive'|'npm'|'url', path?, name?, version?, url?, sha256?, trustLevel?}`.
@@ -1700,7 +1721,9 @@ false` — не активировать, не задано — сохранит
 `not_allowlisted`, `denylisted`, `runtime_install_denied`, `scan_disabled_with_execution`,
 `managed_readonly`, `hybrid_not_allowed` (серверная политика гибрида запрещает плагину работать);
 `404` — `not_found`, `not_active`; `409` — `scan_rejected`, `integrity_mismatch`,
-`integrity_unverifiable`, `execution_disabled`, `rollback_unavailable`; `202` — `approval_required`; `500` —
+`integrity_unverifiable`, `execution_disabled`, `rollback_unavailable`, `approval_expired`,
+`approval_stale` (недействительное подтверждение установки — конфликт состояния, не запрет
+политикой: права проверяет guard роута); `202` — `approval_required`; `500` —
 `loader_unavailable`, `disposer_failed` (сбой хоста, не клиента); `502` — `source_unavailable` для
 сетевого источника. При активации
 `execution_disabled`/`trust_below_floor`/`scan_rejected`/`approval_required` → `409`, `not_found` →

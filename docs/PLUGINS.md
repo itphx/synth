@@ -871,9 +871,46 @@ runtime-install → install-policy (allow/ask/block)
 
 Подтверждение карантина (`synth plugin approve <name>` / `POST /api/v2/plugins/:name/approve`)
 повторно прогоняет гейты и сверяет `PLUGIN_INTEGRITY.json` с фактическим хешем; после этого бандл
-переносится в `installed/`.
+переносится в `installed/`. Правила подтверждения — §7.3.
 
-### 7.3. Управляемый плагин (deploy-time)
+### 7.3. Подтверждение установки: content-hash и срок 24 ч
+
+Вердикт `caution` — не блокировка, а **требование подтверждения**. Подтверждение выдаётся
+автоматически при постановке бандла в карантин и живёт **24 ч** (ADR-090 п. 9 «Решения»):
+
+| Что | Значение |
+|---|---|
+| Что привязано | **content-hash** бандла (sha256 от состава текстовых файлов) |
+| Кто выдал | инициатор постановки в карантин (в managed — `ADMIN` либо service-key со scope `addons:install`, который выдал админ) |
+| Когда | момент выдачи (ISO-8601) |
+| Срок | **24 ч** с момента выдачи (`PLUGIN_APPROVAL_TTL_MS` в `engine/plugins/approval.ts`) |
+| Где хранится | `plugin-approvals.json` в корне раскладки слоя плагинов (`<home>/plugin/` или `{dataDir}/plugin/`) |
+
+Файл подтверждений лежит **рядом** с `plugins.lock.json`, но **вне** каталога бандла: карантин — это
+каталог, и его замена (переустановка/подмена бандла) не должна стирать выданное подтверждение — иначе
+подменённое содержимое прошло бы под старым подтверждением. Запись переживает рестарт процесса.
+
+При `approve` подтверждение проверяется **первым** (до остальных гейтов):
+
+```text
+approve → подтверждение?
+   • подтверждения нет → остальные гейты как прежде (сравнивать не с чем)
+   • истекло (больше 24 ч)          → 409 plugin.approval_expired
+   • content-hash не совпал         → 409 plugin.approval_stale
+   • иначе → гейты → перенос в installed/ + запись в lock
+```
+
+- **Истёкшее подтверждение** (`plugin.approval_expired`): срок решения администратора истёк — бандл
+  надо поставить заново (тогда выдаётся новое подтверждение) и подтвердить его.
+- **Изменённый после подтверждения бандл** (`plugin.approval_stale`): содержимое карантина больше не
+  совпадает с тем, к которому выдано подтверждение, — такое подтверждение не действует (это и есть
+  «отзыв» без отдельного API: отдельная ручка отзыва не нужна, достаточно перестать доверять хешу).
+
+**Кто подтверждает.** Само действие `approve` (то есть установку из карантина) в managed доступно
+**только `ADMIN`** (`approveGuard: requirePermission('ADMIN')`); в core (standalone) — единый
+`requireAuth`. Scope `addons:install` открывает установку/активацию, но **не** подтверждение.
+
+### 7.4. Управляемый плагин (deploy-time)
 
 Плагины, поставленные **образом или PVC** (`plugins.deployDir`), ставятся при старте инстанса и
 **не снимаются** через API/CLI:
@@ -1085,7 +1122,7 @@ synth plugin scan <path> [--json]
 | список | `GET /api/v2/plugins` | `200 { plugins: [...] }` |
 | деталь (манифест + integrity) | `GET /api/v2/plugins/:name` | `200 { plugin, manifest?, integrity? }` |
 | установка | `POST /api/v2/plugins/install` `{source?, path?, name?, version?, url?, sha256?, trustLevel?}` | `201` установлено, `202` нужен `approve` |
-| подтверждение | `POST /api/v2/plugins/:name/approve` | `200` |
+| подтверждение | `POST /api/v2/plugins/:name/approve` | `200` (или `409` — истёкло/подтверждение недействительно) |
 | включить/выключить | `POST /api/v2/plugins/:name/enable` \| `.../disable` | `200 { activation }` / `200 { deactivation }` |
 | снять | `DELETE /api/v2/plugins/:name` | `204` (идемпотентно) |
 | обновить | `POST /api/v2/plugins/update` `{name, version?, sha256?, activate?}` | `200 { outcome: "unchanged" \| "updated" }` |
@@ -1093,7 +1130,8 @@ synth plugin scan <path> [--json]
 | политика | `GET/PUT/DELETE /api/v2/settings/plugins` | `200` (применяется после рестарта) |
 
 RBAC: managed — `ADMIN`; установка/активация — также service-key со scope `addons:install`;
-`approve` и `DELETE` — только `ADMIN`. Core (standalone) — единый `requireAuth`. Локальные
+`approve` и `DELETE` — только `ADMIN` (подтверждение установки — решение администратора, §7.3).
+Core (standalone) — единый `requireAuth`. Локальные
 источники (`dir`/`archive`) в managed запрещены (`403 LOCAL_INSTALL_DISABLED`), сетевые
 (`npm`/`url`) разрешены.
 
@@ -1114,9 +1152,14 @@ Runtime-установка через API требует `plugins.runtimeInstall
 
 ### 9.5. Карантин
 
-`caution` → бандл в `quarantine/<name>@<version>/`, lock не пишется, ответ `202`. Подтверждение
-(`approve`) повторяет гейты и сверяет integrity; доверие берётся из `PLUGIN_INTEGRITY.json`, а не
-угадывается. Без подтверждения плагин не установлен — в списке `GET /plugins` его нет.
+`caution` → бандл в `quarantine/<name>@<version>/`, lock не пишется, ответ `202`. Одновременно
+выдаётся **подтверждение** — привязанное к content-hash и действующее 24 ч (§7.3). Подтверждение
+(`approve`) проверяет подтверждение (срок и хеш), повторяет гейты и сверяет integrity; доверие
+берётся из `PLUGIN_INTEGRITY.json`, а не угадывается. Без подтверждения плагин не установлен — в
+списке `GET /plugins` его нет.
+
+Отказы подтверждения: истёкший срок → `409 plugin.approval_expired`; бандл изменён после выдачи
+подтверждения → `409 plugin.approval_stale`.
 
 ### 9.6. Deploy-time (образ/PVC)
 
@@ -1129,7 +1172,7 @@ plugins.deployDir/
 При старте инстанс сначала **ставит** бандлы из каталога (те же гейты: манифест → fail-closed →
 trust-floor → скан → install-policy), затем активирует установленное из lock. Совпадение версии и
 `content_hash` → `skipped`; ошибка одного бандла не ломает остальные и не роняет старт. Симлинки не
-читаются. Управляемый плагин меняется только новым образом/переразвёртыванием (§7.3).
+читаются. Управляемый плагин меняется только новым образом/переразвёртыванием (§7.4).
 
 ---
 
@@ -1272,7 +1315,7 @@ X-Synth-Plugin-Id: my-plugin
 
 ## 12. Справочник ошибок
 
-Коды причин — `PLUGIN_AUDIT_REASONS` (`packages/shared/src/types/plugin-audit.ts`), 29 значений.
+Коды причин — `PLUGIN_AUDIT_REASONS` (`packages/shared/src/types/plugin-audit.ts`), 31 значение.
 Код виден в ответе API (`reason`), в журнале `{dataDir}/audit/plugins.jsonl` и в stderr CLI.
 
 ### 12.1. Установка и источник
@@ -1285,6 +1328,8 @@ X-Synth-Plugin-Id: my-plugin
 | `plugin.integrity_mismatch` | содержимое установленного бандла изменилось после установки | переустановите бандл; не редактируйте файлы в `installed/…` |
 | `plugin.integrity_unverifiable` | ожидаемый хеш есть, а проверить нечем (нет файлов) | ставьте из источника/архива, а не «полусобранным» каталогом |
 | `plugin.approval_required` | вердикт `caution` — нужен `approve` | проверьте находки скана (`synth plugin scan`), затем подтвердите установку |
+| `plugin.approval_expired` | подтверждение истекло: срок 24 ч с момента выдачи вышел (§7.3) | поставьте бандл заново (`install`) и подтвердите его заново |
+| `plugin.approval_stale` | бандл в карантине изменился после выдачи подтверждения (content-hash не совпал) | поставьте нужный бандл заново — подтверждение к старому содержимому не относится |
 | `plugin.scan_rejected` | вердикт `dangerous` (или сбой сканера — fail-closed) | устраните находки (`child_process`/`eval`/чтение секретов/исполняемый бинарник) |
 
 ### 12.2. Доверие и политика
@@ -1334,7 +1379,8 @@ X-Synth-Plugin-Id: my-plugin
 `provides_mismatch`, локальный `source_unavailable`; `403` — `trust_below_floor`, `disabled`,
 `not_allowlisted`, `denylisted`, `runtime_install_denied`, `scan_disabled_with_execution`,
 `managed_readonly`, `hybrid_not_allowed`; `404` — `not_found`, `not_active`; `409` — `scan_rejected`,
-`integrity_mismatch`, `integrity_unverifiable`, `execution_disabled`, `rollback_unavailable`;
+`integrity_mismatch`, `integrity_unverifiable`, `execution_disabled`, `rollback_unavailable`,
+`approval_expired`, `approval_stale` (недействительное подтверждение — конфликт состояния, §7.3);
 `202` — `approval_required`; `500` — `loader_unavailable`, `disposer_failed`; `502` — сетевой
 `source_unavailable`.
 
