@@ -15,7 +15,7 @@ function readNumber(
   return typeof value === 'number' ? value : undefined
 }
 
-const STATUS_VALUES: readonly string[] = ['completed', 'cancelled', 'stopped', 'error', 'limit']
+const STATUS_VALUES: readonly string[] = ['completed', 'cancelled', 'stopped', 'error', 'limit', 'interrupted']
 
 /**
  * ADR-070 §2.6: статус ответа из metadata.status. Для старых сообщений (до
@@ -71,7 +71,8 @@ interface MessageStatsProps {
  * `Сабагенты: 2 · 12.3k вх · 1.1k исх [· ~ 0.0003 $]`.
  *
  * Префикс-сегмент отражает состояние ответа: cancelled/stopped → «Остановлено»,
- * error → «Ошибка», limit → «Лимит итераций»; completed — без префикса.
+ * error → «Ошибка», limit → «Лимит итераций», interrupted → «Прервано»
+ * (PROP-098 `interrupt`); completed — без префикса.
  * Сегменты показываются только при наличии данных; если данных нет — null.
  * Кэш: `cache_read_tokens / input_tokens` (0 при input = 0).
  * Скорость: `output_tokens / (duration_ms / 1000)`.
@@ -102,6 +103,9 @@ export function MessageStats({ message, className }: MessageStatsProps) {
     segments.push(t('chat.messageStats.error'))
   } else if (status === 'limit') {
     segments.push(t('chat.messageStats.limit'))
+  } else if (status === 'interrupted') {
+    // PROP-098 (этап 2): генерация прервана пользователем, ход продолжился.
+    segments.push(t('chat.messageStats.interrupted'))
   }
 
   if (durationMs !== undefined) {

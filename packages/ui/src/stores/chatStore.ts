@@ -15,7 +15,7 @@ export interface IntermediateTextBlockData {
 }
 
 /** ADR-070 §2.6: статус ответа ассистента (metadata.status), определяет префикс статистики. */
-export type MessageStatus = 'completed' | 'cancelled' | 'stopped' | 'error' | 'limit'
+export type MessageStatus = 'completed' | 'cancelled' | 'stopped' | 'error' | 'limit' | 'interrupted'
 
 export interface MessageData {
   index: number
@@ -314,6 +314,14 @@ interface ChatStore {
   updateMessage: (sessionId: string, index: number, changes: Partial<MessageData>) => void
   startStream: (sessionId: string, streamId: string, agentRole: string | null, model?: string, provider?: string) => void
   updateStreamChunk: (sessionId: string, streamId: string, content: string, reasoning: string, model?: string, provider?: string, iteration?: number) => void
+  /**
+   * PROP-098 (этап 2): прерывание генерации (`stream.interrupted`) — ход НЕ
+   * завершается, стрим остаётся живым (с тем же `stream_id`), но накопленный
+   * текст прерванной генерации уже сохранён отдельным сообщением. Сбрасываем
+   * только аккумулятор (текст/рассуждения), сам стрим и его tool-вызовы —
+   * сохраняем: следующая итерация продолжит ту же генерацию.
+   */
+  resetStreamAccumulator: (sessionId: string, streamId: string) => void
   updateStreamUsage: (sessionId: string, streamId: string, data: {
     usage?: UsageData
     costUsd?: number
@@ -451,6 +459,27 @@ export const useChatStore = create<ChatStore>((set) => ({
         hasContent: nextHasContent,
         model: model || existing.model,
         provider: provider || existing.provider,
+      }
+      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
+    }),
+
+  // PROP-098 (этап 2): прерывание генерации (`stream.interrupted`). Ход
+  // продолжается (тот же `stream_id`), а накопленный текст прерванной
+  // генерации уже сохранён отдельным сообщением со статусом `interrupted` —
+  // сбрасываем аккумулятор, чтобы следующие чанки не дописались к нему.
+  // Живой стрим (isStreaming) и его tool-вызовы сохраняем.
+  resetStreamAccumulator: (sessionId, streamId) =>
+    set((s) => {
+      const existing = s.streamingBySession[sessionId]?.[streamId]
+      if (!existing) return s
+      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
+      sessionStreams[streamId] = {
+        ...existing,
+        content: '',
+        reasoningBlocks: [],
+        intermediateTextBlocks: [],
+        hasContent: false,
+        _lastContentLen: 0,
       }
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),

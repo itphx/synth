@@ -6,15 +6,21 @@ import type { SteerMode } from '@itphx/synth-shared/types'
 
 interface SendModeOption {
   mode: SteerMode
-  labelKey: 'chat.steer.mode.queue' | 'chat.steer.mode.steer'
-  hintKey: 'chat.steer.mode.queueHint' | 'chat.steer.mode.steerHint'
+  labelKey:
+    | 'chat.steer.mode.queue'
+    | 'chat.steer.mode.steer'
+    | 'chat.steer.mode.interrupt'
+  hintKey:
+    | 'chat.steer.mode.queueHint'
+    | 'chat.steer.mode.steerHint'
+    | 'chat.steer.mode.interruptHint'
   icon: string
 }
 
 /**
- * PROP-098 (этап 1): режимы отправки во время активного хода.
- * `interrupt` в UI нет — режима нет и в API этапа 1
- * (`STEERING_INTERRUPT_UNSUPPORTED`), показывать его нечего.
+ * PROP-098: режимы отправки во время активного хода.
+ * `queue` — в очередь, `steer` — вмешаться в ход, `interrupt` — прервать
+ * текущую генерацию (ход продолжается, этап 2).
  */
 const SEND_MODE_OPTIONS: readonly SendModeOption[] = [
   {
@@ -28,6 +34,12 @@ const SEND_MODE_OPTIONS: readonly SendModeOption[] = [
     labelKey: 'chat.steer.mode.steer',
     hintKey: 'chat.steer.mode.steerHint',
     icon: 'send-plane',
+  },
+  {
+    mode: 'interrupt',
+    labelKey: 'chat.steer.mode.interrupt',
+    hintKey: 'chat.steer.mode.interruptHint',
+    icon: 'stop',
   },
 ]
 
