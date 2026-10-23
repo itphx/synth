@@ -2,15 +2,18 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import {
+  packAuthorityProvidesSchema,
   packManifestSchema,
   pipelineDefinitionSchema,
   summarizePackAuthority,
+  trustLevelRank,
   validatePackManifest,
   parseFrontmatter,
   nowISO,
 } from '@itphx/synth-shared';
 import type {
   AgentDefinition,
+  CatalogTrustLevel,
   McpServerConfig,
   PackAgentProvide,
   PackAuthoritySummary,
@@ -20,6 +23,7 @@ import type {
   PackSkillProvide,
   ToolCapability,
 } from '@itphx/synth-shared';
+import type { AuthorityPolicyRepository } from '../../storage/ports/authority-policy-repository.js';
 import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 import type { EventRouteRepository } from '../../storage/ports/event-route-repository.js';
 import type { McpRegistryRepository } from '../../storage/ports/mcp-registry-repository.js';
@@ -32,6 +36,11 @@ import type {
   PipelineDefinitionRecord,
   PipelineRepository,
 } from '../../storage/ports/pipeline-repository.js';
+import {
+  activatePackAuthority,
+  deactivatePackAuthority,
+  type PackAuthorityContent,
+} from '../../engine/authority/activation.js';
 import { requireScopeOrAdminRole } from '../service-scope.js';
 import type { ScopeGuardFactory } from '../service-scope.js';
 import { info } from '../../logger.js';
@@ -147,6 +156,19 @@ export interface PacksRoutesDeps {
   roleFiles?: PackRoleFiles;
   /** Правила маршрутизации внешних событий (ADR-089). */
   routes: EventRouteRepository;
+  /**
+   * ADR-106 Ф5: политика полномочий инстанса (порт `AuthorityPolicyRepository`).
+   * Через неё контент пакета (`provides.authority`) **активируется** при
+   * одобрении и **снимается** при снятии установки. Не задан — активация не
+   * выполняется (пакет ставится, роли в политику не попадают).
+   */
+  authorityPolicy?: AuthorityPolicyRepository;
+  /**
+   * ADR-106 Ф5 / PROP-068 §4.1: фактическое доверие пакета (резолвер хоста —
+   * например, по записи каталога). Не задан — берётся заявленный в манифесте
+   * уровень (`trust.level`), иначе `community` (fail-closed).
+   */
+  resolveTrustLevel?: (manifest: unknown) => CatalogTrustLevel | undefined;
   /** Runtime-регистрация агентов (AgentRegistry) — опционально. */
   registerAgent?: (agent: AgentDefinition) => void;
   /** Снятие агента из runtime-регистрации — опционально. */
@@ -200,6 +222,12 @@ export interface PackInstallResult {
    * которые пакет приносит. Поля нет, если пакет полномочий не приносит.
    */
   authority?: PackAuthoritySummary;
+  /**
+   * Что активировано в политике полномочий инстанса при одобрении пакета
+   * (ADR-106 Ф5) и что не активировано (с причиной). Поля нет, если порт
+   * политики не подключён или пакет полномочий не приносит.
+   */
+  authorityActivation?: PackAuthorityActivationSummary;
   /** Нефатальные замечания (пропущенные вклады и т.п.). */
   problems?: string[];
 }
@@ -737,6 +765,67 @@ export function createPacksRoutes(
   }
 
   /**
+   * Активация контента полномочий пакета в политике инстанса (ADR-106 Ф5).
+   *
+   * Правила — в `engine/authority/activation.ts`: пересечение с политикой
+   * инстанса (не дарование) и trust-floor для мутирующих грантов. Порт не
+   * подключён — активация не выполняется (пакет ставится, роли в политику не
+   * попадают).
+   */
+  async function activateAuthority(
+    manifest: unknown,
+    trustLevel: CatalogTrustLevel,
+  ): Promise<PackAuthorityActivationSummary | undefined> {
+    const content = authorityContentOfManifest(manifest);
+    if (!content || !deps.authorityPolicy) return undefined;
+    const policy = await deps.authorityPolicy.getPolicy();
+    const result = activatePackAuthority({ content, policy, trustLevel });
+    await deps.authorityPolicy.savePolicy(result.policy);
+    return {
+      activated: result.activated,
+      skipped: result.skipped.map((skip) => ({
+        kind: skip.kind,
+        id: skip.id,
+        reason: skip.reason,
+        ...(skip.detail ? { detail: skip.detail } : {}),
+      })),
+    };
+  }
+
+  /**
+   * Снятие контента полномочий пакета из политики инстанса (ADR-106 Ф5).
+   *
+   * Убираются роли и привязки агентов, принесённые пакетом. Роли/агенты,
+   * которые приносит **другой** установленный пакет, остаются. Идемпотентно.
+   */
+  async function deactivateAuthority(manifest: unknown, packName: string): Promise<void> {
+    const content = authorityContentOfManifest(manifest);
+    if (!content || !deps.authorityPolicy) return;
+    const policy = await deps.authorityPolicy.getPolicy();
+    if (!policy) return;
+    const keepRoleIds: string[] = [];
+    const keepAgentIds: string[] = [];
+    const others = await deps.packs.list().catch(() => [] as PackInstallation[]);
+    for (const other of others) {
+      if (other.name === packName) continue;
+      if (other.status !== 'active') continue;
+      const otherContent = authorityContentOfManifest(other.manifest);
+      if (!otherContent) continue;
+      for (const role of otherContent.roles) keepRoleIds.push(role.id);
+      for (const agent of otherContent.agents) keepAgentIds.push(agent.id);
+    }
+    const result = deactivatePackAuthority({ content, policy, keepRoleIds, keepAgentIds });
+    await deps.authorityPolicy.savePolicy(result.policy);
+    if (result.removedRoles.length > 0 || result.removedAgents.length > 0) {
+      info(
+        'PACKS',
+        `Пакет ${packName} снят: из политики полномочий убраны роли=${result.removedRoles.length}, ` +
+          `агенты=${result.removedAgents.length}`,
+      );
+    }
+  }
+
+  /**
    * Требуется ли подтверждение администратора (capability-гранты).
    *
    * Да, если пакет:
@@ -884,6 +973,9 @@ export function createPacksRoutes(
     const requiresApproval = needsApproval(prepared);
     const now = nowISO();
     const userId = deps.resolveUserId?.(c);
+    // ADR-106 Ф5: доверие пакета запоминается в реестре — одобрение приходит
+    // отдельным запросом и должно активировать контент с тем же trust-floor.
+    const trustLevel = resolvePackTrust(rawManifest, deps.resolveTrustLevel);
 
     if (requiresApproval) {
       // Фактическая установка НЕ выполняется — только запись в реестре.
@@ -901,6 +993,7 @@ export function createPacksRoutes(
         provides: planned,
         manifest: rawManifest,
         files,
+        trustLevel,
         installedAt: now,
         updatedAt: now,
         ...(userId ? { installedBy: userId } : {}),
@@ -933,6 +1026,7 @@ export function createPacksRoutes(
       provides: outcome.provides,
       manifest: rawManifest,
       files,
+      trustLevel,
       installedAt: now,
       updatedAt: now,
       ...(userId ? { installedBy: userId } : {}),
@@ -988,6 +1082,11 @@ export function createPacksRoutes(
       updatedAt: now,
     });
     info('PACKS', `Пакет ${name} одобрен и установлен`);
+    // ADR-106 Ф5: контент полномочий активируется в политике инстанса
+    // (пересечение с политикой + trust-floor).
+    const trustLevel =
+      record.trustLevel ?? resolvePackTrust(record.manifest, deps.resolveTrustLevel);
+    const authorityActivation = await activateAuthority(record.manifest, trustLevel);
     const authority = authoritySummaryOf(rawProvides(record.manifest));
     return c.json(
       {
@@ -997,6 +1096,7 @@ export function createPacksRoutes(
         version: record.version,
         provides: outcome.provides,
         ...(authority ? { authority } : {}),
+        ...(authorityActivation ? { authorityActivation } : {}),
         ...(outcome.problems.length > 0 ? { problems: outcome.problems } : {}),
       } satisfies PackInstallResult,
     );
@@ -1053,6 +1153,10 @@ export function createPacksRoutes(
       }
     }
 
+    // ADR-106 Ф5: снятие пакета убирает принесённые роли/привязки агентов из
+    // политики полномочий инстанса (идемпотентно).
+    await deactivateAuthority(manifest, name).catch(() => undefined);
+
     await deps.packs.delete(name);
     info('PACKS', `Пакет ${name} снят`);
     return c.body(null, 204);
@@ -1075,6 +1179,85 @@ function authoritySummaryOf(provides: unknown): PackAuthoritySummary | undefined
     return undefined;
   }
   return summary;
+}
+
+/**
+ * Контент полномочий пакета из **сырого** манифеста (`null` — контента нет).
+ *
+ * Манифест в реестре хранится сырым (как пришёл), поэтому контент читается
+ * строгой схемой `packAuthorityProvidesSchema`: битый/чужой контент → `null`
+ * (ничего не активируется), а не «частичная» активация.
+ */
+function authorityContentOfManifest(manifest: unknown): PackAuthorityContent | undefined {
+  const raw = rawProvides(manifest).authority;
+  if (raw === undefined || raw === null) return undefined;
+  const parsed = packAuthorityProvidesSchema.safeParse(raw);
+  if (!parsed.success) return undefined;
+  const data = parsed.data;
+  if (
+    data.roles.length === 0 &&
+    data.actions.length === 0 &&
+    data.targets.length === 0 &&
+    data.agents.length === 0
+  ) {
+    return undefined;
+  }
+  return {
+    actions: data.actions,
+    roles: data.roles,
+    targets: data.targets,
+    agents: data.agents,
+  };
+}
+
+/** Заявленный в манифесте уровень доверия (`trust.level`) — верхняя граница. */
+function declaredTrustLevel(manifest: unknown): CatalogTrustLevel | undefined {
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) return undefined;
+  const trust = (manifest as { trust?: unknown }).trust;
+  if (typeof trust !== 'object' || trust === null || Array.isArray(trust)) return undefined;
+  const level = (trust as { level?: unknown }).level;
+  if (typeof level !== 'string') return undefined;
+  const levels: readonly CatalogTrustLevel[] = ['builtin', 'verified', 'trusted', 'community'];
+  return levels.includes(level as CatalogTrustLevel) ? (level as CatalogTrustLevel) : undefined;
+}
+
+/**
+ * Фактическое доверие пакета (PROP-068 §4.1).
+ *
+ * Заявленный в манифесте уровень — **верхняя граница**: фактическое доверие
+ * резолвит хост (`resolveTrustLevel`, например по записи каталога) и не может
+ * быть выше заявленного. Без резолвера берётся заявленный уровень (манифест —
+ * единственный источник в этом контуре), без него — `community` (fail-closed:
+ * мутирующие гранты не активируются).
+ */
+function resolvePackTrust(
+  manifest: unknown,
+  resolver?: (manifest: unknown) => CatalogTrustLevel | undefined,
+): CatalogTrustLevel {
+  const declared = declaredTrustLevel(manifest);
+  const resolved = resolver?.(manifest);
+  if (!declared) return resolved ?? 'community';
+  if (!resolved) return declared;
+  // Строже — значит ниже доверия (rank: 0 — самый доверенный).
+  return trustLevelRank(resolved) > trustLevelRank(declared) ? resolved : declared;
+}
+
+/** Сводка активации контента полномочий в политике инстанса (ADR-106 Ф5). */
+export interface PackAuthorityActivationSummary {
+  /** Что активировано (id'ы). */
+  activated: {
+    actions: string[];
+    roles: string[];
+    targets: string[];
+    agents: string[];
+  };
+  /** Что не активировано и почему (машиночитаемые причины). */
+  skipped: Array<{
+    kind: 'role' | 'action' | 'target' | 'agent' | 'grant';
+    id: string;
+    reason: string;
+    detail?: string;
+  }>;
 }
 
 /**

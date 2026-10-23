@@ -149,6 +149,7 @@ const POLICY: AuthorityPolicy = {
   ],
   targets: [],
   ceilings: [],
+  agents: [],
 };
 
 interface World {

@@ -194,6 +194,9 @@ export class AuthorityResolver {
       const agentGrants = [
         ...(this._options.agentGrants ?? []),
         ...this._grantsOfRoles(this._options.agentRoles ?? []),
+        // ADR-106 Ф5: роли агента, объявленные контентом пакета и записанные
+        // в политику инстанца (`policy.agents`).
+        ...this._grantsOfRoles(this._policyAgentRoles(turn.agentId)),
       ];
       if (agentGrants.length > 0) axes.push({ source: 'agent', grants: agentGrants });
     }
@@ -379,6 +382,19 @@ export class AuthorityResolver {
       grants.push(...role.grants);
     }
     return grants;
+  }
+
+  /**
+   * Роли агента, объявленные в политике инстанса (ADR-106 Ф5).
+   *
+   * Контент пакета (`provides.authority.agents[]`) связывает агента с ролями;
+   * активация пакета записывает связь в `policy.agents`, и ось `agent` хода
+   * получает гранты этих ролей (уже прошедших пересечение с политикой
+   * инстанса и trust-floor).
+   */
+  private _policyAgentRoles(agentId: string): string[] {
+    const binding = (this._options.policy?.agents ?? []).find((agent) => agent.id === agentId);
+    return binding?.roles ?? [];
   }
 
   /** Потолок хода указанного источника (если задан). */

@@ -308,6 +308,27 @@ export const authorityTargetDeclarationSchema = z
 export type AuthorityTargetDeclaration = z.infer<typeof authorityTargetDeclarationSchema>;
 
 /**
+ * Привязка агента к ролям и потолку (ADR-106 Ф5): контент пакета объявляет,
+ * какие роли носит агент (`roles[]`) и какие действия ему потолок
+ * (`ceiling[]` — идентификаторы действий).
+ *
+ * Роли — из `policy.roles` (их гранты уже прошли пересечение с политикой
+ * инстанса и trust-floor), потолок — **запись** о намерении пакета; принуждение
+ * оси `pack` по нему — остаток (ADR-106 §11).
+ */
+export const authorityPolicyAgentSchema = z
+  .object({
+    /** id агента. */
+    id: z.string().min(1).max(128),
+    /** Роли агента (id из `policy.roles`). */
+    roles: z.array(z.string().min(1).max(128)).default([]),
+    /** Потолок агента — идентификаторы действий. */
+    ceiling: z.array(z.string().min(1).max(64)).default([]),
+  })
+  .strict();
+export type AuthorityPolicyAgent = z.infer<typeof authorityPolicyAgentSchema>;
+
+/**
  * Политика полномочий инстанса — верхняя граница (ADR-106 §«Точки
  * принуждения», уровень 4). Хранится через порт `AuthorityPolicyRepository`
  * (ADR-096).
@@ -322,6 +343,8 @@ export const authorityPolicySchema = z
     targets: z.array(authorityTargetDeclarationSchema).default([]),
     /** Потолок инстанса. */
     ceilings: z.array(authorityCeilingSchema).default([]),
+    /** Привязки агентов к ролям и потолку (ADR-106 Ф5). */
+    agents: z.array(authorityPolicyAgentSchema).default([]),
   })
   .strict();
 export type AuthorityPolicy = z.infer<typeof authorityPolicySchema>;

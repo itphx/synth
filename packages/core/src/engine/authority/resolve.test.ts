@@ -73,6 +73,7 @@ describe('AuthorityResolver', () => {
         roles: [],
         targets: [{ kind: 'document' }],
         ceilings: [],
+        agents: [],
       };
       const resolver = new AuthorityResolver({
         policy,
@@ -128,6 +129,7 @@ describe('AuthorityResolver', () => {
               grants: [grant({ action: 'write', effect: 'deny' })],
             },
           ],
+          agents: [],
         },
       });
 
@@ -205,12 +207,39 @@ describe('AuthorityResolver', () => {
           ],
           targets: [],
           ceilings: [],
+          agents: [],
         },
       });
       const asDeveloper = turn({ principal: principal({ roles: ['developer'] }) });
 
       expect(resolver.decide(asDeveloper, 'write', pathTarget('src/a.ts')).effect).toBe('allow');
       expect(resolver.decide(asDeveloper, 'write', pathTarget('docs/a.md')).effect).toBe('deny');
+    });
+
+    // ADR-106 Ф5: роли агента, объявленные контентом пакета и записанные в
+    // политику инстанца (`policy.agents`), дают права по оси `agent`.
+    it('роли агента из политики инстанца дают права по оси agent', () => {
+      const resolver = new AuthorityResolver({
+        // Принципал разрешает запись вовсе — ось агента сужает область.
+        principalGrants: [grant({ action: 'write', targetPattern: 'path:**' })],
+        policy: {
+          actions: [{ id: 'write', mutating: true, requires: [] }],
+          roles: [
+            {
+              id: 'editor',
+              domain: 'base',
+              grants: [grant({ action: 'write', targetPattern: 'path:src/**' })],
+            },
+          ],
+          targets: [],
+          ceilings: [],
+          agents: [{ id: 'agent-1', roles: ['editor'], ceiling: [] }],
+        },
+      });
+
+      const asAgent = turn({ agentId: 'agent-1' });
+      expect(resolver.decide(asAgent, 'write', pathTarget('src/a.ts')).effect).toBe('allow');
+      expect(resolver.decide(asAgent, 'write', pathTarget('docs/a.md')).effect).toBe('deny');
     });
   });
 

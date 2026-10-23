@@ -154,6 +154,7 @@ describe('Authority-guard (Ф2) — пересечение осей', () => {
           grants: [{ action: 'write', targetPattern: 'path:**', effect: 'deny' }],
         },
       ],
+      agents: [],
     };
     const { journal, guard } = makeGuard(policy);
     const evaluator = new PermissionEvaluator(ALLOW_ALL, { authorityGate: guard.gate });
@@ -187,6 +188,7 @@ describe('Authority-guard (Ф2) — пересечение осей', () => {
       ],
       targets: [],
       ceilings: [],
+      agents: [],
     };
     const { guard } = makeGuard(policy);
     const evaluator = new PermissionEvaluator(ALLOW_ALL, { authorityGate: guard.gate });

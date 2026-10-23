@@ -36,6 +36,7 @@ function policy(over: Partial<AuthorityPolicy> = {}): AuthorityPolicy {
     ],
     targets: [{ kind: 'record' }],
     ceilings: [],
+    agents: [],
     ...over,
   };
 }
@@ -89,6 +90,7 @@ export function describeAuthorityPolicyRepository(
         roles: [],
         targets: [],
         ceilings: [],
+        agents: [],
       });
 
       const stored = await repo.getPolicy();

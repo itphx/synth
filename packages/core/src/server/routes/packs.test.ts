@@ -12,6 +12,8 @@ import { RouteRuleStore } from '../../storage/route-rule-store.js';
 import { JsonStore } from '../../storage/json-store.js';
 import { SkillService } from '../../engine/skills/service.js';
 import { ContextConfig } from '../../engine/context/config.js';
+import { MemoryAuthorityPolicyRepository } from '../../storage/memory/authority-policy.js';
+import type { AuthorityPolicyRepository } from '../../storage/ports/authority-policy-repository.js';
 import type { AgentDefinition } from '@itphx/synth-shared';
 
 /** Мок auth: requireAuth — no-op (single-user режим core). */
@@ -96,7 +98,7 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  function createTestApp() {
+  function createTestApp(over: { authorityPolicy?: AuthorityPolicyRepository } = {}) {
     const app = new Hono();
     app.route(
       '/api/v2/packs',
@@ -108,6 +110,7 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
         agents: agentStore,
         roleFiles: contextConfig,
         routes: routeRules,
+        ...over,
       }),
     );
     return app;
@@ -527,6 +530,171 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
       expect(res.status).toBe(201);
       const body: any = await res.json();
       expect(body.authority).toBeUndefined();
+    });
+  });
+
+  // ADR-106 Ф5: контент полномочий пакета **активируется в политике
+  // инстанса** при одобрении и **снимается** при снятии установки. Контент не
+  // расширяет политику инстанса (пересечение), мутирующие гранты требуют
+  // trust-floor, роль из политики не перезаписывается.
+  describe('ADR-106 Ф5: активация контента в политику инстанса', () => {
+    /** Манифест с ролью (чтение + мутирование) и агентом. */
+    const ACTIVATION_MANIFEST = {
+      name: 'clinic-pack',
+      version: '0.1.0',
+      kind: 'pack',
+      packType: 'policies',
+      description: 'Пакет с ролями',
+      trust: { level: 'trusted' },
+      provides: {
+        skills: [],
+        mcp: [],
+        agents: [],
+        pipelines: [],
+        authority: {
+          actions: [
+            { id: 'read', mutating: false, requires: [] },
+            { id: 'sign', mutating: true, requires: [] },
+          ],
+          targets: [{ kind: 'record', resolver: 'record-resolver' }],
+          roles: [
+            {
+              id: 'clinician',
+              displayName: 'Врач',
+              domain: 'clinic',
+              grants: [
+                { action: 'read', targetPattern: 'record:*', effect: 'allow' },
+                { action: 'sign', targetPattern: 'record:*', effect: 'allow' },
+              ],
+            },
+          ],
+          agents: [{ id: 'doctor', roles: ['clinician'], ceiling: ['sign'] }],
+        },
+      },
+    };
+
+    it('approve → роли, действия, цели и привязки агента попадают в политику', async () => {
+      const policy = new MemoryAuthorityPolicyRepository();
+      const app = createTestApp({ authorityPolicy: policy });
+
+      const res = await app.request('/api/v2/packs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(installBody(ACTIVATION_MANIFEST)),
+      });
+      expect(res.status).toBe(202);
+
+      // До одобрения политика не тронута: контент неактивирован.
+      expect(await policy.getPolicy()).toBeNull();
+
+      const approve = await app.request('/api/v2/packs/clinic-pack/approve', { method: 'POST' });
+      expect(approve.status).toBe(200);
+      const approved: any = await approve.json();
+      expect(approved.installed).toBe(true);
+
+      // Сводка активации — в ответе одобрения.
+      expect(approved.authorityActivation.activated.roles).toEqual(['clinician']);
+      expect(approved.authorityActivation.activated.actions).toEqual(['read', 'sign']);
+      expect(approved.authorityActivation.activated.targets).toEqual(['record']);
+      expect(approved.authorityActivation.activated.agents).toEqual(['doctor']);
+      expect(approved.authorityActivation.skipped).toEqual([]);
+
+      // Политика инстанца: роль активирована с грантами, агент привязан.
+      const stored = await policy.getPolicy();
+      expect(stored?.roles.map((r) => r.id)).toEqual(['clinician']);
+      expect(stored?.roles[0]?.grants).toEqual([
+        { action: 'read', targetPattern: 'record:*', effect: 'allow' },
+        { action: 'sign', targetPattern: 'record:*', effect: 'allow' },
+      ]);
+      expect(stored?.actions.map((a) => a.id)).toEqual(['read', 'sign']);
+      expect(stored?.targets.map((t) => t.kind)).toEqual(['record']);
+      expect(stored?.agents).toEqual([
+        { id: 'doctor', roles: ['clinician'], ceiling: ['sign'] },
+      ]);
+    });
+
+    it('community → мутирующий грант не активируется (trust-floor), остаётся только read', async () => {
+      const policy = new MemoryAuthorityPolicyRepository();
+      const app = createTestApp({ authorityPolicy: policy });
+
+      const manifest = {
+        ...ACTIVATION_MANIFEST,
+        trust: { level: 'community' },
+      };
+      const res = await app.request('/api/v2/packs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(installBody(manifest)),
+      });
+      expect(res.status).toBe(202);
+
+      const approve = await app.request('/api/v2/packs/clinic-pack/approve', { method: 'POST' });
+      expect(approve.status).toBe(200);
+      const approved: any = await approve.json();
+
+      // Сводка показывает причину пропуска мутирующего гранта.
+      expect(approved.authorityActivation.skipped).toContainEqual(
+        expect.objectContaining({ kind: 'grant', id: 'sign', reason: 'trust_floor' }),
+      );
+
+      // В политике — только чтение.
+      const stored = await policy.getPolicy();
+      expect(stored?.roles[0]?.grants).toEqual([
+        { action: 'read', targetPattern: 'record:*', effect: 'allow' },
+      ]);
+    });
+
+    it('DELETE → роли и привязки агентов убраны из политики', async () => {
+      const policy = new MemoryAuthorityPolicyRepository();
+      const app = createTestApp({ authorityPolicy: policy });
+
+      await app.request('/api/v2/packs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(installBody(ACTIVATION_MANIFEST)),
+      });
+      await app.request('/api/v2/packs/clinic-pack/approve', { method: 'POST' });
+      expect((await policy.getPolicy())?.roles).toHaveLength(1);
+
+      const removed = await app.request('/api/v2/packs/clinic-pack', { method: 'DELETE' });
+      expect(removed.status).toBe(204);
+
+      const stored = await policy.getPolicy();
+      expect(stored?.roles).toEqual([]);
+      expect(stored?.agents).toEqual([]);
+    });
+
+    it('снятие пакета идемпотентно: повторный DELETE не ломает политику', async () => {
+      const policy = new MemoryAuthorityPolicyRepository();
+      const app = createTestApp({ authorityPolicy: policy });
+
+      await app.request('/api/v2/packs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(installBody(ACTIVATION_MANIFEST)),
+      });
+      await app.request('/api/v2/packs/clinic-pack/approve', { method: 'POST' });
+
+      expect((await app.request('/api/v2/packs/clinic-pack', { method: 'DELETE' })).status).toBe(204);
+      expect((await app.request('/api/v2/packs/clinic-pack', { method: 'DELETE' })).status).toBe(204);
+
+      const stored = await policy.getPolicy();
+      expect(stored?.roles).toEqual([]);
+      expect(stored?.agents).toEqual([]);
+    });
+
+    it('без подключённого порта политики approve работает, но роли не активируются', async () => {
+      const app = createTestApp();
+
+      await app.request('/api/v2/packs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(installBody(ACTIVATION_MANIFEST)),
+      });
+      const approve = await app.request('/api/v2/packs/clinic-pack/approve', { method: 'POST' });
+      expect(approve.status).toBe(200);
+      const approved: any = await approve.json();
+      expect(approved.authorityActivation).toBeUndefined();
     });
   });
 });
