@@ -29,6 +29,7 @@ import {
   isSessionExportPath,
   createSessionRoutes as createCoreSessionRoutes,
   stripSessionSecrets,
+  resolveUserPrincipal,
 } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
@@ -452,7 +453,13 @@ export function createSessionRoutes(
       metadata: { type: 'debug_system_message', reason: 'manual', stream_id: streamId },
     };
 
-    const result = await enqueueUserMessage(sessionManager, eventBus, session.id, sysMsg, queueManager, processMessage);
+    // ADR-106 Ф4: принципал инициатора (ввод от пользователя, не системный ход).
+    const turnPrincipal = resolveUserPrincipal(user.id);
+    const result = await enqueueUserMessage(
+      sessionManager, eventBus, session.id, sysMsg, queueManager, processMessage,
+      undefined,
+      turnPrincipal ? { principal: turnPrincipal } : undefined,
+    );
     if (!result) {
       return c.json({ error: { code: 'QUEUE_FULL', message: 'Queue is full' } }, 429);
     }

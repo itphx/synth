@@ -14,6 +14,7 @@ import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorT
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import { requireScope, checkServiceProjectProjection } from '../service-scope.js';
+import { resolveUserPrincipal } from '../../engine/authority/principal.js';
 import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../service-scope.js';
 import { createSessionAccessGuard, createSessionAccessPredicate } from '../session-access-guard.js';
 import type { SessionAccessKind } from '../session-access-guard.js';
@@ -775,6 +776,10 @@ export function createSessionRoutes(
 
     const streamId = body.messageId || generateStreamId();
     const author = await resolveAuthor(c);
+    // ADR-106 Ф4: принципал ввода фиксируется **при приёме ввода** (здесь —
+    // на постановке в очередь). Не аутентифицирован → не задан → fallback
+    // на владельца сессии (совместимость).
+    const turnPrincipal = resolveUserPrincipal(await resolveUserId(c));
 
     const message: Message = {
       id: promptMessageId === 'stream' ? streamId : generateStreamId(),
@@ -803,7 +808,7 @@ export function createSessionRoutes(
       const steerResult = await enqueueSteerMessage(
         sessionManager, eventBus, sessionId, message, MAX_STEER_INJECTIONS_PER_TURN,
         (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
-        { interrupt: interruptMode },
+        { interrupt: interruptMode, ...(turnPrincipal ? { principal: turnPrincipal } : {}) },
       );
       if (!steerResult.accepted) {
         return c.json({
@@ -835,6 +840,7 @@ export function createSessionRoutes(
     const result = await enqueueUserMessage(
       sessionManager, eventBus, sessionId, message, queueManager, processMessage,
       (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
+      turnPrincipal ? { principal: turnPrincipal } : undefined,
     );
 
     if (!result) {
@@ -1052,7 +1058,14 @@ export function createSessionRoutes(
       metadata: { type: 'summarization_request', reason: 'manual', stream_id: streamId },
     };
 
-    const result = await enqueueUserMessage(sessionManager, eventBus, session.id, sysMsg, queueManager, processMessage);
+    // ADR-106 Ф4: принципал инициатора (ручная суммаризация — ввод от
+    // пользователя, а не системный ход).
+    const summarizerPrincipal = resolveUserPrincipal(await resolveUserId(c));
+    const result = await enqueueUserMessage(
+      sessionManager, eventBus, session.id, sysMsg, queueManager, processMessage,
+      undefined,
+      summarizerPrincipal ? { principal: summarizerPrincipal } : undefined,
+    );
     if (!result) {
       return c.json({ error: { code: 'QUEUE_FULL', message: 'Queue is full' } }, 429);
     }

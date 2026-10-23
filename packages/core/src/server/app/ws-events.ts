@@ -14,6 +14,7 @@ import type { LocalAuthKit } from '../../auth/local.js';
 import { isRemoteRef, toLocalId } from '../../remote/aggregate.js';
 import { extractChildSessionId, extractCreatedSession } from '../../events/child-session.js';
 import { parsePermissionPrincipal, type ApprovalRegistry } from '../../engine/permission/approval.js';
+import { resolveUserPrincipal } from '../../engine/authority/principal.js';
 import { INSTANCE_EVENT_CHANNEL } from '../../events/bus.js';
 import { LOCAL_USER_ID } from '../local-owner.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
@@ -395,6 +396,10 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
                   metadata: { stream_id: streamId },
                 };
 
+                // ADR-106 Ф4: принципал ввода фиксируется **при приёме ввода**
+                // (постановка в очередь) — не пересчитывается при исполнении.
+                const turnPrincipal = resolveUserPrincipal(user.id);
+
                 // ADR-104: `steer` — вмешательство в активный ход, `interrupt` —
                 // прерывание текущей генерации (ход НЕ завершается). Если хода
                 // нет — обычная очередь (сообщение начнёт новый ход).
@@ -403,7 +408,12 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
                   const steerResult = await enqueueSteerMessage(
                     sessionManager, eventBus, sid, message, MAX_STEER_INJECTIONS_PER_TURN,
                     (msgSid, steerMsg) => orchestrator.obfuscateUserMessageForHistory(msgSid, steerMsg),
-                    { interrupt: interruptMode },
+                    // ADR-106 Ф4: принципал ввода фиксируется при постановке в
+                    // очередь; инъекция не создаёт новый ход (ADR-104).
+                    {
+                      interrupt: interruptMode,
+                      ...(turnPrincipal ? { principal: turnPrincipal } : {}),
+                    },
                   );
                   if (!steerResult.accepted) {
                     ws.send(JSON.stringify({
@@ -439,6 +449,7 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
                 const result = await enqueueUserMessage(
                   sessionManager, eventBus, sid, message, queueManager, processMessage,
                   (msgSid, msg) => orchestrator.obfuscateUserMessageForHistory(msgSid, msg),
+                  turnPrincipal ? { principal: turnPrincipal } : undefined,
                 );
 
                 if (!result) {

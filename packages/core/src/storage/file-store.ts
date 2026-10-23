@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Session, Message, SessionStatus, SessionSettings, Part, SessionOrigin, SessionReference, PromptState, PromptMeta } from '@itphx/synth-shared';
+import type { Session, Message, SessionStatus, SessionSettings, Part, SessionOrigin, SessionReference, PromptState, PromptMeta, AuthorityPrincipal } from '@itphx/synth-shared';
 import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
 import type { SessionFilter, SessionRepository } from './ports/session-repository.js';
 import { findMessageIndex, prepareMessageForAppend, prepareMessageForUpdate } from './message-write.js';
@@ -49,6 +49,12 @@ interface SerializedMessage {
   source?: string;
   author?: string;
   agent_role?: string;
+  /**
+   * ADR-106 Ф4: принципал ввода (кто отправил сообщение). Хранится вместе с
+   * сообщением, чтобы автор хода не пересчитывался при исполнении (очередь
+   * читается с диска — без сохранения принципал терялся бы).
+   */
+  principal?: AuthorityPrincipal;
   metadata?: Record<string, unknown>;
   /** ADR-070 §2.4: предсказание/валидация prompt-cache (camelCase внутри). */
   prompt_meta?: PromptMeta;
@@ -179,6 +185,7 @@ function serializeMessage(msg: Message): SerializedMessage {
     source: msg.source,
     author: msg.author,
     agent_role: msg.agentRole,
+    principal: msg.principal,
     metadata: msg.metadata,
     prompt_meta: msg.promptMeta,
     summary_of: msg.summaryOf,
@@ -253,6 +260,8 @@ function deserializeMessage(data: SerializedMessage): Message {
     source: data.source as Message['source'],
     author: data.author,
     agentRole: data.agent_role,
+    // ADR-106 Ф4: принципал ввода — legacy-сообщения без поля → undefined.
+    principal: data.principal,
     metadata: data.metadata,
     promptMeta: data.prompt_meta,
     summaryOf: data.summary_of,

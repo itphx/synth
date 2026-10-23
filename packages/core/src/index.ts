@@ -448,6 +448,20 @@ export type {
   AuthorityGuardOptions,
 } from './engine/authority/index.js';
 
+// ADR-106 Ф4: принципал хода (фиксируется при приёме ввода).
+export {
+  principalRef,
+  parsePrincipalRef,
+  samePrincipal,
+  sessionOwnerPrincipal,
+  resolveTurnPrincipal,
+  resolveUserPrincipal,
+  userPrincipal,
+  agentPrincipal,
+  eventPrincipal,
+  schedulerPrincipal,
+} from './engine/authority/principal.js';
+
 export {
   loadProtectedPaths,
   checkPath,
