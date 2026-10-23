@@ -61,6 +61,13 @@
 > удалённой реализации** (реальный HTTP-процесс-заглушка на `127.0.0.1:0`, `loaders.remote`,
 > 23 проверки × 2 транспорта). Инструменты удалённого плагина описываются в `capabilities`, а не
 > `apply()`; полное имя `plugin_<ns>_<tool>` по-прежнему составляет хост.
+> **Обновлено (Ф7):** 2026-10-23 — **Ф7 выполнена** (ветка `feature/plugin-f7`): закрыт гибридный контур —
+> серверная политика `plugins.hybrid` (`mode: off|allowlist`, `allow: string[]`), дискавери (сигнал
+> `plugins` в `GET /auth/oidc-meta` + полный allow-list в `GET /api/v2/settings/plugins`), **Уровень 1**
+> (cooperative: гейт активации `plugin.hybrid_not_allowed`, маркер «не проверен сервером») и **Уровень 2**
+> (server-scoped токен `POST /api/v2/plugins/token` с привязкой `plugin_id`, заголовок
+> `X-Synth-Plugin-Id`, scope `plugins:invoke`, серверная проверка allow-list). Уровень 3 (attestation) —
+> вне объёма. Перенос документа в ADR-090 — отдельная задача.
 > **Источник:** вынесено из зонтика [ADR-086](./adr-086-extensibility-plugins-editions.md) — Extension API
 > проектировался там как первый из четырёх столпов (плагины, editions, contribution flow, add-on'ы);
 > здесь он выделен в отдельный документ и детализирован.
@@ -1114,8 +1121,42 @@ env перебивает `config.yaml` по ADR-023, и путь из конфи
 как в прежней редакции: **Уровень 1 — cooperative** (allow-list как политика соответствия, 🔴),
 **Уровень 2 — server-scoped токены** (плагин получает доступ к серверу только с `plugin_id`-scoped
 токеном; сервер применяет политику, 🟢), **Уровень 3 — attestation** (будущее усиление).
-**Уровень 2 — вне первой волны** (Ф7): `plugin_id`-scope поверх service-key
-([ADR-052](./adr-052-public-api-platform.md)) — открытый вопрос (§14).
+
+**Форма политики (Ф7, реализовано).** Секция `plugins.hybrid` в конфиге инстанса и в runtime-настройках
+(`GET/PUT/DELETE /api/v2/settings/plugins`, приоритет runtime > config > defaults; env
+`SYNTH_PLUGINS_HYBRID_MODE`):
+
+- `mode: 'off' | 'allowlist'` (дефолт `off`) — **`off` означает «сервер не ограничивает»**: ни
+  клиентский гейт активации, ни проверка allow-list по server-scoped токену не применяются;
+- `allow: string[]` — имена плагинов, которым сервер разрешает работать; при `mode: 'allowlist'` и
+  пустом списке **не разрешён никто**.
+
+**Дискавери (Ф7).** Две поверхности, по разу открытости:
+
+- **публичный сигнал** — `GET /auth/oidc-meta` → `plugins: { enabled, mode }`. Списка имён в нём
+  **нет** (список не публичен); старый сервер без поля → клиент трактует состояние как «неизвестно»;
+- **полная политика** — блок `hybrid` (`{ mode, allow }`) в ответе `GET /api/v2/settings/plugins`
+  (аутентифицированный роут). Список имён отдаётся **только** при `mode: 'allowlist'`; в режиме `off`
+  ответ — `{ mode: 'off', allow: [] }`.
+
+**Уровень 1 — cooperative (🔴).** Локальный core в гибриде **перед активацией** сверяется с
+серверной политикой: режим `allowlist`, а плагина нет в `allow` → активация отклоняется с
+`plugin.hybrid_not_allowed` (HTTP 403) и записью в журнал аудита плагинов. Сервер недоступен или
+политика неизвестна → локальный плагин **работает**, но помечается «не проверен сервером»
+(`serverPolicy: 'unverified'` в API и бейджем в UI). Гейт относится к **активации**, а не к
+установке; ключ проверки — имя плагина. Уровень 1 — политика соответствия, а не принуждение:
+исполняемый код на клиенте остаётся под ответственностью владельца локального контура.
+
+**Уровень 2 — server-scoped токены (🟢).** Сервер выдаёт плагину **service-key с привязкой
+`plugin_id`** (`POST /api/v2/plugins/token`, ADMIN в managed): секрет отдаётся единожды, at-rest —
+sha256, формат `synth_svc_…`. Такой ключ принимается сервером **только** если запрос несёт заголовок
+`X-Synth-Plugin-Id` с тем же значением, у ключа есть scope `plugins:invoke`, а `plugin_id` входит в
+серверный allow-list (при `mode: 'allowlist'`). Правило **fail-closed**: ключ с привязкой без
+корректного заголовка отвергается всегда; проверка живёт на границе (после резолва service-креда),
+поэтому действует на **все** серверные API, а не только на плагинные роуты. Отказы —
+`403 PLUGIN_ID_MISMATCH` / `SCOPE_REQUIRED` / `PLUGIN_NOT_ALLOWED`.
+
+**Уровень 3 — attestation** — вне объёма (PROP-073, клиентская целостность).
 
 ## API / CLI / UI
 
@@ -1279,7 +1320,7 @@ content-hash и активности; признак **«управляемый�
 | **Ф4 — два режима исполнения** — ✅ **выполнено 2026-10-23** (ветка `feature/plugin-points`): `inline` (Ф4а) + `out-of-process` (Ф4б-1/2/3 — протокол, клиент/загрузчик, процесс и токен, выбор транспорта, точка `tools`); контрактный suite зелёный на **обоих** транспортах | `inline` (по умолчанию) + `out-of-process`: wire-протокол (`PLUGIN_PROTOCOL_VERSION = 1`, `POST /invoke`, `GET /capabilities`, `GET /health`), контракт протокола — в `@itphx/synth-shared` (отдельный пакет не создаётся), bearer-токен из файла, `127.0.0.1`, fail-closed, `failMode`/деградация. **Сделано (Ф4а):** `inline`-загрузчик `createInlinePluginLoader` (`engine/plugins/inline-loader.ts`): containment по `realpath`, `.js`/`.mjs`, предел 8 МиБ, cache-busting `?v=<hash\|mtime>`, три формы модуля, новый код `plugin.module_invalid`; экспорт из `engine/plugins/index.ts` и `src/index.ts`. **Автоподключения в `server/app.ts`/`main.ts`/`backend/app/deps.ts` нет** — установка/активация и сканирование `plugins.lock.json` при старте появятся в Ф5 | тест: эталонный бандл (реальные `mkdtemp` + ESM-файл) активируется **через `PluginHost`** при `executionEnabled: true`, блок в `PromptBlockRegistry`, аудит `activate`; `export const x`/`export default 42` → `plugin.module_invalid`; бросок в модуле → `plugin.loader_unavailable`; `../evil.js`, абсолютный путь, симлинк наружу, `.ts`, превышение размера → отказ; перезапись бандла → новое содержимое — **выполнено (21 тест), см. §«Статус реализации в коде (Ф4а)»**. **Сделано (Ф4б-1):** контракт `plugin-protocol.ts` в `shared` (версия/DTO/коды/`checkPluginCapabilities`), `RemotePluginClient` (loopback-only, Bearer, `AbortSignal.timeout`, токен не утекает в `message`) и `createRemotePluginLoader` (`mode: 'remote'\|'both'`, `descriptor.remote`, прокси-провайдеры `promptBlocks`/`llmFilters`); тесты — **17 shared + 20 client + 17 loader**, включая 401 без утечки токена, чужую версию протокола, закрытый порт. **Сделано (Ф4б-2):** `PluginProcessManager` (spawn без shell, ready-строка + `/health`, `SIGTERM`→`SIGKILL`, токен-файл `0600`), выбор транспорта в шаге `import`, `mode`/`remote_entry` в lock. **Сделано (Ф4б-3):** точка `tools` по протоколу (`points.tools[]`, вызов `{parameters, context}` → `{content, isError?}`, JSON-Schema из протокола) и контрактный suite на удалённой реализации (23 проверки × 2 транспорта); критерии «неверный токен → 401, недоступный процесс → деградация по `failMode`» покрыты на уровне клиента/загрузчика — **см. §«Статус реализации в коде (Ф4б, часть 3)»** |
 | **Ф5 — install/activate: сервис + runtime + API + CLI; managed deploy-time** — ✅ **выполнено 2026-10-23**: `PluginInstaller` (Ф5а), `PluginRuntime` + старт-активация (Ф5б-1), HTTP API + RBAC-матрица (Ф5б-2), CLI `synth plugin *` (Ф5б-3), источники установки + `update`/`rollback` (Д1–Д2), **managed deploy-time** (Ф5в: образ/PVC, установка при старте, неприкосновенность management-плагинов) | Раскладка `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, установка из `local`/`npm`/`builtin`/`catalog`, CLI `synth plugin *` (в `main.ts` **и** `packages/synth/src/cli.ts`), `/api/v2/plugins*` + `/api/v2/settings/plugins`, матрица RBAC, managed deploy-time (бандлы в образе/PVC) | тест: install → scan → activate → disable → remove проходит по API и по CLI; `synth plugin list --json` совпадает с API; **негативная** матрица RBAC (чужой/не-ADMIN → 403) и **положительная** (ADMIN → 200); managed: runtime-install при `deny` → 403 |
 | **Ф6 — UI** — ✅ **выполнено 2026-10-23** (ветка `feature/plugin-points`, worktree `wt-plugin-points`, коммитов нет) | Раздел «Плагины»: список, карточка (trust/scan/hash/version/`provides`/режим), тумблеры enable/disable, install/update/remove, статус скана | тест UI: карточка показывает trust/scan/hash; переключатель enable вызывает API и обновляет список; i18n-паритет `ru.ts`/`en.ts` зелёный (`parity.test.ts`) — **выполнено** (`PluginsSettings.test.tsx`, 18 тестов) |
-| **Ф7 — hybrid** | Allow-list сервера, форма политики, discovery (`/api/v2/settings/plugins` + сигнал в `/auth/oidc-meta`), server-scoped токены с `plugin_id`-scope (Уровень 2) | тест: плагин вне allow-list не активируется в hybrid; токен с чужим `plugin_id` отвергается сервером; локальный плагин без сервера — cooperative (помечено в UI/доках) |
+| **Ф7 — hybrid** — ✅ **выполнено 2026-10-23** (ветка `feature/plugin-f7`) | Allow-list сервера, форма политики, discovery (`/api/v2/settings/plugins` + сигнал в `/auth/oidc-meta`), server-scoped токены с `plugin_id`-scope (Уровень 2) | тест: плагин вне allow-list не активируется в hybrid; токен с чужим `plugin_id` отвергается сервером; локальный плагин без сервера — cooperative (помечено в UI/доках) — **выполнено**. **Сделано:** секция `plugins.hybrid` (`mode: off\|allowlist`, `allow: string[]`) в конфиге + runtime-настройках (env `SYNTH_PLUGINS_HYBRID_MODE`); контракт политики в `shared` (`types/plugin-hybrid.ts`: сигнал, статусы `unverified\|allowed\|denied`, заголовок `X-Synth-Plugin-Id`, scope `plugins:invoke`); дискавери — публичный сигнал `plugins: {enabled, mode}` в `GET /auth/oidc-meta` (без списка имён) и полный allow-list в блоке `hybrid` ответа `GET /api/v2/settings/plugins`; **Уровень 1** — гейт активации на клиенте (`plugin.hybrid_not_allowed`, HTTP 403) и маркер «не проверен сервером» (cooperative) в API/UI; **Уровень 2** — `POST /api/v2/plugins/token` (service-key с привязкой `plugin_id`, секрет единожды, at-rest sha256) и серверная проверка привязки на **всех** API (`PLUGIN_ID_MISMATCH` / `SCOPE_REQUIRED` / `PLUGIN_NOT_ALLOWED`, fail-closed); привязка `plugin_id` переживает перенос между backend'ами (миграция `013_service_key_plugin_id`). Уровень 3 (attestation) — вне объёма |
 
 ### Статус реализации в коде (Ф0, 2026-10-22)
 
@@ -2460,6 +2501,35 @@ managedReadonly,deployVolume{enabled,existingClaim,mountPath,readOnly}}` — м�
 - Переустановка management-плагина новым содержимым при той же версии возможна (content-hash разошёлся);
   версия в lock не бампается — решение о требовании bump версии остаётся за владельцем.
 
+### Статус реализации в коде (Ф7 — 2026-10-23)
+
+**Гибридный контур слоя плагинов** — PROP-090 §«Гибрид». Ветка `feature/plugin-f7`.
+
+**Файлы.**
+
+| Файл | Что сделано |
+|---|---|
+| `packages/shared/src/types/plugin-hybrid.ts` | контракт политики: `PLUGIN_HYBRID_MODES` (`off`/`allowlist`), публичный сигнал `{enabled, mode}`, политика `{mode, allow}`, статусы `unverified`/`allowed`/`denied`, `PLUGIN_ID_HEADER` (`X-Synth-Plugin-Id`), `PLUGIN_INVOKE_SCOPE` (`plugins:invoke`), `evaluatePluginServerPolicy`/`parsePluginPolicySignal` |
+| `packages/shared/src/config/{types,defaults,env-overrides}.ts` | секция `plugins.hybrid` (`mode`, `allow`) в Zod-схеме, дефолты (`off`/`[]`) и env `SYNTH_PLUGINS_HYBRID_MODE` |
+| `packages/core/src/engine/plugins/hybrid-policy.ts` | `resolvePluginServerPolicy` (эффективная политика инстанса), `describePluginServerPolicy` (представление для API: список — только при `allowlist`), `pluginServerPolicyStatus`, `policyFromSignal` |
+| `packages/core/src/engine/plugins/plugin-host.ts` | опция `serverPolicy`; гейт активации (шаг `policy`): `allowlist` без плагина в списке → `plugin.hybrid_not_allowed`; политика неизвестна → активация проходит (cooperative); `serverPolicyStatus()`, `recordTokenIssued()` (аудит `token`) |
+| `packages/core/src/engine/plugins/runtime.ts` | dep `serverPolicy`; `serverPolicy` в `PluginRuntimeEntry` (маркер для API/UI) |
+| `packages/core/src/server/service-scope.ts` | `checkPluginTokenBinding`/`requirePluginTokenBinding` + `PLUGIN_TOKEN_ERROR_CODES` — enforcement привязки `plugin_id` (fail-closed) |
+| `packages/core/src/server/routes/plugins.ts` | `POST /api/v2/plugins/token` (выдача server-scoped токена: ADMIN в managed, `requireAuth` в core; 201/400/403/404/500) и блок `hybrid` в `GET /api/v2/settings/plugins` |
+| `packages/core/src/server/app.ts`, `server/app/deps.ts`, `server/app/mount-routes.ts` | guard привязки на `/api/*` (после `requireAuth`), резолвер серверной политики в `PluginRuntime`, `serviceKeys`/`serverPolicy` в фабрике роутов |
+| `packages/core/src/remote/connection.ts` | приём сигнала `plugins` из `/auth/oidc-meta`; `refreshPluginPolicy()` — полный allow-list из `GET /api/v2/settings/plugins` (кэш с TTL); сброс кэша при `disconnect()` |
+| `packages/core/src/storage/service-api-key-store.ts`, `storage/ports/service-key-repository.ts`, `storage/memory/events.ts` | внутренняя привязка `pluginId` (файловое/in-memory), тип `CreatePluginServiceKeyInput`, `ServiceKeyCredential.pluginId` |
+| `packages/storage-postgres/src/migrations/013-service-key-plugin-id.ts`, `ports/content.ts` | колонка `plugin_id` в `service_keys` + прокидывание привязки (create/import/resolve/экспорт) |
+| `packages/backend/src/routes/auth.ts` | сигнал `plugins: {enabled, mode}` в `GET /auth/oidc-meta` (без списка имён; отдаётся и при выключенном OIDC) |
+| `packages/backend/src/auth/plugin-scope.ts` | guard `requirePluginTokenBinding` — делегирует core-проверке, локализует отказы (403 `PLUGIN_ID_MISMATCH`/`SCOPE_REQUIRED`/`PLUGIN_NOT_ALLOWED`) |
+| `packages/backend/src/app.ts`, `app/mount-routes.ts` | guard на `/api/v2/*` (после резолва service-креда, до роутов); `POST /api/v2/plugins/token` — ADMIN; реестр service-key и живая политика в фабрике |
+| `packages/ui/src/lib/api/plugins.ts`, `lib/api/synthApi.ts`, `components/settings/PluginsSettings.tsx` | тип `PluginServerPolicyStatus` + поле `serverPolicy` в `PluginRuntimeEntry`; бейдж статуса серверной политики в карточке плагина и пояснение про cooperative-режим |
+| `packages/ui/src/lib/i18n/messages/{ru,en}.ts` | ключи `plugins.serverPolicy.*` — паритет |
+
+**Семантика режимов.** `mode: 'off'` — сервер **не ограничивает** плагины (ни клиентский гейт, ни
+allow-list по токену); `mode: 'allowlist'` — ограничение действует (пустой список — не разрешён
+никто). Привязка заголовка `X-Synth-Plugin-Id` и требование scope `plugins:invoke` действуют всегда.
+
 ### Статус реализации в коде (Ф6 — 2026-10-23)
 
 **UI-раздел «Плагины»** — админ-секция настроек (PROP-090 §«UI»). Ветка `feature/plugin-points`,
@@ -2587,11 +2657,26 @@ worktree `wt-plugin-points`, коммитов нет.
    Пока — ручной перезапуск генерации (известное ограничение каталога); при изменении контракта
    `provides`/`trust` синхронизация обязательна.
 5. **Нужен ли `plugin_id`-scope поверх service-key** ([ADR-052](./adr-052-public-api-platform.md)) —
-   точная механика выдачи/валидации для Уровня 2 (Ф7).
+   точная механика выдачи/валидации для Уровня 2 (Ф7). **Закрыто Ф7 (2026-10-23): да, нужен, и
+   реализован поверх модели service-key** — отдельный публичный класс ключей не заводили (публичный
+   контракт `/api/v2/service-keys` не расширен). Механика: привязка `plugin_id` живёт во **внутренней**
+   модели записи (`ServiceApiKeyRecord.pluginId` + `ServiceKeyCredential.pluginId`; файловое,
+   in-memory и PostgreSQL — миграция `013_service_key_plugin_id`), выдача — отдельный роут
+   `POST /api/v2/plugins/token` (ADMIN в managed; секрет единожды, at-rest sha256, формат
+   `synth_svc_…`, scope `plugins:invoke` добавляется всегда), проверка на сервере — заголовок
+   `X-Synth-Plugin-Id` должен совпадать с `plugin_id` ключа (иначе 403 `PLUGIN_ID_MISMATCH`), scope
+   `plugins:invoke` обязателен (иначе 403 `SCOPE_REQUIRED`), `plugin_id` должен входить в серверный
+   allow-list (при `mode: 'allowlist'`; иначе 403 `PLUGIN_NOT_ALLOWED`). Проверка — на границе, после
+   резолва service-креда, поэтому действует на все серверные API; правило **fail-closed**.
 6. **Транспортная обвязка `out-of-process`.** Контракт протокола живёт в `@itphx/synth-shared` (§7),
    но где лежит реализация клиента/сервера: в core рядом с `execution/remote.ts`
    (`packages/core/src/execution/remote.ts`) или отдельным пакетом по образцу
    `@itphx/synth-executor`? От ответа зависит, кто собирает `out-of-process`-плагин.
+   **Закрыто Ф4б (2026-10-23): отдельным пакетом не заводили** — обвязка в core
+   (`engine/plugins/remote/*`: клиент `RemotePluginClient` (loopback-only, Bearer), загрузчик
+   `createRemotePluginLoader` и менеджер процесса `PluginProcessManager`; контракт — в `shared`
+   (`types/plugin-protocol.ts`). Сборку `out-of-process`-плагина делает **ядро** (хост), отдельный
+   npm-пакет плагинов не предусмотрен.
 7. **Режим `plugins.scan: 'disabled'` — подтверждение владельца.** **Частично закрыто Ф3а:** вариант
    «запретить `disabled` при `plugins.executionEnabled: true`» **реализован** — fail-closed, отказ
    `plugin.scan_disabled_with_execution` (шаг `trust`, до скана). Без исполнения кода поведение
@@ -2701,3 +2786,4 @@ worktree `wt-plugin-points`, коммитов нет.
 - 2026-10-23 — **Ф5в выполнен, Ф5 закрыта полностью** (ветка `feature/plugin-points`): **managed deploy-time** — конфиг `plugins.deployDir`/`plugins.deployTrust`/`plugins.managedReadonly` (+ env-оверрайды), модуль `engine/plugins/deploy.ts` (`listDeployPlugins`: битый манифест → запись пропущена с предупреждением), `PluginRuntime.installDeployPlugins()` (те же гейты, что у обычной установки; `source: 'deploy'`; повтор → `skipped`; ошибка одного бандла не ломает остальные и старт), порядок в `main.ts` обоих режимов: установка → активация. **Неприкосновенность** management-плагинов: `uninstall`/`update` → отказ `plugin.managed_readonly` (**28** кодов), API → 403, CLI → код 1. Образ: `docker/Dockerfile.backend` копирует `docker/plugins/` в `/opt/synth/plugins` + `ENV SYNTH_PLUGINS_DEPLOY_DIR`; чарт: `backend.plugins.*` (deployDir/deployTrust/managedReadonly/deployVolume) — дефолтный рендер не меняется. Тесты: `deploy.test.ts` (7), `installer.test.ts` (+4), routes (+2), CLI (+1), `helm lint`/`helm template` — ожидаемо.
 - 2026-10-23 — **Ф6 выполнена, слой плагинов закрыт полностью** (ветка `feature/plugin-points`, worktree `wt-plugin-points`): **UI-раздел «Плагины»** — домен `lib/api/plugins.ts` (`pluginsApi`: жизненный цикл + `/settings/plugins`; локальные DTO, ошибки с `status`/`code`), barrel `synthApi` (304 → 316 методов, контрактный тест), компонент `PluginsSettings.tsx` (список с бейджами версии/режима/доверия/вердикта скана/хеша/активности и признаком «управляемый»; «Включить»/«Выключить», «Подтвердить» для `202`, «Удалить» через `confirm()`, «Обновить», «Откатить»; установка из источника с пином `sha256` и выбором доверия, `403 LOCAL_INSTALL_DISABLED` — текстом ответа; политика слоя через `GET/PUT/DELETE /settings/plugins` с баннером `restartRequired` и кнопкой перезапуска), страница `plugins` в `SettingsModal`, категория и записи поиска в `settings-catalog`, иконка `plug`, ключи `plugins.*`/`settings.category.plugins`/`settings.help.plugins.*` в ru/en. Тесты: `PluginsSettings.test.tsx` (18), обновлён `settings-catalog.test.ts`, `parity.test.ts` и `synthApi.contract.test.ts` — зелёные. Остаток и вопросы к API (`previousVersion?` в списочном DTO, ленивый detail с `provides`/`contracts`/`host`) — в разделе «Статус реализации в коде (Ф6)».
 - 2026-10-23 — **авторская документация** (ветка `feature/plugin-points`, worktree `wt-plugin-points`): добавлено руководство автора плагина — `docs/PLUGINS.md` (быстрый старт с полным примером манифеста и бандла, справочник `synth.pack`, три точки расширения с контрактами и примерами, два режима исполнения, bundle-only и сканер, доверие/install-policy, контрактный suite и рецепт интеграционного теста, установка/обновление, версионирование контракта, справочник кодов `plugin.*`/`plugin_filter.*`, публикация и чек-лист). Документ — практическое дополнение к настоящему канону; ссылка на него добавлена в шапку, в `docs/MAINTENANCE.md` §«Плагины» и в журнал задач.
+- 2026-10-23 — **Ф7 выполнена, слой плагинов закрыт полностью** (ветка `feature/plugin-f7`): **гибридный контур** — секция `plugins.hybrid` (`mode: off|allowlist`, `allow: string[]`) в конфиге и runtime-настройках (env `SYNTH_PLUGINS_HYBRID_MODE`); контракт политики в `shared` (`types/plugin-hybrid.ts`: публичный сигнал `{enabled, mode}`, политика `{mode, allow}`, статусы `unverified|allowed|denied`, заголовок `X-Synth-Plugin-Id`, scope `plugins:invoke`). **Дискавери:** публичный сигнал `plugins` в `GET /auth/oidc-meta` (списка имён нет) и полный allow-list в блоке `hybrid` ответа `GET /api/v2/settings/plugins` (список — только при `allowlist`; клиент берёт его аутентифицированным запросом, кэш с TTL). **Уровень 1 (cooperative):** гейт активации в `PluginHost` (`plugin.hybrid_not_allowed`, HTTP 403, запись в журнал аудита) и маркер «не проверен сервером» (`serverPolicy` в API, бейдж в UI). **Уровень 2 (server-scoped токены):** `POST /api/v2/plugins/token` (service-key с внутренней привязкой `plugin_id`; секрет единожды, at-rest sha256, формат `synth_svc_…`; scope `plugins:invoke` добавляется всегда) и серверная проверка привязки на границе (заголовок `X-Synth-Plugin-Id` должен совпадать, scope обязателен, `plugin_id` — в серверном allow-list при `mode: 'allowlist'`; отказы 403 `PLUGIN_ID_MISMATCH`/`SCOPE_REQUIRED`/`PLUGIN_NOT_ALLOWED`, fail-closed). Привязка хранится в файловом/in-memory/PostgreSQL-реестре (миграция `013_service_key_plugin_id`) и переживает перенос между backend'ами; публичный контракт `/api/v2/service-keys` не расширен. Новый код отказа **`plugin.hybrid_not_allowed`** (`PLUGIN_AUDIT_REASONS` 28 → 29) и действие аудита **`token`**. Тесты: `plugin-host.test.ts` (+5), `routes/plugins.test.ts` (+7), `connection.test.ts` (+7), `contract/secrets.ts` (+2), backend `plugin-scope.test.ts` (8), `routes/auth.test.ts` (+3), `plugins-rbac-matrix.test.ts` (перепись маршрутов). Остаток: перенос документа в ADR-090 — отдельная задача; Уровень 3 (attestation) — вне объёма.

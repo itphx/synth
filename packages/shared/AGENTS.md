@@ -89,6 +89,12 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `SYNTH_PLUGINS_*` (`enabled`/`runtimeInstall`/`trustFloor`/`scan`/`exactHostExceptions`/
   `promptBlockMaxChars`/`llmFilterTimeoutMs`/`executionEnabled`) — списки остаются в `config.yaml`. Runtime-override в core —
   `RuntimeSettings.plugins` + `mergePluginsConfig` (приоритет runtime > config > defaults).
+  Ф7 (PROP-090): вложенная секция `plugins.hybrid` (`pluginsHybridConfigSchema`: `mode`
+  (`off`|`allowlist`, default `off` — сервер не ограничивает) и `allow` (список имён, default `[]`);
+  env-оверрайд режима — `SYNTH_PLUGINS_HYBRID_MODE`, список остаётся в `config.yaml`) и контракт
+  гибридной политики — `types/plugin-hybrid.ts` (публичный сигнал `{enabled, mode}`, политика
+  `{mode, allow}`, статусы `unverified|allowed|denied`, `PLUGIN_ID_HEADER` = `X-Synth-Plugin-Id`,
+  `PLUGIN_INVOKE_SCOPE` = `plugins:invoke`, `evaluatePluginServerPolicy`/`parsePluginPolicySignal`).
 - **Env-оверрайды скалярных ключей секций** `events`/`scheduler`/`webhooks`/`decision`/`analytics`/`metrics`/`plugins` —
   реестр `ENV_OVERRIDES` (`src/config/env-overrides.ts`), применяется в `loadConfig`;
   имя `SYNTH_<SECTION>_<KEY>` (camelCase→SNAKE_CASE), невалидное значение → warn + игнор;
@@ -256,15 +262,16 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   образ доверен как образ; ниже `trustFloor` → `plugin.trust_below_floor`), `managedReadonly`
   (management-плагин нельзя снять через API/CLI, дефолт `true`); env-оверрайды
   `SYNTH_PLUGINS_DEPLOY_DIR`/`SYNTH_PLUGINS_DEPLOY_TRUST`/`SYNTH_PLUGINS_MANAGED_READONLY`.
-  Новый код отказа `plugin.managed_readonly` (**28** кодов).
+  Новый код отказа `plugin.managed_readonly` (**28** кодов на тот момент; Ф7 добавил
+  `plugin.hybrid_not_allowed` — **29**).
 - PROP-090 §9: **журнал аудита плагинов** — `types/plugin-audit.ts` (re-export из `types`):
   `PluginAuditEntry` (`id` `pa_<uuid>`/`ts`/`actor`/`scope: 'plugin'`/`action`/`plugin`/`version`/
   `trustLevel?`/`scanVerdict?`/`scanFindings?`/`scanPerformed?`/`contentHash?`/`mode?`/`outcome`/
   `reason?`/`source?`) и перечни `PLUGIN_AUDIT_ACTIONS` (`install`/`activate`/`deactivate`/`uninstall`/
   `scan`/`filter` — `filter` добавлено Ф3б: события решений фильтров LLM-вызовов, `install`/`uninstall` —
-  Ф5а: установка и снятие плагина `PluginInstaller`),
+  Ф5а: установка и снятие плагина `PluginInstaller`, `token` — Ф7: выдача server-scoped токена плагину),
   `PLUGIN_AUDIT_OUTCOMES` (`ok`/`rejected`), `PLUGIN_SCAN_VERDICTS` (`safe`/`caution`/`dangerous`),
-  `PLUGIN_AUDIT_REASONS` — **закрытый** список **28** кодов отказа (по одному на гейт пайплайна
+  `PLUGIN_AUDIT_REASONS` — **закрытый** список **29** кодов отказа (по одному на гейт пайплайна
   активации; Д1 добавил `plugin.source_unavailable` — источник установки недоступен или не прошёл
   проверку целостности: локальный путь/архив, npm без SRI или с несовпадением, URL без pin/с
   несовпадением sha256; Ф2 добавил `plugin.scan_rejected` и `plugin.approval_required`, Ф3а —
@@ -272,7 +279,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `plugins.executionEnabled=true`), Ф3б — `plugin.provides_mismatch` (расхождение объявленных
   `provides.promptBlocks[]`/`provides.llmFilters[]` с фактическими регистрациями) и три
   канонических кода фильтров `plugin_filter.denied`/`.deny_downgraded`/`.unavailable`, Ф4а —
-  `plugin.module_invalid` (модуль загружен, но не выполнил контракт `PluginModule` — нет `apply`);
+  `plugin.module_invalid` (модуль загружен, но не выполнил контракт `PluginModule` — нет `apply`), Ф7 — `plugin.hybrid_not_allowed` (серверная allow-list гибрида запрещает активацию);
   неканонические коды хоста (`allowed`/`timeout`/`error`/`redact_unsupported`/`buffering_required`/
   `redact_invalid`) живут **только** в аудите gateway, в журнал плагинов не попадают; источник
   истины — `PluginHost`, `packages/core/src/engine/plugins/plugin-host.ts`). Журнал **отдельный**:

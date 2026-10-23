@@ -31,6 +31,16 @@ export type PluginScanVerdict = 'safe' | 'caution' | 'dangerous'
 /** Режим исполнения плагина из манифеста (`inline`/`remote`/`both`). */
 export type PluginExecutionMode = 'inline' | 'remote' | 'both'
 
+/**
+ * Статус проверки плагина сервером в гибридном режиме (PROP-090 Ф7).
+ *
+ * - `allowed` — сервер подтвердил (политика `off` либо плагин в allow-list);
+ * - `denied` — сервер запретил (плагина нет в allow-list при `allowlist`);
+ * - `unverified` — сервер недоступен или политика неизвестна: локальный плагин
+ *   работает в режиме cooperative, но сервер его не подтвердил.
+ */
+export type PluginServerPolicyStatus = 'unverified' | 'allowed' | 'denied'
+
 /** Вид источника установки (`POST /plugins/install`). */
 export type PluginInstallSourceKind = 'dir' | 'archive' | 'npm' | 'url'
 
@@ -57,6 +67,13 @@ export interface PluginRuntimeEntry {
   active: boolean
   /** Фактический режим исполнения (если активен). */
   mode?: PluginExecutionMode
+  /**
+   * Статус проверки сервером в гибридном режиме (PROP-090 Ф7).
+   *
+   * `unverified` — сервер недоступен или политика неизвестна: плагин работает
+   * в режиме cooperative (сервер его не подтвердил).
+   */
+  serverPolicy: PluginServerPolicyStatus
 }
 
 /** Ответ `GET /plugins`. */
@@ -177,6 +194,13 @@ export interface PluginsSettingsInfo {
   restartRequired: boolean
   /** Эффективные значения процесса на момент старта. */
   running: PluginsPolicyValues
+  /**
+   * Серверная политика плагинов в гибридном режиме (PROP-090 Ф7).
+   *
+   * `mode: 'off'` — сервер не ограничивает плагины; `mode: 'allowlist'` —
+   * разрешены только плагины из `allow` (список приходит только в этом режиме).
+   */
+  hybrid?: { mode: 'off' | 'allowlist'; allow: string[] }
 }
 
 /** Патч политики (`PUT /settings/plugins`) — частичный набор ключей. */

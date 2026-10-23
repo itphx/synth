@@ -26,6 +26,7 @@ import {
   type PluginInstallSourceKind,
   type PluginRuntimeEntry,
   type PluginScanVerdict,
+  type PluginServerPolicyStatus,
   type PluginsPolicyValues,
   type PluginsSettingsInfo,
   type PluginTrustLevel,
@@ -72,9 +73,21 @@ const VERDICT_BADGE_CLASS: Record<PluginScanVerdict, string> = {
   dangerous: 'bg-destructive/15 text-destructive',
 }
 
+/**
+ * Цвет бейджа серверной политики в гибридном режиме (PROP-090 Ф7).
+ *
+ * `allowed` — сервер подтвердил (тот же зелёный, что у активного плагина);
+ * `denied` — сервер запретил (красный — как у опасного вердикта скана);
+ * `unverified` — сервер не подтвердил (предупреждение: политика неизвестна).
+ */
+const SERVER_POLICY_BADGE_CLASS: Record<PluginServerPolicyStatus, string> = {
+  allowed: 'bg-status-success/15 text-status-success',
+  denied: 'bg-destructive/15 text-destructive',
+  unverified: 'bg-status-warning/15 text-status-warning',
+}
+
 /** Общий стиль бейджа (как в соседних админ-разделах). */
 const BADGE = 'shrink-0 rounded px-1.5 py-0.5 text-[0.625rem] font-medium'
-
 /** Короткий вид content-hash: 12 символов достаточно для сверки глазами. */
 export function shortHash(hash: string): string {
   return hash.length > 12 ? `${hash.slice(0, 12)}…` : hash
@@ -658,6 +671,12 @@ export function PluginsSettings() {
                     >
                       {plugin.active ? t('plugins.state.active') : t('plugins.state.inactive')}
                     </span>
+                    <span
+                      data-testid={`plugins-server-policy-${plugin.name}`}
+                      className={cn(BADGE, SERVER_POLICY_BADGE_CLASS[plugin.serverPolicy])}
+                    >
+                      {t(`plugins.serverPolicy.${plugin.serverPolicy}`)}
+                    </span>
                     {managed && (
                       <span
                         data-testid={`plugins-managed-${plugin.name}`}
@@ -694,6 +713,15 @@ export function PluginsSettings() {
                       className="text-xs text-muted-foreground break-words"
                     >
                       {t('plugins.managedHint')}
+                    </p>
+                  )}
+
+                  {plugin.serverPolicy === 'unverified' && (
+                    <p
+                      data-testid={`plugins-server-policy-hint-${plugin.name}`}
+                      className="text-xs text-muted-foreground break-words"
+                    >
+                      {t('plugins.serverPolicy.hint')}
                     </p>
                   )}
 

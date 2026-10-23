@@ -69,6 +69,7 @@ const PLUGIN = {
   installedAt: '2026-10-19T10:00:00.000Z',
   updatedAt: '2026-10-19T10:00:00.000Z',
   active: false,
+  serverPolicy: 'allowed' as const,
 }
 
 const MANAGED_PLUGIN = {
@@ -259,6 +260,28 @@ describe('PluginsSettings — список плагинов', () => {
 
     expect(byTestId(container, 'plugins-list')).toBeNull()
     expect(byTestId(container, 'plugins-empty')).toBeTruthy()
+  })
+
+  it('серверная политика гибрида: бейдж статуса, подсказка только для unverified', async () => {
+    mocks.listPlugins.mockResolvedValue([
+      { ...PLUGIN, serverPolicy: 'allowed' },
+      { ...PLUGIN, name: 'denied-plugin', serverPolicy: 'denied' },
+      { ...PLUGIN, name: 'unverified-plugin', serverPolicy: 'unverified' },
+    ])
+    const container = await renderSettings()
+
+    expect(byTestId(container, 'plugins-server-policy-demo-plugin')?.textContent).toBe(
+      'allowed by the server',
+    )
+    expect(byTestId(container, 'plugins-server-policy-denied-plugin')?.textContent).toBe(
+      'denied by the server',
+    )
+    expect(byTestId(container, 'plugins-server-policy-unverified-plugin')?.textContent).toBe(
+      'not verified by the server',
+    )
+    // Пояснение про cooperative-режим — только там, где сервер не подтвердил.
+    expect(byTestId(container, 'plugins-server-policy-hint-unverified-plugin')).toBeTruthy()
+    expect(byTestId(container, 'plugins-server-policy-hint-demo-plugin')).toBeNull()
   })
 
   it('управляемый плагин помечен и не получает кнопку снятия', async () => {

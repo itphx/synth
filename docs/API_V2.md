@@ -300,7 +300,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/auth/login` | backend | — | ROPC-вход (OIDC), ставит cookie |
 | GET | `/auth/callback` | backend | — | OIDC callback, cookie |
 | GET | `/auth/status` | оба | — | `{authenticated, debug_mode, oidc_enabled, deployment, user}` |
-| GET | `/auth/oidc-meta` | backend | — | Публичные OIDC issuer/clientId (без секрета) |
+| GET | `/auth/oidc-meta` | backend | — | Публичные OIDC issuer/clientId (без секрета) + сигнал `plugins: {enabled, mode}` (серверная политика плагинов в гибриде, PROP-090 Ф7; **без списка имён** — полный allow-list отдаёт `GET /api/v2/settings/plugins`); старый сервер без поля → клиент трактует политику как неизвестную |
 | GET | `/auth/session` | оба | — | Проверка cookie-сессии |
 | GET | `/auth/me` | оба | — | Текущий пользователь |
 | POST | `/auth/spa-login` | оба | — | JSON `{api_key}` → cookie-сессия |
@@ -1608,6 +1608,7 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 | POST | `/api/v2/plugins/:name/disable` | оба | ADMIN или `addons:install` / auth | Обратная прокрутка disposers → `200 {deactivation}`; не активен → `404 plugin.not_active` |
 | DELETE | `/api/v2/plugins/:name` | оба | **ADMIN** / auth | Снятие: деактивация → `lock.delete` → удаление каталога версии; **идемпотентно** → `204` даже если записи не было |
 | POST | `/api/v2/plugins/:name/rollback` | оба | ADMIN или `addons:install` / auth | Откат на ступень `previous`: `200 {outcome:'rolled_back', version, previousVersion, activated?}`; нет ступени/каталога → `409 plugin.rollback_unavailable`, нет записи → `404 plugin.not_found` |
+| POST | `/api/v2/plugins/token` | оба | **ADMIN** / auth | **Выдача server-scoped токена плагину** (PROP-090 Ф7, Уровень 2): тело `{pluginId, scopes?, expiresInSec?}` → `201 {token, pluginId, scopes, expiresAt}`; секрет отдаётся **единожды** (at-rest — sha256, формат `synth_svc_…`), scope `plugins:invoke` добавляется всегда. Ошибки: `400 VALIDATION_ERROR` (нет `pluginId`/неизвестный scope/неверный `expiresInSec`), `403 PLUGIN_NOT_ALLOWED` (плагин вне серверного allow-list при `plugins.hybrid.mode=allowlist`), `404 plugin.not_found` (плагин серверу неизвестен: не установлен и не разрешён allow-list'ом), `501 NOT_IMPLEMENTED` (реестр service-key не подключён) |
 | POST | `/api/v2/plugins/update` | оба | ADMIN или `addons:install` / auth | **Обновление из источника записи lock**: `200 {outcome:'unchanged'|'updated', ...}`; `400 VALIDATION_ERROR` (нет `name`/невалидный `sha256`) или `plugin.source_unavailable` для локального источника, `404 plugin.not_found`, `409 plugin.approval_required`/`scan_rejected`/`integrity_*`, `502 plugin.source_unavailable` для сетевого источника. Тело `{name, version?, sha256?, activate?}`; источник клиентом не выбирается |
 
 **Источники установки (`POST /plugins/install`).** Тело:
@@ -1639,11 +1640,28 @@ false` — не активировать, не задано — сохранит
 'local'` при обновлении отклоняется (`403 LOCAL_INSTALL_DISABLED`) — иначе обновление обходило бы
 запрет локальной установки.
 
+**Server-scoped токен плагина (Уровень 2, Ф7).** Ключ, выданный `POST /api/v2/plugins/token`,
+привязан к `plugin_id` (внутренняя модель service-key; публичный контракт
+`/api/v2/service-keys` не расширен). Сервер принимает такой ключ **только** если выполнены три
+условия (правило **fail-closed**, проверка на границе — после резолва service-креда, поэтому действует
+на **все** серверные API, а не только на плагинные роуты):
+
+1. запрос несёт заголовок `X-Synth-Plugin-Id` **и** его значение совпадает с `plugin_id` ключа —
+   иначе `403 PLUGIN_ID_MISMATCH`;
+2. у ключа есть scope `plugins:invoke` — иначе `403 SCOPE_REQUIRED`;
+3. `plugin_id` входит в серверный allow-list (`plugins.hybrid.allow`) при
+   `plugins.hybrid.mode: 'allowlist'` — иначе `403 PLUGIN_NOT_ALLOWED`.
+
+В режиме `off` сервер не ограничивает плагины (проверка allow-list не применяется), но привязка
+заголовка и требование scope действуют всегда. Обычный service-key (без `plugin_id`) и
+интерактивные креды проверкой не ограничены.
+
 **Маппинг причин отказа → HTTP** (исчерпывающая таблица `PLUGIN_REASON_HTTP` в
 `packages/core/src/server/routes/plugins.ts`): `400` — `manifest_invalid`, `contract_mismatch`,
 `host_mismatch`, `module_invalid`, `provides_mismatch`, `source_unavailable` (локальный источник);
 `403` — `trust_below_floor`, `disabled`,
-`not_allowlisted`, `denylisted`, `runtime_install_denied`, `scan_disabled_with_execution`;
+`not_allowlisted`, `denylisted`, `runtime_install_denied`, `scan_disabled_with_execution`,
+`managed_readonly`, `hybrid_not_allowed` (серверная политика гибрида запрещает плагину работать);
 `404` — `not_found`, `not_active`; `409` — `scan_rejected`, `integrity_mismatch`,
 `integrity_unverifiable`, `execution_disabled`, `rollback_unavailable`; `202` — `approval_required`; `500` —
 `loader_unavailable`, `disposer_failed` (сбой хоста, не клиента); `502` — `source_unavailable` для
@@ -1655,11 +1673,12 @@ false` — не активировать, не задано — сохранит
 PG, порт настроек): `enabled`, `executionEnabled`, `runtimeInstall` (`allow|deny`), `trustFloor`,
 `scan` (`enabled|disabled`), `allowlist`/`denylist`/`remoteAllowlist`, `exactHostExceptions`,
 `promptBlockMaxChars` (бюджет символов блока, дефолт 4 000), `llmFilterTimeoutMs` (бюджет фильтра,
-дефолт 1 000).
+дефолт 1 000), `hybrid` (`mode: off|allowlist` + `allow: string[]` — серверная политика плагинов в
+гибриде, Ф7).
 
 | Метод | Путь | RBAC (backend / core) | Назначение |
 |---|---|---|---|
-| GET | `/api/v2/settings/plugins` | ADMIN / auth | `{plugins (runtime), defaults (config), isOverridden, restartRequired: true, running}` |
+| GET | `/api/v2/settings/plugins` | ADMIN / auth | `{plugins (runtime), defaults (config), isOverridden, restartRequired: true, running, hybrid: {mode, allow}}` — блок `hybrid` — серверная политика плагинов в гибриде (PROP-090 Ф7); список `allow` отдаётся **только** при `mode: 'allowlist'`, в режиме `off` — `{mode: 'off', allow: []}` |
 | PUT | `/api/v2/settings/plugins` | ADMIN / auth | Частичное обновление (`pluginsConfigSchema.partial().strict()`): неизвестный ключ/невалидное значение → `400 VALIDATION_ERROR`; ответ как у `GET` |
 | DELETE | `/api/v2/settings/plugins` | ADMIN / auth | Сброс override к `config.yaml`/дефолтам; ответ как у `GET` |
 

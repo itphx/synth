@@ -695,7 +695,7 @@
   исключений семвер-гейта: **одна полная semver-версия host в строке**, `#` — комментарий,
   не-semver строка пропускается с предупреждением, недоступный файл → исключений нет
   (fail-closed)), `index.ts` — баррел. **Коды отказа** (`PLUGIN_AUDIT_REASONS`,
-  `shared/src/types/plugin-audit.ts`, всего **28**): `plugin.not_found` (resolve),
+  `shared/src/types/plugin-audit.ts`, всего **29**): `plugin.not_found` (resolve),
   `plugin.source_unavailable` (Д1 — источник бандла недоступен или не прошёл проверку целостности:
   локальный путь/архив не распакован, npm без SRI / с несовпадением SRI-sha512 или shasum, URL без pin
   или с несовпадением sha256; отказ **до** гейтов установщика), `plugin.manifest_invalid` (resolve),
@@ -709,7 +709,7 @@
   модуль загружен, но контракт `PluginModule` не выполнен), `plugin.already_active`,
   `plugin.not_active`, `plugin.disposer_failed`, `plugin.provides_mismatch` (facade; Ф3б — объявленное в
   `provides` не совпало с фактическими регистрациями, см. ниже), `plugin_filter.denied`/
-  `plugin_filter.deny_downgraded`/`plugin_filter.unavailable` (журнал решений фильтров). Seam'ы:
+  `plugin_filter.deny_downgraded`/`plugin_filter.unavailable` (журнал решений фильтров), `plugin.hybrid_not_allowed` (Ф7 — серверная allow-list гибрида запрещает активацию). Seam'ы:
   `PluginScanHook` (**Ф2 — закрыт**,
   дефолтная реализация встроенная), `PluginLoader` (**Ф4а — `inline` реализован**; **Ф4б-1 —
   `remote`-загрузчик `createRemotePluginLoader`**; управление процессом — Ф4б-2), `PluginFacade`
@@ -872,6 +872,24 @@
   сетевые `npm`/`url` разрешены — это не путь с ФС хоста). Опция `sourceContext` — инъекция
   сети/лимитов источников (тесты). ⚠️ Backend импортирует core из `dist` — после правок
   `server/routes/*` обязателен `pnpm --filter @itphx/synth-core build` перед backend-тестами.
+- **Гибридный контур плагинов (Ф7).** `engine/plugins/hybrid-policy.ts` — `resolvePluginServerPolicy`
+  (эффективная политика инстанса), `describePluginServerPolicy` (представление для API: список имён
+  — только при `mode: 'allowlist'`), `pluginServerPolicyStatus`; контракт — в `shared`
+  (`types/plugin-hybrid.ts`: публичный сигнал `{enabled, mode}`, статусы
+  `unverified|allowed|denied`, `PLUGIN_ID_HEADER` = `X-Synth-Plugin-Id`, `PLUGIN_INVOKE_SCOPE` =
+  `plugins:invoke`). **Уровень 1 (cooperative):** `PluginHostOptions.serverPolicy` — резолвер
+  серверной политики; в шаге `policy` активации режим `allowlist` без плагина в списке → отказ
+  `plugin.hybrid_not_allowed` (HTTP 403), политика неизвестна → активация проходит, а
+  `PluginRuntimeEntry.serverPolicy` = `unverified` (маркер «не проверен сервером»). **Уровень 2
+  (server-scoped токены):** `POST /api/v2/plugins/token` (выдача service-key с привязкой
+  `plugin_id`; секрет единожды, at-rest sha256; `opts.tokenGuard` — ADMIN в managed) и
+  enforcement на границе — `checkPluginTokenBinding`/`requirePluginTokenBinding`
+  (`server/service-scope.ts`): заголовок `X-Synth-Plugin-Id` должен совпадать с `plugin_id`, scope
+  `plugins:invoke` обязателен, `plugin_id` — в серверном allow-list при `mode: 'allowlist'`;
+  fail-closed, отказы 403 `PLUGIN_ID_MISMATCH`/`SCOPE_REQUIRED`/`PLUGIN_NOT_ALLOWED`. Правило
+  действует на все серверные API (guard вешается после `requireAuth`, где уже разрешён
+  service-кредентал). Дискавери: `remote/connection.ts` — сигнал `plugins` из `/auth/oidc-meta` и
+  `refreshPluginPolicy()` (полный allow-list из `GET /api/v2/settings/plugins`, кэш с TTL).
 - **Managed deploy-time (Ф5в).** `engine/plugins/deploy.ts` — `listDeployPlugins(dir)`: подкаталоги =
   бандлы, манифест `synth.pack` валидируется, битый → запись пропущена с `warn` (разбор не ломается).
   `PluginRuntime.installDeployPlugins({actor})` — установка образных бандлов (**те же** гейты, что у

@@ -3387,6 +3387,11 @@ export const dict = {
   'plugins.managedBadge': 'managed',
   'plugins.managedHint':
     'The plugin is delivered by deployment (image or PVC): it cannot be removed or reinstalled through the API — its version changes with the image (plugin.managed_readonly).',
+  'plugins.serverPolicy.allowed': 'allowed by the server',
+  'plugins.serverPolicy.denied': 'denied by the server',
+  'plugins.serverPolicy.unverified': 'not verified by the server',
+  'plugins.serverPolicy.hint':
+    'The server did not confirm the policy (server unreachable or allowlist mode without a list): the local plugin runs in cooperative mode — in hybrid, client-side enforcement is not guaranteed (Level 1, PROP-090 F7).',
   'plugins.trustLabel': 'Plugin trust level',
   'plugins.scanLabel': 'Scanner verdict',
   'plugins.trust.builtin': 'built-in',

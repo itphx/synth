@@ -267,6 +267,7 @@ export type {
   PluginTrustLevel,
   PluginScanVerdict,
   PluginExecutionMode,
+  PluginServerPolicyStatus,
   PluginInstallSourceKind,
   PluginRuntimeEntry,
   PluginsListResponse,

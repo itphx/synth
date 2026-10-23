@@ -3734,6 +3734,11 @@ export const dict = {
   'plugins.managedBadge': 'управляемый',
   'plugins.managedHint':
     'Плагин поставлен развёртыванием (образ или PVC): его нельзя снять или переустановить через API — версия меняется вместе с образом (plugin.managed_readonly).',
+  'plugins.serverPolicy.allowed': 'разрешён сервером',
+  'plugins.serverPolicy.denied': 'сервер запрещает',
+  'plugins.serverPolicy.unverified': 'не проверен сервером',
+  'plugins.serverPolicy.hint':
+    'Сервер не подтвердил политику (сервер недоступен или режим allowlist без списка): локальный плагин работает в режиме cooperative — в гибриде enforcement со стороны клиента не гарантирован (Уровень 1, PROP-090 Ф7).',
   'plugins.trustLabel': 'Доверие плагина',
   'plugins.scanLabel': 'Вердикт сканера',
   'plugins.trust.builtin': 'встроенный',

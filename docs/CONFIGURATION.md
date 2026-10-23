@@ -1315,6 +1315,8 @@ scheduler:
 | `plugins.deployDir` | Каталог бандлов, поставленных **образом/развёртыванием** (каждый подкаталог — бандл с `synth.pack` + `dist/`). Ставится при старте инстанса (манифест → скан → trust-floor → install-policy), затем активируется из lock. Пусто — deploy-плагинов нет | `/opt/synth/plugins` |
 | `plugins.deployTrust` | Уровень доверия deploy-бандлов (`builtin`/`verified`/`trusted`/`community`). Ниже `trustFloor` — штатный отказ `plugin.trust_below_floor`; скан содержимого выполняется всегда | `verified` |
 | `plugins.managedReadonly` | Management-плагин (`deployDir`, lock `source: 'deploy'`) **нельзя** снять или переустановить через API/CLI — `403 plugin.managed_readonly`. Меняется только новым образом/переразвёртыванием. Действует независимо от режима инстанса | `true` |
+| `plugins.hybrid.mode` | Режим **серверной политики плагинов в гибридном режиме** (Ф7): `off` — сервер **не ограничивает** плагины; `allowlist` — разрешены только плагины из `plugins.hybrid.allow` (пустой список — не разрешён никто) | `off` |
+| `plugins.hybrid.allow` | Имена плагинов, которым сервер разрешает работать (релевантно только при `mode: 'allowlist'`) | `[]` |
 
 ```yaml
 plugins:
@@ -1327,6 +1329,10 @@ plugins:
   deployDir: /opt/synth/plugins
   deployTrust: trusted
   managedReadonly: true
+  # Ф7: серверная политика плагинов в гибридном режиме.
+  hybrid:
+    mode: off        # off (по умолчанию) | allowlist
+    allow: []        # имена разрешённых плагинов (только при allowlist)
 ```
 
 - **Живые ключи.** `promptBlockMaxChars` и `llmFilterTimeoutMs` применяются **без перезапуска**
@@ -1348,6 +1354,16 @@ plugins:
   `managedReadonly: true` запрещает снятие/`update` такого плагина через API/CLI: он меняется новым
   образом или переразвёртыванием каталога. Env-эквиваленты — `SYNTH_PLUGINS_DEPLOY_DIR`,
   `SYNTH_PLUGINS_DEPLOY_TRUST`, `SYNTH_PLUGINS_MANAGED_READONLY`.
+- **Гибридная политика (Ф7).** `plugins.hybrid.mode`/`plugins.hybrid.allow` — серверная политика
+  плагинов: локальный core в гибриде сверяется с ней **перед активацией** плагина (режим
+  `allowlist` и плагина нет в списке → `403 plugin.hybrid_not_allowed`), а сервер отвергает
+  server-scoped токен плагина, чей `plugin_id` вне списка (`403 PLUGIN_NOT_ALLOWED`). При
+  `mode: 'off'` **сервер не ограничивает** плагины: проверка allow-list не применяется, но
+  привязка заголовка `X-Synth-Plugin-Id` и scope `plugins:invoke` действуют всегда. Полный
+  allow-list клиент берёт аутентифицированным запросом `GET /api/v2/settings/plugins` (блок
+  `hybrid`); публичный сигнал режима — в `GET /auth/oidc-meta` (`plugins: {enabled, mode}`, без
+  списка имён). Env-эквивалент режима — `SYNTH_PLUGINS_HYBRID_MODE`; список имён остаётся в
+  `config.yaml`.
 
 ### Аналитика и отчётность (`analytics.*`, ADR-102)
 
