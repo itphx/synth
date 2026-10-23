@@ -209,6 +209,11 @@ describe('defaultConfig', () => {
       executionEnabled: false,
       // PROP-090 §«Точка llmFilters» (Ф3б): бюджет времени фильтра.
       llmFilterTimeoutMs: 1000,
+      // Ф5в: managed deploy-time — дефолтный каталог образных бандлов
+      // (низший приоритет: config.yaml и env его перекрывают).
+      deployDir: '/opt/synth/plugins',
+      deployTrust: 'trusted',
+      managedReadonly: true,
     });
   });
 });
