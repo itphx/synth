@@ -208,6 +208,8 @@ export {
   type ContextConfigSchema,
   type SummarizationConfig,
   type McpServerConfig,
+  type McpServerAuth,
+  mcpServerAuthSchema,
   type McpConfig,
   type ToolsDisabledConfig,
   toolsDisabledConfigSchema,

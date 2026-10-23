@@ -28,6 +28,8 @@ export {
 } from './events.js';
 
 export { MemoryWebhookRepository, MemoryWebhookDeliveryRepository } from './webhooks.js';
+// PROP-107 (Ф1): внешние доступы (OAuth-креды к коннекторам).
+export { MemoryExternalCredentialRepository } from './external-credentials.js';
 
 export { MemoryScheduleRepository, MemoryJobRepository } from './scheduler.js';
 

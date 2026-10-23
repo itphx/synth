@@ -57,6 +57,9 @@ export * from './decision.js';
 export * from './service-keys.js';
 // ADR-052 (этап II): исходящие webhooks — типы и матчер событий — re-exported from webhooks.ts
 export * from './webhooks.js';
+// PROP-107 (Ф0): внешний доступ к внешним сервисам (коннекторам) — типы, zod и
+// маппер «метаданные без секрета».
+export * from './external-credentials.js';
 // ADR-092 (остаток): аудит-журнал обслуживания инстанса — re-exported from maintenance.ts
 export * from './maintenance.js';
 // Egress-политика, журнал внешних запросов и аудит security-политик
