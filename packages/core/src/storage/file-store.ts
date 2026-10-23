@@ -86,7 +86,7 @@ interface SerializedSession {
   project_id?: string;
   messages: SerializedMessage[];
   pending_messages: SerializedMessage[];
-  /** PROP-098: очередь инъекций (steering) — отдельно от `pending_messages`. */
+  /** ADR-104: очередь инъекций (steering) — отдельно от `pending_messages`. */
   steer_inbox?: SerializedMessage[];
   status: Record<string, unknown>;
   settings: Record<string, unknown>;

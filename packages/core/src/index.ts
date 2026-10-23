@@ -349,7 +349,7 @@ export {
 } from './engine/permission/index.js';
 export type { PermissionCheckInput, ApprovalRequest, ApprovalDecision } from './engine/permission/index.js';
 
-// PROP-108 Ф3: реестр подтверждений (привязка к ходу + носитель покрывающего гранта).
+// ADR-106 Ф3: реестр подтверждений (привязка к ходу + носитель покрывающего гранта).
 export { ApprovalRegistry } from './engine/permission/approval.js';
 export type {
   ApprovalBinding,
@@ -359,7 +359,7 @@ export type {
   ApprovalRegistryOptions,
 } from './engine/permission/approval.js';
 
-// PROP-108 Ф3: покрытие подтверждения (роли инстанса, роль в проекте, политика).
+// ADR-106 Ф3: покрытие подтверждения (роли инстанса, роль в проекте, политика).
 export {
   approvalGrantsForProfile,
   buildApprovalResponderProfile,
@@ -372,7 +372,7 @@ export type {
   ApprovalResponderProfile,
 } from './engine/authority/approval.js';
 
-// PROP-108 Ф1: движок Authority-слоя — резолвер решений «действие × цель».
+// ADR-106 Ф1: движок Authority-слоя — резолвер решений «действие × цель».
 export {
   AuthorityResolver,
   computeAuthorityApprovalDigest,
@@ -474,7 +474,7 @@ export type {
   DictionaryRepository,
   ContextFileRepository,
   SSHKeyRepository,
-  // PROP-107 (Ф0/Ф1): внешние доступы (OAuth-креды к коннекторам).
+  // ADR-105 (Ф0/Ф1): внешние доступы (OAuth-креды к коннекторам).
   ExternalCredentialRepository,
   ExternalCredentialErrorCode,
   BlobStore,
@@ -503,7 +503,7 @@ export type {
   PipelineRunFilter,
   PipelineRunEventListOptions,
 } from './storage/ports/index.js';
-// PROP-107 (Ф0/Ф1): доменная ошибка хранилища внешних доступов — значение
+// ADR-105 (Ф0/Ф1): доменная ошибка хранилища внешних доступов — значение
 // (не только тип): её бросают реализации порта, в т.ч. PostgreSQL-драйвер
 // (`@itphx/synth-storage-postgres`) через ленивый `import()` core.
 export { ExternalCredentialStoreError } from './storage/ports/external-credential-repository.js';
@@ -546,7 +546,7 @@ export {
   // ADR-101: спецификации пайплайнов, прогоны и журнал выполнения.
   MemoryProjectPipelineRepository,
   MemoryPipelineRunRepository,
-  // PROP-107 (Ф1): внешние доступы (OAuth-креды к коннекторам).
+  // ADR-105 (Ф1): внешние доступы (OAuth-креды к коннекторам).
   MemoryExternalCredentialRepository,
 } from './storage/memory/index.js';
 // ADR-096 (W2.4): generic-реализация конфигурационных словарей (провайдеры/модели/агенты).
@@ -661,7 +661,7 @@ export type {
   RotateMasterKeyOptions,
   RotateMasterKeyResult,
 } from './storage/ssh-key-store.js';
-// PROP-107 (Ф1): хранилище внешних доступов (OAuth-креды к коннекторам).
+// ADR-105 (Ф1): хранилище внешних доступов (OAuth-креды к коннекторам).
 export {
   ExternalCredentialStore,
   EXTERNAL_CREDENTIALS_SCHEMA_VERSION,
@@ -1444,7 +1444,7 @@ export {
   createWebhookMetrics,
   createEventMetrics,
   createPipelineMetrics,
-  // PROP-108 Ф1: решения Authority-слоя (`synth_authority_decisions_total`).
+  // ADR-106 Ф1: решения Authority-слоя (`synth_authority_decisions_total`).
   createAuthorityMetrics,
   normalizeAuthorityAction,
   normalizeAuthorityEffect,
@@ -1479,7 +1479,7 @@ export type {
   WebhookDeliveryMetrics,
   WebhookDeliveryOutcome,
   EventMetricsHooks,
-  // PROP-108 Ф1: хуки метрик Authority-слоя.
+  // ADR-106 Ф1: хуки метрик Authority-слоя.
   AuthorityMetricAction,
   AuthorityMetricEffect,
   AuthorityMetricSource,

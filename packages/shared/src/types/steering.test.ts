@@ -1,5 +1,5 @@
 /**
- * PROP-098: контракт режима отправки сообщения (`queue`/`steer`/`interrupt`)
+ * ADR-104: контракт режима отправки сообщения (`queue`/`steer`/`interrupt`)
  * и его схема запроса промпта.
  */
 import { describe, it, expect } from 'vitest';
@@ -15,7 +15,7 @@ import {
 } from './steering.js';
 import { promptRequestSchema } from '../schemas/index.js';
 
-describe('PROP-098: типы режима отправки (steering)', () => {
+describe('ADR-104: типы режима отправки (steering)', () => {
   it('известные режимы: queue/steer/interrupt', () => {
     expect([...STEER_MODES]).toEqual(['queue', 'steer', 'interrupt']);
   });
@@ -52,7 +52,7 @@ describe('PROP-098: типы режима отправки (steering)', () => {
   });
 });
 
-describe('PROP-098: promptRequestSchema — поле mode', () => {
+describe('ADR-104: promptRequestSchema — поле mode', () => {
   it('mode не задан → queue (default)', () => {
     const parsed = promptRequestSchema.parse({ content: 'привет' });
     expect(parsed.mode).toBe('queue');

@@ -1,5 +1,5 @@
 /**
- * PROP-098: HTTP-контур режима отправки (`POST /api/v2/sessions/:id/prompt`):
+ * ADR-104: HTTP-контур режима отправки (`POST /api/v2/sessions/:id/prompt`):
  * `queue` (по умолчанию), `steer` (вмешательство в активный ход) и
  * `interrupt` (прерывание текущей генерации — ход продолжается, этап 2).
  */
@@ -48,7 +48,7 @@ function createMockOrchestrator() {
   return {
     createProcessMessage: () => processMessage,
     cancel: vi.fn(),
-    // PROP-098 (этап 2): прерывание текущей генерации без завершения хода.
+    // ADR-104 (этап 2): прерывание текущей генерации без завершения хода.
     interrupt: vi.fn().mockReturnValue(true),
     // ADR-036: обфускация user-сообщения перед постановкой в очередь.
     obfuscateUserMessageForHistory: vi.fn(async (_sid: string, message: Message) => message),
@@ -116,7 +116,7 @@ type ErrorBody = { error: { code: string; message: string } };
 /** Тело успешного ответа `mode=steer`: `{ status, stream_id, pending_count }`. */
 type SteeredBody = { status: string; stream_id: string; pending_count: number };
 
-describe('POST /api/v2/sessions/:id/prompt — режим отправки (PROP-098)', () => {
+describe('POST /api/v2/sessions/:id/prompt — режим отправки (ADR-104)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {

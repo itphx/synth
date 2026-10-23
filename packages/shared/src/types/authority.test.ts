@@ -1,7 +1,7 @@
 /**
- * PROP-108 Ф1: тесты контента полномочий — `provides.authority` пакета.
+ * ADR-106 Ф1: тесты контента полномочий — `provides.authority` пакета.
  *
- * Проверяются три доменных примера из PROP-108 §«Доменная нейтральность»
+ * Проверяются три доменных примера из ADR-106 §«Доменная нейтральность»
  * (разработка ПО / клинические процессы / финансы и закупки) и отказ на
  * неизвестном действии/цели/роли (строгая схема + кросс-валидация).
  */
@@ -22,7 +22,7 @@ function manifestWithAuthority(authority: unknown): Record<string, unknown> {
   };
 }
 
-describe('provides.authority — доменные примеры из PROP-108', () => {
+describe('provides.authority — доменные примеры из ADR-106', () => {
   it('разработка ПО: действия/цели/роли принимаются', () => {
     const manifest = manifestWithAuthority({
       actions: [

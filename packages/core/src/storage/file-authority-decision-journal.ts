@@ -12,7 +12,7 @@ export interface FileAuthorityDecisionJournalConfig {
 }
 
 /**
- * PROP-108 Ф1: журнал решений Authority-слоя — append-only JSONL
+ * ADR-106 Ф1: журнал решений Authority-слоя — append-only JSONL
  * `{dataDir}/audit/authority.jsonl` (одна строка = одна запись; образец —
  * `SecurityAuditStore`/`FilePluginAuditStore`).
  *
@@ -20,7 +20,7 @@ export interface FileAuthorityDecisionJournalConfig {
  * атомарно (tmp→rename, ADR-005). Append защищён `AsyncLock`, чтобы
  * конкурирующие записи не перемешивали строки.
  *
- * Секретов и сырых путей в записи нет (PROP-108 §«Инварианты модели», п. 8) —
+ * Секретов и сырых путей в записи нет (ADR-106 §«Инварианты модели», п. 8) —
  * нормализация цели выполняется на стороне вызывающего (shadow-слой).
  */
 export class FileAuthorityDecisionJournal implements AuthorityDecisionJournal {

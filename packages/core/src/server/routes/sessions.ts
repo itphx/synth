@@ -65,7 +65,7 @@ export interface SessionRouteMessages {
   forbidden: (c: Context) => string;
   contentRequired: (c: Context) => string;
   queueFull: (c: Context, max: number) => string;
-  /** PROP-098: превышен лимит инъекций на ход (`mode: 'steer'`/`'interrupt'`). */
+  /** ADR-104: превышен лимит инъекций на ход (`mode: 'steer'`/`'interrupt'`). */
   steerLimitExceeded: (c: Context, max: number) => string;
 }
 
@@ -181,7 +181,7 @@ function invalidMetaMessage(label: 'icon' | 'color', value: unknown, allowed: re
 }
 
 /**
- * PROP-098: идёт ли сейчас ход сессии (есть чему вмешиваться).
+ * ADR-104: идёт ли сейчас ход сессии (есть чему вмешиваться).
  *
  * `status.blocked` ставит процессор очереди на время хода, `isRunning` —
  * живой процессор сессии. Оба признака нужны: между фазами процессора флаг
@@ -740,7 +740,7 @@ export function createSessionRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.contentRequired(c) } }, 400);
     }
 
-    // PROP-098: режим отправки. Неизвестное значение — как `queue` (обратная
+    // ADR-104: режим отправки. Неизвестное значение — как `queue` (обратная
     // совместимость: поле необязательное).
     const mode = isSteerMode(body.mode) ? body.mode : DEFAULT_STEER_MODE;
 
@@ -775,7 +775,7 @@ export function createSessionRoutes(
       metadata: { ...(body.metadata || {}), stream_id: streamId },
     };
 
-    // PROP-098: `steer` — вмешательство в активный ход (без прерывания
+    // ADR-104: `steer` — вмешательство в активный ход (без прерывания
     // генерации), `interrupt` — прерывание текущей генерации с продолжением
     // хода. Если активного хода нет — ведём себя как обычная очередь
     // (сообщение начнёт новый ход).

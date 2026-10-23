@@ -293,7 +293,7 @@ export const ENGINE_MESSAGE_KEYS = [
   'event.source_not_allowed',
   'event.duplicate',
   'hook.blocked',
-  // --- Steering: форсированная отправка во время хода (PROP-098) ---
+  // --- Steering: форсированная отправка во время хода (ADR-104) ---
   'steer.injected',
   'steer.limit_exceeded',
   'steer.interrupted',
@@ -616,7 +616,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'event.source_not_allowed': ["source"],
   'event.duplicate': ["dedupKey"],
   'hook.blocked': ["hook","reason"],
-  // --- Steering: форсированная отправка во время хода (PROP-098) ---
+  // --- Steering: форсированная отправка во время хода (ADR-104) ---
   'steer.injected': [],
   'steer.limit_exceeded': ["limit"],
   'steer.interrupted': [],

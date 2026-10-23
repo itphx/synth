@@ -9,7 +9,7 @@ export interface FileAuthorityPolicyStoreConfig {
 }
 
 /**
- * PROP-108 Ф0: политика полномочий инстанса — один JSON-документ
+ * ADR-106 Ф0: политика полномочий инстанса — один JSON-документ
  * `{dataDir}/authority/policy.json` (атомарная запись tmp→rename, ADR-005).
  *
  * Документа нет → `getPolicy()` возвращает `null` («политика не задана», ось

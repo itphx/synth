@@ -1,5 +1,5 @@
 /**
- * PROP-098 (этап 2): прерывание текущей генерации (`interrupt`).
+ * ADR-104 (этап 2): прерывание текущей генерации (`interrupt`).
  *
  * Отличие от «Стоп» (`cancel`, ADR-005): ход НЕ завершается и НЕ
  * отменяется — обрывается только текущая генерация, цикл Tool Use
@@ -9,7 +9,7 @@
  * - публикуется `stream.interrupted` (а НЕ `stream.cancelled`);
  * - ход продолжается: инъекция попадает в контекст, итоговый ответ есть;
  * - пары toolUse/toolResult не рвутся;
- * - «принципал» (PROP-108) и «потолок хода» (лимит итераций) не меняются.
+ * - «принципал» (ADR-106) и «потолок хода» (лимит итераций) не меняются.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -159,14 +159,14 @@ async function makeHarness(): Promise<Harness> {
     projectStore,
     defaultWorkingDir: tmpDir,
     contextConfig: new ContextConfig({ userDataDir: join(tmpDir, 'context') }),
-    // PROP-108 Ф1: shadow-запись принципала хода (для проверки, что
+    // ADR-106 Ф1: shadow-запись принципала хода (для проверки, что
     // прерывание принципала и ход не меняет).
     authorityShadow: (input: AuthorityShadowInput) => { shadowInputs.push(input); },
   });
   const session = await sessionManager.createSession({
     title: 'Interrupt',
     projectId: project.id,
-    // Владелец сессии — владелец проекта (`u1`): принципал хода (PROP-108)
+    // Владелец сессии — владелец проекта (`u1`): принципал хода (ADR-106)
     // берётся из `session.ownerId`/`session.userId`.
     userId: 'u1',
     settings: { provider: 'mockinterrupt', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
@@ -185,7 +185,7 @@ async function run(
   return processMessage(fresh, userMsg, new AbortController().signal, publishChunk);
 }
 
-describe('ChatOrchestrator: прерывание генерации (PROP-098, этап 2)', () => {
+describe('ChatOrchestrator: прерывание генерации (ADR-104, этап 2)', () => {
   beforeEach(() => {
     ProviderFactory.register('mockinterrupt', MockInterruptProvider);
     MockInterruptProvider.calls = 0;
@@ -384,7 +384,7 @@ describe('ChatOrchestrator: прерывание генерации (PROP-098, �
       expect(chunkIterations[i]!).toBeGreaterThanOrEqual(chunkIterations[i - 1]!);
     }
 
-    // Принципал хода (PROP-108) не меняется: все решения shadow-контура —
+    // Принципал хода (ADR-106) не меняется: все решения shadow-контура —
     // с тем же принципалом, агентом и идентификатором хода.
     expect(h.shadowInputs.length).toBeGreaterThan(0);
     const principals = h.shadowInputs.map((i) => JSON.stringify(i.principal));

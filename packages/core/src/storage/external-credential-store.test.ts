@@ -23,7 +23,7 @@ async function tmp(): Promise<string> {
 
 const ACCESS_TOKEN = 'ya29.plain-token-must-not-hit-disk';
 
-describe('ExternalCredentialStore (PROP-107 Ф1)', () => {
+describe('ExternalCredentialStore (ADR-105 Ф1)', () => {
   it('файл доступов лежит в secrets/oauth/ и создан с правами 0600', async () => {
     const dir = await tmp();
     const store = new ExternalCredentialStore({ dataDir: dir, secretKey: MASTER_KEY });

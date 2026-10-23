@@ -47,7 +47,7 @@ export interface EventWebSocketDeps {
    */
   localOwnerResolver?: LocalOwnerResolver;
   /**
-   * PROP-108 Ф3: реестр подтверждений. Задан — ответ на `permission_reply`
+   * ADR-106 Ф3: реестр подтверждений. Задан — ответ на `permission_reply`
    * принимает только **носитель покрывающего гранта** (реестр проверяет
    * привязку к ходу и право носителя). Не задан — поведение прежнее.
    */
@@ -291,7 +291,7 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
 
               const streamId = msg.stream_id || generateStreamId();
 
-              // PROP-098: режим отправки. `steer` — вмешательство в активный
+              // ADR-104: режим отправки. `steer` — вмешательство в активный
               // ход, `interrupt` — прерывание текущей генерации (ход при этом
               // НЕ завершается).
               const mode = isSteerMode(msg.mode) ? msg.mode : DEFAULT_STEER_MODE;
@@ -371,7 +371,7 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
                   metadata: { stream_id: streamId },
                 };
 
-                // PROP-098: `steer` — вмешательство в активный ход, `interrupt` —
+                // ADR-104: `steer` — вмешательство в активный ход, `interrupt` —
                 // прерывание текущей генерации (ход НЕ завершается). Если хода
                 // нет — обычная очередь (сообщение начнёт новый ход).
                 if (steerMode && (session.status?.blocked || queueManager.isRunning(sid))) {
@@ -453,13 +453,13 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
               // Новый формат: { action: 'allow'|'deny', once?: boolean }.
               // Старый формат { approved: boolean } остаётся совместимым.
               const action = msg.action === 'allow' || msg.action === 'deny' ? msg.action : undefined;
-              // PROP-108 Ф0: аддитивные поля `principal`/`turn_id` — ответ
+              // ADR-106 Ф0: аддитивные поля `principal`/`turn_id` — ответ
               // привязывается к принципалу и ходу. Невалидные/отсутствующие →
               // поля не публикуются, поведение прежнее.
               const principal = parsePermissionPrincipal(msg.principal);
               const turnId = typeof msg.turn_id === 'string' && msg.turn_id.trim() !== '' ? msg.turn_id : undefined;
 
-              // PROP-108 Ф3: ответ принимает только **носитель покрывающего
+              // ADR-106 Ф3: ответ принимает только **носитель покрывающего
               // гранта** (реестр подтверждений). Реестр не задан — слой
               // Authority выключен/в shadow, поведение прежнее.
               const registry = deps.approvalRegistry;

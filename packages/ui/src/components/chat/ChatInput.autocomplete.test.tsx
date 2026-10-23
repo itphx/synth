@@ -142,7 +142,7 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
     expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, undefined)
   })
 
-  it('после подстановки Enter передаёт режим отправки композера (PROP-098)', async () => {
+  it('после подстановки Enter передаёт режим отправки композера (ADR-104)', async () => {
     const container = await renderInput({ sendMode: 'steer' })
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
 
@@ -161,7 +161,7 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
     expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, 'steer')
   })
 
-  it('«Добавить в очередь» во время стрима передаёт тот же контракт onSend (PROP-098)', async () => {
+  it('«Добавить в очередь» во время стрима передаёт тот же контракт onSend (ADR-104)', async () => {
     const container = await renderInput({ isStreaming: true, sendMode: 'queue' })
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
 
@@ -191,7 +191,7 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
   })
 })
 
-describe('ChatInput — селектор режима отправки (PROP-098)', () => {
+describe('ChatInput — селектор режима отправки (ADR-104)', () => {
   it('при активном ходе селектор режима виден (queue|steer|interrupt)', async () => {
     const container = await renderInput({ isStreaming: true })
 

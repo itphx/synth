@@ -136,7 +136,7 @@ export class OllamaProvider extends BaseProvider {
         originalCancel();
         controller.abort();
       };
-      // PROP-098 (этап 2): прерывание генерации без отмены хода — тот же обрыв
+      // ADR-104 (этап 2): прерывание генерации без отмены хода — тот же обрыв
       // сетевого запроса, что и у «Стоп», но токен НЕ помечается отменённым:
       // ход продолжается (оркестратор применяет инъекцию на границе шага).
       const originalInterrupt = cancellationToken.interrupt?.bind(cancellationToken);
@@ -270,7 +270,7 @@ export class OllamaProvider extends BaseProvider {
         // Ошибки чтения стрима (таймаут/обрыв сети/AbortError) пробрасываем
         // наружу — иначе генератор «успешно» завершится с пустым ответом и
         // оркестратор не узнает о сбое провайдера. При пользовательской
-        // отмене (cancellationToken) и при прерывании генерации (PROP-098)
+        // отмене (cancellationToken) и при прерывании генерации (ADR-104)
         // молча выходим.
         if (!cancellationToken?.cancelled && !cancellationToken?.interrupted) {
           info('OLLAMA', `Стрим прерван: ${e}`);

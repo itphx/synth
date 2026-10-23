@@ -62,7 +62,7 @@ export { buildEventPorts } from './ports/events.js';
 export type { EventPorts } from './ports/events.js';
 export { buildContentPorts } from './ports/content.js';
 export type { ContentPorts } from './ports/content.js';
-// PROP-107 (Ф1): внешние доступы к коннекторам (таблица `external_credentials`,
+// ADR-105 (Ф1): внешние доступы к коннекторам (таблица `external_credentials`,
 // миграция 011; шифрование токенов — core-хелперами через ленивый `import()`).
 export { buildExternalCredentialPorts } from './ports/external-credentials.js';
 export type { ExternalCredentialPorts } from './ports/external-credentials.js';

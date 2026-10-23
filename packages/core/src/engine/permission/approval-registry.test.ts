@@ -1,5 +1,5 @@
 /**
- * PROP-108 Ф3: реестр подтверждений — привязка, одноразовость, fail-closed.
+ * ADR-106 Ф3: реестр подтверждений — привязка, одноразовость, fail-closed.
  *
  * Реестр — **единственное** место, где решается, можно ли принять ответ на
  * запрос подтверждения (`engine/permission/approval.ts`). Инварианты:
@@ -11,7 +11,7 @@
  * 4. **fail-closed**: без резолвера покрытия ни одно подтверждение не
  *    принимается.
  *
- * Отдельно проверяется инвариант PROP-098: инъекция (`steer`) в активный ход
+ * Отдельно проверяется инвариант ADR-104: инъекция (`steer`) в активный ход
  * **не создаёт новый ход** — `turnId` не меняется, привязка подтверждения
  * остаётся валидной.
  */
@@ -54,7 +54,7 @@ function openBinding(registry: ApprovalRegistry, approvalId = 'approval_1'): str
   return digest;
 }
 
-describe('PROP-108 Ф3: реестр подтверждений — привязка', () => {
+describe('ADR-106 Ф3: реестр подтверждений — привязка', () => {
   it('привязка (principal, turnId, action, target, digest) сохраняется в реестре', () => {
     const registry = makeRegistry();
     const digest = openBinding(registry);
@@ -77,7 +77,7 @@ describe('PROP-108 Ф3: реестр подтверждений — привяз
   });
 });
 
-describe('PROP-108 Ф3: реестр подтверждений — отказы', () => {
+describe('ADR-106 Ф3: реестр подтверждений — отказы', () => {
   it('повторный ответ на тот же approval_id → deny (already_consumed)', async () => {
     const registry = makeRegistry();
     const digest = openBinding(registry);
@@ -133,7 +133,7 @@ describe('PROP-108 Ф3: реестр подтверждений — отказы
   });
 });
 
-describe('PROP-098: инъекция (steer) не создаёт новый ход', () => {
+describe('ADR-104: инъекция (steer) не создаёт новый ход', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let sessionId: string;
@@ -142,7 +142,7 @@ describe('PROP-098: инъекция (steer) не создаёт новый хо
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-approval-steer-'));
     sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
     const session = await sessionManager.createSession({ title: 'S', userId: 'owner', ownerId: 'owner' });
-    // Активный ход: `turnId` хода = `streamId` (ADR-089/PROP-098).
+    // Активный ход: `turnId` хода = `streamId` (ADR-089/ADR-104).
     await sessionManager.withLock(session.id, async (s) => {
       s.currentStream = {
         streamId: TURN_ID,
@@ -163,7 +163,7 @@ describe('PROP-098: инъекция (steer) не создаёт новый хо
     const registry = makeRegistry();
     const digest = openBinding(registry);
 
-    // PROP-098: инъекция в активный ход (очередь `steerInbox`).
+    // ADR-104: инъекция в активный ход (очередь `steerInbox`).
     const injected: Message = {
       id: 'msg_steer',
       role: MessageRole.USER,

@@ -673,7 +673,7 @@ export class QueueProcessorManager {
 }
 
 /**
- * Результат постановки сообщения в очередь инъекций (PROP-098).
+ * Результат постановки сообщения в очередь инъекций (ADR-104).
  */
 export interface SteerEnqueueResult {
   /** Сообщение принято в очередь инъекций. */
@@ -685,7 +685,7 @@ export interface SteerEnqueueResult {
 }
 
 /**
- * Опции постановки сообщения в очередь инъекций (PROP-098).
+ * Опции постановки сообщения в очередь инъекций (ADR-104).
  */
 export interface SteerEnqueueOptions {
   /**
@@ -698,7 +698,7 @@ export interface SteerEnqueueOptions {
 }
 
 /**
- * PROP-098: поставить сообщение в очередь инъекций (`steerInbox`) — отправка
+ * ADR-104: поставить сообщение в очередь инъекций (`steerInbox`) — отправка
  * во время активного хода (`mode: 'steer'`).
  *
  * Очередь отдельна от `pendingMessages`: её вычитывает оркестратор на границе
@@ -721,7 +721,7 @@ export async function enqueueSteerMessage(
   if (obfuscate && message.role === MessageRole.USER) {
     message = await obfuscate(sessionId, message);
   }
-  // Признак инъекции — на самом сообщении (PROP-098): UI рисует маркер
+  // Признак инъекции — на самом сообщении (ADR-104): UI рисует маркер
   // «вмешательство в ход», а оркестратор персистит его как есть.
   // В режиме `interrupt` (этап 2) добавляется второй маркер — «прерывание
   // хода»: UI отличает его от обычного вмешательства.

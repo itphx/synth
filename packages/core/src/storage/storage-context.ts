@@ -94,9 +94,9 @@ import { MaintenanceAuditStore } from './maintenance-audit-store.js';
 import { FilePluginAuditStore } from './file-plugin-audit-store.js';
 import { FilePluginLockStore, defaultPluginLockPath } from './file-plugin-lock-store.js';
 import { SecurityAuditStore } from './security-audit-store.js';
-// PROP-107 (Ф1): внешние доступы (OAuth-креды к коннекторам) —
+// ADR-105 (Ф1): внешние доступы (OAuth-креды к коннекторам) —
 // `{dataDir}/secrets/oauth/credentials.json` (в `secrets/` — чтобы обычный
-// бэкап без `--with-secrets` их не захватывал, PROP-107 §10).
+// бэкап без `--with-secrets` их не захватывал, ADR-105 §10).
 import { ExternalCredentialStore } from './external-credential-store.js';
 import { FileAuthorityPolicyStore } from './file-authority-policy-store.js';
 import { FileAuthorityDecisionJournal } from './file-authority-decision-journal.js';
@@ -342,7 +342,7 @@ export interface StorageContext {
   contextFiles: ContextFileRepository;
   sshKeys: SSHKeyRepository;
   /**
-   * PROP-107 (Ф1): внешние доступы к коннекторам (OAuth-креды). Порт хранит
+   * ADR-105 (Ф1): внешние доступы к коннекторам (OAuth-креды). Порт хранит
    * метаданные и зашифрованные токены; plaintext наружу не отдаётся.
    */
   externalCredentials: ExternalCredentialRepository;
@@ -359,12 +359,12 @@ export interface StorageContext {
   /** ADR-101: прогоны пайплайнов и журнал выполнения (append-only). */
   pipelineRuns: PipelineRunRepository;
   /**
-   * PROP-108 Ф0: политика полномочий инстанса (потолок инстанса). Не задана
+   * ADR-106 Ф0: политика полномочий инстанса (потолок инстанса). Не задана
    * драйвером PostgreSQL — остаток (ADR-097, см. комментарий в `buildStorageContext`).
    */
   authorityPolicy?: AuthorityPolicyRepository;
   /**
-   * PROP-108 Ф1: append-only журнал решений Authority-слоя
+   * ADR-106 Ф1: append-only журнал решений Authority-слоя
    * (`{dataDir}/audit/authority.jsonl`). Не задан драйвером PostgreSQL — остаток.
    */
   authorityDecisions?: AuthorityDecisionJournal;
@@ -600,7 +600,7 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
       secretKey: config.secretKey,
       env: config.env,
     }),
-    // PROP-107 (Ф1): доступы к внешним сервисам — `secrets/oauth/credentials.json`
+    // ADR-105 (Ф1): доступы к внешним сервисам — `secrets/oauth/credentials.json`
     // (шифрование мастер-ключом, 0600).
     externalCredentials: new ExternalCredentialStore({
       dataDir,
@@ -618,7 +618,7 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     // append-only `pipelines/run-events.jsonl`).
     projectPipelines: new FileProjectPipelineStore({ dataDir }),
     pipelineRuns: new FilePipelineRunStore({ dataDir }),
-    // PROP-108: политика полномочий инстанса (`authority/policy.json`) и
+    // ADR-106: политика полномочий инстанса (`authority/policy.json`) и
     // append-only журнал решений (`audit/authority.jsonl`).
     authorityPolicy: new FileAuthorityPolicyStore({ dataDir }),
     authorityDecisions: new FileAuthorityDecisionJournal({ dataDir }),
@@ -672,7 +672,7 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     packs: new MemoryPackRepository(),
     projectPipelines: new MemoryProjectPipelineRepository(),
     pipelineRuns: new MemoryPipelineRunRepository(),
-    // PROP-108: порты Authority-слоя (политика + журнал решений).
+    // ADR-106: порты Authority-слоя (политика + журнал решений).
     authorityPolicy: new MemoryAuthorityPolicyRepository(),
     authorityDecisions: new MemoryAuthorityDecisionJournal(),
   };

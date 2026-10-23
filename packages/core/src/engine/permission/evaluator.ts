@@ -69,7 +69,7 @@ export interface PermissionCheckInput {
    */
   workspaceReady?: boolean;
   /**
-   * PROP-108 Ф1/Ф2: контекст хода для Authority-слоя
+   * ADR-106 Ф1/Ф2: контекст хода для Authority-слоя
    * (принципал/сессия/агент/ход). Не задан — слой не считает решение.
    *
    * В shadow-режиме (Ф1) поля **не влияют** на решение permission-слоя — они
@@ -150,7 +150,7 @@ export class PermissionEvaluator {
   constructor(
     private readonly _config: PermissionConfig,
     /**
-     * PROP-108 Ф1/Ф2: швы Authority-слоя.
+     * ADR-106 Ф1/Ф2: швы Authority-слоя.
      *
      * - `authorityShadow` — наблюдение (Ф1): решение считается и пишется в
      *   журнал (`{dataDir}/audit/authority.jsonl`), но **не меняет** решение
@@ -158,7 +158,7 @@ export class PermissionEvaluator {
      * - `authorityGate` — решение Authority-слоя (Ф2): считается всегда, а
      *   при `authority.enabled` **без** `authority.shadow` — **применяется**:
      *   сужает решение слоя (`deny`/`ask`). Потолок сессии в enforced-режиме
-     *   не снимается режимом `yolo` (PROP-108 §«Многопользовательская
+     *   не снимается режимом `yolo` (ADR-106 §«Многопользовательская
      *   сессия»).
      *
      * Если задан `authorityGate` — шов наблюдения не используется: журнал
@@ -191,7 +191,7 @@ export class PermissionEvaluator {
     // deny-правила остаются deny — трансформируется только действие ask.
     const lifted = this._yoloLift(input, parts.decision);
 
-    // PROP-108 Ф1/Ф2: Authority-слой.
+    // ADR-106 Ф1/Ф2: Authority-слой.
     //
     // - шов **решения** (`authorityGate`): guard считает решение и ведёт
     //   журнал решений; при `authority.enabled` **без** `authority.shadow`
@@ -269,7 +269,7 @@ export class PermissionEvaluator {
    * Порядок:
    * 1. `deny` слоя → `deny` (запрет сильнее всего);
    * 2. `ask` слоя → `ask`: это требование **потолка** (ось ≠ «пользователь»),
-   *    и `yolo` его **не снимает** (PROP-108 §«Многопользовательская
+   *    и `yolo` его **не снимает** (ADR-106 §«Многопользовательская
    *    сессия»: «`yolo` не снимает `ask`, если этого требует потолок сессии»);
    * 3. `allow` слоя → решение permission-слоя; но в enforced-режиме `yolo`
    *    **не снимает** `ask` жёсткого слоя (защищённые пути, shell-policy) —
@@ -305,7 +305,7 @@ export class PermissionEvaluator {
   }
 
   /**
-   * PROP-108 Ф1: передать решение в shadow-слой (если он подключён).
+   * ADR-106 Ф1: передать решение в shadow-слой (если он подключён).
    *
    * Ошибка shadow-не должна ломать ход — вызов защищён.
    */
@@ -341,7 +341,7 @@ export class PermissionEvaluator {
    * правилами (режим, роль агента, зависимости окружения, рабочий каталог,
    * shell-policy, защищённые пути). В enforced-режиме Authority-слоя (Ф2)
    * `yolo` не снимает такой `ask` — это требование потолка сессии
-   * (PROP-108 §«Многопользовательская сессия»).
+   * (ADR-106 §«Многопользовательская сессия»).
    */
   private _computeDecisionParts(
     input: PermissionCheckInput,

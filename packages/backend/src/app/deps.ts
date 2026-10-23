@@ -52,11 +52,11 @@ import {
   createSchedulerMetrics,
   createWebhookMetrics,
   createEventMetrics,
-  // PROP-108 Ф1/Ф2: счётчик решений Authority-слоя (`synth_authority_decisions_total`)
+  // ADR-106 Ф1/Ф2: счётчик решений Authority-слоя (`synth_authority_decisions_total`)
   // и guard-слоя (решение считается; в enforced-режиме — применяется).
   createAuthorityMetrics,
   AuthorityGuard,
-  // PROP-108 Ф3: реестр подтверждений + покрытие (носитель покрывающего гранта).
+  // ADR-106 Ф3: реестр подтверждений + покрытие (носитель покрывающего гранта).
   ApprovalRegistry,
   buildApprovalResponderProfile,
   createApprovalCoverageResolver,
@@ -318,7 +318,7 @@ export async function createBackendDeps(
   const schedulerJobMetrics = metrics ? createSchedulerMetrics(metrics) : undefined;
   const webhookDeliveryMetrics = metrics ? createWebhookMetrics(metrics) : undefined;
   const eventMetrics = metrics ? createEventMetrics(metrics) : undefined;
-  // PROP-108 Ф1: решения Authority-слоя (`synth_authority_decisions_total`) —
+  // ADR-106 Ф1: решения Authority-слоя (`synth_authority_decisions_total`) —
   // лейблы только `action`/`effect`/`source`, без id (ADR-094).
   const authorityMetrics = metrics ? createAuthorityMetrics(metrics) : undefined;
   if (metrics) {
@@ -553,7 +553,7 @@ export async function createBackendDeps(
   // модульный, порт берётся из первого вызова (fail-closed в remote-режиме).
   const runtimeDeps = await detectRuntimeDeps(executionPort);
 
-  // PROP-108 Ф1/Ф2: Authority-слой. Решение считается и пишется в журнал
+  // ADR-106 Ф1/Ф2: Authority-слой. Решение считается и пишется в журнал
   // (`{dataDir}/audit/authority.jsonl` через порт). При `authority.enabled`
   // **без** `authority.shadow` решение **применяется** (Ф2): `deny`/`ask`
   // сужают решение permission-слоя. Секция `authority` выключена по умолчанию:
@@ -570,7 +570,7 @@ export async function createBackendDeps(
       })
     : undefined;
 
-  // PROP-108 Ф3: реестр подтверждений. Задаётся **только** в enforced-режиме
+  // ADR-106 Ф3: реестр подтверждений. Задаётся **только** в enforced-режиме
   // (слой Authority применяет решения): ответ на `permission_reply` принимает
   // лишь носитель покрывающего гранта — не «кто видит сессию» (дыра
   // «`VIEWER` подтверждает мутирующий тул»).
@@ -596,10 +596,10 @@ export async function createBackendDeps(
     sessionManager,
     eventBus,
     hooks,
-    // PROP-108 Ф1/Ф2: шов решения Authority-слоя (считает, журналит и —
+    // ADR-106 Ф1/Ф2: шов решения Authority-слоя (считает, журналит и —
     // в enforced-режиме — применяет решение).
     authorityGate: authorityGuard?.gate,
-    // PROP-108 Ф3: реестр подтверждений (привязка к ходу + носитель гранта).
+    // ADR-106 Ф3: реестр подтверждений (привязка к ходу + носитель гранта).
     ...(approvalRegistry ? { approvalRegistry } : {}),
     // ADR-077: порт исполнения команд (inline — исполнение в процессе).
     executionPort,
@@ -1062,7 +1062,7 @@ export async function createBackendDeps(
 
   return {
     dataDir,
-    // PROP-108 Ф3: реестр подтверждений (enforced-режим Authority-слоя).
+    // ADR-106 Ф3: реестр подтверждений (enforced-режим Authority-слоя).
     approvalRegistry,
     // ADR-096: контекст хранения инстанса — для операций, которым нужен
     // целиком (напр. портативный экспорт/импорт проекта, ADR-091).

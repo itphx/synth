@@ -347,7 +347,7 @@ export const packLlmFilterProvideSchema = z
 export type PackLlmFilterProvide = z.infer<typeof packLlmFilterProvideSchema>;
 
 /**
- * PROP-108 §«Доменная нейтральность и доставка контентом»: агент, которому
+ * ADR-106 §«Доменная нейтральность и доставка контентом»: агент, которому
  * пакет поставляет роли и потолок.
  *
  * `roles[]` — роли агента (id из `provides.authority.roles[]`), `ceiling[]` —
@@ -367,17 +367,17 @@ export const packAuthorityAgentProvideSchema = z
 export type PackAuthorityAgentProvide = z.infer<typeof packAuthorityAgentProvideSchema>;
 
 /**
- * PROP-108: `provides.authority` — **контент** полномочий: роли, действия,
+ * ADR-106: `provides.authority` — **контент** полномочий: роли, действия,
  * цели и агенты с ролями.
  *
  * Схема **строгая** (`.strict()`): неизвестное поле — ошибка, а не молчаливое
  * игнорирование. Кросс-ссылки проверяются на разборе: грант на
  * необъявленное действие, агент на необъявленную роль, шаблон цели на
- * неизвестный вид цели → **отказ** (PROP-108 §«Валидация, а не каст»).
+ * неизвестный вид цели → **отказ** (ADR-106 §«Валидация, а не каст»).
  *
  * Пакет **не выдаёт права сам себе**: объявленные роли становятся активными
  * только после одобрения ADMIN и пересечения с политикой инстанса
- * (PROP-108 §«Пересечение, не дарование»).
+ * (ADR-106 §«Пересечение, не дарование»).
  */
 export const packAuthorityProvidesSchema = z
   .object({
@@ -414,7 +414,7 @@ export type PackAuthorityProvides = z.infer<typeof packAuthorityProvidesSchema>;
  * дубль, тир `stable`, неизвестная фаза фильтра) проходит молча, и правило
  * «фактические регистрации обязаны совпадать с `provides`» нечем проверять.
  *
- * `authority` (PROP-108) — тоже **явная** схема: контент полномочий не
+ * `authority` (ADR-106) — тоже **явная** схема: контент полномочий не
  * проходит «как есть» (неизвестное действие/цель/роль → отказ разбора).
  */
 export const packProvidesSchema = z
@@ -552,7 +552,7 @@ export function normalizePackProvides(provides: unknown): PackProvides {
     tools: toList(source.tools) as string[],
     promptBlocks: toList(source.promptBlocks) as PackPromptBlockProvide[],
     llmFilters: toList(source.llmFilters) as PackLlmFilterProvide[],
-    // PROP-108: контент полномочий нормализуется так же (списки вместо
+    // ADR-106: контент полномочий нормализуется так же (списки вместо
     // отсутствия). Содержимое проверяет `packAuthorityProvidesSchema`.
     authority: {
       roles: toList((source.authority as Record<string, unknown> | undefined)?.roles) as PackAuthorityProvides['roles'],
@@ -592,7 +592,7 @@ export function normalizePackProvides(provides: unknown): PackProvides {
  * 13. `mode` — только для `kind: 'plugin'`;
  * 14. `trust.level` плагина — не выше `trusted` (trust-floor, PROP-090 §9);
  * 15. контент полномочий (`provides.authority`) — строгая схема + кросс-ссылки
- *     (PROP-108 §«Валидация, а не каст»): неизвестное действие/цель/роль —
+ *     (ADR-106 §«Валидация, а не каст»): неизвестное действие/цель/роль —
  *     проблема, а не молчаливый проход.
  */
 export function validatePackManifest(manifest: unknown): string[] {
@@ -767,7 +767,7 @@ export function validatePackManifest(manifest: unknown): string[] {
   // проверять).
   problems.push(...validatePluginProvides(provides));
 
-  // 15. Контент полномочий (PROP-108): та же строгая схема + кросс-ссылки —
+  // 15. Контент полномочий (ADR-106): та же строгая схема + кросс-ссылки —
   // неизвестное действие/цель/роль → отказ (не passthrough).
   problems.push(...validateAuthorityProvides(provides));
 
@@ -858,7 +858,7 @@ function describeZodIssues(error: z.ZodError): string {
 }
 
 /**
- * Проверка контента полномочий (`provides.authority`, PROP-108).
+ * Проверка контента полномочий (`provides.authority`, ADR-106).
  *
  * Схема строгая (`.strict()`) — неизвестное поле, неизвестное действие,
  * неизвестная цель или неизвестная роль дают проблему, а не «проскочивший»

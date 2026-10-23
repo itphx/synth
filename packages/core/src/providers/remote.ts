@@ -135,7 +135,7 @@ export class RemoteProvider extends BaseProvider {
         originalCancel();
         controller.abort();
       };
-      // PROP-098 (этап 2): прерывание генерации без отмены хода — тот же обрыв
+      // ADR-104 (этап 2): прерывание генерации без отмены хода — тот же обрыв
       // сетевого запроса, что и у «Стоп», но токен НЕ помечается отменённым:
       // ход продолжается (оркестратор применяет инъекцию на границе шага).
       const originalInterrupt = cancellationToken.interrupt?.bind(cancellationToken);
@@ -267,7 +267,7 @@ export class RemoteProvider extends BaseProvider {
       }
     } catch (e) {
       // Ошибки чтения стрима (обрыв/AbortError) пробрасываем наружу.
-      // При пользовательской отмене и при прерывании генерации (PROP-098)
+      // При пользовательской отмене и при прерывании генерации (ADR-104)
       // молча выходим.
       if (!cancellationToken?.cancelled && !cancellationToken?.interrupted) {
         throw e;

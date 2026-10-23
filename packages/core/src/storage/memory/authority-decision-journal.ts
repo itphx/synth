@@ -1,5 +1,5 @@
 /**
- * In-memory реализация порта журнала решений Authority-слоя (ADR-096, PROP-108 Ф1).
+ * In-memory реализация порта журнала решений Authority-слоя (ADR-096, ADR-106 Ф1).
  *
  * Чистая реализация без модулей ФС (`fs`/`path`): журнал — массив в памяти.
  * Семантика повторяет файловую (`FileAuthorityDecisionJournal`): append-only,

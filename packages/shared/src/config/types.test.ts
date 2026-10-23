@@ -21,7 +21,7 @@ describe('mcpServerConfigSchema (ADR-071 §2.2)', () => {
     expect(mcpServerConfigSchema.parse({ type: 'http', url: 'https://x/mcp' }).type).toBe('http');
   });
 
-  it('PROP-107 Ф0: принимает auth.kind=credential со ссылкой на доступ', () => {
+  it('ADR-105 Ф0: принимает auth.kind=credential со ссылкой на доступ', () => {
     const parsed = mcpServerConfigSchema.parse({
       type: 'http',
       url: 'https://x/mcp',
@@ -30,12 +30,12 @@ describe('mcpServerConfigSchema (ADR-071 §2.2)', () => {
     expect(parsed.auth).toEqual({ kind: 'credential', credentialId: 'extc_1' });
   });
 
-  it('PROP-107 Ф0: старые записи без auth остаются валидными', () => {
+  it('ADR-105 Ф0: старые записи без auth остаются валидными', () => {
     const parsed = mcpServerConfigSchema.parse({ type: 'stdio', command: 'node' });
     expect(parsed.auth).toBeUndefined();
   });
 
-  it('PROP-107 Ф0: невалидный auth отклоняется (пустой credentialId/неизвестный kind)', () => {
+  it('ADR-105 Ф0: невалидный auth отклоняется (пустой credentialId/неизвестный kind)', () => {
     expect(
       mcpServerConfigSchema.safeParse({
         type: 'http',

@@ -1,5 +1,5 @@
 /**
- * PROP-107 §7: host-binding секретных заголовков при редиректах.
+ * ADR-105 §7: host-binding секретных заголовков при редиректах.
  *
  * Инвариант: заголовки-секреты (`authorization`, `proxy-authorization`,
  * `x-api-key`, `cookie`) не пересылаются на хоп с **другим origin**
@@ -54,7 +54,7 @@ const SECRET_HEADERS: Record<string, string> = {
   'x-trace': 'trace-1',
 };
 
-describe('egress-guard: host-binding секретных заголовков (PROP-107 §7)', () => {
+describe('egress-guard: host-binding секретных заголовков (ADR-105 §7)', () => {
   it('редирект на другой хост: секретные заголовки не уходят, остальные — уходят', async () => {
     const { hops, fetchImpl } = mockTransport({
       'https://auth.example/start': 'https://other.example/next',

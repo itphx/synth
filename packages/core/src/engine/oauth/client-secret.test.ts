@@ -1,5 +1,5 @@
 /**
- * PROP-107 (Ф2): `client_secret` — только env или файл
+ * ADR-105 (Ф2): `client_secret` — только env или файл
  * `{dataDir}/secrets/oauth/<provider>.client_secret`; в конфиге его нет, в
  * логах/текстах ошибок он не появляется.
  */

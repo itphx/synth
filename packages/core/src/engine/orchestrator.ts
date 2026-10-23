@@ -240,16 +240,16 @@ export interface OrchestratorOptions {
    */
   metrics?: MetricsRegistry;
   /**
-   * PROP-108 Ф1: шов shadow-наблюдения Authority-слоя. Задан — решения
+   * ADR-106 Ф1: шов shadow-наблюдения Authority-слоя. Задан — решения
    * permission-слоя дополнительно считаются моделью «действие × цель» и
    * пишутся в журнал решений; **решение прав не меняется**.
    *
-   * @deprecated PROP-108 Ф2: используйте `authorityGate` — он же считает
+   * @deprecated ADR-106 Ф2: используйте `authorityGate` — он же считает
    *   решение, ведёт журнал и (в enforced-режиме) **применяет** решение.
    */
   authorityShadow?: AuthorityShadowHook;
   /**
-   * PROP-108 Ф2: шов решения Authority-слоя (guard).
+   * ADR-106 Ф2: шов решения Authority-слоя (guard).
    *
    * Задан — решения permission-слоя считаются моделью «действие × цель» и
    * пишутся в журнал решений. При `authority.enabled` **без**
@@ -258,7 +258,7 @@ export interface OrchestratorOptions {
    */
   authorityGate?: AuthorityGateHook;
   /**
-   * PROP-108 Ф3: реестр подтверждений. Задан — запросы подтверждения
+   * ADR-106 Ф3: реестр подтверждений. Задан — запросы подтверждения
    * **привязываются** к `(принципал, ход, действие, цель, отпечаток)`: ответ
    * принимает только носитель покрывающего гранта, повторный ответ — отказ.
    *
@@ -457,9 +457,9 @@ export class ChatOrchestrator {
   private readonly _gatewayPatternStore: SecretPatternRepository | null;
   /** ADR-094: реестр метрик (LLM-вызовы; временные метрики подключаются приложением). */
   private readonly _metrics: MetricsRegistry | null;
-  /** PROP-108 Ф1: шов shadow-наблюдения Authority-слоя (не меняет решения прав). */
+  /** ADR-106 Ф1: шов shadow-наблюдения Authority-слоя (не меняет решения прав). */
   private readonly _authorityShadow: AuthorityShadowHook | undefined;
-  /** PROP-108 Ф2: шов решения Authority-слоя (считает, журналит и применяет). */
+  /** ADR-106 Ф2: шов решения Authority-слоя (считает, журналит и применяет). */
   private readonly _authorityGate: AuthorityGateHook | undefined;
   /**
    * PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов (мутабельный;
@@ -768,9 +768,9 @@ export class ChatOrchestrator {
     }
     this._gatewayPatternStore = options.gatewayPatternStore ?? null;
     this._metrics = options.metrics ?? null;
-    // PROP-108 Ф1: shadow-наблюдение Authority-слоя (решение прав не меняется).
+    // ADR-106 Ф1: shadow-наблюдение Authority-слоя (решение прав не меняется).
     this._authorityShadow = options.authorityShadow;
-    // PROP-108 Ф2: шов решения Authority-слоя (guard) — считает, журналит и
+    // ADR-106 Ф2: шов решения Authority-слоя (guard) — считает, журналит и
     // применяет решение (в enforced-режиме).
     this._authorityGate = options.authorityGate;
     // PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов. Экземпляр
@@ -1626,7 +1626,7 @@ export class ChatOrchestrator {
         sessionMode,
         planMode,
         planApproved,
-        // PROP-108 Ф1: контекст хода для shadow-наблюдения (на решение не влияет).
+        // ADR-106 Ф1: контекст хода для shadow-наблюдения (на решение не влияет).
         authorityContext: {
           sessionId: session.id,
           principal: {
@@ -2725,7 +2725,7 @@ export class ChatOrchestrator {
           break;
         }
 
-        // PROP-098 (этап 2): прерывание, запрошенное ВО ВРЕМЯ шага (инструмент
+        // ADR-104 (этап 2): прерывание, запрошенное ВО ВРЕМЯ шага (инструмент
         // выполнялся / ждали подтверждения прав) — применяем на ближайшей
         // границе: публикуем `stream.interrupted` и продолжаем ТОТ ЖЕ ход.
         // Генерацию прерывать нечего (её уже нет) — сообщение вплетается
@@ -2744,7 +2744,7 @@ export class ChatOrchestrator {
           });
         }
 
-        // PROP-098: вычитка очереди инъекций — на границе шага (здесь же, где
+        // ADR-104: вычитка очереди инъекций — на границе шага (здесь же, где
         // проверяется отмена). Инъекция НИКОГДА не попадает внутрь шага:
         // результаты инструментов предыдущей итерации уже в `currentMessages`,
         // поэтому пары toolUse/toolResult не рвутся.
@@ -2799,7 +2799,7 @@ export class ChatOrchestrator {
             cancelToken,
           )) {
             if (cancelToken.cancelled) break;
-            // PROP-098 (этап 2): прерывание генерации (`interrupt`) — стрим
+            // ADR-104 (этап 2): прерывание генерации (`interrupt`) — стрим
             // обрывается, ход НЕ завершается: выходим из цикла чанков,
             // частичный текст сохраняется, сообщение вплетается на границе.
             if (cancelToken.interrupted) break;
@@ -2984,7 +2984,7 @@ export class ChatOrchestrator {
           return {};
         }
 
-        // PROP-098 (этап 2): прерывание генерации (`interrupt`) — ход НЕ
+        // ADR-104 (этап 2): прерывание генерации (`interrupt`) — ход НЕ
         // завершается и НЕ отменяется («Стоп» — отдельный механизм, ADR-005):
         // частичный ответ сохраняется отдельным сообщением с маркером
         // `interrupted`, публикуется `stream.interrupted`, цикл продолжается —
@@ -3123,7 +3123,7 @@ export class ChatOrchestrator {
             params: toolArgs,
             workingDir,
             capabilities: toolDef?.capabilities,
-            // PROP-108 Ф1: контекст хода для shadow-наблюдения (на решение не влияет).
+            // ADR-106 Ф1: контекст хода для shadow-наблюдения (на решение не влияет).
             authorityContext: {
               sessionId: session.id,
               principal: {
@@ -3211,7 +3211,7 @@ export class ChatOrchestrator {
             deniedReason = this._securityMessage(permissionDecision, 'en')
               ?? `Permission denied: ${permissionDecision.reason}`;
           } else if (!hookBlocked && permissionDecision.action === 'ask') {
-            // PROP-108 Ф3: пара «действие × цель» для привязки подтверждения.
+            // ADR-106 Ф3: пара «действие × цель» для привязки подтверждения.
             // Задана — запрос привязан к ходу, и ответ принимает только
             // носитель покрывающего гранта (реестр подтверждений).
             const bindingTarget = deriveAuthorityTarget({
@@ -3232,7 +3232,7 @@ export class ChatOrchestrator {
                 arguments: toolArgs,
                 reason: this._securityMessage(permissionDecision, 'en')
                   ?? permissionDecision.reason,
-                // PROP-108 Ф0: принципал и ход запроса (аддитивные поля
+                // ADR-106 Ф0: принципал и ход запроса (аддитивные поля
                 // события `permission.asked`). Полный учёт принципала хода —
                 // Ф4; здесь фиксируется текущий владелец сессии.
                 principal: {
@@ -3241,7 +3241,7 @@ export class ChatOrchestrator {
                   roles: [],
                 },
                 turnId: streamId,
-                // PROP-108 Ф3: привязка к действию и цели.
+                // ADR-106 Ф3: привязка к действию и цели.
                 ...(bindingAction ? { action: bindingAction } : {}),
                 ...(bindingTarget ? { target: bindingTarget } : {}),
               },
@@ -4091,7 +4091,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * PROP-098 (этап 2): обрыв генерации по запросу `interrupt`.
+   * ADR-104 (этап 2): обрыв генерации по запросу `interrupt`.
    *
    * Отличие от «Стоп» (`cancel`, ADR-005): ход НЕ завершается и НЕ
    * отменяется — обрывается только текущая генерация. Частичный ответ
@@ -4154,7 +4154,7 @@ export class ChatOrchestrator {
         // `toolResults` не передаём — итоговое сообщение хода посчитает их usage.
         undefined, undefined, undefined, undefined,
         {
-          // Маркер прерванной генерации (PROP-098): UI рисует его отдельным
+          // Маркер прерванной генерации (ADR-104): UI рисует его отдельным
           // бейджем, а `resolveAssistantStatus` даёт статус `interrupted`.
           [STEER_INTERRUPTED_METADATA_KEY]: true,
           duration_ms: durationMs,
@@ -4184,7 +4184,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * PROP-098 (этап 2): прервать текущую генерацию, НЕ завершая ход.
+   * ADR-104 (этап 2): прервать текущую генерацию, НЕ завершая ход.
    *
    * В отличие от `cancel` («Стоп», ADR-005): ход продолжается — обрывается
    * только генерация, а сообщение пользователя вплетается на ближайшей
@@ -4206,7 +4206,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * PROP-098: применить очередь инъекций (steering) на границе шага.
+   * ADR-104: применить очередь инъекций (steering) на границе шага.
    *
    * Вызывается в начале итерации цикла Tool Use — МЕЖДУ шагами: результаты
    * инструментов предыдущей итерации к этому моменту уже дописаны в

@@ -149,7 +149,7 @@ describe('McpRegistryStore (ADR-071 §2.5)', () => {
     expect(ids.size).toBe(10);
   });
 
-  it('PROP-107 Ф0: ссылка на внешний доступ (auth) переживает перезапуск', async () => {
+  it('ADR-105 Ф0: ссылка на внешний доступ (auth) переживает перезапуск', async () => {
     await store.add({
       name: 'with-auth',
       config: { ...httpConfig(), auth: { kind: 'credential', credentialId: 'extc_1' } },
@@ -167,7 +167,7 @@ describe('McpRegistryStore (ADR-071 §2.5)', () => {
     });
   });
 
-  it('PROP-107 Ф0: старые записи без auth читаются как есть (обратная совместимость)', async () => {
+  it('ADR-105 Ф0: старые записи без auth читаются как есть (обратная совместимость)', async () => {
     const entry = await store.add({ name: 'legacy', config: httpConfig(), origin: 'user' });
     expect(entry.config.auth).toBeUndefined();
     expect((await store.get(entry.id))?.config.auth).toBeUndefined();

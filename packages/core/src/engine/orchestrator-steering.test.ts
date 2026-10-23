@@ -1,5 +1,5 @@
 /**
- * PROP-098: вплетение инъекций в активный ход — строго на границе шага
+ * ADR-104: вплетение инъекций в активный ход — строго на границе шага
  * (пары toolUse/toolResult не рвутся), персист `metadata.steer` и события.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -148,7 +148,7 @@ async function run(
   return processMessage(fresh, userMsg, new AbortController().signal, publishChunk);
 }
 
-describe('ChatOrchestrator: инъекции в активный ход (PROP-098)', () => {
+describe('ChatOrchestrator: инъекции в активный ход (ADR-104)', () => {
   beforeEach(() => {
     ProviderFactory.register('mocksteer', MockSteerProvider);
     MockSteerProvider.calls = 0;

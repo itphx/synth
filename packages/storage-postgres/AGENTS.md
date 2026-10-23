@@ -72,7 +72,7 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
 манифесте расширений (ADR-097) и установка сторонних драйверов-хранилищ
 (сейчас in-tree-драйвер из коробки).
 
-**Порт внешних доступов** (`ExternalCredentialRepository`, PROP-107 Ф1) — **реализован**:
+**Порт внешних доступов** (`ExternalCredentialRepository`, ADR-105 Ф1) — **реализован**:
 `ports/external-credentials.ts`, таблица `external_credentials` (миграция `011`),
 колонки `secret_enc`/`refresh_enc` (готовый токен `enc:v1:…`); шифрование — только
 core-хелперами `encryptSecret`/`decryptSecret` через ленивый `import()`
@@ -106,7 +106,7 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
   `008_plugin_audit_scan` (`ALTER TABLE plugin_audit ADD COLUMN IF NOT EXISTS scan_performed boolean /
   scan_findings integer` — Ф2). `009_plugin_lock_previous` (долги Д2) — колонка `previous jsonb` (ступень отката версии в lock).
   `010_plugin_lock_mode` — колонка `mode` в `plugin_lock` (PROP-090 §«Managed deploy-time»).
-  `011_external_credentials` — таблица `external_credentials` (PROP-107 Ф1: владелец/статус/срок/отзыв
+  `011_external_credentials` — таблица `external_credentials` (ADR-105 Ф1: владелец/статус/срок/отзыв
   и колонки `secret_enc`/`refresh_enc` с готовым `enc:v1:…`). Все идемпотентны.
   `runMigrations(conn, { schema })`: `CREATE SCHEMA IF NOT EXISTS` → advisory-лок
   (`synth:migrate:<schema>`) → применение по возрастанию версии (каждая миграция —
@@ -157,7 +157,7 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
     (PROP-068 §4.4 / PROP-090 §5: таблица `plugin_lock`, миграция 007; ключ — имя
     плагина, `save` — upsert с сохранением `installed_at`, `list` — `ORDER BY name ASC`).
   - `ports/external-credentials.ts` → `buildExternalCredentialPorts(deps)` →
-    `externalCredentials` (PROP-107 Ф1: таблица `external_credentials`, миграция 011;
+    `externalCredentials` (ADR-105 Ф1: таблица `external_credentials`, миграция 011;
     `secret_enc`/`refresh_enc` — готовый `enc:v1:…`; шифрование только core-хелперами
     через ленивый `import()`, как у SSH-ключей в `content.ts`).
 

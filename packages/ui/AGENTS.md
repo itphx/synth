@@ -83,7 +83,7 @@
 - Вызов агента через `@` (`components/chat/ChatInput.tsx`, `splitMessageWithTags`) сохраняет сам тег `@<agentId>` в тексте сообщения (иначе пользователю неясно, почему ответил другой агент); тег одновременно уходит как `agentRole` в `sendMessage`. Не вырезать тег из `part.text`.
 - В пользовательских сообщениях `@<agentId>` известных агентов подсвечивается цветом агента (`AgentInfo.color` через `resolveColor`) — `components/chat/SecretPlaceholder.tsx` (`SecretPlainText`), реестр из `agentsStore`. Неизвестный агент или пустой реестр → обычный текст, без поломки вёрстки и переносов.
 
-### Чат: режим отправки (PROP-098)
+### Чат: режим отправки (ADR-104)
 - Селектор режима отправки — `components/chat/SendModeSelector.tsx`: `queue` («в очередь»), `steer` («вмешаться в ход»), `interrupt` («прервать» — этап 2: обрыв текущей генерации, ход продолжается).
 - Селектор виден **только при активном ходе** (`ChatInput` — проп `isStreaming`): без хода вмешиваться некуда, сообщение уходит очередью. Выбор живёт в состоянии композера, начальное значение — проп `sendMode` (`ChatTab` передаёт `DEFAULT_STEER_MODE`).
 - Режим уходит третьим аргументом `onSend(text, agentRole?, mode?)` → `transportStore.sendMessage` → `POST /sessions/:id/prompt` с полем `mode`. `queue` (и отсутствие режима) в тело запроса **не попадает** — его отбрасывает `lib/api/sessions.ts`; `steer`/`interrupt` — попадают.

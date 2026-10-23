@@ -275,10 +275,10 @@ export const summarizationConfigSchema = z.object({
 });
 
 /**
- * PROP-107 (Ф0): привязка MCP-коннектора к внешнему доступу (OAuth-креде).
+ * ADR-105 (Ф0): привязка MCP-коннектора к внешнему доступу (OAuth-креде).
  *
  * Коннектор ссылается на доступ **по id** — сам токен в реестре/конфиге не лежит
- * (PROP-107 §5). Поле аддитивно: записи без `auth` (все существующие) остаются
+ * (ADR-105 §5). Поле аддитивно: записи без `auth` (все существующие) остаются
  * валидными.
  */
 export const mcpServerAuthSchema = z.object({
@@ -296,7 +296,7 @@ export const mcpServerConfigSchema = z.object({
   url: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   /**
-   * PROP-107 §5: ссылка на внешний доступ (коннектор авторизуется токеном из
+   * ADR-105 §5: ссылка на внешний доступ (коннектор авторизуется токеном из
    * слоя доступов, а не plaintext-заголовком). Аддитивно: старые записи без
    * поля валидны.
    */
@@ -552,17 +552,17 @@ export const analyticsConfigSchema = z.object({
   retentionDays: z.number().int().default(400),
 });
 
-// --- Authority-слой (PROP-108) ---
+// --- Authority-слой (ADR-106) ---
 
 /**
- * PROP-108 Ф1: конфигурация Authority-слоя.
+ * ADR-106 Ф1: конфигурация Authority-слоя.
  *
  * - `enabled` — мастер-выключатель слоя (по умолчанию **выключен**):
  *   Authority-слой не влияет на решения прав, пока его не включили
  *   (Ф2 — принуждение; до этого слой только считает решения);
  * - `shadow` — режим **наблюдения**: решение Authority считается и пишется
  *   в журнал (`{dataDir}/audit/authority.jsonl`), но **не применяется** —
- *   поведение прав не меняется (PROP-108 §«Совместимость и миграция»:
+ *   поведение прав не меняется (ADR-106 §«Совместимость и миграция»:
  *   «Ф0–Ф1: authority-резолвер работает в режиме shadow»).
  *
  * По умолчанию `shadow: true` — при включении слоя он сначала наблюдает, а
@@ -1166,7 +1166,7 @@ export type SessionConfig = z.infer<typeof sessionConfigSchema>;
 export type ContextConfigSchema = z.infer<typeof contextConfigSchema>;
 export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
-/** PROP-107 (Ф0): привязка MCP-коннектора к внешнему доступу. */
+/** ADR-105 (Ф0): привязка MCP-коннектора к внешнему доступу. */
 export type McpServerAuth = z.infer<typeof mcpServerAuthSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
 export type ToolsConfig = z.infer<typeof toolsConfigSchema>;
@@ -1179,7 +1179,7 @@ export type DecisionConfig = z.infer<typeof decisionConfigSchema>;
 export type AnalyticsConfig = z.infer<typeof analyticsConfigSchema>;
 /** ADR-094: секция `metrics` (`enabled`). */
 export type MetricsConfig = z.infer<typeof metricsConfigSchema>;
-/** PROP-108 Ф1: секция `authority` (`enabled`/`shadow`). */
+/** ADR-106 Ф1: секция `authority` (`enabled`/`shadow`). */
 export type AuthorityConfig = z.infer<typeof authorityConfigSchema>;
 /** PROP-090 §10: секция `plugins` — политики слоя плагинов. */
 export type PluginsConfig = z.infer<typeof pluginsConfigSchema>;

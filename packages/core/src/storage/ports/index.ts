@@ -78,7 +78,7 @@ export type { DictionaryRepository } from './dictionary-repository.js';
 export type { DocumentRepository } from './document-repository.js';
 export type { ContextFileRepository } from './context-file-repository.js';
 export type { SSHKeyRepository } from './ssh-key-repository.js';
-// PROP-107 (Ф0/Ф1): внешние доступы (OAuth-креды к коннекторам).
+// ADR-105 (Ф0/Ф1): внешние доступы (OAuth-креды к коннекторам).
 export {
   ExternalCredentialStoreError,
   type ExternalCredentialRepository,
@@ -128,7 +128,7 @@ export {
   COLLECTION_LIMIT_MAX,
   resolveCollectionLimit,
 } from './collection-limit.js';
-// PROP-108: порты Authority-слоя (политика инстанса + журнал решений).
+// ADR-106: порты Authority-слоя (политика инстанса + журнал решений).
 export type { AuthorityPolicyRepository } from './authority-policy-repository.js';
 export type {
   AuthorityDecisionJournal,

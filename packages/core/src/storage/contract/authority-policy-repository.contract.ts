@@ -41,7 +41,7 @@ function policy(over: Partial<AuthorityPolicy> = {}): AuthorityPolicy {
 }
 
 /**
- * Паспорт порта `AuthorityPolicyRepository` (PROP-108 Ф0, ADR-096): политика
+ * Паспорт порта `AuthorityPolicyRepository` (ADR-106 Ф0, ADR-096): политика
  * инстанца — одна на инстанс; «документа нет» (`null`) и «документ пуст» —
  * **разные** состояния (ось отсутствует vs ось запрещает всё).
  */
@@ -135,7 +135,7 @@ export function describeAuthorityPolicyRepository(
 }
 
 /**
- * Паспорт порта `AuthorityDecisionJournal` (PROP-108 Ф1, ADR-096): append-only
+ * Паспорт порта `AuthorityDecisionJournal` (ADR-106 Ф1, ADR-096): append-only
  * журнал решений, выборка «свежие первыми», фильтры `action`/`effect`/`source`,
  * очистка с числом удалённых.
  *

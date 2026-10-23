@@ -1036,7 +1036,7 @@ export const dict = {
   'chat.input.mentionHint': 'Упомяните агента через @',
   'chat.input.enqueue': 'Добавить в очередь',
 
-  // --- Steering: вмешательство в активный ход (PROP-098) ---
+  // --- Steering: вмешательство в активный ход (ADR-104) ---
   'chat.steer.marker': 'Вмешательство в ход',
   'chat.steer.interruptMarker': 'Прерывание хода',
   'chat.steer.mode.label': 'Режим отправки',
@@ -2616,7 +2616,7 @@ export const dict = {
   'event.duplicate': 'Дубликат события проигнорирован: {dedupKey}',
   'hook.blocked': 'Хук «{hook}» заблокировал выполнение: {reason}',
 
-  // --- Steering: форсированная отправка во время хода (PROP-098) ---
+  // --- Steering: форсированная отправка во время хода (ADR-104) ---
   'steer.injected': 'Сообщение вброшено в текущий ход',
   'steer.limit_exceeded':
     'Достигнут лимит вмешательств: не более {limit} сообщений на ход',

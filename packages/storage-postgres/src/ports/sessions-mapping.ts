@@ -56,7 +56,7 @@ export interface SessionRow {
   settings: unknown;
   mcp_servers: unknown;
   pending_messages: unknown;
-  /** PROP-098: очередь инъекций (steering) — отдельно от `pending_messages`. */
+  /** ADR-104: очередь инъекций (steering) — отдельно от `pending_messages`. */
   steer_inbox: unknown;
   current_stream: unknown;
   summarization_pending: boolean;

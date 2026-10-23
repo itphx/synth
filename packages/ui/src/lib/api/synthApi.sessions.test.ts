@@ -192,7 +192,7 @@ describe('sessionsApi — очередь промпта (прямой fetch)', (
     expect('agent' in body).toBe(false)
   })
 
-  it('enqueueMessage: mode=steer уходит в тело, mode=queue не уходит (PROP-098)', async () => {
+  it('enqueueMessage: mode=steer уходит в тело, mode=queue не уходит (ADR-104)', async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 202, json: async () => ({}) } as unknown as Response)
 
     await synthApi.enqueueMessage('s1', 'вмешательство', { streamId: 'sid-3', mode: 'steer' })

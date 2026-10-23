@@ -33,7 +33,7 @@ export * from './provider.js';
 export * from './llm.js';
 // EventType/BusEvent — шина событий сессии (ADR-009/024)
 export * from './bus-events.js';
-// PROP-098: режимы отправки сообщения во время хода (steering)
+// ADR-104: режимы отправки сообщения во время хода (steering)
 export * from './steering.js';
 // Файловая система (FS API v2)
 export * from './fs.js';
@@ -59,7 +59,7 @@ export * from './decision.js';
 export * from './service-keys.js';
 // ADR-052 (этап II): исходящие webhooks — типы и матчер событий — re-exported from webhooks.ts
 export * from './webhooks.js';
-// PROP-107 (Ф0): внешний доступ к внешним сервисам (коннекторам) — типы, zod и
+// ADR-105 (Ф0): внешний доступ к внешним сервисам (коннекторам) — типы, zod и
 // маппер «метаданные без секрета».
 export * from './external-credentials.js';
 // ADR-092 (остаток): аудит-журнал обслуживания инстанса — re-exported from maintenance.ts
@@ -84,7 +84,7 @@ export * from './plugin-lock.js';
 export * from './plugin-runtime.js';
 // PROP-068 §3/§12: контракт индекса каталога расширений (format: 1) — типы, zod-схемы, tolerant-парсер
 export * from './catalog.js';
-// PROP-108 Ф0: модель Authority-слоя — полномочия пользователей и агентов
+// ADR-106 Ф0: модель Authority-слоя — полномочия пользователей и агентов
 // как контент (Principal/Action/Target/Grant/Role/Ceiling/Turn/Approval).
 export * from './authority.js';
 // ADR-051/ADR-100: контракт пайплайна (определение, шаг, экземпляр)

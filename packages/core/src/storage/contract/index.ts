@@ -29,7 +29,7 @@ export { describeMaintenanceAuditRepository } from './maintenance.js';
 export { describePluginAuditRepository } from './plugin-audit-repository.contract.js';
 // PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов.
 export { describePluginLockRepository } from './plugin-lock-repository.contract.js';
-// PROP-108: порты Authority-слоя (политика инстанса + журнал решений).
+// ADR-106: порты Authority-слоя (политика инстанса + журнал решений).
 export {
   describeAuthorityPolicyRepository,
   describeAuthorityDecisionJournal,
@@ -44,7 +44,7 @@ export { describeServiceKeyRepository } from './secrets.js';
 export { describeSSHKeyRepository } from './secrets.js';
 export { describeWebhookRepository } from './secrets.js';
 export { describeWebhookDeliveryRepository } from './secrets.js';
-// PROP-107 (Ф1): внешние доступы (OAuth-креды к коннекторам).
+// ADR-105 (Ф1): внешние доступы (OAuth-креды к коннекторам).
 export { describeExternalCredentialRepository } from './external-credential-repository.contract.js';
 
 export { describeMcpRegistryRepository } from './content.js';

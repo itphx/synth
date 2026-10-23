@@ -83,7 +83,7 @@ interface TransportState {
   connect: (mode: TransportMode, override?: 'ws' | 'sse') => void
   disconnect: () => void
   setTransportMode: (mode: TransportMode) => void
-  /** `mode` — PROP-098: режим отправки (`queue` по умолчанию, `steer` — вмешательство, `interrupt` — прерывание). */
+  /** `mode` — ADR-104: режим отправки (`queue` по умолчанию, `steer` — вмешательство, `interrupt` — прерывание). */
   sendMessage: (sessionId: string, text: string, agentRole?: string, provider?: string, model?: string, mode?: SteerMode) => Promise<void>
   cancel: (sessionId: string) => void
   sendPermissionReply: (sessionId: string, approvalId: string, approved: boolean, once?: boolean) => void
@@ -186,7 +186,7 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // PROP-098: инъекция во время активного хода — сообщение пользователя,
+      // ADR-104: инъекция во время активного хода — сообщение пользователя,
       // вброшенное оркестратором на границе шага. Добавляем в ленту с
       // маркером «вмешательство в ход» (metadata.steer).
       case 'message_injected':
@@ -371,7 +371,7 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // PROP-098 (этап 2): прерывание текущей генерации (`interrupt`). Ход НЕ
+      // ADR-104 (этап 2): прерывание текущей генерации (`interrupt`). Ход НЕ
       // завершается и НЕ отменяется («Стоп» — отдельный механизм, ADR-005):
       // следующая итерация Tool Use продолжает ту же генерацию с тем же
       // `stream_id`. Поэтому стрим НЕ закрываем (никаких finishStream/

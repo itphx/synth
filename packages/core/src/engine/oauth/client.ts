@@ -1,5 +1,5 @@
 /**
- * PROP-107 (Ф2): OAuth-клиент (Authorization Code + PKCE, refresh, revoke).
+ * ADR-105 (Ф2): OAuth-клиент (Authorization Code + PKCE, refresh, revoke).
  *
  * Сеть — **только** `egressFetch` (ADR-099, единый egress-слой: TLS/CA/прокси).
  * Свой HTTP-агент/диспетчер клиент не создаёт; транспорт инъектируется только
@@ -9,7 +9,7 @@
  * — второй реализации form-POST не заводим (Device Flow не дублируем).
  *
  * Секреты (access/refresh-токен, `client_secret`) **не попадают** в текст
- * ошибок и никуда не логируются (PROP-107 §7).
+ * ошибок и никуда не логируются (ADR-105 §7).
  */
 import { postFormDetailed } from '../../remote/device-flow.js';
 import type { AuthFetchLike } from '../../remote/device-flow.js';
@@ -195,7 +195,7 @@ export class OAuthClient {
    * Обновление access-токена по refresh-токену (RFC 6749 §6).
    *
    * `invalid_grant` (refresh-токен отозван/истёк) → `OAuthError('invalid_grant')`:
-   * вызывающий переводит доступ в `status:'error'` (PROP-107 §3).
+   * вызывающий переводит доступ в `status:'error'` (ADR-105 §3).
    */
   async refresh(input: RefreshInput): Promise<OAuthTokenSet> {
     const clientId = input.clientId ?? this._provider.clientId;
@@ -243,7 +243,7 @@ export class OAuthClient {
    *
    * `client_secret_basic` кладёт секрет в заголовок `Authorization: Basic` —
    * поэтому такие запросы **не** должны пересылаться на чужой origin
-   * (host-binding заголовков, PROP-107 §7, `engine/net/egress-guard.ts`).
+   * (host-binding заголовков, ADR-105 §7, `engine/net/egress-guard.ts`).
    */
   private _applyClientAuth(
     params: URLSearchParams,

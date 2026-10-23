@@ -67,7 +67,7 @@ export interface BackendListenDeps {
   /** Порт по умолчанию (`backendConfig.port`). */
   defaultPort: number;
   /**
-   * PROP-108 Ф3: реестр подтверждений. Задан — ответ на `permission_reply`
+   * ADR-106 Ф3: реестр подтверждений. Задан — ответ на `permission_reply`
    * принимает только **носитель покрывающего гранта** (не «кто видит сессию»).
    * Не задан — поведение прежнее (слой Authority выключен/в shadow).
    */
@@ -219,7 +219,7 @@ export function createBackendListen(deps: BackendListenDeps) {
 
                 const streamId = msg.stream_id || generateStreamId();
 
-                // PROP-098: режим отправки. `steer` — вмешательство в активный
+                // ADR-104: режим отправки. `steer` — вмешательство в активный
                 // ход, `interrupt` — прерывание текущей генерации (ход при этом
                 // НЕ завершается).
                 const mode = isSteerMode(msg.mode) ? msg.mode : DEFAULT_STEER_MODE;
@@ -266,7 +266,7 @@ export function createBackendListen(deps: BackendListenDeps) {
                     metadata: { stream_id: streamId },
                   };
 
-                  // PROP-098: `steer` — вмешательство в активный ход, `interrupt` —
+                  // ADR-104: `steer` — вмешательство в активный ход, `interrupt` —
                   // прерывание текущей генерации (ход НЕ завершается). Если хода
                   // нет — обычная очередь (сообщение начнёт новый ход).
                   if (steerMode && (session.status?.blocked || queueManager.isRunning(sid))) {
@@ -338,7 +338,7 @@ export function createBackendListen(deps: BackendListenDeps) {
                 const action = msg.action === 'allow' || msg.action === 'deny' ? msg.action : undefined;
                 const approved = action !== undefined ? action === 'allow' : msg.approved === true;
                 const once = typeof msg.once === 'boolean' ? msg.once : undefined;
-                // PROP-108 Ф0: аддитивные поля `principal`/`turn_id`.
+                // ADR-106 Ф0: аддитивные поля `principal`/`turn_id`.
                 const principal = parsePermissionPrincipal(msg.principal);
                 const turnId = typeof msg.turn_id === 'string' && msg.turn_id.trim() !== '' ? msg.turn_id : undefined;
 
@@ -347,7 +347,7 @@ export function createBackendListen(deps: BackendListenDeps) {
                   const session = await loadVisibleSession(sid);
                   if (!session) return;
 
-                  // PROP-108 Ф3: ответ принимает только **носитель покрывающего
+                  // ADR-106 Ф3: ответ принимает только **носитель покрывающего
                   // гранта**, а не «кто видит сессию» (дыра «`VIEWER`
                   // подтверждает мутирующий тул»). Реестр не задан — слой
                   // Authority выключен/в shadow, поведение прежнее.

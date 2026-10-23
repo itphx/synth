@@ -62,7 +62,7 @@ export const DEFAULT_EGRESS_MAX_HOPS = 5;
 
 /**
  * Заголовки-секреты: при редиректе на хост с **другим origin** они не
- * пересылаются (PROP-107 §7 — host-binding заголовков).
+ * пересылаются (ADR-105 §7 — host-binding заголовков).
  *
  * Список закрытый и общий для всех режимов: `authorization`,
  * `proxy-authorization`, `x-api-key`, `cookie`. Остальные заголовки
@@ -349,7 +349,7 @@ export interface EgressFetchOptions {
   /** Источник времени (тесты). */
   now?: () => number;
   /**
-   * Host-binding секретных заголовков (PROP-107 §7): при редиректе на хост с
+   * Host-binding секретных заголовков (ADR-105 §7): при редиректе на хост с
    * **другим origin** заголовки `authorization`/`proxy-authorization`/
    * `x-api-key`/`cookie` не пересылаются (сравнение — по origin исходного
    * URL). Прочие заголовки пересылаются как раньше.
@@ -395,7 +395,7 @@ async function recordEgress(options: EgressFetchOptions, event: Omit<EgressLogEv
  * `init` для конкретного хопа редиректа.
  *
  * Ручное следование редиректам (`redirect: 'manual'`) — как и раньше. В
- * режиме host-binding (PROP-107 §7) секретные заголовки снимаются, если
+ * режиме host-binding (ADR-105 §7) секретные заголовки снимаются, если
  * origin хопа отличается от origin исходного URL; остальные заголовки и тело
  * запроса — без изменений.
  */
@@ -437,7 +437,7 @@ export async function fetchWithEgressGuard(
   const now = options.now ?? Date.now;
   const method = init.method ?? 'GET';
   let current = rawUrl;
-  // PROP-107 §7: host-binding секретных заголовков. Origin исходного URL —
+  // ADR-105 §7: host-binding секретных заголовков. Origin исходного URL —
   // точка отсчёта: на хоп с другим origin секретные заголовки снимаются.
   const bindSecretHeaders = options.bindSecretHeaders === true;
   const originalOrigin = bindSecretHeaders ? originOf(rawUrl) : undefined;

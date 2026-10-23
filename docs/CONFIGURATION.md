@@ -84,7 +84,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 
 ### Env-оверрайды вложенных секций (ADR-023)
 
-Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision`, `analytics` можно задавать
+Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `authority` можно задавать
 переменными окружения — удобно для k8s (ConfigMap → env пода). Имя переменной
 собирается по правилу **`SYNTH_<SECTION>_<KEY>`**, где camelCase ключа переводится в
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -143,6 +143,9 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
 | `SYNTH_ANALYTICS_RETENTION_DAYS` | number | `analytics.retentionDays` |
 | `SYNTH_METRICS_ENABLED` | boolean | `metrics.enabled` |
+| `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; мастер-выключатель слоя полномочий) |
+| `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — наблюдение, `false` — принуждение) |
+| `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` | string (секрет) | `client_secret` OAuth-провайдера: `google` → `SYNTH_OAUTH_GOOGLE_CLIENT_SECRET` (в config не хранится; альтернатива — файл `{dataDir}/secrets/oauth/<provider>.client_secret`, см. ниже) |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON-массив | `security.bootstrapServiceKeys` (объектный env-оверрайд, ADR-052/O1; см. ниже) |
 | `SYNTH_TLS_CA_FILE` | ADR-099: путь к PEM-файлу доверенного CA (корпоративный CA); взаимоисключающ с `SYNTH_TLS_CA_PEM` | — |
 | `SYNTH_TLS_CA_PEM` | ADR-099: PEM доверенного CA (например из Secret); взаимоисключающ с `SYNTH_TLS_CA_FILE` | — |
@@ -319,7 +322,7 @@ mcp:
                                   # независима от tools.policy; per-session override: session.settings.mcpPolicy
   # servers — см. packages/shared/src/config/types.ts
   #   auth: { kind: "credential", credentialId: "extc_…" } — ссылка на внешний
-  #   доступ (PROP-107 Ф0): коннектор авторизуется токеном из слоя доступов,
+  #   доступ (ADR-105 Ф0): коннектор авторизуется токеном из слоя доступов,
   #   сам токен в конфиге/реестре не лежит (доступ — в {dataDir}/secrets/oauth/).
   #   Поле аддитивно: записи без auth валидны.
   # networkPolicy — адресная политика MCP {mode, list, exceptions} (тот же формат, что egress.*),
@@ -970,6 +973,21 @@ proxy:
 - **Fallback-файл**: если ключ не задан ни env, ни конфигом, core создаёт `{dataDir}/secrets/master.key` при первом запуске (`randomBytes(32)`, каталог `0700`, файл `0600`, атомарная запись). Секреты шифруются at-rest.
 - **Ротация**: `synth secrets rotate` (`--data-dir`, `--config`, `--old-key`/`--old-key-file`, `--new-key`/`--new-key-file`, `--dry-run`, `--yes`) перешифровывает существующие SSH-ключи старым→новым ключом (preflight: нерасшифровываемое поле → abort, ничего не пишется), обновляет `master.key` и сбрасывает кэш; `--dry-run` показывает сводку без записи. Без `--yes` (и без `--dry-run`) — отказ. Если эффективный ключ задан через env/`config.security.secretKey`, файл перезаписывается, но при старте игнорируется — обновите ключ в env/config. Перед ротацией рекомендуются бэкап `$SYNTH_DATA_DIR` и остановка сервера.
 
+### Секреты внешних доступов (OAuth, ADR-105)
+
+Секреты внешних доступов (OAuth-коннекторы) **в `config.yaml` не хранятся** (инвариант 13) — только env или файлы в каталоге `secrets/`.
+
+| Что | Где | Права |
+|-----|-----|-------|
+| `client_secret` OAuth-провайдера | env `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` (например `provider=google` → `SYNTH_OAUTH_GOOGLE_CLIENT_SECRET`) **или** файл `{dataDir}/secrets/oauth/<provider>.client_secret` | файл `0600`, каталог `secrets/` — `0700` |
+| access/refresh-токены доступов | `{dataDir}/secrets/oauth/credentials.json` (файловый backend; PostgreSQL — таблица `external_credentials`) | файл `0600`, атомарная запись tmp→rename (ADR-005) |
+
+- **Приоритет `client_secret`**: env → файл → «секрета нет». Пустое значение env/файла считается отсутствием секрета — провайдеру пустой `client_secret` не уходит.
+- В `config.yaml` у OAuth-провайдера хранятся только **данные**: `authorizeUrl`/`tokenUrl`/`revokeUrl`/`clientId`/`scopes`/`clientAuth`/`redirectUri`. Значение секрета ядро читает само и наружу (API/UI/логи, тексты ошибок) не отдаёт.
+- Токены at-rest **зашифрованы** мастер-ключом (`enc:v1:…`, ADR-076) — plaintext на диске не появляется; наружу отдаются только метаданные с маской.
+- **Бэкап**: каталог `secrets/` исключается из архива `synth backup` без `--with-secrets` — вместе с ним исключаются и токены доступов. Экспорт/импорт проекта (ADR-091) доступы не переносит: они инстанс-локальны.
+- Устройство подсистемы — [EXTERNAL_ACCESS.md](./EXTERNAL_ACCESS.md); решение — [ADR-105](./arch_decisions/adr-105-external-credentials.md).
+
 ### Installer service-key (`security.bootstrapServiceKeys`, ADR-052/O1)
 
 Секция задаёт **installer service-key'и**, которые провижинятся идемпотентно при
@@ -1399,6 +1417,38 @@ openssl rand -hex 32 > "$SYNTH_DATA_DIR/secrets/metrics-token"
 - `/metrics` не публикуется через UI-nginx; в Helm — `metrics.enabled`, аннотации `prometheus.io/*`
   или `ServiceMonitor`, дашборды `grafana.dashboards`, правила `alerts` ([charts/synth/README.md](../charts/synth/README.md)
   §«Наблюдаемость»). Dev-стенд — `docker-compose.observability.yml` ([deploy/observability/README.md](../deploy/observability/README.md)).
+
+### Полномочия (authority) (`authority.*`, ADR-106)
+
+Authority-слой — единая ось полномочий пользователей и агентов (в дополнение к ролям инстанса, ролям участника проекта, capability агента и правилам permission-конфига). Устройство подсистемы — [AUTHORITY.md](./AUTHORITY.md); решение — [ADR-106](./arch_decisions/adr-106-authority-layer.md).
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `authority.enabled` | Мастер-выключатель слоя: `false` — ни решений, ни записей (поведение прав прежнее). Env — `SYNTH_AUTHORITY_ENABLED` | `false` |
+| `authority.shadow` | Режим наблюдения: `true` — решение считается и пишется в журнал, но **не применяется**; `false` — решение применяется (enforced). Env — `SYNTH_AUTHORITY_SHADOW` | `true` |
+
+Три режима:
+
+| Режим | Что происходит |
+|-------|----------------|
+| **выключено** (`enabled: false`) | Слой не считает решения и не пишет их в журнал; права определяет только permission-слой (ADR-025/ADR-029) |
+| **наблюдение / shadow** (`enabled: true`, `shadow: true`) | Решение Authority считается и пишется в журнал (`{dataDir}/audit/authority.jsonl`), но **не применяется** — права не меняются. Режим миграции: расхождение shadow-решения с текущим — дефект миграции |
+| **принуждение / enforced** (`enabled: true`, `shadow: false`) | Решение применяется в permission-слое: `deny` слоя → `deny`, `ask` слоя → `ask` (требование потолка `yolo` не снимает); `allow` слоя ничего не разрешает сверх решения permission-слоя; тул без маппинга → `deny('unknown')`. Ошибка слоя не ломает ход — решение permission-слоя остаётся в силе |
+
+```yaml
+authority:
+  enabled: false
+  shadow: true
+```
+
+```bash
+# включить слой в режиме наблюдения (решения считаются, права не меняются)
+SYNTH_AUTHORITY_ENABLED=true SYNTH_AUTHORITY_SHADOW=true
+```
+
+- Секция — `authorityConfigSchema` (`packages/shared/src/config/types.ts`), дефолты — `config/defaults.ts`; env-оверрайды — по общему правилу `SYNTH_<SECTION>_<KEY>` (реестр `ENV_OVERRIDES`).
+- Runtime-настроек (UI) у секции нет: раздел «Полномочия» — остаток ADR-106 (Ф5).
+- Принуждение подключается **в permission-слое** (`PermissionEvaluator`), а не в тулах и не в обработчиках; журнал решений и метрика `synth_authority_decisions_total{action,effect,source}` — в [OBSERVABILITY.md](./OBSERVABILITY.md).
 
 ### Гибридный режим (remote)
 

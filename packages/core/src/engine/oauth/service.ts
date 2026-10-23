@@ -1,11 +1,11 @@
 /**
- * PROP-107 (Ф2): сервис слоя доступов — выдача кода, refresh, отзыв.
+ * ADR-105 (Ф2): сервис слоя доступов — выдача кода, refresh, отзыв.
  *
  * Единственный путь записи — **порт** `ExternalCredentialRepository`
  * (ADR-096): токены шифруются мастер-ключом внутри хранилища, наружу отдаются
  * метаданные с маской. Прямой записи в `{dataDir}` здесь нет (инвариант 2).
  *
- * **Refresh и гонка** (PROP-107 §3):
+ * **Refresh и гонка** (ADR-105 §3):
  * - параллельный refresh одного доступа → **ровно один** сетевой вызов
  *   (single-flight в процессе: параллельные вызовы ждут один результат);
  * - запись защищена **CAS по `refreshEnc`**: перед записью новых токенов
@@ -16,7 +16,7 @@
  *   `status:'error'` через порт: требуется явная переавторизация, молчаливый
  *   отказ недопустим.
  *
- * **Отзыв** (PROP-107 §4): локальный отзыв выполняется всегда (запись
+ * **Отзыв** (ADR-105 §4): локальный отзыв выполняется всегда (запись
  * помечается отозванной необратимо), вызов провайдера (RFC 7009) —
  * best-effort.
  */
@@ -54,7 +54,7 @@ export interface ExchangeAndStoreInput {
   codeVerifier?: string;
   /** `redirect_uri`, использованный при выдаче кода. */
   redirectUri?: string;
-  /** Владелец доступа (PROP-107 §2). */
+  /** Владелец доступа (ADR-105 §2). */
   owner: ExternalCredentialOwner;
   /** Кто выдал доступ (id пользователя инстанса). */
   createdBy: string;
@@ -75,7 +75,7 @@ export interface RevokeResult {
 }
 
 /**
- * Сервис слоя внешних доступов (PROP-107 Ф2).
+ * Сервис слоя внешних доступов (ADR-105 Ф2).
  *
  * Экземпляр долгоживущий: single-flight refresh держится в памяти сервиса
  * (по id доступа), поэтому параллельные вызовы refresh не превращаются в
@@ -188,7 +188,7 @@ export class OAuthCredentialService {
       tokens = await client.refresh({ refreshToken, clientId: record.clientId });
     } catch (err) {
       if (err instanceof OAuthError && err.code === 'invalid_grant') {
-        // Refresh-токен отозван/истёк → требуется переавторизация (PROP-107 §3).
+        // Refresh-токен отозван/истёк → требуется переавторизация (ADR-105 §3).
         await this._deps.repo.markError(id).catch(() => null);
       }
       throw err;

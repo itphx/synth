@@ -243,9 +243,9 @@ Probes Helm: liveness — `/health` (или `/ready` с большим `failureT
 `synth_pipeline_steps_total` тоже не попадает — он учитывается, когда завершится (после решения
 оператора).
 
-### Authority-слой (PROP-108)
+### Authority-слой (ADR-106)
 
-Решения Authority-слоя (PROP-108 Ф1). Лейблы — `action`/`effect`/`source` (аддитивное
+Решения Authority-слоя (ADR-106 Ф1). Лейблы — `action`/`effect`/`source` (аддитивное
 расширение списка лейблов ADR-094 двумя именами); идентификаторов принципала, хода, сессии и
 цели в лейблах нет — значения приведены к конечным наборам (неизвестное → `other`), поэтому
 кардинальность серий ограничена. Ошибка метрик не влияет на ход.
@@ -274,7 +274,7 @@ Probes Helm: liveness — `/health` (или `/ready` с большим `failureT
 
 - Лейблы — только `method`, `route`, `status`, `provider`, `model`, `kind`, `outcome`, `source`, `op`,
   `currency`, `backend`, `store`, `metric`, а также `action`/`effect` — только для метрик
-  Authority-слоя (PROP-108 Ф1: `synth_authority_decisions_total`).
+  Authority-слоя (ADR-106 Ф1: `synth_authority_decisions_total`).
 - **`route` — шаблон маршрута**, не сырой путь. Неизвестный/catch-all маршрут сводится к `other`.
 - **Нет** `session_id`, `user_id`, query-строк, сырых путей, текстов сообщений — это и PII, и
   неограниченная кардинальность.

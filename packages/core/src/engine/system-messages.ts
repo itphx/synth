@@ -362,7 +362,7 @@ export const SYSTEM_MESSAGES = {
   'event.duplicate': 'Duplicate event ignored: {dedupKey}',
   'hook.blocked': 'Hook "{hook}" blocked execution: {reason}',
 
-  // --- Steering: форсированная отправка во время хода (PROP-098) ---
+  // --- Steering: форсированная отправка во время хода (ADR-104) ---
   'steer.injected': 'Message injected into the running turn',
   'steer.limit_exceeded':
     'Steering limit reached: at most {limit} injected messages per turn',

@@ -96,7 +96,7 @@ export function ChatTab({ tab }: ChatTabProps) {
   const isReadOnly = isSubagent
   const [inputExpanded, setInputExpanded] = useState(false)
 
-  // PROP-098: режим отправки сообщения по умолчанию для композера. Выбор
+  // ADR-104: режим отправки сообщения по умолчанию для композера. Выбор
   // пользователя (`queue`/`steer`/`interrupt`) делает селектор композера — он
   // виден только при активном ходе; без хода сообщение уходит обычной очередью.
   const sendMode: SteerMode = DEFAULT_STEER_MODE

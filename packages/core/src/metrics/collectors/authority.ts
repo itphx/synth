@@ -1,5 +1,5 @@
 /**
- * ADR-094: метрики решений Authority-слоя (PROP-108 Ф1).
+ * ADR-094: метрики решений Authority-слоя (ADR-106 Ф1).
  *
  * Каталог:
  * - `synth_authority_decisions_total{action,effect,source}` — посчитанные
@@ -8,7 +8,7 @@
  * ## Контракт ADR-094
  *
  * - имена — только `synth_*`;
- * - лейблы — `action`/`effect`/`source` (PROP-108 Ф1: «метрики
+ * - лейблы — `action`/`effect`/`source` (ADR-106 Ф1: «метрики
  *   `synth_authority_*` (лейблы `action`/`effect`/`source`, без
  *   `user_id`/`session_id`)») — это **аддитивное** расширение списка лейблов
  *   ADR-094 двумя именами (`action`, `effect`); `source` уже входит в

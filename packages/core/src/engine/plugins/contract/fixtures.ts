@@ -91,7 +91,7 @@ function baseManifest(name: string, over: Partial<PackManifest> = {}): PackManif
       tools: [],
       promptBlocks: [],
       llmFilters: [],
-      // PROP-108: контент полномочий в фикстурах пуст (роли приезжают пакетами).
+      // ADR-106: контент полномочий в фикстурах пуст (роли приезжают пакетами).
       authority: { roles: [], actions: [], targets: [], agents: [] },
     },
     ...over,

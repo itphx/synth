@@ -72,7 +72,7 @@ interface MessageStatsProps {
  *
  * Префикс-сегмент отражает состояние ответа: cancelled/stopped → «Остановлено»,
  * error → «Ошибка», limit → «Лимит итераций», interrupted → «Прервано»
- * (PROP-098 `interrupt`); completed — без префикса.
+ * (ADR-104 `interrupt`); completed — без префикса.
  * Сегменты показываются только при наличии данных; если данных нет — null.
  * Кэш: `cache_read_tokens / input_tokens` (0 при input = 0).
  * Скорость: `output_tokens / (duration_ms / 1000)`.
@@ -104,7 +104,7 @@ export function MessageStats({ message, className }: MessageStatsProps) {
   } else if (status === 'limit') {
     segments.push(t('chat.messageStats.limit'))
   } else if (status === 'interrupted') {
-    // PROP-098 (этап 2): генерация прервана пользователем, ход продолжился.
+    // ADR-104 (этап 2): генерация прервана пользователем, ход продолжился.
     segments.push(t('chat.messageStats.interrupted'))
   }
 

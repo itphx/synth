@@ -21,7 +21,7 @@ function input(over: Partial<CreateExternalCredentialInput> = {}): CreateExterna
 }
 
 /**
- * Паспорт порта `ExternalCredentialRepository` (PROP-107 Ф1, ADR-096).
+ * Паспорт порта `ExternalCredentialRepository` (ADR-105 Ф1, ADR-096).
  *
  * Проверки, обязательные для ЛЮБОЙ реализации:
  * - **уникальность id** — два создания дают разные id, явный дубль → отказ;

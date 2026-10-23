@@ -33,7 +33,7 @@ import {
  * - `stopped` — остановлен (отказ в туле / блокировка);
  * - `error` — ошибка/пустой ответ LLM;
  * - `limit` — достигнут лимит итераций;
- * - `interrupted` — генерация прервана пользователем (PROP-098 `interrupt`:
+ * - `interrupted` — генерация прервана пользователем (ADR-104 `interrupt`:
  *   ход продолжается, ответ — частичный).
  */
 export type AssistantMessageStatus =
@@ -62,7 +62,7 @@ export function resolveAssistantStatus(
   metadataExtra?: Record<string, unknown>,
 ): AssistantMessageStatus {
   if (isCancelled) return 'cancelled';
-  // PROP-098 (этап 2): прерванная генерация (`interrupt`) — не «остановлено»
+  // ADR-104 (этап 2): прерванная генерация (`interrupt`) — не «остановлено»
   // («Стоп») и не ошибка: ход продолжается, ответ частичный.
   if (metadataExtra?.interrupted === true) return 'interrupted';
   const key = (metadataExtra?.i18n as { key?: string } | undefined)?.key;

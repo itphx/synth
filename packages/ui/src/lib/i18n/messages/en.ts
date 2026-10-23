@@ -1056,7 +1056,7 @@ export const dict = {
   'chat.input.mentionHint': 'Mention an agent with @',
   'chat.input.enqueue': 'Enqueue',
 
-  // --- Steering: intervention in the running turn (PROP-098) ---
+  // --- Steering: intervention in the running turn (ADR-104) ---
   'chat.steer.marker': 'Intervened in turn',
   'chat.steer.interruptMarker': 'Turn interrupted',
   'chat.steer.mode.label': 'Send mode',

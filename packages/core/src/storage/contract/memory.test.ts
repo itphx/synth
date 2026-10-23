@@ -153,7 +153,7 @@ describe('контрактные тесты in-memory реализаций по�
     async () => ({ repo: new MemoryPluginLockRepository() }),
   );
 
-  // PROP-108: порты Authority-слоя (политика инстанса + журнал решений).
+  // ADR-106: порты Authority-слоя (политика инстанса + журнал решений).
   describeAuthorityPolicyRepository(
     'MemoryAuthorityPolicyRepository → AuthorityPolicyRepository',
     async () => ({ repo: new MemoryAuthorityPolicyRepository() }),
@@ -195,7 +195,7 @@ describe('контрактные тесты in-memory реализаций по�
     repo: new MemoryWebhookDeliveryRepository(),
   }));
 
-  // PROP-107 (Ф1): внешние доступы (OAuth-креды к коннекторам).
+  // ADR-105 (Ф1): внешние доступы (OAuth-креды к коннекторам).
   describeExternalCredentialRepository(
     'MemoryExternalCredentialRepository → ExternalCredentialRepository',
     async () => ({ repo: new MemoryExternalCredentialRepository() }),

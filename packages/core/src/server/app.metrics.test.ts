@@ -23,7 +23,7 @@ async function withApp<T>(
     apiKey: API_KEY,
     storageBackend: 'memory',
     metricsConfig: { enabled: opts.metricsEnabled ?? false },
-    // PROP-108 Ф1: секция `authority` (слой выключен по умолчанию).
+    // ADR-106 Ф1: секция `authority` (слой выключен по умолчанию).
     authorityConfig: { enabled: opts.authorityEnabled ?? false, shadow: true },
   });
   try {
@@ -77,7 +77,7 @@ describe('createStandaloneApp: ADR-094 (metrics/ready)', () => {
     });
   });
 
-  it('PROP-108 Ф1: счётчик решений Authority-слоя подключён при metrics.enabled=true', async () => {
+  it('ADR-106 Ф1: счётчик решений Authority-слоя подключён при metrics.enabled=true', async () => {
     await withApp({ metricsEnabled: true, authorityEnabled: true }, async (app) => {
       const res = await app.app.request('/metrics');
       expect(res.status).toBe(200);

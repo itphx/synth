@@ -21,13 +21,13 @@ interface ChatInputProps {
   agents: AgentInfo[]
   isStreaming: boolean
   /**
-   * PROP-098: отправка сообщения. Третий аргумент — режим отправки
+   * ADR-104: отправка сообщения. Третий аргумент — режим отправки
    * (`queue` по умолчанию, `steer` — вмешательство в активный ход,
    * `interrupt` — прерывание текущей генерации с продолжением хода).
    */
   onSend: (text: string, agentRole?: string, mode?: SteerMode) => Promise<void>
   /**
-   * PROP-098: режим отправки по умолчанию для этого композера (значение задаёт
+   * ADR-104: режим отправки по умолчанию для этого композера (значение задаёт
    * вызывающий код). В UI режим выбирается селектором композера — только при
    * активном ходе; без хода вмешаться некуда, и сообщение уходит очередью.
    */
@@ -49,7 +49,7 @@ const MAX_TAGS = 3
 const CHAT_INPUT_RADIUS = 'var(--radius-xl)'
 
 /**
- * PROP-098: заголовок кнопки отправки во время активного хода — по выбранному
+ * ADR-104: заголовок кнопки отправки во время активного хода — по выбранному
  * режиму (`queue`/`steer`/`interrupt`). Без активного хода режим не действует,
  * поэтому подпись обычная («в очередь»).
  */
@@ -167,7 +167,7 @@ export function ChatInput({
   // касается десктопов с тачскрином (isTouch = pointer: coarse).
   const { isTouch } = useDevice()
   const [value, setValue] = useState('')
-  // PROP-098: режим отправки, выбранный в селекторе композера (виден только
+  // ADR-104: режим отправки, выбранный в селекторе композера (виден только
   // при активном ходе). Начальное значение — `sendMode` вызывающего кода.
   const [selectedMode, setSelectedMode] = useState<SteerMode>(sendMode ?? DEFAULT_STEER_MODE)
   const retryText = useChatStore((s) => s.retryInputBySession[sessionId])
@@ -354,7 +354,7 @@ export function ChatInput({
       textareaRef.current.style.height = 'auto'
     }
 
-    // Отправка во время активного хода (PROP-098): режим — общий для
+    // Отправка во время активного хода (ADR-104): режим — общий для
     // композера (`effectiveMode`): `queue` — в очередь, `steer` — вмешаться
     // в текущий ход (выбор делает селектор композера).
     if (!parts) {

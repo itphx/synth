@@ -83,7 +83,7 @@ export class TransportClient {
         agent_role: agentRole,
         provider,
         model,
-        // PROP-098: режим отправки (`queue` по умолчанию, `steer` — вмешательство
+        // ADR-104: режим отправки (`queue` по умолчанию, `steer` — вмешательство
         // в активный ход, `interrupt` — прерывание генерации с продолжением
         // хода). Не задан — сервер трактует как `queue`.
         ...(mode && mode !== 'queue' ? { mode } : {}),

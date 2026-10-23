@@ -1,14 +1,14 @@
 /**
- * PROP-108 Ф0: модель Authority-слоя — полномочия как контент.
+ * ADR-106 Ф0: модель Authority-слоя — полномочия как контент.
  *
  * Модель **доменно-нейтральна**: «действие», «цель» и «роль» — данные, а не код
- * ядра (PROP-108 §«Доменная нейтральность»). Ядро знает только форму записи и
+ * ядра (ADR-106 §«Доменная нейтральность»). Ядро знает только форму записи и
  * правила решения; конкретные глаголы (`sign`, `commit`), цели (`record:*`,
  * `invoice:*`) и роли (`clinician`, `treasurer`) приезжают контентом
  * (`provides.authority` пакета, ADR-086/PROP-090) и включаются политикой
- * инстанса (PROP-108 §«Правила безопасности контента»).
+ * инстанса (ADR-106 §«Правила безопасности контента»).
  *
- * Ключевые инварианты (PROP-108 §«Инварианты модели»):
+ * Ключевые инварианты (ADR-106 §«Инварианты модели»):
  * 1. **Нет гранта — нет права.** `allow` не выводится из отсутствия запрета;
  *    неизвестное действие/цель — `deny` (fail-closed).
  * 2. **Грант — всегда «действие × цель».** Цель — типизированный ресурс; текст
@@ -30,7 +30,7 @@ import { globMatch } from '../utils/glob.js';
 // --- Виды принципалов ---
 
 /**
- * Кто действует (PROP-108 §«Модель»): пользователь, агент, service-key,
+ * Кто действует (ADR-106 §«Модель»): пользователь, агент, service-key,
  * шедулер или внешний источник события.
  */
 export const AUTHORITY_PRINCIPAL_KINDS = ['user', 'agent', 'service', 'scheduler', 'event'] as const;
@@ -39,7 +39,7 @@ export const authorityPrincipalKindSchema = z.enum(AUTHORITY_PRINCIPAL_KINDS);
 
 /**
  * Идентификатор принципала: `user:<id>`, `agent:<id>`, `service:<keyId>`,
- * `scheduler`, `event:<source>` (PROP-108 §«Многопользовательская сессия»).
+ * `scheduler`, `event:<source>` (ADR-106 §«Многопользовательская сессия»).
  */
 export const AUTHORITY_PRINCIPAL_ID_REGEX = /^[a-z][a-z0-9._-]*:[^\s]+$/;
 export const authorityPrincipalRefSchema = z
@@ -51,11 +51,11 @@ export const authorityPrincipalRefSchema = z
 // --- Виды целей ---
 
 /**
- * Виды целей, известные **ядру** (PROP-108 §«Модель»): проект, путь, сессия,
+ * Виды целей, известные **ядру** (ADR-106 §«Модель»): проект, путь, сессия,
  * MCP-сервер, внешний ресурс, рабочая область.
  *
  * ⚠️ Доменная нейтральность требует и других видов (`record:<patientId>`,
- * `invoice:<id>`, `report:<period>` — PROP-108 §«Доменная нейтральность»), поэтому
+ * `invoice:<id>`, `report:<period>` — ADR-106 §«Доменная нейтральность»), поэтому
  * `kind` — идентификатор строки, а не закрытое перечисление: доменные виды
  * **объявляются контентом** (`provides.authority.targets[]`) и становятся
  * известными только после установки и одобрения пакета. Ядро знает базовый
@@ -68,7 +68,7 @@ export const AUTHORITY_CORE_TARGET_KINDS = [
   'mcp',
   'external',
   'workspace',
-  // PROP-108 Ф2: путь **вне** рабочего каталога проекта. Отдельный вид цели:
+  // ADR-106 Ф2: путь **вне** рабочего каталога проекта. Отдельный вид цели:
   // правило `external_directory` и fail-closed дефолт «спросить» относятся
   // именно к таким путям, а к `path:` (внутри workspace) — не относятся.
   // Ссылка цели — неразличимый токен (хэш абсолютного пути): сырой путь в
@@ -107,7 +107,7 @@ export const authorityActionIdSchema = z
 // --- Цели и шаблоны целей ---
 
 /**
- * Шаблон цели гранта: `<вид>:<шаблон-ссылки>` (PROP-108 §«Модель»).
+ * Шаблон цели гранта: `<вид>:<шаблон-ссылки>` (ADR-106 §«Модель»).
  * Примеры: `path:src/**`, `path:*.env`, `mcp:git/*`, `record:*`,
  * `external:registry/*`.
  *
@@ -128,7 +128,7 @@ export type AuthorityGrantEffect = (typeof AUTHORITY_GRANT_EFFECTS)[number];
 export const authorityGrantEffectSchema = z.enum(AUTHORITY_GRANT_EFFECTS);
 
 /**
- * Ограничения гранта (PROP-108 §«Модель»): `once` (одноразовость),
+ * Ограничения гранта (ADR-106 §«Модель»): `once` (одноразовость),
  * `ttlMs` (срок жизни), `maxCount` (лимит применений), `requireConfirm`
  * (требовать подтверждения даже при `allow`).
  */
@@ -149,7 +149,7 @@ export type AuthorityGrantConstraints = z.infer<typeof authorityGrantConstraints
 // --- Сущности модели ---
 
 /**
- * Принципал — тот, от чьего имени исполняется ход (PROP-108 §«Модель»).
+ * Принципал — тот, от чьего имени исполняется ход (ADR-106 §«Модель»).
  * `roles[]` — роли, которые носитель принципала предъявляет (содержательные
  * роли приезжают контентом; глобальные роли инстанса — отдельная ось).
  */
@@ -189,7 +189,7 @@ export type AuthorityTarget = z.infer<typeof authorityTargetSchema>;
 
 /**
  * Грант — разрешение «действие × цель» с эффектом и опциональными
- * ограничениями. `deny` в гранте сильнее `allow` (PROP-108 §«Резолвинг и
+ * ограничениями. `deny` в гранте сильнее `allow` (ADR-106 §«Резолвинг и
  * решение»).
  */
 export const authorityGrantSchema = z
@@ -233,7 +233,7 @@ export type AuthorityCeiling = z.infer<typeof authorityCeilingSchema>;
 
 /**
  * Ход — единица исполнения. Принципал фиксируется **при приёме ввода**
- * (PROP-108 §«Инварианты модели», п. 4) — в Ф4; в Ф0–Ф1 это просто контракт.
+ * (ADR-106 §«Инварианты модели», п. 4) — в Ф4; в Ф0–Ф1 это просто контракт.
  */
 export const authorityTurnSchema = z
   .object({
@@ -270,7 +270,7 @@ export type AuthorityApproval = z.infer<typeof authorityApprovalSchema>;
 
 /**
  * Объявление вида цели контентом: `kind` + имя резолвера (резолверы целей
- * регистрирует ядро или плагин — PROP-108 §«Декларация, не код»).
+ * регистрирует ядро или плагин — ADR-106 §«Декларация, не код»).
  */
 export const authorityTargetDeclarationSchema = z
   .object({
@@ -281,7 +281,7 @@ export const authorityTargetDeclarationSchema = z
 export type AuthorityTargetDeclaration = z.infer<typeof authorityTargetDeclarationSchema>;
 
 /**
- * Политика полномочий инстанса — верхняя граница (PROP-108 §«Точки
+ * Политика полномочий инстанса — верхняя граница (ADR-106 §«Точки
  * принуждения», уровень 4). Хранится через порт `AuthorityPolicyRepository`
  * (ADR-096).
  */
@@ -302,7 +302,7 @@ export type AuthorityPolicy = z.infer<typeof authorityPolicySchema>;
 // --- Запись журнала решений ---
 
 /**
- * Запись append-only журнала решений Authority-слоя (PROP-108 §«Инварианты
+ * Запись append-only журнала решений Authority-слоя (ADR-106 §«Инварианты
  * модели», п. 8): `principal`/`action`/`target`/`effect`/`source` — **без
  * секретов и без сырых путей** (путь нормализуется до относительного внутри
  * workspace, инвариант 25/ADR-094).
@@ -324,7 +324,7 @@ export const authorityDecisionEntrySchema = z
     /** Режим: `shadow` — решение посчитано, но не применено (Ф1). */
     mode: z.enum(['shadow', 'enforced']).default('shadow'),
     /**
-     * PROP-108 Ф1: решение permission-слоя на момент shadow-записи. Нужно для
+     * ADR-106 Ф1: решение permission-слоя на момент shadow-записи. Нужно для
      * разбора расхождений миграции («shadow-решение не совпало с текущим —
      * это дефект миграции»). В enforced-режиме поле отсутствует.
      */
@@ -336,7 +336,7 @@ export type AuthorityDecisionEntry = z.infer<typeof authorityDecisionEntrySchema
 // --- Кросс-валидация контента ---
 
 /**
- * Контент Authority-слоя: роли/действия/цели/агенты (PROP-108 §«Доменная
+ * Контент Authority-слоя: роли/действия/цели/агенты (ADR-106 §«Доменная
  * нейтральность»). Та же форма, что в `provides.authority` пакета.
  */
 export interface AuthorityContent {

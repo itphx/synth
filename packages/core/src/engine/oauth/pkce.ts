@@ -1,5 +1,5 @@
 /**
- * PROP-107 (Ф2): PKCE (RFC 7636) для Authorization Code.
+ * ADR-105 (Ф2): PKCE (RFC 7636) для Authorization Code.
  *
  * Клиент — публичный: `code_verifier` (случайный, 43–128 символов unreserved
  * алфавита) и `code_challenge = BASE64URL(SHA256(code_verifier))`, метод

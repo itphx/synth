@@ -1,5 +1,5 @@
 /**
- * PROP-107 (Ф2): OAuth-клиент — PKCE, обмен кода, refresh (в т.ч. параллельный),
+ * ADR-105 (Ф2): OAuth-клиент — PKCE, обмен кода, refresh (в т.ч. параллельный),
  * `invalid_grant`, revoke при 5xx.
  *
  * Провайдер — локальный `node:http`-сервер (реальный транспорт: `egressFetch`,

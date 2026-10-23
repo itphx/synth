@@ -315,7 +315,7 @@ interface ChatStore {
   startStream: (sessionId: string, streamId: string, agentRole: string | null, model?: string, provider?: string) => void
   updateStreamChunk: (sessionId: string, streamId: string, content: string, reasoning: string, model?: string, provider?: string, iteration?: number) => void
   /**
-   * PROP-098 (этап 2): прерывание генерации (`stream.interrupted`) — ход НЕ
+   * ADR-104 (этап 2): прерывание генерации (`stream.interrupted`) — ход НЕ
    * завершается, стрим остаётся живым (с тем же `stream_id`), но накопленный
    * текст прерванной генерации уже сохранён отдельным сообщением. Сбрасываем
    * только аккумулятор (текст/рассуждения), сам стрим и его tool-вызовы —
@@ -463,7 +463,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
 
-  // PROP-098 (этап 2): прерывание генерации (`stream.interrupted`). Ход
+  // ADR-104 (этап 2): прерывание генерации (`stream.interrupted`). Ход
   // продолжается (тот же `stream_id`), а накопленный текст прерванной
   // генерации уже сохранён отдельным сообщением со статусом `interrupted` —
   // сбрасываем аккумулятор, чтобы следующие чанки не дописались к нему.

@@ -25,7 +25,7 @@ function credential(over: Partial<ExternalCredential> = {}): ExternalCredential 
   };
 }
 
-describe('externalCredentialSchema (PROP-107 Ф0)', () => {
+describe('externalCredentialSchema (ADR-105 Ф0)', () => {
   it('принимает запись из §1 документа', () => {
     const parsed = externalCredentialSchema.parse({
       id: 'extc_1',
@@ -68,7 +68,7 @@ describe('externalCredentialSchema (PROP-107 Ф0)', () => {
   });
 });
 
-describe('createExternalCredentialInputSchema (PROP-107 Ф0)', () => {
+describe('createExternalCredentialInputSchema (ADR-105 Ф0)', () => {
   it('принимает вход с plaintext-токеном и опциональными полями', () => {
     const parsed = createExternalCredentialInputSchema.parse({
       provider: 'google',
@@ -105,7 +105,7 @@ describe('createExternalCredentialInputSchema (PROP-107 Ф0)', () => {
   });
 });
 
-describe('updateExternalCredentialTokensSchema (PROP-107 Ф0)', () => {
+describe('updateExternalCredentialTokensSchema (ADR-105 Ф0)', () => {
   it('все поля опциональны; статус ограничен списком', () => {
     expect(updateExternalCredentialTokensSchema.parse({})).toEqual({});
     expect(updateExternalCredentialTokensSchema.safeParse({ status: 'error' }).success).toBe(true);
@@ -113,7 +113,7 @@ describe('updateExternalCredentialTokensSchema (PROP-107 Ф0)', () => {
   });
 });
 
-describe('маска секрета и маппер метаданных (PROP-107 Ф0)', () => {
+describe('маска секрета и маппер метаданных (ADR-105 Ф0)', () => {
   it('маска необратима и стабильна для одного значения', () => {
     const mask = maskExternalSecret('enc:v1:iv:tag:cipher');
     expect(mask).toBe(maskExternalSecret('enc:v1:iv:tag:cipher'));

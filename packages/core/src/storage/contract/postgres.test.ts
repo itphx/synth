@@ -211,7 +211,7 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   describeBlobStore('PG → BlobStore (file-backed)', () => makePort('blobs'));
   describeDefaultsRepository('PG → DefaultsRepository', () => makePort('defaults'));
 
-  // PROP-107 (Ф1): внешние доступы к коннекторам (таблица `external_credentials`,
+  // ADR-105 (Ф1): внешние доступы к коннекторам (таблица `external_credentials`,
   // миграция 011; шифрование токенов — core-хелперами, мастер-ключ в `{dataDir}`).
   describeExternalCredentialRepository('PG → ExternalCredentialRepository', () =>
     makePort('externalCredentials'),

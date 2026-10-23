@@ -115,12 +115,12 @@ function ChatMessageInner({
   // ADR-051: сообщения планировщика (source:'cron') приходят как role:'user' с
   // metadata.scheduler === true — рисуем их служебным Notice, а не user-пузырём.
   const isScheduler = isUser && message.metadata?.scheduler === true
-  // PROP-098: инъекция во время активного хода (metadata.steer === true) —
+  // ADR-104: инъекция во время активного хода (metadata.steer === true) —
   // помечаем маркером «вмешательство в ход»; режим `interrupt`
   // (metadata.interrupt === true) — маркером «прерывание хода».
   const isSteered = isUser && message.metadata?.steer === true
   const isInterruptSteer = isUser && message.metadata?.interrupt === true
-  // PROP-098 (этап 2): прерванная генерация (metadata.status === 'interrupted') —
+  // ADR-104 (этап 2): прерванная генерация (metadata.status === 'interrupted') —
   // ответ частичный, ход продолжился с новым сообщением.
   const isInterrupted = isAssistant && message.metadata?.status === 'interrupted'
   const canRetry = isUser

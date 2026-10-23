@@ -28,7 +28,7 @@ export {
 } from './events.js';
 
 export { MemoryWebhookRepository, MemoryWebhookDeliveryRepository } from './webhooks.js';
-// PROP-107 (Ф1): внешние доступы (OAuth-креды к коннекторам).
+// ADR-105 (Ф1): внешние доступы (OAuth-креды к коннекторам).
 export { MemoryExternalCredentialRepository } from './external-credentials.js';
 
 export { MemoryScheduleRepository, MemoryJobRepository } from './scheduler.js';
@@ -39,7 +39,7 @@ export { MemoryPluginAuditRepository } from './plugin-audit.js';
 // PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов.
 export { MemoryPluginLockRepository } from './plugin-lock.js';
 export { MemorySecurityAuditRepository, MemoryEgressRequestLogRepository } from './security-audit.js';
-// PROP-108: порты Authority-слоя (политика инстанса + журнал решений).
+// ADR-106: порты Authority-слоя (политика инстанса + журнал решений).
 export { MemoryAuthorityPolicyRepository } from './authority-policy.js';
 export { MemoryAuthorityDecisionJournal } from './authority-decision-journal.js';
 export { MemoryAnalyticsRollupRepository } from './analytics-rollup.js';

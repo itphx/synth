@@ -207,7 +207,7 @@ export const promptRequestSchema = z.object({
   agent: z.string().optional(),
   system: z.string().optional(),
   /**
-   * PROP-098: режим отправки. `queue` (по умолчанию) — прежнее поведение;
+   * ADR-104: режим отправки. `queue` (по умолчанию) — прежнее поведение;
    * `steer` — инъекция в активный ход без прерывания генерации;
    * `interrupt` — прерывание текущей генерации с продолжением хода.
    */

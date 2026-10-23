@@ -1,5 +1,5 @@
 /**
- * PROP-108 Ф1: shadow-интеграция Authority-слоя.
+ * ADR-106 Ф1: shadow-интеграция Authority-слоя.
  *
  * ⚠️ **Устарело (Ф2).** Решения теперь считает и применяет `AuthorityGuard`
  * (`engine/authority/guard.ts`) — он же ведёт журнал решений
@@ -24,7 +24,7 @@ export type AuthorityShadowRecorderOptions = AuthorityGuardOptions;
  * Наблюдатель Authority-слоя (Ф1) — считает решения и пишет их в журнал, но
  * **не применяет** (решение прав не меняется).
  *
- * @deprecated PROP-108 Ф2: используйте `AuthorityGuard` — он же считает и
+ * @deprecated ADR-106 Ф2: используйте `AuthorityGuard` — он же считает и
  * применяет решения (`authority.enabled` + `authority.shadow: false`).
  */
 export class AuthorityShadowRecorder extends AuthorityGuard {}

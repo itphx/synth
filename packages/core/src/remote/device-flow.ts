@@ -64,7 +64,7 @@ export interface PostFormOptions {
   /**
    * Дополнительные заголовки запроса (например, `Authorization: Basic` для
    * confidential-клиента). Секреты в заголовках — по правилам host-binding
-   * (PROP-107 §7): такие запросы не должны уходить на чужой origin.
+   * (ADR-105 §7): такие запросы не должны уходить на чужой origin.
    */
   headers?: Record<string, string>;
 }

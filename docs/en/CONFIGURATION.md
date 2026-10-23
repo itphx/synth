@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-10-19 (ADR-094, секция `metrics`); перевод отстаёт (ADR-102, `analytics`).
+> ⚠️ RU-версия обновлена 2026-10-23 (ADR-106, секция `authority`; ADR-105, секреты внешних доступов); перевод отстаёт (ADR-102, `analytics`).
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -85,7 +85,7 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 
 ### Env overrides of nested sections (ADR-023)
 
-Scalar keys of the `events`, `scheduler`, `webhooks`, `decision` sections can be set
+Scalar keys of the `events`, `scheduler`, `webhooks`, `decision`, `authority` sections can be set
 with environment variables — handy for k8s (ConfigMap → pod env). The variable name is
 built by the rule **`SYNTH_<SECTION>_<KEY>`**, where the camelCase key is converted to
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -143,6 +143,9 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON array | `security.bootstrapServiceKeys` (an object env override, ADR-052/O1; see below) |
+| `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; master switch of the authority layer) |
+| `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — observation, `false` — enforcement) |
+| `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` | string (secret) | `client_secret` of an OAuth provider: `google` → `SYNTH_OAUTH_GOOGLE_CLIENT_SECRET` (never stored in config; the alternative is a file `{dataDir}/secrets/oauth/<provider>.client_secret`, see below) |
 | `SYNTH_TLS_CA_FILE` | ADR-099: path to a PEM file with the trusted CA (corporate CA); mutually exclusive with `SYNTH_TLS_CA_PEM` | — |
 | `SYNTH_TLS_CA_PEM` | ADR-099: PEM of the trusted CA (e.g. from a Secret); mutually exclusive with `SYNTH_TLS_CA_FILE` | — |
 | `SYNTH_TLS_CERT_FILE` | ADR-099: path to the PEM file of the client certificate (mTLS) | — |
@@ -964,6 +967,21 @@ Profile passwords live only in env/files (not shown above): `SYNTH_PROXY_PASSWOR
 - **Fallback file**: if the key is set neither via env nor via the config, core creates `{dataDir}/secrets/master.key` on the first start (`randomBytes(32)`, directory `0700`, file `0600`, atomic write). Secrets are encrypted at rest.
 - **Rotation**: `synth secrets rotate` (`--data-dir`, `--config`, `--old-key`/`--old-key-file`, `--new-key`/`--new-key-file`, `--dry-run`, `--yes`) re-encrypts the existing SSH keys from the old key to the new one (preflight: an undecryptable field → abort, nothing is written), updates `master.key` and resets the cache; `--dry-run` shows a summary without writing. Without `--yes` (and without `--dry-run`) — refusal. If the effective key is set via env/`config.security.secretKey`, the file is overwritten but ignored at start — update the key in env/config. Before rotation a backup of `$SYNTH_DATA_DIR` and stopping the server are recommended.
 
+### External access secrets (OAuth, ADR-105)
+
+External access secrets (OAuth connectors) are **never stored in `config.yaml`** (invariant 13) — only env variables or files in the `secrets/` directory.
+
+| What | Where | Permissions |
+|------|-------|-------------|
+| `client_secret` of an OAuth provider | env `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` (e.g. `provider=google` → `SYNTH_OAUTH_GOOGLE_CLIENT_SECRET`) **or** the file `{dataDir}/secrets/oauth/<provider>.client_secret` | file `0600`, the `secrets/` directory — `0700` |
+| access/refresh tokens of the credentials | `{dataDir}/secrets/oauth/credentials.json` (file backend; PostgreSQL — the `external_credentials` table) | file `0600`, atomic write tmp→rename (ADR-005) |
+
+- **`client_secret` priority**: env → file → "no secret". An empty env value or file is treated as "no secret" — an empty `client_secret` is never sent to the provider.
+- In `config.yaml` an OAuth provider holds **data only**: `authorizeUrl`/`tokenUrl`/`revokeUrl`/`clientId`/`scopes`/`clientAuth`/`redirectUri`. The core reads the secret itself and never exposes it (API/UI, logs, error texts).
+- Tokens are **encrypted** at rest with the master key (`enc:v1:…`, ADR-076) — plaintext never appears on disk; only metadata with a mask is exposed.
+- **Backup**: the `secrets/` directory is excluded from the `synth backup` archive without `--with-secrets` — the credential tokens are excluded with it. The project export/import (ADR-091) does not carry credentials over: they are instance-local.
+- The subsystem description — [EXTERNAL_ACCESS.md](../EXTERNAL_ACCESS.md) (RU); the decision — [ADR-105](../arch_decisions/adr-105-external-credentials.md).
+
 ### Installer service key (`security.bootstrapServiceKeys`, ADR-052/O1)
 
 The section defines **installer service keys** that are provisioned idempotently at
@@ -1304,6 +1322,38 @@ metrics:
   annotations or `ServiceMonitor`, dashboards `grafana.dashboards`, rules `alerts`
   ([charts/synth/README.md](../../charts/synth/README.md) §"Наблюдаемость"). Dev stand —
   `docker-compose.observability.yml` ([deploy/observability/README.md](../../deploy/observability/README.md)).
+
+### Authority (`authority.*`, ADR-106)
+
+The authority layer is a single axis of permissions for users and agents (in addition to the instance roles, the project member roles, the agent capability and the permission-config rules). The subsystem description — [AUTHORITY.md](../AUTHORITY.md) (RU); the decision — [ADR-106](../arch_decisions/adr-106-authority-layer.md).
+
+| Field | Purpose | Default |
+|------|-----------|--------------|
+| `authority.enabled` | Master switch of the layer: `false` — no decisions and no records (the permission behaviour is unchanged). Env — `SYNTH_AUTHORITY_ENABLED` | `false` |
+| `authority.shadow` | Observation mode: `true` — the decision is computed and written to the journal but **not applied**; `false` — the decision is applied (enforced). Env — `SYNTH_AUTHORITY_SHADOW` | `true` |
+
+Three modes:
+
+| Mode | What happens |
+|-------|----------------|
+| **disabled** (`enabled: false`) | The layer computes no decisions and writes nothing; permissions are determined by the permission layer alone (ADR-025/ADR-029) |
+| **observation / shadow** (`enabled: true`, `shadow: true`) | The authority decision is computed and written to the journal (`{dataDir}/audit/authority.jsonl`), but **not applied** — permissions do not change. This is the migration mode: a mismatch between the shadow decision and the current one is a migration defect |
+| **enforcement** (`enabled: true`, `shadow: false`) | The decision is applied in the permission layer: a layer `deny` → `deny`, a layer `ask` → `ask` (a ceiling requirement that `yolo` does not lift); a layer `allow` grants nothing beyond the permission-layer decision; a tool without a mapping → `deny('unknown')`. A layer failure does not break the turn — the permission-layer decision stays in force |
+
+```yaml
+authority:
+  enabled: false
+  shadow: true
+```
+
+```bash
+# enable the layer in the observation mode (decisions are computed, permissions do not change)
+SYNTH_AUTHORITY_ENABLED=true SYNTH_AUTHORITY_SHADOW=true
+```
+
+- The section — `authorityConfigSchema` (`packages/shared/src/config/types.ts`), the defaults — `config/defaults.ts`; the env overrides follow the common `SYNTH_<SECTION>_<KEY>` rule (the `ENV_OVERRIDES` registry).
+- The section has no runtime (UI) settings yet: the “Authority” UI section is a remainder of ADR-106 (Ф5).
+- The enforcement is hooked into the **permission layer** (`PermissionEvaluator`), not into the tools and not into the handlers; the decision journal and the `synth_authority_decisions_total{action,effect,source}` metric — in [OBSERVABILITY.md](../OBSERVABILITY.md) (RU).
 
 ### Hybrid mode (remote)
 

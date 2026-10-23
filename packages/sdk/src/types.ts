@@ -73,7 +73,7 @@ export type SessionPatch = SessionUpdateRequest & {
 
 /**
  * Тело `POST /sessions/:id/prompt` — `stream` и `mode` имеют серверные
- * default'ы (`true` и `queue` соответственно, PROP-098).
+ * default'ы (`true` и `queue` соответственно, ADR-104).
  */
 export type SessionPromptInput = Omit<PromptRequestInput, 'stream'> & { stream?: boolean };
 

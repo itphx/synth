@@ -196,7 +196,7 @@ export const defaultConfig: SynthConfig = {
     enabled: false,
   },
   authority: {
-    // PROP-108 Ф1: Authority-слой выключен по умолчанию — права не меняются.
+    // ADR-106 Ф1: Authority-слой выключен по умолчанию — права не меняются.
     enabled: false,
     // При включении слоя он сначала только наблюдает (shadow): решение
     // считается и пишется в журнал, но не применяется.

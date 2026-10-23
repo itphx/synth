@@ -1,5 +1,5 @@
 /**
- * PROP-108 Ф1/Ф2: шов Authority-слоя в permission-слой.
+ * ADR-106 Ф1/Ф2: шов Authority-слоя в permission-слой.
  *
  * Модуль **без побочных эффектов и без импортов движка** — только типы. Его
  * импортит и permission-слой (`engine/permission/evaluator.ts`), и guard
@@ -7,10 +7,10 @@
  *
  * Контракт шва:
  * - решение **не меняется** в shadow-режиме — слой только считает и пишет
- *   (PROP-108 §«Совместимость и миграция»);
+ *   (ADR-106 §«Совместимость и миграция»);
  * - в enforced-режиме (Ф2) решение Authority-слоя **сужает** решение
  *   permission-слоя: `deny` → `deny`, `ask` → `ask`; `allow` ничего не
- *   разрешает сверх permission-слоя (права только сужаются, PROP-108
+ *   разрешает сверх permission-слоя (права только сужаются, ADR-106
  *   §«Инварианты модели», п. 3);
  * - вызов синхронный и **не должен бросать**: ошибка слоя не влияет на ход.
  */
@@ -60,7 +60,7 @@ export interface AuthorityShadowInput extends AuthorityShadowContext {
 export type AuthorityShadowHook = (input: AuthorityShadowInput) => void;
 
 /**
- * Решение Authority-слоя для пары «действие × цель» (PROP-108 Ф2).
+ * Решение Authority-слоя для пары «действие × цель» (ADR-106 Ф2).
  *
  * `enforced` — слой применяет решение (`authority.enabled` и **не**
  * `authority.shadow`). При `enforced: false` решение только считается и
@@ -79,7 +79,7 @@ export interface AuthorityGateResult {
   enforced: boolean;
   /**
    * Требуется подтверждение, которое `yolo` **не снимает**: решение пришло от
-   * потолка/политики (ось ≠ «user»), а не от правил сессии (PROP-108
+   * потолка/политики (ось ≠ «user»), а не от правил сессии (ADR-106
    * §«Многопользовательская сессия»: «`yolo` не снимает `ask`, если этого
    * требует потолок сессии»).
    */

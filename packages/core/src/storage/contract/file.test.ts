@@ -227,7 +227,7 @@ describe('контрактные тесты файловых реализаци�
     repo: new WebhookDeliveryStore({ dataDir: await tmp() }),
   }));
 
-  // PROP-107 (Ф1): внешние доступы — `secrets/oauth/credentials.json` (0600).
+  // ADR-105 (Ф1): внешние доступы — `secrets/oauth/credentials.json` (0600).
   describeExternalCredentialRepository(
     'ExternalCredentialStore → ExternalCredentialRepository',
     async () => {
@@ -311,7 +311,7 @@ describe('контрактные тесты файловых реализаци�
     };
   });
 
-  // PROP-108: порты Authority-слоя (политика инстанса + журнал решений).
+  // ADR-106: порты Authority-слоя (политика инстанса + журнал решений).
   describeAuthorityPolicyRepository(
     'FileAuthorityPolicyStore → AuthorityPolicyRepository',
     async () => {

@@ -1,10 +1,10 @@
 /**
- * PROP-108 Ф1: порт append-only журнала решений Authority-слоя (ADR-096).
+ * ADR-106 Ф1: порт append-only журнала решений Authority-слоя (ADR-096).
  *
  * Журнал фиксирует каждое посчитанное решение («кто, что, над чем, чем
  * кончилось»). Это **отдельный** порт, а не расширение `SECURITY_AUDIT_SCOPES`:
  * security-аудит — про изменения политик, журнал решений — про решения о
- * правах (PROP-108 §«Инварианты модели», п. 8).
+ * правах (ADR-106 §«Инварианты модели», п. 8).
  *
  * Файловая реализация — `packages/core/src/storage/file-authority-decision-journal.ts`
  * (JSONL `{dataDir}/audit/authority.jsonl`), in-memory —

@@ -1,5 +1,5 @@
 /**
- * PROP-098: очередь инъекций (`steerInbox`) — FIFO, лимит инъекций на ход
+ * ADR-104: очередь инъекций (`steerInbox`) — FIFO, лимит инъекций на ход
  * и отказ с понятной ошибкой (STEER_LIMIT_EXCEEDED).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -37,7 +37,7 @@ function makeSteerMessage(content: string): Message {
   };
 }
 
-describe('PROP-098: очередь инъекций (steerInbox)', () => {
+describe('ADR-104: очередь инъекций (steerInbox)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let eventBus: EventBus;
