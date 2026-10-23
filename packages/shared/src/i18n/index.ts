@@ -292,7 +292,7 @@ export const ENGINE_MESSAGE_KEYS = [
   // --- Steering: форсированная отправка во время хода (PROP-098) ---
   'steer.injected',
   'steer.limit_exceeded',
-  'steer.interrupt_unsupported',
+  'steer.interrupted',
   // --- Профиль пользователя и онбординг ---
   'profile.deps_unavailable',
   'profile.session_read_error',
@@ -611,7 +611,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   // --- Steering: форсированная отправка во время хода (PROP-098) ---
   'steer.injected': [],
   'steer.limit_exceeded': ["limit"],
-  'steer.interrupt_unsupported': [],
+  'steer.interrupted': [],
   // --- Профиль пользователя и онбординг ---
   'profile.deps_unavailable': ["tool"],
   'profile.session_read_error': [],

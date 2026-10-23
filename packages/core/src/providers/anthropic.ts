@@ -197,6 +197,17 @@ export class AnthropicProvider extends BaseProvider {
     // таймер снимается, дальше стрим длится сколько нужно.
     let firstChunkReceived = false;
 
+    // PROP-098 (этап 2): прерывание генерации без отмены хода — обрыв сетевого
+    // запроса (как «Стоп»), но токен НЕ помечается отменённым: ход
+    // продолжается (оркестратор применяет инъекцию на границе шага).
+    if (cancellationToken) {
+      const originalInterrupt = cancellationToken.interrupt?.bind(cancellationToken);
+      cancellationToken.interrupt = () => {
+        originalInterrupt?.();
+        controller.abort();
+      };
+    }
+
     try {
       const resp = await egressFetch(this.url, {
         method: 'POST',
@@ -220,7 +231,7 @@ export class AnthropicProvider extends BaseProvider {
 
       try {
         while (true) {
-          if (cancellationToken?.cancelled) {
+          if (cancellationToken?.cancelled || cancellationToken?.interrupted) {
             info('ANTHROPIC', 'Стрим отменён по токену');
             reader.cancel();
             return;
@@ -380,7 +391,7 @@ export class AnthropicProvider extends BaseProvider {
         reader.releaseLock();
       }
 
-      if (!cancellationToken?.cancelled) {
+      if (!cancellationToken?.cancelled && !cancellationToken?.interrupted) {
         debugCollector?.captureApiResponse({
           usage: accumulatedUsage,
           model: this.model,

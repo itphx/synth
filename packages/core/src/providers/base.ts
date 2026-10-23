@@ -171,6 +171,16 @@ export interface LLMMessage {
 export interface CancellationToken {
   cancelled: boolean;
   cancel: () => void;
+  /**
+   * PROP-098 (этап 2): прерывание текущей генерации БЕЗ отмены хода.
+   *
+   * `interrupted` — флаг прерывания (его снимает оркестратор на границе
+   * шага, где прерырование применяется); `interrupt()` — запрос прерывания:
+   * провайдер закрывает сетевой стрим, но `cancelled` не выставляется — ход
+   * продолжается (в отличие от «Стоп», который завершает ход целиком).
+   */
+  interrupted?: boolean;
+  interrupt?: () => void;
 }
 
 export interface ProviderConfig {

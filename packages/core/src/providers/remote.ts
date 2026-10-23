@@ -135,6 +135,14 @@ export class RemoteProvider extends BaseProvider {
         originalCancel();
         controller.abort();
       };
+      // PROP-098 (этап 2): прерывание генерации без отмены хода — тот же обрыв
+      // сетевого запроса, что и у «Стоп», но токен НЕ помечается отменённым:
+      // ход продолжается (оркестратор применяет инъекцию на границе шага).
+      const originalInterrupt = cancellationToken.interrupt?.bind(cancellationToken);
+      cancellationToken.interrupt = () => {
+        originalInterrupt?.();
+        controller.abort();
+      };
     }
 
     let resp: Response;
@@ -142,7 +150,7 @@ export class RemoteProvider extends BaseProvider {
       resp = await this._request(messages, systemPrompt, tools, true, controller.signal);
     } catch (e) {
       // Отмена пользователя — молча завершаем генератор.
-      if (cancellationToken?.cancelled) return;
+      if (cancellationToken?.cancelled || cancellationToken?.interrupted) return;
       // Таймаут/обрыв до начала стрима: AbortError от нашего таймера.
       if (e instanceof Error && e.name === 'AbortError') {
         throw new ProviderError(`Таймаут удалённого LLM-провайдера (${this.timeout}с)`, this.name);
@@ -162,7 +170,7 @@ export class RemoteProvider extends BaseProvider {
 
     try {
       while (true) {
-        if (cancellationToken?.cancelled) {
+        if (cancellationToken?.cancelled || cancellationToken?.interrupted) {
           reader.cancel();
           break;
         }
@@ -259,15 +267,16 @@ export class RemoteProvider extends BaseProvider {
       }
     } catch (e) {
       // Ошибки чтения стрима (обрыв/AbortError) пробрасываем наружу.
-      // При пользовательской отмене молча выходим.
-      if (!cancellationToken?.cancelled) {
+      // При пользовательской отмене и при прерывании генерации (PROP-098)
+      // молча выходим.
+      if (!cancellationToken?.cancelled && !cancellationToken?.interrupted) {
         throw e;
       }
     } finally {
       reader.releaseLock();
     }
 
-    if (!cancellationToken?.cancelled) {
+    if (!cancellationToken?.cancelled && !cancellationToken?.interrupted) {
       debugCollector?.captureApiResponse({
         usage: accumulatedUsage,
         model: this.model,

@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY, STEERING_ERROR_CODES } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY, STEER_INTERRUPTED_METADATA_KEY, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
@@ -2695,6 +2695,25 @@ export class ChatOrchestrator {
           break;
         }
 
+        // PROP-098 (этап 2): прерывание, запрошенное ВО ВРЕМЯ шага (инструмент
+        // выполнялся / ждали подтверждения прав) — применяем на ближайшей
+        // границе: публикуем `stream.interrupted` и продолжаем ТОТ ЖЕ ход.
+        // Генерацию прерывать нечего (её уже нет) — сообщение вплетается
+        // инъекцией ниже, как при `steer`.
+        if (cancelToken.interrupted) {
+          cancelToken.interrupted = false;
+          publishChunk('stream.interrupted', {
+            stream_id: streamId,
+            status: 'interrupted',
+            // `boundary` — прерывание применено на границе шага (генерации в
+            // этот момент не было); `generation` — оборвана текущая генерация.
+            reason: 'boundary',
+            model: finalModel,
+            provider: providerName,
+            iteration: toolIteration,
+          });
+        }
+
         // PROP-098: вычитка очереди инъекций — на границе шага (здесь же, где
         // проверяется отмена). Инъекция НИКОГДА не попадает внутрь шага:
         // результаты инструментов предыдущей итерации уже в `currentMessages`,
@@ -2750,6 +2769,10 @@ export class ChatOrchestrator {
             cancelToken,
           )) {
             if (cancelToken.cancelled) break;
+            // PROP-098 (этап 2): прерывание генерации (`interrupt`) — стрим
+            // обрывается, ход НЕ завершается: выходим из цикла чанков,
+            // частичный текст сохраняется, сообщение вплетается на границе.
+            if (cancelToken.interrupted) break;
 
             // U+0000 в ответе модели/стрима ломает запись в PostgreSQL
             // (`text`/`jsonb`), поэтому чистим чанк до накопления и публикации.
@@ -2929,6 +2952,37 @@ export class ChatOrchestrator {
 
           this._cancellationTokens.delete(streamId);
           return {};
+        }
+
+        // PROP-098 (этап 2): прерывание генерации (`interrupt`) — ход НЕ
+        // завершается и НЕ отменяется («Стоп» — отдельный механизм, ADR-005):
+        // частичный ответ сохраняется отдельным сообщением с маркером
+        // `interrupted`, публикуется `stream.interrupted`, цикл продолжается —
+        // на ближайшей границе шага вплетается сообщение пользователя.
+        if (cancelToken.interrupted) {
+          cancelToken.interrupted = false;
+          // Модель текущей итерации: до прерывания `finalModel` ещё от
+          // прошлой итерации — иначе финальное сообщение хода (ход НЕ
+          // завершается) увидит не ту модель.
+          finalModel = chunkModel ?? finalModel;
+          await this._handleInterruptedGeneration({
+            session,
+            streamId,
+            draft,
+            content: accumulatedContent,
+            reasoning: accumulatedReasoning,
+            model: finalModel,
+            providerName,
+            agentRole: effectiveAgentRole,
+            usage: finalUsage,
+            iteration: toolIteration,
+            startedAt: streamStartedAt,
+            promptChars: iterationPromptChars,
+            debugCollector,
+            promptMeta,
+            publishChunk,
+          });
+          continue;
         }
 
         finalModel = chunkModel ?? finalModel;
@@ -3988,6 +4042,121 @@ export class ChatOrchestrator {
       modelPriceLoader: this._modelPriceLoader,
       analytics: this._analytics ?? undefined,
     };
+  }
+
+  /**
+   * PROP-098 (этап 2): обрыв генерации по запросу `interrupt`.
+   *
+   * Отличие от «Стоп» (`cancel`, ADR-005): ход НЕ завершается и НЕ
+   * отменяется — обрывается только текущая генерация. Частичный ответ
+   * сохраняется отдельным сообщением со статусом `interrupted`
+   * (`metadata.interrupted`), публикуется `stream.interrupted` (а НЕ
+   * `stream.cancelled`), а цикл Tool Use продолжает работу: на ближайшей
+   * границе шага вплетается сообщение пользователя.
+   *
+   * Пары `toolUse`/`toolResult` не рвутся: прерванная генерация не дала
+   * результата (вызов инструмента не выполнялся), поэтому assistant с
+   * `toolCalls` в историю не пишется — «висячей» пары не возникает.
+   * Результаты уже выполненных инструментов в usage/аналитику прерванного
+   * сообщения НЕ включаются: ход продолжается, их usage посчитает итоговое
+   * сообщение хода (иначе — двойной счёт).
+   */
+  private async _handleInterruptedGeneration(args: {
+    session: Session;
+    streamId: string;
+    draft: StreamMessageDraft;
+    content: string;
+    reasoning: string;
+    model: string | undefined;
+    providerName: string;
+    agentRole: string | undefined;
+    usage: TokenUsage;
+    iteration: number;
+    startedAt: number;
+    /** Размер промпта итерации (символы) — для оценки usage. */
+    promptChars: number;
+    debugCollector: DebugCollector;
+    promptMeta: PromptMeta | undefined;
+    publishChunk: (event: string, data: Record<string, unknown>) => void;
+  }): Promise<void> {
+    const {
+      session, streamId, draft, content, reasoning, model, providerName, agentRole,
+      usage, iteration, startedAt, promptChars, debugCollector, promptMeta, publishChunk,
+    } = args;
+
+    // Частичный текст уже лежит в черновике — дожидаемся записи и заменяем её
+    // финальным сообщением (без дубля в истории).
+    await draft.dispose();
+    const interruptedDraft = draft.ref();
+
+    const durationMs = Date.now() - startedAt;
+    // Провайдер при обрыве не отдаёт usage — оцениваем best-effort (как при
+    // отмене): input — из размера промпта, output — из накопленного текста.
+    const estimated = this._estimateUsage(usage, promptChars, content.length);
+    const cost = this._computeMessageCost(model, estimated.usage);
+
+    // Пустой ответ без черновика — сообщение не создаём (иначе в истории
+    // появится пустой assistant). Событие `stream.interrupted` всё равно
+    // публикуется — ход продолжается.
+    if (content || interruptedDraft) {
+      await this._saveAssistantMessage(
+        session.id, content, streamId, agentRole,
+        estimated.usage, model, reasoning, debugCollector,
+        // `isCancelled = false`: прерывание — не отмена хода (ADR-005 «Стоп»).
+        false, providerName,
+        MessageRole.ASSISTANT, undefined, false,
+        // `toolResults` не передаём — итоговое сообщение хода посчитает их usage.
+        undefined, undefined, undefined, undefined,
+        {
+          // Маркер прерванной генерации (PROP-098): UI рисует его отдельным
+          // бейджем, а `resolveAssistantStatus` даёт статус `interrupted`.
+          [STEER_INTERRUPTED_METADATA_KEY]: true,
+          duration_ms: durationMs,
+          ...(estimated.estimated ? { usage_estimated: true } : {}),
+        },
+        promptMeta,
+        cost,
+        interruptedDraft ?? undefined,
+      );
+    }
+
+    publishChunk('stream.interrupted', {
+      stream_id: streamId,
+      content,
+      status: 'interrupted',
+      // `generation` — оборвана текущая генерация; `boundary` — прерывание
+      // применено на границе шага (генерации в этот момент не было).
+      reason: 'generation',
+      model,
+      provider: providerName,
+      iteration,
+      usage: estimated.usage,
+      duration_ms: durationMs,
+      ...(cost ? { cost_usd: cost.costUsd, cost_currency: cost.currency } : {}),
+      ...(estimated.estimated ? { usage_estimated: true } : {}),
+    });
+  }
+
+  /**
+   * PROP-098 (этап 2): прервать текущую генерацию, НЕ завершая ход.
+   *
+   * В отличие от `cancel` («Стоп», ADR-005): ход продолжается — обрывается
+   * только генерация, а сообщение пользователя вплетается на ближайшей
+   * границе шага. Выполняющийся инструмент НЕ прерывается
+   * (`toolAbortController` не трогаем) — необратимые операции не бросаются
+   * на полпути.
+   *
+   * @param streamId — id живого стрима (`session.currentStream.streamId`).
+   * @returns `true`, если стрим найден и прерывание запрошено.
+   */
+  interrupt(streamId: string): boolean {
+    const token = this._cancellationTokens.get(streamId);
+    if (!token) return false;
+    // `interrupt()` провайдера дополнительно обрывает сетевой запрос
+    // генерации; без него (провайдер без обёртки) — только флаг.
+    if (token.interrupt) token.interrupt();
+    else token.interrupted = true;
+    return true;
   }
 
   /**

@@ -29,15 +29,23 @@ import {
 /**
  * ADR-070 §2.6: статус ответа ассистента для строки статистики в UI.
  * - `completed` — нормальный ответ (без префикса);
- * - `cancelled` — отменён пользователем;
+ * - `cancelled` — отменён пользователем («Стоп»);
  * - `stopped` — остановлен (отказ в туле / блокировка);
  * - `error` — ошибка/пустой ответ LLM;
- * - `limit` — достигнут лимит итераций.
+ * - `limit` — достигнут лимит итераций;
+ * - `interrupted` — генерация прервана пользователем (PROP-098 `interrupt`:
+ *   ход продолжается, ответ — частичный).
  */
-export type AssistantMessageStatus = 'completed' | 'cancelled' | 'stopped' | 'error' | 'limit';
+export type AssistantMessageStatus =
+  | 'completed'
+  | 'cancelled'
+  | 'stopped'
+  | 'error'
+  | 'limit'
+  | 'interrupted';
 
 const ASSISTANT_MESSAGE_STATUSES: readonly AssistantMessageStatus[] = [
-  'completed', 'cancelled', 'stopped', 'error', 'limit',
+  'completed', 'cancelled', 'stopped', 'error', 'limit', 'interrupted',
 ];
 
 /** Валидный ли статус (защита от произвольного значения в metadata.status). */
@@ -54,6 +62,9 @@ export function resolveAssistantStatus(
   metadataExtra?: Record<string, unknown>,
 ): AssistantMessageStatus {
   if (isCancelled) return 'cancelled';
+  // PROP-098 (этап 2): прерванная генерация (`interrupt`) — не «остановлено»
+  // («Стоп») и не ошибка: ход продолжается, ответ частичный.
+  if (metadataExtra?.interrupted === true) return 'interrupted';
   const key = (metadataExtra?.i18n as { key?: string } | undefined)?.key;
   switch (key) {
     case 'session.stopped':

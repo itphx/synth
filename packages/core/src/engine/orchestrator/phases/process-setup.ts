@@ -534,6 +534,15 @@ export async function runProcessSetup(
       cancelToken.cancelled = true;
       toolAbortController.abort();
     },
+    // PROP-098 (этап 2): прерывание генерации БЕЗ отмены хода — отдельный
+    // канал. `cancelled` НЕ выставляется и `toolAbortController` НЕ
+    // абортится (исполняющийся инструмент не обрывается) — ход продолжается,
+    // оркестратор применяет инъекцию на ближайшей границе шага. Провайдер
+    // оборачивает `interrupt`, чтобы оборвать сетевой запрос.
+    interrupted: false,
+    interrupt: () => {
+      cancelToken.interrupted = true;
+    },
   };
   deps.registerCancelToken(streamId, cancelToken);
 

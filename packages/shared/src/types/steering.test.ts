@@ -9,6 +9,8 @@ import {
   MAX_STEER_INJECTIONS_PER_TURN,
   STEERING_ERROR_CODES,
   STEER_METADATA_KEY,
+  STEER_INTERRUPT_METADATA_KEY,
+  STEER_INTERRUPTED_METADATA_KEY,
   isSteerMode,
 } from './steering.js';
 import { promptRequestSchema } from '../schemas/index.js';
@@ -34,12 +36,19 @@ describe('PROP-098: типы режима отправки (steering)', () => {
   });
 
   it('машинные коды ошибок steering', () => {
+    // `STEERING_INTERRUPT_UNSUPPORTED` — гейт HTTP-контура этапа 2: режим
+    // `interrupt` движком реализован, но `/prompt` пока отвечает 400.
     expect(STEERING_ERROR_CODES.interruptUnsupported).toBe('STEERING_INTERRUPT_UNSUPPORTED');
     expect(STEERING_ERROR_CODES.limitExceeded).toBe('STEER_LIMIT_EXCEEDED');
   });
 
   it('признак инъекции в metadata — steer', () => {
     expect(STEER_METADATA_KEY).toBe('steer');
+  });
+
+  it('признаки режима interrupt в metadata', () => {
+    expect(STEER_INTERRUPT_METADATA_KEY).toBe('interrupt');
+    expect(STEER_INTERRUPTED_METADATA_KEY).toBe('interrupted');
   });
 });
 

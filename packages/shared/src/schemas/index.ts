@@ -208,7 +208,8 @@ export const promptRequestSchema = z.object({
   system: z.string().optional(),
   /**
    * PROP-098: режим отправки. `queue` (по умолчанию) — прежнее поведение;
-   * `steer` — инъекция в активный ход; `interrupt` — этап 2 (пока 400).
+   * `steer` — инъекция в активный ход без прерывания генерации;
+   * `interrupt` — прерывание текущей генерации с продолжением хода.
    */
   mode: z.enum(STEER_MODES).default(DEFAULT_STEER_MODE),
 });
