@@ -360,6 +360,7 @@ export {
   AUTHORITY_CORE_ACTIONS,
   compileAuthorityGrantsForTool,
   AuthorityShadowRecorder,
+  AuthorityGuard,
 } from './engine/authority/index.js';
 export type {
   AuthorityAxis,
@@ -378,6 +379,9 @@ export type {
   AuthorityShadowHook,
   AuthorityShadowInput,
   AuthorityShadowRecorderOptions,
+  AuthorityGateHook,
+  AuthorityGateResult,
+  AuthorityGuardOptions,
 } from './engine/authority/index.js';
 
 export {

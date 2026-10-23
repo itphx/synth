@@ -65,7 +65,7 @@ import type { ProtectedPathsPolicy } from './security/protected-paths.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, DISABLED_GATEWAY_CONFIG, LlmFilterRegistry } from './gateway/index.js';
 import type { SecretPatternRepository } from '../storage/ports/secret-pattern-repository.js';
 import type { MetricsRegistry } from '../metrics/registry.js';
-import type { AuthorityShadowHook } from './authority/hook.js';
+import type { AuthorityGateHook, AuthorityShadowHook } from './authority/hook.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
@@ -241,8 +241,20 @@ export interface OrchestratorOptions {
    * PROP-108 Ф1: шов shadow-наблюдения Authority-слоя. Задан — решения
    * permission-слоя дополнительно считаются моделью «действие × цель» и
    * пишутся в журнал решений; **решение прав не меняется**.
+   *
+   * @deprecated PROP-108 Ф2: используйте `authorityGate` — он же считает
+   *   решение, ведёт журнал и (в enforced-режиме) **применяет** решение.
    */
   authorityShadow?: AuthorityShadowHook;
+  /**
+   * PROP-108 Ф2: шов решения Authority-слоя (guard).
+   *
+   * Задан — решения permission-слоя считаются моделью «действие × цель» и
+   * пишутся в журнал решений. При `authority.enabled` **без**
+   * `authority.shadow` решение **применяется**: `deny`/`ask` сужают решение
+   * permission-слоя, а потолок сессии не снимается режимом `yolo`.
+   */
+  authorityGate?: AuthorityGateHook;
   /** ADR-070 §2.2: политика prompt-cache (config llm.cache). Дефолт — auto. */
   cachePolicy?: CachePolicy;
   /**
@@ -437,6 +449,8 @@ export class ChatOrchestrator {
   private readonly _metrics: MetricsRegistry | null;
   /** PROP-108 Ф1: шов shadow-наблюдения Authority-слоя (не меняет решения прав). */
   private readonly _authorityShadow: AuthorityShadowHook | undefined;
+  /** PROP-108 Ф2: шов решения Authority-слоя (считает, журналит и применяет). */
+  private readonly _authorityGate: AuthorityGateHook | undefined;
   /**
    * PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов (мутабельный;
    * общий для всех gateway-точек — см. `getLlmFilters()`).
@@ -744,6 +758,9 @@ export class ChatOrchestrator {
     this._metrics = options.metrics ?? null;
     // PROP-108 Ф1: shadow-наблюдение Authority-слоя (решение прав не меняется).
     this._authorityShadow = options.authorityShadow;
+    // PROP-108 Ф2: шов решения Authority-слоя (guard) — считает, журналит и
+    // применяет решение (в enforced-режиме).
+    this._authorityGate = options.authorityGate;
     // PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов. Экземпляр
     // может прийти извне (общий с фасадом плагинов); иначе создаём пустой —
     // бюджет времени из `plugins.llmFilterTimeoutMs`.
@@ -2562,6 +2579,7 @@ export class ChatOrchestrator {
     let effectivePermissionConfig = session.settings.permission ?? this._permissionConfig;
     let permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig, {
       authorityShadow: this._authorityShadow,
+      authorityGate: this._authorityGate,
     });
 
     const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
@@ -3156,6 +3174,7 @@ export class ChatOrchestrator {
                 effectivePermissionConfig = await this._grantSessionToolAllow(session, toolName, toolArgs, workingDir);
                 permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig, {
                   authorityShadow: this._authorityShadow,
+                  authorityGate: this._authorityGate,
                 });
               }
             } else {

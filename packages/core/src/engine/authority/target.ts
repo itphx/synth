@@ -7,9 +7,12 @@
  *
  * - `path:<относительный путь>` — файл/каталог **внутри** workspace. Путь
  *   приводится к относительному: сырых абсолютных путей в журнале решений и
- *   метриках быть не должно (инвариант 25, ADR-094). Путь вне workspace
- *   выразить относительным нельзя → цель не разрешается (`undefined`) →
- *   решение `deny('unknown')` (fail-closed).
+ *   метриках быть не должно (инвариант 25, ADR-094).
+ * - `outside:<токен>` — путь **вне** workspace (PROP-108 Ф2). Отдельный вид
+ *   цели: к таким путям относятся правило `external_directory` и его
+ *   fail-closed дефолт. Ссылка — неразличимый токен (хэш абсолютного пути):
+ *   сырой путь в журнал не попадает, а сопоставление с шаблоном гранта идёт по
+ *   `altRefs` (абсолютный путь) — ровно как для `path:`.
  * - `workspace:<путь>` — рабочая область (shell/git).
  * - `session:<id>` — сессионные тулы (план, todo, профиль, делегирование).
  * - `external:<host><path>` — внешний ресурс (веб). Query-строка и
@@ -17,6 +20,7 @@
  *   секреты).
  * - `mcp:<server>/<tool>` — инструмент внешнего MCP-сервера.
  */
+import { createHash } from 'node:crypto';
 import { relative } from 'node:path';
 
 import type { AuthorityTarget } from '@itphx/synth-shared';
@@ -52,6 +56,60 @@ export interface DerivedAuthorityTarget {
 }
 
 /**
+ * Вид цели файлового тула: `path` — внутри рабочего каталога, `outside` —
+ * вне его (PROP-108 Ф2).
+ */
+export type AuthorityPathTargetKind = 'path' | 'outside';
+
+/** Разрешённый файловый путь: вид цели + ссылка + абсолютный путь. */
+export interface ResolvedAuthorityPath {
+  kind: AuthorityPathTargetKind;
+  /** Ссылка цели (для `outside` — неразличимый токен, без сырого пути). */
+  ref: string;
+  /** Абсолютный путь — только для сопоставления с шаблоном гранта. */
+  absolute: string;
+}
+
+/**
+ * Резолв файлового пути тула: внутри рабочего каталога → `path`, вне → `outside`.
+ *
+ * Единая точка для вывода цели (`deriveAuthorityTarget`) и компиляции грантов
+ * (`compile.ts`): вид цели обязан совпадать в обоих местах, иначе грант
+ * «действие × цель» не покроет цель (и решение станет `deny('no_grant')`).
+ */
+export function resolveAuthorityPathTarget(
+  toolName: string,
+  params: Record<string, unknown>,
+  workingDir: string,
+): ResolvedAuthorityPath | undefined {
+  const paramNames = TOOL_PATH_PARAMS[toolName] ?? [];
+  for (const name of paramNames) {
+    const value = params[name];
+    if (typeof value !== 'string' || value.trim() === '') continue;
+    const absolute = resolvePath(value, workingDir);
+    if (!isInsideWorkingDir(absolute, workingDir)) {
+      return { kind: 'outside', ref: outsideTargetRef(absolute), absolute };
+    }
+    const rel = relative(workingDir, absolute).split('\\').join('/');
+    return { kind: 'path', ref: rel === '' ? '.' : rel, absolute };
+  }
+  return undefined;
+}
+
+/**
+ * Ссылка цели вида `outside` — неразличимый токен (sha256 от абсолютного
+ * пути, первые 16 hex-символов).
+ *
+ * Сырой абсолютный путь в журнал решений/метрики не попадает (инвариант 25,
+ * ADR-094), но остаётся доступен для сопоставления с шаблоном гранта через
+ * `altRefs` — поэтому правило `external_directory: {'/tmp/*': 'allow'}` работает
+ * как и раньше.
+ */
+export function outsideTargetRef(absolutePath: string): string {
+  return createHash('sha256').update(absolutePath).digest('hex').slice(0, 16);
+}
+
+/**
  * Выводит цель вызова тула.
  *
  * Пустой/undefined-результат означает «цель неизвестна» — вызывающий обязан
@@ -69,7 +127,7 @@ export function deriveAuthorityTarget(input: AuthorityTargetInput): DerivedAutho
     case 'path':
       return derivePathTarget(input);
     case 'workspace':
-      return { target: { kind: 'workspace', ref: '.' }, altRefs: [] };
+      return deriveWorkspaceTarget(input);
     case 'session':
       return { target: { kind: 'session', ref: input.sessionId }, altRefs: [] };
     case 'external':
@@ -81,26 +139,39 @@ export function deriveAuthorityTarget(input: AuthorityTargetInput): DerivedAutho
   }
 }
 
-/** Файловая цель: относительный путь внутри workspace. */
+/**
+ * Рабочая область: каталог выполнения относительно рабочего каталога.
+ *
+ * Ссылка — относительный путь (`'.'` — сам рабочий каталог), абсолютный путь
+ * уходит в `altRefs` (только для сопоставления с шаблоном гранта — в журнал
+ * решений он не попадает).
+ */
+function deriveWorkspaceTarget(input: AuthorityTargetInput): DerivedAuthorityTarget {
+  const raw = input.params.cwd;
+  const absolute =
+    typeof raw === 'string' && raw.trim() !== ''
+      ? resolvePath(raw, input.workingDir)
+      : input.workingDir;
+  const inside = isInsideWorkingDir(absolute, input.workingDir);
+  const rel = inside ? relative(input.workingDir, absolute).split('\\').join('/') : '';
+  return {
+    target: { kind: 'workspace', ref: rel === '' ? '.' : rel },
+    altRefs: [absolute],
+  };
+}
+
+/** Файловая цель: относительный путь внутри workspace или `outside` — вне его. */
 function derivePathTarget(input: AuthorityTargetInput): DerivedAuthorityTarget {
-  const paramNames = TOOL_PATH_PARAMS[input.toolName] ?? [];
-  for (const name of paramNames) {
-    const value = input.params[name];
-    if (typeof value !== 'string' || value.trim() === '') continue;
-    const absolute = resolvePath(value, input.workingDir);
-    if (!isInsideWorkingDir(absolute, input.workingDir)) {
-      // Путь вне workspace относительным не выразить — цель неизвестна.
-      return { altRefs: [] };
-    }
-    const rel = relative(input.workingDir, absolute).split('\\').join('/');
-    return {
-      target: { kind: 'path', ref: rel === '' ? '.' : rel },
-      // Абсолютный путь — только для сопоставления с шаблоном гранта.
-      altRefs: [absolute],
-    };
+  const resolved = resolveAuthorityPathTarget(input.toolName, input.params, input.workingDir);
+  if (!resolved) {
+    // Файловый тул без пути — цель не определена.
+    return { altRefs: [] };
   }
-  // Файловый тул без пути — цель не определена.
-  return { altRefs: [] };
+  return {
+    target: { kind: resolved.kind, ref: resolved.ref },
+    // Абсолютный путь — только для сопоставления с шаблоном гранта.
+    altRefs: [resolved.absolute],
+  };
 }
 
 /** Внешняя цель: только host+path, без query и пользовательской части. */

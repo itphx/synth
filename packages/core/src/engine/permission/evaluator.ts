@@ -13,7 +13,12 @@ import {
   type RuntimeDeps,
 } from '../tools/runtime-deps.js';
 import { getToolGroups, TOOL_PATH_PARAMS } from './groups.js';
-import type { AuthorityShadowHook, AuthorityShadowContext } from '../authority/hook.js';
+import type {
+  AuthorityGateHook,
+  AuthorityGateResult,
+  AuthorityShadowHook,
+  AuthorityShadowContext,
+} from '../authority/hook.js';
 import { checkShellCommand, isMutatingCommand, tokenizeCommand, matchShellCommandPattern } from '../security/shell-guard.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
 import { checkPath } from '../security/protected-paths.js';
@@ -64,11 +69,12 @@ export interface PermissionCheckInput {
    */
   workspaceReady?: boolean;
   /**
-   * PROP-108 Ф1: контекст хода для shadow-наблюдения Authority-слоя
-   * (принципал/сессия/агент/ход). Не задан — наблюдение не ведётся.
+   * PROP-108 Ф1/Ф2: контекст хода для Authority-слоя
+   * (принципал/сессия/агент/ход). Не задан — слой не считает решение.
    *
-   * На решение permission-слоя поля **не влияют** — они нужны только для
-   * записи shadow-решения в журнал.
+   * В shadow-режиме (Ф1) поля **не влияют** на решение permission-слоя — они
+   * нужны только для записи shadow-решения в журнал. В enforced-режиме (Ф2)
+   * принципал и ход участвуют в решении слоя (потолок хода, подтверждения).
    */
   authorityContext?: AuthorityShadowContext;
 }
@@ -144,11 +150,24 @@ export class PermissionEvaluator {
   constructor(
     private readonly _config: PermissionConfig,
     /**
-     * PROP-108 Ф1: шов shadow-наблюдения Authority-слоя. Задан — решение
-     * дополнительно считается моделью «действие × цель» и пишется в журнал
-     * (`{dataDir}/audit/authority.jsonl`), но **не меняет** решение слоя.
+     * PROP-108 Ф1/Ф2: швы Authority-слоя.
+     *
+     * - `authorityShadow` — наблюдение (Ф1): решение считается и пишется в
+     *   журнал (`{dataDir}/audit/authority.jsonl`), но **не меняет** решение
+     *   слоя;
+     * - `authorityGate` — решение Authority-слоя (Ф2): считается всегда, а
+     *   при `authority.enabled` **без** `authority.shadow` — **применяется**:
+     *   сужает решение слоя (`deny`/`ask`). Потолок сессии в enforced-режиме
+     *   не снимается режимом `yolo` (PROP-108 §«Многопользовательская
+     *   сессия»).
+     *
+     * Если задан `authorityGate` — шов наблюдения не используется: журнал
+     *   решений ведёт сам guard (иначе запись продублируется).
      */
-    private readonly _options: { authorityShadow?: AuthorityShadowHook } = {},
+    private readonly _options: {
+      authorityShadow?: AuthorityShadowHook;
+      authorityGate?: AuthorityGateHook;
+    } = {},
   ) {}
 
   get config(): PermissionConfig {
@@ -165,11 +184,124 @@ export class PermissionEvaluator {
   }
 
   check(input: PermissionCheckInput): PermissionDecision {
-    const decision = this._checkInternal(input);
-    // PROP-108 Ф1: shadow-наблюдение. Решение **не меняется** — считается
-    // параллельное authority-решение и пишется в журнал решений.
-    this._recordShadow(input, decision);
-    return decision;
+    const parts = this._computeDecisionParts(input);
+
+    // ADR-025-yolo: в режиме yolo все ask-запросы автоматически подтверждаются
+    // (allow) без события permission.asked и без ожидания пользователя.
+    // deny-правила остаются deny — трансформируется только действие ask.
+    const lifted = this._yoloLift(input, parts.decision);
+
+    // PROP-108 Ф1/Ф2: Authority-слой.
+    //
+    // - шов **решения** (`authorityGate`): guard считает решение и ведёт
+    //   журнал решений; при `authority.enabled` **без** `authority.shadow`
+    //   решение **применяется** (сужает решение permission-слоя);
+    // - шов **наблюдения** (`authorityShadow`, Ф1): только считает и пишет.
+    //
+    // Шов решения заменяет шов наблюдения: журнал ведёт сам guard (иначе
+    // запись была бы продублирована).
+    const gate = this._options.authorityGate;
+    if (!gate) {
+      this._recordShadow(input, lifted);
+      return lifted;
+    }
+
+    const result = this._callGate(gate, input, lifted);
+    if (!result?.enforced) {
+      // Режим наблюдения (shadow): решение прав не меняется, журнал ведёт
+      // guard.
+      return lifted;
+    }
+    return this._applyAuthority(parts, lifted, result);
+  }
+
+  /**
+   * ADR-025-yolo: `ask` → `allow` (только действие `ask`; `deny` остаётся).
+   */
+  private _yoloLift(input: PermissionCheckInput, decision: PermissionDecision): PermissionDecision {
+    if (decision.action !== 'ask' || input.sessionMode !== 'yolo') return decision;
+    return {
+      ...decision,
+      action: 'allow',
+      reason: sm('permission.yolo_auto_approved', { reason: decision.reason }),
+    };
+  }
+
+  /**
+   * Вызов шва Authority-слоя. Ошибка слоя не ломает ход — решение
+   * permission-слоя остаётся в силе (fail-safe: слой не может «разрешить»).
+   */
+  private _callGate(
+    gate: AuthorityGateHook,
+    input: PermissionCheckInput,
+    decision: PermissionDecision,
+  ): AuthorityGateResult | undefined {
+    try {
+      return gate({
+        toolName: input.toolName,
+        params: input.params,
+        workingDir: input.workingDir,
+        capabilities: input.capabilities,
+        toolSource: input.toolSource,
+        sessionMode: input.sessionMode,
+        planMode: input.planMode,
+        planApproved: input.planApproved,
+        sessionId: input.authorityContext?.sessionId,
+        principal: input.authorityContext?.principal,
+        agentId: input.authorityContext?.agentId,
+        turnId: input.authorityContext?.turnId,
+        config: this._config,
+        decision,
+      });
+    } catch {
+      // Ошибка слоя не влияет на решение прав.
+      return undefined;
+    }
+  }
+
+  /**
+   * Применение решения Authority-слоя (Ф2).
+   *
+   * Слой может только **сужать**: `deny` → `deny`, `ask` → `ask`. `allow` не
+   * разрешает ничего сверх permission-слоя (жёсткие слои — защищённые пути,
+   * shell-policy, зависимости окружения — в резолвер не попадают).
+   *
+   * Порядок:
+   * 1. `deny` слоя → `deny` (запрет сильнее всего);
+   * 2. `ask` слоя → `ask`: это требование **потолка** (ось ≠ «пользователь»),
+   *    и `yolo` его **не снимает** (PROP-108 §«Многопользовательская
+   *    сессия»: «`yolo` не снимает `ask`, если этого требует потолок сессии»);
+   * 3. `allow` слоя → решение permission-слоя; но в enforced-режиме `yolo`
+   *    **не снимает** `ask` жёсткого слоя (защищённые пути, shell-policy) —
+   *    иначе участник с write-доступом снимал бы подтверждения для всех,
+   *    включая тех, кто в этом ходу не участвовал.
+   */
+  private _applyAuthority(
+    parts: { decision: PermissionDecision; hard: boolean },
+    lifted: PermissionDecision,
+    result: AuthorityGateResult,
+  ): PermissionDecision {
+    if (result.effect === 'deny' && lifted.action !== 'deny') {
+      return {
+        action: 'deny',
+        reason: sm(authorityDenyMessageKey(result.reason), { action: result.action }),
+        matchedRule: 'authority.deny',
+      };
+    }
+    if (result.effect === 'ask' && lifted.action !== 'deny') {
+      // Уже требовалось подтверждение permission-слоем — причина точнее
+      // («путь вне рабочего каталога», «защищённый путь»).
+      if (parts.decision.action === 'ask') return parts.decision;
+      return {
+        action: 'ask',
+        reason: sm('permission.authority_ask', { action: result.action }),
+        matchedRule: 'authority.ask',
+      };
+    }
+    // Слой разрешил — действует решение permission-слоя. `ask` жёсткого слоя
+    // режим `yolo` не снимает.
+    if (parts.hard && parts.decision.action === 'ask') return parts.decision;
+    return lifted;
   }
 
   /**
@@ -202,7 +334,50 @@ export class PermissionEvaluator {
     }
   }
 
-  private _checkInternal(input: PermissionCheckInput): PermissionDecision {
+  /**
+   * Решение слоя: жёсткие слои → правила сессии.
+   *
+   * `hard` — признак того, что решение вынесено **жёстким слоем** над
+   * правилами (режим, роль агента, зависимости окружения, рабочий каталог,
+   * shell-policy, защищённые пути). В enforced-режиме Authority-слоя (Ф2)
+   * `yolo` не снимает такой `ask` — это требование потолка сессии
+   * (PROP-108 §«Многопользовательская сессия»).
+   */
+  private _computeDecisionParts(
+    input: PermissionCheckInput,
+  ): { decision: PermissionDecision; hard: boolean } {
+    const { toolName, params, workingDir } = input;
+    const paths = extractPaths(toolName, params, workingDir);
+    const isFile = paths.length > 0;
+
+    // Командный контекст execute_shell: сама команда и каталог выполнения.
+    const shellCommand = toolName === 'execute_shell' && typeof params.command === 'string'
+      ? params.command
+      : undefined;
+    const shellCwd = toolName === 'execute_shell'
+      ? (typeof params.cwd === 'string' && params.cwd.trim() !== '' ? resolvePath(params.cwd, workingDir) : workingDir)
+      : workingDir;
+
+    const hard = this._checkHardLayers(input, { paths, isFile, shellCommand, shellCwd });
+    if (hard) return { decision: hard, hard: true };
+    return { decision: this._checkRuleLayers(input, { paths, isFile, shellCommand }), hard: false };
+  }
+
+  /**
+   * Жёсткие слои **над** правилами сессии (ADR-025/028/029/071/075/078/098):
+   * роль агента, режим (plan), зависимости окружения, рабочий каталог,
+   * shell-policy, защищённые пути, режим MCP.
+   *
+   * Эти слои — часть **потолка сессии**: `yolo` в enforced-режиме
+   * Authority-слоя (Ф2) не снимает их `ask`.
+   */
+  private _checkHardLayers(
+    input: PermissionCheckInput,
+    ctx: { paths: string[]; isFile: boolean; shellCommand?: string; shellCwd: string },
+  ): PermissionDecision | undefined {
+    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy, protectedPaths, protectedPathsEnabled, runtimeDeps, workspaceReady } = input;
+    const { shellCommand, shellCwd } = ctx;
+
     // ADR-070 §2.9.1: ролевая недоступность — приоритетнее прочих правил. Тул
     // виден модели (список тулов постоянен), но недоступен текущему агенту;
     // отказ несёт подсказку делегировать задачу другому агенту через `@`.
@@ -220,33 +395,6 @@ export class PermissionEvaluator {
         };
       }
     }
-
-    const decision = this._computeDecision(input);
-
-    // ADR-025-yolo: в режиме yolo все ask-запросы автоматически подтверждаются
-    // (allow) без события permission.asked и без ожидания пользователя.
-    // deny-правила остаются deny — трансформируется только действие ask.
-    if (decision.action === 'ask' && input.sessionMode === 'yolo') {
-      return {
-        ...decision,
-        action: 'allow',
-        reason: sm('permission.yolo_auto_approved', { reason: decision.reason }),
-      };
-    }
-    return decision;
-  }
-  private _computeDecision(input: PermissionCheckInput): PermissionDecision {
-    const { toolName, params, workingDir, capabilities, toolSource, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy, protectedPaths, protectedPathsEnabled, runtimeDeps, workspaceReady } = input;
-    const paths = extractPaths(toolName, params, workingDir);
-    const isFile = paths.length > 0;
-
-    // Командный контекст execute_shell: сама команда и каталог выполнения.
-    const shellCommand = toolName === 'execute_shell' && typeof params.command === 'string'
-      ? params.command
-      : undefined;
-    const shellCwd = toolName === 'execute_shell'
-      ? (typeof params.cwd === 'string' && params.cwd.trim() !== '' ? resolvePath(params.cwd, workingDir) : workingDir)
-      : workingDir;
 
     // ADR-098 (W5): деградированное хранилище — строгий read-only. Доступны
     // только безопасные тулы (скиллы/веб) — паритет с осью доступности
@@ -386,6 +534,23 @@ export class PermissionEvaluator {
         }
       }
     }
+
+    return undefined;
+  }
+
+  /**
+   * Правила сессии (ADR-029): per-skill, правило по имени тула,
+   * `external_directory`, групповые правила, `'*'` и дефолт `allow`.
+   *
+   * `ask` отсюда снимается режимом `yolo` (ADR-025) — если только этого не
+   * требует потолок сессии (Authority-слой, Ф2).
+   */
+  private _checkRuleLayers(
+    input: PermissionCheckInput,
+    ctx: { paths: string[]; isFile: boolean; shellCommand?: string },
+  ): PermissionDecision {
+    const { toolName, params, workingDir, capabilities, toolSource, sessionMode, planMode, planApproved } = input;
+    const { paths, isFile, shellCommand } = ctx;
 
     // ADR-046 §8.1: per-skill permissions — правило `skill` (строка или glob по
     // имени скилла). `deny` скрывает скилл из каталога; `ask` спрашивает.
@@ -537,6 +702,25 @@ export class PermissionEvaluator {
       };
     }
     return undefined;
+  }
+}
+
+/**
+ * Ключ i18n для причины отказа Authority-слоя (ADR-041).
+ *
+ * Причины резолвера (`unknown`/`explicit`/`no_grant`) — машинные коды;
+ * пользователю показывается локализованный текст (ADR-041).
+ */
+function authorityDenyMessageKey(
+  reason: AuthorityGateResult['reason'],
+): 'permission.authority_denied_unknown' | 'permission.authority_denied_explicit' | 'permission.authority_denied_no_grant' {
+  switch (reason) {
+    case 'explicit':
+      return 'permission.authority_denied_explicit';
+    case 'no_grant':
+      return 'permission.authority_denied_no_grant';
+    default:
+      return 'permission.authority_denied_unknown';
   }
 }
 

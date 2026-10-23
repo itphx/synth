@@ -47,7 +47,12 @@ export type {
   AuthorityShadowContext,
   AuthorityShadowHook,
   AuthorityShadowInput,
+  AuthorityGateHook,
+  AuthorityGateResult,
 } from './hook.js';
+
+export { AuthorityGuard } from './guard.js';
+export type { AuthorityGuardOptions } from './guard.js';
 
 export { AuthorityShadowRecorder } from './shadow.js';
 export type { AuthorityShadowRecorderOptions } from './shadow.js';

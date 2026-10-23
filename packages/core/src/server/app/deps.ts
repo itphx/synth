@@ -73,7 +73,7 @@ import {
   mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
-import { AuthorityShadowRecorder } from '../../engine/authority/shadow.js';
+import { AuthorityGuard } from '../../engine/authority/guard.js';
 import { applyStartupMigrations, applyPendingRestore } from '../../maintenance/startup.js';
 import { SkillService } from '../../engine/skills/service.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
@@ -586,11 +586,12 @@ export async function createStandaloneDeps(
     await settingsStore.getPlugins(),
   );
 
-  // PROP-108 Ф1: shadow-наблюдение Authority-слоя. Решение считается и пишется
-  // в журнал (`{dataDir}/audit/authority.jsonl` через порт), но **не
-  // применяется** — права не меняются (миграция «двойное чтение»).
-  const authorityShadow = config.authorityConfig?.enabled
-    ? new AuthorityShadowRecorder({
+  // PROP-108 Ф1/Ф2: Authority-слой. Решение считается и пишется в журнал
+  // (`{dataDir}/audit/authority.jsonl` через порт). При `authority.enabled`
+  // **без** `authority.shadow` решение **применяется** (Ф2): `deny`/`ask`
+  // сужают решение permission-слоя.
+  const authorityGuard = config.authorityConfig?.enabled
+    ? new AuthorityGuard({
         enabled: true,
         shadow: config.authorityConfig.shadow,
         journal: storageContext.authorityDecisions,
@@ -604,8 +605,9 @@ export async function createStandaloneDeps(
     sessionManager,
     eventBus,
     hooks,
-    // PROP-108 Ф1: shadow-наблюдение (решение прав не меняется).
-    authorityShadow: authorityShadow?.record,
+    // PROP-108 Ф1/Ф2: шов решения Authority-слоя (считает, журналит и —
+    // в enforced-режиме — применяет решение).
+    authorityGate: authorityGuard?.gate,
     // ADR-077: порт исполнения команд (inline — исполнение в процессе;
     // режим — параметр запуска, инвариант 24). Тот же порт получает и
     // детект внешних зависимостей (ниже) — иначе они смотрели бы в разные

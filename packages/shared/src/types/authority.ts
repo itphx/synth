@@ -68,6 +68,13 @@ export const AUTHORITY_CORE_TARGET_KINDS = [
   'mcp',
   'external',
   'workspace',
+  // PROP-108 Ф2: путь **вне** рабочего каталога проекта. Отдельный вид цели:
+  // правило `external_directory` и fail-closed дефолт «спросить» относятся
+  // именно к таким путям, а к `path:` (внутри workspace) — не относятся.
+  // Ссылка цели — неразличимый токен (хэш абсолютного пути): сырой путь в
+  // журнал решений и метрики не попадает (инвариант 25, ADR-094), а
+  // сопоставление с шаблоном гранта идёт по `altRefs` (абсолютный путь).
+  'outside',
 ] as const;
 export type AuthorityCoreTargetKind = (typeof AUTHORITY_CORE_TARGET_KINDS)[number];
 

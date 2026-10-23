@@ -2494,6 +2494,10 @@ export const dict = {
   'permission.ask_timeout': 'истекло время ожидания подтверждения',
   'permission.ask_no_subscribers': 'нет подключённого пользователя для подтверждения',
   'permission.ask_denied': 'отклонено пользователем',
+  'permission.authority_denied_unknown': 'Действие «{action}» не покрыто слоем полномочий (неизвестное действие или цель) — отказано',
+  'permission.authority_denied_explicit': 'Действие «{action}» запрещено политикой полномочий — отказано',
+  'permission.authority_denied_no_grant': 'Нет полномочия на действие «{action}» — отказано',
+  'permission.authority_ask': 'Действие «{action}» требует подтверждения носителем полномочия',
 
   // --- Shell-политика (shell-guard) ---
   'shellguard.allow_default': 'команда не нарушает shell-политику',
