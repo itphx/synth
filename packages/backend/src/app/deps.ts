@@ -1126,6 +1126,10 @@ export async function createBackendDeps(
     stopEgressLogPruner,
     mcpManager,
     mcpRegistryStore,
+    // ADR-105 (Ф3/Ф4): реестр описаний OAuth-провайдеров и сервис слоя доступов
+    // (HTTP-контур `/api/v2/oauth/credentials`).
+    oauthProviders,
+    oauthCredentialService,
     // ADR-051/ADR-100: порт реестра пайплайнов (определения + экземпляры).
     pipelines: pipelineStore,
     // ADR-101 (Э5): движок пайплайнов (второй движок) — HTTP-роутов нет (Э6).

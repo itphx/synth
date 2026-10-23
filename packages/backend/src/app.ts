@@ -40,7 +40,7 @@ import type {
   EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository,
   SettingsRepository, EventRouter, RequestSessionService, EventBindingRepository,
   EventJournalRepository, EventIngress, ScheduleRepository, SchedulerService,
-  WebhookRepository, WebhookService, StorageContext, PluginRuntime,
+  WebhookRepository, WebhookService, StorageContext, PluginRuntime, McpManager,
 } from '@itphx/synth-core';
 import { createStorageDegradedGuard, createStorageStatusRoutes } from '@itphx/synth-core/server/storage-degraded.js';
 import { loadBackendConfig } from './lib/app-config.js';
@@ -100,6 +100,11 @@ export interface BackendAppHandle {
    * (`main.ts`) и точки для HTTP API/CLI (Ф5б-2/3).
    */
   pluginRuntime: PluginRuntime;
+  /**
+   * ADR-071 §2.5: менеджер MCP. Конфиг серверов приходит из единого реестра
+   * (в т.ч. после привязки внешнего доступа к коннектору, ADR-105 Ф4).
+   */
+  mcpManager: McpManager;
   // ADR-051 (срез) / ADR-089: реестр расписаний и планировщик (cron/interval).
   scheduleStore: ScheduleRepository;
   scheduler: SchedulerService;
@@ -427,6 +432,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       // ADR-090 (Ф5б-1): рантайм плагинов — старт-активация в `main.ts`
       // и точки для HTTP API/CLI (Ф5б-2/3).
       pluginRuntime: deps.pluginRuntime,
+      mcpManager: deps.mcpManager,
       // ADR-051 (срез) / ADR-089: реестр расписаний и планировщик.
       scheduleStore: deps.scheduleStore,
       scheduler: deps.schedulerService,

@@ -84,7 +84,11 @@ export type OAuthErrorCode =
   | 'not_found'
   | 'revoked'
   | 'no_refresh_token'
-  | 'missing_client_secret';
+  | 'missing_client_secret'
+  /** Device flow (RFC 8628 §3.5): провайдер ещё не подтвердил авторизацию. */
+  | 'authorization_pending'
+  /** Device flow (RFC 8628 §3.5): провайдер просит опрашивать реже. */
+  | 'slow_down';
 
 /**
  * Ошибка OAuth-клиента.

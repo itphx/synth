@@ -75,6 +75,30 @@ export interface RevokeResult {
 }
 
 /**
+ * Вход сохранения уже полученных токенов (device flow, RFC 8628).
+ *
+ * Отличие от `exchangeAndStore`: код авторизации уже обменян на токены, сеть
+ * повторно не дёргается — токены кладутся в порт как есть.
+ */
+export interface StoreTokensInput {
+  provider: string;
+  /** `client_id` (по умолчанию — из описания провайдера). */
+  clientId?: string;
+  accessToken: string;
+  refreshToken?: string;
+  /** Срок access-токена, секунды (если провайдер сообщил). */
+  expiresIn?: number;
+  /** Фактически выданные scope'ы (строка через пробел). */
+  scope?: string;
+  /** Запрошенные scope'ы (для записи). */
+  scopes?: string[];
+  owner: ExternalCredentialOwner;
+  createdBy: string;
+  connectorId?: string;
+  projectId?: string;
+}
+
+/**
  * Сервис слоя внешних доступов (ADR-105 Ф2).
  *
  * Экземпляр долгоживущий: single-flight refresh держится в памяти сервиса
@@ -110,6 +134,36 @@ export class OAuthCredentialService {
       owner: input.owner,
       accessToken: tokens.accessToken,
       ...(tokens.refreshToken !== undefined ? { refreshToken: tokens.refreshToken } : {}),
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+      ...(scopesGranted !== undefined ? { scopesGranted } : {}),
+      createdBy: input.createdBy,
+      ...(input.connectorId !== undefined ? { connectorId: input.connectorId } : {}),
+      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+    });
+  }
+
+  /**
+   * Сохранение уже полученных токенов (device flow, RFC 8628).
+   *
+   * Сеть не дёргается: токены кладутся в порт как есть (шифрование — внутри
+   * порта). Наружу отдаются метаданные.
+   */
+  async storeTokens(input: StoreTokensInput): Promise<ExternalCredentialMeta> {
+    const clientId =
+      input.clientId ?? this._deps.clientFor(input.provider).clientId;
+    const scopes = input.scopes ?? this._deps.clientFor(input.provider).defaultScopes;
+    const scopesGranted = input.scope
+      ? input.scope.split(' ').filter(Boolean)
+      : undefined;
+    const expiresAt =
+      input.expiresIn !== undefined ? this._expiresAt(input.expiresIn) : undefined;
+    return this._deps.repo.create({
+      provider: input.provider,
+      clientId,
+      scopes,
+      owner: input.owner,
+      accessToken: input.accessToken,
+      ...(input.refreshToken !== undefined ? { refreshToken: input.refreshToken } : {}),
       ...(expiresAt !== undefined ? { expiresAt } : {}),
       ...(scopesGranted !== undefined ? { scopesGranted } : {}),
       createdBy: input.createdBy,

@@ -282,6 +282,7 @@ export type { RuntimeDeps, RuntimeDependency } from './engine/tools/runtime-deps
 export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, normalizeAgentModes, isModeApplicable, DEFAULT_AGENT_ID, registerStoredAgents } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
 export type { McpToolDef, McpToolResult, McpClientOptions } from './engine/mcp/index.js';
+export { syncMcpManagerFromRegistry } from './engine/mcp/index.js';
 export {
   McpCredentialError,
   createCredentialFetch,
@@ -315,11 +316,16 @@ export {
   OAuthClient,
   OAuthCredentialService,
   OAuthProviderRegistry,
+  PendingAuthorizationStore,
+  DEFAULT_PENDING_AUTHORIZATION_TTL_MS,
+  DEFAULT_PENDING_AUTHORIZATION_MAX_ENTRIES,
   registerOAuthProvidersFromConfig,
   resolveOAuthClientSecret,
   oauthClientSecretEnv,
   oauthClientSecretPath,
   evaluateCredentialBind,
+  bindCredentialToConnector,
+  CredentialConnectorBindError,
 } from './engine/oauth/index.js';
 export type {
   OAuthClientAuthMethod,
@@ -327,9 +333,11 @@ export type {
   OAuthRevokeResult,
   OAuthTokenSet,
   OAuthErrorCode,
+  DeviceAuthorization,
   ExchangeAndStoreInput,
   OAuthCredentialServiceDeps,
   RevokeResult,
+  StoreTokensInput,
   OAuthProviderCatalogEntry,
   OAuthProviderRegistration,
   RegisterOAuthProvidersOptions,
@@ -337,6 +345,11 @@ export type {
   CredentialBindActor,
   CredentialBindDecision,
   CredentialBindInput,
+  BindCredentialToConnectorOptions,
+  PendingAuthorization,
+  PendingAuthorizationInput,
+  PendingAuthorizationKind,
+  PendingAuthorizationStoreOptions,
 } from './engine/oauth/index.js';
 
 // PROP-100 / ADR-071 §2.3.1: единый SSRF/egress-guard исходящих запросов
@@ -1295,6 +1308,15 @@ export type {
 } from './server/routes/agents.js';
 export { createMcpRoutes } from './server/routes/mcp.js';
 export type { McpRoutesAuth, McpRoutesDeps, McpRouteMessages } from './server/routes/mcp.js';
+
+// ADR-105 (Ф4): HTTP-контур слоя внешних доступов.
+export { createOAuthRoutes, OAuthBindError } from './server/routes/oauth.js';
+export type {
+  OAuthRoutesAuth,
+  OAuthRoutesDeps,
+  OAuthRoutesOptions,
+  OAuthRouteMessages,
+} from './server/routes/oauth.js';
 export { createEventRoutes } from './server/routes/events.js';
 export type {
   EventRoutesAuth,

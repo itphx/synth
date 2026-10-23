@@ -280,3 +280,98 @@ export function toExternalCredentialMeta(credential: ExternalCredential): Extern
     hasRefreshToken: credential.refreshEnc !== undefined && credential.refreshEnc !== '',
   };
 }
+
+// --- HTTP-контур слоя доступов (ADR-105 Ф4) ---
+
+/**
+ * Способ выдачи доступа (ADR-105 Ф4):
+ * - `authorize` — Authorization Code + PKCE (RFC 6749 §4.1, RFC 7636);
+ * - `device` — Device Authorization Grant (RFC 8628).
+ */
+export const OAUTH_CREDENTIAL_FLOWS = ['authorize', 'device'] as const;
+export type OAuthCredentialFlow = (typeof OAUTH_CREDENTIAL_FLOWS)[number];
+
+/**
+ * Тело `POST /api/v2/oauth/credentials` (ADR-105 Ф4).
+ *
+ * Один эндпоинт обслуживает обе фазы выдачи:
+ * - **старт** — без `code`/`state`: сервер отдаёт `authorizationUrl` (PKCE) либо
+ *   `userCode`/`verificationUri` (device flow) и запоминает `state`;
+ * - **завершение** — с `code` (обмен кода на токены) либо с `state`
+ *   (опрос device-flow).
+ */
+export const oauthCredentialCreateSchema = z.object({
+  /** Ключ OAuth-провайдера (каталог `oauth.providers`). */
+  provider: z.string().min(1),
+  /** Способ выдачи; по умолчанию — `authorize`. */
+  flow: z.enum(OAUTH_CREDENTIAL_FLOWS).default('authorize'),
+  /** Код авторизации (завершение `authorize`-фазы). */
+  code: z.string().min(1).optional(),
+  /** `state` незавершённой выдачи (завершение `authorize`/`device`-фазы). */
+  state: z.string().min(1).optional(),
+  /** Запрошенные scope'ы (по умолчанию — scope'ы провайдера). */
+  scopes: z.array(z.string().min(1)).optional(),
+  /** `redirect_uri` (по умолчанию — из описания провайдера). */
+  redirectUri: z.string().min(1).optional(),
+  /** Привязка доступа к проекту. */
+  projectId: z.string().min(1).optional(),
+  /** Привязка доступа к MCP-коннектору (id записи реестра). */
+  connectorId: z.string().min(1).optional(),
+  /**
+   * Вид владения: `user` (по умолчанию) или `instance` (инстансный доступ —
+   * выдавать может только `ADMIN`/`LEAD`).
+   */
+  ownerKind: z.enum(['user', 'instance']).optional(),
+});
+export type OAuthCredentialCreateRequest = z.infer<typeof oauthCredentialCreateSchema>;
+
+/** Тело `POST /api/v2/oauth/credentials/:id/bind` (привязка к MCP-коннектору). */
+export const oauthCredentialBindSchema = z.object({
+  /** id или имя записи реестра MCP. */
+  connectorId: z.string().min(1),
+});
+export type OAuthCredentialBindRequest = z.infer<typeof oauthCredentialBindSchema>;
+
+// --- Журнал операций со слоем доступов (ADR-105 Ф4) ---
+
+/**
+ * Операции журнала доступа (ADR-105 Ф4).
+ *
+ * - `issue` — выдан новый доступ (обмен кода/device-подтверждения);
+ * - `refresh` — обновлён access-токен;
+ * - `revoke` — доступ отозван (локально и/или у провайдера);
+ * - `bind` — доступ привязан к MCP-коннектору;
+ * - `use` — токен подставлен в транспорт (MCP).
+ */
+export const EXTERNAL_CREDENTIAL_AUDIT_OPS = ['issue', 'refresh', 'revoke', 'bind', 'use'] as const;
+export type ExternalCredentialAuditOp = (typeof EXTERNAL_CREDENTIAL_AUDIT_OPS)[number];
+
+/** Итог операции: успех или ошибка (код ошибки — без текста секрета). */
+export type ExternalCredentialAuditOutcome = 'ok' | 'error';
+
+/**
+ * Запись журнала операций со слоем доступов (append-only).
+ *
+ * **Секретов в записи нет**: ни значения токена, ни `code_verifier`, ни
+ * `client_secret`, ни сырых путей — только id доступа, провайдер, операция,
+ * актор и код ошибки (ADR-105 §7, §10).
+ */
+export interface ExternalCredentialAuditEntry {
+  id: string;
+  ts: string;
+  op: ExternalCredentialAuditOp;
+  /** id доступа. */
+  credentialId: string;
+  /** Ключ OAuth-провайдера. */
+  provider: string;
+  /** Кто выполнил операцию (id пользователя инстанса; standalone — `local`). */
+  actor?: string;
+  /** Итог операции. */
+  outcome: ExternalCredentialAuditOutcome;
+  /** Машинно-читаемый код ошибки (без текста секрета). */
+  errorCode?: string;
+  /** MCP-коннектор (для `bind`/`use`). */
+  connectorId?: string;
+  /** Проект (если доступ привязан к проекту). */
+  projectId?: string;
+}

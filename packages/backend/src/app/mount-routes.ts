@@ -26,6 +26,7 @@ import {
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createPluginsRoutes, createPluginSettingsRoutes,
+  createOAuthRoutes, bindCredentialToConnector, syncMcpManagerFromRegistry,
   resolveProjectWorkspace,
   resolvePluginServerPolicy,
 } from '@itphx/synth-core';
@@ -620,6 +621,53 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       return project ? projectAccess.canEditProjectContent(c as never, project, user.id) : false;
     },
   }));
+
+  // ADR-105 (Ф4): HTTP-контур слоя внешних доступов. Managed RBAC:
+  // чтение — свои доступы (владелец/участник проекта), `ADMIN`/`LEAD` — все;
+  // мутации — владелец доступа (инстансные — `ADMIN`/`LEAD`); право
+  // распоряжения доступом проверяется на границе (инвариант 16).
+  app.route('/api/v2/oauth', createOAuthRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      credentials: deps.storageContext.externalCredentials,
+      service: deps.oauthCredentialService,
+      providers: deps.oauthProviders,
+      ownerKind: 'user',
+      resolveActor: (c) => {
+        const user = c.get('user') as { id?: string; roles?: string[] } | undefined;
+        return { userId: user?.id ?? '', roles: user?.roles ?? [] };
+      },
+      canReadProject: async (c, projectId) => {
+        const user = await auth.getCurrentUser(c);
+        if (!user) return false;
+        const project = await projectStore.load(projectId);
+        return project ? projectAccess.canReadProject(c, project, user.id) : false;
+      },
+      canEditProject: async (c, projectId) => {
+        const user = await auth.getCurrentUser(c);
+        if (!user) return false;
+        const project = await projectStore.load(projectId);
+        return project ? projectAccess.canEditProjectContent(c, project, user.id) : false;
+      },
+      bindConnector: async ({ connectorId, credentialId, actor, c }) => {
+        await bindCredentialToConnector({
+          registry: deps.mcpRegistryStore,
+          connectorId,
+          credentialId,
+          // Запись реестра меняет автор записи или `ADMIN` (как в `mcp-registry`).
+          canModify: (entry) => {
+            const user = c.get('user') as { id?: string } | undefined;
+            if (auth.isAdmin(c)) return true;
+            if (entry.author?.userId && user?.id && entry.author.userId === user.id) return true;
+            return actor.roles.includes('ADMIN') || actor.roles.includes('LEAD');
+          },
+        });
+        // Реестр — источник истины для конфигурации серверов (ADR-071 §2.5):
+        // без синхронизации менеджер остался бы со старым конфигом (без `auth`).
+        await syncMcpManagerFromRegistry(mcpManager, deps.mcpRegistryStore);
+      },
+    },
+  ));
 
   // Скиллы (ADR-046 §9.1/§9.2): core-фабрика + RBAC ADMIN на запись.
   app.route('/api/v2/skills', createSkillRoutes(auth as unknown as CoreAuthKit, {
