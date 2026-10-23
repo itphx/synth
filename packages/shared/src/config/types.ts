@@ -596,9 +596,12 @@ export const webhooksConfigSchema = z.object({
  *   останавливается — `plugin.execution_disabled`; в Ф3/Ф4 включает `inline`/
  *   `out-of-process`);
  * - `deployDir` — каталог с бандлами, поставленными **образом/развёртыванием**
- *   (например `/opt/synth/plugins/<name>/` с `synth.pack` + `dist/`). Пусто —
- *   не задан (deploy-time установки нет). Ставится при старте инстанса
- *   (`PluginRuntime.installDeployPlugins`, PROP-090 §«Managed deploy-time», Ф5в);
+ *   (например `/opt/synth/plugins/<name>/` с `synth.pack` + `dist/`). Дефолт —
+ *   `/opt/synth/plugins` (конвенциональный путь образа; каталога нет — установки
+ *   нет, разбор пустого каталога — no-op). Пустая строка — deploy-time установки
+ *   выключены. Ставится при старте инстанса (`PluginRuntime.installDeployPlugins`,
+ *   PROP-090 §«Managed deploy-time», Ф5в). Значение переопределяется config.yaml
+ *   или env `SYNTH_PLUGINS_DEPLOY_DIR` (ADR-023: env выше конфига);
  * - `deployTrust` — уровень доверия, с которым ставятся бандлы `deployDir`
  *   (default `trusted`: бандл из образа доверен ровно настолько, насколько
  *   доверен сам образ; при `trustFloor: trusted` (дефолт) установка проходит).
@@ -632,7 +635,7 @@ export const pluginsConfigSchema = z.object({
    * задан (deploy-time установки нет). Каждый подкаталог — бандл
    * (`synth.pack` + `dist/`), ставится при старте инстанса.
    */
-  deployDir: z.string().default(''),
+  deployDir: z.string().default('/opt/synth/plugins'),
   /**
    * Ф5в: уровень доверия deploy-бандлов (не выше доверия инстанса: ниже
    * `trustFloor` — штатный отказ `plugin.trust_below_floor`).

@@ -510,7 +510,7 @@ kubectl -n synth rollout restart deployment/<release>-synth-backend
 
 | Значение | Смысл | По умолчанию |
 |---|---|---|
-| `backend.plugins.deployDir` | каталог с бандлами внутри контейнера (например `/opt/synth/plugins`) | `''` (не задан) |
+| `backend.plugins.deployDir` | каталог с бандлами внутри контейнера; пусто → берётся дефолт схемы (`/opt/synth/plugins`, путь в образе) | `''` (дефолт схемы) |
 | `backend.plugins.deployTrust` | доверие образных бандлов (`builtin`/`verified`/`trusted`/`community`); ниже `plugins.trustFloor` — установка отклоняется | `trusted` |
 | `backend.plugins.managedReadonly` | management-плагин (`source: 'deploy'`) нельзя снять/переустановить через API и CLI | `true` |
 | `backend.plugins.deployVolume.enabled` | монтировать каталог плагинов из PVC | `false` |

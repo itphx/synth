@@ -552,8 +552,9 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
       promptBlockMaxChars: 4000,
       executionEnabled: false,
       llmFilterTimeoutMs: 1000,
-      // Ф5в: дефолты managed deploy-time из схемы.
-      deployDir: '',
+      // Ф5в: дефолты managed deploy-time из схемы (конвенциональный путь
+      // образа; env его перекрывает, config.yaml — тоже).
+      deployDir: '/opt/synth/plugins',
       deployTrust: 'trusted',
       managedReadonly: true,
     });

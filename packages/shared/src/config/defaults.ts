@@ -223,7 +223,7 @@ export const defaultConfig: SynthConfig = {
     // реализован.
     llmFilterTimeoutMs: DEFAULT_LLM_FILTER_TIMEOUT_MS,
     // Ф5в: каталог deploy-плагинов (образ/PVC). Пусто — не задан.
-    deployDir: '',
+    deployDir: '/opt/synth/plugins',
     // Ф5в: доверие deploy-бандлов (образ — доверенный источник, но не выше
     // политики инстанса: ниже trust-floor — штатный отказ).
     deployTrust: 'trusted',
