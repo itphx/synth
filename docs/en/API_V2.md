@@ -1357,13 +1357,36 @@ via `PUT /api/v2/settings/plugins` + an **instance restart**.
 | GET | `/api/v2/plugins` | both | ADMIN / auth | `{plugins: PluginRuntimeEntry[]}` — the installed lock records plus `active`/`mode`; the quarantine is not part of the list |
 | GET | `/api/v2/plugins/:name` | both | ADMIN / auth | `{plugin, manifest?, integrity?}`: the manifest from the installed bundle and `PLUGIN_INTEGRITY.json` (best-effort — a corrupted file does not produce a 500); not in the lock → 404 `plugin.not_found` |
 | POST | `/api/v2/plugins/install` | both | ADMIN or service-key `addons:install` / auth | **Installation from a source** (see "Installation sources" below): `201` — installed, `202` — approval required (`plugin.approval_required`, the bundle is in quarantine), `400` `VALIDATION_ERROR` (body/pin/name) or `plugin.source_unavailable` for a local source, `400` `plugin.manifest_invalid`, `403` `plugin.trust_below_floor`/`plugin.runtime_install_denied`/`plugin.scan_disabled_with_execution`, `409` `plugin.scan_rejected`, `502` `plugin.source_unavailable` for a network source (the registry/URL did not answer). **Managed**: local sources (`dir`/`archive`) are forbidden → `403 LOCAL_INSTALL_DISABLED`; network sources (`npm`/`url`) are allowed |
-| POST | `/api/v2/plugins/:name/approve` | both | **ADMIN** / auth | Approve the quarantine (the `202` installation): the gates are re-run + the integrity is re-checked → `200` installed; `404` `plugin.not_found`, `409` `plugin.scan_rejected` |
+| POST | `/api/v2/plugins/:name/approve` | both | **ADMIN** / auth | Approve the quarantine (the `202` installation): the approval is checked (the content hash + the 24-hour window, ADR-090 §9) → the gates are re-run + the integrity is re-checked → `200` installed; `404` `plugin.not_found`, `409` `plugin.scan_rejected`, `409` `plugin.approval_expired` (the approval has expired — 24 h from the moment of issuance), `409` `plugin.approval_stale` (the bundle in the quarantine changed after the approval was issued) |
 | POST | `/api/v2/plugins/:name/enable` | both | ADMIN or `addons:install` / auth | Activation (the ADR-090 pipeline) → `200 {activation}`; a gate refusal (`plugin.execution_disabled`/`trust_below_floor`/`scan_rejected`/`approval_required`) → `409` with `reason`; not in the lock → `404` |
 | POST | `/api/v2/plugins/:name/disable` | both | ADMIN or `addons:install` / auth | The reverse rollback of the disposers → `200 {deactivation}`; not active → `404 plugin.not_active` |
 | DELETE | `/api/v2/plugins/:name` | both | **ADMIN** / auth | Removal: deactivation → `lock.delete` → deletion of the version directory; **idempotent** → `204` even if there was no record |
 | POST | `/api/v2/plugins/:name/rollback` | both | ADMIN or `addons:install` / auth | Rollback to the `previous` step: `200 {outcome:'rolled_back', version, previousVersion, activated?}`; no step/directory → `409 plugin.rollback_unavailable`, no record → `404 plugin.not_found` |
 | POST | `/api/v2/plugins/token` | both | **ADMIN** / auth | **Issuing a server-scoped token to a plugin** (ADR-090 F7, Level 2): the body `{pluginId, scopes?, expiresInSec?}` → `201 {token, pluginId, scopes, expiresAt}`; the secret is returned **once** (at-rest — sha256, the format `synth_svc_…`), the scope `plugins:invoke` is always added. Errors: `400 VALIDATION_ERROR` (no `pluginId`/an unknown scope/an invalid `expiresInSec`), `403 PLUGIN_NOT_ALLOWED` (the plugin is outside the server allowlist when `plugins.hybrid.mode=allowlist`), `404 plugin.not_found` (the plugin is unknown to the server: neither installed nor allowed by the allowlist), `501 NOT_IMPLEMENTED` (the service-key registry is not wired) |
 | POST | `/api/v2/plugins/update` | both | ADMIN or `addons:install` / auth | **Update from the source of the lock record**: `200 {outcome:'unchanged'|'updated', ...}`; `400 VALIDATION_ERROR` (no `name`/an invalid `sha256`) or `plugin.source_unavailable` for a local source, `404 plugin.not_found`, `409 plugin.approval_required`/`scan_rejected`/`integrity_*`, `502 plugin.source_unavailable` for a network source. The body `{name, version?, sha256?, activate?}`; the source is not chosen by the client |
+
+**The installation approval (`POST /plugins/:name/approve`, ADR-090 §9).** The scan verdict `caution` →
+the bundle goes to `quarantine/<name>@<version>/` (the answer `202`, `plugin.approval_required`) and
+an **approval** is issued along with it: bound to the **content hash** of the bundle, with **who**
+and **when** it was issued, **the window is 24 h** (`PLUGIN_APPROVAL_TTL_MS`). The state is
+persistent: `plugin-approvals.json` in the root of the plugin layer layout (`<home>/plugin/` or
+`{dataDir}/plugin/`) — next to `plugins.lock.json`, but **outside** the bundle directory (replacing
+the bundle in the quarantine does not erase the approval).
+
+On `approve` the approval is checked **first**:
+
+| Condition | Answer |
+|---|---|
+| there is no approval (the bundle was put into the quarantine by hand) | the checks do not apply — the other gates work as before |
+| the 24-hour window has expired | `409` `plugin.approval_expired` |
+| the content hash of the bundle does not match the approved one (the bundle was replaced) | `409` `plugin.approval_stale` |
+| otherwise | the gates are re-run → `200` installed |
+
+In managed only **`ADMIN`** may approve (that is, perform `approve`) (`approveGuard:
+requirePermission('ADMIN')`); the scope `addons:install` opens the installation/activation, but not
+the approval. In core (standalone) — a single `requireAuth`. There is no separate revocation API: the
+approval stops applying when the hash stops matching (`plugin.approval_stale`) or the window
+expires.
 
 **Installation sources (`POST /plugins/install`).** The body:
 `{source?: 'dir'|'archive'|'npm'|'url', path?, name?, version?, url?, sha256?, trustLevel?}`.
@@ -1419,7 +1442,9 @@ the header binding and the scope requirement always apply. A regular service key
 `runtime_install_denied`, `scan_disabled_with_execution`, `managed_readonly`, `hybrid_not_allowed`
 (the server-side hybrid policy forbids the plugin to run); `404` — `not_found`, `not_active`;
 `409` — `scan_rejected`, `integrity_mismatch`, `integrity_unverifiable`, `execution_disabled`,
-`rollback_unavailable`; `202` — `approval_required`; `500` — `loader_unavailable`,
+`rollback_unavailable`, `approval_expired`, `approval_stale` (an invalid installation approval — a
+state conflict, not a policy prohibition: the rights are checked by the route guard); `202` —
+`approval_required`; `500` — `loader_unavailable`,
 `disposer_failed` (a host failure, not a client one); `502` — `source_unavailable` for a network
 source. On activation `execution_disabled`/`trust_below_floor`/`scan_rejected`/`approval_required`
 → `409`, `not_found` → `404`, other refusals → `200 {activation: {outcome: 'rejected', reason}}`.

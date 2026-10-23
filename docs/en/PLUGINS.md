@@ -887,9 +887,50 @@ For `kind: "plugin"` a separate cell of the matrix applies — it **does not dep
 
 Confirming the quarantine (`synth plugin approve <name>` / `POST /api/v2/plugins/:name/approve`)
 re-runs the gates and compares `PLUGIN_INTEGRITY.json` with the actual hash; after that the bundle
-is moved into `installed/`.
+is moved into `installed/`. The rules of the confirmation — §7.3.
 
-### 7.3. Managed plugins (deploy-time)
+### 7.3. Installation approval: content hash and a 24-hour window
+
+The verdict `caution` is not a block but a **request for an approval**. The approval is issued
+automatically when the bundle is put into quarantine and lives for **24 hours** (ADR-090 §9
+"Decisions"):
+
+| What | Value |
+|---|---|
+| What it is bound to | the **content hash** of the bundle (sha256 over the set of text files) |
+| Who issued it | the initiator of the quarantine placement (in managed — `ADMIN` or a service key with the `addons:install` scope, granted by an admin) |
+| When | the moment of issuance (ISO-8601) |
+| The window | **24 h** from the moment of issuance (`PLUGIN_APPROVAL_TTL_MS` in `engine/plugins/approval.ts`) |
+| Where it is stored | `plugin-approvals.json` in the root of the plugin layer layout (`<home>/plugin/` or `{dataDir}/plugin/`) |
+
+The approvals file sits **next to** `plugins.lock.json`, but **outside** the bundle directory: the
+quarantine is a directory, and replacing it (re-installing/swapping the bundle) must not erase the
+issued approval — otherwise the swapped content would pass under the old approval. The record
+survives a process restart.
+
+On `approve` the approval is checked **first** (before the other gates):
+
+```text
+approve → approval?
+   • no approval → the other gates work as before (there is nothing to compare with)
+   • expired (more than 24 h)         → 409 plugin.approval_expired
+   • the content hash does not match  → 409 plugin.approval_stale
+   • otherwise → the gates → the move into installed/ + the lock entry
+```
+
+- **An expired approval** (`plugin.approval_expired`): the administrator's decision has expired — the
+  bundle has to be installed again (that issues a new approval) and approved again.
+- **A bundle changed after the approval** (`plugin.approval_stale`): the content of the quarantine no
+  longer matches the one the approval was issued for — such an approval does not apply (this is the
+  "revocation" without a separate API: there is no need for a separate revocation handle, it is
+  enough to stop trusting the hash).
+
+**Who may approve.** The `approve` action itself (that is, the installation from the quarantine) is
+available in managed to **`ADMIN` only** (`approveGuard: requirePermission('ADMIN')`); in core
+(standalone) — a single `requireAuth`. The scope `addons:install` opens installation/activation, but
+**not** the approval.
+
+### 7.4. Managed plugins (deploy-time)
 
 Plugins delivered **by an image or a PVC** (`plugins.deployDir`) are installed when the instance
 starts and **cannot be removed** via the API/CLI:
@@ -1107,7 +1148,7 @@ changes take effect after a restart. Managing a live instance — the API/UI.
 | the list | `GET /api/v2/plugins` | `200 { plugins: [...] }` |
 | the details (manifest + integrity) | `GET /api/v2/plugins/:name` | `200 { plugin, manifest?, integrity? }` |
 | installation | `POST /api/v2/plugins/install` `{source?, path?, name?, version?, url?, sha256?, trustLevel?}` | `201` installed, `202` an `approve` is needed |
-| confirmation | `POST /api/v2/plugins/:name/approve` | `200` |
+| confirmation | `POST /api/v2/plugins/:name/approve` | `200` (or `409` — expired/invalid approval) |
 | enable/disable | `POST /api/v2/plugins/:name/enable` \| `.../disable` | `200 { activation }` / `200 { deactivation }` |
 | removal | `DELETE /api/v2/plugins/:name` | `204` (idempotent) |
 | an update | `POST /api/v2/plugins/update` `{name, version?, sha256?, activate?}` | `200 { outcome: "unchanged" \| "updated" }` |
@@ -1115,7 +1156,8 @@ changes take effect after a restart. Managing a live instance — the API/UI.
 | the policy | `GET/PUT/DELETE /api/v2/settings/plugins` | `200` (applied after a restart) |
 
 RBAC: managed — `ADMIN`; the installation/activation — also a service key with the scope
-`addons:install`; `approve` and `DELETE` — only `ADMIN`. Core (standalone) — a single `requireAuth`.
+`addons:install`; `approve` and `DELETE` — only `ADMIN` (the installation approval is an
+administrator's decision, §7.3). Core (standalone) — a single `requireAuth`.
 The local sources (`dir`/`archive`) are forbidden in managed (`403 LOCAL_INSTALL_DISABLED`), the
 network ones (`npm`/`url`) are allowed.
 
@@ -1138,9 +1180,13 @@ A runtime installation through the API requires `plugins.runtimeInstall: allow` 
 ### 9.5. Quarantine
 
 `caution` → the bundle goes to `quarantine/<name>@<version>/`, the lock is not written, the answer
-is `202`. The confirmation (`approve`) repeats the gates and checks the integrity; the trust is
-taken from `PLUGIN_INTEGRITY.json`, not guessed. Without a confirmation the plugin is not installed —
-it is not in the `GET /plugins` list.
+is `202`. At the same time an **approval** is issued — bound to the content hash and valid for 24 h
+(§7.3). The confirmation (`approve`) checks the approval (the window and the hash), repeats the
+gates and checks the integrity; the trust is taken from `PLUGIN_INTEGRITY.json`, not guessed.
+Without a confirmation the plugin is not installed — it is not in the `GET /plugins` list.
+
+Approval refusals: an expired window → `409 plugin.approval_expired`; the bundle changed after the
+approval was issued → `409 plugin.approval_stale`.
 
 ### 9.6. Deploy-time (image/PVC)
 
@@ -1154,7 +1200,7 @@ At startup the instance first **installs** the bundles from the directory (the s
 fail-closed → trust-floor → scan → install-policy), then activates what is installed according to
 the lock. A matching version and `content_hash` → `skipped`; a failure of one bundle does not break
 the others and does not bring down the startup. Symlinks are not read. A managed plugin is changed
-only by a new image/redeployment (§7.3).
+only by a new image/redeployment (§7.4).
 
 ---
 
@@ -1299,7 +1345,7 @@ workaround, not the norm for an author.
 
 ## 12. Error reference
 
-The reason codes are `PLUGIN_AUDIT_REASONS` (`packages/shared/src/types/plugin-audit.ts`), 29 values.
+The reason codes are `PLUGIN_AUDIT_REASONS` (`packages/shared/src/types/plugin-audit.ts`), 31 values.
 A code is visible in the API answer (`reason`), in the journal `{dataDir}/audit/plugins.jsonl` and
 in the CLI stderr.
 
@@ -1313,6 +1359,8 @@ in the CLI stderr.
 | `plugin.integrity_mismatch` | the contents of the installed bundle changed after the installation | reinstall the bundle; do not edit the files in `installed/…` |
 | `plugin.integrity_unverifiable` | the expected hash is there, but there is nothing to check it against (no files) | install from a source/archive, not from a "half-built" directory |
 | `plugin.approval_required` | the verdict is `caution` — an `approve` is needed | check the scan findings (`synth plugin scan`), then confirm the installation |
+| `plugin.approval_expired` | the approval has expired: the 24-hour window from the moment of issuance is over (§7.3) | install the bundle again (`install`) and approve it again |
+| `plugin.approval_stale` | the bundle in the quarantine changed after the approval was issued (the content hash does not match) | install the required bundle again — the approval does not apply to the old contents |
 | `plugin.scan_rejected` | the verdict is `dangerous` (or the scanner failed — fail-closed) | eliminate the findings (`child_process`/`eval`/reading secrets/an executable binary) |
 
 ### 12.2. Trust and policy
@@ -1363,7 +1411,8 @@ The mapping of the reasons to HTTP is the single table `PLUGIN_REASON_HTTP`
 `trust_below_floor`, `disabled`, `not_allowlisted`, `denylisted`, `runtime_install_denied`,
 `scan_disabled_with_execution`, `managed_readonly`, `hybrid_not_allowed`; `404` — `not_found`,
 `not_active`; `409` — `scan_rejected`, `integrity_mismatch`, `integrity_unverifiable`,
-`execution_disabled`, `rollback_unavailable`; `202` — `approval_required`; `500` —
+`execution_disabled`, `rollback_unavailable`, `approval_expired`, `approval_stale` (an invalid
+approval — a state conflict, §7.3); `202` — `approval_required`; `500` —
 `loader_unavailable`, `disposer_failed`; `502` — a network `source_unavailable`.
 
 ---

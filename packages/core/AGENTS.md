@@ -656,13 +656,15 @@
   исключений семвер-гейта: **одна полная semver-версия host в строке**, `#` — комментарий,
   не-semver строка пропускается с предупреждением, недоступный файл → исключений нет
   (fail-closed)), `index.ts` — баррел. **Коды отказа** (`PLUGIN_AUDIT_REASONS`,
-  `shared/src/types/plugin-audit.ts`, всего **29**): `plugin.not_found` (resolve),
+  `shared/src/types/plugin-audit.ts`, всего **31**): `plugin.not_found` (resolve),
   `plugin.source_unavailable` (Д1 — источник бандла недоступен или не прошёл проверку целостности:
   локальный путь/архив не распакован, npm без SRI / с несовпадением SRI-sha512 или shasum, URL без pin
   или с несовпадением sha256; отказ **до** гейтов установщика), `plugin.manifest_invalid` (resolve),
   `plugin.integrity_mismatch`/`plugin.integrity_unverifiable` (integrity),
   `plugin.contract_mismatch`/`plugin.host_mismatch` (semver), `plugin.trust_below_floor`/
-  `plugin.scan_rejected`/`plugin.approval_required` (trust/scan), `plugin.disabled`/
+  `plugin.scan_rejected`/`plugin.approval_required` (trust/scan), `plugin.approval_expired`/
+  `plugin.approval_stale` (ADR-090 п. 9 — недействительное подтверждение установки: истёк срок
+  24 ч либо бандл в карантине изменён после выдачи), `plugin.disabled`/
   `plugin.not_allowlisted`/`plugin.denylisted`/`plugin.runtime_install_denied` (policy),
   `plugin.scan_disabled_with_execution` (trust; Ф3а — **fail-closed**: `plugins.scan='disabled'` вместе
   с `plugins.executionEnabled=true` → отказ, исполняемый код обязан быть просканирован),
@@ -729,13 +731,23 @@
   256 КиБ на файл → `high` (`dangerous`).
 - `engine/plugins/layout.ts` — ADR-090: раскладка слоя плагинов на диске. `resolvePluginLayout`
   (приоритет корня: явный home > env `SYNTH_HOME` > `{dataDir}/plugin` — ADR-079) →
-  `<home>/plugin/{installed,quarantine,plugins.lock.json,plugins.json}`; `pluginInstalledDir`/
+  `<home>/plugin/{installed,quarantine,plugins.lock.json,plugins.json,plugin-approvals.json}`;
+  `pluginInstalledDir`/
   `pluginQuarantineDir` (`<name>@<version>`); `stagePluginBundle` (решение install-policy: `allow` →
   в `installed/` + `PLUGIN_INTEGRITY.json`; `ask`/`block` → остаётся в `quarantine/`, в `installed/`
   **не попадает**); `releaseFromQuarantine` (перенос из карантина после подтверждения владельца).
   `PLUGIN_INTEGRITY.json` (Ф5а) хранит не только `sha256`/`source`/`fetched_at`, но и `trust_level?`/
   `install_kind?`/`identifier?`/`ref?` — иначе подтверждение из карантина не знало бы фактическое
   доверие (его резолвит источник, не манифест).
+- `engine/plugins/approval.ts` — ADR-090 п. 9: **подтверждение установки** (`caution`): привязка к
+  **content-hash** бандла, срок **24 ч** (`PLUGIN_APPROVAL_TTL_MS`/`PLUGIN_APPROVAL_TTL_HOURS`),
+  кто выдал и когда. Состояние — `FilePluginApprovalStore` (файл `plugin-approvals.json` в **корне
+  раскладки**, атомарная запись tmp→rename; путь — `PluginLayout.approvalsPath`, т.е. запись идёт
+  через раскладку слоя плагинов, а не мимо неё), `MemoryPluginApprovalStore` — для тестов.
+  Подтверждение лежит **вне** каталога бандла: замена бандла в карантине не стирает его, и
+  расхождение хешей видно (`plugin.approval_stale`). Выдаётся на пути `install-policy: ask`,
+  проверяется в `approve` **первым** (истёк срок → `plugin.approval_expired`; хеш не совпал →
+  `plugin.approval_stale`); отдельного API отзыва нет.
 - **Бюджеты слоя плагинов (долги Д3).** `OrchestratorOptions.promptBlockMaxChars` → `ComposerContext`
   (`plugins.promptBlockMaxChars`; до Д3 ключ **не доходил** до композера и бюджет всегда был дефолтным);
   `OrchestratorOptions.llmFilterTimeoutMs` → `LlmFilterRegistry`. Живое применение —
@@ -761,7 +773,9 @@
   `runtimeInstall=deny` → install-policy**; `allow` → `installed/<name>@<version>/` + `lock.save` +
   аудит `install`; `ask` → `quarantine/…` (lock **не** пишется, аудит `install/rejected`
   `plugin.approval_required`); `block`/`dangerous` → `plugin.scan_rejected`. `approve(name, {version?,
-  activate?})` ищет lock, затем карантин; сверяет `PLUGIN_INTEGRITY.json` с фактическим хешем
+  activate?})` ищет lock, затем карантин; **первым** проверяет подтверждение установки (ADR-090 п. 9:
+  срок 24 ч → `plugin.approval_expired`, несовпадение content-hash → `plugin.approval_stale`), затем
+  сверяет `PLUGIN_INTEGRITY.json` с фактическим хешем
   (`plugin.integrity_mismatch`/`plugin.integrity_unverifiable`), повторяет гейты и переносит
   `releaseFromQuarantine` только без `block`; нет данных доверия → fail-closed `community`.
   `uninstall(name, {removeFiles?})` — деактивация активного (`host.deactivate`) → `lock.delete` →

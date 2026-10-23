@@ -65,6 +65,7 @@ import type {
   PluginScanHook,
 } from './activation.js';
 import { createInlinePluginLoader, DEFAULT_PLUGIN_ENTRY } from './inline-loader.js';
+import { FilePluginApprovalStore } from './approval.js';
 import { collectBundleFiles, PluginInstaller } from './installer.js';
 import { computePluginContentHash } from './integrity.js';
 import { listDeployPlugins } from './deploy.js';
@@ -235,6 +236,11 @@ export class PluginRuntime {
       // Тот же хост: `uninstall` деактивирует, `installFromDirectory({activate})`
       // активирует — иначе установщик и рантайм разошлись бы по реестру активаций.
       host: this.host,
+      // ADR-090 п. 9: подтверждения установки — файл в корне раскладки слоя
+      // плагинов (`<home>/plugin/plugin-approvals.json` или
+      // `{dataDir}/plugin/plugin-approvals.json`): привязка к content-hash и
+      // срок 24 ч, персистентно (переживает рестарт процесса).
+      approvals: new FilePluginApprovalStore({ path: deps.layout.approvalsPath }),
       ...(deps.scan ? { scan: deps.scan } : {}),
       ...(deps.now ? { now: deps.now } : {}),
       logger: this._logger,

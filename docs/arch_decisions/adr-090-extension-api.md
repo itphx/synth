@@ -2,6 +2,7 @@
 
 > **Статус:** ✅ Реализовано — фазы Ф0–Ф7 закрыты (2026-10-22…2026-10-23); слой развёрнут в test (0.12.1); авторская спецификация — [docs/PLUGINS.md](../PLUGINS.md)
 > **Дата:** 2026-10-23 (решение владельца — 2026-10-22, «добить Ф7 и перенести в ADR»)
+> **Обновлено:** 2026-10-24 — п. 9: подтверждение `caution` привязано к content-hash, срок 24 ч, выдаёт ADMIN — **реализовано**
 > **Обновлено:** 2026-10-24 — п. 9: схема записи каталога генерируется автоматически из опубликованного `@itphx/synth-shared` в CI каталога (bot-коммит) — **реализовано**. Фактический механизм: репозиторий каталога `synth-registry` (`scripts/gen-schema.mjs` + джоба `schema` в `.gitverse/workflows/registry.yaml`) берёт контракт из опубликованного npm-пакета, пересобирает `schema/` и коммитит результат в `master` ботом; пока версия пакета с контрактом каталога не опубликована, пересборка пропускается с явным сообщением в логе джобы.
 > **Связано:** [ADR-029](./adr-029-granular-permissions.md) (permission-слой), [ADR-030](./adr-030-hooks-agent-events.md) (шина хуков), [ADR-036](./adr-036-llm-gateway.md) (шлюз LLM), [ADR-052](./adr-052-public-api-platform.md) (модель service-key), [ADR-070](./adr-070-system-prompt-composer.md) (сборка промпта), [ADR-076](./adr-076-git-repo-registry-ssh.md) (секреты at-rest), [ADR-077](./adr-077-runtime-toolchain.md) (образец порта), [ADR-086](./adr-086-extensibility-plugins-editions.md) (зонтик классов расширений), [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md) (порты и драйверы), [ADR-099](./adr-099-egress-tls-trust.md) (egress), [PROP-047](./prop-047-memory-gbrain.md) (память — контрактом плагина), [PROP-068](./prop-068-skills-agents-registry.md) (каталог и модель доверия), [PROP-080](./prop-080-managed-hybrid-modes.md)/[PROP-081](./prop-081-hybrid-policy-leak-protection.md) (гибрид); спецификация — [docs/PLUGINS.md](../PLUGINS.md), HTTP — [docs/API_V2.md](../API_V2.md) §5.36, эксплуатация — [docs/MAINTENANCE.md](../MAINTENANCE.md) §Плагины.
 
@@ -48,6 +49,7 @@
 | Гибридная политика (сигнал, allow-list, статусы) | `packages/shared/src/types/plugin-hybrid.ts` |
 | Модель доверия, сканер, install-policy | `packages/shared/src/types/trust.ts`, `packages/core/src/engine/plugins/scan/*` |
 | Загрузчик, активация, runtime, установщик, раскладка | `packages/core/src/engine/plugins/{plugin-host,activation,runtime,installer,layout}.ts` |
+| Подтверждение установки (content-hash, срок 24 ч) | `packages/core/src/engine/plugins/approval.ts` (состояние — `plugin-approvals.json` в раскладке) |
 | Серверная политика; два режима исполнения | `packages/core/src/engine/plugins/hybrid-policy.ts`, `{inline-loader,remote/*}.ts` |
 | Контрактный suite (доступен автору) | `packages/core/src/engine/plugins/contract/*` (subpath `./engine/plugins/contract.js`) |
 | HTTP API, RBAC, plugin-bound токен | `packages/core/src/server/routes/plugins.ts`, `packages/core/src/server/service-scope.ts`, `packages/backend/src/auth/plugin-scope.ts` |
@@ -58,11 +60,10 @@
 
 - **Уровень 3** (attestation клиента в гибриде) — вне объёма v1.
 - **[PROP-047](./prop-047-memory-gbrain.md)** переписывается под слой плагинов: `MemoryProvider` — контракт, доставляемый плагином (отдельная задача).
-- **Подтверждение `caution`**: привязка к content-hash реализована; **срок 24 ч** и **генерация JSON-схемы каталога в CI монорепо** — решения приняты (п. 9 «Решения»), реализация — в работе.
 - Версия точки расширения — семвер-мажор; окно deprecation — п. 9 «Решения», поведение при несовместимой версии — в [docs/PLUGINS.md](../PLUGINS.md) §11.
 
 ## История
 
 - 2026-10-22 — решение владельца: слой возвращён в работу (был Icebox), форма — in-process SDK + два режима исполнения; фазы Ф0–Ф6 выполнены.
 - 2026-10-23 — Ф7 (гибрид) закрыта; предложение принято как решение (ADR-090); спецификация автора — [docs/PLUGINS.md](../PLUGINS.md).
-- 2026-10-24 — п. 9: схема записи каталога генерируется автоматически из опубликованного `@itphx/synth-shared` в CI каталога (bot-коммит) — реализовано.
+- 2026-10-24 — п. 9: подтверждение `caution` привязано к content-hash, срок 24 ч, выдаёт ADMIN — **реализовано** (состояние — `plugin-approvals.json` в раскладке слоя плагинов; причины `plugin.approval_expired`/`plugin.approval_stale`); схема записи каталога генерируется автоматически из опубликованного `@itphx/synth-shared` в CI каталога (bot-коммит) — реализовано.

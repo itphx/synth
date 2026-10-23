@@ -67,6 +67,17 @@ export type {
 export { computePluginContentHash, verifyPluginIntegrity } from './integrity.js';
 export type { PluginIntegrityVerdict } from './integrity.js';
 
+// ADR-090 п. 9 — подтверждение установки: привязка к content-hash, срок 24 ч.
+export {
+  FilePluginApprovalStore,
+  MemoryPluginApprovalStore,
+  PLUGIN_APPROVAL_TTL_HOURS,
+  PLUGIN_APPROVAL_TTL_MS,
+  buildPluginApproval,
+  isPluginApprovalExpired,
+} from './approval.js';
+export type { PluginApprovalRecord, PluginApprovalStore } from './approval.js';
+
 // Ф5а — сервис установки: манифест → скан → политика → раскладка/lock → аудит.
 export {
   PluginInstaller,
