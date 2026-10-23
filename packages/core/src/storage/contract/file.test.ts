@@ -8,6 +8,7 @@ import {
   describeAuthorityPolicyRepository,
   describeBlobStore,
   describeContextFileRepository,
+  describeCredentialAuditRepository,
   describeDedupRepository,
   describeDictionaryRepository,
   describeDocumentRepository,
@@ -66,6 +67,7 @@ import { SSHKeyStore } from '../ssh-key-store.js';
 import { WebhookStore } from '../webhook-store.js';
 import { WebhookDeliveryStore } from '../webhook-delivery-store.js';
 import { ExternalCredentialStore } from '../external-credential-store.js';
+import { FileCredentialAuditStore } from '../file-credential-audit-store.js';
 import { McpRegistryStore } from '../mcp-registry-store.js';
 import { SkillStore } from '../skill-store.js';
 import { SkillBundleStore } from '../skill-bundle-store.js';
@@ -235,6 +237,18 @@ describe('контрактные тесты файловых реализаци�
       return {
         repo: new ExternalCredentialStore({ dataDir: dir, secretKey: MASTER_KEY }),
         filePath: join(dir, 'secrets', 'oauth', 'credentials.json'),
+      };
+    },
+  );
+
+  // ADR-105 (Ф4): журнал операций со слоем доступов — `audit/credentials.jsonl`.
+  describeCredentialAuditRepository(
+    'FileCredentialAuditStore → CredentialAuditRepository',
+    async () => {
+      const dir = await tmp();
+      return {
+        repo: new FileCredentialAuditStore({ dataDir: dir }),
+        filePath: join(dir, 'audit', 'credentials.jsonl'),
       };
     },
   );

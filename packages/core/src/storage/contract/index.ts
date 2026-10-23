@@ -46,6 +46,8 @@ export { describeWebhookRepository } from './secrets.js';
 export { describeWebhookDeliveryRepository } from './secrets.js';
 // ADR-105 (Ф1): внешние доступы (OAuth-креды к коннекторам).
 export { describeExternalCredentialRepository } from './external-credential-repository.contract.js';
+// ADR-105 (Ф4): журнал операций со слоем доступов (append-only).
+export { describeCredentialAuditRepository } from './credential-audit-repository.contract.js';
 
 export { describeMcpRegistryRepository } from './content.js';
 export { describeSkillRepository } from './content.js';

@@ -519,6 +519,8 @@ export function mountStandaloneRoutes(
       credentials: deps.storageContext.externalCredentials,
       service: deps.oauthCredentialService,
       providers: deps.oauthProviders,
+      // ADR-105 (Ф4): журнал операций со слоем доступов (привязка к коннектору).
+      audit: deps.storageContext.credentialAudit,
       ownerKind: 'local',
       resolveActor: (c) => {
         const user = c.get('user') as { id?: string; roles?: string[] } | undefined;

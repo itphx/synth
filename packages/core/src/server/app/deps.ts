@@ -356,6 +356,8 @@ export async function createStandaloneDeps(
   const oauthCredentialService = new OAuthCredentialService({
     repo: storageContext.externalCredentials,
     clientFor: (provider: string) => oauthProviders.clientFor(provider),
+    // ADR-105 (Ф4): журнал операций со слоем доступов (append-only).
+    audit: storageContext.credentialAudit,
   });
   mcpManager.setCredentialSource(
     createRepositoryCredentialSource({
@@ -363,6 +365,8 @@ export async function createStandaloneDeps(
       refresh: async (credentialId: string) => {
         await oauthCredentialService.refresh(credentialId);
       },
+      // ADR-105 (Ф4): подстановка токена в транспорт журналируется (`use`).
+      audit: storageContext.credentialAudit,
     }),
   );
 

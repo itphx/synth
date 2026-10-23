@@ -24,6 +24,7 @@ import {
 import type { ExternalCredentialMeta, ExternalCredentialOwner } from '@itphx/synth-shared';
 import { evaluateCredentialBind } from '../../engine/oauth/credential-binding.js';
 import type { CredentialBindActor } from '../../engine/oauth/credential-binding.js';
+import { credentialAuditErrorCode, recordCredentialAudit } from '../../engine/oauth/audit.js';
 import { CredentialConnectorBindError } from '../../engine/oauth/bind-connector.js';
 import { PendingAuthorizationStore } from '../../engine/oauth/pending-flows.js';
 import { buildAuthorizationUrl, createPkcePair } from '../../engine/oauth/pkce.js';
@@ -31,6 +32,7 @@ import type { OAuthProviderRegistry } from '../../engine/oauth/registry.js';
 import type { OAuthCredentialService } from '../../engine/oauth/service.js';
 import { OAuthError } from '../../engine/oauth/types.js';
 import type { ExternalCredentialRepository } from '../../storage/ports/external-credential-repository.js';
+import type { CredentialAuditRepository } from '../../storage/ports/credential-audit-repository.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -85,6 +87,11 @@ export interface OAuthRoutesDeps {
   canReadProject?: (c: Context, projectId: string) => boolean | Promise<boolean>;
   /** Право **изменять содержимое** проекта (`OWNER`/`EDITOR`, `LEAD`/`ADMIN`). */
   canEditProject?: (c: Context, projectId: string) => boolean | Promise<boolean>;
+  /**
+   * ADR-105 (Ф4): журнал операций со слоем доступов (append-only) — привязка
+   * доступа к коннектору пишется как `bind`. Не задан — не журналируется.
+   */
+  audit?: CredentialAuditRepository;
   /**
    * Вид владения создаваемым доступом: `local` — standalone (единственный
    * владелец, инвариант 19), `user` — managed (владелец — пользователь).
@@ -516,6 +523,15 @@ export function createOAuthRoutes(
         c,
       });
     } catch (err) {
+      // ADR-105 (Ф4): неудачная привязка — тоже запись журнала (исход `error`).
+      await recordCredentialAudit(deps.audit, {
+        op: 'bind',
+        credentialId: id,
+        provider: credential?.provider ?? '',
+        outcome: 'error',
+        errorCode: credentialAuditErrorCode(err),
+        connectorId: parsed.data.connectorId,
+      });
       if (err instanceof CredentialConnectorBindError) {
         if (err.code === 'not_found') {
           return c.json(
@@ -536,6 +552,14 @@ export function createOAuthRoutes(
       }
       throw err;
     }
+    // ADR-105 (Ф4): успешная привязка — запись журнала (`bind`).
+    await recordCredentialAudit(deps.audit, {
+      op: 'bind',
+      credentialId: id,
+      provider: credential?.provider ?? '',
+      outcome: 'ok',
+      connectorId: parsed.data.connectorId,
+    });
     return c.json({ credentialId: id, connectorId: parsed.data.connectorId, bound: true });
   });
 

@@ -632,6 +632,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       credentials: deps.storageContext.externalCredentials,
       service: deps.oauthCredentialService,
       providers: deps.oauthProviders,
+      // ADR-105 (Ф4): журнал операций со слоем доступов (привязка к коннектору).
+      audit: deps.storageContext.credentialAudit,
       ownerKind: 'user',
       resolveActor: (c) => {
         const user = c.get('user') as { id?: string; roles?: string[] } | undefined;

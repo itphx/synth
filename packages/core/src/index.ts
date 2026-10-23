@@ -538,6 +538,9 @@ export type {
   // ADR-105 (Ф0/Ф1): внешние доступы (OAuth-креды к коннекторам).
   ExternalCredentialRepository,
   ExternalCredentialErrorCode,
+  // ADR-105 (Ф4): журнал операций со слоем доступов (append-only).
+  CredentialAuditRepository,
+  CredentialAuditListOptions,
   BlobStore,
   DefaultsRepository,
   AppearanceDefaults,
@@ -609,6 +612,7 @@ export {
   MemoryPipelineRunRepository,
   // ADR-105 (Ф1): внешние доступы (OAuth-креды к коннекторам).
   MemoryExternalCredentialRepository,
+  MemoryCredentialAuditRepository,
 } from './storage/memory/index.js';
 // ADR-096 (W2.4): generic-реализация конфигурационных словарей (провайдеры/модели/агенты).
 export { MemoryDocumentRepository } from './storage/memory/document-repository.js';
@@ -964,6 +968,10 @@ export type { JobStoreConfig, JobListOptions } from './storage/job-store.js';
 // ADR-092 (остаток): аудит-журнал обслуживания инстанса — файловая реализация порта.
 export { MaintenanceAuditStore } from './storage/maintenance-audit-store.js';
 export type { MaintenanceAuditStoreConfig } from './storage/maintenance-audit-store.js';
+// ADR-105 (Ф4): журнал операций со слоем доступов (append-only JSONL
+// `audit/credentials.jsonl`).
+export { FileCredentialAuditStore } from './storage/file-credential-audit-store.js';
+export type { FileCredentialAuditStoreConfig } from './storage/file-credential-audit-store.js';
 // ADR-090: журнал аудита плагинов (append-only JSONL `audit/plugins.jsonl`).
 export { FilePluginAuditStore } from './storage/file-plugin-audit-store.js';
 export type { FilePluginAuditStoreConfig } from './storage/file-plugin-audit-store.js';

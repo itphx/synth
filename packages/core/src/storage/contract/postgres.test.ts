@@ -27,6 +27,7 @@ import {
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
   describeExternalCredentialRepository,
+  describeCredentialAuditRepository,
   describeMcpRegistryRepository,
   describePackRepository,
   describePipelineRepository,
@@ -215,6 +216,12 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   // миграция 011; шифрование токенов — core-хелперами, мастер-ключ в `{dataDir}`).
   describeExternalCredentialRepository('PG → ExternalCredentialRepository', () =>
     makePort('externalCredentials'),
+  );
+
+  // ADR-105 (Ф4): журнал операций со слоем доступов (таблица
+  // `credential_audit`, миграция 014).
+  describeCredentialAuditRepository('PG → CredentialAuditRepository', () =>
+    makePort('credentialAudit'),
   );
 
   // ADR-051/ADR-100 + ADR-086 §5: переходно файловые порты драйвера.
