@@ -1056,3 +1056,241 @@ Check on your plugin the same things the passport checks:
 4. `GET /api/v2/sessions/:id/prompt` — the block in the manifest;
 5. the journal `{dataDir}/audit/plugins.jsonl` — the `install`/`activate`/`filter` actions and the
    refusal codes.
+
+---
+
+## 9. Installation and updates
+
+### 9.1. Sources
+
+| Kind | CLI | Integrity check | What is written to the lock |
+|---|---|---|---|
+| a directory | `synth plugin install ./my-plugin` | none (the installer reads the files) | `source: local`, the absolute path |
+| a local archive | `synth plugin install ./dist/my-plugin-0.1.0.tgz` | `ref = sha256:<hash of the archive>` is computed on the fly | `source: local`, the path, `ref` |
+| npm | `synth plugin install my-plugin --version 0.1.0` | the SRI `sha512` (`dist.integrity`) is **mandatory**, `shasum` — additionally; no SRI → a refusal | `source: npm`, the exact version |
+| an https URL | `synth plugin install https://…/my-plugin-0.1.0.tgz --sha256 <64-hex>` | the `sha256` pin is **mandatory** | `source: url`, the URL, `ref` |
+
+The kind of the source is derived from the `<ref>`; it can be set explicitly with
+`--source dir|archive|npm|url`. For a URL the pin is mandatory: an arbitrary address without a hash
+is not installed. The network goes through the shared egress layer (proxy, TLS/CA, ADR-099), the
+redirects are checked (a transition to `http:` is rejected), the download limit is 32 MiB.
+
+The archive is unpacked by its own code: ustar/pax/GNU long name are supported, only ordinary files
+and directories are extracted; symlinks, hardlinks, devices, FIFOs, absolute paths, `..`, Windows
+drives and exceeding the limits (500 entries / 16 MiB per file / 64 MiB in total) — a refusal.
+
+### 9.2. CLI
+
+```bash
+synth plugin list [--json]
+synth plugin install <ref> [--source …] [--version …] [--sha256 …] [--trust …] [--activate] [--yes]
+synth plugin update <name> [--version …] [--sha256 …] [--activate] [--yes]
+synth plugin rollback <name>
+synth plugin approve <name> [--version …] [--activate] [--yes]
+synth plugin enable <name> | disable <name>
+synth plugin remove <name> [--keep-files] [--yes]
+synth plugin scan <path> [--json]
+```
+
+The exit codes: `0` — the operation was performed (including "the bundle is in quarantine" and "it
+was not installed" for `remove`), `1` — a refusal (the reason code goes to stderr). The common path
+flags: `--data-dir`, `--config`, `--home`.
+
+Remember: `install`/`update`/`remove` from the CLI are **offline operations**; they pass
+`installKind: "deploy"`, so the `plugins.runtimeInstall` policy does not apply to them, and the
+changes take effect after a restart. Managing a live instance — the API/UI.
+
+### 9.3. HTTP API
+
+| Action | Request | Success |
+|---|---|---|
+| the list | `GET /api/v2/plugins` | `200 { plugins: [...] }` |
+| the details (manifest + integrity) | `GET /api/v2/plugins/:name` | `200 { plugin, manifest?, integrity? }` |
+| installation | `POST /api/v2/plugins/install` `{source?, path?, name?, version?, url?, sha256?, trustLevel?}` | `201` installed, `202` an `approve` is needed |
+| confirmation | `POST /api/v2/plugins/:name/approve` | `200` |
+| enable/disable | `POST /api/v2/plugins/:name/enable` \| `.../disable` | `200 { activation }` / `200 { deactivation }` |
+| removal | `DELETE /api/v2/plugins/:name` | `204` (idempotent) |
+| an update | `POST /api/v2/plugins/update` `{name, version?, sha256?, activate?}` | `200 { outcome: "unchanged" \| "updated" }` |
+| a rollback | `POST /api/v2/plugins/:name/rollback` | `200 { outcome: "rolled_back", version, previousVersion }` |
+| the policy | `GET/PUT/DELETE /api/v2/settings/plugins` | `200` (applied after a restart) |
+
+RBAC: managed — `ADMIN`; the installation/activation — also a service key with the scope
+`addons:install`; `approve` and `DELETE` — only `ADMIN`. Core (standalone) — a single `requireAuth`.
+The local sources (`dir`/`archive`) are forbidden in managed (`403 LOCAL_INSTALL_DISABLED`), the
+network ones (`npm`/`url`) are allowed.
+
+A runtime installation through the API requires `plugins.runtimeInstall: allow` (default `deny`).
+
+### 9.4. Update and rollback
+
+- The update source is taken **from the lock record**, not from the request body: `npm` → the name +
+  the version (`latest` by default, the exact one is written to the lock); `local` → the
+  directory/archive; `url` → the address + a **new mandatory** `sha256`.
+- The `content_hash` matched → `unchanged` (nothing is written).
+- Otherwise — an ordinary installation with the same gates (the trust is taken from the lock), the
+  directory of the previous version is kept, `previous` is written to the lock — **one** step of
+  rollback.
+- `rollback` swaps the current and the previous versions (therefore the rollback is reversible; "two
+  versions back" is two `rollback`s). No step or no directory → `plugin.rollback_unavailable`.
+- An active plugin is deactivated and activated again; `activate: false` — do not activate, not
+  specified — keep the state.
+
+### 9.5. Quarantine
+
+`caution` → the bundle goes to `quarantine/<name>@<version>/`, the lock is not written, the answer
+is `202`. The confirmation (`approve`) repeats the gates and checks the integrity; the trust is
+taken from `PLUGIN_INTEGRITY.json`, not guessed. Without a confirmation the plugin is not installed —
+it is not in the `GET /plugins` list.
+
+### 9.6. Deploy-time (image/PVC)
+
+```text
+plugins.deployDir/
+├── analytics/  synth.pack + dist/index.js
+└── notes/      synth.pack + dist/index.js
+```
+
+At startup the instance first **installs** the bundles from the directory (the same gates: manifest →
+fail-closed → trust-floor → scan → install-policy), then activates what is installed according to
+the lock. A matching version and `content_hash` → `skipped`; a failure of one bundle does not break
+the others and does not bring down the startup. Symlinks are not read. A managed plugin is changed
+only by a new image/redeployment (§7.3).
+
+---
+
+## 10. A plugin in hybrid mode
+
+In hybrid mode the local core and the remote server are two worlds, and a plugin must explicitly
+declare which world it serves. The server policy is set by the server operator; the plugin author
+only plans for it.
+
+### 10.1. Policy shape and allowlist
+
+The `plugins.hybrid` section in the server config and in the runtime settings (`GET/PUT/DELETE
+/api/v2/settings/plugins`):
+
+```yaml
+plugins:
+  hybrid:
+    mode: allowlist   # off (the default) | allowlist
+    allow:            # the plugin names the server allows to run
+      - my-plugin
+```
+
+- `mode: 'off'` (the default) — the **server does not restrict** plugins: neither the client-side
+  activation gate nor the allowlist check via a server-scoped token is applied;
+- `mode: 'allowlist'` — the server restricts: only the plugins from `allow` are permitted; **an
+  empty list permits nobody**.
+
+The env override of the mode is `SYNTH_PLUGINS_HYBRID_MODE` (the list of names stays in
+`config.yaml`).
+
+### 10.2. Discovery: what the client learns about the server
+
+| Surface | What it returns | Who reads it |
+|---|---|---|
+| `GET /auth/oidc-meta` (public) | the `plugins: { enabled, mode }` signal — **without the list of names** | the local core when it connects to the server |
+| `GET /api/v2/settings/plugins` (authenticated) | the `hybrid: { mode, allow }` block — the full allowlist (the list comes **only** when `mode: 'allowlist'`) | the local core (a cache with a TTL) |
+
+An old server without the `plugins` field → the client considers the policy **unknown** and works in
+the cooperative mode (see §10.4). The names are not published in the public discovery on purpose:
+the full allowlist is available only to an authenticated request.
+
+### 10.3. Level 1 — cooperative (policy compliance)
+
+The local core **before the activation** checks itself against the server policy:
+
+- the server is reachable, the mode is `allowlist`, the plugin is not in `allow` → the activation
+  is rejected with `plugin.hybrid_not_allowed` (HTTP 403, an entry in the plugin audit journal);
+- the server is unreachable or the policy is unknown → **the plugin runs**, but it is marked as "not
+  verified by the server" (`serverPolicy: 'unverified'` in the API, a badge in the UI).
+
+The gate concerns the **activation**, not the installation: a plugin can be installed, but it can
+only run if the server permits it. The key of the check is the plugin name.
+
+**What this means for the author.** Level 1 is a compliance policy, not an enforcement: the
+executable code on the client stays under the responsibility of the owner of the local contour.
+The client-side enforcement is **not guaranteed** — the server cannot check that the client core
+really compared itself with the policy. Level 2 provides the guarantee.
+
+### 10.4. The cooperative marker
+
+The `serverPolicy` status in the answer of `GET /api/v2/plugins` (and in the plugin card in the UI):
+
+| Status | Meaning |
+|---|---|
+| `allowed` | the server confirmed: the mode is `off` or the plugin is in the allowlist |
+| `denied` | the server forbade it: the mode is `allowlist`, the plugin is not in the list (and it is not activated) |
+| `unverified` | the server is unreachable or the policy is unknown — the plugin runs, but the server did not confirm it |
+
+`unverified` is **not** a plugin error: it means that there was no server check. In the UI an
+explanation about the cooperative mode is shown next to the badge.
+
+### 10.5. Level 2 — server-scoped token (what the guarantee is)
+
+So that a plugin can address the server, the operator issues it a **service key bound to
+`plugin_id`**:
+
+```http
+POST /api/v2/plugins/token
+Authorization: Bearer <admin-key>
+Content-Type: application/json
+
+{ "pluginId": "my-plugin", "scopes": ["events:ingest"], "expiresInSec": 3600 }
+```
+
+The answer — `201 { "token": "synth_svc_…", "pluginId": "my-plugin", "scopes": […], "expiresAt": … }`.
+The secret is handed out **once** (at rest — sha256). It is issued by **ADMIN** (in managed) or by
+the owner of the instance (in core); the scope `plugins:invoke` is always added.
+
+The server accepts such a key **only** if the request carries a header with the same `plugin_id`:
+
+```http
+Authorization: Bearer synth_svc_…
+X-Synth-Plugin-Id: my-plugin
+```
+
+Three conditions are checked (fail-closed, applied to **all** the server APIs, not only the plugin
+ones):
+
+1. the `X-Synth-Plugin-Id` header is present and matches the key's `plugin_id` — otherwise `403
+   PLUGIN_ID_MISMATCH`;
+2. the key has the scope `plugins:invoke` — otherwise `403 SCOPE_REQUIRED`;
+3. the `plugin_id` is in the server allowlist (with `mode: 'allowlist'`) — otherwise `403
+   PLUGIN_NOT_ALLOWED`.
+
+**What this means for the author.** The token cannot be reused on behalf of another plugin, and a
+key cannot be issued without the required scope: the server applies the policy itself. Level 3
+(attestation — an integrity check of the client) is not part of the layer's scope.
+
+---
+
+## 11. Contract versioning
+
+The Extension API contract is versioned by **semver major**:
+
+- `contracts.extensionApi` — the range of the contract version the plugin was built against. The
+  host declares the version `1.0.0`; the plugin writes `^1`. The major is compared.
+- **The major changes only on incompatibility**: the removal/renaming of a field, a change in the
+  semantics of a verdict, a change of the DTO shape, a tightening of what is mandatory. New optional
+  fields, additional points and additive changes — a minor/patch, the major is untouched.
+- `host` — an independent range of Synth versions: it answers the question "in which core was this
+  verified", while `contracts` answers "on which contract the code is written".
+
+**The deprecation window (fixed in ADR-090).** The major `N` continues to be accepted by the host
+for **at least 3 minor core releases and at least 90 days** after the release of the major `N+1`
+(which comes later); during that period the host supports both majors, and a warning about the
+outdated contract is written to the journal/documentation. The owner's decision is recorded in
+ADR-090 §9.
+
+**What to do on `plugin.contract_mismatch`:**
+
+1. look at the actual values in the refusal message (`expected`/`actual`);
+2. update `contracts.extensionApi` to the supported major (`^1`) and rebuild the bundle;
+3. if the plugin is already incompatible with the current API — release a new major version of the
+   plugin; do not try to "fit" the manifest without changing the code.
+
+`plugin.host_mismatch` is the same, but about `host`: widen the range only after verifying on the
+new core version. The instance operator can add an exact version to the exceptions file
+(`plugins.exactHostExceptions`, one version per line, `#` — a comment) — that is an emergency
+workaround, not the norm for an author.
