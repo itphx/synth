@@ -541,7 +541,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | ADR-097 | Класс расширения «хранилище» (storage) — контракт портов, драйверы из коробки | ⚠️ Частично | [adr-097](./docs/arch_decisions/adr-097-storage-provider-class.md) |
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097](./docs/arch_decisions/prop-097-background-processes-registry.md) |
 | ADR-098 | Деградированный режим и восстановление хранилища | ⚠️ Частично | [adr-098](./docs/arch_decisions/adr-098-storage-degraded-recovery.md) |
-| PROP-098 | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | [prop-098](./docs/arch_decisions/prop-098-mid-turn-steering.md) |
+| PROP-098 | Форсированная отправка сообщения во время хода (steering) | ⚠️ Частично | [prop-098](./docs/arch_decisions/prop-098-mid-turn-steering.md) |
 | ADR-099 | Единый egress-слой — доверие TLS/CA (и mTLS) для исходящих соединений | ⚠️ Частично | [adr-099](./docs/arch_decisions/adr-099-egress-tls-trust.md) |
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099](./docs/arch_decisions/prop-099-memory-footprint-optimization.md) |
 | ADR-100 | Пакет расширения и пайплайн в ядре: единый контракт доставки (`synth.pack`) и учёт прогонов | ⚠️ Частично | [adr-100](./docs/arch_decisions/adr-100-extension-packs-pipelines.md) |
@@ -553,8 +553,8 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | PROP-104 | Внешний транспорт событий: публикация между репликами control plane | 🧩 Предложение | [prop-104](./docs/arch_decisions/prop-104-external-event-transport.md) |
 | PROP-105 | Координация в нескольких репликах: сессии, очередь, общее состояние | 🧩 Предложение | [prop-105](./docs/arch_decisions/prop-105-multi-replica-coordination.md) |
 | PROP-106 | Файловые порты инстанса в SQL: единое состояние при нескольких репликах | 🧩 Предложение | [prop-106](./docs/arch_decisions/prop-106-file-ports-to-sql.md) |
-| PROP-107 | OAuth-хранилище и слой доступа к внешним сервисам (коннекторы): креды шифруются мастер-ключом, токен подставляет транспорт — агент его не видит | 🧩 Предложение | [prop-107](./docs/arch_decisions/prop-107-oauth-credential-layer.md) |
-| PROP-108 | Authority-слой — полномочия пользователей и агентов как контент | 🧩 Предложение | [prop-108](./docs/arch_decisions/prop-108-authority-layer.md) |
+| PROP-107 | OAuth-хранилище и слой доступа к внешним сервисам (коннекторы): креды шифруются мастер-ключом, токен подставляет транспорт — агент его не видит | ⚠️ Частично | [prop-107](./docs/arch_decisions/prop-107-oauth-credential-layer.md) |
+| PROP-108 | Authority-слой — полномочия пользователей и агентов как контент | ⚠️ Частично | [prop-108](./docs/arch_decisions/prop-108-authority-layer.md) |
 <!-- ad-index:end -->
 
 Правило: `docs/arch_decisions/` — единственный дом ADR/PROP; номера и файлы стабильны (ссылок на id по репозиторию — тысячи), файлы не переносятся и не удаляются.
