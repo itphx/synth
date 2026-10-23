@@ -83,6 +83,13 @@
 - Вызов агента через `@` (`components/chat/ChatInput.tsx`, `splitMessageWithTags`) сохраняет сам тег `@<agentId>` в тексте сообщения (иначе пользователю неясно, почему ответил другой агент); тег одновременно уходит как `agentRole` в `sendMessage`. Не вырезать тег из `part.text`.
 - В пользовательских сообщениях `@<agentId>` известных агентов подсвечивается цветом агента (`AgentInfo.color` через `resolveColor`) — `components/chat/SecretPlaceholder.tsx` (`SecretPlainText`), реестр из `agentsStore`. Неизвестный агент или пустой реестр → обычный текст, без поломки вёрстки и переносов.
 
+### Чат: режим отправки (PROP-098)
+- Селектор режима отправки — `components/chat/SendModeSelector.tsx`: `queue` («в очередь») и `steer` («вмешаться в ход»). `interrupt` в UI нет — режима нет в API этапа 1 (`STEERING_INTERRUPT_UNSUPPORTED`).
+- Селектор виден **только при активном ходе** (`ChatInput` — проп `isStreaming`): без хода вмешиваться некуда, сообщение уходит очередью. Выбор живёт в состоянии композера, начальное значение — проп `sendMode` (`ChatTab` передаёт `DEFAULT_STEER_MODE`).
+- Режим уходит третьим аргументом `onSend(text, agentRole?, mode?)` → `transportStore.sendMessage` → `POST /sessions/:id/prompt` с полем `mode`. `queue` (и отсутствие режима) в тело запроса **не попадает** — его отбрасывает `lib/api/sessions.ts`; `steer` — попадает.
+- Тач-таргеты селектора — ≥40px (ADR-044): кнопки помечены `data-compact`, чтобы мобильное правило «компактные кнопки тулбара» (`styles/index.css`) их не ужало; подписи на телефоне/планшете скрыты (иконки), на десктопе — подпись + `@max-[212px]:hidden`.
+- i18n — `chat.steer.mode.*` (ru/en). Тесты — `components/chat/ChatInput.autocomplete.test.tsx` (селектор виден при `isStreaming`, выбор `steer` уходит третьим аргументом, без хода/`queue` режим в запрос не уходит).
+
 ### Сохранение немедленных настроек панели
 - Немедленное сохранение настройки правой панели (тумблер, селект, автосейв поля) — только через общий хук `usePanelSettingSave` (`hooks/usePanelSettingSave.ts`): `run({ key, run, onSuccess, onError, errorKey })`.
 - Шаблон элемента: `pending` контрола по `isPending(key)` → единый success-тост `panel.saved` → при ошибке единый error-тост `panel.saveError` и **откат** контрола/формы к актуальному серверному состоянию. «Залипающих» оптимистичных значений быть не должно (`onError`/`onSuccess` возвращают состояние; для форм — `applyFormValues(formValuesFromSettings(...))`).

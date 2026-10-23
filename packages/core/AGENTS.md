@@ -286,7 +286,10 @@
   `getMetricsTokenStatus`/`writeMetricsToken`/`removeMetricsToken`, минимум 16 символов, атомарно `0600`),
   `collectors/*` (`bus` — turns/streams/retries/cost, `llm` — `createLlmCallRecorder` для
   `GatewayProvider.onCall`, `sessions` — 15 c, `storage` — записи/деградация 60 c и `{dataDir}` 300 c,
-  `events` — ingest/decisions + журнал 5 мин, `scheduler`, `webhooks`, `hybrid`, `decision`, `ready`,
+  `events` — ingest/decisions + журнал 5 мин, `scheduler`, `webhooks`, `hybrid`, `decision`,
+  `authority` — `createAuthorityMetrics`: `synth_authority_decisions_total` (PROP-108 Ф1 — решения
+  Authority-слоя; лейблы только `action`/`effect`/`source`, значения приводятся к конечным наборам,
+  неизвестное → `other`; id принципалов/сессий/ходов в лейблах нет), `ready`,
   `pipelines` — `createPipelineMetrics`: `synth_pipeline_*` (ADR-101 — прогоны/шаги/длительности/
   HITL-ожидания; лейблы только `status`/`source`/`kind`/`outcome`, id прогонов и узлов в лейблах нет —
   значения приводятся к конечным наборам, неизвестное → `other`; ошибка метрик не влияет на прогон)).
@@ -1013,7 +1016,11 @@
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`). ADR-099: доверие CA для
   git-over-https — `simpleGit({ config: ['http.sslCAInfo=<path>'] })` из
   `gitCaConfig()` (путь берётся из уже инициализированного `initTlsTrust`).
-- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (39 — 37 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
+- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (41 — 39 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
+  `ExternalCredentialRepository` — внешние доступы к коннекторам (PROP-107 Ф1; файловое/в-памяти
+  хранилища — `ExternalCredentialStore`, контракт — `storage/contract/external-credential-repository.contract.ts`);
+  `AuthorityPolicyRepository`/`AuthorityDecisionJournal` — политика полномочий и журнал решений
+  Authority-слоя (PROP-108 Ф1);
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
   запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/
