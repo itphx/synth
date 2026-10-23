@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { McpServerConfig, McpRegistryEntry, McpRegistryAuthor, McpRegistryOrigin, McpRegistryTrust } from '@itphx/synth-shared';
-import { MCP_REGISTRY_SCHEMA_VERSION, generateId, nowISO, AsyncLock, atomicWrite, safeJsonParse, findForbiddenMcpSecretHeaders, MCP_SECRET_HEADER_ERROR_CODE } from '@itphx/synth-shared';
+import { MCP_REGISTRY_SCHEMA_VERSION, generateId, nowISO, AsyncLock, atomicWrite, safeJsonParse, findForbiddenMcpSecretHeaders, mcpSecretHeaderErrorMessage, MCP_SECRET_HEADER_ERROR_CODE } from '@itphx/synth-shared';
 import type { McpRegistryRepository } from './ports/mcp-registry-repository.js';
 import { warning } from '../logger.js';
 
@@ -36,7 +36,7 @@ export function assertNoMcpSecretHeaders(config: McpServerConfig): void {
   if (forbidden.length === 0) return;
   throw new McpRegistryValidationError(
     MCP_SECRET_HEADER_ERROR_CODE,
-    `Заголовки с секретами (${forbidden.join(', ')}) в MCP-коннекторе запрещены — используйте auth: { kind: 'credential', credentialId } (доступ к внешнему сервису)`,
+    mcpSecretHeaderErrorMessage(forbidden),
   );
 }
 
@@ -57,7 +57,7 @@ export function stripMcpSecretHeaders(config: McpServerConfig, serverName: strin
   }
   warning(
     'MCP',
-    `У коннектора "${serverName}" из конфига убраны заголовки с секретами (${forbidden.join(', ')}) — используйте auth: { kind: 'credential', credentialId }`,
+    `У коннектора "${serverName}" из конфига убраны заголовки с секретами (${forbidden.join(', ')}) — используйте auth.kind='credential'`,
   );
   return { ...config, headers };
 }

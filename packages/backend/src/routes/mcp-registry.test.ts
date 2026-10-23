@@ -485,4 +485,87 @@ describe('MCP registry API (ADR-071 §2.5)', () => {
     });
     expect(res.status).toBe(201);
   });
+
+  // ADR-105 (Ф3): plaintext-секрет в заголовках коннектора запрещён —
+  // 400 MCP_SECRET_HEADER_FORBIDDEN (не 500) на всех точках записи/проверки.
+  describe('ADR-105 Ф3: запрет plaintext-секрета в заголовках', () => {
+    const SECRET = 'Bearer super-secret-token';
+    const secretConfig = (): McpServerConfig => ({
+      type: 'sse',
+      url: `http://${PUBLIC_IP}/mcp`,
+      headers: { Authorization: SECRET },
+    });
+
+    it('POST /registry с секретом в заголовках → 400 MCP_SECRET_HEADER_FORBIDDEN', async () => {
+      const res = await makeApp().request('/api/v2/mcp/registry', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'srv-secret', config: secretConfig() }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error: { code: string; message: string } };
+      expect(body.error.code).toBe('MCP_SECRET_HEADER_FORBIDDEN');
+      expect(body.error.message).toContain("auth.kind='credential'");
+      expect(body.error.message).not.toContain(SECRET);
+      // Запись в реестр не создана.
+      expect(await registry.getByName('srv-secret')).toBeNull();
+    });
+
+    it('PUT /registry/:id с секретом в заголовках → 400 и запись не изменена', async () => {
+      const entry = await registry.add({
+        name: 'srv-plain',
+        config: httpConfig(),
+        origin: 'instance',
+        trust: 'builtin',
+        author: { userId: 'admin', username: 'admin' },
+      });
+      const res = await makeApp().request(`/api/v2/mcp/registry/${entry.id}`, {
+        method: 'PUT',
+        headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: secretConfig() }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error: { code: string } };
+      expect(body.error.code).toBe('MCP_SECRET_HEADER_FORBIDDEN');
+      const stored = await registry.get(entry.id);
+      expect(stored?.config.headers).toBeUndefined();
+    });
+
+    it('POST /servers (legacy) с секретом в заголовках → 400', async () => {
+      const res = await makeApp().request('/api/v2/mcp/servers', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'legacy-secret', config: secretConfig() }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error: { code: string } };
+      expect(body.error.code).toBe('MCP_SECRET_HEADER_FORBIDDEN');
+      expect(await registry.getByName('legacy-secret')).toBeNull();
+    });
+
+    it('PUT /servers/:name (legacy) с секретом в заголовках → 400', async () => {
+      await registry.add({ name: 'srv-legacy', config: httpConfig(), origin: 'instance', trust: 'builtin' });
+      const res = await makeApp().request('/api/v2/mcp/servers/srv-legacy', {
+        method: 'PUT',
+        headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+        body: JSON.stringify(secretConfig()),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error: { code: string } };
+      expect(body.error.code).toBe('MCP_SECRET_HEADER_FORBIDDEN');
+    });
+
+    it('POST /servers/:name/test с секретом в теле → 400 и probe не вызывается', async () => {
+      await registry.add({ name: 'srv-test', config: httpConfig(), origin: 'instance', trust: 'builtin' });
+      const res = await makeApp().request('/api/v2/mcp/servers/srv-test/test', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: secretConfig() }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error: { code: string } };
+      expect(body.error.code).toBe('MCP_SECRET_HEADER_FORBIDDEN');
+      expect(mcpManager.probeServer).not.toHaveBeenCalled();
+    });
+  });
 });

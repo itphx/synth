@@ -3,9 +3,15 @@ import type { Context } from 'hono';
 import { z } from 'zod';
 import type { AuthKit } from '../auth/middleware.js';
 import type { SessionManager, McpManager, McpRegistryRepository } from '@itphx/synth-core';
-import { evaluateMcpNetworkAccess, getServiceCredential } from '@itphx/synth-core';
-import type { McpServerConfig, McpNetworkPolicy, User } from '@itphx/synth-shared';
-import { sessionMcpScopeSchema, hasServiceScope } from '@itphx/synth-shared';
+import { evaluateMcpNetworkAccess, getServiceCredential, McpRegistryValidationError } from '@itphx/synth-core';
+import type { McpServerConfig, McpNetworkPolicy, McpRegistryEntry, User } from '@itphx/synth-shared';
+import {
+  sessionMcpScopeSchema,
+  hasServiceScope,
+  findForbiddenMcpSecretHeaders,
+  mcpSecretHeaderErrorMessage,
+  MCP_SECRET_HEADER_ERROR_CODE,
+} from '@itphx/synth-shared';
 import { mcpServerConfigSchema } from '@itphx/synth-shared/config';
 import { requireAdminOrScope, requireScopeForServiceKey } from '../auth/guards.js';
 
@@ -49,6 +55,31 @@ export interface McpRoutesOptions {
    * Приоритетнее статической `networkPolicy`; читается на каждый запрос.
    */
   getNetworkPolicy?: () => Promise<McpNetworkPolicy | undefined>;
+}
+
+/**
+ * ADR-105 (Ф3): plaintext-секрет в заголовках коннектора запрещён —
+ * авторизация только через слой внешних доступов (`auth.kind='credential'`).
+ *
+ * Значений заголовков в тексте ошибки нет — только их имена.
+ */
+function secretHeaderError(
+  config: McpServerConfig | undefined | null,
+): { code: string; message: string } | null {
+  const forbidden = findForbiddenMcpSecretHeaders(config?.headers);
+  if (forbidden.length === 0) return null;
+  return { code: MCP_SECRET_HEADER_ERROR_CODE, message: mcpSecretHeaderErrorMessage(forbidden) };
+}
+
+/**
+ * ADR-105 (Ф3): хранилище реестра — последний рубеж запрета plaintext-секрета.
+ * Ошибка валидации → 400 с тем же кодом (иначе роут отдал бы 500).
+ */
+function secretHeaderStoreError(err: unknown): { code: string; message: string } | null {
+  if (err instanceof McpRegistryValidationError && err.code === MCP_SECRET_HEADER_ERROR_CODE) {
+    return { code: err.code, message: err.message };
+  }
+  return null;
 }
 
 export function createMcpRegistryRoutes(
@@ -132,6 +163,12 @@ export function createMcpRegistryRoutes(
       return c.json({ error: { code: 'CONFLICT', message: `Сервер "${name}" уже существует` } }, 409);
     }
 
+    // ADR-105 (Ф3): plaintext-секрет в заголовках → 400 (не 500).
+    const secretError = secretHeaderError(config);
+    if (secretError) {
+      return c.json({ error: secretError }, 400);
+    }
+
     const networkError = await checkNetwork(config, 'instance');
     if (networkError) {
       return c.json({ error: networkError }, 400);
@@ -166,6 +203,12 @@ export function createMcpRegistryRoutes(
     const parsed = updateServerSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
+    }
+
+    // ADR-105 (Ф3): plaintext-секрет в заголовках → 400 (не 500).
+    const secretError = secretHeaderError(parsed.data);
+    if (secretError) {
+      return c.json({ error: secretError }, 400);
     }
 
     const networkError = await checkNetwork(parsed.data, entry.origin);
@@ -213,6 +256,12 @@ export function createMcpRegistryRoutes(
 
     if (!config) {
       return c.json({ error: { code: 'NOT_FOUND', message: `Сервер "${name}" не найден` } }, 404);
+    }
+
+    // ADR-105 (Ф3): probe/тест не подключается к коннектору с plaintext-секретом.
+    const secretError = secretHeaderError(config);
+    if (secretError) {
+      return c.json({ error: secretError }, 400);
     }
 
     if (!mcpManager) {
@@ -347,6 +396,12 @@ export function createMcpRegistryRoutes(
 
     const { name, config, enabled, enabledByDefault, origin } = parsed.data;
     const admin = kit.isAdmin(c);
+
+    // ADR-105 (Ф3): plaintext-секрет в заголовках → 400 (не 500).
+    const secretError = secretHeaderError(config);
+    if (secretError) {
+      return c.json({ error: secretError }, 400);
+    }
     // ADR-052/O1: installer-ключ (scope `addons:install`) создаёт instance-записи
     // даже без роли ADMIN — это общие записи инстанса (а не персональные).
     const isInstaller = isInstallerKey(c);
@@ -380,15 +435,23 @@ export function createMcpRegistryRoutes(
     const user = currentUser(c);
     const author = user ? { userId: user.id, username: user.username } : null;
 
-    const entry = await registry.add({
-      name,
-      config,
-      origin: entryOrigin,
-      trust,
-      author,
-      enabled,
-      enabledByDefault,
-    });
+    let entry: McpRegistryEntry;
+    try {
+      entry = await registry.add({
+        name,
+        config,
+        origin: entryOrigin,
+        trust,
+        author,
+        enabled,
+        enabledByDefault,
+      });
+    } catch (err) {
+      // ADR-105 (Ф3): запрет plaintext-секрета → 400, а не 500.
+      const storeError = secretHeaderStoreError(err);
+      if (storeError) return c.json({ error: storeError }, 400);
+      throw err;
+    }
     await syncManagerConfig();
     return c.json(entry, 201);
   });
@@ -423,6 +486,12 @@ export function createMcpRegistryRoutes(
       return c.json({ error: { code: 'FORBIDDEN', message: 'stdio-серверы может изменять только ADMIN' } }, 403);
     }
 
+    // ADR-105 (Ф3): plaintext-секрет в заголовках → 400 (не 500).
+    const secretError = secretHeaderError(nextConfig);
+    if (secretError) {
+      return c.json({ error: secretError }, 400);
+    }
+
     const networkError = await checkNetwork(nextConfig, existing.origin);
     if (networkError) {
       return c.json({ error: networkError }, 400);
@@ -438,7 +507,15 @@ export function createMcpRegistryRoutes(
       }, 409);
     }
 
-    const updated = await registry.update(id, parsed.data);
+    let updated: McpRegistryEntry | null;
+    try {
+      updated = await registry.update(id, parsed.data);
+    } catch (err) {
+      // ADR-105 (Ф3): запрет plaintext-секрета → 400, а не 500.
+      const storeError = secretHeaderStoreError(err);
+      if (storeError) return c.json({ error: storeError }, 400);
+      throw err;
+    }
     await syncManagerConfig();
     return c.json(updated);
   });

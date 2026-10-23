@@ -262,3 +262,13 @@ export function findForbiddenMcpSecretHeaders(
   const forbidden = new Set<string>(FORBIDDEN_MCP_SECRET_HEADERS);
   return Object.keys(headers).filter((name) => forbidden.has(name.trim().toLowerCase()));
 }
+
+/**
+ * Текст ошибки «секретный заголовок в коннекторе» — **единый** для слоя
+ * хранилища, HTTP-роутов (core/backend) и probe (ADR-105 §5, Ф3).
+ *
+ * Значений заголовков в тексте нет — только их имена.
+ */
+export function mcpSecretHeaderErrorMessage(forbidden: string[]): string {
+  return `Заголовки с секретами (${forbidden.join(', ')}) в MCP-коннекторе запрещены — используйте auth.kind='credential' (доступ к внешнему сервису)`;
+}
