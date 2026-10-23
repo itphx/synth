@@ -304,6 +304,10 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
                   type: 'queued',
                   session_id: sid,
                   stream_id: streamId,
+                  mode,
+                  // ADR-104 (этап 3): единый контракт режима — клиенту всегда
+                  // видно, какой режим применён и применился ли он.
+                  mode_applied: true,
                   timestamp: nowISO(),
                 }));
               }
@@ -324,13 +328,33 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
                     return;
                   }
                   try {
-                    await remote.promptSession(toLocalId(sid), {
+                    // ADR-104 (этап 3): режим доезжает до удалённой стороны —
+                    // раньше WS-путь терял `mode`, и удалённая сессия всегда
+                    // работала как `queue`.
+                    const response = await remote.promptSession(toLocalId(sid), {
                       content: msg.content.trim(),
                       messageId: streamId,
                       ...(msg.agent_role ? { agent: msg.agent_role } : {}),
                       ...(msg.provider ? { provider: msg.provider } : {}),
                       ...(msg.model ? { model: msg.model } : {}),
+                      ...(steerMode ? { mode } : {}),
                     });
+                    if (steerMode) {
+                      // Удалённая сторона применила режим → отвечает `202`
+                      // (ack без SSE-тела); иначе режим не применён (нет
+                      // активного хода на удалённой стороне или старая версия) —
+                      // сообщение ушло обычной очередью.
+                      const modeApplied = response.status === 202;
+                      await response.body?.cancel().catch(() => {});
+                      ws.send(JSON.stringify({
+                        type: 'queued',
+                        session_id: sid,
+                        stream_id: streamId,
+                        mode,
+                        mode_applied: modeApplied,
+                        timestamp: nowISO(),
+                      }));
+                    }
                   } catch (err) {
                     ws.send(JSON.stringify({
                       type: 'error',
@@ -404,6 +428,9 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
                     type: 'queued',
                     session_id: sid,
                     stream_id: streamId,
+                    mode,
+                    // ADR-104 (этап 3): локальная сторона применила режим сама.
+                    mode_applied: true,
                     timestamp: nowISO(),
                   }));
                   return;

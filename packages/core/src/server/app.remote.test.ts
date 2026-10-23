@@ -535,6 +535,107 @@ describe('createStandaloneApp: WS /ws/events send_message с remote-рефом (
     }
   });
 
+  it('ADR-104 этап 3: remote:<id> + mode=steer — режим доезжает до backend, ack с mode_applied', async () => {
+    const fetchMock = hybridFetchMock({
+      modelsBody: modelsBodyWith([]),
+      onOther: (url) => {
+        if (url.includes('/prompt')) {
+          // Удалённая сторона применила режим → 202 (ack без SSE).
+          return jsonResponse({ status: 'steered', stream_id: 'st-1', pending_count: 1 }, 202);
+        }
+        return jsonResponse({}, 200);
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = await startServer({ defaultBackendUrl: BACKEND_URL });
+    await app.handle.connectRemoteWithApiKey(BACKEND_URL, 'tok');
+    const { ws: wsP, received } = connectCollecting(app.port, 'test-key');
+    const ws = await wsP;
+
+    try {
+      await vi.waitFor(() => {
+        expect(received.some((m) => m.type === 'connected')).toBe(true);
+      }, { timeout: 5000 });
+
+      ws.send(JSON.stringify({
+        type: 'send_message',
+        session_id: 'remote:ses-1',
+        content: 'вмешайся',
+        mode: 'steer',
+      }));
+
+      await vi.waitFor(() => {
+        const promptCall = fetchMock.mock.calls.find(([u]) => String(u).includes('/api/v2/sessions/ses-1/prompt'));
+        expect(promptCall).toBeDefined();
+      }, { timeout: 5000 });
+
+      // Режим доехал до удалённой стороны (WS-путь больше его не теряет).
+      const promptCall = fetchMock.mock.calls.find(([u]) => String(u).includes('/api/v2/sessions/ses-1/prompt'))!;
+      const rawBody = promptCall[1]?.body;
+      const sentBody = typeof rawBody === 'string'
+        ? (JSON.parse(rawBody) as Record<string, unknown>)
+        : (JSON.parse(new TextDecoder().decode(rawBody as ArrayBuffer)) as Record<string, unknown>);
+      expect(sentBody.mode).toBe('steer');
+
+      // Клиент получил явный ответ: режим применён.
+      await vi.waitFor(() => {
+        const ack = received.find((m) => m.type === 'queued' && m.session_id === 'remote:ses-1');
+        expect(ack).toBeDefined();
+        expect(ack!.mode).toBe('steer');
+        expect(ack!.mode_applied).toBe(true);
+      }, { timeout: 5000 });
+      expect(received.some((m) => m.type === 'error')).toBe(false);
+    } finally {
+      ws.close();
+      await app.close();
+    }
+  });
+
+  it('ADR-104 этап 3: remote:<id> + mode=steer, удалённая сторона не применила → mode_applied: false', async () => {
+    const fetchMock = hybridFetchMock({
+      modelsBody: modelsBodyWith([]),
+      onOther: (url) => {
+        if (url.includes('/prompt')) {
+          // Обычная очередь на удалённой стороне → SSE (200), режим не применён.
+          return new Response('data: {"type":"stream.done"}\n\n', {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          });
+        }
+        return jsonResponse({}, 200);
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = await startServer({ defaultBackendUrl: BACKEND_URL });
+    await app.handle.connectRemoteWithApiKey(BACKEND_URL, 'tok');
+    const { ws: wsP, received } = connectCollecting(app.port, 'test-key');
+    const ws = await wsP;
+
+    try {
+      await vi.waitFor(() => {
+        expect(received.some((m) => m.type === 'connected')).toBe(true);
+      }, { timeout: 5000 });
+
+      ws.send(JSON.stringify({
+        type: 'send_message',
+        session_id: 'remote:ses-1',
+        content: 'вмешайся',
+        mode: 'steer',
+      }));
+
+      await vi.waitFor(() => {
+        const ack = received.find((m) => m.type === 'queued' && m.session_id === 'remote:ses-1');
+        expect(ack).toBeDefined();
+        expect(ack!.mode_applied).toBe(false);
+      }, { timeout: 5000 });
+    } finally {
+      ws.close();
+      await app.close();
+    }
+  });
+
   it('remote:<id> без подключения → error «Удалённый сервер не подключён»', async () => {
     const app = await startServer({});
     const { ws: wsP, received } = connectCollecting(app.port, 'test-key');
