@@ -625,21 +625,23 @@ export class SessionManager {
 
   /**
    * PROP-098: забрать сообщения инъекций из очереди (FIFO) для вплетения в
-   * текущий ход. Забираются не больше `maxInjections` — остальные остаются в
-   * очереди (лишние отбрасывает оркестратор отдельным событием).
+   * текущий ход. Забираются не больше `maxInjections` — остальные возвращаются
+   * как `dropped` (лимит инъекций на ход; вызывающий публикует `steer.dropped`).
    */
   async takeSteerMessages(
     sessionId: string,
     maxInjections = MAX_STEER_INJECTIONS_PER_TURN,
-  ): Promise<Message[]> {
+  ): Promise<{ messages: Message[]; dropped: Message[] }> {
     return this.withLock(sessionId, async (session) => {
       const inbox = session.steerInbox ?? [];
-      if (inbox.length === 0) return [];
-      const taken = inbox.splice(0, Math.max(0, maxInjections));
+      if (inbox.length === 0) return { messages: [], dropped: [] };
+      const limit = Math.max(0, maxInjections);
+      const messages = inbox.splice(0, limit);
+      const dropped = inbox.splice(0);
       session.steerInbox = inbox;
       session.updatedAt = nowISO();
       await this.store.save(session);
-      return taken;
+      return { messages, dropped };
     });
   }
 
