@@ -93,4 +93,17 @@ describe('settings-catalog — searchSettings', () => {
       'plugins.install',
     )
   })
+
+  it('находит раздел «Полномочия» по названию и синонимам', () => {
+    // ADR-106 §11: категория и записи раздела участвуют в поиске.
+    expect(searchSettings(t, 'authority').categories.map((category) => category.id)).toContain(
+      'authority',
+    )
+    expect(searchSettings(tRu, 'полномочия').categories.map((category) => category.id)).toContain(
+      'authority',
+    )
+    expect(searchSettings(tRu, 'гранты').entries.map((entry) => entry.id)).toContain(
+      'authority.roles',
+    )
+  })
 })

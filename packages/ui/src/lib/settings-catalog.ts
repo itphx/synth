@@ -115,6 +115,24 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     icon: 'send-plane',
     keywords: ['events', 'bindings', 'journal', 'события', 'привязки', 'журнал'],
   },
+  {
+    // ADR-106 §11: раздел «Полномочия» — read-only для всех ролей
+    // (политика слоя меняется конфигом и одобрением пакета, не из UI).
+    id: 'authority',
+    group: 'personal',
+    labelKey: 'settings.category.authority',
+    icon: 'shield-check',
+    keywords: [
+      'authority',
+      'permissions',
+      'grants',
+      'roles',
+      'полномочия',
+      'права',
+      'гранты',
+      'роли',
+    ],
+  },
 
   // Обзор.
   {
@@ -768,6 +786,36 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     sectionId: 'events-journal',
     labelKey: 'events.journal.title',
     keywords: ['journal', 'decisions', 'журнал', 'решения'],
+  },
+
+  // authority (ADR-106 §11) — read-only просмотр полномочий
+  {
+    id: 'authority.mode',
+    categoryId: 'authority',
+    sectionId: 'authority-mode',
+    labelKey: 'authority.mode.title',
+    keywords: ['mode', 'shadow', 'enabled', 'режим', 'журнал', 'принуждение'],
+  },
+  {
+    id: 'authority.policy',
+    categoryId: 'authority',
+    sectionId: 'authority-policy',
+    labelKey: 'authority.policy.title',
+    keywords: ['policy', 'instance', 'политика', 'инстанс'],
+  },
+  {
+    id: 'authority.roles',
+    categoryId: 'authority',
+    sectionId: 'authority-roles',
+    labelKey: 'authority.roles.title',
+    keywords: ['roles', 'grants', 'action', 'target', 'роли', 'гранты', 'действие', 'цель'],
+  },
+  {
+    id: 'authority.agents',
+    categoryId: 'authority',
+    sectionId: 'authority-agents',
+    labelKey: 'authority.agents.title',
+    keywords: ['agents', 'ceiling', 'агенты', 'потолок', 'привязки'],
   },
 
   // admin overview

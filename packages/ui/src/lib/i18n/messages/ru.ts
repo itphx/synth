@@ -119,6 +119,7 @@ export const dict = {
   'settings.category.commands': 'Команды',
   'settings.category.events': 'События',
   'settings.category.eventsConfig': 'Параметры событий',
+  'settings.category.authority': 'Полномочия',
   'settings.category.decision': 'Decision-модели',
   'settings.category.serviceKeys': 'Сервисные ключи',
   'settings.category.webhooks': 'Webhooks',
@@ -3935,4 +3936,60 @@ export const dict = {
   'pwa.updateAvailable': 'Доступна новая версия приложения',
   'pwa.updateNow': 'Обновить',
   'pwa.updateLater': 'Позже',
+
+  // --- Authority (ADR-106 §11) — read-only раздел «Полномочия» ---
+  'authority.title': 'Полномочия',
+  'authority.description':
+    'Полномочия пользователей и агентов: политика инстанса, роли с грантами и привязки агентов. Раздел только для чтения.',
+  'authority.mode.title': 'Режим слоя',
+  'authority.mode.description':
+    'Слой Authority сужает решение permission-слоя: deny и ask сильнее allow.',
+  'authority.mode.current': 'Текущий режим',
+  'authority.mode.unknown': 'В API не отдаётся — задаётся конфигом инстанса',
+  'authority.mode.states': 'Возможные состояния',
+  'authority.mode.state.enforced': 'Принуждение',
+  'authority.mode.state.enforcedHint':
+    'Включено без shadow — deny и ask сужают решение permission-слоя',
+  'authority.mode.state.shadow': 'Только журнал',
+  'authority.mode.state.shadowHint':
+    'Включено с shadow — решение считается и пишется в журнал, но не применяется',
+  'authority.mode.state.disabled': 'Выключен',
+  'authority.mode.state.disabledHint':
+    'По умолчанию выключен — слой не принимает решений и не пишет в журнал',
+  'authority.mode.configHint':
+    'Ключи конфига: synth.authority.enabled и synth.authority.shadow — см. docs/AUTHORITY.md §4',
+  'authority.policy.title': 'Политика инстанса',
+  'authority.policy.description':
+    'Политика инстанса — верхняя граница всех осей полномочий; пакет не может выдать права себе.',
+  'authority.policy.stub':
+    'Политика инстанса (роли и потолок инстанса) доступна только через конфиг и каталог данных — API её не отдаёт. Ниже — состав, принесённый установленными пакетами.',
+  'authority.policy.roles': 'Роли',
+  'authority.policy.actions': 'Действия',
+  'authority.policy.targets': 'Цели',
+  'authority.policy.agents': 'Агенты',
+  'authority.policy.grants': 'Гранты',
+  'authority.policy.mutating': 'мутирующее',
+  'authority.roles.title': 'Роли и гранты',
+  'authority.roles.description':
+    'Грант — это «действие × цель» с эффектом: разрешить, спросить или запретить. Рядом показан источник гранта.',
+  'authority.roles.empty': 'Не установлено ни одного пакета с контентом полномочий',
+  'authority.roles.domain': 'Домен',
+  'authority.roles.grantsCount': '{count, plural, one {# грант} few {# гранта} many {# грантов}}',
+  'authority.roles.noGrants': 'Контент пакета не объявляет грантов для этой роли',
+  'authority.roles.sourcePack': 'пакет',
+  'authority.effect.allow': 'Разрешить',
+  'authority.effect.ask': 'Спросить',
+  'authority.effect.deny': 'Запретить',
+  'authority.pack.status.active': 'активен',
+  'authority.pack.status.pending_approval': 'ожидает одобрения',
+  'authority.pack.status.disabled': 'выключен',
+  'authority.agents.title': 'Привязки агентов',
+  'authority.agents.description':
+    'Роли, которые носит агент, и его потолок — действия, выше которых агент не выходит.',
+  'authority.agents.empty': 'Привязок агентов нет',
+  'authority.agents.roles': 'Роли',
+  'authority.agents.ceiling': 'Потолок',
+  'authority.agents.source': 'Источник',
+  'authority.loadError': 'Не удалось загрузить данные полномочий: {error}',
+  'authority.forbidden': 'Чтение реестра пакетов требует прав администратора',
 };

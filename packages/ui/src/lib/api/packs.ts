@@ -27,6 +27,65 @@ export interface PackProvides {
   pipelines: string[]
 }
 
+/**
+ * ADR-106 Ф5: сводка контента полномочий пакета (`provides.authority`) —
+ * роли/действия/цели/агенты, которые пакет приносит инстанцу.
+ */
+export interface PackAuthoritySummaryRole {
+  /** id роли (уникален в пределах пакета). */
+  id: string
+  /** Отображаемое имя роли (если объявлено). */
+  displayName?: string
+  /** Домен роли. */
+  domain: string
+  /** Число грантов роли. */
+  grants: number
+  /** Число мутирующих грантов роли. */
+  mutatingGrants: number
+}
+
+/** Доменное действие, объявленное пакетом. */
+export interface PackAuthoritySummaryAction {
+  /** id доменного действия. */
+  id: string
+  /** Признак мутирующего действия (информационный). */
+  mutating: boolean
+}
+
+/** Вид цели, объявленный пакетом. */
+export interface PackAuthoritySummaryTarget {
+  /** Вид цели (`kind`). */
+  kind: string
+  /** Имя резолвера цели (если объявлен). */
+  resolver?: string
+}
+
+/** Агент пакета с ролями и потолком. */
+export interface PackAuthoritySummaryAgent {
+  /** id агента. */
+  id: string
+  /** Роли агента (id из `provides.authority.roles[]`). */
+  roles: string[]
+  /** Потолок агента (id действий). */
+  ceiling: string[]
+}
+
+/** Сводка контента полномочий пакета. */
+export interface PackAuthoritySummary {
+  roles: PackAuthoritySummaryRole[]
+  actions: PackAuthoritySummaryAction[]
+  targets: PackAuthoritySummaryTarget[]
+  agents: PackAuthoritySummaryAgent[]
+  totals: {
+    roles: number
+    actions: number
+    targets: number
+    agents: number
+    grants: number
+    mutatingGrants: number
+  }
+}
+
 /** Запись реестра установок пакетов расширений (ADR-086 §5). */
 export interface PackInstallation {
   /** Имя пакета — уникально в инстансе, ключ записи. */
@@ -45,6 +104,16 @@ export interface PackInstallation {
   requiresApproval: boolean
   /** Что пакет поставил в инстанс. */
   provides: PackProvides
+  /**
+   * ADR-106 Ф5: сводка контента полномочий пакета — есть у пакетов, которые
+   * приносят `provides.authority`. Поля нет, если пакет полномочий не приносит.
+   */
+  authority?: PackAuthoritySummary
+  /**
+   * Сырой манифест пакета (есть в ответе `GET /packs/:name`) — источник
+   * подробного состава ролей и грантов (`provides.authority.roles[].grants`).
+   */
+  manifest?: unknown
   /** ISO-время установки. */
   installedAt: string
   /** ISO-время последней записи. */
