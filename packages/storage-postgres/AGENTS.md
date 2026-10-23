@@ -54,10 +54,10 @@ ADR-097): реализация доменных портов `StorageContext` (`
 Волна **3a — инфраструктура драйвера** (готова): пул/подключение, схема БД и
 миграции, сборка контекста. Волна **3b — порты** (готова): все доменные порты
 `StorageContext` реализованы и проходят контрактный suite
-(`packages/core/src/storage/contract/postgres.test.ts` → 132/132 против
+(`packages/core/src/storage/contract/postgres.test.ts` → 145/145 против
 живого PostgreSQL 17). Проводка домена — через `storage.backend = postgres`.
 
-**Текущий статус (сводно).** Реализованы: все 38 доменных порта (группы
+**Текущий статус (сводно).** Реализованы: 39 из 39 доменных портов (группы
 `ports/*`; включая `analyticsRollups` — ADR-102 и `projectPipelines`/`pipelineRuns` —
 ADR-101, SQL-реализация поверх `pipeline_specs`/`pipeline_versions`/`pipeline_runs`/
 `pipeline_run_events`, а также `pluginAudit` — PROP-090 §9 и `pluginLock` — PROP-068 §4.4 /
@@ -71,6 +71,14 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
 режим (надстройка core, ADR-098). **Остаток:** `kind:"storage"` в едином
 манифесте расширений (ADR-097) и установка сторонних драйверов-хранилищ
 (сейчас in-tree-драйвер из коробки).
+
+**Порт внешних доступов** (`ExternalCredentialRepository`, PROP-107 Ф1) — **реализован**:
+`ports/external-credentials.ts`, таблица `external_credentials` (миграция `011`),
+колонки `secret_enc`/`refresh_enc` (готовый токен `enc:v1:…`); шифрование — только
+core-хелперами `encryptSecret`/`decryptSecret` через ленивый `import()`
+(как у SSH-ключей), наружу отдаются только метаданные с маской (`toExternalCredentialMeta`).
+Контрактный suite — `storage/contract/external-credential-repository.contract.ts`
+(file/memory/PG).
 
 - **Подключение (`pool.ts`).** `createPostgresConnection(config)` → `PostgresConnection`
   с ленивым `pg.Pool` (модуль `pg` не required на импорте). Дефолты: `poolMax=10`
@@ -90,12 +98,16 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
   applied_at timestamptz)` в схеме драйвера. SQL-миграции — **inline TS-строки**
   (`src/migrations/001-init.ts`, `002-egress-audit.ts`, `003-analytics-rollups.ts`,
   `004-pipeline-engine.ts`, `005-pipeline-provenance.ts`, `006-plugin-audit.ts`,
-  `007-plugin-lock.ts`, `008-plugin-audit-scan.ts`) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
+  `007-plugin-lock.ts`, `008-plugin-audit-scan.ts`, `009-plugin-lock-previous.ts`,
+  `010-plugin-lock-mode.ts`, `011-external-credentials.ts`) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
   Миграции **006–009** — слой плагинов (PROP-090): `006_plugin_audit` (таблица `plugin_audit`,
   `seq bigserial` — порядок «свежие первыми»), `007_plugin_lock` (таблица `plugin_lock`, PK — имя
   плагина; upsert — `ON CONFLICT`; `installed_at` при перезаписи сохраняется),
   `008_plugin_audit_scan` (`ALTER TABLE plugin_audit ADD COLUMN IF NOT EXISTS scan_performed boolean /
-  scan_findings integer` — Ф2). `009_plugin_lock_previous` (долги Д2) — колонка `previous jsonb` (ступень отката версии в lock). Все идемпотентны.
+  scan_findings integer` — Ф2). `009_plugin_lock_previous` (долги Д2) — колонка `previous jsonb` (ступень отката версии в lock).
+  `010_plugin_lock_mode` — колонка `mode` в `plugin_lock` (PROP-090 §«Managed deploy-time»).
+  `011_external_credentials` — таблица `external_credentials` (PROP-107 Ф1: владелец/статус/срок/отзыв
+  и колонки `secret_enc`/`refresh_enc` с готовым `enc:v1:…`). Все идемпотентны.
   `runMigrations(conn, { schema })`: `CREATE SCHEMA IF NOT EXISTS` → advisory-лок
   (`synth:migrate:<schema>`) → применение по возрастанию версии (каждая миграция —
   в транзакции с записью версии). **Fail-closed**, если версия в БД **больше**
@@ -144,13 +156,18 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
   - `ports/plugin-lock.ts` → `buildPluginLockPorts(deps)` → `pluginLock`
     (PROP-068 §4.4 / PROP-090 §5: таблица `plugin_lock`, миграция 007; ключ — имя
     плагина, `save` — upsert с сохранением `installed_at`, `list` — `ORDER BY name ASC`).
+  - `ports/external-credentials.ts` → `buildExternalCredentialPorts(deps)` →
+    `externalCredentials` (PROP-107 Ф1: таблица `external_credentials`, миграция 011;
+    `secret_enc`/`refresh_enc` — готовый `enc:v1:…`; шифрование только core-хелперами
+    через ленивый `import()`, как у SSH-ключей в `content.ts`).
 
   Общий тип зависимостей — `PortDeps` (`ports/deps.ts`): `connection` (живой
   `PostgresConnection`), `dataDir`, `secretKey?`, `env?`, `systemDictionariesDir?`,
   `contextUserDataDir?`. `buildPostgresStorageContext` собирает контекст как
   `{ kind:'postgres', ...buildSessionPorts, ...buildPrincipalPorts,
   ...buildEventPorts, ...buildContentPorts, ...buildAuditPorts, ...buildAnalyticsPorts,
-  ...buildPipelinePorts, skills/contextFiles/blobs, pipelines, packs, close }`;
+  ...buildExternalCredentialPorts, ...buildPipelinePorts, skills/contextFiles/blobs,
+  pipelines, packs, close }`;
   `skills`/`contextFiles`/`blobs` — **файловые** реализации `createFileStorage`
   (FS/package-bound, см. исключение выше); `pipelines`/`packs` (ADR-100/ADR-086 §5) —
   тоже **файловые** (SQL-реализации этих портов в драйвере пока нет). `ports/stub.ts`
@@ -271,8 +288,8 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
   `CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public;` в базе прогона; тогда
   `DROP SCHEMA … CASCADE` его не трогает, а `search_path = <схема>, public`
   находит опкласс. С этим обходом весь контрактный suite core проходит против
-  живой БД: 132/132 (в т.ч. `PG → PluginLockRepository` — 10/10,
-  `PG → PluginAuditRepository` — 7/7).
+  живой БД: 145/145 (в т.ч. `PG → PluginLockRepository` — 10/10,
+  `PG → PluginAuditRepository` — 7/7, `PG → ExternalCredentialRepository` — 13/13).
 
 ## Критерий приёмки
 
@@ -302,8 +319,9 @@ workspace) остаются file-специфичными ([ADR-091](../../docs/
   **Контрактный прогон портов** живёт в core — `packages/core/src/storage/contract/postgres.test.ts`
   (тот же гейт `SYNTH_TEST_POSTGRES_DSN`, уникальная схема на каждый `make()`,
   `vi.setConfig({ testTimeout: 30000 })` — миграции под параллельной нагрузкой):
-  проходят **все** блоки контрактного suite (35 портов; `AnalyticsRollupRepository` — 11 блоков,
-  `PluginLockRepository` — 10 блоков, `PluginAuditRepository` — 7 блоков).
+  проходят **все** блоки контрактного suite (36 портов; `AnalyticsRollupRepository` — 11 блоков,
+  `PluginLockRepository` — 10 блоков, `PluginAuditRepository` — 7 блоков,
+  `ExternalCredentialRepository` — 13 блоков).
   Пример: `SYNTH_TEST_POSTGRES_DSN="postgres://synth:<pw>@127.0.0.1:5432/synth_test" pnpm --filter @itphx/synth-storage-postgres test`.
 - Сборка: `pnpm --filter @itphx/synth-storage-postgres build` (`tsc -p tsconfig.build.json`);
   порядок релизной сборки — `shared → core → storage-postgres → ui → sdk → synth`

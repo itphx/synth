@@ -39,6 +39,8 @@ export { describeServiceKeyRepository } from './secrets.js';
 export { describeSSHKeyRepository } from './secrets.js';
 export { describeWebhookRepository } from './secrets.js';
 export { describeWebhookDeliveryRepository } from './secrets.js';
+// PROP-107 (Ф1): внешние доступы (OAuth-креды к коннекторам).
+export { describeExternalCredentialRepository } from './external-credential-repository.contract.js';
 
 export { describeMcpRegistryRepository } from './content.js';
 export { describeSkillRepository } from './content.js';

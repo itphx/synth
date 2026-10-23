@@ -13,6 +13,7 @@ import {
   describeEventBindingRepository,
   describeEventJournalRepository,
   describeEventRouteRepository,
+  describeExternalCredentialRepository,
   describeIdentityClaimRepository,
   describeJobRepository,
   describeMaintenanceAuditRepository,
@@ -62,6 +63,7 @@ import { ServiceApiKeyStore } from '../service-api-key-store.js';
 import { SSHKeyStore } from '../ssh-key-store.js';
 import { WebhookStore } from '../webhook-store.js';
 import { WebhookDeliveryStore } from '../webhook-delivery-store.js';
+import { ExternalCredentialStore } from '../external-credential-store.js';
 import { McpRegistryStore } from '../mcp-registry-store.js';
 import { SkillStore } from '../skill-store.js';
 import { SkillBundleStore } from '../skill-bundle-store.js';
@@ -220,6 +222,18 @@ describe('контрактные тесты файловых реализаци�
   describeWebhookDeliveryRepository('WebhookDeliveryStore → WebhookDeliveryRepository', async () => ({
     repo: new WebhookDeliveryStore({ dataDir: await tmp() }),
   }));
+
+  // PROP-107 (Ф1): внешние доступы — `secrets/oauth/credentials.json` (0600).
+  describeExternalCredentialRepository(
+    'ExternalCredentialStore → ExternalCredentialRepository',
+    async () => {
+      const dir = await tmp();
+      return {
+        repo: new ExternalCredentialStore({ dataDir: dir, secretKey: MASTER_KEY }),
+        filePath: join(dir, 'secrets', 'oauth', 'credentials.json'),
+      };
+    },
+  );
 
   describeMcpRegistryRepository('McpRegistryStore → McpRegistryRepository', async () => ({
     repo: new McpRegistryStore({ dataDir: await tmp() }),

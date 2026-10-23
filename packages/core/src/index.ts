@@ -414,6 +414,9 @@ export type {
   DictionaryRepository,
   ContextFileRepository,
   SSHKeyRepository,
+  // PROP-107 (Ф0/Ф1): внешние доступы (OAuth-креды к коннекторам).
+  ExternalCredentialRepository,
+  ExternalCredentialErrorCode,
   BlobStore,
   DefaultsRepository,
   AppearanceDefaults,
@@ -440,6 +443,10 @@ export type {
   PipelineRunFilter,
   PipelineRunEventListOptions,
 } from './storage/ports/index.js';
+// PROP-107 (Ф0/Ф1): доменная ошибка хранилища внешних доступов — значение
+// (не только тип): её бросают реализации порта, в т.ч. PostgreSQL-драйвер
+// (`@itphx/synth-storage-postgres`) через ленивый `import()` core.
+export { ExternalCredentialStoreError } from './storage/ports/external-credential-repository.js';
 // ADR-096 (W2.2): in-memory реализации портов хранения (второй backend за единым слоем).
 export {
   MemorySessionRepository,
@@ -479,6 +486,8 @@ export {
   // ADR-101: спецификации пайплайнов, прогоны и журнал выполнения.
   MemoryProjectPipelineRepository,
   MemoryPipelineRunRepository,
+  // PROP-107 (Ф1): внешние доступы (OAuth-креды к коннекторам).
+  MemoryExternalCredentialRepository,
 } from './storage/memory/index.js';
 // ADR-096 (W2.4): generic-реализация конфигурационных словарей (провайдеры/модели/агенты).
 export { MemoryDocumentRepository } from './storage/memory/document-repository.js';
@@ -592,6 +601,15 @@ export type {
   RotateMasterKeyOptions,
   RotateMasterKeyResult,
 } from './storage/ssh-key-store.js';
+// PROP-107 (Ф1): хранилище внешних доступов (OAuth-креды к коннекторам).
+export {
+  ExternalCredentialStore,
+  EXTERNAL_CREDENTIALS_SCHEMA_VERSION,
+  EXTERNAL_CREDENTIALS_SUBDIR,
+  EXTERNAL_CREDENTIALS_FILENAME,
+  EXTERNAL_CREDENTIAL_ID_PREFIX,
+} from './storage/external-credential-store.js';
+export type { ExternalCredentialStoreConfig } from './storage/external-credential-store.js';
 // ADR-076: one-shot ротация мастер-ключа секретов (SSH-ключи).
 export { rotateSecretsMasterKey, MasterKeyRotationError } from './security/rotate.js';
 export type {

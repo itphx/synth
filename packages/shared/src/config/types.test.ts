@@ -20,6 +20,37 @@ describe('mcpServerConfigSchema (ADR-071 §2.2)', () => {
   it('принимает HTTP-транспорт', () => {
     expect(mcpServerConfigSchema.parse({ type: 'http', url: 'https://x/mcp' }).type).toBe('http');
   });
+
+  it('PROP-107 Ф0: принимает auth.kind=credential со ссылкой на доступ', () => {
+    const parsed = mcpServerConfigSchema.parse({
+      type: 'http',
+      url: 'https://x/mcp',
+      auth: { kind: 'credential', credentialId: 'extc_1' },
+    });
+    expect(parsed.auth).toEqual({ kind: 'credential', credentialId: 'extc_1' });
+  });
+
+  it('PROP-107 Ф0: старые записи без auth остаются валидными', () => {
+    const parsed = mcpServerConfigSchema.parse({ type: 'stdio', command: 'node' });
+    expect(parsed.auth).toBeUndefined();
+  });
+
+  it('PROP-107 Ф0: невалидный auth отклоняется (пустой credentialId/неизвестный kind)', () => {
+    expect(
+      mcpServerConfigSchema.safeParse({
+        type: 'http',
+        url: 'https://x/mcp',
+        auth: { kind: 'credential', credentialId: '' },
+      }).success,
+    ).toBe(false);
+    expect(
+      mcpServerConfigSchema.safeParse({
+        type: 'http',
+        url: 'https://x/mcp',
+        auth: { kind: 'header', credentialId: 'extc_1' },
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe('mcpNetworkPolicySchema (ADR-071 §2.3.1)', () => {

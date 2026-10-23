@@ -1013,7 +1013,7 @@
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`). ADR-099: доверие CA для
   git-over-https — `simpleGit({ config: ['http.sslCAInfo=<path>'] })` из
   `gitCaConfig()` (путь берётся из уже инициализированного `initTlsTrust`).
-- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (38 — 36 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
+- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (39 — 37 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
   запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/
@@ -1070,6 +1070,12 @@
   `McpRegistryStore` (единый реестр MCP, ADR-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (ADR-046), `SSHKeyStore`
   (`secrets/ssh-keys`, шифрование at-rest, ADR-076),
+  `ExternalCredentialStore` (PROP-107 Ф1: внешние доступы к коннекторам —
+  `secrets/oauth/credentials.json`, `0600`; access/refresh-токены зашифрованы
+  мастер-ключом (`enc:v1:…`), наружу отдаются только метаданные с маской;
+  `revoke` идемпотентен и необратим, `markError` — после `invalid_grant`; порт
+  `ExternalCredentialRepository`, контракт —
+  `storage/contract/external-credential-repository.contract.ts`),
   `ServiceApiKeyStore` (`service-keys.json`, ADR-052 этап I: scoped-ключи инстанса — sha256-хеш
   секрета `synth_svc_…` at-rest, plaintext один раз при `create`, `resolveBySecret` с проверкой
   `revokedAt`/`expiresAt`, `revoke`/`touch`/`update`, `ServiceApiKeyConflictError`; ADR-052/O1 —

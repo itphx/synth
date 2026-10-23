@@ -78,6 +78,12 @@ export type { DictionaryRepository } from './dictionary-repository.js';
 export type { DocumentRepository } from './document-repository.js';
 export type { ContextFileRepository } from './context-file-repository.js';
 export type { SSHKeyRepository } from './ssh-key-repository.js';
+// PROP-107 (Ф0/Ф1): внешние доступы (OAuth-креды к коннекторам).
+export {
+  ExternalCredentialStoreError,
+  type ExternalCredentialRepository,
+  type ExternalCredentialErrorCode,
+} from './external-credential-repository.js';
 export type { BlobStore } from './blob-store.js';
 export type { DefaultsRepository, AppearanceDefaults } from './defaults-repository.js';
 // ADR-051/ADR-100: пайплайны (определения + экземпляры).

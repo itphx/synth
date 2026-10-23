@@ -12,6 +12,7 @@ import {
   describeEventBindingRepository,
   describeEventJournalRepository,
   describeEventRouteRepository,
+  describeExternalCredentialRepository,
   describeIdentityClaimRepository,
   describeJobRepository,
   describeMaintenanceAuditRepository,
@@ -50,6 +51,7 @@ import {
   MemoryEventBindingRepository,
   MemoryEventJournalRepository,
   MemoryEventRouteRepository,
+  MemoryExternalCredentialRepository,
   MemoryIdentityClaimRepository,
   MemoryJobRepository,
   MemoryMaintenanceAuditRepository,
@@ -177,6 +179,12 @@ describe('контрактные тесты in-memory реализаций по�
   describeWebhookDeliveryRepository('MemoryWebhookDeliveryRepository → WebhookDeliveryRepository', async () => ({
     repo: new MemoryWebhookDeliveryRepository(),
   }));
+
+  // PROP-107 (Ф1): внешние доступы (OAuth-креды к коннекторам).
+  describeExternalCredentialRepository(
+    'MemoryExternalCredentialRepository → ExternalCredentialRepository',
+    async () => ({ repo: new MemoryExternalCredentialRepository() }),
+  );
 
   describeMcpRegistryRepository('MemoryMcpRegistryRepository → McpRegistryRepository', async () => ({
     repo: new MemoryMcpRegistryRepository(),

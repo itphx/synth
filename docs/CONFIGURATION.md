@@ -318,6 +318,10 @@ mcp:
                                   # consistency | available | auto (дефолт auto)
                                   # независима от tools.policy; per-session override: session.settings.mcpPolicy
   # servers — см. packages/shared/src/config/types.ts
+  #   auth: { kind: "credential", credentialId: "extc_…" } — ссылка на внешний
+  #   доступ (PROP-107 Ф0): коннектор авторизуется токеном из слоя доступов,
+  #   сам токен в конфиге/реестре не лежит (доступ — в {dataDir}/secrets/oauth/).
+  #   Поле аддитивно: записи без auth валидны.
   # networkPolicy — адресная политика MCP {mode, list, exceptions} (тот же формат, что egress.*),
   # см. «Адресная политика исходящих запросов (`egress.*`, ADR-099)»
 

@@ -16,6 +16,7 @@
  *     `maintenanceAudit`;
  *   - `buildAuditPorts(deps)`     → `securityAudit`/`egressRequests`;
  *   - `buildAnalyticsPorts(deps)` → `analyticsRollups` (ADR-102);
+ *   - `buildExternalCredentialPorts(deps)` → `externalCredentials` (PROP-107 Ф1);
  *   - `buildPipelinePorts(deps)`  → `projectPipelines`/`pipelineRuns` (ADR-101).
  *
  * Все доменные порты реализованы поверх SQL; FS/package-bound порты (`skills`,
@@ -41,6 +42,7 @@ import { planMigrations, readSchemaVersion, runMigrations } from './migrate.js';
 import { buildContentPorts } from './ports/content.js';
 import { buildAuditPorts } from './ports/audit.js';
 import { buildAnalyticsPorts } from './ports/analytics.js';
+import { buildExternalCredentialPorts } from './ports/external-credentials.js';
 import type { CoreSyncDeps, PortDeps } from './ports/deps.js';
 import { buildEventPorts } from './ports/events.js';
 import { buildPipelinePorts } from './ports/pipelines.js';
@@ -151,6 +153,10 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     ...buildEventPorts(deps),
     ...buildContentPorts(deps),
     ...buildAuditPorts(deps),
+    // PROP-107 (Ф1): внешние доступы к коннекторам (таблица `external_credentials`,
+    // миграция 011). Токены шифруются core-хелперами (ленивый `import()`), в БД
+    // лежит готовый `enc:v1:…`; наружу отдаются только метаданные с маской.
+    ...buildExternalCredentialPorts(deps),
     // ADR-102: порт роллапов аналитики — пред-агрегированные суточные бакеты
     // (`analytics_rollups`, миграция 003) с атомарным `ON CONFLICT … DO UPDATE`.
     ...buildAnalyticsPorts(deps),

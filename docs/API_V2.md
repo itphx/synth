@@ -675,6 +675,8 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 
 > Резолвинг MCP per-item (ADR-071 §2.4): `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`; дефолт — opt-in (off). Мастер `enabled` (реестр) и проектный `enabled` — live hard-gate (в т.ч. старые сессии и системные серверы), `enabledByDefault`/`project.defaultOn` — snapshot (`mcpDefaultOn`). Причины: `system_disabled\|project_disabled\|session_optout\|not_default`. `McpServerConfig.enabled` — только сид записи реестра (`seedFromConfig`), в резолвинге не участвует. Отсутствие `project.mcp` — гейт не задан (legacy).
 
+> `config.auth` (PROP-107 Ф0) — ссылка на внешний доступ: `{kind:'credential', credentialId}`; коннектор авторизуется токеном из слоя доступов, сам токен в реестре/конфиге не лежит. Поле аддитивно — записи без `auth` валидны. Выдача/ротация доступов — Ф4 (`/api/v2/oauth/credentials`, ещё не реализовано).
+
 ### 5.17 Skills — `/api/v2/skills` (оба, ADR-046 Фаза 1)
 
 | Метод | Путь | Сборка | RBAC (backend / core) | Назначение |

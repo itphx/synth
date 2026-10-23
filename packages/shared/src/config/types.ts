@@ -274,6 +274,18 @@ export const summarizationConfigSchema = z.object({
   promptFile: z.string().default('SUMMARIZER'),
 });
 
+/**
+ * PROP-107 (Ф0): привязка MCP-коннектора к внешнему доступу (OAuth-креде).
+ *
+ * Коннектор ссылается на доступ **по id** — сам токен в реестре/конфиге не лежит
+ * (PROP-107 §5). Поле аддитивно: записи без `auth` (все существующие) остаются
+ * валидными.
+ */
+export const mcpServerAuthSchema = z.object({
+  kind: z.literal('credential'),
+  credentialId: z.string().min(1),
+});
+
 export const mcpServerConfigSchema = z.object({
   type: z.enum(['stdio', 'sse', 'http']),
   /** ADR-071 §2.2: человекочитаемое описание сервера (попадает в блок `mcp.servers`). */
@@ -283,6 +295,12 @@ export const mcpServerConfigSchema = z.object({
   env: z.record(z.string(), z.string()).optional(),
   url: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
+  /**
+   * PROP-107 §5: ссылка на внешний доступ (коннектор авторизуется токеном из
+   * слоя доступов, а не plaintext-заголовком). Аддитивно: старые записи без
+   * поля валидны.
+   */
+  auth: mcpServerAuthSchema.optional(),
   /**
    * Сид системного мастер-флага записи реестра при первичном создании из config
    * (`seedFromConfig`); в резолвинге/подключении не участвует — после создания
@@ -1126,6 +1144,8 @@ export type SessionConfig = z.infer<typeof sessionConfigSchema>;
 export type ContextConfigSchema = z.infer<typeof contextConfigSchema>;
 export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
+/** PROP-107 (Ф0): привязка MCP-коннектора к внешнему доступу. */
+export type McpServerAuth = z.infer<typeof mcpServerAuthSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
 export type ToolsConfig = z.infer<typeof toolsConfigSchema>;
 export type ToolsDisabledConfig = z.infer<typeof toolsDisabledConfigSchema>;
