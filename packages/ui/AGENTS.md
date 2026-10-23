@@ -84,11 +84,13 @@
 - В пользовательских сообщениях `@<agentId>` известных агентов подсвечивается цветом агента (`AgentInfo.color` через `resolveColor`) — `components/chat/SecretPlaceholder.tsx` (`SecretPlainText`), реестр из `agentsStore`. Неизвестный агент или пустой реестр → обычный текст, без поломки вёрстки и переносов.
 
 ### Чат: режим отправки (PROP-098)
-- Селектор режима отправки — `components/chat/SendModeSelector.tsx`: `queue` («в очередь») и `steer` («вмешаться в ход»). `interrupt` в UI нет — режима нет в API этапа 1 (`STEERING_INTERRUPT_UNSUPPORTED`).
+- Селектор режима отправки — `components/chat/SendModeSelector.tsx`: `queue` («в очередь»), `steer` («вмешаться в ход»), `interrupt` («прервать» — этап 2: обрыв текущей генерации, ход продолжается).
 - Селектор виден **только при активном ходе** (`ChatInput` — проп `isStreaming`): без хода вмешиваться некуда, сообщение уходит очередью. Выбор живёт в состоянии композера, начальное значение — проп `sendMode` (`ChatTab` передаёт `DEFAULT_STEER_MODE`).
-- Режим уходит третьим аргументом `onSend(text, agentRole?, mode?)` → `transportStore.sendMessage` → `POST /sessions/:id/prompt` с полем `mode`. `queue` (и отсутствие режима) в тело запроса **не попадает** — его отбрасывает `lib/api/sessions.ts`; `steer` — попадает.
+- Режим уходит третьим аргументом `onSend(text, agentRole?, mode?)` → `transportStore.sendMessage` → `POST /sessions/:id/prompt` с полем `mode`. `queue` (и отсутствие режима) в тело запроса **не попадает** — его отбрасывает `lib/api/sessions.ts`; `steer`/`interrupt` — попадают.
+- Маркеры в ленте (`components/chat/ChatMessage.tsx`): `metadata.steer` — «вмешательство в ход», `metadata.interrupt` — «прерывание хода» (`chat.steer.interruptMarker`); прерванная генерация (`metadata.status === 'interrupted'`) — бейдж «Прервано» (`chat.messageStats.interrupted`).
+- `stream.interrupted` **не закрывает стрим**: ход продолжается тем же `stream_id`, приходят следующие `stream.chunk`/`stream.done`; «Стоп» — отдельный механизм (`stream.cancelled`). Обработчик (`stores/transportStore.ts`) только сбрасывает аккумулятор (`resetStreamAccumulator`) — `finishStream`/`cancelStream` не вызываются.
 - Тач-таргеты селектора — ≥40px (ADR-044): кнопки помечены `data-compact`, чтобы мобильное правило «компактные кнопки тулбара» (`styles/index.css`) их не ужало; подписи на телефоне/планшете скрыты (иконки), на десктопе — подпись + `@max-[212px]:hidden`.
-- i18n — `chat.steer.mode.*` (ru/en). Тесты — `components/chat/ChatInput.autocomplete.test.tsx` (селектор виден при `isStreaming`, выбор `steer` уходит третьим аргументом, без хода/`queue` режим в запрос не уходит).
+- i18n — `chat.steer.mode.*` (ru/en). Тесты — `components/chat/ChatInput.autocomplete.test.tsx` (селектор виден при `isStreaming`, выбор `steer`/`interrupt` уходит третьим аргументом, без хода/`queue` режим в запрос не уходит).
 
 ### Сохранение немедленных настроек панели
 - Немедленное сохранение настройки правой панели (тумблер, селект, автосейв поля) — только через общий хук `usePanelSettingSave` (`hooks/usePanelSettingSave.ts`): `run({ key, run, onSuccess, onError, errorKey })`.
