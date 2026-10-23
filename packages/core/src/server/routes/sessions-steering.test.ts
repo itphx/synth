@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
 import { SessionManager, EventBus, FileStore } from '../../index.js';
+import type { QueueProcessorManager, ChatOrchestrator } from '../../index.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import type { AuthKit } from '../../auth/local.js';
 import {
@@ -79,9 +80,9 @@ function createTestApp(tmpDir: string, opts?: { running?: boolean }) {
     {
       sessionManager,
       eventBus,
-      queueManager: queueManager as any,
+      queueManager: queueManager as unknown as QueueProcessorManager,
       processMessage: orchestrator.createProcessMessage(),
-      orchestrator: orchestrator as any,
+      orchestrator: orchestrator as unknown as ChatOrchestrator,
       projectStore,
     },
     {},
@@ -108,6 +109,11 @@ function makeSteerMessage(content: string): Message {
   };
 }
 
+/** Тело ошибки API: `{ error: { code, message } }`. */
+type ErrorBody = { error: { code: string; message: string } };
+/** Тело успешного ответа `mode=steer`: `{ status, stream_id, pending_count }`. */
+type SteeredBody = { status: string; stream_id: string; pending_count: number };
+
 describe('POST /api/v2/sessions/:id/prompt — режим отправки (PROP-098)', () => {
   let tmpDir: string;
 
@@ -128,7 +134,7 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (PROP
       body: JSON.stringify({ content: 'остановись', mode: 'interrupt' }),
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as ErrorBody;
     expect(body.error.code).toBe(STEERING_ERROR_CODES.interruptUnsupported);
     expect(typeof body.error.message).toBe('string');
 
@@ -185,7 +191,7 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (PROP
       body: JSON.stringify({ content: 'вмешательство', mode: 'steer' }),
     });
     expect(res.status).toBe(202);
-    const body: any = await res.json();
+    const body = (await res.json()) as SteeredBody;
     expect(body.status).toBe('steered');
     expect(body.pending_count).toBe(1);
 
@@ -211,7 +217,7 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (PROP
       body: JSON.stringify({ content: 'лишняя', mode: 'steer' }),
     });
     expect(res.status).toBe(429);
-    const body: any = await res.json();
+    const body = (await res.json()) as ErrorBody;
     expect(body.error.code).toBe(STEERING_ERROR_CODES.limitExceeded);
 
     const fresh = (await sessionManager.getSession(session.id))!;
