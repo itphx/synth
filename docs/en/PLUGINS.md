@@ -1294,3 +1294,167 @@ ADR-090 §9.
 new core version. The instance operator can add an exact version to the exceptions file
 (`plugins.exactHostExceptions`, one version per line, `#` — a comment) — that is an emergency
 workaround, not the norm for an author.
+
+---
+
+## 12. Error reference
+
+The reason codes are `PLUGIN_AUDIT_REASONS` (`packages/shared/src/types/plugin-audit.ts`), 29 values.
+A code is visible in the API answer (`reason`), in the journal `{dataDir}/audit/plugins.jsonl` and
+in the CLI stderr.
+
+### 12.1. Installation and source
+
+| Code | What it means | What the author should do |
+|---|---|---|
+| `plugin.source_unavailable` | the source did not deliver a bundle: no path/directory, the archive was rejected (a symlink, `..`, the limits), npm without SRI/unavailable, a URL without a pin/a hash mismatch | check the path and the kind of the source, for npm — the presence of `dist.integrity`, for a URL — `--sha256`; locally it is a `400`, for the network — a `502` |
+| `plugin.manifest_invalid` | `synth.pack` was not parsed or did not pass `validatePackManifest` | read the text: most often an empty `provides`, `tier: stable`, an unknown phase, `trust.level` above `trusted`, an extra field in `provides` |
+| `plugin.remote_entry_missing` | `mode: "remote"`, but the bundle has no `dist/server.js` | build the server entry point or switch the mode to `inline`/`both` |
+| `plugin.integrity_mismatch` | the contents of the installed bundle changed after the installation | reinstall the bundle; do not edit the files in `installed/…` |
+| `plugin.integrity_unverifiable` | the expected hash is there, but there is nothing to check it against (no files) | install from a source/archive, not from a "half-built" directory |
+| `plugin.approval_required` | the verdict is `caution` — an `approve` is needed | check the scan findings (`synth plugin scan`), then confirm the installation |
+| `plugin.scan_rejected` | the verdict is `dangerous` (or the scanner failed — fail-closed) | eliminate the findings (`child_process`/`eval`/reading secrets/an executable binary) |
+
+### 12.2. Trust and policy
+
+| Code | What it means | What the author should do |
+|---|---|---|
+| `plugin.trust_below_floor` | the trust level is below `plugins.trustFloor` (default `trusted`) | publish an entry with the correct `trust_level` or ask the operator to install it with `--trust trusted`; the manifest does not raise the trust |
+| `plugin.disabled` | the plugin layer is disabled (`plugins.enabled: false`) | this is an instance setting, not a plugin error |
+| `plugin.not_allowlisted` | the name is not in `plugins.allowlist` (the list is set) | ask the operator to add the name |
+| `plugin.denylisted` | the name is in `plugins.denylist` | the plugin is forbidden on the instance |
+| `plugin.runtime_install_denied` | the installation during runtime is forbidden (`plugins.runtimeInstall: deny`) | use the deploy-time/CLI or enable `allow` |
+| `plugin.scan_disabled_with_execution` | the scan is disabled while the execution is enabled — fail-closed | this is the instance policy: executable code must be scanned |
+| `plugin.execution_disabled` | the execution of the plugin code is disabled (`plugins.executionEnabled: false`) | turn the key on and restart the instance |
+| `plugin.managed_readonly` | the plugin was delivered by the deployment, the removal/update is forbidden | change the version by an image/a directory (`deployDir`) |
+| `plugin.hybrid_not_allowed` | the server hybrid policy forbids the plugin from running (`plugins.hybrid.mode: allowlist`, the name is not in `plugins.hybrid.allow`) | ask the server operator to add the plugin name to the allowlist; locally the code appears only in the hybrid mode |
+
+### 12.3. Activation, loading, contributions
+
+| Code | What it means | What the author should do |
+|---|---|---|
+| `plugin.not_found` | there is no lock record | install the plugin |
+| `plugin.not_active` | there is nothing to deactivate | check `list`/`GET /plugins` |
+| `plugin.already_active` | a repeated activation | `disable` first, if a re-activation is needed |
+| `plugin.contract_mismatch` | an incompatible major of `contracts.extensionApi` | bring `contracts` in line with the host's API (§11) |
+| `plugin.host_mismatch` | the Synth version is outside `host` | widen `host` after verifying, or update the plugin |
+| `plugin.loader_unavailable` | the loader is unavailable or the loading failed (no `rootDir`, the file is outside the directory, not `.js`/`.mjs`, > 8 MiB, an `import()` error), and also an exception from `apply()` | check the entry point and its location; `apply()` must not throw |
+| `plugin.module_invalid` | the module was loaded, but did not provide `apply` | use one of the three module forms (§5.1) |
+| `plugin.provides_mismatch` | what was declared in `provides` did not match the actual registrations (or vice versa) | synchronize the manifest and the code; see §4.4 |
+| `plugin.disposer_failed` | a disposer failed during the deactivation (the others were executed) | a disposer must be idempotent and must not throw |
+| `plugin.rollback_unavailable` | there is no `previous` step or no directory of the previous version | a rollback is possible only after an `update`; otherwise install the needed version |
+
+### 12.4. Filter decisions (`plugin_filter.*`)
+
+| Code | Where | What it means | What the author should do |
+|---|---|---|---|
+| `plugin_filter.denied` | the plugin journal + the gateway audit | a trusted filter blocked the call | expected when it triggers; check `reason`/`code` |
+| `plugin_filter.deny_downgraded` | the plugin journal + the gateway audit | a blocking verdict was downgraded: the plugin has no right to veto (trust < `trusted`) | obtain the trust from the source/registry — that is not a plugin setting |
+| `plugin_filter.unavailable` | the plugin journal + the gateway audit | the filter crashed or did not fit into the budget | reduce the work in `inspect`, increase `timeoutMs`, check that the `fan` calls do not block the event loop |
+| `plugin_filter.allowed` | only the gateway audit | the call was passed through | — |
+| `plugin_filter.timeout` / `.error` | only the gateway audit | the budget expired / an exception or an unknown verdict | the same + check the shape of the `verdict` |
+| `plugin_filter.redact_unsupported` | only the gateway audit | `redact` in `pre_request` is not supported | use `deny` or mask the data before the call |
+| `plugin_filter.buffering_required` | only the gateway audit | `deny`/`redact` in `post_response` are rejected (no buffering) | `post_response` — observation only |
+| `plugin_filter.redact_invalid` | only the gateway audit | `redactedTexts` is not an array of strings of the same length — fail-closed `deny` | return an array of the same length |
+
+The mapping of the reasons to HTTP is the single table `PLUGIN_REASON_HTTP`
+(`packages/core/src/server/routes/plugins.ts`): `400` — `manifest_invalid`, `contract_mismatch`,
+`host_mismatch`, `module_invalid`, `provides_mismatch`, a local `source_unavailable`; `403` —
+`trust_below_floor`, `disabled`, `not_allowlisted`, `denylisted`, `runtime_install_denied`,
+`scan_disabled_with_execution`, `managed_readonly`, `hybrid_not_allowed`; `404` — `not_found`,
+`not_active`; `409` — `scan_rejected`, `integrity_mismatch`, `integrity_unverifiable`,
+`execution_disabled`, `rollback_unavailable`; `202` — `approval_required`; `500` —
+`loader_unavailable`, `disposer_failed`; `502` — a network `source_unavailable`.
+
+---
+
+## 13. Publishing
+
+The extension registry is a separate repository, **`synth-registry`** (the entries in `entries/`, the
+common index `index.json` for all the extension classes). The showcase is **`synth-market`** (a
+static site on top of the index).
+
+### 13.1. The registry entry
+
+Copy `synth-registry/templates/entry.yml` to `entries/<owner>__<repo>.yml` and fill it in. What
+matters for a plugin:
+
+| Field | Value |
+|---|---|
+| `kind` | `plugin` |
+| `name` | the plugin name (it matches `synth.pack.name`) |
+| `version` | the version of the published bundle |
+| `trust_level` | `community` (the default) / `verified` / `trusted` / `builtin`. **This is the source of truth** for the actual trust when installing from the registry |
+| `identifier` | `<owner>/<repo>` (for a monorepo sub-package — `<owner>/<repo>#packages/<name>`) |
+| `source` | the delivery channel (`npm`, `github`, `registry`, …) |
+| `install.command` | the command the showcase will show; for a plugin the default is `synth plugin install <name>` |
+| `extra.provides` | for a plugin it makes sense to list `tools`/`promptBlocks`/`llmFilters` (a free form) |
+| `extra.compatibility.contracts` | `extensionApi: "^1"` — the same as in the manifest |
+| `extra.docs` / `extra.changelog` | links to the documentation and to the history |
+
+The `trust_level` of the entry is not raised by the manifest: when installing from the registry the
+actual level is taken from here. The claim in the manifest (`trust.level`) is only an upper bound.
+
+### 13.2. The install command on the showcase
+
+The showcase builds the default command **taking `kind` into account**:
+
+- `kind: "plugin"` → `synth plugin install <name>` (the CLI accepts a path, a `.tgz`, an npm name
+  or an https URL; the version is pinned by the `--version` flag, a URL — by the mandatory
+  `--sha256`);
+- the other classes → the previous command (`synth addons install <name>@<version>`).
+
+An explicit `extra.install.command` in the entry has priority over the default command — if the
+plugin is published from an archive or over a URL, put the exact command with the pin there.
+
+### 13.3. Entry requirements
+
+- `kind: plugin` matches the `synth.pack.kind` of the published bundle;
+- the version in the entry matches the `synth.pack.version` (otherwise the user gets one number on
+  the showcase and another in `plugin list`);
+- the `provides` of the entry does not promise what is not in the manifest;
+- the repository contains `synth.pack` and the built `dist/` (or a release archive with them);
+- the license is specified (SPDX; without a public one — `UNLICENSED` + `licenseNote`);
+- `description` — both locales (`ru`/`en`), without the degrees of comparison.
+
+---
+
+## 14. Author checklist
+
+Before publishing:
+
+- [ ] `synth.pack`: `kind: "plugin"`, `name`/`version`/`description`, `host` and
+      `contracts.extensionApi` are set;
+- [ ] `provides` **exactly** matches the registrations (the block keys, the filter ids, the local
+      tool names);
+- [ ] the blocks: the keys are `plugin.<name>.*`, the tiers are only `context`/`volatile`,
+      `order ≥ 100`;
+- [ ] the filters: the `phase` is valid, the `failMode` is chosen deliberately, `inspect` fits into
+      `timeoutMs`, `deny` is not the only mechanism (it does not work on `community`);
+- [ ] the tools: local names without `plugin_`, non-empty capabilities without `mcp`/`runtime`, a
+      `jsonSchema` is set, the errors are `{ isError: true }`, not exceptions;
+- [ ] the bundle is self-contained: no runtime imports of `@itphx/*`, no `node_modules`, the entry
+      point is ≤ 8 MiB, the build is ESM;
+- [ ] `synth plugin scan ./my-plugin` — `safe` (or `caution` with an understanding of why);
+- [ ] the integration test (§8.2) is green: the activation, the block, the filter, the tool, the
+      deactivation with no leftovers;
+- [ ] verified on a live instance: the block in `GET /sessions/:id/prompt`, the tool is called, the
+      `audit/plugins.jsonl` journal has no unexpected codes;
+- [ ] the registry entry: `kind: plugin`, an honest `trust_level`, `extra.provides` and
+      `extra.compatibility.contracts` are filled in, `install.command` (if needed) with a pin;
+- [ ] the version is raised (semver), the changelog is updated, the license is specified.
+
+---
+
+## See also
+
+- ADR-090 — Extension API v1: the canonical decision on the plugin layer.
+- [API_V2.md](./API_V2.md) §5.36 — the HTTP surface of the plugins.
+- The "Plugins" section of the maintenance runbook (`docs/MAINTENANCE.md`, Russian) — operations:
+  installation, diagnostics, deploy.
+- [CONFIGURATION.md](./CONFIGURATION.md) §"Plugins (`plugins.*`)" — the keys and the defaults.
+- ADR-036 — the LLM gateway (why `post_response` only observes).
+- ADR-070 — the prompt assembly and the block tiers.
+- ADR-029 — the permission layer for the tools.
+- PROP-068 — the trust model, the install policy, the scanner, the registry.
+- ADR-099 — the egress, TLS/CA and the proxy for the plugin's network calls.
