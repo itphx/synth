@@ -36,6 +36,8 @@ import {
   createSchedulerMetrics,
   createWebhookMetrics,
   createEventMetrics,
+  // PROP-108 Ф1: счётчик решений Authority-слоя (`synth_authority_decisions_total`).
+  createAuthorityMetrics,
   startEventJournalMetrics,
   createEgressPolicyResolver,
   createEgressLogSink,
@@ -344,6 +346,9 @@ export async function createStandaloneDeps(
   const schedulerJobMetrics = metrics ? createSchedulerMetrics(metrics) : undefined;
   const webhookDeliveryMetrics = metrics ? createWebhookMetrics(metrics) : undefined;
   const eventMetrics = metrics ? createEventMetrics(metrics) : undefined;
+  // PROP-108 Ф1: решения Authority-слоя (`synth_authority_decisions_total`) —
+  // лейблы только `action`/`effect`/`source`, без id (ADR-094).
+  const authorityMetrics = metrics ? createAuthorityMetrics(metrics) : undefined;
   if (metrics) {
     stopMetricsCollectors.push(attachBusMetrics(metrics, eventBus));
     stopMetricsCollectors.push(startSessionMetrics(metrics, sessionManager));
@@ -590,6 +595,8 @@ export async function createStandaloneDeps(
         shadow: config.authorityConfig.shadow,
         journal: storageContext.authorityDecisions,
         policy: (await storageContext.authorityPolicy?.getPolicy()) ?? null,
+        // ADR-094: счётчик решений Authority-слоя (`synth_authority_decisions_total`).
+        onDecision: authorityMetrics?.onDecision,
       })
     : undefined;
 

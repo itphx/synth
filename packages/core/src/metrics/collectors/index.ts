@@ -49,6 +49,18 @@ export type {
   WebhookDeliveryOutcome,
 } from './webhooks.js';
 export { registerDecisionMetrics } from './decision.js';
+export {
+  createAuthorityMetrics,
+  normalizeAuthorityAction,
+  normalizeAuthorityEffect,
+  normalizeAuthoritySource,
+} from './authority.js';
+export type {
+  AuthorityMetricAction,
+  AuthorityMetricEffect,
+  AuthorityMetricSource,
+  AuthorityMetricsHooks,
+} from './authority.js';
 export { attachHybridMetrics, normalizeRemoteOp } from './hybrid.js';
 export type { HybridMetricsHooks, RemoteRequestInfo } from './hybrid.js';
 export { setSynthReady } from './ready.js';

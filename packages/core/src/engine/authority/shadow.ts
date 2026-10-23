@@ -180,7 +180,16 @@ export class AuthorityShadowRecorder {
 
   /** Запись в журнал + счётчик метрики. */
   private async _write(entry: AuthorityDecisionEntry): Promise<void> {
-    await this._options.journal?.append(entry);
-    this._options.onDecision?.(entry);
+    try {
+      await this._options.journal?.append(entry);
+    } catch {
+      // Ошибка записи в журнал не влияет на ход **и не гасит метрику**:
+      // решение-то посчитано.
+    }
+    try {
+      this._options.onDecision?.(entry);
+    } catch {
+      // Ошибка метрик не влияет на ход.
+    }
   }
 }

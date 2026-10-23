@@ -1399,6 +1399,11 @@ export {
   createWebhookMetrics,
   createEventMetrics,
   createPipelineMetrics,
+  // PROP-108 Ф1: решения Authority-слоя (`synth_authority_decisions_total`).
+  createAuthorityMetrics,
+  normalizeAuthorityAction,
+  normalizeAuthorityEffect,
+  normalizeAuthoritySource,
   normalizePipelineRunStatus,
   normalizePipelineStepOutcome,
   normalizePipelineNodeKind,
@@ -1429,6 +1434,11 @@ export type {
   WebhookDeliveryMetrics,
   WebhookDeliveryOutcome,
   EventMetricsHooks,
+  // PROP-108 Ф1: хуки метрик Authority-слоя.
+  AuthorityMetricAction,
+  AuthorityMetricEffect,
+  AuthorityMetricSource,
+  AuthorityMetricsHooks,
   PipelineGateMetricKind,
   PipelineMetricsHooks,
   PipelineNodeMetricKind,
