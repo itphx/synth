@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-21 (ADR-101: §5.35 «Пайплайны проекта, прогоны и шаблоны» — новый контур пайплайнов, UI реализован; §5.34 помечен как устаревающий, legacy-эндпоинты остаются рабочими); перевод отстаёт (ADR-102 §5.32 «Аналитика и отчётность», §5.33 «Пакеты расширений», §5.34 «Пайплайны» — ADR-100).
+> ⚠️ RU-версия обновлена 2026-10-24 (ADR-105 Ф4: §5.37 «Внешние доступы» — HTTP-контур внешних доступов `/api/v2/oauth`); перевод отстаёт (§5.32 «Аналитика и отчётность», §5.33 «Пакеты расширений», §5.34 «Пайплайны» — ADR-100, §5.35 «Пайплайны проекта» — ADR-101, §5.36 «Плагины» — ADR-090 — не переведены; нумерация §5.32–§5.36 сохранена по RU). Ранее: 2026-10-21 (ADR-101: §5.35 «Пайплайны проекта, прогоны и шаблоны» — новый контур пайплайнов, UI реализован; §5.34 помечен как устаревающий, legacy-эндпоинты остаются рабочими).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -1339,6 +1339,63 @@ restore, and **"Restart"** (mode status, confirmation, an overlay and polling `G
 
 ---
 
+### 5.37 External credentials — `/api/v2/oauth` (both, ADR-105 F4)
+
+The access layer for external services (OAuth connectors): issuance, metadata reads, token
+refresh, revocation, and binding to an MCP connector. A single factory `createOAuthRoutes`
+(`packages/core/src/server/routes/oauth.ts`) serves both core and backend; storage —
+`{dataDir}/secrets/oauth/credentials.json` (tokens encrypted at rest with the master key,
+ADR-105 §3).
+
+**The secret is never returned**: responses carry only `ExternalCredentialMeta` (a `secretMask`
+mask plus the `hasRefreshToken` flag). The token value is reachable only through `reveal()` —
+the transport substitution path (ADR-105 §1).
+
+**Rights are checked at the boundary** (invariant 16): `engine/oauth/credential-binding.ts`
+decides who may act on a credential — own credential → its owner; instance credential →
+`ADMIN`/`LEAD`; project credential → a project member with the right to **change content**
+(`OWNER`/`EDITOR`, plus `LEAD`/`ADMIN`); no access → 404, no right → 403.
+
+| Method | Path | Build | Purpose / req-resp |
+|---|---|---|---|
+| GET | `/api/v2/oauth/credentials` | both | Metadata list `{credentials, count}`: own credentials; `ADMIN`/`LEAD` — all; project ones — project members with read rights |
+| POST | `/api/v2/oauth/credentials` | both | Issue a credential (`oauthCredentialCreateSchema`): `{provider, flow?, code?, state?, scopes?, redirectUri?, projectId?, connectorId?, ownerKind?}` → **201** `{flow:'started', authorizationUrl, state, expiresAt}` (PKCE) or `{flow:'started', state, userCode, verificationUri, verificationUriComplete?, interval, expiresAt}` (device flow), or **201** `{flow:'completed', credential}` (completion: `code`+`state` or the device-flow `state`); device flow still pending → **202** `{flow:'pending', interval, expiresAt}`; invalid body → 400 `VALIDATION_ERROR`; provider not registered → 400 `OAUTH_PROVIDER_UNKNOWN`; provider without device flow → 400 `OAUTH_DEVICE_FLOW_UNSUPPORTED`; provider error → 400 `OAUTH_PROVIDER_ERROR`; `ownerKind:'instance'` from a non-`ADMIN`/`LEAD` actor → 403 `FORBIDDEN` |
+| GET | `/api/v2/oauth/credentials/:id` | both | Credential metadata (`ExternalCredentialMeta`); no credential → 404 `NOT_FOUND`; no read right → 403 `FORBIDDEN` |
+| POST | `/api/v2/oauth/credentials/:id/refresh` | both | Force an access-token refresh → 200 `{credential}`; no credential → 404; no right → 403; refresh rejected by the provider (`invalid_grant`) → 409 `CONFLICT` (the credential moves to `status:'error'` — reauthorization is required); no refresh token → 409 `CONFLICT`; revoked credential → 409 `CONFLICT` |
+| DELETE | `/api/v2/oauth/credentials/:id` | both | Revoke the credential (locally + best-effort RFC 7009 at the provider) → 200 `{credential, providerRevoked}` (a repeated revoke is idempotent — `revokedAt` does not change); no credential → 404; no right → 403; provider error → 400 `OAUTH_PROVIDER_ERROR` (the local revocation still took effect) |
+| POST | `/api/v2/oauth/credentials/:id/bind` | both | Bind to an MCP connector (`oauthCredentialBindSchema`: `{connectorId}`) → 200 `{credentialId, connectorId, bound:true}`; no credential → 404; no right → 403; no such connector → 404; connector owned by someone else → 403; binding conflict → 409 `CONFLICT`; binding unavailable in this build → 409 `SERVICE_UNAVAILABLE` |
+
+**Metadata fields** (`ExternalCredentialMeta`): `id`, `provider`, `connectorId?`, `clientId`,
+`scopes`, `owner` (`{kind: 'user'|'instance'|'local', id}`), `projectId?`, `status`
+(`active|expired|revoked|error`), `expiresAt?`, `revokedAt?`, `createdBy`, `createdAt`,
+`lastUsedAt?`, `scopesGranted?`, `secretMask` (an irreversible mask), `hasRefreshToken`.
+
+**The credential-operations journal** (append-only, `{dataDir}/audit/credentials.jsonl`) is
+**not a public API**: there is no read endpoint. Entries (`issue`/`refresh`/`revoke`/`bind`/`use`)
+are written best-effort through the `CredentialAuditRepository` port and contain neither token
+values nor `code_verifier`/`client_secret` nor user ids. Details — `docs/EXTERNAL_ACCESS.md` §10.2
+(in Russian).
+
+**Provider catalog** — `oauth.providers` in `config.yaml` (env `SYNTH_OAUTH_PROVIDERS`);
+`client_secret` comes only from env `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` or the file
+`{dataDir}/secrets/oauth/<provider>.client_secret` (never from the config).
+
+**Example.**
+
+```bash
+# Start the issuance (PKCE) → authorizationUrl + state.
+curl -X POST http://localhost:5000/api/v2/oauth/credentials \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"provider":"google","scopes":["https://www.googleapis.com/auth/drive.readonly"]}'
+
+# Complete the issuance (authorization code + state) and read the metadata.
+curl -X POST http://localhost:5000/api/v2/oauth/credentials \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"provider":"google","code":"<code>","state":"<state>"}'
+curl http://localhost:5000/api/v2/oauth/credentials/extc_<...> \
+  -H 'Authorization: Bearer admin-key-123'
+```
+
 ## 6. Sources
 
 | Component | File |
@@ -1352,6 +1409,7 @@ restore, and **"Restart"** (mode status, confirmation, an overlay and polling `G
 | Public API SDK (ADR-052, stage III) | `packages/sdk/*` (`@itphx/synth-sdk`) |
 | Webhooks store/journal/routes/engine (ADR-052) | `packages/core/src/storage/webhook-store.ts`, `packages/core/src/storage/webhook-delivery-store.ts`, `packages/core/src/server/routes/webhooks.ts`, `packages/core/src/engine/webhooks/*` |
 | Instance maintenance admin API (ADR-091/ADR-092) | `packages/core/src/server/routes/maintenance.ts`, `packages/core/src/maintenance/*` |
+| External credentials (ADR-105) | `packages/core/src/server/routes/oauth.ts`, `packages/core/src/engine/oauth/*` (client, service, registry, audit), `packages/core/src/storage/external-credential-store.ts`, `packages/core/src/storage/ports/{external-credential-repository,credential-audit-repository}.ts`, `packages/shared/src/types/external-credentials.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

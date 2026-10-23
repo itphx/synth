@@ -1,12 +1,14 @@
 # ADR-105: Внешние доступы — единый слой доступа к внешним сервисам (OAuth-коннекторы)
 
-> **Статус:** ⚠️ Частично — Ф0–Ф3 реализованы (контракты `ExternalCredential`/`ExternalCredentialRepository`,
+> **Статус:** ⚠️ Частично — Ф0–Ф4 реализованы (контракты `ExternalCredential`/`ExternalCredentialRepository`,
 > шифрование at-rest `enc:v1:`, маскирование, file/memory/PostgreSQL-реализации с миграцией `012`, контрактный
 > suite, поле `auth` в схеме MCP-сервера; OAuth-клиент — PKCE/refresh/revoke через `egressFetch`,
 > host-binding секретных заголовков; Ф3 — подстановка access-токена в MCP-транспорт с refresh по `401`,
 > запрет plaintext-заголовков и миграция записей реестра, каталог `oauth.providers`, право привязки доступа
-> к коннектору на границе); остаток — Ф4 (API/UI «Доступы», журнал credential-операций, ротация мастер-ключа,
-> бэкап и перенос).
+> к коннектору на границе; Ф4 — HTTP-контур `createOAuthRoutes` (`/api/v2/oauth/credentials*`) в core и
+> backend, append-only журнал credential-операций (отдельный порт `CredentialAuditRepository`,
+> `SECURITY_AUDIT_SCOPES` не расширяется), ротация мастер-ключа (`synth secrets rotate`: preflight,
+> `--dry-run`, счётчики) и правила бэкапа/переноса); остаток — UI «Доступы».
 > **Дата:** 2026-10-23 · **Связано:** [ADR-071](./adr-071-mcp-servers-prompt.md) «MCP»,
 > [ADR-076](./adr-076-git-repo-registry-ssh.md) «Git-реестр и SSH-ключи» (шифрование at-rest),
 > [ADR-096](./adr-096-storage-layer.md) «Слой хранения», [ADR-099](./adr-099-egress-tls-trust.md) «Egress-слой»,
@@ -62,6 +64,19 @@
   403.
 - **Каталог OAuth-провайдеров** (Ф3): `oauth.providers` в конфиге — описания провайдеров (данные), из них
   строится клиент для refresh; `client_secret` — только env/файл.
+- **HTTP-контур доступа — отдельная фабрика** (Ф4): `createOAuthRoutes` (`server/routes/oauth.ts`) для core и
+  backend; RBAC задаётся guard'ами (`readGuard`/`writeGuard`), право распоряжаться доступом проверяется
+  **на границе** (инвариант 16) по правилу `engine/oauth/credential-binding.ts`; наружу — только
+  `ExternalCredentialMeta` (секрет не отдаётся никогда).
+- **Журнал credential-операций — отдельный порт** (Ф4): `CredentialAuditRepository`
+  (`storage/ports/credential-audit-repository.ts`), append-only, best-effort; `SECURITY_AUDIT_SCOPES` в `shared`
+  **не расширяется** (security-аудит — про политики, журнал доступов — про операции с кредой); в записях нет
+  значений токенов, `code_verifier`/`client_secret` и id пользователей. Журнал **не** публичный API.
+- **Ротация мастер-ключа покрывает слой доступов** (Ф4): `ExternalCredentialStore.rotateMasterKey` — общий
+  preflight всех точек at-rest (запись, не расшифровываемая ни старым, ни новым ключом, → отказ **до**
+  записи), затем перешифровка и перезапись `master.key`; `--dry-run` считает план и ничего не пишет.
+- **Доступы инстанс-локальны** (Ф4): обычный бэкап без `--with-secrets` исключает каталог `secrets/`, поэтому
+  файл доступов в архив не попадает; экспорт проекта доступов и токенов не содержит вовсе (как binding-key).
 
 ## Альтернативы
 
@@ -82,8 +97,8 @@
   явный жизненный цикл (срок, статус, отзыв, переавторизация); агент токен не видит.
 - **Минусы:** ещё один порт хранилища и ещё один секрет в `secrets/`; выдача и ротация требуют отдельного
   API/UI (Ф4) — до этого доступ заводится только кодом.
-- **Остаток (Ф4):** API/UI «Доступы», журнал credential-операций, ротация мастер-ключа, правила бэкапа и
-  переноса.
+- **Остаток (Ф4):** UI «Доступы» — HTTP-контур, журнал credential-операций, ротация мастер-ключа и
+  правила бэкапа/переноса сделаны; пользовательского интерфейса управления доступами пока нет.
 
 ## История
 
@@ -91,3 +106,12 @@
 - 2026-10-23 — Ф3 закрыт: подстановка access-токена в MCP-транспорт (refresh по `401`, ровно один refresh на
   запрос), запрет plaintext-заголовков + миграция записей реестра (400 `MCP_SECRET_HEADER_FORBIDDEN`),
   каталог `oauth.providers`, право привязки доступа к коннектору на границе (инвариант 16); остаток — Ф4.
+- 2026-10-24 — Ф4 закрыт: HTTP-контур `createOAuthRoutes` (`/api/v2/oauth/credentials*`: выдача, список,
+  метаданные, refresh, отзыв, привязка к MCP-коннектору) в core и backend; append-only журнал
+  credential-операций (отдельный порт `CredentialAuditRepository`, файл `{dataDir}/audit/credentials.jsonl`,
+  PG — миграция `014`; журнал **не** публичный API); ротация мастер-ключа (`synth secrets rotate`:
+  preflight → перешифровка → запись `master.key`, `--dry-run`, счётчики) и правила бэкапа/переноса
+  (доступы инстанс-локальны, как binding-key); остаток — UI «Доступы».
+- 2026-10-24 — ротация мастер-ключа покрывает и **signing-секреты подписок исходящих webhooks**
+  (ADR-052 этап II): `WebhookStore.rotateMasterKey` — до этого после ротации вебхуки падали с
+  «Секрет недоступен».

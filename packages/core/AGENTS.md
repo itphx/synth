@@ -152,8 +152,11 @@
   `{dataDir}/secrets/master.key` (`0600`, каталог `0700`, создаётся при первом
   запуске); секреты не отдаются наружу (`reveal()` — только для git). Ротация
   мастера — `synth secrets rotate` (`security/rotate.ts` + `SSHKeyStore.rotateMasterKey`,
-  preflight + dry-run); ключи с passphrase — через askpass (`git/ssh-env.ts`),
-  наружу — `sshkey.env_failed`.
+  preflight + dry-run); перешифровываются **три** точки at-rest: SSH-ключи агентов,
+  внешние доступы (`ExternalCredentialStore.rotateMasterKey`) и signing-секреты подписок
+  исходящих webhooks (`WebhookStore.rotateMasterKey`) — общий preflight всех трёх ДО
+  первой записи, затем запись и перезапись `master.key`; ключи с passphrase — через
+  askpass (`git/ssh-env.ts`), наружу — `sshkey.env_failed`.
 - План — в `project.plan`, todo — в `session.todos`; состояние менять только
   тулами `plan_*`/`todo_*`, не JSON-блоком в ответе модели (ADR-039).
 - Ошибки LLM — через `classifyLlmError`/`isLlmErrorRecoverable`
@@ -319,7 +322,8 @@
   `project-transfer`, `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `dictionaries`, `mcp`, `skills`,
   `commands`, `skill-bundles`, `skill-scope`, `git`, `ssh-keys`, `events`, `identities`,
-  `service-keys`, `webhooks`, `maintenance`, `analytics`.
+  `service-keys`, `webhooks`, `oauth` (ADR-105 Ф4: `/api/v2/oauth/credentials*` — выдача,
+  метаданные, refresh, отзыв, привязка к MCP-коннектору), `maintenance`, `analytics`.
 - `maintenance/*` — ADR-091/ADR-092: обслуживание инстанса. `service.ts` — сервисный слой
   admin-API/UI (список/создание бэкапов, отложенное восстановление
   `scheduleRestore`/`getPendingRestore`/`cancelPendingRestore`, сводный статус; запросы —
@@ -436,7 +440,18 @@
   в конфиге; описание — **данные**, кода провайдера в ядре нет; из описания строится
   клиент для refresh), `credential-binding.ts` (правило права привязки доступа к
   коннектору), `server/credential-bind-guard.ts` (guard привязки на границе —
-  инвариант 16). Ф4 (роуты/UI/аудит/ротация/бэкап) — не реализован.
+  инвариант 16). ADR-105 Ф4: `pending-flows.ts` (незавершённые выдачи PKCE/device —
+  `state`, код верификатора, срок), `bind-connector.ts` (привязка доступа к записи
+  реестра MCP), `audit.ts` (единая точка записи операций в журнал, best-effort);
+  HTTP-контур — `server/routes/oauth.ts` (`createOAuthRoutes`, общий для core и
+  backend; секрет наружу не отдаётся — только `ExternalCredentialMeta`; право
+  распоряжаться доступом — на границе, инвариант 16); журнал операций — порт
+  `CredentialAuditRepository` (`storage/ports/credential-audit-repository.ts`:
+  append-only, `SECURITY_AUDIT_SCOPES` в `shared` **не расширяется**; файл
+  `{dataDir}/audit/credentials.jsonl`, PG — миграция `014`; журнал **не** публичный
+  API — эндпоинта чтения нет); ротация мастер-ключа — `security/rotate.ts`
+  (`ExternalCredentialStore.rotateMasterKey`: preflight → перешифровка → `master.key`,
+  `--dry-run`); остаток Ф4 — только UI «Доступы».
 - `engine/mcp/credential-auth.ts` — ADR-105 Ф3: источник access-токена для
   MCP-транспорта (`McpCredentialSource`: `getAccessToken`/`refreshAccessToken`;
   реализация поверх порта — `reveal()`, наружу токен не отдаётся) и
@@ -1021,6 +1036,11 @@
 - `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (41 — 39 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
   `ExternalCredentialRepository` — внешние доступы к коннекторам (ADR-105 Ф1; файловое/в-памяти
   хранилища — `ExternalCredentialStore`, контракт — `storage/contract/external-credential-repository.contract.ts`);
+  `CredentialAuditRepository` — append-only журнал операций со слоем доступов (ADR-105 Ф4;
+  **отдельный** порт, `SECURITY_AUDIT_SCOPES` в `shared` не расширяется; файловое —
+  `storage/file-credential-audit-store.ts` (`{dataDir}/audit/credentials.jsonl`), в-памяти —
+  `storage/memory/credential-audit.ts`, PG — миграция `014`; контракт —
+  `storage/contract/credential-audit-repository.contract.ts`; журнал **не** публичный API);
   `AuthorityPolicyRepository`/`AuthorityDecisionJournal` — политика полномочий и журнал решений
   Authority-слоя (ADR-106 Ф1);
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
@@ -1084,7 +1104,8 @@
   мастер-ключом (`enc:v1:…`), наружу отдаются только метаданные с маской;
   `revoke` идемпотентен и необратим, `markError` — после `invalid_grant`; порт
   `ExternalCredentialRepository`, контракт —
-  `storage/contract/external-credential-repository.contract.ts`),
+  `storage/contract/external-credential-repository.contract.ts`; Ф4 — `rotateMasterKey`
+  (перешифровка `secretEnc`/`refreshEnc`, preflight → отказ **до** записи, `dryRun`)),
   `ServiceApiKeyStore` (`service-keys.json`, ADR-052 этап I: scoped-ключи инстанса — sha256-хеш
   секрета `synth_svc_…` at-rest, plaintext один раз при `create`, `resolveBySecret` с проверкой
   `revokedAt`/`expiresAt`, `revoke`/`touch`/`update`, `ServiceApiKeyConflictError`; ADR-052/O1 —
@@ -1102,7 +1123,9 @@
   webhooks — signing-секрет `whsec_…` **шифруется at-rest** AES-256-GCM мастер-ключом
   (HMAC требует исходный секрет, в отличие от sha256-хеша API-ключей), plaintext один раз
   при `create`/`regenerateSecret`, обязательная уникальная `label` (глобально) + `url`/`events`/
-  `enabled`/`setEnabled` (мягкое отключение `disabledAt`)/`getSecret`/`touchDelivery`),
+  `enabled`/`setEnabled` (мягкое отключение `disabledAt`)/`getSecret`/`touchDelivery`;
+  `rotateMasterKey` — перешифровка signing-секрета под ротацию мастер-ключа, preflight →
+  отказ **до** записи, `dryRun`),
   `WebhookDeliveryStore` (`webhooks/deliveries.jsonl`, append-only журнал доставок:
   `record`/`list`/`listBySubscription`/`prune`),
   `IdentityClaimStore` (`identity-claim-store.ts`, `events/identity-claims.json`, ADR-089 claim-flow:
