@@ -4,8 +4,9 @@
  * Контракт режима отправки `POST /api/v2/sessions/:id/prompt`:
  * - `queue` — текущее поведение (по умолчанию): сообщение ждёт окончания хода;
  * - `steer` — инъекция в активный ход без прерывания генерации;
- * - `interrupt` — прерывание генерации и продолжение хода (этап 2 PROP-098;
- *   на этом этапе API отвечает 400 `STEERING_INTERRUPT_UNSUPPORTED`).
+ * - `interrupt` — прерывание текущей генерации с продолжением того же хода:
+ *   стрим обрывается (событие `stream.interrupted`), ход НЕ завершается —
+ *   сообщение вплетается на ближайшей безопасной границе шага.
  *
  * Модуль browser-safe (только типы и чистые функции) — используется в UI.
  */
@@ -37,10 +38,21 @@ export const MAX_STEER_INJECTIONS_PER_TURN = 5;
  */
 export const STEER_METADATA_KEY = 'steer';
 
+/**
+ * Признак инъекции в режиме `interrupt` (PROP-098, этап 2):
+ * `metadata.interrupt === true` (вместе с `metadata.steer === true`).
+ * UI рисует такой ввод отдельным маркером — «ход прерван», а не «остановлен».
+ */
+export const STEER_INTERRUPT_METADATA_KEY = 'interrupt';
+
+/**
+ * Признак прерванной генерации в `metadata` assistant-сообщения:
+ * `metadata.interrupted === true` (частичный ответ прерванного стрима).
+ */
+export const STEER_INTERRUPTED_METADATA_KEY = 'interrupted';
+
 /** Машинные коды ошибок steering (контракт ошибок API v2). */
 export const STEERING_ERROR_CODES = {
-  /** `mode: 'interrupt'` — этап 2 PROP-098, пока не поддерживается. */
-  interruptUnsupported: 'STEERING_INTERRUPT_UNSUPPORTED',
   /** Превышен лимит инъекций на ход. */
   limitExceeded: 'STEER_LIMIT_EXCEEDED',
 } as const;

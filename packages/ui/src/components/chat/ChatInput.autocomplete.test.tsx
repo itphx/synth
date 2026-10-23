@@ -192,12 +192,13 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
 })
 
 describe('ChatInput — селектор режима отправки (PROP-098)', () => {
-  it('при активном ходе селектор режима виден (queue|steer)', async () => {
+  it('при активном ходе селектор режима виден (queue|steer|interrupt)', async () => {
     const container = await renderInput({ isStreaming: true })
 
     expect(container.querySelector('[data-testid="send-mode-selector"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="send-mode-queue"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="send-mode-steer"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="send-mode-interrupt"]')).not.toBeNull()
   })
 
   it('выбор «вмешаться» уходит третьим аргументом onSend', async () => {
@@ -215,6 +216,23 @@ describe('ChatInput — селектор режима отправки (PROP-098
     })
 
     expect(mocks.onSend).toHaveBeenCalledWith('остановись на шаге 2', undefined, 'steer')
+  })
+
+  it('выбор «прервать» уходит третьим аргументом onSend (interrupt)', async () => {
+    const container = await renderInput({ isStreaming: true })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      (container.querySelector('[data-testid="send-mode-interrupt"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      setTextareaValue(textarea, 'прерви и сделай иначе')
+    })
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+
+    expect(mocks.onSend).toHaveBeenCalledWith('прерви и сделай иначе', undefined, 'interrupt')
   })
 
   it('без активного хода селектора нет и режим в запрос не уходит', async () => {

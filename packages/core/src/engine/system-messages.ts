@@ -361,8 +361,7 @@ export const SYSTEM_MESSAGES = {
   'steer.injected': 'Message injected into the running turn',
   'steer.limit_exceeded':
     'Steering limit reached: at most {limit} injected messages per turn',
-  'steer.interrupt_unsupported':
-    'Interrupt mode is not supported yet — use "steer" or "queue"',
+  'steer.interrupted': 'Generation interrupted — the turn continues with the new message',
 
   // --- Профиль пользователя и онбординг ---
   'profile.deps_unavailable': 'Error: session manager or profiles store unavailable for {tool}',

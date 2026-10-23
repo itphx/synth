@@ -1038,12 +1038,15 @@ export const dict = {
 
   // --- Steering: вмешательство в активный ход (PROP-098) ---
   'chat.steer.marker': 'Вмешательство в ход',
+  'chat.steer.interruptMarker': 'Прерывание хода',
   'chat.steer.mode.label': 'Режим отправки',
   'chat.steer.mode.queue': 'В очередь',
   'chat.steer.mode.steer': 'Вмешаться',
+  'chat.steer.mode.interrupt': 'Прервать',
   'chat.steer.mode.title': 'Как отправить сообщение во время работы агента',
   'chat.steer.mode.queueHint': 'Сообщение будет обработано после окончания текущего хода',
   'chat.steer.mode.steerHint': 'Сообщение будет вброшено в текущий ход на ближайшей границе шага',
+  'chat.steer.mode.interruptHint': 'Текущая генерация будет прервана, ход продолжится с вашим сообщением',
 
   'chat.actions.copy': 'Копировать',
   'chat.actions.toggleOff': 'Выключить',
@@ -1085,6 +1088,7 @@ export const dict = {
   'chat.messageStats.stopped': 'Остановлено',
   'chat.messageStats.error': 'Ошибка',
   'chat.messageStats.limit': 'Лимит итераций',
+  'chat.messageStats.interrupted': 'Прервано',
   'chat.messageStats.cache': '{pct} кэш',
   'chat.messageStats.in': 'вх',
   'chat.messageStats.out': 'исх',
@@ -2612,8 +2616,8 @@ export const dict = {
   'steer.injected': 'Сообщение вброшено в текущий ход',
   'steer.limit_exceeded':
     'Достигнут лимит вмешательств: не более {limit} сообщений на ход',
-  'steer.interrupt_unsupported':
-    'Режим «прервать» пока не поддерживается — используйте «вмешаться» или «в очередь»',
+  'steer.interrupted':
+    'Генерация прервана — ход продолжается с новым сообщением',
 
   // --- Профиль пользователя и онбординг ---
   'profile.deps_unavailable': 'Ошибка: менеджер сессий или хранилище профилей недоступны для {tool}',

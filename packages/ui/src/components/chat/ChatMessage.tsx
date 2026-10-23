@@ -116,8 +116,13 @@ function ChatMessageInner({
   // metadata.scheduler === true — рисуем их служебным Notice, а не user-пузырём.
   const isScheduler = isUser && message.metadata?.scheduler === true
   // PROP-098: инъекция во время активного хода (metadata.steer === true) —
-  // помечаем маркером «вмешательство в ход».
+  // помечаем маркером «вмешательство в ход»; режим `interrupt`
+  // (metadata.interrupt === true) — маркером «прерывание хода».
   const isSteered = isUser && message.metadata?.steer === true
+  const isInterruptSteer = isUser && message.metadata?.interrupt === true
+  // PROP-098 (этап 2): прерванная генерация (metadata.status === 'interrupted') —
+  // ответ частичный, ход продолжился с новым сообщением.
+  const isInterrupted = isAssistant && message.metadata?.status === 'interrupted'
   const canRetry = isUser
   const hasDebug = !!message.debug_data && Object.keys(message.debug_data).length > 0
 
@@ -505,10 +510,20 @@ function ChatMessageInner({
         {isSteered && (
           <span
             className="mb-1 inline-flex items-center gap-1 self-end rounded-sm bg-primary/10 px-1.5 py-0.5 text-[11px] leading-4 text-primary"
-            title={t('chat.steer.marker')}
+            title={isInterruptSteer ? t('chat.steer.interruptMarker') : t('chat.steer.marker')}
           >
-            <Icon name="send-plane" className="size-3" />
-            {t('chat.steer.marker')}
+            <Icon name={isInterruptSteer ? 'stop' : 'send-plane'} className="size-3" />
+            {isInterruptSteer ? t('chat.steer.interruptMarker') : t('chat.steer.marker')}
+          </span>
+        )}
+
+        {isInterrupted && (
+          <span
+            className="mb-1 inline-flex items-center gap-1 self-start rounded-sm bg-status-warning/15 px-1.5 py-0.5 text-[11px] leading-4 text-status-warning"
+            title={t('chat.steer.interruptMarker')}
+          >
+            <Icon name="stop" className="size-3" />
+            {t('chat.messageStats.interrupted')}
           </span>
         )}
 

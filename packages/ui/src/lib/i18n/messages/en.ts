@@ -1058,12 +1058,15 @@ export const dict = {
 
   // --- Steering: intervention in the running turn (PROP-098) ---
   'chat.steer.marker': 'Intervened in turn',
+  'chat.steer.interruptMarker': 'Turn interrupted',
   'chat.steer.mode.label': 'Send mode',
   'chat.steer.mode.queue': 'Queue',
   'chat.steer.mode.steer': 'Intervene',
+  'chat.steer.mode.interrupt': 'Interrupt',
   'chat.steer.mode.title': 'How to send a message while the agent is working',
   'chat.steer.mode.queueHint': 'The message will be processed after the current turn ends',
   'chat.steer.mode.steerHint': 'The message will be injected into the current turn at the next step boundary',
+  'chat.steer.mode.interruptHint': 'The current generation will be interrupted; the turn continues with your message',
 
   'chat.actions.copy': 'Copy',
   'chat.actions.toggleOff': 'Disable',
@@ -1105,6 +1108,7 @@ export const dict = {
   'chat.messageStats.stopped': 'Stopped',
   'chat.messageStats.error': 'Error',
   'chat.messageStats.limit': 'Iteration limit',
+  'chat.messageStats.interrupted': 'Interrupted',
   'chat.messageStats.cache': '{pct} cache',
   'chat.messageStats.in': 'in',
   'chat.messageStats.out': 'out',

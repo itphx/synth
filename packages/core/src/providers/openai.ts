@@ -124,6 +124,14 @@ export class OpenAIProvider extends BaseProvider {
         originalCancel();
         controller.abort();
       };
+      // PROP-098 (этап 2): прерывание генерации без отмены хода — тот же обрыв
+      // сетевого запроса, что и у «Стоп», но токен НЕ помечается отменённым:
+      // ход продолжается (оркестратор применяет инъекцию на границе шага).
+      const originalInterrupt = cancellationToken.interrupt?.bind(cancellationToken);
+      cancellationToken.interrupt = () => {
+        originalInterrupt?.();
+        controller.abort();
+      };
     }
 
     try {
@@ -156,7 +164,7 @@ export class OpenAIProvider extends BaseProvider {
 
       try {
         while (true) {
-          if (cancellationToken?.cancelled) {
+          if (cancellationToken?.cancelled || cancellationToken?.interrupted) {
             reader.cancel();
             break;
           }
@@ -264,8 +272,9 @@ export class OpenAIProvider extends BaseProvider {
         // Ошибки чтения стрима (таймаут/обрыв сети/AbortError) пробрасываем
         // наружу — иначе генератор «успешно» завершится с пустым ответом и
         // оркестратор не узнает о сбое провайдера. При пользовательской
-        // отмене (cancellationToken) молча выходим.
-        if (!cancellationToken?.cancelled) {
+        // отмене (cancellationToken) и при прерывании генерации (PROP-098)
+        // молча выходим.
+        if (!cancellationToken?.cancelled && !cancellationToken?.interrupted) {
           info('OPENAI', `Стрим прерван: ${e}`);
           throw e;
         }
@@ -273,7 +282,7 @@ export class OpenAIProvider extends BaseProvider {
         reader.releaseLock();
       }
 
-      if (!cancellationToken?.cancelled) {
+      if (!cancellationToken?.cancelled && !cancellationToken?.interrupted) {
         debugCollector?.captureApiResponse({
           usage: accumulatedUsage,
           model: this.model,

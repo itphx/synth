@@ -720,7 +720,6 @@ export function createSessionRoutes(
         contentRequired: (c) => t('errors.validation.contentRequired', undefined, c),
         queueFull: (c, max) => t('errors.chat.queueFull', { max }, c),
         steerLimitExceeded: (c, max) => t('errors.chat.steerLimitExceeded', { max }, c),
-        steerInterruptUnsupported: (c) => t('errors.chat.steerInterruptUnsupported', undefined, c),
       },
     },
   ));

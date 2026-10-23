@@ -83,7 +83,7 @@ interface TransportState {
   connect: (mode: TransportMode, override?: 'ws' | 'sse') => void
   disconnect: () => void
   setTransportMode: (mode: TransportMode) => void
-  /** `mode` — PROP-098: режим отправки (`queue` по умолчанию, `steer` — вмешательство). */
+  /** `mode` — PROP-098: режим отправки (`queue` по умолчанию, `steer` — вмешательство, `interrupt` — прерывание). */
   sendMessage: (sessionId: string, text: string, agentRole?: string, provider?: string, model?: string, mode?: SteerMode) => Promise<void>
   cancel: (sessionId: string) => void
   sendPermissionReply: (sessionId: string, approvalId: string, approved: boolean, once?: boolean) => void
@@ -118,6 +118,7 @@ export function createDispatcher(): EventDispatcher {
       startStream,
       updateStreamChunk,
       updateStreamUsage,
+      resetStreamAccumulator,
       clearUsageStream,
       updateLiveSubagentUsage,
       finishStream,
@@ -367,6 +368,20 @@ export function createDispatcher(): EventDispatcher {
           },
         )
         setStreamRetry(sid, null)
+        break
+      }
+
+      // PROP-098 (этап 2): прерывание текущей генерации (`interrupt`). Ход НЕ
+      // завершается и НЕ отменяется («Стоп» — отдельный механизм, ADR-005):
+      // следующая итерация Tool Use продолжает ту же генерацию с тем же
+      // `stream_id`. Поэтому стрим НЕ закрываем (никаких finishStream/
+      // cancelStream) — сбрасываем только аккумулятор: накопленный текст
+      // прерванной генерации уже сохранён отдельным сообщением со статусом
+      // `interrupted` (приходит отдельным `message.added`).
+      case 'stream_interrupted':
+      case 'stream.interrupted': {
+        const streamId = payload.stream_id as string
+        if (streamId) resetStreamAccumulator(sid, streamId)
         break
       }
 

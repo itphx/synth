@@ -22,7 +22,8 @@ interface ChatInputProps {
   isStreaming: boolean
   /**
    * PROP-098: отправка сообщения. Третий аргумент — режим отправки
-   * (`queue` по умолчанию, `steer` — вмешательство в активный ход).
+   * (`queue` по умолчанию, `steer` — вмешательство в активный ход,
+   * `interrupt` — прерывание текущей генерации с продолжением хода).
    */
   onSend: (text: string, agentRole?: string, mode?: SteerMode) => Promise<void>
   /**
@@ -46,6 +47,17 @@ export interface TagPart {
 const TAG_REGEX = /@(\w+)/g
 const MAX_TAGS = 3
 const CHAT_INPUT_RADIUS = 'var(--radius-xl)'
+
+/**
+ * PROP-098: заголовок кнопки отправки во время активного хода — по выбранному
+ * режиму (`queue`/`steer`/`interrupt`). Без активного хода режим не действует,
+ * поэтому подпись обычная («в очередь»).
+ */
+function sendActionTitle(mode: SteerMode | undefined, t: (key: string) => string): string {
+  if (mode === 'steer') return t('chat.steer.mode.steer')
+  if (mode === 'interrupt') return t('chat.steer.mode.interrupt')
+  return t('chat.input.enqueue')
+}
 
 /**
  * Собирает текст части сообщения для конкретного агента, СОХРАНЯЯ сам тег
@@ -199,9 +211,9 @@ export function ChatInput({
 
   /**
    * Режим отправки, который уходит в запрос. Во время активного хода — выбранный
-   * в селекторе (`queue`/`steer`); без хода — режим вызывающего кода (в UI это
-   * `queue`, поле `mode` в теле запроса не появляется — его отбрасывает
-   * `lib/api/sessions.ts`).
+   * в селекторе (`queue`/`steer`/`interrupt`); без хода — режим вызывающего кода
+   * (в UI это `queue`, поле `mode` в теле запроса не появляется — его
+   * отбрасывает `lib/api/sessions.ts`).
    */
   const effectiveMode: SteerMode | undefined = isStreaming ? selectedMode : sendMode
 
@@ -503,7 +515,7 @@ export function ChatInput({
                   onClick={handleEnqueue}
                   disabled={!value.trim()}
                   className="inline-flex items-center justify-center rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                  title={effectiveMode === 'steer' ? t('chat.steer.mode.steer') : t('chat.input.enqueue')}
+                  title={sendActionTitle(effectiveMode, t)}
                 >
                   <Icon name="arrow-up" className="size-5" />
                 </button>
