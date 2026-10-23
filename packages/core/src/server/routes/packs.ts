@@ -4,6 +4,7 @@ import type { createMiddleware } from 'hono/factory';
 import {
   packManifestSchema,
   pipelineDefinitionSchema,
+  summarizePackAuthority,
   validatePackManifest,
   parseFrontmatter,
   nowISO,
@@ -12,6 +13,7 @@ import type {
   AgentDefinition,
   McpServerConfig,
   PackAgentProvide,
+  PackAuthoritySummary,
   PackManifest,
   PackMcpProvide,
   PackPipelineProvide,
@@ -193,6 +195,11 @@ export interface PackInstallResult {
   version: string;
   /** Что пакет поставил (id'ы). */
   provides: PackInstallationProvides;
+  /**
+   * Сводка контента полномочий пакета (ADR-106 Ф5): роли/действия/цели/агенты,
+   * которые пакет приносит. Поля нет, если пакет полномочий не приносит.
+   */
+  authority?: PackAuthoritySummary;
   /** Нефатальные замечания (пропущенные вклады и т.п.). */
   problems?: string[];
 }
@@ -735,7 +742,11 @@ export function createPacksRoutes(
    * Да, если пакет:
    * - выдаёт агенту непустые `capabilities` (группы инструментов);
    * - объявляет пайплайны (порождаемые правила маршрутизации — ADR-089);
-   * - объявляет расписания (пакет может принести `provides.schedules`).
+   * - объявляет расписания (пакет может принести `provides.schedules`);
+   * - приносит **контент полномочий** (`provides.authority`: роли/действия/
+   *   цели/агенты) — ADR-106 Ф5: пакет с ролями идёт на одобрение ADMIN, и
+   *   администратор видит **сводку** ролей/действий/целей, а не только факт
+   *   «есть capabilities».
    */
   function needsApproval(prepared: PreparedPack): boolean {
     const manifest = prepared.manifest;
@@ -745,7 +756,8 @@ export function createPacksRoutes(
     const declaresPipelines = manifest.provides.pipelines.length > 0;
     const schedules = manifest.provides.schedules;
     const declaresSchedules = Array.isArray(schedules) && schedules.length > 0;
-    return grantsCapabilities || declaresPipelines || declaresSchedules;
+    const declaresAuthority = authoritySummaryOf(manifest.provides) !== undefined;
+    return grantsCapabilities || declaresPipelines || declaresSchedules || declaresAuthority;
   }
 
   /**
@@ -796,19 +808,24 @@ export function createPacksRoutes(
   app.get('/', readGuard, async (c) => {
     const packs = await deps.packs.list();
     return c.json({
-      packs: packs.map((pack) => ({
-        name: pack.name,
-        version: pack.version,
-        kind: pack.kind,
-        ...(pack.packType ? { packType: pack.packType } : {}),
-        ...(pack.description ? { description: pack.description } : {}),
-        status: pack.status,
-        requiresApproval: pack.requiresApproval,
-        provides: pack.provides,
-        installedAt: pack.installedAt,
-        updatedAt: pack.updatedAt,
-        ...(pack.installedBy ? { installedBy: pack.installedBy } : {}),
-      })),
+      packs: packs.map((pack) => {
+        // ADR-106 Ф5: сводка контента полномочий пакета (роли/действия/цели).
+        const authority = authoritySummaryOf(rawProvides(pack.manifest));
+        return {
+          name: pack.name,
+          version: pack.version,
+          kind: pack.kind,
+          ...(pack.packType ? { packType: pack.packType } : {}),
+          ...(pack.description ? { description: pack.description } : {}),
+          status: pack.status,
+          requiresApproval: pack.requiresApproval,
+          provides: pack.provides,
+          ...(authority ? { authority } : {}),
+          installedAt: pack.installedAt,
+          updatedAt: pack.updatedAt,
+          ...(pack.installedBy ? { installedBy: pack.installedBy } : {}),
+        };
+      }),
     });
   });
 
@@ -818,7 +835,9 @@ export function createPacksRoutes(
     if (!pack) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.packNotFound(c) } }, 404);
     }
-    return c.json(pack);
+    // ADR-106 Ф5: в деталях видно, какие роли/действия/цели приносит пакет.
+    const authority = authoritySummaryOf(rawProvides(pack.manifest));
+    return c.json(authority ? { ...pack, authority } : pack);
   });
 
   // POST /api/v2/packs — установка пакета расширения.
@@ -888,6 +907,7 @@ export function createPacksRoutes(
       };
       await deps.packs.save(record);
       info('PACKS', `Пакет ${manifest.name}@${manifest.version} ожидает подтверждения`);
+      const authority = authoritySummaryOf(manifest.provides);
       return c.json(
         {
           installed: false,
@@ -895,6 +915,7 @@ export function createPacksRoutes(
           name: manifest.name,
           version: manifest.version,
           provides: planned,
+          ...(authority ? { authority } : {}),
         } satisfies PackInstallResult,
         202,
       );
@@ -923,6 +944,7 @@ export function createPacksRoutes(
         `mcp=${outcome.provides.mcp.length}, агенты=${outcome.provides.agents.length}, ` +
         `пайплайны=${outcome.provides.pipelines.length}`,
     );
+    const authority = authoritySummaryOf(manifest.provides);
     return c.json(
       {
         installed: true,
@@ -930,6 +952,7 @@ export function createPacksRoutes(
         name: manifest.name,
         version: manifest.version,
         provides: outcome.provides,
+        ...(authority ? { authority } : {}),
         ...(outcome.problems.length > 0 ? { problems: outcome.problems } : {}),
       } satisfies PackInstallResult,
       201,
@@ -965,6 +988,7 @@ export function createPacksRoutes(
       updatedAt: now,
     });
     info('PACKS', `Пакет ${name} одобрен и установлен`);
+    const authority = authoritySummaryOf(rawProvides(record.manifest));
     return c.json(
       {
         installed: true,
@@ -972,6 +996,7 @@ export function createPacksRoutes(
         name: record.name,
         version: record.version,
         provides: outcome.provides,
+        ...(authority ? { authority } : {}),
         ...(outcome.problems.length > 0 ? { problems: outcome.problems } : {}),
       } satisfies PackInstallResult,
     );
@@ -1034,6 +1059,22 @@ export function createPacksRoutes(
   });
 
   return app;
+}
+
+/**
+ * Сводка контента полномочий пакета (`provides.authority`, ADR-106 Ф5).
+ *
+ * `undefined` — пакет полномочий **не** приносит (в ответе поля нет, чтобы не
+ * шуметь в списке установок). Иначе — данные (роли/действия/цели/агенты и
+ * итоги), из которых видно, **что именно** пакет добавит в политику инстанса.
+ */
+function authoritySummaryOf(provides: unknown): PackAuthoritySummary | undefined {
+  const summary = summarizePackAuthority(provides);
+  const totals = summary.totals;
+  if (totals.roles === 0 && totals.actions === 0 && totals.targets === 0 && totals.agents === 0) {
+    return undefined;
+  }
+  return summary;
 }
 
 /**

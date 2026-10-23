@@ -104,6 +104,33 @@ export const authorityActionIdSchema = z
   .max(64)
   .regex(AUTHORITY_ACTION_ID_REGEX, 'действие: строчные латинские буквы/цифры (a-z0-9._-)');
 
+/**
+ * Действия, **не** меняющие состояние (ADR-106 Ф5, trust-floor).
+ *
+ * Мутирующим считается **всё, кроме `read`** (fail-closed): доменные действия
+ * по умолчанию мутирующие. Признак `mutating` в манифесте пакета —
+ * **информационный**: ему не доверяют, иначе пакет объявил бы своё мутирующее
+ * действие «безобидным» и обошёл бы trust-floor (мутирующие гранты
+ * активируются только при trust ≥ `trusted`).
+ */
+export const AUTHORITY_READ_ONLY_ACTIONS = ['read'] as const;
+
+/** Ядровые мутирующие действия (перечислены для документации и UI). */
+export const AUTHORITY_MUTATING_ACTIONS = [
+  'write',
+  'execute',
+  'commit',
+  'publish',
+  'approve',
+  'sign',
+  'delegate',
+] as const;
+
+/** true — действие мутирующее (меняет состояние). */
+export function isAuthorityMutatingAction(id: string): boolean {
+  return !(AUTHORITY_READ_ONLY_ACTIONS as readonly string[]).includes(id);
+}
+
 // --- Цели и шаблоны целей ---
 
 /**

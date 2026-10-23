@@ -396,4 +396,137 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
     const conflict = await app.request('/api/v2/packs/synth-media/approve', { method: 'POST' });
     expect(conflict.status).toBe(409);
   });
+
+  // ADR-106 Ф5: `pending_approval` по существу — пакет с контентом полномочий
+  // (`provides.authority`) идёт на одобрение ADMIN, и в ответе/деталях видна
+  // **сводка** ролей/действий/целей (а не только факт «есть capabilities»).
+  describe('ADR-106 Ф5: одобрение по существу (контент полномочий)', () => {
+    /** Манифест с контентом полномочий (роль, действие, вид цели, агент). */
+    const AUTHORITY_MANIFEST = {
+      name: 'clinic-pack',
+      version: '0.1.0',
+      kind: 'pack',
+      packType: 'policies',
+      description: 'Пакет с ролями',
+      provides: {
+        skills: [],
+        mcp: [],
+        agents: [],
+        pipelines: [],
+        authority: {
+          actions: [
+            { id: 'read', mutating: false, requires: [] },
+            { id: 'sign', mutating: true, requires: [] },
+          ],
+          targets: [{ kind: 'record', resolver: 'record-resolver' }],
+          roles: [
+            {
+              id: 'clinician',
+              displayName: 'Врач',
+              domain: 'clinic',
+              grants: [
+                { action: 'sign', targetPattern: 'record:*', effect: 'allow' },
+                { action: 'read', targetPattern: 'record:*', effect: 'allow' },
+              ],
+            },
+          ],
+          agents: [{ id: 'doctor', roles: ['clinician'], ceiling: ['sign'] }],
+        },
+      },
+    };
+
+    it('пакет с ролями → pending_approval; в ответе — сводка ролей/действий/целей', async () => {
+      const app = createTestApp();
+
+      const res = await app.request('/api/v2/packs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(installBody(AUTHORITY_MANIFEST)),
+      });
+
+      // Контент полномочий → пакет ждёт одобрения ADMIN (даже без capabilities).
+      expect(res.status).toBe(202);
+      const body: any = await res.json();
+      expect(body.installed).toBe(false);
+      expect(body.requiresApproval).toBe(true);
+
+      // Сводка — «что именно» приносит пакет.
+      expect(body.authority.roles).toHaveLength(1);
+      expect(body.authority.roles[0].id).toBe('clinician');
+      expect(body.authority.roles[0].domain).toBe('clinic');
+      expect(body.authority.roles[0].grants).toBe(2);
+      expect(body.authority.roles[0].mutatingGrants).toBe(1);
+      expect(body.authority.actions).toEqual([
+        { id: 'read', mutating: false },
+        { id: 'sign', mutating: true },
+      ]);
+      expect(body.authority.targets).toEqual([{ kind: 'record', resolver: 'record-resolver' }]);
+      expect(body.authority.agents).toEqual([
+        { id: 'doctor', roles: ['clinician'], ceiling: ['sign'] },
+      ]);
+      expect(body.authority.totals).toMatchObject({
+        roles: 1,
+        actions: 2,
+        targets: 1,
+        agents: 1,
+        grants: 2,
+        mutatingGrants: 1,
+      });
+
+      // В реестре — `pending_approval`, фактически ничего не установлено.
+      const record = await packStore.get('clinic-pack');
+      expect(record?.status).toBe('pending_approval');
+      expect(record?.requiresApproval).toBe(true);
+
+      // Сводка видна и в списке, и в деталях пакета.
+      const list = await app.request('/api/v2/packs');
+      const listBody: any = await list.json();
+      expect(listBody.packs[0].authority.roles[0].id).toBe('clinician');
+
+      const one = await app.request('/api/v2/packs/clinic-pack');
+      const oneBody: any = await one.json();
+      expect(oneBody.authority.totals.roles).toBe(1);
+    });
+
+    it('пакет без контента полномочий — прежнее поведение (сводки в ответе нет)', async () => {
+      const app = createTestApp();
+      const manifest = {
+        ...MANIFEST,
+        provides: { ...MANIFEST.provides, pipelines: [] },
+      };
+
+      const res = await app.request('/api/v2/packs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(installBody(manifest)),
+      });
+
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      expect(body.installed).toBe(true);
+      expect(body.authority).toBeUndefined();
+    });
+
+    it('пустой контент полномочий (`roles: []`) — одобрение не требуется', async () => {
+      const app = createTestApp();
+      const manifest = {
+        ...MANIFEST,
+        provides: {
+          ...MANIFEST.provides,
+          pipelines: [],
+          authority: { roles: [], actions: [], targets: [], agents: [] },
+        },
+      };
+
+      const res = await app.request('/api/v2/packs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(installBody(manifest)),
+      });
+
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      expect(body.authority).toBeUndefined();
+    });
+  });
 });
