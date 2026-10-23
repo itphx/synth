@@ -241,6 +241,11 @@ export const SYSTEM_MESSAGES = {
   'permission.ask_timeout': 'approval timed out',
   'permission.ask_no_subscribers': 'no connected user to approve',
   'permission.ask_denied': 'denied by the user',
+  'permission.authority_denied_unknown':
+    'Action "{action}" is not covered by the authority layer (unknown action or target) — denied',
+  'permission.authority_denied_explicit': 'Action "{action}" is forbidden by the authority policy — denied',
+  'permission.authority_denied_no_grant': 'No grant for action "{action}" — denied',
+  'permission.authority_ask': 'Action "{action}" requires confirmation by a grant holder',
 
   // --- Shell-политика (shell-guard) ---
   'shellguard.allow_default': 'command does not violate the shell policy',

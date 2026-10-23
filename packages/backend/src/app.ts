@@ -354,6 +354,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       processMessage: deps.processMessage,
       orchestrator: deps.orchestrator,
       defaultPort: backendConfig.port,
+      // PROP-108 Ф3: реестр подтверждений — ответ на `permission_reply`
+      // принимает только носитель покрывающего гранта (не «кто видит сессию»).
+      approvalRegistry: deps.approvalRegistry,
       // ADR-094: активные WS-соединения — в streams_active (если метрики включены).
       metrics: metricsEnabled ? metrics : undefined,
     });

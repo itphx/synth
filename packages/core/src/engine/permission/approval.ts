@@ -1,8 +1,13 @@
 import { createHash } from 'node:crypto';
 
-import { authorityPrincipalSchema, type AuthorityPrincipal } from '@itphx/synth-shared';
+import {
+  authorityPrincipalSchema,
+  type AuthorityPrincipal,
+  type AuthorityTarget,
+} from '@itphx/synth-shared';
 
 import type { EventBus } from '../../events/bus.js';
+import { computeAuthorityApprovalDigest } from '../authority/resolve.js';
 
 export interface ApprovalRequest {
   approvalId: string;
@@ -24,6 +29,17 @@ export interface ApprovalRequest {
    * конкретным `(ход, действие, цель)`.
    */
   digest?: string;
+  /**
+   * PROP-108 Ф3: действие Authority-слоя (`read`/`write`/…). Задано вместе с
+   * `target` — тогда запрос **привязан** к паре «действие × цель» и ответ
+   * принимается только у носителя покрывающего гранта.
+   */
+  action?: string;
+  /**
+   * PROP-108 Ф3: цель Authority-слоя (типизированный ресурс). Вместе с
+   * `action` образует привязку подтверждения.
+   */
+  target?: AuthorityTarget;
 }
 
 export interface ApprovalDecision {
@@ -96,9 +112,17 @@ export function parsePermissionPrincipal(value: unknown): AuthorityPrincipal | u
  * PROP-108 Ф0: событие `permission.asked` **аддитивно** получает `principal`,
  * `turn_id` и `digest` (принципал/ход/отпечаток запроса). Поля опциональны —
  * старые потребители (UI, backend) продолжают читать прежний набор.
+ *
+ * PROP-108 Ф3: если задан `registry` (реестр подтверждений) и запрос привязан к
+ * паре «действие × цель», запрос **регистрируется** в реестре: ответ принимает
+ * только носитель покрывающего гранта, повторный ответ — отказ. Реестр не
+ * задан — поведение прежнее (слой Authority выключен или работает в shadow).
  */
 export class PermissionApprovalManager {
-  constructor(private readonly _eventBus: EventBus) {}
+  constructor(
+    private readonly _eventBus: EventBus,
+    private readonly _options: { registry?: ApprovalRegistry } = {},
+  ) {}
 
   async waitForDecision(
     sessionId: string,
@@ -121,6 +145,7 @@ export class PermissionApprovalManager {
             done = true;
             clearTimeout(timer);
             unsub();
+            this._options.registry?.close(request.approvalId);
             resolve({ approved: false, timeout: true });
           }, timeoutMs)
         : undefined;
@@ -130,6 +155,7 @@ export class PermissionApprovalManager {
         done = true;
         if (timer) clearTimeout(timer);
         unsub();
+        this._options.registry?.close(request.approvalId);
         resolve(decision);
       };
 
@@ -161,16 +187,38 @@ export class PermissionApprovalManager {
         finish(decision);
       });
 
-      // PROP-108 Ф0: отпечаток запроса — из запроса, иначе считаем по
-      // (сессия, ход, тул, аргументы).
-      const digest =
-        request.digest ??
-        computePermissionDigest({
-          sessionId,
-          turnId: request.turnId,
-          toolName: request.toolName,
-          args: request.arguments,
+      // PROP-108 Ф0/Ф3: отпечаток запроса — из запроса; для привязанного
+      // (Authority) запроса — отпечаток привязки «ход + действие + цель».
+      // Сужаем типы проверкой (без `!`): привязка задана только когда заданы
+      // все три поля.
+      const { action: boundAction, target: boundTarget, turnId: boundTurnId } = request;
+      const bound =
+        boundAction !== undefined && boundTarget !== undefined && boundTurnId !== undefined;
+      const digest = bound
+        ? computeAuthorityApprovalDigest({
+            turnId: boundTurnId,
+            action: boundAction,
+            target: boundTarget,
+          })
+        : (request.digest ??
+          computePermissionDigest({
+            sessionId,
+            turnId: request.turnId,
+            toolName: request.toolName,
+            args: request.arguments,
+          }));
+
+      // PROP-108 Ф3: регистрируем привязку — ответ принимает только носитель
+      // покрывающего гранта, повторный ответ — отказ.
+      if (boundAction !== undefined && boundTarget !== undefined && boundTurnId !== undefined) {
+        this._options.registry?.open(request.approvalId, {
+          principal: request.principal ?? { kind: 'user', id: 'local', roles: [] },
+          turnId: boundTurnId,
+          action: boundAction,
+          target: boundTarget,
+          digest,
         });
+      }
 
       this._eventBus.publish(sessionId, 'permission.asked', {
         approval_id: request.approvalId,
@@ -186,5 +234,144 @@ export class PermissionApprovalManager {
         digest,
       });
     });
+  }
+}
+
+// --- PROP-108 Ф3: реестр подтверждений ---
+
+/**
+ * Привязка подтверждения (PROP-108 Ф3): `(принципал, ход, действие, цель,
+ * отпечаток)`. Подтверждение выдаётся на конкретное действие конкретного хода
+ * и **одноразово**.
+ */
+export interface ApprovalBinding {
+  /** Принципал хода, которому адресован запрос. */
+  principal: AuthorityPrincipal;
+  /** Ход (`turn_id`), которому принадлежит запрос. */
+  turnId: string;
+  /** Действие Authority-слоя. */
+  action: string;
+  /** Цель Authority-слоя. */
+  target: AuthorityTarget;
+  /** Отпечаток привязки (ход + действие + цель). */
+  digest: string;
+}
+
+/** Причины отказа в подтверждении (PROP-108 Ф3). */
+export type ApprovalClaimReason =
+  | 'ok'
+  | 'unknown_approval'
+  | 'already_consumed'
+  | 'turn_mismatch'
+  | 'digest_mismatch'
+  | 'no_grant';
+
+/** Итог попытки подтвердить запрос. */
+export interface ApprovalClaimResult {
+  /** true — ответ принят (подтверждение списано). */
+  ok: boolean;
+  /** Причина (при `ok: false` — почему отказано). */
+  reason: ApprovalClaimReason;
+  /** Привязка подтверждения (если запрос известен). */
+  binding?: ApprovalBinding;
+}
+
+/**
+ * Проверка права подтверждать: носитель **покрывающего гранта**
+ * (PROP-108 §«Резолвинг и решение», п. 2 `approve`).
+ *
+ * Резолвер не доверяет клиенту: он получает **аутентифицированного** принципала
+ * и проверяет его гранты (роли инстанса, роль в проекте, гранты политики).
+ */
+export type ApprovalCoverageResolver = (
+  sessionId: string,
+  responder: AuthorityPrincipal,
+  binding: ApprovalBinding,
+) => boolean | Promise<boolean>;
+
+/** Опции реестра подтверждений. */
+export interface ApprovalRegistryOptions {
+  /**
+   * Резолвер покрытия (носитель покрывающего гранта). Не задан — **fail-closed**:
+   * ни одно подтверждение не принимается (защищённый режим).
+   */
+  coverage?: ApprovalCoverageResolver;
+}
+
+/**
+ * Реестр подтверждений (PROP-108 Ф3) — **единственное** место, где решается,
+ * можно ли принять ответ на запрос подтверждения.
+ *
+ * Инварианты:
+ * 1. **одноразовость**: принятое подтверждение списывается; повторный ответ —
+ *    отказ (`already_consumed`);
+ * 2. **привязка к ходу**: ответ с чужим `turn_id`/`digest` — отказ;
+ * 3. **носитель покрывающего гранта**: ответ без гранта — отказ (`no_grant`).
+ *
+ * Реестр живёт на инстанс (в процессе), состояние — в памяти (ADR-099 п. 24).
+ */
+export class ApprovalRegistry {
+  private readonly _pending = new Map<string, ApprovalBinding>();
+  private readonly _consumed = new Set<string>();
+
+  constructor(private readonly _options: ApprovalRegistryOptions = {}) {}
+
+  /** Зарегистрировать привязку запроса подтверждения. */
+  open(approvalId: string, binding: ApprovalBinding): void {
+    this._pending.set(approvalId, binding);
+    this._consumed.delete(approvalId);
+  }
+
+  /** Снять привязку (ответ получен или истёк таймаут). */
+  close(approvalId: string): void {
+    this._pending.delete(approvalId);
+  }
+
+  /** Привязка запроса (без списания). */
+  get(approvalId: string): ApprovalBinding | undefined {
+    return this._pending.get(approvalId);
+  }
+
+  /**
+   * Попытка принять ответ на запрос подтверждения.
+   *
+   * `opts.turnId`/`opts.digest` — то, что прислал клиент (необязательно): при
+   * расхождении с привязкой — отказ. Клиенту доверять нельзя, поэтому
+   * привязка всегда берётся из реестра.
+   */
+  async claim(
+    approvalId: string,
+    sessionId: string,
+    responder: AuthorityPrincipal,
+    opts: { turnId?: string; digest?: string } = {},
+  ): Promise<ApprovalClaimResult> {
+    const binding = this._pending.get(approvalId);
+    if (!binding) {
+      return {
+        ok: false,
+        reason: this._consumed.has(approvalId) ? 'already_consumed' : 'unknown_approval',
+      };
+    }
+    if (this._consumed.has(approvalId)) {
+      return { ok: false, reason: 'already_consumed', binding };
+    }
+    if (opts.turnId !== undefined && opts.turnId !== binding.turnId) {
+      return { ok: false, reason: 'turn_mismatch', binding };
+    }
+    if (opts.digest !== undefined && opts.digest !== binding.digest) {
+      return { ok: false, reason: 'digest_mismatch', binding };
+    }
+
+    // Носитель покрывающего гранта. Резолвер не задан — fail-closed.
+    const covered = this._options.coverage
+      ? await this._options.coverage(sessionId, responder, binding)
+      : false;
+    if (!covered) {
+      return { ok: false, reason: 'no_grant', binding };
+    }
+
+    this._consumed.add(approvalId);
+    this._pending.delete(approvalId);
+    return { ok: true, reason: 'ok', binding };
   }
 }

@@ -6,8 +6,9 @@ import { Readable } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { Hono } from 'hono';
 import { enqueueUserMessage, enqueueSteerMessage, isSessionVisible, parsePermissionPrincipal } from '@itphx/synth-core';
-import type { EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository, MetricsRegistry } from '@itphx/synth-core';
+import type { EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository, MetricsRegistry, ApprovalRegistry } from '@itphx/synth-core';
 import { nowISO, MessageRole, generateStreamId, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
+import type { AuthorityPrincipal } from '@itphx/synth-shared';
 import type { AuthKit } from '../auth/middleware.js';
 import type { EventClient, EventHub } from '../events/hub.js';
 import { t } from '../lib/i18n.js';
@@ -65,6 +66,12 @@ export interface BackendListenDeps {
   orchestrator: ChatOrchestrator;
   /** Порт по умолчанию (`backendConfig.port`). */
   defaultPort: number;
+  /**
+   * PROP-108 Ф3: реестр подтверждений. Задан — ответ на `permission_reply`
+   * принимает только **носитель покрывающего гранта** (не «кто видит сессию»).
+   * Не задан — поведение прежнее (слой Authority выключен/в shadow).
+   */
+  approvalRegistry?: ApprovalRegistry;
   /**
    * ADR-094: реестр метрик (задан только при `metrics.enabled`). WS-апгрейд не
    * проходит через Hono-middleware — активные соединения учитываются здесь.
@@ -339,14 +346,67 @@ export function createBackendListen(deps: BackendListenDeps) {
                   // ADR-089 (P0): подтверждать права можно только в своей сессии.
                   const session = await loadVisibleSession(sid);
                   if (!session) return;
+
+                  // PROP-108 Ф3: ответ принимает только **носитель покрывающего
+                  // гранта**, а не «кто видит сессию» (дыра «`VIEWER`
+                  // подтверждает мутирующий тул»). Реестр не задан — слой
+                  // Authority выключен/в shadow, поведение прежнее.
+                  const registry = deps.approvalRegistry;
+                  if (!registry) {
+                    eventBus.publish(sid, 'permission.replied', {
+                      approval_id: approvalId,
+                      session_id: sid,
+                      approved,
+                      ...(action ? { action } : {}),
+                      ...(once !== undefined ? { once } : {}),
+                      ...(principal ? { principal } : {}),
+                      ...(turnId ? { turn_id: turnId } : {}),
+                    });
+                    return;
+                  }
+
+                  // Принципал-отвечающий — **аутентифицированный** (клиенту не
+                  // доверяем): подтверждать может только носитель гранта.
+                  const responder: AuthorityPrincipal = {
+                    kind: 'user',
+                    id: user.id,
+                    roles: user.roles ?? [],
+                  };
+                  const claim = await registry.claim(approvalId, sid, responder, {
+                    ...(turnId ? { turnId } : {}),
+                    ...(typeof msg.digest === 'string' && msg.digest !== '' ? { digest: msg.digest } : {}),
+                  });
+                  if (!claim.ok) {
+                    // Отказ: подтверждение не принимается (нет гранта / повторный
+                    // ответ / чужой ход) — действие не выполняется.
+                    eventBus.publish(sid, 'permission.replied', {
+                      approval_id: approvalId,
+                      session_id: sid,
+                      approved: false,
+                      action: 'deny',
+                      reason: claim.reason,
+                    });
+                    ws.send(JSON.stringify({
+                      type: 'error',
+                      session_id: sid,
+                      data: {
+                        error: t('errors.chat.approvalDenied', { reason: claim.reason }),
+                        code: 'APPROVAL_DENIED',
+                      },
+                      timestamp: nowISO(),
+                    }));
+                    return;
+                  }
                   eventBus.publish(sid, 'permission.replied', {
                     approval_id: approvalId,
                     session_id: sid,
                     approved,
                     ...(action ? { action } : {}),
                     ...(once !== undefined ? { once } : {}),
-                    ...(principal ? { principal } : {}),
-                    ...(turnId ? { turn_id: turnId } : {}),
+                    // Привязка — из реестра (серверный источник истины).
+                    principal: responder,
+                    turn_id: claim.binding?.turnId,
+                    digest: claim.binding?.digest,
                   });
                 })().catch(() => {});
               } else if (msg.type === 'permission_hold') {

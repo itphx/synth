@@ -138,6 +138,8 @@ const en: Dictionary = {
   'errors.chat.queueFull': 'Queue is full (max {max} messages)',
   'errors.chat.steerLimitExceeded':
     'Steering limit reached (max {max} injected messages per turn)',
+  // PROP-108 Ф3: подтверждение не принято (нет гранта / повторный ответ / чужой ход).
+  'errors.chat.approvalDenied': 'Approval was not accepted: {reason}',
 
   // Stub
   'stub.llmNotConnected': '[Stub] You said: "{content}". LLM engine is not connected yet.',
@@ -278,6 +280,8 @@ const ru: Dictionary = {
   'errors.chat.queueFull': 'Очередь переполнена (максимум {max} сообщений)',
   'errors.chat.steerLimitExceeded':
     'Достигнут лимит вмешательств в ход (максимум {max} сообщений на ход)',
+  // PROP-108 Ф3: подтверждение не принято (нет гранта / повторный ответ / чужой ход).
+  'errors.chat.approvalDenied': 'Подтверждение не принято: {reason}',
 
   // Stub
   'stub.llmNotConnected': '[Заглушка] Вы сказали: "{content}". LLM-движок ещё не подключён.',

@@ -198,6 +198,57 @@ interface BusEvent { type: EventType; sessionId: string; data: Record<string, un
 > Транспорт событий — только WS `/ws/events` и SSE `GET /api/v2/events`.
 > Новых каналов не заводить (ADR-008/009/024).
 
+### 3.1. Подтверждения разрешений (PROP-108 Ф3)
+
+Запрос подтверждения (`permission.asked`) и ответ на него (`permission.replied`) — по WS `/ws/events`.
+Ответ принимает **носитель покрывающего гранта** (владелец сессии, `EDITOR`/`OWNER` проекта,
+`ADMIN`/`LEAD`, service-key с подходящей ролью), а **не** «тот, кто видит сессию»: `VIEWER` (право
+чтения) подтвердить мутирующий тул не может.
+
+**Событие `permission.asked`** (запрос подтверждения) — дополнительные поля:
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `principal` | `{kind, id, roles}` | принципал хода, которому адресован запрос (PROP-108 Ф0) |
+| `turn_id` | string | ход (`streamId`), которому принадлежит запрос |
+| `digest` | string | отпечаток привязки «ход + действие + цель» (sha256) |
+
+**Клиентское сообщение `permission_reply`**:
+
+```json
+{ "type": "permission_reply", "session_id": "<sid>", "approval_id": "<aid>",
+  "action": "allow" | "deny", "once": true | false,
+  "turn_id": "<turn>", "digest": "<digest>" }
+```
+
+- `action` — решение (`allow`/`deny`); старый формат `{approved: boolean}` поддерживается;
+- `turn_id`/`digest` — необязательные: при расхождении с привязкой ответ отклоняется
+  (`turn_mismatch`/`digest_mismatch`);
+- клиенту доверять нельзя: принципал отвечающего берётся из **аутентификации** WS-соединения.
+
+**Событие `permission.replied`** — при принятом ответе: `approved`, `action`, `principal`, `turn_id`,
+`digest` (привязка — из серверного реестра). При **отказе** — `approved: false`, `action: 'deny'` и
+поле `reason`:
+
+| `reason` | Причина отказа |
+|---|---|
+| `no_grant` | ответ не носителя покрывающего гранта (в т.ч. `VIEWER` на мутации) |
+| `already_consumed` | повторный ответ на тот же `approval_id` (подтверждение одноразово) |
+| `turn_mismatch` | ответ с чужим `turn_id` (другой ход) |
+| `digest_mismatch` | ответ с чужим `digest` (подмена привязки) |
+| `unknown_approval` | неизвестный `approval_id` |
+
+Параллельно клиенту уходит кадр ошибки:
+
+```json
+{ "type": "error", "session_id": "<sid>",
+  "data": { "error": "<текст>", "code": "APPROVAL_DENIED" }, "timestamp": "<ISO>" }
+```
+
+Реестр подтверждений живёт только в **enforced-режиме** Authority-слоя (`authority.enabled` без
+`authority.shadow`); в shadow/выключенном режиме ответ принимается по-старому (по видимости сессии) —
+см. [PROP-108](./arch_decisions/prop-108-authority-layer.md).
+
 ---
 
 ## 4. LLM Proxy

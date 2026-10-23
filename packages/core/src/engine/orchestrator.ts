@@ -43,7 +43,7 @@ import type { MicroModel } from './router/micro/models/base.js';
 import type { RoutingDecision } from './router/router.js';
 import { PermissionEvaluator, extractPaths } from './permission/evaluator.js';
 import { computeToolAvailability } from './permission/availability.js';
-import { PermissionApprovalManager } from './permission/approval.js';
+import { PermissionApprovalManager, type ApprovalRegistry } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { createFileStorage } from '../storage/storage-context.js';
 import type { SSHKeyRepository } from '../storage/ports/ssh-key-repository.js';
@@ -65,7 +65,9 @@ import type { ProtectedPathsPolicy } from './security/protected-paths.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, DISABLED_GATEWAY_CONFIG, LlmFilterRegistry } from './gateway/index.js';
 import type { SecretPatternRepository } from '../storage/ports/secret-pattern-repository.js';
 import type { MetricsRegistry } from '../metrics/registry.js';
-import type { AuthorityShadowHook } from './authority/hook.js';
+import type { AuthorityGateHook, AuthorityShadowHook } from './authority/hook.js';
+import { authorityActionForTool } from './authority/actions.js';
+import { deriveAuthorityTarget } from './authority/target.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
@@ -241,8 +243,28 @@ export interface OrchestratorOptions {
    * PROP-108 Ф1: шов shadow-наблюдения Authority-слоя. Задан — решения
    * permission-слоя дополнительно считаются моделью «действие × цель» и
    * пишутся в журнал решений; **решение прав не меняется**.
+   *
+   * @deprecated PROP-108 Ф2: используйте `authorityGate` — он же считает
+   *   решение, ведёт журнал и (в enforced-режиме) **применяет** решение.
    */
   authorityShadow?: AuthorityShadowHook;
+  /**
+   * PROP-108 Ф2: шов решения Authority-слоя (guard).
+   *
+   * Задан — решения permission-слоя считаются моделью «действие × цель» и
+   * пишутся в журнал решений. При `authority.enabled` **без**
+   * `authority.shadow` решение **применяется**: `deny`/`ask` сужают решение
+   * permission-слоя, а потолок сессии не снимается режимом `yolo`.
+   */
+  authorityGate?: AuthorityGateHook;
+  /**
+   * PROP-108 Ф3: реестр подтверждений. Задан — запросы подтверждения
+   * **привязываются** к `(принципал, ход, действие, цель, отпечаток)`: ответ
+   * принимает только носитель покрывающего гранта, повторный ответ — отказ.
+   *
+   * Не задан — поведение прежнее (слой Authority выключен или shadow).
+   */
+  approvalRegistry?: ApprovalRegistry;
   /** ADR-070 §2.2: политика prompt-cache (config llm.cache). Дефолт — auto. */
   cachePolicy?: CachePolicy;
   /**
@@ -437,6 +459,8 @@ export class ChatOrchestrator {
   private readonly _metrics: MetricsRegistry | null;
   /** PROP-108 Ф1: шов shadow-наблюдения Authority-слоя (не меняет решения прав). */
   private readonly _authorityShadow: AuthorityShadowHook | undefined;
+  /** PROP-108 Ф2: шов решения Authority-слоя (считает, журналит и применяет). */
+  private readonly _authorityGate: AuthorityGateHook | undefined;
   /**
    * PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов (мутабельный;
    * общий для всех gateway-точек — см. `getLlmFilters()`).
@@ -686,7 +710,9 @@ export class ChatOrchestrator {
     this._workspaceManaged = options.workspaceManaged === true;
     this._getWorkspaceOutsideRootPolicy = options.getWorkspaceOutsideRootPolicy ?? null;
     this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
-    this._approvalManager = new PermissionApprovalManager(this._eventBus);
+    this._approvalManager = new PermissionApprovalManager(this._eventBus, {
+      ...(options.approvalRegistry ? { registry: options.approvalRegistry } : {}),
+    });
     this._defaultPlanMode = options.defaultPlanMode ?? 'auto';
     this._securityConfig = options.securityConfig
       ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true }, secretKey: '' };
@@ -744,6 +770,9 @@ export class ChatOrchestrator {
     this._metrics = options.metrics ?? null;
     // PROP-108 Ф1: shadow-наблюдение Authority-слоя (решение прав не меняется).
     this._authorityShadow = options.authorityShadow;
+    // PROP-108 Ф2: шов решения Authority-слоя (guard) — считает, журналит и
+    // применяет решение (в enforced-режиме).
+    this._authorityGate = options.authorityGate;
     // PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов. Экземпляр
     // может прийти извне (общий с фасадом плагинов); иначе создаём пустой —
     // бюджет времени из `plugins.llmFilterTimeoutMs`.
@@ -2562,6 +2591,7 @@ export class ChatOrchestrator {
     let effectivePermissionConfig = session.settings.permission ?? this._permissionConfig;
     let permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig, {
       authorityShadow: this._authorityShadow,
+      authorityGate: this._authorityGate,
     });
 
     const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
@@ -3181,6 +3211,18 @@ export class ChatOrchestrator {
             deniedReason = this._securityMessage(permissionDecision, 'en')
               ?? `Permission denied: ${permissionDecision.reason}`;
           } else if (!hookBlocked && permissionDecision.action === 'ask') {
+            // PROP-108 Ф3: пара «действие × цель» для привязки подтверждения.
+            // Задана — запрос привязан к ходу, и ответ принимает только
+            // носитель покрывающего гранта (реестр подтверждений).
+            const bindingTarget = deriveAuthorityTarget({
+              toolName,
+              params: toolArgs,
+              workingDir,
+              sessionId: session.id,
+              ...(toolDef?.capabilities ? { capabilities: toolDef.capabilities } : {}),
+              ...(toolDef?.source ? { toolSource: toolDef.source } : {}),
+            }).target;
+            const bindingAction = authorityActionForTool(toolName, toolDef?.capabilities);
             const approval = await this._approvalManager.waitForDecision(
               session.id,
               {
@@ -3199,6 +3241,9 @@ export class ChatOrchestrator {
                   roles: [],
                 },
                 turnId: streamId,
+                // PROP-108 Ф3: привязка к действию и цели.
+                ...(bindingAction ? { action: bindingAction } : {}),
+                ...(bindingTarget ? { target: bindingTarget } : {}),
               },
               effectivePermissionConfig.askTimeoutMs,
             );
@@ -3210,6 +3255,7 @@ export class ChatOrchestrator {
                 effectivePermissionConfig = await this._grantSessionToolAllow(session, toolName, toolArgs, workingDir);
                 permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig, {
                   authorityShadow: this._authorityShadow,
+                  authorityGate: this._authorityGate,
                 });
               }
             } else {
