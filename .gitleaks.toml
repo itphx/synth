@@ -250,3 +250,24 @@ regexes = [
   '''test-metrics-token''',
 ]
 regexTarget = "line"
+
+# 10. Ложные срабатывания `generic-credential-literal` в фикстурах внешних доступов
+#     (ADR-105 / PROP-107): значения намеренно помечены как «не настоящие»
+#     (`…do-not-leak`, `…must-not-hit-disk`, `legacy-access-token-value`).
+#     Подавление строго по трём путям и по конкретным dummy-строкам — настоящий
+#     токен в тех же файлах остаётся находкой.
+[[allowlists]]
+description = "тестовые фикстуры внешних доступов (dummy-токены ADR-105, TEST ONLY)"
+paths = [
+  '''packages/core/src/storage/contract/external-credential-repository\.contract\.ts$''',
+  '''packages/core/src/storage/external-credential-store\.test\.ts$''',
+  '''packages/core/src/storage/mcp-registry-migration\.test\.ts$''',
+]
+regexes = [
+  '''ya29\.test-access-token-do-not-leak''',
+  '''refresh-token-do-not-leak''',
+  '''ya29\.plain-token-must-not-hit-disk''',
+  '''refresh-plain-token''',
+  '''legacy-access-token-value''',
+]
+regexTarget = "line"
