@@ -417,6 +417,11 @@ export type ProjectUpdateRequest = z.infer<typeof projectUpdateSchema>;
 export type SSHKeyCreateRequest = z.infer<typeof sshKeyCreateSchema>;
 export type SSHKeyUpdateRequest = z.infer<typeof sshKeyUpdateSchema>;
 export type PromptRequest = z.infer<typeof promptRequestSchema>;
+/**
+ * Форма ВХОДА схемы промпта: поля с серверным `default` (`stream`, `mode`)
+ * необязательны — сервер подставит значение. Для тела запроса SDK.
+ */
+export type PromptRequestInput = z.input<typeof promptRequestSchema>;
 export type SpaLoginRequest = z.infer<typeof spaLoginSchema>;
 export type FsListQuery = z.infer<typeof fsListQuerySchema>;
 export type FsReadQuery = z.infer<typeof fsReadQuerySchema>;

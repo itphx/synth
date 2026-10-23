@@ -24,6 +24,7 @@ import type {
   EventIngestRequest,
   EventRouteRuleUpsertRequest,
   PromptRequest,
+  PromptRequestInput,
   ScheduleInputRequest,
   SessionCreateRequest,
   SessionUpdateRequest,
@@ -41,6 +42,7 @@ export type {
   EventRouteRule,
   EventRouteRuleUpsertRequest,
   PromptRequest,
+  PromptRequestInput,
   RouteDecision,
   Schedule,
   ScheduleInputRequest,
@@ -69,8 +71,11 @@ export type SessionPatch = SessionUpdateRequest & {
   project_id?: string | null;
 };
 
-/** Тело `POST /sessions/:id/prompt` — `stream` имеет серверный default `true`. */
-export type SessionPromptInput = Omit<PromptRequest, 'stream'> & { stream?: boolean };
+/**
+ * Тело `POST /sessions/:id/prompt` — `stream` и `mode` имеют серверные
+ * default'ы (`true` и `queue` соответственно, PROP-098).
+ */
+export type SessionPromptInput = Omit<PromptRequestInput, 'stream'> & { stream?: boolean };
 
 /** Тело `POST/PUT /schedules` — `enabled` имеет серверный default `true`. */
 export type ScheduleInput = Omit<ScheduleInputRequest, 'enabled'> & { enabled?: boolean };
