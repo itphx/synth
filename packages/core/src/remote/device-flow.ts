@@ -54,6 +54,33 @@ export interface PasswordGrantResult {
 /** Параметры postForm: код ошибки при недоступности сервера авторизации. */
 export interface PostFormOptions {
   networkErrorCode?: RemoteErrorCode;
+  /**
+   * Инъекция транспорта (тесты). По умолчанию — `egressFetch` (ADR-099):
+   * единый механизм доверия TLS/CA, свои агенты/диспетчеры не заводим.
+   */
+  fetchImpl?: AuthFetchLike;
+  /** Таймаут HTTP-запроса, мс (по умолчанию — `AUTH_HTTP_TIMEOUT_MS`). */
+  timeoutMs?: number;
+  /**
+   * Дополнительные заголовки запроса (например, `Authorization: Basic` для
+   * confidential-клиента). Секреты в заголовках — по правилам host-binding
+   * (PROP-107 §7): такие запросы не должны уходить на чужой origin.
+   */
+  headers?: Record<string, string>;
+}
+
+/** Транспорт POST-запроса формы (инъекция для тестов). */
+export type AuthFetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+/** Ответ формы: HTTP-статус + разобранное тело (без «прочитанности» ошибки). */
+export interface PostFormResult {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+/** `true`, если статус — успешный (2xx). */
+function isOkStatus(status: number): boolean {
+  return status >= 200 && status < 300;
 }
 
 function str(value: unknown): string | undefined {
@@ -80,19 +107,37 @@ async function getJson(url: string): Promise<Record<string, unknown>> {
   return (await res.json()) as Record<string, unknown>;
 }
 
-export async function postForm(
+/**
+ * POST формы (`application/x-www-form-urlencoded`) с разбором ответа.
+ *
+ * Возвращает **статус и тело** без вынесения ошибки наружу: вызывающий решает,
+ * что делать с неуспехом (например, revoke в RFC 7009 — best-effort).
+ * Сетевая ошибка → `RemoteError` (код из `opts.networkErrorCode`, по умолчанию
+ * `AUTH`).
+ *
+ * Транспорт по умолчанию — `egressFetch` (ADR-099, единое доверие TLS/CA);
+ * `opts.fetchImpl` — инъекция для тестов.
+ */
+export async function postFormDetailed(
   url: string,
   params: URLSearchParams,
   opts: PostFormOptions = {},
-): Promise<Record<string, unknown>> {
+): Promise<PostFormResult> {
+  const timeoutMs = opts.timeoutMs ?? AUTH_HTTP_TIMEOUT_MS;
+  const init: RequestInit = {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      ...(opts.headers ?? {}),
+    },
+    body: params,
+    signal: AbortSignal.timeout(timeoutMs),
+  };
   let res: Response;
   try {
-    res = await egressFetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: params,
-      signal: AbortSignal.timeout(AUTH_HTTP_TIMEOUT_MS),
-    });
+    res = opts.fetchImpl
+      ? await opts.fetchImpl(url, init)
+      : await egressFetch(url, init);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new RemoteError(`Сервер авторизации недоступен: ${reason}`, opts.networkErrorCode ?? 'AUTH');
@@ -103,8 +148,17 @@ export async function postForm(
   } catch {
     // пустое/не-JSON тело — оставляем {}, ошибку сформируем по статусу
   }
-  if (!res.ok && !body.error) {
-    throw new RemoteError(`Сервер авторизации вернул ошибку (HTTP ${res.status})`, 'AUTH');
+  return { status: res.status, body };
+}
+
+export async function postForm(
+  url: string,
+  params: URLSearchParams,
+  opts: PostFormOptions = {},
+): Promise<Record<string, unknown>> {
+  const { status, body } = await postFormDetailed(url, params, opts);
+  if (!isOkStatus(status) && !body.error) {
+    throw new RemoteError(`Сервер авторизации вернул ошибку (HTTP ${status})`, 'AUTH');
   }
   return body;
 }
