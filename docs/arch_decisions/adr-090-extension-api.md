@@ -2,6 +2,7 @@
 
 > **Статус:** ✅ Реализовано — фазы Ф0–Ф7 закрыты (2026-10-22…2026-10-23); слой развёрнут в test (0.12.1); авторская спецификация — [docs/PLUGINS.md](../PLUGINS.md)
 > **Дата:** 2026-10-23 (решение владельца — 2026-10-22, «добить Ф7 и перенести в ADR»)
+> **Обновлено:** 2026-10-24 — п. 9: схема записи каталога генерируется автоматически из опубликованного `@itphx/synth-shared` в CI каталога (bot-коммит) — **реализовано**. Фактический механизм: репозиторий каталога `synth-registry` (`scripts/gen-schema.mjs` + джоба `schema` в `.gitverse/workflows/registry.yaml`) берёт контракт из опубликованного npm-пакета, пересобирает `schema/` и коммитит результат в `master` ботом; пока версия пакета с контрактом каталога не опубликована, пересборка пропускается с явным сообщением в логе джобы.
 > **Связано:** [ADR-029](./adr-029-granular-permissions.md) (permission-слой), [ADR-030](./adr-030-hooks-agent-events.md) (шина хуков), [ADR-036](./adr-036-llm-gateway.md) (шлюз LLM), [ADR-052](./adr-052-public-api-platform.md) (модель service-key), [ADR-070](./adr-070-system-prompt-composer.md) (сборка промпта), [ADR-076](./adr-076-git-repo-registry-ssh.md) (секреты at-rest), [ADR-077](./adr-077-runtime-toolchain.md) (образец порта), [ADR-086](./adr-086-extensibility-plugins-editions.md) (зонтик классов расширений), [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md) (порты и драйверы), [ADR-099](./adr-099-egress-tls-trust.md) (egress), [PROP-047](./prop-047-memory-gbrain.md) (память — контрактом плагина), [PROP-068](./prop-068-skills-agents-registry.md) (каталог и модель доверия), [PROP-080](./prop-080-managed-hybrid-modes.md)/[PROP-081](./prop-081-hybrid-policy-leak-protection.md) (гибрид); спецификация — [docs/PLUGINS.md](../PLUGINS.md), HTTP — [docs/API_V2.md](../API_V2.md) §5.36, эксплуатация — [docs/MAINTENANCE.md](../MAINTENANCE.md) §Плагины.
 
 ## Контекст
@@ -62,6 +63,6 @@
 
 ## История
 
-- 2026-10-12 — предложение (PROP-090), срок решения 2026-11-14.
 - 2026-10-22 — решение владельца: слой возвращён в работу (был Icebox), форма — in-process SDK + два режима исполнения; фазы Ф0–Ф6 выполнены.
 - 2026-10-23 — Ф7 (гибрид) закрыта; предложение принято как решение (ADR-090); спецификация автора — [docs/PLUGINS.md](../PLUGINS.md).
+- 2026-10-24 — п. 9: схема записи каталога генерируется автоматически из опубликованного `@itphx/synth-shared` в CI каталога (bot-коммит) — реализовано.

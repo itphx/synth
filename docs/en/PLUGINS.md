@@ -1417,6 +1417,24 @@ plugin is published from an archive or over a URL, put the exact command with th
 - the license is specified (SPDX; without a public one — `UNLICENSED` + `licenseNote`);
 - `description` — both locales (`ru`/`en`), without the degrees of comparison.
 
+### 13.4. The registry entry schema
+
+The shape of a registry entry (`schema/catalog-entry.schema.json`) and of the
+manifest (`schema/pack-manifest.schema.json`) are **derived from the contract**:
+`catalogEntrySchema` and `packManifestSchema` from `@itphx/synth-shared`
+(`packages/shared/src/types/catalog.ts` and `packages/shared/src/types/pack.ts`).
+
+The schema is **generated automatically — never edit it by hand**: the catalog
+CI (`synth-registry`, the "Rebuild the catalog schema" job) takes the contract
+from the latest published `@itphx/synth-shared`, rebuilds `schema/` and commits
+the result into `master` with a bot commit. A contract change in the monorepo
+(for example, a new field in the manifest) reaches the catalog on its own —
+with the next package release.
+
+If the required `@itphx/synth-shared` version is not published yet, the rebuild
+is skipped with an explicit message in the job log: the schema in force stays
+valid and the job never breaks a release.
+
 ---
 
 ## 14. Author checklist
