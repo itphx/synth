@@ -54,6 +54,10 @@ const en: Dictionary = {
   'errors.forbidden.projectForbidden': 'Project is not available for this service key',
   'errors.rateLimited.serviceKey': 'Service key rate limit exceeded',
 
+  // PROP-090 Ф7 (Уровень 2): server-scoped токен плагина
+  'errors.forbidden.pluginIdMismatch': 'Plugin token: the X-Synth-Plugin-Id header does not match the key plugin_id',
+  'errors.forbidden.pluginNotAllowed': 'Plugin token: the plugin is not in the server allow-list',
+
   // ADR-101 (Э6): пайплайны проекта, прогоны, шаблоны инстанса
   'errors.notFound.pipeline': 'Pipeline not found',
   'errors.notFound.pipelineRun': 'Pipeline run not found',
@@ -195,6 +199,10 @@ const ru: Dictionary = {
   'errors.forbidden.scopeRequired': 'Недостаточно прав: отсутствует требуемый scope',
   'errors.forbidden.projectForbidden': 'Проект недоступен для этого service-key',
   'errors.rateLimited.serviceKey': 'Превышен лимит запросов по service-key',
+
+  // PROP-090 Ф7 (Уровень 2): server-scoped токен плагина
+  'errors.forbidden.pluginIdMismatch': 'Токен плагина: заголовок X-Synth-Plugin-Id не совпадает с plugin_id ключа',
+  'errors.forbidden.pluginNotAllowed': 'Токен плагина: плагина нет в серверном allow-list',
 
   // ADR-101 (Э6): пайплайны проекта, прогоны, шаблоны инстанса
   'errors.notFound.pipeline': 'Пайплайн не найден',

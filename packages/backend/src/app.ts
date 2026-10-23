@@ -32,6 +32,7 @@ import {
   registerProcessMetrics,
   resolveMetricsEnabled,
   resolveMetricsToken,
+  resolvePluginServerPolicy,
   setSynthReady,
 } from '@itphx/synth-core';
 import { resolveExecutionConfig } from '@itphx/synth-shared';
@@ -47,6 +48,7 @@ import type { BackendConfig } from './lib/app-config.js';
 import { resolveCorsOrigin } from './lib/cors.js';
 import { createAuthMiddleware } from './auth/middleware.js';
 import type { AuthKit } from './auth/middleware.js';
+import { requirePluginTokenBinding } from './auth/plugin-scope.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { t } from './lib/i18n.js';
 import type { EventHub } from './events/hub.js';
@@ -296,7 +298,32 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     );
 
     // Auth routes (после profilesStore)
-    app.route('/auth', createAuthRoutes(auth, backendConfig.auth, deps.profilesStore, deps.dataDir, deps.defaultsStore));
+    app.route('/auth', createAuthRoutes(
+      auth,
+      backendConfig.auth,
+      deps.profilesStore,
+      deps.dataDir,
+      deps.defaultsStore,
+      // PROP-090 Ф7: сигнал о серверной политике плагинов для публичного
+      // дискавери (`/auth/oidc-meta`) — только режим и признак включения
+      // слоя, без списка имён.
+      {
+        enabled: deps.pluginRuntime.config.enabled,
+        mode: deps.pluginRuntime.config.hybrid.mode,
+      },
+    ));
+
+    // PROP-090 Ф7 (Уровень 2): plugin-bound service-key (`plugin_id`)
+    // принимается только с заголовком `X-Synth-Plugin-Id` и тем же
+    // значением, со scope `plugins:invoke` и — при
+    // `plugins.hybrid.mode='allowlist'` — с именем плагина в серверном
+    // allow-list. Гейт стоит на границе (после `attachUser`, где уже
+    // разрешён service-кредентал), поэтому правило действует на **все**
+    // серверные API, а не только на плагинные роуты. Fail-closed: ключ с
+    // привязкой без корректного заголовка отвергается всегда.
+    app.use('/api/v2/*', requirePluginTokenBinding(
+      () => resolvePluginServerPolicy(deps.pluginRuntime.config),
+    ));
 
     // ADR-098 (W5): деградированное хранилище — managed: доступ только роли
     // ADMIN (остальным 503 STORAGE_DEGRADED), мутации — 503 STORAGE_DEGRADED_READONLY

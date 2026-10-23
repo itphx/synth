@@ -27,6 +27,7 @@ import {
   createPipelineProjectRoutes,
   createPluginsRoutes, createPluginSettingsRoutes,
   resolveProjectWorkspace,
+  resolvePluginServerPolicy,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
@@ -444,6 +445,11 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       config: mergePluginsConfig(config.synth.plugins, {}),
       settings: settingsStore,
       localInstall: false,
+      // Ф7 (PROP-090): реестр service-key — для выдачи server-scoped токена
+      // плагину (`POST /api/v2/plugins/token`).
+      serviceKeys: serviceApiKeyStore,
+      // Ф7: серверная политика (allow-list) из работающего рантайма.
+      serverPolicy: () => resolvePluginServerPolicy(deps.pluginRuntime.config),
       resolveUserId: (c) => {
         const user = c.get('user') as { id?: string } | undefined;
         return user?.id;
@@ -454,6 +460,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       writeGuard: requireAdminRoleOrScope('addons:install'),
       approveGuard: auth.requirePermission('ADMIN'),
       uninstallGuard: auth.requirePermission('ADMIN'),
+      // Ф7 (Уровень 2): выдача server-scoped токена — только ADMIN (токен даёт
+      // плагину машинный доступ к серверу).
+      tokenGuard: auth.requirePermission('ADMIN'),
     },
   ));
 

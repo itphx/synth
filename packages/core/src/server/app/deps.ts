@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import type {
   ProviderConfig, ModelConfig, ToolsPolicy, ToolsDisabledConfig,
   WorkspaceOutsideRootPolicy, WebhooksConfig, SummarizationConfig, Session,
+  PluginServerPolicy,
 } from '@itphx/synth-shared';
 import { ensureDataDir, parsePrincipalId, readTlsRuntimeSettings, SYNTH_VERSION } from '@itphx/synth-shared';
 import {
@@ -113,6 +114,14 @@ export interface StandaloneDepsAccessors extends HybridMirrorAccessors {
    * сессий при `connect`).
    */
   onSessionMaterialized?: (owner: string, sessionId: string) => void | Promise<void>;
+  /**
+   * PROP-090 Ф7: серверная политика плагинов удалённого сервера (гибрид).
+   *
+   * Возвращает `undefined`, когда сервера нет/он недоступен или политика
+   * неизвестна: тогда локальные плагины работают в режиме cooperative и
+   * помечаются «не проверен сервером».
+   */
+  getServerPluginPolicy?: () => PluginServerPolicy | undefined | Promise<PluginServerPolicy | undefined>;
 }
 
 /**
@@ -754,6 +763,12 @@ export async function createStandaloneDeps(
       remote: createRemotePluginLoader({ processManager: pluginProcessManager }),
     },
     processManager: pluginProcessManager,
+    // Ф7 (PROP-090): серверная политика плагинов в гибриде (Уровень 1 —
+    // cooperative). Не задана — сервера нет: плагины работают, но помечаются
+    // «не проверен сервером».
+    ...(accessors.getServerPluginPolicy
+      ? { serverPolicy: accessors.getServerPluginPolicy }
+      : {}),
   });
 
   const processMessage = orchestrator.createProcessMessage();

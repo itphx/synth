@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type { AuthConfig, User } from '@itphx/synth-shared';
+import type { PluginPolicySignal } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { createLazyOidcClient, oidcUserToUser } from '../auth/oidc.js';
@@ -29,6 +30,15 @@ export function createAuthRoutes(
   profiles?: ProfileStore,
   dataDir?: string,
   defaultsStore?: DefaultsRepository | null,
+  /**
+   * PROP-090 Ф7: сигнал о серверной политике плагинов для публичного
+   * дискавери (`GET /auth/oidc-meta`).
+   *
+   * Только `{ enabled, mode }` — **без списка имён**: allow-list не публичен,
+   * полный список отдаёт аутентифицированный роут `GET /api/v2/settings/plugins`.
+   * Не задан — сигнала нет (старый клиент трактует это как «неизвестно»).
+   */
+  pluginPolicySignal?: PluginPolicySignal | null,
 ): Hono {
   const app = new Hono();
   const avatarsDir = dataDir ? join(dataDir, 'auth', 'avatars') : null;
@@ -153,13 +163,18 @@ export function createAuthRoutes(
   // Локальный core по адресу сервера узнаёт issuer и public client_id (для ROPC/device flow).
   // Секрет клиента НЕ отдаётся.
   app.get('/oidc-meta', (c) => {
+    // Ф7 (PROP-090): сигнал о серверной политике плагинов — только режим и
+    // признак включения слоя; список имён не публичен (полный список — по
+    // аутентифицированному роуту `/api/v2/settings/plugins`).
+    const pluginsSignal = pluginPolicySignal ? { plugins: pluginPolicySignal } : {};
     if (!config.oidc?.enabled) {
-      return c.json({ enabled: false });
+      return c.json({ enabled: false, ...pluginsSignal });
     }
     return c.json({
       enabled: true,
       issuer: config.oidc.issuer,
       clientId: config.oidc.cliClientId || 'synth-cli',
+      ...pluginsSignal,
     });
   });
 

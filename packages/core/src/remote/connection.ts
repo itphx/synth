@@ -18,9 +18,19 @@ import { refreshAccessToken } from './device-flow.js';
 import { RemoteSession } from './session.js';
 import type { RemoteSessionOptions } from './session.js';
 import type { RemoteRequestInfo } from '../metrics/collectors/hybrid.js';
+// PROP-090 Ф7: сигнал и полная политика плагинов сервера (гибрид).
+import { parsePluginPolicySignal } from '@itphx/synth-shared';
+import type { PluginPolicySignal, PluginServerPolicy } from '@itphx/synth-shared';
 
 /** Таймаут GET {server}/auth/oidc-meta по умолчанию. */
 const DEFAULT_OIDC_META_TIMEOUT_MS = 15_000;
+
+/**
+ * TTL кэша полной серверной политики плагинов (Ф7): политика меняется на
+ * сервере рестартом, поэтому клиент не должен дёргать сервер на каждый
+ * запрос — кэш обновляется не чаще раза в минуту.
+ */
+const PLUGIN_POLICY_TTL_MS = 60_000;
 
 /** Обрезать завершающие слэши у адреса сервера. */
 function normalizeBaseUrl(url: string): string {
@@ -53,6 +63,16 @@ export class RemoteConnection {
   private _user: RemoteUser | null = null;
   /** Последний использованный issuer (для UI/логов). */
   private _issuer: string | null = null;
+  /**
+   * Ф7 (PROP-090): сигнал о слое плагинов из публичного дискавери
+   * (`GET /auth/oidc-meta`). Старый сервер без поля → `undefined` (сигнала
+   * нет, политика неизвестна).
+   */
+  private _pluginSignal: PluginPolicySignal | undefined;
+  /** Ф7: кэш полной серверной политики (allow-list) из аутентифицированного роута. */
+  private _pluginPolicy: PluginServerPolicy | undefined;
+  /** Ф7: время последнего обновления кэша политики (мс). */
+  private _pluginPolicyAt = 0;
 
   constructor(deps: RemoteConnectionDeps) {
     this.deps = deps;
@@ -85,6 +105,76 @@ export class RemoteConnection {
     return this._issuer;
   }
 
+  // ── Политика плагинов сервера (PROP-090 Ф7) ──
+
+  /**
+   * Сигнал о политике плагинов из публичного дискавери (`/auth/oidc-meta`).
+   *
+   * `undefined` — сервер старый (без поля) или сигнал неизвестен: политика
+   * неизвестна, локальный плагин работает в режиме cooperative.
+   */
+  get pluginSignal(): PluginPolicySignal | undefined {
+    return this._pluginSignal;
+  }
+
+  /** Кэшированная полная политика плагинов сервера (allow-list). */
+  get pluginPolicy(): PluginServerPolicy | undefined {
+    return this._pluginPolicy;
+  }
+
+  /**
+   * Обновить полную серверную политику плагинов (Ф7).
+   *
+   * Публичный сигнал из `/auth/oidc-meta` **не содержит** списка имён
+   * (список не публичен) — полный allow-list лежит в аутентифицированном
+   * роуте `GET /api/v2/settings/plugins` (блок `hybrid`).
+   *
+   * Правила:
+   * 1. Кэш: обновление не чаще раза в `PLUGIN_POLICY_TTL_MS` (политика
+   *    меняется на сервере рестартом — клиент не должен дёргать сервер часто);
+   * 2. Сервер недоступен/ответил 403 → политика **неизвестна**
+   *    (`undefined`) — локальный плагин работает (cooperative);
+   * 3. Сервер без блока `hybrid` (старый) → политика неизвестна.
+   */
+  async refreshPluginPolicy(opts?: { force?: boolean }): Promise<PluginServerPolicy | undefined> {
+    const now = Date.now();
+    if (
+      !opts?.force &&
+      this._pluginPolicy !== undefined &&
+      now - this._pluginPolicyAt < PLUGIN_POLICY_TTL_MS
+    ) {
+      return this._pluginPolicy;
+    }
+    this._pluginPolicyAt = now;
+
+    const client = this.client;
+    if (!client) {
+      this._pluginPolicy = undefined;
+      return undefined;
+    }
+    try {
+      const body = await client.request<{ hybrid?: { mode?: unknown; allow?: unknown } }>(
+        'GET',
+        '/api/v2/settings/plugins',
+      );
+      const mode = body?.hybrid?.mode;
+      if (mode !== 'off' && mode !== 'allowlist') {
+        // Старый сервер без блока `hybrid` — политика неизвестна.
+        this._pluginPolicy = undefined;
+        return undefined;
+      }
+      const allow = Array.isArray(body?.hybrid?.allow)
+        ? body.hybrid.allow.filter((item): item is string => typeof item === 'string')
+        : [];
+      this._pluginPolicy = { mode, allow: mode === 'allowlist' ? allow : [] };
+      return this._pluginPolicy;
+    } catch {
+      // Сервер недоступен или ответил отказом — политика неизвестна.
+      this._pluginPolicy = undefined;
+      return undefined;
+    }
+  }
+
   // ── Дискавери ──
 
   /**
@@ -94,8 +184,16 @@ export class RemoteConnection {
    *   при их отсутствии — RemoteError('AUTH');
    * - сеть недоступна → fallback на deps.defaultIssuer/defaultClientId,
    *   при их отсутствии — RemoteError('OFFLINE').
+   *
+   * Ф7 (PROP-090): ответ может содержать сигнал `plugins`
+   * (`{ enabled, mode }`) — серверная политика плагинов в гибриде. Старый
+   * сервер без поля → сигнала нет (`undefined`), клиент остаётся cooperative.
    */
-  async discoverOidc(serverUrl: string): Promise<{ issuer: string; clientId: string }> {
+  async discoverOidc(serverUrl: string): Promise<{
+    issuer: string;
+    clientId: string;
+    plugins?: PluginPolicySignal;
+  }> {
     const base = normalizeBaseUrl(serverUrl);
     const fallback =
       this.deps.defaultIssuer && this.deps.defaultClientId
@@ -119,6 +217,11 @@ export class RemoteConnection {
       // не-JSON тело — ошибку сформируем по статусу ниже
     }
 
+    // Ф7: сигнал о политике плагинов читаем **до** проверок OIDC — сервер
+    // может отдать его и вместе с `enabled: false` (OIDC выключен, сигнал
+    // плагинов всё равно полезен клиенту).
+    this._pluginSignal = parsePluginPolicySignal(body.plugins);
+
     if (body.enabled === false) {
       throw new RemoteError('Сервер не поддерживает вход по логину/паролю', 'AUTH');
     }
@@ -133,7 +236,8 @@ export class RemoteConnection {
     if (!issuer || !clientId) {
       throw new RemoteError('Сервер вернул некорректные OIDC-параметры', 'AUTH');
     }
-    return { issuer, clientId };
+    // Ф7: сигнал о политике плагинов (нет поля у старого сервера → undefined).
+    return { issuer, clientId, ...(this._pluginSignal ? { plugins: this._pluginSignal } : {}) };
   }
 
   // ── Подключение ──
@@ -239,6 +343,10 @@ export class RemoteConnection {
     this._user = null;
     this._backendUrl = null;
     this._issuer = null;
+    // Ф7: политика плагинов сервера больше не актуальна — кэш сбрасывается.
+    this._pluginSignal = undefined;
+    this._pluginPolicy = undefined;
+    this._pluginPolicyAt = 0;
   }
 
   // ── Приватные помощники ──

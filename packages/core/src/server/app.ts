@@ -11,8 +11,10 @@ import {
   getPublicOpenApiDocument,
   initTlsTrust,
   applyStartupProxyConfig,
+  requirePluginTokenBinding,
 } from '../index.js';
 import type { StorageBackendKind } from '../index.js';
+import { resolvePluginServerPolicy } from '../engine/plugins/hybrid-policy.js';
 import { createLocalAuth } from '../auth/local.js';
 import { RemoteConnection } from '../remote/connection.js';
 import { createHealthRoutes } from './routes/health.js';
@@ -362,6 +364,17 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.use('/api/*', auth.requireAuth);
   app.use('/ws/*', auth.requireAuth);
 
+  // PROP-090 Ф7 (Уровень 2): plugin-bound service-key (`plugin_id`) принимается
+  // только с заголовком `X-Synth-Plugin-Id` и тем же значением, со scope
+  // `plugins:invoke` и — при `plugins.hybrid.mode='allowlist'` — с именем
+  // плагина в серверном allow-list. Гейт стоит на границе (после `requireAuth`,
+  // где уже разрешён service-кредентал), поэтому правило действует на **все**
+  // серверные API, а не только на плагинные роуты. Fail-closed: ключ с
+  // привязкой без корректного заголовка отвергается всегда.
+  app.use('/api/*', requirePluginTokenBinding(
+    () => resolvePluginServerPolicy(deps.pluginRuntime.config),
+  ));
+
   // ADR-098 (W5): деградированное хранилище — ADMIN-only + строгий read-only.
   // Guard идёт после `requireAuth` (нужен `user` для admin-проверки) и до роутов.
   // Ремонтные операции (maintenance: doctor/бэкап/выгрузка-перенос данных) не
@@ -424,6 +437,13 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const deps = await createStandaloneDeps(config, {
     getActiveRemoteProviderNames: () => hybrid.getActiveRemoteProviderNames(),
     isBlockLocalProviders: () => hybrid.isBlockLocalProviders(),
+    // PROP-090 Ф7: серверная политика плагинов удалённого сервера. Нет
+    // подключения/сервер недоступен → политика неизвестна → локальный плагин
+    // работает в режиме cooperative (помечен «не проверен сервером»).
+    getServerPluginPolicy: async () => {
+      if (!connection.connected) return undefined;
+      return await connection.refreshPluginPolicy();
+    },
     onSessionMaterialized: (owner, sessionId) => {
       wsSubscriptions.subscribeToSession(owner, sessionId);
     },
