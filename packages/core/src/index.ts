@@ -349,6 +349,29 @@ export {
 } from './engine/permission/index.js';
 export type { PermissionCheckInput, ApprovalRequest, ApprovalDecision } from './engine/permission/index.js';
 
+// PROP-108 Ф3: реестр подтверждений (привязка к ходу + носитель покрывающего гранта).
+export { ApprovalRegistry } from './engine/permission/approval.js';
+export type {
+  ApprovalBinding,
+  ApprovalClaimReason,
+  ApprovalClaimResult,
+  ApprovalCoverageResolver,
+  ApprovalRegistryOptions,
+} from './engine/permission/approval.js';
+
+// PROP-108 Ф3: покрытие подтверждения (роли инстанса, роль в проекте, политика).
+export {
+  approvalGrantsForProfile,
+  buildApprovalResponderProfile,
+  coversApproval,
+  createApprovalCoverageResolver,
+} from './engine/authority/approval.js';
+export type {
+  ApprovalProfileResolver,
+  ApprovalProjectRole,
+  ApprovalResponderProfile,
+} from './engine/authority/approval.js';
+
 // PROP-108 Ф1: движок Authority-слоя — резолвер решений «действие × цель».
 export {
   AuthorityResolver,

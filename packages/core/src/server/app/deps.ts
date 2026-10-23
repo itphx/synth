@@ -74,6 +74,11 @@ import {
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
 import { AuthorityGuard } from '../../engine/authority/guard.js';
+import {
+  buildApprovalResponderProfile,
+  createApprovalCoverageResolver,
+} from '../../engine/authority/approval.js';
+import { ApprovalRegistry } from '../../engine/permission/approval.js';
 import { applyStartupMigrations, applyPendingRestore } from '../../maintenance/startup.js';
 import { SkillService } from '../../engine/skills/service.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
@@ -590,14 +595,37 @@ export async function createStandaloneDeps(
   // (`{dataDir}/audit/authority.jsonl` через порт). При `authority.enabled`
   // **без** `authority.shadow` решение **применяется** (Ф2): `deny`/`ask`
   // сужают решение permission-слоя.
+  const authorityPolicy = (await storageContext.authorityPolicy?.getPolicy()) ?? null;
   const authorityGuard = config.authorityConfig?.enabled
     ? new AuthorityGuard({
         enabled: true,
         shadow: config.authorityConfig.shadow,
         journal: storageContext.authorityDecisions,
-        policy: (await storageContext.authorityPolicy?.getPolicy()) ?? null,
+        policy: authorityPolicy,
         // ADR-094: счётчик решений Authority-слоя (`synth_authority_decisions_total`).
         onDecision: authorityMetrics?.onDecision,
+      })
+    : undefined;
+
+  // PROP-108 Ф3: реестр подтверждений. Задаётся **только** в enforced-режиме
+  // (слой Authority применяет решения): ответ на `permission_reply` принимает
+  // лишь носитель покрывающего гранта. В shadow/выключенном режиме реестра
+  // нет — поведение прежнее (решения не применяются).
+  const approvalRegistry = authorityGuard?.enforced
+    ? new ApprovalRegistry({
+        coverage: createApprovalCoverageResolver({
+          policy: authorityPolicy,
+          profile: async (sessionId, principal) => {
+            const session = await sessionManager.getSession(sessionId);
+            const project = session?.projectId
+              ? await projectStore.load(session.projectId)
+              : null;
+            return buildApprovalResponderProfile({
+              principal,
+              sources: { session, project },
+            });
+          },
+        }),
       })
     : undefined;
 
@@ -608,6 +636,8 @@ export async function createStandaloneDeps(
     // PROP-108 Ф1/Ф2: шов решения Authority-слоя (считает, журналит и —
     // в enforced-режиме — применяет решение).
     authorityGate: authorityGuard?.gate,
+    // PROP-108 Ф3: реестр подтверждений (привязка к ходу + носитель гранта).
+    ...(approvalRegistry ? { approvalRegistry } : {}),
     // ADR-077: порт исполнения команд (inline — исполнение в процессе;
     // режим — параметр запуска, инвариант 24). Тот же порт получает и
     // детект внешних зависимостей (ниже) — иначе они смотрели бы в разные
@@ -1062,6 +1092,8 @@ export async function createStandaloneDeps(
 
   return {
     dataDir,
+    // PROP-108 Ф3: реестр подтверждений (enforced-режим Authority-слоя).
+    approvalRegistry,
     // ADR-096: контекст хранения инстанса — для операций, которым нужен
     // целиком (напр. портативный экспорт/импорт проекта, ADR-091).
     storageContext,

@@ -140,6 +140,8 @@ const en: Dictionary = {
     'Steering limit reached (max {max} injected messages per turn)',
   'errors.chat.steerInterruptUnsupported':
     'Interrupt mode is not supported yet — use "steer" or "queue"',
+  // PROP-108 Ф3: подтверждение не принято (нет гранта / повторный ответ / чужой ход).
+  'errors.chat.approvalDenied': 'Approval was not accepted: {reason}',
 
   // Stub
   'stub.llmNotConnected': '[Stub] You said: "{content}". LLM engine is not connected yet.',
@@ -282,6 +284,8 @@ const ru: Dictionary = {
     'Достигнут лимит вмешательств в ход (максимум {max} сообщений на ход)',
   'errors.chat.steerInterruptUnsupported':
     'Режим «прерывание хода» пока не поддерживается — используйте «вмешаться» или «в очередь»',
+  // PROP-108 Ф3: подтверждение не принято (нет гранта / повторный ответ / чужой ход).
+  'errors.chat.approvalDenied': 'Подтверждение не принято: {reason}',
 
   // Stub
   'stub.llmNotConnected': '[Заглушка] Вы сказали: "{content}". LLM-движок ещё не подключён.',

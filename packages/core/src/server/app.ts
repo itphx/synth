@@ -497,6 +497,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     // ADR-089 (standalone): нормализация legacy-владельца (UUID профиля `local`)
     // при снимке подписок `connect` — иначе такие сессии не получают подписчиков.
     localOwnerResolver: deps.localOwnerResolver,
+    // PROP-108 Ф3: реестр подтверждений — ответ принимает только носитель
+    // покрывающего гранта (не «кто видит сессию»).
+    ...(deps.approvalRegistry ? { approvalRegistry: deps.approvalRegistry } : {}),
     // ADR-094: активные WS-соединения — в streams_active (если метрики включены).
     metrics: metricsEnabled ? metrics : undefined,
   });

@@ -6,13 +6,14 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
 import { MessageRole, generateStreamId, nowISO, makeTextPart, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { BusEvent, Message } from '@itphx/synth-shared';
+import type { AuthorityPrincipal } from '@itphx/synth-shared';
 import { enqueueUserMessage, enqueueSteerMessage } from '../../index.js';
 import type { EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator } from '../../index.js';
 import type { RemoteConnection } from '../../remote/connection.js';
 import type { LocalAuthKit } from '../../auth/local.js';
 import { isRemoteRef, toLocalId } from '../../remote/aggregate.js';
 import { extractChildSessionId, extractCreatedSession } from '../../events/child-session.js';
-import { parsePermissionPrincipal } from '../../engine/permission/approval.js';
+import { parsePermissionPrincipal, type ApprovalRegistry } from '../../engine/permission/approval.js';
 import { INSTANCE_EVENT_CHANNEL } from '../../events/bus.js';
 import { LOCAL_USER_ID } from '../local-owner.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
@@ -45,6 +46,12 @@ export interface EventWebSocketDeps {
    * авто-подписки нормализуют владельца из payload. Managed не задаёт.
    */
   localOwnerResolver?: LocalOwnerResolver;
+  /**
+   * PROP-108 Ф3: реестр подтверждений. Задан — ответ на `permission_reply`
+   * принимает только **носитель покрывающего гранта** (реестр проверяет
+   * привязку к ходу и право носителя). Не задан — поведение прежнее.
+   */
+  approvalRegistry?: ApprovalRegistry;
   /**
    * ADR-094: реестр метрик (задан только при `metrics.enabled`). Используется для
    * `synth_http_streams_active`: WS-апгрейд не проходит через Hono-middleware,
@@ -452,15 +459,69 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
               // поля не публикуются, поведение прежнее.
               const principal = parsePermissionPrincipal(msg.principal);
               const turnId = typeof msg.turn_id === 'string' && msg.turn_id.trim() !== '' ? msg.turn_id : undefined;
-              eventBus.publish(sid, 'permission.replied', {
-                approval_id: approvalId,
-                session_id: sid,
-                approved: action !== undefined ? action === 'allow' : msg.approved === true,
-                ...(action ? { action } : {}),
-                ...(typeof msg.once === 'boolean' ? { once: msg.once } : {}),
-                ...(principal ? { principal } : {}),
-                ...(turnId ? { turn_id: turnId } : {}),
-              });
+
+              // PROP-108 Ф3: ответ принимает только **носитель покрывающего
+              // гранта** (реестр подтверждений). Реестр не задан — слой
+              // Authority выключен/в shadow, поведение прежнее.
+              const registry = deps.approvalRegistry;
+              if (!registry) {
+                eventBus.publish(sid, 'permission.replied', {
+                  approval_id: approvalId,
+                  session_id: sid,
+                  approved: action !== undefined ? action === 'allow' : msg.approved === true,
+                  ...(action ? { action } : {}),
+                  ...(typeof msg.once === 'boolean' ? { once: msg.once } : {}),
+                  ...(principal ? { principal } : {}),
+                  ...(turnId ? { turn_id: turnId } : {}),
+                });
+                return;
+              }
+
+              (async () => {
+                // Принципал-отвечающий — **аутентифицированный** (клиенту не
+                // доверяем): подтверждать может только носитель гранта.
+                const responder: AuthorityPrincipal = {
+                  kind: 'user',
+                  id: user.id,
+                  roles: user.roles ?? [],
+                };
+                const claim = await registry.claim(approvalId, sid, responder, {
+                  ...(turnId ? { turnId } : {}),
+                  ...(typeof msg.digest === 'string' && msg.digest !== '' ? { digest: msg.digest } : {}),
+                });
+                if (!claim.ok) {
+                  // Отказ: подтверждение не принимается (нет гранта / повторный
+                  // ответ / чужой ход) — действие не выполняется.
+                  eventBus.publish(sid, 'permission.replied', {
+                    approval_id: approvalId,
+                    session_id: sid,
+                    approved: false,
+                    action: 'deny',
+                    reason: claim.reason,
+                  });
+                  ws.send(JSON.stringify({
+                    type: 'error',
+                    session_id: sid,
+                    data: {
+                      error: `Подтверждение не принято: ${claim.reason}`,
+                      code: 'APPROVAL_DENIED',
+                    },
+                    timestamp: nowISO(),
+                  }));
+                  return;
+                }
+                eventBus.publish(sid, 'permission.replied', {
+                  approval_id: approvalId,
+                  session_id: sid,
+                  approved: action !== undefined ? action === 'allow' : msg.approved === true,
+                  ...(action ? { action } : {}),
+                  ...(typeof msg.once === 'boolean' ? { once: msg.once } : {}),
+                  // Привязка — из реестра (серверный источник истины).
+                  principal: responder,
+                  turn_id: claim.binding?.turnId,
+                  digest: claim.binding?.digest,
+                });
+              })().catch(() => {});
             }
           } catch { /* ignore parse errors */ }
         });
