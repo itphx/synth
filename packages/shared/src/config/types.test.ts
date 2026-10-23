@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('mcpServerConfigSchema (ADR-071 §2.2)', () => {
@@ -242,5 +242,34 @@ describe('executionConfigSchema (ADR-077)', () => {
     expect(
       executionConfigSchema.safeParse({ remote: { concurrency: 0 } }).success,
     ).toBe(false);
+  });
+});
+
+/**
+ * PROP-090 Ф7: форма серверной политики плагинов в гибриде (`plugins.hybrid`).
+ */
+describe('pluginsHybridConfigSchema (PROP-090 Ф7)', () => {
+  it('дефолт: сервер не ограничивает (off), список пуст', () => {
+    expect(pluginsHybridConfigSchema.parse({})).toEqual({ mode: 'off', allow: [] });
+  });
+
+  it('принимает allowlist со списком имён', () => {
+    expect(
+      pluginsHybridConfigSchema.parse({ mode: 'allowlist', allow: ['demo'] }),
+    ).toEqual({ mode: 'allowlist', allow: ['demo'] });
+  });
+
+  it('fail-closed: неизвестный режим и пустое имя отклоняются', () => {
+    expect(pluginsHybridConfigSchema.safeParse({ mode: 'weird' }).success).toBe(false);
+    expect(pluginsHybridConfigSchema.safeParse({ allow: [''] }).success).toBe(false);
+  });
+
+  it('секция plugins: hybrid подставляется дефолтом', () => {
+    const parsed = pluginsConfigSchema.parse({});
+    expect(parsed.hybrid).toEqual({ mode: 'off', allow: [] });
+    expect(pluginsConfigSchema.parse({ hybrid: { mode: 'allowlist', allow: ['a'] } }).hybrid).toEqual({
+      mode: 'allowlist',
+      allow: ['a'],
+    });
   });
 });

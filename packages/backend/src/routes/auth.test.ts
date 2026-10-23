@@ -71,6 +71,46 @@ describe('routes/auth: GET /auth/oidc-meta', () => {
     expect(body).not.toHaveProperty('clientSecret');
     expect(body).not.toHaveProperty('client_secret');
   });
+
+  /**
+   * PROP-090 Ф7: сигнал о серверной политике плагинов в публичном дискавери.
+   *
+   * Сигнал содержит только `{enabled, mode}` — **без списка имён**: allow-list
+   * не публичен (полный список — по аутентифицированному роуту
+   * `GET /api/v2/settings/plugins`).
+   */
+  it('сигнал plugins: {enabled, mode} — без списка имён', async () => {
+    const app = new Hono();
+    app.route('/auth', createAuthRoutes({} as never, { ...OIDC_ENABLED }, undefined, undefined, undefined, {
+      enabled: true,
+      mode: 'allowlist',
+    }));
+    const res = await app.request('/auth/oidc-meta');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { plugins?: Record<string, unknown> };
+    expect(body.plugins).toEqual({ enabled: true, mode: 'allowlist' });
+    // Списка имён в публичном ответе нет.
+    expect(body.plugins).not.toHaveProperty('allow');
+  });
+
+  it('сигнал plugins отдаётся и при выключенном OIDC', async () => {
+    const app = new Hono();
+    app.route('/auth', createAuthRoutes({} as never, { ...BASE_CONFIG }, undefined, undefined, undefined, {
+      enabled: false,
+      mode: 'off',
+    }));
+    const res = await app.request('/auth/oidc-meta');
+    const body = (await res.json()) as { enabled: boolean; plugins?: Record<string, unknown> };
+    expect(body.enabled).toBe(false);
+    expect(body.plugins).toEqual({ enabled: false, mode: 'off' });
+  });
+
+  it('сигнал не задан → поле plugins отсутствует (старый клиент) ', async () => {
+    const app = makeApp({ ...OIDC_ENABLED });
+    const res = await app.request('/auth/oidc-meta');
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('plugins');
+  });
 });
 
 // Path traversal в аватаре: username приходит из OIDC и раньше подставлялся в

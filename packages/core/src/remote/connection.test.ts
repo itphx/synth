@@ -376,6 +376,140 @@ describe('RemoteConnection.connectFromSaved', () => {
   });
 });
 
+/**
+ * PROP-090 Ф7: дискавери серверной политики плагинов.
+ *
+ * Публичный сигнал (`GET /auth/oidc-meta`) содержит только `{enabled, mode}` —
+ * список имён не публичен; полный allow-list клиент берёт из
+ * аутентифицированного роута `GET /api/v2/settings/plugins`.
+ */
+describe('RemoteConnection — политика плагинов сервера (Ф7)', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'synth-conn-plugins-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** fetch-мок с сигналом плагинов в `/auth/oidc-meta` и полной политикой. */
+  function pluginFlowFetchMock(opts: {
+    signal?: Record<string, unknown>;
+    settings?: Record<string, unknown>;
+    settingsStatus?: number;
+  }) {
+    return vi.fn((url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes('/auth/oidc-meta')) {
+        return Promise.resolve(jsonResponse({
+          enabled: true,
+          issuer: ISSUER,
+          clientId: CLIENT_ID,
+          ...(opts.signal ? { plugins: opts.signal } : {}),
+        }));
+      }
+      if (u.includes('/protocol/openid-connect/token')) {
+        return Promise.resolve(jsonResponse({
+          access_token: 'at-ropc',
+          refresh_token: 'rt-ropc',
+          expires_in: 300,
+        }));
+      }
+      if (u.includes('/auth/status')) {
+        return Promise.resolve(jsonResponse({ authenticated: true, oidc_enabled: true, user: SERVER_USER }));
+      }
+      if (u.includes('/api/v2/settings/plugins')) {
+        return Promise.resolve(
+          jsonResponse(opts.settings ?? {}, opts.settingsStatus ?? 200),
+        );
+      }
+      return Promise.resolve(jsonResponse({ error: 'not_found' }, 404));
+    });
+  }
+
+  it('сигнал plugins из /auth/oidc-meta принимается и сохраняется', async () => {
+    vi.stubGlobal('fetch', pluginFlowFetchMock({
+      signal: { enabled: true, mode: 'allowlist' },
+    }));
+
+    const conn = new RemoteConnection({});
+    const meta = await conn.discoverOidc(BACKEND);
+
+    expect(meta.plugins).toEqual({ enabled: true, mode: 'allowlist' });
+    expect(conn.pluginSignal).toEqual({ enabled: true, mode: 'allowlist' });
+  });
+
+  it('старый сервер без поля plugins → сигнала нет, без падения', async () => {
+    vi.stubGlobal('fetch', pluginFlowFetchMock({}));
+
+    const conn = new RemoteConnection({});
+    const meta = await conn.discoverOidc(BACKEND);
+
+    expect(meta.plugins).toBeUndefined();
+    expect(conn.pluginSignal).toBeUndefined();
+  });
+
+  it('мусор в поле plugins → сигнал не принимается (политика неизвестна)', async () => {
+    vi.stubGlobal('fetch', pluginFlowFetchMock({ signal: { enabled: true, mode: 'weird' } }));
+
+    const conn = new RemoteConnection({});
+    const meta = await conn.discoverOidc(BACKEND);
+
+    expect(meta.plugins).toBeUndefined();
+    expect(conn.pluginSignal).toBeUndefined();
+  });
+
+  it('refreshPluginPolicy: полный allow-list из /api/v2/settings/plugins', async () => {
+    vi.stubGlobal('fetch', pluginFlowFetchMock({
+      signal: { enabled: true, mode: 'allowlist' },
+      settings: { hybrid: { mode: 'allowlist', allow: ['demo-plugin'] } },
+    }));
+
+    const conn = new RemoteConnection({ credentialsPath: join(dir, 'credentials.json') });
+    await conn.connectByPassword(BACKEND, 'lucky', 'secret');
+
+    const policy = await conn.refreshPluginPolicy();
+    expect(policy).toEqual({ mode: 'allowlist', allow: ['demo-plugin'] });
+    expect(conn.pluginPolicy).toEqual({ mode: 'allowlist', allow: ['demo-plugin'] });
+  });
+
+  it('refreshPluginPolicy: сервер без блока hybrid → политика неизвестна (undefined)', async () => {
+    vi.stubGlobal('fetch', pluginFlowFetchMock({ settings: {} }));
+
+    const conn = new RemoteConnection({ credentialsPath: join(dir, 'credentials.json') });
+    await conn.connectByPassword(BACKEND, 'lucky', 'secret');
+
+    expect(await conn.refreshPluginPolicy()).toBeUndefined();
+    expect(conn.pluginPolicy).toBeUndefined();
+  });
+
+  it('refreshPluginPolicy: сервер недоступен (403) → политика неизвестна, без падения', async () => {
+    vi.stubGlobal('fetch', pluginFlowFetchMock({ settingsStatus: 403 }));
+
+    const conn = new RemoteConnection({ credentialsPath: join(dir, 'credentials.json') });
+    await conn.connectByPassword(BACKEND, 'lucky', 'secret');
+
+    expect(await conn.refreshPluginPolicy()).toBeUndefined();
+  });
+
+  it('disconnect сбрасывает кэш политики', async () => {
+    vi.stubGlobal('fetch', pluginFlowFetchMock({
+      settings: { hybrid: { mode: 'allowlist', allow: ['demo-plugin'] } },
+    }));
+
+    const conn = new RemoteConnection({ credentialsPath: join(dir, 'credentials.json') });
+    await conn.connectByPassword(BACKEND, 'lucky', 'secret');
+    await conn.refreshPluginPolicy();
+    expect(conn.pluginPolicy).not.toBeUndefined();
+
+    conn.disconnect();
+    expect(conn.pluginPolicy).toBeUndefined();
+    expect(conn.pluginSignal).toBeUndefined();
+  });
+});
+
 describe('RemoteConnection.disconnect', () => {
   let dir: string;
 

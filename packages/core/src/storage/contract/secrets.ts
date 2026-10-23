@@ -89,6 +89,42 @@ export function describeServiceKeyRepository(
       expect(imported.revokedAt).toBeDefined();
       expect(await target.repo.resolveBySecret(created.key)).toBeNull();
     });
+
+    /**
+     * Ф7 (PROP-090, Уровень 2): привязка ключа к плагину (`plugin_id`).
+     *
+     * Привязка — часть **внутренней** модели записи: она обязана пережить
+     * create → resolve (контекст enforcement) и экспорт/импорт (перенос между
+     * backend'ами). Публичный DTO service-key поле не содержит — поэтому
+     * проверка идёт по `credential` и по записи переноса.
+     */
+    it('pluginId: привязка сохраняется в credential и переживает экспорт/импорт', async () => {
+      const source = await make();
+      const target = await make();
+      const created = await source.repo.create(
+        { label: 'plugin-token', scopes: ['plugins:invoke'], pluginId: 'demo-plugin' },
+        'admin',
+      );
+      expect(created.key.startsWith('synth_svc_')).toBe(true);
+
+      const resolved = await source.repo.resolveBySecret(created.key);
+      expect(resolved?.credential.pluginId).toBe('demo-plugin');
+
+      const record = (await source.repo.exportAll())[0]!;
+      expect(record.pluginId).toBe('demo-plugin');
+
+      await target.repo.importExisting(record);
+      const imported = await target.repo.resolveBySecret(created.key);
+      expect(imported?.credential.pluginId).toBe('demo-plugin');
+    });
+
+    it('обычный service-key: pluginId отсутствует (проверка не применяется)', async () => {
+      const { repo } = await make();
+      const created = await repo.create({ label: 'plain', scopes: ['events:ingest'] }, 'admin');
+      const resolved = await repo.resolveBySecret(created.key);
+      expect(resolved?.credential.pluginId).toBeUndefined();
+      expect((await repo.exportAll())[0]?.pluginId).toBeUndefined();
+    });
   });
 }
 

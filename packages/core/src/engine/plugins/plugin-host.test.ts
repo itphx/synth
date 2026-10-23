@@ -407,6 +407,59 @@ describe('PluginHost: шаг политики режима', () => {
   });
 });
 
+describe('PluginHost: Ф7 — серверная политика гибрида (Уровень 1, cooperative)', () => {
+  it('плагина нет в серверном allow-list → plugin.hybrid_not_allowed', async () => {
+    const { host, audit } = makeHost({
+      serverPolicy: () => ({ mode: 'allowlist', allow: ['other-plugin'] }),
+    });
+    const result = await host.activate(descriptor());
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.hybrid_not_allowed');
+    expect(result.step).toBe('policy');
+
+    // Отказ записан в журнал аудита плагинов.
+    const entries = await audit.list();
+    expect(entries.some((e) => e.action === 'activate' && e.reason === 'plugin.hybrid_not_allowed')).toBe(true);
+  });
+
+  it('плагин в серверном allow-list → активация проходит', async () => {
+    const { host } = makeHost({
+      serverPolicy: () => ({ mode: 'allowlist', allow: ['demo-plugin'] }),
+    });
+    const result = await host.activate(descriptor());
+    // Дальше гейта активации идёт шаг import (исполнение кода выключено).
+    expect(result.step).toBe('import');
+    expect(result.reason).toBe('plugin.execution_disabled');
+  });
+
+  it('политика неизвестна (сервера нет/недоступен) → активация проходит (cooperative)', async () => {
+    const { host } = makeHost({ serverPolicy: () => undefined });
+    const result = await host.activate(descriptor());
+    expect(result.step).toBe('import');
+    expect(result.reason).toBe('plugin.execution_disabled');
+    // Статус проверки сервером — «не проверен» (cooperative-маркер).
+    expect(await host.serverPolicyStatus('demo-plugin')).toBe('unverified');
+  });
+
+  it('сервер в режиме off → ограничений нет, статус allowed', async () => {
+    const { host } = makeHost({ serverPolicy: () => ({ mode: 'off', allow: [] }) });
+    const result = await host.activate(descriptor());
+    expect(result.step).toBe('import');
+    expect(await host.serverPolicyStatus('demo-plugin')).toBe('allowed');
+  });
+
+  it('сбой резолвера политики не ломает активацию (cooperative)', async () => {
+    const { host } = makeHost({
+      serverPolicy: () => {
+        throw new Error('сервер недоступен');
+      },
+    });
+    const result = await host.activate(descriptor());
+    expect(result.step).toBe('import');
+    expect(await host.serverPolicyStatus('demo-plugin')).toBe('unverified');
+  });
+});
+
 describe('PluginHost: шаг import (исполнение кода выключено в Ф1)', () => {
   it('executionEnabled=false → plugin.execution_disabled', async () => {
     const { host } = makeHost();

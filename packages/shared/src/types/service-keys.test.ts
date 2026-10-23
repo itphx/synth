@@ -18,8 +18,9 @@ describe('service-key scopes (ADR-052)', () => {
   it('каталог скоупов и семейства непусты и согласованы', () => {
     expect(SERVICE_SCOPES.length).toBeGreaterThan(0);
     // Каждый скоуп либо из wildcard-семейства, либо из «одиночного» пространства
-    // (без wildcard-семейства): llm:chat, addons:install, automation:install, users:read.
-    const standaloneNamespaces = ['llm', 'addons', 'automation', 'users'];
+    // (без wildcard-семейства): llm:chat, addons:install, automation:install,
+    // users:read, plugins:invoke (PROP-090 Ф7 — server-scoped токен плагина).
+    const standaloneNamespaces = ['llm', 'addons', 'automation', 'users', 'plugins'];
     for (const scope of SERVICE_SCOPES) {
       const family = scope.split(':')[0] ?? '';
       expect(
@@ -35,6 +36,10 @@ describe('service-key scopes (ADR-052)', () => {
     expect(isKnownScope('addons:install')).toBe(true);
     expect(isKnownScope('automation:install')).toBe(true);
     expect(isKnownScope('users:read')).toBe(true);
+    // Ф7: scope server-scoped токена плагина (Уровень 2).
+    expect(isKnownScope('plugins:invoke')).toBe(true);
+    // Wildcard-семейства `plugins` нет — точечный scope не покрывается ничем иным.
+    expect(isKnownScope('plugins:*')).toBe(false);
     expect(isKnownScope('events:*')).toBe(true);
     expect(isKnownScope('schedules:*')).toBe(true);
     // Зонтичный скоуп не образует wildcard-семейства: `automation:*` неизвестен.
@@ -49,9 +54,13 @@ describe('service-key scopes (ADR-052)', () => {
     expect(hasServiceScope(['addons:install'], 'addons:install')).toBe(true);
     expect(hasServiceScope(['automation:install'], 'automation:install')).toBe(true);
     expect(hasServiceScope(['users:read'], 'users:read')).toBe(true);
-    // Нет wildcard-семейств addons/automation/users — точечные скоупы не покрываются ничем иным.
+    expect(hasServiceScope(['plugins:invoke'], 'plugins:invoke')).toBe(true);
+    // Нет wildcard-семейств addons/automation/users/plugins — точечные скоупы не покрываются ничем иным.
     expect(hasServiceScope(['events:*'], 'addons:install')).toBe(false);
     expect(hasServiceScope(['events:*'], 'automation:install')).toBe(false);
+    expect(hasServiceScope(['events:*'], 'users:read')).toBe(false);
+    expect(hasServiceScope(['events:*'], 'plugins:invoke')).toBe(false);
+    expect(hasServiceScope(['plugins:invoke'], 'addons:install')).toBe(false);
     expect(hasServiceScope(['addons:install'], 'automation:install')).toBe(false);
     expect(hasServiceScope(['addons:install'], 'users:read')).toBe(false);
   });

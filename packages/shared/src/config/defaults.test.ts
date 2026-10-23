@@ -214,6 +214,8 @@ describe('defaultConfig', () => {
       deployDir: '/opt/synth/plugins',
       deployTrust: 'trusted',
       managedReadonly: true,
+      // Ф7: серверная политика гибрида — по умолчанию сервер не ограничивает.
+      hybrid: { mode: 'off', allow: [] },
     });
   });
 });

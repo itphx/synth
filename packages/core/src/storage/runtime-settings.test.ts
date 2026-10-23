@@ -493,6 +493,8 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
     deployDir: '/opt/synth/plugins',
     deployTrust: 'trusted' as const,
     managedReadonly: true,
+    // Ф7: серверная политика плагинов в гибридном режиме.
+    hybrid: { mode: 'off' as const, allow: [] },
   };
 
   it('runtime поверх base: каждое заданное поле перекрывает base', () => {
@@ -524,6 +526,8 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
       deployDir: '/opt/synth/plugins',
       deployTrust: 'trusted',
       managedReadonly: true,
+      // Ф7: серверная политика плагинов наследуется из base.
+      hybrid: { mode: 'off', allow: [] },
     });
   });
 
@@ -557,6 +561,8 @@ describe('mergePluginsConfig (PROP-090 §10)', () => {
       deployDir: '/opt/synth/plugins',
       deployTrust: 'trusted',
       managedReadonly: true,
+      // Ф7: серверная политика плагинов — дефолт схемы (сервер не ограничивает).
+      hybrid: { mode: 'off', allow: [] },
     });
   });
 

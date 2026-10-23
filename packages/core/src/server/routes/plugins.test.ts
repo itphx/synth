@@ -18,7 +18,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { PackManifest, PluginsConfig } from '@itphx/synth-shared';
+import type { PackManifest, PluginsConfig, PluginServerPolicy } from '@itphx/synth-shared';
 import { pluginsConfigSchema } from '@itphx/synth-shared';
 
 import { PromptBlockRegistry } from '../../engine/context/prompt-block-registry.js';
@@ -27,6 +27,7 @@ import { createToolRegistry } from '../../engine/tools/index.js';
 import { MemoryPluginAuditRepository } from '../../storage/memory/plugin-audit.js';
 import { MemoryPluginLockRepository } from '../../storage/memory/plugin-lock.js';
 import { MemorySettingsRepository } from '../../storage/memory/settings.js';
+import { ServiceApiKeyStore } from '../../storage/service-api-key-store.js';
 import { resolvePluginLayout } from '../../engine/plugins/layout.js';
 import { PluginRuntime } from '../../engine/plugins/runtime.js';
 import type { PluginSourceContext } from '../../engine/plugins/sources.js';
@@ -127,6 +128,8 @@ interface Stand {
   app: Hono;
   runtime: PluginRuntime;
   settings: MemorySettingsRepository;
+  /** Ф7: реестр service-key (проверка выданного токена). */
+  serviceKeys: ServiceApiKeyStore;
   dataDir: string;
   /** Вызовы `onPluginsChange` (живые бюджеты, долги Д3). */
   changes: Array<Record<string, unknown>>;
@@ -137,11 +140,15 @@ async function makeStand(
     config?: PluginsConfig;
     localInstall?: boolean;
     sourceContext?: PluginSourceContext;
+    /** Ф7: серверная политика плагинов (allow-list) — резолвер. */
+    serverPolicy?: () => PluginServerPolicy | undefined;
   } = {},
 ): Promise<Stand> {
   const dataDir = await makeTempDir('synth-plugin-routes-data-');
   const cfg = opts.config ?? config();
   const settings = new MemorySettingsRepository();
+  // Ф7: реестр service-key — выдача server-scoped токена плагину.
+  const serviceApiKeyStore = new ServiceApiKeyStore({ dataDir });
   const runtime = new PluginRuntime({
     layout: resolvePluginLayout({ dataDir, home: null, env: {} }),
     config: cfg,
@@ -160,6 +167,8 @@ async function makeStand(
     config: cfg,
     settings,
     localInstall: opts.localInstall ?? true,
+    serviceKeys: serviceApiKeyStore,
+    ...(opts.serverPolicy ? { serverPolicy: opts.serverPolicy } : {}),
     ...(opts.sourceContext ? { sourceContext: opts.sourceContext } : {}),
   };
 
@@ -179,7 +188,7 @@ async function makeStand(
       });
     },
   }));
-  return { app, runtime, settings, dataDir, changes };
+  return { app, runtime, settings, serviceKeys: serviceApiKeyStore, dataDir, changes };
 }
 
 /** Вызов с JSON-телом. */
@@ -667,6 +676,137 @@ describe('Plugin settings API — /api/v2/settings/plugins (PROP-090 §10)', () 
     expect(body.isOverridden).toBe(false);
     expect(body.restartRequired).toBe(true);
     expect(body.defaults.scan).toBe('enabled');
+  });
+
+  /**
+   * Ф7: блок `hybrid` — серверная политика плагинов в гибридном режиме.
+   *
+   * В standalone и при `mode: 'off'` сервер не ограничивает плагины — блок
+   * `{ mode: 'off', allow: [] }`. Список имён отдаётся только при `allowlist`.
+   */
+  it('GET: блок hybrid — по умолчанию off без списка; allowlist отдаёт список', async () => {
+    const { app } = await makeStand();
+    const res = await app.request('/api/v2/settings/plugins');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { hybrid: { mode: string; allow: string[] } };
+    expect(body.hybrid).toEqual({ mode: 'off', allow: [] });
+
+    // Переключение режима и списка — runtime-override (применяется рестартом).
+    const put = await jsonReq(app, 'PUT', '/api/v2/settings/plugins', {
+      hybrid: { mode: 'allowlist', allow: ['demo-plugin'] },
+    });
+    expect(put.status).toBe(200);
+    const after = (await put.json()) as { hybrid: { mode: string; allow: string[] } };
+    expect(after.hybrid).toEqual({ mode: 'allowlist', allow: ['demo-plugin'] });
+  });
+
+  it('GET: режим off не публикует список имён', async () => {
+    const { app } = await makeStand({
+      config: config({
+        hybrid: { mode: 'off', allow: ['demo-plugin'] },
+      }),
+    });
+    const res = await app.request('/api/v2/settings/plugins');
+    const body = (await res.json()) as { hybrid: { mode: string; allow: string[] } };
+    expect(body.hybrid).toEqual({ mode: 'off', allow: [] });
+  });
+});
+
+/**
+ * PROP-090 Ф7 (Уровень 2): выдача server-scoped токена плагину.
+ *
+ * Токен — service-key с привязкой `plugin_id`: сервер принимает его только с
+ * заголовком `X-Synth-Plugin-Id` и тем же значением, со scope
+ * `plugins:invoke` и (в режиме `allowlist`) с именем плагина в серверном
+ * allow-list. Секрет отдаётся **единожды** (at-rest — sha256).
+ */
+describe('Plugins API — server-scoped токен плагину (Ф7, Уровень 2)', () => {
+  it('POST /plugins/token: выдача токена (секрет один раз, scope plugins:invoke, привязка plugin_id)', async () => {
+    const { app, serviceKeys } = await makeStand();
+    // Плагин должен быть известен серверу (установлен на инстансе).
+    const bundle = await makeBundle();
+    expect((await jsonReq(app, 'POST', '/api/v2/plugins/install', { path: bundle })).status).toBe(201);
+
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/token', { pluginId: 'demo-plugin' });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      token: string;
+      pluginId: string;
+      scopes: string[];
+      expiresAt: string | null;
+    };
+    expect(body.token.startsWith('synth_svc_')).toBe(true);
+    expect(body.pluginId).toBe('demo-plugin');
+    expect(body.scopes).toContain('plugins:invoke');
+    expect(body.expiresAt).toBeNull();
+
+    // Секрет резолвится в ключ с привязкой к плагину (внутренняя модель).
+    const resolved = await serviceKeys.resolveBySecret(body.token);
+    expect(resolved?.credential.pluginId).toBe('demo-plugin');
+    expect(resolved?.credential.scopes).toContain('plugins:invoke');
+    // Публичные метаданные ключа секрета не содержат (секрет — один раз).
+    expect((resolved?.key as unknown as Record<string, unknown>).key).toBeUndefined();
+  });
+
+  it('POST /plugins/token: срок жизни (expiresInSec) и дополнительные scopes', async () => {
+    const { app } = await makeStand();
+    const bundle = await makeBundle();
+    await jsonReq(app, 'POST', '/api/v2/plugins/install', { path: bundle });
+
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/token', {
+      pluginId: 'demo-plugin',
+      scopes: ['events:ingest'],
+      expiresInSec: 600,
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { scopes: string[]; expiresAt: string | null };
+    expect(body.scopes).toContain('plugins:invoke');
+    expect(body.scopes).toContain('events:ingest');
+    expect(body.expiresAt).not.toBeNull();
+  });
+
+  it('POST /plugins/token: без pluginId → 400; неизвестный scope → 400; неверный expiresInSec → 400', async () => {
+    const { app } = await makeStand();
+
+    const noPlugin = await jsonReq(app, 'POST', '/api/v2/plugins/token', {});
+    expect(noPlugin.status).toBe(400);
+    expect((await errorOf(noPlugin)).code).toBe('VALIDATION_ERROR');
+
+    const badScope = await jsonReq(app, 'POST', '/api/v2/plugins/token', {
+      pluginId: 'demo-plugin',
+      scopes: ['bogus:read'],
+    });
+    expect(badScope.status).toBe(400);
+
+    const badExpiry = await jsonReq(app, 'POST', '/api/v2/plugins/token', {
+      pluginId: 'demo-plugin',
+      expiresInSec: -5,
+    });
+    expect(badExpiry.status).toBe(400);
+  });
+
+  it('POST /plugins/token: неизвестный серверу плагин → 404 plugin.not_found', async () => {
+    const { app } = await makeStand();
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/token', { pluginId: 'nope-plugin' });
+    expect(res.status).toBe(404);
+    expect((await errorOf(res)).code).toBe('plugin.not_found');
+  });
+
+  it('POST /plugins/token: плагин вне серверного allow-list → 403 PLUGIN_NOT_ALLOWED', async () => {
+    const { app } = await makeStand({
+      serverPolicy: () => ({ mode: 'allowlist', allow: ['other-plugin'] }),
+    });
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/token', { pluginId: 'demo-plugin' });
+    expect(res.status).toBe(403);
+    expect((await errorOf(res)).code).toBe('PLUGIN_NOT_ALLOWED');
+  });
+
+  it('POST /plugins/token: плагин из allow-list — токен выдаётся даже без установки на сервере', async () => {
+    const { app } = await makeStand({
+      serverPolicy: () => ({ mode: 'allowlist', allow: ['demo-plugin'] }),
+    });
+    const res = await jsonReq(app, 'POST', '/api/v2/plugins/token', { pluginId: 'demo-plugin' });
+    expect(res.status).toBe(201);
   });
 });
 
