@@ -31,6 +31,7 @@ the language rule in the root [AGENTS.md](../../AGENTS.md)).
 | [`docs/PUBLISHING.md`](../PUBLISHING.md) | [`docs/en/PUBLISHING.md`](./PUBLISHING.md) | ✅ available |
 | [`docs/TROUBLESHOOTING.md`](../TROUBLESHOOTING.md) | [`docs/en/TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) | ✅ available |
 | [`docs/KEYCLOAK.md`](../KEYCLOAK.md) | [`docs/en/KEYCLOAK.md`](./KEYCLOAK.md) | ✅ available |
+| [`docs/PLUGINS.md`](../PLUGINS.md) | [`docs/en/PLUGINS.md`](./PLUGINS.md) | ✅ available |
 | [`docs/ARCH_DECISIONS.md`](../ARCH_DECISIONS.md) | — | stays Russian |
 | [`docs/roadmap.md`](../roadmap.md) | — | stays Russian |
 
