@@ -78,6 +78,12 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     branch_point: session.branchPoint || null,
     plan_approved: session.planApproved ?? false,
     mode: session.mode || 'act',
+    /**
+     * ADR-106 Ф4 (шаг C): режим по принципалу — переопределения режима сессии
+     * для отдельных участников (`yolo` одного участника не действует на ходы
+     * другого). Пусто — у всех режим сессии (`mode`).
+     */
+    mode_by_principal: session.modeByPrincipal ?? null,
     /** ADR-025: применим ли переключатель режимов к агенту сессии (по capabilities). */
     mode_applicable: isModeApplicable(agent),
     todos: session.todos || null,

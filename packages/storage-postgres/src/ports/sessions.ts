@@ -84,6 +84,7 @@ const SESSION_FIELDS = [
   'branch_point',
   'plan_approved',
   'mode',
+  'mode_by_principal',
   'user_id',
   'owner_id',
   'project_id',
@@ -116,6 +117,7 @@ const SESSION_FIELDS = [
 ] as const;
 
 const SESSION_JSON_FIELDS: ReadonlySet<string> = new Set([
+  'mode_by_principal',
   'todos',
   'prompt_states',
   'obfuscation_map',

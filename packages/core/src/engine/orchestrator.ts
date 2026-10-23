@@ -70,6 +70,7 @@ import { authorityActionForTool } from './authority/actions.js';
 import { deriveAuthorityTarget } from './authority/target.js';
 import { resolveTurnPrincipal } from './authority/principal.js';
 import { deriveSessionParticipants } from './authority/participants.js';
+import { resolveTurnMode } from './authority/mode.js';
 import { createAuthorityTurnContext, type AuthorityTurnContext } from './authority/turn.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
@@ -2574,7 +2575,11 @@ export class ChatOrchestrator {
 
     // ADR-025: режим Plan/Act — runtime-состояние сессии + строгость из настроек
     const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
-    let sessionMode: SessionMode = session.mode ?? 'act';
+    // ADR-106 Ф4 (шаг C): режим — свойство **принципала хода**: переопределение
+    // участника (`modeByPrincipal`) → базовый режим сессии. `yolo`, выставленный
+    // одним участником, действует только на его ходы и не снимает подтверждения
+    // у других (прежнее поведение — базовый режим сессии).
+    let sessionMode: SessionMode = resolveTurnMode(session, turnPrincipal);
     let planApproved = Boolean(session.planApproved);
 
     // ADR-030 (Ф0 PROP-090): `message_received` — входящее сообщение в сессии.
