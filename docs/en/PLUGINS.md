@@ -651,3 +651,408 @@ Typical causes:
 
 A rejected registration does not count as "registered": for example, a block with the tier `stable`
 is rejected, and if it was declared in `provides`, the activation fails with `provides_mismatch`.
+
+---
+
+## 5. Two execution modes
+
+One extension point contract — two transports. The mode is set by the manifest's `mode`.
+
+| Aspect | `inline` | `out-of-process` (`remote`) |
+|---|---|---|
+| Where the code runs | in the core process | a separate Node process, HTTP/1.1 + JSON |
+| Isolation | none | process-level: a crash/a memory leak does not bring down the core |
+| Latency | ~0 | a round-trip per point call |
+| Access to internals | yes (limited by the facade and discipline) | only serializable DTOs |
+| What the bundle needs | `dist/index.js` | `dist/server.js` |
+| When to choose | `llmFilters` (the hot path), fast blocks, simple tools | heavy filters (ML, antivirus, DLP), blocks with a heavy load, untrusted code |
+
+`mode: "both"` is a compromise: the host chooses `inline` if the bundle has `dist/index.js`,
+otherwise `remote`. For `both` the bundle should have both entry points if you want predictability.
+
+### 5.1. `inline`: the module contract
+
+The host does an `import()` of the entry point and accepts **one of three forms**:
+
+```typescript
+export function apply(facade) { /* … */ }        // 1
+export default { apply(facade) { /* … */ } };    // 2
+export default function apply(facade) { /* … */ }// 3
+```
+
+Any other form → `plugin.module_invalid` ("the module was loaded, but the contract was not
+fulfilled"). Loader restrictions: the file must lie inside the installation directory (containment by
+`realpath` — `..`, absolute paths and symlinks pointing outside are rejected), the extension is
+only `.js`/`.mjs`, the entry file size is ≤ 8 MiB. The `import()` is done with cache-busting
+(`?v=<contentHash|mtime>`), so a reinstall does not serve the old module.
+
+### 5.2. `out-of-process`: the wire protocol
+
+```text
+GET  /health        → 200 (no token; the process is alive)
+GET  /capabilities  → { protocol: 1, name, version, points: { promptBlocks?, llmFilters?, tools? } }
+POST /invoke        → { protocol: 1, point, id, input } → { output }
+```
+
+- **Loopback only**: `127.0.0.1`/`::1`/`localhost`, the scheme is `http://`.
+- A **bearer token** on `/capabilities` and `/invoke` (not on `/health`). The token is the
+  instance's, from the file `{dataDir}/secrets/plugin-token` (`0600`); the host passes it to the
+  process in the environment.
+- The **process environment** is exactly: `PATH`, `NODE_ENV`, `SYNTH_PLUGIN_PORT=0`,
+  `SYNTH_PLUGIN_TOKEN`. No other Synth process variables are passed to the plugin.
+- **Readiness**: the server prints to **stdout** the line `SYNTH_PLUGIN_READY port=<n>`; the host
+  reads it and then polls `/health`. Stdout only: diagnostics go to stderr.
+- **Errors**: `{ error: { reason, message } }` with `reason` from `invalid_request`/`unknown_point`/
+  `unknown_id`/`unauthorized`/`timeout`/`internal_error`/`protocol_mismatch`.
+- **Identity**: `name`/`version` in `/capabilities` must match the manifest, otherwise
+  `protocol_mismatch` (fail-closed).
+- **Tools** are declared in `points.tools[]` (`name` — local, `description`, `parameters?` — a JSON
+  Schema, `capabilities` — **mandatory**), and not through `apply()`: there is no code in the host
+  process.
+
+A minimal server (`dist/server.js` is a **script**, the host runs it: `node dist/server.js`):
+
+```typescript
+// src/server.ts  →  dist/server.js
+import { createServer } from 'node:http';
+
+const TOKEN = process.env.SYNTH_PLUGIN_TOKEN ?? '';
+const PORT = Number(process.env.SYNTH_PLUGIN_PORT ?? '0');
+const PLUGIN = { name: 'my-plugin', version: '0.1.0' };
+
+const server = createServer((req, res) => {
+  const json = (status: number, body: unknown) => {
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+  };
+
+  if (req.method === 'GET' && req.url === '/health') {
+    json(200, { status: 'ok' });
+    return;
+  }
+  if (req.headers.authorization !== `Bearer ${TOKEN}`) {
+    json(401, { error: { reason: 'unauthorized', message: 'bad token' } });
+    return;
+  }
+  if (req.method === 'GET' && req.url === '/capabilities') {
+    json(200, {
+      protocol: 1,
+      ...PLUGIN,
+      points: {
+        promptBlocks: [
+          { key: 'plugin.my-plugin.notes', tier: 'context', order: 120, title: 'Project notes' },
+        ],
+        tools: [
+          {
+            name: 'notes_search',
+            description: 'Searches for a note by keyword.',
+            parameters: {
+              type: 'object',
+              properties: { query: { type: 'string' } },
+              required: ['query'],
+            },
+            capabilities: ['search'],
+          },
+        ],
+      },
+    });
+    return;
+  }
+  // POST /invoke: parse the body, call the point, answer { output } — see the DTO format
+  json(400, { error: { reason: 'unknown_point', message: 'not implemented in example' } });
+});
+
+server.listen(PORT, '127.0.0.1', () => {
+  const address = server.address();
+  const actual = typeof address === 'object' && address ? address.port : PORT;
+  // The only line the host reads from stdout.
+  console.log(`SYNTH_PLUGIN_READY port=${actual}`);
+});
+
+process.on('SIGTERM', () => process.exit(0));
+```
+
+The types `PluginServerOptions`/`PluginServerHandle`/`PluginServerFactory` in `@itphx/synth-shared`
+describe the shape of the server for tests and helper wrappers; **the host itself does not import
+the factory** — it runs the file as a script and waits for the readiness line.
+
+Building the second entry point: `esbuild src/server.ts --bundle --format=esm --platform=node
+--target=node20 --outfile=dist/server.js`.
+
+> **A `package.json` with `"type": "module"` is mandatory** in the bundle root: without it Node
+> treats a `.js` file as CommonJS, and `import`/`export` in the entry point do not work (this
+> concerns both modes).
+
+### 5.3. What crosses the boundary
+
+Only serializable DTOs:
+
+| Point | Input | Output |
+|---|---|---|
+| `promptBlocks` | `PromptBlockContext` | `{ content, provenance?, status? }` (a string/`null` is also allowed) |
+| `llmFilters` | `LlmFilterInput` | `LlmFilterVerdict` |
+| `tools` | `{ parameters, context: { sessionId, messageId, workingDir } }` | `{ content, isError? }` |
+
+Storage ports, the core registries, `GatewayProvider`, `ToolContext.extra` are **not** exposed
+outwards.
+
+---
+
+## 6. Bundle rules (bundle-only)
+
+A plugin is distributed as a **self-contained ESM bundle**: everything needed at runtime is inlined
+into the bundle files. `npm install` is not run for a plugin, `node_modules` never appears, and
+there is no runtime resolution of npm dependencies.
+
+### 6.1. What may and may not go into the bundle
+
+| Artifact | Rule |
+|---|---|
+| ordinary files and directories | yes |
+| `node_modules/`, `.git/` | are not part of the bundle (skipped during installation) |
+| symlinks | are not read: they are skipped during installation, and in archives they are **rejected** (fail-closed) |
+| devices, FIFOs, hardlinks | are rejected in archives |
+| the entry point | `.js`/`.mjs`, inside the bundle directory, ≤ 8 MiB |
+| `@itphx/*` | may be left external, but the **safer** option is `import type` only (erased by the build): a runtime import of a host package requires a permission from the plugin directory |
+| other npm dependencies | must be inlined into the bundle |
+| binary assets | are copied byte for byte; only the text files enter the `content_hash` (the scanner sees the binary ones too) |
+
+### 6.2. What the scanner does
+
+The scanner is **static and advisory**: the code is not executed, the scanner only issues a verdict;
+the install policy matrix blocks the installation (§7). The categories of findings (7):
+
+| Category | What it looks for |
+|---|---|
+| `exfiltration` | reading `process.env`, access to `.env`/`id_rsa`/`credentials.json`/certificates, `~` |
+| `injection` | "ignore previous instructions", requests to reveal the prompt, a role change, hiding from the user, inline shell |
+| `destructive` | `rm -rf`, filesystem deletion, `DROP`, `chmod 777`, `sudo`, `child_process` |
+| `persistence` | `crontab`, `systemd`, shell rc files, `authorized_keys`, global installations, install scripts |
+| `network` | network calls, sockets, DNS, remote execution |
+| `obfuscation` | encoded strings, `eval`, dynamic imports |
+| `invisible_unicode` | zero-width, bidi, unicode tags, soft hyphen |
+
+The `severity → verdict` boundaries: `info|low → safe`, `medium → caution`, `high|critical →
+dangerous`. The verdict of the bundle is the maximum over the findings.
+
+The structural quotas: **50** files, **1024 KiB** in total → no higher than `caution`; **256 KiB** per
+file or an executable binary → `dangerous`. The exceptions are `.skillignore` files in the gitignore
+style (`#`, `!`, `/`, `*`, `**`, "the last match wins").
+
+The practical conclusion: do not write `child_process`, `eval`, a read of `process.env` next to the
+network, or "hidden" unicode characters in the bundle — that is either `caution` (a manual
+confirmation) or `dangerous` (a block).
+
+---
+
+## 7. Trust and install policy
+
+Plugins inherit the extension trust model (PROP-068 §4). The levels (from the highest):
+`builtin` → `verified` → `trusted` → `community`. The level is **resolved by the source**, not by
+the manifest:
+
+| Installation source | Where the trust comes from |
+|---|---|
+| CLI `synth plugin install --trust <level>` | the flag value (default `community`) |
+| API `POST /api/v2/plugins/install { trustLevel }` | the request value |
+| the deploy directory (`plugins.deployDir`) | `plugins.deployTrust` (default `trusted`) |
+| the extension registry | the `trust_level` of the registry entry — the **source of truth** for publication |
+
+`trust` in the manifest is only an **upper bound** (a claim); the actual level is determined by the
+source. Trust cannot be raised by the manifest.
+
+### 7.1. Trust floor
+
+`plugins.trustFloor` (`trusted` by default) is the minimum level **for installing** a plugin. The
+check runs **before** the install policy and before the scan decision:
+
+```text
+manifest → bundle contents/hash → fail-closed (scan+executionEnabled) → trust-floor → scan →
+runtime-install → install-policy (allow/ask/block)
+```
+
+If the trust is below the threshold — a refusal `plugin.trust_below_floor` (nothing is written to
+disk). That is why a local plugin is installed with `--trust trusted`: otherwise the default
+`community` does not pass the threshold.
+
+### 7.2. The install policy matrix for plugins
+
+For `kind: "plugin"` a separate cell of the matrix applies — it **does not depend** on the trust:
+
+| Scan verdict | Decision | What happens |
+|---|---|---|
+| `safe` | `allow` | installation into `installed/<name>@<version>/`, an entry in the lock |
+| `caution` | `ask` | the bundle goes to `quarantine/<name>@<version>/`; the installation is **not finished** — an explicit `approve` is needed |
+| `dangerous` | `block` | a refusal `plugin.scan_rejected` |
+
+Confirming the quarantine (`synth plugin approve <name>` / `POST /api/v2/plugins/:name/approve`)
+re-runs the gates and compares `PLUGIN_INTEGRITY.json` with the actual hash; after that the bundle
+is moved into `installed/`.
+
+### 7.3. Managed plugins (deploy-time)
+
+Plugins delivered **by an image or a PVC** (`plugins.deployDir`) are installed when the instance
+starts and **cannot be removed** via the API/CLI:
+
+- `plugins.deployTrust` (default `trusted`) — the trust of the deploy bundles;
+- `plugins.managedReadonly` (default `true`) — a plugin is managed ⇔ `managedReadonly` is on and
+  (`lock.source === "deploy"` or `lock.identifier` is inside `deployDir`);
+- an attempt to `DELETE /api/v2/plugins/:name` or to update → `403 plugin.managed_readonly` (the
+  CLI exits with code 1).
+
+Why it is so: a plugin removed by hand would come back on the next start, and an `update` would
+replace the image's delivery. Changing such a plugin means a **new image or a redeployment of the
+directory**. For the author this means: if your plugin is planned for the managed contour, its
+version must be raised together with the image.
+
+---
+
+## 8. Testing a plugin
+
+### 8.1. The layer's contract suite
+
+The core has a "passport" of the extension contract — `describePluginContract`
+(`@itphx/synth-core`): a set of checks that the layer must satisfy. It runs on **8 fixtures** (the
+reference one plus one violation each: `stable-block`, `bad-phase`, `bad-verdict`, `provides-mismatch`,
+`unknown-capability`, `reserved-tool-name`, `untrusted-deny`) and on **two transports** — 23 checks
+per transport.
+
+What exactly is checked:
+
+| Block | Checks |
+|---|---|
+| `promptBlocks` | the tier/keys/`order`; `stable` is rejected; the character budget; `status` (`empty`/`truncated`); the block lands in the prompt, `provenance` = `plugin:<name>` |
+| `llmFilters` | valid phases; the traversal order = the registration order; the default `failMode` matches the trust; an unknown verdict is treated per `failMode`; the downgrade of an untrusted veto |
+| `tools` | the namespace `plugin_<ns>_<tool>`; no collision with the builtin/MCP ones; the source `plugin`; the tool is visible to the permission layer and can be forbidden; `deregister` works |
+| `provides` | the reconciliation of all three kinds of contributions by name |
+| dispose | after `deactivate()` not a single registration is left |
+| the ban on bypasses | an unknown/reserved capability, a foreign namespace, a declared trust above the actual one |
+
+> **An honest clarification.** `describePluginContract` is the "passport" of the **layer**: the
+> fixtures are built into the core, and an arbitrary bundle cannot be substituted there. To verify
+> **your** plugin use the recipe from §8.2 — it checks the same properties on your bundle.
+>
+> The contract suite is available through a separate subpath (it is not part of the main package
+> bundle — it needs `vitest`, which is absent from the production image):
+>
+> ```typescript
+> import { describePluginContract, createContractHarness } from '@itphx/synth-core/engine/plugins/contract.js';
+> ```
+>
+> `createContractHarness` assembles the reference harness (the registries, the composer, the gateway,
+> the permission layer) — it can be reused in the integration test of your bundle instead of a manual
+> assembly.
+
+### 8.2. An integration test for your plugin
+
+`PluginHost`, `PromptBlockRegistry`, `LlmFilterRegistry`, `ToolRegistry` and
+`createInlinePluginLoader` are public exports of `@itphx/synth-core`. That is enough to run the
+"passport" on **your** bundle:
+
+```typescript
+// test/contract.test.ts
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { describe, expect, it, beforeEach } from 'vitest';
+import {
+  PluginHost,
+  PromptBlockRegistry,
+  LlmFilterRegistry,
+  ToolRegistry,
+  createInlinePluginLoader,
+} from '@itphx/synth-core';
+import { pluginsConfigSchema } from '@itphx/synth-shared';
+
+const ROOT = process.cwd();               // the plugin directory
+const read = (rel: string) => readFile(join(ROOT, rel), 'utf8');
+
+/** A minimal audit journal: the host needs a port, the content does not matter to the test. */
+const audit = {
+  entries: [] as unknown[],
+  async append(entry: unknown) { this.entries.push(entry); },
+  async list() { return this.entries; },
+  async clear() { this.entries = []; return 0; },
+} as never;
+
+describe('the my-plugin plugin contract', () => {
+  let host: PluginHost;
+  let tools: ToolRegistry;
+  let promptBlocks: PromptBlockRegistry;
+  let llmFilters: LlmFilterRegistry;
+
+  beforeEach(() => {
+    tools = new ToolRegistry();
+    promptBlocks = new PromptBlockRegistry();
+    llmFilters = new LlmFilterRegistry();
+    host = new PluginHost({
+      audit,
+      // For the test the trust must not interfere: the `community` policy + execution enabled.
+      config: { ...pluginsConfigSchema.parse({}), executionEnabled: true, trustFloor: 'community' },
+      hostVersion: '0.12.0',
+      loader: createInlinePluginLoader(),
+      tools,
+      promptBlocks,
+      llmFilters,
+      logger: { warn: () => undefined },
+    });
+  });
+
+  it('activates, provides a block, a filter and a tool; deactivates with no leftovers', async () => {
+    const manifest = JSON.parse(await read('synth.pack'));
+    const result = await host.activate(
+      {
+        name: manifest.name,
+        version: manifest.version,
+        manifest,
+        rootDir: ROOT,
+        entry: 'dist/index.js',
+        trustLevel: 'trusted',
+        installKind: 'deploy',
+        files: { 'synth.pack': await read('synth.pack'), 'dist/index.js': await read('dist/index.js') },
+      },
+      { actor: 'test' },
+    );
+
+    expect(result.outcome).toBe('activated');
+
+    // promptBlocks: the key, the tier, the provenance
+    const block = promptBlocks.get('plugin.my-plugin.notes');
+    expect(block?.provider.tier).not.toBe('stable');
+    expect(block?.provenance).toBe('plugin:my-plugin');
+
+    // tools: the namespace and the source
+    expect(tools.get('plugin_my_plugin_notes_search')?.source).toBe('plugin');
+
+    // llmFilters: exactly one is registered
+    expect(llmFilters.size).toBe(1);
+
+    // dispose discipline: after deactivation the registries are empty
+    await host.deactivate('my-plugin');
+    expect(promptBlocks.size).toBe(0);
+    expect(tools.listPlugin()).toHaveLength(0);
+    expect(llmFilters.size).toBe(0);
+  });
+});
+```
+
+Check on your plugin the same things the passport checks:
+
+- [ ] the block key starts with `plugin.<name>.`, the tier is not `stable`, `order` is set;
+- [ ] the budget: a block longer than `plugins.promptBlockMaxChars` is truncated with
+      `status: "truncated"` (check it with a long response);
+- [ ] `provides` matches the actual registrations (the activation does not fail with
+      `provides_mismatch`);
+- [ ] the filter: the `phase` is valid; the `failMode` is deliberate; a `deny` for `community` does
+      not block;
+- [ ] the tool: the name is local, the capabilities are non-empty, the arguments are validated, the
+      errors are returned as `isError`, not as an exception;
+- [ ] after `deactivate()` there are no blocks, filters or tools left.
+
+### 8.3. Verifying on a live instance
+
+1. `synth plugin scan ./my-plugin` — the verdict and the findings (exit code 1 for `dangerous`);
+2. `synth plugin install ./my-plugin --trust trusted` → restart the instance;
+3. the "Plugins" section: activity, scan verdict, trust, mode;
+4. `GET /api/v2/sessions/:id/prompt` — the block in the manifest;
+5. the journal `{dataDir}/audit/plugins.jsonl` — the `install`/`activate`/`filter` actions and the
+   refusal codes.
