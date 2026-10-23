@@ -262,7 +262,7 @@ export type {
   PipelineMode,
   PipelineRunStatus,
 } from '@itphx/synth-shared/types'
-// PROP-090: слой плагинов (жизненный цикл и runtime-политика).
+// ADR-090: слой плагинов (жизненный цикл и runtime-политика).
 export type {
   PluginTrustLevel,
   PluginScanVerdict,

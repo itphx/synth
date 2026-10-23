@@ -2,9 +2,9 @@
 
 > **Статус:** ✅ Реализовано
 > **Дата:** 2026-10-16
-> **Обновлено:** 2026-10-22 — добавлен порт `PluginAuditRepository` (PROP-090 §9, журнал аудита
+> **Обновлено:** 2026-10-22 — добавлен порт `PluginAuditRepository` (ADR-090, журнал аудита
 > плагинов); счётчик портов приведён к факту (37).
-> **Обновлено:** 2026-10-22 — добавлен порт `PluginLockRepository` (PROP-068 §4.4 / PROP-090 §5,
+> **Обновлено:** 2026-10-22 — добавлен порт `PluginLockRepository` (PROP-068 §4.4 / ADR-090,
 > lock-файл плагинов); счётчик портов приведён к факту (38).
 > **Связано:** [ADR-005](./adr-005-json-storage.md), [ADR-095](./adr-095-god-object-decomposition.md), [ADR-097](./adr-097-storage-provider-class.md), [ADR-077](./adr-077-runtime-toolchain.md); [docs/ARCH_DECISIONS.md](../ARCH_DECISIONS.md).
 
@@ -74,7 +74,7 @@ backend с JSON + атомарной записью ([ADR-005](./adr-005-json-st
 - `storage/storage-context.ts` — `StorageContext` (в т.ч. опциональные `close?`/`locks?`/`health?`/`schemaMigrations?`/`purgeSchema?`/`degraded?`) + `createFileStorage`/`createMemoryStorage`/`createStorageContext` и **async-каскад** `createStorageContextAsync`/`buildStorageContext`; деградация — [ADR-098](./adr-098-storage-degraded-recovery.md).
 - `storage/file-blob-store.ts` — `FileBlobStore` (порт `BlobStore`); `storage/defaults-store.ts` —
   `DefaultsStore` (перенесён в core; backend оставляет реэкспорт).
-- `storage/ports/plugin-audit-repository.ts` — порт `PluginAuditRepository` (PROP-090 §9): журнал
+- `storage/ports/plugin-audit-repository.ts` — порт `PluginAuditRepository` (ADR-090): журнал
   аудита плагинов, append-only (`append`/`list` «свежие первыми» с фильтрами
   `plugin`/`action`/`outcome`/`limit`/`clear`). **Отдельный** порт: `SECURITY_AUDIT_SCOPES` не
   расширяется — семантика «событие расширения» ≠ «изменение политики». Реализации: файл
@@ -83,7 +83,7 @@ backend с JSON + атомарной записью ([ADR-005](./adr-005-json-st
   таблица `plugin_audit`, миграция `006-plugin-audit.ts`); контрактный suite —
   `storage/contract/plugin-audit-repository.contract.ts`, прогон на живой БД —
   `storage/contract/postgres.test.ts` (ADR-097). Подключение — `StorageContext.pluginAudit`.
-- `storage/ports/plugin-lock-repository.ts` — порт `PluginLockRepository` (PROP-068 §4.4 / PROP-090 §5):
+- `storage/ports/plugin-lock-repository.ts` — порт `PluginLockRepository` (PROP-068 §4.4 / ADR-090):
   lock-файл плагинов `plugins.lock.json` — **источник истины** для update/uninstall (провенанс: источник,
   pin `ref`, `content_hash`, уровень доверия, вердикт скана). Ключ записи — **имя плагина** (upsert;
   `installed_at` иммутабельно, `updated_at` обновляется). Реализации: файл

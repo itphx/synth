@@ -18,7 +18,7 @@ import { refreshAccessToken } from './device-flow.js';
 import { RemoteSession } from './session.js';
 import type { RemoteSessionOptions } from './session.js';
 import type { RemoteRequestInfo } from '../metrics/collectors/hybrid.js';
-// PROP-090 Ф7: сигнал и полная политика плагинов сервера (гибрид).
+// ADR-090 Ф7: сигнал и полная политика плагинов сервера (гибрид).
 import { parsePluginPolicySignal } from '@itphx/synth-shared';
 import type { PluginPolicySignal, PluginServerPolicy } from '@itphx/synth-shared';
 
@@ -64,7 +64,7 @@ export class RemoteConnection {
   /** Последний использованный issuer (для UI/логов). */
   private _issuer: string | null = null;
   /**
-   * Ф7 (PROP-090): сигнал о слое плагинов из публичного дискавери
+   * Ф7 (ADR-090): сигнал о слое плагинов из публичного дискавери
    * (`GET /auth/oidc-meta`). Старый сервер без поля → `undefined` (сигнала
    * нет, политика неизвестна).
    */
@@ -105,7 +105,7 @@ export class RemoteConnection {
     return this._issuer;
   }
 
-  // ── Политика плагинов сервера (PROP-090 Ф7) ──
+  // ── Политика плагинов сервера (ADR-090 Ф7) ──
 
   /**
    * Сигнал о политике плагинов из публичного дискавери (`/auth/oidc-meta`).
@@ -185,7 +185,7 @@ export class RemoteConnection {
    * - сеть недоступна → fallback на deps.defaultIssuer/defaultClientId,
    *   при их отсутствии — RemoteError('OFFLINE').
    *
-   * Ф7 (PROP-090): ответ может содержать сигнал `plugins`
+   * Ф7 (ADR-090): ответ может содержать сигнал `plugins`
    * (`{ enabled, mode }`) — серверная политика плагинов в гибриде. Старый
    * сервер без поля → сигнала нет (`undefined`), клиент остаётся cooperative.
    */

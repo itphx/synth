@@ -176,7 +176,7 @@ CREATE TABLE rate_limit_windows (
 - **Кэш URL-инструкций** (`{dataDir}/instructions-cache`, `packages/core/src/engine/context/instructions.ts:1085`) — на каждой реплике свой; расхождение с источником безопасно (следующий запрос с обновлённым TTL перечитает).
 - **Кэш discovery скиллов** (`packages/core/src/engine/skills/watcher.ts:14-49`) — инвалидация по подписи `mtime/size`; на реплике без общего PVC подпись всегда «старая» → пересканирование (безопасно, дороже).
 - **Decision-метрики** (`packages/core/src/engine/router/decision-metrics.ts:113`) — счётчики процесса; Prometheus складывает series реплик.
-- **`HookBus`** (`packages/core/src/engine/hooks/hook-bus.ts:49-58`) — ядровый in-process примитив (ADR-030); распределённость хуков — отдельная задача (Plugin SDK, PROP-090).
+- **`HookBus`** (`packages/core/src/engine/hooks/hook-bus.ts:49-58`) — ядровый in-process примитив (ADR-030); распределённость хуков — отдельная задача (Plugin SDK, ADR-090).
 - **Per-process реестр агентов** — значение общее, кэш локальный (`packages/core/src/engine/agents/index.ts:135`).
 - **Кольцевой буфер стрима** (`packages/core/src/queue/processor.ts:36`, `:562-573`) — буфер последних чанков для переподключения; локальный по определению.
 - **Счётчики HTTP-метрик** процесса (`synth_process_*`) — ADR-094.

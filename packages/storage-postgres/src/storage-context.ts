@@ -164,7 +164,7 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // (`pipeline_specs`/`pipeline_versions`/`pipeline_runs`/`pipeline_run_events`,
     // миграция 004).
     ...buildPipelinePorts(deps),
-    // PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов (таблица `plugin_lock`,
+    // PROP-068 §4.4 / ADR-090: lock-файл плагинов (таблица `plugin_lock`,
     // миграция 007) — источник истины для update/uninstall.
     ...buildPluginLockPorts(deps),
     // FS/package-bound порты: остаются файловыми (см. шапку модуля).
@@ -174,7 +174,7 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // ADR-051/ADR-100 (пайплайны) и ADR-086 §5 (реестр установок пакетов) —
     // переходно файловые (тот же FS/package-bound класс портов, что и выше):
     // SQL-реализация этих двух портов в драйвере ещё не заведена, домен к ним
-    // ещё не подключён (PROP-090 отложен). Контрактный suite проходит и на них
+    // ещё не подключён (ADR-090 отложен). Контрактный suite проходит и на них
     // (файловая реализация core), поэтому поведение backend'ов совпадает.
     pipelines: file.pipelines,
     packs: file.packs,

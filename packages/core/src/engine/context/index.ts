@@ -6,7 +6,7 @@ export {
   sortPromptBlocks,
   joinPromptBlocks,
 } from './prompt-blocks.js';
-// PROP-090 §«Точка promptBlocks»: реестр провайдеров блоков системного промпта.
+// ADR-090: реестр провайдеров блоков системного промпта.
 export {
   PromptBlockRegistrationError,
   PromptBlockRegistry,

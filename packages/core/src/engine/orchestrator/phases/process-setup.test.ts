@@ -303,7 +303,7 @@ describe('runProcessSetup', () => {
     expect(stored.promptStates!.developer).toMatchObject({ reason: 'override', staticPrefix: '' });
   });
 
-  it('PROP-090: «вопрос хода» (текст сообщения пользователя) уходит в контекст композера', async () => {
+  it('ADR-090: «вопрос хода» (текст сообщения пользователя) уходит в контекст композера', async () => {
     const { id, message } = await makeSession();
     const deps = makeDeps();
 
@@ -314,7 +314,7 @@ describe('runProcessSetup', () => {
     );
   });
 
-  it('PROP-090: системные/state-сообщения в «вопрос хода» не попадают', async () => {
+  it('ADR-090: системные/state-сообщения в «вопрос хода» не попадают', async () => {
     const { id, message } = await makeSession();
     // Последнее сообщение пользователя — до state-сообщения: state-сообщение
     // не должно перебивать вопрос хода.
@@ -340,7 +340,7 @@ describe('runProcessSetup', () => {
     );
   });
 
-  it('PROP-090: смена содержимого плагинного блока инвалидирует promptStates', async () => {
+  it('ADR-090: смена содержимого плагинного блока инвалидирует promptStates', async () => {
     const { id, message } = await makeSession();
     const withPluginBlock = (content: string): ComposedPrompt => ({
       ...composedBase,

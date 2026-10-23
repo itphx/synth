@@ -1,5 +1,5 @@
 /**
- * PROP-090 §5: runtime-override включений/настроек плагинов (`plugins.json`).
+ * ADR-090: runtime-override включений/настроек плагинов (`plugins.json`).
  *
  * Файл лежит рядом с lock-файлом в раскладке `<home>/plugin/` (без home —
  * `{dataDir}/plugin/`) и хранит **per-plugin** переопределения: включён ли

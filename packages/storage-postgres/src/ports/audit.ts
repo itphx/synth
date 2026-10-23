@@ -260,7 +260,7 @@ export function buildAuditPorts(deps: PortDeps): AuditPorts {
   return {
     securityAudit: new PostgresSecurityAuditRepository(deps),
     egressRequests: new PostgresEgressRequestLogRepository(deps),
-    // PROP-090 §9: журнал аудита плагинов (отдельный порт, не security-аудит).
+    // ADR-090: журнал аудита плагинов (отдельный порт, не security-аудит).
     ...buildPluginAuditPorts(deps),
   };
 }

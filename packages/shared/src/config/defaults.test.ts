@@ -199,7 +199,7 @@ describe('defaultConfig', () => {
     expect(defaultConfig.metrics).toEqual({ enabled: false });
   });
 
-  it('plugins по умолчанию: включены, runtime-install deny, trust-floor trusted, исполнение кода выключено (PROP-090 Ф0/Ф1)', () => {
+  it('plugins по умолчанию: включены, runtime-install deny, trust-floor trusted, исполнение кода выключено (ADR-090 Ф0/Ф1)', () => {
     expect(defaultConfig.plugins).toEqual({
       enabled: true,
       runtimeInstall: 'deny',
@@ -211,7 +211,7 @@ describe('defaultConfig', () => {
       exactHostExceptions: '',
       promptBlockMaxChars: 4000,
       executionEnabled: false,
-      // PROP-090 §«Точка llmFilters» (Ф3б): бюджет времени фильтра.
+      // ADR-090 (Ф3б): бюджет времени фильтра.
       llmFilterTimeoutMs: 1000,
       // Ф5в: managed deploy-time — дефолтный каталог образных бандлов
       // (низший приоритет: config.yaml и env его перекрывают).

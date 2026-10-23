@@ -1241,7 +1241,7 @@ graceful shutdown и завершается с кодом **75** (`EX_TEMPFAIL`)
 
 ## Плагины: установка, проверка, снятие
 
-Слой плагинов (PROP-090, Extension API v1) — расширения, исполняемые **в процессе** Synth (`inline`):
+Слой плагинов (ADR-090, Extension API v1) — расширения, исполняемые **в процессе** Synth (`inline`):
 блоки системного промпта, фильтры LLM-вызовов, инструменты. Бандл — self-contained ESM-каталог
 (`synth.pack` + `dist/index.js`); npm-зависимости не резолвятся, `@itphx/*` — external.
 

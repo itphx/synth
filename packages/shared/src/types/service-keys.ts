@@ -31,7 +31,7 @@ export type ServiceScopeFamily = (typeof SERVICE_SCOPE_FAMILIES)[number];
  * Точечные скоупы вне wildcard-семейств:
  * - `llm:chat` — LLM-прокси (роут без проектного измерения);
  * - `addons:install` — зонтичный скоуп installer-ключа: установка/обновление
- *   MCP-реестра и скиллов (PROP-090 installer);
+ *   MCP-реестра и скиллов (ADR-090 installer);
  * - `automation:install` — зонтичный скоуп **установщика пакетов расширений**:
  *   агенты и их ролевые промпты, пайплайны, а также порождаемые пакетом
  *   правила маршрутизации и расписания. Для установщика пакета заменяет
@@ -39,7 +39,7 @@ export type ServiceScopeFamily = (typeof SERVICE_SCOPE_FAMILIES)[number];
  *   `addons:install` при этом **не** открывает создание агентов;
  * - `users:read` — чтение пользователей/идентичностей машинной кредой
  *   (консент-сервисы аддонов);
- * - `plugins:invoke` — server-scoped токен плагина (PROP-090 Ф7, Уровень 2):
+ * - `plugins:invoke` — server-scoped токен плагина (ADR-090 Ф7, Уровень 2):
  *   ключ, привязанный к `plugin_id`; без этого scope сервер отвергает такой
  *   ключ (fail-closed).
  */

@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-10-23 (ADR-106, секция `authority`; ADR-105, секреты внешних доступов); перевод отстаёт (ADR-102, `analytics`).
+> ⚠️ RU-версия обновлена 2026-10-23 (ADR-106, секция `authority`; ADR-105, секреты внешних доступов; ADR-090, секция `plugins` — слой плагинов); перевод отстаёт (ADR-102, `analytics`).
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:

@@ -2523,7 +2523,7 @@ export const dict = {
   'gateway.input_blocked': 'В запросе обнаружены секреты ({reason}). Запрос заблокирован LLM Gateway.',
   'gateway.rate_limit_warning': '⚠️ Превышен лимит запросов. Повторите попытку позже.',
   'gateway.output_secrets_reason': 'секреты в ответе модели',
-  // PROP-090 §«Точка llmFilters»: решения фильтров LLM-вызовов.
+  // ADR-090: решения фильтров LLM-вызовов.
   'gateway.filter_denied': 'Запрос LLM отклонён фильтром расширения ({reason}).',
   'gateway.filter_unavailable': 'Запрос LLM заблокирован: фильтр расширения недоступен ({reason}).',
 
@@ -3682,7 +3682,7 @@ export const dict = {
   'settings.help.addons.section.addons-pipelines':
     'Определения пайплайнов, принесённые пакетами, и их прогоны: статус, текущий шаг и число попыток.',
 
-  // --- Плагины (PROP-090, Ф6) ---
+  // --- Плагины (ADR-090, Ф6) ---
   'plugins.title': 'Плагины',
   'plugins.description':
     'Слой плагинов инстанса: установленные расширения, их доверие и вердикт сканера, активация, установка из источника и политика слоя.',
@@ -3738,7 +3738,7 @@ export const dict = {
   'plugins.serverPolicy.denied': 'сервер запрещает',
   'plugins.serverPolicy.unverified': 'не проверен сервером',
   'plugins.serverPolicy.hint':
-    'Сервер не подтвердил политику (сервер недоступен или режим allowlist без списка): локальный плагин работает в режиме cooperative — в гибриде enforcement со стороны клиента не гарантирован (Уровень 1, PROP-090 Ф7).',
+    'Сервер не подтвердил политику (сервер недоступен или режим allowlist без списка): локальный плагин работает в режиме cooperative — в гибриде enforcement со стороны клиента не гарантирован (Уровень 1, ADR-090 Ф7).',
   'plugins.trustLabel': 'Доверие плагина',
   'plugins.scanLabel': 'Вердикт сканера',
   'plugins.trust.builtin': 'встроенный',

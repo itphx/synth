@@ -1339,7 +1339,7 @@ scheduler:
   crossProcessLocks: false
 ```
 
-### Плагины (`plugins.*`, PROP-090)
+### Плагины (`plugins.*`, ADR-090)
 
 Секция задаёт политику слоя плагинов (Extension API v1): доверие, скан, установку и бюджеты точек
 расширения. Runtime-override этих ключей — `GET/PUT/DELETE /api/v2/settings/plugins`
@@ -1351,7 +1351,7 @@ scheduler:
 | `plugins.enabled` | Мастер-выключатель слоя плагинов | `true` |
 | `plugins.executionEnabled` | **Исполнение кода плагинов.** `false` — активация останавливается на шаге `import` (`plugin.execution_disabled`); установка/снятие и скан работают | `false` |
 | `plugins.runtimeInstall` | Установка во время работы (`allow`/`deny`); `deny` — только deploy-time | `deny` |
-| `plugins.trustFloor` | Минимальное доверие для **активации** (`builtin`/`verified`/`trusted`/`community`); ниже порога плагин устанавливается, но не активируется | `trusted` |
+| `plugins.trustFloor` | Минимальное доверие для **установки и активации** (`builtin`/`verified`/`trusted`/`community`); ниже порога установщик **отказывает в установке** (`plugin.trust_below_floor`) | `trusted` |
 | `plugins.scan` | Статический скан содержимого (`enabled`/`disabled`). `disabled` вместе с `executionEnabled: true` — **fail-closed** (`plugin.scan_disabled_with_execution`) | `enabled` |
 | `plugins.allowlist`/`plugins.denylist` | Имена расширений, которым разрешён/запрещён запуск (пусто — политика не применяется) | `[]` |
 | `plugins.remoteAllowlist` | Allow-list для hybrid-контура (Ф7) | `[]` |

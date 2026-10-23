@@ -226,7 +226,7 @@ export class McpClient {
       throw new Error(`MCP-сервер "${this._name}": не указан URL`);
     }
 
-    // PROP-090: конфиг допускает `headers` (auth/tenant-заголовки) — прокидываем
+    // ADR-090: конфиг допускает `headers` (auth/tenant-заголовки) — прокидываем
     // их в транспорт. `requestInit` применяется SDK ко всем HTTP-запросам
     // (initialize/tools/list/tools/call).
     //

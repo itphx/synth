@@ -18,7 +18,7 @@ export * from './schemas/index.js';
 export * from './protocols/index.js';
 export * from './utils/index.js';
 export * from './skills/frontmatter.js';
-// ADR-086/PROP-090: контракт манифеста расширения `synth.pack` (типы + zod).
+// ADR-086/ADR-090: контракт манифеста расширения `synth.pack` (типы + zod).
 export {
   PACK_KINDS,
   PACK_TYPES,
@@ -76,7 +76,7 @@ export type {
   ExtensionCompatibilityReason,
   ExtensionCompatibilityVerdict,
 } from './types/pack.js';
-// PROP-090 §8/§10: semver-матчер диапазонов версий (host/контракты расширения).
+// ADR-090: semver-матчер диапазонов версий (host/контракты расширения).
 export {
   SEMVER_RANGE_REGEX,
   isSemverRange,

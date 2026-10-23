@@ -1,9 +1,9 @@
 /**
- * PROP-090 §«HTTP API» / Ф5б-2: **своя** RBAC-матрица контура плагинов
+ * ADR-090 / Ф5б-2: **своя** RBAC-матрица контура плагинов
  * (`/api/v2/plugins*`, `/api/v2/settings/plugins`).
  *
  * Матрица сессий (`session-idor-matrix.test.ts`) здесь не применима: ресурс —
- * не сессия, а инстанс-уровневый реестр расширений. Правило (PROP-090
+ * не сессия, а инстанс-уровневый реестр расширений. Правило (ADR-090
  * §«HTTP API», «Правило RBAC»):
  *
  * | Действие                         | core (standalone) | managed                          |
@@ -49,7 +49,7 @@ const stopHandle = (b: BackendAppHandle): void => {
   b.stopMetrics();
 };
 
-describe('backend: RBAC-матрица контура плагинов (PROP-090 Ф5б-2)', () => {
+describe('backend: RBAC-матрица контура плагинов (ADR-090 Ф5б-2)', () => {
   let dataDir: string;
   let backend: BackendAppHandle;
 

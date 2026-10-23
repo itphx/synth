@@ -12,7 +12,7 @@ export { extractChildSessionId, extractCreatedSession } from './events/child-ses
 export type { CreatedSessionTarget } from './events/child-session.js';
 export { HookBus, HOOK_ASYNC_TIMEOUT_MS } from './engine/hooks/index.js';
 export type { HookHandler, HookRegistrationOptions, HookEmitResult } from './engine/hooks/index.js';
-// PROP-090 §10: загрузчик плагинов (`PluginHost`). Ф1: исполнение кода
+// ADR-090: загрузчик плагинов (`PluginHost`). Ф1: исполнение кода
 // выключено по умолчанию (`plugins.executionEnabled=false`); Ф4а — `inline`
 // загрузчик кода (`createInlinePluginLoader`).
 export { PluginHost, DEFAULT_EXTENSION_CONTRACT_VERSION } from './engine/plugins/index.js';
@@ -42,7 +42,7 @@ export type {
   PluginIntegrityVerdict,
   PluginToolDefinition,
 } from './engine/plugins/index.js';
-// PROP-090 §«inline» (Ф4а): загрузчик кода плагина из распакованного бандла.
+// ADR-090 (Ф4а): загрузчик кода плагина из распакованного бандла.
 export {
   DEFAULT_MAX_PLUGIN_BUNDLE_BYTES,
   DEFAULT_PLUGIN_ENTRY,
@@ -50,7 +50,7 @@ export {
   createInlinePluginLoader,
 } from './engine/plugins/index.js';
 export type { InlinePluginLoaderOptions } from './engine/plugins/index.js';
-// PROP-090 §«out-of-process» (Ф4б-1/Ф4б-2): клиент wire-протокола, удалённый
+// ADR-090 (Ф4б-1/Ф4б-2): клиент wire-протокола, удалённый
 // загрузчик, менеджер процесса и токен-файл инстанса.
 export {
   DEFAULT_PLUGIN_HEALTH_TIMEOUT_MS,
@@ -75,7 +75,7 @@ export type {
   RemotePluginProcess,
   RemotePluginUnavailableReason,
 } from './engine/plugins/index.js';
-// PROP-090 §5/§9 (Ф5а): сервис установки/подтверждения/снятия плагина.
+// ADR-090 (Ф5а): сервис установки/подтверждения/снятия плагина.
 export {
   PluginInstaller,
   collectBundleFiles,
@@ -94,10 +94,10 @@ export type {
   PluginUpdateOptions,
   PluginUpdateOutcome,
 } from './engine/plugins/index.js';
-// PROP-090 §«Источники установки» (Д1): свой tar-ридер и резолвинг dir/archive/npm/url.
+// ADR-090 (Д1): свой tar-ридер и резолвинг dir/archive/npm/url.
 export { extractPluginArchive, PluginArchiveError } from './engine/plugins/index.js';
 export type { ExtractedArchive, TarExtractLimits } from './engine/plugins/index.js';
-// PROP-090 Ф7: серверная политика плагинов в гибридном режиме (allow-list,
+// ADR-090 Ф7: серверная политика плагинов в гибридном режиме (allow-list,
 // статусы проверки сервером) — ядро enforcement'а.
 export {
   resolvePluginServerPolicy,
@@ -120,11 +120,11 @@ export type {
   PluginSourceRequest,
   ResolvedPluginSource,
 } from './engine/plugins/index.js';
-// PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного,
+// ADR-090 (Ф5б-1): рантайм плагинов — старт-активация установленного,
 // список со статусом активации, `dispose`.
 export { PluginRuntime } from './engine/plugins/index.js';
 export type { PluginRuntimeDeps, PluginRuntimeEntry } from './engine/plugins/index.js';
-// PROP-068 §4.3 / PROP-090 §9 (Ф2): статический сканер расширений — правила,
+// PROP-068 §4.3 / ADR-090 (Ф2): статический сканер расширений — правила,
 // квоты, `.skillignore`, кэш сканов и дефолтный хук скана.
 export {
   BINARY_EXTENSIONS,
@@ -150,7 +150,7 @@ export type {
   ScanRule,
   ScanRuleContext,
 } from './engine/plugins/scan/index.js';
-// PROP-090 §5 (Ф2): раскладка слоя плагинов на диске + карантин.
+// ADR-090 (Ф2): раскладка слоя плагинов на диске + карантин.
 export {
   ensurePluginLayout,
   pluginBundleDirName,
@@ -205,7 +205,7 @@ export { DebugCollector } from './debug.js';
 export { ContextConfig, ContextBuilder, isInterviewCompleted } from './engine/context/index.js';
 export { ContextOptimizer } from './engine/context/index.js';
 export type { BuildSystemPromptParams, ContextBuilderOptions, SummarizationResult, SlidingWindowResult } from './engine/context/index.js';
-// PROP-090 §«Точка promptBlocks» (Ф3а): реестр провайдеров блоков системного
+// ADR-090 (Ф3а): реестр провайдеров блоков системного
 // промпта — **один** экземпляр на инстанс (композер + фасад плагинов).
 export { PromptBlockRegistrationError, PromptBlockRegistry } from './engine/context/index.js';
 export type { PromptBlockRegistrationOptions, RegisteredPromptBlock } from './engine/context/index.js';
@@ -504,10 +504,10 @@ export type {
   JobRepository,
   MaintenanceAuditRepository,
   MaintenanceAuditListOptions,
-  // PROP-090 §9: журнал аудита плагинов (отдельный порт, не security-аудит).
+  // ADR-090: журнал аудита плагинов (отдельный порт, не security-аудит).
   PluginAuditRepository,
   PluginAuditListOptions,
-  // PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов (`plugins.lock.json`).
+  // PROP-068 §4.4 / ADR-090: lock-файл плагинов (`plugins.lock.json`).
   PluginLockRepository,
   SecurityAuditRepository,
   SecurityAuditListOptions,
@@ -811,7 +811,7 @@ export type {
   EnsureServiceKeyInput,
   ServiceKeyEnsureStatus,
   BootstrapServiceKeyEntry,
-  // Ф7 (PROP-090): вход создания ключа с привязкой к плагину (Уровень 2).
+  // Ф7 (ADR-090): вход создания ключа с привязкой к плагину (Уровень 2).
   CreatePluginServiceKeyInput,
 } from './storage/service-api-key-store.js';
 export {
@@ -821,7 +821,7 @@ export {
   checkProjectAccess,
   getServiceCredential,
   isProjectAllowed,
-  // Ф7 (PROP-090): server-scoped токен плагина (Уровень 2) — проверка привязки.
+  // Ф7 (ADR-090): server-scoped токен плагина (Уровень 2) — проверка привязки.
   checkPluginTokenBinding,
   requirePluginTokenBinding,
   PLUGIN_TOKEN_ERROR_CODES,
@@ -951,10 +951,10 @@ export type { JobStoreConfig, JobListOptions } from './storage/job-store.js';
 // ADR-092 (остаток): аудит-журнал обслуживания инстанса — файловая реализация порта.
 export { MaintenanceAuditStore } from './storage/maintenance-audit-store.js';
 export type { MaintenanceAuditStoreConfig } from './storage/maintenance-audit-store.js';
-// PROP-090 §9: журнал аудита плагинов (append-only JSONL `audit/plugins.jsonl`).
+// ADR-090: журнал аудита плагинов (append-only JSONL `audit/plugins.jsonl`).
 export { FilePluginAuditStore } from './storage/file-plugin-audit-store.js';
 export type { FilePluginAuditStoreConfig } from './storage/file-plugin-audit-store.js';
-// PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов (`plugins.lock.json`).
+// PROP-068 §4.4 / ADR-090: lock-файл плагинов (`plugins.lock.json`).
 export { FilePluginLockStore, defaultPluginLockPath } from './storage/file-plugin-lock-store.js';
 export type { FilePluginLockStoreConfig } from './storage/file-plugin-lock-store.js';
 // Egress: аудит изменений security-политик и журнал внешних запросов.
@@ -1427,7 +1427,7 @@ export type {
   PackAgentsPort,
   PackInstallResult,
 } from './server/routes/packs.js';
-// PROP-090 §«HTTP API» (Ф5б-2): управление плагинами и runtime-настройки слоя.
+// ADR-090 (Ф5б-2): управление плагинами и runtime-настройки слоя.
 export {
   createPluginsRoutes,
   createPluginSettingsRoutes,

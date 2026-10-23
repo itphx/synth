@@ -115,7 +115,7 @@ export interface SettingsRepository {
   clearMetrics(): Promise<void>;
 
   /**
-   * PROP-090 §10: runtime-настройки слоя плагинов (секция `plugins`).
+   * ADR-090: runtime-настройки слоя плагинов (секция `plugins`).
    * Применяются при старте процесса (рантайм плагинов и хост собираются на
    * старте) — `restartRequired` в API, инвариант 24.
    */

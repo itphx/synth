@@ -296,7 +296,7 @@ describe('ChatOrchestrator — ADR-030 hooks (Этап 2b)', () => {
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
-  // --- ADR-030 (Ф0 PROP-090): message_received ---
+  // --- ADR-030 (Ф0 ADR-090): message_received ---
 
   it('message_received: один эмит на сообщение, payload без текста сообщения', async () => {
     const hooks = new HookBus();
@@ -388,7 +388,7 @@ describe('ChatOrchestrator — ADR-030 hooks (Этап 2b)', () => {
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
-  // --- ADR-030 (Ф0 PROP-090): plan_rejected ---
+  // --- ADR-030 (Ф0 ADR-090): plan_rejected ---
 
   it('plan_rejected: неудачный plan_exit эмитит план-отклонение и не эмитит plan_approved', async () => {
     ProviderFactory.register('hookscript', HookScriptProvider);

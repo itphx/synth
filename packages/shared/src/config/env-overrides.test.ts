@@ -176,7 +176,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(cfg.events).not.toBe(originalEvents);
   });
 
-  // PROP-090 §10: env-переопределения секции `plugins` (создаётся, если секции нет).
+  // ADR-090: env-переопределения секции `plugins` (создаётся, если секции нет).
   it('применяет env-оверрайды plugins.* (включая promptBlockMaxChars)', () => {
     const cfg = applyEnvOverrides(makeConfig(), {
       SYNTH_PLUGINS_ENABLED: 'false',
@@ -199,7 +199,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
     });
   });
 
-  it('plugins.executionEnabled: невалидное значение → warn + игнор (PROP-090 Ф1)', () => {
+  it('plugins.executionEnabled: невалидное значение → warn + игнор (ADR-090 Ф1)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const cfg = applyEnvOverrides(makeConfig(), { SYNTH_PLUGINS_EXECUTION_ENABLED: 'perhaps' });
 

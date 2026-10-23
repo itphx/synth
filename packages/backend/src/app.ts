@@ -96,7 +96,7 @@ export interface BackendAppHandle {
   /** ADR-089: ingress-точка приёма внешних событий. */
   ingress: EventIngress;
   /**
-   * PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного
+   * ADR-090 (Ф5б-1): рантайм плагинов — старт-активация установленного
    * (`main.ts`) и точки для HTTP API/CLI (Ф5б-2/3).
    */
   pluginRuntime: PluginRuntime;
@@ -304,7 +304,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       deps.profilesStore,
       deps.dataDir,
       deps.defaultsStore,
-      // PROP-090 Ф7: сигнал о серверной политике плагинов для публичного
+      // ADR-090 Ф7: сигнал о серверной политике плагинов для публичного
       // дискавери (`/auth/oidc-meta`) — только режим и признак включения
       // слоя, без списка имён.
       {
@@ -313,7 +313,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
     ));
 
-    // PROP-090 Ф7 (Уровень 2): plugin-bound service-key (`plugin_id`)
+    // ADR-090 Ф7 (Уровень 2): plugin-bound service-key (`plugin_id`)
     // принимается только с заголовком `X-Synth-Plugin-Id` и тем же
     // значением, со scope `plugins:invoke` и — при
     // `plugins.hybrid.mode='allowlist'` — с именем плагина в серверном
@@ -424,7 +424,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       eventBindingStore: deps.eventBindingStore,
       eventJournal: deps.eventJournal,
       ingress: deps.eventIngress,
-      // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация в `main.ts`
+      // ADR-090 (Ф5б-1): рантайм плагинов — старт-активация в `main.ts`
       // и точки для HTTP API/CLI (Ф5б-2/3).
       pluginRuntime: deps.pluginRuntime,
       // ADR-051 (срез) / ADR-089: реестр расписаний и планировщик.

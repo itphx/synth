@@ -126,7 +126,7 @@ export function checkServiceProjectProjection(c: Context, projectId?: string): R
 /** @deprecated Переименовано в `checkServiceProjectProjection` (честное имя). */
 export const checkProjectAccess = checkServiceProjectProjection;
 
-// ── Ф7 (PROP-090): server-scoped токен плагина (Уровень 2) ─────────────────
+// ── Ф7 (ADR-090): server-scoped токен плагина (Уровень 2) ─────────────────
 
 /**
  * Коды отказа проверки plugin-bound service-key (Ф7, Уровень 2).

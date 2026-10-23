@@ -22,7 +22,7 @@ export interface PromptBlock {
   status?: PromptManifestStatus;
   /**
    * Источник блока. `provider` — блок от провайдера точки `promptBlocks`
-   * (PROP-090); не задан — встроенный блок Composer'а.
+   * (ADR-090); не задан — встроенный блок Composer'а.
    *
    * Нужен для инвалидации состояния промпта: блоки провайдеров лежат вне
    * тира `stable`, поэтому смена их содержимого не видна `isPrefixUnchanged`

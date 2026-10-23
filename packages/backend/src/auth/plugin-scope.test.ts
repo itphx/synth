@@ -1,5 +1,5 @@
 /**
- * PROP-090 Ф7 (Уровень 2): guard server-scoped токена плагина.
+ * ADR-090 Ф7 (Уровень 2): guard server-scoped токена плагина.
  *
  * Ключ с привязкой `plugin_id` (token, выданный `POST /api/v2/plugins/token`)
  * сервер принимает только если:

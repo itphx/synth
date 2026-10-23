@@ -59,7 +59,7 @@ export interface PipelineToolRegistryLike {
   /** Встроенные инструменты (слой `tools`). */
   listBuiltin(): ToolDefinition[];
   /**
-   * PROP-090 §«Точка `tools`»: инструменты плагинов (инстанс-локальный слой).
+   * ADR-090: инструменты плагинов (инстанс-локальный слой).
    * Не задан — плагинных инструментов в шаге нет (совместимость с моками).
    */
   listPlugin?(pluginName?: string): ToolDefinition[];
@@ -289,7 +289,7 @@ function resolveMcpDecisions(
 }
 
 /**
- * Все тулы шага: встроенные + плагинные (PROP-090, Ф3в) + MCP активных
+ * Все тулы шага: встроенные + плагинные (ADR-090, Ф3в) + MCP активных
  * серверов проекта. Порядок тот же, что у сессии (`selectForSession`).
  */
 function collectTools(

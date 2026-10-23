@@ -1,5 +1,5 @@
 /**
- * PROP-090 §«Точка `llmFilters`»: фильтры LLM-вызовов в `GatewayProvider`.
+ * ADR-090: фильтры LLM-вызовов в `GatewayProvider`.
  *
  * Проверяются три фазы (`pre_request`, `post_response`, `embedding`), политика
  * вето (только доверенные), таймаут/сбой по `failMode`, аудит решений и
@@ -116,7 +116,7 @@ function makeFilter(
   return { id, phase, inspect, ...extra };
 }
 
-describe('GatewayProvider × llmFilters (PROP-090)', () => {
+describe('GatewayProvider × llmFilters (ADR-090)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {

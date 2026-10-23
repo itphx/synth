@@ -139,7 +139,7 @@ export interface StandaloneConfig {
    */
   authorityConfig?: SynthConfig['authority'];
   /**
-   * PROP-090 §10: конфигурация слоя плагинов из config.yaml `plugins`
+   * ADR-090: конфигурация слоя плагинов из config.yaml `plugins`
    * (`enabled`/`trustFloor`/`scan`/… и бюджеты: `promptBlockMaxChars`,
    * `llmFilterTimeoutMs`).
    */
@@ -366,7 +366,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.use('/api/*', auth.requireAuth);
   app.use('/ws/*', auth.requireAuth);
 
-  // PROP-090 Ф7 (Уровень 2): plugin-bound service-key (`plugin_id`) принимается
+  // ADR-090 Ф7 (Уровень 2): plugin-bound service-key (`plugin_id`) принимается
   // только с заголовком `X-Synth-Plugin-Id` и тем же значением, со scope
   // `plugins:invoke` и — при `plugins.hybrid.mode='allowlist'` — с именем
   // плагина в серверном allow-list. Гейт стоит на границе (после `requireAuth`,
@@ -439,7 +439,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const deps = await createStandaloneDeps(config, {
     getActiveRemoteProviderNames: () => hybrid.getActiveRemoteProviderNames(),
     isBlockLocalProviders: () => hybrid.isBlockLocalProviders(),
-    // PROP-090 Ф7: серверная политика плагинов удалённого сервера. Нет
+    // ADR-090 Ф7: серверная политика плагинов удалённого сервера. Нет
     // подключения/сервер недоступен → политика неизвестна → локальный плагин
     // работает в режиме cooperative (помечен «не проверен сервером»).
     getServerPluginPolicy: async () => {
@@ -588,7 +588,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     requestSessionService: deps.requestSessionService,
     eventBindingStore: deps.eventBindingStore,
     eventJournal: deps.eventJournal,
-    // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация в `main.ts`
+    // ADR-090 (Ф5б-1): рантайм плагинов — старт-активация в `main.ts`
     // и точки для HTTP API/CLI (Ф5б-2/3).
     pluginRuntime: deps.pluginRuntime,
     // ADR-089: ingress-точка приёма внешних событий.

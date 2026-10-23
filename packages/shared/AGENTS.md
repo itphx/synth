@@ -76,20 +76,20 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   совпадает с Helm-чартом). Токен в схеме **не хранится** (инвариант 13): env `SYNTH_METRICS_TOKEN` /
   `{dataDir}/secrets/metrics-token` резолвит core (`metrics/token.ts`). Тесты — `defaults.test.ts`
   (default `false`), `env-overrides.test.ts` (имя и применение), `types.test.ts` (схема).
-- PROP-090 §10: секция `plugins` (`pluginsConfigSchema` + `PluginsConfig`) — политики слоя плагинов:
+- ADR-090: секция `plugins` (`pluginsConfigSchema` + `PluginsConfig`) — политики слоя плагинов:
   `enabled` (default `true`), `runtimeInstall` (`allow|deny`, default `deny`), `trustFloor`
   (уровень доверия, default `trusted`), `scan` (`enabled|disabled`, default `enabled`),
   `allowlist`/`denylist`/`remoteAllowlist` (списки имён, default `[]`), `exactHostExceptions`
   (путь к файлу точных исключений семвер-гейта, default `''`), `promptBlockMaxChars`
   (бюджет символов на блок промпта от плагина, default `4000`), `llmFilterTimeoutMs`
   (бюджет времени на один вызов фильтра LLM-вызовов, мс; default — `DEFAULT_LLM_FILTER_TIMEOUT_MS`
-  = `1000` из `types/llm-filters.ts`, PROP-090 §«Точка `llmFilters`», Ф3б), `executionEnabled`
+  = `1000` из `types/llm-filters.ts`, ADR-090, Ф3б), `executionEnabled`
   (**главный переключатель исполнения кода плагинов**, default `false` — без него загрузчик
-  останавливается на шаге `import`, PROP-090 §10/Ф1); скалярные env-оверрайды
+  останавливается на шаге `import`, ADR-090); скалярные env-оверрайды
   `SYNTH_PLUGINS_*` (`enabled`/`runtimeInstall`/`trustFloor`/`scan`/`exactHostExceptions`/
   `promptBlockMaxChars`/`llmFilterTimeoutMs`/`executionEnabled`) — списки остаются в `config.yaml`. Runtime-override в core —
   `RuntimeSettings.plugins` + `mergePluginsConfig` (приоритет runtime > config > defaults).
-  Ф7 (PROP-090): вложенная секция `plugins.hybrid` (`pluginsHybridConfigSchema`: `mode`
+  Ф7 (ADR-090): вложенная секция `plugins.hybrid` (`pluginsHybridConfigSchema`: `mode`
   (`off`|`allowlist`, default `off` — сервер не ограничивает) и `allow` (список имён, default `[]`);
   env-оверрайд режима — `SYNTH_PLUGINS_HYBRID_MODE`, список остаётся в `config.yaml`) и контракт
   гибридной политики — `types/plugin-hybrid.ts` (публичный сигнал `{enabled, mode}`, политика
@@ -149,7 +149,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - ADR-101: **i18n-ключи движка пайплайнов** — `src/i18n/index.ts`: `ENGINE_MESSAGE_KEYS` дополнены префиксом `pipeline.*` (`not_found`, `not_published`, `invalid_spec`, `loop_limit`, `cancelled`, `executor_missing`, `gate_rejected`, `gate_timeout`, `step_failed`, `step_timeout`, `run_not_found`, `invalid_state`, `tool_not_found`, `tool_failed`, `script_failed`, `script_no_command`, `permission_denied`, `agent_unavailable`, `provider_not_found`, `llm_failed`, `llm_unrecoverable`) с параметрами в `ENGINE_MESSAGE_PARAMS` (ADR-041: строки движка — только через ключи `shared/i18n`).
 - ADR-030/ADR-089: хуки — `HookName`/`HookMode`/`HookResult`/`HookContextMap` (`types/hooks.ts`), плюс
   `MessageReceivedKind` (`user`/`scheduler`/`external`) и контексты `message_received`/`schedule_fired`
-  без текста сообщения/задания (PROP-090 Ф0); события — `SynthEvent`/`EventBinding`/`RouteDecision`/`SessionRequest`/`EventMode`/`EventDeliveryMode` и правила `EventRouteRule`/`EventRouteTarget`/`EventRouteMatch` (`types/events.ts`); Zod `synthEventSchema`, `eventBindingSchema`, `sessionRequestSchema`, `eventIngestSchema`, `eventBindingInputSchema`, `eventRouteRuleSchema`/`eventRouteRuleInputSchema`/`eventRouteRuleUpsertSchema`/`eventRouteTargetSchema`/`eventRouteMatchSchema`. Поля `Session.expiresAt`/`archivedAt` — ephemeral TTL/архив (ADR-089).
+  без текста сообщения/задания (ADR-090 Ф0); события — `SynthEvent`/`EventBinding`/`RouteDecision`/`SessionRequest`/`EventMode`/`EventDeliveryMode` и правила `EventRouteRule`/`EventRouteTarget`/`EventRouteMatch` (`types/events.ts`); Zod `synthEventSchema`, `eventBindingSchema`, `sessionRequestSchema`, `eventIngestSchema`, `eventBindingInputSchema`, `eventRouteRuleSchema`/`eventRouteRuleInputSchema`/`eventRouteRuleUpsertSchema`/`eventRouteTargetSchema`/`eventRouteMatchSchema`. Поля `Session.expiresAt`/`archivedAt` — ephemeral TTL/архив (ADR-089).
 - ADR-089/ADR-052: API-ключи привязок — типы `EventBindingApiKey` (поля `label` (обязательная, уникальная глобально по инстансу)/`description?`/`rateLimitPerMinute?`/`createdBy`/`prefix`/`lastUsedAt?`, `expiresAt?`/`revokedAt?`) и `EventBindingApiKeyCreated` (+ `key` — plaintext единожды), `EventKeyCredential` (в core); Zod `eventBindingApiKeySchema`/`eventBindingApiKeyCreateSchema` (`{label, description?, expiresAt?, rateLimitPerMinute?}`)/`eventBindingApiKeyUpdateSchema` (`null` — сброс поля)/`eventBindingApiKeyCreatedSchema` и `eventKeyIngestSchema` (`eventIngestSchema.partial({ source: true })` — приём по ключу).
 - ADR-052 (этап I): **service-key** — тип `ServiceApiKey` (`id` `svk_<uuid>`/`label`/`description?`/`roles: GlobalRole[]`/`scopes: string[]`/`allowedProjects?: string[]`/`rateLimitPerMinute?`/`expiresAt?`/`revokedAt?`/`createdBy`/`createdAt`/`lastUsedAt?`/`prefix`) и `ServiceApiKeyCreated` (+ `key` — plaintext единожды) (`types/service-keys.ts`, re-export из `types`); входные `CreateServiceApiKeyInput`/`UpdateServiceApiKeyPatch` (`null` — сброс поля). Реестры/матчер: `SERVICE_SCOPES` (точечные scope'ы, включая зонтичный `automation:install` — установщик пакетов расширений: агенты и их ролевые промпты, пайплайны, порождаемые пакетом правила маршрутизации и расписания), `SERVICE_SCOPE_FAMILIES` (wildcard-семейства, глобального `*` нет; `automation` в семейства **не** входит), `isKnownScope`/`hasServiceScope`, `SERVICE_SCOPE_SETS` (наборы «достаточно любого из»: `routesWrite`/`schedulesWrite`/`agentsWrite`) и матчер `hasAnyServiceScope`. Zod — `serviceApiKeySchema`/`serviceApiKeyCreateSchema`/`serviceApiKeyUpdateSchema`/`serviceApiKeyCreatedSchema` (валидация scope/role).
 - ADR-105 (Ф0): **внешние доступы** (OAuth-креды к коннекторам) — тип `ExternalCredential` (`id`/`provider`/`connectorId?`/`clientId`/`scopes`/`owner {kind: user|instance|local, id}`/`projectId?`/`secretEnc`/`refreshEnc?`/`status: active|expired|revoked|error`/`expiresAt?`/`revokedAt?`/`createdBy`/`createdAt`/`lastUsedAt?`/`scopesGranted?`) и **метаданные без секрета** `ExternalCredentialMeta` (те же поля + `secretMask` + `hasRefreshToken`), входные `CreateExternalCredentialInput`/`UpdateExternalCredentialTokensInput`, фильтр `ExternalCredentialFilter` (`types/external-credentials.ts`, re-export из `types`); маппер `toExternalCredentialMeta` и маска `maskExternalSecret` (необратимая сводка шифротекста — значение токена наружу не отдаётся). Zod — `externalCredentialSchema`/`externalCredentialMetaSchema`/`externalCredentialOwnerSchema`/`externalCredentialStatusSchema`/`createExternalCredentialInputSchema`/`updateExternalCredentialTokensSchema`. Ссылка коннектора на доступ — `mcpServerAuthSchema` (`{kind:'credential', credentialId}`) в `mcpServerConfigSchema` (`config/types.ts`) — аддитивно, старые записи без `auth` валидны.
@@ -165,7 +165,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `pipelineErrorPolicySchema`/`pipelineDefinitionSchema`/`pipelineInstanceStatusSchema`/`pipelineStepStatusSchema`/
   `pipelineStepStateSchema`/`pipelineTriggerSchema`/`pipelineInstanceSchema`. Ссылка на шаг пайплайна в
   цели правила маршрутизации — `PipelineRef` (`types/events.ts`) + `pipelineRefSchema` (`schemas`).
-- ADR-086 §5 / PROP-090 §8: **манифест пакета расширения** (`synth.pack`) — `PackKind`
+- ADR-086 §5 / ADR-090: **манифест пакета расширения** (`synth.pack`) — `PackKind`
   (`plugin`/`gateway`/`addon`/`pack`/`storage`), `PackType` (тип контент-пака: `skills`/`agents`/`mcp`/
   `themes`/`i18n`/`providers`/`prompts`/`automation`/`policies`/`memory`/`ui`), `PackMcpProvide`/
   `PackSkillProvide`/`PackAgentProvide`/`PackPipelineProvide` и сводный `PackProvides` (что расширение
@@ -176,7 +176,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `packKindSchema`/`packTypeSchema`/`packNameSchema`/`packVersionSchema`/`packHostSchema`/
   `packMcpProvideSchema`/`packSkillProvideSchema`/`packAgentProvideSchema`/`packPipelineProvideSchema`/
   `packProvidesSchema`/`packManifestSchema`. Модули browser-safe (`zod` + локальные типы).
-- PROP-090 §8/§9: **вклады плагина в манифесте** — `provides.tools[]` (`packToolsProvideSchema`:
+- ADR-090: **вклады плагина в манифесте** — `provides.tools[]` (`packToolsProvideSchema`:
   непустые имена, без дублей), `provides.promptBlocks[]` (`packPromptBlockProvideSchema`:
   `{key, tier, order, title?, provenance?}`, `.strict()`; тир **только** `context`/`volatile` —
   `stable` запрещён, граница prompt-cache ADR-070), `provides.llmFilters[]`
@@ -187,7 +187,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `{level?, source?}`, заявленный уровень — верхняя граница, выше записи каталога не поднимает).
   `validatePackManifest` — правила 12–14 (вклады плагина по явным схемам; `mode` только у плагина;
   `trust.level` плагина не выше `trusted`). Сверка «объявлено ↔ зарегистрировано» — `diffPackProvides`.
-- PROP-090 §«Точка `promptBlocks`» (Ф3а): **контракт провайдера блока системного промпта** —
+- ADR-090 (Ф3а): **контракт провайдера блока системного промпта** —
   `types/prompt-blocks.ts` (browser-safe: только типы и чистые функции; реэкспорт из `types`):
   `PromptBlockProvider` (`key`/`tier`/`order`/`title?`/`load(ctx)`), узкий DTO-контекст
   `PromptBlockContext` (`sessionId`/`agentRole`/`language`/`projectId?`/`mode`/`query?`/`turnId?`/
@@ -197,7 +197,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   единый источник истины для бюджета символов блока — `DEFAULT_PROMPT_BLOCK_MAX_CHARS = 4000`
   (совпадает с `plugins.promptBlockMaxChars` в конфиге) и префикс ключа плагинного блока
   `PLUGIN_PROMPT_BLOCK_KEY_PREFIX = 'plugin.'` + хелпер `isPluginPromptBlockKey`.
-- PROP-090 §«Точка `llmFilters`» (Ф3б): **контракт фильтра LLM-вызовов** — `types/llm-filters.ts`
+- ADR-090 (Ф3б): **контракт фильтра LLM-вызовов** — `types/llm-filters.ts`
   (browser-safe: только типы и чистые функции; реэкспорт из `types`): `LlmCallFilter`
   (`id`/`phase`/`failMode?`/`timeoutMs?`/`inspect(input)`), узкий DTO `LlmFilterInput`
   (`phase`/`provider`/`model`/`sessionId?` + поля по фазе: `messages`/`systemPrompt`/`tools`,
@@ -208,7 +208,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (`open`/`closed`), `LLM_FILTER_VERDICTS` + предикаты; `phaseCanBlock(phase)` — блокировать может
   только `pre_request`/`embedding` (`post_response` — наблюдение, ADR-036); единый источник истины
   бюджета времени — `DEFAULT_LLM_FILTER_TIMEOUT_MS = 1000` (совпадает с `plugins.llmFilterTimeoutMs`).
-- PROP-090 §«Точка `tools`» (Ф3в): **namespace инструментов плагина** — `types/plugin-tools.ts`
+- ADR-090 (Ф3в): **namespace инструментов плагина** — `types/plugin-tools.ts`
   (browser-safe: только константы и чистые функции; реэкспорт из `types`):
   `PLUGIN_TOOL_NAME_PREFIX = 'plugin'`, `pluginToolNamespace(name)` (slug имени плагина),
   `pluginToolFullName(plugin, tool)` → `plugin_<ns>_<tool>`, `pluginToolLocalName(full, plugin)`
@@ -218,7 +218,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `'builtin' | 'mcp' | 'plugin'`, в `ToolDefinition` — необязательный `pluginName?` (владелец
   плагинного тула); в манифесте (`provides.tools[]`) объявляется **локальное** имя, в реестре
   живёт полное (сверка `diffPackProvides` — по локальным).
-- PROP-090 §«out-of-process» (Ф4б-1, точка `tools` — Ф4б-3): **wire-протокол плагина** —
+- ADR-090 (Ф4б-1, точка `tools` — Ф4б-3): **wire-протокол плагина** —
   `types/plugin-protocol.ts`
   (browser-safe: только типы, константы и чистые функции; реэкспорт из `types`; отдельный
   пакет не создаётся): `PLUGIN_PROTOCOL_VERSION = 1`, `PLUGIN_PROTOCOL_PATHS`
@@ -234,7 +234,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   фильтров из `LLM_FILTER_PHASES`, дубли ключей/id — отказ) и
   `PLUGIN_PROTOCOL_MAX_PROMPT_BLOCK_CHARS = 64 КиБ` (предел содержимого блока на проводе) +
   `isPluginPromptBlockStatus`.
-- PROP-090 §«Точка `tools`» (Ф4б-3): **инструмент в протоколе** — `PluginCapabilitiesTool`
+- ADR-090 (Ф4б-3): **инструмент в протоколе** — `PluginCapabilitiesTool`
   (`name` — локальное, без namespace; `description`; `parameters?` — JSON-Schema для модели;
   **обязательные** `capabilities: ToolCapability[]` — иначе тул невидим permission-слою и
   admin-отключению) и `PluginCapabilities.points.tools?`. Валидация в `checkPluginCapabilities`:
@@ -244,7 +244,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   messageId, workingDir}}}`, ответ `{content: string, isError?: boolean}` (как у MCP-инструментов).
   Namespace `plugin_<ns>_<tool>` составляет **хост** (`types/plugin-tools.ts`), по проводу идёт
   локальное имя — то же, что в `provides.tools[]`.
-- PROP-090 §10: **семвер и доверие** — `types/semver.ts`: `SEMVER_RANGE_REGEX`, `isSemverRange`,
+- ADR-090: **семвер и доверие** — `types/semver.ts`: `SEMVER_RANGE_REGEX`, `isSemverRange`,
   `parseSemver`, `satisfiesSemverRange` (операторы `^`/`~`/`>=`/`<=`/`>`/`<`/`=`, wildcard `x`/`*`,
   конъюнкция пробелом; `||` не поддерживается — fail-closed); `PACK_HOST_RANGE_REGEX` ссылается на
   `SEMVER_RANGE_REGEX`, `contracts` манифеста валидируются тем же матчером; гейт
@@ -253,18 +253,18 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `trustLevelRank` — единый перечень уровней (`builtin`/`verified`/`trusted`/`community`), общий для
   каталога (`types/catalog.ts` реэкспортирует) и манифеста (модуль выделен из-за цикла
   `catalog → pack`).
-- PROP-068 §4.4 / PROP-090 §5 (долги Д2): **ступень отката в lock** — `types/plugin-lock.ts`:
+- PROP-068 §4.4 / ADR-090 (долги Д2): **ступень отката в lock** — `types/plugin-lock.ts`:
   `PluginLockPrevious` (`version`/`content_hash`/`entry?`/`installed_at`) и
   `PluginLockEntry.previous?` — **одна** ступень (откат обратим, «на две версии назад» = два
   `rollback`); при обновлении прежняя запись переезжает в `previous`, при откате — swap.
-- PROP-090 §«Managed deploy-time» (Ф5в): ключи секции `plugins` в конфиге — `deployDir` (каталог
+- ADR-090 (Ф5в): ключи секции `plugins` в конфиге — `deployDir` (каталог
   образных бандлов, дефолт `''`), `deployTrust` (доверие образных бандлов, дефолт **`trusted`** —
   образ доверен как образ; ниже `trustFloor` → `plugin.trust_below_floor`), `managedReadonly`
   (management-плагин нельзя снять через API/CLI, дефолт `true`); env-оверрайды
   `SYNTH_PLUGINS_DEPLOY_DIR`/`SYNTH_PLUGINS_DEPLOY_TRUST`/`SYNTH_PLUGINS_MANAGED_READONLY`.
   Новый код отказа `plugin.managed_readonly` (**28** кодов на тот момент; Ф7 добавил
   `plugin.hybrid_not_allowed` — **29**).
-- PROP-090 §9: **журнал аудита плагинов** — `types/plugin-audit.ts` (re-export из `types`):
+- ADR-090: **журнал аудита плагинов** — `types/plugin-audit.ts` (re-export из `types`):
   `PluginAuditEntry` (`id` `pa_<uuid>`/`ts`/`actor`/`scope: 'plugin'`/`action`/`plugin`/`version`/
   `trustLevel?`/`scanVerdict?`/`scanFindings?`/`scanPerformed?`/`contentHash?`/`mode?`/`outcome`/
   `reason?`/`source?`) и перечни `PLUGIN_AUDIT_ACTIONS` (`install`/`activate`/`deactivate`/`uninstall`/
@@ -285,7 +285,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   истины — `PluginHost`, `packages/core/src/engine/plugins/plugin-host.ts`). Журнал **отдельный**:
   `SECURITY_AUDIT_SCOPES` (семантика «изменение политики») не расширяется; секреты в журнал не
   пишутся (инвариант 13).
-- PROP-068 §4.2–§4.4 / PROP-090 §5, §9: **контракты сканера и lock-файла плагинов** —
+- PROP-068 §4.2–§4.4 / ADR-090: **контракты сканера и lock-файла плагинов** —
   `types/plugin-scan.ts` (browser-safe: только типы и чистые функции, без `zod` — модуль используется
   и в UI, и в ядре): `PLUGIN_SCAN_CATEGORIES` (6 базовых + `invisible_unicode`), `PLUGIN_SCAN_SEVERITIES`
   (`info`/`low`/`medium`/`high`/`critical`), `PluginScanFinding` (`category`/`severity`/`file`/`line`/

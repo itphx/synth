@@ -1,5 +1,5 @@
 /**
- * PROP-090 §«HTTP API», фаза Ф5б (часть 2): HTTP-контур управления плагинами —
+ * ADR-090, фаза Ф5б (часть 2): HTTP-контур управления плагинами —
  * `/api/v2/plugins*` (жизненный цикл) и `/api/v2/settings/plugins`
  * (runtime-настройки слоя).
  *
@@ -206,7 +206,7 @@ const DEFAULT_MESSAGES: PluginsRouteMessages = {
 /** Имя файла манифеста (`synth.pack`, ADR-086 §5). */
 const MANIFEST_FILE = 'synth.pack';
 
-/** Служебный файл раскладки с хешем/провенансом (PROP-090 §5). */
+/** Служебный файл раскладки с хешем/провенансом (ADR-090). */
 const INTEGRITY_FILE = 'PLUGIN_INTEGRITY.json';
 
 /**
@@ -272,7 +272,7 @@ export const PLUGIN_REASON_HTTP: Record<PluginAuditReason, number> = {
 };
 
 /**
- * Отказы активации, которые API отдаёт как **409** (PROP-090 §«HTTP API»):
+ * Отказы активации, которые API отдаёт как **409** (ADR-090):
  * гейт не пройден — состояние плагина не изменилось, клиенту нужно действие
  * владельца (включить исполнение, поднять доверие, подтвердить бандл).
  */
@@ -476,7 +476,7 @@ export function createPluginsRoutes(
 
     // Локальные источники (`dir`/`archive`) в managed запрещены: путь с ФС
     // хоста через установщик — чтение произвольного каталога. Сетевые
-    // (`npm`/`url`) разрешены: это не локальный путь (PROP-090 §«Источники»).
+    // (`npm`/`url`) разрешены: это не локальный путь (ADR-090).
     if (LOCAL_SOURCE_KINDS.has(install.kind) && deps.localInstall !== true) {
       return c.json(
         { error: { code: 'LOCAL_INSTALL_DISABLED', message: messages.localInstallDisabled(c) } },
@@ -902,7 +902,7 @@ export type PluginSettingsRoutesDeps = Pick<PluginsRoutesDeps, 'config' | 'setti
   running?: PluginsConfig;
   /**
    * Колбэк применения **живых** ключей после успешной записи/сброса
-   * (PROP-090, долги Д3): `promptBlockMaxChars` и `llmFilterTimeoutMs`
+   * (ADR-090, долги Д3): `promptBlockMaxChars` и `llmFilterTimeoutMs`
    * применяются без рестарта (эффективные значения — после слияния config +
    * runtime). Остальные ключи (`executionEnabled`, `trustFloor`, `scan`, …)
    * действуют только после перезапуска (инвариант 24) — см. `restartRequired`.
@@ -953,7 +953,7 @@ interface PluginsSettingsView {
 
 /**
  * Фабрика роутов `/api/v2/settings/plugins` — runtime-настройки слоя плагинов
- * (PROP-090 §10).
+ * (ADR-090).
  *
  * **`restartRequired` — всегда `true`** (важное отличие от прочих настроек):
  * `PluginRuntime`/`PluginHost` и политика install-policy собираются при старте

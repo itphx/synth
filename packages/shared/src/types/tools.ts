@@ -49,12 +49,12 @@ export interface ToolResult {
 export type ToolExecutor = (params: unknown, ctx: ToolContext) => Promise<ToolResult>;
 
 /**
- * ADR-071 §2.1 + PROP-090 §«Точка `tools`»: источник инструмента.
+ * ADR-071 §2.1 + ADR-090: источник инструмента.
  *
  * - `builtin` — встроенный (слой `tools`, `stable`);
  * - `mcp` — инструмент MCP-сервера (слой `mcp.tools`, `volatile`);
  * - `plugin` — инструмент, зарегистрированный плагином через
- *   `PluginFacade.registerTool` (PROP-090, Ф3в): в промпте идёт после
+ *   `PluginFacade.registerTool` (ADR-090, Ф3в): в промпте идёт после
  *   встроенных (вне stable-префикса — плагин можно снять в runtime).
  *
  * Для встроенных проставляется по умолчанию в `ToolRegistry.register`.
@@ -73,7 +73,7 @@ export interface ToolDefinition {
   /** ADR-071 §2.1: имя MCP-сервера для `source: 'mcp'`. */
   mcpServer?: string;
   /**
-   * PROP-090 §«Точка `tools`»: имя плагина-владельца для `source: 'plugin'`.
+   * ADR-090: имя плагина-владельца для `source: 'plugin'`.
    *
    * Имя тула в реестре — с namespace (`plugin_<plugin>_<tool>`,
    * `pluginToolFullName`), локальное имя хранится только здесь и в манифесте

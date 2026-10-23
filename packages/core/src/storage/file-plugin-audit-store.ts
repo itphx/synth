@@ -12,7 +12,7 @@ export interface FilePluginAuditStoreConfig {
 }
 
 /**
- * PROP-090 §9: журнал аудита плагинов — append-only JSONL
+ * ADR-090: журнал аудита плагинов — append-only JSONL
  * `{dataDir}/audit/plugins.jsonl` (одна строка = одна запись; образец —
  * `MaintenanceAuditStore`, ADR-092; каталог `audit/` уже используется
  * LLM/security-аудитом).

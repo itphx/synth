@@ -760,7 +760,7 @@ containment'а файла (ADR-075) и санитизацией наружу (AD
 | Loop Engine (loop'и, верификация, termination guards) | [PROP-057](./arch_decisions/prop-057-loop-engine.md) — вне объёма, не трогаем |
 | Rollback/exit-стратегия, мониторинг-дашборд, отдельное хранилище артефактов | [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) — остаётся там |
 | Визуальный редактор | `@xyflow/react` (зависимость разрешена владельцем; **реализован, Э7**); **IR — `PipelineSpec`**, формат React Flow не является источником истины |
-| Plugin SDK, каталог пакетов, trust | [PROP-090](./arch_decisions/prop-090-extension-api.md), [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md) |
+| Plugin SDK, каталог пакетов, trust | [ADR-090](./arch_decisions/adr-090-extension-api.md), [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md) |
 
 ---
 

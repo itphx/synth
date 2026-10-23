@@ -76,7 +76,7 @@ import {
   ProviderFactory,
   // ADR-077: порт исполнения команд (inline/remote).
   createExecutionPortForConfig,
-  // PROP-090 §«Точка promptBlocks» (Ф3а) / §5, §10 (Ф5б-1): общий реестр
+  // ADR-090 (Ф3а) / §5, §10 (Ф5б-1): общий реестр
   // блоков промпта (композер + фасад плагинов) и рантайм плагинов.
   PromptBlockRegistry,
   PluginRuntime,
@@ -132,7 +132,7 @@ export async function createBackendStorage(config: BackendConfig): Promise<Stora
     dedupStore: config.synth.events.dedupStore,
     scheduleCrossProcess: config.synth.scheduler.crossProcessLocks,
     bundlesPath: config.synth.commands.bundlesPath,
-    // PROP-090 §5: путь lock-файла плагинов задаёт раскладка (композиционный
+    // ADR-090: путь lock-файла плагинов задаёт раскладка (композиционный
     // корень) — `<home>/plugin/plugins.lock.json` либо `{dataDir}/plugin/…`.
     // Резолвер один — `resolvePluginLayout` (его же использует `PluginRuntime`),
     // поэтому порт и каталоги установки согласованы.
@@ -515,7 +515,7 @@ export async function createBackendDeps(
   const toolRegistry = createToolRegistry();
   const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
-  // PROP-090 §«Точка promptBlocks» (Ф3а): **один** реестр провайдеров блоков
+  // ADR-090 (Ф3а): **один** реестр провайдеров блоков
   // системного промпта на инстанс — композер добавляет блоки в промпт сессии,
   // фасад плагинов (`PluginRuntime` → `PluginHost`) их регистрирует.
   const promptBlocks = new PromptBlockRegistry();
@@ -637,7 +637,7 @@ export async function createBackendDeps(
     dataDir,
     toolRegistry,
     agentRegistry,
-    // PROP-090 §«Точка promptBlocks»: тот же реестр, что у фасада плагинов
+    // ADR-090: тот же реестр, что у фасада плагинов
     // (ниже, `PluginRuntime`) — блоки плагинов попадают в промпт сессии.
     promptBlocks,
     mcpManager,
@@ -664,7 +664,7 @@ export async function createBackendDeps(
     gatewayAuditLogger,
     gatewayPayloadLogPath,
     gatewayPatternStore: patternStore,
-    // PROP-090 §«Точка llmFilters»: бюджет времени фильтров LLM-вызовов
+    // ADR-090: бюджет времени фильтров LLM-вызовов
     // (`plugins.llmFilterTimeoutMs`); реестр — `orchestrator.getLlmFilters()`.
     llmFilterTimeoutMs: config.synth.plugins?.llmFilterTimeoutMs,
     // ADR-094: реестр метрик (только при `metrics.enabled`) — LLM-вызовы
@@ -702,7 +702,7 @@ export async function createBackendDeps(
       (await sessionManager.getSession(sid))?.status.cancelRequested === true,
   });
 
-  // PROP-090 §10 (Ф5б-2): эффективный конфиг слоя = config.yaml (+env) поверх
+  // ADR-090 (Ф5б-2): эффективный конфиг слоя = config.yaml (+env) поверх
   // runtime-настроек (`settings.json`/PG): админка `/api/v2/settings/plugins`
   // пишет runtime, рантайм собирается при старте (применение — рестартом,
   // инвариант 24), поэтому слияние делается **здесь**, а не в рантайме.
@@ -711,7 +711,7 @@ export async function createBackendDeps(
     await settingsStore.getPlugins(),
   );
 
-  // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного
+  // ADR-090 (Ф5б-1): рантайм плагинов — старт-активация установленного
   // (`plugins.lock.json` — источник истины), список со статусом активации и
   // точки `activate`/`deactivate` для HTTP API/CLI (Ф5б-2/3). Реестры — **те же**
   // экземпляры, что у оркестратора (`promptBlocks`, `getLlmFilters()`, `toolRegistry`).
@@ -1038,7 +1038,7 @@ export async function createBackendDeps(
     defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
     catchUp: config.synth.scheduler.catchUp,
     jobRetentionDays: config.synth.scheduler.jobRetentionDays,
-    // ADR-030 (Ф0 PROP-090): хук `schedule_fired` (async, метаданные расписания).
+    // ADR-030 (Ф0 ADR-090): хук `schedule_fired` (async, метаданные расписания).
     hooks,
     // ADR-094: завершённые Job (outcome + дрейф cron).
     onJob: schedulerJobMetrics,
@@ -1155,7 +1155,7 @@ export async function createBackendDeps(
     bundleStore,
     commandService,
     orchestrator,
-    // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного
+    // ADR-090 (Ф5б-1): рантайм плагинов — старт-активация установленного
     // (`app.ts`/`main.ts`) и точки для HTTP API/CLI (Ф5б-2/3). `host`+`installer` внутри.
     pluginRuntime,
     // ADR-077: порт исполнения — тот же инстанс, что у оркестратора и тулов

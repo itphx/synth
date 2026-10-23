@@ -1924,7 +1924,7 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     labelKey: 'addons.pipelines.instances',
     keywords: ['runs', 'instances', 'прогоны', 'экземпляры'],
   },
-  // PROP-090 Ф6: слой плагинов — установка, жизненный цикл и политика.
+  // ADR-090 Ф6: слой плагинов — установка, жизненный цикл и политика.
   {
     id: 'plugins.list',
     categoryId: 'plugins',

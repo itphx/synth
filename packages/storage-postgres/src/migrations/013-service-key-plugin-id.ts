@@ -1,6 +1,6 @@
 /**
  * Миграция 013_service_key_plugin_id — привязка service-key к плагину
- * (PROP-090 Ф7, Уровень 2: server-scoped токены).
+ * (ADR-090 Ф7, Уровень 2: server-scoped токены).
  *
  * `plugin_id` — имя плагина, которому выдан ключ. Ключ с привязкой сервер
  * принимает только с заголовком `X-Synth-Plugin-Id` и тем же значением, со
@@ -16,6 +16,6 @@
  */
 
 export const MIGRATION_013_SERVICE_KEY_PLUGIN_ID = `
--- Привязка service-key к плагину (server-scoped токен, PROP-090 Ф7).
+-- Привязка service-key к плагину (server-scoped токен, ADR-090 Ф7).
 ALTER TABLE service_keys ADD COLUMN IF NOT EXISTS plugin_id text;
 `;

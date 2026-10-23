@@ -1,5 +1,5 @@
 /**
- * PROP-090 §«Источники установки» (долги Д1): резолвинг источника бандла
+ * ADR-090 (долги Д1): резолвинг источника бандла
  * плагина в **локальный каталог**, который принимает `installFromDirectory`.
  *
  * ```text
@@ -37,7 +37,7 @@ import type { PluginLogger } from './activation.js';
 import { extractPluginArchive, PluginArchiveError } from './archive.js';
 import { egressFetch } from '../../security/tls.js';
 
-/** Виды источников установки (PROP-090 §«Источники установки»). */
+/** Виды источников установки (ADR-090). */
 export const PLUGIN_INSTALL_SOURCE_KINDS = ['dir', 'archive', 'npm', 'url'] as const;
 export type PluginInstallSourceKind = (typeof PLUGIN_INSTALL_SOURCE_KINDS)[number];
 

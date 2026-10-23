@@ -429,7 +429,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
   ));
 
-  // PROP-090 §«HTTP API» (Ф5б-2): управление плагинами инстанса. Managed RBAC:
+  // ADR-090 (Ф5б-2): управление плагинами инстанса. Managed RBAC:
   // чтение — ADMIN (реестр инстанса), установка/активация/деактивация —
   // ADMIN или service-key со scope `addons:install` (установка аддонов —
   // зонтичный scope реестра расширений), подтверждение карантина и снятие —
@@ -445,7 +445,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       config: mergePluginsConfig(config.synth.plugins, {}),
       settings: settingsStore,
       localInstall: false,
-      // Ф7 (PROP-090): реестр service-key — для выдачи server-scoped токена
+      // Ф7 (ADR-090): реестр service-key — для выдачи server-scoped токена
       // плагину (`POST /api/v2/plugins/token`).
       serviceKeys: serviceApiKeyStore,
       // Ф7: серверная политика (allow-list) из работающего рантайма.
@@ -466,7 +466,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
   ));
 
-  // PROP-090 §10 (Ф5б-2): runtime-настройки слоя плагинов. Managed RBAC —
+  // ADR-090 (Ф5б-2): runtime-настройки слоя плагинов. Managed RBAC —
   // ADMIN (чтение и запись): политика доверия/скана/исполнения — инстанс-уровневая.
   // `restartRequired` — всегда true (рантайм собирается при старте, инвариант 24).
   app.route('/api/v2/settings', createPluginSettingsRoutes(

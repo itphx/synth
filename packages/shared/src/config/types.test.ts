@@ -246,9 +246,9 @@ describe('executionConfigSchema (ADR-077)', () => {
 });
 
 /**
- * PROP-090 Ф7: форма серверной политики плагинов в гибриде (`plugins.hybrid`).
+ * ADR-090 Ф7: форма серверной политики плагинов в гибриде (`plugins.hybrid`).
  */
-describe('pluginsHybridConfigSchema (PROP-090 Ф7)', () => {
+describe('pluginsHybridConfigSchema (ADR-090 Ф7)', () => {
   it('дефолт: сервер не ограничивает (off), список пуст', () => {
     expect(pluginsHybridConfigSchema.parse({})).toEqual({ mode: 'off', allow: [] });
   });

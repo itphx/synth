@@ -1,13 +1,13 @@
 /**
- * ADR-086 §5 / PROP-090 §3: единый манифест расширения `synth.pack`.
+ * ADR-086 §5 / ADR-090: единый манифест расширения `synth.pack`.
  *
  * Манифест — файл `synth.pack` (JSON) в корне репозитория расширения. Формат
- * **общий** для всех классов расширений: Plugin (PROP-090), Gateway (ADR-087),
+ * **общий** для всех классов расширений: Plugin (ADR-090), Gateway (ADR-087),
  * Add-on (эталон — `synth-media`), контент-пак (PROP-068) и драйвер слоя
  * хранения (`kind: 'storage'`, ADR-097).
  *
  * Здесь только контракт (типы + zod-схемы): загрузка, установка и активация
- * расширений — в core (PROP-090 отложен до 2026-10-19). Модуль browser-safe
+ * расширений — в core (ADR-090 отложен до 2026-10-19). Модуль browser-safe
  * (`zod` + локальные типы), в UI-бандл `node:*` не попадает.
  */
 import { z } from 'zod';
@@ -28,7 +28,7 @@ import { ToolCapability } from './tools.js';
 
 /**
  * Классы расширений (ADR-086 §5):
- * - `plugin` — код в процессе ядра (PROP-090);
+ * - `plugin` — код в процессе ядра (ADR-090);
  * - `gateway` — внешний транспорт «внешний мир ↔ Synth» (ADR-087);
  * - `addon` — внешний сервис-надстройка (эталон — `synth-media`);
  * - `pack` — контент-пак;
@@ -91,7 +91,7 @@ export const packVersionSchema = z
  * Диапазон версий host-приложения — semver-range, как `engines` в package.json
  * (`^0.9.0`, `~1.2.3`, `>=1.0.0 <2.0.0`, `1.x`).
  *
- * Грамматика — единая для `host` и `contracts` манифеста (PROP-090 §8):
+ * Грамматика — единая для `host` и `contracts` манифеста (ADR-090):
  * реализация и матчер — в `types/semver.ts`.
  */
 export const PACK_HOST_RANGE_REGEX = SEMVER_RANGE_REGEX;
@@ -228,10 +228,10 @@ export const packMcpProvidesSchema = z
   .union([z.array(packMcpProvideSchema), packMcpProvideSchema])
   .transform((value) => (Array.isArray(value) ? value : [value]));
 
-// --- Вклады плагина (PROP-090 §8) ---
+// --- Вклады плагина (ADR-090) ---
 
 /**
- * PROP-090 §8: режим исполнения плагина — `inline` (код в процессе core) или
+ * ADR-090: режим исполнения плагина — `inline` (код в процессе core) или
  * `remote` (отдельный процесс), `both` — оба транспорта.
  *
  * Поле допустимо **только** для `kind: 'plugin'` (у остальных классов режим
@@ -242,7 +242,7 @@ export type PackPluginMode = (typeof PACK_PLUGIN_MODES)[number];
 export const packPluginModeSchema = z.enum(PACK_PLUGIN_MODES);
 
 /**
- * PROP-090 §8: заявленные расширением доступы (`permissions`).
+ * ADR-090: заявленные расширением доступы (`permissions`).
  *
  * - `network` — хосты, к которым плагин обращается (проверяются по
  *   egress-политике, ADR-099);
@@ -263,12 +263,12 @@ export const packPermissionsSchema = z.object({
 export type PackPermissions = z.infer<typeof packPermissionsSchema>;
 
 /**
- * PROP-090 §9: заявленный автором уровень/источник доверия.
+ * ADR-090: заявленный автором уровень/источник доверия.
  *
  * **Заявленный уровень — только верхняя граница:** фактический trust
  * резолвится по источнику/реестру (PROP-068 §4.1), манифест не может его
  * повысить. Для `kind: 'plugin'` уровень не должен быть выше `trusted`
- * (trust-floor плагина, PROP-090 §9) — проверяется в `validatePackManifest`.
+ * (trust-floor плагина, ADR-090) — проверяется в `validatePackManifest`.
  */
 export const packTrustSchema = z.object({
   level: catalogTrustLevelSchema.optional(),
@@ -277,7 +277,7 @@ export const packTrustSchema = z.object({
 export type PackTrust = z.infer<typeof packTrustSchema>;
 
 /**
- * PROP-090 §8: `provides.tools[]` — имена тулов, которые регистрирует
+ * ADR-090: `provides.tools[]` — имена тулов, которые регистрирует
  * плагин (имя тула — `tool.name` в `ToolRegistry.register`).
  *
  * Имена уникальны в пределах манифеста; фактические регистрации обязаны
@@ -301,7 +301,7 @@ export const packToolsProvideSchema = z
 export type PackToolsProvide = z.infer<typeof packToolsProvideSchema>;
 
 /**
- * PROP-090 §5/§8: `provides.promptBlocks[]` — описание плагинных блоков
+ * ADR-090: `provides.promptBlocks[]` — описание плагинных блоков
  * системного промпта.
  *
  * - `key` — ключ блока (для плагина — `plugin.<pluginName>.<slot>`);
@@ -326,7 +326,7 @@ export const packPromptBlockProvideSchema = z
 export type PackPromptBlockProvide = z.infer<typeof packPromptBlockProvideSchema>;
 
 /**
- * PROP-090 §6/§8: `provides.llmFilters[]` — описание фильтров LLM-вызовов.
+ * ADR-090: `provides.llmFilters[]` — описание фильтров LLM-вызовов.
  *
  * - `id` — идентификатор фильтра (`plugin:<pluginName>:<filterName>`);
  * - `phase` — фаза: `pre_request` / `post_response` / `embedding`
@@ -409,7 +409,7 @@ export type PackAuthorityProvides = z.infer<typeof packAuthorityProvidesSchema>;
  * пустой массив), неизвестные ключи сохраняются: виды вкладов расширяются
  * без изменения формата манифеста.
  *
- * Ключи `tools`/`promptBlocks`/`llmFilters` (PROP-090 §8) описаны **явными**
+ * Ключи `tools`/`promptBlocks`/`llmFilters` (ADR-090) описаны **явными**
  * схемами — без `.passthrough()`: иначе опечатка в манифесте (пустое имя тула,
  * дубль, тир `stable`, неизвестная фаза фильтра) проходит молча, и правило
  * «фактические регистрации обязаны совпадать с `provides`» нечем проверять.
@@ -468,7 +468,7 @@ export function refinePackType(
  * - `packType` запрещён у остальных `kind` (`addon`/`gateway`/`plugin`/
  *   `storage` — это классы кода/сервиса, а не контент-паки).
  *
- * Поля `mode`/`permissions`/`trust` (PROP-090 §8/§9) — опциональные и
+ * Поля `mode`/`permissions`/`trust` (ADR-090) — опциональные и
  * **явные**: `z.object` выбрасывает неизвестные ключи, поэтому без них
  * эти поля молча терялись при разборе манифеста.
  */
@@ -499,11 +499,11 @@ export const packManifestSchema = z
     provides: packProvidesSchema,
     /** Тип контент-пака — только для `kind: 'pack'`. */
     packType: packTypeSchema.optional(),
-    /** PROP-090 §8: режим исполнения — только для `kind: 'plugin'`. */
+    /** ADR-090: режим исполнения — только для `kind: 'plugin'`. */
     mode: packPluginModeSchema.optional(),
-    /** PROP-090 §8: заявленные расширением доступы. */
+    /** ADR-090: заявленные расширением доступы. */
     permissions: packPermissionsSchema.optional(),
-    /** PROP-090 §9: заявленный уровень/источник доверия (верхняя граница). */
+    /** ADR-090: заявленный уровень/источник доверия (верхняя граница). */
     trust: packTrustSchema.optional(),
   })
   .superRefine(refinePackType);
@@ -588,9 +588,9 @@ export function normalizePackProvides(provides: unknown): PackProvides {
  * 10. пайплайн без `id`;
  * 11. `agents[].capabilities` — строки из известного набора `ToolCapability`;
  * 12. вклады плагина (`provides.tools`/`promptBlocks`/`llmFilters`) — по
- *     явным схемам PROP-090 §8;
+ *     явным схемам ADR-090;
  * 13. `mode` — только для `kind: 'plugin'`;
- * 14. `trust.level` плагина — не выше `trusted` (trust-floor, PROP-090 §9);
+ * 14. `trust.level` плагина — не выше `trusted` (trust-floor, ADR-090);
  * 15. контент полномочий (`provides.authority`) — строгая схема + кросс-ссылки
  *     (ADR-106 §«Валидация, а не каст»): неизвестное действие/цель/роль —
  *     проблема, а не молчаливый проход.
@@ -761,7 +761,7 @@ export function validatePackManifest(manifest: unknown): string[] {
     }
   });
 
-  // 12. Вклады плагина (PROP-090 §8): проверяются явными схемами — неизвестное
+  // 12. Вклады плагина (ADR-090): проверяются явными схемами — неизвестное
   // поле, невалидный тир/фаза, пустое имя и дубль — проблема, а не молчаливый
   // проход (иначе правило «регистрации обязаны совпадать с provides» нечем
   // проверять).
@@ -791,7 +791,7 @@ export function validatePackManifest(manifest: unknown): string[] {
 
 /**
  * Проверка вкладов плагина (`provides.tools`/`promptBlocks`/`llmFilters`) по
- * явным схемам PROP-090 §8. Проблемы — строками (как остальные правила).
+ * явным схемам ADR-090. Проблемы — строками (как остальные правила).
  */
 function validatePluginProvides(provides: PackProvides): string[] {
   const problems: string[] = [];
@@ -881,12 +881,12 @@ function validateAuthorityProvides(provides: PackProvides): string[] {
 }
 
 /**
- * Проверка заявленного доверия (PROP-090 §9).
+ * Проверка заявленного доверия (ADR-090).
  *
  * Заявленный уровень — **верхняя граница**: фактический trust резолвится по
  * источнику/реестру, манифест не может его повысить. Для `kind: 'plugin'`
  * уровень не должен быть выше `trusted` — trust-floor плагина и «право вето
- * только у доверенных» (PROP-090 §6/§9).
+ * только у доверенных» (ADR-090).
  */
 function validateManifestTrust(manifest: Record<string, unknown>, kind: unknown): string[] {
   const problems: string[] = [];
@@ -948,7 +948,7 @@ export interface RegisteredPackProvides {
 }
 
 /**
- * PROP-090 §8: сверка объявленных в манифесте вкладов с фактическими
+ * ADR-090: сверка объявленных в манифесте вкладов с фактическими
  * регистрациями расширения.
  *
  * Правило: «фактические регистрации обязаны совпадать с `provides`» —
@@ -995,7 +995,7 @@ export function diffPackProvides(
   return mismatches;
 }
 
-// --- Семвер-гейт расширения (PROP-090 §10, шаг 3) ---
+// --- Семвер-гейт расширения (ADR-090, шаг 3) ---
 
 /** Причина отказа семвер-гейта. */
 export type ExtensionCompatibilityReason = 'contract_mismatch' | 'host_mismatch';
@@ -1014,11 +1014,11 @@ export interface ExtensionCompatibilityVerdict {
   actual?: string;
 }
 
-/** Имя контракта Extension API по умолчанию (PROP-090 §8). */
+/** Имя контракта Extension API по умолчанию (ADR-090). */
 export const DEFAULT_EXTENSION_CONTRACT = 'extensionApi';
 
 /**
- * PROP-090 §10 (шаг 3): семвер-гейт расширения против хоста.
+ * ADR-090 (шаг 3): семвер-гейт расширения против хоста.
  *
  * Проверяются два объявления манифеста:
  * - `contracts.extensionApi` — semver-диапазон версии контракта точки
@@ -1028,7 +1028,7 @@ export const DEFAULT_EXTENSION_CONTRACT = 'extensionApi';
  * Порядок проверок — как в пайплайне активации: сначала контракт, потом
  * host. Точные исключения (`exactHostExceptions`) — список версий Synth,
  * совместимых **вопреки** диапазону `host` (формат файла исключений —
- * открытый вопрос PROP-090 §14; здесь — сам список).
+ * открытый вопрос ADR-090; здесь — сам список).
  *
  * Вердикт — машиночитаемый: `{ ok, reason, expected, actual }`; загрузчик
  * `PluginHost` (Ф1) переиспользует функцию как есть.

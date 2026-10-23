@@ -1,8 +1,11 @@
 # ADR-086: Расширяемость Synth: классы расширений, editions и contribution flow
 
-> **Статус:** ⚠️ Частично — первый **Gateway** (Telegram-шлюз) реализован и мультитенантен; эталон **Add-on** — `synth-media`; **доставка пакета расширения в ядро** реализована ([ADR-100](./adr-100-extension-packs-pipelines.md): манифест `synth.pack` валидируется, установка — одна операция, одобрение администратора); класс **Gateway** выделен в [ADR-087](./adr-087-gateways.md) (HA/leader election — нет); класс **Storage** выделен в [ADR-097](./adr-097-storage-provider-class.md) (PostgreSQL-драйвер — нет); Plugin SDK ([PROP-090](./prop-090-extension-api.md) — в работе, в коде нет; спецификация 2026-10-22 добавляет два режима исполнения плагина: inline и out-of-process), editions и contribution flow — нет
+> **Статус:** ⚠️ Частично — первый **Gateway** (Telegram-шлюз) реализован и мультитенантен; эталон **Add-on** — `synth-media`; **доставка пакета расширения в ядро** реализована ([ADR-100](./adr-100-extension-packs-pipelines.md): манифест `synth.pack` валидируется, установка — одна операция, одобрение администратора); класс **Gateway** выделен в [ADR-087](./adr-087-gateways.md) (HA/leader election — нет); класс **Storage** выделен в [ADR-097](./adr-097-storage-provider-class.md) (PostgreSQL-драйвер — нет); Plugin SDK ([ADR-090](./adr-090-extension-api.md) — **реализован**: манифест `synth.pack`, `PluginHost`, фасад, два режима исполнения — `inline` и `out-of-process`, модель доверия, install/activate, API/CLI/UI), editions и contribution flow — нет
 > **Дата:** 2026-10-02
-> **Обновлено:** 2026-10-22 — PROP-090 **вернулся в работу** (🧩 Предложение, срок решения 2026-11-14); Plugin определён
+> **Обновлено:** 2026-10-23 — ADR-090 принят как решение: **Plugin SDK реализован** (Ф0–Ф7 закрыты; два режима
+> исполнения — `inline` и `out-of-process`; модель доверия, install/activate, API/CLI/UI; гибрид — серверная
+> политика и server-scoped токены); остаток ADR-086 — editions и contribution flow.
+> **Обновлено:** 2026-10-22 — ADR-090 **вернулся в работу** (🧩 Предложение, срок решения 2026-11-14); Plugin определён
 > как **код расширения с двумя режимами исполнения** — `inline` (в процессе ядра) и `out-of-process` (отдельный процесс);
 > в коде Plugin SDK по-прежнему нет.
 > **Обновлено:** 2026-10-20 — **доставка пакета в ядро** вынесена в [ADR-100](./adr-100-extension-packs-pipelines.md):
@@ -13,15 +16,15 @@
 > [ADR-087](./adr-087-gateways.md) (туда перенесён весь материал Telegram-шлюза, в ADR-086 дубликатов нет), а ADR-086
 > стал **зонтиком «Классы расширений»** (Plugin / Gateway / Add-on / контент-пак + Editions + Contribution flow);
 > введён **единый манифест** `synth.pack` для всех классов и контент-паков; терминология 4 классов закреплена в
-> [PROP-090](./prop-090-extension-api.md).
-> **Обновлено:** 2026-10-12 — Extension API v1 вынесен в отдельный [PROP-090](./prop-090-extension-api.md);
+> [ADR-090](./adr-090-extension-api.md).
+> **Обновлено:** 2026-10-12 — Extension API v1 вынесен в отдельный [ADR-090](./adr-090-extension-api.md);
 > ограничение «плагины только standalone» снято (плагины разрешены во всех режимах: managed — установка ADMIN,
 > hybrid — allow-list сервера с server-scoped токенами). Ранее (2026-10-08) добавлен четвёртый столп «внешние
 > сервисы-надстройки (add-ons)».
-> **Классы расширений:** Plugin → [PROP-090](./prop-090-extension-api.md); **Gateway → [ADR-087](./adr-087-gateways.md)**;
+> **Классы расширений:** Plugin → [ADR-090](./adr-090-extension-api.md); **Gateway → [ADR-087](./adr-087-gateways.md)**;
 > Add-on → этот AD; контент-паки → [PROP-068](./prop-068-skills-agents-registry.md); **Storage → [ADR-097](./adr-097-storage-provider-class.md)**; Edition → этот AD.
 > **Связано:** [ADR-100](./adr-100-extension-packs-pipelines.md) «Пакет расширения и пайплайн в ядре»,
-> [PROP-090](./prop-090-extension-api.md) «Extension API v1», [ADR-087](./adr-087-gateways.md) «Шлюзы (gateways)»,
+> [ADR-090](./adr-090-extension-api.md) «Extension API v1», [ADR-087](./adr-087-gateways.md) «Шлюзы (gateways)»,
 > [ADR-030](./adr-030-hooks-agent-events.md) «Hooks/Plugin SDK», [ADR-038](./adr-038-npm-packages.md) «npm-пакеты»,
 > [ADR-046](./adr-046-skills-and-slash-commands.md) «Скиллы», [PROP-068](./prop-068-skills-agents-registry.md) «Реестр и каталог»,
 > [PROP-082](./prop-082-full-images-deployment.md) «Flavor-образы», [ADR-089](./adr-089-external-events-automation.md) «Платформа внешних событий»,
@@ -32,7 +35,7 @@
 **Решение:** дать сообществу и пользователям **лёгкий путь** доработать Synth без приватного форка ядра. Четыре
 взаимодополняющих столпа и набор **классов расширений**:
 
-1. **Extension API** (спецификация — [PROP-090](./prop-090-extension-api.md)) — расширять без форка: версионированный
+1. **Extension API** (спецификация — [ADR-090](./adr-090-extension-api.md)) — расширять без форка: версионированный
    контракт плагинов, точки расширения, загрузка из npm/каталога/реестра, trust/scan/install-policy (по образцу
    [PROP-068](./prop-068-skills-agents-registry.md)). Терминология жёсткая — пять классов: **Plugin** (код в процессе
    ядра) / **Gateway** ([ADR-087](./adr-087-gateways.md), внешний сервис-транспорт) / **Add-on** (внешний сервис
@@ -56,7 +59,7 @@
 
 | Класс | Что запускается | Где спецификация/детали |
 |---|---|---|
-| **Plugin** | код расширения: **в процессе ядра** (`inline`) или **отдельным процессом** (`out-of-process`); фасад `@itphx/synth-plugin` | [PROP-090](./prop-090-extension-api.md) |
+| **Plugin** | код расширения: **в процессе ядра** (`inline`) или **отдельным процессом** (`out-of-process`); фасад `@itphx/synth-plugin` | [ADR-090](./adr-090-extension-api.md) |
 | **Gateway** | **внешний сервис-транспорт** внешний мир ↔ Synth (двусторонний обмен) | **[ADR-087](./adr-087-gateways.md)** |
 | **Add-on** | **внешний сервис** иного назначения (свой репозиторий/образы/деплой) | этот AD, §4 |
 | **Storage** | **драйвер слоя хранения** (доменные порты + контрактный suite; `file`/`memory`/`postgres`) | **[ADR-097](./adr-097-storage-provider-class.md)** |
@@ -65,7 +68,7 @@
 
 **Критерий выбора класса:** по умолчанию — **Gateway/Add-on** (внешний сервис); **Plugin — только когда
 изменение обязано быть in-process** (синхронная трансформация потока, внутренние реестры, производительность).
-Детали терминологии и таксономии влияния плагинов — [PROP-090](./prop-090-extension-api.md) §1.
+Детали терминологии и таксономии влияния плагинов — [ADR-090](./adr-090-extension-api.md), `docs/PLUGINS.md` §1.
 
 ## Контекст
 
@@ -85,7 +88,7 @@ Synth открыт (лицензия MIT), но расширить его сег
 
 ### 1. Extension API (расширять без форка)
 
-**Полная спецификация — [PROP-090](./prop-090-extension-api.md)**: терминология 4 классов (Plugin/Gateway/Add-on/
+**Полная спецификация — [ADR-090](./adr-090-extension-api.md)**: терминология 4 классов (Plugin/Gateway/Add-on/
 контент-пак), манифест (`synth.pack`), точки расширения (встроенные тулы, провайдеры, HTTP-роуты, event-hooks
 [ADR-030](./adr-030-hooks-agent-events.md), UI-слоты/панели, скиллы/agent-packs), фасад `@itphx/synth-plugin` +
 disposer-модель, bundle-only дистрибуция, install/activate (`plugins.lock.json`/`plugins.json`), trust/scan по
@@ -94,7 +97,7 @@ disposer-модель, bundle-only дистрибуция, install/activate (`pl
 
 ### Плагины, add-on'ы, шлюзы и режимы (обновлено 2026-10-14)
 
-Пять классов расширений Synth (терминология жёсткая, [PROP-090](./prop-090-extension-api.md)):
+Пять классов расширений Synth (терминология жёсткая, [ADR-090](./adr-090-extension-api.md)):
 
 | Класс | Что запускается | Режимы |
 |---|---|---|
@@ -106,7 +109,7 @@ disposer-модель, bundle-only дистрибуция, install/activate (`pl
 
 **Ограничение «плагин только standalone» снято:** плагины разрешены во всех режимах. В **managed**
 установку выполняет ADMIN (deploy-time по умолчанию; runtime-install — опция, по умолчанию `deny`). В **hybrid** —
-allow-list сервера, усиленный **server-scoped токенами** (Уровень 2, проектируется сразу). Детали — [PROP-090](./prop-090-extension-api.md).
+allow-list сервера, усиленный **server-scoped токенами** (Уровень 2 — **реализован**). Детали — [ADR-090](./adr-090-extension-api.md).
 
 ### 2. Editions (специализированные сборки)
 
@@ -150,7 +153,7 @@ leader election, singleton-гарантия) — в [ADR-087](./adr-087-gateways
 ### 5. Единый манифест расширения `synth.pack`
 
 Манифест **всех** классов расширений и контент-паков — единый файл **`synth.pack`** (JSON) в корне репозитория
-расширения. Схема/загрузка для классов с кодом — [PROP-090](./prop-090-extension-api.md); для контент-паков
+расширения. Схема/загрузка для классов с кодом — [ADR-090](./adr-090-extension-api.md); для контент-паков
 (индекс/trust/install-policy/провенанс) — [PROP-068](./prop-068-skills-agents-registry.md).
 
 Поля: `name`, `version`, `kind` (`plugin|gateway|addon|pack|storage`), `host`, `contracts`, `description`,
@@ -162,7 +165,7 @@ leader election, singleton-гарантия) — в [ADR-087](./adr-087-gateways
   `prompts`, `automation`, `policies`, `memory`, `ui` ([PROP-068](./prop-068-skills-agents-registry.md)).
 
 npm-плагин кладёт `synth.pack` в `files` пакета (канонический манифест — файл `synth.pack`, а не поле в
-`package.json`; см. [PROP-090](./prop-090-extension-api.md) §3). Реестр/индекс/trust/install-policy/провенанс —
+`package.json`; см. [ADR-090](./adr-090-extension-api.md), `docs/PLUGINS.md` §3). Реестр/индекс/trust/install-policy/провенанс —
 **единые** для всех классов и типов ([PROP-068](./prop-068-skills-agents-registry.md)).
 
 **Состав `provides` — не только по `packType`.** `provides` — это **набор вкладов**, поэтому у
@@ -176,13 +179,13 @@ npm-плагин кладёт `synth.pack` в `files` пакета (канони
 capability-гранты (непустые `capabilities` агента), объявляющий пайплайны или расписания,
 **требует одобрения администратора** (`POST /api/v2/packs/:name/approve`, только ADMIN) — фактическая
 установка не выполняется до одобрения. **Plugin (код расширения) остаётся вне объёма** —
-[PROP-090](./prop-090-extension-api.md) (вернулся в работу 2026-10-22).
+[ADR-090](./adr-090-extension-api.md) (вернулся в работу 2026-10-22).
 
 ### Что уже есть
 
-- **Точек расширения нет.** Хуки/hook-шина [ADR-030](./adr-030-hooks-agent-events.md) реализованы, но Plugin SDK
-  (`SynthPlugin`) и загрузка плагинов — нет; grep `SynthPlugin` по `packages/` — пусто (кроме Vite/tailwind
-  и `blockUnsafeOperationsPlugin` внутри git-обёртки).
+- **Точки расширения реализованы:** хуки/hook-шина [ADR-030](./adr-030-hooks-agent-events.md), Plugin SDK и загрузка
+  плагинов ([ADR-090](./adr-090-extension-api.md) — `PluginHost`, фасад, точки `promptBlocks`/`llmFilters`/`tools`,
+  режимы `inline`/`out-of-process`).
 - **Публикуемые пакеты** [ADR-038](./adr-038-npm-packages.md) — ключевой enabler editions: 6 независимых npm-пакетов,
   тонкая `@itphx/synth`, `scripts/{build,publish,version-bump}.sh`.
 - **Flavor-образы** [PROP-082](./prop-082-full-images-deployment.md) — уже предтеча «editions» для образов
@@ -214,7 +217,7 @@ capability-гранты (непустые `capabilities` агента), объя
 [PROP-082](./prop-082-full-images-deployment.md) (flavor-образы),
 [ADR-089](./adr-089-external-events-automation.md) (Event/Binding/Router для событийных add-on'ов и шлюзов),
 [ADR-087](./adr-087-gateways.md) (класс Gateway — шлюзы/Telegram, HA),
-[PROP-090](./prop-090-extension-api.md) (Extension API v1, манифест `synth.pack`, классы),
+[ADR-090](./adr-090-extension-api.md) (Extension API v1, манифест `synth.pack`, классы),
 [ADR-023](./adr-023-configuration.md) (конфиг), [ADR-029](./adr-029-granular-permissions.md) (permissions),
 [ADR-036](./adr-036-llm-gateway.md)/[PROP-037](./prop-037-commit-security-step.md) (безопасность),
 [ADR-005](./adr-005-json-storage.md)/[ADR-045](./adr-045-hybrid-server-profiles.md)/[ADR-079](./adr-079-local-home-independent-instances.md) (хранение/home),
@@ -234,10 +237,10 @@ capability-гранты (непустые `capabilities` агента), объя
   эталон — add-on `synth-media` (поставляется пакетом: роль `publisher`, скилл `media-hub`,
   MCP-сервер receiver'а, пайплайн публикации).
 - **Extension API v1** (манифест `synth.pack`, фасад `@itphx/synth-plugin` + disposer-модель, загрузчик,
-  trust/scan, install/activate, `plugins.lock.json`/`plugins.json`) — **специфицирован в [PROP-090](./prop-090-extension-api.md)
-  и не реализован**.
+  trust/scan, install/activate, `plugins.lock.json`/`plugins.json`) — **реализован**, см.
+  [ADR-090](./adr-090-extension-api.md).
 - Хуки/hook-шина [ADR-030](./adr-030-hooks-agent-events.md) реализованы; Plugin SDK / загрузка плагинов
-  (`SynthPlugin`) — нет.
+  (`SynthPlugin`) — **реализованы** ([ADR-090](./adr-090-extension-api.md)).
 - Реестра/каталога editions и add-on'ов нет; install-policy для них не существует.
 - [PROP-082](./prop-082-full-images-deployment.md) (flavor-образы) — не реализовано.
 - [PROP-068](./prop-068-skills-agents-registry.md) (реестр/каталог контента) — не реализовано; [ADR-046](./adr-046-skills-and-slash-commands.md)
@@ -254,12 +257,12 @@ capability-гранты (непустые `capabilities` агента), объя
 
 ## Открытые вопросы
 
-- ~~**Декомпозиция:** один AD или несколько~~ — **закрыто:** Extension API v1 выделен в отдельный [PROP-090](./prop-090-extension-api.md)
+- ~~**Декомпозиция:** один AD или несколько~~ — **закрыто:** Extension API v1 выделен в отдельный [ADR-090](./adr-090-extension-api.md)
   (ADR-086 остаётся зонтиком: плагины/gateway/editions/contribution/add-on'ы/контент-паки).
 - ~~**Реестр:** переиспользовать каталог [PROP-068](./prop-068-skills-agents-registry.md) или отдельный~~ — **закрыто:**
-  переиспользуется единая trust/guard-инфраструктура каталога [PROP-068](./prop-068-skills-agents-registry.md) ([PROP-090](./prop-090-extension-api.md)).
+  переиспользуется единая trust/guard-инфраструктура каталога [PROP-068](./prop-068-skills-agents-registry.md) ([ADR-090](./adr-090-extension-api.md)).
 - ~~**Исполнение стороннего кода:** JS-плагины в процессе ядра — какой sandbox~~ — **закрыто:** bundle-only +
-  trust/скан ([PROP-068](./prop-068-skills-agents-registry.md)) + server-scoped токены ([PROP-090](./prop-090-extension-api.md)).
+  trust/скан ([PROP-068](./prop-068-skills-agents-registry.md)) + server-scoped токены ([ADR-090](./adr-090-extension-api.md)).
 - **Стабильность Extension API:** что считается public, semver-политика, окно deprecation.
 - **Editions:** пресет-метапакет (меньше дрейфа, рекомендуемо) vs полноценный long-lived форк ядра; как
   синхронизировать форк (гайд, скрипт, rebase, subtree)?
@@ -268,7 +271,7 @@ capability-гранты (непустые `capabilities` агента), объя
 - **Экономика «за свой счёт»:** только PR vs спонсорство/баунти; как не превратить в обязательство core-команды.
 - ~~**Управляемый гибрид:** разрешать ли сторонние плагины/editions/add-on'ы на managed-бэкенде~~ — **закрыто:**
   разрешены; managed — установка ADMIN (deploy-time + runtime-опция), hybrid — allow-list сервера с server-scoped
-  токенами ([PROP-090](./prop-090-extension-api.md); политики — [PROP-081](./prop-081-hybrid-policy-leak-protection.md)).
+  токенами ([ADR-090](./adr-090-extension-api.md); политики — [PROP-081](./prop-081-hybrid-policy-leak-protection.md)).
 - **Скилл доработки:** builtin (в поставке) vs official-реестр; нужны ли спец-тулы (git/fork/PR/CI-статус).
 - **Шаблон add-on'а:** что именно в общем скелете (язык, CI, формат контракта интеграции), как проверять
   совместимость версий с Synth.
@@ -278,7 +281,7 @@ _Вопросы шлюза (топология приёма, HA-стейт, ре
 
 ## Связи
 
-- [PROP-090](./prop-090-extension-api.md) — Extension API v1: терминология классов, манифест `synth.pack`, загрузка, install/activate, trust/scan, режимы (спецификация плагинов; вынесена из ADR-086).
+- [ADR-090](./adr-090-extension-api.md) — Extension API v1: терминология классов, манифест `synth.pack`, загрузка, install/activate, trust/scan, режимы (спецификация плагинов; вынесена из ADR-086).
 - [ADR-100](./adr-100-extension-packs-pipelines.md) — доставка пакета расширения в ядро: валидация манифеста, установка одной операцией, одобрение администратора, реестр установок, пайплайны и учёт прогонов (продолжение §5 «Единый манифест расширения `synth.pack`»).
 - [ADR-087](./adr-087-gateways.md) — класс «Шлюзы (gateways)»: контракт, Telegram-шлюз, мультитенантность, HA.
 - [ADR-097](./adr-097-storage-provider-class.md) — класс «хранилище» (storage): драйвер слоя хранения (доменные порты + контрактный suite; `kind: "storage"`).
@@ -296,6 +299,6 @@ _Вопросы шлюза (топология приёма, HA-стейт, ре
 
 ## История
 
-- 2026-10-22 — PROP-090 вернулся в работу; Plugin определён как код расширения с двумя режимами исполнения (`inline`/`out-of-process`); в коде SDK нет.
+- 2026-10-22 — ADR-090 вернулся в работу; Plugin определён как код расширения с двумя режимами исполнения (`inline`/`out-of-process`); в коде SDK нет.
 - 2026-10-20 — доставка пакета расширения в ядро вынесена в [ADR-100](./adr-100-extension-packs-pipelines.md); §5 дополнен: `provides` любого класса может включать `agents`/`pipelines`, установка — `POST /api/v2/packs`, capability-гранты требуют одобрения.
 - 2026-10-16 — добавлен класс **Storage** (`kind: "storage"`) — [ADR-097](./adr-097-storage-provider-class.md).

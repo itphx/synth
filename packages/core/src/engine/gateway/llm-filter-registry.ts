@@ -1,5 +1,5 @@
 /**
- * PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов.
+ * ADR-090: реестр фильтров LLM-вызовов.
  *
  * Реестр живёт рядом с `GatewayProvider` (`engine/gateway/gateway-provider.ts`):
  * gateway обходит его в нужной фазе (`pre_request`/`post_response`/`embedding`)
@@ -11,7 +11,7 @@
  * - фаза — из известного перечня;
  * - доверие владельца не задано → `community` (вeto нет, режим отказа — `open`).
  *
- * **Право вето — только у доверенных** (PROP-090 §«Кто вправе блокировать»):
+ * **Право вето — только у доверенных** (ADR-090):
  * фильтр с trust ниже `trusted` не может заблокировать или переписать вызов —
  * хост понижает его вердикт до `allow` и пишет событие в журнал плагинов.
  *
@@ -46,7 +46,7 @@ export class LlmFilterRegistrationError extends Error {
  * Событие журнала плагинов о решении фильтра (действие `filter`).
  *
  * Пишет владелец фильтра (плагин) через колбэк `onAudit` — журнал плагинов
- * остаётся отдельным от аудита gateway (ADR-096, PROP-090 §9).
+ * остаётся отдельным от аудита gateway (ADR-096, ADR-090).
  */
 export interface LlmFilterAuditEvent {
   /** Идентификатор фильтра. */
@@ -123,7 +123,7 @@ export interface LlmFilterRegistryOptions {
 
 /**
  * Порог доверия для права вето: блокировать/переписывать вызов могут только
- * плагины с trust не ниже `trusted` (PROP-090 §«Кто вправе блокировать»).
+ * плагины с trust не ниже `trusted` (ADR-090).
  */
 export const LLM_FILTER_VETO_TRUST_LEVEL: CatalogTrustLevel = 'trusted';
 

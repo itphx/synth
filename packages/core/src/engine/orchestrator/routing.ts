@@ -61,7 +61,7 @@ export interface GatewayWrapDeps {
   /** ADR-094: реестр метрик — обёртка ставится и при выключенном gateway. */
   metrics?: MetricsRegistry;
   /**
-   * PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов. Не задан/пуст —
+   * ADR-090: реестр фильтров LLM-вызовов. Не задан/пуст —
    * прежнее поведение (фильтры не выполняются).
    */
   filters?: LlmFilterRegistry;

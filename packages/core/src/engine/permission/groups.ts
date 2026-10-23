@@ -103,8 +103,7 @@ export function getToolGroups(
   toolName: string,
   capabilities?: readonly string[],
   /**
-   * Источник тула (`ToolDefinition.source`, ADR-071 §2.1 + PROP-090 §«Точка
-   * `tools`»). Не задан — считается встроенным.
+   * Источник тула (`ToolDefinition.source`, ADR-071 §2.1 + ADR-090). Не задан — считается встроенным.
    *
    * Нужен для групп, которые **не выражаются** именем или capability:
    * MCP-инструменты матчатся по capability `mcp`, а инструменты плагинов —
@@ -126,7 +125,7 @@ export function getToolGroups(
       result.push(group);
       continue;
     }
-    // Инструменты плагинов (PROP-090, Ф3в): группа по источнику, а не по
+    // Инструменты плагинов (ADR-090, Ф3в): группа по источнику, а не по
     // capability — плагин не может «выписаться» из правила `plugin`.
     if (group === 'plugin' && source === 'plugin') {
       result.push(group);

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { isSemverRange, parseSemver, satisfiesSemverRange } from './semver.js';
 import { checkExtensionCompatibility } from './pack.js';
 
-describe('isSemverRange — грамматика диапазонов (PROP-090 §8)', () => {
+describe('isSemverRange — грамматика диапазонов (ADR-090)', () => {
   it('принимает поддерживаемые формы', () => {
     for (const range of ['^1.2.3', '~1.2.3', '>=1.0.0 <2.0.0', '1.x', '*', '1.2.3', '=1.2.3', '>1.0', '1']) {
       expect(isSemverRange(range), range).toBe(true);
@@ -95,7 +95,7 @@ describe('satisfiesSemverRange — операторы', () => {
   });
 });
 
-describe('checkExtensionCompatibility — вердикт семвер-гейта (PROP-090 §10)', () => {
+describe('checkExtensionCompatibility — вердикт семвер-гейта (ADR-090)', () => {
   const base = { hostVersion: '1.4.2', contractVersion: '1.0.0' };
 
   it('совместим: контракт и host проходят', () => {

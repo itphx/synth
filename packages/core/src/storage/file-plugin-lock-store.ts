@@ -19,7 +19,7 @@ export interface FilePluginLockStoreConfig {
 const PLUGINS_KEY = 'plugins';
 
 /**
- * PROP-068 §4.4 / PROP-090 §5: файловая реализация порта lock-файла плагинов
+ * PROP-068 §4.4 / ADR-090: файловая реализация порта lock-файла плагинов
  * (ADR-096 — слой хранения; ADR-005 — JSON + атомарная запись tmp→rename).
  *
  * Ключ записи — имя плагина: `save` — upsert по имени (`installed_at`

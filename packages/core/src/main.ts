@@ -256,7 +256,7 @@ program
       metricsConfig: synth.metrics,
       // ADR-106 Ф1: Authority-слой (по умолчанию выключен).
       authorityConfig: synth.authority,
-      // PROP-090 §10: конфигурация слоя плагинов (политики + бюджеты).
+      // ADR-090: конфигурация слоя плагинов (политики + бюджеты).
       pluginsConfig: synth.plugins,
       // ADR-052 (этап II): конфигурация исходящих webhooks (enabled/retry).
       webhooksConfig: synth.webhooks,
@@ -283,7 +283,7 @@ program
     });
     const { server, wss } = appHandle;
 
-    // PROP-090 §5/§10 (Ф5б-1): старт-активация установленных плагинов.
+    // ADR-090 (Ф5б-1): старт-активация установленных плагинов.
     // `plugins.lock.json` — источник истины; `executionEnabled=false` (дефолт) →
     // no-op. Ошибка плагина (или самого рантайма) **не роняет старт** — только
     // предупреждение; тексты плагинов в лог не попадают (инвариант 13), только
@@ -359,7 +359,7 @@ program
       // ADR-077 (шаг B2): остановить источник MCP-серверов исполнителя.
       appHandle.stopExecutorMcpSource?.();
 
-      // PROP-090 §5 (Ф5б-1): снять вклады плагинов (обратный порядок) — до
+      // ADR-090 (Ф5б-1): снять вклады плагинов (обратный порядок) — до
       // закрытия хранилища; ошибка деактивации не мешает остановке.
       if (appHandle.pluginRuntime) {
         try {
@@ -748,7 +748,7 @@ projectCmd
 
 program.addCommand(projectCmd);
 
-// PROP-090 §«CLI (`synth plugin *`)» (Ф5б-3): группа объявляется и здесь, и в
+// ADR-090 (Ф5б-3): группа объявляется и здесь, и в
 // `packages/synth/src/cli.ts` — обе обёртки используют один модуль команд.
 program.addCommand(createPluginCommand({ createContext: createPluginCliContext }));
 

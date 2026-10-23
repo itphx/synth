@@ -1,4 +1,4 @@
-// plugins: домен API v2 (ADR-095) — слой плагинов (PROP-090, Ф6).
+// plugins: домен API v2 (ADR-095) — слой плагинов (ADR-090, Ф6).
 //
 // HTTP-контур `packages/core/src/server/routes/plugins.ts`:
 //   GET    /plugins                — установленные + статус активации;
@@ -32,7 +32,7 @@ export type PluginScanVerdict = 'safe' | 'caution' | 'dangerous'
 export type PluginExecutionMode = 'inline' | 'remote' | 'both'
 
 /**
- * Статус проверки плагина сервером в гибридном режиме (PROP-090 Ф7).
+ * Статус проверки плагина сервером в гибридном режиме (ADR-090 Ф7).
  *
  * - `allowed` — сервер подтвердил (политика `off` либо плагин в allow-list);
  * - `denied` — сервер запретил (плагина нет в allow-list при `allowlist`);
@@ -68,7 +68,7 @@ export interface PluginRuntimeEntry {
   /** Фактический режим исполнения (если активен). */
   mode?: PluginExecutionMode
   /**
-   * Статус проверки сервером в гибридном режиме (PROP-090 Ф7).
+   * Статус проверки сервером в гибридном режиме (ADR-090 Ф7).
    *
    * `unverified` — сервер недоступен или политика неизвестна: плагин работает
    * в режиме cooperative (сервер его не подтвердил).
@@ -195,7 +195,7 @@ export interface PluginsSettingsInfo {
   /** Эффективные значения процесса на момент старта. */
   running: PluginsPolicyValues
   /**
-   * Серверная политика плагинов в гибридном режиме (PROP-090 Ф7).
+   * Серверная политика плагинов в гибридном режиме (ADR-090 Ф7).
    *
    * `mode: 'off'` — сервер не ограничивает плагины; `mode: 'allowlist'` —
    * разрешены только плагины из `allow` (список приходит только в этом режиме).
@@ -210,7 +210,7 @@ const pluginPath = (name: string): string =>
   `${BASE_URL}/plugins/${encodeURIComponent(name)}`
 
 export const pluginsApi = {
-  // --- PROP-090 Ф6: жизненный цикл плагинов (`/plugins*`) ---
+  // --- ADR-090 Ф6: жизненный цикл плагинов (`/plugins*`) ---
   /** GET /plugins — установленные плагины и статус активации. */
   async listPlugins(): Promise<PluginRuntimeEntry[]> {
     const response = await fetchJSON<PluginsListResponse>(`${BASE_URL}/plugins`)
@@ -269,7 +269,7 @@ export const pluginsApi = {
     return fetchJSON<PluginRollbackResult>(`${pluginPath(name)}/rollback`, { method: 'POST' })
   },
 
-  // --- PROP-090 §10: runtime-настройки слоя (`/settings/plugins`) ---
+  // --- ADR-090: runtime-настройки слоя (`/settings/plugins`) ---
   /** GET /settings/plugins — runtime-override, дефолты, признак рестарта. */
   async getPluginsSettings(): Promise<PluginsSettingsInfo> {
     return fetchJSON<PluginsSettingsInfo>(`${BASE_URL}/settings/plugins`)

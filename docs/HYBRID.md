@@ -184,7 +184,7 @@ synth project fork <remote-id> --local
 
 ### 7. Плагины в гибриде
 
-Слой плагинов в гибриде разведён на две стороны ([PROP-090](./arch_decisions/prop-090-extension-api.md)
+Слой плагинов в гибриде разведён на две стороны ([ADR-090](./arch_decisions/adr-090-extension-api.md)
 Ф7, §«Гибрид»).
 
 **Политика сервера.** Секция `plugins.hybrid` в конфиге сервера (и в runtime-настройках

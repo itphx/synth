@@ -25,9 +25,9 @@ export { describeDedupRepository } from './events.js';
 export { describeScheduleRepository } from './scheduler.js';
 export { describeJobRepository } from './scheduler.js';
 export { describeMaintenanceAuditRepository } from './maintenance.js';
-// PROP-090 §9: журнал аудита плагинов (отдельный порт).
+// ADR-090: журнал аудита плагинов (отдельный порт).
 export { describePluginAuditRepository } from './plugin-audit-repository.contract.js';
-// PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов.
+// PROP-068 §4.4 / ADR-090: lock-файл плагинов.
 export { describePluginLockRepository } from './plugin-lock-repository.contract.js';
 // ADR-106: порты Authority-слоя (политика инстанса + журнал решений).
 export {

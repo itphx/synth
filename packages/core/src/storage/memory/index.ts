@@ -34,9 +34,9 @@ export { MemoryExternalCredentialRepository } from './external-credentials.js';
 export { MemoryScheduleRepository, MemoryJobRepository } from './scheduler.js';
 
 export { MemoryMaintenanceAuditRepository } from './audit.js';
-// PROP-090 §9: журнал аудита плагинов (отдельный порт, не security-аудит).
+// ADR-090: журнал аудита плагинов (отдельный порт, не security-аудит).
 export { MemoryPluginAuditRepository } from './plugin-audit.js';
-// PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов.
+// PROP-068 §4.4 / ADR-090: lock-файл плагинов.
 export { MemoryPluginLockRepository } from './plugin-lock.js';
 export { MemorySecurityAuditRepository, MemoryEgressRequestLogRepository } from './security-audit.js';
 // ADR-106: порты Authority-слоя (политика инстанса + журнал решений).

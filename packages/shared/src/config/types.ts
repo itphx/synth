@@ -653,10 +653,10 @@ export const webhooksConfigSchema = z.object({
   deliveryRetentionDays: z.number().int().min(0).default(30),
 });
 
-// --- Слой плагинов (PROP-090 §10) ---
+// --- Слой плагинов (ADR-090) ---
 
 /**
- * Ф7 (PROP-090): форма серверной политики плагинов для гибридного режима —
+ * Ф7 (ADR-090): форма серверной политики плагинов для гибридного режима —
  * `plugins.hybrid` (конфиг + runtime-настройки).
  *
  * `mode: 'off'` — сервер не ограничивает плагины; `mode: 'allowlist'` —
@@ -668,7 +668,7 @@ export const pluginsHybridConfigSchema = z.object({
 });
 
 /**
- * PROP-090 §10: конфигурация слоя плагинов (Extension API).
+ * ADR-090: конфигурация слоя плагинов (Extension API).
  *
  * - `enabled` — мастер-выключатель Extension API (по умолчанию включён: слой
  *   Ф0–Ф2 ещё не исполняет код плагинов, но политики читаются);
@@ -678,17 +678,17 @@ export const pluginsHybridConfigSchema = z.object({
  * - `trustFloor` — минимальный уровень доверия для **установки и активации**
  *   плагина (по умолчанию `trusted`). Плагин ниже порога **не устанавливается**:
  *   установщик отказывает с `plugin.trust_below_floor` — как и активация
- *   (PROP-090 §9).
+ *   (ADR-090).
  * - `scan` — статический сканер содержимого расширения
  *   (`enabled`/`disabled`; по умолчанию включён);
  * - `allowlist`/`denylist` — списки имён расширений, которым разрешён/
  *   запрещён запуск (пусто — политика не применяется);
  * - `remoteAllowlist` — allow-list расширений для hybrid-контура (Ф7);
  * - `exactHostExceptions` — путь к файлу точных исключений семвер-гейта
- *   (формат файла — открытый вопрос PROP-090 §14);
+ *   (формат файла — открытый вопрос ADR-090);
  * - `promptBlockMaxChars` — бюджет символов **на блок** системного промпта
  *   от плагина (по умолчанию 4000; превышение — обрезка хостом с маркером
- *   усечения, PROP-090 §5);
+ *   усечения, ADR-090);
  * - `executionEnabled` — **главный переключатель исполнения кода плагинов**
  *   (по умолчанию `false`: в Ф1 загрузчик доводит плагин до шага `import` и
  *   останавливается — `plugin.execution_disabled`; в Ф3/Ф4 включает `inline`/
@@ -698,7 +698,7 @@ export const pluginsHybridConfigSchema = z.object({
  *   `/opt/synth/plugins` (конвенциональный путь образа; каталога нет — установки
  *   нет, разбор пустого каталога — no-op). Пустая строка — deploy-time установки
  *   выключены. Ставится при старте инстанса (`PluginRuntime.installDeployPlugins`,
- *   PROP-090 §«Managed deploy-time», Ф5в). Значение переопределяется config.yaml
+ *   ADR-090, Ф5в). Значение переопределяется config.yaml
  *   или env `SYNTH_PLUGINS_DEPLOY_DIR` (ADR-023: env выше конфига);
  * - `deployTrust` — уровень доверия, с которым ставятся бандлы `deployDir`
  *   (default `trusted`: бандл из образа доверен ровно настолько, насколько
@@ -723,7 +723,7 @@ export const pluginsConfigSchema = z.object({
   executionEnabled: z.boolean().default(false),
   /**
    * Бюджет времени на один вызов фильтра LLM-вызовов, мс (точка
-   * `llmFilters`, PROP-090 §6). Не задан фильтром — берётся это значение;
+   * `llmFilters`, ADR-090). Не задан фильтром — берётся это значение;
    * по истечении применяется `failMode` фильтра (`closed` → вызов не уходит,
    * `open` → вызов идёт, факт — в аудите).
    */
@@ -1259,7 +1259,7 @@ export type AnalyticsConfig = z.infer<typeof analyticsConfigSchema>;
 export type MetricsConfig = z.infer<typeof metricsConfigSchema>;
 /** ADR-106 Ф1: секция `authority` (`enabled`/`shadow`). */
 export type AuthorityConfig = z.infer<typeof authorityConfigSchema>;
-/** PROP-090 §10: секция `plugins` — политики слоя плагинов. */
+/** ADR-090: секция `plugins` — политики слоя плагинов. */
 export type PluginsConfig = z.infer<typeof pluginsConfigSchema>;
 export type WebhooksConfig = z.infer<typeof webhooksConfigSchema>;
 export type EgressPolicyConfig = z.infer<typeof egressPolicySchema>;

@@ -1,5 +1,5 @@
 /**
- * PROP-090 §«out-of-process»: клиент удалённого процесса плагина (Ф4б-1).
+ * ADR-090: клиент удалённого процесса плагина (Ф4б-1).
  *
  * Транспорт — HTTP/1.1 + JSON, контракт — `@itphx/synth-shared`
  * (`types/plugin-protocol.ts`): `GET /health` (без токена), `GET /capabilities`,

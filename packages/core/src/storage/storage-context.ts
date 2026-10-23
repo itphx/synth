@@ -319,13 +319,13 @@ export interface StorageContext {
   jobs: JobRepository;
   maintenanceAudit: MaintenanceAuditRepository;
   /**
-   * PROP-090 §9: журнал аудита плагинов (append-only). Отдельный порт, а не
+   * ADR-090: журнал аудита плагинов (append-only). Отдельный порт, а не
    * расширение `securityAudit`: семантика «событие расширения» ≠ «изменение
    * политики».
    */
   pluginAudit: PluginAuditRepository;
   /**
-   * PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов (`plugins.lock.json`) —
+   * PROP-068 §4.4 / ADR-090: lock-файл плагинов (`plugins.lock.json`) —
    * **источник истины** для update/uninstall (провенанс: источник, pin,
    * content-hash, доверие, вердикт скана).
    */
@@ -413,7 +413,7 @@ export interface StorageContextConfig {
   /** ADR-098 (задел W5): каталог файлового фоллбека при деградации. */
   fallbackDir?: string;
   /**
-   * PROP-090 §5: путь к lock-файлу плагинов. По умолчанию —
+   * ADR-090: путь к lock-файлу плагинов. По умолчанию —
    * `{dataDir}/plugin/plugins.lock.json`; при home-модели (ADR-079) —
    * `<home>/plugin/plugins.lock.json` (путь задаёт composition root).
    */
@@ -576,9 +576,9 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     }),
     jobs: new JobStore({ dataDir }),
     maintenanceAudit: new MaintenanceAuditStore({ dataDir }),
-    // PROP-090 §9: журнал аудита плагинов (`audit/plugins.jsonl`).
+    // ADR-090: журнал аудита плагинов (`audit/plugins.jsonl`).
     pluginAudit: new FilePluginAuditStore({ dataDir }),
-    // PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов. Путь задаётся
+    // PROP-068 §4.4 / ADR-090: lock-файл плагинов. Путь задаётся
     // раскладкой (`<home>/plugin/plugins.lock.json` при home-модели), без
     // home — `{dataDir}/plugin/plugins.lock.json`.
     pluginLock: new FilePluginLockStore({
@@ -1020,7 +1020,7 @@ export interface BuildStorageContextOptions {
   /** ADR-097: режим работы со схемой БД при сборке (`postgres`). */
   postgresSchemaMode?: PostgresSchemaMode;
   /**
-   * PROP-090 §5: путь к lock-файлу плагинов (`plugins.lock.json`). Задаёт
+   * ADR-090: путь к lock-файлу плагинов (`plugins.lock.json`). Задаёт
    * composition root — при home-модели это `<home>/plugin/plugins.lock.json`
    * (иначе порт смотрел бы в `{dataDir}/plugin/…`, и CLI с `--home` разошёлся
    * бы с сервером).

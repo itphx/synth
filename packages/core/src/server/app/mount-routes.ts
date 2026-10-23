@@ -484,7 +484,7 @@ export function mountStandaloneRoutes(
     },
   ));
 
-  // PROP-090 §10 (Ф5б-2): runtime-настройки слоя плагинов
+  // ADR-090 (Ф5б-2): runtime-настройки слоя плагинов
   // (`/api/v2/settings/plugins`). `restartRequired` — всегда true: рантайм
   // плагинов и хост собираются при старте (инвариант 24). Core — `requireAuth`.
   app.route('/api/v2/settings', createPluginSettingsRoutes(
@@ -585,7 +585,7 @@ export function mountStandaloneRoutes(
     },
   ));
 
-  // PROP-090 §«HTTP API» (Ф5б-2): управление плагинами — список/деталь,
+  // ADR-090 (Ф5б-2): управление плагинами — список/деталь,
   // установка из источника (standalone: `localInstall: true` — каталог/архив/
   // npm/url), подтверждение карантина, активация/деактивация и снятие.
   // Standalone — дефолтные guard'ы (`requireAuth`; единственный пользователь
@@ -597,7 +597,7 @@ export function mountStandaloneRoutes(
       config: mergePluginsConfig(config.pluginsConfig, {}),
       settings: settingsStore,
       localInstall: true,
-      // Ф7 (PROP-090): реестр service-key — для выдачи server-scoped токена
+      // Ф7 (ADR-090): реестр service-key — для выдачи server-scoped токена
       // плагину (`POST /api/v2/plugins/token`).
       serviceKeys: deps.storageContext.serviceKeys,
       // Ф7: серверная политика (allow-list) из работающего рантайма.

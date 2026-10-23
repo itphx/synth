@@ -263,7 +263,7 @@ interface ServiceKeyRow extends Row {
   last_used_at: Date | string | null;
   expires_at: Date | string | null;
   revoked_at: Date | string | null;
-  /** Ф7 (PROP-090): привязка ключа к плагину (server-scoped токен). */
+  /** Ф7 (ADR-090): привязка ключа к плагину (server-scoped токен). */
   plugin_id?: string | null;
 }
 
@@ -292,7 +292,7 @@ function serviceKeyToPublic(row: ServiceKeyRow): ServiceApiKey {
 /** Внутренняя запись для переноса между backend'ами: публичные поля + sha256-хеш. */
 function serviceKeyToRecord(row: ServiceKeyRow): ServiceApiKeyRecord {
   const record: ServiceApiKeyRecord = { ...serviceKeyToPublic(row), hash: row.secret_hash };
-  // Ф7 (PROP-090): привязка к плагину переносится вместе с записью — иначе
+  // Ф7 (ADR-090): привязка к плагину переносится вместе с записью — иначе
   // ключ потерял бы привязку и стал бы обычным service-key (fail-open).
   if (row.plugin_id) record.pluginId = row.plugin_id;
   return record;
@@ -361,7 +361,7 @@ class PostgresServiceKeyRepository implements ServiceKeyRepository {
         record.lastUsedAt ?? null,
         record.expiresAt ?? null,
         record.revokedAt ?? null,
-        // Ф7 (PROP-090): привязка к плагину переносится вместе с записью.
+        // Ф7 (ADR-090): привязка к плагину переносится вместе с записью.
         record.pluginId ?? null,
       ],
     );
@@ -429,7 +429,7 @@ class PostgresServiceKeyRepository implements ServiceKeyRepository {
           record.createdBy,
           record.createdAt,
           record.expiresAt ?? null,
-          // Ф7 (PROP-090): привязка к плагину (server-scoped токен).
+          // Ф7 (ADR-090): привязка к плагину (server-scoped токен).
           input.pluginId ?? null,
         ],
       );
@@ -597,7 +597,7 @@ class PostgresServiceKeyRepository implements ServiceKeyRepository {
     };
     if (key.allowedProjects) credential.allowedProjects = [...key.allowedProjects];
     if (key.rateLimitPerMinute !== undefined) credential.rateLimitPerMinute = key.rateLimitPerMinute;
-    // Ф7 (PROP-090): привязка к плагину — по ней сервер проверяет заголовок
+    // Ф7 (ADR-090): привязка к плагину — по ней сервер проверяет заголовок
     // `X-Synth-Plugin-Id` и серверный allow-list (fail-closed).
     if (row.plugin_id) credential.pluginId = row.plugin_id;
     return { key, credential };

@@ -30,7 +30,7 @@ export interface PermissionCheckInput {
   workingDir: string;
   capabilities?: readonly string[];
   /**
-   * PROP-090 §«Точка `tools`»: источник тула (`ToolDefinition.source`).
+   * ADR-090: источник тула (`ToolDefinition.source`).
    * `plugin` — инструмент плагина, попадает в группу `plugin` (правило
    * `permission.rules.plugin` запрещает все плагинные инструменты сразу).
    * Не задан — встроенный/MCP (поведение прежнее).

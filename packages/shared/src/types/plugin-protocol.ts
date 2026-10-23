@@ -1,5 +1,5 @@
 /**
- * PROP-090 §«Два режима исполнения» → «`out-of-process`»: wire-протокол плагина.
+ * ADR-090 → «`out-of-process`»: wire-протокол плагина.
  *
  * Транспорт — HTTP/1.1 + JSON по образцу исполнителя
  * (`packages/executor/src/protocol.ts`, ADR-077): `POST /invoke` (вызов точки
@@ -16,7 +16,7 @@
  * (`LlmFilterInput` → `LlmFilterVerdict`) и `tools`
  * (`{ parameters, context }` → `{ content, isError? }`, как у MCP-инструментов).
  * Порты хранилища, реестры ядра и `GatewayProvider` наружу не отдаются
- * (PROP-090 §«Что пересекает границу»).
+ * (ADR-090).
  *
  * **Точка `tools` (Ф4б-3).** Процесс объявляет инструменты в
  * `points.tools[]` (`PluginCapabilitiesTool`: локальное имя, описание,

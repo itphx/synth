@@ -59,7 +59,7 @@ import {
   createPipelineMetrics,
   toCoreProviderConfig,
   ProviderFactory,
-  // PROP-090 §«Точка promptBlocks» (Ф3а) / §5, §10 (Ф5б-1): общий реестр блоков
+  // ADR-090 (Ф3а) / §5, §10 (Ф5б-1): общий реестр блоков
   // промпта (композер + фасад плагинов) и рантайм плагинов (старт-активация).
   PromptBlockRegistry,
   PluginRuntime,
@@ -120,7 +120,7 @@ export interface StandaloneDepsAccessors extends HybridMirrorAccessors {
    */
   onSessionMaterialized?: (owner: string, sessionId: string) => void | Promise<void>;
   /**
-   * PROP-090 Ф7: серверная политика плагинов удалённого сервера (гибрид).
+   * ADR-090 Ф7: серверная политика плагинов удалённого сервера (гибрид).
    *
    * Возвращает `undefined`, когда сервера нет/он недоступен или политика
    * неизвестна: тогда локальные плагины работают в режиме cooperative и
@@ -157,7 +157,7 @@ export async function createStandaloneStorage(config: StandaloneConfig): Promise
     scheduleCrossProcess: config.schedulerConfig?.crossProcessLocks ?? false,
     systemPromptsDir: config.systemPromptsDir,
     bundlesPath: config.commandsConfig?.bundlesPath,
-    // PROP-090 §5: путь lock-файла плагинов задаёт раскладка (композиционный
+    // ADR-090: путь lock-файла плагинов задаёт раскладка (композиционный
     // корень) — `<home>/plugin/plugins.lock.json` либо `{dataDir}/plugin/…`.
     // Логику home не дублируем: единственный резолвер — `resolvePluginLayout`,
     // его же использует `PluginRuntime` (раскладка `installed/`/`quarantine/`),
@@ -513,7 +513,7 @@ export async function createStandaloneDeps(
   const toolRegistry = createToolRegistry();
   const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
-  // PROP-090 §«Точка promptBlocks» (Ф3а): **один** реестр провайдеров блоков
+  // ADR-090 (Ф3а): **один** реестр провайдеров блоков
   // системного промпта на инстанс. Композер добавляет блоки в промпт сессии,
   // фасад плагинов (`PluginRuntime` → `PluginHost`) регистрирует их — экземпляр
   // обязан быть общим, иначе плагинные блоки в промпт не попадут.
@@ -616,7 +616,7 @@ export async function createStandaloneDeps(
   // модульный, порт берётся из первого вызова (fail-closed в remote-режиме).
   const runtimeDeps = await detectRuntimeDeps(executionPort);
 
-  // PROP-090 §5 (долги Д3): эффективный конфиг слоя = config.yaml (+env) поверх
+  // ADR-090 (долги Д3): эффективный конфиг слоя = config.yaml (+env) поверх
   // runtime-настроек — нужен **до** оркестратора: бюджеты `promptBlockMaxChars`
   // и `llmFilterTimeoutMs` попадают в композер/реестр фильтров при сборке.
   const effectivePluginsConfig = mergePluginsConfig(
@@ -686,7 +686,7 @@ export async function createStandaloneDeps(
     dataDir,
     toolRegistry,
     agentRegistry,
-    // PROP-090 §«Точка promptBlocks»: тот же реестр, что у фасада плагинов
+    // ADR-090: тот же реестр, что у фасада плагинов
     // (ниже, `PluginRuntime`) — блоки плагинов попадают в промпт сессии.
     promptBlocks,
     projectStore,
@@ -706,7 +706,7 @@ export async function createStandaloneDeps(
     securityConfig: effectiveSecurityConfig,
     gatewayConfig,
     gatewayPatternStore: patternStore,
-    // PROP-090 §«Точка llmFilters»/«Точка promptBlocks»: бюджеты слоя плагинов.
+    // ADR-090/«Точка promptBlocks»: бюджеты слоя плагинов.
     // Реестр фильтров создаётся оркестратором (`getLlmFilters()`), бюджет блока
     // уходит в композер; оба меняются живьём — `setLlmFilterTimeoutMs`/
     // `setPromptBlockMaxChars` (долги Д3).
@@ -753,12 +753,12 @@ export async function createStandaloneDeps(
       (await sessionManager.getSession(sid))?.status.cancelRequested === true,
   });
 
-  // PROP-090 §10 (Ф5б-2): эффективный конфиг слоя = config.yaml (+env) поверх
+  // ADR-090 (Ф5б-2): эффективный конфиг слоя = config.yaml (+env) поверх
   // runtime-настроек (`settings.json`/PG): админка `/api/v2/settings/plugins`
   // пишет runtime, рантайм собирается при старте (применение — рестартом,
   // инвариант 24), поэтому слияние делается **здесь**, а не в рантайме.
 
-  // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного
+  // ADR-090 (Ф5б-1): рантайм плагинов — старт-активация установленного
   // (`plugins.lock.json` — источник истины), список со статусом активации и
   // точки `activate`/`deactivate` для HTTP API/CLI (Ф5б-2/3). Реестры — **те же**
   // экземпляры, что у оркестратора: блоки промпта (`promptBlocks` выше), фильтры
@@ -787,7 +787,7 @@ export async function createStandaloneDeps(
       remote: createRemotePluginLoader({ processManager: pluginProcessManager }),
     },
     processManager: pluginProcessManager,
-    // Ф7 (PROP-090): серверная политика плагинов в гибриде (Уровень 1 —
+    // Ф7 (ADR-090): серверная политика плагинов в гибриде (Уровень 1 —
     // cooperative). Не задана — сервера нет: плагины работают, но помечаются
     // «не проверен сервером».
     ...(accessors.getServerPluginPolicy
@@ -1109,7 +1109,7 @@ export async function createStandaloneDeps(
     defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
     catchUp: config.schedulerConfig?.catchUp ?? 'skip',
     jobRetentionDays: config.schedulerConfig?.jobRetentionDays ?? 30,
-    // ADR-030 (Ф0 PROP-090): хук `schedule_fired` (async, метаданные расписания).
+    // ADR-030 (Ф0 ADR-090): хук `schedule_fired` (async, метаданные расписания).
     hooks,
     // ADR-094: завершённые Job (outcome + дрейф cron).
     onJob: schedulerJobMetrics,
@@ -1204,7 +1204,7 @@ export async function createStandaloneDeps(
     // ADR-071 §2.5: единый реестр MCP-серверов (установщик пакета пишет в него).
     mcpRegistryStore,
     orchestrator,
-    // PROP-090 §5/§10 (Ф5б-1): рантайм плагинов — старт-активация установленного
+    // ADR-090 (Ф5б-1): рантайм плагинов — старт-активация установленного
     // (`main.ts`) и точки для HTTP API/CLI (Ф5б-2/3). `host`+`installer` внутри.
     pluginRuntime,
     // ADR-077: порт исполнения — тот же инстанс, что у оркестратора и тулов

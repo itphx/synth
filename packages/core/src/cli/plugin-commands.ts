@@ -1,5 +1,5 @@
 /**
- * PROP-090 §«CLI (`synth plugin *`)», фаза Ф5б (часть 3): группа команд
+ * ADR-090, фаза Ф5б (часть 3): группа команд
  * управления плагинами — установка, подтверждение из карантина, список,
  * включение/выключение, снятие и dry-run скан.
  *
@@ -862,7 +862,7 @@ async function runScan(dir: string, json: boolean): Promise<number> {
  */
 export function createPluginCommand(deps: PluginCommandDeps): Command {
   return new Command('plugin')
-    .description('Плагины (PROP-090): установка, проверка, обновление, откат, снятие')
+    .description('Плагины (ADR-090): установка, проверка, обновление, откат, снятие')
     .addCommand(createListCommand(deps))
     .addCommand(createInstallCommand(deps))
     .addCommand(createUpdateCommand(deps))

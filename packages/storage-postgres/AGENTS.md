@@ -60,8 +60,8 @@ ADR-097): реализация доменных портов `StorageContext` (`
 **Текущий статус (сводно).** Реализованы: 39 из 39 доменных портов (группы
 `ports/*`; включая `analyticsRollups` — ADR-102 и `projectPipelines`/`pipelineRuns` —
 ADR-101, SQL-реализация поверх `pipeline_specs`/`pipeline_versions`/`pipeline_runs`/
-`pipeline_run_events`, а также `pluginAudit` — PROP-090 §9 и `pluginLock` — PROP-068 §4.4 /
-PROP-090 §5), лёгкие выборки `@future-backend` (в т.ч. `listLight`/`loadLight` — метаданные
+`pipeline_run_events`, а также `pluginAudit` — ADR-090 и `pluginLock` — PROP-068 §4.4 /
+ADR-090), лёгкие выборки `@future-backend` (в т.ч. `listLight`/`loadLight` — метаданные
 сессий без истории, `ports/sessions.ts`), точечная запись сообщений `appendMessage`/`updateMessage`
 (одна строка `messages` в транзакции под per-session advisory-локом; `save` остаётся полной заменой
 истории для импорта/ветвления), координация на session-level
@@ -100,12 +100,12 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
   `004-pipeline-engine.ts`, `005-pipeline-provenance.ts`, `006-plugin-audit.ts`,
   `007-plugin-lock.ts`, `008-plugin-audit-scan.ts`, `009-plugin-lock-previous.ts`,
   `010-plugin-lock-mode.ts`, `011-external-credentials.ts`) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
-  Миграции **006–009** — слой плагинов (PROP-090): `006_plugin_audit` (таблица `plugin_audit`,
+  Миграции **006–009** — слой плагинов (ADR-090): `006_plugin_audit` (таблица `plugin_audit`,
   `seq bigserial` — порядок «свежие первыми»), `007_plugin_lock` (таблица `plugin_lock`, PK — имя
   плагина; upsert — `ON CONFLICT`; `installed_at` при перезаписи сохраняется),
   `008_plugin_audit_scan` (`ALTER TABLE plugin_audit ADD COLUMN IF NOT EXISTS scan_performed boolean /
   scan_findings integer` — Ф2). `009_plugin_lock_previous` (долги Д2) — колонка `previous jsonb` (ступень отката версии в lock).
-  `010_plugin_lock_mode` — колонка `mode` в `plugin_lock` (PROP-090 §«Managed deploy-time»).
+  `010_plugin_lock_mode` — колонка `mode` в `plugin_lock` (ADR-090).
   `011_external_credentials` — таблица `external_credentials` (ADR-105 Ф1: владелец/статус/срок/отзыв
   и колонки `secret_enc`/`refresh_enc` с готовым `enc:v1:…`). Все идемпотентны.
   `runMigrations(conn, { schema })`: `CREATE SCHEMA IF NOT EXISTS` → advisory-лок
@@ -151,10 +151,10 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
     `pipeline_run_events`, миграция 004 — миграций данных нет, схема версионируется
     как обычно; `installed_by` добавлен миграцией 005, идемпотентной).
   - журнал аудита плагинов `pluginAudit` — **внутри** `ports/audit.ts`
-    (`buildAuditPorts(deps)`; SQL-часть — `ports/plugin-audit.ts`, PROP-090 §9: таблица
+    (`buildAuditPorts(deps)`; SQL-часть — `ports/plugin-audit.ts`, ADR-090: таблица
     `plugin_audit`, миграция 006; поля скана `scan_performed`/`scan_findings` — миграция 008).
   - `ports/plugin-lock.ts` → `buildPluginLockPorts(deps)` → `pluginLock`
-    (PROP-068 §4.4 / PROP-090 §5: таблица `plugin_lock`, миграция 007; ключ — имя
+    (PROP-068 §4.4 / ADR-090: таблица `plugin_lock`, миграция 007; ключ — имя
     плагина, `save` — upsert с сохранением `installed_at`, `list` — `ORDER BY name ASC`).
   - `ports/external-credentials.ts` → `buildExternalCredentialPorts(deps)` →
     `externalCredentials` (ADR-105 Ф1: таблица `external_credentials`, миграция 011;

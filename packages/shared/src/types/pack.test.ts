@@ -83,7 +83,7 @@ const GATEWAY_TELEGRAM_MANIFEST = {
   },
 } as const;
 
-describe('Манифест расширения synth.pack — схема (ADR-086 §5 / PROP-090 §3)', () => {
+describe('Манифест расширения synth.pack — схема (ADR-086 §5 / ADR-090)', () => {
   it('принимает корректный манифест', () => {
     const parsed = packManifestSchema.safeParse({
       name: 'acme-pack',
@@ -485,9 +485,9 @@ describe('Реестры классов и типов расширений', () 
   });
 });
 
-// --- PROP-090 §8/§9: поля плагина и явные схемы вкладов ---
+// --- ADR-090: поля плагина и явные схемы вкладов ---
 
-/** Валидный манифест плагина (все поля PROP-090 §8/§9). */
+/** Валидный манифест плагина (все поля ADR-090). */
 const PLUGIN_MANIFEST = {
   name: 'demo-plugin',
   version: '1.0.0',
@@ -514,7 +514,7 @@ const PLUGIN_MANIFEST = {
   },
 } as const;
 
-describe('Манифест плагина — поля PROP-090 §8/§9 сохраняются (регрессия z.object)', () => {
+describe('Манифест плагина — поля ADR-090 сохраняются (регрессия z.object)', () => {
   it('mode/permissions/trust не выбрасываются при safeParse', () => {
     const parsed = packManifestSchema.safeParse(PLUGIN_MANIFEST);
     expect(parsed.success).toBe(true);
@@ -547,7 +547,7 @@ describe('Манифест плагина — поля PROP-090 §8/§9 сохр
   });
 });
 
-describe('provides плагина — явные схемы (PROP-090 §8)', () => {
+describe('provides плагина — явные схемы (ADR-090)', () => {
   it('отклоняет пустое имя тула', () => {
     const parsed = packManifestSchema.safeParse({
       ...PLUGIN_MANIFEST,
@@ -605,7 +605,7 @@ describe('provides плагина — явные схемы (PROP-090 §8)', () 
   });
 });
 
-describe('validatePackManifest — правила 12–14 (PROP-090 §8/§9)', () => {
+describe('validatePackManifest — правила 12–14 (ADR-090)', () => {
   it('валидный плагин не даёт проблем', () => {
     expect(packManifestSchema.safeParse(PLUGIN_MANIFEST).success).toBe(true);
     expect(validatePackManifest(PLUGIN_MANIFEST)).toEqual([]);

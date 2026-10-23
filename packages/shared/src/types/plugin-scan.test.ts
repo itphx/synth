@@ -1,12 +1,12 @@
 /**
- * PROP-068 §4.2/§4.3 + PROP-090 §9: тесты контрактов сканера расширений.
+ * PROP-068 §4.2/§4.3 + ADR-090: тесты контрактов сканера расширений.
  *
  * Проверяется канон, на который опираются ядро и UI:
  * - матрица `severity → verdict` (границы вердикта);
  * - вердикт бандла = **максимум** severity по находкам;
  * - квоты структуры и их влияние на вердикт;
  * - матрица install-policy (`trust × verdict`) и её новая ячейка
- *   `kind: 'plugin'` (PROP-090 §9).
+ *   `kind: 'plugin'` (ADR-090).
  */
 import { describe, expect, it } from 'vitest';
 
@@ -167,7 +167,7 @@ describe('installPolicyDecision — матрица trust × verdict (PROP-068 §
   });
 });
 
-describe('installPolicyDecision — ячейка kind: plugin (PROP-090 §9)', () => {
+describe('installPolicyDecision — ячейка kind: plugin (ADR-090)', () => {
   it('safe → allow, caution → ask, dangerous → block', () => {
     expect(installPolicyDecision({ trust: 'trusted', verdict: 'safe', kind: 'plugin' })).toBe('allow');
     expect(installPolicyDecision({ trust: 'trusted', verdict: 'caution', kind: 'plugin' })).toBe('ask');

@@ -620,7 +620,7 @@ projectCmd
 
 program.addCommand(projectCmd);
 
-// PROP-090 §«CLI (`synth plugin *`)» (Ф5б-3): та же группа, что в core-`main.ts`
+// ADR-090 (Ф5б-3): та же группа, что в core-`main.ts`
 // (реализация — общий модуль `@itphx/synth-core/cli/plugin-commands.js`).
 program.addCommand(createPluginCommand({ createContext: createPluginCliContext }));
 

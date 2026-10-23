@@ -10,10 +10,10 @@ import {
 } from './plugin-hybrid.js';
 
 /**
- * PROP-090 Ф7: контракт гибридной политики плагинов (Уровень 1 — cooperative,
+ * ADR-090 Ф7: контракт гибридной политики плагинов (Уровень 1 — cooperative,
  * Уровень 2 — server-scoped токены).
  */
-describe('гибридная политика плагинов (PROP-090 Ф7)', () => {
+describe('гибридная политика плагинов (ADR-090 Ф7)', () => {
   it('режимы политики: off|allowlist', () => {
     expect(PLUGIN_HYBRID_MODES).toEqual(['off', 'allowlist']);
     expect(PLUGIN_ID_HEADER).toBe('X-Synth-Plugin-Id');

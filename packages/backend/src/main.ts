@@ -25,7 +25,7 @@ try {
 }
 const { app, dataDir, port, config, auth, eventHub, queueManager, sessionManager, stopEphemeralSweeper, stopEventJournalPruner, stopAnalyticsRollupPruner, stopScheduler, stopWebhookService, stopWebhookDeliveryPruner, stopMetrics } = handle;
 
-// PROP-090 §5/§10 (Ф5б-1): старт-активация установленных плагинов.
+// ADR-090 (Ф5б-1): старт-активация установленных плагинов.
 // `plugins.lock.json` — источник истины; `plugins.executionEnabled=false`
 // (дефолт) → no-op. Ошибка плагина/рантайма **не роняет старт** (только
 // предупреждение); тексты плагинов в лог не попадают (инвариант 13).

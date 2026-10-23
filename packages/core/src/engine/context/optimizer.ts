@@ -40,7 +40,7 @@ export interface ContextOptimizerGatewayHooks {
   /** ADR-094: реестр метрик (учёт вызовов суммаризации). */
   metrics?: MetricsRegistry;
   /**
-   * PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов — суммаризация
+   * ADR-090: реестр фильтров LLM-вызовов — суммаризация
    * тоже LLM-вызов, её видит фаза `pre_request` (`GatewayProvider._prepare`).
    */
   filters?: LlmFilterRegistry;

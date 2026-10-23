@@ -179,9 +179,9 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   describeScheduleRepository('PG → ScheduleRepository', () => makePort('schedules'));
   describeJobRepository('PG → JobRepository', () => makePort('jobs'));
   describeMaintenanceAuditRepository('PG → MaintenanceAuditRepository', () => makePort('maintenanceAudit'));
-  // PROP-090 §9: журнал аудита плагинов (отдельный порт, не security-аудит).
+  // ADR-090: журнал аудита плагинов (отдельный порт, не security-аудит).
   describePluginAuditRepository('PG → PluginAuditRepository', () => makePort('pluginAudit'));
-  // PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов.
+  // PROP-068 §4.4 / ADR-090: lock-файл плагинов.
   describePluginLockRepository('PG → PluginLockRepository', () => makePort('pluginLock'));
   describeSecurityAuditRepository('PG → SecurityAuditRepository', () => makePort('securityAudit'));
   describeEgressRequestLogRepository('PG → EgressRequestLogRepository', () => makePort('egressRequests'));

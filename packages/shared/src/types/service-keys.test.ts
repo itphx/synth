@@ -19,7 +19,7 @@ describe('service-key scopes (ADR-052)', () => {
     expect(SERVICE_SCOPES.length).toBeGreaterThan(0);
     // Каждый скоуп либо из wildcard-семейства, либо из «одиночного» пространства
     // (без wildcard-семейства): llm:chat, addons:install, automation:install,
-    // users:read, plugins:invoke (PROP-090 Ф7 — server-scoped токен плагина).
+    // users:read, plugins:invoke (ADR-090 Ф7 — server-scoped токен плагина).
     const standaloneNamespaces = ['llm', 'addons', 'automation', 'users', 'plugins'];
     for (const scope of SERVICE_SCOPES) {
       const family = scope.split(':')[0] ?? '';

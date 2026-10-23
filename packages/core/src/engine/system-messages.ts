@@ -268,7 +268,7 @@ export const SYSTEM_MESSAGES = {
   'gateway.input_blocked': 'Secrets detected in the request ({reason}). Request blocked by LLM Gateway.',
   'gateway.rate_limit_warning': '⚠️ Rate limit exceeded. Please retry later.',
   'gateway.output_secrets_reason': 'secrets in the model response',
-  // PROP-090 §«Точка llmFilters»: решения фильтров LLM-вызовов.
+  // ADR-090: решения фильтров LLM-вызовов.
   'gateway.filter_denied': 'LLM request denied by an extension filter ({reason}).',
   'gateway.filter_unavailable': 'LLM request blocked: extension filter unavailable ({reason}).',
 

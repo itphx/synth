@@ -1,5 +1,5 @@
 /**
- * PROP-090 §«out-of-process»: баррел модуля `engine/plugins/remote/*`.
+ * ADR-090: баррел модуля `engine/plugins/remote/*`.
  *
  * Ф4б-1 — wire-протокол (контракт — `@itphx/synth-shared`,
  * `types/plugin-protocol.ts`), клиент и загрузчик удалённых плагинов.

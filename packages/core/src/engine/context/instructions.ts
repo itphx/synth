@@ -444,7 +444,7 @@ export function truncateHeadTail(
  *
  * `truncateHeadTail` — частный случай (маркер усечения файла). Общая форма
  * нужна там, где обрезаемый текст не является файлом: например, блок
- * системного промпта от провайдера точки `promptBlocks` (PROP-090) — его
+ * системного промпта от провайдера точки `promptBlocks` (ADR-090) — его
  * маркер усечения не должен предлагать `read_file`.
  */
 export function truncateHeadTailWithMarker(

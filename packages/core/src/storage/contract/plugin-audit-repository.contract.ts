@@ -20,7 +20,7 @@ function entry(id: string, over: Partial<PluginAuditEntry> = {}): PluginAuditEnt
 }
 
 /**
- * Паспорт порта `PluginAuditRepository` (PROP-090 §9, ADR-096): append-only
+ * Паспорт порта `PluginAuditRepository` (ADR-090, ADR-096): append-only
  * журнал, выборка «свежие первыми», фильтры `plugin`/`action`/`outcome`/`limit`,
  * очистка с числом удалённых.
  *

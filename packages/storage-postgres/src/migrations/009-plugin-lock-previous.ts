@@ -1,6 +1,6 @@
 /**
  * Миграция 009_plugin_lock_previous — ступень отката в lock-файле плагинов
- * (PROP-090 §«Запись lock», долги Д2).
+ * (ADR-090, долги Д2).
  *
  * `previous jsonb` — предыдущая установленная версия (`version`,
  * `content_hash`, `entry?`, `installed_at`). Хранится **ровно одна** ступень:

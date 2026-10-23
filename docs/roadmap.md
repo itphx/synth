@@ -26,7 +26,7 @@
 
 Пометка: это приоритет **0.11**; состав целей и их порядок могут уточняться.
 
-## Предложения к решению (31)
+## Предложения к решению (30)
 
 | ID | Тема | Статус | Решение до | Заметка |
 |---|---|---|---|---|
@@ -51,7 +51,6 @@
 | [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) | Flavor-образы с toolchain | 🧩 Предложение | 2026-11-14 | all-in-one образ (control plane + toolchain + исполнитель) и образы worker'ов `synth-executor`; flavor'ы `slim`/`core`/`dev`/`devops`/`browser`/`full` (alpine + debian); переключатель топологии — `execution.mode` (ADR-077); тяжёлые flavor'ы — Docker Hub (лимит ~500 МБ в gitverse/GHCR) |
 | [PROP-083](./arch_decisions/prop-083-instance-customization-branding.md) | Кастомизация инстанса и брендинг | 🧩 Предложение | 2026-11-14 | приветственное окно, ватермарка; позже — locked settings |
 | [PROP-085](./arch_decisions/prop-085-multimodal-input.md) | Мультимодальный ввод (звук/изображения/видео) | 🧩 Предложение | 2026-11-14 | контракт `Part`; зависит от ADR-096/ADR-077 |
-| [PROP-090](./arch_decisions/prop-090-extension-api.md) | Extension API v1 — слой плагинов: контракты, доверие, два режима исполнения | 🧩 Предложение | 2026-11-14 | **возвращён в работу решением 2026-10-22** (было 🧊 Icebox): полный in-process SDK (манифест `synth.pack` `kind:"plugin"`, `PluginHost`, фасад `@itphx/synth-plugin`, bundle-only) **+ два режима исполнения** (`inline` / `out-of-process` по образцу `ExecutionPort`/`@itphx/synth-executor`); **две новые точки расширения** — `promptBlocks` (сборка system-промпта) и `llmFilters` (фильтрация вызовов к провайдеру); право вето (`deny`) — только при trust ≥ `trusted`, `community` — только наблюдение; модель доверия [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md) + trust-floor `trusted` + отдельный журнал `audit/plugins.jsonl`; полный контур API/CLI/UI; фазы Ф0–Ф7 с критериями приёмки; [PROP-047](./arch_decisions/prop-047-memory-gbrain.md) переписывается под слой плагинов (`MemoryProvider` — контракт, доставляемый плагином) |
 | [PROP-093](./arch_decisions/prop-093-docs-versioning.md) | Версионирование документации портала | 🧩 Предложение | 2026-11-14 | вариант A (nginx) или B (`mike`) |
 | [PROP-096](./arch_decisions/prop-096-background-subagent-sessions.md) | Фоновые сессии саб-агентов (не блокируют основную) | 🧩 Предложение | 2026-11-14 | аналог `subagent background` в OpenCode; общий реестр с PROP-097 |
 | [PROP-097](./arch_decisions/prop-097-background-processes-registry.md) | Фоновые процессы: реестр + контроль через UI | 🧩 Предложение | 2026-11-14 | аналог `shell background` в OpenCode; панель «Процессы», stop, live-лог |
@@ -63,7 +62,7 @@
 | [PROP-106](./arch_decisions/prop-106-file-ports-to-sql.md) | Файловые порты инстанса в SQL: единое состояние при нескольких репликах | 🧩 Предложение | 2026-11-14 | `packs`/`skills`/`blobs`/`contextFiles`/legacy-`pipelines` остаются файловыми даже под PostgreSQL ⇒ расходятся между репликами; в `StorageContext` — 36 портов, из них 5 файловых; общий RWX-том `data` — промежуточная мера; приоритет 1 — `packs` + legacy `pipelines` (пишет установщик пакета одной операцией), далее `blobs`+`skills`, затем `contextFiles` |
 
 Пометка: строка ADR-097 — принятый ADR (`⚠️ Частично` в индексе), в таблице он стоит ради своего
-остатка (авто-возврат к БД без рестарта, документы) и срока `2026-11-14`; остальные 30 строк —
+остатка (авто-возврат к БД без рестарта, документы) и срока `2026-11-14`; остальные 29 строк —
 предложения.
 
 Пометка: `PROP-108` решением **2026-10-23** переведён в
@@ -92,12 +91,14 @@ PKCE/refresh/revoke, host-binding секретных заголовков) — �
 SOCKS5 — best-effort (п. 26); остаток — runtime-reload прокси/TLS без рестарта (ADR-099,
 «Статус в коде» → «Нет (остаток)»).
 
-Пометка: `PROP-090` решением **2026-10-22** возвращён в работу (🧊 Icebox → 🧩 Предложение, срок
-`2026-11-14` восстановлен): Extension API v1 — полный in-process SDK **+** два режима исполнения,
-две новые точки расширения (`promptBlocks`, `llmFilters`), модель доверия и полный контур
-API/CLI/UI; фазы Ф0–Ф7 (Ф0 — остаток [ADR-030](./arch_decisions/adr-030-hooks-agent-events.md):
-политика `builtin` + 4 эмита). Прежняя пометка об отложении 2026-10-19 снята — она противоречила
-новому статусу.
+Пометка: `PROP-090` решением **2026-10-23** принят как
+[ADR-090](./arch_decisions/adr-090-extension-api.md) — Extension API v1: полный in-process SDK **+** два
+режима исполнения (`inline` / `out-of-process`), три точки расширения (`promptBlocks`, `llmFilters`,
+`tools`), модель доверия, install/activate и полный контур API/CLI/UI; фазы Ф0–Ф7 закрыты, слой
+развёрнут в test — из списка предложений снят. Остаток (Уровень 3 — attestation клиента в гибриде;
+память как плагин — [PROP-047](./arch_decisions/prop-047-memory-gbrain.md)) живёт в теле ADR-090;
+устройство подсистемы — [docs/PLUGINS.md](./PLUGINS.md). Прежняя пометка об отложении 2026-10-19 и
+возврате в работу 2026-10-22 снята — она противоречила новому статусу.
 
 ## Vision (8)
 
@@ -106,7 +107,7 @@ API/CLI/UI; фазы Ф0–Ф7 (Ф0 — остаток [ADR-030](./arch_decision
 
 | ID | Тема | Статус | Заметка |
 |---|---|---|---|
-| [PROP-047](./arch_decisions/prop-047-memory-gbrain.md) | Память Synth (Gbrain + композиция) | 🧩 Предложение (vision) | RAG по памяти/коду, Obsidian bridge; пересекается с PROP-062; **переписывается под слой плагинов** (PROP-090, возврат в работу 2026-10-22): `MemoryProvider` — контракт, доставляемый плагином, а не подсистемой ядра |
+| [PROP-047](./arch_decisions/prop-047-memory-gbrain.md) | Память Synth (Gbrain + композиция) | 🧩 Предложение (vision) | RAG по памяти/коду, Obsidian bridge; пересекается с PROP-062; **переписывается под слой плагинов** ([ADR-090](./arch_decisions/adr-090-extension-api.md), **реализован**): `MemoryProvider` — контракт, доставляемый плагином, а не подсистемой ядра |
 | [PROP-055](./arch_decisions/prop-055-instance-exchange.md) | Обмен между инстансами Synth | 🧩 Предложение (vision) | идемпотентный upsert/дельта, peer-auth, live-сессии |
 | [PROP-057](./arch_decisions/prop-057-loop-engine.md) | Loop Engine и Loop Design Wizard | 🧩 Предложение (vision) | outer loop, Verification Rubric; включает PROP-031 |
 | [PROP-058](./arch_decisions/prop-058-service-agents-council.md) | Служебные агенты и консилиум (Council) | 🧩 Предложение (vision) | panel/consensus/debate/verifier/judge |
@@ -140,13 +141,13 @@ ADR-018 и ADR-046 — принятые ADR со смешанным статус
 | ID | Тема | Статус | Остаток |
 |---|---|---|---|
 | [ADR-018](./arch_decisions/adr-018-session-engine-selection.md) | Выбор AI-движка на уровне сессии | ✅ поле/плумбинг | механика движков (EngineManager/адаптеры) → PROP-050 |
-| [ADR-030](./arch_decisions/adr-030-hooks-agent-events.md) | Hooks для событий агента | ⚠️ Частично | Plugin SDK/загрузка плагинов → PROP-090 |
+| [ADR-030](./arch_decisions/adr-030-hooks-agent-events.md) | Hooks для событий агента | ⚠️ Частично | Plugin SDK/загрузка плагинов — **реализовано** ([ADR-090](./arch_decisions/adr-090-extension-api.md)); остаток — эмит `callback` (вне ядра) |
 | [ADR-046](./arch_decisions/adr-046-skills-and-slash-commands.md) | Скиллы и slash-команды | ✅ Фазы 1–3 | install/trust/подписи и backend-админка каталога → PROP-068 |
 | [ADR-051](./arch_decisions/adr-051-scheduler-pipelines.md) | Шедулер | ⚠️ Частично | пайплайны реализованы как декларация + учёт прогона ([ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md)); **движок пайплайна — [ADR-101](./arch_decisions/adr-101-pipeline-engine.md)** (реализован); остаток — rollback/дашборд (ADR-101), размещение в гибриде, K8s Lease/PG advisory lock |
 | [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) | Инструментальное окружение исполнения (toolchain/executor) | ⚠️ Частично | порт `ExecutionPort` и режим `execution.mode` (inline/remote) — в коде, исполнитель — отдельный in-tree пакет `@itphx/synth-executor`; остаток — перенос `simple-git` и MCP-stdio в исполнитель (шаги 7c–7d плана) |
-| [ADR-086](./arch_decisions/adr-086-extensibility-plugins-editions.md) | Расширяемость (зонтик) | ⚠️ Частично | доставка пакета расширения реализована ([ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md)); остаток — Plugin SDK → PROP-090, каталог/trust пакетов → PROP-068, editions, contribution flow |
+| [ADR-086](./arch_decisions/adr-086-extensibility-plugins-editions.md) | Расширяемость (зонтик) | ⚠️ Частично | доставка пакета расширения реализована ([ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md)); Plugin SDK — **реализован** ([ADR-090](./arch_decisions/adr-090-extension-api.md)); остаток — каталог/trust пакетов → PROP-068, editions, contribution flow |
 | [ADR-087](./arch_decisions/adr-087-gateways.md) | Шлюзы (gateways) | ⚠️ Частично | HA/leader election, webhook-транспорт Telegram, общий каркас адаптеров каналов ([ADR-103](./arch_decisions/adr-103-gateway-core-channel-contract.md)), второй канал (VK — реализован: ждёт публикации, деплоя и проверки на живом сообществе), третий (MAX — в работе) |
-| [ADR-089](./arch_decisions/adr-089-external-events-automation.md) | Платформа внешних событий | ⚠️ Частично | Plugin SDK → PROP-090, пайплайны — движок реализован ([ADR-101](./arch_decisions/adr-101-pipeline-engine.md)), остаток → ADR-101, остаток ADR-087, стриминг ответа наружу |
+| [ADR-089](./arch_decisions/adr-089-external-events-automation.md) | Платформа внешних событий | ⚠️ Частично | Plugin SDK — реализован ([ADR-090](./arch_decisions/adr-090-extension-api.md)), пайплайны — движок реализован ([ADR-101](./arch_decisions/adr-101-pipeline-engine.md)), остаток → ADR-101, остаток ADR-087, стриминг ответа наружу |
 | [ADR-094](./arch_decisions/adr-094-observability-metrics.md) | Наблюдаемость: `/metrics`, `/ready`, дашборды и алерты | ⚠️ Частично | JSON-логи с `request_id`/`session_id`, OpenTelemetry-трейсинг, Alertmanager/SLO-страница (остальное — в коде) |
 | [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md) | Единый egress-слой: TLS/CA (mTLS, per-host профили) + адресная политика + прокси (config/UI) | ⚠️ Частично | Kerberos/NTLM — вне scope → egress-шлюз (п. 25), SOCKS5 — best-effort (п. 26); hot-reload прокси/TLS без рестарта — остаток (см. ADR-099, «Статус в коде»), пиннинг адреса → PROP-100, метрики → ADR-094, per-host CA и несколько default-сертов, перепроверка встроенного `fetch` на Node 22 |
 | [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) | Pipeline Engine (движок пайплайнов) | ✅ Реализовано | остаток визионного предложения о Pipeline Automation: rollback/exit-стратегия, мониторинг-дашборд, отдельное хранилище артефактов — §«Открытые вопросы» ADR-101 |
@@ -154,10 +155,10 @@ ADR-018 и ADR-046 — принятые ADR со смешанным статус
 | [ADR-104](./arch_decisions/adr-104-mid-turn-steering.md) | Вмешательство в ход посреди генерации (steering) | ⚠️ Частично | режимы `queue`/`steer`/`interrupt` у `/prompt`, очередь инъекций `steerInbox`, применение на границе шага, `interrupt` без завершения хода (`stream.interrupted`), порядок применения инъекций (`interrupt` раньше `steer`), правило «инъекция — ввод в тот же ход, а не ответ пользователя» (`ask`/`plan`), единый контракт режима в гибриде (`mode_applied`) — в коде; остаток — PROP-096: фоновые саб-агенты (steering фонового ребёнка) |
 | [ADR-105](./arch_decisions/adr-105-external-credentials.md) | Внешние доступы (OAuth-коннекторы) | ⚠️ Частично | сущность `ExternalCredential`, шифрование at-rest `enc:v1:`, порт `ExternalCredentialRepository` (file/memory/PostgreSQL, миграция `012`, контрактный suite), OAuth-клиент (PKCE/refresh/revoke), host-binding секретных заголовков — в коде; остаток — Ф3–Ф4: подстановка токена в MCP-транспорт и запрет plaintext-заголовков (Ф3), API/UI «Доступы», журнал credential-операций, ротация мастер-ключа, правила бэкапа и переноса (Ф4) |
 | [ADR-106](./arch_decisions/adr-106-authority-layer.md) | Authority-слой (полномочия как контент) | ⚠️ Частично | модель слоя (`Principal`/`Action`/`Target`/`Grant`/`Role`/`Ceiling`/`Turn`/`Approval`), порты `AuthorityPolicyRepository`/`AuthorityDecisionJournal`, резолвер `effective`/`decide`/`approve`, shadow-интеграция (Ф1), принуждение в permission-слое с потолком сессии и ограничением `yolo` (Ф2), одноразовые подтверждения по `(principal, turn, action, target, digest)` с проверкой покрытия в WS (Ф3), метрика `synth_authority_decisions_total` — в коде; остаток — Ф4–Ф5: `Turn.principal` в очереди и steering, участники сессии и потолок сессии, ограничение `PATCH mode` (Ф4), поставка `provides.authority`, `pending_approval` по существу, trust-floor, flavor-роли, каталог PROP-068, UI «Полномочия» (Ф5) |
-Итого: документов — 97 (ADR — 58: 39 со статусом `✅ Реализовано` и 19 со статусом `⚠️ Частично`,
-в т.ч. 5 — «принятое ядро + остаток-предложение»: 030, 051, 086, 087, 099; предложения — 38:
-30 actionable (`🧩 Предложение`) и 8 vision; legacy — 1).
-В разделах roadmap: «Предложения к решению» — 31 строка (30 предложений + строка ADR-097
+Итого: документов — 97 (ADR — 59: 40 со статусом `✅ Реализовано` и 19 со статусом `⚠️ Частично`,
+в т.ч. 5 — «принятое ядро + остаток-предложение»: 030, 051, 086, 087, 099; предложения — 37:
+29 actionable (`🧩 Предложение`) и 8 vision; legacy — 1).
+В разделах roadmap: «Предложения к решению» — 30 строк (29 предложений + строка ADR-097
 с остатком), «Vision» — 8, «Частично реализовано» — 15 (ADR-018, ADR-030, ADR-046, ADR-051, ADR-077,
 ADR-086, ADR-087, ADR-089, ADR-094, ADR-099, ADR-101, ADR-102, ADR-104, ADR-105, ADR-106). Раздел «Частично»
 в сгенерированном индексе содержит 19 файлов — ADR-018, ADR-030, ADR-046, ADR-051, ADR-077, ADR-086,

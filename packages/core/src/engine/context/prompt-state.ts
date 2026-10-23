@@ -47,7 +47,7 @@ export function buildPromptState(
     key: block.key,
     hash: hashText(block.content),
     chars: block.content.length,
-    // PROP-090 §«Точка promptBlocks»: помечаем блоки провайдеров — по ним
+    // ADR-090: помечаем блоки провайдеров — по ним
     // ведётся отдельный трек инвалидации (вне тира `stable`).
     ...(block.source === 'provider' ? { provider: true } : {}),
   }));

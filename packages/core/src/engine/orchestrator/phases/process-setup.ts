@@ -191,9 +191,9 @@ export interface ProcessSetupDeps {
     schedulerActive?: boolean;
     interviewEligible?: boolean;
     schedulerCurrentTurn?: boolean;
-    /** PROP-090 §«Точка promptBlocks»: текст последнего сообщения пользователя. */
+    /** ADR-090: текст последнего сообщения пользователя. */
     query?: string;
-    /** PROP-090 §«Точка promptBlocks»: идентификатор хода (`streamId`). */
+    /** ADR-090: идентификатор хода (`streamId`). */
     turnId?: string;
   }) => ComposerContext;
   collectComposerMcpServers: (decisions: McpScopeDecision[]) => ComposerMcpServer[] | undefined;
@@ -417,7 +417,7 @@ export async function runProcessSetup(
     }),
     // Текущий ход инициирован планировщиком — volatile-пояснение модели.
     schedulerCurrentTurn: deps.schedulerCurrentTurn(session, message),
-    // PROP-090 §«Точка promptBlocks»: контекст текущего хода для провайдеров
+    // ADR-090: контекст текущего хода для провайдеров
     // блоков промпта — «вопрос хода» (текст последнего сообщения пользователя)
     // и метка хода. Системные/state-сообщения в вопрос не попадают.
     query: resolveTurnQuery(session, message),
@@ -454,7 +454,7 @@ export async function runProcessSetup(
   // контента инструкций отслеживаем отдельно — иначе promptStates/generation
   // не инвалидируются при изменении `AGENTS.md`.
   const instructionsChanged = isBlockChanged(prevPromptState, composed.blocks, 'instructions');
-  // PROP-090 §«Точка promptBlocks»: блоки провайдеров лежат вне тира `stable`,
+  // ADR-090: блоки провайдеров лежат вне тира `stable`,
   // поэтому `isPrefixUnchanged` их не видит — трек ведётся отдельно, по
   // образцу `instructions`. Учитываем и текущие блоки провайдеров, и те, что
   // были в прошлом состоянии (плагин мог быть деактивирован — блок исчез, а
@@ -506,7 +506,7 @@ export async function runProcessSetup(
   // модель получает НИКАКИХ инструментов (safety-fallback).
   // `select()` — после ensureToolsLoaded (реестр уже содержит MCP-тулы).
   const toolSelection = select();
-  // PROP-090 §«Точка `tools`»: порядок слоёв — встроенные → плагинные → MCP.
+  // ADR-090: порядок слоёв — встроенные → плагинные → MCP.
   // `stableToolCount` считает только встроенные: плагинные и MCP-тулы меняются
   // в runtime (активация/деактивация, серверы сессии) и вне stable-префикса.
   const tools = deps.toolRegistry

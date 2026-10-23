@@ -1,5 +1,5 @@
 /**
- * PROP-068 §4.3 / PROP-090 §9: контракты статического сканера расширений и
+ * PROP-068 §4.3 / ADR-090: контракты статического сканера расширений и
  * матрица install-policy.
  *
  * Модуль browser-safe (`zod` не нужен — только типы и чистые функции), чтобы
@@ -9,7 +9,7 @@
  * **Канон границ.** Таблица `severity → verdict` и значения квот зафиксированы
  * в [PROP-068](../../../../docs/arch_decisions/prop-068-skills-agents-registry.md) §4.3
  * (согласовано с владельцем 2026-10-22);
- * [PROP-090](../../../../docs/arch_decisions/prop-090-extension-api.md) §9 ссылается
+ * [ADR-090](../../../../docs/arch_decisions/adr-090-extension-api.md) ссылается
  * на неё и не дублирует. При изменении значений — правка обоих документов.
  */
 import type { PluginScanVerdict } from './plugin-audit.js';
@@ -187,7 +187,7 @@ export type InstallPolicyTrustLevel = (typeof INSTALL_POLICY_TRUST_LEVELS)[numbe
  * Класс расширения, для которого считается install-policy.
  *
  * - `content` — контент-паки/скиллы/агенты (матрица PROP-068 §4.2);
- * - `plugin` — плагины (PROP-090 §9): **новая ячейка** матрицы.
+ * - `plugin` — плагины (ADR-090): **новая ячейка** матрицы.
  */
 export type InstallPolicyKind = 'content' | 'plugin';
 
@@ -214,7 +214,7 @@ export interface InstallPolicyInput {
  * | `community` | allow | block | block |
  * | `agent-created` | allow | allow | ask |
  *
- * Плагин (`kind: 'plugin'`) — **новая ячейка** (PROP-090 §9): блокирующий
+ * Плагин (`kind: 'plugin'`) — **новая ячейка** (ADR-090): блокирующий
  * вердикт — `dangerous` (→ `block`), `caution` → `ask` (явное подтверждение
  * владельца), `safe` → `allow`. Ячейка не зависит от уровня доверия.
  */
@@ -254,5 +254,5 @@ export function installPolicyDecision(input: InstallPolicyInput): InstallPolicyA
   return (row ?? CONTENT_POLICY.community)[input.verdict];
 }
 
-// ── Lock (PROP-068 §4.4 / PROP-090 §5) ───────────────────────────────────
+// ── Lock (PROP-068 §4.4 / ADR-090) ───────────────────────────────────
 // Запись lock-файла вынесена в отдельный модуль `plugin-lock.ts`.

@@ -3335,7 +3335,7 @@ export const dict = {
   'settings.help.addons.section.addons-pipelines':
     'Pipeline definitions delivered by packages and their runs: status, current step and attempt count.',
 
-  // --- Plugins (PROP-090, Ф6) ---
+  // --- Plugins (ADR-090, Ф6) ---
   'plugins.title': 'Plugins',
   'plugins.description':
     'Instance plugin layer: installed extensions with their trust level and scanner verdict, activation, installation from a source and layer policy.',
@@ -3391,7 +3391,7 @@ export const dict = {
   'plugins.serverPolicy.denied': 'denied by the server',
   'plugins.serverPolicy.unverified': 'not verified by the server',
   'plugins.serverPolicy.hint':
-    'The server did not confirm the policy (server unreachable or allowlist mode without a list): the local plugin runs in cooperative mode — in hybrid, client-side enforcement is not guaranteed (Level 1, PROP-090 F7).',
+    'The server did not confirm the policy (server unreachable or allowlist mode without a list): the local plugin runs in cooperative mode — in hybrid, client-side enforcement is not guaranteed (Level 1, ADR-090 F7).',
   'plugins.trustLabel': 'Plugin trust level',
   'plugins.scanLabel': 'Scanner verdict',
   'plugins.trust.builtin': 'built-in',

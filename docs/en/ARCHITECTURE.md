@@ -371,7 +371,7 @@ hook bus, and session creation is consolidated into a single funnel.
 - **`HookBus`** (`engine/hooks/hook-bus.ts`) — the lifecycle hook bus of the agent
   (`session_requested`, `external_event`, …); async hooks with a timeout
   (`HOOK_ASYNC_TIMEOUT_MS`), and a result can block an event (`blocked`/`reason`).
-  This is the foundation; the Plugin SDK and plugin loading (PROP-090) are not implemented.
+  This is the foundation; the Plugin SDK and plugin loading (ADR-090) **are implemented**.
 - **Entities** (`shared/types/events.ts`, with the Zod schemas next to them). `SynthEvent` — a normalized
   external event `{id: 'evt_<uuid>', source, type, payload, identity{principalId?, chatKey?,
   threadKey?, roles?}, dedupKey, ts}` (known `source` values: `telegram`/`synth-media`/`webhook`/
@@ -434,7 +434,7 @@ API endpoints and RBAC — `docs/API_V2.md` §5.26; configuration — `docs/CONF
 keys with scopes and a project projection, webhooks, `public-OpenAPI` (28 operations, `GET /api/v2/openapi.json`)
 and the `@itphx/synth-sdk` SDK — **ADR-052 is closed in full (stages I–IV, including moving the Telegram gateway
 to a scoped service key)**; the first add-on is the Telegram gateway (`addons/synth-gateway-telegram`) —
-implemented; plugins (Plugin SDK, PROP-090) and pipelines (ADR-101) are not implemented.
+implemented; **plugins are implemented** (Plugin SDK, ADR-090); pipelines — ADR-100 remainder (the engine is implemented, ADR-101).
 
 ## Egress layer (outbound connections)
 

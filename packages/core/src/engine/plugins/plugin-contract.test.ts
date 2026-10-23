@@ -1,5 +1,5 @@
 /**
- * PROP-090 §«Точки расширения» (Ф3в): контрактный suite расширений — прогон на
+ * ADR-090 (Ф3в): контрактный suite расширений — прогон на
  * **in-memory** реализации (ядро: `PluginHost` + общий `ToolRegistry`, реестры
  * `PromptBlockRegistry`/`LlmFilterRegistry`, `SystemPromptComposer`,
  * `GatewayProvider`, `PermissionEvaluator`).

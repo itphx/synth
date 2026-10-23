@@ -52,12 +52,12 @@ export type {
   MaintenanceAuditRepository,
   MaintenanceAuditListOptions,
 } from './maintenance-audit-repository.js';
-// PROP-090 §9: журнал аудита плагинов (отдельный порт, не security-аудит).
+// ADR-090: журнал аудита плагинов (отдельный порт, не security-аудит).
 export type {
   PluginAuditRepository,
   PluginAuditListOptions,
 } from './plugin-audit-repository.js';
-// PROP-068 §4.4 / PROP-090 §5: lock-файл плагинов (источник истины для
+// PROP-068 §4.4 / ADR-090: lock-файл плагинов (источник истины для
 // update/uninstall).
 export type { PluginLockRepository } from './plugin-lock-repository.js';
 export type {

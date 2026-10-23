@@ -9,13 +9,13 @@ export * from './message.js';
 export * from './session.js';
 // Промпт: состояние/манифест/история (ADR-070/071)
 export * from './prompt.js';
-// PROP-090 §«Точка promptBlocks»: контракт провайдера блока системного промпта
+// ADR-090: контракт провайдера блока системного промпта
 export * from './prompt-blocks.js';
-// PROP-090 §«Точка llmFilters»: контракт фильтра LLM-вызовов
+// ADR-090: контракт фильтра LLM-вызовов
 export * from './llm-filters.js';
-// PROP-090 §«Точка tools»: namespace инструментов плагина (plugin_<ns>_<tool>)
+// ADR-090: namespace инструментов плагина (plugin_<ns>_<tool>)
 export * from './plugin-tools.js';
-// PROP-090 §«out-of-process»: wire-протокол плагина (версия, DTO, эндпоинты, коды)
+// ADR-090: wire-протокол плагина (версия, DTO, эндпоинты, коды)
 export * from './plugin-protocol.js';
 // MCP: реестр серверов, сетевой доступ, уровни/эффективный набор (ADR-071)
 export * from './mcp.js';
@@ -68,21 +68,21 @@ export * from './maintenance.js';
 export * from './egress.js';
 // Аналитика и отчётность инстанса: суточные роллапы (ADR-102)
 export * from './analytics.js';
-// ADR-086/PROP-090: единый манифест расширения `synth.pack` — типы и zod-схемы
+// ADR-086/ADR-090: единый манифест расширения `synth.pack` — типы и zod-схемы
 export * from './pack.js';
-// PROP-090 §8/§10: semver-матчер диапазонов версий (host/контракты расширения)
+// ADR-090: semver-матчер диапазонов версий (host/контракты расширения)
 export * from './semver.js';
-// PROP-090 §9: журнал аудита плагинов — отдельный тип и отдельный scope
+// ADR-090: журнал аудита плагинов — отдельный тип и отдельный scope
 // (не расширение `SECURITY_AUDIT_SCOPES` — семантика «событие расширения»).
 export * from './plugin-audit.js';
-// PROP-068 §4.2/§4.3 + PROP-090 §9: контракты сканера расширений (категории,
+// PROP-068 §4.2/§4.3 + ADR-090: контракты сканера расширений (категории,
 // severity→verdict, квоты), матрица install-policy и запись lock-файла.
 export * from './plugin-scan.js';
-// PROP-068 §4.4 / PROP-090 §5: запись lock-файла плагинов (`plugins.lock.json`).
+// PROP-068 §4.4 / ADR-090: запись lock-файла плагинов (`plugins.lock.json`).
 export * from './plugin-lock.js';
-// PROP-090 §5: runtime-override плагинов (`plugins.json`).
+// ADR-090: runtime-override плагинов (`plugins.json`).
 export * from './plugin-runtime.js';
-// PROP-090 Ф7: контракт гибридной политики плагинов (сигнал дискавери,
+// ADR-090 Ф7: контракт гибридной политики плагинов (сигнал дискавери,
 // allow-list, статусы проверки сервером, заголовок `plugin_id`).
 export * from './plugin-hybrid.js';
 // PROP-068 §3/§12: контракт индекса каталога расширений (format: 1) — типы, zod-схемы, tolerant-парсер

@@ -282,7 +282,7 @@ describe('McpClient (sse)', () => {
     expect(client.tools).toEqual([]);
   });
 
-  it('PROP-090: headers конфига прокидываются в транспорт (requestInit.headers)', async () => {
+  it('ADR-090: headers конфига прокидываются в транспорт (requestInit.headers)', async () => {
     const headers = { Authorization: 'Bearer tok', 'X-Tenant': 'tg-dev' };
     const withHeaders = new McpClient('hdr', makeSseConfig({ headers }));
     await withHeaders.connect();

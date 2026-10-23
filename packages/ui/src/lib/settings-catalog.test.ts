@@ -78,7 +78,7 @@ describe('settings-catalog — searchSettings', () => {
   })
 
   it('находит админ-раздел «Плагины» по названию и синонимам', () => {
-    // PROP-090 Ф6: категория и записи слоя плагинов участвуют в поиске.
+    // ADR-090 Ф6: категория и записи слоя плагинов участвуют в поиске.
     expect(searchSettings(t, 'plugins').categories.map((category) => category.id)).toContain(
       'plugins',
     )

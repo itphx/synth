@@ -1,5 +1,5 @@
 /**
- * PROP-090 §5: раскладка слоя плагинов на диске + карантин.
+ * ADR-090: раскладка слоя плагинов на диске + карантин.
  *
  * ```text
  * <home>/plugin/                    # без home — {dataDir}/plugin/
@@ -21,7 +21,7 @@
  * **Карантин.** Всё распакованное попадает в `quarantine/` и сканируется там;
  * при решении install-policy `allow` бандл переносится в `installed/`, при
  * `ask`/`block` — остаётся изолированным в карантине и в `installed/` **не
- * попадает** (PROP-090 §5). Сам путь скачивания/доставки — Ф5; здесь только
+ * попадает** (ADR-090). Сам путь скачивания/доставки — Ф5; здесь только
  * раскладка и запись lock.
  */
 import { copyFile, mkdir, rename, rm, writeFile } from 'node:fs/promises';
@@ -90,7 +90,7 @@ export async function ensurePluginLayout(layout: PluginLayout): Promise<void> {
   await mkdir(layout.quarantineDir, { recursive: true });
 }
 
-/** Содержимое `PLUGIN_INTEGRITY.json` (PROP-090 §5). */
+/** Содержимое `PLUGIN_INTEGRITY.json` (ADR-090). */
 export interface PluginIntegrityFile {
   /** sha256 бандла (content-hash). */
   sha256: string;

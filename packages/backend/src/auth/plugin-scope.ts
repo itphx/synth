@@ -6,7 +6,7 @@ import type { PluginServerPolicy } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
 
 /**
- * PROP-090 Ф7 (Уровень 2): guard server-scoped токена плагина — backend-обёртка
+ * ADR-090 Ф7 (Уровень 2): guard server-scoped токена плагина — backend-обёртка
  * над core-проверкой {@link checkPluginTokenBinding}.
  *
  * Enforcement (сверка заголовка `X-Synth-Plugin-Id`, scope `plugins:invoke` и

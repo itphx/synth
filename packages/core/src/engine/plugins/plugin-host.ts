@@ -1,7 +1,7 @@
 /**
- * PROP-090 §10: `PluginHost` — загрузчик плагинов.
+ * ADR-090: `PluginHost` — загрузчик плагинов.
  *
- * Пайплайн активации (PROP-090 §10, шаги 1–9):
+ * Пайплайн активации (ADR-090, шаги 1–9):
  * `resolve → integrity → semver-гейт → trust/scan → политика режима → import →
  * facade (сбор disposers) → аудит`.
  *
@@ -95,7 +95,7 @@ const FILTER_JOURNAL_REASONS: ReadonlyMap<string, PluginAuditReason> = new Map([
   ['plugin_filter.unavailable', 'plugin_filter.unavailable'],
 ]);
 
-/** Названия видов вкладов для сообщений об отказе (PROP-090 §«Правило соответствия»). */
+/** Названия видов вкладов для сообщений об отказе (ADR-090). */
 const PROVIDES_KIND_LABELS: Record<PackProvidesKind, string> = {
   tool: 'тул',
   promptBlock: 'блок промпта',
@@ -186,7 +186,7 @@ export interface PluginHostOptions {
    */
   tools?: ToolRegistry;
   /**
-   * Ф7 (PROP-090, Уровень 1 — cooperative): серверная политика плагинов в
+   * Ф7 (ADR-090, Уровень 1 — cooperative): серверная политика плагинов в
    * гибридном режиме.
    *
    * Резолвер вызывается **перед активацией** плагина: серверная allow-list
@@ -393,8 +393,7 @@ export class PluginHost {
     };
     /**
      * Фактические регистрации вкладов (**только успешные**) — для сверки с
-     * `provides` манифеста (`diffPackProvides`, PROP-090 §«Правило
-     * соответствия»). Отклонённая регистрация сюда не попадает: иначе отказ
+     * `provides` манифеста (`diffPackProvides`, ADR-090). Отклонённая регистрация сюда не попадает: иначе отказ
      * точки (например, тир `stable`) выглядел бы как «зарегистрировано».
      */
     const registeredPromptBlocks: string[] = [];
@@ -407,7 +406,7 @@ export class PluginHost {
       // Ф3а: точка `promptBlocks` — регистрация провайдера блока системного
       // промпта. Отказ (например, тир `stable`) **не роняет** остальные точки
       // расширения плагина: фиксируется предупреждением, возвращается no-op
-      // disposer (PROP-090, критерии приёмки точки `promptBlocks`).
+      // disposer (ADR-090, критерии приёмки точки `promptBlocks`).
       registerPromptBlock: (provider, opts) => {
         if (!this._promptBlocks) {
           this._logger.warn(
@@ -539,7 +538,7 @@ export class PluginHost {
     }
 
     // ── Шаг 8б: сверка `provides` с фактическими регистрациями ────────
-    // PROP-090 §«Правило соответствия»: расхождение — **отказ активации**
+    // ADR-090: расхождение — **отказ активации**
     // (признак несогласованной сборки, а не «мелочь»). Сверяются все три точки,
     // реализованные в Ф3 (`promptBlocks`, `llmFilters`, `tools`). Тулы
     // сверяются по **локальным** именам: в манифесте объявляется имя без
@@ -774,7 +773,7 @@ export class PluginHost {
     const scan = await this._runScan(descriptor, level);
     if (!scan.ok) return scan;
 
-    // Install-policy: ячейка `kind: plugin` (PROP-090 §9).
+    // Install-policy: ячейка `kind: plugin` (ADR-090).
     const action = installPolicyDecision({
       trust: level,
       verdict: scan.verdict,

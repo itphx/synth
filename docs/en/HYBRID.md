@@ -2,6 +2,8 @@
 
 > 🌐 **English** · [Russian](../HYBRID.md)
 
+> ⚠️ RU-версия обновлена 2026-10-23 (ADR-090, §7 «Плагины в гибриде» — серверная политика, allow-list и server-scoped токены); перевод отстаёт.
+
 > [!NOTE]
 > A user how-to on hybrid mode is available in the documentation portal:
 > https://docs.synth.itphx.ru/deploy/hybrid/.

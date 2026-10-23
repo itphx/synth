@@ -639,7 +639,7 @@ export class MemoryMcpRegistryRepository implements McpRegistryRepository {
 /**
  * Внутренняя запись service-key: публичные поля + sha256-хеш секрета.
  *
- * Ф7 (PROP-090, Уровень 2): `pluginId` — привязка ключа к плагину
+ * Ф7 (ADR-090, Уровень 2): `pluginId` — привязка ключа к плагину
  * (server-scoped токен). Поле внутреннее: публичный DTO service-key его
  * не содержит.
  */

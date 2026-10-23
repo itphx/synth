@@ -21,7 +21,7 @@ function entry(name: string, overrides: Partial<PluginLockEntry> = {}): PluginLo
 }
 
 /**
- * Паспорт порта `PluginLockRepository` (PROP-068 §4.4 / PROP-090 §5, ADR-096).
+ * Паспорт порта `PluginLockRepository` (PROP-068 §4.4 / ADR-090, ADR-096).
  *
  * Проверяется общий для всех backend'ов контракт:
  * - upsert по имени плагина (`installed_at` сохраняется, `updated_at` обновляется);

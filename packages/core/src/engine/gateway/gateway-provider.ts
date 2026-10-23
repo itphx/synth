@@ -81,18 +81,18 @@ export interface GatewayProviderOptions {
    */
   metrics?: MetricsRegistry;
   /**
-   * PROP-090 §«Точка `llmFilters`»: мутабельный реестр фильтров LLM-вызовов.
+   * ADR-090: мутабельный реестр фильтров LLM-вызовов.
    * Не задан или пуст — поведение прежнее (никаких дополнительных задержек:
    * реестр обходится только если в нём есть фильтры нужной фазы).
    *
    * Фильтры выполняются **только при включённом gateway** (`config.enabled`):
-   * выключен gateway — нет и его слоёв (PROP-090 §«Семантика отказа»).
+   * выключен gateway — нет и его слоёв (ADR-090).
    */
   filters?: LlmFilterRegistry;
 }
 
 /**
- * PROP-090 §«Точка `llmFilters`»: коды решений хоста по фильтрам.
+ * ADR-090: коды решений хоста по фильтрам.
  *
  * Пишутся в аудит gateway (`type: 'plugin_filter'`, поле `filterCode`).
  * `plugin_filter.denied`/`plugin_filter.deny_downgraded`/`plugin_filter.unavailable`
@@ -337,7 +337,7 @@ export class GatewayProvider extends BaseProvider {
   }
 
   /**
-   * PROP-090 §«Фаза `embedding`»: эмбеддинг проходит gateway-контур.
+   * ADR-090: эмбеддинг проходит gateway-контур.
    *
    * До Ф3 `embed` был прямым вызовом `_inner.embed` мимо guard'ов, аудита и
    * метрик — дыра инварианта 3 («любой LLM-вызов — через `GatewayProvider`»).
@@ -347,7 +347,7 @@ export class GatewayProvider extends BaseProvider {
    * произвольным; лимит считается в chat-путях), но вызов больше не «невидим».
    *
    * Выключенный gateway — прежнее поведение (прямой вызов `_inner.embed`):
-   * выключен gateway — нет и его слоёв (PROP-090 §«Семантика отказа»).
+   * выключен gateway — нет и его слоёв (ADR-090).
    */
   async embed(text: string): Promise<number[]> {
     if (!this._config.enabled) return this._inner.embed(text);
@@ -524,7 +524,7 @@ export class GatewayProvider extends BaseProvider {
       };
     }
 
-    // PROP-090 §«Точка llmFilters», фаза `pre_request`: фильтры видят уже
+    // ADR-090, фаза `pre_request`: фильтры видят уже
     // обфусцированные сообщения/промпт/tools (после guard'а и сохранения карты).
     const filtered = await this._applyPreRequestFilters(guard.messages, guard.systemPrompt, guard.tools);
     if (filtered.blocked) {
@@ -550,7 +550,7 @@ export class GatewayProvider extends BaseProvider {
   }
 
   /**
-   * PROP-090 §«Точка `llmFilters`»: фильтры фазы в порядке регистрации.
+   * ADR-090: фильтры фазы в порядке регистрации.
    *
    * Пустой реестр (или выключенный gateway) → пустой список: поведение
    * побайтово прежнее, дополнительных `await` нет.
@@ -985,7 +985,7 @@ export class GatewayProvider extends BaseProvider {
       warning('GATEWAY', `Ошибка аудита завершения: ${this._errorMessage(e)}`);
     }
 
-    // PROP-090 §«Точка llmFilters», фаза `post_response`: только наблюдение —
+    // ADR-090, фаза `post_response`: только наблюдение —
     // ответ уже отдан, блокировать/переписывать нельзя (ADR-036).
     try {
       await this._applyPostResponseFilters(content, usage);

@@ -1,5 +1,5 @@
 /**
- * PROP-090 §«HTTP API», Ф5б-2: тесты фабрик `/api/v2/plugins*` и
+ * ADR-090, Ф5б-2: тесты фабрик `/api/v2/plugins*` и
  * `/api/v2/settings/plugins`.
  *
  * Стенд — **реальные** `PluginRuntime` + `PluginInstaller` на временном каталоге
@@ -214,7 +214,7 @@ async function errorOf(res: Response): Promise<{ code: string; message: string }
   return body.error!;
 }
 
-describe('Plugins API — жизненный цикл (PROP-090 Ф5б-2)', () => {
+describe('Plugins API — жизненный цикл (ADR-090 Ф5б-2)', () => {
   it('GET /plugins: пусто → {plugins: []}; после установки — запись со статусом', async () => {
     const { app } = await makeStand();
 
@@ -595,7 +595,7 @@ describe('Plugins API — таблица причин → HTTP', () => {
   });
 });
 
-describe('Plugin settings API — /api/v2/settings/plugins (PROP-090 §10)', () => {
+describe('Plugin settings API — /api/v2/settings/plugins (ADR-090)', () => {
   it('GET: дефолты из config, пустой override, restartRequired=true, running', async () => {
     const { app } = await makeStand();
     const res = await app.request('/api/v2/settings/plugins');
@@ -713,7 +713,7 @@ describe('Plugin settings API — /api/v2/settings/plugins (PROP-090 §10)', () 
 });
 
 /**
- * PROP-090 Ф7 (Уровень 2): выдача server-scoped токена плагину.
+ * ADR-090 Ф7 (Уровень 2): выдача server-scoped токена плагину.
  *
  * Токен — service-key с привязкой `plugin_id`: сервер принимает его только с
  * заголовком `X-Synth-Plugin-Id` и тем же значением, со scope

@@ -178,7 +178,7 @@ describe('HookBus', () => {
   });
 });
 
-describe('HookBus — политика builtin (PROP-090 §10)', () => {
+describe('HookBus — политика builtin (ADR-090)', () => {
   let bus: HookBus;
 
   beforeEach(() => {

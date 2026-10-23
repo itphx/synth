@@ -1,5 +1,5 @@
 /**
- * PROP-068 §4.1 / PROP-090 §9: уровни доверия расширений — **единственный**
+ * PROP-068 §4.1 / ADR-090: уровни доверия расширений — **единственный**
  * перечень в пакете `@itphx/synth-shared`.
  *
  * Модуль выделен отдельно, чтобы перечень не зависел от модулей, которые сами
@@ -9,7 +9,7 @@
  * цикл (использование `const` на этапе инициализации модуля).
  *
  * Иерархия (от старшего к младшему): `builtin` → `verified` → `trusted` →
- * `community`. Уровень `agent-created` (PROP-090 §9) в каталоге расширений не
+ * `community`. Уровень `agent-created` (ADR-090) в каталоге расширений не
  * используется — записи каталога публикуются из репозиториев (PROP-068 §4.1).
  *
  * Модуль browser-safe (`zod` + локальные типы).
@@ -23,7 +23,7 @@ export const catalogTrustLevelSchema = z.enum(CATALOG_TRUST_LEVELS);
 
 /**
  * Позиция уровня в иерархии доверия (0 — старший). Используется для
- * сравнения «не выше порога» (PROP-090 §9: trust-floor плагина = `trusted`).
+ * сравнения «не выше порога» (ADR-090: trust-floor плагина = `trusted`).
  */
 export function trustLevelRank(level: CatalogTrustLevel): number {
   return CATALOG_TRUST_LEVELS.indexOf(level);

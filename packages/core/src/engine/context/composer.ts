@@ -39,7 +39,7 @@ import { truncateHeadTailWithMarker } from './instructions.js';
 const EST_TOKENS_DIVISOR = 4;
 
 /**
- * PROP-090 §«Точка promptBlocks»: доли головы/хвоста при обрезке блока
+ * ADR-090: доли головы/хвоста при обрезке блока
  * провайдера по бюджету символов (те же пропорции, что у проектных
  * инструкций, ADR-069 §5.1).
  */
@@ -72,14 +72,14 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   'mcp.status': 'MCP status',
   'skills.catalog': 'Skills catalog',
   'skills.catalog.session': 'Session skills',
-  // PROP-090 §«Точка promptBlocks»: плагинные блоки. Ключ плагина —
+  // ADR-090: плагинные блоки. Ключ плагина —
   // динамический (`plugin.<pluginName>.<slot>`), поэтому ниже работает
   // fallback по префиксу (`promptBlockLabel`).
   plugin: 'Plugin block',
 };
 
 /**
- * PROP-090 §«Точка promptBlocks»: подпись блока в манифесте промпта.
+ * ADR-090: подпись блока в манифесте промпта.
  *
  * Порядок: явная запись в `PROMPT_BLOCK_LABELS` → подпись провайдера
  * (`provider.title`) → общая подпись для плагинных ключей → сам ключ.
@@ -151,7 +151,7 @@ export interface ComposerMcpServer {
  *
  * Composer читает из сессии ровно пять вещей:
  * - `id` — идентификатор сессии (в контексте провайдера блока промпта,
- *   PROP-090 §«Точка promptBlocks»; для шага пайплайна — `pipeline:<runId>:<nodeId>`);
+ *   ADR-090; для шага пайплайна — `pipeline:<runId>:<nodeId>`);
  * - `settings` — роль агента (`agentRole`), язык (`language`) и override
  *   системного промпта (`systemPrompt`);
  * - `promptStates` — состояние промпта per-agent (`generation`, ADR-070 §2.4);
@@ -291,23 +291,23 @@ export interface ComposerContext {
    */
   debugCollector?: DebugCollector;
   /**
-   * PROP-090 §«Точка promptBlocks»: текст последнего сообщения пользователя —
+   * ADR-090: текст последнего сообщения пользователя —
    * «вопрос хода», по которому идёт retrieval. Не задан — вопроса хода нет
    * (шаг пайплайна, саб-агент `task`).
    */
   query?: string;
   /**
-   * PROP-090 §«Точка promptBlocks»: идентификатор хода (`streamId`) — для
+   * ADR-090: идентификатор хода (`streamId`) — для
    * мемоизации/кэша провайдера.
    */
   turnId?: string;
   /**
-   * PROP-090 §«Точка promptBlocks»: метка времени хода (ISO 8601) — для оценки
+   * ADR-090: метка времени хода (ISO 8601) — для оценки
    * «свежести» фактов.
    */
   timestamp?: string;
   /**
-   * PROP-090 §«Точка promptBlocks»: бюджет символов **одного** блока
+   * ADR-090: бюджет символов **одного** блока
    * провайдера (`plugins.promptBlockMaxChars`). Не задан — дефолт
    * `DEFAULT_PROMPT_BLOCK_MAX_CHARS` (4 000).
    */
@@ -329,7 +329,7 @@ export interface SystemPromptComposerDeps {
   projectStore?: { load(id: string): Promise<Project | null> } | null;
   debugCollector?: DebugCollector;
   /**
-   * PROP-090 §«Точка promptBlocks»: реестр провайдеров блоков системного
+   * ADR-090: реестр провайдеров блоков системного
    * промпта. Не задан — пустой реестр (встроенных блоков это не касается).
    */
   promptBlocks?: PromptBlockRegistry;
@@ -341,7 +341,7 @@ export class SystemPromptComposer {
   private readonly _projectStore: { load(id: string): Promise<Project | null> } | null;
   private readonly _debug: DebugCollector | undefined;
   /**
-   * PROP-090 §«Точка promptBlocks»: реестр провайдеров блоков. Общий с
+   * ADR-090: реестр провайдеров блоков. Общий с
    * загрузчиком плагинов (фасад плагина регистрирует провайдера здесь).
    */
   private readonly _promptBlocks: PromptBlockRegistry;
@@ -355,7 +355,7 @@ export class SystemPromptComposer {
   }
 
   /**
-   * PROP-090 §«Точка promptBlocks»: реестр провайдеров блоков системного
+   * ADR-090: реестр провайдеров блоков системного
    * промпта (точка регистрации для фасада плагина).
    */
   get promptBlocks(): PromptBlockRegistry {
@@ -717,8 +717,8 @@ export class SystemPromptComposer {
       provenance: session.projectId ? `projects/${session.projectId}` : 'session.info',
     });
 
-    // PROP-090 §«Точка promptBlocks»: блоки от зарегистрированных провайдеров.
-    // Правила (зафиксированы здесь и в PROP-090):
+    // ADR-090: блоки от зарегистрированных провайдеров.
+    // Правила (зафиксированы здесь и в ADR-090):
     //  - при `session.settings.systemPrompt` override блоки провайдеров **не
     //    добавляются** (то же правило, что для `instructions`/`skills.catalog`:
     //    пользовательский промпт заменяет систему целиком);
@@ -734,7 +734,7 @@ export class SystemPromptComposer {
   }
 
   /**
-   * PROP-090 §«Точка promptBlocks»: блоки провайдеров блоков системного промпта.
+   * ADR-090: блоки провайдеров блоков системного промпта.
    *
    * Провайдеры обходятся в порядке регистрации; итоговый порядок блоков
    * определяет `sortPromptBlocks` (тир → `order`, tie-break — регистрация).
@@ -771,7 +771,7 @@ export class SystemPromptComposer {
           status = loaded.status;
         }
       } catch (err) {
-        // Деградация: ошибка провайдера не роняет ход (PROP-090 §«Правила»).
+        // Деградация: ошибка провайдера не роняет ход (ADR-090).
         warning(
           'PROMPT',
           `Провайдер блока промпта «${provider.key}» завершился ошибкой: ` +
@@ -835,10 +835,10 @@ export class SystemPromptComposer {
   }
 
   /**
-   * PROP-090 §«Точка promptBlocks»: узкий контекст вызова провайдера.
+   * ADR-090: узкий контекст вызова провайдера.
    *
    * Только DTO: история сессии наружу не отдаётся (контракт должен оставаться
-   * сериализуемым, PROP-090 §7).
+   * сериализуемым, ADR-090).
    */
   private _providerContext(ctx: ComposerContext): PromptBlockContext {
     const agentRole = ctx.agentRole ?? ctx.agentDef?.id ?? ctx.session.settings.agentRole ?? '';

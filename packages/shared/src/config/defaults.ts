@@ -208,7 +208,7 @@ export const defaultConfig: SynthConfig = {
     shadow: true,
   },
   plugins: {
-    // PROP-090 §10: слой плагинов. Мастер-выключатель Extension API включён;
+    // ADR-090: слой плагинов. Мастер-выключатель Extension API включён;
     // исполнение кода плагинов появляется в Ф1+ (сейчас — только политики).
     enabled: true,
     // Установка во время работы инстанса — по умолчанию запрещена (managed:
@@ -231,7 +231,7 @@ export const defaultConfig: SynthConfig = {
     // до шага `import` и останавливается — `plugin.execution_disabled`).
     executionEnabled: false,
     // Бюджет времени на один вызов фильтра LLM-вызовов (точка `llmFilters`,
-    // Ф3б). Значение — вопрос владельца (PROP-090 §14), механизм fail-closed/open
+    // Ф3б). Значение — вопрос владельца (ADR-090), механизм fail-closed/open
     // реализован.
     llmFilterTimeoutMs: DEFAULT_LLM_FILTER_TIMEOUT_MS,
     // Ф5в: каталог deploy-плагинов (образ/PVC). Пусто — не задан.

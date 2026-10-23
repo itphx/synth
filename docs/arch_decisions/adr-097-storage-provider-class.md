@@ -2,7 +2,7 @@
 
 > **Статус:** ⚠️ Частично — класс `storage` выделен, контракт класса (доменные порты + suite) и драйверы `file`/`memory`/`postgres` есть; `kind: "storage"` в манифесте и установка сторонних драйверов — нет
 > **Дата:** 2026-10-16
-> **Связано:** [ADR-096](./adr-096-storage-layer.md), [ADR-086](./adr-086-extensibility-plugins-editions.md), [ADR-005](./adr-005-json-storage.md), [ADR-023](./adr-023-configuration.md), [ADR-038](./adr-038-npm-packages.md), [ADR-091](./adr-091-backup-restore-transfer.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [PROP-090](./prop-090-extension-api.md), [PROP-068](./prop-068-skills-agents-registry.md).
+> **Связано:** [ADR-096](./adr-096-storage-layer.md), [ADR-086](./adr-086-extensibility-plugins-editions.md), [ADR-005](./adr-005-json-storage.md), [ADR-023](./adr-023-configuration.md), [ADR-038](./adr-038-npm-packages.md), [ADR-091](./adr-091-backup-restore-transfer.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [ADR-090](./adr-090-extension-api.md), [PROP-068](./prop-068-skills-agents-registry.md).
 
 ## Контекст
 
@@ -14,7 +14,7 @@
 укладывается ни в один существующий класс расширений [ADR-086](./adr-086-extensibility-plugins-editions.md):
 это не Plugin, не Gateway/Add-on/контент-пак, а **подмена физического backend'а под портами**.
 
-**Почему это не Plugin ([PROP-090](./prop-090-extension-api.md)):** у плагина нет storage-фацета — плагин
+**Почему это не Plugin ([ADR-090](./adr-090-extension-api.md)):** у плагина нет storage-фацета — плагин
 **потребитель** портов, а не их реализация; иное время загрузки (`StorageContext` собирается в composition
 root **до** auth/EventHub, плагин — позже); sync-сборка (`createStorageContext`) против асинхронного пула БД;
 singleton-слой хранения против disposer-модели плагина.
@@ -38,7 +38,7 @@ singleton-слой хранения против disposer-модели плаг�
 
 ## Альтернативы
 
-- **Storage как Plugin по [PROP-090](./prop-090-extension-api.md)** — отклонён: у Plugin нет storage-фацета;
+- **Storage как Plugin по [ADR-090](./adr-090-extension-api.md)** — отклонён: у Plugin нет storage-фацета;
   другое время загрузки (composition root до auth/EventHub), sync vs async-пул, singleton vs disposer (см. «Контекст»).
 - **Отдельный класс + свой ранний загрузчик/lifecycle** — принят **как форма** (класс и ранняя точка сборки),
   но первый драйвер — in-tree, без отдельного загрузчика сторонних драйверов.

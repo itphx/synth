@@ -74,7 +74,7 @@ describe('buildPromptState', () => {
     expect(next.reason).toBe('generation-change');
   });
 
-  it('блок провайдера помечается `provider: true` (PROP-090, точка promptBlocks)', () => {
+  it('блок провайдера помечается `provider: true` (ADR-090, точка promptBlocks)', () => {
     const c = {
       system: 'SYS',
       stablePrefix: 'STABLE',

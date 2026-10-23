@@ -476,7 +476,7 @@
   decision-вызов (ADR-084: guard/обфускация `state`, тот же `_prepare`/аудит, что у chat-путей).
   `SystemPromptPayload` (`stablePrefix`/`cacheKey`/`cachePolicy`, ADR-070) проходит через Gateway в
   провайдер без изменений — prompt-cache-маркеры ставятся в провайдерах **после** guard/обфускации.
-  **Фильтры LLM-вызовов (точка `llmFilters`, PROP-090, Ф3б):** `llm-filter-registry.ts` —
+  **Фильтры LLM-вызовов (точка `llmFilters`, ADR-090, Ф3б):** `llm-filter-registry.ts` —
   `LlmFilterRegistry` (fail-closed `register` + disposer, `unregister`/`get`/`list(phase)`/`size`/`clear`;
   метаданные владельца `trustLevel`/`pluginName`/`pluginVersion`/`onAudit`/`failMode`/`timeoutMs`;
   `canVetoLlmFilter` — вето только у trust ≥ `trusted`, `LLM_FILTER_VETO_TRUST_LEVEL`;
@@ -496,7 +496,7 @@
   `filters` прокидывается из оркестратора (`Options.llmFilters`/`llmFilterTimeoutMs`, шов
   `getLlmFilters()`) в пул, decision- и optimizer-gateway; пустой реестр — поведение прежнее.
 - `engine/router/*` — routing моделей и micro-model слой (ADR-034/035); decision-слой — `DecisionContentClassifier` (`decision-content-classifier.ts`, ADR-084), `DecisionModel` в `micro/models/` (`kind='decision'`, per-session `decisionFirst`), единый каскад `decision-cascade.ts` (`decideChoiceCascade`: `primary → escalation` по необязательной паре `escalationProvider`/`escalationModel`, fail-safe) и агрегатные метрики `decision-metrics.ts` (синглтон `decisionMetrics`: `calls`/`handled`/`fallback`/`escalated`/`attempts`/`rejected`/`by_model`). Мультимодальный контракт (задел PROP-085): `MicroInput.images`/`videos`, `ClassifyRequest.images`/`videos`, `DecisionProvider.decide(opts.images/videos)` — добавляются в тело запроса только если непусты.
-- `engine/permission/*` — permissions (`PERMISSION_GROUPS`; группа `plugin` — PROP-090 Ф3в: матчится
+- `engine/permission/*` — permissions (`PERMISSION_GROUPS`; группа `plugin` — ADR-090 Ф3в: матчится
   **по источнику** `ToolSource` (`getToolGroups(toolName, capabilities, source?)`,
   `PermissionCheckInput.toolSource`), а не по capability, — плагин с `file_read`/`search` не
   «выписывается» из правила `plugin`); `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
@@ -504,7 +504,7 @@
   Системный промпт (ADR-070): `composer.ts` — `SystemPromptComposer` (единственная точка сборки
   промпта основной сессии и саб-агентов: `compose()` идемпотентно собирает из состояния, `manifest()` —
   манифест источников; типы `ComposedPrompt`/`PromptBlock`, **`PromptBlockProvider`-шов**
-  (`{ key, tier, order, load(ctx) }` — точка `promptBlocks`, PROP-090; имя `ContextSource` из
+  (`{ key, tier, order, load(ctx) }` — точка `promptBlocks`, ADR-090; имя `ContextSource` из
   `shared/types/provider.ts` — метаданные модели, к промпт-блокам отношения не имеет));
   `prompt-blocks.ts` — тиры `stable`/`context`/`volatile` и детерминированная склейка
   (`sortPromptBlocks`/`joinPromptBlocks`); `prompt-state.ts` — состояние промпта per-agent
@@ -518,59 +518,7 @@
   Профиль/интервью в промпте резолвит единый `_resolveProfile(userId)` (`loadProfile(userId) ??
   getProfileByUsername(userId)`; `session.userId` — username, профиль ключуется по id-UUID); `profilesStore`
   проброшен и в standalone `ContextBuilder` (`server/app.ts`, `server/chat.ts`).
-  **Реестр блоков промпта (PROP-090 §«Точка `promptBlocks``, Ф3а).**
-  `engine/context/prompt-block-registry.ts` — `PromptBlockRegistry`: реестр провайдеров блоков
-  системного промпта; `register()` — **fail-closed** (пустой ключ / нечисловой `order` / занятый ключ /
-  тир `stable` → `PromptBlockRegistrationError`), возвращает **disposer** (идемпотентный);
-  `unregister`/`get`/`list`/`size`/`clear`. Провайдер (`PromptBlockProvider`,
-  `shared/src/types/prompt-blocks.ts`) вызывается композером **раз в ход**; тир ограничен
-  `context`/`volatile` **на уровне типа** — `stable` запрещён (граница prompt-cache, ADR-070 §2.1).
-  Блоки провайдеров добавляются в `SystemPromptComposer._collectProviderBlocks` — **тот же** массив
-  блоков, что и встроенные (один манифест, одна склейка, одна сортировка по тирам); при
-  `session.settings.systemPrompt` (override) блоки **не добавляются**.
-  Правила: ошибка провайдера → `warning` в лог, блок пуст, **ход не падает**; пустой результат →
-  `status: 'empty'`; содержимое длиннее бюджета → хост обрезает (голова+хвост, свой маркер усечения
-  без `read_file`) и ставит `status: 'truncated'`. **Бюджет символов блока** —
-  `plugins.promptBlockMaxChars` (дефолт 4 000 — `DEFAULT_PROMPT_BLOCK_MAX_CHARS` в `shared`).
-  **Контекст хода** (`PromptBlockContext`): `sessionId`/`agentRole`/`language`/`projectId?`/`mode` +
-  `query?`/`turnId?`/`timestamp?`; `query` — **только текст сообщения пользователя** (не системные и не
-  state-сообщения, не отключённые — `resolveTurnQuery`, `engine/orchestrator/prompt-info.ts`); история
-  сессии наружу не отдаётся. Инвалидация состояния промпта: блоки провайдеров лежат вне тира
-  `stable`, поэтому трек ведётся отдельно (`PromptBlock.source='provider'` →
-  `PromptBlockState.provider`, `isBlockChanged` — как у блока `instructions`).
-  Регистрация из плагина — `PluginFacade.registerPromptBlock` (`engine/plugins/activation.ts`,
-  реализация — `PluginHost`): при отказе — предупреждение в лог, активация плагина не падает.
-  Проектные инструкции (ADR-069): `instructions.ts` — `ProjectInstructionsResolver`
-  (merged chain `git root → … → workspace`, кандидаты `AGENTS.override.md` > `AGENTS.md` >
-  `agents.md` > `CLAUDE.md` (opt-in) > `CONTEXT.md` (deprecated); дедуп sha256;
-  provenance `--- from … ---`; `waterFillAllocate` + `truncateHeadTail` с маркером `read_file`;
-  `resolveInstructionsCap` — динамический кап; `config.sources` `before`/`after` + URL-fetch
-  с TTL-кэшем `{dataDir}/instructions-cache`; `project-trust` (`skills.trustedProjectDirs` +
-  авто-trust `workspacesRoot`) и install-tree guard; блочный резолвер `buildInstructionsInfo`/
-  `createInstructionsInfoResolver` — снимок для `GET /api/v2/context/instructions`),
-  `lazy-instructions.ts` — `LazyInstructionsLoader` (tool-result догрузка: `LAZY_TRIGGER_TOOLS`,
-  `extractLazyTargetDir`/`extractShellDir`, ≤`lazy.maxAncestors` внутри workspace,
-  `LAZY_INSTRUCTIONS_PREFIX`, реестры `loaded`/`claims` + sha256; резолвер stateless,
-  состояние per-session — в оркестраторе, `seed()` инициализирует `loaded` из merged chain).
-  Резолвится оркестратором и отдаётся composer'у как блок `instructions` тира `context`
-  (ADR-070); per-turn мемоизация — `_resolveProjectInstructions(turnId)` в `engine/orchestrator.ts`.
-- `engine/file-signature.ts` — ADR-069 (R5) / ADR-046: `filesSignature`/`dirsSignature`
-  (`id:floor(mtimeMs):size`, отсутствующий кандидат — маркер `!`) для ленивой инвалидации
-  кэшей (общий со скиллами).
-- `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация;
-  `createAgentRegistry(toolRegistry, overridesDir)` — встроенные агенты + merge с файловым
-  каталогом `{dataDir}/agents`; `registerStoredAgents(registry, agents)` — регистрация
-  агентов из **стора** (ADR-096) в реестр при старте (merge как в `GET /api/v2/agents`:
-  override встроенного выигрывает, custom регистрируется, `isOverridden: true`). Нужно,
-  потому что при `storage.backend=postgres` стор агентов — БД, а `createAgentRegistry`
-  читает только каталог: без этого агент, поставленный пакетом расширения (ADR-086),
-  после рестарта не резолвился в Router (`agentTemplate` → `null`, сессия не создавалась).
-  Вызывается в `server/app/deps.ts` и `backend/app/deps.ts` (обе сборки — async).
-- `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP; `executor-mcp-source.ts` +
-  `executor-mcp-client.ts` — состав MCP-серверов пула исполнителей и вызовы их инструментов
-  поверх HTTP API исполнителя (ADR-077, шаг B2): TTL снимка 120 с, а **неудачный** discovery
-  (404/сеть/таймаут) повторяется через `EXECUTOR_MCP_SOURCE_RETRY_MS` (15 с) — иначе backend,
-  стартовавший раньше пода исполнителя, «запоминал» пустой состав на весь TTL; успешный
+  **Реестр блоков промпта (ADR-090 пустой состав на весь TTL; успешный
   пустой ответ — валидный снимок и живёт до TTL.
   **`idle` = «ещё не поднят», а не «недоступен»** (ленивый старт исполнителя: сервер
   поднимает `GET /mcp/tools`, а `GET /mcp/servers` только показывает состояние): источник
@@ -610,7 +558,7 @@
   prompt-команда генерации/обновления `AGENTS.md` (`INIT_INSTRUCTION_PATH`). Тесты — `engine/commands/*.test.ts`.
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
   plan, todo, project, task, skill, profile_update). Реестр держит **три слоя** по
-  `ToolDefinition.source` (`builtin` | `mcp` | `plugin`, ADR-071 §2.1 + PROP-090 §«Точка `tools`»):
+  `ToolDefinition.source` (`builtin` | `mcp` | `plugin`, ADR-071 §2.1 + ADR-090):
   `registerPlugin(tool, pluginName)` — единственный путь регистрации плагинного тула, **атомарная**
   валидация с отказом `invalid_name`/`invalid_definition`/`invalid_capability`/`name_conflict`;
   имя всегда `plugin_<ns>_<tool>` (namespace — из `manifest.name`, хелперы в
@@ -660,7 +608,7 @@
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
 - `engine/hooks/*` — `HookBus` (ADR-030): ядровая in-process шина хуков
   (`on/off/emit/emitAsync`, priority, `sync`/`async`, `builtin`), отдельная от
-  session-`EventBus`. Политика `builtin` (Ф0 PROP-090): регистрация ядра (`builtin: true`)
+  session-`EventBus`. Политика `builtin` (Ф0 ADR-090): регистрация ядра (`builtin: true`)
   **не снимается** ни `off(name, handler)`, ни функцией отписки из `on` (отказ + лог, без
   исключения); явный путь владельца регистрации — `offBuiltin(name, handler)`; `removeAll()` —
   служебный (тесты). Пример — `analytics/hooks.ts` (подписки `builtin`, отписка `offBuiltin`).
@@ -669,7 +617,7 @@
   `external_event`/`message_received` (только `role: user`, первая попытка, без текста)/
   `schedule_fired` (метаданные расписания, без текста задания). `callback` объявлен, но в core
   не эмитится — нет точки «нажатие инлайн-кнопки» (контракт внешнего канала, ADR-087/ADR-103).
-- `engine/plugins/*` — PROP-090 §10: загрузчик плагинов `PluginHost` и его пайплайн активации
+- `engine/plugins/*` — ADR-090: загрузчик плагинов `PluginHost` и его пайплайн активации
   (**resolve → integrity → semver-гейт → trust/scan → политика режима → import → facade**).
   **Исполнение кода по умолчанию выключено** — `plugins.executionEnabled` (default `false`), шаг `import`
   останавливается явно. **Ф4а:** `inline`-загрузчик реализован (`inline-loader.ts`); **Ф5б-1: подключён** —
@@ -762,7 +710,7 @@
   (46 суммарно). Различие транспортов одно: невалидный вклад отклоняет реестр при регистрации
   (inline) либо `checkPluginCapabilities` на `/capabilities` (remote, fail-closed) — suite проверяет
   «регистрации не появилось + причина названа» (`refusalText`).
-- `engine/plugins/scan/*` — PROP-090 §9 / PROP-068 §4.3: встроенный статический сканер расширений
+- `engine/plugins/scan/*` — ADR-090 / PROP-068 §4.3: встроенный статический сканер расширений
   (**advisory**: код не исполняется, сканер лишь выносит вердикт; блокирует матрица install-policy).
   Файлы: `rules.ts` (таблица правил `PLUGIN_SCAN_RULES` по 7 категориям — 6 базовых + `invisible_unicode`;
   `INVISIBLE_UNICODE_PATTERNS` — zero-width/bidi/unicode-tag/soft-hyphen), `scanner.ts`
@@ -779,7 +727,7 @@
   `PluginScanHook`), `index.ts` — баррел. **Квоты** (`PLUGIN_SCAN_QUOTAS` + `PLUGIN_SCAN_QUOTA_SEVERITIES`,
   `shared/src/types/plugin-scan.ts`): 50 файлов / 1024 КиБ суммарно → `medium` (вердикт не выше `caution`),
   256 КиБ на файл → `high` (`dangerous`).
-- `engine/plugins/layout.ts` — PROP-090 §5: раскладка слоя плагинов на диске. `resolvePluginLayout`
+- `engine/plugins/layout.ts` — ADR-090: раскладка слоя плагинов на диске. `resolvePluginLayout`
   (приоритет корня: явный home > env `SYNTH_HOME` > `{dataDir}/plugin` — ADR-079) →
   `<home>/plugin/{installed,quarantine,plugins.lock.json,plugins.json}`; `pluginInstalledDir`/
   `pluginQuarantineDir` (`<name>@<version>`); `stagePluginBundle` (решение install-policy: `allow` →
@@ -1062,7 +1010,7 @@
   `{dataDir}/scheduler/leader.lock`); публикует `{source:'cron', type:'schedule_fired'}`
   через `EventIngress`, а перед публикацией (при наличии подписчиков) эмитит хук
   `schedule_fired` (async, метаданные расписания — `scheduleId`/`name`/`target`/`cron`/`trigger`,
-  без текста задания; шина — `SchedulerServiceDeps.hooks`, ADR-030/Ф0 PROP-090).
+  без текста задания; шина — `SchedulerServiceDeps.hooks`, ADR-030/Ф0 ADR-090).
   Тикер стартует только у лидера (`scheduler.leaderElection`).
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
@@ -1124,7 +1072,7 @@
   поверх основного источника — привязок в `ProfileData.identities[]`), ADR-089; `decision` +
   `mergeDecisionConfig` — runtime-настройки decision-слоя, ADR-084, включая `escalationProvider`/`escalationModel`;
   `metrics` — runtime `metrics.enabled` (ADR-094), резолв — `resolveMetricsEnabled`;
-  `plugins` + `mergePluginsConfig` — runtime-настройки слоя плагинов (PROP-090 §10: `enabled`/
+  `plugins` + `mergePluginsConfig` — runtime-настройки слоя плагинов (ADR-090: `enabled`/
   `runtimeInstall`/`trustFloor`/`scan`/`allowlist`/`denylist`/`remoteAllowlist`/`exactHostExceptions`/
   `promptBlockMaxChars`/`executionEnabled` (главный переключатель исполнения кода плагинов, default
   `false`); приоритет runtime > config > defaults; `getPlugins`/`setPlugins`/`clearPlugins`),
@@ -1166,7 +1114,7 @@
   **инстанс-локальный** — не переносится publish/fork, ADR-042/PROP-081)
   и `JobStore` (`scheduler/jobs.jsonl`, Job-история, ADR-051),
   `MaintenanceAuditStore` (`audit/maintenance.jsonl`, append-only аудит-журнал обслуживания, ADR-092);
-  `FilePluginAuditStore` (`audit/plugins.jsonl`, append-only журнал аудита плагинов, PROP-090 §9 —
+  `FilePluginAuditStore` (`audit/plugins.jsonl`, append-only журнал аудита плагинов, ADR-090 —
   порт `PluginAuditRepository`, **отдельный**: `SECURITY_AUDIT_SCOPES` не расширяется; append под
   `AsyncLock`, `clear` атомарно tmp→rename), `MemoryPluginAuditRepository`
   (`storage/memory/plugin-audit.ts`), PostgreSQL — `packages/storage-postgres/src/ports/plugin-audit.ts`
@@ -1174,7 +1122,7 @@
   `storage/contract/plugin-audit-repository.contract.ts` (file/memory/PG; прогон на живой БД —
   `storage/contract/postgres.test.ts`); подключение — `StorageContext.pluginAudit`;
   `FilePluginLockStore` (`storage/file-plugin-lock-store.ts`, порт `PluginLockRepository`,
-  PROP-068 §4.4 / PROP-090 §5 — lock-файл плагинов `plugins.lock.json`, **источник истины** для
+  PROP-068 §4.4 / ADR-090 — lock-файл плагинов `plugins.lock.json`, **источник истины** для
   update/uninstall; путь задаёт раскладка `<home>/plugin/` или `{dataDir}/plugin/` — опция
   `pluginLockPath`; ключ записи — имя плагина, `installed_at` иммутабельно; атомарная запись
   tmp→rename), `MemoryPluginLockRepository` (`storage/memory/plugin-lock.ts`), PostgreSQL —
@@ -1273,7 +1221,7 @@
 ## MCP
 
 - Транспорты: stdio (`StdioClientTransport`) и Streamable HTTP
-  (`StreamableHTTPClientTransport`) — `engine/mcp/client.ts`. PROP-090: `config.headers`
+  (`StreamableHTTPClientTransport`) — `engine/mcp/client.ts`. ADR-090: `config.headers`
   пробрасываются в HTTP-транспорт (`requestInit: { headers }`) — auth/tenant-заголовки.
 - Лимиты: connect 60 c; tool timeout 120 c (`config.timeout`, мс); результат
   усечён до 30 000 символов (`MAX_TOOL_RESULT`).

@@ -300,7 +300,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/auth/login` | backend | — | ROPC-вход (OIDC), ставит cookie |
 | GET | `/auth/callback` | backend | — | OIDC callback, cookie |
 | GET | `/auth/status` | оба | — | `{authenticated, debug_mode, oidc_enabled, deployment, user}` |
-| GET | `/auth/oidc-meta` | backend | — | Публичные OIDC issuer/clientId (без секрета) + сигнал `plugins: {enabled, mode}` (серверная политика плагинов в гибриде, PROP-090 Ф7; **без списка имён** — полный allow-list отдаёт `GET /api/v2/settings/plugins`); старый сервер без поля → клиент трактует политику как неизвестную |
+| GET | `/auth/oidc-meta` | backend | — | Публичные OIDC issuer/clientId (без секрета) + сигнал `plugins: {enabled, mode}` (серверная политика плагинов в гибриде, ADR-090 Ф7; **без списка имён** — полный allow-list отдаёт `GET /api/v2/settings/plugins`); старый сервер без поля → клиент трактует политику как неизвестную |
 | GET | `/auth/session` | оба | — | Проверка cookie-сессии |
 | GET | `/auth/me` | оба | — | Текущий пользователь |
 | POST | `/auth/spa-login` | оба | — | JSON `{api_key}` → cookie-сессия |
@@ -1595,9 +1595,9 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 
 ---
 
-### 5.36 Плагины — `/api/v2/plugins*` и `/api/v2/settings/plugins` (оба, PROP-090)
+### 5.36 Плагины — `/api/v2/plugins*` и `/api/v2/settings/plugins` (оба, ADR-090)
 
-Слой плагинов (PROP-090, Extension API v1): установка бандла `synth.pack` (`kind: 'plugin'`),
+Слой плагинов (ADR-090, Extension API v1): установка бандла `synth.pack` (`kind: 'plugin'`),
 модель доверия/скан/install-policy (PROP-068), активация через `PluginHost` и точки расширения
 (`promptBlocks`, `llmFilters`, `tools`). Единая фабрика `createPluginsRoutes` для core и backend;
 `plugins.lock.json` — источник истины (что установлено), `installed/<name>@<version>/` — бандл,
@@ -1613,11 +1613,11 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 | GET | `/api/v2/plugins/:name` | оба | ADMIN / auth | `{plugin, manifest?, integrity?}`: манифест из установленного бандла и `PLUGIN_INTEGRITY.json` (best-effort — порча файла не даёт 500); нет в lock → 404 `plugin.not_found` |
 | POST | `/api/v2/plugins/install` | оба | ADMIN или service-key `addons:install` / auth | **Установка из источника** (см. «Источники установки» ниже): `201` — установлено, `202` — нужно подтверждение (`plugin.approval_required`, бандл в карантине), `400` `VALIDATION_ERROR` (тело/pin/имя) или `plugin.source_unavailable` для локального источника, `400` `plugin.manifest_invalid`, `403` `plugin.trust_below_floor`/`plugin.runtime_install_denied`/`plugin.scan_disabled_with_execution`, `409` `plugin.scan_rejected`, `502` `plugin.source_unavailable` для сетевого источника (registry/URL не ответили). **Managed**: локальные источники (`dir`/`archive`) запрещены → `403 LOCAL_INSTALL_DISABLED`; сетевые (`npm`/`url`) разрешены |
 | POST | `/api/v2/plugins/:name/approve` | оба | **ADMIN** / auth | Подтвердить карантин (`202`-установку): повторные гейты + сверка integrity → `200` установлено; `404` `plugin.not_found`, `409` `plugin.scan_rejected` |
-| POST | `/api/v2/plugins/:name/enable` | оба | ADMIN или `addons:install` / auth | Активация (пайплайн PROP-090 §10) → `200 {activation}`; отказ по гейту (`plugin.execution_disabled`/`trust_below_floor`/`scan_rejected`/`approval_required`) → `409` с `reason`; нет в lock → `404` |
+| POST | `/api/v2/plugins/:name/enable` | оба | ADMIN или `addons:install` / auth | Активация (пайплайн ADR-090) → `200 {activation}`; отказ по гейту (`plugin.execution_disabled`/`trust_below_floor`/`scan_rejected`/`approval_required`) → `409` с `reason`; нет в lock → `404` |
 | POST | `/api/v2/plugins/:name/disable` | оба | ADMIN или `addons:install` / auth | Обратная прокрутка disposers → `200 {deactivation}`; не активен → `404 plugin.not_active` |
 | DELETE | `/api/v2/plugins/:name` | оба | **ADMIN** / auth | Снятие: деактивация → `lock.delete` → удаление каталога версии; **идемпотентно** → `204` даже если записи не было |
 | POST | `/api/v2/plugins/:name/rollback` | оба | ADMIN или `addons:install` / auth | Откат на ступень `previous`: `200 {outcome:'rolled_back', version, previousVersion, activated?}`; нет ступени/каталога → `409 plugin.rollback_unavailable`, нет записи → `404 plugin.not_found` |
-| POST | `/api/v2/plugins/token` | оба | **ADMIN** / auth | **Выдача server-scoped токена плагину** (PROP-090 Ф7, Уровень 2): тело `{pluginId, scopes?, expiresInSec?}` → `201 {token, pluginId, scopes, expiresAt}`; секрет отдаётся **единожды** (at-rest — sha256, формат `synth_svc_…`), scope `plugins:invoke` добавляется всегда. Ошибки: `400 VALIDATION_ERROR` (нет `pluginId`/неизвестный scope/неверный `expiresInSec`), `403 PLUGIN_NOT_ALLOWED` (плагин вне серверного allow-list при `plugins.hybrid.mode=allowlist`), `404 plugin.not_found` (плагин серверу неизвестен: не установлен и не разрешён allow-list'ом), `501 NOT_IMPLEMENTED` (реестр service-key не подключён) |
+| POST | `/api/v2/plugins/token` | оба | **ADMIN** / auth | **Выдача server-scoped токена плагину** (ADR-090 Ф7, Уровень 2): тело `{pluginId, scopes?, expiresInSec?}` → `201 {token, pluginId, scopes, expiresAt}`; секрет отдаётся **единожды** (at-rest — sha256, формат `synth_svc_…`), scope `plugins:invoke` добавляется всегда. Ошибки: `400 VALIDATION_ERROR` (нет `pluginId`/неизвестный scope/неверный `expiresInSec`), `403 PLUGIN_NOT_ALLOWED` (плагин вне серверного allow-list при `plugins.hybrid.mode=allowlist`), `404 plugin.not_found` (плагин серверу неизвестен: не установлен и не разрешён allow-list'ом), `501 NOT_IMPLEMENTED` (реестр service-key не подключён) |
 | POST | `/api/v2/plugins/update` | оба | ADMIN или `addons:install` / auth | **Обновление из источника записи lock**: `200 {outcome:'unchanged'|'updated', ...}`; `400 VALIDATION_ERROR` (нет `name`/невалидный `sha256`) или `plugin.source_unavailable` для локального источника, `404 plugin.not_found`, `409 plugin.approval_required`/`scan_rejected`/`integrity_*`, `502 plugin.source_unavailable` для сетевого источника. Тело `{name, version?, sha256?, activate?}`; источник клиентом не выбирается |
 
 **Источники установки (`POST /plugins/install`).** Тело:
@@ -1687,7 +1687,7 @@ PG, порт настроек): `enabled`, `executionEnabled`, `runtimeInstall` 
 
 | Метод | Путь | RBAC (backend / core) | Назначение |
 |---|---|---|---|
-| GET | `/api/v2/settings/plugins` | ADMIN / auth | `{plugins (runtime), defaults (config), isOverridden, restartRequired: true, running, hybrid: {mode, allow}}` — блок `hybrid` — серверная политика плагинов в гибриде (PROP-090 Ф7); список `allow` отдаётся **только** при `mode: 'allowlist'`, в режиме `off` — `{mode: 'off', allow: []}` |
+| GET | `/api/v2/settings/plugins` | ADMIN / auth | `{plugins (runtime), defaults (config), isOverridden, restartRequired: true, running, hybrid: {mode, allow}}` — блок `hybrid` — серверная политика плагинов в гибриде (ADR-090 Ф7); список `allow` отдаётся **только** при `mode: 'allowlist'`, в режиме `off` — `{mode: 'off', allow: []}` |
 | PUT | `/api/v2/settings/plugins` | ADMIN / auth | Частичное обновление (`pluginsConfigSchema.partial().strict()`): неизвестный ключ/невалидное значение → `400 VALIDATION_ERROR`; ответ как у `GET` |
 | DELETE | `/api/v2/settings/plugins` | ADMIN / auth | Сброс override к `config.yaml`/дефолтам; ответ как у `GET` |
 
@@ -1719,7 +1719,7 @@ PG, порт настроек): `enabled`, `executionEnabled`, `runtimeInstall` 
 | Аналитика и отчёты (ADR-102) | `packages/core/src/server/routes/analytics.ts`, `packages/core/src/analytics/*`, `packages/shared/src/types/analytics.ts` |
 | Пакеты расширений и пайплайны (ADR-100) | `packages/core/src/server/routes/packs.ts`, `packages/core/src/server/routes/pipelines.ts`, `packages/core/src/engine/events/pipeline-tracker.ts`, `packages/core/src/storage/ports/pack-repository.ts`, `packages/core/src/storage/ports/pipeline-repository.ts`, `packages/shared/src/types/pack.ts`, `packages/shared/src/types/pipeline.ts` |
 | Пайплайны проекта, прогоны и шаблоны (ADR-101, Э6) | `packages/core/src/server/routes/pipeline-project-routes.ts`, `packages/core/src/engine/pipelines/*`, `packages/core/src/storage/ports/project-pipeline-repository.ts`, `packages/core/src/storage/ports/pipeline-run-repository.ts`, `packages/shared/src/types/pipeline-engine.ts` |
-| Плагины (PROP-090) | `packages/core/src/server/routes/plugins.ts`, `packages/core/src/engine/plugins/*` (хост, загрузчик, установщик, рантайм), `packages/shared/src/types/{pack,plugin-audit,plugin-lock,plugin-scan,prompt-blocks,llm-filters,plugin-tools}.ts` |
+| Плагины (ADR-090) | `packages/core/src/server/routes/plugins.ts`, `packages/core/src/engine/plugins/*` (хост, загрузчик, установщик, рантайм), `packages/shared/src/types/{pack,plugin-audit,plugin-lock,plugin-scan,prompt-blocks,llm-filters,plugin-tools}.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

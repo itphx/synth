@@ -200,23 +200,23 @@ export interface OrchestratorOptions {
   /** Хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт). */
   gatewayPatternStore?: SecretPatternRepository;
   /**
-   * PROP-090 §«Точка `llmFilters`»: **мутабельный** реестр фильтров LLM-вызовов.
+   * ADR-090: **мутабельный** реестр фильтров LLM-вызовов.
    * Единый экземпляр на инстанс: через него `GatewayProvider` (все точки:
    * ход сессии, пул, decision, суммаризация) видит фильтры, а фасад плагинов
    * (`PluginHost`, часть 2) регистрирует/снимает их при активации/деактивации.
    *
    * Не задан — реестр создаётся здесь пустым (`getLlmFilters()`); пустой реестр
-   * поведения не меняет (PROP-090: без фильтров — прежний ход вызова).
+   * поведения не меняет (ADR-090: без фильтров — прежний ход вызова).
    */
   llmFilters?: LlmFilterRegistry;
   /**
-   * PROP-090 §«Точка `llmFilters`»: бюджет времени на один вызов фильтра по
+   * ADR-090: бюджет времени на один вызов фильтра по
    * умолчанию, мс (`plugins.llmFilterTimeoutMs`). Действует, если фильтр не
    * задал свой `timeoutMs`. Применяется только к реестру, созданному здесь.
    */
   llmFilterTimeoutMs?: number;
   /**
-   * PROP-090 §«Точка `promptBlocks`»: бюджет символов **на блок** системного
+   * ADR-090: бюджет символов **на блок** системного
    * промпта от плагина (`plugins.promptBlockMaxChars`, дефолт 4 000).
    *
    * Ранее ключ конфигурации не доходил до композера — бюджет всегда оставался
@@ -224,7 +224,7 @@ export interface OrchestratorOptions {
    */
   promptBlockMaxChars?: number;
   /**
-   * PROP-090 §«Точка `promptBlocks`»: реестр провайдеров блоков системного
+   * ADR-090: реестр провайдеров блоков системного
    * промпта — **тот же** экземпляр, в который регистрирует вклады фасад
    * плагинов (`PluginRuntime`/`PluginHost`).
    *
@@ -462,7 +462,7 @@ export class ChatOrchestrator {
   /** ADR-106 Ф2: шов решения Authority-слоя (считает, журналит и применяет). */
   private readonly _authorityGate: AuthorityGateHook | undefined;
   /**
-   * PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов (мутабельный;
+   * ADR-090: реестр фильтров LLM-вызовов (мутабельный;
    * общий для всех gateway-точек — см. `getLlmFilters()`).
    */
   private readonly _llmFilters: LlmFilterRegistry;
@@ -694,7 +694,7 @@ export class ChatOrchestrator {
         ? createFileStorage({ dataDir: options.dataDir, env: process.env }).sshKeys
         : null);
     // ADR-070 §2.1: единая точка сборки системного промпта (идемпотентно).
-    // PROP-090 §«Точка promptBlocks»: реестр блоков промпта — **один** экземпляр
+    // ADR-090: реестр блоков промпта — **один** экземпляр
     // на инстанс (его же получает фасад плагинов); второй не создаём.
     this._composer = new SystemPromptComposer({
       contextBuilder: this._contextBuilder,
@@ -773,7 +773,7 @@ export class ChatOrchestrator {
     // ADR-106 Ф2: шов решения Authority-слоя (guard) — считает, журналит и
     // применяет решение (в enforced-режиме).
     this._authorityGate = options.authorityGate;
-    // PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов. Экземпляр
+    // ADR-090: реестр фильтров LLM-вызовов. Экземпляр
     // может прийти извне (общий с фасадом плагинов); иначе создаём пустой —
     // бюджет времени из `plugins.llmFilterTimeoutMs`.
     this._llmFilters = options.llmFilters
@@ -892,7 +892,7 @@ export class ChatOrchestrator {
       audit,
       rateLimiter,
       obfMapStore,
-      // PROP-090 §«Точка llmFilters»: суммаризация — тоже LLM-вызов, фильтры
+      // ADR-090: суммаризация — тоже LLM-вызов, фильтры
       // фазы `pre_request` видят и её (порядок — тот же gateway-контур).
       filters: this._llmFilters,
       ...(this._metrics ? { metrics: this._metrics } : {}),
@@ -904,7 +904,7 @@ export class ChatOrchestrator {
    * и live-переключение). У пула нет сессии, поэтому карта обфускации пустая:
    * защита от утечки секретов работает, карта не персистится.
    *
-   * PROP-090 §«Точка `llmFilters`»: тот же реестр фильтров — так embedding-фаза
+   * ADR-090: тот же реестр фильтров — так embedding-фаза
    * видит эмбеддинги микро-слоя (`router/micro/models/embedding-model.ts` берёт
    * провайдера из пула, а пул оборачивает его в `GatewayProvider`).
    */
@@ -997,7 +997,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * PROP-090 §«Точка `llmFilters`»: реестр фильтров LLM-вызовов инстанса.
+   * ADR-090: реестр фильтров LLM-вызовов инстанса.
    *
    * Тот же экземпляр, что видят все gateway-точки (ход сессии, пул провайдеров,
    * decision, суммаризация). Фасад плагинов регистрирует в нём фильтры при
@@ -1009,7 +1009,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * PROP-090 (долги Д3): живое применение `plugins.promptBlockMaxChars`.
+   * ADR-090 (долги Д3): живое применение `plugins.promptBlockMaxChars`.
    *
    * `undefined` — вернуться к дефолту композера (`DEFAULT_PROMPT_BLOCK_MAX_CHARS`).
    * Действует со следующего хода: бюджет читается при сборке промпта.
@@ -1019,7 +1019,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * PROP-090 (долги Д3): живое применение бюджета фильтров
+   * ADR-090 (долги Д3): живое применение бюджета фильтров
    * (`plugins.llmFilterTimeoutMs`). Действует на **последующие** регистрации
    * фильтров: у уже зарегистрированных бюджет зафиксирован при регистрации
    * (политика плагина не переписывается на лету).
@@ -1251,7 +1251,7 @@ export class ChatOrchestrator {
       ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef, workspaceReady)
       : undefined;
     // ADR-071 §2.6: admin-disabled исключаются всегда, независимо от политики.
-    // PROP-090 §«Точка `tools`»: плагинные инструменты — инстанс-локальный слой;
+    // ADR-090: плагинные инструменты — инстанс-локальный слой;
     // политика у них та же, что у встроенных (`tools.policy`), отдельного
     // `plugins.policy` нет. Admin-отключение (`tools.disabled`) действует всегда.
     const toolPredicates = {
@@ -1295,9 +1295,9 @@ export class ChatOrchestrator {
     interviewEligible?: boolean;
     /** ADR-051: текущий ход инициирован планировщиком. */
     schedulerCurrentTurn?: boolean;
-    /** PROP-090 §«Точка promptBlocks»: «вопрос хода» (текст сообщения пользователя). */
+    /** ADR-090: «вопрос хода» (текст сообщения пользователя). */
     query?: string;
-    /** PROP-090 §«Точка promptBlocks»: идентификатор хода (`streamId`). */
+    /** ADR-090: идентификатор хода (`streamId`). */
     turnId?: string;
   }): ComposerContext {
     const {
@@ -2441,7 +2441,7 @@ export class ChatOrchestrator {
         agentDef, sessionMode, planMode, planApproved, workspaceReady,
       }),
       schedulerCurrentTurn: this._schedulerCurrentTurn(session),
-      // PROP-090 §«Точка promptBlocks»: в диагностике «вопрос хода» — последнее
+      // ADR-090: в диагностике «вопрос хода» — последнее
       // пользовательское сообщение истории (явного хода нет).
       query: resolveTurnQueryFn(session),
     });
@@ -2553,7 +2553,7 @@ export class ChatOrchestrator {
     let sessionMode: SessionMode = session.mode ?? 'act';
     let planApproved = Boolean(session.planApproved);
 
-    // ADR-030 (Ф0 PROP-090): `message_received` — входящее сообщение в сессии.
+    // ADR-030 (Ф0 ADR-090): `message_received` — входящее сообщение в сессии.
     // Один эмит на сообщение: только первая попытка (`attempt` 1-based; ретраи
     // в `QueueProcessor` переиспользуют то же сообщение) и только `role: user`.
     // Внутренние системные сообщения хода (суммаризация/отладка) и
@@ -3134,7 +3134,7 @@ export class ChatOrchestrator {
               ...(effectiveAgentRole ? { agentId: effectiveAgentRole } : {}),
               turnId: streamId,
             },
-            // PROP-090 §«Точка `tools`»: источник тула — плагинные инструменты
+            // ADR-090: источник тула — плагинные инструменты
             // адресуются группой `plugin` в permission-правилах.
             toolSource: toolDef?.source,
             agentCapabilities: agentDef?.capabilities,
@@ -3591,7 +3591,7 @@ export class ChatOrchestrator {
               });
             }
           } else if (toolResult.isError && toolName === 'plan_exit') {
-            // ADR-030 (Ф0 PROP-090): `plan_rejected` — утверждение плана не
+            // ADR-030 (Ф0 ADR-090): `plan_rejected` — утверждение плана не
             // удалось (`plan_exit` вернул ошибку): план не утверждён, сессия
             // остаётся в plan-режиме. Отдельного «отклонить план» в коде нет,
             // поэтому точка — неудачное утверждение (ближайшая по смыслу).

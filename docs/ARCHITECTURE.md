@@ -370,7 +370,7 @@ hook-шину, а создание сессий сведено в один funne
 - **`HookBus`** (`engine/hooks/hook-bus.ts`) — шина хуков жизненного цикла агента
   (`session_requested`, `external_event`, …); async-хуки с таймаутом
   (`HOOK_ASYNC_TIMEOUT_MS`), результат может заблокировать событие (`blocked`/`reason`).
-  Это фундамент; Plugin SDK и загрузка плагинов (PROP-090) не реализованы.
+  Это фундамент; Plugin SDK и загрузка плагинов (ADR-090) **реализованы**.
 - **Сущности** (`shared/types/events.ts`, Zod-схемы рядом). `SynthEvent` — нормализованное
   внешнее событие `{id: 'evt_<uuid>', source, type, payload, identity{principalId?, chatKey?,
   threadKey?, roles?}, dedupKey, ts}` (известные `source`: `telegram`/`synth-media`/`webhook`/
@@ -433,7 +433,7 @@ API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `do
 со scopes/проектной проекцией, webhooks, public-OpenAPI (28 операций, `GET /api/v2/openapi.json`)
 и SDK `@itphx/synth-sdk` — **ADR-052 закрыт целиком (этапы I–IV: включая перевод Telegram-шлюза
 на scoped service-key)**; первый add-on — Telegram-шлюз (`addons/synth-gateway-telegram`) —
-реализован; не реализованы плагины (Plugin SDK, PROP-090) и пайплайны (ADR-100).
+реализован; **плагины реализованы** (Plugin SDK, ADR-090); пайплайны — остаток ADR-100 (движок реализован, ADR-101).
 
 ## Egress-слой (исходящие соединения)
 

@@ -81,7 +81,7 @@ export interface MetricsRuntimeSettings {
 }
 
 /**
- * PROP-090 §10 / ADR-023: runtime-настройки секции `plugins` (слой плагинов),
+ * ADR-090 / ADR-023: runtime-настройки секции `plugins` (слой плагинов),
  * сохраняемые через UI. Состав ключей — ровно `pluginsConfigSchema`
  * (`@itphx/synth-shared/config`): политики (`enabled`/`runtimeInstall`/
  * `trustFloor`/`scan`/`executionEnabled`), списки имён (`allowlist`/`denylist`/
@@ -102,28 +102,28 @@ export interface PluginsRuntimeSettings {
   exactHostExceptions?: string;
   promptBlockMaxChars?: number;
   /**
-   * PROP-090 Ф1: переключатель исполнения кода плагинов (по умолчанию `false`).
+   * ADR-090 Ф1: переключатель исполнения кода плагинов (по умолчанию `false`).
    * `false` — загрузчик доводит плагин до шага `import` и останавливается
    * (`plugin.execution_disabled`).
    */
   executionEnabled?: boolean;
   /**
-   * PROP-090 Ф3б: бюджет времени на один вызов фильтра LLM-вызовов, мс
+   * ADR-090 Ф3б: бюджет времени на один вызов фильтра LLM-вызовов, мс
    * (точка `llmFilters`).
    */
   llmFilterTimeoutMs?: number;
   /**
-   * PROP-090 Ф5в: каталог бандлов, поставленных образом/PVC (deploy-time).
+   * ADR-090 Ф5в: каталог бандлов, поставленных образом/PVC (deploy-time).
    * Пусто — не задан. Runtime-override действует после рестарта (рантайм
    * плагинов собирается при старте, инвариант 24).
    */
   deployDir?: string;
-  /** PROP-090 Ф5в: доверие deploy-бандлов (`plugin.trust_below_floor` при ниже порога). */
+  /** ADR-090 Ф5в: доверие deploy-бандлов (`plugin.trust_below_floor` при ниже порога). */
   deployTrust?: PluginsConfig['deployTrust'];
-  /** PROP-090 Ф5в: management-плагин нельзя снять/переустановить через API/CLI. */
+  /** ADR-090 Ф5в: management-плагин нельзя снять/переустановить через API/CLI. */
   managedReadonly?: boolean;
   /**
-   * PROP-090 Ф7: серверная политика плагинов для гибридного режима.
+   * ADR-090 Ф7: серверная политика плагинов для гибридного режима.
    *
    * `mode` — `off` (сервер не ограничивает) | `allowlist` (разрешены только
    * плагины из `allow`); `allow` — имена разрешённых плагинов.
@@ -198,7 +198,7 @@ export interface RuntimeSettings {
   decision?: DecisionRuntimeSettings;
   /** ADR-094: runtime-настройки наблюдаемости (`metrics.enabled`). */
   metrics?: MetricsRuntimeSettings;
-  /** PROP-090 §10: runtime-настройки секции `plugins` (админка, слой плагинов). */
+  /** ADR-090: runtime-настройки секции `plugins` (админка, слой плагинов). */
   plugins?: Partial<PluginsRuntimeSettings>;
   /**
    * ADR-099: runtime-override секции `proxy` (админка). Секретов не содержит:
@@ -353,7 +353,7 @@ export function mergeDecisionConfig(
 export const DEFAULT_PLUGIN_DEPLOY_DIR = '/opt/synth/plugins';
 
 /**
- * PROP-090 §10 / ADR-023: мёржит runtime-настройки секции `plugins` поверх
+ * ADR-090 / ADR-023: мёржит runtime-настройки секции `plugins` поверх
  * config.yaml. Runtime приоритетнее; отсутствие поля — значения из config,
  * затем дефолты схемы `pluginsConfigSchema` (`defaults.ts`).
  *
@@ -786,7 +786,7 @@ export class RuntimeSettingsStore implements SettingsRepository {
     });
   }
 
-  /** PROP-090 §10: runtime-настройки слоя плагинов, {} — не заданы. */
+  /** ADR-090: runtime-настройки слоя плагинов, {} — не заданы. */
   async getPlugins(): Promise<Partial<PluginsRuntimeSettings>> {
     const settings = await this.load();
     return settings.plugins ?? {};

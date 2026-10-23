@@ -7,7 +7,7 @@ export interface PromptBlockState {
   hash: string;
   chars: number;
   /**
-   * Блок пришёл от провайдера точки `promptBlocks` (PROP-090), а не от
+   * Блок пришёл от провайдера точки `promptBlocks` (ADR-090), а не от
    * встроенного источника Composer'а.
    *
    * Нужен для инвалидации состояния промпта: такие блоки лежат вне тира

@@ -1,7 +1,7 @@
 /**
  * ADR-030: контракты hook-шины событий агента и интеграций. Здесь только типы
  * (имена хуков, режим выполнения, результат и карта контекстов); сама шина —
- * `HookBus` в core, внешний фасад — Plugin SDK (PROP-090).
+ * `HookBus` в core, внешний фасад — Plugin SDK (ADR-090).
  */
 import type { SynthEvent, EventInitiator } from './events.js';
 import type { SessionMode } from './session.js';
@@ -42,7 +42,7 @@ export interface HookAnalyticsAxes {
 }
 
 /**
- * ADR-030 / PROP-090 Ф0: вид входящего сообщения для `message_received`.
+ * ADR-030 / ADR-090 Ф0: вид входящего сообщения для `message_received`.
  * - `user` — сообщение человека (UI/CLI/API);
  * - `scheduler` — срабатывание расписания (автор `Scheduler`, ADR-051);
  * - `external` — доставка внешнего события (webhook/шлюз, `metadata.source`).

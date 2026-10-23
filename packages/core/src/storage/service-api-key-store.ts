@@ -47,10 +47,10 @@ export interface ServiceKeyCredential {
   allowedProjects?: string[];
   /** Лимит запросов/мин ключа (0/отсутствует — без лимита). */
   rateLimitPerMinute?: number;
-  /** Задел ADR-052/PROP-090: идентичность отправителя/сервиса. */
+  /** Задел ADR-052/ADR-090: идентичность отправителя/сервиса. */
   principalId?: string;
   /**
-   * Ф7 (PROP-090, Уровень 2): привязка ключа к плагину (`plugin_id`).
+   * Ф7 (ADR-090, Уровень 2): привязка ключа к плагину (`plugin_id`).
    *
    * Ключ с привязкой — **server-scoped токен** плагина: сервер принимает его
    * только с заголовком `X-Synth-Plugin-Id` и тем же значением, с scope
@@ -78,7 +78,7 @@ export class ServiceApiKeyConflictError extends Error {
 export interface ServiceApiKeyRecord extends ServiceApiKey {
   hash: string;
   /**
-   * Ф7 (PROP-090, Уровень 2): привязка ключа к плагину (`plugin_id`).
+   * Ф7 (ADR-090, Уровень 2): привязка ключа к плагину (`plugin_id`).
    *
    * Поле **внутреннее**: публичный контракт `/api/v2/service-keys` не меняется
    * (ключ с привязкой выдаётся отдельным роутом `POST /api/v2/plugins/token`).

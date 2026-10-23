@@ -29,7 +29,7 @@ export interface AuthorityDecisionListOptions {
  *
  * Записи неизменяемы; `id`/`ts` формирует вызывающий (`ad_<uuid>`).
  * `list` отдаёт записи «свежие первыми» (новые → старые) — как журнал аудита
- * плагинов (PROP-090 §9).
+ * плагинов (ADR-090).
  */
 export interface AuthorityDecisionJournal {
   /** Дозапись одного решения. */

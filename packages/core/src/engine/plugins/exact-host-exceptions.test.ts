@@ -1,5 +1,5 @@
 /**
- * PROP-090 Ф1: формат файла точных исключений семвер-гейта
+ * ADR-090 Ф1: формат файла точных исключений семвер-гейта
  * (`plugins.exactHostExceptions`).
  */
 import { mkdtemp, writeFile } from 'node:fs/promises';

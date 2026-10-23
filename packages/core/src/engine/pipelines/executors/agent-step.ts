@@ -800,7 +800,7 @@ function buildStepSessionLike(ctx: StepExecutionContext): ComposerSessionLike {
   const projectId = ctx.projectId ?? ctx.spec.projectId;
   return {
     // Идентификатор шага — тот же, что и ключ кэша промпта (`pipeline:<runId>:<nodeId>`):
-    // в контексте провайдера блока промпта (PROP-090) это «sessionId» шага.
+    // в контексте провайдера блока промпта (ADR-090) это «sessionId» шага.
     id: `pipeline:${ctx.runId}:${ctx.node.id}`,
     settings: {
       agentRole: ctx.node.agent,

@@ -78,7 +78,7 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   // authority (ADR-106 Ф1): мастер-выключатель слоя и режим наблюдения.
   { section: 'authority', key: 'enabled', type: 'boolean' },
   { section: 'authority', key: 'shadow', type: 'boolean' },
-  // plugins (PROP-090 §10): политики слоя плагинов. Списки (allowlist/denylist/
+  // plugins (ADR-090): политики слоя плагинов. Списки (allowlist/denylist/
   // remoteAllowlist) — объектные, остаются в config.yaml.
   { section: 'plugins', key: 'enabled', type: 'boolean' },
   { section: 'plugins', key: 'runtimeInstall', type: 'string' },

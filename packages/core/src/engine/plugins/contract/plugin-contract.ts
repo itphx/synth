@@ -1,5 +1,5 @@
 /**
- * PROP-090 §«Точки расширения» (Ф3в): **контрактный suite расширений**.
+ * ADR-090 (Ф3в): **контрактный suite расширений**.
  *
  * По образцу контрактных suite'ов слоя хранения
  * (`packages/core/src/storage/contract/*`): «паспорт» — набор проверок,
@@ -172,7 +172,7 @@ export function describePluginContract(
   name: string,
   make: PluginContractHarnessFactory,
 ): void {
-  describe(`контракт расширений (PROP-090): ${name}`, () => {
+  describe(`контракт расширений (ADR-090): ${name}`, () => {
     let h: PluginContractHarness;
 
     beforeEach(async () => {

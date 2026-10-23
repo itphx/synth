@@ -10,7 +10,54 @@
   развёрнуты в test: `synth-backend:0.12.1`, `synth-ui:0.12.1`, `synth-executor:0.12.1-full`).
   Остальные 12 джоб CI зелёные, включая `secret-scan`, контрактный suite на живой PostgreSQL и
   `helm lint`. Проверка перезапущена через ветку `feature/ci-images-retry` (master не перезапускался,
-  чтобы не плодить пустые коммиты).## 2026-10-23 — PROP-090: спецификация по плагинам для авторов (`docs/PLUGINS.md`)
+  чтобы не плодить пустые коммиты).
+
+## 2026-10-23 — PROP-090 принято как ADR-090: слой плагинов (перенос предложения в решение)
+
+- **Задача:** реализовать последнюю фазу Ф7 (гибрид) и перенести предложение PROP-090 в принятое
+  решение ADR-090. **Тип:** feature + docs (решение). **Исполнитель:** @fixer (Ф7), @fixer (перенос),
+  верификация и слияние — @orchestrator. **Результат:** PASS. **Ветки:** `feature/plugin-f7` (Ф7),
+  `feature/prop090-to-adr` (перенос), обе слиты в master.
+- **Ф7 — hybrid (ADR-090 §7).** Форма политики: `plugins.hybrid.mode` (`off`|`allowlist`) + `plugins.hybrid.allow[]`
+  (конфиг, env `SYNTH_PLUGINS_HYBRID_MODE`, runtime-настройки). Дискавери: сигнал `plugins` в
+  `GET /auth/oidc-meta` (без списка имён) и полная политика в `GET /api/v2/settings/plugins` (блок `hybrid`);
+  клиентский резолвер в `remote/connection.ts` с кэшем 60 с и сбросом при disconnect. **Уровень 1
+  (cooperative):** плагин вне серверного allow-list не активируется — причина `plugin.hybrid_not_allowed`
+  (HTTP 403); при недоступном сервере плагин работает, но помечен «не проверен сервером». **Уровень 2:**
+  `POST /api/v2/plugins/token` — токен, привязанный к `plugin_id` (модель service-key, публичный контракт
+  `/api/v2/service-keys` не расширен); сервер требует совпадающий заголовок `X-Synth-Plugin-Id`, scope
+  `plugins:invoke` и присутствие плагина в allow-list — иначе 403 (`PLUGIN_ID_MISMATCH`/`SCOPE_REQUIRED`/
+  `PLUGIN_NOT_ALLOWED`), fail-closed. Публичный контракт service-key не изменён; привязка `pluginId`
+  переживает создание → резолв → экспорт/импорт (контрактный suite), в PostgreSQL — миграция
+  `013-service-key-plugin-id`.
+- **Перенос в ADR-090.** Новый файл `docs/arch_decisions/adr-090-extension-api.md` (67 строк — одна
+  страница по образцу ADR-091: Контекст / Решение / Альтернативы / Последствия / Статус в коде / Остаток
+  и развитие / История из трёх строк); старый `prop-090-extension-api.md` удалён. Переписано **670**
+  упоминаний `PROP-090` и **69** ссылок на файл (198 файлов: код-комментарии, пакетные `AGENTS.md`,
+  `docs/*`, `docs/en/*`); 387 указателей на секции удалённого предложения приведены к ссылкам на
+  `docs/PLUGINS.md`. Журнал задач (append-only) и `docs/releases/0.10.0.md` (историческое имя) не тронуты.
+  Смысловая правка: ADR-030 (остаток — только эмит `callback`), ADR-086 (Plugin SDK реализован; остаток —
+  editions/contribution), ADR-089, ADR-100, PROP-047 (17 правок), PROP-068, `docs/roadmap.md`
+  (счётчики пересчитаны, строка из actionable убрана), `docs/ARCH_DECISIONS.md` §6.
+- **Исправлены устаревшие утверждения (текст против кода):** `docs/ARCHITECTURE.md` и `docs/en/ARCHITECTURE.md`
+  — «Plugin SDK не реализован» → «реализован (ADR-090)» (заодно про пайплайны); `docs/CONFIGURATION.md` —
+  `plugins.trustFloor`: «устанавливается, но не активируется» → «установщик **отказывает в установке**
+  (`plugin.trust_below_floor`)»; EN-зеркала `docs/en/CONFIGURATION.md` и `docs/en/HYBRID.md` — баннер
+  отставания перевода.
+- **Решения владельца, зафиксированные в ADR-090 (п. 9):** окно deprecation контракта — мажор живёт
+  ≥ 3 минорных релизов и ≥ 90 дней; отдельного бюджета фильтра для embedding нет; в managed — только
+  restart; JSON-схема каталога генерируется из `packages/shared/src/types/catalog.ts` в CI; подтверждение
+  `caution` — ADMIN по content-hash, 24 ч; `plugins.scan: 'disabled'` без исполнения кода остаётся;
+  кэш сканов — in-process, версия правил в ключе; файл точных исключений семвер-гейта — текстовый.
+- **Проверки:** shared 798 / core 5781 / backend 669 / ui 1774 тестов — зелёные; typecheck — 0 ошибок;
+  lint — 0 ошибок; `adr-check` — 0 ошибок (32 предупреждения, базовая линия); `docs-link-check` — 0 ошибок;
+  `secret-scan` — чисто (дополнительно подавлены 5 ложных срабатываний на dummy-фикстуры внешних
+  доступов ADR-105 — не related к плагинам).
+- **Остаток:** Уровень 3 (attestation клиента в гибриде) — вне объёма v1; память по PROP-047 — отдельная
+  задача; EN-зеркало `docs/PLUGINS.md` отсутствует; пункты ADR-090 п. 9 «срок 24 ч подтверждения» и
+  «генерация схемы каталога в CI» — решения приняты, реализация в работе.
+
+## 2026-10-23 — PROP-090: спецификация по плагинам для авторов (`docs/PLUGINS.md`)
 
 - **Задача:** дать автору расширения практический путь «от нуля до работающего плагина» — PROP-090 остаётся внутренним каноном, а внешнему разработчику нужен справочник с проверяемыми примерами. **Тип:** docs (+ смежные репозитории каталога/витрины). **Исполнитель:** @fixer. **Результат:** PASS. **Ветка:** `feature/plugin-points`, worktree `wt-plugin-points`. **Коммитов нет** (инвариант 12).
 - **Новый документ `docs/PLUGINS.md`** (13 разделов): что такое плагин и границы (может/не может, доступные в v1 три точки из 14); быстрый старт с **полными** копируемыми `synth.pack`, `src/index.ts`, `package.json` и командами (scan → install → enable → проверка `GET /sessions/:id/prompt` и вызов тула); справочник манифеста (все поля, `provides` по трём видам вкладов, что реально проверяется — `contracts.extensionApi`, `trust.level` не выше `trusted`, пустой `provides` невалиден); три точки расширения с контрактами и примерами (`promptBlocks`: тиры/ключи/`order`/бюджет 4 000 символов/`truncated`/деградация/override/саб-агент и шаг пайплайна; `llmFilters`: фазы, вердикты, `failMode`, таймаут 1 000 мс, вето только trust ≥ `trusted`, обфусцированный запрос, `post_response` — наблюдение, `redact` в `pre_request` не поддержан, требование `llmGateway.enabled`; `tools`: namespace `plugin_<ns>_<tool>`, локальные имена, обязательные capabilities, `mcp`/`runtime` зарезервированы, permission-слой, `jsonSchema` из-за собственной копии zod); сверка `provides` ↔ регистрации; два режима исполнения (полный wire-протокол `SYNTH_PLUGIN_READY`/`/capabilities`/`/invoke`, loopback, токен, окружение процесса, пример сервера); bundle-only и сканер (7 категорий, квоты, `.skillignore`, вердикты); доверие и install-policy (trust-floor **до** install-policy, матрица `safe→allow`/`caution→ask`/`dangerous→block`, managed readonly); тестирование (что проверяет контрактный suite, честное ограничение — харнесс не публичен, и рецепт интеграционного теста на своём бандле через публичные `PluginHost`/реестры/`createInlinePluginLoader`); установка/обновление (источники и целостность, CLI, API, update/rollback, карантин, deploy-time); версионирование контракта + **предложение** окна deprecation (3 минорных релиза и ≥ 90 дней); справочник 28 кодов `plugin.*` + `plugin_filter.*` с действиями автора и HTTP-маппингом; публикация в `synth-registry`/`synth-market`; чек-лист.

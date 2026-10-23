@@ -1,5 +1,5 @@
 /**
- * PROP-090 §9: тесты дефолтного seam'а скана (`createPluginScanHook`).
+ * ADR-090: тесты дефолтного seam'а скана (`createPluginScanHook`).
  *
  * Хук — точка расширения Ф2: по умолчанию он зовёт встроенный статический
  * сканер и отдаёт `PluginScanResult` (`performed: true`).

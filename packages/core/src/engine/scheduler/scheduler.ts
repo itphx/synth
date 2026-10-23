@@ -32,7 +32,7 @@ export interface SchedulerServiceDeps {
   /** ADR-094: колбэк метрик завершённых Job (`ok`/`error`/`skipped`). */
   onJob?: SchedulerJobMetrics;
   /**
-   * ADR-030 (Ф0 PROP-090): hook-шина для эмита `schedule_fired` (async).
+   * ADR-030 (Ф0 ADR-090): hook-шина для эмита `schedule_fired` (async).
    * Не задана — хук не эмитится.
    */
   hooks?: HookBus;
@@ -345,7 +345,7 @@ export class SchedulerService {
       };
       if (opts?.force) payload.force = true;
 
-      // ADR-030 (Ф0 PROP-090): `schedule_fired` — неблокирующий эмит **до**
+      // ADR-030 (Ф0 ADR-090): `schedule_fired` — неблокирующий эмит **до**
       // публикации события: подписчики видят срабатывание раньше, чем Router
       // материализует доставку. Ошибки/таймауты обработчиков изолирует
       // `HookBus.emitAsync` (fire-and-forget), поэтому публикацию они не ломают.

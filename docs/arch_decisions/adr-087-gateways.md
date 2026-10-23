@@ -10,7 +10,7 @@
 > выполняет **агент через MCP-инструменты шлюза**, а не ядро (поток и риск approve-gate — [ADR-089](./adr-089-external-events-automation.md));
 > «стриминг ответа наружу» остатком ADR-087 **не является** — он закрыт на стороне шлюза (live-стриминг `stream.chunk` → правки сообщения).
 > **Связано:** [ADR-086](./adr-086-extensibility-plugins-editions.md) (зонтик «Классы расширений»),
-> [PROP-090](./prop-090-extension-api.md) (Plugin / классы расширений), [ADR-089](./adr-089-external-events-automation.md)
+> [ADR-090](./adr-090-extension-api.md) (Plugin / классы расширений), [ADR-089](./adr-089-external-events-automation.md)
 > (Event/Binding/Router, identity/claim-flow), [ADR-030](./adr-030-hooks-agent-events.md) (hooks),
 > [ADR-052](./adr-052-public-api-platform.md) (service-key/scopes/webhooks), [ADR-076](./adr-076-git-repo-registry-ssh.md)
 > (секреты at-rest), [PROP-085](./prop-085-multimodal-input.md) (вложения), [ADR-051](./adr-051-scheduler-pipelines.md)
@@ -19,7 +19,7 @@
 ## 1. Решение
 
 Ввести **класс «Gateway»** — отдельный класс расширений Synth, наряду с Plugin / Add-on / контент-паком /
-Edition ([ADR-086](./adr-086-extensibility-plugins-editions.md), [PROP-090](./prop-090-extension-api.md)).
+Edition ([ADR-086](./adr-086-extensibility-plugins-editions.md), [ADR-090](./adr-090-extension-api.md)).
 
 **Gateway** — внешний сервис-транспорт, который подключает Synth к **внешнему миру** (мессенджеры, чаты,
 каналы, боты, внешние платформы) и обеспечивает **двусторонний** обмен:
@@ -32,7 +32,7 @@ Gateway — **не** подвид Add-on'а и **не** Plugin: это само�
 (Telegram — реализован; VK — реализован; MAX — в очереди); см. §4.
 
 Манифест любого расширения, включая gateway, — единый файл **`synth.pack`** (`kind: "gateway"`,
-[ADR-086](./adr-086-extensibility-plugins-editions.md), [PROP-090](./prop-090-extension-api.md)).
+[ADR-086](./adr-086-extensibility-plugins-editions.md), [ADR-090](./adr-090-extension-api.md)).
 
 ## 2. Отличия класса Gateway от Add-on/Plugin/контент-пака
 
@@ -284,7 +284,7 @@ tombstone-файл удалён. Наследование относительн
 ## 7. Связи
 
 - [ADR-086](./adr-086-extensibility-plugins-editions.md) — зонтик «Классы расширений»: Gateway наряду с Plugin/Add-on/контент-паком, editions и contribution flow.
-- [PROP-090](./prop-090-extension-api.md) — Extension API v1: терминология классов, единый манифест `synth.pack`.
+- [ADR-090](./adr-090-extension-api.md) — Extension API v1: терминология классов, единый манифест `synth.pack`.
 - [ADR-089](./adr-089-external-events-automation.md) — Event/Binding/Router, identity/claim-flow: как события мессенджера превращаются в работу сессии.
 - [ADR-030](./adr-030-hooks-agent-events.md) — hook-шина: фундамент событийной обработки (hook `message_received`).
 - [ADR-052](./adr-052-public-api-platform.md) — публичный API, service-key/scopes, приём webhook'ов.
