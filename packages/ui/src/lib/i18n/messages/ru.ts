@@ -3818,8 +3818,18 @@ export const dict = {
   'plugins.restart.button': 'Перезапустить',
   'plugins.restart.started': 'Перезапуск запущен',
   'plugins.restart.error': 'Не удалось перезапустить инстанс: {error}',
+  'plugins.audit.title': 'Журнал плагинов',
+  'plugins.audit.description':
+    'Журнал действий плагинов: установки, активации, сканы и причины отказов (последние записи).',
+  'plugins.audit.empty': 'Журнал плагинов пуст',
+  'plugins.audit.refresh': 'Обновить',
+  'plugins.audit.loadError': 'Не удалось загрузить журнал плагинов: {error}',
+  'plugins.audit.outcome.ok': 'успешно',
+  'plugins.audit.outcome.rejected': 'отказ',
   'settings.help.plugins.section.plugins-list':
     'Установленные плагины: версия, режим, доверие, вердикт сканера и хеш содержимого; действия — включить/выключить, обновить, откатить, удалить.',
+  'settings.help.plugins.section.plugins-audit':
+    'Журнал действий плагинов — время, плагин, действие, итог и причина отказа. Чтение журнала не меняет состояние плагинов.',
   'settings.help.plugins.section.plugins-install':
     'Установка из источника. Локальные пути и архивы доступны только в standalone; https-архиву обязателен пин sha256.',
   'settings.help.plugins.section.plugins-policy':

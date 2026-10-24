@@ -44,6 +44,7 @@ import type {
   CatalogTrustLevel,
   PackManifest,
   PackPluginMode,
+  PluginAuditEntry,
   PluginLockEntry,
   PluginScanVerdict,
   PluginsConfig,
@@ -51,7 +52,10 @@ import type {
   PluginServerPolicyStatus,
 } from '@itphx/synth-shared';
 
-import type { PluginAuditRepository } from '../../storage/ports/plugin-audit-repository.js';
+import type {
+  PluginAuditListOptions,
+  PluginAuditRepository,
+} from '../../storage/ports/plugin-audit-repository.js';
 import type { PluginLockRepository } from '../../storage/ports/plugin-lock-repository.js';
 import type { PromptBlockRegistry } from '../context/prompt-block-registry.js';
 import type { LlmFilterRegistry } from '../gateway/llm-filter-registry.js';
@@ -201,6 +205,12 @@ export class PluginRuntime {
 
   private readonly _lock: PluginLockRepository;
   private readonly _logger: PluginLogger;
+  /**
+   * Порт журнала аудита плагинов (ADR-096) — тот же, что пишут хост и
+   * установщик: чтение журнала отдаёт ровно те события, которые видны в
+   * UI/CLI (ADR-090).
+   */
+  private readonly _audit: PluginAuditRepository;
   /** Менеджер процессов удалённых плагинов (Ф4б-2) — гасится в `dispose`. */
   private readonly _processManager: PluginRuntimeDeps['processManager'];
 
@@ -208,6 +218,7 @@ export class PluginRuntime {
     this.layout = deps.layout;
     this.config = deps.config;
     this._lock = deps.lock;
+    this._audit = deps.audit;
     this._processManager = deps.processManager;
     this._logger = deps.logger ?? {
       warn: (message: string) => {
@@ -451,6 +462,18 @@ export class PluginRuntime {
     actor?: string;
   }): Promise<void> {
     await this.host.recordTokenIssued(input);
+  }
+
+  /**
+   * Чтение журнала аудита плагинов (ADR-090): append-only журнал, записи
+   * «свежие первыми» (новые → старые).
+   *
+   * Фильтры и `limit` — как у порта `PluginAuditRepository` (`plugin`/
+   * `action`/`outcome`, последние N). Чтение **не** создаёт записей: это
+   * просмотр, а не действие над плагином.
+   */
+  async listAudit(opts: PluginAuditListOptions = {}): Promise<PluginAuditEntry[]> {
+    return this._audit.list(opts);
   }
 
   /**

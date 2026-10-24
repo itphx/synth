@@ -314,7 +314,28 @@ synth plugin list
 
 4. **Статус и журнал.** `GET /api/v2/plugins` (или раздел «Плагины») показывает версию, режим,
    доверие, вердикт скана, content-hash и активность; журнал операций —
+   `GET /api/v2/plugins/audit` (в UI — блок «Журнал плагинов» в разделе «Плагины»), файл журнала —
    `{dataDir}/audit/plugins.jsonl`.
+
+### 2.7. Где смотреть журнал действий плагинов
+
+Журнал — append-only: он пишет порт `PluginAuditRepository` (`{dataDir}/audit/plugins.jsonl` в
+файловом хранилище, таблица `plugin_audit` в PostgreSQL). Прочитать его можно тремя способами:
+
+| Способ | Как | Что отдаёт |
+|---|---|---|
+| UI | Настройки → **«Плагины»** → блок **«Журнал плагинов»** | последние записи (время, плагин, действие, итог, причина) и кнопка «Обновить» |
+| HTTP API | `GET /api/v2/plugins/audit?limit=50&plugin=<имя>` | `{entries: [...]}` — хвост журнала; `limit` (по умолчанию 50, максимум 500), `plugin` — фильтр по имени плагина |
+| Файл | `{dataDir}/audit/plugins.jsonl` (одна строка — одна запись) | сырой журнал целиком |
+
+Права на чтение журнала те же, что на чтение реестра плагинов: в серверном режиме — администратору,
+в локальном (standalone) — владельцу инстанса. **Чтение журнала не меняет состояние плагинов** и
+не создаёт записей: это просмотр, а не действие над плагином.
+
+Записи описывают жизненный цикл расширения: `install`, `activate`, `deactivate`, `rollback`,
+`uninstall`, `scan`, `filter`, `token`. В записи есть время (`ts`), инициатор (`actor`), действие,
+итог (`outcome`: `ok`/`rejected`) и **код причины** (`reason`) — по нему видно, на каком гейте
+плагин не прошёл.
 
 ---
 
@@ -1070,7 +1091,9 @@ describe('контракт плагина my-plugin', () => {
 2. `synth plugin install ./my-plugin --trust trusted` → перезапуск инстанса;
 3. раздел «Плагины»: активность, вердикт скана, trust, режим;
 4. `GET /api/v2/sessions/:id/prompt` — блок в манифесте;
-5. журнал `{dataDir}/audit/plugins.jsonl` — действия `install`/`activate`/`filter` и коды отказа.
+5. журнал действий плагинов — блок «Журнал плагинов» в разделе «Плагины» или
+   `GET /api/v2/plugins/audit` (действия `install`/`activate`/`filter` и коды отказа); файл журнала —
+   `{dataDir}/audit/plugins.jsonl`.
 
 ---
 
@@ -1316,7 +1339,8 @@ X-Synth-Plugin-Id: my-plugin
 ## 12. Справочник ошибок
 
 Коды причин — `PLUGIN_AUDIT_REASONS` (`packages/shared/src/types/plugin-audit.ts`), 31 значение.
-Код виден в ответе API (`reason`), в журнале `{dataDir}/audit/plugins.jsonl` и в stderr CLI.
+Код виден в ответе API (`reason`), в журнале плагинов (`GET /api/v2/plugins/audit` либо файл
+`{dataDir}/audit/plugins.jsonl`) и в stderr CLI.
 
 ### 12.1. Установка и источник
 

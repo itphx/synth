@@ -10,6 +10,7 @@
  *
  * ```text
  * GET    /plugins                — установленные + статус активации (runtime.list)
+ * GET    /plugins/audit          — журнал действий плагинов (хвост, ADR-090)
  * GET    /plugins/:name          — запись + манифест + PLUGIN_INTEGRITY.json
  * POST   /plugins/install        — установка из источника (dir/archive/npm/url)
  * POST   /plugins/:name/approve   — подтверждение карантина (202-установка)
@@ -20,6 +21,13 @@
  * DELETE /plugins/:name           — снятие по записи lock (идемпотентно;
  *                                   management-плагин → 403 plugin.managed_readonly)
  * ```
+ *
+ * **Журнал действий плагинов (`GET /plugins/audit`).** Записи пишет порт
+ * `PluginAuditRepository` (append-only: `{dataDir}/audit/plugins.jsonl` или
+ * таблица `plugin_audit` в PostgreSQL). Отдаётся **хвост** журнала: `limit`
+ * (по умолчанию 50, максимум 500) и необязательный фильтр по имени плагина
+ * (`plugin`). Чтение — **не действие над плагином**: запись в журнал при
+ * чтении не создаётся.
  *
  * **Management-плагины (Ф5в).** Плагин, поставленный развёртыванием
  * (`plugins.deployDir`, lock `source: 'deploy'`), при `plugins.managedReadonly:
@@ -208,6 +216,28 @@ const MANIFEST_FILE = 'synth.pack';
 
 /** Служебный файл раскладки с хешем/провенансом (ADR-090). */
 const INTEGRITY_FILE = 'PLUGIN_INTEGRITY.json';
+
+/**
+ * Размер выборки журнала плагинов по умолчанию (`GET /plugins/audit`).
+ *
+ * Журнал append-only и может быть большим, поэтому отдаётся только хвост.
+ */
+const AUDIT_DEFAULT_LIMIT = 50;
+
+/** Предел выборки журнала плагинов (`GET /plugins/audit`). */
+const AUDIT_MAX_LIMIT = 500;
+
+/**
+ * Разобрать параметр `limit` журнала плагинов.
+ *
+ * Не число/`<= 0` — дефолт; больше предела — предел (хвост, не «всё»).
+ */
+function parseAuditLimit(raw: string | undefined): number {
+  if (raw === undefined) return AUDIT_DEFAULT_LIMIT;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return AUDIT_DEFAULT_LIMIT;
+  return Math.min(Math.floor(parsed), AUDIT_MAX_LIMIT);
+}
 
 /**
  * Причина отказа установки/активации → HTTP-код (единая таблица).
@@ -460,6 +490,21 @@ export function createPluginsRoutes(
   app.get('/', readGuard, async (c) => {
     const plugins = await deps.runtime.list();
     return c.json({ plugins });
+  });
+
+  // GET /api/v2/plugins/audit — журнал действий плагинов (ADR-090).
+  // Объявлен до `/:name`: `/audit` — статический сегмент, иначе его съел бы
+  // маршрут детали плагина. Права — как у чтения реестра (`readGuard`):
+  // managed — ADMIN, core — `requireAuth`.
+  app.get('/audit', readGuard, async (c) => {
+    const limit = parseAuditLimit(c.req.query('limit'));
+    const plugin = optionalString(c.req.query('plugin'));
+    // Чтение журнала — не действие над плагином: запись при чтении не создаётся.
+    const entries = await deps.runtime.listAudit({
+      limit,
+      ...(plugin ? { plugin } : {}),
+    });
+    return c.json({ entries });
   });
 
   // POST /api/v2/plugins/install — установка из источника (dir/archive/npm/url).

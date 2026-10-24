@@ -3471,8 +3471,18 @@ export const dict = {
   'plugins.restart.button': 'Restart',
   'plugins.restart.started': 'Restart started',
   'plugins.restart.error': 'Failed to restart the instance: {error}',
+  'plugins.audit.title': 'Plugin journal',
+  'plugins.audit.description':
+    'Journal of plugin actions: installs, activations, scans and the reasons for rejections (latest entries).',
+  'plugins.audit.empty': 'The plugin journal is empty',
+  'plugins.audit.refresh': 'Refresh',
+  'plugins.audit.loadError': 'Failed to load the plugin journal: {error}',
+  'plugins.audit.outcome.ok': 'succeeded',
+  'plugins.audit.outcome.rejected': 'rejected',
   'settings.help.plugins.section.plugins-list':
     'Installed plugins: version, mode, trust, scanner verdict and content hash; actions — enable/disable, update, roll back, remove.',
+  'settings.help.plugins.section.plugins-audit':
+    'Journal of plugin actions — time, plugin, action, outcome and the rejection reason. Reading the journal does not change the plugin state.',
   'settings.help.plugins.section.plugins-install':
     'Install from a source. Local paths and archives are available in standalone only; an https archive requires a sha256 pin.',
   'settings.help.plugins.section.plugins-policy':

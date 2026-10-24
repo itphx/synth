@@ -125,6 +125,7 @@ describe('backend: RBAC-матрица контура плагинов (ADR-090 
     const mounted = new Set(backend.app.routes.map((r) => `${r.method.toUpperCase()} ${r.path}`));
     for (const route of [
       'GET /api/v2/plugins',
+      'GET /api/v2/plugins/audit',
       'GET /api/v2/plugins/:name',
       'POST /api/v2/plugins/install',
       'POST /api/v2/plugins/token',
@@ -148,6 +149,7 @@ describe('backend: RBAC-матрица контура плагинов (ADR-090 
   it('негативная матрица: не-ADMIN → 403 на каждом действии контура плагинов', async () => {
     const cases: Array<{ method: string; path: string; body?: unknown }> = [
       { method: 'GET', path: '/api/v2/plugins' },
+      { method: 'GET', path: '/api/v2/plugins/audit' },
       { method: 'GET', path: '/api/v2/plugins/demo-plugin' },
       { method: 'POST', path: '/api/v2/plugins/install', body: { path: '/tmp/whatever' } },
       { method: 'POST', path: '/api/v2/plugins/token', body: { pluginId: 'demo-plugin' } },
@@ -185,6 +187,11 @@ describe('backend: RBAC-матрица контура плагинов (ADR-090 
     const list = await req('/api/v2/plugins', {}, ADMIN);
     expect(list.status).toBe(200);
     expect(await list.json()).toEqual({ plugins: [] });
+
+    // Журнал действий плагинов — чтение реестра (ADMIN), пустой на новом инстансе.
+    const audit = await req('/api/v2/plugins/audit', {}, ADMIN);
+    expect(audit.status).toBe(200);
+    expect(await audit.json()).toEqual({ entries: [] });
 
     const settings = await req('/api/v2/settings/plugins', {}, ADMIN);
     expect(settings.status).toBe(200);

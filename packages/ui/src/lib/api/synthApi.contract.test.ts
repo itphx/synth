@@ -48,7 +48,7 @@ const EXPECTED_API_METHODS = [
   'getUser', 'getUsers', 'getWebhookDeliveries', 'getWebhookSubscription',
   'getWebhookSubscriptions', 'getWorkspacePolicy', 'getWorkspaceRoot', 'getWorkspaceSetting',
   'initGitRepo', 'installPlugin', 'instantiatePipelineTemplate', 'listAgentSshKeys', 'listAudit', 'listBackups', 'listDirectory', 'listEventBindings',
-  'listPipelineRuns', 'listPlugins', 'listSshKeys', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
+  'listPipelineRuns', 'listPluginAudit', 'listPlugins', 'listSshKeys', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
   'patchSessionMode', 'pinMessage', 'probeMcpServer', 'publishProject', 'publishProjectPipeline',
   'putSkillFile', 'readFile', 'regenerateWebhookSecret', 'registerGitRepo',
   'reloadSkills', 'removeCa', 'removeDefaultClient', 'removeGitRepo', 'removePlugin', 'removeProfileCa', 'removeProfileClient', 'removeSessionReference', 'reset', 'resetContextFile',
@@ -74,7 +74,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (316)', () => {
+  it('набор методов совпадает с зафиксированным (317)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

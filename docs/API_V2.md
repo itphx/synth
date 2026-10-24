@@ -1638,6 +1638,7 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 | Метод | Путь | Сборка | RBAC (backend / core) | Назначение / req-resp |
 |---|---|---|---|---|
 | GET | `/api/v2/plugins` | оба | ADMIN / auth | `{plugins: PluginRuntimeEntry[]}` — установленные записи lock + `active`/`mode`; карантин в список не входит |
+| GET | `/api/v2/plugins/audit` | оба | ADMIN / auth | `{entries: PluginAuditEntry[]}` — **журнал действий плагинов** (ADR-090), хвост: `limit` (по умолчанию 50, максимум 500) и необязательный фильтр по имени плагина (`plugin`). Записи «свежие первыми» (новые → старые); в записи — время (`ts`), плагин, действие (`action`), итог (`outcome`: `ok`/`rejected`), код причины (`reason`) и прочие поля записи. Чтение **не** создаёт записей в журнале |
 | GET | `/api/v2/plugins/:name` | оба | ADMIN / auth | `{plugin, manifest?, integrity?}`: манифест из установленного бандла и `PLUGIN_INTEGRITY.json` (best-effort — порча файла не даёт 500); нет в lock → 404 `plugin.not_found` |
 | POST | `/api/v2/plugins/install` | оба | ADMIN или service-key `addons:install` / auth | **Установка из источника** (см. «Источники установки» ниже): `201` — установлено, `202` — нужно подтверждение (`plugin.approval_required`, бандл в карантине), `400` `VALIDATION_ERROR` (тело/pin/имя) или `plugin.source_unavailable` для локального источника, `400` `plugin.manifest_invalid`, `403` `plugin.trust_below_floor`/`plugin.runtime_install_denied`/`plugin.scan_disabled_with_execution`, `409` `plugin.scan_rejected`, `502` `plugin.source_unavailable` для сетевого источника (registry/URL не ответили). **Managed**: локальные источники (`dir`/`archive`) запрещены → `403 LOCAL_INSTALL_DISABLED`; сетевые (`npm`/`url`) разрешены |
 | POST | `/api/v2/plugins/:name/approve` | оба | **ADMIN** / auth | Подтвердить карантин (`202`-установку): проверка подтверждения (content-hash + срок 24 ч, ADR-090 п. 9) → повторные гейты + сверка integrity → `200` установлено; `404` `plugin.not_found`, `409` `plugin.scan_rejected`, `409` `plugin.approval_expired` (подтверждение истекло — 24 ч с момента выдачи), `409` `plugin.approval_stale` (бандл в карантине изменён после выдачи подтверждения) |
@@ -1668,6 +1669,25 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 requirePermission('ADMIN')`); scope `addons:install` открывает установку/активацию, но не
 подтверждение. В core (standalone) — единый `requireAuth`. Отдельного API отзыва нет: подтверждение
 перестаёт действовать, когда перестаёт совпадать хеш (`plugin.approval_stale`) или истекает срок.
+
+**Журнал действий плагинов (`GET /plugins/audit`).** Журнал **append-only**: его пишет порт
+`PluginAuditRepository` (`{dataDir}/audit/plugins.jsonl` в файловом хранилище, таблица `plugin_audit`
+в PostgreSQL). Записи описывают жизненный цикл расширения: `install`, `activate`, `deactivate`,
+`rollback`, `uninstall`, `scan`, `filter`, `token`.
+
+| Параметр | Тип | По умолчанию | Значение |
+|---|---|---|---|
+| `limit` | число | 50 | сколько **последних** записей отдать (максимум 500; не число или `<= 0` — дефолт) |
+| `plugin` | строка | — | фильтр по имени плагина (пусто — все плагины) |
+
+Ответ — `{entries: PluginAuditEntry[]}`: записи «свежие первыми» (новые → старые). Поля записи:
+`id`, `ts` (ISO-8601), `actor`, `action`, `plugin`, `version`, `outcome` (`ok`/`rejected`),
+`reason?` (машиночитаемый код отказа — `plugin.*`/`plugin_filter.*`), плюс, если заполнены,
+`trustLevel`, `scanVerdict`, `scanFindings`, `scanPerformed`, `contentHash`, `mode`, `source`.
+
+Права — как у чтения реестра плагинов: в managed — **ADMIN**, в core — `requireAuth`. Чтение
+журнала — **не действие над плагином**: запись при чтении не создаётся. В UI тот же журнал виден
+в разделе «Плагины» → «Журнал плагинов».
 
 **Источники установки (`POST /plugins/install`).** Тело:
 `{source?: 'dir'|'archive'|'npm'|'url', path?, name?, version?, url?, sha256?, trustLevel?}`.

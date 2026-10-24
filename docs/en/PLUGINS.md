@@ -320,7 +320,29 @@ role.
 
 4. **Status and journal.** `GET /api/v2/plugins` (or the "Plugins" section) shows the version, mode,
    trust, scan verdict, content-hash and activity; the operations journal is
-   `{dataDir}/audit/plugins.jsonl`.
+   `GET /api/v2/plugins/audit` (in the UI — the "Plugin journal" block of the "Plugins" section),
+   the journal file is `{dataDir}/audit/plugins.jsonl`.
+
+### 2.7. Where to read the plugin action journal
+
+The journal is append-only: it is written by the `PluginAuditRepository` port
+(`{dataDir}/audit/plugins.jsonl` in the file storage, the `plugin_audit` table in PostgreSQL).
+There are three ways to read it:
+
+| Way | How | What it returns |
+|---|---|---|
+| UI | Settings → **"Plugins"** → the **"Plugin journal"** block | the latest entries (time, plugin, action, outcome, reason) plus a "Refresh" button |
+| HTTP API | `GET /api/v2/plugins/audit?limit=50&plugin=<name>` | `{entries: [...]}` — the tail of the journal; `limit` (50 by default, 500 at most), `plugin` — a filter by the plugin name |
+| File | `{dataDir}/audit/plugins.jsonl` (one line — one entry) | the raw journal in full |
+
+The rights to read the journal are the same as for reading the plugin registry: the administrator in
+the server mode, the instance owner in the local (standalone) mode. **Reading the journal does not
+change the plugin state** and creates no entries: it is a view, not an action on a plugin.
+
+The entries describe the extension lifecycle: `install`, `activate`, `deactivate`, `rollback`,
+`uninstall`, `scan`, `filter`, `token`. An entry carries the time (`ts`), the actor (`actor`), the
+action, the outcome (`outcome`: `ok`/`rejected`) and the **reason code** (`reason`) — it shows which
+gate the plugin did not pass.
 
 ---
 
@@ -1095,8 +1117,9 @@ Check on your plugin the same things the passport checks:
 2. `synth plugin install ./my-plugin --trust trusted` → restart the instance;
 3. the "Plugins" section: activity, scan verdict, trust, mode;
 4. `GET /api/v2/sessions/:id/prompt` — the block in the manifest;
-5. the journal `{dataDir}/audit/plugins.jsonl` — the `install`/`activate`/`filter` actions and the
-   refusal codes.
+5. the plugin action journal — the "Plugin journal" block of the "Plugins" section or
+   `GET /api/v2/plugins/audit` (the `install`/`activate`/`filter` actions and the
+   refusal codes); the journal file is `{dataDir}/audit/plugins.jsonl`.
 
 ---
 
@@ -1346,7 +1369,8 @@ workaround, not the norm for an author.
 ## 12. Error reference
 
 The reason codes are `PLUGIN_AUDIT_REASONS` (`packages/shared/src/types/plugin-audit.ts`), 31 values.
-A code is visible in the API answer (`reason`), in the journal `{dataDir}/audit/plugins.jsonl` and
+A code is visible in the API answer (`reason`), in the plugin journal
+(`GET /api/v2/plugins/audit` or the file `{dataDir}/audit/plugins.jsonl`) and
 in the CLI stderr.
 
 ### 12.1. Installation and source
