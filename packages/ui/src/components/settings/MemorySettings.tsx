@@ -9,6 +9,7 @@ import { useProjectsStore } from '@/stores/projectsStore'
 import { Button } from '../ui/button'
 import { Icon } from '../icon/Icon'
 import { SelectContent, SelectItem } from '../ui/select'
+import { MemoryGraphCanvas } from './MemoryGraphCanvas'
 import {
   InfoField,
   NumberField,
@@ -1567,6 +1568,17 @@ export function MemorySettings() {
           >
             {t('common.loading')}
           </div>
+        )}
+
+        {/* Визуализация графа: клик по узлу — тот же обработчик, что клик по
+            сущности в списке (подставляет `entity` и перестраивает граф).
+            Пустой граф канвас не рисует — состояние показывает секция. */}
+        {graph && (
+          <MemoryGraphCanvas
+            graph={graph}
+            selectedEntity={graphSelected?.name}
+            onSelectEntity={(name) => selectGraphEntity({ name })}
+          />
         )}
 
         {graph && (

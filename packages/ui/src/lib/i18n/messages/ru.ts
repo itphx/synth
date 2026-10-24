@@ -693,6 +693,7 @@ export const dict = {
   'rightPanel.stats.promptBlock.summary': 'Сжатый диалог',
   'rightPanel.stats.promptBlock.interview': 'Опросник',
   'rightPanel.stats.promptBlock.tools': 'Описание инструментов',
+  'rightPanel.stats.promptBlock.plugin.tools': 'Плагинные инструменты',
   'rightPanel.stats.promptBlock.mcp.tools': 'MCP-инструменты',
   'rightPanel.stats.promptBlock.mcp.servers': 'MCP-серверы',
   'rightPanel.stats.promptBlock.mcp.status': 'Статус MCP',
@@ -3489,6 +3490,15 @@ export const dict = {
   'settings.memory.graph.factsTitle': 'Связанные факты',
   'settings.memory.graph.factsEmpty': 'Связанных фактов нет',
   'settings.memory.graph.providerUnavailable': 'Плагин памяти не активирован.',
+  'settings.memory.graph.canvas.ariaLabel':
+    'Граф памяти: сущностей — {entities}, фактов — {facts}, связей — {edges}',
+  'settings.memory.graph.canvas.hint':
+    'Кликните по сущности в графе, чтобы перестроить его вокруг неё',
+  'settings.memory.graph.canvas.legendEntity': 'Сущность',
+  'settings.memory.graph.canvas.legendFact': 'Факт',
+  'settings.memory.graph.canvas.relationUnknown': 'связана',
+  'settings.memory.graph.canvas.relationMentions': 'упоминает',
+  'settings.memory.graph.canvas.relationCoOccurs': 'встречается с',
 
   'sessionCreate.project': 'Проект',
 

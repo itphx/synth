@@ -799,6 +799,25 @@ describe('MemorySettings — граф памяти', () => {
     expect((byTestId(container, 'memory-graph-entity') as HTMLInputElement).value).toBe('Fleet')
   })
 
+  it('canvas графа появляется после построения, клик по узлу перестраивает граф', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-graph-build')
+
+    const canvas = byTestId(container, 'memory-graph-canvas')
+    expect(canvas).toBeTruthy()
+
+    const node = container.querySelector('[data-node-id="entity:Fleet"]')
+    expect(node).toBeTruthy()
+    await act(async () => {
+      ;(node as Element).dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await flush()
+
+    expect(mocks.getMemoryGraph).toHaveBeenLastCalledWith({ entity: 'Fleet', depth: 1 })
+    expect((byTestId(container, 'memory-graph-entity') as HTMLInputElement).value).toBe('Fleet')
+  })
+
   it('статистика графа показывается в шапке раздела', async () => {
     const container = await renderSettings()
 

@@ -713,6 +713,7 @@ export const dict = {
   'rightPanel.stats.promptBlock.summary': 'Compressed dialog',
   'rightPanel.stats.promptBlock.interview': 'Interview prompt',
   'rightPanel.stats.promptBlock.tools': 'Tool descriptions',
+  'rightPanel.stats.promptBlock.plugin.tools': 'Plugin tools',
   'rightPanel.stats.promptBlock.mcp.tools': 'MCP tools',
   'rightPanel.stats.promptBlock.mcp.servers': 'MCP servers',
   'rightPanel.stats.promptBlock.mcp.status': 'MCP status',
@@ -3142,6 +3143,15 @@ export const dict = {
   'settings.memory.graph.factsTitle': 'Related facts',
   'settings.memory.graph.factsEmpty': 'No related facts yet',
   'settings.memory.graph.providerUnavailable': 'The memory plugin is not activated.',
+  'settings.memory.graph.canvas.ariaLabel':
+    'Memory graph: {entities} entities, {facts} facts, {edges} relations',
+  'settings.memory.graph.canvas.hint':
+    'Click an entity in the graph to rebuild it around that entity',
+  'settings.memory.graph.canvas.legendEntity': 'Entity',
+  'settings.memory.graph.canvas.legendFact': 'Fact',
+  'settings.memory.graph.canvas.relationUnknown': 'related',
+  'settings.memory.graph.canvas.relationMentions': 'mentions',
+  'settings.memory.graph.canvas.relationCoOccurs': 'co-occurs',
 
   'sessionCreate.project': 'Project',
 
