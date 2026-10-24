@@ -229,3 +229,55 @@ describe('memoryApi — консолидация фактов', () => {
     })
   })
 })
+
+describe('memoryApi — граф памяти', () => {
+  const graph = {
+    nodes: [
+      { id: 'entity-fleet', kind: 'entity', name: 'Fleet' },
+      {
+        id: 'fact-1',
+        kind: 'fact',
+        factId: 'fact-1',
+        text: 'Деплой в test идёт через Fleet.',
+        entity: 'Fleet',
+      },
+    ],
+    edges: [{ from: 'entity-fleet', to: 'fact-1', relation: 'mentions' }],
+    stats: { entities: 1, facts: 1, edges: 1 },
+  }
+
+  it('getMemoryGraph: GET /memory/graph — фильтры уходят в query-строку', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(graph))
+
+    await expect(
+      synthApi.getMemoryGraph({ entity: 'Fleet', depth: 2, limit: 50, projectId: 'project-1' }),
+    ).resolves.toEqual(graph)
+
+    const url = urlOf(0)
+    expect(url.startsWith('/api/v2/memory/graph?')).toBe(true)
+    expect(url).toContain('entity=Fleet')
+    expect(url).toContain('depth=2')
+    expect(url).toContain('limit=50')
+    expect(url).toContain('projectId=project-1')
+  })
+
+  it('getMemoryGraph: без фильтров — пустой query; 422 несёт status и code', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(graph))
+
+    await synthApi.getMemoryGraph()
+    expect(urlOf(0)).toBe('/api/v2/memory/graph')
+
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        { error: { code: 'MEMORY_GRAPH_FAILED', message: 'graph build failed' } },
+        422,
+      ),
+    )
+
+    await expect(synthApi.getMemoryGraph({ depth: 3 })).rejects.toMatchObject({
+      status: 422,
+      code: 'MEMORY_GRAPH_FAILED',
+      message: 'graph build failed',
+    })
+  })
+})

@@ -310,6 +310,11 @@ export {
   MEMORY_CONSOLIDATION_THRESHOLD_MIN,
   MEMORY_CONSOLIDATION_THRESHOLD_MAX,
   MEMORY_CONSOLIDATION_THRESHOLD_DEFAULT,
+  MEMORY_GRAPH_DEPTH_MIN,
+  MEMORY_GRAPH_DEPTH_MAX,
+  MEMORY_GRAPH_DEPTH_DEFAULT,
+  MEMORY_GRAPH_LIMIT_MIN,
+  MEMORY_GRAPH_LIMIT_MAX,
 } from './memory'
 export type {
   MemoryReadiness,
@@ -332,6 +337,12 @@ export type {
   MemoryConsolidationCluster,
   MemoryConsolidationReport,
   ConsolidateMemoryInput,
+  MemoryGraphNodeKind,
+  MemoryGraphNode,
+  MemoryGraphEdge,
+  MemoryGraphStats,
+  MemoryGraph,
+  MemoryGraphParams,
 } from './memory'
 
 export const synthApi = {

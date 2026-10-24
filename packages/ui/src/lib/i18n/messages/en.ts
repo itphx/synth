@@ -3116,6 +3116,33 @@ export const dict = {
     'Clusters: {clusters}, superseded: {superseded}, kept: {kept} (dry run)',
   'settings.memory.consolidate.providerUnavailable': 'The memory plugin is not activated.',
 
+  // --- Граф памяти (PROP-047) ---
+  'settings.memory.graph.title': 'Graph',
+  'settings.memory.graph.description':
+    'Entities, facts and the relations between them: relations are built from `[[entity]]` mentions in the fact text.',
+  'settings.memory.graph.project': 'Project',
+  'settings.memory.graph.projectAll': 'All projects',
+  'settings.memory.graph.entity': 'Entity',
+  'settings.memory.graph.entityPlaceholder': 'Entity name (empty — the whole graph)',
+  'settings.memory.graph.depth': 'Depth',
+  'settings.memory.graph.depthHint': 'From 1 to 3.',
+  'settings.memory.graph.depthInvalid': 'The depth must be between 1 and 3.',
+  'settings.memory.graph.build': 'Build',
+  'settings.memory.graph.stats': 'Entities: {entities}, facts: {facts}, relations: {edges}',
+  'settings.memory.graph.empty': 'No relations yet: add `[[entity]]` to the fact text',
+  'settings.memory.graph.entitiesTitle': 'Entities',
+  'settings.memory.graph.entitiesEmpty': 'No entities yet',
+  'settings.memory.graph.entityFacts': '{count, plural, one {# fact} other {# facts}}',
+  'settings.memory.graph.selectedTitle': 'Entity: {name}',
+  'settings.memory.graph.relationsTitle': 'Relations',
+  'settings.memory.graph.relationsEmpty': 'No relations yet',
+  'settings.memory.graph.relationUnknown': 'related',
+  'settings.memory.graph.relationMentions': 'mentions',
+  'settings.memory.graph.relationCoOccurs': 'co-occurs',
+  'settings.memory.graph.factsTitle': 'Related facts',
+  'settings.memory.graph.factsEmpty': 'No related facts yet',
+  'settings.memory.graph.providerUnavailable': 'The memory plugin is not activated.',
+
   'sessionCreate.project': 'Project',
 
   // --- ADR-102: аналитика и отчёты (UI, волна 2) ---
@@ -3480,6 +3507,8 @@ export const dict = {
     'Facts remembered by the memory plugin: text, kind, status, confidence and provenance. The section only reads.',
   'settings.help.memory.section.memory-indexes':
     'Built corpora for retrieval: source, state, generation and the embedding fingerprint (model, dimension, chunker version).',
+  'settings.help.memory.section.memory-graph':
+    'Graph of the memory plugin: entities extracted from facts and the relations between them. Click an entity to rebuild the graph around it.',
   'settings.help.debug.section.debug-ai': 'Log levels for AI providers and models; includes every group except the service ones.',
   'settings.help.debug.section.debug-service': 'Instance service groups: routes, storage, WebSocket, and the debug output itself.',
   'settings.help.debug.levels': 'NONE — off, DEBUG — verbose, INFO — regular events, WARNING — problems, ERROR — errors only.',

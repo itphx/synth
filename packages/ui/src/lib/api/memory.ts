@@ -1,7 +1,7 @@
 // memory: домен API v2 (ADR-095) — объект `memoryApi` и его DTO.
 //
 // ADR-107 / PROP-047: портал памяти — состояние провайдера памяти, факты и
-// индексы. Чтение (`status`/`facts`/`indexes`) плюс операции с индексами:
+// индексы. Чтение (`status`/`facts`/`indexes`/`graph`) плюс операции с индексами:
 // создание, пересборка и удаление, и консолидация фактов (дубли → заменённые).
 // Отзыв факта в мутации не входит.
 //
@@ -200,6 +200,63 @@ export interface ConsolidateMemoryInput {
   dryRun?: boolean
 }
 
+/** Вид узла графа памяти: сущность (упоминание) или факт. */
+export type MemoryGraphNodeKind = 'entity' | 'fact'
+
+/** Узел графа памяти — сущность или факт. */
+export interface MemoryGraphNode {
+  id: string
+  kind: MemoryGraphNodeKind
+  /** Отображаемое имя сущности (для `kind: 'entity'`). */
+  name?: string
+  /** id факта-источника (для `kind: 'fact'`). */
+  factId?: string
+  /** Текст факта-источника, обрезанный сервером (для `kind: 'fact'`). */
+  text?: string
+  /**
+   * Ключ сущности (для `kind: 'entity'`). У узла-факта — упомянутая
+   * сущность, если сервер её прислал; связь факта с сущностями иначе идёт
+   * через рёбра.
+   */
+  entity?: string
+}
+
+/** Ребро графа памяти — связь между двумя узлами. */
+export interface MemoryGraphEdge {
+  /** id узла-источника. */
+  from: string
+  /** id узла-приёмника. */
+  to: string
+  /** Тип связи (`mentions`, `related`, …). */
+  relation?: string
+}
+
+/** Счётчики графа памяти. */
+export interface MemoryGraphStats {
+  entities: number
+  facts: number
+  edges: number
+}
+
+/** Граф памяти — узлы, связи и счётчики. */
+export interface MemoryGraph {
+  nodes: MemoryGraphNode[]
+  edges: MemoryGraphEdge[]
+  stats: MemoryGraphStats
+}
+
+/** Фильтры выборки графа памяти (`GET /memory/graph`). */
+export interface MemoryGraphParams {
+  /** Сущность-центр графа (не задана — весь граф). */
+  entity?: string
+  /** Глубина обхода (1..3). */
+  depth?: number
+  /** Предел числа узлов (1..200). */
+  limit?: number
+  /** Проект-владелец фактов. */
+  projectId?: string
+}
+
 /** Размер страницы фактов по умолчанию — как на сервере. */
 export const MEMORY_FACTS_DEFAULT_LIMIT = 50
 
@@ -217,6 +274,21 @@ export const MEMORY_CONSOLIDATION_THRESHOLD_MAX = 0.99
 
 /** Порог схожести по умолчанию — консервативный (почти только явные дубли). */
 export const MEMORY_CONSOLIDATION_THRESHOLD_DEFAULT = 0.9
+
+/** Минимальная глубина обхода графа (сервер: 400 вне 1..3). */
+export const MEMORY_GRAPH_DEPTH_MIN = 1
+
+/** Максимальная глубина обхода графа. */
+export const MEMORY_GRAPH_DEPTH_MAX = 3
+
+/** Глубина обхода графа по умолчанию. */
+export const MEMORY_GRAPH_DEPTH_DEFAULT = 1
+
+/** Минимальный предел числа узлов графа (сервер: 400 вне 1..200). */
+export const MEMORY_GRAPH_LIMIT_MIN = 1
+
+/** Максимальный предел числа узлов графа. */
+export const MEMORY_GRAPH_LIMIT_MAX = 200
 
 /** Собирает query-строку: пустые и незаданные значения не уходят на сервер. */
 function buildQuery(params: Record<string, string | number | undefined>): string {
@@ -303,5 +375,25 @@ export const memoryApi = {
       method: 'POST',
       body: JSON.stringify(input),
     })
+  },
+
+  /**
+   * GET /memory/graph — граф памяти: сущности, факты и связи между ними.
+   *
+   * Пустая `entity` — весь граф; `depth` — глубина обхода (1..3),
+   * `limit` — предел числа узлов (1..200).
+   *
+   * Ошибки сервера: 400 `VALIDATION_ERROR` (глубина/предел вне диапазона),
+   * 404 `PROJECT_NOT_FOUND`, 409 `MEMORY_PROVIDER_UNAVAILABLE`,
+   * 422 `MEMORY_GRAPH_FAILED`.
+   */
+  async getMemoryGraph(params: MemoryGraphParams = {}): Promise<MemoryGraph> {
+    const query = buildQuery({
+      entity: params.entity,
+      depth: params.depth,
+      limit: params.limit,
+      projectId: params.projectId,
+    })
+    return fetchJSON<MemoryGraph>(`${BASE_URL}/memory/graph${query}`)
   },
 }

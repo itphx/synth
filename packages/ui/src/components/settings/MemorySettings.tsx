@@ -22,6 +22,9 @@ import {
   MEMORY_CONSOLIDATION_THRESHOLD_DEFAULT,
   MEMORY_CONSOLIDATION_THRESHOLD_MAX,
   MEMORY_CONSOLIDATION_THRESHOLD_MIN,
+  MEMORY_GRAPH_DEPTH_DEFAULT,
+  MEMORY_GRAPH_DEPTH_MAX,
+  MEMORY_GRAPH_DEPTH_MIN,
   synthApi,
   type MemoryConsolidationReport,
   type MemoryFact,
@@ -29,6 +32,9 @@ import {
   type MemoryFactListParams,
   type MemoryFactStatus,
   type MemoryFactStatusFilter,
+  type MemoryGraph,
+  type MemoryGraphEdge,
+  type MemoryGraphNode,
   type MemoryIndex,
   type MemoryIndexList,
   type MemoryIndexSourceKind,
@@ -117,6 +123,12 @@ const PROJECT_ALL = '__all__'
 /** Интервал автообновления статуса, пока индексы собираются (мс). */
 const INDEX_POLL_INTERVAL_MS = 3000
 
+/** Максимальная длина текста факта в списке графа (обрезается с многоточием). */
+const GRAPH_FACT_TEXT_MAX = 120
+
+/** Максимальная длина подписи узла в строке связи. */
+const GRAPH_LABEL_TEXT_MAX = 60
+
 /** Функция перевода UI-словаря. */
 type Translate = (
   key: string,
@@ -141,6 +153,91 @@ const statusOf = (err: unknown): number | undefined =>
 function formatConfidence(confidence: number): string {
   if (!Number.isFinite(confidence)) return '—'
   return confidence.toFixed(2)
+}
+
+/**
+ * Совпадение ссылки на сущность с узлом графа: по имени или по id
+ * (регистр не важен — упоминание в тексте факта может отличаться).
+ */
+function matchesEntity(
+  reference: string | undefined,
+  entity: { id: string; name: string },
+): boolean {
+  const ref = (reference ?? '').trim()
+  if (!ref) return false
+  if (ref === entity.id || ref === entity.name) return true
+  return ref.toLowerCase() === entity.name.toLowerCase()
+}
+
+/** Обрезка длинного текста факта в списке графа. */
+function truncateGraphText(text: string): string {
+  const value = text.trim()
+  if (value.length <= GRAPH_FACT_TEXT_MAX) return value
+  return `${value.slice(0, GRAPH_FACT_TEXT_MAX)}…`
+}
+
+/** Узлы графа по id — для разрешения концов рёбер. */
+function indexGraphNodes(nodes: MemoryGraphNode[]): Map<string, MemoryGraphNode> {
+  const byId = new Map<string, MemoryGraphNode>()
+  for (const node of nodes) byId.set(node.id, node)
+  return byId
+}
+
+/**
+ * Подпись узла графа: имя сущности или обрезанный текст факта.
+ *
+ * Узла-факта без текста (например, обрезанного сервером) показываем по id.
+ */
+function graphNodeLabel(node: MemoryGraphNode | undefined, fallback: string): string {
+  if (!node) return fallback
+  if (node.kind === 'entity') return node.name?.trim() || node.id
+  const text = (node.text ?? '').trim()
+  if (!text) return node.factId ?? node.id
+  return text.length > GRAPH_LABEL_TEXT_MAX ? `${text.slice(0, GRAPH_LABEL_TEXT_MAX)}…` : text
+}
+
+/**
+ * Факты, связанные с сущностью.
+ *
+ * Основной источник — рёбра «факт → сущность» (связь `mentions`); запасной
+ * вариант — поле `entity` узла-факта (если сервер его прислал).
+ */
+function factsOfEntity(
+  nodes: MemoryGraphNode[],
+  edges: MemoryGraphEdge[],
+  entity: { id: string; name: string },
+): MemoryGraphNode[] {
+  const byId = indexGraphNodes(nodes)
+  const linked = new Set<string>()
+  for (const edge of edges) {
+    if (edge.from === entity.id) {
+      const other = byId.get(edge.to)
+      if (other?.kind === 'fact') linked.add(other.id)
+    } else if (edge.to === entity.id) {
+      const other = byId.get(edge.from)
+      if (other?.kind === 'fact') linked.add(other.id)
+    }
+  }
+  return nodes.filter(
+    (node) => node.kind === 'fact' && (linked.has(node.id) || matchesEntity(node.entity, entity)),
+  )
+}
+
+/** Связи сущности: рёбра, у которых один из концов — её узел. */
+function relationsOfEntity(
+  nodes: MemoryGraphNode[],
+  edges: MemoryGraphEdge[],
+  entity: { id: string },
+): Array<{ key: string; from: string; to: string; relation: string }> {
+  const byId = indexGraphNodes(nodes)
+  return edges
+    .filter((edge) => edge.from === entity.id || edge.to === entity.id)
+    .map((edge) => ({
+      key: `${edge.from}->${edge.to}:${edge.relation ?? ''}`,
+      from: graphNodeLabel(byId.get(edge.from), edge.from),
+      to: graphNodeLabel(byId.get(edge.to), edge.to),
+      relation: edge.relation ?? '',
+    }))
 }
 
 export function MemorySettings() {
@@ -205,6 +302,18 @@ export function MemorySettings() {
   } | null>(null)
   /** Защита от двойного запуска: состояние обновляется асинхронно, ref — сразу. */
   const consolidatingRef = useRef(false)
+
+  // Граф памяти: фильтры (проект/сущность/глубина), результат и выбранная
+  // сущность. Пустая сущность — весь граф.
+  const [graph, setGraph] = useState<MemoryGraph | null>(null)
+  const [graphLoading, setGraphLoading] = useState(false)
+  const [graphError, setGraphError] = useState<string | null>(null)
+  const [graphDepthError, setGraphDepthError] = useState<string | null>(null)
+  const [graphProviderHint, setGraphProviderHint] = useState(false)
+  const [graphProject, setGraphProject] = useState<string>(PROJECT_ALL)
+  const [graphEntityInput, setGraphEntityInput] = useState('')
+  const [graphDepth, setGraphDepth] = useState(String(MEMORY_GRAPH_DEPTH_DEFAULT))
+  const [graphSelectedName, setGraphSelectedName] = useState<string | null>(null)
 
   /** 503 — сервис памяти не сконфигурирован: портал недоступен. */
   const describeError = useCallback(
@@ -325,11 +434,10 @@ export function MemorySettings() {
     [projects],
   )
 
-  /** Реестр проектов нужен только при открытой форме — грузим тогда. */
+  /** Реестр проектов нужен селектам (индексы, консолидация, граф). */
   useEffect(() => {
-    if (!formOpen && !consolidateOpen) return
     void useProjectsStore.getState().loadProjects()
-  }, [consolidateOpen, formOpen])
+  }, [])
 
   /** Сброс формы создания индекса. */
   const resetForm = useCallback(() => {
@@ -592,6 +700,94 @@ export function MemorySettings() {
     validateThreshold,
   ])
 
+  /**
+   * Глубина обхода графа: вне 1..3 — инлайн-ошибка, запрос не уходит
+   * (сервер ответил бы 400 `VALIDATION_ERROR`).
+   */
+  const validateGraphDepth = useCallback(
+    (raw: string): number | null => {
+      const value = Number(raw.trim())
+      if (
+        !raw.trim() ||
+        !Number.isInteger(value) ||
+        value < MEMORY_GRAPH_DEPTH_MIN ||
+        value > MEMORY_GRAPH_DEPTH_MAX
+      ) {
+        setGraphDepthError(t('settings.memory.graph.depthInvalid'))
+        return null
+      }
+      setGraphDepthError(null)
+      return value
+    },
+    [t],
+  )
+
+  /**
+   * Ошибка построения графа: 409 — плагин памяти не активен (подсказка),
+   * 400 — глубина вне диапазона (инлайн-ошибка), прочие — баннер с текстом
+   * сервера (в т.ч. 422 `MEMORY_GRAPH_FAILED`).
+   */
+  const handleGraphError = useCallback(
+    (err: unknown) => {
+      const code = statusOf(err)
+      if (code === 409) {
+        setProviderUnavailable(true)
+        setGraphProviderHint(true)
+        setGraphError(null)
+        return
+      }
+      if (code === 400) {
+        setGraphDepthError(t('settings.memory.graph.depthInvalid'))
+        setGraphError(null)
+        return
+      }
+      setGraphProviderHint(false)
+      setGraphError(
+        describeError(err, err instanceof Error ? err.message : t('common.error')),
+      )
+    },
+    [describeError, t],
+  )
+
+  /**
+   * Построение графа по текущим фильтрам. `override.entity` — сущность,
+   * выбранная в списке: клик подставляет её в фильтр и перестраивает граф.
+   */
+  const buildGraph = useCallback(
+    async (override?: { entity?: string }) => {
+      const depth = validateGraphDepth(graphDepth)
+      if (depth === null) return
+      const entity = (override?.entity ?? graphEntityInput).trim()
+      setGraphLoading(true)
+      setGraphError(null)
+      setGraphProviderHint(false)
+      try {
+        setGraph(
+          await synthApi.getMemoryGraph({
+            ...(entity ? { entity } : {}),
+            depth,
+            ...(graphProject !== PROJECT_ALL ? { projectId: graphProject } : {}),
+          }),
+        )
+        setGraphSelectedName(entity || null)
+      } catch (err) {
+        handleGraphError(err)
+      } finally {
+        setGraphLoading(false)
+      }
+    },
+    [graphDepth, graphEntityInput, graphProject, handleGraphError, validateGraphDepth],
+  )
+
+  /** Клик по сущности в списке: подставляет её в фильтр и перестраивает граф. */
+  const selectGraphEntity = useCallback(
+    (entity: { name: string }) => {
+      setGraphEntityInput(entity.name)
+      void buildGraph({ entity: entity.name })
+    },
+    [buildGraph],
+  )
+
   /** «Обновить» — перезапрос всех трёх срезов портала. */
   const handleRefresh = useCallback(async () => {
     if (refreshing) return
@@ -663,6 +859,61 @@ export function MemorySettings() {
   const factsFrom = factsItems.length > 0 ? offset + 1 : 0
   const factsTo = offset + factsItems.length
   const hasNextPage = factsItems.length > 0 && offset + factsItems.length < factsTotal
+
+  /** Сущности графа: имя и число связанных с ними фактов. */
+  const graphEntities = useMemo(() => {
+    const nodes = graph?.nodes ?? []
+    const edges = graph?.edges ?? []
+    return nodes
+      .filter((node) => node.kind === 'entity')
+      .map((node) => {
+        const name = node.name?.trim() || node.id
+        const entity = { id: node.id, name }
+        return {
+          id: node.id,
+          name,
+          factCount: factsOfEntity(nodes, edges, entity).length,
+        }
+      })
+  }, [graph])
+
+  /** Выбранная сущность — узел графа по имени фильтра (если такой есть). */
+  const graphSelected = useMemo(() => {
+    const name = graphSelectedName
+    if (!name) return null
+    const exact = graphEntities.find((entity) => entity.name === name)
+    if (exact) return exact
+    const lower = name.toLowerCase()
+    return graphEntities.find((entity) => entity.name.toLowerCase() === lower) ?? null
+  }, [graphEntities, graphSelectedName])
+
+  /** Связи выбранной сущности: «откуда —rel→ куда». */
+  const graphRelations = useMemo(() => {
+    const selected = graphSelected
+    if (!selected || !graph) return []
+    return relationsOfEntity(graph.nodes, graph.edges, selected)
+  }, [graph, graphSelected])
+
+  /**
+   * Подпись связи: известные метки плагина переводим, пользовательские
+   * (`[[сущность|связь]]`) показываем как есть.
+   */
+  const graphRelationLabel = useCallback(
+    (relation: string): string => {
+      if (!relation) return t('settings.memory.graph.relationUnknown')
+      if (relation === 'mentions') return t('settings.memory.graph.relationMentions')
+      if (relation === 'co_occurs') return t('settings.memory.graph.relationCoOccurs')
+      return relation
+    },
+    [t],
+  )
+
+  /** Связанные с выбранной сущностью факты. */
+  const graphFacts = useMemo(() => {
+    const selected = graphSelected
+    if (!selected || !graph) return []
+    return factsOfEntity(graph.nodes, graph.edges, selected)
+  }, [graph, graphSelected])
 
   return (
     <SettingsPanel
@@ -1202,7 +1453,237 @@ export function MemorySettings() {
         )}
       </SettingsSection>
 
-      {/* 3. Индексы: корпуса для поиска + операции с индексами. */}
+      {/* 3. Граф: сущности, связи и связанные факты (только списки, без canvas). */}
+      <SettingsSection
+        id="memory-graph"
+        title={t('settings.memory.graph.title')}
+        description={t('settings.memory.graph.description')}
+        tooltip={t('settings.help.memory.section.memory-graph')}
+      >
+        {graph && (
+          <div
+            className="text-xs text-muted-foreground break-words"
+            data-testid="memory-graph-stats"
+          >
+            {t('settings.memory.graph.stats', {
+              entities: graph.stats.entities,
+              facts: graph.stats.facts,
+              edges: graph.stats.edges,
+            })}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 min-w-0">
+          <SelectField
+            label={t('settings.memory.graph.project')}
+            value={graphProject}
+            onValueChange={setGraphProject}
+            ariaLabel={t('settings.memory.graph.project')}
+            triggerTestId="memory-graph-project"
+            items={[
+              { value: PROJECT_ALL, label: t('settings.memory.graph.projectAll') },
+              ...projectItems,
+            ]}
+          >
+            <SelectContent>
+              <SelectItem value={PROJECT_ALL}>
+                {t('settings.memory.graph.projectAll')}
+              </SelectItem>
+              {projectItems.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </SelectField>
+
+          <TextField
+            label={t('settings.memory.graph.entity')}
+            placeholder={t('settings.memory.graph.entityPlaceholder')}
+            value={graphEntityInput}
+            onChange={(event) => setGraphEntityInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void buildGraph()
+              }
+            }}
+            containerClassName="min-w-0"
+            data-testid="memory-graph-entity"
+          />
+
+          <NumberField
+            label={t('settings.memory.graph.depth')}
+            description={t('settings.memory.graph.depthHint')}
+            value={graphDepth}
+            onChange={(event) => setGraphDepth(event.target.value)}
+            min={MEMORY_GRAPH_DEPTH_MIN}
+            max={MEMORY_GRAPH_DEPTH_MAX}
+            step={1}
+            error={graphDepthError ?? undefined}
+            data-testid="memory-graph-depth"
+          />
+
+          <div className="flex items-end min-w-0">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => void buildGraph()}
+              disabled={graphLoading}
+              data-testid="memory-graph-build"
+            >
+              <Icon
+                name={graphLoading ? 'loader-2' : 'links-line'}
+                className={cn('size-3.5', graphLoading && 'animate-spin')}
+              />
+              {t('settings.memory.graph.build')}
+            </Button>
+          </div>
+        </div>
+
+        {graphProviderHint && (
+          <p
+            data-testid="memory-graph-provider-hint"
+            className="text-xs text-status-warning break-words"
+          >
+            {t('settings.memory.graph.providerUnavailable')}
+          </p>
+        )}
+
+        {graphError && (
+          <div
+            role="alert"
+            data-testid="memory-graph-error"
+            className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive break-words"
+          >
+            {graphError}
+          </div>
+        )}
+
+        {graphLoading && (
+          <div
+            className="py-2 text-center text-xs text-muted-foreground"
+            data-testid="memory-graph-loading"
+          >
+            {t('common.loading')}
+          </div>
+        )}
+
+        {graph && (
+          <div className="space-y-1.5 min-w-0">
+            <div className="text-xs font-medium text-foreground break-words">
+              {t('settings.memory.graph.entitiesTitle')}
+            </div>
+            {graphEntities.length === 0 ? (
+              <p
+                className="text-xs text-muted-foreground break-words"
+                data-testid="memory-graph-entities-empty"
+              >
+                {t('settings.memory.graph.entitiesEmpty')}
+              </p>
+            ) : (
+              <ul className="space-y-1 min-w-0" data-testid="memory-graph-entities">
+                {graphEntities.map((entity) => (
+                  <li key={entity.id} className="min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => selectGraphEntity(entity)}
+                      className={cn(
+                        'block max-w-full truncate text-left text-xs text-foreground',
+                        graphSelected?.id === entity.id && 'font-medium text-primary',
+                      )}
+                      title={entity.name}
+                      data-testid={`memory-graph-entity-${entity.id}`}
+                    >
+                      {entity.name}
+                      <span className="ml-1.5 text-muted-foreground">
+                        {t('settings.memory.graph.entityFacts', { count: entity.factCount })}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {graph && graph.edges.length === 0 && (
+          <div
+            className="flex flex-col items-center gap-1 py-4 text-center text-muted-foreground"
+            data-testid="memory-graph-empty"
+          >
+            <Icon name="links-line" className="size-6 opacity-40" />
+            <p className="text-xs">{t('settings.memory.graph.empty')}</p>
+          </div>
+        )}
+
+        {graphSelected && (
+          <div
+            className="space-y-2 rounded-lg border border-border/60 bg-surface-inset p-3 min-w-0"
+            data-testid="memory-graph-selected"
+          >
+            <div className="text-xs font-medium text-foreground break-words">
+              {t('settings.memory.graph.selectedTitle', { name: graphSelected.name })}
+            </div>
+
+            <div className="space-y-1 min-w-0">
+              <div className="text-xs font-medium text-muted-foreground break-words">
+                {t('settings.memory.graph.relationsTitle')}
+              </div>
+              {graphRelations.length === 0 ? (
+                <p
+                  className="text-xs text-muted-foreground break-words"
+                  data-testid="memory-graph-relations-empty"
+                >
+                  {t('settings.memory.graph.relationsEmpty')}
+                </p>
+              ) : (
+                <ul className="space-y-1 min-w-0" data-testid="memory-graph-relations">
+                  {graphRelations.map((relation) => (
+                    <li
+                      key={relation.key}
+                      className="text-xs text-foreground break-words"
+                      data-testid={`memory-graph-relation-${relation.key}`}
+                    >
+                      {relation.from} —{graphRelationLabel(relation.relation)}
+                      → {relation.to}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="space-y-1 min-w-0">
+              <div className="text-xs font-medium text-muted-foreground break-words">
+                {t('settings.memory.graph.factsTitle')}
+              </div>
+              {graphFacts.length === 0 ? (
+                <p
+                  className="text-xs text-muted-foreground break-words"
+                  data-testid="memory-graph-facts-empty"
+                >
+                  {t('settings.memory.graph.factsEmpty')}
+                </p>
+              ) : (
+                <ul className="space-y-1 min-w-0" data-testid="memory-graph-facts">
+                  {graphFacts.map((fact) => (
+                    <li
+                      key={fact.id}
+                      className="text-xs text-muted-foreground break-words"
+                      title={fact.text}
+                      data-testid={`memory-graph-fact-${fact.id}`}
+                    >
+                      {truncateGraphText(fact.text ?? '')}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+      </SettingsSection>
+
+      {/* 4. Индексы: корпуса для поиска + операции с индексами. */}
       <SettingsSection
         id="memory-indexes"
         title={t('settings.memory.indexes.title')}

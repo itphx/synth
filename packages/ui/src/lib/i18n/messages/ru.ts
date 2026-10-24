@@ -3462,6 +3462,34 @@ export const dict = {
     'Кластеров: {clusters}, заменено: {superseded}, оставлено: {kept} (пробный прогон)',
   'settings.memory.consolidate.providerUnavailable': 'Плагин памяти не активирован.',
 
+  // --- Граф памяти (PROP-047) ---
+  'settings.memory.graph.title': 'Граф',
+  'settings.memory.graph.description':
+    'Сущности, факты и связи между ними: связи строятся по упоминаниям `[[сущность]]` в тексте факта.',
+  'settings.memory.graph.project': 'Проект',
+  'settings.memory.graph.projectAll': 'Все проекты',
+  'settings.memory.graph.entity': 'Сущность',
+  'settings.memory.graph.entityPlaceholder': 'Имя сущности (пусто — весь граф)',
+  'settings.memory.graph.depth': 'Глубина',
+  'settings.memory.graph.depthHint': 'От 1 до 3.',
+  'settings.memory.graph.depthInvalid': 'Глубина должна быть в диапазоне 1–3.',
+  'settings.memory.graph.build': 'Построить',
+  'settings.memory.graph.stats': 'Сущностей: {entities}, фактов: {facts}, связей: {edges}',
+  'settings.memory.graph.empty': 'Связей нет: добавьте `[[сущность]]` в текст факта',
+  'settings.memory.graph.entitiesTitle': 'Сущности',
+  'settings.memory.graph.entitiesEmpty': 'Сущностей нет',
+  'settings.memory.graph.entityFacts':
+    '{count, plural, one {# факт} few {# факта} many {# фактов} other {# факта}}',
+  'settings.memory.graph.selectedTitle': 'Сущность: {name}',
+  'settings.memory.graph.relationsTitle': 'Связи',
+  'settings.memory.graph.relationsEmpty': 'Связей нет',
+  'settings.memory.graph.relationUnknown': 'связана',
+  'settings.memory.graph.relationMentions': 'упоминает',
+  'settings.memory.graph.relationCoOccurs': 'встречается с',
+  'settings.memory.graph.factsTitle': 'Связанные факты',
+  'settings.memory.graph.factsEmpty': 'Связанных фактов нет',
+  'settings.memory.graph.providerUnavailable': 'Плагин памяти не активирован.',
+
   'sessionCreate.project': 'Проект',
 
   // --- ADR-102: аналитика и отчёты (UI, волна 2) ---
@@ -3826,6 +3854,8 @@ export const dict = {
     'Факты, которые помнит плагин памяти: текст, вид, статус, уверенность и провенанс. Раздел только читает.',
   'settings.help.memory.section.memory-indexes':
     'Построенные корпусы для поиска: источник, состояние, поколение и фингерпринт эмбеддинга (модель, размерность, версия чанкера).',
+  'settings.help.memory.section.memory-graph':
+    'Граф плагина памяти: сущности, извлечённые из фактов, и связи между ними. Клик по сущности перестраивает граф вокруг неё.',
   'settings.help.debug.section.debug-ai': 'Уровни логирования AI-провайдеров и моделей; сюда попадают все группы, кроме служебных.',
   'settings.help.debug.section.debug-service': 'Служебные группы инстанса: маршруты, хранилище, WebSocket и сам отладочный вывод.',
   'settings.help.debug.levels': 'NONE — выключено, DEBUG — подробно, INFO — обычные события, WARNING — проблемы, ERROR — только ошибки.',

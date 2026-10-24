@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   rebuildMemoryIndex: vi.fn(),
   deleteMemoryIndex: vi.fn(),
   consolidateMemory: vi.fn(),
+  getMemoryGraph: vi.fn(),
   getProjects: vi.fn(),
   notify: vi.fn(),
   confirm: vi.fn(),
@@ -43,6 +44,11 @@ vi.mock('@/lib/api/synthApi', () => ({
   MEMORY_CONSOLIDATION_THRESHOLD_MIN: 0.5,
   MEMORY_CONSOLIDATION_THRESHOLD_MAX: 0.99,
   MEMORY_CONSOLIDATION_THRESHOLD_DEFAULT: 0.9,
+  MEMORY_GRAPH_DEPTH_MIN: 1,
+  MEMORY_GRAPH_DEPTH_MAX: 3,
+  MEMORY_GRAPH_DEPTH_DEFAULT: 1,
+  MEMORY_GRAPH_LIMIT_MIN: 1,
+  MEMORY_GRAPH_LIMIT_MAX: 200,
 }))
 vi.mock('@/hooks/useNotification', () => ({
   useNotification: () => ({ notify: mocks.notify }),
@@ -55,7 +61,7 @@ import { useProjectsStore } from '@/stores/projectsStore'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { MemorySettings } from './MemorySettings'
-import type { MemoryFact, MemoryIndex, MemoryStatus } from '@/lib/api/synthApi'
+import type { MemoryFact, MemoryGraph, MemoryIndex, MemoryStatus } from '@/lib/api/synthApi'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -120,8 +126,35 @@ const REPORT = {
   items: [{ keptId: 'fact-1', supersededIds: ['fact-2', 'fact-3'], similarity: 0.94 }],
 }
 
+/**
+ * Граф памяти: две сущности, один факт и связи (как отдаёт сервер: узлы-факты
+ * без поля `entity`, связь «факт → сущность» и «сущность ↔ сущность»).
+ */
+const GRAPH: MemoryGraph = {
+  nodes: [
+    { id: 'entity:Fleet', kind: 'entity', name: 'Fleet', entity: 'Fleet' },
+    { id: 'entity:kubectl', kind: 'entity', name: 'kubectl', entity: 'kubectl' },
+    {
+      id: 'fact:fact-1',
+      kind: 'fact',
+      factId: 'fact-1',
+      text: 'Деплой в test идёт через Fleet, а не через kubectl.',
+    },
+  ],
+  edges: [
+    { from: 'fact:fact-1', to: 'entity:Fleet', relation: 'mentions' },
+    { from: 'fact:fact-1', to: 'entity:kubectl', relation: 'mentions' },
+    { from: 'entity:Fleet', to: 'entity:kubectl', relation: 'co_occurs' },
+  ],
+  stats: { entities: 2, facts: 1, edges: 3 },
+}
+
 const byTestId = (container: HTMLElement, testId: string): HTMLElement | null =>
   container.querySelector(`[data-testid="${testId}"]`)
+
+/** Секция настроек по её `data-settings-section` (anchor из ADR-072). */
+const bySection = (container: HTMLElement, sectionId: string): HTMLElement | null =>
+  container.querySelector(`[data-settings-section="${sectionId}"]`)
 
 async function flush(): Promise<void> {
   await act(async () => {})
@@ -211,6 +244,7 @@ beforeEach(() => {
   mocks.rebuildMemoryIndex.mockResolvedValue({ index: BUILDING_INDEX })
   mocks.deleteMemoryIndex.mockResolvedValue(undefined)
   mocks.consolidateMemory.mockResolvedValue({ report: REPORT })
+  mocks.getMemoryGraph.mockResolvedValue(GRAPH)
   mocks.getProjects.mockResolvedValue([PROJECT])
   mocks.confirm.mockResolvedValue(true)
   useProjectsStore.setState({ projects: [PROJECT] as never })
@@ -730,6 +764,165 @@ describe('MemorySettings — консолидация фактов', () => {
       resolveRun({ report: REPORT })
     })
     await flush()
+  })
+})
+
+describe('MemorySettings — граф памяти', () => {
+  it('«Построить» запрашивает граф с фильтрами проекта и глубины', async () => {
+    const container = await renderSettings()
+
+    await selectOption(container, 'memory-graph-project', 'Project One')
+    await clickTestId(container, 'memory-graph-build')
+
+    expect(mocks.getMemoryGraph).toHaveBeenCalledWith({ depth: 1, projectId: 'project-1' })
+  })
+
+  it('сущность из поля фильтра уходит в запрос', async () => {
+    const container = await renderSettings()
+
+    const input = byTestId(container, 'memory-graph-entity') as HTMLInputElement
+    await setInputValue(input, 'Fleet')
+    await clickTestId(container, 'memory-graph-build')
+
+    expect(mocks.getMemoryGraph).toHaveBeenCalledWith({ entity: 'Fleet', depth: 1 })
+  })
+
+  it('клик по сущности подставляет её в фильтр и перестраивает граф', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-graph-build')
+    expect(mocks.getMemoryGraph).toHaveBeenCalledWith({ depth: 1 })
+
+    await clickTestId(container, 'memory-graph-entity-entity:Fleet')
+
+    expect(mocks.getMemoryGraph).toHaveBeenLastCalledWith({ entity: 'Fleet', depth: 1 })
+    expect((byTestId(container, 'memory-graph-entity') as HTMLInputElement).value).toBe('Fleet')
+  })
+
+  it('статистика графа показывается в шапке раздела', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-graph-build')
+
+    const stats = byTestId(container, 'memory-graph-stats')?.textContent ?? ''
+    expect(stats).toContain('Entities: 2')
+    expect(stats).toContain('facts: 1')
+    expect(stats).toContain('relations: 3')
+  })
+
+  it('список сущностей показывает имя и число фактов, связи и факты — по клику', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-graph-build')
+
+    const entities = byTestId(container, 'memory-graph-entities')?.textContent ?? ''
+    expect(entities).toContain('Fleet')
+    expect(entities).toContain('1 fact')
+    expect(entities).toContain('kubectl')
+
+    await clickTestId(container, 'memory-graph-entity-entity:Fleet')
+
+    const relations = byTestId(container, 'memory-graph-relations')?.textContent ?? ''
+    expect(relations).toContain('Fleet')
+    expect(relations).toContain('kubectl')
+    // Известные метки связи переводятся, пользовательские — как есть.
+    expect(relations).toContain('mentions')
+    expect(relations).toContain('co-occurs')
+
+    const facts = byTestId(container, 'memory-graph-facts')?.textContent ?? ''
+    expect(facts).toContain('Деплой в test идёт через Fleet')
+  })
+
+  it('пустой граф — подсказка про упоминание `[[сущность]]` в тексте факта', async () => {
+    mocks.getMemoryGraph.mockResolvedValue({
+      nodes: [],
+      edges: [],
+      stats: { entities: 0, facts: 0, edges: 0 },
+    })
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-graph-build')
+
+    const empty = byTestId(container, 'memory-graph-empty')?.textContent ?? ''
+    expect(empty).toContain('No relations yet')
+    expect(empty).toContain('[[entity]]')
+  })
+
+  it('409: плагин памяти не активен — показана подсказка', async () => {
+    mocks.getMemoryGraph.mockRejectedValue(
+      Object.assign(new Error('provider is not active'), { status: 409 }),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-graph-build')
+
+    expect(byTestId(container, 'memory-graph-provider-hint')?.textContent).toContain(
+      'The memory plugin is not activated.',
+    )
+    expect(byTestId(container, 'memory-graph-error')).toBeNull()
+  })
+
+  it('422: баннер показывает текст ошибки построения графа', async () => {
+    mocks.getMemoryGraph.mockRejectedValue(
+      Object.assign(new Error('graph build failed: no provider'), { status: 422 }),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-graph-build')
+
+    expect(byTestId(container, 'memory-graph-error')?.textContent).toContain(
+      'graph build failed: no provider',
+    )
+  })
+
+  it('400 от сервера — инлайн-ошибка глубины', async () => {
+    mocks.getMemoryGraph.mockRejectedValue(
+      Object.assign(new Error('depth out of range'), { status: 400 }),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-graph-build')
+
+    expect(bySection(container, 'memory-graph')?.textContent).toContain(
+      'The depth must be between 1 and 3.',
+    )
+    expect(byTestId(container, 'memory-graph-error')).toBeNull()
+  })
+
+  it('глубина вне 1..3 — запрос не уходит, инлайн-ошибка', async () => {
+    const container = await renderSettings()
+
+    const input = byTestId(container, 'memory-graph-depth') as HTMLInputElement
+    await setInputValue(input, '5')
+    await clickTestId(container, 'memory-graph-build')
+
+    expect(mocks.getMemoryGraph).not.toHaveBeenCalled()
+    expect(bySection(container, 'memory-graph')?.textContent).toContain(
+      'The depth must be between 1 and 3.',
+    )
+  })
+
+  it('на время запроса кнопка «Построить» заблокирована', async () => {
+    let resolveGraph: (value: unknown) => void = () => undefined
+    mocks.getMemoryGraph.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveGraph = resolve
+        }),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-graph-build')
+
+    expect((byTestId(container, 'memory-graph-build') as HTMLButtonElement).disabled).toBe(true)
+    expect(byTestId(container, 'memory-graph-loading')).toBeTruthy()
+
+    await act(async () => {
+      resolveGraph(GRAPH)
+    })
+    await flush()
+
+    expect((byTestId(container, 'memory-graph-build') as HTMLButtonElement).disabled).toBe(false)
   })
 })
 

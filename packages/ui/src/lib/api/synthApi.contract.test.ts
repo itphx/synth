@@ -33,7 +33,7 @@ const EXPECTED_API_METHODS = [
   'getDictionary', 'getDoctor', 'getEgressLog', 'getEgressPolicy', 'getEventBindingKeys', 'getEventJournal', 'getEventRoutes',
   'getEventsSettings', 'getGatewayPatterns', 'getHealth', 'getHybridStatus',
   'getLlmGatewaySettingsInfo', 'getLlmPayloads', 'getLogs', 'getMcpNetworkPolicyInfo',
-  'getMcpPolicyInfo', 'getMcpRegistry', 'getMcpToolSettings', 'getMemoryFact', 'getMemoryStatus', 'getMigrations', 'getModels',
+  'getMcpPolicyInfo', 'getMcpRegistry', 'getMcpToolSettings', 'getMemoryFact', 'getMemoryGraph', 'getMemoryStatus', 'getMigrations', 'getModels',
   'getMyIdentities', 'getOAuthCredential', 'getOAuthCredentials', 'getOptimization', 'getPack', 'getPacks', 'getPendingRestore',
   'getPipelineInstances', 'getPipelineRun', 'getPipelineTemplates', 'getPipelines', 'getPlugin', 'getPluginsSettings',
   'getProject', 'getProjectMcp',
@@ -75,7 +75,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (331)', () => {
+  it('набор методов совпадает с зафиксированным (332)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 
