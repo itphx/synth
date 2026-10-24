@@ -16,6 +16,9 @@
  * | GET | `/facts` | `{items, total, limit, offset}` — записи `MemoryFactRecord` как есть |
  * | GET | `/facts/:id` | запись `MemoryFactRecord` либо 404 `MEMORY_FACT_NOT_FOUND` |
  * | GET | `/indexes` | `{items, total}` — записи `MemoryIndexRecord` (без чанков) |
+ * | POST | `/indexes` | 202 `{index, message}` — индекс создан (запись из порта) |
+ * | POST | `/indexes/:id/rebuild` | 202 `{index}` — пересборка запущена |
+ * | DELETE | `/indexes/:id` | 204 — индекс удалён |
  *
  * ## Правила
  *
@@ -30,10 +33,30 @@
  * - **портов нет — 503**: `MEMORY_UNAVAILABLE`, а не падение (деградация вместо
  *   500). `/status` при этом отвечает 200 с `readiness: 'unavailable'` — портал
  *   должен уметь показать «память недоступна».
+ *
+ * ## Мутации индексов: портал → админ-тул плагина
+ *
+ * Логика индекса принадлежит **плагину** (PROP-047 §3: ядро владеет данными,
+ * плагин — логикой), поэтому портал не пишет в порт индексов напрямую:
+ * он проверяет границы (проект, workspace, доступность провайдера) и вызывает
+ * **админ-тул плагина** через реестр тулов (`opts.invokeTool` → `executeToolDef`,
+ * ADR-090). Тул — единственный владелец логики индекса; портал отвечает за
+ * HTTP-контракт и права.
+ *
+ * - **guard — тот же**, что у чтения (managed — ADMIN);
+ * - **проект обязателен** для создания индекса: индекс файлов строится в
+ *   проекте (`MEMORY_PROJECT_REQUIRED`), проект не найден — `PROJECT_NOT_FOUND`,
+ *   у проекта нет `workspace` (источник `files`) — `MEMORY_WORKSPACE_REQUIRED`;
+ * - **провайдер недоступен** (тул не зарегистрирован или плагин не активен) —
+ *   `409 MEMORY_PROVIDER_UNAVAILABLE`; чтение при этом работает как раньше;
+ * - **провал тула** (`isError`) — `422 MEMORY_INDEX_FAILED` с текстом из
+ *   `content` (внутренние пути замаскированы).
  */
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
+import type { ToolResult } from '@itphx/synth-shared';
+import { pluginToolFullName } from '@itphx/synth-shared';
 import type {
   MemoryFactQuery,
   MemoryFactRecord,
@@ -63,6 +86,85 @@ type Middleware = ReturnType<typeof createMiddleware>;
  * (`mount-routes.ts`) продолжают брать их отсюда.
  */
 export { MEMORY_NAMESPACE, MEMORY_PLUGIN_NAME };
+
+/**
+ * Полное имя админ-тула плагина памяти в реестре тулов (ADR-090).
+ *
+ * Имя составляет **хост** (`plugin_<ns>_<tool>`) — тот же хелпер, что и у
+ * регистрации плагинных тулов (`shared/types/plugin-tools.ts`).
+ */
+export const MEMORY_INDEX_TOOL_NAME = pluginToolFullName(MEMORY_PLUGIN_NAME, 'memory_index');
+
+/** Вид источника корпуса индекса, который принимает портал. */
+export type MemoryIndexSourceKind = 'files' | 'facts';
+
+/**
+ * Проект — как его видит портал памяти (минимум для мутаций индексов).
+ *
+ * `workspace` — **абсолютный** путь рабочего каталога (относительный путь
+ * резолвит вызывающая сторона, ADR-075); не задан — у проекта нет workspace.
+ */
+export interface MemoryPortalProject {
+  /** Id проекта. */
+  id: string;
+  /** Абсолютный рабочий каталог проекта (если задан). */
+  workspace?: string;
+}
+
+/** Вход вызова админ-тула плагина памяти. */
+export interface MemoryToolInvokeInput {
+  /** Полное имя тула в реестре (`plugin_synth_plugin_memory_memory_index`). */
+  tool: string;
+  /** Параметры тула (`action`/`indexId`/`name`/`source`/`projectId`/`force`). */
+  params: Record<string, unknown>;
+  /** Проект-владелец индекса (если есть). */
+  projectId?: string;
+  /** Рабочий каталог вызова (workspace проекта либо каталог данных). */
+  workingDir: string;
+}
+
+/**
+ * Вызов админ-тула плагина памяти (реализует вызывающая сторона — mount-routes).
+ *
+ * Результат — `ToolResult`: `content` — текст, `isError` — ошибка тула,
+ * `metadata` — `{indexId?, state?, generation?, stats?}`.
+ */
+export type MemoryToolInvoker = (input: MemoryToolInvokeInput) => Promise<ToolResult>;
+
+/**
+ * Провайдер памяти недоступен: тул плагина не зарегистрирован в реестре.
+ *
+ * Вызывающая сторона бросает его, когда тула нет в `ToolRegistry`; портал
+ * отвечает 409 `MEMORY_PROVIDER_UNAVAILABLE`, а не 500.
+ */
+export class MemoryProviderUnavailableError extends Error {
+  constructor(tool?: string) {
+    super(tool ? `Тул памяти не зарегистрирован: ${tool}` : 'Провайдер памяти недоступен');
+    this.name = 'MemoryProviderUnavailableError';
+  }
+}
+
+/**
+ * Маскирование внутренних путей в тексте ошибки тула.
+ *
+ * Наружу отдаются только плейсхолдеры: каталог данных инстанса → `<data>`,
+ * рабочий каталог → `<workspace>`. Внутренние пути хоста не должны утекать
+ * через портал.
+ */
+function redactInternalPaths(text: string, workingDir: string, dataDir?: string): string {
+  if (!text) return '';
+  let out = text;
+  const mask = (value: string | undefined, placeholder: string): void => {
+    if (!value) return;
+    const trimmed = value.replace(/[/\\]+$/, '');
+    if (!trimmed || trimmed === '/' || trimmed === '\\') return;
+    out = out.split(trimmed).join(placeholder);
+  };
+  // Сначала — каталог данных (он шире рабочего каталога), затем — workspace.
+  mask(dataDir, '<data>');
+  if (workingDir !== dataDir) mask(workingDir, '<workspace>');
+  return out;
+}
 
 /** Статусы факта, допустимые в фильтре `status` (плюс `all` — без фильтра). */
 export const MEMORY_FACT_STATUSES: readonly MemoryFactStatus[] = [
@@ -108,6 +210,24 @@ export interface MemoryRouteMessages {
   invalidOffset: (c: Context) => string;
   factNotFound: (c: Context) => string;
   unavailable: (c: Context) => string;
+  /** Некорректное тело запроса мутации. */
+  invalidBody: (c: Context) => string;
+  /** Некорректный вид источника индекса. */
+  invalidSource: (c: Context) => string;
+  /** Не указан проект (индекс файлов строится в проекте). */
+  projectRequired: (c: Context) => string;
+  /** Проект не найден. */
+  projectNotFound: (c: Context) => string;
+  /** У проекта нет рабочего каталога. */
+  workspaceRequired: (c: Context) => string;
+  /** Плагин памяти не активен либо его тул не зарегистрирован. */
+  providerUnavailable: (c: Context) => string;
+  /** Индекс памяти не найден. */
+  indexNotFound: (c: Context) => string;
+  /** Операция с индексом не удалась (текст — из ответа тула). */
+  indexFailed: (c: Context) => string;
+  /** Сообщение об успешном создании индекса. */
+  indexCreated: (c: Context) => string;
 }
 
 /** Порты памяти инстанса (ADR-096) — источник истины для портала. */
@@ -141,6 +261,27 @@ export interface MemoryRoutesOptions {
    * данные могли остаться от прошлой установки).
    */
   isPluginActive?: () => boolean;
+  /**
+   * Вызов админ-тула плагина памяти через реестр тулов (ADR-090).
+   *
+   * Реализует вызывающая сторона (`mount-routes`): находит определение тула в
+   * `ToolRegistry` и зовёт `executeToolDef`. Не задан — мутации индексов
+   * отвечают `409 MEMORY_PROVIDER_UNAVAILABLE` (чтение работает как раньше).
+   */
+  invokeTool?: MemoryToolInvoker;
+  /**
+   * Резолвер проекта (порт `ProjectRepository.load`) — для мутаций индексов.
+   *
+   * `workspace` — **абсолютный** путь рабочего каталога (относительный путь
+   * резолвит вызывающая сторона, ADR-075); не задан — у проекта нет workspace.
+   * Резолвер не задан — проект не найден (fail-closed).
+   */
+  resolveProject?: (projectId: string) => Promise<MemoryPortalProject | null>;
+  /**
+   * Каталог данных инстанса — рабочий каталог для источника `facts`
+   * (у проекта нет workspace) и маскировка путей в текстах ошибок.
+   */
+  dataDir?: string;
 }
 
 /** Сводка по фактам памяти (namespace портала). */
@@ -206,6 +347,15 @@ const DEFAULT_MESSAGES: MemoryRouteMessages = {
   invalidOffset: () => 'offset памяти: ожидается целое число не меньше 0',
   factNotFound: () => 'Факт памяти не найден',
   unavailable: () => 'Хранилище памяти недоступно',
+  invalidBody: () => 'Некорректное тело запроса памяти',
+  invalidSource: () => 'Недопустимый источник индекса памяти',
+  projectRequired: () => 'Индекс памяти строится в проекте: укажите projectId',
+  projectNotFound: () => 'Проект не найден',
+  workspaceRequired: () => 'У проекта нет рабочего каталога: индекс файлов строить негде',
+  providerUnavailable: () => 'Провайдер памяти недоступен: плагин памяти не активен',
+  indexNotFound: () => 'Индекс памяти не найден',
+  indexFailed: () => 'Не удалось выполнить операцию с индексом памяти',
+  indexCreated: () => 'Индекс памяти создан',
 };
 
 /** Дефолтный потолок выборки фактов. */
@@ -249,6 +399,102 @@ export function createMemoryRoutes(
   /** Ответ 503: порты памяти не сконфигурированы. */
   const unavailable = (c: Context) =>
     c.json({ error: { code: 'MEMORY_UNAVAILABLE', message: messages.unavailable(c) } }, 503);
+
+  /** Ошибка API в общем формате `{ error: { code, message } }`. */
+  const apiError = (
+    c: Context,
+    code: string,
+    message: string,
+    status: 400 | 404 | 409 | 422,
+  ) => c.json({ error: { code, message } }, status);
+
+  /** 409: плагин памяти не активен либо его тул не зарегистрирован. */
+  const providerUnavailable = (c: Context) =>
+    apiError(c, 'MEMORY_PROVIDER_UNAVAILABLE', messages.providerUnavailable(c), 409);
+
+  /** 404: индекса нет (или он чужого namespace — как «не найдено»). */
+  const indexNotFound = (c: Context) =>
+    apiError(c, 'MEMORY_INDEX_NOT_FOUND', messages.indexNotFound(c), 404);
+
+  /**
+   * Провайдер памяти доступен: инвокер задан **и** плагин активен.
+   *
+   * Без инвокера или без активного плагина мутации невозможны — портал
+   * отвечает 409, а не падает.
+   */
+  const providerAvailable = (): boolean =>
+    typeof opts.invokeTool === 'function' && (opts.isPluginActive?.() ?? false);
+
+  /** Тело запроса как объект (`null` — нечитаемый JSON или не объект). */
+  const readBody = async (c: Context): Promise<Record<string, unknown> | null> => {
+    try {
+      const raw = await c.req.text();
+      if (!raw.trim()) return {};
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+      return parsed as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * Резолв проекта для мутации индекса (fail-closed: нет проекта — `null`).
+   */
+  const resolvePortalProject = async (
+    projectId: string,
+  ): Promise<MemoryPortalProject | null> => {
+    if (!opts.resolveProject) return null;
+    try {
+      return await opts.resolveProject(projectId);
+    } catch {
+      return null;
+    }
+  };
+
+  /** Рабочий каталог вызова: workspace проекта, иначе каталог данных инстанса. */
+  const workingDirOf = (project: MemoryPortalProject | null): string =>
+    project?.workspace ?? opts.dataDir ?? process.cwd();
+
+  /**
+   * Вызов админ-тула плагина памяти.
+   *
+   * Провал тула (`isError`) — 422 `MEMORY_INDEX_FAILED` с текстом из `content`
+   * (внутренние пути замаскированы). Отсутствие тула в реестре
+   * (`MemoryProviderUnavailableError`) — 409. Прочие броски — 422.
+   */
+  const invokeIndexTool = async (
+    c: Context,
+    input: MemoryToolInvokeInput,
+  ): Promise<{ ok: true; result: ToolResult } | { ok: false; response: Response }> => {
+    const invoke = opts.invokeTool;
+    if (!invoke) return { ok: false, response: providerUnavailable(c) };
+    let result: ToolResult;
+    try {
+      result = await invoke(input);
+    } catch (error) {
+      if (error instanceof MemoryProviderUnavailableError) {
+        return { ok: false, response: providerUnavailable(c) };
+      }
+      return {
+        ok: false,
+        response: apiError(c, 'MEMORY_INDEX_FAILED', messages.indexFailed(c), 422),
+      };
+    }
+    if (result?.isError) {
+      const text = redactInternalPaths(result.content ?? '', input.workingDir, opts.dataDir);
+      return {
+        ok: false,
+        response: apiError(
+          c,
+          'MEMORY_INDEX_FAILED',
+          text.trim() ? text : messages.indexFailed(c),
+          422,
+        ),
+      };
+    }
+    return { ok: true, result };
+  };
 
   /**
    * Статус портала памяти: провайдер, готовность и сводные счётчики.
@@ -434,6 +680,157 @@ export function createMemoryRoutes(
     const items = await indexes.listIndexes(query);
     const page: MemoryIndexesPage = { items, total: items.length };
     return c.json(page);
+  });
+
+  /**
+   * Создание индекса памяти — через админ-тул плагина (ADR-090).
+   *
+   * Границы проверяет портал, логику индекса — плагин: индекс файлов строится
+   * в проекте (ADR-075), поэтому проект обязателен, а у проекта с источником
+   * `files` должен быть рабочий каталог.
+   */
+  app.post('/indexes', guard, async (c) => {
+    const body = await readBody(c);
+    if (!body) return apiError(c, 'VALIDATION_ERROR', messages.invalidBody(c), 400);
+
+    // Источник корпуса: `files` (по умолчанию) или `facts`.
+    let sourceKind: MemoryIndexSourceKind = 'files';
+    let sourceFilter: string | undefined;
+    const rawSource = body.source;
+    if (rawSource !== undefined && rawSource !== null) {
+      if (typeof rawSource !== 'object' || Array.isArray(rawSource)) {
+        return apiError(c, 'VALIDATION_ERROR', messages.invalidSource(c), 400);
+      }
+      const source = rawSource as Record<string, unknown>;
+      const kind = source.kind;
+      if (kind !== undefined && kind !== null && kind !== 'files' && kind !== 'facts') {
+        return apiError(c, 'VALIDATION_ERROR', messages.invalidSource(c), 400);
+      }
+      sourceKind = kind === 'facts' ? 'facts' : 'files';
+      if (typeof source.filter === 'string' && source.filter.trim()) {
+        sourceFilter = source.filter.trim();
+      }
+    }
+
+    const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : undefined;
+    const projectId =
+      typeof body.projectId === 'string' && body.projectId.trim() ? body.projectId.trim() : undefined;
+    const force = body.force === true ? true : undefined;
+
+    if (!projectId) {
+      return apiError(c, 'MEMORY_PROJECT_REQUIRED', messages.projectRequired(c), 400);
+    }
+    const project = await resolvePortalProject(projectId);
+    if (!project) {
+      return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
+    }
+    if (sourceKind === 'files' && !project.workspace) {
+      return apiError(c, 'MEMORY_WORKSPACE_REQUIRED', messages.workspaceRequired(c), 400);
+    }
+    if (!providerAvailable()) return providerUnavailable(c);
+
+    const workingDir = workingDirOf(project);
+    const params: Record<string, unknown> = {
+      action: 'create',
+      ...(name ? { name } : {}),
+      source: { kind: sourceKind, ...(sourceFilter ? { filter: sourceFilter } : {}) },
+      projectId,
+      ...(force ? { force } : {}),
+    };
+    const call = await invokeIndexTool(c, {
+      tool: MEMORY_INDEX_TOOL_NAME,
+      params,
+      projectId,
+      workingDir,
+    });
+    if (!call.ok) return call.response;
+
+    // Тело индекса — из порта (источник истины); если записи ещё нет — метаданные тула.
+    const indexId = typeof call.result.metadata?.indexId === 'string'
+      ? call.result.metadata.indexId
+      : undefined;
+    const indexes = indexesPort();
+    const record = indexId && indexes ? await indexes.getIndex(indexId) : null;
+    const index = record ?? call.result.metadata ?? {};
+    return c.json({ index, message: messages.indexCreated(c) }, 202);
+  });
+
+  /**
+   * Пересборка индекса памяти — через админ-тул плагина (ADR-090).
+   *
+   * Индекс и его проект — из порта; клиент подменять их не может.
+   */
+  app.post('/indexes/:id/rebuild', guard, async (c) => {
+    const indexes = indexesPort();
+    if (!indexes) return unavailable(c);
+
+    const id = c.req.param('id');
+    const index = await indexes.getIndex(id);
+    // Чужой namespace выглядит как «не найдено» — как и у фактов.
+    if (!index || index.namespace !== namespace) return indexNotFound(c);
+
+    const body = await readBody(c);
+    if (!body) return apiError(c, 'VALIDATION_ERROR', messages.invalidBody(c), 400);
+    const force = body.force === true;
+
+    let project: MemoryPortalProject | null = null;
+    if (index.projectId) {
+      project = await resolvePortalProject(index.projectId);
+      if (!project) {
+        return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
+      }
+      if (index.source.kind === 'files' && !project.workspace) {
+        return apiError(c, 'MEMORY_WORKSPACE_REQUIRED', messages.workspaceRequired(c), 400);
+      }
+    }
+    if (!providerAvailable()) return providerUnavailable(c);
+
+    const workingDir = workingDirOf(project);
+    const call = await invokeIndexTool(c, {
+      tool: MEMORY_INDEX_TOOL_NAME,
+      params: { action: 'rebuild', indexId: id, force },
+      ...(index.projectId ? { projectId: index.projectId } : {}),
+      workingDir,
+    });
+    if (!call.ok) return call.response;
+
+    const record = await indexes.getIndex(id);
+    return c.json({ index: record ?? call.result.metadata ?? {} }, 202);
+  });
+
+  /**
+   * Удаление индекса памяти — через админ-тул плагина (ADR-090).
+   *
+   * Запись индекса удаляет **тул** (владелец логики), портал лишь проверяет
+   * границы и отвечает 204.
+   */
+  app.delete('/indexes/:id', guard, async (c) => {
+    const indexes = indexesPort();
+    if (!indexes) return unavailable(c);
+
+    const id = c.req.param('id');
+    const index = await indexes.getIndex(id);
+    if (!index || index.namespace !== namespace) return indexNotFound(c);
+
+    let project: MemoryPortalProject | null = null;
+    if (index.projectId) {
+      project = await resolvePortalProject(index.projectId);
+      if (!project) {
+        return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
+      }
+    }
+    if (!providerAvailable()) return providerUnavailable(c);
+
+    const workingDir = workingDirOf(project);
+    const call = await invokeIndexTool(c, {
+      tool: MEMORY_INDEX_TOOL_NAME,
+      params: { action: 'delete', indexId: id },
+      ...(index.projectId ? { projectId: index.projectId } : {}),
+      workingDir,
+    });
+    if (!call.ok) return call.response;
+
+    return c.body(null, 204);
   });
 
   return app;

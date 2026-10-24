@@ -3,7 +3,8 @@
 // определяет приоритеты маршрутов (статические сегменты раньше параметрических,
 // SSE-хаб `/api/v2/events` после роутов событий, но до admin-роутов).
 // Вынесено из `app.ts` (ADR-095, шаг 4b) — «вынос по швам», без изменения поведения.
-import { isAbsolute, normalize, resolve } from 'node:path';
+import { isAbsolute, join, normalize, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { Hono } from 'hono';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, SYNTH_VERSION, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword } from '@itphx/synth-shared';
 import {
@@ -26,7 +27,7 @@ import {
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createPluginsRoutes, createPluginSettingsRoutes,
-  createMemoryRoutes, MEMORY_PLUGIN_NAME,
+  createMemoryRoutes, MEMORY_PLUGIN_NAME, MemoryProviderUnavailableError, executeToolDef,
   createOAuthRoutes, bindCredentialToConnector, syncMcpManagerFromRegistry,
   resolveProjectWorkspace,
   resolvePluginServerPolicy,
@@ -507,6 +508,38 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       guard: auth.requirePermission('ADMIN'),
       // Активен ли плагин памяти в процессе — реестр активаций хоста (ADR-090).
       isPluginActive: () => deps.pluginRuntime.host.isActive(MEMORY_PLUGIN_NAME),
+      // М2: мутации индексов — через админ-тул плагина памяти (реестр тулов).
+      // Контекст вызова (sessionId/messageId) создаёт вызывающая сторона:
+      // сессии у портала нет — это служебный вызов инстанса.
+      invokeTool: async ({ tool, params, projectId, workingDir }) => {
+        const def = toolRegistry.get(tool);
+        if (!def) throw new MemoryProviderUnavailableError(tool);
+        return executeToolDef(
+          def,
+          params,
+          {
+            sessionId: `system:memory-portal:${randomUUID()}`,
+            messageId: `system:memory-portal:${randomUUID()}`,
+            workingDir,
+            ...(projectId ? { projectId } : {}),
+          },
+          tool,
+        );
+      },
+      // Проект и его workspace (ADR-075): относительный workspace резолвится
+      // от `workspacesRoot`, абсолютный — как есть.
+      resolveProject: async (projectId) => {
+        const project = await deps.storageContext.projects.load(projectId);
+        if (!project) return null;
+        if (!project.workspace) return { id: project.id };
+        const root = config.workspacesRoot ?? join(dataDir, 'workspaces');
+        const workspace = isAbsolute(project.workspace)
+          ? normalize(project.workspace)
+          : resolve(root, project.workspace);
+        return { id: project.id, workspace };
+      },
+      // Каталог данных — рабочий каталог для источника `facts` (нет workspace).
+      dataDir,
       messages: {
         invalidStatus: (c) => t('errors.validation.invalidMemoryStatus', undefined, c),
         invalidState: (c) => t('errors.validation.invalidMemoryState', undefined, c),
@@ -514,6 +547,15 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         invalidOffset: (c) => t('errors.validation.invalidMemoryOffset', undefined, c),
         factNotFound: (c) => t('errors.notFound.memoryFact', undefined, c),
         unavailable: (c) => t('errors.unavailable.memory', undefined, c),
+        invalidBody: (c) => t('errors.validation.invalidMemoryBody', undefined, c),
+        invalidSource: (c) => t('errors.validation.invalidMemorySource', undefined, c),
+        projectRequired: (c) => t('errors.validation.memoryProjectRequired', undefined, c),
+        projectNotFound: (c) => t('errors.notFound.memoryProject', undefined, c),
+        workspaceRequired: (c) => t('errors.validation.memoryWorkspaceRequired', undefined, c),
+        providerUnavailable: (c) => t('errors.unavailable.memoryProvider', undefined, c),
+        indexNotFound: (c) => t('errors.notFound.memoryIndex', undefined, c),
+        indexFailed: (c) => t('errors.failed.memoryIndex', undefined, c),
+        indexCreated: (c) => t('memory.indexCreated', undefined, c),
       },
     },
   ));

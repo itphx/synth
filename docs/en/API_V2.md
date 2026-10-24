@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-24 (ADR-106 Ф5: §5.33 «Пакеты расширений» — сводка `authority`, `authorityActivation`; ADR-105 Ф4: §5.37 «Внешние доступы»; ADR-090 §5.36 «Плагины» — переведено); перевод отстаёт (§5.32 — ADR-102, §5.34 — ADR-100, §5.35 — ADR-101).
+> ⚠️ RU-версия обновлена 2026-10-24 (ADR-106 Ф5: §5.33 «Пакеты расширений» — сводка `authority`, `authorityActivation`; ADR-105 Ф4: §5.37 «Внешние доступы»; ADR-090 §5.36 «Плагины» — переведено; ADR-107 §5.38 «Память» (портал + мутации индексов, М2) — переведено); перевод отстаёт (§5.32 — ADR-102, §5.34 — ADR-100, §5.35 — ADR-101).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -1496,6 +1496,99 @@ removal — **only `ADMIN`**. Core (standalone): a single `requireAuth` (the ins
 ADR-079). Its own matrix — `packages/backend/src/routes/plugins-rbac-matrix.test.ts` (negative:
 `USER`/`LEAD`/`AUDITOR` → 403; positive: `ADMIN`, a service key with and without the scope).
 
+### 5.38 Memory — `/api/v2/memory` (both, ADR-107 / PROP-047 §2.1)
+
+The memory portal in the core: **reads** over the domain memory ports
+(`MemoryFactRepository`/`MemoryIndexRepository`, ADR-096) and **index mutations**
+(M2). A single factory `createMemoryRoutes` (`packages/core/src/server/routes/memory.ts`)
+for core and backend; the backend only adds RBAC through `opts.guard`. The
+subsystem itself — see [docs/MEMORY.md](../MEMORY.md).
+
+**The namespace is set by the server.** The memory port serves several independent
+providers, so the portal reads only its own namespace — `plugin:synth-plugin-memory`
+(the host rule: `plugin:<plugin name>`). The `namespace` query parameter is
+**ignored**: a client cannot substitute it. Records of a foreign namespace look
+"not found" (404) rather than a permission refusal.
+
+**Rights.** Reads — `requireAuth` (core, standalone) / **ADMIN** (managed, an
+admin portal). Index mutations — **the same guard** as the reads (managed —
+ADMIN). No memory ports in the build → **503 `MEMORY_UNAVAILABLE`** (degradation,
+not a 500).
+
+| Method | Path | Build | Purpose / req-resp |
+|---|---|---|---|
+| GET | `/api/v2/memory/status` | both | The portal state: `{provider:{id,mode,active}, readiness, namespace, facts:{total,active}, indexes:{total,ready,stale,failed,building}}`. `provider.id` = the namespace, `provider.mode` = `inline` (the memory plugin is `inline` by design) or `null`, `provider.active` — whether the `synth-plugin-memory` plugin is active in the process. `readiness`: `ready` (the service is available, no problematic indexes) / `degraded` (there are `failed`/`stale` indexes) / `unavailable` (the memory ports are not configured — the answer is **200**, the portal shows "memory unavailable"). The counters go through the ports (`count` of the facts, a selection of the indexes) |
+| GET | `/api/v2/memory/facts` | both | A page of facts: `{items, total, limit, offset}`. Parameters: `query` (a substring of `text`, case-insensitive; searched **in memory** after the selection — full-text search is M2), `kind`, `status` (`candidate`\|`active`\|`superseded`\|`retracted`\|`all`; `active` by default), `projectId`, `limit` (1..200, 50 by default), `offset` (≥ 0, 0 by default). `total` is the number of records **under the filters** (not the page length). Garbage in the parameters → 400 `VALIDATION_ERROR` |
+| GET | `/api/v2/memory/facts/:id` | both | A fact by id (`MemoryFactRecord` as is); no fact (or a foreign namespace) → 404 `MEMORY_FACT_NOT_FOUND` |
+| GET | `/api/v2/memory/indexes` | both | A page of indexes: `{items, total}` — `MemoryIndexRecord` records **without the chunks** (the chunks are a separate port). Parameters: `projectId`, `state` (`building`\|`ready`\|`stale`\|`failed`\|`all`; `all` by default). Garbage in `state` → 400 `VALIDATION_ERROR` |
+| POST | `/api/v2/memory/indexes` | both | Create an index: the body `{name?, source?:{kind:'files'\|'facts', filter?}, projectId?, force?}` → **202** `{index, message}`. `index` — the `MemoryIndexRecord` from the port (by the tool's `metadata.indexId`); if there is no record yet — the tool's `metadata`. `message` — a localized confirmation. The boundaries: a project is required (a file index is built in a project) → 400 `MEMORY_PROJECT_REQUIRED`; no such project → 404 `PROJECT_NOT_FOUND`; the project has no workspace and `source.kind === 'files'` → 400 `MEMORY_WORKSPACE_REQUIRED`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
+| POST | `/api/v2/memory/indexes/:id/rebuild` | both | Rebuild an index: the body `{force?}` → **202** `{index}`. The project and the source of the index are taken **from the port** (a client cannot substitute them). No index (or a foreign namespace) → 404 `MEMORY_INDEX_NOT_FOUND`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
+| DELETE | `/api/v2/memory/indexes/:id` | both | Delete an index → **204**. No index → 404 `MEMORY_INDEX_NOT_FOUND`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
+
+**Mutations: the portal → the plugin's admin tool through the registry.** The index
+logic belongs to the **plugin** (PROP-047 §3: the core owns the data, the plugin
+owns the logic), so the portal does **not** write to the index port directly: it
+checks the boundaries (project, workspace, provider availability, rights) and
+calls the memory plugin's **admin tool**
+`plugin_synth_plugin_memory_memory_index`
+(`pluginToolFullName('synth-plugin-memory', 'memory_index')`, ADR-090) through the
+tool registry — `executeToolDef` (`engine/tools/tool-execution.ts`). The tool is the
+**sole owner of the index logic**: it creates, rebuilds and deletes; the portal is
+responsible for the HTTP contract only.
+
+| Tool parameter | Value |
+|---|---|
+| `action` | `create` \| `rebuild` \| `delete` |
+| `indexId` | the index id (`rebuild`/`delete`) |
+| `name` | the index name (`create`, `project` by default — on the plugin side) |
+| `source` | `{kind:'files'\|'facts', filter?}` (`create`, `files` by default) |
+| `projectId` | the project that owns the index |
+| `force` | a forced rebuild (`rebuild`) |
+
+The call context (sessionId/messageId/workingDir) is created by the **calling
+side** (`mount-routes`): the portal has no session, it is an instance-level
+service call (`system:memory-portal:<uuid>`). `workingDir` is the **project
+workspace** (`project.workspace`, ADR-075); for the `facts` source without a
+workspace — the instance data directory. The provider is unavailable when the
+invoker is not configured or the memory plugin is not active in the process
+(`PluginHost.isActive`) — then the mutations answer 409 while the reads work as
+before. The text of a tool failure (`isError`) is returned in 422
+`MEMORY_INDEX_FAILED`; the internal paths (the data directory, the working
+directory) are masked in it.
+
+**Error codes:** `VALIDATION_ERROR` (400), `MEMORY_PROJECT_REQUIRED` (400),
+`MEMORY_WORKSPACE_REQUIRED` (400), `PROJECT_NOT_FOUND` (404),
+`MEMORY_FACT_NOT_FOUND` (404), `MEMORY_INDEX_NOT_FOUND` (404),
+`MEMORY_PROVIDER_UNAVAILABLE` (409), `MEMORY_INDEX_FAILED` (422),
+`MEMORY_UNAVAILABLE` (503).
+
+**Example.**
+
+```bash
+# The state of the memory portal.
+curl http://localhost:5000/api/v2/memory/status -H 'Authorization: Bearer admin-key-123'
+
+# The active facts with a substring search.
+curl 'http://localhost:5000/api/v2/memory/facts?status=all&query=fleet&limit=20' \
+  -H 'Authorization: Bearer admin-key-123'
+
+# The indexes that need a rebuild.
+curl 'http://localhost:5000/api/v2/memory/indexes?state=stale' \
+  -H 'Authorization: Bearer admin-key-123'
+
+# Create a file index for a project (202 → {index, message}).
+curl -X POST http://localhost:5000/api/v2/memory/indexes \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"projectId":"prj_1","name":"docs","source":{"kind":"files","filter":"**/*.md"}}'
+
+# Rebuild the index (202) and delete it (204).
+curl -X POST http://localhost:5000/api/v2/memory/indexes/<indexId>/rebuild \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"force":true}'
+curl -X DELETE http://localhost:5000/api/v2/memory/indexes/<indexId> \
+  -H 'Authorization: Bearer admin-key-123'
+```
+
 ---
 
 ## 6. Sources
@@ -1512,6 +1605,7 @@ ADR-079). Its own matrix — `packages/backend/src/routes/plugins-rbac-matrix.te
 | Webhooks store/journal/routes/engine (ADR-052) | `packages/core/src/storage/webhook-store.ts`, `packages/core/src/storage/webhook-delivery-store.ts`, `packages/core/src/server/routes/webhooks.ts`, `packages/core/src/engine/webhooks/*` |
 | Instance maintenance admin API (ADR-091/ADR-092) | `packages/core/src/server/routes/maintenance.ts`, `packages/core/src/maintenance/*` |
 | Plugins (ADR-090) | `packages/core/src/server/routes/plugins.ts`, `packages/core/src/engine/plugins/*` (the host, the loader, the installer, the runtime), `packages/shared/src/types/{pack,plugin-audit,plugin-lock,plugin-scan,prompt-blocks,llm-filters,plugin-tools}.ts` |
+| Memory: the portal and the metrics (ADR-107, PROP-047) | `packages/core/src/server/routes/memory.ts`, `packages/core/src/metrics/collectors/memory.ts`, `packages/core/src/storage/ports/{memory-fact-repository,memory-index-repository}.ts`, `packages/core/src/engine/plugins/scoped-memory.ts` |
 | External credentials (ADR-105) | `packages/core/src/server/routes/oauth.ts`, `packages/core/src/engine/oauth/*` (client, service, registry, audit), `packages/core/src/storage/external-credential-store.ts`, `packages/core/src/storage/ports/{external-credential-repository,credential-audit-repository}.ts`, `packages/shared/src/types/external-credentials.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |

@@ -79,13 +79,22 @@ const en: Dictionary = {
   'errors.validation.invalidAnalyticsOption': 'Invalid report parameter (report/format)',
   'errors.forbidden.analytics': 'Insufficient permissions for this report',
 
-  // ADR-107 / PROP-047: портал памяти (только чтение)
+  // ADR-107 / PROP-047: портал памяти (чтение + мутации индексов, М2)
   'errors.validation.invalidMemoryStatus': 'Invalid memory fact status filter',
   'errors.validation.invalidMemoryState': 'Invalid memory index state filter',
   'errors.validation.invalidMemoryLimit': 'Invalid limit value (an integer 1..200)',
   'errors.validation.invalidMemoryOffset': 'Invalid offset value (an integer >= 0)',
   'errors.notFound.memoryFact': 'Memory fact not found',
   'errors.unavailable.memory': 'Memory storage is unavailable',
+  'errors.validation.invalidMemoryBody': 'Invalid memory request payload',
+  'errors.validation.invalidMemorySource': 'Invalid memory index source (expected files or facts)',
+  'errors.validation.memoryProjectRequired': 'A memory index is built in a project: projectId is required',
+  'errors.notFound.memoryProject': 'Project not found',
+  'errors.validation.memoryWorkspaceRequired': 'The project has no workspace: a file index cannot be built',
+  'errors.unavailable.memoryProvider': 'The memory provider is unavailable: the memory plugin is not active',
+  'errors.notFound.memoryIndex': 'Memory index not found',
+  'errors.failed.memoryIndex': 'Failed to perform the memory index operation',
+  'memory.indexCreated': 'Memory index created',
 
   // ADR-052 (этап II): исходящие webhooks
   'errors.validation.invalidWebhook': 'Invalid webhook subscription payload',
@@ -235,13 +244,22 @@ const ru: Dictionary = {
   'errors.validation.invalidAnalyticsOption': 'Некорректный параметр отчёта (report/format)',
   'errors.forbidden.analytics': 'Недостаточно прав для отчёта',
 
-  // ADR-107 / PROP-047: портал памяти (только чтение)
+  // ADR-107 / PROP-047: портал памяти (чтение + мутации индексов, М2)
   'errors.validation.invalidMemoryStatus': 'Некорректный фильтр статуса факта памяти',
   'errors.validation.invalidMemoryState': 'Некорректный фильтр состояния индекса памяти',
   'errors.validation.invalidMemoryLimit': 'Некорректное значение limit (целое 1..200)',
   'errors.validation.invalidMemoryOffset': 'Некорректное значение offset (целое ≥ 0)',
   'errors.notFound.memoryFact': 'Факт памяти не найден',
   'errors.unavailable.memory': 'Хранилище памяти недоступно',
+  'errors.validation.invalidMemoryBody': 'Некорректное тело запроса памяти',
+  'errors.validation.invalidMemorySource': 'Некорректный источник индекса памяти (ожидается files или facts)',
+  'errors.validation.memoryProjectRequired': 'Индекс памяти строится в проекте: укажите projectId',
+  'errors.notFound.memoryProject': 'Проект не найден',
+  'errors.validation.memoryWorkspaceRequired': 'У проекта нет рабочего каталога: индекс файлов строить негде',
+  'errors.unavailable.memoryProvider': 'Провайдер памяти недоступен: плагин памяти не активен',
+  'errors.notFound.memoryIndex': 'Индекс памяти не найден',
+  'errors.failed.memoryIndex': 'Не удалось выполнить операцию с индексом памяти',
+  'memory.indexCreated': 'Индекс памяти создан',
 
   // ADR-052 (этап II): исходящие webhooks
   'errors.validation.invalidWebhook': 'Некорректное тело webhook-подписки',

@@ -3,6 +3,7 @@
 // маршрутов (в т.ч. относительно прокси-middleware в `app.ts`).
 // Вынесено из `server/app.ts` (ADR-095, шаг 4a) — «вынос по швам», без изменения поведения.
 import { join, isAbsolute, normalize, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import type { SecurityConfig, WorkspaceOutsideRootPolicy, ProviderConfig, ModelConfig } from '@itphx/synth-shared';
@@ -34,6 +35,8 @@ import type { MetricsReadiness } from '../routes/metrics-settings.js';
 import { createProjectTransferRoutes } from '../routes/project-transfer.js';
 import { createUpdateRoutes } from '../routes/updates.js';
 import { ProjectInstructionsResolver, createInstructionsInfoResolver } from '../../engine/context/instructions.js';
+import { executeToolDef } from '../../engine/tools/tool-execution.js';
+import { MemoryProviderUnavailableError } from '../routes/memory.js';
 import { resolvePluginServerPolicy } from '../../engine/plugins/hybrid-policy.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
 import { mergeLlmGatewayConfig, mergeSecurityConfig, mergePluginsConfig } from '../../storage/runtime-settings.js';
@@ -654,6 +657,38 @@ export function mountStandaloneRoutes(
       },
       // Активен ли плагин памяти в процессе — реестр активаций хоста (ADR-090).
       isPluginActive: () => deps.pluginRuntime.host.isActive(MEMORY_PLUGIN_NAME),
+      // М2: мутации индексов — через админ-тул плагина памяти (реестр тулов).
+      // Контекст вызова (sessionId/messageId) создаёт вызывающая сторона:
+      // сессии у портала нет — это служебный вызов инстанса.
+      invokeTool: async ({ tool, params, projectId, workingDir }) => {
+        const def = toolRegistry.get(tool);
+        if (!def) throw new MemoryProviderUnavailableError(tool);
+        return executeToolDef(
+          def,
+          params,
+          {
+            sessionId: `system:memory-portal:${randomUUID()}`,
+            messageId: `system:memory-portal:${randomUUID()}`,
+            workingDir,
+            ...(projectId ? { projectId } : {}),
+          },
+          tool,
+        );
+      },
+      // Проект и его workspace (ADR-075): относительный workspace резолвится
+      // от `workspacesRoot`, абсолютный — как есть.
+      resolveProject: async (projectId) => {
+        const project = await deps.storageContext.projects.load(projectId);
+        if (!project) return null;
+        if (!project.workspace) return { id: project.id };
+        const root = config.workspacesRoot ?? join(dataDir, 'workspaces');
+        const workspace = isAbsolute(project.workspace)
+          ? normalize(project.workspace)
+          : resolve(root, project.workspace);
+        return { id: project.id, workspace };
+      },
+      // Каталог данных — рабочий каталог для источника `facts` (нет workspace).
+      dataDir,
     },
   ));
 

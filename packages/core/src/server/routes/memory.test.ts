@@ -14,7 +14,13 @@ import { createMemoryStorage } from '../../storage/storage-context.js';
 import type { StorageContext } from '../../storage/storage-context.js';
 import type { MemoryFactRecord } from '../../storage/ports/memory-fact-repository.js';
 import type { MemoryIndexRecord } from '../../storage/ports/memory-index-repository.js';
-import { createMemoryRoutes, MEMORY_NAMESPACE, MEMORY_PLUGIN_NAME } from './memory.js';
+import {
+  createMemoryRoutes,
+  MEMORY_NAMESPACE,
+  MEMORY_PLUGIN_NAME,
+  MEMORY_INDEX_TOOL_NAME,
+} from './memory.js';
+import type { MemoryToolInvokeInput, MemoryToolInvoker } from './memory.js';
 
 const requireAuth = async (_c: Context, next: Next) => { await next(); };
 const deny = async (c: Context) => c.json({ error: { code: 'FORBIDDEN', message: 'deny' } }, 403);
@@ -56,6 +62,12 @@ interface AppOptions {
   withPorts?: boolean;
   guard?: (c: Context, next: Next) => Promise<Response | void>;
   active?: boolean;
+  /** Инвокер админ-тула плагина памяти (реестр тулов). */
+  invokeTool?: MemoryToolInvoker;
+  /** Проекты инстанса: id → workspace (нет workspace — у проекта его нет). */
+  projects?: Record<string, { workspace?: string }>;
+  /** Каталог данных инстанса. */
+  dataDir?: string;
 }
 
 /** Приложение с порталом памяти поверх in-memory портов хранения. */
@@ -71,6 +83,20 @@ function createApp(options: AppOptions = {}): { app: Hono; storage: StorageConte
       ...(ports ? { memory: ports } : {}),
       ...(options.guard ? { guard: options.guard as never } : {}),
       isPluginActive: () => options.active ?? true,
+      ...(options.invokeTool ? { invokeTool: options.invokeTool } : {}),
+      ...(options.projects
+        ? {
+          resolveProject: async (projectId: string) => {
+            const project = options.projects?.[projectId];
+            if (!project) return null;
+            return {
+              id: projectId,
+              ...(project.workspace ? { workspace: project.workspace } : {}),
+            };
+          },
+        }
+        : {}),
+      ...(options.dataDir ? { dataDir: options.dataDir } : {}),
     },
   ));
   return { app, storage };
@@ -287,6 +313,253 @@ describe('createMemoryRoutes — индексы', () => {
     await seed(storage);
     const body = await json(await app.request('/api/v2/memory/indexes?namespace=plugin:other-plugin'));
     expect(body.total).toBe(3);
+  });
+});
+
+describe('createMemoryRoutes — мутации индексов (портал → админ-тул плагина)', () => {
+  const WORKSPACE = '/srv/workspaces/demo';
+  const DATA_DIR = '/srv/data';
+
+  /** Инвокер-заглушка: запоминает вызовы и отвечает успехом. */
+  function makeInvoker(
+    result: { content?: string; isError?: boolean; metadata?: Record<string, unknown> } = {},
+  ): { invoke: MemoryToolInvoker; calls: MemoryToolInvokeInput[] } {
+    const calls: MemoryToolInvokeInput[] = [];
+    return {
+      calls,
+      invoke: async (input) => {
+        calls.push(input);
+        return { content: 'ok', ...result };
+      },
+    };
+  }
+
+  /** POST с JSON-телом. */
+  async function post(app: Hono, path: string, body: unknown): Promise<Response> {
+    return app.request(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('POST /indexes: без проекта → 400 MEMORY_PROJECT_REQUIRED', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app } = createApp({ invokeTool: invoke, projects: { 'p-1': { workspace: WORKSPACE } } });
+    const res = await post(app, '/api/v2/memory/indexes', { name: 'demo' });
+    expect(res.status).toBe(400);
+    expect((await json(res)).error.code).toBe('MEMORY_PROJECT_REQUIRED');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('POST /indexes: несуществующий проект → 404 PROJECT_NOT_FOUND', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app } = createApp({ invokeTool: invoke, projects: { 'p-1': { workspace: WORKSPACE } } });
+    const res = await post(app, '/api/v2/memory/indexes', { projectId: 'p-nope' });
+    expect(res.status).toBe(404);
+    expect((await json(res)).error.code).toBe('PROJECT_NOT_FOUND');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('POST /indexes: проект без workspace при files → 400 MEMORY_WORKSPACE_REQUIRED', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app } = createApp({ invokeTool: invoke, projects: { 'p-1': {} } });
+    const res = await post(app, '/api/v2/memory/indexes', { projectId: 'p-1' });
+    expect(res.status).toBe(400);
+    expect((await json(res)).error.code).toBe('MEMORY_WORKSPACE_REQUIRED');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('POST /indexes: успех → 202, тул вызван с action=create, projectId и workingDir', async () => {
+    const { invoke, calls } = makeInvoker({ metadata: { indexId: 'i-new' } });
+    const { app } = createApp({ invokeTool: invoke, projects: { 'p-1': { workspace: WORKSPACE } } });
+    const res = await post(app, '/api/v2/memory/indexes', {
+      name: 'demo',
+      projectId: 'p-1',
+      source: { kind: 'files', filter: '**/*.md' },
+    });
+    expect(res.status).toBe(202);
+    const body = await json(res);
+    expect(typeof body.message).toBe('string');
+    expect(calls).toHaveLength(1);
+    const [call] = calls;
+    expect(call?.tool).toBe(MEMORY_INDEX_TOOL_NAME);
+    expect(call?.projectId).toBe('p-1');
+    expect(call?.workingDir).toBe(WORKSPACE);
+    expect(call?.params.action).toBe('create');
+    expect(call?.params.name).toBe('demo');
+    expect(call?.params.projectId).toBe('p-1');
+    expect(call?.params.source).toEqual({ kind: 'files', filter: '**/*.md' });
+  });
+
+  it('POST /indexes: тело индекса — запись из порта', async () => {
+    const { invoke } = makeInvoker({ metadata: { indexId: 'i-new' } });
+    const { app, storage } = createApp({
+      invokeTool: invoke,
+      projects: { 'p-1': { workspace: WORKSPACE } },
+    });
+    await storage.memoryIndexes.saveIndex(makeIndex({ id: 'i-new', name: 'demo' }));
+    const body = await json(await post(app, '/api/v2/memory/indexes', { projectId: 'p-1' }));
+    expect(body.index.id).toBe('i-new');
+    expect(body.index.name).toBe('demo');
+    expect(body.index.namespace).toBe(MEMORY_NAMESPACE);
+  });
+
+  it('POST /indexes: без инвокера → 409 MEMORY_PROVIDER_UNAVAILABLE', async () => {
+    const { app } = createApp({ projects: { 'p-1': { workspace: WORKSPACE } } });
+    const res = await post(app, '/api/v2/memory/indexes', { projectId: 'p-1' });
+    expect(res.status).toBe(409);
+    expect((await json(res)).error.code).toBe('MEMORY_PROVIDER_UNAVAILABLE');
+  });
+
+  it('POST /indexes: плагин не активен → 409 MEMORY_PROVIDER_UNAVAILABLE', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app } = createApp({
+      invokeTool: invoke,
+      active: false,
+      projects: { 'p-1': { workspace: WORKSPACE } },
+    });
+    const res = await post(app, '/api/v2/memory/indexes', { projectId: 'p-1' });
+    expect(res.status).toBe(409);
+    expect((await json(res)).error.code).toBe('MEMORY_PROVIDER_UNAVAILABLE');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('POST /indexes: ошибка тула → 422 MEMORY_INDEX_FAILED с текстом тула', async () => {
+    const { invoke } = makeInvoker({ content: 'Индекс не собран: нет файлов', isError: true });
+    const { app } = createApp({ invokeTool: invoke, projects: { 'p-1': { workspace: WORKSPACE } } });
+    const res = await post(app, '/api/v2/memory/indexes', { projectId: 'p-1' });
+    expect(res.status).toBe(422);
+    const body = await json(res);
+    expect(body.error.code).toBe('MEMORY_INDEX_FAILED');
+    expect(body.error.message).toBe('Индекс не собран: нет файлов');
+  });
+
+  it('POST /indexes: внутренние пути в тексте ошибки маскируются', async () => {
+    const { invoke } = makeInvoker({
+      content: `не удалось прочитать ${DATA_DIR}/secrets/master.key в ${WORKSPACE}/docs`,
+      isError: true,
+    });
+    const { app } = createApp({
+      invokeTool: invoke,
+      dataDir: DATA_DIR,
+      projects: { 'p-1': { workspace: WORKSPACE } },
+    });
+    const res = await post(app, '/api/v2/memory/indexes', { projectId: 'p-1' });
+    expect(res.status).toBe(422);
+    const message = (await json(res)).error.message as string;
+    expect(message).not.toContain(DATA_DIR);
+    expect(message).not.toContain(WORKSPACE);
+    expect(message).toContain('<data>');
+  });
+
+  it('POST /indexes: источник facts без workspace → рабочий каталог = каталог данных', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app } = createApp({
+      invokeTool: invoke,
+      dataDir: DATA_DIR,
+      projects: { 'p-1': {} },
+    });
+    const res = await post(app, '/api/v2/memory/indexes', {
+      projectId: 'p-1',
+      source: { kind: 'facts' },
+    });
+    expect(res.status).toBe(202);
+    expect(calls).toHaveLength(1);
+    const [call] = calls;
+    expect(call?.workingDir).toBe(DATA_DIR);
+    expect(call?.params.source).toEqual({ kind: 'facts' });
+  });
+
+  it('POST /indexes: недопустимый источник → 400 VALIDATION_ERROR', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app } = createApp({ invokeTool: invoke, projects: { 'p-1': { workspace: WORKSPACE } } });
+    const res = await post(app, '/api/v2/memory/indexes', {
+      projectId: 'p-1',
+      source: { kind: 'bogus' },
+    });
+    expect(res.status).toBe(400);
+    expect((await json(res)).error.code).toBe('VALIDATION_ERROR');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('POST /indexes/:id/rebuild: несуществующий индекс → 404 MEMORY_INDEX_NOT_FOUND', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app } = createApp({ invokeTool: invoke, projects: { 'p-1': { workspace: WORKSPACE } } });
+    const res = await post(app, '/api/v2/memory/indexes/nope/rebuild', {});
+    expect(res.status).toBe(404);
+    expect((await json(res)).error.code).toBe('MEMORY_INDEX_NOT_FOUND');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('POST /indexes/:id/rebuild: успех → 202, тул вызван с action=rebuild', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app, storage } = createApp({
+      invokeTool: invoke,
+      projects: { 'p-1': { workspace: WORKSPACE } },
+    });
+    await storage.memoryIndexes.saveIndex(makeIndex({ id: 'i-1', projectId: 'p-1' }));
+    const res = await post(app, '/api/v2/memory/indexes/i-1/rebuild', { force: true });
+    expect(res.status).toBe(202);
+    const body = await json(res);
+    expect(body.index.id).toBe('i-1');
+    expect(calls).toHaveLength(1);
+    const [call] = calls;
+    expect(call?.params.action).toBe('rebuild');
+    expect(call?.params.indexId).toBe('i-1');
+    expect(call?.params.force).toBe(true);
+    expect(call?.projectId).toBe('p-1');
+    expect(call?.workingDir).toBe(WORKSPACE);
+  });
+
+  it('POST /indexes/:id/rebuild: индекс чужого namespace → 404', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app, storage } = createApp({
+      invokeTool: invoke,
+      projects: { 'p-1': { workspace: WORKSPACE } },
+    });
+    await storage.memoryIndexes.saveIndex(makeIndex({ id: 'i-x', namespace: 'plugin:other-plugin' }));
+    const res = await post(app, '/api/v2/memory/indexes/i-x/rebuild', {});
+    expect(res.status).toBe(404);
+    expect((await json(res)).error.code).toBe('MEMORY_INDEX_NOT_FOUND');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('DELETE /indexes/:id: успех → 204, тул вызван с action=delete', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app, storage } = createApp({
+      invokeTool: invoke,
+      projects: { 'p-1': { workspace: WORKSPACE } },
+    });
+    await storage.memoryIndexes.saveIndex(makeIndex({ id: 'i-1', projectId: 'p-1' }));
+    const res = await app.request('/api/v2/memory/indexes/i-1', { method: 'DELETE' });
+    expect(res.status).toBe(204);
+    expect(calls).toHaveLength(1);
+    const [call] = calls;
+    expect(call?.params.action).toBe('delete');
+    expect(call?.params.indexId).toBe('i-1');
+    expect(call?.projectId).toBe('p-1');
+  });
+
+  it('DELETE /indexes/:id: несуществующий индекс → 404 MEMORY_INDEX_NOT_FOUND', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app } = createApp({ invokeTool: invoke, projects: { 'p-1': { workspace: WORKSPACE } } });
+    const res = await app.request('/api/v2/memory/indexes/nope', { method: 'DELETE' });
+    expect(res.status).toBe(404);
+    expect((await json(res)).error.code).toBe('MEMORY_INDEX_NOT_FOUND');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('guard: мутации индексов закрыты без прав', async () => {
+    const { invoke } = makeInvoker();
+    const { app } = createApp({
+      invokeTool: invoke,
+      guard: deny,
+      projects: { 'p-1': { workspace: WORKSPACE } },
+    });
+    expect((await post(app, '/api/v2/memory/indexes', { projectId: 'p-1' })).status).toBe(403);
+    expect((await post(app, '/api/v2/memory/indexes/i-1/rebuild', {})).status).toBe(403);
+    expect((await app.request('/api/v2/memory/indexes/i-1', { method: 'DELETE' })).status).toBe(403);
   });
 });
 

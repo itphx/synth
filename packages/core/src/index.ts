@@ -241,6 +241,11 @@ export type { StoredDictionary, DictionaryLanguage } from './engine/router/index
 export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
 
 export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
+// ADR-090: единая точка исполнения тулов (`safeParse → execute → catch`) и
+// сужение контекста для плагинных тулов. Публичны для managed-backend:
+// портал памяти вызывает админ-тул плагина через реестр тулов (ADR-107, М2).
+export { executeToolDef, narrowToolContext, buildDenyResult } from './engine/tools/tool-execution.js';
+export type { SecurityMessageSource, BuildDenyResultParams } from './engine/tools/tool-execution.js';
 // ADR-077 (шаг 1): порт исполнения команд — интерфейс домена + реализации.
 // Домен (тулы shell/rg/git, inline-shell, детект зависимостей) ходит в порт,
 // а не в `execFile` напрямую: физический исполнитель взаимозаменяем
@@ -1579,13 +1584,16 @@ export type {
   PluginSettingsRoutesOptions,
   PluginSettingsStoreLike,
 } from './server/routes/plugins.js';
-// ADR-107 / PROP-047 §2.1: портал памяти в ядре (чтение фактов/индексов).
+// ADR-107 / PROP-047 §2.1: портал памяти в ядре (чтение фактов/индексов +
+// мутации индексов через админ-тул плагина, М2).
 export {
   createMemoryRoutes,
   MEMORY_PLUGIN_NAME,
   MEMORY_NAMESPACE,
   MEMORY_FACT_STATUSES,
   MEMORY_INDEX_STATES,
+  MEMORY_INDEX_TOOL_NAME,
+  MemoryProviderUnavailableError,
 } from './server/routes/memory.js';
 export type {
   MemoryRoutesAuth,
@@ -1600,6 +1608,10 @@ export type {
   MemoryIndexesSummary,
   MemoryFactsPage,
   MemoryIndexesPage,
+  MemoryIndexSourceKind,
+  MemoryPortalProject,
+  MemoryToolInvokeInput,
+  MemoryToolInvoker,
 } from './server/routes/memory.js';
 export { createIdentityRoutes } from './server/routes/identities.js';
 export type {

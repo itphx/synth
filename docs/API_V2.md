@@ -1831,11 +1831,12 @@ curl http://localhost:5000/api/v2/oauth/credentials/extc_<...> \
 
 ### 5.38 Память — `/api/v2/memory` (оба, ADR-107 / PROP-047 §2.1)
 
-Портал памяти в ядре: **только чтение** поверх доменных портов памяти
-(`MemoryFactRepository`/`MemoryIndexRepository`, ADR-096). Единая фабрика
-`createMemoryRoutes` (`packages/core/src/server/routes/memory.ts`) для
-standalone-core и managed-backend; backend добавляет только RBAC через
-`opts.guard`. Устройство подсистемы — [docs/MEMORY.md](./MEMORY.md).
+Портал памяти в ядре: **чтение** поверх доменных портов памяти
+(`MemoryFactRepository`/`MemoryIndexRepository`, ADR-096) и **мутации индексов**
+(М2). Единая фабрика `createMemoryRoutes`
+(`packages/core/src/server/routes/memory.ts`) для standalone-core и
+managed-backend; backend добавляет только RBAC через `opts.guard`. Устройство
+подсистемы — [docs/MEMORY.md](./MEMORY.md).
 
 **Namespace задаёт сервер.** Порт памяти обслуживает несколько независимых
 поставщиков, поэтому портал читает только свой namespace —
@@ -1844,7 +1845,8 @@ standalone-core и managed-backend; backend добавляет только RBAC
 чужого namespace выглядят как «не найдено» (404), а не как отказ по правам.
 
 **Права.** Чтение — `requireAuth` (core, standalone) / **ADMIN** (managed,
-админский портал). Портов памяти в сборке нет — контур отвечает **503
+админский портал). Мутации индексов — **тот же guard**, что и у чтения
+(managed — ADMIN). Портов памяти в сборке нет — контур отвечает **503
 `MEMORY_UNAVAILABLE`** (деградация, а не 500).
 
 | Метод | Путь | Сборка | Назначение / req-resp |
@@ -1853,8 +1855,43 @@ standalone-core и managed-backend; backend добавляет только RBAC
 | GET | `/api/v2/memory/facts` | оба | Страница фактов: `{items, total, limit, offset}`. Параметры: `query` (подстрока по `text`, регистронезависимо; ищется **в памяти** после выборки — полнотекстовый поиск М2), `kind`, `status` (`candidate`\|`active`\|`superseded`\|`retracted`\|`all`; по умолчанию `active`), `projectId`, `limit` (1..200, по умолчанию 50), `offset` (≥ 0, по умолчанию 0). `total` — число записей **под фильтрами** (не длина страницы). Мусор в параметрах → 400 `VALIDATION_ERROR` |
 | GET | `/api/v2/memory/facts/:id` | оба | Факт по id (`MemoryFactRecord` как есть); нет факта (или он чужого namespace) → 404 `MEMORY_FACT_NOT_FOUND` |
 | GET | `/api/v2/memory/indexes` | оба | Страница индексов: `{items, total}` — записи `MemoryIndexRecord` **без чанков** (чанки — отдельный порт). Параметры: `projectId`, `state` (`building`\|`ready`\|`stale`\|`failed`\|`all`; по умолчанию `all`). Мусор в `state` → 400 `VALIDATION_ERROR` |
+| POST | `/api/v2/memory/indexes` | оба | Создание индекса: тело `{name?, source?:{kind:'files'\|'facts', filter?}, projectId?, force?}` → **202** `{index, message}`. `index` — запись `MemoryIndexRecord` из порта (по `metadata.indexId` тула), если записи ещё нет — `metadata` тула. `message` — локализованное подтверждение. Границы: проект обязателен (индекс файлов строится в проекте) → 400 `MEMORY_PROJECT_REQUIRED`; нет проекта → 404 `PROJECT_NOT_FOUND`; у проекта нет workspace при `source.kind === 'files'` → 400 `MEMORY_WORKSPACE_REQUIRED`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
+| POST | `/api/v2/memory/indexes/:id/rebuild` | оба | Пересборка индекса: тело `{force?}` → **202** `{index}`. Проект и источник индекса берутся **из порта** (клиент их не подменяет). Нет индекса (или он чужого namespace) → 404 `MEMORY_INDEX_NOT_FOUND`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
+| DELETE | `/api/v2/memory/indexes/:id` | оба | Удаление индекса → **204**. Нет индекса → 404 `MEMORY_INDEX_NOT_FOUND`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
 
-**Коды ошибок:** `VALIDATION_ERROR` (400), `MEMORY_FACT_NOT_FOUND` (404),
+**Мутации: портал → админ-тул плагина через реестр.** Логика индекса
+принадлежит **плагину** (PROP-047 §3: ядро владеет данными, плагин — логикой),
+поэтому портал **не пишет в порт индексов напрямую**: он проверяет границы
+(проект, workspace, доступность провайдера, права) и вызывает **админ-тул
+плагина памяти** `plugin_synth_plugin_memory_memory_index`
+(`pluginToolFullName('synth-plugin-memory', 'memory_index')`, ADR-090) через
+реестр тулов — `executeToolDef` (`engine/tools/tool-execution.ts`). Тул —
+**единственный владелец логики индекса**: создание, пересборка и удаление
+делает он, портал отвечает только за HTTP-контракт.
+
+| Параметр тула | Значение |
+|---|---|
+| `action` | `create` \| `rebuild` \| `delete` |
+| `indexId` | id индекса (`rebuild`/`delete`) |
+| `name` | имя индекса (`create`, по умолчанию `project` — на стороне плагина) |
+| `source` | `{kind:'files'\|'facts', filter?}` (`create`, по умолчанию `files`) |
+| `projectId` | проект-владелец индекса |
+| `force` | принудительная пересборка (`rebuild`) |
+
+Контекст вызова (sessionId/messageId/workingDir) создаёт **вызывающая
+сторона** (`mount-routes`): у портала нет сессии, это служебный вызов инстанса
+(`system:memory-portal:<uuid>`). `workingDir` — **рабочий каталог проекта**
+(`project.workspace`, ADR-075); для источника `facts` без workspace — каталог
+данных инстанса. Провайдер недоступен, если инвокер не сконфигурирован или
+плагин памяти не активен в процессе (`PluginHost.isActive`) — тогда мутации
+отвечают 409, а чтение работает как раньше. Текст ошибки тула (`isError`)
+возвращается в 422 `MEMORY_INDEX_FAILED`; внутренние пути (каталог данных,
+рабочий каталог) в нём маскируются.
+
+**Коды ошибок:** `VALIDATION_ERROR` (400), `MEMORY_PROJECT_REQUIRED` (400),
+`MEMORY_WORKSPACE_REQUIRED` (400), `PROJECT_NOT_FOUND` (404),
+`MEMORY_FACT_NOT_FOUND` (404), `MEMORY_INDEX_NOT_FOUND` (404),
+`MEMORY_PROVIDER_UNAVAILABLE` (409), `MEMORY_INDEX_FAILED` (422),
 `MEMORY_UNAVAILABLE` (503).
 
 **Пример.**
@@ -1869,6 +1906,18 @@ curl 'http://localhost:5000/api/v2/memory/facts?status=all&query=fleet&limit=20'
 
 # Индексы, требующие пересборки.
 curl 'http://localhost:5000/api/v2/memory/indexes?state=stale' \
+  -H 'Authorization: Bearer admin-key-123'
+
+# Создать индекс файлов проекта (202 → {index, message}).
+curl -X POST http://localhost:5000/api/v2/memory/indexes \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"projectId":"prj_1","name":"docs","source":{"kind":"files","filter":"**/*.md"}}'
+
+# Пересобрать индекс (202) и удалить его (204).
+curl -X POST http://localhost:5000/api/v2/memory/indexes/<indexId>/rebuild \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"force":true}'
+curl -X DELETE http://localhost:5000/api/v2/memory/indexes/<indexId> \
   -H 'Authorization: Bearer admin-key-123'
 ```
 
