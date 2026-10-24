@@ -1126,3 +1126,10 @@
 - **UI:** SVG-канвас графа без новых зависимостей — детерминированный эллипс, факты у своей сущности, пунктир `co_occurs`, клик → фильтр, `role="img"`.
 - **Приёмка:** `pnpm build` OK · `typecheck` 9/9 · lint 0 errors · **9752 теста** (shared 801 · core 6078 · executor 24 · ui 1873 · backend 682 · sdk 96 · plugin-memory 147 · storage-postgres 51) · `adr-check`/`docs-link-check` OK.
 - **Остаток:** Gbrain (внешний add-on, договорились не трогать); авто-«schedule → pipeline run»; автошедулер консолидации.
+
+## 2026-10-24 — финал: память на обоих инстансах, chart 0.12.1-12
+
+- **Сборки:** `--test-only` → `0.12.1-11`, `BACKEND_FLAVOR=full` → `0.12.1-12` (рабочая); версия приложения не менялась.
+- **`test-allinone` включён:** `backend.extraEnv` (`SYNTH_PLUGINS_EXECUTION_ENABLED`, эмбеддинги ollama/nomic-embed-text) + `backend.plugins` (deployDir/deployTrust); доступность ollama из пода проверена заранее.
+- **Проверено на обоих инстансах:** плагин `source: deploy`, `scan: safe`, `active: true` без ручного `approve`; `/memory/status` active; `/pipeline-templates` содержит `builtin:memory-consolidation`; `/memory/graph` и `/memory/consolidate {dryRun}` → 200; на all-in-one индекс собран (2 файла → 2 чанка, dim 768) и пересобран (gen 1 → 2); метрика `synth_memory_index_chunks{status="ready"} 6` на `synth`.
+- **Остаток:** граф на реальных фактах не проверен (0 фактов: запись только тулом `memory_write` в ходе сессии); авто-«schedule → pipeline run» и автошедулер консолидации; Gbrain — вне репозитория (договорено).
