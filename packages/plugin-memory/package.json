@@ -16,12 +16,11 @@
     }
   },
   "scripts": {
-    "build": "rm -rf dist && esbuild src/index.ts --bundle --format=esm --platform=node --target=node20 --external:@itphx/* --outfile=dist/index.js",
+    "build": "esbuild src/index.ts --bundle --format=esm --platform=node --target=node20 --external:@itphx/* --outfile=dist/index.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "clean": "rm -rf dist"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "zod": "^3.24.0"
