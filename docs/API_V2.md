@@ -1859,6 +1859,7 @@ managed-backend; backend добавляет только RBAC через `opts.g
 | POST | `/api/v2/memory/indexes/:id/rebuild` | оба | Пересборка индекса: тело `{force?}` → **202** `{index}`. Проект и источник индекса берутся **из порта** (клиент их не подменяет). Нет индекса (или он чужого namespace) → 404 `MEMORY_INDEX_NOT_FOUND`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
 | DELETE | `/api/v2/memory/indexes/:id` | оба | Удаление индекса → **204**. Нет индекса → 404 `MEMORY_INDEX_NOT_FOUND`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
 | POST | `/api/v2/memory/consolidate` | оба | Консолидация фактов: тело `{projectId?, threshold?, dryRun?}` → **200** `{report, message}`. `report` = `{clusters, superseded, kept, items}` — число кластеров, число вытесненных фактов, число канонов и состав кластеров (`items`: `{keptId, supersededIds, similarity}` на кластер). `threshold` — порог косинуса сходства (0.5..0.99), вне диапазона → 400 `VALIDATION_ERROR`; `dryRun` — прогон без записи (решает плагин). `projectId` — проект, чьи факты консолидируются; без него — факты инстанса; нет такого проекта → 404 `PROJECT_NOT_FOUND`. Workspace проекта **не требуется** (консолидация идёт по фактам). Провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_CONSOLIDATION_FAILED` (машинный код тула — в `error.details.code`) |
+| GET | `/api/v2/memory/graph` | оба | Чтение графа памяти: query `entity?` (сущность-старт обхода; не задана или пустая — «весь граф»), `depth?` (1..3, по умолчанию 1), `limit?` (1..200, по умолчанию 100), `projectId?` (скоуп графа) → **200** `{nodes, edges, stats}`. `nodes` — `{id, kind:'entity'\|'fact', name?, factId?, text?, entity?}`, `edges` — `{from, to, relation?}`, `stats` — `{entities, facts, edges}`. Мусор в `depth`/`limit` → 400 `VALIDATION_ERROR`; нет такого проекта → 404 `PROJECT_NOT_FOUND`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_GRAPH_FAILED` (машинный код тула — в `error.details.code`) |
 
 **Мутации: портал → админ-тул плагина через реестр.** Логика индекса
 принадлежит **плагину** (PROP-047 §3: ядро владеет данными, плагин — логикой),
@@ -1908,11 +1909,43 @@ managed-backend; backend добавляет только RBAC через `opts.g
 инстанса. Провал тула → 422 `MEMORY_CONSOLIDATION_FAILED`, его машинный код
 (напр. `plugin.embedding_not_configured`) — в `error.details.code`.
 
+**Чтение графа памяти.** Граф (PROP-047 §2.1, М5) — тоже **логика плагина**:
+сущности и их со-встречаемости плагин извлекает из текста фактов сам (ядро IR
+графа не строит). Поэтому портал вызывает админ-тул плагина памяти
+`plugin_synth_plugin_memory_memory_graph`
+(`pluginToolFullName('synth-plugin-memory', 'memory_graph')`, ADR-090) тем же
+способом, что и мутации индексов и консолидация: guard — **тот же**, что у
+чтения (managed — ADMIN); недоступный провайдер (инвокер не задан или плагин не
+активен) → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422
+`MEMORY_GRAPH_FAILED` (его машинный код — в `error.details.code`, внутренние
+пути в тексте маскируются).
+
+Граф собирается из упоминаний сущностей в фактах памяти: `[[сущность]]` — сущность
+(узел `kind:'entity'`), `[[сущность|связь]]` — сущность с типом связи (ребро
+`relation`); факт, в котором встретились сущности, — узел `kind:'fact'`, а
+со-встречаемость двух сущностей в одном факте — ребро между ними. Ответ:
+узлы (`nodes`), со-встречаемости (`edges`) и счётчики (`stats`). Форма ответа
+нормализуется порталом: недоверенные метаданные тула не ломают
+`{nodes, edges, stats}` (узел без `id`/с неизвестным `kind` и ребро без
+`from`/`to` отбрасываются), а счётчики считаются **по нормализованным** узлам и
+рёбрам — ответ плагина не может разойтись с формой графа.
+
+Параметры: `entity` — сущность-старт обхода (не задана или пустая — «весь
+граф»; непустая строка длиной до 200 символов, длиннее → 400
+`VALIDATION_ERROR`); `depth` — глубина обхода (1 — сама сущность, 2 — её связи,
+3 — связи связей; 1..3, по умолчанию 1); `limit` — потолок узлов ответа (1..200,
+по умолчанию 100). Скоуп — `projectId` (необязательный): проект должен
+существовать (нет такого → 404 `PROJECT_NOT_FOUND`), рабочий каталог вызова =
+workspace проекта, иначе каталог данных инстанса (граф читается и без
+workspace). Скоуп проекта уходит в **контекст вызова** тула (`projectId`),
+а не в его параметры: контракт тула — `entity`/`depth`/`limit`.
+
 **Коды ошибок:** `VALIDATION_ERROR` (400), `MEMORY_PROJECT_REQUIRED` (400),
 `MEMORY_WORKSPACE_REQUIRED` (400), `PROJECT_NOT_FOUND` (404),
 `MEMORY_FACT_NOT_FOUND` (404), `MEMORY_INDEX_NOT_FOUND` (404),
 `MEMORY_PROVIDER_UNAVAILABLE` (409), `MEMORY_INDEX_FAILED` (422),
-`MEMORY_CONSOLIDATION_FAILED` (422), `MEMORY_UNAVAILABLE` (503).
+`MEMORY_CONSOLIDATION_FAILED` (422), `MEMORY_GRAPH_FAILED` (422),
+`MEMORY_UNAVAILABLE` (503).
 
 **Пример.**
 
@@ -1944,6 +1977,10 @@ curl -X DELETE http://localhost:5000/api/v2/memory/indexes/<indexId> \
 curl -X POST http://localhost:5000/api/v2/memory/consolidate \
   -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
   -d '{"projectId":"prj_1","threshold":0.85,"dryRun":true}'
+
+# Граф памяти: сущность и её связи (200 → {nodes, edges, stats}).
+curl 'http://localhost:5000/api/v2/memory/graph?entity=Fleet&depth=2&limit=50' \
+  -H 'Authorization: Bearer admin-key-123'
 ```
 
 ## 6. Источники

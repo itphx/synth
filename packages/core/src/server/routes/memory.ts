@@ -20,6 +20,7 @@
  * | POST | `/indexes/:id/rebuild` | 202 `{index}` — пересборка запущена |
  * | DELETE | `/indexes/:id` | 204 — индекс удалён |
  * | POST | `/consolidate` | 200 `{report, message}` — отчёт консолидации фактов |
+ * | GET | `/graph` | 200 `{nodes, edges, stats}` — граф памяти (сущности и их со-встречаемости) |
  *
  * ## Правила
  *
@@ -73,6 +74,29 @@
  * - **провал тула** (`isError`) — 422 `MEMORY_CONSOLIDATION_FAILED` с текстом
  *   из `content` (пути замаскированы); код тула (`metadata.code`, напр.
  *   `plugin.embedding_not_configured`) пробрасывается в `error.details.code`.
+ *
+ * ## Чтение графа памяти: портал → админ-тул плагина
+ *
+ * Граф (PROP-047 §2.1, М5) — тоже **логика плагина**: извлечение сущностей и
+ * их со-встречаемостей из текста фактов (`[[сущность]]` /
+ * `[[сущность|связь]]`) плагин делает сам, ядро не строит IR графа. Поэтому
+ * чтение графа устроено как остальные операции плагина: портал проверяет
+ * границы и вызывает админ-тул `plugin_synth_plugin_memory_memory_graph`
+ * через `opts.invokeTool`.
+ *
+ * - **guard — тот же**, что у чтения (managed — ADMIN);
+ * - **глубина обхода** (`depth`) — целое 1..3 (по умолчанию 1), **потолок
+ *   узлов** (`limit`) — целое 1..200 (по умолчанию 100); мусор → 400
+ *   `VALIDATION_ERROR`;
+ * - **сущность** (`entity`) — не задана (или пустая) → «весь граф»;
+ * - **проект опционален** (`projectId`) — скоуп графа: нет такого проекта →
+ *   404 `PROJECT_NOT_FOUND`; рабочий каталог вызова = workspace проекта,
+ *   иначе каталог данных инстанса (граф работает и без workspace);
+ * - **провайдер недоступен** (тул не зарегистрирован или плагин не активен) —
+ *   `409 MEMORY_PROVIDER_UNAVAILABLE`;
+ * - **провал тула** (`isError`) — 422 `MEMORY_GRAPH_FAILED` с текстом из
+ *   `content` (пути замаскированы); код тула (`metadata.code`) — в
+ *   `error.details.code`.
  */
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -129,6 +153,15 @@ export const MEMORY_CONSOLIDATE_TOOL_NAME = pluginToolFullName(
   'memory_consolidate',
 );
 
+/**
+ * Полное имя админ-тула плагина памяти для чтения графа (ADR-090).
+ *
+ * Граф — логика плагина (PROP-047 §2.1, М5): извлечение сущностей и их
+ * со-встречаемостей из текста фактов. Хост составляет имя тем же хелпером,
+ * что и у `memory_index`/`memory_consolidate`.
+ */
+export const MEMORY_GRAPH_TOOL_NAME = pluginToolFullName(MEMORY_PLUGIN_NAME, 'memory_graph');
+
 /** Вид источника корпуса индекса, который принимает портал. */
 export type MemoryIndexSourceKind = 'files' | 'facts';
 
@@ -153,10 +186,12 @@ export interface MemoryToolInvokeInput {
    * Параметры тула.
    *
    * - `memory_index`: `action`/`indexId`/`name`/`source`/`projectId`/`force`;
-   * - `memory_consolidate`: `projectId?`/`threshold?`/`dryRun?`.
+   * - `memory_consolidate`: `projectId?`/`threshold?`/`dryRun?`;
+   * - `memory_graph`: `entity?`/`depth`/`limit` (скоуп проекта — в
+   *   `projectId` контекста вызова, а не в параметрах).
    */
   params: Record<string, unknown>;
-  /** Проект-владелец индекса или консолидации (если есть). */
+  /** Проект-владелец индекса/консолидации или скоуп графа (если есть). */
   projectId?: string;
   /** Рабочий каталог вызова (workspace проекта либо каталог данных). */
   workingDir: string;
@@ -166,8 +201,9 @@ export interface MemoryToolInvokeInput {
  * Вызов админ-тула плагина памяти (реализует вызывающая сторона — mount-routes).
  *
  * Результат — `ToolResult`: `content` — текст, `isError` — ошибка тула,
- * `metadata` — `{indexId?, state?, generation?, stats?}` (индекс) или
- * `{clusters?, superseded?, kept?, items?}` (консолидация).
+ * `metadata` — `{indexId?, state?, generation?, stats?}` (индекс),
+ * `{clusters?, superseded?, kept?, items?}` (консолидация) или
+ * `{nodes?, edges?, stats?}` (граф).
  */
 export type MemoryToolInvoker = (input: MemoryToolInvokeInput) => Promise<ToolResult>;
 
@@ -274,6 +310,14 @@ export interface MemoryRouteMessages {
   consolidationFailed: (c: Context) => string;
   /** Сообщение об успешной консолидации. */
   consolidated: (c: Context) => string;
+  /** Некорректная глубина обхода графа памяти (вне 1..3). */
+  invalidGraphDepth: (c: Context) => string;
+  /** Некорректный потолок узлов графа памяти (вне 1..200). */
+  invalidGraphLimit: (c: Context) => string;
+  /** Некорректная сущность графа памяти (пусто или слишком длинная). */
+  invalidGraphEntity: (c: Context) => string;
+  /** Чтение графа памяти не удалось (текст — из ответа тула). */
+  graphFailed: (c: Context) => string;
 }
 
 /** Порты памяти инстанса (ADR-096) — источник истины для портала. */
@@ -414,6 +458,62 @@ export interface MemoryConsolidationReport {
   items: MemoryConsolidationItem[];
 }
 
+/**
+ * Вид узла графа памяти.
+ *
+ * `entity` — сущность (упоминание `[[сущность]]`), `fact` — факт-источник
+ * упоминания.
+ */
+export type MemoryGraphNodeKind = 'entity' | 'fact';
+
+/**
+ * Узел графа памяти (`GET /graph`).
+ *
+ * Необязательные поля заполняются, только если плагин их прислал: `name` —
+ * имя сущности, `factId`/`text` — факт-источник, `entity` — сущность узла-факта.
+ */
+export interface MemoryGraphNode {
+  /** Id узла в пределах графа. */
+  id: string;
+  /** Вид узла (сущность или факт). */
+  kind: MemoryGraphNodeKind;
+  /** Имя сущности (узел-сущность). */
+  name?: string;
+  /** Id факта-источника (узел-факт). */
+  factId?: string;
+  /** Текст факта-источника (узел-факт). */
+  text?: string;
+  /** Сущность, к которой относится узел-факт. */
+  entity?: string;
+}
+
+/** Ребро графа памяти — со-встречаемость двух узлов. */
+export interface MemoryGraphEdge {
+  /** Id узла-источника. */
+  from: string;
+  /** Id узла-цели. */
+  to: string;
+  /** Тип связи (напр. `связь` из `[[сущность|связь]]`). */
+  relation?: string;
+}
+
+/** Граф памяти — ответ `GET /graph`. */
+export interface MemoryGraph {
+  /** Узлы графа (сущности и факты-источники). */
+  nodes: MemoryGraphNode[];
+  /** Рёбра графа (со-встречаемости). */
+  edges: MemoryGraphEdge[];
+  /** Счётчики графа (из нормализованных узлов и рёбер). */
+  stats: {
+    /** Число узлов-сущностей. */
+    entities: number;
+    /** Число узлов-фактов. */
+    facts: number;
+    /** Число рёбер. */
+    edges: number;
+  };
+}
+
 const DEFAULT_MESSAGES: MemoryRouteMessages = {
   invalidStatus: () => 'Недопустимый статус факта памяти',
   invalidState: () => 'Недопустимое состояние индекса памяти',
@@ -433,6 +533,10 @@ const DEFAULT_MESSAGES: MemoryRouteMessages = {
   invalidThreshold: () => 'Порог консолидации памяти: ожидается число от 0.5 до 0.99',
   consolidationFailed: () => 'Не удалось выполнить консолидацию памяти',
   consolidated: () => 'Консолидация памяти выполнена',
+  invalidGraphDepth: () => 'Глубина графа памяти: ожидается целое число от 1 до 3',
+  invalidGraphLimit: () => 'limit графа памяти: ожидается целое число от 1 до 200',
+  invalidGraphEntity: () => 'Сущность графа памяти: ожидается непустая строка длиной до 200 символов',
+  graphFailed: () => 'Не удалось прочитать граф памяти',
 };
 
 /** Дефолтный потолок выборки фактов. */
@@ -452,6 +556,27 @@ const MIN_CONSOLIDATION_THRESHOLD = 0.5;
 
 /** Верхняя граница порога кластеризации (косинус сходства). */
 const MAX_CONSOLIDATION_THRESHOLD = 0.99;
+
+/** Глубина обхода графа по умолчанию (только указанная сущность). */
+const DEFAULT_GRAPH_DEPTH = 1;
+
+/** Максимальная глубина обхода графа (1 — сущность, 2 — её связи, 3 — связи связей). */
+const MAX_GRAPH_DEPTH = 3;
+
+/** Потолок узлов графа по умолчанию. */
+const DEFAULT_GRAPH_LIMIT = 100;
+
+/** Максимальный потолок узлов графа (больше — обрезается). */
+const MAX_GRAPH_LIMIT = 200;
+
+/**
+ * Максимальная длина сущности графа (символы).
+ *
+ * Граница — из контракта тула графа (`entity` — строка 1..200): портал
+ * отсекает мусор сам (400 `VALIDATION_ERROR`), иначе длинная сущность
+ * дошла бы до тула и вернулась ошибкой плагина (422).
+ */
+const MAX_GRAPH_ENTITY_LENGTH = 200;
 
 /** Разбор неотрицательного целого query-параметра (`null` — не задан). */
 function parseIntegerParam(raw: string | undefined): number | null {
@@ -518,6 +643,100 @@ function toolErrorDetails(metadata?: Record<string, unknown>): { code: string } 
   const code = metadata?.code;
   if (typeof code !== 'string' || !code.trim()) return undefined;
   return { code: code.trim() };
+}
+
+/**
+ * Необязательная строка из метаданных тула (обрезанная; пустая — нет поля).
+ *
+ * Идентификаторы (`name`/`factId`/`entity`) обрезаются — это имена, а не текст.
+ */
+function optionalIdent(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Необязательный текст из метаданных тула (как есть; пустая — нет поля).
+ *
+ * Текст факта не обрезается: это содержимое факта, а не идентификатор.
+ */
+function optionalText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  return value.trim() ? value : undefined;
+}
+
+/**
+ * Узлы графа — из метаданных тула (недоверенный ввод приводится к форме).
+ *
+ * Узел без `id` или с неизвестным `kind` в ответ не попадает: иначе клиент
+ * получил бы «вершину, о которой ничего не известно».
+ */
+function normalizeGraphNodes(value: unknown): MemoryGraphNode[] {
+  if (!Array.isArray(value)) return [];
+  const nodes: MemoryGraphNode[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const node = raw as Record<string, unknown>;
+    const id = optionalIdent(node.id);
+    if (!id) continue;
+    const kind = node.kind;
+    if (kind !== 'entity' && kind !== 'fact') continue;
+    const name = optionalIdent(node.name);
+    const factId = optionalIdent(node.factId);
+    const text = optionalText(node.text);
+    const entity = optionalIdent(node.entity);
+    nodes.push({
+      id,
+      kind,
+      ...(name ? { name } : {}),
+      ...(factId ? { factId } : {}),
+      ...(text ? { text } : {}),
+      ...(entity ? { entity } : {}),
+    });
+  }
+  return nodes;
+}
+
+/**
+ * Рёбра графа — из метаданных тула (недоверенный ввод приводится к форме).
+ *
+ * Ребро без `from`/`to` в ответ не попадает — оно не привязано к узлам.
+ */
+function normalizeGraphEdges(value: unknown): MemoryGraphEdge[] {
+  if (!Array.isArray(value)) return [];
+  const edges: MemoryGraphEdge[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const edge = raw as Record<string, unknown>;
+    const from = optionalIdent(edge.from);
+    const to = optionalIdent(edge.to);
+    if (!from || !to) continue;
+    const relation = optionalIdent(edge.relation);
+    edges.push({ from, to, ...(relation ? { relation } : {}) });
+  }
+  return edges;
+}
+
+/**
+ * Граф памяти — из метаданных тула.
+ *
+ * Счётчики — **из нормализованных узлов и рёбер**: ответ плагина не должен
+ * расходиться с формой графа (иначе портал показал бы «3 сущности» при двух
+ * узлах в ответе).
+ */
+function normalizeMemoryGraph(metadata?: Record<string, unknown>): MemoryGraph {
+  const nodes = normalizeGraphNodes(metadata?.nodes);
+  const edges = normalizeGraphEdges(metadata?.edges);
+  return {
+    nodes,
+    edges,
+    stats: {
+      entities: nodes.filter((node) => node.kind === 'entity').length,
+      facts: nodes.filter((node) => node.kind === 'fact').length,
+      edges: edges.length,
+    },
+  };
 }
 
 /**
@@ -1066,6 +1285,85 @@ export function createMemoryRoutes(
 
     const report = normalizeConsolidationReport(call.result.metadata);
     return c.json({ report, message: messages.consolidated(c) }, 200);
+  });
+
+  /**
+   * Граф памяти — через админ-тул плагина (ADR-090).
+   *
+   * Граф строит **плагин** (PROP-047 §2.1, М5): он извлекает сущности и их
+   * со-встречаемости из текста фактов (`[[сущность]]` /
+   * `[[сущность|связь]]`) и отдаёт узлы/рёбра в метаданных тула. Портал
+   * проверяет границы (глубина, потолок, проект, доступность провайдера) и
+   * отвечает за HTTP-контракт.
+   *
+   * Отличие от консолидации: чтение — без побочных эффектов, поэтому портал
+   * не требует портов памяти (граф живёт в плагине) и отвечает 200 сразу.
+   */
+  app.get('/graph', guard, async (c) => {
+    // Глубина обхода: целое 1..3 (по умолчанию 1).
+    const parsedDepth = parseIntegerParam(c.req.query('depth'));
+    if (
+      parsedDepth !== null &&
+      (!Number.isFinite(parsedDepth) || parsedDepth < 1 || parsedDepth > MAX_GRAPH_DEPTH)
+    ) {
+      return apiError(c, 'VALIDATION_ERROR', messages.invalidGraphDepth(c), 400);
+    }
+    const depth = parsedDepth ?? DEFAULT_GRAPH_DEPTH;
+
+    // Потолок узлов графа: целое 1..200 (по умолчанию 100).
+    const parsedLimit = parseIntegerParam(c.req.query('limit'));
+    if (
+      parsedLimit !== null &&
+      (!Number.isFinite(parsedLimit) || parsedLimit < 1 || parsedLimit > MAX_GRAPH_LIMIT)
+    ) {
+      return apiError(c, 'VALIDATION_ERROR', messages.invalidGraphLimit(c), 400);
+    }
+    const limit = parsedLimit ?? DEFAULT_GRAPH_LIMIT;
+
+    // Сущность не задана (или пустая) — «весь граф»: параметр тулу не уходит.
+    const entity = c.req.query('entity')?.trim() || undefined;
+    if (entity && entity.length > MAX_GRAPH_ENTITY_LENGTH) {
+      return apiError(c, 'VALIDATION_ERROR', messages.invalidGraphEntity(c), 400);
+    }
+
+    // Скоуп графа: проект (если задан) должен существовать — иначе 404
+    // (fail-closed, как у консолидации).
+    const projectId = c.req.query('projectId')?.trim() || undefined;
+    let project: MemoryPortalProject | null = null;
+    if (projectId) {
+      project = await resolvePortalProject(projectId);
+      if (!project) {
+        return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
+      }
+    }
+    if (!providerAvailable()) return providerUnavailable(c);
+
+    // Workspace у проекта может не быть — это не ошибка чтения графа:
+    // рабочий каталог вызова = workspace, иначе каталог данных инстанса.
+    const workingDir = workingDirOf(project);
+    const params: Record<string, unknown> = {
+      depth,
+      limit,
+      ...(entity ? { entity } : {}),
+    };
+    const call = await invokeMemoryTool(
+      c,
+      {
+        tool: MEMORY_GRAPH_TOOL_NAME,
+        params,
+        // Скоуп проекта — в контексте вызова (не в параметрах тула).
+        ...(projectId ? { projectId } : {}),
+        workingDir,
+      },
+      {
+        code: 'MEMORY_GRAPH_FAILED',
+        message: messages.graphFailed(c),
+        withDetails: true,
+      },
+    );
+    if (!call.ok) return call.response;
+
+    return c.json(normalizeMemoryGraph(call.result.metadata), 200);
   });
 
   return app;

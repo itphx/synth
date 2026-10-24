@@ -20,6 +20,7 @@ import {
   MEMORY_PLUGIN_NAME,
   MEMORY_INDEX_TOOL_NAME,
   MEMORY_CONSOLIDATE_TOOL_NAME,
+  MEMORY_GRAPH_TOOL_NAME,
 } from './memory.js';
 import type { MemoryToolInvokeInput, MemoryToolInvoker } from './memory.js';
 
@@ -667,6 +668,133 @@ describe('createMemoryRoutes — консолидация фактов (порт
     expect((await json(res)).report).toEqual(REPORT_METADATA);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.workingDir).toBe(DATA_DIR);
+  });
+});
+
+describe('createMemoryRoutes — граф памяти (портал → админ-тул плагина)', () => {
+  const WORKSPACE = '/srv/workspaces/demo';
+  const DATA_DIR = '/srv/data';
+
+  const GRAPH_METADATA = {
+    nodes: [
+      { id: 'e-1', kind: 'entity', name: 'Fleet' },
+      {
+        id: 'f-1',
+        kind: 'fact',
+        factId: 'fact-1',
+        text: 'Деплой в test идёт через Fleet',
+        entity: 'Fleet',
+      },
+    ],
+    edges: [{ from: 'f-1', to: 'e-1', relation: 'упоминается' }],
+    stats: { entities: 1, facts: 1, edges: 1 },
+  };
+
+  it('GET /graph: успех → 200, форма {nodes, edges, stats}', async () => {
+    const { invoke, calls } = makeInvoker({ metadata: GRAPH_METADATA });
+    const { app } = createApp({ invokeTool: invoke, projects: { 'p-1': { workspace: WORKSPACE } } });
+    const res = await app.request('/api/v2/memory/graph?entity=Fleet&depth=2&limit=50&projectId=p-1');
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.nodes).toEqual(GRAPH_METADATA.nodes);
+    expect(body.edges).toEqual(GRAPH_METADATA.edges);
+    expect(body.stats).toEqual({ entities: 1, facts: 1, edges: 1 });
+    expect(calls).toHaveLength(1);
+    const [call] = calls;
+    expect(call?.tool).toBe(MEMORY_GRAPH_TOOL_NAME);
+    expect(call?.params).toEqual({ entity: 'Fleet', depth: 2, limit: 50 });
+    expect(call?.workingDir).toBe(WORKSPACE);
+    expect(call?.projectId).toBe('p-1');
+
+    // Без параметров — дефолты (depth 1, limit 100), сущность не передаётся.
+    await app.request('/api/v2/memory/graph');
+    expect(calls[1]?.params).toEqual({ depth: 1, limit: 100 });
+
+    // Недоверенные метаданные не ломают форму ответа.
+    const { invoke: badInvoke } = makeInvoker({
+      metadata: { nodes: 'nope', edges: [{ from: 'a' }, { from: 'b', to: 'c' }] },
+    });
+    const { app: badApp } = createApp({ invokeTool: badInvoke });
+    const badBody = await json(await badApp.request('/api/v2/memory/graph'));
+    expect(badBody.nodes).toEqual([]);
+    expect(badBody.edges).toEqual([{ from: 'b', to: 'c' }]);
+    expect(badBody.stats).toEqual({ entities: 0, facts: 0, edges: 1 });
+  });
+
+  it('GET /graph: depth/limit вне диапазона → 400 VALIDATION_ERROR', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app } = createApp({ invokeTool: invoke });
+    const badQueries = [
+      'depth=0',
+      'depth=4',
+      'depth=abc',
+      'limit=0',
+      'limit=201',
+      'limit=x',
+      // Мусор в сущности — длиннее контракта тула (1..200 символов).
+      `entity=${'x'.repeat(201)}`,
+    ];
+    for (const query of badQueries) {
+      const res = await app.request(`/api/v2/memory/graph?${query}`);
+      expect(res.status, query).toBe(400);
+      expect((await json(res)).error.code).toBe('VALIDATION_ERROR');
+    }
+    expect(calls).toHaveLength(0);
+    // Границы диапазона допустимы.
+    for (const query of ['depth=1', 'depth=3', 'limit=1', 'limit=200', `entity=${'x'.repeat(200)}`]) {
+      const res = await app.request(`/api/v2/memory/graph?${query}`);
+      expect(res.status, query).toBe(200);
+    }
+  });
+
+  it('GET /graph: несуществующий проект → 404 PROJECT_NOT_FOUND', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app } = createApp({ invokeTool: invoke, projects: { 'p-1': { workspace: WORKSPACE } } });
+    const res = await app.request('/api/v2/memory/graph?projectId=p-nope');
+    expect(res.status).toBe(404);
+    expect((await json(res)).error.code).toBe('PROJECT_NOT_FOUND');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('GET /graph: без инвокера → 409 MEMORY_PROVIDER_UNAVAILABLE', async () => {
+    const { app } = createApp();
+    const res = await app.request('/api/v2/memory/graph');
+    expect(res.status).toBe(409);
+    expect((await json(res)).error.code).toBe('MEMORY_PROVIDER_UNAVAILABLE');
+  });
+
+  it('GET /graph: ошибка тула → 422 MEMORY_GRAPH_FAILED с кодом в details', async () => {
+    const { invoke } = makeInvoker({
+      content: `Граф не построен: ${DATA_DIR}/memory`,
+      isError: true,
+      metadata: { code: 'plugin.graph_not_ready' },
+    });
+    const { app } = createApp({ invokeTool: invoke, dataDir: DATA_DIR });
+    const res = await app.request('/api/v2/memory/graph');
+    expect(res.status).toBe(422);
+    const body = await json(res);
+    expect(body.error.code).toBe('MEMORY_GRAPH_FAILED');
+    expect(body.error.details.code).toBe('plugin.graph_not_ready');
+    // Внутренние пути в тексте ошибки маскируются.
+    expect(body.error.message).not.toContain(DATA_DIR);
+    expect(body.error.message).toContain('<data>');
+  });
+
+  it('GET /graph: проект без workspace не мешает (200, рабочий каталог = каталог данных)', async () => {
+    const { invoke, calls } = makeInvoker({ metadata: GRAPH_METADATA });
+    const { app } = createApp({
+      invokeTool: invoke,
+      dataDir: DATA_DIR,
+      projects: { 'p-1': {} },
+    });
+    const res = await app.request('/api/v2/memory/graph?projectId=p-1');
+    expect(res.status).toBe(200);
+    expect((await json(res)).nodes).toHaveLength(2);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.workingDir).toBe(DATA_DIR);
+    // Скоуп проекта уходит в контекст вызова, а не в параметры тула.
+    expect(calls[0]?.projectId).toBe('p-1');
+    expect(calls[0]?.params.projectId).toBeUndefined();
   });
 });
 

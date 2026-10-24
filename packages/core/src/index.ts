@@ -1594,6 +1594,7 @@ export {
   MEMORY_INDEX_STATES,
   MEMORY_INDEX_TOOL_NAME,
   MEMORY_CONSOLIDATE_TOOL_NAME,
+  MEMORY_GRAPH_TOOL_NAME,
   MemoryProviderUnavailableError,
 } from './server/routes/memory.js';
 export type {
@@ -1611,6 +1612,10 @@ export type {
   MemoryIndexesPage,
   MemoryConsolidationItem,
   MemoryConsolidationReport,
+  MemoryGraphNode,
+  MemoryGraphNodeKind,
+  MemoryGraphEdge,
+  MemoryGraph,
   MemoryIndexSourceKind,
   MemoryPortalProject,
   MemoryToolInvokeInput,

@@ -1525,6 +1525,7 @@ not a 500).
 | POST | `/api/v2/memory/indexes/:id/rebuild` | both | Rebuild an index: the body `{force?}` → **202** `{index}`. The project and the source of the index are taken **from the port** (a client cannot substitute them). No index (or a foreign namespace) → 404 `MEMORY_INDEX_NOT_FOUND`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
 | DELETE | `/api/v2/memory/indexes/:id` | both | Delete an index → **204**. No index → 404 `MEMORY_INDEX_NOT_FOUND`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
 | POST | `/api/v2/memory/consolidate` | both | Consolidate the facts: the body `{projectId?, threshold?, dryRun?}` → **200** `{report, message}`. `report` = `{clusters, superseded, kept, items}` — the number of clusters, the number of superseded facts, the number of canonical facts and the cluster contents (`items`: `{keptId, supersededIds, similarity}` per cluster). `threshold` — the cosine similarity threshold (0.5..0.99), out of range → 400 `VALIDATION_ERROR`; `dryRun` — a run without writes (the plugin decides). `projectId` — the project whose facts are consolidated; without it — the facts of the instance; no such project → 404 `PROJECT_NOT_FOUND`. The project **does not need** a workspace (the consolidation works on the facts). The provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_CONSOLIDATION_FAILED` (the machine code of the tool is in `error.details.code`) |
+| GET | `/api/v2/memory/graph` | both | Read the memory graph: the query `entity?` (the start entity of the walk; not set or empty — the whole graph), `depth?` (1..3, 1 by default), `limit?` (1..200, 100 by default), `projectId?` (the graph scope) → **200** `{nodes, edges, stats}`. `nodes` — `{id, kind:'entity'\|'fact', name?, factId?, text?, entity?}`, `edges` — `{from, to, relation?}`, `stats` — `{entities, facts, edges}`. Garbage in `depth`/`limit` → 400 `VALIDATION_ERROR`; no such project → 404 `PROJECT_NOT_FOUND`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_GRAPH_FAILED` (the machine code of the tool is in `error.details.code`) |
 
 **Mutations: the portal → the plugin's admin tool through the registry.** The index
 logic belongs to the **plugin** (PROP-047 §3: the core owns the data, the plugin
@@ -1577,11 +1578,46 @@ the project workspace if it exists, otherwise the instance data directory. A too
 failure → 422 `MEMORY_CONSOLIDATION_FAILED`, its machine code (e.g.
 `plugin.embedding_not_configured`) — in `error.details.code`.
 
+**Reading the memory graph.** The graph (PROP-047 §2.1, M5) is also the
+**plugin's logic**: the plugin extracts the entities and their co-occurrences
+from the text of the facts itself (the core does not build a graph IR). So the
+portal calls the memory plugin's admin tool
+`plugin_synth_plugin_memory_memory_graph`
+(`pluginToolFullName('synth-plugin-memory', 'memory_graph')`, ADR-090) the same
+way as the index mutations and the consolidation do: the guard is **the same**
+as for the reads (managed — ADMIN); an unavailable provider (the invoker is not
+configured or the plugin is not active) → 409 `MEMORY_PROVIDER_UNAVAILABLE`; a
+tool failure → 422 `MEMORY_GRAPH_FAILED` (its machine code is in
+`error.details.code`, the internal paths in the text are masked).
+
+The graph is built from the entity mentions in the memory facts: `[[entity]]` —
+an entity (a `kind:'entity'` node), `[[entity|relation]]` — an entity with a
+relation type (the `relation` of an edge); the fact where the entities co-occur
+is a `kind:'fact'` node, and the co-occurrence of two entities in one fact is
+an edge between them. The answer: the nodes (`nodes`), the co-occurrences
+(`edges`) and the counters (`stats`). The portal normalizes the shape of the
+answer: the untrusted tool metadata does not break `{nodes, edges, stats}` (a
+node without `id`/with an unknown `kind` and an edge without `from`/`to` are
+dropped), and the counters are counted **from the normalized** nodes and edges —
+the answer of the plugin cannot disagree with the shape of the graph.
+
+Parameters: `entity` — the start entity of the walk (not set or empty — the
+whole graph; a non-empty string of at most 200 characters, longer → 400
+`VALIDATION_ERROR`); `depth` — the depth of the walk (1 — the entity itself, 2 —
+its relations, 3 — the relations of the relations; 1..3, 1 by default); `limit` —
+the node cap of the answer (1..200, 100 by default). The scope — `projectId`
+(optional): the project must exist (no such one → 404 `PROJECT_NOT_FOUND`), the
+working directory of the call is the project workspace, otherwise the instance
+data directory (the graph is readable without a workspace). The project scope
+goes into the **call context** of the tool (`projectId`), not into its
+parameters: the tool contract is `entity`/`depth`/`limit`.
+
 **Error codes:** `VALIDATION_ERROR` (400), `MEMORY_PROJECT_REQUIRED` (400),
 `MEMORY_WORKSPACE_REQUIRED` (400), `PROJECT_NOT_FOUND` (404),
 `MEMORY_FACT_NOT_FOUND` (404), `MEMORY_INDEX_NOT_FOUND` (404),
 `MEMORY_PROVIDER_UNAVAILABLE` (409), `MEMORY_INDEX_FAILED` (422),
-`MEMORY_CONSOLIDATION_FAILED` (422), `MEMORY_UNAVAILABLE` (503).
+`MEMORY_CONSOLIDATION_FAILED` (422), `MEMORY_GRAPH_FAILED` (422),
+`MEMORY_UNAVAILABLE` (503).
 
 **Example.**
 
@@ -1613,6 +1649,10 @@ curl -X DELETE http://localhost:5000/api/v2/memory/indexes/<indexId> \
 curl -X POST http://localhost:5000/api/v2/memory/consolidate \
   -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
   -d '{"projectId":"prj_1","threshold":0.85,"dryRun":true}'
+
+# The memory graph: an entity and its relations (200 → {nodes, edges, stats}).
+curl 'http://localhost:5000/api/v2/memory/graph?entity=Fleet&depth=2&limit=50' \
+  -H 'Authorization: Bearer admin-key-123'
 ```
 
 ---

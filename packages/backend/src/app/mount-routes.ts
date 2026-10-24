@@ -559,6 +559,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         invalidThreshold: (c) => t('errors.validation.invalidMemoryThreshold', undefined, c),
         consolidationFailed: (c) => t('errors.failed.memoryConsolidation', undefined, c),
         consolidated: (c) => t('memory.consolidated', undefined, c),
+        invalidGraphDepth: (c) => t('errors.validation.invalidMemoryGraphDepth', undefined, c),
+        invalidGraphLimit: (c) => t('errors.validation.invalidMemoryGraphLimit', undefined, c),
+        invalidGraphEntity: (c) => t('errors.validation.invalidMemoryGraphEntity', undefined, c),
+        graphFailed: (c) => t('errors.failed.memoryGraph', undefined, c),
       },
     },
   ));

@@ -99,6 +99,11 @@ const en: Dictionary = {
     'Invalid memory consolidation threshold (expected a number 0.5..0.99)',
   'errors.failed.memoryConsolidation': 'Failed to consolidate memory',
   'memory.consolidated': 'Memory consolidation completed',
+  'errors.validation.invalidMemoryGraphDepth': 'Invalid memory graph depth (an integer 1..3)',
+  'errors.validation.invalidMemoryGraphLimit': 'Invalid memory graph limit (an integer 1..200)',
+  'errors.validation.invalidMemoryGraphEntity':
+    'Invalid memory graph entity (a non-empty string of at most 200 characters)',
+  'errors.failed.memoryGraph': 'Failed to read the memory graph',
 
   // ADR-052 (этап II): исходящие webhooks
   'errors.validation.invalidWebhook': 'Invalid webhook subscription payload',
@@ -268,6 +273,11 @@ const ru: Dictionary = {
     'Некорректный порог консолидации памяти (ожидается число 0.5..0.99)',
   'errors.failed.memoryConsolidation': 'Не удалось выполнить консолидацию памяти',
   'memory.consolidated': 'Консолидация памяти выполнена',
+  'errors.validation.invalidMemoryGraphDepth': 'Некорректная глубина графа памяти (целое 1..3)',
+  'errors.validation.invalidMemoryGraphLimit': 'Некорректное значение limit графа памяти (целое 1..200)',
+  'errors.validation.invalidMemoryGraphEntity':
+    'Некорректная сущность графа памяти (непустая строка длиной до 200 символов)',
+  'errors.failed.memoryGraph': 'Не удалось прочитать граф памяти',
 
   // ADR-052 (этап II): исходящие webhooks
   'errors.validation.invalidWebhook': 'Некорректное тело webhook-подписки',
