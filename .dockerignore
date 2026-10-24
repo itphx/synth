@@ -17,3 +17,9 @@ tmp/
 .env
 .env.*
 .DS_Store
+
+# Deploy-плагины: бандлы из `docker/plugins/` обязаны попасть в контекст сборки —
+# `docker/Dockerfile.backend` (стадия build) копирует каталог в `/opt/synth/plugins`.
+# Правило `**/dist/` выше иначе вырезало бы собранный бандл плагина (`docker/plugins/<name>/dist/index.js`).
+!docker/plugins
+!docker/plugins/**

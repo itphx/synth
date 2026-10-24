@@ -84,3 +84,7 @@ changelog-partial.md
 # Лицензии, материализуемые при публикации (единственный источник — корневой LICENSE)
 /packages/*/LICENSE
 /packages/*/LICENSE.ru.md
+
+# Deploy-плагины (артефакты scripts/stage-deploy-plugins.sh): собираются в
+# образ, в git не попадают — источник истины packages/plugin-memory.
+docker/plugins/
