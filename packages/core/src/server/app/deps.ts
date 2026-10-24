@@ -59,6 +59,7 @@ import {
   createAgentStepExecutor,
   createPipelineExitHandler,
   createPipelineMetrics,
+  ensureBuiltinPipelines,
   toCoreProviderConfig,
   ProviderFactory,
   // ADR-090 (Ф3а) / §5, §10 (Ф5б-1): общий реестр блоков
@@ -1150,6 +1151,26 @@ export async function createStandaloneDeps(
     runtimeDeps,
     workspacesRoot: pipelineWorkspacesRoot,
   });
+
+  // ADR-101: встроенные шаблоны пайплайнов инстанса (сид при старте).
+  // Идемпотентно: существующий шаблон не перезаписывается. Ошибка сидирования
+  // **не** роняет старт — только предупреждение в лог. В деградированном
+  // режиме (ADR-098) хранилище read-only — запись не выполняется вовсе.
+  if (!storageDegraded) {
+    try {
+      await ensureBuiltinPipelines({
+        pipelines: storageContext.projectPipelines,
+        logger: {
+          info: (message) => console.log(message),
+          warn: (message) => console.warn(message),
+        },
+      });
+    } catch (err) {
+      console.warn(
+        `[pipelines] не удалось засеять встроенные шаблоны: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   // ADR-051 (срез) / ADR-089: планировщик публикует cron-события через ingress.
   // `start()` гейтится конфигом; остановка — на shutdown (`stopScheduler`).

@@ -81,6 +81,18 @@ export {
   PIPELINE_ERROR_CODES,
 } from './types.js';
 export { createPipelineExitHandler } from './exits.js';
+// ADR-101: встроенные шаблоны пайплайнов инстанса (сид при старте).
+export {
+  BUILTIN_PIPELINE_PROVENANCE,
+  buildMemoryConsolidationPipelineSpec,
+  ensureBuiltinPipelines,
+  MEMORY_CONSOLIDATION_PIPELINE_ID,
+  MEMORY_CONSOLIDATION_PIPELINE_VERSION,
+} from './builtin.js';
+export type {
+  EnsureBuiltinPipelinesDeps,
+  EnsureBuiltinPipelinesResult,
+} from './builtin.js';
 export type {
   PipelineExitDeps,
   PipelineExitEventBusLike,

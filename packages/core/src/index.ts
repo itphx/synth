@@ -1529,6 +1529,18 @@ export type {
   StepOutcome,
   ToolStepExecutorOptions,
 } from './engine/pipelines/index.js';
+// ADR-101: встроенные шаблоны пайплайнов инстанса (сид при старте процесса).
+export {
+  BUILTIN_PIPELINE_PROVENANCE,
+  buildMemoryConsolidationPipelineSpec,
+  ensureBuiltinPipelines,
+  MEMORY_CONSOLIDATION_PIPELINE_ID,
+  MEMORY_CONSOLIDATION_PIPELINE_VERSION,
+} from './engine/pipelines/builtin.js';
+export type {
+  EnsureBuiltinPipelinesDeps,
+  EnsureBuiltinPipelinesResult,
+} from './engine/pipelines/builtin.js';
 export { createSchedulerRoutes } from './server/routes/schedules.js';
 export type {
   SchedulerRoutesAuth,

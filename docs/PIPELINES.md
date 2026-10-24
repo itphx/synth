@@ -751,6 +751,90 @@ containment'а файла (ADR-075) и санитизацией наружу (AD
 `stores/pipelinesStore.ts` (`applyRunEvent`) обновляет детали прогона; второй транспорт не
 заводим (ADR-024/ADR-089, инвариант 6).
 
+### 2.16. Встроенные шаблоны
+
+> **Реализовано (М4b):** встроенный шаблон пайплайна **«Память: консолидация сессии»** —
+> `packages/core/src/engine/pipelines/builtin.ts`
+> (`buildMemoryConsolidationPipelineSpec`, `ensureBuiltinPipelines`,
+> `MEMORY_CONSOLIDATION_PIPELINE_ID = 'builtin:memory-consolidation'`).
+
+**Что это.** Шаблон инстанца (`scope:'instance'`), объявленный **в коде** и засеянный в порт
+спецификаций при старте процесса — по образцу встроенных скиллов (`engine/skills/builtin.ts`,
+ADR-046 §9.5): отдельного asset-каталога и пакета расширения не нужно. Сидирование —
+**идемпотентное**: существующая запись не перезаписывается (правка шаблона в UI переживает
+рестарт), ошибка сидирования не роняет старт (только `warn` в лог), в деградированном режиме
+(ADR-098) запись не выполняется вовсе. **Удалённый** шаблон вернётся при следующем старте —
+он поставляется ядром.
+
+**Точки вызова:** `packages/core/src/server/app/deps.ts` (standalone) и
+`packages/backend/src/app/deps.ts` (managed) — после сборки `storageContext`.
+
+**Спецификация шаблона.**
+
+| Часть | Значение |
+|---|---|
+| `id` / `name` | `builtin:memory-consolidation` / «Память: консолидация сессии» |
+| `mode` | `act` (шаг пишет факты — режим должен разрешать запись) |
+| Вход | `io.input` — JSON Schema `{sessionId: string}` (обязателен); `vars.sessionId` ← `trigger.payload.sessionId` |
+| Узел | один узел `kind:'agent'`, `agent:'assistant'`, `timeoutSec: 600`, `input: ['trigger.payload.sessionId']` |
+| Выход | `none` (прогон завершается без внешнего следа) |
+| Провенанс | `installedBy: {pack:'builtin', version:'1'}`; опубликованная версия 1 (`publishedBy:'system'`) |
+
+**Что делает шаблон.** Агентский шаг:
+
+1. читает сессию тулом `read_session_reference` (`session_id` = `sessionId` из входа);
+2. выделяет **устойчивые** утверждения (решения, ограничения/правила, ссылки на артефакты и
+   системы, устойчивые предпочтения) — разовые договорённости, вопросы и рассуждения в память
+   не идут; ничего не выдумывается;
+3. пишет каждое утверждение **отдельным** вызовом тула `memory_write` (в наборе инструментов
+   он называется `plugin_synth_plugin_memory_memory_write`): `kind` — по смыслу (`decision` /
+   `constraint` / `reference` / `preference` / `observation`), `confidence` — 0..1, `ttlDays` —
+   **только** если в сессии явно назван срок; дубли не создаются;
+4. возвращает короткий отчёт `{"candidates": N, "written": M}`.
+
+Тулы памяти живут в плагине (`packages/plugin-memory`, ADR-090/ADR-107): если плагин не
+установлен, тула записи факта в наборе инструментов нет — шаг ничего не пишет и объясняет это
+в отчёте.
+
+**Как инстанцировать и запустить.**
+
+```bash
+# 1. шаблон виден в списке шаблонов инстанца
+curl -H "Authorization: Bearer $KEY" http://localhost:5000/api/v2/pipeline-templates
+
+# 2. инстанцирование в проект (копия спецификации → черновик пайплайна проекта)
+curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"projectId":"proj_…"}' \
+  http://localhost:5000/api/v2/pipeline-templates/builtin:memory-consolidation/instantiate
+
+# 3. публикация версии пайплайна проекта (иначе прогон запустить нельзя)
+curl -X POST -H "Authorization: Bearer $KEY" \
+  http://localhost:5000/api/v2/projects/proj_…/pipelines/pl_…/publish
+
+# 4. запуск прогона: вручную (trigger по умолчанию — manual)
+curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"trigger":{"kind":"manual","payload":{"sessionId":"ses_…"}}}' \
+  http://localhost:5000/api/v2/projects/proj_…/pipelines/pl_…/runs
+```
+
+**Триггер.** В ADR-101 триггер — свойство **прогона** (`PipelineRunTrigger`, §2.3), а не
+спецификации: `kind` задаёт, кто запустил прогон. Поэтому шаблон объявляет **вход**
+(`io.input`/`vars`/`node.input`), а способ запуска — вручную (`kind:'manual'` — дефолт
+HTTP-роута) или по расписанию (`kind:'schedule'`, `source:'cron'` — например, вызов
+`POST …/runs` из внешнего планировщика):
+
+```bash
+# запуск по расписанию
+curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"trigger":{"kind":"schedule","source":"cron","payload":{"sessionId":"ses_…"}}}' \
+  http://localhost:5000/api/v2/projects/proj_…/pipelines/pl_…/runs
+```
+
+Расписание как таковое объявляется в ADR-051 (`schedules`: `cron` или `every`), но сейчас его
+маршрутизация ведёт в **сессию**, а не в прогон пайплайна: контур «шедулер → прогон пайплайна»
+(с лидер-элекшеном) — остаток (см.
+[ADR-101](./arch_decisions/adr-101-pipeline-engine.md) §«Открытые вопросы»).
+
 ---
 
 ## Часть III. Границы
