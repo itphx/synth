@@ -306,6 +306,11 @@ export type {
   PluginsPolicyPatch,
 } from './plugins'
 // ADR-107 / PROP-047: портал памяти — состояние, факты, индексы + операции с индексами.
+export {
+  MEMORY_CONSOLIDATION_THRESHOLD_MIN,
+  MEMORY_CONSOLIDATION_THRESHOLD_MAX,
+  MEMORY_CONSOLIDATION_THRESHOLD_DEFAULT,
+} from './memory'
 export type {
   MemoryReadiness,
   MemoryProviderMode,
@@ -324,6 +329,9 @@ export type {
   MemoryFactListParams,
   MemoryIndexListParams,
   CreateMemoryIndexInput,
+  MemoryConsolidationCluster,
+  MemoryConsolidationReport,
+  ConsolidateMemoryInput,
 } from './memory'
 
 export const synthApi = {

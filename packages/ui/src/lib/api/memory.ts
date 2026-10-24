@@ -2,7 +2,8 @@
 //
 // ADR-107 / PROP-047: портал памяти — состояние провайдера памяти, факты и
 // индексы. Чтение (`status`/`facts`/`indexes`) плюс операции с индексами:
-// создание, пересборка и удаление. Отзыв факта в мутации не входит.
+// создание, пересборка и удаление, и консолидация фактов (дубли → заменённые).
+// Отзыв факта в мутации не входит.
 //
 // Типы объявлены локально (как в соседних доменах): тянуть core в браузерный
 // бандл нельзя (см. `packages/ui/AGENTS.md`).
@@ -165,6 +166,40 @@ export interface CreateMemoryIndexInput {
   projectId?: string
 }
 
+/**
+ * Кластер дубликатов фактов: оставленный факт и факты, помеченные заменёнными.
+ */
+export interface MemoryConsolidationCluster {
+  /** id факта, который остался активным. */
+  keptId: string
+  /** id фактов, помеченных заменёнными. */
+  supersededIds: string[]
+  /** Схожесть внутри кластера (0..1). */
+  similarity: number
+}
+
+/** Отчёт консолидации фактов (PROP-047: дубли → заменённые). */
+export interface MemoryConsolidationReport {
+  /** Сколько кластеров дубликатов найдено. */
+  clusters: number
+  /** Сколько фактов помечено заменёнными. */
+  superseded: number
+  /** Сколько фактов оставлено активными. */
+  kept: number
+  /** Состав кластеров. */
+  items: MemoryConsolidationCluster[]
+}
+
+/** Тело консолидации фактов (`POST /memory/consolidate`). */
+export interface ConsolidateMemoryInput {
+  /** Проект-владелец фактов (не задан — все проекты). */
+  projectId?: string
+  /** Порог схожести дубликатов (0.5..0.99). */
+  threshold?: number
+  /** Пробный прогон: только показать, что будет заменено. */
+  dryRun?: boolean
+}
+
 /** Размер страницы фактов по умолчанию — как на сервере. */
 export const MEMORY_FACTS_DEFAULT_LIMIT = 50
 
@@ -173,6 +208,15 @@ export const MEMORY_FACTS_DEFAULT_STATUS: MemoryFactStatus = 'active'
 
 /** Значение фильтра «все статусы» — сервер понимает `status=all`. */
 export const MEMORY_FACTS_ALL_STATUSES = 'all'
+
+/** Нижняя граница порога схожести при консолидации (сервер: 400 вне 0.5..0.99). */
+export const MEMORY_CONSOLIDATION_THRESHOLD_MIN = 0.5
+
+/** Верхняя граница порога схожести при консолидации. */
+export const MEMORY_CONSOLIDATION_THRESHOLD_MAX = 0.99
+
+/** Порог схожести по умолчанию — консервативный (почти только явные дубли). */
+export const MEMORY_CONSOLIDATION_THRESHOLD_DEFAULT = 0.9
 
 /** Собирает query-строку: пустые и незаданные значения не уходят на сервер. */
 function buildQuery(params: Record<string, string | number | undefined>): string {
@@ -241,6 +285,23 @@ export const memoryApi = {
   async deleteMemoryIndex(id: string): Promise<void> {
     return fetchJSON<void>(`${BASE_URL}/memory/indexes/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+    })
+  },
+
+  /**
+   * POST /memory/consolidate — консолидация фактов: поиск дублей и пометка
+   * заменённых (PROP-047).
+   *
+   * Ошибки сервера: 400 `VALIDATION_ERROR` (порог вне 0.5..0.99),
+   * 404 `PROJECT_NOT_FOUND`, 409 `MEMORY_PROVIDER_UNAVAILABLE`,
+   * 422 `MEMORY_CONSOLIDATION_FAILED`.
+   */
+  async consolidateMemory(
+    input: ConsolidateMemoryInput = {},
+  ): Promise<{ report: MemoryConsolidationReport }> {
+    return fetchJSON<{ report: MemoryConsolidationReport }>(`${BASE_URL}/memory/consolidate`, {
+      method: 'POST',
+      body: JSON.stringify(input),
     })
   },
 }

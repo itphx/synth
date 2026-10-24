@@ -3439,6 +3439,29 @@ export const dict = {
   'settings.memory.indexes.providerUnavailable': 'Плагин памяти не активирован.',
   'settings.memory.indexes.column.actions': 'Действия',
 
+  // --- Консолидация фактов (PROP-047) ---
+  'settings.memory.consolidate.open': 'Консолидировать',
+  'settings.memory.consolidate.title': 'Консолидация фактов',
+  'settings.memory.consolidate.description':
+    'Найти дубли фактов и пометить устаревшие как заменённые.',
+  'settings.memory.consolidate.project': 'Проект',
+  'settings.memory.consolidate.projectAll': 'Все проекты',
+  'settings.memory.consolidate.threshold': 'Порог схожести',
+  'settings.memory.consolidate.thresholdHint': 'От 0.5 до 0.99.',
+  'settings.memory.consolidate.thresholdInvalid': 'Порог должен быть в диапазоне 0.5–0.99.',
+  'settings.memory.consolidate.dryRun': 'Только показать (пробный прогон)',
+  'settings.memory.consolidate.dryRunHint': 'Показывает, что будет заменено, ничего не меняя.',
+  'settings.memory.consolidate.run': 'Запустить',
+  'settings.memory.consolidate.running': 'Запуск…',
+  'settings.memory.consolidate.cancel': 'Отмена',
+  'settings.memory.consolidate.confirmTitle': 'Консолидировать факты?',
+  'settings.memory.consolidate.confirm':
+    'Дубли будут помечены как заменённые: устаревшие версии заменяются актуальными.',
+  'settings.memory.consolidate.report': 'Кластеров: {clusters}, заменено: {superseded}, оставлено: {kept}',
+  'settings.memory.consolidate.reportDryRun':
+    'Кластеров: {clusters}, заменено: {superseded}, оставлено: {kept} (пробный прогон)',
+  'settings.memory.consolidate.providerUnavailable': 'Плагин памяти не активирован.',
+
   'sessionCreate.project': 'Проект',
 
   // --- ADR-102: аналитика и отчёты (UI, волна 2) ---

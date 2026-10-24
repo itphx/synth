@@ -3092,6 +3092,30 @@ export const dict = {
   'settings.memory.indexes.providerUnavailable': 'The memory plugin is not activated.',
   'settings.memory.indexes.column.actions': 'Actions',
 
+  // --- Консолидация фактов (PROP-047) ---
+  'settings.memory.consolidate.open': 'Consolidate',
+  'settings.memory.consolidate.title': 'Consolidation of facts',
+  'settings.memory.consolidate.description':
+    'Find duplicate facts and mark the outdated ones as superseded.',
+  'settings.memory.consolidate.project': 'Project',
+  'settings.memory.consolidate.projectAll': 'All projects',
+  'settings.memory.consolidate.threshold': 'Similarity threshold',
+  'settings.memory.consolidate.thresholdHint': 'From 0.5 to 0.99.',
+  'settings.memory.consolidate.thresholdInvalid':
+    'The threshold must be between 0.5 and 0.99.',
+  'settings.memory.consolidate.dryRun': 'Only show (dry run)',
+  'settings.memory.consolidate.dryRunHint': 'Report what would be replaced, change nothing.',
+  'settings.memory.consolidate.run': 'Run',
+  'settings.memory.consolidate.running': 'Running...',
+  'settings.memory.consolidate.cancel': 'Cancel',
+  'settings.memory.consolidate.confirmTitle': 'Consolidate facts?',
+  'settings.memory.consolidate.confirm':
+    'Duplicate facts will be marked as superseded: the outdated versions are replaced by the current ones.',
+  'settings.memory.consolidate.report': 'Clusters: {clusters}, superseded: {superseded}, kept: {kept}',
+  'settings.memory.consolidate.reportDryRun':
+    'Clusters: {clusters}, superseded: {superseded}, kept: {kept} (dry run)',
+  'settings.memory.consolidate.providerUnavailable': 'The memory plugin is not activated.',
+
   'sessionCreate.project': 'Project',
 
   // --- ADR-102: аналитика и отчёты (UI, волна 2) ---

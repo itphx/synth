@@ -32,12 +32,18 @@ const mocks = vi.hoisted(() => ({
   createMemoryIndex: vi.fn(),
   rebuildMemoryIndex: vi.fn(),
   deleteMemoryIndex: vi.fn(),
+  consolidateMemory: vi.fn(),
   getProjects: vi.fn(),
   notify: vi.fn(),
   confirm: vi.fn(),
 }))
 
-vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
+vi.mock('@/lib/api/synthApi', () => ({
+  synthApi: mocks,
+  MEMORY_CONSOLIDATION_THRESHOLD_MIN: 0.5,
+  MEMORY_CONSOLIDATION_THRESHOLD_MAX: 0.99,
+  MEMORY_CONSOLIDATION_THRESHOLD_DEFAULT: 0.9,
+}))
 vi.mock('@/hooks/useNotification', () => ({
   useNotification: () => ({ notify: mocks.notify }),
 }))
@@ -106,6 +112,14 @@ const BUILDING_INDEX: MemoryIndex = {
 
 const PROJECT = { id: 'project-1', name: 'Project One', origin: 'local' }
 
+/** Отчёт консолидации: кластеры дубликатов (PROP-047). */
+const REPORT = {
+  clusters: 3,
+  superseded: 5,
+  kept: 7,
+  items: [{ keptId: 'fact-1', supersededIds: ['fact-2', 'fact-3'], similarity: 0.94 }],
+}
+
 const byTestId = (container: HTMLElement, testId: string): HTMLElement | null =>
   container.querySelector(`[data-testid="${testId}"]`)
 
@@ -149,6 +163,18 @@ async function selectOption(container: HTMLElement, triggerTestId: string, optio
   await flush()
 }
 
+/** Переключает тумблер «пробный прогон» в панели консолидации. */
+async function toggleDryRun(container: HTMLElement): Promise<void> {
+  const wrapper = byTestId(container, 'memory-consolidate-dry-run')
+  expect(wrapper, 'тумблер пробного прогона').toBeTruthy()
+  const toggle = wrapper?.querySelector('button[role="switch"]') as HTMLElement | null
+  expect(toggle, 'переключатель пробного прогона').toBeTruthy()
+  await act(async () => {
+    toggle!.click()
+  })
+  await flush()
+}
+
 async function renderSettings(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   useUIStore.setState({ settingsShowAdvanced: true, settingsFocus: null })
@@ -184,6 +210,7 @@ beforeEach(() => {
   mocks.createMemoryIndex.mockResolvedValue({ index: INDEX })
   mocks.rebuildMemoryIndex.mockResolvedValue({ index: BUILDING_INDEX })
   mocks.deleteMemoryIndex.mockResolvedValue(undefined)
+  mocks.consolidateMemory.mockResolvedValue({ report: REPORT })
   mocks.getProjects.mockResolvedValue([PROJECT])
   mocks.confirm.mockResolvedValue(true)
   useProjectsStore.setState({ projects: [PROJECT] as never })
@@ -511,6 +538,11 @@ describe('MemorySettings — операции с индексами', () => {
     expect((byTestId(container, 'memory-index-rebuild-index-1') as HTMLButtonElement).disabled).toBe(
       true,
     )
+    // Консолидация фактов — тоже: провайдер памяти недоступен.
+    expect((byTestId(container, 'memory-consolidate-toggle') as HTMLButtonElement).disabled).toBe(true)
+    expect(byTestId(container, 'memory-consolidate-provider-hint')?.textContent).toContain(
+      'The memory plugin is not activated.',
+    )
   })
 
   it('422: баннер показывает текст ошибки сборки', async () => {
@@ -546,6 +578,158 @@ describe('MemorySettings — операции с индексами', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('MemorySettings — консолидация фактов', () => {
+  it('кнопка «Консолидировать» открывает панель с дефолтным порогом', async () => {
+    const container = await renderSettings()
+
+    expect(byTestId(container, 'memory-consolidate-panel')).toBeNull()
+    await clickTestId(container, 'memory-consolidate-toggle')
+
+    expect(byTestId(container, 'memory-consolidate-panel')).toBeTruthy()
+    expect((byTestId(container, 'memory-consolidate-threshold') as HTMLInputElement).value).toBe('0.9')
+    expect(byTestId(container, 'memory-consolidate-project')).toBeTruthy()
+    expect(byTestId(container, 'memory-consolidate-dry-run')).toBeTruthy()
+  })
+
+  it('пробный прогон: подтверждение не спрашивается, в запрос уходят проект и dryRun', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-consolidate-toggle')
+    await selectOption(container, 'memory-consolidate-project', 'Project One')
+    await toggleDryRun(container)
+    await clickTestId(container, 'memory-consolidate-run')
+
+    expect(mocks.confirm).not.toHaveBeenCalled()
+    expect(mocks.consolidateMemory).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      threshold: 0.9,
+      dryRun: true,
+    })
+  })
+
+  it('реальный прогон: спрашивается подтверждение, дубли помечаются заменёнными', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-consolidate-toggle')
+    await clickTestId(container, 'memory-consolidate-run')
+
+    expect(mocks.confirm).toHaveBeenCalled()
+    expect(String(mocks.confirm.mock.calls[0]?.[0]?.message)).toContain('superseded')
+    expect(mocks.consolidateMemory).toHaveBeenCalledWith({ threshold: 0.9, dryRun: false })
+  })
+
+  it('отчёт показывается баннером и тостом, факты и статус перечитываются', async () => {
+    const container = await renderSettings()
+
+    const factsCalls = mocks.listMemoryFacts.mock.calls.length
+    const statusCalls = mocks.getMemoryStatus.mock.calls.length
+
+    await clickTestId(container, 'memory-consolidate-toggle')
+    await clickTestId(container, 'memory-consolidate-run')
+
+    const report = byTestId(container, 'memory-consolidate-report')?.textContent ?? ''
+    expect(report).toContain('Clusters: 3')
+    expect(report).toContain('superseded: 5')
+    expect(report).toContain('kept: 7')
+    expect(String(mocks.notify.mock.calls[0]?.[0]?.text)).toContain('Clusters: 3')
+    expect(mocks.listMemoryFacts.mock.calls.length).toBe(factsCalls + 1)
+    expect(mocks.getMemoryStatus.mock.calls.length).toBe(statusCalls + 1)
+  })
+
+  it('пробный прогон помечает отчёт как пробный', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-consolidate-toggle')
+    await toggleDryRun(container)
+    await clickTestId(container, 'memory-consolidate-run')
+
+    expect(byTestId(container, 'memory-consolidate-report')?.textContent).toContain('(dry run)')
+  })
+
+  it('409: провайдер недоступен — консолидация заблокирована, показана подсказка', async () => {
+    mocks.consolidateMemory.mockRejectedValue(
+      Object.assign(new Error('provider is not active'), { status: 409 }),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-consolidate-toggle')
+    await clickTestId(container, 'memory-consolidate-run')
+
+    expect(byTestId(container, 'memory-consolidate-provider-hint')?.textContent).toContain(
+      'The memory plugin is not activated.',
+    )
+    expect((byTestId(container, 'memory-consolidate-toggle') as HTMLButtonElement).disabled).toBe(true)
+    expect((byTestId(container, 'memory-consolidate-run') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('422: баннер показывает текст ошибки консолидации', async () => {
+    mocks.consolidateMemory.mockRejectedValue(
+      Object.assign(new Error('clustering failed: no embedding provider'), { status: 422 }),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-consolidate-toggle')
+    await clickTestId(container, 'memory-consolidate-run')
+
+    expect(byTestId(container, 'memory-consolidate-error')?.textContent).toContain(
+      'clustering failed: no embedding provider',
+    )
+  })
+
+  it('невалидный порог — инлайн-ошибка, запрос не уходит', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-consolidate-toggle')
+    const input = byTestId(container, 'memory-consolidate-threshold') as HTMLInputElement
+    await setInputValue(input, '1.5')
+    await clickTestId(container, 'memory-consolidate-run')
+
+    expect(mocks.consolidateMemory).not.toHaveBeenCalled()
+    expect(byTestId(container, 'memory-consolidate-panel')?.textContent).toContain(
+      'The threshold must be between 0.5 and 0.99.',
+    )
+  })
+
+  it('400 от сервера — инлайн-ошибка порога', async () => {
+    mocks.consolidateMemory.mockRejectedValue(
+      Object.assign(new Error('threshold out of range'), { status: 400 }),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-consolidate-toggle')
+    await clickTestId(container, 'memory-consolidate-run')
+
+    expect(byTestId(container, 'memory-consolidate-panel')?.textContent).toContain(
+      'The threshold must be between 0.5 and 0.99.',
+    )
+  })
+
+  it('повторный клик во время прогона не отправляет второй запрос', async () => {
+    let resolveRun: (value: unknown) => void = () => undefined
+    mocks.consolidateMemory.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRun = resolve
+        }),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-consolidate-toggle')
+    await clickTestId(container, 'memory-consolidate-run')
+
+    // На время запроса кнопка заблокирована.
+    expect((byTestId(container, 'memory-consolidate-run') as HTMLButtonElement).disabled).toBe(true)
+
+    await clickTestId(container, 'memory-consolidate-run')
+    expect(mocks.consolidateMemory).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveRun({ report: REPORT })
+    })
+    await flush()
   })
 })
 

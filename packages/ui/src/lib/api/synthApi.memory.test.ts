@@ -182,3 +182,50 @@ describe('memoryApi — операции с индексами', () => {
     })
   })
 })
+
+describe('memoryApi — консолидация фактов', () => {
+  const report = {
+    clusters: 2,
+    superseded: 3,
+    kept: 4,
+    items: [{ keptId: 'fact-1', supersededIds: ['fact-2', 'fact-3'], similarity: 0.93 }],
+  }
+
+  it('consolidateMemory: POST /memory/consolidate с телом', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ report }))
+
+    await expect(
+      synthApi.consolidateMemory({ projectId: 'project-1', threshold: 0.9, dryRun: true }),
+    ).resolves.toEqual({ report })
+
+    expect(urlOf(0)).toBe('/api/v2/memory/consolidate')
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({
+      projectId: 'project-1',
+      threshold: 0.9,
+      dryRun: true,
+    })
+  })
+
+  it('consolidateMemory: без параметров — пустое тело; 409 несёт status и code', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ report }))
+
+    await synthApi.consolidateMemory()
+    expect(urlOf(0)).toBe('/api/v2/memory/consolidate')
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({})
+
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        { error: { code: 'MEMORY_PROVIDER_UNAVAILABLE', message: 'provider is not active' } },
+        409,
+      ),
+    )
+
+    await expect(synthApi.consolidateMemory({ threshold: 0.9 })).rejects.toMatchObject({
+      status: 409,
+      code: 'MEMORY_PROVIDER_UNAVAILABLE',
+      message: 'provider is not active',
+    })
+  })
+})

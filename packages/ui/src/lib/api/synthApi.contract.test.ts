@@ -13,7 +13,7 @@ const EXPECTED_API_METHODS = [
   'backupDownloadUrl', 'batchMessages', 'bindOAuthCredential', 'browseWorkspaceRoot', 'cancelPipelineRun', 'cancelQueueRetry', 'cancelRestore',
   'cancelSummarization', 'checkEgress', 'checkProxy',
   'checkUpdate', 'claimIdentity', 'clearAudit', 'clearProfilePassword', 'clearProxyPassword', 'clearQueue', 'clearSession',
-  'clearWorkspacePolicy', 'cloneGitRepo', 'createAgentSshKey', 'createBackup', 'createDirectory',
+  'clearWorkspacePolicy', 'cloneGitRepo', 'consolidateMemory', 'createAgentSshKey', 'createBackup', 'createDirectory',
   'createEventBindingKey', 'createEventRoute', 'createMemoryIndex', 'createOAuthCredential', 'createProject', 'createProjectPipeline', 'createProvider',
   'createSchedule', 'createServiceKey', 'createSession', 'createSkill',
   'createSkillBundle', 'createSshKey', 'createTlsMapping', 'createUser', 'createWebhookSubscription',
@@ -75,7 +75,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (330)', () => {
+  it('набор методов совпадает с зафиксированным (331)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

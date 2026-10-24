@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
@@ -9,9 +9,21 @@ import { useProjectsStore } from '@/stores/projectsStore'
 import { Button } from '../ui/button'
 import { Icon } from '../icon/Icon'
 import { SelectContent, SelectItem } from '../ui/select'
-import { InfoField, SettingsPanel, SettingsSection, SelectField, TextField } from '../ui/settings'
 import {
+  InfoField,
+  NumberField,
+  SettingsPanel,
+  SettingsSection,
+  SelectField,
+  TextField,
+  ToggleField,
+} from '../ui/settings'
+import {
+  MEMORY_CONSOLIDATION_THRESHOLD_DEFAULT,
+  MEMORY_CONSOLIDATION_THRESHOLD_MAX,
+  MEMORY_CONSOLIDATION_THRESHOLD_MIN,
   synthApi,
+  type MemoryConsolidationReport,
   type MemoryFact,
   type MemoryFactList,
   type MemoryFactListParams,
@@ -30,8 +42,8 @@ import {
  * состояние провайдера, факты (с провенансом и версиями) и индексы для поиска.
  *
  * Чтение: состояние провайдера, факты, индексы. Мутации — операции с
- * индексами: создание, пересборка и удаление (инлайн-форма + кнопки в строках).
- * Факты остаются read-only (отзыв факта — вне этой волны).
+ * индексами: создание, пересборка и удаление (инлайн-форма + кнопки в строках),
+ * плюс консолидация фактов (дубли → заменённые). Отзыв факта — вне этой волны.
  *
  * Плагин памяти может быть не установлен: тогда портал отвечает 503, а
  * раздел объясняет это понятным текстом (`settings.memory.unavailable`).
@@ -98,6 +110,9 @@ const INDEX_DEFAULT_NAME = 'project'
 
 /** Значение «проект не выбран» в селекте проекта (пустая строка недопустима). */
 const PROJECT_NONE = '__none__'
+
+/** Значение «все проекты» в селекте консолидации (пустая строка недопустима). */
+const PROJECT_ALL = '__all__'
 
 /** Интервал автообновления статуса, пока индексы собираются (мс). */
 const INDEX_POLL_INTERVAL_MS = 3000
@@ -173,6 +188,23 @@ export function MemorySettings() {
   const [detailId, setDetailId] = useState<string | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+
+  // Консолидация фактов: панель запуска, параметры прогона и результат.
+  const [consolidateOpen, setConsolidateOpen] = useState(false)
+  const [consolidateProject, setConsolidateProject] = useState<string>(PROJECT_ALL)
+  const [consolidateThreshold, setConsolidateThreshold] = useState(
+    String(MEMORY_CONSOLIDATION_THRESHOLD_DEFAULT),
+  )
+  const [consolidateDryRun, setConsolidateDryRun] = useState(false)
+  const [consolidating, setConsolidating] = useState(false)
+  const [consolidateError, setConsolidateError] = useState<string | null>(null)
+  const [consolidateThresholdError, setConsolidateThresholdError] = useState<string | null>(null)
+  const [consolidateResult, setConsolidateResult] = useState<{
+    report: MemoryConsolidationReport
+    dryRun: boolean
+  } | null>(null)
+  /** Защита от двойного запуска: состояние обновляется асинхронно, ref — сразу. */
+  const consolidatingRef = useRef(false)
 
   /** 503 — сервис памяти не сконфигурирован: портал недоступен. */
   const describeError = useCallback(
@@ -295,9 +327,9 @@ export function MemorySettings() {
 
   /** Реестр проектов нужен только при открытой форме — грузим тогда. */
   useEffect(() => {
-    if (!formOpen) return
+    if (!formOpen && !consolidateOpen) return
     void useProjectsStore.getState().loadProjects()
-  }, [formOpen])
+  }, [consolidateOpen, formOpen])
 
   /** Сброс формы создания индекса. */
   const resetForm = useCallback(() => {
@@ -439,6 +471,126 @@ export function MemorySettings() {
     },
     [busy, handleMutationError, loadIndexes, loadStatus, notify, t],
   )
+
+  /** Текст отчёта консолидации (для тоста и баннера в панели). */
+  const consolidationReportText = useCallback(
+    (report: MemoryConsolidationReport, dryRun: boolean): string =>
+      t(dryRun ? 'settings.memory.consolidate.reportDryRun' : 'settings.memory.consolidate.report', {
+        clusters: report.clusters,
+        superseded: report.superseded,
+        kept: report.kept,
+      }),
+    [t],
+  )
+
+  /** Открытие/закрытие панели консолидации (результат прошлого прогона сбрасывается). */
+  const handleToggleConsolidate = useCallback(() => {
+    if (consolidateOpen) {
+      setConsolidateOpen(false)
+      return
+    }
+    setConsolidateError(null)
+    setConsolidateThresholdError(null)
+    setConsolidateResult(null)
+    setConsolidateOpen(true)
+  }, [consolidateOpen])
+
+  /**
+   * Порог консолидации: вне диапазона 0.5..0.99 — инлайн-ошибка у поля,
+   * запрос не уходит (сервер ответил бы 400 `VALIDATION_ERROR`).
+   */
+  const validateThreshold = useCallback(
+    (raw: string): number | null => {
+      const value = Number(raw.trim())
+      if (
+        !raw.trim() ||
+        !Number.isFinite(value) ||
+        value < MEMORY_CONSOLIDATION_THRESHOLD_MIN ||
+        value > MEMORY_CONSOLIDATION_THRESHOLD_MAX
+      ) {
+        setConsolidateThresholdError(t('settings.memory.consolidate.thresholdInvalid'))
+        return null
+      }
+      setConsolidateThresholdError(null)
+      return value
+    },
+    [t],
+  )
+
+  /**
+   * Ошибка консолидации: 409 — провайдер памяти недоступен (кнопки блокируются),
+   * 400 — порог вне диапазона (инлайн-ошибка), 422 и прочие — текст сервера.
+   */
+  const handleConsolidateError = useCallback(
+    (err: unknown) => {
+      const code = statusOf(err)
+      if (code === 409) {
+        setProviderUnavailable(true)
+        setConsolidateError(t('settings.memory.consolidate.providerUnavailable'))
+        return
+      }
+      if (code === 400) {
+        setConsolidateThresholdError(t('settings.memory.consolidate.thresholdInvalid'))
+        return
+      }
+      setConsolidateError(err instanceof Error ? err.message : t('common.error'))
+    },
+    [t],
+  )
+
+  /**
+   * Запуск консолидации: порог → подтверждение (кроме пробного прогона) →
+   * запрос → отчёт и перечитывание фактов/статуса.
+   */
+  const handleConsolidate = useCallback(async () => {
+    if (consolidatingRef.current) return
+    const threshold = validateThreshold(consolidateThreshold)
+    if (threshold === null) return
+
+    consolidatingRef.current = true
+    setConsolidating(true)
+    setConsolidateError(null)
+    try {
+      if (!consolidateDryRun) {
+        const ok = await confirm({
+          title: t('settings.memory.consolidate.confirmTitle'),
+          message: t('settings.memory.consolidate.confirm'),
+          confirmLabel: t('settings.memory.consolidate.run'),
+          variant: 'warning',
+          icon: 'git-branch',
+        })
+        if (!ok) return
+      }
+      const { report } = await synthApi.consolidateMemory({
+        ...(consolidateProject !== PROJECT_ALL ? { projectId: consolidateProject } : {}),
+        threshold,
+        dryRun: consolidateDryRun,
+      })
+      setConsolidateResult({ report, dryRun: consolidateDryRun })
+      notify({
+        text: consolidationReportText(report, consolidateDryRun),
+        type: 'success',
+        category: 'system',
+      })
+      await Promise.all([loadFacts(), loadStatus()])
+    } catch (err) {
+      handleConsolidateError(err)
+    } finally {
+      consolidatingRef.current = false
+      setConsolidating(false)
+    }
+  }, [
+    consolidateDryRun,
+    consolidateProject,
+    consolidateThreshold,
+    consolidationReportText,
+    handleConsolidateError,
+    loadFacts,
+    loadStatus,
+    notify,
+    t,
+    validateThreshold,
+  ])
 
   /** «Обновить» — перезапрос всех трёх срезов портала. */
   const handleRefresh = useCallback(async () => {
@@ -650,6 +802,18 @@ export function MemorySettings() {
         title={t('settings.memory.facts.title')}
         description={t('settings.memory.facts.description')}
         tooltip={t('settings.help.memory.section.memory-facts')}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleToggleConsolidate}
+            disabled={providerInactive || consolidating}
+            data-testid="memory-consolidate-toggle"
+          >
+            <Icon name="git-branch" className="size-3.5" />
+            {t('settings.memory.consolidate.open')}
+          </Button>
+        }
       >
         {factsError && (
           <div
@@ -747,6 +911,120 @@ export function MemorySettings() {
             </SelectContent>
           </SelectField>
         </div>
+
+        {providerInactive && (
+          <p
+            data-testid="memory-consolidate-provider-hint"
+            className="text-xs text-status-warning break-words"
+          >
+            {t('settings.memory.consolidate.providerUnavailable')}
+          </p>
+        )}
+
+        {/* Панель консолидации фактов (PROP-047): проект, порог, пробный прогон. */}
+        {consolidateOpen && (
+          <div
+            className="space-y-3 rounded-lg border border-border/60 bg-surface-inset p-3 min-w-0"
+            data-testid="memory-consolidate-panel"
+          >
+            <div className="text-xs font-medium text-foreground break-words">
+              {t('settings.memory.consolidate.title')}
+            </div>
+            <p className="text-xs text-muted-foreground break-words">
+              {t('settings.memory.consolidate.description')}
+            </p>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 min-w-0">
+              <SelectField
+                label={t('settings.memory.consolidate.project')}
+                value={consolidateProject}
+                onValueChange={setConsolidateProject}
+                ariaLabel={t('settings.memory.consolidate.project')}
+                triggerTestId="memory-consolidate-project"
+                items={[
+                  { value: PROJECT_ALL, label: t('settings.memory.consolidate.projectAll') },
+                  ...projectItems,
+                ]}
+              >
+                <SelectContent>
+                  <SelectItem value={PROJECT_ALL}>
+                    {t('settings.memory.consolidate.projectAll')}
+                  </SelectItem>
+                  {projectItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </SelectField>
+
+              <NumberField
+                label={t('settings.memory.consolidate.threshold')}
+                description={t('settings.memory.consolidate.thresholdHint')}
+                value={consolidateThreshold}
+                onChange={(event) => setConsolidateThreshold(event.target.value)}
+                min={MEMORY_CONSOLIDATION_THRESHOLD_MIN}
+                max={MEMORY_CONSOLIDATION_THRESHOLD_MAX}
+                step={0.01}
+                error={consolidateThresholdError ?? undefined}
+                data-testid="memory-consolidate-threshold"
+              />
+            </div>
+
+            <div data-testid="memory-consolidate-dry-run">
+              <ToggleField
+                label={t('settings.memory.consolidate.dryRun')}
+                description={t('settings.memory.consolidate.dryRunHint')}
+                enabled={consolidateDryRun}
+                onToggle={() => setConsolidateDryRun((value) => !value)}
+                ariaLabel={t('settings.memory.consolidate.dryRun')}
+              />
+            </div>
+
+            {consolidateError && (
+              <div
+                role="alert"
+                data-testid="memory-consolidate-error"
+                className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive break-words"
+              >
+                {consolidateError}
+              </div>
+            )}
+
+            {consolidateResult && (
+              <div
+                data-testid="memory-consolidate-report"
+                className="rounded-lg bg-status-success/15 p-3 text-sm text-foreground break-words"
+              >
+                {consolidationReportText(consolidateResult.report, consolidateResult.dryRun)}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => void handleConsolidate()}
+                disabled={consolidating || providerInactive}
+                data-testid="memory-consolidate-run"
+              >
+                <Icon name="check" className={cn('size-3.5', consolidating && 'animate-spin')} />
+                {consolidating
+                  ? t('settings.memory.consolidate.running')
+                  : t('settings.memory.consolidate.run')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleToggleConsolidate}
+                disabled={consolidating}
+                data-testid="memory-consolidate-cancel"
+              >
+                {t('settings.memory.consolidate.cancel')}
+              </Button>
+            </div>
+          </div>
+        )}
 
         {factsLoading && !facts && (
           <div className="py-3 text-center text-xs text-muted-foreground">{t('common.loading')}</div>
