@@ -6,11 +6,13 @@
  * серии метрик регистрируются **в ядре**: плагин своей реестровой метрики не
  * заводит (ADR-094: наблюдаемость — контракт ядра).
  *
- * Две серии:
+ * Три серии:
  * - `synth_memory_facts{status}` — число фактов в namespace плагина памяти по
  *   статусам (`candidate`/`active`/`superseded`/`retracted`);
  * - `synth_memory_indexes{status}` — число индексов по состояниям
- *   (`building`/`ready`/`stale`/`failed`).
+ *   (`building`/`ready`/`stale`/`failed`);
+ * - `synth_memory_index_chunks{status}` — суммарное число чанков по индексам
+ *   в каждом состоянии (актуальное поколение корпуса).
  *
  * Правила:
  * - **кардинальность ограничена**: лейбл только `status` с фиксированным
@@ -32,6 +34,16 @@ export const MEMORY_FACTS_METRIC = 'synth_memory_facts';
 
 /** Имя метрики числа индексов памяти (по состояниям). */
 export const MEMORY_INDEXES_METRIC = 'synth_memory_indexes';
+
+/** Имя метрики объёма корпуса индексов памяти (чанки по состояниям индексов). */
+export const MEMORY_INDEX_CHUNKS_METRIC = 'synth_memory_index_chunks';
+
+/**
+ * Потолок выборки индексов при пересчёте (максимум порта — 1000 записей,
+ * `resolveCollectionLimit`): больше индексов на инстанс не бывает, поэтому
+ * выборка полная.
+ */
+export const MEMORY_INDEX_LIST_LIMIT = 1000;
 
 /** Статусы факта — полный набор значений лейбла `status`. */
 export const MEMORY_METRIC_FACT_STATUSES: readonly MemoryFactStatus[] = [
@@ -81,6 +93,11 @@ export function startMemoryMetrics(
     'Number of memory indexes in the plugin memory namespace by state.',
     ['status'],
   );
+  const indexChunksGauge = registry.gauge(
+    MEMORY_INDEX_CHUNKS_METRIC,
+    'Number of memory index chunks in the plugin memory namespace by index state.',
+    ['status'],
+  );
 
   let stopped = false;
   let inFlight = false;
@@ -102,8 +119,14 @@ export function startMemoryMetrics(
       if (indexes) {
         // В порту индексов нет `count` — состояния считаются по выборке
         // (индексов на инстанс единицы, выборка полная).
-        const list = await indexes.listIndexes({ namespace });
+        const list = await indexes.listIndexes({ namespace, limit: MEMORY_INDEX_LIST_LIMIT });
         const counts: Record<MemoryIndexState, number> = {
+          building: 0,
+          ready: 0,
+          stale: 0,
+          failed: 0,
+        };
+        const chunkCounts: Record<MemoryIndexState, number> = {
           building: 0,
           ready: 0,
           stale: 0,
@@ -111,9 +134,21 @@ export function startMemoryMetrics(
         };
         for (const index of list) {
           if (index.state in counts) counts[index.state] += 1;
+          // Объём корпуса — чанки **актуального поколения** индекса; индекс
+          // без поколения (`generation = 0`) ещё не собран — чанков нет.
+          const generation = index.generation;
+          if (!Number.isFinite(generation) || generation <= 0) continue;
+          try {
+            const chunks = await indexes.countChunks(index.id, generation);
+            if (index.state in chunkCounts) chunkCounts[index.state] += chunks;
+          } catch {
+            // Ошибка по одному индексу — индекс пропускаем, остальные считаем
+            // (скрейп метрик не ломаем).
+          }
         }
         for (const state of MEMORY_METRIC_INDEX_STATES) {
           indexesGauge.set({ status: state }, counts[state]);
+          indexChunksGauge.set({ status: state }, chunkCounts[state]);
         }
       }
     } catch {
