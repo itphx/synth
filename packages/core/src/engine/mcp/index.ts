@@ -13,6 +13,7 @@ export type {
 } from './credential-auth.js';
 export { McpManager } from './manager.js';
 export type { McpManagerOptions } from './manager.js';
+export { syncMcpManagerFromRegistry } from './manager-sync.js';
 export {
   ExecutorMcpClient,
   ExecutorMcpPool,

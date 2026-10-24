@@ -30,6 +30,8 @@ export {
 export { MemoryWebhookRepository, MemoryWebhookDeliveryRepository } from './webhooks.js';
 // ADR-105 (Ф1): внешние доступы (OAuth-креды к коннекторам).
 export { MemoryExternalCredentialRepository } from './external-credentials.js';
+// ADR-105 (Ф4): журнал операций со слоем доступов (append-only).
+export { MemoryCredentialAuditRepository } from './credential-audit.js';
 
 export { MemoryScheduleRepository, MemoryJobRepository } from './scheduler.js';
 

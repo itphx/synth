@@ -14,6 +14,7 @@ import {
   createGitRoutes, createSshKeyRoutes, createAgentSshKeyRoutes,
   createQueueRoutes, createMessageRoutes, createSettingsRoutes,
   createDictionaryRoutes, createMcpRoutes, createEventRoutes, createSchedulerRoutes,
+  createOAuthRoutes, bindCredentialToConnector,
   createAuditRoutes,
   createServiceKeyRoutes, createWebhookRoutes, createSkillRoutes, createCommandRoutes,
   createSkillBundleRoutes, createSessionSkillScopeRoutes, createProjectSkillScopeRoutes,
@@ -508,6 +509,37 @@ export function mountStandaloneRoutes(
 
   // MCP (probe подключения к серверу)
   app.route('/api/v2/mcp', createMcpRoutes(auth, { mcpManager }));
+
+  // ADR-105 (Ф4): HTTP-контур слоя внешних доступов. Standalone: единственный
+  // владелец — локальный пользователь (`owner.kind='local'`, инвариант 19),
+  // он же ADMIN — правило изменения записи реестра MCP не сужается.
+  app.route('/api/v2/oauth', createOAuthRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      credentials: deps.storageContext.externalCredentials,
+      service: deps.oauthCredentialService,
+      providers: deps.oauthProviders,
+      // ADR-105 (Ф4): журнал операций со слоем доступов (привязка к коннектору).
+      audit: deps.storageContext.credentialAudit,
+      ownerKind: 'local',
+      resolveActor: (c) => {
+        const user = c.get('user') as { id?: string; roles?: string[] } | undefined;
+        return { userId: user?.id ?? 'local', roles: user?.roles ?? ['ADMIN'] };
+      },
+      bindConnector: async ({ connectorId, credentialId }) => {
+        await bindCredentialToConnector({
+          registry: deps.mcpRegistryStore,
+          connectorId,
+          credentialId,
+          canModify: () => true,
+        });
+        // Синхронизации с менеджером MCP здесь нет: в standalone конфиг
+        // серверов приходит из `config.mcpServers`, а реестр — источник истины
+        // только в managed-инстансе (ADR-071 §2.5). Перезапись менеджера из
+        // реестра стёрла бы серверы из конфига.
+      },
+    },
+  ));
 
   // ADR-089: приём внешних событий (ingress), биндинги и журнал. `GET /` не
   // определяется — SSE-хаб на `/api/v2/events` регистрируется ниже.

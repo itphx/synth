@@ -231,15 +231,43 @@ auth?: { kind: 'credential'; credentialId: string };
 клиент для **refresh**. `client_secret` в каталоге нет — только env `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET`
 или файл `{dataDir}/secrets/oauth/<provider>.client_secret` (§7).
 
-## 10. Что не реализовано (план, Ф4)
+## 10. Статус реализации (Ф4)
 
 | Этап | Что | Статус |
 |---|---|---|
 | Ф3 | подстановка токена в MCP-транспорт; запрет plaintext-`Authorization` в `headers` (+ валидация и миграция существующих записей реестра); refresh пересоздаёт транспорт; `probe` использует доступ; каталог `oauth.providers`; право привязки доступа к коннектору | **✅ закрыт (2026-10-23)** |
-| Ф4 | HTTP-роуты `createOAuthRoutes` (`POST/GET /api/v2/oauth/credentials`, `POST …/:id/refresh`, `DELETE …/:id`, `POST …/:id/bind`) и монтирование в backend; раздел UI «Доступы»; журнал credential-операций (отдельный append-only, `SECURITY_AUDIT_SCOPES` в `shared` **не расширяется**); включение порта в `synth secrets rotate` (preflight, `--dry-run`, счётчики); правила бэкапа и переноса проекта (доступы инстанс-локальны, как binding-key) | **план** |
+| Ф4 | HTTP-роуты `createOAuthRoutes` (`POST/GET /api/v2/oauth/credentials`, `POST …/:id/refresh`, `DELETE …/:id`, `POST …/:id/bind`) и монтирование в backend/core; журнал credential-операций (отдельный append-only, `SECURITY_AUDIT_SCOPES` в `shared` **не расширяется**); включение порта в `synth secrets rotate` (preflight, `--dry-run`, счётчики); правила бэкапа и переноса проекта (доступы инстанс-локальны, как binding-key) | **✅ закрыт (2026-10-24)** |
 
-Пока Ф4 не сделан, доступ заводится и обновляется **только кодом** (через порт), HTTP-контракта у слоя
-доступов нет; коннекторы привязывают уже заведённые доступы по `credentialId` (см. §9.3).
+**Остаток Ф4 — только UI «Доступы».** HTTP-контур, журнал операций, ротация мастер-ключа и
+правила бэкапа/переноса сделаны; пользовательского интерфейса управления доступами пока нет —
+доступ заводится и обновляется через HTTP-контур (`docs/API_V2.md` §5.37) либо кодом (через
+порт). Коннекторы привязывают уже заведённые доступы по `credentialId` (см. §9.3).
+
+### 10.1 Ротация мастер-ключа покрывает и вебхуки
+
+`synth secrets rotate` перешифровывает **три** точки at-rest (ADR-076 / ADR-105 / ADR-052):
+SSH-ключи агентов, access/refresh-токены внешних доступов и **signing-секреты подписок
+исходящих webhooks** (`WebhookStore.rotateMasterKey`). До этого подписки вебхуков после ротации
+падали с «Секрет недоступен»: HMAC-подпись доставки требует исходный секрет, а он оставался
+зашифрованным прежним мастер-ключом.
+
+Порядок: **preflight всех трёх точек** (запись, которая не расшифровывается ни старым, ни новым
+ключом, → отказ **до** первой записи) → перешифровка (счётчики `rotated`/`upgraded`/`skipped`)
+→ перезапись `{dataDir}/secrets/master.key` (0600). `--dry-run` считает план и ничего не пишет.
+
+### 10.2 Журнал операций со слоем доступов
+
+Отдельный **append-only** порт `CredentialAuditRepository`
+(`storage/ports/credential-audit-repository.ts`) — не расширение `SECURITY_AUDIT_SCOPES`
+(`packages/shared/src/types/egress.ts`): security-аудит — про изменения политик, журнал
+доступов — про операции с OAuth-кредой. Файловая реализация —
+`{dataDir}/audit/credentials.jsonl` (`FileCredentialAuditStore`), in-memory —
+`MemoryCredentialAuditRepository`, БД — драйвер `@itphx/synth-storage-postgres` (миграция
+`014`). Запись (`issue`/`refresh`/`revoke`/`bind`/`use`) **не содержит** ни значения токена, ни
+`secretEnc`/`refreshEnc`, ни `code_verifier`/`client_secret`, ни id пользователей/сессий — только
+id доступа, провайдера, операцию, исход и машинный код ошибки. Запись — best-effort: сбой
+журналирования не ломает саму операцию. Журнал **не является публичным API** — эндпоинта
+чтения нет.
 
 ## 11. Ключевые файлы
 
@@ -253,6 +281,14 @@ auth?: { kind: 'credential'; credentialId: string };
 | `packages/core/src/storage/memory/external-credentials.ts` | in-memory реализация |
 | `packages/core/src/storage/contract/external-credential-repository.contract.ts` | контрактный suite (паспорт порта) |
 | `packages/core/src/storage/storage-context.ts` | подключение `StorageContext.externalCredentials` |
+| `packages/core/src/server/routes/oauth.ts` | HTTP-контур слоя доступов (`createOAuthRoutes`) — общий для core и backend |
+| `packages/core/src/engine/oauth/pending-flows.ts` | незавершённые выдачи (PKCE/device) — `state`, код верификатора, срок |
+| `packages/core/src/engine/oauth/bind-connector.ts` | привязка доступа к MCP-коннектору (запись реестра) |
+| `packages/core/src/storage/ports/credential-audit-repository.ts` | порт append-only журнала операций со слоем доступов |
+| `packages/core/src/engine/oauth/audit.ts` | единая точка записи в журнал (`recordCredentialAudit`, best-effort) |
+| `packages/core/src/storage/file-credential-audit-store.ts` | файловая реализация журнала (`{dataDir}/audit/credentials.jsonl`) |
+| `packages/core/src/storage/memory/credential-audit.ts` | in-memory реализация журнала |
+| `packages/core/src/storage/contract/credential-audit-repository.contract.ts` | контрактный suite журнала |
 | `packages/core/src/engine/oauth/*` | OAuth-клиент и сервис слоя доступов |
 | `packages/core/src/engine/oauth/registry.ts` | реестр описаний OAuth-провайдеров (каталог `oauth.providers`) |
 | `packages/core/src/engine/mcp/credential-auth.ts` | источник токена для MCP-транспорта (`McpCredentialSource`) и `createCredentialFetch` (подстановка + refresh по 401) |
@@ -261,7 +297,9 @@ auth?: { kind: 'credential'; credentialId: string };
 | `packages/core/src/remote/device-flow.ts` | обобщённый device flow (`postFormDetailed`) |
 | `packages/core/src/engine/net/egress-guard.ts` | `bindSecretHeaders` — host-binding секретных заголовков |
 | `packages/core/src/security/crypto.ts` | `encryptSecret`/`decryptSecret`, формат `enc:v1:…` |
-| `packages/storage-postgres/src/ports/external-credentials.ts` + `src/migrations/012-external-credentials.ts` | PG-порт и миграция `012` |
+| `packages/core/src/security/rotate.ts` | `synth secrets rotate` — общий preflight/запись для SSH-ключей, доступов и вебхуков |
+| `packages/storage-postgres/src/ports/external-credentials.ts` + `src/migrations/012-external-credentials.ts` | PG-порт доступов и миграция `012` |
+| `packages/storage-postgres/src/ports/credential-audit.ts` + `src/migrations/016-credential-audit.ts` | PG-порт журнала доступов и миграция `016` |
 
 ## 12. Связи
 
@@ -278,4 +316,4 @@ auth?: { kind: 'credential'; credentialId: string };
   (нехешируемый) — два прецедента модели секретов.
 - [ADR-091](./arch_decisions/adr-091-backup-restore-transfer.md) — бэкап/перенос и режим «без секретов».
 - [docs/CONFIGURATION.md](./CONFIGURATION.md) — раздел `mcp.servers` (`auth: { kind: 'credential', credentialId }`).
-- [docs/API_V2.md](./API_V2.md) — §5.16 (`config.auth` у MCP-сервера).
+- [docs/API_V2.md](./API_V2.md) — §5.16 (`config.auth` у MCP-сервера), §5.37 (HTTP-контур внешних доступов).

@@ -37,6 +37,7 @@ export {
 } from './client-secret.js';
 export {
   OAuthClient,
+  type DeviceAuthorization,
   type ExchangeCodeInput,
   type OAuthClientOptions,
   type RefreshInput,
@@ -47,7 +48,17 @@ export {
   type ExchangeAndStoreInput,
   type OAuthCredentialServiceDeps,
   type RevokeResult,
+  type StoreTokensInput,
 } from './service.js';
+export {
+  PendingAuthorizationStore,
+  DEFAULT_PENDING_AUTHORIZATION_TTL_MS,
+  DEFAULT_PENDING_AUTHORIZATION_MAX_ENTRIES,
+  type PendingAuthorization,
+  type PendingAuthorizationInput,
+  type PendingAuthorizationKind,
+  type PendingAuthorizationStoreOptions,
+} from './pending-flows.js';
 export {
   OAuthProviderRegistry,
   registerOAuthProvidersFromConfig,
@@ -61,3 +72,8 @@ export {
   type CredentialBindDecision,
   type CredentialBindInput,
 } from './credential-binding.js';
+export {
+  bindCredentialToConnector,
+  CredentialConnectorBindError,
+  type BindCredentialToConnectorOptions,
+} from './bind-connector.js';

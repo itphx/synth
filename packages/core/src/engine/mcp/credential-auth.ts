@@ -15,6 +15,8 @@
  * запрос возвращается как есть (ошибку разбирает вызывающий).
  */
 import type { ExternalCredentialRepository } from '../../storage/ports/external-credential-repository.js';
+import type { CredentialAuditRepository } from '../../storage/ports/credential-audit-repository.js';
+import { credentialAuditErrorCode, recordCredentialAudit } from '../oauth/audit.js';
 import { OAuthError } from '../oauth/types.js';
 
 /** Коды ошибок слоя доступа применительно к MCP-коннектору. */
@@ -76,6 +78,12 @@ export interface RepositoryCredentialSourceDeps {
    * Не задан — обновить токен нечем (статический токен без refresh-токена).
    */
   refresh?: (credentialId: string) => Promise<void>;
+  /**
+   * ADR-105 (Ф4): журнал операций со слоем доступов (append-only). В журнал
+   * пишется подстановка токена в транспорт (`use`) — **без значения токена**.
+   * Не задан — подстановки не журналируются.
+   */
+  audit?: CredentialAuditRepository;
 }
 
 /**
@@ -89,24 +97,49 @@ export function createRepositoryCredentialSource(
 ): McpCredentialSource {
   return {
     async getAccessToken(credentialId: string): Promise<string> {
-      const meta = await deps.repo.get(credentialId);
-      if (!meta) {
-        throw new McpCredentialError('not_found', `Доступ «${credentialId}» не найден`);
+      // Провайдер известен сразу после чтения метаданных — нужен и для
+      // успешной записи в журнал, и для записи об ошибке.
+      let provider = '';
+      try {
+        const meta = await deps.repo.get(credentialId);
+        if (!meta) {
+          throw new McpCredentialError('not_found', `Доступ «${credentialId}» не найден`);
+        }
+        provider = meta.provider;
+        if (meta.status === 'revoked') {
+          throw new McpCredentialError('revoked', `Доступ «${credentialId}» отозван`);
+        }
+        if (meta.status === 'error') {
+          throw new McpCredentialError(
+            'reauthorization_required',
+            `Доступ «${credentialId}» требует переавторизации`,
+          );
+        }
+        const revealed = await deps.repo.reveal(credentialId);
+        if (!revealed?.accessToken) {
+          throw new McpCredentialError('not_found', `Доступ «${credentialId}» не найден`);
+        }
+        // ADR-105 (Ф4): подстановка токена в транспорт журналируется (`use`).
+        // В записи — только id доступа, провайдер и коннектор; значения токена
+        // в журнале нет.
+        await recordCredentialAudit(deps.audit, {
+          op: 'use',
+          credentialId,
+          provider: meta.provider,
+          outcome: 'ok',
+          ...(meta.connectorId !== undefined ? { connectorId: meta.connectorId } : {}),
+        });
+        return revealed.accessToken;
+      } catch (err) {
+        await recordCredentialAudit(deps.audit, {
+          op: 'use',
+          credentialId,
+          provider,
+          outcome: 'error',
+          errorCode: credentialAuditErrorCode(err),
+        });
+        throw err;
       }
-      if (meta.status === 'revoked') {
-        throw new McpCredentialError('revoked', `Доступ «${credentialId}» отозван`);
-      }
-      if (meta.status === 'error') {
-        throw new McpCredentialError(
-          'reauthorization_required',
-          `Доступ «${credentialId}» требует переавторизации`,
-        );
-      }
-      const revealed = await deps.repo.reveal(credentialId);
-      if (!revealed?.accessToken) {
-        throw new McpCredentialError('not_found', `Доступ «${credentialId}» не найден`);
-      }
-      return revealed.accessToken;
     },
 
     async refreshAccessToken(credentialId: string): Promise<string> {

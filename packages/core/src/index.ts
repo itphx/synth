@@ -282,6 +282,7 @@ export type { RuntimeDeps, RuntimeDependency } from './engine/tools/runtime-deps
 export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, normalizeAgentModes, isModeApplicable, DEFAULT_AGENT_ID, registerStoredAgents } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
 export type { McpToolDef, McpToolResult, McpClientOptions } from './engine/mcp/index.js';
+export { syncMcpManagerFromRegistry } from './engine/mcp/index.js';
 export {
   McpCredentialError,
   createCredentialFetch,
@@ -315,11 +316,16 @@ export {
   OAuthClient,
   OAuthCredentialService,
   OAuthProviderRegistry,
+  PendingAuthorizationStore,
+  DEFAULT_PENDING_AUTHORIZATION_TTL_MS,
+  DEFAULT_PENDING_AUTHORIZATION_MAX_ENTRIES,
   registerOAuthProvidersFromConfig,
   resolveOAuthClientSecret,
   oauthClientSecretEnv,
   oauthClientSecretPath,
   evaluateCredentialBind,
+  bindCredentialToConnector,
+  CredentialConnectorBindError,
 } from './engine/oauth/index.js';
 export type {
   OAuthClientAuthMethod,
@@ -327,9 +333,11 @@ export type {
   OAuthRevokeResult,
   OAuthTokenSet,
   OAuthErrorCode,
+  DeviceAuthorization,
   ExchangeAndStoreInput,
   OAuthCredentialServiceDeps,
   RevokeResult,
+  StoreTokensInput,
   OAuthProviderCatalogEntry,
   OAuthProviderRegistration,
   RegisterOAuthProvidersOptions,
@@ -337,6 +345,11 @@ export type {
   CredentialBindActor,
   CredentialBindDecision,
   CredentialBindInput,
+  BindCredentialToConnectorOptions,
+  PendingAuthorization,
+  PendingAuthorizationInput,
+  PendingAuthorizationKind,
+  PendingAuthorizationStoreOptions,
 } from './engine/oauth/index.js';
 
 // PROP-100 / ADR-071 §2.3.1: единый SSRF/egress-guard исходящих запросов
@@ -561,6 +574,12 @@ export type {
   // ADR-105 (Ф0/Ф1): внешние доступы (OAuth-креды к коннекторам).
   ExternalCredentialRepository,
   ExternalCredentialErrorCode,
+  // ADR-105 (Ф4): ротация мастер-ключа для внешних доступов.
+  RotateExternalCredentialKeyOptions,
+  RotateExternalCredentialKeyResult,
+  // ADR-105 (Ф4): журнал операций со слоем доступов (append-only).
+  CredentialAuditRepository,
+  CredentialAuditListOptions,
   BlobStore,
   DefaultsRepository,
   AppearanceDefaults,
@@ -636,6 +655,7 @@ export {
   MemoryPipelineRunRepository,
   // ADR-105 (Ф1): внешние доступы (OAuth-креды к коннекторам).
   MemoryExternalCredentialRepository,
+  MemoryCredentialAuditRepository,
 } from './storage/memory/index.js';
 // ADR-096 (W2.4): generic-реализация конфигурационных словарей (провайдеры/модели/агенты).
 export { MemoryDocumentRepository } from './storage/memory/document-repository.js';
@@ -921,9 +941,16 @@ export type {
 export {
   WebhookStore,
   WebhookConflictError,
+  WebhookStoreError,
   WEBHOOKS_SCHEMA_VERSION,
 } from './storage/webhook-store.js';
-export type { WebhookStoreConfig, WebhookRecord } from './storage/webhook-store.js';
+export type {
+  WebhookStoreConfig,
+  WebhookRecord,
+  WebhookStoreErrorCode,
+  RotateWebhookKeyOptions,
+  RotateWebhookKeyResult,
+} from './storage/webhook-store.js';
 export { WebhookDeliveryStore } from './storage/webhook-delivery-store.js';
 export type { WebhookDeliveryStoreConfig } from './storage/webhook-delivery-store.js';
 export {
@@ -1002,6 +1029,10 @@ export type { JobStoreConfig, JobListOptions } from './storage/job-store.js';
 // ADR-092 (остаток): аудит-журнал обслуживания инстанса — файловая реализация порта.
 export { MaintenanceAuditStore } from './storage/maintenance-audit-store.js';
 export type { MaintenanceAuditStoreConfig } from './storage/maintenance-audit-store.js';
+// ADR-105 (Ф4): журнал операций со слоем доступов (append-only JSONL
+// `audit/credentials.jsonl`).
+export { FileCredentialAuditStore } from './storage/file-credential-audit-store.js';
+export type { FileCredentialAuditStoreConfig } from './storage/file-credential-audit-store.js';
 // ADR-090: журнал аудита плагинов (append-only JSONL `audit/plugins.jsonl`).
 export { FilePluginAuditStore } from './storage/file-plugin-audit-store.js';
 export type { FilePluginAuditStoreConfig } from './storage/file-plugin-audit-store.js';
@@ -1346,6 +1377,15 @@ export type {
 } from './server/routes/agents.js';
 export { createMcpRoutes } from './server/routes/mcp.js';
 export type { McpRoutesAuth, McpRoutesDeps, McpRouteMessages } from './server/routes/mcp.js';
+
+// ADR-105 (Ф4): HTTP-контур слоя внешних доступов.
+export { createOAuthRoutes, OAuthBindError } from './server/routes/oauth.js';
+export type {
+  OAuthRoutesAuth,
+  OAuthRoutesDeps,
+  OAuthRoutesOptions,
+  OAuthRouteMessages,
+} from './server/routes/oauth.js';
 export { createEventRoutes } from './server/routes/events.js';
 export type {
   EventRoutesAuth,

@@ -26,7 +26,11 @@ import type {
   ExternalCredentialOwner,
   UpdateExternalCredentialTokensInput,
 } from '@itphx/synth-shared';
+import { generateId } from '@itphx/synth-shared';
 import type { ExternalCredentialRepository } from '../../storage/ports/external-credential-repository.js';
+import type { CredentialAuditRepository } from '../../storage/ports/credential-audit-repository.js';
+import { EXTERNAL_CREDENTIAL_ID_PREFIX } from '../../storage/external-credential-store.js';
+import { credentialAuditErrorCode, recordCredentialAudit } from './audit.js';
 import { OAuthError } from './types.js';
 import type { OAuthClient } from './client.js';
 import type { OAuthTokenSet } from './types.js';
@@ -40,6 +44,12 @@ export interface OAuthCredentialServiceDeps {
    * берётся вызывающим из env/файла (`client-secret.ts`).
    */
   clientFor: (provider: string) => OAuthClient;
+  /**
+   * ADR-105 (Ф4): журнал операций со слоем доступов (append-only). Не задан —
+   * операции не журналируются (журнал — best-effort: сбой записи не ломает
+   * саму операцию).
+   */
+  audit?: CredentialAuditRepository;
   /** Источник времени (тесты). */
   now?: () => number;
 }
@@ -75,6 +85,30 @@ export interface RevokeResult {
 }
 
 /**
+ * Вход сохранения уже полученных токенов (device flow, RFC 8628).
+ *
+ * Отличие от `exchangeAndStore`: код авторизации уже обменян на токены, сеть
+ * повторно не дёргается — токены кладутся в порт как есть.
+ */
+export interface StoreTokensInput {
+  provider: string;
+  /** `client_id` (по умолчанию — из описания провайдера). */
+  clientId?: string;
+  accessToken: string;
+  refreshToken?: string;
+  /** Срок access-токена, секунды (если провайдер сообщил). */
+  expiresIn?: number;
+  /** Фактически выданные scope'ы (строка через пробел). */
+  scope?: string;
+  /** Запрошенные scope'ы (для записи). */
+  scopes?: string[];
+  owner: ExternalCredentialOwner;
+  createdBy: string;
+  connectorId?: string;
+  projectId?: string;
+}
+
+/**
  * Сервис слоя внешних доступов (ADR-105 Ф2).
  *
  * Экземпляр долгоживущий: single-flight refresh держится в памяти сервиса
@@ -91,31 +125,109 @@ export class OAuthCredentialService {
    * Обмен кода на токены и запись доступа (шифрование — внутри порта).
    *
    * Возвращаются **метаданные** доступа: значение токена наружу не отдаётся.
+   *
+   * ADR-105 (Ф4): операция журналируется в append-only журнал (`issue`);
+   * id доступа генерируется заранее, чтобы запись ссылалась на доступ и при
+   * неуспешной выдаче.
    */
   async exchangeAndStore(input: ExchangeAndStoreInput): Promise<ExternalCredentialMeta> {
     const client = this._deps.clientFor(input.provider);
-    const tokens = await client.exchangeCode({
-      code: input.code,
-      ...(input.codeVerifier !== undefined ? { codeVerifier: input.codeVerifier } : {}),
-      ...(input.redirectUri !== undefined ? { redirectUri: input.redirectUri } : {}),
-    });
-    const scopes = input.scopes ?? client.defaultScopes;
-    const scopesGranted = tokens.scope ? tokens.scope.split(' ').filter(Boolean) : undefined;
+    const credentialId = `${EXTERNAL_CREDENTIAL_ID_PREFIX}${generateId()}`;
+    try {
+      const tokens = await client.exchangeCode({
+        code: input.code,
+        ...(input.codeVerifier !== undefined ? { codeVerifier: input.codeVerifier } : {}),
+        ...(input.redirectUri !== undefined ? { redirectUri: input.redirectUri } : {}),
+      });
+      const scopes = input.scopes ?? client.defaultScopes;
+      const scopesGranted = tokens.scope ? tokens.scope.split(' ').filter(Boolean) : undefined;
+      const expiresAt =
+        tokens.expiresIn !== undefined ? this._expiresAt(tokens.expiresIn) : undefined;
+      const meta = await this._deps.repo.create({
+        id: credentialId,
+        provider: input.provider,
+        clientId: client.clientId,
+        scopes,
+        owner: input.owner,
+        accessToken: tokens.accessToken,
+        ...(tokens.refreshToken !== undefined ? { refreshToken: tokens.refreshToken } : {}),
+        ...(expiresAt !== undefined ? { expiresAt } : {}),
+        ...(scopesGranted !== undefined ? { scopesGranted } : {}),
+        createdBy: input.createdBy,
+        ...(input.connectorId !== undefined ? { connectorId: input.connectorId } : {}),
+        ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      });
+      await recordCredentialAudit(this._deps.audit, {
+        op: 'issue',
+        credentialId: meta.id,
+        provider: input.provider,
+        outcome: 'ok',
+        ...(input.connectorId !== undefined ? { connectorId: input.connectorId } : {}),
+      });
+      return meta;
+    } catch (err) {
+      await recordCredentialAudit(this._deps.audit, {
+        op: 'issue',
+        credentialId,
+        provider: input.provider,
+        outcome: 'error',
+        errorCode: credentialAuditErrorCode(err),
+      });
+      throw err;
+    }
+  }
+
+  /**
+   * Сохранение уже полученных токенов (device flow, RFC 8628).
+   *
+   * Сеть не дёргается: токены кладутся в порт как есть (шифрование — внутри
+   * порта). Наружу отдаются метаданные.
+   *
+   * ADR-105 (Ф4): журналируется как `issue` (выдан новый доступ).
+   */
+  async storeTokens(input: StoreTokensInput): Promise<ExternalCredentialMeta> {
+    const clientId =
+      input.clientId ?? this._deps.clientFor(input.provider).clientId;
+    const scopes = input.scopes ?? this._deps.clientFor(input.provider).defaultScopes;
+    const scopesGranted = input.scope
+      ? input.scope.split(' ').filter(Boolean)
+      : undefined;
     const expiresAt =
-      tokens.expiresIn !== undefined ? this._expiresAt(tokens.expiresIn) : undefined;
-    return this._deps.repo.create({
-      provider: input.provider,
-      clientId: client.clientId,
-      scopes,
-      owner: input.owner,
-      accessToken: tokens.accessToken,
-      ...(tokens.refreshToken !== undefined ? { refreshToken: tokens.refreshToken } : {}),
-      ...(expiresAt !== undefined ? { expiresAt } : {}),
-      ...(scopesGranted !== undefined ? { scopesGranted } : {}),
-      createdBy: input.createdBy,
-      ...(input.connectorId !== undefined ? { connectorId: input.connectorId } : {}),
-      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
-    });
+      input.expiresIn !== undefined ? this._expiresAt(input.expiresIn) : undefined;
+    const credentialId = `${EXTERNAL_CREDENTIAL_ID_PREFIX}${generateId()}`;
+    try {
+      const meta = await this._deps.repo.create({
+        id: credentialId,
+        provider: input.provider,
+        clientId,
+        scopes,
+        owner: input.owner,
+        accessToken: input.accessToken,
+        ...(input.refreshToken !== undefined ? { refreshToken: input.refreshToken } : {}),
+        ...(expiresAt !== undefined ? { expiresAt } : {}),
+        ...(scopesGranted !== undefined ? { scopesGranted } : {}),
+        createdBy: input.createdBy,
+        ...(input.connectorId !== undefined ? { connectorId: input.connectorId } : {}),
+        ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      });
+      await recordCredentialAudit(this._deps.audit, {
+        op: 'issue',
+        credentialId: meta.id,
+        provider: input.provider,
+        outcome: 'ok',
+        ...(input.connectorId !== undefined ? { connectorId: input.connectorId } : {}),
+      });
+      return meta;
+    } catch (err) {
+      await recordCredentialAudit(this._deps.audit, {
+        op: 'issue',
+        credentialId,
+        provider: input.provider,
+        outcome: 'error',
+        errorCode: credentialAuditErrorCode(err),
+      });
+      throw err;
+    }
   }
 
   /**
@@ -124,6 +236,9 @@ export class OAuthCredentialService {
    * Параллельные вызовы одного доступа дают **один** сетевой вызов: второй
    * ждёт результат первого (single-flight). `invalid_grant` → доступ
    * переводится в `status:'error'` и ошибка пробрасывается вызывающему.
+   *
+   * ADR-105 (Ф4): операция журналируется (`refresh`); при single-flight запись
+   * одна — журналируется фактический сетевой вызов.
    */
   async refresh(id: string): Promise<ExternalCredentialMeta> {
     const pending = this._inflight.get(id);
@@ -131,7 +246,23 @@ export class OAuthCredentialService {
     const promise = this._refreshInner(id);
     this._inflight.set(id, promise);
     try {
-      return await promise;
+      const meta = await promise;
+      await recordCredentialAudit(this._deps.audit, {
+        op: 'refresh',
+        credentialId: id,
+        provider: meta.provider,
+        outcome: 'ok',
+      });
+      return meta;
+    } catch (err) {
+      await recordCredentialAudit(this._deps.audit, {
+        op: 'refresh',
+        credentialId: id,
+        provider: await this._providerOf(id),
+        outcome: 'error',
+        errorCode: credentialAuditErrorCode(err),
+      });
+      throw err;
     } finally {
       this._inflight.delete(id);
     }
@@ -140,10 +271,21 @@ export class OAuthCredentialService {
   /**
    * Отзыв доступа: локальный (всегда, необратимо) + вызов провайдера
    * (RFC 7009, best-effort — провайдер может не поддерживать revoke).
+   *
+   * ADR-105 (Ф4): журналируется (`revoke`).
    */
   async revoke(id: string): Promise<RevokeResult> {
     const record = await this._rawRecord(id);
-    if (!record) throw new OAuthError('not_found', 'Доступ не найден');
+    if (!record) {
+      await recordCredentialAudit(this._deps.audit, {
+        op: 'revoke',
+        credentialId: id,
+        provider: '',
+        outcome: 'error',
+        errorCode: 'not_found',
+      });
+      throw new OAuthError('not_found', 'Доступ не найден');
+    }
     let providerRevoked = false;
     try {
       const revealed = await this._deps.repo.reveal(id);
@@ -159,6 +301,12 @@ export class OAuthCredentialService {
     }
     const meta = await this._deps.repo.revoke(id);
     if (!meta) throw new OAuthError('not_found', 'Доступ не найден');
+    await recordCredentialAudit(this._deps.audit, {
+      op: 'revoke',
+      credentialId: id,
+      provider: record.provider,
+      outcome: 'ok',
+    });
     return { meta, providerRevoked };
   }
 
@@ -225,6 +373,21 @@ export class OAuthCredentialService {
   private async _rawRecord(id: string): Promise<ExternalCredential | null> {
     const all = await this._deps.repo.listRaw();
     return all.find((credential) => credential.id === id) ?? null;
+  }
+
+  /**
+   * Провайдер доступа по id — для журнала операций (ADR-105 Ф4).
+   *
+   * Доступа нет (или метаданные недоступны) — пустая строка: провайдер
+   * неизвестен, но попытка операции в журнале остаётся.
+   */
+  private async _providerOf(id: string): Promise<string> {
+    try {
+      const meta = await this._deps.repo.get(id);
+      return meta?.provider ?? '';
+    } catch {
+      return '';
+    }
   }
 
   /** ISO-8601 срок по `expires_in` (секунды). */

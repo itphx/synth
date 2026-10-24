@@ -96,6 +96,9 @@ let availableBinaries: string[] = [];
 describe.skipIf(!(await isExecutorPackageAvailable()))(
   'RemoteExecutionPort → ExecutionPort',
   () => {
+    // Медленный хук: загрузка серверного модуля исполнителя + mkdtemp под
+    // параллельной нагрузкой легко выходят за дефолтные 10 с (флейк в полном
+    // прогоне). Бюджет поднят так же, как `testTimeout` в vitest.config.ts.
     beforeAll(async () => {
       const mod = await loadServerModule();
       workspace = await realpath(await mkdtemp(join(tmpdir(), 'synth-executor-remote-')));
@@ -125,7 +128,7 @@ describe.skipIf(!(await isExecutorPackageAvailable()))(
         token: TOKEN,
         timeoutMs: 20_000,
       });
-    });
+    }, 30_000);
 
     afterAll(async () => {
       await handle?.close();

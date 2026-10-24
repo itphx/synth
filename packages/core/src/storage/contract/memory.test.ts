@@ -6,6 +6,7 @@ import {
   describeAuthorityPolicyRepository,
   describeBlobStore,
   describeContextFileRepository,
+  describeCredentialAuditRepository,
   describeDefaultsRepository,
   describeDedupRepository,
   describeDictionaryRepository,
@@ -47,6 +48,7 @@ import {
   MemoryAuthorityPolicyRepository,
   MemoryBlobStore,
   MemoryContextFileRepository,
+  MemoryCredentialAuditRepository,
   MemoryDefaultsRepository,
   MemoryDedupRepository,
   MemoryDictionaryRepository,
@@ -199,6 +201,12 @@ describe('контрактные тесты in-memory реализаций по�
   describeExternalCredentialRepository(
     'MemoryExternalCredentialRepository → ExternalCredentialRepository',
     async () => ({ repo: new MemoryExternalCredentialRepository() }),
+  );
+
+  // ADR-105 (Ф4): журнал операций со слоем доступов.
+  describeCredentialAuditRepository(
+    'MemoryCredentialAuditRepository → CredentialAuditRepository',
+    async () => ({ repo: new MemoryCredentialAuditRepository() }),
   );
 
   describeMcpRegistryRepository('MemoryMcpRegistryRepository → McpRegistryRepository', async () => ({

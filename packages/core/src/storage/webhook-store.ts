@@ -9,7 +9,13 @@ import type {
 } from '@itphx/synth-shared';
 import { WEBHOOK_SECRET_PREFIX } from '@itphx/synth-shared';
 import { generateId, AsyncLock, atomicWrite, safeJsonParse, nowISO } from '@itphx/synth-shared';
-import { decryptSecret, encryptSecret, isEncrypted, resolveMasterKey } from '../security/crypto.js';
+import {
+  MASTER_KEY_LENGTH,
+  decryptSecret,
+  encryptSecret,
+  isEncrypted,
+  resolveMasterKey,
+} from '../security/crypto.js';
 import type { WebhookRepository } from './ports/webhook-repository.js';
 
 /** ADR-052 (этап II): версия схемы файла подписок webhooks (для будущей миграции ADR-096). */
@@ -33,6 +39,51 @@ export class WebhookConflictError extends Error {
     super(`Метка webhook уже используется: ${label}`);
     this.name = 'WebhookConflictError';
   }
+}
+
+/** Коды ошибок хранилища подписок webhooks. */
+export type WebhookStoreErrorCode =
+  /** Некорректный вход/ключ (например, мастер-ключ не 32 байта). */
+  | 'invalid'
+  /** Не удалось расшифровать signing-секрет (смена мастер-ключа, повреждение данных). */
+  | 'decrypt_failed'
+  /** Мастер-ключ недоступен/некорректен — запись секрета невозможна. */
+  | 'encryption_unavailable'
+  /**
+   * Preflight ротации не пройден: подписка не расшифровывается ни старым, ни
+   * новым мастер-ключом — операция прервана ДО записи.
+   */
+  | 'preflight_failed';
+
+/** Типизированная ошибка хранилища подписок (секрет в тексте ошибки не фигурирует). */
+export class WebhookStoreError extends Error {
+  constructor(
+    readonly code: WebhookStoreErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'WebhookStoreError';
+  }
+}
+
+/** Опции ротации мастер-ключа подписок webhooks. */
+export interface RotateWebhookKeyOptions {
+  /** Предпросмотр: счётчики считаются, записи не сохраняются. */
+  dryRun?: boolean;
+}
+
+/** Результат ротации мастер-ключа: счётчики подписок и id изменённых. */
+export interface RotateWebhookKeyResult {
+  /** Всего подписок в хранилище. */
+  total: number;
+  /** Подписок, где signing-секрет перешифрован старым→новым ключом. */
+  rotated: number;
+  /** Подписок, где plaintext-секрет зашифрован новым ключом («апгрейд»). */
+  upgraded: number;
+  /** Подписок, уже зашифрованных новым ключом (ничего не изменено). */
+  skipped: number;
+  /** id подписок, которые были бы/были изменены (rotated + upgraded). */
+  ids: string[];
 }
 
 /**
@@ -318,6 +369,86 @@ export class WebhookStore implements WebhookRepository {
     }
   }
 
+  /**
+   * Ротация мастер-ключа (one-shot) — по образцу
+   * `ExternalCredentialStore.rotateMasterKey`/`SSHKeyStore.rotateMasterKey`.
+   *
+   * Signing-секрет подписки шифруется at-rest мастер-ключом (ADR-052 этап II),
+   * поэтому после смены мастер-ключа подписки перестают подписывать доставки
+   * («Секрет недоступен»), пока секрет не перешифрован.
+   *
+   * Порядок: сначала **preflight по всем подпискам** (каждый секрет должен
+   * расшифровываться новым либо старым ключом; иначе `preflight_failed` со
+   * списком id и **ничего не записывается**), затем перешифровка старым→новым
+   * (идемпотентно: уже новые — `skipped`), plaintext-секрет «апгрейдится» новым
+   * ключом. Запись — атомарно (весь файл перезаписывается tmp→rename, ADR-005).
+   * `dryRun` — без записи.
+   */
+  async rotateMasterKey(
+    oldKey: Buffer,
+    newKey: Buffer,
+    opts: RotateWebhookKeyOptions = {},
+  ): Promise<RotateWebhookKeyResult> {
+    if (oldKey.length !== MASTER_KEY_LENGTH || newKey.length !== MASTER_KEY_LENGTH) {
+      throw new WebhookStoreError('invalid', 'Мастер-ключ должен быть 32 байта');
+    }
+
+    await this._lock.acquire();
+    try {
+      const file = await this._load();
+      const failures = new Set<string>();
+      const planned: Array<{
+        record: WebhookRecord;
+        changed: boolean;
+        kind: 'rotated' | 'upgraded' | 'skipped';
+      }> = [];
+
+      // Preflight: планируем все изменения в памяти, ничего не записывая.
+      for (const record of file.subscriptions) {
+        const item = planSubscriptionRotation(record, oldKey, newKey, failures);
+        if (item) planned.push(item);
+      }
+
+      if (failures.size > 0) {
+        throw new WebhookStoreError(
+          'preflight_failed',
+          `Не удалось расшифровать signing-секреты webhooks (ни старым, ни новым ключом): ${[...failures].sort().join(', ')}`,
+        );
+      }
+
+      let rotated = 0;
+      let upgraded = 0;
+      let skipped = 0;
+      const ids: string[] = [];
+      let dirty = false;
+
+      for (const item of planned) {
+        if (item.kind === 'rotated') {
+          rotated += 1;
+          ids.push(item.record.id);
+        } else if (item.kind === 'upgraded') {
+          upgraded += 1;
+          ids.push(item.record.id);
+        } else {
+          skipped += 1;
+        }
+        if (!item.changed) continue;
+        dirty = true;
+        const index = file.subscriptions.findIndex((s) => s.id === item.record.id);
+        if (index >= 0) file.subscriptions[index] = item.record;
+      }
+
+      // Запись — одна атомарная перезапись файла (ADR-005, tmp→rename).
+      if (dirty && !opts.dryRun) {
+        await this._save(file);
+      }
+
+      return { total: file.subscriptions.length, rotated, upgraded, skipped, ids };
+    } finally {
+      this._lock.release();
+    }
+  }
+
   private _applyEnabled(record: WebhookRecord, enabled: boolean): void {
     record.enabled = enabled;
     if (enabled) {
@@ -326,4 +457,56 @@ export class WebhookStore implements WebhookRepository {
       record.disabledAt = nowISO();
     }
   }
+}
+
+type WebhookSecretRotation =
+  | { value: string; kind: 'rotated' | 'upgraded' | 'unchanged' }
+  | { invalid: true };
+
+/**
+ * Перешифровывает signing-секрет подписки: plaintext → шифр новым ключом
+ * (upgraded); уже новый шифр → без изменений; старый шифр → расшифровать
+ * старым и зашифровать новым (rotated); иначе — invalid (preflight-отказ).
+ */
+function rotateWebhookSecret(
+  secret: string,
+  oldKey: Buffer,
+  newKey: Buffer,
+): WebhookSecretRotation {
+  if (!isEncrypted(secret)) {
+    return { value: encryptSecret(secret, newKey), kind: 'upgraded' };
+  }
+  try {
+    decryptSecret(secret, newKey);
+    return { value: secret, kind: 'unchanged' };
+  } catch {
+    // Не расшифровывается новым — пробуем старым.
+  }
+  try {
+    const plaintext = decryptSecret(secret, oldKey);
+    return { value: encryptSecret(plaintext, newKey), kind: 'rotated' };
+  } catch {
+    return { invalid: true };
+  }
+}
+
+/**
+ * Планирует ротацию одной подписки; при нерасшифровываемом секрете пишет id в
+ * `failures` (preflight-отказ).
+ */
+function planSubscriptionRotation(
+  record: WebhookRecord,
+  oldKey: Buffer,
+  newKey: Buffer,
+  failures: Set<string>,
+): { record: WebhookRecord; changed: boolean; kind: 'rotated' | 'upgraded' | 'skipped' } | null {
+  const result = rotateWebhookSecret(record.secret, oldKey, newKey);
+  if ('invalid' in result) {
+    failures.add(record.id);
+    return null;
+  }
+  if (result.kind === 'unchanged') return { record, changed: false, kind: 'skipped' };
+  // `secretPrefix` не меняется: plaintext-секрет при ротации тот же.
+  const next: WebhookRecord = { ...record, secret: result.value };
+  return { record: next, changed: true, kind: result.kind };
 }

@@ -29,6 +29,7 @@ import {
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
   describeExternalCredentialRepository,
+  describeCredentialAuditRepository,
   describeMcpRegistryRepository,
   describePackRepository,
   describePipelineRepository,
@@ -235,6 +236,12 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
     if (!repo) throw new Error('Порт authorityDecisions не подключён драйвером PostgreSQL');
     return { repo, dispose };
   });
+
+  // ADR-105 (Ф4): журнал операций со слоем доступов (таблица
+  // `credential_audit`, миграция 016).
+  describeCredentialAuditRepository('PG → CredentialAuditRepository', () =>
+    makePort('credentialAudit'),
+  );
 
   // ADR-051/ADR-100 + ADR-086 §5: переходно файловые порты драйвера.
   describePipelineRepository('PG → PipelineRepository (file-backed)', () => makePort('pipelines'));

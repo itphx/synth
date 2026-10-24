@@ -52,6 +52,8 @@
 | ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ✅ Реализовано | [adr-095-god-object-decomposition.md](./adr-095-god-object-decomposition.md) |
 | ADR-096 | Единый слой хранения — доменные порты с взаимозаменяемыми backend'ами | ✅ Реализовано | [adr-096-storage-layer.md](./adr-096-storage-layer.md) |
 | ADR-101 | Pipeline Engine: пайплайн как второй движок рядом с оркестратором | ✅ Реализовано | [adr-101-pipeline-engine.md](./adr-101-pipeline-engine.md) |
+| ADR-104 | Вмешательство в ход посреди генерации (steering) | ✅ Реализовано | [adr-104-mid-turn-steering.md](./adr-104-mid-turn-steering.md) |
+| ADR-105 | Внешние доступы — единый слой доступа к внешним сервисам (OAuth-коннекторы) | ✅ Реализовано | [adr-105-external-credentials.md](./adr-105-external-credentials.md) |
 
 ## Частично
 
@@ -73,8 +75,6 @@
 | ADR-100 | Пакет расширения и пайплайн в ядре: единый контракт доставки (`synth.pack`) и учёт прогонов | ⚠️ Частично | [adr-100-extension-packs-pipelines.md](./adr-100-extension-packs-pipelines.md) |
 | ADR-102 | Аналитика и отчётность инстанса | ⚠️ Частично | [adr-102-analytics-reports.md](./adr-102-analytics-reports.md) |
 | ADR-103 | Ядро шлюзов (`@itphx/synth-gateway-core`) и контракт канала | ⚠️ Частично | [adr-103-gateway-core-channel-contract.md](./adr-103-gateway-core-channel-contract.md) |
-| ADR-104 | Вмешательство в ход посреди генерации (steering) | ⚠️ Частично | [adr-104-mid-turn-steering.md](./adr-104-mid-turn-steering.md) |
-| ADR-105 | Внешние доступы — единый слой доступа к внешним сервисам (OAuth-коннекторы) | ⚠️ Частично | [adr-105-external-credentials.md](./adr-105-external-credentials.md) |
 | ADR-106 | Authority-слой — полномочия пользователей и агентов как контент; Ф0–Ф5 реализованы (остаток — UI «Полномочия» и flavor-роли) | ⚠️ Частично | [adr-106-authority-layer.md](./adr-106-authority-layer.md) |
 
 ## Предложения
@@ -132,4 +132,4 @@
 
 ---
 
-Всего документов: 97 (Решения: 40, Частично: 19, Предложения: 29, Vision: 8, Icebox: 0, Legacy: 1).
+Всего документов: 97 (Решения: 42, Частично: 17, Предложения: 29, Vision: 8, Icebox: 0, Legacy: 1).

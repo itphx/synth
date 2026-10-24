@@ -38,6 +38,7 @@ import type {
   EventJournalRepository,
   EventRouteRepository,
   ExternalCredentialRepository,
+  CredentialAuditRepository,
   IdentityClaimRepository,
   JobRepository,
   MaintenanceAuditRepository,
@@ -98,6 +99,8 @@ import { SecurityAuditStore } from './security-audit-store.js';
 // `{dataDir}/secrets/oauth/credentials.json` (в `secrets/` — чтобы обычный
 // бэкап без `--with-secrets` их не захватывал, ADR-105 §10).
 import { ExternalCredentialStore } from './external-credential-store.js';
+// ADR-105 (Ф4): журнал операций со слоем доступов — `{dataDir}/audit/credentials.jsonl`.
+import { FileCredentialAuditStore } from './file-credential-audit-store.js';
 import { FileAuthorityPolicyStore } from './file-authority-policy-store.js';
 import { FileAuthorityDecisionJournal } from './file-authority-decision-journal.js';
 import { applyStartupProxyConfig } from '../security/proxy-startup.js';
@@ -132,6 +135,7 @@ import {
   MemoryEventJournalRepository,
   MemoryEventRouteRepository,
   MemoryExternalCredentialRepository,
+  MemoryCredentialAuditRepository,
   MemoryIdentityClaimRepository,
   MemoryJobRepository,
   MemoryMaintenanceAuditRepository,
@@ -346,6 +350,13 @@ export interface StorageContext {
    * метаданные и зашифрованные токены; plaintext наружу не отдаётся.
    */
   externalCredentials: ExternalCredentialRepository;
+  /**
+   * ADR-105 (Ф4): append-only журнал операций со слоем доступов
+   * (`issue`/`refresh`/`revoke`/`bind`/`use`). Секретов и id сессий/
+   * пользователей в записях нет — только id доступа, провайдер, операция и
+   * исход.
+   */
+  credentialAudit: CredentialAuditRepository;
   blobs: BlobStore;
   /** ADR-051/ADR-100: определения и экземпляры пайплайнов. */
   pipelines: PipelineRepository;
@@ -607,6 +618,8 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
       secretKey: config.secretKey,
       env: config.env,
     }),
+    // ADR-105 (Ф4): журнал операций со слоем доступов (`audit/credentials.jsonl`).
+    credentialAudit: new FileCredentialAuditStore({ dataDir }),
     blobs: new FileBlobStore({ root: dataDir }),
     // ADR-051/ADR-100: пайплайны — определения (`pipelines/definitions.json`)
     // и экземпляры (`pipelines/instances.json`).
@@ -667,6 +680,7 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     contextFiles: new MemoryContextFileRepository(),
     sshKeys: new MemorySSHKeyRepository(),
     externalCredentials: new MemoryExternalCredentialRepository(),
+    credentialAudit: new MemoryCredentialAuditRepository(),
     blobs: new MemoryBlobStore(),
     pipelines: new MemoryPipelineRepository(),
     packs: new MemoryPackRepository(),

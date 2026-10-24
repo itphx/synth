@@ -10,6 +10,7 @@ import {
   evaluateMcpNetworkAccess,
   getServiceCredential,
   McpRegistryValidationError,
+  syncMcpManagerFromRegistry,
 } from '@itphx/synth-core';
 import type { McpServerConfig, McpNetworkPolicy, McpRegistryEntry, User } from '@itphx/synth-shared';
 import {
@@ -115,13 +116,7 @@ export function createMcpRegistryRoutes(
   /** Синхронизировать конфиг менеджера из реестра — одно чтение на все карты. */
   const syncManagerConfig = async (): Promise<void> => {
     if (!mcpManager) return;
-    const maps = await registry.toManagerMaps();
-    mcpManager.setConfig(maps.servers);
-    mcpManager.setServerOrigins(maps.origins);
-    mcpManager.setServerTrusts(maps.trusts);
-    mcpManager.setServerAuthors(maps.authors);
-    mcpManager.setDefaultServers(maps.defaults);
-    mcpManager.setServerSystemEnabled(maps.systemEnabled);
+    await syncMcpManagerFromRegistry(mcpManager, registry);
   };
 
   const isConnected = (name: string): boolean =>

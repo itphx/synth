@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-24 (ADR-106 Ф5: §5.33 «Пакеты расширений» — сводка `authority`, `pending_approval` по существу, `authorityActivation`; ADR-090 §5.36 «Плагины» — переведено); перевод отстаёт (§5.32 «Аналитика и отчётность» — ADR-102, §5.34 «Пайплайны» — ADR-100, §5.35 — ADR-101).
+> ⚠️ RU-версия обновлена 2026-10-24 (ADR-106 Ф5: §5.33 «Пакеты расширений» — сводка `authority`, `authorityActivation`; ADR-105 Ф4: §5.37 «Внешние доступы»; ADR-090 §5.36 «Плагины» — переведено); перевод отстаёт (§5.32 — ADR-102, §5.34 — ADR-100, §5.35 — ADR-101).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -1491,6 +1491,7 @@ ADR-079). Its own matrix — `packages/backend/src/routes/plugins-rbac-matrix.te
 | Webhooks store/journal/routes/engine (ADR-052) | `packages/core/src/storage/webhook-store.ts`, `packages/core/src/storage/webhook-delivery-store.ts`, `packages/core/src/server/routes/webhooks.ts`, `packages/core/src/engine/webhooks/*` |
 | Instance maintenance admin API (ADR-091/ADR-092) | `packages/core/src/server/routes/maintenance.ts`, `packages/core/src/maintenance/*` |
 | Plugins (ADR-090) | `packages/core/src/server/routes/plugins.ts`, `packages/core/src/engine/plugins/*` (the host, the loader, the installer, the runtime), `packages/shared/src/types/{pack,plugin-audit,plugin-lock,plugin-scan,prompt-blocks,llm-filters,plugin-tools}.ts` |
+| External credentials (ADR-105) | `packages/core/src/server/routes/oauth.ts`, `packages/core/src/engine/oauth/*` (client, service, registry, audit), `packages/core/src/storage/external-credential-store.ts`, `packages/core/src/storage/ports/{external-credential-repository,credential-audit-repository}.ts`, `packages/shared/src/types/external-credentials.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

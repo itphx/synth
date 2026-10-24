@@ -112,6 +112,22 @@ export interface ExchangeCodeInput {
   clientId?: string;
 }
 
+/**
+ * Ответ device-authorization endpoint (RFC 8628 §3.2).
+ *
+ * `device_code` — секрет (одноразовый), `user_code` — то, что вводит человек.
+ */
+export interface DeviceAuthorization {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string;
+  /** Срок действия device-кода, секунды. */
+  expiresIn: number;
+  /** Интервал опроса token-endpoint, секунды (RFC 8628 §3.5). */
+  interval: number;
+}
+
 /** Параметры refresh (RFC 6749 §6). */
 export interface RefreshInput {
   refreshToken: string;
@@ -188,6 +204,80 @@ export class OAuthClient {
     if (input.redirectUri) params.set('redirect_uri', input.redirectUri);
     const headers = this._applyClientAuth(params, clientId);
     const result = await this._post(this._provider.tokenUrl, params, headers);
+    return parseTokenResponse(result.status, result.body);
+  }
+
+  /**
+   * Начало device flow (RFC 8628 §3.1): запрос device-кода у провайдера.
+   *
+   * Провайдер без `deviceAuthorizationUrl` → `OAuthError('not_found')`.
+   */
+  async startDeviceAuthorization(scopes?: string[]): Promise<DeviceAuthorization> {
+    const url = this._provider.deviceAuthorizationUrl;
+    if (!url) {
+      throw new OAuthError(
+        'not_found',
+        `Провайдер «${this._provider.provider}» не поддерживает device flow`,
+      );
+    }
+    const params = new URLSearchParams({ client_id: this._provider.clientId });
+    const requested = scopes ?? this.defaultScopes;
+    if (requested.length > 0) params.set('scope', requested.join(' '));
+    const headers = this._applyClientAuth(params, this._provider.clientId);
+    const result = await this._post(url, params, headers);
+    if (result.status < 200 || result.status >= 300) {
+      const error = str(result.body.error);
+      throw new OAuthError(
+        'provider_error',
+        `Провайдер не выдал device-код (HTTP ${result.status})${error ? `: ${error}` : ''}`,
+      );
+    }
+    const deviceCode = str(result.body.device_code);
+    const userCode = str(result.body.user_code);
+    const verificationUri = str(result.body.verification_uri);
+    if (!deviceCode || !userCode || !verificationUri) {
+      throw new OAuthError(
+        'invalid_response',
+        'Провайдер вернул некорректный ответ device flow (нет device_code/user_code/verification_uri)',
+      );
+    }
+    const verificationUriComplete = str(result.body.verification_uri_complete);
+    return {
+      deviceCode,
+      userCode,
+      verificationUri,
+      ...(verificationUriComplete !== undefined ? { verificationUriComplete } : {}),
+      expiresIn: num(result.body.expires_in) ?? 600,
+      interval: num(result.body.interval) ?? 5,
+    };
+  }
+
+  /**
+   * Одна попытка обмена device-кода на токены (RFC 8628 §3.4).
+   *
+   * Провайдер ещё не подтвердил авторизацию → `OAuthError('authorization_pending')`
+   * (вызывающий повторяет с интервалом); провайдер просит реже → `'slow_down'`.
+   */
+  async pollDeviceToken(deviceCode: string): Promise<OAuthTokenSet> {
+    const params = new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+      device_code: deviceCode,
+      client_id: this._provider.clientId,
+    });
+    const headers = this._applyClientAuth(params, this._provider.clientId);
+    const result = await this._post(this._provider.tokenUrl, params, headers);
+    const error = str(result.body.error);
+    if (error) {
+      if (error === 'authorization_pending' || error === 'slow_down') {
+        throw new OAuthError(error, `Провайдер ждёт подтверждения авторизации (${error})`);
+      }
+      const description = str(result.body.error_description);
+      const detail = description ? ` — ${description.slice(0, MAX_ERROR_DESCRIPTION_CHARS)}` : '';
+      throw new OAuthError(
+        KNOWN_ERROR_CODES.has(error) ? (error as OAuthError['code']) : 'provider_error',
+        `Провайдер вернул ошибку OAuth: ${error}${detail}`,
+      );
+    }
     return parseTokenResponse(result.status, result.body);
   }
 

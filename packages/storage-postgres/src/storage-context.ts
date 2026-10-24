@@ -18,6 +18,7 @@
  *   - `buildAnalyticsPorts(deps)` → `analyticsRollups` (ADR-102);
  *   - `buildAuthorityPorts(deps)` → `authorityPolicy`/`authorityDecisions` (ADR-106 Ф0/Ф1);
  *   - `buildExternalCredentialPorts(deps)` → `externalCredentials` (ADR-105 Ф1);
+ *   - `buildCredentialAuditPorts(deps)`  → `credentialAudit` (ADR-105 Ф4);
  *   - `buildPipelinePorts(deps)`  → `projectPipelines`/`pipelineRuns` (ADR-101).
  *
  * Все доменные порты реализованы поверх SQL; FS/package-bound порты (`skills`,
@@ -45,6 +46,7 @@ import { buildAuditPorts } from './ports/audit.js';
 import { buildAnalyticsPorts } from './ports/analytics.js';
 import { buildAuthorityPorts } from './ports/authority.js';
 import { buildExternalCredentialPorts } from './ports/external-credentials.js';
+import { buildCredentialAuditPorts } from './ports/credential-audit.js';
 import type { CoreSyncDeps, PortDeps } from './ports/deps.js';
 import { buildEventPorts } from './ports/events.js';
 import { buildPipelinePorts } from './ports/pipelines.js';
@@ -163,6 +165,10 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // миграция 011). Токены шифруются core-хелперами (ленивый `import()`), в БД
     // лежит готовый `enc:v1:…`; наружу отдаются только метаданные с маской.
     ...buildExternalCredentialPorts(deps),
+    // ADR-105 (Ф4): журнал операций со слоем доступов (таблица
+    // `credential_audit`, миграция 016). Секретов и id сессий/пользователей
+    // в записях нет.
+    ...buildCredentialAuditPorts(deps),
     // ADR-102: порт роллапов аналитики — пред-агрегированные суточные бакеты
     // (`analytics_rollups`, миграция 003) с атомарным `ON CONFLICT … DO UPDATE`.
     ...buildAnalyticsPorts(deps),

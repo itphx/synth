@@ -25,7 +25,12 @@ import type {
   UpdateExternalCredentialTokensInput,
 } from '@itphx/synth-shared';
 import { generateId, toExternalCredentialMeta } from '@itphx/synth-shared';
-import type { ExternalCredentialRepository, StorageContext } from '@itphx/synth-core';
+import type {
+  ExternalCredentialRepository,
+  RotateExternalCredentialKeyOptions,
+  RotateExternalCredentialKeyResult,
+  StorageContext,
+} from '@itphx/synth-core';
 import type { PostgresExecutor } from '../pool.js';
 import { jsonbParam } from '../json-param.js';
 import type { PortDeps } from './deps.js';
@@ -354,6 +359,126 @@ class PostgresExternalCredentialRepository implements ExternalCredentialReposito
     );
     return rows.map(rowToCredential);
   }
+
+  /**
+   * Ротация мастер-ключа (ADR-105 Ф4, one-shot) — по образцу `sshKeys`.
+   *
+   * Порядок — как у `SSHKeyRepository.rotateMasterKey`: сначала preflight по
+   * всем записям (каждое зашифрованное поле расшифровывается новым либо
+   * старым ключом; иначе `preflight_failed` и **ничего не записывается**), затем
+   * перешифровка (идемпотентно: уже новые — `skipped`), plaintext-поля
+   * «апгрейдятся» новым ключом. `dryRun` — без записи.
+   */
+  async rotateMasterKey(
+    oldKey: Buffer,
+    newKey: Buffer,
+    opts: RotateExternalCredentialKeyOptions = {},
+  ): Promise<RotateExternalCredentialKeyResult> {
+    const core = await loadCore();
+    if (oldKey.length !== core.crypto.MASTER_KEY_LENGTH || newKey.length !== core.crypto.MASTER_KEY_LENGTH) {
+      throw new core.ExternalCredentialStoreError('invalid', 'Мастер-ключ должен быть 32 байта');
+    }
+
+    const rows = await this._db().query<ExternalCredentialRow>(
+      'SELECT id, secret_enc, refresh_enc FROM external_credentials ORDER BY created_at ASC, id ASC',
+    );
+    const failures = new Set<string>();
+    const planned: Array<{
+      id: string;
+      secretEnc: string;
+      refreshEnc: string | null;
+      kind: 'rotated' | 'upgraded' | 'skipped';
+    }> = [];
+
+    for (const row of rows) {
+      const plan = planCredentialRotation(core, row.secret_enc, row.refresh_enc, oldKey, newKey);
+      if (!plan) {
+        failures.add(row.id);
+        continue;
+      }
+      planned.push({ id: row.id, ...plan });
+    }
+
+    if (failures.size > 0) {
+      throw new core.ExternalCredentialStoreError(
+        'preflight_failed',
+        `Не удалось расшифровать внешние доступы (ни старым, ни новым ключом): ${[...failures].sort().join(', ')}`,
+      );
+    }
+
+    let rotated = 0;
+    let upgraded = 0;
+    let skipped = 0;
+    const ids: string[] = [];
+    for (const item of planned) {
+      if (item.kind === 'rotated') {
+        rotated += 1;
+        ids.push(item.id);
+      } else if (item.kind === 'upgraded') {
+        upgraded += 1;
+        ids.push(item.id);
+      } else {
+        skipped += 1;
+      }
+      if (item.kind !== 'skipped' && !opts.dryRun) {
+        await this._db().query(
+          'UPDATE external_credentials SET secret_enc = $2, refresh_enc = $3 WHERE id = $1',
+          [item.id, item.secretEnc, item.refreshEnc],
+        );
+      }
+    }
+    return { total: rows.length, rotated, upgraded, skipped, ids };
+  }
+}
+
+/** План ротации полей одной записи доступа (secret/refresh). */
+interface CredentialRotationPlan {
+  secretEnc: string;
+  refreshEnc: string | null;
+  kind: 'rotated' | 'upgraded' | 'skipped';
+}
+
+/**
+ * Планирует ротацию полей записи доступа (plaintext → upgraded, старый шифр →
+ * rotated). `null` — поле не расшифровывается ни старым, ни новым ключом.
+ */
+function planCredentialRotation(
+  core: CoreModule,
+  secretEnc: string,
+  refreshEnc: string | null,
+  oldKey: Buffer,
+  newKey: Buffer,
+): CredentialRotationPlan | null {
+  let kind: 'rotated' | 'upgraded' | 'skipped' = 'skipped';
+
+  const rotateToken = (token: string): string | null => {
+    if (!core.isEncrypted(token)) {
+      kind = 'upgraded';
+      return core.encryptSecret(token, newKey);
+    }
+    try {
+      core.decryptSecret(token, newKey);
+      return token;
+    } catch {
+      // не расшифровывается новым — пробуем старым
+    }
+    try {
+      const plaintext = core.decryptSecret(token, oldKey);
+      kind = 'rotated';
+      return core.encryptSecret(plaintext, newKey);
+    } catch {
+      return null;
+    }
+  };
+
+  const nextSecret = rotateToken(secretEnc);
+  if (nextSecret === null) return null;
+  let nextRefresh = refreshEnc;
+  if (refreshEnc !== null) {
+    nextRefresh = rotateToken(refreshEnc);
+    if (nextRefresh === null) return null;
+  }
+  return { secretEnc: nextSecret, refreshEnc: nextRefresh, kind };
 }
 
 /** Ошибка криптослоя → типизированная ошибка хранилища (без утечки секрета). */

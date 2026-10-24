@@ -1,6 +1,6 @@
 # ADR-104: Вмешательство в ход посреди генерации (steering)
 
-> **Статус:** ⚠️ Частично — этапы 1–3 реализованы (2026-10-23); остаток — PROP-096 (фоновые саб-агенты: steering фонового ребёнка недоступен).
+> **Статус:** ✅ Реализовано — этапы 1–3 (2026-10-23…24). Steering фонового ребёнка не входит в объём: он возможен только после [PROP-096](./prop-096-background-subagent-sessions.md) (фоновых сессий саб-агентов в коде нет).
 > **Дата:** 2026-10-23
 > **Парные документы (as-built):** [API_V2.md](../API_V2.md) §5.5 (поле `mode`) · [packages/ui/AGENTS.md](../../packages/ui/AGENTS.md) («Чат: режим отправки»)
 > **Связано:** [ADR-005](./adr-005-json-storage.md) («Стоп» — соседняя семантика отмены хода), [ADR-024](./adr-024-eventhub-transport.md) (доставка событий в UI), [ADR-039](./adr-039-plan-in-project.md) (состояние агента через Tool Use), [ADR-089](./adr-089-external-events-automation.md) (события сессии), [PROP-096](./prop-096-background-subagent-sessions.md) (фоновые саб-агенты)
@@ -92,6 +92,13 @@
   (`ToolDefinition.description`), локализации у них нет, а i18n-словарь (`shared/i18n`) покрывает
   результаты тулов, а не их описания.
 - Существующие клиенты не ломаются: поле необязательное, неизвестное значение трактуется как `queue`.
+
+## Статус в коде
+
+- API: `POST /api/v2/sessions/:id/prompt` и WS `send_message` — поле `mode` (`queue`/`steer`/`interrupt`), ответы `202 {status:'steered'|'interrupted', stream_id, pending_count, mode_applied}`, `429 STEER_LIMIT_EXCEEDED` (`docs/API_V2.md` §5.5).
+- Ядро: `queue/processor.ts` (`enqueueSteerMessage`), `sessions/manager.ts` (`steerInbox`, `takeSteerMessages` с приоритетом `interrupt` → `steer`), `engine/orchestrator.ts` (вычитка на границе шага, `_handleInterruptedGeneration`, `interrupt(streamId)`), `shared/types/steering.ts` (типы, лимит 5, порядок).
+- UI: `SendModeSelector`, маркеры вмешательства/прерывания, `resetStreamAccumulator` — `packages/ui/AGENTS.md`.
+- Тесты: `queue/steering.test.ts`, `engine/orchestrator-steering.test.ts`, `engine/orchestrator-interrupt.test.ts`, `server/routes/sessions-steering.test.ts`, `queue/steering-subagent.test.ts`.
 
 ## История
 

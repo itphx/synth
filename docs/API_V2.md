@@ -1754,6 +1754,61 @@ PG, порт настроек): `enabled`, `executionEnabled`, `runtimeInstall` 
 `packages/backend/src/routes/plugins-rbac-matrix.test.ts` (негативная: `USER`/`LEAD`/`AUDITOR` →
 403; позитивная: `ADMIN`, service-key со scope и без).
 
+### 5.37 Внешние доступы — `/api/v2/oauth` (оба, ADR-105 Ф4)
+
+Слой доступа к внешним сервисам (OAuth-коннекторам): выдача, чтение метаданных, обновление
+токена, отзыв и привязка к MCP-коннектору. Единая фабрика `createOAuthRoutes`
+(`packages/core/src/server/routes/oauth.ts`) для core и backend; хранилище —
+`{dataDir}/secrets/oauth/credentials.json` (токены зашифрованы at-rest мастер-ключом, ADR-105 §3).
+
+**Секрет наружу не отдаётся никогда**: ответы содержат только `ExternalCredentialMeta`
+(маска `secretMask`, флаг `hasRefreshToken`). Значение токена доступно лишь `reveal()` —
+подстановке в транспорт (ADR-105 §1).
+
+**Право — на границе** (инвариант 16): «кем распоряжается доступом» решает
+`engine/oauth/credential-binding.ts`; свой доступ — его владелец; инстансный — `ADMIN`/`LEAD`;
+проектный — участник проекта с правом **изменения содержимого** (`OWNER`/`EDITOR`, а также
+`LEAD`/`ADMIN`); нет доступа — 404, нет права — 403.
+
+| Метод | Путь | Сборка | Назначение / req-resp |
+|---|---|---|---|
+| GET | `/api/v2/oauth/credentials` | оба | Список метаданных `{credentials, count}`: свои доступы; `ADMIN`/`LEAD` — все; проектные — участникам проекта с правом чтения |
+| POST | `/api/v2/oauth/credentials` | оба | Выдача доступа (`oauthCredentialCreateSchema`): `{provider, flow?, code?, state?, scopes?, redirectUri?, projectId?, connectorId?, ownerKind?}` → **201** `{flow:'started', authorizationUrl, state, expiresAt}` (PKCE) либо `{flow:'started', state, userCode, verificationUri, verificationUriComplete?, interval, expiresAt}` (device flow), либо **201** `{flow:'completed', credential}` (завершение: передан `code`+`state` или `state` device-flow); device flow в ожидании → **202** `{flow:'pending', interval, expiresAt}`; невалидное тело → 400 `VALIDATION_ERROR`; провайдер не зарегистрирован → 400 `OAUTH_PROVIDER_UNKNOWN`; провайдер без device flow → 400 `OAUTH_DEVICE_FLOW_UNSUPPORTED`; ошибка провайдера → 400 `OAUTH_PROVIDER_ERROR`; `ownerKind:'instance'` не от `ADMIN`/`LEAD` → 403 `FORBIDDEN` |
+| GET | `/api/v2/oauth/credentials/:id` | оба | Метаданные доступа (`ExternalCredentialMeta`); нет доступа → 404 `NOT_FOUND`; нет права на чтение → 403 `FORBIDDEN` |
+| POST | `/api/v2/oauth/credentials/:id/refresh` | оба | Форсированное обновление access-токена → 200 `{credential}`; нет доступа → 404; нет права → 403; refresh отклонён провайдером (`invalid_grant`) → 409 `CONFLICT` (доступ переходит в `status:'error'` — нужна переавторизация); нет refresh-токена → 409 `CONFLICT`; доступ отозван → 409 `CONFLICT` |
+| DELETE | `/api/v2/oauth/credentials/:id` | оба | Отзыв доступа (локально + best-effort RFC 7009 у провайдера) → 200 `{credential, providerRevoked}` (повторный отзыв идемпотентен — `revokedAt` не меняется); нет доступа → 404; нет права → 403; ошибка провайдера → 400 `OAUTH_PROVIDER_ERROR` (локальный отзыв при этом состоялся) |
+| POST | `/api/v2/oauth/credentials/:id/bind` | оба | Привязка к MCP-коннектору (`oauthCredentialBindSchema`: `{connectorId}`) → 200 `{credentialId, connectorId, bound:true}`; нет доступа → 404; нет права → 403; коннектора нет → 404; коннектор принадлежит другому → 403; конфликт привязки → 409 `CONFLICT`; привязка недоступна в сборке → 409 `SERVICE_UNAVAILABLE` |
+
+**Поля метаданных** (`ExternalCredentialMeta`): `id`, `provider`, `connectorId?`, `clientId`,
+`scopes`, `owner` (`{kind: 'user'|'instance'|'local', id}`), `projectId?`, `status`
+(`active|expired|revoked|error`), `expiresAt?`, `revokedAt?`, `createdBy`, `createdAt`,
+`lastUsedAt?`, `scopesGranted?`, `secretMask` (маска, необратимая сводка), `hasRefreshToken`.
+
+**Журнал операций со слоем доступов** (append-only, `{dataDir}/audit/credentials.jsonl`) —
+**не является публичным API**: эндпоинта чтения нет. Записи (`issue`/`refresh`/`revoke`/`bind`/
+`use`) пишутся портом `CredentialAuditRepository` best-effort и не содержат ни значений токенов,
+ни `code_verifier`/`client_secret`, ни id пользователей. Подробности — `docs/EXTERNAL_ACCESS.md` §10.2.
+
+**Каталог провайдеров** — `oauth.providers` в `config.yaml` (env `SYNTH_OAUTH_PROVIDERS`);
+`client_secret` — только env `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` или файл
+`{dataDir}/secrets/oauth/<provider>.client_secret` (в конфиге его нет).
+
+**Пример.**
+
+```bash
+# Старт выдачи (PKCE) → authorizationUrl + state.
+curl -X POST http://localhost:5000/api/v2/oauth/credentials \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"provider":"google","scopes":["https://www.googleapis.com/auth/drive.readonly"]}'
+
+# Завершение выдачи (код авторизации + state) и чтение метаданных.
+curl -X POST http://localhost:5000/api/v2/oauth/credentials \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"provider":"google","code":"<code>","state":"<state>"}'
+curl http://localhost:5000/api/v2/oauth/credentials/extc_<...> \
+  -H 'Authorization: Bearer admin-key-123'
+```
+
 ## 6. Источники
 
 | Компонент | Файл |
@@ -1771,6 +1826,7 @@ PG, порт настроек): `enabled`, `executionEnabled`, `runtimeInstall` 
 | Пакеты расширений и пайплайны (ADR-100) | `packages/core/src/server/routes/packs.ts`, `packages/core/src/server/routes/pipelines.ts`, `packages/core/src/engine/events/pipeline-tracker.ts`, `packages/core/src/storage/ports/pack-repository.ts`, `packages/core/src/storage/ports/pipeline-repository.ts`, `packages/shared/src/types/pack.ts`, `packages/shared/src/types/pipeline.ts` |
 | Пайплайны проекта, прогоны и шаблоны (ADR-101, Э6) | `packages/core/src/server/routes/pipeline-project-routes.ts`, `packages/core/src/engine/pipelines/*`, `packages/core/src/storage/ports/project-pipeline-repository.ts`, `packages/core/src/storage/ports/pipeline-run-repository.ts`, `packages/shared/src/types/pipeline-engine.ts` |
 | Плагины (ADR-090) | `packages/core/src/server/routes/plugins.ts`, `packages/core/src/engine/plugins/*` (хост, загрузчик, установщик, рантайм), `packages/shared/src/types/{pack,plugin-audit,plugin-lock,plugin-scan,prompt-blocks,llm-filters,plugin-tools}.ts` |
+| Внешние доступы (ADR-105) | `packages/core/src/server/routes/oauth.ts`, `packages/core/src/engine/oauth/*` (клиент, сервис, реестр, аудит), `packages/core/src/storage/external-credential-store.ts`, `packages/core/src/storage/ports/{external-credential-repository,credential-audit-repository}.ts`, `packages/shared/src/types/external-credentials.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

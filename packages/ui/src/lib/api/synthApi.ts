@@ -31,6 +31,7 @@ import { decisionApi } from './decision'
 import { schedulesApi } from './schedules'
 import { serviceKeysApi } from './service-keys'
 import { webhooksApi } from './webhooks'
+import { oauthApi } from './oauth'
 import { maintenanceApi } from './maintenance'
 import { analyticsApi } from './analytics'
 import { logsApi } from './logs'
@@ -189,6 +190,16 @@ export type {
 } from './analytics'
 export type { HybridStatus } from './hybrid'
 export type {
+  OAuthFlowKind,
+  OAuthFlowResponse,
+  OAuthAuthorizationStart,
+  OAuthFlowCompleted,
+  OAuthFlowPending,
+  OAuthCredentialCreateInput,
+  OAuthCredentialBindResult,
+  OAuthCredentialRevokeResult,
+} from './oauth'
+export type {
   MaintenanceStatus,
   MaintenanceBackupInfo,
   MaintenanceMigration,
@@ -319,6 +330,7 @@ export const synthApi = {
   ...schedulesApi,
   ...serviceKeysApi,
   ...webhooksApi,
+  ...oauthApi,
   ...maintenanceApi,
   ...analyticsApi,
   ...logsApi,

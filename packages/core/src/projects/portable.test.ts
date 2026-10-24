@@ -424,6 +424,48 @@ describe('portable export/import проекта (ADR-091)', () => {
     expect(files.some((f) => f.content.includes('TOPSECRETVALUE'))).toBe(false);
   });
 
+  it('ADR-105 Ф4: внешние доступы (токены) не попадают в портативный архив проекта', async () => {
+    const fixture = await makeProject(src, 'Проект A');
+    // Файл доступов к коннекторам лежит в `secrets/oauth/` (ADR-105 Ф1) —
+    // в перенос проекта он не входит ни при каких флагах.
+    const oauthDir = join(src, 'secrets', 'oauth');
+    await mkdir(oauthDir, { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(oauthDir, 'credentials.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        credentials: [
+          {
+            id: 'extc_1',
+            provider: 'google',
+            clientId: 'client-123',
+            scopes: [],
+            owner: { kind: 'local', id: 'local' },
+            secretEnc: 'enc:v1:AAA',
+            status: 'active',
+            createdBy: 'local',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      }),
+      'utf-8',
+    );
+
+    const exported = await exportProject({ dataDir: src, projectId: fixture.projectId, out: tmpDir });
+    const files = await readArchiveFiles(exported.path);
+
+    // Ни файла доступов, ни каталога `secrets/` в архиве нет.
+    expect([...files.keys()].some((path) => path.startsWith('secrets/'))).toBe(false);
+    expect([...files.keys()].some((path) => path.includes('oauth'))).toBe(false);
+    // В payload сессий нет ни токена, ни полей доступа.
+    for (const payload of sessionPayloads(files)) {
+      expect(payload).not.toContain('extc_1');
+      expect(payload).not.toContain('secretEnc');
+      expect(payload).not.toContain('secret_enc');
+      expect(payload).not.toContain('enc:v1:');
+    }
+  });
+
   it('security-фикс 0.11.3: по умолчанию карта обфускации и metadata.secrets вырезаны из payload сессий', async () => {
     const fixture = await makeProject(src, 'Проект A');
 

@@ -22,10 +22,12 @@ import type {
   UpdateExternalCredentialTokensInput,
 } from '@itphx/synth-shared';
 import { AsyncLock, atomicWrite, generateId, nowISO, safeJsonParse, toExternalCredentialMeta } from '@itphx/synth-shared';
-import { CryptoError, decryptSecret, encryptSecret, isEncrypted, resolveMasterKey } from '../security/crypto.js';
+import { CryptoError, decryptSecret, encryptSecret, isEncrypted, MASTER_KEY_LENGTH, resolveMasterKey } from '../security/crypto.js';
 import {
   ExternalCredentialStoreError,
   type ExternalCredentialRepository,
+  type RotateExternalCredentialKeyOptions,
+  type RotateExternalCredentialKeyResult,
 } from './ports/external-credential-repository.js';
 
 /** Версия схемы файла доступов (для будущей миграции, ADR-096). */
@@ -285,6 +287,82 @@ export class ExternalCredentialStore implements ExternalCredentialRepository {
     const file = await this._load();
     return sortCredentials(file.credentials).map((credential) => ({ ...credential }));
   }
+
+  /**
+   * Ротация мастер-ключа (ADR-105 Ф4, one-shot) — по образцу
+   * `SSHKeyStore.rotateMasterKey`.
+   *
+   * Для каждой записи: preflight — каждое зашифрованное поле (`secretEnc`/
+   * `refreshEnc`) должно расшифровываться НОВЫМ либо СТАРЫМ ключом; иначе
+   * операция прерывается (`preflight_failed` со списком id) и **ничего не
+   * записывается**. Далее поля перешифровываются старым→новым (идемпотентно:
+   * уже новые — `skipped`), plaintext-поля «апгрейдятся» новым ключом. Запись
+   * — атомарно (весь файл перезаписывается tmp→rename). `dryRun` — без записи.
+   */
+  async rotateMasterKey(
+    oldKey: Buffer,
+    newKey: Buffer,
+    opts: RotateExternalCredentialKeyOptions = {},
+  ): Promise<RotateExternalCredentialKeyResult> {
+    if (oldKey.length !== MASTER_KEY_LENGTH || newKey.length !== MASTER_KEY_LENGTH) {
+      throw new ExternalCredentialStoreError('invalid', 'Мастер-ключ должен быть 32 байта');
+    }
+
+    await this._lock.acquire();
+    try {
+      const file = await this._load();
+      const failures = new Set<string>();
+      const planned: Array<{
+        credential: ExternalCredential;
+        changed: boolean;
+        kind: 'rotated' | 'upgraded' | 'skipped';
+      }> = [];
+
+      // Preflight: планируем все изменения в памяти, ничего не записывая.
+      for (const credential of file.credentials) {
+        const item = planCredentialRotation(credential, oldKey, newKey, failures);
+        if (item) planned.push(item);
+      }
+
+      if (failures.size > 0) {
+        throw new ExternalCredentialStoreError(
+          'preflight_failed',
+          `Не удалось расшифровать внешние доступы (ни старым, ни новым ключом): ${[...failures].sort().join(', ')}`,
+        );
+      }
+
+      let rotated = 0;
+      let upgraded = 0;
+      let skipped = 0;
+      const ids: string[] = [];
+      let dirty = false;
+
+      for (const item of planned) {
+        if (item.kind === 'rotated') {
+          rotated += 1;
+          ids.push(item.credential.id);
+        } else if (item.kind === 'upgraded') {
+          upgraded += 1;
+          ids.push(item.credential.id);
+        } else {
+          skipped += 1;
+        }
+        if (!item.changed) continue;
+        dirty = true;
+        const index = file.credentials.findIndex((c) => c.id === item.credential.id);
+        if (index >= 0) file.credentials[index] = item.credential;
+      }
+
+      // Запись — одна атомарная перезапись файла (ADR-005, tmp→rename).
+      if (dirty && !opts.dryRun) {
+        await this._save(file);
+      }
+
+      return { total: file.credentials.length, rotated, upgraded, skipped, ids };
+    } finally {
+      this._lock.release();
+    }
+  }
 }
 
 /** Запись считается валидной, если это запись доступа с обязательными полями. */
@@ -343,4 +421,69 @@ function mapCryptoError(err: unknown): ExternalCredentialStoreError {
     );
   }
   return new ExternalCredentialStoreError('decrypt_failed', 'Не удалось расшифровать секрет');
+}
+
+type CredentialFieldRotation =
+  | { value: string; kind: 'rotated' | 'upgraded' | 'unchanged' }
+  | { invalid: true };
+
+/**
+ * Перешифровывает одно поле доступа: plaintext → шифр новым ключом (upgraded);
+ * уже новый шифр → без изменений; старый шифр → расшифровать старым и
+ * зашифровать новым (rotated); иначе — invalid (preflight-failure).
+ */
+function rotateCredentialToken(
+  token: string,
+  oldKey: Buffer,
+  newKey: Buffer,
+): CredentialFieldRotation {
+  if (!isEncrypted(token)) {
+    return { value: encryptSecret(token, newKey), kind: 'upgraded' };
+  }
+  try {
+    decryptSecret(token, newKey);
+    return { value: token, kind: 'unchanged' };
+  } catch {
+    // Не расшифровывается новым — пробуем старым.
+  }
+  try {
+    const plaintext = decryptSecret(token, oldKey);
+    return { value: encryptSecret(plaintext, newKey), kind: 'rotated' };
+  } catch {
+    return { invalid: true };
+  }
+}
+
+/**
+ * Планирует ротацию одной записи доступа; при нерасшифровываемом поле пишет
+ * id в `failures` (preflight-отказ).
+ */
+function planCredentialRotation(
+  credential: ExternalCredential,
+  oldKey: Buffer,
+  newKey: Buffer,
+  failures: Set<string>,
+): { credential: ExternalCredential; changed: boolean; kind: 'rotated' | 'upgraded' | 'skipped' } | null {
+  const next: ExternalCredential = { ...credential };
+  let rotated = false;
+  let upgraded = false;
+
+  const fields: Array<'secretEnc' | 'refreshEnc'> = ['secretEnc', 'refreshEnc'];
+  for (const field of fields) {
+    const token = credential[field];
+    if (token === undefined) continue;
+    const result = rotateCredentialToken(token, oldKey, newKey);
+    if ('invalid' in result) {
+      failures.add(credential.id);
+      return null;
+    }
+    if (result.kind === 'unchanged') continue;
+    next[field] = result.value;
+    if (result.kind === 'rotated') rotated = true;
+    else upgraded = true;
+  }
+
+  if (rotated) return { credential: next, changed: true, kind: 'rotated' };
+  if (upgraded) return { credential: next, changed: true, kind: 'upgraded' };
+  return { credential: next, changed: false, kind: 'skipped' };
 }

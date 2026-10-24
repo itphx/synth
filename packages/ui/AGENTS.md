@@ -260,6 +260,15 @@
 
 - **Секция «Идентичности»** в `components/settings/ProfileSettings.tsx` (Settings UI Kit, `SettingsSection`): список внешних аккаунтов профиля (`provider:externalId`, `displayName`/`username`, дата `linkedAt`), пустое состояние, ошибки; отвязка — кнопка с `confirm()` (`lib/confirm.ts`), после успеха строка удаляется локально. **Привязка (claim-flow, ADR-089):** поле одноразового кода + кнопка «Связать» → `synthApi.claimIdentity(code)` (`POST /me/identities/claim`), успех обновляет список, ошибки маппятся по статусу/коду (`404` → «код недействителен», `409` → «уже привязана», `400` → «укажите код»; повторный ввод сбрасывает сообщение), кнопка недоступна при пустом коде. Методы — `synthApi.getMyIdentities()` / `deleteMyIdentity(provider, externalId)` / `claimIdentity(code)` (`GET/DELETE/POST /api/v2/me/identities*`; RBAC — текущий пользователь). i18n-ключи `auth.identities*`/`auth.identityUnlink*`/`auth.identityLinkedAt`/`auth.identitiesLoadError`/`auth.identityUnlinkError`/`auth.identityClaim*` (ru/en).
 
+## Внешние доступы (ADR-105 Ф4)
+
+- **Раздел «Доступы»** (`components/settings/CredentialsSettings.tsx`; категория `credentials`, `labelKey: settings.category.credentials`, icon `key`, группа `personal` — **без `roles`**, виден всем ролям): список внешних доступов к OAuth-коннекторам через `synthApi.getOAuthCredentials/getOAuthCredential/createOAuthCredential/refreshOAuthCredential/deleteOAuthCredential/bindOAuthCredential` (`/api/v2/oauth/credentials*`; домен `lib/api/oauth.ts` → `oauthApi`, входит в barrel `synthApi`).
+- **Секрет наружу не отдаётся никогда**: в списке показывается только `secretMask` (тест фиксирует, что `accessToken`/`refreshToken`/`secretEnc` не попадают в DOM). Значение токена живёт только на сервере (`engine/mcp/credential-auth.ts`).
+- **Выдача.** Форма (провайдер, scope через запятую, способ выдачи): **PKCE** (`authorize` → ссылка `authorizationUrl` + поле кода) либо **device flow** (`device` → код `userCode` + `verificationUri`, опрос кнопкой). Один эндпоинт `POST /oauth/credentials` обслуживает старт и завершение (`flow: 'started' | 'pending' | 'completed'`).
+- **Действия.** «Переавторизовать» (`credentials.refresh`) — форсированный refresh для статусов `active`/`expired`/`error` (у `revoked` кнопки нет); «Отозвать» — **только через `confirm()`** (`lib/confirm.ts` + `ConfirmDialog`, `variant: 'danger'`); «Привязать к коннектору» — выбор MCP-сервера из реестра (`useMcpStore().registry`). Ошибки — по статусу/коду (`credentials.errors.*`).
+- **Мобильные тач-таргеты ≥40px** (ADR-044): секция помечена классом `credentials-panel` — якорь правил `styles/index.css` (кнопки, поля и нативный `select` формы привязки ≥ `--control-height-touch` в зонах телефон/планшет и при coarse-указателе).
+- i18n — `credentials.*` + `settings.category.credentials` (ru/en).
+
 ## Мобильный / PWA
 
 - Полные конвенции (зоны ≤768 / 769–1199 / ≥1200, дроверы, touch-first, PWA-шелл, баннер обновления) — в [ADR-044](../../docs/arch_decisions/adr-044-mobile-adaptive-ui-pwa.md) и кратко в корневом `AGENTS.md`; классами/баннером конкретно здесь не дублируются.

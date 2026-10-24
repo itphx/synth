@@ -133,6 +133,24 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
       'роли',
     ],
   },
+  {
+    // ADR-105 Ф4: внешние доступы к OAuth-коннекторам. Раздел личный: свои
+    // доступы видны всем ролям (право — на сервере, инвариант 16).
+    id: 'credentials',
+    group: 'personal',
+    labelKey: 'settings.category.credentials',
+    icon: 'key',
+    keywords: [
+      'credentials',
+      'oauth',
+      'access',
+      'token',
+      'доступы',
+      'доступ',
+      'токен',
+      'коннектор',
+    ],
+  },
 
   // Обзор.
   {
@@ -816,6 +834,43 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     sectionId: 'authority-agents',
     labelKey: 'authority.agents.title',
     keywords: ['agents', 'ceiling', 'агенты', 'потолок', 'привязки'],
+  },
+
+  // credentials (ADR-105 Ф4) — внешние доступы к OAuth-коннекторам.
+  {
+    id: 'credentials.list',
+    categoryId: 'credentials',
+    sectionId: 'credentials-list',
+    labelKey: 'credentials.listTitle',
+    keywords: ['credentials', 'accesses', 'oauth', 'доступы', 'доступы к сервисам'],
+  },
+  {
+    id: 'credentials.provider',
+    categoryId: 'credentials',
+    sectionId: 'credentials-list',
+    labelKey: 'credentials.form.provider',
+    keywords: ['provider', 'oauth', 'провайдер'],
+  },
+  {
+    id: 'credentials.scopes',
+    categoryId: 'credentials',
+    sectionId: 'credentials-list',
+    labelKey: 'credentials.form.scopes',
+    keywords: ['scopes', 'rights', 'scope', 'права'],
+  },
+  {
+    id: 'credentials.status',
+    categoryId: 'credentials',
+    sectionId: 'credentials-list',
+    labelKey: 'credentials.status.active',
+    keywords: ['status', 'expired', 'revoked', 'статус', 'истёк', 'отозван'],
+  },
+  {
+    id: 'credentials.bind',
+    categoryId: 'credentials',
+    sectionId: 'credentials-list',
+    labelKey: 'credentials.bind',
+    keywords: ['bind', 'connector', 'mcp', 'привязать', 'коннектор'],
   },
 
   // admin overview

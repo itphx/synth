@@ -356,6 +356,8 @@ export async function createStandaloneDeps(
   const oauthCredentialService = new OAuthCredentialService({
     repo: storageContext.externalCredentials,
     clientFor: (provider: string) => oauthProviders.clientFor(provider),
+    // ADR-105 (Ф4): журнал операций со слоем доступов (append-only).
+    audit: storageContext.credentialAudit,
   });
   mcpManager.setCredentialSource(
     createRepositoryCredentialSource({
@@ -363,6 +365,8 @@ export async function createStandaloneDeps(
       refresh: async (credentialId: string) => {
         await oauthCredentialService.refresh(credentialId);
       },
+      // ADR-105 (Ф4): подстановка токена в транспорт журналируется (`use`).
+      audit: storageContext.credentialAudit,
     }),
   );
 
@@ -1203,6 +1207,10 @@ export async function createStandaloneDeps(
     packs: packStore,
     // ADR-071 §2.5: единый реестр MCP-серверов (установщик пакета пишет в него).
     mcpRegistryStore,
+    // ADR-105 (Ф3/Ф4): реестр описаний OAuth-провайдеров и сервис слоя доступов
+    // (HTTP-контур `/api/v2/oauth/credentials`).
+    oauthProviders,
+    oauthCredentialService,
     orchestrator,
     // ADR-090 (Ф5б-1): рантайм плагинов — старт-активация установленного
     // (`main.ts`) и точки для HTTP API/CLI (Ф5б-2/3). `host`+`installer` внутри.

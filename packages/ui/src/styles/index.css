@@ -500,6 +500,26 @@ html.device-tablet .agents-grid {
   grid-template-columns: 1fr;
 }
 
+/* Раздел «Доступы» (ADR-105 Ф4): touch-таргеты ≥40px в мобильных зонах
+   (телефон/планшет) и при coarse-указателе. Панель настроек — внутри диалога,
+   но её кнопки и нативный select не подпадают под правило dialog-content
+   (там — только поля и [data-slot="select-trigger"]). */
+html.device-phone .credentials-panel button:not([role="switch"]),
+html.device-tablet .credentials-panel button:not([role="switch"]),
+html.pointer-coarse .credentials-panel button:not([role="switch"]) {
+  min-height: var(--control-height-touch);
+  min-width: var(--control-height-touch);
+}
+
+html.device-phone .credentials-panel input:not([type="checkbox"]):not([type="radio"]),
+html.device-tablet .credentials-panel input:not([type="checkbox"]):not([type="radio"]),
+html.pointer-coarse .credentials-panel input:not([type="checkbox"]):not([type="radio"]),
+html.device-phone .credentials-panel select,
+html.device-tablet .credentials-panel select,
+html.pointer-coarse .credentials-panel select {
+  min-height: var(--control-height-touch);
+}
+
 /* Компактные подписи индикаторов на телефоне и при узкой центральной колонке
    (остаётся точка/иконка) */
 .device-hide-label {
