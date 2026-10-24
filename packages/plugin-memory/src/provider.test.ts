@@ -185,6 +185,7 @@ describe('память: настройки плагина', () => {
       exclude: [],
       embeddingModel: '',
       dimensionProbeTtlMs: 30_000,
+      consolidateThreshold: 0.9,
     });
   });
 

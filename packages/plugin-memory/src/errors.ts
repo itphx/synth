@@ -50,3 +50,17 @@ export class IndexBusyError extends Error {
     this.name = 'IndexBusyError';
   }
 }
+
+/**
+ * Консолидация не выполнена (М4a).
+ *
+ * Ошибка **внутри** плагина: несоответствие эмбеддингов порту или отказ записи
+ * в порт. Ошибки сервисов фасада (`facade.embed`) пробрасываются как есть —
+ * их различает вызывающий (у них есть машиночитаемый код).
+ */
+export class ConsolidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConsolidationError';
+  }
+}

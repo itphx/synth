@@ -34,6 +34,8 @@ export interface MemoryPluginSettings {
   embeddingModel: string;
   /** TTL кэша «пробы» размерности вектора, мс (0 — без кэша). */
   dimensionProbeTtlMs: number;
+  /** Порог похожести (косинус) для слияния фактов при консолидации (М4a). */
+  consolidateThreshold: number;
 }
 
 /** Дефолт лимита фактов в блоке «project facts». */
@@ -75,6 +77,12 @@ export const MIN_MAX_FILE_BYTES = 1024;
 export const MAX_MAX_FILE_BYTES = 20_000_000;
 /** Дефолт TTL кэша «пробы» размерности вектора, мс. */
 export const DEFAULT_DIMENSION_PROBE_TTL_MS = 30_000;
+/** Дефолт порога похожести для консолидации фактов (М4a). */
+export const DEFAULT_CONSOLIDATE_THRESHOLD = 0.9;
+/** Минимальный порог похожести для консолидации (ниже — слишком рискованно). */
+export const MIN_CONSOLIDATE_THRESHOLD = 0.5;
+/** Максимальный порог похожести для консолидации. */
+export const MAX_CONSOLIDATE_THRESHOLD = 0.99;
 
 /** Привести число к диапазону; нечисловое значение — дефолт. */
 export function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -129,6 +137,12 @@ export function resolveMemorySettings(raw: Record<string, unknown>): MemoryPlugi
       0,
       600_000,
       DEFAULT_DIMENSION_PROBE_TTL_MS,
+    ),
+    consolidateThreshold: clampNumber(
+      raw.consolidateThreshold,
+      MIN_CONSOLIDATE_THRESHOLD,
+      MAX_CONSOLIDATE_THRESHOLD,
+      DEFAULT_CONSOLIDATE_THRESHOLD,
     ),
   };
 }

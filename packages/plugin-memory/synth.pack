@@ -2,7 +2,7 @@
   "name": "synth-plugin-memory",
   "version": "0.1.0",
   "kind": "plugin",
-  "description": "Память агентов: факты с provenance, recall по вопросу хода, поиск/запись/отзыв фактов",
+  "description": "Память агентов: факты с provenance, recall по вопросу хода, поиск/запись/отзыв фактов, консолидация дубликатов",
   "host": ">=0.12.0 <0.14.0",
   "contracts": {
     "extensionApi": "^1",
@@ -11,7 +11,13 @@
   },
   "mode": "inline",
   "provides": {
-    "tools": ["memory_search", "memory_write", "memory_forget", "memory_index"],
+    "tools": [
+      "memory_search",
+      "memory_write",
+      "memory_forget",
+      "memory_index",
+      "memory_consolidate"
+    ],
     "promptBlocks": [
       {
         "key": "plugin.synth-plugin-memory.facts",

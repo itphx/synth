@@ -96,7 +96,9 @@ describe('активация плагина памяти хостом', () => {
     expect(tools.get('plugin_synth_plugin_memory_memory_write')).toBeDefined();
     expect(tools.get('plugin_synth_plugin_memory_memory_forget')).toBeDefined();
     expect(tools.get('plugin_synth_plugin_memory_memory_index')).toBeDefined();
+    expect(tools.get('plugin_synth_plugin_memory_memory_consolidate')).toBeDefined();
     expect(tools.pluginLocalNames('synth-plugin-memory').sort()).toEqual([
+      'memory_consolidate',
       'memory_forget',
       'memory_index',
       'memory_search',

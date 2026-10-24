@@ -1,7 +1,7 @@
 /**
  * Плагин памяти Synth (`synth-plugin-memory`) — точки доставки и движок RAG.
  *
- * Точки расширения (ADR-090): `promptBlocks` (2 блока) и `tools` (4 тула).
+ * Точки расширения (ADR-090): `promptBlocks` (2 блока) и `tools` (5 тулов).
  * Данные — через `facade.memory` (ADR-107): ядро владеет фактами и индексами,
  * плагин — логикой памяти (PROP-047, docs/MEMORY.md).
  *
@@ -11,10 +11,11 @@
  * - `blocks/recall-block.ts` — retrieval по вопросу хода (tier `volatile`,
  *   order 110): гибридно по индексу, иначе keyword по фактам;
  * - `tools/search.ts` / `tools/write.ts` / `tools/forget.ts` / `tools/index-tool.ts`
- *   — поиск, запись, отзыв факта и управление индексами;
+ *   / `tools/consolidate.ts` — поиск, запись, отзыв факта, управление индексами
+ *   и консолидация (слияние похожих фактов, М4a);
  * - `provider.ts` — единственное место плагина, которое ходит в хранилище;
  * - `engine/` — движок ванильного RAG (чанкер, эмбеддинги, корпус, индексы,
- *   гибридный поиск);
+ *   гибридный поиск) и движок консолидации;
  * - `scoring.ts` — детерминированный keyword-скоринг (общий для блока и тула).
  */
 import type { PluginFacade } from '@itphx/synth-core';
@@ -22,6 +23,7 @@ import type { PluginFacade } from '@itphx/synth-core';
 import { createFactsBlock } from './blocks/facts-block.js';
 import { createRecallBlock } from './blocks/recall-block.js';
 import { MemoryProviderLite } from './provider.js';
+import { createMemoryConsolidateTool } from './tools/consolidate.js';
 import { createMemoryForgetTool } from './tools/forget.js';
 import { createMemoryIndexTool } from './tools/index-tool.js';
 import { createMemorySearchTool } from './tools/search.js';
@@ -44,6 +46,7 @@ export function apply(facade: PluginFacade): void {
   facade.registerTool(createMemoryWriteTool(provider));
   facade.registerTool(createMemoryForgetTool(provider));
   facade.registerTool(createMemoryIndexTool(provider));
+  facade.registerTool(createMemoryConsolidateTool(provider));
 }
 
 export default { apply };
@@ -60,6 +63,7 @@ export {
   DEFAULT_FACTS_LIMIT,
   DEFAULT_MIN_SCORE,
   DEFAULT_RECALL_LIMIT,
+  ConsolidationError,
   FactNotFoundError,
   IndexBusyError,
   IndexNotFoundError,
@@ -72,6 +76,9 @@ export {
 } from './provider.js';
 export { keywordScore, tokenize } from './scoring.js';
 export {
+  DEFAULT_CONSOLIDATE_THRESHOLD,
+  MAX_CONSOLIDATE_THRESHOLD,
+  MIN_CONSOLIDATE_THRESHOLD,
   resolveMemorySettings,
   type MemoryPluginSettings,
 } from './settings.js';
@@ -98,6 +105,15 @@ export {
   type SearchItem,
   type SearchOutcome,
 } from './engine/search.js';
+export {
+  CONSOLIDATE_FACT_LIMIT,
+  CONSOLIDATE_ITEMS_LIMIT,
+  consolidateFacts,
+  type ConsolidateCluster,
+  type ConsolidateDeps,
+  type ConsolidateOptions,
+  type ConsolidateReport,
+} from './engine/consolidate.js';
 export { createMemorySearchTool, MEMORY_SEARCH_TOOL_NAME } from './tools/search.js';
 export { createMemoryWriteTool, MEMORY_WRITE_TOOL_NAME } from './tools/write.js';
 export { createMemoryForgetTool, MEMORY_FORGET_TOOL_NAME } from './tools/forget.js';
@@ -106,3 +122,8 @@ export {
   MEMORY_INDEX_TOOL_NAME,
   memoryIndexParameters,
 } from './tools/index-tool.js';
+export {
+  createMemoryConsolidateTool,
+  MEMORY_CONSOLIDATE_TOOL_NAME,
+  memoryConsolidateParameters,
+} from './tools/consolidate.js';

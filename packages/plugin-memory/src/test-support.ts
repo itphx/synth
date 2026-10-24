@@ -69,6 +69,42 @@ export function fakeEmbed(texts: readonly string[], dimension = 8): Promise<numb
   );
 }
 
+/** Хеш строки (FNV-1a) — для раскладки n-грамм по бакетам. */
+function hashString(value: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash);
+}
+
+/**
+ * Детерминированный эмбеддер по **n-граммам** (2 и 3 символа).
+ *
+ * Нужен там, где важна **похожесть** текстов, а не просто их различие:
+ * - почти одинаковые утверждения (разница в пунктуации/регистре/одном слове)
+ *   дают косинус ~0.9 и выше — их и сливает консолидация;
+ * - разные утверждения дают низкий косинус — они не объединяются.
+ *
+ * `fakeEmbed` для этого не годится: он зависит только от суммы кодов, и
+ * разные тексты с одинаковой суммой дают **одинаковый** вектор.
+ */
+export function fakeNgramEmbed(texts: readonly string[], dimension = 256): Promise<number[][]> {
+  return Promise.resolve(
+    texts.map((text) => {
+      const vector = new Array<number>(dimension).fill(0);
+      const lower = (text ?? '').toLowerCase();
+      const grams = new Set<string>();
+      for (const size of [2, 3]) {
+        for (let i = 0; i + size <= lower.length; i += 1) grams.add(lower.slice(i, i + size));
+      }
+      for (const gram of grams) vector[hashString(gram) % dimension] = 1;
+      return vector;
+    }),
+  );
+}
+
 /**
  * Тестовый фасад плагина.
  *

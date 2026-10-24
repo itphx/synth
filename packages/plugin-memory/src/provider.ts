@@ -30,6 +30,7 @@ import type {
 } from '@itphx/synth-core';
 import { z } from 'zod';
 
+import { embedTexts } from './engine/embedder.js';
 import { IndexManager, type IndexStatus } from './engine/index-manager.js';
 import type { CreateIndexInput, RebuildIndexInput } from './engine/index-manager.js';
 import { searchIndex, type SearchOutcome } from './engine/search.js';
@@ -71,6 +72,15 @@ export {
   MAX_RECALL_LIMIT,
   MIN_FACTS_LIMIT,
   MIN_RECALL_LIMIT,
+} from './settings.js';
+
+/**
+ * Настройки М4a (консолидация) — порог слияния фактов.
+ */
+export {
+  DEFAULT_CONSOLIDATE_THRESHOLD,
+  MAX_CONSOLIDATE_THRESHOLD,
+  MIN_CONSOLIDATE_THRESHOLD,
 } from './settings.js';
 
 /** Уверенность факта, записанного агентом без явного `confidence`. */
@@ -140,6 +150,7 @@ export type { MemoryPluginSettings } from './settings.js';
 
 /** Ошибки памяти — общие для провайдера, движка и тулов. */
 export {
+  ConsolidationError,
   FactNotFoundError,
   IndexBusyError,
   IndexNotFoundError,
@@ -243,14 +254,19 @@ export class MemoryProviderLite {
    * ({@link inScope}): проект сессии задан → его факты и факты без проекта;
    * не задан → только факты без проекта. Одна реализация recall — блок и тул
    * не должны разойтись (docs/MEMORY.md §3).
+   *
+   * `limit` — потолок выборки (по умолчанию {@link CANDIDATE_LIMIT}; для
+   * консолидации — 1000, потолок порта). Больше порт не отдаёт в любом случае.
    */
   async listFacts(opts: {
     status?: 'active' | 'candidate' | 'all';
     kind?: string;
     /** Проект сессии (`ctx.projectId`); не задан — только факты без проекта. */
     projectId?: string;
+    /** Потолок выборки (по умолчанию {@link CANDIDATE_LIMIT}). */
+    limit?: number;
   }): Promise<MemoryFactRecord[]> {
-    const query: MemoryFactQuery = { limit: CANDIDATE_LIMIT };
+    const query: MemoryFactQuery = { limit: opts.limit ?? CANDIDATE_LIMIT };
     if (opts.status && opts.status !== 'all') query.status = opts.status;
     if (opts.kind) query.kind = opts.kind;
     const facts = await this._facts().list(query);
@@ -383,6 +399,51 @@ export class MemoryProviderLite {
     return { factId: old.id, version: old.version };
   }
 
+  // ── Запись по порту (М4a — консолидация) ───────────────────────────────
+  //
+  // Движок консолидации ходит в порты **через провайдера** — иначе у плагина
+  // было бы две реализации доступа к памяти (как с recall, docs/MEMORY.md §3).
+
+  /**
+   * Сохранить факт (upsert по `id`) — для движка консолидации.
+   *
+   * Namespace навязывает хост (scoped-обёртка, ADR-107); версию и текст
+   * вызывающий не меняет без нужды — «версия канона не меняется, если текст
+   * не менялся».
+   */
+  async save(fact: MemoryFactRecord): Promise<void> {
+    await this._facts().save(fact);
+  }
+
+  /**
+   * Пометить факт заменённым новой версией (`supersede`) — для консолидации.
+   *
+   * Идемпотентно (порт): повторный вызов с тем же `nextId` — `true`.
+   * Чужой факт (чужой namespace) недостижим: порт вернёт `false`.
+   */
+  async supersede(id: string, nextId: string): Promise<boolean> {
+    return this._facts().supersede(id, nextId);
+  }
+
+  /**
+   * Факт по id (`null` — если нет или он чужого namespace'а).
+   *
+   * Нужен консолидации: перед записью метаданных канона факт перечитывается,
+   * чтобы не затереть параллельное изменение (правку текста или отзыв).
+   */
+  async getFact(id: string): Promise<MemoryFactRecord | null> {
+    return this._facts().get(id);
+  }
+
+  /**
+   * Эмбеддинги текстов через `facade.embed` (ADR-107) — **только** через
+   * шлюз хоста (ADR-036, инвариант 3). Ошибки фасада пробрасываются как есть.
+   */
+  async embed(texts: readonly string[]): Promise<number[][]> {
+    const outcome = await embedTexts(this._facade, texts);
+    return outcome.vectors;
+  }
+
   // ── Индексы (М2) ──────────────────────────────────────────────────────
   //
   // Скоуп — тот же, что у фактов: проект сессии задан → его индексы;
@@ -455,10 +516,7 @@ export class MemoryProviderLite {
  * Индекс в скоупе хода: проект сессии задан → индексы этого проекта;
  * не задан → только индексы **без** проекта (то же правило, что у фактов).
  */
-function inIndexScope(
-  index: { projectId?: string },
-  projectId: string | undefined,
-): boolean {
+function inIndexScope(index: { projectId?: string }, projectId: string | undefined): boolean {
   if (projectId) return index.projectId === projectId;
   return index.projectId === undefined;
 }
