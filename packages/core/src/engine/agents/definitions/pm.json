@@ -16,7 +16,8 @@
     "git_write",
     "task",
     "mcp",
-    "runtime"
+    "runtime",
+    "memory"
   ],
   "icon": "clipboard",
   "color": "--primary",

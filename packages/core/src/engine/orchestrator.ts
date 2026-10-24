@@ -3339,6 +3339,9 @@ export class ChatOrchestrator {
               toolResult = await executeToolDef(toolDef, toolArgs, {
                 sessionId: session.id,
                 messageId: (message.metadata?.stream_id as string) || streamId,
+                // Проект сессии — метаданные хода: плагинный тул (память)
+                // ограничивает себя данными проекта (ADR-107).
+                ...(session.projectId ? { projectId: session.projectId } : {}),
                 // Живой сигнал отмены: абортится как по /abort (cancel()),
                 // так и по cancelRetry (внешний signal). Без этого тулы
                 // (task/сабагент) не узнают о «Стоп» до своего завершения.

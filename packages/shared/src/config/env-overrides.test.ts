@@ -216,6 +216,19 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toContain('SYNTH_PLUGINS_PROMPT_BLOCK_MAX_CHARS');
   });
+
+  // ADR-090 (WP-F): провайдер/модель эмбеддингов для `facade.embed`.
+  it('применяет env-оверрайды провайдера/модели эмбеддингов (SYNTH_PLUGINS_EMBEDDING_*)', () => {
+    const cfg = applyEnvOverrides(makeConfig(), {
+      SYNTH_PLUGINS_EMBEDDING_PROVIDER: 'ollama',
+      SYNTH_PLUGINS_EMBEDDING_MODEL: 'nomic-embed-text',
+    });
+
+    expect(cfg.plugins).toEqual({
+      embeddingProvider: 'ollama',
+      embeddingModel: 'nomic-embed-text',
+    });
+  });
 });
 
 /**

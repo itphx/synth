@@ -45,6 +45,7 @@ import { packsApi } from './packs'
 import { pipelinesApi } from './pipelines'
 import { pipelineProjectApi } from './pipeline-project'
 import { pluginsApi } from './plugins'
+import { memoryApi } from './memory'
 
 export type { EntityOrigin } from './common'
 export type {
@@ -304,6 +305,24 @@ export type {
   PluginsSettingsInfo,
   PluginsPolicyPatch,
 } from './plugins'
+// ADR-107 / PROP-047: портал памяти — read-only (состояние, факты, индексы).
+export type {
+  MemoryReadiness,
+  MemoryProviderMode,
+  MemoryFactStatus,
+  MemoryFactStatusFilter,
+  MemoryIndexState,
+  MemoryFactProvenance,
+  MemoryFact,
+  MemoryIndex,
+  MemoryIndexFingerprint,
+  MemoryIndexSource,
+  MemoryStatus,
+  MemoryFactList,
+  MemoryIndexList,
+  MemoryFactListParams,
+  MemoryIndexListParams,
+} from './memory'
 
 export const synthApi = {
   fetchJSON,
@@ -349,4 +368,5 @@ export const synthApi = {
   ...pipelinesApi,
   ...pipelineProjectApi,
   ...pluginsApi,
+  ...memoryApi,
 }

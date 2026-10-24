@@ -44,6 +44,7 @@ vi.mock('./ServiceKeysSettings', () => ({ ServiceKeysSettings: () => <div>servic
 vi.mock('./WebhooksSettings', () => ({ WebhooksSettings: () => <div>webhooks-page</div> }))
 vi.mock('./MaintenanceSettings', () => ({ MaintenanceSettings: () => <div>maintenance-page</div> }))
 vi.mock('./ObservabilitySettings', () => ({ ObservabilitySettings: () => <div>metrics-page</div> }))
+vi.mock('./MemorySettings', () => ({ MemorySettings: () => <div>memory-page</div> }))
 vi.mock('../admin/DashboardPanel', () => ({ DashboardPanel: () => <div>dashboard-page</div> }))
 vi.mock('../admin/SessionsPanel', () => ({ SessionsPanel: () => <div>sessions-page</div> }))
 vi.mock('../admin/ProjectsPanel', () => ({ ProjectsPanel: () => <div>projects-page</div> }))

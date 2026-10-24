@@ -47,6 +47,8 @@ import type {
   SecurityAuditRepository,
   EgressRequestLogRepository,
   McpRegistryRepository,
+  MemoryFactRepository,
+  MemoryIndexRepository,
   PackRepository,
   PipelineRepository,
   PipelineRunRepository,
@@ -113,6 +115,9 @@ import { FilePipelineStore } from './file-pipeline-store.js';
 import { FilePackStore } from './file-pack-store.js';
 import { FileProjectPipelineStore } from './file-project-pipeline-store.js';
 import { FilePipelineRunStore } from './file-pipeline-run-store.js';
+// PROP-047 §2.1 (предпосылка A): порты памяти — факты и индексы с чанками.
+import { FileMemoryFactStore } from './file-memory-fact-store.js';
+import { FileMemoryIndexStore } from './file-memory-index-store.js';
 import { ContextConfig } from '../engine/context/config.js';
 import { SSHKeyStore } from './ssh-key-store.js';
 import { FileBlobStore } from './file-blob-store.js';
@@ -139,6 +144,8 @@ import {
   MemoryIdentityClaimRepository,
   MemoryJobRepository,
   MemoryMaintenanceAuditRepository,
+  MemoryFactRepository as MemoryFactRepositoryImpl,
+  MemoryIndexRepository as MemoryIndexRepositoryImpl,
   MemoryPluginAuditRepository,
   MemoryPluginLockRepository,
   MemorySecurityAuditRepository,
@@ -379,6 +386,20 @@ export interface StorageContext {
    * (`{dataDir}/audit/authority.jsonl`; PostgreSQL — `authority_decisions`).
    */
   authorityDecisions?: AuthorityDecisionJournal;
+  /**
+   * PROP-047 §2.1 (предпосылка A): факты памяти — утверждения с провенансом и
+   * жизненным циклом (`candidate`/`active`/`superseded`/`retracted`).
+   * Реализовано файловым (`{dataDir}/memory/facts.json`), in-memory и
+   * драйвером PostgreSQL (`memory_facts`, миграция 017).
+   */
+  memoryFacts: MemoryFactRepository;
+  /**
+   * PROP-047 §2.1 (предпосылка A): индексы памяти и их чанки (корпус для
+   * retrieval). Реализовано файловым (`{dataDir}/memory/indexes.json` +
+   * `memory/chunks/<id>/g<generation>.json`), in-memory и драйвером PostgreSQL
+   * (`memory_indexes`/`memory_chunks`, миграция 017).
+   */
+  memoryIndexes: MemoryIndexRepository;
 }
 
 /** Параметры сборки слоя хранения (общие для file/memory). */
@@ -635,6 +656,10 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     // append-only журнал решений (`audit/authority.jsonl`).
     authorityPolicy: new FileAuthorityPolicyStore({ dataDir }),
     authorityDecisions: new FileAuthorityDecisionJournal({ dataDir }),
+    // PROP-047 §2.1: порты памяти — факты (`memory/facts.json`) и индексы с
+    // чанками (`memory/indexes.json` + `memory/chunks/<id>/g<generation>.json`).
+    memoryFacts: new FileMemoryFactStore({ dataDir }),
+    memoryIndexes: new FileMemoryIndexStore({ dataDir }),
   };
 }
 
@@ -689,6 +714,9 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     // ADR-106: порты Authority-слоя (политика + журнал решений).
     authorityPolicy: new MemoryAuthorityPolicyRepository(),
     authorityDecisions: new MemoryAuthorityDecisionJournal(),
+    // PROP-047 §2.1: порты памяти — факты и индексы с чанками.
+    memoryFacts: new MemoryFactRepositoryImpl(),
+    memoryIndexes: new MemoryIndexRepositoryImpl(),
   };
 }
 

@@ -19,6 +19,8 @@ import {
   describeIdentityClaimRepository,
   describeJobRepository,
   describeMaintenanceAuditRepository,
+  describeMemoryFactRepository,
+  describeMemoryIndexRepository,
   describePluginAuditRepository,
   describePluginLockRepository,
   describeSecurityAuditRepository,
@@ -61,6 +63,8 @@ import {
   MemoryIdentityClaimRepository,
   MemoryJobRepository,
   MemoryMaintenanceAuditRepository,
+  MemoryFactRepository,
+  MemoryIndexRepository,
   MemoryPluginAuditRepository,
   MemoryPluginLockRepository,
   MemorySecurityAuditRepository,
@@ -274,6 +278,15 @@ describe('контрактные тесты in-memory реализаций по�
   describePipelineRunRepository('MemoryPipelineRunRepository → PipelineRunRepository', async () => ({
     repo: new MemoryPipelineRunRepository(),
     pipelines: new MemoryProjectPipelineRepository(),
+  }));
+
+  // PROP-047 §2.1 (предпосылка A): порты памяти — факты и индексы с чанками.
+  describeMemoryFactRepository('MemoryFactRepository → MemoryFactRepository', async () => ({
+    repo: new MemoryFactRepository(),
+  }));
+
+  describeMemoryIndexRepository('MemoryIndexRepository → MemoryIndexRepository', async () => ({
+    repo: new MemoryIndexRepository(),
   }));
 });
 

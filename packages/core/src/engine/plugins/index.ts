@@ -10,6 +10,8 @@ export type { PluginHostOptions } from './plugin-host.js';
 
 export {
   PLUGIN_ACTIVATION_STEPS,
+  PLUGIN_FACADE_ERROR_CODES,
+  PluginFacadeError,
   PluginLoadError,
   pluginLoadFailureReason,
   type PluginActivationDescriptor,
@@ -18,9 +20,13 @@ export {
   type PluginActivationStep,
   type PluginDeactivationResult,
   type PluginDisposer,
+  type PluginEmbedFn,
+  type PluginEmbedOptions,
   type PluginFacade,
+  type PluginFacadeErrorCode,
   type PluginLlmFilterOptions,
   type PluginLoadFailureReason,
+  type PluginSettingsReader,
   type PluginToolDefinition,
   type PluginLoader,
   type PluginLogger,
@@ -28,6 +34,21 @@ export {
   type PluginScanHook,
   type PluginScanResult,
 } from './activation.js';
+
+// ADR-090 (WP-F): сервис эмбеддингов фасада (`facade.embed`) — лимиты и
+// политика провайдера/модели; сам вызов — инъекция из сборки приложения.
+export {
+  MAX_PLUGIN_EMBED_BATCH,
+  MAX_PLUGIN_EMBED_TEXT_CHARS,
+  MAX_PLUGIN_EMBED_TOTAL_CHARS,
+  createPluginEmbedService,
+} from './embed.js';
+export type { PluginEmbedServiceOptions } from './embed.js';
+
+// ADR-090 (WP-F): ридер настроек плагина (`facade.getSettings`) — запись
+// плагина в `plugins.json` (только чтение).
+export { createPluginSettingsReader } from './settings.js';
+export type { PluginSettingsReaderOptions } from './settings.js';
 
 // Ф4а — `inline`-загрузчик кода плагина (bundle-only, containment, cache-busting).
 export {
@@ -131,6 +152,19 @@ export { listDeployPlugins } from './deploy.js';
 export type { ListDeployPluginsOptions, PluginDeployScanEntry } from './deploy.js';
 
 export { readExactHostExceptions } from './exact-host-exceptions.js';
+
+// PROP-047 §2.1 (предпосылка A): scoped-доступ плагина к портам памяти —
+// namespace `plugin:<имя плагина>` навязывает хост (плагин его не выбирает).
+export {
+  PLUGIN_MEMORY_NAMESPACE_PREFIX,
+  createScopedMemory,
+  pluginMemoryNamespace,
+} from './scoped-memory.js';
+export type { PluginMemoryPorts } from './scoped-memory.js';
+
+// ADR-107 / PROP-047 §3: имя плагина памяти и namespace его памяти —
+// нейтральный модуль (HTTP-слой и коллектор метрик не зависят друг от друга).
+export { MEMORY_NAMESPACE, MEMORY_PLUGIN_NAME } from './memory-namespace.js';
 
 // Ф2 — модель доверия: статический сканер, install-policy, раскладка и lock.
 export {

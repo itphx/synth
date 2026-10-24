@@ -684,6 +684,11 @@
   при доступном агенту `profile_update` (гейт `_interviewEligible` — `_availabilityPredicate` +
   `_isAdminDisabled`, fail-closed без тула); стор приходит через `ToolContext.extra.profilesStore`,
   нет владельца — понятная ошибка.
+  **Контекст плагинного тула сужается.** Для `source: 'plugin'` `executeToolDef` отдаёт только
+  `sessionId`/`messageId`/`workingDir`/`agentRole?`/`projectId?`/`abortSignal?` (`narrowToolContext`): `extra` и `dataDir`
+  плагину **не передаются** — симметрично `out-of-process` (по проводу те же три поля). Встроенные и
+  MCP-тулы получают контекст без изменений; правило действует и в шагах пайплайна, и в саб-агенте `task`
+  (обе точки идут через `executeToolDef`).
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
 - `engine/hooks/*` — `HookBus` (ADR-030): ядровая in-process шина хуков
   (`on/off/emit/emitAsync`, priority, `sync`/`async`, `builtin`), отдельная от
@@ -1000,6 +1005,15 @@
   **Аудит:** действия `install`/`activate`/`deactivate`/`rollback`/`uninstall`/`scan`/`filter`
   (`PLUGIN_AUDIT_ACTIONS`; порядок — жизненный цикл; `rollback` добавлен долгами Д2); запись получила
   поля `scanVerdict?`/`scanPerformed?`/`scanFindings?`.
+  **Сервисы фасада (ADR-107).** Помимо трёх регистраций фасад отдаёт доступ к ресурсам инстанса:
+  `memory` (порты памяти через scoped-обёртку `scoped-memory.ts`; namespace `plugin:<имя>` навязывает
+  хост, чужие записи выглядят как «не найдено»), `embed` (инъекция `PluginEmbedFn` из `deps.ts` →
+  `GatewayProvider.embed`; лимиты 64 текста / 8 000 символов / 64 000 суммарно; код
+  `plugin.embedding_not_configured`; конфиг `plugins.embeddingProvider`/`embeddingModel`) и
+  `getSettings` (чтение `plugins[<имя>].settings` из `plugins.json`; ридер по умолчанию — `runtime.ts`
+  по `layout.settingsPath`). Сервисы доступны **только `inline`**: wire-протокол v1 покрывает три точки.
+  Новый доступ к ресурсам инстанса оформляется как **сервис фасада + ADR**, а не как ещё один метод
+  «по месту».
 - `engine/pipelines/*` — ADR-101: **второй движок** рядом с `ChatOrchestrator`
   (шаг пайплайна ≠ сессия; движок сам по себе не знает про HTTP/сессии/очередь).
   `engine.ts` — `PipelineEngine`: цикл прогона по опубликованной версии спецификации,

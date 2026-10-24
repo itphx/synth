@@ -63,6 +63,14 @@ export type {
 } from './authority.js';
 export { attachHybridMetrics, normalizeRemoteOp } from './hybrid.js';
 export type { HybridMetricsHooks, RemoteRequestInfo } from './hybrid.js';
+export {
+  startMemoryMetrics,
+  MEMORY_FACTS_METRIC,
+  MEMORY_INDEXES_METRIC,
+  MEMORY_METRIC_FACT_STATUSES,
+  MEMORY_METRIC_INDEX_STATES,
+} from './memory.js';
+export type { MemoryMetricsSources } from './memory.js';
 export { setSynthReady } from './ready.js';
 export { createLlmCallRecorder } from './llm.js';
 export type { LlmCallInfo, LlmCallOutcome } from './llm.js';

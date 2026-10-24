@@ -12,6 +12,15 @@ export const ToolCapability = {
   MCP: 'mcp',
   RUNTIME: 'runtime',
   USER: 'user',
+  /**
+   * Память (ADR-107, PROP-047): тулы плагина памяти (`memory_search`/
+   * `memory_write`/`memory_forget`).
+   *
+   * Отдельная capability, а не `search`/`file_write`: память работает **всегда** —
+   * она не привязана к рабочему каталогу проекта (`WORKSPACE_CAPABILITIES`),
+   * поэтому в сессии без `project.workspace` тулы памяти остаются доступны.
+   */
+  MEMORY: 'memory',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -28,6 +37,7 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.MCP]: { label: 'MCP-инструменты', description: 'внешние MCP-серверы' },
   [ToolCapability.RUNTIME]: { label: 'Управление сессией', description: 'classify_conversation' },
   [ToolCapability.USER]: { label: 'Работа с пользователем', description: 'profile_update' },
+  [ToolCapability.MEMORY]: { label: 'Память', description: 'memory_search, memory_write, memory_forget' },
 };
 
 export interface ToolContext {
@@ -35,6 +45,13 @@ export interface ToolContext {
   messageId: string;
   abortSignal?: AbortSignal;
   agentRole?: string;
+  /**
+   * Проект сессии — метаданные хода, а не internals ядра.
+   *
+   * Нужен плагину, который сужает контекст (ADR-107): без него плагинный тул
+   * не знает, чей это проект, и не может ограничить себя его данными.
+   */
+  projectId?: string;
   workingDir: string;
   dataDir?: string;
   extra?: Record<string, unknown>;

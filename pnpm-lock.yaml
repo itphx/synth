@@ -160,6 +160,28 @@ importers:
         specifier: ^5.8.0
         version: 5.9.3
 
+  packages/plugin-memory:
+    dependencies:
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+    devDependencies:
+      '@itphx/synth-core':
+        specifier: workspace:*
+        version: link:../core
+      '@itphx/synth-shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.19
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.0
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+
   packages/sdk:
     dependencies:
       '@itphx/synth-shared':

@@ -25,6 +25,7 @@ import { MIGRATION_013_SERVICE_KEY_PLUGIN_ID } from './013-service-key-plugin-id
 import { MIGRATION_014_SESSION_MODE_BY_PRINCIPAL } from './014-session-mode-by-principal.js';
 import { MIGRATION_015_AUTHORITY } from './015-authority.js';
 import { MIGRATION_016_CREDENTIAL_AUDIT } from './016-credential-audit.js';
+import { MIGRATION_017_MEMORY } from './017-memory.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -54,6 +55,7 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 14, id: '014_session_mode_by_principal', sql: MIGRATION_014_SESSION_MODE_BY_PRINCIPAL },
   { version: 15, id: '015_authority', sql: MIGRATION_015_AUTHORITY },
   { version: 16, id: '016_credential_audit', sql: MIGRATION_016_CREDENTIAL_AUDIT },
+  { version: 17, id: '017_memory', sql: MIGRATION_017_MEMORY },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

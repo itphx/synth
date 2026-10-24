@@ -87,9 +87,11 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (бюджет времени на один вызов фильтра LLM-вызовов, мс; default — `DEFAULT_LLM_FILTER_TIMEOUT_MS`
   = `1000` из `types/llm-filters.ts`, ADR-090, Ф3б), `executionEnabled`
   (**главный переключатель исполнения кода плагинов**, default `false` — без него загрузчик
-  останавливается на шаге `import`, ADR-090); скалярные env-оверрайды
+  останавливается на шаге `import`, ADR-090); `embeddingProvider`/`embeddingModel` — провайдер и модель
+  эмбеддингов для сервиса фасада `facade.embed` (default `''` — не сконфигурированы, плагин получает
+  `plugin.embedding_not_configured`; ADR-107); скалярные env-оверрайды
   `SYNTH_PLUGINS_*` (`enabled`/`runtimeInstall`/`trustFloor`/`scan`/`exactHostExceptions`/
-  `promptBlockMaxChars`/`llmFilterTimeoutMs`/`executionEnabled`) — списки остаются в `config.yaml`. Runtime-override в core —
+  `promptBlockMaxChars`/`llmFilterTimeoutMs`/`executionEnabled`/`embeddingProvider`/`embeddingModel`) — списки остаются в `config.yaml`. Runtime-override в core —
   `RuntimeSettings.plugins` + `mergePluginsConfig` (приоритет runtime > config > defaults).
   Ф7 (ADR-090): вложенная секция `plugins.hybrid` (`pluginsHybridConfigSchema`: `mode`
   (`off`|`allowlist`, default `off` — сервер не ограничивает) и `allow` (список имён, default `[]`);

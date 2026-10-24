@@ -57,6 +57,7 @@ import type {
   PluginAuditRepository,
 } from '../../storage/ports/plugin-audit-repository.js';
 import type { PluginLockRepository } from '../../storage/ports/plugin-lock-repository.js';
+import type { StorageContext } from '../../storage/storage-context.js';
 import type { PromptBlockRegistry } from '../context/prompt-block-registry.js';
 import type { LlmFilterRegistry } from '../gateway/llm-filter-registry.js';
 import type { ToolRegistry } from '../tools/registry.js';
@@ -64,9 +65,11 @@ import type {
   PluginActivationDescriptor,
   PluginActivationResult,
   PluginDeactivationResult,
+  PluginEmbedFn,
   PluginLoader,
   PluginLogger,
   PluginScanHook,
+  PluginSettingsReader,
 } from './activation.js';
 import { createInlinePluginLoader, DEFAULT_PLUGIN_ENTRY } from './inline-loader.js';
 import { FilePluginApprovalStore } from './approval.js';
@@ -77,6 +80,7 @@ import type { PluginDeployScanEntry } from './deploy.js';
 import type { PluginLayout } from './layout.js';
 import { pluginInstalledDir } from './layout.js';
 import { PluginHost } from './plugin-host.js';
+import { createPluginSettingsReader } from './settings.js';
 
 /** Имя файла манифеста (`synth.pack`, ADR-086 §5). */
 const MANIFEST_FILE = 'synth.pack';
@@ -112,6 +116,29 @@ export interface PluginRuntimeDeps {
   llmFilters: LlmFilterRegistry;
   /** **Тот же** экземпляр, что у оркестратора и permission-слоя (точка `tools`). */
   tools: ToolRegistry;
+  /**
+   * Порты памяти инстанса (PROP-047 §2.1, предпосылка A) — фасад отдаёт
+   * плагину **scoped-доступ** (namespace `plugin:<имя плагина>` навязывает
+   * хост, `engine/plugins/scoped-memory.ts`).
+   *
+   * Не заданы — сервис памяти плагину недоступен (`facade.memory` не задан).
+   */
+  memory?: Pick<StorageContext, 'memoryFacts' | 'memoryIndexes'>;
+  /**
+   * ADR-090 (WP-F): сервис эмбеддингов фасада (`facade.embed`).
+   *
+   * Инъекция из сборки приложения (`server/app/deps.ts`/`backend/app/deps.ts`):
+   * провайдер оборачивается в `GatewayProvider` (инвариант 3, ADR-036).
+   * Не задана — `facade.embed` есть, но бросает `plugin.embed_unavailable`.
+   */
+  embed?: PluginEmbedFn;
+  /**
+   * ADR-090 (WP-F): ридер настроек плагина (`facade.getSettings`).
+   *
+   * Не задан — берётся файловый ридер `plugins.json` из раскладки слоя
+   * плагинов (`layout.settingsPath`).
+   */
+  settings?: PluginSettingsReader;
   /** Загрузчик кода плагина (по умолчанию — `inline`: `createInlinePluginLoader`). */
   loader?: PluginLoader;
   /**
@@ -235,6 +262,22 @@ export class PluginRuntime {
       promptBlocks: deps.promptBlocks,
       llmFilters: deps.llmFilters,
       tools: deps.tools,
+      // PROP-047 §2.1: порты памяти — фасад отдаёт плагину scoped-обёртку
+      // (namespace навязывает хост). Портов нет — сервис памяти недоступен.
+      ...(deps.memory
+        ? {
+            memory: {
+              facts: deps.memory.memoryFacts,
+              indexes: deps.memory.memoryIndexes,
+            },
+          }
+        : {}),
+      // ADR-090 (WP-F): сервис эмбеддингов фасада (инъекция из сборки).
+      ...(deps.embed ? { embed: deps.embed } : {}),
+      // ADR-090 (WP-F): настройки своего плагина — файл `plugins.json` в
+      // раскладке слоя плагинов (по умолчанию); ридер читает снимок на
+      // каждый вызов, поэтому изменения видны без рестарта.
+      settings: deps.settings ?? createPluginSettingsReader({ path: deps.layout.settingsPath }),
       ...(deps.scan ? { scan: deps.scan } : {}),
       ...(deps.serverPolicy ? { serverPolicy: deps.serverPolicy } : {}),
       logger: this._logger,

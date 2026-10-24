@@ -5,7 +5,7 @@
     "en": "Universal subagent for complex multi-step tasks",
     "ru": "Универсальный сабагент для сложных многошаговых задач"
   },
-  "capabilities": ["file_read", "file_write", "search", "shell", "web", "git_read", "git_write", "mcp"],
+  "capabilities": ["file_read", "file_write", "search", "shell", "web", "git_read", "git_write", "mcp", "memory"],
   "icon": "robot-3",
   "color": "--syntax-variable",
   "contextFile": "",

@@ -35,6 +35,8 @@ const EXPECTED_PLUGIN_KEYS = [
   'plugins.deployDir',
   'plugins.deployTrust',
   'plugins.managedReadonly',
+  'plugins.embeddingProvider',
+  'plugins.embeddingModel',
   'plugins.hybrid.mode',
   'plugins.hybrid.allow',
 ] as const;

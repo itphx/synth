@@ -24,6 +24,9 @@ import type {
 } from '@itphx/synth-shared';
 import type { z } from 'zod';
 
+import type { MemoryFactRepository } from '../../storage/ports/memory-fact-repository.js';
+import type { MemoryIndexRepository } from '../../storage/ports/memory-index-repository.js';
+
 /**
  * Шаги пайплайна активации плагина (ADR-090, шаги 1–8).
  *
@@ -187,6 +190,80 @@ export interface PluginDeactivationResult {
 }
 
 /**
+ * Опции вызова эмбеддингов из плагина (ADR-090, WP-F).
+ *
+ * Значения **перекрывают** конфиг инстанса (`plugins.embeddingProvider`/
+ * `plugins.embeddingModel`) — по каждому полю отдельно: перекрытый провайдер
+ * не меняет модель и наоборот.
+ */
+export interface PluginEmbedOptions {
+  /** Провайдер эмбеддингов (пусто — конфиг инстанса). */
+  provider?: string;
+  /** Модель эмбеддингов (пусто — конфиг инстанса, иначе дефолт провайдера). */
+  model?: string;
+}
+
+/**
+ * Функция эмбеддингов, инъецируемая хостом (ADR-036/ADR-090, WP-F).
+ *
+ * Реализация — **в сборке приложения** (`server/app/deps.ts`): она создаёт
+ * провайдера и оборачивает его в `GatewayProvider`, поэтому эмбеддинги плагина
+ * идут тем же путём, что и остальные LLM-вызовы (guard, обфускация, rate-limit,
+ * аудит, embedding-фаза фильтров `llmFilters`).
+ */
+export type PluginEmbedFn = (
+  texts: readonly string[],
+  opts?: PluginEmbedOptions,
+) => Promise<number[][]>;
+
+/**
+ * Чтение настроек плагина (ADR-090, WP-F): `plugins.json` → запись плагина.
+ *
+ * Имя плагина задаёт **хост** (из активации), а не плагин: чужую запись
+ * прочитать нельзя.
+ */
+export type PluginSettingsReader = (plugin: string) => Record<string, unknown>;
+
+/**
+ * Коды ошибок сервисов фасада (`facade.embed`/`facade.getSettings`).
+ *
+ * Это **не** коды журнала плагинов (`PLUGIN_AUDIT_REASONS` — закрытый список
+ * отказов пайплайна активации): здесь ошибка летит в код плагина, чтобы тот
+ * мог отреагировать (деградировать, повторить, отказаться).
+ */
+export const PLUGIN_FACADE_ERROR_CODES = [
+  /** Превышен лимит запроса (батч/длина текста/суммарный объём). */
+  'plugin.embed_limit',
+  /** Эмбеддинги не сконфигурированы (нет провайдера в конфиге и в вызове). */
+  'plugin.embedding_not_configured',
+  /** Сервис эмбеддингов недоступен в этом инстансе. */
+  'plugin.embed_unavailable',
+  /** Провайдер вернул непригодный результат (число/длина векторов). */
+  'plugin.embed_invalid_result',
+] as const;
+
+/** Код ошибки сервиса фасада. */
+export type PluginFacadeErrorCode = (typeof PLUGIN_FACADE_ERROR_CODES)[number];
+
+/**
+ * Ошибка сервиса фасада с машиночитаемым кодом.
+ *
+ * Ошибки провайдера **не оборачиваются** этим классом — они пробрасываются
+ * как есть (плагин видит причину; секретов в текстах нет — gateway это
+ * обеспечивает).
+ */
+export class PluginFacadeError extends Error {
+  /** Машиночитаемый код ошибки. */
+  readonly code: PluginFacadeErrorCode;
+
+  constructor(code: PluginFacadeErrorCode, message: string) {
+    super(message);
+    this.name = 'PluginFacadeError';
+    this.code = code;
+  }
+}
+
+/**
  * Фасад плагина (ADR-090, шаг 7).
  *
  * Ф1: только сбор disposers. **Ф3а**: регистрация провайдера блока системного
@@ -255,6 +332,53 @@ export interface PluginFacade {
    * @returns disposer — снимает инструмент из реестра (идемпотентен).
    */
   registerTool(def: PluginToolDefinition): PluginDisposer;
+  /**
+   * Сервис хранения памяти (предпосылка A, PROP-047).
+   *
+   * Доступ **scoped**: хост навязывает namespace `plugin:<имя плагина>`, и
+   * плагин видит только свои записи — чужие факты/индексы/чанки выглядят как
+   * «не найдено» (`null`/`false`/`0`), а `namespace` в запросе игнорируется.
+   * Методы — те же, что у портов слоя хранения
+   * (`MemoryFactRepository`/`MemoryIndexRepository`).
+   *
+   * Не задан (`undefined`) — сервис памяти инстансом не сконфигурирован:
+   * плагин обязан это учитывать (фича-детект, а не ошибка активации).
+   */
+  readonly memory?: {
+    /** Факты памяти (scoped к namespace'у плагина). */
+    readonly facts: MemoryFactRepository;
+    /** Индексы памяти и их чанки (scoped к namespace'у плагина). */
+    readonly indexes: MemoryIndexRepository;
+  };
+  /**
+   * Эмбеддинги (ADR-090, WP-F) — **только через LLM-шлюз** (ADR-036).
+   *
+   * Плагин не дёргает провайдера сам: хост отдаёт функцию, обёрнутую в
+   * `GatewayProvider` (guard, обфускация, rate-limit, аудит и embedding-фаза
+   * фильтров `llmFilters`). Провайдер/модель — из конфига инстанса
+   * (`plugins.embeddingProvider`/`plugins.embeddingModel`), перекрываются
+   * аргументом вызова.
+   *
+   * Лимиты (превышение → `plugin.embed_limit`): не более 64 текстов за вызов,
+   * не более 8 000 символов в тексте и не более 64 000 символов суммарно.
+   * Все векторы должны быть одной длины (иначе — `plugin.embed_invalid_result`).
+   *
+   * Не сконфигурировано (`plugin.embedding_not_configured`) — метод **есть**,
+   * но бросает: хост не падает, плагин сам решает, деградировать ли.
+   */
+  embed(texts: readonly string[], opts?: PluginEmbedOptions): Promise<number[][]>;
+  /**
+   * Свои настройки плагина (ADR-090, WP-F) — запись плагина в `plugins.json`
+   * (`plugins[<имя>].settings`).
+   *
+   * Имя берёт **хост** (из активации): настройки чужого плагина не видны.
+   * Снимок читается на каждый вызов (файл маленький) — изменения применяются
+   * без рестарта; влияние на уже активированные регистрации — на усмотрение
+   * плагина.
+   *
+   * Значение по умолчанию — `{}` (никогда не `undefined`).
+   */
+  getSettings<T extends Record<string, unknown> = Record<string, unknown>>(): Readonly<T>;
 }
 
 /**

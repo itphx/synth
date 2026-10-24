@@ -60,7 +60,13 @@ and they land in the existing subsystems (`SystemPromptComposer`, `GatewayProvid
 - observe LLM calls and — with sufficient trust — block them (`pre_request`, `embedding`) or redact
   embedding texts;
 - register a tool that the model sees on par with the built-in ones (but under its own namespace and
-  through the permission layer).
+  through the permission layer);
+- use the instance memory service (`facade.memory`) — facts and indexes **within its own
+  namespace** (§4.5);
+- get embeddings through the gateway (`facade.embed`) — with the same guards, rate limit and
+  audit as ordinary LLM calls (§4.6);
+- read its own settings (`facade.getSettings`) — the record of its own plugin in `plugins.json`
+  (§4.7).
 
 ### 1.2. What a plugin cannot do
 
@@ -68,6 +74,7 @@ and they land in the existing subsystems (`SystemPromptComposer`, `GatewayProvid
 |---|---|
 | change the model, the role prompt or prompt templates | that is not an extension point; the model is a session/instance setting |
 | bypass the permission layer (`plan`/`act`/`yolo`, `allow`/`deny`/`ask`) | ADR-025/ADR-029; a plugin tool is an ordinary tool with capabilities |
+| read or overwrite the memory of another plugin | the host imposes the namespace (`plugin:<plugin name>`); foreign records look "not found" (§4.5) |
 | bypass the LLM gateway, its guards, rate limit and audit | ADR-036 |
 | read files/secrets "directly", bypassing permissions and the API | secrets are never handed to a plugin; the filesystem is reachable only through tools and the permission layer |
 | write into `$SYNTH_DATA_DIR` bypassing the storage layer | ADR-096 |
@@ -87,6 +94,10 @@ serializable DTOs cross the boundary.
 > `promptBlocks`, `llmFilters` and `tools`. The other points from the ADR-090 table (hooks, providers,
 > routes, commands, skills, agents, mcp, events, schedules, settings, UI slot) are **not exported**
 > in v1 — a plugin cannot register for them.
+>
+> Separate from the registration points, the facade exposes **services**, not new contributions:
+> the memory service `facade.memory` (§4.5), the embeddings `facade.embed` (§4.6) and the
+> plugin's own settings `facade.getSettings` (§4.7).
 
 ---
 
@@ -405,6 +416,10 @@ export interface PluginFacade {
   registerPromptBlock(provider: PromptBlockProvider, opts?: { title?: string }): PluginDisposer;
   registerLlmFilter(filter: LlmCallFilter, opts?: { failMode?: 'open' | 'closed'; timeoutMs?: number }): PluginDisposer;
   registerTool(def: PluginToolDefinition): PluginDisposer;
+  memory?: {                                  // the memory service (§4.5); may be absent
+    readonly facts: MemoryFactRepository;
+    readonly indexes: MemoryIndexRepository;
+  };
 }
 ```
 
@@ -599,7 +614,8 @@ local name: `^[A-Za-z0-9][A-Za-z0-9_-]*$`, the `plugin_` prefix is forbidden (ot
 `provides` reconciliation would be ambiguous).
 
 **The capabilities.** Mandatory and non-empty, the values are from `ToolCapability`: `file_read`,
-`file_write`, `shell`, `search`, `web`, `git_read`, `git_write`, `task`, `user` (`mcp` and `runtime`
+`file_write`, `shell`, `search`, `web`, `git_read`, `git_write`, `task`, `user`,
+`memory` (memory: `memory_search`/`memory_write`/`memory_forget`) (`mcp` and `runtime`
 are **reserved**: the first is the MCP layer, the second is core primitives that an admin cannot
 disable). Without capabilities the tool would be invisible to the permission layer and to the
 admin's disabling, therefore the registration is rejected.
@@ -612,9 +628,29 @@ in `plan`. The instance can disable the tool by name (`plugin_<ns>_<tool>`) or b
 `PUT /api/v2/settings/tools-disabled` — but that will also disable the built-in tools with the same
 capability.
 
-**What arrives in `execute`.** `(params, ctx)`, where `ctx.sessionId`, `ctx.messageId`,
-`ctx.workingDir`, `ctx.agentRole?`, `ctx.abortSignal?`. Do not rely on `ctx.extra` — it is an
-internal core object, its composition is not part of the contract and may change.
+**What arrives in `execute`.** `(params, ctx)`, where `ctx` is a `ToolContext`, but a **narrowed**
+one: the host gives the plugin only the turn identifiers and the working directory.
+
+| `ToolContext` field | What it is | When it arrives |
+|---|---|---|
+| `sessionId` | session id (in a pipeline — `pipeline:<runId>`) | always |
+| `messageId` | message/call id | always |
+| `workingDir` | working directory (project workspace) | always |
+| `agentRole` | agent role | if set |
+| `projectId` | session project id | if set |
+| `abortSignal` | turn cancellation signal | if set |
+| `extra` | internal core state | **not passed** |
+| `dataDir` | instance data root | **not passed** |
+
+`ctx.extra` is the internal core object (`sessionManager`, `projectStore`, `eventBus`, stores, the
+execution port, the security config); `ctx.dataDir` is the instance data root. Neither is handed
+to the plugin: in **both** modes (`inline` and `out-of-process`) a plugin tool sees exactly this
+minimum. Over the wire (`out-of-process`) the context is additionally serialized — only
+`sessionId`/`messageId`/`workingDir` travel in the DTO (§5.3).
+
+The core does the narrowing in **one place** — at the tool call — so the rule applies equally to
+sessions, sub-agents (`task`) and pipeline steps. Built-in (`builtin`) and MCP tools receive the
+context unchanged — the rule covers plugin tools only (`source: 'plugin'`).
 
 **Why you should set `jsonSchema`.** `parameters` is your zod schema; the host validates the
 arguments with it (`safeParse`). But for the model the schema is converted by the host into JSON
@@ -674,6 +710,136 @@ Typical causes:
 A rejected registration does not count as "registered": for example, a block with the tier `stable`
 is rejected, and if it was declared in `provides`, the activation fails with `provides_mismatch`.
 
+### 4.5. The memory service (`facade.memory`)
+
+The core owns the instance memory data (facts and indexes with chunks — storage layer ports,
+ADR-096), the plugin owns the memory logic (PROP-047). The facade gives the plugin **ready access
+to that data** — with the same methods as the ports:
+
+```typescript
+facade.memory?.facts;    // MemoryFactRepository: save/get/list/delete/supersede/count
+facade.memory?.indexes;  // MemoryIndexRepository: saveIndex/getIndex/listIndexes/deleteIndex/
+                         // setState/replaceChunks/listChunks/deleteChunks/countChunks
+```
+
+**The namespace rule.** A memory record always belongs to a namespace. The host imposes
+`plugin:<plugin name>` (the full plugin name, not the `plugin_<ns>_…` abbreviation used for tool
+names) and **overwrites** the `namespace` with it: the value passed in is ignored, so a record
+cannot be written into a foreign namespace.
+
+**Isolation.** A plugin sees only its own memory:
+
+| Operation | Behaviour |
+|---|---|
+| `save`/`saveIndex` | `namespace` is overwritten with the plugin's namespace |
+| `get`/`getIndex` | a record of a foreign namespace → `null` (not "exists, but foreign") |
+| `list`/`count`/`listIndexes` | the namespace is imposed: the `namespace` filter from the query is **ignored** |
+| `delete`/`supersede`/`setState`/`deleteIndex` | own records only; otherwise "not found" (`false`). `supersede` checks **both** ids (the superseded fact and the new version) — otherwise a plugin could point `supersededBy` at a foreign fact; the new version must be **saved first** |
+| `replaceChunks`/`listChunks`/`deleteChunks`/`countChunks` | own indexes only; a foreign index → `0`/empty list |
+
+A namespace violation is **not** signalled by an exception — only "not found" goes outwards.
+Otherwise the result would distinguish "foreign id" from "non-existent id", and an id sweep could
+discover the contents of a foreign memory.
+
+**The service may be absent.** `facade.memory === undefined` when the instance has no memory
+service configured. That is **not an activation error**: a plugin must check for the service
+(feature detection) and work correctly without it.
+
+**`inline` only.** Over the wire (`out-of-process`, §5) the memory service is not exported: a
+remote plugin receives only serializable DTOs (§5.3).
+
+**Example: a fact the plugin remembers.**
+
+```typescript
+export default {
+  async apply(facade) {
+    const memory = facade.memory;          // may be undefined — check it
+    if (!memory) return;
+
+    await memory.facts.save({
+      id: 'deploy-policy',
+      namespace: 'ignored',                 // the host overwrites it with its own
+      version: 1,
+      text: 'deployments go through Fleet',
+      kind: 'decision',
+      provenance: { sourceKind: 'session', sourceId: 's-42', capturedAt: new Date().toISOString() },
+      confidence: 0.9,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    // Its own fact reads back; foreign ones are invisible.
+    const facts = await memory.facts.list({ namespace: 'plugin:someone-else' });
+    // → only this plugin's facts
+  },
+};
+```
+
+### 4.6. Embeddings (`facade.embed`)
+
+A plugin needs a vector for a text — and it must not reach for the provider itself: in Synth
+every LLM call goes through the gateway (ADR-036). The facade gives a **ready call** that
+the host wraps in `GatewayProvider` (guards, obfuscation, rate limit, audit and the
+`embedding` phase of the `llmFilters`):
+
+```typescript
+const vectors: number[][] = await facade.embed(['first text', 'second text']);
+// vectors[i] — the vector for texts[i]
+```
+
+**Provider and model.** By default — the instance config: `plugins.embeddingProvider` and
+`plugins.embeddingModel` (see [CONFIGURATION.md](./CONFIGURATION.md) §"Plugins
+(`plugins.*`)"). A plugin may override them **in the call** — per field:
+
+```typescript
+await facade.embed(['text'], { provider: 'ollama', model: 'nomic-embed-text' });
+```
+
+An empty model means the default model of the provider. If there is no provider neither in the
+config nor in the call, `facade.embed` **throws** `plugin.embedding_not_configured`: the host
+does not fail, the plugin decides (whether to degrade or not to call it at all).
+
+**Limits** (exceeding them → `plugin.embed_limit`, checked **before** the provider is
+called):
+
+| Limit | Value |
+|---|---|
+| texts per call | at most 64 |
+| characters in one text | at most 8 000 |
+| characters in total per call | at most 64 000 |
+
+**The result.** There must be as many vectors as texts, and all of them must be **of the same
+length**; otherwise — `plugin.embed_invalid_result`. Provider errors are propagated **as is**
+(the plugin sees the reason; there are no secrets in the texts — the gateway ensures that).
+
+**`inline` only.** Over the wire (`out-of-process`, §5) the service is not exported: protocol
+v1 covers only the three extension points (§5.3).
+
+### 4.7. Its own settings (`facade.getSettings`)
+
+The settings of a plugin live in `plugins.json` next to the lock file
+(`plugins[<plugin name>].settings`). The facade returns **its own** record:
+
+```typescript
+const settings = facade.getSettings<{ namespace?: string; limit?: number }>();
+// → { namespace: 'notes', limit: 10 } or {} — if there is no record
+```
+
+The rules:
+
+- **Its own only.** The plugin name is taken by the **host** (from the activation), not by
+  the plugin: the settings of another plugin are invisible.
+- **The default is `{}`**, never `undefined`: `getSettings().foo` does not fail.
+- **The snapshot is read on every call** (the file is small), so changes apply **without a
+  restart**. The effect on the already registered contributions (prompt blocks, filters,
+  tools) is up to the plugin.
+- **There is no change event**: there is no per-plugin settings writer yet (nor an API to
+  change them) — a dead API is not introduced.
+
+**`inline` only.** Over the wire (`out-of-process`, §5) the service is not exported: protocol
+v1 covers only the three extension points (§5.3).
+
 ---
 
 ## 5. Two execution modes
@@ -685,7 +851,7 @@ One extension point contract — two transports. The mode is set by the manifest
 | Where the code runs | in the core process | a separate Node process, HTTP/1.1 + JSON |
 | Isolation | none | process-level: a crash/a memory leak does not bring down the core |
 | Latency | ~0 | a round-trip per point call |
-| Access to internals | yes (limited by the facade and discipline) | only serializable DTOs |
+| Access to internals | the tool context is narrowed (§4.3), but the process is the same — the process Node API is reachable | only serializable DTOs |
 | What the bundle needs | `dist/index.js` | `dist/server.js` |
 | When to choose | `llmFilters` (the hot path), fast blocks, simple tools | heavy filters (ML, antivirus, DLP), blocks with a heavy load, untrusted code |
 
@@ -815,8 +981,15 @@ Only serializable DTOs:
 | `llmFilters` | `LlmFilterInput` | `LlmFilterVerdict` |
 | `tools` | `{ parameters, context: { sessionId, messageId, workingDir } }` | `{ content, isError? }` |
 
-Storage ports, the core registries, `GatewayProvider`, `ToolContext.extra` are **not** exposed
-outwards.
+Storage ports, the core registries, `GatewayProvider`, `ToolContext.extra` and
+`ToolContext.dataDir` are **not** exposed outwards (in `inline` mode either — the core narrows the
+tool context for plugins, see §4.3). The memory service `facade.memory` is not exported over the
+wire either — it is available to `inline` plugins only (§4.5).
+
+The same holds for the other facade services: **`facade.embed` and `facade.getSettings` are not
+available in `out-of-process`** — wire protocol v1 covers only the three extension points
+(`promptBlocks`/`llmFilters`/`tools`), and neither embeddings nor settings are part of its DTOs.
+A plugin that needs them runs in the `inline` mode (§4.6, §4.7).
 
 ---
 
@@ -1438,6 +1611,21 @@ The mapping of the reasons to HTTP is the single table `PLUGIN_REASON_HTTP`
 `execution_disabled`, `rollback_unavailable`, `approval_expired`, `approval_stale` (an invalid
 approval — a state conflict, §7.3); `202` — `approval_required`; `500` —
 `loader_unavailable`, `disposer_failed`; `502` — a network `source_unavailable`.
+
+### 12.5. Facade service errors
+
+These codes are **not** from `PLUGIN_AUDIT_REASONS`: they never appear in the plugin journal
+or in an API response. They are the errors that the **plugin itself** receives when it calls a
+facade service (`facade.embed`); they have a `code` field (`PluginFacadeError`).
+
+| Code | What it means | What the author should do |
+|---|---|---|
+| `plugin.embed_limit` | the call limit is exceeded: more than 64 texts, a text longer than 8 000 characters, or more than 64 000 characters in total | split the request into parts; the check runs **before** the provider is called |
+| `plugin.embedding_not_configured` | embeddings are not configured: there is no `plugins.embeddingProvider` and no `opts.provider` was passed | ask the operator to set the provider/model or pass them in the call; or degrade (the memory service of §4.5 works without embeddings) |
+| `plugin.embed_unavailable` | the embedding service is not wired in this instance | degrade: `facade.embed` is always present, but a host without the gateway does not serve it |
+| `plugin.embed_invalid_result` | the provider returned a number of vectors different from the number of texts, or vectors of different lengths | this is a provider/configuration problem, not a plugin one; retrying makes no sense |
+
+Provider errors themselves arrive **as is** (not wrapped) — the plugin sees the reason.
 
 ---
 

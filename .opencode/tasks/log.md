@@ -869,3 +869,216 @@
 - **Проверки:** build всех пакетов ✔, `pnpm typecheck` ✔, `pnpm lint` 0 errors ✔, `pnpm test` ✔ (shared 800, core 5923, ui 1798, backend 682, executor 96, storage-postgres 51, sdk 24), `adr-check` 0 ошибок, `docs-link-check` 0 ошибок (890 ссылок).
 - **Устранён флейк:** `core/src/execution/contract/remote.test.ts` — `hookTimeout` 30 с (было 10); полный прогон core стабильно зелёный.
 - **Остаток по направлениям:** ADR-104 — только PROP-096 (фоновые сессии); ADR-105 — standalone `bind` не перезагружает живой MCP-клиент до переподключения, PG-контракт портов — в CI (`SYNTH_TEST_POSTGRES_DSN`); ADR-106 — flavor-роли (PROP-082), политика читается снимком при старте (активация видна после рестарта), PG-контракт Authority — в CI.
+
+## 2026-10-24 — Память: ревизия предпосылок под принятый ADR-090
+
+- **Задача:** «Основной репозиторий обновлен еще раз. Закончены работы по плагинам, так что worktree надо бы опять пересоздать. Остались ли еще какие-то пререквизиты, которые следует реализовать прежде чем мы приступим к памяти?» **Тип:** ревизия архитектуры (код не писался). **Исполнитель:** @orchestrator. **Результат:** PASS.
+- **Worktree:** удалён старый `wt-memory` (ветка `feature/memory-plugins`, база `b0e55df3` → `86b95598`) и создан новый: `/mnt/data/Agent/dev/Synth/wt-memory`, ветка `feature/memory-plugin`, от `master` `93af3b8a` (правки сохранены и перенесены: `docs/MEMORY.md`, PROP-047, журнал).
+- **Что изменилось в репозитории:** PROP-090 переведён в **[ADR-090](./docs/arch_decisions/adr-090-extension-api.md) со статусом ✅ Реализовано** (Ф0–Ф7, включая гибрид: серверная политика + `plugins:invoke`/`X-Synth-Plugin-Id`); появились ADR-104 (steering), ADR-105 (внешние доступы/OAuth-коннекторы), ADR-106 (Authority-слой); портов хранения — 41; журнал действий плагинов (API + UI).
+- **Ключевое открытие ревизии:** Extension API v1 — **ровно три точки** (`promptBlocks`, `llmFilters`, `tools`). Вариант «14 точек сразу» **отклонён** решением владельца; `hooks`/`routes`/`settings`/`providers`/`events`/… в v1 **не экспонируются** (`docs/PLUGINS.md` §1.3 — прямая цитата). Фасад = `registerDisposer` + три регистрации. Поэтому прежний список «пяти предпосылок» (добавить `hooks`, `routes`, `settings`, storage, embeddings) **неверен по форме**: три из них нельзя решить «добавлением точки» без переоткрытия ADR-090.
+- **Пересмотр предпосылок — осталось три (и две оказались мнимыми):**
+  - **A. Storage-грант — единственный жёсткий блокер.** Плагин не может писать в `$SYNTH_DATA_DIR` (инвариант 2), порта памяти нет, каталога данных плагину не даётся. A1 (рекомендуется): доменный порт `MemoryRepository`/`MemoryIndexRepository` (ADR-096 + контрактный suite + file/PG) + сервис фасада `facade.memory.store` (scoped к namespace). A2: `out-of-process`-плагин со своим хранилищем — работает уже сегодня, но без бэкапа/`storage migrate`/PG.
+  - **B. `facade.embed`** — без него RAG либо нарушает инвариант 3, либо не работает; `GatewayProvider.embed` уже проходит через `_prepareEmbedding` + embedding-фазу, но плагину недоступен; LLM Proxy отдаёт только `/chat/completions`.
+  - **C. `facade.getSettings()`** — `plugins.json` хранит per-plugin `settings`, но метода чтения нет.
+  - **Мнимые:** (1) **ingest по хукам** — не нужен: пакетный ingest закрывается пайплайном ADR-101 (`read_session_reference` → шаг `agent` → `plugin_<ns>_memory_write`), реалтайм — оптимизация; (2) **точка `routes` для портала** — не нужна: портал поднимается в ядре (`createMemoryRoutes` + порт + админ-тул плагина).
+- **Отдельная находка (дыра в модели доверия):** `PluginToolDefinition.execute` получает **тот же** `ToolContext`, что и встроенные тулы, а в `ctx.extra` оркестратор кладёт `sessionManager`/`projectStore`/`eventBus`/`profilesStore`/`gitService` (`orchestrator.ts:3338-3365`). То есть **inline-плагин через свой тул де-факто читает internals ядра**, тогда как `out-of-process` по проводу получает только `{sessionId, messageId, workingDir}` (`remote/loader.ts:253`). `PLUGINS.md` §1.2 утверждает обратное. Для памяти это принципиально: опираться на `ctx.extra` нельзя, но и оставлять так — дыра. Рекомендация: сузить `ctx.extra` для плагинных тулов (симметрия с remote) до начала работ по памяти.
+- **Обновлено:** `docs/MEMORY.md` — §2 переписан (таблица «потребность → возможно ли на трёх точках», три предпосылки A/B/C, две мнимые), добавлен §2.2 (находка про `ctx.extra`), фазы М0.5 переформулированы, открытые вопросы расширены до 11; `docs/arch_decisions/prop-047-memory-gbrain.md` — таблица «что изменилось» (три точки, портал в ядре), §1.5 write-path переведён на пакетный ingest, «Статус реализации» переписан по коду (был противоречив), §4 (API портала) и М1 в фазах исправлены, добавлена ссылка на `docs/MEMORY.md` и строка истории.
+- **Проверки:** `node scripts/adr-check.mjs` — OK (97 документов, 0 ошибок); `node scripts/docs-link-check.mjs` — OK (57 файлов, 893 ссылки, 0 ошибок).
+- **Не делалось:** `AGENTS.md` не правился (инвариант 14). Код не менялся, коммитов нет (инвариант 12).
+- **Ответ на вопрос владельца:** да, остались **три** предпосылки (A storage-грант, B `facade.embed`, C `facade.getSettings`) плюс закрытие находки `ctx.extra`; ingest и портал — **не** блокеры.
+
+## 2026-10-24 04:06 UTC — Пререквизиты памяти: старт работ (фиксация состояния)
+
+- **Решение владельца:** пререквизиты реализуем в этой же сессии (без дробления), сабагенты — в фоне, модель `minimax/MiniMax-M3.1-Flash` (точный id в каталоге: `minimax/MiniMax-M3.1-Flash`; `minimax/minimax-m3.1-flash` в каталоге отсутствует). У провайдера 5-часовые лимиты; на момент старта до сброса ~4 часа (ориентир сброса ~08:06 UTC / 13:06 +05). При упоре в лимит — ждать сброса, не ретраить.
+- **Состояние репозитория:** `master` = `93af3b8a`; worktree `/mnt/data/Agent/dev/Synth/wt-memory`, ветка `feature/memory-plugin`; коммитов нет. `pnpm install --frozen-lockfile` выполнен (node_modules в worktree), собраны `shared`/`core`/`storage-postgres`/`executor`, `pnpm --filter @itphx/synth-core typecheck` — чистый (baseline зелёный).
+- **Файлы, изменённые ранее (в рабочем дереве, не закоммичены):** `docs/MEMORY.md` (новый), `docs/arch_decisions/prop-047-memory-gbrain.md`, `.opencode/tasks/log.md`.
+- **План (волны):**
+  - **Волна 1 (запущена, параллельно):** WP-D — сузить `ToolContext` для тулов с `source: 'plugin'` (убрать `extra`/`dataDir`, симметрия с `out-of-process`); WP-A — доменные порты памяти `MemoryFactRepository`/`MemoryIndexRepository` (in-memory + file + PG-миграция `017-memory`, контрактный suite).
+  - **Волна 2 (после проверки волны 1):** сервисы фасада — `facade.memory.store` (scoped по `namespace`), `facade.embed` (через `GatewayProvider.embed` + `plugins.embedding*` в конфиге), `facade.getSettings` (поверх `plugins.json`); проводка в `server/app/deps.ts` и `backend/app/deps.ts`; тесты; документация (`docs/PLUGINS.md`, `docs/CONFIGURATION.md`).
+  - **Волна 3:** фиксация решения (ADR о plugin services) + актуализация `PROP-047`/`docs/MEMORY.md` по факту кода.
+
+## 2026-10-24 09:35 +05 — Волна 1 пререквизитов: WP-D и WP-A приняты
+
+- **WP-D (сужение `ctx.extra` для тулов плагинов) — PASS.** `narrowToolContext()` в `engine/tools/tool-execution.ts` — единственная точка (`executeToolDef`); для `source: 'plugin'` плагин получает только `sessionId`/`messageId`/`workingDir`/`agentRole?`/`abortSignal?`, без `extra`/`dataDir`; builtin/mcp — без изменений. Проверено: `toolDef.execute` вызывается ровно в одном месте, поэтому правило действует и для оркестратора, и для саб-агента `task`, и для шагов пайплайна. Тест `tool-execution.plugin-context.test.ts` — 5/5. Доки: `docs/PLUGINS.md` §4.3/§5/§5.3 + `docs/en/PLUGINS.md`.
+- **WP-A (порты памяти, ADR-096) — PASS.** Добавлены `MemoryFactRepository`/`MemoryIndexRepository` (namespace-скоуп, версии фактов, поколения индексов, чанки с векторами), in-memory + file (`{dataDir}/memory/{facts,indexes}.json`, чанки `memory/chunks/<id>/g<N>.json`, атомарная запись через общий `atomicWrite` — ADR-005) + PG (`017-memory`, таблицы `memory_facts`/`memory_indexes`/`memory_chunks`, вектор — `jsonb` без `pgvector`), контрактный suite и блоки в `memory.test.ts`/`file.test.ts`/`postgres.test.ts`; обязательные поля `memoryFacts`/`memoryIndexes` в `StorageContext` и проводка во всех трёх backend'ах.
+- **Проверки (мои, независимые):** `pnpm typecheck` (весь воркспейс) — **exit 0**; `vitest run src/storage/contract/{memory,file}.test.ts + tool-execution.plugin-context.test.ts` — **380 тестов passed**; `git diff --stat -- '**/package.json' pnpm-lock.yaml` — пусто (**зависимостей не добавляли**). Агент дополнительно прогнал контрактный suite против живой PostgreSQL (`./scripts/ci-postgres.sh run`) — 185/185.
+- **Осталось косметически (передано в волну 2):** `PORT_KEYS` в `storage-context.test.ts` (+2 ключа) и устаревшая фраза «27 доменных портов» в шапке `contract/postgres.test.ts`.
+- **Волна 2 (запущена):** `facade.memory` — scoped-обёртка (`namespace = plugin:<name>`, чужие данные → «не найдено», штамповка namespace на записи), проводка через `PluginRuntimeDeps` + `server/app/deps.ts`/`backend/app/deps.ts`, тесты изоляции, доки RU/EN.
+
+## 2026-10-24 09:55 +05 — Волна 2 принята: `facade.memory` (scoped), + запуск волны 3
+
+- **WP-E (`facade.memory`) — PASS**, проверено самостоятельно (агент завершился без отчёта, работа на месте).
+  - Тип: `PluginFacade.memory?: { facts: MemoryFactRepository; indexes: MemoryIndexRepository }` (`activation.ts:273`).
+  - Реализация: `engine/plugins/scoped-memory.ts` — `createScopedMemory(pluginName, ports)`; обёртка
+    создаётся **на плагин** в `plugin-host.ts:532` (`PluginHostOptions.memory`, `_memory`), поэтому чужой
+    namespace недостижим по построению.
+  - Правила (fail-closed, без утечки существования): `save`/`saveIndex` штампуют `namespace = plugin:<name>`
+    (входное значение игнорируется); `get`/`getIndex` чужой записи → `null`; `list`/`count`/`listIndexes`
+    принудительно подставляют свой namespace (spread `{...query, namespace}` — свой ключ последним);
+    `delete`/`setState`/`deleteIndex`/чанки чужого индекса → `false`/`0`/`[]`, без исключений.
+  - Проводка: `PluginHostOptions.memory` ← `PluginRuntimeDeps.memory` ← `{ memoryFacts, memoryIndexes }`
+    из `StorageContext` в `server/app/deps.ts:792` и `backend/app/deps.ts:743`; сервис не сконфигурирован →
+    `facade.memory === undefined` (активация не падает).
+  - Косметика волны 1 закрыта: `PORT_KEYS` (+2), шапка `contract/postgres.test.ts` переформулирована.
+  - Доки: `docs/PLUGINS.md` §4.5 «Сервис памяти» + `docs/en/PLUGINS.md` §4.5 (RU/EN синхронно).
+- **Проверки (мои):** `pnpm typecheck` (весь воркспейс) — **exit 0**; `vitest run src/engine/plugins src/storage` —
+  **53 файла, 1106 passed** (188 skipped — PG-блоки без `SYNTH_TEST_POSTGRES_DSN`).
+- **Найден и отправлен на фикс пробел в изоляции:** `supersede(id, nextId)` проверял владение только
+  первым id → плагин мог проставить `supersededBy` на факт чужого namespace (не утечка данных, но
+  кросс-namespace ссылка). Фикс: проверять оба id; тест на отказ + сохранность старого факта.
+- **Волна 3 (запущена):** `facade.embed` (инъекция из `deps.ts` через `ProviderFactory.create` +
+  `orchestrator.wrapProviderWithGateway` → `GatewayProvider.embed`, лимиты 64 текста/8k символов/64k сумма,
+  код `plugin.embedding_not_configured`, конфиг `plugins.embeddingProvider`/`embeddingModel`) и
+  `facade.getSettings` (per-plugin `settings` из `plugins.json`, `{}` по умолчанию, без события изменения);
+  явная оговорка в доках: в `out-of-process` оба сервиса **недоступны** (протокол v1 — только три точки).
+
+## 2026-10-24 10:00 +05 — Волна 3 (embed + settings): код на месте, ловим один typecheck-дефект
+
+- **Состояние:** `facade.embed` и `facade.getSettings` реализованы; агент снова завершился обрывком ответа,
+  поэтому проверял сам.
+  - `engine/plugins/embed.ts` — политика вызова поверх **инъецированной** `PluginEmbedFn`: лимиты
+    (64 текста / 8 000 символов на текст / 64 000 суммарно → `plugin.embed_limit`), перекрытие
+    `opts.provider|model` по каждому полю, валидация результата (число векторов = число текстов,
+    одинаковая длина → иначе `plugin.embed_invalid_result`), коды `plugin.embedding_not_configured`/
+    `plugin.embed_unavailable`. Ошибки провайдера не глотаются, секретов в текстах нет (gateway).
+  - Проводка (`server/app/deps.ts:782-816`): `pluginEmbed` = `ProviderFactory.create` +
+    `orchestrator.wrapProviderWithGateway` → `GatewayProvider.embed` по одной строке — **тот же** путь,
+    что остальные LLM-вызовы (guard, обфускация, rate-limit, аудит, embedding-фаза `llmFilters`,
+    инвариант 3). Провайдер/модель — из `plugins.embeddingProvider`/`embeddingModel`, перекрываются
+    аргументом вызова.
+  - `engine/plugins/settings.ts` — `createPluginSettingsReader({ path: layout.settingsPath })`: читает
+    **свой** `plugins[<name>].settings` из `plugins.json` на каждый вызов, возвращает замороженную копию,
+    при любой ошибке (нет файла/битый JSON/не та структура) — `{}`; чужой плагин не виден (имя из активации).
+    События изменения не вводим — writer'а per-plugin настроек сегодня нет (мёртвый API не плодим).
+  - Проводка фасада: `plugin-host.ts:576` (`getSettings` → `this._settings(handle.plugin)`),
+    `plugin-host.ts:569` (`embed: createPluginEmbedService`), `runtime.ts:280` (ридер по умолчанию).
+  - Конфиг: `plugins.embeddingProvider`/`plugins.embeddingModel` (+ defaults/env/tests), доки
+    `CONFIGURATION.md` RU/EN; `PLUGINS.md` RU/EN — три пометки «Только `inline`» (memory/embed/settings)
+    и строка в таблице сравнения транспортов.
+- **Дефект:** `pnpm typecheck` = **exit 1** — одна ошибка в новом тесте
+  `engine/plugins/plugin-facade-services.test.ts:40` (TS2352: каст литерала манифеста к `PackManifest`).
+  Тесты при этом зелёные (`engine/plugins` — 434, `shared/src/config` — 387). Отправлено на фикс тому же
+  агенту (собрать валидный манифест по образцу фикстур, не глушить каст) + требование полного отчёта.
+
+## 2026-10-24 10:20 +05 — Волна 3: код и решение зафиксированы, ловим последний тест
+
+- **`facade.embed` / `facade.getSettings` — приняты по коду** (проверено: `pnpm typecheck` exit 0,
+  `src/engine/plugins` 434 теста, `src/config` 387, `lint` 0 errors / 361 warning = baseline).
+  Агент подтвердил: late-bound не понадобился — в обоих `deps.ts` оркестратор создаётся раньше `PluginRuntime`;
+  сервисы по проводу `out-of-process` не идут (задокументировано в §4.6/§4.7/§5.3, RU+EN).
+- **Найден дефект, не пойманный агентом:** `mergePluginsConfig` получил два новых поля, а его тест
+  (`storage/runtime-settings.test.ts`) не обновили — 4 падения (`expected …(16) to deeply equal …(14)`).
+  Отправлено на фикс с требованием прогонять `src/storage` целиком при изменении формы `PluginsConfig`.
+- **Решение зафиксировано как [ADR-107](./docs/arch_decisions/adr-107-plugin-facade-services.md)**
+  («Сервисы фасада плагинов — память, эмбеддинги, свои настройки», ✅ Реализовано): сервисы, а не точки;
+  `memory` — scoped по `plugin:<имя>`; `embed` — инъекция → `GatewayProvider.embed`; `getSettings` — чтение
+  своих настроек; сужение `ToolContext` для плагинных тулов; сервисы только `inline`. Альтернативы
+  (сырые порты, каталог данных плагина, четвёртая точка, эмбеддинги мимо Gateway) отвергнуты с причинами.
+  Индекс пересобран скриптом: `node scripts/adr-check.mjs --write` → `AGENTS.md` (+1 строка в
+  авто-генерируемом `ad-index`) и `docs/arch_decisions/README.md` (+1 строка, счётчик 98).
+- **Доки по факту:** `docs/MEMORY.md` §2 переписан (таблица «потребность → статус → чем закрыто»:
+  персистентность/эмбеддинги/настройки/сужение контекста — ✅; ingest — 🟡 пакетный; портал/события/метрики — ❌),
+  §2.1 «что осталось до М1», §2.2 «граница транспорта» (вывод: **RAG — `inline`**, **Gbrain — `remote`**),
+  фазы М0/М0.5 → готово, открытые вопросы сокращены до 9. В `PROP-047` статус-таблица обновлена
+  (Фасад — 4 метода + 3 сервиса; порты памяти — ✅; «память как продукт» — ❌).
+- **Проверки доков:** `adr-check` OK (98 документов, 0 ошибок), `docs-link-check` OK (903 ссылки).
+
+## 2026-10-24 10:25 +05 — Пререквизиты памяти закрыты (полная приёмка)
+
+- **Все предпосылки выполнены** ([ADR-107](./docs/arch_decisions/adr-107-plugin-facade-services.md)):
+  - **A** — порты `MemoryFactRepository`/`MemoryIndexRepository` (memory/file/PG, миграция `017-memory`,
+    вектор `jsonb`, контрактный suite) + **scoped** `facade.memory` (`namespace = plugin:<имя>`,
+    кросс-namespace ссылки отсекаются, `supersede` проверяет оба id);
+  - **B** — `facade.embed` через `GatewayProvider.embed` (инъекция из `deps.ts`; guard/аудит/
+    embedding-фаза `llmFilters`; лимиты 64/8 000/64 000; `plugins.embedding*` в конфиге);
+  - **C** — `facade.getSettings` (свои `plugins.json`-настройки, `{}` по умолчанию);
+  - **D** — сужение `ToolContext` для `source: 'plugin'` (`extra`/`dataDir` не передаются).
+- **Последний дефект закрыт:** `mergePluginsConfig` vs его тест — выравнивание схемы
+  (`embeddingProvider`/`embeddingModel` → `z.string().default('')`) и ожиданий теста (без ослабления
+  проверок); прогон `src/storage` целиком — 694 passed.
+- **Полная приёмка (мои прогоны, не по отчёту):**
+  | Проверка | Результат |
+  |---|---|
+  | `pnpm typecheck` (8 пакетов) | exit 0 |
+  | `shared` (весь пакет) | 801 passed |
+  | `core` (весь пакет) | **5995 passed**, 195 skipped (405 файлов) |
+  | `storage-postgres` | 51 passed, 14 skipped (PG без DSN) |
+  | `backend` | 682 passed |
+  | `lint` core/backend/shared/storage-postgres | 0 errors (361/194/0/0 warnings — baseline) |
+  | `adr-check` / `docs-link-check` | OK (98 документов) / OK (903 ссылки) |
+- **Объём:** 55 файлов в рабочем дереве (17 новых), +1315 строк в изменённых. Зависимостей не добавляли,
+  коммитов нет (инвариант 12), `AGENTS.md` не правился (инвариант 14).
+- **Накопленные предложения по `AGENTS.md`** (ждут согласования владельца): (1) `packages/core/AGENTS.md`
+  `engine/tools` — сужение контекста плагинного тула; (2) `packages/core/AGENTS.md` `engine/plugins` —
+  сервисы фасада (`memory`/`embed`/`getSettings`) и правило «эмбеддинги плагина — только через Gateway»;
+  (3) корневой инвариант 3 — пример «не только chat»; (4) `packages/shared/AGENTS.md` — ключи
+  `plugins.embedding*`; (5) корневой «Слой хранения» — два порта памяти + файлы/таблицы; (6) триггер
+  «память» → `docs/MEMORY.md`.
+- **Следующий шаг:** М1 плагина памяти — два блока (`context`/`volatile`), тулы `memory_search`/
+  `memory_write`/`memory_forget`, портал в ядре (`createMemoryRoutes`), метрики `synth_memory_*`.
+
+## 2026-10-24 — правки инструкций + старт М1
+
+- **`AGENTS.md` (7 правок, согласованы владельцем):** корневой — инвариант 3 (эмбеддинги только через
+  `GatewayProvider.embed`), «Слой хранения» (убраны разъехавшиеся счётчики, добавлены порты памяти и пути
+  файлов/таблиц), триггер «память / факты / индексы / recall», строка `docs/MEMORY.md` в таблице
+  документации; `packages/core/AGENTS.md` — сужение `ToolContext` для плагинных тулов и сервисы фасада
+  (`memory`/`embed`/`getSettings`, «только `inline`», правило «новый доступ — сервис + ADR»);
+  `packages/shared/AGENTS.md` — ключи `plugins.embedding*` + env. Проверки: `adr-check` OK (98),
+  `docs-link-check` OK (906 ссылок). Коммита нет.
+- **Worktree актуализировать не пришлось:** `master` = `93af3b8a` = база ветки (0 коммитов расхождения).
+
+### М1 — решения этой волны
+
+| Вопрос | Решение | Почему |
+|---|---|---|
+| Где живёт плагин | `packages/plugin-memory` (`@itphx/synth-plugin-memory`, `private: true`) | `packages/*` уже в workspace: typecheck/lint/test/CI без правки `pnpm-workspace.yaml`; вынос в отдельный addon-репозиторий — когда появится публикация |
+| Объём тулов | `memory_search`/`memory_write`/`memory_forget` | `memory_index` требует менеджера индексов (М2): стаб не выпускаем |
+| Портал | только чтение: `status`/`facts`/`facts/:id`/`indexes` | мутации — через админ-тул плагина; конвенция серверного вызова тула остаётся открытым вопросом до М2 |
+| RBAC портала | core — `requireAuth`, managed — `ADMIN` | это админ-раздел; facts содержат пользовательские утверждения |
+| События `memory.*` | не в М1 | нужны прогрессу консолидации (М4); публиковать нечего |
+| Метрики | `synth_memory_facts{status}`, `synth_memory_indexes{status}` (gauge, скрейп) | без `namespace`/`session_id`: кардинальность; `status` — уже в контракте лейблов ADR-094 |
+| Recall без векторов | keyword-скоринг по активным фактам (М2 добавит векторы и гибрид) | каркас должен быть полезен до индексов; контракт `MemoryProvider` не меняется |
+
+### М1 — параллельные потоки (фоновые сабагенты, `minimax/MiniMax-M3.1-Flash`)
+
+- **A — плагин:** пакет, манифест, два блока (facts/recall), три тула, keyword-скоринг, тесты
+  (включая активацию через `PluginHost`: `provides` ↔ регистрации).
+- **B — портал в ядре:** `createMemoryRoutes` (контракт зафиксирован), монтирование core/backend,
+  коллектор `memory` + `docs/API_V2.md`/`docs/OBSERVABILITY.md`.
+- **C — UI:** админ-категория «Память» (read-only), домен `lib/api/memory.ts`, RU/EN i18n, тесты.
+
+Пересечений по файлам нет; приёмка — после отчётов: сборка, `typecheck`, целевые тесты, затем полный
+прогон. Коммит — по-прежнему только по просьбе владельца.
+
+### М1 — итог (приёмка)
+
+| Проверка | Результат |
+|---|---|
+| `pnpm build` (9 пакетов) | OK; плагин — esbuild-бандл 148 КБ, один файл, `zod` вшит |
+| `pnpm typecheck` | 9/9, 0 ошибок |
+| `pnpm lint` | 0 errors (363 core / 27 ui / 194 backend warnings; новых 2 — `any` в `routes/memory.test.ts`) |
+| `pnpm test` | **9538 passed**, 209 skipped, 1 todo |
+| `adr-check` / `docs-link-check` | OK (98) / OK (908 ссылок) |
+
+По пакетам: shared 801 · core 6021 · executor 24 · ui 1825 · backend 682 · sdk 96 · plugin-memory 38 · storage-postgres 51.
+
+**Сделано:** плагин `packages/plugin-memory` (манифест, 2 блока, 3 тула, capability `memory`, скоуп по проекту на чтении и записи, self-contained бандл); портал
+`createMemoryRoutes` (read-only, namespace подставляет сервер, core `requireAuth` / managed `ADMIN`, `503 MEMORY_UNAVAILABLE`);
+метрики `synth_memory_facts{status}` / `synth_memory_indexes{status}` (gauge на скрейпе); админ-раздел UI «Память» + домен `memoryApi`;
+джоба CI `test-plugin-memory`.
+
+**Дефекты, найденные при приёмке (не по отчётам агентов):**
+1. тулы памяти были привязаны к `workspace` (`search`/`file_write`) → capability `memory`, не workspace-зависимая;
+2. `memory_search` видел факты всех проектов → `projectId` в `ToolContext` + единая реализация скоупа (блоки и тул);
+3. `memory_write` писал «общий» факт без `projectId` → приоритет проекта сессии;
+4. бандл тянул `zod` извне → esbuild-сборка;
+5. тестов плагина не было в CI;
+6. метрики зависели от HTTP-слоя (`MEMORY_NAMESPACE` из роутов) → `engine/plugins/memory-namespace.ts`.
+
+**`AGENTS.md` (по согласованию):** `projectId?` в списке суженного контекста (core), абзац про админ-раздел «Память» (ui), строка `/api/v2/memory` в таблице API (корень).
+
+**Открыто (М2):** `memory_index` (менеджер индексов), чанкер + `facade.embed` + гибридный поиск, мутации портала через админ-тул плагина
+(конвенция серверного вызова), события `memory.*` (М4).
+
+**Объём:** 101 изменение в рабочем дереве (74 файла, 27 новых), +1946/−99 (+ правки инструкций). Коммита нет.

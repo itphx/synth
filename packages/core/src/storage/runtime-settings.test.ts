@@ -493,6 +493,9 @@ describe('mergePluginsConfig (ADR-090)', () => {
     deployDir: '/opt/synth/plugins',
     deployTrust: 'trusted' as const,
     managedReadonly: true,
+    // ADR-090 (WP-F): провайдер/модель эмбеддингов для `facade.embed`.
+    embeddingProvider: 'ollama',
+    embeddingModel: 'nomic-embed-text',
     // Ф7: серверная политика плагинов в гибридном режиме.
     hybrid: { mode: 'off' as const, allow: [] },
   };
@@ -509,6 +512,9 @@ describe('mergePluginsConfig (ADR-090)', () => {
         remoteAllowlist: [],
         exactHostExceptions: '/etc/synth/runtime-hosts.txt',
         promptBlockMaxChars: 8000,
+        // ADR-090 (WP-F): провайдер/модель эмбеддингов перекрываются runtime.
+        embeddingProvider: 'openai',
+        embeddingModel: 'text-embedding-3-small',
       }),
     ).toEqual({
       enabled: true,
@@ -526,6 +532,9 @@ describe('mergePluginsConfig (ADR-090)', () => {
       deployDir: '/opt/synth/plugins',
       deployTrust: 'trusted',
       managedReadonly: true,
+      // ADR-090 (WP-F): провайдер/модель эмбеддингов — из runtime.
+      embeddingProvider: 'openai',
+      embeddingModel: 'text-embedding-3-small',
       // Ф7: серверная политика плагинов наследуется из base.
       hybrid: { mode: 'off', allow: [] },
     });
@@ -561,6 +570,9 @@ describe('mergePluginsConfig (ADR-090)', () => {
       deployDir: '/opt/synth/plugins',
       deployTrust: 'trusted',
       managedReadonly: true,
+      // ADR-090 (WP-F): дефолты схемы — эмбеддинги не сконфигурированы.
+      embeddingProvider: '',
+      embeddingModel: '',
       // Ф7: серверная политика плагинов — дефолт схемы (сервер не ограничивает).
       hybrid: { mode: 'off', allow: [] },
     });

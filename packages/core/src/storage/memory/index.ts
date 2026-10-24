@@ -62,3 +62,7 @@ export { MemoryProjectPipelineRepository, MemoryPipelineRunRepository } from './
 
 // ADR-096 (W2.4): конфигурационные словари (провайдеры/модели/агенты) — общий generic-порт.
 export { MemoryDocumentRepository } from './document-repository.js';
+
+// PROP-047 §2.1 (предпосылка A): порты памяти — факты и индексы с чанками.
+export { MemoryFactRepository } from './facts.js';
+export { MemoryIndexRepository } from './indexes.js';

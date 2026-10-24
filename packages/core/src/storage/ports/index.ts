@@ -141,3 +141,23 @@ export type {
   AuthorityDecisionJournal,
   AuthorityDecisionListOptions,
 } from './authority-decision-journal.js';
+// PROP-047 §2.1 (предпосылка A): порты памяти — факты и индексы с чанками.
+// Ядро владеет данными памяти (бэкап, миграция, retention), плагин — логикой.
+export type {
+  MemoryFactRepository,
+  MemoryFactRecord,
+  MemoryFactQuery,
+  MemoryFactStatus,
+  MemoryFactProvenance,
+  MemoryFactRevision,
+} from './memory-fact-repository.js';
+export type {
+  MemoryIndexRepository,
+  MemoryIndexRecord,
+  MemoryIndexQuery,
+  MemoryIndexState,
+  MemoryIndexFingerprint,
+  MemoryIndexSource,
+  MemoryIndexStats,
+  MemoryChunkRecord,
+} from './memory-index-repository.js';

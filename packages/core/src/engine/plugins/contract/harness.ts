@@ -36,6 +36,8 @@ import {
 } from '@itphx/synth-shared';
 
 import { MemoryPluginAuditRepository } from '../../../storage/memory/plugin-audit.js';
+import { MemoryFactRepository } from '../../../storage/memory/facts.js';
+import { MemoryIndexRepository } from '../../../storage/memory/indexes.js';
 import { PluginHost } from '../plugin-host.js';
 import type {
   PluginActivationDescriptor,
@@ -193,6 +195,11 @@ export async function createContractHarness(
   const promptBlocks = new PromptBlockRegistry();
   const llmFilters = new LlmFilterRegistry();
   const provider = new CountingProvider({ url: 'http://mock', apiKey: 'k', model: 'm' });
+  // PROP-047 §2.1: порты памяти инстанса — фасад отдаёт плагину scoped-доступ
+  // (namespace навязывает хост). Suite проверяет, что запись осталась в
+  // namespace'е плагина.
+  const memoryFacts = new MemoryFactRepository();
+  const memoryIndexes = new MemoryIndexRepository();
 
   const host = new PluginHost({
     audit: new MemoryPluginAuditRepository(),
@@ -203,6 +210,7 @@ export async function createContractHarness(
     tools,
     promptBlocks,
     llmFilters,
+    memory: { facts: memoryFacts, indexes: memoryIndexes },
     ...(options.loader ? { loader: options.loader } : {}),
     ...(options.loaders ? { loaders: options.loaders } : {}),
   });
@@ -253,6 +261,8 @@ export async function createContractHarness(
     tools,
     promptBlocks,
     llmFilters,
+    memoryFacts,
+    memoryIndexes,
     warnings,
     reference: DEFAULT_PLUGIN_CONTRACT_REFERENCE,
     activate: async (fixtureName: PluginContractFixtureName): Promise<PluginActivationResult> =>

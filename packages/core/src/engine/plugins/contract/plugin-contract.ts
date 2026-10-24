@@ -40,7 +40,13 @@ import type { PluginHost } from '../plugin-host.js';
 import type { PromptBlockRegistry } from '../../context/prompt-block-registry.js';
 import type { LlmFilterRegistry } from '../../gateway/llm-filter-registry.js';
 import type { ToolRegistry } from '../../tools/registry.js';
+import type {
+  MemoryFactRepository,
+  MemoryIndexRepository,
+} from '../../../storage/ports/index.js';
 import {
+  MEMORY_FIXTURE_FACT_ID,
+  MEMORY_FIXTURE_PLUGIN,
   PLUGIN_CONTRACT_FIXTURES,
   PLUGIN_FIXTURE_SET,
   REFERENCE_EMPTY_BLOCK_KEY,
@@ -115,6 +121,13 @@ export interface PluginContractHarness {
   promptBlocks: PromptBlockRegistry;
   /** Реестр фильтров LLM-вызовов (точка `llmFilters`). */
   llmFilters: LlmFilterRegistry;
+  /**
+   * Порт фактов памяти инстанса (PROP-047 §2.1) — **сырой** порт: suite
+   * проверяет, что запись плагина осталась в его namespace'е.
+   */
+  memoryFacts: MemoryFactRepository;
+  /** Порт индексов памяти инстанса (PROP-047 §2.1) — сырой порт. */
+  memoryIndexes: MemoryIndexRepository;
   /** Накопленные предупреждения хоста плагинов (отказы точек). */
   warnings: string[];
   /** Эталонные имена набора. */
@@ -482,6 +495,29 @@ export function describePluginContract(
         // Манифест заявлял `trusted`, фактический уровень — community.
         expect(activation!.trustLevel).toBe('community');
         expect(h.llmFilters.get('plugin:contract-untrusted:block')!.trustLevel).toBe('community');
+      });
+    });
+
+    // ── 7. Сервис памяти (фасад) ─────────────────────────────────────────
+
+    describe('сервис памяти (фасад)', () => {
+      it('плагин пишет факт через фасад: запись остаётся в namespace плагина', async () => {
+        const result = await h.activate('memory');
+        // Фикстура сама проверяет контракт и бросает наружу при нарушении —
+        // ошибка `apply()` стала бы отказом активации.
+        expect(result.outcome).toBe('activated');
+
+        if (h.transport === 'inline') {
+          const facts = await h.memoryFacts.list();
+          expect(facts).toHaveLength(1);
+          expect(facts[0]?.id).toBe(MEMORY_FIXTURE_FACT_ID);
+          // Namespace навязал хост: значение фикстуры («чужое») перезаписано.
+          expect(facts[0]?.namespace).toBe(`plugin:${MEMORY_FIXTURE_PLUGIN}`);
+        } else {
+          // Out-of-process: точка памяти по проводу не экспонируется — удалённый
+          // плагин до памяти не дотягивается, записей нет.
+          expect(await h.memoryFacts.count()).toBe(0);
+        }
       });
     });
 

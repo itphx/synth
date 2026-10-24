@@ -14,7 +14,8 @@
     "web",
     "git_read",
     "mcp",
-    "runtime"
+    "runtime",
+    "memory"
   ],
   "icon": "shield-check",
   "color": "--status-warning",

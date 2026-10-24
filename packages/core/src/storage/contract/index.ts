@@ -69,4 +69,7 @@ export { describePackRepository } from './pack-repository.contract.js';
 export { describeProjectPipelineRepository } from './project-pipeline-repository.contract.js';
 export { describePipelineRunRepository } from './pipeline-run-repository.contract.js';
 
+// PROP-047 §2.1 (предпосылка A): порты памяти — факты и индексы с чанками.
+export { describeMemoryFactRepository, describeMemoryIndexRepository } from './memory.js';
+
 export { createTmpDir, makeSession, makeMessage, makeProject, makeProfile } from './helpers.js';

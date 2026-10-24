@@ -40,4 +40,15 @@ describe('SettingsModal — активная категория недоступ
     const ids = CATEGORIES.map((cat) => cat.id)
     expect(ids.indexOf('metrics')).toBe(ids.indexOf('maintenance') + 1)
   })
+
+  it('категория «Память» видна ADMIN и скрыта USER', () => {
+    expect(visibleFor(['ADMIN']).some((cat) => cat.id === 'memory')).toBe(true)
+    expect(visibleFor(['USER']).some((cat) => cat.id === 'memory')).toBe(false)
+    expect(visibleFor(['LEAD']).some((cat) => cat.id === 'memory')).toBe(false)
+  })
+
+  it('«Память» идёт сразу после «Метрик» в админ-блоке', () => {
+    const ids = CATEGORIES.map((cat) => cat.id)
+    expect(ids.indexOf('memory')).toBe(ids.indexOf('metrics') + 1)
+  })
 })

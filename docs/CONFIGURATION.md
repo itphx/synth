@@ -1364,6 +1364,8 @@ scheduler:
 | `plugins.deployDir` | Каталог бандлов, поставленных **образом/развёртыванием** (каждый подкаталог — бандл с `synth.pack` + `dist/`). Ставится при старте инстанса (манифест → скан → trust-floor → install-policy), затем активируется из lock. Пусто — deploy-плагинов нет | `/opt/synth/plugins` |
 | `plugins.deployTrust` | Уровень доверия deploy-бандлов (`builtin`/`verified`/`trusted`/`community`). Ниже `trustFloor` — штатный отказ `plugin.trust_below_floor`; скан содержимого выполняется всегда | `trusted` |
 | `plugins.managedReadonly` | Management-плагин (`deployDir`, lock `source: 'deploy'`) **нельзя** снять или переустановить через API/CLI — `403 plugin.managed_readonly`. Меняется только новым образом/переразвёртыванием. Действует независимо от режима инстанса | `true` |
+| `plugins.embeddingProvider` | Провайдер эмбеддингов для сервиса фасада `facade.embed` (ADR-090, WP-F). Пусто — эмбеддинги не сконфигурированы: `facade.embed` бросает `plugin.embedding_not_configured` (плагин сам решает, деградировать ли). Плагин может перекрыть провайдера/модель в вызове | `''` |
+| `plugins.embeddingModel` | Модель эмбеддингов для `facade.embed`. Пусто — берётся дефолтная модель провайдера | `''` |
 | `plugins.hybrid.mode` | Режим **серверной политики плагинов в гибридном режиме** (Ф7): `off` — сервер **не ограничивает** плагины; `allowlist` — разрешены только плагины из `plugins.hybrid.allow` (пустой список — не разрешён никто) | `off` |
 | `plugins.hybrid.allow` | Имена плагинов, которым сервер разрешает работать (релевантно только при `mode: 'allowlist'`) | `[]` |
 

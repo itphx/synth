@@ -19,7 +19,8 @@
  *   - `buildAuthorityPorts(deps)` → `authorityPolicy`/`authorityDecisions` (ADR-106 Ф0/Ф1);
  *   - `buildExternalCredentialPorts(deps)` → `externalCredentials` (ADR-105 Ф1);
  *   - `buildCredentialAuditPorts(deps)`  → `credentialAudit` (ADR-105 Ф4);
- *   - `buildPipelinePorts(deps)`  → `projectPipelines`/`pipelineRuns` (ADR-101).
+ *   - `buildPipelinePorts(deps)`  → `projectPipelines`/`pipelineRuns` (ADR-101);
+ *   - `buildMemoryPorts(deps)`     → `memoryFacts`/`memoryIndexes` (PROP-047 §2.1).
  *
  * Все доменные порты реализованы поверх SQL; FS/package-bound порты (`skills`,
  * `contextFiles`, `blobs`) — **файловые реализации** core (контент скиллов/
@@ -47,6 +48,7 @@ import { buildAnalyticsPorts } from './ports/analytics.js';
 import { buildAuthorityPorts } from './ports/authority.js';
 import { buildExternalCredentialPorts } from './ports/external-credentials.js';
 import { buildCredentialAuditPorts } from './ports/credential-audit.js';
+import { buildMemoryPorts } from './ports/memory.js';
 import type { CoreSyncDeps, PortDeps } from './ports/deps.js';
 import { buildEventPorts } from './ports/events.js';
 import { buildPipelinePorts } from './ports/pipelines.js';
@@ -176,6 +178,10 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // (`pipeline_specs`/`pipeline_versions`/`pipeline_runs`/`pipeline_run_events`,
     // миграция 004).
     ...buildPipelinePorts(deps),
+    // PROP-047 §2.1 (предпосылка A): порты памяти — факты, индексы и чанки
+    // (`memory_facts`/`memory_indexes`/`memory_chunks`, миграция 017). Векторы
+    // хранятся в `jsonb` (без `pgvector` — расширение в БД не установлено).
+    ...buildMemoryPorts(deps),
     // PROP-068 §4.4 / ADR-090: lock-файл плагинов (таблица `plugin_lock`,
     // миграция 007) — источник истины для update/uninstall.
     ...buildPluginLockPorts(deps),
