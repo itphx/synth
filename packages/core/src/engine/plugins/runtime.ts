@@ -73,6 +73,7 @@ import type {
 } from './activation.js';
 import { createInlinePluginLoader, DEFAULT_PLUGIN_ENTRY } from './inline-loader.js';
 import { FilePluginApprovalStore } from './approval.js';
+import type { PluginApprovalStore } from './approval.js';
 import { collectBundleFiles, PluginInstaller } from './installer.js';
 import { computePluginContentHash } from './integrity.js';
 import { listDeployPlugins } from './deploy.js';
@@ -154,6 +155,17 @@ export interface PluginRuntimeDeps {
   processManager?: { stopAll(): Promise<void> };
   /** Скан/проверка доверия (не задан — встроенный сканер `engine/plugins/scan/`). */
   scan?: PluginScanHook;
+  /**
+   * ADR-090 п. 9: хранилище подтверждений установки (content-hash, срок 24 ч).
+   *
+   * Не задано — файловое хранилище в корне раскладки слоя плагинов
+   * (`<home>/plugin/plugin-approvals.json` или `{dataDir}/plugin/…`).
+   *
+   * **Тот же** экземпляр получают хост (проверка подтверждения на активации)
+   * и установщик (выдача/проверка подтверждения при установке) — хранилище
+   * на инстанс одно.
+   */
+  approvals?: PluginApprovalStore;
   /**
    * Ф7 (ADR-090): резолвер серверной политики плагинов в гибридном режиме.
    *
@@ -253,6 +265,12 @@ export class PluginRuntime {
       },
     };
 
+    // ADR-090 п. 9: подтверждения установки — **одно** хранилище на инстанс:
+    // хост проверяет его на активации, установщик выдаёт и проверяет при
+    // установке (content-hash, срок 24 ч, персистентно).
+    const approvals =
+      deps.approvals ?? new FilePluginApprovalStore({ path: deps.layout.approvalsPath });
+
     this.host = new PluginHost({
       ...(deps.loaders ? { loaders: deps.loaders } : {}),
       audit: deps.audit,
@@ -278,6 +296,9 @@ export class PluginRuntime {
       // раскладке слоя плагинов (по умолчанию); ридер читает снимок на
       // каждый вызов, поэтому изменения видны без рестарта.
       settings: deps.settings ?? createPluginSettingsReader({ path: deps.layout.settingsPath }),
+      // ADR-090 п. 9: подтверждение установки учитывается и на активации
+      // (шаг trust) — тот же экземпляр, что у установщика.
+      approvals,
       ...(deps.scan ? { scan: deps.scan } : {}),
       ...(deps.serverPolicy ? { serverPolicy: deps.serverPolicy } : {}),
       logger: this._logger,
@@ -293,8 +314,9 @@ export class PluginRuntime {
       // ADR-090 п. 9: подтверждения установки — файл в корне раскладки слоя
       // плагинов (`<home>/plugin/plugin-approvals.json` или
       // `{dataDir}/plugin/plugin-approvals.json`): привязка к content-hash и
-      // срок 24 ч, персистентно (переживает рестарт процесса).
-      approvals: new FilePluginApprovalStore({ path: deps.layout.approvalsPath }),
+      // срок 24 ч, персистентно (переживает рестарт процесса). Тот же
+      // экземпляр, что у хоста (проверка подтверждения на активации).
+      approvals,
       ...(deps.scan ? { scan: deps.scan } : {}),
       ...(deps.now ? { now: deps.now } : {}),
       logger: this._logger,

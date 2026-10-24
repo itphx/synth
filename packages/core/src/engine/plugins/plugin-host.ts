@@ -67,10 +67,15 @@ import type {
   PluginSettingsReader,
 } from './activation.js';
 import { pluginLoadFailureReason } from './activation.js';
+import {
+  isPluginApprovalExpired,
+  PLUGIN_APPROVAL_TTL_HOURS,
+} from './approval.js';
+import type { PluginApprovalRecord, PluginApprovalStore } from './approval.js';
 import { createPluginEmbedService } from './embed.js';
 import { readExactHostExceptions } from './exact-host-exceptions.js';
 import { evaluatePluginServerPolicy } from './hybrid-policy.js';
-import { verifyPluginIntegrity } from './integrity.js';
+import { computePluginContentHash, verifyPluginIntegrity } from './integrity.js';
 import { DEFAULT_PLUGIN_ENTRY } from './inline-loader.js';
 import { createPluginScanHook } from './scan/hook.js';
 import { createScopedMemory, type PluginMemoryPorts } from './scoped-memory.js';
@@ -220,6 +225,23 @@ export interface PluginHostOptions {
    */
   settings?: PluginSettingsReader;
   /**
+   * ADR-090 п. 9: хранилище **подтверждений установки** (content-hash бандла,
+   * срок 24 ч, кто выдал).
+   *
+   * Подтверждение выдаётся при постановке бандла в карантин (вердикт скана
+   * `caution`) и **учитывается на активации**: без действующего подтверждения
+   * плагин с вердиктом `caution` активировать нельзя (шаг `trust`).
+   *
+   * Не задано — подтверждения не проверяются: вердикт `caution` всегда даёт
+   * `plugin.approval_required` (поведение прежнее, гейт не ослаблен).
+   */
+  approvals?: PluginApprovalStore;
+  /**
+   * Инъекция часов (ISO-8601) — для детерминированных тестов (срок
+   * подтверждения). По умолчанию — текущее время процесса.
+   */
+  now?: () => string;
+  /**
    * Ф7 (ADR-090, Уровень 1 — cooperative): серверная политика плагинов в
    * гибридном режиме.
    *
@@ -277,6 +299,13 @@ export class PluginHost {
    * ADR-090 (WP-F): ридер настроек плагина (`plugins.json`).
    */
   private readonly _settings: PluginSettingsReader | undefined;
+  /**
+   * ADR-090 п. 9: хранилище подтверждений установки (content-hash + срок 24 ч).
+   * Не задано — подтверждение не проверяется (вердикт `caution` → отказ).
+   */
+  private readonly _approvals: PluginApprovalStore | undefined;
+  /** Часы хоста (ISO-8601) — срок подтверждения; инъекция для тестов. */
+  private readonly _now: () => string;
   /** Ф7: резолвер серверной политики плагинов (гибрид; Уровень 1 — cooperative). */
   private readonly _serverPolicy: PluginHostOptions['serverPolicy'];
   private readonly _logger: PluginLogger;
@@ -304,6 +333,8 @@ export class PluginHost {
     this._memory = options.memory;
     this._embed = options.embed;
     this._settings = options.settings;
+    this._approvals = options.approvals;
+    this._now = options.now ?? (() => new Date().toISOString());
     this._serverPolicy = options.serverPolicy;
     this._explicitExceptions = options.exactHostExceptions;
     this._logger = options.logger ?? {
@@ -398,6 +429,14 @@ export class PluginHost {
     if (!integrity.ok) {
       return failure('integrity', integrity.code, integrity.message);
     }
+    /**
+     * Фактический content-hash бандла — для сверки с подтверждением установки
+     * (ADR-090 п. 9). Шаг integrity уже посчитал его (`actual` — проверенный
+     * хеш); если ожидаемый хеш не был задан (проверять нечего) — считаем по
+     * составу файлов дескриптора (тот же обход, что у установщика).
+     */
+    const actualContentHash =
+      integrity.actual ?? (ready.files ? computePluginContentHash(ready.files) : undefined);
 
     // ── Шаг 3: semver-гейт ────────────────────────────────────────────
     const semver = await this._checkSemver(ready);
@@ -406,7 +445,7 @@ export class PluginHost {
     }
 
     // ── Шаг 4: trust/scan ─────────────────────────────────────────────
-    const trust = await this._checkTrust(ready);
+    const trust = await this._checkTrust(ready, actualContentHash);
     if (!trust.ok) {
       return failure('trust', trust.reason, trust.message);
     }
@@ -797,7 +836,10 @@ export class PluginHost {
    *    хук); при `dangerous` → `plugin.scan_rejected`;
    * 3. **install-policy** (PROP-068 §4.2 + ячейка `kind: plugin`) — для
    *    плагина `caution` → `ask` (явное подтверждение владельца), а не блок:
-   *    `plugin.approval_required`.
+   *    `plugin.approval_required`. При `ask` проверяется **подтверждение
+   *    установки** (ADR-090 п. 9): оно есть, не истекло (24 ч) и его
+   *    content-hash совпадает с фактическим — активация продолжается; иначе
+   *    `plugin.approval_required` (гейт не ослаблен).
    *
    * Скан выключен политикой (`plugins.scan: 'disabled'`) — это **не** ошибка:
    * вердикт по умолчанию `safe`, а в журнале аудита видно, что скана не было
@@ -807,6 +849,7 @@ export class PluginHost {
    */
   private async _checkTrust(
     descriptor: PluginActivationDescriptor,
+    actualContentHash?: string,
   ): Promise<{ ok: true } | { ok: false; reason: PluginAuditReason; message: string }> {
     // Решение владельца (Ф3а, 2026-10-22): исполняемый код обязан быть
     // просканирован. `plugins.scan='disabled'` вместе с
@@ -858,14 +901,108 @@ export class PluginHost {
       };
     }
     if (action === 'ask') {
+      // ADR-090 п. 9: подтверждение установки (content-hash, срок 24 ч)
+      // выдано при постановке бандла в карантин и **учитывается здесь**:
+      // без действующего подтверждения плагин с вердиктом `caution`
+      // активировать нельзя.
+      const approval = await this._checkApproval(descriptor, actualContentHash, scan.verdict);
+      if (approval.ok) return { ok: true };
       return {
         ok: false,
         reason: 'plugin.approval_required',
+        message: approval.message,
+      };
+    }
+    return { ok: true };
+  }
+
+  /**
+   * Проверка подтверждения установки (ADR-090 п. 9) для вердикта `caution`.
+   *
+   * Подтверждение привязано к **content-hash** бандла и живёт 24 ч, поэтому
+   * действительно только для того содержимого, которое было одобрено:
+   * подменённый бандл под старым подтверждением не проходит (хеш не совпал).
+   *
+   * Правила (fail-closed — любой сомнительный случай → отказ):
+   * - хранилище подтверждений не подключено → подтверждения нет;
+   * - подтверждения нет → подтверждения нет;
+   * - срок истёк (`isPluginApprovalExpired`) → недействительно;
+   * - фактический content-hash неизвестен → сверять нечего → недействительно;
+   * - content-hash подтверждения ≠ фактического → недействительно.
+   */
+  private async _checkApproval(
+    descriptor: PluginActivationDescriptor,
+    actualContentHash: string | undefined,
+    verdict: PluginScanVerdict,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    const plugin = descriptor.name;
+    const version = descriptor.version;
+    const base =
+      `Install-policy: вердикт сканера «${verdict}» для плагина «${plugin}@${version}» — `;
+
+    if (!this._approvals) {
+      // Хранилище не подключено — поведение прежнее: подтверждение не спросить.
+      return {
+        ok: false,
         message:
-          `Install-policy: вердикт сканера «${scan.verdict}» для плагина — ` +
+          `Install-policy: вердикт сканера «${verdict}» для плагина — ` +
           'требуется явное подтверждение владельца (решение не принято автоматически).',
       };
     }
+
+    let approval: PluginApprovalRecord | null;
+    try {
+      approval = await this._approvals.get(plugin, version);
+    } catch (err) {
+      // Порча файла подтверждений — не «подтверждения нет», но и не «есть»:
+      // fail-closed, активация ждёт нового подтверждения.
+      return {
+        ok: false,
+        message:
+          base +
+          'не удалось прочитать подтверждение установки: ' +
+          `${err instanceof Error ? err.message : String(err)} — требуется явное подтверждение владельца.`,
+      };
+    }
+
+    if (!approval) {
+      return {
+        ok: false,
+        message:
+          base +
+          'подтверждение установки не выдано — требуется явное подтверждение владельца.',
+      };
+    }
+
+    if (isPluginApprovalExpired(approval, this._now())) {
+      return {
+        ok: false,
+        message:
+          base +
+          `подтверждение истекло (выдано ${approval.approvedAt}, срок ${PLUGIN_APPROVAL_TTL_HOURS} ч) — ` +
+          'требуется новое подтверждение владельца.',
+      };
+    }
+
+    if (!actualContentHash) {
+      return {
+        ok: false,
+        message:
+          base +
+          'невозможно сверить content-hash бандла с подтверждением — требуется явное подтверждение владельца.',
+      };
+    }
+
+    if (approval.contentHash !== actualContentHash) {
+      return {
+        ok: false,
+        message:
+          base +
+          'подтверждение относится к другому содержимому (content-hash не совпал) — ' +
+          'требуется новое подтверждение владельца.',
+      };
+    }
+
     return { ok: true };
   }
 

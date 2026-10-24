@@ -27,6 +27,8 @@ import { pluginsConfigSchema, ToolCapability } from '@itphx/synth-shared';
 
 import { MemoryPluginAuditRepository } from '../../storage/memory/plugin-audit.js';
 import { PluginHost } from './plugin-host.js';
+import { buildPluginApproval, MemoryPluginApprovalStore } from './approval.js';
+import type { PluginApprovalStore } from './approval.js';
 import type {
   PluginActivationDescriptor,
   PluginDisposer,
@@ -375,6 +377,126 @@ describe('PluginHost: Ф2 — скан и install-policy', () => {
     expect(scans[0]!.scanFindings).toBe(1);
     expect(scans[0]!.contentHash).toBe('a'.repeat(64));
     expect(scans[0]!.trustLevel).toBe('trusted');
+  });
+});
+
+describe('PluginHost: Ф2 — подтверждение установки на активации (ADR-090 п. 9)', () => {
+  /** Файлы бандла — их content-hash и есть одобренное содержимое. */
+  const files = { 'dist/index.js': 'console.log(1);' };
+  /** Content-hash бандла (тот же расчёт, что у шага integrity). */
+  const contentHash = computePluginContentHash(files);
+  /** Момент «сейчас» для часов хоста (срок подтверждения — 24 ч). */
+  const now = '2026-10-24T12:00:00.000Z';
+
+  /**
+   * Хост с вердиктом скана `caution` и (опционально) хранилищем подтверждений.
+   *
+   * Исполнение кода включено (`executionEnabled: true`) — иначе активация
+   * остановилась бы на шаге `import` и дошла бы только до `facade`.
+   */
+  function makeCautionHost(
+    approvals?: PluginApprovalStore,
+    over: Partial<ConstructorParameters<typeof PluginHost>[0]> = {},
+  ): { host: PluginHost; audit: MemoryPluginAuditRepository } {
+    return makeHost({
+      config: config({ executionEnabled: true }),
+      scan: async () => ({ verdict: 'caution', performed: true, findings: [] }),
+      loader: async () => ({ apply: () => undefined }),
+      ...(approvals ? { approvals } : {}),
+      now: () => now,
+      ...over,
+    });
+  }
+
+  /** Запись подтверждения (content-hash, кто выдал, когда). */
+  async function saveApproval(
+    store: PluginApprovalStore,
+    over: { contentHash?: string; approvedAt?: string } = {},
+  ): Promise<void> {
+    await store.save(
+      buildPluginApproval({
+        name: 'demo-plugin',
+        version: '1.0.0',
+        contentHash: over.contentHash ?? contentHash,
+        approvedBy: 'admin',
+        approvedAt: over.approvedAt ?? '2026-10-24T10:00:00.000Z',
+      }),
+    );
+  }
+
+  it('caution + действующее подтверждение с тем же content-hash → активация проходит', async () => {
+    const approvals = new MemoryPluginApprovalStore();
+    await saveApproval(approvals);
+    const { host } = makeCautionHost(approvals);
+
+    const result = await host.activate(descriptor({ files, contentHash }));
+    expect(result.outcome).toBe('activated');
+    expect(host.isActive('demo-plugin')).toBe(true);
+  });
+
+  it('caution + подтверждение с другим content-hash → plugin.approval_required', async () => {
+    const approvals = new MemoryPluginApprovalStore();
+    await saveApproval(approvals, { contentHash: 'b'.repeat(64) });
+    const { host } = makeCautionHost(approvals);
+
+    const result = await host.activate(descriptor({ files, contentHash }));
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.approval_required');
+    expect(result.step).toBe('trust');
+    expect(result.message).toContain('другому содержимому');
+  });
+
+  it('caution + просроченное подтверждение (> 24 ч) → plugin.approval_required', async () => {
+    const approvals = new MemoryPluginApprovalStore();
+    await saveApproval(approvals, { approvedAt: '2026-10-20T10:00:00.000Z' });
+    const { host } = makeCautionHost(approvals);
+
+    const result = await host.activate(descriptor({ files, contentHash }));
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.approval_required');
+    expect(result.message).toContain('истекло');
+  });
+
+  it('caution + подтверждения нет (хранилище пустое) → plugin.approval_required', async () => {
+    const approvals = new MemoryPluginApprovalStore();
+    const { host } = makeCautionHost(approvals);
+
+    const result = await host.activate(descriptor({ files, contentHash }));
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.approval_required');
+    expect(result.message).toContain('не выдано');
+  });
+
+  it('без хранилища подтверждений — прежнее поведение (plugin.approval_required)', async () => {
+    const { host } = makeCautionHost();
+
+    const result = await host.activate(descriptor({ files, contentHash }));
+    expect(result.outcome).toBe('rejected');
+    expect(result.reason).toBe('plugin.approval_required');
+    expect(result.step).toBe('trust');
+    expect(result.message).toContain('явное подтверждение владельца');
+  });
+
+  it('trust-floor по-прежнему проверяется до подтверждения', async () => {
+    const approvals = new MemoryPluginApprovalStore();
+    await saveApproval(approvals);
+    const { host } = makeCautionHost(approvals);
+
+    const result = await host.activate(
+      descriptor({ files, contentHash, trustLevel: 'community' }),
+    );
+    expect(result.reason).toBe('plugin.trust_below_floor');
+  });
+
+  it('вердикт dangerous по-прежнему блокируется (подтверждение не помогает)', async () => {
+    const approvals = new MemoryPluginApprovalStore();
+    await saveApproval(approvals);
+    const { host } = makeCautionHost(approvals, {
+      scan: async () => ({ verdict: 'dangerous', performed: true, findings: [] }),
+    });
+
+    const result = await host.activate(descriptor({ files, contentHash }));
+    expect(result.reason).toBe('plugin.scan_rejected');
   });
 });
 
