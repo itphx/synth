@@ -842,7 +842,10 @@
   иначе шаг integrity отклонит плагин) → `host.activate`; уже активные пропускаются; **никогда не бросает**,
   сбой одного плагина не мешает остальным; `executionEnabled=false` → `[]`. `list()` — установленные +
   `active`/`mode` (карантин не входит); `activate(name)`/`deactivate(name)` — по lock без броска
-  (`plugin.not_found`/`plugin.not_active`); `dispose()` — деактивация в обратном порядке.
+  (`plugin.not_found`/`plugin.not_active`); `listAudit(opts)` — **чтение журнала аудита** через порт
+  `pluginAudit` (записи «свежие первыми», фильтры `plugin`/`action`/`outcome`, `limit`; чтение не
+  создаёт записей) — его отдаёт `GET /api/v2/plugins/audit`; `dispose()` — деактивация в обратном
+  порядке.
   `OrchestratorOptions.promptBlocks` прокидывается в `SystemPromptComposer` — **один** реестр на инстанс
   (до Ф5б-1 композер создавал собственный, и блоки плагинов в промпт не попадали).
 - `engine/plugins/installer.ts` — **Ф5а: `PluginInstaller`**, сервис установки/подтверждения/снятия
@@ -912,7 +915,9 @@
   `main.ts` **и** `packages/synth/src/cli.ts` (subpath-экспорт `./cli/plugin-commands.js` — точный путь,
   wildcard не резолвится TS).
 - `server/routes/plugins.ts` — **Ф5б-2: HTTP-контур плагинов**. `createPluginsRoutes(auth, deps, opts)`:
-  `GET /`, `GET /:name` (манифест + `PLUGIN_INTEGRITY.json` — best-effort, порча не даёт 500),
+  `GET /`, `GET /audit` (**журнал действий плагинов**: `{entries}` — хвост, `limit` (дефолт 50,
+  максимум 500) и фильтр `plugin`; маршрут объявлен **до** `/:name`; guard — `readGuard`, чтение
+  не создаёт записей), `GET /:name` (манифест + `PLUGIN_INTEGRITY.json` — best-effort, порча не даёт 500),
   `POST /install` (`201`/`202`/`400`/`403`/`409`/`502`; тело `{source?, path?, name?, version?, url?,
   sha256?, trustLevel?}` — вид источника выводится из полей, старое `{path}` = `dir`; метка `source` в
   lock — результат резолвинга; `plugin.source_unavailable` → `400` локально / `502` сетево),
@@ -1220,7 +1225,8 @@
   `MaintenanceAuditStore` (`audit/maintenance.jsonl`, append-only аудит-журнал обслуживания, ADR-092);
   `FilePluginAuditStore` (`audit/plugins.jsonl`, append-only журнал аудита плагинов, ADR-090 —
   порт `PluginAuditRepository`, **отдельный**: `SECURITY_AUDIT_SCOPES` не расширяется; append под
-  `AsyncLock`, `clear` атомарно tmp→rename), `MemoryPluginAuditRepository`
+  `AsyncLock`, `clear` атомарно tmp→rename; **чтение** — `list(opts)`: записи «свежие первыми»,
+  фильтры `plugin`/`action`/`outcome`, `limit` — последние N), `MemoryPluginAuditRepository`
   (`storage/memory/plugin-audit.ts`), PostgreSQL — `packages/storage-postgres/src/ports/plugin-audit.ts`
   (таблица `plugin_audit`, миграция `006-plugin-audit.ts`); контрактный suite —
   `storage/contract/plugin-audit-repository.contract.ts` (file/memory/PG; прогон на живой БД —

@@ -270,7 +270,9 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - ADR-090: **журнал аудита плагинов** — `types/plugin-audit.ts` (re-export из `types`):
   `PluginAuditEntry` (`id` `pa_<uuid>`/`ts`/`actor`/`scope: 'plugin'`/`action`/`plugin`/`version`/
   `trustLevel?`/`scanVerdict?`/`scanFindings?`/`scanPerformed?`/`contentHash?`/`mode?`/`outcome`/
-  `reason?`/`source?`) и перечни `PLUGIN_AUDIT_ACTIONS` (`install`/`activate`/`deactivate`/`uninstall`/
+  `reason?`/`source?`) — запись журнала **читается** через порт `PluginAuditRepository.list()`
+  (хвост, фильтр по `plugin`/`action`/`outcome`, `limit`) и отдаётся как `GET /api/v2/plugins/audit`
+  (`{entries: [...]}`; тип ответа в UI объявлен локально — `lib/api/plugins.ts`), и перечни `PLUGIN_AUDIT_ACTIONS` (`install`/`activate`/`deactivate`/`uninstall`/
   `scan`/`filter` — `filter` добавлено Ф3б: события решений фильтров LLM-вызовов, `install`/`uninstall` —
   Ф5а: установка и снятие плагина `PluginInstaller`, `token` — Ф7: выдача server-scoped токена плагину),
   `PLUGIN_AUDIT_OUTCOMES` (`ok`/`rejected`), `PLUGIN_SCAN_VERDICTS` (`safe`/`caution`/`dangerous`),

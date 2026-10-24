@@ -1355,6 +1355,7 @@ via `PUT /api/v2/settings/plugins` + an **instance restart**.
 | Method | Path | Build | RBAC (backend / core) | Purpose / req-resp |
 |---|---|---|---|---|
 | GET | `/api/v2/plugins` | both | ADMIN / auth | `{plugins: PluginRuntimeEntry[]}` — the installed lock records plus `active`/`mode`; the quarantine is not part of the list |
+| GET | `/api/v2/plugins/audit` | both | ADMIN / auth | `{entries: PluginAuditEntry[]}` — the **journal of plugin actions** (ADR-090), the tail: `limit` (50 by default, 500 at most) and an optional filter by the plugin name (`plugin`). The entries are "freshest first" (newest → oldest); an entry carries the time (`ts`), the plugin, the action (`action`), the outcome (`outcome`: `ok`/`rejected`), the reason code (`reason`) and the remaining entry fields. Reading **does not** create journal entries |
 | GET | `/api/v2/plugins/:name` | both | ADMIN / auth | `{plugin, manifest?, integrity?}`: the manifest from the installed bundle and `PLUGIN_INTEGRITY.json` (best-effort — a corrupted file does not produce a 500); not in the lock → 404 `plugin.not_found` |
 | POST | `/api/v2/plugins/install` | both | ADMIN or service-key `addons:install` / auth | **Installation from a source** (see "Installation sources" below): `201` — installed, `202` — approval required (`plugin.approval_required`, the bundle is in quarantine), `400` `VALIDATION_ERROR` (body/pin/name) or `plugin.source_unavailable` for a local source, `400` `plugin.manifest_invalid`, `403` `plugin.trust_below_floor`/`plugin.runtime_install_denied`/`plugin.scan_disabled_with_execution`, `409` `plugin.scan_rejected`, `502` `plugin.source_unavailable` for a network source (the registry/URL did not answer). **Managed**: local sources (`dir`/`archive`) are forbidden → `403 LOCAL_INSTALL_DISABLED`; network sources (`npm`/`url`) are allowed |
 | POST | `/api/v2/plugins/:name/approve` | both | **ADMIN** / auth | Approve the quarantine (the `202` installation): the approval is checked (the content hash + the 24-hour window, ADR-090 §9) → the gates are re-run + the integrity is re-checked → `200` installed; `404` `plugin.not_found`, `409` `plugin.scan_rejected`, `409` `plugin.approval_expired` (the approval has expired — 24 h from the moment of issuance), `409` `plugin.approval_stale` (the bundle in the quarantine changed after the approval was issued) |
@@ -1387,6 +1388,26 @@ requirePermission('ADMIN')`); the scope `addons:install` opens the installation/
 the approval. In core (standalone) — a single `requireAuth`. There is no separate revocation API: the
 approval stops applying when the hash stops matching (`plugin.approval_stale`) or the window
 expires.
+
+**The plugin action journal (`GET /plugins/audit`).** The journal is **append-only**: it is written
+by the `PluginAuditRepository` port (`{dataDir}/audit/plugins.jsonl` in the file storage, the
+`plugin_audit` table in PostgreSQL). The entries describe the extension lifecycle: `install`,
+`activate`, `deactivate`, `rollback`, `uninstall`, `scan`, `filter`, `token`.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `limit` | number | 50 | how many **latest** entries to return (500 at most; a non-number or `<= 0` means the default) |
+| `plugin` | string | — | filter by the plugin name (empty — all plugins) |
+
+The answer is `{entries: PluginAuditEntry[]}`: the entries are "freshest first" (newest → oldest).
+Entry fields: `id`, `ts` (ISO-8601), `actor`, `action`, `plugin`, `version`, `outcome`
+(`ok`/`rejected`), `reason?` (the machine-readable refusal code — `plugin.*`/`plugin_filter.*`),
+plus, when filled in, `trustLevel`, `scanVerdict`, `scanFindings`, `scanPerformed`, `contentHash`,
+`mode`, `source`.
+
+The rights are the same as for reading the plugin registry: **ADMIN** in managed, `requireAuth` in
+core. Reading the journal is **not an action on a plugin**: no entry is created while reading. The UI
+shows the same journal in "Plugins" → "Plugin journal".
 
 **Installation sources (`POST /plugins/install`).** The body:
 `{source?: 'dir'|'archive'|'npm'|'url', path?, name?, version?, url?, sha256?, trustLevel?}`.

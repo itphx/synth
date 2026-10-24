@@ -618,6 +618,89 @@ describe('Plugins API — жизненный цикл (ADR-090 Ф5б-2)', () => 
   });
 });
 
+describe('Plugins API — журнал действий плагинов (ADR-090)', () => {
+  it('GET /plugins/audit: пусто → {entries: []}; записи журнала — «свежие первыми»', async () => {
+    const { app } = await makeStand();
+
+    const empty = await app.request('/api/v2/plugins/audit');
+    expect(empty.status).toBe(200);
+    expect(await empty.json()).toEqual({ entries: [] });
+
+    // Установка пишет в журнал (действие `install`).
+    const bundle = await makeBundle();
+    expect((await jsonReq(app, 'POST', '/api/v2/plugins/install', { path: bundle })).status).toBe(201);
+
+    const res = await app.request('/api/v2/plugins/audit');
+    const body = (await res.json()) as {
+      entries: Array<{
+        id: string;
+        action: string;
+        plugin: string;
+        outcome: string;
+        ts: string;
+        reason?: string;
+      }>;
+    };
+    expect(body.entries.length).toBeGreaterThanOrEqual(1);
+    const last = body.entries[0]!;
+    expect(last.action).toBe('install');
+    expect(last.plugin).toBe('demo-plugin');
+    expect(last.outcome).toBe('ok');
+    expect(last.ts).toBeTruthy();
+  });
+
+  it('GET /plugins/audit: фильтр по имени плагина и limit (хвост журнала)', async () => {
+    const { app } = await makeStand();
+
+    const bundle = await makeBundle();
+    await jsonReq(app, 'POST', '/api/v2/plugins/install', { path: bundle });
+    await jsonReq(app, 'POST', '/api/v2/plugins/demo-plugin/enable');
+
+    // Фильтр по имени — только записи этого плагина.
+    const filtered = (await (
+      await app.request('/api/v2/plugins/audit?plugin=demo-plugin')
+    ).json()) as { entries: Array<{ plugin: string }> };
+    expect(filtered.entries.length).toBeGreaterThanOrEqual(2);
+    expect(filtered.entries.every((entry) => entry.plugin === 'demo-plugin')).toBe(true);
+
+    // Чужое имя — пусто.
+    const other = (await (
+      await app.request('/api/v2/plugins/audit?plugin=absent-plugin')
+    ).json()) as { entries: unknown[] };
+    expect(other.entries).toEqual([]);
+
+    // limit — последние N записей (свежие первыми).
+    const limited = (await (
+      await app.request('/api/v2/plugins/audit?limit=1')
+    ).json()) as { entries: Array<{ action: string }> };
+    expect(limited.entries).toHaveLength(1);
+    expect(limited.entries[0]!.action).toBe('activate');
+
+    // limit больше предела — журнал целиком (предел 500, записей мало).
+    const huge = (await (
+      await app.request('/api/v2/plugins/audit?limit=100000')
+    ).json()) as { entries: unknown[] };
+    expect(huge.entries.length).toBeGreaterThan(limited.entries.length);
+    expect(huge.entries.length).toBeLessThanOrEqual(500);
+  });
+
+  it('GET /plugins/audit: чтение не создаёт записи в журнале', async () => {
+    const { app } = await makeStand();
+    const bundle = await makeBundle();
+    await jsonReq(app, 'POST', '/api/v2/plugins/install', { path: bundle });
+
+    const before = (await (await app.request('/api/v2/plugins/audit')).json()) as {
+      entries: unknown[];
+    };
+    await app.request('/api/v2/plugins/audit');
+    await app.request('/api/v2/plugins/audit?limit=10&plugin=demo-plugin');
+    const after = (await (await app.request('/api/v2/plugins/audit')).json()) as {
+      entries: unknown[];
+    };
+    expect(after.entries).toHaveLength(before.entries.length);
+  });
+});
+
 describe('Plugins API — таблица причин → HTTP', () => {
   it('исчерпывающая и без «немого» 2xx для отказов', () => {
     // Каждая причина из журнала аудита имеет код ответа; `approval_required` —

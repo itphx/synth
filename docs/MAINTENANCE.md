@@ -1313,6 +1313,7 @@ synth plugin rollback synth-plugin-memory              # обратно — ещ
 | Действие | Запрос |
 |---|---|
 | Список | `GET /api/v2/plugins` |
+| Журнал действий плагинов | `GET /api/v2/plugins/audit` (`limit` — по умолчанию 50, максимум 500; `plugin` — фильтр по имени) → `{entries: [...]}` |
 | Детали (манифест, integrity) | `GET /api/v2/plugins/:name` |
 | Установка из каталога (локально; только standalone) | `POST /api/v2/plugins/install` `{path}` |
 | Установка из архива (локально; только standalone) | `POST /api/v2/plugins/install` `{source:'archive', path}` |
@@ -1336,6 +1337,12 @@ RBAC managed: чтение и настройки — `ADMIN`; установка
 (`path`/архив) в managed запрещены (`403 LOCAL_INSTALL_DISABLED`), сетевые (`npm`/`url`) разрешены.
 Отказ источника: `400` (локальный) / `502` (сетевой) `plugin.source_unavailable`. Спецификация —
 [API_V2.md](./API_V2.md) §5.36.
+
+**Журнал действий плагинов** (append-only: `{dataDir}/audit/plugins.jsonl`, в PostgreSQL — таблица
+`plugin_audit`) читается в UI: **Настройки → «Плагины» → блок «Журнал плагинов»** — время,
+плагин, действие, итог (`ok`/`rejected`) и код причины отказа, кнопка «Обновить». То же отдаёт
+`GET /api/v2/plugins/audit` (хвост журнала). Чтение журнала — **не действие над плагином**: записи
+при чтении не создаются, состояние плагинов не меняется.
 
 ### Удалённый плагин (`out-of-process`)
 
@@ -1373,7 +1380,8 @@ admin-отключению), `mcp`/`runtime` зарезервированы. `is
 более ранней реплики.
 
 Отказ фильтра виден в журнале плагинов (`{dataDir}/audit/plugins.jsonl`, действие `filter`, код
-`plugin_filter.denied`) и в аудите шлюза (`{dataDir}/audit/llm-gateway.jsonl`, событие
+`plugin_filter.denied`; в UI — блок «Журнал плагинов», по API — `GET /api/v2/plugins/audit`) и в
+аудите шлюза (`{dataDir}/audit/llm-gateway.jsonl`, событие
 `plugin_filter`); пользователю возвращается «LLM request denied by an extension filter (…)».
 
 ### Плагины из образа (managed deploy-time, Ф5в)

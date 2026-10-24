@@ -2,6 +2,7 @@
 //
 // HTTP-контур `packages/core/src/server/routes/plugins.ts`:
 //   GET    /plugins                — установленные + статус активации;
+//   GET    /plugins/audit          — журнал действий плагинов (хвост);
 //   GET    /plugins/:name          — запись + манифест + PLUGIN_INTEGRITY.json;
 //   POST   /plugins/install        — установка (201) либо карантин (202);
 //   POST   /plugins/:name/approve  — подтверждение карантина;
@@ -79,6 +80,75 @@ export interface PluginRuntimeEntry {
 /** Ответ `GET /plugins`. */
 export interface PluginsListResponse {
   plugins: PluginRuntimeEntry[]
+}
+
+/**
+ * Вид операции в журнале действий плагинов (ADR-090).
+ *
+ * Порядок — жизненный цикл расширения: установка → активация → деактивация →
+ * откат → снятие, затем диагностические `scan`/`filter` и выдача `token`.
+ */
+export type PluginAuditAction =
+  | 'install'
+  | 'activate'
+  | 'deactivate'
+  | 'rollback'
+  | 'uninstall'
+  | 'scan'
+  | 'filter'
+  | 'token'
+
+/** Итог операции журнала плагинов: `ok` — состояние достигнуто, `rejected` — отказ. */
+export type PluginAuditOutcome = 'ok' | 'rejected'
+
+/**
+ * Запись журнала действий плагинов (`GET /plugins/audit`).
+ *
+ * Журнал append-only; по времени — ISO-8601, записи отдаются «свежие
+ * первыми». `reason` — машиночитаемый код отказа (`plugin.*`,
+ * `plugin_filter.*`), он же объясняет, **почему** плагин не прошёл гейт.
+ */
+export interface PluginAuditEntry {
+  id: string
+  /** Метка события, ISO-8601. */
+  ts: string
+  /** Инициатор операции (`userId`, `cli`, `startup`, `system`). */
+  actor: string
+  action: PluginAuditAction
+  /** Имя плагина. */
+  plugin: string
+  /** Версия плагина. */
+  version: string
+  outcome: PluginAuditOutcome
+  /** Код причины (машиночитаемый). */
+  reason?: string
+  /** Фактический уровень доверия. */
+  trustLevel?: PluginTrustLevel
+  /** Вердикт статического сканера. */
+  scanVerdict?: PluginScanVerdict
+  /** Число находок сканера. */
+  scanFindings?: number
+  /** Выполнялся ли скан. */
+  scanPerformed?: boolean
+  /** Content-hash бандла. */
+  contentHash?: string
+  /** Режим исполнения (`inline`/`remote`/`both`). */
+  mode?: PluginExecutionMode
+  /** Источник установки. */
+  source?: string
+}
+
+/** Ответ `GET /plugins/audit` — хвост журнала (последние записи). */
+export interface PluginAuditListResponse {
+  entries: PluginAuditEntry[]
+}
+
+/** Параметры выборки журнала плагинов (`GET /plugins/audit`). */
+export interface PluginAuditListOptions {
+  /** Сколько последних записей (по умолчанию 50, максимум 500 — на сервере). */
+  limit?: number
+  /** Фильтр по имени плагина. */
+  plugin?: string
 }
 
 /** Ответ `GET /plugins/:name` — запись lock, манифест и служебный файл целостности. */
@@ -215,6 +285,24 @@ export const pluginsApi = {
   async listPlugins(): Promise<PluginRuntimeEntry[]> {
     const response = await fetchJSON<PluginsListResponse>(`${BASE_URL}/plugins`)
     return response.plugins ?? []
+  },
+
+  /**
+   * GET /plugins/audit — журнал действий плагинов (ADR-090).
+   *
+   * Журнал append-only и может быть большим, поэтому сервер отдаёт **хвост**:
+   * `limit` (по умолчанию 50, максимум 500) и необязательный фильтр по имени
+   * плагина (`plugin`). Записи «свежие первыми».
+   */
+  async listPluginAudit(opts: PluginAuditListOptions = {}): Promise<PluginAuditEntry[]> {
+    const params = new URLSearchParams()
+    if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+    if (opts.plugin) params.set('plugin', opts.plugin)
+    const query = params.toString()
+    const response = await fetchJSON<PluginAuditListResponse>(
+      `${BASE_URL}/plugins/audit${query ? `?${query}` : ''}`,
+    )
+    return response.entries ?? []
   },
 
   /** GET /plugins/:name — деталь: запись lock, манифест, целостность. */

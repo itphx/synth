@@ -26,6 +26,7 @@ vi.hoisted(() => {
 
 const mocks = vi.hoisted(() => ({
   listPlugins: vi.fn(),
+  listPluginAudit: vi.fn(),
   getPlugin: vi.fn(),
   installPlugin: vi.fn(),
   approvePlugin: vi.fn(),
@@ -90,6 +91,26 @@ const POLICY_DEFAULTS = {
   scan: 'enabled' as const,
   promptBlockMaxChars: 4000,
   llmFilterTimeoutMs: 1000,
+}
+
+/** Запись журнала действий плагинов (ADR-090). */
+const AUDIT_ENTRY = {
+  id: 'pa_1',
+  ts: '2026-10-24T10:00:00.000Z',
+  actor: 'admin',
+  action: 'activate' as const,
+  plugin: 'demo-plugin',
+  version: '1.2.3',
+  outcome: 'ok' as const,
+}
+
+/** Запись отказа: причина — машиночитаемый код гейта. */
+const AUDIT_REJECTED_ENTRY = {
+  ...AUDIT_ENTRY,
+  id: 'pa_2',
+  action: 'activate' as const,
+  outcome: 'rejected' as const,
+  reason: 'plugin.trust_below_floor',
 }
 
 const SETTINGS = {
@@ -161,6 +182,7 @@ async function renderSettings(roles: string[] = ['ADMIN']): Promise<HTMLElement>
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.listPlugins.mockResolvedValue([])
+  mocks.listPluginAudit.mockResolvedValue([])
   mocks.getPluginsSettings.mockResolvedValue(SETTINGS)
   mocks.enablePlugin.mockResolvedValue({ activation: { outcome: 'activated' } })
   mocks.disablePlugin.mockResolvedValue({ deactivation: { outcome: 'deactivated' } })
@@ -417,6 +439,61 @@ describe('PluginsSettings — установка', () => {
 
     expect(mocks.confirm).toHaveBeenCalled()
     expect(mocks.approvePlugin).toHaveBeenCalledWith('quarantined-plugin')
+  })
+})
+
+describe('PluginsSettings — журнал действий плагинов', () => {
+  it('показывает записи журнала: время, плагин, действие, итог и причину', async () => {
+    mocks.listPluginAudit.mockResolvedValue([AUDIT_REJECTED_ENTRY, AUDIT_ENTRY])
+    const container = await renderSettings()
+
+    expect(mocks.listPluginAudit).toHaveBeenCalled()
+    expect(byTestId(container, 'plugins-audit-list')).toBeTruthy()
+    expect(byTestId(container, 'plugins-audit-empty')).toBeNull()
+
+    const item = byTestId(container, 'plugins-audit-item-pa_2')
+    expect(item).toBeTruthy()
+    expect(item?.textContent).toContain('demo-plugin')
+    expect(byTestId(container, 'plugins-audit-action-pa_2')?.textContent).toBe('activate')
+    expect(byTestId(container, 'plugins-audit-outcome-pa_2')?.textContent).toBe('rejected')
+    expect(byTestId(container, 'plugins-audit-reason-pa_2')?.textContent).toBe(
+      'plugin.trust_below_floor',
+    )
+    // Запись без причины — бейдж причины не рисуется.
+    expect(byTestId(container, 'plugins-audit-outcome-pa_1')?.textContent).toBe('succeeded')
+    expect(byTestId(container, 'plugins-audit-reason-pa_1')).toBeNull()
+  })
+
+  it('пустой журнал — пустое состояние', async () => {
+    mocks.listPluginAudit.mockResolvedValue([])
+    const container = await renderSettings()
+
+    expect(byTestId(container, 'plugins-audit-list')).toBeNull()
+    expect(byTestId(container, 'plugins-audit-empty')?.textContent).toBe(
+      'The plugin journal is empty',
+    )
+  })
+
+  it('кнопка «Обновить» перечитывает журнал', async () => {
+    mocks.listPluginAudit.mockResolvedValue([AUDIT_ENTRY])
+    const container = await renderSettings()
+
+    expect(mocks.listPluginAudit.mock.calls.length).toBe(1)
+
+    await clickTestId(container, 'plugins-audit-refresh')
+
+    expect(mocks.listPluginAudit.mock.calls.length).toBe(2)
+  })
+
+  it('ошибка загрузки журнала показывается в секции', async () => {
+    mocks.listPluginAudit.mockRejectedValue(
+      Object.assign(new Error('forbidden'), { status: 403 }),
+    )
+    const container = await renderSettings()
+
+    expect(byTestId(container, 'plugins-audit-error')?.textContent).toBe(
+      'Administrator rights are required to view this section.',
+    )
   })
 })
 

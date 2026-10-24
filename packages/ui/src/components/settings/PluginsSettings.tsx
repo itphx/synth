@@ -22,6 +22,7 @@ import {
 } from '../ui/settings'
 import {
   synthApi,
+  type PluginAuditEntry,
   type PluginInstallInput,
   type PluginInstallSourceKind,
   type PluginRuntimeEntry,
@@ -94,6 +95,17 @@ export function shortHash(hash: string): string {
 }
 
 /**
+ * Цвет бейджа итога операции журнала плагинов.
+ *
+ * `ok` — состояние достигнуто (установка/активация прошли); `rejected` —
+ * отказ по гейту (тогда в записи есть код причины).
+ */
+const AUDIT_OUTCOME_BADGE_CLASS: Record<'ok' | 'rejected', string> = {
+  ok: 'bg-status-success/15 text-status-success',
+  rejected: 'bg-destructive/15 text-destructive',
+}
+
+/**
  * Вид источника установки по строке ввода (тот же вывод, что у сервера):
  * `https://…` → `url`; `.tgz`/`.tar.gz` → `archive`; npm-имя → `npm`; иначе `dir`.
  */
@@ -159,6 +171,11 @@ export function PluginsSettings() {
   /** Известные ступени отката (из ответов `update`): имя → прежняя версия. */
   const [previousVersions, setPreviousVersions] = useState<Record<string, string>>({})
 
+  /** Журнал действий плагинов (ADR-090): хвост, «свежие первыми». */
+  const [audit, setAudit] = useState<PluginAuditEntry[] | null>(null)
+  const [auditLoading, setAuditLoading] = useState(true)
+  const [auditError, setAuditError] = useState<string | null>(null)
+
   const [installRef, setInstallRef] = useState('')
   const [installSha, setInstallSha] = useState('')
   const [installTrust, setInstallTrust] = useState<PluginTrustLevel>('community')
@@ -207,6 +224,24 @@ export function PluginsSettings() {
     }
   }, [describeError, t])
 
+  /**
+   * Журнал действий плагинов (ADR-090): последние записи — «свежие первыми».
+   *
+   * Чтение журнала не меняет состояние плагинов, поэтому блок обновляется
+   * кнопкой «Обновить», а не по событиям.
+   */
+  const loadAudit = useCallback(async () => {
+    setAuditLoading(true)
+    setAuditError(null)
+    try {
+      setAudit(await synthApi.listPluginAudit())
+    } catch (err) {
+      setAuditError(describeError(err, t('plugins.audit.loadError', { error: t('common.error') })))
+    } finally {
+      setAuditLoading(false)
+    }
+  }, [describeError, t])
+
   useEffect(() => {
     void loadPlugins()
   }, [loadPlugins])
@@ -214,6 +249,10 @@ export function PluginsSettings() {
   useEffect(() => {
     void loadSettings()
   }, [loadSettings])
+
+  useEffect(() => {
+    void loadAudit()
+  }, [loadAudit])
 
   /** Эффективная политика: дефолты config.yaml поверх runtime-override. */
   const effectivePolicy = useMemo<PluginsPolicyValues | null>(
@@ -788,7 +827,93 @@ export function PluginsSettings() {
         )}
       </SettingsSection>
 
-      {/* 2. Установка: источник + доверие; в managed локальные источники запрещены. */}
+      {/* 2. Журнал действий плагинов: что установлено/отклонено и почему (ADR-090). */}
+      <SettingsSection
+        id="plugins-audit"
+        title={t('plugins.audit.title')}
+        description={t('plugins.audit.description')}
+        tooltip={t('settings.help.plugins.section.plugins-audit')}
+      >
+        {auditError && (
+          <div
+            role="alert"
+            data-testid="plugins-audit-error"
+            className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive break-words"
+          >
+            {auditError}
+          </div>
+        )}
+
+        {auditLoading && !audit && (
+          <div className="py-3 text-center text-xs text-muted-foreground">{t('common.loading')}</div>
+        )}
+
+        {audit && audit.length === 0 && (
+          <div
+            className="flex flex-col items-center gap-1 py-4 text-center text-muted-foreground"
+            data-testid="plugins-audit-empty"
+          >
+            <Icon name="file-list" className="size-6 opacity-40" />
+            <p className="text-xs">{t('plugins.audit.empty')}</p>
+          </div>
+        )}
+
+        {audit && audit.length > 0 && (
+          <ul className="space-y-1.5 min-w-0" data-testid="plugins-audit-list">
+            {audit.map((entry) => (
+              <li
+                key={entry.id}
+                data-testid={`plugins-audit-item-${entry.id}`}
+                className="space-y-1 rounded-lg border border-border/60 bg-surface-inset p-2.5 min-w-0"
+              >
+                <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                  <span className="text-sm font-medium text-foreground break-words min-w-0">
+                    {entry.plugin}
+                  </span>
+                  <span
+                    data-testid={`plugins-audit-action-${entry.id}`}
+                    className={cn(BADGE, 'bg-muted text-muted-foreground font-mono')}
+                  >
+                    {entry.action}
+                  </span>
+                  <span
+                    data-testid={`plugins-audit-outcome-${entry.id}`}
+                    className={cn(BADGE, AUDIT_OUTCOME_BADGE_CLASS[entry.outcome])}
+                  >
+                    {t(`plugins.audit.outcome.${entry.outcome}`)}
+                  </span>
+                  <span className="text-xs text-muted-foreground break-words min-w-0">
+                    {formatDateTime(entry.ts, locale)}
+                  </span>
+                </div>
+                {entry.reason && (
+                  <p
+                    data-testid={`plugins-audit-reason-${entry.id}`}
+                    className="text-xs text-muted-foreground font-mono break-words"
+                  >
+                    {entry.reason}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void loadAudit()}
+            disabled={auditLoading}
+            data-testid="plugins-audit-refresh"
+          >
+            <Icon name="refresh" className={cn('size-3.5', auditLoading && 'animate-spin')} />
+            {t('plugins.audit.refresh')}
+          </Button>
+        </div>
+      </SettingsSection>
+
+      {/* 3. Установка: источник + доверие; в managed локальные источники запрещены. */}
       <SettingsSection
         id="plugins-install"
         title={t('plugins.install.title')}
@@ -873,7 +998,7 @@ export function PluginsSettings() {
         )}
       </SettingsSection>
 
-      {/* 3. Политика слоя: ключевые значения и обновление через PUT/DELETE. */}
+      {/* 4. Политика слоя: ключевые значения и обновление через PUT/DELETE. */}
       <SettingsSection
         id="plugins-policy"
         title={t('plugins.settings.title')}

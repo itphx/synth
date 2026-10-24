@@ -111,6 +111,17 @@ export function describePluginAuditRepository(
       expect((await repo.list())[0]!.outcome).toBe('ok');
     });
 
+    it('чтение не создаёт записей (журнал append-only: list — не действие над плагином)', async () => {
+      const { repo } = await make();
+      await repo.append(entry('pa_1'));
+
+      // Несколько чтений подряд (в т.ч. с фильтрами) — журнал не растёт.
+      await repo.list();
+      await repo.list({ plugin: 'demo-plugin' });
+      await repo.list({ action: 'activate', outcome: 'ok', limit: 10 });
+      expect(await repo.list()).toHaveLength(1);
+    });
+
     it('файловая реализация: повреждённая строка не ломает list', async () => {
       const { repo, filePath } = await make();
       if (!filePath) return;
