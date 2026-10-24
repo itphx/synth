@@ -1,8 +1,8 @@
 // memory: домен API v2 (ADR-095) — объект `memoryApi` и его DTO.
 //
-// ADR-107 / PROP-047: портал памяти — read-only просмотр состояния провайдера
-// памяти, фактов и индексов. В этой волне раздел только читает: мутаций
-// (создание/пересборка индекса, отзыв факта) нет.
+// ADR-107 / PROP-047: портал памяти — состояние провайдера памяти, факты и
+// индексы. Чтение (`status`/`facts`/`indexes`) плюс операции с индексами:
+// создание, пересборка и удаление. Отзыв факта в мутации не входит.
 //
 // Типы объявлены локально (как в соседних доменах): тянуть core в браузерный
 // бандл нельзя (см. `packages/ui/AGENTS.md`).
@@ -148,6 +148,23 @@ export interface MemoryIndexListParams {
   state?: MemoryIndexState
 }
 
+/**
+ * Вид источника корпуса, который умеет создавать UI.
+ *
+ * `files` — файлы проекта (нужен `projectId`), `facts` — факты памяти.
+ */
+export type MemoryIndexSourceKind = 'files' | 'facts'
+
+/** Тело создания индекса (`POST /memory/indexes`). */
+export interface CreateMemoryIndexInput {
+  /** Имя индекса (обязательное на сервере). */
+  name?: string
+  /** Источник корпуса: что индексируем и с каким фильтром. */
+  source?: { kind: MemoryIndexSourceKind; filter?: string }
+  /** Проект-владелец индекса (обязателен для `files`). */
+  projectId?: string
+}
+
 /** Размер страницы фактов по умолчанию — как на сервере. */
 export const MEMORY_FACTS_DEFAULT_LIMIT = 50
 
@@ -196,5 +213,34 @@ export const memoryApi = {
   async listMemoryIndexes(params: MemoryIndexListParams = {}): Promise<MemoryIndexList> {
     const query = buildQuery({ projectId: params.projectId, state: params.state })
     return fetchJSON<MemoryIndexList>(`${BASE_URL}/memory/indexes${query}`)
+  },
+
+  /**
+   * POST /memory/indexes — создать индекс (202, сборка идёт в фоне).
+   *
+   * Ошибки сервера: 400 `MEMORY_PROJECT_REQUIRED`/`MEMORY_WORKSPACE_REQUIRED`,
+   * 404 `PROJECT_NOT_FOUND`, 409 `MEMORY_PROVIDER_UNAVAILABLE`,
+   * 422 `MEMORY_INDEX_FAILED`.
+   */
+  async createMemoryIndex(input: CreateMemoryIndexInput): Promise<{ index: MemoryIndex }> {
+    return fetchJSON<{ index: MemoryIndex }>(`${BASE_URL}/memory/indexes`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  /** POST /memory/indexes/:id/rebuild — пересобрать индекс (202). */
+  async rebuildMemoryIndex(id: string, opts?: { force?: boolean }): Promise<{ index: MemoryIndex }> {
+    return fetchJSON<{ index: MemoryIndex }>(
+      `${BASE_URL}/memory/indexes/${encodeURIComponent(id)}/rebuild`,
+      { method: 'POST', body: JSON.stringify(opts ?? {}) },
+    )
+  },
+
+  /** DELETE /memory/indexes/:id — удалить индекс (204, без тела). */
+  async deleteMemoryIndex(id: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/memory/indexes/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
   },
 }

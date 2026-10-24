@@ -305,13 +305,14 @@ export type {
   PluginsSettingsInfo,
   PluginsPolicyPatch,
 } from './plugins'
-// ADR-107 / PROP-047: портал памяти — read-only (состояние, факты, индексы).
+// ADR-107 / PROP-047: портал памяти — состояние, факты, индексы + операции с индексами.
 export type {
   MemoryReadiness,
   MemoryProviderMode,
   MemoryFactStatus,
   MemoryFactStatusFilter,
   MemoryIndexState,
+  MemoryIndexSourceKind,
   MemoryFactProvenance,
   MemoryFact,
   MemoryIndex,
@@ -322,6 +323,7 @@ export type {
   MemoryIndexList,
   MemoryFactListParams,
   MemoryIndexListParams,
+  CreateMemoryIndexInput,
 } from './memory'
 
 export const synthApi = {

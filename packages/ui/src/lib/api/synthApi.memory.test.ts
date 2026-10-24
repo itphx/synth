@@ -3,8 +3,8 @@ import { synthApi } from './synthApi'
 
 /**
  * Домен `memory` (`lib/api/memory.ts`, ADR-107 / PROP-047): портал памяти —
- * read-only просмотр состояния, фактов и индексов. Ценно — пути, дефолты
- * выборки (статус `active`, страница 50) и отсутствие мутаций.
+ * состояние, факты и индексы плюс операции с индексами. Ценно — пути, дефолты
+ * выборки (статус `active`, страница 50), тела мутаций и 204 без тела.
  */
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -99,6 +99,86 @@ describe('memoryApi — портал памяти (ADR-107)', () => {
     await expect(synthApi.getMemoryFact('missing')).rejects.toMatchObject({
       status: 404,
       code: 'MEMORY_FACT_NOT_FOUND',
+    })
+  })
+})
+
+describe('memoryApi — операции с индексами', () => {
+  const index = { id: 'index-1', name: 'project', state: 'building' }
+
+  it('createMemoryIndex: POST /memory/indexes с телом', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ index }, 202))
+
+    await expect(
+      synthApi.createMemoryIndex({
+        name: 'project',
+        source: { kind: 'files' },
+        projectId: 'project-1',
+      }),
+    ).resolves.toEqual({ index })
+
+    expect(urlOf(0)).toBe('/api/v2/memory/indexes')
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({
+      name: 'project',
+      source: { kind: 'files' },
+      projectId: 'project-1',
+    })
+  })
+
+  it('rebuildMemoryIndex: POST /memory/indexes/:id/rebuild, id кодируется', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ index }, 202))
+
+    await synthApi.rebuildMemoryIndex('index 1')
+    expect(urlOf(0)).toBe('/api/v2/memory/indexes/index%201/rebuild')
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({})
+
+    await synthApi.rebuildMemoryIndex('index-1', { force: true })
+    expect(urlOf(1)).toBe('/api/v2/memory/indexes/index-1/rebuild')
+    expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
+      force: true,
+    })
+  })
+
+  it('deleteMemoryIndex: DELETE /memory/indexes/:id — 204 без тела', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(undefined, 204))
+
+    await expect(synthApi.deleteMemoryIndex('index 1')).resolves.toBeUndefined()
+
+    expect(urlOf(0)).toBe('/api/v2/memory/indexes/index%201')
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe('DELETE')
+  })
+
+  it('409 по провайдеру: ошибка несёт status и code', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        { error: { code: 'MEMORY_PROVIDER_UNAVAILABLE', message: 'provider is not active' } },
+        409,
+      ),
+    )
+
+    await expect(synthApi.rebuildMemoryIndex('index-1')).rejects.toMatchObject({
+      status: 409,
+      code: 'MEMORY_PROVIDER_UNAVAILABLE',
+      message: 'provider is not active',
+    })
+  })
+
+  it('422 по сборке: ошибка несёт status и текст сервера', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        { error: { code: 'MEMORY_INDEX_FAILED', message: 'embedding provider is not configured' } },
+        422,
+      ),
+    )
+
+    await expect(synthApi.createMemoryIndex({ name: 'project' })).rejects.toMatchObject({
+      status: 422,
+      code: 'MEMORY_INDEX_FAILED',
+      message: 'embedding provider is not configured',
     })
   })
 })

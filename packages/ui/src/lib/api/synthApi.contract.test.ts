@@ -14,11 +14,11 @@ const EXPECTED_API_METHODS = [
   'cancelSummarization', 'checkEgress', 'checkProxy',
   'checkUpdate', 'claimIdentity', 'clearAudit', 'clearProfilePassword', 'clearProxyPassword', 'clearQueue', 'clearSession',
   'clearWorkspacePolicy', 'cloneGitRepo', 'createAgentSshKey', 'createBackup', 'createDirectory',
-  'createEventBindingKey', 'createEventRoute', 'createOAuthCredential', 'createProject', 'createProjectPipeline', 'createProvider',
+  'createEventBindingKey', 'createEventRoute', 'createMemoryIndex', 'createOAuthCredential', 'createProject', 'createProjectPipeline', 'createProvider',
   'createSchedule', 'createServiceKey', 'createSession', 'createSkill',
   'createSkillBundle', 'createSshKey', 'createTlsMapping', 'createUser', 'createWebhookSubscription',
   'deleteAgent', 'deleteBackup', 'deleteContextFile', 'deleteEntry', 'deleteEventBinding',
-  'deleteEventBindingKey', 'deleteEventRoute', 'deleteMcpRegistryEntry', 'deleteMessage',
+  'deleteEventBindingKey', 'deleteEventRoute', 'deleteMcpRegistryEntry', 'deleteMemoryIndex', 'deleteMessage',
   'deleteModel', 'deleteMyIdentity', 'deleteOAuthCredential', 'deleteProject', 'deleteProjectPipeline', 'deleteProvider',
   'deleteSchedule', 'deleteServiceKey', 'deleteSession', 'deleteSkill',
   'deleteSkillBundle', 'deleteSkillFile', 'deleteSshKey', 'deleteStickyNote',
@@ -51,7 +51,7 @@ const EXPECTED_API_METHODS = [
   'listMemoryFacts', 'listMemoryIndexes',
   'listPipelineRuns', 'listPluginAudit', 'listPlugins', 'listSshKeys', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
   'patchSessionMode', 'pinMessage', 'probeMcpServer', 'publishProject', 'publishProjectPipeline',
-  'putSkillFile', 'readFile', 'refreshOAuthCredential', 'regenerateWebhookSecret', 'registerGitRepo',
+  'putSkillFile', 'readFile', 'rebuildMemoryIndex', 'refreshOAuthCredential', 'regenerateWebhookSecret', 'registerGitRepo',
   'reloadSkills', 'removeCa', 'removeDefaultClient', 'removeGitRepo', 'removePlugin', 'removeProfileCa', 'removeProfileClient', 'removeSessionReference', 'reset', 'resetContextFile',
   'resetDecisionMetrics', 'resetDecisionSettings', 'resetDefaultAgent', 'resetDefaultModel', 'resetDictionary',
   'resetEgressPolicy', 'resetEventsSettings', 'resetGatewayPatterns', 'resetLlmGatewaySettings', 'resetMcpNetworkPolicy',
@@ -75,7 +75,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (327)', () => {
+  it('набор методов совпадает с зафиксированным (330)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

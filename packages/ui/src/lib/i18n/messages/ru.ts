@@ -3328,10 +3328,10 @@ export const dict = {
   'observability.hints.scrape': 'Пример scrape_config для Prometheus:',
   'observability.hints.copy': 'Скопировать конфиг',
 
-  // --- ADR-107 / PROP-047: портал памяти (только чтение) ---
+  // --- ADR-107 / PROP-047: портал памяти (чтение + операции с индексами) ---
   'settings.memory.title': 'Память',
   'settings.memory.description':
-    'Портал плагина памяти (только чтение): готовность провайдера, факты с провенансом и индексы для поиска.',
+    'Портал плагина памяти: готовность провайдера, факты с провенансом, индексы для поиска и операции с индексами.',
   'settings.memory.unavailable':
     'Портал памяти недоступен: сервис памяти не сконфигурирован.',
   'settings.memory.refresh': 'Обновить',
@@ -3415,6 +3415,29 @@ export const dict = {
   'settings.memory.indexes.state.failed': 'ошибка',
   'settings.memory.indexes.volume': '{documents} док. · {chunks} чанков',
   'settings.memory.indexes.error.hint': 'Сборка индекса завершилась ошибкой',
+  'settings.memory.indexes.create': 'Создать индекс',
+  'settings.memory.indexes.createSubmit': 'Создать',
+  'settings.memory.indexes.createCancel': 'Отмена',
+  'settings.memory.indexes.form.name': 'Имя',
+  'settings.memory.indexes.form.namePlaceholder': 'Имя индекса',
+  'settings.memory.indexes.form.nameRequired': 'Укажите имя индекса.',
+  'settings.memory.indexes.form.source': 'Источник',
+  'settings.memory.indexes.form.source.files': 'файлы',
+  'settings.memory.indexes.form.source.facts': 'факты',
+  'settings.memory.indexes.form.filter': 'Фильтр',
+  'settings.memory.indexes.form.filterPlaceholder': 'Glob или предикат (необязательно)',
+  'settings.memory.indexes.form.project': 'Проект',
+  'settings.memory.indexes.form.projectNone': 'Не выбран',
+  'settings.memory.indexes.form.projectRequired': 'Выберите проект для индекса.',
+  'settings.memory.indexes.rebuild': 'Пересобрать',
+  'settings.memory.indexes.remove': 'Удалить',
+  'settings.memory.indexes.removeConfirmTitle': 'Удалить индекс?',
+  'settings.memory.indexes.removeConfirm': 'Индекс «{name}» и его чанки будут удалены.',
+  'settings.memory.indexes.created': 'Индекс «{name}» создан',
+  'settings.memory.indexes.rebuilt': 'Пересборка индекса «{name}» запущена',
+  'settings.memory.indexes.deleted': 'Индекс «{name}» удалён',
+  'settings.memory.indexes.providerUnavailable': 'Плагин памяти не активирован.',
+  'settings.memory.indexes.column.actions': 'Действия',
 
   'sessionCreate.project': 'Проект',
 

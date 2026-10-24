@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
+import { useNotification } from '@/hooks/useNotification'
+import { confirm } from '@/lib/confirm'
 import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/formatDate'
+import { useProjectsStore } from '@/stores/projectsStore'
 import { Button } from '../ui/button'
 import { Icon } from '../icon/Icon'
 import { SelectContent, SelectItem } from '../ui/select'
@@ -16,21 +19,24 @@ import {
   type MemoryFactStatusFilter,
   type MemoryIndex,
   type MemoryIndexList,
+  type MemoryIndexSourceKind,
   type MemoryIndexState,
   type MemoryReadiness,
   type MemoryStatus,
 } from '@/lib/api/synthApi'
 
 /**
- * ADR-107 / PROP-047: админ-раздел «Память» — **read-only** портал плагина
- * памяти: состояние провайдера, факты (с провенансом и версиями) и индексы
- * для поиска.
+ * ADR-107 / PROP-047: админ-раздел «Память» — портал плагина памяти:
+ * состояние провайдера, факты (с провенансом и версиями) и индексы для поиска.
  *
- * Раздел только читает: мутаций (создание/пересборка индекса, отзыв факта)
- * в этой волне нет — правда чтения на сервере, UI лишь показывает данные.
+ * Чтение: состояние провайдера, факты, индексы. Мутации — операции с
+ * индексами: создание, пересборка и удаление (инлайн-форма + кнопки в строках).
+ * Факты остаются read-only (отзыв факта — вне этой волны).
  *
  * Плагин памяти может быть не установлен: тогда портал отвечает 503, а
  * раздел объясняет это понятным текстом (`settings.memory.unavailable`).
+ * Провайдер не активен (`status.provider.active === false`) или сервер ответил
+ * 409 — кнопки мутаций заблокированы, показана подсказка.
  */
 
 /** Общий стиль бейджа статуса (как в соседних админ-разделах). */
@@ -84,6 +90,18 @@ const ALL_STATUSES = 'all'
 /** Размер страницы фактов. */
 const PAGE_LIMIT = 50
 
+/** Виды источника корпуса, которые UI умеет создавать. */
+const INDEX_SOURCE_KINDS: MemoryIndexSourceKind[] = ['files', 'facts']
+
+/** Имя индекса по умолчанию в форме создания. */
+const INDEX_DEFAULT_NAME = 'project'
+
+/** Значение «проект не выбран» в селекте проекта (пустая строка недопустима). */
+const PROJECT_NONE = '__none__'
+
+/** Интервал автообновления статуса, пока индексы собираются (мс). */
+const INDEX_POLL_INTERVAL_MS = 3000
+
 /** Функция перевода UI-словаря. */
 type Translate = (
   key: string,
@@ -112,6 +130,8 @@ function formatConfidence(confidence: number): string {
 
 export function MemorySettings() {
   const { t, locale } = useI18n()
+  const { notify } = useNotification()
+  const projects = useProjectsStore((s) => s.projects)
 
   const [status, setStatus] = useState<MemoryStatus | null>(null)
   const [statusLoading, setStatusLoading] = useState(true)
@@ -126,6 +146,20 @@ export function MemorySettings() {
   const [indexesError, setIndexesError] = useState<string | null>(null)
 
   const [refreshing, setRefreshing] = useState(false)
+
+  // Форма создания индекса (инлайн-форма в блоке «Индексы»).
+  const [formOpen, setFormOpen] = useState(false)
+  const [nameInput, setNameInput] = useState(INDEX_DEFAULT_NAME)
+  const [sourceKind, setSourceKind] = useState<MemoryIndexSourceKind>('files')
+  const [filterInput, setFilterInput] = useState('')
+  const [projectInput, setProjectInput] = useState('')
+  const [formErrors, setFormErrors] = useState<{ name?: string; project?: string }>({})
+
+  // Мутации индексов: занятость (`create` или id индекса), ошибка и флаг
+  // «провайдер памяти недоступен» (409 → кнопки мутаций блокируются).
+  const [busy, setBusy] = useState<string | null>(null)
+  const [mutationError, setMutationError] = useState<string | null>(null)
+  const [providerUnavailable, setProviderUnavailable] = useState(false)
 
   // Фильтры фактов: поле ввода и применённые значения — разные состояния.
   const [queryInput, setQueryInput] = useState('')
@@ -227,6 +261,184 @@ export function MemorySettings() {
   useEffect(() => {
     void loadIndexes()
   }, [loadIndexes])
+
+  /** Есть ли индексы в работе — тогда статус и список нужно опрашивать. */
+  const hasBuildingIndexes = useMemo(
+    () => (indexes?.items ?? []).some((index) => index.state === 'building'),
+    [indexes],
+  )
+
+  /**
+   * Автообновление, пока индексы собираются: один таймер на раздел, снимается
+   * на unmount и как только building-индексы исчезли.
+   */
+  useEffect(() => {
+    if (!hasBuildingIndexes) return
+    const timer = setInterval(() => {
+      void loadStatus()
+      void loadIndexes()
+    }, INDEX_POLL_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [hasBuildingIndexes, loadIndexes, loadStatus])
+
+  /** Провайдер памяти недоступен: активен=false или сервер ответил 409. */
+  const providerInactive = providerUnavailable || (status !== null && !status.provider.active)
+
+  /** Есть ли активная мутация (создание/пересборка/удаление). */
+  const mutating = busy !== null
+
+  /** Проекты для селекта формы создания индекса. */
+  const projectItems = useMemo(
+    () => projects.map((project) => ({ value: project.id, label: project.name })),
+    [projects],
+  )
+
+  /** Реестр проектов нужен только при открытой форме — грузим тогда. */
+  useEffect(() => {
+    if (!formOpen) return
+    void useProjectsStore.getState().loadProjects()
+  }, [formOpen])
+
+  /** Сброс формы создания индекса. */
+  const resetForm = useCallback(() => {
+    setNameInput(INDEX_DEFAULT_NAME)
+    setSourceKind('files')
+    setFilterInput('')
+    setProjectInput('')
+    setFormErrors({})
+  }, [])
+
+  const handleToggleForm = useCallback(() => {
+    if (formOpen) {
+      setFormOpen(false)
+      resetForm()
+      return
+    }
+    resetForm()
+    setFormOpen(true)
+  }, [formOpen, resetForm])
+
+  /**
+   * Ошибка мутации: 409 — провайдер памяти недоступен (кнопки блокируются),
+   * прочие — текст сервера (`error.message`), в т.ч. 422 `MEMORY_INDEX_FAILED`.
+   */
+  const handleMutationError = useCallback(
+    (err: unknown) => {
+      const code = statusOf(err)
+      if (code === 409) {
+        setProviderUnavailable(true)
+        setMutationError(t('settings.memory.indexes.providerUnavailable'))
+        return
+      }
+      setMutationError(err instanceof Error ? err.message : t('common.error'))
+      // 422 — сервер зафиксировал неудачную сборку: перечитываем список,
+      // чтобы строка индекса показала состояние `failed` и текст ошибки.
+      if (code === 422) void loadIndexes()
+    },
+    [loadIndexes, t],
+  )
+
+  /** Создание индекса: валидация формы → мутация → перезапрос статуса и списка. */
+  const handleCreateIndex = useCallback(async () => {
+    const name = nameInput.trim()
+    const kind = sourceKind
+    const projectId = projectInput
+    const errors: { name?: string; project?: string } = {}
+    if (!name) errors.name = t('settings.memory.indexes.form.nameRequired')
+    // Проект обязателен для любого источника: индекс привязан к проекту
+    // (сервер отвечает 400 `MEMORY_PROJECT_REQUIRED` без `projectId`).
+    if (!projectId) errors.project = t('settings.memory.indexes.form.projectRequired')
+    setFormErrors(errors)
+    if (errors.name || errors.project) return
+
+    const filter = filterInput.trim()
+    setBusy('create')
+    setMutationError(null)
+    try {
+      await synthApi.createMemoryIndex({
+        name,
+        source: { kind, ...(filter ? { filter } : {}) },
+        ...(projectId ? { projectId } : {}),
+      })
+      await Promise.all([loadStatus(), loadIndexes()])
+      notify({
+        text: t('settings.memory.indexes.created', { name }),
+        type: 'success',
+        category: 'system',
+      })
+      setFormOpen(false)
+      resetForm()
+    } catch (err) {
+      handleMutationError(err)
+    } finally {
+      setBusy(null)
+    }
+  }, [
+    filterInput,
+    handleMutationError,
+    loadIndexes,
+    loadStatus,
+    nameInput,
+    notify,
+    projectInput,
+    resetForm,
+    sourceKind,
+    t,
+  ])
+
+  /** Пересборка индекса: сборка уходит в фон, статус обновляется опросом. */
+  const handleRebuildIndex = useCallback(
+    async (index: MemoryIndex) => {
+      if (busy) return
+      setBusy(index.id)
+      setMutationError(null)
+      try {
+        await synthApi.rebuildMemoryIndex(index.id)
+        await Promise.all([loadStatus(), loadIndexes()])
+        notify({
+          text: t('settings.memory.indexes.rebuilt', { name: index.name }),
+          type: 'success',
+          category: 'system',
+        })
+      } catch (err) {
+        handleMutationError(err)
+      } finally {
+        setBusy(null)
+      }
+    },
+    [busy, handleMutationError, loadIndexes, loadStatus, notify, t],
+  )
+
+  /** Удаление индекса — только после подтверждения. */
+  const handleDeleteIndex = useCallback(
+    async (index: MemoryIndex) => {
+      if (busy) return
+      const ok = await confirm({
+        title: t('settings.memory.indexes.removeConfirmTitle'),
+        message: t('settings.memory.indexes.removeConfirm', { name: index.name }),
+        confirmLabel: t('settings.memory.indexes.remove'),
+        variant: 'danger',
+        icon: 'delete-bin',
+      })
+      if (!ok) return
+      setBusy(index.id)
+      setMutationError(null)
+      try {
+        await synthApi.deleteMemoryIndex(index.id)
+        await Promise.all([loadStatus(), loadIndexes()])
+        notify({
+          text: t('settings.memory.indexes.deleted', { name: index.name }),
+          type: 'success',
+          category: 'system',
+        })
+      } catch (err) {
+        handleMutationError(err)
+      } finally {
+        setBusy(null)
+      }
+    },
+    [busy, handleMutationError, loadIndexes, loadStatus, notify, t],
+  )
 
   /** «Обновить» — перезапрос всех трёх срезов портала. */
   const handleRefresh = useCallback(async () => {
@@ -712,13 +924,44 @@ export function MemorySettings() {
         )}
       </SettingsSection>
 
-      {/* 3. Индексы: корпуса для поиска. */}
+      {/* 3. Индексы: корпуса для поиска + операции с индексами. */}
       <SettingsSection
         id="memory-indexes"
         title={t('settings.memory.indexes.title')}
         description={t('settings.memory.indexes.description')}
         tooltip={t('settings.help.memory.section.memory-indexes')}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleToggleForm}
+            disabled={providerInactive}
+            data-testid="memory-index-create-toggle"
+          >
+            <Icon name="add" className="size-3.5" />
+            {t('settings.memory.indexes.create')}
+          </Button>
+        }
       >
+        {providerInactive && (
+          <p
+            data-testid="memory-index-provider-hint"
+            className="text-xs text-status-warning break-words"
+          >
+            {t('settings.memory.indexes.providerUnavailable')}
+          </p>
+        )}
+
+        {mutationError && (
+          <div
+            role="alert"
+            data-testid="memory-index-mutation-error"
+            className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive break-words"
+          >
+            {mutationError}
+          </div>
+        )}
+
         {indexesError && (
           <div
             role="alert"
@@ -736,6 +979,99 @@ export function MemorySettings() {
               <Icon name="refresh" className="size-3.5" />
               {t('settings.memory.retry')}
             </Button>
+          </div>
+        )}
+
+        {/* Форма создания индекса — инлайн, без модального окна. */}
+        {formOpen && (
+          <div
+            className="space-y-3 rounded-lg border border-border/60 bg-surface-inset p-3 min-w-0"
+            data-testid="memory-index-create-form"
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 min-w-0">
+              <TextField
+                label={t('settings.memory.indexes.form.name')}
+                placeholder={t('settings.memory.indexes.form.namePlaceholder')}
+                value={nameInput}
+                onChange={(event) => setNameInput(event.target.value)}
+                error={formErrors.name}
+                data-testid="memory-index-create-name"
+              />
+              <SelectField
+                label={t('settings.memory.indexes.form.source')}
+                value={sourceKind}
+                onValueChange={(value) => setSourceKind(value as MemoryIndexSourceKind)}
+                ariaLabel={t('settings.memory.indexes.form.source')}
+                triggerTestId="memory-index-create-source"
+                items={INDEX_SOURCE_KINDS.map((kind) => ({
+                  value: kind,
+                  label: t(`settings.memory.indexes.form.source.${kind}`),
+                }))}
+              >
+                <SelectContent>
+                  {INDEX_SOURCE_KINDS.map((kind) => (
+                    <SelectItem key={kind} value={kind}>
+                      {t(`settings.memory.indexes.form.source.${kind}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </SelectField>
+              <TextField
+                label={t('settings.memory.indexes.form.filter')}
+                placeholder={t('settings.memory.indexes.form.filterPlaceholder')}
+                value={filterInput}
+                onChange={(event) => setFilterInput(event.target.value)}
+                data-testid="memory-index-create-filter"
+              />
+              <SelectField
+                label={t('settings.memory.indexes.form.project')}
+                value={projectInput || PROJECT_NONE}
+                onValueChange={(value) => setProjectInput(value === PROJECT_NONE ? '' : value)}
+                ariaLabel={t('settings.memory.indexes.form.project')}
+                triggerTestId="memory-index-create-project"
+                error={formErrors.project}
+                items={[
+                  {
+                    value: PROJECT_NONE,
+                    label: t('settings.memory.indexes.form.projectNone'),
+                  },
+                  ...projectItems,
+                ]}
+              >
+                <SelectContent>
+                  <SelectItem value={PROJECT_NONE}>
+                    {t('settings.memory.indexes.form.projectNone')}
+                  </SelectItem>
+                  {projectItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </SelectField>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => void handleCreateIndex()}
+                disabled={mutating}
+                data-testid="memory-index-create-submit"
+              >
+                <Icon name="check" className="size-3.5" />
+                {t('settings.memory.indexes.createSubmit')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleToggleForm}
+                disabled={mutating}
+                data-testid="memory-index-create-cancel"
+              >
+                {t('settings.memory.indexes.createCancel')}
+              </Button>
+            </div>
           </div>
         )}
 
@@ -773,7 +1109,12 @@ export function MemorySettings() {
                   <th className="py-1 pr-2 font-medium">
                     {t('settings.memory.indexes.column.volume')}
                   </th>
-                  <th className="py-1 font-medium">{t('settings.memory.indexes.column.updated')}</th>
+                  <th className="py-1 pr-2 font-medium">
+                    {t('settings.memory.indexes.column.updated')}
+                  </th>
+                  <th className="py-1 font-medium">
+                    {t('settings.memory.indexes.column.actions')}
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -808,8 +1149,32 @@ export function MemorySettings() {
                         chunks: index.stats.chunks,
                       })}
                     </td>
-                    <td className="py-1 text-muted-foreground">
+                    <td className="py-1 pr-2 text-muted-foreground">
                       {formatDateTime(index.updatedAt, locale)}
+                    </td>
+                    <td className="py-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void handleRebuildIndex(index)}
+                          disabled={providerInactive || mutating || index.state === 'building'}
+                          data-testid={`memory-index-rebuild-${index.id}`}
+                        >
+                          <Icon name="refresh" className="size-3.5" />
+                          {t('settings.memory.indexes.rebuild')}
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={() => void handleDeleteIndex(index)}
+                          disabled={providerInactive || mutating}
+                          data-testid={`memory-index-remove-${index.id}`}
+                        >
+                          <Icon name="delete-bin" className="size-3.5" />
+                          {t('settings.memory.indexes.remove')}
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}

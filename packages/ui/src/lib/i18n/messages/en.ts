@@ -2984,7 +2984,7 @@ export const dict = {
   // --- ADR-107 / PROP-047: портал памяти (read-only) ---
   'settings.memory.title': 'Memory',
   'settings.memory.description':
-    'Read-only portal of the memory plugin: provider readiness, facts with provenance and retrieval indexes.',
+    'Memory plugin portal: provider readiness, facts with provenance, retrieval indexes and index management.',
   'settings.memory.unavailable':
     'The memory portal is unavailable: the memory service is not configured.',
   'settings.memory.refresh': 'Refresh',
@@ -3068,6 +3068,29 @@ export const dict = {
   'settings.memory.indexes.state.failed': 'failed',
   'settings.memory.indexes.volume': '{documents} docs · {chunks} chunks',
   'settings.memory.indexes.error.hint': 'Index build failed',
+  'settings.memory.indexes.create': 'Create index',
+  'settings.memory.indexes.createSubmit': 'Create',
+  'settings.memory.indexes.createCancel': 'Cancel',
+  'settings.memory.indexes.form.name': 'Name',
+  'settings.memory.indexes.form.namePlaceholder': 'Index name',
+  'settings.memory.indexes.form.nameRequired': 'Enter the index name.',
+  'settings.memory.indexes.form.source': 'Source',
+  'settings.memory.indexes.form.source.files': 'files',
+  'settings.memory.indexes.form.source.facts': 'facts',
+  'settings.memory.indexes.form.filter': 'Filter',
+  'settings.memory.indexes.form.filterPlaceholder': 'Glob or predicate (optional)',
+  'settings.memory.indexes.form.project': 'Project',
+  'settings.memory.indexes.form.projectNone': 'Not selected',
+  'settings.memory.indexes.form.projectRequired': 'Select the project for the index.',
+  'settings.memory.indexes.rebuild': 'Rebuild',
+  'settings.memory.indexes.remove': 'Delete',
+  'settings.memory.indexes.removeConfirmTitle': 'Delete the index?',
+  'settings.memory.indexes.removeConfirm': 'Index "{name}" and its chunks will be deleted.',
+  'settings.memory.indexes.created': 'Index "{name}" created',
+  'settings.memory.indexes.rebuilt': 'Rebuild of index "{name}" started',
+  'settings.memory.indexes.deleted': 'Index "{name}" deleted',
+  'settings.memory.indexes.providerUnavailable': 'The memory plugin is not activated.',
+  'settings.memory.indexes.column.actions': 'Actions',
 
   'sessionCreate.project': 'Project',
 
