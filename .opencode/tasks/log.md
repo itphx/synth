@@ -1091,3 +1091,21 @@
 - **Скан пакета:** `caution` — одно ложное срабатывание на base64 внутри inlined `zod` (JWT-валидация). `rm -rf`/`rmSync` из `package.json` убраны, чтобы не плодить находок.
 - **Найдена диагностическая щель (не блокер М2):** композер получает только `toolSelection.builtin` (`orchestrator.ts:1328`), поэтому плагинные тулы не попадают в слой `tools` манифеста и в оценку токенов; в запрос к модели они уходят (в `process-setup.ts:512` собираются builtin+plugin+mcp). Кандидат в тех.долг: отдельный слой `plugin.tools` в композере.
 - **М2 запущен** тремя потоками: RAG-движок плагина, мутации портала (ядро), операции с индексами (UI). Контракт зафиксирован в `docs/MEMORY.md` §2.3.
+
+## 2026-10-24 — М2, М4a, первый деплой на test
+
+- **М2 (готово):** RAG-движок в плагине (чанкер, corpus файлов, эмбеддинги через `facade.embed`, поколения, fingerprint → `stale`, гибридный поиск keyword+vector+RRF, evidence), тул `memory_index`, мутации портала (`POST /memory/indexes`, `:id/rebuild`, `DELETE`) и операции в UI. Живая проверка: 3 файла → 6 чанков (dim 768), rebuild → generation 2, delete → 204.
+- **М4a (готово):** консолидация без LLM — кластеризация активных фактов по косинусу (порог 0.5..0.99, default 0.9), детерминированный канон, `supersede` дублей, `dryRun`, отчёт; тул `memory_consolidate`, `POST /memory/consolidate`, кнопка в UI.
+- **Деплой test (первый):** chart `0.12.1-6`, образ backend с `docker/plugins/synth-plugin-memory` (стейджинг `scripts/stage-deploy-plugins.sh`, `.gitignore`/`.dockerignore`), Fleet применил; память проверена на стенде (индекс, rebuild).
+- **Проблема первого деплоя:** бандл получал `caution` (base64 внутри вшитого `zod`), install-policy = `ask`, подтверждение владельца живёт 24 ч → в managed-деплое плагин перестал бы активироваться после рестарта.
+- **Исправлено в корне:** плагин переведён на собственный мини-валидатор (`src/schema.ts`, `safeParse` + `issues`), `zod` оставлен только как тип в devDependencies. Бандл 200.9 → 88.4 КБ, скан `caution` → **`safe`**, сторонних runtime-зависимостей нет. Модель доверия не ослаблена.
+- **Приёмка перед выкатом:** `pnpm build` OK · `pnpm typecheck` 9/9 · lint 0 errors · **9681 тест** (shared 801 · core 6051 · executor 24 · ui 1854 · backend 682 · sdk 96 · plugin-memory 122 · storage-postgres 51).
+- **Остаток по фазам:** М4b — ingest сессий и суммаризация формулировок (нужен `agent`-шаг пайплайна ADR-101 + шедулер); М5 — граф сущностей; М3 — Gbrain (внешний сервис, отдельный add-on).
+
+## 2026-10-24 — test: chart 0.12.1-8 (scan-safe + консолидация)
+
+- **Выкат:** два прогона (`--test-only` для slim `test`, затем `BACKEND_FLAVOR=full` для `test-allinone`), chart `0.12.1-6 → 0.12.1-8`; версия приложения не менялась.
+- **Плагин ставится сам:** лог `deploy: установлено 1 / активировано 1`, `approval_required`/`quarantine` нет; `GET /plugins` → `source: deploy`, `scanVerdict: safe`, `active: true`.
+- **Проверено на стенде:** индекс `ready` (3 чанка, dim 768), `rebuild` → generation 2, `POST /memory/consolidate {dryRun:true}` → 200 (0 кластеров — фактов нет).
+- **Остаток:** `test-allinone` — плагин установлен, но `executionEnabled=false` (в values второго инстанса нет секции `plugins`); при необходимости включить отдельным прогоном.
+- **Открытая политика:** если бандл снова получит `caution`, 24-часовое подтверждение несовместимо с managed-деплоем — нужен ADR (auto-approve для `source: deploy` при `deployTrust ≥ trustFloor` либо whitelist известных зависимостей в сканере).
