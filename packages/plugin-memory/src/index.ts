@@ -1,7 +1,7 @@
 /**
  * Плагин памяти Synth (`synth-plugin-memory`) — точки доставки и движок RAG.
  *
- * Точки расширения (ADR-090): `promptBlocks` (2 блока) и `tools` (5 тулов).
+ * Точки расширения (ADR-090): `promptBlocks` (2 блока) и `tools` (6 тулов).
  * Данные — через `facade.memory` (ADR-107): ядро владеет фактами и индексами,
  * плагин — логикой памяти (PROP-047, docs/MEMORY.md).
  *
@@ -11,11 +11,12 @@
  * - `blocks/recall-block.ts` — retrieval по вопросу хода (tier `volatile`,
  *   order 110): гибридно по индексу, иначе keyword по фактам;
  * - `tools/search.ts` / `tools/write.ts` / `tools/forget.ts` / `tools/index-tool.ts`
- *   / `tools/consolidate.ts` — поиск, запись, отзыв факта, управление индексами
- *   и консолидация (слияние похожих фактов, М4a);
+ *   / `tools/consolidate.ts` / `tools/graph.ts` — поиск, запись, отзыв факта,
+ *   управление индексами, консолидация (слияние похожих фактов, М4a) и граф
+ *   сущностей памяти (М5);
  * - `provider.ts` — единственное место плагина, которое ходит в хранилище;
  * - `engine/` — движок ванильного RAG (чанкер, эмбеддинги, корпус, индексы,
- *   гибридный поиск) и движок консолидации;
+ *   гибридный поиск), движок консолидации и движок графа сущностей (М5);
  * - `scoring.ts` — детерминированный keyword-скоринг (общий для блока и тула).
  */
 import type { PluginFacade } from '@itphx/synth-core';
@@ -25,6 +26,7 @@ import { createRecallBlock } from './blocks/recall-block.js';
 import { MemoryProviderLite } from './provider.js';
 import { createMemoryConsolidateTool } from './tools/consolidate.js';
 import { createMemoryForgetTool } from './tools/forget.js';
+import { createMemoryGraphTool } from './tools/graph.js';
 import { createMemoryIndexTool } from './tools/index-tool.js';
 import { createMemorySearchTool } from './tools/search.js';
 import { createMemoryWriteTool } from './tools/write.js';
@@ -47,6 +49,7 @@ export function apply(facade: PluginFacade): void {
   facade.registerTool(createMemoryForgetTool(provider));
   facade.registerTool(createMemoryIndexTool(provider));
   facade.registerTool(createMemoryConsolidateTool(provider));
+  facade.registerTool(createMemoryGraphTool(provider));
 }
 
 export default { apply };
@@ -127,3 +130,35 @@ export {
   MEMORY_CONSOLIDATE_TOOL_NAME,
   memoryConsolidateParameters,
 } from './tools/consolidate.js';
+export {
+  buildGraph,
+  CO_OCCURS_RELATION,
+  DEFAULT_GRAPH_DEPTH,
+  DEFAULT_GRAPH_LIMIT,
+  ENTITY_NODE_PREFIX,
+  entityNodeId,
+  extractEntities,
+  FACT_NODE_PREFIX,
+  factNodeId,
+  GRAPH_FACT_LIMIT,
+  GRAPH_TEXT_LIMIT,
+  MENTIONS_RELATION,
+  MAX_GRAPH_DEPTH,
+  MAX_GRAPH_LIMIT,
+  MIN_GRAPH_DEPTH,
+  MIN_GRAPH_LIMIT,
+  normalizeEntityName,
+  type BuildGraphOptions,
+  type EntityMention,
+  type GraphEdge,
+  type GraphNode,
+  type GraphNodeKind,
+  type GraphStats,
+  type MemoryGraph,
+} from './engine/graph.js';
+export {
+  createMemoryGraphTool,
+  GRAPH_TOP_ENTITIES,
+  MEMORY_GRAPH_TOOL_NAME,
+  memoryGraphParameters,
+} from './tools/graph.js';
