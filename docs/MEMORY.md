@@ -85,6 +85,25 @@ v1 покрывает три точки.
 Практический вывод: **ванильный RAG — `inline`** (ему нужны порты и `facade.embed`), **Gbrain —
 `remote`** (своё хранилище, только три точки).
 
+### 2.3. М2 — решения (ванильный RAG)
+
+Зафиксировано до реализации, чтобы не расходились тул, блок и портал.
+
+| Вопрос | Решение |
+|---|---|
+| Источники корпуса | `files` — текстовые файлы `project.workspace` (относительные пути, glob-фильтр, лимит размера файла) и `facts` — активные факты проекта. Внешние источники — М3 (`remote`-провайдер) |
+| Идентификатор индекса | `idx_<uuid>`; по умолчанию один индекс на (проект, источник), имя `project` |
+| Чанкер | markdown-aware (заголовки + абзацы), `chunkChars` 1200 / `chunkOverlap` 200, `chunkerVersion: '1'` входит в фингерпринт |
+| Эмбеддинги | **только** `facade.embed` (Gateway, инвариант 3), батч ≤ 32 текста; модель — из `plugins.embedding*`; нет модели → индекс не строится (`plugin.embedding_not_configured`), recall деградирует на keyword |
+| Фингерпринт | `model` + `dimension` + `chunkerVersion` (+ `normalize`); расхождение с текущей конфигурацией → `state: 'stale'` (не «тихо похоже») |
+| Поколения | сборка пишет `generation + 1` через `replaceChunks` (атомарно), затем `saveIndex({state:'ready', generation})`; предыдущее поколение удаляется после переключения |
+| Гибридный поиск | keyword (BM25-lite по чанкам) + cosine по векторам → **RRF** (`k = 60`) → top-N; при отсутствии векторов — только keyword |
+| Evidence | каждый результат: `indexId`, `generation`, путь (`metadata.path`), диапазон строк, score; модель видит источник, а не «магию» |
+| Мутации портала | конвенция: HTTP-роут (guard ADMIN) → админ-тул плагина через реестр (`executeToolDef`, контекст `sessionId: 'system:memory-portal:<id>'`, `projectId`, `workingDir` = `project.workspace`); плагин не активен → `409 MEMORY_PROVIDER_UNAVAILABLE` |
+| Сборка индекса | фоновая: ответ `202` + `indexId`, прогресс — по `state` (`building` → `ready`/`failed` + `error`); отдельного job-хранилища в М2 нет |
+| Настройки плагина | `factsLimit`, `recallLimit`, `minScore`, `topK`, `maxChunks`, `chunkChars`, `chunkOverlap`, `maxFileBytes`, `exclude` (glob-список) — через `facade.getSettings` |
+| Метрики | `synth_memory_index_chunks{status}` (gauge: чанки индексов по состоянию владельца), `synth_memory_index_builds_total{outcome}` (counter) |
+
 ## 3. Состав плагина
 
 ```text
