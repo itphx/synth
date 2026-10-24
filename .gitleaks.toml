@@ -271,3 +271,26 @@ regexes = [
   '''legacy-access-token-value''',
 ]
 regexTarget = "line"
+
+# 11. Ложные срабатывания `generic-credential-literal` в тестовых фикстурах внешних
+#     доступов и ротации мастер-ключа (ADR-105 / ADR-106): значения намеренно
+#     помечены как не настоящие (`…must-not-leak`, `plaintoken-…`, `super-secret-…`
+#     в UI-фикстуре) — это тестовые значения, а не выданные секреты.
+#     Подавление строго по трём путям и по конкретным dummy-строкам.
+[[allowlists]]
+description = "тестовые фикстуры внешних доступов и ротации ключей (dummy-токены ADR-105/106, TEST ONLY)"
+paths = [
+  '''packages/core/src/engine/oauth/credential-audit\.test\.ts$''',
+  '''packages/core/src/security/rotate\.test\.ts$''',
+  '''packages/ui/src/components/settings/CredentialsSettings\.test\.tsx$''',
+]
+regexes = [
+  '''plaintoken-access-AAAABBBBCCCC''',
+  '''plaintoken-refresh-DDDDEEEEFFFF''',
+  '''plaintoken-access-new-GGGGHHHH''',
+  '''ya29\.access-token-must-not-leak''',
+  '''refresh-token-must-not-leak''',
+  '''ya29\.super-secret-access-token''',
+  '''ghr_super-secret-refresh-token''',
+]
+regexTarget = "line"
