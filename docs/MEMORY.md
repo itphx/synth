@@ -415,8 +415,8 @@ SchedulerService → schedule_fired → RouteRule(PipelineRef) → PipelineEngin
 | **М0 — порты** | `MemoryFactRepository`/`MemoryIndexRepository` + контрактный suite (memory/file/PG, миграция `017-memory`) | ✅ **готово** |
 | **М0.5 — предпосылки** | `facade.memory` (scoped), `facade.embed` (через Gateway), `facade.getSettings`, сужение `ToolContext` для плагинных тулов ([ADR-107](./arch_decisions/adr-107-plugin-facade-services.md)) | ✅ **готово** |
 | **М1 — первый плагин** | плагин-каркас: 2 блока (`context`/`volatile`) + `memory_search`/`memory_write`/`memory_forget`; портал в ядре (`createMemoryRoutes`) + админ-категория; метрики `synth_memory_*` | 🟡 **частично**: портал (чтение) и метрики сделаны в ядре (`/api/v2/memory/*`, `synth_memory_*`); плагин-каркас и админ-категория UI — отдельная работа |
-| **М2 — ванильный RAG** | чанкер, эмбеддинги через `facade.embed`, индекс с поколениями и фингерпринтом, гибридный поиск (keyword + vector + RRF), evidence; портал «Индексы» | после М1 |
-| **М3 — Gbrain** | внешний Add-on + `mode: remote` плагин (своё хранилище, без портов); сравнение качества с RAG на общем корпусе | после М1 |
+| **М2 — ванильный RAG** | чанкер, эмбеддинги через `facade.embed`, индекс с поколениями и фингерпринтом, гибридный поиск (keyword + vector + RRF), evidence; портал «Индексы» (чтение + мутации), `memory_index` | ✅ **готово** |
+| **М3 — Gbrain** | внешний Add-on + `mode: remote` плагин (своё хранилище, без портов); сравнение качества с RAG на общем корпусе | ⬅️ следующая (внешний сервис, вне этого репозитория) |
 | **М4 — консолидация** | пайплайн (`read_session_reference` → `agent` → `memory_write`), шедулер, лидер-элекшен, портал «Задачи», live-события | после М2 |
 | **М5 — граф** | извлечение `[[entity]]` без LLM, IR + адаптер React Flow, портал «Граф» | после М2 |
 
@@ -448,6 +448,8 @@ SchedulerService → schedule_fired → RouteRule(PipelineRef) → PipelineEngin
   не экспонируются; пересмотрены предпосылки — осталось **три** (storage-грант, `facade.embed`,
   `facade.getSettings`), две оказались мнимыми (ingest закрывается пайплайном; портал — в ядре);
   добавлена находка §2.2 (inline-тул получает `ctx.extra` с internals ядра).
+- 2026-10-24 — М2: индекс файлов/фактов с поколениями и фингерпринтом, гибридный поиск (keyword + vector + RRF),
+  `memory_index`, мутации портала (`POST /memory/indexes`, `:id/rebuild`, `DELETE`) и операции в UI.
 - 2026-10-24 — предпосылки закрыты ([ADR-107](./arch_decisions/adr-107-plugin-facade-services.md)):
   §2 переписан по факту (порты памяти, `facade.memory`/`embed`/`getSettings`, сужение `ToolContext`),
   §2.1 — что осталось до М1, §2.2 — граница транспорта (RAG — `inline`, Gbrain — `remote`),
