@@ -509,7 +509,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | PROP-047 | Память Synth (Gbrain + композиция): storage backbone, RAG по памяти и коду/докам, компрессия tool output, 4-layer retrieval, Obsidian bridge | 🧩 Предложение (vision) | [prop-047](./docs/arch_decisions/prop-047-memory-gbrain.md) |
 | PROP-048 | Self-help скиллы и admin-MCP: dogfooding-развёртывание, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN | 🧩 Предложение | [prop-048](./docs/arch_decisions/prop-048-self-help-skills-admin-mcp.md) |
 | PROP-049 | Git worktrees: тулы `git_worktree_*`, per-session cwd на базе worktree, детект secondary worktree, UI | 🧩 Предложение | [prop-049](./docs/arch_decisions/prop-049-git-worktrees.md) |
-| PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090, маршрутизация по `Session.engine` | 🧩 Предложение | [prop-050](./docs/arch_decisions/prop-050-external-engines-runner.md) |
+| PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090, маршрутизация по `Session.engine` | 🧊 Icebox | [prop-050](./docs/arch_decisions/prop-050-external-engines-runner.md) |
 | ADR-051 | Шедулер и пайплайны (облегчённый n8n): `SchedulerService`, cron/interval-источник `schedule_fired` через Router (ADR-089), API/UI расписаний; Job-история, catch-up, force-run — да; семы/file-based мульти-инстанс — default OFF; пайплайны вынесены в ADR-100/ADR-101 (движок реализован), гибрид-размещение — нет | ⚠️ Частично | [adr-051](./docs/arch_decisions/adr-051-scheduler-pipelines.md) |
 | ADR-052 | Публичная API-платформа: per-service **service-key** со **scopes** + **проектной проекцией** (`allowedProjects`), public-**OpenAPI**, **SDK**, **webhooks**; **tenants исключены** (self-host: изоляция = инстанс, группировка = проект, ADR-014); этапы I–IV закрыты 2026-10-13 | ✅ Реализовано | [adr-052](./docs/arch_decisions/adr-052-public-api-platform.md) |
 | PROP-053 | CLI и TUI: паритет публикуемого и dev-CLI, CLI как клиент API v2, TUI | 🧩 Предложение | [prop-053](./docs/arch_decisions/prop-053-cli-tui.md) |
@@ -573,6 +573,8 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | ADR-106 | Authority-слой — полномочия пользователей и агентов как контент; Ф0–Ф5 реализованы (остаток — UI «Полномочия» и flavor-роли) | ⚠️ Частично | [adr-106](./docs/arch_decisions/adr-106-authority-layer.md) |
 | PROP-106 | Файловые порты инстанса в SQL: единое состояние при нескольких репликах | 🧩 Предложение | [prop-106](./docs/arch_decisions/prop-106-file-ports-to-sql.md) |
 | ADR-107 | Сервисы фасада плагинов — память, эмбеддинги, свои настройки | ✅ Реализовано | [adr-107](./docs/arch_decisions/adr-107-plugin-facade-services.md) |
+| PROP-109 | Централизация внешних агентных систем (федерация) | 🧩 Предложение | [prop-109](./docs/arch_decisions/prop-109-agent-system-federation.md) |
+| PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110](./docs/arch_decisions/prop-110-portal-platform.md) |
 <!-- ad-index:end -->
 
 Правило: `docs/arch_decisions/` — единственный дом ADR/PROP; номера и файлы стабильны (ссылок на id по репозиторию — тысячи), файлы не переносятся и не удаляются.

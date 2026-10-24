@@ -86,7 +86,6 @@
 | PROP-037 | Security step перед коммитом | 🧩 Предложение | [prop-037-commit-security-step.md](./prop-037-commit-security-step.md) |
 | PROP-048 | Self-help скиллы и admin-MCP: dogfooding, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN | 🧩 Предложение | [prop-048-self-help-skills-admin-mcp.md](./prop-048-self-help-skills-admin-mcp.md) |
 | PROP-049 | Git worktrees: тулы `git_worktree_*`, per-session cwd, детект secondary worktree, UI | 🧩 Предложение | [prop-049-git-worktrees.md](./prop-049-git-worktrees.md) |
-| PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧩 Предложение | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
 | PROP-053 | CLI и TUI: паритет публикуемого и dev-CLI, CLI как клиент API v2, TUI | 🧩 Предложение | [prop-053-cli-tui.md](./prop-053-cli-tui.md) |
 | PROP-054 | Kanban-доска, backlog: интерактивная доска поверх `project.plan`, глобальный backlog, assignee/WIP | 🧩 Предложение | [prop-054-kanban-backlog.md](./prop-054-kanban-backlog.md) |
 | PROP-056 | MCP-сервер Synth и скиллы для внешних агентов: MCP над API v2, auth, права, форматы конфигов клиентов | 🧩 Предложение | [prop-056-synth-mcp-server.md](./prop-056-synth-mcp-server.md) |
@@ -111,6 +110,9 @@
 | PROP-104 | Внешний транспорт событий: публикация между репликами control plane | 🧩 Предложение | [prop-104-external-event-transport.md](./prop-104-external-event-transport.md) |
 | PROP-105 | Координация в нескольких репликах: сессии, очередь, общее состояние | 🧩 Предложение | [prop-105-multi-replica-coordination.md](./prop-105-multi-replica-coordination.md) |
 | PROP-106 | Файловые порты инстанса в SQL: единое состояние при нескольких репликах | 🧩 Предложение | [prop-106-file-ports-to-sql.md](./prop-106-file-ports-to-sql.md) |
+| PROP-109 | Централизация внешних агентных систем (федерация) | 🧩 Предложение | [prop-109-agent-system-federation.md](./prop-109-agent-system-federation.md) |
+| PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110-portal-platform.md](./prop-110-portal-platform.md) |
+| PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧊 Icebox | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
 
 ## Vision
 
@@ -133,4 +135,4 @@
 
 ---
 
-Всего документов: 98 (Решения: 43, Частично: 17, Предложения: 29, Vision: 8, Icebox: 0, Legacy: 1).
+Всего документов: 100 (Решения: 43, Частично: 17, Предложения: 30, Vision: 8, Icebox: 1, Legacy: 1).
