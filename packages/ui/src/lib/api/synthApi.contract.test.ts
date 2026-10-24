@@ -10,16 +10,16 @@ import { synthApi } from './synthApi'
  */
 const EXPECTED_API_METHODS = [
   'addMcpRegistryEntry', 'addSessionReference', 'addStickyNote', 'applyMigrations', 'approvePack', 'approvePlugin', 'auditRevealed',
-  'backupDownloadUrl', 'batchMessages', 'browseWorkspaceRoot', 'cancelPipelineRun', 'cancelQueueRetry', 'cancelRestore',
+  'backupDownloadUrl', 'batchMessages', 'bindOAuthCredential', 'browseWorkspaceRoot', 'cancelPipelineRun', 'cancelQueueRetry', 'cancelRestore',
   'cancelSummarization', 'checkEgress', 'checkProxy',
   'checkUpdate', 'claimIdentity', 'clearAudit', 'clearProfilePassword', 'clearProxyPassword', 'clearQueue', 'clearSession',
   'clearWorkspacePolicy', 'cloneGitRepo', 'createAgentSshKey', 'createBackup', 'createDirectory',
-  'createEventBindingKey', 'createEventRoute', 'createProject', 'createProjectPipeline', 'createProvider',
+  'createEventBindingKey', 'createEventRoute', 'createOAuthCredential', 'createProject', 'createProjectPipeline', 'createProvider',
   'createSchedule', 'createServiceKey', 'createSession', 'createSkill',
   'createSkillBundle', 'createSshKey', 'createTlsMapping', 'createUser', 'createWebhookSubscription',
   'deleteAgent', 'deleteBackup', 'deleteContextFile', 'deleteEntry', 'deleteEventBinding',
   'deleteEventBindingKey', 'deleteEventRoute', 'deleteMcpRegistryEntry', 'deleteMessage',
-  'deleteModel', 'deleteMyIdentity', 'deleteProject', 'deleteProjectPipeline', 'deleteProvider',
+  'deleteModel', 'deleteMyIdentity', 'deleteOAuthCredential', 'deleteProject', 'deleteProjectPipeline', 'deleteProvider',
   'deleteSchedule', 'deleteServiceKey', 'deleteSession', 'deleteSkill',
   'deleteSkillBundle', 'deleteSkillFile', 'deleteSshKey', 'deleteStickyNote',
   'deleteTlsMapping', 'deleteToken', 'deleteUser', 'deleteWebhookSubscription', 'disablePlugin', 'downloadFile',
@@ -34,7 +34,7 @@ const EXPECTED_API_METHODS = [
   'getEventsSettings', 'getGatewayPatterns', 'getHealth', 'getHybridStatus',
   'getLlmGatewaySettingsInfo', 'getLlmPayloads', 'getLogs', 'getMcpNetworkPolicyInfo',
   'getMcpPolicyInfo', 'getMcpRegistry', 'getMcpToolSettings', 'getMigrations', 'getModels',
-  'getMyIdentities', 'getOptimization', 'getPack', 'getPacks', 'getPendingRestore',
+  'getMyIdentities', 'getOAuthCredential', 'getOAuthCredentials', 'getOptimization', 'getPack', 'getPacks', 'getPendingRestore',
   'getPipelineInstances', 'getPipelineRun', 'getPipelineTemplates', 'getPipelines', 'getPlugin', 'getPluginsSettings',
   'getProject', 'getProjectMcp',
   'getProjectPipeline', 'getProjectPipelines', 'getProjectSkills', 'getProjectStats', 'getProjects', 'getProtectedPaths',
@@ -50,7 +50,7 @@ const EXPECTED_API_METHODS = [
   'initGitRepo', 'installPlugin', 'instantiatePipelineTemplate', 'listAgentSshKeys', 'listAudit', 'listBackups', 'listDirectory', 'listEventBindings',
   'listPipelineRuns', 'listPlugins', 'listSshKeys', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
   'patchSessionMode', 'pinMessage', 'probeMcpServer', 'publishProject', 'publishProjectPipeline',
-  'putSkillFile', 'readFile', 'regenerateWebhookSecret', 'registerGitRepo',
+  'putSkillFile', 'readFile', 'refreshOAuthCredential', 'regenerateWebhookSecret', 'registerGitRepo',
   'reloadSkills', 'removeCa', 'removeDefaultClient', 'removeGitRepo', 'removePlugin', 'removeProfileCa', 'removeProfileClient', 'removeSessionReference', 'reset', 'resetContextFile',
   'resetDecisionMetrics', 'resetDecisionSettings', 'resetDefaultAgent', 'resetDefaultModel', 'resetDictionary',
   'resetEgressPolicy', 'resetEventsSettings', 'resetGatewayPatterns', 'resetLlmGatewaySettings', 'resetMcpNetworkPolicy',
@@ -74,7 +74,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (316)', () => {
+  it('набор методов совпадает с зафиксированным (322)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

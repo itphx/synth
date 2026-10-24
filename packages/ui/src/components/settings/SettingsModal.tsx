@@ -31,6 +31,7 @@ import { EventsSettings } from "./EventsSettings"
 import { DecisionSettings } from "./DecisionSettings"
 import { ServiceKeysSettings } from "./ServiceKeysSettings"
 import { WebhooksSettings } from "./WebhooksSettings"
+import { CredentialsSettings } from "./CredentialsSettings"
 import { AddonsSettings } from "./AddonsSettings"
 import { PluginsSettings } from "./PluginsSettings"
 import { MaintenanceSettings } from "./MaintenanceSettings"
@@ -321,6 +322,7 @@ export const SettingsModal = () => {
             {activePage === "skillsAdmin" && <SkillsAdminSettings />}
             {activePage === "commands" && <CommandsSettings />}
             {activePage === "eventsAdmin" && <EventsAdminSettings />}
+            {activePage === "credentials" && <CredentialsSettings />}
             {activePage === "eventsConfig" && <EventsSettings />}
             {activePage === "decisionConfig" && <DecisionSettings />}
             {activePage === "serviceKeys" && <ServiceKeysSettings />}
