@@ -1,26 +1,47 @@
 /**
- * М1: `MemoryProvider-lite` — слой доставки памяти поверх `facade.memory`.
+ * Провайдер памяти плагина (`MemoryProvider-lite`) — слой доставки поверх
+ * `facade.memory`.
  *
  * Ядро владеет данными памяти (порты `MemoryFactRepository`/
  * `MemoryIndexRepository`, ADR-096), плагин — логикой памяти (PROP-047 §3,
  * docs/MEMORY.md). Здесь — единственное место плагина, которое ходит в
- * хранилище: блоки промпта и туны работают через провайдер, а не напрямую
+ * хранилище: блоки промпта и тулы работают через провайдер, а не напрямую
  * (иначе появятся две реализации recall — в блоке и в туле, и они разойдутся).
  *
  * **Правила доступа к хранилищу.**
- * - Всё — только через `facade.memory.facts`; namespace навязывает хост
- *   (ADR-107), поэтому в запросах `namespace` **не передаётся**;
+ * - Всё — только через `facade.memory` (факты и индексы); namespace навязывает
+ *   хост (ADR-107), поэтому в запросах `namespace` **не передаётся**;
  * - `facade.memory === undefined` — фича-детект, а не ошибка: вызывающий
  *   проверяет `available` и деградирует (блок → `null`, тул → `isError`);
- * - скоуп хода: задан проект сессии → факты этого проекта **и** общие (без
- *   проекта); не задан → только факты **без** проекта (чужие проекты в выдачу
- *   не попадают). Правило одно для блоков промпта и тула `memory_search`.
+ * - скоуп хода: задан проект сессии → факты и индексы этого проекта **и**
+ *   общие (без проекта); не задан → только **без** проекта (чужие проекты в
+ *   выдачу не попадают). Правило одно для блоков промпта и тулов.
+ *
+ * **Индексы (М2).** Провайдер делегирует жизненный цикл корпуса движку
+ * (`engine/index-manager.ts`), а поиск — `engine/search.ts`: блоки и тулы не
+ * знают про поколения и фингерпринты (знание — в движке).
  */
 import { randomUUID } from 'node:crypto';
 
-import type { MemoryFactQuery, MemoryFactRecord, PluginFacade } from '@itphx/synth-core';
+import type {
+  MemoryFactQuery,
+  MemoryFactRecord,
+  PluginFacade,
+} from '@itphx/synth-core';
 import { z } from 'zod';
 
+import { IndexManager, type IndexStatus } from './engine/index-manager.js';
+import type { CreateIndexInput, RebuildIndexInput } from './engine/index-manager.js';
+import { searchIndex, type SearchOutcome } from './engine/search.js';
+import {
+  FactNotFoundError,
+  MemoryUnavailableError,
+  SupersedeTextRequiredError,
+} from './errors.js';
+import {
+  resolveMemorySettings,
+  type MemoryPluginSettings,
+} from './settings.js';
 import { keywordScore } from './scoring.js';
 
 /** Порт фактов памяти — тот же тип, что у фасада (`facade.memory.facts`). */
@@ -38,28 +59,20 @@ export type FactKind = z.infer<typeof factKindSchema>;
 /** Перечень видов фактов (итерация, справка). */
 export const FACT_KINDS: readonly FactKind[] = factKindSchema.options;
 
-/** Настройки плагина памяти (`plugins[<имя>].settings`, ADR-107). */
-export interface MemoryPluginSettings {
-  /** Сколько фактов показывать в блоке «project facts». */
-  factsLimit: number;
-  /** Сколько фактов показывать в блоке recall. */
-  recallLimit: number;
-  /** Порог keyword-скоринга для recall (0..1). */
-  minScore: number;
-}
+/**
+ * Настройки плагина памяти и их дефолты — в `settings.ts` (единое место
+ * чтения настроек для блоков, тулов и движка индекса).
+ */
+export {
+  DEFAULT_FACTS_LIMIT,
+  DEFAULT_MIN_SCORE,
+  DEFAULT_RECALL_LIMIT,
+  MAX_FACTS_LIMIT,
+  MAX_RECALL_LIMIT,
+  MIN_FACTS_LIMIT,
+  MIN_RECALL_LIMIT,
+} from './settings.js';
 
-/** Дефолт лимита фактов в блоке «project facts». */
-export const DEFAULT_FACTS_LIMIT = 6;
-/** Допустимый диапазон лимита фактов. */
-export const MIN_FACTS_LIMIT = 1;
-export const MAX_FACTS_LIMIT = 20;
-/** Дефолт лимита recall. */
-export const DEFAULT_RECALL_LIMIT = 5;
-/** Допустимый диапазон лимита recall. */
-export const MIN_RECALL_LIMIT = 1;
-export const MAX_RECALL_LIMIT = 20;
-/** Дефолт порога keyword-скоринга (recall). */
-export const DEFAULT_MIN_SCORE = 0.34;
 /** Уверенность факта, записанного агентом без явного `confidence`. */
 export const DEFAULT_FACT_CONFIDENCE = 0.7;
 /**
@@ -122,40 +135,17 @@ export interface ForgetFactResult {
   supersededId?: string;
 }
 
-/**
- * Сервис памяти недоступен в этом инстансе (`facade.memory === undefined`).
- *
- * Это **не** ошибка активации: плагин деградирует (блок пуст, тул отвечает
- * понятным текстом), ход продолжается.
- */
-export class MemoryUnavailableError extends Error {
-  constructor() {
-    super('Хранилище памяти недоступно в этом инстансе');
-    this.name = 'MemoryUnavailableError';
-  }
-}
+/** Настройки плагина памяти (`plugins[<имя>].settings`, ADR-107) — см. `settings.ts`. */
+export type { MemoryPluginSettings } from './settings.js';
 
-/** Факт не найден (нет такого id или он принадлежит чужому namespace'у). */
-export class FactNotFoundError extends Error {
-  constructor() {
-    super('Факт не найден');
-    this.name = 'FactNotFoundError';
-  }
-}
-
-/** Для режима `supersede` не передан новый текст факта. */
-export class SupersedeTextRequiredError extends Error {
-  constructor() {
-    super('Для замены факта (supersede) нужен новый текст факта');
-    this.name = 'SupersedeTextRequiredError';
-  }
-}
-
-/** Привести число к диапазону; нечисловое значение — дефолт. */
-function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-  return Math.min(max, Math.max(min, value));
-}
+/** Ошибки памяти — общие для провайдера, движка и тулов. */
+export {
+  FactNotFoundError,
+  IndexBusyError,
+  IndexNotFoundError,
+  MemoryUnavailableError,
+  SupersedeTextRequiredError,
+} from './errors.js';
 
 /** ISO-момент → `YYYY-MM-DD` (для блоков промпта). */
 export function formatFactDate(iso: string | undefined): string {
@@ -195,16 +185,24 @@ function inScope(fact: MemoryFactRecord, scope: FactScope): boolean {
 }
 
 /**
- * Провайдер памяти плагина (М1).
+ * Провайдер памяти плагина (М1 + М2).
  *
- * Обёртка над `facade.memory.facts`: скоуп, порядок, скоринг и запись.
- * Блоки промпта и туны ходят в хранилище **только** через него.
+ * Обёртка над `facade.memory`: скоуп, порядок, скоринг, запись фактов и
+ * жизненный цикл индексов. Блоки промпта и туны ходят в хранилище **только**
+ * через него (docs/MEMORY.md §3: «блок не ходит в хранилище напрямую»).
  */
 export class MemoryProviderLite {
   private readonly _facade: PluginFacade;
+  /** Менеджер индексов (движок М2) — единственный владелец корпуса. */
+  private readonly _indexes: IndexManager;
 
   constructor(facade: PluginFacade) {
     this._facade = facade;
+    this._indexes = new IndexManager({
+      facade,
+      listFacts: (opts) => this.listFacts(opts),
+      settings: () => this.settings(),
+    });
   }
 
   /** Доступен ли сервис памяти в этом инстансе (фича-детект). */
@@ -214,22 +212,12 @@ export class MemoryProviderLite {
 
   /** Настройки плагина — нормализованные (вне диапазона → дефолт). */
   settings(): MemoryPluginSettings {
-    const raw = this._facade.getSettings();
-    return {
-      factsLimit: clampNumber(
-        raw.factsLimit,
-        MIN_FACTS_LIMIT,
-        MAX_FACTS_LIMIT,
-        DEFAULT_FACTS_LIMIT,
-      ),
-      recallLimit: clampNumber(
-        raw.recallLimit,
-        MIN_RECALL_LIMIT,
-        MAX_RECALL_LIMIT,
-        DEFAULT_RECALL_LIMIT,
-      ),
-      minScore: clampNumber(raw.minScore, 0, 1, DEFAULT_MIN_SCORE),
-    };
+    return resolveMemorySettings(this._facade.getSettings());
+  }
+
+  /** Менеджер индексов памяти (движок М2). */
+  get indexManager(): IndexManager {
+    return this._indexes;
   }
 
   /** Порт фактов (бросает, если сервис памяти недоступен). */
@@ -394,4 +382,83 @@ export class MemoryProviderLite {
     await facts.save({ ...old, status: 'retracted', updatedAt: iso });
     return { factId: old.id, version: old.version };
   }
+
+  // ── Индексы (М2) ──────────────────────────────────────────────────────
+  //
+  // Скоуп — тот же, что у фактов: проект сессии задан → его индексы;
+  // не задан → только индексы **без** проекта (чужие проекты в выдачу не
+  // попадают).
+
+  /** Индексы в скоупе хода (с эффективным состоянием). */
+  async listIndexes(opts: { projectId?: string } = {}): Promise<IndexStatus[]> {
+    const statuses = await this._indexes.statuses();
+    return statuses.filter((status) => inIndexScope(status.index, opts.projectId));
+  }
+
+  /** Статус индекса по id (или `null`). */
+  async getIndex(id: string): Promise<IndexStatus | null> {
+    return this._indexes.getStatus(id);
+  }
+
+  /** Создать индекс (фоновая сборка корпуса). */
+  async createIndex(input: CreateIndexInput): Promise<IndexStatus> {
+    return this._indexes.createIndex(input);
+  }
+
+  /** Пересобрать индекс (фоновая сборка нового поколения). */
+  async rebuildIndex(id: string, input: RebuildIndexInput = {}): Promise<IndexStatus> {
+    return this._indexes.rebuildIndex(id, input);
+  }
+
+  /** Удалить индекс (каскад чанков — порт). */
+  async deleteIndex(id: string): Promise<boolean> {
+    return this._indexes.deleteIndex(id);
+  }
+
+  /**
+   * Индекс проекта для recall: готовый или устаревший (`stale`).
+   *
+   * Индекс в состоянии `building`/`failed` не используется — recall деградирует
+   * на keyword по фактам (иначе в промпт попали бы полузагруженные данные).
+   */
+  async projectIndex(projectId?: string): Promise<IndexStatus | null> {
+    const statuses = await this.listIndexes({ ...(projectId ? { projectId } : {}) });
+    const usable = statuses.filter(
+      (status) => status.state === 'ready' || status.state === 'stale',
+    );
+    if (usable.length === 0) return null;
+    // Свежий — первый; при равенстве — по id (детерминированно).
+    usable.sort((a, b) => {
+      const byUpdated = Date.parse(b.index.updatedAt) - Date.parse(a.index.updatedAt);
+      if (!Number.isNaN(byUpdated) && byUpdated !== 0) return byUpdated;
+      return a.index.id.localeCompare(b.index.id);
+    });
+    return usable[0] ?? null;
+  }
+
+  /** Гибридный поиск по индексу (keyword + вектор + RRF). */
+  async searchIndex(
+    indexId: string,
+    query: string,
+    options: { topK?: number; maxChunks?: number } = {},
+  ): Promise<SearchOutcome> {
+    const status = await this._indexes.getStatus(indexId);
+    return searchIndex(this._facade, indexId, query, {
+      ...(options.topK !== undefined ? { topK: options.topK } : {}),
+      ...(options.maxChunks !== undefined ? { maxChunks: options.maxChunks } : {}),
+      ...(status ? { index: status.index, stale: status.stale } : {}),
+    });
+  }
+}
+
+/**
+ * Индекс в скоупе хода: проект сессии задан → индексы этого проекта;
+ * не задан → только индексы **без** проекта (то же правило, что у фактов).
+ */
+function inIndexScope(
+  index: { projectId?: string },
+  projectId: string | undefined,
+): boolean {
+  if (projectId) return index.projectId === projectId;
+  return index.projectId === undefined;
 }

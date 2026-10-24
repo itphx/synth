@@ -173,7 +173,19 @@ describe('память: настройки плагина', () => {
   it('без настроек → дефолты', () => {
     const { facade } = createTestFacade();
     const provider = new MemoryProviderLite(facade);
-    expect(provider.settings()).toEqual({ factsLimit: 6, recallLimit: 5, minScore: 0.34 });
+    expect(provider.settings()).toEqual({
+      factsLimit: 6,
+      recallLimit: 5,
+      minScore: 0.34,
+      topK: 5,
+      maxChunks: 2000,
+      chunkChars: 1200,
+      chunkOverlap: 200,
+      maxFileBytes: 512_000,
+      exclude: [],
+      embeddingModel: '',
+      dimensionProbeTtlMs: 30_000,
+    });
   });
 
   it('значения вне диапазона приводятся к границам', () => {
@@ -181,7 +193,10 @@ describe('память: настройки плагина', () => {
       settings: { factsLimit: 100, recallLimit: 0, minScore: 5 },
     });
     const provider = new MemoryProviderLite(facade);
-    expect(provider.settings()).toEqual({ factsLimit: 20, recallLimit: 1, minScore: 1 });
+    const settings = provider.settings();
+    expect(settings.factsLimit).toBe(20);
+    expect(settings.recallLimit).toBe(1);
+    expect(settings.minScore).toBe(1);
   });
 
   it('нечисловые значения → дефолты', () => {
@@ -189,7 +204,30 @@ describe('память: настройки плагина', () => {
       settings: { factsLimit: 'шесть', recallLimit: null, minScore: undefined },
     });
     const provider = new MemoryProviderLite(facade);
-    expect(provider.settings()).toEqual({ factsLimit: 6, recallLimit: 5, minScore: 0.34 });
+    const settings = provider.settings();
+    expect(settings.factsLimit).toBe(6);
+    expect(settings.recallLimit).toBe(5);
+    expect(settings.minScore).toBe(0.34);
+  });
+
+  it('настройки М2 (чанкер, корпус, эмбеддинги) нормализуются', () => {
+    const { facade } = createTestFacade({
+      settings: {
+        chunkChars: 10,
+        chunkOverlap: 9999,
+        maxFileBytes: 1,
+        exclude: 'docs/**',
+        embeddingModel: '  text-embed-3  ',
+      },
+    });
+    const provider = new MemoryProviderLite(facade);
+    const settings = provider.settings();
+    expect(settings.chunkChars).toBe(100);
+    // Перекрытие не может быть больше чанка.
+    expect(settings.chunkOverlap).toBeLessThan(settings.chunkChars);
+    expect(settings.maxFileBytes).toBe(1024);
+    expect(settings.exclude).toEqual(['docs/**']);
+    expect(settings.embeddingModel).toBe('text-embed-3');
   });
 });
 

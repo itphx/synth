@@ -1,15 +1,23 @@
 /**
- * М1: тул `memory_search` — поиск по памяти плагина (точка `tools`).
+ * М1 + М2: тул `memory_search` — поиск по памяти плагина (точка `tools`).
  *
- * Ищет факты по тексту запроса тем же keyword-скорингом, что и блок recall
- * (М2 добавит векторный поиск через `facade.embed`, ADR-107). Порог
- * `minScore` — настройка **recall**: явный поиск агента отдаём шире (достаточно
- * совпадения одного токена), иначе модель получала бы «ничего не найдено» там,
- * где совпадение есть.
+ * Источники выдачи:
+ * - **факты** памяти — keyword-скоринг (порог `minScore` — настройка recall:
+ *   явный поиск агента отдаём шире, иначе модель получала бы «ничего не
+ *   найдено» там, где совпадение есть);
+ * - **индекс проекта** (если он готов или устарел) — гибридный поиск по
+ *   корпусу: keyword + вектор + RRF (`engine/search.ts`).
+ *
+ * Списки сливаются **RRF** (docs/MEMORY.md §2.3): один порядок выдачи для
+ * фактов и фрагментов корпуса. Каждый результат несёт **evidence** (источник,
+ * строки/поколение, score) — модель видит, откуда взялось утверждение.
+ *
+ * Индекса нет → поведение М1 (поиск только по фактам).
  */
 import type { PluginToolDefinition } from '@itphx/synth-core';
 import { z } from 'zod';
 
+import { reciprocalRankFusion, type SearchItem } from '../engine/search.js';
 import {
   formatFactLineWithMeta,
   MemoryUnavailableError,
@@ -42,7 +50,7 @@ export const memorySearchJsonSchema: Record<string, unknown> = {
       type: 'integer',
       minimum: 1,
       maximum: 20,
-      description: 'Сколько фактов вернуть (по умолчанию 5)',
+      description: 'Сколько результатов вернуть (по умолчанию 5)',
     },
     kind: {
       type: 'string',
@@ -58,8 +66,21 @@ export const memorySearchJsonSchema: Record<string, unknown> = {
   additionalProperties: false,
 };
 
-/** Сколько фактов отдавать по умолчанию. */
+/** Сколько результатов отдавать по умолчанию. */
 const DEFAULT_LIMIT = 5;
+
+/** Строка найденного фрагмента корпуса (evidence). */
+export function formatChunkLine(item: SearchItem): string {
+  const metadata = item.metadata ?? {};
+  const path = typeof metadata.path === 'string' ? metadata.path : undefined;
+  const factId = typeof metadata.factId === 'string' ? metadata.factId : undefined;
+  const source = path ?? factId ?? item.documentId;
+  const startLine = typeof metadata.startLine === 'number' ? metadata.startLine : undefined;
+  const endLine = typeof metadata.endLine === 'number' ? metadata.endLine : undefined;
+  const range =
+    startLine !== undefined && endLine !== undefined ? `, ${startLine}-${endLine}` : '';
+  return `- ${item.text} (src: ${source}${range}, score ${item.score.toFixed(2)})`;
+}
 
 /**
  * Тул поиска по памяти.
@@ -71,7 +92,7 @@ export function createMemorySearchTool(provider: MemoryProviderLite): PluginTool
   return {
     name: MEMORY_SEARCH_TOOL_NAME,
     description:
-      'Ищет факты в памяти по тексту запроса. Возвращает совпавшие утверждения с источником, id и уверенностью.',
+      'Ищет факты и фрагменты корпуса в памяти по тексту запроса. Возвращает совпавшие утверждения с источником, id и уверенностью.',
     parameters: memorySearchParameters,
     jsonSchema: memorySearchJsonSchema,
     capabilities: ['memory'],
@@ -95,21 +116,60 @@ export function createMemorySearchTool(provider: MemoryProviderLite): PluginTool
           // промпта (ADR-107: хост прокидывает проект в суженный контекст).
           ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
         });
-        const scored = facts
+        const factEntries = facts
           .map((fact) => ({ fact, score: keywordScore(query, fact.text) }))
-          .filter((entry) => entry.score > 0);
-        scored.sort((a, b) => {
-          if (b.score !== a.score) return b.score - a.score;
-          if (b.fact.confidence !== a.fact.confidence) return b.fact.confidence - a.fact.confidence;
-          const byUpdated = Date.parse(b.fact.updatedAt) - Date.parse(a.fact.updatedAt);
-          if (!Number.isNaN(byUpdated) && byUpdated !== 0) return byUpdated;
-          return a.fact.id.localeCompare(b.fact.id);
-        });
-        const top = scored.slice(0, limit);
-        if (top.length === 0) {
+          .filter((entry) => entry.score > 0)
+          .sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;
+            if (b.fact.confidence !== a.fact.confidence) return b.fact.confidence - a.fact.confidence;
+            const byUpdated = Date.parse(b.fact.updatedAt) - Date.parse(a.fact.updatedAt);
+            if (!Number.isNaN(byUpdated) && byUpdated !== 0) return byUpdated;
+            return a.fact.id.localeCompare(b.fact.id);
+          });
+
+        // Фрагменты корпуса — если индекс проекта готов (или устарел).
+        const index = await provider.projectIndex(ctx.projectId);
+        const chunkItems: SearchItem[] =
+          index && (index.state === 'ready' || index.state === 'stale')
+            ? (await provider.searchIndex(index.index.id, query, { topK: limit * 3 })).items
+            : [];
+
+        if (factEntries.length === 0 && chunkItems.length === 0) {
           return { content: 'Ничего не найдено.' };
         }
-        return { content: top.map((entry) => formatFactLineWithMeta(entry.fact)).join('\n') };
+
+        const fused = reciprocalRankFusion([
+          factEntries.map((entry) => ({ key: `fact:${entry.fact.id}`, score: entry.score })),
+          chunkItems.map((item) => ({ key: `chunk:${item.chunkId}`, score: item.score })),
+        ]);
+        const factsById = new Map(factEntries.map((entry) => [entry.fact.id, entry.fact]));
+        const chunksById = new Map(chunkItems.map((item) => [item.chunkId, item]));
+
+        const lines: string[] = [];
+        const evidence: Array<Record<string, unknown>> = [];
+        for (const entry of fused.slice(0, limit)) {
+          if (entry.key.startsWith('fact:')) {
+            const fact = factsById.get(entry.key.slice('fact:'.length));
+            if (!fact) continue;
+            lines.push(formatFactLineWithMeta(fact));
+            evidence.push({ kind: 'fact', factId: fact.id, source: fact.provenance.sourceKind });
+            continue;
+          }
+          const item = chunksById.get(entry.key.slice('chunk:'.length));
+          if (!item) continue;
+          lines.push(formatChunkLine(item));
+          evidence.push({
+            kind: 'chunk',
+            indexId: item.indexId,
+            generation: item.generation,
+            chunkId: item.chunkId,
+            path: item.metadata?.path,
+            startLine: item.metadata?.startLine,
+            endLine: item.metadata?.endLine,
+          });
+        }
+
+        return { content: lines.join('\n'), metadata: { results: evidence } };
       } catch (err) {
         if (err instanceof MemoryUnavailableError) {
           return { content: err.message, isError: true };

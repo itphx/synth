@@ -11,7 +11,7 @@
   },
   "mode": "inline",
   "provides": {
-    "tools": ["memory_search", "memory_write", "memory_forget"],
+    "tools": ["memory_search", "memory_write", "memory_forget", "memory_index"],
     "promptBlocks": [
       {
         "key": "plugin.synth-plugin-memory.facts",

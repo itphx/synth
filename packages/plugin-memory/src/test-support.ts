@@ -42,6 +42,31 @@ export interface TestFacadeOptions {
   settings?: Record<string, unknown>;
   /** `false` — сервис памяти недоступен (`facade.memory === undefined`). */
   withMemory?: boolean;
+  /** Функция эмбеддингов (по умолчанию — детерминированная заглушка). */
+  embed?: (texts: readonly string[]) => Promise<number[][]>;
+  /** Размерность вектора заглушки (по умолчанию — 8). */
+  embedDimension?: number;
+}
+
+/**
+ * Детерминированный фейковый эмбеддер.
+ *
+ * Вектор — псевдо-вектор из суммы кодов символов: одинаковый текст →
+ * одинаковый вектор, разный текст → разный вектор. Эмбеддинги в тестах не
+ * должны зависеть от провайдера (в бою — только через шлюз, ADR-036).
+ */
+export function fakeEmbed(texts: readonly string[], dimension = 8): Promise<number[][]> {
+  return Promise.resolve(
+    texts.map((text) => {
+      const vector = new Array<number>(dimension).fill(0);
+      let sum = 0;
+      for (let i = 0; i < text.length; i += 1) sum = (sum + text.charCodeAt(i)) % 100_003;
+      for (let i = 0; i < dimension; i += 1) {
+        vector[i] = ((sum + i * 31) % 97) / 97;
+      }
+      return vector;
+    }),
+  );
 }
 
 /**
@@ -77,9 +102,7 @@ export function createTestFacade(options: TestFacadeOptions = {}): TestFacade {
             indexes: storage.memoryIndexes,
           }),
         }),
-    embed: async () => {
-      throw new Error('эмбеддинги в М1 не используются');
-    },
+    embed: options.embed ?? ((texts) => fakeEmbed(texts, options.embedDimension ?? 8)),
     getSettings: <T extends Record<string, unknown> = Record<string, unknown>>(): Readonly<T> =>
       (options.settings ?? {}) as Readonly<T>,
   };
