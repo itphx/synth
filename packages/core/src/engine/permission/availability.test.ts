@@ -177,6 +177,16 @@ describe('computeToolAvailability — workspace (ADR-075)', () => {
     expect(computeToolAvailability('classify_conversation', ['runtime'], { workspaceReady: false })).toEqual({ available: true });
   });
 
+  it('workspaceReady:false не блокирует тул памяти (capability memory)', () => {
+    // Память не привязана к рабочему каталогу проекта (ADR-107): тул памяти
+    // остаётся доступен в сессии без `project.workspace`.
+    expect(
+      computeToolAvailability('plugin_synth_plugin_memory_memory_search', ['memory'], {
+        workspaceReady: false,
+      }),
+    ).toEqual({ available: true });
+  });
+
   it('workspaceReady undefined/true → fail-open', () => {
     expect(computeToolAvailability('read_file', ['file_read'], {})).toEqual({ available: true });
     expect(computeToolAvailability('read_file', ['file_read'], { workspaceReady: true })).toEqual({ available: true });

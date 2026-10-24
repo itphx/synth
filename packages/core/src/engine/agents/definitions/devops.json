@@ -18,7 +18,8 @@
     "git_write",
     "task",
     "mcp",
-    "runtime"
+    "runtime",
+    "memory"
   ],
   "icon": "server",
   "color": "--syntax-type",

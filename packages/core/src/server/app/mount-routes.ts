@@ -26,6 +26,7 @@ import {
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createPluginsRoutes, createPluginSettingsRoutes,
+  createMemoryRoutes, MEMORY_PLUGIN_NAME,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -637,6 +638,22 @@ export function mountStandaloneRoutes(
       serviceKeys: deps.storageContext.serviceKeys,
       // Ф7: серверная политика (allow-list) из работающего рантайма.
       serverPolicy: () => resolvePluginServerPolicy(deps.pluginRuntime.config),
+    },
+  ));
+
+  // ADR-107 / PROP-047 §2.1: портал памяти в ядре — чтение фактов и индексов
+  // через доменные порты памяти (namespace плагина памяти подставляет сервер).
+  // Standalone — дефолтный guard (`requireAuth`; единственный пользователь
+  // инстанса — владелец, ADR-079); managed backend передаст RBAC (ADMIN).
+  app.route('/api/v2/memory', createMemoryRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      memory: {
+        facts: deps.storageContext.memoryFacts,
+        indexes: deps.storageContext.memoryIndexes,
+      },
+      // Активен ли плагин памяти в процессе — реестр активаций хоста (ADR-090).
+      isPluginActive: () => deps.pluginRuntime.host.isActive(MEMORY_PLUGIN_NAME),
     },
   ));
 

@@ -42,16 +42,21 @@ export function findTool(
  *
  * Сессии у шага нет (ADR-101 §1) — `sessionId` здесь просто параметр-пакет с
  * префиксом `pipeline:` (по нему тулы, пишущие в сессию, отсеивают вызов).
+ *
+ * Проект прогона — метаданные хода (ADR-107): плагинный тул (память)
+ * ограничивает себя данными проекта, а не всего инстанса.
  */
 export function buildToolContext(
   ctx: StepExecutionContext,
   workingDir: string,
 ): ToolContext {
+  const projectId = ctx.projectId ?? ctx.step?.projectId;
   return {
     sessionId: `pipeline:${ctx.runId}`,
     messageId: generateId(),
     abortSignal: ctx.signal,
     ...(ctx.step?.agent?.id ? { agentRole: ctx.step.agent.id } : {}),
+    ...(projectId ? { projectId } : {}),
     workingDir,
   };
 }

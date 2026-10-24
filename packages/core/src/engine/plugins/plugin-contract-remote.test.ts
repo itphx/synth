@@ -130,6 +130,9 @@ function capabilitiesFor(fixture: PluginContractFixtureName): Record<string, unk
         ...base,
         points: { llmFilters: [{ id: 'plugin:contract-untrusted:block', phase: 'pre_request' }] },
       };
+    case 'memory':
+      // Сервис памяти по проводу не экспонируется: у процесса нет точек.
+      return { ...base, points: {} };
   }
 }
 

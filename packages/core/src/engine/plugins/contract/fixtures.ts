@@ -31,6 +31,7 @@ export const PLUGIN_CONTRACT_FIXTURES = [
   'unknown-capability',
   'reserved-tool-name',
   'untrusted-deny',
+  'memory',
 ] as const;
 export type PluginContractFixtureName = (typeof PLUGIN_CONTRACT_FIXTURES)[number];
 
@@ -49,8 +50,13 @@ export interface PluginFixture {
   manifest: PackManifest;
   /** Фактический уровень доверия установки (`CatalogTrustLevel`). */
   trustLevel: CatalogTrustLevel;
-  /** Регистрации вкладов через фасад. */
-  apply(facade: PluginFacade): void;
+  /**
+   * Регистрации вкладов через фасад.
+   *
+   * Может быть асинхронной: запись в сервис памяти (`facade.memory`) — это
+   * `await` порта, а активация ждёт промис `apply()`.
+   */
+  apply(facade: PluginFacade): void | Promise<void>;
 }
 
 /** Имя плагина эталонной фикстуры. */
@@ -69,6 +75,11 @@ export const REFERENCE_RESPONSE_FILTER = 'plugin:contract-plugin:response';
 export const REFERENCE_TOOL_NAME = 'memory_search';
 /** Полное имя инструмента в реестре (`plugin_<ns>_<tool>`). */
 export const REFERENCE_TOOL_FULL_NAME = pluginToolFullName(REFERENCE_PLUGIN, REFERENCE_TOOL_NAME);
+
+/** Имя плагина-фикстуры сервиса памяти (PROP-047 §2.1). */
+export const MEMORY_FIXTURE_PLUGIN = 'contract-memory';
+/** Id факта, который пишет фикстура сервиса памяти. */
+export const MEMORY_FIXTURE_FACT_ID = 'contract-memory-fact';
 
 /** Длинное содержимое блока — для проверки бюджета (`status: 'truncated'`). */
 export const REFERENCE_LONG_CONTENT = 'M'.repeat(600);
@@ -373,6 +384,64 @@ const untrustedDenyFixture: PluginFixture = {
   },
 };
 
+/**
+ * Фикстура сервиса памяти (PROP-047 §2.1, предпосылка A).
+ *
+ * Плагин пишет факт через `facade.memory` и читает его обратно. Фикстура
+ * **сама проверяет контракт** и бросает наружу, если хост нарушил его:
+ * - namespace навязывает хост (значение фикстуры перезаписано на
+ *   `plugin:<имя плагина>`);
+ * - записанный факт читается обратно;
+ * - `namespace` в запросе игнорируется (свой факт виден даже с «чужим»
+ *   фильтром).
+ *
+ * Ошибка `apply()` превращается в отказ активации
+ * (`plugin.loader_unavailable`, шаг `facade`) — поэтому «контракт нарушен»
+ * поймает сам suite.
+ */
+const memoryFixture: PluginFixture = {
+  name: MEMORY_FIXTURE_PLUGIN,
+  version: REFERENCE_VERSION,
+  trustLevel: 'trusted',
+  manifest: baseManifest(MEMORY_FIXTURE_PLUGIN),
+  apply: async (facade) => {
+    const memory = facade.memory;
+    // Сервис памяти инстансом не сконфигурирован — плагин это учитывает
+    // (ошибок активации не бросаем).
+    if (!memory) return;
+
+    await memory.facts.save({
+      id: MEMORY_FIXTURE_FACT_ID,
+      // Namespace навязывает хост: «чужое» значение должно быть перезаписано.
+      namespace: 'plugin:someone-else',
+      version: 1,
+      text: 'факт плагина памяти',
+      kind: 'decision',
+      provenance: {
+        sourceKind: 'session',
+        sourceId: 's-1',
+        capturedAt: '2026-10-24T10:00:00.000Z',
+      },
+      confidence: 0.8,
+      status: 'active',
+      createdAt: '2026-10-24T10:00:00.000Z',
+      updatedAt: '2026-10-24T10:00:00.000Z',
+    });
+
+    const read = await memory.facts.get(MEMORY_FIXTURE_FACT_ID);
+    if (!read) {
+      throw new Error('фасад памяти не отдал записанный факт обратно');
+    }
+    if (read.namespace !== `plugin:${MEMORY_FIXTURE_PLUGIN}`) {
+      throw new Error(`namespace факта не навязан хостом: «${read.namespace}»`);
+    }
+    const listed = await memory.facts.list({ namespace: 'plugin:someone-else' });
+    if (listed.length !== 1 || listed[0]?.id !== MEMORY_FIXTURE_FACT_ID) {
+      throw new Error('фильтр namespace в запросе не проигнорирован');
+    }
+  },
+};
+
 /** Набор фикстур контрактного suite. */
 export const PLUGIN_FIXTURE_SET: Record<PluginContractFixtureName, PluginFixture> = {
   reference: referenceFixture,
@@ -383,4 +452,5 @@ export const PLUGIN_FIXTURE_SET: Record<PluginContractFixtureName, PluginFixture
   'unknown-capability': unknownCapabilityFixture,
   'reserved-tool-name': reservedToolNameFixture,
   'untrusted-deny': untrustedDenyFixture,
+  memory: memoryFixture,
 };

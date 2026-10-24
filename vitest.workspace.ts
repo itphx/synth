@@ -7,4 +7,5 @@ export default defineWorkspace([
   'packages/storage-postgres',
   'packages/backend',
   'packages/ui',
+  'packages/plugin-memory',
 ]);

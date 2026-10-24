@@ -123,6 +123,19 @@ export interface PluginsRuntimeSettings {
   /** ADR-090 Ф5в: management-плагин нельзя снять/переустановить через API/CLI. */
   managedReadonly?: boolean;
   /**
+   * ADR-090 (WP-F): провайдер эмбеддингов для `facade.embed`.
+   *
+   * Пусто — сервис эмбеддингов не сконфигурирован (вызов бросает
+   * `plugin.embedding_not_configured`).
+   */
+  embeddingProvider?: string;
+  /**
+   * ADR-090 (WP-F): модель эмбеддингов для `facade.embed`.
+   *
+   * Пусто — берётся дефолтная модель провайдера.
+   */
+  embeddingModel?: string;
+  /**
    * ADR-090 Ф7: серверная политика плагинов для гибридного режима.
    *
    * `mode` — `off` (сервер не ограничивает) | `allowlist` (разрешены только
@@ -384,6 +397,11 @@ export function mergePluginsConfig(
     // установка проходит.
     deployTrust: r.deployTrust ?? base?.deployTrust ?? 'trusted',
     managedReadonly: r.managedReadonly ?? base?.managedReadonly ?? true,
+    // ADR-090 (WP-F): провайдер/модель эмбеддингов для `facade.embed`.
+    // Пусто — сервис эмбеддингов не сконфигурирован (плагин получает ошибку
+    // `plugin.embedding_not_configured` и решает сам, деградировать ли).
+    embeddingProvider: r.embeddingProvider ?? base?.embeddingProvider ?? '',
+    embeddingModel: r.embeddingModel ?? base?.embeddingModel ?? '',
     // Ф7: серверная политика плагинов в гибриде. Режим и список мержатся
     // по отдельности (runtime может переключить режим, не затирая список).
     hybrid: {

@@ -26,6 +26,7 @@ import {
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createPluginsRoutes, createPluginSettingsRoutes,
+  createMemoryRoutes, MEMORY_PLUGIN_NAME,
   createOAuthRoutes, bindCredentialToConnector, syncMcpManagerFromRegistry,
   resolveProjectWorkspace,
   resolvePluginServerPolicy,
@@ -489,6 +490,31 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     {
       readGuard: auth.requirePermission('ADMIN'),
       writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
+
+  // ADR-107 / PROP-047 §2.1: портал памяти в ядре — чтение фактов и индексов
+  // через доменные порты памяти. Managed RBAC: **только ADMIN** — портал
+  // админский (данные памяти видны целиком, без проектной проекции).
+  // Namespace плагина памяти подставляет сервер — клиент его не задаёт.
+  app.route('/api/v2/memory', createMemoryRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      memory: {
+        facts: deps.storageContext.memoryFacts,
+        indexes: deps.storageContext.memoryIndexes,
+      },
+      guard: auth.requirePermission('ADMIN'),
+      // Активен ли плагин памяти в процессе — реестр активаций хоста (ADR-090).
+      isPluginActive: () => deps.pluginRuntime.host.isActive(MEMORY_PLUGIN_NAME),
+      messages: {
+        invalidStatus: (c) => t('errors.validation.invalidMemoryStatus', undefined, c),
+        invalidState: (c) => t('errors.validation.invalidMemoryState', undefined, c),
+        invalidLimit: (c) => t('errors.validation.invalidMemoryLimit', undefined, c),
+        invalidOffset: (c) => t('errors.validation.invalidMemoryOffset', undefined, c),
+        factNotFound: (c) => t('errors.notFound.memoryFact', undefined, c),
+        unavailable: (c) => t('errors.unavailable.memory', undefined, c),
+      },
     },
   ));
 

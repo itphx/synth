@@ -56,7 +56,12 @@
 - наблюдать LLM-вызовы и — при достаточном доверии — блокировать их (`pre_request`, `embedding`)
   или маскировать тексты эмбеддинга;
 - зарегистрировать инструмент, который модель видит наравне со встроенными (но под своим
-  namespace и через permission-слой).
+  namespace и через permission-слой);
+- пользоваться сервисом памяти инстанса (`facade.memory`) — фактами и индексами **в пределах
+  своего namespace'а** (§4.5);
+- получать эмбеддинги через шлюз (`facade.embed`) — с теми же guard'ами, rate-limit и аудитом,
+  что у обычных LLM-вызовов (§4.6);
+- читать свои настройки (`facade.getSettings`) — запись своего плагина в `plugins.json` (§4.7).
 
 ### 1.2. Что плагин не может
 
@@ -64,6 +69,7 @@
 |---|---|
 | изменить модель, ролевой промпт или шаблоны промптов | это не вклад точки расширения; выбор модели — настройка сессии/инстанса |
 | обойти permission-слой (`plan`/`act`/`yolo`, `allow`/`deny`/`ask`) | [ADR-025](./arch_decisions/adr-025-plan-act-toggle.md)/[ADR-029](./arch_decisions/adr-029-granular-permissions.md); тул плагина — обычный тул с capabilities |
+| читать или перезаписать память другого плагина | namespace навязывает хост (`plugin:<имя плагина>`); чужие записи выглядят как «не найдено» (§4.5) |
 | обойти LLM-шлюз, его guard'ы, rate-limit и аудит | [ADR-036](./arch_decisions/adr-036-llm-gateway.md) |
 | читать файлы/секреты «напрямую» в обход разрешений и API | секреты плагину не выдаются; ФС — только через инструменты и permission-слой |
 | писать в `$SYNTH_DATA_DIR` мимо слоя хранения | [ADR-096](./arch_decisions/adr-096-storage-layer.md) |
@@ -83,6 +89,10 @@
 > `llmFilters` и `tools`. Остальные точки из таблицы ADR-090 (hooks, providers,
 > routes, commands, skills, agents, mcp, events, schedules, settings, UI-slot) в v1 **не
 > экспонируются** — на них нельзя зарегистрироваться из плагина.
+>
+> Отдельно от точек регистрации фасад даёт **сервисы**, а не новые вклады: сервис памяти
+> `facade.memory` (§4.5), эмбеддинги `facade.embed` (§4.6) и свои настройки
+> `facade.getSettings` (§4.7).
 
 ---
 
@@ -397,6 +407,10 @@ export interface PluginFacade {
   registerPromptBlock(provider: PromptBlockProvider, opts?: { title?: string }): PluginDisposer;
   registerLlmFilter(filter: LlmCallFilter, opts?: { failMode?: 'open' | 'closed'; timeoutMs?: number }): PluginDisposer;
   registerTool(def: PluginToolDefinition): PluginDisposer;
+  memory?: {                                  // сервис памяти (§4.5); может отсутствовать
+    readonly facts: MemoryFactRepository;
+    readonly indexes: MemoryIndexRepository;
+  };
 }
 ```
 
@@ -589,7 +603,8 @@ namespace — имя плагина в нижнем регистре, небук
 префикс `plugin_` запрещён (иначе сверка `provides` была бы неоднозначной).
 
 **Capabilities.** Обязательны и непусты, значения — из `ToolCapability`:
-`file_read`, `file_write`, `shell`, `search`, `web`, `git_read`, `git_write`, `task`, `user`
+`file_read`, `file_write`, `shell`, `search`, `web`, `git_read`, `git_write`, `task`, `user`,
+`memory` (память: `memory_search`/`memory_write`/`memory_forget`)
 (`mcp` и `runtime` **зарезервированы**: первый — слой MCP, второй — неотключаемые админом
 примитивы ядра). Без capabilities тул был бы невидим permission-слою и админ-отключению, поэтому
 регистрация отклоняется.
@@ -602,9 +617,30 @@ namespace — имя плагина в нижнем регистре, небук
 Инстанс может выключить инструмент по имени (`plugin_<ns>_<tool>`) или по capability через
 `PUT /api/v2/settings/tools-disabled` — но это же выключит и встроенные тулы с той же capability.
 
-**Что приходит в `execute`.** `(params, ctx)`, где `ctx.sessionId`, `ctx.messageId`,
-`ctx.workingDir`, `ctx.agentRole?`, `ctx.abortSignal?`. Не опирайтесь на `ctx.extra` — это
-внутренний объект ядра, его состав не является частью контракта и может меняться.
+**Что приходит в `execute`.** `(params, ctx)`, где `ctx` — `ToolContext`, но **суженный**:
+хост отдаёт плагину только идентификаторы хода и рабочий каталог.
+
+| Поле `ToolContext` | Что это | Когда приходит |
+|---|---|---|
+| `sessionId` | id сессии (в пайплайне — `pipeline:<runId>`) | всегда |
+| `messageId` | id сообщения/вызова | всегда |
+| `workingDir` | рабочий каталог (workspace проекта) | всегда |
+| `agentRole` | роль агента | если задана |
+| `projectId` | id проекта сессии | если задан |
+| `abortSignal` | сигнал отмены хода | если задан |
+| `extra` | внутреннее состояние ядра | **не передаётся** |
+| `dataDir` | корень данных инстанса | **не передаётся** |
+
+`ctx.extra` — внутренний объект ядра (`sessionManager`, `projectStore`, `eventBus`, сторы,
+порт исполнения, конфиг безопасности); `ctx.dataDir` — корень данных инстанса. Ни то,
+ни другое плагину не отдаётся: **в обоих режимах** (`inline` и `out-of-process`) тул плагина
+видит ровно этот минимум. По проводу (`out-of-process`) контекст ещё и сериализуется —
+в DTO уходят только `sessionId`/`messageId`/`workingDir` (§5.3).
+
+Сужение делает ядро в **одной точке** — на вызове тула, поэтому правило действует одинаково
+для сессий, саб-агентов (`task`) и шагов пайплайна. Встроенные (`builtin`) и MCP-инструменты
+контекст получают без изменений — правило касается только инструментов плагинов
+(`source: 'plugin'`).
 
 **Почему стоит задавать `jsonSchema`.** `parameters` — ваша zod-схема; хост валидирует ею
 аргументы (`safeParse`). Но для модели схема конвертируется хостом в JSON Schema, и конвертер
@@ -663,6 +699,139 @@ const tool: Parameters<PluginFacade['registerTool']>[0] = {
 Отклонённая регистрация «зарегистрированной» не считается: например, блок с тиром `stable`
 отклоняется, и если он был объявлен в `provides`, активация упадёт с `provides_mismatch`.
 
+### 4.5. Сервис памяти (`facade.memory`)
+
+Ядро владеет данными памяти инстанса (факты и индексы с чанками — порты слоя хранения,
+[ADR-096](./arch_decisions/adr-096-storage-layer.md)), плагин — логикой памяти
+([PROP-047](./arch_decisions/prop-047-memory-gbrain.md)). Фасад даёт плагину **готовый доступ к
+этим данным** — с теми же методами, что у портов:
+
+```typescript
+facade.memory?.facts;    // MemoryFactRepository: save/get/list/delete/supersede/count
+facade.memory?.indexes;  // MemoryIndexRepository: saveIndex/getIndex/listIndexes/deleteIndex/
+                         // setState/replaceChunks/listChunks/deleteChunks/countChunks
+```
+
+**Правило namespace.** Запись в памяти всегда принадлежит namespace'у. Хост навязывает
+плагину `plugin:<имя плагина>` (полное имя плагина, не сокращение `plugin_<ns>_…` из
+названий тулов) и **перезаписывает** `namespace` своим: значение из аргумента игнорируется,
+поэтому записать факт в чужой namespace нельзя.
+
+**Изоляция.** Плагин видит только свою память:
+
+| Операция | Поведение |
+|---|---|
+| `save`/`saveIndex` | `namespace` перезаписывается namespace'ом плагина |
+| `get`/`getIndex` | запись чужого namespace → `null` (не «существует, но чужой») |
+| `list`/`count`/`listIndexes` | namespace подставляется принудительно: фильтр `namespace` из запроса **игнорируется** |
+| `delete`/`supersede`/`setState`/`deleteIndex` | только своя запись; иначе — «не найдено» (`false`). У `supersede` проверяются **оба** id (заменяемый факт и новая версия) — иначе плагин проставил бы `supersededBy` на чужой факт; новую версию надо **сначала записать** |
+| `replaceChunks`/`listChunks`/`deleteChunks`/`countChunks` | только свои индексы; чужой индекс → `0`/пустой список |
+
+Нарушение namespace **не выражается исключением** — наружу уходит только «не найдено». Иначе по
+результату можно было бы отличить «чужой id» от «несуществующий» и перебором id выяснить
+содержимое чужой памяти.
+
+**Сервиса может не быть.** `facade.memory === undefined`, если сервис памяти инстансом не
+сконфигурирован. Это **не ошибка активации**: плагин обязан проверять наличие сервиса
+(фича-детект) и корректно работать без него.
+
+**Только `inline`.** По проводу (`out-of-process`, §5) сервис памяти не экспонируется: удалённый
+плагин получает только сериализуемые DTO (§5.3).
+
+**Пример: факт, который помнит плагин.**
+
+```typescript
+export default {
+  async apply(facade) {
+    const memory = facade.memory;          // может быть undefined — проверяем
+    if (!memory) return;
+
+    await memory.facts.save({
+      id: 'deploy-policy',
+      namespace: 'ignored',                 // хост перезапишет своим
+      version: 1,
+      text: 'деплой идёт через Fleet',
+      kind: 'decision',
+      provenance: { sourceKind: 'session', sourceId: 's-42', capturedAt: new Date().toISOString() },
+      confidence: 0.9,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    // Свой факт читается обратно; чужие не видны.
+    const facts = await memory.facts.list({ namespace: 'plugin:someone-else' });
+    // → только факты этого плагина
+  },
+};
+```
+
+### 4.6. Эмбеддинги (`facade.embed`)
+
+Плагину нужен вектор для текста — и он не должен дёргать провайдера сам: любой
+LLM-вызов в Synth идёт через шлюз ([ADR-036](./arch_decisions/adr-036-llm-gateway.md)).
+Фасад даёт **готовый вызов**, который хост оборачивает в `GatewayProvider` (guard,
+обфускация, rate-limit, аудит и embedding-фаза фильтров `llmFilters`):
+
+```typescript
+const vectors: number[][] = await facade.embed(['первый текст', 'второй текст']);
+// vectors[i] — вектор для texts[i]
+```
+
+**Провайдер и модель.** По умолчанию — конфиг инстанса:
+`plugins.embeddingProvider` и `plugins.embeddingModel` (см.
+[CONFIGURATION.md](./CONFIGURATION.md) §«Плагины (`plugins.*`)»). Плагин может
+перекрыть их **в вызове** — по каждому полю отдельно:
+
+```typescript
+await facade.embed(['текст'], { provider: 'ollama', model: 'nomic-embed-text' });
+```
+
+Пустая модель — дефолтная модель провайдера. Провайдера нет ни в конфиге, ни в
+вызове — `facade.embed` **бросает** `plugin.embedding_not_configured`: хост при
+этом не падает, решает плагин (деградировать или не звать вовсе).
+
+**Лимиты** (превышение → `plugin.embed_limit`, проверка **до** обращения к
+провайдеру):
+
+| Лимит | Значение |
+|---|---|
+| текстов за вызов | не более 64 |
+| символов в одном тексте | не более 8 000 |
+| символов суммарно за вызов | не более 64 000 |
+
+**Результат.** Векторов должно быть столько же, сколько текстов, и все они —
+**одной длины**; иначе `plugin.embed_invalid_result`. Ошибки провайдера
+пробрасываются **как есть** (плагин видит причину; секретов в текстах нет —
+это обеспечивает шлюз).
+
+**Только `inline`.** По проводу (`out-of-process`, §5) сервис не экспонируется:
+протокол v1 покрывает только три точки расширения (§5.3).
+
+### 4.7. Свои настройки (`facade.getSettings`)
+
+Настройки плагина живут в `plugins.json` рядом с lock-файлом
+(`plugins[<имя плагина>].settings`). Фасад отдаёт **свою** запись:
+
+```typescript
+const settings = facade.getSettings<{ namespace?: string; limit?: number }>();
+// → { namespace: 'notes', limit: 10 } или {} — если записи нет
+```
+
+Правила:
+
+- **Только свои.** Имя плагина берёт **хост** (из активации), а не плагин:
+  настройки чужого плагина не видны.
+- **По умолчанию — `{}`**, никогда не `undefined`: `getSettings().foo` не падает.
+- **Снимок читается на каждый вызов** (файл маленький), поэтому изменения
+  применяются **без рестарта**. Влияние на уже активированные регистрации
+  (блоки промпта, фильтры, тулы) — на усмотрение плагина.
+- **События изменения нет**: writer'а per-plugin настроек пока не существует
+  (нет и API их изменения) — мёртвый API не вводим.
+
+**Только `inline`.** По проводу (`out-of-process`, §5) сервис не экспонируется:
+протокол v1 покрывает только три точки расширения (§5.3).
+
 ---
 
 ## 5. Два режима исполнения
@@ -674,7 +843,7 @@ const tool: Parameters<PluginFacade['registerTool']>[0] = {
 | Где код | в процессе core | отдельный процесс Node, HTTP/1.1 + JSON |
 | Изоляция | нет | процессовая: падение/утечка памяти не роняют core |
 | Латентность | ~0 | round-trip на каждый вызов точки |
-| Доступ к internals | есть (ограничен фасадом и дисциплиной) | только сериализуемые DTO |
+| Доступ к internals | контекст тула сужен (§4.3), но процесс тот же — Node API процесса доступен | только сериализуемые DTO |
 | Что нужно в бандле | `dist/index.js` | `dist/server.js` |
 | Когда выбирать | `llmFilters` (горячий путь), быстрые блоки, простые тулы | тяжёлые фильтры (ML, антивирус, DLP), блоки с тяжёлой загрузкой, недоверенный код |
 
@@ -801,7 +970,15 @@ process.on('SIGTERM', () => process.exit(0));
 | `llmFilters` | `LlmFilterInput` | `LlmFilterVerdict` |
 | `tools` | `{ parameters, context: { sessionId, messageId, workingDir } }` | `{ content, isError? }` |
 
-Порты хранилища, реестры ядра, `GatewayProvider`, `ToolContext.extra` наружу **не отдаются**.
+Порты хранилища, реестры ядра, `GatewayProvider`, `ToolContext.extra` и `ToolContext.dataDir`
+наружу **не отдаются** (в `inline`-режиме — тоже: контекст тула плагина сужается ядром,
+см. §4.3). Сервис памяти `facade.memory` по проводу не экспонируется — он доступен только
+`inline`-плагину (§4.5).
+
+То же и для остальных сервисов фасада: **`facade.embed` и `facade.getSettings` в
+`out-of-process` недоступны** — wire-протокол v1 покрывает только три точки расширения
+(`promptBlocks`/`llmFilters`/`tools`), а эмбеддинги и настройки не сериализуются в его
+DTO. Плагин, которому они нужны, работает в режиме `inline` (§4.6, §4.7).
 
 ---
 
@@ -1407,6 +1584,21 @@ X-Synth-Plugin-Id: my-plugin
 `approval_expired`, `approval_stale` (недействительное подтверждение — конфликт состояния, §7.3);
 `202` — `approval_required`; `500` — `loader_unavailable`, `disposer_failed`; `502` — сетевой
 `source_unavailable`.
+
+### 12.5. Ошибки сервисов фасада
+
+Эти коды — **не** из `PLUGIN_AUDIT_REASONS`: их не бывает в журнале плагинов и в
+ответе API. Это ошибки, которые получает **сам плагин** при вызове сервиса фасада
+(`facade.embed`): у них есть поле `code` (`PluginFacadeError`).
+
+| Код | Что означает | Что делать автору |
+|---|---|---|
+| `plugin.embed_limit` | превышен лимит вызова: больше 64 текстов, текст длиннее 8 000 символов или суммарно больше 64 000 | разбейте запрос на части; проверка идёт **до** обращения к провайдеру |
+| `plugin.embedding_not_configured` | эмбеддинги не сконфигурированы: нет `plugins.embeddingProvider` и не передан `opts.provider` | попросите оператора задать провайдера/модель или передайте их в вызове; либо деградируйте (сервис памяти §4.5 работает без эмбеддингов) |
+| `plugin.embed_unavailable` | в этом инстансе сервис эмбеддингов не подключён | деградируйте: `facade.embed` есть всегда, но хост без шлюза его не обслуживает |
+| `plugin.embed_invalid_result` | провайдер вернул не столько векторов, сколько текстов, либо векторы разной длины | это ошибка конфигурации/провайдера, а не плагина; повторять вызов смысла нет |
+
+Ошибки самого провайдера приходят **как есть** (без обёртки) — плагин видит причину.
 
 ---
 

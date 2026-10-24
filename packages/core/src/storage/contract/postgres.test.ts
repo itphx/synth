@@ -24,6 +24,8 @@ import {
   describeIdentityClaimRepository,
   describeJobRepository,
   describeMaintenanceAuditRepository,
+  describeMemoryFactRepository,
+  describeMemoryIndexRepository,
   describePluginAuditRepository,
   describePluginLockRepository,
   describeSecurityAuditRepository,
@@ -67,7 +69,7 @@ import type { StorageContext } from '../storage-context.js';
  * `storage-context.ts` в core): `@itphx/synth-storage-postgres` — опциональная
  * зависимость, статический импорт сломал бы typecheck core без собранного драйвера.
  *
- * Все 27 доменных портов реализованы (волна 3b): контрактные блоки проходят
+ * Все доменные порты реализованы: контрактные блоки проходят
  * против живой БД; FS/package-bound порты (`skills`/`contextFiles`/`blobs`) —
  * файловые реализации внутри драйвера.
  */
@@ -255,4 +257,9 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
     const { ctx, dispose } = await makeContext();
     return { repo: ctx.pipelineRuns, pipelines: ctx.projectPipelines, dispose };
   });
+
+  // PROP-047 §2.1 (предпосылка A): порты памяти — факты, индексы и чанки
+  // (`memory_facts`/`memory_indexes`/`memory_chunks`, миграция 017).
+  describeMemoryFactRepository('PG → MemoryFactRepository', () => makePort('memoryFacts'));
+  describeMemoryIndexRepository('PG → MemoryIndexRepository', () => makePort('memoryIndexes'));
 });

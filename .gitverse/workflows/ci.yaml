@@ -213,6 +213,27 @@ jobs:
       - name: Тесты
         run: pnpm --filter @itphx/synth-ui test
 
+  # Плагин памяти (ADR-107). Тесты пакета в рантайме импортируют
+  # `@itphx/synth-core` (createMemoryStorage/createScopedMemory — порты
+  # памяти) и `@itphx/synth-shared` (схемы манифеста), поэтому dist обоих
+  # должен быть собран до прогона. Сборка самого плагина для тестов не нужна
+  # (vitest исполняет исходники) — нужен только в релизном контуре.
+  test-plugin-memory:
+    name: Тесты @itphx/synth-plugin-memory
+    runs-on: ubuntu-latest
+    needs: test-shared
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Установка
+        run: npm install -g pnpm@12.14.0 && pnpm install --frozen-lockfile
+      - name: Сборка @itphx/synth-shared
+        run: pnpm --filter @itphx/synth-shared build
+      - name: Сборка @itphx/synth-core
+        run: pnpm --filter @itphx/synth-core build
+      - name: Тесты
+        run: pnpm --filter @itphx/synth-plugin-memory test
+
   # Secret-scan — блокирующая проверка без внешних зависимостей (только node + git),
   # поэтому pnpm здесь не ставится: рабочее дерево + вся история (режимы commits/blobs).
   # Это и есть обещанный в SECURITY.md/CONTRIBUTING.md скан секретов в CI

@@ -1829,6 +1829,49 @@ curl http://localhost:5000/api/v2/oauth/credentials/extc_<...> \
   -H 'Authorization: Bearer admin-key-123'
 ```
 
+### 5.38 Память — `/api/v2/memory` (оба, ADR-107 / PROP-047 §2.1)
+
+Портал памяти в ядре: **только чтение** поверх доменных портов памяти
+(`MemoryFactRepository`/`MemoryIndexRepository`, ADR-096). Единая фабрика
+`createMemoryRoutes` (`packages/core/src/server/routes/memory.ts`) для
+standalone-core и managed-backend; backend добавляет только RBAC через
+`opts.guard`. Устройство подсистемы — [docs/MEMORY.md](./MEMORY.md).
+
+**Namespace задаёт сервер.** Порт памяти обслуживает несколько независимых
+поставщиков, поэтому портал читает только свой namespace —
+`plugin:synth-plugin-memory` (правило хоста: `plugin:<имя плагина>`). Параметр
+`namespace` в query **игнорируется**: клиент подменить его не может. Записи
+чужого namespace выглядят как «не найдено» (404), а не как отказ по правам.
+
+**Права.** Чтение — `requireAuth` (core, standalone) / **ADMIN** (managed,
+админский портал). Портов памяти в сборке нет — контур отвечает **503
+`MEMORY_UNAVAILABLE`** (деградация, а не 500).
+
+| Метод | Путь | Сборка | Назначение / req-resp |
+|---|---|---|---|
+| GET | `/api/v2/memory/status` | оба | Состояние портала: `{provider:{id,mode,active}, readiness, namespace, facts:{total,active}, indexes:{total,ready,stale,failed,building}}`. `provider.id` = namespace, `provider.mode` = `inline` (плагин памяти по дизайну `inline`) или `null`, `provider.active` — активен ли плагин `synth-plugin-memory` в процессе. `readiness`: `ready` (сервис доступен, нет проблемных индексов) / `degraded` (есть индексы `failed`/`stale`) / `unavailable` (порты памяти не сконфигурированы — ответ **200**, портал показывает «память недоступна»). Счётчики — через порты (`count` фактов, выборка индексов) |
+| GET | `/api/v2/memory/facts` | оба | Страница фактов: `{items, total, limit, offset}`. Параметры: `query` (подстрока по `text`, регистронезависимо; ищется **в памяти** после выборки — полнотекстовый поиск М2), `kind`, `status` (`candidate`\|`active`\|`superseded`\|`retracted`\|`all`; по умолчанию `active`), `projectId`, `limit` (1..200, по умолчанию 50), `offset` (≥ 0, по умолчанию 0). `total` — число записей **под фильтрами** (не длина страницы). Мусор в параметрах → 400 `VALIDATION_ERROR` |
+| GET | `/api/v2/memory/facts/:id` | оба | Факт по id (`MemoryFactRecord` как есть); нет факта (или он чужого namespace) → 404 `MEMORY_FACT_NOT_FOUND` |
+| GET | `/api/v2/memory/indexes` | оба | Страница индексов: `{items, total}` — записи `MemoryIndexRecord` **без чанков** (чанки — отдельный порт). Параметры: `projectId`, `state` (`building`\|`ready`\|`stale`\|`failed`\|`all`; по умолчанию `all`). Мусор в `state` → 400 `VALIDATION_ERROR` |
+
+**Коды ошибок:** `VALIDATION_ERROR` (400), `MEMORY_FACT_NOT_FOUND` (404),
+`MEMORY_UNAVAILABLE` (503).
+
+**Пример.**
+
+```bash
+# Статус портала памяти.
+curl http://localhost:5000/api/v2/memory/status -H 'Authorization: Bearer admin-key-123'
+
+# Активные факты с поиском по подстроке.
+curl 'http://localhost:5000/api/v2/memory/facts?status=all&query=fleet&limit=20' \
+  -H 'Authorization: Bearer admin-key-123'
+
+# Индексы, требующие пересборки.
+curl 'http://localhost:5000/api/v2/memory/indexes?state=stale' \
+  -H 'Authorization: Bearer admin-key-123'
+```
+
 ## 6. Источники
 
 | Компонент | Файл |
@@ -1847,6 +1890,7 @@ curl http://localhost:5000/api/v2/oauth/credentials/extc_<...> \
 | Пайплайны проекта, прогоны и шаблоны (ADR-101, Э6) | `packages/core/src/server/routes/pipeline-project-routes.ts`, `packages/core/src/engine/pipelines/*`, `packages/core/src/storage/ports/project-pipeline-repository.ts`, `packages/core/src/storage/ports/pipeline-run-repository.ts`, `packages/shared/src/types/pipeline-engine.ts` |
 | Плагины (ADR-090) | `packages/core/src/server/routes/plugins.ts`, `packages/core/src/engine/plugins/*` (хост, загрузчик, установщик, рантайм), `packages/shared/src/types/{pack,plugin-audit,plugin-lock,plugin-scan,prompt-blocks,llm-filters,plugin-tools}.ts` |
 | Внешние доступы (ADR-105) | `packages/core/src/server/routes/oauth.ts`, `packages/core/src/engine/oauth/*` (клиент, сервис, реестр, аудит), `packages/core/src/storage/external-credential-store.ts`, `packages/core/src/storage/ports/{external-credential-repository,credential-audit-repository}.ts`, `packages/shared/src/types/external-credentials.ts` |
+| Память: портал и метрики (ADR-107, PROP-047) | `packages/core/src/server/routes/memory.ts`, `packages/core/src/metrics/collectors/memory.ts`, `packages/core/src/storage/ports/{memory-fact-repository,memory-index-repository}.ts`, `packages/core/src/engine/plugins/scoped-memory.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

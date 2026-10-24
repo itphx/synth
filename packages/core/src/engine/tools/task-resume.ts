@@ -370,6 +370,9 @@ export async function runSubagentResume(
         abortSignal,
         workingDir,
         agentRole,
+        // Проект дочерней сессии — метаданные хода (ADR-107): плагинный тул
+        // памяти ограничивает себя данными проекта.
+        ...(child.projectId ? { projectId: child.projectId } : {}),
       },
       retry,
     });

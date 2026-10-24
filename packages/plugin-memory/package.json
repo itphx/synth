@@ -1,0 +1,43 @@
+{
+  "name": "@itphx/synth-plugin-memory",
+  "version": "0.1.0",
+  "description": "Плагин памяти Synth: факты с provenance, recall по вопросу хода, поиск/запись/отзыв фактов (ADR-107, docs/MEMORY.md)",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "synth.pack"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && esbuild src/index.ts --bundle --format=esm --platform=node --target=node20 --external:@itphx/* --outfile=dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "zod": "^3.24.0"
+  },
+  "peerDependencies": {
+    "@itphx/synth-shared": "workspace:*",
+    "@itphx/synth-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@itphx/synth-shared": "workspace:*",
+    "@itphx/synth-core": "workspace:*",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

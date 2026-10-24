@@ -1,0 +1,40 @@
+{
+  "name": "synth-plugin-memory",
+  "version": "0.1.0",
+  "kind": "plugin",
+  "description": "Память агентов: факты с provenance, recall по вопросу хода, поиск/запись/отзыв фактов",
+  "host": ">=0.12.0 <0.14.0",
+  "contracts": {
+    "extensionApi": "^1",
+    "promptBlocks": "^1",
+    "tools": "^1"
+  },
+  "mode": "inline",
+  "provides": {
+    "tools": ["memory_search", "memory_write", "memory_forget"],
+    "promptBlocks": [
+      {
+        "key": "plugin.synth-plugin-memory.facts",
+        "tier": "context",
+        "order": 100,
+        "title": "Факты памяти"
+      },
+      {
+        "key": "plugin.synth-plugin-memory.recall",
+        "tier": "volatile",
+        "order": 110,
+        "title": "Воспоминание по вопросу хода"
+      }
+    ]
+  },
+  "permissions": {
+    "network": [],
+    "secrets": [],
+    "tools": [],
+    "hooks": []
+  },
+  "trust": {
+    "level": "trusted",
+    "source": "builtin"
+  }
+}

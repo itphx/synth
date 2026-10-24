@@ -20,6 +20,8 @@ import {
   describeIdentityClaimRepository,
   describeJobRepository,
   describeMaintenanceAuditRepository,
+  describeMemoryFactRepository,
+  describeMemoryIndexRepository,
   describePluginAuditRepository,
   describePluginLockRepository,
   describeSecurityAuditRepository,
@@ -81,6 +83,8 @@ import { FilePipelineStore } from '../file-pipeline-store.js';
 import { FilePackStore } from '../file-pack-store.js';
 import { FileProjectPipelineStore } from '../file-project-pipeline-store.js';
 import { FilePipelineRunStore } from '../file-pipeline-run-store.js';
+import { FileMemoryFactStore } from '../file-memory-fact-store.js';
+import { FileMemoryIndexStore } from '../file-memory-index-store.js';
 import { FileAuthorityPolicyStore } from '../file-authority-policy-store.js';
 import { FileAuthorityDecisionJournal } from '../file-authority-decision-journal.js';
 
@@ -324,6 +328,16 @@ describe('контрактные тесты файловых реализаци�
       pipelines: new FileProjectPipelineStore({ dataDir: dir }),
     };
   });
+
+  // PROP-047 §2.1 (предпосылка A): порты памяти — факты (`memory/facts.json`)
+  // и индексы с чанками (`memory/indexes.json` + `memory/chunks/<id>/g<N>.json`).
+  describeMemoryFactRepository('FileMemoryFactStore → MemoryFactRepository', async () => ({
+    repo: new FileMemoryFactStore({ dataDir: await tmp() }),
+  }));
+
+  describeMemoryIndexRepository('FileMemoryIndexStore → MemoryIndexRepository', async () => ({
+    repo: new FileMemoryIndexStore({ dataDir: await tmp() }),
+  }));
 
   // ADR-106: порты Authority-слоя (политика инстанса + журнал решений).
   describeAuthorityPolicyRepository(

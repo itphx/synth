@@ -49,6 +49,9 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   plugin: [],
   runtime: RUNTIME_TOOLS,
   user: ['profile_update'],
+  // ADR-107: память — capability тулов плагина памяти; группа пустая (имён
+  // встроенных тулов нет), матчится по capability `memory` у плагинного тула.
+  memory: [],
   [ToolCapability.FILE_READ]: READ_TOOLS,
   [ToolCapability.FILE_WRITE]: WRITE_TOOLS,
   [ToolCapability.GIT_READ]: GIT_READ_TOOLS,
@@ -68,6 +71,7 @@ export const PERMISSION_GROUP_ORDER: string[] = [
   'plugin',
   'runtime',
   'user',
+  'memory',
   ToolCapability.FILE_READ,
   ToolCapability.FILE_WRITE,
   ToolCapability.GIT_READ,

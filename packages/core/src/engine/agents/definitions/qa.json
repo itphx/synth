@@ -17,7 +17,8 @@
     "git_read",
     "task",
     "mcp",
-    "runtime"
+    "runtime",
+    "memory"
   ],
   "icon": "bug",
   "color": "--syntax-number",

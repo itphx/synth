@@ -79,6 +79,14 @@ const en: Dictionary = {
   'errors.validation.invalidAnalyticsOption': 'Invalid report parameter (report/format)',
   'errors.forbidden.analytics': 'Insufficient permissions for this report',
 
+  // ADR-107 / PROP-047: портал памяти (только чтение)
+  'errors.validation.invalidMemoryStatus': 'Invalid memory fact status filter',
+  'errors.validation.invalidMemoryState': 'Invalid memory index state filter',
+  'errors.validation.invalidMemoryLimit': 'Invalid limit value (an integer 1..200)',
+  'errors.validation.invalidMemoryOffset': 'Invalid offset value (an integer >= 0)',
+  'errors.notFound.memoryFact': 'Memory fact not found',
+  'errors.unavailable.memory': 'Memory storage is unavailable',
+
   // ADR-052 (этап II): исходящие webhooks
   'errors.validation.invalidWebhook': 'Invalid webhook subscription payload',
   'errors.notFound.webhook': 'Webhook subscription not found',
@@ -226,6 +234,14 @@ const ru: Dictionary = {
   'errors.validation.invalidAnalyticsGroupBy': 'Некорректная ось группировки (groupBy)',
   'errors.validation.invalidAnalyticsOption': 'Некорректный параметр отчёта (report/format)',
   'errors.forbidden.analytics': 'Недостаточно прав для отчёта',
+
+  // ADR-107 / PROP-047: портал памяти (только чтение)
+  'errors.validation.invalidMemoryStatus': 'Некорректный фильтр статуса факта памяти',
+  'errors.validation.invalidMemoryState': 'Некорректный фильтр состояния индекса памяти',
+  'errors.validation.invalidMemoryLimit': 'Некорректное значение limit (целое 1..200)',
+  'errors.validation.invalidMemoryOffset': 'Некорректное значение offset (целое ≥ 0)',
+  'errors.notFound.memoryFact': 'Факт памяти не найден',
+  'errors.unavailable.memory': 'Хранилище памяти недоступно',
 
   // ADR-052 (этап II): исходящие webhooks
   'errors.validation.invalidWebhook': 'Некорректное тело webhook-подписки',

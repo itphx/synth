@@ -708,7 +708,12 @@ export const pluginsHybridConfigSchema = z.object({
  * - `managedReadonly` — management-плагин (из `deployDir`, `lock.source ===
  *   'deploy'`) **нельзя** снять или переустановить через API/CLI (default
  *   `true`; отказ `plugin.managed_readonly`). Действует независимо от режима
- *   инстанса.
+ *   инстанса;
+ * - `embeddingProvider`/`embeddingModel` — провайдер и модель эмбеддингов для
+ *   сервиса фасада `facade.embed` (ADR-090, WP-F). Пусто — сервис не
+ *   сконфигурирован (`facade.embed` бросает `plugin.embedding_not_configured`).
+ *   Переопределяется config.yaml или env `SYNTH_PLUGINS_EMBEDDING_PROVIDER` /
+ *   `SYNTH_PLUGINS_EMBEDDING_MODEL` (ADR-023: env выше конфига).
  */
 export const pluginsConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -744,6 +749,21 @@ export const pluginsConfigSchema = z.object({
    * API/CLI запрещены (`plugin.managed_readonly`). Управляется развёртыванием.
    */
   managedReadonly: z.boolean().default(true),
+  /**
+   * ADR-090 (WP-F): провайдер эмбеддингов для сервиса фасада `facade.embed`.
+   *
+   * Пусто — сервис эмбеддингов **не сконфигурирован**: `facade.embed` есть
+   * всегда, но бросает `plugin.embedding_not_configured` (плагин сам решает,
+   * деградировать или нет; хост не падает). Плагин может перекрыть провайдера
+   * и модель в вызове (`opts.provider`/`opts.model`).
+   */
+  embeddingProvider: z.string().default(''),
+  /**
+   * ADR-090 (WP-F): модель эмбеддингов для `facade.embed`.
+   *
+   * Пусто — берётся дефолтная модель провайдера (`provider.defaultModel`).
+   */
+  embeddingModel: z.string().default(''),
   /**
    * Ф7: серверная политика плагинов для гибридного режима.
    *

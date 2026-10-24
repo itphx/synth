@@ -2,7 +2,10 @@
 
 > **Статус:** 🧩 Предложение (vision)
 > **Дата:** 2026-09-16
-> **Обновлено:** 2026-10-22 — переписано под слой плагинов (ADR-090): память — тип плагина; больше не «в обход Extension API»
+> **Обновлено:** 2026-10-24 — синхронизация с принятым ADR-090 (три точки; `hooks`/`routes`/`settings` не экспонируются);
+> write-path переведён на пакетный ingest пайплайном
+> **Устройство плагина:** [docs/MEMORY.md](../MEMORY.md) — компоненты, возможности, модель данных,
+> портал, консолидация, безопасность, тесты, предпосылки, фазы М0–М5.
 > **Источник:** перенесено из `AD-DRAFTS.md` (D2, идея 2); Obsidian-vault `Memory-Architecture.md`,
 > `Memory-Analysis.md`, `Roadmap.md` (Фаза 3); прототип `~/dev/aic/t11` (`app/embeddings/`).
 > **Связано:** [ADR-090](./adr-090-extension-api.md) (слой плагинов — канон для памяти),
@@ -54,12 +57,12 @@
 |---|---|---|
 | Аргумент «ADR-090 в Icebox» | основание для отдельного контракта | **снят** — слой плагинов реализован и принят как решение ([ADR-090](./adr-090-extension-api.md), 2026-10-23) |
 | Класс расширения | отдельный узкий контракт в обход Extension API | **плагин** (`kind: "plugin"`); контракт `MemoryProvider` — доставляемый плагином |
-| Точка расширения | «новая 13-я точка» в core | **существующие точки** ADR-090: `promptBlocks`, `tools`, `hooks`, `routes`, `settings` |
+| Точка расширения | «новая 13-я точка» в core | **три точки** ADR-090 v1: `promptBlocks` (доставка), `tools` (`memory_search` и др.), `llmFilters` (`embedding`). `hooks`/`routes`/`settings` в v1 **не экспонируются** — см. §1.5 и `docs/MEMORY.md` §2 |
 | Доверие | свой (не определён) | модель доверия ADR-090 (trust-floor `trusted`, скан бандла, `audit/plugins.jsonl`) |
-| «Минимальные правки в core (без ADR-090)» | отдельный список правок ядра (реестр блоков, `resolveMemoryContext`, `isBlockChanged`, `ToolCapability.MEMORY`, канал записи) | правок ядра **на доставку фактов нет** — реестр `promptBlocks` это Ф3 ADR-090; `ToolCapability.MEMORY` — часть Ф0/Ф3, не отдельная правка |
+| «Минимальные правки в core (без ADR-090)» | отдельный список правок ядра (реестр блоков, `resolveMemoryContext`, `isBlockChanged`, `ToolCapability.MEMORY`, канал записи) | правок ядра **на доставку фактов нет** — реестр `promptBlocks` реализован (ADR-090 Ф3). `ToolCapability.MEMORY` **не существует** (`shared/src/types/tools.ts:3-15`, 11 значений) — тулы памяти используют существующие возможности (`runtime`/`search`) |
 | Где живёт ванильный RAG | открытый вопрос: `@itphx/synth-memory` или `packages/core/src/engine/memory/` | **внутри как реализация `MemoryProvider`**, поставляемая плагином; отдельный npm-пакет **не создаётся** — контракт в `@itphx/synth-shared` (§1.2) |
 | Gbrain | Add-on/Gateway + адаптер в ядре | Add-on (внешний сервис) + **плагин-адаптер** (`MemoryProvider` поверх MCP) |
-| Портал | core-фабрика `createMemoryRoutes` в ядре | API — роут **плагина** (точка `routes`), UI — встроенный экран (точка UI-slot отложена) |
+| Портал | core-фабрика `createMemoryRoutes` в ядре | API — **в ядре** (точки `routes` в v1 нет; `createMemoryRoutes` читает порт и вызывает админ-тул плагина), UI — встроенный экран (UI-slot отложен) |
 
 ## Контекст
 
@@ -161,8 +164,9 @@
 - **Контракт `MemoryProvider` остаётся**, но меняет роль: это **контракт точки расширения/провайдера**,
   который **доставляется плагином** (регистрация через фасад), а не контракт в обход Extension API.
 - **Отдельная точка расширения `memory` не заводится.** Плагин памяти использует существующие точки
-  ADR-090: `promptBlocks` (доставка фактов), `tools` (`memory_search`), `hooks` (write-path),
-  `routes` (API портала), `settings` (свои настройки), `schedules` (расписание консолидации);
+  ADR-090 v1: `promptBlocks` (доставка фактов), `tools` (`memory_search` и др.), `llmFilters`
+  (embedding-фаза). `hooks`/`routes`/`settings` в v1 **не экспонируются** — write-path идёт пакетным
+  ingest'ом пайплайном, портал живёт в ядре, настройки — предпосылка C;
   определение пайплайна-консолидации приходит не из точки расширения, а из `provides.pipelines`
   манифеста (ADR-100) и исполняется движком ADR-101. Это снимает вопрос ADR-090 о месте контракта
   `MemoryProvider` (закрыт решением владельца 2026-10-22: контракт — в `@itphx/synth-shared`, §1.2).
@@ -267,19 +271,22 @@ retrieval инвалидировал бы prompt-cache. Плагинные бл�
 
 #### 1.5 Write-path (запись в память)
 
-- Хуки `post_tool_use` / `session_end` объявлены и эмитятся шиной `HookBus`, но payload не содержит
-  контента сессии.
-- `message_received` **объявлен** (`packages/shared/src/types/hooks.ts:15`), но **не эмитится** —
-  остаток ADR-030, пункт **Ф0** ADR-090. Плагин подписывается на хуки через точку `hooks`
-  (ADR-090) — **правок в core для подписки не требуется**.
-- Пока `message_received` нет, промежуточный вариант — state-сообщение типа `memory_recall`.
-  **Честно:** `StateMessageType` — закрытый union (`packages/core/src/engine/context/state-messages.ts:20`:
-  `mode_change | plan_updated | todos_updated | agent_switch`), поэтому такое сообщение требует
-  **правки core** (расширение union + рендер) — то есть это уже не «без правок в core».
-  Правильнее: дождаться Ф0 (`message_received`) либо писать через `ingest` плагина по событию
-  `post_tool_use`.
+- **Хуки плагину недоступны.** `message_received` эмитится с 2026-10-22 (Ф0 ADR-090), `post_tool_use` /
+  `session_end` тоже, но точка `hooks` в Extension API v1 **не экспонируется** — подписаться из плагина
+  нельзя (`PluginFacade` = `registerDisposer` + три регистрации). Поэтому «подписка на хуки» **снята**
+  как способ записи.
+- **Пакетный ingest — рабочий путь без новых точек.** Пайплайн (ADR-101) исполняется в ядре и может
+  вызывать и ядровые, и плагинные тулы:
+  `schedule_fired` → пайплайн → `read_session_reference` (ядровый тул читает сессию) → шаг `agent`
+  (сводка; LLM только через `GatewayProvider`) → `plugin_<ns>_memory_write` (тул плагина).
+  Так закрывается «память по итогам сессий» без `hooks` и без правок ядра.
+- **Реалтайм (`message_received`)** — оптимизация, не требование: если понадобится «помнит сразу»,
+  это отдельное решение о расширении Extension API (четвёртая точка) либо о сервисе ядра.
+- `StateMessageType` — закрытый union (`state-messages.ts:20`), поэтому state-сообщение `memory_recall`
+  требует правки core; вариант **отклонён**.
 - Форма записи факта — версия факта (§6): сырой факт не перезаписывается, а заменяется
-  (`superseded_claim`), запись идемпотентна по `fact.id`.
+  (`superseded_claim`), запись идемпотентна по `fact.id`. Кандидаты, собранные пайплайном, попадают в
+  активные факты через консолидацию или явный `memory_write`.
 
 #### 1.6 Что делать с точечной памятью
 
@@ -386,13 +393,15 @@ synthesis-провайдеры получают текст). Поэтому фа
   (инвариант 6), один словарь i18n с тестом паритета, один app-shell/SW (ADR-044), `@itphx/synth-ui`
   — «не библиотека» (`packages/ui/AGENTS.md`).
 
-**Кто что делает: API — плагин, UI — встроенный.** Точка **UI-slot** в ADR-090 **отложена**
+**Кто что делает: API и UI — в ядре, операции провайдера — через админ-тул плагина.** Точки **`routes`** и **UI-slot** в ADR-090 v1 **не экспонируются**
 (в SPA нет стабильной точки монтирования сторонних React-компонентов), поэтому произвольный UI
 плагина невозможен. Значит:
 
-- **API** (`/api/v2/memory/*`) — роут **плагина** через точку `routes` (ADR-090, п. 4): фабрика
-  `createMemoryRoutes(auth, deps, opts)` по образцу `createXxxRoutes` ([ADR-017](./adr-017-api-v2-hono.md)),
-  контракт — `docs/API_V2.md`;
+- **API** (`/api/v2/memory/*`) — **core-фабрика** `createMemoryRoutes(auth, deps, opts)` по образцу
+  `createXxxRoutes` ([ADR-017](./adr-017-api-v2-hono.md)), контракт — `docs/API_V2.md`. Данные читаются
+  через порт памяти (предпосылка A), операции провайдера (пересборка индекса, статус) выполняются
+  **админ-тулом плагина** (`plugin_<ns>_memory_admin`); конвенция серверного вызова тула — открытый
+  вопрос (`docs/MEMORY.md` §13, п. 3);
 - **UI** — встроенный экран в `@itphx/synth-ui`, работающий с любым плагином, реализовавшим
   `MemoryProvider` с capability `admin`.
 
@@ -525,41 +534,31 @@ recall возвращает `readiness: 'degraded' | 'stale'`, а **не** пу�
 
 ## Статус реализации в коде
 
-**Не реализовано.** Проверено точечным grep по `packages/**` (без `dist/`, `node_modules/`):
+**Памяти нет. Слой плагинов, на который она опирается, — есть и принят.** Проверено по коду 2026-10-24.
 
-- подсистемы памяти нет: grep по `gbrain`, `pgvector`, `MemoryProvider`, `MemoryIndex`, `MemoryFact`,
-  `PromptBlockProvider` — совпадений в продуктовом коде нет;
-- реестра prompt-блоков нет — `_collectBlocks` (`composer.ts:426-646`) хардкодит блоки; сама точка
-  `promptBlocks` реализован в ADR-090 (**Ф3**);
-- порта памяти нет: в `packages/core/src/storage/ports/` — **34 доменных порта**; порта эмбеддингов нет;
-- `pgvector` в драйвере нет — только `pg_trgm` (`packages/storage-postgres/src/migrations/001-init.ts:18`);
-- `ToolCapability.MEMORY` нет (`packages/shared/src/types/tools.ts:3-15`), `TOOL_CAPABILITY_META` без него;
-- **слоя памяти в коде нет**: контракта `MemoryProvider`, плагина-поставщика и тула `memory_search` — нет;
-  сам **слой плагинов реализован** (ADR-090, Ф0–Ф7) — плагин-поставщик памяти ещё не написан;
-- `PACK_TYPES` **содержит** `'memory'` (`packages/shared/src/types/pack.ts:52`; список — `:42-56`), но
-  установщик пакета (`server/routes/packs.ts`) умеет только скиллы/MCP/агенты/пайплайны, а
-  `provides.promptBlocks[]`/`provides.llmFilters[]`/`provides.tools[]` в схеме **нет**
-  (`provides` — `packProvidesSchema`; явные Zod-схемы `provides.promptBlocks[]`/`provides.llmFilters[]`/
-  `provides.tools[]` — Ф0/Ф3 ADR-090);
-- `message_received` — объявлен (`packages/shared/src/types/hooks.ts:15`), **не эмитится** (остаток
-  ADR-030, Ф0 ADR-090 — **реализован**); `StateMessageType` — закрытый union
-  (`packages/core/src/engine/context/state-messages.ts:20`);
-- эмбеддинги идут мимо `GatewayProvider`: `GatewayProvider.embed`
-  (`packages/core/src/engine/gateway/gateway-provider.ts:269`) — прямой вызов `_inner.embed`;guard/аудит/
-  обфускация не применяются; `EmbeddingModel`
-  (`packages/core/src/engine/router/micro/models/embedding-model.ts`) зовёт `provider.embed` напрямую
-  через duck-типизированный `ProviderPool` (`:155`, вызовы `:200`, `:217`). Фильтры `llmFilters` к
-  эмбеддингам **не применяются** — третья фаза `embedding` введена в **Ф3** ADR-090: до
-  этого эмбеддинги не видны фильтру;
-- `ContextOptimizer` (`packages/core/src/engine/context/optimizer.ts`) — summary-кэш в памяти процесса,
-  суммаризация через `GatewayProvider` (`_wrapWithGateway`, `:633-645`); это **не** память;
-- `ContextSource` в `shared/src/types/provider.ts:64` — **не** шов промпт-блоков (это метаданные
-  модели: `'api'|'reference'|'manual'|'unknown'`).
+| Что | Состояние |
+|---|---|
+| Слой плагинов | ✅ **[ADR-090](./adr-090-extension-api.md) принят** (Ф0–Ф7): `PluginHost`/`PluginRuntime`/`PluginInstaller`, inline + remote загрузчики, сканер и trust/install-policy, `plugins.lock.json`/`plugins.json`, `/api/v2/plugins*` + `/api/v2/settings/plugins`, CLI `synth plugin *`, UI «Плагины» + журнал плагинов, гибрид (allow-list + `plugins:invoke`) |
+| Фасад | 4 метода регистрации + **сервисы** `memory` / `embed` / `getSettings` ([ADR-107](./adr-107-plugin-facade-services.md), ✅): scoped-доступ к портам памяти по namespace, эмбеддинги через `GatewayProvider`, чтение своих `plugins.json`-настроек. Точек `hooks`/`routes`/`settings` по-прежнему **нет** (ADR-090 v1) |
+| Точка `promptBlocks` (Ф3) | ✅ контракт `PromptBlockProvider`/`PromptBlockContext`, реестр, обход в `SystemPromptComposer`, бюджет `plugins.promptBlockMaxChars` (4 000) + `status: 'truncated'`, инвалидация `promptStates`, тир `stable` — отказ |
+| Точка `llmFilters` (Ф3) | ✅ три фазы; `embed` через gateway; вето только trust ≥ `trusted` |
+| Точка `tools` (Ф3) | ✅ namespace `plugin_<ns>_<tool>`, `source: 'plugin'`, сверка `provides.tools[]` |
+| **Порты памяти** | ✅ `MemoryFactRepository`/`MemoryIndexRepository` (ADR-096-паттерн): memory/file/PG, миграция `017-memory`, контрактный suite; чанки с векторами (`jsonb`, без `pgvector`) |
+| **Память как продукт** | ❌ контракта `MemoryProvider` (`recall`/`ingest`/`admin`, `readiness`) нет; плагина-поставщика, тулов `memory_*`, портала и консолидации нет; `ToolCapability.MEMORY` нет (используются существующие возможности) |
+| `PACK_TYPES` | `'memory'` **есть** (`shared/src/types/pack.ts:52`); `provides.promptBlocks[]`/`provides.tools[]`/`provides.llmFilters[]` — явные Zod-схемы |
+| Хуки | `message_received` **эмитится** (Ф0); `callback` — нет; **плагину подписка недоступна** (точки `hooks` в v1 нет) |
+| Эмбеддинги | `GatewayProvider.embed` → `_prepareEmbedding`, embedding-фаза фильтров работает; **плагин вызвать `embed` всё равно не может** |
 
-**Существующая точечная память** (не дублировать, обернуть в `MemoryProvider`):
-`project.plan` / `project.log` / `project.invariants` (`ProjectStore`), sticky notes
-(`SessionRepository`), профиль (`ProfileStore` → блок `profile`), `ContextOptimizer`
-(сжатие истории, **не** память).
+**Что делать не нужно (уже отдаётся встроенными блоками):** `project.invariants` — блок `session.info`
+(`composer.ts:809-814`); sticky notes — блок `sticky` (`builder.ts:287-301`); профиль — блок `profile`
+(`builder.ts:223-253`). Плагин их **не дублирует** и не переводит в `MemoryProvider`: доступа к
+`ProjectStore`/`SessionRepository`/`ProfileStore` у него нет, множества фактов не пересекаются.
+
+**Контекст-оптимизатор — не память:** `ContextOptimizer` (`engine/context/optimizer.ts`) — summary-кэш
+в памяти процесса, суммаризация через `GatewayProvider` (`_wrapWithGateway`).
+
+> Устройство плагина памяти (компоненты, возможности, модель данных, портал, консолидация,
+> безопасность, тесты, предпосылки, фазы) — **[docs/MEMORY.md](../MEMORY.md)**.
 
 ## Фазы
 
@@ -570,7 +569,7 @@ recall возвращает `readiness: 'degraded' | 'stale'`, а **не** пу�
 | Фаза | Содержание | Зависимость от ADR-090 | Критерий приёмки |
 |---|---|---|---|
 | **М0 — контракт `MemoryProvider`** | типы `MemoryProvider`/`MemoryIndex`/`MemoryFact`/`RecallRequest`/`RecallResult` + `readiness` — **в `@itphx/synth-shared`** (отдельный npm-пакет не создаётся, §1.2); манифест памяти (`kind:"plugin"`, `provides.promptBlocks`); Zod-схемы `provides.promptBlocks[]` **и `provides.tools[]`** (обе — в ADR-090; без `provides.tools[]` правило «регистрации обязаны совпадать с `provides`» ломается на туле `memory_search`) | типы — независимы; схемы `provides` — вместе с **Ф0** | типы собраны; `validatePackManifest` принимает манифест памяти (и отклоняет `tier: 'stable'`); тест контракта `MemoryProvider` (recall/ingest/admin, readiness) |
-| **М1 — первый плагин памяти** | плагин `builtin:sticky` (точечная память: `project.invariants`/sticky/profile); `PromptBlockProvider` (тир `context`); обвязка `MemoryProvider`; тул `memory_search` + `ToolCapability.MEMORY`; API роутов плагина (точка `routes`) + настройки (точка `settings`); портал-каркас (center-tab «Память» → «Индексы»/«Факты») + админ-категория «Память» (группы/разделы — §4.1; **пользовательский раздел — не в первой волне**) | после **Ф3** (реестр `promptBlocks`) и **Ф5** (install/activate) | факты из `project.invariants`/sticky/profile попадают в блок `context`; `stablePrefix` не меняется (prompt-cache цел); тул доступен агенту по capability; ошибка провайдера не роняет ход (warn → пустой блок); негативная RBAC-матрица |
+| **М1 — первый плагин памяти** | плагин-каркас: два блока (`context` — факты, `volatile` — recall), тулы `memory_search`/`memory_write`/`memory_forget`; портал-каркас в ядре (`createMemoryRoutes`, center-tab «Память» → «Провайдеры»/«Факты») + админ-категория «Память» (§4.1; **пользовательский раздел — не в первой волне**). `project.invariants`/sticky/профиль **не дублируются** — их отдаёт ядро встроенными блоками | М0 + предпосылки A/B/C (`docs/MEMORY.md` §2.1) | блок виден в `GET /sessions/:id/prompt` с `provenance: 'plugin:<name>'`; `stablePrefix` не меняется (prompt-cache цел); тул доступен по capability; ошибка провайдера не роняет ход; негативная RBAC-матрица |
 | **М2 — ванильный RAG** | чанкер + `EmbeddingProvider` + индекс (file-бэкенд) + гибридный поиск (keyword + vector + RRF) + evidence-контракт + readiness/stale; rebuild с фингерпринтом; API индекса/фактов; портал «Индексы» (создание/пересборка/статус) | после М1 | один корпус — один индекс; `rebuild` после смены модели эмбеддинга → индекс `stale` → пересборка; пустой результат при неготовом индексе ≠ «не найдено» (`readiness`) |
 | **М3 — Gbrain-адаптер** | Add-on Gbrain + MCP-регистрация через `provides.mcp`; плагин-адаптер `MemoryProvider` (вызовы `search`/`recall`/`think`); сквозной сценарий «задать вопрос → факты в промпте»; сравнение качества RAG-провайдера и Gbrain на одном корпусе | после М1 (+ Add-on/MCP) | recall Gbrain даёт факты с цитатами и `evidence`; при недоступном Gbrain — деградация без падения сессии; замеры на общем корпусе |
 | **М4 — фоновые процессы** | воркер + лидер-элекшен (`StorageContext.locks`); пайплайн-консолидация, объявленный плагином (`provides.pipelines`); маршрут расписания → пайплайн; журнал и метрики `synth_pipeline_*` + `synth_memory_*`; портал «Задачи» с live-прогрессом; отмена | после М1 (+ ADR-101/ADR-051) | два экземпляра в managed → консолидация выполняется **одна**; прогон воспроизводим (снимок спецификации); журнал читается через API; live-события доходят до портала |
@@ -620,7 +619,7 @@ recall возвращает `readiness: 'degraded' | 'stale'`, а **не** пу�
 ## Связи
 
 - [ADR-090](./adr-090-extension-api.md) — слой плагинов: **канон** для памяти (манифест `synth.pack`
-  `kind: "plugin"`, точки `promptBlocks`/`tools`/`hooks`/`routes`/`settings`, два режима исполнения,
+  `kind: "plugin"`, три точки (`promptBlocks`/`tools`/`llmFilters`), два режима исполнения,
   модель доверия, фазы Ф0–Ф7); контракт `MemoryProvider` — в `@itphx/synth-shared`, реализации — плагинами.
 - [ADR-086](./adr-086-extensibility-plugins-editions.md), [ADR-100](./adr-100-extension-packs-pipelines.md),
   [PROP-068](./prop-068-skills-agents-registry.md) — классы расширений, `synth.pack`, `packType:'memory'`,
@@ -669,3 +668,4 @@ recall возвращает `readiness: 'degraded' | 'stale'`, а **не** пу�
   `MemoryProvider` — контракт, доставляемый плагином; «обход Extension API» снят; отдельная точка
   `memory` не заводится.
 - 2026-10-22 — решения владельца: контракт `MemoryProvider` — **в `@itphx/synth-shared`** (отдельный npm-пакет не создаётся, реализации — плагинами); **эмбеддинги — через gateway-фильтры** (третья фаза `llmFilters`, ADR-090); настройки памяти — админ-категория «Память» с группами/разделами + отдельный **пользовательский** раздел (состав обсуждается отдельно, в первую волну не входит).
+- 2026-10-24 — под принятый ADR-090 (✅, Ф0–Ф7): Extension API v1 — три точки; write-path переведён с хуков на пакетный ingest пайплайном (`read_session_reference` → `agent` → `memory_write`); API портала возвращён в ядро (точки `routes` нет); `ToolCapability.MEMORY` признан несуществующим (используются существующие возможности); устройство плагина — `docs/MEMORY.md`.

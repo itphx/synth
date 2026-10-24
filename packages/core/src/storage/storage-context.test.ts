@@ -24,6 +24,8 @@ const PORT_KEYS = [
   'pipelines', 'packs',
   // ADR-101: спецификации пайплайнов, прогоны и журнал выполнения.
   'projectPipelines', 'pipelineRuns',
+  // PROP-047 §2.1 (предпосылка A): порты памяти — факты и индексы с чанками.
+  'memoryFacts', 'memoryIndexes',
 ] as const satisfies readonly (keyof StorageContext)[];
 
 describe('StorageContext (ADR-096, W2.3)', () => {

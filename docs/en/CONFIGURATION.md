@@ -1359,6 +1359,8 @@ config) is assembled at the start.
 | `plugins.deployDir` | The directory of the bundles delivered **by the image/deployment** (each subdirectory is a bundle with `synth.pack` + `dist/`). It is installed at the instance start (manifest → scan → trust-floor → install-policy), then activated from the lock. Empty — there are no deploy plugins | `/opt/synth/plugins` |
 | `plugins.deployTrust` | The trust level of the deploy bundles (`builtin`/`verified`/`trusted`/`community`). Below `trustFloor` — a regular refusal `plugin.trust_below_floor`; the content scan is always performed | `trusted` |
 | `plugins.managedReadonly` | A management plugin (`deployDir`, lock `source: 'deploy'`) **cannot** be removed or reinstalled through the API/CLI — `403 plugin.managed_readonly`. It changes only with a new image/redeployment. It applies regardless of the instance mode | `true` |
+| `plugins.embeddingProvider` | The provider of embeddings for the facade service `facade.embed` (ADR-090, WP-F). Empty — embeddings are not configured: `facade.embed` throws `plugin.embedding_not_configured` (the plugin decides whether to degrade). The plugin may override the provider/model in the call | `''` |
+| `plugins.embeddingModel` | The embedding model for `facade.embed`. Empty — the default model of the provider is used | `''` |
 | `plugins.hybrid.mode` | The mode of the **server-side plugin policy in hybrid mode** (F7): `off` — the server **does not restrict** plugins; `allowlist` — only the plugins from `plugins.hybrid.allow` are allowed (an empty list — nobody is allowed) | `off` |
 | `plugins.hybrid.allow` | The names of the plugins the server allows to run (relevant only when `mode: 'allowlist'`) | `[]` |
 

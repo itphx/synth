@@ -54,6 +54,7 @@
 | ADR-101 | Pipeline Engine: пайплайн как второй движок рядом с оркестратором | ✅ Реализовано | [adr-101-pipeline-engine.md](./adr-101-pipeline-engine.md) |
 | ADR-104 | Вмешательство в ход посреди генерации (steering) | ✅ Реализовано | [adr-104-mid-turn-steering.md](./adr-104-mid-turn-steering.md) |
 | ADR-105 | Внешние доступы — единый слой доступа к внешним сервисам (OAuth-коннекторы) | ✅ Реализовано | [adr-105-external-credentials.md](./adr-105-external-credentials.md) |
+| ADR-107 | Сервисы фасада плагинов — память, эмбеддинги, свои настройки | ✅ Реализовано | [adr-107-plugin-facade-services.md](./adr-107-plugin-facade-services.md) |
 
 ## Частично
 
@@ -132,4 +133,4 @@
 
 ---
 
-Всего документов: 97 (Решения: 42, Частично: 17, Предложения: 29, Vision: 8, Icebox: 0, Legacy: 1).
+Всего документов: 98 (Решения: 43, Частично: 17, Предложения: 29, Vision: 8, Icebox: 0, Legacy: 1).

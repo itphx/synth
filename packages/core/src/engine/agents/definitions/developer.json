@@ -18,7 +18,8 @@
     "git_write",
     "task",
     "mcp",
-    "runtime"
+    "runtime",
+    "memory"
   ],
   "icon": "code-s-slash",
   "color": "--status-info",

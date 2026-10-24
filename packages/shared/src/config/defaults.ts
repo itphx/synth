@@ -241,6 +241,11 @@ export const defaultConfig: SynthConfig = {
     deployTrust: 'trusted',
     // Ф5в: management-плагин нельзя снять/переустановить через API/CLI.
     managedReadonly: true,
+    // ADR-090 (WP-F): провайдер/модель эмбеддингов для `facade.embed`.
+    // Пусто — сервис эмбеддингов не сконфигурирован (вызов бросает
+    // `plugin.embedding_not_configured`, плагин решает, деградировать ли).
+    embeddingProvider: '',
+    embeddingModel: '',
     // Ф7: серверная политика плагинов в гибриде. По умолчанию сервер не
     // ограничивает плагины (`off`); allow-list включается явно.
     hybrid: {

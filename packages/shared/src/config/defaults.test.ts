@@ -218,6 +218,10 @@ describe('defaultConfig', () => {
       deployDir: '/opt/synth/plugins',
       deployTrust: 'trusted',
       managedReadonly: true,
+      // ADR-090 (WP-F): эмбеддинги не сконфигурированы (пусто — вызов
+      // `facade.embed` бросает `plugin.embedding_not_configured`).
+      embeddingProvider: '',
+      embeddingModel: '',
       // Ф7: серверная политика гибрида — по умолчанию сервер не ограничивает.
       hybrid: { mode: 'off', allow: [] },
     });

@@ -18,7 +18,8 @@
     "task",
     "mcp",
     "runtime",
-    "user"
+    "user",
+    "memory"
   ],
   "icon": "robot-3",
   "color": "--status-success",

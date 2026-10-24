@@ -75,9 +75,48 @@ export function buildDenyResult(p: BuildDenyResultParams): ToolResult {
 }
 
 /**
+ * ADR-090: сужение контекста тула для инструментов плагинов.
+ *
+ * `inline`-плагин исполняется **в процессе ядра**, поэтому контекст тула нельзя
+ * отдавать ему целиком: `ctx.extra` — внутреннее состояние ядра (`sessionManager`,
+ * `projectStore`, `eventBus`, сторы, порт исполнения, конфиг безопасности…),
+ * `ctx.dataDir` — корень данных инстанса. По проводу (`out-of-process`) плагин
+ * получает только сериализуемый DTO (`sessionId`/`messageId`/`workingDir`),
+ * поэтому inline-режим должен видеть тот же минимум — иначе плагин де-факто
+ * читает всё, что читает ядро, в обход разрешений и API.
+ *
+ * Правило живёт в **одном chokepoint'е** — `executeToolDef`: через него идут
+ * все вызовы тулов (оркестратор, саб-агент `task`, шаги пайплайна). Встроенные
+ * (`builtin`) и MCP-тулы получают контекст **без изменений**.
+ *
+ * @param toolDef — определение тула (источник — `ToolDefinition.source`).
+ * @param context — полный контекст вызова (как у встроенных тулов).
+ * @returns суженный контекст для плагинного тула; исходный — для остальных.
+ */
+export function narrowToolContext(
+  toolDef: ToolDefinition,
+  context: ToolContext,
+): ToolContext {
+  if ((toolDef.source ?? 'builtin') !== 'plugin') return context;
+  return {
+    sessionId: context.sessionId,
+    messageId: context.messageId,
+    workingDir: context.workingDir,
+    ...(context.agentRole !== undefined ? { agentRole: context.agentRole } : {}),
+    // ADR-107: проект сессии — метаданные хода, а не internals ядра: плагинному
+    // тулу нужны, чтобы ограничить поиск данными своего проекта.
+    ...(context.projectId !== undefined ? { projectId: context.projectId } : {}),
+    ...(context.abortSignal !== undefined ? { abortSignal: context.abortSignal } : {}),
+  };
+}
+
+/**
  * Единое исполнение тула: `safeParse` → `execute` → `catch`.
  * Ошибки валидации/исполнения оформляются как `isError`-результаты с i18n-ключом
  * (как в оркестраторе). Не бросает.
+ *
+ * ADR-090: плагинному тулу (`source: 'plugin'`) уходит **суженный** контекст
+ * (см. `narrowToolContext`) — internals ядра наружу не отдаются.
  */
 export async function executeToolDef(
   toolDef: ToolDefinition,
@@ -100,7 +139,7 @@ export async function executeToolDef(
   }
 
   try {
-    const result = await toolDef.execute(parsed.data, context);
+    const result = await toolDef.execute(parsed.data, narrowToolContext(toolDef, context));
     // Единая точка санитизации вывода тулов (web_fetch/shell/read_file/…):
     // U+0000 из внешнего мира не должен попадать в историю/`jsonb`.
     return {

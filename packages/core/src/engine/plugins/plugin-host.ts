@@ -59,17 +59,21 @@ import type {
   PluginActivationStep,
   PluginDeactivationResult,
   PluginDisposer,
+  PluginEmbedFn,
   PluginFacade,
   PluginLoader,
   PluginLogger,
   PluginScanHook,
+  PluginSettingsReader,
 } from './activation.js';
 import { pluginLoadFailureReason } from './activation.js';
+import { createPluginEmbedService } from './embed.js';
 import { readExactHostExceptions } from './exact-host-exceptions.js';
 import { evaluatePluginServerPolicy } from './hybrid-policy.js';
 import { verifyPluginIntegrity } from './integrity.js';
 import { DEFAULT_PLUGIN_ENTRY } from './inline-loader.js';
 import { createPluginScanHook } from './scan/hook.js';
+import { createScopedMemory, type PluginMemoryPorts } from './scoped-memory.js';
 
 /**
  * Версия контракта Extension API, который предоставляет хост.
@@ -186,6 +190,36 @@ export interface PluginHostOptions {
    */
   tools?: ToolRegistry;
   /**
+   * Порты памяти инстанса (PROP-047 §2.1, предпосылка A).
+   *
+   * Хост отдаёт плагину **scoped-обёртку** над этими портами
+   * (`engine/plugins/scoped-memory.ts`): namespace `plugin:<имя плагина>`
+   * навязывает хост, плагин видит только свои записи.
+   *
+   * Не заданы — сервис памяти плагину недоступен (`facade.memory` не задан:
+   * плагин обязан это учитывать; ошибок активации не бросаем).
+   */
+  memory?: PluginMemoryPorts;
+  /**
+   * ADR-090 (WP-F): сервис эмбеддингов фасада (`facade.embed`).
+   *
+   * Функция **инъецируется сборкой приложения** (`server/app/deps.ts`/
+   * `backend/app/deps.ts`): там провайдер оборачивается в `GatewayProvider`,
+   * поэтому эмбеддинги плагина идут тем же путём, что и остальные LLM-вызовы
+   * (инвариант 3, ADR-036).
+   *
+   * Не задана — `facade.embed` есть, но бросает `plugin.embed_unavailable`
+   * (плагин сам решает, деградировать ли; активация не падает).
+   */
+  embed?: PluginEmbedFn;
+  /**
+   * ADR-090 (WP-F): ридер настроек плагина (`facade.getSettings`).
+   *
+   * Имя плагина задаёт хост (из активации) — чужую запись прочитать нельзя.
+   * Не задан — настроек нет (`{}`).
+   */
+  settings?: PluginSettingsReader;
+  /**
    * Ф7 (ADR-090, Уровень 1 — cooperative): серверная политика плагинов в
    * гибридном режиме.
    *
@@ -230,6 +264,19 @@ export class PluginHost {
   private readonly _llmFilters: LlmFilterRegistry | undefined;
   /** Ф3в: общий реестр инструментов (точка `tools`). */
   private readonly _tools: ToolRegistry | undefined;
+  /**
+   * Порты памяти инстанса (PROP-047 §2.1) — фасад отдаёт плагину scoped-обёртку
+   * (namespace навязывает хост).
+   */
+  private readonly _memory: PluginMemoryPorts | undefined;
+  /**
+   * ADR-090 (WP-F): сервис эмбеддингов фасада (инъекция из сборки приложения).
+   */
+  private readonly _embed: PluginEmbedFn | undefined;
+  /**
+   * ADR-090 (WP-F): ридер настроек плагина (`plugins.json`).
+   */
+  private readonly _settings: PluginSettingsReader | undefined;
   /** Ф7: резолвер серверной политики плагинов (гибрид; Уровень 1 — cooperative). */
   private readonly _serverPolicy: PluginHostOptions['serverPolicy'];
   private readonly _logger: PluginLogger;
@@ -254,6 +301,9 @@ export class PluginHost {
     this._promptBlocks = options.promptBlocks;
     this._llmFilters = options.llmFilters;
     this._tools = options.tools;
+    this._memory = options.memory;
+    this._embed = options.embed;
+    this._settings = options.settings;
     this._serverPolicy = options.serverPolicy;
     this._explicitExceptions = options.exactHostExceptions;
     this._logger = options.logger ?? {
@@ -506,6 +556,25 @@ export class PluginHost {
         if (local) registeredTools.push(local);
         return disposer;
       },
+      // PROP-047 §2.1: сервис памяти — **scoped**-доступ (namespace навязывает
+      // хост: `plugin:<имя плагина>`). Плагин видит только свои записи; чужие
+      // выглядят как «не найдено». Портов нет — сервис не задан (плагин обязан
+      // это учитывать), ошибок активации не бросаем.
+      ...(this._memory
+        ? { memory: createScopedMemory(handle.plugin, this._memory) }
+        : {}),
+      // ADR-090 (WP-F): эмбеддинги — только через инъецированную функцию
+      // (GatewayProvider, инвариант 3). Лимиты и политика провайдера/модели —
+      // в сервисе (`engine/plugins/embed.ts`); ошибки провайдера летят как есть.
+      embed: createPluginEmbedService({
+        plugin: handle.plugin,
+        config: this._config,
+        ...(this._embed ? { embed: this._embed } : {}),
+      }),
+      // ADR-090 (WP-F): настройки **своего** плагина (`plugins.json`). Имя
+      // берёт хост; чужую запись прочитать нельзя; по умолчанию — `{}`.
+      getSettings: <T extends Record<string, unknown> = Record<string, unknown>>(): Readonly<T> =>
+        (this._settings?.(handle.plugin) ?? {}) as Readonly<T>,
     };
 
     let module;

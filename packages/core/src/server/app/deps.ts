@@ -33,6 +33,8 @@ import {
   attachBusMetrics,
   startSessionMetrics,
   startStorageMetrics,
+  // ADR-094/PROP-047: метрики памяти (`synth_memory_*`).
+  startMemoryMetrics,
   registerDecisionMetrics,
   createSchedulerMetrics,
   createWebhookMetrics,
@@ -64,11 +66,13 @@ import {
   PromptBlockRegistry,
   PluginRuntime,
   PluginProcessManager,
+  PluginFacadeError,
   createInlinePluginLoader,
   createRemotePluginLoader,
   resolvePluginLayout,
   type BaseProvider,
   type PipelinePermissionDeps,
+  type PluginEmbedFn,
   type StorageContext,
 } from '../../index.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
@@ -413,6 +417,11 @@ export async function createStandaloneDeps(
     stopMetricsCollectors.push(registerDecisionMetrics(metrics));
     // ADR-094: размер журнала внешних событий (фон, раз в 5 минут).
     stopMetricsCollectors.push(startEventJournalMetrics(metrics, eventJournal));
+    // ADR-094/PROP-047: метрики памяти (`synth_memory_*`) — пересчёт на скрейпе.
+    stopMetricsCollectors.push(startMemoryMetrics(metrics, {
+      facts: storageContext.memoryFacts,
+      indexes: storageContext.memoryIndexes,
+    }));
   }
 
   // ADR-052 (этап II): исходящие webhooks — реестр подписок (signing-секрет
@@ -777,6 +786,45 @@ export async function createStandaloneDeps(
     logger: { warn: (message: string) => console.warn(`[plugin-process] ${message}`) },
   });
 
+  // ADR-090 (WP-F): сервис эмбеддингов фасада (`facade.embed`).
+  //
+  // Эмбеддинги плагина идут **тем же** путём, что и остальные LLM-вызовы:
+  // провайдер создаётся `ProviderFactory`, оборачивается в `GatewayProvider`
+  // (`orchestrator.wrapProviderWithGateway`) — значит, работают guard'ы,
+  // обфускация, rate-limit, аудит и embedding-фаза фильтров `llmFilters`
+  // (инвариант 3, ADR-036). Плагин провайдера напрямую не достаёт.
+  //
+  // Провайдер/модель приходят из фасада: конфиг инстанса
+  // (`plugins.embeddingProvider`/`plugins.embeddingModel`) с перекрытием
+  // аргументом вызова. `GatewayProvider.embed` принимает **одну** строку —
+  // батча в v1 нет, поэтому цикл по текстам.
+  const pluginEmbed: PluginEmbedFn = async (texts, opts) => {
+    const providerName = opts?.provider?.trim() ?? '';
+    if (!providerName) {
+      throw new PluginFacadeError(
+        'plugin.embedding_not_configured',
+        'Эмбеддинги не сконфигурированы: задайте plugins.embeddingProvider ' +
+          '(или передайте провайдера в вызове facade.embed).',
+      );
+    }
+    const sharedConfig = providerLoader(providerName);
+    if (!sharedConfig) {
+      throw new PluginFacadeError(
+        'plugin.embedding_not_configured',
+        `Провайдер «${providerName}» не найден в инстансе — эмбеддинги недоступны.`,
+      );
+    }
+    const model = opts?.model?.trim() || sharedConfig.defaultModel || '';
+    const provider = orchestrator.wrapProviderWithGateway(
+      ProviderFactory.create(providerName, toCoreProviderConfig(sharedConfig, model)),
+    );
+    const vectors: number[][] = [];
+    for (const text of texts) {
+      vectors.push(await provider.embed(text));
+    }
+    return vectors;
+  };
+
   const pluginRuntime = new PluginRuntime({
     layout: resolvePluginLayout({ dataDir, env: process.env }),
     config: effectivePluginsConfig,
@@ -786,11 +834,20 @@ export async function createStandaloneDeps(
     promptBlocks,
     llmFilters: orchestrator.getLlmFilters(),
     tools: toolRegistry,
+    // PROP-047 §2.1: порты памяти инстанса — фасад плагина отдаёт **scoped**
+    // доступ (namespace навязывает хост). Порты обязательны в
+    // `StorageContext`, поэтому сервис доступен всегда.
+    memory: {
+      memoryFacts: storageContext.memoryFacts,
+      memoryIndexes: storageContext.memoryIndexes,
+    },
     loaders: {
       inline: createInlinePluginLoader(),
       remote: createRemotePluginLoader({ processManager: pluginProcessManager }),
     },
     processManager: pluginProcessManager,
+    // ADR-090 (WP-F): сервис эмбеддингов фасада — через Gateway (инвариант 3).
+    embed: pluginEmbed,
     // Ф7 (ADR-090): серверная политика плагинов в гибриде (Уровень 1 —
     // cooperative). Не задана — сервера нет: плагины работают, но помечаются
     // «не проверен сервером».

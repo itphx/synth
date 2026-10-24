@@ -18,11 +18,23 @@ export type { HookHandler, HookRegistrationOptions, HookEmitResult } from './eng
 export { PluginHost, DEFAULT_EXTENSION_CONTRACT_VERSION } from './engine/plugins/index.js';
 export {
   PLUGIN_ACTIVATION_STEPS,
+  PLUGIN_FACADE_ERROR_CODES,
+  PluginFacadeError,
   PluginLoadError,
   computePluginContentHash,
   pluginLoadFailureReason,
   verifyPluginIntegrity,
   readExactHostExceptions,
+  // PROP-047 §2.1: namespace памяти плагина и scoped-обёртка над портами.
+  PLUGIN_MEMORY_NAMESPACE_PREFIX,
+  createScopedMemory,
+  pluginMemoryNamespace,
+  // ADR-090 (WP-F): сервис эмбеддингов фасада и ридер настроек плагина.
+  MAX_PLUGIN_EMBED_BATCH,
+  MAX_PLUGIN_EMBED_TEXT_CHARS,
+  MAX_PLUGIN_EMBED_TOTAL_CHARS,
+  createPluginEmbedService,
+  createPluginSettingsReader,
 } from './engine/plugins/index.js';
 export type {
   PluginHostOptions,
@@ -32,14 +44,19 @@ export type {
   PluginActivationStep,
   PluginDeactivationResult,
   PluginDisposer,
+  PluginEmbedFn,
+  PluginEmbedOptions,
   PluginFacade,
+  PluginFacadeErrorCode,
   PluginLoadFailureReason,
   PluginLoader,
   PluginLogger,
+  PluginMemoryPorts,
   PluginModule,
   PluginScanHook,
   PluginScanResult,
   PluginIntegrityVerdict,
+  PluginSettingsReader,
   PluginToolDefinition,
 } from './engine/plugins/index.js';
 // ADR-090 (Ф4а): загрузчик кода плагина из распакованного бандла.
@@ -530,6 +547,11 @@ export type { FilePipelineStoreConfig } from './storage/file-pipeline-store.js';
 // ADR-086 §5: файловая реализация порта реестра установок пакетов.
 export { FilePackStore } from './storage/file-pack-store.js';
 export type { FilePackStoreConfig } from './storage/file-pack-store.js';
+// PROP-047 §2.1 (предпосылка A): файловые реализации портов памяти.
+export { FileMemoryFactStore } from './storage/file-memory-fact-store.js';
+export type { FileMemoryFactStoreConfig } from './storage/file-memory-fact-store.js';
+export { FileMemoryIndexStore } from './storage/file-memory-index-store.js';
+export type { FileMemoryIndexStoreConfig } from './storage/file-memory-index-store.js';
 export type {
   SessionRepository,
   SessionFilter,
@@ -609,6 +631,21 @@ export type {
   AuthorityPolicyRepository,
   AuthorityDecisionJournal,
   AuthorityDecisionListOptions,
+  // PROP-047 §2.1 (предпосылка A): порты памяти — факты и индексы с чанками.
+  MemoryFactRepository,
+  MemoryFactRecord,
+  MemoryFactQuery,
+  MemoryFactStatus,
+  MemoryFactProvenance,
+  MemoryFactRevision,
+  MemoryIndexRepository,
+  MemoryIndexRecord,
+  MemoryIndexQuery,
+  MemoryIndexState,
+  MemoryIndexFingerprint,
+  MemoryIndexSource,
+  MemoryIndexStats,
+  MemoryChunkRecord,
 } from './storage/ports/index.js';
 // ADR-105 (Ф0/Ф1): доменная ошибка хранилища внешних доступов — значение
 // (не только тип): её бросают реализации порта, в т.ч. PostgreSQL-драйвер
@@ -656,6 +693,13 @@ export {
   // ADR-105 (Ф1): внешние доступы (OAuth-креды к коннекторам).
   MemoryExternalCredentialRepository,
   MemoryCredentialAuditRepository,
+} from './storage/memory/index.js';
+// PROP-047 §2.1: in-memory реализации портов памяти. Имена классов совпадают с
+// именами портов (`MemoryFactRepository`), поэтому в публичном API они
+// экспортируются с суффиксом `Impl` (иначе — конфликт имён с типом порта).
+export {
+  MemoryFactRepository as MemoryFactRepositoryImpl,
+  MemoryIndexRepository as MemoryIndexRepositoryImpl,
 } from './storage/memory/index.js';
 // ADR-096 (W2.4): generic-реализация конфигурационных словарей (провайдеры/модели/агенты).
 export { MemoryDocumentRepository } from './storage/memory/document-repository.js';
@@ -1535,6 +1579,28 @@ export type {
   PluginSettingsRoutesOptions,
   PluginSettingsStoreLike,
 } from './server/routes/plugins.js';
+// ADR-107 / PROP-047 §2.1: портал памяти в ядре (чтение фактов/индексов).
+export {
+  createMemoryRoutes,
+  MEMORY_PLUGIN_NAME,
+  MEMORY_NAMESPACE,
+  MEMORY_FACT_STATUSES,
+  MEMORY_INDEX_STATES,
+} from './server/routes/memory.js';
+export type {
+  MemoryRoutesAuth,
+  MemoryRoutesOptions,
+  MemoryRoutesPorts,
+  MemoryRouteMessages,
+  MemoryFactStatusFilter,
+  MemoryIndexStateFilter,
+  MemoryPortalReadiness,
+  MemoryStatusView,
+  MemoryFactsSummary,
+  MemoryIndexesSummary,
+  MemoryFactsPage,
+  MemoryIndexesPage,
+} from './server/routes/memory.js';
 export { createIdentityRoutes } from './server/routes/identities.js';
 export type {
   IdentityRoutesAuth,
@@ -1602,6 +1668,8 @@ export {
   attachBusMetrics,
   startSessionMetrics,
   startStorageMetrics,
+  // ADR-094/PROP-047: метрики памяти (`synth_memory_*`).
+  startMemoryMetrics,
   registerDecisionMetrics,
   createSchedulerMetrics,
   createWebhookMetrics,
@@ -1634,6 +1702,7 @@ export {
 export type {
   TurnOutcome,
   StorageMetricsSources,
+  MemoryMetricsSources,
   HybridMetricsHooks,
   RemoteRequestInfo,
   SchedulerJobInfo,
