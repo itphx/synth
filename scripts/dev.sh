@@ -34,6 +34,9 @@ export SYNTH_LOG_DIR="$LOGDIR"
 
 # Режим разработки: debug-аутентификация с тестовыми пользователями
 export SYNTH_AUTH_DEBUG=true
+# Плагины (ADR-090): dev включает исполнение кода плагинов и ставит in-tree
+# плагин памяти (scripts/dev-plugins.sh). Выключить: SYNTH_PLUGINS_EXECUTION_ENABLED=false.
+export SYNTH_PLUGINS_EXECUTION_ENABLED="${SYNTH_PLUGINS_EXECUTION_ENABLED:-true}"
 
 # Каталог данных — вне репозитория; по умолчанию <repo>/../data, переопределяется env
 export SYNTH_DATA_DIR="${SYNTH_DATA_DIR:-$ROOT/../data}"
@@ -188,6 +191,13 @@ start_backend() {
         exit 1
     }
     echo " ok"
+
+    # Плагины: установка/обновление in-tree плагина памяти + подтверждение
+    # (ADR-090). Идемпотентно и не критично для старта: без плагина память
+    # деградирует (портал отвечает 503), backend работает.
+    echo -n "  плагины..."
+    bash "$SYNTH/scripts/dev-plugins.sh" "$LOGDIR/plugins.log" >/dev/null 2>&1 || true
+    echo " ok (лог: $LOGDIR/plugins.log)"
 
     # Супервизор-цикл: code 75 из UI-restart → перезапуск (SYNTH_RESTART_MODE).
     # Запускаем tsx напрямую — минуем pnpm, чтобы избежать повторной проверки deps.
