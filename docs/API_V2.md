@@ -1858,6 +1858,7 @@ managed-backend; backend добавляет только RBAC через `opts.g
 | POST | `/api/v2/memory/indexes` | оба | Создание индекса: тело `{name?, source?:{kind:'files'\|'facts', filter?}, projectId?, force?}` → **202** `{index, message}`. `index` — запись `MemoryIndexRecord` из порта (по `metadata.indexId` тула), если записи ещё нет — `metadata` тула. `message` — локализованное подтверждение. Границы: проект обязателен (индекс файлов строится в проекте) → 400 `MEMORY_PROJECT_REQUIRED`; нет проекта → 404 `PROJECT_NOT_FOUND`; у проекта нет workspace при `source.kind === 'files'` → 400 `MEMORY_WORKSPACE_REQUIRED`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
 | POST | `/api/v2/memory/indexes/:id/rebuild` | оба | Пересборка индекса: тело `{force?}` → **202** `{index}`. Проект и источник индекса берутся **из порта** (клиент их не подменяет). Нет индекса (или он чужого namespace) → 404 `MEMORY_INDEX_NOT_FOUND`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
 | DELETE | `/api/v2/memory/indexes/:id` | оба | Удаление индекса → **204**. Нет индекса → 404 `MEMORY_INDEX_NOT_FOUND`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
+| POST | `/api/v2/memory/consolidate` | оба | Консолидация фактов: тело `{projectId?, threshold?, dryRun?}` → **200** `{report, message}`. `report` = `{clusters, superseded, kept, items}` — число кластеров, число вытесненных фактов, число канонов и состав кластеров (`items`: `{keptId, supersededIds, similarity}` на кластер). `threshold` — порог косинуса сходства (0.5..0.99), вне диапазона → 400 `VALIDATION_ERROR`; `dryRun` — прогон без записи (решает плагин). `projectId` — проект, чьи факты консолидируются; без него — факты инстанса; нет такого проекта → 404 `PROJECT_NOT_FOUND`. Workspace проекта **не требуется** (консолидация идёт по фактам). Провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_CONSOLIDATION_FAILED` (машинный код тула — в `error.details.code`) |
 
 **Мутации: портал → админ-тул плагина через реестр.** Логика индекса
 принадлежит **плагину** (PROP-047 §3: ядро владеет данными, плагин — логикой),
@@ -1888,11 +1889,30 @@ managed-backend; backend добавляет только RBAC через `opts.g
 возвращается в 422 `MEMORY_INDEX_FAILED`; внутренние пути (каталог данных,
 рабочий каталог) в нём маскируются.
 
+**Консолидация фактов.** Консолидация (PROP-047 §2.1) — тоже **логика
+плагина**: портал не считает кластеры сам, а вызывает админ-тул плагина
+памяти `plugin_synth_plugin_memory_memory_consolidate`
+(`pluginToolFullName('synth-plugin-memory', 'memory_consolidate')`, ADR-090)
+тем же способом, что и мутации индексов. Плагин группирует факты в
+**кластеры по косинусу сходства** эмбеддингов, в каждом кластере выбирает
+**канон** (факт-эталон) и помечает остальные факты как `superseded` —
+заменённые каноном дубликаты; отчёт — число кластеров, число заменённых
+фактов, число канонов и состав каждого кластера
+(`items: [{keptId, supersededIds, similarity}]`). Порог сходства задаёт
+клиент (`threshold`, 0.5..0.99; по умолчанию — на стороне плагина), `dryRun`
+прогоняет консолидацию **без записи** (только отчёт). В отличие от сборки
+индекса операция **синхронная**: ответ 200 с отчётом, а не 202. Проект
+опционален (`projectId` — консолидируются факты конкретного проекта, иначе
+инстанса); **workspace не нужен** — консолидация идёт по фактам, а рабочий
+каталог вызова равен workspace проекта, если он есть, иначе каталогу данных
+инстанса. Провал тула → 422 `MEMORY_CONSOLIDATION_FAILED`, его машинный код
+(напр. `plugin.embedding_not_configured`) — в `error.details.code`.
+
 **Коды ошибок:** `VALIDATION_ERROR` (400), `MEMORY_PROJECT_REQUIRED` (400),
 `MEMORY_WORKSPACE_REQUIRED` (400), `PROJECT_NOT_FOUND` (404),
 `MEMORY_FACT_NOT_FOUND` (404), `MEMORY_INDEX_NOT_FOUND` (404),
 `MEMORY_PROVIDER_UNAVAILABLE` (409), `MEMORY_INDEX_FAILED` (422),
-`MEMORY_UNAVAILABLE` (503).
+`MEMORY_CONSOLIDATION_FAILED` (422), `MEMORY_UNAVAILABLE` (503).
 
 **Пример.**
 
@@ -1919,6 +1939,11 @@ curl -X POST http://localhost:5000/api/v2/memory/indexes/<indexId>/rebuild \
   -d '{"force":true}'
 curl -X DELETE http://localhost:5000/api/v2/memory/indexes/<indexId> \
   -H 'Authorization: Bearer admin-key-123'
+
+# Консолидация фактов проекта в dry-run (200 → {report, message}).
+curl -X POST http://localhost:5000/api/v2/memory/consolidate \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"projectId":"prj_1","threshold":0.85,"dryRun":true}'
 ```
 
 ## 6. Источники

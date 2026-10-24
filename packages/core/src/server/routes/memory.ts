@@ -19,6 +19,7 @@
  * | POST | `/indexes` | 202 `{index, message}` — индекс создан (запись из порта) |
  * | POST | `/indexes/:id/rebuild` | 202 `{index}` — пересборка запущена |
  * | DELETE | `/indexes/:id` | 204 — индекс удалён |
+ * | POST | `/consolidate` | 200 `{report, message}` — отчёт консолидации фактов |
  *
  * ## Правила
  *
@@ -51,6 +52,27 @@
  *   `409 MEMORY_PROVIDER_UNAVAILABLE`; чтение при этом работает как раньше;
  * - **провал тула** (`isError`) — `422 MEMORY_INDEX_FAILED` с текстом из
  *   `content` (внутренние пути замаскированы).
+ *
+ * ## Консолидация фактов: портал → админ-тул плагина
+ *
+ * Консолидация (PROP-047 §2.1, ADR-107) — тоже **логика плагина**: кластеризация
+ * фактов по косинусу, выбор канона в кластере и замена дубликатов. Портал
+ * отвечает только за границы и HTTP-контракт, поэтому консолидация устроена
+ * так же, как мутации индексов: вызов **админ-тула плагина**
+ * `plugin_synth_plugin_memory_memory_consolidate` через `opts.invokeTool`.
+ *
+ * - **операция синхронная** — ответ 200 с отчётом (не 202: фоновая сборка
+ *   индекса — другое дело);
+ * - **проект опционален**: без `projectId` консолидируются факты инстанса;
+ *   с `projectId` — факты проекта (нет проекта → 404 `PROJECT_NOT_FOUND`);
+ * - **workspace не нужен**: консолидация работает по фактам, а не по файлам —
+ *   рабочий каталог вызова = workspace проекта, если он есть, иначе каталог
+ *   данных инстанса;
+ * - **порог кластеризации** (`threshold`) — 0.5..0.99, вне диапазона →
+ *   400 `VALIDATION_ERROR`;
+ * - **провал тула** (`isError`) — 422 `MEMORY_CONSOLIDATION_FAILED` с текстом
+ *   из `content` (пути замаскированы); код тула (`metadata.code`, напр.
+ *   `plugin.embedding_not_configured`) пробрасывается в `error.details.code`.
  */
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -95,6 +117,18 @@ export { MEMORY_NAMESPACE, MEMORY_PLUGIN_NAME };
  */
 export const MEMORY_INDEX_TOOL_NAME = pluginToolFullName(MEMORY_PLUGIN_NAME, 'memory_index');
 
+/**
+ * Полное имя админ-тула плагина памяти для консолидации фактов (ADR-090).
+ *
+ * Консолидация — тоже логика плагина (PROP-047 §2.1): кластеры по косинусу,
+ * канон в кластере, замена дубликатов. Хост составляет имя тем же
+ * хелпером, что и у `memory_index`.
+ */
+export const MEMORY_CONSOLIDATE_TOOL_NAME = pluginToolFullName(
+  MEMORY_PLUGIN_NAME,
+  'memory_consolidate',
+);
+
 /** Вид источника корпуса индекса, который принимает портал. */
 export type MemoryIndexSourceKind = 'files' | 'facts';
 
@@ -115,9 +149,14 @@ export interface MemoryPortalProject {
 export interface MemoryToolInvokeInput {
   /** Полное имя тула в реестре (`plugin_synth_plugin_memory_memory_index`). */
   tool: string;
-  /** Параметры тула (`action`/`indexId`/`name`/`source`/`projectId`/`force`). */
+  /**
+   * Параметры тула.
+   *
+   * - `memory_index`: `action`/`indexId`/`name`/`source`/`projectId`/`force`;
+   * - `memory_consolidate`: `projectId?`/`threshold?`/`dryRun?`.
+   */
   params: Record<string, unknown>;
-  /** Проект-владелец индекса (если есть). */
+  /** Проект-владелец индекса или консолидации (если есть). */
   projectId?: string;
   /** Рабочий каталог вызова (workspace проекта либо каталог данных). */
   workingDir: string;
@@ -127,7 +166,8 @@ export interface MemoryToolInvokeInput {
  * Вызов админ-тула плагина памяти (реализует вызывающая сторона — mount-routes).
  *
  * Результат — `ToolResult`: `content` — текст, `isError` — ошибка тула,
- * `metadata` — `{indexId?, state?, generation?, stats?}`.
+ * `metadata` — `{indexId?, state?, generation?, stats?}` (индекс) или
+ * `{clusters?, superseded?, kept?, items?}` (консолидация).
  */
 export type MemoryToolInvoker = (input: MemoryToolInvokeInput) => Promise<ToolResult>;
 
@@ -228,6 +268,12 @@ export interface MemoryRouteMessages {
   indexFailed: (c: Context) => string;
   /** Сообщение об успешном создании индекса. */
   indexCreated: (c: Context) => string;
+  /** Некорректный порог консолидации (вне 0.5..0.99). */
+  invalidThreshold: (c: Context) => string;
+  /** Консолидация памяти не удалась (текст — из ответа тула). */
+  consolidationFailed: (c: Context) => string;
+  /** Сообщение об успешной консолидации. */
+  consolidated: (c: Context) => string;
 }
 
 /** Порты памяти инстанса (ADR-096) — источник истины для портала. */
@@ -340,6 +386,34 @@ export interface MemoryIndexesPage {
   total: number;
 }
 
+/**
+ * Один кластер консолидации: канон и вытесненные им факты.
+ *
+ * `keptId` — факт-канон кластера (он остаётся активным), `supersededIds` —
+ * факты, которые он заменил (становятся `superseded`), `similarity` — косинус
+ * сходства канона с заменёнными фактами.
+ */
+export interface MemoryConsolidationItem {
+  /** Id факта-канона кластера. */
+  keptId: string;
+  /** Id фактов, вытесненных каноном. */
+  supersededIds: string[];
+  /** Косинус сходства канона с вытесненными фактами. */
+  similarity: number;
+}
+
+/** Отчёт консолидации фактов (`POST /consolidate`). */
+export interface MemoryConsolidationReport {
+  /** Число кластеров, найденных по порогу сходства. */
+  clusters: number;
+  /** Число фактов, вытесненных канонами кластеров. */
+  superseded: number;
+  /** Число фактов-канонов, оставшихся активными. */
+  kept: number;
+  /** Состав кластеров (по кластеру — канон и заменённые им факты). */
+  items: MemoryConsolidationItem[];
+}
+
 const DEFAULT_MESSAGES: MemoryRouteMessages = {
   invalidStatus: () => 'Недопустимый статус факта памяти',
   invalidState: () => 'Недопустимое состояние индекса памяти',
@@ -356,6 +430,9 @@ const DEFAULT_MESSAGES: MemoryRouteMessages = {
   indexNotFound: () => 'Индекс памяти не найден',
   indexFailed: () => 'Не удалось выполнить операцию с индексом памяти',
   indexCreated: () => 'Индекс памяти создан',
+  invalidThreshold: () => 'Порог консолидации памяти: ожидается число от 0.5 до 0.99',
+  consolidationFailed: () => 'Не удалось выполнить консолидацию памяти',
+  consolidated: () => 'Консолидация памяти выполнена',
 };
 
 /** Дефолтный потолок выборки фактов. */
@@ -370,11 +447,77 @@ const MAX_FACTS_LIMIT = 200;
  */
 const SEARCH_SAMPLE_LIMIT = 1000;
 
+/** Нижняя граница порога кластеризации (косинус сходства). */
+const MIN_CONSOLIDATION_THRESHOLD = 0.5;
+
+/** Верхняя граница порога кластеризации (косинус сходства). */
+const MAX_CONSOLIDATION_THRESHOLD = 0.99;
+
 /** Разбор неотрицательного целого query-параметра (`null` — не задан). */
 function parseIntegerParam(raw: string | undefined): number | null {
   if (raw === undefined || raw.trim() === '') return null;
   if (!/^-?\d+$/.test(raw.trim())) return Number.NaN;
   return Number.parseInt(raw.trim(), 10);
+}
+
+/**
+ * Нормализация счётчика из метаданных тула (не число/отрицательное — 0).
+ *
+ * Метаданные тула — недоверенный ввод: портал приводит их к форме отчёта,
+ * чтобы ответ API не зависел от того, что вернул плагин.
+ */
+function normalizeCount(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 0;
+  return Math.floor(value);
+}
+
+/**
+ * Нормализация состава кластеров из метаданных тула.
+ *
+ * Кластер без канона (`keptId`) в отчёт не попадает — иначе клиент получил бы
+ * «замену неизвестно на что».
+ */
+function normalizeConsolidationItems(value: unknown): MemoryConsolidationItem[] {
+  if (!Array.isArray(value)) return [];
+  const items: MemoryConsolidationItem[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const item = raw as Record<string, unknown>;
+    const keptId = typeof item.keptId === 'string' ? item.keptId.trim() : '';
+    if (!keptId) continue;
+    const supersededIds = Array.isArray(item.supersededIds)
+      ? item.supersededIds
+          .filter((id): id is string => typeof id === 'string')
+          .map((id) => id.trim())
+          .filter((id) => id.length > 0)
+      : [];
+    const similarity =
+      typeof item.similarity === 'number' && Number.isFinite(item.similarity) ? item.similarity : 0;
+    items.push({ keptId, supersededIds, similarity });
+  }
+  return items;
+}
+
+/** Отчёт консолидации — из метаданных тула (пустое → нули). */
+function normalizeConsolidationReport(metadata?: Record<string, unknown>): MemoryConsolidationReport {
+  return {
+    clusters: normalizeCount(metadata?.clusters),
+    superseded: normalizeCount(metadata?.superseded),
+    kept: normalizeCount(metadata?.kept),
+    items: normalizeConsolidationItems(metadata?.items),
+  };
+}
+
+/**
+ * Код ошибки тула (`metadata.code`) — для `error.details.code`.
+ *
+ * Плагин отдаёт машинный код (напр. `plugin.embedding_not_configured`),
+ * клиенту он полезнее текста; нестрока/пустой код — код не пробрасывается.
+ */
+function toolErrorDetails(metadata?: Record<string, unknown>): { code: string } | undefined {
+  const code = metadata?.code;
+  if (typeof code !== 'string' || !code.trim()) return undefined;
+  return { code: code.trim() };
 }
 
 /**
@@ -400,13 +543,18 @@ export function createMemoryRoutes(
   const unavailable = (c: Context) =>
     c.json({ error: { code: 'MEMORY_UNAVAILABLE', message: messages.unavailable(c) } }, 503);
 
-  /** Ошибка API в общем формате `{ error: { code, message } }`. */
+  /**
+   * Ошибка API в общем формате `{ error: { code, message } }`.
+   *
+   * `details` — аддитивное поле (напр. машинный код тула в `error.details.code`).
+   */
   const apiError = (
     c: Context,
     code: string,
     message: string,
     status: 400 | 404 | 409 | 422,
-  ) => c.json({ error: { code, message } }, status);
+    details?: Record<string, unknown>,
+  ) => c.json({ error: { code, message, ...(details ? { details } : {}) } }, status);
 
   /** 409: плагин памяти не активен либо его тул не зарегистрирован. */
   const providerUnavailable = (c: Context) =>
@@ -459,13 +607,17 @@ export function createMemoryRoutes(
   /**
    * Вызов админ-тула плагина памяти.
    *
-   * Провал тула (`isError`) — 422 `MEMORY_INDEX_FAILED` с текстом из `content`
+   * Провал тула (`isError`) — 422 с кодом операции и текстом из `content`
    * (внутренние пути замаскированы). Отсутствие тула в реестре
    * (`MemoryProviderUnavailableError`) — 409. Прочие броски — 422.
+   *
+   * `withDetails` — пробросить машинный код тула (`metadata.code`) в
+   * `error.details.code` (для консолидации: `plugin.embedding_not_configured`).
    */
-  const invokeIndexTool = async (
+  const invokeMemoryTool = async (
     c: Context,
     input: MemoryToolInvokeInput,
+    failure: { code: string; message: string; withDetails?: boolean },
   ): Promise<{ ok: true; result: ToolResult } | { ok: false; response: Response }> => {
     const invoke = opts.invokeTool;
     if (!invoke) return { ok: false, response: providerUnavailable(c) };
@@ -478,23 +630,32 @@ export function createMemoryRoutes(
       }
       return {
         ok: false,
-        response: apiError(c, 'MEMORY_INDEX_FAILED', messages.indexFailed(c), 422),
+        response: apiError(c, failure.code, failure.message, 422),
       };
     }
     if (result?.isError) {
       const text = redactInternalPaths(result.content ?? '', input.workingDir, opts.dataDir);
+      const details = failure.withDetails ? toolErrorDetails(result.metadata) : undefined;
       return {
         ok: false,
         response: apiError(
           c,
-          'MEMORY_INDEX_FAILED',
-          text.trim() ? text : messages.indexFailed(c),
+          failure.code,
+          text.trim() ? text : failure.message,
           422,
+          details,
         ),
       };
     }
     return { ok: true, result };
   };
+
+  /** Вызов админ-тула индекса памяти (`MEMORY_INDEX_FAILED`). */
+  const invokeIndexTool = (c: Context, input: MemoryToolInvokeInput) =>
+    invokeMemoryTool(c, input, {
+      code: 'MEMORY_INDEX_FAILED',
+      message: messages.indexFailed(c),
+    });
 
   /**
    * Статус портала памяти: провайдер, готовность и сводные счётчики.
@@ -831,6 +992,80 @@ export function createMemoryRoutes(
     if (!call.ok) return call.response;
 
     return c.body(null, 204);
+  });
+
+  /**
+   * Консолидация фактов памяти — через админ-тул плагина (ADR-090).
+   *
+   * Логика консолидации принадлежит **плагину** (PROP-047 §2.1): кластеры по
+   * косинусу сходства, канон в кластере, замена дубликатов. Портал проверяет
+   * границы (проект, порог, доступность провайдера) и отвечает за контракт.
+   *
+   * Отличие от мутаций индексов: операция **синхронная** (200, не 202) и
+   * **workspace не нужен** — консолидация работает по фактам, а не по файлам.
+   */
+  app.post('/consolidate', guard, async (c) => {
+    const body = await readBody(c);
+    if (!body) return apiError(c, 'VALIDATION_ERROR', messages.invalidBody(c), 400);
+
+    // Порог кластеризации: число 0.5..0.99 (вне диапазона — 400).
+    let threshold: number | undefined;
+    if (body.threshold !== undefined && body.threshold !== null) {
+      const raw = body.threshold;
+      if (
+        typeof raw !== 'number' ||
+        !Number.isFinite(raw) ||
+        raw < MIN_CONSOLIDATION_THRESHOLD ||
+        raw > MAX_CONSOLIDATION_THRESHOLD
+      ) {
+        return apiError(c, 'VALIDATION_ERROR', messages.invalidThreshold(c), 400);
+      }
+      threshold = raw;
+    }
+
+    const projectId =
+      typeof body.projectId === 'string' && body.projectId.trim()
+        ? body.projectId.trim()
+        : undefined;
+    const dryRun = body.dryRun === true ? true : undefined;
+
+    // Проект (если задан) должен существовать: консолидация по фактам
+    // конкретного проекта. Нет проекта — 404 (fail-closed).
+    let project: MemoryPortalProject | null = null;
+    if (projectId) {
+      project = await resolvePortalProject(projectId);
+      if (!project) {
+        return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
+      }
+    }
+    if (!providerAvailable()) return providerUnavailable(c);
+
+    // Workspace у проекта может не быть — это не ошибка консолидации:
+    // рабочий каталог вызова = workspace, иначе каталог данных инстанса.
+    const workingDir = workingDirOf(project);
+    const params: Record<string, unknown> = {
+      ...(projectId ? { projectId } : {}),
+      ...(threshold !== undefined ? { threshold } : {}),
+      ...(dryRun !== undefined ? { dryRun } : {}),
+    };
+    const call = await invokeMemoryTool(
+      c,
+      {
+        tool: MEMORY_CONSOLIDATE_TOOL_NAME,
+        params,
+        ...(projectId ? { projectId } : {}),
+        workingDir,
+      },
+      {
+        code: 'MEMORY_CONSOLIDATION_FAILED',
+        message: messages.consolidationFailed(c),
+        withDetails: true,
+      },
+    );
+    if (!call.ok) return call.response;
+
+    const report = normalizeConsolidationReport(call.result.metadata);
+    return c.json({ report, message: messages.consolidated(c) }, 200);
   });
 
   return app;

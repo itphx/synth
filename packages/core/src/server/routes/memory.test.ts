@@ -19,6 +19,7 @@ import {
   MEMORY_NAMESPACE,
   MEMORY_PLUGIN_NAME,
   MEMORY_INDEX_TOOL_NAME,
+  MEMORY_CONSOLIDATE_TOOL_NAME,
 } from './memory.js';
 import type { MemoryToolInvokeInput, MemoryToolInvoker } from './memory.js';
 
@@ -116,6 +117,29 @@ async function seed(storage: StorageContext): Promise<void> {
 
 async function json(res: Response): Promise<Record<string, any>> {
   return (await res.json()) as Record<string, any>;
+}
+
+/** Инвокер-заглушка: запоминает вызовы и отвечает результатом. */
+function makeInvoker(
+  result: { content?: string; isError?: boolean; metadata?: Record<string, unknown> } = {},
+): { invoke: MemoryToolInvoker; calls: MemoryToolInvokeInput[] } {
+  const calls: MemoryToolInvokeInput[] = [];
+  return {
+    calls,
+    invoke: async (input) => {
+      calls.push(input);
+      return { content: 'ok', ...result };
+    },
+  };
+}
+
+/** POST с JSON-телом. */
+async function post(app: Hono, path: string, body: unknown): Promise<Response> {
+  return app.request(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 
 describe('createMemoryRoutes — статус портала', () => {
@@ -319,29 +343,6 @@ describe('createMemoryRoutes — индексы', () => {
 describe('createMemoryRoutes — мутации индексов (портал → админ-тул плагина)', () => {
   const WORKSPACE = '/srv/workspaces/demo';
   const DATA_DIR = '/srv/data';
-
-  /** Инвокер-заглушка: запоминает вызовы и отвечает успехом. */
-  function makeInvoker(
-    result: { content?: string; isError?: boolean; metadata?: Record<string, unknown> } = {},
-  ): { invoke: MemoryToolInvoker; calls: MemoryToolInvokeInput[] } {
-    const calls: MemoryToolInvokeInput[] = [];
-    return {
-      calls,
-      invoke: async (input) => {
-        calls.push(input);
-        return { content: 'ok', ...result };
-      },
-    };
-  }
-
-  /** POST с JSON-телом. */
-  async function post(app: Hono, path: string, body: unknown): Promise<Response> {
-    return app.request(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-  }
 
   it('POST /indexes: без проекта → 400 MEMORY_PROJECT_REQUIRED', async () => {
     const { invoke, calls } = makeInvoker();
@@ -560,6 +561,112 @@ describe('createMemoryRoutes — мутации индексов (портал �
     expect((await post(app, '/api/v2/memory/indexes', { projectId: 'p-1' })).status).toBe(403);
     expect((await post(app, '/api/v2/memory/indexes/i-1/rebuild', {})).status).toBe(403);
     expect((await app.request('/api/v2/memory/indexes/i-1', { method: 'DELETE' })).status).toBe(403);
+  });
+});
+
+describe('createMemoryRoutes — консолидация фактов (портал → админ-тул плагина)', () => {
+  const WORKSPACE = '/srv/workspaces/demo';
+  const DATA_DIR = '/srv/data';
+
+  const REPORT_METADATA = {
+    clusters: 2,
+    superseded: 3,
+    kept: 2,
+    items: [
+      { keptId: 'f-1', supersededIds: ['f-2', 'f-3'], similarity: 0.93 },
+      { keptId: 'f-4', supersededIds: [], similarity: 0.81 },
+    ],
+  };
+
+  it('POST /consolidate: успех → 200 с отчётом, тул вызван с projectId/dryRun/threshold', async () => {
+    const { invoke, calls } = makeInvoker({ metadata: REPORT_METADATA });
+    const { app } = createApp({ invokeTool: invoke, projects: { 'p-1': { workspace: WORKSPACE } } });
+    const res = await post(app, '/api/v2/memory/consolidate', {
+      projectId: 'p-1',
+      threshold: 0.85,
+      dryRun: true,
+    });
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.report).toEqual(REPORT_METADATA);
+    expect(typeof body.message).toBe('string');
+    expect(calls).toHaveLength(1);
+    const [call] = calls;
+    expect(call?.tool).toBe(MEMORY_CONSOLIDATE_TOOL_NAME);
+    expect(call?.projectId).toBe('p-1');
+    expect(call?.workingDir).toBe(WORKSPACE);
+    expect(call?.params.projectId).toBe('p-1');
+    expect(call?.params.threshold).toBe(0.85);
+    expect(call?.params.dryRun).toBe(true);
+    // У консолидации нет `action` — это операция без вида.
+    expect(call?.params.action).toBeUndefined();
+  });
+
+  it('POST /consolidate: порог вне 0.5..0.99 → 400 VALIDATION_ERROR', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app } = createApp({ invokeTool: invoke, projects: { 'p-1': { workspace: WORKSPACE } } });
+    for (const threshold of [0.2, 1, -0.5, 1.5, '0.8']) {
+      const res = await post(app, '/api/v2/memory/consolidate', { projectId: 'p-1', threshold });
+      expect(res.status, String(threshold)).toBe(400);
+      expect((await json(res)).error.code).toBe('VALIDATION_ERROR');
+    }
+    expect(calls).toHaveLength(0);
+    // Границы диапазона допустимы.
+    for (const threshold of [0.5, 0.99]) {
+      const res = await post(app, '/api/v2/memory/consolidate', { projectId: 'p-1', threshold });
+      expect(res.status, String(threshold)).toBe(200);
+    }
+  });
+
+  it('POST /consolidate: несуществующий проект → 404 PROJECT_NOT_FOUND', async () => {
+    const { invoke, calls } = makeInvoker();
+    const { app } = createApp({ invokeTool: invoke, projects: { 'p-1': { workspace: WORKSPACE } } });
+    const res = await post(app, '/api/v2/memory/consolidate', { projectId: 'p-nope' });
+    expect(res.status).toBe(404);
+    expect((await json(res)).error.code).toBe('PROJECT_NOT_FOUND');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('POST /consolidate: без инвокера → 409 MEMORY_PROVIDER_UNAVAILABLE', async () => {
+    const { app } = createApp({ projects: { 'p-1': { workspace: WORKSPACE } } });
+    const res = await post(app, '/api/v2/memory/consolidate', { projectId: 'p-1' });
+    expect(res.status).toBe(409);
+    expect((await json(res)).error.code).toBe('MEMORY_PROVIDER_UNAVAILABLE');
+  });
+
+  it('POST /consolidate: ошибка тула → 422 MEMORY_CONSOLIDATION_FAILED с кодом в details', async () => {
+    const { invoke } = makeInvoker({
+      content: `Эмбеддинги не настроены: ${DATA_DIR}/secrets`,
+      isError: true,
+      metadata: { code: 'plugin.embedding_not_configured' },
+    });
+    const { app } = createApp({
+      invokeTool: invoke,
+      dataDir: DATA_DIR,
+      projects: { 'p-1': { workspace: WORKSPACE } },
+    });
+    const res = await post(app, '/api/v2/memory/consolidate', { projectId: 'p-1' });
+    expect(res.status).toBe(422);
+    const body = await json(res);
+    expect(body.error.code).toBe('MEMORY_CONSOLIDATION_FAILED');
+    expect(body.error.details.code).toBe('plugin.embedding_not_configured');
+    // Внутренние пути в тексте ошибки маскируются.
+    expect(body.error.message).not.toContain(DATA_DIR);
+    expect(body.error.message).toContain('<data>');
+  });
+
+  it('POST /consolidate: проект без workspace не мешает (200, рабочий каталог = каталог данных)', async () => {
+    const { invoke, calls } = makeInvoker({ metadata: REPORT_METADATA });
+    const { app } = createApp({
+      invokeTool: invoke,
+      dataDir: DATA_DIR,
+      projects: { 'p-1': {} },
+    });
+    const res = await post(app, '/api/v2/memory/consolidate', { projectId: 'p-1' });
+    expect(res.status).toBe(200);
+    expect((await json(res)).report).toEqual(REPORT_METADATA);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.workingDir).toBe(DATA_DIR);
   });
 });
 

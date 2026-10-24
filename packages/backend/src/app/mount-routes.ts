@@ -556,6 +556,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         indexNotFound: (c) => t('errors.notFound.memoryIndex', undefined, c),
         indexFailed: (c) => t('errors.failed.memoryIndex', undefined, c),
         indexCreated: (c) => t('memory.indexCreated', undefined, c),
+        invalidThreshold: (c) => t('errors.validation.invalidMemoryThreshold', undefined, c),
+        consolidationFailed: (c) => t('errors.failed.memoryConsolidation', undefined, c),
+        consolidated: (c) => t('memory.consolidated', undefined, c),
       },
     },
   ));

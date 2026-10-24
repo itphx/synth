@@ -1524,6 +1524,7 @@ not a 500).
 | POST | `/api/v2/memory/indexes` | both | Create an index: the body `{name?, source?:{kind:'files'\|'facts', filter?}, projectId?, force?}` → **202** `{index, message}`. `index` — the `MemoryIndexRecord` from the port (by the tool's `metadata.indexId`); if there is no record yet — the tool's `metadata`. `message` — a localized confirmation. The boundaries: a project is required (a file index is built in a project) → 400 `MEMORY_PROJECT_REQUIRED`; no such project → 404 `PROJECT_NOT_FOUND`; the project has no workspace and `source.kind === 'files'` → 400 `MEMORY_WORKSPACE_REQUIRED`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
 | POST | `/api/v2/memory/indexes/:id/rebuild` | both | Rebuild an index: the body `{force?}` → **202** `{index}`. The project and the source of the index are taken **from the port** (a client cannot substitute them). No index (or a foreign namespace) → 404 `MEMORY_INDEX_NOT_FOUND`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
 | DELETE | `/api/v2/memory/indexes/:id` | both | Delete an index → **204**. No index → 404 `MEMORY_INDEX_NOT_FOUND`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
+| POST | `/api/v2/memory/consolidate` | both | Consolidate the facts: the body `{projectId?, threshold?, dryRun?}` → **200** `{report, message}`. `report` = `{clusters, superseded, kept, items}` — the number of clusters, the number of superseded facts, the number of canonical facts and the cluster contents (`items`: `{keptId, supersededIds, similarity}` per cluster). `threshold` — the cosine similarity threshold (0.5..0.99), out of range → 400 `VALIDATION_ERROR`; `dryRun` — a run without writes (the plugin decides). `projectId` — the project whose facts are consolidated; without it — the facts of the instance; no such project → 404 `PROJECT_NOT_FOUND`. The project **does not need** a workspace (the consolidation works on the facts). The provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_CONSOLIDATION_FAILED` (the machine code of the tool is in `error.details.code`) |
 
 **Mutations: the portal → the plugin's admin tool through the registry.** The index
 logic belongs to the **plugin** (PROP-047 §3: the core owns the data, the plugin
@@ -1556,11 +1557,31 @@ before. The text of a tool failure (`isError`) is returned in 422
 `MEMORY_INDEX_FAILED`; the internal paths (the data directory, the working
 directory) are masked in it.
 
+**Fact consolidation.** The consolidation (PROP-047 §2.1) is also the **plugin's
+logic**: the portal does not count the clusters itself, it calls the memory
+plugin's admin tool `plugin_synth_plugin_memory_memory_consolidate`
+(`pluginToolFullName('synth-plugin-memory', 'memory_consolidate')`, ADR-090) the
+same way as the index mutations do. The plugin groups the facts into **clusters
+by the cosine similarity** of the embeddings, picks a **canonical fact** in each
+cluster (the reference one) and marks the rest as `superseded` — the duplicates
+replaced by the canonical fact; the report is the number of clusters, the number
+of replaced facts, the number of canonical facts and the contents of every
+cluster (`items: [{keptId, supersededIds, similarity}]`). The client sets the
+similarity threshold (`threshold`, 0.5..0.99; by default — on the plugin side),
+`dryRun` runs the consolidation **without writes** (a report only). Unlike an
+index build the operation is **synchronous**: the answer is 200 with the report,
+not 202. The project is optional (`projectId` — the facts of a specific project
+are consolidated, otherwise the instance's ones); a **workspace is not needed** —
+the consolidation works on the facts, and the working directory of the call is
+the project workspace if it exists, otherwise the instance data directory. A tool
+failure → 422 `MEMORY_CONSOLIDATION_FAILED`, its machine code (e.g.
+`plugin.embedding_not_configured`) — in `error.details.code`.
+
 **Error codes:** `VALIDATION_ERROR` (400), `MEMORY_PROJECT_REQUIRED` (400),
 `MEMORY_WORKSPACE_REQUIRED` (400), `PROJECT_NOT_FOUND` (404),
 `MEMORY_FACT_NOT_FOUND` (404), `MEMORY_INDEX_NOT_FOUND` (404),
 `MEMORY_PROVIDER_UNAVAILABLE` (409), `MEMORY_INDEX_FAILED` (422),
-`MEMORY_UNAVAILABLE` (503).
+`MEMORY_CONSOLIDATION_FAILED` (422), `MEMORY_UNAVAILABLE` (503).
 
 **Example.**
 
@@ -1587,6 +1608,11 @@ curl -X POST http://localhost:5000/api/v2/memory/indexes/<indexId>/rebuild \
   -d '{"force":true}'
 curl -X DELETE http://localhost:5000/api/v2/memory/indexes/<indexId> \
   -H 'Authorization: Bearer admin-key-123'
+
+# Consolidate the facts of a project in a dry run (200 → {report, message}).
+curl -X POST http://localhost:5000/api/v2/memory/consolidate \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"projectId":"prj_1","threshold":0.85,"dryRun":true}'
 ```
 
 ---

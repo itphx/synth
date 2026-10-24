@@ -95,6 +95,10 @@ const en: Dictionary = {
   'errors.notFound.memoryIndex': 'Memory index not found',
   'errors.failed.memoryIndex': 'Failed to perform the memory index operation',
   'memory.indexCreated': 'Memory index created',
+  'errors.validation.invalidMemoryThreshold':
+    'Invalid memory consolidation threshold (expected a number 0.5..0.99)',
+  'errors.failed.memoryConsolidation': 'Failed to consolidate memory',
+  'memory.consolidated': 'Memory consolidation completed',
 
   // ADR-052 (этап II): исходящие webhooks
   'errors.validation.invalidWebhook': 'Invalid webhook subscription payload',
@@ -260,6 +264,10 @@ const ru: Dictionary = {
   'errors.notFound.memoryIndex': 'Индекс памяти не найден',
   'errors.failed.memoryIndex': 'Не удалось выполнить операцию с индексом памяти',
   'memory.indexCreated': 'Индекс памяти создан',
+  'errors.validation.invalidMemoryThreshold':
+    'Некорректный порог консолидации памяти (ожидается число 0.5..0.99)',
+  'errors.failed.memoryConsolidation': 'Не удалось выполнить консолидацию памяти',
+  'memory.consolidated': 'Консолидация памяти выполнена',
 
   // ADR-052 (этап II): исходящие webhooks
   'errors.validation.invalidWebhook': 'Некорректное тело webhook-подписки',
