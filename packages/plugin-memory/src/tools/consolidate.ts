@@ -14,7 +14,7 @@
  * слияния до того, как память изменится.
  */
 import type { PluginToolDefinition } from '@itphx/synth-core';
-import { z } from 'zod';
+import type { z } from 'zod';
 
 import { consolidateFacts, type ConsolidateReport } from '../engine/consolidate.js';
 import {
@@ -22,16 +22,22 @@ import {
   MemoryUnavailableError,
   type MemoryProviderLite,
 } from '../provider.js';
+import { boolean, number, object, optional, string } from '../schema.js';
 import { MAX_CONSOLIDATE_THRESHOLD, MIN_CONSOLIDATE_THRESHOLD } from '../settings.js';
 
 /** Локальное имя тула (в реестре — с namespace'ом, его составляет хост). */
 export const MEMORY_CONSOLIDATE_TOOL_NAME = 'memory_consolidate';
 
-/** Схема параметров (zod) — по ней хост валидирует аргументы. */
-export const memoryConsolidateParameters = z.object({
-  projectId: z.string().min(1).max(200).optional(),
-  threshold: z.number().min(MIN_CONSOLIDATE_THRESHOLD).max(MAX_CONSOLIDATE_THRESHOLD).optional(),
-  dryRun: z.boolean().optional(),
+/**
+ * Схема параметров — по ней хост валидирует аргументы.
+ *
+ * Валидатор — собственный (`schema.ts`): бандл плагина не должен тянуть
+ * сторонние зависимости (иначе скан помечает его как `caution`).
+ */
+export const memoryConsolidateParameters = object({
+  projectId: optional(string({ min: 1, max: 200 })),
+  threshold: optional(number({ min: MIN_CONSOLIDATE_THRESHOLD, max: MAX_CONSOLIDATE_THRESHOLD })),
+  dryRun: optional(boolean()),
 });
 
 /**
@@ -94,7 +100,12 @@ export function createMemoryConsolidateTool(provider: MemoryProviderLite): Plugi
     name: MEMORY_CONSOLIDATE_TOOL_NAME,
     description:
       'Консолидирует память: находит похожие утверждения (по косинусу эмбеддингов) и оставляет одно, помечая остальные заменёнными. Текст канона не переписывается. Можно сначала посмотреть план (dryRun).',
-    parameters: memoryConsolidateParameters,
+    // `PluginToolDefinition.parameters` типизирован хостом как `z.ZodTypeAny`
+    // (ADR-090), а валидатор плагина — свой (без zod в бандле). Контракт
+    // совпадает: хост зовёт `safeParse` и читает `error.issues`, поэтому
+    // кастуем через `unknown` — типовой разрыв между двумя реализациями
+    // одного контракта.
+    parameters: memoryConsolidateParameters as unknown as z.ZodTypeAny,
     jsonSchema: memoryConsolidateJsonSchema,
     capabilities: ['memory'],
     async execute(params, ctx) {

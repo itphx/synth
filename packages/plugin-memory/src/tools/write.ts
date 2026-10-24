@@ -12,24 +12,30 @@
  * аргумент модели разрешён, без него факт общий.
  */
 import type { PluginToolDefinition } from '@itphx/synth-core';
-import { z } from 'zod';
+import type { z } from 'zod';
 
 import {
   factKindSchema,
   MemoryUnavailableError,
   type MemoryProviderLite,
 } from '../provider.js';
+import { number, object, optional, string } from '../schema.js';
 
 /** Локальное имя тула (в реестре — с namespace'ом, его составляет хост). */
 export const MEMORY_WRITE_TOOL_NAME = 'memory_write';
 
-/** Схема параметров (zod) — по ней хост валидирует аргументы. */
-export const memoryWriteParameters = z.object({
-  text: z.string().min(1).max(2000),
-  kind: factKindSchema.optional(),
-  projectId: z.string().min(1).optional(),
-  confidence: z.number().min(0).max(1).optional(),
-  ttlDays: z.number().int().min(1).max(3650).optional(),
+/**
+ * Схема параметров — по ней хост валидирует аргументы.
+ *
+ * Валидатор — собственный (`schema.ts`): бандл плагина не должен тянуть
+ * сторонние зависимости (иначе скан помечает его как `caution`).
+ */
+export const memoryWriteParameters = object({
+  text: string({ min: 1, max: 2000 }),
+  kind: optional(factKindSchema),
+  projectId: optional(string({ min: 1 })),
+  confidence: optional(number({ min: 0, max: 1 })),
+  ttlDays: optional(number({ int: true, min: 1, max: 3650 })),
 });
 
 /**
@@ -82,7 +88,12 @@ export function createMemoryWriteTool(provider: MemoryProviderLite): PluginToolD
     name: MEMORY_WRITE_TOOL_NAME,
     description:
       'Запоминает утверждение в память: решение, ограничение, договорённость или наблюдение. Факт автоматически привязывается к проекту сессии, если сессия в проекте — projectId указывать не нужно. Возвращает id и версию факта.',
-    parameters: memoryWriteParameters,
+    // `PluginToolDefinition.parameters` типизирован хостом как `z.ZodTypeAny`
+    // (ADR-090), а валидатор плагина — свой (без zod в бандле). Контракт
+    // совпадает: хост зовёт `safeParse` и читает `error.issues`, поэтому
+    // кастуем через `unknown` — типовой разрыв между двумя реализациями
+    // одного контракта.
+    parameters: memoryWriteParameters as unknown as z.ZodTypeAny,
     jsonSchema: memoryWriteJsonSchema,
     capabilities: ['memory'],
     async execute(params, ctx) {

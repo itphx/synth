@@ -10,7 +10,7 @@
  * с текстом «Факт не найден».
  */
 import type { PluginToolDefinition } from '@itphx/synth-core';
-import { z } from 'zod';
+import type { z } from 'zod';
 
 import {
   FactNotFoundError,
@@ -18,15 +18,21 @@ import {
   SupersedeTextRequiredError,
   type MemoryProviderLite,
 } from '../provider.js';
+import { enumOf, object, optional, string } from '../schema.js';
 
 /** Локальное имя тула (в реестре — с namespace'ом, его составляет хост). */
 export const MEMORY_FORGET_TOOL_NAME = 'memory_forget';
 
-/** Схема параметров (zod) — по ней хост валидирует аргументы. */
-export const memoryForgetParameters = z.object({
-  factId: z.string().min(1),
-  mode: z.enum(['supersede', 'retract']),
-  text: z.string().min(1).max(2000).optional(),
+/**
+ * Схема параметров — по ней хост валидирует аргументы.
+ *
+ * Валидатор — собственный (`schema.ts`): бандл плагина не должен тянуть
+ * сторонние зависимости (иначе скан помечает его как `caution`).
+ */
+export const memoryForgetParameters = object({
+  factId: string({ min: 1 }),
+  mode: enumOf(['supersede', 'retract']),
+  text: optional(string({ min: 1, max: 2000 })),
 });
 
 /**
@@ -64,7 +70,12 @@ export function createMemoryForgetTool(provider: MemoryProviderLite): PluginTool
     name: MEMORY_FORGET_TOOL_NAME,
     description:
       'Отзывает факт из памяти: supersede — исправляет утверждение новой версией, retract — снимает утверждение.',
-    parameters: memoryForgetParameters,
+    // `PluginToolDefinition.parameters` типизирован хостом как `z.ZodTypeAny`
+    // (ADR-090), а валидатор плагина — свой (без zod в бандле). Контракт
+    // совпадает: хост зовёт `safeParse` и читает `error.issues`, поэтому
+    // кастуем через `unknown` — типовой разрыв между двумя реализациями
+    // одного контракта.
+    parameters: memoryForgetParameters as unknown as z.ZodTypeAny,
     jsonSchema: memoryForgetJsonSchema,
     capabilities: ['memory'],
     async execute(params, ctx) {

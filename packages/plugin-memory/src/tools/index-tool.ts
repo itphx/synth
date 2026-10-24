@@ -10,7 +10,7 @@
  * не трогаются (то же правило, что у фактов и у тула `memory_write`).
  */
 import type { PluginToolDefinition } from '@itphx/synth-core';
-import { z } from 'zod';
+import type { z } from 'zod';
 
 import {
   IndexBusyError,
@@ -18,23 +18,29 @@ import {
   MemoryUnavailableError,
   type MemoryProviderLite,
 } from '../provider.js';
+import { boolean, enumOf, object, optional, string } from '../schema.js';
 
 /** Локальное имя тула (в реестре — с namespace'ом, его составляет хост). */
 export const MEMORY_INDEX_TOOL_NAME = 'memory_index';
 
-/** Схема параметров (zod) — по ней хост валидирует аргументы. */
-export const memoryIndexParameters = z.object({
-  action: z.enum(['status', 'create', 'build', 'rebuild', 'delete']),
-  indexId: z.string().min(1).max(200).optional(),
-  name: z.string().min(1).max(120).optional(),
-  source: z
-    .object({
-      kind: z.enum(['files', 'facts']),
-      filter: z.string().min(1).max(500).optional(),
-    })
-    .optional(),
-  projectId: z.string().min(1).max(200).optional(),
-  force: z.boolean().optional(),
+/**
+ * Схема параметров — по ней хост валидирует аргументы.
+ *
+ * Валидатор — собственный (`schema.ts`): бандл плагина не должен тянуть
+ * сторонние зависимости (иначе скан помечает его как `caution`).
+ */
+export const memoryIndexParameters = object({
+  action: enumOf(['status', 'create', 'build', 'rebuild', 'delete']),
+  indexId: optional(string({ min: 1, max: 200 })),
+  name: optional(string({ min: 1, max: 120 })),
+  source: optional(
+    object({
+      kind: enumOf(['files', 'facts']),
+      filter: optional(string({ min: 1, max: 500 })),
+    }),
+  ),
+  projectId: optional(string({ min: 1, max: 200 })),
+  force: optional(boolean()),
 });
 
 /** Явная JSON-схема параметров — то, что видит модель (ADR-090, §4.3). */
@@ -111,7 +117,12 @@ export function createMemoryIndexTool(provider: MemoryProviderLite): PluginToolD
     name: MEMORY_INDEX_TOOL_NAME,
     description:
       'Управляет индексами памяти проекта: создать, собрать, пересобрать, удалить, посмотреть статус. Сборка идёт в фоне — состояние индекса меняется с building на ready или failed.',
-    parameters: memoryIndexParameters,
+    // `PluginToolDefinition.parameters` типизирован хостом как `z.ZodTypeAny`
+    // (ADR-090), а валидатор плагина — свой (без zod в бандле). Контракт
+    // совпадает: хост зовёт `safeParse` и читает `error.issues`, поэтому
+    // кастуем через `unknown` — типовой разрыв между двумя реализациями
+    // одного контракта.
+    parameters: memoryIndexParameters as unknown as z.ZodTypeAny,
     jsonSchema: memoryIndexJsonSchema,
     capabilities: ['memory'],
     async execute(params, ctx) {

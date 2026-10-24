@@ -28,7 +28,6 @@ import type {
   MemoryFactRecord,
   PluginFacade,
 } from '@itphx/synth-core';
-import { z } from 'zod';
 
 import { embedTexts } from './engine/embedder.js';
 import { IndexManager, type IndexStatus } from './engine/index-manager.js';
@@ -43,22 +42,25 @@ import {
   resolveMemorySettings,
   type MemoryPluginSettings,
 } from './settings.js';
+import { enumOf } from './schema.js';
 import { keywordScore } from './scoring.js';
 
 /** Порт фактов памяти — тот же тип, что у фасада (`facade.memory.facts`). */
 export type FactsRepository = NonNullable<PluginFacade['memory']>['facts'];
 
 /** Виды фактов памяти (модель данных — docs/MEMORY.md §5.2). */
-export const factKindSchema = z.enum([
+export const FACT_KIND_VALUES = [
   'decision',
   'constraint',
   'reference',
   'preference',
   'observation',
-]);
-export type FactKind = z.infer<typeof factKindSchema>;
+] as const;
+export type FactKind = (typeof FACT_KIND_VALUES)[number];
 /** Перечень видов фактов (итерация, справка). */
-export const FACT_KINDS: readonly FactKind[] = factKindSchema.options;
+export const FACT_KINDS: readonly FactKind[] = FACT_KIND_VALUES;
+/** Схема вида факта — по ней хост валидирует аргумент `kind` тула `memory_write`. */
+export const factKindSchema = enumOf(FACT_KIND_VALUES);
 
 /**
  * Настройки плагина памяти и их дефолты — в `settings.ts` (единое место

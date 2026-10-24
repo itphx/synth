@@ -161,10 +161,6 @@ importers:
         version: 5.9.3
 
   packages/plugin-memory:
-    dependencies:
-      zod:
-        specifier: ^3.24.0
-        version: 3.25.76
     devDependencies:
       '@itphx/synth-core':
         specifier: workspace:*
@@ -181,6 +177,9 @@ importers:
       typescript:
         specifier: ^5.8.0
         version: 5.9.3
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
 
   packages/sdk:
     dependencies:

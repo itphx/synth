@@ -15,7 +15,7 @@
  * Индекса нет → поведение М1 (поиск только по фактам).
  */
 import type { PluginToolDefinition } from '@itphx/synth-core';
-import { z } from 'zod';
+import type { z } from 'zod';
 
 import { reciprocalRankFusion, type SearchItem } from '../engine/search.js';
 import {
@@ -23,17 +23,23 @@ import {
   MemoryUnavailableError,
   type MemoryProviderLite,
 } from '../provider.js';
+import { enumOf, number, object, optional, string } from '../schema.js';
 import { keywordScore } from '../scoring.js';
 
 /** Локальное имя тула (в реестре — с namespace'ом, его составляет хост). */
 export const MEMORY_SEARCH_TOOL_NAME = 'memory_search';
 
-/** Схема параметров (zod) — по ней хост валидирует аргументы. */
-export const memorySearchParameters = z.object({
-  query: z.string().min(1).max(500),
-  limit: z.number().int().min(1).max(20).optional(),
-  kind: z.string().min(1).optional(),
-  status: z.enum(['active', 'candidate', 'all']).optional(),
+/**
+ * Схема параметров — по ней хост валидирует аргументы.
+ *
+ * Валидатор — собственный (`schema.ts`): бандл плагина не должен тянуть
+ * сторонние зависимости (иначе скан помечает его как `caution`).
+ */
+export const memorySearchParameters = object({
+  query: string({ min: 1, max: 500 }),
+  limit: optional(number({ int: true, min: 1, max: 20 })),
+  kind: optional(string({ min: 1 })),
+  status: optional(enumOf(['active', 'candidate', 'all'])),
 });
 
 /**
@@ -93,7 +99,12 @@ export function createMemorySearchTool(provider: MemoryProviderLite): PluginTool
     name: MEMORY_SEARCH_TOOL_NAME,
     description:
       'Ищет факты и фрагменты корпуса в памяти по тексту запроса. Возвращает совпавшие утверждения с источником, id и уверенностью.',
-    parameters: memorySearchParameters,
+    // `PluginToolDefinition.parameters` типизирован хостом как `z.ZodTypeAny`
+    // (ADR-090), а валидатор плагина — свой (без zod в бандле). Контракт
+    // совпадает: хост зовёт `safeParse` и читает `error.issues`, поэтому
+    // кастуем через `unknown` — типовой разрыв между двумя реализациями
+    // одного контракта.
+    parameters: memorySearchParameters as unknown as z.ZodTypeAny,
     jsonSchema: memorySearchJsonSchema,
     capabilities: ['memory'],
     async execute(params, ctx) {

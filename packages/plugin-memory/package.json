@@ -22,9 +22,6 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "dependencies": {
-    "zod": "^3.24.0"
-  },
   "peerDependencies": {
     "@itphx/synth-shared": "workspace:*",
     "@itphx/synth-core": "workspace:*"
@@ -34,7 +31,8 @@
     "@itphx/synth-core": "workspace:*",
     "@types/node": "^22.0.0",
     "esbuild": "^0.28.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "zod": "^3.24.0"
   },
   "engines": {
     "node": ">=22.0.0"
