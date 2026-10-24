@@ -69,10 +69,11 @@ export interface PromptManifestEntry {
   /**
    * Источник записи: `system` — блок системного промпта, `tools` — слой
    * встроенных инструментов (stable, ADR-070 §2.5), `mcp.tools` — слой
-   * MCP-инструментов (volatile, ADR-071 §2.1). Слои инструментов не входят в
+   * MCP-инструментов (volatile, ADR-071 §2.1), `plugin.tools` — слой
+   * инструментов плагинов (volatile, ADR-090). Слои инструментов не входят в
    * system-текст, но отражаются в манифесте и размерах.
    */
-  source?: 'system' | 'tools' | 'mcp.tools';
+  source?: 'system' | 'tools' | 'mcp.tools' | 'plugin.tools';
 }
 
 /** ADR-070 §2.5: манифест состава системного промпта (для API/UI/тестов). */

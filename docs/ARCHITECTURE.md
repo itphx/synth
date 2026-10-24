@@ -287,7 +287,9 @@ synth/
   модели/провайдера generation **не** поднимают (смена модели даёт `expected: 'miss'` без пересборки
   stable-префикса); смена агента не переиспользует чужой префикс. `promptStates` саб-агентов не персистятся.
 - **Прозрачность.** Манифест источников (`key`/`label`/`tier`/`chars`/`estTokens`/`status`/`provenance`/
-  `source`) + запись `tools` (самый ранний кэшируемый слой, вставляется в конце тира `stable`) + слой
+  `source`) + запись `tools` (самый ранний кэшируемый слой, вставляется в конце тира `stable`) + слои
+  `plugin.tools` (плагинные тулы, ADR-090) и `mcp.tools` (MCP-инструменты) — оба `volatile`, вне
+  кэшируемого stable-префикса, в system-текст не входят + слой
   истории (`PromptHistoryInfo`); `manifest()` и `compose()` используют один обход, есть тест паритета
   «манифест ↔ отправленные байты». API `GET /api/v2/sessions/:id/prompt` (manifest + history +
   promptState + promptMeta) и UI-секция «Состав промпта»; `DebugCollector` проброшен во все точки создания.

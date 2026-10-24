@@ -1272,8 +1272,9 @@ export class ChatOrchestrator {
 
   /**
    * ADR-070 §2.1/§2.5: единая сборка `ComposerContext` для `compose`/`manifest`.
-   * `toolSelection` (для манифеста `tools`/`mcp.tools`) передаётся только
-   * диагностикой; `project` — уже загруженный проект (ADR-071 §2.4).
+   * `toolSelection` (для манифеста `tools`/`plugin.tools`/`mcp.tools`)
+   * передаётся только диагностикой; `project` — уже загруженный проект
+   * (ADR-071 §2.4).
    */
   private _buildComposerContext(args: {
     session: Session;
@@ -1327,6 +1328,12 @@ export class ChatOrchestrator {
       summaryContent: summaryContent || undefined,
       tools: toolSelection
         ? toolSelection.builtin as unknown as Array<Record<string, unknown>>
+        : undefined,
+      // ADR-090: слой плагинных тулов (volatile, вне stable-префикса) — та же
+      // выборка, что уходит в запрос (`process-setup`: builtin → plugin → mcp).
+      // Мок/внешняя реализация реестра может не отдавать слой `plugin`.
+      pluginTools: toolSelection && toolSelection.plugin && toolSelection.plugin.length > 0
+        ? toolSelection.plugin as unknown as Array<Record<string, unknown>>
         : undefined,
       mcpTools: toolSelection
         ? toolSelection.mcp as unknown as Array<Record<string, unknown>>
@@ -2414,9 +2421,10 @@ export class ChatOrchestrator {
     // ADR-071 §2.6: chars-per-token модели (калибровка) для оценок токенов.
     const tokenRatio = await this._resolveTokenRatio(session.settings.model);
 
-    // ADR-070 §2.5 + ADR-071 §2.1/§2.3: манифест отражает реальные слои запроса —
-    // `tools` (встроенные) и `mcp.tools` (MCP сессии); тир `tools` зависит от
-    // `tools.policy`, MCP-блоки всегда volatile.
+    // ADR-070 §2.5 + ADR-071 §2.1/§2.3 + ADR-090: манифест отражает реальные
+    // слои запроса — `tools` (встроенные), `plugin.tools` (плагинные тулы) и
+    // `mcp.tools` (MCP сессии); тир `tools` зависит от `tools.policy`, слои
+    // `plugin.tools`/MCP всегда volatile.
     // ADR-046 §5: каталог скиллов — тем же путём, что и в запросе.
     const skillsCatalog = await this._collectSkillsCatalog({
       session,

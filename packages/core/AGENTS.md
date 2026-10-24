@@ -528,7 +528,10 @@
   state-сообщения (`mode_change`/`plan_updated`/`todos_updated`/`agent_switch`, `syncStateMessages`,
   обёртка `<system-state type="…">`, `UnavailableTool`). Специализированные промпты debug-эха и
   `SUMMARIZER.{lang}.md` идут мимо Composer (inline). Манифест: system-блоки в реальном порядке +
-  запись `tools` (`source: 'tools'`, в конце тира `stable`), `PromptHistoryInfo` — слой истории
+  запись `tools` (`source: 'tools'`, в конце тира `stable`), слой плагинных тулов
+  `plugin.tools` (ADR-090: `volatile`, сразу после `tools`, **вне** кэшируемого stable-префикса —
+  состав плагинов меняется в runtime; запись появляется только при непустом составе) и
+  `mcp.tools` (MCP, `volatile`), `PromptHistoryInfo` — слой истории
   (`_buildPromptHistoryInfo` зеркалит `_sessionMessagesToLlm`).
   Профиль/интервью в промпте резолвит единый `_resolveProfile(userId)` (`loadProfile(userId) ??
   getProfileByUsername(userId)`; `session.userId` — username, профиль ключуется по id-UUID); `profilesStore`
@@ -644,7 +647,9 @@
   `shared/types/plugin-tools.ts`: `pluginToolFullName`/`pluginToolLocalName`), capability `mcp`
   (слой MCP) и `runtime` (примитивы ядра неотключаемы админом) зарезервированы, пустой набор
   capabilities — отказ. Выборка по слоям — `selectForSession` → `{ builtin, plugin, mcp }`
-  (склейка промпта — `builtin → plugin → mcp`), `listPlugin(pluginName?)`/`pluginLocalNames()`;
+  (склейка промпта — `builtin → plugin → mcp`; слой `plugin` отражается в манифесте промпта
+  отдельной записью `plugin.tools` — ADR-090, volatile, вне stable-префикса),
+  `listPlugin(pluginName?)`/`pluginLocalNames()`;
   `deregister`/`deregisterByCapability` работают с плагинными как с обычными.
   git-тулы принимают необязательный `repo_path`
   (containment внутри `project.workspace`), SSH-окружение — `engine/tools/git-ssh.ts`

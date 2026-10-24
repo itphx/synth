@@ -483,6 +483,111 @@ describe('SystemPromptComposer', () => {
     });
   });
 
+  describe('слой plugin.tools (ADR-090)', () => {
+    const tools = [
+      { type: 'function', function: { name: 'read_file', description: 'Read', parameters: {} } },
+    ];
+    const pluginTools = [
+      { type: 'function', function: { name: 'plugin_demo_search', description: 'Plugin', parameters: {} } },
+    ];
+    const mcpTools = [
+      { type: 'function', function: { name: 'srv_ping', description: 'MCP', parameters: {} } },
+    ];
+
+    it('запись plugin.tools: volatile, chars/estTokens как у tools, вне staticPrefix', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const pluginChars = JSON.stringify(pluginTools).length;
+
+      const manifest = await composer.manifest(makeCtx(session, { tools, pluginTools }));
+
+      const entry = manifest.entries.find((e) => e.key === 'plugin.tools');
+      expect(entry).toBeDefined();
+      expect(entry!.label).toBe('Plugin tools');
+      expect(entry!.tier).toBe('volatile');
+      expect(entry!.status).toBe('loaded');
+      expect(entry!.chars).toBe(pluginChars);
+      expect(entry!.estTokens).toBe(Math.ceil(pluginChars / 4));
+      expect(entry!.provenance).toBe('plugin.tools');
+      expect(entry!.source).toBe('plugin.tools');
+    });
+
+    it('порядок: tools → plugin.tools → mcp.servers → mcp.tools → mcp.status', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const servers: ComposerMcpServer[] = [
+        { name: 'srv', tools: [{ name: 'ping' }], status: 'connected' },
+      ];
+
+      const manifest = await composer.manifest(
+        makeCtx(session, { tools, pluginTools, mcpTools, mcpServers: servers }),
+      );
+
+      const iTools = manifest.entries.findIndex((e) => e.key === 'tools');
+      const iPluginTools = manifest.entries.findIndex((e) => e.key === 'plugin.tools');
+      const iServers = manifest.entries.findIndex((e) => e.key === 'mcp.servers');
+      const iMcpTools = manifest.entries.findIndex((e) => e.key === 'mcp.tools');
+      const iStatus = manifest.entries.findIndex((e) => e.key === 'mcp.status');
+
+      expect(iTools).toBeGreaterThanOrEqual(0);
+      expect(iPluginTools).toBe(iTools + 1);
+      expect(iServers).toBeGreaterThan(iPluginTools);
+      expect(iMcpTools).toBeGreaterThan(iServers);
+      expect(iStatus).toBeGreaterThan(iMcpTools);
+    });
+
+    it('без MCP-серверов plugin.tools идёт сразу за tools, mcp.tools — следом', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+
+      const manifest = await composer.manifest(makeCtx(session, { tools, pluginTools, mcpTools }));
+
+      const iTools = manifest.entries.findIndex((e) => e.key === 'tools');
+      const iPluginTools = manifest.entries.findIndex((e) => e.key === 'plugin.tools');
+      const iMcpTools = manifest.entries.findIndex((e) => e.key === 'mcp.tools');
+
+      expect(iPluginTools).toBe(iTools + 1);
+      expect(iMcpTools).toBe(iPluginTools + 1);
+    });
+
+    it('staticPrefixChars не меняется, totalChars включает слой plugin.tools', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const pluginChars = JSON.stringify(pluginTools).length;
+
+      const withoutPlugin = await composer.manifest(makeCtx(session, { tools }));
+      const withPlugin = await composer.manifest(makeCtx(session, { tools, pluginTools }));
+
+      // Плагинные тулы — вне кэшируемого stable-префикса (ADR-090: состав
+      // плагинов меняется в runtime).
+      expect(withPlugin.staticPrefixChars).toBe(withoutPlugin.staticPrefixChars);
+      expect(withPlugin.totalChars).toBe(withoutPlugin.totalChars + pluginChars);
+      expect(withPlugin.estTokens).toBeGreaterThan(withoutPlugin.estTokens);
+    });
+
+    it('пустой/отсутствующий pluginTools — записи plugin.tools нет', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+
+      const absent = await composer.manifest(makeCtx(session, { tools }));
+      expect(absent.entries.find((e) => e.key === 'plugin.tools')).toBeUndefined();
+
+      const empty = await composer.manifest(makeCtx(session, { tools, pluginTools: [] }));
+      expect(empty.entries.find((e) => e.key === 'plugin.tools')).toBeUndefined();
+      expect(empty.totalChars).toBe(absent.totalChars);
+    });
+
+    it('compose() не содержит описаний плагинных тулов (слой только в манифесте)', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+
+      const composed = await composer.compose(makeCtx(session, { tools, pluginTools }));
+
+      expect(composed.blocks.some((b) => b.key === 'plugin.tools')).toBe(false);
+      expect(composed.system).not.toContain('plugin_demo_search');
+    });
+  });
+
   describe('mcp.servers / mcp.status (ADR-071 §2.2)', () => {
     function makeMcpServers(): ComposerMcpServer[] {
       return [

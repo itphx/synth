@@ -67,6 +67,8 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   interview: 'Interview prompt',
   tools: 'Tool descriptions',
   'tools.guide': 'Tools guide',
+  // ADR-090: слой плагинных инструментов (отдельная запись манифеста).
+  'plugin.tools': 'Plugin tools',
   'mcp.tools': 'MCP tools',
   'mcp.servers': 'MCP servers',
   'mcp.status': 'MCP status',
@@ -217,6 +219,14 @@ export interface ComposerContext {
    * (`tools → system → messages`), в system-текст `compose()` не входят.
    */
   tools?: Array<Record<string, unknown>>;
+  /**
+   * ADR-090: описания **плагинных** инструментов, реально уходящие в запрос
+   * (слой `plugin.tools`, volatile). Учитываются только в манифесте
+   * (`plugin.tools`), в system-текст `compose()` не входят; в
+   * `staticPrefixChars` не входят (состав плагинов меняется в runtime —
+   * активация/деактивация, как у MCP).
+   */
+  pluginTools?: Array<Record<string, unknown>>;
   /**
    * ADR-071 §2.3: фактически применённая политика **встроенных** инструментов
    * (`auto` уже разрешён вызывающей стороной в `consistency`/`available`).
@@ -394,9 +404,9 @@ export class SystemPromptComposer {
    * источников, что и `compose()`, но **без побочных эффектов**: не вызывает
    * `captureSystemPromptParts` и не пишет состояние. Размеры блоков считаются
    * без разделителей `\n\n`, поэтому тест паритета сравнивает сумму `chars`
-   * с длинами блоков (и учитывает разделители отдельно). Запись `tools`
-   * (`source: 'tools'`) описывает слой инструментов и в system-блоки
-   * `compose()` не входит.
+   * с длинами блоков (и учитывает разделители отдельно). Записи `tools`,
+   * `plugin.tools` и `mcp.tools` описывают слои инструментов и в system-блоки
+   * `compose()` не входят.
    */
   async manifest(ctx: ComposerContext): Promise<PromptManifest> {
     const blocks = await this._collectBlocks(ctx);
@@ -417,21 +427,27 @@ export class SystemPromptComposer {
       ...(block.provenance ? { provenance: block.provenance } : {}),
     }));
 
-    // ADR-070 §2.5 + ADR-071 §2.1/§2.3: слои описаний инструментов — отдельные
-    // записи (`tools → mcp.servers → mcp.tools → mcp.status → system → messages`).
-    // В system-текст (`compose`) `tools`/`mcp.tools` не входят, но отражаются в
-    // манифесте и учитываются в общих размерах.
+    // ADR-070 §2.5 + ADR-071 §2.1/§2.3 + ADR-090: слои описаний инструментов —
+    // отдельные записи (`tools → plugin.tools → mcp.servers → mcp.tools →
+    // mcp.status → system → messages`).
+    // В system-текст (`compose`) `tools`/`plugin.tools`/`mcp.tools` не входят, но
+    // отражаются в манифесте и учитываются в общих размерах.
     //  - `tools` (встроенные) — `stable` в `consistency`, `context` в `available`
     //    (состав зависит от режима/роли); в staticPrefix входит только в stable;
+    //  - `plugin.tools` (плагинные тулы) — `volatile`, в staticPrefix НЕ входит
+    //    (состав плагинов меняется в runtime);
     //  - `mcp.tools` (MCP активных серверов) — `volatile`, в staticPrefix НЕ входит.
     // `tools` вставляется в конце своего тира (перед записями более поздних
-    // тиров), `mcp.tools` — сразу после блока `mcp.servers` (или после `tools`,
-    // если серверов нет), чтобы MCP-регион шёл после встроенных инструментов.
-    // `role` остаётся первой записью.
+    // тиров), `plugin.tools` — сразу после `tools` (до MCP-региона),
+    // `mcp.tools` — сразу после блока `mcp.servers` (или после `plugin.tools`,
+    // если серверов нет), чтобы MCP-регион шёл после встроенных и плагинных
+    // инструментов. `role` остаётся первой записью.
     const toolsPolicy = ctx.toolsPolicy ?? 'consistency';
     const mcpPolicy = ctx.mcpPolicy ?? 'consistency';
     const toolsTier: PromptTier = toolsPolicy === 'available' ? 'context' : 'stable';
     const toolsChars = ctx.tools && ctx.tools.length > 0 ? JSON.stringify(ctx.tools).length : 0;
+    const pluginToolsChars =
+      ctx.pluginTools && ctx.pluginTools.length > 0 ? JSON.stringify(ctx.pluginTools).length : 0;
     const mcpToolsChars = ctx.mcpTools && ctx.mcpTools.length > 0 ? JSON.stringify(ctx.mcpTools).length : 0;
     const toolsEntry: PromptManifestEntry = {
       key: 'tools',
@@ -442,6 +458,16 @@ export class SystemPromptComposer {
       status: toolsChars === 0 ? 'empty' : 'loaded',
       provenance: 'tools',
       source: 'tools',
+    };
+    const pluginToolsEntry: PromptManifestEntry = {
+      key: 'plugin.tools',
+      label: PROMPT_BLOCK_LABELS['plugin.tools'] ?? 'Plugin tools',
+      tier: 'volatile',
+      chars: pluginToolsChars,
+      estTokens: Math.ceil(pluginToolsChars / ratio),
+      status: pluginToolsChars === 0 ? 'empty' : 'loaded',
+      provenance: 'plugin.tools',
+      source: 'plugin.tools',
     };
     const mcpToolsEntry: PromptManifestEntry = {
       key: 'mcp.tools',
@@ -455,21 +481,34 @@ export class SystemPromptComposer {
     };
     // `entries` отсортированы `sortPromptBlocks` (tier → order). Вставляем `tools`
     // после всех записей своего и более ранних тиров (в конец своего тира),
-    // `mcp.tools` — сразу после `mcp.servers` (MCP-регион: servers → tools →
-    // status), либо сразу после `tools`, если серверов нет. `role` — первая.
+    // `plugin.tools` — сразу после `tools`, `mcp.tools` — сразу после
+    // `mcp.servers` (MCP-регион: servers → tools → status), либо сразу после
+    // `plugin.tools`, если серверов нет. `role` — первая.
     const tierRank: Record<PromptTier, number> = { stable: 0, context: 1, volatile: 2 };
     const toolsInsertIndex = entries.filter((entry) => tierRank[entry.tier] <= tierRank[toolsTier]).length;
     entries.splice(toolsInsertIndex, 0, toolsEntry);
+    // ADR-090: слой плагинных тулов — запись появляется только при непустом
+    // составе (в отличие от `tools`/`mcp.tools`, которые есть всегда).
+    let pluginToolsInserted = false;
+    if (pluginToolsChars > 0) {
+      entries.splice(toolsInsertIndex + 1, 0, pluginToolsEntry);
+      pluginToolsInserted = true;
+    }
     const mcpServersIndex = entries.findIndex((entry) => entry.key === 'mcp.servers');
-    const mcpToolsInsertIndex = mcpServersIndex >= 0 ? mcpServersIndex + 1 : toolsInsertIndex + 1;
+    const mcpToolsInsertIndex = mcpServersIndex >= 0
+      ? mcpServersIndex + 1
+      : toolsInsertIndex + 1 + (pluginToolsInserted ? 1 : 0);
     entries.splice(mcpToolsInsertIndex, 0, mcpToolsEntry);
 
     const nonEmpty = blocks.filter((block) => block.content !== '');
     const totalChars =
-      nonEmpty.reduce((sum, block) => sum + block.content.length, 0) + toolsChars + mcpToolsChars;
-    // ADR-071 §2.1/§2.3: MCP-блоки (`mcp.servers`/`mcp.tools`/`mcp.status`) всегда
-    // volatile и в кэшируемый stable-префикс не входят; `tools` в режиме
-    // `available` (context) — тоже.
+      nonEmpty.reduce((sum, block) => sum + block.content.length, 0)
+      + toolsChars
+      + pluginToolsChars
+      + mcpToolsChars;
+    // ADR-071 §2.1/§2.3 + ADR-090: MCP-блоки (`mcp.servers`/`mcp.tools`/
+    // `mcp.status`) и слой `plugin.tools` всегда volatile и в кэшируемый
+    // stable-префикс не входят; `tools` в режиме `available` (context) — тоже.
     const staticPrefixChars =
       nonEmpty
         .filter((block) => block.tier === 'stable')
