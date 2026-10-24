@@ -37,6 +37,10 @@ export SYNTH_AUTH_DEBUG=true
 # Плагины (ADR-090): dev включает исполнение кода плагинов и ставит in-tree
 # плагин памяти (scripts/dev-plugins.sh). Выключить: SYNTH_PLUGINS_EXECUTION_ENABLED=false.
 export SYNTH_PLUGINS_EXECUTION_ENABLED="${SYNTH_PLUGINS_EXECUTION_ENABLED:-true}"
+# Эмбеддинги памяти (М2): локальная ollama — без внешних расходов.
+# Модель должна быть в инстансе (data/models/ollama/nomic-embed-text:latest).
+export SYNTH_PLUGINS_EMBEDDING_PROVIDER="${SYNTH_PLUGINS_EMBEDDING_PROVIDER:-ollama}"
+export SYNTH_PLUGINS_EMBEDDING_MODEL="${SYNTH_PLUGINS_EMBEDDING_MODEL:-nomic-embed-text:latest}"
 
 # Каталог данных — вне репозитория; по умолчанию <repo>/../data, переопределяется env
 export SYNTH_DATA_DIR="${SYNTH_DATA_DIR:-$ROOT/../data}"
