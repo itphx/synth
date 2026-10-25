@@ -52,6 +52,27 @@ function makeProvider(
   return new MemoryProviderLite(facade);
 }
 
+/** Засеять факт в памяти плагина (namespace навязывает хост). */
+async function seedFact(
+  storage: StorageContext,
+  over: { id: string; text: string; projectId?: string },
+): Promise<void> {
+  const ts = '2026-10-24T10:00:00.000Z';
+  await storage.memoryFacts.save({
+    id: over.id,
+    namespace: 'plugin:synth-plugin-memory',
+    version: 1,
+    text: over.text,
+    kind: 'observation',
+    ...(over.projectId ? { projectId: over.projectId } : {}),
+    provenance: { sourceKind: 'session', sourceId: 's1', capturedAt: ts },
+    confidence: 0.8,
+    status: 'active',
+    createdAt: ts,
+    updatedAt: ts,
+  });
+}
+
 describe('менеджер индексов: сборка корпуса', () => {
   it('files-индекс собирается в фоне: состояние building → ready', async () => {
     const storage = createTestStorage();
@@ -259,5 +280,94 @@ describe('менеджер индексов: сборка корпуса', () =>
     expect(await provider.deleteIndex(created.index.id)).toBe(true);
     expect(await storage.memoryIndexes.getIndex(created.index.id)).toBeNull();
     expect(await storage.memoryIndexes.countChunks(created.index.id)).toBe(0);
+  });
+});
+
+describe('менеджер индексов: инстансный индекс (scope: instance)', () => {
+  it('индекс по фактам собирает факты всех проектов инстанса', async () => {
+    const storage = createTestStorage();
+    await seedFact(storage, { id: 'mem_1', text: 'Факт проекта p1', projectId: 'p1' });
+    await seedFact(storage, { id: 'mem_2', text: 'Факт проекта p2', projectId: 'p2' });
+    const provider = makeProvider(storage);
+
+    const created = await provider.createIndex({
+      source: { kind: 'facts' },
+      scope: 'instance',
+    });
+    await provider.indexManager.whenIdle();
+
+    const status = await provider.getIndex(created.index.id);
+    expect(status!.state).toBe('ready');
+    expect(status!.index.scope).toBe('instance');
+    // Имя по умолчанию — по области видимости.
+    expect(status!.index.name).toBe('instance');
+    // Владельца нет: `projectId` у инстансного индекса по фактам отсутствует.
+    expect(status!.index.projectId).toBeUndefined();
+    // Корпус — факты обоих проектов.
+    expect(status!.index.stats.documents).toBe(2);
+    expect(status!.index.stats.chunks).toBe(2);
+  });
+
+  it('проектный индекс по фактам берёт только факты своего проекта', async () => {
+    const storage = createTestStorage();
+    await seedFact(storage, { id: 'mem_1', text: 'Факт проекта p1', projectId: 'p1' });
+    await seedFact(storage, { id: 'mem_2', text: 'Факт проекта p2', projectId: 'p2' });
+    const provider = makeProvider(storage);
+
+    const created = await provider.createIndex({
+      source: { kind: 'facts' },
+      projectId: 'p1',
+    });
+    await provider.indexManager.whenIdle();
+
+    const status = await provider.getIndex(created.index.id);
+    expect(status!.index.scope).toBe('project');
+    expect(status!.index.name).toBe('project');
+    expect(status!.index.stats.documents).toBe(1);
+  });
+
+  it('инстансный индекс виден из сессии другого проекта, проектный — нет', async () => {
+    const storage = createTestStorage();
+    await seedFact(storage, { id: 'mem_1', text: 'Факт проекта p1', projectId: 'p1' });
+    const provider = makeProvider(storage);
+
+    const instance = await provider.createIndex({
+      source: { kind: 'facts' },
+      scope: 'instance',
+    });
+    const project = await provider.createIndex({
+      source: { kind: 'facts' },
+      projectId: 'p1',
+    });
+    await provider.indexManager.whenIdle();
+
+    const inP2 = await provider.listIndexes({ projectId: 'p2' });
+    const ids = inP2.map((status) => status.index.id);
+    expect(ids).toContain(instance.index.id);
+    expect(ids).not.toContain(project.index.id);
+
+    // Сессия без проекта тоже видит инстансный индекс.
+    const withoutProject = await provider.listIndexes();
+    expect(withoutProject.map((status) => status.index.id)).toContain(instance.index.id);
+  });
+
+  it('пересборка сохраняет область видимости', async () => {
+    const storage = createTestStorage();
+    await seedFact(storage, { id: 'mem_1', text: 'Факт проекта p1', projectId: 'p1' });
+    const provider = makeProvider(storage);
+
+    const created = await provider.createIndex({
+      source: { kind: 'facts' },
+      scope: 'instance',
+    });
+    await provider.indexManager.whenIdle();
+
+    await provider.rebuildIndex(created.index.id);
+    await provider.indexManager.whenIdle();
+
+    const status = await provider.getIndex(created.index.id);
+    expect(status!.index.scope).toBe('instance');
+    expect(status!.index.name).toBe('instance');
+    expect(status!.index.generation).toBe(2);
   });
 });

@@ -31,6 +31,7 @@ import type {
   MemoryIndexFingerprint,
   MemoryIndexRecord,
   MemoryIndexRepository,
+  MemoryIndexScope,
   MemoryIndexState,
   PluginFacade,
 } from '@itphx/synth-core';
@@ -46,6 +47,13 @@ export const INDEX_PROVIDER_ID = 'plugin:synth-plugin-memory';
 
 /** Дефолтное имя индекса проекта. */
 export const DEFAULT_INDEX_NAME = 'project';
+
+/**
+ * Дефолтное имя инстансного (общего на инстанс) индекса.
+ *
+ * Отличается от имени проектного: в списке индексов видно, что корпус общий.
+ */
+export const DEFAULT_INSTANCE_INDEX_NAME = 'instance';
 
 /** Идентификатор модели эмбеддингов, когда модель не задана явно. */
 export const DEFAULT_EMBEDDING_MODEL = 'instance-default';
@@ -76,11 +84,19 @@ export interface IndexStatus {
 
 /** Вход создания индекса. */
 export interface CreateIndexInput {
-  /** Имя индекса (по умолчанию — `project`). */
+  /** Имя индекса (по умолчанию — `project`/`instance` — по области видимости). */
   name?: string;
   /** Источник корпуса (по умолчанию — файлы рабочего каталога). */
   source?: IndexSourceSpec;
-  /** Проект-владелец индекса. */
+  /**
+   * Область видимости индекса (по умолчанию — `project`).
+   *
+   * - `project` — индекс виден только проекту `projectId`;
+   * - `instance` — общий на инстанс: виден всем сессиям и проектам, а
+   *   `projectId` (если задан) — **источник корпуса** (`files`), не владелец.
+   */
+  scope?: MemoryIndexScope;
+  /** Проект-владелец индекса (для `scope:'instance'` — источник корпуса). */
   projectId?: string;
   /** Рабочий каталог (источник `files`). */
   workingDir?: string;
@@ -98,8 +114,17 @@ export interface RebuildIndexInput {
 export interface IndexManagerDeps {
   /** Фасад плагина (порты памяти + эмбеддинги + настройки). */
   facade: PluginFacade;
-  /** Активные факты проекта — источник `facts`. */
-  listFacts: (opts: { status?: 'active'; projectId?: string }) => Promise<MemoryFactRecord[]>;
+  /**
+   * Активные факты — источник `facts`.
+   *
+   * `allProjects` — **все** активные факты инстанса (инстансный индекс);
+   * без флага — факты проекта (`projectId`) и факты без проекта.
+   */
+  listFacts: (opts: {
+    status?: 'active';
+    projectId?: string;
+    allProjects?: boolean;
+  }) => Promise<MemoryFactRecord[]>;
   /** Настройки плагина (нормализованные). */
   settings: () => MemoryPluginSettings;
 }
@@ -274,13 +299,15 @@ export class IndexManager {
     const indexes = this._indexes();
     const now = new Date().toISOString();
     const source = input.source ?? { kind: 'files' as IndexSourceKind };
+    const scope: MemoryIndexScope = input.scope ?? 'project';
     const index: MemoryIndexRecord = {
       id: `idx_${randomUUID()}`,
       // Namespace навязывает хост (ADR-107) — значение игнорируется.
       namespace: '',
-      name: input.name?.trim() || DEFAULT_INDEX_NAME,
+      name: input.name?.trim() || defaultIndexName(scope),
       providerId: INDEX_PROVIDER_ID,
       ...(input.projectId ? { projectId: input.projectId } : {}),
+      scope,
       source: {
         kind: source.kind,
         ...(source.filter ? { filter: source.filter } : {}),
@@ -305,6 +332,9 @@ export class IndexManager {
    * Новое поколение = `current + 1`; предыдущее удаляется **после**
    * переключения на новое. Индекс в состоянии `building` без `force` —
    * отказ (`IndexBusyError`).
+   *
+   * Область видимости (`scope`) при пересборке **не меняется** — запись
+   * копируется целиком (`...current`).
    */
   async rebuildIndex(id: string, input: RebuildIndexInput = {}): Promise<IndexStatus> {
     const indexes = this._indexes();
@@ -428,10 +458,16 @@ export class IndexManager {
     workingDir?: string,
   ): Promise<SourceDocument[]> {
     if (index.source.kind === 'facts') {
-      const facts = await this._deps.listFacts({
-        status: 'active',
-        ...(index.projectId ? { projectId: index.projectId } : {}),
-      });
+      // Инстансный индекс по фактам — корпус **всего** инстанса (все
+      // активные факты, независимо от проекта). Проектный — факты проекта
+      // (и факты без проекта) — как раньше.
+      const facts =
+        index.scope === 'instance'
+          ? await this._deps.listFacts({ status: 'active', allProjects: true })
+          : await this._deps.listFacts({
+              status: 'active',
+              ...(index.projectId ? { projectId: index.projectId } : {}),
+            });
       return facts.map((fact) => ({
         documentId: fact.id,
         text: fact.text,
@@ -486,4 +522,14 @@ export class IndexManager {
     }
     return chunks;
   }
+}
+
+/**
+ * Имя индекса по умолчанию — по области видимости.
+ *
+ * Проектный индекс — `project`, инстансный (общий) — `instance`: в списке
+ * видно, что корпус общий.
+ */
+function defaultIndexName(scope: MemoryIndexScope): string {
+  return scope === 'instance' ? DEFAULT_INSTANCE_INDEX_NAME : DEFAULT_INDEX_NAME;
 }

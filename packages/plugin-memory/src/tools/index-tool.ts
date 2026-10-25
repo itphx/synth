@@ -8,8 +8,15 @@
  *
  * Скоуп — проект сессии (`ctx.projectId`): индексы чужих проектов не видны и
  * не трогаются (то же правило, что у фактов и у тула `memory_write`).
+ *
+ * **Инстансный индекс** (`scope: 'instance'`) — общий корпус на инстанс:
+ * виден всем сессиям и проектам. Создание, пересборка и удаление такого
+ * индекса — **только через портал памяти** (ADMIN в managed): портал зовёт тул
+ * со служебной сессией `system:memory-portal:…`, и только такой вызов
+ * допускается. Модель этим значением не управляет — сессия портала создаёт
+ * сервер.
  */
-import type { PluginToolDefinition } from '@itphx/synth-core';
+import type { MemoryIndexScope, PluginToolDefinition } from '@itphx/synth-core';
 import type { z } from 'zod';
 
 import {
@@ -22,6 +29,28 @@ import { boolean, enumOf, object, optional, string } from '../schema.js';
 
 /** Локальное имя тула (в реестре — с namespace'ом, его составляет хост). */
 export const MEMORY_INDEX_TOOL_NAME = 'memory_index';
+
+/**
+ * Префикс sessionId служебного вызова портала памяти.
+ *
+ * Портал памяти (ядро) вызывает админ-тулы плагина со служебной сессией с
+ * таким префиксом — сессии у портала нет (это вызов инстанса).
+ */
+export const MEMORY_PORTAL_SESSION_PREFIX = 'system:memory-portal:';
+
+/** Текст отказа: инстансный индекс — только через портал. */
+export const INSTANCE_SCOPE_DENIED_TEXT =
+  'Инстансный индекс управляется через портал (ADMIN)';
+
+/**
+ * Вызов идёт из портала памяти (служебная сессия инстанса).
+ *
+ * Единственный путь управления инстансными индексами: портал зовёт тул с
+ * сессией `system:memory-portal:…`. Модель такой вызов создать не может.
+ */
+export function isPortalSession(sessionId: string | undefined): boolean {
+  return typeof sessionId === 'string' && sessionId.startsWith(MEMORY_PORTAL_SESSION_PREFIX);
+}
 
 /**
  * Схема параметров — по ней хост валидирует аргументы.
@@ -39,6 +68,7 @@ export const memoryIndexParameters = object({
       filter: optional(string({ min: 1, max: 500 })),
     }),
   ),
+  scope: optional(enumOf(['project', 'instance'])),
   projectId: optional(string({ min: 1, max: 200 })),
   force: optional(boolean()),
 });
@@ -78,6 +108,12 @@ export const memoryIndexJsonSchema: Record<string, unknown> = {
       description:
         'Проект-владелец индекса. Если сессия работает в проекте — параметр игнорируется.',
     },
+    scope: {
+      type: 'string',
+      enum: ['project', 'instance'],
+      description:
+        'Область видимости индекса: project (по умолчанию) — только свой проект; instance — общий на инстанс, только через портал (ADMIN).',
+    },
     force: {
       type: 'boolean',
       description: 'Пересобрать даже если сборка уже идёт (по умолчанию — нет)',
@@ -92,6 +128,7 @@ function formatIndexLine(status: {
   index: {
     id: string;
     name: string;
+    scope?: MemoryIndexScope;
     source: { kind: string };
     generation: number;
     stats: { documents: number; chunks: number };
@@ -100,8 +137,9 @@ function formatIndexLine(status: {
 }): string {
   const { index, state } = status;
   const stale = state === 'stale' ? ' (устарел — нужна пересборка)' : '';
+  const scope = index.scope === 'instance' ? 'instance' : 'project';
   return (
-    `- ${index.name} (${index.id}): ${state}${stale}, поколение ${index.generation}, ` +
+    `- [${scope}] ${index.name} (${index.id}): ${state}${stale}, поколение ${index.generation}, ` +
     `документов ${index.stats.documents}, чанков ${index.stats.chunks}`
   );
 }
@@ -135,10 +173,13 @@ export function createMemoryIndexTool(provider: MemoryProviderLite): PluginToolD
           isError: true,
         };
       }
-      const { action, indexId, name, source, projectId, force } = parsed.data;
+      const { action, indexId, name, source, scope, projectId, force } = parsed.data;
 
       // Скоуп сессии важнее аргумента модели (то же правило, что у `memory_write`).
       const scopeProjectId = ctx.projectId?.trim() ? ctx.projectId : projectId;
+      // Область видимости нового индекса (по умолчанию — проектная).
+      const indexScope: MemoryIndexScope = scope ?? 'project';
+      const portalSession = isPortalSession(ctx.sessionId);
 
       try {
         if (action === 'status') {
@@ -159,6 +200,7 @@ export function createMemoryIndexTool(provider: MemoryProviderLite): PluginToolD
               indexes: statuses.map((status) => ({
                 indexId: status.index.id,
                 name: status.index.name,
+                scope: status.index.scope,
                 state: status.state,
                 generation: status.index.generation,
                 stats: status.index.stats,
@@ -168,10 +210,28 @@ export function createMemoryIndexTool(provider: MemoryProviderLite): PluginToolD
         }
 
         if (action === 'create') {
+          // Инстансный индекс — только через портал (ADMIN в managed).
+          if (indexScope === 'instance' && !portalSession) {
+            return { content: INSTANCE_SCOPE_DENIED_TEXT, isError: true };
+          }
+          const sourceKind = source?.kind ?? 'files';
+          // Для инстансного индекса по фактам `projectId` **не** передаётся:
+          // корпус — все факты инстанса, владельца нет. Для индекса по файлам
+          // `projectId` — источник корпуса (чей workspace сканировать).
+          const indexProjectId =
+            indexScope === 'instance' && sourceKind === 'facts' ? undefined : scopeProjectId;
+          if (indexScope === 'instance' && sourceKind === 'files' && !indexProjectId) {
+            return {
+              content:
+                'Инстансный индекс файлов требует projectId — это источник корпуса (чей workspace сканировать).',
+              isError: true,
+            };
+          }
           const created = await provider.createIndex({
             ...(name ? { name } : {}),
             ...(source ? { source } : {}),
-            ...(scopeProjectId ? { projectId: scopeProjectId } : {}),
+            scope: indexScope,
+            ...(indexProjectId ? { projectId: indexProjectId } : {}),
             workingDir: ctx.workingDir,
           });
           return {
@@ -180,6 +240,7 @@ export function createMemoryIndexTool(provider: MemoryProviderLite): PluginToolD
               'Состояние индекса: building → ready или failed.',
             metadata: {
               indexId: created.index.id,
+              scope: created.index.scope,
               state: created.state,
               generation: created.index.generation,
               stats: created.index.stats,
@@ -201,13 +262,18 @@ export function createMemoryIndexTool(provider: MemoryProviderLite): PluginToolD
           };
         }
 
+        // Инстансный индекс — только через портал (ADMIN в managed).
+        if (target.scope === 'instance' && !portalSession) {
+          return { content: INSTANCE_SCOPE_DENIED_TEXT, isError: true };
+        }
+
         if (action === 'delete') {
           const removed = await provider.deleteIndex(target.id);
           return {
             content: removed
               ? `Индекс удалён (id: ${target.id}).`
               : `Индекс не найден (id: ${target.id}).`,
-            metadata: { indexId: target.id, deleted: removed },
+            metadata: { indexId: target.id, scope: target.scope, deleted: removed },
             ...(removed ? {} : { isError: true }),
           };
         }
@@ -222,6 +288,7 @@ export function createMemoryIndexTool(provider: MemoryProviderLite): PluginToolD
             `(поколение ${rebuilt.index.generation}).`,
           metadata: {
             indexId: rebuilt.index.id,
+            scope: rebuilt.index.scope,
             state: rebuilt.state,
             generation: rebuilt.index.generation,
             stats: rebuilt.index.stats,
@@ -246,11 +313,13 @@ export function createMemoryIndexTool(provider: MemoryProviderLite): PluginToolD
  *
  * Поиск идёт **по скоупу**: индекс чужого проекта не находится (и не
  * удаляется) — id из аргументов модели не даёт доступа к чужому индексу.
+ * Инстансный индекс виден всем (общий корпус), но управлять им можно только
+ * из портала — проверка области видимости в вызывающем коде.
  */
 async function resolveTarget(
   provider: MemoryProviderLite,
   opts: { indexId?: string; name?: string; projectId?: string },
-): Promise<{ id: string; name: string } | null> {
+): Promise<{ id: string; name: string; scope: MemoryIndexScope } | null> {
   const statuses = await provider.listIndexes(
     opts.projectId ? { projectId: opts.projectId } : {},
   );
@@ -259,5 +328,10 @@ async function resolveTarget(
     : opts.name
       ? statuses.find((status) => status.index.name === opts.name)
       : undefined;
-  return found ? { id: found.index.id, name: found.index.name } : null;
+  if (!found) return null;
+  return {
+    id: found.index.id,
+    name: found.index.name,
+    scope: found.index.scope === 'instance' ? 'instance' : 'project',
+  };
 }

@@ -94,14 +94,20 @@ export {
 } from './engine/embedder.js';
 export {
   IndexManager,
+  DEFAULT_INDEX_NAME,
+  DEFAULT_INSTANCE_INDEX_NAME,
   INDEX_PROVIDER_ID,
   embeddingInputHash,
+  type CreateIndexInput,
   type IndexSourceKind,
   type IndexSourceSpec,
   type IndexStatus,
+  type RebuildIndexInput,
 } from './engine/index-manager.js';
 export {
+  chunkItemKey,
   cosine,
+  mergeChunkItems,
   reciprocalRankFusion,
   searchIndex,
   type MemorySearchReadiness,
@@ -122,7 +128,10 @@ export { createMemoryWriteTool, MEMORY_WRITE_TOOL_NAME } from './tools/write.js'
 export { createMemoryForgetTool, MEMORY_FORGET_TOOL_NAME } from './tools/forget.js';
 export {
   createMemoryIndexTool,
+  INSTANCE_SCOPE_DENIED_TEXT,
   MEMORY_INDEX_TOOL_NAME,
+  MEMORY_PORTAL_SESSION_PREFIX,
+  isPortalSession,
   memoryIndexParameters,
 } from './tools/index-tool.js';
 export {

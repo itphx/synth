@@ -20,6 +20,7 @@ function indexRecord(over: Partial<MemoryIndexRecord> = {}): MemoryIndexRecord {
     name: 'project',
     providerId: 'plugin:synth-plugin-memory',
     projectId: 'p1',
+    scope: 'project',
     source: { kind: 'files' },
     state: 'ready',
     generation: 1,

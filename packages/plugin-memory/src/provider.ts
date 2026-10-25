@@ -15,7 +15,10 @@
  *   проверяет `available` и деградирует (блок → `null`, тул → `isError`);
  * - скоуп хода: задан проект сессии → факты и индексы этого проекта **и**
  *   общие (без проекта); не задан → только **без** проекта (чужие проекты в
- *   выдачу не попадают). Правило одно для блоков промпта и тулов.
+ *   выдачу не попадают). Правило одно для блоков промпта и тулов;
+ * - **инстансные** индексы (`scope: 'instance'`) — общий корпус на инстанс:
+ *   видны всем сессиям и проектам; их `projectId` (если задан) — источник
+ *   корпуса, а не владелец.
  *
  * **Индексы (М2).** Провайдер делегирует жизненный цикл корпуса движку
  * (`engine/index-manager.ts`), а поиск — `engine/search.ts`: блоки и тулы не
@@ -26,6 +29,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   MemoryFactQuery,
   MemoryFactRecord,
+  MemoryIndexScope,
   PluginFacade,
 } from '@itphx/synth-core';
 
@@ -94,6 +98,14 @@ export const DEFAULT_FACT_CONFIDENCE = 0.7;
  * и блоку фактов, и recall, а лишнее не тянем из хранилища.
  */
 export const CANDIDATE_LIMIT = 200;
+
+/**
+ * Потолок выборки фактов для **инстансного** индекса (источник `facts`).
+ *
+ * Инстансный корпус — все активные факты инстанса, поэтому нужен максимум,
+ * который отдаёт порт (1000).
+ */
+export const INSTANCE_FACTS_LIMIT = 1000;
 
 /** Скоуп фактов в ходе: проект сессии (не задан — только факты без проекта). */
 export interface FactScope {
@@ -257,6 +269,9 @@ export class MemoryProviderLite {
    * не задан → только факты без проекта. Одна реализация recall — блок и тул
    * не должны разойтись (docs/MEMORY.md §3).
    *
+   * `allProjects` — **все** факты инстанса, без фильтра по проекту (сборка
+   * инстансного индекса по фактам).
+   *
    * `limit` — потолок выборки (по умолчанию {@link CANDIDATE_LIMIT}; для
    * консолидации — 1000, потолок порта). Больше порт не отдаёт в любом случае.
    */
@@ -265,13 +280,18 @@ export class MemoryProviderLite {
     kind?: string;
     /** Проект сессии (`ctx.projectId`); не задан — только факты без проекта. */
     projectId?: string;
+    /** Все факты инстанса (без фильтра по проекту). */
+    allProjects?: boolean;
     /** Потолок выборки (по умолчанию {@link CANDIDATE_LIMIT}). */
     limit?: number;
   }): Promise<MemoryFactRecord[]> {
-    const query: MemoryFactQuery = { limit: opts.limit ?? CANDIDATE_LIMIT };
+    const query: MemoryFactQuery = {
+      limit: opts.limit ?? (opts.allProjects ? INSTANCE_FACTS_LIMIT : CANDIDATE_LIMIT),
+    };
     if (opts.status && opts.status !== 'all') query.status = opts.status;
     if (opts.kind) query.kind = opts.kind;
     const facts = await this._facts().list(query);
+    if (opts.allProjects) return facts;
     return facts.filter((fact) => inScope(fact, { projectId: opts.projectId }));
   }
 
@@ -450,12 +470,24 @@ export class MemoryProviderLite {
   //
   // Скоуп — тот же, что у фактов: проект сессии задан → его индексы;
   // не задан → только индексы **без** проекта (чужие проекты в выдачу не
-  // попадают).
+  // попадают). **Инстансные** индексы (`scope: 'instance'`) видны всем
+  // сессиям и проектам — их `projectId` (если задан) — источник корпуса,
+  // а не владелец.
 
-  /** Индексы в скоупе хода (с эффективным состоянием). */
-  async listIndexes(opts: { projectId?: string } = {}): Promise<IndexStatus[]> {
+  /**
+   * Индексы в скоупе хода (с эффективным состоянием).
+   *
+   * `scope` — дополнительный фильтр по области видимости (не задан — любые).
+   */
+  async listIndexes(opts: { projectId?: string; scope?: MemoryIndexScope } = {}): Promise<
+    IndexStatus[]
+  > {
     const statuses = await this._indexes.statuses();
-    return statuses.filter((status) => inIndexScope(status.index, opts.projectId));
+    return statuses.filter((status) => {
+      if (!inIndexScope(status.index, opts.projectId)) return false;
+      if (opts.scope !== undefined && status.index.scope !== opts.scope) return false;
+      return true;
+    });
   }
 
   /** Статус индекса по id (или `null`). */
@@ -479,23 +511,36 @@ export class MemoryProviderLite {
   }
 
   /**
-   * Индекс проекта для recall: готовый или устаревший (`stale`).
+   * Индексы, пригодные для recall: готовые или устаревшие (`stale`).
    *
-   * Индекс в состоянии `building`/`failed` не используется — recall деградирует
-   * на keyword по фактам (иначе в промпт попали бы полузагруженные данные).
+   * Учитываются **и** проектные, **и** инстансные индексы (инстансный виден
+   * всем). Индекс в состоянии `building`/`failed` не используется — recall
+   * деградирует на keyword по фактам (иначе в промпт попали бы полузагруженные
+   * данные).
+   *
+   * Порядок — детерминированный: свежие первыми (`updatedAt` убыв.), при
+   * равенстве — по id.
    */
-  async projectIndex(projectId?: string): Promise<IndexStatus | null> {
-    const statuses = await this.listIndexes({ ...(projectId ? { projectId } : {}) });
+  async usableIndexes(projectId?: string): Promise<IndexStatus[]> {
+    const statuses = await this.listIndexes(projectId ? { projectId } : {});
     const usable = statuses.filter(
       (status) => status.state === 'ready' || status.state === 'stale',
     );
-    if (usable.length === 0) return null;
-    // Свежий — первый; при равенстве — по id (детерминированно).
     usable.sort((a, b) => {
       const byUpdated = Date.parse(b.index.updatedAt) - Date.parse(a.index.updatedAt);
       if (!Number.isNaN(byUpdated) && byUpdated !== 0) return byUpdated;
       return a.index.id.localeCompare(b.index.id);
     });
+    return usable;
+  }
+
+  /**
+   * Первый пригодный индекс для recall (готовый или устаревший).
+   *
+   * Обёртка над {@link usableIndexes} — для одиночного использования.
+   */
+  async projectIndex(projectId?: string): Promise<IndexStatus | null> {
+    const usable = await this.usableIndexes(projectId);
     return usable[0] ?? null;
   }
 
@@ -515,10 +560,18 @@ export class MemoryProviderLite {
 }
 
 /**
- * Индекс в скоупе хода: проект сессии задан → индексы этого проекта;
- * не задан → только индексы **без** проекта (то же правило, что у фактов).
+ * Индекс в скоупе хода.
+ *
+ * - `scope: 'instance'` — общий на инстанс: **виден всегда** (и сессии без
+ *   проекта, и любому проекту);
+ * - `scope: 'project'` — проект сессии задан → индекс этого проекта; не задан →
+ *   только индексы **без** проекта (то же правило, что у фактов).
  */
-function inIndexScope(index: { projectId?: string }, projectId: string | undefined): boolean {
+function inIndexScope(
+  index: { scope?: MemoryIndexScope; projectId?: string },
+  projectId: string | undefined,
+): boolean {
+  if (index.scope === 'instance') return true;
   if (projectId) return index.projectId === projectId;
   return index.projectId === undefined;
 }

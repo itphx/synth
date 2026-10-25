@@ -7,6 +7,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import type { StorageContext } from '@itphx/synth-core';
+
 import { MemoryProviderLite } from './provider.js';
 import { createMemoryForgetTool } from './tools/forget.js';
 import { createMemorySearchTool } from './tools/search.js';
@@ -240,5 +242,63 @@ describe('память: сервис недоступен', () => {  it('тул�
     const result = await write.execute({ text: FACT_TEXT }, toolCtx());
     expect(result.isError).toBe(true);
     expect(result.content).toBe('Хранилище памяти недоступно в этом инстансе');
+  });
+});
+
+describe('память: область видимости индексов', () => {
+  /** Запись индекса для проверки скоупа (namespace навязывает хост). */
+  async function seedIndex(
+    storage: StorageContext,
+    over: { id: string; scope: 'project' | 'instance'; projectId?: string },
+  ): Promise<void> {
+    const now = '2026-10-24T10:00:00.000Z';
+    await storage.memoryIndexes.saveIndex({
+      id: over.id,
+      namespace: 'plugin:synth-plugin-memory',
+      name: over.scope,
+      providerId: 'plugin:synth-plugin-memory',
+      ...(over.projectId ? { projectId: over.projectId } : {}),
+      scope: over.scope,
+      source: { kind: 'facts' },
+      state: 'ready',
+      generation: 1,
+      fingerprint: { model: 'instance-default', dimension: 8, chunkerVersion: '1' },
+      stats: { documents: 0, chunks: 0, updatedAt: now },
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  it('инстансный индекс виден всем сессиям, проектный — только своему проекту', async () => {
+    const { storage, provider } = makeMemory();
+    await seedIndex(storage, { id: 'idx_instance', scope: 'instance' });
+    await seedIndex(storage, { id: 'idx_project', scope: 'project', projectId: 'p1' });
+
+    const inP1 = await provider.listIndexes({ projectId: 'p1' });
+    expect(inP1.map((status) => status.index.id)).toContain('idx_instance');
+    expect(inP1.map((status) => status.index.id)).toContain('idx_project');
+
+    // Чужой проект инстансный индекс видит, проектный — нет.
+    const inP2 = await provider.listIndexes({ projectId: 'p2' });
+    expect(inP2.map((status) => status.index.id)).toEqual(['idx_instance']);
+
+    // Сессия без проекта — тоже видит инстансный.
+    const withoutProject = await provider.listIndexes();
+    expect(withoutProject.map((status) => status.index.id)).toEqual(['idx_instance']);
+  });
+
+  it('фильтр по области видимости и список пригодных индексов', async () => {
+    const { storage, provider } = makeMemory();
+    await seedIndex(storage, { id: 'idx_instance', scope: 'instance' });
+    await seedIndex(storage, { id: 'idx_project', scope: 'project', projectId: 'p1' });
+
+    const onlyInstance = await provider.listIndexes({ projectId: 'p1', scope: 'instance' });
+    expect(onlyInstance.map((status) => status.index.id)).toEqual(['idx_instance']);
+
+    // Пригодные для recall: `ready`/`stale` (в порядке: свежие первыми).
+    const usable = await provider.usableIndexes('p1');
+    expect(usable.map((status) => status.index.id)).toEqual(
+      expect.arrayContaining(['idx_instance', 'idx_project']),
+    );
   });
 });

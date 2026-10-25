@@ -33,13 +33,18 @@ afterEach(async () => {
 });
 
 /** Контекст тула (суженный контекст плагина, ADR-107). */
-function ctx(projectId?: string, workingDir = '/ws') {
+function ctx(projectId?: string, workingDir = '/ws', sessionId = 's1') {
   return {
-    sessionId: 's1',
+    sessionId,
     messageId: 'm1',
     workingDir,
     ...(projectId ? { projectId } : {}),
   };
+}
+
+/** Контекст служебного вызова портала памяти. */
+function portalCtx(projectId?: string, workingDir = '/ws') {
+  return ctx(projectId, workingDir, 'system:memory-portal:test');
 }
 
 describe('тул memory_index', () => {
@@ -167,5 +172,127 @@ describe('тул memory_index', () => {
     const result = await tool.execute({ action: 'status' }, ctx('p1'));
     expect(result.isError).toBe(true);
     expect(result.content).toBe('Хранилище памяти недоступно в этом инстансе');
+  });
+});
+
+describe('тул memory_index: инстансный индекс (scope: instance)', () => {
+  it('создание инстансного индекса без сессии портала → отказ', async () => {
+    const storage = createTestStorage();
+    const dir = await makeCorpus();
+    const { facade } = createTestFacade({ storage });
+    const provider = new MemoryProviderLite(facade);
+    const tool = createMemoryIndexTool(provider);
+
+    const created = await tool.execute(
+      { action: 'create', scope: 'instance', source: { kind: 'files' } },
+      ctx('p1', dir),
+    );
+    expect(created.isError).toBe(true);
+    expect(created.content).toBe('Инстансный индекс управляется через портал (ADMIN)');
+    // Индекс не создан.
+    expect(await storage.memoryIndexes.listIndexes()).toHaveLength(0);
+  });
+
+  it('создание инстансного индекса из портала → индекс создан', async () => {
+    const storage = createTestStorage();
+    const dir = await makeCorpus();
+    const { facade } = createTestFacade({ storage });
+    const provider = new MemoryProviderLite(facade);
+    const tool = createMemoryIndexTool(provider);
+
+    const created = await tool.execute(
+      { action: 'create', scope: 'instance', source: { kind: 'files' } },
+      portalCtx('p1', dir),
+    );
+    expect(created.isError).toBeUndefined();
+    const indexId = String(created.metadata?.indexId);
+    expect(indexId).toMatch(/^idx_/);
+    expect(created.metadata?.scope).toBe('instance');
+
+    await provider.indexManager.whenIdle();
+    const status = await provider.getIndex(indexId);
+    expect(status!.index.scope).toBe('instance');
+    expect(status!.index.projectId).toBe('p1');
+  });
+
+  it('инстансный индекс по фактам: projectId не передаётся (владельца нет)', async () => {
+    const storage = createTestStorage();
+    const { facade } = createTestFacade({ storage });
+    const provider = new MemoryProviderLite(facade);
+    const tool = createMemoryIndexTool(provider);
+
+    const created = await tool.execute(
+      { action: 'create', scope: 'instance', source: { kind: 'facts' } },
+      portalCtx('p1'),
+    );
+    expect(created.isError).toBeUndefined();
+
+    await provider.indexManager.whenIdle();
+    const status = await provider.getIndex(String(created.metadata?.indexId));
+    expect(status!.index.scope).toBe('instance');
+    expect(status!.index.projectId).toBeUndefined();
+  });
+
+  it('пересборка инстансного индекса без сессии портала → отказ', async () => {
+    const storage = createTestStorage();
+    const dir = await makeCorpus();
+    const { facade } = createTestFacade({ storage });
+    const provider = new MemoryProviderLite(facade);
+    const tool = createMemoryIndexTool(provider);
+
+    const created = await tool.execute(
+      { action: 'create', scope: 'instance', source: { kind: 'files' } },
+      portalCtx('p1', dir),
+    );
+    const indexId = String(created.metadata?.indexId);
+    await provider.indexManager.whenIdle();
+
+    const rebuilt = await tool.execute({ action: 'rebuild', indexId }, ctx('p1', dir));
+    expect(rebuilt.isError).toBe(true);
+    expect(rebuilt.content).toBe('Инстансный индекс управляется через портал (ADMIN)');
+    // Поколение прежнее — пересборки не было.
+    const status = await provider.getIndex(indexId);
+    expect(status!.index.generation).toBe(1);
+  });
+
+  it('удаление инстансного индекса без сессии портала → отказ', async () => {
+    const storage = createTestStorage();
+    const dir = await makeCorpus();
+    const { facade } = createTestFacade({ storage });
+    const provider = new MemoryProviderLite(facade);
+    const tool = createMemoryIndexTool(provider);
+
+    const created = await tool.execute(
+      { action: 'create', scope: 'instance', source: { kind: 'files' } },
+      portalCtx('p1', dir),
+    );
+    const indexId = String(created.metadata?.indexId);
+    await provider.indexManager.whenIdle();
+
+    const removed = await tool.execute({ action: 'delete', indexId }, ctx('p1', dir));
+    expect(removed.isError).toBe(true);
+    expect(removed.content).toBe('Инстансный индекс управляется через портал (ADMIN)');
+    expect(await storage.memoryIndexes.getIndex(indexId)).not.toBeNull();
+  });
+
+  it('статус: инстансный индекс виден и помечен областью видимости', async () => {
+    const storage = createTestStorage();
+    const dir = await makeCorpus();
+    const { facade } = createTestFacade({ storage });
+    const provider = new MemoryProviderLite(facade);
+    const tool = createMemoryIndexTool(provider);
+
+    await tool.execute(
+      { action: 'create', scope: 'instance', source: { kind: 'files' } },
+      portalCtx('p1', dir),
+    );
+    await provider.indexManager.whenIdle();
+
+    // Статус из сессии другого проекта — инстансный индекс виден.
+    const status = await tool.execute({ action: 'status' }, ctx('p2', dir));
+    expect(status.content).toContain('[instance]');
+    const indexes = status.metadata?.indexes as Array<Record<string, unknown>>;
+    expect(indexes).toHaveLength(1);
+    expect(indexes[0]!.scope).toBe('instance');
   });
 });

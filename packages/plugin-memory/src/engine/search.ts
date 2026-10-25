@@ -119,6 +119,40 @@ export function reciprocalRankFusion(
   return fused;
 }
 
+/**
+ * Ключ фрагмента в слиянии выдачи: индекс + чанк.
+ *
+ * `chunkId` уникален **в пределах индекса**, поэтому индекс входит в ключ —
+ * иначе фрагменты разных индексов (проектного и инстансного) с одинаковым
+ * `documentId#ordinal` склеились бы в один.
+ */
+export function chunkItemKey(item: SearchItem): string {
+  return `${item.indexId}:${item.chunkId}`;
+}
+
+/**
+ * Слить фрагменты нескольких индексов в один список.
+ *
+ * Дедуп — по `indexId:chunkId`; порядок — по score (убыв.), при равенстве —
+ * по индексу, затем по чанку (детерминированно).
+ */
+export function mergeChunkItems(items: readonly SearchItem[]): SearchItem[] {
+  const seen = new Set<string>();
+  const merged: SearchItem[] = [];
+  for (const item of items) {
+    const key = chunkItemKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  merged.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.indexId !== b.indexId) return a.indexId.localeCompare(b.indexId);
+    return a.chunkId.localeCompare(b.chunkId);
+  });
+  return merged;
+}
+
 /** Параметры поиска по индексу. */
 export interface IndexSearchOptions {
   /** Сколько результатов вернуть. */

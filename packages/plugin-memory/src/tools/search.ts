@@ -5,19 +5,20 @@
  * - **факты** памяти — keyword-скоринг (порог `minScore` — настройка recall:
  *   явный поиск агента отдаём шире, иначе модель получала бы «ничего не
  *   найдено» там, где совпадение есть);
- * - **индекс проекта** (если он готов или устарел) — гибридный поиск по
- *   корпусу: keyword + вектор + RRF (`engine/search.ts`).
+ * - **индексы** (если они готовы или устарели) — гибридный поиск по корпусу:
+ *   keyword + вектор + RRF (`engine/search.ts`). Учитываются **и** проектные,
+ *   **и** инстансные индексы (`scope: 'instance'` — общий корпус на инстанс).
  *
  * Списки сливаются **RRF** (docs/MEMORY.md §2.3): один порядок выдачи для
  * фактов и фрагментов корпуса. Каждый результат несёт **evidence** (источник,
  * строки/поколение, score) — модель видит, откуда взялось утверждение.
  *
- * Индекса нет → поведение М1 (поиск только по фактам).
+ * Индексов нет → поведение М1 (поиск только по фактам).
  */
 import type { PluginToolDefinition } from '@itphx/synth-core';
 import type { z } from 'zod';
 
-import { reciprocalRankFusion, type SearchItem } from '../engine/search.js';
+import { mergeChunkItems, reciprocalRankFusion, type SearchItem } from '../engine/search.js';
 import {
   formatFactLineWithMeta,
   MemoryUnavailableError,
@@ -138,12 +139,17 @@ export function createMemorySearchTool(provider: MemoryProviderLite): PluginTool
             return a.fact.id.localeCompare(b.fact.id);
           });
 
-        // Фрагменты корпуса — если индекс проекта готов (или устарел).
-        const index = await provider.projectIndex(ctx.projectId);
-        const chunkItems: SearchItem[] =
-          index && (index.state === 'ready' || index.state === 'stale')
-            ? (await provider.searchIndex(index.index.id, query, { topK: limit * 3 })).items
-            : [];
+        // Фрагменты корпуса — по всем пригодным индексам (проектным и
+        // инстансным). `chunkId` уникален в пределах индекса, поэтому ключ
+        // RRF несёт и id индекса — иначе фрагменты разных индексов с
+        // одинаковым `documentId#ordinal` слились бы в один.
+        const indexes = await provider.usableIndexes(ctx.projectId);
+        const collected: SearchItem[] = [];
+        for (const index of indexes) {
+          const found = await provider.searchIndex(index.index.id, query, { topK: limit * 3 });
+          collected.push(...found.items);
+        }
+        const chunkItems = mergeChunkItems(collected);
 
         if (factEntries.length === 0 && chunkItems.length === 0) {
           return { content: 'Ничего не найдено.' };
@@ -151,10 +157,18 @@ export function createMemorySearchTool(provider: MemoryProviderLite): PluginTool
 
         const fused = reciprocalRankFusion([
           factEntries.map((entry) => ({ key: `fact:${entry.fact.id}`, score: entry.score })),
-          chunkItems.map((item) => ({ key: `chunk:${item.chunkId}`, score: item.score })),
+          chunkItems.map((item) => ({
+            key: `chunk:${item.indexId}:${item.chunkId}`,
+            score: item.score,
+          })),
         ]);
         const factsById = new Map(factEntries.map((entry) => [entry.fact.id, entry.fact]));
-        const chunksById = new Map(chunkItems.map((item) => [item.chunkId, item]));
+        const chunksById = new Map(
+          chunkItems.map((item) => [`${item.indexId}:${item.chunkId}`, item]),
+        );
+        const scopeByIndex = new Map(
+          indexes.map((index) => [index.index.id, index.index.scope]),
+        );
 
         const lines: string[] = [];
         const evidence: Array<Record<string, unknown>> = [];
@@ -172,6 +186,7 @@ export function createMemorySearchTool(provider: MemoryProviderLite): PluginTool
           evidence.push({
             kind: 'chunk',
             indexId: item.indexId,
+            scope: scopeByIndex.get(item.indexId),
             generation: item.generation,
             chunkId: item.chunkId,
             path: item.metadata?.path,
