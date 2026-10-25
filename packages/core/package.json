@@ -52,6 +52,14 @@
       "types": "./dist/cli/plugin-commands.d.ts",
       "import": "./dist/cli/plugin-commands.js"
     },
+    "./cli/memory-commands.js": {
+      "types": "./dist/cli/memory-commands.d.ts",
+      "import": "./dist/cli/memory-commands.js"
+    },
+    "./cli/memory-connection.js": {
+      "types": "./dist/cli/memory-connection.d.ts",
+      "import": "./dist/cli/memory-connection.js"
+    },
     "./engine/gateway/index.js": {
       "types": "./dist/engine/gateway/index.d.ts",
       "import": "./dist/engine/gateway/index.js"

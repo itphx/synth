@@ -6,9 +6,9 @@
 > канон слоя плагинов — [ADR-090](./arch_decisions/adr-090-extension-api.md); руководство автора
 > плагина — [PLUGINS.md](./PLUGINS.md).
 > **Статус:** проектирование. Ядро: порты памяти (М0), сервисы фасада (М0.5), портал чтения
-> (`createMemoryRoutes`) и метрики `synth_memory_*` — реализованы; логика памяти (чанкер, эмбеддинги,
-> retrieval, консолидация) — в плагине, его нет.
-> **Обновлено:** 2026-10-24.
+> (`createMemoryRoutes`), CLI-клиент портала (`synth memory`) и метрики `synth_memory_*` — реализованы;
+> логика памяти (чанкер, эмбеддинги, retrieval, консолидация) — в плагине, его нет.
+> **Обновлено:** 2026-10-25.
 
 ## 1. Что это и где граница
 
@@ -219,6 +219,56 @@ namespace плагина (`plugin:synth-plugin-memory`) подставляет �
 | Наблюдаемость | метрики `synth_memory_*` (регистрируются ядром, ADR-094), события `memory.*` в инстансном канале |
 | Аудит | журнал плагинов `{dataDir}/audit/plugins.jsonl` + записи `memory.*` в аудите действий |
 | Деградация | провал `recall` → пустой блок + `warning`; ход не падает (правило `promptBlocks`) |
+
+### 4.4 CLI (`synth memory`)
+
+**Тонкий клиент HTTP API v2** портала памяти (`packages/core/src/cli/memory-commands.ts`): логики
+памяти в CLI нет — только вызовы `/api/v2/memory/*` **работающего инстанса**. Поэтому нужны
+запущенный инстанс и токен (ниже — как он резолвится).
+
+```bash
+synth memory status  [--json]
+synth memory list    [--project <id>] [--state <state>] [--json]
+synth memory index   <projectId> [--name <name>] [--source files|facts] [--filter <glob>] \
+                     [--wait] [--timeout <sec>] [--json]
+synth memory rebuild <indexId> [--wait] [--timeout <sec>] [--json]
+synth memory drop    <indexId> [--yes]
+```
+
+Общие опции (на каждой подкоманде): `--url <base>`, `--token <key>`, `--config <path>`,
+`--data-dir <dir>`.
+
+**Подключение.** Адрес: `--url` → `remote.backendUrl` (если `remote.enabled`) →
+`http://127.0.0.1:<port>` (порт — `SYNTH_PORT` → `core.port` → 5000). Ключ: `--token` →
+`SYNTH_API_KEY` → `core.apiKey` → файл `{dataDir}/secrets/api-key` (файл читается, не создаётся —
+создаёт сервер при старте). Пустой ключ — понятная ошибка «не задан API-ключ», а не 401 от сервера;
+значение ключа нигде не печатается (инвариант 13).
+
+**Асинхронность.** `index` и `rebuild` отвечают `202` — сборка идёт в фоне (PROP-047 §2.3).
+`--wait` опрашивает `GET /api/v2/memory/indexes` до состояния `ready`/`failed` (интервал 1 с,
+таймаут 300 с, `--timeout <sec>`); по таймауту — код выхода 1. `drop` без `--yes` — отказ (код 1),
+запрос не отправляется.
+
+**Коды выхода.** `0` — операция выполнена; `1` — отказ: HTTP-ошибка (в `stderr` — код и текст из
+тела `{error:{code,message}}`), сетевая ошибка, отсутствующий токен, `drop` без `--yes`, таймаут
+ожидания.
+
+```bash
+# Статус: готовность, провайдер, факты и индексы по состояниям
+synth memory status
+synth memory status --json
+
+# Список индексов (фильтры — проект и состояние)
+synth memory list --project prj_42
+synth memory list --state stale --json
+
+# Поставить сборку индекса и дождаться готовности
+synth memory index prj_42 --name docs --source files --filter '**/*.md' --wait
+
+# Пересобрать индекс (например, после смены модели эмбеддинга) и снять его
+synth memory rebuild idx_7f3a --wait --timeout 600
+synth memory drop idx_7f3a --yes
+```
 
 ## 5. Контракты и модель данных
 
@@ -443,6 +493,11 @@ SchedulerService → schedule_fired → RouteRule(PipelineRef) → PipelineEngin
 
 ## История
 
+- 2026-10-25 — **CLI `synth memory`**: тонкий клиент HTTP API v2 портала памяти
+  (`packages/core/src/cli/memory-commands.ts`): `status`/`list`/`index`/`rebuild`/`drop`, резолвинг
+  подключения (`--url`/`--token` → env → `core.apiKey` → файл `{dataDir}/secrets/api-key`),
+  `--wait` для асинхронной сборки индекса (опрос состояния, таймаут), коды выхода и разбор
+  ошибок `{error:{code,message}}`. §4.4.
 - 2026-10-24 — **М4b: ingest сессий — встроенный шаблон пайплайна** («Память: консолидация сессии»,
   id `builtin:memory-consolidation`, ADR-101): спецификация в ядре (`engine/pipelines/builtin.ts`),
   сидирование шаблона инстанса при старте (идемпотентно), шаг `agent` — `read_session_reference` →

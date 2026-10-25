@@ -4,11 +4,13 @@ import type { SynthConfig, ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { join, resolve } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';
 import { t as sm } from './engine/system-messages.js';
-import { initTlsTrust } from './security/tls.js';
+import { egressFetch, initTlsTrust } from './security/tls.js';
 import { configureRestart, resolveRestartMode, RESTART_EXIT_CODE } from './server/restart.js';
 import { checkExecutionMode } from './execution/startup.js';
 import { setSynthReady } from './metrics/collectors/ready.js';
 import { createPluginCliContext, createPluginCommand } from './cli/plugin-commands.js';
+import { createMemoryCommand } from './cli/memory-commands.js';
+import { createMemoryConnectionResolver } from './cli/memory-connection.js';
 
 const program = new Command();
 
@@ -751,6 +753,15 @@ program.addCommand(projectCmd);
 // ADR-090 (Ф5б-3): группа объявляется и здесь, и в
 // `packages/synth/src/cli.ts` — обе обёртки используют один модуль команд.
 program.addCommand(createPluginCommand({ createContext: createPluginCliContext }));
+
+// ADR-107: `synth memory …` — клиент HTTP API v2 портала памяти
+// (`/api/v2/memory/*`). Транспорт — `egressFetch` (ADR-099).
+program.addCommand(
+  createMemoryCommand({
+    resolveConnection: createMemoryConnectionResolver(),
+    fetchImpl: egressFetch,
+  }),
+);
 
 program
   .command('chat')

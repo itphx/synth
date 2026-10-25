@@ -1457,6 +1457,38 @@ runtime-install (не применяется, `installKind: 'deploy'`) → insta
 или остановка инстанса + удаление `<home>/plugin/` — **вместе** с `plugins.lock.json`.
 
 
+## Память: индексы и факты (`synth memory`)
+
+**Цель:** обслуживание портала памяти (ADR-107) из CLI — состояние, индексы, пересборка и снятие.
+CLI — тонкий клиент HTTP API v2 (`/api/v2/memory/*`), поэтому нужен **запущенный инстанс** и токен;
+логики памяти в CLI нет (она в плагине). Устройство подсистемы — [MEMORY.md](./MEMORY.md) §4.4.
+
+```bash
+# 1. Состояние: готовность, провайдер, факты и индексы по состояниям
+synth memory status
+
+# 2. Индексы проекта (фильтр состояния: building | ready | stale | failed | all)
+synth memory list --project <projectId> --state stale
+
+# 3. Пересобрать индекс (после смены модели эмбеддинга индекс становится stale)
+synth memory rebuild <indexId> --wait --timeout 600
+
+# 4. Снять индекс (деструктивно — только с --yes)
+synth memory drop <indexId> --yes
+```
+
+**Подключение.** Адрес: `--url` → `remote.backendUrl` (если `remote.enabled`) →
+`http://127.0.0.1:<port>`; ключ: `--token` → `SYNTH_API_KEY` → `core.apiKey` → файл
+`{dataDir}/secrets/api-key`. Пустой ключ — понятная ошибка «не задан API-ключ» (код выхода 1), а не
+401 от сервера.
+
+**Диагностика по коду.** Отказ инстанса печатается как `<КОД>: <текст>` (тело
+`{error:{code,message}}`): `MEMORY_PROVIDER_UNAVAILABLE` — плагин памяти не активен (мутации
+индексов недоступны, чтение работает), `MEMORY_INDEX_NOT_FOUND` — индекса нет, `PROJECT_NOT_FOUND` —
+нет проекта. Сборка индекса асинхронна (`202`): `--wait` дожидается состояния `ready`/`failed`,
+по таймауту — код выхода 1.
+
+
 ## Обслуживание из UI
 
 **Цель:** выполнить эксплуатационные операции без CLI; доступно только роли ADMIN.
@@ -1586,6 +1618,11 @@ curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
 
 ## История
 
+- 2026-10-25 — добавлен раздел «Память: индексы и факты (`synth memory`)» (ADR-107): CLI-клиент
+  HTTP API v2 портала памяти — `status`/`list`/`index`/`rebuild`/`drop`, резолвинг подключения
+  (`--url`/`--token` → env → `core.apiKey` → файл `{dataDir}/secrets/api-key`), асинхронная сборка
+  индекса (`--wait`, таймаут), диагностика по кодам (`MEMORY_PROVIDER_UNAVAILABLE`,
+  `MEMORY_INDEX_NOT_FOUND`); подробности — [MEMORY.md](./MEMORY.md) §4.4.
 - 2026-10-18 — добавлен runbook «Аналитика: пересборка роллапов» (`synth analytics rebuild`, ADR-102): назначение, флаги (`--from`/`--dry-run`/`--yes`/`--json`), отказ без флагов, идемпотентность через `set`, источники и политика «сообщения — истина, аудит — дополнение», диагностика `computeSessionStats`, ограничения (`decision` не пересобирается, `prompt` — проекция на чтении, аудита в `maintenance.jsonl` нет).
 - 2026-10-16 — краткое описание `synth storage migrate` развёрнуто в runbook «Перенос данных между backend'ами»: цель, предусловия (env-адресация цели, запрет `SYNTH_STORAGE_BACKEND` при вызове, останов сервиса), порядок (бэкап → dry-run → apply), независимая сверка (`psql`/`doctor`), закрепление режима, верификация после старта (в т.ч. проверка записи в БД), откат, ограничения/fail-closed и предупреждение о `storage.degradedMode`; проверено на живом dev-переносе (2026-10-16).
 - 2026-10-16 — добавлен раздел «PostgreSQL как backend хранения» ([ADR-097](./arch_decisions/adr-097-storage-provider-class.md)/[ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)): схема драйвера и `synth migrate`, db-проверки `doctor`, бэкап/restore (данных БД в архиве нет — `pg_dump`/PITR), `uninstall --purge-db`, деградированный режим и скилл `synth-storage-recovery`, перенос данных `synth storage migrate` с честными ограничениями.
