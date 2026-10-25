@@ -3437,6 +3437,16 @@ export const dict = {
   'settings.memory.indexes.form.name': 'Имя',
   'settings.memory.indexes.form.namePlaceholder': 'Имя индекса',
   'settings.memory.indexes.form.nameRequired': 'Укажите имя индекса.',
+  'settings.memory.indexes.form.scope': 'Область',
+  'settings.memory.indexes.form.scope.project': 'Проект',
+  'settings.memory.indexes.form.scope.instance': 'Инстанс',
+  'settings.memory.indexes.form.scope.instanceHint':
+    'Общий для инстанса: доступен всем пользователям и во всех сессиях.',
+  'settings.memory.indexes.form.scope.instanceFilesHint':
+    'Файлы берутся из рабочего каталога этого проекта.',
+  'settings.memory.indexes.form.scope.instanceFilesWarning':
+    'Содержимое рабочего каталога проекта станет доступно всем пользователям инстанса.',
+  'settings.memory.indexes.form.scope.sourceProject': 'Проект-источник (workspace)',
   'settings.memory.indexes.form.source': 'Источник',
   'settings.memory.indexes.form.source.files': 'файлы',
   'settings.memory.indexes.form.source.facts': 'факты',
@@ -3453,6 +3463,7 @@ export const dict = {
   'settings.memory.indexes.rebuilt': 'Пересборка индекса «{name}» запущена',
   'settings.memory.indexes.deleted': 'Индекс «{name}» удалён',
   'settings.memory.indexes.providerUnavailable': 'Плагин памяти не активирован.',
+  'settings.memory.indexes.scopeBadge.instance': 'Инстанс',
   'settings.memory.indexes.column.actions': 'Действия',
 
   // --- Консолидация фактов (PROP-047) ---

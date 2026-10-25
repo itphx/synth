@@ -22,6 +22,14 @@ export type MemoryFactStatus = 'candidate' | 'active' | 'superseded' | 'retracte
 /** Состояние индекса памяти (ADR-096, порт индексов). */
 export type MemoryIndexState = 'building' | 'ready' | 'stale' | 'failed'
 
+/**
+ * Область видимости индекса памяти (ADR-107, порт индексов).
+ *
+ * `project` — индекс виден только своему проекту (по умолчанию),
+ * `instance` — общий для всех пользователей инстанса.
+ */
+export type MemoryIndexScope = 'project' | 'instance'
+
 /** Провенанс факта — откуда взялось утверждение. */
 export interface MemoryFactProvenance {
   /** Вид источника (`session`/`project`/`file`/`external`/…). */
@@ -86,7 +94,15 @@ export interface MemoryIndex {
   name: string
   /** Провайдер памяти, которому принадлежит индекс. */
   providerId: string
+  /**
+   * Проект-владелец индекса.
+   *
+   * Для `scope: 'project'` — проект-владелец; для `scope: 'instance'` —
+   * источник корпуса (чей workspace индексируется), может отсутствовать.
+   */
   projectId?: string
+  /** Область видимости индекса (легаси-записи без поля читаются как `project`). */
+  scope: MemoryIndexScope
   source: MemoryIndexSource
   state: MemoryIndexState
   /** Поколение корпуса (инкремент при пересборке). */
@@ -147,6 +163,8 @@ export interface MemoryIndexListParams {
   projectId?: string
   /** Состояние индекса. */
   state?: MemoryIndexState
+  /** Область видимости индекса (`project`/`instance`). */
+  scope?: MemoryIndexScope
 }
 
 /**
@@ -162,8 +180,15 @@ export interface CreateMemoryIndexInput {
   name?: string
   /** Источник корпуса: что индексируем и с каким фильтром. */
   source?: { kind: MemoryIndexSourceKind; filter?: string }
-  /** Проект-владелец индекса (обязателен для `files`). */
+  /**
+   * Проект-владелец индекса.
+   *
+   * Обязателен для `scope: 'project'` и для источника `files`; для
+   * `scope: 'instance'` с источником `facts` не нужен (индекс общий для инстанса).
+   */
   projectId?: string
+  /** Область видимости индекса (не задан — `project`, как на сервере). */
+  scope?: MemoryIndexScope
 }
 
 /**
@@ -327,7 +352,11 @@ export const memoryApi = {
 
   /** GET /memory/indexes — индексы с фильтрами. */
   async listMemoryIndexes(params: MemoryIndexListParams = {}): Promise<MemoryIndexList> {
-    const query = buildQuery({ projectId: params.projectId, state: params.state })
+    const query = buildQuery({
+      projectId: params.projectId,
+      state: params.state,
+      scope: params.scope,
+    })
     return fetchJSON<MemoryIndexList>(`${BASE_URL}/memory/indexes${query}`)
   },
 

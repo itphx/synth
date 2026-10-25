@@ -322,6 +322,7 @@ export type {
   MemoryFactStatus,
   MemoryFactStatusFilter,
   MemoryIndexState,
+  MemoryIndexScope,
   MemoryIndexSourceKind,
   MemoryFactProvenance,
   MemoryFact,

@@ -97,6 +97,7 @@ const INDEX: MemoryIndex = {
   name: 'Project corpus',
   providerId: 'plugin:memory:rag',
   projectId: 'project-1',
+  scope: 'project',
   source: { kind: 'project', filter: '**/*.ts' },
   state: 'failed',
   generation: 2,
@@ -612,6 +613,88 @@ describe('MemorySettings — операции с индексами', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('MemorySettings — область индекса (scope)', () => {
+  it('по умолчанию область — проект: тело без scope, проект обязателен', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-index-create-toggle')
+
+    expect(byTestId(container, 'memory-index-create-scope')?.textContent).toContain('Project')
+    await clickTestId(container, 'memory-index-create-submit')
+
+    expect(mocks.createMemoryIndex).not.toHaveBeenCalled()
+    expect(byTestId(container, 'memory-index-create-form')?.textContent).toContain(
+      'Select the project for the index.',
+    )
+  })
+
+  it('область «инстанс» с источником «facts»: проект не нужен, тело без projectId', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-index-create-toggle')
+    await selectOption(container, 'memory-index-create-scope', 'Instance')
+    await selectOption(container, 'memory-index-create-source', 'facts')
+
+    // Проект для facts не требуется — поле скрыто.
+    expect(byTestId(container, 'memory-index-create-project')).toBeNull()
+
+    await clickTestId(container, 'memory-index-create-submit')
+
+    expect(mocks.createMemoryIndex).toHaveBeenCalledWith({
+      name: 'project',
+      source: { kind: 'facts' },
+      scope: 'instance',
+    })
+  })
+
+  it('область «инстанс» с источником «files» без проекта: ошибка, запрос не уходит', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-index-create-toggle')
+    await selectOption(container, 'memory-index-create-scope', 'Instance')
+
+    // Предупреждение о раскрытии workspace — текст, создание не блокирует.
+    expect(byTestId(container, 'memory-index-create-instance-warning')?.textContent).toContain(
+      'workspace contents',
+    )
+
+    await clickTestId(container, 'memory-index-create-submit')
+
+    expect(mocks.createMemoryIndex).not.toHaveBeenCalled()
+    expect(byTestId(container, 'memory-index-create-form')?.textContent).toContain(
+      'Select the project for the index.',
+    )
+  })
+
+  it('область «инстанс» с источником «files» и проектом: тело содержит scope и projectId', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'memory-index-create-toggle')
+    await selectOption(container, 'memory-index-create-scope', 'Instance')
+    await selectOption(container, 'memory-index-create-project', 'Project One')
+
+    await clickTestId(container, 'memory-index-create-submit')
+
+    expect(mocks.createMemoryIndex).toHaveBeenCalledWith({
+      name: 'project',
+      source: { kind: 'files' },
+      projectId: 'project-1',
+      scope: 'instance',
+    })
+  })
+
+  it('в списке индекс области «инстанс» помечен бейджем, индекс проекта — без бейджа', async () => {
+    mocks.listMemoryIndexes.mockResolvedValue({
+      items: [INDEX, { ...INDEX, id: 'index-2', name: 'Instance corpus', scope: 'instance' }],
+      total: 2,
+    })
+    const container = await renderSettings()
+
+    expect(byTestId(container, 'memory-index-scope-index-1')).toBeNull()
+    expect(byTestId(container, 'memory-index-scope-index-2')?.textContent).toBe('Instance')
   })
 })
 

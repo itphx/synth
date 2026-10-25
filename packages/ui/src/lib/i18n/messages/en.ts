@@ -3090,6 +3090,16 @@ export const dict = {
   'settings.memory.indexes.form.name': 'Name',
   'settings.memory.indexes.form.namePlaceholder': 'Index name',
   'settings.memory.indexes.form.nameRequired': 'Enter the index name.',
+  'settings.memory.indexes.form.scope': 'Scope',
+  'settings.memory.indexes.form.scope.project': 'Project',
+  'settings.memory.indexes.form.scope.instance': 'Instance',
+  'settings.memory.indexes.form.scope.instanceHint':
+    'Shared by the whole instance: available to all users and all sessions.',
+  'settings.memory.indexes.form.scope.instanceFilesHint':
+    'Files are taken from the working directory of this project.',
+  'settings.memory.indexes.form.scope.instanceFilesWarning':
+    'The workspace contents of the project will become available to all users of the instance.',
+  'settings.memory.indexes.form.scope.sourceProject': 'Source project (workspace)',
   'settings.memory.indexes.form.source': 'Source',
   'settings.memory.indexes.form.source.files': 'files',
   'settings.memory.indexes.form.source.facts': 'facts',
@@ -3106,6 +3116,7 @@ export const dict = {
   'settings.memory.indexes.rebuilt': 'Rebuild of index "{name}" started',
   'settings.memory.indexes.deleted': 'Index "{name}" deleted',
   'settings.memory.indexes.providerUnavailable': 'The memory plugin is not activated.',
+  'settings.memory.indexes.scopeBadge.instance': 'Instance',
   'settings.memory.indexes.column.actions': 'Actions',
 
   // --- Консолидация фактов (PROP-047) ---

@@ -91,6 +91,14 @@ describe('memoryApi — портал памяти (ADR-107)', () => {
     expect(urlOf(1)).toBe('/api/v2/memory/indexes?projectId=project-1&state=failed')
   })
 
+  it('listMemoryIndexes: фильтр по области уходит в query-строку', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ items: [], total: 0 }))
+
+    await synthApi.listMemoryIndexes({ scope: 'instance' })
+
+    expect(urlOf(0)).toBe('/api/v2/memory/indexes?scope=instance')
+  })
+
   it('404 по факту: ошибка несёт status и code для UI', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({ error: { code: 'MEMORY_FACT_NOT_FOUND', message: 'fact not found' } }, 404),
@@ -124,6 +132,23 @@ describe('memoryApi — операции с индексами', () => {
       name: 'project',
       source: { kind: 'files' },
       projectId: 'project-1',
+    })
+  })
+
+  it('createMemoryIndex: область видимости уходит в тело', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ index }, 202))
+
+    await synthApi.createMemoryIndex({
+      name: 'shared',
+      source: { kind: 'facts' },
+      scope: 'instance',
+    })
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(JSON.parse(String(init.body))).toEqual({
+      name: 'shared',
+      source: { kind: 'facts' },
+      scope: 'instance',
     })
   })
 

@@ -38,6 +38,7 @@ import {
   type MemoryGraphNode,
   type MemoryIndex,
   type MemoryIndexList,
+  type MemoryIndexScope,
   type MemoryIndexSourceKind,
   type MemoryIndexState,
   type MemoryReadiness,
@@ -111,6 +112,9 @@ const PAGE_LIMIT = 50
 
 /** Виды источника корпуса, которые UI умеет создавать. */
 const INDEX_SOURCE_KINDS: MemoryIndexSourceKind[] = ['files', 'facts']
+
+/** Области видимости индекса: проект (по умолчанию) или общий для инстанса. */
+const INDEX_SCOPES: MemoryIndexScope[] = ['project', 'instance']
 
 /** Имя индекса по умолчанию в форме создания. */
 const INDEX_DEFAULT_NAME = 'project'
@@ -263,6 +267,7 @@ export function MemorySettings() {
   // Форма создания индекса (инлайн-форма в блоке «Индексы»).
   const [formOpen, setFormOpen] = useState(false)
   const [nameInput, setNameInput] = useState(INDEX_DEFAULT_NAME)
+  const [scope, setScope] = useState<MemoryIndexScope>('project')
   const [sourceKind, setSourceKind] = useState<MemoryIndexSourceKind>('files')
   const [filterInput, setFilterInput] = useState('')
   const [projectInput, setProjectInput] = useState('')
@@ -443,6 +448,7 @@ export function MemorySettings() {
   /** Сброс формы создания индекса. */
   const resetForm = useCallback(() => {
     setNameInput(INDEX_DEFAULT_NAME)
+    setScope('project')
     setSourceKind('files')
     setFilterInput('')
     setProjectInput('')
@@ -479,6 +485,31 @@ export function MemorySettings() {
     [loadIndexes, t],
   )
 
+  /**
+   * Нужен ли проект для текущей комбинации «область + источник».
+   *
+   * `scope: 'project'` — индекс принадлежит проекту (проект обязателен);
+   * `scope: 'instance'` — индекс общий для инстанса, проект обязателен только
+   * для источника `files` (откуда берутся файлы), для `facts` — не нужен.
+   *
+   * Флаг решает сразу три вещи: обязательность поля, его видимость в форме и
+   * отправку `projectId` в теле.
+   */
+  const projectRequired = scope === 'project' || sourceKind === 'files'
+
+  /**
+   * Подпись поля проекта: в области инстанса это проект-источник (его
+   * workspace индексируется), в области проекта — сам проект-владелец.
+   */
+  const projectLabel =
+    scope === 'instance'
+      ? t('settings.memory.indexes.form.scope.sourceProject')
+      : t('settings.memory.indexes.form.project')
+
+  /** Подсказка поля проекта в области инстанса: файлы берутся из его workspace. */
+  const projectDescription =
+    scope === 'instance' ? t('settings.memory.indexes.form.scope.instanceFilesHint') : undefined
+
   /** Создание индекса: валидация формы → мутация → перезапрос статуса и списка. */
   const handleCreateIndex = useCallback(async () => {
     const name = nameInput.trim()
@@ -486,9 +517,12 @@ export function MemorySettings() {
     const projectId = projectInput
     const errors: { name?: string; project?: string } = {}
     if (!name) errors.name = t('settings.memory.indexes.form.nameRequired')
-    // Проект обязателен для любого источника: индекс привязан к проекту
+    // Проект обязателен для индекса проекта и для источника `files`
     // (сервер отвечает 400 `MEMORY_PROJECT_REQUIRED` без `projectId`).
-    if (!projectId) errors.project = t('settings.memory.indexes.form.projectRequired')
+    // Для индекса инстанса с источником `facts` проект не нужен.
+    if (projectRequired && !projectId) {
+      errors.project = t('settings.memory.indexes.form.projectRequired')
+    }
     setFormErrors(errors)
     if (errors.name || errors.project) return
 
@@ -499,7 +533,9 @@ export function MemorySettings() {
       await synthApi.createMemoryIndex({
         name,
         source: { kind, ...(filter ? { filter } : {}) },
-        ...(projectId ? { projectId } : {}),
+        ...(projectRequired && projectId ? { projectId } : {}),
+        // Область «проект» — дефолт сервера, в тело не пишем.
+        ...(scope === 'instance' ? { scope } : {}),
       })
       await Promise.all([loadStatus(), loadIndexes()])
       notify({
@@ -522,7 +558,9 @@ export function MemorySettings() {
     nameInput,
     notify,
     projectInput,
+    projectRequired,
     resetForm,
+    scope,
     sourceKind,
     t,
   ])
@@ -1769,6 +1807,30 @@ export function MemorySettings() {
                 data-testid="memory-index-create-name"
               />
               <SelectField
+                label={t('settings.memory.indexes.form.scope')}
+                description={
+                  scope === 'instance'
+                    ? t('settings.memory.indexes.form.scope.instanceHint')
+                    : undefined
+                }
+                value={scope}
+                onValueChange={(value) => setScope(value as MemoryIndexScope)}
+                ariaLabel={t('settings.memory.indexes.form.scope')}
+                triggerTestId="memory-index-create-scope"
+                items={INDEX_SCOPES.map((value) => ({
+                  value,
+                  label: t(`settings.memory.indexes.form.scope.${value}`),
+                }))}
+              >
+                <SelectContent>
+                  {INDEX_SCOPES.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {t(`settings.memory.indexes.form.scope.${value}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </SelectField>
+              <SelectField
                 label={t('settings.memory.indexes.form.source')}
                 value={sourceKind}
                 onValueChange={(value) => setSourceKind(value as MemoryIndexSourceKind)}
@@ -1794,33 +1856,48 @@ export function MemorySettings() {
                 onChange={(event) => setFilterInput(event.target.value)}
                 data-testid="memory-index-create-filter"
               />
-              <SelectField
-                label={t('settings.memory.indexes.form.project')}
-                value={projectInput || PROJECT_NONE}
-                onValueChange={(value) => setProjectInput(value === PROJECT_NONE ? '' : value)}
-                ariaLabel={t('settings.memory.indexes.form.project')}
-                triggerTestId="memory-index-create-project"
-                error={formErrors.project}
-                items={[
-                  {
-                    value: PROJECT_NONE,
-                    label: t('settings.memory.indexes.form.projectNone'),
-                  },
-                  ...projectItems,
-                ]}
-              >
-                <SelectContent>
-                  <SelectItem value={PROJECT_NONE}>
-                    {t('settings.memory.indexes.form.projectNone')}
-                  </SelectItem>
-                  {projectItems.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      {item.label}
+              {/* Проект не нужен для индекса инстанса с источником `facts`. */}
+              {projectRequired && (
+                <SelectField
+                  label={projectLabel}
+                  description={projectDescription}
+                  value={projectInput || PROJECT_NONE}
+                  onValueChange={(value) => setProjectInput(value === PROJECT_NONE ? '' : value)}
+                  ariaLabel={projectLabel}
+                  triggerTestId="memory-index-create-project"
+                  error={formErrors.project}
+                  items={[
+                    {
+                      value: PROJECT_NONE,
+                      label: t('settings.memory.indexes.form.projectNone'),
+                    },
+                    ...projectItems,
+                  ]}
+                >
+                  <SelectContent>
+                    <SelectItem value={PROJECT_NONE}>
+                      {t('settings.memory.indexes.form.projectNone')}
                     </SelectItem>
-                  ))}
-                </SelectContent>
-              </SelectField>
+                    {projectItems.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </SelectField>
+              )}
             </div>
+
+            {/* Предупреждение (не блокирует): общий индекс инстанса раскрывает
+                содержимое workspace проекта всем пользователям инстанса. */}
+            {scope === 'instance' && sourceKind === 'files' && (
+              <p
+                data-testid="memory-index-create-instance-warning"
+                className="text-xs text-status-warning break-words"
+              >
+                {t('settings.memory.indexes.form.scope.instanceFilesWarning')}
+              </p>
+            )}
 
             <div className="flex flex-wrap items-center gap-2 min-w-0">
               <Button
@@ -1896,7 +1973,18 @@ export function MemorySettings() {
                     data-testid={`memory-index-${index.id}`}
                   >
                     <td className="py-1 pr-2 break-words">
-                      <span className="block text-foreground">{index.name}</span>
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-foreground">{index.name}</span>
+                        {/* Область индекса: «инстанс» — общий для всех пользователей. */}
+                        {index.scope === 'instance' && (
+                          <span
+                            data-testid={`memory-index-scope-${index.id}`}
+                            className={cn(BADGE, 'bg-primary/15 text-primary')}
+                          >
+                            {t('settings.memory.indexes.scopeBadge.instance')}
+                          </span>
+                        )}
+                      </span>
                       <span className="block text-muted-foreground break-words">
                         {index.source.kind}
                         {index.source.filter ? ` · ${index.source.filter}` : ''}
