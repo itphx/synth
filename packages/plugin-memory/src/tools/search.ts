@@ -14,6 +14,11 @@
  * строки/поколение, score) — модель видит, откуда взялось утверждение.
  *
  * Индексов нет → поведение М1 (поиск только по фактам).
+ *
+ * Каждый выполненный поиск сообщается хосту телеметрией (`kind: 'search'`):
+ * исход (`hit`/`empty`/`error`), число строк выдачи и длительность (ADR-107).
+ * Некорректные аргументы отсекаются до поиска — такой вызов телеметрии не
+ * даёт (запрос не выполнялся).
  */
 import type { PluginToolDefinition } from '@itphx/synth-core';
 import type { z } from 'zod';
@@ -26,6 +31,7 @@ import {
 } from '../provider.js';
 import { enumOf, number, object, optional, string } from '../schema.js';
 import { keywordScore } from '../scoring.js';
+import { elapsedMs, startTimer } from '../telemetry.js';
 
 /** Локальное имя тула (в реестре — с namespace'ом, его составляет хост). */
 export const MEMORY_SEARCH_TOOL_NAME = 'memory_search';
@@ -119,6 +125,7 @@ export function createMemorySearchTool(provider: MemoryProviderLite): PluginTool
         };
       }
       const { query, limit = DEFAULT_LIMIT, kind, status = 'active' } = parsed.data;
+      const startedAt = startTimer();
 
       try {
         const facts = await provider.listFacts({
@@ -152,6 +159,12 @@ export function createMemorySearchTool(provider: MemoryProviderLite): PluginTool
         const chunkItems = mergeChunkItems(collected);
 
         if (factEntries.length === 0 && chunkItems.length === 0) {
+          provider.recordRecall({
+            kind: 'search',
+            outcome: 'empty',
+            hits: 0,
+            durationMs: elapsedMs(startedAt),
+          });
           return { content: 'Ничего не найдено.' };
         }
 
@@ -195,8 +208,21 @@ export function createMemorySearchTool(provider: MemoryProviderLite): PluginTool
           });
         }
 
+        // Хиты телеметрии — строки выдачи (после среза `limit`, до склейки).
+        provider.recordRecall({
+          kind: 'search',
+          outcome: lines.length > 0 ? 'hit' : 'empty',
+          hits: lines.length,
+          durationMs: elapsedMs(startedAt),
+        });
         return { content: lines.join('\n'), metadata: { results: evidence } };
       } catch (err) {
+        provider.recordRecall({
+          kind: 'search',
+          outcome: 'error',
+          hits: 0,
+          durationMs: elapsedMs(startedAt),
+        });
         if (err instanceof MemoryUnavailableError) {
           return { content: err.message, isError: true };
         }

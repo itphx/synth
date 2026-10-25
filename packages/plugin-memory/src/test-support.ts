@@ -14,6 +14,8 @@ import type {
 import { createMemoryStorage, createScopedMemory } from '@itphx/synth-core';
 import type { PromptBlockProvider } from '@itphx/synth-shared';
 
+import type { MemoryTelemetryInput } from './telemetry.js';
+
 /** Имя плагина в тестах (совпадает с именем манифеста `synth.pack`). */
 export const TEST_PLUGIN_NAME = 'synth-plugin-memory';
 
@@ -48,6 +50,13 @@ export interface TestFacadeOptions {
   embedDimension?: number;
   /** Фактическая модель хоста (для фингерпринта индекса). */
   embedding?: { provider?: string; model?: string };
+  /**
+   * Телеметрия recall/search (ADR-107) — вызывается провайдером плагина.
+   *
+   * Не задана — фасад без телеметрии (как у хоста с выключенными метриками):
+   * плагин обязан это переживать (фича-детект).
+   */
+  memoryTelemetry?: (input: MemoryTelemetryInput) => void;
 }
 
 /**
@@ -144,6 +153,7 @@ export function createTestFacade(options: TestFacadeOptions = {}): TestFacade {
     getSettings: <T extends Record<string, unknown> = Record<string, unknown>>(): Readonly<T> =>
       (options.settings ?? {}) as Readonly<T>,
     ...(options.embedding ? { embedding: options.embedding } : {}),
+    ...(options.memoryTelemetry ? { memoryTelemetry: options.memoryTelemetry } : {}),
   };
 
   return { facade, promptBlocks, tools, disposers };

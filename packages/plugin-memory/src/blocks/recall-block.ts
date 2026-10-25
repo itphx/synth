@@ -11,6 +11,12 @@
  * Блок появляется **только** при непустом `ctx.query`: у шага пайплайна и
  * саб-агента вопроса хода нет, вспоминать нечего (docs/MEMORY.md §7).
  *
+ * Каждая **реальная** попытка вспоминания (сервис памяти доступен, вопрос
+ * непустой) сообщается хосту телеметрией (`kind: 'recall'`): исход
+ * (`hit`/`empty`/`error`), число найденных фрагментов и длительность
+ * (ADR-107). Сервис памяти недоступен — блок не грузится, запроса не было,
+ * телеметрии нет.
+ *
  * Детерминированность обязательна (ADR-070, граница prompt-cache): один и тот
  * же вход → один и тот же текст блока.
  */
@@ -18,6 +24,7 @@ import type { PromptBlockProvider } from '@itphx/synth-shared';
 
 import { mergeChunkItems, type SearchItem } from '../engine/search.js';
 import { formatFactLine, type MemoryProviderLite } from '../provider.js';
+import { elapsedMs, startTimer } from '../telemetry.js';
 
 /** Ключ блока (совпадает с `provides.promptBlocks[]` манифеста). */
 export const RECALL_BLOCK_KEY = 'plugin.synth-plugin-memory.recall';
@@ -66,43 +73,76 @@ export function createRecallBlock(provider: MemoryProviderLite): PromptBlockProv
     order: 110,
     title: RECALL_BLOCK_TITLE,
     async load(ctx) {
+      // Сервис памяти недоступен (`facade.memory === undefined`) — блок не
+      // грузится: вспоминать нечего, телеметрии нет (запроса не было).
       if (!provider.available) return null;
       const query = ctx.query?.trim();
       if (!query) return null;
-      const scope = ctx.projectId ? { projectId: ctx.projectId } : {};
-      const candidates = await provider.candidates(scope);
-      const inFacts = new Set(provider.selectFacts(candidates).map((fact) => fact.id));
-      const { recallLimit } = provider.settings();
+      const startedAt = startTimer();
+      let hits = 0;
+      let content: string | null = null;
+      try {
+        const scope = ctx.projectId ? { projectId: ctx.projectId } : {};
+        const candidates = await provider.candidates(scope);
+        const inFacts = new Set(provider.selectFacts(candidates).map((fact) => fact.id));
+        const { recallLimit } = provider.settings();
 
-      // Пригодные индексы (проектные + инстансные) — гибридный recall.
-      const indexes = await provider.usableIndexes(ctx.projectId);
-      if (indexes.length > 0) {
-        const collected: SearchItem[] = [];
-        let stale = false;
-        for (const index of indexes) {
-          if (index.state === 'stale') stale = true;
-          const found = await provider.searchIndex(index.index.id, query, {
-            topK: recallLimit,
-          });
-          collected.push(...found.items);
+        // Пригодные индексы (проектные + инстансные) — гибридный recall.
+        const indexes = await provider.usableIndexes(ctx.projectId);
+        if (indexes.length > 0) {
+          const collected: SearchItem[] = [];
+          let stale = false;
+          for (const index of indexes) {
+            if (index.state === 'stale') stale = true;
+            const found = await provider.searchIndex(index.index.id, query, {
+              topK: recallLimit,
+            });
+            collected.push(...found.items);
+          }
+          const merged = mergeChunkItems(collected);
+          const lines = merged
+            .slice(0, recallLimit)
+            .filter((item) => !isFactInFacts(item, inFacts))
+            .map((item) => formatRecallItem(item));
+          // Хиты телеметрии — строки-фрагменты выдачи (после дедупа и среза,
+          // без заголовков блока).
+          hits = lines.length;
+          // Пометка устаревания — если **хотя бы один** использованный индекс
+          // `stale` (детерминированно: индексы перебираются в отсортированном
+          // порядке).
+          const notice = stale ? [RECALL_STALE_NOTICE] : [];
+          if (lines.length > 0) {
+            content = [RECALL_BLOCK_HEADER, ...notice, ...lines].join('\n');
+          } else if (notice.length > 0) {
+            content = [RECALL_BLOCK_HEADER, ...notice].join('\n');
+          }
         }
-        const merged = mergeChunkItems(collected);
-        const lines = merged
-          .slice(0, recallLimit)
-          .filter((item) => !isFactInFacts(item, inFacts))
-          .map((item) => formatRecallItem(item));
-        // Пометка устаревания — если **хотя бы один** использованный индекс
-        // `stale` (детерминированно: индексы перебираются в отсортированном
-        // порядке).
-        const notice = stale ? [RECALL_STALE_NOTICE] : [];
-        if (lines.length > 0) return [RECALL_BLOCK_HEADER, ...notice, ...lines].join('\n');
-        if (notice.length > 0) return [RECALL_BLOCK_HEADER, ...notice].join('\n');
-      }
 
-      // Индексов нет — keyword-recall по фактам (поведение М1).
-      const hits = await provider.recall(candidates, query, inFacts);
-      if (hits.length === 0) return null;
-      return [RECALL_BLOCK_HEADER, ...hits.map(formatFactLine)].join('\n');
+        // Индексов нет (или выдача по ним пуста) — keyword-recall по фактам
+        // (поведение М1). Хиты телеметрии — строки фактов.
+        if (content === null) {
+          const factHits = await provider.recall(candidates, query, inFacts);
+          hits = factHits.length;
+          if (factHits.length > 0) {
+            content = [RECALL_BLOCK_HEADER, ...factHits.map(formatFactLine)].join('\n');
+          }
+        }
+      } catch (err) {
+        provider.recordRecall({
+          kind: 'recall',
+          outcome: 'error',
+          hits: 0,
+          durationMs: elapsedMs(startedAt),
+        });
+        throw err;
+      }
+      provider.recordRecall({
+        kind: 'recall',
+        outcome: hits > 0 ? 'hit' : 'empty',
+        hits,
+        durationMs: elapsedMs(startedAt),
+      });
+      return content;
     },
   };
 }

@@ -48,6 +48,7 @@ import {
 } from './settings.js';
 import { enumOf } from './schema.js';
 import { keywordScore } from './scoring.js';
+import type { MemoryTelemetryInput } from './telemetry.js';
 
 /** Порт фактов памяти — тот же тип, что у фасада (`facade.memory.facts`). */
 export type FactsRepository = NonNullable<PluginFacade['memory']>['facts'];
@@ -244,6 +245,26 @@ export class MemoryProviderLite {
   /** Настройки плагина — нормализованные (вне диапазона → дефолт). */
   settings(): MemoryPluginSettings {
     return resolveMemorySettings(this._facade.getSettings());
+  }
+
+  // ── Телеметрия (ADR-107) ──────────────────────────────────────────────
+  //
+  // Плагин **только сообщает**: метрики (`synth_memory_recall_*`) ведёт хост
+  // (ADR-094). Содержимое выдачи памяти наружу не уходит — только счётчики.
+
+  /**
+   * Сообщить хосту телеметрию recall/search-запроса (ADR-107).
+   *
+   * Телеметрия недоступна (старый хост, метрики выключены) — тихо
+   * пропускаем: это фича-детект, а не ошибка. Ошибка телеметрии **не**
+   * ломает ход (наблюдательность — не критичный путь).
+   */
+  recordRecall(input: MemoryTelemetryInput): void {
+    try {
+      this._facade.memoryTelemetry?.(input);
+    } catch {
+      // Сбой телеметрии не влияет на работу плагина.
+    }
   }
 
   /** Менеджер индексов памяти (движок М2). */

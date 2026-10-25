@@ -79,6 +79,11 @@ export {
 } from './provider.js';
 export { keywordScore, tokenize } from './scoring.js';
 export {
+  elapsedMs,
+  startTimer,
+  type MemoryTelemetryInput,
+} from './telemetry.js';
+export {
   DEFAULT_CONSOLIDATE_THRESHOLD,
   MAX_CONSOLIDATE_THRESHOLD,
   MIN_CONSOLIDATE_THRESHOLD,
