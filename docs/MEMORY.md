@@ -487,7 +487,9 @@ Input Guard (обфускация чата) работает только в cha
 | **Портал** | читает факты/индексы | нет | админ в UI видит факты как есть |
 | **Бэкап** | file-backend включает `memory/` и `sessions/` | нет | архив (`synth backup --encrypt` — шифрование архива) |
 
-**Что исключается из корпуса всегда** (`engine/corpus.ts`, без opt-out):
+**Что исключается из корпуса всегда** (политика ядра `engine/security/secret-files.ts`, без
+opt-out; плагин получает предикаты через `facade.security` — в его бандле имён секретных файлов
+нет, иначе сканер расширений блокирует его как эксфильтрацию):
 
 - каталоги: `.ssh`, `.gnupg`, `.aws`, `.kube`, `.docker`, `.terraform`, `.gcloud`, `secrets`
   (плюс служебные `node_modules`, `.git`, `dist`, `build`, `.next`, `coverage`, `tmp`);
