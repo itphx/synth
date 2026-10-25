@@ -1142,3 +1142,13 @@
 - **ACL портала памяти:** `authorizeProject(read|write)` на 8 роутах, fail-closed, 403 `FORBIDDEN`; managed — `canReadProject`/`canEditProjectContent` (VIEWER читает, не мутирует).
 - **Приёмка:** build OK · typecheck 9/9 · lint 0 errors · **9807 тестов** (shared 804 · core 6116 · executor 24 · ui 1881 · backend 688 · sdk 96 · plugin-memory 147 · storage-postgres 51) · `adr-check` 98/0 · `docs-link-check` 912/0.
 - **Остаток:** динамический вход прогона (шаблон памяти по расписанию требует фиксированный `sessionId`); AGENTS.md не обновлялся (по договорённости — только по согласованию).
+
+## 2026-10-25 — инстансный (общий) индекс памяти
+
+- **Модель:** `MemoryIndexRecord.scope: 'project'|'instance'`; `projectId` у instance — **источник корпуса** (files), не владелец; для facts отсутствует. Легаси без поля → `project`. PG-миграция `018-memory-index-scope`.
+- **Плагин:** instance-индекс по facts собирает **все** активные факты инстанса (потолок 1000); recall/`memory_search` сливают выдачу проектного и инстансных индексов (дедуп `indexId:chunkId`, score desc, детерминизм), `stale`-пометка при любом устаревшем; мутации instance — только portal-session (`system:memory-portal:`).
+- **Портал:** `scope` в create/list; instance+facts — без проекта и без проектного ACL; instance+files — projectId обязателен (workspace-источник); rebuild/delete instance — без ACL. Managed: портал уже под ADMIN.
+- **CLI:** `synth memory index --scope`, `list --scope`, колонка SCOPE.
+- **UI:** выбор области, «Проект-источник (workspace)» для instance+files + предупреждение о раскрытии, бейдж «Инстанс».
+- **Приёмка:** build OK · typecheck 9/9 · lint 0 errors · **9872 теста** (shared 804 · core 6155 · executor 24 · ui 1888 · backend 688 · sdk 96 · plugin-memory 166 · storage-postgres 51) · контракт PG на живой БД 188/188 · `adr-check` 98/0 · `docs-link-check` 913/0.
+- **Замечания:** инстансный индекс по `files` осознанно раскрывает содержимое workspace всем пользователям (ADMIN-действие, предупреждение в UI); AGENTS.md не обновлялся (по договорённости).
