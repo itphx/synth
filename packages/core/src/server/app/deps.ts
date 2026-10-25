@@ -28,6 +28,9 @@ import {
   // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю + retention.
   QuestionService,
   startQuestionPruner,
+  // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
+  BackgroundRunService,
+  startBackgroundRunPruner,
   AnalyticsRecorder,
   attachAnalyticsActivityHooks,
   startAnalyticsRollupPruner,
@@ -88,6 +91,7 @@ import {
   type StorageContext,
 } from '../../index.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
+import { serializeMessage, serializeSession } from '../serialize.js';
 import { createExecutionPortForConfig } from '../../execution/factory.js';
 import { attachExecutorMcpSource } from '../../engine/mcp/executor-mcp-source.js';
 import {
@@ -444,6 +448,56 @@ export async function createStandaloneDeps(
     ? () => {}
     : startQuestionPruner(storageContext.questions, {
         getRetentionDays: () => config.questionsConfig?.retentionDays ?? 14,
+      });
+
+  // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
+  //
+  // Один инстанс на процесс: его получают тул `task` (фоновый запуск
+  // саб-агента) и HTTP-точки обслуживания реестра. Порт записи — из контекста
+  // хранения (ADR-096); лимиты — из конфигурации `background.*`.
+  const backgroundService = storageDegraded
+    ? undefined
+    : new BackgroundRunService({
+        repository: storageContext.backgroundRuns,
+        eventBus,
+        limits: {
+          maxSubagentsPerSession: config.backgroundConfig?.maxSubagentsPerSession ?? 2,
+          maxRunsPerSession: config.backgroundConfig?.maxRunsPerSession ?? 10,
+        },
+        // Уведомление родителя о завершении фонового саб-агента: сообщение в
+        // историю родителя (роль USER — видно модели) + постановка в очередь
+        // (автоход). Точка сборки — здесь; глобальных синглтонов нет.
+        onNotifyParent: async (sessionId, message) => {
+          const updated = await sessionManager.addMessage(sessionId, message);
+          if (updated) {
+            const idx = updated.messages.length - 1;
+            eventBus.publish(sessionId, 'message.added', {
+              message: serializeMessage(updated.messages[idx]!, idx),
+              index: idx,
+            });
+            eventBus.publish(sessionId, 'session.updated', serializeSession(updated));
+          }
+          await enqueueUserMessage(
+            sessionManager, eventBus, sessionId, message, queueManager, processMessage,
+          );
+        },
+      });
+  // Старт: прогоны прошлого процесса не пережили рестарт (хэндлы отмены — в
+  // памяти) — помечаем их `orphaned`. Best-effort: ошибка не роняет старт.
+  if (backgroundService) {
+    try {
+      await backgroundService.recoverOnStart();
+    } catch (err) {
+      console.warn(
+        `[background] восстановление фоновых прогонов не удалось: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  // Retention-очистка терминальных записей реестра (сразу + каждые 6 ч).
+  const stopBackgroundRunPruner = storageDegraded
+    ? () => {}
+    : startBackgroundRunPruner(storageContext.backgroundRuns, {
+        getRetentionDays: () => config.backgroundConfig?.retentionDays ?? 7,
       });
 
   // ADR-094: доменные коллекторы. `metrics` приходит только при
@@ -834,6 +888,11 @@ export async function createStandaloneDeps(
     // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» — тул
     // `question` задаёт вопрос и ждёт ответа пользователя.
     ...(questionService ? { questionService } : {}),
+    // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов — тул
+    // `task` с `background: true` регистрирует фонового саб-агента и
+    // возвращает управление сразу (PROP-096).
+    ...(backgroundService ? { backgroundService } : {}),
+    backgroundEnabled: config.backgroundConfig?.enabled ?? true,
     // ADR-101/ADR-051: late-bound рантайм автоматизации для встроенных тулов
     // (`pipeline_*`/`schedule_*`) — движок пайплайнов и шедулер создаются ниже,
     // поэтому геттер отдаёт актуальный снимок в момент хода.
@@ -1353,6 +1412,9 @@ export async function createStandaloneDeps(
     // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю (+ pruner).
     questionService,
     stopQuestionPruner,
+    // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов (+ pruner).
+    backgroundService,
+    stopBackgroundRunPruner,
     webhooksConfig,
     // Egress: живой резолвер политики + журналы безопасности.
     egressResolver,

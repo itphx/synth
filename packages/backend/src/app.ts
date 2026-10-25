@@ -121,6 +121,11 @@ export interface BackendAppHandle {
    * освобождение ожиданий ответа.
    */
   stopQuestionPruner: () => void;
+  /**
+   * Этап 1 roadmap 0.13 (блок 4): остановка retention-очистки реестра фоновых
+   * прогонов (PROP-096).
+   */
+  stopBackgroundRunPruner: () => void;
   /** ADR-052 (этап II): реестр подписок webhooks (для тестов/диагностики). */
   webhookStore: WebhookRepository;
   /** ADR-052 (этап II): движок исходящих webhooks. */
@@ -450,6 +455,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         deps.stopQuestionPruner();
         deps.questionService?.dispose();
       },
+      // Этап 1 roadmap 0.13 (блок 4): retention-очистка реестра фоновых прогонов.
+      stopBackgroundRunPruner: () => deps.stopBackgroundRunPruner(),
       // ADR-052 (этап II): реестр подписок и движок webhooks + остановка на shutdown.
       webhookStore: deps.webhookStore,
       webhookService: deps.webhookService,

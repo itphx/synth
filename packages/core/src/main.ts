@@ -256,6 +256,8 @@ program
       analyticsConfig: synth.analytics,
       // Этап 1 roadmap 0.13 (блок 3): «вопрос пользователю» (таймаут ответа).
       questionsConfig: synth.questions,
+      // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов (PROP-096).
+      backgroundConfig: synth.background,
       // ADR-094: конфигурация метрик (`metrics.enabled`, env SYNTH_METRICS_ENABLED).
       metricsConfig: synth.metrics,
       // ADR-106 Ф1: Authority-слой (по умолчанию выключен).
@@ -348,6 +350,10 @@ program
       // Этап 1 roadmap 0.13 (блок 3): остановить retention-очистку вопросов и
       // освободить ожидания ответа.
       appHandle.stopQuestionPruner?.();
+
+      // Этап 1 roadmap 0.13 (блок 4): остановить retention-очистку реестра
+      // фоновых прогонов.
+      appHandle.stopBackgroundRunPruner?.();
 
       // ADR-094: снять readiness до остановки коллекторов — скрейп в момент
       // shutdown видит `synth_ready 0`.

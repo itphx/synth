@@ -264,6 +264,31 @@ export type {
   QuestionErrorCode,
   QuestionInvalidAnswerReason,
 } from './engine/question/index.js';
+// Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096 —
+// фоновые саб-агенты, PROP-097 — фоновые шелл-процессы): сервис реестра,
+// retention-очистка и типизированные ошибки. Публично: managed-backend собирает
+// тот же сервис (паритет core↔backend).
+export {
+  BackgroundRunService,
+  startBackgroundRunPruner,
+  buildSubagentNotification,
+  BACKGROUND_RUN_ID_PREFIX,
+  BACKGROUND_TERMINAL_STATUSES,
+  BACKGROUND_ERROR_CODES,
+  BackgroundRunError,
+  BackgroundLimitExceededError,
+} from './engine/background/index.js';
+export type {
+  BackgroundRunServiceOptions,
+  BackgroundRunPrunerOptions,
+  BackgroundErrorCode,
+  BackgroundFinalState,
+  BackgroundFinishPatch,
+  BackgroundLogger,
+  BackgroundRunLimits,
+  BackgroundRunState,
+  BackgroundSubagentInput,
+} from './engine/background/index.js';
 // ADR-090: единая точка исполнения тулов (`safeParse → execute → catch`) и
 // сужение контекста для плагинных тулов. Публичны для managed-backend:
 // портал памяти вызывает админ-тул плагина через реестр тулов (ADR-107, М2).

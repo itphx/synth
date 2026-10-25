@@ -613,6 +613,27 @@ export const questionsConfigSchema = z.object({
   retentionDays: z.number().int().default(14),
 });
 
+// --- Фоновые прогоны (этап 1 roadmap 0.13 — блок 4) ---
+
+/**
+ * Конфигурация единого реестра фоновых прогонов (PROP-096/PROP-097).
+ *
+ * - `enabled` — мастер-выключатель фоновой работы: при `false` тул `task`
+ *   с `background: true` отказывает (`task.background_disabled`);
+ * - `maxSubagentsPerSession` — максимум **одновременно идущих** фоновых
+ *   саб-агентов на одну родительскую сессию;
+ * - `maxRunsPerSession` — максимум записей реестра на одну сессию-владельца
+ *   (защита от роста реестра; записи чистит retention);
+ * - `retentionDays` — срок хранения терминальных записей реестра (дни);
+ *   `<= 0` — без ограничения.
+ */
+export const backgroundConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  maxSubagentsPerSession: z.number().int().min(0).default(2),
+  maxRunsPerSession: z.number().int().min(0).default(10),
+  retentionDays: z.number().int().default(7),
+});
+
 // --- Authority-слой (ADR-106) ---
 
 /**
@@ -1241,6 +1262,7 @@ export const synthConfigSchema = z.object({
   oauth: oauthConfigSchema.default({}),
   analytics: analyticsConfigSchema.default({}),
   questions: questionsConfigSchema.default({}),
+  background: backgroundConfigSchema.default({}),
   metrics: metricsConfigSchema.default({}),
   authority: authorityConfigSchema.default({}),
   plugins: pluginsConfigSchema.default({}),
@@ -1293,6 +1315,8 @@ export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
 export type AnalyticsConfig = z.infer<typeof analyticsConfigSchema>;
 /** Этап 1 roadmap 0.13 (блок 3): секция `questions` (таймаут ответа + retention). */
 export type QuestionsConfig = z.infer<typeof questionsConfigSchema>;
+/** Этап 1 roadmap 0.13 (блок 4): секция `background` (реестр фоновых прогонов). */
+export type BackgroundConfig = z.infer<typeof backgroundConfigSchema>;
 /** ADR-094: секция `metrics` (`enabled`). */
 export type MetricsConfig = z.infer<typeof metricsConfigSchema>;
 /** ADR-106 Ф1: секция `authority` (`enabled`/`shadow`). */

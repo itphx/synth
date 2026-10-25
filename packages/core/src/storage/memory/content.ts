@@ -274,6 +274,10 @@ export class MemoryContextFileRepository implements ContextFileRepository {
     return '';
   }
 
+  getMaxStepsPrompt(): string {
+    return '';
+  }
+
   getSummarizerPrompt(): string {
     return '';
   }

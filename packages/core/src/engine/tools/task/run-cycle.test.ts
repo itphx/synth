@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { MessageRole } from '@itphx/synth-shared';
 import type { ToolContext, ToolDefinition, ToolResult, TokenUsage } from '@itphx/synth-shared';
-import type { BaseProvider, LLMMessage } from '../../../providers/base.js';
+import type { BaseProvider, LLMMessage, SystemPromptInput } from '../../../providers/base.js';
 import type { AgentRegistry } from '../../agents/registry.js';
 import type { ModelRouter } from '../../router/router.js';
 import { FileStore } from '../../../storage/file-store.js';
@@ -29,6 +29,7 @@ import { EventBus } from '../../../events/bus.js';
 import { HookBus } from '../../hooks/hook-bus.js';
 import { ToolRegistry } from '../registry.js';
 import { LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS, MAX_DOOM_LOOP_COUNT } from '../../llm-error.js';
+import { stubContextFiles } from '../../../test-helpers/storage-stubs.js';
 import { runSubagent, SUBAGENT_MAX_ATTEMPTS, SUBAGENT_RETRY_DELAYS_MS, type SubagentRunConfig } from './run-cycle.js';
 import type { TaskExtra } from './types.js';
 
@@ -60,7 +61,11 @@ function toolCallChunk(name: string, args: Record<string, unknown> = {}, id = 'c
 /** Провайдер с пошаговым сценарием: script[i] — чанки i-го вызова (последний повторяется). */
 function scriptedProvider(script: Chunk[][]) {
   let calls = 0;
-  const chatAsync = vi.fn(() => {
+  const chatAsync = vi.fn((
+    _messages: LLMMessage[],
+    _systemPrompt?: SystemPromptInput,
+    _tools?: Record<string, unknown>[],
+  ) => {
     const idx = Math.min(calls, script.length - 1);
     calls += 1;
     return (async function* () {
@@ -68,7 +73,7 @@ function scriptedProvider(script: Chunk[][]) {
     })();
   });
   const provider = { model: 'test-model', name: 'test-provider', chatAsync } as unknown as BaseProvider;
-  return { provider, calls: () => calls };
+  return { provider, calls: () => calls, chatAsync };
 }
 
 /** Провайдер, бросающий ошибку (после опциональной прелюдии чанков). */
@@ -313,9 +318,13 @@ describe('run-cycle — цикл Tool Use', () => {
     expect(toolCalls[0]!.result.content).toContain('ghost_tool');
   });
 
-  it('maxSteps=1: цикл останавливается после первого шага, аппендикс — empty_response', async () => {
-    // Провайдер всегда просит тул; лимит шагов не даёт бесконечного цикла.
-    const { provider } = scriptedProvider([[toolCallChunk('noop')]]);
+  it('maxSteps=1: принудительный финальный шаг-отчёт (без инструментов) + маркер steps_limit', async () => {
+    // Провайдер на первом шаге просит тул (лимит шагов не даёт бесконечного
+    // цикла), на втором — отвечает текстом: это финальный шаг-отчёт.
+    const { provider, calls, chatAsync } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [{ isFinal: true, content: 'ОТЧЁТ: сделано 1 из 3, осталось доделать' }],
+    ]);
     const { registry, counters } = makeRegistry({ noop: () => ({ content: 'ok' }) });
 
     const result = await runSubagent(makeConfig({
@@ -324,8 +333,59 @@ describe('run-cycle — цикл Tool Use', () => {
     }));
 
     expect(counters.noop).toBe(1);
+    // Два вызова LLM: основной шаг + шаг-отчёт.
+    expect(calls()).toBe(2);
+    // Шаг-отчёт — «только текст»: инструменты не передаются.
+    expect(chatAsync.mock.calls[1]![2]).toBeUndefined();
+    expect(result.content).toContain('ОТЧЁТ: сделано 1 из 3');
+    expect(result.content).toContain('[steps_limit]');
+    expect(result.metadata!.step_limit_reached).toBe(true);
     expect(result.metadata!.steps).toBe(1);
-    expect(result.content).toContain('empty subagent response');
+    expect(result.metadata!.final_content).toContain('ОТЧЁТ: сделано 1 из 3');
+  });
+
+  it('шаг-отчёт: требование «только текст» подставляется в системный промпт', async () => {
+    const { provider, chatAsync } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [{ isFinal: true, content: 'отчёт' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    await runSubagent(makeConfig({
+      maxSteps: 1,
+      extra: makeExtra({
+        provider,
+        toolRegistry: registry,
+        contextConfig: stubContextFiles({
+          getMaxStepsPrompt: () => 'ЛИМИТ ШАГОВ ({limit}) — ТОЛЬКО ТЕКСТ',
+        }),
+      }),
+    }));
+
+    const reportSystemPrompt = chatAsync.mock.calls[1]![1] as string;
+    expect(reportSystemPrompt).toContain('ЛИМИТ ШАГОВ (1) — ТОЛЬКО ТЕКСТ');
+    expect(reportSystemPrompt).toContain('SYS');
+  });
+
+  it('maxSteps=1: toolCall на шаге-отчёте не исполняется, цикл не падает', async () => {
+    // Модель проигнорировала требование и снова попросила инструмент —
+    // вызов не исполняется, результат — маркер «шаги исчерпаны».
+    const { provider, calls } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [toolCallChunk('noop')],
+    ]);
+    const { registry, counters } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      maxSteps: 1,
+      extra: makeExtra({ provider, toolRegistry: registry }),
+    }));
+
+    expect(counters.noop).toBe(1);
+    expect(calls()).toBe(2);
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('exhausted the step limit (1)');
+    expect(result.metadata!.step_limit_reached).toBe(true);
   });
 });
 
@@ -607,5 +667,58 @@ describe('run-cycle — отмена', () => {
     // В истории ребёнка — маркер остановки.
     const saved = (await sessionManager.getSession(child.id))!;
     expect(saved.messages.some((m) => m.metadata?.stopped_by === 'user')).toBe(true);
+  });
+
+  it('отмена во время работы: дополнительного шага-отчёта нет', async () => {
+    // Тул отменяет прогон на первом шаге — цикл прерывается, шаг-отчёт по
+    // лимиту шагов не выполняется (лишний вызов LLM не делаем).
+    const ac = new AbortController();
+    const { provider, calls } = scriptedProvider([[toolCallChunk('noop')]]);
+    const { registry, counters } = makeRegistry({
+      noop: () => {
+        ac.abort();
+        return { content: 'ok' };
+      },
+    });
+
+    const result = await runSubagent(makeConfig({
+      maxSteps: 1,
+      extra: makeExtra({ provider, toolRegistry: registry }),
+      ctx: makeCtx({ abortSignal: ac.signal }),
+    }));
+
+    expect(counters.noop).toBe(1);
+    expect(calls()).toBe(1);
+    expect(result.metadata!.stopped_by).toBe('user');
+    expect(result.metadata!.step_limit_reached).toBeUndefined();
+  });
+
+  it('отмена во время шага-отчёта: результат — протокол прерывания', async () => {
+    const ac = new AbortController();
+    let calls = 0;
+    const chatAsync = vi.fn(() => {
+      calls += 1;
+      return (async function* () {
+        if (calls === 1) {
+          yield toolCallChunk('noop');
+          return;
+        }
+        // Шаг-отчёт: отмена приходит во время стрима.
+        ac.abort();
+        yield { isFinal: true, content: 'частичный отчёт' };
+      })();
+    });
+    const provider = { model: 'test-model', name: 'test-provider', chatAsync } as unknown as BaseProvider;
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      maxSteps: 1,
+      extra: makeExtra({ provider, toolRegistry: registry }),
+      ctx: makeCtx({ abortSignal: ac.signal }),
+    }));
+
+    expect(calls).toBe(2);
+    expect(result.metadata!.stopped_by).toBe('user');
+    expect(result.metadata!.interrupted).toBe(true);
   });
 });

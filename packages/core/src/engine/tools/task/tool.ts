@@ -4,16 +4,18 @@
  * ADR-095 (шаг 5): вынесено из `task.ts` без изменения поведения; общий цикл —
  * в `run-cycle.ts`, создание дочерней сессии — в `fork.ts`, промпт — в `prompt.ts`.
  */
-import { MessageRole, nowISO, generateId, makeTextPart, ToolCapability } from '@itphx/synth-shared';
-import type { ToolDefinition, Message, SessionSettings, ToolForLLM } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, generateStreamId, makeTextPart, ToolCapability } from '@itphx/synth-shared';
+import type { ToolDefinition, Message, SessionSettings, ToolForLLM, ToolContext, ToolResult } from '@itphx/synth-shared';
 import { normalizeAgentModes } from '../../agents/normalize.js';
-import type { LLMMessage } from '../../../providers/base.js';
+import type { CancellationToken, LLMMessage } from '../../../providers/base.js';
 import { formatSkillsCatalogBlock } from '../../skills/catalog.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
+import { BackgroundLimitExceededError } from '../../background/types.js';
 import { publishMessageAdded } from './child-session.js';
 import { prepareChildSession, type PreparedChildSession } from './fork.js';
 import { buildSubagentUnavailableToolsSection, messageToLLMMessage, resolveSubagentPrompt } from './prompt.js';
-import { runSubagent } from './run-cycle.js';
+import { runSubagent, type SubagentRunConfig } from './run-cycle.js';
+import { appendResumeMarker, resumeInitialMessages } from './resume-target.js';
 import { taskParametersSchema, type TaskParams } from './args.js';
 import type { ContextMode, TaskExtra } from './types.js';
 
@@ -58,6 +60,14 @@ export const taskTool: ToolDefinition = {
         content: sm('task.subagent_not_allowed', { type: params.subagent_type, modes: String(agentDef.agentMode) }),
         isError: true,
       };
+    }
+
+    // ─── Продолжение существующей дочерней сессии (`task_id`) ───────
+    // Продолжение идёт **синхронно в текущем ходе** (родитель ждёт): новая
+    // дочерняя сессия не создаётся, берётся история указанной (`PROP-096`
+    // §«Продолжение ребёнка»).
+    if (params.task_id) {
+      return await continueChildSession({ params, extra, ctx });
     }
 
     const contextMode: ContextMode = params.context_mode || 'none';
@@ -296,7 +306,7 @@ export const taskTool: ToolDefinition = {
     }
 
     // ─── Запуск цикла саб-агента: общий код для task и resume (ниже) ──
-    return runSubagent({
+    const runConfig: SubagentRunConfig = {
       subagentType: params.subagent_type,
       description: params.description,
       contextMode,
@@ -311,6 +321,279 @@ export const taskTool: ToolDefinition = {
       extra,
       ctx,
       retry: extra.retry,
-    });
+    };
+
+    // ─── Фоновый запуск (PROP-096) ───────────────────────────────────
+    // Родительский ход **не блокируется**: тул возвращает управление сразу,
+    // а по завершении ребёнка приходит уведомление (сообщение в истории
+    // родителя + автоход).
+    if (params.background === true) {
+      return await startBackgroundSubagent({ params, runConfig, extra, ctx });
+    }
+
+    return runSubagent(runConfig);
   },
 };
+
+/**
+ * Продолжение дочерней сессии саб-агента из тула `task` (`task_id`).
+ *
+ * Проверки: сессия существует, она — ребёнок **текущей** сессии, не занята.
+ * Далее — общий цикл саб-агента (`runSubagent`) в текущем ходе родителя:
+ * родитель ждёт результат, ответ приходит обычным `task_result`.
+ */
+async function continueChildSession(opts: {
+  params: TaskParams;
+  extra: TaskExtra;
+  ctx: ToolContext;
+}): Promise<ToolResult> {
+  const { params, extra, ctx } = opts;
+  const sessionManager = extra.sessionManager;
+  if (!sessionManager) {
+    return { content: sm('task.deps_unavailable'), isError: true };
+  }
+
+  const childId = params.task_id!;
+  const child = await sessionManager.getSession(childId);
+  if (!child) {
+    return {
+      content: sm('task.resume_session_not_found', { id: childId }),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.resume_session_not_found', { id: childId }) },
+    };
+  }
+  // Чужой ребёнок продолжить нельзя (только свой).
+  if (child.parentId !== ctx.sessionId) {
+    return {
+      content: sm('task.resume_foreign_child', { id: childId }),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.resume_foreign_child', { id: childId }) },
+    };
+  }
+  // Занятый ребёнок (идёт прогон) — продолжение невозможно.
+  if (child.status.blocked || child.currentStream) {
+    return {
+      content: sm('task.resume_child_busy', { id: childId }),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.resume_child_busy', { id: childId }) },
+    };
+  }
+
+  const agentRole = child.settings.agentRole || '';
+  const agentDef = agentRole ? extra.agentRegistry.get(agentRole) : undefined;
+  if (!agentDef || !normalizeAgentModes(agentDef.agentMode).includes('subagent')) {
+    return {
+      content: sm('task.resume_agent_not_found', { type: agentRole }),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.resume_agent_not_found', { type: agentRole }) },
+    };
+  }
+
+  const streamId = generateStreamId();
+  // Маркер продолжения — в историю ребёнка (общий помощник с HTTP-resume).
+  const freshChild = await appendResumeMarker(sessionManager, extra.eventBus, {
+    child,
+    parentSessionId: ctx.sessionId,
+    streamId,
+  });
+
+  const childExtra: TaskExtra = {
+    ...extra,
+    // Настройки ребёнка — его собственные (permission/настройки/язык).
+    parentSessionSettings: child.settings,
+    permissionConfig: child.settings.permission ?? extra.permissionConfig,
+    streamId,
+  };
+
+  return runSubagent({
+    subagentType: agentRole,
+    description: params.description || child.title || '',
+    contextMode: 'none',
+    maxSteps: agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS,
+    llmSystemPrompt: resolveSubagentPrompt(
+      agentDef,
+      agentRole,
+      child.settings.language,
+      extra.contextConfig?.systemPromptsDir,
+    ),
+    initialMessages: resumeInitialMessages(freshChild),
+    provider: extra.provider,
+    tools: extra.agentRegistry.getToolsForAgent(agentDef.id, extra.mcpServers),
+    childSessionId: child.id,
+    parentSessionId: ctx.sessionId,
+    extra: childExtra,
+    ctx,
+    retry: extra.retry,
+  });
+}
+
+/**
+ * Фоновый запуск саб-агента (PROP-096): тул возвращает управление сразу.
+ *
+ * Порядок: регистрация в реестре фоновых прогонов (лимиты) → блокировка
+ * дочерней сессии (`acquireLock` + `currentStream`) → cancel-токен в
+ * оркестраторе → detached-прогон → немедленный возврат `tool_result`.
+ *
+ * Фоновый ребёнок **независим** от родителя: свой `AbortController` (сигнал
+ * родителя его не касается) и свой `streamId`. Отмена — только
+ * `POST /sessions/<child>/abort`.
+ */
+async function startBackgroundSubagent(opts: {
+  params: TaskParams;
+  runConfig: SubagentRunConfig;
+  extra: TaskExtra;
+  ctx: ToolContext;
+}): Promise<ToolResult> {
+  const { params, runConfig, extra, ctx } = opts;
+  const service = extra.backgroundService;
+  if (!service || extra.backgroundEnabled === false) {
+    return {
+      content: sm('task.background_disabled'),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.background_disabled') },
+    };
+  }
+
+  const parentSessionId = extra.sessionId;
+  const childSessionId = runConfig.childSessionId;
+  const sessionManager = extra.sessionManager;
+  if (!parentSessionId || !childSessionId || !sessionManager) {
+    // Без дочерней сессии фоновый прогон неотличим от обычного — отказ.
+    return {
+      content: sm('task.deps_unavailable'),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.deps_unavailable') },
+    };
+  }
+
+  // 1. Регистрация в реестре фоновых прогонов (лимиты — здесь).
+  let record;
+  try {
+    record = await service.startSubagent({
+      sessionId: parentSessionId,
+      childSessionId,
+      agentRole: params.subagent_type,
+      description: params.description,
+    });
+  } catch (err) {
+    if (err instanceof BackgroundLimitExceededError) {
+      return {
+        content: sm('task.background_limit', { limit: String(err.limit) }),
+        isError: true,
+        metadata: {
+          background_run_limit: err.limitKind,
+          i18n: i18nMeta('task.background_limit', { limit: String(err.limit) }),
+        },
+      };
+    }
+    throw err;
+  }
+
+  // 2. Собственный сигнал отмены и свой streamId фонового прогона.
+  const backgroundAbort = new AbortController();
+  const streamId = generateStreamId();
+  const cancelToken: CancellationToken = {
+    cancelled: false,
+    cancel: () => {
+      cancelToken.cancelled = true;
+      backgroundAbort.abort();
+    },
+  };
+  extra.registerCancelToken?.(streamId, cancelToken);
+  // Хэндл отмены в реестре — остановка фонового прогона по его записи.
+  service.registerAbort(record.id, () => backgroundAbort.abort());
+
+  // 3. Блокировка дочерней сессии + маркер активности (`currentStream`) —
+  //    по образцу `orchestrator.startSubagentResume`: так работает
+  //    `POST /sessions/<child>/abort` и виден статус в UI.
+  const processId = `background:${record.id}`;
+  const acquired = await sessionManager.acquireLock(childSessionId, processId);
+  if (!acquired) {
+    extra.unregisterCancelToken?.(streamId);
+    backgroundAbort.abort();
+    await service.finish(record.id, { status: 'cancelled', summary: 'child session is busy' });
+    return {
+      content: sm('task.resume_child_busy', { id: childSessionId }),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.resume_child_busy', { id: childSessionId }) },
+    };
+  }
+  try {
+    await sessionManager.withLock(childSessionId, async (s) => {
+      s.currentStream = {
+        streamId,
+        message: params.description,
+        agentRole: params.subagent_type,
+        startedAt: nowISO(),
+        cancelled: false,
+      };
+      await sessionManager.saveSession(s);
+    });
+  } catch {
+    // Блокировка могла не записаться — прогон всё равно пойдёт, отмена
+    // останется доступна через реестр (`stop`).
+  }
+
+  // 4. Detached-прогон: собственный контекст (сигнал отмены — свой), без
+  //    публикации в родительский стрим (`publish` опционален в цикле).
+  const detachedExtra: TaskExtra = {
+    ...extra,
+    publish: undefined,
+    streamId,
+    // Сессия в extra остаётся **родительской** — по ней идут child.*-события.
+    sessionId: parentSessionId,
+    callId: extra.callId,
+  };
+  const detachedCtx: ToolContext = {
+    ...ctx,
+    messageId: streamId,
+    abortSignal: backgroundAbort.signal,
+  };
+
+  void runSubagent({ ...runConfig, extra: detachedExtra, ctx: detachedCtx })
+    .then(async (result) => {
+      const stoppedByUser = result.metadata?.stopped_by === 'user';
+      const status: 'completed' | 'failed' | 'cancelled' = result.isError
+        ? 'failed'
+        : stoppedByUser ? 'cancelled' : 'completed';
+      const finalContent = typeof result.metadata?.final_content === 'string'
+        ? (result.metadata.final_content as string)
+        : '';
+      const summary = status === 'completed'
+        ? (finalContent || result.content)
+        : status === 'cancelled'
+          ? (typeof result.metadata?.partial_output === 'string' ? (result.metadata.partial_output as string) : '')
+          : result.content;
+      await service.finish(record.id, { status, summary });
+    })
+    .catch((err: unknown) => {
+      void service.finish(record.id, { status: 'failed', summary: String(err) });
+    })
+    .finally(async () => {
+      extra.unregisterCancelToken?.(streamId);
+      try {
+        await sessionManager.withLock(childSessionId, async (s) => {
+          s.currentStream = undefined;
+          await sessionManager.saveSession(s);
+        });
+      } catch {
+        // сессия могла быть удалена
+      }
+      try {
+        await sessionManager.releaseLock(childSessionId, processId);
+      } catch {
+        // ignore
+      }
+    });
+
+  // 5. Немедленный возврат: родитель продолжает работать, уведомление придёт.
+  return {
+    content: sm('task.background_started', { id: childSessionId }),
+    metadata: {
+      child_session_id: childSessionId,
+      status: 'running',
+      background_run_id: record.id,
+      i18n: i18nMeta('task.background_started', { id: childSessionId }),
+    },
+  };
+}

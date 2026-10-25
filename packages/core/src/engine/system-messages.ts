@@ -57,6 +57,24 @@ export const SYSTEM_MESSAGES = {
   'task.resume_agent_not_found': 'Agent "{type}" not found or cannot be used as a subagent',
   'task.resume_provider_unavailable': 'Provider is not configured for session {id} — cannot resume',
 
+  // --- Фоновые саб-агенты и лимит шагов (этап 1 roadmap 0.13, блок 4) ---
+  // `[steps_limit]` — короткая страховка после отчёта саб-агента: причина
+  // (лимит шагов) и сам лимит. Подробности — в отчёте модели выше.
+  'task.steps_limit':
+    '[steps_limit] The subagent was stopped by the step limit ({limit}).',
+  'task.steps_limit_empty':
+    'The subagent exhausted the step limit ({limit}) and gave no textual answer; continue from its history or raise the limit',
+  'task.background_started':
+    'The subagent is running in the background (sessionID: {id}). You will be notified automatically; do not poll its status.',
+  'task.background_limit':
+    'The background subagent limit for this session ({limit}) is reached — finish or cancel the running background subagents first',
+  'task.background_disabled':
+    'Background subagents are disabled on this instance (background.enabled = false) — run the subagent in the foreground',
+  'task.resume_foreign_child':
+    'Session {id} is not a subagent session of the current session — it cannot be continued from here',
+  'task.resume_child_busy':
+    'Session {id} is busy or already running — it cannot be continued right now',
+
   // --- Тулы: общие ошибки и результаты ---
   'tool.args_error': 'Tool "{tool}" argument error: {issues}',
   'tool.exec_error': 'Tool "{tool}" execution error: {error}',

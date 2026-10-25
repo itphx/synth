@@ -27,6 +27,11 @@ export interface ContextFileRepository {
   getParticipantsNotice(language?: string): string;
   getSchedulerNotice(language?: string): string;
   getSchedulerTurnNotice(language?: string): string;
+  /**
+   * Требование «только текст» для финального шага-отчёта саб-агента по
+   * лимиту шагов (prompts/system/MAX_STEPS.{lang}.md).
+   */
+  getMaxStepsPrompt(language?: string): string;
   getSummarizerPrompt(language?: string): string;
   getUserContextTemplate(language?: string): string;
   getCompressedDialogTemplate(language?: string): string;

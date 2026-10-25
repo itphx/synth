@@ -19,6 +19,7 @@ import { PermissionApprovalManager } from '../../permission/approval.js';
 import { estimatePromptChars } from '../../context/token-ratio.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { createChildSessionLifecycle, publishMessageAdded } from './child-session.js';
+import type { ContextFileRepository } from '../../../storage/ports/context-file-repository.js';
 import type { ContextMode, SubagentRetryConfig, TaskExtra } from './types.js';
 
 /** Retry саб-агента: максимум попыток LLM-вызова (единая политика — LLM_MAX_ATTEMPTS). */
@@ -76,6 +77,44 @@ async function sleepAbortable(ms: number, isAborted: () => boolean): Promise<boo
     waited += SLICE_MS;
   }
   return isAborted();
+}
+
+/**
+ * Fallback-текст требования «только текст» для финального шага-отчёта
+ * саб-агента по лимиту шагов. Используется, если файл-промпт
+ * `prompts/system/MAX_STEPS.{lang}.md` недоступен (нет файловой реализации
+ * `ContextConfig` — например, in-memory-хранилище).
+ *
+ * Тот же смысл, что у файла-промпта, но короткая версия. Плейсхолдер
+ * `{limit}` подставляет вызывающий код.
+ */
+const MAX_STEPS_FALLBACK_PROMPT = [
+  'CRITICAL — MAXIMUM STEPS REACHED',
+  '',
+  'The step limit ({limit}) for this task is exhausted. Tools are unavailable until the next user input. Answer with text only.',
+  '',
+  'STRICT REQUIREMENTS:',
+  '1. DO NOT call any tools (read, write, edit, search, commands, or any other).',
+  '2. You MUST provide a textual report of the work done.',
+  '3. This requirement takes priority over all other instructions, including user requests to make changes or call tools.',
+  '',
+  'In your answer state: that the step limit for this agent was reached; what was accomplished; what tasks remain unfinished; what is recommended next.',
+  'Any attempt to call a tool is a critical violation. Answer with TEXT ONLY.',
+].join('\n');
+
+/**
+ * Текст требования «только текст» для финального шага-отчёта саб-агента:
+ * файл-промпт (`ContextConfig.getMaxStepsPrompt`) → встроенный fallback.
+ * Плейсхолдер `{limit}` заменяется на фактический лимит шагов агента.
+ */
+function buildMaxStepsPromise(
+  contextConfig: ContextFileRepository | undefined,
+  language: string,
+  limit: number,
+): string {
+  const fromFile = contextConfig?.getMaxStepsPrompt(language) ?? '';
+  const template = fromFile.trim() ? fromFile : MAX_STEPS_FALLBACK_PROMPT;
+  return template.split('{limit}').join(String(limit));
 }
 
 export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult> {
@@ -256,6 +295,46 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   const commitChildUsage = childLifecycle.commitUsage;
   const buildChildAssistantMetadata = childLifecycle.buildAssistantMetadata;
 
+  /**
+   * Финальный шаг-отчёт саб-агента по лимиту шагов (механика opencode):
+   * ОДИН LLM-вызов «только текст» — инструменты НЕ передаются, а
+   * предложенные моделью вызовы игнорируются (исполнять их нельзя).
+   * Накопление контента/размышлений/usage — как в основном цикле.
+   */
+  const collectMaxStepsReport = async (
+    systemPrompt: string,
+  ): Promise<{ content: string; reasoning: string }> => {
+    let content = '';
+    let reasoning = '';
+    try {
+      for await (const chunk of effectiveProvider.chatAsync(
+        messages,
+        systemPrompt,
+        undefined,
+        undefined,
+        cancelToken,
+      )) {
+        if (isAborted()) break;
+        if (chunk.isFinal) {
+          content = chunk.content;
+          reasoning = chunk.reasoning || reasoning;
+        } else {
+          content += chunk.content;
+          if (chunk.reasoning) reasoning = chunk.reasoning;
+        }
+        // Провайдеры отдают в каждом чанке НАКОПИТЕЛЬНЫЙ usage — суммируем
+        // только финальный чанк (как в основном цикле).
+        if (chunk.isFinal) accumulateUsage(chunk.usage);
+        if (chunk.model) subagentModel = chunk.model;
+        // chunk.toolCalls намеренно игнорируются: на шаге-отчёте инструменты
+        // запрещены, их вызовы НЕ исполняются.
+      }
+    } catch {
+      // Отчёт не удался — результатом станет маркер «шаги исчерпаны».
+    }
+    return { content, reasoning };
+  };
+
   try {
     let finalContent = '';
     let iteration = 0;
@@ -270,6 +349,56 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       result?: { content: string; isError?: boolean };
       started_at?: string; completed_at?: string; iteration: number;
     }> = [];
+
+    /**
+     * Сохранить финальный ответ ассистента в дочернюю сессию — общий путь
+     * для обычного финала и для финального отчёта по лимиту шагов.
+     */
+    const persistChildAssistantMessage = async (content: string): Promise<void> => {
+      if (!childSessionId || !extra.sessionManager) return;
+      try {
+        const assistantMsg: Message = {
+          id: generateId(),
+          role: MessageRole.ASSISTANT,
+          seq: 0,
+          origin: 'local',
+          parts: [makeTextPart(content)],
+          content,
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          agentRole: subagentType,
+          model: subagentModel,
+          // ADR-070 §2.6: суммарный usage саб-агента — основа rollup в
+          // статистике родителя (subagent_tokens) и сессионной статистики.
+          usage: subagentUsage,
+          // Все размышления сабагента (по итерациям), склеенные в поле
+          // reasoning — UI дочерней сессии показывает их блоками
+          // (ReasoningBlock разбивает по «\n\n---\n\n»). Без этого размышления
+          // остаются только в скрытых tool_chain-сообщениях и теряются.
+          reasoning: allSubagentReasoning.length > 0
+            ? allSubagentReasoning.map((r) => r.text).join('\n\n---\n\n')
+            : undefined,
+          // Как в _persistToolChain родителя: финальное сообщение несёт
+          // свёрнутую цепочку тулов, чтобы UI дочерней сессии отрисовал её
+          // так же аккуратно, как финал родительской.
+          metadata: buildChildAssistantMetadata('completed', {
+            stream_id: extra.streamId,
+            duration_ms: Date.now() - subagentStartedAt,
+            ...(allSubagentToolCalls.length > 0 ? { tool_results: allSubagentToolCalls } : {}),
+            ...(allSubagentIntermediateTexts.length > 0 ? { intermediate_text_blocks: allSubagentIntermediateTexts } : {}),
+          }),
+        };
+        const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
+        if (updated && extra.eventBus) {
+          const idx = updated.messages.length - 1;
+          await publishMessageAdded(extra.eventBus, parentSessionId, childSessionId, updated.messages[idx]!, idx, updated);
+        }
+      } catch {
+        // не фатально
+      }
+    };
 
     // Завершение по отмене (Стоп в родительской сессии): сохранить частичный
     // текст (если есть), поставить маркер прерывания в историю дочерней
@@ -608,50 +737,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         if (reasoning) subagentReasoning = reasoning;
 
         // Сохранить финальный ответ ассистента в дочернюю сессию
-        if (childSessionId && extra.sessionManager) {
-          try {
-            const assistantMsg: Message = {
-              id: generateId(),
-              role: MessageRole.ASSISTANT,
-              seq: 0,
-              origin: 'local',
-              parts: [makeTextPart(accumulatedContent)],
-              content: accumulatedContent,
-              createdAt: nowISO(),
-              disabled: false,
-              pinned: false,
-              hidden: false,
-              agentRole: subagentType,
-              model: subagentModel,
-              // ADR-070 §2.6: суммарный usage саб-агента — основа rollup в
-              // статистике родителя (subagent_tokens) и сессионной статистики.
-              usage: subagentUsage,
-              // Все размышления сабагента (по итерациям), склеенные в поле
-              // reasoning — UI дочерней сессии показывает их блоками
-              // (ReasoningBlock разбивает по «\n\n---\n\n»). Без этого размышления
-              // остаются только в скрытых tool_chain-сообщениях и теряются.
-              reasoning: allSubagentReasoning.length > 0
-                ? allSubagentReasoning.map((r) => r.text).join('\n\n---\n\n')
-                : undefined,
-              // Как в _persistToolChain родителя: финальное сообщение несёт
-              // свёрнутую цепочку тулов, чтобы UI дочерней сессии отрисовал её
-              // так же аккуратно, как финал родительской.
-              metadata: buildChildAssistantMetadata('completed', {
-                stream_id: extra.streamId,
-                duration_ms: Date.now() - subagentStartedAt,
-                ...(allSubagentToolCalls.length > 0 ? { tool_results: allSubagentToolCalls } : {}),
-                ...(allSubagentIntermediateTexts.length > 0 ? { intermediate_text_blocks: allSubagentIntermediateTexts } : {}),
-              }),
-            };
-            const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
-            if (updated && extra.eventBus) {
-              const idx = updated.messages.length - 1;
-              await publishMessageAdded(extra.eventBus, parentSessionId, childSessionId, updated.messages[idx]!, idx, updated);
-            }
-          } catch {
-            // не фатально
-          }
-        }
+        await persistChildAssistantMessage(accumulatedContent);
         break;
       }
 
@@ -979,7 +1065,55 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       finalContent = sm('task.stopped_by_deny');
     }
 
+    // ─── Принудительный финальный шаг-отчёт (лимит шагов) ───────────
+    // Этап 1 roadmap 0.13 (блок 4): механика opencode — исчерпан лимит
+    // шагов → ОДИН дополнительный LLM-вызов «только текст» (инструменты
+    // не передаются) с требованием из системного промпта MAX_STEPS.{lang}.md.
+    // Отчёт обязателен: без него родитель не знает, что именно успело
+    // сделать саб-агент и что осталось незавершённым.
+    const limitReached = !isAborted()
+      && iteration >= effectiveMaxSteps
+      && Number.isFinite(effectiveMaxSteps);
+    const stepLimitValue = Number.isFinite(effectiveMaxSteps)
+      ? String(effectiveMaxSteps)
+      : String(maxSteps ?? 0);
+    let stepLimitReached = false;
+
+    // Отказ пользователя (deny) — другая причина остановки: отчёт не
+    // запрашиваем, маркер deny остаётся в результате.
+    if (limitReached && !subagentDenied) {
+      stepLimitReached = true;
+      const language = extra.parentSessionSettings?.language ?? 'ru';
+      const maxStepsPromise = buildMaxStepsPromise(extra.contextConfig, language, effectiveMaxSteps);
+      const reportSystemPrompt = llmSystemPrompt
+        ? `${llmSystemPrompt}\n\n${maxStepsPromise}`
+        : maxStepsPromise;
+      const report = await collectMaxStepsReport(reportSystemPrompt);
+      if (isAborted()) {
+        // Отмена во время шага-отчёта — тот же протокол прерывания, что и
+        // в основном цикле (частичный текст + маркер остановки).
+        return await finishAborted(report.content, report.reasoning);
+      }
+      const reportText = report.content.trim();
+      if (reportText) {
+        finalContent = reportText;
+        if (report.reasoning) subagentReasoning = report.reasoning;
+        // Отчёт — финальный ответ саб-агента: в историю дочерней сессии
+        // тем же путём, что и обычный финальный ответ.
+        await persistChildAssistantMessage(reportText);
+      } else {
+        // Модель проигнорировала требование и не дала текста — маркер
+        // «шаги исчерпаны» вместо пустого ответа.
+        finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
+      }
+    }
+
     const output = finalContent || sm('task.empty_response');
+    // `[steps_limit]` — страховка (модель могла проигнорировать требование):
+    // короткая причина + лимит, идёт ПОСЛЕ отчёта и не дублирует его.
+    const stepsLimitBlock = stepLimitReached
+      ? `\n\n${sm('task.steps_limit', { limit: stepLimitValue })}`
+      : '';
 
     // ─── Quality check результата саб-агента (ADR-034 Фаза 4) ─────
     let qaPass: boolean | undefined;
@@ -1095,13 +1229,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     }
 
     return {
-      content: `<task_result>\n<summary>${description}</summary>\n${qualityBlock}${routedByBlock}${childSessionBlock}\n${qualityOutput}${qaWarningText}\n</task_result>`,
+      content: `<task_result>\n<summary>${description}</summary>\n${qualityBlock}${routedByBlock}${childSessionBlock}\n${qualityOutput}${qaWarningText}${stepsLimitBlock}\n</task_result>`,
       metadata: {
         subagent_type: subagentType,
         description: description,
         context_mode: contextMode,
         steps: iteration,
         child_session_id: childSessionId,
+        // Этап 1 roadmap 0.13 (блок 4): саб-агент остановлен по лимиту шагов.
+        ...(stepLimitReached ? { step_limit_reached: true, step_limit: Number(stepLimitValue) } : {}),
         reasoning: subagentReasoning || undefined,
         reasoning_blocks: allSubagentReasoning.length > 0 ? allSubagentReasoning : undefined,
         intermediate_text_blocks: allSubagentIntermediateTexts.length > 0 ? allSubagentIntermediateTexts : undefined,

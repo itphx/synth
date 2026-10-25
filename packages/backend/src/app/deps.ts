@@ -46,6 +46,11 @@ import {
   // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю + retention.
   QuestionService,
   startQuestionPruner,
+  // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов + retention.
+  BackgroundRunService,
+  startBackgroundRunPruner,
+  serializeMessage,
+  serializeSession,
   WebhookService, startWebhookDeliveryPruner,
   AnalyticsRecorder, attachAnalyticsActivityHooks, startAnalyticsRollupPruner, sessionAxes,
   createStorageContextAsync,
@@ -402,6 +407,60 @@ export async function createBackendDeps(
     ? () => {}
     : startQuestionPruner(storageContext.questions, {
         getRetentionDays: () => config.synth.questions.retentionDays,
+      });
+
+  // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
+  //
+  // Паритет с standalone-core: тот же порт записи (ADR-096), те же лимиты из
+  // конфигурации `background.*`. Один инстанс на процесс: его получают тул
+  // `task` (фоновый запуск саб-агента) и HTTP-точки обслуживания реестра.
+  const backgroundService = storageDegraded
+    ? undefined
+    : new BackgroundRunService({
+        repository: storageContext.backgroundRuns,
+        eventBus,
+        limits: {
+          maxSubagentsPerSession: config.synth.background.maxSubagentsPerSession,
+          maxRunsPerSession: config.synth.background.maxRunsPerSession,
+        },
+        // Уведомление родителя о завершении фонового саб-агента: сообщение в
+        // историю родителя (роль USER — видно модели) + постановка в очередь
+        // (автоход). Точка сборки — здесь; глобальных синглтонов нет.
+        //
+        // ADR-036: обфускация user-сообщений НЕ применяется — уведомление
+        // системное (автор `Subagent`), а не пользовательский ввод; секреты в
+        // исходящих LLM-запросах обфусцирует сам Gateway.
+        onNotifyParent: async (sessionId, message) => {
+          const updated = await sessionManager.addMessage(sessionId, message);
+          if (updated) {
+            const idx = updated.messages.length - 1;
+            eventBus.publish(sessionId, 'message.added', {
+              message: serializeMessage(updated.messages[idx]!, idx),
+              index: idx,
+            });
+            eventBus.publish(sessionId, 'session.updated', serializeSession(updated));
+          }
+          await enqueueUserMessage(
+            sessionManager, eventBus, sessionId, message, queueManager, processMessage,
+          );
+        },
+      });
+  // Старт: прогоны прошлого процесса не пережили рестарт (хэндлы отмены — в
+  // памяти) — помечаем их `orphaned`. Best-effort: ошибка не роняет старт.
+  if (backgroundService) {
+    try {
+      await backgroundService.recoverOnStart();
+    } catch (err) {
+      console.warn(
+        `[background] восстановление фоновых прогонов не удалось: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  // Retention-очистка терминальных записей реестра (сразу + каждые 6 ч).
+  const stopBackgroundRunPruner = storageDegraded
+    ? () => {}
+    : startBackgroundRunPruner(storageContext.backgroundRuns, {
+        getRetentionDays: () => config.synth.background.retentionDays,
       });
 
   // ADR-094: доменные коллекторы. `metrics` приходит только при
@@ -791,6 +850,11 @@ export async function createBackendDeps(
     // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» — тул
     // `question` задаёт вопрос и ждёт ответа пользователя.
     ...(questionService ? { questionService } : {}),
+    // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов — тул
+    // `task` с `background: true` регистрирует фонового саб-агента и
+    // возвращает управление сразу (PROP-096).
+    ...(backgroundService ? { backgroundService } : {}),
+    backgroundEnabled: config.synth.background.enabled,
   });
 
   // ADR-090 (Ф5б-2): эффективный конфиг слоя = config.yaml (+env) поверх
@@ -1332,6 +1396,9 @@ export async function createBackendDeps(
     // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю (+ pruner).
     questionService,
     stopQuestionPruner,
+    // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов (+ pruner).
+    backgroundService,
+    stopBackgroundRunPruner,
     webhookStore,
     webhookDeliveryStore,
     webhookService,

@@ -59,6 +59,8 @@ import type { HookBus } from './hooks/hook-bus.js';
 import type { RequestSessionService } from './events/request-session.js';
 // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю».
 import type { QuestionService } from './question/service.js';
+// Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
+import type { BackgroundRunService } from './background/service.js';
 
 import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, refreshRuntimeDeps, type RuntimeDeps } from './tools/runtime-deps.js';
 import { InlineExecutionPort } from '../execution/inline-execution-port.js';
@@ -396,6 +398,19 @@ export interface OrchestratorOptions {
    */
   questionService?: QuestionService;
   /**
+   * Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
+   *
+   * Не задан — фоновый запуск саб-агента (`task` с `background: true`)
+   * недоступен (`task.background_disabled`).
+   */
+  backgroundService?: BackgroundRunService;
+  /**
+   * Этап 1 roadmap 0.13 (блок 4): фоновые прогоны разрешены инстансом
+   * (`background.enabled`). `false` — тул `task` с `background: true`
+   * отказывает (`task.background_disabled`). По умолчанию — разрешены.
+   */
+  backgroundEnabled?: boolean;
+  /**
    * Шаг 2б: интервал (мс) персистентности частичного стрима. Черновик
    * assistant-сообщения создаётся сразу при первом непустом чанке, далее
    * обновляется не чаще интервала (или при приросте ≥4096 символов).
@@ -557,6 +572,13 @@ export class ChatOrchestrator {
    * Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (null — не задан).
    */
   private readonly _questionService: QuestionService | null;
+  /**
+   * Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов (null — не задан:
+   * фоновый запуск саб-агента недоступен).
+   */
+  private readonly _backgroundService: BackgroundRunService | null;
+  /** Этап 1 roadmap 0.13 (блок 4): фоновые прогоны разрешены инстансом. */
+  private readonly _backgroundEnabled: boolean;
   /**
    * Этап 1 roadmap 0.13 (блок 3): соответствие «ход (`streamId`) → сессия».
    *
@@ -803,6 +825,9 @@ export class ChatOrchestrator {
     this._isCancelRequested = options.isCancelRequested ?? null;
     // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю.
     this._questionService = options.questionService ?? null;
+    // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов + тумблер инстанса.
+    this._backgroundService = options.backgroundService ?? null;
+    this._backgroundEnabled = options.backgroundEnabled ?? true;
     this._streamPersistIntervalMs = options.streamPersistIntervalMs ?? 1000;
 
     // ADR-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
@@ -3474,6 +3499,20 @@ export class ChatOrchestrator {
                   // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю —
                   // тул `question` задаёт вопрос и ждёт ответа.
                   questionService: this._questionService ?? undefined,
+                  // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов —
+                  // тул `task` с `background: true` регистрирует фонового
+                  // саб-агента и возвращает управление сразу.
+                  backgroundService: this._backgroundService ?? undefined,
+                  backgroundEnabled: this._backgroundEnabled,
+                  // Регистрация cancel-токена фонового прогона: `POST
+                  // /sessions/<child>/abort` останавливает фонового ребёнка
+                  // через общую карту токенов оркестратора (по streamId).
+                  registerCancelToken: (id: string, token: CancellationToken) => {
+                    this.registerCancelToken(id, token);
+                  },
+                  unregisterCancelToken: (id: string) => {
+                    this.unregisterCancelToken(id);
+                  },
                   // ADR-046 §4.5: scope-гейты скиллов (система/проект/сессия).
                   skillScope: this._skillScopeFor(session, projectForState),
                   // ADR-069 §7: уже резолвленные проектные инструкции — в extra,

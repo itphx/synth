@@ -24,6 +24,9 @@ import type { SSHKeyRepository } from '../../../storage/ports/ssh-key-repository
 import type { GitService } from '../../../git/git-service.js';
 // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю».
 import type { QuestionService } from '../../question/service.js';
+// Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
+import type { BackgroundRunService } from '../../background/service.js';
+import type { CancellationToken } from '../../../providers/base.js';
 
 export interface TaskExtra {
   provider: BaseProvider;
@@ -101,6 +104,28 @@ export interface TaskExtra {
    * пользователю в своём ходе (если право будет выдано).
    */
   questionService?: QuestionService;
+  /**
+   * Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов (PROP-096).
+   *
+   * Тул `task` с `background: true` регистрирует фонового саб-агента в
+   * реестре (лимиты, запись, уведомление родителя). Не задан — фоновый
+   * запуск недоступен (`task.background_disabled`).
+   */
+  backgroundService?: BackgroundRunService;
+  /**
+   * Этап 1 roadmap 0.13 (блок 4): фоновые прогоны разрешены инстансом
+   * (`background.enabled`). `false` — тул `task` с `background: true`
+   * отказывает (`task.background_disabled`). Не задан — разрешены.
+   */
+  backgroundEnabled?: boolean;
+  /**
+   * Этап 1 roadmap 0.13 (блок 4): регистрация cancel-токена фонового прогона
+   * в оркестраторе — чтобы `POST /sessions/<child>/abort` останавливал фонового
+   * ребёнка (`orchestrator.cancel(streamId)`).
+   */
+  registerCancelToken?: (streamId: string, token: CancellationToken) => void;
+  /** Снятие cancel-токена фонового прогона (по завершении прогона). */
+  unregisterCancelToken?: (streamId: string) => void;
   /** ADR-046 §4.5: scope-гейты скиллов родительского контекста. */
   skillScope?: SkillScopeOptions;
   /**
