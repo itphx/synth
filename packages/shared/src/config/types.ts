@@ -619,7 +619,8 @@ export const questionsConfigSchema = z.object({
  * Конфигурация единого реестра фоновых прогонов (PROP-096/PROP-097).
  *
  * - `enabled` — мастер-выключатель фоновой работы: при `false` тул `task`
- *   с `background: true` отказывает (`task.background_disabled`);
+ *   с `background: true` отказывает (`task.background_disabled`), как и
+ *   `execute_shell` с `background: true` (`process.background_disabled`);
  * - `maxSubagentsPerSession` — максимум **одновременно идущих** фоновых
  *   саб-агентов на одну родительскую сессию;
  * - `maxProcessesPerSession` — максимум **одновременно идущих** фоновых

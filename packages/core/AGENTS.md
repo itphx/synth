@@ -1232,9 +1232,13 @@
   `storage/memory/background-runs.ts`, PG — `packages/storage-postgres/src/ports/
   background-runs.ts`, миграция `021_background_runs`; контракт —
   `storage/contract/background-run-repository.contract.ts`).
+  Мастер-выключатель `background.enabled` гейтит **оба** вида фоновой работы:
+  `task` (`task.background_disabled`) и `execute_shell` (`process.background_disabled`).
 - `engine/processes/*` — PROP-097 (ADR-111): фоновые шелл-процессы. `service.ts`
   (`ProcessService`: `spawn` через `ExecutionPort.spawnBackground`, поток stdout/stderr в лог,
-  `stop`, `logs`; лимит записи лога — `background.logMaxBytes`), `types.ts`
+  `stop`, `logs`; лимит записи лога — `background.logMaxBytes`; `stop` публикует
+  `process.stopped` в канал владельца — один раз на прогон, терминальный статус
+  приходит позже — `process.exited`), `types.ts`
   (`BackgroundUnsupportedError` и пр.), `prune.ts` (очистка логов). Логи — blob-хранилище
   (`BlobStore`), путь `processes/<id>.log`. В `remote`-режиме фоновый запуск не поддержан —
   `background_unsupported` (остаток ADR-077, шаг 7c).

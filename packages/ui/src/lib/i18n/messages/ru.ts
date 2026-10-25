@@ -2921,6 +2921,7 @@ export const dict = {
   'process.background_limit':
     'Достигнут лимит фоновых процессов для этой сессии ({limit}). Дождитесь завершения процесса или остановите его.',
   'process.background_unsupported': 'Фоновое исполнение недоступно в текущем режиме исполнения',
+  'process.background_disabled': 'Фоновые процессы выключены (background.enabled: false)',
 
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',

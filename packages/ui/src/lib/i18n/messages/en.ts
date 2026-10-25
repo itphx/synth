@@ -2515,6 +2515,7 @@ export const dict = {
   'process.background_limit':
     'The limit of background processes for this session has been reached ({limit}). Wait for a running process to finish or stop it.',
   'process.background_unsupported': 'Background execution is unavailable in the current execution mode',
+  'process.background_disabled': 'Background processes are disabled (background.enabled: false)',
 
   // --- Фоновые саб-агенты и лимит шагов (этап 1 roadmap 0.13, блок 4) ---
   'task.steps_limit':

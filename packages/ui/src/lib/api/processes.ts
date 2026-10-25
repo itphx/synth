@@ -53,7 +53,7 @@ export interface ProcessResponse {
 export interface ProcessLogsOptions {
   /** Смещение в байтах от начала лога. */
   offset?: number
-  /** Предел выдачи, байт (сервер: дефолт 64 КиБ, максимум 256 КиБ). */
+  /** Предел выдачи, байт (сервер: по умолчанию и максимум 256 КиБ — как отдаёт сервер). */
   limit?: number
 }
 

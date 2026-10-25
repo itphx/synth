@@ -480,6 +480,7 @@ export const SYSTEM_MESSAGES = {
     'The limit of background processes for this session has been reached ({limit}). Wait for a running process to finish or stop it.',
   'process.background_unsupported':
     'Background execution is unavailable in the current execution mode',
+  'process.background_disabled': 'Background processes are disabled (background.enabled: false)',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

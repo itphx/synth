@@ -20,9 +20,13 @@ const DEFAULT_TIMEOUT = 30_000;
  *
  * `processService` — сервис фоновых шелл-процессов (PROP-097). Не задан —
  * режим `background: true` недоступен (`process.deps_unavailable`).
+ *
+ * `backgroundEnabled` — фоновые прогоны разрешены инстансом (`background.enabled`).
+ * `false` — режим `background: true` отказывает (`process.background_disabled`).
  */
 export interface ShellToolExtra {
   processService?: ProcessService;
+  backgroundEnabled?: boolean;
 }
 
 export const executeShellTool: ToolDefinition = {
@@ -144,6 +148,15 @@ async function startBackgroundProcess(
   ctx: ToolContext,
 ): Promise<ToolResult> {
   const extra = ctx.extra as ShellToolExtra | undefined;
+  // Мастер-выключатель фоновой работы (`background.enabled`) — гейтит и
+  // фоновый shell, не только фоновых саб-агентов (тул `task`).
+  if (extra?.backgroundEnabled === false) {
+    return {
+      content: sm('process.background_disabled'),
+      isError: true,
+      metadata: { i18n: i18nMeta('process.background_disabled') },
+    };
+  }
   const service = extra?.processService;
   if (!service || !ctx.sessionId) {
     return {

@@ -262,12 +262,14 @@ interface BusEvent { type: EventType; sessionId: string; data: Record<string, un
 | `user_question.cancelled` | вопрос отменён (таймаут, «Стоп», ручная отмена) | `question_id`, `session_id`, `reason` |
 | `process.started` | запущена фоновая шелл-команда (`kind:'process'`) | `process_id`, `session_id`, `command`, `cwd`, `pid?`, `background_run_id`, `log_path` |
 | `process.exited` | фоновый процесс завершён | `process_id`, `session_id`, `state` (`completed`/`failed`/`cancelled`/`orphaned`), `exit_code?`, `signal?`, `background_run_id` |
+| `process.stopped` | запрошена остановка фонового процесса (один раз на прогон) | `process_id`, `session_id`, `background_run_id`, `reason` |
 | `child.completed` / `child.failed` / `child.cancelled` | фоновый саб-агент завершился (успех/ошибка/отмена; `kind:'subagent'`) | `child_session_id`, `parent_session_id`, `state`, `background_run_id`, `description` |
 
 Префикс `user_question.*` — намеренно **не** `question.*`: `question.asked` уже
-занят смыслом «очередь зависла». Событие `process.stopped` объявлено в типах
-(`EventType`) и обрабатывается клиентом как терминальное, но ядро публикует
-остановку прогона как `process.exited` со `state: 'cancelled'`.
+занят смыслом «очередь зависла». Событие `process.stopped` публикуется ядром
+при успешном запросе остановки прогона (`POST /api/v2/processes/:id/stop`,
+`reason` — причина остановки); терминальный статус прогона приходит позже —
+событием `process.exited` (у остановленного процесса `state: 'cancelled'`).
 
 ---
 
@@ -2113,7 +2115,7 @@ PROP-096/PROP-097): два вида прогонов — `subagent` (фонов�
 | GET | `/api/v2/processes` | оба | auth | Список прогонов `{runs}`; фильтры `sessionId`/`projectId`/`kind` (`subagent`/`process`)/`status` (`running`/`completed`/`failed`/`cancelled`/`orphaned`)/`limit` (по умолчанию 50, максимум 200); неверный `kind`/`status` → 400 `VALIDATION_ERROR`. Выдаются только прогоны сессий, доступных пользователю (владелец/участник проекта; `ADMIN`/`LEAD` — все) |
 | GET | `/api/v2/processes/:id` | оба | auth | Прогон `{run}` (запись реестра целиком); прогона нет → 404 `NOT_FOUND`, сессии-владельца нет → 404, нет прав → 403 `FORBIDDEN` |
 | GET | `/api/v2/processes/:id/logs` | оба | auth | Отрезок лога фонового процесса `{content, offset, nextOffset, totalBytes, truncated}`; только `kind:'process'` (для `subagent` → 400 `VALIDATION_ERROR`), файла лога нет → 404 `NOT_FOUND`. `offset` — смещение в байтах от начала лога, `limit` — размер выдачи (по умолчанию и максимум — 256 КиБ) |
-| POST | `/api/v2/processes/:id/stop` | оба | auth (**write**) | Остановить прогон → 200 `{status:'stopping'}` (остановка асинхронная: итоговый статус приходит событием `process.exited`); прогон уже не `running` либо идёт в другом процессе (остановить отсюда нельзя) → 409 `CONFLICT` |
+| POST | `/api/v2/processes/:id/stop` | оба | auth (**write**) | Остановить прогон → 200 `{status:'stopping'}` (остановка асинхронная: запрос остановки приходит событием `process.stopped`, итоговый статус — событием `process.exited`); прогон уже не `running` либо идёт в другом процессе (остановить отсюда нельзя) → 409 `CONFLICT` |
 | DELETE | `/api/v2/processes/:id` | оба | auth (**write**) | Удалить запись реестра → **204**; прогон ещё `running` → 409 `CONFLICT` |
 
 **Граница доступа (инварианты 16/21).** Право на прогон — это право на его
@@ -2136,10 +2138,11 @@ guard резолвит запись реестра и её сессию-влад
 монтируется**, поэтому все эндпоинты раздела отвечают `404` (контура нет).
 
 **События.** Живые изменения приходят в **канале сессии-владельца**
-(`process.started`/`process.exited`/`child.*`, ADR-009/ADR-024; новых
-транспортных каналов нет) — состав и поля событий — §3.2. Фоновый саб-агент
-дополнительно публикует уведомление в историю родителя и ставит родительский
-ход в очередь (автоход) — по [ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md).
+(`process.started`/`process.stopped`/`process.exited`/`child.*`, ADR-009/ADR-024;
+новых транспортных каналов нет) — состав и поля событий — §3.2. Фоновый
+саб-агент дополнительно публикует уведомление в историю родителя и ставит
+родительский ход в очередь (автоход) — по
+[ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md).
 
 **Хранилище.** Реестр — `{dataDir}/processes/registry.json` (ADR-005, атомарная
 запись); PostgreSQL — таблица `background_runs` (миграция `021_background_runs`

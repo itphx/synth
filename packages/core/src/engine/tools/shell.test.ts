@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { executeShellTool } from './shell.js';
 import type { ToolContext } from '@itphx/synth-shared';
+import type { ProcessService } from '../processes/service.js';
 
 describe('execute_shell — cwd resolution', () => {
   let tmpDir: string;
@@ -129,5 +130,59 @@ describe('execute_shell — прерывание по «Стоп» (abortSignal)
     expect(result.content).toContain('Error');
     expect(result.metadata?.interrupted).toBeUndefined();
     expect(result.metadata?.stopped_by).toBeUndefined();
+  });
+});
+
+describe('execute_shell — фоновый запуск (background: true)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-shell-bg-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(extra: Record<string, unknown>): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      extra,
+    };
+  }
+
+  it('backgroundEnabled=false — отказ process.background_disabled, процесс не запущен', async () => {
+    const spawn = vi.fn();
+    const processService = { spawn } as unknown as ProcessService;
+
+    const result = await executeShellTool.execute(
+      { command: 'sleep 1', background: true },
+      makeCtx({ processService, backgroundEnabled: false }),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Background processes are disabled');
+    expect(result.metadata?.i18n).toMatchObject({ key: 'process.background_disabled' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('backgroundEnabled=true — процесс запущен (гейт не мешает)', async () => {
+    const spawn = vi.fn().mockResolvedValue({
+      runId: 'bgr_1',
+      processId: 'proc_1',
+      logPath: 'processes/bgr_1.log',
+    });
+    const processService = { spawn } as unknown as ProcessService;
+
+    const result = await executeShellTool.execute(
+      { command: 'sleep 1', background: true },
+      makeCtx({ processService, backgroundEnabled: true }),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(result.metadata?.process_id).toBe('proc_1');
   });
 });

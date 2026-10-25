@@ -54,7 +54,7 @@ export interface ProcessServiceOptions {
   background: BackgroundRunService;
   /** Порт blob-хранилища (ADR-096) — логи процессов (`processes/<id>.log`). */
   blobs: BlobStore;
-  /** Шина событий сессии (ADR-009) — `process.started`/`process.exited`/`fs.changed`. */
+  /** Шина событий сессии (ADR-009) — `process.started`/`process.stopped`/`process.exited`/`fs.changed`. */
   eventBus: EventBus;
   /** Лимиты подсистемы (`background.logMaxBytes`). */
   limits: ProcessLimits;

@@ -1522,7 +1522,7 @@ questions:
 
 | Поле | Назначение | По умолчанию |
 |------|-----------|--------------|
-| `background.enabled` | Мастер-выключатель фоновой работы. `false` — `task({background: true})` отвечает ошибкой `background_disabled` (ход не падает), а foreground-работа и реестр продолжают работать. Env — `SYNTH_BACKGROUND_ENABLED` | `true` |
+| `background.enabled` | Мастер-выключатель фоновой работы. `false` — и `task({background: true})`, и `execute_shell({background: true})` отвечают ошибкой (`task.background_disabled` / `process.background_disabled`; ход не падает), а foreground-работа и реестр продолжают работать. Env — `SYNTH_BACKGROUND_ENABLED` | `true` |
 | `background.maxSubagentsPerSession` | Максимум одновременно идущих фоновых саб-агентов на сессию-владельца; превышение → `background_limit_exceeded` (ошибка тула, ход не падает). Env — `SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION` | `2` |
 | `background.maxProcessesPerSession` | Максимум одновременно идущих фоновых шелл-процессов на сессию-владельца; превышение → `background_limit_exceeded`. Env — `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION` | `5` |
 | `background.maxRunsPerSession` | Максимум записей реестра на сессию-владельца (считаются все записи, чистятся retention-ом). Env — `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | `10` |
@@ -1556,9 +1556,11 @@ background:
 - **Фоновые процессы в `remote`-режиме недоступны** (`background_unsupported`):
   порт исполнения не умеет фоновый запуск — это остаток ADR-077 (шаг 7c).
   Для фоновых саб-агентов ограничение не действует.
-- **События** — `process.started` / `process.exited` / `child.completed` /
-  `child.failed` / `child.cancelled` в канале сессии-владельца (ADR-009/ADR-024,
-  новых каналов нет).
+- **События** — `process.started` / `process.stopped` / `process.exited` /
+  `child.completed` / `child.failed` / `child.cancelled` в канале
+  сессии-владельца (ADR-009/ADR-024, новых каналов нет). `process.stopped` —
+  запрос остановки (один раз на прогон); терминальный статус приходит позже —
+  `process.exited`.
 
 ### Наблюдаемость (`metrics.*`, ADR-094)
 

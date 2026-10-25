@@ -22,6 +22,8 @@
  *    `BackgroundRunService.finish` (идемпотентно);
  * 4. **Уведомление родителя** — сообщение роли USER с автором `Process`
  *    (тот же колбэк `onNotifyParent`, что у фоновых саб-агентов).
+ * 5. **Остановка видна сразу**: успешный `stop` публикует `process.stopped`
+ *    (один раз на прогон); терминальный статус приходит позже — `process.exited`.
  */
 import type { BackgroundRunRecord, BackgroundRunStatus } from '@itphx/synth-shared';
 import type { ExecBackgroundProcess, ExecutionPort } from '../../execution/ports/index.js';
@@ -53,6 +55,12 @@ interface LiveProcess {
   writer: ProcessLogWriter;
   /** Таймер эскалации до SIGKILL. */
   killTimer?: NodeJS.Timeout;
+  /** Сессия-владелец (канал события `process.stopped`). */
+  sessionId: string;
+  /** Идентификатор процесса (в событии — `process_id`). */
+  processId: string;
+  /** Событие `process.stopped` уже опубликовано (один раз на прогон). */
+  stopPublished?: boolean;
 }
 
 /**
@@ -233,7 +241,12 @@ export class ProcessService {
 
     const logPath = record.logPath ?? '';
     const writer = new ProcessLogWriter(this._blobs, logPath, this._limits.maxLogBytes, this._logger);
-    this._live.set(record.id, { proc, writer });
+    this._live.set(record.id, {
+      proc,
+      writer,
+      sessionId: record.sessionId,
+      processId: record.processId ?? record.id,
+    });
 
     // Остановка по записи реестра (`BackgroundRunService.stop` → хэндл отмены).
     this._background.registerAbort(record.id, () => {
@@ -272,6 +285,10 @@ export class ProcessService {
   /**
    * Остановить фоновый процесс: `SIGTERM`, через 5 с — `SIGKILL`.
    *
+   * Успешный запрос остановки публикует `process.stopped` в канал
+   * владельца (один раз на прогон; повторный `stop` не дублирует).
+   * Терминальный статус прогона приходит позже — событием `process.exited`.
+   *
    * `false` — процесса нет в этом процессе (уже завершён или пережил
    * рестарт сервиса).
    */
@@ -282,6 +299,16 @@ export class ProcessService {
       live.proc.stop('SIGTERM');
     } catch {
       // процесс уже завершён — не страшно
+    }
+    // Остановка запрошена — сообщаем каналу владельца (один раз на прогон).
+    if (!live.stopPublished) {
+      live.stopPublished = true;
+      this._eventBus.publish(live.sessionId, 'process.stopped', {
+        process_id: live.processId,
+        session_id: live.sessionId,
+        background_run_id: runId,
+        reason,
+      });
     }
     if (!live.killTimer) {
       const timer = setTimeout(() => {
@@ -298,7 +325,6 @@ export class ProcessService {
       timer.unref?.();
       live.killTimer = timer;
     }
-    void reason;
     return true;
   }
 
