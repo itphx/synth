@@ -1875,21 +1875,52 @@ managed портал дополнительно закрыт ролевым guar
 | `GET /memory/facts?projectId=` | `read` | query (не передан — проверки нет) |
 | `GET /memory/facts/:id` | `read` | проект **самого факта** (нет проекта — проверки нет) |
 | `GET /memory/indexes?projectId=` | `read` | query (не передан — проверки нет) |
-| `POST /memory/indexes` | `write` | тело (обязателен) |
-| `POST /memory/indexes/:id/rebuild` | `write` | проект **индекса** |
-| `DELETE /memory/indexes/:id` | `write` | проект **индекса** |
+| `POST /memory/indexes` | `write` | тело (обязателен; `scope:'instance'` — проверки нет) |
+| `POST /memory/indexes/:id/rebuild` | `write` | проект **индекса** (`scope:'instance'` — проверки нет) |
+| `DELETE /memory/indexes/:id` | `write` | проект **индекса** (`scope:'instance'` — проверки нет) |
 | `POST /memory/consolidate` | `write` | тело (не передан — операция по инстансу) |
 | `GET /memory/graph?projectId=` | `read` | query (не передан — проверки нет) |
+
+**Область видимости индексов (`scope`).** У индекса памяти есть область
+видимости (`MemoryIndexRecord.scope`, ADR-096): `project` (по умолчанию — индекс
+виден только своему проекту) или `instance` (**инстансный** индекс — виден
+**всем** на инстансе: общий корпус, например индекс по фактам памяти).
+
+| | `scope: 'project'` (по умолчанию) | `scope: 'instance'` |
+|---|---|---|
+| `projectId` в теле | обязателен — **владелец** индекса | для `source.kind:'files'` — **источник корпуса** (чей workspace сканировать); для `source.kind:'facts'` — **не используется** (в тул не передаётся и в запись не пишется) |
+| права на проект | `write` — проверяются **на границе** | **не применяются**: операция инстансная (в managed портал и так под ADMIN) |
+| workspace проекта | обязателен при `source.kind:'files'` | обязателен при `source.kind:'files'` (источник корпуса) |
+| параметр `scope` тула | не передаётся (дефолт плагина — `project`) | `scope: 'instance'` |
+
+Правила:
+
+- **`scope` не задан → `'project'`** (прежнее поведение); неизвестное значение
+  (в теле или в query) → 400 `VALIDATION_ERROR`;
+- **список**: `GET /api/v2/memory/indexes?scope=` — фильтр области видимости
+  (`project`|`instance`; `all`/пусто — без фильтра). Фильтр `projectId` работает
+  как раньше: у инстансного индекса с source-проектом он тоже совпадёт
+  (осознанно: `projectId` инстансного индекса — это **источник корпуса**, а не
+  область видимости; область видимости фильтруется отдельным `scope`);
+- **пересборка/удаление**: у инстансного индекса права проекта **не
+  проверяются**, а проект резолвится только как источник корпуса
+  (`source.kind:'files'` и заданный `projectId`) — 404 `PROJECT_NOT_FOUND` /
+  400 `MEMORY_WORKSPACE_REQUIRED`, но **без** проверки прав; у проектного —
+  всё как прежде;
+- **инстансные индексы создаёт только портал** (в managed — ADMIN, guard
+  роли): тул плагина принимает `scope:'instance'` только для служебного вызова
+  портала (`sessionId: 'system:memory-portal:<uuid>'`), обычный агентский вызов
+  инстансный индекс не создаёт.
 
 | Метод | Путь | Сборка | Назначение / req-resp |
 |---|---|---|---|
 | GET | `/api/v2/memory/status` | оба | Состояние портала: `{provider:{id,mode,active}, readiness, namespace, facts:{total,active}, indexes:{total,ready,stale,failed,building}}`. `provider.id` = namespace, `provider.mode` = `inline` (плагин памяти по дизайну `inline`) или `null`, `provider.active` — активен ли плагин `synth-plugin-memory` в процессе. `readiness`: `ready` (сервис доступен, нет проблемных индексов) / `degraded` (есть индексы `failed`/`stale`) / `unavailable` (порты памяти не сконфигурированы — ответ **200**, портал показывает «память недоступна»). Счётчики — через порты (`count` фактов, выборка индексов) |
 | GET | `/api/v2/memory/facts` | оба | Страница фактов: `{items, total, limit, offset}`. Параметры: `query` (подстрока по `text`, регистронезависимо; ищется **в памяти** после выборки — полнотекстовый поиск М2), `kind`, `status` (`candidate`\|`active`\|`superseded`\|`retracted`\|`all`; по умолчанию `active`), `projectId`, `limit` (1..200, по умолчанию 50), `offset` (≥ 0, по умолчанию 0). `total` — число записей **под фильтрами** (не длина страницы). Мусор в параметрах → 400 `VALIDATION_ERROR` |
 | GET | `/api/v2/memory/facts/:id` | оба | Факт по id (`MemoryFactRecord` как есть); нет факта (или он чужого namespace) → 404 `MEMORY_FACT_NOT_FOUND` |
-| GET | `/api/v2/memory/indexes` | оба | Страница индексов: `{items, total}` — записи `MemoryIndexRecord` **без чанков** (чанки — отдельный порт). Параметры: `projectId`, `state` (`building`\|`ready`\|`stale`\|`failed`\|`all`; по умолчанию `all`). Мусор в `state` → 400 `VALIDATION_ERROR` |
-| POST | `/api/v2/memory/indexes` | оба | Создание индекса: тело `{name?, source?:{kind:'files'\|'facts', filter?}, projectId?, force?}` → **202** `{index, message}`. `index` — запись `MemoryIndexRecord` из порта (по `metadata.indexId` тула), если записи ещё нет — `metadata` тула. `message` — локализованное подтверждение. Границы: проект обязателен (индекс файлов строится в проекте) → 400 `MEMORY_PROJECT_REQUIRED`; нет проекта → 404 `PROJECT_NOT_FOUND`; у проекта нет workspace при `source.kind === 'files'` → 400 `MEMORY_WORKSPACE_REQUIRED`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
-| POST | `/api/v2/memory/indexes/:id/rebuild` | оба | Пересборка индекса: тело `{force?}` → **202** `{index}`. Проект и источник индекса берутся **из порта** (клиент их не подменяет). Нет индекса (или он чужого namespace) → 404 `MEMORY_INDEX_NOT_FOUND`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
-| DELETE | `/api/v2/memory/indexes/:id` | оба | Удаление индекса → **204**. Нет индекса → 404 `MEMORY_INDEX_NOT_FOUND`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
+| GET | `/api/v2/memory/indexes` | оба | Страница индексов: `{items, total}` — записи `MemoryIndexRecord` **без чанков** (чанки — отдельный порт). Параметры: `projectId`, `state` (`building`\|`ready`\|`stale`\|`failed`\|`all`; по умолчанию `all`), `scope` (`project`\|`instance`\|`all`; по умолчанию `all` — без фильтра). Мусор в `state`/`scope` → 400 `VALIDATION_ERROR` |
+| POST | `/api/v2/memory/indexes` | оба | Создание индекса: тело `{name?, source?:{kind:'files'\|'facts', filter?}, projectId?, scope?:'project'\|'instance', force?}` → **202** `{index, message}`. `scope` не задан → `'project'` (прежнее поведение); `'instance'` — **инстансный** индекс (виден всем на инстансе), права проекта не применяются, а `projectId` для `source.kind:'files'` — источник корпуса (для `'facts'` — не используется). `index` — запись `MemoryIndexRecord` из порта (по `metadata.indexId` тула), если записи ещё нет — `metadata` тула; `index.scope` приходит из порта. `message` — локализованное подтверждение. Границы: проект обязателен (индекс файлов строится в проекте; для `scope:'instance'` — только при `source.kind:'files'`) → 400 `MEMORY_PROJECT_REQUIRED`; нет проекта → 404 `PROJECT_NOT_FOUND`; у проекта нет workspace при `source.kind === 'files'` → 400 `MEMORY_WORKSPACE_REQUIRED`; неизвестный `scope` → 400 `VALIDATION_ERROR`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
+| POST | `/api/v2/memory/indexes/:id/rebuild` | оба | Пересборка индекса: тело `{force?}` → **202** `{index}`. Проект и источник индекса берутся **из порта** (клиент их не подменяет). У инстансного индекса (`scope:'instance'`) права проекта **не проверяются**, а проект резолвится только как источник корпуса (`source.kind:'files'`): нет проекта → 404 `PROJECT_NOT_FOUND`, нет workspace → 400 `MEMORY_WORKSPACE_REQUIRED`. Нет индекса (или он чужого namespace) → 404 `MEMORY_INDEX_NOT_FOUND`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
+| DELETE | `/api/v2/memory/indexes/:id` | оба | Удаление индекса → **204**. У инстансного индекса (`scope:'instance'`) права проекта **не проверяются**. Нет индекса → 404 `MEMORY_INDEX_NOT_FOUND`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_INDEX_FAILED` |
 | POST | `/api/v2/memory/consolidate` | оба | Консолидация фактов: тело `{projectId?, threshold?, dryRun?}` → **200** `{report, message}`. `report` = `{clusters, superseded, kept, items}` — число кластеров, число вытесненных фактов, число канонов и состав кластеров (`items`: `{keptId, supersededIds, similarity}` на кластер). `threshold` — порог косинуса сходства (0.5..0.99), вне диапазона → 400 `VALIDATION_ERROR`; `dryRun` — прогон без записи (решает плагин). `projectId` — проект, чьи факты консолидируются; без него — факты инстанса; нет такого проекта → 404 `PROJECT_NOT_FOUND`. Workspace проекта **не требуется** (консолидация идёт по фактам). Провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_CONSOLIDATION_FAILED` (машинный код тула — в `error.details.code`) |
 | GET | `/api/v2/memory/graph` | оба | Чтение графа памяти: query `entity?` (сущность-старт обхода; не задана или пустая — «весь граф»), `depth?` (1..3, по умолчанию 1), `limit?` (1..200, по умолчанию 100), `projectId?` (скоуп графа) → **200** `{nodes, edges, stats}`. `nodes` — `{id, kind:'entity'\|'fact', name?, factId?, text?, entity?}`, `edges` — `{from, to, relation?}`, `stats` — `{entities, facts, edges}`. Мусор в `depth`/`limit` → 400 `VALIDATION_ERROR`; нет такого проекта → 404 `PROJECT_NOT_FOUND`; провайдер недоступен → 409 `MEMORY_PROVIDER_UNAVAILABLE`; провал тула → 422 `MEMORY_GRAPH_FAILED` (машинный код тула — в `error.details.code`) |
 
@@ -1909,7 +1940,8 @@ managed портал дополнительно закрыт ролевым guar
 | `indexId` | id индекса (`rebuild`/`delete`) |
 | `name` | имя индекса (`create`, по умолчанию `project` — на стороне плагина) |
 | `source` | `{kind:'files'\|'facts', filter?}` (`create`, по умолчанию `files`) |
-| `projectId` | проект-владелец индекса |
+| `projectId` | проект-владелец индекса (для `scope:'instance'` — источник корпуса; для `source.kind:'facts'` инстансного индекса — не передаётся) |
+| `scope` | `instance` — инстансный индекс (`create`); для проектных индексов не передаётся (дефолт плагина — `project`). Плагин принимает его **только** для служебного вызова портала (`sessionId: 'system:memory-portal:<uuid>'`) |
 | `force` | принудительная пересборка (`rebuild`) |
 
 Контекст вызова (sessionId/messageId/workingDir) создаёт **вызывающая
@@ -1997,6 +2029,15 @@ curl 'http://localhost:5000/api/v2/memory/indexes?state=stale' \
 curl -X POST http://localhost:5000/api/v2/memory/indexes \
   -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
   -d '{"projectId":"prj_1","name":"docs","source":{"kind":"files","filter":"**/*.md"}}'
+
+# Инстансный индекс по фактам памяти — виден всем на инстансе (202).
+curl -X POST http://localhost:5000/api/v2/memory/indexes \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"scope":"instance","name":"global-facts","source":{"kind":"facts"}}'
+
+# Только инстансные индексы.
+curl 'http://localhost:5000/api/v2/memory/indexes?scope=instance' \
+  -H 'Authorization: Bearer admin-key-123'
 
 # Пересобрать индекс (202) и удалить его (204).
 curl -X POST http://localhost:5000/api/v2/memory/indexes/<indexId>/rebuild \

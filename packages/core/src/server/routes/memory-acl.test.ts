@@ -59,6 +59,7 @@ function makeIndex(overrides: Partial<MemoryIndexRecord> & { id: string }): Memo
     namespace: MEMORY_NAMESPACE,
     name: overrides.id,
     providerId: MEMORY_NAMESPACE,
+    scope: 'project',
     source: { kind: 'project' },
     state: 'ready',
     generation: 1,

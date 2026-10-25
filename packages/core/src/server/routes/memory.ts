@@ -68,6 +68,36 @@
  * | `POST /consolidate` | `write` | тело (нет — операция по инстансу) |
  * | `GET /graph?projectId=` | `read` | query (нет — проверки нет) |
  *
+ * ## Область видимости индексов: `project` / `instance`
+ *
+ * У индекса памяти есть **область видимости** (`MemoryIndexRecord.scope`,
+ * ADR-096): `project` (по умолчанию — индекс виден только своему проекту) или
+ * `instance` (**инстансный** индекс — виден всем на инстансе).
+ *
+ * | | `project` | `instance` |
+ * |---|---|---|
+ * | `projectId` в теле | обязателен (владелец) | для `files` — **источник корпуса** (чей workspace сканировать); для `facts` — не используется |
+ * | права на проект | `write` (проверяются) | **не применяются** (операция инстансная; в managed портал и так под ADMIN) |
+ * | workspace | обязателен для `files` | обязателен для `files` (источник корпуса) |
+ * | параметр `scope` тула | не передаётся (по умолчанию `project`) | `scope: 'instance'` |
+ *
+ * Правила:
+ *
+ * - **не задан → `project`** (прежнее поведение);
+ * - **неизвестное значение** (`scope` в теле или query) → 400
+ *   `VALIDATION_ERROR`;
+ * - **инстансный индекс виден всем** — в этом и смысл `instance`: общий корпус
+ *   инстанса (например, индекс по фактам памяти), а не проектный;
+ * - **`projectId` фильтр списка работает как раньше**: у инстансного индекса с
+ *   source-проектом он тоже совпадёт (осознанно: `projectId` инстансного
+ *   индекса — это источник корпуса, а не область видимости; область видимости
+ *   фильтруется отдельным `scope`);
+ * - **ACL проекта не применяется к instance-операциям**: `authorizeProject`
+ *   для них **не вызывается** (только `providerAvailable()` и `invokeTool`);
+ * - **тул плагина** принимает `scope: 'instance'` только для служебного вызова
+ *   портала (`sessionId: 'system:memory-portal:<uuid>'`) — обычный агентский
+ *   вызов инстансный индекс не создаёт.
+ *
  * ## Мутации индексов: портал → админ-тул плагина
  *
  * Логика индекса принадлежит **плагину** (PROP-047 §3: ядро владеет данными,
@@ -145,6 +175,7 @@ import type {
   MemoryIndexQuery,
   MemoryIndexRecord,
   MemoryIndexRepository,
+  MemoryIndexScope,
   MemoryIndexState,
 } from '../../storage/ports/memory-index-repository.js';
 import {
@@ -196,6 +227,14 @@ export const MEMORY_GRAPH_TOOL_NAME = pluginToolFullName(MEMORY_PLUGIN_NAME, 'me
 
 /** Вид источника корпуса индекса, который принимает портал. */
 export type MemoryIndexSourceKind = 'files' | 'facts';
+
+/**
+ * Области видимости индекса памяти, принимаемые порталом.
+ *
+ * - `project` — индекс виден только своему проекту (прежнее поведение);
+ * - `instance` — **инстансный** индекс: виден всем на инстансе (общий корпус).
+ */
+export const MEMORY_INDEX_SCOPES: readonly MemoryIndexScope[] = ['project', 'instance'];
 
 /**
  * Проект — как его видит портал памяти (минимум для мутаций индексов).
@@ -322,6 +361,8 @@ export interface MemoryRouteMessages {
   invalidBody: (c: Context) => string;
   /** Некорректный вид источника индекса. */
   invalidSource: (c: Context) => string;
+  /** Некорректная область видимости индекса (`scope`). */
+  invalidScope: (c: Context) => string;
   /** Не указан проект (индекс файлов строится в проекте). */
   projectRequired: (c: Context) => string;
   /** Проект не найден. */
@@ -569,6 +610,7 @@ const DEFAULT_MESSAGES: MemoryRouteMessages = {
   unavailable: () => 'Хранилище памяти недоступно',
   invalidBody: () => 'Некорректное тело запроса памяти',
   invalidSource: () => 'Недопустимый источник индекса памяти',
+  invalidScope: () => 'Недопустимая область видимости индекса памяти',
   projectRequired: () => 'Индекс памяти строится в проекте: укажите projectId',
   projectNotFound: () => 'Проект не найден',
   workspaceRequired: () => 'У проекта нет рабочего каталога: индекс файлов строить негде',
@@ -630,6 +672,37 @@ function parseIntegerParam(raw: string | undefined): number | null {
   if (raw === undefined || raw.trim() === '') return null;
   if (!/^-?\d+$/.test(raw.trim())) return Number.NaN;
   return Number.parseInt(raw.trim(), 10);
+}
+
+/**
+ * Область видимости индекса из **query-параметра** (фильтр списка).
+ *
+ * `undefined` — без фильтра (пусто или `all`), `null` — мусор (400
+ * `VALIDATION_ERROR`).
+ */
+function parseScopeFilter(raw: string | undefined): MemoryIndexScope | undefined | null {
+  if (raw === undefined) return undefined;
+  const value = raw.trim();
+  if (!value || value === 'all') return undefined;
+  return MEMORY_INDEX_SCOPES.includes(value as MemoryIndexScope)
+    ? (value as MemoryIndexScope)
+    : null;
+}
+
+/**
+ * Область видимости индекса из **тела запроса** (создание).
+ *
+ * Не задана (пусто/`undefined`) — `project` (прежнее поведение); неизвестное
+ * значение — `null` (мусор → 400 `VALIDATION_ERROR`).
+ */
+function parseScopeBody(raw: unknown): MemoryIndexScope | null {
+  if (raw === undefined || raw === null) return 'project';
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim();
+  if (!value) return 'project';
+  return MEMORY_INDEX_SCOPES.includes(value as MemoryIndexScope)
+    ? (value as MemoryIndexScope)
+    : null;
 }
 
 /**
@@ -899,6 +972,58 @@ export function createMemoryRoutes(
     project?.workspace ?? opts.dataDir ?? process.cwd();
 
   /**
+   * Проект для операции над **существующим** индексом — по области видимости
+   * записи (`MemoryIndexRecord.scope`).
+   *
+   * - **project** — проектный индекс: права (`write`) проверяются **на
+   *   границе** (инвариант 16), проект обязан существовать, у индекса по
+   *   файлам нужен workspace;
+   * - **instance** — **инстансный** индекс: права проекта **не применяются**
+   *   (операция инстансная; в managed портал и так под ADMIN), а проект нужен
+   *   только как **источник корпуса** (`source.kind === 'files'`) — из него
+   *   берётся workspace; без него рабочий каталог вызова = каталог данных
+   *   инстанса.
+   *
+   * Порядок — как у проектного индекса: **404 раньше 403** (сначала «есть ли
+   * проект», потом права).
+   */
+  const resolveIndexProject = async (
+    c: Context,
+    index: MemoryIndexRecord,
+    opts: { requireWorkspace: boolean },
+  ): Promise<
+    { ok: true; project: MemoryPortalProject | null } | { ok: false; response: Response }
+  > => {
+    const instanceScope = index.scope === 'instance';
+    const projectId = index.projectId;
+    // Проект нужен: проектному индексу — всегда (владелец), инстансному —
+    // только как источник корпуса (файлы).
+    if (!projectId || (instanceScope && index.source.kind !== 'files')) {
+      return { ok: true, project: null };
+    }
+    const project = await resolvePortalProject(projectId);
+    if (!project) {
+      return {
+        ok: false,
+        response: apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404),
+      };
+    }
+    if (!instanceScope) {
+      // Права на изменение содержимого проекта — до вызова тула (инвариант 16).
+      if (!(await authorizeProjectAccess(c, projectId, 'write'))) {
+        return { ok: false, response: forbidden(c) };
+      }
+    }
+    if (opts.requireWorkspace && index.source.kind === 'files' && !project.workspace) {
+      return {
+        ok: false,
+        response: apiError(c, 'MEMORY_WORKSPACE_REQUIRED', messages.workspaceRequired(c), 400),
+      };
+    }
+    return { ok: true, project };
+  };
+
+  /**
    * Вызов админ-тула плагина памяти.
    *
    * Провал тула (`isError`) — 422 с кодом операции и текстом из `content`
@@ -1142,10 +1267,19 @@ export function createMemoryRoutes(
     if (projectId && !(await authorizeProjectAccess(c, projectId, 'read'))) {
       return forbidden(c);
     }
+    // Область видимости (`project`/`instance`; `all`/пусто — без фильтра).
+    const scopeFilter = parseScopeFilter(c.req.query('scope'));
+    if (scopeFilter === null) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: messages.invalidScope(c) } },
+        400,
+      );
+    }
     const query: MemoryIndexQuery = {
       namespace,
       ...(stateFilter ? { state: stateFilter } : {}),
       ...(projectId ? { projectId } : {}),
+      ...(scopeFilter ? { scope: scopeFilter } : {}),
     };
     const items = await indexes.listIndexes(query);
     const page: MemoryIndexesPage = { items, total: items.length };
@@ -1158,6 +1292,12 @@ export function createMemoryRoutes(
    * Границы проверяет портал, логику индекса — плагин: индекс файлов строится
    * в проекте (ADR-075), поэтому проект обязателен, а у проекта с источником
    * `files` должен быть рабочий каталог.
+   *
+   * Область видимости (`scope`): `project` (по умолчанию) — проектный индекс
+   * с правами на проект; `instance` — **инстансный** индекс (виден всем на
+   * инстансе): права проекта **не применяются**, а `projectId` для источника
+   * `files` — это **источник корпуса** (чей workspace сканировать), для
+   * `facts` — не используется вовсе.
    */
   app.post('/indexes', guard, async (c) => {
     const body = await readBody(c);
@@ -1187,19 +1327,54 @@ export function createMemoryRoutes(
       typeof body.projectId === 'string' && body.projectId.trim() ? body.projectId.trim() : undefined;
     const force = body.force === true ? true : undefined;
 
-    if (!projectId) {
-      return apiError(c, 'MEMORY_PROJECT_REQUIRED', messages.projectRequired(c), 400);
+    // Область видимости: `project` (по умолчанию) или `instance`.
+    const scope = parseScopeBody(body.scope);
+    if (scope === null) {
+      return apiError(c, 'VALIDATION_ERROR', messages.invalidScope(c), 400);
     }
-    const project = await resolvePortalProject(projectId);
-    if (!project) {
-      return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
-    }
-    // Права на изменение содержимого проекта — до вызова тула (инвариант 16).
-    if (!(await authorizeProjectAccess(c, projectId, 'write'))) {
-      return forbidden(c);
-    }
-    if (sourceKind === 'files' && !project.workspace) {
-      return apiError(c, 'MEMORY_WORKSPACE_REQUIRED', messages.workspaceRequired(c), 400);
+
+    // Проект и рабочий каталог вызова — по области видимости.
+    let project: MemoryPortalProject | null = null;
+    // Проект, который уходит в тул: у `instance` — источник корпуса (`files`),
+    // у `project` — владелец.
+    let toolProjectId: string | undefined;
+    if (scope === 'instance') {
+      // Инстансный индекс: права проекта **не применяются** (операция
+      // инстансная; в managed портал и так под ADMIN).
+      if (sourceKind === 'files') {
+        // `projectId` — источник корпуса (чей workspace сканировать):
+        // обязателен, проект должен существовать, workspace нужен.
+        if (!projectId) {
+          return apiError(c, 'MEMORY_PROJECT_REQUIRED', messages.projectRequired(c), 400);
+        }
+        project = await resolvePortalProject(projectId);
+        if (!project) {
+          return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
+        }
+        if (!project.workspace) {
+          return apiError(c, 'MEMORY_WORKSPACE_REQUIRED', messages.workspaceRequired(c), 400);
+        }
+        toolProjectId = projectId;
+      }
+      // Источник `facts`: проект не используется — ни в параметрах тула, ни в
+      // записи индекса; рабочий каталог вызова = каталог данных инстанса.
+    } else {
+      // Проектный индекс — прежнее поведение: проект обязателен (владелец),
+      // права на изменение содержимого — до вызова тула (инвариант 16).
+      if (!projectId) {
+        return apiError(c, 'MEMORY_PROJECT_REQUIRED', messages.projectRequired(c), 400);
+      }
+      project = await resolvePortalProject(projectId);
+      if (!project) {
+        return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
+      }
+      if (!(await authorizeProjectAccess(c, projectId, 'write'))) {
+        return forbidden(c);
+      }
+      if (sourceKind === 'files' && !project.workspace) {
+        return apiError(c, 'MEMORY_WORKSPACE_REQUIRED', messages.workspaceRequired(c), 400);
+      }
+      toolProjectId = projectId;
     }
     if (!providerAvailable()) return providerUnavailable(c);
 
@@ -1208,13 +1383,16 @@ export function createMemoryRoutes(
       action: 'create',
       ...(name ? { name } : {}),
       source: { kind: sourceKind, ...(sourceFilter ? { filter: sourceFilter } : {}) },
-      projectId,
+      ...(toolProjectId ? { projectId: toolProjectId } : {}),
+      // Область видимости уходит в тул только для инстансного индекса:
+      // проектный — поведение плагина по умолчанию.
+      ...(scope === 'instance' ? { scope } : {}),
       ...(force ? { force } : {}),
     };
     const call = await invokeIndexTool(c, {
       tool: MEMORY_INDEX_TOOL_NAME,
       params,
-      projectId,
+      ...(toolProjectId ? { projectId: toolProjectId } : {}),
       workingDir,
     });
     if (!call.ok) return call.response;
@@ -1233,6 +1411,10 @@ export function createMemoryRoutes(
    * Пересборка индекса памяти — через админ-тул плагина (ADR-090).
    *
    * Индекс и его проект — из порта; клиент подменять их не может.
+   *
+   * Область видимости индекса решает, применяются ли права проекта: у
+   * **проектного** индекса — да (`write`), у **инстансного** — нет (проект
+   * нужен только как источник корпуса, чтобы взять workspace).
    */
   app.post('/indexes/:id/rebuild', guard, async (c) => {
     const indexes = indexesPort();
@@ -1247,20 +1429,9 @@ export function createMemoryRoutes(
     if (!body) return apiError(c, 'VALIDATION_ERROR', messages.invalidBody(c), 400);
     const force = body.force === true;
 
-    let project: MemoryPortalProject | null = null;
-    if (index.projectId) {
-      project = await resolvePortalProject(index.projectId);
-      if (!project) {
-        return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
-      }
-      // Права на изменение содержимого проекта — до вызова тула (инвариант 16).
-      if (!(await authorizeProjectAccess(c, index.projectId, 'write'))) {
-        return forbidden(c);
-      }
-      if (index.source.kind === 'files' && !project.workspace) {
-        return apiError(c, 'MEMORY_WORKSPACE_REQUIRED', messages.workspaceRequired(c), 400);
-      }
-    }
+    const resolved = await resolveIndexProject(c, index, { requireWorkspace: true });
+    if (!resolved.ok) return resolved.response;
+    const project = resolved.project;
     if (!providerAvailable()) return providerUnavailable(c);
 
     const workingDir = workingDirOf(project);
@@ -1281,6 +1452,9 @@ export function createMemoryRoutes(
    *
    * Запись индекса удаляет **тул** (владелец логики), портал лишь проверяет
    * границы и отвечает 204.
+   *
+   * Область видимости индекса решает, применяются ли права проекта: у
+   * **проектного** индекса — да (`write`), у **инстансного** — нет.
    */
   app.delete('/indexes/:id', guard, async (c) => {
     const indexes = indexesPort();
@@ -1290,17 +1464,9 @@ export function createMemoryRoutes(
     const index = await indexes.getIndex(id);
     if (!index || index.namespace !== namespace) return indexNotFound(c);
 
-    let project: MemoryPortalProject | null = null;
-    if (index.projectId) {
-      project = await resolvePortalProject(index.projectId);
-      if (!project) {
-        return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
-      }
-      // Права на изменение содержимого проекта — до вызова тула (инвариант 16).
-      if (!(await authorizeProjectAccess(c, index.projectId, 'write'))) {
-        return forbidden(c);
-      }
-    }
+    const resolved = await resolveIndexProject(c, index, { requireWorkspace: false });
+    if (!resolved.ok) return resolved.response;
+    const project = resolved.project;
     if (!providerAvailable()) return providerUnavailable(c);
 
     const workingDir = workingDirOf(project);

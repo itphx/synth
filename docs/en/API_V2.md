@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-25 (ADR-106 Ф5: §5.33 «Пакеты расширений» — сводка `authority`, `authorityActivation`; ADR-105 Ф4: §5.37 «Внешние доступы»; ADR-090 §5.36 «Плагины» — переведено; ADR-107 §5.38 «Память» (портал + мутации индексов, М2; проектная авторизация портала — инвариант 16) — переведено); перевод отстаёт (§5.32 — ADR-102, §5.34 — ADR-100, §5.35 — ADR-101).
+> ⚠️ RU-версия обновлена 2026-10-25 (ADR-106 Ф5: §5.33 «Пакеты расширений» — сводка `authority`, `authorityActivation`; ADR-105 Ф4: §5.37 «Внешние доступы»; ADR-090 §5.36 «Плагины» — переведено; ADR-107 §5.38 «Память» (портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'` — переведено); перевод отстаёт (§5.32 — ADR-102, §5.34 — ADR-100, §5.35 — ADR-101).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -1542,21 +1542,53 @@ was found.
 | `GET /memory/facts?projectId=` | `read` | query (not passed — no check) |
 | `GET /memory/facts/:id` | `read` | the project **of the fact itself** (no project — no check) |
 | `GET /memory/indexes?projectId=` | `read` | query (not passed — no check) |
-| `POST /memory/indexes` | `write` | body (required) |
-| `POST /memory/indexes/:id/rebuild` | `write` | the project **of the index** |
-| `DELETE /memory/indexes/:id` | `write` | the project **of the index** |
+| `POST /memory/indexes` | `write` | body (required; `scope:'instance'` — no check) |
+| `POST /memory/indexes/:id/rebuild` | `write` | the project **of the index** (`scope:'instance'` — no check) |
+| `DELETE /memory/indexes/:id` | `write` | the project **of the index** (`scope:'instance'` — no check) |
 | `POST /memory/consolidate` | `write` | body (not passed — an instance-wide operation) |
 | `GET /memory/graph?projectId=` | `read` | query (not passed — no check) |
+
+**The scope of the indexes (`scope`).** A memory index has a scope
+(`MemoryIndexRecord.scope`, ADR-096): `project` (by default — the index is
+visible only to its project) or `instance` (an **instance-wide** index — visible
+to **everyone** on the instance: a shared corpus, e.g. an index over the memory
+facts).
+
+| | `scope: 'project'` (by default) | `scope: 'instance'` |
+|---|---|---|
+| `projectId` in the body | required — the **owner** of the index | for `source.kind:'files'` — the **corpus source** (whose workspace is scanned); for `source.kind:'facts'` — **not used** (it is not passed to the tool and not written into the record) |
+| rights on the project | `write` — checked **at the boundary** | **not applied**: the operation is instance-wide (in managed the portal is under ADMIN anyway) |
+| the project workspace | required for `source.kind:'files'` | required for `source.kind:'files'` (the corpus source) |
+| the `scope` tool parameter | not passed (the plugin default is `project`) | `scope: 'instance'` |
+
+Rules:
+
+- **`scope` not set → `'project'`** (the previous behaviour); an unknown value
+  (in the body or in the query) → 400 `VALIDATION_ERROR`;
+- **the list**: `GET /api/v2/memory/indexes?scope=` — the scope filter
+  (`project`|`instance`; `all`/empty — no filter). The `projectId` filter works
+  as before: it also matches an instance index with a source project
+  (intentionally: the `projectId` of an instance index is the **corpus source**,
+  not the scope; the scope is filtered by the separate `scope` parameter);
+- **rebuild/delete**: for an instance index the project rights are **not
+  checked**, and the project is resolved only as the corpus source
+  (`source.kind:'files'` and a set `projectId`) — 404 `PROJECT_NOT_FOUND` /
+  400 `MEMORY_WORKSPACE_REQUIRED`, but **without** the rights check; for a
+  project index — everything as before;
+- **only the portal creates instance indexes** (in managed — ADMIN, the role
+  guard): the plugin tool accepts `scope:'instance'` only for the portal's
+  service call (`sessionId: 'system:memory-portal:<uuid>'`), an ordinary agent
+  call does not create an instance index.
 
 | Method | Path | Build | Purpose / req-resp |
 |---|---|---|---|
 | GET | `/api/v2/memory/status` | both | The portal state: `{provider:{id,mode,active}, readiness, namespace, facts:{total,active}, indexes:{total,ready,stale,failed,building}}`. `provider.id` = the namespace, `provider.mode` = `inline` (the memory plugin is `inline` by design) or `null`, `provider.active` — whether the `synth-plugin-memory` plugin is active in the process. `readiness`: `ready` (the service is available, no problematic indexes) / `degraded` (there are `failed`/`stale` indexes) / `unavailable` (the memory ports are not configured — the answer is **200**, the portal shows "memory unavailable"). The counters go through the ports (`count` of the facts, a selection of the indexes) |
 | GET | `/api/v2/memory/facts` | both | A page of facts: `{items, total, limit, offset}`. Parameters: `query` (a substring of `text`, case-insensitive; searched **in memory** after the selection — full-text search is M2), `kind`, `status` (`candidate`\|`active`\|`superseded`\|`retracted`\|`all`; `active` by default), `projectId`, `limit` (1..200, 50 by default), `offset` (≥ 0, 0 by default). `total` is the number of records **under the filters** (not the page length). Garbage in the parameters → 400 `VALIDATION_ERROR` |
 | GET | `/api/v2/memory/facts/:id` | both | A fact by id (`MemoryFactRecord` as is); no fact (or a foreign namespace) → 404 `MEMORY_FACT_NOT_FOUND` |
-| GET | `/api/v2/memory/indexes` | both | A page of indexes: `{items, total}` — `MemoryIndexRecord` records **without the chunks** (the chunks are a separate port). Parameters: `projectId`, `state` (`building`\|`ready`\|`stale`\|`failed`\|`all`; `all` by default). Garbage in `state` → 400 `VALIDATION_ERROR` |
-| POST | `/api/v2/memory/indexes` | both | Create an index: the body `{name?, source?:{kind:'files'\|'facts', filter?}, projectId?, force?}` → **202** `{index, message}`. `index` — the `MemoryIndexRecord` from the port (by the tool's `metadata.indexId`); if there is no record yet — the tool's `metadata`. `message` — a localized confirmation. The boundaries: a project is required (a file index is built in a project) → 400 `MEMORY_PROJECT_REQUIRED`; no such project → 404 `PROJECT_NOT_FOUND`; the project has no workspace and `source.kind === 'files'` → 400 `MEMORY_WORKSPACE_REQUIRED`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
-| POST | `/api/v2/memory/indexes/:id/rebuild` | both | Rebuild an index: the body `{force?}` → **202** `{index}`. The project and the source of the index are taken **from the port** (a client cannot substitute them). No index (or a foreign namespace) → 404 `MEMORY_INDEX_NOT_FOUND`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
-| DELETE | `/api/v2/memory/indexes/:id` | both | Delete an index → **204**. No index → 404 `MEMORY_INDEX_NOT_FOUND`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
+| GET | `/api/v2/memory/indexes` | both | A page of indexes: `{items, total}` — `MemoryIndexRecord` records **without the chunks** (the chunks are a separate port). Parameters: `projectId`, `state` (`building`\|`ready`\|`stale`\|`failed`\|`all`; `all` by default), `scope` (`project`\|`instance`\|`all`; `all` by default — no filter). Garbage in `state`/`scope` → 400 `VALIDATION_ERROR` |
+| POST | `/api/v2/memory/indexes` | both | Create an index: the body `{name?, source?:{kind:'files'\|'facts', filter?}, projectId?, scope?:'project'\|'instance', force?}` → **202** `{index, message}`. `scope` not set → `'project'` (the previous behaviour); `'instance'` — an **instance-wide** index (visible to everyone on the instance), the project rights are not applied, and `projectId` for `source.kind:'files'` is the corpus source (for `'facts'` — not used). `index` — the `MemoryIndexRecord` from the port (by the tool's `metadata.indexId`); if there is no record yet — the tool's `metadata`; `index.scope` comes from the port. `message` — a localized confirmation. The boundaries: a project is required (a file index is built in a project; for `scope:'instance'` — only with `source.kind:'files'`) → 400 `MEMORY_PROJECT_REQUIRED`; no such project → 404 `PROJECT_NOT_FOUND`; the project has no workspace and `source.kind === 'files'` → 400 `MEMORY_WORKSPACE_REQUIRED`; an unknown `scope` → 400 `VALIDATION_ERROR`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
+| POST | `/api/v2/memory/indexes/:id/rebuild` | both | Rebuild an index: the body `{force?}` → **202** `{index}`. The project and the source of the index are taken **from the port** (a client cannot substitute them). For an instance index (`scope:'instance'`) the project rights are **not checked**, and the project is resolved only as the corpus source (`source.kind:'files'`): no such project → 404 `PROJECT_NOT_FOUND`, no workspace → 400 `MEMORY_WORKSPACE_REQUIRED`. No index (or a foreign namespace) → 404 `MEMORY_INDEX_NOT_FOUND`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
+| DELETE | `/api/v2/memory/indexes/:id` | both | Delete an index → **204**. For an instance index (`scope:'instance'`) the project rights are **not checked**. No index → 404 `MEMORY_INDEX_NOT_FOUND`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_INDEX_FAILED` |
 | POST | `/api/v2/memory/consolidate` | both | Consolidate the facts: the body `{projectId?, threshold?, dryRun?}` → **200** `{report, message}`. `report` = `{clusters, superseded, kept, items}` — the number of clusters, the number of superseded facts, the number of canonical facts and the cluster contents (`items`: `{keptId, supersededIds, similarity}` per cluster). `threshold` — the cosine similarity threshold (0.5..0.99), out of range → 400 `VALIDATION_ERROR`; `dryRun` — a run without writes (the plugin decides). `projectId` — the project whose facts are consolidated; without it — the facts of the instance; no such project → 404 `PROJECT_NOT_FOUND`. The project **does not need** a workspace (the consolidation works on the facts). The provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_CONSOLIDATION_FAILED` (the machine code of the tool is in `error.details.code`) |
 | GET | `/api/v2/memory/graph` | both | Read the memory graph: the query `entity?` (the start entity of the walk; not set or empty — the whole graph), `depth?` (1..3, 1 by default), `limit?` (1..200, 100 by default), `projectId?` (the graph scope) → **200** `{nodes, edges, stats}`. `nodes` — `{id, kind:'entity'\|'fact', name?, factId?, text?, entity?}`, `edges` — `{from, to, relation?}`, `stats` — `{entities, facts, edges}`. Garbage in `depth`/`limit` → 400 `VALIDATION_ERROR`; no such project → 404 `PROJECT_NOT_FOUND`; the provider is unavailable → 409 `MEMORY_PROVIDER_UNAVAILABLE`; the tool fails → 422 `MEMORY_GRAPH_FAILED` (the machine code of the tool is in `error.details.code`) |
 
@@ -1577,7 +1609,8 @@ responsible for the HTTP contract only.
 | `indexId` | the index id (`rebuild`/`delete`) |
 | `name` | the index name (`create`, `project` by default — on the plugin side) |
 | `source` | `{kind:'files'\|'facts', filter?}` (`create`, `files` by default) |
-| `projectId` | the project that owns the index |
+| `projectId` | the project that owns the index (for `scope:'instance'` — the corpus source; for an instance index with `source.kind:'facts'` — not passed) |
+| `scope` | `instance` — an instance-wide index (`create`); for project indexes it is not passed (the plugin default is `project`). The plugin accepts it **only** for the portal's service call (`sessionId: 'system:memory-portal:<uuid>'`) |
 | `force` | a forced rebuild (`rebuild`) |
 
 The call context (sessionId/messageId/workingDir) is created by the **calling
@@ -1670,6 +1703,16 @@ curl 'http://localhost:5000/api/v2/memory/indexes?state=stale' \
 curl -X POST http://localhost:5000/api/v2/memory/indexes \
   -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
   -d '{"projectId":"prj_1","name":"docs","source":{"kind":"files","filter":"**/*.md"}}'
+
+# An instance-wide index over the memory facts — visible to everyone on the
+# instance (202).
+curl -X POST http://localhost:5000/api/v2/memory/indexes \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"scope":"instance","name":"global-facts","source":{"kind":"facts"}}'
+
+# Only the instance-wide indexes.
+curl 'http://localhost:5000/api/v2/memory/indexes?scope=instance' \
+  -H 'Authorization: Bearer admin-key-123'
 
 # Rebuild the index (202) and delete it (204).
 curl -X POST http://localhost:5000/api/v2/memory/indexes/<indexId>/rebuild \
