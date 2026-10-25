@@ -34,6 +34,7 @@ import {
 import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
 import type { ProjectRepository } from '@itphx/synth-core';
+import type { MemoryFactRepository, MemoryIndexRepository } from '@itphx/synth-core';
 import { createProjectAccess } from './projects.js';
 
 /**
@@ -75,6 +76,12 @@ export function createSessionRoutes(
   requestSessionService?: RequestSessionService,
   /** ADR-102: сборщик `activity` (меры `aborts`/`messages_*`) для core-фабрики. */
   analytics?: AnalyticsRecorder,
+  /** ADR-107: агрегаты памяти сессии для `GET /:id/memory` (вкладка «Память»). */
+  memory?: {
+    facts: MemoryFactRepository;
+    indexes: MemoryIndexRepository;
+    isPluginActive: () => boolean;
+  },
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -668,7 +675,7 @@ export function createSessionRoutes(
   // последней: статические/backend-only сегменты должны матчиться раньше.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}) },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,

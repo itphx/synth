@@ -132,6 +132,8 @@ const MATRIX: Row[] = [
   row('sessions', 'DELETE', '/:id', { status: 204 }),
   row('sessions', 'GET', '/:id/status'),
   row('sessions', 'GET', '/:id/prompt'),
+  // ADR-107: агрегаты памяти для вкладки «Память» — чтение сессии.
+  row('sessions', 'GET', '/:id/memory'),
   row('sessions', 'GET', '/:id/stats'),
   row('sessions', 'POST', '/:id/prompt', { status: 400 }), // пустое тело → VALIDATION_ERROR
   row('sessions', 'GET', '/:id/messages'),

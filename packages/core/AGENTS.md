@@ -318,7 +318,7 @@
   window 60 c, ключ — `keyId`) — после `requireAuth`, до роутов; `rateLimitPerMinute`
   ключа, 0/не задан — без лимита, превышение → 429 `RATE_LIMITED` (паритет с backend).
   При старте — `applyBootstrapServiceKeys` (ADR-052/O1: installer-ключи из `security.bootstrapServiceKeys`).
-- `server/routes/*` — `health`, `hybrid`, `auth`, `sessions`, `messages`, `projects`,
+- `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107), `messages`, `projects`,
   `project-transfer`, `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `dictionaries`, `mcp`, `skills`,
   `commands`, `skill-bundles`, `skill-scope`, `git`, `ssh-keys`, `events`, `identities`,

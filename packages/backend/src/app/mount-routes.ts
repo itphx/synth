@@ -187,7 +187,16 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   ));
 
   // Sessions routes
-  app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore, getDefaultAgentId, requestSessionService, analytics));
+  app.route('/api/v2/sessions', createSessionRoutes(
+    auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub,
+    contextOptimizer, projectStore, profilesStore, getDefaultAgentId, requestSessionService, analytics,
+    // ADR-107: агрегаты памяти сессии для вкладки «Память».
+    {
+      facts: deps.storageContext.memoryFacts,
+      indexes: deps.storageContext.memoryIndexes,
+      isPluginActive: () => deps.pluginRuntime.host.isActive(MEMORY_PLUGIN_NAME),
+    },
+  ));
 
   // Messages routes
   app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, contextOptimizer, eventBus, projectStore));

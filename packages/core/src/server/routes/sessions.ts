@@ -24,6 +24,9 @@ import { applySessionMode } from '../../engine/authority/mode.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
 import type { AnalyticsRecorder } from '../../analytics/recorder.js';
 import { sessionAxes } from '../../analytics/recorder.js';
+import { MEMORY_NAMESPACE } from '../../engine/plugins/memory-namespace.js';
+import type { MemoryFactRepository } from '../../storage/ports/memory-fact-repository.js';
+import type { MemoryIndexRepository } from '../../storage/ports/memory-index-repository.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -61,6 +64,15 @@ export interface SessionRoutesDeps {
    * Не задан — запись не выполняется.
    */
   analytics?: AnalyticsRecorder;
+  /**
+   * ADR-107: память сессии — `GET /:id/memory` (вкладка «Память»).
+   * Не задан — эндпоинт отвечает `provider.active:false`, `readiness:'unavailable'`.
+   */
+  memory?: {
+    facts: MemoryFactRepository;
+    indexes: MemoryIndexRepository;
+    isPluginActive: () => boolean;
+  };
 }
 
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
@@ -728,6 +740,96 @@ export function createSessionRoutes(
     // Доступ — у prefix-guard (единая точка истины); здесь не дублируем.
     const info = await orchestrator.getPromptInfo(session);
     return c.json(info);
+  });
+
+  /**
+   * GET /api/v2/sessions/:id/memory — память сессии (ADR-107, вкладка «Память»).
+   *
+   * Только агрегаты: блоки памяти из **последнего** хода (`promptMeta.memory`),
+   * число активных фактов в скоупе и индексы в скоупе. Текстов фактов/чанков
+   * нет — доступ к содержимому остаётся у портала (ADMIN).
+   *
+   * Доступ — у prefix-guard (инвариант 16); здесь не дублируем.
+   */
+  app.get('/:id/memory', auth.requireAuth, scoped('sessions:read'), async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    const accessDenied = serviceProjectProjection(c, session.projectId);
+    if (accessDenied) return accessDenied;
+
+    const memory = deps.memory;
+    const providerActive = memory ? memory.isPluginActive() : false;
+
+    const lastContext = (() => {
+      for (let i = session.messages.length - 1; i >= 0; i -= 1) {
+        const meta = session.messages[i]?.promptMeta?.memory;
+        if (meta) return meta;
+      }
+      return null;
+    })();
+
+    if (!memory || !providerActive) {
+      return c.json({
+        provider: { active: providerActive },
+        scope: { ...(session.projectId ? { projectId: session.projectId } : {}) },
+        lastContext,
+        facts: { active: 0 },
+        indexes: { total: 0, project: 0, instance: 0, ready: 0, building: 0, failed: 0 },
+        readiness: 'unavailable',
+      });
+    }
+
+    let activeFacts = 0;
+    try {
+      const facts = await memory.facts.list({
+        namespace: MEMORY_NAMESPACE,
+        status: 'active',
+        limit: 1000,
+      });
+      activeFacts = facts.filter((fact) =>
+        session.projectId
+          ? fact.projectId === undefined || fact.projectId === session.projectId
+          : fact.projectId === undefined,
+      ).length;
+    } catch {
+      // Порт недоступен — показываем 0, но readiness не притворяется healthy.
+    }
+
+    const indexes = {
+      total: 0,
+      project: 0,
+      instance: 0,
+      ready: 0,
+      building: 0,
+      failed: 0,
+    };
+    try {
+      const records = await memory.indexes.listIndexes({ namespace: MEMORY_NAMESPACE, limit: 1000 });
+      for (const index of records) {
+        const inScope = index.scope === 'instance'
+          || (session.projectId ? index.projectId === session.projectId : index.projectId === undefined);
+        if (!inScope) continue;
+        indexes.total += 1;
+        if (index.scope === 'instance') indexes.instance += 1;
+        else indexes.project += 1;
+        if (index.state === 'ready') indexes.ready += 1;
+        else if (index.state === 'building') indexes.building += 1;
+        else if (index.state === 'failed') indexes.failed += 1;
+      }
+    } catch {
+      // см. выше — агрегаты деградируют, ответ остаётся валидным.
+    }
+
+    return c.json({
+      provider: { active: true },
+      scope: { ...(session.projectId ? { projectId: session.projectId } : {}) },
+      lastContext,
+      facts: { active: activeFacts },
+      indexes,
+      readiness: indexes.failed > 0 ? 'degraded' : 'ready',
+    });
   });
 
   // GET /api/v2/sessions/:id/stats — статистика по агентам/пользователям

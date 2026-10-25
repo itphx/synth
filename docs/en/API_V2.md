@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-25 (ADR-106 Ф5: §5.33 «Пакеты расширений» — сводка `authority`, `authorityActivation`; ADR-105 Ф4: §5.37 «Внешние доступы»; ADR-090 §5.36 «Плагины» — переведено; ADR-107 §5.38 «Память» (портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги — переведено); перевод отстаёт (§5.32 — ADR-102, §5.34 — ADR-100, §5.35 — ADR-101).
+> ⚠️ RU-версия обновлена 2026-10-25 (ADR-106 Ф5: §5.33 «Пакеты расширений» — сводка `authority`, `authorityActivation`; ADR-105 Ф4: §5.37 «Внешние доступы»; ADR-090 §5.36 «Плагины» — переведено; ADR-107 §5.38 «Память» (портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги; **§5.5** — `GET /sessions/:id/memory` для вкладки «Память» — переведено); перевод отстаёт (§5.32 — ADR-102, §5.34 — ADR-100, §5.35 — ADR-101).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -350,6 +350,7 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | GET | `/api/v2/sessions/:id/status` | both | auth | `{blocked, pending_count, processor_running}` |
 | POST | `/api/v2/sessions/:id/prompt` | both | auth | Enqueue a message, return an **SSE stream**; the `mode` field (`queue`\|`steer`\|`interrupt`, `queue` by default) — steering into the running turn (ADR-104, see below) |
 | GET | `/api/v2/sessions/:id/prompt` | both | auth | System prompt composition (ADR-070): `manifest` + `history` + `promptState` + `lastPromptMeta` + `toolsDetail` (tools with `chars`/`estTokens` and the estimation flag, ADR-071 §2.8). `manifest.toolsPolicy`/`manifest.mcpPolicy` — the applied built-in/MCP policies (ADR-071 §2.3); entries: `tools` (stable/context) → `mcp.servers`/`mcp.tools`/`mcp.status` (volatile, not in `staticPrefixChars`) |
+| GET | `/api/v2/sessions/:id/memory` | both | auth | Session memory for the “Memory” tab (ADR-107): `provider.active`, `scope.projectId`, `lastContext` — `facts`/`recall` blocks from the **last** turn (`chars`/`estTokens`/`status`, `null` when there were no turns), `facts.active` (active facts in scope), `indexes` (total/project/instance/ready/building/failed; `stale` is computed by the plugin and is not returned here), `readiness` (`ready`/`degraded`/`unavailable`). No fact/chunk texts; access — session read (prefix guard), no duplicate checks |
 | GET | `/api/v2/sessions/:id/stats` | both | auth | Usage statistics (ADR-070): messages + recursive subagent usage (the `task` tool), aggregates per agent/user (`computeSessionStats`) |
 | GET | `/api/v2/sessions/:id/messages` | both | auth | `{messages, session_id}` |
 | POST | `/api/v2/sessions/:id/clear` | both | auth | Clear the history (except pinned) |

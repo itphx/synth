@@ -244,6 +244,15 @@ synth-plugin-memory/                 # name: synth-plugin-memory → namespace s
 API портала — **в ядре** (`createMemoryRoutes`): читает факты/индексы через порт памяти (предпосылка A),
 а операции провайдера выполняет админ-тулом плагина; встроенный экран UI вызывает его своим API-доменом.
 
+### 4.2.1 Вкладка «Память» в правой панели (ADR-107)
+
+Пользователь сессии (не только ADMIN) видит, что память дала в контекст: `GET /api/v2/sessions/:id/memory`
+отдаёт **агрегаты без текстов** — блоки `facts`/`recall` последнего хода (`chars`/`estTokens`/`status`,
+из `promptMeta.memory`), число активных фактов в скоупе, индексы (project/instance, ready/building/failed)
+и `readiness`. Вкладка показывает статус/контекст/скоуп и подсказки (stale/недоступность), ADMIN — переход
+в настройки памяти. Метрики контекста и recall — в [OBSERVABILITY.md](./OBSERVABILITY.md) §«Память»;
+источник контекстных серий — манифест промпта (ядро), recall-серий — `facade.memoryTelemetry` (плагин).
+
 **Чтение портала сделано** (ADR-107): `GET /api/v2/memory/{status,facts,facts/:id,indexes}` —
 namespace плагина (`plugin:synth-plugin-memory`) подставляет сервер, чтение — `requireAuth` (core) /
 `ADMIN` (managed). Спека — [docs/API_V2.md](./API_V2.md) §5.38. Операции провайдера (правка/отзыв

@@ -148,6 +148,16 @@ export function mountStandaloneRoutes(
       getRemoteClient: () => getClient(),
       requestSessionService,
       analytics,
+      // ADR-107: вкладка «Память» — агрегаты памяти сессии.
+      ...(deps.storageContext
+        ? {
+            memory: {
+              facts: deps.storageContext.memoryFacts,
+              indexes: deps.storageContext.memoryIndexes,
+              isPluginActive: () => deps.pluginRuntime.host.isActive(MEMORY_PLUGIN_NAME),
+            },
+          }
+        : {}),
     },
     {
       resolveDefaultAgent: getDefaultAgentId,
