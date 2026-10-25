@@ -26,6 +26,7 @@ import {
   createMetricsSettingsRoutes,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
+  createProcessRoutes,
   createPluginsRoutes, createPluginSettingsRoutes,
   createMemoryRoutes, MEMORY_PLUGIN_NAME, MemoryProviderUnavailableError, executeToolDef,
   createOAuthRoutes, bindCredentialToConnector, syncMcpManagerFromRegistry,
@@ -34,6 +35,7 @@ import {
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
+import { createBackendProcessAccess } from '../routes/processes.js';
 import { createSessionRoutes } from '../routes/sessions.js';
 import { createMessageRoutes } from '../routes/messages.js';
 import { createQueueRoutes } from '../routes/queue.js';
@@ -415,6 +417,40 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       },
     },
   ));
+
+  // PROP-096/097: HTTP-контур единого реестра фоновых прогонов (список,
+  // деталь, лог, остановка, удаление). Право на прогон — право на его
+  // сессию-владельца: владелец|ADMIN, участник проекта (read — любая роль,
+  // write — OWNER/EDITOR/LEAD/ADMIN; `VIEWER` читает, но не мутирует —
+  // инвариант 21). Проверка — граничный guard core-фабрики (инвариант 16),
+  // в обработчиках проверок нет. Сервисы фоновой работы в деградированном
+  // режиме хранилища не создаются — тогда контура нет.
+  if (deps.backgroundService && deps.processService) {
+    app.route('/api/v2/processes', createProcessRoutes(
+      { requireAuth: auth.requireAuth },
+      {
+        backgroundRuns: deps.storageContext.backgroundRuns,
+        background: deps.backgroundService,
+        processes: deps.processService,
+        sessionManager,
+      },
+      {
+        isAllowed: createBackendProcessAccess({ auth, projectStore }),
+        resolveUserId: async (c) => (await auth.getCurrentUser(c))?.id ?? '',
+        messages: {
+          runNotFound: (c) => t('errors.notFound.backgroundRun', undefined, c),
+          sessionNotFound: (c) => t('errors.notFound.backgroundRunSession', undefined, c),
+          forbidden: (c) => t('auth.forbidden', undefined, c),
+          invalidQuery: (c) => t('errors.validation.invalidBackgroundRunQuery', undefined, c),
+          invalidKind: (c) => t('errors.validation.backgroundRunLogKind', undefined, c),
+          logNotFound: (c) => t('errors.notFound.processLog', undefined, c),
+          alreadyFinished: (c) => t('errors.conflict.backgroundRunFinished', undefined, c),
+          notStoppable: (c) => t('errors.conflict.backgroundRunNotStoppable', undefined, c),
+          runActive: (c) => t('errors.conflict.backgroundRunActive', undefined, c),
+        },
+      },
+    ));
+  }
 
   // ADR-086 §5: установка пакетов расширений (скиллы/MCP/агенты/пайплайны) и
   // реестр установок. Managed RBAC: установка — ADMIN или service-key со

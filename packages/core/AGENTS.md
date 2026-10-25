@@ -330,7 +330,8 @@
   `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `dictionaries`, `mcp`, `skills`,
   `commands`, `skill-bundles`, `skill-scope`, `git`, `ssh-keys`, `events`, `identities`,
   `service-keys`, `webhooks`, `oauth` (ADR-105 Ф4: `/api/v2/oauth/credentials*` — выдача,
-  метаданные, refresh, отзыв, привязка к MCP-коннектору), `maintenance`, `analytics`.
+  метаданные, refresh, отзыв, привязка к MCP-коннектору), `maintenance`, `analytics`,
+  `processes` (PROP-096/097: `/api/v2/processes*` — реестр фоновых прогонов).
 - `maintenance/*` — ADR-091/ADR-092: обслуживание инстанса. `service.ts` — сервисный слой
   admin-API/UI (список/создание бэкапов, отложенное восстановление
   `scheduleRestore`/`getPendingRestore`/`cancelPendingRestore`, сводный статус; запросы —
@@ -1407,6 +1408,17 @@
   прав → 403, чужой ресурс под чужим id → 404. Шаблоны инстанца — отдельный
   `adminGuard` (ADMIN), инстанцирование дополнительно требует право изменения
   целевого проекта.
+  `createProcessRoutes` (PROP-096/097) — HTTP-контур единого реестра фоновых
+  прогонов (`GET /` — список с фильтрами `sessionId`/`projectId`/`kind`/`status`/
+  `limit`, `GET /:id` — деталь, `GET /:id/logs` — отрезок лога фонового
+  процесса, `POST /:id/stop` — остановка, `DELETE /:id` — удаление терминальной
+  записи). Доступ — **на границе** (инвариант 16): guard `processGuard` резолвит
+  запись реестра и её сессию-владельца **один раз**, кладёт запись в контекст
+  (`guardedProcess`), обработчики проверок доступа не содержат; вид доступа —
+  по HTTP-методу (`read`/`write`), `VIEWER` читает, но не мутирует (инвариант
+  21). Список прогонов фильтруется по доступу к сессии-владельцу (сессии кэшируются
+  на один запрос). Core-дефолт `isAllowed` — `createSessionAccessPredicate()`;
+  backend передаёт правило проекта (`routes/processes.ts`).
   `createSettingsRoutes` (ADR-089/ADR-084): `GET/PUT/DELETE /settings/events` — runtime-настройки
   раздела «События» (`fallbackEvents` из config, `onEventsChange` — live-применение,
   мутации под `eventsWriteGuard`; core — `requireAuth`, backend — ADMIN) и

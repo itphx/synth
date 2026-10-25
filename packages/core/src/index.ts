@@ -1042,6 +1042,7 @@ export type {
   SessionAccessPredicate,
   SessionAccessPredicateOptions,
   SessionAccessMessages,
+  SessionAccessKind,
 } from './server/session-access-guard.js';
 // ADR-105 (Ф3): право привязки внешнего доступа к коннектору — на границе.
 export { createCredentialBindGuard } from './server/credential-bind-guard.js';
@@ -1688,6 +1689,15 @@ export type {
   PipelineProjectRoutesOptions,
   PipelineProjectRouteMessages,
 } from './server/routes/pipeline-project-routes.js';
+// PROP-096/097: HTTP-контур единого реестра фоновых прогонов (список,
+// деталь, лог, остановка, удаление).
+export { createProcessRoutes } from './server/routes/processes.js';
+export type {
+  ProcessRoutesAuth,
+  ProcessRoutesDeps,
+  ProcessRoutesOptions,
+  ProcessRouteMessages,
+} from './server/routes/processes.js';
 // ADR-086 §5: установка пакетов расширений и реестр установок.
 export { createPacksRoutes } from './server/routes/packs.js';
 export type {

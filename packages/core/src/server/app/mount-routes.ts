@@ -26,6 +26,7 @@ import {
   createMetricsSettingsRoutes,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
+  createProcessRoutes,
   createPluginsRoutes, createPluginSettingsRoutes,
   createMemoryRoutes, MEMORY_PLUGIN_NAME,
 } from '../../index.js';
@@ -617,6 +618,29 @@ export function mountStandaloneRoutes(
       runControl: deps.pipelineRunControl,
     },
   ));
+
+  // PROP-096/097: HTTP-контур единого реестра фоновых прогонов (список,
+  // деталь, лог, остановка, удаление). Standalone — дефолтные guard'ы
+  // (`requireAuth`), правило доступа — standalone-предикат (единственный
+  // пользователь инстанса — владелец, ADR-079). Сервисы фоновой работы в
+  // деградированном режиме хранилища не создаются — тогда контура нет.
+  if (deps.backgroundService && deps.processService) {
+    app.route('/api/v2/processes', createProcessRoutes(
+      auth,
+      {
+        backgroundRuns: deps.storageContext.backgroundRuns,
+        background: deps.backgroundService,
+        processes: deps.processService,
+        sessionManager,
+      },
+      {
+        // ADR-089 (standalone): нормализация legacy-владельца локального
+        // профиля (UUID `ProfileData.id`) к `local` — иначе такие сессии были бы
+        // не видны в списке прогонов.
+        localOwnerResolver: deps.localOwnerResolver,
+      },
+    ));
+  }
 
   // ADR-086 §5: установка пакетов расширений (скиллы/MCP/агенты/пайплайны) и
   // реестр установок. Standalone — `requireAuth` (single-user) + scope-гейт

@@ -325,19 +325,17 @@ export class ProcessService {
    * Чтение — из blob-хранилища по пути из записи реестра. `offset`/`limit` —
    * в байтах; усечение по границе UTF-8 допускается (простой срез по байтам).
    *
-   * `null` — записи (или лога) нет.
+   * `null` — записи (или лога) нет: файла лога не существует (запись без
+   * пути, либо лог удалён retention-очисткой). Пустой, но существующий лог —
+   * не `null`, а отрезок с `totalBytes: 0`.
    */
   async logs(id: string, opts: ProcessLogsOptions = {}): Promise<ProcessLogsResult | null> {
     const record = await this.get(id);
     if (!record) return null;
     const truncated = record.metadata?.truncated === true;
-    if (!record.logPath) {
-      return { content: '', offset: 0, nextOffset: 0, totalBytes: 0, truncated };
-    }
+    if (!record.logPath) return null;
     const buf = await this._blobs.read(record.logPath);
-    if (!buf) {
-      return { content: '', offset: 0, nextOffset: 0, totalBytes: 0, truncated };
-    }
+    if (!buf) return null;
     const totalBytes = buf.length;
     const rawOffset = Number.isFinite(opts.offset) ? Number(opts.offset) : 0;
     const offset = Math.min(Math.max(rawOffset, 0), totalBytes);

@@ -72,6 +72,16 @@ const en: Dictionary = {
   'errors.conflict.pipelineRunFinished': 'The run is already finished',
   'errors.conflict.pipelineTemplateUnsupported': 'The template cannot be instantiated as a pipeline',
 
+  // PROP-096/097: единый реестр фоновых прогонов
+  'errors.notFound.backgroundRun': 'Background run not found',
+  'errors.notFound.backgroundRunSession': 'Session of the background run not found',
+  'errors.validation.invalidBackgroundRunQuery': 'Invalid background run filter',
+  'errors.validation.backgroundRunLogKind': 'Logs are available for background processes only',
+  'errors.notFound.processLog': 'Background process log not found',
+  'errors.conflict.backgroundRunFinished': 'The background run is already finished',
+  'errors.conflict.backgroundRunNotStoppable': 'The background run is not controlled by this instance',
+  'errors.conflict.backgroundRunActive': 'The background run is still running',
+
   // ADR-102: отчёты аналитики (только чтение)
   'errors.validation.invalidAnalyticsPeriod': 'Invalid period: expected a date in YYYY-MM-DD (UTC)',
   'errors.validation.invalidAnalyticsRange': 'Period start is later than period end',
@@ -245,6 +255,16 @@ const ru: Dictionary = {
   'errors.conflict.pipelineNothingToPublish': 'Нет черновика для публикации',
   'errors.conflict.pipelineRunFinished': 'Прогон уже завершён',
   'errors.conflict.pipelineTemplateUnsupported': 'Шаблон нельзя инстанцировать в пайплайн',
+
+  // PROP-096/097: единый реестр фоновых прогонов
+  'errors.notFound.backgroundRun': 'Фоновый прогон не найден',
+  'errors.notFound.backgroundRunSession': 'Сессия фонового прогона не найдена',
+  'errors.validation.invalidBackgroundRunQuery': 'Некорректный фильтр фоновых прогонов',
+  'errors.validation.backgroundRunLogKind': 'Логи доступны только для фоновых процессов',
+  'errors.notFound.processLog': 'Лог фонового процесса не найден',
+  'errors.conflict.backgroundRunFinished': 'Фоновый прогон уже завершён',
+  'errors.conflict.backgroundRunNotStoppable': 'Фоновый прогон не контролируется этим инстансом',
+  'errors.conflict.backgroundRunActive': 'Фоновый прогон ещё выполняется',
 
   // ADR-102: отчёты аналитики (только чтение)
   'errors.validation.invalidAnalyticsPeriod': 'Некорректный период: ожидается дата YYYY-MM-DD (UTC)',
