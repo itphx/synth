@@ -1133,3 +1133,12 @@
 - **`test-allinone` включён:** `backend.extraEnv` (`SYNTH_PLUGINS_EXECUTION_ENABLED`, эмбеддинги ollama/nomic-embed-text) + `backend.plugins` (deployDir/deployTrust); доступность ollama из пода проверена заранее.
 - **Проверено на обоих инстансах:** плагин `source: deploy`, `scan: safe`, `active: true` без ручного `approve`; `/memory/status` active; `/pipeline-templates` содержит `builtin:memory-consolidation`; `/memory/graph` и `/memory/consolidate {dryRun}` → 200; на all-in-one индекс собран (2 файла → 2 чанка, dim 768) и пересобран (gen 1 → 2); метрика `synth_memory_index_chunks{status="ready"} 6` на `synth`.
 - **Остаток:** граф на реальных фактах не проверен (0 фактов: запись только тулом `memory_write` в ходе сессии); авто-«schedule → pipeline run» и автошедулер консолидации; Gbrain — вне репозитория (договорено).
+
+## 2026-10-25 — закрытие остатков памяти (расписание→пайплайн, CLI, ACL)
+
+- **Расписание → прогон пайплайна:** `ScheduleTarget = {mode:'pipeline', projectId, pipelineId, version?, payload?}`; `SchedulerService.runPipeline` запускает прогон напрямую (событие в Router не публикуется, сессия не создаётся), `PipelineEngine.run` получил `onStarted` — Job сразу получает `runId` (прогон идёт в фоне). Job: `decision:'pipeline'`, `pipelineId`, `runId`; без раннера — `error/pipeline_unavailable`. Ограничение: `payload` статический (динамического входа «последняя сессия» нет).
+- **UI:** цель `pipeline` редактируется (проект → пайплайн → payload JSON), предупреждение о неопубликованном пайплайне, подпись «Прогон пайплайна: проект / пайплайн».
+- **CLI:** `synth memory status|list|index|rebuild|drop` (+`--wait`, `--json`) — тонкий клиент HTTP API; общий резолвер подключения (`cli/memory-connection.ts`) для core-CLI и публикуемого `@itphx/synth`; транспорт `egressFetch`.
+- **ACL портала памяти:** `authorizeProject(read|write)` на 8 роутах, fail-closed, 403 `FORBIDDEN`; managed — `canReadProject`/`canEditProjectContent` (VIEWER читает, не мутирует).
+- **Приёмка:** build OK · typecheck 9/9 · lint 0 errors · **9807 тестов** (shared 804 · core 6116 · executor 24 · ui 1881 · backend 688 · sdk 96 · plugin-memory 147 · storage-postgres 51) · `adr-check` 98/0 · `docs-link-check` 912/0.
+- **Остаток:** динамический вход прогона (шаблон памяти по расписанию требует фиксированный `sessionId`); AGENTS.md не обновлялся (по договорённости — только по согласованию).
