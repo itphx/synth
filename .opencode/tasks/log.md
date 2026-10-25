@@ -1152,3 +1152,12 @@
 - **UI:** выбор области, «Проект-источник (workspace)» для instance+files + предупреждение о раскрытии, бейдж «Инстанс».
 - **Приёмка:** build OK · typecheck 9/9 · lint 0 errors · **9872 теста** (shared 804 · core 6155 · executor 24 · ui 1888 · backend 688 · sdk 96 · plugin-memory 166 · storage-postgres 51) · контракт PG на живой БД 188/188 · `adr-check` 98/0 · `docs-link-check` 913/0.
 - **Замечания:** инстансный индекс по `files` осознанно раскрывает содержимое workspace всем пользователям (ADMIN-действие, предупреждение в UI); AGENTS.md не обновлялся (по договорённости).
+
+## 2026-10-25 — dev-проверка, модели эмбеддингов, политика секретов в ядре
+
+- **Сканер расширений заблокировал плагин** (`dangerous`) за список имён секретных файлов — ровно за код исключения. Политика перенесена в ядро (`engine/security/secret-files.ts`), плагин спрашивает `facade.security`; скан бандла снова `safe`.
+- **Фингерпринт:** модель берётся из `facade.embedding` (`ollama/<model>`), а не из настроек плагина; смена модели при той же размерности → `stale` (тест).
+- **Dev:** плагин active/safe; индекс по workspace с `.env`/`credentials.json`/`secrets/` — 2 документа из 5 (исключения работают); instance-индекс по facts создаётся; `synth memory status/list` работают; fingerprint `ollama/nomic-embed-text:latest`, dim 768.
+- **Модели Ollama** (owu/omn/localhost): `nomic-embed-text:latest` 768/~0.1–2 c; `nomic-embed-text-v2-moe:latest` 768/~6 c; `qwen3-embedding:latest` 4096/17–21 c. Рекомендация — nomic (дефолт), v2-moe — качество при той же размерности, qwen3 — дорого (×5.3 объёма векторов).
+- **Документация:** MEMORY §2.4/§10.1, CONFIGURATION (RU/EN), API_V2 §5.38 (RU/EN), AGENTS (корень/core/ui); портал `synth-docs` — новая страница «Память агентов», schedule pipeline, CLI, mkdocs --strict.
+- **Приёмка:** build/typecheck 9/9, lint 0 errors, **9878 тестов**, adr-check 98/0, docs-link 923/0.
