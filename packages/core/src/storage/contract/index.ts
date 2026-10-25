@@ -72,4 +72,9 @@ export { describePipelineRunRepository } from './pipeline-run-repository.contrac
 // PROP-047 §2.1 (предпосылка A): порты памяти — факты и индексы с чанками.
 export { describeMemoryFactRepository, describeMemoryIndexRepository } from './memory.js';
 
+// Этап 1 roadmap 0.13: вопросы пользователю (блок 1.3) и единый реестр
+// фоновых прогонов (блок 1.2).
+export { describeQuestionRepository } from './question-repository.contract.js';
+export { describeBackgroundRunRepository } from './background-run-repository.contract.js';
+
 export { createTmpDir, makeSession, makeMessage, makeProject, makeProfile } from './helpers.js';

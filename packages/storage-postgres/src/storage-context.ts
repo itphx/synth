@@ -20,7 +20,10 @@
  *   - `buildExternalCredentialPorts(deps)` → `externalCredentials` (ADR-105 Ф1);
  *   - `buildCredentialAuditPorts(deps)`  → `credentialAudit` (ADR-105 Ф4);
  *   - `buildPipelinePorts(deps)`  → `projectPipelines`/`pipelineRuns` (ADR-101);
- *   - `buildMemoryPorts(deps)`     → `memoryFacts`/`memoryIndexes` (PROP-047 §2.1).
+ *   - `buildMemoryPorts(deps)`     → `memoryFacts`/`memoryIndexes` (PROP-047 §2.1);
+ *   - `buildQuestionPorts(deps)`   → `questions` (этап 1 roadmap 0.13, блок 1.3);
+ *   - `buildBackgroundRunPorts(deps)` → `backgroundRuns` (этап 1 roadmap 0.13,
+ *     блок 1.2 — фоновые саб-агенты и шелл-процессы).
  *
  * Все доменные порты реализованы поверх SQL; FS/package-bound порты (`skills`,
  * `contextFiles`, `blobs`) — **файловые реализации** core (контент скиллов/
@@ -52,6 +55,8 @@ import { buildMemoryPorts } from './ports/memory.js';
 import type { CoreSyncDeps, PortDeps } from './ports/deps.js';
 import { buildEventPorts } from './ports/events.js';
 import { buildPipelinePorts } from './ports/pipelines.js';
+import { buildQuestionPorts } from './ports/questions.js';
+import { buildBackgroundRunPorts } from './ports/background-runs.js';
 import { buildPluginLockPorts } from './ports/plugin-lock.js';
 import { buildPrincipalPorts } from './ports/principals.js';
 import { buildSessionPorts } from './ports/sessions.js';
@@ -185,6 +190,10 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // PROP-068 §4.4 / ADR-090: lock-файл плагинов (таблица `plugin_lock`,
     // миграция 007) — источник истины для update/uninstall.
     ...buildPluginLockPorts(deps),
+    // Этап 1 roadmap 0.13: вопросы пользователю (таблица `questions`) и единый
+    // реестр фоновых прогонов (таблица `background_runs`) — миграция 021.
+    ...buildQuestionPorts(deps),
+    ...buildBackgroundRunPorts(deps),
     // FS/package-bound порты: остаются файловыми (см. шапку модуля).
     skills: file.skills,
     contextFiles: file.contextFiles,

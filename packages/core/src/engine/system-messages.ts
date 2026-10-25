@@ -449,6 +449,14 @@ export const SYSTEM_MESSAGES = {
     'Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
   'execution.remote_unavailable':
     'Remote execution mode (execution.mode=remote) is unavailable: {reason}',
+
+  // --- Вопрос пользователю и фоновые процессы (этап 1 roadmap 0.13) ---
+  'question.answered': 'The user answered the questions: {answers}. Continue with the answers.',
+  'question.cancelled': 'The user cancelled the question: {reason}',
+  'question.timeout': 'The question expired by timeout',
+  'question.deps_unavailable': 'The question mechanism is unavailable in this build',
+  'process.background_started':
+    'Command started in the background (processId: {id}). Output: {log}',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

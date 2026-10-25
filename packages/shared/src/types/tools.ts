@@ -36,6 +36,16 @@ export const ToolCapability = {
    * доменный ресурс, а не примитив ядра.
    */
   SCHEDULE: 'schedule',
+  /**
+   * Вопрос пользователю (этап 1 roadmap 0.13 — блок 1.3): тулы, задающие
+   * пользователю вопрос и ждущие ответа.
+   *
+   * Отдельная capability по той же причине, что и `pipeline`/`schedule`:
+   * вопрос — доменный ресурс (персистентная запись вопроса), а не примитив
+   * ядра. Capability **не** привязана к рабочему каталогу проекта
+   * (`WORKSPACE_CAPABILITIES`) — вопрос задаётся и без workspace.
+   */
+  QUESTION: 'question',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -61,6 +71,10 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.SCHEDULE]: {
     label: 'Расписания',
     description: 'schedule_list, schedule_get, schedule_save, schedule_delete, schedule_run, schedule_jobs',
+  },
+  [ToolCapability.QUESTION]: {
+    label: 'Вопрос пользователю',
+    description: 'question',
   },
 };
 

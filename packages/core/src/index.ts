@@ -561,6 +561,11 @@ export { FileMemoryFactStore } from './storage/file-memory-fact-store.js';
 export type { FileMemoryFactStoreConfig } from './storage/file-memory-fact-store.js';
 export { FileMemoryIndexStore } from './storage/file-memory-index-store.js';
 export type { FileMemoryIndexStoreConfig } from './storage/file-memory-index-store.js';
+// Этап 1 roadmap 0.13: вопросы пользователю и реестр фоновых прогонов.
+export { FileQuestionStore } from './storage/file-question-store.js';
+export type { FileQuestionStoreConfig } from './storage/file-question-store.js';
+export { FileBackgroundRunStore } from './storage/file-background-run-store.js';
+export type { FileBackgroundRunStoreConfig } from './storage/file-background-run-store.js';
 export type {
   SessionRepository,
   SessionFilter,
@@ -656,6 +661,9 @@ export type {
   MemoryIndexSource,
   MemoryIndexStats,
   MemoryChunkRecord,
+  // Этап 1 roadmap 0.13: вопросы пользователю и реестр фоновых прогонов.
+  QuestionRepository,
+  BackgroundRunRepository,
 } from './storage/ports/index.js';
 // ADR-105 (Ф0/Ф1): доменная ошибка хранилища внешних доступов — значение
 // (не только тип): её бросают реализации порта, в т.ч. PostgreSQL-драйвер
@@ -703,6 +711,9 @@ export {
   // ADR-105 (Ф1): внешние доступы (OAuth-креды к коннекторам).
   MemoryExternalCredentialRepository,
   MemoryCredentialAuditRepository,
+  // Этап 1 roadmap 0.13: вопросы пользователю и реестр фоновых прогонов.
+  MemoryQuestionRepository,
+  MemoryBackgroundRunRepository,
 } from './storage/memory/index.js';
 // PROP-047 §2.1: in-memory реализации портов памяти. Имена классов совпадают с
 // именами портов (`MemoryFactRepository`), поэтому в публичном API они

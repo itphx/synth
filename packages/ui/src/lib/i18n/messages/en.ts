@@ -2450,6 +2450,13 @@ export const dict = {
   'execution.remote_unavailable':
     'Remote execution mode (execution.mode=remote) is unavailable: {reason}',
 
+  // --- Question to the user and background processes (stage 1 roadmap 0.13) ---
+  'question.answered': 'The user answered the questions: {answers}. Continue with the answers.',
+  'question.cancelled': 'The user cancelled the question: {reason}',
+  'question.timeout': 'The question expired by timeout',
+  'question.deps_unavailable': 'The question mechanism is unavailable in this build',
+  'process.background_started': 'Command started in the background (processId: {id}). Output: {log}',
+
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH keys',
   'sshKeys.description': 'Per-agent SSH keys for git operations. Private keys and passphrases are encrypted at rest and are never shown after saving.',

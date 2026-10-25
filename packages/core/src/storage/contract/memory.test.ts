@@ -4,6 +4,7 @@ import {
   describeAnalyticsRollupRepository,
   describeAuthorityDecisionJournal,
   describeAuthorityPolicyRepository,
+  describeBackgroundRunRepository,
   describeBlobStore,
   describeContextFileRepository,
   describeCredentialAuditRepository,
@@ -23,6 +24,7 @@ import {
   describeMemoryIndexRepository,
   describePluginAuditRepository,
   describePluginLockRepository,
+  describeQuestionRepository,
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
   describeMcpRegistryRepository,
@@ -48,6 +50,7 @@ import {
   MemoryAnalyticsRollupRepository,
   MemoryAuthorityDecisionJournal,
   MemoryAuthorityPolicyRepository,
+  MemoryBackgroundRunRepository,
   MemoryBlobStore,
   MemoryContextFileRepository,
   MemoryCredentialAuditRepository,
@@ -67,6 +70,7 @@ import {
   MemoryIndexRepository,
   MemoryPluginAuditRepository,
   MemoryPluginLockRepository,
+  MemoryQuestionRepository,
   MemorySecurityAuditRepository,
   MemoryEgressRequestLogRepository,
   MemoryMcpRegistryRepository,
@@ -288,6 +292,17 @@ describe('контрактные тесты in-memory реализаций по�
   describeMemoryIndexRepository('MemoryIndexRepository → MemoryIndexRepository', async () => ({
     repo: new MemoryIndexRepository(),
   }));
+
+  // Этап 1 roadmap 0.13 (блок 1.3): вопросы пользователю.
+  describeQuestionRepository('MemoryQuestionRepository → QuestionRepository', async () => ({
+    repo: new MemoryQuestionRepository(),
+  }));
+
+  // Этап 1 roadmap 0.13 (блок 1.2): реестр фоновых прогонов.
+  describeBackgroundRunRepository(
+    'MemoryBackgroundRunRepository → BackgroundRunRepository',
+    async () => ({ repo: new MemoryBackgroundRunRepository() }),
+  );
 });
 
 /** Специфика memory-реализаций: изоляция экземпляров и замороженные дефолты. */

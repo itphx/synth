@@ -6,6 +6,7 @@ import {
   describeAnalyticsRollupRepository,
   describeAuthorityDecisionJournal,
   describeAuthorityPolicyRepository,
+  describeBackgroundRunRepository,
   describeBlobStore,
   describeContextFileRepository,
   describeCredentialAuditRepository,
@@ -24,6 +25,7 @@ import {
   describeMemoryIndexRepository,
   describePluginAuditRepository,
   describePluginLockRepository,
+  describeQuestionRepository,
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
   describeMcpRegistryRepository,
@@ -87,6 +89,8 @@ import { FileMemoryFactStore } from '../file-memory-fact-store.js';
 import { FileMemoryIndexStore } from '../file-memory-index-store.js';
 import { FileAuthorityPolicyStore } from '../file-authority-policy-store.js';
 import { FileAuthorityDecisionJournal } from '../file-authority-decision-journal.js';
+import { FileQuestionStore } from '../file-question-store.js';
+import { FileBackgroundRunStore } from '../file-background-run-store.js';
 
 /** Мастер-ключ для шифрующих хранилищ (base64, 32 байта) — файл master.key не создаётся. */
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
@@ -361,6 +365,17 @@ describe('контрактные тесты файловых реализаци�
       };
     },
   );
+
+  // Этап 1 roadmap 0.13 (блок 1.3): вопросы пользователю (`questions.json`).
+  describeQuestionRepository('FileQuestionStore → QuestionRepository', async () => ({
+    repo: new FileQuestionStore({ dataDir: await tmp() }),
+  }));
+
+  // Этап 1 roadmap 0.13 (блок 1.2): реестр фоновых прогонов
+  // (`processes/registry.json`).
+  describeBackgroundRunRepository('FileBackgroundRunStore → BackgroundRunRepository', async () => ({
+    repo: new FileBackgroundRunStore({ dataDir: await tmp() }),
+  }));
 });
 
 // `DefaultsRepository` реализуется в backend (`DefaultsStore`) — его контрактный

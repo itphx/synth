@@ -365,6 +365,12 @@ export const ENGINE_MESSAGE_KEYS = [
   // --- Исполнение (ADR-077) ---
   'execution.remote_url_required',
   'execution.remote_unavailable',
+  // --- Вопрос пользователю и фоновые процессы (этап 1 roadmap 0.13) ---
+  'question.answered',
+  'question.cancelled',
+  'question.timeout',
+  'question.deps_unavailable',
+  'process.background_started',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -722,6 +728,12 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   // --- Исполнение (ADR-077) ---
   'execution.remote_url_required': [],
   'execution.remote_unavailable': ["reason"],
+  // --- Вопрос пользователю и фоновые процессы (этап 1 roadmap 0.13) ---
+  'question.answered': ["answers"],
+  'question.cancelled': ["reason"],
+  'question.timeout': [],
+  'question.deps_unavailable': [],
+  'process.background_started': ["id","log"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

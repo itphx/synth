@@ -76,6 +76,21 @@ export type EventType =
   | 'pipeline.run.failed'
   // ADR-101: выход пайплайна вида `gateway` — публикация наружу (ADR-052/ADR-087).
   | 'pipeline.completed'
+  // Этап 1 roadmap 0.13 (блок 1.3): «вопрос пользователю». Префикс
+  // `user_question.*` — намеренно НЕ `question.*`: `question.asked` уже занят
+  // смыслом «очередь зависла» (см. выше).
+  | 'user_question.asked'
+  | 'user_question.answered'
+  | 'user_question.cancelled'
+  // Этап 1 roadmap 0.13 (блок 1.2): фоновые шелл-процессы (PROP-097).
+  | 'process.started'
+  | 'process.exited'
+  | 'process.stopped'
+  // Этап 1 roadmap 0.13 (блок 1.2): фоновые дочерние сессии саб-агентов
+  // (PROP-096).
+  | 'child.completed'
+  | 'child.failed'
+  | 'child.cancelled'
   | 'error';
 
 export interface BusEvent {

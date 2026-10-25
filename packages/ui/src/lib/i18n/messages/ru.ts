@@ -2840,6 +2840,13 @@ export const dict = {
   'execution.remote_url_required': 'Удалённый режим исполнения (execution.mode=remote) требует хотя бы один адрес исполнителя (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
   'execution.remote_unavailable': 'Удалённый режим исполнения (execution.mode=remote) недоступен: {reason}',
 
+  // --- Вопрос пользователю и фоновые процессы (этап 1 roadmap 0.13) ---
+  'question.answered': 'Пользователь ответил на вопросы: {answers}. Продолжай с учётом ответов.',
+  'question.cancelled': 'Пользователь отменил вопрос: {reason}',
+  'question.timeout': 'Вопрос истёк по таймауту',
+  'question.deps_unavailable': 'Механизм вопросов недоступен в этой сборке',
+  'process.background_started': 'Команда запущена в фоне (processId: {id}). Вывод: {log}',
+
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',
   'sshKeys.description': 'SSH-ключи per-agent для git-операций. Приватные ключи и парольные фразы шифруются at-rest и не отображаются после сохранения.',

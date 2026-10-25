@@ -27,6 +27,7 @@ import type {
   AnalyticsRollupRepository,
   AuthorityDecisionJournal,
   AuthorityPolicyRepository,
+  BackgroundRunRepository,
   BlobStore,
   ContextFileRepository,
   DedupRepository,
@@ -44,6 +45,7 @@ import type {
   MaintenanceAuditRepository,
   PluginAuditRepository,
   PluginLockRepository,
+  QuestionRepository,
   SecurityAuditRepository,
   EgressRequestLogRepository,
   McpRegistryRepository,
@@ -118,6 +120,10 @@ import { FilePipelineRunStore } from './file-pipeline-run-store.js';
 // PROP-047 §2.1 (предпосылка A): порты памяти — факты и индексы с чанками.
 import { FileMemoryFactStore } from './file-memory-fact-store.js';
 import { FileMemoryIndexStore } from './file-memory-index-store.js';
+// Этап 1 roadmap 0.13: вопросы пользователю (блок 1.3) и единый реестр
+// фоновых прогонов (блок 1.2).
+import { FileQuestionStore } from './file-question-store.js';
+import { FileBackgroundRunStore } from './file-background-run-store.js';
 import { ContextConfig } from '../engine/context/config.js';
 import { SSHKeyStore } from './ssh-key-store.js';
 import { FileBlobStore } from './file-blob-store.js';
@@ -130,6 +136,7 @@ import {
   MemoryAnalyticsRollupRepository,
   MemoryAuthorityDecisionJournal,
   MemoryAuthorityPolicyRepository,
+  MemoryBackgroundRunRepository,
   MemoryBlobStore,
   MemoryContextFileRepository,
   MemoryDefaultsRepository,
@@ -148,6 +155,7 @@ import {
   MemoryIndexRepository as MemoryIndexRepositoryImpl,
   MemoryPluginAuditRepository,
   MemoryPluginLockRepository,
+  MemoryQuestionRepository,
   MemorySecurityAuditRepository,
   MemoryEgressRequestLogRepository,
   MemoryMcpRegistryRepository,
@@ -400,6 +408,19 @@ export interface StorageContext {
    * (`memory_indexes`/`memory_chunks`, миграция 017).
    */
   memoryIndexes: MemoryIndexRepository;
+  /**
+   * Этап 1 roadmap 0.13 (блок 1.3): персистентные вопросы пользователю
+   * (`ask_user`). Реализовано файловым (`{dataDir}/questions.json`),
+   * in-memory и драйвером PostgreSQL (`questions`, миграция 021).
+   */
+  questions: QuestionRepository;
+  /**
+   * Этап 1 roadmap 0.13 (блок 1.2): единый реестр фоновых прогонов —
+   * фоновые саб-агенты (PROP-096) и шелл-процессы (PROP-097). Реализовано
+   * файловым (`{dataDir}/processes/registry.json`), in-memory и драйвером
+   * PostgreSQL (`background_runs`, миграция 021).
+   */
+  backgroundRuns: BackgroundRunRepository;
 }
 
 /** Параметры сборки слоя хранения (общие для file/memory). */
@@ -660,6 +681,10 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     // чанками (`memory/indexes.json` + `memory/chunks/<id>/g<generation>.json`).
     memoryFacts: new FileMemoryFactStore({ dataDir }),
     memoryIndexes: new FileMemoryIndexStore({ dataDir }),
+    // Этап 1 roadmap 0.13: вопросы пользователю (`questions.json`) и единый
+    // реестр фоновых прогонов (`processes/registry.json`).
+    questions: new FileQuestionStore({ dataDir }),
+    backgroundRuns: new FileBackgroundRunStore({ dataDir }),
   };
 }
 
@@ -717,6 +742,10 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     // PROP-047 §2.1: порты памяти — факты и индексы с чанками.
     memoryFacts: new MemoryFactRepositoryImpl(),
     memoryIndexes: new MemoryIndexRepositoryImpl(),
+    // Этап 1 roadmap 0.13: вопросы пользователю и единый реестр фоновых
+    // прогонов.
+    questions: new MemoryQuestionRepository(),
+    backgroundRuns: new MemoryBackgroundRunRepository(),
   };
 }
 
