@@ -7,7 +7,10 @@ export {
   BackgroundRunService,
   BACKGROUND_RUN_ID_PREFIX,
   BACKGROUND_TERMINAL_STATUSES,
+  PROCESS_LOG_DIR,
+  processLogPath,
   buildSubagentNotification,
+  buildProcessNotification,
   type BackgroundRunServiceOptions,
 } from './service.js';
 export {
@@ -22,6 +25,7 @@ export {
   type BackgroundFinalState,
   type BackgroundFinishPatch,
   type BackgroundLogger,
+  type BackgroundProcessInput,
   type BackgroundRunLimits,
   type BackgroundRunState,
   type BackgroundSubagentInput,

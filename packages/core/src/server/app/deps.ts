@@ -31,6 +31,9 @@ import {
   // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
   BackgroundRunService,
   startBackgroundRunPruner,
+  // PROP-097 (блок 5b): сервис фоновых шелл-процессов + retention логов.
+  ProcessService,
+  startProcessLogPruner,
   AnalyticsRecorder,
   attachAnalyticsActivityHooks,
   startAnalyticsRollupPruner,
@@ -462,6 +465,8 @@ export async function createStandaloneDeps(
         eventBus,
         limits: {
           maxSubagentsPerSession: config.backgroundConfig?.maxSubagentsPerSession ?? 2,
+          // PROP-097: лимит одновременных фоновых шелл-процессов на сессию.
+          maxProcessesPerSession: config.backgroundConfig?.maxProcessesPerSession ?? 5,
           maxRunsPerSession: config.backgroundConfig?.maxRunsPerSession ?? 10,
         },
         // Уведомление родителя о завершении фонового саб-агента: сообщение в
@@ -497,6 +502,13 @@ export async function createStandaloneDeps(
   const stopBackgroundRunPruner = storageDegraded
     ? () => {}
     : startBackgroundRunPruner(storageContext.backgroundRuns, {
+        getRetentionDays: () => config.backgroundConfig?.retentionDays ?? 7,
+      });
+  // PROP-097 (блок 5b): retention логов фоновых процессов. Создаётся **до**
+  // pruner'а записей реестра: лог удаляется, пока его запись ещё видна.
+  const stopProcessLogPruner = storageDegraded
+    ? () => {}
+    : startProcessLogPruner(storageContext.backgroundRuns, storageContext.blobs, {
         getRetentionDays: () => config.backgroundConfig?.retentionDays ?? 7,
       });
 
@@ -734,6 +746,22 @@ export async function createStandaloneDeps(
   // `execution/factory.ts` (`remote` → удалённый порт, fail-closed).
   const executionPort = await createExecutionPortForConfig(config.executionConfig);
 
+  // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
+  //
+  // Тот же порт исполнения, что у тулов (ADR-077): фон — это лишь способ
+  // ожидания, а не отдельный путь исполнения. Учёт прогона — общий реестр
+  // фоновых прогонов (`kind: 'process'`), лог — blob-хранилище (ADR-096).
+  // В деградированном режиме хранилища сервиса нет (писать некуда).
+  const processService = backgroundService
+    ? new ProcessService({
+        executionPort,
+        background: backgroundService,
+        blobs: storageContext.blobs,
+        eventBus,
+        limits: { maxLogBytes: config.backgroundConfig?.logMaxBytes ?? 10_485_760 },
+      })
+    : undefined;
+
   // ADR-077 (шаг B2): в split-режиме MCP-серверы поднимаются **в исполнителе**
   // (браузерные/tier-4 тулы) — control plane забирает их состав и инструменты
   // по HTTP API исполнителя. Только `mode=remote`: в `inline` источник не
@@ -892,6 +920,9 @@ export async function createStandaloneDeps(
     // `task` с `background: true` регистрирует фонового саб-агента и
     // возвращает управление сразу (PROP-096).
     ...(backgroundService ? { backgroundService } : {}),
+    // PROP-097: сервис фоновых шелл-процессов — тот же экземпляр, что у
+    // реестра и тула `execute_shell` (через `ctx.extra.processService`).
+    ...(processService ? { processService } : {}),
     backgroundEnabled: config.backgroundConfig?.enabled ?? true,
     // ADR-101/ADR-051: late-bound рантайм автоматизации для встроенных тулов
     // (`pipeline_*`/`schedule_*`) — движок пайплайнов и шедулер создаются ниже,
@@ -1415,6 +1446,9 @@ export async function createStandaloneDeps(
     // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов (+ pruner).
     backgroundService,
     stopBackgroundRunPruner,
+    // PROP-097 (блок 5b): сервис фоновых шелл-процессов (+ pruner логов).
+    processService,
+    stopProcessLogPruner,
     webhooksConfig,
     // Egress: живой резолвер политики + журналы безопасности.
     egressResolver,

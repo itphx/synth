@@ -622,15 +622,22 @@ export const questionsConfigSchema = z.object({
  *   с `background: true` отказывает (`task.background_disabled`);
  * - `maxSubagentsPerSession` — максимум **одновременно идущих** фоновых
  *   саб-агентов на одну родительскую сессию;
+ * - `maxProcessesPerSession` — максимум **одновременно идущих** фоновых
+ *   шелл-процессов на одну сессию-владельца (PROP-097);
  * - `maxRunsPerSession` — максимум записей реестра на одну сессию-владельца
  *   (защита от роста реестра; записи чистит retention);
+ * - `logMaxBytes` — предел размера лога фонового процесса, байт; `0` — без
+ *   ограничения. По превышении запись в лог прекращается, а в записи реестра
+ *   ставится `metadata.truncated`;
  * - `retentionDays` — срок хранения терминальных записей реестра (дни);
  *   `<= 0` — без ограничения.
  */
 export const backgroundConfigSchema = z.object({
   enabled: z.boolean().default(true),
   maxSubagentsPerSession: z.number().int().min(0).default(2),
+  maxProcessesPerSession: z.number().int().min(0).default(5),
   maxRunsPerSession: z.number().int().min(0).default(10),
+  logMaxBytes: z.number().int().min(0).default(10_485_760),
   retentionDays: z.number().int().default(7),
 });
 

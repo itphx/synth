@@ -49,6 +49,9 @@ import {
   // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов + retention.
   BackgroundRunService,
   startBackgroundRunPruner,
+  // PROP-097 (блок 5b): сервис фоновых шелл-процессов + retention логов.
+  ProcessService,
+  startProcessLogPruner,
   serializeMessage,
   serializeSession,
   WebhookService, startWebhookDeliveryPruner,
@@ -421,6 +424,8 @@ export async function createBackendDeps(
         eventBus,
         limits: {
           maxSubagentsPerSession: config.synth.background.maxSubagentsPerSession,
+          // PROP-097: лимит одновременных фоновых шелл-процессов на сессию.
+          maxProcessesPerSession: config.synth.background.maxProcessesPerSession,
           maxRunsPerSession: config.synth.background.maxRunsPerSession,
         },
         // Уведомление родителя о завершении фонового саб-агента: сообщение в
@@ -460,6 +465,13 @@ export async function createBackendDeps(
   const stopBackgroundRunPruner = storageDegraded
     ? () => {}
     : startBackgroundRunPruner(storageContext.backgroundRuns, {
+        getRetentionDays: () => config.synth.background.retentionDays,
+      });
+  // PROP-097 (блок 5b): retention логов фоновых процессов. Создаётся **до**
+  // pruner'а записей реестра: лог удаляется, пока его запись ещё видна.
+  const stopProcessLogPruner = storageDegraded
+    ? () => {}
+    : startProcessLogPruner(storageContext.backgroundRuns, storageContext.blobs, {
         getRetentionDays: () => config.synth.background.retentionDays,
       });
 
@@ -708,6 +720,22 @@ export async function createBackendDeps(
   const execution = executionConfig ?? resolveExecutionConfig(config.synth, process.env);
   const executionPort = await createExecutionPortForConfig(execution);
 
+  // PROP-097 (блок 5b): сервис фоновых шелл-процессов (паритет с standalone).
+  //
+  // Тот же порт исполнения, что у тулов (ADR-077): фон — это лишь способ
+  // ожидания, а не отдельный путь исполнения. Учёт прогона — общий реестр
+  // фоновых прогонов (`kind: 'process'`), лог — blob-хранилище (ADR-096).
+  // В деградированном режиме хранилища сервиса нет (писать некуда).
+  const processService = backgroundService
+    ? new ProcessService({
+        executionPort,
+        background: backgroundService,
+        blobs: storageContext.blobs,
+        eventBus,
+        limits: { maxLogBytes: config.synth.background.logMaxBytes },
+      })
+    : undefined;
+
   // ADR-070 §2.9.1/ADR-101: зависимости окружения (git/rg/sh) — детекция при
   // старте, fail-open при ошибке. Общий для оркестратора и движка пайплайнов
   // (контекст шага, ADR-101 §10).
@@ -854,6 +882,9 @@ export async function createBackendDeps(
     // `task` с `background: true` регистрирует фонового саб-агента и
     // возвращает управление сразу (PROP-096).
     ...(backgroundService ? { backgroundService } : {}),
+    // PROP-097: сервис фоновых шелл-процессов — тот же экземпляр, что у
+    // реестра и тула `execute_shell` (через `ctx.extra.processService`).
+    ...(processService ? { processService } : {}),
     backgroundEnabled: config.synth.background.enabled,
   });
 
@@ -1399,6 +1430,9 @@ export async function createBackendDeps(
     // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов (+ pruner).
     backgroundService,
     stopBackgroundRunPruner,
+    // PROP-097 (блок 5b): сервис фоновых шелл-процессов (+ pruner логов).
+    processService,
+    stopProcessLogPruner,
     webhookStore,
     webhookDeliveryStore,
     webhookService,

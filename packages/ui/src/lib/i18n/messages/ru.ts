@@ -2862,6 +2862,10 @@ export const dict = {
   'question.timeout': 'Вопрос истёк по таймауту',
   'question.deps_unavailable': 'Механизм вопросов недоступен в этой сборке',
   'process.background_started': 'Команда запущена в фоне (processId: {id}). Вывод: {log}',
+  'process.deps_unavailable': 'Фоновые процессы недоступны в этой сборке',
+  'process.background_limit':
+    'Достигнут лимит фоновых процессов для этой сессии ({limit}). Дождитесь завершения процесса или остановите его.',
+  'process.background_unsupported': 'Фоновое исполнение недоступно в текущем режиме исполнения',
 
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',

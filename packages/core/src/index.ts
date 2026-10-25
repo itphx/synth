@@ -272,6 +272,9 @@ export {
   BackgroundRunService,
   startBackgroundRunPruner,
   buildSubagentNotification,
+  buildProcessNotification,
+  processLogPath,
+  PROCESS_LOG_DIR,
   BACKGROUND_RUN_ID_PREFIX,
   BACKGROUND_TERMINAL_STATUSES,
   BACKGROUND_ERROR_CODES,
@@ -285,10 +288,35 @@ export type {
   BackgroundFinalState,
   BackgroundFinishPatch,
   BackgroundLogger,
+  BackgroundProcessInput,
   BackgroundRunLimits,
   BackgroundRunState,
   BackgroundSubagentInput,
 } from './engine/background/index.js';
+// PROP-097 (блок 5b): фоновые шелл-процессы — сервис запуска/остановки,
+// retention-очистка логов и типизированные ошибки. Публично: managed-backend
+// собирает тот же сервис (паритет core↔backend).
+export {
+  ProcessService,
+  startProcessLogPruner,
+  BackgroundUnsupportedError,
+  ProcessError,
+  PROCESS_ERROR_CODES,
+  PROCESS_LOG_FLUSH_BYTES,
+  PROCESS_LOG_FLUSH_INTERVAL_MS,
+  PROCESS_LOG_TAIL_LIMIT,
+} from './engine/processes/index.js';
+export type {
+  ProcessLogPrunerOptions,
+  ProcessErrorCode,
+  ProcessLimits,
+  ProcessLogger,
+  ProcessLogsOptions,
+  ProcessLogsResult,
+  ProcessServiceOptions,
+  ProcessSpawnInput,
+  ProcessSpawnResult,
+} from './engine/processes/index.js';
 // ADR-090: единая точка исполнения тулов (`safeParse → execute → catch`) и
 // сужение контекста для плагинных тулов. Публичны для managed-backend:
 // портал памяти вызывает админ-тул плагина через реестр тулов (ADR-107, М2).

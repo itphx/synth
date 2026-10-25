@@ -28,12 +28,25 @@ import {
   BackgroundLimitExceededError,
   type BackgroundFinishPatch,
   type BackgroundLogger,
+  type BackgroundProcessInput,
   type BackgroundRunLimits,
   type BackgroundSubagentInput,
 } from './types.js';
 
 /** Префикс id фонового прогона. */
 export const BACKGROUND_RUN_ID_PREFIX = 'bgr_';
+
+/**
+ * Каталог логов фоновых процессов в BlobStore (PROP-097).
+ *
+ * Путь лога — `processes/<id>.log`, где `id` — id записи реестра.
+ */
+export const PROCESS_LOG_DIR = 'processes';
+
+/** Путь лога фонового процесса по id записи реестра. */
+export function processLogPath(runId: string): string {
+  return `${PROCESS_LOG_DIR}/${runId}.log`;
+}
 
 export interface BackgroundRunServiceOptions {
   /** Порт реестра фоновых прогонов (ADR-096) — единственный источник истины. */
@@ -100,7 +113,7 @@ export class BackgroundRunService {
    * @throws BackgroundLimitExceededError — лимит исчерпан.
    */
   async startSubagent(input: BackgroundSubagentInput): Promise<BackgroundRunRecord> {
-    await this._assertLimits(input.sessionId);
+    await this._assertLimits(input.sessionId, 'subagent');
 
     const now = this._now();
     const record: BackgroundRunRecord = {
@@ -116,6 +129,41 @@ export class BackgroundRunService {
       updatedAt: now,
     };
     await this._repository.save(record);
+    return record;
+  }
+
+  /**
+   * Зарегистрировать фоновый шелл-процесс (PROP-097).
+   *
+   * Порядок: проверка лимитов → запись `running` в реестр → событие
+   * `process.started` в канал владельца.
+   *
+   * Вызывается **после** фактического старта процесса портом исполнения:
+   * тогда известны `pid` и `processId` (идентификатор у порта).
+   *
+   * @throws BackgroundLimitExceededError — лимит исчерпан.
+   */
+  async startProcess(input: BackgroundProcessInput): Promise<BackgroundRunRecord> {
+    await this._assertLimits(input.sessionId, 'process');
+
+    const now = this._now();
+    const id = `${BACKGROUND_RUN_ID_PREFIX}${this._generateId()}`;
+    const record: BackgroundRunRecord = {
+      id,
+      kind: 'process',
+      status: 'running',
+      sessionId: input.sessionId,
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      command: input.command,
+      cwd: input.cwd,
+      ...(input.pid !== undefined ? { pid: input.pid } : {}),
+      ...(input.processId ? { processId: input.processId } : {}),
+      logPath: input.logPath ?? processLogPath(id),
+      startedAt: now,
+      updatedAt: now,
+    };
+    await this._repository.save(record);
+    this._publishStarted(record);
     return record;
   }
 
@@ -146,6 +194,9 @@ export class BackgroundRunService {
       ...(patch.summary !== undefined ? { summary: patch.summary } : {}),
       ...(patch.exitCode !== undefined ? { exitCode: patch.exitCode } : {}),
       ...(patch.signal !== undefined ? { signal: patch.signal } : {}),
+      ...(patch.metadata !== undefined
+        ? { metadata: { ...(record.metadata ?? {}), ...patch.metadata } }
+        : {}),
       finishedAt: now,
       updatedAt: now,
     };
@@ -225,17 +276,37 @@ export class BackgroundRunService {
     return this._repository.prune(before);
   }
 
-  /** Проверка лимитов сессии-владельца (бросок при превышении). */
-  private async _assertLimits(sessionId: string): Promise<void> {
-    const maxSubagents = this._limits.maxSubagentsPerSession;
-    if (maxSubagents > 0) {
-      const running = await this._repository.list({ kind: 'subagent', status: 'running', sessionId });
-      if (running.length >= maxSubagents) {
-        throw new BackgroundLimitExceededError(
-          'subagents',
-          maxSubagents,
-          `Превышен лимит фоновых саб-агентов для сессии ${sessionId} (${maxSubagents})`,
-        );
+  /**
+   * Проверка лимитов сессии-владельца (бросок при превышении).
+   *
+   * Лимит одновременных прогонов — **по виду** работы (`subagents`/`processes`):
+   * фоновые саб-агенты и шелл-процессы считаются раздельно (у них разные
+   * лимиты в конфигурации `background.*`).
+   */
+  private async _assertLimits(sessionId: string, kind: 'subagent' | 'process'): Promise<void> {
+    if (kind === 'subagent') {
+      const maxSubagents = this._limits.maxSubagentsPerSession;
+      if (maxSubagents > 0) {
+        const running = await this._repository.list({ kind: 'subagent', status: 'running', sessionId });
+        if (running.length >= maxSubagents) {
+          throw new BackgroundLimitExceededError(
+            'subagents',
+            maxSubagents,
+            `Превышен лимит фоновых саб-агентов для сессии ${sessionId} (${maxSubagents})`,
+          );
+        }
+      }
+    } else {
+      const maxProcesses = this._limits.maxProcessesPerSession;
+      if (maxProcesses > 0) {
+        const running = await this._repository.list({ kind: 'process', status: 'running', sessionId });
+        if (running.length >= maxProcesses) {
+          throw new BackgroundLimitExceededError(
+            'processes',
+            maxProcesses,
+            `Превышен лимит фоновых процессов для сессии ${sessionId} (${maxProcesses})`,
+          );
+        }
       }
     }
     const maxRuns = this._limits.maxRunsPerSession;
@@ -249,6 +320,20 @@ export class BackgroundRunService {
         );
       }
     }
+  }
+
+  /** Стартовое событие прогона в канал владельца. */
+  private _publishStarted(record: BackgroundRunRecord): void {
+    if (record.kind !== 'process') return;
+    this._eventBus.publish(record.sessionId, 'process.started', {
+      process_id: record.processId ?? record.id,
+      session_id: record.sessionId,
+      command: record.command ?? '',
+      cwd: record.cwd ?? '',
+      pid: record.pid,
+      background_run_id: record.id,
+      log_path: record.logPath ?? '',
+    });
   }
 
   /** Терминальное событие прогона в канал владельца. */
@@ -269,26 +354,42 @@ export class BackgroundRunService {
       });
     } else {
       this._eventBus.publish(record.sessionId, 'process.exited', {
-        process_id: record.id,
+        process_id: record.processId ?? record.id,
         session_id: record.sessionId,
-        status: state,
+        state,
         exit_code: record.exitCode,
         signal: record.signal,
+        background_run_id: record.id,
       });
     }
   }
 
   /**
-   * Уведомление родителя о завершении фонового саб-агента.
+   * Уведомление родителя о завершении фонового прогона.
    *
-   * Сообщение — **роль USER** (видно модели), автор `Subagent`, не скрытое и
-   * не эфемерное: результат фоновой работы должен попасть в контекст
+   * Сообщение — **роль USER** (видно модели), автор `Subagent`/`Process`, не
+   * скрытое и не эфемерное: результат фоновой работы должен попасть в контекст
    * родителя. Колбэк точки сборки кладёт его в историю и ставит в очередь
    * (автоход).
    */
   private async _notifyParent(record: BackgroundRunRecord): Promise<void> {
-    if (record.kind !== 'subagent') return;
     if (!this._onNotifyParent) return;
+    if (record.kind === 'process') {
+      const state = record.status === 'completed' ? 'completed'
+        : record.status === 'failed' ? 'failed'
+          : record.status === 'cancelled' ? 'cancelled'
+            : 'failed';
+      const message = buildProcessNotification(record, state);
+      try {
+        await this._onNotifyParent(record.sessionId, message);
+      } catch (err) {
+        this._logger.warn?.(
+          `[BackgroundRunService] уведомление родителя о процессе ${record.id} не удалось: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return;
+    }
+    if (record.kind !== 'subagent') return;
     const state = record.status === 'completed' ? 'completed'
       : record.status === 'failed' ? 'failed'
         : record.status === 'cancelled' ? 'cancelled'
@@ -342,6 +443,63 @@ export function buildSubagentNotification(
       state,
     },
   };
+}
+
+/**
+ * Сообщение-уведомление родителя о завершении фонового шелл-процесса
+ * (PROP-097).
+ *
+ * Формат — компактный XML-блок (его удобно прочитать и модели, и человеку):
+ * `<process processID="…" state="exited|failed|killed" command="…">\n<хвост лога>\n</process>`.
+ *
+ * Тело — **хвост лога** (запись `summary`, ≤4000 символов). Лог — сырой вывод
+ * процесса: обфускация (ADR-036) применяется к тому, что уходит в LLM-запрос
+ * (Gateway), сам лог намеренно не обфусцируется — иначе его нельзя читать.
+ */
+export function buildProcessNotification(
+  record: BackgroundRunRecord,
+  state: 'completed' | 'failed' | 'cancelled',
+): Message {
+  const stateLabel = state === 'completed' ? 'exited'
+    : state === 'failed' ? 'failed'
+      : 'killed';
+  const tail = record.summary ?? '';
+  const content = [
+    `<process processID="${escapeXmlAttr(record.processId ?? record.id)}" state="${stateLabel}" command="${escapeXmlAttr(record.command ?? '')}">`,
+    tail,
+    '</process>',
+  ].join('\n');
+  return {
+    id: generateMessageId(),
+    role: MessageRole.USER,
+    seq: 0,
+    origin: 'local',
+    parts: [makeTextPart(content)],
+    content,
+    createdAt: nowISO(),
+    disabled: false,
+    pinned: false,
+    hidden: false,
+    ephemeral: false,
+    author: 'Process',
+    metadata: {
+      type: 'background_run_result',
+      background_run_id: record.id,
+      kind: record.kind,
+      process_id: record.processId ?? record.id,
+      state,
+    },
+  };
+}
+
+/** Экранирование значения XML-атрибута (кавычки и спецсимволы). */
+function escapeXmlAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\r?\n/g, ' ');
 }
 
 /** Генератор id по умолчанию (uuid). */

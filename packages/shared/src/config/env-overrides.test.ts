@@ -96,6 +96,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       decision: { enabled: false, provider: '', model: '', confidenceThreshold: 0.6 },
       analytics: { retentionDays: 400 },
       questions: { timeoutMs: 600_000, retentionDays: 14 },
+      background: { enabled: true, maxSubagentsPerSession: 2, maxProcessesPerSession: 5, maxRunsPerSession: 10, logMaxBytes: 10_485_760 },
       metrics: { enabled: false },
     };
   }
@@ -115,6 +116,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
       SYNTH_ANALYTICS_RETENTION_DAYS: '30',
       SYNTH_QUESTIONS_TIMEOUT_MS: '0',
       SYNTH_QUESTIONS_RETENTION_DAYS: '7',
+      SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION: '3',
+      SYNTH_BACKGROUND_LOG_MAX_BYTES: '2048',
       SYNTH_METRICS_ENABLED: 'true',
     });
 
@@ -136,6 +139,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(cfg.analytics).toEqual({ retentionDays: 30 });
     // Этап 1 roadmap 0.13 (блок 3): секция `questions` (таймаут ответа + retention).
     expect(cfg.questions).toEqual({ timeoutMs: 0, retentionDays: 7 });
+    // PROP-097: лимит фоновых процессов и предел размера лога.
+    expect(cfg.background).toMatchObject({ maxProcessesPerSession: 3, logMaxBytes: 2048 });
     // ADR-094: Helm ставит SYNTH_METRICS_ENABLED — имя env должно совпадать.
     expect(cfg.metrics).toEqual({ enabled: true });
   });

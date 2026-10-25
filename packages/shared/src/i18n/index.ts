@@ -378,6 +378,9 @@ export const ENGINE_MESSAGE_KEYS = [
   'question.timeout',
   'question.deps_unavailable',
   'process.background_started',
+  'process.deps_unavailable',
+  'process.background_limit',
+  'process.background_unsupported',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -748,6 +751,9 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'question.timeout': [],
   'question.deps_unavailable': [],
   'process.background_started': ["id","log"],
+  'process.deps_unavailable': [],
+  'process.background_limit': ["limit"],
+  'process.background_unsupported': [],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

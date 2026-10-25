@@ -355,6 +355,10 @@ program
       // фоновых прогонов.
       appHandle.stopBackgroundRunPruner?.();
 
+      // PROP-097 (блок 5b): остановить retention-очистку логов фоновых
+      // процессов.
+      appHandle.stopProcessLogPruner?.();
+
       // ADR-094: снять readiness до остановки коллекторов — скрейп в момент
       // shutdown видит `synth_ready 0`.
       setSynthReady(appHandle.metrics, 0);

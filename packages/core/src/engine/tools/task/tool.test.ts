@@ -228,7 +228,12 @@ describe('task/tool.ts — фоновый саб-агент (PROP-096)', () => {
     const service = new BackgroundRunService({
       repository,
       eventBus,
-      limits: { maxSubagentsPerSession: 0, maxRunsPerSession: 0, ...(limits ?? {}) },
+      limits: {
+        maxSubagentsPerSession: 0,
+        maxProcessesPerSession: 0,
+        maxRunsPerSession: 0,
+        ...(limits ?? {}),
+      },
       generateId: () => `id-${++counter}`,
       onNotifyParent: (_sessionId: string, message: Message) => {
         notifications.push(message);

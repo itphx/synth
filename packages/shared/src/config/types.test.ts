@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('mcpServerConfigSchema (ADR-071 §2.2)', () => {
@@ -288,5 +288,33 @@ describe('questionsConfigSchema (этап 1 roadmap 0.13 — блок 3)', () =>
 
   it('отрицательный таймаут отклоняется', () => {
     expect(questionsConfigSchema.safeParse({ timeoutMs: -1 }).success).toBe(false);
+  });
+});
+
+/**
+ * PROP-097: секция `background` — реестр фоновых прогонов (саб-агенты и
+ * шелл-процессы).
+ */
+describe('backgroundConfigSchema (PROP-096/PROP-097)', () => {
+  it('дефолт: 2 саб-агента, 5 процессов, 10 записей реестра, лог 10 МиБ', () => {
+    expect(backgroundConfigSchema.parse({})).toEqual({
+      enabled: true,
+      maxSubagentsPerSession: 2,
+      maxProcessesPerSession: 5,
+      maxRunsPerSession: 10,
+      logMaxBytes: 10_485_760,
+      retentionDays: 7,
+    });
+  });
+
+  it('нулевые лимиты допустимы (без ограничения)', () => {
+    const parsed = backgroundConfigSchema.parse({ maxProcessesPerSession: 0, logMaxBytes: 0 });
+    expect(parsed.maxProcessesPerSession).toBe(0);
+    expect(parsed.logMaxBytes).toBe(0);
+  });
+
+  it('отрицательные лимиты отклоняются', () => {
+    expect(backgroundConfigSchema.safeParse({ maxProcessesPerSession: -1 }).success).toBe(false);
+    expect(backgroundConfigSchema.safeParse({ logMaxBytes: -1 }).success).toBe(false);
   });
 });

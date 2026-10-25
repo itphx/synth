@@ -30,6 +30,17 @@ describe('defaultConfig', () => {
     expect(defaultConfig.questions).toEqual({ timeoutMs: 600_000, retentionDays: 14 });
   });
 
+  it('background по умолчанию: 2 саб-агента, 5 процессов, лог 10 МиБ (PROP-096/PROP-097)', () => {
+    expect(defaultConfig.background).toEqual({
+      enabled: true,
+      maxSubagentsPerSession: 2,
+      maxProcessesPerSession: 5,
+      maxRunsPerSession: 10,
+      logMaxBytes: 10_485_760,
+      retentionDays: 7,
+    });
+  });
+
   it('llm.defaultProvider и llm.defaultModel — пустые строки (зона админа)', () => {
     expect(defaultConfig.llm.defaultProvider).toBe('');
     expect(defaultConfig.llm.defaultModel).toBe('');

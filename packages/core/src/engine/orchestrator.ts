@@ -61,6 +61,7 @@ import type { RequestSessionService } from './events/request-session.js';
 import type { QuestionService } from './question/service.js';
 // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
 import type { BackgroundRunService } from './background/service.js';
+import type { ProcessService } from './processes/service.js';
 
 import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, refreshRuntimeDeps, type RuntimeDeps } from './tools/runtime-deps.js';
 import { InlineExecutionPort } from '../execution/inline-execution-port.js';
@@ -411,6 +412,13 @@ export interface OrchestratorOptions {
    */
   backgroundEnabled?: boolean;
   /**
+   * PROP-097 (блок 5b): сервис фоновых шелл-процессов.
+   *
+   * Не задан — тул `execute_shell` с `background: true` отказывает
+   * (`process.deps_unavailable`).
+   */
+  processService?: ProcessService;
+  /**
    * Шаг 2б: интервал (мс) персистентности частичного стрима. Черновик
    * assistant-сообщения создаётся сразу при первом непустом чанке, далее
    * обновляется не чаще интервала (или при приросте ≥4096 символов).
@@ -579,6 +587,11 @@ export class ChatOrchestrator {
   private readonly _backgroundService: BackgroundRunService | null;
   /** Этап 1 roadmap 0.13 (блок 4): фоновые прогоны разрешены инстансом. */
   private readonly _backgroundEnabled: boolean;
+  /**
+   * PROP-097 (блок 5b): сервис фоновых шелл-процессов (null — не задан:
+   * режим `background: true` у `execute_shell` недоступен).
+   */
+  private readonly _processService: ProcessService | null;
   /**
    * Этап 1 roadmap 0.13 (блок 3): соответствие «ход (`streamId`) → сессия».
    *
@@ -828,6 +841,8 @@ export class ChatOrchestrator {
     // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов + тумблер инстанса.
     this._backgroundService = options.backgroundService ?? null;
     this._backgroundEnabled = options.backgroundEnabled ?? true;
+    // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
+    this._processService = options.processService ?? null;
     this._streamPersistIntervalMs = options.streamPersistIntervalMs ?? 1000;
 
     // ADR-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
@@ -3504,6 +3519,10 @@ export class ChatOrchestrator {
                   // саб-агента и возвращает управление сразу.
                   backgroundService: this._backgroundService ?? undefined,
                   backgroundEnabled: this._backgroundEnabled,
+                  // PROP-097 (блок 5b): сервис фоновых шелл-процессов —
+                  // тул `execute_shell` с `background: true` запускает команду
+                  // в фоне и возвращает управление сразу.
+                  processService: this._processService ?? undefined,
                   // Регистрация cancel-токена фонового прогона: `POST
                   // /sessions/<child>/abort` останавливает фонового ребёнка
                   // через общую карту токенов оркестратора (по streamId).

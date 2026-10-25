@@ -68,6 +68,11 @@ export interface BackgroundRunRecord {
   cwd?: string;
   /** `kind=process`: pid процесса. */
   pid?: number;
+  /**
+   * `kind=process`: идентификатор фонового процесса у порта исполнения
+   * (`proc_<uuid>`) — по нему процесс останавливается и различается в UI.
+   */
+  processId?: string;
   /** Относительный путь лога в BlobStore (`processes/<id>.log`). */
   logPath?: string;
   /** Код завершения процесса. */

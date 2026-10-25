@@ -2456,6 +2456,10 @@ export const dict = {
   'question.timeout': 'The question expired by timeout',
   'question.deps_unavailable': 'The question mechanism is unavailable in this build',
   'process.background_started': 'Command started in the background (processId: {id}). Output: {log}',
+  'process.deps_unavailable': 'Background processes are unavailable in this build',
+  'process.background_limit':
+    'The limit of background processes for this session has been reached ({limit}). Wait for a running process to finish or stop it.',
+  'process.background_unsupported': 'Background execution is unavailable in the current execution mode',
 
   // --- Фоновые саб-агенты и лимит шагов (этап 1 roadmap 0.13, блок 4) ---
   'task.steps_limit':

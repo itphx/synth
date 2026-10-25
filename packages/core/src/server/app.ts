@@ -621,6 +621,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     // Этап 1 roadmap 0.13 (блок 4): остановка retention-очистки реестра
     // фоновых прогонов.
     stopBackgroundRunPruner: () => deps.stopBackgroundRunPruner(),
+    // PROP-097 (блок 5b): остановка retention-очистки логов фоновых процессов.
+    stopProcessLogPruner: () => deps.stopProcessLogPruner(),
     // ADR-052 (этап II): остановка движка webhooks и retention-очистки доставок.
     stopWebhookService: () => deps.webhookService.stop(),
     stopWebhookDeliveryPruner: () => deps.stopWebhookDeliveryPruner(),

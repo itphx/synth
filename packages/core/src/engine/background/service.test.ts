@@ -46,6 +46,7 @@ function createService(opts?: {
     eventBus,
     limits: {
       maxSubagentsPerSession: 0,
+      maxProcessesPerSession: 0,
       maxRunsPerSession: 0,
       ...(opts?.limits ?? {}),
     },
@@ -292,7 +293,7 @@ describe('BackgroundRunService — уведомление родителя', () 
     const service = new BackgroundRunService({
       repository,
       eventBus: new EventBus(),
-      limits: { maxSubagentsPerSession: 0, maxRunsPerSession: 0 },
+      limits: { maxSubagentsPerSession: 0, maxProcessesPerSession: 0, maxRunsPerSession: 0 },
     });
 
     const record = await service.startSubagent({ sessionId: 'parent-1', childSessionId: 'child-1' });
