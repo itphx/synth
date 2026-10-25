@@ -22,6 +22,8 @@ import type { SkillRuntime, SkillScopeOptions } from '../../skills/types.js';
 import type { ProjectStoreLike } from '../../../storage/project-store.js';
 import type { SSHKeyRepository } from '../../../storage/ports/ssh-key-repository.js';
 import type { GitService } from '../../../git/git-service.js';
+// Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю».
+import type { QuestionService } from '../../question/service.js';
 
 export interface TaskExtra {
   provider: BaseProvider;
@@ -90,6 +92,15 @@ export interface TaskExtra {
    * тул `skill` (тот же объект уходит в ToolContext.extra).
    */
   skillRuntime?: SkillRuntime;
+  /**
+   * Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю».
+   *
+   * Саб-агенту вопросы недоступны (permission `question: deny`,
+   * `engine/permission/derive.ts`), но сервис в `extra` прокидывается —
+   * чтобы дочерняя сессия, созданная тулой `task`, могла задавать вопрос
+   * пользователю в своём ходе (если право будет выдано).
+   */
+  questionService?: QuestionService;
   /** ADR-046 §4.5: scope-гейты скиллов родительского контекста. */
   skillScope?: SkillScopeOptions;
   /**

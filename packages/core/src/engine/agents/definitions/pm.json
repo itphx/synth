@@ -19,7 +19,8 @@
     "runtime",
     "memory",
     "pipeline",
-    "schedule"
+    "schedule",
+    "question"
   ],
   "icon": "clipboard",
   "color": "--primary",

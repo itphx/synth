@@ -95,6 +95,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       webhooks: { enabled: false },
       decision: { enabled: false, provider: '', model: '', confidenceThreshold: 0.6 },
       analytics: { retentionDays: 400 },
+      questions: { timeoutMs: 600_000, retentionDays: 14 },
       metrics: { enabled: false },
     };
   }
@@ -112,6 +113,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
       SYNTH_DECISION_MODEL: 'clef-flash',
       SYNTH_DECISION_CONFIDENCE_THRESHOLD: '0.9',
       SYNTH_ANALYTICS_RETENTION_DAYS: '30',
+      SYNTH_QUESTIONS_TIMEOUT_MS: '0',
+      SYNTH_QUESTIONS_RETENTION_DAYS: '7',
       SYNTH_METRICS_ENABLED: 'true',
     });
 
@@ -131,6 +134,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
     });
     // ADR-102: retention суточных роллапов аналитики.
     expect(cfg.analytics).toEqual({ retentionDays: 30 });
+    // Этап 1 roadmap 0.13 (блок 3): секция `questions` (таймаут ответа + retention).
+    expect(cfg.questions).toEqual({ timeoutMs: 0, retentionDays: 7 });
     // ADR-094: Helm ставит SYNTH_METRICS_ENABLED — имя env должно совпадать.
     expect(cfg.metrics).toEqual({ enabled: true });
   });

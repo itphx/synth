@@ -74,6 +74,17 @@ export const SCHEDULE_READ_TOOLS = ['schedule_list', 'schedule_get', 'schedule_j
 
 export const SCHEDULE_WRITE_TOOLS = ['schedule_save', 'schedule_delete', 'schedule_run'];
 
+/**
+ * Этап 1 roadmap 0.13 (блок 3): тул `question` — вопрос пользователю посреди
+ * хода.
+ *
+ * Отдельная группа (как `pipeline`/`schedule`): вопрос — доменный ресурс
+ * (персистентная запись вопроса), а не примитив ядра. Ключ группы совпадает со
+ * значением capability `question`, поэтому правило `permission.rules.question`
+ * работает и по имени встроенного тула, и по capability плагинного тула.
+ */
+export const QUESTION_TOOLS = ['question'];
+
 /** Все тулы пайплайнов (read + write). */
 export const PIPELINE_TOOLS = [...PIPELINE_READ_TOOLS, ...PIPELINE_WRITE_TOOLS];
 /** Все тулы расписаний (read + write). */
@@ -101,6 +112,9 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   pipeline: PIPELINE_TOOLS,
   // ADR-051: расписания планировщика (ключ совпадает с capability `schedule`).
   schedule: SCHEDULE_TOOLS,
+  // Этап 1 roadmap 0.13 (блок 3): вопрос пользователю (ключ совпадает с
+  // capability `question`).
+  question: QUESTION_TOOLS,
   [ToolCapability.FILE_READ]: READ_TOOLS,
   [ToolCapability.FILE_WRITE]: WRITE_TOOLS,
   [ToolCapability.GIT_READ]: GIT_READ_TOOLS,
@@ -133,6 +147,7 @@ export const PERMISSION_GROUP_ORDER: string[] = [
   ToolCapability.GIT_WRITE,
   'pipeline',
   'schedule',
+  'question',
 ];
 
 /** Имена параметров тулов, которые являются путями к файлам/директориям. */

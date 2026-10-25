@@ -142,6 +142,8 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
 | `SYNTH_ANALYTICS_RETENTION_DAYS` | number | `analytics.retentionDays` |
+| `SYNTH_QUESTIONS_TIMEOUT_MS` | number | `questions.timeoutMs` (этап 1 roadmap 0.13 — блок 3) |
+| `SYNTH_QUESTIONS_RETENTION_DAYS` | number | `questions.retentionDays` (этап 1 roadmap 0.13 — блок 3) |
 | `SYNTH_METRICS_ENABLED` | boolean | `metrics.enabled` |
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; мастер-выключатель слоя полномочий) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — наблюдение, `false` — принуждение) |
@@ -1474,6 +1476,34 @@ analytics:
 - **Приватность.** Роллапы агрегированы: текста сообщений, содержимого промптов,
   ключей и PII в значениях нет; дериваты (`cache_hit_rate`, `output_tps`, …)
   не персистятся, а считаются на чтении.
+
+### Вопросы пользователю (`questions.*`, этап 1 roadmap 0.13 — блок 3)
+
+Секция задаёт поведение подсистемы «вопрос пользователю» (`ask_user`): агент
+задаёт вопрос с вариантами ответа, ход **ждёт** ответа пользователя. Ответ
+приходит по `id` вопроса (`POST /api/v2/sessions/:id/questions/:qid/answer`).
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `questions.timeoutMs` | Срок ожидания ответа, мс. `0` — **без таймаута**: вопрос ждёт, пока ответят или его отменят (конец хода, «Стоп», ручная отмена). По истечении срока вопрос снимается с причиной `timeout`. Env — `SYNTH_QUESTIONS_TIMEOUT_MS` | `600000` (10 минут) |
+| `questions.retentionDays` | Срок хранения терминальных записей вопросов (`answered`/`cancelled`), дни; `<= 0` — без ограничения. Env — `SYNTH_QUESTIONS_RETENTION_DAYS` | `14` |
+
+```yaml
+questions:
+  timeoutMs: 600000
+  retentionDays: 14
+```
+
+- **Хранение** — доменный порт `QuestionRepository` (ADR-096): файловый backend —
+  `{dataDir}/questions.json` (ADR-005, атомарная запись), PostgreSQL — таблица
+  `questions` (миграция 021 драйвера).
+- **Ожидание ответа — в памяти процесса.** Поэтому при старте все открытые
+  вопросы снимаются с причиной `interrupted` (ожидание не пережило рестарт) —
+  иначе вопрос «завис» бы навсегда.
+- **Таймеры** — `unref` (не держат процесс); retention-очистка запускается сразу
+  при старте и далее каждые 6 часов, ошибки логируются и не роняют процесс.
+- **События** — `user_question.asked` / `user_question.answered` /
+  `user_question.cancelled` в канале сессии (ADR-009/ADR-024, новых каналов нет).
 
 ### Наблюдаемость (`metrics.*`, ADR-094)
 

@@ -148,6 +148,8 @@ export function mountStandaloneRoutes(
       getRemoteClient: () => getClient(),
       requestSessionService,
       analytics,
+      // Этап 1 roadmap 0.13 (блок 3): вопросы пользователю (`ask_user`).
+      ...(deps.questionService ? { questionService: deps.questionService } : {}),
       // ADR-107: вкладка «Память» — агрегаты памяти сессии.
       ...(deps.storageContext
         ? {

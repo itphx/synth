@@ -116,6 +116,11 @@ export interface BackendAppHandle {
   stopEventJournalPruner: () => void;
   /** ADR-102: остановка retention-очистки суточных роллапов аналитики. */
   stopAnalyticsRollupPruner: () => void;
+  /**
+   * Этап 1 roadmap 0.13 (блок 3): остановка retention-очистки вопросов и
+   * освобождение ожиданий ответа.
+   */
+  stopQuestionPruner: () => void;
   /** ADR-052 (этап II): реестр подписок webhooks (для тестов/диагностики). */
   webhookStore: WebhookRepository;
   /** ADR-052 (этап II): движок исходящих webhooks. */
@@ -440,6 +445,11 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       stopEphemeralSweeper: deps.stopEphemeralSweeper,
       stopEventJournalPruner: deps.stopEventJournalPruner,
       stopAnalyticsRollupPruner: deps.stopAnalyticsRollupPruner,
+      // Этап 1 roadmap 0.13 (блок 3): retention-очистка вопросов + ожидания.
+      stopQuestionPruner: () => {
+        deps.stopQuestionPruner();
+        deps.questionService?.dispose();
+      },
       // ADR-052 (этап II): реестр подписок и движок webhooks + остановка на shutdown.
       webhookStore: deps.webhookStore,
       webhookService: deps.webhookService,

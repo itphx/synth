@@ -21,7 +21,8 @@
     "runtime",
     "memory",
     "pipeline",
-    "schedule"
+    "schedule",
+    "question"
   ],
   "icon": "code-s-slash",
   "color": "--status-info",

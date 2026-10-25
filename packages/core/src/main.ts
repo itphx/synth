@@ -254,6 +254,8 @@ program
       oauthProviders: synth.oauth.providers,
       // ADR-102: конфигурация аналитики (retention суточных роллапов).
       analyticsConfig: synth.analytics,
+      // Этап 1 roadmap 0.13 (блок 3): «вопрос пользователю» (таймаут ответа).
+      questionsConfig: synth.questions,
       // ADR-094: конфигурация метрик (`metrics.enabled`, env SYNTH_METRICS_ENABLED).
       metricsConfig: synth.metrics,
       // ADR-106 Ф1: Authority-слой (по умолчанию выключен).
@@ -342,6 +344,10 @@ program
 
       // ADR-102: остановить retention-очистку роллапов аналитики.
       appHandle.stopAnalyticsRollupPruner?.();
+
+      // Этап 1 roadmap 0.13 (блок 3): остановить retention-очистку вопросов и
+      // освободить ожидания ответа.
+      appHandle.stopQuestionPruner?.();
 
       // ADR-094: снять readiness до остановки коллекторов — скрейп в момент
       // shutdown видит `synth_ready 0`.

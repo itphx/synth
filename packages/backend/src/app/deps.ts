@@ -43,6 +43,9 @@ import {
   SchedulerRuleProvider, SchedulerService, AlwaysLeader, FileLeader,
   createExternalIdentityResolver,
   startEventJournalPruner,
+  // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю + retention.
+  QuestionService,
+  startQuestionPruner,
   WebhookService, startWebhookDeliveryPruner,
   AnalyticsRecorder, attachAnalyticsActivityHooks, startAnalyticsRollupPruner, sessionAxes,
   createStorageContextAsync,
@@ -368,6 +371,38 @@ export async function createBackendDeps(
   const queueManager = new QueueProcessorManager();
   // ADR-102: пользовательские сообщения персистит процессор — мера `messages_user`.
   queueManager.setAnalytics(analytics);
+
+  // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
+  //
+  // Паритет с standalone-core: тот же порт записи (ADR-096), тот же срок
+  // ожидания ответа из конфигурации `questions.timeoutMs` (`0` — без
+  // таймаута). Один инстанс на процесс: его получают и оркестратор (тул
+  // `question`), и HTTP-роуты сессий.
+  const questionService = storageDegraded
+    ? undefined
+    : new QuestionService({
+        repository: storageContext.questions,
+        eventBus,
+        timeoutMs: config.synth.questions.timeoutMs,
+      });
+  // Старт: открытые вопросы прошлого процесса не пережили рестарт (ожидание
+  // в памяти) — снимаем их с причиной `interrupted`. Best-effort: ошибка не
+  // роняет старт.
+  if (questionService) {
+    try {
+      await questionService.recoverOnStart();
+    } catch (err) {
+      console.warn(
+        `[questions] восстановление открытых вопросов не удалось: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  // Retention-очистка терминальных записей вопросов (сразу + каждые 6 ч).
+  const stopQuestionPruner = storageDegraded
+    ? () => {}
+    : startQuestionPruner(storageContext.questions, {
+        getRetentionDays: () => config.synth.questions.retentionDays,
+      });
 
   // ADR-094: доменные коллекторы. `metrics` приходит только при
   // `metrics.enabled=true` — иначе реестр остаётся пустым (`/metrics` → 404).
@@ -753,6 +788,9 @@ export async function createBackendDeps(
     // многоитерационный Tool Use на границе итерации (backoff/гонка).
     isCancelRequested: async (sid) =>
       (await sessionManager.getSession(sid))?.status.cancelRequested === true,
+    // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» — тул
+    // `question` задаёт вопрос и ждёт ответа пользователя.
+    ...(questionService ? { questionService } : {}),
   });
 
   // ADR-090 (Ф5б-2): эффективный конфиг слоя = config.yaml (+env) поверх
@@ -1291,6 +1329,9 @@ export async function createBackendDeps(
     packs: packStore,
     eventBus,
     queueManager,
+    // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю (+ pruner).
+    questionService,
+    stopQuestionPruner,
     webhookStore,
     webhookDeliveryStore,
     webhookService,

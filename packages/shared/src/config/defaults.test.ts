@@ -23,6 +23,11 @@ describe('defaultConfig', () => {
     expect(defaultConfig).toHaveProperty('scheduler');
     expect(defaultConfig).toHaveProperty('decision');
     expect(defaultConfig).toHaveProperty('metrics');
+    expect(defaultConfig).toHaveProperty('questions');
+  });
+
+  it('questions по умолчанию: таймаут ответа 10 минут, retention 14 дней (этап 1 roadmap 0.13)', () => {
+    expect(defaultConfig.questions).toEqual({ timeoutMs: 600_000, retentionDays: 14 });
   });
 
   it('llm.defaultProvider и llm.defaultModel — пустые строки (зона админа)', () => {

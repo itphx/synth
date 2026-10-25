@@ -598,6 +598,21 @@ export const analyticsConfigSchema = z.object({
   retentionDays: z.number().int().default(400),
 });
 
+// --- Вопросы пользователю (этап 1 roadmap 0.13 — блок 3) ---
+
+/**
+ * Конфигурация подсистемы «вопрос пользователю» (`ask_user`).
+ *
+ * - `timeoutMs` — срок ожидания ответа на вопрос, мс. `0` — **без таймаута**:
+ *   вопрос ждёт ответа, пока его не отменят вручную или не прервётся ход;
+ * - `retentionDays` — срок хранения терминальных записей вопросов (дни);
+ *   `<= 0` — без ограничения.
+ */
+export const questionsConfigSchema = z.object({
+  timeoutMs: z.number().int().min(0).default(600_000),
+  retentionDays: z.number().int().default(14),
+});
+
 // --- Authority-слой (ADR-106) ---
 
 /**
@@ -1225,6 +1240,7 @@ export const synthConfigSchema = z.object({
   decision: decisionConfigSchema.default({}),
   oauth: oauthConfigSchema.default({}),
   analytics: analyticsConfigSchema.default({}),
+  questions: questionsConfigSchema.default({}),
   metrics: metricsConfigSchema.default({}),
   authority: authorityConfigSchema.default({}),
   plugins: pluginsConfigSchema.default({}),
@@ -1275,6 +1291,8 @@ export type OAuthProviderConfig = z.infer<typeof oauthProviderConfigSchema>;
 /** ADR-105 (Ф3): секция `oauth` (каталог провайдеров). */
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
 export type AnalyticsConfig = z.infer<typeof analyticsConfigSchema>;
+/** Этап 1 roadmap 0.13 (блок 3): секция `questions` (таймаут ответа + retention). */
+export type QuestionsConfig = z.infer<typeof questionsConfigSchema>;
 /** ADR-094: секция `metrics` (`enabled`). */
 export type MetricsConfig = z.infer<typeof metricsConfigSchema>;
 /** ADR-106 Ф1: секция `authority` (`enabled`/`shadow`). */

@@ -204,6 +204,11 @@ describe('PermissionEvaluator — plan mode (ADR-025)', () => {
     expect(planCheck('plan_exit', {}, { sessionMode: 'plan' }).action).toBe('allow');
   });
 
+  it('mode=plan не блокирует тул question (вопрос — не мутация)', () => {
+    expect(planCheck('question', { questions: [] }, { sessionMode: 'plan' }).action).toBe('allow');
+    expect(planCheck('question', { questions: [] }, { planMode: 'strict', planApproved: false }).action).toBe('allow');
+  });
+
   it('strict без утверждённого плана блокирует write', () => {
     expect(planCheck('write_file', { file_path: 'a.txt', content: 'x' }, { planMode: 'strict', planApproved: false }).action).toBe('deny');
   });

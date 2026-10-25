@@ -44,3 +44,29 @@ describe('Дефолтные агенты — capability pipeline/schedule (ADR-
     );
   });
 });
+
+/**
+ * Этап 1 roadmap 0.13 (блок 3): capability `question` — вопрос пользователю
+ * посреди хода.
+ *
+ * Capability получают те же агенты, что и `pipeline`/`schedule` (агенты,
+ * которые ведут работу в проекте и могут уточнять требования у человека).
+ * Read-only агенты (`explore`, `auditor`), сабагент (`general`) и
+ * генератор заголовков (`title`) — нет: вопрос задаёт человек, а не агент.
+ */
+describe('Дефолтные агенты — capability question (этап 1 roadmap 0.13)', () => {
+  const agents = loadSystemAgentDefinitions();
+  const byId = new Map(agents.map((a) => [a.id, a]));
+
+  it.each(WITH_AUTOMATION)('%s имеет capability question', (id) => {
+    const agent = byId.get(id);
+    expect(agent, `агент ${id} не найден`).toBeDefined();
+    expect(agent!.capabilities, id).toContain(ToolCapability.QUESTION);
+  });
+
+  it.each(WITHOUT_AUTOMATION)('%s не имеет capability question', (id) => {
+    const agent = byId.get(id);
+    expect(agent, `агент ${id} не найден`).toBeDefined();
+    expect(agent!.capabilities, id).not.toContain(ToolCapability.QUESTION);
+  });
+});

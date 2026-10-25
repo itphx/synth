@@ -57,6 +57,8 @@ import { runSubagentResume, validateSubagentResume, SubagentResumeError, type Su
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
 import type { HookBus } from './hooks/hook-bus.js';
 import type { RequestSessionService } from './events/request-session.js';
+// Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю».
+import type { QuestionService } from './question/service.js';
 
 import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, refreshRuntimeDeps, type RuntimeDeps } from './tools/runtime-deps.js';
 import { InlineExecutionPort } from '../execution/inline-execution-port.js';
@@ -387,6 +389,13 @@ export interface OrchestratorOptions {
    */
   isCancelRequested?: (sessionId: string) => Promise<boolean>;
   /**
+   * Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
+   *
+   * Не задан — тул `question` возвращает `question.deps_unavailable`
+   * (вопросы в этой сборке не работают).
+   */
+  questionService?: QuestionService;
+  /**
    * Шаг 2б: интервал (мс) персистентности частичного стрима. Черновик
    * assistant-сообщения создаётся сразу при первом непустом чанке, далее
    * обновляется не чаще интервала (или при приросте ≥4096 символов).
@@ -544,6 +553,17 @@ export class ChatOrchestrator {
    * границе цикла Tool Use даже без живого cancelToken (backoff/гонка).
    */
   private readonly _isCancelRequested: ((sessionId: string) => Promise<boolean>) | null;
+  /**
+   * Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (null — не задан).
+   */
+  private readonly _questionService: QuestionService | null;
+  /**
+   * Этап 1 roadmap 0.13 (блок 3): соответствие «ход (`streamId`) → сессия».
+   *
+   * Нужно для «Стопа»: `cancel(streamId)` знает только ход, а снимать открытые
+   * вопросы нужно у сессии.
+   */
+  private readonly _streamSessions = new Map<string, string>();
   /** Шаг 2б: интервал персистентности частичного стрима (мс). */
   private readonly _streamPersistIntervalMs: number;
   /** ADR-069 Фаза 1: конфиг проектных инструкций (null — выключено/не задано). */
@@ -781,6 +801,8 @@ export class ChatOrchestrator {
     this._getAutomationRuntime = options.getAutomationRuntime ?? null;
     this._isSchedulerActive = options.isSchedulerActive ?? null;
     this._isCancelRequested = options.isCancelRequested ?? null;
+    // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю.
+    this._questionService = options.questionService ?? null;
     this._streamPersistIntervalMs = options.streamPersistIntervalMs ?? 1000;
 
     // ADR-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
@@ -2718,6 +2740,10 @@ export class ChatOrchestrator {
     if (earlyResult) return earlyResult;
 
     try {
+      // Этап 1 roadmap 0.13 (блок 3): «ход → сессия» — нужно для «Стопа»:
+      // `cancel(streamId)` знает только ход, а снимать открытые вопросы нужно
+      // у сессии. Запись снимается в `finally` ниже.
+      this._streamSessions.set(streamId, session.id);
       // ADR-095 (шаг 6b-1): подготовка запроса (провайдер → MCP-скоуп →
       // state-сообщения → промпт Composer'ом → инструменты → cancel-токен)
       // вынесена в `orchestrator/phases/process-setup.ts`; порядок прежний.
@@ -2815,6 +2841,13 @@ export class ChatOrchestrator {
           cancelToken.cancelled
           || (this._isCancelRequested ? await this._isCancelRequested(session.id) : false)
         ) {
+          // Этап 1 roadmap 0.13 (блок 3): отмена хода снимает открытые
+          // вопросы сессии — иначе вопрос остался бы ждать ответа.
+          if (this._questionService) {
+            void this._questionService.cancelSession(session.id, 'aborted').catch(() => {
+              // Снятие вопросов не должно ронять отмену хода.
+            });
+          }
           cancelledBeforeFinal = true;
           break;
         }
@@ -3438,6 +3471,9 @@ export class ChatOrchestrator {
                   // ADR-046 §5: тул `skill` получает рантайм через ToolContext.extra
                   // (в ToolContext нет dataDir); саб-агенты — тот же объект.
                   skillRuntime: this._skillRuntime ?? undefined,
+                  // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю —
+                  // тул `question` задаёт вопрос и ждёт ответа.
+                  questionService: this._questionService ?? undefined,
                   // ADR-046 §4.5: scope-гейты скиллов (система/проект/сессия).
                   skillScope: this._skillScopeFor(session, projectForState),
                   // ADR-069 §7: уже резолвленные проектные инструкции — в extra,
@@ -3815,6 +3851,10 @@ export class ChatOrchestrator {
         if (stopAfterDeny) break;
       }
 
+      // Этап 1 roadmap 0.13 (блок 3): конец хода — снимаем вопросы **этого**
+      // хода (оставшиеся `pending`). Вопросы других ходов/сессий не трогаем.
+      await this._cancelTurnQuestions(session.id, streamId);
+
       // ADR-095 (шаг 6b-1): эпилог (ветка отмены до финального сохранения,
       // фоллбек-тексты, quality-check/escalation, персист tool-chain, финальное
       // сообщение, `stream.done`, авто-тайтл, триггеры оптимизации контекста)
@@ -3844,12 +3884,48 @@ export class ChatOrchestrator {
         providerName: session.settings.provider,
         agentRole: effectiveAgentRole,
       });
+    } finally {
+      this._streamSessions.delete(streamId);
+    }
+  }
+
+  /**
+   * Этап 1 roadmap 0.13 (блок 3): снять открытые вопросы **этого хода**.
+   *
+   * Вопросы других ходов не трогаем (фильтр по `turnId`): снятие вопроса
+   * соседнего хода сломало бы его ожидание ответа. Ошибки не роняют ход.
+   */
+  private async _cancelTurnQuestions(sessionId: string, turnId: string): Promise<void> {
+    const service = this._questionService;
+    if (!service) return;
+    try {
+      const pending = await service.listPending(sessionId);
+      for (const record of pending) {
+        if (record.turnId !== turnId) continue;
+        try {
+          await service.cancel(record.id, 'turn_ended');
+        } catch {
+          // Уже закрыт (ответ пришёл гонкой) — не мешает.
+        }
+      }
+    } catch (err) {
+      warning('ORCHESTRATOR', `Не удалось снять вопросы хода: ${String(err)}`);
     }
   }
 
   cancel(streamId: string): void {
     const token = this._cancellationTokens.get(streamId);
     if (token) token.cancel();
+    // Этап 1 roadmap 0.13 (блок 3): «Стоп» снимает открытые вопросы сессии —
+    // иначе вопрос остался бы ждать ответа уже после отмены хода. Сигнал
+    // отмены тула (`toolAbortController`) снимает вопрос сам, но сигнал может
+    // не дойти (вопрос задан вне выполняющегося тула) — снимаем явно.
+    const sessionId = this._streamSessions.get(streamId);
+    if (sessionId && this._questionService) {
+      void this._questionService.cancelSession(sessionId, 'aborted').catch(() => {
+        // Отмена вопросов не должна ронять «Стоп».
+      });
+    }
   }
 
   /**

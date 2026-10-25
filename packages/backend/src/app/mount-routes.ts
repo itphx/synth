@@ -196,6 +196,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       indexes: deps.storageContext.memoryIndexes,
       isPluginActive: () => deps.pluginRuntime.host.isActive(MEMORY_PLUGIN_NAME),
     },
+    // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
+    deps.questionService,
   ));
 
   // Messages routes

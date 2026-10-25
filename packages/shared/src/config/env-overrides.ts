@@ -73,6 +73,9 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'decision', key: 'escalationModel', type: 'string' },
   // analytics (ADR-102)
   { section: 'analytics', key: 'retentionDays', type: 'number' },
+  // questions (этап 1 roadmap 0.13 — блок 3): таймаут ответа + retention.
+  { section: 'questions', key: 'timeoutMs', type: 'number' },
+  { section: 'questions', key: 'retentionDays', type: 'number' },
   // metrics (ADR-094): Helm ставит `SYNTH_METRICS_ENABLED` — имя должно совпадать.
   { section: 'metrics', key: 'enabled', type: 'boolean' },
   // authority (ADR-106 Ф1): мастер-выключатель слоя и режим наблюдения.

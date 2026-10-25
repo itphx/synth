@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('mcpServerConfigSchema (ADR-071 §2.2)', () => {
@@ -271,5 +271,22 @@ describe('pluginsHybridConfigSchema (ADR-090 Ф7)', () => {
       mode: 'allowlist',
       allow: ['a'],
     });
+  });
+});
+
+/**
+ * Этап 1 roadmap 0.13 (блок 3): секция `questions` — «вопрос пользователю».
+ */
+describe('questionsConfigSchema (этап 1 roadmap 0.13 — блок 3)', () => {
+  it('дефолт: таймаут ответа 10 минут, retention 14 дней', () => {
+    expect(questionsConfigSchema.parse({})).toEqual({ timeoutMs: 600_000, retentionDays: 14 });
+  });
+
+  it('timeoutMs = 0 — без таймаута (валидное значение)', () => {
+    expect(questionsConfigSchema.parse({ timeoutMs: 0 }).timeoutMs).toBe(0);
+  });
+
+  it('отрицательный таймаут отклоняется', () => {
+    expect(questionsConfigSchema.safeParse({ timeoutMs: -1 }).success).toBe(false);
   });
 });

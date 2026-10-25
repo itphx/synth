@@ -25,6 +25,9 @@ import {
   createExternalIdentityResolver,
   startEventJournalPruner,
   startWebhookDeliveryPruner,
+  // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю + retention.
+  QuestionService,
+  startQuestionPruner,
   AnalyticsRecorder,
   attachAnalyticsActivityHooks,
   startAnalyticsRollupPruner,
@@ -411,6 +414,38 @@ export async function createStandaloneDeps(
   // точка записи инкрементирует `activity.messages_user`.
   queueManager.setAnalytics(analytics);
 
+  // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
+  //
+  // Один инстанс на процесс: его получают и оркестратор (тул `question`), и
+  // HTTP-роуты сессий (`GET /:id/questions`, `POST .../answer|cancel`).
+  // Порт записи — из контекста хранения (ADR-096); срок ожидания ответа — из
+  // конфигурации `questions.timeoutMs` (`0` — без таймаута).
+  const questionService = storageDegraded
+    ? undefined
+    : new QuestionService({
+        repository: storageContext.questions,
+        eventBus,
+        timeoutMs: config.questionsConfig?.timeoutMs ?? 600_000,
+      });
+  // Старт: открытые вопросы прошлого процесса не пережили рестарт (ожидание
+  // в памяти) — снимаем их с причиной `interrupted`. Best-effort: ошибка не
+  // роняет старт.
+  if (questionService) {
+    try {
+      await questionService.recoverOnStart();
+    } catch (err) {
+      console.warn(
+        `[questions] восстановление открытых вопросов не удалось: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  // Retention-очистка терминальных записей вопросов (сразу + каждые 6 ч).
+  const stopQuestionPruner = storageDegraded
+    ? () => {}
+    : startQuestionPruner(storageContext.questions, {
+        getRetentionDays: () => config.questionsConfig?.retentionDays ?? 14,
+      });
+
   // ADR-094: доменные коллекторы. `metrics` приходит только при
   // `metrics.enabled=true` — иначе реестр остается пустым (`/metrics` → 404).
   // Фоновые таймеры `unref`-ятся; остановка — `stopMetricsCollectors` на
@@ -796,6 +831,9 @@ export async function createStandaloneDeps(
     // ADR-051: late-bound резолвер активности расписания в сессии (ScheduleStore
     // создаётся ниже) — включает статический блок `Scheduler` в промпт.
     isSchedulerActive: (sid) => scheduleStore.hasEnabledTargetFor(sid),
+    // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» — тул
+    // `question` задаёт вопрос и ждёт ответа пользователя.
+    ...(questionService ? { questionService } : {}),
     // ADR-101/ADR-051: late-bound рантайм автоматизации для встроенных тулов
     // (`pipeline_*`/`schedule_*`) — движок пайплайнов и шедулер создаются ниже,
     // поэтому геттер отдаёт актуальный снимок в момент хода.
@@ -1312,6 +1350,9 @@ export async function createStandaloneDeps(
     mcpManager,
     eventBus,
     queueManager,
+    // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю (+ pruner).
+    questionService,
+    stopQuestionPruner,
     webhooksConfig,
     // Egress: живой резолвер политики + журналы безопасности.
     egressResolver,

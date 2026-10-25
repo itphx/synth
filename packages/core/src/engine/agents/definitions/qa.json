@@ -20,7 +20,8 @@
     "runtime",
     "memory",
     "pipeline",
-    "schedule"
+    "schedule",
+    "question"
   ],
   "icon": "bug",
   "color": "--syntax-number",

@@ -241,6 +241,29 @@ export type { StoredDictionary, DictionaryLanguage } from './engine/router/index
 export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
 
 export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
+// Этап 1 roadmap 0.13 (блок 3): подсистема «вопрос пользователю» (`ask_user`) —
+// сервис (постановка/ожидание/ответ/отмена), retention-очистка и типизированные
+// ошибки. Публично: managed-backend собирает тот же сервис (паритет core↔backend).
+export {
+  QuestionService,
+  startQuestionPruner,
+  validateAnswers,
+  QUESTION_ERROR_CODES,
+  QuestionError,
+  QuestionNotFoundError,
+  QuestionAlreadySettledError,
+  QuestionInvalidAnswerError,
+} from './engine/question/index.js';
+export type {
+  QuestionServiceOptions,
+  QuestionLogger,
+  QuestionPrunerOptions,
+  QuestionAskInput,
+  QuestionOutcome,
+  QuestionListFilter,
+  QuestionErrorCode,
+  QuestionInvalidAnswerReason,
+} from './engine/question/index.js';
 // ADR-090: единая точка исполнения тулов (`safeParse → execute → catch`) и
 // сужение контекста для плагинных тулов. Публичны для managed-backend:
 // портал памяти вызывает админ-тул плагина через реестр тулов (ADR-107, М2).

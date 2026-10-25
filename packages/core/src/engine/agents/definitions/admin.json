@@ -21,7 +21,8 @@
     "runtime",
     "memory",
     "pipeline",
-    "schedule"
+    "schedule",
+    "question"
   ],
   "icon": "shield-keyhole",
   "color": "--status-error",
