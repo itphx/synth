@@ -1014,7 +1014,9 @@ CRUD расписаний планировщика (единая фабрика 
 backend). Срабатывание не создаёт сессию
 само: сервис публикует нормализованное событие `source: 'cron'`,
 `type: 'schedule_fired'` через `EventIngress`, а маршрутизацию выполняет
-`SchedulerRuleProvider` (`RouteRuleProvider`). RBAC managed (backend): чтение
+`SchedulerRuleProvider` (`RouteRuleProvider`). Исключение — цель `mode:'pipeline'`:
+шедулер запускает прогон пайплайна **напрямую** (событие в Router не публикуется и
+сессия не создаётся), см. ниже. RBAC managed (backend): чтение
 (`GET`) — `requireAuth`; мутации (`POST`/`PUT`/`DELETE`) и принудительный запуск
 (`POST /:id/run`) — только ADMIN (`writeGuard = requireAdmin`); `run` дополнительно
 под rate limit 10/60 c (`runMiddleware`). В core (standalone) — единый `requireAuth`
@@ -1024,7 +1026,8 @@ service-key с `schedules:write` **или** `automation:install` (зонтичн
 установщика пакетов расширений — достаточно **любого** из двух: расписание,
 порождаемое пакетом, пишется его установщиком; в managed scope-гейт действует
 **сверх** ролевого гейта — ключу дополнительно нужна роль `ADMIN`); проектная проекция — по цели
-расписания (`bound`/`queue` → проект сессии, `ephemeral` → `project`).
+расписания (`bound`/`queue` → проект сессии, `ephemeral` → `project`,
+`pipeline` → `projectId`).
 
 | Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|---|
@@ -1037,11 +1040,15 @@ service-key с `schedules:write` **или** `automation:install` (зонтичн
 
 `ScheduleJob` (`types/schedules.ts`): `trigger` (`cron`/`manual`/`catchup`),
 `status` (`ok`/`error`/`skipped`), `startedAt`/`finishedAt`/`durationMs`, `target`,
-`decision`/`reason` (маршрутизация: `drop no_route`, `busy`, `missed`),
-`sessionId`, `error`.
+`decision`/`reason` (маршрутизация: `drop no_route`, `busy`, `missed`; для цели
+`pipeline` — `decision:'pipeline'`, `reason:'pipeline_unavailable'` при отсутствии
+раннера прогонов), `sessionId`, `pipelineId`/`runId`, `error`.
 
 `target` — дискриминированный союз: `{mode:'bound', sessionId}` |
-`{mode:'ephemeral', agentTemplate?, project?, ttl?}` | `{mode:'queue', sessionId}`.
+`{mode:'ephemeral', agentTemplate?, project?, ttl?}` | `{mode:'queue', sessionId}` |
+`{mode:'pipeline', projectId, pipelineId, version?, payload?}`. Для `pipeline`:
+`payload` — статический вход прогона (`trigger.payload.*`), `version` по умолчанию —
+последняя опубликованная; прогон идёт в фоне, `runId` — в Job-истории.
 `cron` — 5 полей (UTC), `every` — `30s | 15m | 1h | 24h`. `nextRunAt` вычисляется
 сервисом; `catchUp` (`skip`/`once`, дефолт `scheduler.catchUp`) управляет поведением
 при пропущенном на старте срабатывании, Job-история — `GET /:id/jobs`.
@@ -1848,6 +1855,31 @@ managed-backend; backend добавляет только RBAC через `opts.g
 админский портал). Мутации индексов — **тот же guard**, что и у чтения
 (managed — ADMIN). Портов памяти в сборке нет — контур отвечает **503
 `MEMORY_UNAVAILABLE`** (деградация, а не 500).
+
+**Проектная авторизация (инвариант 16, ADR-089 §5.8).** `projectId` — обычный
+параметр запроса, поэтому права на проект проверяются **на границе** (до
+обращения к порту/тулу), а не внутри обработчика: `read` — право **чтения**
+проекта (владелец/участник/`LEAD`/`ADMIN`), `write` — право **изменения
+содержимого** (владелец/`EDITOR`/`LEAD`/`ADMIN`; `VIEWER` только читает —
+инвариант 21). Отказ — **403 `FORBIDDEN`**; сбой самой проверки (исключение) —
+тоже 403 (fail-closed: проверка не должна превращаться в разрешение). В
+managed портал дополнительно закрыт ролевым guard'ом (ADMIN) — проектная
+проверка работает **поверх** него. Проверка не задана (standalone: пользователь
+инстанса один) — доступ разрешён. `GET /status` вне проверки: агрегат по
+инстансу, `projectId` у него нет. **404 раньше 403**: «нет сущности» (факта,
+индекса, проекта) отвечает 404, а права проверяются уже по проекту найденной
+сущности.
+
+| Роут | Вид доступа | id проекта |
+|---|---|---|
+| `GET /memory/facts?projectId=` | `read` | query (не передан — проверки нет) |
+| `GET /memory/facts/:id` | `read` | проект **самого факта** (нет проекта — проверки нет) |
+| `GET /memory/indexes?projectId=` | `read` | query (не передан — проверки нет) |
+| `POST /memory/indexes` | `write` | тело (обязателен) |
+| `POST /memory/indexes/:id/rebuild` | `write` | проект **индекса** |
+| `DELETE /memory/indexes/:id` | `write` | проект **индекса** |
+| `POST /memory/consolidate` | `write` | тело (не передан — операция по инстансу) |
+| `GET /memory/graph?projectId=` | `read` | query (не передан — проверки нет) |
 
 | Метод | Путь | Сборка | Назначение / req-resp |
 |---|---|---|---|
