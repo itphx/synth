@@ -22,6 +22,7 @@ const SessionSettingsTab = lazy(() =>
 )
 const ProjectTab = lazy(() => import('./ProjectTab').then((m) => ({ default: m.ProjectTab })))
 const SchedulerTab = lazy(() => import('./SchedulerTab').then((m) => ({ default: m.SchedulerTab })))
+const ProcessesTab = lazy(() => import('./ProcessesTab').then((m) => ({ default: m.ProcessesTab })))
 
 /** Заглушка на время загрузки ленивой вкладки — спиннер в сетке панели. */
 function TabLoadingFallback() {
@@ -43,6 +44,8 @@ export const RIGHT_TABS = [
   { id: 'memory', icon: 'brain' as const, labelKey: 'rightPanel.tab.memory' },
   { id: 'references', icon: 'link' as const, labelKey: 'rightPanel.tab.references' },
   { id: 'scheduler', icon: 'calendar-schedule' as const, labelKey: 'rightPanel.tab.scheduler' },
+  // PROP-096/097: единый реестр фоновых процессов и фоновых саб-агентов.
+  { id: 'processes', icon: 'terminal-box' as const, labelKey: 'rightPanel.tab.processes' },
 ] as const
 
 export const RightPanel: React.FC = () => {
@@ -129,6 +132,7 @@ export const RightPanel: React.FC = () => {
             </PanelTab>
           )}
           {rightPanelTab === 'scheduler' && <SchedulerTab />}
+          {rightPanelTab === 'processes' && <ProcessesTab />}
         </Suspense>
       </div>
     </div>

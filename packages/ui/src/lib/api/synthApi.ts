@@ -48,6 +48,7 @@ import { pluginsApi } from './plugins'
 import { memoryApi } from './memory'
 import { sessionMemoryApi } from './session-memory'
 import { questionsApi } from './questions'
+import { processesApi } from './processes'
 
 export type { EntityOrigin } from './common'
 export type {
@@ -366,6 +367,18 @@ export type {
   QuestionListResponse,
   QuestionResponse,
 } from './questions'
+// PROP-096/097: единый реестр фоновых прогонов (процессы и саб-агенты).
+export type {
+  BackgroundRunKind,
+  BackgroundRunRecord,
+  BackgroundRunStatus,
+  ProcessesListOptions,
+  ProcessesListResponse,
+  ProcessLogsOptions,
+  ProcessLogsResponse,
+  ProcessResponse,
+  ProcessStopResponse,
+} from './processes'
 
 export const synthApi = {
   fetchJSON,
@@ -414,4 +427,14 @@ export const synthApi = {
   ...memoryApi,
   ...sessionMemoryApi,
   ...questionsApi,
+  // PROP-096/097: реестр фоновых прогонов. Короткие имена домена (`list`,
+  // `get`) в barrel уже заняты (вопросы, метрики) — домен раскладывается
+  // под своими префиксами, чтобы не переопределить чужие методы.
+  ...{
+    listProcesses: processesApi.list,
+    getProcess: processesApi.get,
+    getProcessLogs: processesApi.logs,
+    stopProcess: processesApi.stop,
+    removeProcess: processesApi.remove,
+  },
 }

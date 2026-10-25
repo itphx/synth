@@ -11,6 +11,7 @@ import { useQuestionStore } from './questionStore'
 import { useSkillsStore } from './skillsStore'
 import { useInstructionsStore } from './instructionsStore'
 import { usePipelinesStore } from './pipelinesStore'
+import { useProcessesStore } from './processesStore'
 import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData, MessageStatus, CostBreakdown } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
@@ -106,6 +107,16 @@ export function createDispatcher(): EventDispatcher {
     // как «бессессионные» (инвариант 6: новых транспортных каналов не заводим).
     if (type.startsWith('pipeline.')) {
       usePipelinesStore.getState().applyRunEvent(payload)
+      return
+    }
+
+    // PROP-096/097: события единого реестра фоновых прогонов
+    // (`process.*`/`child.*`). Они публикуются в канал сессии-владельца, но
+    // разбираются ДО проверки `sid`: id сессии лежит в payload, а в кадре
+    // WS его может не быть. Существующие подписки `child.*` не затрагиваются:
+    // в диспетчере других веток `child.*` нет.
+    if (type.startsWith('process.') || type.startsWith('child.')) {
+      useProcessesStore.getState().applyEvent(type, payload)
       return
     }
 
