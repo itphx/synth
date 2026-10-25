@@ -7,7 +7,9 @@
  * Правила отбора (docs/MEMORY.md §2.3):
  * - только текстовые расширения (список ниже);
  * - исключаются служебные каталоги (`node_modules`, `.git`, `dist`, `build`,
- *   `.next`, `coverage`, `tmp`) и файлы `*.lock`, `*.min.*`, `*.map`;
+ *   `.next`, `coverage`, `tmp`), каталоги секретов (`.ssh`, `.aws`, `secrets`, …)
+ *   и файлы секретов (`SECRET_FILE_PATTERNS`), плюс `*.lock`, `*.min.*`, `*.map`;
+ *   обфускации при индексации нет — секреты не должны попадать в корпус;
  * - бинарные файлы (NUL-байт) и файлы больше лимита размера — пропускаются;
  * - путь документа — **относительный, POSIX** (`docs/api.md`), одинаковый при
  *   любом запуске (иначе индекс не воспроизводим).
@@ -38,7 +40,14 @@ export const TEXT_EXTENSIONS: readonly string[] = [
   '.html',
 ];
 
-/** Каталоги, которые не индексируются никогда. */
+/**
+ * Каталоги, которые не индексируются никогда.
+ *
+ * Служебные (`node_modules`, `.git`, сборка) + каталоги, где почти всегда
+ * лежат секреты (SSH/GPG/AWS/Kube/Docker/Terraform-состояния). Список — часть
+ * политики «секреты не индексируются»: обфускации при индексации нет
+ * (docs/MEMORY.md §10.1), поэтому единственный барьер — не читать их вовсе.
+ */
 export const EXCLUDED_DIRECTORIES: readonly string[] = [
   'node_modules',
   '.git',
@@ -47,7 +56,63 @@ export const EXCLUDED_DIRECTORIES: readonly string[] = [
   '.next',
   'coverage',
   'tmp',
+  // Секреты и ключи.
+  '.ssh',
+  '.gnupg',
+  '.aws',
+  '.kube',
+  '.docker',
+  '.terraform',
+  '.gcloud',
+  'secrets',
 ];
+
+/**
+ * Имена файлов, которые не индексируются (секреты и ключи).
+ *
+ * Glob по **basename**: `.env`, `.env.local`, `credentials.json`,
+ * `secrets.yaml`, `service-account-*.json`, ключи/хранилища. Расширения
+ * `*.pem`/`*.key`/… и так не входят в {@link TEXT_EXTENSIONS}, но список
+ * держим явно — он документирует политику и переживёт расширение списка
+ * текстовых расширений.
+ */
+export const SECRET_FILE_PATTERNS: readonly string[] = [
+  '.env',
+  '.env.*',
+  '.npmrc',
+  '.pypirc',
+  '.netrc',
+  '_netrc',
+  '.git-credentials',
+  'credentials',
+  'credentials.json',
+  'secret.json',
+  'secret.yaml',
+  'secret.yml',
+  'secrets.json',
+  'secrets.yaml',
+  'secrets.yml',
+  'service-account*.json',
+  'id_rsa*',
+  'id_ed25519*',
+  'id_ecdsa*',
+  'id_dsa*',
+  '*.pem',
+  '*.key',
+  '*.p12',
+  '*.pfx',
+  '*.jks',
+  '*.keystore',
+  '*.ppk',
+  '*.kdbx',
+  '*.tfstate',
+  '*.tfstate.*',
+];
+
+/** Файл с секретами/ключами (по basename) — в корпус не попадает. */
+export function isSecretFile(name: string): boolean {
+  return matchesAnyGlob(name, SECRET_FILE_PATTERNS);
+}
 
 /** Число байт, по которым определяется бинарность файла. */
 const BINARY_SNIFF_BYTES = 8000;
@@ -156,6 +221,8 @@ async function walk(
       continue;
     }
     if (!entry.isFile()) continue;
+    // Политика «секреты не индексируются» — до расширений и include/exclude.
+    if (isSecretFile(entry.name)) continue;
     if (!isTextExtension(entry.name)) continue;
     const relPath = toPosixRelative(root, full);
     if (options.include && !matchesAnyGlob(relPath, [options.include])) continue;

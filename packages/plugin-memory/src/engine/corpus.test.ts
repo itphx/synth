@@ -11,7 +11,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { collectTextFiles, isTextExtension, matchesAnyGlob } from './corpus.js';
+import { collectTextFiles, isSecretFile, isTextExtension, matchesAnyGlob } from './corpus.js';
 
 const tempDirs: string[] = [];
 
@@ -65,6 +65,80 @@ describe('сбор корпуса файлов', () => {
     expect(paths).not.toContain('main.js.map');
     expect(paths).not.toContain('image.png');
     expect(paths).not.toContain('data.bin');
+  });
+
+  it('исключает файлы и каталоги с секретами, не трогая обычные документы', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-corpus-secrets-'));
+    tempDirs.push(dir);
+
+    // Обычные файлы — должны остаться (в т.ч. документ со словом «secret» в имени).
+    await writeFile(join(dir, 'readme.md'), 'readme\n', 'utf-8');
+    await writeFile(join(dir, 'config.yaml'), 'ok: true\n', 'utf-8');
+    await mkdir(join(dir, 'docs'), { recursive: true });
+    await writeFile(join(dir, 'docs', 'secret-guide.md'), 'guide\n', 'utf-8');
+
+    // Файлы с секретами по имени/расширению.
+    for (const name of [
+      'credentials.json',
+      'secrets.yaml',
+      'service-account-prod.json',
+      '.env',
+      '.env.local',
+      '.npmrc',
+      'id_rsa',
+      'server.pem',
+      'server.key',
+      'terraform.tfstate',
+    ]) {
+      await writeFile(join(dir, name), 'secret\n', 'utf-8');
+    }
+
+    // Каталоги, где секреты живут по соглашению.
+    for (const name of ['secrets', '.ssh', '.aws', '.kube', '.docker', '.terraform']) {
+      await mkdir(join(dir, name), { recursive: true });
+      await writeFile(join(dir, name, 'notes.md'), 'secret\n', 'utf-8');
+    }
+
+    const paths = (await collectTextFiles(dir, { maxFileBytes: 100_000, exclude: [] })).map(
+      (file) => file.path,
+    );
+
+    expect(paths).toContain('readme.md');
+    expect(paths).toContain('config.yaml');
+    expect(paths).toContain('docs/secret-guide.md');
+    for (const hidden of [
+      'credentials.json',
+      'secrets.yaml',
+      'service-account-prod.json',
+      '.env',
+      '.env.local',
+      '.npmrc',
+      'id_rsa',
+      'server.pem',
+      'server.key',
+      'terraform.tfstate',
+      'secrets/notes.md',
+      '.ssh/notes.md',
+      '.aws/notes.md',
+      '.kube/notes.md',
+      '.docker/notes.md',
+      '.terraform/notes.md',
+    ]) {
+      expect(paths).not.toContain(hidden);
+    }
+  });
+
+  it('isSecretFile: известные файлы секретов — да, документы — нет', () => {
+    expect(isSecretFile('.env')).toBe(true);
+    expect(isSecretFile('.env.production')).toBe(true);
+    expect(isSecretFile('credentials.json')).toBe(true);
+    expect(isSecretFile('secrets.yaml')).toBe(true);
+    expect(isSecretFile('service-account-prod.json')).toBe(true);
+    expect(isSecretFile('id_ed25519')).toBe(true);
+    expect(isSecretFile('server.pem')).toBe(true);
+    expect(isSecretFile('credentials-guide.md')).toBe(false);
+    expect(isSecretFile('secret-guide.md')).toBe(false);
+    expect(isSecretFile('config.yaml')).toBe(false);
   });
 
   it('файлы больше лимита размера пропускаются', async () => {
