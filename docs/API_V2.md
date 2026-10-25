@@ -1912,6 +1912,20 @@ managed портал дополнительно закрыт ролевым guar
   портала (`sessionId: 'system:memory-portal:<uuid>'`), обычный агентский вызов
   инстансный индекс не создаёт.
 
+**Секреты и egress.** Портал **не маскирует** содержимое: обфускации при
+индексации нет (обоснование и меры — [docs/MEMORY.md](./MEMORY.md) §10.1).
+Текст чанков уходит провайдеру эмбеддингов как есть, а найденные фрагменты —
+в LLM; поэтому индексировать стоит только каталоги без чувствительного текста.
+Из корпуса **всегда** исключаются каталоги и файлы секретов — политика ядра
+`engine/security/secret-files.ts` (`.ssh`, `.gnupg`, `.aws`, `.kube`, `.docker`,
+`.terraform`, `.gcloud`, `secrets`; `.env*`, `credentials*.json`,
+`secret(s).json|yaml|yml`, `service-account*.json`, `id_rsa|ed25519|ecdsa|dsa*`,
+`*.pem|key|p12|pfx|jks|keystore|ppk|kdbx`, `*.tfstate*`); отключить исключения
+нельзя. Рекомендация — **локальные** эмбеддинги (`plugins.embeddingProvider=ollama`):
+тогда корпус не покидает хост. Модели, размерность и латентность —
+[docs/MEMORY.md](./MEMORY.md) §2.4; смена модели помечает индексы `stale`
+(пересборка — `POST /memory/indexes/:id/rebuild`).
+
 | Метод | Путь | Сборка | Назначение / req-resp |
 |---|---|---|---|
 | GET | `/api/v2/memory/status` | оба | Состояние портала: `{provider:{id,mode,active}, readiness, namespace, facts:{total,active}, indexes:{total,ready,stale,failed,building}}`. `provider.id` = namespace, `provider.mode` = `inline` (плагин памяти по дизайну `inline`) или `null`, `provider.active` — активен ли плагин `synth-plugin-memory` в процессе. `readiness`: `ready` (сервис доступен, нет проблемных индексов) / `degraded` (есть индексы `failed`/`stale`) / `unavailable` (порты памяти не сконфигурированы — ответ **200**, портал показывает «память недоступна»). Счётчики — через порты (`count` фактов, выборка индексов) |

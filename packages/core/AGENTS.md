@@ -251,7 +251,7 @@
 
 ## Карта модулей
 
-- `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, `analytics rebuild`, …).
+- `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, `analytics rebuild`, `memory`, …).
 - `execution/` — ADR-077 (шаги 1, 3, 7b + шаг A): порт исполнения команд, выбор реализации по
   режиму и проверка режима при старте —
   `ports/execution-port.ts`
@@ -514,7 +514,7 @@
 - `engine/permission/*` — permissions (`PERMISSION_GROUPS`; группа `plugin` — ADR-090 Ф3в: матчится
   **по источнику** `ToolSource` (`getToolGroups(toolName, capabilities, source?)`,
   `PermissionCheckInput.toolSource`), а не по capability, — плагин с `file_read`/`search` не
-  «выписывается» из правила `plugin`); `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
+  «выписывается» из правила `plugin`); `engine/security/*` — injection/shell/protected paths; `engine/security/secret-files.ts` — политика «файлы и каталоги секретов» (`isSecretFileName`/`isSecretDirectoryName`; список имён и каталогов + шаблоны `.env*`/`credentials*`/`secret(s)*`/`service-account*`/`id_*`/`*.pem|key|p12|pfx|jks|keystore|ppk|kdbx`/`*.tfstate*`; отдаётся плагину через `facade.security`, т.к. сканер расширений блокирует бандл за упоминание имён секретных файлов); слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
   Системный промпт (ADR-070): `composer.ts` — `SystemPromptComposer` (единственная точка сборки
   промпта основной сессии и саб-агентов: `compose()` идемпотентно собирает из состояния, `manifest()` —
@@ -924,6 +924,17 @@
   процессе проверяют пайплайн, но не переключают живой инстанс (для этого API/UI). Подключён в
   `main.ts` **и** `packages/synth/src/cli.ts` (subpath-экспорт `./cli/plugin-commands.js` — точный путь,
   wildcard не резолвится TS).
+- `cli/memory-commands.ts` — **CLI `synth memory`** (ADR-107): тонкий клиент HTTP API v2 портала
+  памяти (`status`/`list`/`index`/`rebuild`/`drop`; логики памяти в CLI нет — только вызовы
+  `/api/v2/memory/*` **работающего** инстанса, поэтому нужны запущенный инстанс и токен).
+  Подключение: `--url` → `remote.backendUrl` → `http://127.0.0.1:<port>`; ключ — `--token` →
+  `SYNTH_API_KEY` → `core.apiKey` → файл `{dataDir}/secrets/api-key` (файл читается, не создаётся;
+  значение ключа нигде не печатается — инвариант 13). Флаги: `--scope project|instance`
+  (область индекса; у `instance` + `--source files` `projectId` — **источник корпуса**, для `facts`
+  не нужен; значение проверяется локально → `VALIDATION_ERROR`, код выхода 1), `--wait`
+  (опрос состояния до `ready`/`failed`), `--timeout`, `--json`, `--yes` (для `drop`).
+  Коды выхода: `0` — успех, `1` — отказ (HTTP-ошибка, сеть, нет токена, `drop` без `--yes`,
+  таймаут ожидания).
 - `server/routes/plugins.ts` — **Ф5б-2: HTTP-контур плагинов**. `createPluginsRoutes(auth, deps, opts)`:
   `GET /`, `GET /audit` (**журнал действий плагинов**: `{entries}` — хвост, `limit` (дефолт 50,
   максимум 500) и фильтр `plugin`; маршрут объявлен **до** `/:name`; guard — `readGuard`, чтение
@@ -1016,7 +1027,12 @@
   `GatewayProvider.embed`; лимиты 64 текста / 8 000 символов / 64 000 суммарно; код
   `plugin.embedding_not_configured`; конфиг `plugins.embeddingProvider`/`embeddingModel`) и
   `getSettings` (чтение `plugins[<имя>].settings` из `plugins.json`; ридер по умолчанию — `runtime.ts`
-  по `layout.settingsPath`). Сервисы доступны **только `inline`**: wire-протокол v1 покрывает три точки.
+  по `layout.settingsPath`), `embedding` (фактическая модель хоста `provider/model` из
+  `plugins.embeddingProvider`/`embeddingModel` — нужна плагину для фингерпринта индекса: смена
+  модели при той же размерности помечает индекс `stale`) и `security` (предикаты «файл/каталог
+  секрета» — `engine/security/secret-files.ts`; список имён живёт в ядре, потому что сканер
+  расширений считает упоминание таких имён эксфильтрацией и блокирует бандл). Сервисы доступны
+  **только `inline`**: wire-протокол v1 покрывает три точки.
   Новый доступ к ресурсам инстанса оформляется как **сервис фасада + ADR**, а не как ещё один метод
   «по месту».
 - `engine/pipelines/*` — ADR-101: **второй движок** рядом с `ChatOrchestrator`
@@ -1129,6 +1145,11 @@
   `schedule_fired` (async, метаданные расписания — `scheduleId`/`name`/`target`/`cron`/`trigger`,
   без текста задания; шина — `SchedulerServiceDeps.hooks`, ADR-030/Ф0 ADR-090).
   Тикер стартует только у лидера (`scheduler.leaderElection`).
+  **Цель `pipeline` (ADR-101)** — исключение из маршрутизации: `ScheduleTarget =
+  {mode:'pipeline', projectId, pipelineId, version?, payload?}` → прогон запускает **раннер прогонов**
+  напрямую, событие в `EventIngress`/Router **не публикуется**, `payload` статический, пайплайн
+  должен быть опубликован; Job — `decision:'pipeline'` с `pipelineId`/`runId`
+  (`SchedulerRuleProvider` для такой цели отдаёт `null`).
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт

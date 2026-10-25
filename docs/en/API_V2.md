@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-25 (ADR-106 Ф5: §5.33 «Пакеты расширений» — сводка `authority`, `authorityActivation`; ADR-105 Ф4: §5.37 «Внешние доступы»; ADR-090 §5.36 «Плагины» — переведено; ADR-107 §5.38 «Память» (портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'` — переведено); перевод отстаёт (§5.32 — ADR-102, §5.34 — ADR-100, §5.35 — ADR-101).
+> ⚠️ RU-версия обновлена 2026-10-25 (ADR-106 Ф5: §5.33 «Пакеты расширений» — сводка `authority`, `authorityActivation`; ADR-105 Ф4: §5.37 «Внешние доступы»; ADR-090 §5.36 «Плагины» — переведено; ADR-107 §5.38 «Память» (портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги — переведено); перевод отстаёт (§5.32 — ADR-102, §5.34 — ADR-100, §5.35 — ADR-101).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -1579,6 +1579,22 @@ Rules:
   guard): the plugin tool accepts `scope:'instance'` only for the portal's
   service call (`sessionId: 'system:memory-portal:<uuid>'`), an ordinary agent
   call does not create an instance index.
+
+**The secrets and the egress.** The portal does **not** mask the content: there
+is no obfuscation at indexing (the rationale and the measures —
+[MEMORY.md](../MEMORY.md) §10.1, RU). The chunk text goes to the embeddings
+provider as is, and the found fragments go to the LLM; so only the directories
+without sensitive text are worth indexing. The secret directories and files are
+**always** excluded from the corpus — the policy of the core
+`engine/security/secret-files.ts` (`.ssh`, `.gnupg`, `.aws`, `.kube`, `.docker`,
+`.terraform`, `.gcloud`, `secrets`; `.env*`, `credentials*.json`,
+`secret(s).json|yaml|yml`, `service-account*.json`, `id_rsa|ed25519|ecdsa|dsa*`,
+`*.pem|key|p12|pfx|jks|keystore|ppk|kdbx`, `*.tfstate*`); the exclusions cannot
+be turned off. The recommendation is **local** embeddings
+(`plugins.embeddingProvider=ollama`): the corpus does not leave the host. The
+models, their dimension and latency — [MEMORY.md](../MEMORY.md) §2.4 (RU); a
+model change marks the indexes `stale` (the rebuild —
+`POST /memory/indexes/:id/rebuild`).
 
 | Method | Path | Build | Purpose / req-resp |
 |---|---|---|---|

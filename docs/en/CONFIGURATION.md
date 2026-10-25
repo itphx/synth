@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-10-23 (ADR-090, секция `plugins` — слой плагинов — переведена); перевод отстаёт (кроме секции про плагины `plugins.*`): ADR-102, секция `analytics`.
+> ⚠️ RU-версия обновлена 2026-10-25 (секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секции про плагины `plugins.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -1412,6 +1412,35 @@ plugins:
   request `GET /api/v2/settings/plugins` (the `hybrid` block); the public signal of the mode is in
   `GET /auth/oidc-meta` (`plugins: {enabled, mode}`, without the list of names). The env equivalent
   of the mode — `SYNTH_PLUGINS_HYBRID_MODE`; the list of names stays in `config.yaml`.
+- **The embedding models** (`plugins.embeddingProvider`/`plugins.embeddingModel`) — the memory
+  plugin (indexes and recall) and the micro layer of the router use them. The verified Ollama
+  models:
+
+  | Model | Dimension | Latency | Size | Recommendation |
+  |---|---|---|---|---|
+  | `nomic-embed-text:latest` | 768 | ~0.1–2 s | 274 MB | **Default** — fast and compact |
+  | `nomic-embed-text-v2-moe:latest` | 768 | ~6 s (cold) | 958 MB | Quality at the **same** dimension |
+  | `qwen3-embedding:latest` | **4096** | 17–21 s | 4.7 GB | Only deliberately: the vector size grows ×~5.3, the host load grows too |
+
+  ```yaml
+  plugins:
+    embeddingProvider: ollama
+    embeddingModel: nomic-embed-text:latest
+  ```
+
+  The env equivalents — `SYNTH_PLUGINS_EMBEDDING_PROVIDER` / `SYNTH_PLUGINS_EMBEDDING_MODEL`
+  (env is above the config, ADR-023). An empty provider — the embeddings are not configured
+  (`plugin.embedding_not_configured`): the index is not built, the recall degrades to the keyword
+  search.
+
+  **Egress.** The chunk text goes to the embeddings provider **without obfuscation** (there is none
+  at indexing, see [MEMORY.md](../MEMORY.md) §10.1 — RU). The local Ollama does not send the corpus
+  outside; an external provider receives it entirely, and the found fragments then go to the LLM.
+  Index only the directories that hold no sensitive text, and keep the secrets out of the working
+  directory.
+
+  A model change **marks the built indexes as `stale`** (the fingerprint holds the actual
+  `provider/model`): they have to be rebuilt (`synth memory rebuild <indexId>`).
 
 ### Observability (`metrics.*`, ADR-094)
 
