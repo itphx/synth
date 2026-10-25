@@ -15,6 +15,11 @@
  * со служебной сессией `system:memory-portal:…`, и только такой вызов
  * допускается. Модель этим значением не управляет — сессия портала создаёт
  * сервер.
+ *
+ * **Массовая пересборка** (`rebuild_all`) — только **проектные** индексы
+ * проекта сессии: инстансный корпус — ресурс портала (ADMIN), модель его не
+ * пересобирает. Сборки запускаются в фоне; `wait: true` опрашивает состояние
+ * индексов (`getIndex`) до `ready`/`failed` либо до `timeoutMs`.
  */
 import type { MemoryIndexScope, PluginToolDefinition } from '@itphx/synth-core';
 import type { z } from 'zod';
@@ -25,10 +30,47 @@ import {
   MemoryUnavailableError,
   type MemoryProviderLite,
 } from '../provider.js';
-import { boolean, enumOf, object, optional, string } from '../schema.js';
+import { boolean, enumOf, number, object, optional, string } from '../schema.js';
 
 /** Локальное имя тула (в реестре — с namespace'ом, его составляет хост). */
 export const MEMORY_INDEX_TOOL_NAME = 'memory_index';
+
+/** Действия тула (порядок — жизненный цикл корпуса; `rebuild_all` — массовая). */
+export const MEMORY_INDEX_ACTIONS = [
+  'status',
+  'create',
+  'build',
+  'rebuild',
+  'rebuild_all',
+  'delete',
+] as const;
+export type MemoryIndexAction = (typeof MEMORY_INDEX_ACTIONS)[number];
+
+/** Дефолтный бюджет ожидания массовой пересборки (`wait: true`), мс. */
+export const DEFAULT_REBUILD_ALL_TIMEOUT_MS = 120_000;
+/** Нижняя граница `timeoutMs` массовой пересборки, мс. */
+export const MIN_REBUILD_ALL_TIMEOUT_MS = 1_000;
+/** Верхняя граница `timeoutMs` массовой пересборки, мс. */
+export const MAX_REBUILD_ALL_TIMEOUT_MS = 600_000;
+/** Шаг опроса состояний индексов при `wait: true`, мс. */
+export const REBUILD_ALL_POLL_INTERVAL_MS = 500;
+
+/** Результат ожидания сборок массовой пересборки. */
+export interface RebuildAllWaitResult {
+  /** Сборка завершилась успешно (`ready` или `stale`). */
+  ready: string[];
+  /** Сборка завершилась ошибкой (`failed`). */
+  failed: string[];
+  /** Не дождались за `timeoutMs` (или ожидание прервано `abortSignal`). */
+  timedOut: string[];
+}
+
+/** Результат исполнения тула (контракт плагинного тула, ADR-090). */
+interface IndexToolResult {
+  content: string;
+  isError?: boolean;
+  metadata?: Record<string, unknown>;
+}
 
 /**
  * Префикс sessionId служебного вызова портала памяти.
@@ -59,7 +101,7 @@ export function isPortalSession(sessionId: string | undefined): boolean {
  * сторонние зависимости (иначе скан помечает его как `caution`).
  */
 export const memoryIndexParameters = object({
-  action: enumOf(['status', 'create', 'build', 'rebuild', 'delete']),
+  action: enumOf(MEMORY_INDEX_ACTIONS),
   indexId: optional(string({ min: 1, max: 200 })),
   name: optional(string({ min: 1, max: 120 })),
   source: optional(
@@ -71,6 +113,14 @@ export const memoryIndexParameters = object({
   scope: optional(enumOf(['project', 'instance'])),
   projectId: optional(string({ min: 1, max: 200 })),
   force: optional(boolean()),
+  wait: optional(boolean()),
+  timeoutMs: optional(
+    number({
+      min: MIN_REBUILD_ALL_TIMEOUT_MS,
+      max: MAX_REBUILD_ALL_TIMEOUT_MS,
+      int: true,
+    }),
+  ),
 });
 
 /** Явная JSON-схема параметров — то, что видит модель (ADR-090, §4.3). */
@@ -79,8 +129,9 @@ export const memoryIndexJsonSchema: Record<string, unknown> = {
   properties: {
     action: {
       type: 'string',
-      enum: ['status', 'create', 'build', 'rebuild', 'delete'],
-      description: 'Действие: статус, создать, собрать, пересобрать, удалить',
+      enum: [...MEMORY_INDEX_ACTIONS],
+      description:
+        'Действие: статус, создать, собрать, пересобрать, пересобрать все проектные (rebuild_all), удалить',
     },
     indexId: {
       type: 'string',
@@ -118,6 +169,20 @@ export const memoryIndexJsonSchema: Record<string, unknown> = {
       type: 'boolean',
       description: 'Пересобрать даже если сборка уже идёт (по умолчанию — нет)',
     },
+    wait: {
+      type: 'boolean',
+      default: false,
+      description:
+        'Для rebuild_all: дождаться завершения запущенных сборок (по умолчанию — нет, сборки идут в фоне)',
+    },
+    timeoutMs: {
+      type: 'integer',
+      minimum: MIN_REBUILD_ALL_TIMEOUT_MS,
+      maximum: MAX_REBUILD_ALL_TIMEOUT_MS,
+      default: DEFAULT_REBUILD_ALL_TIMEOUT_MS,
+      description:
+        'Для rebuild_all с wait:true — предельное время ожидания, мс (1000..600000, по умолчанию 120000)',
+    },
   },
   required: ['action'],
   additionalProperties: false,
@@ -154,7 +219,7 @@ export function createMemoryIndexTool(provider: MemoryProviderLite): PluginToolD
   return {
     name: MEMORY_INDEX_TOOL_NAME,
     description:
-      'Управляет индексами памяти проекта: создать, собрать, пересобрать, удалить, посмотреть статус. Сборка идёт в фоне — состояние индекса меняется с building на ready или failed.',
+      'Управляет индексами памяти проекта: создать, собрать, пересобрать, пересобрать все проектные (rebuild_all), удалить, посмотреть статус. Сборка идёт в фоне — состояние индекса меняется с building на ready или failed; rebuild_all с wait:true дожидается завершения.',
     // `PluginToolDefinition.parameters` типизирован хостом как `z.ZodTypeAny`
     // (ADR-090), а валидатор плагина — свой (без zod в бандле). Контракт
     // совпадает: хост зовёт `safeParse` и читает `error.issues`, поэтому
@@ -173,7 +238,8 @@ export function createMemoryIndexTool(provider: MemoryProviderLite): PluginToolD
           isError: true,
         };
       }
-      const { action, indexId, name, source, scope, projectId, force } = parsed.data;
+      const { action, indexId, name, source, scope, projectId, force, wait, timeoutMs } =
+        parsed.data;
 
       // Скоуп сессии важнее аргумента модели (то же правило, что у `memory_write`).
       const scopeProjectId = ctx.projectId?.trim() ? ctx.projectId : projectId;
@@ -248,6 +314,17 @@ export function createMemoryIndexTool(provider: MemoryProviderLite): PluginToolD
           };
         }
 
+        if (action === 'rebuild_all') {
+          return await rebuildAllProjectIndexes(provider, {
+            ...(scopeProjectId ? { projectId: scopeProjectId } : {}),
+            ...(force !== undefined ? { force } : {}),
+            workingDir: ctx.workingDir,
+            wait: wait ?? false,
+            timeoutMs: timeoutMs ?? DEFAULT_REBUILD_ALL_TIMEOUT_MS,
+            ...(ctx.abortSignal ? { abortSignal: ctx.abortSignal } : {}),
+          });
+        }
+
         // build / rebuild / delete — индекс по id или по имени (+ проект).
         const target = await resolveTarget(provider, {
           indexId,
@@ -306,6 +383,192 @@ export function createMemoryIndexTool(provider: MemoryProviderLite): PluginToolD
       }
     },
   };
+}
+
+/**
+ * Массовая пересборка проектных индексов проекта сессии.
+ *
+ * Область — **только** `scope: 'project'` индексы проекта (`projectId`
+ * сессии): инстансный корпус — ресурс портала (ADMIN), модель его не трогает.
+ *
+ * `state: 'building'` индексы пропускаются (сборка уже идёт) — в том числе
+ * гонка `IndexBusyError`: один занятый индекс не валит весь вызов.
+ * `wait: true` опрашивает `getIndex` до `ready`/`failed` либо до `timeoutMs`
+ * (ожидание прерывается `ctx.abortSignal`).
+ */
+async function rebuildAllProjectIndexes(
+  provider: MemoryProviderLite,
+  input: {
+    /** Проект сессии (не задан — индексы без проекта). */
+    projectId?: string;
+    /** Повторить сборку, даже если она уже идёт. */
+    force?: boolean;
+    /** Рабочий каталог (источник `files`). */
+    workingDir?: string;
+    /** Дождаться завершения запущенных сборок. */
+    wait: boolean;
+    /** Бюджет ожидания (только для `wait: true`), мс. */
+    timeoutMs: number;
+    /** Прерывание хода («Стоп») — ожидание останавливается. */
+    abortSignal?: AbortSignal;
+  },
+): Promise<IndexToolResult> {
+  const statuses = await provider.listIndexes(
+    input.projectId ? { projectId: input.projectId } : {},
+  );
+  // Инстансные индексы видны всем, но пересобирает их только портал (ADMIN).
+  const projectIndexes = statuses.filter((status) => {
+    if (status.index.scope === 'instance') return false;
+    if (input.projectId) return status.index.projectId === input.projectId;
+    return status.index.projectId === undefined;
+  });
+
+  if (projectIndexes.length === 0) {
+    return {
+      content: input.projectId
+        ? 'Проектных индексов памяти нет — пересобирать нечего.'
+        : 'Сессия не привязана к проекту — проектных индексов памяти нет, пересобирать нечего.',
+      metadata: { action: 'rebuild_all', started: [], skipped: [] },
+    };
+  }
+
+  const started: string[] = [];
+  const skipped: string[] = [];
+
+  for (const status of projectIndexes) {
+    const indexId = status.index.id;
+    // Пропускаем по «сырому» состоянию записи: `rebuildIndex` отказывает
+    // именно по нему, а эффективный `status.state` (stale) мог бы скрыть
+    // идущую сборку.
+    if (status.index.state === 'building' || status.state === 'building') {
+      skipped.push(indexId);
+      continue;
+    }
+    try {
+      await provider.rebuildIndex(indexId, {
+        ...(input.force !== undefined ? { force: input.force } : {}),
+        ...(input.workingDir ? { workingDir: input.workingDir } : {}),
+      });
+      started.push(indexId);
+    } catch (err) {
+      // Гонка: сборку успели запустить между чтением списка и вызовом.
+      // Остальные ошибки — как у одиночных действий (`isError` наверху).
+      if (err instanceof IndexBusyError) {
+        skipped.push(indexId);
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  const content = [
+    `Массовая пересборка проектных индексов: запущено ${started.length}, ` +
+      `пропущено ${skipped.length} (сборка уже идёт).`,
+  ];
+  if (started.length > 0) content.push(`Запущено: ${started.join(', ')}.`);
+  if (skipped.length > 0) content.push(`Пропущено (сборка уже идёт): ${skipped.join(', ')}.`);
+
+  const metadata: Record<string, unknown> = {
+    action: 'rebuild_all',
+    started,
+    skipped,
+  };
+
+  if (input.wait) {
+    // Ничего не запущено — ждать нечего, но состав полей metadata стабилен:
+    // вызывающий всегда видит ready/failed/timedOut при wait:true.
+    const waited =
+      started.length > 0
+        ? await waitForRebuilds(provider, started, input)
+        : { ready: [], failed: [], timedOut: [] };
+    if (started.length > 0) {
+      content.push(
+        `Ожидание завершения (до ${input.timeoutMs} мс): готовы ${waited.ready.length}, ` +
+          `с ошибкой ${waited.failed.length}, не дождались ${waited.timedOut.length}.`,
+      );
+    }
+    if (waited.ready.length > 0) content.push(`Готовы (ready): ${waited.ready.join(', ')}.`);
+    if (waited.failed.length > 0) content.push(`С ошибкой (failed): ${waited.failed.join(', ')}.`);
+    if (waited.timedOut.length > 0) {
+      content.push(`Не дождались (timedOut): ${waited.timedOut.join(', ')}.`);
+    }
+    metadata.ready = waited.ready;
+    metadata.failed = waited.failed;
+    metadata.timedOut = waited.timedOut;
+  }
+
+  return { content: content.join('\n'), metadata };
+}
+
+/**
+ * Дождаться завершения запущенных сборок: опрос `getIndex` каждые
+ * {@link REBUILD_ALL_POLL_INTERVAL_MS} до `ready`/`failed` либо до `timeoutMs`.
+ *
+ * Ожидание **ограничено** бюджетом (первый опрос — сразу, без сна) и
+ * прерывается `abortSignal`: незавершённые сборки попадают в `timedOut`, а не
+ * блокируют ход дольше запрошенного времени. Индекс, удалённый во время
+ * сборки, считается `failed` (сборка не завершится).
+ */
+async function waitForRebuilds(
+  provider: MemoryProviderLite,
+  indexIds: readonly string[],
+  opts: { timeoutMs: number; abortSignal?: AbortSignal },
+): Promise<RebuildAllWaitResult> {
+  const pending = new Set(indexIds);
+  const result: RebuildAllWaitResult = { ready: [], failed: [], timedOut: [] };
+  const deadline = Date.now() + Math.max(0, opts.timeoutMs);
+
+  while (pending.size > 0) {
+    if (opts.abortSignal?.aborted) break;
+
+    for (const indexId of [...pending]) {
+      const status = await provider.getIndex(indexId);
+      if (!status) {
+        // Индекс исчез — сборки не будет.
+        pending.delete(indexId);
+        result.failed.push(indexId);
+        continue;
+      }
+      if (status.state === 'ready' || status.state === 'stale') {
+        pending.delete(indexId);
+        result.ready.push(indexId);
+        continue;
+      }
+      if (status.state === 'failed') {
+        pending.delete(indexId);
+        result.failed.push(indexId);
+      }
+    }
+
+    if (pending.size === 0) break;
+
+    // Остаток бюджета: последний сон не должен вывести за `timeoutMs`.
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    await sleep(Math.min(REBUILD_ALL_POLL_INTERVAL_MS, left), opts.abortSignal);
+  }
+
+  if (pending.size > 0) result.timedOut.push(...pending);
+  return result;
+}
+
+/** Пауза с прерыванием по `AbortSignal` (ожидание сборок). */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 /**

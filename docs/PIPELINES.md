@@ -780,6 +780,24 @@ ADR-046 §9.5): отдельного asset-каталога и пакета ра
 | Выход | `none` (прогон завершается без внешнего следа) |
 | Провенанс | `installedBy: {pack:'builtin', version:'1'}`; опубликованная версия 1 (`publishedBy:'system'`) |
 
+**Другие встроенные шаблоны памяти.**
+
+| `id` | Узлы | Вход | Назначение |
+|---|---|---|---|
+| `builtin:memory-consolidation` | `agent` (`assistant`) | `{sessionId}` | извлечь устойчивые утверждения из сессии и записать факты |
+| `builtin:memory-consolidate-facts` | `tool` `plugin_synth_plugin_memory_memory_consolidate` | — | слить дубли фактов проекта (`dryRun:false`) |
+| `builtin:memory-reindex` | `tool` `plugin_synth_plugin_memory_memory_index` | — | `action:'rebuild_all'`, `wait:true` — пересобрать все **проектные** индексы |
+
+Все три — `scope:'instance'`, версия 1, `mode:'act'`, `exits:[{kind:'none'}]`. Общие
+(`instance`) индексы `rebuild_all` не трогает: это ресурс инстанса, пересборка — только
+портал/ADMIN. Для дедупликации и переиндексации расписание осмысленно; для извлечения из
+сессии — обычно только разовый прогон с `{sessionId}`.
+
+**Идемпотентное инстанцирование.** `POST /pipeline-templates/:tid/instantiate` с
+`{"projectId":"…","ensure":true}` возвращает существующий пайплайн проекта
+(`installedBy.templateId === tid`) или создаёт новый; повторный вызов не плодит копии.
+Дальше — обычная публикация и прогон/расписание.
+
 **Что делает шаблон.** Агентский шаг:
 
 1. читает сессию тулом `read_session_reference` (`session_id` = `sessionId` из входа);
@@ -862,6 +880,87 @@ curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json'
   входа или с фиксированным входом это подходит; для «консолидации каждый день новой сессии»
   нужен динамический вход — остаток (см.
   [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) §«Открытые вопросы»).
+
+### 2.17. Агентские тулы (чат)
+
+Пайплайнами и расписаниями агент управляет **из чата** — встроенными тулами, а не только через
+HTTP API. Двенадцать тулов `pipeline_*` и шесть `schedule_*` зарегистрированы в
+`ALL_BUILTIN_TOOLS` (`packages/core/src/engine/tools/index.ts`), реализация — в
+`packages/core/src/engine/tools/pipeline-authoring.ts`, `pipeline-runs.ts`,
+`pipeline-templates.ts` и `schedules.ts`; общие проверки области и прав — в
+`engine/tools/automation-helpers.ts`. Capability: `pipeline` и `schedule`
+(отключаются админом через `tools.disabled`, группы `pipeline`/`schedule`).
+
+**Тулы `pipeline_*` (ADR-101).**
+
+| Тул | Ключевые параметры | Что делает |
+|---|---|---|
+| `pipeline_list` | — | список пайплайнов проекта сессии: draft и опубликованная версия |
+| `pipeline_get` | `pipeline_id`, `version?` | спецификация пайплайна: черновик, опубликованная версия, проблемы черновика |
+| `pipeline_save` | `pipeline_id?`, `name?`, `description?`, `spec` | создать или заменить **черновик** спецификации (версия **не** растёт) |
+| `pipeline_publish` | `pipeline_id` | опубликовать черновик как неизменяемую версию (повтор без изменений — идемпотентно) |
+| `pipeline_delete` | `pipeline_id` | удалить пайплайн; **прогоны остаются** читаемыми |
+| `pipeline_run` | `pipeline_id`, `version?`, `input?` | запустить **опубликованную** версию (фон); ответ — id прогона |
+| `pipeline_run_status` | `run_id`, `limit?` | заголовок прогона (статус, текущий узел, ошибка) и журнал выполнения |
+| `pipeline_run_list` | `pipeline_id?`, `status?`, `limit?` | прогоны проекта (свежие первыми) |
+| `pipeline_run_resume` | `run_id`, `approved`, `output?`, `comment?` | HITL-решение по прогону в статусе `awaiting_human` (ADR-106) |
+| `pipeline_run_cancel` | `run_id` | остановить прогон (идущий — прервать, ожидающий — пометить отменённым) |
+| `pipeline_templates` | — | шаблоны пайплайнов **инстанса** (проект не нужен; оба формата — `adr-101` и legacy) |
+| `pipeline_instantiate` | `template_id`, `name?`, `ensure?` | скопировать шаблон в **черновик** пайплайна проекта сессии (`ensure:true` — идемпотентно) |
+
+**Правила (общие с HTTP-контуром, но контур агента у́же).**
+
+- **Проект — только из сессии.** Параметра `project_id` у тулов нет: подсунуть чужой проект
+  нельзя. Пайплайн чужого проекта выглядит как отсутствующий (`pipeline.tool.not_found`), прогон
+  чужого проекта — как чужой (`pipeline.tool.run_foreign`).
+- **Права — по правилам проекта** (инвариант 21): читать пайплайны и журналы прогонов может любой
+  участник проекта; мутировать (`pipeline_save`, `pipeline_publish`, `pipeline_delete`,
+  `pipeline_run`, `pipeline_run_resume`, `pipeline_run_cancel`, `pipeline_instantiate`) — только
+  владелец/`EDITOR` проекта. Участник с ролью `VIEWER` **только читает**.
+- **Plan-режим блокирует мутации** — permission-слой (`engine/permission/evaluator.ts`,
+  `isPlanBlockedTool` + `PIPELINE_WRITE_TOOLS`/`SCHEDULE_WRITE_TOOLS`): в режиме `plan`
+  доступны только чтение и планирование.
+- **Один активный прогон на пайплайн.** Второй `pipeline_run`, пока первый идёт, отклоняется
+  (`pipeline.tool.already_running`) — лишние прогоны уводятся через общий реестр активных
+  прогонов (`engine/pipelines/run-control.ts`), тот же механизм, что у HTTP-роута.
+- **Прогон — только по опубликованной версии**: у пайплайна без публикации запуск отклоняется
+  (`pipeline.tool.not_published`).
+- **`pipeline_run_resume` — действие `approve`** в Authority-слое (ADR-106): возобновление
+  HITL-прогона — это решение человека, поэтому оно идёт через подтверждение пользователя.
+  `pipeline_run_cancel` — действие `execute` (остановка — не «согласие с гейтом»): отдельного
+  подтверждения не требует, но, как и `resume`, доступно только при праве изменения
+  содержимого проекта.
+- **Инстанцирование — право изменения своего проекта** (`canEditProject`), а не роль `ADMIN`
+  инстанца: шаблоны инстанца только читаются, а создаётся пайплайн проекта. В HTTP-контуре
+  managed (`POST /api/v2/pipeline-templates/:tid/instantiate`) — наоборот, `ADMIN`: это другой
+  контур, и его правила не переносятся в чат.
+- Неконвертируемый legacy-шаблон (`loop`) → отказ со **списком проблем**
+  (`pipeline.tool.template_unsupported`) — молчаливый обход недопустим.
+- Спецификация — `PipelineSpec` (§2.2–§2.5): id пайплайна **не выдумывается**, существующий
+  читается через `pipeline_get`.
+
+**Тулы `schedule_*` (ADR-051).** Шесть тулов: `schedule_list` (доступные сессии расписания),
+`schedule_get` (деталь), `schedule_save` (создание/частичный патч), `schedule_delete`,
+`schedule_run` (ручной запуск — независимо от `enabled`) и `schedule_jobs` (история срабатываний).
+Область доступа — **«свои + проект»**: расписание видно, если оно своё (`ownerId` = пользователь
+сессии) или его цель относится к проекту сессии; **свои** расписания доступны и без проекта;
+чужие выглядят как отсутствующие (`schedule.tool.not_found`). Проектные расписания читает любой
+участник, мутирует — только с правом изменения содержимого проекта. Триггер ровно один:
+`cron` (5 полей, **UTC**) **или** `every` (`30s|15m|1h|24h`) — смена одного заменяет другой; после
+`save` пересчитывается `nextRunAt`. Цель `pipeline` требует **опубликованный** пайплайн проекта
+сессии (`projectId` = проект сессии, `pipelineId` = пайплайн проекта, версия по умолчанию —
+последняя опубликованная) и **не создаёт сессию**: прогон идёт в фоне, прогресс — через
+`pipeline_run_status`.
+
+**Встроенные скиллы.** Те же контуры доступны агенту как инструкции: `synth-pipelines`
+(команда `/pipelines`) и `synth-schedules` (команда `/schedules`) — объявлены в коде в
+`packages/core/src/engine/skills/builtin.ts` (ADR-046 §9.5), требуют capability `pipeline`/
+`schedule` соответственно.
+
+**Ссылки:** реализация тулов — `packages/core/src/engine/tools/pipeline-authoring.ts`,
+`pipeline-runs.ts`, `pipeline-templates.ts`, `schedules.ts`; общие хелперы области —
+`packages/core/src/engine/tools/automation-helpers.ts`; HTTP-контур и права — [API_V2.md](./API_V2.md)
+§5.27 (расписания), §5.33–§5.35 (пайплайны, прогоны, шаблоны).
 
 ---
 

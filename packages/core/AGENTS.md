@@ -318,7 +318,7 @@
   window 60 c, ключ — `keyId`) — после `requireAuth`, до роутов; `rateLimitPerMinute`
   ключа, 0/не задан — без лимита, превышение → 429 `RATE_LIMITED` (паритет с backend).
   При старте — `applyBootstrapServiceKeys` (ADR-052/O1: installer-ключи из `security.bootstrapServiceKeys`).
-- `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107), `messages`, `projects`,
+- `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107), `messages`, `projects` (`memory` — политика памяти проекта),
   `project-transfer`, `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `dictionaries`, `mcp`, `skills`,
   `commands`, `skill-bundles`, `skill-scope`, `git`, `ssh-keys`, `events`, `identities`,
@@ -526,7 +526,7 @@
   (`agentKeyOf`/`DEFAULT_AGENT_KEY`, `buildPromptState`/`computeExpected`/`validateExpected`, запись
   `session.promptStates[agentKey]` только при смене generation); `state-messages.ts` — chronological
   state-сообщения (`mode_change`/`plan_updated`/`todos_updated`/`agent_switch`, `syncStateMessages`,
-  обёртка `<system-state type="…">`, `UnavailableTool`). Специализированные промпты debug-эха и
+  обёртка `<system-state type="…">`, `UnavailableTool`). Блок `memory.guide` (`prompts/system/MEMORY.{ru,en}.md`, тир context, order 25) подключается только при доступной памяти — резолвер `context/memory-availability.ts` (проект не выключил память, capability `memory`, есть включённый тул плагина). Специализированные промпты debug-эха и
   `SUMMARIZER.{lang}.md` идут мимо Composer (inline). Манифест: system-блоки в реальном порядке +
   запись `tools` (`source: 'tools'`, в конце тира `stable`), слой плагинных тулов
   `plugin.tools` (ADR-090: `volatile`, сразу после `tools`, **вне** кэшируемого stable-префикса —
@@ -629,9 +629,18 @@
   `trigger`, `command`, `mode`. `invocation` — комбинация двух флагов: `both`/`user`/
   `model`/`none` (`scope.ts`). Невалидный скилл не попадает в реестр (ошибка в
   `GET /api/v2/skills?diagnostics=1`), discovery остальных не ломает. Встроенные
-  (`builtin.ts`) — `skill-creator` и `synth-agents-md` (ADR-069: команда `/agents-md`,
-  capability-aware `file_read`/`search`/`file_write`). Тесты —
-  `engine/skills/*.test.ts`.
+  (`builtin.ts`) объявлены **в коде** (ADR-046 §9.5; отдельного asset-каталога нет):
+  `skill-creator` (команда `/skill-creator`, capability-aware `file_read`/`file_write`),
+  `synth-agents-md` (ADR-069: команда `/agents-md` — не `/init`, та занята встроенной
+  командой; `file_read`/`search`/`file_write`), `synth-storage-recovery` (ADR-098 W5: команда
+  `/storage-recovery`, read-only runbook), `synth-pipelines` (ADR-101: команда `/pipelines`,
+  capability `pipeline`) и `synth-schedules` (ADR-051: команда `/schedules`, capability
+  `schedule`) — последние два описывают агенту жизненный цикл пайплайна (спецификация →
+  публикация → прогон → журнал, шаблоны инстанца) и расписания (cron/интервал → цель, ручной
+  запуск, история срабатываний). Команды встроенных скиллов **уникальны** и не пересекаются с
+  встроенными slash-командами (`help`/`skills`/`commands`/`summary`/`init`) — иначе
+  `resolveCatalog` (`engine/commands/resolver.ts`) эмитил бы диагностику `shadowed` и скилл
+  был бы недостижим. Тесты — `engine/skills/*.test.ts`.
 - `engine/commands/*` — slash-команды и bundles (ADR-046): `parser`/`template`/
   `discovery`/`registry`/`bundles`/`builtin`/`resolver`/`service`; резолвинг в core
   до LLM, событие `command.invoked`; per-command права `permission.rules.command`;
@@ -689,6 +698,44 @@
   при доступном агенту `profile_update` (гейт `_interviewEligible` — `_availabilityPredicate` +
   `_isAdminDisabled`, fail-closed без тула); стор приходит через `ToolContext.extra.profilesStore`,
   нет владельца — понятная ошибка.
+  **Тулы пайплайнов (ADR-101, B1).** `pipeline_list`/`pipeline_get`/`pipeline_save`/
+  `pipeline_publish`/`pipeline_delete` (`engine/tools/pipeline-authoring.ts`) — чтение и
+  авторство спецификации пайплайна **проекта сессии**; проект берётся только из сессии
+  (аргумент `project_id` не принимается), мутации — по правам проекта (`canEditProject`,
+  `VIEWER` только читает), пайплайн чужого проекта выглядит как отсутствующий
+  (`pipeline.tool.not_found`). Версионирование (bump черновика, идемпотентность публикации) —
+  общими авторскими операциями `engine/pipelines/authoring.ts` (те же, что у HTTP-роута).
+  Рантайм (порты/движок) приходит через `ctx.extra.automation`
+  (`engine/tools/automation-runtime.ts`); общие проверки (рантайм/проект/право) — в
+  `engine/tools/automation-helpers.ts` (`getAutomation`/`loadAutomationScope`/`ensureCanEdit`).
+  **Тулы прогонов (ADR-101, B2).** `pipeline_run`/`pipeline_run_status`/`pipeline_run_list`/
+  `pipeline_run_resume`/`pipeline_run_cancel` (`engine/tools/pipeline-runs.ts`) — запуск
+  опубликованной версии, заголовок + журнал прогона, список прогонов проекта, HITL-решение
+  и отмена. Проект — только из сессии, прогон чужого проекта выглядит как чужой
+  (`pipeline.tool.run_foreign`); запуск/резолюция/отмена — по правам проекта, чтение доступно
+  `VIEWER`; запуск и отмена идут через **общий** реестр активных прогонов
+  (`engine/pipelines/run-control.ts`) — soft-lock «второй прогон того же пайплайна» и отмена
+  идущего прогона одинаковы для HTTP и для агента.
+  **Тулы шаблонов (ADR-101, B2).** `pipeline_templates`/`pipeline_instantiate`
+  (`engine/tools/pipeline-templates.ts`) — список шаблонов инстанса (оба формата: `adr-101` и
+  legacy `adr-100`; проект не требуется — это ресурс инстанса) и инстанцирование шаблона в
+  **черновик** пайплайна проекта сессии (`ensure` — идемпотентно, `installedBy.templateId` —
+  провенанс). Гейт инстанцирования — право изменения **своего** проекта (`canEditProject`),
+  а не роль `ADMIN` инстанца: шаблоны инстанса только читаются, а создаётся пайплайн проекта
+  (HTTP-контур для managed закрыт `ADMIN` — это другой контур). Логика шаблонов — в движке
+  (`engine/pipelines/authoring.ts`: `listPipelineTemplates`/`instantiatePipelineFromTemplate`) —
+  оттуда же её берёт HTTP-роут, поэтому два контура не разойдутся.
+  **Тулы расписаний (ADR-051).** `schedule_list`/`schedule_get`/`schedule_save`/`schedule_delete`/
+  `schedule_run`/`schedule_jobs` (`engine/tools/schedules.ts`) — список/деталь расписания,
+  создание и частичный патч, удаление, принудительный запуск и журнал срабатываний. Область
+  доступа — **«свои + проект»**: расписание видно, если оно своё (`ownerId === userId` сессии)
+  или его цель относится к проекту сессии (`pipeline`/`ephemeral`/`bound`/`queue`); проект у
+  сессии не обязателен (свои расписания доступны и без проекта), чужие выглядят как
+  отсутствующие (`schedule.tool.not_found`), мутации — по владению или по праву изменения
+  содержимого проекта (`VIEWER` только читает). Цель не подсунуть: `pipeline` — только
+  опубликованный пайплайн проекта сессии, `bound`/`queue` — своя сессия или сессия своего
+  проекта. Scope/правила области — в `engine/tools/automation-helpers.ts`
+  (`loadScheduleScope`/`isScheduleInScope`/`ensureScheduleMutable`).
   **Контекст плагинного тула сужается.** Для `source: 'plugin'` `executeToolDef` отдаёт только
   `sessionId`/`messageId`/`workingDir`/`agentRole?`/`projectId?`/`abortSignal?` (`narrowToolContext`): `extra` и `dataDir`
   плагину **не передаются** — симметрично `out-of-process` (по проводу те же три поля). Встроенные и
@@ -1059,6 +1106,7 @@
   `instructionsResolver`/`agentRegistry`/`skillsCatalog`/`exits`/`metrics`) — глобальных
   синглтонов нет, сборка — в `server/app/deps.ts` (standalone) и `backend/app/deps.ts`
   (managed).
+- `engine/pipelines/builtin.ts` — встроенные шаблоны памяти: `builtin:memory-consolidation` (сессия → факты, `agent`), `builtin:memory-consolidate-facts` (`memory_consolidate`), `builtin:memory-reindex` (`memory_index action=rebuild_all`, `wait:true`). Сид при старте идемпотентен; `POST /pipeline-templates/:tid/instantiate` с `ensure:true` возвращает существующий пайплайн проекта по `installedBy.templateId` (200) или создаёт (201).
 - `server/routes/pipeline-project-routes.ts` — ADR-101 (Э6): `createPipelineProjectRoutes`
   — единая фабрика (core + backend) для трёх контуров: пайплайны проекта
   (`/projects/:id/pipelines*` — создание, правка черновика, публикация неизменяемой

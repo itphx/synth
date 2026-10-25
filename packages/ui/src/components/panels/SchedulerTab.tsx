@@ -168,6 +168,9 @@ export function SchedulerTab() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
 
+  const scheduleDraft = useUIStore((s) => s.scheduleDraft)
+  const setScheduleDraft = useUIStore((s) => s.setScheduleDraft)
+
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -213,6 +216,31 @@ export function SchedulerTab() {
       }
     }
   }, [schedules, loadProjectPipelines])
+
+  /**
+   * Deep-link из вкладки «Память» (ADR-101): черновик расписания предзаполняет
+   * форму создания и сразу очищается — ничего не сохраняет. Повторный рендер
+   * не открывает редактор снова.
+   */
+  useEffect(() => {
+    if (!scheduleDraft) return
+    const draft = scheduleDraft
+    setFormError(null)
+    setSaveError(null)
+    setEditor({
+      ...EMPTY_EDITOR,
+      name: draft.name,
+      enabled: true,
+      trigger: 'cron',
+      cron: draft.cron ?? '0 3 * * *',
+      mode: 'pipeline',
+      pipelineProjectId: draft.projectId,
+      pipelineId: draft.pipelineId,
+      pipelinePayload: JSON.stringify(draft.payload ?? {}),
+    })
+    void loadProjectPipelines(draft.projectId, { force: true })
+    setScheduleDraft(null)
+  }, [scheduleDraft, loadProjectPipelines, setScheduleDraft])
 
   /** Общий guard повторных кликов по конкретной сущности (`key`). */
   const runWithPending = async (key: string, fn: () => Promise<void>) => {

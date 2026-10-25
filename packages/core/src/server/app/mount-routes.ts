@@ -610,6 +610,9 @@ export function mountStandaloneRoutes(
       engine: deps.pipelineEngine,
       projects: projectStore,
       templates: pipelines,
+      // ADR-101: общий реестр активных прогонов (soft-lock + отмена) —
+      // тот же экземпляр, что у встроенных тулов агента.
+      runControl: deps.pipelineRunControl,
     },
   ));
 

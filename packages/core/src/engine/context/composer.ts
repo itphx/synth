@@ -34,6 +34,7 @@ import { RUNTIME_DEP_BINARY, type RuntimeDeps } from '../tools/runtime-deps.js';
 import type { DebugCollector } from '../../debug.js';
 import { warning } from '../../logger.js';
 import { truncateHeadTailWithMarker } from './instructions.js';
+import { MEMORY_PLUGIN_NAME } from '../plugins/memory-namespace.js';
 
 /** Эвристика оценки токенов (ADR-070 §2.5, открытый вопрос 4 — chars/4). */
 const EST_TOKENS_DIVISOR = 4;
@@ -46,6 +47,22 @@ const EST_TOKENS_DIVISOR = 4;
 const PROVIDER_BLOCK_HEAD_RATIO = 0.7;
 const PROVIDER_BLOCK_TAIL_RATIO = 0.2;
 
+/**
+ * ADR-107: блок принадлежит плагину памяти.
+ *
+ * Признак — provenance регистрации (`plugin:<имя>`) или ключ провайдера
+ * (`plugin.<имя>.…`); строку имени не дублируем — берём `MEMORY_PLUGIN_NAME`.
+ */
+function isMemoryPluginBlock(registration: {
+  provider: { key: string };
+  provenance?: string;
+}): boolean {
+  if (registration.provenance === `plugin:${MEMORY_PLUGIN_NAME}`) return true;
+  return registration.provider.key.startsWith(
+    `${PLUGIN_PROMPT_BLOCK_KEY_PREFIX}${MEMORY_PLUGIN_NAME}.`,
+  );
+}
+
 /** Человекочитаемые подписи блоков манифеста (UI локализует по `key`). */
 const PROMPT_BLOCK_LABELS: Record<string, string> = {
   role: 'Role prompt',
@@ -57,6 +74,7 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   classification: 'Classification instruction',
   profile: 'User profile',
   'project.info': 'Project info',
+  'memory.guide': 'Memory guide',
   instructions: 'Project instructions',
   scheduler: 'Scheduler notice',
   'scheduler.turn': 'Scheduler current turn',
@@ -205,6 +223,11 @@ export interface ComposerContext {
    * Вычисляет оркестратор; прокидывается в `buildBaseBlocks`.
    */
   interviewEligible?: boolean;
+  /**
+   * ADR-107: память доступна в сессии — добавляет блок `memory.guide`
+   * (`prompts/system/MEMORY.{lang}.md`). Вычисляет оркестратор.
+   */
+  memoryAvailable?: boolean;
   stickyNotes?: StickyNote[];
   summaryContent?: string;
   /**
@@ -558,6 +581,7 @@ export class SystemPromptComposer {
           language: lang,
           showInterview: ctx.showInterview,
           interviewEligible: ctx.interviewEligible,
+          memoryAvailable: ctx.memoryAvailable,
           stickyNotes: ctx.stickyNotes,
           summaryContent: ctx.summaryContent,
         });
@@ -787,12 +811,17 @@ export class SystemPromptComposer {
     // Override пользователя заменяет системный промпт целиком — блоки
     // провайдеров не добавляются (как `instructions`/`skills.catalog`).
     if (override) return [];
+    // ADR-107: память проекта выключена — блоки плагина памяти не собираются
+    // (провайдеры не вызываются, в промпт ничего не попадает). Остальные
+    // плагины политикой памяти не затрагиваются.
+    const memoryDisabled = ctx.project?.memory?.enabled === false;
 
     const budget = ctx.promptBlockMaxChars ?? DEFAULT_PROMPT_BLOCK_MAX_CHARS;
     const providerCtx = this._providerContext(ctx);
     const blocks: PromptBlock[] = [];
 
     for (const registration of registrations) {
+      if (memoryDisabled && isMemoryPluginBlock(registration)) continue;
       const { provider } = registration;
       let content = '';
       let status: PromptManifestStatus | undefined;

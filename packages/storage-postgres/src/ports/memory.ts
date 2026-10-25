@@ -306,6 +306,7 @@ type MemoryIndexRow = {
   provider_id: string;
   project_id: string | null;
   scope: string | null;
+  enabled: boolean | null;
   source: unknown;
   state: string;
   generation: number;
@@ -345,6 +346,8 @@ function toIndex(row: MemoryIndexRow): MemoryIndexRecord {
     providerId: row.provider_id,
     projectId: row.project_id ?? undefined,
     scope: normalizeScope(row.scope),
+    // `enabled` — легаси-строки/`NULL` читаются как включённые (дефолт true).
+    enabled: row.enabled !== false,
     source: row.source as MemoryIndexRecord['source'],
     state: row.state as MemoryIndexState,
     generation: row.generation,
@@ -378,16 +381,17 @@ export class PgMemoryIndexRepository implements MemoryIndexRepository {
   async saveIndex(index: MemoryIndexRecord): Promise<void> {
     await this._deps.connection.query(
       `INSERT INTO memory_indexes
-         (id, namespace, name, provider_id, project_id, scope, source, state, generation,
+         (id, namespace, name, provider_id, project_id, scope, enabled, source, state, generation,
           fingerprint, stats, created_at, updated_at, error)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb,
-               $12::timestamptz, $13::timestamptz, $14)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12::jsonb,
+               $13::timestamptz, $14::timestamptz, $15)
        ON CONFLICT (id) DO UPDATE SET
          namespace = EXCLUDED.namespace,
          name = EXCLUDED.name,
          provider_id = EXCLUDED.provider_id,
          project_id = EXCLUDED.project_id,
          scope = EXCLUDED.scope,
+         enabled = EXCLUDED.enabled,
          source = EXCLUDED.source,
          state = EXCLUDED.state,
          generation = EXCLUDED.generation,
@@ -403,6 +407,7 @@ export class PgMemoryIndexRepository implements MemoryIndexRepository {
         index.providerId,
         index.projectId ?? null,
         normalizeScope(index.scope),
+        index.enabled !== false,
         jsonbParam(index.source),
         index.state,
         index.generation,

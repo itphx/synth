@@ -246,6 +246,10 @@ export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
 // портал памяти вызывает админ-тул плагина через реестр тулов (ADR-107, М2).
 export { executeToolDef, narrowToolContext, buildDenyResult } from './engine/tools/tool-execution.js';
 export type { SecurityMessageSource, BuildDenyResultParams } from './engine/tools/tool-execution.js';
+// ADR-101/ADR-051: рантайм автоматизации для встроенных тулов
+// (`pipeline_*`/`schedule_*`) — порты хранилища + движок пайплайнов и
+// шедулер. Передаётся в тул через `ToolContext.extra.automation`.
+export type { AutomationRuntime } from './engine/tools/automation-runtime.js';
 // ADR-077 (шаг 1): порт исполнения команд — интерфейс домена + реализации.
 // Домен (тулы shell/rg/git, inline-shell, детект зависимостей) ходит в порт,
 // а не в `execFile` напрямую: физический исполнитель взаимозаменяем
@@ -1488,6 +1492,20 @@ export {
   SHELL_TOOL_NAME,
   startGateTimeout,
   stepWorkingDir,
+  // ADR-101: управление активными прогонами (soft-lock + отмена) —
+  // общий экземпляр для HTTP-роута и встроенных тулов агента.
+  PipelineRunControl,
+  // ADR-101: авторские операции над пайплайном проекта (черновик/публикация/
+  // удаление) — общие для HTTP-роута и встроенных тулов агента.
+  createPipelineDraft,
+  updatePipelineDraft,
+  publishPipeline,
+  deletePipeline,
+  PipelineAuthoringError,
+  // ADR-101: шаблоны инстанса — список и инстанцирование (общие для
+  // HTTP-роута и встроенных тулов агента).
+  listPipelineTemplates,
+  instantiatePipelineFromTemplate,
 } from './engine/pipelines/index.js';
 export type {
   AgentStepExecutorOptions,
@@ -1515,6 +1533,8 @@ export type {
   PipelinePathContext,
   PipelineProjectStoreLike,
   PipelineRunOptions,
+  PipelineRunStartOptions,
+  PipelineRunStartResult,
   PipelineSkillsCatalogLike,
   PipelineStepContext,
   PipelineStepContextDeps,
@@ -1530,13 +1550,23 @@ export type {
   StepOutcome,
   ToolStepExecutorOptions,
 } from './engine/pipelines/index.js';
+export type {
+  PipelineDraftSpecInput,
+  PipelineTemplateInstantiation,
+  PipelineTemplateSummary,
+} from './engine/pipelines/index.js';
 // ADR-101: встроенные шаблоны пайплайнов инстанса (сид при старте процесса).
 export {
   BUILTIN_PIPELINE_PROVENANCE,
+  buildMemoryConsolidateFactsPipelineSpec,
   buildMemoryConsolidationPipelineSpec,
+  buildMemoryReindexPipelineSpec,
   ensureBuiltinPipelines,
+  MEMORY_BUILTIN_PIPELINE_VERSION,
+  MEMORY_CONSOLIDATE_FACTS_PIPELINE_ID,
   MEMORY_CONSOLIDATION_PIPELINE_ID,
   MEMORY_CONSOLIDATION_PIPELINE_VERSION,
+  MEMORY_REINDEX_PIPELINE_ID,
 } from './engine/pipelines/builtin.js';
 export type {
   EnsureBuiltinPipelinesDeps,

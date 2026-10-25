@@ -58,6 +58,14 @@ export interface ProjectSkillSettings {
 }
 
 /**
+ * ADR-107: память проекта (undefined — наследует политику инстанса/включена).
+ */
+export interface ProjectMemorySettings {
+  /** false — блоки памяти и тулы памяти выключены для проекта; данные сохраняются. */
+  enabled?: boolean;
+}
+
+/**
  * ADR-075: политика для абсолютного `project.workspace` вне `workspacesRoot`.
  * - `confirm` — путь разрешён только с явным подтверждением (`confirmOutsideRoot`);
  * - `deny` — путь запрещён (managed-развёртывание: жёстко).
@@ -95,6 +103,8 @@ export interface Project {
   mcp?: ProjectMcpSettings;
   /** ADR-046 §4.5: проектный скоуп скиллов (owner/lead). */
   skills?: ProjectSkillSettings;
+  /** ADR-107: память проекта (undefined — наследует политику инстанса/включена). */
+  memory?: ProjectMemorySettings;
   statusMessages: StatusMessage[];
   /** Kanban-план проекта (ADR-039). Владеет проектом, а не сессией. */
   plan?: ProjectPlan;

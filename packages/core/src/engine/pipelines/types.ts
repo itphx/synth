@@ -54,6 +54,10 @@ import type { PipelineStepContext, PipelineStepContextDeps } from './step-contex
  *
  * Э4.3b (Tool-Use-цикл агентского шага) добавил: `pipeline.agent_iterations`
  * (исчерпан лимит итераций Tool-Use-цикла — модель не привела к ответу).
+ *
+ * Управление прогонами (`run-control.ts`) добавило: `pipeline.already_running`
+ * (по пайплайну уже исполняется прогон — soft-lock: второй прогон не
+ * запускается).
  */
 export const PIPELINE_ERROR_CODES = [
   'pipeline.not_found',
@@ -77,6 +81,9 @@ export const PIPELINE_ERROR_CODES = [
   'pipeline.llm_failed',
   'pipeline.llm_unrecoverable',
   'pipeline.agent_iterations',
+  // Управление прогонами (ADR-101, run-control): по пайплайну уже исполняется
+  // прогон — второй не запускается (soft-lock, анти-«запусти 50 прогонов»).
+  'pipeline.already_running',
 ] as const;
 
 /** Код ошибки движка пайплайнов (см. `PIPELINE_ERROR_CODES`). */

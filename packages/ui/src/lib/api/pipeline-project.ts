@@ -43,6 +43,8 @@ import { BASE_URL, fetchJSON } from './base'
 export interface PipelineProvenance {
   pack: string
   version: string
+  /** Шаблон инстанса, из которого создан пайплайн (ADR-101). */
+  templateId?: string
 }
 
 /**
@@ -178,6 +180,11 @@ export interface PipelineRunResumeBody {
 export interface PipelineTemplateInstantiateBody {
   projectId: string
   name?: string
+  /**
+   * Идемпотентность: если пайплайн из этого шаблона в проекте уже есть —
+   * вернуть его (`created:false`), иначе создать (`created:true`).
+   */
+  ensure?: boolean
 }
 
 /** Фильтр выборки прогонов (`GET .../runs`). */

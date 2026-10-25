@@ -401,6 +401,48 @@ export const SYSTEM_MESSAGES = {
     'Step "{node}" has no LLM provider configured (provider: "{provider}")',
   'pipeline.llm_failed': 'Step "{node}" failed: LLM error ({type})',
   'pipeline.llm_unrecoverable': 'Step "{node}" failed: LLM error ({type}) is not recoverable',
+  // --- Встроенные тулы пайплайнов (ADR-101) ---
+  'pipeline.tool.deps_unavailable': 'Error: the pipeline runtime is unavailable for {tool}',
+  'pipeline.tool.no_project':
+    'No project: pipelines are available only within a project of the session',
+  'pipeline.tool.forbidden':
+    'Error: you do not have permission to modify this project (owner or editor role required)',
+  'pipeline.tool.not_found': 'Pipeline "{id}" not found',
+  'pipeline.tool.already_running':
+    'Pipeline "{id}" already has a running execution — wait for it to finish',
+  'pipeline.tool.invalid_spec': 'Invalid pipeline specification: {problems}',
+  'pipeline.tool.not_published': 'Pipeline "{id}" has no published version',
+  'pipeline.tool.run_not_found': 'Pipeline run "{id}" not found',
+  'pipeline.tool.run_foreign': 'Pipeline run "{id}" belongs to another project',
+  'pipeline.tool.run_not_waiting':
+    'Pipeline run "{id}" is not waiting for a human decision (status: {status})',
+  'pipeline.tool.template_not_found': 'Pipeline template "{id}" not found',
+  'pipeline.tool.template_unsupported':
+    'Pipeline template "{id}" cannot be instantiated: {problems}',
+  'pipeline.tool.saved': 'Pipeline draft saved: {id} (version {version})',
+  'pipeline.tool.published': 'Pipeline version {version} published: {id}',
+  'pipeline.tool.deleted': 'Pipeline deleted: {id}',
+  'pipeline.tool.run_started': 'Pipeline run started: {run_id}',
+  'pipeline.tool.run_resumed': 'Pipeline run {run_id}: the human decision was applied',
+  'pipeline.tool.run_cancelled': 'Pipeline run cancelled: {run_id}',
+  'pipeline.tool.instantiated': 'Pipeline created from the template: {id}',
+  'pipeline.tool.list_empty': 'No pipelines in the project',
+  'pipeline.tool.runs_empty': 'No pipeline runs',
+  'pipeline.tool.templates_empty': 'No pipeline templates in the instance',
+
+  // --- Встроенные тулы расписаний (ADR-051) ---
+  'schedule.tool.deps_unavailable': 'Error: the schedule runtime is unavailable for {tool}',
+  'schedule.tool.forbidden':
+    'Error: you do not have permission to modify this schedule (owner or project editor role required)',
+  'schedule.tool.not_found': 'Schedule "{id}" not found',
+  'schedule.tool.invalid': 'Invalid schedule: {problems}',
+  'schedule.tool.saved': 'Schedule saved: {id}',
+  'schedule.tool.deleted': 'Schedule deleted: {id}',
+  'schedule.tool.ran': 'Schedule "{id}" triggered (status: {status})',
+  'schedule.tool.list_empty': 'No schedules',
+  'schedule.tool.jobs_empty': 'No schedule runs',
+  'schedule.tool.target_forbidden': 'The target of the schedule is not allowed: {reason}',
+  'schedule.tool.not_published': 'Pipeline "{id}" has no published version',
 
   // --- Исполнение (ADR-077) ---
   'execution.remote_url_required':

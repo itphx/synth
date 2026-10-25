@@ -22,6 +22,12 @@ export interface BuildSystemPromptParams {
   interviewEligible?: boolean;
   stickyNotes?: StickyNote[];
   summaryContent?: string;
+  /**
+   * ADR-107: память доступна в текущей сессии (плагин активен, тулы памяти не
+   * отключены, проект не выключил память). Только тогда в промпт попадает
+   * инструкция prompts/system/MEMORY.{lang}.md.
+   */
+  memoryAvailable?: boolean;
 }
 
 export interface ContextBuilderOptions {
@@ -115,7 +121,15 @@ export class ContextBuilder {
     // 7. Project prompt (context)
     const projectContent = (await this._getProjectPrompt(params.projectName)) ?? '';
 
-    // 8. Interview prompt (volatile)
+    // 8. Memory guide (context). Инструкция нужна только при доступной памяти:
+    // иначе модель видела бы советы про отсутствующие инструменты.
+    let memoryContent = '';
+    if (params.memoryAvailable) {
+      memoryContent = this._config.getMemoryInstructions(lang);
+      if (memoryContent) this._debugAdd('memory', { loaded: true, language: lang });
+    }
+
+    // 9. Interview prompt (volatile)
     // Блок показывается, только если: интервью включено настройкой сессии И
     // ход признан подходящим (`interviewEligible`: первое сообщение сессии от
     // пользователя, не Scheduler/системное) И профиль найден И интервью ещё
@@ -138,6 +152,11 @@ export class ContextBuilder {
       { key: 'additional', tier: 'stable', order: 20, content: additionalContent, provenance: 'context' },
       { key: 'profile', tier: 'context', order: 10, content: profileContent, provenance: 'profile' },
       { key: 'project.info', tier: 'context', order: 20, content: projectContent, provenance: params.projectName ? `projects/${params.projectName}/info.md` : 'projects' },
+      // Подключаем блок только при доступной памяти: иначе в манифесте
+      // появлялась бы пустая «инструкция», хотя инструментов у агента нет.
+      ...(params.memoryAvailable
+        ? [{ key: 'memory.guide', tier: 'context' as const, order: 25, content: memoryContent, provenance: 'prompts/system/MEMORY' }]
+        : []),
       { key: 'sticky', tier: 'volatile', order: 10, content: stickyContent, provenance: 'stickyNotes' },
       { key: 'participants', tier: 'volatile', order: 20, content: participantsContent, provenance: 'history' },
       { key: 'summary', tier: 'volatile', order: 30, content: summaryContent, provenance: 'summary' },

@@ -164,6 +164,9 @@ export const projectCreateSchema = z.object({
   repos: z.array(z.union([z.string(), gitRepoConfigSchema])).optional(),
 });
 
+/** ADR-107: проектная политика памяти (undefined — не менять). */
+export const projectMemoryUpdateSchema = z.object({ enabled: z.boolean().optional() });
+
 export const projectUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().optional(),
@@ -173,6 +176,7 @@ export const projectUpdateSchema = z.object({
   color: projectColorKeySchema.optional().nullable(),
   workspace: z.string().optional(),
   repos: z.array(z.union([z.string(), gitRepoConfigSchema])).optional(),
+  memory: projectMemoryUpdateSchema.optional(),
 });
 
 /** ADR-076: тело создания SSH-ключа (`POST /api/v2/ssh-keys`). */

@@ -131,6 +131,20 @@ describe('SystemPromptComposer', () => {
     };
   }
 
+  it('memory.guide: блок добавляется только при memoryAvailable', async () => {
+    const composer = makeComposer({
+      contextConfig: makeContextConfig({ getMemoryInstructions: () => '[MEMORY GUIDE]' }),
+    });
+    const session = makeSession();
+
+    const withMemory = await composer.compose(makeCtx(session, { memoryAvailable: true }));
+    expect(withMemory.system).toContain('[ПАМЯТЬ]');
+    expect(withMemory.blocks.find((block) => block.key === 'memory.guide')?.tier).toBe('context');
+
+    const withoutMemory = await composer.compose(makeCtx(session, { memoryAvailable: false }));
+    expect(withoutMemory.system).not.toContain('[ПАМЯТЬ]');
+  });
+
   it('идемпотентность: двойной compose при одном состоянии → одинаковые байты', async () => {
     const composer = makeComposer();
     const session = makeSession({ projectId: 'p1', todos: makeTodos() });

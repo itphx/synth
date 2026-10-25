@@ -18,6 +18,8 @@ import { SystemPromptComposer, type ComposerContext, type ComposerInstructions, 
 import type { PromptBlockRegistry } from './context/prompt-block-registry.js';
 import { ProjectInstructionsResolver, type InstructionsFileInfo } from './context/instructions.js';
 import { LazyInstructionsLoader } from './context/lazy-instructions.js';
+import { isMemoryPromptAvailable } from './context/memory-availability.js';
+import { MEMORY_PLUGIN_NAME } from './plugins/memory-namespace.js';
 import type { ComposerSkillsCatalog } from './skills/catalog.js';
 import type { SkillRuntime, SkillScopeOptions } from './skills/types.js';
 import type { CommandRuntime } from '@itphx/synth-shared';
@@ -25,6 +27,7 @@ import { calibrateCharsPerToken, estimateTokens, DEFAULT_CHARS_PER_TOKEN } from 
 import { agentKeyOf } from './context/prompt-state.js';
 import { createStateMessage, findLastStateMessage, buildModeChangeContent, buildPlanUpdatedContent, wrapStateContent, type UnavailableTool } from './context/state-messages.js';
 import type { ToolRegistry } from './tools/registry.js';
+import type { AutomationRuntime } from './tools/automation-runtime.js';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
 import { attachExecutorMcpFromDescriptor } from './mcp/executor-mcp-source.js';
@@ -88,7 +91,7 @@ import { handleDebugSystemMessage as handleDebugSystemMessageFn, type DebugSyste
 import { handleSummarization as handleSummarizationFn, type SummarizationDeps } from './orchestrator/summarization.js';
 import { runProcessEarly, type ProcessEarlyDeps } from './orchestrator/phases/process-early.js';
 import { runProcessFinalize, type ProcessFinalizeDeps } from './orchestrator/phases/process-finalize.js';
-import { runProcessSetup, type ProcessSetupDeps, type MemoryContextEntry } from './orchestrator/phases/process-setup.js';
+import { runProcessSetup, withoutMemoryPluginTools, type ProcessSetupDeps, type MemoryContextEntry } from './orchestrator/phases/process-setup.js';
 import type { AnalyticsRecorder } from '../analytics/recorder.js';
 
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
@@ -360,6 +363,15 @@ export interface OrchestratorOptions {
    */
   getRequestSessionService?: () => RequestSessionService | undefined;
   /**
+   * ADR-101/ADR-051: late-bound рантайм автоматизации (пайплайны, расписания)
+   * для встроенных тулов (`pipeline_*`/`schedule_*`).
+   *
+   * Геттер нужен, т.к. движок пайплайнов и шедулер создаются в приложении
+   * **после** оркестратора; в момент хода отдаётся актуальный снимок
+   * зависимостей (`engine/tools/automation-runtime.ts`).
+   */
+  getAutomationRuntime?: () => AutomationRuntime | undefined;
+  /**
    * ADR-051: late-bound резолвер «активно ли расписание для сессии» (в сессии есть
    * включённое расписание с целью-сессией). Прокидывается в Composer-контекст:
    * при `true` в системный промпт добавляется статическое описание `Scheduler`.
@@ -522,6 +534,8 @@ export class ChatOrchestrator {
   private readonly _commandRuntime: CommandRuntime | null;
   /** ADR-089: late-bound funnel создания сессий для тула `task` (null — не задан). */
   private readonly _getRequestSessionService: (() => RequestSessionService | undefined) | null;
+  /** ADR-101/ADR-051: late-bound рантайм автоматизации (null — не задан). */
+  private readonly _getAutomationRuntime: (() => AutomationRuntime | undefined) | null;
   /** ADR-051: late-bound резолвер активности расписания в сессии (null — не задан). */
   private readonly _isSchedulerActive: ((sessionId: string) => Promise<boolean>) | null;
   /**
@@ -764,6 +778,7 @@ export class ChatOrchestrator {
     this._skillRuntime = options.skillRuntime ?? null;
     this._commandRuntime = options.commandRuntime ?? null;
     this._getRequestSessionService = options.getRequestSessionService ?? null;
+    this._getAutomationRuntime = options.getAutomationRuntime ?? null;
     this._isSchedulerActive = options.isSchedulerActive ?? null;
     this._isCancelRequested = options.isCancelRequested ?? null;
     this._streamPersistIntervalMs = options.streamPersistIntervalMs ?? 1000;
@@ -1289,6 +1304,26 @@ export class ChatOrchestrator {
   }
 
   /**
+   * ADR-107: нужна ли агенту инструкция по памяти в системном промпте.
+   *
+   * Доступность — не «вообще плагин установлен», а **в этой сессии**:
+   * - память проекта не выключена (`project.memory.enabled !== false`);
+   * - у агента есть capability `memory` (иначе тулы ему не предназначены);
+   * - в реестре есть хотя бы один не отключённый админом тул плагина памяти.
+   */
+  private _memoryPromptAvailable(
+    project: Project | null | undefined,
+    agentDef: AgentDefinition | undefined,
+  ): boolean {
+    return isMemoryPromptAvailable({
+      project,
+      agentCapabilities: agentDef?.capabilities,
+      tools: this._toolRegistry?.listPlugin(MEMORY_PLUGIN_NAME) ?? [],
+      isAdminDisabled: (tool) => this._isAdminDisabled(tool),
+    });
+  }
+
+  /**
    * ADR-070 §2.1/§2.5: единая сборка `ComposerContext` для `compose`/`manifest`.
    * `toolSelection` (для манифеста `tools`/`plugin.tools`/`mcp.tools`)
    * передаётся только диагностикой; `project` — уже загруженный проект
@@ -1342,6 +1377,7 @@ export class ChatOrchestrator {
       userId: session.userId,
       showInterview: session.settings.showInterview,
       interviewEligible,
+      memoryAvailable: this._memoryPromptAvailable(project, agentDef),
       stickyNotes: session.stickyNotes,
       summaryContent: summaryContent || undefined,
       tools: toolSelection
@@ -3382,6 +3418,8 @@ export class ChatOrchestrator {
                   sessionManager: this._sessionManager,
                   // ADR-089: funnel создания дочерней сессии (late-bound, если подключён).
                   getRequestSessionService: this._getRequestSessionService ?? undefined,
+                  // ADR-101/ADR-051: рантайм пайплайнов/расписаний (late-bound).
+                  automation: this._getAutomationRuntime?.() ?? undefined,
                   projectStore: this._projectStore ?? undefined,
                   // Онбординг: тул `profile_update` сохраняет ответы интервью.
                   profilesStore: this._profilesStore ?? undefined,
@@ -3689,10 +3727,15 @@ export class ChatOrchestrator {
               sessionMode, planMode, planApproved, workspaceReady,
             });
             const rebuiltSelection = rebuilt.select();
+            // ADR-107: политика памяти проекта действует и после смены
+            // проекта/workspace в ходе — тулы плагина памяти не возвращаются.
+            const rebuiltPlugin = projectForState?.memory?.enabled === false
+              ? withoutMemoryPluginTools(rebuiltSelection.plugin ?? [])
+              : (rebuiltSelection.plugin ?? []);
             tools = this._toolRegistry
               ? [
                 ...rebuiltSelection.builtin,
-                ...(rebuiltSelection.plugin ?? []),
+                ...rebuiltPlugin,
                 ...rebuiltSelection.mcp,
               ]
               : undefined;

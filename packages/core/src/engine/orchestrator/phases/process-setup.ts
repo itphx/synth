@@ -67,6 +67,28 @@ const MEMORY_FACTS_BLOCK_KEY = `${PLUGIN_PROMPT_BLOCK_KEY_PREFIX}${MEMORY_PLUGIN
 const MEMORY_RECALL_BLOCK_KEY = `${PLUGIN_PROMPT_BLOCK_KEY_PREFIX}${MEMORY_PLUGIN_NAME}.recall`;
 
 /**
+ * Префикс полного имени тула плагина памяти в реестре (`plugin_<ns>_`).
+ *
+ * Namespace — то же правило, что у `pluginToolFullName` (небуквенно-цифровые
+ * символы → `_`), но здесь нужен **префикс для набора** тулов: имя конкретного
+ * тула заранее неизвестно.
+ */
+const MEMORY_TOOL_NAME_PREFIX = `plugin_${MEMORY_PLUGIN_NAME.replace(/-/g, '_')}_`;
+
+/**
+ * ADR-107: убрать тулы плагина памяти из выбранного набора.
+ *
+ * Применяется, когда память проекта выключена (`project.memory.enabled ===
+ * false`): модель не должна видеть эти тулы вовсе (а не получать отказ
+ * permission-слоя). Остальные плагинные тулы не затрагиваются.
+ */
+export function withoutMemoryPluginTools<T extends { function: { name: string } }>(
+  tools: readonly T[],
+): T[] {
+  return tools.filter((tool) => !tool.function.name.startsWith(MEMORY_TOOL_NAME_PREFIX));
+}
+
+/**
  * ADR-107: блок памяти, фактически ушедший в промпт хода (для метрик).
  *
  * Только размеры и статус — содержимое памяти в телеметрию не попадает.
@@ -589,11 +611,17 @@ export async function runProcessSetup(
   // ADR-090: порядок слоёв — встроенные → плагинные → MCP.
   // `stableToolCount` считает только встроенные: плагинные и MCP-тулы меняются
   // в runtime (активация/деактивация, серверы сессии) и вне stable-префикса.
+  // ADR-107: память проекта выключена — тулы плагина памяти модели не
+  // показываются (остальные плагинные тулы остаются).
+  const pluginTools = toolSelection.plugin ?? [];
+  const visiblePluginTools = projectForState?.memory?.enabled === false
+    ? withoutMemoryPluginTools(pluginTools)
+    : pluginTools;
   const tools = deps.toolRegistry
     ? [
       ...toolSelection.builtin,
       // Мок/внешняя реализация реестра может не отдавать слой `plugin`.
-      ...(toolSelection.plugin ?? []),
+      ...visiblePluginTools,
       ...toolSelection.mcp,
     ]
     : undefined;

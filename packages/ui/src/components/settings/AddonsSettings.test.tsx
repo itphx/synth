@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   uninstallPack: vi.fn(),
   getPipelines: vi.fn(),
   getPipelineInstances: vi.fn(),
+  getPipelineTemplates: vi.fn(),
   notify: vi.fn(),
   confirm: vi.fn(),
 }))
@@ -98,6 +99,23 @@ const INSTANCE = {
   updatedAt: '2026-10-19T10:00:00.000Z',
 }
 
+/** Системный шаблон движка ADR-101 (`GET /pipeline-templates`). */
+const TEMPLATE = {
+  id: 'builtin:memory-reindex',
+  name: 'Memory: reindex project',
+  format: 'adr-101' as const,
+  version: 1,
+  installedBy: { pack: 'builtin', version: '1' },
+}
+
+/** Legacy-определение пакета ADR-100 — в блоке шаблонов не показывается. */
+const LEGACY_TEMPLATE = {
+  id: 'publication',
+  name: 'Legacy publication',
+  format: 'adr-100' as const,
+  steps: [{ id: 'draft' }],
+}
+
 const byTestId = (container: HTMLElement, testId: string): HTMLElement | null =>
   container.querySelector(`[data-testid="${testId}"]`)
 
@@ -149,6 +167,7 @@ beforeEach(() => {
   mocks.getPacks.mockResolvedValue([])
   mocks.getPipelines.mockResolvedValue([])
   mocks.getPipelineInstances.mockResolvedValue([])
+  mocks.getPipelineTemplates.mockResolvedValue([])
   mocks.approvePack.mockResolvedValue({
     installed: true,
     requiresApproval: false,
@@ -324,5 +343,58 @@ describe('AddonsSettings — пайплайны', () => {
     await flush()
 
     expect(mocks.getPipelineInstances).toHaveBeenCalledWith({ status: 'failed' })
+  })
+})
+
+describe('AddonsSettings — системные шаблоны (ADR-101)', () => {
+  async function openTemplatesTab(container: HTMLElement): Promise<void> {
+    const tabs = Array.from(container.querySelectorAll('[role="tab"]')) as HTMLElement[]
+    const templatesTab = tabs.find((tab) => tab.textContent === 'Templates')
+    expect(templatesTab, 'вкладка "Templates"').toBeTruthy()
+    await act(async () => {
+      templatesTab!.click()
+    })
+    await flush()
+    await flush()
+  }
+
+  it('read-only список: id, имя, версия и пакет; legacy не показывается', async () => {
+    mocks.getPipelineTemplates.mockResolvedValue([TEMPLATE, LEGACY_TEMPLATE])
+    const container = await renderSettings()
+
+    await openTemplatesTab(container)
+
+    const item = byTestId(container, 'addons-template-builtin:memory-reindex')
+    expect(item).toBeTruthy()
+    const text = item?.textContent ?? ''
+    expect(text).toContain('Memory: reindex project')
+    expect(text).toContain('builtin:memory-reindex')
+    expect(text).toContain('1')
+    expect(text).toContain('builtin')
+    expect(text).toContain('system')
+
+    // Legacy-определение ADR-100 в этом блоке не смешивается с шаблонами движка.
+    expect(byTestId(container, 'addons-template-publication')).toBeNull()
+  })
+
+  it('пустой список шаблонов — пустое состояние', async () => {
+    mocks.getPipelineTemplates.mockResolvedValue([])
+    const container = await renderSettings()
+
+    await openTemplatesTab(container)
+
+    expect(byTestId(container, 'addons-pipelines-templates-empty')).toBeTruthy()
+  })
+
+  it('ошибка загрузки шаблонов показывается в alert', async () => {
+    mocks.getPipelineTemplates.mockRejectedValue(new Error('templates boom'))
+    const container = await renderSettings()
+
+    await openTemplatesTab(container)
+
+    const error = byTestId(container, 'addons-pipelines-templates-error')
+    expect(error).toBeTruthy()
+    expect(error?.getAttribute('role')).toBe('alert')
+    expect(error?.textContent).toContain('templates boom')
   })
 })

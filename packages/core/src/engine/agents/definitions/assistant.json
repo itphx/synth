@@ -19,7 +19,9 @@
     "mcp",
     "runtime",
     "user",
-    "memory"
+    "memory",
+    "pipeline",
+    "schedule"
   ],
   "icon": "robot-3",
   "color": "--status-success",

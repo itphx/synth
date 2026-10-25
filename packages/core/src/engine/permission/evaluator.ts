@@ -12,7 +12,7 @@ import {
   TOOL_RUNTIME_DEP,
   type RuntimeDeps,
 } from '../tools/runtime-deps.js';
-import { getToolGroups, TOOL_PATH_PARAMS } from './groups.js';
+import { getToolGroups, TOOL_PATH_PARAMS, PIPELINE_WRITE_TOOLS, SCHEDULE_WRITE_TOOLS } from './groups.js';
 import type {
   AuthorityGateHook,
   AuthorityGateResult,
@@ -105,8 +105,21 @@ export function isEditTool(toolName: string, capabilities?: readonly string[]): 
  * ADR-025: тулы, блокируемые в plan-режиме (и strict без утверждённого плана):
  * edit-группа (write/edit/delete файлов) + git-запись (git_commit/git_push/...).
  * Read-only git-тулы (git_status/git_diff/...) в группу не входят и остаются доступны.
+ *
+ * ADR-101/ADR-051: мутирующие тулы пайплайнов и расписаний — **явный список
+ * имён**. Они не входят в группы `edit`/`git_write` (у них собственные
+ * capability `pipeline`/`schedule`), поэтому без явного списка plan-режим
+ * разрешал бы публикацию версии и запуск прогона. Read-тулы пайплайнов и
+ * расписаний (список/деталь/журнал/шаблоны) в plan-режиме **остаются
+ * доступны** — планирование часто требует их увидеть.
  */
+const PLAN_BLOCKED_AUTOMATION_TOOLS: ReadonlySet<string> = new Set([
+  ...PIPELINE_WRITE_TOOLS,
+  ...SCHEDULE_WRITE_TOOLS,
+]);
+
 export function isPlanBlockedTool(toolName: string, capabilities?: readonly string[]): boolean {
+  if (PLAN_BLOCKED_AUTOMATION_TOOLS.has(toolName)) return true;
   const groups = getToolGroups(toolName, capabilities);
   return groups.includes('edit') || groups.includes('git_write');
 }

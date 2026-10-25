@@ -302,6 +302,10 @@ export class MemoryContextFileRepository implements ContextFileRepository {
     return '';
   }
 
+  getMemoryInstructions(): string {
+    return '';
+  }
+
   getSecurityMessage(): string | null {
     return null;
   }

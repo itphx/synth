@@ -733,7 +733,11 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       expect(body.pipeline.projectId).toBe('proj-1');
       expect(body.pipeline.draftVersion).toBe(1);
       expect(body.pipeline.publishedVersion).toBeUndefined();
-      expect(body.pipeline.installedBy).toEqual({ pack: 'synth-media', version: '1.0.0' });
+      expect(body.pipeline.installedBy).toEqual({
+        pack: 'synth-media',
+        version: '1.0.0',
+        templateId: 'publication',
+      });
       // Спецификация шаблона сконвертирована в спецификацию движка.
       expect(body.pipeline.draft.nodes[0]).toMatchObject({ id: 'step-1', kind: 'agent', agent: 'publisher' });
       expect(body.pipeline.draft.exits).toHaveLength(1);
@@ -768,6 +772,124 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body: JSON.stringify({ projectId: 'proj-1' }),
       });
       expect(res.status).toBe(404);
+    });
+
+    it('POST /pipeline-templates/:tid/instantiate — ensure:true идемпотентен', async () => {
+      const { app, pipelines } = createHarness({
+        projects,
+        templates: [
+          legacyDefinition('publication', { installedBy: { pack: 'synth-media', version: '1.0.0' } }),
+        ],
+      });
+
+      const body = JSON.stringify({ projectId: 'proj-1', ensure: true });
+      const first = await app.request('/api/v2/pipeline-templates/publication/instantiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      expect(first.status).toBe(201);
+      const firstBody: any = await first.json();
+      expect(firstBody.created).toBe(true);
+      expect(firstBody.pipeline.installedBy).toEqual({
+        pack: 'synth-media',
+        version: '1.0.0',
+        templateId: 'publication',
+      });
+
+      const second = await app.request('/api/v2/pipeline-templates/publication/instantiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      expect(second.status).toBe(200);
+      const secondBody: any = await second.json();
+      expect(secondBody.created).toBe(false);
+      // Возвращается тот же пайплайн — копии не появилось.
+      expect(secondBody.pipeline.id).toBe(firstBody.pipeline.id);
+      expect(secondBody.pipeline.installedBy.templateId).toBe('publication');
+
+      const stored = await pipelines.listPipelines({ scope: 'project', projectId: 'proj-1' });
+      expect(stored).toHaveLength(1);
+      expect(stored[0]!.id).toBe(firstBody.pipeline.id);
+    });
+
+    it('POST /pipeline-templates/:tid/instantiate — без ensure каждый вызов создаёт пайплайн', async () => {
+      const { app, pipelines } = createHarness({
+        projects,
+        templates: [
+          legacyDefinition('publication', { installedBy: { pack: 'synth-media', version: '1.0.0' } }),
+        ],
+      });
+
+      const body = JSON.stringify({ projectId: 'proj-1' });
+      const first = await app.request('/api/v2/pipeline-templates/publication/instantiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      const second = await app.request('/api/v2/pipeline-templates/publication/instantiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(201);
+      const firstBody: any = await first.json();
+      const secondBody: any = await second.json();
+      expect(firstBody.created).toBe(true);
+      expect(secondBody.created).toBe(true);
+      expect(secondBody.pipeline.id).not.toBe(firstBody.pipeline.id);
+
+      const stored = await pipelines.listPipelines({ scope: 'project', projectId: 'proj-1' });
+      expect(stored).toHaveLength(2);
+    });
+
+    it('POST /pipeline-templates/:tid/instantiate — провенанс без пакета получает pack "instance"', async () => {
+      const { app } = createHarness({
+        projects,
+        templates: [legacyDefinition('plain')],
+      });
+
+      const res = await app.request('/api/v2/pipeline-templates/plain/instantiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: 'proj-1' }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      expect(body.pipeline.installedBy).toEqual({
+        pack: 'instance',
+        version: '1',
+        templateId: 'plain',
+      });
+    });
+
+    it('GET /projects/:id/pipelines — templateId виден в списке проекта', async () => {
+      const { app } = createHarness({
+        projects,
+        templates: [
+          legacyDefinition('publication', { installedBy: { pack: 'synth-media', version: '1.0.0' } }),
+        ],
+      });
+
+      const created = await app.request('/api/v2/pipeline-templates/publication/instantiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: 'proj-1', ensure: true }),
+      });
+      const createdBody: any = await created.json();
+
+      const list = await app.request('/api/v2/projects/proj-1/pipelines');
+      expect(list.status).toBe(200);
+      const listBody: any = await list.json();
+      expect(listBody.pipelines).toHaveLength(1);
+      expect(listBody.pipelines[0].id).toBe(createdBody.pipeline.id);
+      expect(listBody.pipelines[0].installedBy).toEqual({
+        pack: 'synth-media',
+        version: '1.0.0',
+        templateId: 'publication',
+      });
     });
   });
 

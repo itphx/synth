@@ -249,7 +249,7 @@ describe('память: область видимости индексов', () 
   /** Запись индекса для проверки скоупа (namespace навязывает хост). */
   async function seedIndex(
     storage: StorageContext,
-    over: { id: string; scope: 'project' | 'instance'; projectId?: string },
+    over: { id: string; scope: 'project' | 'instance'; projectId?: string; enabled?: boolean },
   ): Promise<void> {
     const now = '2026-10-24T10:00:00.000Z';
     await storage.memoryIndexes.saveIndex({
@@ -259,6 +259,7 @@ describe('память: область видимости индексов', () 
       providerId: 'plugin:synth-plugin-memory',
       ...(over.projectId ? { projectId: over.projectId } : {}),
       scope: over.scope,
+      ...(over.enabled !== undefined ? { enabled: over.enabled } : {}),
       source: { kind: 'facts' },
       state: 'ready',
       generation: 1,
@@ -300,5 +301,25 @@ describe('память: область видимости индексов', () 
     expect(usable.map((status) => status.index.id)).toEqual(
       expect.arrayContaining(['idx_instance', 'idx_project']),
     );
+  });
+
+  it('выключенный проектный индекс не используется, общий — всегда', async () => {
+    const { storage, provider } = makeMemory();
+    await seedIndex(storage, { id: 'idx_off', scope: 'project', projectId: 'p1', enabled: false });
+    await seedIndex(storage, { id: 'idx_on', scope: 'project', projectId: 'p1' });
+    await seedIndex(storage, { id: 'idx_instance_off', scope: 'instance', enabled: false });
+
+    // Список (портал/вкладка) показывает все — включая выключенные.
+    const all = await provider.listIndexes({ projectId: 'p1' });
+    expect(all.map((status) => status.index.id)).toEqual(
+      expect.arrayContaining(['idx_off', 'idx_on', 'idx_instance_off']),
+    );
+
+    // Recall/search — только включённые; instance-индекс не отключается.
+    const usable = await provider.usableIndexes('p1');
+    expect(usable.map((status) => status.index.id)).toEqual(
+      expect.arrayContaining(['idx_on', 'idx_instance_off']),
+    );
+    expect(usable.map((status) => status.index.id)).not.toContain('idx_off');
   });
 });

@@ -762,6 +762,21 @@ export function createSessionRoutes(
     const memory = deps.memory;
     const providerActive = memory ? memory.isPluginActive() : false;
 
+    // ADR-107: эффективная политика памяти проекта. Поле не задано/проект не
+    // загружен — память включена (не блокируем). Сессия без проекта — `null`.
+    let projectMemoryEnabled = true;
+    if (session.projectId && deps.projectStore) {
+      try {
+        const project = await deps.projectStore.load(session.projectId);
+        projectMemoryEnabled = project?.memory?.enabled !== false;
+      } catch {
+        projectMemoryEnabled = true;
+      }
+    }
+    const projectMemory = session.projectId
+      ? { enabled: projectMemoryEnabled }
+      : null;
+
     const lastContext = (() => {
       for (let i = session.messages.length - 1; i >= 0; i -= 1) {
         const meta = session.messages[i]?.promptMeta?.memory;
@@ -774,9 +789,13 @@ export function createSessionRoutes(
       return c.json({
         provider: { active: providerActive },
         scope: { ...(session.projectId ? { projectId: session.projectId } : {}) },
+        projectMemory,
         lastContext,
         facts: { active: 0 },
-        indexes: { total: 0, project: 0, instance: 0, ready: 0, building: 0, failed: 0 },
+        indexes: {
+          total: 0, project: 0, instance: 0, ready: 0, building: 0, failed: 0,
+          items: [],
+        },
         readiness: 'unavailable',
       });
     }
@@ -797,34 +816,60 @@ export function createSessionRoutes(
       // Порт недоступен — показываем 0, но readiness не притворяется healthy.
     }
 
-    const indexes = {
-      total: 0,
-      project: 0,
-      instance: 0,
-      ready: 0,
-      building: 0,
-      failed: 0,
+    /** Индекс в скоупе сессии для вкладки «Память». */
+    type SessionMemoryIndexItem = {
+      id: string;
+      name: string;
+      scope: 'project' | 'instance';
+      state: string;
+      enabled: boolean;
+      projectId?: string;
     };
+    const items: SessionMemoryIndexItem[] = [];
     try {
       const records = await memory.indexes.listIndexes({ namespace: MEMORY_NAMESPACE, limit: 1000 });
       for (const index of records) {
         const inScope = index.scope === 'instance'
           || (session.projectId ? index.projectId === session.projectId : index.projectId === undefined);
         if (!inScope) continue;
-        indexes.total += 1;
-        if (index.scope === 'instance') indexes.instance += 1;
-        else indexes.project += 1;
-        if (index.state === 'ready') indexes.ready += 1;
-        else if (index.state === 'building') indexes.building += 1;
-        else if (index.state === 'failed') indexes.failed += 1;
+        items.push({
+          id: index.id,
+          name: index.name,
+          scope: index.scope,
+          state: index.state,
+          // Инстансный индекс отключить нельзя — он всегда включён.
+          enabled: index.scope === 'instance' ? true : index.enabled !== false,
+          ...(index.projectId ? { projectId: index.projectId } : {}),
+        });
       }
     } catch {
       // см. выше — агрегаты деградируют, ответ остаётся валидным.
+    }
+    // Детерминированный порядок — по имени, тайбрейкер — id.
+    items.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+
+    // Агрегаты считаются из `items` (один проход, не два).
+    const indexes = {
+      total: items.length,
+      project: 0,
+      instance: 0,
+      ready: 0,
+      building: 0,
+      failed: 0,
+      items,
+    };
+    for (const index of items) {
+      if (index.scope === 'instance') indexes.instance += 1;
+      else indexes.project += 1;
+      if (index.state === 'ready') indexes.ready += 1;
+      else if (index.state === 'building') indexes.building += 1;
+      else if (index.state === 'failed') indexes.failed += 1;
     }
 
     return c.json({
       provider: { active: true },
       scope: { ...(session.projectId ? { projectId: session.projectId } : {}) },
+      projectMemory,
       lastContext,
       facts: { active: activeFacts },
       indexes,

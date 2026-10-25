@@ -5,10 +5,14 @@ import { pipelineSpecSchema, validatePipelineSpec } from '@itphx/synth-shared';
 import type { PipelineSpec, Project } from '@itphx/synth-shared';
 
 import {
+  buildMemoryConsolidateFactsPipelineSpec,
   buildMemoryConsolidationPipelineSpec,
+  buildMemoryReindexPipelineSpec,
   ensureBuiltinPipelines,
+  MEMORY_CONSOLIDATE_FACTS_PIPELINE_ID,
   MEMORY_CONSOLIDATION_PIPELINE_ID,
   MEMORY_CONSOLIDATION_PIPELINE_VERSION,
+  MEMORY_REINDEX_PIPELINE_ID,
 } from './builtin.js';
 import { createPipelineProjectRoutes } from '../../server/routes/pipeline-project-routes.js';
 import {
@@ -137,12 +141,65 @@ describe('Встроенный шаблон пайплайна «Память: �
     });
   });
 
+  describe('шаблон «Память: слияние дублей фактов»', () => {
+    it('проходит схему и валидатор графа', () => {
+      const spec = buildMemoryConsolidateFactsPipelineSpec();
+      expect(pipelineSpecSchema.safeParse(spec).success).toBe(true);
+      expect(validatePipelineSpec(spec)).toEqual({ ok: true });
+      expect(spec.id).toBe(MEMORY_CONSOLIDATE_FACTS_PIPELINE_ID);
+      expect(spec.mode).toBe('act');
+    });
+
+    it('объявляет один узел tool с тулом плагина памяти и dryRun:false', () => {
+      const spec = buildMemoryConsolidateFactsPipelineSpec();
+      expect(spec.name).toBe('Память: слияние дублей фактов');
+      expect(spec.nodes).toHaveLength(1);
+      const node = spec.nodes[0]!;
+      expect(node.kind).toBe('tool');
+      expect(node.tool).toBe('plugin_synth_plugin_memory_memory_consolidate');
+      expect(node.toolArgs).toEqual({ dryRun: false });
+      expect(node.timeoutSec).toBe(600);
+      expect(spec.exits).toEqual([{ kind: 'none' }]);
+      // Обязательного входа у шаблона нет.
+      expect(spec.io?.input).toEqual({ type: 'object', properties: {} });
+      expect(spec.io?.input?.required).toBeUndefined();
+    });
+  });
+
+  describe('шаблон «Память: переиндексация проекта»', () => {
+    it('проходит схему и валидатор графа', () => {
+      const spec = buildMemoryReindexPipelineSpec();
+      expect(pipelineSpecSchema.safeParse(spec).success).toBe(true);
+      expect(validatePipelineSpec(spec)).toEqual({ ok: true });
+      expect(spec.id).toBe(MEMORY_REINDEX_PIPELINE_ID);
+      expect(spec.mode).toBe('act');
+    });
+
+    it('объявляет один узел tool с memory_index и rebuild_all/wait', () => {
+      const spec = buildMemoryReindexPipelineSpec();
+      expect(spec.name).toBe('Память: переиндексация проекта');
+      expect(spec.nodes).toHaveLength(1);
+      const node = spec.nodes[0]!;
+      expect(node.kind).toBe('tool');
+      expect(node.tool).toBe('plugin_synth_plugin_memory_memory_index');
+      expect(node.toolArgs).toEqual({ action: 'rebuild_all', wait: true });
+      expect(node.timeoutSec).toBe(900);
+      expect(spec.exits).toEqual([{ kind: 'none' }]);
+      expect(spec.io?.input).toEqual({ type: 'object', properties: {} });
+      expect(spec.io?.input?.required).toBeUndefined();
+    });
+  });
+
   describe('сидирование', () => {
     it('создаёт запись шаблона и опубликованную версию', async () => {
       const pipelines = new MemoryProjectPipelineRepository();
       const result = await ensureBuiltinPipelines({ pipelines }, () => '2026-01-01T00:00:00.000Z');
 
-      expect(result.created).toEqual([MEMORY_CONSOLIDATION_PIPELINE_ID]);
+      expect(result.created).toEqual([
+        MEMORY_CONSOLIDATION_PIPELINE_ID,
+        MEMORY_CONSOLIDATE_FACTS_PIPELINE_ID,
+        MEMORY_REINDEX_PIPELINE_ID,
+      ]);
       expect(result.skipped).toEqual([]);
 
       const record = await pipelines.getPipeline(MEMORY_CONSOLIDATION_PIPELINE_ID);
@@ -163,6 +220,27 @@ describe('Встроенный шаблон пайплайна «Память: �
       expect(version!.publishedAt).toBe('2026-01-01T00:00:00.000Z');
     });
 
+    it('сидит все три шаблона памяти с версией 1 и провенансом builtin/1', async () => {
+      const pipelines = new MemoryProjectPipelineRepository();
+      await ensureBuiltinPipelines({ pipelines }, () => '2026-01-01T00:00:00.000Z');
+
+      for (const id of [
+        MEMORY_CONSOLIDATION_PIPELINE_ID,
+        MEMORY_CONSOLIDATE_FACTS_PIPELINE_ID,
+        MEMORY_REINDEX_PIPELINE_ID,
+      ]) {
+        const record = await pipelines.getPipeline(id);
+        expect(record, id).not.toBeNull();
+        expect(record!.scope, id).toBe('instance');
+        expect(record!.draftVersion, id).toBe(1);
+        expect(record!.publishedVersion, id).toBe(1);
+        expect(record!.installedBy, id).toEqual({ pack: 'builtin', version: '1' });
+        const versions = await pipelines.listVersions(id);
+        expect(versions, id).toHaveLength(1);
+        expect(versions[0]!.spec.status, id).toBe('published');
+      }
+    });
+
     it('идемпотентен: повторный вызов не перезаписывает запись и версии', async () => {
       const pipelines = new MemoryProjectPipelineRepository();
       await ensureBuiltinPipelines({ pipelines }, () => '2026-01-01T00:00:00.000Z');
@@ -173,7 +251,11 @@ describe('Встроенный шаблон пайплайна «Память: �
         () => '2026-02-02T00:00:00.000Z',
       );
       expect(second.created).toEqual([]);
-      expect(second.skipped).toEqual([MEMORY_CONSOLIDATION_PIPELINE_ID]);
+      expect(second.skipped).toEqual([
+        MEMORY_CONSOLIDATION_PIPELINE_ID,
+        MEMORY_CONSOLIDATE_FACTS_PIPELINE_ID,
+        MEMORY_REINDEX_PIPELINE_ID,
+      ]);
 
       const record = await pipelines.getPipeline(MEMORY_CONSOLIDATION_PIPELINE_ID);
       // `createdAt` иммутабельно, `updatedAt` не меняется (записи не было).
@@ -203,7 +285,11 @@ describe('Встроенный шаблон пайплайна «Память: �
         () => '2026-01-01T00:00:00.000Z',
       );
 
-      expect(result.failed).toEqual([MEMORY_CONSOLIDATION_PIPELINE_ID]);
+      expect(result.failed).toEqual([
+        MEMORY_CONSOLIDATION_PIPELINE_ID,
+        MEMORY_CONSOLIDATE_FACTS_PIPELINE_ID,
+        MEMORY_REINDEX_PIPELINE_ID,
+      ]);
       expect(result.created).toEqual([]);
       expect(warnings.join(' ')).toContain('storage unavailable');
     });
@@ -213,7 +299,11 @@ describe('Встроенный шаблон пайплайна «Память: �
       await ensureBuiltinPipelines({ pipelines }, () => '2026-01-01T00:00:00.000Z');
 
       const instance = await pipelines.listPipelines({ scope: 'instance' });
-      expect(instance.map((p) => p.id)).toEqual([MEMORY_CONSOLIDATION_PIPELINE_ID]);
+      expect(instance.map((p) => p.id)).toEqual([
+        MEMORY_CONSOLIDATE_FACTS_PIPELINE_ID,
+        MEMORY_CONSOLIDATION_PIPELINE_ID,
+        MEMORY_REINDEX_PIPELINE_ID,
+      ]);
 
       const projectScoped = await pipelines.listPipelines({ scope: 'project' });
       expect(projectScoped).toHaveLength(0);
@@ -270,7 +360,11 @@ describe('Встроенный шаблон пайплайна «Память: �
       expect(body.pipeline.projectId).toBe('proj-1');
       expect(body.pipeline.draftVersion).toBe(1);
       expect(body.pipeline.publishedVersion).toBeUndefined();
-      expect(body.pipeline.installedBy).toEqual({ pack: 'builtin', version: '1' });
+      expect(body.pipeline.installedBy).toEqual({
+        pack: 'builtin',
+        version: '1',
+        templateId: MEMORY_CONSOLIDATION_PIPELINE_ID,
+      });
       // Копия спецификации: id сервера, проект и статус — черновика.
       expect(body.pipeline.draft.id).toBe(body.pipeline.id);
       expect(body.pipeline.draft.projectId).toBe('proj-1');

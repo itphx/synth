@@ -19,7 +19,9 @@
     "task",
     "mcp",
     "runtime",
-    "memory"
+    "memory",
+    "pipeline",
+    "schedule"
   ],
   "icon": "server",
   "color": "--syntax-type",

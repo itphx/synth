@@ -21,6 +21,21 @@ export const ToolCapability = {
    * поэтому в сессии без `project.workspace` тулы памяти остаются доступны.
    */
   MEMORY: 'memory',
+  /**
+   * Пайплайны (ADR-101): тулы работы с пайплайнами проекта и прогонами.
+   *
+   * Отдельная capability, а не `runtime`: пайплайн — доменный ресурс проекта
+   * (спецификация с версиями + прогоны), а не примитив ядра. Capability
+   * отключается админом через `tools.disabled` (группа `pipeline`).
+   */
+  PIPELINE: 'pipeline',
+  /**
+   * Расписания (ADR-051): тулы работы с расписаниями планировщика.
+   *
+   * Отдельная capability по той же причине, что и `pipeline`: расписание —
+   * доменный ресурс, а не примитив ядра.
+   */
+  SCHEDULE: 'schedule',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -38,6 +53,15 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.RUNTIME]: { label: 'Управление сессией', description: 'classify_conversation' },
   [ToolCapability.USER]: { label: 'Работа с пользователем', description: 'profile_update' },
   [ToolCapability.MEMORY]: { label: 'Память', description: 'memory_search, memory_write, memory_forget' },
+  [ToolCapability.PIPELINE]: {
+    label: 'Пайплайны',
+    description:
+      'pipeline_list, pipeline_get, pipeline_save, pipeline_publish, pipeline_delete, pipeline_run, pipeline_run_status, pipeline_run_list, pipeline_run_resume, pipeline_run_cancel, pipeline_templates, pipeline_instantiate',
+  },
+  [ToolCapability.SCHEDULE]: {
+    label: 'Расписания',
+    description: 'schedule_list, schedule_get, schedule_save, schedule_delete, schedule_run, schedule_jobs',
+  },
 };
 
 export interface ToolContext {

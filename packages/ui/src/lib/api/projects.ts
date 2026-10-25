@@ -28,6 +28,8 @@ export interface UpdateProjectBody {
   workspace?: string | null
   repos?: GitRepoConfigData[] | null
   confirmOutsideRoot?: boolean
+  /** ADR-107: настройки памяти проекта (эффективное значение). */
+  memory?: { enabled: boolean } | null
 }
 
 export interface ProjectData {

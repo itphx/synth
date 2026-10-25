@@ -210,6 +210,7 @@ beforeEach(() => {
   useSessionsStore.setState({ sessions: [SESSION] as never })
   useAgentsStore.setState({ agents: [AGENT] as never })
   useProjectsStore.setState({ projects: [PROJECT] as never })
+  useUIStore.setState({ scheduleDraft: null })
   // Стор пайплайнов — синглтон модуля: сбрасываем кэш между тестами.
   usePipelinesStore.setState({
     pipelinesByProject: {},
@@ -692,5 +693,84 @@ describe('SchedulerTab — история запусков (ADR-051)', () => {
     await click(container.querySelector('[data-testid="scheduler-history-toggle-sch_1"]'))
     await flush()
     expect(container.textContent).toContain('history boom')
+  })
+})
+
+describe('SchedulerTab — deep-link из «Памяти» (ADR-101)', () => {
+  it('черновик предзаполняет редактор и сразу очищается', async () => {
+    useUIStore.setState({
+      scheduleDraft: {
+        name: 'Memory: reindex project',
+        projectId: 'p1',
+        pipelineId: 'pl_1',
+        payload: { sessionId: 's1' },
+        cron: '0 4 * * *',
+      },
+    })
+
+    const container = await renderTab()
+
+    // Черновик одноразовый.
+    expect(useUIStore.getState().scheduleDraft).toBeNull()
+    // Редактор открыт и заполнен.
+    expect(container.querySelector('[data-testid="scheduler-editor"]')).not.toBeNull()
+    expect(
+      (container.querySelector('[data-testid="scheduler-name"]') as HTMLInputElement).value,
+    ).toBe('Memory: reindex project')
+    expect(
+      (container.querySelector('[data-testid="scheduler-cron"]') as HTMLInputElement).value,
+    ).toBe('0 4 * * *')
+    expect(
+      (container.querySelector('[data-testid="scheduler-target"]') as HTMLSelectElement).value,
+    ).toBe('pipeline')
+    expect(
+      container.querySelector('[data-testid="scheduler-pipeline-project"]')?.textContent,
+    ).toContain('Project One')
+
+    const payload = container.querySelector(
+      '[data-testid="scheduler-payload"]',
+    ) as HTMLTextAreaElement
+    expect(JSON.parse(payload.value)).toEqual({ sessionId: 's1' })
+
+    // Пайплайны проекта подгружены для селекта.
+    await waitFor(() => {
+      expect(mocks.getProjectPipelines).toHaveBeenCalledWith('p1')
+    })
+    // Deep-link ничего не создаёт.
+    expect(mocks.createSchedule).not.toHaveBeenCalled()
+  })
+
+  it('после deep-link обычное создание работает как раньше', async () => {
+    useUIStore.setState({
+      scheduleDraft: {
+        name: 'Memory: merge duplicate facts',
+        projectId: 'p1',
+        pipelineId: 'pl_1',
+        cron: '0 3 * * *',
+      },
+    })
+    const container = await renderTab()
+
+    await click(container.querySelector('[data-testid="scheduler-save"]'))
+    await flush()
+
+    expect(mocks.createSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Memory: merge duplicate facts',
+        enabled: true,
+        cron: '0 3 * * *',
+        target: expect.objectContaining({
+          mode: 'pipeline',
+          projectId: 'p1',
+          pipelineId: 'pl_1',
+        }),
+      }),
+    )
+
+    // Следующее создание открывается пустым — черновик не «залип».
+    await click(container.querySelector('[data-testid="scheduler-add"]'))
+    expect(
+      (container.querySelector('[data-testid="scheduler-name"]') as HTMLInputElement).value,
+    ).toBe('')
   })
 })

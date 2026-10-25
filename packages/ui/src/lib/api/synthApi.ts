@@ -352,7 +352,11 @@ export type {
   SessionMemoryReadiness,
   SessionMemoryBlock,
   SessionMemoryLastContext,
+  SessionMemoryIndexState,
+  SessionMemoryIndexScope,
+  SessionMemoryIndexItem,
   SessionMemoryIndexes,
+  SessionProjectMemory,
   SessionMemoryResponse,
 } from './session-memory'
 

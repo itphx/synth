@@ -37,6 +37,7 @@ type ProjectRow = {
   repos: unknown;
   mcp: unknown;
   skills: unknown;
+  memory: unknown;
   members: Record<string, string> | null;
   created_at: Date | string;
   updated_at: Date | string;
@@ -69,6 +70,7 @@ function rowToProject(row: ProjectRow): ProjectEntity {
     repos: (row.repos ?? undefined) as ProjectEntity['repos'],
     mcp: (row.mcp ?? undefined) as ProjectEntity['mcp'],
     skills: (row.skills ?? undefined) as ProjectEntity['skills'],
+    memory: (row.memory ?? undefined) as ProjectEntity['memory'],
     statusMessages: (row.status_messages ?? []) as ProjectEntity['statusMessages'],
     plan: (row.plan ?? undefined) as ProjectEntity['plan'],
     log: (row.log ?? undefined) as ProjectEntity['log'],
@@ -91,10 +93,10 @@ export function createPrincipalProjectsPort(conn: PostgresConnection): ProjectsP
         await tx.query(
           `INSERT INTO projects (
              id, name, owner_id, description, current_task, invariants, icon, color,
-             workspace, plan, log, status_messages, repos, mcp, skills, created_at, updated_at
+             workspace, plan, log, status_messages, repos, mcp, skills, memory, created_at, updated_at
            ) VALUES (
              $1, $2, $3, $4, $5, $6, $7, $8,
-             $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17
+             $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18
            )
            ON CONFLICT (id) DO UPDATE SET
              name = EXCLUDED.name,
@@ -111,6 +113,7 @@ export function createPrincipalProjectsPort(conn: PostgresConnection): ProjectsP
              repos = EXCLUDED.repos,
              mcp = EXCLUDED.mcp,
              skills = EXCLUDED.skills,
+             memory = EXCLUDED.memory,
              updated_at = EXCLUDED.updated_at`,
           [
             project.id,
@@ -128,6 +131,7 @@ export function createPrincipalProjectsPort(conn: PostgresConnection): ProjectsP
             jsonbParam(project.repos ?? null),
             jsonbParam(project.mcp ?? null),
             jsonbParam(project.skills ?? null),
+            jsonbParam(project.memory ?? null),
             project.createdAt,
             project.updatedAt,
           ],

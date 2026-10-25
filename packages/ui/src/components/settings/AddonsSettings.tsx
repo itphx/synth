@@ -17,6 +17,7 @@ import {
   type PipelineDefinition,
   type PipelineInstance,
   type PipelineInstanceStatus,
+  type PipelineTemplate,
 } from '@/lib/api/synthApi'
 
 /**
@@ -89,6 +90,11 @@ export function AddonsSettings() {
   const [filterPipelineId, setFilterPipelineId] = useState('')
   const [filterStatus, setFilterStatus] = useState<PipelineInstanceStatus | ''>('')
 
+  // ADR-101: системные шаблоны инстанса (read-only) — отдельная вкладка.
+  const [templates, setTemplates] = useState<PipelineTemplate[] | null>(null)
+  const [templatesLoading, setTemplatesLoading] = useState(true)
+  const [templatesError, setTemplatesError] = useState<string | null>(null)
+
   /** Понятная ошибка: 403 — «нужны права администратора», остальное — текст сервера. */
   const describeError = useCallback(
     (err: unknown, fallback: string): string =>
@@ -139,6 +145,29 @@ export function AddonsSettings() {
   useEffect(() => {
     void loadPipelines()
   }, [loadPipelines])
+
+  const loadTemplates = useCallback(async () => {
+    setTemplatesLoading(true)
+    setTemplatesError(null)
+    try {
+      setTemplates(await synthApi.getPipelineTemplates())
+    } catch (err) {
+      setTemplatesError(
+        describeError(
+          err,
+          t('addons.pipelines.templatesError', {
+            error: err instanceof Error ? err.message : t('common.error'),
+          }),
+        ),
+      )
+    } finally {
+      setTemplatesLoading(false)
+    }
+  }, [describeError, t])
+
+  useEffect(() => {
+    void loadTemplates()
+  }, [loadTemplates])
 
   /** Одобрение пакета: фактическая установка артефактов (только ADMIN). */
   const handleApprove = useCallback(
@@ -203,6 +232,12 @@ export function AddonsSettings() {
   const pendingCount = useMemo(
     () => (packs ?? []).filter((pack) => pack.status === 'pending_approval').length,
     [packs],
+  )
+
+  /** Вкладка «Шаблоны» показывает только шаблоны движка ADR-101 (legacy — отдельно). */
+  const adr101Templates = useMemo(
+    () => (templates ?? []).filter((template) => template.format === 'adr-101'),
+    [templates],
   )
 
   return (
@@ -375,6 +410,7 @@ export function AddonsSettings() {
           items={[
             { value: 'definitions', label: t('addons.pipelines.definitions') },
             { value: 'instances', label: t('addons.pipelines.instances') },
+            { value: 'templates', label: t('addons.pipelines.templates') },
           ]}
           value={pipelineTab}
           onChange={setPipelineTab}
@@ -530,6 +566,74 @@ export function AddonsSettings() {
                     {instance.error && (
                       <p className="text-xs text-destructive break-words">{instance.error}</p>
                     )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {pipelineTab === 'templates' && (
+          <div className="space-y-2 min-w-0">
+            {templatesError && (
+              <div
+                role="alert"
+                data-testid="addons-pipelines-templates-error"
+                className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive break-words"
+              >
+                {templatesError}
+              </div>
+            )}
+
+            {templatesLoading && !templates && (
+              <div className="py-3 text-center text-xs text-muted-foreground">
+                {t('common.loading')}
+              </div>
+            )}
+
+            {templates && adr101Templates.length === 0 && (
+              <div
+                className="flex flex-col items-center gap-1 py-4 text-center text-muted-foreground"
+                data-testid="addons-pipelines-templates-empty"
+              >
+                <Icon name="links-line" className="size-6 opacity-40" />
+                <p className="text-xs">{t('addons.pipelines.templatesEmpty')}</p>
+              </div>
+            )}
+
+            {adr101Templates.length > 0 && (
+              <ul className="space-y-2 min-w-0" data-testid="addons-pipelines-templates-list">
+                {adr101Templates.map((template) => (
+                  <li
+                    key={template.id}
+                    data-testid={`addons-template-${template.id}`}
+                    className="space-y-1 rounded-lg border border-border/60 bg-surface-inset p-2.5 min-w-0"
+                  >
+                    <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                      <span className="text-sm font-medium text-foreground break-words min-w-0">
+                        {template.name}
+                      </span>
+                      <span className={cn(BADGE, 'bg-primary/15 text-primary')}>
+                        {t('addons.templates.badge')}
+                      </span>
+                      {template.installedBy?.pack && (
+                        <span
+                          className={cn(BADGE, 'bg-muted text-muted-foreground font-mono')}
+                          data-testid={`addons-template-pack-${template.id}`}
+                        >
+                          {template.installedBy.pack}
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-1 min-w-0">
+                      <InfoField label={t('addons.templates.id')} value={template.id} />
+                      {template.version !== undefined && (
+                        <InfoField
+                          label={t('addons.templates.version')}
+                          value={String(template.version)}
+                        />
+                      )}
+                    </div>
                   </li>
                 ))}
               </ul>

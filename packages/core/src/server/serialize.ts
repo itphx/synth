@@ -211,6 +211,8 @@ export function serializeProject(project: Project) {
     repos: project.repos || null,
     /** ADR-071 §2.4: проектный скоуп MCP (owner/lead). */
     mcp: project.mcp ?? null,
+    /** ADR-107: политика памяти проекта (`{enabled}`; null — наследует). */
+    memory: project.memory ?? null,
     status_messages: (project.statusMessages || []).map((sm: StatusMessage) => ({
       id: sm.id,
       text: sm.text,

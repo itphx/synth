@@ -16,6 +16,7 @@
  * | GET | `/facts` | `{items, total, limit, offset}` — записи `MemoryFactRecord` как есть |
  * | GET | `/facts/:id` | запись `MemoryFactRecord` либо 404 `MEMORY_FACT_NOT_FOUND` |
  * | GET | `/indexes` | `{items, total}` — записи `MemoryIndexRecord` (без чанков) |
+ * | PATCH | `/indexes/:id` | 200 `{index}` — переключатель `enabled` (проектный индекс; инстансный — 409) |
  * | POST | `/indexes` | 202 `{index, message}` — индекс создан (запись из порта) |
  * | POST | `/indexes/:id/rebuild` | 202 `{index}` — пересборка запущена |
  * | DELETE | `/indexes/:id` | 204 — индекс удалён |
@@ -373,6 +374,8 @@ export interface MemoryRouteMessages {
   providerUnavailable: (c: Context) => string;
   /** Индекс памяти не найден. */
   indexNotFound: (c: Context) => string;
+  /** Инстансный индекс отключать нельзя (общий корпус инстанса). */
+  indexNotToggleable: (c: Context) => string;
   /** Операция с индексом не удалась (текст — из ответа тула). */
   indexFailed: (c: Context) => string;
   /** Сообщение об успешном создании индекса. */
@@ -616,6 +619,7 @@ const DEFAULT_MESSAGES: MemoryRouteMessages = {
   workspaceRequired: () => 'У проекта нет рабочего каталога: индекс файлов строить негде',
   providerUnavailable: () => 'Провайдер памяти недоступен: плагин памяти не активен',
   indexNotFound: () => 'Индекс памяти не найден',
+  indexNotToggleable: () => 'Инстансный индекс памяти отключить нельзя',
   indexFailed: () => 'Не удалось выполнить операцию с индексом памяти',
   indexCreated: () => 'Индекс памяти создан',
   invalidThreshold: () => 'Порог консолидации памяти: ожидается число от 0.5 до 0.99',
@@ -1284,6 +1288,47 @@ export function createMemoryRoutes(
     const items = await indexes.listIndexes(query);
     const page: MemoryIndexesPage = { items, total: items.length };
     return c.json(page);
+  });
+
+  /**
+   * Переключатель индекса памяти (`PATCH /indexes/:id`, ADR-107).
+   *
+   * Тело — `{enabled: boolean}` (обязательное, иначе 400 `VALIDATION_ERROR`).
+   * Выключенный индекс остаётся в портале и сохраняет данные, но не
+   * используется в recall/search (провайдер плагина фильтрует его).
+   *
+   * Инстансный индекс (`scope: 'instance'`) — общий корпус инстанса, отключать
+   * его нельзя: 409 `MEMORY_INDEX_NOT_TOGGLEABLE`. Порядок — как у остальных
+   * мутаций: сначала «есть ли индекс» (404), потом политика (409).
+   */
+  app.patch('/indexes/:id', guard, async (c) => {
+    const indexes = indexesPort();
+    if (!indexes) return unavailable(c);
+
+    const id = c.req.param('id');
+    const index = await indexes.getIndex(id);
+    if (!index || index.namespace !== namespace) return indexNotFound(c);
+
+    const body = await readBody(c);
+    if (!body || typeof body.enabled !== 'boolean') {
+      return apiError(c, 'VALIDATION_ERROR', messages.invalidBody(c), 400);
+    }
+    if (index.scope === 'instance') {
+      return apiError(
+        c,
+        'MEMORY_INDEX_NOT_TOGGLEABLE',
+        messages.indexNotToggleable(c),
+        409,
+      );
+    }
+
+    await indexes.saveIndex({
+      ...index,
+      enabled: body.enabled,
+      updatedAt: new Date().toISOString(),
+    });
+    const saved = await indexes.getIndex(id);
+    return c.json({ index: saved ?? { ...index, enabled: body.enabled } });
   });
 
   /**

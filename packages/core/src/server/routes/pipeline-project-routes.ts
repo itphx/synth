@@ -3,34 +3,36 @@ import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
 import {
-  generateId,
   nowISO,
   pipelineSpecSchema,
   pipelineRunStatusSchema,
   pipelineRunTriggerSchema,
-  validatePipelineSpec,
 } from '@itphx/synth-shared';
 import type {
-  PipelineNode,
   PipelineRunStatus,
   PipelineRunTrigger,
-  PipelineSpec,
   Project,
 } from '@itphx/synth-shared';
 import type {
   PipelineRecord,
   PipelineRunRecord,
   PipelineRunRepository,
-  PipelineVersionRecord,
   ProjectPipelineRepository,
 } from '../../storage/ports/index.js';
-import type {
-  PipelineDefinitionRecord,
-  PipelineRepository,
-} from '../../storage/ports/pipeline-repository.js';
+import type { PipelineRepository } from '../../storage/ports/pipeline-repository.js';
 import type { ProjectRepository } from '../../storage/ports/project-repository.js';
 import { PipelineEngineError } from '../../engine/pipelines/index.js';
 import type { PipelineEngine } from '../../engine/pipelines/index.js';
+import {
+  PipelineAuthoringError,
+  createPipelineDraft,
+  deletePipeline as deletePipelineRecord,
+  instantiatePipelineFromTemplate,
+  listPipelineTemplates,
+  publishPipeline,
+  updatePipelineDraft,
+} from '../../engine/pipelines/authoring.js';
+import { PipelineRunControl } from '../../engine/pipelines/run-control.js';
 import {
   checkServiceProjectProjection,
   requireScopeOrAdminRole,
@@ -103,6 +105,8 @@ export interface PipelineProjectRouteMessages {
   nothingToPublish: (c: Context) => string;
   /** Прогон уже завершён — отменять нечего (409). */
   runFinished: (c: Context) => string;
+  /** По пайплайну уже идёт прогон — второй не запускается (409). */
+  alreadyRunning: (c: Context) => string;
   /** Шаблон нельзя инстанцировать в пайплайн движка (409). */
   templateNotInstantiable: (c: Context) => string;
   /** Не указан проект (400). */
@@ -121,6 +125,7 @@ const DEFAULT_MESSAGES: PipelineProjectRouteMessages = {
   invalidState: () => 'Прогон не ожидает решения человека',
   nothingToPublish: () => 'Нет черновика для публикации',
   runFinished: () => 'Прогон уже завершён',
+  alreadyRunning: () => 'По этому пайплайну уже идёт прогон',
   templateNotInstantiable: () => 'Шаблон нельзя инстанцировать в пайплайн',
   projectIdRequired: () => 'Не указан проект',
 };
@@ -141,6 +146,13 @@ export interface PipelineProjectRoutesDeps {
    * Не задан — шаблонами считаются только записи `scope:'instance'`.
    */
   templates?: PipelineRepository;
+  /**
+   * Реестр активных прогонов (ADR-101, `run-control.ts`).
+   *
+   * Не задан — создаётся локальный экземпляр (тогда soft-lock не делится с
+   * встроенными тулами агента; в инстансе всегда передаётся общий).
+   */
+  runControl?: PipelineRunControl;
 }
 
 export interface PipelineProjectRoutesOptions {
@@ -188,15 +200,16 @@ interface GuardedProject {
   project: Project;
 }
 
-/** Префикс id пайплайна проекта (`pl_<uuid>`). */
-const PIPELINE_ID_PREFIX = 'pl_';
-/** Потолок ожидания заголовка прогона в порту (мс). */
-const RUN_RECORD_WAIT_MS = 5000;
-/** Шаг опроса порта прогонов при поиске заголовка (мс). */
-const RUN_RECORD_POLL_MS = 5;
+/**
+ * Конвертация legacy-определения ADR-100 в спецификацию движка ADR-101.
+ *
+ * Реализация живёт в движке (`engine/pipelines/authoring.ts`) — её
+ * используют и HTTP-роут, и встроенные тулы агента; здесь оставлен
+ * ре-экспорт ради публичного API пакета (`@itphx/synth-core`).
+ */
+export { legacyDefinitionToPipelineSpec } from '../../engine/pipelines/authoring.js';
 
 // ────────────────────────────── Схемы тел ──────────────────────────────
-
 /**
  * Серверные поля спецификации: их проставляет сервер (ADR-101, Э6).
  *
@@ -271,125 +284,16 @@ const instantiateBodySchema = z.object({
   projectId: z.string().min(1),
   /** Имя нового пайплайна (по умолчанию — имя шаблона). */
   name: z.string().min(1).optional(),
+  /**
+   * Идемпотентное инстанцирование: если в проекте уже есть пайплайн,
+   * инстанцированный из этого шаблона (`installedBy.templateId`), новый не
+   * создаётся — возвращается существующий (`200`, `created: false`).
+   * Без флага поведение прежнее — всегда создаётся новый пайплайн.
+   */
+  ensure: z.boolean().optional(),
 });
 
 // ────────────────────────────── Утилиты ──────────────────────────────
-
-/** Каноничный JSON (ключи отсортированы) — для сравнения спецификаций. */
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`);
-  return `{${entries.join(',')}}`;
-}
-
-/**
- * Сравнение спецификаций **по содержанию**: `version`/`status` игнорируются
- * (черновик и опубликованная версия отличаются ими по построению).
- */
-function sameSpecContent(a: PipelineSpec, b: PipelineSpec): boolean {
-  const strip = (spec: PipelineSpec): unknown => ({ ...spec, version: 0, status: 'draft' });
-  return canonicalJson(strip(a)) === canonicalJson(strip(b));
-}
-
-/**
- * Спецификация из тела запроса: серверные поля (`id`/`version`/`status`/
- * `projectId`) необязательны — их проставляет сервер.
- */
-type PipelineSpecInput = Omit<PipelineSpec, 'id' | 'version' | 'status' | 'projectId'> &
-  Partial<Pick<PipelineSpec, 'id' | 'version' | 'status' | 'projectId'>>;
-
-/** Черновик с серверными полями (`id`/`version`/`status`/`projectId`). */
-function toDraftSpec(
-  spec: PipelineSpecInput,
-  ctx: { pipelineId: string; projectId: string; version: number },
-): PipelineSpec {
-  return {
-    ...spec,
-    id: ctx.pipelineId,
-    version: ctx.version,
-    status: 'draft',
-    projectId: ctx.projectId,
-  };
-}
-
-/** Пауза (мс) — вспомогательная для опроса порта прогонов. */
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-/**
- * Конвертация legacy-определения ADR-100 (`PipelineDefinition`) в спецификацию
- * движка ADR-101 (`PipelineSpec`) — **best-effort**, без миграции данных.
- *
- * Правила (задокументированы в `docs/PIPELINES.md` §2.11):
- * - шаг вида `agent` → узел вида `agent` (`agent`/`skill`/`prompt`/`timeoutSec`
- *   переносятся как есть);
- * - шаг вида `loop` **не конвертируется** (Loop Engine вне объёма, PROP-057) —
- *   шаблон с такими шагами не инстанцируется (409 со списком проблем);
- * - шаг без `agent` — не конвертируется (узел движка вида `agent` требует агента);
- * - `waitsFor` (событие-триггер/гейт автомата ADR-100) **не переносится**: в
- *   ADR-101 триггер задаётся при запуске прогона, а HITL-гейт выражается узлом
- *   вида `human` — его добавляет владелец пайплайна в черновике;
- * - выход пайплайна — `none` (выход ADR-101 задаётся вручную).
- */
-export function legacyDefinitionToPipelineSpec(
-  definition: PipelineDefinitionRecord,
-  ctx: { pipelineId: string; projectId: string },
-): { ok: true; spec: PipelineSpec } | { ok: false; problems: string[] } {
-  const problems: string[] = [];
-  const nodes: PipelineNode[] = [];
-
-  definition.steps.forEach((step, index) => {
-    if (step.kind === 'loop') {
-      problems.push(
-        `steps[${index}] («${step.id}»): шаг вида «loop» не поддерживается движком (PROP-057)`,
-      );
-      return;
-    }
-    if (!step.agent?.trim()) {
-      problems.push(
-        `steps[${index}] («${step.id}»): шаг без поля «agent» — узел движка вида «agent» требует агента`,
-      );
-      return;
-    }
-    nodes.push({
-      id: step.id,
-      kind: 'agent',
-      ...(step.title ? { title: step.title } : {}),
-      agent: step.agent,
-      ...(step.skill ? { skill: step.skill } : {}),
-      ...(step.prompt ? { prompt: step.prompt } : {}),
-      ...(step.timeoutSec !== undefined ? { timeoutSec: step.timeoutSec } : {}),
-    });
-  });
-
-  if (problems.length > 0) return { ok: false, problems };
-  if (nodes.length === 0) {
-    return { ok: false, problems: ['steps: у шаблона нет шагов, конвертируемых в узлы движка'] };
-  }
-
-  const spec: PipelineSpec = {
-    id: ctx.pipelineId,
-    name: definition.name,
-    ...(definition.description ? { description: definition.description } : {}),
-    version: 1,
-    status: 'draft',
-    mode: 'act',
-    projectId: ctx.projectId,
-    nodes,
-    exits: [{ kind: 'none' }],
-  };
-
-  const validation = validatePipelineSpec(spec);
-  if (!validation.ok) return { ok: false, problems: validation.problems };
-  return { ok: true, spec };
-}
 
 // ────────────────────────────── Фабрика ──────────────────────────────
 
@@ -413,53 +317,14 @@ export function createPipelineProjectRoutes(
     opts.getCurrentUserId ? await opts.getCurrentUserId(c) : 'local';
 
   /**
-   * Активные прогоны **этого процесса**: `runId` → контроллер отмены и промис
-   * движка. Нужен для отмены идущего прогона (ADR-101 §2.9): отмена идёт
-   * через `AbortController`, который передан движку.
+   * Реестр активных прогонов **этого процесса** (ADR-101, `run-control.ts`).
+   *
+   * Общий экземпляр на процесс: его же получают встроенные тулы агента
+   * (`engine/tools/pipeline-run.ts`) — поэтому soft-lock «не запустить второй
+   * прогон того же пайплайна» работает одинаково для HTTP и для агента.
+   * Не передан — создаётся локальный (поведение прежнее).
    */
-  const activeRuns = new Map<
-    string,
-    { controller: AbortController; promise: Promise<PipelineRunRecord> }
-  >();
-
-  /**
-   * Дождаться заголовка прогона в порту: движок сохраняет его **до** первого
-   * шага, поэтому заголовок появляется сразу, а сам прогон идёт в фоне.
-   */
-  const awaitRunRecord = async (
-    before: Set<string>,
-    pipelineId: string,
-    promise: Promise<PipelineRunRecord>,
-  ): Promise<PipelineRunRecord> => {
-    let settled: PipelineRunRecord | undefined;
-    let failure: unknown;
-    promise.then(
-      (record) => {
-        settled = record;
-      },
-      (err) => {
-        failure = err;
-      },
-    );
-
-    const deadline = Date.now() + RUN_RECORD_WAIT_MS;
-    while (Date.now() < deadline) {
-      if (failure) throw failure;
-      if (settled) return settled;
-      let runs: PipelineRunRecord[] = [];
-      try {
-        runs = await deps.runs.listRuns({ pipelineId, limit: 100 });
-      } catch {
-        runs = [];
-      }
-      const fresh = runs.find((run) => !before.has(run.id));
-      if (fresh) return fresh;
-      await delay(RUN_RECORD_POLL_MS);
-    }
-    if (failure) throw failure;
-    if (settled) return settled;
-    throw new Error('прогон пайплайна не стартовал');
-  };
+  const runControl = deps.runControl ?? new PipelineRunControl();
 
   const canRead = async (c: Context, project: Project, userId: string): Promise<boolean> =>
     opts.canReadProject ? await opts.canReadProject(c, project, userId) : true;
@@ -562,6 +427,11 @@ export function createPipelineProjectRoutes(
         return c.json({ error: { code: err.code, message: messages.invalidState(c) } }, 409);
       case 'pipeline.invalid_spec':
         return invalid(c, [err.message], messages.invalidSpec(c));
+      case 'pipeline.already_running':
+        return c.json(
+          { error: { code: err.code, message: messages.alreadyRunning(c) } },
+          409,
+        );
       default:
         return undefined;
     }
@@ -596,46 +466,10 @@ export function createPipelineProjectRoutes(
 
   // ─────────────── Шаблоны инстанса (ADR-100 → шаблоны ADR-101) ───────────────
 
-  /**
-   * Шаблон инстанса: запись `scope:'instance'` (новый формат) либо legacy-определение
-   * ADR-100 (его наполняет установщик пакета расширения).
-   */
-  type Template =
-    | { format: 'adr-101'; record: PipelineRecord }
-    | { format: 'adr-100'; definition: PipelineDefinitionRecord };
-
-  /** Найти шаблон по id (сначала новый формат, затем legacy-реестр). */
-  const resolveTemplate = async (id: string): Promise<Template | null> => {
-    const instance = await deps.pipelines.getPipeline(id);
-    if (instance && instance.scope === 'instance') return { format: 'adr-101', record: instance };
-    const legacy = await deps.templates?.getDefinition(id);
-    if (legacy) return { format: 'adr-100', definition: legacy };
-    return null;
-  };
-
-  /** Публичное представление шаблона. */
-  const templateView = (template: Template) => {
-    if (template.format === 'adr-101') {
-      return {
-        id: template.record.id,
-        name: template.record.name,
-        description: template.record.description,
-        format: 'adr-101' as const,
-        version: template.record.draft?.version,
-        installedBy: template.record.installedBy,
-        spec: template.record.draft,
-      };
-    }
-    return {
-      id: template.definition.id,
-      name: template.definition.name,
-      description: template.definition.description,
-      format: 'adr-100' as const,
-      version: template.definition.version,
-      installedBy: template.definition.installedBy,
-      steps: template.definition.steps,
-    };
-  };
+  // Шаблоны инстанца (ADR-100 → шаблоны ADR-101): логика живёт в движке
+  // (`engine/pipelines/authoring.ts`: `listPipelineTemplates`/
+  // `instantiatePipelineFromTemplate`) — оттуда же её берут встроенные тулы
+  // агента. Здесь — только HTTP-обвязка: права, коды ответов, локализация.
 
   // ─────────────── Пайплайны проекта ───────────────
 
@@ -678,27 +512,24 @@ export function createPipelineProjectRoutes(
         );
       }
 
-      const pipelineId = `${PIPELINE_ID_PREFIX}${generateId()}`;
-      const spec = toDraftSpec(parsed.data.spec, { pipelineId, projectId, version: 1 });
-      const validation = validatePipelineSpec(spec);
-      if (!validation.ok) return invalid(c, validation.problems);
-
-      const now = nowISO();
-      const record: PipelineRecord = {
-        id: pipelineId,
-        scope: 'project',
-        projectId,
-        name: parsed.data.name ?? spec.name,
-        ...(parsed.data.description ?? spec.description
-          ? { description: parsed.data.description ?? spec.description }
-          : {}),
-        draft: spec,
-        draftVersion: 1,
-        createdAt: now,
-        updatedAt: now,
-      };
-      await deps.pipelines.savePipeline(record);
-      return c.json({ pipeline: record }, 201);
+      // Создание черновика — общими авторскими операциями движка
+      // (`engine/pipelines/authoring.ts`): серверные поля спецификации
+      // проставляются там, валидация графа — тоже.
+      try {
+        const record = await createPipelineDraft({
+          pipelines: deps.pipelines,
+          projectId,
+          ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+          ...(parsed.data.description !== undefined
+            ? { description: parsed.data.description }
+            : {}),
+          spec: parsed.data.spec,
+        });
+        return c.json({ pipeline: record }, 201);
+      } catch (err) {
+        if (err instanceof PipelineAuthoringError) return invalid(c, err.problems);
+        throw err;
+      }
     },
   );
 
@@ -748,25 +579,22 @@ export function createPipelineProjectRoutes(
         );
       }
 
-      const spec = toDraftSpec(parsed.data.spec, {
-        pipelineId: record.id,
-        projectId,
-        version: record.draftVersion,
-      });
-      const validation = validatePipelineSpec(spec);
-      if (!validation.ok) return invalid(c, validation.problems);
-
-      const updated: PipelineRecord = {
-        ...record,
-        name: parsed.data.name ?? spec.name,
-        ...(parsed.data.description !== undefined
-          ? { description: parsed.data.description }
-          : {}),
-        draft: spec,
-        updatedAt: nowISO(),
-      };
-      await deps.pipelines.savePipeline(updated);
-      return c.json({ pipeline: updated });
+      // Правка черновика — версия **не** bump'ается (ADR-101 §2.8).
+      try {
+        const updated = await updatePipelineDraft({
+          pipelines: deps.pipelines,
+          record,
+          spec: parsed.data.spec,
+          ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+          ...(parsed.data.description !== undefined
+            ? { description: parsed.data.description }
+            : {}),
+        });
+        return c.json({ pipeline: updated });
+      } catch (err) {
+        if (err instanceof PipelineAuthoringError) return invalid(c, err.problems);
+        throw err;
+      }
     },
   );
 
@@ -784,7 +612,7 @@ export function createPipelineProjectRoutes(
 
       const record = await loadProjectPipeline(c, projectId, c.req.param('pid'));
       if (!record) return notFoundPipeline(c);
-      await deps.pipelines.deletePipeline(record.id);
+      await deletePipelineRecord({ pipelines: deps.pipelines, pipelineId: record.id });
       return c.body(null, 204);
     },
   );
@@ -803,53 +631,33 @@ export function createPipelineProjectRoutes(
 
       const record = await loadProjectPipeline(c, projectId, c.req.param('pid'));
       if (!record) return notFoundPipeline(c);
-      if (!record.draft) {
-        return c.json(
-          { error: { code: 'CONFLICT', message: messages.nothingToPublish(c) } },
-          409,
-        );
-      }
 
-      // Повторная публикация без изменений — идемпотентный ответ: версии не плодим.
-      const lastPublished = record.publishedVersion
-        ? await deps.pipelines.getVersion(record.id, record.publishedVersion)
-        : null;
-      if (lastPublished && sameSpecContent(lastPublished.spec, record.draft)) {
-        return c.json({
-          pipeline: { ...pipelineSummary(record), draft: record.draft },
-          published: lastPublished,
-        });
-      }
-
-      const version = record.draftVersion;
+      // Публикация — общими авторскими операциями движка: идемпотентность
+      // (повторная публикация без изменений версии не плодит) и bump черновика
+      // живут в одном месте с тулами агента.
       const publishedBy = await currentUserId(c);
-      const publishedSpec: PipelineSpec = {
-        ...record.draft,
-        version,
-        status: 'published',
-      };
-      const versionRecord: PipelineVersionRecord = {
-        pipelineId: record.id,
-        version,
-        spec: publishedSpec,
-        publishedAt: nowISO(),
-        publishedBy,
-      };
-      await deps.pipelines.saveVersion(versionRecord);
-
-      const nextVersion = version + 1;
-      const updated: PipelineRecord = {
-        ...record,
-        draftVersion: nextVersion,
-        publishedVersion: version,
-        draft: { ...record.draft, version: nextVersion, status: 'draft' },
-        updatedAt: nowISO(),
-      };
-      await deps.pipelines.savePipeline(updated);
-      return c.json({
-        pipeline: { ...pipelineSummary(updated), draft: updated.draft },
-        published: versionRecord,
-      });
+      try {
+        const result = await publishPipeline({
+          pipelines: deps.pipelines,
+          record,
+          publishedBy,
+        });
+        return c.json({
+          pipeline: { ...pipelineSummary(result.pipeline), draft: result.pipeline.draft },
+          published: result.published,
+        });
+      } catch (err) {
+        if (err instanceof PipelineAuthoringError) {
+          if (err.code === 'nothing_to_publish') {
+            return c.json(
+              { error: { code: 'CONFLICT', message: messages.nothingToPublish(c) } },
+              409,
+            );
+          }
+          return invalid(c, err.problems);
+        }
+        throw err;
+      }
     },
   );
 
@@ -934,29 +742,20 @@ export function createPipelineProjectRoutes(
       }
 
       const trigger: PipelineRunTrigger = parsed.data.trigger ?? { kind: 'manual' };
-      const before = new Set(
-        (await deps.runs.listRuns({ pipelineId: record.id, limit: 1000 })).map((run) => run.id),
-      );
 
-      const controller = new AbortController();
-      const promise = deps.engine.run({
-        pipelineId: record.id,
-        version,
-        trigger,
-        projectId,
-        signal: controller.signal,
-      });
-      // Ошибка прогона не должна вешать процесс: она попадёт в ответ/журнал.
-      promise.catch(() => undefined);
-
+      // Запуск — через общий реестр активных прогонов (`run-control.ts`):
+      // soft-lock «не запустить второй прогон того же пайплайна» и отмена
+      // идущего прогона работают одинаково для HTTP и для встроенных тулов.
       try {
-        const run = await awaitRunRecord(before, record.id, promise);
-        activeRuns.set(run.id, { controller, promise });
-        promise.then(
-          () => activeRuns.delete(run.id),
-          () => activeRuns.delete(run.id),
-        );
-        return c.json({ run }, 201);
+        const started = await runControl.startRun({
+          engine: deps.engine,
+          runs: deps.runs,
+          pipelineId: record.id,
+          version,
+          projectId,
+          trigger,
+        });
+        return c.json({ run: started.run }, 201);
       } catch (err) {
         const mapped = engineError(c, err);
         if (mapped) return mapped;
@@ -1017,11 +816,10 @@ export function createPipelineProjectRoutes(
     runGuard('write'),
     async (c) => {
       const run = guardedRun(c);
-      const active = activeRuns.get(run.id);
-      if (active) {
-        // Идущий в этом процессе прогон — отменяем через AbortController.
-        active.controller.abort();
-        const final = await active.promise.catch(() => run);
+      // Идущий в этом процессе прогон — отменяем через AbortController
+      // (общий реестр активных прогонов, ADR-101 `run-control.ts`).
+      const final = await runControl.cancelAndWait(run.id);
+      if (final) {
         return c.json({ run: final });
       }
       if (run.status === 'done' || run.status === 'failed' || run.status === 'cancelled') {
@@ -1055,18 +853,19 @@ export function createPipelineProjectRoutes(
 
   // GET /api/v2/pipeline-templates — шаблоны инстанса.
   app.get('/pipeline-templates', auth.requireAuth, adminGuard, async (c) => {
-    const instanceTemplates = await deps.pipelines.listPipelines({ scope: 'instance' });
-    const legacyDefinitions = (await deps.templates?.listDefinitions()) ?? [];
-    const templates = [
-      ...instanceTemplates.map((record) =>
-        templateView({ format: 'adr-101', record }),
-      ),
-      ...legacyDefinitions.map((definition) => templateView({ format: 'adr-100', definition })),
-    ];
+    const templates = await listPipelineTemplates({
+      pipelines: deps.pipelines,
+      ...(deps.templates ? { templates: deps.templates } : {}),
+    });
     return c.json({ templates });
   });
 
   // POST /api/v2/pipeline-templates/:tid/instantiate — создать пайплайн проекта.
+  //
+  // Провенанс записи несёт `installedBy.templateId` (id шаблона-источника),
+  // поэтому повторный вызов с `ensure: true` находит уже созданный пайплайн и
+  // возвращает его (`200 {pipeline, created:false}`) вместо копии. Без `ensure`
+  // поведение прежнее: каждый вызов создаёт новый пайплайн (`201`).
   app.post('/pipeline-templates/:tid/instantiate', auth.requireAuth, adminGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = instantiateBodySchema.safeParse(body);
@@ -1090,76 +889,38 @@ export function createPipelineProjectRoutes(
     const userId = await currentUserId(c);
     if (!(await canEdit(c, project, userId))) return forbidden(c);
 
-    const template = await resolveTemplate(c.req.param('tid'));
-    if (!template) {
-      return c.json(
-        { error: { code: 'NOT_FOUND', message: messages.templateNotFound(c) } },
-        404,
-      );
-    }
-
-    const pipelineId = `${PIPELINE_ID_PREFIX}${generateId()}`;
-    const built =
-      template.format === 'adr-101'
-        ? buildFromInstanceTemplate(template.record, { pipelineId, projectId })
-        : legacyDefinitionToPipelineSpec(template.definition, { pipelineId, projectId });
-    if (!built.ok) {
+    // Инстанцирование — общими операциями движка
+    // (`instantiatePipelineFromTemplate`): поиск шаблона в двух источниках,
+    // идемпотентность (`ensure`), конвертация legacy-определения и провенанс
+    // `installedBy.templateId` — те же правила, что у встроенных тулов агента.
+    const result = await instantiatePipelineFromTemplate({
+      pipelines: deps.pipelines,
+      ...(deps.templates ? { templates: deps.templates } : {}),
+      templateId: c.req.param('tid'),
+      projectId,
+      ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+      ...(parsed.data.ensure !== undefined ? { ensure: parsed.data.ensure } : {}),
+    });
+    if (!result.ok) {
+      if (result.reason === 'template_not_found') {
+        return c.json(
+          { error: { code: 'NOT_FOUND', message: messages.templateNotFound(c) } },
+          404,
+        );
+      }
       return c.json(
         {
           error: {
             code: 'PIPELINE_TEMPLATE_UNSUPPORTED',
             message: messages.templateNotInstantiable(c),
-            problems: built.problems,
+            problems: result.problems ?? [],
           },
         },
         409,
       );
     }
-
-    const now = nowISO();
-    const record: PipelineRecord = {
-      id: pipelineId,
-      scope: 'project',
-      projectId,
-      name: parsed.data.name ?? built.spec.name,
-      ...(built.spec.description ? { description: built.spec.description } : {}),
-      draft: built.spec,
-      draftVersion: 1,
-      ...(installedByOf(template) ? { installedBy: installedByOf(template)! } : {}),
-      createdAt: now,
-      updatedAt: now,
-    };
-    await deps.pipelines.savePipeline(record);
-    return c.json({ pipeline: record }, 201);
+    return c.json({ pipeline: result.pipeline, created: result.created }, result.created ? 201 : 200);
   });
 
   return app;
-}
-
-/**
- * Провенанс шаблона (пакет/версия) — если известен.
- */
-function installedByOf(template: {
-  format: 'adr-101' | 'adr-100';
-  record?: PipelineRecord;
-  definition?: PipelineDefinitionRecord;
-}): { pack: string; version: string } | undefined {
-  return template.format === 'adr-101' ? template.record?.installedBy : template.definition?.installedBy;
-}
-
-/**
- * Черновик из шаблона инстанса нового формата (`scope:'instance'`): копия
- * спецификации с серверными полями (id/версия/проект).
- */
-function buildFromInstanceTemplate(
-  record: PipelineRecord,
-  ctx: { pipelineId: string; projectId: string },
-): { ok: true; spec: PipelineSpec } | { ok: false; problems: string[] } {
-  if (!record.draft) {
-    return { ok: false, problems: ['template: у шаблона нет спецификации'] };
-  }
-  const spec = toDraftSpec(record.draft, { pipelineId: ctx.pipelineId, projectId: ctx.projectId, version: 1 });
-  const validation = validatePipelineSpec(spec);
-  if (!validation.ok) return { ok: false, problems: validation.problems };
-  return { ok: true, spec };
 }

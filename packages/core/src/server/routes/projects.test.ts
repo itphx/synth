@@ -304,6 +304,35 @@ describe('Project API Routes (opts: RBAC / stats / MCP / managed)', () => {
     expect((await store.load(id))!.name).toBe('Edited');
   });
 
+  it('canEditContent: память проекта (project.memory.enabled) — владелец, 400/403', async () => {
+    const app = makeApp(ownerRbac());
+    const id = await seedOwner();
+
+    const off = await app.request(`/api/v2/projects/${id}`, {
+      method: 'PUT', headers: header('owner'), body: JSON.stringify({ memory: { enabled: false } }),
+    });
+    expect(off.status).toBe(200);
+    expect((await store.load(id))!.memory).toEqual({ enabled: false });
+
+    const on = await app.request(`/api/v2/projects/${id}`, {
+      method: 'PUT', headers: header('owner'), body: JSON.stringify({ memory: { enabled: true } }),
+    });
+    expect(on.status).toBe(200);
+    expect((await store.load(id))!.memory).toEqual({ enabled: true });
+
+    const denied = await app.request(`/api/v2/projects/${id}`, {
+      method: 'PUT', headers: header('other'), body: JSON.stringify({ memory: { enabled: false } }),
+    });
+    expect(denied.status).toBe(403);
+    expect((await store.load(id))!.memory).toEqual({ enabled: true });
+
+    const invalid = await app.request(`/api/v2/projects/${id}`, {
+      method: 'PUT', headers: header('owner'), body: JSON.stringify({ memory: { enabled: 'нет' } }),
+    });
+    expect(invalid.status).toBe(400);
+    expect((await store.load(id))!.memory).toEqual({ enabled: true });
+  });
+
   it('getCurrentUserId: POST создаёт проект с владельцем из opts', async () => {
     const app = makeApp(ownerRbac());
     const res = await app.request('/api/v2/projects', {

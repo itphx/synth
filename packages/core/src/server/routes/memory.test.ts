@@ -342,6 +342,51 @@ describe('createMemoryRoutes — индексы', () => {
   });
 });
 
+describe('createMemoryRoutes — включение/отключение индекса', () => {
+  async function patch(app: Hono, id: string, body: unknown): Promise<Response> {
+    return app.request(`/api/v2/memory/indexes/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('PATCH проектного индекса: enabled=false сохраняется и читается', async () => {
+    const { app, storage } = createApp();
+    await seed(storage);
+
+    const res = await patch(app, 'i-1', { enabled: false });
+    expect(res.status).toBe(200);
+    expect((await json(res)).index.enabled).toBe(false);
+    expect((await storage.memoryIndexes.getIndex('i-1'))?.enabled).toBe(false);
+
+    const back = await patch(app, 'i-1', { enabled: true });
+    expect(back.status).toBe(200);
+    expect((await storage.memoryIndexes.getIndex('i-1'))?.enabled).toBe(true);
+  });
+
+  it('PATCH общего (instance) индекса → 409 MEMORY_INDEX_NOT_TOGGLEABLE', async () => {
+    const { app, storage } = createApp();
+    await storage.memoryIndexes.saveIndex(makeIndex({ id: 'i-inst', scope: 'instance' }));
+
+    const res = await patch(app, 'i-inst', { enabled: false });
+    expect(res.status).toBe(409);
+    expect((await json(res)).error.code).toBe('MEMORY_INDEX_NOT_TOGGLEABLE');
+    expect((await storage.memoryIndexes.getIndex('i-inst'))?.enabled).not.toBe(false);
+  });
+
+  it('PATCH: нет индекса → 404, невалидное тело → 400', async () => {
+    const { app, storage } = createApp();
+    await seed(storage);
+    const missing = await patch(app, 'nope', { enabled: false });
+    expect(missing.status).toBe(404);
+
+    const invalid = await patch(app, 'i-1', { enabled: 'нет' });
+    expect(invalid.status).toBe(400);
+    expect((await json(invalid)).error.code).toBe('VALIDATION_ERROR');
+  });
+});
+
 describe('createMemoryRoutes — мутации индексов (портал → админ-тул плагина)', () => {
   const WORKSPACE = '/srv/workspaces/demo';
   const DATA_DIR = '/srv/data';

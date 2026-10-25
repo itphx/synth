@@ -50,6 +50,8 @@ describe('/api/v2/skills (ADR-046 §9.1)', () => {
       'skill-creator',
       'synth-agents-md',
       'synth-storage-recovery',
+      'synth-pipelines',
+      'synth-schedules',
     ]);
     expect(body.skills[0].trusted).toBe(true);
     expect(body.skills[0].scope).toBe('instance');
@@ -217,6 +219,8 @@ describe('/api/v2/skills/:name — невалидные и отсутствую�
       'skill-creator',
       'synth-agents-md',
       'synth-storage-recovery',
+      'synth-pipelines',
+      'synth-schedules',
     ]);
     expect(await skillService.instanceExists('Bad_Name')).toBe(false);
   });

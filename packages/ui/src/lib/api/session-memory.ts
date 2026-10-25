@@ -36,6 +36,28 @@ export interface SessionMemoryLastContext {
   recall?: SessionMemoryBlock
 }
 
+/** Состояние индекса памяти в срезе сессии. */
+export type SessionMemoryIndexState = 'building' | 'ready' | 'stale' | 'failed'
+
+/** Область видимости индекса: проектный или общий для инстанса. */
+export type SessionMemoryIndexScope = 'project' | 'instance'
+
+/** Индекс памяти в скоупе сессии (без корпуса — только метаданные). */
+export interface SessionMemoryIndexItem {
+  /** Идентификатор индекса. */
+  id: string
+  /** Имя индекса. */
+  name: string
+  /** Область видимости. */
+  scope: SessionMemoryIndexScope
+  /** Состояние сборки. */
+  state: SessionMemoryIndexState
+  /** Участвует ли индекс в recall (у общих всегда `true`). */
+  enabled: boolean
+  /** Проект-владелец (у общих — источник корпуса, может отсутствовать). */
+  projectId?: string
+}
+
 /** Счётчики индексов памяти в скоупе сессии. */
 export interface SessionMemoryIndexes {
   /** Всего индексов. */
@@ -50,6 +72,14 @@ export interface SessionMemoryIndexes {
   building: number
   /** Индексы с ошибкой. */
   failed: number
+  /** Индексы в скоупе (для списка в правой панели). */
+  items: SessionMemoryIndexItem[]
+}
+
+/** Настройки памяти проекта (эффективное значение). */
+export interface SessionProjectMemory {
+  /** Включена ли память проекта. */
+  enabled: boolean
 }
 
 /** Ответ `GET /sessions/:id/memory`. */
@@ -66,6 +96,8 @@ export interface SessionMemoryResponse {
   indexes: SessionMemoryIndexes
   /** Готовность памяти. */
   readiness: SessionMemoryReadiness
+  /** Память проекта (`null` — сессия без проекта). */
+  projectMemory?: SessionProjectMemory | null
 }
 
 export const sessionMemoryApi = {

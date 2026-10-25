@@ -252,6 +252,54 @@ describe('PermissionEvaluator — plan mode (ADR-025)', () => {
   it('auto в act-режиме не блокирует write', () => {
     expect(planCheck('write_file', { file_path: 'a.txt', content: 'x' }, { planMode: 'auto', sessionMode: 'act' }).action).toBe('allow');
   });
+
+  // ADR-101/ADR-051: мутирующие тулы пайплайнов и расписаний блокируются в
+  // plan-режиме (публикация версии, запуск прогона, правка расписания).
+  it('mode=plan блокирует мутирующие тулы пайплайнов', () => {
+    for (const tool of [
+      'pipeline_save',
+      'pipeline_publish',
+      'pipeline_delete',
+      'pipeline_run',
+      'pipeline_run_resume',
+      'pipeline_run_cancel',
+      'pipeline_instantiate',
+    ]) {
+      const d = planCheck(tool, {}, { sessionMode: 'plan' });
+      expect(d.action, tool).toBe('deny');
+      expect(d.matchedRule, tool).toBe('plan.deny');
+    }
+  });
+
+  it('mode=plan блокирует мутирующие тулы расписаний', () => {
+    for (const tool of ['schedule_save', 'schedule_delete', 'schedule_run']) {
+      const d = planCheck(tool, {}, { sessionMode: 'plan' });
+      expect(d.action, tool).toBe('deny');
+      expect(d.matchedRule, tool).toBe('plan.deny');
+    }
+  });
+
+  it('mode=plan оставляет read-тулы пайплайнов и расписаний доступными', () => {
+    for (const tool of [
+      'pipeline_list',
+      'pipeline_get',
+      'pipeline_run_status',
+      'pipeline_run_list',
+      'pipeline_templates',
+      'schedule_list',
+      'schedule_get',
+      'schedule_jobs',
+    ]) {
+      expect(planCheck(tool, {}, { sessionMode: 'plan' }).action, tool).toBe('allow');
+    }
+  });
+
+  it('strict без утверждённого плана блокирует мутирующие тулы автоматизации', () => {
+    expect(planCheck('pipeline_publish', {}, { planMode: 'strict', planApproved: false }).action).toBe('deny');
+    expect(planCheck('schedule_save', {}, { planMode: 'strict', planApproved: false }).action).toBe('deny');
+    // Read-тулы остаются доступны.
+    expect(planCheck('pipeline_list', {}, { planMode: 'strict', planApproved: false }).action).toBe('allow');
+  });
 });
 
 describe('PermissionEvaluator — MCP доступность по режимам (plan/act)', () => {

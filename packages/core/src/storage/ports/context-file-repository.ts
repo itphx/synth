@@ -34,6 +34,8 @@ export interface ContextFileRepository {
   getRoutingInstructions(language?: string): string;
   getRules(language?: string): string;
   getGatewayInstructions(language?: string): string;
+  /** ADR-107: инструкция по работе с памятью (prompts/system/MEMORY.{lang}.md). */
+  getMemoryInstructions(language?: string): string;
   getSecurityMessage(
     messageId: string,
     language?: string,

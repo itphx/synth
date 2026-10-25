@@ -17,7 +17,9 @@
     "task",
     "mcp",
     "runtime",
-    "memory"
+    "memory",
+    "pipeline",
+    "schedule"
   ],
   "icon": "clipboard",
   "color": "--primary",

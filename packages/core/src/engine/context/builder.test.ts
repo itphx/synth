@@ -173,6 +173,29 @@ describe('ContextBuilder.buildBaseBlocks', () => {
     await rm(userDataDir, { recursive: true, force: true });
   });
 
+  it('memory.guide: только при memoryAvailable, из prompts/system/MEMORY.{lang}.md', async () => {
+    const config = new ContextConfig({ userDataDir });
+    const builder = new ContextBuilder(config);
+
+    const withMemory = await builder.buildBaseBlocks({
+      agentRole: 'assistant', language: 'ru', memoryAvailable: true,
+    });
+    const memoryBlock = withMemory.find((block) => block.key === 'memory.guide');
+    expect(memoryBlock?.tier).toBe('context');
+    expect(memoryBlock?.content).toContain('[ПАМЯТЬ]');
+    expect(memoryBlock?.provenance).toBe('prompts/system/MEMORY');
+
+    const withoutMemory = await builder.buildBaseBlocks({
+      agentRole: 'assistant', language: 'ru', memoryAvailable: false,
+    });
+    expect(withoutMemory.find((block) => block.key === 'memory.guide')).toBeUndefined();
+
+    const english = await builder.buildBaseBlocks({
+      agentRole: 'assistant', language: 'en', memoryAvailable: true,
+    });
+    expect(english.find((block) => block.key === 'memory.guide')?.content).toContain('[MEMORY]');
+  });
+
   it('возвращает блоки с ожидаемыми key/tier/order', async () => {
     const config = new ContextConfig({ userDataDir });
     const builder = new ContextBuilder(config);

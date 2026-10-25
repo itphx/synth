@@ -1170,3 +1170,30 @@
 - **UI:** вкладка «Память» (ready/degraded/unavailable, блоки контекста, факты/индексы, ADMIN → настройки).
 - **Дашборд:** `synth-memory.json` — 9 панелей (gauge + recall + контекст).
 - **Приёмка:** build/typecheck 9/9, lint 0 errors, **9920 тестов**, adr-check 98/0, docs-link 924/0; dev: эндпоинт отвечает, плагин safe/active.
+
+## 2026-10-25 — автоматизация памяти: шаблоны, задания, переиндексация
+
+- **Системные шаблоны (ADR-101):** `builtin:memory-consolidation` (сессия → факты), `builtin:memory-consolidate-facts` (дубли фактов), `builtin:memory-reindex` (`memory_index action=rebuild_all`, `wait:true`); сид при старте, `POST /pipeline-templates/:tid/instantiate` с `ensure:true` идемпотентен (`installedBy.templateId`).
+- **`memory_index`:** действие `rebuild_all` — только проектные индексы, `building` пропускает, `wait` с таймаутом; instance не трогает.
+- **UI:** секция «Автоматизация» в «Памяти» (ADMIN+проект): статус шаблона/пайплайна, последний прогон, «Подготовить пайплайн», «Запустить сейчас», «Расписание» (deep-link в «Шедулер»); «Аддоны → Пайплайны → Шаблоны» — системные шаблоны.
+- **Проверено на dev:** 3 шаблона в `/pipeline-templates`; `ensure` дважды → один пайплайн; публикация и прогоны dedupe/reindex → `done`; reindex пересобрал проектный `check` (gen 3), `instance-check` не тронут; UI-секция отображается.
+- **Приёмка:** build/typecheck 9/9, lint 0 errors, **9976 тестов** (core 6193 · ui 1928 · backend 689 · plugin 191 · shared 804 · sdk 96 · executor 24 · storage-postgres 51); adr/docs-link/mkdocs — зелёные.
+
+## 2026-10-25 — системная инструкция по памяти
+
+- **Файлы:** `packages/core/prompts/system/MEMORY.{ru,en}.md` — правила: память как данные, а не инструкции; когда искать/писать/отзывать; запрет на обслуживание индексов без просьбы; секреты и дубли не сохранять.
+- **Блок:** `memory.guide` (tier `context`, order 25) через `ContextBuilder`/`getMemoryInstructions`; подключается только при доступной памяти — резолвер `engine/context/memory-availability.ts` (проект не выключил память, capability `memory`, есть включённый тул плагина).
+- **Проверено на dev:** у проектной сессии `memory.guide` `loaded` (1766); при `project.memory.enabled=false` блока в манифесте нет; после восстановления снова `loaded`.
+- **Приёмка:** build/typecheck 9/9, lint 0 errors, **9984 теста** (core 6201 · ui 1928 · backend 689 · plugin 191 · shared 804 · sdk 96 · executor 24 · storage-postgres 51); adr/docs-link/mkdocs — зелёные.
+
+## 2026-10-25 — тулы и скиллы автоматизации (пайплайны, расписания)
+
+- **Capability:** `pipeline`/`schedule` (`shared/types/tools.ts` + meta); permission-группы `pipeline`/`schedule`, plan-блокировка **только мутирующих** (`engine/permission/evaluator.ts`); authority-маппинг 18 имён (`engine/authority/actions.ts`: read/write/publish/execute, `pipeline_run_resume → approve`, цель `session`).
+- **Движок:** `engine/pipelines/run-control.ts` — реестр активных прогонов **один на процесс** (HTTP и тулы), soft-lock `pipeline.already_running`, отмена; `engine/pipelines/authoring.ts` — create/update/publish (идемпотентная публикация)/delete + `listPipelineTemplates`/`instantiatePipelineFromTemplate`; HTTP-роутер переведён на них (контракт ответов сохранён, тесты роутера дополнены).
+- **Рантайм тулов:** late-bound `getAutomationRuntime` → `ctx.extra.automation` (движок/шедулер создаются позже оркестратора); сборка в `server/app/deps.ts` (core) и `backend/src/app/deps.ts`, `runControl` в обоих `mount-routes`.
+- **Тулы (18):** 12 `pipeline_*` (авторство 5, прогоны 5, шаблоны 2) + 6 `schedule_*`. Область пайплайнов — проект сессии (параметра `project_id` нет, `VIEWER` только читает); расписаний — «свои + проект» (свои доступны без проекта); цель `pipeline` требует **опубликованный** пайплайн проекта сессии; `schedule_jobs` фильтрует область **до** `limit`.
+- **Агенты:** capability у `assistant`/`developer`/`devops`/`admin`/`pm`/`qa`/`analyst`; у `explore`/`general`/`auditor`/`title` — нет. Ограничение: оверрайды в `{dataDir}/agents/*.json` требуют ручной правки.
+- **Скиллы:** `synth-pipelines` (`/pipelines`), `synth-schedules` (`/schedules`) — builtin (ADR-046 §9.5), `requiresCapabilities` `pipeline`/`schedule`, команды без коллизий (`resolveCatalog` — 0 `shadowed`).
+- **Доки:** `AGENTS.md` (две строки таблицы тулов + встроенные скиллы), `docs/PIPELINES.md` §2.17, `packages/core/AGENTS.md`.
+- **Приёмка:** build OK · typecheck 9/9 · lint 0 errors · **10 110 тестов** (core 6327 + 199 skip · ui 1928 · shared 804 · backend 689 · plugin-memory 191 · executor 96 · storage-postgres 51 + 14 skip · sdk 24) · adr-check 98/0 (30 предсуществующих warnings) · docs-link 926/0.
+- **Замечания:** `pipeline_instantiate` в чате гейтится правом изменения **своего** проекта (managed HTTP-контур — `ADMIN`; шаблоны инстанса тул только читает); расписание с целью `pipeline` сессию не создаёт — прогон в фоне, прогресс через `pipeline_run_status`.

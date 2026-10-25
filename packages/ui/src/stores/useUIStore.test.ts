@@ -234,8 +234,7 @@ describe('useUIStore.remapFileTabs', () => {
   })
 })
 
-describe('useUIStore.closeTab — очистка черновика', () => {
-  beforeEach(() => {
+describe('useUIStore.closeTab — очистка черновика', () => {  beforeEach(() => {
     storage.clear()
     useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
     useFilesStore.setState({ draftContents: {} })
@@ -280,5 +279,41 @@ describe('useUIStore.closeTab — очистка черновика', () => {
     useUIStore.getState().closeTab('chat-1')
 
     expect(useFilesStore.getState().draftContents['p1::a.txt']).toBe('changed')
+  })
+})
+
+describe('useUIStore.scheduleDraft — deep-link в «Шедулер»', () => {
+  const draft = {
+    name: 'Memory: reindex project',
+    projectId: 'p1',
+    pipelineId: 'pl_1',
+    payload: { sessionId: 's1' },
+    cron: '0 3 * * *',
+  }
+
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ scheduleDraft: null })
+  })
+
+  it('setScheduleDraft меняет значение и очищает', () => {
+    useUIStore.getState().setScheduleDraft(draft)
+    expect(useUIStore.getState().scheduleDraft).toEqual(draft)
+
+    useUIStore.getState().setScheduleDraft(null)
+    expect(useUIStore.getState().scheduleDraft).toBeNull()
+  })
+
+  it('runtime-поле не попадает в partialize', () => {
+    useUIStore.getState().setScheduleDraft(draft)
+    const partialize = useUIStore.persist.getOptions().partialize
+    expect(partialize).toBeTypeOf('function')
+    const persisted = partialize!(useUIStore.getState()) as Record<string, unknown>
+    expect('scheduleDraft' in persisted).toBe(false)
+  })
+
+  it('черновик не пишется в localStorage', () => {
+    useUIStore.getState().setScheduleDraft(draft)
+    expect(storage.getItem('synth-ui-settings') ?? '').not.toContain('scheduleDraft')
   })
 })

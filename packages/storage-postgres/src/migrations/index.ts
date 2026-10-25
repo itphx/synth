@@ -27,6 +27,8 @@ import { MIGRATION_015_AUTHORITY } from './015-authority.js';
 import { MIGRATION_016_CREDENTIAL_AUDIT } from './016-credential-audit.js';
 import { MIGRATION_017_MEMORY } from './017-memory.js';
 import { MIGRATION_018_MEMORY_INDEX_SCOPE } from './018-memory-index-scope.js';
+import { MIGRATION_019_MEMORY_INDEX_ENABLED } from './019-memory-index-enabled.js';
+import { MIGRATION_020_PROJECT_MEMORY } from './020-project-memory.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -58,6 +60,8 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 16, id: '016_credential_audit', sql: MIGRATION_016_CREDENTIAL_AUDIT },
   { version: 17, id: '017_memory', sql: MIGRATION_017_MEMORY },
   { version: 18, id: '018_memory_index_scope', sql: MIGRATION_018_MEMORY_INDEX_SCOPE },
+  { version: 19, id: '019_memory_index_enabled', sql: MIGRATION_019_MEMORY_INDEX_ENABLED },
+  { version: 20, id: '020_project_memory', sql: MIGRATION_020_PROJECT_MEMORY },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

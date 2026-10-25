@@ -71,6 +71,18 @@ export interface SettingsFocusRequest {
   sectionId?: string
 }
 
+/**
+ * Черновик расписания для deep-link в вкладку «Шедулер» (ADR-051/ADR-101):
+ * предзаполняет форму создания, но ничего не сохраняет. Runtime-only.
+ */
+export interface ScheduleDraft {
+  name: string
+  projectId: string
+  pipelineId: string
+  payload?: Record<string, unknown>
+  cron?: string
+}
+
 export interface SettingsFocusTarget extends SettingsFocusRequest {
   nonce: number
 }
@@ -117,6 +129,10 @@ interface UIStore {
   /** Одноразовый запрос фокуса на секцию панели (runtime, не персистится). */
   settingsFocus: SettingsFocusTarget | null
   focusSettings: (target: SettingsFocusRequest) => void
+
+  /** Одноразовый черновик расписания для вкладки «Шедулер» (runtime, не персистится). */
+  scheduleDraft: ScheduleDraft | null
+  setScheduleDraft: (draft: ScheduleDraft | null) => void
 
   isLogsDialogOpen: boolean
   setLogsDialogOpen: (open: boolean) => void
@@ -282,6 +298,9 @@ export const useUIStore = create<UIStore>()(
             nonce: (state.settingsFocus?.nonce ?? 0) + 1,
           },
         })),
+
+      scheduleDraft: null,
+      setScheduleDraft: (draft) => set({ scheduleDraft: draft }),
 
       isLogsDialogOpen: false,
       setLogsDialogOpen: (open) => set({ isLogsDialogOpen: open }),

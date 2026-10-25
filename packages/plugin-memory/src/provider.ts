@@ -551,7 +551,11 @@ export class MemoryProviderLite {
   async usableIndexes(projectId?: string): Promise<IndexStatus[]> {
     const statuses = await this.listIndexes(projectId ? { projectId } : {});
     const usable = statuses.filter(
-      (status) => status.state === 'ready' || status.state === 'stale',
+      (status) =>
+        (status.state === 'ready' || status.state === 'stale')
+        // ADR-107: выключенный проектный индекс в recall не участвует;
+        // инстансный индекс отключить нельзя — он всегда пригоден.
+        && (status.index.scope === 'instance' || status.index.enabled !== false),
     );
     usable.sort((a, b) => {
       const byUpdated = Date.parse(b.index.updatedAt) - Date.parse(a.index.updatedAt);

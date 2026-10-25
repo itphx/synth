@@ -19,7 +19,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { LLMChunk, LLMResponse, Message, ToolForLLM } from '@itphx/synth-shared';
+import type { LLMChunk, LLMResponse, Message, Project, ToolForLLM } from '@itphx/synth-shared';
 import { stubContextFiles } from '../../../test-helpers/storage-stubs.js';
 import { FileStore } from '../../../storage/file-store.js';
 import { SessionManager } from '../../../sessions/manager.js';
@@ -314,6 +314,43 @@ describe('runProcessSetup', () => {
       { block: 'facts', status: 'loaded', chars: 5 },
       { block: 'recall', status: 'empty', chars: 0 },
     ]);
+  });
+
+  it('память проекта выключена → тулы плагина памяти скрыты, остальные остаются', async () => {
+    const { id, message } = await makeSession();
+    const select = () => ({
+      builtin: [tool('read_file')],
+      plugin: [tool('plugin_synth_plugin_memory_memory_search'), tool('plugin_other_echo')],
+      mcp: [] as ToolForLLM[],
+    });
+    const deps = makeDeps({
+      buildToolSelection: vi.fn(() => ({
+        toolsPolicy: 'consistency' as const,
+        mcpPolicy: 'consistency' as const,
+        select,
+      })) as never,
+    });
+
+    const disabled = await runProcessSetup(
+      await makeArgs(id, message, { projectForState: { memory: { enabled: false } } as Project }),
+      deps,
+    );
+    expect(disabled.failed).toBe(false);
+    if (!disabled.failed) {
+      const names = (disabled.state.tools ?? []).map((t) => t.function.name);
+      expect(names).toEqual(['read_file', 'plugin_other_echo']);
+    }
+
+    const enabled = await runProcessSetup(
+      await makeArgs(id, message, { projectForState: { memory: { enabled: true } } as Project }),
+      deps,
+    );
+    expect(enabled.failed).toBe(false);
+    if (!enabled.failed) {
+      expect((enabled.state.tools ?? []).map((t) => t.function.name)).toContain(
+        'plugin_synth_plugin_memory_memory_search',
+      );
+    }
   });
 
   it('смена stable-префикса → generation-change (generation=2)', async () => {

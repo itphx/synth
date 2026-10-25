@@ -20,6 +20,18 @@
  * **относительным** путём (без сырых абсолютных путей, инвариант 25/ADR-094),
  * рабочая область — `workspace:`, сессия — `session:`, внешний ресурс —
  * `external:`, MCP-инструмент — `mcp:`.
+ *
+ * ## Про автоматизацию (ADR-101/ADR-051)
+ *
+ * - **`pipeline_run_resume` → `approve`**: возобновление HITL-прогона — это
+ *   решение человека о продолжении работы (ровно как `plan_exit`). Отдельного
+ *   действия «resume» не заводим: доменные глаголы приезжают контентом, а
+ *   базовый словарь ядра уже содержит `approve`.
+ * - **Цель пайплайнов и расписаний — `session`**: проект — свойство сессии
+ *   (ADR-014), а пайплайн/расписание живут внутри проекта сессии. Новый вид
+ *   цели («pipeline») потребовал бы новых правил в политике полномочий и не
+ *   усиливал бы контроль: право на проект уже выражено тем, что действие
+ *   применяется к сессии.
  */
 import { ToolCapability } from '@itphx/synth-shared';
 
@@ -112,6 +124,30 @@ const TOOL_ACTIONS: Readonly<Record<string, string>> = {
   plan_exit: 'approve',
   task: 'delegate',
   task_resume: 'delegate',
+  // ADR-101: пайплайны проекта. Чтение — `read`; правка спецификации —
+  // `write`; публикация версии — `publish` (необратимое действие: версия
+  // становится неизменяемой); запуск/отмена прогона — `execute` (движок
+  // исполняет шаги); возобновление HITL-прогона — `approve` (решение
+  // человека: ровно то же действие, что `plan_exit`).
+  pipeline_list: 'read',
+  pipeline_get: 'read',
+  pipeline_run_status: 'read',
+  pipeline_run_list: 'read',
+  pipeline_templates: 'read',
+  pipeline_save: 'write',
+  pipeline_delete: 'write',
+  pipeline_publish: 'publish',
+  pipeline_run: 'execute',
+  pipeline_run_cancel: 'execute',
+  pipeline_instantiate: 'execute',
+  pipeline_run_resume: 'approve',
+  // ADR-051: расписания планировщика (область — свои + проект сессии).
+  schedule_list: 'read',
+  schedule_get: 'read',
+  schedule_jobs: 'read',
+  schedule_save: 'write',
+  schedule_delete: 'write',
+  schedule_run: 'execute',
 };
 
 /** Отображение capability на действие — для MCP/плагинных тулов. */
@@ -126,6 +162,10 @@ const CAPABILITY_ACTIONS: Readonly<Record<string, string>> = {
   [ToolCapability.TASK]: 'delegate',
   [ToolCapability.RUNTIME]: 'write',
   [ToolCapability.USER]: 'write',
+  // ADR-101/ADR-051: capability `pipeline`/`schedule` — фоллбак для
+  // плагинных тулов с этими capability (встроенные тулы маппингом выше).
+  [ToolCapability.PIPELINE]: 'write',
+  [ToolCapability.SCHEDULE]: 'write',
 };
 
 /**
@@ -180,6 +220,31 @@ const TOOL_TARGET_KINDS: Readonly<Record<string, string>> = {
   project_repo_remove: 'workspace',
   web_fetch: 'external',
   web_search: 'external',
+  // ADR-101/ADR-051: пайплайны и расписания — **цель `session`**.
+  //
+  // Новые виды цели не вводим: проект — свойство сессии (ADR-014), а
+  // пайплайн/расписание — доменный ресурс **внутри** проекта сессии. Отдельный
+  // вид «pipeline» потребовал бы новых правил в политике полномочий и не
+  // дал бы выигрыша: право на проект уже выражено тем, что действие
+  // применяется к сессии её владельца.
+  pipeline_list: 'session',
+  pipeline_get: 'session',
+  pipeline_run_status: 'session',
+  pipeline_run_list: 'session',
+  pipeline_templates: 'session',
+  pipeline_save: 'session',
+  pipeline_delete: 'session',
+  pipeline_publish: 'session',
+  pipeline_run: 'session',
+  pipeline_run_cancel: 'session',
+  pipeline_instantiate: 'session',
+  pipeline_run_resume: 'session',
+  schedule_list: 'session',
+  schedule_get: 'session',
+  schedule_jobs: 'session',
+  schedule_save: 'session',
+  schedule_delete: 'session',
+  schedule_run: 'session',
 };
 
 /**

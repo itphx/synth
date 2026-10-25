@@ -16,7 +16,9 @@
  * - `gate.ts` — общие помощники гейтов (пауза, таймаут, решение оператора);
  * - `step-context.ts` — контекст шага (проект/workspace/режим/тулы/MCP);
  * - `executors/` — исполнители видов шага (`tool`/`script`/`human`/`agent`);
- * - `engine.ts` — `PipelineEngine`.
+ * - `engine.ts` — `PipelineEngine`;
+ * - `run-control.ts` — реестр активных прогонов (soft-lock + отмена);
+ * - `authoring.ts` — авторские операции над пайплайном проекта.
  */
 export { PipelineEngine } from './engine.js';
 export { evaluateCondition } from './condition.js';
@@ -81,6 +83,33 @@ export {
   PIPELINE_ERROR_CODES,
 } from './types.js';
 export { createPipelineExitHandler } from './exits.js';
+// ADR-101: управление активными прогонами — общий экземпляр для HTTP-роута
+// и встроенных тулов агента (soft-lock + отмена идущего прогона).
+export { PipelineRunControl } from './run-control.js';
+export type {
+  PipelineRunStartOptions,
+  PipelineRunStartResult,
+} from './run-control.js';
+// ADR-101: авторские операции над пайплайном проекта (черновик/публикация/
+// удаление) — общие для HTTP-роута и встроенных тулов агента.
+export {
+  createPipelineDraft,
+  deletePipeline,
+  instantiatePipelineFromTemplate,
+  legacyDefinitionToPipelineSpec,
+  listPipelineTemplates,
+  PIPELINE_ID_PREFIX,
+  PipelineAuthoringError,
+  publishPipeline,
+  sameSpecContent,
+  toDraftSpec,
+  updatePipelineDraft,
+} from './authoring.js';
+export type {
+  PipelineDraftSpecInput,
+  PipelineTemplateInstantiation,
+  PipelineTemplateSummary,
+} from './authoring.js';
 // ADR-101: встроенные шаблоны пайплайнов инстанса (сид при старте).
 export {
   BUILTIN_PIPELINE_PROVENANCE,

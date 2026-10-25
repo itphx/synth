@@ -19,7 +19,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { PromptBlockContext, PromptBlockProvider, Session } from '@itphx/synth-shared';
+import type { Project, PromptBlockContext, PromptBlockProvider, Session } from '@itphx/synth-shared';
 
 import { ContextConfig } from './config.js';
 import { ContextBuilder } from './builder.js';
@@ -125,6 +125,55 @@ describe('SystemPromptComposer: точка promptBlocks', () => {
     expect(entry!.tier).toBe('context');
     // В манифесте не торчит сырой ключ.
     expect(entry!.label).not.toBe('plugin.demo.memory');
+  });
+
+  it('ADR-107: память проекта выключена → блоки плагина памяти не собираются', async () => {
+    const loadFacts = vi.fn(() => 'ФАКТЫ ПАМЯТИ');
+    const loadRecall = vi.fn(() => 'RECALL ПАМЯТИ');
+    registry.register(
+      {
+        key: 'plugin.synth-plugin-memory.facts',
+        tier: 'context',
+        order: 100,
+        load: loadFacts,
+      },
+      { provenance: 'plugin:synth-plugin-memory' },
+    );
+    registry.register({
+      key: 'plugin.synth-plugin-memory.recall',
+      tier: 'volatile',
+      order: 101,
+      load: loadRecall,
+    });
+    // Чужой плагин политикой памяти не затрагивается.
+    registry.register({ key: 'plugin.demo.other', tier: 'context', order: 102, load: () => 'ДРУГОЙ' });
+    const composer = makeComposer();
+    const project = { id: 'p1', memory: { enabled: false } } as unknown as Project;
+
+    const disabled = await composer.compose(
+      makeCtx(makeSession({ projectId: 'p1' }), { project }),
+    );
+    expect(loadFacts).not.toHaveBeenCalled();
+    expect(loadRecall).not.toHaveBeenCalled();
+    expect(disabled.blocks.find((b) => b.key === 'plugin.synth-plugin-memory.facts')).toBeUndefined();
+    expect(disabled.blocks.find((b) => b.key === 'plugin.synth-plugin-memory.recall')).toBeUndefined();
+    expect(disabled.system).not.toContain('ФАКТЫ ПАМЯТИ');
+    expect(disabled.system).not.toContain('RECALL ПАМЯТИ');
+    // Остальные плагинные блоки остаются.
+    expect(disabled.system).toContain('ДРУГОЙ');
+
+    // `true` и отсутствие поля — память включена (легаси).
+    const enabledProject = { id: 'p1', memory: { enabled: true } } as unknown as Project;
+    const enabled = await composer.compose(
+      makeCtx(makeSession({ projectId: 'p1' }), { project: enabledProject }),
+    );
+    expect(loadFacts).toHaveBeenCalled();
+    expect(enabled.system).toContain('ФАКТЫ ПАМЯТИ');
+
+    const legacy = await composer.compose(
+      makeCtx(makeSession({ projectId: 'p1' }), { project: { id: 'p1' } as unknown as Project }),
+    );
+    expect(legacy.system).toContain('ФАКТЫ ПАМЯТИ');
   });
 
   it('тир stable отклоняется на регистрации (понятная причина)', () => {

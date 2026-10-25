@@ -28,6 +28,33 @@ import { todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteToo
 import { profileUpdateTool } from './profile-update.js';
 import { projectCreateTool, projectAttachTool, projectUpdateTool, projectWorkspaceSetTool, projectLogWriteTool, projectLogReadTool, projectInvariantsReadTool, projectInvariantsWriteTool } from './project-manage.js';
 import { projectRepoCloneTool, projectRepoInitTool, projectRepoAddTool, projectRepoFetchTool, projectRepoRemoveTool } from './project-repos.js';
+// ADR-101: пайплайны проекта — чтение и авторство (спецификация, версии).
+import {
+  pipelineListTool,
+  pipelineGetTool,
+  pipelineSaveTool,
+  pipelinePublishTool,
+  pipelineDeleteTool,
+} from './pipeline-authoring.js';
+// ADR-101: прогоны пайплайнов — запуск, статус, список, HITL-решение, отмена.
+import {
+  pipelineRunTool,
+  pipelineRunStatusTool,
+  pipelineRunListTool,
+  pipelineRunResumeTool,
+  pipelineRunCancelTool,
+} from './pipeline-runs.js';
+// ADR-101: шаблоны пайплайнов — список шаблонов инстанца и инстанцирование.
+import { pipelineTemplatesTool, pipelineInstantiateTool } from './pipeline-templates.js';
+// ADR-051: расписания планировщика — чтение, авторство, запуск, журнал.
+import {
+  scheduleListTool,
+  scheduleGetTool,
+  scheduleSaveTool,
+  scheduleDeleteTool,
+  scheduleRunTool,
+  scheduleJobsTool,
+} from './schedules.js';
 
 export { ToolRegistry } from './registry.js';
 export { zodToJsonSchema } from './json-schema.js';
@@ -85,6 +112,28 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   projectLogReadTool,
   projectInvariantsReadTool,
   projectInvariantsWriteTool,
+  // ADR-101: пайплайны проекта
+  pipelineListTool,
+  pipelineGetTool,
+  pipelineSaveTool,
+  pipelinePublishTool,
+  pipelineDeleteTool,
+  // ADR-101: прогоны пайплайнов
+  pipelineRunTool,
+  pipelineRunStatusTool,
+  pipelineRunListTool,
+  pipelineRunResumeTool,
+  pipelineRunCancelTool,
+  // ADR-101: шаблоны пайплайнов
+  pipelineTemplatesTool,
+  pipelineInstantiateTool,
+  // ADR-051: расписания
+  scheduleListTool,
+  scheduleGetTool,
+  scheduleSaveTool,
+  scheduleDeleteTool,
+  scheduleRunTool,
+  scheduleJobsTool,
 ];
 
 export function createToolRegistry(): ToolRegistry {

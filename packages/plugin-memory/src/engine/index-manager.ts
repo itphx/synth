@@ -326,6 +326,9 @@ export class IndexManager {
         kind: source.kind,
         ...(source.filter ? { filter: source.filter } : {}),
       },
+      // ADR-107: новый индекс включён (для `instance` поле игнорируется);
+      // пересборка/сборка сохраняют значение через `...current`.
+      enabled: true,
       state: 'building',
       generation: 0,
       fingerprint: { model: this._model(), dimension: 0, chunkerVersion: CHUNKER_VERSION },

@@ -5,6 +5,7 @@ import type { createMiddleware } from 'hono/factory';
 import type { Project, Session, WorkspaceOutsideRootPolicy, ProjectMcpSettings, ProjectSkillSettings } from '@itphx/synth-shared';
 import {
   projectMcpUpdateSchema,
+  projectMemoryUpdateSchema,
   PROJECT_ICON_KEYS,
   PROJECT_COLOR_KEYS,
   isProjectIconKey,
@@ -108,7 +109,7 @@ const planFieldSchema = z.unknown().nullable().optional();
 
 /** Мутирующие поля контента проекта (всё, кроме `workspace`): требуют прав редактора. */
 const projectContentFields = [
-  'name', 'description', 'current_task', 'invariants', 'icon', 'color', 'repos', 'plan',
+  'name', 'description', 'current_task', 'invariants', 'icon', 'color', 'repos', 'plan', 'memory',
 ] as const;
 
 /** Сообщение о недопустимом значении метаданных с перечнем допустимых ключей. */
@@ -382,6 +383,18 @@ export function createProjectRoutes(
       return c.json({
         error: { code: 'VALIDATION_ERROR', message: invalidMetaMessage('color', body.color, PROJECT_COLOR_KEYS) },
       }, 400);
+    }
+
+    // ADR-107: политика памяти проекта (`{enabled}`). Поле не задано — не
+    // трогаем; `enabled: undefined` внутри объекта тоже не затирает значение.
+    if (body.memory !== undefined) {
+      const parsedMemory = projectMemoryUpdateSchema.safeParse(body.memory);
+      if (!parsedMemory.success) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedMemory.error.message } }, 400);
+      }
+      if (parsedMemory.data.enabled !== undefined) {
+        project.memory = { ...project.memory, enabled: parsedMemory.data.enabled };
+      }
     }
 
     if (body.name !== undefined) project.name = body.name;

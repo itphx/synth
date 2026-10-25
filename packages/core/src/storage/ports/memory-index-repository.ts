@@ -114,6 +114,14 @@ export interface MemoryIndexRecord {
    * Область видимости: `project` — только проект `projectId`; `instance` — виден всем.
    */
   scope: MemoryIndexScope;
+  /**
+   * Используется ли индекс в recall/search (ADR-107).
+   *
+   * `undefined` — включён (легаси-записи); `false` — индекс не попадает в
+   * поиск, но остаётся видимым в портале (его данные сохраняются). Для
+   * `scope: 'instance'` поле игнорируется — общий индекс всегда включён.
+   */
+  enabled?: boolean;
   /** Источник корпуса. */
   source: MemoryIndexSource;
   /** Состояние индекса. */

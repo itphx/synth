@@ -18,7 +18,9 @@
     "task",
     "mcp",
     "runtime",
-    "memory"
+    "memory",
+    "pipeline",
+    "schedule"
   ],
   "icon": "bug",
   "color": "--syntax-number",

@@ -71,6 +71,9 @@ import {
   startEventJournalMetrics,
   // ADR-101 (Э5): движок пайплайнов, исполнители шагов, обработчики выходов.
   PipelineEngine,
+  // ADR-101: реестр активных прогонов (soft-lock + отмена) — общий экземпляр
+  // для HTTP-роута пайплайнов и встроенных тулов агента.
+  PipelineRunControl,
   createToolStepExecutor,
   createScriptStepExecutor,
   createHumanStepExecutor,
@@ -97,6 +100,7 @@ import type {
   EventsRuntimeSettings,
   MetricsRegistry,
   StorageContext,
+  AutomationRuntime,
   BaseProvider,
   PipelinePermissionDeps,
   PipelineRunRecord,
@@ -229,6 +233,25 @@ export async function createBackendDeps(
     pipelines: pipelineStore,
     packs: packStore,
   } = storageContext;
+
+  // ADR-101: реестр активных прогонов пайплайнов — **один на процесс**.
+  // Его получают и HTTP-роут пайплайнов, и встроенные тулы агента: поэтому
+  // soft-lock «не запустить второй прогон того же пайплайна» и отмена
+  // идущего прогона работают одинаково для обоих контуров.
+  const pipelineRunControl = new PipelineRunControl();
+
+  // ADR-101/ADR-051: рантайм автоматизации для встроенных тулов
+  // (`pipeline_*`/`schedule_*`). Движок пайплайнов и шедулер создаются
+  // **ниже** (после оркестратора), поэтому объект заполняется по мере сборки,
+  // а оркестратор получает late-bound геттер (`engine/tools/automation-runtime.ts`).
+  const automationRuntime: AutomationRuntime = {
+    pipelines: storageContext.projectPipelines,
+    runs: storageContext.pipelineRuns,
+    runControl: pipelineRunControl,
+    templates: pipelineStore,
+    schedules: scheduleStore,
+    jobs: jobStore,
+  };
 
   // ADR-030: ядровая шина хуков — общий инстанс для SessionManager и оркестратора.
   const hooks = new HookBus();
@@ -722,6 +745,10 @@ export async function createBackendDeps(
     // ADR-051: late-bound резолвер активности расписания в сессии (ScheduleStore
     // создаётся ниже) — включает статический блок `Scheduler` в промпт.
     isSchedulerActive: (sid) => scheduleStore.hasEnabledTargetFor(sid),
+    // ADR-101/ADR-051: late-bound рантайм автоматизации для встроенных тулов
+    // (`pipeline_*`/`schedule_*`) — движок пайплайнов и шедулер создаются ниже,
+    // поэтому геттер отдаёт актуальный снимок в момент хода.
+    getAutomationRuntime: () => automationRuntime,
     // «Стоп»: персистентный флаг отмены сессии — прерывает длинный
     // многоитерационный Tool Use на границе итерации (backoff/гонка).
     isCancelRequested: async (sid) =>
@@ -1095,6 +1122,10 @@ export async function createBackendDeps(
     workspacesRoot: config.workspacesRoot,
   });
 
+  // ADR-101/ADR-051: движок пайплайнов появился — отдаём его тулам
+  // `pipeline_*` через рантайм автоматизации (late-bound).
+  automationRuntime.engine = pipelineEngine;
+
   // ADR-101: встроенные шаблоны пайплайнов инстанса (сид при старте).
   // Идемпотентно: существующий шаблон не перезаписывается. Ошибка сидирования
   // **не** роняет старт — только предупреждение в лог. В деградированном
@@ -1173,6 +1204,10 @@ export async function createBackendDeps(
     });
   }
 
+  // ADR-101/ADR-051: шедулер появился — отдаём его тулам `schedule_*`
+  // через рантайм автоматизации (late-bound).
+  automationRuntime.scheduler = schedulerService;
+
   // ADR-092: авто-миграции схемы данных при старте (паритет со standalone-core) —
   // обязательная страховочная копия + межпроцессный лок. Миграция снапшотов скоупа —
   // зарегистрированная миграция реестра (`session-scope-snapshots-v1`), отдельный
@@ -1249,6 +1284,9 @@ export async function createBackendDeps(
     pipelines: pipelineStore,
     // ADR-101 (Э5): движок пайплайнов (второй движок) — HTTP-роутов нет (Э6).
     pipelineEngine,
+    // ADR-101: реестр активных прогонов — общий для HTTP-роута пайплайнов и
+    // встроенных тулов агента (soft-lock + отмена идущего прогона).
+    pipelineRunControl,
     // ADR-086 §5: порт реестра установок пакетов расширений.
     packs: packStore,
     eventBus,

@@ -51,6 +51,7 @@ export function stubContextFiles(
     getRoutingInstructions: (): string => '',
     getRules: (): string => '',
     getGatewayInstructions: (): string => '',
+    getMemoryInstructions: (): string => '',
     getSecurityMessage: (): string | null => null,
     getModePrompt: (): string | null => null,
     getPlanModePrompt: (): string | null => null,

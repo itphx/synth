@@ -453,6 +453,14 @@ export class ContextConfig implements ContextFileRepository {
   }
 
   /**
+   * ADR-107: инструкция по работе с памятью (только когда память доступна в
+   * сессии). Файлы: prompts/system/MEMORY.{lang}.md → MEMORY.md (fallback).
+   */
+  getMemoryInstructions(language = 'ru'): string {
+    return this._readPrompt('MEMORY', 'system', language) ?? '';
+  }
+
+  /**
    * Локализованные сообщения безопасности (deny/ask защищённых путей, запрещённых
    * команд). Файлы: prompts/security/{messageId}.{lang}.md → {messageId}.md.
    * Override через {userDataDir}/user/system/security/{messageId}.md и

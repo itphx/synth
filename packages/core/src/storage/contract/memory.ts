@@ -418,6 +418,17 @@ export function describeMemoryIndexRepository(
       expect((await repo.getIndex('index-1'))?.scope).toBe('project');
     });
 
+    it('enabled: false сохраняется, true/undefined — читаются как включённые', async () => {
+      const { repo } = await make();
+      await repo.saveIndex(index('index-off', { enabled: false }));
+      await repo.saveIndex(index('index-on', { enabled: true }));
+      await repo.saveIndex(index('index-legacy'));
+
+      expect((await repo.getIndex('index-off'))?.enabled).toBe(false);
+      expect((await repo.getIndex('index-on'))?.enabled).not.toBe(false);
+      expect((await repo.getIndex('index-legacy'))?.enabled).not.toBe(false);
+    });
+
     it('индексы: порядок «свежие первыми» и пагинация', async () => {
       const { repo } = await make();
       await repo.saveIndex(index('index-old', { createdAt: '2026-01-01T00:00:00.000Z' }));

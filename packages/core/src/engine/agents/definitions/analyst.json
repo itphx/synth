@@ -15,7 +15,9 @@
     "git_read",
     "mcp",
     "runtime",
-    "memory"
+    "memory",
+    "pipeline",
+    "schedule"
   ],
   "icon": "chart-line",
   "color": "--syntax-function",

@@ -26,9 +26,10 @@
  * [docs/PIPELINES.md](../../../../../docs/PIPELINES.md).
  */
 
-import { nowISO } from '@itphx/synth-shared';
+import { nowISO, pluginToolFullName } from '@itphx/synth-shared';
 import type { PipelineSpec } from '@itphx/synth-shared';
 
+import { MEMORY_PLUGIN_NAME } from '../plugins/memory-namespace.js';
 import type {
   PipelineRecord,
   PipelineVersionRecord,
@@ -38,8 +39,17 @@ import type {
 /** Идентификатор встроенного шаблона «Память: консолидация сессии». */
 export const MEMORY_CONSOLIDATION_PIPELINE_ID = 'builtin:memory-consolidation';
 
+/** Идентификатор встроенного шаблона «Память: слияние дублей фактов». */
+export const MEMORY_CONSOLIDATE_FACTS_PIPELINE_ID = 'builtin:memory-consolidate-facts';
+
+/** Идентификатор встроенного шаблона «Память: переиндексация проекта». */
+export const MEMORY_REINDEX_PIPELINE_ID = 'builtin:memory-reindex';
+
 /** Номер версии встроенного шаблона памяти (первая и единственная). */
 export const MEMORY_CONSOLIDATION_PIPELINE_VERSION = 1;
+
+/** Номер версии встроенных шаблонов памяти (все — версия 1). */
+export const MEMORY_BUILTIN_PIPELINE_VERSION = 1;
 
 /** Провенанс встроенных шаблонов: пакет `builtin`, версия `1`. */
 export const BUILTIN_PIPELINE_PROVENANCE = { pack: 'builtin', version: '1' } as const;
@@ -124,6 +134,83 @@ export function buildMemoryConsolidationPipelineSpec(): PipelineSpec {
   };
 }
 
+/**
+ * Полное имя админ-тула плагина памяти в реестре (ADR-090/ADR-107):
+ * имя составляет хост (`plugin_<namespace>_<tool>`), поэтому в шаблоне его
+ * не дублируем строкой.
+ */
+export const MEMORY_CONSOLIDATE_TOOL_NAME = pluginToolFullName(
+  MEMORY_PLUGIN_NAME,
+  'memory_consolidate',
+);
+
+/** Полное имя тула индексов памяти в реестре (`memory_index`). */
+export const MEMORY_INDEX_TOOL_NAME = pluginToolFullName(MEMORY_PLUGIN_NAME, 'memory_index');
+
+/**
+ * Спецификация встроенного шаблона «Память: слияние дублей фактов».
+ *
+ * Один узел вида `tool` — вызов админ-тула плагина памяти `memory_consolidate`
+ * без пробного прогона (`dryRun: false`): находит похожие утверждения и
+ * оставляет по одному. Вход шаблону не нужен (пустая схема).
+ */
+export function buildMemoryConsolidateFactsPipelineSpec(): PipelineSpec {
+  return {
+    id: MEMORY_CONSOLIDATE_FACTS_PIPELINE_ID,
+    name: 'Память: слияние дублей фактов',
+    description:
+      'Находит дубли среди фактов памяти и сливает их (оставляет одно утверждение, остальные помечает заменёнными). ' +
+      'Запуск: вручную (trigger.kind=manual, по умолчанию) или по расписанию (trigger.kind=schedule).',
+    version: MEMORY_BUILTIN_PIPELINE_VERSION,
+    status: 'draft',
+    mode: 'act',
+    io: { input: { type: 'object', properties: {} } },
+    nodes: [
+      {
+        id: 'consolidate-facts',
+        kind: 'tool',
+        title: 'Слияние дублей фактов',
+        tool: MEMORY_CONSOLIDATE_TOOL_NAME,
+        toolArgs: { dryRun: false },
+        timeoutSec: 600,
+      },
+    ],
+    exits: [{ kind: 'none' }],
+  };
+}
+
+/**
+ * Спецификация встроенного шаблона «Память: переиндексация проекта».
+ *
+ * Один узел вида `tool` — `memory_index` с `action: 'rebuild_all'` и
+ * `wait: true` (дождаться завершения сборки в рамках шага). Проект берётся
+ * из контекста прогона (`ctx.projectId`), отдельного входа не нужно.
+ */
+export function buildMemoryReindexPipelineSpec(): PipelineSpec {
+  return {
+    id: MEMORY_REINDEX_PIPELINE_ID,
+    name: 'Память: переиндексация проекта',
+    description:
+      'Пересобирает все индексы памяти проекта (файлы и факты). ' +
+      'Запуск: вручную (trigger.kind=manual, по умолчанию) или по расписанию (trigger.kind=schedule).',
+    version: MEMORY_BUILTIN_PIPELINE_VERSION,
+    status: 'draft',
+    mode: 'act',
+    io: { input: { type: 'object', properties: {} } },
+    nodes: [
+      {
+        id: 'reindex',
+        kind: 'tool',
+        title: 'Переиндексация проекта',
+        tool: MEMORY_INDEX_TOOL_NAME,
+        toolArgs: { action: 'rebuild_all', wait: true },
+        timeoutSec: 900,
+      },
+    ],
+    exits: [{ kind: 'none' }],
+  };
+}
+
 /** Зависимости сидирования встроенных шаблонов. */
 export interface EnsureBuiltinPipelinesDeps {
   /** Порт спецификаций пайплайнов (ADR-096). */
@@ -159,16 +246,32 @@ interface BuiltinTemplate {
   version: number;
 }
 
-/** Список встроенных шаблонов (сейчас — один; список, а не одна запись). */
+/** Список встроенных шаблонов памяти (три; список, а не одна запись). */
 function builtinTemplates(): BuiltinTemplate[] {
-  const draft = buildMemoryConsolidationPipelineSpec();
+  const consolidation = buildMemoryConsolidationPipelineSpec();
+  const consolidateFacts = buildMemoryConsolidateFactsPipelineSpec();
+  const reindex = buildMemoryReindexPipelineSpec();
   return [
     {
       id: MEMORY_CONSOLIDATION_PIPELINE_ID,
-      name: draft.name,
-      description: draft.description ?? '',
-      draft,
+      name: consolidation.name,
+      description: consolidation.description ?? '',
+      draft: consolidation,
       version: MEMORY_CONSOLIDATION_PIPELINE_VERSION,
+    },
+    {
+      id: MEMORY_CONSOLIDATE_FACTS_PIPELINE_ID,
+      name: consolidateFacts.name,
+      description: consolidateFacts.description ?? '',
+      draft: consolidateFacts,
+      version: MEMORY_BUILTIN_PIPELINE_VERSION,
+    },
+    {
+      id: MEMORY_REINDEX_PIPELINE_ID,
+      name: reindex.name,
+      description: reindex.description ?? '',
+      draft: reindex,
+      version: MEMORY_BUILTIN_PIPELINE_VERSION,
     },
   ];
 }

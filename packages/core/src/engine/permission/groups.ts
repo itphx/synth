@@ -37,6 +37,48 @@ const RUNTIME_TOOLS = [
   'project_invariants_write',
 ];
 
+/**
+ * ADR-101: тулы пайплайнов проекта (спецификация, версии, прогоны, шаблоны).
+ *
+ * Отдельные группы read/write — чтобы правило permission-слоя могло разделить
+ * чтение и мутацию (ADR-029). Имена тулов — единственный источник истины для
+ * блокировки в plan-режиме (`isPlanBlockedTool`, `permission/evaluator.ts`).
+ */
+export const PIPELINE_READ_TOOLS = [
+  'pipeline_list',
+  'pipeline_get',
+  'pipeline_run_status',
+  'pipeline_run_list',
+  'pipeline_templates',
+];
+
+export const PIPELINE_WRITE_TOOLS = [
+  'pipeline_save',
+  'pipeline_publish',
+  'pipeline_delete',
+  'pipeline_run',
+  'pipeline_run_resume',
+  'pipeline_run_cancel',
+  'pipeline_instantiate',
+];
+
+/**
+ * ADR-051: тулы расписаний планировщика.
+ *
+ * Фундамент заложен вместе с capability `schedule`; сами тулы — следующий
+ * этап (Stage C), но группа и список имён нужны уже сейчас: правила
+ * permission-слоя и блокировка в plan-режиме не должны «появиться» позже
+ * отдельным изменением.
+ */
+export const SCHEDULE_READ_TOOLS = ['schedule_list', 'schedule_get', 'schedule_jobs'];
+
+export const SCHEDULE_WRITE_TOOLS = ['schedule_save', 'schedule_delete', 'schedule_run'];
+
+/** Все тулы пайплайнов (read + write). */
+export const PIPELINE_TOOLS = [...PIPELINE_READ_TOOLS, ...PIPELINE_WRITE_TOOLS];
+/** Все тулы расписаний (read + write). */
+export const SCHEDULE_TOOLS = [...SCHEDULE_READ_TOOLS, ...SCHEDULE_WRITE_TOOLS];
+
 export const PERMISSION_GROUPS: Record<string, string[]> = {
   read: READ_TOOLS,
   edit: WRITE_TOOLS,
@@ -52,13 +94,26 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   // ADR-107: память — capability тулов плагина памяти; группа пустая (имён
   // встроенных тулов нет), матчится по capability `memory` у плагинного тула.
   memory: [],
+  // ADR-101: пайплайны проекта (спецификация/прогоны/шаблоны). Ключ группы
+  // совпадает со значением capability `pipeline` — поэтому правило
+  // `permission.rules.pipeline` работает и по именам встроенных тулов, и по
+  // capability плагинного тула (как `runtime`/`mcp`).
+  pipeline: PIPELINE_TOOLS,
+  // ADR-051: расписания планировщика (ключ совпадает с capability `schedule`).
+  schedule: SCHEDULE_TOOLS,
   [ToolCapability.FILE_READ]: READ_TOOLS,
   [ToolCapability.FILE_WRITE]: WRITE_TOOLS,
   [ToolCapability.GIT_READ]: GIT_READ_TOOLS,
   [ToolCapability.GIT_WRITE]: GIT_WRITE_TOOLS,
 };
 
-/** Порядок проверки групповых правил (первая сработавшая группа побеждает). */
+/**
+ * Порядок проверки групповых правил (первая сработавшая группа побеждает).
+ *
+ * Группы `pipeline`/`schedule` стоят **в конце**: их наборы имён не
+ * пересекаются с прочими группами, поэтому порядок не меняет разрешение
+ * существующих правил — а новые группы не сдвигают порядок проверки старых.
+ */
 export const PERMISSION_GROUP_ORDER: string[] = [
   'read',
   'edit',
@@ -76,6 +131,8 @@ export const PERMISSION_GROUP_ORDER: string[] = [
   ToolCapability.FILE_WRITE,
   ToolCapability.GIT_READ,
   ToolCapability.GIT_WRITE,
+  'pipeline',
+  'schedule',
 ];
 
 /** Имена параметров тулов, которые являются путями к файлам/директориям. */

@@ -382,6 +382,19 @@ export const memoryApi = {
     )
   },
 
+  /**
+   * PATCH /memory/indexes/:id — включить/выключить участие индекса в recall.
+   *
+   * Общие (`scope: 'instance'`) индексы не переключаются: сервер отвечает
+   * 409 `MEMORY_INDEX_NOT_TOGGLEABLE`.
+   */
+  async setMemoryIndexEnabled(id: string, enabled: boolean): Promise<{ index: MemoryIndex }> {
+    return fetchJSON<{ index: MemoryIndex }>(
+      `${BASE_URL}/memory/indexes/${encodeURIComponent(id)}`,
+      { method: 'PATCH', body: JSON.stringify({ enabled }) },
+    )
+  },
+
   /** DELETE /memory/indexes/:id — удалить индекс (204, без тела). */
   async deleteMemoryIndex(id: string): Promise<void> {
     return fetchJSON<void>(`${BASE_URL}/memory/indexes/${encodeURIComponent(id)}`, {

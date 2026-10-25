@@ -56,6 +56,9 @@ import {
   createRepositoryCredentialSource,
   // ADR-101 (Э5): движок пайплайнов, исполнители шагов, обработчики выходов.
   PipelineEngine,
+  // ADR-101: реестр активных прогонов (soft-lock + отмена) — общий экземпляр
+  // для HTTP-роута пайплайнов и встроенных тулов агента.
+  PipelineRunControl,
   createToolStepExecutor,
   createScriptStepExecutor,
   createHumanStepExecutor,
@@ -75,6 +78,7 @@ import {
   createRemotePluginLoader,
   resolvePluginLayout,
   type BaseProvider,
+  type AutomationRuntime,
   type PipelinePermissionDeps,
   type PipelineRunRecord,
   type PluginEmbedFn,
@@ -190,6 +194,12 @@ export async function createStandaloneDeps(
   const storageDegraded = storageContext.degraded !== undefined;
   await ensureDataDir(dataDir);
 
+  // ADR-101: реестр активных прогонов пайплайнов — **один на процесс**.
+  // Его получают и HTTP-роут пайплайнов, и встроенные тулы агента: поэтому
+  // soft-lock «не запустить второй прогон того же пайплайна» и отмена
+  // идущего прогона работают одинаково для обоих контуров.
+  const pipelineRunControl = new PipelineRunControl();
+
   // ADR-091: отложенное восстановление из бэкапа — офлайн-операция, применяется
   // при старте **до** миграций и до использования стораджей (меняет данные
   // каталога: возврат к снимку). Fail-closed: невалидный запрос останавливает
@@ -241,6 +251,19 @@ export async function createStandaloneDeps(
     // ADR-071 §2.5: единый реестр MCP-серверов (установщик пакета пишет в него).
     mcpRegistry: mcpRegistryStore,
   } = storageContext;
+
+  // ADR-101/ADR-051: рантайм автоматизации для встроенных тулов
+  // (`pipeline_*`/`schedule_*`). Движок пайплайнов и шедулер создаются
+  // **ниже** (после оркестратора), поэтому объект заполняется по мере сборки,
+  // а оркестратор получает late-bound геттер (`engine/tools/automation-runtime.ts`).
+  const automationRuntime: AutomationRuntime = {
+    pipelines: storageContext.projectPipelines,
+    runs: storageContext.pipelineRuns,
+    runControl: pipelineRunControl,
+    templates: pipelineStore,
+    schedules: scheduleStore,
+    jobs: jobStore,
+  };
 
   // Egress: живой резолвер политики (settings.json → config.yaml → дефолт) и
   // журнал внешних запросов. Резолвер читает стор на каждый запрос — без
@@ -773,6 +796,10 @@ export async function createStandaloneDeps(
     // ADR-051: late-bound резолвер активности расписания в сессии (ScheduleStore
     // создаётся ниже) — включает статический блок `Scheduler` в промпт.
     isSchedulerActive: (sid) => scheduleStore.hasEnabledTargetFor(sid),
+    // ADR-101/ADR-051: late-bound рантайм автоматизации для встроенных тулов
+    // (`pipeline_*`/`schedule_*`) — движок пайплайнов и шедулер создаются ниже,
+    // поэтому геттер отдаёт актуальный снимок в момент хода.
+    getAutomationRuntime: () => automationRuntime,
     // «Стоп»: персистентный флаг отмены сессии — прерывает длинный
     // многоитерационный Tool Use на границе итерации (backoff/гонка).
     isCancelRequested: async (sid) =>
@@ -1167,6 +1194,10 @@ export async function createStandaloneDeps(
     workspacesRoot: pipelineWorkspacesRoot,
   });
 
+  // ADR-101/ADR-051: движок пайплайнов появился — отдаём его тулам
+  // `pipeline_*` через рантайм автоматизации (late-bound).
+  automationRuntime.engine = pipelineEngine;
+
   // ADR-101: встроенные шаблоны пайплайнов инстанса (сид при старте).
   // Идемпотентно: существующий шаблон не перезаписывается. Ошибка сидирования
   // **не** роняет старт — только предупреждение в лог. В деградированном
@@ -1244,6 +1275,10 @@ export async function createStandaloneDeps(
     });
   }
 
+  // ADR-101/ADR-051: шедулер появился — отдаём его тулам `schedule_*`
+  // через рантайм автоматизации (late-bound).
+  automationRuntime.scheduler = schedulerService;
+
   return {
     dataDir,
     // ADR-106 Ф3: реестр подтверждений (enforced-режим Authority-слоя).
@@ -1314,6 +1349,9 @@ export async function createStandaloneDeps(
     pipelines: pipelineStore,
     // ADR-101 (Э5): движок пайплайнов (второй движок) — HTTP-роутов нет (Э6).
     pipelineEngine,
+    // ADR-101: реестр активных прогонов — общий для HTTP-роута пайплайнов и
+    // встроенных тулов агента (soft-lock + отмена идущего прогона).
+    pipelineRunControl,
     // ADR-086 §5: порт реестра установок пакетов расширений.
     packs: packStore,
     // ADR-071 §2.5: единый реестр MCP-серверов (установщик пакета пишет в него).
