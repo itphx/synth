@@ -41,7 +41,7 @@ curl -s localhost:4300/metrics | head
 - Prometheus — <http://localhost:9090> (`Status → Targets`: оба job'а
   (`synth-dev-core`, `synth-dev-backend`) `UP`, `Alerts`: правила загружены);
 - Grafana — <http://localhost:3000> (по умолчанию `admin` / `admin`; анонимный
-  просмотр включён, папка **Synth** с тремя дашбордами).
+  просмотр включён, папка **Synth** с четырьмя дашбордами).
 
 Если основной стек ещё не поднимали, сети `synth_default` нет — стенд упадёт с
 `network synth_default not found`. Поднимите основной стек первым либо создайте

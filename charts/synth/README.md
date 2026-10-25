@@ -458,6 +458,7 @@ alerts:
 | `synth-overview.json` | Готовность (`synth_ready`), HTTP RED (RPS по route, доля 5xx, p95), in-flight, uptime/build, RSS/heap/CPU/event loop lag, `{dataDir}`/записи/деградация, сессии/стримы/очередь |
 | `synth-llm.json` | запросы/ошибки/p95 по provider/model, токены по kind, ретраи, стоимость по currency, зеркало decision-метрик |
 | `synth-events-ops.json` | ingest по source/outcome, решения Router по kind, журнал, шедулер (jobs/drift), webhooks, гибрид, remote p95 |
+| `synth-memory.json` | память (ADR-107): факты по статусам, индексы по состояниям, объём корпуса индексов (чанки), сводка (активные факты / готовые индексы / чанки), вспоминания (запросы, попадания p50/p95, длительность p95), память в контексте (инжекты по block/status, средний размер блока) |
 
 Все панели используют переменную `DS_PROMETHEUS` (datasource типа `prometheus`) — при импорте
 выберите свой источник. После выбора datasource доступны переменные **«Окружение»** (`env`) и
