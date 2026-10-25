@@ -13,18 +13,22 @@ import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useProjectsStore } from '@/stores/projectsStore'
+import { usePipelinesStore } from '@/stores/pipelinesStore'
 import { formatDateTime } from '@/lib/formatDate'
 import { formatDuration } from '@/lib/formatStats'
 import { Icon } from '@/components/icon/Icon'
 import { Button } from '@/components/ui/button'
 import { Toggle } from '@/components/ui/Toggle'
 import { FieldTooltip, TextArea, TextField } from '@/components/ui/settings'
-import { AgentSelect, ProjectSelect, SessionSelect } from '@/components/settings/entity-selects'
+import { AgentSelect, EntitySelect, ProjectSelect, SessionSelect } from '@/components/settings/entity-selects'
 import { PanelTab } from './PanelTab'
 
 /** ADR-051/ADR-089: настройка триггера — ровно одно из `cron` / `every`. */
 type TriggerKind = 'cron' | 'every'
 type TargetMode = ScheduleTarget['mode']
+/** ADR-101: цель `pipeline` — проект, пайплайн и payload прогона. */
+type PipelineTarget = Extract<ScheduleTarget, { mode: 'pipeline' }>
 
 /** Интервалы `every` (парсер core: целое число + `s|m|h|d`). */
 const EVERY_OPTIONS = ['30s', '15m', '1h', '24h'] as const
@@ -44,6 +48,15 @@ interface EditorState {
   project: string
   ttl: string
   prompt: string
+  /**
+   * ADR-101: цель `pipeline` редактируется формой: проект-владелец, пайплайн
+   * и payload прогона (текст JSON). Версия спецификации не редактируется
+   * (по умолчанию — последняя опубликованная) и сохраняется при правке.
+   */
+  pipelineProjectId: string
+  pipelineId: string
+  pipelinePayload: string
+  pipelineVersion?: number
 }
 
 const EMPTY_EDITOR: EditorState = {
@@ -58,6 +71,9 @@ const EMPTY_EDITOR: EditorState = {
   project: '',
   ttl: '',
   prompt: '',
+  pipelineProjectId: '',
+  pipelineId: '',
+  pipelinePayload: '',
 }
 
 /** Полная сущность → вход обновления (сохраняет payload/ownerId при toggle). */
@@ -74,6 +90,38 @@ function scheduleToInput(schedule: Schedule): ScheduleInput {
   }
 }
 
+/**
+ * ADR-101: payload цели `pipeline` — JSON-объект (вход прогона).
+ * Пустой текст — «payload не задан»; невалидный JSON или не-объект — ошибка
+ * (массив/примитив отвергаются: сервер ждёт объект).
+ */
+function parsePipelinePayload(
+  text: string,
+): { ok: true; value?: Record<string, unknown> } | { ok: false } {
+  const trimmed = text.trim()
+  if (!trimmed) return { ok: true }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    return { ok: false }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false }
+  return { ok: true, value: parsed as Record<string, unknown> }
+}
+
+/** ADR-101: цель `pipeline` из полей формы (пустые поля не включаются). */
+function buildPipelineTarget(editor: EditorState): PipelineTarget {
+  const payload = parsePipelinePayload(editor.pipelinePayload)
+  return {
+    mode: 'pipeline',
+    projectId: editor.pipelineProjectId.trim(),
+    pipelineId: editor.pipelineId.trim(),
+    ...(editor.pipelineVersion !== undefined ? { version: editor.pipelineVersion } : {}),
+    ...(payload.ok && payload.value ? { payload: payload.value } : {}),
+  }
+}
+
 /** Черновик формы → вход API: пустые строки опускаются. */
 function editorToInput(editor: EditorState): ScheduleInput {
   const target: ScheduleTarget =
@@ -84,7 +132,9 @@ function editorToInput(editor: EditorState): ScheduleInput {
           project: editor.project || undefined,
           ttl: editor.ttl || undefined,
         }
-      : { mode: editor.mode, sessionId: editor.sessionId }
+      : editor.mode === 'pipeline'
+        ? buildPipelineTarget(editor)
+        : { mode: editor.mode, sessionId: editor.sessionId }
   return {
     name: editor.name.trim(),
     enabled: editor.enabled,
@@ -108,6 +158,11 @@ export function SchedulerTab() {
   const setRightPanelTab = useUIStore((s) => s.setRightPanelTab)
 
   const sessions = useSessionsStore((s) => s.sessions)
+  const projects = useProjectsStore((s) => s.projects)
+
+  const pipelinesByProject = usePipelinesStore((s) => s.pipelinesByProject)
+  const loadingProjects = usePipelinesStore((s) => s.loadingProjects)
+  const loadProjectPipelines = usePipelinesStore((s) => s.loadProjectPipelines)
 
   const [schedules, setSchedules] = useState<Schedule[] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -148,6 +203,17 @@ export function SchedulerTab() {
     void useSessionsStore.getState().loadSessions()
   }, [])
 
+  // ADR-101: имена пайплайнов в подписи цели — список пайплайнов проекта
+  // подгружается для расписаний с целью `pipeline`.
+  useEffect(() => {
+    if (!schedules) return
+    for (const schedule of schedules) {
+      if (schedule.target.mode === 'pipeline') {
+        void loadProjectPipelines(schedule.target.projectId)
+      }
+    }
+  }, [schedules, loadProjectPipelines])
+
   /** Общий guard повторных кликов по конкретной сущности (`key`). */
   const runWithPending = async (key: string, fn: () => Promise<void>) => {
     if (pendingKeys.includes(key)) return
@@ -184,6 +250,15 @@ export function SchedulerTab() {
       project: target.mode === 'ephemeral' ? target.project ?? '' : '',
       ttl: target.mode === 'ephemeral' ? target.ttl ?? '' : '',
       prompt: schedule.prompt ?? '',
+      // ADR-101: цель `pipeline` редактируется формой — поля заполняются
+      // из цели; версия спецификации не редактируется и сохраняется.
+      pipelineProjectId: target.mode === 'pipeline' ? target.projectId : '',
+      pipelineId: target.mode === 'pipeline' ? target.pipelineId : '',
+      pipelinePayload:
+        target.mode === 'pipeline' && target.payload
+          ? JSON.stringify(target.payload, null, 2)
+          : '',
+      pipelineVersion: target.mode === 'pipeline' ? target.version : undefined,
     })
   }
 
@@ -199,9 +274,25 @@ export function SchedulerTab() {
       setFormError(t('rightPanel.scheduler.form.nameRequired'))
       return
     }
-    if (editor.mode !== 'ephemeral' && !editor.sessionId) {
+    if (editor.mode !== 'ephemeral' && editor.mode !== 'pipeline' && !editor.sessionId) {
       setFormError(t('rightPanel.scheduler.form.sessionRequired'))
       return
+    }
+    // ADR-101: цель `pipeline` — проект и пайплайн обязательны, payload —
+    // валидный JSON-объект (пусто = «payload не задан»).
+    if (editor.mode === 'pipeline') {
+      if (!editor.pipelineProjectId.trim()) {
+        setFormError(t('rightPanel.scheduler.form.projectRequired'))
+        return
+      }
+      if (!editor.pipelineId.trim()) {
+        setFormError(t('rightPanel.scheduler.form.pipelineRequired'))
+        return
+      }
+      if (!parsePipelinePayload(editor.pipelinePayload).ok) {
+        setFormError(t('rightPanel.scheduler.form.payloadInvalid'))
+        return
+      }
     }
     if (editor.trigger === 'cron' && !editor.cron.trim()) {
       setFormError(t('rightPanel.scheduler.form.cronRequired'))
@@ -316,6 +407,17 @@ export function SchedulerTab() {
       if (target.ttl) parts.push(`${t('rightPanel.scheduler.field.ttl')}: ${target.ttl}`)
       return parts.join(' · ')
     }
+    // ADR-101: цель `pipeline` — прогон пайплайна (сессии у цели нет):
+    // «Прогон пайплайна: <проект> / <пайплайн>» (без имени — id).
+    if (target.mode === 'pipeline') {
+      const projectName =
+        projects.find((project) => project.id === target.projectId)?.name || target.projectId
+      const pipelineName =
+        (pipelinesByProject[target.projectId] ?? []).find(
+          (pipeline) => pipeline.id === target.pipelineId,
+        )?.name || target.pipelineId
+      return `${t('rightPanel.scheduler.target.pipelineRun')}: ${projectName} / ${pipelineName}`
+    }
     const label =
       target.mode === 'queue'
         ? t('rightPanel.scheduler.target.queue')
@@ -325,6 +427,34 @@ export function SchedulerTab() {
 
   const statusLabel = (status: ScheduleRunStatus) =>
     t(`rightPanel.scheduler.status.${status}`)
+
+  /** ADR-101: опции селекта пайплайна — имя + пометка публикации. */
+  const pipelineOptions = useMemo(() => {
+    if (!editor || editor.mode !== 'pipeline') return []
+    return (pipelinesByProject[editor.pipelineProjectId] ?? []).map((pipeline) => ({
+      value: pipeline.id,
+      label: pipeline.publishedVersion
+        ? `${pipeline.name} · ${t('pipelines.publishedVersion', {
+            version: String(pipeline.publishedVersion),
+          })}`
+        : `${pipeline.name} · ${t('pipelines.draftOnly')}`,
+    }))
+  }, [editor, pipelinesByProject, t])
+
+  /** ADR-101: выбранный пайплайн (предупреждение «не опубликован»). */
+  const selectedPipeline = useMemo(() => {
+    if (!editor || editor.mode !== 'pipeline' || !editor.pipelineId) return undefined
+    return (pipelinesByProject[editor.pipelineProjectId] ?? []).find(
+      (pipeline) => pipeline.id === editor.pipelineId,
+    )
+  }, [editor, pipelinesByProject])
+
+  /** ADR-101: идёт ли загрузка пайплайнов выбранного проекта. */
+  const pipelinesLoading = Boolean(
+    editor?.mode === 'pipeline' &&
+      editor.pipelineProjectId &&
+      loadingProjects.has(editor.pipelineProjectId),
+  )
 
   return (
     <PanelTab>
@@ -458,9 +588,77 @@ export function SchedulerTab() {
             <option value="bound">{t('rightPanel.scheduler.target.bound')}</option>
             <option value="ephemeral">{t('rightPanel.scheduler.target.ephemeral')}</option>
             <option value="queue">{t('rightPanel.scheduler.target.queue')}</option>
+            {/* ADR-101: цель `pipeline` — прямой запуск прогона пайплайна. */}
+            <option value="pipeline">{t('rightPanel.scheduler.target.pipeline')}</option>
           </NativeSelect>
 
-          {editor.mode !== 'ephemeral' ? (
+          {editor.mode === 'pipeline' ? (
+            <>
+              <ProjectSelect
+                label={t('rightPanel.scheduler.field.project')}
+                tooltip={t('rightPanel.scheduler.field.pipelineProjectTooltip')}
+                value={editor.pipelineProjectId}
+                onChange={(value) => {
+                  setEditor((prev) =>
+                    prev ? { ...prev, pipelineProjectId: value, pipelineId: '' } : prev,
+                  )
+                  if (value) void loadProjectPipelines(value, { force: true })
+                }}
+                testId="scheduler-pipeline-project"
+              />
+
+              <EntitySelect
+                label={t('rightPanel.scheduler.field.pipeline')}
+                tooltip={t('rightPanel.scheduler.field.pipelineTooltip')}
+                value={editor.pipelineId}
+                onChange={(value) =>
+                  setEditor((prev) => (prev ? { ...prev, pipelineId: value } : prev))
+                }
+                items={pipelineOptions}
+                includeEmpty
+                emptyLabel={t('rightPanel.scheduler.selectPipeline')}
+                testId="scheduler-pipeline"
+              />
+
+              {editor.pipelineProjectId && pipelinesLoading && (
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-testid="scheduler-pipeline-loading"
+                >
+                  {t('rightPanel.scheduler.pipelineLoading')}
+                </p>
+              )}
+
+              {editor.pipelineProjectId && !pipelinesLoading && pipelineOptions.length === 0 && (
+                <p className="text-xs text-muted-foreground" data-testid="scheduler-pipeline-none">
+                  {t('rightPanel.scheduler.pipelineNone')}
+                </p>
+              )}
+
+              {selectedPipeline && !selectedPipeline.publishedVersion && (
+                <div
+                  className="rounded-lg border border-status-warning/40 bg-status-warning/10 p-3 text-xs text-status-warning"
+                  data-testid="scheduler-pipeline-warning"
+                >
+                  {t('rightPanel.scheduler.pipelineNotPublished')}
+                </div>
+              )}
+
+              <TextArea
+                label={t('rightPanel.scheduler.field.payload')}
+                tooltip={t('rightPanel.scheduler.field.payloadTooltip')}
+                description={t('rightPanel.scheduler.field.payloadHint')}
+                value={editor.pipelinePayload}
+                onChange={(e) =>
+                  setEditor((prev) => (prev ? { ...prev, pipelinePayload: e.target.value } : prev))
+                }
+                rows={3}
+                mono
+                id="scheduler-payload"
+                data-testid="scheduler-payload"
+              />
+            </>
+          ) : editor.mode !== 'ephemeral' ? (
             <SessionSelect
               label={t('rightPanel.scheduler.field.session')}
               tooltip={t('rightPanel.scheduler.field.sessionTooltip')}

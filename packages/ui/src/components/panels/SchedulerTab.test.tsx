@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   getSessions: vi.fn(),
   getAgents: vi.fn(),
   getProjects: vi.fn(),
+  getProjectPipelines: vi.fn(),
   notify: vi.fn(),
   confirm: vi.fn(),
 }))
@@ -51,6 +52,7 @@ import { SchedulerTab } from './SchedulerTab'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
+import { usePipelinesStore } from '@/stores/pipelinesStore'
 import { useUIStore } from '@/stores/useUIStore'
 import type { Schedule, ScheduleJob } from '@itphx/synth-shared/types'
 
@@ -88,6 +90,23 @@ async function waitFor(assertion: () => void, timeout = 5000): Promise<void> {
 const SESSION = { id: 's1', name: 'Session One', settings: {} }
 const AGENT = { id: 'assistant', display_name: 'Assistant', enabled: true }
 const PROJECT = { id: 'p1', name: 'Project One' }
+const PROJECT_TWO = { id: 'p2', name: 'Project Two' }
+
+/** Пайплайн проекта (ADR-101) — краткое представление из `GET /projects/:id/pipelines`. */
+function projectPipeline(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'pl_1',
+    name: 'Digest',
+    scope: 'project',
+    projectId: 'p1',
+    draftVersion: 2,
+    publishedVersion: 2,
+    hasDraft: false,
+    createdAt: '2026-10-01T00:00:00.000Z',
+    updatedAt: '2026-10-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
 
 function schedule(overrides: Partial<Schedule> = {}): Schedule {
   return {
@@ -126,6 +145,17 @@ async function selectOption(trigger: HTMLElement | null, label: string): Promise
   expect(option, `option "${label}"`).toBeTruthy()
   await act(async () => {
     option!.click()
+  })
+}
+
+/** Выбирает опцию нативного `<select>` по значению (как это делает React). */
+async function setNativeSelect(el: HTMLSelectElement | null, value: string): Promise<void> {
+  expect(el, 'нативный селект не найден').toBeTruthy()
+  const select = el as HTMLSelectElement
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
+    setter.call(select, value)
+    select.dispatchEvent(new Event('change', { bubbles: true }))
   })
 }
 
@@ -174,11 +204,19 @@ beforeEach(() => {
   mocks.getSessions.mockResolvedValue([SESSION])
   mocks.getAgents.mockResolvedValue({ agents: [AGENT], default_agent: 'assistant' })
   mocks.getProjects.mockResolvedValue([PROJECT])
+  mocks.getProjectPipelines.mockResolvedValue([projectPipeline()])
   mocks.confirm.mockResolvedValue(true)
 
   useSessionsStore.setState({ sessions: [SESSION] as never })
   useAgentsStore.setState({ agents: [AGENT] as never })
   useProjectsStore.setState({ projects: [PROJECT] as never })
+  // Стор пайплайнов — синглтон модуля: сбрасываем кэш между тестами.
+  usePipelinesStore.setState({
+    pipelinesByProject: {},
+    loadedProjects: new Set<string>(),
+    loadingProjects: new Set<string>(),
+    error: null,
+  })
 })
 
 afterEach(async () => {
@@ -310,6 +348,213 @@ describe('SchedulerTab — создание и редактирование', ()
     expect(container.textContent).toContain('invalid cron')
     expect(mocks.notify).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'error' }),
+    )
+  })
+})
+
+describe('SchedulerTab — цель `pipeline` (ADR-101)', () => {
+  /** Открывает форму создания и переключает цель на `pipeline`. */
+  async function openPipelineEditor(container: HTMLElement): Promise<void> {
+    await click(container.querySelector('[data-testid="scheduler-add"]'))
+    await setNativeSelect(
+      container.querySelector('[data-testid="scheduler-target"]') as HTMLSelectElement,
+      'pipeline',
+    )
+    await flush()
+  }
+
+  /** Заполняет имя расписания. */
+  async function setName(container: HTMLElement, value: string): Promise<void> {
+    const name = container.querySelector('[data-testid="scheduler-name"]') as HTMLInputElement
+    await act(async () => {
+      setInputValue(name, value)
+    })
+  }
+
+  it('создание с целью `pipeline` шлёт projectId/pipelineId/payload', async () => {
+    const container = await renderTab()
+    await openPipelineEditor(container)
+    await setName(container, 'Nightly digest')
+
+    await selectOption(
+      container.querySelector('[data-testid="scheduler-pipeline-project"]'),
+      'Project One',
+    )
+    await flush()
+    await selectOption(container.querySelector('[data-testid="scheduler-pipeline"]'), 'Digest')
+
+    const payload = container.querySelector('[data-testid="scheduler-payload"]') as HTMLTextAreaElement
+    await act(async () => {
+      setInputValue(payload, '{"sessionId":"ses_1"}')
+    })
+
+    await click(container.querySelector('[data-testid="scheduler-save"]'))
+    await flush()
+
+    expect(mocks.createSchedule).toHaveBeenCalledTimes(1)
+    expect(mocks.createSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Nightly digest',
+        target: {
+          mode: 'pipeline',
+          projectId: 'p1',
+          pipelineId: 'pl_1',
+          payload: { sessionId: 'ses_1' },
+        },
+      }),
+    )
+  })
+
+  it('пустой pipelineId → ошибка, запрос не уходит', async () => {
+    const container = await renderTab()
+    await openPipelineEditor(container)
+    await setName(container, 'No pipeline')
+
+    await selectOption(
+      container.querySelector('[data-testid="scheduler-pipeline-project"]'),
+      'Project One',
+    )
+    await flush()
+    await click(container.querySelector('[data-testid="scheduler-save"]'))
+    await flush()
+
+    expect(mocks.createSchedule).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Select a pipeline')
+  })
+
+  it('невалидный JSON в payload → ошибка, запрос не уходит', async () => {
+    const container = await renderTab()
+    await openPipelineEditor(container)
+    await setName(container, 'Broken payload')
+
+    await selectOption(
+      container.querySelector('[data-testid="scheduler-pipeline-project"]'),
+      'Project One',
+    )
+    await flush()
+    await selectOption(container.querySelector('[data-testid="scheduler-pipeline"]'), 'Digest')
+
+    const payload = container.querySelector('[data-testid="scheduler-payload"]') as HTMLTextAreaElement
+    await act(async () => {
+      setInputValue(payload, '{oops')
+    })
+    await click(container.querySelector('[data-testid="scheduler-save"]'))
+    await flush()
+
+    expect(mocks.createSchedule).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Payload must be a JSON object')
+  })
+
+  it('подпись цели показывает имя проекта и пайплайна', async () => {
+    mocks.getSchedules.mockResolvedValue({
+      schedules: [
+        schedule({ target: { mode: 'pipeline', projectId: 'p1', pipelineId: 'pl_1' } }),
+      ],
+    })
+    const container = await renderTab()
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="scheduler-item-sch_1"]')?.textContent,
+      ).toContain('Pipeline run: Project One / Digest')
+    })
+  })
+
+  it('подпись цели без имени пайплайна показывает id', async () => {
+    mocks.getSchedules.mockResolvedValue({
+      schedules: [
+        schedule({ target: { mode: 'pipeline', projectId: 'p1', pipelineId: 'pl_x' } }),
+      ],
+    })
+    mocks.getProjectPipelines.mockResolvedValue([])
+    const container = await renderTab()
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="scheduler-item-sch_1"]')?.textContent,
+      ).toContain('Pipeline run: Project One / pl_x')
+    })
+  })
+
+  it('при смене проекта список пайплайнов перезапрашивается', async () => {
+    mocks.getProjects.mockResolvedValue([PROJECT, PROJECT_TWO])
+    const container = await renderTab()
+    await openPipelineEditor(container)
+    await waitFor(() => {
+      expect(useProjectsStore.getState().projects).toHaveLength(2)
+    })
+
+    await selectOption(
+      container.querySelector('[data-testid="scheduler-pipeline-project"]'),
+      'Project One',
+    )
+    await flush()
+    expect(mocks.getProjectPipelines).toHaveBeenCalledWith('p1')
+
+    await selectOption(
+      container.querySelector('[data-testid="scheduler-pipeline-project"]'),
+      'Project Two',
+    )
+    await flush()
+    expect(mocks.getProjectPipelines).toHaveBeenCalledWith('p2')
+  })
+
+  it('неопубликованный пайплайн показывает предупреждение, но сохраняется', async () => {
+    mocks.getProjectPipelines.mockResolvedValue([
+      projectPipeline({ publishedVersion: undefined, hasDraft: true }),
+    ])
+    const container = await renderTab()
+    await openPipelineEditor(container)
+    await setName(container, 'Draft pipeline')
+
+    await selectOption(
+      container.querySelector('[data-testid="scheduler-pipeline-project"]'),
+      'Project One',
+    )
+    await flush()
+    await selectOption(container.querySelector('[data-testid="scheduler-pipeline"]'), 'Digest')
+
+    expect(container.querySelector('[data-testid="scheduler-pipeline-warning"]')).not.toBeNull()
+    expect(container.textContent).toContain('not published')
+
+    await click(container.querySelector('[data-testid="scheduler-save"]'))
+    await flush()
+    expect(mocks.createSchedule).toHaveBeenCalledTimes(1)
+  })
+
+  it('правка расписания с целью `pipeline` сохраняет цель (в т.ч. версию)', async () => {
+    mocks.getSchedules.mockResolvedValue({
+      schedules: [
+        schedule({
+          target: {
+            mode: 'pipeline',
+            projectId: 'p1',
+            pipelineId: 'pl_1',
+            version: 2,
+            payload: { sessionId: 'ses_1' },
+          },
+        }),
+      ],
+    })
+    const container = await renderTab()
+    await click(container.querySelector('[data-testid="scheduler-edit-sch_1"]'))
+    await setName(container, 'Renamed digest')
+
+    await click(container.querySelector('[data-testid="scheduler-save"]'))
+    await flush()
+
+    expect(mocks.updateSchedule).toHaveBeenCalledWith(
+      'sch_1',
+      expect.objectContaining({
+        name: 'Renamed digest',
+        target: {
+          mode: 'pipeline',
+          projectId: 'p1',
+          pipelineId: 'pl_1',
+          version: 2,
+          payload: { sessionId: 'ses_1' },
+        },
+      }),
     )
   })
 })
