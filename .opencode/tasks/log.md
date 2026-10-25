@@ -1161,3 +1161,12 @@
 - **Модели Ollama** (owu/omn/localhost): `nomic-embed-text:latest` 768/~0.1–2 c; `nomic-embed-text-v2-moe:latest` 768/~6 c; `qwen3-embedding:latest` 4096/17–21 c. Рекомендация — nomic (дефолт), v2-moe — качество при той же размерности, qwen3 — дорого (×5.3 объёма векторов).
 - **Документация:** MEMORY §2.4/§10.1, CONFIGURATION (RU/EN), API_V2 §5.38 (RU/EN), AGENTS (корень/core/ui); портал `synth-docs` — новая страница «Память агентов», schedule pipeline, CLI, mkdocs --strict.
 - **Приёмка:** build/typecheck 9/9, lint 0 errors, **9878 тестов**, adr-check 98/0, docs-link 923/0.
+
+## 2026-10-25 — память: контекст, recall-метрики, вкладка, дашборд
+
+- **Контекст:** `PromptMeta.memory` (блоки facts/recall последнего хода) + метрики `synth_memory_context_injected_total{block,status}` и `synth_memory_context_chars{block}` (ядро, по манифесту).
+- **Recall:** `facade.memoryTelemetry` (ADR-107) — плагин сообщает recall/`memory_search`; ядро ведёт `synth_memory_recall_queries_total{kind,outcome}`, `_recall_hits`, `_recall_duration_seconds`.
+- **API:** `GET /api/v2/sessions/:id/memory` — агрегаты без текстов (lastContext, facts.active, indexes по scope, readiness); доступ — чтение сессии; матрица IDOR обновлена.
+- **UI:** вкладка «Память» (ready/degraded/unavailable, блоки контекста, факты/индексы, ADMIN → настройки).
+- **Дашборд:** `synth-memory.json` — 9 панелей (gauge + recall + контекст).
+- **Приёмка:** build/typecheck 9/9, lint 0 errors, **9920 тестов**, adr-check 98/0, docs-link 924/0; dev: эндпоинт отвечает, плагин safe/active.
