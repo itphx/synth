@@ -1477,6 +1477,26 @@ synth memory rebuild <indexId> --wait --timeout 600
 synth memory drop <indexId> --yes
 ```
 
+**Область индекса.** У индекса есть область видимости: `project` (по умолчанию — виден только своему
+проекту) и `instance` (общий корпус инстанса). Флаг `--scope project|instance` есть у `index` и
+`list`; у `list` это фильтр выборки, в таблице — колонка `SCOPE`.
+
+```bash
+# Общий индекс инстанса по фактам памяти — проект не нужен
+synth memory index --scope instance --source facts --name facts --wait
+
+# Общий индекс инстанса по файлам — projectId = источник корпуса (чей workspace)
+synth memory index <projectId> --scope instance --name workspace --wait
+
+# Только общие индексы в списке
+synth memory list --scope instance
+```
+
+⚠️ **Инстансный индекс создаётся только ADMIN** — через портал (UI) или CLI с ключом роли ADMIN
+(в managed — `ADMIN`; в standalone-core — локальный владелец). Пользовательский ключ получит отказ
+на границе, а не «тихий» проектный индекс. Значение `--scope` и обязательность `projectId`
+проверяются локально: неверное значение — `VALIDATION_ERROR` и код выхода 1 (запрос не уходит).
+
 **Подключение.** Адрес: `--url` → `remote.backendUrl` (если `remote.enabled`) →
 `http://127.0.0.1:<port>`; ключ: `--token` → `SYNTH_API_KEY` → `core.apiKey` → файл
 `{dataDir}/secrets/api-key`. Пустой ключ — понятная ошибка «не задан API-ключ» (код выхода 1), а не
@@ -1618,6 +1638,11 @@ curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
 
 ## История
 
+- 2026-10-25 — в runbook «Память: индексы и факты (`synth memory`)» добавлена **область индекса**:
+  `--scope project|instance` у `index`/`list` (у `list` — фильтр и колонка `SCOPE` в таблице),
+  инстансный индекс по фактам создаётся без проекта, а по файлам — `projectId` = источник корпуса;
+  инстансный индекс создаётся только ADMIN (портал или CLI с ADMIN-ключом). Подробности —
+  [MEMORY.md](./MEMORY.md) §4.4.
 - 2026-10-25 — добавлен раздел «Память: индексы и факты (`synth memory`)» (ADR-107): CLI-клиент
   HTTP API v2 портала памяти — `status`/`list`/`index`/`rebuild`/`drop`, резолвинг подключения
   (`--url`/`--token` → env → `core.apiKey` → файл `{dataDir}/secrets/api-key`), асинхронная сборка

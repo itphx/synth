@@ -195,10 +195,49 @@ describe('synth memory list', () => {
     expect(result.out).toContain('docs');
     expect(result.out).toContain('Всего: 1');
   });
+
+  it('--scope instance → фильтр области уходит в query, в таблице видна scope', async () => {
+    const result = await runMemory(['list', '--scope', 'instance'], {
+      responders: [
+        () =>
+          json(200, {
+            items: [
+              {
+                id: 'idx_2',
+                name: 'facts',
+                scope: 'instance',
+                source: { kind: 'facts' },
+                state: 'ready',
+                generation: 1,
+                stats: { chunks: 3 },
+              },
+            ],
+            total: 1,
+          }),
+      ],
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.calls[0]?.url).toBe(
+      'http://127.0.0.1:5000/api/v2/memory/indexes?scope=instance',
+    );
+    // Колонка области видна и в шапке, и в строке индекса.
+    expect(result.out).toMatch(/SCOPE/i);
+    expect(result.out).toContain('instance');
+  });
+
+  it('недопустимый --scope → код 1 (VALIDATION_ERROR), запрос не отправляется', async () => {
+    const result = await runMemory(['list', '--scope', 'global'], { responders: [] });
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('VALIDATION_ERROR');
+    expect(result.err).toContain('project | instance');
+    expect(result.calls).toHaveLength(0);
+  });
 });
 
 describe('synth memory index', () => {
-  it('создание индекса: тело {name, source:{kind,filter}, projectId}, печать id', async () => {
+  it('создание индекса: тело {name, source:{kind,filter}, scope, projectId}, печать id', async () => {
     const result = await runMemory(
       ['index', 'p1', '--name', 'docs', '--source', 'files', '--filter', '**/*.md'],
       {
@@ -218,10 +257,81 @@ describe('synth memory index', () => {
     expect(result.calls[0]?.body).toEqual({
       name: 'docs',
       source: { kind: 'files', filter: '**/*.md' },
+      scope: 'project',
       projectId: 'p1',
     });
     expect(result.out).toContain('idx_1');
     expect(result.out).toContain('building');
+  });
+
+  it('--scope instance --source facts без projectId → тело без projectId', async () => {
+    const result = await runMemory(
+      ['index', '--scope', 'instance', '--source', 'facts', '--name', 'facts'],
+      {
+        responders: [() => json(202, { index: { id: 'idx_3', state: 'building' } })],
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.calls[0]?.method).toBe('POST');
+    expect(result.calls[0]?.body).toEqual({
+      name: 'facts',
+      source: { kind: 'facts' },
+      scope: 'instance',
+    });
+    expect(result.calls[0]?.body).not.toHaveProperty('projectId');
+  });
+
+  it('--scope instance --source facts с projectId → projectId в тело не уходит', async () => {
+    const result = await runMemory(['index', 'p1', '--scope', 'instance', '--source', 'facts'], {
+      responders: [() => json(202, { index: { id: 'idx_3', state: 'building' } })],
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.calls[0]?.body).toEqual({
+      source: { kind: 'facts' },
+      scope: 'instance',
+    });
+  });
+
+  it('--scope instance (files) → projectId обязателен и уходит в тело как источник корпуса', async () => {
+    const result = await runMemory(['index', 'p1', '--scope', 'instance'], {
+      responders: [() => json(202, { index: { id: 'idx_4', state: 'building' } })],
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.calls[0]?.body).toEqual({
+      source: { kind: 'files' },
+      scope: 'instance',
+      projectId: 'p1',
+    });
+  });
+
+  it('--scope project без projectId → код 1, запрос не отправляется', async () => {
+    const result = await runMemory(['index', '--scope', 'project'], { responders: [] });
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('VALIDATION_ERROR');
+    expect(result.err).toContain('projectId');
+    expect(result.calls).toHaveLength(0);
+  });
+
+  it('--scope instance без projectId (источник files) → код 1, запрос не отправляется', async () => {
+    const result = await runMemory(['index', '--scope', 'instance'], { responders: [] });
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('VALIDATION_ERROR');
+    expect(result.err).toContain('projectId');
+    expect(result.calls).toHaveLength(0);
+  });
+
+  it('недопустимый --scope → код 1 (VALIDATION_ERROR), запрос не отправляется', async () => {
+    const result = await runMemory(['index', 'p1', '--scope', 'global'], { responders: [] });
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('VALIDATION_ERROR');
+    expect(result.err).toContain('project | instance');
+    expect(result.calls).toHaveLength(0);
   });
 
   it('--wait: опрос состояния building → ready, не менее двух обращений', async () => {

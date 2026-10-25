@@ -26,6 +26,14 @@
  * токен, отказ без `--yes`, таймаут ожидания). Ошибки — в `stderr`, результат —
  * в `stdout`. Код выхода ставится через `process.exitCode` (не `process.exit`).
  *
+ * **Область индекса (`--scope`).** У индекса есть область видимости
+ * (`project`/`instance`, порт `MemoryIndexRepository`): `project` — индекс
+ * виден только своему проекту, `instance` — общий корпус инстанса. Для
+ * `instance` позиционный `projectId` — **источник корпуса** (чей workspace
+ * сканировать при `--source files`); при `--source facts` он не нужен и в
+ * тело не уходит. Значение флага проверяется локально (`VALIDATION_ERROR`),
+ * чтобы не получать 400 от сервера.
+ *
  * **Транспорт.** `deps.fetchImpl ?? fetch` — в CLI это `egressFetch`
  * (ADR-099: единое доверие TLS/CA и прокси для исходящих соединений); в
  * тестах — подмена без сети.
@@ -81,6 +89,18 @@ const DEFAULT_POLL_INTERVAL_MS = 1000;
 const MEMORY_SOURCE_KINDS = ['files', 'facts'] as const;
 
 /**
+ * Области видимости индекса памяти (как в порте `MemoryIndexRepository`).
+ *
+ * `project` — индекс виден только своему проекту; `instance` — общий корпус
+ * инстанса (например, индекс по фактам памяти или по workspace, не
+ * привязанному к проекту).
+ */
+const MEMORY_INDEX_SCOPES = ['project', 'instance'] as const;
+
+/** Область видимости индекса памяти. */
+type MemoryIndexScope = (typeof MEMORY_INDEX_SCOPES)[number];
+
+/**
  * Ошибка CLI: машинный код + текст.
  *
  * Для HTTP-ошибок код берётся из тела (`{error:{code,message}}`), для
@@ -116,6 +136,8 @@ interface MemoryIndexRow {
   id?: string;
   name?: string;
   projectId?: string;
+  /** Область видимости индекса (`project`/`instance`). */
+  scope?: string;
   source?: { kind?: string; filter?: string };
   state?: string;
   generation?: number;
@@ -252,6 +274,28 @@ function indexChunks(row: MemoryIndexRow): number {
   return num(row.stats?.chunks);
 }
 
+/**
+ * Область видимости индекса из флага `--scope` (валидация локальная).
+ *
+ * Пустое значение — `fallback` (для `index` — `project`, для `list` — фильтр
+ * не задан). Недопустимое значение — `VALIDATION_ERROR`: локальная ошибка
+ * понятнее, чем 400 от сервера.
+ */
+function parseIndexScope(
+  raw: unknown,
+  fallback: MemoryIndexScope | undefined,
+): MemoryIndexScope | undefined {
+  const value = str(raw).trim();
+  if (!value) return fallback;
+  if (!MEMORY_INDEX_SCOPES.includes(value as MemoryIndexScope)) {
+    throw new MemoryCliError(
+      'VALIDATION_ERROR',
+      `--scope: ожидается ${MEMORY_INDEX_SCOPES.join(' | ')}, получено «${value}»`,
+    );
+  }
+  return value as MemoryIndexScope;
+}
+
 /** Человекочитаемая строка таблицы индексов. */
 function formatIndexRow(row: MemoryIndexRow): string {
   const source = str(row.source?.kind) || '—';
@@ -259,6 +303,7 @@ function formatIndexRow(row: MemoryIndexRow): string {
   return [
     str(row.id).padEnd(38),
     str(row.name).padEnd(20),
+    (str(row.scope) || '—').padEnd(8),
     str(row.projectId).padEnd(20),
     (filter ? `${source}:${filter}` : source).padEnd(24),
     indexState(row).padEnd(10),
@@ -424,13 +469,17 @@ function createStatusCommand(deps: MemoryCliDeps): Command {
   });
 }
 
-/** `synth memory list [--project <id>] [--state <state>] [--json]` — индексы. */
+/** `synth memory list [--project <id>] [--state <state>] [--scope <scope>] [--json]` — индексы. */
 function createListCommand(deps: MemoryCliDeps): Command {
   const cmd = new Command('list').description('Список индексов памяти');
   addCommonOptions(
     cmd
       .option('--project <id>', 'только индексы проекта')
       .option('--state <state>', 'фильтр по состоянию: building | ready | stale | failed | all')
+      .option(
+        '--scope <scope>',
+        `фильтр по области индекса: ${MEMORY_INDEX_SCOPES.join(' | ')}`,
+      )
       .option('--json', 'машиночитаемый вывод (JSON)'),
   );
   return cmd.action(async (options: Record<string, unknown>) => {
@@ -439,9 +488,11 @@ function createListCommand(deps: MemoryCliDeps): Command {
       const query = new URLSearchParams();
       const projectId = str(options.project).trim();
       const state = str(options.state).trim();
+      const scope = parseIndexScope(options.scope, undefined);
       if (projectId) query.set('projectId', projectId);
       // `all` — не состояние индекса, а «без фильтра»: сервер отверг бы его 400.
       if (state && state !== 'all') query.set('state', state);
+      if (scope) query.set('scope', scope);
       const suffix = query.toString() ? `?${query.toString()}` : '';
       const body = await client.get(`/memory/indexes${suffix}`);
       if (options.json === true) {
@@ -457,6 +508,7 @@ function createListCommand(deps: MemoryCliDeps): Command {
         [
           'ID'.padEnd(38),
           'ИМЯ'.padEnd(20),
+          'SCOPE'.padEnd(8),
           'ПРОЕКТ'.padEnd(20),
           'ИСТОЧНИК'.padEnd(24),
           'СОСТОЯНИЕ'.padEnd(10),
@@ -473,22 +525,30 @@ function createListCommand(deps: MemoryCliDeps): Command {
   });
 }
 
-/** `synth memory index <projectId> …` — поставить сборку индекса (202). */
+/** `synth memory index [projectId] …` — поставить сборку индекса (202). */
 function createIndexCommand(deps: MemoryCliDeps): Command {
   const cmd = new Command('index').description(
-    'Создать индекс памяти для проекта (сборка идёт в фоне; --wait — дождаться готовности)',
+    'Создать индекс памяти (--scope project — индекс проекта, instance — общий индекс инстанса; ' +
+      'сборка идёт в фоне; --wait — дождаться готовности)',
   );
-  cmd.argument('<projectId>', 'ID проекта');
+  cmd.argument(
+    '[projectId]',
+    'ID проекта (обязателен, кроме --scope instance --source facts)',
+  );
   addCommonOptions(
     cmd
       .option('--name <name>', 'имя индекса')
       .option('--source <kind>', `источник корпуса: ${MEMORY_SOURCE_KINDS.join(' | ')} (по умолчанию — files)`)
+      .option(
+        '--scope <scope>',
+        `область индекса: ${MEMORY_INDEX_SCOPES.join(' | ')} (по умолчанию — project)`,
+      )
       .option('--filter <glob>', 'фильтр источника (glob для файлов)')
       .option('--wait', 'дождаться готовности индекса (опрос состояния)')
       .option('--timeout <sec>', `таймаут ожидания, с (по умолчанию — ${DEFAULT_WAIT_TIMEOUT_SEC})`)
       .option('--json', 'машиночитаемый вывод (JSON)'),
   );
-  return cmd.action(async (projectId: string, options: Record<string, unknown>) => {
+  return cmd.action(async (projectId: string | undefined, options: Record<string, unknown>) => {
     const out = deps.stdout ?? ((line: string) => console.log(line));
     await run(deps, options, async (client) => {
       const kind = str(options.source).trim() || 'files';
@@ -498,12 +558,27 @@ function createIndexCommand(deps: MemoryCliDeps): Command {
           `--source: ожидается ${MEMORY_SOURCE_KINDS.join(' | ')}, получено «${kind}»`,
         );
       }
+      const scope = parseIndexScope(options.scope, 'project') ?? 'project';
+      const project = str(projectId).trim();
+      // `instance` + `facts` — общий индекс по фактам памяти: проект не нужен,
+      // и в тело он не уходит (сервер для facts его игнорирует).
+      const instanceFacts = scope === 'instance' && kind === 'facts';
+      if (!instanceFacts && !project) {
+        throw new MemoryCliError(
+          'VALIDATION_ERROR',
+          scope === 'instance'
+            ? `--scope instance --source ${kind}: требуется projectId — он источник корпуса ` +
+              '(workspace проекта)'
+            : '--scope project: требуется projectId — индекс виден только своему проекту',
+        );
+      }
       const filter = str(options.filter).trim();
       const name = str(options.name).trim();
       const body = {
         ...(name ? { name } : {}),
         source: { kind, ...(filter ? { filter } : {}) },
-        projectId,
+        scope,
+        ...(project && !instanceFacts ? { projectId: project } : {}),
       };
       const created = (await client.post('/memory/indexes', body)) as {
         index?: MemoryIndexRow;

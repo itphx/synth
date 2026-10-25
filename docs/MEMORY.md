@@ -228,15 +228,30 @@ namespace плагина (`plugin:synth-plugin-memory`) подставляет �
 
 ```bash
 synth memory status  [--json]
-synth memory list    [--project <id>] [--state <state>] [--json]
-synth memory index   <projectId> [--name <name>] [--source files|facts] [--filter <glob>] \
-                     [--wait] [--timeout <sec>] [--json]
+synth memory list    [--project <id>] [--state <state>] [--scope project|instance] [--json]
+synth memory index   [projectId] [--name <name>] [--source files|facts] [--scope project|instance] \
+                     [--filter <glob>] [--wait] [--timeout <sec>] [--json]
 synth memory rebuild <indexId> [--wait] [--timeout <sec>] [--json]
 synth memory drop    <indexId> [--yes]
 ```
 
 Общие опции (на каждой подкоманде): `--url <base>`, `--token <key>`, `--config <path>`,
 `--data-dir <dir>`.
+
+**Область индекса (`--scope`).** У индекса есть область видимости: `project` (по умолчанию) — индекс
+виден только своему проекту; `instance` — общий корпус инстанса (его видят все). Модель области,
+порты и портал — §2 и §4; здесь только работа CLI:
+
+| Случай | `projectId` | Что уходит в тело `POST /memory/indexes` |
+|---|---|---|
+| `--scope project` (дефолт), любой `--source` | **обязателен** — проект-владелец индекса | `{name?, source:{kind,filter?}, scope:'project', projectId}` |
+| `--scope instance --source files` (дефолт `--source`) | **обязателен** — это *источник корпуса*: чей workspace сканировать | `{name?, source:{kind,filter?}, scope:'instance', projectId}` |
+| `--scope instance --source facts` | **не нужен** — общий индекс по фактам памяти; если `projectId` указан, в тело он **не** уходит (сервер для `facts` его игнорирует) | `{name?, source:{kind:'facts'}, scope:'instance'}` |
+
+Значение `--scope` проверяется **локально**: недопустимое — `VALIDATION_ERROR` и код выхода 1
+(лучше, чем 400 от сервера); отсутствие обязательного `projectId` — тоже локальный отказ, запрос не
+отправляется. `synth memory list --scope project|instance` фильтрует выборку (query-параметр
+`scope`), а в таблице индексов есть колонка `SCOPE` (`project`/`instance`).
 
 **Подключение.** Адрес: `--url` → `remote.backendUrl` (если `remote.enabled`) →
 `http://127.0.0.1:<port>` (порт — `SYNTH_PORT` → `core.port` → 5000). Ключ: `--token` →
@@ -251,19 +266,26 @@ synth memory drop    <indexId> [--yes]
 
 **Коды выхода.** `0` — операция выполнена; `1` — отказ: HTTP-ошибка (в `stderr` — код и текст из
 тела `{error:{code,message}}`), сетевая ошибка, отсутствующий токен, `drop` без `--yes`, таймаут
-ожидания.
+ожидания, неверные `--scope`/`--source`/отсутствующий `projectId`.
 
 ```bash
 # Статус: готовность, провайдер, факты и индексы по состояниям
 synth memory status
 synth memory status --json
 
-# Список индексов (фильтры — проект и состояние)
+# Список индексов (фильтры — проект, состояние и область)
 synth memory list --project prj_42
 synth memory list --state stale --json
+synth memory list --scope instance
 
-# Поставить сборку индекса и дождаться готовности
+# Проектный индекс (область по умолчанию) — виден только проекту
 synth memory index prj_42 --name docs --source files --filter '**/*.md' --wait
+
+# Общий индекс инстанса по фактам памяти — проект не нужен
+synth memory index --scope instance --source facts --name facts --wait
+
+# Общий индекс инстанса по файлам — projectId = источник корпуса (чей workspace)
+synth memory index prj_42 --scope instance --name workspace --wait
 
 # Пересобрать индекс (например, после смены модели эмбеддинга) и снять его
 synth memory rebuild idx_7f3a --wait --timeout 600
@@ -493,6 +515,11 @@ SchedulerService → schedule_fired → RouteRule(PipelineRef) → PipelineEngin
 
 ## История
 
+- 2026-10-25 — **CLI `synth memory`: область индекса `--scope`**: `index` и `list` принимают
+  `--scope project|instance` (дефолт `project`); у `index` позиционный `projectId` стал необязательным
+  для `--scope instance --source facts` (в тело он не уходит), для `--scope instance --source files`
+  он остаётся обязательным и значит *источник корпуса*; в таблице списка индексов — колонка
+  `SCOPE`; значение флага проверяется локально (`VALIDATION_ERROR`, код выхода 1). §4.4.
 - 2026-10-25 — **CLI `synth memory`**: тонкий клиент HTTP API v2 портала памяти
   (`packages/core/src/cli/memory-commands.ts`): `status`/`list`/`index`/`rebuild`/`drop`, резолвинг
   подключения (`--url`/`--token` → env → `core.apiKey` → файл `{dataDir}/secrets/api-key`),
