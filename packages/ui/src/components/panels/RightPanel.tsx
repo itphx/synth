@@ -16,6 +16,7 @@ import { PanelTab } from './PanelTab'
  * ссылки, секреты) остаются синхронными.
  */
 const StatsTab = lazy(() => import('./StatsTab').then((m) => ({ default: m.StatsTab })))
+const MemoryTab = lazy(() => import('./MemoryTab').then((m) => ({ default: m.MemoryTab })))
 const SessionSettingsTab = lazy(() =>
   import('./SessionSettingsTab').then((m) => ({ default: m.SessionSettingsTab })),
 )
@@ -39,6 +40,7 @@ export const RIGHT_TABS = [
   { id: 'project', icon: 'folder-3' as const, labelKey: 'rightPanel.tab.project' },
   { id: 'context', icon: 'file-text' as const, labelKey: 'rightPanel.tab.context' },
   { id: 'stats', icon: 'bar-chart-2' as const, labelKey: 'rightPanel.tab.stats' },
+  { id: 'memory', icon: 'brain' as const, labelKey: 'rightPanel.tab.memory' },
   { id: 'references', icon: 'link' as const, labelKey: 'rightPanel.tab.references' },
   { id: 'scheduler', icon: 'calendar-schedule' as const, labelKey: 'rightPanel.tab.scheduler' },
 ] as const
@@ -106,6 +108,7 @@ export const RightPanel: React.FC = () => {
       <div className="flex-1 min-h-0">
         <Suspense fallback={<TabLoadingFallback />}>
           {rightPanelTab === 'stats' && <StatsTab />}
+          {rightPanelTab === 'memory' && <MemoryTab />}
           {rightPanelTab === 'params' && <SessionSettingsTab />}
           {rightPanelTab === 'project' && <ProjectTab />}
           {rightPanelTab === 'context' && <ContextTab />}

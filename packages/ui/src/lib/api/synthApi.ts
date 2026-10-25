@@ -46,6 +46,7 @@ import { pipelinesApi } from './pipelines'
 import { pipelineProjectApi } from './pipeline-project'
 import { pluginsApi } from './plugins'
 import { memoryApi } from './memory'
+import { sessionMemoryApi } from './session-memory'
 
 export type { EntityOrigin } from './common'
 export type {
@@ -345,6 +346,15 @@ export type {
   MemoryGraph,
   MemoryGraphParams,
 } from './memory'
+// ADR-107 / PROP-047: память в контексте сессии (последний ход, скоуп, индексы).
+export type {
+  SessionMemoryBlockStatus,
+  SessionMemoryReadiness,
+  SessionMemoryBlock,
+  SessionMemoryLastContext,
+  SessionMemoryIndexes,
+  SessionMemoryResponse,
+} from './session-memory'
 
 export const synthApi = {
   fetchJSON,
@@ -391,4 +401,5 @@ export const synthApi = {
   ...pipelineProjectApi,
   ...pluginsApi,
   ...memoryApi,
+  ...sessionMemoryApi,
 }
