@@ -59,8 +59,9 @@ export interface SchedulerRoutesOptions {
   serviceProjectProjection?: ServiceProjectProjectionGuard;
   /**
    * ADR-052: резолвер `sessionId` → `projectId` цели расписания (`bound`/`queue`).
-   * Проект `ephemeral`-цели берётся из `target.project`. Не задан — проектный
-   * гейт для session-целей пропускается.
+   * Проект `ephemeral`-цели берётся из `target.project`, проект `pipeline`-цели
+   * (ADR-101) — из `target.projectId`. Не задан — проектный гейт для
+   * session-целей пропускается.
    */
   resolveSessionProject?: (sessionId: string) => Promise<string | undefined>;
 }
@@ -106,15 +107,21 @@ export function createSchedulerRoutes(
   const scoped = opts.scopeGuard ?? requireScope;
   const serviceProjectProjection = opts.serviceProjectProjection ?? checkServiceProjectProjection;
 
-  /** projectId цели расписания (ephemeral — сам target, bound/queue — сессия). */
+  /**
+   * projectId цели расписания (проектная проекция service-key, ADR-052).
+   * - `ephemeral` — сам target;
+   * - `pipeline` (ADR-101) — проект-владелец пайплайна;
+   * - `bound`/`queue` — проект сессии (`resolveSessionProject`).
+   */
   const projectForTarget = async (
     target: ScheduleInputRequest['target'],
-  ): Promise<string | undefined> =>
-    target.mode === 'ephemeral'
-      ? target.project
-      : opts.resolveSessionProject
-        ? await opts.resolveSessionProject(target.sessionId)
-        : undefined;
+  ): Promise<string | undefined> => {
+    if (target.mode === 'ephemeral') return target.project;
+    if (target.mode === 'pipeline') return target.projectId;
+    return opts.resolveSessionProject
+      ? await opts.resolveSessionProject(target.sessionId)
+      : undefined;
+  };
 
   const invalid = (c: Context, message?: string) =>
     c.json(

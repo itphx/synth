@@ -233,6 +233,19 @@ export class PipelineEngine {
       updatedAt: now,
     };
     await this._runs.saveRun(record);
+    // ADR-101: «прогон стартовал» — сразу после сохранения записи и **до**
+    // исполнения узлов. Вызывающий узнаёт id прогона, не дожидаясь конца.
+    // Ошибка колбэка не должна ронять прогон — она логируется.
+    if (opts.onStarted) {
+      try {
+        opts.onStarted(record);
+      } catch (err) {
+        this._logger.warning(
+          LOG_GROUP,
+          `прогон ${runId}: колбэк onStarted не удался: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     await this._appendEvent(runId, 'run.started', {
       pipelineId: opts.pipelineId,
       version: spec.version,

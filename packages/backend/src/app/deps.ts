@@ -96,6 +96,7 @@ import type {
   StorageContext,
   BaseProvider,
   PipelinePermissionDeps,
+  PipelineRunRecord,
   PluginEmbedFn,
 } from '@itphx/synth-core';
 import type { BackendConfig } from '../lib/app-config.js';
@@ -1124,6 +1125,24 @@ export async function createBackendDeps(
     hooks,
     // ADR-094: завершённые Job (outcome + дрейф cron).
     onJob: schedulerJobMetrics,
+    // ADR-101: цель расписания `mode:'pipeline'` — прямой запуск прогона.
+    // Прогон идёт в фоне: ждём только `onStarted` (id прогона), не конца.
+    runPipeline: async ({ projectId, pipelineId, version, payload, dedupKey }) => {
+      const started = new Promise<PipelineRunRecord>((resolve, reject) => {
+        const p = pipelineEngine.run({
+          projectId,
+          pipelineId,
+          ...(version !== undefined ? { version } : {}),
+          trigger: { kind: 'schedule', source: 'cron', type: 'schedule_fired', payload, dedupKey },
+          onStarted: resolve,
+        });
+        // Ошибка до старта — reject (Job → error). Ошибка после старта — в журнале
+        // прогона; обработчик снимает unhandled rejection, `reject` уже не сработает.
+        p.catch(reject);
+      });
+      const run = await started;
+      return { runId: run.id };
+    },
     // ADR-051/ADR-089/ADR-096: тикер стартует только у лидера (default —
     // AlwaysLeader). `file` — файловый лок на общем dataDir, `postgres` —
     // session-level advisory-lock драйвера (доступен только при PG-backend).

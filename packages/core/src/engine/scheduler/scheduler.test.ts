@@ -564,6 +564,231 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
   });
 });
 
+describe('SchedulerService × ADR-101 (цель `pipeline` — прямой запуск прогона)', () => {
+  let tmpDir: string;
+  let store: ScheduleStore;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-scheduler-pipeline-'));
+    store = new ScheduleStore({ dataDir: tmpDir });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('цель pipeline: runPipeline вызывается с projectId/pipelineId/payload, ingest НЕ вызывается', async () => {
+    let current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'pl',
+      enabled: true,
+      every: '1h',
+      payload: { shared: 'from-schedule', sessionId: 'ses_schedule' },
+      target: {
+        mode: 'pipeline',
+        projectId: 'proj_1',
+        pipelineId: 'pl_1',
+        version: 3,
+        payload: { sessionId: 'ses_target' },
+      },
+    });
+    const jobStore = new JobStore({ dataDir: tmpDir });
+    const { ingress, ingest } = makeIngress();
+    const runPipeline = vi.fn(
+      async (_input: {
+        projectId: string;
+        pipelineId: string;
+        version?: number;
+        payload: Record<string, unknown>;
+        dedupKey: string;
+      }) => ({ runId: 'run_1' }),
+    );
+    const svc = new SchedulerService({
+      scheduleStore: store,
+      ingress,
+      jobStore,
+      runPipeline,
+      now: () => current,
+    });
+    await svc.start();
+    svc.stop();
+
+    current = new Date('2026-01-01T01:00:00Z');
+    await svc.tick();
+
+    expect(runPipeline).toHaveBeenCalledTimes(1);
+    const call = runPipeline.mock.calls[0]![0];
+    expect(call.projectId).toBe('proj_1');
+    expect(call.pipelineId).toBe('pl_1');
+    expect(call.version).toBe(3);
+    expect(call.dedupKey).toBe(`cron:${schedule.id}:2026-01-01T01:00`);
+    // payload прогона: scheduleId/name + payload расписания + payload цели
+    // (payload цели приоритетнее).
+    expect(call.payload).toEqual({
+      scheduleId: schedule.id,
+      name: 'pl',
+      shared: 'from-schedule',
+      sessionId: 'ses_target',
+    });
+    // Событие в Router не публикуется — сессия не создаётся.
+    expect(ingest).not.toHaveBeenCalled();
+  });
+
+  it('цель pipeline: Job ok с decision/pipelineId/runId, markRun ok, nextRunAt пересчитан', async () => {
+    let current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'pl',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'pipeline', projectId: 'proj_1', pipelineId: 'pl_1' },
+    });
+    const jobStore = new JobStore({ dataDir: tmpDir });
+    const { ingress } = makeIngress();
+    const runPipeline = vi.fn(async () => ({ runId: 'run_42' }));
+    const svc = new SchedulerService({
+      scheduleStore: store,
+      ingress,
+      jobStore,
+      runPipeline,
+      now: () => current,
+    });
+    await svc.start();
+    svc.stop();
+
+    current = new Date('2026-01-01T01:00:00Z');
+    await svc.tick();
+
+    const jobs = await jobStore.list({ scheduleId: schedule.id });
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      trigger: 'cron',
+      status: 'ok',
+      decision: 'pipeline',
+      pipelineId: 'pl_1',
+      runId: 'run_42',
+    });
+    expect(jobs[0]!.sessionId).toBeUndefined();
+
+    const after = await store.get(schedule.id);
+    expect(after?.lastStatus).toBe('ok');
+    expect(after?.lastRunAt).toBe('2026-01-01T01:00:00.000Z');
+    expect(after?.nextRunAt).toBe('2026-01-01T02:00:00.000Z');
+    expect(after?.lastError).toBeUndefined();
+  });
+
+  it('цель pipeline без runner\'а: Job error/reason pipeline_unavailable, ingest НЕ вызывается', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'pl',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'pipeline', projectId: 'proj_1', pipelineId: 'pl_1' },
+    });
+    const jobStore = new JobStore({ dataDir: tmpDir });
+    const { ingress, ingest } = makeIngress();
+    const svc = new SchedulerService({
+      scheduleStore: store,
+      ingress,
+      jobStore,
+      now: () => current,
+    });
+    await svc.start();
+    svc.stop();
+
+    current = new Date('2026-01-01T01:00:00Z');
+    await svc.tick();
+
+    expect(ingest).not.toHaveBeenCalled();
+    const jobs = await jobStore.list({ scheduleId: schedule.id });
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ status: 'error', reason: 'pipeline_unavailable' });
+    expect(jobs[0]!.error).toBeTruthy();
+    expect((await store.get(schedule.id))?.lastStatus).toBe('error');
+  });
+
+  it('цель pipeline: ошибка runner\'а → Job error, guard снят (следующий тик снова запускается)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'pl',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'pipeline', projectId: 'proj_1', pipelineId: 'pl_1' },
+    });
+    const jobStore = new JobStore({ dataDir: tmpDir });
+    const { ingress, ingest } = makeIngress();
+    const runPipeline = vi.fn(async () => {
+      throw new Error('pipeline boom');
+    });
+    const svc = new SchedulerService({
+      scheduleStore: store,
+      ingress,
+      jobStore,
+      runPipeline,
+      now: () => current,
+    });
+    await svc.start();
+    svc.stop();
+
+    current = new Date('2026-01-01T01:00:00Z');
+    await svc.tick();
+
+    expect(runPipeline).toHaveBeenCalledTimes(1);
+    expect(ingest).not.toHaveBeenCalled();
+    const jobs = await jobStore.list({ scheduleId: schedule.id });
+    expect(jobs[0]).toMatchObject({ status: 'error', error: 'pipeline boom' });
+    expect((await store.get(schedule.id))?.lastStatus).toBe('error');
+
+    // In-flight guard снят — следующий тик снова запускает прогон (не `busy`).
+    current = new Date('2026-01-01T02:00:00Z');
+    await svc.tick();
+    expect(runPipeline).toHaveBeenCalledTimes(2);
+    const jobsAfter = await jobStore.list({ scheduleId: schedule.id });
+    expect(jobsAfter).toHaveLength(2);
+    expect(jobsAfter.some((job) => job.reason === 'busy')).toBe(false);
+  });
+
+  it('цель bound по-прежнему идёт через ingest (путь pipeline не меняет)', async () => {
+    let current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'b',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const jobStore = new JobStore({ dataDir: tmpDir });
+    const { ingress, ingest } = makeIngress({ kind: 'bound', sessionId: 's1' });
+    const runPipeline = vi.fn(
+      async (_input: {
+        projectId: string;
+        pipelineId: string;
+        version?: number;
+        payload: Record<string, unknown>;
+        dedupKey: string;
+      }) => ({ runId: 'run_1' }),
+    );
+    const svc = new SchedulerService({
+      scheduleStore: store,
+      ingress,
+      jobStore,
+      runPipeline,
+      now: () => current,
+    });
+    await svc.start();
+    svc.stop();
+
+    current = new Date('2026-01-01T01:00:00Z');
+    await svc.tick();
+
+    expect(ingest).toHaveBeenCalledTimes(1);
+    expect(runPipeline).not.toHaveBeenCalled();
+    const jobs = await jobStore.list({ scheduleId: schedule.id });
+    expect(jobs[0]).toMatchObject({ status: 'ok', decision: 'bound' });
+  });
+});
+
 describe('SchedulerService × ADR-094 (метрики Job)', () => {
   let tmpDir: string;
   let store: ScheduleStore;

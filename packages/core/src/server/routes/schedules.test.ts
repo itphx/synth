@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { Context, MiddlewareHandler, Next } from 'hono';
+import { createMiddleware } from 'hono/factory';
 import type { RouteDecision, SynthEvent } from '@itphx/synth-shared';
 import { createSchedulerRoutes } from './schedules.js';
 import type { SchedulerRoutesAuth } from './schedules.js';
@@ -299,5 +300,104 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
 
     const runRes = await app.request(`/api/v2/schedules/${created.id}/run`, { method: 'POST' });
     expect(runRes.status).toBe(403);
+  });
+
+  it('POST / — цель pipeline: 201 (ADR-101)', async () => {
+    const app = makeApp();
+    const res = await app.request(
+      '/api/v2/schedules',
+      json('POST', {
+        name: 'pl',
+        every: '1h',
+        target: {
+          mode: 'pipeline',
+          projectId: 'proj_1',
+          pipelineId: 'pl_1',
+          version: 2,
+          payload: { sessionId: 'ses_1' },
+        },
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      schedule: { target: { mode: string; projectId: string; pipelineId: string; version: number } };
+    };
+    expect(body.schedule.target).toEqual({
+      mode: 'pipeline',
+      projectId: 'proj_1',
+      pipelineId: 'pl_1',
+      version: 2,
+      payload: { sessionId: 'ses_1' },
+    });
+  });
+
+  it('POST / — цель pipeline с пустым pipelineId → 400', async () => {
+    const app = makeApp();
+    const res = await app.request(
+      '/api/v2/schedules',
+      json('POST', {
+        name: 'pl',
+        every: '1h',
+        target: { mode: 'pipeline', projectId: 'proj_1', pipelineId: '' },
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('POST / — цель pipeline без projectId → 400', async () => {
+    const app = makeApp();
+    const res = await app.request(
+      '/api/v2/schedules',
+      json('POST', {
+        name: 'pl',
+        every: '1h',
+        target: { mode: 'pipeline', pipelineId: 'pl_1' },
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('проектная проекция service-key: цель pipeline на чужом проекте → 403 PROJECT_FORBIDDEN', async () => {
+    const app = new Hono();
+    // Симуляция service-key с проекльной проекцией (ADR-052).
+    app.use(
+      '*',
+      createMiddleware(async (c, next) => {
+        c.set('serviceKey' as never, {
+          keyId: 'svk_1',
+          label: 'installer',
+          roles: [],
+          scopes: ['schedules:read', 'schedules:write'],
+          allowedProjects: ['proj_allowed'],
+        } as never);
+        await next();
+      }),
+    );
+    app.route(
+      '/api/v2/schedules',
+      createSchedulerRoutes(auth, { scheduleStore: store, scheduler, jobStore }),
+    );
+
+    const foreign = await app.request(
+      '/api/v2/schedules',
+      json('POST', {
+        name: 'pl',
+        every: '1h',
+        target: { mode: 'pipeline', projectId: 'proj_foreign', pipelineId: 'pl_1' },
+      }),
+    );
+    expect(foreign.status).toBe(403);
+    expect(((await foreign.json()) as { error: { code: string } }).error.code).toBe('PROJECT_FORBIDDEN');
+
+    const allowed = await app.request(
+      '/api/v2/schedules',
+      json('POST', {
+        name: 'pl',
+        every: '1h',
+        target: { mode: 'pipeline', projectId: 'proj_allowed', pipelineId: 'pl_1' },
+      }),
+    );
+    expect(allowed.status).toBe(201);
   });
 });

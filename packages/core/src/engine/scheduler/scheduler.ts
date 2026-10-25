@@ -36,6 +36,20 @@ export interface SchedulerServiceDeps {
    * Не задана — хук не эмитится.
    */
   hooks?: HookBus;
+  /**
+   * ADR-101: запуск прогона пайплайна для `target.mode === 'pipeline'`.
+   *
+   * Прямой путь: событие в Router **не** публикуется, шедулер сам запускает
+   * прогон и возвращает его id. Не задан — цель `pipeline` недоступна: Job
+   * помечается ошибкой (`reason:'pipeline_unavailable'`).
+   */
+  runPipeline?: (input: {
+    projectId: string;
+    pipelineId: string;
+    version?: number;
+    payload: Record<string, unknown>;
+    dedupKey: string;
+  }) => Promise<{ runId: string }>;
 }
 
 /** Дефолтный период тика, если `tickMs` не задан. */
@@ -73,6 +87,7 @@ export class SchedulerService {
   private _now: () => Date;
   private _onJob?: SchedulerJobMetrics;
   private _hooks?: HookBus;
+  private _runPipeline?: SchedulerServiceDeps['runPipeline'];
   private _timer?: ReturnType<typeof setInterval>;
   private _busy = false;
   /** Защита от параллельного запуска одного расписания. */
@@ -90,6 +105,7 @@ export class SchedulerService {
     this._now = deps.now ?? (() => new Date());
     this._onJob = deps.onJob;
     this._hooks = deps.hooks;
+    this._runPipeline = deps.runPipeline;
   }
 
   /**
@@ -309,6 +325,9 @@ export class SchedulerService {
    * Публикует событие, пишет Job и фиксирует результат с новым `nextRunAt`.
    * Повторный запуск того же расписания, пока предыдущий не завершён, —
    * Job `skipped` (`reason:'busy'`) без публикации события.
+   *
+   * ADR-101: для цели `mode:'pipeline'` путь другой — событие в Router **не**
+   * публикуется, вместо этого запускается прогон пайплайна (`_dispatchPipeline`).
    */
   private async _dispatch(
     schedule: Schedule,
@@ -360,6 +379,13 @@ export class SchedulerService {
         });
       }
 
+      // ADR-101: цель `pipeline` — прямой запуск прогона (событие в Router не
+      // публикуется, сессия не создаётся).
+      if (schedule.target.mode === 'pipeline') {
+        await this._dispatchPipeline(schedule, at, dedupKey, trigger, started);
+        return;
+      }
+
       const { decision, session } = await this._ingress.ingest({
         source: 'cron',
         type: 'schedule_fired',
@@ -392,15 +418,123 @@ export class SchedulerService {
         started,
       );
 
-      const next = nextRunAt(schedule, at);
-      await this._store.markRun(schedule.id, {
-        at: at.toISOString(),
-        status: dropped ? 'skipped' : 'ok',
-        nextRunAt: next.toISOString(),
-      });
+      await this._markScheduleRun(schedule, at, dropped ? 'skipped' : 'ok');
     } finally {
       this._inFlight.delete(schedule.id);
     }
+  }
+
+  /**
+   * ADR-101: прямой запуск прогона пайплайна для цели `mode:'pipeline'`.
+   *
+   * Событие в Router **не** публикуется — прогон запускается шедулером. Payload
+   * прогона: `scheduleId`/`name` + `schedule.payload` + `target.payload` (payload
+   * цели приоритетнее). Результат — id прогона в Job-истории; сам прогон идёт
+   * в фоне, его журнал — в прогоне пайплайна.
+   *
+   * Ошибка запуска (нет пайплайна/не опубликован/бросок runner'а) → Job
+   * `status:'error'`; in-flight guard снимается в `finally` вызывающего `_dispatch`.
+   */
+  private async _dispatchPipeline(
+    schedule: Schedule,
+    at: Date,
+    dedupKey: string,
+    trigger: ScheduleJobTrigger,
+    started: Date,
+  ): Promise<void> {
+    const target = schedule.target;
+    if (target.mode !== 'pipeline') return;
+
+    const payload: Record<string, unknown> = {
+      scheduleId: schedule.id,
+      name: schedule.name,
+      ...(schedule.payload ?? {}),
+      ...(target.payload ?? {}),
+    };
+
+    let outcome: {
+      status: 'ok' | 'error';
+      decision?: 'pipeline';
+      pipelineId?: string;
+      runId?: string;
+      reason?: string;
+      error?: string;
+    };
+
+    if (!this._runPipeline) {
+      outcome = {
+        status: 'error',
+        reason: 'pipeline_unavailable',
+        error:
+          'Запуск пайплайна по расписанию недоступен: движок пайплайнов не подключён к планировщику',
+      };
+      console.warn(
+        `[scheduler] расписание "${schedule.id}": ${outcome.error}`,
+      );
+    } else {
+      try {
+        const { runId } = await this._runPipeline({
+          projectId: target.projectId,
+          pipelineId: target.pipelineId,
+          ...(target.version !== undefined ? { version: target.version } : {}),
+          payload,
+          dedupKey,
+        });
+        outcome = {
+          status: 'ok',
+          decision: 'pipeline',
+          pipelineId: target.pipelineId,
+          runId,
+        };
+      } catch (err) {
+        const error = errorMessage(err);
+        outcome = { status: 'error', error };
+        console.warn(
+          `[scheduler] запуск пайплайна "${target.pipelineId}" по расписанию "${schedule.id}" не удался: ${error}`,
+        );
+      }
+    }
+
+    const finished = this._now();
+    await this._recordJob({
+      scheduleId: schedule.id,
+      scheduleName: schedule.name,
+      trigger,
+      status: outcome.status,
+      startedAt: started.toISOString(),
+      finishedAt: finished.toISOString(),
+      durationMs: finished.getTime() - started.getTime(),
+      target: schedule.target,
+      dedupKey,
+      ...(outcome.decision ? { decision: outcome.decision } : {}),
+      ...(outcome.reason ? { reason: outcome.reason } : {}),
+      ...(outcome.pipelineId ? { pipelineId: outcome.pipelineId } : {}),
+      ...(outcome.runId ? { runId: outcome.runId } : {}),
+      ...(outcome.error ? { error: outcome.error } : {}),
+    });
+    this._reportJob(outcome.status, finished.getTime() - started.getTime(), at, trigger, started);
+
+    await this._markScheduleRun(schedule, at, outcome.status, outcome.error);
+  }
+
+  /**
+   * Общий хвост срабатывания: пересчёт `nextRunAt` и фиксация статуса в
+   * расписании (`markRun`). Ошибка расчёта/записи — как у обычного пути:
+   * пробрасывается наружу (её ловит `_dispatchSafe`).
+   */
+  private async _markScheduleRun(
+    schedule: Schedule,
+    at: Date,
+    status: ScheduleJob['status'],
+    error?: string,
+  ): Promise<void> {
+    const next = nextRunAt(schedule, at);
+    await this._store.markRun(schedule.id, {
+      at: at.toISOString(),
+      status,
+      ...(error ? { error } : {}),
+      nextRunAt: next.toISOString(),
+    });
   }
 
   /** Дозапись Job в историю (`job_<uuid>`); без `jobStore` — no-op. */

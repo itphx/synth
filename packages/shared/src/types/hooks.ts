@@ -106,8 +106,8 @@ export interface HookContextMap {
     scheduleId: string;
     /** Имя расписания (для логов/уведомлений). */
     name?: string;
-    /** Режим цели расписания (`bound`/`ephemeral`/`queue`). */
-    target?: 'bound' | 'ephemeral' | 'queue';
+    /** Режим цели расписания (`bound`/`ephemeral`/`queue`/`pipeline`). */
+    target?: 'bound' | 'ephemeral' | 'queue' | 'pipeline';
     /** Cron-выражение (если расписание задано через `cron`). */
     cron?: string;
     /** Триггер срабатывания (`cron`/`manual`/`catchup`). */

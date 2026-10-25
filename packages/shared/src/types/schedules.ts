@@ -11,12 +11,25 @@
  * ADR-051/ADR-089: цель срабатывания расписания.
  * - `bound` — постоянная сессия (событие уходит в неё);
  * - `ephemeral` — разовая сессия с TTL и авто-архивом;
- * - `queue` — не запускать сразу, отложить владельцу.
+ * - `queue` — не запускать сразу, отложить владельцу;
+ * - `pipeline` — прямой запуск прогона пайплайна (ADR-101): событие в Router
+ *   **не** публикуется, шедулер запускает прогон сам.
  */
 export type ScheduleTarget =
   | { mode: 'bound'; sessionId: string }
   | { mode: 'ephemeral'; agentTemplate?: string; project?: string; ttl?: string }
-  | { mode: 'queue'; sessionId: string };
+  | { mode: 'queue'; sessionId: string }
+  | {
+      mode: 'pipeline';
+      /** Проект-владелец пайплайна (прогон живёт в проекте). */
+      projectId: string;
+      /** id пайплайна проекта (не шаблона). */
+      pipelineId: string;
+      /** Версия спецификации; по умолчанию — последняя опубликованная. */
+      version?: number;
+      /** Данные входа прогона → trigger.payload.* (напр. {sessionId}). */
+      payload?: Record<string, unknown>;
+    };
 
 /** ADR-051/ADR-089: статус последнего запуска расписания. */
 export type ScheduleRunStatus = 'ok' | 'error' | 'skipped';
@@ -35,6 +48,10 @@ export type ScheduleJobTrigger = 'cron' | 'manual' | 'catchup';
  * Append-only JSONL `{dataDir}/scheduler/jobs.jsonl`. `decision` — итог
  * маршрутизации события (`RouteDecision['kind']`), `reason` — причина
  * `drop`/`skip`, `sessionId` — материализованная Router'ом сессия (если была).
+ *
+ * ADR-101: для цели `mode:'pipeline'` событие в Router не публикуется, поэтому
+ * `decision:'pipeline'` — **пометка прямого запуска прогона**, а не решение
+ * Router; `pipelineId`/`runId` адресуют запущенный прогон.
  */
 export interface ScheduleJob {
   /** `job_<uuid>`, уникален в пределах инстанса. */
@@ -51,12 +68,19 @@ export interface ScheduleJob {
   target: ScheduleTarget;
   /** Ключ идемпотентности события (`cron:<id>:<...>`). */
   dedupKey?: string;
-  /** Решение Router: `'bound' | 'queue' | 'ephemeral' | 'bind' | 'drop'`. */
-  decision?: 'bound' | 'queue' | 'ephemeral' | 'bind' | 'drop';
+  /**
+   * Решение Router: `'bound' | 'queue' | 'ephemeral' | 'bind' | 'drop'`;
+   * `'pipeline'` — прямой запуск прогона пайплайна (ADR-101, не решение Router).
+   */
+  decision?: 'bound' | 'queue' | 'ephemeral' | 'bind' | 'drop' | 'pipeline';
   /** Причина `drop`/`skip` (напр. `no_route`, `busy`, `missed`). */
   reason?: string;
   /** Идентификатор сессии, в которую доставлено событие. */
   sessionId?: string;
+  /** ADR-101: id пайплайна, прогон которого запущен расписанием. */
+  pipelineId?: string;
+  /** ADR-101: id запущенного прогона пайплайна. */
+  runId?: string;
   /** Текст ошибки при `status === 'error'`. */
   error?: string;
 }

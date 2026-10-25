@@ -322,12 +322,63 @@ describe('sessionRequestSchema (ADR-089)', () => {
 });
 
 describe('schedule schemas (ADR-051 / ADR-089)', () => {
-  it('scheduleTargetSchema: три варианта', () => {
+  it('scheduleTargetSchema: четыре варианта (ADR-051 / ADR-089 / ADR-101)', () => {
     expect(scheduleTargetSchema.safeParse({ mode: 'bound', sessionId: 's1' }).success).toBe(true);
     expect(scheduleTargetSchema.safeParse({ mode: 'queue', sessionId: 's1' }).success).toBe(true);
     expect(scheduleTargetSchema.safeParse({ mode: 'ephemeral', ttl: '30m' }).success).toBe(true);
     expect(scheduleTargetSchema.safeParse({ mode: 'bound' }).success).toBe(false);
     expect(scheduleTargetSchema.safeParse({ mode: 'other' }).success).toBe(false);
+  });
+
+  it('scheduleTargetSchema: pipeline-цель (ADR-101) — проект, пайплайн, версия, payload', () => {
+    const parsed = scheduleTargetSchema.safeParse({
+      mode: 'pipeline',
+      projectId: 'proj_1',
+      pipelineId: 'pl_1',
+      version: 2,
+      payload: { sessionId: 'ses_1' },
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.mode === 'pipeline' && parsed.data.pipelineId).toBe('pl_1');
+    // Версия и payload опциональны.
+    expect(
+      scheduleTargetSchema.safeParse({ mode: 'pipeline', projectId: 'proj_1', pipelineId: 'pl_1' })
+        .success,
+    ).toBe(true);
+  });
+
+  it('scheduleTargetSchema: pipeline-цель — негативные случаи', () => {
+    // Пустой pipelineId.
+    expect(
+      scheduleTargetSchema.safeParse({ mode: 'pipeline', projectId: 'proj_1', pipelineId: '' })
+        .success,
+    ).toBe(false);
+    // Нет projectId.
+    expect(
+      scheduleTargetSchema.safeParse({ mode: 'pipeline', pipelineId: 'pl_1' }).success,
+    ).toBe(false);
+    // Пустой projectId.
+    expect(
+      scheduleTargetSchema.safeParse({ mode: 'pipeline', projectId: '', pipelineId: 'pl_1' })
+        .success,
+    ).toBe(false);
+    // Версия — целое ≥ 1.
+    expect(
+      scheduleTargetSchema.safeParse({
+        mode: 'pipeline',
+        projectId: 'proj_1',
+        pipelineId: 'pl_1',
+        version: 0,
+      }).success,
+    ).toBe(false);
+    expect(
+      scheduleTargetSchema.safeParse({
+        mode: 'pipeline',
+        projectId: 'proj_1',
+        pipelineId: 'pl_1',
+        version: 1.5,
+      }).success,
+    ).toBe(false);
   });
 
   it('eventRouteTargetSchema: четыре варианта, включая bind (ADR-089 auto-bind)', () => {
@@ -454,5 +505,24 @@ describe('schedule schemas (ADR-051 / ADR-089)', () => {
         target: { mode: 'bound', sessionId: 's1' },
       }).success,
     ).toBe(false);
+  });
+
+  it('scheduleJobSchema: pipeline-Job (ADR-101) — decision/pipelineId/runId', () => {
+    const parsed = scheduleJobSchema.safeParse({
+      id: 'job_3',
+      scheduleId: 'sch_1',
+      scheduleName: 'pipeline',
+      trigger: 'cron',
+      status: 'ok',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      finishedAt: '2026-01-01T00:00:01.000Z',
+      durationMs: 1000,
+      target: { mode: 'pipeline', projectId: 'proj_1', pipelineId: 'pl_1' },
+      decision: 'pipeline',
+      pipelineId: 'pl_1',
+      runId: 'run_1',
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.runId).toBe('run_1');
   });
 });

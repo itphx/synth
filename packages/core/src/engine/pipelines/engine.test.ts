@@ -125,6 +125,36 @@ describe('PipelineEngine', () => {
     ]);
   });
 
+  it('onStarted: колбэк вызывается сразу после сохранения прогона, до исполнения узлов', async () => {
+    const order: string[] = [];
+    const { runs, engine } = await setup(
+      spec([{ id: 'first', kind: 'tool', tool: 'noop' }]),
+      [
+        executor('tool', (ctx) => {
+          order.push(`node:${ctx.node.id}`);
+          return { status: 'ok', attempt: ctx.attempt, output: {} };
+        }),
+      ],
+    );
+
+    let started: { id: string; status: string } | undefined;
+    const run = await engine.run({
+      pipelineId: 'p1',
+      trigger,
+      projectId: 'proj-1',
+      onStarted: (record) => {
+        order.push('onStarted');
+        started = { id: record.id, status: record.status };
+      },
+    });
+
+    // Колбэк отдаёт id прогона и статус `running` (прогон уже сохранён).
+    expect(started).toEqual({ id: run.id, status: 'running' });
+    // Колбэк сработал **до** исполнения узлов.
+    expect(order).toEqual(['onStarted', 'node:first']);
+    expect(await eventTypes(runs, run.id)).toContain('run.started');
+  });
+
   it('прогон самодостаточен: в записи — снимок спецификации', async () => {
     const pipelineSpec = spec([{ id: 'first', kind: 'tool', tool: 'noop' }]);
     const { runs, engine } = await setup(pipelineSpec, [

@@ -873,6 +873,14 @@ export const scheduleTargetSchema = z.discriminatedUnion('mode', [
     ttl: z.string().optional(),
   }),
   z.object({ mode: z.literal('queue'), sessionId: z.string().min(1) }),
+  // ADR-101: прямой запуск прогона пайплайна (событие в Router не публикуется).
+  z.object({
+    mode: z.literal('pipeline'),
+    projectId: z.string().min(1),
+    pipelineId: z.string().min(1),
+    version: z.number().int().min(1).optional(),
+    payload: z.record(z.string(), z.unknown()).optional(),
+  }),
 ]);
 
 /**
@@ -1029,9 +1037,12 @@ export const scheduleJobSchema = z.object({
   durationMs: z.number(),
   target: scheduleTargetSchema,
   dedupKey: z.string().optional(),
-  decision: z.enum(['bound', 'queue', 'ephemeral', 'bind', 'drop']).optional(),
+  // ADR-101: `pipeline` — пометка прямого запуска прогона (не решение Router).
+  decision: z.enum(['bound', 'queue', 'ephemeral', 'bind', 'drop', 'pipeline']).optional(),
   reason: z.string().optional(),
   sessionId: z.string().optional(),
+  pipelineId: z.string().optional(),
+  runId: z.string().optional(),
   error: z.string().optional(),
 });
 

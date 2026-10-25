@@ -24,7 +24,12 @@ export class MemoryScheduleRepository implements ScheduleRepository {
 
   async hasEnabledTargetFor(sessionId: string): Promise<boolean> {
     for (const schedule of this._schedules.values()) {
-      if (schedule.enabled && schedule.target.mode !== 'ephemeral' && schedule.target.sessionId === sessionId) {
+      const target = schedule.target;
+      if (
+        schedule.enabled
+        && (target.mode === 'bound' || target.mode === 'queue')
+        && target.sessionId === sessionId
+      ) {
         return true;
       }
     }

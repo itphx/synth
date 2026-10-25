@@ -22,6 +22,7 @@ import type { EventType } from '@itphx/synth-shared';
 import type { BaseProvider } from '../../providers/base.js';
 import type { PipelineMetricsHooks } from '../../metrics/collectors/pipelines.js';
 import type {
+  PipelineRunRecord,
   PipelineRunRepository,
   ProjectPipelineRepository,
 } from '../../storage/ports/index.js';
@@ -426,6 +427,12 @@ export interface PipelineRunOptions {
   projectId?: string;
   /** Сигнал отмены прогона. */
   signal?: AbortSignal;
+  /**
+   * ADR-101: колбэк «прогон стартовал» — вызывается сразу после сохранения
+   * записи прогона и **до** исполнения узлов. Нужен вызывающему, чтобы узнать
+   * id прогона, не дожидаясь конца (шедулер запускает прогон в фоне).
+   */
+  onStarted?: (run: PipelineRunRecord) => void;
 }
 
 /** Решение человека по HITL-гейту (возобновление прогона). */

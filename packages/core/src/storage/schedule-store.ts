@@ -136,8 +136,9 @@ export class ScheduleStore implements ScheduleRepository {
 
   /**
    * ADR-051/ADR-089: есть ли включённое расписание, нацеленное на сессию
-   * (`target.mode !== 'ephemeral'` и совпадающий `target.sessionId`). Ephemeral-
-   * цели сессию не адресуют (создают разовую), поэтому не учитываются.
+   * (`target.mode` — `bound`/`queue` и совпадающий `target.sessionId`).
+   * Ephemeral-цели сессию не адресуют (создают разовую), поэтому не
+   * учитываются; цель `pipeline` (ADR-101) сессию не адресует вовсе.
    * Используется оркестратором: при `true` в системный промпт добавляется
    * статическое описание системного пользователя `Scheduler`.
    */
@@ -146,7 +147,7 @@ export class ScheduleStore implements ScheduleRepository {
     return file.schedules.some(
       (schedule) =>
         schedule.enabled
-        && schedule.target.mode !== 'ephemeral'
+        && (schedule.target.mode === 'bound' || schedule.target.mode === 'queue')
         && schedule.target.sessionId === sessionId,
     );
   }

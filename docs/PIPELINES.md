@@ -820,8 +820,8 @@ curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json'
 **Триггер.** В ADR-101 триггер — свойство **прогона** (`PipelineRunTrigger`, §2.3), а не
 спецификации: `kind` задаёт, кто запустил прогон. Поэтому шаблон объявляет **вход**
 (`io.input`/`vars`/`node.input`), а способ запуска — вручную (`kind:'manual'` — дефолт
-HTTP-роута) или по расписанию (`kind:'schedule'`, `source:'cron'` — например, вызов
-`POST …/runs` из внешнего планировщика):
+HTTP-роута) или по расписанию (`kind:'schedule'`, `source:'cron'` — нативно из расписания с
+целью `pipeline`, см. ниже, либо вызовом `POST …/runs` из внешнего планировщика):
 
 ```bash
 # запуск по расписанию
@@ -830,10 +830,38 @@ curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json'
   http://localhost:5000/api/v2/projects/proj_…/pipelines/pl_…/runs
 ```
 
-Расписание как таковое объявляется в ADR-051 (`schedules`: `cron` или `every`), но сейчас его
-маршрутизация ведёт в **сессию**, а не в прогон пайплайна: контур «шедулер → прогон пайплайна»
-(с лидер-элекшеном) — остаток (см.
-[ADR-101](./arch_decisions/adr-101-pipeline-engine.md) §«Открытые вопросы»).
+**Запуск по расписанию (цель `pipeline`).** Шедулер (ADR-051) умеет запускать прогон напрямую:
+цель расписания `{"mode":"pipeline", projectId, pipelineId, version?, payload?}`. Такой прогон
+**не** публикует событие в Router и не создаёт сессию — `SchedulerService` вызывает движок сам
+(лидер-элекшен шедулера действует как обычно); `payload` цели уходит в `trigger.payload`
+(приоритетнее `payload` расписания), `trigger` — `{kind:'schedule', source:'cron'}`.
+
+```bash
+# расписание: каждую ночь запускать конкретный пайплайн проекта
+curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' -d '{
+  "name": "memory-consolidation",
+  "cron": "0 3 * * *",
+  "target": {
+    "mode": "pipeline",
+    "projectId": "proj_…",
+    "pipelineId": "pl_…",
+    "payload": { "sessionId": "ses_…" }
+  }
+}' http://localhost:5000/api/v2/schedules
+```
+
+Что важно знать:
+
+- пайплайн должен быть **опубликован** (иначе Job — `error`); `version` не задан — берётся
+  последняя опубликованная;
+- прогон идёт в фоне: Job-история (`GET /schedules/:id/jobs`) получает `decision:'pipeline'`,
+  `pipelineId` и `runId`, прогресс — по `pipeline.run.*` и журналу прогона;
+- нет зарегистрированного раннера прогонов (например, шедулер поднят без движка) → Job
+  `error`, `reason:'pipeline_unavailable'`, событие в Router не публикуется;
+- `payload` **статичен**: подстановок вида «последняя сессия проекта» нет. Для пайплайнов без
+  входа или с фиксированным входом это подходит; для «консолидации каждый день новой сессии»
+  нужен динамический вход — остаток (см.
+  [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) §«Открытые вопросы»).
 
 ---
 

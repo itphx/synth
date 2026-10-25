@@ -43,6 +43,9 @@ export class SchedulerRuleProvider implements RouteRuleProvider {
     }
 
     const target = schedule.target;
+    // ADR-101: цель `pipeline` не маршрутизируется — шедулер запускает прогон
+    // сам (событие в Router не публикуется), правило роутинга не применимо.
+    if (target.mode === 'pipeline') return null;
     return decisionFromTarget(target, this._defaultEphemeralTtl, { reason: 'schedule' });
   }
 }
