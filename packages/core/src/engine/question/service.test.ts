@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventBus } from '../../events/bus.js';
 import { MemoryQuestionRepository } from '../../storage/memory/questions.js';
-import { QuestionService } from './service.js';
+import { QuestionService, MAX_FREE_ANSWER_LENGTH } from './service.js';
 import {
   QuestionAlreadySettledError,
   QuestionInvalidAnswerError,
@@ -111,16 +111,86 @@ describe('QuestionService — постановка вопроса и ожида�
     await pending;
   });
 
-  it('значение вне options → QuestionInvalidAnswerError (unknown_option)', async () => {
+  it('свободный ответ (значение вне options) принимается', async () => {
     const { repository, service } = createService();
     const pending = service.ask({ sessionId: 's1', questions: QUESTIONS });
     await Promise.resolve();
     const record = (await repository.list())[0]!;
 
-    await expect(service.answer(record.id, [['zzz']])).rejects.toMatchObject({
-      reason: 'unknown_option',
+    // «Type your own answer»: любая непустая строка валидна.
+    const answered = await service.answer(record.id, [['свой ответ']]);
+    expect(answered.status).toBe('answered');
+    expect(answered.answers).toEqual([['свой ответ']]);
+
+    const outcome = await pending;
+    expect(outcome.status).toBe('answered');
+  });
+
+  it('пустой/пробельный ответ → QuestionInvalidAnswerError (empty_answer)', async () => {
+    const { repository, service } = createService();
+    const pending = service.ask({ sessionId: 's1', questions: QUESTIONS });
+    await Promise.resolve();
+    const record = (await repository.list())[0]!;
+
+    await expect(service.answer(record.id, [['']])).rejects.toMatchObject({
+      reason: 'empty_answer',
+    });
+    await expect(service.answer(record.id, [['   ']])).rejects.toMatchObject({
+      reason: 'empty_answer',
     });
     await service.cancel(record.id, 'test');
+    await pending;
+  });
+
+  it('слишком длинный свободный ответ → QuestionInvalidAnswerError (answer_too_long)', async () => {
+    const { repository, service } = createService();
+    const pending = service.ask({ sessionId: 's1', questions: QUESTIONS });
+    await Promise.resolve();
+    const record = (await repository.list())[0]!;
+
+    await expect(service.answer(record.id, [['x'.repeat(MAX_FREE_ANSWER_LENGTH + 1)]])).rejects.toMatchObject({
+      reason: 'answer_too_long',
+    });
+    // Ровно предел — валидно.
+    await service.answer(record.id, [['x'.repeat(MAX_FREE_ANSWER_LENGTH)]]);
+    await pending;
+  });
+
+  it('не-строковое значение → QuestionInvalidAnswerError (invalid_answer)', async () => {
+    const { repository, service } = createService();
+    const pending = service.ask({ sessionId: 's1', questions: QUESTIONS });
+    await Promise.resolve();
+    const record = (await repository.list())[0]!;
+
+    await expect(service.answer(record.id, [[42 as unknown as string]])).rejects.toMatchObject({
+      reason: 'invalid_answer',
+    });
+    await service.cancel(record.id, 'test');
+    await pending;
+  });
+
+  it('одиночный вопрос с двумя значениями → QuestionInvalidAnswerError (too_many_answers)', async () => {
+    const { repository, service } = createService();
+    const pending = service.ask({ sessionId: 's1', questions: QUESTIONS });
+    await Promise.resolve();
+    const record = (await repository.list())[0]!;
+
+    await expect(service.answer(record.id, [['a', 'b']])).rejects.toMatchObject({
+      reason: 'too_many_answers',
+    });
+    await service.cancel(record.id, 'test');
+    await pending;
+  });
+
+  it('вопрос multiple: true принимает несколько значений', async () => {
+    const { repository, service } = createService();
+    const multiple: QuestionItem[] = [{ ...QUESTIONS[0]!, multiple: true }];
+    const pending = service.ask({ sessionId: 's1', questions: multiple });
+    await Promise.resolve();
+    const record = (await repository.list())[0]!;
+
+    const answered = await service.answer(record.id, [['a', 'b']]);
+    expect(answered.answers).toEqual([['a', 'b']]);
     await pending;
   });
 

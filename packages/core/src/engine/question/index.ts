@@ -5,7 +5,7 @@
  * вопроса: постановка → ожидание ответа → ответ/отмена. Хранилище — порт
  * `QuestionRepository` (ADR-096), транспорт — шина событий сессии (ADR-009).
  */
-export { QuestionService, validateAnswers } from './service.js';
+export { QuestionService, validateAnswers, MAX_FREE_ANSWER_LENGTH } from './service.js';
 export type { QuestionServiceOptions, QuestionLogger } from './service.js';
 export { startQuestionPruner } from './prune.js';
 export type { QuestionPrunerOptions } from './prune.js';

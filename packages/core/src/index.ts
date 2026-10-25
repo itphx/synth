@@ -248,6 +248,7 @@ export {
   QuestionService,
   startQuestionPruner,
   validateAnswers,
+  MAX_FREE_ANSWER_LENGTH,
   QUESTION_ERROR_CODES,
   QuestionError,
   QuestionNotFoundError,

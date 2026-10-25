@@ -101,16 +101,24 @@ export class QuestionAlreadySettledError extends QuestionError {
  *
  * - `no_questions` — вопрос задан без единого пункта (защита сервиса);
  * - `answer_count_mismatch` — число ответов ≠ числу заданных вопросов;
- * - `empty_answer` — на вопрос не выбран ни один вариант;
- * - `unknown_option` — значение ответа не входит в варианты вопроса.
+ * - `empty_answer` — на вопрос не выбран ни один вариант / пустая строка;
+ * - `too_many_answers` — одиночный вопрос (`multiple: false`) получил больше
+ *   одного значения;
+ * - `invalid_answer` — значение ответа не строка;
+ * - `answer_too_long` — свободный ответ длиннее `MAX_FREE_ANSWER_LENGTH`.
+ *
+ * Значение, не входящее в `options[].value`, **не** является ошибкой: свободный
+ * ответ разрешён всегда (аналог «Type your own answer» в opencode).
  */
 export type QuestionInvalidAnswerReason =
   | 'no_questions'
   | 'answer_count_mismatch'
   | 'empty_answer'
-  | 'unknown_option';
+  | 'too_many_answers'
+  | 'invalid_answer'
+  | 'answer_too_long';
 
-/** Ответ не проходит валидацию (число ответов, пустой ответ, чужой вариант). */
+/** Ответ не проходит валидацию (число ответов, пустой ответ, лишнее значение). */
 export class QuestionInvalidAnswerError extends QuestionError {
   readonly reason: QuestionInvalidAnswerReason;
   /** Индекс вопроса (по порядку в `questions`), если ошибка привязана к нему. */

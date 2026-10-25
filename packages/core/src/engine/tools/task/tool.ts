@@ -70,6 +70,17 @@ export const taskTool: ToolDefinition = {
       return await continueChildSession({ params, extra, ctx });
     }
 
+    // ─── Фон недоступен → отказ ДО создания дочерней сессии ────────
+    // Проверка идёт до `prepareChildSession`: иначе при выключенном фоне
+    // оставался бы «пустой» ребёнок (сессия + `session.created`) без прогона.
+    if (params.background === true && (!extra.backgroundService || extra.backgroundEnabled === false)) {
+      return {
+        content: sm('task.background_disabled'),
+        isError: true,
+        metadata: { i18n: i18nMeta('task.background_disabled') },
+      };
+    }
+
     const contextMode: ContextMode = params.context_mode || 'none';
     const contextCount = params.context_count || DEFAULT_LAST_N;
     const systemPrompt = resolveSubagentPrompt(

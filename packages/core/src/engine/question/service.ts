@@ -61,14 +61,24 @@ interface QuestionWaiter {
 const RECOVER_LIMIT = 1000;
 
 /**
+ * Предел длины свободного ответа (символов после `trim()`).
+ *
+ * Значение из `options[].value` ограничением не связано (оно задано
+ * автором вопроса); ограничение относится к «своему ответу».
+ */
+export const MAX_FREE_ANSWER_LENGTH = 1000;
+
+/**
  * Сервис вопросов пользователю.
  *
  * Инварианты:
  * 1. **Один переход состояния**: `pending → answered | cancelled`. Повторный
  *    ответ/отмена закрытого вопроса — `QuestionAlreadySettledError`;
  * 2. **Ответ валидируется по составу вопроса**: число ответов равно числу
- *    вопросов, на каждый вопрос — хотя бы одно значение, значение входит в
- *    `options[].value`;
+ *    вопросов, на каждый вопрос — хотя бы одно значение, для одиночного
+ *    вопроса — не больше одного; значение из `options[].value` валидно, но
+ *    **свободный ответ (любая непустая строка) валиден тоже** — ограничение
+ *    только длина и непустота;
  * 3. **Ожидание — в памяти**: ответ, пришедший после рестарта процесса,
  *    закрывает запись, но уже не разблокирует ход (вопрос снят при старте).
  */
@@ -370,22 +380,40 @@ export class QuestionService {
  * Правила (ADR-029-подобная строгость, но для данных, а не для прав):
  * - число ответов равно числу вопросов;
  * - на каждый вопрос — хотя бы одно значение;
- * - значение входит в `options[].value` вопроса (свой ответ в UI добавляется
- *   отдельным вариантом — «Type your own answer»).
+ * - одиночный вопрос (`multiple: false`) — не больше одного значения;
+ * - значение из `options[].value` — всегда валидно;
+ * - **свободный ответ разрешён всегда** (аналог «Type your own answer» в
+ *   opencode): любая непустая строка (после `trim()`) валидна; ограничение —
+ *   длина (`MAX_FREE_ANSWER_LENGTH`) и непустота. Пустая/пробельная строка —
+ *   `empty_answer`, не-строка — `invalid_answer`, длиннее предела —
+ *   `answer_too_long`.
  */
 export function validateAnswers(questions: QuestionItem[], answers: string[][]): void {
   if (!Array.isArray(answers) || answers.length !== questions.length) {
     throw new QuestionInvalidAnswerError('answer_count_mismatch');
   }
   for (let i = 0; i < questions.length; i += 1) {
-    const values = answers[i] ?? [];
-    if (values.length === 0) {
+    const question = questions[i];
+    const values = answers[i];
+    if (!Array.isArray(values) || values.length === 0) {
       throw new QuestionInvalidAnswerError('empty_answer', i);
     }
-    const allowed = new Set((questions[i]?.options ?? []).map((o) => o.value));
+    // Одиночный вопрос — максимум одно значение (свой ответ заменяет вариант).
+    if (question?.multiple !== true && values.length > 1) {
+      throw new QuestionInvalidAnswerError('too_many_answers', i);
+    }
+    const allowed = new Set((question?.options ?? []).map((o) => o.value));
     for (const value of values) {
-      if (!allowed.has(value)) {
-        throw new QuestionInvalidAnswerError('unknown_option', i);
+      if (typeof value !== 'string') {
+        throw new QuestionInvalidAnswerError('invalid_answer', i);
+      }
+      if (allowed.has(value)) continue;
+      const trimmed = value.trim();
+      if (trimmed.length === 0) {
+        throw new QuestionInvalidAnswerError('empty_answer', i);
+      }
+      if (trimmed.length > MAX_FREE_ANSWER_LENGTH) {
+        throw new QuestionInvalidAnswerError('answer_too_long', i);
       }
     }
   }

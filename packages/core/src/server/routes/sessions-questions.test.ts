@@ -166,6 +166,26 @@ describe('HTTP: вопросы пользователю (этап 1 roadmap 0.13
     await pending;
   });
 
+  it('POST answer — свой ответ (вне options) принимается', async () => {
+    const { app, sessionManager, questionService } = createApp();
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    const pending = questionService.ask({ sessionId: session.id, questions: QUESTIONS });
+    await new Promise((r) => setTimeout(r, 0));
+    const record = (await questionService.listPending(session.id))[0]!;
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/questions/${record.id}/answer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers: [['свой ответ']] }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { question: { status: string; answers: string[][] } };
+    expect(body.question.status).toBe('answered');
+    expect(body.question.answers).toEqual([['свой ответ']]);
+
+    await pending;
+  });
+
   it('POST answer — невалидный ответ → 400 VALIDATION_ERROR', async () => {
     const { app, sessionManager, questionService } = createApp();
     const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
@@ -173,11 +193,11 @@ describe('HTTP: вопросы пользователю (этап 1 roadmap 0.13
     await new Promise((r) => setTimeout(r, 0));
     const record = (await questionService.listPending(session.id))[0]!;
 
-    // Значение вне вариантов вопроса.
+    // Пустой ответ на вопрос.
     const res = await app.request(`/api/v2/sessions/${session.id}/questions/${record.id}/answer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ answers: [['zzz']] }),
+      body: JSON.stringify({ answers: [['']] }),
     });
     expect(res.status).toBe(400);
     expect(((await res.json()) as ErrorBody).error.code).toBe('VALIDATION_ERROR');

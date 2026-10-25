@@ -338,6 +338,61 @@ describe('task/tool.ts — фоновый саб-агент (PROP-096)', () => {
     expect(await service.list()).toHaveLength(0);
   });
 
+  it('фон недоступен — дочерняя сессия не создаётся, session.created не публикуется', async () => {
+    const { provider, chatAsync } = makeProvider();
+    const { service } = makeBackgroundService();
+    const eventBus = new EventBus();
+    const created: string[] = [];
+    eventBus.subscribe(parent.id, (e) => {
+      if (e.type === 'session.created') created.push(e.type);
+    });
+
+    const sessionsBefore = await sessionManager.listSessions(undefined, { light: true });
+
+    // 1. Фон выключен инстансом (`backgroundEnabled: false`).
+    const disabled = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore', background: true },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        eventBus,
+        backgroundService: service,
+        backgroundEnabled: false,
+      }, parent.id),
+    );
+
+    expect(disabled.isError).toBe(true);
+    expect(disabled.content).toContain('Background subagents are disabled');
+    expect(disabled.metadata!.i18n).toMatchObject({ key: 'task.background_disabled' });
+
+    // 2. Сервиса фоновых прогонов нет вовсе.
+    const noService = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore', background: true },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        eventBus,
+      }, parent.id),
+    );
+
+    expect(noService.isError).toBe(true);
+    expect(noService.content).toContain('Background subagents are disabled');
+    expect(noService.metadata!.i18n).toMatchObject({ key: 'task.background_disabled' });
+
+    // Дочерней сессии не появилось — «пустого» ребёнка не осталось.
+    const sessionsAfter = await sessionManager.listSessions(undefined, { light: true });
+    expect(sessionsAfter).toHaveLength(sessionsBefore.length);
+    expect(sessionsAfter.map((s) => s.id)).toEqual(sessionsBefore.map((s) => s.id));
+    expect(created).toHaveLength(0);
+    // Прогон не запускался — LLM не звали.
+    expect(chatAsync).not.toHaveBeenCalled();
+    expect(await service.list()).toHaveLength(0);
+  });
+
   it('превышен лимит фоновых саб-агентов сессии — отказ task.background_limit', async () => {
     const { provider, release } = gatedProvider();
     const { service, notifications } = makeBackgroundService({ maxSubagentsPerSession: 1 });
