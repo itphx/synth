@@ -70,6 +70,7 @@ function makeIndex(over: Partial<MemoryIndexRecord> = {}): MemoryIndexRecord {
     namespace: 'plugin:other',
     name: 'корпус',
     providerId: 'plugin:other',
+    scope: 'project',
     source: { kind: 'project' },
     state: 'building',
     generation: 1,

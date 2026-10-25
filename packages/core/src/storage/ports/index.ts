@@ -155,6 +155,7 @@ export type {
   MemoryIndexRepository,
   MemoryIndexRecord,
   MemoryIndexQuery,
+  MemoryIndexScope,
   MemoryIndexState,
   MemoryIndexFingerprint,
   MemoryIndexSource,

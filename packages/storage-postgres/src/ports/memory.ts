@@ -37,6 +37,7 @@ import type {
   MemoryIndexQuery,
   MemoryIndexRecord,
   MemoryIndexRepository,
+  MemoryIndexScope,
   MemoryIndexState,
   StorageContext,
 } from '@itphx/synth-core';
@@ -304,6 +305,7 @@ type MemoryIndexRow = {
   name: string;
   provider_id: string;
   project_id: string | null;
+  scope: string | null;
   source: unknown;
   state: string;
   generation: number;
@@ -326,6 +328,14 @@ type MemoryChunkRow = {
   metadata: unknown;
 };
 
+/**
+ * Область видимости индекса: `instance` — как есть, всё прочее (включая
+ * `NULL` у строк, созданных до миграции 018) — `project`.
+ */
+function normalizeScope(scope: unknown): MemoryIndexScope {
+  return scope === 'instance' ? 'instance' : 'project';
+}
+
 /** Запись индекса из колонок. */
 function toIndex(row: MemoryIndexRow): MemoryIndexRecord {
   return compact({
@@ -334,6 +344,7 @@ function toIndex(row: MemoryIndexRow): MemoryIndexRecord {
     name: row.name,
     providerId: row.provider_id,
     projectId: row.project_id ?? undefined,
+    scope: normalizeScope(row.scope),
     source: row.source as MemoryIndexRecord['source'],
     state: row.state as MemoryIndexState,
     generation: row.generation,
@@ -367,15 +378,16 @@ export class PgMemoryIndexRepository implements MemoryIndexRepository {
   async saveIndex(index: MemoryIndexRecord): Promise<void> {
     await this._deps.connection.query(
       `INSERT INTO memory_indexes
-         (id, namespace, name, provider_id, project_id, source, state, generation,
+         (id, namespace, name, provider_id, project_id, scope, source, state, generation,
           fingerprint, stats, created_at, updated_at, error)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10::jsonb,
-               $11::timestamptz, $12::timestamptz, $13)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb,
+               $12::timestamptz, $13::timestamptz, $14)
        ON CONFLICT (id) DO UPDATE SET
          namespace = EXCLUDED.namespace,
          name = EXCLUDED.name,
          provider_id = EXCLUDED.provider_id,
          project_id = EXCLUDED.project_id,
+         scope = EXCLUDED.scope,
          source = EXCLUDED.source,
          state = EXCLUDED.state,
          generation = EXCLUDED.generation,
@@ -390,6 +402,7 @@ export class PgMemoryIndexRepository implements MemoryIndexRepository {
         index.name,
         index.providerId,
         index.projectId ?? null,
+        normalizeScope(index.scope),
         jsonbParam(index.source),
         index.state,
         index.generation,
@@ -420,6 +433,10 @@ export class PgMemoryIndexRepository implements MemoryIndexRepository {
     if (query?.projectId !== undefined) {
       params.push(query.projectId);
       where.push(`project_id = $${params.length}`);
+    }
+    if (query?.scope !== undefined) {
+      params.push(normalizeScope(query.scope));
+      where.push(`scope = $${params.length}`);
     }
     if (query?.providerId !== undefined) {
       params.push(query.providerId);

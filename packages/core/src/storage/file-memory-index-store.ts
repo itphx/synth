@@ -7,6 +7,7 @@ import type {
   MemoryIndexQuery,
   MemoryIndexRecord,
   MemoryIndexRepository,
+  MemoryIndexScope,
   MemoryIndexState,
 } from './ports/memory-index-repository.js';
 import { readCollectionFile, writeCollectionFile } from './json-collection-file.js';
@@ -227,7 +228,15 @@ export class FileMemoryIndexStore implements MemoryIndexRepository {
   }
 
   private async _readIndexes(): Promise<MemoryIndexRecord[]> {
-    return readCollectionFile<MemoryIndexRecord>(this.path(), INDEXES_KEY, 'файл индексов памяти');
+    const indexes = await readCollectionFile<MemoryIndexRecord>(
+      this.path(),
+      INDEXES_KEY,
+      'файл индексов памяти',
+    );
+    // Область видимости нормализуется **при чтении**: легаси-записи без поля
+    // (и записи с невалидным значением) читаются как `project` — как
+    // нормализация иконок/цветов. Запись идёт «как есть».
+    return indexes.map((index) => ({ ...index, scope: normalizeScope(index.scope) }));
   }
 
   private async _writeIndexes(indexes: MemoryIndexRecord[]): Promise<void> {
@@ -283,11 +292,20 @@ function stateList(state: MemoryIndexQuery['state']): readonly MemoryIndexState[
   return Array.isArray(state) ? (state as readonly MemoryIndexState[]) : [state as MemoryIndexState];
 }
 
+/**
+ * Область видимости индекса при чтении: `instance` — как есть, всё прочее
+ * (включая отсутствующее поле легаси-записи) — `project`.
+ */
+function normalizeScope(scope: unknown): MemoryIndexScope {
+  return scope === 'instance' ? 'instance' : 'project';
+}
+
 /** Совпадает ли индекс с фильтрами запроса (все условия — по «И»). */
 function matches(index: MemoryIndexRecord, query: MemoryIndexQuery | undefined): boolean {
   if (!query) return true;
   if (query.namespace !== undefined && index.namespace !== query.namespace) return false;
   if (query.projectId !== undefined && index.projectId !== query.projectId) return false;
+  if (query.scope !== undefined && index.scope !== query.scope) return false;
   if (query.providerId !== undefined && index.providerId !== query.providerId) return false;
   const states = stateList(query.state);
   if (states !== undefined && !states.includes(index.state)) return false;

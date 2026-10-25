@@ -51,6 +51,7 @@ function makeIndex(id: string, state: MemoryIndexRecord['state'], generation = 1
     namespace: MEMORY_NAMESPACE,
     name: id,
     providerId: MEMORY_NAMESPACE,
+    scope: 'project',
     source: { kind: 'project' },
     state,
     generation,

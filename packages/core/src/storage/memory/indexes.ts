@@ -22,6 +22,7 @@ import type {
   // объявлением (в публичном API core класс экспортируется как
   // `MemoryIndexRepositoryImpl`).
   MemoryIndexRepository as MemoryIndexRepositoryPort,
+  MemoryIndexScope,
   MemoryIndexState,
 } from '../ports/memory-index-repository.js';
 import { resolveCollectionLimit } from '../ports/collection-limit.js';
@@ -33,11 +34,20 @@ function stateList(state: MemoryIndexQuery['state']): readonly MemoryIndexState[
   return Array.isArray(state) ? (state as readonly MemoryIndexState[]) : [state as MemoryIndexState];
 }
 
+/**
+ * Область видимости индекса при чтении: `instance` — как есть, всё прочее
+ * (включая отсутствующее поле легаси-записи) — `project`.
+ */
+function normalizeScope(scope: unknown): MemoryIndexScope {
+  return scope === 'instance' ? 'instance' : 'project';
+}
+
 /** Совпадает ли индекс с фильтрами запроса (все условия — по «И»). */
 function matches(index: MemoryIndexRecord, query: MemoryIndexQuery | undefined): boolean {
   if (!query) return true;
   if (query.namespace !== undefined && index.namespace !== query.namespace) return false;
   if (query.projectId !== undefined && index.projectId !== query.projectId) return false;
+  if (query.scope !== undefined && index.scope !== query.scope) return false;
   if (query.providerId !== undefined && index.providerId !== query.providerId) return false;
   const states = stateList(query.state);
   if (states !== undefined && !states.includes(index.state)) return false;
@@ -55,6 +65,8 @@ export class MemoryIndexRepository implements MemoryIndexRepositoryPort {
 
   async saveIndex(index: MemoryIndexRecord): Promise<void> {
     const stored = this._indexes.get(index.id);
+    // Область видимости при сохранении **не выдумывается**: пишется как есть
+    // (нормализация — на чтении).
     this._indexes.set(index.id, {
       ...structuredClone(index),
       // `createdAt` иммутабельно, `updatedAt` монотонно обновляется.
@@ -65,11 +77,14 @@ export class MemoryIndexRepository implements MemoryIndexRepositoryPort {
 
   async getIndex(id: string): Promise<MemoryIndexRecord | null> {
     const index = this._indexes.get(id);
-    return index ? structuredClone(index) : null;
+    if (!index) return null;
+    return { ...structuredClone(index), scope: normalizeScope(index.scope) };
   }
 
   async listIndexes(query?: MemoryIndexQuery): Promise<MemoryIndexRecord[]> {
-    const filtered = [...this._indexes.values()].filter((index) => matches(index, query));
+    const filtered = [...this._indexes.values()]
+      .map((index) => ({ ...index, scope: normalizeScope(index.scope) }))
+      .filter((index) => matches(index, query));
     // Свежие первыми (`createdAt` убыв.), тайбрейкер — `id`.
     const sorted = [...filtered].sort((a, b) => {
       const diff = Date.parse(b.createdAt) - Date.parse(a.createdAt);

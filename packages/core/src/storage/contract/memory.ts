@@ -37,6 +37,7 @@ function index(id: string, overrides: Partial<MemoryIndexRecord> = {}): MemoryIn
     name: id,
     providerId: 'plugin:synth-plugin-memory',
     projectId: 'project-1',
+    scope: 'project',
     source: { kind: 'project', filter: '**/*.ts' },
     state: 'building',
     generation: 1,
@@ -281,7 +282,9 @@ export function describeMemoryFactRepository(
  *
  * Проверяется общий для всех backend'ов контракт:
  * - индексы — upsert по `id` (`createdAt` не теряется), чтение, фильтры
- *   `namespace`/`projectId`/`providerId`/`state`, пагинация, удаление;
+ *   `namespace`/`projectId`/`scope`/`providerId`/`state`, пагинация, удаление;
+ * - область видимости (`scope`) — сохраняется при записи и при upsert, фильтр
+ *   `listIndexes({scope})` отбирает записи по области;
  * - `setState` — смена состояния (с ошибкой), для отсутствующего — `false`;
  * - чанки — `replaceChunks` **атомарно заменяет поколение** (старое поколение
  *   не трогается), `listChunks` с фильтрами и пагинацией, `deleteChunks`,
@@ -359,6 +362,60 @@ export function describeMemoryIndexRepository(
         (await repo.listIndexes({ namespace: 'plugin:a', state: 'ready' })).map((i) => i.id),
       ).toEqual(['index-2']);
       expect(await repo.listIndexes({ namespace: 'plugin:missing' })).toEqual([]);
+    });
+
+    it('индекс: область видимости сохраняется (roundtrip)', async () => {
+      const { repo } = await make();
+      await repo.saveIndex(index('index-instance', { scope: 'instance', projectId: undefined }));
+
+      const saved = await repo.getIndex('index-instance');
+      expect(saved?.scope).toBe('instance');
+      // Запись без проекта (источник корпуса — не проект) допустима.
+      expect(saved?.projectId).toBeUndefined();
+
+      const listed = await repo.listIndexes({ scope: 'instance' });
+      expect(listed.map((i) => i.id)).toEqual(['index-instance']);
+      expect(listed[0]?.scope).toBe('instance');
+    });
+
+    it('индексы: фильтр по области видимости (scope)', async () => {
+      const { repo } = await make();
+      await repo.saveIndex(index('index-project', { scope: 'project', projectId: 'project-1' }));
+      await repo.saveIndex(index('index-instance', { scope: 'instance', projectId: 'project-1' }));
+
+      expect((await repo.listIndexes({ scope: 'project' })).map((i) => i.id)).toEqual([
+        'index-project',
+      ]);
+      expect((await repo.listIndexes({ scope: 'instance' })).map((i) => i.id)).toEqual([
+        'index-instance',
+      ]);
+      // Без фильтра — оба.
+      expect((await repo.listIndexes()).map((i) => i.id).sort()).toEqual([
+        'index-instance',
+        'index-project',
+      ]);
+      // AND: область видимости И проект.
+      expect(
+        (await repo.listIndexes({ scope: 'instance', projectId: 'project-1' })).map((i) => i.id),
+      ).toEqual(['index-instance']);
+      expect(await repo.listIndexes({ scope: 'instance', projectId: 'project-2' })).toEqual([]);
+    });
+
+    it('индекс: upsert не сбрасывает область видимости', async () => {
+      const { repo } = await make();
+      await repo.saveIndex(index('index-1', { scope: 'instance' }));
+
+      await repo.saveIndex(
+        index('index-1', { scope: 'instance', name: 'переименованный', generation: 2 }),
+      );
+      const updated = await repo.getIndex('index-1');
+      expect(updated?.scope).toBe('instance');
+      expect(updated?.name).toBe('переименованный');
+      expect(updated?.generation).toBe(2);
+
+      // Смена области видимости — только явная (значение из записи).
+      await repo.saveIndex(index('index-1', { scope: 'project' }));
+      expect((await repo.getIndex('index-1'))?.scope).toBe('project');
     });
 
     it('индексы: порядок «свежие первыми» и пагинация', async () => {
