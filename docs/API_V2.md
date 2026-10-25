@@ -249,6 +249,26 @@ interface BusEvent { type: EventType; sessionId: string; data: Record<string, un
 `authority.shadow`); в shadow/выключенном режиме ответ принимается по-старому (по видимости сессии) —
 см. [ADR-106](./arch_decisions/adr-106-authority-layer.md).
 
+### 3.2. Фоновые прогоны и вопросы пользователю
+
+События фоновой работы и «вопрос пользователю» публикуются в **канале
+сессии-владельца** (`EventBus.publish(sessionId, …)`, ADR-009) — новых
+транспортных каналов не заводим (ADR-024).
+
+| Событие | Когда | Поля `data` |
+|---|---|---|
+| `user_question.asked` | агент задал вопрос и ждёт ответа | `question_id`, `session_id`, `questions[]`, `turn_id?`, `tool_call_id?`, `agent_role?` |
+| `user_question.answered` | пользователь ответил | `question_id`, `session_id`, `answers[][]` |
+| `user_question.cancelled` | вопрос отменён (таймаут, «Стоп», ручная отмена) | `question_id`, `session_id`, `reason` |
+| `process.started` | запущена фоновая шелл-команда (`kind:'process'`) | `process_id`, `session_id`, `command`, `cwd`, `pid?`, `background_run_id`, `log_path` |
+| `process.exited` | фоновый процесс завершён | `process_id`, `session_id`, `state` (`completed`/`failed`/`cancelled`/`orphaned`), `exit_code?`, `signal?`, `background_run_id` |
+| `child.completed` / `child.failed` / `child.cancelled` | фоновый саб-агент завершился (успех/ошибка/отмена; `kind:'subagent'`) | `child_session_id`, `parent_session_id`, `state`, `background_run_id`, `description` |
+
+Префикс `user_question.*` — намеренно **не** `question.*`: `question.asked` уже
+занят смыслом «очередь зависла». Событие `process.stopped` объявлено в типах
+(`EventType`) и обрабатывается клиентом как терминальное, но ядро публикует
+остановку прогона как `process.exited` со `state: 'cancelled'`.
+
 ---
 
 ## 4. LLM Proxy
@@ -2075,6 +2095,65 @@ curl 'http://localhost:5000/api/v2/memory/graph?entity=Fleet&depth=2&limit=50' \
   -H 'Authorization: Bearer admin-key-123'
 ```
 
+### 5.39 Фоновые прогоны — `/api/v2/processes` (оба, ADR-111/PROP-097)
+
+Единый реестр фоновой работы ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
+PROP-096/PROP-097): два вида прогонов — `subagent` (фоновая дочерняя сессия
+саб-агента, `task({background: true})`) и `process` (фоновая шелл-команда,
+`execute_shell({background: true})`). Запись реестра персистентна (порт
+`BackgroundRunRepository`, ADR-096), поэтому состояние прогона переживает
+реконнект UI и рестарт сервиса; «живые» хэндлы отмены живут в памяти процесса
+(после рестарта записи `running` становятся `orphaned`).
+
+Фабрика `createProcessRoutes` — общая для core и backend; managed передаёт
+правило доступа по проекту (`packages/backend/src/routes/processes.ts`).
+
+| Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/processes` | оба | auth | Список прогонов `{runs}`; фильтры `sessionId`/`projectId`/`kind` (`subagent`/`process`)/`status` (`running`/`completed`/`failed`/`cancelled`/`orphaned`)/`limit` (по умолчанию 50, максимум 200); неверный `kind`/`status` → 400 `VALIDATION_ERROR`. Выдаются только прогоны сессий, доступных пользователю (владелец/участник проекта; `ADMIN`/`LEAD` — все) |
+| GET | `/api/v2/processes/:id` | оба | auth | Прогон `{run}` (запись реестра целиком); прогона нет → 404 `NOT_FOUND`, сессии-владельца нет → 404, нет прав → 403 `FORBIDDEN` |
+| GET | `/api/v2/processes/:id/logs` | оба | auth | Отрезок лога фонового процесса `{content, offset, nextOffset, totalBytes, truncated}`; только `kind:'process'` (для `subagent` → 400 `VALIDATION_ERROR`), файла лога нет → 404 `NOT_FOUND`. `offset` — смещение в байтах от начала лога, `limit` — размер выдачи (по умолчанию и максимум — 256 КиБ) |
+| POST | `/api/v2/processes/:id/stop` | оба | auth (**write**) | Остановить прогон → 200 `{status:'stopping'}` (остановка асинхронная: итоговый статус приходит событием `process.exited`); прогон уже не `running` либо идёт в другом процессе (остановить отсюда нельзя) → 409 `CONFLICT` |
+| DELETE | `/api/v2/processes/:id` | оба | auth (**write**) | Удалить запись реестра → **204**; прогон ещё `running` → 409 `CONFLICT` |
+
+**Граница доступа (инварианты 16/21).** Право на прогон — это право на его
+**сессию-владельца**, и проверяется оно **на границе**, а не в обработчике:
+guard резолвит запись реестра и её сессию-владельца **один раз** и кладёт
+запись в контекст Hono (`guardedProcess`); в обработчиках проверок доступа
+нет — иначе правила разошлись бы. Вид доступа выводится из HTTP-метода
+(`read` — чтение, `write` — мутация): участник проекта с ролью просмотра
+(`VIEWER`) читает прогон, но **не** может его остановить или удалить
+(инвариант 21). Правила ролей managed: владелец сессии; `ADMIN` — сквозной
+доступ; `LEAD` — сквозной доступ к содержимому проекта; участник проекта —
+`read` любая роль, `write` — `OWNER`/`EDITOR`/`LEAD`/`ADMIN`. В standalone
+(core) действует предикат единственного владельца инстанса. Список прогонов
+фильтруется по тому же правилу: запись, чью сессию не видно, в выдаче не
+появляется вовсе (сессии кэшируются на один запрос, не на процесс — права
+меняются, кэш процесса раздавал бы устаревшие решения).
+
+**Деградированный режим хранилища (ADR-098).** В деградированном режиме
+сервисы фоновой работы не создаются — контур `/api/v2/processes` **не
+монтируется**, поэтому все эндпоинты раздела отвечают `404` (контура нет).
+
+**События.** Живые изменения приходят в **канале сессии-владельца**
+(`process.started`/`process.exited`/`child.*`, ADR-009/ADR-024; новых
+транспортных каналов нет) — состав и поля событий — §3.2. Фоновый саб-агент
+дополнительно публикует уведомление в историю родителя и ставит родительский
+ход в очередь (автоход) — по [ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md).
+
+**Хранилище.** Реестр — `{dataDir}/processes/registry.json` (ADR-005, атомарная
+запись); PostgreSQL — таблица `background_runs` (миграция `021_background_runs`
+драйвера `@itphx/synth-storage-postgres`, ADR-097). Логи фоновых процессов —
+blob-хранилище (`BlobStore`), путь `processes/<id>.log`; предел записи лога —
+`background.logMaxBytes` (потолок выдачи за один HTTP-запрос — 256 КиБ, это
+разные величины).
+
+**UI.** Вкладка «Процессы» правой панели
+(`packages/ui/src/components/panels/ProcessesTab.tsx`): список прогонов (вид,
+статус, команда/описание, время), лог фонового процесса, «Остановить» и
+удаление записи. Обновление — live-события `process.*`/`child.*` плюс
+периодическое перечитывание списка, пока вкладка активна.
+
 ## 6. Источники
 
 | Компонент | Файл |
@@ -2094,6 +2173,7 @@ curl 'http://localhost:5000/api/v2/memory/graph?entity=Fleet&depth=2&limit=50' \
 | Плагины (ADR-090) | `packages/core/src/server/routes/plugins.ts`, `packages/core/src/engine/plugins/*` (хост, загрузчик, установщик, рантайм), `packages/shared/src/types/{pack,plugin-audit,plugin-lock,plugin-scan,prompt-blocks,llm-filters,plugin-tools}.ts` |
 | Внешние доступы (ADR-105) | `packages/core/src/server/routes/oauth.ts`, `packages/core/src/engine/oauth/*` (клиент, сервис, реестр, аудит), `packages/core/src/storage/external-credential-store.ts`, `packages/core/src/storage/ports/{external-credential-repository,credential-audit-repository}.ts`, `packages/shared/src/types/external-credentials.ts` |
 | Память: портал и метрики (ADR-107, PROP-047) | `packages/core/src/server/routes/memory.ts`, `packages/core/src/metrics/collectors/memory.ts`, `packages/core/src/storage/ports/{memory-fact-repository,memory-index-repository}.ts`, `packages/core/src/engine/plugins/scoped-memory.ts` |
+| Фоновые прогоны: реестр, сервисы, HTTP-контур (ADR-111, PROP-096/097) | `packages/core/src/server/routes/processes.ts`, `packages/core/src/engine/background/*`, `packages/core/src/engine/processes/*`, `packages/core/src/storage/ports/background-run-repository.ts`, `packages/backend/src/routes/processes.ts`, `packages/shared/src/types/background.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

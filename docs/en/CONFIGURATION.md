@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-10-25 (секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секции про плагины `plugins.*`): ADR-102, секция `analytics`.
+> ⚠️ RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*`; перевод отстаёт); RU-версия обновлена 2026-10-25 (секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секции про плагины `plugins.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:

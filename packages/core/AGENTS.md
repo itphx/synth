@@ -331,7 +331,8 @@
   `commands`, `skill-bundles`, `skill-scope`, `git`, `ssh-keys`, `events`, `identities`,
   `service-keys`, `webhooks`, `oauth` (ADR-105 Ф4: `/api/v2/oauth/credentials*` — выдача,
   метаданные, refresh, отзыв, привязка к MCP-коннектору), `maintenance`, `analytics`,
-  `processes` (PROP-096/097: `/api/v2/processes*` — реестр фоновых прогонов).
+  `processes` (ADR-111/PROP-096/097: `/api/v2/processes*` — единый реестр фоновых прогонов;
+  в деградированном режиме хранилища контур **не монтируется** → 404).
 - `maintenance/*` — ADR-091/ADR-092: обслуживание инстанса. `service.ts` — сервисный слой
   admin-API/UI (список/создание бэкапов, отложенное восстановление
   `scheduleRestore`/`getPendingRestore`/`cancelPendingRestore`, сводный статус; запросы —
@@ -1209,6 +1210,34 @@
   напрямую, событие в `EventIngress`/Router **не публикуется**, `payload` статический, пайплайн
   должен быть опубликован; Job — `decision:'pipeline'` с `pipelineId`/`runId`
   (`SchedulerRuleProvider` для такой цели отдаёт `null`).
+- `engine/question/*` — ADR-112 (этап 1 roadmap 0.13 — блок 1.3): «вопрос пользователю»
+  (`ask_user`). `service.ts` (`QuestionService`: `ask`/`answer`/`cancel`/`list`/`listPending`/
+  `cancelSession`; ожидание ответа — в памяти процесса, таймер `unref`), `types.ts`
+  (вход/выход вопроса, коды ошибок `QuestionError`/`QuestionNotFoundError`/…), `prune.ts`
+  (`startQuestionPruner` — retention
+  терминальных записей, сразу + каждые 6 ч). Публикует `user_question.asked`/
+  `user_question.answered`/`user_question.cancelled` в канале сессии. Тул — `engine/tools/
+  question.ts` (переводит ответы модели в записи вопросов). Порт — `QuestionRepository`
+  (`storage/ports/question-repository.ts`; файловый — `{dataDir}/questions.json`, в-памяти —
+  `storage/memory/questions.ts`, PG — миграция `021_background_runs`; контракт —
+  `storage/contract/question-repository.contract.ts`).
+- `engine/background/*` — ADR-111 (этап 1 roadmap 0.13 — блок 1.2): единый реестр фоновой
+  работы. `service.ts` (`BackgroundRunService`: `startSubagent`/`startProcess`/`finish`/`stop`/
+  `recoverOnStart`/`prune`/`buildSubagentNotification`; лимиты сессии — `background.*`;
+  терминальный переход публикует `process.exited`/`child.completed|failed|cancelled` в канал
+  сессии-владельца), `types.ts` (входы запуска, лимиты, коды ошибок, `BackgroundLimitExceededError`), `prune.ts`
+  (`startBackgroundRunPruner` — retention, чистятся только терминальные записи). Порт —
+  `BackgroundRunRepository` (`storage/ports/background-run-repository.ts`; файловый —
+  `{dataDir}/processes/registry.json` (`storage/file-background-run-store.ts`), в-памяти —
+  `storage/memory/background-runs.ts`, PG — `packages/storage-postgres/src/ports/
+  background-runs.ts`, миграция `021_background_runs`; контракт —
+  `storage/contract/background-run-repository.contract.ts`).
+- `engine/processes/*` — PROP-097 (ADR-111): фоновые шелл-процессы. `service.ts`
+  (`ProcessService`: `spawn` через `ExecutionPort.spawnBackground`, поток stdout/stderr в лог,
+  `stop`, `logs`; лимит записи лога — `background.logMaxBytes`), `types.ts`
+  (`BackgroundUnsupportedError` и пр.), `prune.ts` (очистка логов). Логи — blob-хранилище
+  (`BlobStore`), путь `processes/<id>.log`. В `remote`-режиме фоновый запуск не поддержан —
+  `background_unsupported` (остаток ADR-077, шаг 7c).
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
@@ -1228,6 +1257,13 @@
   миграция `014` — контрактный suite гоняется на **живой** БД, гейт `SYNTH_TEST_POSTGRES_DSN`);
   контент `provides.authority` пакета активируется в `authorityPolicy` при одобрении пакета и
   снимается при снятии установки (см. `engine/authority/activation.ts`));
+  `QuestionRepository` — персистентные записи вопросов пользователю (ADR-112; файловое —
+  `{dataDir}/questions.json`, в-памяти — `storage/memory/questions.ts`, PG — миграция
+  `021_background_runs`; контракт — `storage/contract/question-repository.contract.ts`);
+  `BackgroundRunRepository` — единый реестр фоновых прогонов (ADR-111; файловое —
+  `{dataDir}/processes/registry.json`, в-памяти — `storage/memory/background-runs.ts`, PG —
+  миграция `021_background_runs`; контракт —
+  `storage/contract/background-run-repository.contract.ts`);
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
   запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/

@@ -73,6 +73,16 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - ADR-102: секция `analytics` (`retentionDays`, default `400`; `<= 0` — хранение без
   ограничения; `analyticsConfigSchema` + `AnalyticsConfig`), скалярный env-оверрайд
   `SYNTH_ANALYTICS_RETENTION_DAYS` по общему правилу секций.
+- Этап 1 roadmap 0.13: секция `questions` (`timeoutMs` — срок ожидания ответа,
+  default `600000`; `retentionDays` — срок хранения терминальных записей, default `14`;
+  `questionsConfigSchema` + `QuestionsConfig`) и секция `background` (`enabled` —
+  default `true`; `maxSubagentsPerSession` — `2`; `maxProcessesPerSession` — `5`;
+  `maxRunsPerSession` — `10`; `logMaxBytes` — `10485760`; `retentionDays` — `7`;
+  `backgroundConfigSchema` + `BackgroundConfig`); скалярные env-оверрайды по общему
+  правилу секций — `SYNTH_QUESTIONS_TIMEOUT_MS`/`SYNTH_QUESTIONS_RETENTION_DAYS` и
+  `SYNTH_BACKGROUND_ENABLED`/`SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION`/
+  `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION`/`SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION`/
+  `SYNTH_BACKGROUND_LOG_MAX_BYTES`/`SYNTH_BACKGROUND_RETENTION_DAYS`.
 - ADR-094: секция `metrics` (`enabled`, default `false`; `metricsConfigSchema` + `MetricsConfig`) —
   мастер-выключатель `GET /metrics`; скалярный env-оверрайд `SYNTH_METRICS_ENABLED` (имя намеренно
   совпадает с Helm-чартом). Токен в схеме **не хранится** (инвариант 13): env `SYNTH_METRICS_TOKEN` /
@@ -326,6 +336,27 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `analyticsDaySchema`/`analyticsRollupBucketSchema`/`analyticsRollupQuerySchema`/
   `analyticsReportRowSchema`/`analyticsReportSchema`/`analyticsSummarySchema`/
   `analyticsExportFormatSchema`.
+- ADR-112 (этап 1 roadmap 0.13 — блок 1.3): **вопрос пользователю** — `types/question.ts`:
+  `QuestionStatus` (`pending`/`answered`/`cancelled`), `QUESTION_TERMINAL_STATUSES`,
+  `QuestionOption`/`QuestionItem`/`QuestionRecord` (запись `qst_<uuid>`; `answers[i]` —
+  выбранные значения вариантов для `questions[i]`), входные `QuestionAnswerInput`/
+  `QuestionCancelInput`; Zod — `questionStatusSchema`/`questionOptionSchema`/
+  `questionItemSchema`/`questionRecordSchema`/`questionAnswerSchema`/`questionCancelSchema`.
+  Capability `ToolCapability.QUESTION` (`types/tools.ts`) — тулы, задающие вопрос и ждущие
+  ответа; отдельная capability по той же причине, что `pipeline`/`schedule` (вопрос —
+  доменный ресурс, а не примитив ядра), и она **не** входит в `WORKSPACE_CAPABILITIES` —
+  вопрос задаётся и без рабочего каталога проекта.
+- ADR-111 (этап 1 roadmap 0.13 — блок 1.2): **единый реестр фоновых прогонов** —
+  `types/background.ts`: `BackgroundRunKind` (`subagent`/`process`), `BackgroundRunStatus`
+  (`running`/`completed`/`failed`/`cancelled`/`orphaned`), `BACKGROUND_RUN_TERMINAL_STATUSES`
+  (чистятся retention-ом), `BackgroundRunRecord` (запись `bgr_<uuid>`) и
+  `BackgroundRunFilter` (все условия — по «И»). Оба контракта (`question.ts`,
+  `background.ts`) — browser-safe: только типы + Zod, без бизнес-логики; re-export из `types`.
+- Этап 1 roadmap 0.13: **события шины** (`types/bus-events.ts`) — `user_question.asked`/
+  `user_question.answered`/`user_question.cancelled` (префикс `user_question.*` намеренно
+  **не** `question.*` — `question.asked` уже занят смыслом «очередь зависла»),
+  `process.started`/`process.exited`/`process.stopped` и `child.completed`/`child.failed`/
+  `child.cancelled`; все публикуются в **канале сессии** (ADR-009/ADR-024, новых каналов нет).
 - ADR-089: внешняя идентичность профиля — тип `ExternalIdentity` (`provider` (префикс principalId,
   напр. `tg`) / `externalId` (числовой id источника строкой) / `username?`/`displayName?` —
   display-кэш, НЕ ключ / `linkedAt` ISO / `linkedBy?`); `ProfileData.identities?: ExternalIdentity[]`
@@ -352,6 +383,13 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - ADR-077: `execution.remote_url_required`, `execution.remote_unavailable` (`{reason}`) —
   fail-closed на старте при `execution.mode=remote` (удалённый исполнитель — шаг 7b плана
   ADR-077: пакет исполнителя недоступен / токен не читается).
+- Этап 1 roadmap 0.13: `question.answered` (`{answers}`), `question.cancelled` (`{reason}`),
+  `question.timeout`, `question.deps_unavailable` — «вопрос пользователю» (ADR-112);
+  `task.background_started` (`{id}`), `task.background_limit` (`{limit}`),
+  `task.background_disabled` — фоновый саб-агент (ADR-111);
+  `process.background_started` (`{id}`, `{log}`), `process.deps_unavailable`,
+  `process.background_limit` (`{limit}`), `process.background_unsupported` — фоновый
+  шелл-процесс (ADR-111/PROP-097).
 
 ## Тесты и сборка
 

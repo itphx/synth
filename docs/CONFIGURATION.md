@@ -84,7 +84,8 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 
 ### Env-оверрайды вложенных секций (ADR-023)
 
-Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `authority` можно задавать
+Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `metrics`,
+`questions`, `background`, `authority` можно задавать
 переменными окружения — удобно для k8s (ConfigMap → env пода). Имя переменной
 собирается по правилу **`SYNTH_<SECTION>_<KEY>`**, где camelCase ключа переводится в
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -144,6 +145,12 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_ANALYTICS_RETENTION_DAYS` | number | `analytics.retentionDays` |
 | `SYNTH_QUESTIONS_TIMEOUT_MS` | number | `questions.timeoutMs` (этап 1 roadmap 0.13 — блок 3) |
 | `SYNTH_QUESTIONS_RETENTION_DAYS` | number | `questions.retentionDays` (этап 1 roadmap 0.13 — блок 3) |
+| `SYNTH_BACKGROUND_ENABLED` | boolean | `background.enabled` (этап 1 roadmap 0.13 — блок 4) |
+| `SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION` | number | `background.maxSubagentsPerSession` (этап 1 roadmap 0.13 — блок 4) |
+| `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION` | number | `background.maxProcessesPerSession` (этап 1 roadmap 0.13 — блок 4) |
+| `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | number | `background.maxRunsPerSession` (этап 1 roadmap 0.13 — блок 4) |
+| `SYNTH_BACKGROUND_LOG_MAX_BYTES` | number | `background.logMaxBytes` (этап 1 roadmap 0.13 — блок 4) |
+| `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (этап 1 roadmap 0.13 — блок 4) |
 | `SYNTH_METRICS_ENABLED` | boolean | `metrics.enabled` |
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; мастер-выключатель слоя полномочий) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — наблюдение, `false` — принуждение) |
@@ -1504,6 +1511,54 @@ questions:
   при старте и далее каждые 6 часов, ошибки логируются и не роняют процесс.
 - **События** — `user_question.asked` / `user_question.answered` /
   `user_question.cancelled` в канале сессии (ADR-009/ADR-024, новых каналов нет).
+
+### Фоновые прогоны (background.*, этап 1 roadmap 0.13 — блок 4)
+
+Секция задаёт поведение единого реестра фоновой работы: фоновые **саб-агенты**
+(`task({background: true})`, PROP-096/ADR-111) и фоновые **шелл-процессы**
+(`execute_shell({background: true})`, PROP-097) живут в **одном** реестре —
+второго хранилища нет. Лимиты считаются по сессии-владельцу (для саб-агента —
+родительская сессия).
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `background.enabled` | Мастер-выключатель фоновой работы. `false` — `task({background: true})` отвечает ошибкой `background_disabled` (ход не падает), а foreground-работа и реестр продолжают работать. Env — `SYNTH_BACKGROUND_ENABLED` | `true` |
+| `background.maxSubagentsPerSession` | Максимум одновременно идущих фоновых саб-агентов на сессию-владельца; превышение → `background_limit_exceeded` (ошибка тула, ход не падает). Env — `SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION` | `2` |
+| `background.maxProcessesPerSession` | Максимум одновременно идущих фоновых шелл-процессов на сессию-владельца; превышение → `background_limit_exceeded`. Env — `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION` | `5` |
+| `background.maxRunsPerSession` | Максимум записей реестра на сессию-владельца (считаются все записи, чистятся retention-ом). Env — `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | `10` |
+| `background.logMaxBytes` | Предел размера лога фонового процесса, байт; `0` — без ограничения. Не путать с потолком выдачи лога за один HTTP-запрос (256 КиБ) — это разные величины. Env — `SYNTH_BACKGROUND_LOG_MAX_BYTES` | `10485760` (10 МиБ) |
+| `background.retentionDays` | Срок хранения терминальных записей реестра (`completed`/`failed`/`cancelled`/`orphaned`), дни; `<= 0` — без ограничения. Env — `SYNTH_BACKGROUND_RETENTION_DAYS` | `7` |
+
+```yaml
+background:
+  enabled: true
+  maxSubagentsPerSession: 2
+  maxProcessesPerSession: 5
+  maxRunsPerSession: 10
+  logMaxBytes: 10485760
+  retentionDays: 7
+```
+
+- **Хранение реестра** — доменный порт `BackgroundRunRepository` (ADR-096):
+  файловый backend — `{dataDir}/processes/registry.json` (ADR-005, атомарная
+  запись), PostgreSQL — таблица `background_runs` (миграция
+  `021_background_runs` драйвера). Логи фоновых процессов — blob-хранилище
+  (`BlobStore`), путь `processes/<id>.log`.
+- **Рестарт не возобновляет фоновые прогоны.** «Живые» хэндлы отмены живут в
+  памяти процесса, поэтому при старте все записи `running` переводятся в
+  `orphaned` с пометкой «interrupted by restart»: запись остаётся в реестре
+  (честно показывает незавершённость), но прогона уже нет.
+- **Таймеры** — `unref` (не держат процесс); retention-очистка запускается
+  сразу при старте и далее каждые 6 часов, ошибки логируются и не роняют
+  процесс. Чистятся **только** терминальные записи.
+- **Глубина вложенности — 1**: саб-агент не может породить фонового
+  саб-агента.
+- **Фоновые процессы в `remote`-режиме недоступны** (`background_unsupported`):
+  порт исполнения не умеет фоновый запуск — это остаток ADR-077 (шаг 7c).
+  Для фоновых саб-агентов ограничение не действует.
+- **События** — `process.started` / `process.exited` / `child.completed` /
+  `child.failed` / `child.cancelled` в канале сессии-владельца (ADR-009/ADR-024,
+  новых каналов нет).
 
 ### Наблюдаемость (`metrics.*`, ADR-094)
 
