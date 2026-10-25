@@ -46,6 +46,8 @@ export interface TestFacadeOptions {
   embed?: (texts: readonly string[]) => Promise<number[][]>;
   /** Размерность вектора заглушки (по умолчанию — 8). */
   embedDimension?: number;
+  /** Фактическая модель хоста (для фингерпринта индекса). */
+  embedding?: { provider?: string; model?: string };
 }
 
 /**
@@ -141,6 +143,7 @@ export function createTestFacade(options: TestFacadeOptions = {}): TestFacade {
     embed: options.embed ?? ((texts) => fakeEmbed(texts, options.embedDimension ?? 8)),
     getSettings: <T extends Record<string, unknown> = Record<string, unknown>>(): Readonly<T> =>
       (options.settings ?? {}) as Readonly<T>,
+    ...(options.embedding ? { embedding: options.embedding } : {}),
   };
 
   return { facade, promptBlocks, tools, disposers };

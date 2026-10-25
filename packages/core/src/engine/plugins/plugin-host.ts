@@ -73,6 +73,7 @@ import {
 } from './approval.js';
 import type { PluginApprovalRecord, PluginApprovalStore } from './approval.js';
 import { createPluginEmbedService } from './embed.js';
+import { isSecretDirectoryName, isSecretFileName } from '../security/secret-files.js';
 import { readExactHostExceptions } from './exact-host-exceptions.js';
 import { evaluatePluginServerPolicy } from './hybrid-policy.js';
 import { computePluginContentHash, verifyPluginIntegrity } from './integrity.js';
@@ -614,6 +615,18 @@ export class PluginHost {
       // берёт хост; чужую запись прочитать нельзя; по умолчанию — `{}`.
       getSettings: <T extends Record<string, unknown> = Record<string, unknown>>(): Readonly<T> =>
         (this._settings?.(handle.plugin) ?? {}) as Readonly<T>,
+      // ADR-107: фактическая модель эмбеддингов — для фингерпринта индекса.
+      embedding: {
+        ...(this._config.embeddingProvider ? { provider: this._config.embeddingProvider } : {}),
+        ...(this._config.embeddingModel ? { model: this._config.embeddingModel } : {}),
+      },
+      // ADR-107 (docs/MEMORY.md §10.1): политика «файлы/каталоги секретов».
+      // Список имён живёт в ядре: сканер расширений блокирует бандл за любое
+      // упоминание таких имён, поэтому плагин спрашивает предикаты у хоста.
+      security: {
+        isSecretFile: isSecretFileName,
+        isSecretDirectory: isSecretDirectoryName,
+      },
     };
 
     let module;

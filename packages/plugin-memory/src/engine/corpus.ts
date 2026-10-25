@@ -7,9 +7,10 @@
  * Правила отбора (docs/MEMORY.md §2.3):
  * - только текстовые расширения (список ниже);
  * - исключаются служебные каталоги (`node_modules`, `.git`, `dist`, `build`,
- *   `.next`, `coverage`, `tmp`), каталоги секретов (`.ssh`, `.aws`, `secrets`, …)
- *   и файлы секретов (`SECRET_FILE_PATTERNS`), плюс `*.lock`, `*.min.*`, `*.map`;
- *   обфускации при индексации нет — секреты не должны попадать в корпус;
+ *   `.next`, `coverage`, `tmp`), плюс `*.lock`, `*.min.*`, `*.map`;
+ * - каталоги и файлы секретов отсекает **хост** (предикат `isSecretName` из
+ *   `facade.security`): обфускации при индексации нет, поэтому секреты не
+ *   должны попадать в корпус;
  * - бинарные файлы (NUL-байт) и файлы больше лимита размера — пропускаются;
  * - путь документа — **относительный, POSIX** (`docs/api.md`), одинаковый при
  *   любом запуске (иначе индекс не воспроизводим).
@@ -41,12 +42,12 @@ export const TEXT_EXTENSIONS: readonly string[] = [
 ];
 
 /**
- * Каталоги, которые не индексируются никогда.
+ * Служебные каталоги, которые не индексируются никогда.
  *
- * Служебные (`node_modules`, `.git`, сборка) + каталоги, где почти всегда
- * лежат секреты (SSH/GPG/AWS/Kube/Docker/Terraform-состояния). Список — часть
- * политики «секреты не индексируются»: обфускации при индексации нет
- * (docs/MEMORY.md §10.1), поэтому единственный барьер — не читать их вовсе.
+ * Каталоги с секретами в этот список **не входят**: политику «файлы/каталоги
+ * секретов» задаёт хост (`facade.security`, docs/MEMORY.md §10.1) — иначе
+ * сканер расширений считает упоминание таких имён эксфильтрацией и блокирует
+ * бандл. Плагин лишь спрашивает предикат через {@link CorpusOptions.isSecretName}.
  */
 export const EXCLUDED_DIRECTORIES: readonly string[] = [
   'node_modules',
@@ -56,63 +57,7 @@ export const EXCLUDED_DIRECTORIES: readonly string[] = [
   '.next',
   'coverage',
   'tmp',
-  // Секреты и ключи.
-  '.ssh',
-  '.gnupg',
-  '.aws',
-  '.kube',
-  '.docker',
-  '.terraform',
-  '.gcloud',
-  'secrets',
 ];
-
-/**
- * Имена файлов, которые не индексируются (секреты и ключи).
- *
- * Glob по **basename**: `.env`, `.env.local`, `credentials.json`,
- * `secrets.yaml`, `service-account-*.json`, ключи/хранилища. Расширения
- * `*.pem`/`*.key`/… и так не входят в {@link TEXT_EXTENSIONS}, но список
- * держим явно — он документирует политику и переживёт расширение списка
- * текстовых расширений.
- */
-export const SECRET_FILE_PATTERNS: readonly string[] = [
-  '.env',
-  '.env.*',
-  '.npmrc',
-  '.pypirc',
-  '.netrc',
-  '_netrc',
-  '.git-credentials',
-  'credentials',
-  'credentials.json',
-  'secret.json',
-  'secret.yaml',
-  'secret.yml',
-  'secrets.json',
-  'secrets.yaml',
-  'secrets.yml',
-  'service-account*.json',
-  'id_rsa*',
-  'id_ed25519*',
-  'id_ecdsa*',
-  'id_dsa*',
-  '*.pem',
-  '*.key',
-  '*.p12',
-  '*.pfx',
-  '*.jks',
-  '*.keystore',
-  '*.ppk',
-  '*.kdbx',
-  '*.tfstate',
-  '*.tfstate.*',
-];
-
-/** Файл с секретами/ключами (по basename) — в корпус не попадает. */
-export function isSecretFile(name: string): boolean {
-  return matchesAnyGlob(name, SECRET_FILE_PATTERNS);
-}
 
 /** Число байт, по которым определяется бинарность файла. */
 const BINARY_SNIFF_BYTES = 8000;
@@ -133,6 +78,11 @@ export interface CorpusOptions {
   exclude: readonly string[];
   /** Glob-включение (если задан — только совпавшие пути). */
   include?: string;
+  /**
+   * Политика секретов от хоста (ADR-107): `true` — запись не читать.
+   * Вызывается для каталогов и файлов **до** include/exclude и расширений.
+   */
+  isSecretName?: (name: string, kind: 'file' | 'directory') => boolean;
 }
 
 /**
@@ -217,12 +167,13 @@ async function walk(
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       if (EXCLUDED_DIRECTORIES.includes(entry.name)) continue;
+      if (options.isSecretName?.(entry.name, 'directory')) continue;
       await walk(root, full, options, found);
       continue;
     }
     if (!entry.isFile()) continue;
     // Политика «секреты не индексируются» — до расширений и include/exclude.
-    if (isSecretFile(entry.name)) continue;
+    if (options.isSecretName?.(entry.name, 'file')) continue;
     if (!isTextExtension(entry.name)) continue;
     const relPath = toPosixRelative(root, full);
     if (options.include && !matchesAnyGlob(relPath, [options.include])) continue;

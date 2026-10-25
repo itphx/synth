@@ -265,6 +265,37 @@ describe('менеджер индексов: сборка корпуса', () =>
     expect(status!.index.generation).toBe(1);
   });
 
+  it('смена модели эмбеддинга при той же размерности → stale', async () => {
+    const storage = createTestStorage();
+    const dir = await makeCorpus();
+    const make = (model: string): MemoryProviderLite => {
+      const { facade } = createTestFacade({
+        storage,
+        settings: { dimensionProbeTtlMs: 0 },
+        embedDimension: 8,
+        embedding: { provider: 'ollama', model },
+      });
+      return new MemoryProviderLite(facade);
+    };
+
+    const first = make('model-a');
+    const created = await first.createIndex({
+      source: { kind: 'files' },
+      projectId: 'p1',
+      workingDir: dir,
+    });
+    await first.indexManager.whenIdle();
+    const ready = await first.getIndex(created.index.id);
+    expect(ready!.index.fingerprint.model).toBe('ollama/model-a');
+
+    // Другая модель хоста, та же размерность: индекс должен стать stale.
+    const second = make('model-b');
+    const status = await second.getIndex(created.index.id);
+    expect(status!.index.fingerprint.dimension).toBe(8);
+    expect(status!.stale).toBe(true);
+    expect(status!.state).toBe('stale');
+  });
+
   it('удаление индекса каскадно удаляет чанки', async () => {
     const storage = createTestStorage();
     const dir = await makeCorpus();

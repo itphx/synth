@@ -227,6 +227,12 @@ export class MemoryProviderLite {
       facade,
       listFacts: (opts) => this.listFacts(opts),
       settings: () => this.settings(),
+      // ADR-107: политика секретов задаётся хостом (в плагине имён нет —
+      // сканер расширений считает их эксфильтрацией).
+      isSecretName: (name, kind) =>
+        kind === 'file'
+          ? (facade.security?.isSecretFile(name) ?? false)
+          : (facade.security?.isSecretDirectory(name) ?? false),
     });
   }
 

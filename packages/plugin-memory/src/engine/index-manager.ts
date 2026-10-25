@@ -127,6 +127,11 @@ export interface IndexManagerDeps {
   }) => Promise<MemoryFactRecord[]>;
   /** Настройки плагина (нормализованные). */
   settings: () => MemoryPluginSettings;
+  /**
+   * Политика хоста «файл/каталог секретов» (ADR-107). Не задана — корпус
+   * собирается без этого фильтра (старый хост), см. docs/MEMORY.md §10.1.
+   */
+  isSecretName?: (name: string, kind: 'file' | 'directory') => boolean;
 }
 
 /** Документ корпуса (до нарезки). */
@@ -205,8 +210,17 @@ export class IndexManager {
     return memory.indexes;
   }
 
-  /** Модель эмбеддингов из настроек плагина. */
+  /**
+   * Модель эмбеддингов для фингерпринта.
+   *
+   * Приоритет — **фактическая** модель хоста (`facade.embedding`): иначе смена
+   * `plugins.embeddingModel` при той же размерности не помечала индекс `stale`
+   * и в одном индексе смешивались бы векторы разных моделей. Затем — настройки
+   * плагина, затем дефолт (совместимость со старыми хостами/тестами).
+   */
   private _model(): string {
+    const host = this._deps.facade.embedding;
+    if (host?.model) return `${host.provider ?? 'default'}/${host.model}`;
     return this._deps.settings().embeddingModel || DEFAULT_EMBEDDING_MODEL;
   }
 
@@ -481,6 +495,7 @@ export class IndexManager {
       maxFileBytes: settings.maxFileBytes,
       exclude: settings.exclude,
       ...(index.source.filter ? { include: index.source.filter } : {}),
+      ...(this._deps.isSecretName ? { isSecretName: this._deps.isSecretName } : {}),
     });
     return files.map((file) => ({
       documentId: file.path,
