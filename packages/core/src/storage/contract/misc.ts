@@ -37,9 +37,31 @@ export function describeBlobStore(
       expect(scoped.map((e) => e.path)).toEqual(['dir/a.txt', 'dir/b.txt']);
     });
 
+    it('append дописывает в конец (файла нет — создаётся)', async () => {
+      const { repo } = await make();
+      await repo.append('log/run.log', 'first\n');
+      await repo.append('log/run.log', 'second\n');
+      expect((await repo.read('log/run.log'))?.toString('utf-8')).toBe('first\nsecond\n');
+
+      // Дописывание к существующему файлу ничего не затирает.
+      await repo.write('plain.txt', 'a');
+      await repo.append('plain.txt', 'b');
+      expect((await repo.read('plain.txt'))?.toString('utf-8')).toBe('ab');
+
+      // Размер в `list` учитывает дописанное.
+      const entry = (await repo.list('log')).find((e) => e.path === 'log/run.log');
+      expect(entry?.size).toBe('first\nsecond\n'.length);
+    });
+
     it('containment: `..` отклоняется', async () => {
       const { repo } = await make();
       await expect(repo.write('../escape.txt', 'x')).rejects.toThrow();
+      await expect(repo.append('../escape.txt', 'x')).rejects.toThrow();
+    });
+
+    it('containment: абсолютный путь отклоняется', async () => {
+      const { repo } = await make();
+      await expect(repo.append('/etc/escape.txt', 'x')).rejects.toThrow();
     });
   });
 }

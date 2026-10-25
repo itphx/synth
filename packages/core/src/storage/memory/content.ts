@@ -358,6 +358,13 @@ export class MemoryBlobStore implements BlobStore {
     this._blobs.set(path, typeof data === 'string' ? Buffer.from(data, 'utf-8') : Buffer.from(data));
   }
 
+  async append(path: string, data: Buffer | string): Promise<void> {
+    this._validate(path);
+    const chunk = typeof data === 'string' ? Buffer.from(data, 'utf-8') : Buffer.from(data);
+    const current = this._blobs.get(path);
+    this._blobs.set(path, current ? Buffer.concat([current, chunk]) : chunk);
+  }
+
   async delete(path: string): Promise<void> {
     this._validate(path);
     this._blobs.delete(path);

@@ -13,7 +13,10 @@
  *   - таймаут и отмена по `AbortSignal`;
  *   - лимит вывода: флаг усечения;
  *   - отсутствующий бинарник (`ENOENT`);
- *   - `durationMs` заполнен.
+ *   - `durationMs` заполнен;
+ *   - фоновый запуск (PROP-097): поток вывода, код завершения, `stop()`,
+ *     таймаут — отдельным блоком `describeBackgroundExecutionChecks` (только
+ *     для реализаций, которые фоновый запуск поддерживают).
  *
  * ## Что различается между реализациями
  *
@@ -204,6 +207,97 @@ export function describeExecutionPort(name: string, make: ExecutionPortHarnessFa
 }
 
 /**
+ * Проверки фонового запуска (PROP-097) — для реализаций, которые его
+ * поддерживают (сейчас — inline).
+ *
+ * Фоновый процесс — не то же, что `execute`: он не ждёт завершения, вывод
+ * приходит потоком, а отмена делается через `stop()` хэндла. Проверяется:
+ *
+ *   - поток вывода раздельно по `stdout`/`stderr`;
+ *   - код завершения (`exitCode`), в том числе ненулевой;
+ *   - остановка через `stop()` — процесс завершается по сигналу;
+ *   - таймаут (`timeoutMs`) — процесс убивается по таймеру;
+ *   - `processId`/`pid` заполнены, `exited` резолвится один раз.
+ *
+ * Реализация без `spawnBackground` (удалённый порт — до шага 7c ADR-077) этот
+ * набор не проходит: блок подключается только там, где метод есть.
+ */
+export function describeBackgroundExecutionChecks(
+  name: string,
+  make: ExecutionPortHarnessFactory,
+): void {
+  describe(`${name} — фоновый запуск`, () => {
+    it('вывод приходит потоком: stdout и stderr раздельно, exitCode 0', async () => {
+      const { port } = await make();
+      if (typeof port.spawnBackground !== 'function') return;
+      const bg = await port.spawnBackground({
+        command: { kind: 'shell', command: 'printf hi; printf err >&2' },
+      });
+      expect(bg.processId).toMatch(/^proc_/);
+      expect(bg.pid).toBeGreaterThan(0);
+
+      const chunks: Array<{ stream: string; data: string }> = [];
+      for await (const chunk of bg.output) {
+        chunks.push({ stream: chunk.stream, data: chunk.data });
+      }
+
+      const stdout = chunks
+        .filter((c) => c.stream === 'stdout')
+        .map((c) => c.data)
+        .join('');
+      const stderr = chunks
+        .filter((c) => c.stream === 'stderr')
+        .map((c) => c.data)
+        .join('');
+      expect(stdout).toContain('hi');
+      expect(stderr).toContain('err');
+
+      const exit = await bg.exited;
+      expect(exit.exitCode).toBe(0);
+      expect(exit.signal).toBeNull();
+      expect(exit.durationMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it('ненулевой код завершения — в exitCode', async () => {
+      const { port } = await make();
+      if (typeof port.spawnBackground !== 'function') return;
+      const bg = await port.spawnBackground({
+        command: { kind: 'shell', command: 'exit 3' },
+      });
+      const exit = await bg.exited;
+      expect(exit.exitCode).toBe(3);
+      expect(exit.signal).toBeNull();
+    });
+
+    it('stop() — процесс завершается по сигналу', async () => {
+      const { port } = await make();
+      if (typeof port.spawnBackground !== 'function') return;
+      const bg = await port.spawnBackground({
+        command: { kind: 'shell', command: 'sleep 5' },
+      });
+      bg.stop();
+      const exit = await bg.exited;
+      expect(exit.signal).not.toBeNull();
+      expect(exit.exitCode).toBeNull();
+      // Повторный `stop()` не бросает (процесс уже завершён).
+      expect(() => bg.stop()).not.toThrow();
+    });
+
+    it('timeoutMs — процесс убивается по таймеру', async () => {
+      const { port } = await make();
+      if (typeof port.spawnBackground !== 'function') return;
+      const bg = await port.spawnBackground({
+        command: { kind: 'shell', command: 'sleep 5' },
+        timeoutMs: 200,
+      });
+      const exit = await bg.exited;
+      expect(exit.signal).not.toBeNull();
+      expect(exit.exitCode).toBeNull();
+    });
+  });
+}
+
+/**
  * Проверки, применимые **ТОЛЬКО к inline-реализации** (исполнение в процессе
  * control plane).
  *
@@ -238,6 +332,11 @@ export function describeRemoteOnlyExecutionChecks(
   make: ExecutionPortHarnessFactory,
 ): void {
   describe(`${name} — только remote`, () => {
+    it('фоновый запуск недоступен: метод не реализован (шаг 7c ADR-077)', async () => {
+      const { port } = await make();
+      expect(typeof port.spawnBackground).toBe('undefined');
+    });
+
     it('cwd вне workspace исполнителя — отказ (EWORKSPACE), команда не запускается', async () => {
       const { port, cwdOutside } = await make();
       const dir = cwdOutside ?? (await realpath('/tmp'));

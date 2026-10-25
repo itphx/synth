@@ -15,6 +15,9 @@ export type {
   ExecFailureReason,
   ExecutionCapabilitySummary,
   ExecutionBaseCapability,
+  ExecBackgroundChunk,
+  ExecBackgroundExit,
+  ExecBackgroundProcess,
 } from './execution-port.js';
 export {
   ExecutionError,

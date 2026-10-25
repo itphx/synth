@@ -12,6 +12,7 @@
 
 export {
   describeExecutionPort,
+  describeBackgroundExecutionChecks,
   describeInlineOnlyExecutionChecks,
   describeRemoteOnlyExecutionChecks,
 } from './execution.js';

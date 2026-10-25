@@ -82,12 +82,68 @@ export interface ExecResult {
   durationMs: number;
 }
 
+/** Кусок вывода фонового процесса. */
+export interface ExecBackgroundChunk {
+  /** Поток, из которого пришёл кусок. */
+  stream: 'stdout' | 'stderr';
+  /** Текст куска (UTF-8). */
+  data: string;
+}
+
+/** Завершение фонового процесса. */
+export interface ExecBackgroundExit {
+  /**
+   * Код завершения; `null` — процесс убит сигналом.
+   *
+   * Неудача запуска (нет бинарника, неверный `cwd`) — отрицательный код
+   * libuv (например `-2` для ENOENT), а не `null`.
+   */
+  exitCode: number | null;
+  /** Сигнал, завершивший процесс; `null` — процесс вышел сам. */
+  signal: string | null;
+  /** Длительность жизни процесса (мс). */
+  durationMs: number;
+}
+
+/** Хэндл фонового процесса (PROP-097). */
+export interface ExecBackgroundProcess {
+  /** Идентификатор фонового процесса (`proc_<uuid>`) — для реестра прогонов. */
+  readonly processId: string;
+  /** pid процесса ОС (если процесс запустился). */
+  readonly pid?: number;
+  /** Поток вывода; завершается вместе с процессом. */
+  readonly output: AsyncIterable<ExecBackgroundChunk>;
+  /** Промис завершения (резолвится один раз). */
+  readonly exited: Promise<ExecBackgroundExit>;
+  /** Сигнал процессу (по умолчанию SIGTERM). Не бросает. */
+  stop(signal?: NodeJS.Signals): void;
+}
+
 /**
  * Порт исполнения команд. Реализации: `InlineExecutionPort` (в процессе) и
  * `RemoteExecutionPort` (HTTP к исполнителю, шаг 7 плана ADR-077).
  */
 export interface ExecutionPort {
   execute(req: ExecRequest): Promise<ExecResult>;
+
+  /**
+   * Фоновый запуск команды (PROP-097). Не задан — фоновое исполнение
+   * недоступно в этой реализации (remote до шага 7c ADR-077).
+   *
+   * ## Отличия от `execute`
+   *
+   * Фоновый процесс **переживает ход** агента, поэтому:
+   *
+   * - `ExecRequest.signal` **не поддерживается** — отмена фонового процесса
+   *   делается только через `stop()` хэндла;
+   * - `ExecRequest.requires` **не проверяется** — проверка бинарных требований
+   *   остаётся на слое тула (как и в `execute`);
+   * - `ExecRequest.maxOutputBytes` **не применяется** — вывод не буферизуется
+   *   портом, а стримится кусками в `output`;
+   * - `ExecRequest.timeoutMs` (если `> 0`) — таймер, убивающий процесс
+   *   (`SIGTERM`, затем `SIGKILL` через 5 с).
+   */
+  spawnBackground?(req: ExecRequest): Promise<ExecBackgroundProcess>;
 
   /**
    * Доступен ли бинарь в окружении, где исполняется порт (ADR-077).

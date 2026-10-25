@@ -260,14 +260,21 @@
   `ExecutionPort.probe?(bin, args?)`, `ExecutionPort.capabilitySummary?(bin)`,
   `ExecutionCapabilitySummary`, `EXECUTION_BASE_CAPABILITIES = ['git','rg','sh']`,
   причина отказа `dependency_missing`), `inline-execution-port.ts`
-  (`InlineExecutionPort` — исполнение в процессе поверх `execFile`; `probe()` — поверх общей пробы),
+  (`InlineExecutionPort` — исполнение в процессе поверх `execFile`; `probe()` — поверх общей пробы;
+  **PROP-097**: `spawnBackground?(req)` — фоновый запуск через `spawn` (не `execFile`):
+  `processId` = `proc_<uuid>`, `pid`, поток `output` (`stdout`/`stderr` кусками), промис `exited`
+  (`exitCode`/`signal`/`durationMs`), `stop(signal='SIGTERM')`; `timeoutMs > 0` — таймер
+  (`unref`) `SIGTERM` → `SIGKILL` через 5 с; `requires`/`signal`/`maxOutputBytes` в фоне
+  не применяются (проверка бинарных требований — на слое тула, отмена — через `stop()`)),
   `probe.ts` (**единственная** проба `bin --version` через порт: `ENOENT` → `false`, прочая ошибка →
   `true`, fail-open, ADR-078), `contract/`
   (контрактный suite порта — обязателен для любой реализации, как `storage/contract/`;
   общий набор проверок + блоки `describeInlineOnlyExecutionChecks`/`describeRemoteOnlyExecutionChecks`
   — разделение намеренное: у remote `cwd` обязан лежать в workspace исполнителя, у inline
   такого ограничения нет; `probe`/`requires` проверяются в общем наборе, `dependency_missing` —
-  в remote-блоке), `remote.ts` (загрузчик удалённого порта: **динамический `import()`
+  в remote-блоке; **PROP-097**: блок `describeBackgroundExecutionChecks` — фоновый запуск
+  (поток вывода, `exitCode`, `stop()`, таймаут) — только там, где метод реализован; в
+  remote-блоке проверяется, что `spawnBackground` **не реализован** (шаг 7c ADR-077)), `remote.ts` (загрузчик удалённого порта: **динамический `import()`
   по строке-константе** `'@itphx/synth-executor/client'` + локальный интерфейс модуля +
   каст — по образцу драйвера хранилища в `storage/storage-context.ts`; чтение токена из
   файла по `execution.remote.tokenSecret` — **fail-closed**, значение токена не логируется
@@ -1232,7 +1239,9 @@
   `close?`/`locks?`/`health?`/`schemaMigrations?`/`purgeSchema?`/`degraded?`) + `createFileStorage`/`createMemoryStorage`/
   `createStorageContext` (`@deprecated`) и **async-каскад** `createStorageContextAsync`/`buildStorageContext`
   (backend по `storage.backend`, env `SYNTH_STORAGE_BACKEND`),
-  `storage/file-blob-store.ts` (`FileBlobStore`, порт `BlobStore`), `storage/defaults-store.ts`
+  `storage/file-blob-store.ts` (`FileBlobStore`, порт `BlobStore` — `read`/`write`/`append`/
+  `delete`/`exists`/`list`; `append` — дописывание в конец для журналов (логи фоновых процессов,
+  PROP-097), атомарность не требуется), `storage/defaults-store.ts`
   (`DefaultsStore` — перенесён из backend, там реэкспорт). Пайплайны ADR-101 — отдельные порты:
   `storage/ports/project-pipeline-repository.ts` (`ProjectPipelineRepository` — черновик пайплайна
   + журнал опубликованных версий; `scope` = `project`|`instance`, `installedBy` — провенанс пакета) и

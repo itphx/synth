@@ -15,13 +15,18 @@
  * (`ExecutionError` с полем `reason`), а не «сырой» объект `execFile`.
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
+import { warning } from '../logger.js';
 import { probeBinaryThroughPort } from './probe.js';
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_SHELL_BINARY,
   ExecutionError,
+  type ExecBackgroundChunk,
+  type ExecBackgroundExit,
+  type ExecBackgroundProcess,
   type ExecCommand,
   type ExecFailureReason,
   type ExecRequest,
@@ -80,6 +85,65 @@ function toExecutionError(err: unknown, durationMs: number): ExecutionError {
 }
 
 /**
+ * Пауза между «мягким» и «жёстким» убийством фонового процесса:
+ * `SIGTERM` → (через 5 с) `SIGKILL`.
+ */
+const BACKGROUND_KILL_GRACE_MS = 5_000;
+
+/**
+ * Поток вывода фонового процесса — очередь кусков + сигнал о завершении.
+ *
+ * Куски `stdout`/`stderr` складываются в очередь и отдаются потребителю по
+ * мере поступления; поток закрывается вместе с процессом (событие `close` —
+ * оно приходит после закрытия обоих потоков, поэтому последний кусок не
+ * теряется).
+ *
+ * Ограничение: пока поток не читают, куски копятся в памяти. Фоновый процесс
+ * пишет лог по мере поступления, поэтому очередь короткая; контракт порта
+ * лимита на объём фонового вывода не задаёт (в отличие от `maxOutputBytes`
+ * у синхронного `execute`).
+ */
+function createBackgroundOutput(child: ChildProcess): AsyncIterable<ExecBackgroundChunk> {
+  const queue: ExecBackgroundChunk[] = [];
+  let notify: (() => void) | null = null;
+  let closed = false;
+
+  /** Разбудить потребителя (данные пришли или процесс завершился). */
+  const wake = (): void => {
+    const resolve = notify;
+    notify = null;
+    resolve?.();
+  };
+
+  child.stdout?.on('data', (chunk: Buffer) => {
+    queue.push({ stream: 'stdout', data: chunk.toString('utf-8') });
+    wake();
+  });
+  child.stderr?.on('data', (chunk: Buffer) => {
+    queue.push({ stream: 'stderr', data: chunk.toString('utf-8') });
+    wake();
+  });
+  child.once('close', () => {
+    closed = true;
+    wake();
+  });
+
+  return {
+    async *[Symbol.asyncIterator](): AsyncIterator<ExecBackgroundChunk> {
+      while (true) {
+        while (queue.length > 0) {
+          yield queue.shift() as ExecBackgroundChunk;
+        }
+        if (closed) return;
+        await new Promise<void>((resolve) => {
+          notify = resolve;
+        });
+      }
+    },
+  };
+}
+
+/**
  * Исполнение в процессе backend'а — нынешнее поведение Synth.
  *
  * Экземпляр **без состояния**: его можно создавать на каждый вызов (тулы
@@ -120,5 +184,85 @@ export class InlineExecutionPort implements ExecutionPort {
     } catch (err) {
       throw toExecutionError(err, Date.now() - startedAt);
     }
+  }
+
+  /**
+   * Фоновый запуск команды (PROP-097) — исполнение в процессе control plane.
+   *
+   * Отличия от `execute` (портовый контракт — `ExecutionPort.spawnBackground`):
+   *
+   * - процесс **не ждёт** завершения: хэндл отдаётся сразу, результат — в
+   *   `exited`, вывод — в потоке `output`;
+   * - `requires` не проверяется (проверка бинарных требований — на слое тула,
+   *   как и в `execute`), `signal` запроса не поддерживается (отмена — через
+   *   `stop()`), `maxOutputBytes` не применяется (вывод стримится);
+   * - `timeoutMs > 0` — таймер, убивающий процесс (`SIGTERM`, затем `SIGKILL`
+   *   через 5 с); в `exited` это видно по `signal`.
+   *
+   * Таймеры фонового процесса — `unref`: они не держат event loop, поэтому
+   * процесс control plane не «зависает» из-за фоновой команды.
+   */
+  async spawnBackground(req: ExecRequest): Promise<ExecBackgroundProcess> {
+    const startedAt = Date.now();
+    const { file, args } = resolveInvocation(req.command);
+    const child = spawn(file, args, {
+      cwd: req.cwd,
+      // Базовое окружение — всё `process.env`; `env` запроса мержится поверх.
+      env: { ...process.env, ...(req.env ?? {}) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Фоновый процесс — ребёнок control plane, а не отдельная группа:
+      // он не должен переживать завершение родителя «сам по себе».
+      detached: false,
+    });
+
+    // Неудача запуска (нет бинарника, неверный `cwd`) приходит событием
+    // 'error'; без подписки Node бросает её как непойманную. Отдельного поля
+    // для ошибки в контракте нет — неудача видна в `exited`: `pid` не задан,
+    // а `exitCode` — отрицательный код libuv (например `-2` для ENOENT).
+    child.on('error', (err: Error) => {
+      warning('EXECUTION', `Фоновый процесс не запущен (${err.message})`);
+    });
+
+    let timeoutTimer: NodeJS.Timeout | null = null;
+    let killTimer: NodeJS.Timeout | null = null;
+
+    const exited = new Promise<ExecBackgroundExit>((resolve) => {
+      child.once('close', (code, signal) => {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        if (killTimer) clearTimeout(killTimer);
+        resolve({
+          exitCode: code ?? null,
+          signal: signal ?? null,
+          durationMs: Date.now() - startedAt,
+        });
+      });
+    });
+
+    const timeoutMs = req.timeoutMs ?? 0;
+    if (timeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        child.kill('SIGTERM');
+        killTimer = setTimeout(() => child.kill('SIGKILL'), BACKGROUND_KILL_GRACE_MS);
+        killTimer.unref?.();
+      }, timeoutMs);
+      timeoutTimer.unref?.();
+    }
+
+    const stop = (signal: NodeJS.Signals = 'SIGTERM'): void => {
+      try {
+        child.kill(signal);
+      } catch {
+        // Процесс уже завершён (или сигнал недопустим) — `stop()` не бросает:
+        // повторный вызов и гонка с завершением — норма.
+      }
+    };
+
+    return {
+      processId: `proc_${randomUUID()}`,
+      pid: child.pid ?? undefined,
+      output: createBackgroundOutput(child),
+      exited,
+      stop,
+    };
   }
 }
