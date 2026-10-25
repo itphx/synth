@@ -575,6 +575,8 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | ADR-107 | Сервисы фасада плагинов — память, эмбеддинги, свои настройки | ✅ Реализовано | [adr-107](./docs/arch_decisions/adr-107-plugin-facade-services.md) |
 | PROP-109 | Централизация внешних агентных систем (федерация) | 🧩 Предложение | [prop-109](./docs/arch_decisions/prop-109-agent-system-federation.md) |
 | PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110](./docs/arch_decisions/prop-110-portal-platform.md) |
+| ADR-111 | Фоновые прогоны — неблокирующие саб-агенты и реестр | ✅ Реализовано | [adr-111](./docs/arch_decisions/adr-111-background-subagent-sessions.md) |
+| ADR-112 | Вопрос пользователю посреди хода (question) | ✅ Реализовано | [adr-112](./docs/arch_decisions/adr-112-user-questions-mid-turn.md) |
 <!-- ad-index:end -->
 
 Правило: `docs/arch_decisions/` — единственный дом ADR/PROP; номера и файлы стабильны (ссылок на id по репозиторию — тысячи), файлы не переносятся и не удаляются.
