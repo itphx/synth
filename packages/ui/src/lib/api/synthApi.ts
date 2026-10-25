@@ -47,6 +47,7 @@ import { pipelineProjectApi } from './pipeline-project'
 import { pluginsApi } from './plugins'
 import { memoryApi } from './memory'
 import { sessionMemoryApi } from './session-memory'
+import { questionsApi } from './questions'
 
 export type { EntityOrigin } from './common'
 export type {
@@ -359,6 +360,12 @@ export type {
   SessionProjectMemory,
   SessionMemoryResponse,
 } from './session-memory'
+// Этап 1 roadmap 0.13 (блок 3): вопросы пользователю (`ask_user`).
+export type {
+  QuestionListOptions,
+  QuestionListResponse,
+  QuestionResponse,
+} from './questions'
 
 export const synthApi = {
   fetchJSON,
@@ -406,4 +413,5 @@ export const synthApi = {
   ...pluginsApi,
   ...memoryApi,
   ...sessionMemoryApi,
+  ...questionsApi,
 }

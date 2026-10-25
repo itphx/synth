@@ -7,6 +7,7 @@ import { useGitStore } from './gitStore'
 import { useFilesStore } from './filesStore'
 import { useUIStore } from './useUIStore'
 import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
+import { useQuestionStore } from './questionStore'
 import { useSkillsStore } from './skillsStore'
 import { useInstructionsStore } from './instructionsStore'
 import { usePipelinesStore } from './pipelinesStore'
@@ -16,7 +17,7 @@ import { synthApi } from '@/lib/api/synthApi'
 import type { SessionData } from '@/lib/api/synthApi'
 import { notifyMessage } from '@/hooks/useNotification'
 import { i18nText } from '@/lib/i18n/text'
-import type { SteerMode } from '@itphx/synth-shared/types'
+import type { QuestionItem, QuestionRecord, SteerMode } from '@itphx/synth-shared/types'
 
 type EventDispatcher = (event: WSEvent) => void
 
@@ -473,6 +474,39 @@ export function createDispatcher(): EventDispatcher {
           askedAt: new Date().toISOString(),
           timeoutMs,
         })
+        break
+      }
+
+      // Вопросы пользователю (`ask_user`, этап 1 roadmap 0.13 — блок 1.3).
+      // ⚠️ Это НЕ `question.asked` — тот означает «очередь зависла» (см. выше).
+      case 'user_question.asked': {
+        const full = payload.question as QuestionRecord | undefined
+        const questionId = (payload.question_id as string | undefined) || full?.id
+        if (!questionId) break
+
+        const now = new Date().toISOString()
+        const record: QuestionRecord = full && typeof full === 'object'
+          ? { ...full, id: full.id || questionId, sessionId: full.sessionId || sid }
+          : {
+              id: questionId,
+              sessionId: sid,
+              status: 'pending',
+              questions: (payload.questions as QuestionItem[]) ?? [],
+              createdAt: now,
+              updatedAt: now,
+              ...(payload.turn_id ? { turnId: String(payload.turn_id) } : {}),
+              ...(payload.tool_call_id ? { toolCallId: String(payload.tool_call_id) } : {}),
+              ...(payload.agent_role ? { agentRole: String(payload.agent_role) } : {}),
+            }
+        useQuestionStore.getState().add(sid, record)
+        break
+      }
+
+      // Вопрос закрыт (ответили или отменили) — из pending он уходит.
+      case 'user_question.answered':
+      case 'user_question.cancelled': {
+        const questionId = payload.question_id as string | undefined
+        if (questionId) useQuestionStore.getState().remove(sid, questionId)
         break
       }
 

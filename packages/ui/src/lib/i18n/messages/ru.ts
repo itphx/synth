@@ -1186,6 +1186,19 @@ export const dict = {
   'permission.bar.timeoutTitle': 'Время до авто-отклонения запроса',
   'permission.bar.grantedForSession': 'Инструмент {tool} разрешён для сессии',
 
+  // Вопросы пользователю (этап 1 roadmap 0.13 — блок 1.3): док над вводом.
+  'question.dock.title': 'Агент задал вопрос',
+  'question.dock.custom': 'Свой ответ',
+  'question.dock.submit': 'Ответить',
+  'question.dock.cancel': 'Отменить',
+  'question.dock.next': 'Далее',
+  'question.dock.prev': 'Назад',
+  'question.dock.progress': '{current} из {total}',
+  'question.dock.required': 'Ответьте на каждый вопрос',
+  'question.dock.failed': 'Не удалось отправить ответ',
+  'question.dock.cancelled': 'Вопрос отменён',
+  'question.dock.multipleHint': 'Можно выбрать несколько вариантов',
+
   'chat.error.rateLimit': 'Превышен лимит запросов. Пауза {sec}с...',
   'chat.error.retryCount': 'Попытка {current}/{max}',
   'chat.retry.inProgress': 'Повторная попытка {current}/{max} через {sec} с…',

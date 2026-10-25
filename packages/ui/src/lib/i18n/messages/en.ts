@@ -1208,6 +1208,19 @@ export const dict = {
   'permission.bar.timeoutTitle': 'Time until request auto-denied',
   'permission.bar.grantedForSession': 'Tool {tool} allowed for the session',
 
+  // User questions (stage 1 roadmap 0.13 — block 1.3): dock above the composer.
+  'question.dock.title': 'The agent asked a question',
+  'question.dock.custom': 'Your own answer',
+  'question.dock.submit': 'Answer',
+  'question.dock.cancel': 'Cancel',
+  'question.dock.next': 'Next',
+  'question.dock.prev': 'Back',
+  'question.dock.progress': '{current} of {total}',
+  'question.dock.required': 'Answer every question',
+  'question.dock.failed': 'Failed to send the answer',
+  'question.dock.cancelled': 'Question cancelled',
+  'question.dock.multipleHint': 'You can select multiple options',
+
   'chat.error.rateLimit': 'Rate limit exceeded. Pause {sec}s...',
   'chat.error.retryCount': 'Attempt {current}/{max}',
   'chat.retry.inProgress': 'Retry {current}/{max} in {sec}s…',
