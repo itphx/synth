@@ -506,6 +506,20 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         indexes: deps.storageContext.memoryIndexes,
       },
       guard: auth.requirePermission('ADMIN'),
+      // Проектная авторизация (инвариант 16, ADR-089 §5.8): проверка прав на
+      // границе — до обращения к порту/тулу. `read` — право чтения проекта
+      // (владелец/участник/`LEAD`/`ADMIN`), `write` — право изменения
+      // содержимого (владелец/`EDITOR`/`LEAD`/`ADMIN`; `VIEWER` только
+      // читает, инвариант 21). Нет проекта/прав → отказ (fail-closed).
+      authorizeProject: async (c, projectId, mode) => {
+        const user = await auth.getCurrentUser(c);
+        if (!user) return false;
+        const project = await projectStore.load(projectId);
+        if (!project) return false;
+        return mode === 'read'
+          ? projectAccess.canReadProject(c, project, user.id)
+          : projectAccess.canEditProjectContent(c, project, user.id);
+      },
       // Активен ли плагин памяти в процессе — реестр активаций хоста (ADR-090).
       isPluginActive: () => deps.pluginRuntime.host.isActive(MEMORY_PLUGIN_NAME),
       // М2: мутации индексов — через админ-тул плагина памяти (реестр тулов).
@@ -563,6 +577,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         invalidGraphLimit: (c) => t('errors.validation.invalidMemoryGraphLimit', undefined, c),
         invalidGraphEntity: (c) => t('errors.validation.invalidMemoryGraphEntity', undefined, c),
         graphFailed: (c) => t('errors.failed.memoryGraph', undefined, c),
+        forbidden: (c) => t('auth.forbidden', undefined, c),
       },
     },
   ));

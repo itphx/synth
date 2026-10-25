@@ -648,6 +648,9 @@ export function mountStandaloneRoutes(
   // через доменные порты памяти (namespace плагина памяти подставляет сервер).
   // Standalone — дефолтный guard (`requireAuth`; единственный пользователь
   // инстанса — владелец, ADR-079); managed backend передаст RBAC (ADMIN).
+  // Проектная авторизация (`opts.authorizeProject`) в standalone **не задана**:
+  // пользователь инстанса один, проектная проекция не разграничивается (так же,
+  // как у FS- и git-роутов выше); managed backend передаёт проверку прав.
   app.route('/api/v2/memory', createMemoryRoutes(
     { requireAuth: auth.requireAuth },
     {

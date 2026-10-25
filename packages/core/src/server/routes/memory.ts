@@ -36,6 +36,38 @@
  *   500). `/status` при этом отвечает 200 с `readiness: 'unavailable'` — портал
  *   должен уметь показать «память недоступна».
  *
+ * ## Проектная авторизация (инвариант 16)
+ *
+ * `projectId` — обычный параметр запроса, поэтому портал проверяет права на
+ * проект **на границе** (до обращения к порту/тулу), а не внутри обработчика.
+ * Проверка — через `opts.authorizeProject(c, projectId, mode)`:
+ *
+ * - `read` — чтение (владелец/участник/`LEAD`/`ADMIN` — `canReadProject`);
+ * - `write` — изменение содержимого (владелец/`EDITOR`/`LEAD`/`ADMIN` —
+ *   `canEditProjectContent`; `VIEWER` только читает, инвариант 21).
+ *
+ * Правила:
+ *
+ * - **не задана — разрешено** (standalone: пользователь инстанса один);
+ * - **исключение из callback → 403** (fail-closed: сбой проверки не должен
+ *   превращаться в разрешение);
+ * - отказ → **403** `{error:{code:'FORBIDDEN', message}}`;
+ * - **`GET /status` — вне проверки**: агрегат по инстансу, `projectId` у него нет;
+ * - **404 раньше 403**: «нет сущности» (факта/индекса/проекта) отвечает 404,
+ *   права проверяются после — по проекту найденной сущности. Единообразно для
+ *   всех роутов.
+ *
+ * | Роут | mode | id проекта |
+ * |---|---|---|
+ * | `GET /facts?projectId=` | `read` | query (нет — проверки нет) |
+ * | `GET /facts/:id` | `read` | проект **самого факта** (нет — проверки нет) |
+ * | `GET /indexes?projectId=` | `read` | query (нет — проверки нет) |
+ * | `POST /indexes` | `write` | тело (обязателен) |
+ * | `POST /indexes/:id/rebuild` | `write` | проект **индекса** |
+ * | `DELETE /indexes/:id` | `write` | проект **индекса** |
+ * | `POST /consolidate` | `write` | тело (нет — операция по инстансу) |
+ * | `GET /graph?projectId=` | `read` | query (нет — проверки нет) |
+ *
  * ## Мутации индексов: портал → админ-тул плагина
  *
  * Логика индекса принадлежит **плагину** (PROP-047 §3: ядро владеет данными,
@@ -318,6 +350,8 @@ export interface MemoryRouteMessages {
   invalidGraphEntity: (c: Context) => string;
   /** Чтение графа памяти не удалось (текст — из ответа тула). */
   graphFailed: (c: Context) => string;
+  /** Нет прав на проект (граничная проверка доступа). */
+  forbidden: (c: Context) => string;
 }
 
 /** Порты памяти инстанса (ADR-096) — источник истины для портала. */
@@ -372,6 +406,18 @@ export interface MemoryRoutesOptions {
    * (у проекта нет workspace) и маскировка путей в текстах ошибок.
    */
   dataDir?: string;
+  /**
+   * Граничная проверка доступа к проекту (инвариант 16): read — чтение,
+   * write — изменение содержимого. Не задана — разрешено (standalone).
+   *
+   * Вызывается **до** обращения к порту/тулу; исключение из callback → 403
+   * (fail-closed), отказ → 403 `FORBIDDEN`.
+   */
+  authorizeProject?: (
+    c: Context,
+    projectId: string,
+    mode: 'read' | 'write',
+  ) => boolean | Promise<boolean>;
 }
 
 /** Сводка по фактам памяти (namespace портала). */
@@ -537,6 +583,7 @@ const DEFAULT_MESSAGES: MemoryRouteMessages = {
   invalidGraphLimit: () => 'limit графа памяти: ожидается целое число от 1 до 200',
   invalidGraphEntity: () => 'Сущность графа памяти: ожидается непустая строка длиной до 200 символов',
   graphFailed: () => 'Не удалось прочитать граф памяти',
+  forbidden: () => 'Доступ к проекту запрещён',
 };
 
 /** Дефолтный потолок выборки фактов. */
@@ -783,6 +830,34 @@ export function createMemoryRoutes(
   const indexNotFound = (c: Context) =>
     apiError(c, 'MEMORY_INDEX_NOT_FOUND', messages.indexNotFound(c), 404);
 
+  /** 403: нет прав на проект (граничная проверка доступа). */
+  const forbidden = (c: Context) =>
+    c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
+
+  /**
+   * ГРАНИЧНАЯ проверка доступа к проекту (инвариант 16): `read` — чтение,
+   * `write` — изменение содержимого.
+   *
+   * Правило — в одной точке (внутри обработчиков проверок нет):
+   * - проверка **не задана** → разрешено (standalone: пользователь один);
+   * - **исключение из callback → отказ** (fail-closed: сбой проверки не должен
+   *   превращаться в разрешение);
+   * - не-`true` → отказ.
+   */
+  const authorizeProjectAccess = async (
+    c: Context,
+    projectId: string,
+    mode: 'read' | 'write',
+  ): Promise<boolean> => {
+    const authorize = opts.authorizeProject;
+    if (!authorize) return true;
+    try {
+      return (await authorize(c, projectId, mode)) === true;
+    } catch {
+      return false;
+    }
+  };
+
   /**
    * Провайдер памяти доступен: инвокер задан **и** плагин активен.
    *
@@ -985,6 +1060,12 @@ export function createMemoryRoutes(
     const projectId = c.req.query('projectId')?.trim() || undefined;
     const query = c.req.query('query')?.trim() || undefined;
 
+    // Права на проект — до чтения из порта (инвариант 16). Без `projectId`
+    // скоуп — инстанс: проверять нечего (guard остаётся).
+    if (projectId && !(await authorizeProjectAccess(c, projectId, 'read'))) {
+      return forbidden(c);
+    }
+
     // Namespace подставляет сервер: клиент его не задаёт.
     const base: MemoryFactQuery = {
       namespace,
@@ -1031,6 +1112,11 @@ export function createMemoryRoutes(
         404,
       );
     }
+    // Права — по проекту **самого факта** (клиент его не подменяет). Факт без
+    // проекта — запись инстанса: проверять нечего (guard остаётся).
+    if (fact.projectId && !(await authorizeProjectAccess(c, fact.projectId, 'read'))) {
+      return forbidden(c);
+    }
     return c.json(fact);
   });
 
@@ -1052,6 +1138,10 @@ export function createMemoryRoutes(
     }
 
     const projectId = c.req.query('projectId')?.trim() || undefined;
+    // Права на проект — до чтения из порта (инвариант 16).
+    if (projectId && !(await authorizeProjectAccess(c, projectId, 'read'))) {
+      return forbidden(c);
+    }
     const query: MemoryIndexQuery = {
       namespace,
       ...(stateFilter ? { state: stateFilter } : {}),
@@ -1103,6 +1193,10 @@ export function createMemoryRoutes(
     const project = await resolvePortalProject(projectId);
     if (!project) {
       return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
+    }
+    // Права на изменение содержимого проекта — до вызова тула (инвариант 16).
+    if (!(await authorizeProjectAccess(c, projectId, 'write'))) {
+      return forbidden(c);
     }
     if (sourceKind === 'files' && !project.workspace) {
       return apiError(c, 'MEMORY_WORKSPACE_REQUIRED', messages.workspaceRequired(c), 400);
@@ -1159,6 +1253,10 @@ export function createMemoryRoutes(
       if (!project) {
         return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
       }
+      // Права на изменение содержимого проекта — до вызова тула (инвариант 16).
+      if (!(await authorizeProjectAccess(c, index.projectId, 'write'))) {
+        return forbidden(c);
+      }
       if (index.source.kind === 'files' && !project.workspace) {
         return apiError(c, 'MEMORY_WORKSPACE_REQUIRED', messages.workspaceRequired(c), 400);
       }
@@ -1197,6 +1295,10 @@ export function createMemoryRoutes(
       project = await resolvePortalProject(index.projectId);
       if (!project) {
         return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
+      }
+      // Права на изменение содержимого проекта — до вызова тула (инвариант 16).
+      if (!(await authorizeProjectAccess(c, index.projectId, 'write'))) {
+        return forbidden(c);
       }
     }
     if (!providerAvailable()) return providerUnavailable(c);
@@ -1255,6 +1357,11 @@ export function createMemoryRoutes(
       project = await resolvePortalProject(projectId);
       if (!project) {
         return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
+      }
+      // Права на изменение содержимого проекта — до вызова тула (инвариант 16).
+      // Без проекта операция инстансная: проверять нечего (guard остаётся).
+      if (!(await authorizeProjectAccess(c, projectId, 'write'))) {
+        return forbidden(c);
       }
     }
     if (!providerAvailable()) return providerUnavailable(c);
@@ -1334,6 +1441,11 @@ export function createMemoryRoutes(
       project = await resolvePortalProject(projectId);
       if (!project) {
         return apiError(c, 'PROJECT_NOT_FOUND', messages.projectNotFound(c), 404);
+      }
+      // Права на проект — до вызова тула (инвариант 16). Без `projectId` скоуп
+      // — инстанс: проверять нечего (guard остаётся).
+      if (!(await authorizeProjectAccess(c, projectId, 'read'))) {
+        return forbidden(c);
       }
     }
     if (!providerAvailable()) return providerUnavailable(c);
