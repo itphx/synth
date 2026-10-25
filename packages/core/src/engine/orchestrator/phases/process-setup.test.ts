@@ -273,6 +273,49 @@ describe('runProcessSetup', () => {
     expect(second.state.promptMeta).toMatchObject({ generation: 1, expected: 'hit' });
   });
 
+  it('блоки памяти плагина → promptMeta.memory и onMemoryContext', async () => {
+    const { id, message } = await makeSession();
+    const onMemoryContext = vi.fn();
+    const deps = makeDeps({ onMemoryContext } as Partial<ProcessSetupDeps>);
+    deps.composer = {
+      compose: vi.fn(async () => ({
+        ...composedBase,
+        blocks: [
+          ...composedBase.blocks,
+          {
+            key: 'plugin.synth-plugin-memory.facts',
+            tier: 'context',
+            order: 100,
+            content: 'FACTS',
+            status: 'loaded',
+            source: 'provider',
+          },
+          {
+            key: 'plugin.synth-plugin-memory.recall',
+            tier: 'volatile',
+            order: 110,
+            content: '',
+            status: 'empty',
+            source: 'provider',
+          },
+        ],
+      })),
+    } as unknown as SystemPromptComposer;
+
+    const result = await runProcessSetup(await makeArgs(id, message), deps);
+    expect(result.failed).toBe(false);
+    if (result.failed) return;
+
+    expect(result.state.promptMeta.memory).toEqual({
+      facts: { chars: 5, estTokens: 2, status: 'loaded' },
+      recall: { chars: 0, estTokens: 0, status: 'empty' },
+    });
+    expect(onMemoryContext).toHaveBeenCalledWith([
+      { block: 'facts', status: 'loaded', chars: 5 },
+      { block: 'recall', status: 'empty', chars: 0 },
+    ]);
+  });
+
   it('смена stable-префикса → generation-change (generation=2)', async () => {
     const { id, message } = await makeSession();
     const deps = makeDeps();

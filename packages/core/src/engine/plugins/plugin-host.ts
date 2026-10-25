@@ -63,6 +63,7 @@ import type {
   PluginFacade,
   PluginLoader,
   PluginLogger,
+  PluginMemoryTelemetryFn,
   PluginScanHook,
   PluginSettingsReader,
 } from './activation.js';
@@ -258,6 +259,18 @@ export interface PluginHostOptions {
    * Не задан — политика сервера не проверяется (standalone, тесты).
    */
   serverPolicy?: () => PluginServerPolicy | undefined | Promise<PluginServerPolicy | undefined>;
+  /**
+   * ADR-107: телеметрия recall/search-запросов памяти.
+   *
+   * Инъекция из сборки приложения (`server/app/deps.ts`/`backend/app/deps.ts`):
+   * запись метрик `synth_memory_recall_*`. Хост отдаёт плагину только
+   * счётчик (вид/исход/число фрагментов/длительность) — содержимое выдачи
+   * памяти наружу не уходит.
+   *
+   * Не задана — `facade.memoryTelemetry` не задаётся (плагин детектит
+   * наличие фичи и работает без телеметрии).
+   */
+  memoryTelemetry?: PluginMemoryTelemetryFn;
   /** Логгер (по умолчанию — `console.warn`). */
   logger?: PluginLogger;
 }
@@ -309,6 +322,8 @@ export class PluginHost {
   private readonly _now: () => string;
   /** Ф7: резолвер серверной политики плагинов (гибрид; Уровень 1 — cooperative). */
   private readonly _serverPolicy: PluginHostOptions['serverPolicy'];
+  /** ADR-107: телеметрия recall/search-запросов памяти (инъекция из сборки). */
+  private readonly _memoryTelemetry: PluginMemoryTelemetryFn | undefined;
   private readonly _logger: PluginLogger;
   /** Реестр активных плагинов: имя → дескриптор активации. */
   private readonly _activations = new Map<string, PluginActivationHandle>();
@@ -337,6 +352,7 @@ export class PluginHost {
     this._approvals = options.approvals;
     this._now = options.now ?? (() => new Date().toISOString());
     this._serverPolicy = options.serverPolicy;
+    this._memoryTelemetry = options.memoryTelemetry;
     this._explicitExceptions = options.exactHostExceptions;
     this._logger = options.logger ?? {
       warn: (message: string) => {
@@ -627,6 +643,20 @@ export class PluginHost {
         isSecretFile: isSecretFileName,
         isSecretDirectory: isSecretDirectoryName,
       },
+      // ADR-107: телеметрия recall/search-запросов памяти. Хост отдаёт
+      // плагину только счётчик (вид/исход/число фрагментов/длительность);
+      // ошибка телеметрии не ломает работу плагина.
+      ...(this._memoryTelemetry
+        ? {
+            memoryTelemetry: (input) => {
+              try {
+                this._memoryTelemetry?.(input);
+              } catch {
+                // Ошибка телеметрии не влияет на плагин.
+              }
+            },
+          }
+        : {}),
     };
 
     let module;

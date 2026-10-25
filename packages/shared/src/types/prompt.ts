@@ -34,6 +34,34 @@ export interface PromptState {
   updatedAt: string;
 }
 
+/**
+ * ADR-107: блок памяти, фактически переданный в промпт последнего хода.
+ *
+ * Оценка токенов — эвристика проекта (`Math.ceil(chars / 4)`), как и в
+ * манифесте промпта (ADR-070 §2.5).
+ */
+export interface PromptMemoryBlock {
+  /** Сколько символов блока ушло в промпт. */
+  chars: number;
+  /** Оценка токенов (`ceil(chars / 4)`) — значение оценочное. */
+  estTokens: number;
+  /** Статус блока в манифесте промпта (`loaded`/`truncated`/`empty`/…). */
+  status: PromptManifestStatus;
+}
+
+/**
+ * ADR-107: память в промпте последнего хода — по блокам.
+ *
+ * Поля отсутствуют, если блок не передавался (плагин памяти не активен или
+ * блок пуст) — аддитивно, старые записи остаются валидными.
+ */
+export interface PromptMemoryMeta {
+  /** Блок фактов памяти (`plugin.synth-plugin-memory.facts`). */
+  facts?: PromptMemoryBlock;
+  /** Блок recall-контекста (`plugin.synth-plugin-memory.recall`). */
+  recall?: PromptMemoryBlock;
+}
+
 /** ADR-070 §2.4: компактная мета промпта, кладётся в assistant-сообщение. */
 export interface PromptMeta {
   /** agentKey, к которому относится ход (agentRole или `__default__`). */
@@ -45,6 +73,12 @@ export interface PromptMeta {
   cachedTokens: number;
   /** expected подтверждён/опровергнут фактом. */
   validated: boolean;
+  /**
+   * ADR-107: блоки памяти, реально попавшие в промпт хода.
+   *
+   * Не задано — память в промпте не участвовала.
+   */
+  memory?: PromptMemoryMeta;
 }
 
 // --- Prompt manifest (ADR-070 §2.5) ---

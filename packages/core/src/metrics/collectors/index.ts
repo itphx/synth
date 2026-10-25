@@ -65,13 +65,33 @@ export { attachHybridMetrics, normalizeRemoteOp } from './hybrid.js';
 export type { HybridMetricsHooks, RemoteRequestInfo } from './hybrid.js';
 export {
   startMemoryMetrics,
+  createMemoryTelemetry,
+  normalizeMemoryContextBlock,
+  normalizeMemoryContextStatus,
+  normalizeMemoryRecallKind,
+  normalizeMemoryRecallOutcome,
   MEMORY_FACTS_METRIC,
   MEMORY_INDEXES_METRIC,
   MEMORY_INDEX_CHUNKS_METRIC,
+  MEMORY_CONTEXT_INJECTED_METRIC,
+  MEMORY_CONTEXT_CHARS_METRIC,
+  MEMORY_RECALL_QUERIES_METRIC,
+  MEMORY_RECALL_HITS_METRIC,
+  MEMORY_RECALL_DURATION_METRIC,
+  MEMORY_CONTEXT_CHARS_BUCKETS,
+  MEMORY_RECALL_HITS_BUCKETS,
+  MEMORY_RECALL_DURATION_BUCKETS,
   MEMORY_METRIC_FACT_STATUSES,
   MEMORY_METRIC_INDEX_STATES,
 } from './memory.js';
-export type { MemoryMetricsSources } from './memory.js';
+export type {
+  MemoryMetricsSources,
+  MemoryTelemetryRecorder,
+  MemoryContextBlockLabel,
+  MemoryContextStatusLabel,
+  MemoryRecallKindLabel,
+  MemoryRecallOutcomeLabel,
+} from './memory.js';
 export { setSynthReady } from './ready.js';
 export { createLlmCallRecorder } from './llm.js';
 export type { LlmCallInfo, LlmCallOutcome } from './llm.js';

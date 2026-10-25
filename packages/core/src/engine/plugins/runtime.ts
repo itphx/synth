@@ -68,6 +68,7 @@ import type {
   PluginEmbedFn,
   PluginLoader,
   PluginLogger,
+  PluginMemoryTelemetryFn,
   PluginScanHook,
   PluginSettingsReader,
 } from './activation.js';
@@ -175,6 +176,17 @@ export interface PluginRuntimeDeps {
    * (`plugin.hybrid_not_allowed`).
    */
   serverPolicy?: () => PluginServerPolicy | undefined | Promise<PluginServerPolicy | undefined>;
+  /**
+   * ADR-107: телеметрия recall/search-запросов памяти.
+   *
+   * Инъекция из сборки приложения (`server/app/deps.ts`/`backend/app/deps.ts`):
+   * запись метрик `synth_memory_recall_*`. Хост отдаёт плагину только
+   * счётчик (вид/исход/число фрагментов/длительность).
+   *
+   * Не задана — `facade.memoryTelemetry` не задаётся (плагин детектит
+   * наличие фичи и работает без телеметрии).
+   */
+  memoryTelemetry?: PluginMemoryTelemetryFn;
   /** Логгер (по умолчанию — `console.warn` с префиксом `[plugin-runtime]`). */
   logger?: PluginLogger;
   /** Инъекция часов — для детерминированных тестов (ISO-8601). */
@@ -301,6 +313,8 @@ export class PluginRuntime {
       approvals,
       ...(deps.scan ? { scan: deps.scan } : {}),
       ...(deps.serverPolicy ? { serverPolicy: deps.serverPolicy } : {}),
+      // ADR-107: телеметрия recall/search-запросов памяти (ADR-107).
+      ...(deps.memoryTelemetry ? { memoryTelemetry: deps.memoryTelemetry } : {}),
       logger: this._logger,
     });
     this.installer = new PluginInstaller({

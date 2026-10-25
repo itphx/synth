@@ -248,14 +248,24 @@ Probes Helm: liveness — `/health` (или `/ready` с большим `failureT
 Метрики подсистемы памяти (ADR-107 / PROP-047 §2.1). Серии регистрирует **ядро**
 (плагин памяти своей реестровой метрики не заводит): данные памяти хранит ядро
 (порты `MemoryFactRepository`/`MemoryIndexRepository`, ADR-096), логика — плагин.
-Лейбл только `status` с фиксированным набором значений: `namespace`,
-`project_id`, `session_id` в лейблах нет — кардинальность ограничена (ADR-094 п. 5).
+Лейблы — только фиксированные наборы (`status`, `block`, `kind`, `outcome`):
+`namespace`, `project_id`, `session_id` в лейблах нет — кардинальность ограничена (ADR-094 п. 5).
 
 | Метрика | Тип | Лейблы | Смысл / обновление |
 |---|---|---|---|
 | `synth_memory_facts` | gauge | `status` (`candidate`/`active`/`superseded`/`retracted`) | Число фактов в namespace плагина памяти; пересчёт **на скрейпе** (порты `count`) |
 | `synth_memory_indexes` | gauge | `status` (`building`/`ready`/`stale`/`failed`) | Число индексов в namespace плагина памяти по состоянию; пересчёт **на скрейпе** |
 | `synth_memory_index_chunks` | gauge | `status` (`building`/`ready`/`stale`/`failed`) | Объём корпуса индексов памяти: суммарное число чанков по индексам в каждом состоянии; пересчёт **на скрейпе** (порт `countChunks`) |
+| `synth_memory_context_injected_total` | counter | `block` (`facts`/`recall`), `status` (`loaded`/`truncated`/`empty`/…) | Сколько раз блок памяти попадал в промпт хода (по манифесту, один раз на блок за ход) |
+| `synth_memory_context_chars` | histogram | `block` (`facts`/`recall`) | Размер блока памяти, фактически ушедшего в контекст (символы); бакеты 50…16 000 |
+| `synth_memory_recall_queries_total` | counter | `kind` (`recall`/`search`), `outcome` (`hit`/`empty`/`unavailable`/`error`) | Запросы recall (блок промпта) и `memory_search` (тул) |
+| `synth_memory_recall_hits` | histogram | `kind` (`recall`/`search`) | Сколько фрагментов/строк вернуло вспоминание |
+| `synth_memory_recall_duration_seconds` | histogram | `kind` (`recall`/`search`) | Длительность вспоминания (поиск + слияние) |
+
+Контекстные серии снимает **ядро** (манифест промпта, `promptMeta.memory`), recall-серии —
+плагин через сервис фасада `facade.memoryTelemetry` (ADR-107): ядро ведёт метрики,
+плагин только сообщает `{kind, outcome, hits, durationMs}`. Ошибка/отсутствие телеметрии
+не влияет на ход. При `metrics.enabled=false` рекордер не создаётся — серий нет.
 
 Порт памяти не сконфигурирован — серии **не публикуются** (нули-обманки не
 показываем: «память недоступна» ≠ «в памяти ноль фактов»). Ошибка порта не
@@ -388,11 +398,29 @@ metrics:
 
 | Артефакт | Путь | Подключение |
 |---|---|---|
-| Дашборды | `charts/synth/files/dashboards/synth-overview.json`, `synth-llm.json`, `synth-events-ops.json` | ConfigMap с label `grafana_dashboard=1` (sidecar) при `grafana.dashboards.enabled=true`; либо импорт JSON вручную |
+| Дашборды | `charts/synth/files/dashboards/synth-overview.json`, `synth-llm.json`, `synth-events-ops.json`, `synth-memory.json` | ConfigMap с label `grafana_dashboard=1` (sidecar) при `grafana.dashboards.enabled=true`; либо импорт JSON вручную |
 | Правила алертов | `charts/synth/files/alerts/synth-rules.yaml` | `rule_files` (vanilla) или `PrometheusRule` при `alerts.enabled=true` |
 
 Все панели используют переменную `DS_PROMETHEUS` (datasource типа `prometheus`) — при импорте
 выберите свой источник. Файл правил — источник истины и для чарта, и для dev-стенда.
+
+Дашборд памяти (`synth-memory.json`, UID `synth-memory`) — девять панелей по метрикам памяти
+(ADR-107, §«Память»):
+
+- **Состав памяти (gauge, пересчёт на скрейпе)** — «Факты по статусам» (`synth_memory_facts`),
+  «Индексы по состояниям» (`synth_memory_indexes`), «Чанки индексов по состояниям»
+  (`synth_memory_index_chunks`) и stat «Сводка памяти» (`sum(...)` по `status="active"` /
+  `status="ready"`). Эти панели читаются без `$__rate_interval` (stat — instant, графики — обычный
+  range-запрос).
+- **Вспоминания (recall)** — «Вспоминания: запросы» (`rate(synth_memory_recall_queries_total)` по
+  `kind`/`outcome`), «Вспоминания: попадания (p50/p95)» (`histogram_quantile` по
+  `synth_memory_recall_hits_bucket`) и «Вспоминания: длительность (p95)»
+  (`histogram_quantile(0.95, … synth_memory_recall_duration_seconds_bucket)`).
+- **Память в контексте** — «Память в контексте: инжекты»
+  (`rate(synth_memory_context_injected_total)` по `block`/`status`) и «Память в контексте: средний
+  размер блока» (`rate(synth_memory_context_chars_sum) / rate(synth_memory_context_chars_count)`).
+
+Если порт памяти не сконфигурирован, серий нет — панели пустые, а не нулевые.
 
 ### Dev-стенд без кластера
 
@@ -403,7 +431,7 @@ docker compose -f docker-compose.observability.yml up -d
 curl -s localhost:4300/metrics | head
 ```
 
-Prometheus — `:9090`, Grafana — `:3000` (папка **Synth**, три дашборда). Цели/порты/сеть и диагностика —
+Prometheus — `:9090`, Grafana — `:3000` (папка **Synth**, четыре дашборда). Цели/порты/сеть и диагностика —
 [deploy/observability/README.md](../deploy/observability/README.md).
 
 ## Несколько окружений в одном Prometheus
@@ -444,7 +472,7 @@ scrape_configs:
 не годится как стабильный признак среды. Надёжный селектор окружения — **`env`**; `instance` нужен,
 чтобы выбрать конкретную реплику/инстанс внутри окружения.
 
-В дашбордах (`synth-overview`, `synth-llm`, `synth-events-ops`) после `DS_PROMETHEUS` добавлены
+В дашбордах (`synth-overview`, `synth-llm`, `synth-events-ops`, `synth-memory`) после `DS_PROMETHEUS` добавлены
 переменные **«Окружение»** (`env`) и **«Инстанс»** (`instance`, зависит от выбранного `env`). Все
 запросы панелей фильтруются `env=~"$env"` и `instance=~"$instance"`; по умолчанию выбрано `All`
 (`.*`), поэтому на инстансе с одним окружением поведение не меняется.

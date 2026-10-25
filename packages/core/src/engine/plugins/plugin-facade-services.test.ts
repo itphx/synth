@@ -30,6 +30,7 @@ import type {
   PluginEmbedOptions,
   PluginFacade,
   PluginLoader,
+  PluginMemoryTelemetryFn,
   PluginSettingsReader,
 } from './activation.js';
 import { PluginHost } from './plugin-host.js';
@@ -71,6 +72,8 @@ interface ActivateOptions {
   embed?: PluginEmbedFn;
   /** Ридер настроек плагина. */
   settings?: PluginSettingsReader;
+  /** Телеметрия recall/search-запросов памяти (ADR-107). */
+  memoryTelemetry?: PluginMemoryTelemetryFn;
 }
 
 /** Активировать демо-плагин и вернуть его фасад. */
@@ -95,6 +98,7 @@ async function activateAndCapture(
     loader,
     ...(options.embed ? { embed: options.embed } : {}),
     ...(options.settings ? { settings: options.settings } : {}),
+    ...(options.memoryTelemetry ? { memoryTelemetry: options.memoryTelemetry } : {}),
   });
   const name = options.name ?? 'demo-plugin';
   const descriptor: PluginActivationDescriptor = {
@@ -347,5 +351,51 @@ describe('facade.getSettings — свои настройки плагина', ()
     expect(facade.getSettings()).toEqual({ mode: 'one' });
     await write('two');
     expect(facade.getSettings()).toEqual({ mode: 'two' });
+  });
+});
+
+/**
+ * ADR-107: `facade.memoryTelemetry` — телеметрия recall/search-запросов памяти.
+ */
+describe('facade.memoryTelemetry — телеметрия запросов памяти', () => {
+  it('вызов из фасада доходит до инъецированного колбэка', async () => {
+    const calls: Array<{
+      kind: 'recall' | 'search';
+      outcome: 'hit' | 'empty' | 'unavailable' | 'error';
+      hits: number;
+      durationMs: number;
+    }> = [];
+    const memoryTelemetry: PluginMemoryTelemetryFn = (input) => {
+      calls.push(input);
+    };
+    const { facade } = await activateAndCapture({ memoryTelemetry });
+
+    facade.memoryTelemetry?.({ kind: 'recall', outcome: 'hit', hits: 3, durationMs: 42 });
+    facade.memoryTelemetry?.({ kind: 'search', outcome: 'empty', hits: 0, durationMs: 7 });
+
+    expect(calls).toEqual([
+      { kind: 'recall', outcome: 'hit', hits: 3, durationMs: 42 },
+      { kind: 'search', outcome: 'empty', hits: 0, durationMs: 7 },
+    ]);
+  });
+
+  it('ошибка колбэка не ломает apply() (активация состоялась)', async () => {
+    const memoryTelemetry: PluginMemoryTelemetryFn = () => {
+      throw new Error('телеметрия сломалась');
+    };
+    const { facade, host } = await activateAndCapture({ memoryTelemetry });
+
+    expect(() =>
+      facade.memoryTelemetry?.({ kind: 'recall', outcome: 'error', hits: 0, durationMs: 1 }),
+    ).not.toThrow();
+    // Хост жив, плагин активен.
+    expect(host.isActive('demo-plugin')).toBe(true);
+  });
+
+  it('без инъекции телеметрии метод не задан (плагин детектит фичу)', async () => {
+    const { facade } = await activateAndCapture();
+
+    expect(facade.memoryTelemetry).toBeUndefined();
+    expect(() => facade.memoryTelemetry?.({ kind: 'recall', outcome: 'hit', hits: 1, durationMs: 1 })).not.toThrow();
   });
 });

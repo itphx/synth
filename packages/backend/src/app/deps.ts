@@ -53,6 +53,9 @@ import {
   startStorageMetrics,
   // ADR-094/PROP-047: метрики памяти (`synth_memory_*`).
   startMemoryMetrics,
+  // ADR-107: телеметрия контекста памяти и recall (`synth_memory_context_*`,
+  // `synth_memory_recall_*`).
+  createMemoryTelemetry,
   registerDecisionMetrics,
   createSchedulerMetrics,
   createWebhookMetrics,
@@ -384,6 +387,11 @@ export async function createBackendDeps(
     }));
   }
 
+  // ADR-107: телеметрия памяти — блоки памяти в промпте хода и recall-запросы
+  // плагина памяти. Метрики выключены — телеметрии нет (плагин и ход работают
+  // как раньше).
+  const memoryTelemetry = metrics ? createMemoryTelemetry(metrics) : undefined;
+
   // ADR-052 (этап II): исходящие webhooks — реестр подписок (signing-секрет
   // `whsec_…` шифруется at-rest мастер-ключом), append-only журнал доставок и
   // движок над той же шиной `EventBus`, что обслуживает сессии/SSE. Движок
@@ -685,6 +693,9 @@ export async function createBackendDeps(
     // ADR-094: реестр метрик (только при `metrics.enabled`) — LLM-вызовы
     // сессий учитываются и при выключенном LLM Gateway.
     metrics,
+    // ADR-107: телеметрия блоков памяти в промпте хода
+    // (`synth_memory_context_*`).
+    ...(memoryTelemetry ? { onMemoryContext: memoryTelemetry.recordContext } : {}),
     cachePolicy: config.synth.llm.cache,
     toolsPolicy,
     mcpPolicy,
@@ -801,6 +812,9 @@ export async function createBackendDeps(
     processManager: pluginProcessManager,
     // ADR-090 (WP-F): сервис эмбеддингов фасада — через Gateway (инвариант 3).
     embed: pluginEmbed,
+    // ADR-107: телеметрия recall/search-запросов памяти
+    // (`synth_memory_recall_*`).
+    ...(memoryTelemetry ? { memoryTelemetry: memoryTelemetry.recordRecall } : {}),
   });
 
   const processMessage = orchestrator.createProcessMessage();

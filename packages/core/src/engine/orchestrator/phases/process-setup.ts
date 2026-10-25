@@ -16,6 +16,7 @@ import type {
   PermissionConfig,
   PlanMode,
   Project,
+  PromptMemoryMeta,
   PromptMeta,
   ReasoningLevel,
   Session,
@@ -23,7 +24,7 @@ import type {
   ToolForLLM,
   ToolsPolicy,
 } from '@itphx/synth-shared';
-import { MessageRole } from '@itphx/synth-shared';
+import { MessageRole, PLUGIN_PROMPT_BLOCK_KEY_PREFIX } from '@itphx/synth-shared';
 import type { BaseProvider, CachePolicy, CancellationToken, LLMMessage, SystemPromptPayload } from '../../../providers/base.js';
 import type { DebugCollector } from '../../../debug.js';
 import type { SessionManager } from '../../../sessions/manager.js';
@@ -34,6 +35,8 @@ import type { ToolRegistry } from '../../tools/registry.js';
 import type { ContextOptimizer } from '../../context/optimizer.js';
 import type { ContextFileRepository } from '../../../storage/ports/context-file-repository.js';
 import type { ComposerContext, ComposerInstructions, ComposerMcpServer, SystemPromptComposer } from '../../context/composer.js';
+import type { PromptBlock } from '../../context/prompt-blocks.js';
+import { MEMORY_PLUGIN_NAME } from '../../plugins/memory-namespace.js';
 import type { InstructionsFileInfo } from '../../context/instructions.js';
 import type { UnavailableTool } from '../../context/state-messages.js';
 import type { ComposerSkillsCatalog } from '../../skills/catalog.js';
@@ -52,6 +55,61 @@ export interface ProcessSetupResult {
   error?: string;
   errorType?: string;
   canRetry?: boolean;
+}
+
+/**
+ * Ключи блоков промпта памяти (плагин памяти, ADR-107).
+ *
+ * Плагин регистрирует блоки через точку `promptBlocks` (ADR-090), поэтому
+ * ключи — с префиксом `plugin.` и именем плагина.
+ */
+const MEMORY_FACTS_BLOCK_KEY = `${PLUGIN_PROMPT_BLOCK_KEY_PREFIX}${MEMORY_PLUGIN_NAME}.facts`;
+const MEMORY_RECALL_BLOCK_KEY = `${PLUGIN_PROMPT_BLOCK_KEY_PREFIX}${MEMORY_PLUGIN_NAME}.recall`;
+
+/**
+ * ADR-107: блок памяти, фактически ушедший в промпт хода (для метрик).
+ *
+ * Только размеры и статус — содержимое памяти в телеметрию не попадает.
+ */
+export interface MemoryContextEntry {
+  /** Какой блок памяти: факты (`facts`) или recall-контекст (`recall`). */
+  block: 'facts' | 'recall';
+  /** Статус блока в манифесте промпта (`loaded`/`truncated`/`empty`/…). */
+  status: string;
+  /** Объём блока в символах. */
+  chars: number;
+}
+
+/**
+ * ADR-107: собрать блоки памяти, ушедшие в промпт хода.
+ *
+ * Источник — блоки провайдера промпта (`source: 'provider'`) с ключами
+ * плагина памяти. Блока нет — он в промпт не попал (плагин не активен или
+ * ничего не вернул) — тогда в `meta` соответствующего поля нет.
+ */
+export function collectMemoryPromptContext(
+  blocks: readonly PromptBlock[],
+): { meta?: PromptMemoryMeta; entries: MemoryContextEntry[] } {
+  const entries: MemoryContextEntry[] = [];
+  const meta: PromptMemoryMeta = {};
+  const pairs = [
+    ['facts', MEMORY_FACTS_BLOCK_KEY],
+    ['recall', MEMORY_RECALL_BLOCK_KEY],
+  ] as const;
+  for (const [block, key] of pairs) {
+    const found = blocks.find((b) => b.key === key && b.source === 'provider');
+    if (!found) continue;
+    const chars = found.content.length;
+    const status = found.status ?? (chars > 0 ? 'loaded' : 'empty');
+    meta[block] = {
+      chars,
+      // Эвристика проекта: 4 символа на токен (как в манифесте промпта).
+      estTokens: Math.ceil(chars / DEFAULT_CHARS_PER_TOKEN),
+      status,
+    };
+    entries.push({ block, status, chars });
+  }
+  return entries.length > 0 ? { meta, entries } : { entries };
 }
 
 /** ADR-069 §2.1/§7: результат резолва проектных инструкций для текущего хода. */
@@ -218,6 +276,13 @@ export interface ProcessSetupDeps {
   sessionManager: SessionManager;
   loadTokenRatio: (model: string | undefined) => Promise<number | undefined>;
   registerCancelToken: (streamId: string, token: CancellationToken) => void;
+  /**
+   * ADR-107: телеметрия блоков памяти, ушедших в промпт хода (метрики
+   * `synth_memory_context_*`).
+   *
+   * Не задана — телеметрия не ведётся; ошибка колбэка не влияет на ход.
+   */
+  onMemoryContext?: (entries: readonly MemoryContextEntry[]) => void;
 }
 
 /**
@@ -424,6 +489,10 @@ export async function runProcessSetup(
     turnId: streamId,
   });
   const composed = await deps.composer.compose(composerCtx);
+  // ADR-107: блоки памяти (факты/recall плагина памяти), фактически ушедшие
+  // в промпт хода. Собираются сразу после сборки промпта — манифест блоков
+  // уже готов, а `promptMeta.memory` заполняется ниже.
+  const memoryContext = collectMemoryPromptContext(composed.blocks);
   // ADR-070 §2.2: в провайдер уходит payload с границей stable-префикса и
   // ключом кэша (стабильный id сессии). При override
   // `session.settings.systemPrompt` stablePrefix не задаём (безопаснее).
@@ -493,7 +562,18 @@ export async function runProcessSetup(
     expected: expectedCache,
     cachedTokens: 0,
     validated: false,
+    // ADR-107: блоки памяти, ушедшие в промпт хода (аддитивно).
+    ...(memoryContext.meta ? { memory: memoryContext.meta } : {}),
   };
+  // ADR-107: телеметрия блоков памяти (метрики `synth_memory_context_*`).
+  // Ошибка колбэка не влияет на ход — метрики наблюдают, а не мешают.
+  if (memoryContext.entries.length > 0) {
+    try {
+      deps.onMemoryContext?.(memoryContext.entries);
+    } catch {
+      // Ошибка телеметрии не влияет на ход.
+    }
+  }
 
   // 3. Convert messages for LLM (без summary — они уже в system prompt)
   const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);

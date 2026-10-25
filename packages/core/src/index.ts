@@ -1704,6 +1704,12 @@ export {
   startStorageMetrics,
   // ADR-094/PROP-047: метрики памяти (`synth_memory_*`).
   startMemoryMetrics,
+  // ADR-107: телеметрия контекста памяти и recall.
+  createMemoryTelemetry,
+  normalizeMemoryContextBlock,
+  normalizeMemoryContextStatus,
+  normalizeMemoryRecallKind,
+  normalizeMemoryRecallOutcome,
   registerDecisionMetrics,
   createSchedulerMetrics,
   createWebhookMetrics,
@@ -1737,6 +1743,12 @@ export type {
   TurnOutcome,
   StorageMetricsSources,
   MemoryMetricsSources,
+  // ADR-107: телеметрия памяти.
+  MemoryTelemetryRecorder,
+  MemoryContextBlockLabel,
+  MemoryContextStatusLabel,
+  MemoryRecallKindLabel,
+  MemoryRecallOutcomeLabel,
   HybridMetricsHooks,
   RemoteRequestInfo,
   SchedulerJobInfo,

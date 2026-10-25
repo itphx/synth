@@ -14,6 +14,15 @@
  * - `synth_memory_index_chunks{status}` — суммарное число чанков по индексам
  *   в каждом состоянии (актуальное поколение корпуса).
  *
+ * Плюс **телеметрия контекста и recall** (ADR-107, `createMemoryTelemetry`):
+ * - `synth_memory_context_injected_total{block,status}` — сколько блоков
+ *   памяти (факты/recall) фактически ушло в промпт хода;
+ * - `synth_memory_context_chars{block}` — объём такого блока (символы);
+ * - `synth_memory_recall_queries_total{kind,outcome}` — recall-запросы по
+ *   виду (`recall`/`search`) и исходу (`hit`/`empty`/`unavailable`/`error`);
+ * - `synth_memory_recall_hits{kind}` — число найденных фрагментов;
+ * - `synth_memory_recall_duration_seconds{kind}` — длительность recall-запроса.
+ *
  * Правила:
  * - **кардинальность ограничена**: лейбл только `status` с фиксированным
  *   набором значений; `namespace`/`project_id`/`session_id` в лейблах нет
@@ -37,6 +46,45 @@ export const MEMORY_INDEXES_METRIC = 'synth_memory_indexes';
 
 /** Имя метрики объёма корпуса индексов памяти (чанки по состояниям индексов). */
 export const MEMORY_INDEX_CHUNKS_METRIC = 'synth_memory_index_chunks';
+
+/** Имя метрики инъекции блока памяти в промпт хода (по блоку и статусу). */
+export const MEMORY_CONTEXT_INJECTED_METRIC = 'synth_memory_context_injected_total';
+
+/** Имя метрики объёма блока памяти, ушедшего в промпт хода (символы). */
+export const MEMORY_CONTEXT_CHARS_METRIC = 'synth_memory_context_chars';
+
+/** Имя метрики recall-запросов памяти (по виду и исходу). */
+export const MEMORY_RECALL_QUERIES_METRIC = 'synth_memory_recall_queries_total';
+
+/** Имя метрики числа найденных фрагментов recall. */
+export const MEMORY_RECALL_HITS_METRIC = 'synth_memory_recall_hits';
+
+/** Имя метрики длительности recall-запроса (секунды). */
+export const MEMORY_RECALL_DURATION_METRIC = 'synth_memory_recall_duration_seconds';
+
+/**
+ * Корзины гистограммы объёма блока памяти (символы).
+ *
+ * Бюджет блока промпта — 4 000 символов (`plugins.promptBlockMaxChars`),
+ * поэтому верхняя корзина 16 000 покрывает блок, снятый с ограничением.
+ */
+export const MEMORY_CONTEXT_CHARS_BUCKETS: readonly number[] = [
+  50, 200, 500, 1000, 2000, 4000, 8000, 16000,
+];
+
+/**
+ * Корзины гистограммы числа найденных фрагментов recall.
+ *
+ * Ноль — валидное значение (recall ничего не нашёл), но реестр метрик
+ * отбрасывает неположительные границы (`normalizeBuckets` требует `b > 0`),
+ * поэтому фактическая первая корзина — `le="1"`.
+ */
+export const MEMORY_RECALL_HITS_BUCKETS: readonly number[] = [0, 1, 2, 3, 5, 10, 20, 50];
+
+/** Корзины гистограммы длительности recall-запроса (секунды). */
+export const MEMORY_RECALL_DURATION_BUCKETS: readonly number[] = [
+  0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5,
+];
 
 /**
  * Потолок выборки индексов при пересчёте (максимум порта — 1000 записей,
@@ -169,5 +217,166 @@ export function startMemoryMetrics(
     if (stopped) return;
     stopped = true;
     removeCollector();
+  };
+}
+
+// ── Телеметрия контекста памяти и recall (ADR-107) ─────────────────────
+
+/** Блок памяти в промпте (конечный набор значений лейбла `block`). */
+export type MemoryContextBlockLabel = 'facts' | 'recall' | 'other';
+
+/** Статус блока памяти в промпте (конечный набор значений лейбла `status`). */
+export type MemoryContextStatusLabel =
+  | 'loaded'
+  | 'truncated'
+  | 'empty'
+  | 'blocked'
+  | 'suppressed'
+  | 'other';
+
+/** Вид recall-запроса (конечный набор значений лейбла `kind`). */
+export type MemoryRecallKindLabel = 'recall' | 'search' | 'other';
+
+/** Исход recall-запроса (конечный набор значений лейбла `outcome`). */
+export type MemoryRecallOutcomeLabel = 'hit' | 'empty' | 'unavailable' | 'error' | 'other';
+
+const CONTEXT_BLOCKS: readonly string[] = ['facts', 'recall'];
+const CONTEXT_STATUSES: readonly string[] = [
+  'loaded',
+  'truncated',
+  'empty',
+  'blocked',
+  'suppressed',
+];
+const RECALL_KINDS: readonly string[] = ['recall', 'search'];
+const RECALL_OUTCOMES: readonly string[] = ['hit', 'empty', 'unavailable', 'error'];
+
+/** Приведение значения к конечному набору: неизвестное → `other`. */
+function normalize(value: string | undefined, allowed: readonly string[]): string {
+  if (!value) return 'other';
+  return allowed.includes(value) ? value : 'other';
+}
+
+/** Нормализация имени блока памяти. */
+export function normalizeMemoryContextBlock(value: string | undefined): MemoryContextBlockLabel {
+  return normalize(value, CONTEXT_BLOCKS) as MemoryContextBlockLabel;
+}
+
+/** Нормализация статуса блока памяти. */
+export function normalizeMemoryContextStatus(value: string | undefined): MemoryContextStatusLabel {
+  return normalize(value, CONTEXT_STATUSES) as MemoryContextStatusLabel;
+}
+
+/** Нормализация вида recall-запроса. */
+export function normalizeMemoryRecallKind(value: string | undefined): MemoryRecallKindLabel {
+  return normalize(value, RECALL_KINDS) as MemoryRecallKindLabel;
+}
+
+/** Нормализация исхода recall-запроса. */
+export function normalizeMemoryRecallOutcome(value: string | undefined): MemoryRecallOutcomeLabel {
+  return normalize(value, RECALL_OUTCOMES) as MemoryRecallOutcomeLabel;
+}
+
+/**
+ * Телеметрия памяти: что ушло в промпт хода и как отработал recall.
+ *
+ * Вызывается из двух мест:
+ * - ход сессии (`onMemoryContext` оркестратора → блоки памяти в промпте);
+ * - фасад плагина (`facade.memoryTelemetry` → recall/search-запросы плагина).
+ */
+export interface MemoryTelemetryRecorder {
+  /**
+   * Блоки памяти, ушедшие в промпт хода (по одному на блок).
+   *
+   * `block` — `facts`/`recall`, `status` — статус манифеста промпта,
+   * `chars` — объём блока в символах.
+   */
+  recordContext(
+    entries: readonly { block: 'facts' | 'recall'; status: string; chars: number }[],
+  ): void;
+  /**
+   * Recall-запрос плагина памяти.
+   *
+   * `kind` — вид запроса (`recall`/`search`), `outcome` — исход
+   * (`hit`/`empty`/`unavailable`/`error`), `hits` — число найденных
+   * фрагментов, `durationMs` — длительность в миллисекундах.
+   */
+  recordRecall(input: {
+    kind: 'recall' | 'search';
+    outcome: 'hit' | 'empty' | 'unavailable' | 'error';
+    hits: number;
+    durationMs: number;
+  }): void;
+}
+
+/**
+ * Создать телеметрию памяти поверх реестра метрик (ADR-094).
+ *
+ * Реестра нет (`metrics.enabled=false`) — возвращается no-op: телеметрия
+ * памяти не должна ломать ход и не должна требовать включённых метрик.
+ * Ошибка записи не влияет на вызывающего (метрики — наблюдательность).
+ */
+export function createMemoryTelemetry(registry: MetricsRegistry): MemoryTelemetryRecorder {
+  const reg = registry as MetricsRegistry | undefined;
+  if (!reg) {
+    return {
+      recordContext: () => undefined,
+      recordRecall: () => undefined,
+    };
+  }
+
+  const contextInjected = reg.counter(
+    MEMORY_CONTEXT_INJECTED_METRIC,
+    'Total number of memory blocks injected into the prompt of a turn, by block and status.',
+    ['block', 'status'],
+  );
+  const contextChars = reg.histogram(
+    MEMORY_CONTEXT_CHARS_METRIC,
+    'Characters of memory blocks injected into the prompt of a turn, by block.',
+    ['block'],
+    MEMORY_CONTEXT_CHARS_BUCKETS,
+  );
+  const recallQueries = reg.counter(
+    MEMORY_RECALL_QUERIES_METRIC,
+    'Total number of memory recall queries by kind and outcome.',
+    ['kind', 'outcome'],
+  );
+  const recallHits = reg.histogram(
+    MEMORY_RECALL_HITS_METRIC,
+    'Number of memory fragments found by a recall query, by kind.',
+    ['kind'],
+    MEMORY_RECALL_HITS_BUCKETS,
+  );
+  const recallDuration = reg.histogram(
+    MEMORY_RECALL_DURATION_METRIC,
+    'Duration of memory recall queries in seconds, by kind.',
+    ['kind'],
+    MEMORY_RECALL_DURATION_BUCKETS,
+  );
+
+  return {
+    recordContext(entries) {
+      for (const entry of entries) {
+        try {
+          const block = normalizeMemoryContextBlock(entry.block);
+          const status = normalizeMemoryContextStatus(entry.status);
+          contextInjected.inc({ block, status });
+          contextChars.observe({ block }, Math.max(0, entry.chars));
+        } catch {
+          // Ошибка метрик не влияет на ход.
+        }
+      }
+    },
+    recordRecall(input) {
+      try {
+        const kind = normalizeMemoryRecallKind(input.kind);
+        const outcome = normalizeMemoryRecallOutcome(input.outcome);
+        recallQueries.inc({ kind, outcome });
+        recallHits.observe({ kind }, Math.max(0, input.hits));
+        recallDuration.observe({ kind }, Math.max(0, input.durationMs) / 1000);
+      } catch {
+        // Ошибка метрик не влияет на ход.
+      }
+    },
   };
 }

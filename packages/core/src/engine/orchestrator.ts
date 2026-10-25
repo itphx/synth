@@ -88,7 +88,7 @@ import { handleDebugSystemMessage as handleDebugSystemMessageFn, type DebugSyste
 import { handleSummarization as handleSummarizationFn, type SummarizationDeps } from './orchestrator/summarization.js';
 import { runProcessEarly, type ProcessEarlyDeps } from './orchestrator/phases/process-early.js';
 import { runProcessFinalize, type ProcessFinalizeDeps } from './orchestrator/phases/process-finalize.js';
-import { runProcessSetup, type ProcessSetupDeps } from './orchestrator/phases/process-setup.js';
+import { runProcessSetup, type ProcessSetupDeps, type MemoryContextEntry } from './orchestrator/phases/process-setup.js';
 import type { AnalyticsRecorder } from '../analytics/recorder.js';
 
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
@@ -107,6 +107,14 @@ const CONTEXT_LIMIT_WARNING_PERCENT = 90;
  * реэкспорт сохраняет прежний публичный контракт (`orchestrator.js`).
  */
 export type { AssistantMessageStatus } from './orchestrator/persistence.js';
+
+/**
+ * ADR-107: блок памяти, ушедший в промпт хода (для телеметрии памяти).
+ *
+ * Публикуется из оркестратора: composition root подключает сюда запись
+ * метрик (`synth_memory_context_*`), плагин памяти — через фасад.
+ */
+export type { MemoryContextEntry } from './orchestrator/phases/process-setup.js';
 
 export interface ModelPricing {
   inputPrice?: number;
@@ -243,6 +251,13 @@ export interface OrchestratorOptions {
    * (`synth_llm_requests_total`/`..._duration_seconds`/`..._tokens_total`).
    */
   metrics?: MetricsRegistry;
+  /**
+   * ADR-107: телеметрия блоков памяти, ушедших в промпт хода (метрики
+   * `synth_memory_context_injected_total`/`synth_memory_context_chars`).
+   *
+   * Не задана — телеметрия не ведётся; ошибка колбэка не влияет на ход.
+   */
+  onMemoryContext?: (entries: readonly MemoryContextEntry[]) => void;
   /**
    * ADR-106 Ф1: шов shadow-наблюдения Authority-слоя. Задан — решения
    * permission-слоя дополнительно считаются моделью «действие × цель» и
@@ -461,6 +476,8 @@ export class ChatOrchestrator {
   private readonly _gatewayPatternStore: SecretPatternRepository | null;
   /** ADR-094: реестр метрик (LLM-вызовы; временные метрики подключаются приложением). */
   private readonly _metrics: MetricsRegistry | null;
+  /** ADR-107: телеметрия блоков памяти в промпте хода (метрики `synth_memory_context_*`). */
+  private readonly _onMemoryContext: ((entries: readonly MemoryContextEntry[]) => void) | undefined;
   /** ADR-106 Ф1: шов shadow-наблюдения Authority-слоя (не меняет решения прав). */
   private readonly _authorityShadow: AuthorityShadowHook | undefined;
   /** ADR-106 Ф2: шов решения Authority-слоя (считает, журналит и применяет). */
@@ -772,6 +789,7 @@ export class ChatOrchestrator {
     }
     this._gatewayPatternStore = options.gatewayPatternStore ?? null;
     this._metrics = options.metrics ?? null;
+    this._onMemoryContext = options.onMemoryContext;
     // ADR-106 Ф1: shadow-наблюдение Authority-слоя (решение прав не меняется).
     this._authorityShadow = options.authorityShadow;
     // ADR-106 Ф2: шов решения Authority-слоя (guard) — считает, журналит и
@@ -1849,6 +1867,8 @@ export class ChatOrchestrator {
       registerCancelToken: (streamId, token) => {
         this._cancellationTokens.set(streamId, token);
       },
+      // ADR-107: телеметрия блоков памяти в промпте хода.
+      ...(this._onMemoryContext ? { onMemoryContext: this._onMemoryContext } : {}),
     };
   }
 

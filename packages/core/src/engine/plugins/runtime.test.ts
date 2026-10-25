@@ -28,6 +28,7 @@ import type { PluginLockRepository } from '../../storage/ports/plugin-lock-repos
 import { resolvePluginLayout } from './layout.js';
 import type { PluginLayout } from './layout.js';
 import { PluginRuntime } from './runtime.js';
+import type { PluginMemoryTelemetryFn } from './activation.js';
 
 /** Временные каталоги теста (убираются в `afterEach`). */
 const tempDirs: string[] = [];
@@ -126,6 +127,7 @@ async function makeRuntime(
     promptBlocks?: PromptBlockRegistry;
     llmFilters?: LlmFilterRegistry;
     tools?: ReturnType<typeof createToolRegistry>;
+    memoryTelemetry?: PluginMemoryTelemetryFn;
   } = {},
 ): Promise<RuntimeStand> {
   const dataDir = await makeTempDir('synth-plugin-runtime-root-');
@@ -144,6 +146,7 @@ async function makeRuntime(
     promptBlocks,
     llmFilters,
     tools,
+    ...(opts.memoryTelemetry ? { memoryTelemetry: opts.memoryTelemetry } : {}),
     logger: { warn: () => undefined },
   });
   return { runtime, layout, lock, audit, promptBlocks, llmFilters, tools };
@@ -257,6 +260,39 @@ describe('PluginRuntime: старт-активация установленно�
 });
 
 // ── Список и статусы ─────────────────────────────────────────────────────
+
+describe('PluginRuntime: телеметрия памяти', () => {
+  it('прокидывает memoryTelemetry в фасад плагина', async () => {
+    const calls: unknown[] = [];
+    const stand = await makeRuntime({ memoryTelemetry: (input: unknown) => calls.push(input) });
+    // Манифест по умолчанию объявляет блок — код обязан его зарегистрировать
+    // (иначе `provides_mismatch`), плюс сообщает телеметрию.
+    const code =
+      'export function apply(facade) {\n' +
+      '  facade.registerPromptBlock({\n' +
+      "    key: 'plugin.demo-plugin.tip',\n" +
+      "    tier: 'context',\n" +
+      '    order: 10,\n' +
+      "    load: () => '',\n" +
+      '  });\n' +
+      "  facade.memoryTelemetry?.({ kind: 'recall', outcome: 'hit', hits: 2, durationMs: 7 });\n" +
+      '}\n';
+    const install = await stand.runtime.installer.installFromDirectory({
+      dir: await makeBundle({ code }),
+      trustLevel: 'trusted',
+      source: 'local',
+      installKind: 'deploy',
+      actor: 'tester',
+    });
+    if (install.outcome !== 'installed') {
+      throw new Error(`install rejected: ${JSON.stringify(install)}`);
+    }
+
+    const results = await stand.runtime.activateInstalled({ actor: 'startup' });
+    expect(results[0]).toMatchObject({ outcome: 'activated', plugin: 'demo-plugin' });
+    expect(calls).toEqual([{ kind: 'recall', outcome: 'hit', hits: 2, durationMs: 7 }]);
+  });
+});
 
 describe('PluginRuntime: список и деактивация', () => {
   it('list(): установленные со статусом active, карантин не входит', async () => {

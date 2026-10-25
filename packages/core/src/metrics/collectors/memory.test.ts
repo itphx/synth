@@ -5,6 +5,10 @@
  * состояниям, только актуальное поколение, индекс без поколения — 0 чанков),
  * отсутствие порта → серий нет (нули-обманки не публикуются), повторный скрейп
  * не плодит серии и ошибка порта не ломает скрейп.
+ *
+ * ADR-107: телеметрия контекста памяти и recall (`createMemoryTelemetry`) —
+ * счётчики/гистограммы инъекции блоков в промпт и recall-запросов, нормализация
+ * неизвестных значений в `other` и работа без реестра метрик.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { MetricsRegistry } from '../registry.js';
@@ -16,7 +20,13 @@ import type {
   MemoryIndexRepository,
 } from '../../storage/ports/memory-index-repository.js';
 import { MEMORY_NAMESPACE } from '../../server/routes/memory.js';
-import { startMemoryMetrics } from './memory.js';
+import {
+  createMemoryTelemetry,
+  startMemoryMetrics,
+  MEMORY_CONTEXT_CHARS_BUCKETS,
+  MEMORY_RECALL_DURATION_BUCKETS,
+  MEMORY_RECALL_HITS_BUCKETS,
+} from './memory.js';
 
 /** Значение серии по точному префиксу строки (`name{...} value`). */
 function valueOf(text: string, prefix: string): number | undefined {
@@ -292,5 +302,119 @@ describe('startMemoryMetrics', () => {
     expect(seriesCount(rendered, 'synth_memory_indexes')).toBe(0);
     expect(seriesCount(rendered, 'synth_memory_index_chunks')).toBe(0);
     stop();
+  });
+});
+
+/**
+ * ADR-107: телеметрия контекста памяти и recall.
+ */
+describe('createMemoryTelemetry', () => {
+  it('блоки памяти в промпте: счётчик по блоку/статусу и гистограмма символов', () => {
+    const registry = new MetricsRegistry();
+    const telemetry = createMemoryTelemetry(registry);
+
+    telemetry.recordContext([
+      { block: 'facts', status: 'loaded', chars: 120 },
+      { block: 'recall', status: 'truncated', chars: 900 },
+    ]);
+
+    const rendered = registry.render().text;
+    expect(valueOf(rendered, 'synth_memory_context_injected_total{block="facts",status="loaded"}')).toBe(1);
+    expect(valueOf(rendered, 'synth_memory_context_injected_total{block="recall",status="truncated"}')).toBe(1);
+    // Объём блока — в гистограмме символов (сумма наблюдений).
+    expect(valueOf(rendered, 'synth_memory_context_chars_sum{block="facts"}')).toBe(120);
+    expect(valueOf(rendered, 'synth_memory_context_chars_sum{block="recall"}')).toBe(900);
+    expect(valueOf(rendered, 'synth_memory_context_chars_count{block="facts"}')).toBe(1);
+  });
+
+  it('два блока с одинаковым статусом — два инкремента счётчика', () => {
+    const registry = new MetricsRegistry();
+    const telemetry = createMemoryTelemetry(registry);
+
+    telemetry.recordContext([{ block: 'facts', status: 'loaded', chars: 10 }]);
+    telemetry.recordContext([{ block: 'facts', status: 'loaded', chars: 20 }]);
+
+    const rendered = registry.render().text;
+    expect(valueOf(rendered, 'synth_memory_context_injected_total{block="facts",status="loaded"}')).toBe(2);
+    expect(valueOf(rendered, 'synth_memory_context_chars_count{block="facts"}')).toBe(2);
+  });
+
+  it('recall: счётчик по виду и исходу', () => {
+    const registry = new MetricsRegistry();
+    const telemetry = createMemoryTelemetry(registry);
+
+    telemetry.recordRecall({ kind: 'recall', outcome: 'hit', hits: 3, durationMs: 120 });
+    telemetry.recordRecall({ kind: 'search', outcome: 'empty', hits: 0, durationMs: 10 });
+
+    const rendered = registry.render().text;
+    expect(valueOf(rendered, 'synth_memory_recall_queries_total{kind="recall",outcome="hit"}')).toBe(1);
+    expect(valueOf(rendered, 'synth_memory_recall_queries_total{kind="search",outcome="empty"}')).toBe(1);
+    // Неизвестный исход не заводит серию — только конечные значения.
+    expect(seriesCount(rendered, 'synth_memory_recall_queries_total')).toBe(2);
+  });
+
+  it('recall: гистограммы числа фрагментов и длительности', () => {
+    const registry = new MetricsRegistry();
+    const telemetry = createMemoryTelemetry(registry);
+
+    telemetry.recordRecall({ kind: 'recall', outcome: 'hit', hits: 7, durationMs: 250 });
+
+    const rendered = registry.render().text;
+    expect(valueOf(rendered, 'synth_memory_recall_hits_count{kind="recall"}')).toBe(1);
+    expect(valueOf(rendered, 'synth_memory_recall_hits_sum{kind="recall"}')).toBe(7);
+    // Длительность — в секундах.
+    expect(valueOf(rendered, 'synth_memory_recall_duration_seconds_sum{kind="recall"}')).toBe(0.25);
+    expect(valueOf(rendered, 'synth_memory_recall_duration_seconds_count{kind="recall"}')).toBe(1);
+  });
+
+  it('корзины гистограмм — из контракта (реестр отбрасывает неположительные границы)', () => {
+    const registry = new MetricsRegistry();
+    const telemetry = createMemoryTelemetry(registry);
+    telemetry.recordRecall({ kind: 'recall', outcome: 'empty', hits: 0, durationMs: 0 });
+    telemetry.recordContext([{ block: 'facts', status: 'empty', chars: 0 }]);
+
+    const rendered = registry.render().text;
+    // Граница `0` неположительна — реестр её отбрасывает, первая корзина `le="1"`.
+    expect(valueOf(rendered, 'synth_memory_recall_hits_bucket{kind="recall",le="1"}')).toBe(1);
+    expect(rendered).toContain('synth_memory_recall_hits_bucket{kind="recall",le="+Inf"} 1');
+    // Корзины объёма блока — по контракту.
+    for (const bound of MEMORY_CONTEXT_CHARS_BUCKETS) {
+      expect(rendered).toContain(`synth_memory_context_chars_bucket{block="facts",le="${bound}"}`);
+    }
+    for (const bound of MEMORY_RECALL_DURATION_BUCKETS) {
+      expect(rendered).toContain(`synth_memory_recall_duration_seconds_bucket{kind="recall",le="${bound}"}`);
+    }
+    // Ноль в списке контракта есть, но в выводе его нет (реестр: `b > 0`).
+    expect(MEMORY_RECALL_HITS_BUCKETS).toContain(0);
+    expect(rendered).not.toContain('synth_memory_recall_hits_bucket{kind="recall",le="0"}');
+  });
+
+  it('неизвестные значения приводятся к other', () => {
+    const registry = new MetricsRegistry();
+    const telemetry = createMemoryTelemetry(registry);
+
+    telemetry.recordContext([
+      { block: 'что-то' as never, status: 'неизвестно' as never, chars: 5 },
+    ]);
+    telemetry.recordRecall({
+      kind: 'прочее' as never,
+      outcome: 'неизвестно' as never,
+      hits: 1,
+      durationMs: 1,
+    });
+
+    const rendered = registry.render().text;
+    expect(valueOf(rendered, 'synth_memory_context_injected_total{block="other",status="other"}')).toBe(1);
+    expect(valueOf(rendered, 'synth_memory_recall_queries_total{kind="other",outcome="other"}')).toBe(1);
+    expect(valueOf(rendered, 'synth_memory_context_chars_sum{block="other"}')).toBe(5);
+  });
+
+  it('без реестра метрик ничего не падает (телеметрия — no-op)', () => {
+    const telemetry = createMemoryTelemetry(undefined as unknown as MetricsRegistry);
+
+    expect(() => telemetry.recordContext([{ block: 'facts', status: 'loaded', chars: 10 }])).not.toThrow();
+    expect(() =>
+      telemetry.recordRecall({ kind: 'recall', outcome: 'hit', hits: 1, durationMs: 1 }),
+    ).not.toThrow();
   });
 });
