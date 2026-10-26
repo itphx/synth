@@ -1268,3 +1268,10 @@
 - **Чарт:** `executor.tls.caSecret`/`caKey` (по умолчанию выключено), `helm lint` + `helm template` (пусто/задан CA) — OK.
 - **Приёмка:** typecheck 0; lint 0 errors; executor **172** (+30), core **6572** (+7), backend **702**; adr-check/docs-link 0 ошибок; `grep` — секреты не логируются.
 - **За рамками:** фоновые процессы с секретами (fail-closed), mTLS-клиент к прокси на исполнителе.
+
+## 2026-10-26 — 0.13.0 этап 1, п.1.5 шаг 5.4: метрики synth_executor_* (пункт 1.5 закрыт)
+
+- **Коммит:** `996c776b` (+ строка roadmap «✅ ADR-077»). Пункт 1.5 закрыт.
+- **Сделано:** core — `ExecutionMetricsSink` (узкий интерфейс, реестр в клиент не тянется) + коллектор `executor` (`queue_depth`, `workers_busy`, `wait_seconds`, `commands_total{outcome}`), sink из реестра процесса в `deps` (core/backend) → `createExecutionPortForConfig` → `RemoteExecutionPort`. Исполнитель — свой `/metrics` (`commands_total{outcome}`, `inflight`, `exec_duration_seconds`, `mcp_servers{status}`) тем же реестром/рендером 0.0.4; 404 при выключенном, 401 без токена, `no-store`; `SYNTH_EXECUTOR_METRICS_ENABLED` (дефолт `false`). Чарт: `executor.metrics.enabled`, `executor.networkPolicy.metricsIngress` (доп. ingress; политика рендерится и без `networkPolicy.enabled`, но egress тогда не ограничивается — осознанно), группа алертов `synth-executor`.
+- **Приёмка:** typecheck 0; lint 0 errors; core **6582**, executor **191**, backend **702**; `helm lint` 0 failed, `helm template` по умолчанию побайтово = HEAD; adr-check/docs-link 0 ошибок.
+- **Замечания:** `synth_executor_commands_total` есть на обеих сторонах и считает разное (control plane — доставленные вызовы, исполнитель — исполненные команды) — суммировать серии нельзя, различать по `job`; алерт `ExecutorPoolStalled` на `deriv()` по gauge требует подгонки под SLO; до релиза проверить живой split-контур (скрейп отдельным job'ом).

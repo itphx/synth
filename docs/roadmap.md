@@ -30,7 +30,7 @@
 | 1.2 | **Фоны: саб-агенты и процессы** | [ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md), [ADR-113](./arch_decisions/adr-113-background-processes.md) | дочерняя сессия/процесс живёт после ответа родителя, виден в реестре и в UI; реестр — через порты хранения, а не файлами | ✅ ADR-111/ADR-113 |
 | 1.3 | **`question`: вопрос посреди хода** | [ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md), [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) (HITL-гейт), [ADR-104](./arch_decisions/adr-104-mid-turn-steering.md) (границы хода) | ход замирает до ответа, ответ приходит как `resume` с `output`, вопрос и ответ видны в журнале | ✅ ADR-112 |
 | 1.4 | **per-session cwd / worktrees** | [PROP-049](./arch_decisions/prop-049-git-worktrees.md), [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md) | сессия работает в своём каталоге, инструменты и git не пересекаются между сессиями | — |
-| 1.5 | **Остаток исполнителя** | [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 7c–7d) | git (вместо `simple-git`) и MCP-stdio исполняются исполнителем, метрики `synth_executor_*` — в контракте [ADR-094](./arch_decisions/adr-094-observability-metrics.md) | git/MCP — ✅; метрики — — |
+| 1.5 | **Остаток исполнителя** | [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 7c–7d) | git (вместо `simple-git`) и MCP-stdio исполняются исполнителем, метрики `synth_executor_*` — в контракте [ADR-094](./arch_decisions/adr-094-observability-metrics.md) | ✅ ADR-077 (git, MCP, `synth_executor_*`) |
 
 **Статус на 2026-10-26:** 1.2 и 1.3 закрыты ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
 [ADR-113](./arch_decisions/adr-113-background-processes.md),
