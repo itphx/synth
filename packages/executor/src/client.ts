@@ -873,6 +873,14 @@ function isTerminalBackgroundStatus(status: BackgroundProcessStatus): boolean {
  * разбудить опрос состояния, чтобы терминальный статус увидели сразу, а не
  * через полный интервал. После прерывания следующие ожидания снова полные
  * (иначе опрос «пел бы» вхолостую).
+ *
+ * Таймер ожидания **не** `unref`-ится: класс используется только
+ * `RemoteBackgroundProcess` (опрос состояния и журнала фонового процесса), и
+ * пока наблюдение активно, ожидание обязано держать event loop. Иначе в
+ * потребителе без другой ref'нутой работы (CLI-скрипт, короткий smoke-тест)
+ * Node завершает процесс с «unsettled top-level await» — поток вывода
+ * `bg.output` не доходит до конца, и контракт порта работает только внутри
+ * долгоживущего HTTP-сервера.
  */
 class InterruptibleWait {
   private _waiters: Array<() => void> = [];
@@ -887,7 +895,6 @@ class InterruptibleWait {
         resolve();
       };
       state.timer = setTimeout(wake, ms);
-      state.timer.unref?.();
       this._waiters.push(wake);
     });
   }

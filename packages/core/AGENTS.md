@@ -256,12 +256,16 @@
   режиму и проверка режима при старте —
   `ports/execution-port.ts`
   (`ExecutionPort`, `ExecRequest`, `ExecResult`, `ExecCommand` — union `shell`/`argv`,
-  `ExecutionError`, `DEFAULT_MAX_OUTPUT_BYTES`; **шаг A**: `ExecRequest.requires?: string[]`,
+  `ExecutionError`, `isExecutionError` — **структурная** проверка типа ошибки порта: клиент
+  удалённого порта создаёт ошибку через динамический `import()` (из `dist`), а core импортирует
+  класс из исходников — это два разных объекта класса, и `instanceof` не срабатывает; проверка
+  опирается на стабильный признак `name === 'ExecutionError'` и форму `reason`/`message`,
+  `DEFAULT_MAX_OUTPUT_BYTES`; **шаг A**: `ExecRequest.requires?: string[]`,
   `ExecutionPort.probe?(bin, args?)`, `ExecutionPort.capabilitySummary?(bin)`,
   `ExecutionCapabilitySummary`, `EXECUTION_BASE_CAPABILITIES = ['git','rg','sh']`,
   причина отказа `dependency_missing`), `inline-execution-port.ts`
   (`InlineExecutionPort` — исполнение в процессе поверх `execFile`; `probe()` — поверх общей пробы;
-  **PROP-097**: `spawnBackground?(req)` — фоновый запуск через `spawn` (не `execFile`):
+  **ADR-113**: `spawnBackground?(req)` — фоновый запуск через `spawn` (не `execFile`):
   `processId` = `proc_<uuid>`, `pid`, поток `output` (`stdout`/`stderr` кусками), промис `exited`
   (`exitCode`/`signal`/`durationMs`), `stop(signal='SIGTERM')`; `timeoutMs > 0` — таймер
   (`unref`) `SIGTERM` → `SIGKILL` через 5 с; `requires`/`signal`/`maxOutputBytes` в фоне
@@ -272,7 +276,7 @@
   общий набор проверок + блоки `describeInlineOnlyExecutionChecks`/`describeRemoteOnlyExecutionChecks`
   — разделение намеренное: у remote `cwd` обязан лежать в workspace исполнителя, у inline
   такого ограничения нет; `probe`/`requires` проверяются в общем наборе, `dependency_missing` —
-  в remote-блоке; **PROP-097**: блок `describeBackgroundExecutionChecks` — фоновый запуск
+  в remote-блоке; **ADR-113**: блок `describeBackgroundExecutionChecks` — фоновый запуск
   (поток вывода, `exitCode`, `stop()`, таймаут) — только там, где метод реализован;
   **фоновый запуск — в обеих реализациях** (inline и remote, ADR-077 шаг 7c): в
   remote-блоке проверяется, что `spawnBackground` **реализован** и что
@@ -287,9 +291,12 @@
   `probe()`/`capabilitySummary()` по инвентарю, маршрутизация команды в адрес с нужными
   бинарями; адрес без нужного бинаря и не ответивший адрес из маршрутизации исключаются,
   подходящего адреса нет → `dependency_missing`/`EDEPENDENCY` с текстом «в пуле: N из M»;
-  **фоновый запуск в remote** (ADR-077 шаг 7c): `spawnBackground` — опрос состояния
+  **фоновый запуск в remote** (ADR-077 шаг 7c; ADR-113): `spawnBackground` — опрос состояния
   (`GET /exec/:id`, 500 мс) и журнала (`GET /exec/:id/logs`, 300 мс) исполнителя —
-  стриминга на проводе нет; обёртка `RemoteExecutionPortWithExecutorMcp` пробрасывает
+  стриминга на проводе нет; `stop(signal)` уходит на исполнителя телом
+  `{ signal }` (`POST /exec/:id/stop`: `SIGTERM`|`SIGKILL`, иной сигнал — `400`),
+  поэтому конкретный сигнал доезжает, а не подменяется дефолтом сервера;
+  обёртка `RemoteExecutionPortWithExecutorMcp` пробрасывает
   метод **только если его умеет внутренний порт** (иначе «фон не поддерживается» не
   отличить от «метод есть, но падает»); исполнитель протокола < 3 (нет
   `features.background`) → `ExecutionError.code = 'EBACKGROUND'`
@@ -1254,7 +1261,7 @@
   `storage/contract/background-run-repository.contract.ts`).
   Мастер-выключатель `background.enabled` гейтит **оба** вида фоновой работы:
   `task` (`task.background_disabled`) и `execute_shell` (`process.background_disabled`).
-- `engine/processes/*` — PROP-097 (ADR-111): фоновые шелл-процессы. `service.ts`
+- `engine/processes/*` — ADR-113 (ADR-111): фоновые шелл-процессы. `service.ts`
   (`ProcessService`: `spawn` через `ExecutionPort.spawnBackground`, поток stdout/stderr в лог,
   `stop`, `logs`; лимит записи лога — `background.logMaxBytes`; `stop` публикует
   `process.stopped` в канал владельца — один раз на прогон, терминальный статус
@@ -1307,7 +1314,7 @@
   (backend по `storage.backend`, env `SYNTH_STORAGE_BACKEND`),
   `storage/file-blob-store.ts` (`FileBlobStore`, порт `BlobStore` — `read`/`write`/`append`/
   `delete`/`exists`/`list`; `append` — дописывание в конец для журналов (логи фоновых процессов,
-  PROP-097), атомарность не требуется), `storage/defaults-store.ts`
+  ADR-113), атомарность не требуется), `storage/defaults-store.ts`
   (`DefaultsStore` — перенесён из backend, там реэкспорт). Пайплайны ADR-101 — отдельные порты:
   `storage/ports/project-pipeline-repository.ts` (`ProjectPipelineRepository` — черновик пайплайна
   + журнал опубликованных версий; `scope` = `project`|`instance`, `installedBy` — провенанс пакета) и

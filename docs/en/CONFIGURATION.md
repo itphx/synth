@@ -1484,7 +1484,7 @@ questions:
 
 The section sets the behaviour of the single registry of the background work: background
 **subagents** (`task({background: true})`, PROP-096/ADR-111) and background **shell
-processes** (`execute_shell({background: true})`, PROP-097) live in **one** registry —
+processes** (`execute_shell({background: true})`, ADR-113) live in **one** registry —
 there is no second storage. The limits are counted per the owner session (for a subagent —
 the parent session).
 

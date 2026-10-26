@@ -183,6 +183,12 @@ interface ExecutionPort {
   отмены): благодаря этому распознавание отмены (`isAbortError`) и тексты ошибок не
   изменились. Разбор ошибки на конкретные тексты (`ENOENT` → `tool.binary_missing`) остался
   в тулах — порт не знает про i18n-ключи.
+- **Проверка типа ошибки — структурная (`isExecutionError`), а не через `instanceof`.**
+  Клиент удалённого порта создаёт ошибку через динамический `import('@itphx/synth-core')`
+  (то есть из `dist`), а код в core импортирует класс из исходников — это **два разных
+  объекта класса**, и `instanceof` не срабатывает. Поэтому порт экспортирует
+  `isExecutionError(value): value is ExecutionError` — она опирается на стабильный признак
+  типа (`name === 'ExecutionError'`) и форму ошибки (`reason`/`message`).
 - **`stdin` не реализован.** Потребности в неинтерактивном вводе у домена нет: exec-API
   обслуживает только неинтерактивные команды (PTY/attach — вне объёма этой версии,
   [PROP-064](./arch_decisions/prop-064-ui-browser-terminal.md)). Поле не добавлено «на будущее» — при
@@ -286,10 +292,10 @@ interface ExecutionPort {
 | Метод | Путь | Назначение |
 |---|---|---|
 | `POST` | `/exec` | тело: `{ command: ExecCommand, cwd?, env?, timeoutMs?, maxOutputBytes? }` → `200 { stdout, stderr, exitCode, truncated, durationMs }`; при неудаче — код ошибки с телом `{ error: { reason, code, message, stdout, stderr, killed, signal, truncated, durationMs } }` (зеркалит `ExecutionError`) |
-| `POST` | `/exec/spawn` | тело: `{ command: ExecCommand, cwd?, env?, timeoutMs?, requires? }` → `201 { processId, pid }`; фоновый процесс (ADR-077, шаг 7c; PROP-097): `400` — невалидное тело или `cwd` вне workspace, `429` — превышен лимит живых фоновых процессов |
+| `POST` | `/exec/spawn` | тело: `{ command: ExecCommand, cwd?, env?, timeoutMs?, requires? }` → `201 { processId, pid }`; фоновый процесс (ADR-077, шаг 7c; ADR-113): `400` — невалидное тело или `cwd` вне workspace, `429` — превышен лимит живых фоновых процессов |
 | `GET` | `/exec/:processId` | `200 { processId, status, exitCode, signal, pid?, command, cwd, startedAt, finishedAt?, durationMs?, stdoutBytes, stderrBytes, truncated }` — состояние фонового процесса; `404` — процесс не найден |
 | `GET` | `/exec/:processId/logs` | `200 { processId, status, exitCode, signal, stdout: { content, offset, nextOffset }, stderr: { … }, totalBytes, truncated }`; query `stdoutOffset`/`stderrOffset`/`limit` (отрезок ≤ 256 КиБ, по умолчанию 64 КиБ); `404` — процесс не найден |
-| `POST` | `/exec/:processId/stop` | `200 { status: 'stopping' }` — остановка фонового процесса (`SIGTERM`, через 5 с — `SIGKILL`; идемпотентно); `404` — процесс не найден |
+| `POST` | `/exec/:processId/stop` | `200 { status: 'stopping' }` — остановка фонового процесса; тело `{ signal }` — `SIGTERM`\|`SIGKILL` (пустое тело — `SIGTERM` по умолчанию, иной сигнал — `400`); через 5 с после `SIGTERM` — `SIGKILL`; идемпотентно; `404` — процесс не найден |
 | `GET` | `/capabilities` | `{ protocol: 3, toolchain: {git?, rg?, sh?, python3?}, os, arch, node, features: { background } }` — рукопожатие версии протокола и состава toolchain'а |
 | `GET` | `/mcp/servers` | `[{ name, status, toolCount, error? }]` — состояние MCP-серверов исполнителя (`idle`/`up`/`down`); значения `env` не отдаются |
 | `GET` | `/mcp/tools` | `[{ server, name, description, inputSchema }]` — инструменты всех **поднятых** MCP-серверов |
@@ -842,7 +848,7 @@ Split-топология технически возможна и при одн�
   разделение секретов и меньший образ control plane; общий (один образ, разные роли через env) —
   проще CI и не нужен четвёртый образ в реестре (квота 500 МБ). Нужно решение до шага 5 (образ
   worker'а `synth-executor:<v>-<flavor>`).
-- **Взаимодействие с PROP-097** (реестр фоновых процессов). `execute_shell { background: true }` и
+- **Взаимодействие с ADR-113** (реестр фоновых процессов). `execute_shell { background: true }` и
   пул исполнителей — один и тот же механизм исполнения; реестр процессов должен быть общим (иначе
   фоновая команда «уедет» в worker'а, а UI-реестр останется в backend'е).
 - **Стоимость и квоты.** Кто платит за worker'ов (node pool, диск под workspace, квоты namespace)?
@@ -874,7 +880,7 @@ Split-топология технически возможна и при одн�
 - [ADR-023](./arch_decisions/adr-023-configuration.md) «Конфигурация» — приоритет CLI > env > config.yaml > defaults.
 - [ADR-052](./arch_decisions/adr-052-public-api-platform.md) «Публичная API-платформа» — образец машинных ключей.
 - [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) «Full-образы и базовое развёртывание» — all-in-one топология и состав образов.
-- [PROP-097](./arch_decisions/prop-097-background-processes-registry.md) «Фоновые процессы» — общий реестр фоновых процессов.
+- [ADR-113](./arch_decisions/adr-113-background-processes.md) «Фоновые процессы» — общий реестр фоновых процессов.
 - [PROP-049](./arch_decisions/prop-049-git-worktrees.md) «Git worktrees» — персональный cwd как будущая единица работы на исполнителе.
 - [PROP-080](./arch_decisions/prop-080-managed-hybrid-modes.md) / [PROP-081](./arch_decisions/prop-081-hybrid-policy-leak-protection.md) — гибрид: где исполняется local vs managed.
 - [PROP-064](./arch_decisions/prop-064-ui-browser-terminal.md) «UI-терминал» — PTY/attach вне объёма.

@@ -577,6 +577,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110](./docs/arch_decisions/prop-110-portal-platform.md) |
 | ADR-111 | Фоновые прогоны — неблокирующие саб-агенты и реестр | ✅ Реализовано | [adr-111](./docs/arch_decisions/adr-111-background-subagent-sessions.md) |
 | ADR-112 | Вопрос пользователю посреди хода (question) | ✅ Реализовано | [adr-112](./docs/arch_decisions/adr-112-user-questions-mid-turn.md) |
+| ADR-113 | Фоновые процессы — реестр, control plane и исполнитель | ✅ Реализовано | [adr-113](./docs/arch_decisions/adr-113-background-processes.md) |
 <!-- ad-index:end -->
 
 Правило: `docs/arch_decisions/` — единственный дом ADR/PROP; номера и файлы стабильны (ссылок на id по репозиторию — тысячи), файлы не переносятся и не удаляются.
@@ -596,7 +597,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | движки / engine | [ADR-018](./docs/arch_decisions/adr-018-session-engine-selection.md), [ADR-022](./docs/arch_decisions/adr-022-typescript-stack-runner.md). ⚠️ Поле `Session.engine` **удалено** из контракта (публичный OpenAPI/SDK, ответы `GET /sessions*`, `:id/messages`, тела POST/PATCH) — намеренное ломающее изменение; выбор и адаптеры движков — [PROP-050](./docs/arch_decisions/prop-050-external-engines-runner.md) |
 | UI / React / PWA | [ADR-019](./docs/arch_decisions/adr-019-react-spa.md), [ADR-044](./docs/arch_decisions/adr-044-mobile-adaptive-ui-pwa.md), [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) |
 | саб-агенты / контекст | [ADR-026](./docs/arch_decisions/adr-026-subagent-context-modes.md), [ADR-033](./docs/arch_decisions/adr-033-session-branching-merge.md) |
-| фоновые прогоны / процессы / саб-агенты в фоне | [ADR-111](./docs/arch_decisions/adr-111-background-subagent-sessions.md), [PROP-097](./docs/arch_decisions/prop-097-background-processes-registry.md) |
+| фоновые прогоны / процессы / саб-агенты в фоне | [ADR-111](./docs/arch_decisions/adr-111-background-subagent-sessions.md), [ADR-113](./docs/arch_decisions/adr-113-background-processes.md) |
 | вопрос пользователю посреди хода | [ADR-112](./docs/arch_decisions/adr-112-user-questions-mid-turn.md) |
 | permissions / plan-act | [ADR-025](./docs/arch_decisions/adr-025-plan-act-toggle.md), [ADR-028](./docs/arch_decisions/adr-028-plan-build-strictness.md), [ADR-029](./docs/arch_decisions/adr-029-granular-permissions.md) |
 | полномочия / роли / среды / «кто что может через агента» | [ADR-106](./docs/arch_decisions/adr-106-authority-layer.md), [docs/AUTHORITY.md](./docs/AUTHORITY.md), [ADR-025](./docs/arch_decisions/adr-025-plan-act-toggle.md), [ADR-029](./docs/arch_decisions/adr-029-granular-permissions.md), [ADR-089](./docs/arch_decisions/adr-089-external-events-automation.md) (права внешних отправителей) |

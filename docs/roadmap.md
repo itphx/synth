@@ -24,17 +24,19 @@
 слоем плагинов ([ADR-090](./arch_decisions/adr-090-extension-api.md)), сюда не входят — их место в каталоге
 (этап 2a.4).
 
-| # | Цель | Документы | Критерий готовности |
-|---|---|---|---|
-| 1.1 | **Данные: мультимодальный `Part` и blob-порт** | [PROP-085](./arch_decisions/prop-085-multimodal-input.md), [PROP-106](./arch_decisions/prop-106-file-ports-to-sql.md) (часть: `blobs`/`packs`/legacy-`pipelines`) | сообщение с изображением/аудио проходит от API до провайдера; вложение лежит в порте хранения, а не пишется мимо него; второй миграции не потребуется |
-| 1.2 | **Фоны: саб-агенты и процессы** | [ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md) (саб-агенты), [PROP-097](./arch_decisions/prop-097-background-processes-registry.md) (процессы) | дочерняя сессия/процесс живёт после ответа родителя, виден в реестре и в UI; реестр — через порты хранения, а не файлами |
-| 1.3 | **`question`: вопрос посреди хода** | [ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md), [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) (HITL-гейт), [ADR-104](./arch_decisions/adr-104-mid-turn-steering.md) (границы хода) | ход замирает до ответа, ответ приходит как `resume` с `output`, вопрос и ответ видны в журнале |
-| 1.4 | **per-session cwd / worktrees** | [PROP-049](./arch_decisions/prop-049-git-worktrees.md), [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md) | сессия работает в своём каталоге, инструменты и git не пересекаются между сессиями |
-| 1.5 | **Остаток исполнителя** | [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 7c–7d) | `simple-git` и MCP-stdio исполняются исполнителем, метрики `synth_executor_*` — в контракте [ADR-094](./arch_decisions/adr-094-observability-metrics.md) |
+| # | Цель | Документы | Критерий готовности | Статус |
+|---|---|---|---|---|
+| 1.1 | **Данные: мультимодальный `Part` и blob-порт** | [PROP-085](./arch_decisions/prop-085-multimodal-input.md), [PROP-106](./arch_decisions/prop-106-file-ports-to-sql.md) (часть: `blobs`/`packs`/legacy-`pipelines`) | сообщение с изображением/аудио проходит от API до провайдера; вложение лежит в порте хранения, а не пишется мимо него; второй миграции не потребуется | — |
+| 1.2 | **Фоны: саб-агенты и процессы** | [ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md), [ADR-113](./arch_decisions/adr-113-background-processes.md) | дочерняя сессия/процесс живёт после ответа родителя, виден в реестре и в UI; реестр — через порты хранения, а не файлами | ✅ ADR-111/ADR-113 |
+| 1.3 | **`question`: вопрос посреди хода** | [ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md), [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) (HITL-гейт), [ADR-104](./arch_decisions/adr-104-mid-turn-steering.md) (границы хода) | ход замирает до ответа, ответ приходит как `resume` с `output`, вопрос и ответ видны в журнале | ✅ ADR-112 |
+| 1.4 | **per-session cwd / worktrees** | [PROP-049](./arch_decisions/prop-049-git-worktrees.md), [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md) | сессия работает в своём каталоге, инструменты и git не пересекаются между сессиями | — |
+| 1.5 | **Остаток исполнителя** | [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 7c–7d) | `simple-git` и MCP-stdio исполняются исполнителем, метрики `synth_executor_*` — в контракте [ADR-094](./arch_decisions/adr-094-observability-metrics.md) | — |
 
 **Статус на 2026-10-26:** 1.2 и 1.3 закрыты ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
-[ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md)) — фоновые процессы поддержаны
-и в `inline`, и в `remote` ([ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) шаг 7c;
+[ADR-113](./arch_decisions/adr-113-background-processes.md),
+[ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md)); остаток 1.2 (remote-процессы) закрыт
+(протокол v3) — фоновые процессы поддержаны и в `inline`, и в `remote`
+([ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) шаг 7c;
 ограничение — исполнитель протокола < 3, `background_unsupported`).
 
 ### Этап 2 — доведение начатого (2a → 2b)
@@ -82,7 +84,7 @@
 | [PROP-083](./arch_decisions/prop-083-instance-customization-branding.md) | Кастомизация и брендинг | после портал-платформы ([PROP-110](./arch_decisions/prop-110-portal-platform.md)), иначе делать дважды |
 | [PROP-093](./arch_decisions/prop-093-docs-versioning.md) | Версионирование документации | не блокирует поставку |
 
-## Предложения к решению (30)
+## Предложения к решению (29)
 
 | ID | Тема | Статус | Решение до | Заметка |
 |---|---|---|---|---|
@@ -107,7 +109,6 @@
 | [PROP-083](./arch_decisions/prop-083-instance-customization-branding.md) | Кастомизация инстанса и брендинг | 🧩 Предложение | 2026-11-14 | приветственное окно, ватермарка; позже — locked settings |
 | [PROP-085](./arch_decisions/prop-085-multimodal-input.md) | Мультимодальный ввод (звук/изображения/видео) | 🧩 Предложение | 2026-11-14 | контракт `Part`; зависит от ADR-096/ADR-077 |
 | [PROP-093](./arch_decisions/prop-093-docs-versioning.md) | Версионирование документации портала | 🧩 Предложение | 2026-11-14 | вариант A (nginx) или B (`mike`) |
-| [PROP-097](./arch_decisions/prop-097-background-processes-registry.md) | Фоновые процессы: реестр + контроль через UI | 🧩 Предложение | 2026-11-14 | реализовано в обеих топологиях: единый реестр (`BackgroundRunRepository`, `kind=process`), `execute_shell({background:true})`, API `/api/v2/processes*` и вкладка «Процессы»; `remote` — фоновый процесс живёт на исполнителе (протокол v3, `features.background`), control plane опрашивает состояние и журнал ([ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) шаг 7c) |
 | [PROP-099](./arch_decisions/prop-099-memory-footprint-optimization.md) | Оптимизация потребления памяти | 🧩 Предложение | 2026-11-14 | цель релиза 0.11; RSS-бюджет, bounded-кэши, лёгкие листинги; связано с ADR-096/ADR-094 |
 | [PROP-100](./arch_decisions/prop-100-ssrf-dns-rebinding.md) | SSRF: TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению | 🧩 Предложение | 2026-11-14 | дефекты 1–3 закрыты 2026-10-17 (единый `engine/net/egress-guard.ts`); прокси реализован (proxied-режим); остаток — пиннинг для direct/`noProxy`-хостов, наблюдаемость; класс SSRF/egress аудита |
 | [PROP-101](./arch_decisions/prop-101-local-installers-platforms.md) | Локальные инсталляторы и платформенная дистрибуция (Win/mac/Linux) | 🧩 Предложение | 2026-12-31 | реализация — до 1.0.0; CI Linux-only (нативные раннеры + подписи/нотаризация — пререквизиты); flatpak/snap не берём; этапы 0–3 |
@@ -118,8 +119,17 @@
 | [PROP-110](./arch_decisions/prop-110-portal-platform.md) | Портал-платформа: общий UI-kit, единый вход, шаблон портала | 🧩 Предложение | 2026-12-31 | `@itphx/synth-ui-kit` (токены/примитивы) + `@itphx/synth-portal` (оболочка, вход, settings-kit); этап 2b; первый потребитель — `synth-media` |
 
 Пометка: строка ADR-097 — принятый ADR (`⚠️ Частично` в индексе), в таблице он стоит ради своего
-остатка (авто-возврат к БД без рестарта, документы) и срока `2026-11-14`; остальные 29 строк —
+остатка (авто-возврат к БД без рестарта, документы) и срока `2026-11-14`; остальные 28 строк —
 предложения.
+
+Пометка: `PROP-097` решением **2026-10-26** переведён в
+[ADR-113](./arch_decisions/adr-113-background-processes.md) (фоновые процессы: единый реестр
+`BackgroundRunRepository` с видом `process`, `ProcessService` в control plane (лог в `BlobStore`,
+`SIGTERM` → `SIGKILL`), `execute_shell({background: true})` с немедленным возвратом управления,
+уведомление родителя с автоходом и хвостом лога, API `/api/v2/processes*`, вкладка «Процессы»;
+в `remote` — протокол исполнителя v3, опрос состояния и журнала, старый исполнитель →
+`background_unsupported`) — из списка предложений снят; файл предложения остаётся в каталоге как
+исходная гипотеза.
 
 Пометка: `PROP-096` решением **2026-10-26** переведён в
 [ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md) (фоновые прогоны: единый реестр
@@ -220,11 +230,11 @@ ADR-018 и ADR-046 — принятые ADR со смешанным статус
 | [ADR-104](./arch_decisions/adr-104-mid-turn-steering.md) | Вмешательство в ход посреди генерации (steering) | ✅ Реализовано | режимы `queue`/`steer`/`interrupt`, `steerInbox`, граница шага, `interrupt` без завершения хода, приоритет инъекций, правила `ask`/`plan`, гибрид (`mode_applied`), steering дочерней (фоновой) сессии саб-агента (ADR-111) |
 | [ADR-105](./arch_decisions/adr-105-external-credentials.md) | Внешние доступы (OAuth-коннекторы) | ✅ Реализовано | сущность и порт (file/memory/PG), OAuth-клиент, host-binding, токен в MCP-транспорте, запрет plaintext, каталог `oauth.providers`, права, `/api/v2/oauth`, журнал, ротация (SSH+доступы+вебхуки), бэкап, UI «Доступы». Ограничения: standalone `bind` не перезагружает живой клиент, PG-контракт — в CI |
 | [ADR-106](./arch_decisions/adr-106-authority-layer.md) | Authority-слой (полномочия как контент) | ⚠️ Частично | Ф0–Ф5 реализованы: модель и порты (file/memory/PG), резолвер, shadow, принуждение с потолком сессии и `yolo`, подтверждения по `(principal, turn, action, target, digest)`, `Turn.principal`, участники и потолок хода, `PATCH mode`, активация `provides.authority` с trust-floor, PG-порты (миграции `014`/`015`), UI «Полномочия»; остаток — flavor-роли (PROP-082) |
-Итого: документов — 102 (ADR — 62: 45 со статусом `✅ Реализовано` и 17 со статусом `⚠️ Частично`,
+Итого: документов — 103 (ADR — 63: 46 со статусом `✅ Реализовано` и 17 со статусом `⚠️ Частично`,
 1 legacy; предложений — 30, vision — 8, icebox — 1).
-В разделах roadmap: «Предложения к решению» — 30 строк (29 предложений + строка ADR-097
-с остатком; `PROP-096` снят — см. пометку выше, его файл остаётся в каталоге как исходная
-гипотеза), «Vision» — 8, «Вне горизонта 0.13» — 6 (в т.ч. icebox PROP-050), «Частично реализовано» — 15
+В разделах roadmap: «Предложения к решению» — 29 строк (28 предложений + строка ADR-097
+с остатком; `PROP-096` и `PROP-097` сняты — см. пометки выше, их файлы остаются в каталоге как
+исходные гипотезы), «Vision» — 8, «Вне горизонта 0.13» — 6 (в т.ч. icebox PROP-050), «Частично реализовано» — 15
 (ADR-018, ADR-030, ADR-046, ADR-051, ADR-077, ADR-086, ADR-087, ADR-089, ADR-094, ADR-099, ADR-101,
 ADR-102, ADR-104, ADR-105, ADR-106). Раздел «Частично»
 в сгенерированном индексе содержит 17 файлов — ADR-018, ADR-030, ADR-046, ADR-051, ADR-077, ADR-086,
