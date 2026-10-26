@@ -582,6 +582,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | ADR-111 | Фоновые прогоны — неблокирующие саб-агенты и реестр | ✅ Реализовано | [adr-111](./docs/arch_decisions/adr-111-background-subagent-sessions.md) |
 | ADR-112 | Вопрос пользователю посреди хода (question) | ✅ Реализовано | [adr-112](./docs/arch_decisions/adr-112-user-questions-mid-turn.md) |
 | ADR-113 | Фоновые процессы — реестр, control plane и исполнитель | ✅ Реализовано | [adr-113](./docs/arch_decisions/adr-113-background-processes.md) |
+| ADR-114 | Git worktrees — per-session рабочий каталог | ⚠️ Частично | [adr-114](./docs/arch_decisions/adr-114-git-worktrees.md) |
 <!-- ad-index:end -->
 
 Правило: `docs/arch_decisions/` — единственный дом ADR/PROP; номера и файлы стабильны (ссылок на id по репозиторию — тысячи), файлы не переносятся и не удаляются.
@@ -613,6 +614,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | безопасность клиента / целостность / аттестация гибрида | [PROP-073](./docs/arch_decisions/prop-073-client-integrity-hybrid.md) |
 | soft-delete / скрытие / retention / аудит-режим | [PROP-074](./docs/arch_decisions/prop-074-soft-delete-retention.md) |
 | workspace / рабочий каталог / окружение проекта | [ADR-075](./docs/arch_decisions/adr-075-project-workspace-provisioning.md) |
+| worktrees / per-session cwd | [ADR-114](./docs/arch_decisions/adr-114-git-worktrees.md), [docs/WORKTREES.md](./docs/WORKTREES.md), [ADR-075](./docs/arch_decisions/adr-075-project-workspace-provisioning.md), [ADR-076](./docs/arch_decisions/adr-076-git-repo-registry-ssh.md) |
 | git-репозитории / SSH-ключи | [ADR-076](./docs/arch_decisions/adr-076-git-repo-registry-ssh.md) |
 | инструменты / образы / тулчейн / executor | [ADR-077](./docs/arch_decisions/adr-077-runtime-toolchain.md), [ADR-078](./docs/arch_decisions/adr-078-runtime-dependency-availability.md), [PROP-082](./docs/arch_decisions/prop-082-full-images-deployment.md) |
 | план / todo | [ADR-039](./docs/arch_decisions/adr-039-plan-in-project.md) |
@@ -679,6 +681,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | [docs/LLM_PROVIDERS.md](./docs/LLM_PROVIDERS.md) | Провайдеры LLM для разработки |
 | [docs/PUBLISHING.md](./docs/PUBLISHING.md) | Сборка, публикация npm, Docker, Helm, релиз |
 | [docs/PIPELINES.md](./docs/PIPELINES.md) | Пайплайны: формат и устройство (ADR-101 — пайплайн как второй движок; ADR-100 — поставка `synth.pack`) |
+| [docs/WORKTREES.md](./docs/WORKTREES.md) | Git worktrees и per-session cwd: модель, хранение, containment, API, события, lifecycle (ADR-114) |
 | [docs/PLUGINS.md](./docs/PLUGINS.md) | Плагины: руководство автора расширения (ADR-090) |
 | [docs/MEMORY.md](./docs/MEMORY.md) | Память: плагин памяти, сервисы фасада, порты, версионирование, консолидация (ADR-107, PROP-047) |
 | [docs/QUICKSTART.md](./docs/QUICKSTART.md) | Быстрый старт |

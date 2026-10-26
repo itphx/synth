@@ -29,7 +29,7 @@
 | 1.1 | **Данные: мультимодальный `Part` и blob-порт** | [PROP-085](./arch_decisions/prop-085-multimodal-input.md), [PROP-106](./arch_decisions/prop-106-file-ports-to-sql.md) (часть: `blobs`/`packs`/legacy-`pipelines`) | сообщение с изображением/аудио проходит от API до провайдера; вложение лежит в порте хранения, а не пишется мимо него; второй миграции не потребуется | — |
 | 1.2 | **Фоны: саб-агенты и процессы** | [ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md), [ADR-113](./arch_decisions/adr-113-background-processes.md) | дочерняя сессия/процесс живёт после ответа родителя, виден в реестре и в UI; реестр — через порты хранения, а не файлами | ✅ ADR-111/ADR-113 |
 | 1.3 | **`question`: вопрос посреди хода** | [ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md), [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) (HITL-гейт), [ADR-104](./arch_decisions/adr-104-mid-turn-steering.md) (границы хода) | ход замирает до ответа, ответ приходит как `resume` с `output`, вопрос и ответ видны в журнале | ✅ ADR-112 |
-| 1.4 | **per-session cwd / worktrees** | [PROP-049](./arch_decisions/prop-049-git-worktrees.md), [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md) | сессия работает в своём каталоге, инструменты и git не пересекаются между сессиями | — |
+| 1.4 | **per-session cwd / worktrees** | [ADR-114](./arch_decisions/adr-114-git-worktrees.md), [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md), [PROP-049](./arch_decisions/prop-049-git-worktrees.md) (исходное предложение), [docs/WORKTREES.md](./WORKTREES.md) (спецификация) | сессия работает в своём каталоге, инструменты и git не пересекаются между сессиями | 🚧 ADR-114 |
 | 1.5 | **Остаток исполнителя** | [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 7c–7d) | git (вместо `simple-git`) и MCP-stdio исполняются исполнителем, метрики `synth_executor_*` — в контракте [ADR-094](./arch_decisions/adr-094-observability-metrics.md) | ✅ ADR-077 (git, MCP, `synth_executor_*`) |
 
 **Статус на 2026-10-26:** 1.2 и 1.3 закрыты ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
@@ -38,6 +38,10 @@
 (протокол v3) — фоновые процессы поддержаны и в `inline`, и в `remote`
 ([ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) шаг 7c;
 ограничение — исполнитель протокола < 3, `background_unsupported`).
+**1.4 — решение принято** ([ADR-114](./arch_decisions/adr-114-git-worktrees.md), 2026-10-26): контракт
+per-session cwd на базе git worktree зафиксирован (корень внутри корня workspace, инвентарь доменным
+портом, привязка сессии аддитивным полем, тулы `git_worktree_*`, HTTP-контур и событие
+`worktree.updated`); спецификация — [docs/WORKTREES.md](./WORKTREES.md); **реализация впереди** (🚧).
 
 ### Этап 2 — доведение начатого (2a → 2b)
 
@@ -84,7 +88,7 @@
 | [PROP-083](./arch_decisions/prop-083-instance-customization-branding.md) | Кастомизация и брендинг | после портал-платформы ([PROP-110](./arch_decisions/prop-110-portal-platform.md)), иначе делать дважды |
 | [PROP-093](./arch_decisions/prop-093-docs-versioning.md) | Версионирование документации | не блокирует поставку |
 
-## Предложения к решению (29)
+## Предложения к решению (28)
 
 | ID | Тема | Статус | Решение до | Заметка |
 |---|---|---|---|---|
@@ -92,7 +96,6 @@
 | [ADR-097](./arch_decisions/adr-097-storage-provider-class.md) | Класс расширения «хранилище»: БД-backend (PostgreSQL) за единым слоем | ⚠️ Частично | 2026-11-14 | волны 1–5 в коде: драйвер `@itphx/synth-storage-postgres` (все 30 портов, контрактный suite против живой БД, `SYNTH_TEST_POSTGRES_DSN`), async-каскад сборки, БД-локи, обслуживание (`migrate`/`doctor`/`backup`/`uninstall --purge-db`), перенос `synth storage migrate`, деградированный режим ([ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)); TLS/CA соединения с БД — [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md); остаток — авто-возврат к БД без рестарта, документы |
 | [PROP-037](./arch_decisions/prop-037-commit-security-step.md) | Security step перед коммитом (hook + маркер-хеш) | 🧩 Предложение | 2026-11-14 | опирается на ADR-029/ADR-036 |
 | [PROP-048](./arch_decisions/prop-048-self-help-skills-admin-mcp.md) | Self-help скиллы и admin-MCP (dogfooding) | 🧩 Предложение | 2026-11-14 | read-only status-MCP + deploy-тулы, гейтинг ADMIN |
-| [PROP-049](./arch_decisions/prop-049-git-worktrees.md) | Git worktrees: тулы, per-session cwd, UI | 🧩 Предложение | 2026-11-14 | усиливает ADR-075/ADR-076 |
 | [PROP-053](./arch_decisions/prop-053-cli-tui.md) | CLI и TUI: паритет CLI, клиент API v2 | 🧩 Предложение | 2026-11-14 | — |
 | [PROP-054](./arch_decisions/prop-054-kanban-backlog.md) | Kanban-доска и глобальный backlog | 🧩 Предложение | 2026-11-14 | поверх `project.plan` (ADR-039) |
 | [PROP-056](./arch_decisions/prop-056-synth-mcp-server.md) | MCP-сервер Synth для внешних агентов | 🧩 Предложение | 2026-11-14 | опирается на ADR-052/ADR-089 |
@@ -119,8 +122,20 @@
 | [PROP-110](./arch_decisions/prop-110-portal-platform.md) | Портал-платформа: общий UI-kit, единый вход, шаблон портала | 🧩 Предложение | 2026-12-31 | `@itphx/synth-ui-kit` (токены/примитивы) + `@itphx/synth-portal` (оболочка, вход, settings-kit); этап 2b; первый потребитель — `synth-media` |
 
 Пометка: строка ADR-097 — принятый ADR (`⚠️ Частично` в индексе), в таблице он стоит ради своего
-остатка (авто-возврат к БД без рестарта, документы) и срока `2026-11-14`; остальные 28 строк —
+остатка (авто-возврат к БД без рестарта, документы) и срока `2026-11-14`; остальные 27 строк —
 предложения.
+
+Пометка: `PROP-049` решением **2026-10-26** переведён в
+[ADR-114](./arch_decisions/adr-114-git-worktrees.md) (git worktrees: корень
+`{workspacesRoot}/.worktrees/<projectId>/<slug}` внутри корня workspace, инвентарь доменным портом
+`WorktreeRepository` (файл `{dataDir}/worktrees.json`, PostgreSQL — существующая таблица `documents`,
+без новой миграции), привязка сессии аддитивным полем `Session.worktree` и приоритет резолва
+`session.worktree.directory → project.workspace → defaultWorkingDir` (исчезнувший каталог — fail-closed),
+containment от каталога сессии, тулы `git_worktree_list|create|remove|prune` через порт исполнения,
+жизненный цикл (`forceRequired`, `prune`, sweep на старте, `project.worktreeSetupScript`), HTTP-контур
+`/api/v2/projects/:id/worktrees*` + `PATCH /api/v2/sessions/:id`, событие `worktree.updated`, UI) — из
+списка предложений снят; файл предложения остаётся в каталоге как исходная гипотеза; спецификация —
+[docs/WORKTREES.md](./WORKTREES.md); **реализация впереди** (🚧, блок 1.4).
 
 Пометка: `PROP-097` решением **2026-10-26** переведён в
 [ADR-113](./arch_decisions/adr-113-background-processes.md) (фоновые процессы: единый реестр
@@ -230,12 +245,13 @@ ADR-018 и ADR-046 — принятые ADR со смешанным статус
 | [ADR-104](./arch_decisions/adr-104-mid-turn-steering.md) | Вмешательство в ход посреди генерации (steering) | ✅ Реализовано | режимы `queue`/`steer`/`interrupt`, `steerInbox`, граница шага, `interrupt` без завершения хода, приоритет инъекций, правила `ask`/`plan`, гибрид (`mode_applied`), steering дочерней (фоновой) сессии саб-агента (ADR-111) |
 | [ADR-105](./arch_decisions/adr-105-external-credentials.md) | Внешние доступы (OAuth-коннекторы) | ✅ Реализовано | сущность и порт (file/memory/PG), OAuth-клиент, host-binding, токен в MCP-транспорте, запрет plaintext, каталог `oauth.providers`, права, `/api/v2/oauth`, журнал, ротация (SSH+доступы+вебхуки), бэкап, UI «Доступы». Ограничения: standalone `bind` не перезагружает живой клиент, PG-контракт — в CI |
 | [ADR-106](./arch_decisions/adr-106-authority-layer.md) | Authority-слой (полномочия как контент) | ⚠️ Частично | Ф0–Ф5 реализованы: модель и порты (file/memory/PG), резолвер, shadow, принуждение с потолком сессии и `yolo`, подтверждения по `(principal, turn, action, target, digest)`, `Turn.principal`, участники и потолок хода, `PATCH mode`, активация `provides.authority` с trust-floor, PG-порты (миграции `014`/`015`), UI «Полномочия»; остаток — flavor-роли (PROP-082) |
-Итого: документов — 103 (ADR — 63: 46 со статусом `✅ Реализовано` и 17 со статусом `⚠️ Частично`,
+Итого: документов — 104 (ADR — 64: 46 со статусом `✅ Реализовано` и 18 со статусом `⚠️ Частично`,
 1 legacy; предложений — 30, vision — 8, icebox — 1).
-В разделах roadmap: «Предложения к решению» — 29 строк (28 предложений + строка ADR-097
-с остатком; `PROP-096` и `PROP-097` сняты — см. пометки выше, их файлы остаются в каталоге как
-исходные гипотезы), «Vision» — 8, «Вне горизонта 0.13» — 6 (в т.ч. icebox PROP-050), «Частично реализовано» — 15
+В разделах roadmap: «Предложения к решению» — 28 строк (27 предложений + строка ADR-097
+с остатком; `PROP-096`, `PROP-097` и `PROP-049` сняты — см. пометки выше, их файлы остаются в каталоге
+как исходные гипотезы), «Vision» — 8, «Вне горизонта 0.13» — 6 (в т.ч. icebox PROP-050), «Частично реализовано» — 15
 (ADR-018, ADR-030, ADR-046, ADR-051, ADR-077, ADR-086, ADR-087, ADR-089, ADR-094, ADR-099, ADR-101,
 ADR-102, ADR-104, ADR-105, ADR-106). Раздел «Частично»
-в сгенерированном индексе содержит 17 файлов — ADR-018, ADR-030, ADR-046, ADR-051, ADR-077, ADR-086,
-ADR-087, ADR-091, ADR-092, ADR-094, ADR-097, ADR-098, ADR-099, ADR-100, ADR-102, ADR-103, ADR-106 (сводка — [arch_decisions/README.md](./arch_decisions/README.md)).
+в сгенерированном индексе содержит 18 файлов — ADR-018, ADR-030, ADR-046, ADR-051, ADR-077, ADR-086,
+ADR-087, ADR-091, ADR-092, ADR-094, ADR-097, ADR-098, ADR-099, ADR-100, ADR-102, ADR-103, ADR-106,
+ADR-114 (сводка — [arch_decisions/README.md](./arch_decisions/README.md)).

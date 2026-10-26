@@ -80,6 +80,7 @@
 | ADR-102 | Аналитика и отчётность инстанса | ⚠️ Частично | [adr-102-analytics-reports.md](./adr-102-analytics-reports.md) |
 | ADR-103 | Ядро шлюзов (`@itphx/synth-gateway-core`) и контракт канала | ⚠️ Частично | [adr-103-gateway-core-channel-contract.md](./adr-103-gateway-core-channel-contract.md) |
 | ADR-106 | Authority-слой — полномочия пользователей и агентов как контент; Ф0–Ф5 реализованы (остаток — UI «Полномочия» и flavor-роли) | ⚠️ Частично | [adr-106-authority-layer.md](./adr-106-authority-layer.md) |
+| ADR-114 | Git worktrees — per-session рабочий каталог | ⚠️ Частично | [adr-114-git-worktrees.md](./adr-114-git-worktrees.md) |
 
 ## Предложения
 
@@ -138,4 +139,4 @@
 
 ---
 
-Всего документов: 103 (Решения: 46, Частично: 17, Предложения: 30, Vision: 8, Icebox: 1, Legacy: 1).
+Всего документов: 104 (Решения: 46, Частично: 18, Предложения: 30, Vision: 8, Icebox: 1, Legacy: 1).
