@@ -31,6 +31,7 @@ export const ENGINE_MESSAGE_KEYS = [
   'task.subagent_not_found',
   'task.subagent_not_allowed',
   'task.deps_unavailable',
+  'task.model_unavailable',
   'task.subagent_exec_error_after_retries',
   'task.resume_marker',
   'task.resume_result',
@@ -382,6 +383,12 @@ export const ENGINE_MESSAGE_KEYS = [
   'process.background_limit',
   'process.background_unsupported',
   'process.background_disabled',
+  'process.tool.empty',
+  'process.tool.not_found',
+  'process.tool.deps_unavailable',
+  'process.tool.header',
+  'process.tool.no_log',
+  'process.tool.child_history',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -406,6 +413,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'task.subagent_not_found': ["type","types"],
   'task.subagent_not_allowed': ["type","modes"],
   'task.deps_unavailable': [],
+  'task.model_unavailable': ["provider","model"],
   'task.subagent_exec_error_after_retries': ["type","attempts","error"],
   'task.resume_marker': [],
   'task.resume_result': ["type","summary"],
@@ -756,6 +764,12 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'process.background_limit': ["limit"],
   'process.background_unsupported': [],
   'process.background_disabled': [],
+  'process.tool.empty': [],
+  'process.tool.not_found': ["id"],
+  'process.tool.deps_unavailable': [],
+  'process.tool.header': ["count"],
+  'process.tool.no_log': [],
+  'process.tool.child_history': ["child_session"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

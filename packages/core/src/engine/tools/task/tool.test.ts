@@ -9,9 +9,10 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolCapability } from '@itphx/synth-shared';
-import type { Message, Session, ToolContext } from '@itphx/synth-shared';
+import type { Message, Session, SessionSettings, ToolContext, RouterConfig } from '@itphx/synth-shared';
 import type { BaseProvider } from '../../../providers/base.js';
 import type { AgentRegistry } from '../../agents/registry.js';
+import type { ModelRouter } from '../../router/router.js';
 import { FileStore } from '../../../storage/file-store.js';
 import { SessionManager } from '../../../sessions/manager.js';
 import { MemoryBackgroundRunRepository } from '../../../storage/memory/background-runs.js';
@@ -541,5 +542,393 @@ describe('task/tool.ts — саб-агент не может запускать 
       capabilities: [ToolCapability.TASK],
     });
     expect(decision.action).toBe('deny');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Выбор модели/провайдера саб-агента (ADR-034 Фаза 4).
+//
+// Явные `task({model, provider})` и дефолт `router.subagent.{model,provider}`
+// должны определять провайдера **прогона**, а не только настройки дочерней
+// сессии. Роутер (`modelRouter.route`) при явном выборе не зовётся.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Провайдер с именем/моделью — чтобы отличить прогон по разным моделям. */
+function makeNamedProvider(name: string, model: string, content = 'ok') {
+  const chatAsync = vi.fn(() => (async function* () {
+    yield { isFinal: true, content, toolCalls: [] };
+  })());
+  const provider = { model, name, chatAsync } as unknown as BaseProvider;
+  return { provider, chatAsync };
+}
+
+/** Мок `ModelRouter`: `route()` + `getProvider()` (ADR-034). */
+function makeModelRouterMock(over: {
+  decision?: { providerName: string; modelName: string; strategy?: string; reason?: string };
+  providerFor?: (decision: { providerName: string; modelName: string }) => BaseProvider | null;
+}) {
+  const route = vi.fn(async () => ({
+    providerName: over.decision?.providerName ?? 'routed-prov',
+    modelName: over.decision?.modelName ?? 'routed-model',
+    reason: over.decision?.reason ?? 'routed',
+    strategy: over.decision?.strategy ?? 'content',
+  }));
+  const getProvider = vi.fn((decision: { providerName: string; modelName: string }) =>
+    (over.providerFor ? over.providerFor(decision) : null));
+  return { route, getProvider, router: { route, getProvider } as unknown as ModelRouter };
+}
+
+/** RouterConfig-мок (секция `content` нужна для блока ROUTING в промпте). */
+function makeRouterConfig(over: Partial<RouterConfig> = {}): RouterConfig {
+  return {
+    enabled: true,
+    strategy: 'auto',
+    content: {
+      coding: { provider: '', model: '' },
+      chat: { provider: '', model: '' },
+      research: { provider: '', model: '' },
+    },
+    escalation: {
+      enabled: false,
+      fallbackProvider: '',
+      fallbackModel: '',
+      maxRetries: 1,
+      checks: ['min_length'],
+      minLength: 10,
+    },
+    cost: {
+      enabled: false,
+      cheapProvider: '',
+      cheapModel: '',
+      expensiveProvider: '',
+      expensiveModel: '',
+      maxCheapTokens: 500,
+    },
+    subagent: { enabled: true, model: '', provider: '' },
+    ...over,
+  } as RouterConfig;
+}
+
+describe('task/tool.ts — выбор модели/провайдера саб-агента (ADR-034 Фаза 4)', () => {
+  let dir: string;
+  let sessionManager: SessionManager;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'synth-task-model-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: dir }));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  });
+
+  const parentSettings = {
+    provider: 'parent-prov',
+    model: 'parent-model',
+    routingEnabled: true,
+  } as unknown as SessionSettings;
+
+  it('явные model+provider: route() не вызывается, getProvider получает эту пару, прогон идёт на ней', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const explicitProv = makeNamedProvider('explicit-prov', 'explicit-model');
+    const { route, getProvider, router } = makeModelRouterMock({
+      providerFor: (d) => (d.providerName === 'explicit-prov' ? explicitProv.provider : null),
+    });
+
+    const result = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        model: 'explicit-model',
+        provider: 'explicit-prov',
+      },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    // Роутер не звали — пара задана явно.
+    expect(route).not.toHaveBeenCalled();
+    expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({
+      providerName: 'explicit-prov',
+      modelName: 'explicit-model',
+    }));
+    // Прогон идёт на явно выбранном провайдере, а не на родительском.
+    expect(explicitProv.chatAsync).toHaveBeenCalledTimes(1);
+    expect(parentProv.chatAsync).not.toHaveBeenCalled();
+    expect(result.metadata!.routing_strategy).toBe('explicit');
+    expect(result.metadata!.routing_provider).toBe('explicit-prov');
+    expect(result.metadata!.routing_model).toBe('explicit-model');
+
+    // Настройки дочерней сессии = фактическая модель прогона.
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.provider).toBe('explicit-prov');
+    expect(child.settings.model).toBe('explicit-model');
+  });
+
+  it('только model (без provider): пара = провайдер родителя + заданная модель', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const explicitProv = makeNamedProvider('parent-prov', 'only-model');
+    const { route, getProvider, router } = makeModelRouterMock({
+      providerFor: (d) => (d.modelName === 'only-model' ? explicitProv.provider : null),
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore', model: 'only-model' },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(route).not.toHaveBeenCalled();
+    expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({
+      providerName: 'parent-prov',
+      modelName: 'only-model',
+    }));
+    expect(explicitProv.chatAsync).toHaveBeenCalledTimes(1);
+    expect(result.metadata!.routing_strategy).toBe('explicit');
+
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.provider).toBe('parent-prov');
+    expect(child.settings.model).toBe('only-model');
+  });
+
+  it('router.subagent.model/provider без явных параметров: используется конфиг-пара, route() не вызывается', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const cfgProv = makeNamedProvider('cfg-prov', 'cfg-model');
+    const { route, getProvider, router } = makeModelRouterMock({
+      providerFor: (d) => (d.providerName === 'cfg-prov' ? cfgProv.provider : null),
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore' },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig({
+          subagent: { enabled: true, model: 'cfg-model', provider: 'cfg-prov' },
+        }),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(route).not.toHaveBeenCalled();
+    expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({
+      providerName: 'cfg-prov',
+      modelName: 'cfg-model',
+    }));
+    expect(cfgProv.chatAsync).toHaveBeenCalledTimes(1);
+    expect(parentProv.chatAsync).not.toHaveBeenCalled();
+    expect(result.metadata!.routing_strategy).toBe('subagent-config');
+
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.provider).toBe('cfg-prov');
+    expect(child.settings.model).toBe('cfg-model');
+  });
+
+  it('router.subagent.enabled=false: конфиг-пара игнорируется, роутер ведёт себя как обычно', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const { route, getProvider, router } = makeModelRouterMock({
+      decision: { providerName: 'parent-prov', modelName: 'parent-model', strategy: 'default' },
+      providerFor: () => parentProv.provider,
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore' },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig({
+          subagent: { enabled: false, model: 'cfg-model', provider: 'cfg-prov' },
+        }),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    // Конфиг-пара выключена — роутер решает, как и без неё.
+    expect(route).toHaveBeenCalledTimes(1);
+    expect(getProvider).not.toHaveBeenCalledWith(expect.objectContaining({
+      providerName: 'cfg-prov',
+      modelName: 'cfg-model',
+    }));
+    expect(parentProv.chatAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it('routing_strategy=none: route() не вызывается, провайдер — родительский', async () => {    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const { route, getProvider, router } = makeModelRouterMock({
+      providerFor: () => parentProv.provider,
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore', routing_strategy: 'none' },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(route).not.toHaveBeenCalled();
+    expect(getProvider).not.toHaveBeenCalled();
+    expect(parentProv.chatAsync).toHaveBeenCalledTimes(1);
+    expect(result.metadata!.routing_strategy).toBeUndefined();
+
+    // Роутинг у ребёнка выключен.
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.routingEnabled).toBe(false);
+  });
+
+  it('getProvider вернул null при явной паре → отказ task.model_unavailable (без тихого отката)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const { route, getProvider, router } = makeModelRouterMock({ providerFor: () => null });
+
+    const sessionsBefore = await sessionManager.listSessions(undefined, { light: true });
+
+    const result = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        model: 'missing-model',
+        provider: 'missing-prov',
+      },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.metadata!.i18n).toMatchObject({ key: 'task.model_unavailable' });
+    expect(result.content).toContain('missing-prov');
+    expect(result.content).toContain('missing-model');
+    expect(route).not.toHaveBeenCalled();
+    expect(getProvider).toHaveBeenCalled();
+    // Прогон не пошёл на родительском провайдере.
+    expect(parentProv.chatAsync).not.toHaveBeenCalled();
+    // Дочерней сессии не создано.
+    const sessionsAfter = await sessionManager.listSessions(undefined, { light: true });
+    expect(sessionsAfter).toHaveLength(sessionsBefore.length);
+  });
+
+  it('регрессия: блок ROUTING в промпте — только при своём выборе модели, не при родительской паре', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const prompts: string[] = [];
+    const makeProv = (name: string, model: string) => ({
+      model,
+      name,
+      chatAsync: vi.fn((_m: unknown, systemPrompt?: string) => (async function* () {
+        prompts.push(systemPrompt || '');
+        yield { isFinal: true, content: 'OK', toolCalls: [] };
+      })()),
+    });
+    const explicitProv = makeProv('explicit-prov', 'explicit-model');
+    const { router } = makeModelRouterMock({
+      providerFor: (d) => (d.providerName === 'explicit-prov' ? explicitProv as unknown as BaseProvider : null),
+    });
+
+    const capture = async (params: Record<string, unknown>): Promise<string> => {
+      prompts.length = 0;
+      await taskTool.execute(
+        { description: 'd', prompt: 'go', subagent_type: 'explore', ...params },
+        makeCtx({
+          provider: makeProv('parent-prov', 'parent-model') as unknown as BaseProvider,
+          agentRegistry: makeAgentRegistry(),
+          sessionManager,
+          sessionId: parent.id,
+          // Роутинг у родителя выключен (дефолт сессии).
+          parentSessionSettings: {
+            provider: 'parent-prov',
+            model: 'parent-model',
+            routingEnabled: false,
+          } as unknown as SessionSettings,
+          modelRouter: router,
+          routerConfig: makeRouterConfig(),
+        }, parent.id),
+      );
+      return prompts[0] ?? '';
+    };
+
+    // Родительская пара — блока роутинга в промпте нет (как и раньше).
+    expect(await capture({})).not.toContain('[ROUTING]');
+    // Свой выбор модели — блок роутинга объясняет доступные провайдеры.
+    expect(await capture({ model: 'explicit-model', provider: 'explicit-prov' })).toContain('[ROUTING]');
+  });
+
+  it('регрессия: без явных параметров и без router.subagent — прежнее поведение (route() зовётся)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const routedProv = makeNamedProvider('routed-prov', 'routed-model');
+    const { route, getProvider, router } = makeModelRouterMock({
+      decision: { providerName: 'routed-prov', modelName: 'routed-model', strategy: 'content' },
+      providerFor: (d) => (d.providerName === 'routed-prov' ? routedProv.provider : null),
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore' },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(route).toHaveBeenCalledTimes(1);
+    expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({
+      providerName: 'routed-prov',
+      modelName: 'routed-model',
+    }));
+    expect(routedProv.chatAsync).toHaveBeenCalledTimes(1);
+    expect(parentProv.chatAsync).not.toHaveBeenCalled();
+    expect(result.metadata!.routing_strategy).toBe('content');
+
+    // Настройки ребёнка совпадают с фактической моделью прогона.
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.provider).toBe('routed-prov');
+    expect(child.settings.model).toBe('routed-model');
   });
 });

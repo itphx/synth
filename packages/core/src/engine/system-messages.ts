@@ -43,6 +43,8 @@ export const SYSTEM_MESSAGES = {
   'task.subagent_not_found': 'Subagent "{type}" not found. Available types: {types}',
   'task.subagent_not_allowed': 'Agent "{type}" cannot be used as a subagent (modes: {modes})',
   'task.deps_unavailable': 'Error: provider or agent registry unavailable for subagent launch',
+  'task.model_unavailable':
+    'Error: the model "{provider}/{model}" requested for the subagent is unavailable — the provider is not configured or the model is unknown',
   'task.subagent_exec_error_after_retries': 'Subagent execution error "{type}" after {attempts} attempt(s): {error}',
 
   // --- Возобновление дочерней сессии саб-агента (resume) ---
@@ -481,6 +483,13 @@ export const SYSTEM_MESSAGES = {
   'process.background_unsupported':
     'Background execution is unavailable in the current execution mode',
   'process.background_disabled': 'Background processes are disabled (background.enabled: false)',
+  'process.tool.empty': 'No background runs',
+  'process.tool.not_found': 'Background run "{id}" not found',
+  'process.tool.deps_unavailable': 'The background run registry is unavailable in this build',
+  'process.tool.header': 'Background runs ({count}):',
+  'process.tool.no_log': 'There is no log for this background run',
+  'process.tool.child_history':
+    'The history of the child session {child_session} is available via the read_session_reference tool',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

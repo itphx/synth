@@ -18,7 +18,8 @@
     "memory",
     "pipeline",
     "schedule",
-    "question"
+    "question",
+    "process"
   ],
   "icon": "chart-line",
   "color": "--syntax-function",

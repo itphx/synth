@@ -85,6 +85,20 @@ export const SCHEDULE_WRITE_TOOLS = ['schedule_save', 'schedule_delete', 'schedu
  */
 export const QUESTION_TOOLS = ['question'];
 
+/**
+ * Этап 1 roadmap 0.13 (блок 16): реестр фоновых прогонов (ADR-111/PROP-097).
+ *
+ * Отдельная группа (как `pipeline`/`schedule`/`question`): реестр фоновой
+ * работы — доменный ресурс (персистентные записи прогонов + логи), а не
+ * примитив ядра. Ключ группы совпадает со значением capability `process`,
+ * поэтому правило `permission.rules.process` работает и по именам встроенных
+ * тулов, и по capability плагинного тула.
+ *
+ * Обе группы — **только чтение**: в plan-режиме они разрешены (см.
+ * `isPlanBlockedTool` — список блокируемых имён их не содержит).
+ */
+export const PROCESS_TOOLS = ['process_list', 'process_logs'];
+
 /** Все тулы пайплайнов (read + write). */
 export const PIPELINE_TOOLS = [...PIPELINE_READ_TOOLS, ...PIPELINE_WRITE_TOOLS];
 /** Все тулы расписаний (read + write). */
@@ -115,6 +129,9 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   // Этап 1 roadmap 0.13 (блок 3): вопрос пользователю (ключ совпадает с
   // capability `question`).
   question: QUESTION_TOOLS,
+  // Этап 1 roadmap 0.13 (блок 16): реестр фоновых прогонов (ключ совпадает с
+  // capability `process`).
+  process: PROCESS_TOOLS,
   [ToolCapability.FILE_READ]: READ_TOOLS,
   [ToolCapability.FILE_WRITE]: WRITE_TOOLS,
   [ToolCapability.GIT_READ]: GIT_READ_TOOLS,
@@ -148,6 +165,7 @@ export const PERMISSION_GROUP_ORDER: string[] = [
   'pipeline',
   'schedule',
   'question',
+  'process',
 ];
 
 /** Имена параметров тулов, которые являются путями к файлам/директориям. */

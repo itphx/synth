@@ -7,7 +7,7 @@
 import { MessageRole, nowISO, generateId, generateStreamId, makeTextPart, ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition, Message, SessionSettings, ToolForLLM, ToolContext, ToolResult } from '@itphx/synth-shared';
 import { normalizeAgentModes } from '../../agents/normalize.js';
-import type { CancellationToken, LLMMessage } from '../../../providers/base.js';
+import type { CancellationToken, LLMMessage, BaseProvider } from '../../../providers/base.js';
 import { formatSkillsCatalogBlock } from '../../skills/catalog.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { BackgroundLimitExceededError } from '../../background/types.js';
@@ -92,10 +92,36 @@ export const taskTool: ToolDefinition = {
     const tools: ToolForLLM[] | undefined = extra.agentRegistry.getToolsForAgent(agentDef.id, extra.mcpServers);
     const maxSteps = agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS;
 
+    // ─── Выбор провайдера для саб-агента (ADR-034 Фаза 4) ────────────
+    // Резолвится ДО создания дочерней сессии: настройки ребёнка должны
+    // совпадать с фактической моделью прогона.
+    const resolution = await resolveSubagentProvider({
+      params,
+      extra,
+      parentSettings: extra.parentSessionSettings,
+    });
+    if (resolution.unavailable) {
+      const unavailableParams = {
+        provider: resolution.unavailable.provider,
+        model: resolution.unavailable.model,
+      };
+      return {
+        content: sm('task.model_unavailable', unavailableParams),
+        isError: true,
+        metadata: { i18n: i18nMeta('task.model_unavailable', unavailableParams) },
+      };
+    }
+
     // ─── Настройки роутинга для дочерней сессии (ADR-034 Фаза 4) ──
     const childRoutingOverrides: Partial<SessionSettings> = {};
-    if (params.model) childRoutingOverrides.model = params.model;
-    if (params.provider) childRoutingOverrides.provider = params.provider;
+    // Фактическая пара провайдер/модель прогона = настройки ребёнка
+    // (иначе дочерняя сессия указывала бы на модель, которой не шёл прогон).
+    if (resolution.providerName) childRoutingOverrides.provider = resolution.providerName;
+    if (resolution.modelName) childRoutingOverrides.model = resolution.modelName;
+    // Саб-агент идёт по модели, отличной от родительской — блок роутинга
+    // в его промпте остаётся осмысленным (как и при явном выборе модели).
+    const usesOwnModel = resolution.providerName !== resolution.parentProviderName
+      || resolution.modelName !== resolution.parentModelName;
     if (agentDef?.reasoningLevel) childRoutingOverrides.reasoningLevel = agentDef.reasoningLevel;
     if (params.routing_strategy) {
       if (params.routing_strategy === 'none') {
@@ -108,13 +134,6 @@ export const taskTool: ToolDefinition = {
     const subagentRoutingCfg = extra.routerConfig?.subagent;
     if (subagentRoutingCfg?.enabled && params.routing_strategy !== 'none') {
       childRoutingOverrides.routingEnabled = true;
-      // Если есть дефолтная модель саб-агента в конфиге и не переопределена
-      if (!params.model && subagentRoutingCfg.model) {
-        childRoutingOverrides.model = subagentRoutingCfg.model;
-      }
-      if (!params.provider && subagentRoutingCfg.provider) {
-        childRoutingOverrides.provider = subagentRoutingCfg.provider;
-      }
     }
 
     // ─── Создание дочерней сессии с контекстом (ADR-026/029) ────────
@@ -152,7 +171,7 @@ export const taskTool: ToolDefinition = {
       // Загружается из контекстных файлов prompts/system/ROUTING.{lang}.md
       const parentSettings = extra.parentSessionSettings;
       const routingEnabled = extra.routerConfig?.enabled && (parentSettings?.routingEnabled !== false);
-      const shouldShowRouting = routingEnabled || childRoutingOverrides.model || childRoutingOverrides.provider;
+      const shouldShowRouting = routingEnabled || usesOwnModel;
       if (shouldShowRouting && extra.routerConfig) {
         const lang = parentSettings?.language || 'ru';
         const template = extra.contextConfig?.getRoutingInstructions(lang) || '';
@@ -238,30 +257,11 @@ export const taskTool: ToolDefinition = {
     );
     if (unavailableSection) llmSystemPrompt += `\n\n${unavailableSection}`;
 
-    // ─── Выбор провайдера для саб-агента через роутер (ADR-034 Фаза 4) ──
-    let effectiveProvider = extra.provider;
-    let routingDecisionInfo: { providerName: string; modelName: string; strategy: string } | undefined;
-    const parentSettings = extra.parentSessionSettings;
-    if (extra.modelRouter && (parentSettings?.routingEnabled !== false) && extra.routerConfig) {
-      try {
-        const decision = await extra.modelRouter.route({
-          sessionSettings: parentSettings!,
-          userMessage: params.prompt,
-          systemPrompt: llmSystemPrompt,
-        });
-        const routedProvider = extra.modelRouter.getProvider(decision);
-        if (routedProvider && (decision.providerName !== parentSettings?.provider || decision.modelName !== parentSettings?.model)) {
-          effectiveProvider = routedProvider;
-          routingDecisionInfo = {
-            providerName: decision.providerName,
-            modelName: decision.modelName,
-            strategy: decision.strategy,
-          };
-        }
-      } catch {
-        // fallback на провайдер родителя
-      }
-    }
+    // ─── Провайдер прогона саб-агента (ADR-034 Фаза 4) ──────────────
+    // Резолв выполнен выше (до создания дочерней сессии) — здесь только
+    // фиксируем фактический провайдер и routing-решение для отчётности.
+    const effectiveProvider = resolution.provider;
+    const routingDecisionInfo = resolution.routingDecisionInfo;
 
     // ADR-070 §2.1/§1.5: system prompt передаётся ТОЛЬКО вторым аргументом
     // chatAsync (как в оркестраторе), в messages system-сообщения нет —
@@ -345,6 +345,152 @@ export const taskTool: ToolDefinition = {
     return runSubagent(runConfig);
   },
 };
+
+/** Результат резолвинга провайдера/модели саб-агента. */
+interface SubagentProviderResolution {
+  /** Провайдер, которым реально пойдёт прогон саб-агента. */
+  provider: BaseProvider;
+  /** Пара provider/model фактического прогона. */
+  providerName: string;
+  modelName: string;
+  /** Пара provider/model родительской сессии (с ней сравнивается фактическая). */
+  parentProviderName: string;
+  parentModelName: string;
+  /** Routing-решение для отчётности (`<routed_by>`/metadata прогона). */
+  routingDecisionInfo?: { providerName: string; modelName: string; strategy: string };
+  /** Нужен не-родительский провайдер, но он недоступен — отказ тула. */
+  unavailable?: { provider: string; model: string };
+}
+
+/**
+ * Резолвинг провайдера/модели саб-агента (ADR-034 Фаза 4).
+ *
+ * Приоритет (сверху вниз):
+ *  1. **явные** `params.model`/`params.provider` — пара, заданная вызывающим
+ *     агентом (недостающее поле — из настроек родителя);
+ *  2. `routerConfig.subagent.{model,provider}` — дефолт инстанса для
+ *     саб-агентов (при `enabled !== false`), недостающее — из родителя;
+ *  3. `params.routing_strategy === 'none'` — пара родителя, роутер не зовём;
+ *  4. иначе — `modelRouter.route()` (прежнее поведение ADR-034).
+ *
+ * Пункты 1–2 роутер **не** зовут: провайдер резолвится напрямую через
+ * `modelRouter.getProvider()`. Если запрошенная пара недоступна (провайдер не
+ * настроен/модель неизвестна) — отказ тула `task.model_unavailable`, без тихого
+ * отката на родителя: иначе прогон ушёл бы на другой модели, чем запросили.
+ */
+async function resolveSubagentProvider(opts: {
+  params: TaskParams;
+  extra: TaskExtra;
+  parentSettings?: SessionSettings;
+}): Promise<SubagentProviderResolution> {
+  const { params, extra, parentSettings } = opts;
+
+  // Пара родителя: настройки сессии → провайдер родителя (fallback).
+  const parentProviderName = parentSettings?.provider || extra.provider?.name || '';
+  const parentModelName = parentSettings?.model || extra.provider?.model || '';
+  const base: SubagentProviderResolution = {
+    provider: extra.provider,
+    providerName: parentProviderName,
+    modelName: parentModelName,
+    parentProviderName,
+    parentModelName,
+  };
+
+  const subagentCfg = extra.routerConfig?.subagent;
+  const subagentCfgEnabled = subagentCfg !== undefined && subagentCfg.enabled !== false;
+  const explicitModel = params.model?.trim() || '';
+  const explicitProvider = params.provider?.trim() || '';
+  const cfgModel = subagentCfgEnabled ? (subagentCfg?.model?.trim() || '') : '';
+  const cfgProvider = subagentCfgEnabled ? (subagentCfg?.provider?.trim() || '') : '';
+
+  /** Резолв заданной пары через пул провайдеров роутера (без `route()`). */
+  const resolveRequestedPair = (
+    providerName: string,
+    modelName: string,
+    strategy: string,
+  ): SubagentProviderResolution => {
+    const requested = {
+      providerName,
+      modelName,
+      reason: 'explicit override',
+      strategy: 'default',
+    };
+    const resolved = extra.modelRouter?.getProvider(requested) ?? null;
+    if (resolved) {
+      return {
+        ...base,
+        provider: resolved,
+        providerName,
+        modelName,
+        routingDecisionInfo: { providerName, modelName, strategy },
+      };
+    }
+    // Провайдер недоступен. Если это ровно родительская пара — берём родителя
+    // (запроса на другую модель не было), иначе — явный отказ.
+    if (providerName === parentProviderName && modelName === parentModelName) {
+      return base;
+    }
+    return {
+      ...base,
+      providerName,
+      modelName,
+      unavailable: { provider: providerName, model: modelName },
+    };
+  };
+
+  // 1. Явные параметры тула — приоритет выше всего.
+  if (explicitModel || explicitProvider) {
+    return resolveRequestedPair(
+      explicitProvider || parentProviderName,
+      explicitModel || parentModelName,
+      'explicit',
+    );
+  }
+
+  // 2. Дефолт инстанса для саб-агентов (router.subagent).
+  if (cfgModel || cfgProvider) {
+    return resolveRequestedPair(
+      cfgProvider || parentProviderName,
+      cfgModel || parentModelName,
+      'subagent-config',
+    );
+  }
+
+  // 3. Роутинг выключен явно (`routing_strategy: 'none'`) — пара родителя,
+  //    роутер не зовём.
+  if (params.routing_strategy === 'none') {
+    return base;
+  }
+
+  // 4. Роутинг ADR-034 — прежнее поведение: решение роутера, при совпадении
+  //    с родителем — провайдер родителя.
+  if (extra.modelRouter && parentSettings && parentSettings.routingEnabled !== false && extra.routerConfig) {
+    try {
+      const decision = await extra.modelRouter.route({
+        sessionSettings: parentSettings,
+        userMessage: params.prompt,
+      });
+      const routedProvider = extra.modelRouter.getProvider(decision);
+      if (routedProvider && (decision.providerName !== parentProviderName || decision.modelName !== parentModelName)) {
+        return {
+          ...base,
+          provider: routedProvider,
+          providerName: decision.providerName,
+          modelName: decision.modelName,
+          routingDecisionInfo: {
+            providerName: decision.providerName,
+            modelName: decision.modelName,
+            strategy: decision.strategy,
+          },
+        };
+      }
+    } catch {
+      // fallback на провайдер родителя
+    }
+  }
+
+  return base;
+}
 
 /**
  * Продолжение дочерней сессии саб-агента из тула `task` (`task_id`).

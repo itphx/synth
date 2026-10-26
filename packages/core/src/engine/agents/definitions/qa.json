@@ -21,7 +21,8 @@
     "memory",
     "pipeline",
     "schedule",
-    "question"
+    "question",
+    "process"
   ],
   "icon": "bug",
   "color": "--syntax-number",

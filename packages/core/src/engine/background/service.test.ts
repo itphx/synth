@@ -89,6 +89,47 @@ describe('BackgroundRunService — регистрация фонового са�
     expect(stored).toMatchObject({ id: record.id, status: 'running' });
   });
 
+  it('startSubagent публикует child.started в канал родителя', async () => {
+    const { service, eventBus } = createService();
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe('parent-1', (e) => events.push({ type: e.type, data: e.data }));
+
+    const record = await service.startSubagent({
+      sessionId: 'parent-1',
+      childSessionId: 'child-1',
+      agentRole: 'explore',
+      description: 'разобрать репозиторий',
+    });
+
+    const started = events.find((e) => e.type === 'child.started');
+    expect(started).toBeDefined();
+    expect(started!.data.child_session_id).toBe('child-1');
+    expect(started!.data.parent_session_id).toBe('parent-1');
+    expect(started!.data.description).toBe('разобрать репозиторий');
+    expect(started!.data.agent_role).toBe('explore');
+    expect(started!.data.background_run_id).toBe(record.id);
+  });
+
+  it('startProcess публикует process.started в канал владельца', async () => {
+    const { service, eventBus } = createService();
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe('parent-1', (e) => events.push({ type: e.type, data: e.data }));
+
+    const record = await service.startProcess({
+      sessionId: 'parent-1',
+      command: 'npm test',
+      cwd: '/work',
+    });
+
+    const started = events.find((e) => e.type === 'process.started');
+    expect(started).toBeDefined();
+    expect(started!.data.background_run_id).toBe(record.id);
+    expect(started!.data.command).toBe('npm test');
+    expect(started!.data.cwd).toBe('/work');
+    // Старт саб-агента не публикует событий процесса.
+    expect(events.filter((e) => e.type === 'child.started')).toHaveLength(0);
+  });
+
   it('запись видна через list({sessionId, status})', async () => {
     const { service } = createService();
 
@@ -286,6 +327,54 @@ describe('BackgroundRunService — уведомление родителя', () 
     expect(message.metadata?.state).toBe('failed');
     expect(message.content).toContain('state="failed"');
     expect(message.content).toContain('ошибка');
+  });
+
+  it('уведомление о фоновом процессе несёт метки прогона (старт/финиш/длительность/код)', async () => {
+    const { service, notifications } = createService();
+
+    const record = await service.startProcess({
+      sessionId: 'parent-1',
+      command: 'npm test',
+      cwd: '/work',
+    });
+    await service.finish(record.id, {
+      status: 'completed',
+      summary: '5 passed',
+      exitCode: 0,
+      signal: 'SIGTERM',
+    });
+
+    expect(notifications).toHaveLength(1);
+    const message = notifications[0]!.message;
+    expect(message.metadata?.started_at).toBe(record.startedAt);
+    expect(message.metadata?.finished_at).toBeTruthy();
+    expect(typeof message.metadata?.duration_ms).toBe('number');
+    expect(message.metadata?.exit_code).toBe(0);
+    expect(message.metadata?.signal).toBe('SIGTERM');
+    expect(message.metadata?.command).toBe('npm test');
+    expect(message.metadata?.cwd).toBe('/work');
+    // Конверт для модели не меняется.
+    expect(message.content).toContain('<process processID=');
+    expect(message.content).toContain('state="exited"');
+  });
+
+  it('уведомление о саб-агентате несёт роль агента и метки прогона', async () => {
+    const { service, notifications } = createService();
+
+    const record = await service.startSubagent({
+      sessionId: 'parent-1',
+      childSessionId: 'child-1',
+      agentRole: 'explore',
+      description: 'собрать отчёт',
+    });
+    await service.finish(record.id, { status: 'completed', summary: 'отчёт готов' });
+
+    const message = notifications[0]!.message;
+    expect(message.metadata?.agent_role).toBe('explore');
+    expect(message.metadata?.description).toBe('собрать отчёт');
+    expect(message.metadata?.started_at).toBe(record.startedAt);
+    expect(message.metadata?.finished_at).toBeTruthy();
+    expect(typeof message.metadata?.duration_ms).toBe('number');
   });
 
   it('без onNotifyParent сервис работает без уведомлений (точка сборки не задана)', async () => {

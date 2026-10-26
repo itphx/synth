@@ -775,6 +775,22 @@
   опубликованный пайплайн проекта сессии, `bound`/`queue` — своя сессия или сессия своего
   проекта. Scope/правила области — в `engine/tools/automation-helpers.ts`
   (`loadScheduleScope`/`isScheduleInScope`/`ensureScheduleMutable`).
+  **Тулы реестра фоновых прогонов (ADR-111/PROP-097).** `process_list`/`process_logs`
+  (`engine/tools/processes.ts`) — чтение **единого** реестра фоновой работы (фоновые
+  саб-агенты и фоновые шелл-процессы) и лога фонового процесса. Скоуп — **«своя сессия +
+  дочерние»**: видны прогоны текущей сессии и прогоны её дочерних сессий (`task`); чужой
+  прогон выглядит как отсутствующий (`process.tool.not_found` — тот же текст, что и для
+  несуществующего, существование чужого ресурса не раскрывается). Только чтение: оба тула
+  разрешены в plan-режиме (`isPlanBlockedTool` их не блокирует), группа `process`
+  отключаема админом. Зависимости — из `ctx.extra`: `backgroundService` (реестр),
+  `processService` (лог), `sessionManager` (дети сессии); нет сервиса — понятный отказ
+  `process.tool.deps_unavailable`. **Лог есть только у `kind: 'process'`** — он читается из
+  `BlobStore` по пути записи реестра (`processes/<runId>.log`) через `ProcessService.logs`
+  (`offset`/`limit` в байтах, `truncated` — признак усечения лога при записи); у фонового
+  саб-агента лога нет — тул отдаёт **summary** прогона и id дочерней сессии (её история —
+  в `read_session_reference`). Capability `process` выдана агентам, которые ведут работу в
+  проекте (`assistant`/`developer`/`devops`/`admin`/`pm`/`qa`/`analyst`); у `explore`/
+  `general`/`auditor`/`title` её нет (тест — `engine/agents/capabilities.test.ts`).
   **Контекст плагинного тула сужается.** Для `source: 'plugin'` `executeToolDef` отдаёт только
   `sessionId`/`messageId`/`workingDir`/`agentRole?`/`projectId?`/`abortSignal?` (`narrowToolContext`): `extra` и `dataDir`
   плагину **не передаются** — симметрично `out-of-process` (по проводу те же три поля). Встроенные и
@@ -1251,8 +1267,12 @@
 - `engine/background/*` — ADR-111 (этап 1 roadmap 0.13 — блок 1.2): единый реестр фоновой
   работы. `service.ts` (`BackgroundRunService`: `startSubagent`/`startProcess`/`finish`/`stop`/
   `recoverOnStart`/`prune`/`buildSubagentNotification`; лимиты сессии — `background.*`;
-  терминальный переход публикует `process.exited`/`child.completed|failed|cancelled` в канал
-  сессии-владельца), `types.ts` (входы запуска, лимиты, коды ошибок, `BackgroundLimitExceededError`), `prune.ts`
+  старт публикует `child.started`/`process.started`, терминальный переход —
+  `process.exited`/`child.completed|failed|cancelled` в канал
+  сессии-владельца; `metadata` уведомления родителю несёт метки прогона —
+  `started_at`/`finished_at`/`duration_ms`/`exit_code`/`signal`/`command`/`cwd`/
+  `agent_role`/`description` — для карточки результата в UI; конверт `<process …>`/
+  `<subagent …>` для модели не меняется), `types.ts` (входы запуска, лимиты, коды ошибок, `BackgroundLimitExceededError`), `prune.ts`
   (`startBackgroundRunPruner` — retention, чистятся только терминальные записи). Порт —
   `BackgroundRunRepository` (`storage/ports/background-run-repository.ts`; файловый —
   `{dataDir}/processes/registry.json` (`storage/file-background-run-store.ts`), в-памяти —

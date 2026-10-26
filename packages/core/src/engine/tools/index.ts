@@ -57,6 +57,8 @@ import {
   scheduleRunTool,
   scheduleJobsTool,
 } from './schedules.js';
+// Этап 1 roadmap 0.13 (блок 16): реестр фоновых прогонов — список и лог.
+import { processListTool, processLogsTool } from './processes.js';
 
 export { ToolRegistry } from './registry.js';
 export { zodToJsonSchema } from './json-schema.js';
@@ -138,6 +140,9 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   scheduleDeleteTool,
   scheduleRunTool,
   scheduleJobsTool,
+  // Этап 1 roadmap 0.13 (блок 16): реестр фоновых прогонов
+  processListTool,
+  processLogsTool,
 ];
 
 export function createToolRegistry(): ToolRegistry {

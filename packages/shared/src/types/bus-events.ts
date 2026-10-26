@@ -88,6 +88,7 @@ export type EventType =
   | 'process.stopped'
   // Этап 1 roadmap 0.13 (блок 1.2): фоновые дочерние сессии саб-агентов
   // (PROP-096).
+  | 'child.started'
   | 'child.completed'
   | 'child.failed'
   | 'child.cancelled'

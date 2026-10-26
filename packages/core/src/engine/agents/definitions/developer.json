@@ -22,7 +22,8 @@
     "memory",
     "pipeline",
     "schedule",
-    "question"
+    "question",
+    "process"
   ],
   "icon": "code-s-slash",
   "color": "--status-info",

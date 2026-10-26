@@ -14,6 +14,8 @@
 import { describe, it, expect } from 'vitest';
 import { ToolCapability } from '@itphx/synth-shared';
 import { loadSystemAgentDefinitions } from './index.js';
+import { processListTool, processLogsTool } from '../tools/processes.js';
+import { computeToolAvailability } from '../permission/availability.js';
 
 /** Агенты, которым нужны capability пайплайнов и расписаний. */
 const WITH_AUTOMATION = ['assistant', 'developer', 'devops', 'admin', 'pm', 'qa', 'analyst'];
@@ -68,5 +70,61 @@ describe('Дефолтные агенты — capability question (этап 1 ro
     const agent = byId.get(id);
     expect(agent, `агент ${id} не найден`).toBeDefined();
     expect(agent!.capabilities, id).not.toContain(ToolCapability.QUESTION);
+  });
+});
+
+/**
+ * Этап 1 roadmap 0.13 (блок 17): capability `process` — реестр фоновых
+ * прогонов (ADR-111/PROP-097).
+ *
+ * Capability получают те же агенты, что и `pipeline`/`schedule`/`question`:
+ * реестр фоновой работы — часть работы в проекте (агент должен уметь
+ * посмотреть, что запустил, и прочитать лог фонового процесса).
+ *
+ * Проверка идёт **через доступность тула** (`computeToolAvailability`), а не
+ * только через список capability: так тест ловит и « capability есть, но тул
+ * отсеивается по capability» (роль), и «тул отдаётся агенту без capability».
+ */
+describe('Дефолтные агенты — capability process (этап 1 roadmap 0.13, блок 17)', () => {
+  const agents = loadSystemAgentDefinitions();
+  const byId = new Map(agents.map((a) => [a.id, a]));
+
+  const PROCESS_TOOLS = [processListTool, processLogsTool];
+
+  it.each(WITH_AUTOMATION)('%s имеет capability process', (id) => {
+    const agent = byId.get(id);
+    expect(agent, `агент ${id} не найден`).toBeDefined();
+    expect(agent!.capabilities, id).toContain(ToolCapability.PROCESS);
+  });
+
+  it.each(WITHOUT_AUTOMATION)('%s не имеет capability process', (id) => {
+    const agent = byId.get(id);
+    expect(agent, `агент ${id} не найден`).toBeDefined();
+    expect(agent!.capabilities, id).not.toContain(ToolCapability.PROCESS);
+  });
+
+  it.each(WITH_AUTOMATION)('%s видит process_list/process_logs', (id) => {
+    const agent = byId.get(id)!;
+    for (const tool of PROCESS_TOOLS) {
+      const availability = computeToolAvailability(
+        tool.name,
+        tool.capabilities,
+        { agentCapabilities: agent.capabilities, sessionMode: 'act' },
+      );
+      expect(availability.available, `${id} → ${tool.name}`).toBe(true);
+    }
+  });
+
+  it.each(['explore', 'general'])('%s не видит process_list/process_logs', (id) => {
+    const agent = byId.get(id)!;
+    for (const tool of PROCESS_TOOLS) {
+      const availability = computeToolAvailability(
+        tool.name,
+        tool.capabilities,
+        { agentCapabilities: agent.capabilities, sessionMode: 'act' },
+      );
+      expect(availability.available, `${id} → ${tool.name}`).toBe(false);
+      expect(availability.reason, `${id} → ${tool.name}`).toBe('role');
+    }
   });
 });

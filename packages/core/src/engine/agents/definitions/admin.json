@@ -22,7 +22,8 @@
     "memory",
     "pipeline",
     "schedule",
-    "question"
+    "question",
+    "process"
   ],
   "icon": "shield-keyhole",
   "color": "--status-error",

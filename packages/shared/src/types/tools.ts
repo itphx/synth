@@ -46,6 +46,16 @@ export const ToolCapability = {
    * (`WORKSPACE_CAPABILITIES`) — вопрос задаётся и без workspace.
    */
   QUESTION: 'question',
+  /**
+   * Реестр фоновых прогонов (ADR-111/PROP-097): тулы чтения реестра и логов
+   * фоновых процессов (`process_list`/`process_logs`).
+   *
+   * Отдельная capability по той же причине, что и `pipeline`/`schedule`/
+   * `question`: реестр фоновой работы — доменный ресурс, а не примитив ядра.
+   * Capability **не** привязана к рабочему каталогу проекта
+   * (`WORKSPACE_CAPABILITIES`) — реестр доступен и без workspace.
+   */
+  PROCESS: 'process',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -75,6 +85,10 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.QUESTION]: {
     label: 'Вопрос пользователю',
     description: 'question',
+  },
+  [ToolCapability.PROCESS]: {
+    label: 'Фоновые процессы',
+    description: 'process_list, process_logs',
   },
 };
 

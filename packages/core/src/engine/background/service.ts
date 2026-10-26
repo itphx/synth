@@ -107,8 +107,9 @@ export class BackgroundRunService {
   /**
    * Зарегистрировать фоновый саб-агента.
    *
-   * Порядок: проверка лимитов → запись `running` в реестр. Возвращает запись
-   * реестра (её id — `background_run_id` в уведомлении и tool_result).
+   * Порядок: проверка лимитов → запись `running` в реестр → событие
+   * `child.started` в канал владельца. Возвращает запись реестра (её id —
+   * `background_run_id` в уведомлении и tool_result).
    *
    * @throws BackgroundLimitExceededError — лимит исчерпан.
    */
@@ -129,6 +130,7 @@ export class BackgroundRunService {
       updatedAt: now,
     };
     await this._repository.save(record);
+    this._publishStarted(record);
     return record;
   }
 
@@ -322,9 +324,24 @@ export class BackgroundRunService {
     }
   }
 
-  /** Стартовое событие прогона в канал владельца. */
+  /**
+   * Стартовое событие прогона в канал владельца.
+   *
+   * `process.started` — шелл-процесс (PROP-097); `child.started` — фоновый
+   * саб-агент (PROP-096). Событие нужно UI: по нему показывается уведомление
+   * о старте фоновой работы.
+   */
   private _publishStarted(record: BackgroundRunRecord): void {
-    if (record.kind !== 'process') return;
+    if (record.kind === 'subagent') {
+      this._eventBus.publish(record.sessionId, 'child.started', {
+        child_session_id: record.childSessionId,
+        parent_session_id: record.sessionId,
+        description: record.description ?? '',
+        agent_role: record.agentRole ?? '',
+        background_run_id: record.id,
+      });
+      return;
+    }
     this._eventBus.publish(record.sessionId, 'process.started', {
       process_id: record.processId ?? record.id,
       session_id: record.sessionId,
@@ -445,6 +462,12 @@ export function buildSubagentNotification(
       // (в чате показывается «Фоновый саб-агент · <описание>»). Формат
       // сообщения для модели не меняется — конверт остаётся в `content`.
       ...(record.description ? { description: record.description } : {}),
+      // Метки прогона — UI рисует по ним карточку результата (как у тула):
+      // время старта/финиша, длительность, роль агента.
+      ...(record.agentRole ? { agent_role: record.agentRole } : {}),
+      started_at: record.startedAt,
+      ...(record.finishedAt ? { finished_at: record.finishedAt } : {}),
+      ...durationMetadata(record),
     },
   };
 }
@@ -496,8 +519,31 @@ export function buildProcessNotification(
       // (в чате показывается «Фоновый процесс · <команда>»). Формат сообщения
       // для модели не меняется — конверт остаётся в `content`.
       ...(record.command ? { command: record.command } : {}),
+      // Метки прогона — UI рисует по ним карточку результата (как у тула):
+      // время старта/финиша, длительность, код завершения и сигнал.
+      ...(record.cwd ? { cwd: record.cwd } : {}),
+      ...(record.exitCode !== undefined ? { exit_code: record.exitCode } : {}),
+      ...(record.signal ? { signal: record.signal } : {}),
+      started_at: record.startedAt,
+      ...(record.finishedAt ? { finished_at: record.finishedAt } : {}),
+      ...durationMetadata(record),
     },
   };
+}
+
+/**
+ * Длительность прогона в миллисекундах (по меткам старта/финиша).
+ *
+ * Пусто — если метки не разбираются или финиша ещё не было.
+ */
+function durationMetadata(record: BackgroundRunRecord): { duration_ms?: number } {
+  if (!record.finishedAt) return {};
+  const started = Date.parse(record.startedAt);
+  const finished = Date.parse(record.finishedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(finished)) return {};
+  const ms = finished - started;
+  if (ms < 0) return {};
+  return { duration_ms: ms };
 }
 
 /** Экранирование значения XML-атрибута (кавычки и спецсимволы). */

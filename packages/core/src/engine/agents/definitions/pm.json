@@ -20,7 +20,8 @@
     "memory",
     "pipeline",
     "schedule",
-    "question"
+    "question",
+    "process"
   ],
   "icon": "clipboard",
   "color": "--primary",
