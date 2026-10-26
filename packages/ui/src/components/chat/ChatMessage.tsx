@@ -13,7 +13,7 @@ import { CommandMessage } from './CommandMessage'
 import { Notice, type NoticeVariant } from './Notice'
 import {
   backgroundNoticeName,
-  extractBackgroundBody,
+  backgroundToolCall,
   resolveBackgroundKind,
   resolveBackgroundState,
 } from './background-notice'
@@ -424,9 +424,11 @@ function ChatMessageInner({
   }
 
   // ADR-111/ADR-113: уведомление о завершении фонового прогона — центрированный
-  // системный блок: подпись «Фоновый процесс · <команда> · <статус>», тело — лог
-  // или итог прогона без конверта `<process …>`/`<subagent …>` (конверт нужен
-  // модели, в чате лишний). Действия — полный набор как у user-сообщения.
+  // системный блок (`Notice`, как у сообщений планировщика): шапка с иконкой
+  // прогона и подписью «Фоновый процесс · <команда> · <статус>», внутри —
+  // сворачиваемая карточка результата (лог или итог прогона без конверта
+  // `<process …>`/`<subagent …>` — конверт нужен модели, в чате лишний).
+  // Действия — полный набор как у user-сообщения (внутри `Notice`).
   if (isBackgroundResult) {
     const metadata = message.metadata ?? undefined
     const kind = resolveBackgroundKind(metadata)
@@ -458,8 +460,6 @@ function ChatMessageInner({
         />
       </div>
     ) : null
-
-    const body = extractBackgroundBody(displayContent)
 
     const backgroundEl = (
       <Notice
@@ -496,13 +496,13 @@ function ChatMessageInner({
         onCopy={handleCopy}
         disabled={message.disabled}
       >
-        {body && (
-          <SecretMarkdown
-            content={resolveI18nText(i18nMeta, body)}
-            secrets={secrets}
-            sessionId={sessionId}
-          />
-        )}
+        <ToolCallPart
+          toolCall={backgroundToolCall(metadata, displayContent)}
+          resultFirst
+          plain
+          secrets={secrets}
+          sessionId={sessionId}
+        />
       </Notice>
     )
 

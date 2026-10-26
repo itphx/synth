@@ -1161,6 +1161,15 @@ export const dict = {
   'chat.notice.backgroundState.completed': 'completed',
   'chat.notice.backgroundState.failed': 'failed',
   'chat.notice.backgroundState.cancelled': 'stopped',
+  // ADR-111/ADR-113: UI-уведомления о старте/финише фоновой работы.
+  'notify.background.started': 'Background process started: {name}',
+  'notify.background.subagentStarted': 'Background subagent started: {name}',
+  'notify.background.completed': 'Background process completed: {name}',
+  'notify.background.failed': 'Background process failed: {name}',
+  'notify.background.cancelled': 'Background process stopped: {name}',
+  'notify.background.subagentCompleted': 'Background subagent completed: {name}',
+  'notify.background.subagentFailed': 'Background subagent failed: {name}',
+  'notify.background.subagentCancelled': 'Background subagent stopped: {name}',
   'chat.notice.copy': 'Copy',
 
   'chat.message.copied': 'Copied',
@@ -2522,6 +2531,13 @@ export const dict = {
     'The limit of background processes for this session has been reached ({limit}). Wait for a running process to finish or stop it.',
   'process.background_unsupported': 'Background execution is unavailable in the current execution mode',
   'process.background_disabled': 'Background processes are disabled (background.enabled: false)',
+  'process.tool.empty': 'No background runs',
+  'process.tool.not_found': 'Background run "{id}" not found',
+  'process.tool.deps_unavailable': 'The background run registry is unavailable in this build',
+  'process.tool.header': 'Background runs ({count}):',
+  'process.tool.no_log': 'There is no log for this background run',
+  'process.tool.child_history':
+    'The history of the child session {child_session} is available via the read_session_reference tool',
 
   // --- Фоновые саб-агенты и лимит шагов (этап 1 roadmap 0.13, блок 4) ---
   'task.steps_limit':
@@ -2538,6 +2554,8 @@ export const dict = {
     'Session {id} is not a subagent session of the current session — it cannot be continued from here',
   'task.resume_child_busy':
     'Session {id} is busy or already running — it cannot be continued right now',
+  'task.model_unavailable':
+    'Error: the model "{provider}/{model}" requested for the subagent is unavailable — the provider is not configured or the model is unknown',
 
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH keys',

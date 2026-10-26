@@ -1,14 +1,17 @@
 /**
- * ADR-111/ADR-113: уведомление о завершении фонового прогона — служебный
- * (системный) блок в чате.
+ * ADR-111/ADR-113: уведомление о завершении фонового прогона.
  *
  * Уведомление приходит сообщением роли USER (так его видит модель), поэтому в
  * UI его нельзя рисовать обычным user-пузырём: автор там — текущий
- * пользователь, а не фоновый прогон. Показываем системным блоком (как
- * сообщения планировщика, ADR-051).
+ * пользователь, а не фоновый прогон. Показываем **системным блоком**
+ * (`Notice`, как сообщения планировщика), внутри которого — сворачиваемая
+ * **карточка результата**: как у результата тула `execute_shell`/`task` в
+ * ответе агента (`ToolCallPart`): ряд-детализация (иконка + подпись +
+ * длительность), тело — вкладки «Аргументы»/«Результат» с логом/итогом
+ * прогона.
  *
- * Конверт `<process …>…</process>` / `<subagent …>…</subagent>` нужен модели, но
- * в UI лишний: в блоке показывается только тело (лог/итог прогона).
+ * Конверт `<process …>…</process>` / `<subagent …>…</subagent>` нужен модели,
+ * но в UI лишний: в карточке показывается только тело (лог/итог прогона).
  */
 
 /** Вид фонового прогона. */
@@ -49,6 +52,16 @@ export function resolveBackgroundState(
 }
 
 /**
+ * Успешное терминальное состояние прогона.
+ *
+ * Для шелл-процесса успех в конверте модели обозначен как «exited», в
+ * `metadata` — как «completed» (единая нормализация).
+ */
+export function isBackgroundSuccess(state: BackgroundNoticeState): boolean {
+  return state === 'completed';
+}
+
+/**
  * Имя прогона для подписи: команда (процесс) или описание (саб-агент).
  * Длинные значения обрезаются — подпись не должна ломать вёрстку.
  */
@@ -70,6 +83,19 @@ export function backgroundNoticeName(
 }
 
 /**
+ * Снять конверт модели (`<process …>`/`<subagent …>`) — вернуть тело.
+ *
+ * Если конверт не распознан — текст возвращается как есть.
+ */
+export function stripBackgroundEnvelope(content: string): string {
+  const full = content.match(ENVELOPE_RE);
+  if (full) return full[2] ?? '';
+  const partial = content.match(OPEN_ENVELOPE_RE);
+  if (partial) return partial[2] ?? '';
+  return content;
+}
+
+/**
  * Тело уведомления без конверта модели.
  *
  * Снимается внешний конверт (`<process …>`/`<subagent …>`) и обёртка `<summary>`
@@ -77,11 +103,7 @@ export function backgroundNoticeName(
  * текст возвращается как есть.
  */
 export function extractBackgroundBody(content: string): string {
-  const full = content.match(ENVELOPE_RE);
-  if (full) return stripSummary(full[2] ?? '');
-  const partial = content.match(OPEN_ENVELOPE_RE);
-  if (partial) return stripSummary(partial[2] ?? '');
-  return content;
+  return stripSummary(stripBackgroundEnvelope(content));
 }
 
 /** Снять обёртку `<summary>…</summary>` (в уведомлении о саб-агентате). */
@@ -92,4 +114,70 @@ function stripSummary(body: string): string {
     .slice('<summary>'.length)
     .replace(/<\/summary>\s*$/, '')
     .trim();
+}
+
+/** Строка из `metadata` (непустая). */
+function metaString(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/**
+ * Данные карточки результата фонового прогона — та же форма, что у
+ * `ToolCallPart` (результат тула в ответе агента).
+ */
+export interface BackgroundToolCall {
+  /** Имя тула-источника: `execute_shell` (процесс) / `task` (саб-агент). */
+  name: string;
+  /** Аргументы карточки (команда/рабочий каталог либо описание). */
+  args: Record<string, unknown>;
+  /** Результат — тело прогона без конверта модели. */
+  result: { content: string; isError?: boolean };
+  /** Статус вызова (прогон завершён — карточка не «бежит»). */
+  status: 'done';
+  /** Начало прогона (ISO-8601) — для длительности в шапке карточки. */
+  startedAt?: string;
+  /** Финиш прогона (ISO-8601) — для длительности в шапке карточки. */
+  completedAt?: string;
+}
+
+/**
+ * Собрать данные карточки результата фонового прогона.
+ *
+ * `kind:'process'` → карточка результата `execute_shell` (аргументы — команда
+ * и рабочий каталог, тело — хвост лога). `kind:'subagent'` → карточка
+ * результата `task` (аргументы — описание, тело — итог саб-агента).
+ */
+export function backgroundToolCall(
+  metadata: Record<string, unknown> | null | undefined,
+  content: string,
+): BackgroundToolCall {
+  const kind = resolveBackgroundKind(metadata);
+  const state = resolveBackgroundState(metadata);
+  const body = extractBackgroundBody(content);
+  const startedAt = metaString(metadata?.started_at);
+  const completedAt = metaString(metadata?.finished_at);
+  const isError = !isBackgroundSuccess(state);
+
+  if (kind === 'subagent') {
+    return {
+      name: 'task',
+      args: { description: metaString(metadata?.description) ?? '' },
+      result: { content: body, isError },
+      status: 'done',
+      ...(startedAt ? { startedAt } : {}),
+      ...(completedAt ? { completedAt } : {}),
+    };
+  }
+
+  return {
+    name: 'execute_shell',
+    args: {
+      command: metaString(metadata?.command) ?? '',
+      cwd: metaString(metadata?.cwd) ?? '',
+    },
+    result: { content: body, isError },
+    status: 'done',
+    ...(startedAt ? { startedAt } : {}),
+    ...(completedAt ? { completedAt } : {}),
+  };
 }

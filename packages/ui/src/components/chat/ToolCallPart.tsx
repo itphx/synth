@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { getToolIcon, getToolDisplayName } from '@/lib/toolIcons'
 import { useI18n, useResolveI18n } from '@/lib/i18n'
@@ -31,6 +32,17 @@ interface ToolCallPartProps {
   sessionId?: string
   /** Вложенный контент (например, активность саб-агента) — рендерится ВНУТРИ карточки, под заголовком. */
   children?: React.ReactNode
+  /**
+   * Карточка без заливки — для вложения в системный блок (`Notice`):
+   * ряд-детализация, а не «карточка в карточке».
+   */
+  plain?: boolean
+  /**
+   * Результат — главное содержимое карточки: вкладка «Результат» доступна
+   * даже для тула `task` и открыта по умолчанию (тело видно сразу после
+   * раскрытия карточки).
+   */
+  resultFirst?: boolean
 }
 
 /** JSON-строка (аргументы тула) с плейсхолдерами секретов: текст + кликабельные бейджи. */
@@ -176,13 +188,13 @@ function SubagentResult({ result, toolCall: _toolCall }: { result: ToolCallData[
   )
 }
 
-export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }: ToolCallPartProps) {
+export function ToolCallPart({ toolCall, nested, secrets, sessionId, children, plain, resultFirst }: ToolCallPartProps) {
   const { t } = useI18n()
   // i18n ядра: metadata.i18n у tool_result → перевод по ключу (fallback — content).
   const resolveI18nText = useResolveI18n()
   const [expanded, setExpanded] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
-  const [viewMode, setViewMode] = useState<'args' | 'result'>('args')
+  const [viewMode, setViewMode] = useState<'args' | 'result'>(resultFirst ? 'result' : 'args')
 
   const isError = toolCall.result?.isError
   const isRunning = toolCall.status === 'running'
@@ -192,6 +204,9 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
   const duration = formatDuration(started, completed)
   const hasResult = !!toolCall.result?.content
   const isSubagent = toolCall.name === 'task'
+  // `resultFirst` — результат главное содержимое: вкладка «Результат» есть и
+  // для `task` (карточка фонового прогона), и открыта по умолчанию.
+  const showResultTab = !isSubagent || resultFirst === true
   const subagentType = (toolCall.args as Record<string, unknown>)?.subagent_type as string | undefined
   const diff = toolCall.result?.metadata?.diff as string | undefined
 
@@ -202,7 +217,6 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
     : ''
 
   const toolIcon = isSubagent ? 'robot-2' : getToolIcon(toolCall.name)
-  const toolDisplayName = getToolDisplayName(toolCall.name)
 
   const headerColor = isError
     ? 'text-status-error'
@@ -217,9 +231,15 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
   const nameColor = isError ? 'text-status-error' : ''
 
   return (
-    <div className={nested ? 'mb-1 ml-3' : 'mb-2'}>
-      <div className="rounded-md border border-border bg-muted overflow-hidden">
+    <div className={nested ? 'mb-1 ml-3' : plain ? 'mb-0' : 'mb-2'}>
+      <div
+        className={cn(
+          'rounded-md border overflow-hidden',
+          plain ? 'border-transparent' : 'border-border bg-muted'
+        )}
+      >
         <button
+          data-tool-call-toggle="1"
           className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
           onClick={() => setExpanded(!expanded)}
         >
@@ -234,7 +254,7 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
           <span className={`font-mono font-medium truncate ${nameColor}${isRunning ? ' animate-tool-pulse' : ''}`}>
             {isSubagent && subagentType
               ? `${t('chat.subagent.title')}: ${subagentType}`
-              : toolDisplayName}
+              : getToolDisplayName(toolCall.name)}
           </span>
           {toolCall.iteration != null && (
             <span className="text-[0.625rem] opacity-40 shrink-0">
@@ -261,7 +281,7 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
                 >
                   {t('chat.toolCall.arguments')}
                 </button>
-                {!isSubagent && (
+                {showResultTab && (
                   <button
                     className={`px-3 py-1 text-[0.6875rem] font-medium transition-colors ${
                       viewMode === 'result'

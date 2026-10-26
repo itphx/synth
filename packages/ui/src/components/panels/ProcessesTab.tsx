@@ -274,7 +274,6 @@ export const ProcessesTab: React.FC = () => {
               key={filter}
               variant={kindFilter === filter ? 'primary' : 'outline-muted'}
               size="sm"
-              className="min-h-10"
               aria-pressed={kindFilter === filter}
               onClick={() => setKindFilter(filter)}
               data-testid={`processes-filter-${filter}`}
@@ -408,8 +407,7 @@ export const ProcessesTab: React.FC = () => {
                   {isRunning && (
                     <Button
                       variant="ghost"
-                      size="sm"
-                      className="min-h-10 min-w-10"
+                      size="icon"
                       onClick={() => void handleStop(run)}
                       disabled={busy === run.id}
                       title={t('processes.action.stop')}
@@ -422,8 +420,7 @@ export const ProcessesTab: React.FC = () => {
                   {run.kind === 'subagent' && run.childSessionId && (
                     <Button
                       variant="ghost"
-                      size="sm"
-                      className="min-h-10 min-w-10"
+                      size="icon"
                       onClick={() => handleOpenSession(run)}
                       title={t('processes.action.openSession')}
                       aria-label={t('processes.action.openSession')}
@@ -435,8 +432,7 @@ export const ProcessesTab: React.FC = () => {
                   {run.kind === 'process' && (
                     <Button
                       variant="ghost"
-                      size="sm"
-                      className="min-h-10 min-w-10"
+                      size="icon"
                       onClick={() => setLogId((current) => (current === run.id ? null : run.id))}
                       title={logId === run.id ? t('processes.action.hideLog') : t('processes.action.showLog')}
                       aria-label={logId === run.id ? t('processes.action.hideLog') : t('processes.action.showLog')}
@@ -448,8 +444,8 @@ export const ProcessesTab: React.FC = () => {
                   {!isRunning && (
                     <Button
                       variant="ghost"
-                      size="sm"
-                      className="min-h-10 min-w-10 hover:text-destructive"
+                      size="icon"
+                      className="hover:text-destructive"
                       onClick={() => void handleRemove(run)}
                       disabled={busy === run.id}
                       title={t('processes.action.remove')}
@@ -478,8 +474,7 @@ export const ProcessesTab: React.FC = () => {
             </span>
             <Button
               variant="ghost"
-              size="sm"
-              className="min-h-10 min-w-10"
+              size="icon"
               onClick={() => void fetchLog(logId, 0)}
               title={t('processes.action.refreshLog')}
               aria-label={t('processes.action.refreshLog')}
@@ -489,8 +484,7 @@ export const ProcessesTab: React.FC = () => {
             </Button>
             <Button
               variant="ghost"
-              size="sm"
-              className="min-h-10 min-w-10"
+              size="icon"
               onClick={() => setLogId(null)}
               title={t('processes.action.hideLog')}
               aria-label={t('processes.action.hideLog')}

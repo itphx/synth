@@ -305,4 +305,45 @@ describe('ProcessesTab — единый реестр фоновых прогон
     const error = container.querySelector('[data-testid="processes-error"]')
     expect(error?.textContent).toContain('доступ запрещён')
   })
+
+  it('компактные кнопки: фильтры и действия строк без min-h-10/min-w-10 (десктоп)', async () => {
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_1', { command: 'npm test' }),
+      makeRun('bgr_2', { status: 'completed', finishedAt: '2026-10-01T00:05:00.000Z' }),
+    ])
+
+    const container = await renderProcesses()
+
+    // Фильтры — как сегментные кнопки в других вкладках: без принудительных 40px.
+    const filter = container.querySelector('[data-testid="processes-filter-all"]') as HTMLElement
+    expect(filter).not.toBeNull()
+    expect(filter.className).not.toContain('min-h-10')
+    expect(filter.className).not.toContain('min-w-10')
+
+    // Кнопки-действия строк — компактные (size="icon" → 32px), не 40px.
+    for (const testId of ['processes-stop-bgr_1', 'processes-log-toggle-bgr_1', 'processes-remove-bgr_2']) {
+      const button = container.querySelector(`[data-testid="${testId}"]`) as HTMLElement
+      expect(button, `элемент ${testId} не найден`).toBeTruthy()
+      expect(button.className).not.toContain('min-h-10')
+      expect(button.className).not.toContain('min-w-10')
+      expect(button.className).toContain('size-8')
+      // Тач-таргет ≥40px на coarse-указателе (ADR-044).
+      expect(button.className).toContain('pointer-coarse:size-10')
+    }
+  })
+
+  it('кнопки панели лога — компактные (size="icon")', async () => {
+    mocks.listProcesses.mockResolvedValue([makeRun('bgr_1', { command: 'npm test' })])
+
+    const container = await renderProcesses()
+    await click(container, 'processes-log-toggle-bgr_1')
+
+    for (const testId of ['processes-log-refresh', 'processes-log-hide']) {
+      const button = container.querySelector(`[data-testid="${testId}"]`) as HTMLElement
+      expect(button, `элемент ${testId} не найден`).toBeTruthy()
+      expect(button.className).not.toContain('min-h-10')
+      expect(button.className).not.toContain('min-w-10')
+      expect(button.className).toContain('size-8')
+    }
+  })
 })

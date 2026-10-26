@@ -87,7 +87,11 @@ export function Notice({
             style.mono && 'font-mono',
           )}
         >
-          <Icon name={icon ?? style.icon} className="size-3 shrink-0" />
+          <Icon
+            name={icon ?? style.icon}
+            className="size-3 shrink-0"
+            data-icon={icon ?? style.icon}
+          />
           {label && <span className="truncate">{label}</span>}
           {meta && <span className="ml-auto inline-flex items-center gap-1.5">{meta}</span>}
         </div>

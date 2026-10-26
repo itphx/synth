@@ -194,7 +194,23 @@ describe('ChatMessage: уведомление о завершении фонов
     })
   })
 
-  it('процесс → системный блок «Background process · <команда>», конверта в тексте нет', async () => {
+  /** Клик по шапке карточки результата (раскрытие/сворачивание). */
+  function toggleCard(container: HTMLElement): void {
+    const header = container.querySelector('[data-tool-call-toggle]') as HTMLButtonElement
+    expect(header).not.toBeNull()
+    act(() => {
+      header.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+  }
+
+  /** Иконка в шапке системного блока (`Notice`). */
+  function noticeIcon(container: HTMLElement): string | null {
+    const group = container.querySelector('[role="group"]') as HTMLElement | null
+    const header = group?.firstElementChild as HTMLElement | null
+    return header?.querySelector('[data-icon]')?.getAttribute('data-icon') ?? null
+  }
+
+  it('процесс → системный Notice «Background process · <команда> · completed», карточка внутри свёрнута', async () => {
     const container = await renderChat(
       makeMessage({
         role: 'user',
@@ -211,11 +227,17 @@ describe('ChatMessage: уведомление о завершении фонов
         },
       }),
     )
+
+    // Внешний системный блок: подпись в шапке и иконка прогона.
     const group = container.querySelector('[role="group"]') as HTMLElement
     expect(group).not.toBeNull()
     expect(group.getAttribute('aria-label')).toBe('Background process · npm test · completed')
-    // Тело — лог прогона, конверт модели не показываем.
-    expect(container.textContent).toContain('5 passed')
+    expect(container.textContent).toContain('Background process · npm test · completed')
+    expect(noticeIcon(container)).toBe('terminal-box')
+    // Внутри блока — карточка результата, свёрнута: тело прогона не видно.
+    expect(container.querySelector('[data-tool-call-toggle]')).not.toBeNull()
+    expect(container.textContent).not.toContain('5 passed')
+    // Служебных тегов модели в тексте нет.
     expect(container.textContent).not.toContain('<process')
     expect(container.textContent).not.toContain('</process>')
     // Не рисуем правый user-пузырь и userBadge текущего пользователя.
@@ -223,7 +245,53 @@ describe('ChatMessage: уведомление о завершении фонов
     expect(container.textContent).not.toContain('Alice')
   })
 
-  it('саб-агент → подпись «Background subagent» и тело без конверта', async () => {
+  it('процесс → после раскрытия карточки видно тело (лог) без конверта', async () => {
+    const container = await renderChat(
+      makeMessage({
+        role: 'user',
+        content: [
+          '<process processID="proc_1" state="exited" command="npm test">',
+          '5 passed',
+          '</process>',
+        ].join('\n'),
+        metadata: {
+          type: 'background_run_result',
+          kind: 'process',
+          state: 'completed',
+          command: 'npm test',
+        },
+      }),
+    )
+
+    await act(async () => {
+      toggleCard(container)
+    })
+
+    expect(container.textContent).toContain('5 passed')
+    expect(container.textContent).not.toContain('<process')
+    expect(container.textContent).not.toContain('</process>')
+  })
+
+  it('процесс → в шапке карточки длительность прогона (по меткам старта/финиша)', async () => {
+    const container = await renderChat(
+      makeMessage({
+        role: 'user',
+        content: '<process processID="proc_1" state="exited" command="npm test">\nok\n</process>',
+        metadata: {
+          type: 'background_run_result',
+          kind: 'process',
+          state: 'completed',
+          command: 'npm test',
+          started_at: '2026-10-20T10:00:00.000Z',
+          finished_at: '2026-10-20T10:00:02.500Z',
+        },
+      }),
+    )
+
+    expect(container.textContent).toContain('2.5s')
+  })
+
+  it('саб-агент → подпись «Background subagent», иконка робота и тело без конверта', async () => {
     const container = await renderChat(
       makeMessage({
         role: 'user',
@@ -241,11 +309,18 @@ describe('ChatMessage: уведомление о завершении фонов
         },
       }),
     )
-    const group = container.querySelector('[role="group"]') as HTMLElement
-    expect(group.getAttribute('aria-label')).toBe('Background subagent · собрать отчёт · failed')
-    expect(container.textContent).toContain('отчёт не собран')
+
+    expect(container.textContent).toContain('Background subagent · собрать отчёт · failed')
+    expect(noticeIcon(container)).toBe('robot-2')
     expect(container.textContent).not.toContain('<subagent')
     expect(container.textContent).not.toContain('</subagent>')
+    expect(container.textContent).not.toContain('<summary>')
+
+    await act(async () => {
+      toggleCard(container)
+    })
+
+    expect(container.textContent).toContain('отчёт не собран')
     expect(container.textContent).not.toContain('<summary>')
   })
 
@@ -262,8 +337,7 @@ describe('ChatMessage: уведомление о завершении фонов
         },
       }),
     )
-    const group = container.querySelector('[role="group"]') as HTMLElement
-    expect(group.getAttribute('aria-label')).toBe('Background process · sleep 100 · stopped')
+    expect(container.textContent).toContain('Background process · sleep 100 · stopped')
   })
 
   it('уведомление → полный набор действий как у user-сообщения', async () => {
@@ -284,7 +358,7 @@ describe('ChatMessage: уведомление о завершении фонов
     expect(titles).toContain('Create branch')
     expect(titles).toContain('Pin')
     expect(titles).toContain('Delete')
-    // Дублирующей кнопки копирования нет (копия — из Notice).
+    // Копия — одна (карточка сама копию не рисует).
     expect(titles.filter((t) => t === 'Copy')).toHaveLength(1)
   })
 

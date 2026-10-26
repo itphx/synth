@@ -76,6 +76,108 @@ function mapCostBreakdown(raw: unknown): CostBreakdown | undefined {
   return raw as CostBreakdown
 }
 
+/**
+ * ADR-111/ADR-113: UI-уведомления о фоновой работе (старт/финиш).
+ *
+ * Дедупа нет: каждое пришедшее событие фоновой работы даёт уведомление —
+ * корневая причина дублей устранена в ядре (единый `enqueueUserMessage`),
+ * события шины не реплеятся, у реальных прогонов разные `background_run_id`.
+ */
+/** Стартовые события фоновой работы. */
+const BACKGROUND_START_EVENTS = new Set(['process.started', 'child.started'])
+
+/** Терминальные события фоновой работы. */
+const BACKGROUND_FINISH_EVENTS = new Set([
+  'process.exited',
+  'process.stopped',
+  'child.completed',
+  'child.failed',
+  'child.cancelled',
+])
+
+/** Максимальная длина имени прогона в уведомлении. */
+const BACKGROUND_NOTIFY_NAME_LIMIT = 80
+
+/** Терминальное состояние прогона по событию и payload. */
+function backgroundFinishState(
+  type: string,
+  payload: Record<string, unknown>,
+): 'completed' | 'failed' | 'cancelled' {
+  const state = payload.state
+  if (state === 'completed' || state === 'failed' || state === 'cancelled') return state
+  if (type === 'process.stopped') return 'cancelled'
+  if (type === 'child.failed') return 'failed'
+  if (type === 'child.cancelled') return 'cancelled'
+  return 'completed'
+}
+
+/**
+ * Имя прогона для уведомления: команда (процесс) или описание (саб-агент).
+ *
+ * Берётся из реестра фоновых прогонов (запись уже применена событием), иначе
+ * — из payload. Длинные значения обрезаются.
+ */
+function backgroundRunName(
+  isChild: boolean,
+  payload: Record<string, unknown>,
+): string {
+  const runId = typeof payload.background_run_id === 'string' ? payload.background_run_id : ''
+  const record = runId ? useProcessesStore.getState().byId[runId] : undefined
+  const raw = isChild
+    ? record?.description ?? payload.description
+    : record?.command ?? payload.command
+  const name = typeof raw === 'string' ? raw.trim() : ''
+  if (name.length <= BACKGROUND_NOTIFY_NAME_LIMIT) return name
+  return `${name.slice(0, BACKGROUND_NOTIFY_NAME_LIMIT - 1)}…`
+}
+
+/**
+ * Показать уведомление о фоновой работе (старт/финиш прогона).
+ *
+ * События, которые не относятся к фоновой работе, игнорируются. Каждое
+ * пришедшее событие даёт уведомление (дедупа нет).
+ */
+function notifyBackgroundRun(type: string, payload: Record<string, unknown>): void {
+  const isStart = BACKGROUND_START_EVENTS.has(type)
+  const isFinish = BACKGROUND_FINISH_EVENTS.has(type)
+  if (!isStart && !isFinish) return
+
+  const isChild = type.startsWith('child.')
+  const name = backgroundRunName(isChild, payload)
+  const sessionId =
+    (typeof payload.session_id === 'string' ? payload.session_id : undefined) ??
+    (typeof payload.parent_session_id === 'string' ? payload.parent_session_id : undefined)
+
+  if (isStart) {
+    notifyMessage({
+      text: i18nText(isChild ? 'notify.background.subagentStarted' : 'notify.background.started', { name }),
+      type: 'info',
+      category: 'system',
+      ...(sessionId ? { sessionId } : {}),
+    })
+    return
+  }
+
+  const state = backgroundFinishState(type, payload)
+  const textKey = isChild
+    ? state === 'failed'
+      ? 'notify.background.subagentFailed'
+      : state === 'cancelled'
+        ? 'notify.background.subagentCancelled'
+        : 'notify.background.subagentCompleted'
+    : state === 'failed'
+      ? 'notify.background.failed'
+      : state === 'cancelled'
+        ? 'notify.background.cancelled'
+        : 'notify.background.completed'
+  notifyMessage({
+    text: i18nText(textKey, { name }),
+    type: state === 'failed' ? 'error' : state === 'cancelled' ? 'warning' : 'success',
+    category: 'system',
+    ...(sessionId ? { sessionId } : {}),
+  })
+}
+
 interface TransportState {
   transportMode: TransportMode
   activeTransport: TransportKind
@@ -117,6 +219,7 @@ export function createDispatcher(): EventDispatcher {
     // в диспетчере других веток `child.*` нет.
     if (type.startsWith('process.') || type.startsWith('child.')) {
       useProcessesStore.getState().applyEvent(type, payload)
+      notifyBackgroundRun(type, payload)
       return
     }
 

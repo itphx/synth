@@ -1141,6 +1141,15 @@ export const dict = {
   'chat.notice.backgroundState.completed': 'завершён',
   'chat.notice.backgroundState.failed': 'ошибка',
   'chat.notice.backgroundState.cancelled': 'остановлен',
+  // ADR-111/ADR-113: UI-уведомления о старте/финише фоновой работы.
+  'notify.background.started': 'Фоновый процесс запущен: {name}',
+  'notify.background.subagentStarted': 'Фоновый саб-агент запущен: {name}',
+  'notify.background.completed': 'Фоновый процесс завершён: {name}',
+  'notify.background.failed': 'Фоновый процесс завершился с ошибкой: {name}',
+  'notify.background.cancelled': 'Фоновый процесс остановлен: {name}',
+  'notify.background.subagentCompleted': 'Фоновый саб-агент завершён: {name}',
+  'notify.background.subagentFailed': 'Фоновый саб-агент завершился с ошибкой: {name}',
+  'notify.background.subagentCancelled': 'Фоновый саб-агент остановлен: {name}',
   'chat.notice.copy': 'Копировать',
 
   'chat.message.copied': 'Скопировано',
@@ -2508,6 +2517,8 @@ export const dict = {
   'task.subagent_not_found': 'Сабагент «{type}» не найден. Доступные типы: {types}',
   'task.subagent_not_allowed': 'Агент «{type}» не может использоваться как сабагент (режимы: {modes})',
   'task.deps_unavailable': 'Ошибка: провайдер или реестр агентов недоступны для запуска сабагента',
+  'task.model_unavailable':
+    'Ошибка: модель «{provider}/{model}», запрошенная для сабагента, недоступна — провайдер не настроен или модель неизвестна',
   'task.subagent_exec_error_after_retries': 'Ошибка выполнения сабагента «{type}» после {attempts} попыток: {error}',
 
   // --- Возобновление дочерней сессии саб-агента (resume) ---
@@ -2928,6 +2939,13 @@ export const dict = {
     'Достигнут лимит фоновых процессов для этой сессии ({limit}). Дождитесь завершения процесса или остановите его.',
   'process.background_unsupported': 'Фоновое исполнение недоступно в текущем режиме исполнения',
   'process.background_disabled': 'Фоновые процессы выключены (background.enabled: false)',
+  'process.tool.empty': 'Нет фоновых прогонов',
+  'process.tool.not_found': 'Фоновый прогон «{id}» не найден',
+  'process.tool.deps_unavailable': 'Реестр фоновых прогонов недоступен в этой сборке',
+  'process.tool.header': 'Фоновые прогоны ({count}):',
+  'process.tool.no_log': 'У этого фонового прогона нет лога',
+  'process.tool.child_history':
+    'История дочерней сессии {child_session} доступна через тул read_session_reference',
 
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',

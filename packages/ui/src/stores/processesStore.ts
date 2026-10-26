@@ -108,6 +108,20 @@ function statusFromChildEvent(type: string): BackgroundRunStatus {
   return 'completed'
 }
 
+/**
+ * События фоновых прогонов-саб-агентов (`child.*`).
+ *
+ * В канал родителя публикуются и другие `child.*`-события
+ * (`child.message.added`/`child.session.updated` — обычный, не фоновый
+ * саб-агент); в реестр фоновой работы они не относятся.
+ */
+const CHILD_RUN_EVENTS = new Set([
+  'child.started',
+  'child.completed',
+  'child.failed',
+  'child.cancelled',
+])
+
 /** Читает строковое поле payload. */
 function str(payload: Record<string, unknown>, key: string): string | undefined {
   const value = payload[key]
@@ -156,7 +170,7 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
 
   applyEvent: (type, payload) => {
     const backgroundRunId = str(payload, 'background_run_id')
-    const isChild = type.startsWith('child.')
+    const isChild = CHILD_RUN_EVENTS.has(type)
     const isProcess = type.startsWith('process.')
     if (!isChild && !isProcess) return
 
@@ -166,9 +180,11 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
     const id = backgroundRunId ?? childSessionId ?? str(payload, 'process_id')
     if (!id) return
 
-    const terminal = type === 'process.exited' || type === 'process.stopped' || isChild
+    // `child.started` — прогон только начался (не терминальное событие).
+    const terminal =
+      type === 'process.exited' || type === 'process.stopped' || (isChild && type !== 'child.started')
     const status = isChild
-      ? statusFromChildEvent(type)
+      ? type === 'child.started' ? 'running' : statusFromChildEvent(type)
       : terminal
         ? statusFromState(payload.state)
         : 'running'
@@ -194,6 +210,9 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
         ...(str(payload, 'signal') ? { signal: str(payload, 'signal') } : {}),
         ...(isChild && str(payload, 'description')
           ? { description: str(payload, 'description') }
+          : {}),
+        ...(isChild && str(payload, 'agent_role')
+          ? { agentRole: str(payload, 'agent_role') }
           : {}),
         startedAt: prev?.startedAt ?? now,
         updatedAt: now,
