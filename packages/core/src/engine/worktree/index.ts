@@ -41,3 +41,5 @@ export type {
   WorktreeEventSessionSource,
   WorktreeUpdatedInput,
 } from './events.js';
+export { startWorktreeSweeper } from './sweep.js';
+export type { WorktreeSweeperTarget } from './sweep.js';

@@ -57,6 +57,7 @@ import {
   // `worktree.updated` в каналы сессий проекта.
   WorktreeService,
   publishWorktreeUpdated,
+  startWorktreeSweeper,
   WebhookService, startWebhookDeliveryPruner,
   AnalyticsRecorder, attachAnalyticsActivityHooks, startAnalyticsRollupPruner, sessionAxes,
   createStorageContextAsync,
@@ -781,6 +782,12 @@ export async function createBackendDeps(
           });
         },
       });
+
+  // ADR-114 §7.4: sweep осиротевших записей worktree'ов при старте процесса
+  // (записи без каталога — их чистит и prune проекта, §7.3). Фоново: старт
+  // **не блокируется**, ошибка — в лог, процесс продолжает жить. В деградированном
+  // режиме хранилища сервиса нет — вычищать нечего.
+  if (worktreeService) startWorktreeSweeper(worktreeService);
 
   // ADR-070 §2.9.1/ADR-101: зависимости окружения (git/rg/sh) — детекция при
   // старте, fail-open при ошибке. Общий для оркестратора и движка пайплайнов

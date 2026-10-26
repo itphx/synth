@@ -695,6 +695,10 @@ export type {
   WorktreeEventDeps,
   WorktreeEventSessionSource,
 } from './engine/worktree/index.js';
+// ADR-114 §7.4: стартовый sweep осиротевших записей worktree'ов (фоново,
+// без падения старта) — общий хук для core и backend.
+export { startWorktreeSweeper } from './engine/worktree/index.js';
+export type { WorktreeSweeperTarget } from './engine/worktree/index.js';
 export type {
   SessionRepository,
   SessionFilter,

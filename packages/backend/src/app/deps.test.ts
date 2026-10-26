@@ -7,11 +7,11 @@
  * Прямая проверка here — дешёвая ловушка на переименование/потерю поля, которое
  * фасад читает по имени (TypeScript ловит часть, но не «значение по геттеру»).
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_AGENT_ID, MetricsRegistry } from '@itphx/synth-core';
+import { DEFAULT_AGENT_ID, MetricsRegistry, WorktreeService } from '@itphx/synth-core';
 import type { EventsRuntimeSettings } from '@itphx/synth-core';
 import type { AgentDefinition, DecisionConfig } from '@itphx/synth-shared';
 import { loadBackendConfig } from '../lib/app-config.js';
@@ -254,6 +254,56 @@ describe('createBackendDeps: агенты из стора попадают в р
       if (savedBackend === undefined) delete process.env.SYNTH_STORAGE_BACKEND;
       else process.env.SYNTH_STORAGE_BACKEND = savedBackend;
       await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+});
+
+/**
+ * ADR-114 §7.4: стартовый sweep осиротевших записей worktree'ов подключён и
+ * в backend-сборке (`src/app/deps.ts`): вызов фоновый (старт не блокируется),
+ * ошибка sweep старт не роняет.
+ */
+describe('createBackendDeps: стартовый sweep worktree (ADR-114 §7.4)', () => {
+  async function buildBackendDeps(): Promise<void> {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-backend-deps-worktree-'));
+    const savedDataDir = process.env.SYNTH_DATA_DIR;
+    process.env.SYNTH_DATA_DIR = dir;
+    try {
+      const config = await loadBackendConfig();
+      const deps = await createBackendDeps(config);
+      deps.schedulerService.stop();
+      deps.webhookService.stop();
+      deps.stopEphemeralSweeper();
+      deps.stopEventJournalPruner();
+      deps.stopWebhookDeliveryPruner();
+    } finally {
+      if (savedDataDir === undefined) delete process.env.SYNTH_DATA_DIR;
+      else process.env.SYNTH_DATA_DIR = savedDataDir;
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  }
+
+  it('вызывает sweep при сборке зависимостей', async () => {
+    const sweep = vi
+      .spyOn(WorktreeService.prototype, 'sweepOrphans')
+      .mockResolvedValue({ recordsRemoved: 0 });
+    try {
+      await buildBackendDeps();
+      await vi.waitFor(() => expect(sweep).toHaveBeenCalledTimes(1));
+    } finally {
+      sweep.mockRestore();
+    }
+  });
+
+  it('ошибка sweep не роняет старт', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sweep = vi
+      .spyOn(WorktreeService.prototype, 'sweepOrphans')
+      .mockRejectedValue(new Error('порт недоступен'));
+    try {
+      await expect(buildBackendDeps()).resolves.toBeUndefined();
+    } finally {
+      sweep.mockRestore();
     }
   });
 });

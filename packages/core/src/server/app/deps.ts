@@ -39,6 +39,7 @@ import {
   // `worktree.updated` в каналы сессий проекта.
   WorktreeService,
   publishWorktreeUpdated,
+  startWorktreeSweeper,
   AnalyticsRecorder,
   attachAnalyticsActivityHooks,
   startAnalyticsRollupPruner,
@@ -811,6 +812,12 @@ export async function createStandaloneDeps(
           });
         },
       });
+
+  // ADR-114 §7.4: sweep осиротевших записей worktree'ов при старте процесса
+  // (записи без каталога — их чистит и prune проекта, §7.3). Фоново: старт
+  // **не блокируется**, ошибка — в лог, процесс продолжает жить. В деградированном
+  // режиме хранилища сервиса нет — вычищать нечего.
+  if (worktreeService) startWorktreeSweeper(worktreeService);
 
   // ADR-077 (шаг B2): в split-режиме MCP-серверы поднимаются **в исполнителе**
   // (браузерные/tier-4 тулы) — control plane забирает их состав и инструменты
