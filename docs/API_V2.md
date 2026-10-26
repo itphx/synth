@@ -257,7 +257,7 @@ interface BusEvent { type: EventType; sessionId: string; data: Record<string, un
 
 | Событие | Когда | Поля `data` |
 |---|---|---|
-| `user_question.asked` | агент задал вопрос и ждёт ответа | `question_id`, `session_id`, `questions[]`, `turn_id?`, `tool_call_id?`, `agent_role?` |
+| `user_question.asked` | агент задал вопрос и ждёт ответа | `question_id`, `session_id`, `questions[]`, `created_at`, `expires_at?` (только при заданном сроке — по нему UI рисует обратный отсчёт), `turn_id?`, `tool_call_id?`, `agent_role?` |
 | `user_question.answered` | пользователь ответил | `question_id`, `session_id`, `answers[][]` |
 | `user_question.cancelled` | вопрос отменён (таймаут, «Стоп», ручная отмена) | `question_id`, `session_id`, `reason` |
 | `process.started` | запущена фоновая шелл-команда (`kind:'process'`) | `process_id`, `session_id`, `command`, `cwd`, `pid?`, `background_run_id`, `log_path` |

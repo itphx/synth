@@ -46,12 +46,19 @@
    (`multiple: false`) допустимо ровно одно значение; ответ должен покрывать все заданные вопросы.
 5. **События — `user_question.asked | answered | cancelled` в канале сессии.** Префикс `user_question.*`
    выбран намеренно: `question.asked` уже занят смыслом «очередь зависла». Новых транспортных каналов
-   не заводим (ADR-024).
+   не заводим (ADR-024). В `user_question.asked` едет `created_at` и — только при заданном сроке —
+   `expires_at` (ISO-8601): по нему UI рисует обратный отсчёт срока ожидания, не запрашивая запись
+   отдельно.
 6. **Вопрос и ответ видны в истории и в журнале.** В истории сессии вопрос — обычный вызов инструмента
    (`tool_use` + `tool_result`), ответ — в содержимом `tool_result`; в записи порта — состав вопроса,
    ответы, кто ответил (`answeredBy`), время. UI: док вопроса **над композером** (`QuestionDock`) —
    варианты, «свой ответ», «Ответить»/«Отменить»; после перезагрузки док восстанавливается по
    `GET /sessions/:id/questions?status=pending`, live-обновление — по событиям `user_question.*`.
+   Док **сворачивается** (в свёрнутом виде — вопрос, бейдж «отвечено N/M» и кнопка «Развернуть»;
+   важно на телефоне), вопросы переключаются **точками-сегментами**, а перед отправкой показывается
+   **шаг проверки** «вопрос → ответ» с «Изменить» (наше расширение: в opencode/openchamber отправка
+   идёт прямо с последнего вопроса). Если у вопроса есть срок — в шапке дока идёт обратный отсчёт
+   (`мм:сс`/`ч:мм:сс`, по истечении `00:00`; вопрос снимает сервер).
 
 ## Последствия и границы
 
@@ -83,14 +90,18 @@
 | События | `user_question.asked/answered/cancelled` в канале сессии (`shared/types/bus-events.ts`) |
 | Точки сборки | `server/app/deps.ts`, `backend/app/deps.ts` (`questionService`, `recoverOnStart` при старте) |
 | Конфиг | `shared/config/{types,defaults}.ts` — секция `questions` (`timeoutMs` — `0`, без таймаута по умолчанию; `retentionDays` — 14) |
-| UI | `packages/ui/src/components/chat/QuestionDock.tsx` (док над композером), `packages/ui/src/stores/questionStore.ts`, диспетчер — `packages/ui/src/stores/transportStore.ts` |
-| Тесты | `engine/question/service.test.ts`, `engine/tools/question.test.ts`, `packages/ui/src/components/chat/QuestionDock.test.tsx`, `packages/ui/src/stores/transportStore.questions.test.ts` |
+| UI | `packages/ui/src/components/chat/QuestionDock.tsx` (док над композером: сворачивание, точки-сегменты, шаг проверки «вопрос → ответ», обратный отсчёт по `expiresAt`; формат — `lib/formatDuration.ts`), `packages/ui/src/stores/questionStore.ts`, диспетчер — `packages/ui/src/stores/transportStore.ts` (тост `notify.question.asked`, только если сессия не активна; непрочитанное — бейдж в дереве) |
+| Тесты | `engine/question/service.test.ts`, `engine/tools/question.test.ts`, `packages/ui/src/components/chat/QuestionDock.test.tsx`, `packages/ui/src/stores/transportStore.questions.test.ts`, `packages/ui/src/lib/formatDuration.test.ts` |
 
 ## Открытые вопросы
 
 - Нужен ли вопрос без ожидания («просто уведомить, продолжить сам») — сейчас любой вопрос блокирует ход.
 - Не введено: выбор ответа из истории сессии (переиспользование прошлых ответов) и несколько
   одновременных вопросов в разных сессиях пользователя (док показывает первый `pending`).
+- **Адресные вопросы конкретному пользователю — отложено** (обсуждалось, не реализуем сейчас). Эскиз:
+  `target` (`user`/роль) в `QuestionRecord`, проверка адресата в `QuestionService.answer` (не вместо
+  граничного guard'а), `cancel` — любому участнику, тост/бейдж — только адресату, `ADMIN`/`LEAD` —
+  override с аудитом; этап 1 — `target.userId`, этап 2 — роли/authority и эскалация.
 
 ## Связи
 
@@ -107,3 +118,7 @@
 - 2026-10-26 — уточнение: по умолчанию **таймаута нет** (`questions.timeoutMs = 0`, вопрос ждёт
   ответа бесконечно); срок ожидания задаёт сам тул `question` (`timeout`, ≥ 5 минут — не
   рекомендуется, ожидание обрывается).
+- 2026-10-26 — UX и срок: `user_question.asked` несёт `created_at`/`expires_at` (по сроку док рисует
+  обратный отсчёт); док сворачивается, вопросы переключаются точками-сегментами, перед отправкой —
+  шаг проверки «вопрос → ответ»; тост `notify.question.asked` для неактивной сессии и непрочитанное
+  в дереве. Адресные вопросы отложены (эскиз — в «Открытых вопросах»).

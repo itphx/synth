@@ -1191,7 +1191,13 @@ graceful shutdown и завершается с кодом **75** (`EX_TEMPFAIL`)
    HTTP-запросы и WS/SSE-подписки на этом процессе; очередь сообщений и состояние сессий **сохраняются**
    (они в хранилище), но незавершённый ход будет прерван и его нужно повторить. Восстановление,
    запланированное через `POST /maintenance/restore`, применится на этом же старте (до миграций);
-   pending-миграции схемы — тоже (со страховочной копией).
+   pending-миграции схемы — тоже (со страховочной копией). **Фоновая работа не возобновляется**
+   ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
+   [ADR-113](./arch_decisions/adr-113-background-processes.md)): записи реестра `running` при старте
+   переводятся в `orphaned` («interrupted by restart»), незавершённые вопросы — в `cancelled`
+   с причиной `interrupted` ([ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md));
+   у удалённых процессов реестр исполнителя живёт в памяти, поэтому перезапуск исполнителя их тоже теряет.
+   Терминальные записи и логи в `BlobStore` остаются — их видно во вкладке «Процессы».
 2. **Режим.** `GET /api/v2/maintenance/restart` → `{supported, mode, reason?, startedAt, version}`.
    Режим задаётся `SYNTH_RESTART_MODE` (CLI `synth serve --restart-mode` приоритетнее env):
    `disabled` (default — `supported:false`, `POST` → 409 `RESTART_UNSUPPORTED`), `process`

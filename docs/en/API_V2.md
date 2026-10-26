@@ -259,7 +259,7 @@ channels are introduced (ADR-024).
 
 | Event | When | `data` fields |
 |---|---|---|
-| `user_question.asked` | the agent asked a question and waits for an answer | `question_id`, `session_id`, `questions[]`, `turn_id?`, `tool_call_id?`, `agent_role?` |
+| `user_question.asked` | the agent asked a question and waits for an answer | `question_id`, `session_id`, `questions[]`, `created_at`, `expires_at?` (only when a deadline is set — the UI renders the countdown from it), `turn_id?`, `tool_call_id?`, `agent_role?` |
 | `user_question.answered` | the user answered | `question_id`, `session_id`, `answers[][]` |
 | `user_question.cancelled` | the question was cancelled (timeout, "Stop", a manual cancel) | `question_id`, `session_id`, `reason` |
 | `process.started` | a background shell command was started (`kind:'process'`) | `process_id`, `session_id`, `command`, `cwd`, `pid?`, `background_run_id`, `log_path` |
