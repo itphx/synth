@@ -286,7 +286,11 @@ interface ExecutionPort {
 | Метод | Путь | Назначение |
 |---|---|---|
 | `POST` | `/exec` | тело: `{ command: ExecCommand, cwd?, env?, timeoutMs?, maxOutputBytes? }` → `200 { stdout, stderr, exitCode, truncated, durationMs }`; при неудаче — код ошибки с телом `{ error: { reason, code, message, stdout, stderr, killed, signal, truncated, durationMs } }` (зеркалит `ExecutionError`) |
-| `GET` | `/capabilities` | `{ protocol: 2, toolchain: {git?, rg?, sh?, python3?}, os, arch, node }` — рукопожатие версии протокола и состава toolchain'а |
+| `POST` | `/exec/spawn` | тело: `{ command: ExecCommand, cwd?, env?, timeoutMs?, requires? }` → `201 { processId, pid }`; фоновый процесс (ADR-077, шаг 7c; PROP-097): `400` — невалидное тело или `cwd` вне workspace, `429` — превышен лимит живых фоновых процессов |
+| `GET` | `/exec/:processId` | `200 { processId, status, exitCode, signal, pid?, command, cwd, startedAt, finishedAt?, durationMs?, stdoutBytes, stderrBytes, truncated }` — состояние фонового процесса; `404` — процесс не найден |
+| `GET` | `/exec/:processId/logs` | `200 { processId, status, exitCode, signal, stdout: { content, offset, nextOffset }, stderr: { … }, totalBytes, truncated }`; query `stdoutOffset`/`stderrOffset`/`limit` (отрезок ≤ 256 КиБ, по умолчанию 64 КиБ); `404` — процесс не найден |
+| `POST` | `/exec/:processId/stop` | `200 { status: 'stopping' }` — остановка фонового процесса (`SIGTERM`, через 5 с — `SIGKILL`; идемпотентно); `404` — процесс не найден |
+| `GET` | `/capabilities` | `{ protocol: 3, toolchain: {git?, rg?, sh?, python3?}, os, arch, node, features: { background } }` — рукопожатие версии протокола и состава toolchain'а |
 | `GET` | `/mcp/servers` | `[{ name, status, toolCount, error? }]` — состояние MCP-серверов исполнителя (`idle`/`up`/`down`); значения `env` не отдаются |
 | `GET` | `/mcp/tools` | `[{ server, name, description, inputSchema }]` — инструменты всех **поднятых** MCP-серверов |
 | `POST` | `/mcp/call` | тело: `{ server, tool, arguments? }` → `200 { content, isError }`; неизвестный сервер/инструмент → `404`, ошибка MCP → `500` с текстом ошибки (без секретов) |
@@ -425,12 +429,14 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   `packages/core/src/engine/tools/git.ts`, `packages/core/src/engine/tools/path-utils.ts`);
   выход за пределы → ошибка. Это **доверительная граница**, а не косметика: без неё
   удалённый порт превращается в выполнение команд в произвольном каталоге.
-- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 2`) и
+- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 3`) и
   состав toolchain'а (`git`/`rg`/`sh`/`python3`), ОС и архитектуру. Это источник правды для
   детекта внешних зависимостей в split-режиме (ADR-078): backend не должен считать
   `git`/`rg`/`sh` доступными там, где их нет. Версия протокола — **контракт совместимости**:
-  исполнитель версии 1 не знает MCP-эндпоинтов, поэтому control plane и пул
-  исполнителей обязаны обновляться вместе (ADR-077, операционные следствия шага A).
+  исполнитель версии 1 не знает MCP-эндпоинтов, версии 2 — фоновых процессов, поэтому control
+  plane и пул исполнителей обязаны обновляться вместе (ADR-077, операционные следствия шага A).
+  Поле `features` — **аддитивное**: `background: true` означает, что исполнитель умеет
+  `/exec/spawn` (фоновые процессы, ADR-077 шаг 7c).
 - **Egress-политика.** Обращения backend'а к исполнителю проходят через политику встроенных
   инструментов (`egress.tools`, `packages/shared/src/config/types.ts`) — адрес исполнителя должен
   быть разрешён; `POST /api/v2/settings/egress/check` (ADR-099) — offline-проверка без запроса.

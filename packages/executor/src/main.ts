@@ -14,8 +14,9 @@
  *    окружение дочерних процессов и в текст команды, который видит модель;
  * 3. поднимается HTTP-сервер (`startExecutorServer`), в лог уходят адрес и
  *    порт (токен — никогда);
- * 4. graceful shutdown по `SIGINT`/`SIGTERM`: сервер закрывается, процесс
- *    завершается с кодом `0`.
+ * 4. graceful shutdown по `SIGINT`/`SIGTERM`: сервер закрывается, фоновые
+ *    процессы останавливаются (`SIGTERM` → `SIGKILL`), процесс завершается
+ *    с кодом `0`.
  *
  * Запуск: `node dist/main.js` (в образе — `/app/dist/main.js`).
  */
@@ -53,6 +54,9 @@ export async function main(): Promise<void> {
     maxConcurrency: config.maxConcurrency,
     maxTimeoutMs: config.maxTimeoutMs,
     maxOutputBytes: config.maxOutputBytes,
+    maxBackgroundProcesses: config.backgroundMax,
+    backgroundLogMaxBytes: config.backgroundLogMaxBytes,
+    ...(config.backgroundLogDir ? { backgroundLogDir: config.backgroundLogDir } : {}),
     mcpServers: config.mcpServers,
     host: config.host,
     port: config.port,
@@ -62,6 +66,7 @@ export async function main(): Promise<void> {
     `[executor] исполнитель слушает ${handle.host}:${handle.port} ` +
       `(workspace: ${config.workspaceRoot}; лимит команд: ${config.maxConcurrency}; ` +
       `потолок таймаута: ${config.maxTimeoutMs} мс; потолок вывода: ${config.maxOutputBytes} байт; ` +
+      `лимит фоновых процессов: ${config.backgroundMax}; ` +
       `MCP-серверов: ${config.mcpServers.length})`,
   );
 
