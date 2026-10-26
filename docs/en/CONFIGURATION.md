@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*`; перевод отстаёт); RU-версия обновлена 2026-10-25 (секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секции про плагины `plugins.*`): ADR-102, секция `analytics`.
+> ⚠️ RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -85,7 +85,8 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 
 ### Env overrides of nested sections (ADR-023)
 
-Scalar keys of the `events`, `scheduler`, `webhooks`, `decision`, `authority` sections can be set
+Scalar keys of the `events`, `scheduler`, `webhooks`, `decision`, `questions`, `background`,
+`authority` sections can be set
 with environment variables — handy for k8s (ConfigMap → pod env). The variable name is
 built by the rule **`SYNTH_<SECTION>_<KEY>`**, where the camelCase key is converted to
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -142,6 +143,14 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_DECISION_CONFIDENCE_THRESHOLD` | number | `decision.confidenceThreshold` |
 | `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
+| `SYNTH_QUESTIONS_TIMEOUT_MS` | number | `questions.timeoutMs` (stage 1 of roadmap 0.13 — block 3) |
+| `SYNTH_QUESTIONS_RETENTION_DAYS` | number | `questions.retentionDays` (stage 1 of roadmap 0.13 — block 3) |
+| `SYNTH_BACKGROUND_ENABLED` | boolean | `background.enabled` (stage 1 of roadmap 0.13 — block 4) |
+| `SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION` | number | `background.maxSubagentsPerSession` (stage 1 of roadmap 0.13 — block 4) |
+| `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION` | number | `background.maxProcessesPerSession` (stage 1 of roadmap 0.13 — block 4) |
+| `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | number | `background.maxRunsPerSession` (stage 1 of roadmap 0.13 — block 4) |
+| `SYNTH_BACKGROUND_LOG_MAX_BYTES` | number | `background.logMaxBytes` (stage 1 of roadmap 0.13 — block 4) |
+| `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (stage 1 of roadmap 0.13 — block 4) |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON array | `security.bootstrapServiceKeys` (an object env override, ADR-052/O1; see below) |
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; master switch of the authority layer) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — observation, `false` — enforcement) |
@@ -1441,6 +1450,84 @@ plugins:
 
   A model change **marks the built indexes as `stale`** (the fingerprint holds the actual
   `provider/model`): they have to be rebuilt (`synth memory rebuild <indexId>`).
+
+### User questions (`questions.*`, stage 1 of roadmap 0.13 — block 3)
+
+The section sets the behaviour of the "ask the user" subsystem (the `question` tool): the
+agent asks a question with answer options and the turn **waits** for the user's answer.
+The answer comes by the question `id` (`POST /api/v2/sessions/:id/questions/:qid/answer`).
+
+| Field | Purpose | Default |
+|------|-----------|--------------|
+| `questions.timeoutMs` | The wait for an answer, ms. `0` — **no timeout**: the question waits until it is answered or cancelled (the end of the turn, "Stop", a manual cancel). When the time expires, the question is cancelled with the reason `timeout`. Env — `SYNTH_QUESTIONS_TIMEOUT_MS` | `600000` (10 minutes) |
+| `questions.retentionDays` | The retention of the terminal question records (`answered`/`cancelled`), days; `<= 0` — no limit. Env — `SYNTH_QUESTIONS_RETENTION_DAYS` | `14` |
+
+```yaml
+questions:
+  timeoutMs: 600000
+  retentionDays: 14
+```
+
+- **Storage** — the `QuestionRepository` domain port (ADR-096): the file backend —
+  `{dataDir}/questions.json` (ADR-005, an atomic write), PostgreSQL — the `questions`
+  table (the 021 migration of the driver).
+- **The wait for an answer — in the process memory.** Therefore at start all the open
+  questions are cancelled with the reason `interrupted` (the wait did not survive the
+  restart) — otherwise the question would "hang" forever.
+- **Timers** — `unref` (they do not hold the process); the retention cleanup starts
+  immediately at start and then every 6 hours, the errors are logged and do not crash the
+  process.
+- **Events** — `user_question.asked` / `user_question.answered` /
+  `user_question.cancelled` in the session channel (ADR-009/ADR-024, no new channels).
+
+### Background runs (`background.*`, stage 1 of roadmap 0.13 — block 4)
+
+The section sets the behaviour of the single registry of the background work: background
+**subagents** (`task({background: true})`, PROP-096/ADR-111) and background **shell
+processes** (`execute_shell({background: true})`, PROP-097) live in **one** registry —
+there is no second storage. The limits are counted per the owner session (for a subagent —
+the parent session).
+
+| Field | Purpose | Default |
+|------|-----------|--------------|
+| `background.enabled` | The master switch of the background work. `false` — both `task({background: true})` and `execute_shell({background: true})` respond with an error (`task.background_disabled` / `process.background_disabled`; the turn does not fail), while the foreground work and the registry keep working. Env — `SYNTH_BACKGROUND_ENABLED` | `true` |
+| `background.maxSubagentsPerSession` | The maximum of the background subagents running at the same time per the owner session; exceeding it → `background_limit_exceeded` (a tool error, the turn does not fail). Env — `SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION` | `2` |
+| `background.maxProcessesPerSession` | The maximum of the background shell processes running at the same time per the owner session; exceeding it → `background_limit_exceeded`. Env — `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION` | `5` |
+| `background.maxRunsPerSession` | The maximum of the registry records per the owner session (all the records are counted, they are cleaned by the retention). Env — `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | `10` |
+| `background.logMaxBytes` | The limit of the size of a background process log, bytes; `0` — no limit. Do not confuse it with the ceiling of the log output per HTTP request (256 KiB) — these are different values. Env — `SYNTH_BACKGROUND_LOG_MAX_BYTES` | `10485760` (10 MiB) |
+| `background.retentionDays` | The retention of the terminal registry records (`completed`/`failed`/`cancelled`/`orphaned`), days; `<= 0` — no limit. Env — `SYNTH_BACKGROUND_RETENTION_DAYS` | `7` |
+
+```yaml
+background:
+  enabled: true
+  maxSubagentsPerSession: 2
+  maxProcessesPerSession: 5
+  maxRunsPerSession: 10
+  logMaxBytes: 10485760
+  retentionDays: 7
+```
+
+- **Registry storage** — the `BackgroundRunRepository` domain port (ADR-096): the file
+  backend — `{dataDir}/processes/registry.json` (ADR-005, an atomic write), PostgreSQL —
+  the `background_runs` table (the `021_background_runs` migration of the driver). The logs
+  of the background processes — a blob store (`BlobStore`), the path `processes/<id>.log`.
+- **A restart does not resume the background runs.** The "live" cancel handles live in the
+  process memory, therefore at start all the `running` records are turned into `orphaned`
+  with the note "interrupted by restart": the record stays in the registry (it honestly
+  shows the incompleteness), but the run itself is gone.
+- **Timers** — `unref` (they do not hold the process); the retention cleanup starts
+  immediately at start and then every 6 hours, the errors are logged and do not crash the
+  process. Only the **terminal** records are cleaned.
+- **The nesting depth — 1**: a subagent cannot spawn a background subagent.
+- **Background processes in the `remote` mode** — the background spawn is delegated to the
+  executor's **protocol v3** (`POST /exec/spawn`, the handshake flag `features.background`);
+  an executor that does not support the background mode (an old pool, protocol < 3) →
+  `background_unsupported` (`process.background_unsupported`). For background subagents the
+  restriction does not apply.
+- **Events** — `process.started` / `process.stopped` / `process.exited` /
+  `child.completed` / `child.failed` / `child.cancelled` in the owner session channel
+  (ADR-009/ADR-024, no new channels). `process.stopped` — a stop request (once per run);
+  the terminal status arrives later — with `process.exited`.
 
 ### Observability (`metrics.*`, ADR-094)
 
