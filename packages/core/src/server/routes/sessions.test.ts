@@ -1,15 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
 import { SessionManager, EventBus, FileStore, FileProfileStore, DEFAULT_AGENT_ID } from '../../index.js';
 import { ProjectStore } from '../../storage/project-store.js';
+import { WorktreeService } from '../../engine/worktree/service.js';
+import { MemoryWorktreeRepository } from '../../storage/memory/worktrees.js';
 import type { AuthKit } from '../../auth/local.js';
 import { MessageRole, generateId, makeTextPart, nowISO, ProjectRole } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
+
+const execFileAsync = promisify(execFile);
 
 function createMockAuth(): AuthKit {
   return {
@@ -978,5 +984,269 @@ describe('POST /api/v2/sessions/:id/abort — персистентный фла�
     const s = await sessionManager.getSession(session.id);
     expect(s!.status.cancelRequested).toBeUndefined();
     expect(s!.status.cancelRequestedAt).toBeUndefined();
+  });
+});
+
+/**
+ * ADR-114 §3/§6: привязка сессии к worktree —
+ * `PATCH /api/v2/sessions/:id { worktreeId }`.
+ *
+ * Привязка принадлежит **проекту** сессии: запись чужого проекта выглядит
+ * как отсутствующая (404), а сессия без проекта — 400. Привязка/отвязка
+ * публикует `worktree.updated` в каналы сессий проекта (ADR-024).
+ */
+describe('PATCH /api/v2/sessions/:id — привязка к worktree (ADR-114)', () => {
+  let tmpDir: string;
+  let workspacesRoot: string;
+  let projectDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-worktree-'));
+    workspacesRoot = join(tmpDir, 'workspaces');
+    projectDir = join(workspacesRoot, 'projects', 'prj-1');
+    await mkdir(projectDir, { recursive: true });
+    await execFileAsync('git', ['init', '--initial-branch', 'main'], { cwd: projectDir });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: projectDir });
+    await execFileAsync('git', ['config', 'user.name', 'Тест'], { cwd: projectDir });
+    await writeFile(join(projectDir, 'README.md'), 'hello\n');
+    await execFileAsync('git', ['add', '--', 'README.md'], { cwd: projectDir });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: projectDir });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Приложение с сервисом worktree'ов (memory-порт + временный репозиторий). */
+  function makeApp() {
+    const app = new Hono();
+    const fileStore = new FileStore({ dataDir: tmpDir });
+    const sessionManager = new SessionManager(fileStore);
+    const projectStore = new ProjectStore({ dataDir: tmpDir });
+    const eventBus = new EventBus();
+    const orchestrator = createMockOrchestrator();
+    const queueManager = createMockQueueManager();
+    const worktreeService = new WorktreeService({
+      repository: new MemoryWorktreeRepository(),
+      workspacesRoot,
+      defaultWorkingDir: projectDir,
+    });
+
+    const routes = createSessionRoutes(
+      createMockAuth(),
+      {
+        sessionManager,
+        eventBus,
+        queueManager: queueManager as any,
+        processMessage: orchestrator.createProcessMessage(),
+        orchestrator: orchestrator as any,
+        projectStore,
+        worktreeService,
+      },
+    );
+    app.route('/api/v2/sessions', routes);
+    return { app, sessionManager, projectStore, eventBus, worktreeService };
+  }
+
+  it('привязка: worktreeId → 200, session.worktree заполнен, событие worktree.updated', async () => {    const world = makeApp();
+    const project = world.projectStore.create('P', 'u1', { workspace: projectDir });
+    await world.projectStore.save(project);
+    const created = await world.worktreeService.create(project.id, project, { branch: 'feature/x', name: 'wt' });
+    const session = await world.sessionManager.createSession({
+      title: 'S', userId: 'local', projectId: project.id,
+    });
+
+    const events: Array<{ type: string; data: unknown }> = [];
+    world.eventBus.subscribe(session.id, (e) => events.push({ type: e.type, data: e.data }));
+
+    const res = await world.app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worktreeId: created.worktree.id }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { worktree: Record<string, unknown> | null };
+    expect(body.worktree).toMatchObject({
+      worktree_id: created.worktree.id,
+      project_id: project.id,
+      directory: created.worktree.directory,
+      branch: 'feature/x',
+    });
+
+    // Привязка сохранена в хранилище.
+    const persisted = await world.sessionManager.getSession(session.id);
+    expect(persisted?.worktree?.worktreeId).toBe(created.worktree.id);
+
+    // Событие `worktree.updated` опубликовано в канал сессии проекта.
+    const updated = events.find((e) => e.type === 'worktree.updated');
+    expect(updated).toBeTruthy();
+    expect((updated!.data as { project_id?: string }).project_id).toBe(project.id);
+  });
+
+  it('отвязка: worktreeId=null → привязка снята', async () => {
+    const world = makeApp();
+    const project = world.projectStore.create('P', 'u1', { workspace: projectDir });
+    await world.projectStore.save(project);
+    const created = await world.worktreeService.create(project.id, project, { branch: 'feature/x', name: 'wt' });
+    const session = await world.sessionManager.createSession({
+      title: 'S', userId: 'local', projectId: project.id,
+    });
+
+    await world.app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worktreeId: created.worktree.id }),
+    });
+
+    const res = await world.app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worktreeId: null }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { worktree: unknown };
+    expect(body.worktree).toBeNull();
+    const persisted = await world.sessionManager.getSession(session.id);
+    expect(persisted?.worktree).toBeUndefined();
+  });
+
+  it('worktree чужого проекта → 404, привязка не изменилась', async () => {
+    const world = makeApp();
+    const project = world.projectStore.create('P', 'u1', { workspace: projectDir });
+    const other = world.projectStore.create('Other', 'u1', { workspace: projectDir });
+    await world.projectStore.save(project);
+    await world.projectStore.save(other);
+    const foreign = await world.worktreeService.create(other.id, other, { branch: 'feature/foreign', name: 'foreign' });
+    const session = await world.sessionManager.createSession({
+      title: 'S', userId: 'local', projectId: project.id,
+    });
+
+    const res = await world.app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worktreeId: foreign.worktree.id }),
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('WORKTREE_NOT_FOUND');
+    const persisted = await world.sessionManager.getSession(session.id);
+    expect(persisted?.worktree).toBeUndefined();
+  });
+
+  it('неизвестный worktreeId → 404 WORKTREE_NOT_FOUND', async () => {
+    const world = makeApp();
+    const project = world.projectStore.create('P', 'u1', { workspace: projectDir });
+    await world.projectStore.save(project);
+    const session = await world.sessionManager.createSession({
+      title: 'S', userId: 'local', projectId: project.id,
+    });
+
+    const res = await world.app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worktreeId: 'wkt-none' }),
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('WORKTREE_NOT_FOUND');
+  });
+
+  it('сессия без проекта → 400', async () => {
+    const world = makeApp();
+    const project = world.projectStore.create('P', 'u1', { workspace: projectDir });
+    await world.projectStore.save(project);
+    const created = await world.worktreeService.create(project.id, project, { branch: 'feature/x', name: 'wt' });
+    const session = await world.sessionManager.createSession({ title: 'S', userId: 'local' });
+
+    const res = await world.app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worktreeId: created.worktree.id }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('worktreeId не-строка → 400', async () => {
+    const world = makeApp();
+    const project = world.projectStore.create('P', 'u1', { workspace: projectDir });
+    await world.projectStore.save(project);
+    const session = await world.sessionManager.createSession({
+      title: 'S', userId: 'local', projectId: project.id,
+    });
+
+    const res = await world.app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worktreeId: 42 }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('GET /:id отдаёт worktree в ответе (привязанная и не привязанная сессия)', async () => {
+    const world = makeApp();
+    const project = world.projectStore.create('P', 'u1', { workspace: projectDir });
+    await world.projectStore.save(project);
+    const created = await world.worktreeService.create(project.id, project, { branch: 'feature/x', name: 'wt' });
+    const session = await world.sessionManager.createSession({
+      title: 'S', userId: 'local', projectId: project.id,
+    });
+
+    const before = await world.app.request(`/api/v2/sessions/${session.id}`);
+    expect(before.status).toBe(200);
+    expect(((await before.json()) as { worktree: unknown }).worktree).toBeNull();
+
+    await world.app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worktreeId: created.worktree.id }),
+    });
+
+    const after = await world.app.request(`/api/v2/sessions/${session.id}`);
+    expect(after.status).toBe(200);
+    const body = await after.json() as { worktree: Record<string, unknown> | null };
+    expect(body.worktree).toMatchObject({
+      worktree_id: created.worktree.id,
+      project_id: project.id,
+      branch: 'feature/x',
+    });
+  });
+
+  it('сервис worktree не подключён → worktreeId игнорируется (привязки нет)', async () => {
+    const app = new Hono();
+    const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    const orchestrator = createMockOrchestrator();
+    const routes = createSessionRoutes(
+      createMockAuth(),
+      {
+        sessionManager,
+        eventBus: new EventBus(),
+        queueManager: createMockQueueManager() as any,
+        processMessage: orchestrator.createProcessMessage(),
+        orchestrator: orchestrator as any,
+      },
+    );
+    app.route('/api/v2/sessions', routes);
+
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    const res = await app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worktreeId: 'wkt-none' }),
+    });
+
+    // Сервиса нет — привязка недоступна: 400, сессия не тронута.
+    expect(res.status).toBe(400);
+    const persisted = await sessionManager.getSession(session.id);
+    expect(persisted?.worktree).toBeUndefined();
   });
 });
