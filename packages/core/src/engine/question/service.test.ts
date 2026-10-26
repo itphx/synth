@@ -341,6 +341,42 @@ describe('QuestionService — таймаут и отмена хода', () => {
     await service.cancel(records[0]!.id, 'test');
     await pending;
   });
+
+  it('timeoutMs=0 — таймер не ставится, expiresAt не пишется', async () => {
+    const { repository, service } = createService({ timeoutMs: 0 });
+    const pending = service.ask({ sessionId: 's1', questions: QUESTIONS });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const record = (await repository.list())[0]!;
+    expect(record.status).toBe('pending');
+    expect(record.expiresAt).toBeUndefined();
+
+    const records = await service.listPending('s1');
+    await service.cancel(records[0]!.id, 'test');
+    await pending;
+  });
+
+  it('явный timeoutMs вопроса пишет expiresAt и по истечении отменяет с причиной timeout', async () => {
+    const { repository, service } = createService({ timeoutMs: 0 });
+    const pending = service.ask({
+      sessionId: 's1',
+      questions: QUESTIONS,
+      timeoutMs: 1_000,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const record = (await repository.list())[0]!;
+    expect(record.expiresAt).toBeTruthy();
+
+    await vi.advanceTimersByTimeAsync(1_500);
+    const outcome = await pending;
+    expect(outcome.status).toBe('cancelled');
+    if (outcome.status === 'cancelled') expect(outcome.reason).toBe('timeout');
+
+    const cancelled = (await repository.list())[0]!;
+    expect(cancelled.status).toBe('cancelled');
+    expect(cancelled.cancelReason).toBe('timeout');
+  });
 });
 
 describe('QuestionService — dispose', () => {

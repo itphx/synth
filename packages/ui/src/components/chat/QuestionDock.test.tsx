@@ -264,7 +264,7 @@ describe('QuestionDock (док вопросов агента над вводом
     expect(useQuestionStore.getState().bySession[SESSION_ID]).toBeUndefined()
   })
 
-  it('несколько вопросов: навигация «Далее»/«Назад» и прогресс «1 из 2»', async () => {
+  it('несколько вопросов: навигация «Далее»/«Назад» и точки-сегменты', async () => {
     setupQuestions([
       makeRecord({
         questions: [
@@ -283,7 +283,11 @@ describe('QuestionDock (док вопросов агента над вводом
     ])
     const container = await renderDock()
 
-    expect(container.textContent).toContain('1 из 2')
+    // Прогресс — точками, текст остаётся в aria-подписи группы.
+    const dots = container.querySelector('[data-question-dots]') as HTMLElement
+    expect(dots).toBeTruthy()
+    expect(dots.getAttribute('aria-label')).toBe('1 из 2')
+    expect(container.querySelectorAll('[data-question-dot]')).toHaveLength(2)
     expect(container.textContent).toContain('Первый вопрос?')
 
     const next = findButton(container, 'Далее')
@@ -292,17 +296,19 @@ describe('QuestionDock (док вопросов агента над вводом
       next!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
-    expect(container.textContent).toContain('2 из 2')
     expect(container.textContent).toContain('Второй вопрос?')
+    expect(
+      (container.querySelector('[data-question-dots]') as HTMLElement).getAttribute('aria-label'),
+    ).toBe('2 из 2')
 
     const prev = findButton(container, 'Назад')
     await act(async () => {
       prev!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
-    expect(container.textContent).toContain('1 из 2')
+    expect(container.textContent).toContain('Первый вопрос?')
   })
 
-  it('ответ на каждый вопрос обязателен: без ответа на второй submit заблокирован', async () => {
+  it('точки-сегменты: клик переключает вопрос, активная помечена aria-current', async () => {
     setupQuestions([
       makeRecord({
         questions: [
@@ -313,12 +319,256 @@ describe('QuestionDock (док вопросов агента над вводом
     ])
     const container = await renderDock()
 
-    const radios = container.querySelectorAll('input[type="radio"]')
+    const dotButtons = () =>
+      Array.from(container.querySelectorAll('[data-question-dot]')) as HTMLButtonElement[]
+
+    expect(dotButtons()[0]!.getAttribute('aria-current')).toBe('step')
+    expect(dotButtons()[1]!.getAttribute('aria-current')).toBeNull()
+    expect(dotButtons()[0]!.getAttribute('aria-label')).toBe('Вопрос 1')
+    expect(dotButtons()[1]!.getAttribute('aria-label')).toBe('Вопрос 2')
+
     await act(async () => {
-      ;(radios[0] as HTMLInputElement).click()
+      dotButtons()[1]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
-    expect(findButton(container, 'Ответить')!.disabled).toBe(true)
+    expect(container.textContent).toContain('Второй?')
+    expect(dotButtons()[0]!.getAttribute('aria-current')).toBeNull()
+    expect(dotButtons()[1]!.getAttribute('aria-current')).toBe('step')
+  })
+
+  it('сворачивание: варианты скрыты, подпись и бейдж видны, разворачивание возвращает', async () => {
+    setupQuestions()
+    const container = await renderDock()
+
+    const toggle = container.querySelector('[data-question-collapse]') as HTMLButtonElement
+    expect(toggle).toBeTruthy()
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    // Тело дока скрыто: варианты, ввод и навигация недоступны.
+    const body = container.querySelector('[data-question-body]') as HTMLElement
+    expect(body.hidden).toBe(true)
+    expect(body.getAttribute('aria-hidden')).toBe('true')
+    expect(body.hasAttribute('inert')).toBe(true)
+    const radio = body.querySelector('input[type="radio"]') as HTMLInputElement
+    expect(radio).toBeTruthy()
+    expect(radio.closest('[hidden]')).not.toBeNull()
+
+    // Подпись шапки и бейдж отвеченных.
+    expect(container.textContent).toContain('Вопрос 1 из 1')
+    expect(container.textContent).toContain('отвечено 0/1')
+    expect(container.querySelector('[data-question-collapsed]')).not.toBeNull()
+
+    // Кнопка «Развернуть» возвращает шаг.
+    const expand = findButton(container, 'Развернуть')
+    expect(expand).toBeDefined()
+    await act(async () => {
+      expand!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    const restored = container.querySelector('[data-question-body]') as HTMLElement
+    expect(restored.hidden).toBe(false)
+    expect(restored.hasAttribute('inert')).toBe(false)
+    expect(container.querySelector('[data-question-collapsed]')).toBeNull()
+  })
+
+  it('сворачивание сохраняется при переключении вопросов и сбрасывается на новом вопросе', async () => {
+    setupQuestions([
+      makeRecord({
+        questions: [
+          { question: 'Первый?', header: 'Первый', options: [{ value: 'a', label: 'A' }] },
+          { question: 'Второй?', header: 'Второй', options: [{ value: 'b', label: 'B' }] },
+        ],
+      }),
+    ])
+    const container = await renderDock()
+
+    const toggle = container.querySelector('[data-question-collapse]') as HTMLButtonElement
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect((container.querySelector('[data-question-body]') as HTMLElement).hidden).toBe(true)
+
+    // Переключение вопроса (по точке) не разворачивает док.
+    await act(async () => {
+      ;(container.querySelectorAll('[data-question-dot]')[1] as HTMLButtonElement).dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      )
+    })
+    expect((container.querySelector('[data-question-body]') as HTMLElement).hidden).toBe(true)
+    expect(container.textContent).toContain('Вопрос 2 из 2')
+
+    // Новый вопрос (другая запись) — док раскрыт заново.
+    await act(async () => {
+      useQuestionStore
+        .getState()
+        .setAll(SESSION_ID, [makeRecord({ id: 'qst_2', questions: [{ question: 'Третий?', header: 'Третий', options: [] }] })])
+    })
+    expect((container.querySelector('[data-question-body]') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('проверка ответов: «Далее» на последнем вопросе открывает review, «Отправить» шлёт ответы', async () => {
+    setupQuestions([
+      makeRecord({
+        questions: [
+          { question: 'Первый?', header: 'Первый', options: [{ value: 'a', label: 'Вариант A' }] },
+          {
+            question: 'Второй?',
+            header: 'Второй',
+            multiple: true,
+            options: [
+              { value: 'b', label: 'Вариант B' },
+              { value: 'c', label: 'Вариант C' },
+            ],
+          },
+        ],
+      }),
+    ])
+    const container = await renderDock()
+
+    // Отвечаем на первый вопрос.
+    await act(async () => {
+      ;(container.querySelectorAll('input[type="radio"]')[0] as HTMLInputElement).click()
+    })
+
+    // «Далее» → второй вопрос, на нём кнопка становится «Проверить».
+    await act(async () => {
+      findButton(container, 'Далее')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const boxes = container.querySelectorAll('input[type="checkbox"]')
+    expect(boxes).toHaveLength(2)
+    await act(async () => {
+      ;(boxes[0] as HTMLInputElement).click()
+      ;(boxes[1] as HTMLInputElement).click()
+    })
+
+    const review = findButton(container, 'Проверить')
+    expect(review).toBeDefined()
+    await act(async () => {
+      review!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    // Экран проверки: видны пары «вопрос → ответ».
+    const reviewBlock = container.querySelector('[data-question-review]') as HTMLElement
+    expect(reviewBlock).toBeTruthy()
+    expect(reviewBlock.textContent).toContain('Первый')
+    expect(reviewBlock.textContent).toContain('Вариант A')
+    expect(reviewBlock.textContent).toContain('Второй')
+    expect(reviewBlock.textContent).toContain('Вариант B, Вариант C')
+
+    // Точки на шаге проверки скрыты.
+    expect(container.querySelector('[data-question-dots]')).toBeNull()
+
+    // «Отправить» — один вызов answer с полным массивом ответов.
+    const submit = findButton(container, 'Отправить')
+    expect(submit).toBeDefined()
+    expect(submit!.disabled).toBe(false)
+    await act(async () => {
+      submit!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(mocks.answer).toHaveBeenCalledTimes(1)
+    expect(mocks.answer).toHaveBeenCalledWith(SESSION_ID, 'qst_1', [['a'], ['b', 'c']])
+  })
+
+  it('проверка ответов: «Изменить» возвращает к нужному вопросу, ответы сохраняются', async () => {
+    setupQuestions([
+      makeRecord({
+        questions: [
+          { question: 'Первый?', header: 'Первый', options: [{ value: 'a', label: 'A' }] },
+          { question: 'Второй?', header: 'Второй', options: [{ value: 'b', label: 'B' }] },
+        ],
+      }),
+    ])
+    const container = await renderDock()
+
+    await act(async () => {
+      ;(container.querySelectorAll('input[type="radio"]')[0] as HTMLInputElement).click()
+    })
+    await act(async () => {
+      findButton(container, 'Далее')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {
+      ;(container.querySelectorAll('input[type="radio"]')[0] as HTMLInputElement).click()
+    })
+    await act(async () => {
+      findButton(container, 'Проверить')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    // «Изменить» у первого вопроса — возврат к первому шагу с сохранённым выбором.
+    const editButtons = Array.from(
+      container.querySelectorAll('[data-question-review] button'),
+    ) as HTMLButtonElement[]
+    expect(editButtons).toHaveLength(2)
+    await act(async () => {
+      editButtons[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(container.textContent).toContain('Первый?')
+    expect(
+      (container.querySelectorAll('input[type="radio"]')[0] as HTMLInputElement).checked,
+    ).toBe(true)
+    expect(container.querySelector('[data-question-review]')).toBeNull()
+  })
+
+  it('проверка ответов: «Отправить» заблокирована, пока не отвечены все вопросы', async () => {
+    setupQuestions([
+      makeRecord({
+        questions: [
+          { question: 'Первый?', header: 'Первый', options: [{ value: 'a', label: 'A' }] },
+          { question: 'Второй?', header: 'Второй', options: [{ value: 'b', label: 'B' }] },
+        ],
+      }),
+    ])
+    const container = await renderDock()
+
+    await act(async () => {
+      ;(container.querySelectorAll('input[type="radio"]')[0] as HTMLInputElement).click()
+    })
+    await act(async () => {
+      findButton(container, 'Далее')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {
+      findButton(container, 'Проверить')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    const submit = findButton(container, 'Отправить')
+    expect(submit).toBeDefined()
+    expect(submit!.disabled).toBe(true)
+    expect(mocks.answer).not.toHaveBeenCalled()
+  })
+
+  it('Ctrl+Enter на шаге проверки отправляет ответы', async () => {
+    setupQuestions([
+      makeRecord({
+        questions: [
+          { question: 'Первый?', header: 'Первый', options: [{ value: 'a', label: 'A' }] },
+          { question: 'Второй?', header: 'Второй', options: [{ value: 'b', label: 'B' }] },
+        ],
+      }),
+    ])
+    const container = await renderDock()
+
+    await act(async () => {
+      ;(container.querySelectorAll('input[type="radio"]')[0] as HTMLInputElement).click()
+    })
+    await act(async () => {
+      findButton(container, 'Далее')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {
+      ;(container.querySelectorAll('input[type="radio"]')[0] as HTMLInputElement).click()
+    })
+    await act(async () => {
+      findButton(container, 'Проверить')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }),
+      )
+    })
+    expect(mocks.answer).toHaveBeenCalledTimes(1)
+    expect(mocks.answer).toHaveBeenCalledWith(SESSION_ID, 'qst_1', [['a'], ['b']])
   })
 
   it('ошибка API → тост, состояние (выбор) сохраняется', async () => {

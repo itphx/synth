@@ -1459,12 +1459,12 @@ The answer comes by the question `id` (`POST /api/v2/sessions/:id/questions/:qid
 
 | Field | Purpose | Default |
 |------|-----------|--------------|
-| `questions.timeoutMs` | The wait for an answer, ms. `0` — **no timeout**: the question waits until it is answered or cancelled (the end of the turn, "Stop", a manual cancel). When the time expires, the question is cancelled with the reason `timeout`. Env — `SYNTH_QUESTIONS_TIMEOUT_MS` | `600000` (10 minutes) |
+| `questions.timeoutMs` | The wait for an answer, ms. `0` — **no timeout** (the default): the question waits until it is answered or cancelled (the end of the turn, "Stop", a manual cancel). The `question` tool may set a deadline for a specific question (`timeout`, ≥ 5 minutes — not recommended: it aborts the wait). When the time expires, the question is cancelled with the reason `timeout`. Env — `SYNTH_QUESTIONS_TIMEOUT_MS` | `0` (no timeout) |
 | `questions.retentionDays` | The retention of the terminal question records (`answered`/`cancelled`), days; `<= 0` — no limit. Env — `SYNTH_QUESTIONS_RETENTION_DAYS` | `14` |
 
 ```yaml
 questions:
-  timeoutMs: 600000
+  timeoutMs: 0
   retentionDays: 14
 ```
 

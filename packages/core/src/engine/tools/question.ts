@@ -4,7 +4,9 @@
  *
  * Агент задаёт один или несколько вопросов с вариантами ответа и **ждёт**
  * ответа: ход стоит, пока пользователь не ответит, не отменит вопрос и не
- * истечёт срок ожидания (`questions.timeoutMs`).
+ * истечёт срок ожидания. По умолчанию срока **нет** (`questions.timeoutMs = 0`
+ * — вопрос ждёт бесконечно); срок может задать сам тул (`timeout`, ≥ 5 минут —
+ * не рекомендуется: ожидание обрывается).
  *
  * Механика — в сервисе `engine/question/service.ts` (владеет записью вопроса,
  * ожиданием и событиями `user_question.*`); тул только переводит исход
@@ -63,6 +65,19 @@ const questionToolSchema = z
       .min(1)
       .max(5)
       .describe('Questions to ask the user (1-5)'),
+    timeout: z
+      .number()
+      .int()
+      .min(300_000)
+      .max(86_400_000)
+      // Описание — до `.optional()`: конвертер `zodToJsonSchema` разворачивает
+      // обёртку `optional` и берёт описание внутреннего типа — иначе модель
+      // не увидит ни единицы измерения, ни минимума.
+      .describe(
+        'Optional answer timeout in milliseconds. By default the question waits indefinitely (no timeout). '
+        + 'Not recommended: it aborts waiting. Minimum 300000 (5 minutes).',
+      )
+      .optional(),
   })
   .strict();
 
@@ -73,7 +88,8 @@ export const questionTool: ToolDefinition = {
     + 'Use it when you need to clarify requirements, choose between options, or get a decision before continuing. '
     + 'Give each question a short header and concrete options; put the recommended option first and mark it with "(Recommended)". '
     + 'A free-text "Type your own answer" option is added automatically - do not add your own free-text option. '
-    + 'Set multiple=true only if several options can be chosen at once.',
+    + 'Set multiple=true only if several options can be chosen at once. '
+    + 'Set "timeout" only if the user explicitly wants the question to expire; it is not recommended.',
   parameters: questionToolSchema,
   capabilities: [ToolCapability.QUESTION],
   async execute(args, ctx) {
@@ -120,6 +136,10 @@ export const questionTool: ToolDefinition = {
       ...(typeof extra?.callId === 'string' ? { toolCallId: extra.callId } : {}),
       ...(ctx.agentRole ? { agentRole: ctx.agentRole } : {}),
       questions,
+      // Срок ожидания ответа: переопределение конфигурации `questions.timeoutMs`
+      // для конкретного вопроса. Не задан — берётся конфиг (по умолчанию — без
+      // таймаута, вопрос ждёт ответа бесконечно).
+      ...(typeof parsed.data.timeout === 'number' ? { timeoutMs: parsed.data.timeout } : {}),
       // Сигнал отмены хода: по нему вопрос снимается с ожидания.
       ...(ctx.abortSignal ? { signal: ctx.abortSignal } : {}),
     });

@@ -1170,6 +1170,8 @@ export const dict = {
   'notify.background.subagentCompleted': 'Background subagent completed: {name}',
   'notify.background.subagentFailed': 'Background subagent failed: {name}',
   'notify.background.subagentCancelled': 'Background subagent stopped: {name}',
+  // ADR-112: notification about a user question (the session is not open).
+  'notify.question.asked': 'Agent is waiting for an answer: {name}',
   'chat.notice.copy': 'Copy',
 
   'chat.message.copied': 'Copied',
@@ -1277,6 +1279,20 @@ export const dict = {
   'question.dock.failed': 'Failed to send the answer',
   'question.dock.cancelled': 'Question cancelled',
   'question.dock.multipleHint': 'You can select multiple options',
+  // Dock collapsing and question navigation (dots instead of "1 of N").
+  'question.dock.collapse': 'Collapse',
+  'question.dock.expand': 'Expand',
+  'question.dock.collapsedTitle': 'Question {current} of {total}',
+  'question.dock.collapsedSummary': 'answered {answered}/{total}',
+  'question.dock.dots.aria': 'Question {n}',
+  // Final review of the answers before sending.
+  'question.dock.review.open': 'Review',
+  'question.dock.review.title': 'Review answers',
+  'question.dock.review.collapsed': 'Review answers · {answered}/{total}',
+  'question.dock.review.edit': 'Edit',
+  'question.dock.review.submit': 'Send',
+  'question.dock.review.back': 'Back',
+  'question.dock.review.unanswered': 'No answer',
 
   'chat.error.rateLimit': 'Rate limit exceeded. Pause {sec}s...',
   'chat.error.retryCount': 'Attempt {current}/{max}',

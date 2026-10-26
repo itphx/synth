@@ -1,5 +1,27 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
+// persist (zustand) захватывает localStorage при импорте стора, а Node/vitest без
+// --localstorage-file его не даёт — ставим заглушку до импорта useUIStore.
+vi.hoisted(() => {
+  const data = new Map<string, string>()
+  const ls = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v)
+    },
+    removeItem: (k: string) => {
+      data.delete(k)
+    },
+    clear: () => {
+      data.clear()
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true })
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', { value: ls, configurable: true })
+  }
+})
+
 // Моки внешних зависимостей диспетчера: сетевых вызовов и toast быть не должно.
 vi.mock('@/lib/api/synthApi', () => ({
   synthApi: {
@@ -13,6 +35,8 @@ vi.mock('@/hooks/useNotification', () => ({
 
 import { createDispatcher } from './transportStore'
 import { useQuestionStore, pendingFor } from './questionStore'
+import { useUIStore } from './useUIStore'
+import { notifyMessage } from '@/hooks/useNotification'
 import type { WSEvent } from '@/lib/api/transport'
 
 const dispatch = createDispatcher()
@@ -29,9 +53,26 @@ const QUESTIONS = [
   },
 ]
 
+/** Сессия открыта в активной центральной вкладке. */
+function openSessionInActiveTab(sessionId: string): void {
+  useUIStore.setState({
+    centerTabs: [
+      { id: `chat-${sessionId}`, type: 'chat', title: sessionId, data: { sessionId } },
+    ],
+    activeCenterTabId: `chat-${sessionId}`,
+  })
+}
+
+/** Активной вкладки с сессией нет (сессия свёрнута/не открыта). */
+function closeActiveTab(): void {
+  useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
+}
+
 describe('transportStore dispatcher: user_question.* (вопросы пользователю)', () => {
   beforeEach(() => {
     useQuestionStore.setState({ bySession: {} })
+    vi.clearAllMocks()
+    closeActiveTab()
   })
 
   it('user_question.asked — добавляет pending-запись вопроса в стор', () => {
@@ -112,5 +153,55 @@ describe('transportStore dispatcher: user_question.* (вопросы польз�
     dispatch(makeEvent('question.asked', 's1', { session_id: 's1', pending_count: 3 }))
 
     expect(useQuestionStore.getState().bySession['s1']).toBeUndefined()
+  })
+})
+
+describe('transportStore dispatcher: уведомление о вопросе (ADR-112)', () => {
+  beforeEach(() => {
+    useQuestionStore.setState({ bySession: {} })
+    vi.clearAllMocks()
+    closeActiveTab()
+  })
+
+  it('неактивная сессия — тост вызван, вопрос попал в стор', () => {
+    dispatch(makeEvent('user_question.asked', 's1', {
+      question_id: 'qst_1',
+      session_id: 's1',
+      questions: QUESTIONS,
+    }))
+
+    expect(notifyMessage).toHaveBeenCalledTimes(1)
+    const opts = vi.mocked(notifyMessage).mock.calls[0]![0]
+    expect(opts.type).toBe('info')
+    expect(opts.category).toBe('system')
+    expect(opts.sessionId).toBe('s1')
+    expect(opts.text).toContain('Выбор')
+
+    expect(pendingFor('s1')).toHaveLength(1)
+  })
+
+  it('активная сессия — тост не вызван, вопрос всё равно попал в стор', () => {
+    openSessionInActiveTab('s1')
+
+    dispatch(makeEvent('user_question.asked', 's1', {
+      question_id: 'qst_1',
+      session_id: 's1',
+      questions: QUESTIONS,
+    }))
+
+    expect(notifyMessage).not.toHaveBeenCalled()
+    expect(pendingFor('s1')).toHaveLength(1)
+  })
+
+  it('без header у вопроса — в уведомлении fallback «question»', () => {
+    dispatch(makeEvent('user_question.asked', 's1', {
+      question_id: 'qst_1',
+      session_id: 's1',
+      questions: [{ question: 'Что делать?', options: [{ value: 'a', label: 'A' }] }],
+    }))
+
+    expect(notifyMessage).toHaveBeenCalledTimes(1)
+    const opts = vi.mocked(notifyMessage).mock.calls[0]![0]
+    expect(opts.text).toContain('question')
   })
 })

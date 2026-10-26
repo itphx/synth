@@ -1263,7 +1263,10 @@
   question.ts` (переводит ответы модели в записи вопросов). Порт — `QuestionRepository`
   (`storage/ports/question-repository.ts`; файловый — `{dataDir}/questions.json`, в-памяти —
   `storage/memory/questions.ts`, PG — миграция `021_background_runs`; контракт —
-  `storage/contract/question-repository.contract.ts`).
+  `storage/contract/question-repository.contract.ts`). Срок ожидания ответа по умолчанию **не
+  задан** (`questions.timeoutMs = 0` — без таймера, без `expiresAt`); срок может задать тул
+  `question` (`timeout`, ≥ 5 мин — не рекомендуется: по истечении вопрос снимается с причиной
+  `timeout`).
 - `engine/background/*` — ADR-111 (этап 1 roadmap 0.13 — блок 1.2): единый реестр фоновой
   работы. `service.ts` (`BackgroundRunService`: `startSubagent`/`startProcess`/`finish`/`stop`/
   `recoverOnStart`/`prune`/`buildSubagentNotification`; лимиты сессии — `background.*`;

@@ -278,8 +278,8 @@ describe('pluginsHybridConfigSchema (ADR-090 Ф7)', () => {
  * Этап 1 roadmap 0.13 (блок 3): секция `questions` — «вопрос пользователю».
  */
 describe('questionsConfigSchema (этап 1 roadmap 0.13 — блок 3)', () => {
-  it('дефолт: таймаут ответа 10 минут, retention 14 дней', () => {
-    expect(questionsConfigSchema.parse({})).toEqual({ timeoutMs: 600_000, retentionDays: 14 });
+  it('дефолт: без таймаута ответа, retention 14 дней', () => {
+    expect(questionsConfigSchema.parse({})).toEqual({ timeoutMs: 0, retentionDays: 14 });
   });
 
   it('timeoutMs = 0 — без таймаута (валидное значение)', () => {

@@ -1150,6 +1150,8 @@ export const dict = {
   'notify.background.subagentCompleted': 'Фоновый саб-агент завершён: {name}',
   'notify.background.subagentFailed': 'Фоновый саб-агент завершился с ошибкой: {name}',
   'notify.background.subagentCancelled': 'Фоновый саб-агент остановлен: {name}',
+  // ADR-112: уведомление о вопросе пользователю (сессия не открыта).
+  'notify.question.asked': 'Агент ждёт ответа: {name}',
   'chat.notice.copy': 'Копировать',
 
   'chat.message.copied': 'Скопировано',
@@ -1255,6 +1257,20 @@ export const dict = {
   'question.dock.failed': 'Не удалось отправить ответ',
   'question.dock.cancelled': 'Вопрос отменён',
   'question.dock.multipleHint': 'Можно выбрать несколько вариантов',
+  // Сворачивание дока и навигация по вопросам (точки вместо «1 из N»).
+  'question.dock.collapse': 'Свернуть',
+  'question.dock.expand': 'Развернуть',
+  'question.dock.collapsedTitle': 'Вопрос {current} из {total}',
+  'question.dock.collapsedSummary': 'отвечено {answered}/{total}',
+  'question.dock.dots.aria': 'Вопрос {n}',
+  // Итоговая проверка ответов перед отправкой.
+  'question.dock.review.open': 'Проверить',
+  'question.dock.review.title': 'Проверка ответов',
+  'question.dock.review.collapsed': 'Проверка ответов · {answered}/{total}',
+  'question.dock.review.edit': 'Изменить',
+  'question.dock.review.submit': 'Отправить',
+  'question.dock.review.back': 'Назад',
+  'question.dock.review.unanswered': 'Без ответа',
 
   'chat.error.rateLimit': 'Превышен лимит запросов. Пауза {sec}с...',
   'chat.error.retryCount': 'Попытка {current}/{max}',

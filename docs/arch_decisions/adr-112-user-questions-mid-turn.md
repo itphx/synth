@@ -27,8 +27,10 @@
 2. **`QuestionService` — запись персистентна, ожидание живёт в памяти.** Запись `QuestionRecord` лежит
    в порте `QuestionRepository` (ADR-096): файл `{dataDir}/questions.json`, в-памяти и PostgreSQL
    (таблица `questions`, миграция `021-background-runs`). Ожидание ответа — **внутри tool-loop**:
-   ход стоит, пока пользователь не ответит, не отменит вопрос и не истечёт срок. Таймаут —
-   `questions.timeoutMs` (`0` — без таймаута); отмена — по сигналу отмены хода («Стоп»: `orchestrator.cancel`
+   ход стоит, пока пользователь не ответит, не отменит вопрос и не истечёт срок. **По умолчанию
+   таймаута нет** (`questions.timeoutMs = 0` — вопрос ждёт ответа бесконечно); срок ожидания может
+   задать сам тул `question` (`timeout`, ≥ 5 минут — не рекомендуется: ожидание обрывается).
+   Отмена — по сигналу отмены хода («Стоп»: `orchestrator.cancel`
    снимает открытые вопросы сессии явно, а сигнал тула снимает тот вопрос, который он ждёт) и по ручной
    отмене пользователя. При старте `recoverOnStart` снимает все `pending`-вопросы с причиной
    `interrupted`: пережить рестарт нельзя, а запись в порте остаётся (журнал).
@@ -59,8 +61,12 @@
   порядка (такое имя уже занято в других слоях), а «спросить пользователя» — это `question` с
   ожиданием ответа, а не permission-вопрос `ask`.
 - Вопрос блокирует ход: пока ответа нет, агент не делает следующий шаг. Это осознанно (иначе «вопрос»
-  превратился бы в запись в лог) и означает, что таймаут и ручная отмена — обязательные, а не
-  декоративные.
+  превратился бы в запись в лог) и означает, что ручная отмена — обязательная, а не декоративная.
+- **Таймаута по умолчанию нет.** Вопрос ждёт ответа бесконечно (`questions.timeoutMs = 0`): обрыв
+  ожидания «по таймеру» обрывает ход на полуслове и теряет работу агента. Срок ожидания может задать
+  **тул** (`timeout`, ≥ 5 минут, максимум 24 часа) — но это осознанный выбор агента под явное
+  требование пользователя («спроси и не жди дольше N минут»), поэтому в описании тула он помечен как
+  нерекомендуемый.
 - Ответ пользователя — обычный ввод в ходе сессии, поэтому он проходит через те же права и правила
   видимости, что и остальные реплики.
 
@@ -71,12 +77,12 @@
 | Контракт записи | `shared/types/question.ts` (`QuestionRecord`/`QuestionItem`/`QuestionOption`, Zod-схемы ответа и отмены) |
 | Порт и реализации | `storage/ports/question-repository.ts`; `storage/file-question-store.ts` (`{dataDir}/questions.json`), `storage/memory/questions.ts`, `packages/storage-postgres/src/ports/questions.ts` (таблица `questions`, миграция `021-background-runs`) |
 | Сервис | `engine/question/service.ts` (`ask`/`answer`/`cancel`/`get`/`list`/`recoverOnStart`, `MAX_FREE_ANSWER_LENGTH`), `engine/question/types.ts` (типизированные ошибки), `engine/question/prune.ts` |
-| Тул | `engine/tools/question.ts` (схема 1–5 вопросов, до 8 вариантов; ответ — i18n-ключ `question.answered`) |
+| Тул | `engine/tools/question.ts` (схема 1–5 вопросов, до 8 вариантов; опция `timeout` — срок ожидания ответа, ≥ 5 мин; ответ — i18n-ключ `question.answered`) |
 | Permission-слой | `engine/permission/groups.ts` (`QUESTION_TOOLS`, группа `question`), `engine/permission/derive.ts` (`rules.question = 'deny'` для саб-агентов); capability `QUESTION` — `shared/types/tools.ts` |
 | HTTP | `server/routes/sessions.ts` — `GET /:id/questions`, `POST /:id/questions/:qid/answer`, `POST /:id/questions/:qid/cancel` (503 `QUESTION_UNAVAILABLE`, 400 `VALIDATION_ERROR`, 404 `NOT_FOUND`, 409 `CONFLICT`) |
 | События | `user_question.asked/answered/cancelled` в канале сессии (`shared/types/bus-events.ts`) |
 | Точки сборки | `server/app/deps.ts`, `backend/app/deps.ts` (`questionService`, `recoverOnStart` при старте) |
-| Конфиг | `shared/config/{types,defaults}.ts` — секция `questions` (`timeoutMs` — 10 мин, `retentionDays` — 14) |
+| Конфиг | `shared/config/{types,defaults}.ts` — секция `questions` (`timeoutMs` — `0`, без таймаута по умолчанию; `retentionDays` — 14) |
 | UI | `packages/ui/src/components/chat/QuestionDock.tsx` (док над композером), `packages/ui/src/stores/questionStore.ts`, диспетчер — `packages/ui/src/stores/transportStore.ts` |
 | Тесты | `engine/question/service.test.ts`, `engine/tools/question.test.ts`, `packages/ui/src/components/chat/QuestionDock.test.tsx`, `packages/ui/src/stores/transportStore.questions.test.ts` |
 
@@ -98,3 +104,6 @@
   `question`, саб-агентам deny, в plan-режиме разрешён), `QuestionService` с персистентной записью и
   ожиданием в памяти, HTTP-контур вопросов в фабрике сессий, свободный ответ до 1000 символов,
   события `user_question.*`, док вопроса над композером.
+- 2026-10-26 — уточнение: по умолчанию **таймаута нет** (`questions.timeoutMs = 0`, вопрос ждёт
+  ответа бесконечно); срок ожидания задаёт сам тул `question` (`timeout`, ≥ 5 минут — не
+  рекомендуется, ожидание обрывается).

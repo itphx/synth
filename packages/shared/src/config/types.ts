@@ -603,13 +603,14 @@ export const analyticsConfigSchema = z.object({
 /**
  * Конфигурация подсистемы «вопрос пользователю» (`ask_user`).
  *
- * - `timeoutMs` — срок ожидания ответа на вопрос, мс. `0` — **без таймаута**:
- *   вопрос ждёт ответа, пока его не отменят вручную или не прервётся ход;
+ * - `timeoutMs` — срок ожидания ответа на вопрос, мс. `0` — **без таймаута**
+ *   (дефолт): вопрос ждёт ответа, пока его не отменят вручную или не
+ *   прервётся ход; срок может задать тул `question` (`timeout`, ≥ 5 минут);
  * - `retentionDays` — срок хранения терминальных записей вопросов (дни);
  *   `<= 0` — без ограничения.
  */
 export const questionsConfigSchema = z.object({
-  timeoutMs: z.number().int().min(0).default(600_000),
+  timeoutMs: z.number().int().min(0).default(0),
   retentionDays: z.number().int().default(14),
 });
 

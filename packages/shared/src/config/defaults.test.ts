@@ -26,8 +26,8 @@ describe('defaultConfig', () => {
     expect(defaultConfig).toHaveProperty('questions');
   });
 
-  it('questions по умолчанию: таймаут ответа 10 минут, retention 14 дней (этап 1 roadmap 0.13)', () => {
-    expect(defaultConfig.questions).toEqual({ timeoutMs: 600_000, retentionDays: 14 });
+  it('questions по умолчанию: без таймаута ответа, retention 14 дней (этап 1 roadmap 0.13)', () => {
+    expect(defaultConfig.questions).toEqual({ timeoutMs: 0, retentionDays: 14 });
   });
 
   it('background по умолчанию: 2 саб-агента, 5 процессов, лог 10 МиБ (PROP-096/PROP-097)', () => {

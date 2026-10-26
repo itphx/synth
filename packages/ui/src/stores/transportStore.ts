@@ -131,6 +131,35 @@ function backgroundRunName(
   return `${name.slice(0, BACKGROUND_NOTIFY_NAME_LIMIT - 1)}…`
 }
 
+/** Максимальная длина имени вопроса в уведомлении. */
+const QUESTION_NOTIFY_NAME_LIMIT = 60
+
+/**
+ * Имя вопроса для уведомления: короткий заголовок первого вопроса.
+ *
+ * Fallback — `question`; длинные значения обрезаются (как имя прогона).
+ */
+function questionNotifyName(questions: QuestionItem[] | undefined): string {
+  const header = questions?.[0]?.header
+  const name = typeof header === 'string' ? header.trim() : ''
+  if (!name) return 'question'
+  if (name.length <= QUESTION_NOTIFY_NAME_LIMIT) return name
+  return `${name.slice(0, QUESTION_NOTIFY_NAME_LIMIT - 1)}…`
+}
+
+/**
+ * Открыта ли сессия в **активной** центральной вкладке.
+ *
+ * Тост о вопросе нужен только для неактивной сессии: в открытой сессии док
+ * вопроса и так виден пользователю (прецедент openchamber — `permission-toast`).
+ * Непрочитанный счётчик в дереве инкрементит сам `notifyMessage`.
+ */
+function isSessionActive(sessionId: string): boolean {
+  const state = useUIStore.getState()
+  const activeTab = state.centerTabs.find((t) => t.id === state.activeCenterTabId)
+  return activeTab?.data?.sessionId === sessionId
+}
+
 /**
  * Показать уведомление о фоновой работе (старт/финиш прогона).
  *
@@ -613,6 +642,17 @@ export function createDispatcher(): EventDispatcher {
               ...(payload.agent_role ? { agentRole: String(payload.agent_role) } : {}),
             }
         useQuestionStore.getState().add(sid, record)
+        // Тост — только если сессия **не** открыта: в открытой сессии док
+        // вопроса и так виден пользователю. Непрочитанный счётчик в дереве
+        // инкрементит сам `notifyMessage` (то же правило, что в нём).
+        if (!isSessionActive(sid)) {
+          notifyMessage({
+            text: i18nText('notify.question.asked', { name: questionNotifyName(record.questions) }),
+            type: 'info',
+            category: 'system',
+            sessionId: sid,
+          })
+        }
         break
       }
 

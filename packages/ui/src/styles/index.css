@@ -535,6 +535,17 @@ html.pointer-coarse .question-dock input:not([type="checkbox"]):not([type="radio
   min-height: var(--control-height-touch);
 }
 
+/* Точки-сегменты дока вопросов — вторичная навигация по шагам: таргет
+   компактный (28px), иначе ячейка 40px съедает шапку и подпись
+   «Вопрос N из M» обрезается. Основные действия дока (шеврон,
+   «Назад»/«Далее», «Проверить», «Отправить», «Отменить») остаются ≥40px. */
+html.device-phone .question-dock button[data-question-dot],
+html.device-tablet .question-dock button[data-question-dot],
+html.pointer-coarse .question-dock button[data-question-dot] {
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+}
+
 /* Компактные подписи индикаторов на телефоне и при узкой центральной колонке
    (остаётся точка/иконка) */
 .device-hide-label {

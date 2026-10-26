@@ -74,7 +74,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   ограничения; `analyticsConfigSchema` + `AnalyticsConfig`), скалярный env-оверрайд
   `SYNTH_ANALYTICS_RETENTION_DAYS` по общему правилу секций.
 - Этап 1 roadmap 0.13: секция `questions` (`timeoutMs` — срок ожидания ответа,
-  default `600000`; `retentionDays` — срок хранения терминальных записей, default `14`;
+  default `0` — **без таймаута**; `retentionDays` — срок хранения терминальных записей, default `14`;
   `questionsConfigSchema` + `QuestionsConfig`) и секция `background` (`enabled` —
   default `true`; `maxSubagentsPerSession` — `2`; `maxProcessesPerSession` — `5`;
   `maxRunsPerSession` — `10`; `logMaxBytes` — `10485760`; `retentionDays` — `7`;

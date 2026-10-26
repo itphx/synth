@@ -432,7 +432,7 @@ export async function createStandaloneDeps(
     : new QuestionService({
         repository: storageContext.questions,
         eventBus,
-        timeoutMs: config.questionsConfig?.timeoutMs ?? 600_000,
+        timeoutMs: config.questionsConfig?.timeoutMs ?? 0,
       });
   // Старт: открытые вопросы прошлого процесса не пережили рестарт (ожидание
   // в памяти) — снимаем их с причиной `interrupted`. Best-effort: ошибка не
