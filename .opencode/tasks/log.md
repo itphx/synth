@@ -1245,3 +1245,17 @@
 - **Схема `timeout`:** в описании поля и тула явно указано «top-level, не внутри вопроса» — модель больше не кладёт его в объект вопроса (в живой проверке было `arg error`, теперь одна корректная попытка).
 - **E2E на test:** агент задал вопрос с `timeout: 300000` → `expiresAt` = +5 мин, один вызов тула без ошибок аргументов; ответ через API → ход продолжился.
 - **Приёмка:** core 6557, ui 2047 (док: 20, таймер: 42), typecheck/lint 0; полный workspace ранее — 10 526 тестов.
+
+## 2026-10-26 — 0.13.0 этап 1, п.1.5 шаг 5.1: доки ADR-077 (протокол 3, B2)
+
+- **Ветка:** `feature/0.13.0-stage1-executor-worktrees` (от `master`), коммит `2875147f`.
+- **Сделано:** ADR-077 — статус/«Остаток» приведены к коду: MCP-stdio B2 **реализован** (`ExecutorMcpSource` + `attachExecutorMcpSource`), `EXECUTOR_PROTOCOL_VERSION = 3` (1→2 MCP, 2→3 фоновые процессы), совместимость — по `protocol` в `/capabilities`. Добавлен блок «Обновлено 2026-10-26»: (а) git — argv через `ExecutionPort`, `simple-git` удаляется; (б) SSH-ключи — `secrets[]` в `POST /exec` (протокол 4), материализация на вызов + sweep, at-rest только в control plane (ADR-076); (в) CA — конфигурация исполнителя (`SYNTH_EXECUTOR_TLS_CA_FILE`), `gitCaConfig()` в remote не применяется (ADR-099). `docs/EXECUTION.md` §1.3/§4.2.1/§7/§9/§11/§12 синхронизированы, метрики `synth_executor_*` помечены планом (7d).
+- **Приёмка:** `adr-check` 0 ошибок (30 предупреждений — как до правок), `docs-link-check` 0 ошибок; правок `packages/**` нет.
+- **Замечания:** индекс `AGENTS.md` не изменился (`adr-check --write` — пустой diff), статус ADR-077 остаётся «⚠️ Частично».
+
+## 2026-10-26 — 0.13.0 этап 1, п.1.5 шаг 5.2: GitService на argv, simple-git удалён
+
+- **Коммит:** `5dc5671e` (ветка `feature/0.13.0-stage1-executor-worktrees`).
+- **Сделано:** новый `core/src/git/exec.ts` — `gitExec` через `ExecutionPort` (`argv`, `requires:['git']`, env = `sanitizeGitEnv` + `GIT_TERMINAL_PROMPT=0` + `gitProxyEnv` + опции, CA `-c http.sslCAInfo` только в inline). `GitService` переписан на argv + NUL-разбор (`status --porcelain=v2 -z`, `log/show` с `%x00`), публичный API и типы не менялись. `ExecutionPort.isRemote` (аддитивно) + реализации inline/remote/MCP-обёртка. Порт прокинут в `GitService` из оркестратора и в `createGitRoutes` (core/backend). `simple-git` удалён из core и lockfile (`pnpm why` — пусто).
+- **Приёмка (своя, не только сабагента):** `pnpm typecheck` 0 ошибок; `pnpm lint` 0 errors (194 warning — pre-existing); core **6565 passed** / 211 skipped; executor **142 passed**.
+- **Замечания:** поведенческие сдвиги парсинга (задокументированы в отчёте): `lastCommitAt` — строгий ISO (`%aI`), `shortHash` — `%h` вместо `slice(0,7)`, `CommitDetail.message` без дубля subject, корневой коммит теперь отдаёт файлы, rename — одной записью. Контракт типов не менялся.
