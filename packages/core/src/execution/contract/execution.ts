@@ -226,6 +226,7 @@ export function describeExecutionPort(name: string, make: ExecutionPortHarnessFa
  *   - код завершения (`exitCode`), в том числе ненулевой;
  *   - остановка через `stop()` — процесс завершается по сигналу;
  *   - таймаут (`timeoutMs`) — процесс убивается по таймеру;
+ *   - `timeoutMs: 0` — без таймаута: процесс живёт и завершается сам;
  *   - `processId`/`pid` заполнены, `exited` резолвится один раз.
  *
  * Блок подключается только там, где метод есть: реализация без
@@ -302,6 +303,21 @@ export function describeBackgroundExecutionChecks(
       const exit = await bg.exited;
       expect(exit.signal).not.toBeNull();
       expect(exit.exitCode).toBeNull();
+    });
+
+    it('timeoutMs 0 — без таймаута: процесс живёт и завершается сам', async () => {
+      const { port } = await make();
+      if (typeof port.spawnBackground !== 'function') return;
+      // Фоновый процесс по умолчанию **без таймаута** — домен передаёт `0`.
+      // Удалённый исполнитель обязан такой запрос принять (иначе первый
+      // вызов `execute_shell({background:true})` падает с 400).
+      const bg = await port.spawnBackground({
+        command: { kind: 'shell', command: 'sleep 0.3; printf done' },
+        timeoutMs: 0,
+      });
+      const exit = await bg.exited;
+      expect(exit.exitCode).toBe(0);
+      expect(exit.signal).toBeNull();
     });
   });
 }

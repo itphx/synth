@@ -83,6 +83,50 @@ export function describeBackgroundRunRepository(
       expect((await repo.list({ limit: 1 })).map((r) => r.id)).toEqual(['bgr-3']);
     });
 
+    it('processId и projectId/agentRole/description сохраняются и читаются', async () => {
+      const { repo } = await make();
+      await repo.save(
+        run('bgr-proc', {
+          kind: 'process',
+          childSessionId: undefined,
+          projectId: 'proj-7',
+          agentRole: 'devops',
+          description: 'сборка образа',
+          processId: 'proc_11111111-2222-3333-4444-555555555555',
+        }),
+      );
+
+      const saved = await repo.get('bgr-proc');
+      expect(saved?.processId).toBe('proc_11111111-2222-3333-4444-555555555555');
+      expect(saved?.projectId).toBe('proj-7');
+      expect(saved?.agentRole).toBe('devops');
+      expect(saved?.description).toBe('сборка образа');
+
+      // То же самое в выборке (не только по id).
+      const listed = (await repo.list({ kind: 'process' })).find((r) => r.id === 'bgr-proc');
+      expect(listed?.processId).toBe('proc_11111111-2222-3333-4444-555555555555');
+      expect(listed?.projectId).toBe('proj-7');
+      expect(listed?.agentRole).toBe('devops');
+      expect(listed?.description).toBe('сборка образа');
+
+      // Перезапись записи (upsert) — новые значения приходят в БД/файл.
+      await repo.save(
+        run('bgr-proc', {
+          kind: 'process',
+          childSessionId: undefined,
+          projectId: 'proj-8',
+          agentRole: 'qa',
+          description: 'прогон тестов',
+          processId: 'proc_99999999-8888-7777-6666-555555555555',
+        }),
+      );
+      const rewritten = await repo.get('bgr-proc');
+      expect(rewritten?.processId).toBe('proc_99999999-8888-7777-6666-555555555555');
+      expect(rewritten?.projectId).toBe('proj-8');
+      expect(rewritten?.agentRole).toBe('qa');
+      expect(rewritten?.description).toBe('прогон тестов');
+    });
+
     it('remove: удаляет запись; повтор — false (не ошибка)', async () => {
       const { repo } = await make();
       await repo.save(run('bgr-1'));

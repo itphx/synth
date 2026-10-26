@@ -134,6 +134,33 @@ describe('исполнитель: фоновые процессы — запус
     expect(finished.exitCode).toBe(4);
   });
 
+  it('spawn — timeoutMs 0 (без таймаута) — 201, процесс живёт и завершается', async () => {
+    const app = makeApp();
+    const res = await postSpawn(app, {
+      command: { kind: 'shell', command: 'sleep 0.3; printf done' },
+      // Фоновый процесс по умолчанию **без таймаута** — порт передаёт `0`.
+      timeoutMs: 0,
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as SpawnExecResponse;
+    expect(body.processId.startsWith('proc_')).toBe(true);
+    expect(body.pid).toBeGreaterThan(0);
+
+    const finished = await waitStatus(app, body.processId);
+    expect(finished.status).toBe('exited');
+    expect(finished.exitCode).toBe(0);
+  });
+
+  it('spawn — отрицательный timeoutMs — 400 invalid_request', async () => {
+    const app = makeApp();
+    const res = await postSpawn(app, {
+      command: { kind: 'shell', command: 'printf x' },
+      timeoutMs: -1,
+    });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
   it('невалидное тело — 400 invalid_request', async () => {
     const app = makeApp();
     const res = await postSpawn(app, { command: { kind: 'shell' } });

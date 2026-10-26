@@ -393,7 +393,10 @@ export interface SpawnExecRequest {
   cwd?: string;
   /** Дополнительное окружение — мержится поверх окружения исполнителя. */
   env?: Record<string, string>;
-  /** Таймаут процесса, мс (не задан — без таймаута: процесс живёт, пока жив). */
+  /**
+   * Таймаут процесса, мс (`0` или не задано — без таймаута: процесс живёт,
+   * пока жив; `> 0` — таймер `SIGTERM` → через 5 с `SIGKILL`).
+   */
   timeoutMs?: number;
   /**
    * Требуемые бинари — принимаются, но **не проверяются**: проверка
@@ -572,8 +575,10 @@ export function parseSpawnExecRequestBody(
   }
 
   if (raw.timeoutMs !== undefined) {
-    if (typeof raw.timeoutMs !== 'number' || !Number.isInteger(raw.timeoutMs) || raw.timeoutMs <= 0) {
-      return { ok: false, message: 'поле timeoutMs должно быть целым числом > 0' };
+    // Фоновый процесс по умолчанию **без таймаута** — порт передаёт `0`
+    // (`timeoutMs: 0`), поэтому ноль допустим; отрицательное значение — нет.
+    if (typeof raw.timeoutMs !== 'number' || !Number.isInteger(raw.timeoutMs) || raw.timeoutMs < 0) {
+      return { ok: false, message: 'поле timeoutMs должно быть целым числом >= 0' };
     }
     value.timeoutMs = raw.timeoutMs;
   }

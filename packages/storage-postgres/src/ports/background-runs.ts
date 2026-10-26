@@ -6,7 +6,8 @@
  * Таблица `background_runs` (миграция 021): вид, статус, владелец и параметры
  * прогона; `metadata` — `jsonb`; лог процесса — относительный путь в
  * BlobStore (`log_path`), сами логи остаются на диске (ФС-периметр вне портов,
- * ADR-091/ADR-092).
+ * ADR-091/ADR-092). Идентификатор фонового процесса у порта исполнения
+ * (`process_id`, `proc_<uuid>`) — колонка миграции 022.
  *
  * Семантика повторяет файловые реализации core (`FileBackgroundRunStore`) и
  * in-memory (`MemoryBackgroundRunRepository`):
@@ -75,6 +76,7 @@ type BackgroundRunRow = {
   command: string | null;
   cwd: string | null;
   pid: number | null;
+  process_id: string | null;
   log_path: string | null;
   exit_code: number | null;
   signal: string | null;
@@ -99,6 +101,7 @@ function toBackgroundRun(row: BackgroundRunRow): BackgroundRunRecord {
     command: row.command ?? undefined,
     cwd: row.cwd ?? undefined,
     pid: row.pid ?? undefined,
+    processId: row.process_id ?? undefined,
     logPath: row.log_path ?? undefined,
     exitCode: row.exit_code ?? undefined,
     signal: row.signal ?? undefined,
@@ -118,10 +121,10 @@ export class PgBackgroundRunRepository implements BackgroundRunRepository {
     await this._deps.connection.query(
       `INSERT INTO background_runs
          (id, kind, status, session_id, project_id, child_session_id, agent_role, description,
-          command, cwd, pid, log_path, exit_code, signal, started_at, finished_at, updated_at,
-          summary, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::timestamptz,
-               $16::timestamptz, $17::timestamptz, $18, $19::jsonb)
+          command, cwd, pid, process_id, log_path, exit_code, signal, started_at, finished_at,
+          updated_at, summary, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz,
+               $17::timestamptz, $18::timestamptz, $19, $20::jsonb)
        ON CONFLICT (id) DO UPDATE SET
          kind = EXCLUDED.kind,
          status = EXCLUDED.status,
@@ -133,6 +136,7 @@ export class PgBackgroundRunRepository implements BackgroundRunRepository {
          command = EXCLUDED.command,
          cwd = EXCLUDED.cwd,
          pid = EXCLUDED.pid,
+         process_id = EXCLUDED.process_id,
          log_path = EXCLUDED.log_path,
          exit_code = EXCLUDED.exit_code,
          signal = EXCLUDED.signal,
@@ -153,6 +157,7 @@ export class PgBackgroundRunRepository implements BackgroundRunRepository {
         record.command ?? null,
         record.cwd ?? null,
         record.pid ?? null,
+        record.processId ?? null,
         record.logPath ?? null,
         record.exitCode ?? null,
         record.signal ?? null,
