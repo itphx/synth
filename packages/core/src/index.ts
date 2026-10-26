@@ -686,6 +686,15 @@ export type {
   WorktreeSecondaryInfo,
   WorktreeErrorCode,
 } from './engine/worktree/index.js';
+// ADR-114 §6: публикация `worktree.updated` в каналы сессий проекта.
+export {
+  publishWorktreeUpdated,
+  WORKTREE_EVENT_MAX_SESSIONS,
+} from './engine/worktree/index.js';
+export type {
+  WorktreeEventDeps,
+  WorktreeEventSessionSource,
+} from './engine/worktree/index.js';
 export type {
   SessionRepository,
   SessionFilter,

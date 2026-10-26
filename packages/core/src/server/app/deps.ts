@@ -35,6 +35,10 @@ import {
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов + retention логов.
   ProcessService,
   startProcessLogPruner,
+  // ADR-114: сервис worktree'ов (per-session рабочий каталог) + публикация
+  // `worktree.updated` в каналы сессий проекта.
+  WorktreeService,
+  publishWorktreeUpdated,
   AnalyticsRecorder,
   attachAnalyticsActivityHooks,
   startAnalyticsRollupPruner,
@@ -778,6 +782,32 @@ export async function createStandaloneDeps(
       })
     : undefined;
 
+  // ADR-114: сервис worktree'ов (per-session рабочий каталог).
+  //
+  // Один инстанс на процесс: его получают HTTP-роуты проектов
+  // (`/projects/:id/worktrees*`), тулы `git_worktree_*` и привязка сессии
+  // (`PATCH /sessions/:id { worktreeId }`). Порт инвентаря — из контекста
+  // хранения (ADR-096); git-команды — через порт исполнения (ADR-077);
+  // `onUpdated` публикует `worktree.updated` в каналы сессий проекта
+  // (ADR-114 §6, ADR-024). В деградированном режиме хранилища сервиса нет
+  // (писать некуда — split-brain).
+  const worktreeService = storageDegraded
+    ? undefined
+    : new WorktreeService({
+        repository: storageContext.worktrees,
+        workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
+        execution: executionPort,
+        defaultWorkingDir,
+        // Привязанная живая сессия — по полю `session.worktree` (ADR-114 §1.3).
+        resolveAttachedSession: async (worktreeId: string) => {
+          const sessions = await sessionManager.listSessions(undefined, { light: true });
+          return sessions.find((s) => s.worktree?.worktreeId === worktreeId)?.id;
+        },
+        onUpdated: (projectId: string) => {
+          void publishWorktreeUpdated({ eventBus, sessionStore: sessionManager }, projectId);
+        },
+      });
+
   // ADR-077 (шаг B2): в split-режиме MCP-серверы поднимаются **в исполнителе**
   // (браузерные/tier-4 тулы) — control plane забирает их состав и инструменты
   // по HTTP API исполнителя. Только `mode=remote`: в `inline` источник не
@@ -939,6 +969,9 @@ export async function createStandaloneDeps(
     // PROP-097: сервис фоновых шелл-процессов — тот же экземпляр, что у
     // реестра и тула `execute_shell` (через `ctx.extra.processService`).
     ...(processService ? { processService } : {}),
+    // ADR-114: сервис worktree'ов — тулы `git_worktree_*` (инвентарь
+    // per-session рабочих каталогов проекта).
+    ...(worktreeService ? { worktreeService } : {}),
     backgroundEnabled: config.backgroundConfig?.enabled ?? true,
     // ADR-101/ADR-051: late-bound рантайм автоматизации для встроенных тулов
     // (`pipeline_*`/`schedule_*`) — движок пайплайнов и шедулер создаются ниже,
@@ -1465,6 +1498,8 @@ export async function createStandaloneDeps(
     // PROP-097 (блок 5b): сервис фоновых шелл-процессов (+ pruner логов).
     processService,
     stopProcessLogPruner,
+    // ADR-114: сервис worktree'ов — HTTP-контур проектов и привязка сессии.
+    worktreeService,
     webhooksConfig,
     // Egress: живой резолвер политики + журналы безопасности.
     egressResolver,

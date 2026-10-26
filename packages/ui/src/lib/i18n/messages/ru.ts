@@ -2855,6 +2855,25 @@ export const dict = {
   'worktree.directory_missing':
     'Рабочий каталог привязанного git-worktree «{path}» не существует. '
     + 'Каталог, вероятно, удалён — сессия не может продолжить работу в другом каталоге.',
+  'worktree.tool.deps_unavailable': 'Ошибка: сервис git-worktree в этом инстансе недоступен',
+  'worktree.tool.no_project':
+    'Ошибка: у сессии нет проекта — операции с git-worktree требуют проекта',
+  'worktree.tool.list_empty': 'В проекте нет git-worktree',
+  'worktree.tool.list_header': 'Git-worktree проекта ({count}):',
+  'worktree.tool.list_row':
+    'имя: {name} | ветка: {branch} | каталог: {directory} | грязный: {dirty} | привязанная сессия: {attached} | существует: {exists}',
+  'worktree.tool.created':
+    'Git-worktree «{name}» создан на ветке «{branch}» (каталог: {directory}). '
+    + 'К сессии он пока не привязан — привяжите его через PATCH /api/v2/sessions/<sessionId> '
+    + 'и поле «worktreeId» (значение <worktreeId>) или позвольте пользователю привязать его в UI.',
+  'worktree.tool.removed': 'Git-worktree «{name}» удалён',
+  'worktree.tool.pruned':
+    'Очищены git-worktree: удалено записей без каталога — {records}, метаданные git очищены — {git_pruned}',
+  'worktree.tool.force_required':
+    'Ошибка: в git-worktree «{name}» есть незакоммиченные изменения — повторите вызов с force: true, чтобы удалить его принудительно',
+  'worktree.tool.busy':
+    'Ошибка: git-worktree «{name}» привязан к живой сессии ({session}) — сначала отвяжите сессию',
+  'worktree.tool.not_found': 'Ошибка: git-worktree «{id}» не найден',
 
   // --- Внешние события и хуки (ADR-030 / ADR-089) ---
   'event.ingested': 'Событие {id} получено из источника «{source}»',

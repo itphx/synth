@@ -11,6 +11,10 @@ export type EventType =
   | 'session.messages.merged'
   | 'session.moved'
   | 'project.updated'
+  // ADR-114: инвентарь git-worktree'ов проекта изменился (создан/удалён/
+  // привязан/отвязан). Событие — в существующей шине (ADR-024), новых
+  // транспортных каналов нет.
+  | 'worktree.updated'
   | 'fs.changed'
   | 'message.added'
   | 'message.updated'

@@ -54,6 +54,7 @@ import type { ProjectStoreLike } from '../storage/project-store.js';
 import { GitService } from '../git/git-service.js';
 import { MAX_DOOM_LOOP_COUNT } from './llm-error.js';
 import { WorktreeDirectoryMissingError } from './worktree/errors.js';
+import type { WorktreeService } from './worktree/service.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
 import type { HookBus } from './hooks/hook-bus.js';
@@ -421,6 +422,12 @@ export interface OrchestratorOptions {
    */
   processService?: ProcessService;
   /**
+   * ADR-114: сервис worktree'ов — тулы `git_worktree_*`.
+   *
+   * Не задан — тулы worktree недоступны (`worktree.tool.deps_unavailable`).
+   */
+  worktreeService?: WorktreeService;
+  /**
    * Шаг 2б: интервал (мс) персистентности частичного стрима. Черновик
    * assistant-сообщения создаётся сразу при первом непустом чанке, далее
    * обновляется не чаще интервала (или при приросте ≥4096 символов).
@@ -594,6 +601,11 @@ export class ChatOrchestrator {
    * режим `background: true` у `execute_shell` недоступен).
    */
   private readonly _processService: ProcessService | null;
+  /**
+   * ADR-114: сервис worktree'ов (null — не задан: тулы `git_worktree_*`
+   * недоступны).
+   */
+  private readonly _worktreeService: WorktreeService | null;
   /**
    * Этап 1 roadmap 0.13 (блок 3): соответствие «ход (`streamId`) → сессия».
    *
@@ -848,6 +860,8 @@ export class ChatOrchestrator {
     this._backgroundEnabled = options.backgroundEnabled ?? true;
     // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
     this._processService = options.processService ?? null;
+    // ADR-114: сервис worktree'ов (тулы `git_worktree_*`).
+    this._worktreeService = options.worktreeService ?? null;
     this._streamPersistIntervalMs = options.streamPersistIntervalMs ?? 1000;
 
     // ADR-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
@@ -3624,6 +3638,8 @@ export class ChatOrchestrator {
                   // тул `execute_shell` с `background: true` запускает команду
                   // в фоне и возвращает управление сразу.
                   processService: this._processService ?? undefined,
+                  // ADR-114: сервис worktree'ов — тулы `git_worktree_*`.
+                  worktreeService: this._worktreeService ?? undefined,
                   // Регистрация cancel-токена фонового прогона: `POST
                   // /sessions/<child>/abort` останавливает фонового ребёнка
                   // через общую карту токенов оркестратора (по streamId).

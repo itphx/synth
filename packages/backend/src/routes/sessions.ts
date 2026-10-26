@@ -37,6 +37,8 @@ import type { ProjectRepository } from '@itphx/synth-core';
 import type { MemoryFactRepository, MemoryIndexRepository } from '@itphx/synth-core';
 // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
 import type { QuestionService } from '@itphx/synth-core';
+// ADR-114: сервис worktree'ов — привязка сессии к worktree.
+import type { WorktreeService } from '@itphx/synth-core';
 import { createProjectAccess } from './projects.js';
 
 /**
@@ -90,6 +92,13 @@ export function createSessionRoutes(
    * Не задан — маршруты вопросов отвечают 503 (подсистема не подключена).
    */
   questionService?: QuestionService,
+  /**
+   * ADR-114: сервис worktree'ов — привязка сессии к worktree
+   * (`PATCH /api/v2/sessions/:id { worktreeId }`).
+   *
+   * Не задан — поле `worktreeId` в PATCH игнорируется (привязка недоступна).
+   */
+  worktreeService?: WorktreeService,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -683,7 +692,7 @@ export function createSessionRoutes(
   // последней: статические/backend-only сегменты должны матчиться раньше.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}) },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}) },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,

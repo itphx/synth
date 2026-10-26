@@ -10,8 +10,22 @@ import { ToolCapability, type ToolSource } from '@itphx/synth-shared';
 
 const READ_TOOLS = ['read_file', 'list_directory', 'glob'];
 const WRITE_TOOLS = ['write_file', 'edit_file', 'create_directory', 'delete_file'];
-const GIT_READ_TOOLS = ['git_status', 'git_diff', 'git_log', 'git_branch_list', 'git_show', 'git_blame'];
-const GIT_WRITE_TOOLS = ['git_commit', 'git_push', 'git_pull', 'git_checkout', 'git_stash', 'project_repo_clone', 'project_repo_init', 'project_repo_fetch'];
+const GIT_READ_TOOLS = ['git_status', 'git_diff', 'git_log', 'git_branch_list', 'git_show', 'git_blame', 'git_worktree_list'];
+const GIT_WRITE_TOOLS = [
+  'git_commit',
+  'git_push',
+  'git_pull',
+  'git_checkout',
+  'git_stash',
+  'project_repo_clone',
+  'project_repo_init',
+  'project_repo_fetch',
+  // ADR-114: мутации инвентаря git-worktree'ов (создание/удаление/prune) —
+  // группа `git_write`, поэтому plan-режим их блокирует (ADR-029/ADR-025).
+  'git_worktree_create',
+  'git_worktree_remove',
+  'git_worktree_prune',
+];
 const GIT_TOOLS = [...GIT_READ_TOOLS, ...GIT_WRITE_TOOLS];
 const RUNTIME_TOOLS = [
   'classify_conversation',

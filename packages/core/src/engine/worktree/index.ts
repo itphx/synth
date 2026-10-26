@@ -31,3 +31,11 @@ export {
   WorktreeGitFailedError,
 } from './errors.js';
 export type { WorktreeErrorCode } from './errors.js';
+export {
+  publishWorktreeUpdated,
+  WORKTREE_EVENT_MAX_SESSIONS,
+} from './events.js';
+export type {
+  WorktreeEventDeps,
+  WorktreeEventSessionSource,
+} from './events.js';

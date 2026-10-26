@@ -91,6 +91,19 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     user_id: session.userId || null,
     owner_id: session.ownerId || null,
     project_id: session.projectId || null,
+    /**
+     * ADR-114: привязка сессии к git-worktree (рабочий каталог сессии).
+     * Поле аддитивное — у сессий без привязки `null`.
+     */
+    worktree: session.worktree
+      ? {
+          worktree_id: session.worktree.worktreeId,
+          project_id: session.worktree.projectId,
+          repo_path: session.worktree.repoPath || null,
+          directory: session.worktree.directory,
+          branch: session.worktree.branch,
+        }
+      : null,
     messages: session.messages.map((m, i) => serializeMessage(m, i, messageOpts)),
     pending_messages: session.pendingMessages.map((m, i) => serializeMessage(m, i, messageOpts)),
     pending_count: session.pendingMessages.length,
