@@ -10,11 +10,14 @@
 > **Статус документа:** порт `ExecutionPort`, обе реализации (inline/remote), секция `execution` в конфигурации,
 > пакет исполнителя `@itphx/synth-executor`, подключение по `execution.mode=remote` и чарт
 > split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том
-> workspace, `NetworkPolicy` пула) — **реализованы**; **шаг B1** — исполнитель хостит MCP-серверы
-> у себя (`SYNTH_EXECUTOR_MCP_SERVERS`, эндпоинты `/mcp/servers`, `/mcp/tools`, `/mcp/call`,
-> протокол версии 2) — **реализован на стороне исполнителя**; остаток — клиентская проводка в
-> control plane (шаг B2), метрики `synth_executor_*` и runbook переключения топологии (шаг 7d),
-> перенос `simple-git` в исполнитель (шаг 8) и `inline-shell` (шаг 9).
+> workspace, `NetworkPolicy` пула) — **реализованы**; **MCP-stdio — реализовано**: исполнитель хостит
+> MCP-серверы у себя (**B1**: `SYNTH_EXECUTOR_MCP_SERVERS`, эндпоинты `/mcp/servers`, `/mcp/tools`,
+> `/mcp/call` — появились в протоколе **2**), а control plane к ним подключён (**B2**: `ExecutorMcpSource` +
+> `attachExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе); **актуальная версия
+> протокола — 3** (фоновые процессы, ADR-113), совместимость — по полю `protocol` в `GET /capabilities`.
+> Остаток — метрики `synth_executor_*` + `/metrics` исполнителя + runbook переключения топологии (шаг 7d),
+> перенос git-операций control plane на `ExecutionPort` вместо `simple-git` (решение — ADR-077
+> «Обновлено 2026-10-26») и `inline-shell` (шаг 9).
 
 ---
 
@@ -64,11 +67,11 @@
 | **Исполняемые команды** (shell, grep, git) | в процессе backend'а | в контейнере worker'а |
 | **FS-роуты** (чтение/запись файлов через HTTP) | backend | backend (не уезжают — см. матрицу) |
 | **Provisioning workspace** | backend (`engine/workspace-provision.ts`) | backend (тот же модуль) |
-| **Git-реестр** (`project.repos`, [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md)) | backend | backend (реестр и SSH-материал — в backend'е) |
+| **Git-реестр** (`project.repos`, [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md)) | backend | backend (реестр и SSH-материал — в backend'е; ключи едут в исполнителя на время вызова, ADR-077) |
 | **LLM-вызовы** (через `GatewayProvider`, [ADR-036](./arch_decisions/adr-036-llm-gateway.md)) | backend | backend (в исполнителе LLM-ключей нет) |
 | **Permission-слой** (`plan`/`act`/`yolo`, allow/deny/ask) | backend | backend (решение о допуске — до вызова порта) |
-| **MCP stdio-серверы** | в процессе backend'а (spawn через `StdioClientTransport`) | **в исполнителе** (шаг B1: `SYNTH_EXECUTOR_MCP_SERVERS` + `/mcp/*`); клиентская проводка в control plane — шаг B2 |
-| **Наблюдаемость** | `/metrics` backend'а | `/metrics` backend'а + `/metrics` исполнителя (агрегация) |
+| **MCP stdio-серверы** | в процессе backend'а (spawn через `StdioClientTransport`) | **в исполнителе** (B1: `SYNTH_EXECUTOR_MCP_SERVERS` + `/mcp/*`, протокол 2; B2: клиентская проводка в control plane — `ExecutorMcpSource`) |
+| **Наблюдаемость** | `/metrics` backend'а | `/metrics` backend'а + `/metrics` исполнителя (агрегация; серия `synth_executor_*` — **план**, шаг 7d) |
 
 ---
 
@@ -329,7 +332,7 @@ interface ExecutionPort {
   - синхронные команды (`POST /exec`) от старого исполнителя работать
     продолжают — требование касается только фонового запуска.
 
-### 4.2.1. MCP-хостинг исполнителя (шаг B1)
+### 4.2.1. MCP-хостинг исполнителя (шаги B1+B2)
 
 В split-топологии control plane тонкий (в образе `synth-backend` нет Chromium и
 tier-4 MCP-серверов), а браузерные инструменты нужны агенту. Поэтому **хостит**
@@ -352,9 +355,14 @@ MCP-серверы исполнитель — у него и toolchain, и Chrom
   не ломает исполнитель: сервер получает статус `down` с причиной, а
   следующее обращение его переподнимает. При остановке исполнителя MCP-серверы
   закрываются — дочерние процессы (и Chromium) не остаются жить.
-- **Ограничение шага B1:** реализована **серверная** часть. Клиентская проводка в
-  control plane (транспорт MCP-исполнителя, регистрация тулов с префиксом
-  `{serverName}_{toolName}`) — шаг B2.
+- **Граница шагов.** **B1** — серверная часть исполнителя (см. выше). **B2 — реализована**:
+  control plane подключается к MCP-серверам исполнителя источником `ExecutorMcpSource`
+  (`packages/core/src/engine/mcp/executor-mcp-source.ts`) и транспортом
+  `executor-mcp-client.ts`; `attachExecutorMcpSource(...)` в `packages/core/src/server/app/deps.ts`
+  добавляет их в `McpManager` при `execution.mode=remote`, тулы регистрируются с префиксом
+  `{serverName}_{toolName}`. Проверка — юнит-тесты источника/транспорта и e2e
+  `packages/core/src/engine/mcp/executor-mcp.e2e.test.ts` (гейт по env
+  `SYNTH_TEST_EXECUTOR_MCP_URL`/`SYNTH_TEST_EXECUTOR_MCP_TOKEN`, как контрактный suite хранения).
 - **Playwright MCP:** `playwright-mcp` по умолчанию ищет Google Chrome, которого в
   образе нет ⇒ `--executable-path /opt/synth/browser/chrome` (стабильный симлинк
   tier 3 на фактический `chromium-<ревизия>/chrome-linux64/chrome`), плюс
@@ -517,9 +525,9 @@ Workspace проекта (`project.workspace`, [ADR-075](./arch_decisions/adr-07
 
 | Фаза | Что уезжает | Что остаётся в backend'е | Обоснование |
 |---|---|---|---|
-| **1** | `execute_shell` (`packages/core/src/engine/tools/shell.ts`), `grep_files`/`rg` (`packages/core/src/engine/tools/search.ts`), python через shell | FS-роуты, provisioning workspace, git-реестр, хранение, LLM-вызовы, permission-слой, MCP stdio | Минимальный шов, максимальный выигрыш: shell — самая «тяжёлая» и самая частая операция; git и MCP требуют доставки ключей/реестров, поэтому идут позже |
-| **2** | git-тулы (`packages/core/src/engine/tools/git.ts`) + доставка SSH-материала | git-реестр `project.repos` (в backend'е), расшифровка и выдача ключей (в backend'е) | SSH-ключи per-agent шифрованы at-rest (`enc:v1:…`, AES-256-GCM) в `{dataDir}/secrets/ssh-keys/` (`packages/core/src/storage/ssh-key-store.ts`); их доставка исполнителю — отдельный протокол (открытый вопрос) |
-| **3** | MCP stdio-серверы (`packages/core/src/engine/mcp/client.ts`) и inline-shell (`packages/core/src/engine/commands/inline-shell.ts`) | MCP-реестр и политики ([ADR-071](./arch_decisions/adr-071-mcp-servers-prompt.md)), конфигурация серверов | MCP stdio — это `spawn` с окружением; в исполнителе нужен свой реестр бинарей и своя доставка конфигурации |
+| **1** | `execute_shell` (`packages/core/src/engine/tools/shell.ts`), `grep_files`/`rg` (`packages/core/src/engine/tools/search.ts`), python через shell | FS-роуты, provisioning workspace, git-реестр, хранение, LLM-вызовы, permission-слой, MCP stdio | Минимальный шов, максимальный выигрыш: shell — самая «тяжёлая» и самая частая операция; git и MCP требуют доставки ключей/реестров, поэтому идут позже. **Реализовано** (шаг 7c) |
+| **2** | git-тулы (`packages/core/src/engine/tools/git.ts`) + доставка SSH-материала | git-реестр `project.repos` (в backend'е), расшифровка и выдача ключей (в backend'е) | SSH-ключи per-agent шифрованы at-rest (`enc:v1:…`, AES-256-GCM) в `{dataDir}/secrets/ssh-keys/` (`packages/core/src/storage/ssh-key-store.ts`). **Решение (ADR-077, «Обновлено 2026-10-26»)**: git-операции control plane — argv через существующий `ExecutionPort` (`requires: ['git']`, без новых git-эндпоинтов); SSH-ключи — аддитивное поле `secrets[]` в `POST /exec` (протокол 4), материализация в tmp исполнителя (`mkdtemp`, 0700/0600), удаление в `finally` + sweep `synth-ssh-*` при старте |
+| **3** | MCP stdio-серверы (`packages/core/src/engine/mcp/client.ts`) и inline-shell (`packages/core/src/engine/commands/inline-shell.ts`) | MCP-реестр и политики ([ADR-071](./arch_decisions/adr-071-mcp-servers-prompt.md)), конфигурация серверов | MCP stdio — это `spawn` с окружением; в исполнителе нужен свой реестр бинарей и своя доставка конфигурации. **MCP-stdio — реализовано** (B1+B2, протокол 3; эндпоинты `/mcp/*` — с протокола 2); `inline-shell` — остаток (шаг 9) |
 
 **Что не уезжает ни в одной фазе:**
 
@@ -531,7 +539,11 @@ Workspace проекта (`project.workspace`, [ADR-075](./arch_decisions/adr-07
 - **LLM-вызовы** — через `GatewayProvider` (инвариант 3; ADR-036): в исполнителе LLM-ключей нет.
 - **Permission-слой** — `plan`/`act`/`yolo`, allow/deny/ask (ADR-025/ADR-028/ADR-029): решение о
   допуске принимается **до** вызова порта, в backend'е.
-- **MCP stdio на фазе 1** — остаётся в backend'е (исполнитель без собственного MCP-реестра).
+- **MCP stdio на фазе 1** — остаётся в backend'е (исполнитель без собственного MCP-реестра);
+  с шага B1+B2 серверы хостит исполнитель, а control plane подключается к ним по HTTP.
+- **CA-материалы git** — конфигурация исполнителя, а не пользовательский секрет: в remote-режиме
+  исполнитель получает CA при старте (`SYNTH_EXECUTOR_TLS_CA_FILE`) и сам добавляет
+  `-c http.sslCAInfo`; `gitCaConfig()` control plane в remote-режиме не применяется (ADR-099).
 - **Детект зависимостей** (ADR-078) — на фазе 1 детект остаётся локальным
   (`packages/core/src/engine/tools/runtime-deps.ts`); в split-режиме детект должен спрашивать
   исполнителя (перенос — вместе с фазой 1, иначе backend будет считать `git`/`rg` доступными там,
@@ -569,12 +581,21 @@ control plane (тот же namespace) на порт исполнителя, egre
 
 | Метрика | Тип | Лейблы | Где | Смысл |
 |---|---|---|---|---|
-| `synth_executor_queue_depth` | gauge | — | backend | Запросов в очереди на отправку исполнителю |
-| `synth_executor_workers_busy` | gauge | — | backend | Занятых исполнителей (по pool'у) |
-| `synth_executor_wait_seconds` | histogram | — | backend | Время ожидания в очереди (до отправки) |
-| `synth_executor_commands_total` | counter | `outcome` | backend + исполнитель | Выполненных команд по исходу (`ok`/`error`/`timeout`/`cancelled`) |
+| `synth_executor_queue_depth` | gauge | — | backend (клиент, core) | Запросов в очереди на отправку исполнителю |
+| `synth_executor_workers_busy` | gauge | — | backend (клиент, core) | Занятых исполнителей (по pool'у) |
+| `synth_executor_wait_seconds` | histogram | — | backend (клиент, core) | Время ожидания в очереди (до отправки) |
+| `synth_executor_commands_total` | counter | `outcome` | backend (клиент, core) + `/metrics` исполнителя | Выполненных команд по исходу (`ok`/`error`/`timeout`/`cancelled`) |
 
-- **Исполнитель отдаёт свой `/metrics`** — тем же реестром, что и backend
+- **Статус — план, не реализовано (шаг 7d).** Серии `synth_executor_*` в коде **нет** (в
+  `packages/core/src/metrics/collectors/` таких коллекторов нет), и `/metrics` у исполнителя тоже
+  **не реализован** — сейчас live-картина по split-режиму берётся из журналов control plane и
+  исполнителя. Реализация должна переиспользовать уже существующий реестр и рендер, а не заводить
+  второй (см. ниже).
+- **Где что живёт (при реализации).** Клиентские метрики (очередь, занятость, ожидание) —
+  в **core**, на стороне удалённого порта (`packages/core/src/execution/remote.ts` /
+  `@itphx/synth-executor/client`): только там известны адреса пула и очередь вызовов. Метрики
+  исполнения с лейблом `outcome` — на **исполнителе**, в его собственном `/metrics`.
+- **Исполнитель отдаёт свой `/metrics` (при реализации)** — тем же реестром, что и backend
   (`packages/core/src/metrics/registry.ts`), тем же рендером 0.0.4
   (`packages/core/src/metrics/renderer.ts`), тем же middleware (`packages/core/src/metrics/http.ts`).
   Backend **агрегирует** метрики пула (gauge по пулу) и отдаёт свои; метрики исполнения с
@@ -677,8 +698,9 @@ worker — **значением** в env (`SYNTH_EXECUTOR_TOKEN`, `secretKeyRef`
 5. **Переключить режим:** `execution.mode=remote` (config.yaml/env/CLI) → **рестарт** backend'а
    (переключатель — параметр запуска; рестарт — через graceful shutdown с exit 75,
    `packages/core/src/server/restart.ts`).
-6. **Проверить:** exec-вызовы идут в исполнитель (метрики `synth_executor_*`), файлы в workspace
-   те же, git-тулы работают (фаза 2 — после включения), MCP stdio (фаза 3) — по плану.
+6. **Проверить:** exec-вызовы идут в исполнитель (по журналам; серия `synth_executor_*` — план,
+   шаг 7d), файлы в workspace те же, git-тулы работают (через `ExecutionPort`, шаг 5.2 плана этапа —
+   ADR-077, SSH-материал `secrets[]`), MCP stdio (B1+B2) — тулы `{server}_{tool}` видны в сессии.
 
 **Обратимо:** да — возврат `execution.mode=inline` + рестарт возвращает исполнение в процесс
 backend'а. Данные не затронуты (workspace — тот же том, состояние — та же БД).
@@ -732,7 +754,7 @@ backend'а. Данные не затронуты (workspace — тот же то
 | `synth_sessions_active` / `synth_queue_pending` — про сессии и очередь **сообщений**, не про исполнение | `packages/core/src/metrics/collectors/sessions.ts:26`, `:30` |
 | Порт исполнения: `ExecutionPort` + `InlineExecutionPort` + контрактный suite (шаг 1) | `packages/core/src/execution/ports/execution-port.ts:1`, `packages/core/src/execution/inline-execution-port.ts:1`, `packages/core/src/execution/contract/execution.ts:1` |
 | Секция `execution` в конфиге, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed на старте (шаг 3) | `packages/shared/src/config/execution.ts:1`, `packages/shared/src/config/types.ts:178`, `packages/shared/src/config/defaults.ts:32`, `packages/core/src/execution/startup.ts:1`, `packages/core/src/main.ts:110` |
-| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-хостинг исполнителя** (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call`, протокол версии 2) — **реализован** (шаг B1, серверная часть); осталось: клиентская проводка в control plane (B2), метрики `synth_executor_*` + runbook (7d), образ worker'а и flavor'ы — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) (шаги 4–6) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
+| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; актуальная версия протокола — 3); осталось: метрики `synth_executor_*` + `/metrics` исполнителя + runbook (7d), git через `ExecutionPort` вместо `simple-git`, образ worker'а и flavor'ы — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) (шаги 4–6) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
 | Слой хранения — образец портов: 30 доменных портов, контрактный suite, `createFileStorage`/`createMemoryStorage`/`createPostgresStorage`/`createStorageContextAsync`/`buildStorageContext` | `packages/core/src/storage/ports/`, `packages/core/src/storage/contract/index.ts:1`, `packages/core/src/storage/storage-context.ts:467`, `:529`, `:599`, `:847`, `:917` |
 | Ограничения >1 реплики: файловая БД не масштабируется; RWO PVC; `FileMutex` (эксклюзивный `mkdir` + stale-takeover) работает только на общем FS; `scheduler.leaderElection: none`, `crossProcessLocks: false` (в PG — `PgMutex`/`PgLeader`) | `charts/synth/values.yaml:11`, `:45`; `packages/core/src/storage/file-mutex.ts:33`, `:48`; `packages/core/src/storage/mutex.ts:7`; `packages/shared/src/config/defaults.ts:155` |
 | Рестарт инстанса — graceful shutdown с exit code 75, режимы `disabled`/`process`/`supervisor` | `packages/core/src/server/restart.ts:20`, `:23`; `packages/core/src/main.ts:81` |
@@ -769,9 +791,10 @@ backend'а. Данные не затронуты (workspace — тот же то
 8. **Чарт**: значения `execution.*` и `executor.*`; шаблоны `executor-deployment.yaml`,
    `executor-service.yaml`, PVC общего workspace (RWX), `NetworkPolicy` для worker'а, токен из
    Secret; `executor.enabled` — переключатель split-развёртывания. — **реализовано (шаг 7c)**
-9. **Наблюдаемость**: метрики `synth_executor_queue_depth`, `synth_executor_workers_busy`,
-   `synth_executor_wait_seconds`, `synth_executor_commands_total{outcome}`; `/metrics` исполнителя;
-   агрегация на backend'е; алерты в `charts/synth/files/alerts/`. — **остаток**
+9. **Наблюдаемость (план)**: метрики `synth_executor_queue_depth`, `synth_executor_workers_busy`,
+   `synth_executor_wait_seconds` и `synth_executor_commands_total{outcome}`; `/metrics` исполнителя;
+   агрегация на backend'е; алерты в `charts/synth/files/alerts/`. — **остаток** (шаг 7d; сейчас
+   серии и `/metrics` исполнителя в коде нет, см. §9)
 10. **Детект зависимостей (ADR-078)** в split-режиме — спрашивать исполнителя, а не локальный
      `execFile` (иначе backend считает `git`/`rg` доступными там, где их нет). — **остаток**
 11. **Миграции**: `synth storage migrate --to postgres` (уже есть) + процедура переключения
@@ -782,9 +805,14 @@ backend'а. Данные не затронуты (workspace — тот же то
      (примеры split-развёртывания), `docs/TROUBLESHOOTING.md` (исполнитель недоступен). — **частично**
 13. **Перенос MCP stdio в исполнитель (шаг 9/B1+B2)**: исполнитель поднимает MCP-серверы у себя
      (`SYNTH_EXECUTOR_MCP_SERVERS`), отдаёт инструменты и вызовы по HTTP (`/mcp/servers`,
-     `/mcp/tools`, `/mcp/call`), протокол поднят до версии 2. — **B1 (серверная часть) сделано**;
-     **B2 (клиентская проводка в control plane)** — транспорт MCP-исполнителя, регистрация тулов
-     с префиксом `{serverName}_{toolName}`, e2e в кластере — **остаток**
+     `/mcp/tools`, `/mcp/call`; эндпоинты протокола 2), а control plane к ним подключён
+     (`ExecutorMcpSource` + `attachExecutorMcpSource`, тулы `{serverName}_{toolName}`, e2e на живом
+     исполнителе). — **сделано (B1+B2)**; остаток шага 9 — `inline-shell`
+14. **Git через порт вместо `simple-git`**: git-операции control plane — argv через существующий
+     `ExecutionPort` (`requires: ['git']`), публичный API `GitService` сохраняется, пакет
+     `simple-git` удаляется из core; SSH-ключи — аддитивное поле `secrets[]` в `POST /exec`
+     (протокол 4). — **решение принято** (ADR-077, «Обновлено 2026-10-26»), реализация — отдельный
+     шаг этапа (5.2); CA — конфигурация исполнителя (`SYNTH_EXECUTOR_TLS_CA_FILE`), не поле протокола
 
 ### 12.3. Порядок реализации
 
@@ -802,9 +830,9 @@ backend'а. Данные не затронуты (workspace — тот же то
 | **7a** | Executor-сервис: пакет `@itphx/synth-executor` (`packages/executor`, по образцу драйвера хранилища — ADR-097/ADR-096) с exec-API (HTTP/1.1 + JSON: `/exec`, `/capabilities`, `/health`, containment `cwd`, токен `synth_exec_…`) + клиент удалённого порта (`egressFetch`, ADR-099) + прогон контрактного suite порта против исполнителя (в core, `packages/core/src/execution/contract/`) | ADR-077 | не нужна |
 | **7b** | Подключение по `execution.mode=remote`: динамический `import()` пакета (fail-closed), `execution.remote.failMode`/`concurrency`, пул адресов (выбор по кругу, проба следующего при ошибке соединения) | ADR-077 | не нужна (нужна для >1 реплики control plane) |
 | **7c** | Helm: значения `executor.*` (Deployment/Service/пул), RWX-том общего workspace, токен — из Secret, `NetworkPolicy` для worker'а; **фаза 1** матрицы (`execute_shell`/`grep_files`/`python`) | ADR-077 | не нужна |
-| **7d** | Метрики `synth_executor_*` (+ `/metrics` исполнителя) и runbook (переключение топологии, диагностика «исполнитель недоступен») | ADR-077 | не нужна |
-| **8** | **Фаза 2** матрицы: git-тулы + доставка SSH-материала в исполнителя | ADR-077 | не нужна |
-| **9** | **Фаза 3** матрицы: MCP stdio-серверы и inline-shell. **B1 (серверная часть MCP) — сделано**: исполнитель хостит MCP-серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/*`, протокол 2); **B2** — клиентская проводка в control plane (транспорт, регистрация тулов `{serverName}_{toolName}`, e2e в кластере) | ADR-077 | не нужна |
+| **7d** | Метрики `synth_executor_*` + `/metrics` исполнителя + runbook (переключение топологии, диагностика «исполнитель недоступен») | ADR-077 | не нужна |
+| **8** | **Фаза 2** матрицы: git-тулы + доставка SSH-материала в исполнителя. Решение — ADR-077 («Обновлено 2026-10-26»): git через `ExecutionPort` (`requires: ['git']`, без новых git-эндпоинтов), SSH — `secrets[]` в `POST /exec` (протокол 4); в плане этапа 0.13.0 — **шаг 5.2** | ADR-077 | не нужна |
+| **9** | **Фаза 3** матрицы: MCP stdio-серверы и inline-shell. **B1+B2 — сделано**: исполнитель хостит MCP-серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/*`, эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`, тулы `{serverName}_{toolName}`, e2e); остаток — `inline-shell` | ADR-077 | не нужна |
 | **10** | Изоляция и квоты (`NetworkPolicy`, `ResourceQuota`/`LimitRange`, лимиты worker'а, без `docker.sock`); наблюдаемость: метрики `synth_executor_*`, `/metrics` исполнителя, алерты; детект зависимостей (ADR-078) на стороне исполнителя | ADR-077 | не нужна |
 | **11** | Workspace-v2: per-worker копия или S3-совместимое объектное хранилище (снимает «один RWX-том на всех») | ADR-077 | желательна |
 | **12** | Миграции и документация: переключение топологии (runbook — `docs/MAINTENANCE.md`), секция `execution` в `docs/CONFIGURATION.md`, метрики в `docs/OBSERVABILITY.md`, примеры в `charts/synth/README.md`, диагностика в `docs/TROUBLESHOOTING.md`; compose-сценарии all-in-one/split | общий | не нужна |
@@ -827,16 +855,15 @@ Split-топология технически возможна и при одн�
   FS-роуты, provisioning, git-реестр, хранение, LLM-вызовы, permission-слой — не уезжают.
 - Поведение при недоступности исполнителя — закрыто: `failMode: fail` (fail-closed) по умолчанию;
   `inline-fallback` — только явной настройкой.
+- **Доставка SSH-материала и CA в исполнитель** (фаза 2) — закрыто решением ADR-077 («Обновлено
+  2026-10-26»): приватные ключи проектов едут **на время вызова** полем `secrets[]` в `POST /exec`
+  (протокол 4) и материализуются в tmp исполнителя (`mkdtemp`, каталог 0700/ключ 0600, удаление в
+  `finally` + sweep `synth-ssh-*` при старте) — без общего Secret-тома и без мастер-ключа в
+  исполнителе; CA — **конфигурация** исполнителя (`SYNTH_EXECUTOR_TLS_CA_FILE`, применяется при
+  старте, ADR-099), а `gitCaConfig()` control plane в remote-режиме не применяется.
 
 **Реально открытые:**
 
-- **Доставка расшифрованного SSH-материала в исполнитель** (фаза 2). Ключи per-agent шифрованы
-  at-rest (`enc:v1:…`, AES-256-GCM) в `{dataDir}/secrets/ssh-keys/`
-  (`packages/core/src/storage/ssh-key-store.ts`), мастер-ключ — `{dataDir}/secrets/master.key`
-  (`packages/core/src/security/crypto.ts`); исполнитель
-  такого ключа не имеет. Варианты: одноразовый токен на операцию; расшифровка на стороне backend'а и
-  передача «используемого» `GIT_SSH_COMMAND` с временным файлом ключа; проброс мастер-ключа в
-  исполнитель (нежелательно — расширяет круг доверия). Требует отдельного AD по границе доверия.
 - **Per-worker workspace против общего.** Общий том (RWX) — просто, но даёт всем исполнителям доступ
   ко всем workspace'ам проектов (ограничение — «исполнитель не видит чужих workspace» перестаёт
   работать на уровне тома; остаётся на уровне `cwd`). Per-worker копия — изоляция, но рассинхрон и
@@ -906,3 +933,8 @@ Split-топология технически возможна и при одн�
   общий том workspace (RWX) в backend и в пуле, токен из Secret — backend файлом, worker значением,
   fail-closed проверки рендера; при `executor.enabled: false` рендер не меняется); документ переведён в
   класс **Spec** — решение в ADR-077, детали здесь.
+- 2026-10-26 — снято расхождение с кодом: MCP-stdio **реализовано целиком** (B1+B2, эндпоинты `/mcp/*`
+  с протокола 2, актуальная версия протокола — 3), «остатка B2» больше нет; §9 помечает серию
+  `synth_executor_*` и `/metrics` исполнителя как **план** (шаг 7d); SSH/CA приведены к решению
+  ADR-077 («Обновлено 2026-10-26»): ключи — `secrets[]` на время вызова (протокол 4), CA — конфигурация
+  исполнителя; git вынесен в отдельный шаг (5.2 плана этапа) — ADR-077 (а).
