@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
@@ -30,6 +30,7 @@ import { dict as enDict } from '@/lib/i18n/messages/en'
 import { ChatMessage } from './ChatMessage'
 import type { MessageData } from '@/stores/chatStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useAuthStore } from '@/stores/authStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -83,6 +84,7 @@ afterEach(async () => {
   }
   document.body.innerHTML = ''
   useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
+  useAuthStore.setState({ user: null, profile: null } as never)
 })
 
 function actionTitles(container: HTMLElement): string[] {
@@ -177,5 +179,118 @@ describe('ChatMessage: единый Notice служебных сообщений
     )
     expect(container.querySelector('input[type="checkbox"]')).not.toBeNull()
     expect(container.textContent).toContain('Summary')
+  })
+})
+
+describe('ChatMessage: уведомление о завершении фонового прогона (ADR-111/ADR-113)', () => {
+  useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+
+  beforeEach(() => {
+    // Текущий залогиненный пользователь — чтобы убедиться, что в блоке фонового
+    // прогона не рисуется userBadge с его именем.
+    useAuthStore.setState({
+      user: { id: 'u1', username: 'alice', roles: [] } as never,
+      profile: { display_name: 'Alice' } as never,
+    })
+  })
+
+  it('процесс → системный блок «Background process · <команда>», конверта в тексте нет', async () => {
+    const container = await renderChat(
+      makeMessage({
+        role: 'user',
+        content: [
+          '<process processID="proc_1" state="exited" command="npm test">',
+          '5 passed',
+          '</process>',
+        ].join('\n'),
+        metadata: {
+          type: 'background_run_result',
+          kind: 'process',
+          state: 'completed',
+          command: 'npm test',
+        },
+      }),
+    )
+    const group = container.querySelector('[role="group"]') as HTMLElement
+    expect(group).not.toBeNull()
+    expect(group.getAttribute('aria-label')).toBe('Background process · npm test · completed')
+    // Тело — лог прогона, конверт модели не показываем.
+    expect(container.textContent).toContain('5 passed')
+    expect(container.textContent).not.toContain('<process')
+    expect(container.textContent).not.toContain('</process>')
+    // Не рисуем правый user-пузырь и userBadge текущего пользователя.
+    expect(container.querySelector('.items-end')).toBeNull()
+    expect(container.textContent).not.toContain('Alice')
+  })
+
+  it('саб-агент → подпись «Background subagent» и тело без конверта', async () => {
+    const container = await renderChat(
+      makeMessage({
+        role: 'user',
+        content: [
+          '<subagent sessionID="child-1" state="failed" description="собрать отчёт">',
+          '<summary>',
+          'отчёт не собран',
+          '</subagent>',
+        ].join('\n'),
+        metadata: {
+          type: 'background_run_result',
+          kind: 'subagent',
+          state: 'failed',
+          description: 'собрать отчёт',
+        },
+      }),
+    )
+    const group = container.querySelector('[role="group"]') as HTMLElement
+    expect(group.getAttribute('aria-label')).toBe('Background subagent · собрать отчёт · failed')
+    expect(container.textContent).toContain('отчёт не собран')
+    expect(container.textContent).not.toContain('<subagent')
+    expect(container.textContent).not.toContain('</subagent>')
+    expect(container.textContent).not.toContain('<summary>')
+  })
+
+  it('отменённый процесс → состояние «stopped»', async () => {
+    const container = await renderChat(
+      makeMessage({
+        role: 'user',
+        content: '<process processID="proc_1" state="killed" command="sleep 100">\n</process>',
+        metadata: {
+          type: 'background_run_result',
+          kind: 'process',
+          state: 'cancelled',
+          command: 'sleep 100',
+        },
+      }),
+    )
+    const group = container.querySelector('[role="group"]') as HTMLElement
+    expect(group.getAttribute('aria-label')).toBe('Background process · sleep 100 · stopped')
+  })
+
+  it('уведомление → полный набор действий как у user-сообщения', async () => {
+    const container = await renderChat(
+      makeMessage({
+        role: 'user',
+        content: '<process processID="proc_1" state="exited" command="npm test">\nok\n</process>',
+        metadata: {
+          type: 'background_run_result',
+          kind: 'process',
+          state: 'completed',
+          command: 'npm test',
+        },
+      }),
+    )
+    const titles = actionTitles(container)
+    expect(titles).toContain('Copy')
+    expect(titles).toContain('Create branch')
+    expect(titles).toContain('Pin')
+    expect(titles).toContain('Delete')
+    // Дублирующей кнопки копирования нет (копия — из Notice).
+    expect(titles.filter((t) => t === 'Copy')).toHaveLength(1)
+  })
+
+  it('обычное user-сообщение → user-пузырь сохранён (фоновый блок не ломает обычные)', async () => {
+    const container = await renderChat(makeMessage({ role: 'user', content: 'Hello' }))
+    expect(container.querySelector('.items-end')).not.toBeNull()
+    expect(container.querySelector('[role="group"]')).toBeNull()
   })
 })

@@ -6,7 +6,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   ProviderConfig, ModelConfig, ToolsPolicy, ToolsDisabledConfig,
-  WorkspaceOutsideRootPolicy, WebhooksConfig, SummarizationConfig, Session,
+  WorkspaceOutsideRootPolicy, WebhooksConfig, SummarizationConfig, Session, Message,
   PluginServerPolicy,
 } from '@itphx/synth-shared';
 import { ensureDataDir, parsePrincipalId, readTlsRuntimeSettings, SYNTH_VERSION } from '@itphx/synth-shared';
@@ -31,6 +31,7 @@ import {
   // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
   BackgroundRunService,
   startBackgroundRunPruner,
+  createBackgroundParentNotifier,
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов + retention логов.
   ProcessService,
   startProcessLogPruner,
@@ -94,7 +95,6 @@ import {
   type StorageContext,
 } from '../../index.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
-import { serializeMessage, serializeSession } from '../serialize.js';
 import { createExecutionPortForConfig } from '../../execution/factory.js';
 import { attachExecutorMcpSource } from '../../engine/mcp/executor-mcp-source.js';
 import {
@@ -458,6 +458,26 @@ export async function createStandaloneDeps(
   // Один инстанс на процесс: его получают тул `task` (фоновый запуск
   // саб-агента) и HTTP-точки обслуживания реестра. Порт записи — из контекста
   // хранения (ADR-096); лимиты — из конфигурации `background.*`.
+  //
+  // Уведомление родителя о завершении фонового прогона (ADR-111): ОДИН путь —
+  // постановка в очередь (`enqueueUserMessage`); процессор добавит сообщение в
+  // историю сам и опубликует `message.added` (двух копий больше нет).
+  // `processMessage` собирается ниже (после оркестратора) — нотификатор
+  // создаётся лениво, при первом вызове колбэка (он приходит только из
+  // фонового прогона, т.е. уже после старта).
+  let backgroundNotifier: ReturnType<typeof createBackgroundParentNotifier> | null = null;
+  const notifyBackgroundParent = async (
+    sessionId: string,
+    message: Message,
+  ): Promise<void> => {
+    backgroundNotifier ??= createBackgroundParentNotifier({
+      sessionManager,
+      eventBus,
+      processorManager: queueManager,
+      processMessage,
+    });
+    await backgroundNotifier(sessionId, message);
+  };
   const backgroundService = storageDegraded
     ? undefined
     : new BackgroundRunService({
@@ -469,23 +489,8 @@ export async function createStandaloneDeps(
           maxProcessesPerSession: config.backgroundConfig?.maxProcessesPerSession ?? 5,
           maxRunsPerSession: config.backgroundConfig?.maxRunsPerSession ?? 10,
         },
-        // Уведомление родителя о завершении фонового саб-агента: сообщение в
-        // историю родителя (роль USER — видно модели) + постановка в очередь
-        // (автоход). Точка сборки — здесь; глобальных синглтонов нет.
-        onNotifyParent: async (sessionId, message) => {
-          const updated = await sessionManager.addMessage(sessionId, message);
-          if (updated) {
-            const idx = updated.messages.length - 1;
-            eventBus.publish(sessionId, 'message.added', {
-              message: serializeMessage(updated.messages[idx]!, idx),
-              index: idx,
-            });
-            eventBus.publish(sessionId, 'session.updated', serializeSession(updated));
-          }
-          await enqueueUserMessage(
-            sessionManager, eventBus, sessionId, message, queueManager, processMessage,
-          );
-        },
+        // Точка сборки уведомления — здесь (глобальных синглтонов нет).
+        onNotifyParent: notifyBackgroundParent,
       });
   // Старт: прогоны прошлого процесса не пережили рестарт (хэндлы отмены — в
   // памяти) — помечаем их `orphaned`. Best-effort: ошибка не роняет старт.

@@ -1135,6 +1135,12 @@ export const dict = {
   'chat.notice.info': 'Инфо',
   'chat.notice.scheduler': 'Планировщик',
   'chat.notice.schedulerNamed': 'Планировщик · {name}',
+  // ADR-111/ADR-113: уведомление о завершении фонового прогона.
+  'chat.notice.backgroundProcess': 'Фоновый процесс · {name}',
+  'chat.notice.backgroundSubagent': 'Фоновый саб-агент · {name}',
+  'chat.notice.backgroundState.completed': 'завершён',
+  'chat.notice.backgroundState.failed': 'ошибка',
+  'chat.notice.backgroundState.cancelled': 'остановлен',
   'chat.notice.copy': 'Копировать',
 
   'chat.message.copied': 'Скопировано',

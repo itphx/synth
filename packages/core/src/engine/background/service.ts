@@ -441,6 +441,10 @@ export function buildSubagentNotification(
       kind: record.kind,
       child_session_id: record.childSessionId,
       state,
+      // ADR-111/ADR-113: описание прогона — для подписи системного блока в UI
+      // (в чате показывается «Фоновый саб-агент · <описание>»). Формат
+      // сообщения для модели не меняется — конверт остаётся в `content`.
+      ...(record.description ? { description: record.description } : {}),
     },
   };
 }
@@ -488,6 +492,10 @@ export function buildProcessNotification(
       kind: record.kind,
       process_id: record.processId ?? record.id,
       state,
+      // ADR-111/ADR-113: команда прогона — для подписи системного блока в UI
+      // (в чате показывается «Фоновый процесс · <команда>»). Формат сообщения
+      // для модели не меняется — конверт остаётся в `content`.
+      ...(record.command ? { command: record.command } : {}),
     },
   };
 }

@@ -18,6 +18,10 @@ export {
   type BackgroundRunPrunerOptions,
 } from './prune.js';
 export {
+  createBackgroundParentNotifier,
+  type BackgroundParentNotifierDeps,
+} from './notify-parent.js';
+export {
   BackgroundRunError,
   BackgroundLimitExceededError,
   BACKGROUND_ERROR_CODES,

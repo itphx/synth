@@ -274,6 +274,7 @@ export {
   startBackgroundRunPruner,
   buildSubagentNotification,
   buildProcessNotification,
+  createBackgroundParentNotifier,
   processLogPath,
   PROCESS_LOG_DIR,
   BACKGROUND_RUN_ID_PREFIX,
@@ -285,6 +286,7 @@ export {
 export type {
   BackgroundRunServiceOptions,
   BackgroundRunPrunerOptions,
+  BackgroundParentNotifierDeps,
   BackgroundErrorCode,
   BackgroundFinalState,
   BackgroundFinishPatch,
