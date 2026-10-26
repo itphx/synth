@@ -18,8 +18,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { MessageRole } from '@itphx/synth-shared';
-import type { ToolContext, ToolDefinition, ToolResult, TokenUsage } from '@itphx/synth-shared';
+import { MessageRole, generateId, nowISO, makeTextPart, MAX_STEER_INJECTIONS_PER_TURN } from '@itphx/synth-shared';
+import type { ToolContext, ToolDefinition, ToolResult, TokenUsage, Message } from '@itphx/synth-shared';
 import type { BaseProvider, LLMMessage, SystemPromptInput } from '../../../providers/base.js';
 import type { AgentRegistry } from '../../agents/registry.js';
 import type { ModelRouter } from '../../router/router.js';
@@ -61,19 +61,23 @@ function toolCallChunk(name: string, args: Record<string, unknown> = {}, id = 'c
 /** Провайдер с пошаговым сценарием: script[i] — чанки i-го вызова (последний повторяется). */
 function scriptedProvider(script: Chunk[][]) {
   let calls = 0;
+  // Снимок сообщений на момент вызова: массив `messages` в цикле мутируется
+  // дальше (инъекции дописываются в него), поэтому смотреть нужно копию.
+  const snapshots: LLMMessage[][] = [];
   const chatAsync = vi.fn((
-    _messages: LLMMessage[],
+    messages: LLMMessage[],
     _systemPrompt?: SystemPromptInput,
     _tools?: Record<string, unknown>[],
   ) => {
     const idx = Math.min(calls, script.length - 1);
     calls += 1;
+    snapshots.push(messages.map((m) => ({ ...m })));
     return (async function* () {
       for (const c of script[idx]!) yield c;
     })();
   });
   const provider = { model: 'test-model', name: 'test-provider', chatAsync } as unknown as BaseProvider;
-  return { provider, calls: () => calls, chatAsync };
+  return { provider, calls: () => calls, chatAsync, snapshots };
 }
 
 /** Провайдер, бросающий ошибку (после опциональной прелюдии чанков). */
@@ -93,7 +97,7 @@ function makeAgentRegistry(): AgentRegistry {
   } as unknown as AgentRegistry;
 }
 
-function makeRegistry(spec: Record<string, () => ToolResult>): { registry: ToolRegistry; counters: Record<string, number> } {
+function makeRegistry(spec: Record<string, () => ToolResult | Promise<ToolResult>>): { registry: ToolRegistry; counters: Record<string, number> } {
   const registry = new ToolRegistry();
   const counters: Record<string, number> = {};
   for (const [name, exec] of Object.entries(spec)) {
@@ -640,6 +644,166 @@ describe('run-cycle — hooks (ADR-030)', () => {
 
     await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
     expect(failed.mock.calls[0]![0]).toMatchObject({ agentId: child.id });
+  });
+});
+
+describe('run-cycle — steering дочерней сессии (ADR-104)', () => {
+  /** Сообщение-инъекция в очередь ребёнка (`steerInbox`). */
+  function steerMessage(content: string, metadata?: Record<string, unknown>): Message {
+    return {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(content)],
+      content,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      author: 'user',
+      metadata: { steer: true, ...(metadata ?? {}) },
+    };
+  }
+
+  it('инъекция в очередь ребёнка попадает в LLM-контекст следующего шага и в историю', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider, snapshots } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [{ isFinal: true, content: 'done' }],
+    ]);
+    // Пользователь вмешивается в ход ребёнка, пока тот выполняет инструмент.
+    const { registry } = makeRegistry({
+      noop: async () => {
+        await sessionManager.enqueueSteerMessage(child.id, steerMessage('ищи в другом месте'));
+        return { content: 'noop ok' };
+      },
+    });
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('done');
+
+    // Инъекция пришла после первого шага — в первый LLM-вызов она не попала.
+    const firstCall = snapshots[0]!;
+    expect(firstCall.some((m) => m.content === 'ищи в другом месте')).toBe(false);
+    // …но попала в следующий запрос — это и есть «вмешательство в текущий ход».
+    const secondCall = snapshots[1]!;
+    expect(secondCall.some((m) => m.role === 'user' && m.content === 'ищи в другом месте')).toBe(true);
+
+    // Персист в истории ребёнка — обычная user-реплика с маркером инъекции.
+    const saved = (await sessionManager.getSession(child.id))!;
+    const injected = saved.messages.find((m) => m.content === 'ищи в другом месте');
+    expect(injected).toBeDefined();
+    expect(injected!.role).toBe(MessageRole.USER);
+    expect(injected!.metadata!.steer).toBe(true);
+    // `seq` назначен по месту (у ввода, поставленного в очередь раньше, он
+    // был бы устаревшим).
+    expect(injected!.seq).toBe(saved.messages.indexOf(injected!) + 1);
+    // Очередь ребёнка вычищена — инъекция не копится.
+    expect(saved.steerInbox ?? []).toHaveLength(0);
+  });
+
+  it('маркер interrupt не прерывает прогон: инъекция применяется как обычная', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider, snapshots } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [{ isFinal: true, content: 'done' }],
+    ]);
+    const { registry } = makeRegistry({
+      noop: async () => {
+        await sessionManager.enqueueSteerMessage(
+          child.id,
+          steerMessage('остановись', { steer: true, interrupt: true }),
+        );
+        return { content: 'noop ok' };
+      },
+    });
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    // Прогон доходит до финального ответа — прерывания хода не было.
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('done');
+    expect(result.metadata!.interrupted).toBeUndefined();
+    expect(result.metadata!.stopped_by).toBeUndefined();
+
+    // Инъекция применена как обычное вмешательство и сохранена с маркерами.
+    const secondCall = snapshots[1]!;
+    expect(secondCall.some((m) => m.role === 'user' && m.content === 'остановись')).toBe(true);
+    const saved = (await sessionManager.getSession(child.id))!;
+    const injected = saved.messages.find((m) => m.content === 'остановись');
+    expect(injected!.metadata!.steer).toBe(true);
+    expect(injected!.metadata!.interrupt).toBe(true);
+  });
+
+  it('превышение лимита инъекций: событие steer.dropped, прогон не падает', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const bus = new EventBus();
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    bus.subscribe(child.id, (e) => { events.push({ type: e.type, data: e.data as Record<string, unknown> }); });
+    // Лимит инъекций на ход — 5; кладём 6 (лимит самой очереди поднят,
+    // чтобы лишнее дошло до границы шага и было отброшено там).
+    for (let i = 0; i < MAX_STEER_INJECTIONS_PER_TURN + 1; i++) {
+      await sessionManager.enqueueSteerMessage(child.id, steerMessage(`инъекция ${i}`), 10);
+    }
+    const { provider } = scriptedProvider([[{ isFinal: true, content: 'done' }]]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, eventBus: bus }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('done');
+
+    const dropped = events.find((e) => e.type === 'steer.dropped');
+    expect(dropped).toBeDefined();
+    expect(dropped!.data.reason).toBe('limit');
+    expect(dropped!.data.dropped_count).toBe(1);
+    expect(dropped!.data.limit).toBe(MAX_STEER_INJECTIONS_PER_TURN);
+
+    // Применены ровно 5 инъекций (лимит хода), лишняя отброшена.
+    const saved = (await sessionManager.getSession(child.id))!;
+    const applied = saved.messages.filter((m) => m.metadata?.steer === true);
+    expect(applied).toHaveLength(MAX_STEER_INJECTIONS_PER_TURN);
+  });
+
+  it('без дочерней сессии поведение прежнее: инъекция в родителя не попадает в ход саб-агента', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    await sessionManager.enqueueSteerMessage(parent.id, steerMessage('вмешательство в родителя'), 10);
+    const { provider, snapshots, calls } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [{ isFinal: true, content: 'done' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      parentSessionId: parent.id,
+    }));
+
+    expect(calls()).toBe(2);
+    expect(result.content).toContain('done');
+    // Очередь родителя не тронута — её вычитает оркестратор родительской сессии.
+    const parentAfter = (await sessionManager.getSession(parent.id))!;
+    expect(parentAfter.steerInbox ?? []).toHaveLength(1);
+    // В ход саб-агента чужое сообщение не попало.
+    const secondCall = snapshots[1]!;
+    expect(secondCall.some((m) => m.content === 'вмешательство в родителя')).toBe(false);
   });
 });
 

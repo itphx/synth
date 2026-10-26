@@ -680,7 +680,17 @@
   tool-loop `runSubagent`, используемый и `task-resume.ts`), `prompt.ts`, `args.ts`, `types.ts`;
   `task.ts` — фасад-реэкспорт. Тулы `task`/`task-resume` собирают промпт
   саб-агента (`resolveSubagentPrompt`) — проектные инструкции (ADR-069) добавляются,
-  кроме `task(skip_context_files=true)`. Тулы управления проектом:
+  кроме `task(skip_context_files=true)`.
+  **Steering дочерней сессии (ADR-104 + ADR-111).** Цикл саб-агента применяет инъекции
+  **на границе шага** (`run-cycle.ts`): перед каждым LLM-вызовом вычитывается `steerInbox`
+  **сессии-ребёнка** (`sessionManager.takeSteerMessages`), сообщение персистится в истории
+  ребёнка как `user`-реплика с `metadata.steer`, попадает в LLM-контекст текущего хода
+  (`messageToLLMMessage`) и публикуется в канал ребёнка (`message.added` + `message.injected`);
+  превышение лимита — `steer.dropped` в канале ребёнка (ход не падает). `interrupt` для
+  ребёнка прогон **не** прерывает (на границе шага генерации нет) — применяется как обычная
+  инъекция. Общая точка применения инъекций для основной сессии и ребёнка —
+  `engine/steering/apply.ts` (`applySteerInjections`); оркестратор использует её же
+  (`ChatOrchestrator._applySteerInjections`). Очереди родителя и ребёнка изолированы. Тулы управления проектом:
   `project_update`/`project_workspace_set` (`project-manage.ts`) и
   `project_repo_clone|init|add|fetch|remove` (`project-repos.ts`) — проект берётся
   из сессии, смена workspace/регистрация репозиториев сохраняются `ProjectStore.save`

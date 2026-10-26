@@ -19,6 +19,8 @@ import { PermissionApprovalManager } from '../../permission/approval.js';
 import { estimatePromptChars } from '../../context/token-ratio.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { createChildSessionLifecycle, publishMessageAdded } from './child-session.js';
+import { messageToLLMMessage } from './prompt.js';
+import { applySteerInjections } from '../../steering/apply.js';
 import type { ContextFileRepository } from '../../../storage/ports/context-file-repository.js';
 import type { ContextMode, SubagentRetryConfig, TaskExtra } from './types.js';
 
@@ -296,6 +298,69 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   const buildChildAssistantMetadata = childLifecycle.buildAssistantMetadata;
 
   /**
+   * ADR-104: steering дочерней сессии — применение очереди инъекций на
+   * границе шага (тот же шов, что у оркестратора основной сессии; общая
+   * реализация — `engine/steering/apply.ts`).
+   *
+   * Инъекция адресована конкретной сессии: очередь ребёнка (`steerInbox`
+   * дочерней сессии) изолирована от очереди родителя. Сообщение
+   * (`POST /sessions/<child>/prompt` с `mode:'steer'`) персистится в
+   * истории ребёнка как `user`-реплика с `metadata.steer=true` и
+   * добавляется в LLM-контекст текущего хода — то есть вплетается в тот же
+   * ход, без нового хода и без разрыва пар `toolUse`/`toolResult`.
+   *
+   * `interrupt` для дочерней сессии НЕ прерывает прогон и не абортит токен:
+   * на границе шага генерации уже нет (она закончилась на предыдущей
+   * итерации), поэтому инъекция применяется как обычное вмешательство —
+   * семантика «вмешательство без завершения хода». Прервать генерацию
+   * внутри шага саб-агента нечем: шаг — это LLM-вызов целиком.
+   *
+   * Нет дочерней сессии (чистый `none`-контекст) — no-op.
+   */
+  const applyChildSteerInjections = async (): Promise<void> => {
+    const sessionManager = extra.sessionManager;
+    if (!childSessionId || !sessionManager) return;
+    try {
+      await applySteerInjections({
+        sessionManager,
+        sessionId: childSessionId,
+        llmMessages: messages,
+        toLlmMessages: (message) => [messageToLLMMessage(message)],
+        persist: async (message) => {
+          // `seq` назначается по месту (`addMessage`): ввод мог быть поставлен
+          // в очередь инъекций раньше, и его `seq` (снимок на момент постановки)
+          // к этому моменту уже устарел.
+          const updated = await sessionManager.addMessage(childSessionId, { ...message, seq: 0 });
+          if (!updated) return { index: 0 };
+          const index = updated.messages.length - 1;
+          const persisted = updated.messages[index]!;
+          // Сообщение дочерней сессии — как любое другое сообщение ребёнка:
+          // `message.added` в канал ребёнка (+ `child.message.added` в канал
+          // родителя) через общий хелпер.
+          if (extra.eventBus) {
+            await publishMessageAdded(
+              extra.eventBus, parentSessionId, childSessionId, persisted, index, updated,
+            );
+          }
+          return { index };
+        },
+        // `message.injected` публикуется в канал **ребёнка**: инъекция
+        // принадлежит его ходу, а позиция сообщения — индекс его истории
+        // (в канале родителя такой индекс попал бы в чужое сообщение).
+        publishInjected: (event) => {
+          extra.eventBus?.publish(childSessionId, 'message.injected', event);
+        },
+        publishDropped: (event) => {
+          extra.eventBus?.publish(childSessionId, 'steer.dropped', event);
+        },
+        streamId: extra.streamId,
+      });
+    } catch {
+      // Инъекция не должна ронять прогон саб-агента.
+    }
+  };
+
+  /**
    * Финальный шаг-отчёт саб-агента по лимиту шагов (механика opencode):
    * ОДИН LLM-вызов «только текст» — инструменты НЕ передаются, а
    * предложенные моделью вызовы игнорируются (исполнять их нельзя).
@@ -495,6 +560,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
 
     while (iteration < effectiveMaxSteps) {
       if (isAborted()) break;
+
+      // ADR-104: инъекции в дочернюю сессию применяются на границе шага —
+      // ДО формирования запроса к LLM, поэтому сообщение попадает в текущую
+      // итерацию. Результаты инструментов предыдущей итерации уже в
+      // `messages`, поэтому пары `toolUse`/`toolResult` не рвутся.
+      await applyChildSteerInjections();
 
       let accumulatedContent = '';
       let toolCalls: Record<string, unknown>[] | undefined = [];

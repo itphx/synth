@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY, STEER_INTERRUPTED_METADATA_KEY, STEERING_ERROR_CODES } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
@@ -86,6 +86,7 @@ import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
 // ADR-095 (шаг 6a): вынесенные модули оркестратора (тонкие делегации).
 import { computeMessageCost, resolveMessageModel, estimateUsage, estimatePromptChars as estimatePromptCharsFn, publishLiveUsage, aggregateSubagentStats, type PublishLiveUsageParams } from './orchestrator/usage.js';
 import { publishFsChange } from './orchestrator/fs-change.js';
+import { applySteerInjections } from './steering/apply.js';
 import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, joinAccumulatedTexts, type SaveAssistantMessageDeps, type AssistantMessageStatus } from './orchestrator/persistence.js';
 import { StreamMessageDraft, type StreamMessageRef } from './orchestrator/stream-persistence.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './orchestrator/errors.js';
@@ -4460,54 +4461,25 @@ export class ChatOrchestrator {
     author: string,
     streamId: string,
   ): Promise<void> {
-    const { messages, dropped } = await this._sessionManager.takeSteerMessages(
-      session.id, MAX_STEER_INJECTIONS_PER_TURN,
-    );
-
-    // Лимит инъекций на ход: лишние сообщения отбрасываются (событие
-    // `steer.dropped`), а не копятся и не рвут tool-цепочку.
-    if (dropped.length > 0) {
-      publishChunk('steer.dropped', {
-        reason: 'limit',
-        // Машинный код — тот же, что отдаёт API (429 STEER_LIMIT_EXCEEDED).
-        code: STEERING_ERROR_CODES.limitExceeded,
-        limit: MAX_STEER_INJECTIONS_PER_TURN,
-        dropped_count: dropped.length,
-        error: sm('steer.limit_exceeded', { limit: String(MAX_STEER_INJECTIONS_PER_TURN) }),
-        i18n: i18nMeta('steer.limit_exceeded', { limit: String(MAX_STEER_INJECTIONS_PER_TURN) }),
-      });
-    }
-
-    for (const injected of messages) {
-      const persisted: Message = {
-        ...injected,
-        role: MessageRole.USER,
-        metadata: {
-          ...(injected.metadata ?? {}),
-          [STEER_METADATA_KEY]: true,
-          stream_id: (injected.metadata?.stream_id as string) || streamId,
-        },
-      };
-      const stored = await this._sessionManager.appendMessage(session.id, persisted);
-
-      // В контекст LLM — тем же маппингом, что и история сессии
-      // (`sessionMessagesToLlm`), чтобы атрибуция совпадала.
-      for (const llmMessage of sessionMessagesToLlmFn([persisted], agentRole, author)) {
-        currentMessages.push(llmMessage);
-      }
-
-      publishChunk('message.injected', {
-        stream_id: streamId,
+    // Общая точка применения инъекций (ADR-104) — её же использует цикл
+    // саб-агента (`engine/tools/task/run-cycle.ts`): семантика инъекции
+    // (лимит, порядок, маркеры, payload событий) не должна расходиться
+    // между основной сессией и дочерней.
+    await applySteerInjections({
+      sessionManager: this._sessionManager,
+      sessionId: session.id,
+      llmMessages: currentMessages,
+      toLlmMessages: (message) => sessionMessagesToLlmFn([message], agentRole, author),
+      persist: async (message) => {
+        const stored = await this._sessionManager.appendMessage(session.id, message);
         // Позиция сообщения в истории (0-based) — как в `GET /:id/messages`,
         // чтобы UI мог добавить его в ленту без полной перезагрузки.
-        message_index: (stored?.seq ?? persisted.seq) - 1,
-        message_id: persisted.id,
-        content: persisted.content,
-        author: persisted.author,
-        agent_role: persisted.agentRole,
-        metadata: persisted.metadata,
-      });
-    }
+        return { index: (stored?.seq ?? message.seq) - 1 };
+      },
+      publishInjected: (event) => publishChunk('message.injected', event),
+      publishDropped: (event) => publishChunk('steer.dropped', event),
+      streamId,
+    });
   }
 
   /**

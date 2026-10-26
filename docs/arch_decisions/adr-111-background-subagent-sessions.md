@@ -7,7 +7,7 @@
 > [ADR-077](./adr-077-runtime-toolchain.md) (исполнитель; шаг 7c — остаток),
 > [ADR-089](./adr-089-external-events-automation.md) (события сессии, владелец, надёжный «Стоп»),
 > [ADR-096](./adr-096-storage-layer.md) (порты слоя хранения),
-> [ADR-104](./adr-104-mid-turn-steering.md) (границы хода; steering ребёнка — остаток),
+> [ADR-104](./adr-104-mid-turn-steering.md) (границы хода; steering дочерней сессии),
 > [ADR-107](./adr-107-plugin-facade-services.md) (образец: порт + сервис + точка сборки),
 > [PROP-096](./prop-096-background-subagent-sessions.md) (исходное предложение),
 > [PROP-097](./prop-097-background-processes-registry.md) (фоновые процессы — родственный механизм).
@@ -71,8 +71,12 @@
 - **Фоновые процессы в `remote`-режиме недоступны** (`background_unsupported`): порт исполнения не
   умеет фоновый запуск — это остаток ADR-077 (шаг 7c). Для фоновых саб-агентов ограничение не
   действует: они идут через LLM-путь, а не через порт команд.
-- **Steering фонового ребёнка — остаток ADR-104**: `steerInbox` адресован конкретной сессии, а цикл
-  фонового ребёнка идёт мимо оркестратора, поэтому инъекция в фоновую сессию её не разблокирует.
+- **Steering дочерней сессии поддержан** (`POST /sessions/<child>/prompt` с `mode:'steer'`):
+  инъекция кладётся в очередь инъекций сессии-ребёнка, а цикл ребёнка
+  (`engine/tools/task/run-cycle.ts`) применяет её на границе шага — как в основной сессии
+  (ADR-104). Для фонового прогона это работает всегда: сессия ребёнка помечена занятой, поэтому
+  режим отправки применяется к ней как к активному ходу. `interrupt` для ребёнка не обрывает
+  генерацию (на границе шага её уже нет) и применяется как обычное вмешательство.
 - Рестарт не возобновляет фоновые прогоны (п. 6) — после рестарта родитель узнаёт об этом из записи
   реестра, а не из работающего ребёнка.
 
@@ -85,6 +89,7 @@
 | Сервис реестра | `engine/background/service.ts` (`BackgroundRunService`: `startSubagent`/`startProcess`/`finish`/`stop`/`recoverOnStart`/`prune`, `buildSubagentNotification`), `engine/background/types.ts`, `engine/background/prune.ts` |
 | Тул `task` | `engine/tools/task/tool.ts` (`startBackgroundSubagent` — порядок п. 2), `engine/tools/task/args.ts` (аргумент `background`), `engine/tools/task/resume-target.ts` (п. 4), `engine/tools/task/run-cycle.ts` (лимит шагов, п. 7), `engine/tools/task-resume.ts` |
 | Промпт лимита шагов | `prompts/system/MAX_STEPS.{ru,en}.md`; загрузчик — `ContextConfig.getMaxStepsPrompt` |
+| Steering ребёнка (ADR-104) | `engine/steering/apply.ts` (общая точка применения инъекций на границе шага), `engine/tools/task/run-cycle.ts` (граница шага цикла ребёнка); тесты — `engine/tools/task/run-cycle.test.ts` |
 | События и история | `child.completed/failed/cancelled` в канал родителя; уведомление — `buildSubagentNotification` (`metadata.type = 'background_run_result'`) |
 | Точки сборки | `server/app/deps.ts`, `backend/app/deps.ts` (`backgroundService`, `onNotifyParent` — запись в историю + постановка в очередь, `backgroundEnabled`) |
 | Конфиг | `shared/config/{types,defaults}.ts` — секция `background` (`enabled`, `maxSubagentsPerSession`, `maxProcessesPerSession`, `maxRunsPerSession`, `logMaxBytes`, `retentionDays`) |
@@ -111,5 +116,5 @@
 - 2026-10-26 — решение принято и реализовано: фоновые саб-агенты (`task({background: true})`), единый
   реестр фоновых прогонов (порт `BackgroundRunRepository`), уведомление родителя с автоходом,
   продолжение ребёнка из тула, лимиты сессии и глубина 1, `orphaned` при рестарте, принудительный
-  финальный шаг-отчёт по лимиту шагов. Остаток — фоновые процессы в `remote`-режиме (PROP-097,
-  ADR-077 шаг 7c) и steering фонового ребёнка (ADR-104).
+  финальный шаг-отчёт по лимиту шагов, steering дочерней сессии (граница шага цикла ребёнка,
+  ADR-104). Остаток — фоновые процессы в `remote`-режиме (PROP-097, ADR-077 шаг 7c).
