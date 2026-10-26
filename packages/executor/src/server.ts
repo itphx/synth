@@ -97,6 +97,11 @@ export interface ExecutorAppOptions {
   startedAt?: number;
   /** Порт исполнения (инъекция для тестов). */
   executionPort?: ConstructorParameters<typeof ExecService>[0]['executionPort'];
+  /**
+   * Файл CA доверия git (ADR-099/ADR-077): путь в окружении исполнителя.
+   * Задан → в окружение вызова добавляется `http.sslCAInfo` (env-канал).
+   */
+  tlsCaFile?: string;
 }
 
 /** Дефолты лимитов исполнителя (совпадают с `EXECUTOR_DEFAULTS`). */
@@ -188,6 +193,7 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
     maxTimeoutMs: opts.maxTimeoutMs ?? DEFAULT_MAX_TIMEOUT_MS,
     maxOutputBytes: opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
     ...(opts.executionPort ? { executionPort: opts.executionPort } : {}),
+    ...(opts.tlsCaFile ? { tlsCaFile: opts.tlsCaFile } : {}),
   });
   // Реестр фоновых процессов исполнителя (ADR-077, шаг 7c). Готовый сервис
   // передаётся из `startExecutorServer` — иначе он не смог бы остановить
@@ -382,7 +388,7 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
       arch: process.arch,
       node: process.version,
       // Аддитивно: старый control plane поле не читает.
-      features: { background: true },
+      features: { background: true, secrets: true },
     };
     return c.json(body, 200);
   });

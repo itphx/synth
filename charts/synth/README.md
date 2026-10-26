@@ -163,6 +163,8 @@ ingress:
 | `executor.networkPolicy.allowedEgress` | `[]` | Доп. egress-правила (формат `networking.k8s.io/v1`) |
 | `executor.token.existingSecret` | `""` | Secret с токеном доверия `synth_exec_…` (пусто → `secrets.existingSecret`) |
 | `executor.token.secretKey` | `SYNTH_EXECUTION_TOKEN` | Ключ внутри Secret: backend читает файл, исполнитель — значение из `secretKeyRef` |
+| `executor.tls.caSecret` | `""` | Secret с CA доверия git у исполнителя (пусто — выключено): монтируется в `/etc/synth/tls` (read-only), env `SYNTH_EXECUTOR_TLS_CA_FILE` |
+| `executor.tls.caKey` | `ca.pem` | Ключ (имя файла CA) внутри `executor.tls.caSecret` |
 | `security.tls.existingSecret` | `""` | Secret с CA/клиентскими сертификатами → mount в `/etc/synth/tls` (ADR-099) |
 | `security.tls.caKey` / `certKey` / `keyKey` | `""` | Ключи внутри Secret → `security.tls.{caFile,certFile,keyFile}` (путь `/etc/synth/tls/<key>`) |
 | `security.tls.caFile` / `certFile` / `keyFile` | `""` | Явные пути внутри контейнера (когда файлы смонтированы вами) |
@@ -1024,6 +1026,37 @@ kubectl exec -n synth deploy/synth-executor -- \
   sh -c 'wget -qO- --header="Authorization: Bearer $SYNTH_EXECUTOR_TOKEN" http://127.0.0.1:5100/mcp/servers' || true
 # → [{"name":"playwright-mcp","status":"up","toolCount":25}]  (status до первого обращения — "idle")
 ```
+
+### CA доверия git у исполнителя (ADR-077 «Обновлено 2026-10-26», (в))
+
+В split-режиме git-команды исполняет **исполнитель**, а не control plane:
+путь CA в контейнере backend'а в контейнере исполнителя не существует. Поэтому
+CA — **конфигурация исполнителя**, а не пользовательский секрет: он монтируется
+в pod исполнителя из Secret и передаётся процессу **путём** через env.
+
+```yaml
+executor:
+  tls:
+    caSecret: corp-ca        # имя Secret (пусто — выключено, дефолт)
+    caKey: ca.pem            # ключ внутри Secret
+```
+
+Что это даёт:
+
+- Secret монтируется в `/etc/synth/tls` **read-only** (`defaultMode: 0444`);
+- исполнитель получает `SYNTH_EXECUTOR_TLS_CA_FILE=/etc/synth/tls/<caKey>` и
+  добавляет его в окружение вызова env-каналом git ≥ 2.31
+  (`GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=http.sslCAInfo`,
+  `GIT_CONFIG_VALUE_0=<путь>`);
+- `gitCaConfig()` control plane в remote-режиме **не** применяется — в argv
+  попал бы путь файла, которого в исполнителе нет;
+- **fail-closed**: `caSecret` задан, но файл не читается — исполнитель **не
+  стартует** (иначе он считал бы, что доверяет CA, а git-команды падали бы с
+  невнятной ошибкой TLS).
+
+Значений PEM в `values.yaml` нет (инвариант 13) — только ссылка на Secret.
+Пустой `caSecret` (дефолт) → том не монтируется, env не выставляется, манифесты
+не меняются.
 
 ### Привязка клиента к поду пула исполнителей
 

@@ -1,18 +1,25 @@
 # ADR-077: Инструментальное окружение исполнения — единый порт ExecutionPort и режим remote
 
-> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула), **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`), **шаг B1** — исполнитель **хостит MCP-серверы у себя** (stdio) и отдаёт их инструменты и вызовы по HTTP (`GET /mcp/servers`, `GET /mcp/tools`, `POST /mcp/call`; эти эндпоинты появились в протоколе 2) и **шаг B2** — клиентская проводка MCP-stdio в control plane (источник `ExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе). **Актуальная версия протокола — 3** (фоновые процессы, ADR-113); совместимость проверяется полем `protocol` в `GET /capabilities`. Перенос git-операций control plane на `ExecutionPort` выполнен (`GitService` — argv через порт, `simple-git` удалён из core). Остаток — метрики `synth_executor_*` + `/metrics` исполнителя + runbook (шаг 7d), доставка SSH/CA в split-режиме — см. «Обновлено 2026-10-26».
+> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула), **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`), **шаг B1** — исполнитель **хостит MCP-серверы у себя** (stdio) и отдаёт их инструменты и вызовы по HTTP (`GET /mcp/servers`, `GET /mcp/tools`, `POST /mcp/call`; эти эндпоинты появились в протоколе 2) и **шаг B2** — клиентская проводка MCP-stdio в control plane (источник `ExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе). **Актуальная версия протокола — 4** (секреты вызова `secrets[]`, ADR-077 «Обновлено 2026-10-26», (б); фоновые процессы — v3, ADR-113); совместимость проверяется полем `protocol` в `GET /capabilities`. Перенос git-операций control plane на `ExecutionPort` выполнен (`GitService` — argv через порт, `simple-git` удалён из core). **Доставка SSH/CA в split-режиме — реализована** (см. «Обновлено 2026-10-26», (б) и (в)). Остаток — метрики `synth_executor_*` + `/metrics` исполнителя + runbook переключения топологии (шаг 7d).
 > **Дата:** 2026-10-21
 > **Обновлено:** 2026-10-26 — три решения по остатку исполнителя (детали и порядок — [docs/EXECUTION.md](../EXECUTION.md)):
 > **(а) git — через существующий порт, без новых git-эндпоинтов протокола.** Git-операции control plane
 > переводятся на argv (`ExecutionPort.execute`, `requires: ['git']`); класс `GitService` сохраняет
 > публичный API — меняется только внутренняя реализация, пакет `simple-git` удалён из core.
-> **(б) SSH-материал — на время вызова.** Приватные SSH-ключи проектов доставляются исполнителю
-> аддитивным полем `secrets[]` в `POST /exec` (протокол 4): материализация в tmp исполнителя
-> (`mkdtemp`, каталог 0700, ключ 0600), удаление в `finally` + sweep `synth-ssh-*` при старте. В общий
+> **(б) SSH-материал — на время вызова. — РЕАЛИЗОВАНО.** Приватные SSH-ключи проектов доставляются
+> исполнителю аддитивным полем `secrets[]` в `POST /exec` (протокол **4**): значение ключа (не путь к
+> файлу — путь control plane в контейнере исполнителя не существует); материализация в tmp исполнителя
+> (`mkdtemp` с префиксом `synth-ssh-`, каталог 0700, ключ 0600, askpass 0700 при passphrase),
+> удаление в `finally` + **sweep `synth-ssh-*` при старте** (`sweepStaleSshDirs`). В общий
 > Secret-том/K8s Secret ключи **не** попадают: at-rest они только в control plane (шифрование
-> мастер-ключом, ADR-076).
-> **(в) CA — конфигурация, а не пользовательский секрет.** Исполнитель получает CA при старте
-> (`SYNTH_EXECUTOR_TLS_CA_FILE`, Secret/файл в образе) и сам добавляет `-c http.sslCAInfo`;
+> мастер-ключом, ADR-076). Признак поддержки — `features.secrets: true` в `GET /capabilities`;
+> исполнитель протокола < 4 → fail-closed `ESECRETS` (`EXECUTION_SECRETS_UNSUPPORTED_CODE`):
+> выполнять команду без ключа нельзя. Фоновые процессы (`POST /exec/spawn`) секреты **не
+> поддерживают** — отказ с обеих сторон.
+> **(в) CA — конфигурация, а не пользовательский секрет. — РЕАЛИЗОВАНО.** Исполнитель получает CA при
+> старте (`SYNTH_EXECUTOR_TLS_CA_FILE`, Secret/файл в образе; задан, но файл не читается — ошибка
+> старта, fail-closed) и сам добавляет в окружение вызова env-канал git ≥ 2.31:
+> `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=http.sslCAInfo`, `GIT_CONFIG_VALUE_0=<путь>`;
 > `gitCaConfig()` control plane в remote-режиме **не** применяется (иначе в argv попал бы путь файла,
 > которого в исполнителе нет). Это соответствует ADR-099: источник доверия один, применяется при старте.
 > **Связано:** [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md) (образец портов и контрактного suite), [ADR-099](./adr-099-egress-tls-trust.md) (доверенная граница и исходящий транспорт), [ADR-092](./adr-092-instance-lifecycle-maintenance.md) (рестарт, exit 75), [ADR-094](./adr-094-observability-metrics.md) (метрики), [ADR-075](./adr-075-project-workspace-provisioning.md) (workspace), [ADR-076](./adr-076-git-repo-registry-ssh.md) (git-реестр и SSH), [ADR-078](./adr-078-runtime-dependency-availability.md) (детект зависимостей), [ADR-036](./adr-036-llm-gateway.md) (в исполнителе LLM-ключей нет), [ADR-038](./adr-038-npm-packages.md) (поставка пакета); детали и формат — [docs/EXECUTION.md](../EXECUTION.md) (Spec).
@@ -228,9 +235,11 @@
   `contract/remote.test.ts`.
 - **Реализации:** `packages/core/src/execution/inline-execution-port.ts` (в процессе) и удалённая —
   `packages/core/src/execution/remote.ts` (динамический `import()` `@itphx/synth-executor/client`, fail-closed,
-  чтение токена из файла) + пакет `packages/executor/` (`protocol.ts` — `EXECUTOR_PROTOCOL_VERSION = 3`,
+  чтение токена из файла) + пакет `packages/executor/` (`protocol.ts` — `EXECUTOR_PROTOCOL_VERSION = 4`,
   `client.ts` — `RemoteExecutionPort`, `server.ts`, `mcp.ts` — хостинг MCP-серверов, `exec-service.ts`,
-  `auth.ts`, `workspace.ts` — containment `cwd`, `toolchain.ts`, `config.ts`, `main.ts`).
+  `secrets.ts` — материализация секретов вызова и sweep `synth-ssh-*`, `auth.ts`,
+  `workspace.ts` — containment `cwd`, `toolchain.ts`, `config.ts` (`SYNTH_EXECUTOR_TLS_CA_FILE`),
+  `main.ts`).
 - **Выбор режима и шов:** `packages/core/src/execution/factory.ts` (`createExecutionPortForConfig`),
   `packages/core/src/execution/startup.ts` (`checkExecutionMode`/`assertExecutionModeSupported` — fail-closed),
   `packages/core/src/execution/tool-port.ts` (`resolveExecutionPort(ctx)` → `ctx.extra.executionPort`).
@@ -310,9 +319,21 @@
   `execution.mode=remote`), тесты `executor-mcp-source.test.ts`, `executor-mcp-client.test.ts` и e2e
   `executor-mcp.e2e.test.ts` (гейт по env `SYNTH_TEST_EXECUTOR_MCP_URL`/`_TOKEN`, как контрактный suite
   хранения по `SYNTH_TEST_POSTGRES_DSN`).
-- **Остаток:** метрики `synth_executor_*` + `/metrics` исполнителя + runbook переключения топологии
-  (шаг 7d); доставка SSH-материала и CA в split-режиме — см. «Обновлено 2026-10-26», (б) и (в).
-  Перенос git-операций control plane на `ExecutionPort` выполнен (там же, (а)).
+- **Секреты вызова и доверие git (протокол 4):** `packages/core/src/execution/ports/execution-port.ts`
+  (`ExecSecret`, `ExecRequest.secrets`, `EXECUTION_SECRETS_UNSUPPORTED_CODE`),
+  `packages/core/src/execution/secret-env.ts` (материализация в inline-режиме),
+  `packages/core/src/git/ssh-env.ts` (`toSshSecret` — ключ как значение),
+  `packages/core/src/engine/tools/git-ssh.ts` (`secrets` вместо `env`),
+  `packages/core/src/git/exec.ts`/`git-service.ts` (передача `secrets` в порт),
+  `packages/executor/src/protocol.ts` (`parseExecSecrets`, пределы: 4 записи, ключ ≤ 16 КиБ,
+  passphrase ≤ 4 КиБ), `packages/executor/src/secrets.ts` (`materializeSecrets`,
+  `sweepStaleSshDirs`), `packages/executor/src/exec-service.ts` (окружение вызова:
+  `env` → `GIT_CONFIG_*` → env секрета), `packages/executor/src/client.ts` (доставка `secrets` в тело
+  `POST /exec`, fail-closed `ESECRETS` для исполнителя протокола < 4 и для фонового запуска),
+  `packages/executor/src/config.ts` (`SYNTH_EXECUTOR_TLS_CA_FILE`).
+- **Остаток:** только метрики `synth_executor_*` + `/metrics` исполнителя + runbook переключения
+  топологии (шаг 7d). Перенос git-операций control plane на `ExecutionPort` выполнен
+  («Обновлено 2026-10-26», (а)); доставка SSH-материала и CA — **реализована** (там же, (б) и (в)).
 
 ## Связи
 
@@ -339,6 +360,11 @@
   `mode`; шаги 7a–7b: пакет исполнителя (exec-API `/exec`/`/capabilities`/`/health`, containment `cwd`) и
   подключение по `execution.mode=remote` (динамический `import()`, чтение токена из файла, стартовая
   проверка режима).
+- 2026-10-26 — **фаза 2 закрыта**: протокол **4** (`secrets[]` в `POST /exec`, `features.secrets`),
+  материализация секрета на исполнителе (`mkdtemp` `synth-ssh-*`, каталог 0700/ключ 0600/askpass 0700,
+  удаление в `finally` + sweep `synth-ssh-*` при старте), CA исполнителя (`SYNTH_EXECUTOR_TLS_CA_FILE`
+  → `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0`), fail-closed `ESECRETS` для
+  исполнителя протокола < 4 и для фоновых процессов.
 - 2026-10-22 — шаг 7c: чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны
   `executor-*.yaml`, RWX-том workspace в backend и в пуле, `NetworkPolicy` пула, токен из Secret —
   backend файлом, worker значением, fail-closed проверки рендера); предложение повышено до ADR, детали

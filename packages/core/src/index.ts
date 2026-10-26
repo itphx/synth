@@ -341,12 +341,14 @@ export {
   DEFAULT_SHELL_BINARY,
   EXECUTION_BASE_CAPABILITIES,
   EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
+  EXECUTION_SECRETS_UNSUPPORTED_CODE,
 } from './execution/ports/index.js';
 export type {
   ExecutionPort,
   ExecRequest,
   ExecResult,
   ExecCommand,
+  ExecSecret,
   ExecFailureReason,
   ExecutionErrorInit,
   ExecutionCapabilitySummary,

@@ -1309,6 +1309,19 @@
   исполнитель, ADR-099/ADR-077) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).
+- **SSH-доступ — секрет вызова, а не файл в control plane** (ADR-077, протокол 4).
+  Приватный ключ per-agent раскрывается в control plane и уходит в порт **значением**:
+  `ExecSecret` (`execution/ports/execution-port.ts`: `kind:'ssh-key'`, `privateKey`,
+  `passphrase?`) в `ExecRequest.secrets`. Материализацию делает **точка исполнения**:
+  `execution/secret-env.ts` (`materializeSecretEnv` — inline-режим) либо исполнитель
+  (`packages/executor/src/secrets.ts` — remote-режим; путь к файлу control plane в его
+  контейнере не существует, поэтому прописать его в `GIT_SSH_COMMAND` нельзя).
+  Итог: **в control plane временных файлов с ключом не остаётся** — только значение в
+  запросе; `git/ssh-env.ts` (`toSshSecret`) превращает раскрытый ключ в `ExecSecret`,
+  `engine/tools/git-ssh.ts` отдаёт `secrets` (не `env`), `git/exec.ts` и `git/git-service.ts`
+  передают `secrets` в порт. Значения **не логируются** и **не возвращаются** в ответе;
+  фоновые процессы (`spawnBackground`) секреты не поддерживают — fail-closed с кодом
+  `ESECRETS` (`EXECUTION_SECRETS_UNSUPPORTED_CODE`).
 - `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (41 — 39 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
   `ExternalCredentialRepository` — внешние доступы к коннекторам (ADR-105 Ф1; файловое/в-памяти
   хранилища — `ExternalCredentialStore`, контракт — `storage/contract/external-credential-repository.contract.ts`);

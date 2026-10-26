@@ -1,7 +1,7 @@
 import { readdir, mkdir, rm } from 'node:fs/promises';
 import { resolve as pathResolve, relative, join, isAbsolute, sep } from 'node:path';
 import type { RepoStatus, CommitInfo, CommitDetail, CommitFileInfo } from '@itphx/synth-shared';
-import type { ExecutionPort } from '../execution/ports/index.js';
+import type { ExecutionPort, ExecSecret } from '../execution/ports/index.js';
 import { gitExec, sanitizeGitEnv } from './exec.js';
 
 /**
@@ -17,9 +17,16 @@ import { gitExec, sanitizeGitEnv } from './exec.js';
 /** Санитайз окружения git — историческое место экспорта (реализация — `exec.ts`). */
 export { sanitizeGitEnv };
 
-/** Опции git-вызова: дополнительные переменные окружения (например SSH). */
+/**
+ * Опции git-вызова: дополнительное окружение и секреты вызова.
+ *
+ * `secrets` — SSH-ключ (ADR-077, протокол 4): он доставляется точке
+ * исполнения на время вызова, а не прописывается путём в control plane.
+ */
 export interface GitEnvOptions {
   env?: Record<string, string>;
+  /** Секреты вызова (SSH-ключ) — доставляются точке исполнения. */
+  secrets?: ExecSecret[];
 }
 
 /** Опции fetch: окружение + конкретный remote (по умолчанию — все). */
@@ -144,14 +151,19 @@ export class GitService {
   private run(
     args: string[],
     cwd?: string,
-    env?: Record<string, string>,
+    opts?: GitEnvOptions,
   ): Promise<{ stdout: string; stderr: string }> {
-    return gitExec(args, { execution: this._execution, cwd, env });
+    return gitExec(args, {
+      execution: this._execution,
+      cwd,
+      env: opts?.env,
+      ...(opts?.secrets && opts.secrets.length > 0 ? { secrets: opts.secrets } : {}),
+    });
   }
 
   async isRepo(repoPath: string, opts?: GitEnvOptions): Promise<boolean> {
     try {
-      const { stdout } = await this.run(['rev-parse', '--is-inside-work-tree'], repoPath, opts?.env);
+      const { stdout } = await this.run(['rev-parse', '--is-inside-work-tree'], repoPath, opts);
       return stdout.trim() === 'true';
     } catch {
       return false;
@@ -164,12 +176,12 @@ export class GitService {
       const { stdout } = await this.run(
         ['status', '--porcelain=v2', '-z', '--branch'],
         repoAbsPath,
-        opts?.env,
+        opts,
       );
       const { stdout: logOut } = await this.run(
         ['log', '-1', '--format=%aI%x00%s'],
         repoAbsPath,
-        opts?.env,
+        opts,
       );
       const [lastCommitAt, lastCommitSubject] = logOut.split('\0');
       return {
@@ -243,7 +255,7 @@ export class GitService {
       // directory might already exist
     }
     const args = defaultBranch ? ['init', '--initial-branch', defaultBranch] : ['init'];
-    await this.run(args, repoPath, opts?.env);
+    await this.run(args, repoPath, opts);
     return {
       path: repoRelPath,
       isRepo: true,
@@ -271,19 +283,19 @@ export class GitService {
     // `cwd` — родительский каталог внутри workspace: в remote-режиме
     // containment проверяет исполнитель, и абсолютный путь назначения обязан
     // лежать в его workspace (том общий, ADR-077).
-    await this.run(args, parentDir, opts?.env);
+    await this.run(args, parentDir, opts);
     return {
       path: effectivePath,
       isRepo: true,
     };
   }
 
-  /** ADR-076: fetch репозитория (при необходимости с SSH-окружением). */
+  /** ADR-076: fetch репозитория (при необходимости с SSH-доступом). */
   async fetchRepo(wsAbsPath: string, repoRelPath: string, opts?: GitFetchOptions): Promise<void> {
     const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
     await this.ensureRepo(repoPath, opts);
     const args = opts?.remote ? ['fetch', opts.remote] : ['fetch'];
-    await this.run(args, repoPath, opts?.env);
+    await this.run(args, repoPath, opts);
   }
 
   /**
@@ -307,7 +319,7 @@ export class GitService {
   ): Promise<CommitInfo[]> {
     const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
     await this.ensureRepo(repoPath, opts);
-    const branch = (await this.run(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath, opts?.env)).stdout.trim();
+    const branch = (await this.run(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath, opts)).stdout.trim();
     const { stdout } = await this.run(
       [
         'log',
@@ -317,7 +329,7 @@ export class GitService {
         '--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s',
       ],
       repoPath,
-      opts?.env,
+      opts,
     );
     const tokens = stdout.split('\0');
     // `-z` завершает каждый коммит NUL — последний токен пустой.
@@ -353,12 +365,12 @@ export class GitService {
   ): Promise<CommitDetail> {
     const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
     await this.ensureRepo(repoPath, opts);
-    const branch = (await this.run(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath, opts?.env)).stdout.trim();
+    const branch = (await this.run(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath, opts)).stdout.trim();
 
     const { stdout: showRaw } = await this.run(
       ['show', '-s', '--no-patch', '--format=%H%x00%an%x00%ae%x00%aI%x00%s%x00%B', hash],
       repoPath,
-      opts?.env,
+      opts,
     );
     const meta = showRaw.split('\0');
     const commitHash = (meta[0] ?? '').trim() || hash;
@@ -372,12 +384,12 @@ export class GitService {
     const { stdout: statRaw } = await this.run(
       ['show', '--numstat', '-z', '--format=', hash],
       repoPath,
-      opts?.env,
+      opts,
     );
     const files = parseNumstatZ(statRaw);
 
     const diff = (
-      await this.run(['show', hash, '--patch', '--format='], repoPath, opts?.env)
+      await this.run(['show', hash, '--patch', '--format='], repoPath, opts)
     ).stdout;
 
     return {

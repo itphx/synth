@@ -75,23 +75,52 @@
  * Журналы — **раздельные** по потокам: `stdout` и `stderr` приходят
  * отдельными отрезками со своими смещениями. Идентификатор процесса —
  * `proc_<uuid>` (тот же формат, что у порта core).
+ *
+ * ## Секреты вызова (протокол 4)
+ *
+ * `POST /exec` принимает **аддитивное** поле `secrets[]` — материал, нужный
+ * точке исполнения на время одной команды (сейчас — приватный SSH-ключ,
+ * ADR-076/ADR-077):
+ *
+ * ```json
+ * {
+ *   "command": { "kind": "argv", "file": "git", "args": ["fetch"] },
+ *   "secrets": [{ "kind": "ssh-key", "privateKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n…\n" }]
+ * }
+ * ```
+ *
+ * Правила:
+ *
+ * - значения **не логируются** и **не возвращаются** в ответе (ни в успехе,
+ *   ни в ошибке); в `/capabilities` их нет;
+ * - исполнитель материализует материал **у себя** (временный каталог `0700`,
+ *   ключ `0600`, askpass `0700`) и удаляет его после вызова;
+ * - максимум 4 записи, `kind === 'ssh-key'`, `privateKey` — непустая строка до
+ *   16 КиБ, `passphrase` — строка до 4 КиБ; иначе — `400 invalid_request`;
+ * - в `POST /exec/spawn` (фоновые процессы) секреты **не поддерживаются**:
+ *   процесс переживает вызов, а материал доставляется «на время вызова»;
+ * - признак поддержки — `features.secrets: true` в `GET /capabilities`
+ *   (и версия протокола ≥ 4).
  */
 
-import type { ExecCommand } from '@itphx/synth-core';
+import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
 
 /**
  * Версия wire-протокола исполнителя.
  *
+ * **4** — добавлены секреты вызова (`secrets[]` в `POST /exec`, ADR-077,
+ * «Обновлено 2026-10-26», (б)). Старый исполнитель (версии 1–3) их не знает ⇒
+ * control plane и исполнитель обязаны быть **одной версии** (ADR-077,
+ * операционное следствие шага A: инвентарь пула приходит от исполнителя, а не
+ * вычисляется на стороне control plane).
+ *
  * **3** — добавлены фоновые процессы (`/exec/spawn`, `/exec/:processId`,
- * `/exec/:processId/logs`, `/exec/:processId/stop`). Старый исполнитель
- * (версии 1–2) их не знает ⇒ control plane и исполнитель обязаны быть
- * **одной версии** (ADR-077, операционное следствие шага A: инвентарь пула
- * приходит от исполнителя, а не вычисляется на стороне control plane).
+ * `/exec/:processId/logs`, `/exec/:processId/stop`).
  *
  * **2** — добавлены MCP-эндпоинты (`/mcp/servers`, `/mcp/tools`,
  * `/mcp/call`).
  */
-export const EXECUTOR_PROTOCOL_VERSION = 3;
+export const EXECUTOR_PROTOCOL_VERSION = 4;
 
 /** Причина неудачи на проводе. */
 export type ExecutorErrorReason =
@@ -130,6 +159,12 @@ export interface ExecRequestBody {
   timeoutMs?: number;
   /** Лимит буфера вывода, байт (исполнитель ограничивает своим максимумом). */
   maxOutputBytes?: number;
+  /**
+   * Секреты вызова (протокол 4): материал, нужный **на время вызова** —
+   * исполнитель материализует его у себя и удаляет после команды. Значения не
+   * логируются и не возвращаются в ответе.
+   */
+  secrets?: ExecSecret[];
 }
 
 /** Тело успешного ответа `POST /exec`. */
@@ -179,6 +214,9 @@ export interface ExecutorCapabilities {
    *
    * `background: true` — исполнитель умеет фоновые процессы
    * (`/exec/spawn`, ADR-077 шаг 7c).
+   *
+   * `secrets: true` — исполнитель принимает секреты вызова (`secrets[]` в
+   * `POST /exec`, протокол 4).
    */
   features?: ExecutorFeatures;
 }
@@ -187,6 +225,8 @@ export interface ExecutorCapabilities {
 export interface ExecutorFeatures {
   /** Фоновые процессы (`POST /exec/spawn`). */
   background?: boolean;
+  /** Секреты вызова (`secrets[]` в `POST /exec`, протокол 4). */
+  secrets?: boolean;
 }
 
 /** Ответ `GET /health`. */
@@ -327,6 +367,82 @@ export function isValidExecCommand(value: unknown): value is ExecCommand {
   return false;
 }
 
+/**
+ * Пределы секретов вызова (протокол 4).
+ *
+ * Секрет — это материал, который исполнитель записывает на диск (временный
+ * ключ `0600`), поэтому размер ограничен: слишком большой ключ — это не
+ * ключ, а попытка забить tmp исполнителя.
+ */
+export const EXEC_SECRET_LIMITS = {
+  /** Максимум записей `secrets[]` в одном вызове. */
+  maxEntries: 4,
+  /** Максимальный размер приватного ключа, байт. */
+  maxPrivateKeyBytes: 16 * 1024,
+  /** Максимальный размер passphrase, байт. */
+  maxPassphraseBytes: 4 * 1024,
+} as const;
+
+/**
+ * Разбор `secrets[]` — валидный список секретов или причина отказа.
+ *
+ * Проверки строгие: неизвестный `kind`, непустой/слишком большой ключ,
+ * нестроковая passphrase — отказ (`invalid_request`). Молчаливый пропуск
+ * означал бы, что команда выполнится **без** ключа, а операция упадёт с
+ * невнятной ошибкой аутентификации.
+ */
+export function parseExecSecrets(
+  raw: unknown,
+): { ok: true; value: ExecSecret[] } | { ok: false; message: string } {
+  if (!Array.isArray(raw)) {
+    return { ok: false, message: 'поле secrets должно быть массивом секретов вызова' };
+  }
+  if (raw.length > EXEC_SECRET_LIMITS.maxEntries) {
+    return {
+      ok: false,
+      message: `поле secrets: не больше ${EXEC_SECRET_LIMITS.maxEntries} секретов на вызов`,
+    };
+  }
+  const secrets: ExecSecret[] = [];
+  for (const [index, item] of raw.entries()) {
+    const where = `secrets[${index}]`;
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      return { ok: false, message: `поле ${where}: секрет должен быть объектом` };
+    }
+    const record = item as Record<string, unknown>;
+    if (record.kind !== 'ssh-key') {
+      return {
+        ok: false,
+        message: `поле ${where}.kind: поддерживается только "ssh-key"`,
+      };
+    }
+    if (typeof record.privateKey !== 'string' || record.privateKey.length === 0) {
+      return { ok: false, message: `поле ${where}.privateKey: обязательное непустое поле` };
+    }
+    if (Buffer.byteLength(record.privateKey, 'utf-8') > EXEC_SECRET_LIMITS.maxPrivateKeyBytes) {
+      return {
+        ok: false,
+        message: `поле ${where}.privateKey: больше ${EXEC_SECRET_LIMITS.maxPrivateKeyBytes} байт`,
+      };
+    }
+    const secret: ExecSecret = { kind: 'ssh-key', privateKey: record.privateKey };
+    if (record.passphrase !== undefined) {
+      if (typeof record.passphrase !== 'string') {
+        return { ok: false, message: `поле ${where}.passphrase: должно быть строкой` };
+      }
+      if (Buffer.byteLength(record.passphrase, 'utf-8') > EXEC_SECRET_LIMITS.maxPassphraseBytes) {
+        return {
+          ok: false,
+          message: `поле ${where}.passphrase: больше ${EXEC_SECRET_LIMITS.maxPassphraseBytes} байт`,
+        };
+      }
+      secret.passphrase = record.passphrase;
+    }
+    secrets.push(secret);
+  }
+  return { ok: true, value: secrets };
+}
+
 /** Разбор тела запроса `POST /exec` → валидный запрос или причина отказа. */
 export function parseExecRequestBody(
   body: unknown,
@@ -380,6 +496,12 @@ export function parseExecRequestBody(
       return { ok: false, message: 'поле maxOutputBytes должно быть целым числом > 0' };
     }
     value.maxOutputBytes = raw.maxOutputBytes;
+  }
+
+  if (raw.secrets !== undefined) {
+    const secrets = parseExecSecrets(raw.secrets);
+    if (!secrets.ok) return secrets;
+    value.secrets = secrets.value;
   }
 
   return { ok: true, value };
@@ -549,6 +671,14 @@ export function parseSpawnExecRequestBody(
     return {
       ok: false,
       message: 'поле command обязательно: {kind:"shell",command} или {kind:"argv",file,args?}',
+    };
+  }
+  // Секреты вызова в фоне не поддерживаются: фоновый процесс переживает
+  // вызов, а материал доставляется «на время вызова» (протокол 4).
+  if (raw.secrets !== undefined) {
+    return {
+      ok: false,
+      message: 'секреты доступны только для синхронного /exec (фоновые процессы их не поддерживают)',
     };
   }
   const value: SpawnExecRequest = { command: raw.command };

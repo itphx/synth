@@ -26,6 +26,7 @@ import {
   type ExecutorErrorReason,
   isPortFailureReason,
 } from './protocol.js';
+import { materializeSecrets } from './secrets.js';
 import { resolveContainedCwd } from './workspace.js';
 
 /** Итог выполнения команды: успех либо ошибка (без исключения). */
@@ -45,6 +46,12 @@ export interface ExecServiceOptions {
   maxOutputBytes: number;
   /** Порт исполнения (по умолчанию — inline-реализация core). */
   executionPort?: ExecutionPort;
+  /**
+   * Файл CA доверия git (ADR-099/ADR-077): путь в окружении исполнителя.
+   * Задан → в окружение вызова добавляется `GIT_CONFIG_COUNT=1` +
+   * `GIT_CONFIG_KEY_0=http.sslCAInfo` (git ≥ 2.31 читает конфиг из env).
+   */
+  tlsCaFile?: string;
 }
 
 /** Ленивая загрузка inline-порта core (runtime-импорт — точечный). */
@@ -89,6 +96,7 @@ export class ExecService {
   private readonly _maxTimeoutMs: number;
   private readonly _maxOutputBytes: number;
   private readonly _executionPort: ExecutionPort | undefined;
+  private readonly _tlsCaFile: string | undefined;
   private _active = 0;
 
   constructor(opts: ExecServiceOptions) {
@@ -97,6 +105,7 @@ export class ExecService {
     this._maxTimeoutMs = Math.max(1, opts.maxTimeoutMs);
     this._maxOutputBytes = Math.max(1, opts.maxOutputBytes);
     this._executionPort = opts.executionPort;
+    this._tlsCaFile = opts.tlsCaFile;
   }
 
   /** Число выполняющихся сейчас команд. */
@@ -138,13 +147,30 @@ export class ExecService {
       };
     }
 
+    // Секреты вызова (протокол 4) материализуются **до** запуска команды и
+    // удаляются в `finally` — при успехе, ошибке, таймауте и отмене.
+    let materialized: Awaited<ReturnType<typeof materializeSecrets>> | undefined;
+    if (req.secrets && req.secrets.length > 0) {
+      try {
+        materialized = await materializeSecrets(req.secrets);
+      } catch {
+        // Текст ошибки — без материала: ни ключа, ни passphrase в ответе быть
+        // не должно (в лог попадает только факт сбоя подготовки).
+        return {
+          ok: false,
+          status: 500,
+          error: toErrorBody('internal_error', 'не удалось подготовить секреты вызова в исполнителе'),
+        };
+      }
+    }
+
     this._active += 1;
     try {
       const port = this._executionPort ?? (await resolveInlinePort());
       const execRequest: ExecRequest = {
         command: req.command,
         cwd: cwd.path,
-        env: req.env,
+        env: this._buildEnv(req.env, materialized?.env),
         // Потолок исполнителя — final: запрошенное значение ограничивается.
         timeoutMs: Math.min(req.timeoutMs ?? this._maxTimeoutMs, this._maxTimeoutMs),
         maxOutputBytes: Math.min(req.maxOutputBytes ?? this._maxOutputBytes, this._maxOutputBytes),
@@ -191,6 +217,29 @@ export class ExecService {
       };
     } finally {
       this._active -= 1;
+      await materialized?.cleanup().catch(() => {});
     }
+  }
+
+  /**
+   * Окружение вызова: `env` запроса + доверие git (CA исполнителя) +
+   * окружение секретов (перекрывает всё — материал доставлен явно).
+   *
+   * CA передаётся **env-каналом** (`GIT_CONFIG_*`, git ≥ 2.31), а не argv:
+   * `-c http.sslCAInfo=…` в чужую команду подмешивать нельзя. Перекрываются
+   * ровно три ключа — остальное окружение вызова сохраняется.
+   */
+  private _buildEnv(
+    requestEnv: Record<string, string> | undefined,
+    secretEnv: Record<string, string> | undefined,
+  ): Record<string, string> {
+    const env: Record<string, string> = { ...(requestEnv ?? {}) };
+    if (this._tlsCaFile) {
+      env.GIT_CONFIG_COUNT = '1';
+      env.GIT_CONFIG_KEY_0 = 'http.sslCAInfo';
+      env.GIT_CONFIG_VALUE_0 = this._tlsCaFile;
+    }
+    Object.assign(env, secretEnv ?? {});
+    return env;
   }
 }

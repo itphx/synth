@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolContext } from '@itphx/synth-shared';
@@ -9,9 +9,60 @@ import { FileStore } from '../../storage/file-store.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import { SSHKeyStore } from '../../storage/ssh-key-store.js';
 
-const PRIVATE_KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\ntest-key-material\n-----END OPENSSH PRIVATE KEY-----\n';
+/**
+ * ADR-077 (протокол 4): SSH-доступ — это **секрет вызова** (`ExecSecret`),
+ * а не путь к файлу в control plane. Материализацию (временный ключ `0600`
+ * в каталоге `0700`) делает **точка исполнения**: в remote-режиме — исполнитель
+ * (путь control plane в его контейнере не существует).
+ *
+ * Поэтому проверки здесь — обратные: в control plane **не должно** появиться
+ * ни каталога `synth-ssh-*`, ни файла с материалом ключа.
+ */
+const PRIVATE_KEY =
+  '-----BEGIN OPENSSH PRIVATE KEY-----\ncontrol-plane-must-not-materialize\n-----END OPENSSH PRIVATE KEY-----\n';
+const PASSPHRASE = 'passphrase-must-not-leak';
+/** Префикс временных каталогов SSH-ключа (общий с core `createSshEnv`). */
+const SSH_TEMP_DIR_PREFIX = 'synth-ssh-';
 
-describe('resolveRepoGitEnv (ADR-076 §T6)', () => {
+/**
+ * Ищет в `os.tmpdir()` каталоги `synth-ssh-*`, в которых лежит материал
+ * ключа (по содержимому файлов).
+ *
+ * Поиск по **содержимому**, а не по имени каталога: тесты идут параллельно,
+ * и чужой каталог `synth-ssh-*` (от другого теста) не должен давать ложную
+ * ошибку — важен именно материал **нашего** ключа.
+ */
+async function findMaterializedKeyMaterial(marker: string): Promise<string[]> {
+  const root = tmpdir();
+  const found: string[] = [];
+  let entries: string[];
+  try {
+    entries = await readdir(root);
+  } catch {
+    return found;
+  }
+  for (const name of entries) {
+    if (!name.startsWith(SSH_TEMP_DIR_PREFIX)) continue;
+    const dir = join(root, name);
+    let files: string[];
+    try {
+      files = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      try {
+        const content = await readFile(join(dir, file), 'utf-8');
+        if (content.includes(marker)) found.push(join(dir, file));
+      } catch {
+        // Файл недоступен/не файл — материал не найден.
+      }
+    }
+  }
+  return found;
+}
+
+describe('resolveRepoGitEnv (ADR-076 §T6, ADR-077 протокол 4)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let projectStore: ProjectStore;
@@ -44,31 +95,55 @@ describe('resolveRepoGitEnv (ADR-076 §T6)', () => {
     };
   }
 
-  it('репо-запись с sshKeyId → GIT_SSH_COMMAND с временным ключом; cleanup удаляет файл', async () => {
+  it('репо-запись с sshKeyId → секрет вызова ssh-key; в control plane ключ не материализуется', async () => {
     const key = await sshKeyStore.create({ name: 'k1', privateKey: PRIVATE_KEY });
     const sessionId = await seedProject([{ path: 'repo', sshKeyId: key.id }]);
     const cwd = join(tmpDir, 'repo');
 
     const result = await resolveRepoGitEnv(makeCtx(sessionId), cwd);
     expect(result.error).toBeUndefined();
-    expect(result.env?.GIT_SSH_COMMAND).toContain('ssh -i');
 
-    const keyPath = /ssh -i (\S+)/.exec(result.env!.GIT_SSH_COMMAND!)?.[1];
-    expect(keyPath).toBeTruthy();
-    await expect(access(keyPath!)).resolves.toBeUndefined();
+    // Секрет вызова — значение приватного ключа (не путь к файлу).
+    expect(result.secrets).toHaveLength(1);
+    const secret = result.secrets?.[0];
+    expect(secret?.kind).toBe('ssh-key');
+    expect(secret?.privateKey).toBe(PRIVATE_KEY);
 
-    await result.cleanup();
-    await expect(access(keyPath!)).rejects.toBeTruthy();
-    // cleanup идемпотентен
+    // Пути/окружения с ключом в результате нет — только значение.
+    expect('env' in result).toBe(false);
+    expect(JSON.stringify(result)).not.toContain('GIT_SSH_COMMAND');
+    expect(JSON.stringify(result)).not.toContain(SSH_TEMP_DIR_PREFIX);
+
+    // Материализации в control plane нет: ни одного файла с материалом ключа.
+    expect(await findMaterializedKeyMaterial('control-plane-must-not-materialize')).toEqual([]);
+
     await expect(result.cleanup()).resolves.toBeUndefined();
   });
 
-  it('запись без sshKeyId → env пуст (ambient ssh)', async () => {
+  it('passphrase ключа едет в секрете вызова и не материализуется в control plane', async () => {
+    const key = await sshKeyStore.create({
+      name: 'k-pass',
+      privateKey: PRIVATE_KEY,
+      passphrase: PASSPHRASE,
+    });
+    const sessionId = await seedProject([{ path: 'repo', sshKeyId: key.id }]);
+
+    const result = await resolveRepoGitEnv(makeCtx(sessionId), join(tmpDir, 'repo'));
+    expect(result.error).toBeUndefined();
+    expect(result.secrets?.[0]?.passphrase).toBe(PASSPHRASE);
+
+    expect(await findMaterializedKeyMaterial(PASSPHRASE)).toEqual([]);
+    expect(await findMaterializedKeyMaterial('control-plane-must-not-materialize')).toEqual([]);
+
+    await result.cleanup();
+  });
+
+  it('запись без sshKeyId → секретов нет (ambient ssh)', async () => {
     const sessionId = await seedProject([{ path: 'repo' }]);
     const cwd = join(tmpDir, 'repo');
 
     const result = await resolveRepoGitEnv(makeCtx(sessionId), cwd);
-    expect(result.env).toBeUndefined();
+    expect(result.secrets).toBeUndefined();
     expect(result.error).toBeUndefined();
     await expect(result.cleanup()).resolves.toBeUndefined();
   });
@@ -80,6 +155,7 @@ describe('resolveRepoGitEnv (ADR-076 §T6)', () => {
     const result = await resolveRepoGitEnv(makeCtx(sessionId), cwd);
     expect(result.error).toBe('sshkey.not_found');
     expect(result.errorParams).toEqual({ id: 'missing' });
+    expect(result.secrets).toBeUndefined();
   });
 
   it('корень workspace (path ".") сопоставляется с cwd проекта', async () => {
@@ -88,22 +164,22 @@ describe('resolveRepoGitEnv (ADR-076 §T6)', () => {
 
     const result = await resolveRepoGitEnv(makeCtx(sessionId), tmpDir);
     expect(result.error).toBeUndefined();
-    expect(result.env?.GIT_SSH_COMMAND).toContain('ssh -i');
+    expect(result.secrets?.[0]?.kind).toBe('ssh-key');
     await result.cleanup();
   });
 
-  it('cwd вне записи реестра → env пуст', async () => {
+  it('cwd вне записи реестра → секретов нет', async () => {
     const key = await sshKeyStore.create({ name: 'k2', privateKey: PRIVATE_KEY });
     const sessionId = await seedProject([{ path: 'repo', sshKeyId: key.id }]);
     const other = join(tmpDir, 'other');
     await rm(other, { recursive: true, force: true });
 
     const result = await resolveRepoGitEnv(makeCtx(sessionId), join(tmpDir, 'other'));
-    expect(result.env).toBeUndefined();
+    expect(result.secrets).toBeUndefined();
     expect(result.error).toBeUndefined();
   });
 
-  it('без sshKeyStore в extra → env пуст (нет доступа к ключам)', async () => {
+  it('без sshKeyStore в extra → секретов нет (нет доступа к ключам)', async () => {
     const ctx: ToolContext = {
       sessionId: 's1',
       messageId: 'm1',
@@ -111,6 +187,6 @@ describe('resolveRepoGitEnv (ADR-076 §T6)', () => {
       extra: {},
     };
     const result = await resolveRepoGitEnv(ctx, tmpDir);
-    expect(result.env).toBeUndefined();
+    expect(result.secrets).toBeUndefined();
   });
 });

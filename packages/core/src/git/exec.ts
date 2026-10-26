@@ -1,5 +1,5 @@
 import { InlineExecutionPort } from '../execution/inline-execution-port.js';
-import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionPort } from '../execution/ports/index.js';
+import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionPort, type ExecSecret } from '../execution/ports/index.js';
 import { runtimeRequires } from '../engine/tools/runtime-deps.js';
 import { gitProxyEnv } from '../security/proxy-state.js';
 import { gitCaConfig } from '../security/tls.js';
@@ -54,6 +54,12 @@ export interface GitExecOptions {
   cwd?: string;
   /** Дополнительное окружение (например SSH из ADR-076). */
   env?: Record<string, string>;
+  /**
+   * Секреты вызова (ADR-077, протокол 4): SSH-ключ доставляется точке
+   * исполнения на время вызова — в inline-режиме материализуется локально,
+   * в remote-режиме уезжает в теле `POST /exec`.
+   */
+  secrets?: ExecSecret[];
   /** Таймаут вызова (мс); не задан — без таймаута (прежнее поведение). */
   timeoutMs?: number;
   /** Сигнал отмены («Стоп»). */
@@ -117,6 +123,9 @@ export async function gitExec(
     timeoutMs: opts.timeoutMs,
     signal: opts.signal,
     env: buildGitEnv(opts.env),
+    // ADR-077 (протокол 4): SSH-ключ — секрет вызова, а не путь к файлу в
+    // control plane: материал готовит точка исполнения.
+    ...(opts.secrets && opts.secrets.length > 0 ? { secrets: opts.secrets } : {}),
     maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
   });
   return { stdout, stderr };

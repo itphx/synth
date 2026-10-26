@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import * as undici from 'undici';
 import { GitService, resolveRepoPath, sanitizeGitEnv } from './git-service.js';
-import { DEFAULT_MAX_OUTPUT_BYTES, type ExecRequest, type ExecutionPort } from '../execution/ports/index.js';
+import { DEFAULT_MAX_OUTPUT_BYTES, type ExecRequest, type ExecSecret, type ExecutionPort } from '../execution/ports/index.js';
 import { initTlsTrust, _resetTlsTrustForTests } from '../security/tls.js';
 
 const execFileAsync = promisify(execFile);
@@ -284,6 +284,26 @@ describe('GitService (ADR-076 §T3, ADR-077)', () => {
 
     await svc.isRepo(join(ws, 'repo'), { env: { GIT_SSH_COMMAND: 'ssh -i /key' } });
     expect(port.calls.at(-1)?.env?.GIT_SSH_COMMAND).toBe('ssh -i /key');
+  });
+
+  it('секрет вызова (SSH-ключ) доходит до порта значением, а не путём к файлу', async () => {
+    const port = new CapturingPort();
+    const svc = new GitService(root, { execution: port });
+    const secret: ExecSecret = {
+      kind: 'ssh-key',
+      privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----\nkey\n-----END OPENSSH PRIVATE KEY-----\n',
+      passphrase: 'pass',
+    };
+
+    await svc.isRepo(join(ws, 'repo'), { secrets: [secret] });
+
+    const req = port.calls.at(-1);
+    expect(req?.secrets).toHaveLength(1);
+    expect(req?.secrets?.[0]?.kind).toBe('ssh-key');
+    expect(req?.secrets?.[0]?.privateKey).toBe(secret.privateKey);
+    expect(req?.secrets?.[0]?.passphrase).toBe('pass');
+    // Секрет — значение, а не путь: пути в control plane на исполнителе нет.
+    expect(JSON.stringify(req?.secrets)).not.toContain('synth-ssh-');
   });
 
   it('порт получает санитайзенное окружение (ambient GIT_*/EDITOR не протекают)', async () => {

@@ -28,10 +28,12 @@
 export {
   EXECUTOR_PROTOCOL_VERSION,
   EXEC_ERROR_STATUS,
+  EXEC_SECRET_LIMITS,
   PORT_FAILURE_REASONS,
   isPortFailureReason,
   isValidExecCommand,
   parseExecRequestBody,
+  parseExecSecrets,
   parseSpawnExecRequestBody,
   errorResponse,
 } from './protocol.js';
@@ -64,6 +66,7 @@ export {
   EXECUTOR_ENV,
   EXECUTOR_DEFAULTS,
   resolveExecutorConfig,
+  resolveTlsCaFile,
   parseMcpServerSpecs,
   scrubExecutorToken,
   scrubExecutorMcpServers,
@@ -85,6 +88,15 @@ export type { CwdResolution } from './workspace.js';
 // Слой исполнения.
 export { ExecService } from './exec-service.js';
 export type { ExecServiceOptions, ExecOutcome } from './exec-service.js';
+
+// Секреты вызова (ADR-077, протокол 4).
+export {
+  materializeSecrets,
+  sweepStaleSshDirs,
+  SSH_TEMP_DIR_PREFIX,
+  STALE_SSH_DIR_TTL_MS,
+} from './secrets.js';
+export type { MaterializedSecrets } from './secrets.js';
 
 // Фоновые процессы (ADR-077, шаг 7c; PROP-097).
 export {

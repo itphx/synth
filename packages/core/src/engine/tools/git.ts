@@ -11,7 +11,7 @@ import type { SystemMessageKey } from '../system-messages.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
 import { runtimeRequires } from './runtime-deps.js';
-import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError, type ExecutionPort } from '../../execution/ports/index.js';
+import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError, type ExecutionPort, type ExecSecret } from '../../execution/ports/index.js';
 
 const MAX_GIT_OUTPUT = 20_000;
 
@@ -23,6 +23,12 @@ const MAX_GIT_OUTPUT = 20_000;
  * ADR-077: исполнение — через порт (`execution`). По умолчанию — inline:
  * те же argv без shell, `cwd`, таймаут 30 с, `maxBuffer` 10 МБ и окружение
  * `{...process.env, ...env}`.
+ *
+ * `secrets` (ADR-077, протокол 4) — SSH-ключ как **секрет вызова**: он
+ * доставляется точке исполнения на время вызова (в inline-режиме
+ * материализуется локально, в remote-режиме — исполнителем). Путь к
+ * временному файлу в control plane в контейнере исполнителя не существует,
+ * поэтому прописывать его в `env` нельзя.
  */
 export async function runGit(
   args: string[],
@@ -30,6 +36,7 @@ export async function runGit(
   signal?: AbortSignal,
   env?: Record<string, string>,
   execution?: ExecutionPort,
+  secrets?: ExecSecret[],
 ): Promise<{ stdout: string; stderr: string }> {
   const { stdout, stderr } = await (execution ?? new InlineExecutionPort()).execute({
     command: { kind: 'argv', file: 'git', args },
@@ -40,6 +47,7 @@ export async function runGit(
     timeoutMs: 30_000,
     signal,
     env,
+    ...(secrets && secrets.length > 0 ? { secrets } : {}),
     maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
   });
   return { stdout, stderr };
@@ -519,7 +527,7 @@ export const gitPushTool: ToolDefinition = {
       const pushArgs = ['push', '--', remote];
       if (branch) pushArgs.push(branch);
 
-      const { stdout, stderr } = await runGit(pushArgs, cwd, ctx.abortSignal, ssh.env, execution);
+      const { stdout, stderr } = await runGit(pushArgs, cwd, ctx.abortSignal, undefined, execution, ssh.secrets);
       return {
         content: stdout || stderr || 'git push выполнен',
         metadata: { cwd, remote: params.remote, branch: params.branch },
@@ -597,7 +605,7 @@ export const gitPullTool: ToolDefinition = {
       const pullArgs = ['pull', '--', remote];
       if (branch) pullArgs.push(branch);
 
-      const { stdout, stderr } = await runGit(pullArgs, cwd, ctx.abortSignal, ssh.env, execution);
+      const { stdout, stderr } = await runGit(pullArgs, cwd, ctx.abortSignal, undefined, execution, ssh.secrets);
       return {
         content: stdout || stderr || 'git pull выполнен',
         metadata: { cwd, remote: params.remote, branch: params.branch },

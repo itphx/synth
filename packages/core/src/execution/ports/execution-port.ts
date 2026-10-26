@@ -33,6 +33,40 @@ export type ExecCommand =
   /** Прямой запуск: `<file> <args…>` — без shell. */
   | { kind: 'argv'; file: string; args?: string[] };
 
+/**
+ * Секрет вызова (ADR-077, протокол 4).
+ *
+ * Материал, который нужен точке исполнения **на время одной команды**:
+ * приватный SSH-ключ (ADR-076) с необязательной passphrase.
+ *
+ * ## Где материализуется
+ *
+ * - **inline** — в процессе control plane: временный ключ `0600` в каталоге
+ *   `0700` (`createSshEnv`), удаление в `finally`;
+ * - **remote** — на исполнителе: control plane передаёт ключ в теле
+ *   `POST /exec` (`secrets[]`), исполнитель материализует его у себя и
+ *   удаляет после вызова. Путь к файлу в control plane в контейнере
+ *   исполнителя не существует — поэтому доставка идёт **значением**, а не
+ *   путём.
+ *
+ * ## Правила
+ *
+ * - `kind` — дискриминатор закрытого union'а: набор видов расширяется
+ *   аддитивно (новый вид ⇒ новое поле), а не сменой формы;
+ * - значение **никогда не логируется** и **не возвращается** в ответе
+ *   (ни в ошибке, ни в `/capabilities`);
+ * - at-rest ключ лежит только в control plane (шифрование мастер-ключом,
+ *   ADR-076): в Secret-том/K8s Secret исполнителя он не попадает.
+ */
+export interface ExecSecret {
+  /** Вид секрета. */
+  kind: 'ssh-key';
+  /** Приватный ключ в формате OpenSSH (PEM/OPENSSH — как принят ssh). */
+  privateKey: string;
+  /** Passphrase ключа (необязательна): передаётся askpass-скриптом. */
+  passphrase?: string;
+}
+
 export interface ExecRequest {
   /** Команда: shell-строка или argv. */
   command: ExecCommand;
@@ -63,6 +97,16 @@ export interface ExecRequest {
    * (10 МБ, как `maxBuffer` у нынешних вызовов).
    */
   maxOutputBytes?: number;
+  /**
+   * Секреты вызова: материал доставляется точке исполнения **на время
+   * вызова**, никогда не логируется и не возвращается в ответе; в
+   * inline-режиме материализуется локально (временный ключ `0600` в
+   * каталоге `0700`, удаление после вызова), в remote-режиме — уходит в теле
+   * `POST /exec` и материализуется исполнителем (ADR-077, протокол 4).
+   *
+   * Не задано — обычный вызов без секретов (прежнее поведение).
+   */
+  secrets?: ExecSecret[];
 }
 
 export interface ExecResult {
@@ -257,6 +301,16 @@ export const DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
  * (`process.background_unsupported` для модели).
  */
 export const EXECUTION_BACKGROUND_UNSUPPORTED_CODE = 'EBACKGROUND';
+
+/**
+ * Код ошибки порта: **исполнитель не умеет принимать секреты вызова**.
+ *
+ * Удалённый порт сообщает это кодом в `ExecutionError.code` (исполнитель
+ * протокола < 4 не знает `secrets[]` в `POST /exec`); «тихое» выполнение
+ * команды без ключа недопустимо — SSH-операция упала бы с невнятной
+ * ошибкой аутентификации.
+ */
+export const EXECUTION_SECRETS_UNSUPPORTED_CODE = 'ESECRETS';
 
 export interface ExecutionErrorInit {
   /** Текст ошибки (дословно как у процесса — его видит модель). */

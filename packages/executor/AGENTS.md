@@ -40,7 +40,7 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
 - Собственных HTTP-агентов/диспетчеров пакет **не создаёт** (инвариант 22):
   исходящие запросы клиента — только через `egressFetch` из core.
 
-## Wire-протокол (версия 3)
+## Wire-протокол (версия 4)
 
 | Метод | Путь | Назначение | Авторизация |
 |---|---|---|---|
@@ -55,9 +55,10 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
 | `POST` | `/mcp/call` | вызов инструмента MCP-сервера | bearer-токен |
 | `GET` | `/health` | liveness исполнителя | без токена |
 
-- Запрос: `{ command: ExecCommand, cwd?, env?, timeoutMs?, maxOutputBytes? }`.
+- Запрос: `{ command: ExecCommand, cwd?, env?, timeoutMs?, maxOutputBytes?, secrets? }`.
   `command` — тот же union `shell`/`argv`, что у порта core: форма команды на
-  проводе не переопределяется (паритет remote/inline).
+  проводе не переопределяется (паритет remote/inline). `secrets[]` — **секреты
+  вызова** (протокол 4, см. «Секреты вызова» ниже).
 - Успех — `200 { stdout, stderr, exitCode, truncated, durationMs }` (успешный
   вызов — всегда `exitCode: 0`; неуспешный код приходит **ошибкой**, как и в
   inline-режиме).
@@ -74,14 +75,57 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
   `too_many_requests` | `internal_error`). Клиент переносит причину порта как
   есть, протокольную — в `reason: 'spawn_failed'` с различающим `code`
   (`EWORKSPACE`/`EAUTH`/`ELIMIT`/`EINVAL`).
-- `GET /capabilities` — **аддитивно** отдаёт `features: { background: true }`
-  (признак фоновых процессов); старое поле `protocol` не меняет смысла.
+- `GET /capabilities` — **аддитивно** отдаёт `features: { background: true, secrets: true }`
+  (признаки фоновых процессов и секретов вызова); старое поле `protocol` не меняет смысла.
 
-**Версия протокола — контракт совместимости.** `EXECUTOR_PROTOCOL_VERSION = 3`
-(в 2 не было `/exec/spawn` и фоновых маршрутов, в 1 — `/mcp/*`): control plane
+**Версия протокола — контракт совместимости.** `EXECUTOR_PROTOCOL_VERSION = 4`
+(в 3 не было `/exec/spawn` и фоновых маршрутов, в 2 — `/mcp/*`, в 1 — базовый
+`/exec`): control plane
 и пул исполнителей обновляются **вместе** (то же правило, что для инвентаря
 пула, шаг A). Старый исполнитель фоновых маршрутов не знает, новый control
-plane получил бы `404`.
+plane получил бы `404`; исполнитель протокола < 4 не знает `secrets[]` — control
+plane отказывает такому вызову с `ESECRETS` (см. «Секреты вызова»).
+
+### Секреты вызова (ADR-077, протокол 4)
+
+Материал, нужный точке исполнения **на время одной команды** (сейчас — приватный
+SSH-ключ с необязательной passphrase, ADR-076). Control plane передаёт его
+**значением**: путь к файлу в control plane в контейнере исполнителя не
+существует, поэтому прописать его в `GIT_SSH_COMMAND` нельзя.
+
+- **Поле `secrets[]` в `POST /exec`** — аддитивное: `{ kind: 'ssh-key', privateKey, passphrase? }`.
+  Значения **не логируются** и **не возвращаются** в ответе (ни в успехе, ни в
+  ошибке); в `/capabilities` их нет.
+- **Разбор — строгий** (`protocol.ts`, `parseExecSecrets`): максимум 4 записи на
+  вызов, `kind === 'ssh-key'`, `privateKey` — непустая строка до 16 КиБ,
+  `passphrase` — строка до 4 КиБ; иначе — `400 invalid_request`. Молчаливый
+  пропуск означал бы, что команда выполнится **без** ключа, а операция упадёт с
+  невнятной ошибкой аутентификации.
+- **Материализация — на исполнителе** (`secrets.ts`, `materializeSecrets`):
+  временный каталог `0700` (`mkdtemp`, префикс `synth-ssh-`), ключ `0600`,
+  askpass `0700` (при passphrase — `SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force` +
+  `NumberOfPasswordPrompts=1`). Подготовка ключа/askpass — **общая** с control
+  plane (`createSshEnv` из core): дублировать её нельзя.
+- **Удаление — всегда**: успех, ошибка команды, таймаут, отмена (`finally` в
+  `exec-service.ts`). Плюс **sweep** осиротевших каталогов `synth-ssh-*` при
+  старте процесса (`sweepStaleSshDirs`, TTL час; вызывается в `main.ts`) —
+  прерванный процесс мог не дойти до `finally`.
+- **Только синхронный `/exec`.** `POST /exec/spawn` (фоновые процессы) секреты
+  **не поддерживает**: процесс переживает вызов, а материал доставляется «на время
+  вызова». Отказ — fail-closed с обеих сторон: исполнитель отвечает
+  `400 invalid_request`, control plane — ошибкой `ESECRETS`
+  (`EXECUTION_SECRETS_UNSUPPORTED_CODE` в core).
+- **Признак поддержки — `features.secrets: true`** в `GET /capabilities` (и версия
+  протокола ≥ 4). Исполнитель протокола < 4 **без** этого признака в кандидаты
+  на вызов с секретами **не попадает**; если в пуле нет ни одного такого адреса —
+  отказ `ESECRETS`: выполнять команду без ключа нельзя.
+- **Доверие git (CA) — конфигурация исполнителя**, а не секрет вызова: env
+  `SYNTH_EXECUTOR_TLS_CA_FILE` (путь к файлу CA в окружении исполнителя; задан,
+  но файл не читается — **ошибка старта**, fail-closed). Исполнитель добавляет в
+  окружение вызова env-канал git ≥ 2.31: `GIT_CONFIG_COUNT=1`,
+  `GIT_CONFIG_KEY_0=http.sslCAInfo`, `GIT_CONFIG_VALUE_0=<путь>`. Порядок
+  наложения окружения: `env` вызова → CA-тройка `GIT_CONFIG_*` → env секрета
+  (перекрывает всё — материал доставлен явно для этой команды).
 
 ### Фоновые процессы (ADR-077, шаг 7c; ADR-113)
 
@@ -326,6 +370,7 @@ plane получил бы `404`.
 | `SYNTH_EXECUTOR_BACKGROUND_MAX` | нет | `8` | лимит живых фоновых процессов (ADR-077, шаг 7c) |
 | `SYNTH_EXECUTOR_BACKGROUND_LOG_MAX_BYTES` | нет | `10485760` | лимит журнала фонового процесса на поток, байт |
 | `SYNTH_EXECUTOR_BACKGROUND_LOG_DIR` | нет | `<tmp>/synth-exec-bg` | каталог журналов фоновых процессов |
+| `SYNTH_EXECUTOR_TLS_CA_FILE` | нет | — | файл CA доверия git (`http.sslCAInfo`): путь в окружении исполнителя; задан, но файл не читается — **ошибка старта** (fail-closed) |
 
 Без токена или без корня workspace процесс **не стартует** (fail-closed);
 невалидные числа — тоже ошибка (явная настройка оператора не должна молча
@@ -376,7 +421,21 @@ plane получил бы `404`.
     (`not_found`), 400, `down` после неудачного спавна (ENOENT), секреты не
     попадают в ответ;
   - `config.test.ts` — fail-closed разбор env (в т.ч. `SYNTH_EXECUTOR_MCP_SERVERS`:
-    строгий JSON, `''` = пустой список).
+    строгий JSON, `''` = пустой список; `SYNTH_EXECUTOR_TLS_CA_FILE` — файл должен
+    быть читаемым, иначе ошибка старта);
+  - `secrets.test.ts` — **секреты вызова (протокол 4)**: каталог `0700`/ключ `0600`
+    (по `stat`), `GIT_SSH_COMMAND` с путём внутри своего tmp, askpass
+    (`SSH_ASKPASS`/`SSH_ASKPASS_REQUIRE`/`NumberOfPasswordPrompts=1`), файл ключа
+    существует **во время** команды и удалён после успеха и после ошибки команды,
+    частично созданный каталог убран при сбое подготовки, `sweepStaleSshDirs`
+    удаляет старый каталог и не трогает свежий;
+  - `protocol.test.ts` — разбор `secrets[]` в `POST /exec` (валидный кейс, > 4
+    записей, чужой `kind`, пустой/слишком длинный `privateKey`, слишком длинный
+    `passphrase` → `invalid_request`) и отказ на `secrets` в `POST /exec/spawn`;
+  - `exec-service.test.ts` — окружение вызова: `tlsCaFile` → `GIT_CONFIG_COUNT=1`/
+    `GIT_CONFIG_KEY_0=http.sslCAInfo`/`GIT_CONFIG_VALUE_0=<путь>`, без `tlsCaFile` —
+    этих ключей нет, `env` вызова мержится (не заменяет базовое окружение) и не
+    перекрывает CA, секреты не попадают в тело ошибки.
 
   **Контрактного набора проверок в пакете нет** — источник истины один: контрактный
   suite порта живёт в core (`packages/core/src/execution/contract/execution.ts`), прогон

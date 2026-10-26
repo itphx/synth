@@ -1,6 +1,7 @@
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ExecSecret } from '../execution/ports/index.js';
 
 /**
  * ADR-076 §T3: подготовка SSH-окружения для git (ключа `GIT_SSH_COMMAND`).
@@ -42,6 +43,22 @@ export interface CreateSshEnvOptions {
 export interface SshEnv {
   env: Record<string, string>;
   cleanup: () => Promise<void>;
+}
+
+/**
+ * Раскрытый SSH-ключ → секрет вызова (`ExecSecret`, ADR-077 протокол 4).
+ *
+ * Чистая функция: **ничего не пишет на диск**. Ключ уезжает в порт
+ * исполнения как значение, а материал (файл `0600` в каталоге `0700`)
+ * готовит **точка исполнения** — иначе путь control plane в контейнере
+ * исполнителя не существует (ADR-077, «Обновлено 2026-10-26», (б)).
+ */
+export function toSshSecret(revealed: { privateKey: string; passphrase?: string }): ExecSecret {
+  return {
+    kind: 'ssh-key',
+    privateKey: revealed.privateKey,
+    ...(revealed.passphrase !== undefined ? { passphrase: revealed.passphrase } : {}),
+  };
 }
 
 /**
