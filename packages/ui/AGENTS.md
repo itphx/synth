@@ -196,6 +196,50 @@
 - **Git-вкладка** (`components/panels/left-panel/GitTab.tsx`, `stores/gitStore.ts`): реестр `project.repos` с `destination`/`type`/`url`/`ssh-key`/`lastFetch`; `scan → register`, `clone`/`init` с полями `name`/`path` и селектором SSH-ключа, `fetch`, `remove` (через `ConfirmDialog`, опц. `deleteLocal`). Методы — `synthApi.*GitRepo*`.
 - **SSH-ключи** (`components/settings/SshKeysSettings.tsx`, встраивается в админ-категорию «Агенты» `admin/AgentsPanel.tsx`): CRUD per-agent ключей, привязка к агентам (`agentIds`), редактирование без обязательной замены ключа. Поля «Тип» нет (дублировало имя) — в shared `SSHKey.type?`/`sshKeyCreateSchema.type?` сохранены для обратной совместимости, UI их не задаёт и не показывает. API `synthApi.*SshKey*` отдаёт только `SSHKeyMeta` (без `privateKey`/`passphrase`); ошибки — ключи `sshkey.*` (в т.ч. `sshkey.env_failed`), i18n ru/en. Ключи с `passphrase` поддерживаются (git-операция — через askpass).
 
+## Worktrees (ADR-114 §9)
+
+Подсистема worktree'ов (вторичные рабочие копии репозитория, per-session рабочий каталог).
+Спецификация — [docs/WORKTREES.md](../../docs/WORKTREES.md), HTTP-контур —
+[docs/API_V2.md](../../docs/API_V2.md) §5.40.
+
+- **Домен API** — `lib/api/worktrees.ts` (`worktreesApi`: `listWorktrees`/`createWorktree`/
+  `removeWorktree`/`pruneWorktrees`/`bindWorktree` → `/api/v2/projects/:id/worktrees*` и
+  `PATCH /api/v2/sessions/:id { worktreeId }`), входит в barrel `synthApi`. DTO и типы —
+  type-only из `@itphx/synth-shared/types`; домен **не глотает** `409 WORKTREE_DIRTY` — признак
+  `error.forceRequired` пробрасывается наружу (иначе UI не сможет показать второй шаг
+  подтверждения).
+- **Стор** — `stores/worktreesStore.ts` (`useWorktreesStore`): инвентарь по проектам
+  (`byProject`/`loadingByProject`/`error`), операции `refresh`/`create`/`remove`/`prune`/`bind`,
+  селектор `list(projectId)` и хелпер `findWorktree(state, worktreeId)`. Источник истины —
+  сервер; `bind()` обновляет снимок привязки в `sessionsStore` (ответ PATCH — полная сессия).
+- **Live-события.** `worktree.updated` (`{project_id, worktree_id?, action}`) → перечитывание
+  инвентаря проекта (событие — сигнал «перечитай», не поток данных). `fs.changed` → область
+  инвалидации **пробрасывается** в `filesStore.scheduleRefresh` (`scope`/`paths`/
+  `workspace_changed`/`op`): жёсткий `scope:'all'` ломал бы учёт `fileRevisions`/`deletedFiles`
+  (регресс закрыт тестом `stores/worktreesStore.test.ts`). Диспетчер — `stores/transportStore.ts`,
+  второй транспорт не заводим (ADR-024).
+- **Инвентарь** — раздел «Worktrees» во вкладке «Проект» правой панели
+  (`components/panels/ProjectTab.tsx`, `data-testid="project-worktrees"`): список (имя, ветка,
+  бейджи «изменения»/«нет каталога»/«привязан»), форма создания (ветка + имя каталога — пусто
+  значит «подберёт сервер»), «Привязать»/«Отвязать» (текущая сессия), «Очистить» (prune),
+  «Удалить». Удаление грязного worktree — **двухшаговое подтверждение**: первый `confirm` →
+  сервер отвечает `409` с `forceRequired` → второй `confirm` → повтор с `force: true`.
+- **Селектор рабочего каталога** — вкладка «Сессия» правой панели
+  (`components/panels/SessionSettingsTab.tsx`, `WorktreeSelector`, `data-testid="session-worktree-select"`):
+  «Каталог проекта» + worktree'ы проекта; смена → `PATCH /api/v2/sessions/:id { worktreeId }`.
+- **Индикатор в шапке** — `components/layout/Header.tsx`: бейдж «worktree: `<имя>` · `<ветка>`»
+  (desktop + mobile), имя — из инвентаря по `worktree_id`, фоллбэк — имя каталога на диске;
+  клик открывает правую панель на вкладке «Проект» (на телефоне — дровер).
+- **Дерево Files** — каталог `.worktrees` **скрыт всегда** (`stores/filesStore.ts`,
+  `ALWAYS_HIDDEN_ENTRIES`), в том числе при `showHidden`.
+- **Мобильный адаптив** — без DnD; touch-таргеты ≥ 40 px через CSS `.worktrees-panel`
+  (`styles/index.css`: кнопки/поля/`select` не ниже `--control-height-touch` в зонах
+  телефон/планшет и при coarse-указателе).
+- **i18n** — `worktrees.*` (ru/en, паритет), включая `worktrees.confirm.forceTitle`/
+  `forceMessage` (второй шаг подтверждения). Тесты — `lib/api/worktrees.test.ts`,
+  `stores/worktreesStore.test.ts`, `components/panels/ProjectTab.worktrees.test.tsx`,
+  `components/panels/SessionSettingsTab.worktrees.test.tsx`, `components/layout/Header.worktrees.test.tsx`.
+
 ## Внешние события (ADR-089)
 
 - **Раздел «События» — пользовательская часть** (`components/settings/EventsAdminSettings.tsx`; категория `eventsAdmin`, `labelKey: settings.category.events`, **без `roles`**): виден всем ролям, расположен среди user-категорий до админ-блока. Содержит реестр биндингов источник→сессия, правила маршрутизации (`EventRoutesSection`) и журнал решений Router (`EventJournalPanel`). API — `synthApi` (bindings/routes/journal/keys).

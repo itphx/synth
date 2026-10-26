@@ -1312,7 +1312,9 @@
   корень `{workspacesRoot}/.worktrees/<projectId>`, создание/удаление/prune/sweep, детект secondary
   worktree, startup-скрипт проекта), `errors.ts` (типизированные ошибки с машинными кодами
   `WORKTREE_*` — HTTP-статус по коду), `events.ts` (`worktree.updated` + `fs.changed` в каналы
-  сессий проекта, лимит 200); тулы `git_worktree_list|create|remove|prune`
+  сессий проекта, лимит 200), `sweep.ts` (`startWorktreeSweeper` — стартовый sweep осиротевших
+  записей: **фоново**, старт не блокируется, ошибка — в лог; вызывается из `server/app/deps.ts`
+  и `backend/app/deps.ts`); тулы `git_worktree_list|create|remove|prune`
   (`engine/tools/worktree.ts` — проект только из сессии, в plan-режиме мутации запрещены,
   `create` не привязывает сессию). Порт инвентаря — `storage/ports/worktree-repository.ts`
   (ADR-096); привязка сессии — `Session.worktree` (в форме хранения — snake_case, PostgreSQL —

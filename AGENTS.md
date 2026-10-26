@@ -411,6 +411,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 - Панель «Сессия» в правой панели показывает план (`planContent`) и ToDo (`todos`); обновляется по WS-событиям `plan.approved`/`todos.updated` (полный refresh с сервера).
 - **Вопрос пользователю** — док над композером (`components/chat/QuestionDock.tsx`), не `PanelTab`: сворачивание, точки-сегменты, шаг проверки «вопрос → ответ» перед отправкой, обратный отсчёт по `expiresAt`. Тост `notify.question.asked` (только если сессия не активна) + непрочитанное в дереве. Детали — [packages/ui/AGENTS.md](./packages/ui/AGENTS.md).
 - **Фоновая работа** — вкладка «Процессы» правой панели (`components/panels/ProcessesTab.tsx`): единый реестр `GET /api/v2/processes` (шелл-процессы и фоновые саб-агенты), live по `process.*`/`child.*`, остановка/удаление/открытие дочерней сессии, лог процесса по `offset`. Уведомления `notify.background.*` на старт и терминальный переход.
+- **Worktrees (ADR-114)** — инвентарь в правой панели (раздел «Worktrees» во вкладке «Проект»), селектор рабочего каталога сессии (вкладка «Сессия»), индикатор привязки в шапке; каталог `.worktrees` в дереве Files скрыт всегда; удаление грязного worktree — двухшаговое подтверждение (`forceRequired`). Детали — [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) и [docs/WORKTREES.md](./docs/WORKTREES.md).
 - Мутирующие тулы ядра публикуют `fs.changed` (`engine/fs-change.ts`): дерево Files, открытые редакторы и Git-вкладка обновляются с debounce; события несут `op` (`write`/`delete`/`mkdir`/`move` с `from`/`to`), дерево перечитывает только родительские каталоги, редактор уходит в `file.deletedOnDisk`. Read-only тулы событий не шлют.
 - Перенос/переименование (`filesStore.moveEntry`, DnD и диалог) перемапливает поддерево (`treesByProject`/`expandedDirs`/`fileRevisions`/`deletedFiles`/`draftContents`) и открытые вкладки (`useUIStore.remapFileTabs`), сохраняя несохранённые черновики; `op:'move'` из shell ремапится синхронно до debounce. Межпроектный перенос — серверный `/fs/move` с `targetProjectId` (не read/write/delete-хаком).
 - Перенос сессии между проектами (`session.moved`, в т.ч. `project_create`/`project_attach` агентом) обновляет `project_id` в сторе, список проектов и дерево Files.
@@ -583,7 +584,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | ADR-111 | Фоновые прогоны — неблокирующие саб-агенты и реестр | ✅ Реализовано | [adr-111](./docs/arch_decisions/adr-111-background-subagent-sessions.md) |
 | ADR-112 | Вопрос пользователю посреди хода (question) | ✅ Реализовано | [adr-112](./docs/arch_decisions/adr-112-user-questions-mid-turn.md) |
 | ADR-113 | Фоновые процессы — реестр, control plane и исполнитель | ✅ Реализовано | [adr-113](./docs/arch_decisions/adr-113-background-processes.md) |
-| ADR-114 | Git worktrees — per-session рабочий каталог | ⚠️ Частично | [adr-114](./docs/arch_decisions/adr-114-git-worktrees.md) |
+| ADR-114 | Git worktrees — per-session рабочий каталог | ✅ Реализовано | [adr-114](./docs/arch_decisions/adr-114-git-worktrees.md) |
 <!-- ad-index:end -->
 
 Правило: `docs/arch_decisions/` — единственный дом ADR/PROP; номера и файлы стабильны (ссылок на id по репозиторию — тысячи), файлы не переносятся и не удаляются.

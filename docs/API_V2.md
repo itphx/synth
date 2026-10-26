@@ -359,7 +359,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/api/v2/sessions` | оба | auth | Создать; `{name\|title, project_id, settings}` → 201 || GET | `/api/v2/sessions/:id` | оба | auth | Сессия (сериализованная) |
 | GET | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Эффективный MCP-скоуп (ADR-071 §2.4): `{servers:[{name, level, enabled, reason?, connected?, origin, trust, chars?, estTokens?, estimated?}], enabled, disabled, mcpServers, mcpDisabledServers}`. `reason` ∈ `system_disabled\|project_disabled\|session_optout\|not_default`; проектный гейт `enabled` применяется и к системным серверам. Серверы/тулы несут `chars`/`estTokens` (ADR-071 §2.8) |
 | PUT | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Переключить MCP (один тумблер): `{name, enabled}` → `mcpServers`/`mcpDisabledServers` (opt-out системных — через `enabled:false`), либо `{mcpServers?, mcpDisabledServers?}` |
-| PATCH | `/api/v2/sessions/:id` | оба | auth | `{name, title, mode: plan\|act\|yolo, settings, project_id}` |
+| PATCH | `/api/v2/sessions/:id` | оба | auth | `{name, title, mode: plan\|act\|yolo, settings, project_id}`; `worktreeId: string\|null` — привязка сессии к worktree (ADR-114, §5.40) |
 | DELETE | `/api/v2/sessions/:id` | оба | auth | Удалить → 204 |
 | GET | `/api/v2/sessions/:id/secrets` | backend | ADMIN/AUDITOR | Карта обфускации Gateway `{sessionId, secrets}` |
 | POST | `/api/v2/sessions/:id/fork` | оба | auth | Форк; `{message_id?, message_index?, title?}` → 201 |
@@ -2159,6 +2159,50 @@ blob-хранилище (`BlobStore`), путь `processes/<id>.log`; преде
 удаление записи. Обновление — live-события `process.*`/`child.*` плюс
 периодическое перечитывание списка, пока вкладка активна.
 
+### 5.40 Worktrees — `/api/v2/projects/:id/worktrees*` (оба, ADR-114)
+
+Вторичные рабочие копии репозитория ([ADR-114](./arch_decisions/adr-114-git-worktrees.md)):
+сессия может работать в своём каталоге (`git worktree`), не пересекаясь с
+другими сессиями того же проекта. Полный контракт подсистемы —
+[docs/WORKTREES.md](./WORKTREES.md); ниже — HTTP-часть.
+
+Фабрика `createProjectRoutes` (core) монтирует контур, когда передан сервис
+worktree'ов (`opts.worktrees`); backend добавляет только правила доступа по
+проекту. Инвентарь — доменный порт `WorktreeRepository` (ADR-096): файл
+`{dataDir}/worktrees.json`, in-memory и PostgreSQL (generic-таблица
+`documents`, `kind='worktree'`, без новой миграции).
+
+| Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/projects/:id/worktrees` | оба | право **чтения** проекта | Инвентарь проекта → `200 { worktrees: WorktreeSummary[] }`. Записи — **camelCase**: `id`, `projectId`, `repoPath?`, `directory`, `branch`, `name`, `strategy`, `createdAt`, `updatedAt`, `createdBy?` + вычисляемые `attachedSessionId?` (привязанная живая сессия), `dirty?` (есть незакоммиченные изменения), `exists?` (каталог на месте). Проекта нет → 404 `NOT_FOUND`; нет права чтения → 403 `FORBIDDEN` |
+| POST | `/api/v2/projects/:id/worktrees` | оба | право **изменения содержимого** проекта | Создать worktree → `201 { worktree: WorktreeRecord, setup? }`. Тело: `{ branch?, name?, repoPath?, from? }` (все поля необязательные; `name` — slug `^[a-z0-9][a-z0-9._-]{0,63}$`, `branch` — без пробелов/`..`/`~`/`^`/`:`/`?`/`*`/`[`/`\`, `repoPath` — относительный путь без `..`, `from` — база ветки). `setup` присутствует, только если у проекта задан `worktreeSetupScript` (`{ok, exitCode?, error?}`). Ошибки: 400 `VALIDATION_ERROR` (тело), 400 `WORKTREE_NOT_A_REPO` (путь не git-репозиторий или у проекта нет рабочего каталога), 409 `WORKTREE_GIT_FAILED` (команда git/не найдена база ветки), 409 `WORKTREE_PATH_EXISTS` (не нашлось свободного имени каталога) |
+| DELETE | `/api/v2/projects/:id/worktrees/:wid` | оба | право **изменения содержимого** проекта | Удалить worktree → **204** (тело пустое). `?force=true` (а также `?force=1`/`?force` без значения) — снять и **незакоммиченные изменения**. Ошибки: 404 `WORKTREE_NOT_FOUND` (записи нет или она чужого проекта — существование не выдаётся), 409 `WORKTREE_DIRTY` (есть незакоммиченные изменения, нужен `force`; в теле — `error.forceRequired: true`), 409 `WORKTREE_BUSY` (к записи привязана живая сессия — даже с `force`: привязку снимает `PATCH` сессии), 409 `WORKTREE_GIT_FAILED` |
+| POST | `/api/v2/projects/:id/worktrees/prune` | оба | право **изменения содержимого** проекта | Вычистить осиротевшие записи → `200 { recordsRemoved: number, gitPruned: boolean }`. Тело **опционально**: пустое/отсутствующее — успех; непустое — строгая схема (лишнее поле → 400 `VALIDATION_ERROR`). Удаляются **только записи без каталога** + выполняется `git worktree prune` (`gitPruned: false` — репозиторий недоступен, записи всё равно вычищены); каталоги без записей не трогаются |
+| PATCH | `/api/v2/sessions/:id` | оба | доступ к сессии по prefix-guard'у (§5.5) | Привязка сессии к worktree: поле `worktreeId: string \| null` (`null` — снять привязку). В ответе — обновлённая сессия, поле `worktree` — **snake_case**-снимок привязки `{ worktree_id, project_id, repo_path, directory, branch }` либо `null`. Ошибки: 400 `VALIDATION_ERROR` (`worktreeId` — не строка и не `null`; у сессии нет проекта; привязка недоступна в этом инстансе), 404 `WORKTREE_NOT_FOUND` (записи нет в проекте сессии), 409 `WORKTREE_DIRECTORY_MISSING` (каталога привязываемого worktree нет на диске), 404 `NOT_FOUND` (сессии нет/нет доступа — решает prefix-guard) |
+
+**Права (инвариант 21).** Чтение инвентаря — право **чтения** проекта
+(`canReadProject`: владелец, любой участник, `LEAD`, `ADMIN`); мутации
+(`POST`/`DELETE`/`prune`) — право **изменения содержимого** (`canEditProjectContent`:
+`OWNER`, `EDITOR`, `LEAD`, `ADMIN`); `VIEWER` читает, но получает **403
+`FORBIDDEN`** на мутации. `ADMIN`/`LEAD` — сквозной доступ. В standalone
+(core) ролевых проверок нет (любой аутентифицированный). Проверка доступа —
+**на границе** (инвариант 16), в обработчиках её нет. Матрица доступа
+(владелец/`EDITOR`/`VIEWER`/`ADMIN`/`LEAD`/посторонний) — тест
+`packages/backend/src/routes/worktree-access-matrix.test.ts`: проверяет
+production-модуль и снимает перечень маршрутов со **смонтированного** приложения
+(появился `:id`-маршрут — тест красный).
+
+**Событие.** Изменение инвентаря публикуется событием `worktree.updated` в
+**каналы сессий проекта** (инвентарь — ресурс проекта, а не одной сессии):
+payload — **snake_case** `{ project_id, worktree_id?, action }`, где `action` ∈
+`created | removed | pruned | attached | detached`. Создание и удаление worktree
+меняют файлы на диске — дополнительно публикуется `fs.changed { scope: 'all' }`
+(ADR-024/ADR-089). Новых транспортных каналов нет.
+
+**Прочее.** Осиротевшие записи (каталог исчез) чистятся **при старте процесса**
+(sweep, ADR-114 §7.4) и `prune` проекта; UI-поведение —
+[docs/WORKTREES.md](./WORKTREES.md) §9.
+
 ## 6. Источники
 
 | Компонент | Файл |
@@ -2179,6 +2223,7 @@ blob-хранилище (`BlobStore`), путь `processes/<id>.log`; преде
 | Внешние доступы (ADR-105) | `packages/core/src/server/routes/oauth.ts`, `packages/core/src/engine/oauth/*` (клиент, сервис, реестр, аудит), `packages/core/src/storage/external-credential-store.ts`, `packages/core/src/storage/ports/{external-credential-repository,credential-audit-repository}.ts`, `packages/shared/src/types/external-credentials.ts` |
 | Память: портал и метрики (ADR-107, PROP-047) | `packages/core/src/server/routes/memory.ts`, `packages/core/src/metrics/collectors/memory.ts`, `packages/core/src/storage/ports/{memory-fact-repository,memory-index-repository}.ts`, `packages/core/src/engine/plugins/scoped-memory.ts` |
 | Фоновые прогоны: реестр, сервисы, HTTP-контур (ADR-111, PROP-096/097) | `packages/core/src/server/routes/processes.ts`, `packages/core/src/engine/background/*`, `packages/core/src/engine/processes/*`, `packages/core/src/storage/ports/background-run-repository.ts`, `packages/backend/src/routes/processes.ts`, `packages/shared/src/types/background.ts` |
+| Worktrees: сервис, порт инвентаря, HTTP-контур, событие (ADR-114) | `packages/core/src/engine/worktree/*`, `packages/core/src/storage/ports/worktree-repository.ts`, `packages/core/src/storage/file-worktree-store.ts`, `packages/core/src/server/routes/projects.ts`, `packages/core/src/server/routes/sessions.ts`, `packages/core/src/engine/tools/worktree.ts`, `packages/shared/src/types/worktree.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

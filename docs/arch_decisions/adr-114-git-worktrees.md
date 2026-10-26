@@ -1,9 +1,9 @@
 # ADR-114: Git worktrees — per-session рабочий каталог
 
-> **Статус:** ⚠️ Частично — решение принято 2026-10-26; **ядро реализовано** (этап 1.4: порт
+> **Статус:** ✅ Реализовано — решение принято 2026-10-26; **ядро реализовано** (этап 1.4: порт
 > `WorktreeRepository` и три backend'а, сервис worktrees, привязка сессии с персистентностью,
-> резолв per-session cwd, тулы `git_worktree_*`, HTTP-контур, событие `worktree.updated`), **остаток —
-> UI** (§9). Подробности — в разделе «Статус в коде».
+> резолв per-session cwd, тулы `git_worktree_*`, HTTP-контур, событие `worktree.updated`), **UI**
+> (§9) и **вызов sweep'а при старте** (§7.4). Подробности — в разделе «Статус в коде».
 > **Дата:** 2026-10-26
 > **Связано:** [ADR-014](./adr-014-project-container.md) (проект как контейнер сессий),
 > [ADR-029](./adr-029-granular-permissions.md) (группы правил permission-слоя),
@@ -68,9 +68,14 @@
    Права: чтение — право чтения проекта, запись — право изменения содержимого (`canEditProjectContent`;
    инвариант 21: `VIEWER` только читает). Событие — `worktree.updated { projectId }` в существующей шине
    (ADR-024), по нему UI инвалидирует дерево Files.
-9. **UI.** Инвентарь worktrees в настройках проекта (как «Workspaces» в opencode), селектор worktree для
-   новой сессии и в шапке сессии, индикатор secondary worktree, скрытие `.worktrees` в дереве Files,
+9. **UI.** Инвентарь worktrees в настройках проекта (как «Workspaces» в opencode), селектор worktree для новой сессии и в шапке сессии, индикатор secondary worktree, скрытие `.worktrees` в дереве Files,
    мобильный вариант без DnD (ADR-044).
+   > **Уточнение по факту реализации:** инвентарь и селектор живут в **правой панели**
+   > (вкладки «Проект» и «Сессия»), а не в модалке настроек; селектор меняет привязку
+   > **существующей** сессии (отдельного выбора worktree при создании сессии нет);
+   > **индикатор secondary worktree не выводится** — определение «вторичная копия» требует
+   > `git rev-parse --git-common-dir` на стороне сервера, а UI видит только снимок привязки.
+   > Подробности — [docs/WORKTREES.md](../WORKTREES.md) §9.
 10. **Ограничение честно: worktree — не граница безопасности** между пользователями одного проекта
     (общий `.git`, refs, hooks). Изоляция секретов остаётся на уровне политики workspace и ADR-076.
 
@@ -90,8 +95,9 @@
 
 ## Статус в коде
 
-**Ядро реализовано, остаток — UI** (этап 1 roadmap 0.13 — блок 1.4; коммиты `3ce2060f`, `142cb652`,
-`b71bd40d`). Статус ADR остаётся `⚠️ Частично`: UI-контур (ADR-114 §9) ещё не сделан.
+**Реализовано целиком** (этап 1 roadmap 0.13 — блок 1.4; коммиты `3ce2060f`, `142cb652`,
+`b71bd40d`, `f216b01b`): ядро, HTTP-контур, **UI** и **вызов sweep'а при старте**. Статус ADR —
+`✅ Реализовано`.
 
 Реализовано:
 
@@ -110,6 +116,11 @@
   secondary worktree (`git rev-parse --git-common-dir`), startup-скрипт проекта
   (`project.worktreeSetupScript`, env `SYNTH_WORKTREE_BASE`/`SYNTH_WORKTREE_PATH`); типизированные
   ошибки с машинными кодами `WORKTREE_*` (`core/src/engine/worktree/errors.ts`).
+- **Sweep при старте (§7.4).** Общий хук `startWorktreeSweeper(service)`
+  (`core/src/engine/worktree/sweep.ts`) вызывается из `core/src/server/app/deps.ts` (standalone) и
+  `backend/src/app/deps.ts` (managed) — сразу после сборки `WorktreeService`. Запуск **фоновый**
+  (старт не блокируется), ошибка — в лог и **не роняет старт**; в деградированном режиме
+  хранилища (ADR-098) хук не вызывается.
 - **Привязка сессии с персистентностью.** `Session.worktree` сериализуется в **snake_case**
   (`worktree_id`/`project_id`/`repo_path`/`directory`/`branch`): файловый стор сессий и PostgreSQL
   (колонка `sessions.worktree jsonb`, **миграция `023_session_worktree`**) — привязка переживает
@@ -126,25 +137,33 @@
 - **HTTP-контур.** `GET/POST /api/v2/projects/:id/worktrees`,
   `DELETE /api/v2/projects/:id/worktrees/:wid?force=true`, `POST /api/v2/projects/:id/worktrees/prune`,
   `PATCH /api/v2/sessions/:id { worktreeId }` — общий для core и backend (права — по правилам
-  проекта, инвариант 21); полный контракт — [docs/WORKTREES.md](../WORKTREES.md) §5.
+  проекта, инвариант 21); полный контракт — [docs/WORKTREES.md](../WORKTREES.md) §5 и
+  [docs/API_V2.md](../API_V2.md) §5.40 (спека справочника API приведена в соответствие).
 - **Событие** `worktree.updated` (`core/src/engine/worktree/events.ts`): payload
   `{ project_id, worktree_id?, action }` (`action` ∈ `created|removed|pruned|attached|detached`),
   публикация в каналы сессий проекта (лимит 200) + `fs.changed { scope: 'all' }`; новых
   транспортных каналов нет.
+- **UI (§9).** Инвентарь в правой панели: раздел «Worktrees» во вкладке «Проект»
+  (`packages/ui/src/components/panels/ProjectTab.tsx`) — список с бейджами «изменения»/«нет
+  каталога»/«привязан», создание, привязка/отвязка текущей сессии, prune, удаление с
+  **двухшаговым подтверждением** при `forceRequired` (409 `WORKTREE_DIRTY` → второй confirm →
+  повтор с `force`); селектор «Рабочий каталог» во вкладке «Сессия»
+  (`SessionSettingsTab.tsx`, `PATCH /sessions/:id { worktreeId }`); индикатор привязки в шапке
+  (`Header.tsx`, desktop + mobile, клик открывает вкладку «Проект»); каталог `.worktrees` **скрыт
+  всегда** в дереве Files (`stores/filesStore.ts`, `ALWAYS_HIDDEN_ENTRIES`); live-обновление по
+  событиям `worktree.updated` (перечитывание инвентаря) и `fs.changed` (проброс области
+  инвалидации в `filesStore.scheduleRefresh`); мобильный вариант — touch-таргеты ≥ 40 px
+  (CSS `.worktrees-panel`). Домен API — `packages/ui/src/lib/api/worktrees.ts`, стор —
+  `packages/ui/src/stores/worktreesStore.ts`.
 - **Матрица доступа** — `packages/backend/src/routes/worktree-access-matrix.test.ts`
   (владелец/`EDITOR`/`VIEWER`/`ADMIN`/`LEAD`/посторонний; `VIEWER` читает, мутации — 403).
-- **Тесты.** Тулы, HTTP, событие, привязка сессии, персистентность и матрица доступа — 69 тестов
-  (`core/src/engine/tools/worktree.test.ts`, `core/src/engine/worktree/*.test.ts`,
-  `core/src/server/routes/worktree-routes.test.ts`, `core/src/server/routes/sessions.test.ts`,
-  `packages/backend/src/routes/worktree-access-matrix.test.ts`).
+- **Тесты.** Тулы, HTTP, событие, привязка сессии, персистентность, стартовый sweep (хелпер и
+  обе точки подключения) и матрица доступа — 74 теста (`core/src/engine/tools/worktree.test.ts`,
+  `core/src/engine/worktree/*.test.ts`, `core/src/server/routes/worktree-routes.test.ts`,
+  `core/src/server/routes/sessions.test.ts`, `core/src/server/app/deps.worktree-sweep.test.ts`,
+  `packages/backend/src/app/deps.test.ts`, `packages/backend/src/routes/worktree-access-matrix.test.ts`).
 
-Не реализовано:
-
-- **UI (ADR-114 §9)** — инвентарь worktree'ов в настройках проекта, селектор worktree для новой
-  сессии, индикатор secondary worktree в шапке сессии, скрытие `.worktrees` в дереве Files,
-  переключение привязки из UI. Рабочий контур на сегодня — HTTP-контур (§5 спеки) и тулы.
-- Мелочи: вызов sweep'а осиротевших записей на старте процесса не подключён (метод сервиса есть,
-  стартового хука нет) и эндпоинты worktree'ов ещё не вынесены в `docs/API_V2.md`.
+Остаток: нет — реализованы ядро, HTTP-контур, UI и стартовый sweep.
 
 ---## Связи
 
@@ -168,3 +187,8 @@
   сессии с персистентностью и миграцией `023_session_worktree`, резолв per-session cwd с
   fail-closed и наследованием, containment, тулы `git_worktree_*`, HTTP-контур, событие
   `worktree.updated`, матрица доступа и тесты); остаток — UI (§9).
+- 2026-10-26 — этап 1.4 закрыт: реализованы **UI** (§9 — инвентарь в правой панели, селектор
+  рабочего каталога, индикатор в шапке, скрытие `.worktrees` в дереве Files, двухшаговое
+  подтверждение при `forceRequired`, мобильный вариант, live-обновление) и **вызов sweep'а при
+  старте** (§7.4 — `startWorktreeSweeper`, фоново и без падения старта, в core и backend);
+  эндпоинты вынесены в [docs/API_V2.md](../API_V2.md) §5.40. Статус ADR → `✅ Реализовано`.

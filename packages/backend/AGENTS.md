@@ -42,6 +42,7 @@
 | `createPipelineProjectRoutes`, `createPipelinesRoutes`, `createPacksRoutes` | HTTP-контур пайплайнов: пайплайны проекта + прогоны + шаблоны инстанса (ADR-101, Э6), legacy-контур «декларация + учёт» (ADR-100) и реестр пакетов расширений (ADR-086 §5) |
 | `createProcessRoutes` | HTTP-контур единого реестра фоновых прогонов (PROP-096/097): список, деталь, лог, остановка, удаление |
 | `createPipelineMetrics` | коллектор метрик `synth_pipeline_*` (ADR-094/ADR-101) |
+| `WorktreeService`, `publishWorktreeUpdated`, `startWorktreeSweeper` | worktree'ы (ADR-114): сервис git-worktree'ов + публикация `worktree.updated` в каналы сессий проекта + **стартовый sweep** осиротевших записей (фоново, старт не блокируется, ошибка — в лог; вызывается в `src/app/deps.ts` сразу после сборки сервиса) |
 | `detectRuntimeDeps` | детект внешних бинарников (`git`/`rg`/`sh`) при старте → `runtimeDeps` оркестратора (ADR-078) |
 
 Локально только:
