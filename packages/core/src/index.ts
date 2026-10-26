@@ -655,6 +655,9 @@ export { FileQuestionStore } from './storage/file-question-store.js';
 export type { FileQuestionStoreConfig } from './storage/file-question-store.js';
 export { FileBackgroundRunStore } from './storage/file-background-run-store.js';
 export type { FileBackgroundRunStoreConfig } from './storage/file-background-run-store.js';
+// Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
+export { FileWorktreeStore } from './storage/file-worktree-store.js';
+export type { FileWorktreeStoreConfig } from './storage/file-worktree-store.js';
 export type {
   SessionRepository,
   SessionFilter,
@@ -753,6 +756,8 @@ export type {
   // Этап 1 roadmap 0.13: вопросы пользователю и реестр фоновых прогонов.
   QuestionRepository,
   BackgroundRunRepository,
+  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
+  WorktreeRepository,
 } from './storage/ports/index.js';
 // ADR-105 (Ф0/Ф1): доменная ошибка хранилища внешних доступов — значение
 // (не только тип): её бросают реализации порта, в т.ч. PostgreSQL-драйвер
@@ -803,6 +808,8 @@ export {
   // Этап 1 roadmap 0.13: вопросы пользователю и реестр фоновых прогонов.
   MemoryQuestionRepository,
   MemoryBackgroundRunRepository,
+  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
+  MemoryWorktreeRepository,
 } from './storage/memory/index.js';
 // PROP-047 §2.1: in-memory реализации портов памяти. Имена классов совпадают с
 // именами портов (`MemoryFactRepository`), поэтому в публичном API они

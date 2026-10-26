@@ -9,9 +9,12 @@
 > `repo_path` — [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md); исполнение команд —
 > [docs/EXECUTION.md](./EXECUTION.md).
 >
-> **Статус документа:** контракт зафиксирован (ADR-114, 2026-10-26), **реализации нет**: в `packages/**`
-> вхождений `worktree` — 0. Документ описывает целевое устройство; при реализации разделы
-> «Статус в коде» в ADR-114 и этот блок статуса обновляются.
+> **Статус документа:** контракт зафиксирован (ADR-114, 2026-10-26); **реализовано хранение**
+> (этап 1.4.1a): тип `WorktreeRecord` + Zod, порт `WorktreeRepository`, файловая/in-memory/
+> PostgreSQL-реализации и контрактный suite. **Поведения ещё нет**: сервис worktrees, резолв
+> `session.worktree.directory` в `_resolveWorkingDir`, тулы `git_worktree_*`, HTTP-роуты, событие
+> `worktree.updated` и UI — следующие шаги. Документ описывает целевое устройство; разделы
+> «Статус в коде» в ADR-114 и этот блок статуса обновляются по мере реализации.
 
 ---
 
@@ -49,6 +52,16 @@
 | `createdBy` | `string?` | пользователь, создавший запись (аудит, не авторизация) |
 | `createdAt` / `updatedAt` | ISO-8601 | `createdAt` **иммутабельно**; `updatedAt` ставит вызывающий (порт не подставляет «сейчас») |
 | `setupScriptRun` | `boolean` | выполнялся ли `project.worktreeSetupScript` для этой записи |
+
+> **Что реализовано на шаге 1.4.1a (контракт хранения).** Запись, которую сегодня хранит порт:
+> `id`, `projectId`, `repoPath?`, `directory`, `branch`, `name` (slug каталога), `strategy`
+> (`git`), `createdAt`, `updatedAt`, `createdBy?` — итого **девять полей плюс два необязательных**.
+> Отличия от таблицы выше (их закрывает сервис и тулы — шаг 1.4.2):
+> - имя каталога в записи — **`name`**, а не `slug` (в HTTP-теле — тоже `name`);
+> - поля жизненного цикла (`baseRef`, `status`, `setupScriptRun`) в записи **пока отсутствуют** —
+>   они появляются вместе с сервисом (`status` — вычисляемое состояние, `baseRef` — база ветки,
+>     `setupScriptRun` — признак выполнения startup-скрипта);
+> - стратегия записи — **`strategy: 'git'`** (задел на другие стратегии, ADR-114 §5).
 
 ### 1.2. Инварианты
 
@@ -91,10 +104,11 @@ Session.worktree?: {
 
 | Метод | Смысл |
 |---|---|
-| `save(record)` | upsert по `id` (`createdAt` иммутабельно, `updatedAt` — из записи) |
+| `save(record)` | upsert по `id` (полная перезапись записи; `createdAt` иммутабельно, `updatedAt` — из записи) |
 | `get(id)` | запись по `id`; отсутствующая — `null` |
-| `list(filter?: { projectId?: string })` | записи (свежие первыми по `updatedAt`, тайбрейкер `id`); фильтр — по «И» |
+| `list(filter?: { projectId?: string })` | записи (свежие первыми по `createdAt`, тайбрейкер `id`); фильтр — по «И» |
 | `delete(id)` | удаление записи; отсутствие — не ошибка (идемпотентно) |
+| `deleteByProject(projectId)` | удаление всех записей проекта; возвращает число удалённых (prune/снятие проекта) |
 
 ### 2.2. Реализации
 
@@ -102,18 +116,22 @@ Session.worktree?: {
 |---|---|---|
 | Файловый (default) | `{dataDir}/worktrees.json` | JSON-коллекция (`{ "schemaVersion": 1, "worktrees": [...] }`) — тот же слой, что `{dataDir}/questions.json` (ADR-112): атомарная запись tmp→rename (ADR-005), каталог создаётся при первой записи; отсутствие файла — пустой репозиторий, повреждённый JSON — понятная ошибка, а не тихий пустой список |
 | In-memory | `packages/core/src/storage/memory/` | герметичные тесты; тот же контракт, что у файловой реализации |
-| PostgreSQL | таблица `documents`, `kind='worktree'` | **существующий** generic-слой `DocumentRepository<T>`: `createDocumentPort` уже обслуживает `providers`/`models`/`agents` поверх `documents(kind, key, value jsonb)`; `kind` — свободный текст (CHECK-ограничений нет), поэтому **новая миграция не требуется** — расширяется лишь список `kind` в драйвере |
+| PostgreSQL | таблица `documents`, `kind='worktree'` | **существующий** generic-слой `documents(kind, key, value jsonb)`: `kind` — свободный текст (CHECK-ограничений нет), поэтому **новая миграция не требуется** — расширяется лишь список `kind` в драйвере |
 
 > **Факт по коду:** таблица `documents` заведена миграцией `001-init` (`packages/storage-postgres/src/migrations/001-init.ts`)
 > как `PRIMARY KEY (kind, key)`; драйвер использует её через `createDocumentPort`
-> (`packages/storage-postgres/src/ports/principals-documents.ts`). Миграция `023` не нужна.
+> (`packages/storage-postgres/src/ports/principals-documents.ts`) для `providers`/`models`/`agents`
+> и напрямую — для worktree'ов (`packages/storage-postgres/src/ports/worktrees.ts`, ключ — `id`
+> записи, значение — запись целиком). Миграция `023` не нужна.
 
 ### 2.3. Контрактный suite
 
 `packages/core/src/storage/contract/worktree-repository.contract.ts` — обязателен, как для любого порта
-(ADR-096): upsert по `id`, неизменность `createdAt`, монотонность `updatedAt`, фильтр по `projectId`,
-идемпотентность `delete`, пустой репозиторий на чистом backend'е. Прогон против живой БД — тот же гейт
-`SYNTH_TEST_POSTGRES_DSN`.
+(ADR-096): upsert по `id`, неизменность `createdAt`, фильтр по `projectId`, идемпотентность `delete`,
+`deleteByProject` (число и фактическое удаление), пустой репозиторий на чистом backend'е, «редкая»
+запись (без необязательных полей) читается без потерь. Прогон против живой БД — тот же гейт
+`SYNTH_TEST_POSTGRES_DSN`. Подключён к трём прогонам: `contract/file.test.ts`,
+`contract/memory.test.ts`, `contract/postgres.test.ts`.
 
 ---
 
@@ -149,6 +167,12 @@ Session.worktree?: {
 В самой сессии (`Session.worktree`) — переживает рестарт и не зависит от доступности порта при чтении.
 При переносе сессии в другой проект (`project_attach`, ADR-014) привязка **снимается**: worktree
 принадлежит проекту, и чужая привязка дала бы сессии каталог вне её проекта.
+
+> **Остаток реализации (важно).** Поле `Session.worktree` добавлено в контракт (`shared`,
+> шаг 1.4.1a), но его **сериализация** в портах сессий — ещё нет: файловый стор
+> (`SerializedSession`) и PostgreSQL-драйвер перечисляют поля явно, поэтому привязка пока
+> **не переживает рестарт**. Пункт обязателен для шага сервиса/тулов: без него резолв cwd после
+> рестарта молча ушёл бы в `project.workspace` — ровно тот сценарий, который ADR-114 запрещает.
 
 ---
 
@@ -194,10 +218,15 @@ Session.worktree?: {
 | Метод | Путь | Тело | Ответ |
 |---|---|---|---|
 | `GET` | `/api/v2/projects/:id/worktrees` | — | `200 { worktrees: WorktreeRecord[] }` |
-| `POST` | `/api/v2/projects/:id/worktrees` | `{ slug, branch?, baseRef?, repoPath? }` | `201 { worktree: WorktreeRecord }` |
+| `POST` | `/api/v2/projects/:id/worktrees` | `{ name?, branch?, repoPath?, from? }` (`worktreeCreateSchema`) | `201 { worktree: WorktreeRecord }` |
 | `DELETE` | `/api/v2/projects/:id/worktrees/:wid` | `{ force?: boolean }` (или query `?force=true`) | `204` (пусто) |
-| `POST` | `/api/v2/projects/:id/worktrees/prune` | — | `200 { removed: string[] }` (id удалённых записей) |
+| `POST` | `/api/v2/projects/:id/worktrees/prune` | — (`worktreePruneSchema`: параметров нет) | `200 { removed: string[] }` (id удалённых записей) |
 | `PATCH` | `/api/v2/sessions/:id` | `{ worktreeId: string \| null }` | `200` — обновлённая сессия |
+
+> **Имена полей HTTP-тела** (реализовано на шаге 1.4.1a, схема `worktreeCreateSchema` в
+> `packages/shared/src/types/worktree.ts`): имя каталога — **`name`** (не `slug`), база ветки —
+> **`from`** (не `baseRef`). Валидация: `name` — slug `^[a-z0-9][a-z0-9._-]{0,63}$`, `branch` —
+> без пробелов/`..`/`~`/`^`/`:`/`?`/`*`/`[`/`\`, `repoPath` — относительный путь без `..`.
 
 ### 5.1. Права
 
@@ -403,3 +432,10 @@ Worktree переживает сессию: архивирование, закр
   записи и порт, привязка сессии и приоритет резолва cwd, containment, HTTP-контур, событие
   `worktree.updated`, lifecycle (удаление/`force`, `prune`, sweep, startup-скрипт), ограничения
   (общий `.git`, ignored-файлы, «worktree — не граница безопасности»), UI-поведение и матрица тестов.
+- 2026-10-26 — этап 1.4.1a (контракт и хранение): реализованы тип `WorktreeRecord` + Zod-схемы
+  (`worktreeRecordSchema`/`worktreeCreateSchema`/`worktreePruneSchema`), порт
+  `WorktreeRepository` (`save`/`get`/`list`/`delete`/`deleteByProject`), файловая
+  (`{dataDir}/worktrees.json`), in-memory и PostgreSQL (`documents`, `kind='worktree'`, без новой
+  миграции) реализации и контрактный suite (file/memory/PG). Уточнены имена полей: `name`
+  (вместо `slug`), `from` (вместо `baseRef`), `strategy`; добавлен `deleteByProject`; сортировка
+  списка — по `createdAt`. Поля жизненного цикла (`baseRef`/`status`/`setupScriptRun`) — с сервисом.

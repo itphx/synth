@@ -57,7 +57,7 @@ ADR-097): реализация доменных портов `StorageContext` (`
 (`packages/core/src/storage/contract/postgres.test.ts` → 145/145 против
 живого PostgreSQL 17). Проводка домена — через `storage.backend = postgres`.
 
-**Текущий статус (сводно).** Реализованы: 39 из 39 доменных портов (группы
+**Текущий статус (сводно).** Реализованы: 40 из 40 доменных портов (группы
 `ports/*`; включая `analyticsRollups` — ADR-102 и `projectPipelines`/`pipelineRuns` —
 ADR-101, SQL-реализация поверх `pipeline_specs`/`pipeline_versions`/`pipeline_runs`/
 `pipeline_run_events`, а также `pluginAudit` — ADR-090 и `pluginLock` — PROP-068 §4.4 /
@@ -71,6 +71,15 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
 режим (надстройка core, ADR-098). **Остаток:** `kind:"storage"` в едином
 манифесте расширений (ADR-097) и установка сторонних драйверов-хранилищ
 (сейчас in-tree-драйвер из коробки).
+
+**Порт инвентаря worktree'ов** (`WorktreeRepository`, ADR-114) — **реализован**:
+`ports/worktrees.ts`, generic-таблица `documents` (`kind='worktree'`, ключ — `id`
+записи, значение — запись целиком); **новая миграция не нужна** (`kind` — свободный
+текст без CHECK-ограничений). Семантика — как у файловой/в-памяти реализаций:
+upsert с неизменным `createdAt`, `list` — «свежие первыми» по `createdAt`
+(сортировка в драйвере, объём коллекции мал), `delete` идемпотентно,
+`deleteByProject` — `DELETE … RETURNING` (число удалённых). Контрактный suite —
+`storage/contract/worktree-repository.contract.ts` (file/memory/PG).
 
 **Порт внешних доступов** (`ExternalCredentialRepository`, ADR-105 Ф1) — **реализован**:
 `ports/external-credentials.ts`, таблица `external_credentials` (миграция `011`),
@@ -173,6 +182,10 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
     `action`/`effect`/`source` и `limit`). Валидация документа — схема
     `authorityPolicySchema` из shared; невалидный документ читается как **отсутствие
     политики** (fail-closed на оси «user»).
+  - `ports/worktrees.ts` → `buildWorktreePorts(deps)` → `worktrees` (ADR-114:
+    generic-таблица `documents`, `kind='worktree'`, ключ — `id` записи; **без новой
+    миграции**; `createdAt` при перезаписи не меняется — `jsonb_set` по сохранённому
+    значению).
 
   Общий тип зависимостей — `PortDeps` (`ports/deps.ts`): `connection` (живой
   `PostgresConnection`), `dataDir`, `secretKey?`, `env?`, `systemDictionariesDir?`,

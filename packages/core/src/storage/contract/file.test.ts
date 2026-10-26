@@ -1,5 +1,6 @@
-import { afterAll, describe } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
+import { writeFile } from 'node:fs/promises';
 
 import {
   createTmpDir,
@@ -46,6 +47,7 @@ import {
   describeSSHKeyRepository,
   describeWebhookDeliveryRepository,
   describeWebhookRepository,
+  describeWorktreeRepository,
 } from './index.js';
 
 import { FileStore } from '../file-store.js';
@@ -91,6 +93,7 @@ import { FileAuthorityPolicyStore } from '../file-authority-policy-store.js';
 import { FileAuthorityDecisionJournal } from '../file-authority-decision-journal.js';
 import { FileQuestionStore } from '../file-question-store.js';
 import { FileBackgroundRunStore } from '../file-background-run-store.js';
+import { FileWorktreeStore } from '../file-worktree-store.js';
 
 /** Мастер-ключ для шифрующих хранилищ (base64, 32 байта) — файл master.key не создаётся. */
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
@@ -376,6 +379,21 @@ describe('контрактные тесты файловых реализаци�
   describeBackgroundRunRepository('FileBackgroundRunStore → BackgroundRunRepository', async () => ({
     repo: new FileBackgroundRunStore({ dataDir: await tmp() }),
   }));
+
+  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree'ов (`worktrees.json`).
+  describeWorktreeRepository('FileWorktreeStore → WorktreeRepository', async () => ({
+    repo: new FileWorktreeStore({ dataDir: await tmp() }),
+  }));
+
+  // Файловая деталь (ADR-005/ADR-114): повреждённый JSON — **понятная ошибка**,
+  // а не тихий пустой список (иначе «все worktree'ы потеряны» выглядели бы как
+  // пустой инвентарь).
+  it('повреждённый worktrees.json — понятная ошибка, а не пустой репозиторий', async () => {
+    const dir = await tmp();
+    const store = new FileWorktreeStore({ dataDir: dir });
+    await writeFile(join(dir, 'worktrees.json'), '{ это не json', 'utf-8');
+    await expect(store.list()).rejects.toThrow(/Повреждён файл/);
+  });
 });
 
 // `DefaultsRepository` реализуется в backend (`DefaultsStore`) — его контрактный

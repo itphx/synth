@@ -352,6 +352,19 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (чистятся retention-ом), `BackgroundRunRecord` (запись `bgr_<uuid>`) и
   `BackgroundRunFilter` (все условия — по «И»). Оба контракта (`question.ts`,
   `background.ts`) — browser-safe: только типы + Zod, без бизнес-логики; re-export из `types`.
+- ADR-114 (этап 1 roadmap 0.13 — блок 1.4): **git worktrees** (per-session рабочий
+  каталог) — `types/worktree.ts`: `WorktreeStrategy` (`git`), `WORKTREE_STRATEGIES`,
+  `WorktreeRecord` (запись `wkt_<uuid>`: `id`/`projectId`/`repoPath?`/`directory`/
+  `branch`/`name`/`strategy`/`createdAt`/`updatedAt`/`createdBy?`), `WorktreeCreateInput`
+  (`branch?`/`name?`/`repoPath?`/`from?`), `WorktreeSummary` (запись + вычисляемые
+  сервисом `attachedSessionId?`/`dirty?`/`exists?` — в порт не пишутся) и
+  `SessionWorktree` (привязка сессии: `worktreeId`/`projectId`/`repoPath?`/`directory`/
+  `branch`; поле `Session.worktree` — аддитивное). Zod — `worktreeRecordSchema`/
+  `worktreeCreateSchema`/`worktreePruneSchema` + предикаты `isValidWorktreeBranch`
+  (без пробелов, `..`, `~`, `^`, `:`, `?`, `*`, `[`, `\`) и `isValidWorktreeRepoPath`
+  (относительный путь без `..`); имя каталога — slug `WORKTREE_NAME_REGEX`
+  (`^[a-z0-9][a-z0-9._-]{0,63}$`, предел `WORKTREE_NAME_MAX_LENGTH` = 64).
+  Контракт browser-safe: только типы + Zod, без бизнес-логики; re-export из `types`.
 - Этап 1 roadmap 0.13: **события шины** (`types/bus-events.ts`) — `user_question.asked`/
   `user_question.answered`/`user_question.cancelled` (префикс `user_question.*` намеренно
   **не** `question.*` — `question.asked` уже занят смыслом «очередь зависла»),

@@ -1,7 +1,8 @@
 # ADR-114: Git worktrees — per-session рабочий каталог
 
-> **Статус:** ⚠️ Частично — решение принято 2026-10-26; **остаток — реализация** (в коде нет ни порта
-> хранения, ни тулов `git_worktree_*`, ни HTTP-контура, ни привязки сессии к worktree).
+> **Статус:** ⚠️ Частично — решение принято 2026-10-26; **реализовано хранение** (тип `WorktreeRecord`,
+> порт `WorktreeRepository` и три backend'а — файл/память/PostgreSQL, контрактный suite), **остаток —
+> поведение** (в коде нет ни тулов `git_worktree_*`, ни HTTP-контура, ни привязки сессии к worktree).
 > **Дата:** 2026-10-26
 > **Связано:** [ADR-014](./adr-014-project-container.md) (проект как контейнер сессий),
 > [ADR-029](./adr-029-granular-permissions.md) (группы правил permission-слоя),
@@ -88,17 +89,29 @@
 
 ## Статус в коде
 
-**Не реализовано.** Проверено точечным grep по `packages/**` (исключая `dist/`, `node_modules/`):
-вхождений `worktree` — **0**; `_resolveWorkingDir` (`core/src/engine/orchestrator.ts`) знает только
-`project.workspace` → `defaultWorkingDir`; git-тулы принимают `repo_path` относительно `project.workspace`
-(`core/src/engine/tools/git.ts`).
+**Частично реализовано** (этап 1 roadmap 0.13 — блок 1.4.1a: контракт и хранение;
+поведение — следующий шаг).
 
-Остаток (план реализации, детали — в [docs/WORKTREES.md](../WORKTREES.md)): тип `WorktreeRecord` и порт
-`WorktreeRepository` (+ файловая, in-memory и PostgreSQL-реализации, контрактный suite); сервис
-worktrees; резолв `session.worktree.directory` в `_resolveWorkingDir` и наследование привязки
-саб-агентами; тулы `git_worktree_*` и их правила permission-слоя; HTTP-роуты
-(`/api/v2/projects/:id/worktrees*`, `PATCH /api/v2/sessions/:id` с `worktreeId`); событие
-`worktree.updated`; UI (инвентарь в настройках проекта, селектор, индикатор, скрытие `.worktrees`).
+Реализовано:
+
+- типы в `shared` (`packages/shared/src/types/worktree.ts`): `WorktreeRecord`,
+  `WorktreeCreateInput`, `WorktreeSummary`, `SessionWorktree` + Zod-схемы
+  (`worktreeRecordSchema`/`worktreeCreateSchema`/`worktreePruneSchema`); аддитивные поля
+  `Session.worktree` и `Project.worktreeSetupScript`;
+- порт `WorktreeRepository` (`core/src/storage/ports/worktree-repository.ts`) и три
+  реализации: файловая (`{dataDir}/worktrees.json`), in-memory
+  (`core/src/storage/memory/worktrees.ts`) и PostgreSQL (generic-таблица `documents`,
+  `kind='worktree'`, **без новой миграции** — `packages/storage-postgres/src/ports/worktrees.ts`);
+- контрактный suite порта (`core/src/storage/contract/worktree-repository.contract.ts`) —
+  file/memory/PG.
+
+Не реализовано (поведение): `_resolveWorkingDir` (`core/src/engine/orchestrator.ts`) знает только
+`project.workspace` → `defaultWorkingDir`; git-тулы принимают `repo_path` относительно `project.workspace`
+(`core/src/engine/tools/git.ts`); сервис worktrees; резолв `session.worktree.directory` в
+`_resolveWorkingDir` и наследование привязки саб-агентами; тулы `git_worktree_*` и их правила
+permission-слоя; HTTP-роуты (`/api/v2/projects/:id/worktrees*`, `PATCH /api/v2/sessions/:id` с
+`worktreeId`); событие `worktree.updated`; UI (инвентарь в настройках проекта, селектор, индикатор,
+скрытие `.worktrees`).
 
 ## Связи
 
@@ -115,3 +128,6 @@ worktrees; резолв `session.worktree.directory` в `_resolveWorkingDir` и 
   инвентарь доменным портом `WorktreeRepository`, привязка сессии аддитивным полем `Session.worktree`,
   containment от каталога сессии, тулы `git_worktree_*` через порт исполнения, HTTP-контур и событие
   `worktree.updated`, UI и честное ограничение «worktree — не граница безопасности».
+- 2026-10-26 — этап 1.4.1a: реализованы контракт и хранение — тип `WorktreeRecord` (+ Zod),
+  порт `WorktreeRepository`, файловая/in-memory/PostgreSQL-реализации и контрактный suite;
+  поведение (сервис, тулы, резолв cwd, HTTP, событие, UI) — остаток.

@@ -1328,7 +1328,7 @@
   передают `secrets` в порт. Значения **не логируются** и **не возвращаются** в ответе;
   фоновые процессы (`spawnBackground`) секреты не поддерживают — fail-closed с кодом
   `ESECRETS` (`EXECUTION_SECRETS_UNSUPPORTED_CODE`).
-- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (41 — 39 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
+- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (45 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
   `ExternalCredentialRepository` — внешние доступы к коннекторам (ADR-105 Ф1; файловое/в-памяти
   хранилища — `ExternalCredentialStore`, контракт — `storage/contract/external-credential-repository.contract.ts`);
   `CredentialAuditRepository` — append-only журнал операций со слоем доступов (ADR-105 Ф4;
@@ -1348,6 +1348,12 @@
   `{dataDir}/processes/registry.json`, в-памяти — `storage/memory/background-runs.ts`, PG —
   миграция `021_background_runs`; контракт —
   `storage/contract/background-run-repository.contract.ts`);
+  `WorktreeRepository` — инвентарь git-worktree'ов (ADR-114, per-session рабочий каталог;
+  файловое — `{dataDir}/worktrees.json`, в-памяти — `storage/memory/worktrees.ts`, PG —
+  generic-таблица `documents` (`kind='worktree'`), **без новой миграции**; контракт —
+  `storage/contract/worktree-repository.contract.ts`; `save` — полная перезапись записи,
+  `createdAt` иммутабельно, `updatedAt` ставит вызывающий, `list` — «свежие первыми»
+  по `createdAt`, `delete` идемпотентно, `deleteByProject` — число удалённых);
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
   запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/

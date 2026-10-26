@@ -99,6 +99,11 @@ export interface Project {
   color?: string;
   workspace?: string;
   repos?: GitRepoConfig[];
+  /**
+   * ADR-114 §7.6: команда, выполняемая один раз после создания worktree
+   * (env `SYNTH_WORKTREE_BASE`/`SYNTH_WORKTREE_PATH`). Аддитивное поле.
+   */
+  worktreeSetupScript?: string;
   /** ADR-071 §2.4: проектный скоуп MCP (owner/lead). */
   mcp?: ProjectMcpSettings;
   /** ADR-046 §4.5: проектный скоуп скиллов (owner/lead). */
