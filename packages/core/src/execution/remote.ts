@@ -34,7 +34,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
-import type { ExecutionPort } from './ports/index.js';
+import type { ExecutionMetricsSink, ExecutionPort } from './ports/index.js';
 
 /**
  * Пакет исполнителя (клиент удалённого порта). Аннотация `string`
@@ -51,6 +51,12 @@ interface ExecutorClientModule {
     timeoutMs?: number;
     concurrency?: number;
     failMode?: 'fail' | 'inline-fallback';
+    /**
+     * ADR-094: приёмник метрик исполнения (очередь/занятость/ожидание/исход).
+     * Реестр метрик в пакет исполнителя **не** попадает — только узкий
+     * интерфейс (ADR-077, инвариант «клиент не знает про наблюдаемость»).
+     */
+    metricsSink?: ExecutionMetricsSink;
   }): ExecutionPort;
 }
 
@@ -187,10 +193,13 @@ class RemoteExecutionPortWithExecutorMcp implements ExecutionPort {
  * адреса → пакет → токен.
  *
  * @param config эффективная секция `execution` (`resolveExecutionConfig`)
+ * @param opts приёмник метрик исполнения (ADR-094) — достаётся до клиента
+ *             удалённого порта; не задан — метрики пула не собираются
  * @returns порт исполнения поверх HTTP-клиента пакета исполнителя
  */
 export async function createRemoteExecutionPortFromConfig(
   config: ResolvedExecutionConfig,
+  opts?: { metricsSink?: ExecutionMetricsSink },
 ): Promise<ExecutionPort> {
   const remote = config.remote;
   const urls = (remote.url ?? []).map((url) => url.trim()).filter((url) => url.length > 0);
@@ -229,6 +238,11 @@ export async function createRemoteExecutionPortFromConfig(
       timeoutMs: remote.timeoutMs,
       concurrency: remote.concurrency,
       failMode: remote.failMode,
+      // ADR-094: приёмник метрик достаётся до клиента удалённого порта.
+      // Обёртка (`RemoteExecutionPortWithExecutorMcp`) делегирует `execute`
+      // внутреннему порту — поэтому метрики считает именно он, второй раз
+      // обёртка их не дублирует.
+      ...(opts?.metricsSink ? { metricsSink: opts.metricsSink } : {}),
     }),
     urls,
     token,

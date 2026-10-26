@@ -71,6 +71,13 @@ spec:
               value: {{ .Values.executor.limits.maxTimeoutMs | int64 | quote }}
             - name: SYNTH_EXECUTOR_MAX_OUTPUT_BYTES
               value: {{ .Values.executor.limits.maxOutputBytes | int64 | quote }}
+            {{- /* ADR-077 шаг 7d: метрики исполнителя выключены по умолчанию
+                   (`GET /metrics` → 404). env выставляется только при явном
+                   включении — дефолт образа остаётся в силе. */}}
+            {{- if .Values.executor.metrics.enabled }}
+            - name: SYNTH_EXECUTOR_METRICS_ENABLED
+              value: "true"
+            {{- end }}
             {{- /* MCP-серверы, которые исполнитель хостит у себя (ADR-077, шаг
                    B1). Пустой список → env не выставляется: действует дефолт
                    образа (у flavor'ов с браузером — Playwright MCP).

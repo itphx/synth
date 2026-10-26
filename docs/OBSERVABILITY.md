@@ -276,6 +276,47 @@ Probes Helm: liveness — `/health` (или `/ready` с большим `failureT
 опрашивается; ошибка `countChunks` по одному индексу пропускает только этот
 индекс — остальные считаются (частичный результат), скрейп при этом не падает.
 
+### Исполнитель (split-режим, ADR-077)
+
+Метрики исполнения команд в split-топологии (`execution.mode: remote`). Счёт
+**двусторонний**: у control plane свой набор (очередь/занятость пула), у
+исполнителя — свой (исполненные команды). Эндпоинтов `/metrics` тоже два:
+backend'а и pod'ов пула.
+
+**Control plane** (backend `/metrics`; коллектор
+`createExecutorMetricsCollector`, `packages/core/src/metrics/collectors/executor.ts`):
+
+| Метрика | Тип | Лейблы | Смысл / обновление |
+|---|---|---|---|
+| `synth_executor_queue_depth` | gauge | — | Запросов в очереди на отправку исполнителю (ждут слот пула); растёт на постановке в очередь, падает при снятии |
+| `synth_executor_workers_busy` | gauge | — | Занятых слотов пула; растёт на старте команды, падает по её завершении |
+| `synth_executor_wait_seconds` | histogram | — | Ожидание в очереди до отправки (корзины 0.005…60 с); наблюдается при снятии с очереди |
+| `synth_executor_commands_total` | counter | `outcome` (`ok`/`error`/`timeout`/`cancelled`) | **Доставленные** исполнителю вызовы по исходу |
+
+**Исполнитель** (его собственный `/metrics`, `packages/executor/src/metrics.ts`):
+
+| Метрика | Тип | Лейблы | Смысл / обновление |
+|---|---|---|---|
+| `synth_executor_commands_total` | counter | `outcome` (`ok`/`error`/`timeout`/`cancelled`) | **Исполненные** команды по исходу |
+| `synth_executor_exec_duration_seconds` | histogram | — | Длительность исполнения команды (корзины 0.05…600 с) |
+| `synth_executor_inflight` | gauge | — | Выполняющихся сейчас команд |
+| `synth_executor_mcp_servers` | gauge | `status` (`idle`/`up`/`down`) | MCP-серверы исполнителя по состоянию (ленивый старт: `idle` = «ещё не поднят»); пересчёт **на скрейпе** |
+
+> ⚠️ **Двойного счёта нет — но суммировать серии нельзя.**
+> `synth_executor_commands_total` есть **на обеих сторонах** и считает **разное**:
+> control plane — доставленные исполнителю вызовы, исполнитель — исполненные
+> команды. Одна команда даёт единицу в каждом счётчике, поэтому
+> `sum(...)` по обоим job'ам посчитает её **дважды**. Различайте стороны по
+> лейблу `job` Prometheus (`synth-backend` vs `synth-executor`) и не складывайте
+> их в одну метрику.
+
+Серии исполнителя появляются **только** при включённом экспорте:
+`executor.metrics.enabled: true` (chart) → env `SYNTH_EXECUTOR_METRICS_ENABLED=true`.
+Выключено → `/metrics` исполнителя отвечает `404` (как у control plane,
+ADR-094 п. 4); без bearer-токена исполнителя — `401`. Идентификаторов
+(адресов, id команд, имён MCP-серверов) в лейблах нет: число MCP-серверов —
+это **счётчик по состоянию**, а не список имён.
+
 ### Authority-слой (ADR-106)
 
 Решения Authority-слоя (ADR-106 Ф1). Лейблы — `action`/`effect`/`source` (аддитивное
@@ -393,6 +434,66 @@ metrics:
 
 `secretKeyRef` создаётся с `optional: true` — отсутствие ключа не блокирует старт pod'а. Полные
 примеры — [charts/synth/README.md](../charts/synth/README.md) §«Наблюдаемость».
+
+### Пул исполнителей (split-режим, ADR-077)
+
+В split-топологии у пула исполнителей **свой** `/metrics` — отдельный target и
+отдельный `job` Prometheus. Скрейпятся **два** эндпоинта: backend (control
+plane: очередь, занятость, ожидание, доставленные вызовы) и pod'ы пула
+(исполненные команды, длительность, inflight, MCP-серверы).
+
+```yaml
+# prometheus.yml — пул исполнителей (отдельный job!)
+scrape_configs:
+  # control plane
+  - job_name: synth-backend
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["synth-backend:5000"]
+
+  # пул исполнителей: токен — ФАЙЛОМ (значение в конфиге не пишется)
+  - job_name: synth-executor
+    metrics_path: /metrics
+    scrape_interval: 15s
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/synth-executor-token
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: ["synth"]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            action: keep
+            regex: executor
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: http
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: instance
+```
+
+- **Токен исполнителя** — тот же bearer, что и у остальных эндпоинтов пула
+  (`SYNTH_EXECUTOR_TOKEN`, Secret `executor.token.existingSecret` /
+  `executor.token.secretKey`). В `scrape_config` — только **путь к файлу**
+  (`credentials_file`); значение токена в конфиге Prometheus не пишется.
+  Без токена `/metrics` исполнителя отвечает `401`.
+- **Доступ из сети** — ingress-правило в NetworkPolicy пула:
+  `executor.networkPolicy.metricsIngress` (дополнительное правило **в
+  дополнение** к правилу от control plane, не вместо него). Само правило для
+  скрейпа не включает egress-ограничения пула — те включаются
+  `executor.networkPolicy.enabled: true`.
+- **Двойного счёта нет** — но `synth_executor_commands_total` есть на обеих
+  сторонах и считает разное (доставленные вызовы vs исполненные команды):
+  **не суммируйте** серии двух job'ов, различайте их по `job`
+  (см. §«Исполнитель (split-режим)»).
+- В `inline`-режиме (`execution.mode: inline`) исполнителей нет: серии
+  control plane существуют (нули), серии исполнителя — нет.
+
+Пример в чарте — [charts/synth/README.md](../charts/synth/README.md)
+§«Метрики исполнителя»; включение — `executor.metrics.enabled: true` (env
+`SYNTH_EXECUTOR_METRICS_ENABLED=true`).
 
 ### Grafana и алерты
 
@@ -515,6 +616,31 @@ scrape_configs:
 | `WebhookFailures` | > 20% доставок с ошибкой 10 мин | warning |
 | `SchedulerDrift` / `SchedulerDriftCritical` | дрейф > 60 с (10 мин) / > 300 с (5 мин) | warning / critical |
 | `MetricsScrapeSlow` | рендер `/metrics` > 1 с 10 мин | warning |
+| `ExecutorPoolStalled` | пул исполнителей недоступен: `workers_busy == 0` при растущем `queue_depth` | critical |
+| `ExecutorCommandErrorRate` | доля `commands_total{outcome="error"}` > 10% (10 мин) | warning |
+| `ExecutorQueueWaitHigh` | p95 ожидания в очереди пула > 5 с (10 мин) | warning |
+
+Алерты пула (ADR-077 шаг 7d) — отдельная группа `synth-executor` в
+`charts/synth/files/alerts/synth-rules.yaml`:
+
+```promql
+# пул недоступен: слоты не заняты, а очередь растёт
+(synth_executor_workers_busy == 0) and (synth_executor_queue_depth > 0)
+  and (deriv(synth_executor_queue_depth[10m]) > 0)
+
+# доля неуспешных команд
+sum by (env) (rate(synth_executor_commands_total{outcome="error"}[10m]))
+  / clamp_min(sum by (env) (rate(synth_executor_commands_total[10m])), 1e-9) > 0.1
+
+# команды ждут слот пула слишком долго
+histogram_quantile(0.95,
+  sum by (le, env) (rate(synth_executor_wait_seconds_bucket[10m]))) > 5
+```
+
+Доли и p95 считаются **по каждой стороне отдельно**: у control plane и у
+исполнителя своя серия `synth_executor_commands_total`, и складывать их нельзя
+(см. §«Исполнитель (split-режим)»). В `inline`-режиме эти правила молчат:
+очередь пула всегда пуста, серий исполнителя нет.
 
 Что подстроить под себя:
 
@@ -544,6 +670,10 @@ scrape_configs:
 | `synth_datadir_bytes` растёт | Проверьте `kind` (сессии/события/workspaces), retention журнала событий и Job-истории, свободное место PVC |
 | Target `UP`, но серий `synth_*` нет | Скрейп попал в `/metrics` при выключенном экспорте (404) или отфильтрован по пути — см. «Включение» |
 | `MetricsScrapeSlow` | Дорогой рендер: высокая кардинальность или много `route`/`store`; проверьте `synth_metrics_series` |
+| `curl /metrics` исполнителя → 404 | Экспорт исполнителя выключен: не задан `executor.metrics.enabled` / env `SYNTH_EXECUTOR_METRICS_ENABLED` |
+| `curl /metrics` исполнителя → 401 | Не передан bearer-токен исполнителя (`SYNTH_EXECUTOR_TOKEN`): в `scrape_config` нужен `credentials_file` с токеном из Secret |
+| `synth_executor_queue_depth` растёт, `workers_busy == 0` | Пул недоступен: ни один исполнитель не отвечает (при `failMode: fail` команды падают с `EUNREACHABLE`); проверьте pod'ы пула, токен доверия и NetworkPolicy |
+| `synth_executor_wait_seconds` растёт | Слоты пула заняты (`workers_busy` на пределе `maxConcurrency`) — расширьте пул или поднимите лимит одновременных команд |
 
 Общая диагностика инстанса — [MAINTENANCE.md](./MAINTENANCE.md) §«Проверка и диагностика»,
 типовые проблемы — [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).

@@ -19,7 +19,7 @@
 
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { InlineExecutionPort } from './inline-execution-port.js';
-import type { ExecutionPort } from './ports/index.js';
+import type { ExecutionMetricsSink, ExecutionPort } from './ports/index.js';
 import { createRemoteExecutionPortFromConfig } from './remote.js';
 
 /**
@@ -27,11 +27,15 @@ import { createRemoteExecutionPortFromConfig } from './remote.js';
  *
  * @param config эффективная секция `execution` (`resolveExecutionConfig`);
  *                 не задана — `inline` (прежнее поведение)
+ * @param opts приёмник метрик исполнения (ADR-094) — передаётся удалённому
+ *             порту; в `inline` режиме не используется (исполнение в процессе
+ *             control plane метриками пула не измеряется)
  * @returns порт исполнения для оркестратора, тулов и детекта зависимостей
  */
 export async function createExecutionPortForConfig(
   config?: ResolvedExecutionConfig | null,
+  opts?: { metricsSink?: ExecutionMetricsSink },
 ): Promise<ExecutionPort> {
   if (!config || config.mode !== 'remote') return new InlineExecutionPort();
-  return createRemoteExecutionPortFromConfig(config);
+  return createRemoteExecutionPortFromConfig(config, opts);
 }

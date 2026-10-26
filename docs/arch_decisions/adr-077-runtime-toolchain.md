@@ -1,6 +1,6 @@
 # ADR-077: Инструментальное окружение исполнения — единый порт ExecutionPort и режим remote
 
-> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула), **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`), **шаг B1** — исполнитель **хостит MCP-серверы у себя** (stdio) и отдаёт их инструменты и вызовы по HTTP (`GET /mcp/servers`, `GET /mcp/tools`, `POST /mcp/call`; эти эндпоинты появились в протоколе 2) и **шаг B2** — клиентская проводка MCP-stdio в control plane (источник `ExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе). **Актуальная версия протокола — 4** (секреты вызова `secrets[]`, ADR-077 «Обновлено 2026-10-26», (б); фоновые процессы — v3, ADR-113); совместимость проверяется полем `protocol` в `GET /capabilities`. Перенос git-операций control plane на `ExecutionPort` выполнен (`GitService` — argv через порт, `simple-git` удалён из core). **Доставка SSH/CA в split-режиме — реализована** (см. «Обновлено 2026-10-26», (б) и (в)). Остаток — метрики `synth_executor_*` + `/metrics` исполнителя + runbook переключения топологии (шаг 7d).
+> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула), **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`), **шаг B1** — исполнитель **хостит MCP-серверы у себя** (stdio) и отдаёт их инструменты и вызовы по HTTP (`GET /mcp/servers`, `GET /mcp/tools`, `POST /mcp/call`; эти эндпоинты появились в протоколе 2) и **шаг B2** — клиентская проводка MCP-stdio в control plane (источник `ExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе). **Актуальная версия протокола — 4** (секреты вызова `secrets[]`, ADR-077 «Обновлено 2026-10-26», (б); фоновые процессы — v3, ADR-113); совместимость проверяется полем `protocol` в `GET /capabilities`. Перенос git-операций control plane на `ExecutionPort` выполнен (`GitService` — argv через порт, `simple-git` удалён из core). **Доставка SSH/CA в split-режиме — реализована** (см. «Обновлено 2026-10-26», (б) и (в)). **Шаг 7d — реализован**: метрики `synth_executor_*` (control plane и исполнитель), собственный `/metrics` исполнителя, скрейп пула и алерты — по шагам этого ADR остатка нет; вне его — образ worker'а и flavor'ы (PROP-082), квоты (шаг 10), workspace-v2 (шаг 11) и runbook переключения топологии (шаг 12), поэтому статус остаётся «⚠️ Частично».
 > **Дата:** 2026-10-21
 > **Обновлено:** 2026-10-26 — три решения по остатку исполнителя (детали и порядок — [docs/EXECUTION.md](../EXECUTION.md)):
 > **(а) git — через существующий порт, без новых git-эндпоинтов протокола.** Git-операции control plane
@@ -331,8 +331,32 @@
   `env` → `GIT_CONFIG_*` → env секрета), `packages/executor/src/client.ts` (доставка `secrets` в тело
   `POST /exec`, fail-closed `ESECRETS` для исполнителя протокола < 4 и для фонового запуска),
   `packages/executor/src/config.ts` (`SYNTH_EXECUTOR_TLS_CA_FILE`).
-- **Остаток:** только метрики `synth_executor_*` + `/metrics` исполнителя + runbook переключения
-  топологии (шаг 7d). Перенос git-операций control plane на `ExecutionPort` выполнен
+- **Шаг 7d — наблюдаемость пула и исполнителя:** метрики control plane
+  (`packages/core/src/metrics/collectors/executor.ts` — `createExecutorMetricsCollector`:
+  `synth_executor_queue_depth`, `synth_executor_workers_busy`, `synth_executor_wait_seconds`,
+  `synth_executor_commands_total{outcome}`) через узкий приёмник
+  `ExecutionMetricsSink` (`packages/core/src/execution/ports/execution-port.ts`), который дёргает
+  клиент удалённого порта (`packages/executor/src/client.ts`); sink создаётся в
+  `server/app/deps.ts` и `backend/app/deps.ts` из общего реестра процесса; собственный `/metrics`
+  исполнителя (`packages/executor/src/metrics.ts` — `synth_executor_commands_total{outcome}`,
+  `synth_executor_exec_duration_seconds`, `synth_executor_inflight`,
+  `synth_executor_mcp_servers{status}`), выключается `SYNTH_EXECUTOR_METRICS_ENABLED`
+  (`packages/executor/src/config.ts`), 404/401/200 + `no-store`
+  (`packages/executor/src/server.ts`); чарт — `executor.metrics.enabled` и
+  `executor.networkPolicy.metricsIngress` (ingress-правило для скрейпа пула — **в дополнение** к
+  правилу от control plane); алерты — группа `synth-executor` в
+  `charts/synth/files/alerts/synth-rules.yaml` (`ExecutorPoolStalled`,
+  `ExecutorCommandErrorRate`, `ExecutorQueueWaitHigh`); каталог серий и скрейп —
+  [docs/OBSERVABILITY.md](../OBSERVABILITY.md) §«Исполнитель (split-режим)», runbook диагностики —
+  [docs/MAINTENANCE.md](../MAINTENANCE.md) §«Метрики исполнителя и диагностика split-режима».
+  **Двойного счёта нет:** `synth_executor_commands_total` есть на обеих сторонах и считает разное
+  (доставленные вызовы vs исполненные команды) — суммировать серии двух job'ов нельзя.
+- **Остаток:** по шагам этого ADR **остатка нет** — метрики `synth_executor_*`, `/metrics`
+  исполнителя, алерты и runbook диагностики реализованы (шаг 7d). Вне этого ADR остаются: образ
+  worker'а и flavor'ы ([PROP-082](./prop-082-full-images-deployment.md), шаги 4–6), квоты и
+  изоляция (шаг 10), workspace-v2 (шаг 11) и runbook переключения топологии (шаг 12 —
+  [docs/EXECUTION.md](../EXECUTION.md) §12.2), поэтому статус остаётся «⚠️ Частично».
+  Перенос git-операций control plane на `ExecutionPort` выполнен
   («Обновлено 2026-10-26», (а)); доставка SSH-материала и CA — **реализована** (там же, (б) и (в)).
 
 ## Связи
@@ -375,3 +399,8 @@
   кэш детекции по экземпляру порта; зафиксированы операционные следствия (единая версия протокола
   control plane и исполнителя, fail-open при недоступном инвентаре и fail-closed в маршрутизации,
   «один образ — один инвентарь», снимок доступности при старте).
+- 2026-10-26 — **шаг 7d закрыт**: наблюдаемость пула и исполнителя (метрики control plane и
+  исполнителя, собственный `/metrics` исполнителя с `SYNTH_EXECUTOR_METRICS_ENABLED`, скрейп пула
+  отдельным job'ом с `executor.networkPolicy.metricsIngress`, алерты `synth-executor`, runbook
+  диагностики в `docs/MAINTENANCE.md`); по шагам ADR остатка нет — статус остаётся «⚠️ Частично»
+  по причинам вне этого ADR (PROP-082, квоты, workspace-v2, runbook переключения топологии).

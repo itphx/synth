@@ -16,6 +16,8 @@ export type {
   ExecFailureReason,
   ExecutionCapabilitySummary,
   ExecutionBaseCapability,
+  ExecutionMetricsOutcome,
+  ExecutionMetricsSink,
   ExecBackgroundChunk,
   ExecBackgroundExit,
   ExecBackgroundProcess,

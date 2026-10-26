@@ -5,7 +5,11 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { egressFetch, ExecutionError } from '@itphx/synth-core';
-import type { ExecBackgroundProcess, ExecutionPort } from '@itphx/synth-core';
+import type {
+  ExecBackgroundProcess,
+  ExecutionMetricsSink,
+  ExecutionPort,
+} from '@itphx/synth-core';
 import { createRemoteExecutionPort, type ExecutorFetch } from './client.js';
 import { startExecutorServer, type ExecutorHandle } from './server.js';
 
@@ -171,6 +175,131 @@ describe('клиент удалённого порта', () => {
       .catch((e) => e);
     expect(err).toBeInstanceOf(ExecutionError);
     expect((err as ExecutionError).code).toBe('EWORKSPACE');
+  });
+});
+
+/**
+ * ADR-094/ADR-077: приёмник метрик исполнения на стороне control plane.
+ *
+ * Клиент удалённого порта **не знает** про реестр метрик — он получает узкий
+ * приёмник (`ExecutionMetricsSink`) и сообщает о событиях: постановка в
+ * очередь, получение слота (с временем ожидания), старт и завершение (исход).
+ */
+describe('клиент удалённого порта: приёмник метрик исполнения', () => {
+  /** События приёмника в порядке поступления. */
+  interface SinkEvent {
+    kind: 'queued' | 'dequeued' | 'started' | 'finished';
+    waitMs?: number;
+    outcome?: string;
+  }
+
+  /** Приёмник, пишущий события в список. */
+  function recordingSink(events: SinkEvent[]): ExecutionMetricsSink {
+    return {
+      onQueued: () => events.push({ kind: 'queued' }),
+      onDequeued: (waitMs) => events.push({ kind: 'dequeued', waitMs }),
+      onStarted: () => events.push({ kind: 'started' }),
+      onFinished: (outcome) => events.push({ kind: 'finished', outcome }),
+    };
+  }
+
+  it('успешный вызов: очередь → слот → старт → успех', async () => {
+    const handle = await startExecutor();
+    const events: SinkEvent[] = [];
+    const port = createRemoteExecutionPort({
+      urls: [handle.url],
+      token: TOKEN,
+      metricsSink: recordingSink(events),
+    });
+
+    await port.execute({ command: { kind: 'shell', command: 'printf ok' } });
+
+    expect(events.map((e) => e.kind)).toEqual(['queued', 'dequeued', 'started', 'finished']);
+    expect(events[1]!.waitMs).toBeGreaterThanOrEqual(0);
+    expect(events[3]!.outcome).toBe('ok');
+  });
+
+  it('ненулевой код выхода — исход error', async () => {
+    const handle = await startExecutor();
+    const events: SinkEvent[] = [];
+    const port = createRemoteExecutionPort({
+      urls: [handle.url],
+      token: TOKEN,
+      metricsSink: recordingSink(events),
+    });
+
+    await expect(
+      port.execute({ command: { kind: 'shell', command: 'exit 7' } }),
+    ).rejects.toBeInstanceOf(ExecutionError);
+
+    const finished = events.find((e) => e.kind === 'finished');
+    expect(finished?.outcome).toBe('error');
+  });
+
+  it('таймаут команды — исход timeout', async () => {
+    const handle = await startExecutor();
+    const events: SinkEvent[] = [];
+    const port = createRemoteExecutionPort({
+      urls: [handle.url],
+      token: TOKEN,
+      metricsSink: recordingSink(events),
+    });
+
+    await expect(
+      port.execute({ command: { kind: 'shell', command: 'sleep 5' }, timeoutMs: 200 }),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+
+    const finished = events.find((e) => e.kind === 'finished');
+    expect(finished?.outcome).toBe('timeout');
+  });
+
+  it('отмена по AbortSignal — исход cancelled', async () => {
+    const handle = await startExecutor();
+    const events: SinkEvent[] = [];
+    const port = createRemoteExecutionPort({
+      urls: [handle.url],
+      token: TOKEN,
+      metricsSink: recordingSink(events),
+    });
+    const controller = new AbortController();
+
+    const pending = port.execute({
+      command: { kind: 'shell', command: 'sleep 5' },
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 50);
+    await expect(pending).rejects.toMatchObject({ reason: 'aborted' });
+
+    const finished = events.find((e) => e.kind === 'finished');
+    expect(finished?.outcome).toBe('cancelled');
+  });
+
+  it('очередь: второй вызов ждёт слот и попадает в гистограмму ожидания', async () => {
+    const handle = await startExecutor();
+    const events: SinkEvent[] = [];
+    const port = createRemoteExecutionPort({
+      urls: [handle.url],
+      token: TOKEN,
+      concurrency: 1,
+      metricsSink: recordingSink(events),
+    });
+
+    await Promise.all([
+      port.execute({ command: { kind: 'shell', command: 'sleep 0.3' } }),
+      port.execute({ command: { kind: 'shell', command: 'sleep 0.3' } }),
+    ]);
+
+    const dequeued = events.filter((e) => e.kind === 'dequeued');
+    expect(dequeued).toHaveLength(2);
+    // Второй вызов ждал слот — ожидание измеримо (больше нуля).
+    expect(dequeued[1]!.waitMs).toBeGreaterThan(0);
+  });
+
+  it('приёмник не задан — вызов работает как прежде (метрики не обязательны)', async () => {
+    const handle = await startExecutor();
+    const port = createRemoteExecutionPort({ urls: [handle.url], token: TOKEN });
+    const res = await port.execute({ command: { kind: 'shell', command: 'printf ok' } });
+    expect(res.stdout).toBe('ok');
   });
 });
 

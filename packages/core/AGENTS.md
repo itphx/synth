@@ -329,7 +329,13 @@
   неизвестное → `other`; id принципалов/сессий/ходов в лейблах нет), `ready`,
   `pipelines` — `createPipelineMetrics`: `synth_pipeline_*` (ADR-101 — прогоны/шаги/длительности/
   HITL-ожидания; лейблы только `status`/`source`/`kind`/`outcome`, id прогонов и узлов в лейблах нет —
-  значения приводятся к конечным наборам, неизвестное → `other`; ошибка метрик не влияет на прогон)).
+  значения приводятся к конечным наборам, неизвестное → `other`; ошибка метрик не влияет на прогон),
+  `executor` — `createExecutorMetricsCollector`: `synth_executor_*` (ADR-077 шаг 7d — сторона control
+  plane: `synth_executor_queue_depth`/`_workers_busy`/`_wait_seconds`/`_commands_total{outcome}`; sink —
+  `ExecutionMetricsSink` (`execution/ports/execution-port.ts`), который дёргает клиент удалённого порта;
+  серии исполнителя (`_exec_duration_seconds`/`_inflight`/`_mcp_servers`) считает сам исполнитель в
+  своём `/metrics` — `synth_executor_commands_total` есть на обеих сторонах и считает **разное**
+  (доставленные вызовы vs исполненные команды), суммировать их нельзя)).
   Роуты — `server/routes/metrics.ts` (`/metrics`: 404 при disabled, 401 при токене, `no-store`),
   `server/routes/health.ts` (`/health`, `/ready`) и `server/routes/metrics-settings.ts`
   (`createMetricsSettingsRoutes`: runtime/status/token, `resolveMetricsEnabled` — env > runtime > config > default).

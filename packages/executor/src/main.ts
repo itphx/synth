@@ -66,6 +66,8 @@ export async function main(): Promise<void> {
     mcpServers: config.mcpServers,
     host: config.host,
     port: config.port,
+    // ADR-094: `/metrics` исполнителя (по умолчанию выключен → 404).
+    metricsEnabled: config.metricsEnabled,
   });
 
   console.log(
@@ -74,6 +76,7 @@ export async function main(): Promise<void> {
       `потолок таймаута: ${config.maxTimeoutMs} мс; потолок вывода: ${config.maxOutputBytes} байт; ` +
       `лимит фоновых процессов: ${config.backgroundMax}; ` +
       `MCP-серверов: ${config.mcpServers.length}; ` +
+      `метрики: ${config.metricsEnabled ? 'включены' : 'выключены'}; ` +
       `CA доверия: ${config.tlsCaFile ? 'задан' : 'не задан'}; ` +
       `удалено старых каталогов SSH: ${swept})`,
   );

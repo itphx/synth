@@ -95,3 +95,8 @@ export type {
 export { setSynthReady } from './ready.js';
 export { createLlmCallRecorder } from './llm.js';
 export type { LlmCallInfo, LlmCallOutcome } from './llm.js';
+export {
+  createExecutorMetricsCollector,
+  normalizeExecutorOutcome,
+  EXECUTOR_WAIT_BUCKETS,
+} from './executor.js';

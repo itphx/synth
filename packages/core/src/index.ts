@@ -353,6 +353,9 @@ export type {
   ExecutionErrorInit,
   ExecutionCapabilitySummary,
   ExecutionBaseCapability,
+  // ADR-094: приёмник метрик исполнения (узкий интерфейс — без реестра).
+  ExecutionMetricsOutcome,
+  ExecutionMetricsSink,
   ExecBackgroundChunk,
   ExecBackgroundExit,
   ExecBackgroundProcess,
@@ -1867,6 +1870,10 @@ export {
   setSynthReady,
   createLlmCallRecorder,
   normalizeRemoteOp,
+  // ADR-094/ADR-077: метрики пула исполнителей (`synth_executor_*`).
+  createExecutorMetricsCollector,
+  normalizeExecutorOutcome,
+  EXECUTOR_WAIT_BUCKETS,
   DATADIR_KINDS,
   SESSIONS_METRICS_INTERVAL_MS,
   STORAGE_RECORDS_INTERVAL_MS,

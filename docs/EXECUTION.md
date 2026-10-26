@@ -16,8 +16,12 @@
 > `attachExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе); **актуальная версия
 > протокола — 4** (секреты вызова `secrets[]`, ADR-077 «Обновлено 2026-10-26», (б); фон — v3, ADR-113),
 > совместимость — по полю `protocol` в `GET /capabilities`.
-> Остаток — метрики `synth_executor_*` + `/metrics` исполнителя + runbook переключения топологии (шаг 7d)
-> и `inline-shell` (шаг 9). Перенос git-операций control plane на `ExecutionPort` вместо
+> Остаток — `inline-shell` (шаг 9) и runbook переключения топологии (шаг 12).
+> Метрики `synth_executor_*` + `/metrics` исполнителя + диагностика
+> «исполнитель недоступен» — **реализованы** (шаг 7d; каталог серий —
+> [OBSERVABILITY.md](./OBSERVABILITY.md) §«Исполнитель (split-режим)», runbook —
+> [MAINTENANCE.md](./MAINTENANCE.md) §«Метрики исполнителя и диагностика split-режима»).
+> Перенос git-операций control plane на `ExecutionPort` вместо
 > `simple-git` **выполнен** (ADR-077 «Обновлено 2026-10-26», (а)); доставка SSH-материала и CA —
 > **тоже** (там же, (б) и (в)): SSH-ключ едет на время вызова полем `secrets[]` (протокол 4),
 > CA — конфигурация исполнителя (`SYNTH_EXECUTOR_TLS_CA_FILE`).
@@ -74,7 +78,7 @@
 | **LLM-вызовы** (через `GatewayProvider`, [ADR-036](./arch_decisions/adr-036-llm-gateway.md)) | backend | backend (в исполнителе LLM-ключей нет) |
 | **Permission-слой** (`plan`/`act`/`yolo`, allow/deny/ask) | backend | backend (решение о допуске — до вызова порта) |
 | **MCP stdio-серверы** | в процессе backend'а (spawn через `StdioClientTransport`) | **в исполнителе** (B1: `SYNTH_EXECUTOR_MCP_SERVERS` + `/mcp/*`, протокол 2; B2: клиентская проводка в control plane — `ExecutorMcpSource`) |
-| **Наблюдаемость** | `/metrics` backend'а | `/metrics` backend'а + `/metrics` исполнителя (агрегация; серия `synth_executor_*` — **план**, шаг 7d) |
+| **Наблюдаемость** | `/metrics` backend'а | `/metrics` backend'а (очередь/занятость пула/ожидание) **+** `/metrics` исполнителя (исполненные команды/длительность/inflight/MCP) — шаг 7d |
 
 ---
 
@@ -645,33 +649,54 @@ control plane (тот же namespace) на порт исполнителя, egre
 | Метрика | Тип | Лейблы | Где | Смысл |
 |---|---|---|---|---|
 | `synth_executor_queue_depth` | gauge | — | backend (клиент, core) | Запросов в очереди на отправку исполнителю |
-| `synth_executor_workers_busy` | gauge | — | backend (клиент, core) | Занятых исполнителей (по pool'у) |
+| `synth_executor_workers_busy` | gauge | — | backend (клиент, core) | Занятых слотов пула |
 | `synth_executor_wait_seconds` | histogram | — | backend (клиент, core) | Время ожидания в очереди (до отправки) |
-| `synth_executor_commands_total` | counter | `outcome` | backend (клиент, core) + `/metrics` исполнителя | Выполненных команд по исходу (`ok`/`error`/`timeout`/`cancelled`) |
+| `synth_executor_commands_total` | counter | `outcome` | backend — **доставленные** исполнителю вызовы; исполнитель — **исполненные** команды | Команды по исходу (`ok`/`error`/`timeout`/`cancelled`) |
+| `synth_executor_exec_duration_seconds` | histogram | — | исполнитель (`/metrics` исполнителя) | Длительность исполнения команды |
+| `synth_executor_inflight` | gauge | — | исполнитель (`/metrics` исполнителя) | Выполняющихся сейчас команд |
+| `synth_executor_mcp_servers` | gauge | `status` (`idle`/`up`/`down`) | исполнитель (`/metrics` исполнителя) | MCP-серверы исполнителя по состоянию |
 
-- **Статус — план, не реализовано (шаг 7d).** Серии `synth_executor_*` в коде **нет** (в
-  `packages/core/src/metrics/collectors/` таких коллекторов нет), и `/metrics` у исполнителя тоже
-  **не реализован** — сейчас live-картина по split-режиму берётся из журналов control plane и
-  исполнителя. Реализация должна переиспользовать уже существующий реестр и рендер, а не заводить
-  второй (см. ниже).
-- **Где что живёт (при реализации).** Клиентские метрики (очередь, занятость, ожидание) —
-  в **core**, на стороне удалённого порта (`packages/core/src/execution/remote.ts` /
-  `@itphx/synth-executor/client`): только там известны адреса пула и очередь вызовов. Метрики
-  исполнения с лейблом `outcome` — на **исполнителе**, в его собственном `/metrics`.
-- **Исполнитель отдаёт свой `/metrics` (при реализации)** — тем же реестром, что и backend
+- **Статус — реализовано (шаг 7d).** Клиентские серии считает коллектор
+  `createExecutorMetricsCollector` (`packages/core/src/metrics/collectors/executor.ts`),
+  приёмник — узкий порт `ExecutionMetricsSink`
+  (`packages/core/src/execution/ports/execution-port.ts`: `onQueued`/`onDequeued`/
+  `onStarted`/`onFinished`), который клиент удалённого порта
+  (`packages/executor/src/client.ts`) дёргает на каждом вызове. Создаётся sink в
+  `server/app/deps.ts` (core) и `backend/app/deps.ts` — из общего реестра
+  процесса, второй реестр не заводим.
+- **Где что живёт.** Клиентские метрики (очередь, занятость, ожидание) — в
+  **core**, на стороне удалённого порта: только там известны адреса пула и
+  очередь вызовов. Серии исполнения (исход, длительность, inflight, MCP) — на
+  **исполнителе**, в его собственном `/metrics`
+  (`packages/executor/src/metrics.ts`).
+- **Исполнитель отдаёт свой `/metrics`** — тем же реестром, что и backend
   (`packages/core/src/metrics/registry.ts`), тем же рендером 0.0.4
-  (`packages/core/src/metrics/renderer.ts`), тем же middleware (`packages/core/src/metrics/http.ts`).
-  Backend **агрегирует** метрики пула (gauge по пулу) и отдаёт свои; метрики исполнения с
-  лейблом `outcome` агрегируются в счётчик backend'а, чтобы не было двойного счёта при скрейпе обоих
-  эндпоинтов.
+  (`packages/core/src/metrics/renderer.ts`); второго рендера в проекте нет.
+  Включается `SYNTH_EXECUTOR_METRICS_ENABLED=true` (chart: `executor.metrics.enabled`),
+  **выключен по умолчанию**: выключено → `404`, без bearer-токена исполнителя →
+  `401`, с токеном → `200` (`no-store`). Отдельного токена не заводим — тот же,
+  что у остальных эндпоинтов исполнителя.
+- **Двойного счёта нет.** `synth_executor_commands_total` есть на обеих сторонах
+  и считает **разное** (доставленные вызовы vs исполненные команды): одна
+  команда даёт единицу в каждом счётчике. Суммировать серии двух job'ов
+  Prometheus **нельзя** — различать по `job`
+  (см. [OBSERVABILITY.md](./OBSERVABILITY.md) §«Исполнитель (split-режим)»).
 - **Формат и правила** — как у остальных: `/metrics` вне `/api/v2`, 404 при выключенном, 401 при
   токене, `no-store` (`packages/core/src/server/routes/metrics.ts`).
   Существующие `synth_sessions_active`/`synth_queue_pending`
   (`packages/core/src/metrics/collectors/sessions.ts`) — про сессии и очередь **сообщений**,
   не про исполнение; дублировать их нельзя.
+- **Скрейп** — два эндпоинта и **отдельный job** для пула; доступ из сети —
+  `executor.networkPolicy.metricsIngress`; токен в `scrape_config` — файлом
+  (`credentials_file`), значение не пишется. Пример — [charts/synth/README.md](../charts/synth/README.md)
+  §«Метрики исполнителя».
 - **Лимит серий** — 2000 на метрику, при переполнении `synth_metrics_series_dropped_total`
   (`packages/core/src/metrics/registry.ts`). Лейблов у метрик выше — ноль или один, риск
   кардинальности отсутствует.
+- **Алерты** — группа `synth-executor` в `charts/synth/files/alerts/synth-rules.yaml`:
+  `ExecutorPoolStalled` (пул недоступен: `workers_busy == 0` при растущем
+  `queue_depth`), `ExecutorCommandErrorRate` (доля `outcome="error"`),
+  `ExecutorQueueWaitHigh` (p95 `synth_executor_wait_seconds`).
 - **Health/ready.** У backend'а `GET /health` и `GET /ready`
   (`packages/core/src/server/routes/health.ts`). В split-режиме **живость control plane и
   готовность пула разойдутся**: backend готов, когда готов сам (даже если пул пуст), а «исполнители
@@ -706,6 +731,8 @@ control plane (тот же namespace) на порт исполнителя, egre
 | `executor.workspace.mountPath` | Точка монтирования общего тома — **одинаковая** в backend и в worker'е (по умолчанию `/var/synth/data/workspaces` — совпадает с дефолтом `storage.workspacesRoot` = `{dataDir}/workspaces`) |
 | `executor.workspace.backendWorkspacesRoot` | `storage.workspacesRoot` backend'а (env `SYNTH_WORKSPACES_ROOT`) — задаётся, если `mountPath` отличается от `{dataDir}/workspaces` |
 | `executor.networkPolicy.enabled` / `.allowedEgress` | NetworkPolicy worker'а: ingress — только от pod'ов control plane, egress — по умолчанию только DNS |
+| `executor.networkPolicy.metricsIngress` | Доп. ingress-правила (формат `networking.k8s.io/v1`) — **в дополнение** к правилу от control plane (например, скрейп `/metrics` исполнителя Prometheus'ом из другого namespace). Непустое значение включает NetworkPolicy пула; egress-ограничения при этом — только при `networkPolicy.enabled: true` |
+| `executor.metrics.enabled` | Метрики исполнителя (ADR-077 шаг 7d; ADR-094): env `SYNTH_EXECUTOR_METRICS_ENABLED=true` → свой `GET /metrics` (404 при выключенном, 401 без токена, 200 с токеном); выключено по умолчанию |
 | `executor.token.existingSecret` / `.secretKey` | Secret с токеном `synth_exec_…` и ключ внутри него |
 | `executor.mcp.enabled` / `.servers` | MCP-серверы, которые хостит исполнитель (ADR-077 шаг B1): `[{name, command, args, env}]` → env `SYNTH_EXECUTOR_MCP_SERVERS` (JSON). Пусто → env не выставляется (дефолт образа: у flavor'ов с браузером — Playwright MCP); `enabled: false` → env `""` = серверов нет |
 
@@ -761,8 +788,8 @@ worker — **значением** в env (`SYNTH_EXECUTOR_TOKEN`, `secretKeyRef`
 5. **Переключить режим:** `execution.mode=remote` (config.yaml/env/CLI) → **рестарт** backend'а
    (переключатель — параметр запуска; рестарт — через graceful shutdown с exit 75,
    `packages/core/src/server/restart.ts`).
-6. **Проверить:** exec-вызовы идут в исполнитель (по журналам; серия `synth_executor_*` — план,
-   шаг 7d), файлы в workspace те же, git-тулы работают (через `ExecutionPort`, шаг 5.2 плана этапа —
+6. **Проверить:** exec-вызовы идут в исполнитель (по журналам и сериям
+   `synth_executor_*` — шаг 7d), файлы в workspace те же, git-тулы работают (через `ExecutionPort`, шаг 5.2 плана этапа —
    ADR-077, SSH-материал `secrets[]`), MCP stdio (B1+B2) — тулы `{server}_{tool}` видны в сессии.
 
 **Обратимо:** да — возврат `execution.mode=inline` + рестарт возвращает исполнение в процесс
@@ -813,11 +840,12 @@ backend'а. Данные не затронуты (workspace — тот же то
 | Probes backend'а — оба `GET /health` (не `/ready`): деградация БД — штатный сценарий | `charts/synth/values.yaml:103`, `:107`, `:97` |
 | `runAsUser: 1000`, `runAsNonRoot: true`, `allowPrivilegeEscalation: false`; UI — `fsGroup: 101` | `charts/synth/values.yaml:113`, `:115`, `:118`; `:503` |
 | Секреты в чарте — только из Secret (`SYNTH_POSTGRES_PASSWORD`, `SYNTH_METRICS_TOKEN`, `SYNTH_BOOTSTRAP_SERVICE_KEYS`, `SYNTH_API_KEY`), в ConfigMap/values — никаких значений | `charts/synth/templates/backend-deployment.yaml:82`, `:100`, `:125`, `:137` |
-| Наблюдаемость: реестр с лимитом 2000 серий, рендер 0.0.4, `/metrics` (404/401/`no-store`), `/health` + `/ready`; метрик **очереди/занятости исполнителей нет** | `packages/core/src/metrics/registry.ts:19`, `:27`; `packages/core/src/server/routes/metrics.ts:52`, `:56`, `:63`, `:82`; `packages/core/src/server/routes/health.ts:63`, `:65` |
+| Наблюдаемость: реестр с лимитом 2000 серий, рендер 0.0.4, `/metrics` (404/401/`no-store`), `/health` + `/ready` | `packages/core/src/metrics/registry.ts:19`, `:27`; `packages/core/src/server/routes/metrics.ts:52`, `:56`, `:63`, `:82`; `packages/core/src/server/routes/health.ts:63`, `:65` |
+| Метрики пула исполнителей: `synth_executor_queue_depth`/`_workers_busy`/`_wait_seconds`/`_commands_total` на стороне control plane (коллектор `createExecutorMetricsCollector`), `synth_executor_commands_total`/`_exec_duration_seconds`/`_inflight`/`_mcp_servers` — на исполнителе (его `/metrics`) | `packages/core/src/metrics/collectors/executor.ts:1`; `packages/core/src/execution/ports/execution-port.ts:259`; `packages/executor/src/metrics.ts:1`; `packages/executor/src/server.ts:483` |
 | `synth_sessions_active` / `synth_queue_pending` — про сессии и очередь **сообщений**, не про исполнение | `packages/core/src/metrics/collectors/sessions.ts:26`, `:30` |
 | Порт исполнения: `ExecutionPort` + `InlineExecutionPort` + контрактный suite (шаг 1) | `packages/core/src/execution/ports/execution-port.ts:1`, `packages/core/src/execution/inline-execution-port.ts:1`, `packages/core/src/execution/contract/execution.ts:1` |
 | Секция `execution` в конфиге, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed на старте (шаг 3) | `packages/shared/src/config/execution.ts:1`, `packages/shared/src/config/types.ts:178`, `packages/shared/src/config/defaults.ts:32`, `packages/core/src/execution/startup.ts:1`, `packages/core/src/main.ts:110` |
-| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 4**: секреты вызова `secrets[]`, ADR-077 «Обновлено 2026-10-26», (б)); осталось: метрики `synth_executor_*` + `/metrics` исполнителя + runbook (7d), образ worker'а и flavor'ы — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено** | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
+| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 4**: секреты вызова `secrets[]`, ADR-077 «Обновлено 2026-10-26», (б)); осталось: образ worker'а и flavor'ы — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено**; **метрики `synth_executor_*` + `/metrics` исполнителя + алерты + runbook — выполнено** (шаг 7d) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `packages/core/src/metrics/collectors/executor.ts:1`, `packages/executor/src/metrics.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
 | Слой хранения — образец портов: 30 доменных портов, контрактный suite, `createFileStorage`/`createMemoryStorage`/`createPostgresStorage`/`createStorageContextAsync`/`buildStorageContext` | `packages/core/src/storage/ports/`, `packages/core/src/storage/contract/index.ts:1`, `packages/core/src/storage/storage-context.ts:467`, `:529`, `:599`, `:847`, `:917` |
 | Ограничения >1 реплики: файловая БД не масштабируется; RWO PVC; `FileMutex` (эксклюзивный `mkdir` + stale-takeover) работает только на общем FS; `scheduler.leaderElection: none`, `crossProcessLocks: false` (в PG — `PgMutex`/`PgLeader`) | `charts/synth/values.yaml:11`, `:45`; `packages/core/src/storage/file-mutex.ts:33`, `:48`; `packages/core/src/storage/mutex.ts:7`; `packages/shared/src/config/defaults.ts:155` |
 | Рестарт инстанса — graceful shutdown с exit code 75, режимы `disabled`/`process`/`supervisor` | `packages/core/src/server/restart.ts:20`, `:23`; `packages/core/src/main.ts:81` |
@@ -854,10 +882,13 @@ backend'а. Данные не затронуты (workspace — тот же то
 8. **Чарт**: значения `execution.*` и `executor.*`; шаблоны `executor-deployment.yaml`,
    `executor-service.yaml`, PVC общего workspace (RWX), `NetworkPolicy` для worker'а, токен из
    Secret; `executor.enabled` — переключатель split-развёртывания. — **реализовано (шаг 7c)**
-9. **Наблюдаемость (план)**: метрики `synth_executor_queue_depth`, `synth_executor_workers_busy`,
-   `synth_executor_wait_seconds` и `synth_executor_commands_total{outcome}`; `/metrics` исполнителя;
-   агрегация на backend'е; алерты в `charts/synth/files/alerts/`. — **остаток** (шаг 7d; сейчас
-   серии и `/metrics` исполнителя в коде нет, см. §9)
+9. **Наблюдаемость**: метрики `synth_executor_queue_depth`, `synth_executor_workers_busy`,
+   `synth_executor_wait_seconds` и `synth_executor_commands_total{outcome}` (control plane) +
+   `synth_executor_commands_total{outcome}`, `synth_executor_exec_duration_seconds`,
+   `synth_executor_inflight`, `synth_executor_mcp_servers{status}` (исполнитель); `/metrics`
+   исполнителя (`SYNTH_EXECUTOR_METRICS_ENABLED`, выключен по умолчанию); скрейп пула отдельным
+   job'ом; алерты в `charts/synth/files/alerts/` (группа `synth-executor`). —
+   **сделано** (шаг 7d; серии двух сторон **не суммируются** — см. §9)
 10. **Детект зависимостей (ADR-078)** в split-режиме — спрашивать исполнителя, а не локальный
      `execFile` (иначе backend считает `git`/`rg` доступными там, где их нет). — **остаток**
 11. **Миграции**: `synth storage migrate --to postgres` (уже есть) + процедура переключения
@@ -895,10 +926,10 @@ backend'а. Данные не затронуты (workspace — тот же то
 | **7a** | Executor-сервис: пакет `@itphx/synth-executor` (`packages/executor`, по образцу драйвера хранилища — ADR-097/ADR-096) с exec-API (HTTP/1.1 + JSON: `/exec`, `/capabilities`, `/health`, containment `cwd`, токен `synth_exec_…`) + клиент удалённого порта (`egressFetch`, ADR-099) + прогон контрактного suite порта против исполнителя (в core, `packages/core/src/execution/contract/`) | ADR-077 | не нужна |
 | **7b** | Подключение по `execution.mode=remote`: динамический `import()` пакета (fail-closed), `execution.remote.failMode`/`concurrency`, пул адресов (выбор по кругу, проба следующего при ошибке соединения) | ADR-077 | не нужна (нужна для >1 реплики control plane) |
 | **7c** | Helm: значения `executor.*` (Deployment/Service/пул), RWX-том общего workspace, токен — из Secret, `NetworkPolicy` для worker'а; **фаза 1** матрицы (`execute_shell`/`grep_files`/`python`) | ADR-077 | не нужна |
-| **7d** | Метрики `synth_executor_*` + `/metrics` исполнителя + runbook (переключение топологии, диагностика «исполнитель недоступен») | ADR-077 | не нужна |
+| **7d** | Метрики `synth_executor_*` + `/metrics` исполнителя + runbook (переключение топологии, диагностика «исполнитель недоступен») — **реализовано** (серии control plane и исполнителя, скрейп пула, алерты `synth-executor`, runbook в `docs/MAINTENANCE.md`) | ADR-077 | не нужна |
 | **8** | **Фаза 2** матрицы: git-тулы + доставка SSH-материала в исполнителя. Решение — ADR-077 («Обновлено 2026-10-26»): git через `ExecutionPort` (`requires: ['git']`, без новых git-эндпоинтов), SSH — `secrets[]` в `POST /exec` (протокол 4). **Реализовано** (шаг 5.2 этапа 0.13.0) | ADR-077 | не нужна |
 | **9** | **Фаза 3** матрицы: MCP stdio-серверы и inline-shell. **B1+B2 — сделано**: исполнитель хостит MCP-серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/*`, эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`, тулы `{serverName}_{toolName}`, e2e); остаток — `inline-shell` | ADR-077 | не нужна |
-| **10** | Изоляция и квоты (`NetworkPolicy`, `ResourceQuota`/`LimitRange`, лимиты worker'а, без `docker.sock`); наблюдаемость: метрики `synth_executor_*`, `/metrics` исполнителя, алерты; детект зависимостей (ADR-078) на стороне исполнителя | ADR-077 | не нужна |
+| **10** | Изоляция и квоты (`NetworkPolicy`, `ResourceQuota`/`LimitRange`, лимиты worker'а, без `docker.sock`); детект зависимостей (ADR-078) на стороне исполнителя. Наблюдаемость (метрики `synth_executor_*`, `/metrics` исполнителя, алерты) — **сделано** (шаг 7d); остаток — квоты (`ResourceQuota`/`LimitRange`) | ADR-077 | не нужна |
 | **11** | Workspace-v2: per-worker копия или S3-совместимое объектное хранилище (снимает «один RWX-том на всех») | ADR-077 | желательна |
 | **12** | Миграции и документация: переключение топологии (runbook — `docs/MAINTENANCE.md`), секция `execution` в `docs/CONFIGURATION.md`, метрики в `docs/OBSERVABILITY.md`, примеры в `charts/synth/README.md`, диагностика в `docs/TROUBLESHOOTING.md`; compose-сценарии all-in-one/split | общий | не нужна |
 
@@ -1013,3 +1044,10 @@ Split-топология технически возможна и при одн�
   `synth-ssh-*` при старте), CA исполнителя (`SYNTH_EXECUTOR_TLS_CA_FILE` → `GIT_CONFIG_*`),
   fail-closed `ESECRETS` для старого исполнителя и для фоновых процессов; §4.2.2 — раздел
   «Секреты вызова и доверие git».
+- 2026-10-26 — **шаг 7d закрыт**: §9 переведён из «план» в «реализовано» — метрики control plane
+  (`synth_executor_queue_depth`/`_workers_busy`/`_wait_seconds`/`_commands_total`) и исполнителя
+  (`_commands_total`/`_exec_duration_seconds`/`_inflight`/`_mcp_servers`), собственный `/metrics`
+  исполнителя (`SYNTH_EXECUTOR_METRICS_ENABLED`, выключен по умолчанию), скрейп пула отдельным job'ом
+  (`executor.networkPolicy.metricsIngress`), алерты `synth-executor`; значения чарта
+  `executor.metrics.enabled` и `executor.networkPolicy.metricsIngress`. Серии двух сторон
+  **не суммируются** (`commands_total` считает разное) — различать по `job`.

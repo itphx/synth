@@ -26,6 +26,7 @@ import {
   type ExecutorErrorReason,
   isPortFailureReason,
 } from './protocol.js';
+import { outcomeFromFailureReason, type ExecutorMetrics } from './metrics.js';
 import { materializeSecrets } from './secrets.js';
 import { resolveContainedCwd } from './workspace.js';
 
@@ -52,6 +53,11 @@ export interface ExecServiceOptions {
    * `GIT_CONFIG_KEY_0=http.sslCAInfo` (git ≥ 2.31 читает конфиг из env).
    */
   tlsCaFile?: string;
+  /**
+   * ADR-094/ADR-077: метрики исполнения (`synth_executor_*`) — считаются на
+   * исполнителе (свои `/metrics`). Не заданы — счётчики не ведутся.
+   */
+  metrics?: ExecutorMetrics;
 }
 
 /** Ленивая загрузка inline-порта core (runtime-импорт — точечный). */
@@ -97,6 +103,7 @@ export class ExecService {
   private readonly _maxOutputBytes: number;
   private readonly _executionPort: ExecutionPort | undefined;
   private readonly _tlsCaFile: string | undefined;
+  private readonly _metrics: ExecutorMetrics | undefined;
   private _active = 0;
 
   constructor(opts: ExecServiceOptions) {
@@ -106,6 +113,7 @@ export class ExecService {
     this._maxOutputBytes = Math.max(1, opts.maxOutputBytes);
     this._executionPort = opts.executionPort;
     this._tlsCaFile = opts.tlsCaFile;
+    this._metrics = opts.metrics;
   }
 
   /** Число выполняющихся сейчас команд. */
@@ -165,6 +173,10 @@ export class ExecService {
     }
 
     this._active += 1;
+    // ADR-094: команда действительно пошла на исполнение (отклонённые
+    // запросы — за пределами containment'а и лимита — командами не считаются).
+    this._metrics?.commandStarted();
+    const startedAt = Date.now();
     try {
       const port = this._executionPort ?? (await resolveInlinePort());
       const execRequest: ExecRequest = {
@@ -178,6 +190,7 @@ export class ExecService {
       if (signal !== undefined) execRequest.signal = signal;
 
       const result: ExecResult = await port.execute(execRequest);
+      this._metrics?.commandFinished('ok', Date.now() - startedAt);
       return {
         ok: true,
         result: {
@@ -202,6 +215,8 @@ export class ExecService {
       };
       const reason: ExecutorErrorReason =
         typeof e.reason === 'string' && isPortFailureReason(e.reason) ? e.reason : 'spawn_failed';
+      // ADR-094: исход команды — по причине неудачи (таймаут/отмена/ошибка).
+      this._metrics?.commandFinished(outcomeFromFailureReason(reason), Date.now() - startedAt);
       return {
         ok: false,
         status: 500,

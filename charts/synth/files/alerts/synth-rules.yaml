@@ -321,6 +321,73 @@ groups:
             Дрейф больше 5 минут: расписания фактически не соблюдаются.
             Проверьте лидерство (leader election), CPU/память и зависшие задачи.
 
+  - name: synth-executor
+    # Метрики пула исполнителей (ADR-077 шаг 7d). Серии бывают на ДВУХ
+    # сторонах: control plane (backend) — очередь/занятость/ожидание и
+    # доставленные вызовы; исполнитель (свой /metrics) — исполненные команды.
+    # `synth_executor_commands_total` есть в обоих местах и считает РАЗНОЕ —
+    # поэтому доли считаются по каждой стороне отдельно и НЕ складываются
+    # (различать по лейблу `job`). В inline-режиме пула нет: правила молчат
+    # (очередь пуста, серий исполнителя не существует).
+    rules:
+      - alert: ExecutorPoolStalled
+        # Пул недоступен: слоты не заняты (workers_busy == 0), а очередь на
+        # отправку растёт — команды уходят в пул, но их никто не берёт.
+        expr: >-
+          (synth_executor_workers_busy == 0) and (synth_executor_queue_depth > 0)
+          and (deriv(synth_executor_queue_depth[10m]) > 0)
+        for: 5m
+        labels:
+          severity: critical
+          component: executor
+          env: '{{ $labels.env }}'
+        annotations:
+          summary: "Пул исполнителей не отвечает (env={{ $labels.env }}, очередь растёт)"
+          description: >-
+            synth_executor_workers_busy == 0 при растущей synth_executor_queue_depth:
+            ни один исполнитель не берёт команды (пул недоступен или токен
+            доверия не сходится). При execution.remote.failMode=fail такие
+            вызовы падают с EUNREACHABLE. Проверьте pod'ы пула, Secret с
+            токеном, NetworkPolicy и состояние synth_executor_inflight на
+            стороне исполнителей.
+
+      - alert: ExecutorCommandErrorRate
+        # Доля неуспешных команд. Считается по одной стороне: у control plane
+        # это доставленные вызовы, у исполнителя — исполненные команды.
+        expr: >-
+          sum by (env) (rate(synth_executor_commands_total{outcome="error"}[10m]))
+          / clamp_min(sum by (env) (rate(synth_executor_commands_total[10m])), 1e-9) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          component: executor
+          env: '{{ $labels.env }}'
+        annotations:
+          summary: "Более 10% команд исполнителя неуспешны (env={{ $labels.env }}, {{ $value | humanizePercentage }})"
+          description: >-
+            Доля outcome="error" в synth_executor_commands_total выше 10%.
+            Смотрите журналы control plane и исполнителя: обычные причины —
+            ненулевой код выхода, обрезанный вывод, превышение лимита
+            одновременных команд. Серии двух сторон (job'ов) не суммируйте.
+
+      - alert: ExecutorQueueWaitHigh
+        # Команды слишком долго ждут свободного слота пула.
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le, env) (rate(synth_executor_wait_seconds_bucket[10m]))) > 5
+        for: 10m
+        labels:
+          severity: warning
+          component: executor
+          env: '{{ $labels.env }}'
+        annotations:
+          summary: "p95 ожидания в очереди пула выше 5 с ({{ $value | humanizeDuration }})"
+          description: >-
+            p95 по synth_executor_wait_seconds выше 5 с: слоты пула заняты
+            дольше, чем приходят команды (synth_executor_workers_busy близок к
+            лимиту maxConcurrency). Расширьте пул (executor.replicaCount) или
+            поднимите лимит одновременных команд.
+
   - name: synth-self
     rules:
       - alert: MetricsScrapeSlow

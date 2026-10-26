@@ -150,6 +150,7 @@ ingress:
 | `executor.service.sessionAffinity` | `None` | Привязка клиента к поду пула: `None` \| `ClientIP`. Нужна при `executor.replicaCount > 1` — браузерные MCP-сессии живут внутри под'а (см. «Привязка клиента к поду пула исполнителей») |
 | `executor.resources` | `1000m/1Gi`, `200m/256Mi` | limits/requests исполнителя |
 | `executor.limits.maxConcurrency` / `.maxTimeoutMs` / `.maxOutputBytes` | `4` / `120000` / `10485760` | Лимиты исполнителя (env `SYNTH_EXECUTOR_MAX_*`) |
+| `executor.metrics.enabled` | `false` | Метрики исполнителя (ADR-077 шаг 7d; ADR-094): env `SYNTH_EXECUTOR_METRICS_ENABLED=true` → свой `GET /metrics`; выключено по умолчанию (404). См. «Метрики исполнителя» |
 | `executor.mcp.enabled` | `true` | MCP-хостинг в исполнителе; `false` → env `SYNTH_EXECUTOR_MCP_SERVERS=""` (серверов нет, дефолт образа отключён) |
 | `executor.mcp.servers` | `[]` | MCP-серверы, которые хостит исполнитель (stdio, ADR-077 шаг B1): `[{name, command, args, env}]` → env `SYNTH_EXECUTOR_MCP_SERVERS` (JSON). Пусто → env не выставляется, действует дефолт образа (у flavor'ов с браузером — Playwright MCP) |
 | `executor.workspace.enabled` | `true` | Чарт управляет общим томом workspace (действует при `executor.enabled: true`) |
@@ -161,6 +162,7 @@ ingress:
 | `executor.workspace.backendWorkspacesRoot` | `""` | `storage.workspacesRoot` backend'а (env `SYNTH_WORKSPACES_ROOT`); пусто → дефолт `{dataDir}/workspaces` |
 | `executor.networkPolicy.enabled` | `false` | NetworkPolicy пула: ingress — только от control plane, egress — по умолчанию только DNS |
 | `executor.networkPolicy.allowedEgress` | `[]` | Доп. egress-правила (формат `networking.k8s.io/v1`) |
+| `executor.networkPolicy.metricsIngress` | `[]` | Доп. ingress-правила (формат `networking.k8s.io/v1`) — например, для скрейпа `/metrics` исполнителя Prometheus'ом из другого namespace. Добавляются **в дополнение** к правилу от control plane |
 | `executor.token.existingSecret` | `""` | Secret с токеном доверия `synth_exec_…` (пусто → `secrets.existingSecret`) |
 | `executor.token.secretKey` | `SYNTH_EXECUTION_TOKEN` | Ключ внутри Secret: backend читает файл, исполнитель — значение из `secretKeyRef` |
 | `executor.tls.caSecret` | `""` | Secret с CA доверия git у исполнителя (пусто — выключено): монтируется в `/etc/synth/tls` (read-only), env `SYNTH_EXECUTOR_TLS_CA_FILE` |
@@ -1107,6 +1109,106 @@ executor:
 - В исполнителе **нет** LLM-ключей, OIDC-секретов и чужих workspace: образ
   worker'а собирается отдельно от образа backend'а.
 - `docker.sock` в исполнитель **не монтируется никогда**.
+
+### Метрики исполнителя
+
+У исполнителя **свой** `/metrics` (ADR-077 шаг 7d; ADR-094) — выключен по
+умолчанию, как `metrics.enabled` у control plane:
+
+```yaml
+executor:
+  metrics:
+    enabled: true          # → env SYNTH_EXECUTOR_METRICS_ENABLED=true
+```
+
+Эндпоинт — **вне** префиксов (как у backend'а): выключено → `404`; без
+bearer-токена исполнителя → `401`; с токеном → `200`
+(`text/plain; version=0.0.4`, `Cache-Control: no-store`).
+
+**Скрейпить надо два эндпоинта** — они описывают разные стороны:
+
+| Эндпоинт | Что видно | Серии |
+|---|---|---|
+| backend `/metrics` (control plane) | очередь и занятость пула, ожидание в очереди, **доставленные** исполнителю вызовы | `synth_executor_queue_depth`, `synth_executor_workers_busy`, `synth_executor_wait_seconds`, `synth_executor_commands_total{outcome}` |
+| pod исполнителя `/metrics` | **исполненные** команды, их длительность, выполняющиеся сейчас, состояние MCP-серверов | `synth_executor_commands_total{outcome}`, `synth_executor_exec_duration_seconds`, `synth_executor_inflight`, `synth_executor_mcp_servers{status}` |
+
+> ⚠️ **`synth_executor_commands_total` есть на обеих сторонах и считает разное.**
+> На control plane это **доставленные исполнителю вызовы**, на исполнителе —
+> **исполненные команды**. **Суммировать эти серии нельзя** (получится двойной
+> счёт одной команды). Различайте их по лейблу `job` Prometheus
+> (`synth-backend` vs `synth-executor`) — либо смотрите только одну сторону.
+
+Пример `scrape_config` (отдельный `job` для пула; токен — **файлом**, значение
+в конфиге не пишется):
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  # control plane: очередь/занятость пула, ожидание, доставленные вызовы
+  - job_name: synth-backend
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["synth-backend:5000"]
+
+  # пул исполнителей: исполненные команды, длительность, inflight, MCP-серверы
+  - job_name: synth-executor
+    metrics_path: /metrics
+    scrape_interval: 15s
+    # Bearer-токен исполнителя — ФАЙЛОМ (тот же Secret, что и у control plane:
+    # executor.token.existingSecret / executor.token.secretKey).
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/synth-executor-token
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: ["synth"]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            action: keep
+            regex: executor
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: http
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: instance
+```
+
+Файл с токеном на узле Prometheus (значение не печатается):
+
+```bash
+mkdir -p /etc/prometheus/secrets
+kubectl get secret synth-secrets -n synth \
+  -o jsonpath='{.data.SYNTH_EXECUTION_TOKEN}' | base64 -d \
+  > /etc/prometheus/secrets/synth-executor-token
+chmod 0600 /etc/prometheus/secrets/synth-executor-token
+```
+
+Доступ Prometheus'а к пулу — правило ingress в NetworkPolicy пула
+(`executor.networkPolicy.metricsIngress`; **в дополнение** к правилу от
+control plane, не вместо него):
+
+```yaml
+executor:
+  networkPolicy:
+    metricsIngress:
+      - from:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: monitoring
+        ports:
+          - protocol: TCP
+            port: 5100
+```
+
+> Оговорка: правило для скрейпа само по себе **не** включает egress-ограничения
+> пула — те включаются только при `executor.networkPolicy.enabled: true`.
+> Задавайте `metricsIngress` вместе с ним, если пулу нужен закрытый egress.
+
+Каталог серий, алерты и диагностика — [docs/OBSERVABILITY.md](../../docs/OBSERVABILITY.md)
+§«Исполнитель (split-режим)» и [docs/MAINTENANCE.md](../../docs/MAINTENANCE.md)
+§«Метрики исполнителя и диагностика split-режима».
 
 ### Как проверить
 

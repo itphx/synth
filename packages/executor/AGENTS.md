@@ -54,6 +54,7 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
 | `GET` | `/mcp/tools` | инструменты поднятых MCP-серверов (ленивый старт) | bearer-токен |
 | `POST` | `/mcp/call` | вызов инструмента MCP-сервера | bearer-токен |
 | `GET` | `/health` | liveness исполнителя | без токена |
+| `GET` | `/metrics` | метрики исполнителя (`synth_executor_*`) | bearer-токен |
 
 - Запрос: `{ command: ExecCommand, cwd?, env?, timeoutMs?, maxOutputBytes?, secrets? }`.
   `command` — тот же union `shell`/`argv`, что у порта core: форма команды на
@@ -355,6 +356,30 @@ SSH-ключ с необязательной passphrase, ADR-076). Control plane
   окружение дочерних процессов и в текст команды. В логах токен не пишется.
 - Сравнение токена — **timing-safe** (`timingSafeEqual` по SHA-256).
 
+## Метрики исполнителя (ADR-077 шаг 7d; ADR-094)
+
+Исполнитель — отдельный процесс, поэтому у него **свой** `/metrics` (вне
+префиксов, как у backend'а): выключено → `404`, без bearer-токена → `401`, с
+токеном → `200` (exposition 0.0.4, `Cache-Control: no-store`). Отдельного
+токена не заводим — тот же, что у остальных эндпоинтов исполнителя. Включение —
+`SYNTH_EXECUTOR_METRICS_ENABLED=true` (строгий bool, дефолт `false`); реестр
+создаётся **лениво** (динамический `import()`) — выключенный `/metrics` не
+тянет ядро в процесс воркера.
+
+- Реестр — **тот же** `MetricsRegistry` из core (peer-зависимость пакета) и тот
+  же рендер exposition 0.0.4: второй реестр/рендер в проекте не заводим.
+- Серии (`src/metrics.ts`): `synth_executor_commands_total{outcome}` (исход
+  `ok`/`error`/`timeout`/`cancelled`), `synth_executor_inflight`,
+  `synth_executor_exec_duration_seconds`, `synth_executor_mcp_servers{status}`
+  (`idle`/`up`/`down`).
+- **Двойного счёта нет:** тот же счётчик `synth_executor_commands_total` есть
+  на control plane, но там он считает **доставленные** вызовы, а здесь —
+  **исполненные** команды. Суммировать серии двух job'ов нельзя; различать по
+  `job` (см. `docs/OBSERVABILITY.md` §«Исполнитель (split-режим)»).
+- Ошибка метрик не влияет на исполнение команды (вызовы обёрнуты в
+  try/catch); идентификаторов (адресов, id команд, имён MCP-серверов) в
+  лейблах нет.
+
 ## Env-конфигурация
 
 | Переменная | Обязательна | По умолчанию | Назначение |
@@ -371,6 +396,7 @@ SSH-ключ с необязательной passphrase, ADR-076). Control plane
 | `SYNTH_EXECUTOR_BACKGROUND_LOG_MAX_BYTES` | нет | `10485760` | лимит журнала фонового процесса на поток, байт |
 | `SYNTH_EXECUTOR_BACKGROUND_LOG_DIR` | нет | `<tmp>/synth-exec-bg` | каталог журналов фоновых процессов |
 | `SYNTH_EXECUTOR_TLS_CA_FILE` | нет | — | файл CA доверия git (`http.sslCAInfo`): путь в окружении исполнителя; задан, но файл не читается — **ошибка старта** (fail-closed) |
+| `SYNTH_EXECUTOR_METRICS_ENABLED` | нет | `false` | экспорт метрик исполнителя (`GET /metrics`): строгий bool; `false` → эндпоинт отвечает `404` (ADR-094 п. 4) |
 
 Без токена или без корня workspace процесс **не стартует** (fail-closed);
 невалидные числа — тоже ошибка (явная настройка оператора не должна молча
@@ -436,6 +462,10 @@ SSH-ключ с необязательной passphrase, ADR-076). Control plane
     `GIT_CONFIG_KEY_0=http.sslCAInfo`/`GIT_CONFIG_VALUE_0=<путь>`, без `tlsCaFile` —
     этих ключей нет, `env` вызова мержится (не заменяет базовое окружение) и не
     перекрывает CA, секреты не попадают в тело ошибки.
+  - `metrics.test.ts` — **метрики исполнителя (ADR-094)**: `synth_executor_commands_total{outcome}`,
+    `synth_executor_inflight`, `synth_executor_exec_duration_seconds`,
+    `synth_executor_mcp_servers{status}`; экспорт `/metrics` — 404 (выключено), 401 (без токена),
+    200 + `no-store` (с токеном).
 
   **Контрактного набора проверок в пакете нет** — источник истины один: контрактный
   suite порта живёт в core (`packages/core/src/execution/contract/execution.ts`), прогон

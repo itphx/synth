@@ -54,6 +54,9 @@ import {
   createEventMetrics,
   // ADR-106 Ф1: счётчик решений Authority-слоя (`synth_authority_decisions_total`).
   createAuthorityMetrics,
+  // ADR-094/ADR-077: метрики пула исполнителей (`synth_executor_*`) — приёмник
+  // для клиента удалённого порта.
+  createExecutorMetricsCollector,
   startEventJournalMetrics,
   createEgressPolicyResolver,
   createEgressLogSink,
@@ -749,7 +752,15 @@ export async function createStandaloneDeps(
   // запуска процесса (инвариант 24), поэтому порт собирается здесь, при
   // старте, и не переинициализируется на лету. Выбор режима — фабрика
   // `execution/factory.ts` (`remote` → удалённый порт, fail-closed).
-  const executionPort = await createExecutionPortForConfig(config.executionConfig);
+  //
+  // ADR-094: удалённому порту передаётся приёмник метрик исполнения
+  // (`synth_executor_*`): очередь, занятость пула, ожидание и исход команд.
+  // Реестр метрик в пакет исполнителя не попадает — только узкий интерфейс.
+  const executorMetrics = metrics ? createExecutorMetricsCollector(metrics) : undefined;
+  const executionPort = await createExecutionPortForConfig(
+    config.executionConfig,
+    executorMetrics ? { metricsSink: executorMetrics } : undefined,
+  );
 
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
   //

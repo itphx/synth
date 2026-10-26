@@ -68,6 +68,8 @@ import {
   createMemoryTelemetry,
   registerDecisionMetrics,
   createSchedulerMetrics,
+  // ADR-094/ADR-077: метрики пула исполнителей (`synth_executor_*`).
+  createExecutorMetricsCollector,
   createWebhookMetrics,
   createEventMetrics,
   // ADR-106 Ф1/Ф2: счётчик решений Authority-слоя (`synth_authority_decisions_total`)
@@ -722,7 +724,13 @@ export async function createBackendDeps(
   // Тот же порт получают оркестратор (тулы, inline-shell, детект зависимостей)
   // и резолвер проектных инструкций.
   const execution = executionConfig ?? resolveExecutionConfig(config.synth, process.env);
-  const executionPort = await createExecutionPortForConfig(execution);
+  // ADR-094/ADR-077: метрики пула исполнителей (`synth_executor_*`) — приёмник
+  // для клиента удалённого порта (очередь, занятость, ожидание, исход).
+  const executorMetrics = metrics ? createExecutorMetricsCollector(metrics) : undefined;
+  const executionPort = await createExecutionPortForConfig(
+    execution,
+    executorMetrics ? { metricsSink: executorMetrics } : undefined,
+  );
 
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов (паритет с standalone).
   //

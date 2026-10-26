@@ -73,6 +73,8 @@ import type {
   ExecRequest,
   ExecResult,
   ExecutionCapabilitySummary,
+  ExecutionMetricsOutcome,
+  ExecutionMetricsSink,
   ExecutionPort,
 } from '@itphx/synth-core';
 import {
@@ -108,6 +110,14 @@ export interface RemoteExecutionPortOptions {
   failMode?: RemoteFailMode;
   /** Транспорт (по умолчанию — `egressFetch` из core; для тестов). */
   fetchImpl?: ExecutorFetch;
+  /**
+   * ADR-094: приёмник метрик исполнения (очередь/занятость/ожидание/исход).
+   *
+   * Приёмник — **узкий интерфейс** из core: реестр метрик в пакет
+   * исполнителя не попадает (клиент не знает про подсистему наблюдаемости).
+   * Не задан — метрики пула не собираются (поведение прежнее).
+   */
+  metricsSink?: ExecutionMetricsSink;
 }
 
 /** Таймаут HTTP-запроса по умолчанию, мс (как `execution.remote.timeoutMs`). */
@@ -246,6 +256,26 @@ function normalizeUrl(url: string): string {
 }
 
 /**
+ * Исход неудачного вызова → исход метрики (ADR-094).
+ *
+ * Проверка — **структурная** (по имени класса `ExecutionError`), а не
+ * `instanceof`: ошибка создана другой копией модуля core (`src` против
+ * `dist`), поэтому `instanceof` не срабатывает (см. `isExecutionError` в
+ * core). Причина (`reason`) — единственный признак, по которому таймаут
+ * отличается от отмены; всё прочее — `error`.
+ */
+function outcomeFromError(err: unknown): ExecutionMetricsOutcome {
+  if (typeof err === 'object' && err !== null) {
+    const e = err as { name?: unknown; reason?: unknown };
+    if (e.name === 'ExecutionError') {
+      if (e.reason === 'timeout') return 'timeout';
+      if (e.reason === 'aborted') return 'cancelled';
+    }
+  }
+  return 'error';
+}
+
+/**
  * Реализация `ExecutionPort` поверх удалённых исполнителей.
  *
  * Экземпляр можно создавать на каждый вызов (инстанс без процесс-глобального
@@ -260,6 +290,8 @@ export class RemoteExecutionPort implements ExecutionPort {
   private readonly _concurrency: number;
   private readonly _failMode: RemoteFailMode;
   private readonly _fetchImpl: ExecutorFetch | undefined;
+  /** ADR-094: приёмник метрик исполнения (не задан — метрики не собираются). */
+  private readonly _metricsSink: ExecutionMetricsSink | undefined;
   private _cursor = 0;
   private _active = 0;
   private readonly _waiting: Array<() => void> = [];
@@ -279,6 +311,7 @@ export class RemoteExecutionPort implements ExecutionPort {
     this._concurrency = Math.max(1, opts.concurrency ?? 1);
     this._failMode = opts.failMode ?? 'fail';
     this._fetchImpl = opts.fetchImpl;
+    this._metricsSink = opts.metricsSink;
   }
 
   /** Адреса исполнителей (нормализованные). */
@@ -320,9 +353,21 @@ export class RemoteExecutionPort implements ExecutionPort {
 
   /** Выполнить команду на удалённом исполнителе. */
   async execute(req: ExecRequest): Promise<ExecResult> {
+    // ADR-094: запрос поставлен в очередь на отправку исполнителю.
+    this._metricsSink?.onQueued?.();
+    const queuedAt = Date.now();
     await this._acquire();
+    // Слот получен: время ожидания в очереди — в гистограмму ожидания.
+    this._metricsSink?.onDequeued?.(Date.now() - queuedAt);
+    this._metricsSink?.onStarted?.();
+    const startedAt = Date.now();
     try {
-      return await this._execute(req);
+      const result = await this._execute(req);
+      this._metricsSink?.onFinished?.('ok', Date.now() - startedAt);
+      return result;
+    } catch (err) {
+      this._metricsSink?.onFinished?.(outcomeFromError(err), Date.now() - startedAt);
+      throw err;
     } finally {
       this._release();
     }

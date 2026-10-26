@@ -1245,6 +1245,84 @@ graceful shutdown и завершается с кодом **75** (`EX_TEMPFAIL`)
      `/settings/tls` и что рестарт действительно произошёл (смена `startedAt`), а не был перехвачен
      другим процессом.
 
+## Метрики исполнителя и диагностика split-режима
+
+**Цель:** в split-топологии (`execution.mode: remote`, ADR-077) понять, жив ли пул
+исполнителей, не копится ли очередь и не деградировали ли команды — без захода в
+UI. Каталог серий и контракт — [OBSERVABILITY.md](./OBSERVABILITY.md)
+§«Исполнитель (split-режим)»; топология — [EXECUTION.md](./EXECUTION.md).
+
+1. **Включить экспорт.** У control plane — `metrics.enabled` (или
+   `SYNTH_METRICS_ENABLED=true`); у исполнителя — `SYNTH_EXECUTOR_METRICS_ENABLED=true`
+   (в чарте: `executor.metrics.enabled: true`). Оба **выключены по умолчанию**.
+
+   | Сторона | Эндпоинт | Что видно |
+   |---|---|---|
+   | control plane (backend) | `GET /metrics` (порт backend'а) | `synth_executor_queue_depth`, `synth_executor_workers_busy`, `synth_executor_wait_seconds`, `synth_executor_commands_total{outcome}` (доставленные вызовы) |
+   | исполнитель (pod пула) | `GET /metrics` (порт исполнителя) | `synth_executor_commands_total{outcome}` (исполненные команды), `synth_executor_exec_duration_seconds`, `synth_executor_inflight`, `synth_executor_mcp_servers{status}` |
+
+2. **Проверить вручную.** Токен исполнителя — тот же bearer, что у остальных его
+   эндпоинтов (`SYNTH_EXECUTOR_TOKEN`; в кластере — Secret
+   `executor.token.existingSecret` / `executor.token.secretKey`). Значение токена
+   не печатаем — подставляем его в заголовок из файла:
+
+   ```bash
+   # control plane
+   curl -s localhost:5000/metrics | grep '^synth_executor_'
+
+   # исполнитель (из pod'а пула; 404 — экспорт выключен, 401 — нет токена)
+   kubectl exec -n synth deploy/synth-executor -- \
+     sh -c 'wget -qO- --header="Authorization: Bearer $SYNTH_EXECUTOR_TOKEN" http://127.0.0.1:5100/metrics' \
+     | grep '^synth_executor_'
+   ```
+
+   *Ожидаемо:* на стороне control plane — `synth_executor_queue_depth 0`,
+   `synth_executor_workers_busy` (0, если команд нет), нули гистограммы ожидания;
+   на стороне исполнителя — `synth_executor_inflight 0`,
+   `synth_executor_mcp_servers{status="idle"|"up"|"down"}` (по числу
+   MCP-серверов).
+
+   > ⚠️ **`synth_executor_commands_total` есть на обеих сторонах и считает разное:**
+   > control plane — доставленные исполнителю вызовы, исполнитель — исполненные
+   > команды. **Суммировать серии нельзя** (двойной счёт одной команды) —
+   > различайте стороны по лейблу `job` Prometheus (`synth-backend` vs
+   > `synth-executor`).
+
+3. **Скрейп пула.** Отдельный `job` Prometheus; токен — файлом
+   (`credentials_file`), значение в `scrape_config` не пишется; доступ из сети —
+   `executor.networkPolicy.metricsIngress` (дополнительное ingress-правило **в
+   дополнение** к правилу от control plane). Пример — README чарта
+   (§«Метрики исполнителя») и [OBSERVABILITY.md](./OBSERVABILITY.md)
+   §«Пул исполнителей (split-режим)».
+
+4. **Отличить «пул недоступен» от «медленные команды».**
+
+   | Симптом | Диагноз | Что делать |
+   |---|---|---|
+   | `synth_executor_queue_depth` растёт, `synth_executor_workers_busy == 0` | **Пул недоступен**: ни один исполнитель не берёт команды (при `execution.remote.failMode: fail` вызовы падают с `EUNREACHABLE`) | проверьте pod'ы пула и их логи, Secret с токеном доверия, NetworkPolicy; в K3s — `kubectl get pods -l app.kubernetes.io/component=executor` |
+   | `synth_executor_workers_busy` на пределе, `synth_executor_wait_seconds` растёт | **Пул занят**: слоты кончились (лимит `SYNTH_EXECUTOR_MAX_CONCURRENCY` × число реплик), команды ждут | расширьте пул (`executor.replicaCount`) или поднимите лимит одновременных команд |
+   | `synth_executor_exec_duration_seconds` растёт на стороне исполнителя | **Медленные команды**: сами команды идут долго (долгая сборка/тест) | смотрите журнал исполнителя; при необходимости поднимите `execution.remote.timeoutMs`/`SYNTH_EXECUTOR_MAX_TIMEOUT_MS` |
+   | `synth_executor_commands_total{outcome="error"}` растёт на стороне control plane | команды **не доставлены** (ошибка соединения/адреса) | проверьте адреса пула (`SYNTH_EXECUTION_REMOTE_URL`) и токен |
+   | `synth_executor_commands_total{outcome="error"}` растёт на стороне исполнителя | команды **доставлены, но упали** (ненулевой код выхода, обрезка вывода, лимиты) | журнал исполнителя; уточните, не превышен ли `maxOutputBytes` |
+
+5. **Алерты.** Группа `synth-executor` в
+   `charts/synth/files/alerts/synth-rules.yaml`: `ExecutorPoolStalled` (пул
+   недоступен), `ExecutorCommandErrorRate` (доля ошибок),
+   `ExecutorQueueWaitHigh` (p95 ожидания в очереди). В `inline`-режиме правила
+   молчат: пула нет.
+
+6. **Проверка в кластере.**
+
+   ```bash
+   # экспорт исполнителя включён?
+   kubectl get deploy synth-executor -n synth \
+     -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="SYNTH_EXECUTOR_METRICS_ENABLED")].value}'
+   # → "true" (пусто — экспорт выключен: /metrics отдаёт 404)
+
+   # пул жив? (инвентарь и toolchain — тот же /capabilities, что и для control plane)
+   kubectl exec -n synth deploy/synth-backend -- printenv SYNTH_EXECUTION_MODE SYNTH_EXECUTION_REMOTE_URL
+   ```
+
 ## Плагины: установка, проверка, снятие
 
 Слой плагинов (ADR-090, Extension API v1) — расширения, исполняемые **в процессе** Synth (`inline`):
