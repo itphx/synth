@@ -1220,3 +1220,12 @@
 - **EN-переводы:** `docs/en/API_V2.md` (§3.2 события, §5.5 вопросы+steering, §5.39 processes), `docs/en/CONFIGURATION.md` (`questions.*`, `background.*`, env); RU §5.5 — заметка о рестарте (pending → `cancelled/interrupted`, ход не возобновляется).
 - **Приёмка:** typecheck 0 · lint 0 errors · **10 411 тестов** (core 6496+210 skip · ui 1995 · shared 812 · backend 702 · executor 140 · plugin-memory 191 · storage-postgres 51+14 skip · sdk 24); adr-check 0 ошибок (30 предупреждений — пре-existing), docs-link 0. Dev: remote-фон проверен на живом исполнителе (stdout/stderr, SIGTERM, exit 3), UI «Процессы» — визуально.
 - **Версия:** 0.12.2 (9 пакетов + `charts/synth/Chart.yaml`), деплой в test через `synth-deploy/scripts/build-and-publish.sh --app-version 0.12.2`.
+
+## 2026-10-26 — test: 0.12.2 (chart 0.12.2-4), remote-фоны и фиксы по e2e
+
+- **Раскатано на test:** образы `synth-backend:0.12.2` (+`-full`), `synth-ui:0.12.2`, `synth-executor:0.12.2-full`; чарт `synth 0.12.2-4`; бандлы `synth-test` и `synth-test-allinone` — `1/1`; `/health` → `version 0.12.2`. Деплой: `synth-deploy` `f196bcb`, pins `0.12.2` / `0.12.2-full`.
+- **E2E (remote, PG):** агент `developer` вызвал `execute_shell({background:true})` → процесс `running → completed`; уведомление `kind=process, state=completed, author=Process, process_id=proc_…`, `background_run_id=bgr_…`, команда в metadata; в чате — системный блок с раскрывающейся карточкой (без служебных тегов). `process_list` в агенте отвечает («No background runs» для новой сессии).
+- **Найдено и исправлено по e2e:** (1) PG терял `processId` — миграция `022` (`background_runs.process_id`) + маппинг порта, проверено на живой PG (schema 22); (2) executor отклонял `timeoutMs: 0` (фон без таймаута) — `/exec/spawn` теперь принимает `>= 0`.
+- **UX уведомлений:** дубль сообщений устранён в ядре (единый `enqueueUserMessage`; в тестах на старом `core/dist` он ещё воспроизводился), отдельный дедуп тостов убран; уведомления приходят на старте и завершении; результат — карточка внутри системного `Notice`.
+- **Приёмка:** typecheck 0 · lint 0 errors · **10 490+ тестов** (с DSN: core 6751, executor 142, PG 201/201, ui 2025, shared 812, backend 702, plugin-memory 191, storage-postgres 65, sdk 24); adr-check/docs-link 0 ошибок.
+- **Замечания:** `assistant` не имеет capability `shell` (by design) — фоновые процессы запускает `developer`/`devops`; тестовые сессии e2e (`bg-remote-e2e*`, `tools-e2e`) оставлены на инстансе для проверки.
