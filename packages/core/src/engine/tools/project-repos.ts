@@ -223,7 +223,13 @@ export const projectRepoCloneTool: ToolDefinition = {
 
     let repo: RepoStatus;
     try {
-      repo = await git.cloneRepo(wsAbs, params.path ?? '', params.url, params.branch, ssh.env ? { env: ssh.env } : undefined);
+      repo = await git.cloneRepo(
+        wsAbs,
+        params.path ?? '',
+        params.url,
+        params.branch,
+        ssh.secrets ? { secrets: ssh.secrets } : undefined,
+      );
     } catch (err) {
       return toolExecError(this.name, err);
     } finally {
@@ -391,7 +397,7 @@ export const projectRepoFetchTool: ToolDefinition = {
     if (ssh.error) return i18nError(ssh.error as SystemMessageKey, ssh.errorParams);
 
     try {
-      await git.fetchRepo(wsAbs, entry.path, ssh.env ? { env: ssh.env } : undefined);
+      await git.fetchRepo(wsAbs, entry.path, ssh.secrets ? { secrets: ssh.secrets } : undefined);
     } catch (err) {
       return toolExecError(this.name, err);
     } finally {

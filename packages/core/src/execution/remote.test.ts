@@ -116,11 +116,13 @@ describe('ADR-077: фабрика выбора порта по режиму', ()
   it('inline — исполнение в процессе (прежнее поведение)', async () => {
     const port = await createExecutionPortForConfig(execution({ mode: 'inline' }));
     expect(port).toBeInstanceOf(InlineExecutionPort);
+    expect(port.isRemote).toBe(false);
   });
 
   it('конфиг не задан — тоже inline (fail-safe для сборок без секции)', async () => {
     const port = await createExecutionPortForConfig(undefined);
     expect(port).toBeInstanceOf(InlineExecutionPort);
+    expect(port.isRemote).toBe(false);
   });
 });
 
@@ -139,6 +141,7 @@ describe.skipIf(!(await isExecutorPackageAvailable()))('ADR-077: фабрика 
         execution({ mode: 'remote', url: ['http://127.0.0.1:59999'], tokenSecret: file }),
       );
       expect(port).not.toBeInstanceOf(InlineExecutionPort);
+      expect(port.isRemote).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

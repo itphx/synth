@@ -21,6 +21,21 @@ interface PendingFsChange {
 
 const pendingChanges = new Map<string, PendingFsChange>()
 
+/**
+ * ADR-114 §9: каталог `.worktrees` (вторичные копии репозитория) в дереве
+ * Files **не показывается никогда** — даже при включённых скрытых файлах.
+ *
+ * Исключение явное: полагаться на «скрытые файлы скрыты по умолчанию» нельзя —
+ * переключатель «показать скрытые» включается пользователем, а worktree'и
+ * показываются в отдельной секции «Worktrees» (инвентарь проекта).
+ */
+const ALWAYS_HIDDEN_ENTRIES = new Set(['.worktrees'])
+
+/** Отбрасывает записи листинга, которые не показываются никогда. */
+function filterTreeEntries(entries: FileEntry[]): FileEntry[] {
+  return entries.filter((entry) => !ALWAYS_HIDDEN_ENTRIES.has(entry.name))
+}
+
 export interface FsChangeHint {
   scope: 'file' | 'all'
   paths?: string[]
@@ -118,7 +133,7 @@ export const useFilesStore = create<FilesStore>()(
         set((s) => ({
           treesByProject: {
             ...s.treesByProject,
-            [dirPath ? `${projectId}/${dirPath}` : projectId]: result.entries,
+            [dirPath ? `${projectId}/${dirPath}` : projectId]: filterTreeEntries(result.entries),
           },
         }))
       }
@@ -286,7 +301,7 @@ export const useFilesStore = create<FilesStore>()(
             set((s) => ({
               treesByProject: {
                 ...s.treesByProject,
-                [path ? `${projectId}/${path}` : projectId]: result.entries,
+                [path ? `${projectId}/${path}` : projectId]: filterTreeEntries(result.entries),
               },
               loading: false,
             }))
@@ -302,7 +317,7 @@ export const useFilesStore = create<FilesStore>()(
             set((s) => ({
               treesByProject: {
                 ...s.treesByProject,
-                [`${projectId}/${dirPath}`]: result.entries,
+                [`${projectId}/${dirPath}`]: filterTreeEntries(result.entries),
               },
             }))
           } catch (e) {
@@ -476,7 +491,7 @@ export const useFilesStore = create<FilesStore>()(
               set((s) => ({
                 treesByProject: {
                   ...s.treesByProject,
-                  [key]: result.entries,
+                  [key]: filterTreeEntries(result.entries),
                 },
               }))
             } catch {
@@ -512,7 +527,7 @@ export const useFilesStore = create<FilesStore>()(
             try {
               const result = await synthApi.listDirectory(projectId, dir, showHidden)
               set((s) => ({
-                treesByProject: { ...s.treesByProject, [key]: result.entries },
+                treesByProject: { ...s.treesByProject, [key]: filterTreeEntries(result.entries) },
               }))
             } catch {
               // Каталог мог исчезнуть — убираем только его ключ.

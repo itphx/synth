@@ -5,7 +5,7 @@ import type { createMiddleware } from 'hono/factory';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer, RequestSessionService } from '../../index.js';
 import type { SessionTree } from '../../sessions/manager.js';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, createResolveAuthorName, PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS, isProjectIconKey, isProjectColorKey, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
-import type { Message, Session, QuestionStatus } from '@itphx/synth-shared';
+import type { Message, Session, QuestionStatus, SessionWorktree } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { enqueueUserMessage, enqueueSteerMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
 import { serializeSession, serializeMessage, redactSessionSecretValues } from '../serialize.js';
@@ -35,6 +35,8 @@ import {
   QuestionInvalidAnswerError,
   QuestionNotFoundError,
 } from '../../engine/question/types.js';
+import type { WorktreeService } from '../../engine/worktree/service.js';
+import { publishWorktreeUpdated, type WorktreeUpdatedInput } from '../../engine/worktree/events.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -88,6 +90,13 @@ export interface SessionRoutesDeps {
    * отвечает 503, `POST .../answer|cancel` — 503.
    */
   questionService?: QuestionService;
+  /**
+   * ADR-114: сервис worktree'ов — привязка сессии к worktree
+   * (`PATCH /api/v2/sessions/:id { worktreeId }`).
+   *
+   * Не задан — поле `worktreeId` в PATCH игнорируется (привязка недоступна).
+   */
+  worktreeService?: WorktreeService;
 }
 
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
@@ -640,18 +649,159 @@ export function createSessionRoutes(
       }, 400);
     }
 
+    // ADR-114: привязка сессии к worktree (`worktreeId`).
+    //   - `null`      — снять привязку;
+    //   - `'<id>'`    — привязать к записи worktree **целевого** проекта сессии
+    //                   (запись чужого проекта выглядит как отсутствующая —
+    //                   существование не выдаётся, ADR-114 §5.2).
+    //
+    // Здесь — **только разбор тела** (не зависит от состояния сессии). Резолв
+    // записи и проверку принадлежности проекту делаем **под локом** (внутри
+    // `withLock`): иначе параллельный перенос сессии в другой проект мог бы
+    // привязать worktree прежнего проекта — чтение проекта вне лока races с
+    // переносом (ADR-114 §3.4).
+    const hasWorktreeParam = Object.prototype.hasOwnProperty.call(body, 'worktreeId');
+    const worktreeParam = hasWorktreeParam ? (body as { worktreeId?: unknown }).worktreeId : undefined;
+    const worktreeRequest = !hasWorktreeParam
+      ? undefined
+      : worktreeParam === null
+        ? { kind: 'unbind' as const }
+        : (typeof worktreeParam === 'string' && worktreeParam.trim().length > 0
+          ? { kind: 'bind' as const, id: worktreeParam }
+          : null);
+    if (hasWorktreeParam && !worktreeRequest) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'worktreeId должен быть строкой или null',
+        },
+      }, 400);
+    }
+
     // read-modify-write сессии — только под `SessionManager.withLock`: без лока
     // параллельные PATCH/clear/skills затирают правки друг друга (lost update —
     // победитель сохраняет свой снапшот целиком). Внутри лока сессия перечитывается.
-    const { updatedSession, prevProjectId, prevTitle, projectChanged } = await sessionManager.withLock(id, async (s) => {
+    const {
+      updatedSession,
+      prevProjectId,
+      prevTitle,
+      projectChanged,
+      worktreeDetached,
+      worktreeError,
+      worktreeEvents,
+    } = await sessionManager.withLock(id, async (s) => {
       const prevProjectId = s.projectId;
+      const prevWorktreeId = s.worktree?.worktreeId;
       let projectChanged = false;
+      let worktreeDetached = false;
+      let worktreeRebound = false;
+      const worktreeEvents: WorktreeUpdatedInput[] = [];
       if (projectParam !== undefined) {
         const resolved = projectParam || undefined;
         if (prevProjectId !== resolved) {
           s.projectId = resolved;
           s.planApproved = false;
           projectChanged = true;
+          // ADR-114 §3.4: worktree принадлежит проекту — при переносе сессии
+          // привязка снимается (иначе каталог был бы вне нового проекта).
+          if (s.worktree) {
+            s.worktree = undefined;
+            worktreeDetached = true;
+            // Инвентарь **старого** проекта изменился: запись отвязалась.
+            if (prevProjectId) {
+              worktreeEvents.push({
+                projectId: prevProjectId,
+                ...(prevWorktreeId !== undefined ? { worktreeId: prevWorktreeId } : {}),
+                action: 'detached',
+              });
+            }
+          }
+        }
+      }
+      // ADR-114: привязка/отвязка worktree — резолв **под локом** (свежая
+      // сессия): проект сессии к этому моменту уже актуален (возможен перенос
+      // тем же PATCH'ем), поэтому запись ищется именно в нём.
+      let worktreeBinding: SessionWorktree | undefined;
+      let worktreeUnbind = false;
+      let worktreeError:
+        | { status: number; code: string; message: string }
+        | undefined;
+      if (worktreeRequest?.kind === 'unbind') {
+        worktreeUnbind = true;
+      } else if (worktreeRequest?.kind === 'bind') {
+        const targetProjectId = session.projectId;
+        if (!targetProjectId) {
+          worktreeError = {
+            status: 400,
+            code: 'VALIDATION_ERROR',
+            message: 'Привязать worktree можно только сессии с проектом',
+          };
+        } else if (!deps.worktreeService) {
+          worktreeError = {
+            status: 400,
+            code: 'VALIDATION_ERROR',
+            message: 'Привязка к worktree в этом инстансе недоступна',
+          };
+        } else {
+          const summaries = await deps.worktreeService.list(targetProjectId);
+          const found = summaries.find((item) => item.id === worktreeRequest.id);
+          if (!found) {
+            worktreeError = {
+              status: 404,
+              code: 'WORKTREE_NOT_FOUND',
+              message: 'Worktree не найден',
+            };
+          } else if (found.exists === false) {
+            worktreeError = {
+              status: 409,
+              code: 'WORKTREE_DIRECTORY_MISSING',
+              message: `Каталог worktree не найден: ${found.directory}`,
+            };
+          } else {
+            worktreeBinding = {
+              worktreeId: found.id,
+              projectId: found.projectId,
+              ...(found.repoPath !== undefined ? { repoPath: found.repoPath } : {}),
+              directory: found.directory,
+              branch: found.branch,
+            };
+          }
+        }
+      }
+      if (worktreeError) {
+        // Ошибка привязки — сессия не меняется вовсе (в т.ч. перенос проекта):
+        // запись не сохраняем, события не публикуем.
+        return {
+          updatedSession: s,
+          prevProjectId,
+          prevTitle: undefined,
+          projectChanged,
+          worktreeDetached,
+          worktreeRebound: false,
+          worktreeError,
+          worktreeEvents,
+        };
+      }
+      // ADR-114: привязка/отвязка worktree (после смены проекта: привязка
+      // должна принадлежать проекту сессии на момент записи).
+      if (worktreeBinding) {
+        s.worktree = worktreeBinding;
+        worktreeRebound = true;
+        worktreeEvents.push({
+          projectId: s.projectId ?? '',
+          worktreeId: worktreeBinding.worktreeId,
+          action: 'attached',
+        });
+      } else if (worktreeUnbind) {
+        s.worktree = undefined;
+        worktreeRebound = true;
+        // Отвязка без прежней привязки — ничего не изменилось: события нет.
+        if (prevWorktreeId && s.projectId) {
+          worktreeEvents.push({
+            projectId: s.projectId,
+            worktreeId: prevWorktreeId,
+            action: 'detached',
+          });
         }
       }
       if (body.name !== undefined) s.title = body.name;
@@ -673,8 +823,24 @@ export function createSessionRoutes(
         s.settings = { ...s.settings, ...parsed.data.settings };
       }
       await sessionManager.updateSession(s);
-      return { updatedSession: s, prevProjectId, prevTitle, projectChanged };
+      return {
+        updatedSession: s,
+        prevProjectId,
+        prevTitle,
+        projectChanged,
+        worktreeDetached,
+        worktreeRebound,
+        worktreeError: undefined,
+        worktreeEvents,
+      };
     });
+
+    if (worktreeError) {
+      return c.json(
+        { error: { code: worktreeError.code, message: worktreeError.message } },
+        worktreeError.status as 400 | 404 | 409,
+      );
+    }
 
     // Порядок публикации сохранён: renamed → updated → moved.
     if (publishRenamed && prevTitle !== undefined && prevTitle !== body.title) {
@@ -686,7 +852,15 @@ export function createSessionRoutes(
         session_id: updatedSession.id,
         project_id: updatedSession.projectId ?? null,
         prev_project_id: prevProjectId ?? null,
+        // ADR-114 §3.4: привязка к worktree снята (worktree принадлежит
+        // старому проекту) — факт снятия виден в событии.
+        ...(worktreeDetached ? { worktree_detached: true } : {}),
       });
+    }
+    // ADR-114 §6: привязка/отвязка worktree — инвентарь проекта изменился
+    // (статус записи attached/detached) → событие в каналы сессий проекта.
+    for (const event of worktreeEvents) {
+      await publishWorktreeUpdated({ eventBus, sessionStore: sessionManager }, event);
     }
     return c.json(serializeSession(updatedSession, { agentRegistry }));
   });

@@ -19,6 +19,7 @@ import {
   gitCommitQuerySchema,
 } from '@itphx/synth-shared';
 import { GitService, deriveRepoName, resolveRepoPath } from '../../git/git-service.js';
+import type { ExecutionPort, ExecSecret } from '../../execution/ports/index.js';
 import { isSshUrl } from '../../git/ssh-env.js';
 import { resolveSshEnvById } from '../../engine/tools/git-ssh.js';
 import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js';
@@ -62,6 +63,11 @@ export interface GitRoutesOptions {
    * пользователь инстанса, доступ к проекту не разграничивается).
    */
   authorizeRead?: (c: Context, projectId: string) => Promise<boolean>;
+  /**
+   * ADR-077: порт исполнения git-команд. В remote-режиме те же команды уходят
+   * исполнителю (control plane без toolchain'а). Не задан — inline.
+   */
+  execution?: ExecutionPort;
 }
 
 interface RouteError {
@@ -154,7 +160,7 @@ export function createGitRoutes(
   opts: GitRoutesOptions = {},
 ): Hono {
   const app = new Hono();
-  const gitService = new GitService(workspacesRoot);
+  const gitService = new GitService(workspacesRoot, { execution: opts.execution });
   // `auth.requireAuth` уже навешан на write-эндпоинты выше, поэтому дефолтный
   // writeGuard — no-op (в backend передаётся requireAdmin/RBAC).
   const writeGuard: Middleware = opts.writeGuard ?? (async (_c, next) => { await next(); });
@@ -264,10 +270,17 @@ export function createGitRoutes(
     return next();
   };
 
-  /** SSH-окружение по `sshKeyId`: без id — пусто; нет ключа — 404; сбой env — 400. */
+  /**
+   * SSH-доступ по `sshKeyId`: без id — пусто; нет ключа — 404.
+   *
+   * Возвращается **секрет вызова** (`ExecSecret`, ADR-077 протокол 4), а не
+   * готовый `GIT_SSH_COMMAND`: материал готовит точка исполнения (в
+   * remote-режиме — исполнитель; путь control plane в его контейнере не
+   * существует).
+   */
   async function resolveSshEnv(
     sshKeyId?: string,
-  ): Promise<{ env?: Record<string, string>; cleanup?: () => Promise<void> }> {
+  ): Promise<{ secrets?: ExecSecret[]; cleanup?: () => Promise<void> }> {
     const res = await resolveSshEnvById(opts.sshKeyStore, sshKeyId);
     if (res.error === 'sshkey.env_failed') {
       // ADR-041: наружу — i18n-ключ, не сырой текст ошибки.
@@ -276,7 +289,7 @@ export function createGitRoutes(
     if (res.error) {
       throw { error: `SSH-ключ ${sshKeyId} не найден`, code: 'sshkey.not_found' } satisfies RouteError;
     }
-    return { env: res.env, cleanup: res.cleanup };
+    return { secrets: res.secrets, cleanup: res.cleanup };
   }
 
   /** Upsert записи реестра (по `id` либо `path`), сохранение проекта. */
@@ -343,7 +356,7 @@ export function createGitRoutes(
           wsPath,
           body.path,
           body.defaultBranch,
-          ssh.env ? { env: ssh.env } : undefined,
+          ssh.secrets ? { secrets: ssh.secrets } : undefined,
         );
         await registerRepo(project, {
           path: body.path,
@@ -383,7 +396,7 @@ export function createGitRoutes(
           body.path || '',
           body.url,
           body.branch,
-          ssh.env ? { env: ssh.env } : undefined,
+          ssh.secrets ? { secrets: ssh.secrets } : undefined,
         );
         await registerRepo(project, {
           path: repo.path,
@@ -479,7 +492,7 @@ export function createGitRoutes(
       const ssh = await resolveSshEnv(entry.sshKeyId);
       const lastFetch = nowISO();
       try {
-        await gitService.fetchRepo(wsPath, entry.path, ssh.env ? { env: ssh.env } : undefined);
+        await gitService.fetchRepo(wsPath, entry.path, ssh.secrets ? { secrets: ssh.secrets } : undefined);
       } finally {
         await ssh.cleanup?.();
       }

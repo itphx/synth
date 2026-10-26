@@ -73,6 +73,8 @@ import type {
   ExecRequest,
   ExecResult,
   ExecutionCapabilitySummary,
+  ExecutionMetricsOutcome,
+  ExecutionMetricsSink,
   ExecutionPort,
 } from '@itphx/synth-core';
 import {
@@ -108,6 +110,14 @@ export interface RemoteExecutionPortOptions {
   failMode?: RemoteFailMode;
   /** Транспорт (по умолчанию — `egressFetch` из core; для тестов). */
   fetchImpl?: ExecutorFetch;
+  /**
+   * ADR-094: приёмник метрик исполнения (очередь/занятость/ожидание/исход).
+   *
+   * Приёмник — **узкий интерфейс** из core: реестр метрик в пакет
+   * исполнителя не попадает (клиент не знает про подсистему наблюдаемости).
+   * Не задан — метрики пула не собираются (поведение прежнее).
+   */
+  metricsSink?: ExecutionMetricsSink;
 }
 
 /** Таймаут HTTP-запроса по умолчанию, мс (как `execution.remote.timeoutMs`). */
@@ -160,7 +170,19 @@ interface PoolEntry {
   protocol: number;
   /** Умеет ли исполнитель фоновые процессы (`features.background`, протокол v3). */
   background: boolean;
+  /** Умеет ли исполнитель принимать секреты вызова (`features.secrets`, протокол v4). */
+  secrets: boolean;
 }
+
+/**
+ * Минимальная версия протокола с фоновыми процессами (`/exec/spawn`).
+ */
+const EXECUTOR_PROTOCOL_BACKGROUND = 3;
+
+/**
+ * Минимальная версия протокола с секретами вызова (`secrets[]` в `POST /exec`).
+ */
+const EXECUTOR_PROTOCOL_SECRETS = 4;
 
 /** Ошибка соединения — повод переключиться на следующий адрес. */
 class ConnectionFailure extends Error {
@@ -234,18 +256,42 @@ function normalizeUrl(url: string): string {
 }
 
 /**
+ * Исход неудачного вызова → исход метрики (ADR-094).
+ *
+ * Проверка — **структурная** (по имени класса `ExecutionError`), а не
+ * `instanceof`: ошибка создана другой копией модуля core (`src` против
+ * `dist`), поэтому `instanceof` не срабатывает (см. `isExecutionError` в
+ * core). Причина (`reason`) — единственный признак, по которому таймаут
+ * отличается от отмены; всё прочее — `error`.
+ */
+function outcomeFromError(err: unknown): ExecutionMetricsOutcome {
+  if (typeof err === 'object' && err !== null) {
+    const e = err as { name?: unknown; reason?: unknown };
+    if (e.name === 'ExecutionError') {
+      if (e.reason === 'timeout') return 'timeout';
+      if (e.reason === 'aborted') return 'cancelled';
+    }
+  }
+  return 'error';
+}
+
+/**
  * Реализация `ExecutionPort` поверх удалённых исполнителей.
  *
  * Экземпляр можно создавать на каждый вызов (инстанс без процесс-глобального
  * состояния) — состояние счётчиков относится к одному порту.
  */
 export class RemoteExecutionPort implements ExecutionPort {
+  /** Исполнение — на удалённом исполнителе (ADR-077). */
+  readonly isRemote = true;
   private readonly _urls: string[];
   private readonly _token: string;
   private readonly _timeoutMs: number;
   private readonly _concurrency: number;
   private readonly _failMode: RemoteFailMode;
   private readonly _fetchImpl: ExecutorFetch | undefined;
+  /** ADR-094: приёмник метрик исполнения (не задан — метрики не собираются). */
+  private readonly _metricsSink: ExecutionMetricsSink | undefined;
   private _cursor = 0;
   private _active = 0;
   private readonly _waiting: Array<() => void> = [];
@@ -265,6 +311,7 @@ export class RemoteExecutionPort implements ExecutionPort {
     this._concurrency = Math.max(1, opts.concurrency ?? 1);
     this._failMode = opts.failMode ?? 'fail';
     this._fetchImpl = opts.fetchImpl;
+    this._metricsSink = opts.metricsSink;
   }
 
   /** Адреса исполнителей (нормализованные). */
@@ -306,9 +353,21 @@ export class RemoteExecutionPort implements ExecutionPort {
 
   /** Выполнить команду на удалённом исполнителе. */
   async execute(req: ExecRequest): Promise<ExecResult> {
+    // ADR-094: запрос поставлен в очередь на отправку исполнителю.
+    this._metricsSink?.onQueued?.();
+    const queuedAt = Date.now();
     await this._acquire();
+    // Слот получен: время ожидания в очереди — в гистограмму ожидания.
+    this._metricsSink?.onDequeued?.(Date.now() - queuedAt);
+    this._metricsSink?.onStarted?.();
+    const startedAt = Date.now();
     try {
-      return await this._execute(req);
+      const result = await this._execute(req);
+      this._metricsSink?.onFinished?.('ok', Date.now() - startedAt);
+      return result;
+    } catch (err) {
+      this._metricsSink?.onFinished?.(outcomeFromError(err), Date.now() - startedAt);
+      throw err;
     } finally {
       this._release();
     }
@@ -334,6 +393,17 @@ export class RemoteExecutionPort implements ExecutionPort {
    * запрос, а держать слот до его конца — значит заблокировать пул.
    */
   async spawnBackground(req: ExecRequest): Promise<ExecBackgroundProcess> {
+    // ADR-077 (протокол 4): секреты вызова в фоне не поддерживаются —
+    // процесс переживает вызов, а материал доставляется «на время вызова».
+    // Fail-closed: «тихо» запустить процесс без ключа нельзя.
+    if (req.secrets && req.secrets.length > 0) {
+      const core = await loadCore();
+      throw await buildExecutionError({
+        reason: 'spawn_failed',
+        code: core.EXECUTION_SECRETS_UNSUPPORTED_CODE,
+        message: 'секреты вызова не поддерживаются для фоновых процессов',
+      });
+    }
     if (this._urls.length === 0) {
       return this._unreachableBackground(new Error('не задано ни одного адреса исполнителя'), req);
     }
@@ -367,8 +437,12 @@ export class RemoteExecutionPort implements ExecutionPort {
     }
 
     const requires = req.requires ?? [];
-    if (requires.length > 0) {
-      return this._executeWithRequirements(req, requires);
+    // ADR-077 (протокол 4): доставка секретов — только исполнителю, который
+    // их понимает; иначе команда выполнилась бы «без ключа» (тихий сбой
+    // аутентификации). Старый исполнитель → fail-closed (см. `_executeWithRequirements`).
+    const needsSecrets = (req.secrets?.length ?? 0) > 0;
+    if (requires.length > 0 || needsSecrets) {
+      return this._executeWithRequirements(req, requires, needsSecrets);
     }
 
     const start = this._cursor;
@@ -392,7 +466,8 @@ export class RemoteExecutionPort implements ExecutionPort {
   }
 
   /**
-   * ADR-077: маршрутизация команды по бинарным требованиям.
+   * ADR-077: маршрутизация команды по бинарным требованиям **и** по поддержке
+   * секретов вызова.
    *
    * Команда уходит в адрес, чей инвентарь покрывает **все** требуемые
    * бинари. Адреса, не ответившие на `/capabilities`, не участвуют (состав
@@ -401,11 +476,14 @@ export class RemoteExecutionPort implements ExecutionPort {
    * - ни один адрес не ответил — поведение по `failMode` (пул недоступен);
    * - пул ответил, но нужной программы нет ни у кого — ошибка
    *   `dependency_missing` (различимая причина: слой доступности превращает
-   *   её в `unavailable(dependency)`).
+   *   её в `unavailable(dependency)`);
+   * - секреты вызова нужны, а никто их не принимает — ошибка `ESECRETS`
+   *   («нужен протокол 4»): выполнять команду без ключа нельзя.
    */
   private async _executeWithRequirements(
     req: ExecRequest,
     requires: string[],
+    needsSecrets = false,
   ): Promise<ExecResult> {
     const inventory = await this._ensureInventory();
     const start = this._cursor;
@@ -416,6 +494,7 @@ export class RemoteExecutionPort implements ExecutionPort {
       const url = this._urls[(start + i) % this._urls.length] as string;
       const entry = inventory.get(url);
       if (!entry || !entry.reachable) continue;
+      if (needsSecrets && !entry.secrets) continue;
       if (!requires.every((bin) => entry.binaries.has(bin))) continue;
       candidates.push(url);
     }
@@ -428,6 +507,17 @@ export class RemoteExecutionPort implements ExecutionPort {
           new Error('исполнители не ответили на /capabilities'),
           req,
         );
+      }
+      if (needsSecrets && !reachable.some((entry) => entry.secrets)) {
+        // Код отказа — из core (источник истины для обеих сторон).
+        const core = await loadCore();
+        throw await buildExecutionError({
+          reason: 'spawn_failed',
+          code: core.EXECUTION_SECRETS_UNSUPPORTED_CODE,
+          message:
+            `исполнитель не поддерживает доставку секретов: ` +
+            `нужен протокол ${EXECUTOR_PROTOCOL_SECRETS}`,
+        });
       }
       throw await buildExecutionError({
         reason: 'dependency_missing',
@@ -676,7 +766,7 @@ export class RemoteExecutionPort implements ExecutionPort {
       const body = (await response.json()) as {
         toolchain?: Record<string, unknown>;
         protocol?: number;
-        features?: { background?: boolean };
+        features?: { background?: boolean; secrets?: boolean };
       } | null;
       const toolchain = body?.toolchain;
       const binaries = new Set<string>();
@@ -687,8 +777,10 @@ export class RemoteExecutionPort implements ExecutionPort {
       // Фоновые процессы — протокол v3 (`/exec/spawn` и далее). Признак
       // `features.background` — аддитивный: исполнитель может объявить его
       // явно, но и версия протокола ≥ 3 уже означает поддержку.
-      const background = body?.features?.background === true || protocol >= EXECUTOR_PROTOCOL_VERSION;
-      return { reachable: true, binaries, protocol, background };
+      const background = body?.features?.background === true || protocol >= EXECUTOR_PROTOCOL_BACKGROUND;
+      // Секреты вызова — протокол v4 (`secrets[]` в `POST /exec`).
+      const secrets = body?.features?.secrets === true || protocol >= EXECUTOR_PROTOCOL_SECRETS;
+      return { reachable: true, binaries, protocol, background, secrets };
     } catch {
       // Адрес не ответил — состав неизвестен (в маршрутизации не участвует).
       return unreachableEntry();
@@ -715,6 +807,9 @@ export class RemoteExecutionPort implements ExecutionPort {
       ...(req.env !== undefined ? { env: req.env } : {}),
       ...(req.timeoutMs !== undefined ? { timeoutMs: req.timeoutMs } : {}),
       ...(req.maxOutputBytes !== undefined ? { maxOutputBytes: req.maxOutputBytes } : {}),
+      // ADR-077 (протокол 4): секреты вызова — телом запроса (значение, а не
+      // путь: путь control plane в контейнере исполнителя не существует).
+      ...(req.secrets && req.secrets.length > 0 ? { secrets: req.secrets } : {}),
     };
 
     let response: Response;
@@ -858,7 +953,7 @@ function describeCause(cause: unknown): string {
 
 /** Запись инвентаря для адреса, не ответившего на `/capabilities`. */
 function unreachableEntry(): PoolEntry {
-  return { reachable: false, binaries: new Set(), protocol: 0, background: false };
+  return { reachable: false, binaries: new Set(), protocol: 0, background: false, secrets: false };
 }
 
 /** Терминальный статус фонового процесса (процесс завершился). */

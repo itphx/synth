@@ -5,7 +5,11 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { egressFetch, ExecutionError } from '@itphx/synth-core';
-import type { ExecBackgroundProcess, ExecutionPort } from '@itphx/synth-core';
+import type {
+  ExecBackgroundProcess,
+  ExecutionMetricsSink,
+  ExecutionPort,
+} from '@itphx/synth-core';
 import { createRemoteExecutionPort, type ExecutorFetch } from './client.js';
 import { startExecutorServer, type ExecutorHandle } from './server.js';
 
@@ -175,6 +179,131 @@ describe('клиент удалённого порта', () => {
 });
 
 /**
+ * ADR-094/ADR-077: приёмник метрик исполнения на стороне control plane.
+ *
+ * Клиент удалённого порта **не знает** про реестр метрик — он получает узкий
+ * приёмник (`ExecutionMetricsSink`) и сообщает о событиях: постановка в
+ * очередь, получение слота (с временем ожидания), старт и завершение (исход).
+ */
+describe('клиент удалённого порта: приёмник метрик исполнения', () => {
+  /** События приёмника в порядке поступления. */
+  interface SinkEvent {
+    kind: 'queued' | 'dequeued' | 'started' | 'finished';
+    waitMs?: number;
+    outcome?: string;
+  }
+
+  /** Приёмник, пишущий события в список. */
+  function recordingSink(events: SinkEvent[]): ExecutionMetricsSink {
+    return {
+      onQueued: () => events.push({ kind: 'queued' }),
+      onDequeued: (waitMs) => events.push({ kind: 'dequeued', waitMs }),
+      onStarted: () => events.push({ kind: 'started' }),
+      onFinished: (outcome) => events.push({ kind: 'finished', outcome }),
+    };
+  }
+
+  it('успешный вызов: очередь → слот → старт → успех', async () => {
+    const handle = await startExecutor();
+    const events: SinkEvent[] = [];
+    const port = createRemoteExecutionPort({
+      urls: [handle.url],
+      token: TOKEN,
+      metricsSink: recordingSink(events),
+    });
+
+    await port.execute({ command: { kind: 'shell', command: 'printf ok' } });
+
+    expect(events.map((e) => e.kind)).toEqual(['queued', 'dequeued', 'started', 'finished']);
+    expect(events[1]!.waitMs).toBeGreaterThanOrEqual(0);
+    expect(events[3]!.outcome).toBe('ok');
+  });
+
+  it('ненулевой код выхода — исход error', async () => {
+    const handle = await startExecutor();
+    const events: SinkEvent[] = [];
+    const port = createRemoteExecutionPort({
+      urls: [handle.url],
+      token: TOKEN,
+      metricsSink: recordingSink(events),
+    });
+
+    await expect(
+      port.execute({ command: { kind: 'shell', command: 'exit 7' } }),
+    ).rejects.toBeInstanceOf(ExecutionError);
+
+    const finished = events.find((e) => e.kind === 'finished');
+    expect(finished?.outcome).toBe('error');
+  });
+
+  it('таймаут команды — исход timeout', async () => {
+    const handle = await startExecutor();
+    const events: SinkEvent[] = [];
+    const port = createRemoteExecutionPort({
+      urls: [handle.url],
+      token: TOKEN,
+      metricsSink: recordingSink(events),
+    });
+
+    await expect(
+      port.execute({ command: { kind: 'shell', command: 'sleep 5' }, timeoutMs: 200 }),
+    ).rejects.toMatchObject({ reason: 'timeout' });
+
+    const finished = events.find((e) => e.kind === 'finished');
+    expect(finished?.outcome).toBe('timeout');
+  });
+
+  it('отмена по AbortSignal — исход cancelled', async () => {
+    const handle = await startExecutor();
+    const events: SinkEvent[] = [];
+    const port = createRemoteExecutionPort({
+      urls: [handle.url],
+      token: TOKEN,
+      metricsSink: recordingSink(events),
+    });
+    const controller = new AbortController();
+
+    const pending = port.execute({
+      command: { kind: 'shell', command: 'sleep 5' },
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 50);
+    await expect(pending).rejects.toMatchObject({ reason: 'aborted' });
+
+    const finished = events.find((e) => e.kind === 'finished');
+    expect(finished?.outcome).toBe('cancelled');
+  });
+
+  it('очередь: второй вызов ждёт слот и попадает в гистограмму ожидания', async () => {
+    const handle = await startExecutor();
+    const events: SinkEvent[] = [];
+    const port = createRemoteExecutionPort({
+      urls: [handle.url],
+      token: TOKEN,
+      concurrency: 1,
+      metricsSink: recordingSink(events),
+    });
+
+    await Promise.all([
+      port.execute({ command: { kind: 'shell', command: 'sleep 0.3' } }),
+      port.execute({ command: { kind: 'shell', command: 'sleep 0.3' } }),
+    ]);
+
+    const dequeued = events.filter((e) => e.kind === 'dequeued');
+    expect(dequeued).toHaveLength(2);
+    // Второй вызов ждал слот — ожидание измеримо (больше нуля).
+    expect(dequeued[1]!.waitMs).toBeGreaterThan(0);
+  });
+
+  it('приёмник не задан — вызов работает как прежде (метрики не обязательны)', async () => {
+    const handle = await startExecutor();
+    const port = createRemoteExecutionPort({ urls: [handle.url], token: TOKEN });
+    const res = await port.execute({ command: { kind: 'shell', command: 'printf ok' } });
+    expect(res.stdout).toBe('ok');
+  });
+});
+
+/**
  * ADR-077: инвентарь пула (`GET /capabilities`) и маршрутизация команды по
  * бинарным требованиям (`ExecRequest.requires`).
  */
@@ -297,6 +426,113 @@ describe('клиент удалённого порта: инвентарь пу�
     expect(summary?.missing).toBe(1);
     expect(summary?.total).toBe(2);
     expect(summary?.unreachable).toBe(0);
+  });
+});
+
+/**
+ * ADR-077 (протокол 4): доставка секретов вызова исполнителю.
+ *
+ * Секрет уходит **значением** в теле `POST /exec` (путь control plane в
+ * контейнере исполнителя не существует). Исполнитель, который секретов не
+ * принимает (протокол < 4 и без `features.secrets`), — **fail-closed**:
+ * выполнять команду без ключа нельзя (операция упала бы с невнятной ошибкой
+ * аутентификации).
+ */
+describe('клиент удалённого порта: секреты вызова', () => {
+  /** Исполнитель протокола v3 — секреты вызова не принимает. */
+  async function startLegacySecretsExecutor(): Promise<{ url: string; execCalls: () => number }> {
+    let execCalls = 0;
+    const server = createServer((req, res) => {
+      if (req.url === '/capabilities') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            protocol: 3,
+            toolchain: { sh: 'sh 5.2' },
+            os: process.platform,
+            arch: process.arch,
+            node: process.version,
+            features: { background: true },
+          }),
+        );
+        return;
+      }
+      if (req.url === '/exec') {
+        execCalls += 1;
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { reason: 'internal_error', message: 'no' } }));
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const { port } = server.address() as AddressInfo;
+    legacyServers.push(server);
+    return { url: `http://127.0.0.1:${port}`, execCalls: () => execCalls };
+  }
+
+  it('секрет уходит в теле POST /exec значением (не путём к файлу)', async () => {
+    const handle = await startExecutor();
+    const bodies: unknown[] = [];
+    const capturing: ExecutorFetch = async (url, init) => {
+      if (url.endsWith('/exec') && typeof init?.body === 'string') {
+        bodies.push(JSON.parse(init.body));
+      }
+      return egressFetch(url, init);
+    };
+    const port = createRemoteExecutionPort({
+      urls: [handle.url],
+      token: TOKEN,
+      fetchImpl: capturing,
+    });
+
+    const secret = {
+      kind: 'ssh-key' as const,
+      privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----\nremote-secret\n-----END OPENSSH PRIVATE KEY-----\n',
+    };
+    const res = await port.execute({
+      command: { kind: 'shell', command: 'printf ok' },
+      secrets: [secret],
+    });
+    expect(res.stdout).toBe('ok');
+
+    const body = bodies.at(-1) as { secrets?: Array<{ kind: string; privateKey: string }> };
+    expect(body.secrets).toHaveLength(1);
+    expect(body.secrets?.[0]?.kind).toBe('ssh-key');
+    expect(body.secrets?.[0]?.privateKey).toBe(secret.privateKey);
+  });
+
+  it('исполнитель без поддержки секретов — fail-closed ESECRETS, команда не выполняется', async () => {
+    const legacy = await startLegacySecretsExecutor();
+    const port = createRemoteExecutionPort({ urls: [legacy.url], token: TOKEN });
+
+    const err = await port
+      .execute({
+        command: { kind: 'shell', command: 'printf should-not-run' },
+        secrets: [{ kind: 'ssh-key', privateKey: 'key-material' }],
+      })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ExecutionError);
+    expect((err as ExecutionError).code).toBe('ESECRETS');
+    // Команда не должна была выполниться «без ключа».
+    expect(legacy.execCalls()).toBe(0);
+  });
+
+  it('фоновый запуск с секретами — fail-closed ESECRETS', async () => {
+    const handle = await startExecutor();
+    const port = createRemoteExecutionPort({ urls: [handle.url], token: TOKEN });
+
+    const spawn = port.spawnBackground;
+    if (!spawn) throw new Error('ожидалась поддержка фонового запуска');
+    const err = await spawn
+      .call(port, {
+        command: { kind: 'shell', command: 'sleep 1' },
+        secrets: [{ kind: 'ssh-key', privateKey: 'key-material' }],
+      })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ExecutionError);
+    expect((err as ExecutionError).code).toBe('ESECRETS');
   });
 });
 

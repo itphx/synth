@@ -1245,3 +1245,51 @@
 - **Схема `timeout`:** в описании поля и тула явно указано «top-level, не внутри вопроса» — модель больше не кладёт его в объект вопроса (в живой проверке было `arg error`, теперь одна корректная попытка).
 - **E2E на test:** агент задал вопрос с `timeout: 300000` → `expiresAt` = +5 мин, один вызов тула без ошибок аргументов; ответ через API → ход продолжился.
 - **Приёмка:** core 6557, ui 2047 (док: 20, таймер: 42), typecheck/lint 0; полный workspace ранее — 10 526 тестов.
+
+## 2026-10-26 — 0.13.0 этап 1, п.1.5 шаг 5.1: доки ADR-077 (протокол 3, B2)
+
+- **Ветка:** `feature/0.13.0-stage1-executor-worktrees` (от `master`), коммит `2875147f`.
+- **Сделано:** ADR-077 — статус/«Остаток» приведены к коду: MCP-stdio B2 **реализован** (`ExecutorMcpSource` + `attachExecutorMcpSource`), `EXECUTOR_PROTOCOL_VERSION = 3` (1→2 MCP, 2→3 фоновые процессы), совместимость — по `protocol` в `/capabilities`. Добавлен блок «Обновлено 2026-10-26»: (а) git — argv через `ExecutionPort`, `simple-git` удаляется; (б) SSH-ключи — `secrets[]` в `POST /exec` (протокол 4), материализация на вызов + sweep, at-rest только в control plane (ADR-076); (в) CA — конфигурация исполнителя (`SYNTH_EXECUTOR_TLS_CA_FILE`), `gitCaConfig()` в remote не применяется (ADR-099). `docs/EXECUTION.md` §1.3/§4.2.1/§7/§9/§11/§12 синхронизированы, метрики `synth_executor_*` помечены планом (7d).
+- **Приёмка:** `adr-check` 0 ошибок (30 предупреждений — как до правок), `docs-link-check` 0 ошибок; правок `packages/**` нет.
+- **Замечания:** индекс `AGENTS.md` не изменился (`adr-check --write` — пустой diff), статус ADR-077 остаётся «⚠️ Частично».
+
+## 2026-10-26 — 0.13.0 этап 1, п.1.5 шаг 5.2: GitService на argv, simple-git удалён
+
+- **Коммит:** `5dc5671e` (ветка `feature/0.13.0-stage1-executor-worktrees`).
+- **Сделано:** новый `core/src/git/exec.ts` — `gitExec` через `ExecutionPort` (`argv`, `requires:['git']`, env = `sanitizeGitEnv` + `GIT_TERMINAL_PROMPT=0` + `gitProxyEnv` + опции, CA `-c http.sslCAInfo` только в inline). `GitService` переписан на argv + NUL-разбор (`status --porcelain=v2 -z`, `log/show` с `%x00`), публичный API и типы не менялись. `ExecutionPort.isRemote` (аддитивно) + реализации inline/remote/MCP-обёртка. Порт прокинут в `GitService` из оркестратора и в `createGitRoutes` (core/backend). `simple-git` удалён из core и lockfile (`pnpm why` — пусто).
+- **Приёмка (своя, не только сабагента):** `pnpm typecheck` 0 ошибок; `pnpm lint` 0 errors (194 warning — pre-existing); core **6565 passed** / 211 skipped; executor **142 passed**.
+- **Замечания:** поведенческие сдвиги парсинга (задокументированы в отчёте): `lastCommitAt` — строгий ISO (`%aI`), `shortHash` — `%h` вместо `slice(0,7)`, `CommitDetail.message` без дубля subject, корневой коммит теперь отдаёт файлы, rename — одной записью. Контракт типов не менялся.
+
+## 2026-10-26 — 0.13.0 этап 1, п.1.5 шаг 5.3: SSH-секреты на вызов (протокол 4) и CA исполнителя
+
+- **Коммит:** `193be2ab`. **Дефект, а не улучшение:** в split-режиме ключ материализовался в tmp control plane, а `GIT_SSH_COMMAND` указывал на путь, которого в контейнере исполнителя нет (то же с `gitCaConfig()`).
+- **Сделано:** `ExecSecret` (значение, не путь) + `ExecRequest.secrets`; `secret-env.ts` (core) и `executor/secrets.ts` — материализация `mkdtemp`/0700 + ключ 0600/askpass 0700, `cleanup` в `finally`, sweep `synth-ssh-*` при старте (TTL 1 ч). Протокол **4**: `secrets[]` в `POST /exec`, лимиты 4 записи/16 КиБ ключ/4 КиБ passphrase, `features.secrets`, отказ в `/exec/spawn`. Fail-closed `ESECRETS` на исполнителе < 4. CA: `SYNTH_EXECUTOR_TLS_CA_FILE` → `GIT_CONFIG_COUNT/KEY_0/VALUE_0` (git ≥ 2.31), fail-closed при нечитаемом файле; `gitCaConfig()` в remote не применяется. Control plane больше не пишет ключ: `resolveSshEnvById`/`resolveRepoGitEnv` отдают `secrets`, переведены `routes/git.ts`, `git_push/pull`, `project_repo_clone`, `GitService.cloneRepo/fetchRepo`.
+- **Побочный фикс:** гейт фоновых процессов — `protocol >= 3` (раньше `>= EXECUTOR_PROTOCOL_VERSION`, после бампа до 4 spawn отвалился бы у исполнителей v3).
+- **Чарт:** `executor.tls.caSecret`/`caKey` (по умолчанию выключено), `helm lint` + `helm template` (пусто/задан CA) — OK.
+- **Приёмка:** typecheck 0; lint 0 errors; executor **172** (+30), core **6572** (+7), backend **702**; adr-check/docs-link 0 ошибок; `grep` — секреты не логируются.
+- **За рамками:** фоновые процессы с секретами (fail-closed), mTLS-клиент к прокси на исполнителе.
+
+## 2026-10-26 — 0.13.0 этап 1, п.1.5 шаг 5.4: метрики synth_executor_* (пункт 1.5 закрыт)
+
+- **Коммит:** `996c776b` (+ строка roadmap «✅ ADR-077»). Пункт 1.5 закрыт.
+- **Сделано:** core — `ExecutionMetricsSink` (узкий интерфейс, реестр в клиент не тянется) + коллектор `executor` (`queue_depth`, `workers_busy`, `wait_seconds`, `commands_total{outcome}`), sink из реестра процесса в `deps` (core/backend) → `createExecutionPortForConfig` → `RemoteExecutionPort`. Исполнитель — свой `/metrics` (`commands_total{outcome}`, `inflight`, `exec_duration_seconds`, `mcp_servers{status}`) тем же реестром/рендером 0.0.4; 404 при выключенном, 401 без токена, `no-store`; `SYNTH_EXECUTOR_METRICS_ENABLED` (дефолт `false`). Чарт: `executor.metrics.enabled`, `executor.networkPolicy.metricsIngress` (доп. ingress; политика рендерится и без `networkPolicy.enabled`, но egress тогда не ограничивается — осознанно), группа алертов `synth-executor`.
+- **Приёмка:** typecheck 0; lint 0 errors; core **6582**, executor **191**, backend **702**; `helm lint` 0 failed, `helm template` по умолчанию побайтово = HEAD; adr-check/docs-link 0 ошибок.
+- **Замечания:** `synth_executor_commands_total` есть на обеих сторонах и считает разное (control plane — доставленные вызовы, исполнитель — исполненные команды) — суммировать серии нельзя, различать по `job`; алерт `ExecutorPoolStalled` на `deriv()` по gauge требует подгонки под SLO; до релиза проверить живой split-контур (скрейп отдельным job'ом).
+
+## 2026-10-26 — 0.13.0 этап 1, п.1.4: per-session cwd на git worktree (пункт закрыт)
+
+- **Коммиты:** `0a5ba591` (ADR-114 + спека), `b811c52c` (порт+3 backend'а), `40e7f7f2` (сервис), `a305b685` (привязка/cwd/containment), `3ce2060f` (тулы/HTTP/событие), `142cb652` (+69 тестов и матрица), `b71bd40d` (4 фикса), `f216b01b` (UI), `2c679912` + `3350b74f` (доки), `d40708ba` (sweep при старте).
+- **Модель:** корень `{workspacesRoot}/.worktrees/<projectId>/<slug>` (внутри корня workspace — иначе исполнитель отвергает `cwd`); инвентарь — порт `WorktreeRepository` (файл/memory/PG через `documents`, без миграции); привязка — аддитивное `Session.worktree` (snake_case, PG-колонка, **миграция 023**).
+- **cwd:** `_resolveSessionWorkingDir` — `session.worktree.directory` → `project.workspace` → `defaultWorkingDir`; исчезнувший каталог — fail-closed (`WORKTREE_DIRECTORY_MISSING`, `canRetry:false`, i18n), наследование саб-агентом через `parentId`; containment от каталога сессии (`repo_path` — только `.`), `findRepoEntry` по `worktreeRepoPath` (иначе push/pull теряли SSH-ключ).
+- **Тулы/HTTP:** `git_worktree_list|create|remove|prune` (`git_read`/`git_write`, plan-режим блокирует мутации); `GET/POST /projects/:id/worktrees`, `prune`, `DELETE :wid?force`, `PATCH /sessions/:id {worktreeId|null}`; `409 WORKTREE_DIRTY{forceRequired}`/`WORKTREE_BUSY`; событие `worktree.updated {project_id, worktree_id?, action}` + `fs.changed`.
+- **UI:** инвентарь в `ProjectTab`, селектор «Рабочий каталог», индикатор в шапке, `.worktrees` скрыт всегда, двухшаговое подтверждение при `forceRequired`; `worktree.updated` инвалидирует проект.
+- **Найденные и исправленные дефекты:** (1) ошибка cwd бросалась до `try` → уходила как `internal`; (2) `applyEvent('fs.changed')` ставил `scope:'all'` → ломал учёт `fileRevisions`/`deletedFiles`; (3) гонка в `PATCH /sessions/:id` (резолв до лока); (4) `git_worktree_create` не отдавал id в `content` (агент не мог привязаться); (5) `sweepOrphans` не вызывался при старте; (6) флейк `remote-dispatch.test.ts` — дефолтный `hookTimeout` 10s при динамическом импорте исполнителя (поднят до 30s на уровне конфига пакета).
+- **Приёмка:** полный `pnpm test` — 8 пакетов зелёные (shared 821, core **6708**, sdk 24, ui **2098**, backend **719**, executor 191, plugin-memory 191, storage-postgres 59); typecheck 0; lint 0 errors; adr-check/docs-link 0 ошибок; `helm lint` OK.
+
+## 2026-10-27 — test 0.12.3: сборка, публикация, Fleet (этап 1.4/1.5 в проде test)
+
+- **Собрано/опубликовано:** образы `git.itphx.ru/itphx/{synth-backend,synth-ui}:0.12.3`, `synth-executor:0.12.3-full`; чарт `synth 0.12.3-2` (HTTP 201, подтверждён в `index.yaml`); версия репозитория — `0.12.3` (+`charts/synth/Chart.yaml`). Прогон `synth-deploy/scripts/build-and-publish.sh --test-only --app-version 0.12.3`; креды Gitea — из конфигурации MCP (в env/`secrets/` токена нет), `GITEA_CA_FILE` не задавался (известный дефект из README).
+- **Деплой:** `synth-deploy` `63e6591` (пиннинги chart/образов) → `main`; Fleet `synth-test` **1/1**; Helm `synth-test` ревизия **53**, chart `0.12.3-2`, app `0.12.3`; rollout backend/ui/executor успешно (2 реплики исполнителя).
+- **Проверки:** `/health` → `{status:healthy, version:0.12.3}`; образы в деплойментах 0.12.3/0.12.3/0.12.3-full; `GET /api/v2/projects/:id/worktrees` → **401** (маршрут смонтирован); исполнитель стартовал новым кодом (`метрики: выключены; CA доверия: не задан; удалено старых каталогов SSH: 0`); `/metrics` исполнителя → **404** (off-by-default), `/capabilities` → **401**.
+- **Не проверено автоматически:** сквозной worktree через API — у клиента Keycloak `synth` отключён direct grant (`unauthorized_client`), нужен браузерный PKCE-вход; визуальная проверка — за пользователем.
+- **Откат:** `helm -n synth rollback synth-test <REV>` или реверт пиннингов в `synth-deploy` + push в `main`. При следующих итерациях — поднимать только номер сборки чарта (тег `0.12.3` образов при этом перезаписывается — откат по ревизии не даст прежний код).

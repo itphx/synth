@@ -91,10 +91,12 @@
   реализации — `execution/factory.ts` (`createExecutionPortForConfig`) при старте процесса;
   шов внедрения — `ctx.extra.executionPort` (`resolveExecutionPort(ctx)`);
   не-туловые точки (резолвер проектных инструкций, детект зависимостей, inline-shell) берут
-  тот же порт через композицию. Вне порта остаются операции, не относящиеся к агентским
-  командам: `simple-git` (`git/git-service.ts` — clone/fetch/init с SSH/CA-окружением), MCP
-  stdio (`engine/mcp/client.ts`), обслуживание (`maintenance/update.ts`) — они уезжают в
-  исполнитель по фазам 2–3 плана ADR-077.
+  тот же порт через композицию. `GitService` (`git/git-service.ts`) исполняет git
+  **через тот же порт** (`git/exec.ts`): clone/fetch/init/log — argv без shell,
+  `requires: ['git']`; в remote-режиме команды уходят исполнителю, поэтому slim-образ
+  control plane не содержит git. Вне порта остаются операции, не относящиеся к
+  агентским командам: MCP stdio (`engine/mcp/client.ts`), обслуживание
+  (`maintenance/update.ts`) — они уезжают в исполнитель по фазам 2–3 плана ADR-077.
 - **Доступность программы — вопрос порта, а не control plane (ADR-077 шаг A).**
   `ExecRequest.requires?: string[]` — бинарные требования команды; канонический словарь
   базовых возможностей — `EXECUTION_BASE_CAPABILITIES` (`git`/`rg`/`sh`) в
@@ -327,7 +329,13 @@
   неизвестное → `other`; id принципалов/сессий/ходов в лейблах нет), `ready`,
   `pipelines` — `createPipelineMetrics`: `synth_pipeline_*` (ADR-101 — прогоны/шаги/длительности/
   HITL-ожидания; лейблы только `status`/`source`/`kind`/`outcome`, id прогонов и узлов в лейблах нет —
-  значения приводятся к конечным наборам, неизвестное → `other`; ошибка метрик не влияет на прогон)).
+  значения приводятся к конечным наборам, неизвестное → `other`; ошибка метрик не влияет на прогон),
+  `executor` — `createExecutorMetricsCollector`: `synth_executor_*` (ADR-077 шаг 7d — сторона control
+  plane: `synth_executor_queue_depth`/`_workers_busy`/`_wait_seconds`/`_commands_total{outcome}`; sink —
+  `ExecutionMetricsSink` (`execution/ports/execution-port.ts`), который дёргает клиент удалённого порта;
+  серии исполнителя (`_exec_duration_seconds`/`_inflight`/`_mcp_servers`) считает сам исполнитель в
+  своём `/metrics` — `synth_executor_commands_total` есть на обеих сторонах и считает **разное**
+  (доставленные вызовы vs исполненные команды), суммировать их нельзя)).
   Роуты — `server/routes/metrics.ts` (`/metrics`: 404 при disabled, 401 при токене, `no-store`),
   `server/routes/health.ts` (`/health`, `/ready`) и `server/routes/metrics-settings.ts`
   (`createMetricsSettingsRoutes`: runtime/status/token, `resolveMetricsEnabled` — env > runtime > config > default).
@@ -1299,13 +1307,41 @@
   журналом на исполнителе (до его `prune`). Исполнитель старой версии (протокол < 3, нет
   `features.background`) → `ExecutionError.code = 'EBACKGROUND'`
   (`EXECUTION_BACKGROUND_UNSUPPORTED_CODE`) → `background_unsupported`.
+- `engine/worktree/*` — ADR-114 (per-session рабочий каталог): `WorktreeService`
+  (`engine/worktree/service.ts` — git-операции **только** через порт `ExecutionPort` (ADR-077),
+  корень `{workspacesRoot}/.worktrees/<projectId>`, создание/удаление/prune/sweep, детект secondary
+  worktree, startup-скрипт проекта), `errors.ts` (типизированные ошибки с машинными кодами
+  `WORKTREE_*` — HTTP-статус по коду), `events.ts` (`worktree.updated` + `fs.changed` в каналы
+  сессий проекта, лимит 200), `sweep.ts` (`startWorktreeSweeper` — стартовый sweep осиротевших
+  записей: **фоново**, старт не блокируется, ошибка — в лог; вызывается из `server/app/deps.ts`
+  и `backend/app/deps.ts`); тулы `git_worktree_list|create|remove|prune`
+  (`engine/tools/worktree.ts` — проект только из сессии, в plan-режиме мутации запрещены,
+  `create` не привязывает сессию). Порт инвентаря — `storage/ports/worktree-repository.ts`
+  (ADR-096); привязка сессии — `Session.worktree` (в форме хранения — snake_case, PostgreSQL —
+  миграция `023_session_worktree`); резолв cwd — `engine/orchestrator.ts` (fail-closed при
+  исчезнувшем каталоге). Спецификация — `docs/WORKTREES.md`.
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
-- `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
+- `git/*` — `git-service.ts` (clone/init/fetch/remove/log; публичный API не меняется,
+  исполнение — через `ExecutionPort`), `exec.ts` (argv git через порт: `requires: ['git']`,
+  общее окружение `sanitizeGitEnv` + `GIT_TERMINAL_PROMPT=0` + прокси, `maxOutputBytes`;
+  CA `-c http.sslCAInfo=<path>` — **только inline**, в remote-режиме доверие задаёт
+  исполнитель, ADR-099/ADR-077) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
-  `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`). ADR-099: доверие CA для
-  git-over-https — `simpleGit({ config: ['http.sslCAInfo=<path>'] })` из
-  `gitCaConfig()` (путь берётся из уже инициализированного `initTlsTrust`).
-- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (41 — 39 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
+  `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).
+- **SSH-доступ — секрет вызова, а не файл в control plane** (ADR-077, протокол 4).
+  Приватный ключ per-agent раскрывается в control plane и уходит в порт **значением**:
+  `ExecSecret` (`execution/ports/execution-port.ts`: `kind:'ssh-key'`, `privateKey`,
+  `passphrase?`) в `ExecRequest.secrets`. Материализацию делает **точка исполнения**:
+  `execution/secret-env.ts` (`materializeSecretEnv` — inline-режим) либо исполнитель
+  (`packages/executor/src/secrets.ts` — remote-режим; путь к файлу control plane в его
+  контейнере не существует, поэтому прописать его в `GIT_SSH_COMMAND` нельзя).
+  Итог: **в control plane временных файлов с ключом не остаётся** — только значение в
+  запросе; `git/ssh-env.ts` (`toSshSecret`) превращает раскрытый ключ в `ExecSecret`,
+  `engine/tools/git-ssh.ts` отдаёт `secrets` (не `env`), `git/exec.ts` и `git/git-service.ts`
+  передают `secrets` в порт. Значения **не логируются** и **не возвращаются** в ответе;
+  фоновые процессы (`spawnBackground`) секреты не поддерживают — fail-closed с кодом
+  `ESECRETS` (`EXECUTION_SECRETS_UNSUPPORTED_CODE`).
+- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (45 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
   `ExternalCredentialRepository` — внешние доступы к коннекторам (ADR-105 Ф1; файловое/в-памяти
   хранилища — `ExternalCredentialStore`, контракт — `storage/contract/external-credential-repository.contract.ts`);
   `CredentialAuditRepository` — append-only журнал операций со слоем доступов (ADR-105 Ф4;
@@ -1325,6 +1361,12 @@
   `{dataDir}/processes/registry.json`, в-памяти — `storage/memory/background-runs.ts`, PG —
   миграция `021_background_runs`; контракт —
   `storage/contract/background-run-repository.contract.ts`);
+  `WorktreeRepository` — инвентарь git-worktree'ов (ADR-114, per-session рабочий каталог;
+  файловое — `{dataDir}/worktrees.json`, в-памяти — `storage/memory/worktrees.ts`, PG —
+  generic-таблица `documents` (`kind='worktree'`), **без новой миграции**; контракт —
+  `storage/contract/worktree-repository.contract.ts`; `save` — полная перезапись записи,
+  `createdAt` иммутабельно, `updatedAt` ставит вызывающий, `list` — «свежие первыми»
+  по `createdAt`, `delete` идемпотентно, `deleteByProject` — число удалённых);
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
   запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/

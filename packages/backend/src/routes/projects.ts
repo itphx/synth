@@ -5,6 +5,8 @@ import type {
   SettingsRepository, McpRegistryRepository,
 } from '@itphx/synth-core';
 import { createProjectRoutes as createCoreProjectRoutes, resolveProjectSkillSeed } from '@itphx/synth-core';
+// ADR-114: сервис worktree'ов — контур `/projects/:id/worktrees*`.
+import type { WorktreeService } from '@itphx/synth-core';
 import type { Project } from '@itphx/synth-shared';
 import { ProjectRole } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
@@ -57,6 +59,11 @@ export function createProjectRoutes(
   skillService?: SkillService,
   settingsStore?: SettingsRepository,
   mcpRegistryStore?: McpRegistryRepository,
+  /**
+   * ADR-114: сервис worktree'ов проекта — контур `/projects/:id/worktrees*`
+   * (список/создание/удаление/prune). Не задан — роутов нет.
+   */
+  worktreeService?: WorktreeService,
 ): Hono {
   const { canManageProject, canEditProjectContent, canReadProject } = createProjectAccess(kit);
 
@@ -101,6 +108,8 @@ export function createProjectRoutes(
       sessionManager,
       getWorkspacesRoot: () => workspacesRoot,
       getOutsideRootPolicy: () => 'deny',
+      // ADR-114: контур worktree'ов проекта.
+      ...(worktreeService ? { worktrees: worktreeService } : {}),
     },
   );
 }

@@ -20,9 +20,11 @@ import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { warning } from '../logger.js';
 import { probeBinaryThroughPort } from './probe.js';
+import { materializeSecretEnv } from './secret-env.js';
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_SHELL_BINARY,
+  EXECUTION_SECRETS_UNSUPPORTED_CODE,
   ExecutionError,
   type ExecBackgroundChunk,
   type ExecBackgroundExit,
@@ -150,6 +152,9 @@ function createBackgroundOutput(child: ChildProcess): AsyncIterable<ExecBackgrou
  * синглтонов не появляется (инвариант 24).
  */
 export class InlineExecutionPort implements ExecutionPort {
+  /** Исполнение — в процессе control plane (ADR-077). */
+  readonly isRemote = false;
+
   /**
    * ADR-077/ADR-078: наличие программы в окружении исполнения.
    *
@@ -164,14 +169,21 @@ export class InlineExecutionPort implements ExecutionPort {
   async execute(req: ExecRequest): Promise<ExecResult> {
     const startedAt = Date.now();
     const { file, args } = resolveInvocation(req.command);
+    // ADR-077 (протокол 4): секреты вызова материализуются **здесь** — временный
+    // ключ `0600` в каталоге `0700`; очистка — гарантированно (успех, ошибка
+    // команды, таймаут, отмена, неудача запуска).
+    const secrets = req.secrets && req.secrets.length > 0 ? req.secrets : undefined;
+    const materialized = secrets ? await materializeSecretEnv(secrets) : undefined;
     try {
       const { stdout, stderr } = await execFileAsync(file, args, {
         cwd: req.cwd,
         timeout: req.timeoutMs,
         signal: req.signal,
         maxBuffer: req.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
-        // Базовое окружение — всё `process.env`; `env` запроса мержится поверх.
-        env: { ...process.env, ...(req.env ?? {}) },
+        // Базовое окружение — всё `process.env`; `env` запроса мержится поверх,
+        // окружение секретов — поверх `env` (материал доставлен явно для этой
+        // команды, он важнее ambient-значений).
+        env: { ...process.env, ...(req.env ?? {}), ...(materialized?.env ?? {}) },
       });
       return {
         stdout,
@@ -182,6 +194,8 @@ export class InlineExecutionPort implements ExecutionPort {
       };
     } catch (err) {
       throw toExecutionError(err, Date.now() - startedAt);
+    } finally {
+      await materialized?.cleanup().catch(() => {});
     }
   }
 
@@ -202,6 +216,16 @@ export class InlineExecutionPort implements ExecutionPort {
    * процесс control plane не «зависает» из-за фоновой команды.
    */
   async spawnBackground(req: ExecRequest): Promise<ExecBackgroundProcess> {
+    // ADR-077 (протокол 4): секреты вызова **не поддерживаются** в фоне —
+    // процесс переживает вызов, а материал доставляется «на время вызова».
+    // Fail-closed: «тихо» запустить процесс без ключа нельзя.
+    if (req.secrets && req.secrets.length > 0) {
+      throw new ExecutionError({
+        message: 'секреты вызова не поддерживаются для фоновых процессов',
+        code: EXECUTION_SECRETS_UNSUPPORTED_CODE,
+        reason: 'spawn_failed',
+      });
+    }
     const startedAt = Date.now();
     const { file, args } = resolveInvocation(req.command);
     const child = spawn(file, args, {

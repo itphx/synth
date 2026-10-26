@@ -1,12 +1,15 @@
 # PROP-049: Git worktrees
 
+> ⚠️ **Принято как [ADR-114](./adr-114-git-worktrees.md) (2026-10-26).** Файл оставлен как история: правило каталога — файлы не удаляются (см. [ARCH_DECISIONS.md](../ARCH_DECISIONS.md) §3 «Формат ADR: заморозка на одну страницу»).
+
 > **Статус:** 🧩 Предложение — Git worktrees: тулы `git_worktree_*`, per-session cwd на базе worktree, детект secondary worktree, UI
 > **Решение до:** 2026-11-14
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D4, идея 4 + Obsidian `Фичи.md`).
 > **Связано:** [ADR-014](./adr-014-project-container.md), [ADR-029](./adr-029-granular-permissions.md),
 > [PROP-037](./prop-037-commit-security-step.md), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md),
-> [ADR-075](./adr-075-project-workspace-provisioning.md), [ADR-076](./adr-076-git-repo-registry-ssh.md).
+> [ADR-075](./adr-075-project-workspace-provisioning.md), [ADR-076](./adr-076-git-repo-registry-ssh.md),
+> [ADR-114](./adr-114-git-worktrees.md) (принятое решение), [docs/WORKTREES.md](../../WORKTREES.md) (спецификация).
 
 **Решение:** добавить поддержку `git worktree` как first-class возможности Synth: инструменты
 `git_worktree_*` (add/list/remove/…), **per-session рабочий каталог (cwd)** на базе worktree, детект

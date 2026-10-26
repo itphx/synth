@@ -16,6 +16,12 @@
  * | `GET` | `/mcp/tools` | инструменты поднятых MCP-серверов | bearer-токен |
  * | `POST` | `/mcp/call` | вызов инструмента MCP-сервера | bearer-токен |
  * | `GET` | `/health` | liveness исполнителя | без токена |
+ * | `GET` | `/metrics` | метрики исполнителя (`synth_executor_*`) | bearer-токен |
+ *
+ * `/metrics` — **вне** префиксов и **по умолчанию выключен** (ADR-094 п. 4):
+ * без включённых метрик эндпоинт отвечает `404`; с включёнными — `401` без
+ * bearer-токена исполнителя и `200` (exposition 0.0.4, `no-store`) с токеном.
+ * Отдельного токена не заводим — тот же, что у остальных эндпоинтов.
  *
  * Коды ответов — по классу ошибки (`EXEC_ERROR_STATUS`): `400` — некорректный
  * запрос или `cwd` вне workspace, `401` — нет/неверный токен, `404` — неизвестный
@@ -42,6 +48,7 @@ import {
   type BackgroundLogsOptions,
 } from './background.js';
 import { ExecService } from './exec-service.js';
+import type { ExecutorMetrics } from './metrics.js';
 import {
   EXECUTOR_PROTOCOL_VERSION,
   errorResponse,
@@ -93,10 +100,21 @@ export interface ExecutorAppOptions {
   mcpServers?: McpServerSpec[];
   /** Готовый хост MCP-серверов (иначе создаётся из `mcpServers`). */
   mcpHost?: ExecutorMcpHost;
+  /**
+   * ADR-094/ADR-077: метрики исполнителя (`synth_executor_*`) — реестр и
+   * счётчики. Не заданы — эндпоинт `/metrics` **выключен** (404), счётчики
+   * не ведутся (по умолчанию метрики выключены — ADR-094 п. 4).
+   */
+  metrics?: ExecutorMetrics;
   /** Момент старта процесса, мс (для `uptimeSec`). */
   startedAt?: number;
   /** Порт исполнения (инъекция для тестов). */
   executionPort?: ConstructorParameters<typeof ExecService>[0]['executionPort'];
+  /**
+   * Файл CA доверия git (ADR-099/ADR-077): путь в окружении исполнителя.
+   * Задан → в окружение вызова добавляется `http.sslCAInfo` (env-канал).
+   */
+  tlsCaFile?: string;
 }
 
 /** Дефолты лимитов исполнителя (совпадают с `EXECUTOR_DEFAULTS`). */
@@ -188,6 +206,8 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
     maxTimeoutMs: opts.maxTimeoutMs ?? DEFAULT_MAX_TIMEOUT_MS,
     maxOutputBytes: opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
     ...(opts.executionPort ? { executionPort: opts.executionPort } : {}),
+    ...(opts.tlsCaFile ? { tlsCaFile: opts.tlsCaFile } : {}),
+    ...(opts.metrics ? { metrics: opts.metrics } : {}),
   });
   // Реестр фоновых процессов исполнителя (ADR-077, шаг 7c). Готовый сервис
   // передаётся из `startExecutorServer` — иначе он не смог бы остановить
@@ -205,6 +225,10 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
 
   // Хост MCP-серверов: серверы поднимаются лениво (первое обращение).
   const mcpHost = opts.mcpHost ?? new ExecutorMcpHost(opts.mcpServers ?? []);
+
+  // ADR-094: состояние MCP-серверов — источник gauge `synth_executor_mcp_servers`
+  // (лейбл `status`: `idle`/`up`/`down`). Пересчёт — перед рендером.
+  opts.metrics?.setMcpSource(() => mcpHost.listServers().map((server) => ({ status: server.status })));
 
   // Состав toolchain'а: задан на старте либо определяется при первом запросе
   // (результат кэшируется).
@@ -382,7 +406,7 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
       arch: process.arch,
       node: process.version,
       // Аддитивно: старый control plane поле не читает.
-      features: { background: true },
+      features: { background: true, secrets: true },
     };
     return c.json(body, 200);
   });
@@ -450,6 +474,29 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
     return c.json(body, 200);
   });
 
+  // --- Метрики исполнителя (ADR-077, шаг 7d; ADR-094) --------------------
+  //
+  // Путь — **вне** префиксов (`/metrics`, как у backend'а). Правила те же:
+  // выключено → 404 (эндпоинта «нет»), без bearer-токена исполнителя → 401,
+  // с токеном → 200 в формате exposition 0.0.4 с `Cache-Control: no-store`.
+  // Отдельный токен не заводим — тот же, что у остальных эндпоинтов.
+  app.get('/metrics', (c) => {
+    const metrics = opts.metrics;
+    if (!metrics) {
+      const { status, body } = errorResponse('not_found', 'экспорт метрик отключён');
+      return c.json(body, status);
+    }
+    if (!isAuthorized(c.req.header('authorization'), token)) {
+      const { status, body } = errorResponse('unauthorized', 'нет или неверный bearer-токен');
+      return c.json(body, status);
+    }
+    const { text } = metrics.render();
+    return c.body(text, 200, {
+      'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+  });
+
   return app;
 }
 
@@ -509,6 +556,12 @@ export interface ExecutorServerOptions extends ExecutorAppOptions {
   host?: string;
   /** Порт прослушивания (по умолчанию — `5100`; `0` — случайный порт). */
   port?: number;
+  /**
+   * ADR-094: включить `/metrics` исполнителя. По умолчанию — выключено
+   * (эндпоинт → 404). Реестр метрик создаётся лениво (динамический
+   * `import()`): выключенные метрики не тянут ядро в процесс исполнителя.
+   */
+  metricsEnabled?: boolean;
 }
 
 /** Запущенный сервер исполнителя. */
@@ -537,6 +590,15 @@ export async function startExecutorServer(opts: ExecutorServerOptions): Promise<
   const host = opts.host ?? '0.0.0.0';
   const toolchain = opts.toolchain ?? (await detectToolchain());
   const mcpHost = opts.mcpHost ?? new ExecutorMcpHost(opts.mcpServers ?? []);
+  // ADR-094: метрики исполнителя — по запросу (ленивый `import()`): выключенный
+  // `/metrics` не должен поднимать реестр метрик (и ядро) в процессе воркера.
+  const metrics =
+    opts.metrics ??
+    (opts.metricsEnabled
+      ? (await import('./metrics.js')).createExecutorMetrics({
+          mcpServers: () => mcpHost.listServers().map((server) => ({ status: server.status })),
+        })
+      : undefined);
   // Сервис фоновых процессов создаётся здесь: приложение получает готовый
   // инстанс, а остановка исполнителя — доступ к нему (фоновые процессы
   // не должны пережить исполнитель).
@@ -548,7 +610,7 @@ export async function startExecutorServer(opts: ExecutorServerOptions): Promise<
       maxLogBytes: opts.backgroundLogMaxBytes ?? DEFAULT_BACKGROUND_MAX_LOG_BYTES,
       logDir: opts.backgroundLogDir ?? DEFAULT_BACKGROUND_LOG_DIR,
     });
-  const app = createExecutorApp({ ...opts, toolchain, mcpHost, backgroundService: background });
+  const app = createExecutorApp({ ...opts, toolchain, mcpHost, backgroundService: background, ...(metrics ? { metrics } : {}) });
   const server = createExecutorHttpServer(app);
 
   await new Promise<void>((resolve, reject) => {

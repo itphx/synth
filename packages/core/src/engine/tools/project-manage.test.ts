@@ -149,6 +149,107 @@ describe('project_create / project_attach', () => {
   });
 });
 
+/**
+ * ADR-114 §3.4: привязка к worktree принадлежит проекту — при переносе сессии
+ * в другой проект она снимается (иначе рабочий каталог сессии оказался бы
+ * вне её нового проекта). Факт снятия виден в ответе тула и в событии
+ * `session.moved` — оба под одним wire-ключом `worktree_detached`
+ * (snake_case — как `session_id`/`project_id` в событии).
+ */
+describe('project_attach — снятие привязки к worktree (ADR-114 §3.4)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let eventBus: EventBus;
+  let sessionId: string;
+  let targetProjectId: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-project-worktree-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    eventBus = new EventBus();
+
+    const current = projectStore.create('Current', 'u1');
+    const target = projectStore.create('Target', 'u1');
+    await projectStore.save(current);
+    await projectStore.save(target);
+    targetProjectId = target.id;
+
+    const session = await sessionManager.createSession({
+      title: 'Bound',
+      projectId: current.id,
+      userId: 'u1',
+    });
+    sessionId = session.id;
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.ownerId = 'u1';
+      s.worktree = {
+        worktreeId: 'wkt_test',
+        projectId: current.id,
+        directory: join(tmpDir, 'worktrees', 'feature-x'),
+        branch: 'feature/x',
+      };
+      await sessionManager.saveSession(s);
+    });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(): ToolContext {
+    return {
+      sessionId,
+      messageId: generateId(),
+      abortSignal: new AbortController().signal,
+      workingDir: tmpDir,
+      extra: { sessionManager, projectStore, sessionId, eventBus, workspacesRoot: join(tmpDir, 'workspaces') },
+    };
+  }
+
+  it('привязка к worktree снимается, в metadata — worktree_detached: true', async () => {
+    const result = await projectAttachTool.execute({ projectId: targetProjectId }, makeCtx());
+    expect(result.isError).toBeUndefined();
+    expect(result.metadata?.worktree_detached).toBe(true);
+
+    const session = (await sessionManager.getSession(sessionId))!;
+    expect(session.projectId).toBe(targetProjectId);
+    expect(session.worktree).toBeUndefined();
+  });
+
+  it('в опубликованном session.moved — worktree_detached: true', async () => {
+    let moved: Record<string, unknown> | undefined;
+    eventBus.subscribe(sessionId, (e) => {
+      if (e.type === 'session.moved') moved = e.data as Record<string, unknown>;
+    });
+
+    await projectAttachTool.execute({ projectId: targetProjectId }, makeCtx());
+
+    expect(moved).toBeTruthy();
+    expect(moved?.project_id).toBe(targetProjectId);
+    expect(moved?.worktree_detached).toBe(true);
+  });
+
+  it('сессия без привязки: worktree_detached не выставляется (прежнее поведение)', async () => {
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.worktree = undefined;
+      await sessionManager.saveSession(s);
+    });
+
+    let moved: Record<string, unknown> | undefined;
+    eventBus.subscribe(sessionId, (e) => {
+      if (e.type === 'session.moved') moved = e.data as Record<string, unknown>;
+    });
+
+    const result = await projectAttachTool.execute({ projectId: targetProjectId }, makeCtx());
+
+    expect(result.isError).toBeUndefined();
+    expect(result.metadata?.worktree_detached).toBeUndefined();
+    expect(moved?.worktree_detached).toBeUndefined();
+  });
+});
+
 describe('project_log / project_invariants', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;

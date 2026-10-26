@@ -1,25 +1,45 @@
 import { readdir, mkdir, rm } from 'node:fs/promises';
 import { resolve as pathResolve, relative, join, isAbsolute, sep } from 'node:path';
-import { simpleGit, type SimpleGit, type SimpleGitOptions, type LogResult } from 'simple-git';
 import type { RepoStatus, CommitInfo, CommitDetail, CommitFileInfo } from '@itphx/synth-shared';
-// ADR-099: доверие TLS/CA для git — пер-вызовом через `-c <key>=<value>`;
-// прокси (D2b) — child-env (`http_proxy`/`https_proxy`/`all_proxy`/`no_proxy`).
-import { gitCaConfig } from '../security/tls.js';
-import { gitProxyEnv } from '../security/proxy-state.js';
+import type { ExecutionPort, ExecSecret } from '../execution/ports/index.js';
+import { gitExec, sanitizeGitEnv } from './exec.js';
 
 /**
  * ADR-076 §T3: git-сервис ядра (перенос из backend `lib/git-service.ts`).
  * Единая реализация git — в core; backend (T4) переходит на core-фабрику роутов.
+ *
+ * ADR-077: исполнение — через `ExecutionPort` (`git/exec.ts`), без сторонней
+ * git-библиотеки.
+ * Публичный API класса не меняется; в remote-режиме те же команды уходят
+ * исполнителю (control plane больше не требует git в своём образе).
  */
 
-/** Опции git-вызова: дополнительные переменные окружения (например SSH). */
+/** Санитайз окружения git — историческое место экспорта (реализация — `exec.ts`). */
+export { sanitizeGitEnv };
+
+/**
+ * Опции git-вызова: дополнительное окружение и секреты вызова.
+ *
+ * `secrets` — SSH-ключ (ADR-077, протокол 4): он доставляется точке
+ * исполнения на время вызова, а не прописывается путём в control plane.
+ */
 export interface GitEnvOptions {
   env?: Record<string, string>;
+  /** Секреты вызова (SSH-ключ) — доставляются точке исполнения. */
+  secrets?: ExecSecret[];
 }
 
 /** Опции fetch: окружение + конкретный remote (по умолчанию — все). */
 export interface GitFetchOptions extends GitEnvOptions {
   remote?: string;
+}
+
+/**
+ * Опции сервиса. `execution` — порт исполнения команд (ADR-077); не задан —
+ * inline (`InlineExecutionPort`), то есть прежнее локальное поведение.
+ */
+export interface GitServiceOptions {
+  execution?: ExecutionPort;
 }
 
 function relativeTime(isoDate: string): string {
@@ -60,109 +80,91 @@ export function deriveRepoName(url: string): string {
   return name;
 }
 
-/**
- * ADR-076: не-git ключи, которые simple-git блокирует по blocklist
- * (`@simple-git/argv-parser`: `isGitEnvKey` — `EDITOR`, `VISUAL`, `PAGER`,
- * `PREFIX`, `SSH_ASKPASS`, …). Остальные блокируемые ключи — `GIT_*`
- * (`GIT_EDITOR`, `GIT_PAGER`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`, …) —
- * вырезаются по префиксу в `sanitizeGitEnv`. `SSH_ASKPASS_REQUIRE` сам не в
- * blocklist, но вырезается вместе с `SSH_ASKPASS`: сервис ставит его только сам
- * (см. `createSshEnv`) — ambient-значение не должно протекать в git.
- * `allowUnsafeEditor`/`allowUnsafePager` сознательно НЕ включаем.
- */
-const BLOCKED_ENV_KEYS = new Set(['editor', 'visual', 'pager', 'prefix', 'ssh_askpass', 'ssh_askpass_require']);
+/** Поля заголовка `git status --porcelain=v2 --branch`. */
+const STATUS_BRANCH_HEAD = '# branch.head ';
 
 /**
- * Санитизирует окружение перед передачей в `simpleGit.env()`: вырезает
- * `git*`-ключи (без учёта регистра) и не-git blocklist (`EDITOR`, `VISUAL`,
- * `PAGER`, `PREFIX`, `SSH_ASKPASS`, …). Иначе `process.env` хоста (например
- * `EDITOR` из dev-шелла) роняет вызов на environment-guard / blockUnsafeOperationsPlugin.
+ * Ветка из `git status --porcelain=v2 --branch -z`.
+ *
+ * Записи (`1`/`2`/`u`/`?`/`!`) пропускаются: у записи типа `2` (rename/copy)
+ * исходный путь идёт отдельным NUL-полем — его тоже пропускаем, иначе путь,
+ * начинающийся с `# `, был бы прочитан как заголовок.
  */
-export function sanitizeGitEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(source)) {
-    if (value === undefined) continue;
-    const lower = key.toLowerCase();
-    if (lower.startsWith('git') || BLOCKED_ENV_KEYS.has(lower)) continue;
-    out[key] = value;
+function parseStatusBranch(raw: string): string | undefined {
+  const tokens = raw.split('\0');
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i] ?? '';
+    if (token.startsWith(STATUS_BRANCH_HEAD)) {
+      const head = token.slice(STATUS_BRANCH_HEAD.length).trim();
+      if (!head) return undefined;
+      // `rev-parse --abbrev-ref HEAD` (прежняя реализация) на detached HEAD
+      // возвращает `HEAD` — сохраняем это представление.
+      return head === '(detached)' ? 'HEAD' : head;
+    }
+    if (token.startsWith('2 ')) i += 1;
   }
-  return out;
+  return undefined;
 }
 
-/**
- * Опции simple-git, разрешающие ровно те «unsafe»-категории, которые сервис
- * ставит сам (`GIT_SSH_COMMAND` из расшифрованного SSH-ключа, `SSH_ASKPASS`
- * для ключей с passphrase). `allowUnsafeEditor`/`allowUnsafePager` не включаем —
- * соответствующие переменные вырезаются санитайзером.
- *
- * `allowEnvironment` (simple-git 4.x) — двойной opt-in: environment-guard
- * отклоняет задачу, если через `.env()` явно передан `GIT_*`/blocklist-ключ,
- * не названный здесь. Список — ровно те переменные, которые сервис ставит сам:
- * `GIT_TERMINAL_PROMPT` (неинтерактивность) и SSH-набор из `createSshEnv`.
- * Ambient-значения этих ключей не протекают: `.env()` получает санитайзенный
- * `process.env` (см. `withEnv`).
- */
-const GIT_UNSAFE_OPTIONS = {
-  unsafe: { allowUnsafeSshCommand: true, allowUnsafeAskPass: true },
-  allowEnvironment: ['GIT_TERMINAL_PROMPT', 'GIT_SSH_COMMAND', 'SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE'],
-} as const;
-
-/**
- * ADR-099: опции инстанса `simple-git` = разрешённые SSH/askpass-категории +
- * args git-конфига доверия CA (`git -c <arg>`).
- *
- * Доверие уже инициализировано при старте (`initTlsTrust`) — путь CA берём
- * геттером `gitCaConfig()`, конфиг в git-модуль не тянем. `GIT_SSL_CAINFO` как
- * env-канал недоступен: `sanitizeGitEnv` вырезает `git*`-env, а
- * `allowEnvironment`-guard отклоняет задачу, поэтому CA передаётся только
- * пер-вызовом. Без `security.tls.caFile` — пусто (системное доверие, прежнее
- * поведение, поле `config` не появляется).
- */
-function gitInstanceOptions(): Partial<SimpleGitOptions> {
-  // Прокси в argv/`-c` НЕ передаём (пароль не должен попадать в аргументы):
-  // D2b использует child-env в `withEnv` (`gitProxyEnv`), libcurl применяет
-  // `no_proxy` и Basic-креды из userinfo.
-  const config = gitCaConfig();
-  return config.length > 0 ? { ...GIT_UNSAFE_OPTIONS, config } : GIT_UNSAFE_OPTIONS;
-}
-
-/** Создаёт simple-git с разрешёнными SSH/askpass-операциями и CA доверия. */
-function createGit(baseDir?: string): SimpleGit {
-  const options = gitInstanceOptions();
-  return baseDir === undefined ? simpleGit(options) : simpleGit(baseDir, options);
-}
-
-/**
- * Применяет env к simple-git. `simpleGit.env(obj)` ЗАМЕНЯЕТ окружение процесса,
- * поэтому базовый `process.env` обязательно объединяем — но только после
- * санитайза: с simple-git 4.x environment-guard отклоняет задачу, если в `.env()`
- * явно передан `GIT_*`/blocklist-ключ без `allowEnvironment`, а ambient-`GIT_*`
- * без этого не протекает. Поэтому `.env()` ставится ВСЕГДА (даже без `env`):
- * дочерний git получает предсказуемое санитайзенное окружение и не наследует
- * `GIT_*`/`EDITOR`/… из окружения хоста.
- * `GIT_TERMINAL_PROMPT=0` — неинтерактивность: git не ждёт ввода без askpass.
- */
-function withEnv(git: SimpleGit, env?: Record<string, string>): SimpleGit {
-  return git.env({
-    ...sanitizeGitEnv(process.env),
-    GIT_TERMINAL_PROMPT: '0',
-    // D2b: прокси/креды/no_proxy — только env (libcurl), не argv.
-    ...gitProxyEnv(),
-    ...env,
-  });
+/** Разбор `--numstat -z`: `add\tdel\tpath`, у rename путь — два NUL-поля. */
+function parseNumstatZ(raw: string): CommitFileInfo[] {
+  const files: CommitFileInfo[] = [];
+  const tokens = raw.split('\0');
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i] ?? '';
+    if (!token) continue;
+    const parts = token.split('\t');
+    if (parts.length < 2) continue;
+    const additions = parseInt(parts[0] ?? '', 10) || 0;
+    const deletions = parseInt(parts[1] ?? '', 10) || 0;
+    const path = parts.slice(2).join('\t');
+    if (!path) {
+      // Rename/copy: `add\tdel\t` + исходный путь + новый путь.
+      const newPath = tokens[i + 2] ?? '';
+      i += 2;
+      if (newPath) {
+        files.push({ path: newPath, status: 'renamed', additions, deletions });
+      }
+      continue;
+    }
+    files.push({ path, status: 'modified', additions, deletions });
+  }
+  return files;
 }
 
 export class GitService {
-  constructor(private workspacesRoot: string) {}
+  private readonly _execution: ExecutionPort | undefined;
+
+  constructor(
+    private workspacesRoot: string,
+    options: GitServiceOptions = {},
+  ) {
+    this._execution = options.execution;
+  }
 
   /** Публичный доступ к проверке containment (для роутов/тестов). */
   resolveRepoPath(workspaceAbsPath: string, repoRelPath: string): string {
     return resolveRepoPath(workspaceAbsPath, repoRelPath);
   }
 
+  /** Git-команда через порт исполнения (ADR-077) с общим окружением. */
+  private run(
+    args: string[],
+    cwd?: string,
+    opts?: GitEnvOptions,
+  ): Promise<{ stdout: string; stderr: string }> {
+    return gitExec(args, {
+      execution: this._execution,
+      cwd,
+      env: opts?.env,
+      ...(opts?.secrets && opts.secrets.length > 0 ? { secrets: opts.secrets } : {}),
+    });
+  }
+
   async isRepo(repoPath: string, opts?: GitEnvOptions): Promise<boolean> {
     try {
-      return await withEnv(createGit(repoPath), opts?.env).checkIsRepo();
+      const { stdout } = await this.run(['rev-parse', '--is-inside-work-tree'], repoPath, opts);
+      return stdout.trim() === 'true';
     } catch {
       return false;
     }
@@ -171,16 +173,24 @@ export class GitService {
   async getRepoStatus(repoAbsPath: string, opts?: GitEnvOptions): Promise<RepoStatus | null> {
     if (!(await this.isRepo(repoAbsPath, opts))) return null;
     try {
-      const g = withEnv(createGit(repoAbsPath), opts?.env);
-      const branch = await g.revparse(['--abbrev-ref', 'HEAD']);
-      const log = await g.log({ maxCount: 1 });
-      const last = log.latest;
+      const { stdout } = await this.run(
+        ['status', '--porcelain=v2', '-z', '--branch'],
+        repoAbsPath,
+        opts,
+      );
+      const { stdout: logOut } = await this.run(
+        ['log', '-1', '--format=%aI%x00%s'],
+        repoAbsPath,
+        opts,
+      );
+      const [lastCommitAt, lastCommitSubject] = logOut.split('\0');
       return {
         path: '',
         isRepo: true,
-        currentBranch: branch.trim() || undefined,
-        lastCommitAt: last ? last.date : undefined,
-        lastCommitSubject: last ? last.message.split('\n')[0] : undefined,
+        currentBranch: parseStatusBranch(stdout),
+        lastCommitAt: lastCommitAt || undefined,
+        // `git log` добавляет завершающий перевод строки — оставляем только subject.
+        lastCommitSubject: lastCommitSubject?.split('\n')[0] || undefined,
       };
     } catch {
       return null;
@@ -244,12 +254,8 @@ export class GitService {
     } catch {
       // directory might already exist
     }
-    const g = withEnv(createGit(repoPath), opts?.env);
-    if (defaultBranch) {
-      await g.init(['--initial-branch', defaultBranch]);
-    } else {
-      await g.init();
-    }
+    const args = defaultBranch ? ['init', '--initial-branch', defaultBranch] : ['init'];
+    await this.run(args, repoPath, opts);
     return {
       path: repoRelPath,
       isRepo: true,
@@ -271,25 +277,31 @@ export class GitService {
     } catch {
       // директория может уже существовать
     }
-    await withEnv(createGit(), opts?.env).clone(url, repoPath, branch ? { '--branch': branch } : undefined);
+    const args = ['clone'];
+    if (branch) args.push('--branch', branch);
+    args.push(url, repoPath);
+    // `cwd` — родительский каталог внутри workspace: в remote-режиме
+    // containment проверяет исполнитель, и абсолютный путь назначения обязан
+    // лежать в его workspace (том общий, ADR-077).
+    await this.run(args, parentDir, opts);
     return {
       path: effectivePath,
       isRepo: true,
     };
   }
 
-  /** ADR-076: fetch репозитория (при необходимости с SSH-окружением). */
+  /** ADR-076: fetch репозитория (при необходимости с SSH-доступом). */
   async fetchRepo(wsAbsPath: string, repoRelPath: string, opts?: GitFetchOptions): Promise<void> {
     const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
     await this.ensureRepo(repoPath, opts);
-    const g = withEnv(createGit(repoPath), opts?.env);
-    await (opts?.remote ? g.fetch([opts.remote]) : g.fetch());
+    const args = opts?.remote ? ['fetch', opts.remote] : ['fetch'];
+    await this.run(args, repoPath, opts);
   }
 
   /**
    * ADR-076: удаляет локальный каталог репозитория. `rm -rf` выполняется ТОЛЬКО
    * после проверки containment через `resolveRepoPath` (защита от traversal);
-   * корень workspace удалять запрещено.
+   * корень workspace удалять запрещено. Это файловая операция, не git-команда.
    */
   async removeLocal(wsAbsPath: string, repoRelPath: string): Promise<void> {
     const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
@@ -307,20 +319,42 @@ export class GitService {
   ): Promise<CommitInfo[]> {
     const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
     await this.ensureRepo(repoPath, opts);
-    const g = withEnv(createGit(repoPath), opts?.env);
-    const branch = (await g.revparse(['--abbrev-ref', 'HEAD'])).trim();
-    const log: LogResult = await g.log({ maxCount });
-    return log.all.map((entry) => ({
-      hash: entry.hash,
-      shortHash: entry.hash.slice(0, 7),
-      subject: entry.message.split('\n')[0] || '',
-      message: entry.message,
-      author: entry.author_name,
-      authorEmail: entry.author_email,
-      date: entry.date,
-      relativeDate: relativeTime(entry.date),
-      branch,
-    }));
+    const branch = (await this.run(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath, opts)).stdout.trim();
+    const { stdout } = await this.run(
+      [
+        'log',
+        '-n',
+        String(maxCount),
+        '-z',
+        '--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s',
+      ],
+      repoPath,
+      opts,
+    );
+    const tokens = stdout.split('\0');
+    // `-z` завершает каждый коммит NUL — последний токен пустой.
+    if (tokens.at(-1) === '') tokens.pop();
+    const commits: CommitInfo[] = [];
+    for (let i = 0; i + 5 < tokens.length; i += 6) {
+      const hash = tokens[i] ?? '';
+      const shortHash = tokens[i + 1] || hash.slice(0, 7);
+      const author = tokens[i + 2] ?? '';
+      const authorEmail = tokens[i + 3] ?? '';
+      const date = tokens[i + 4] ?? '';
+      const subject = tokens[i + 5] ?? '';
+      commits.push({
+        hash,
+        shortHash,
+        subject,
+        message: subject,
+        author,
+        authorEmail,
+        date,
+        relativeDate: relativeTime(date),
+        branch,
+      });
+    }
+    return commits;
   }
 
   async getCommitDetail(
@@ -331,35 +365,32 @@ export class GitService {
   ): Promise<CommitDetail> {
     const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
     await this.ensureRepo(repoPath, opts);
-    const g = withEnv(createGit(repoPath), opts?.env);
-    const branch = (await g.revparse(['--abbrev-ref', 'HEAD'])).trim();
+    const branch = (await this.run(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath, opts)).stdout.trim();
 
-    const showRaw = await g.raw(['show', '--format=%H%n%an%n%ae%n%aI%n%s%n%B%n==ENDOFCOMMIT==', '-s', '--no-patch', hash]);
-    const metaEnd = showRaw.indexOf('\n==ENDOFCOMMIT==');
-    const meta = metaEnd >= 0 ? showRaw.slice(0, metaEnd).split('\n') : showRaw.split('\n');
-    const commitHash = meta[0] || hash;
-    const author = meta[1] || '';
-    const authorEmail = meta[2] || '';
-    const date = meta[3] || '';
-    const message = meta.slice(4).join('\n');
-    const subject = message.split('\n')[0] || '';
+    const { stdout: showRaw } = await this.run(
+      ['show', '-s', '--no-patch', '--format=%H%x00%an%x00%ae%x00%aI%x00%s%x00%B', hash],
+      repoPath,
+      opts,
+    );
+    const meta = showRaw.split('\0');
+    const commitHash = (meta[0] ?? '').trim() || hash;
+    const author = meta[1] ?? '';
+    const authorEmail = meta[2] ?? '';
+    const date = meta[3] ?? '';
+    const subject = meta[4] ?? '';
+    // `%B` — полное сообщение; git добавляет завершающий перевод строки.
+    const message = (meta[5] ?? '').replace(/\n+$/, '') || subject;
 
-    const statRaw = await g.raw(['diff-tree', '--no-commit-id', '--numstat', '-r', hash]);
-    const files: CommitFileInfo[] = [];
-    if (statRaw.trim()) {
-      for (const line of statRaw.trim().split('\n')) {
-        const parts = line.split('\t');
-        if (parts.length < 3) continue;
-        files.push({
-          path: parts[2]!,
-          status: 'modified' as CommitFileInfo['status'],
-          additions: parseInt(parts[0]!, 10) || 0,
-          deletions: parseInt(parts[1]!, 10) || 0,
-        });
-      }
-    }
+    const { stdout: statRaw } = await this.run(
+      ['show', '--numstat', '-z', '--format=', hash],
+      repoPath,
+      opts,
+    );
+    const files = parseNumstatZ(statRaw);
 
-    const diff = await g.show([hash, '--patch', '--format=']);
+    const diff = (
+      await this.run(['show', hash, '--patch', '--format='], repoPath, opts)
+    ).stdout;
 
     return {
       hash: commitHash,

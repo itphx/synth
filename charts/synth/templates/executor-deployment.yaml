@@ -71,6 +71,13 @@ spec:
               value: {{ .Values.executor.limits.maxTimeoutMs | int64 | quote }}
             - name: SYNTH_EXECUTOR_MAX_OUTPUT_BYTES
               value: {{ .Values.executor.limits.maxOutputBytes | int64 | quote }}
+            {{- /* ADR-077 шаг 7d: метрики исполнителя выключены по умолчанию
+                   (`GET /metrics` → 404). env выставляется только при явном
+                   включении — дефолт образа остаётся в силе. */}}
+            {{- if .Values.executor.metrics.enabled }}
+            - name: SYNTH_EXECUTOR_METRICS_ENABLED
+              value: "true"
+            {{- end }}
             {{- /* MCP-серверы, которые исполнитель хостит у себя (ADR-077, шаг
                    B1). Пустой список → env не выставляется: действует дефолт
                    образа (у flavor'ов с браузером — Playwright MCP).
@@ -84,10 +91,29 @@ spec:
               value: {{ .servers | toJson | quote }}
             {{- end }}
             {{- end }}
+            {{- /* Доверие git у исполнителя: CA — конфигурация исполнителя
+                   (ADR-077 «Обновлено 2026-10-26», (в); ADR-099). Путь
+                   передаётся значением (файл смонтирован в /etc/synth/tls);
+                   задан, но файл не читается — исполнитель не стартует
+                   (fail-closed). */}}
+            {{- with .Values.executor.tls }}
+            {{- if .caSecret }}
+            - name: SYNTH_EXECUTOR_TLS_CA_FILE
+              value: "/etc/synth/tls/{{ .caKey }}"
+            {{- end }}
+            {{- end }}
           volumeMounts:
             {{- /* Общий том workspace: те же файлы, что у control plane. */}}
             - name: workspace
               mountPath: {{ .Values.executor.workspace.mountPath }}
+            {{- /* CA доверия git — только на чтение. */}}
+            {{- with .Values.executor.tls }}
+            {{- if .caSecret }}
+            - name: executor-tls
+              mountPath: /etc/synth/tls
+              readOnly: true
+            {{- end }}
+            {{- end }}
           {{- with .Values.executor.probes.liveness }}
           livenessProbe:
             httpGet:
@@ -116,4 +142,14 @@ spec:
         - name: workspace
           persistentVolumeClaim:
             claimName: {{ include "synth.executor.workspaceClaim" . }}
+        {{- /* CA доверия git — Secret (readonly). Значений в values нет
+               (инвариант 13): только ссылка на Secret. */}}
+        {{- with .Values.executor.tls }}
+        {{- if .caSecret }}
+        - name: executor-tls
+          secret:
+            secretName: {{ .caSecret }}
+            defaultMode: 0444
+        {{- end }}
+        {{- end }}
 {{- end }}

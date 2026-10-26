@@ -32,6 +32,11 @@ export interface SessionData {
   user_id: string | null
   owner_id: string | null
   project_id: string | null
+  /**
+   * ADR-114: привязка к worktree (рабочий каталог сессии) — null/undefined,
+   * если привязки нет.
+   */
+  worktree?: SessionWorktreeBinding | null
   /** Канонический ключ иконки сессии (PROJECT_ICON_KEYS) или null. */
   icon?: string | null
   /** Канонический ключ цвета сессии (PROJECT_COLOR_KEYS) или null. */
@@ -79,6 +84,24 @@ export interface SessionData {
   processor_running: boolean | null
   created_at: string
   updated_at: string
+}
+
+/**
+ * ADR-114: привязка сессии к git-worktree — **снимок** на момент привязки
+ * (каталог/ветка копируются из записи, чтобы резолв рабочего каталога не
+ * требовал чтения порта на каждом ходу). В ответах API — snake_case.
+ */
+export interface SessionWorktreeBinding {
+  /** Идентификатор записи worktree. */
+  worktree_id: string
+  /** Проект-владелец worktree. */
+  project_id: string
+  /** Репозиторий относительно `project.workspace` (null — корень workspace). */
+  repo_path: string | null
+  /** Абсолютный путь каталога worktree. */
+  directory: string
+  /** Ветка на момент привязки. */
+  branch: string
 }
 
 export interface StickyNoteData {

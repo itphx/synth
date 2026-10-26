@@ -1,8 +1,17 @@
 {{- /* ADR-077, шаг 7c: NetworkPolicy пула исполнителей.
        ingress — только от pod'ов control plane (тот же namespace чарта) на порт
        исполнителя; egress — по умолчанию ограничен (DNS), без открытого
-       доступа в интернет. Доп. правила — `executor.networkPolicy.allowedEgress`. */ -}}
-{{- if and .Values.executor.enabled .Values.executor.networkPolicy.enabled }}
+       доступа в интернет. Доп. правила — `executor.networkPolicy.allowedEgress`.
+       Доп. ingress-правила (скрейп `/metrics` исполнителя) —
+       `executor.networkPolicy.metricsIngress`: добавляются **в дополнение** к
+       правилу от control plane (правила одного объекта складываются union'ом).
+
+       Политика рендерится, если включён `networkPolicy.enabled` **или** задан
+       непустой `metricsIngress` (иначе значение было бы молчаливым no-op).
+       Egress-ограничения (DNS-only + allowedEgress) появляются только при
+       явном `networkPolicy.enabled: true` — само правило для скрейпа не должно
+       молча резать исходящий трафик пула. */ -}}
+{{- if and .Values.executor.enabled (or .Values.executor.networkPolicy.enabled .Values.executor.networkPolicy.metricsIngress) }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -16,7 +25,9 @@ spec:
       {{- include "synth.executor.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if .Values.executor.networkPolicy.enabled }}
     - Egress
+    {{- end }}
   ingress:
     - from:
         {{- /* Control plane (backend) в namespace чарта. */}}
@@ -26,6 +37,12 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.executor.service.targetPort }}
+    {{- /* Доп. ingress-правила (скрейп `/metrics` исполнителя) — В ДОПОЛНЕНИЕ
+           к штатному правилу от control plane, а не вместо него. */}}
+    {{- with .Values.executor.networkPolicy.metricsIngress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- if .Values.executor.networkPolicy.enabled }}
   egress:
     {{- /* DNS — без него не работает ни один egress-вызов. */}}
     - to:
@@ -40,4 +57,5 @@ spec:
     {{- with .Values.executor.networkPolicy.allowedEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
+  {{- end }}
 {{- end }}

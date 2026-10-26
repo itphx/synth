@@ -6,6 +6,7 @@ import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { usePanelSettingSave } from '@/hooks/usePanelSettingSave'
+import { useNotification } from '@/hooks/useNotification'
 import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
@@ -19,6 +20,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import { SelectContent, SelectItem } from '../ui/select'
 import { InfoField as Field, InfoSection as Section, ModelPairSelect, SelectField, SliderField } from '../ui/settings'
 import { PanelTab } from './PanelTab'
+import { useWorktreesStore } from '@/stores/worktreesStore'
 
 /** Задержка автосохранения для инпутов/слайдеров (тумблеры/селекты сохраняются сразу). */
 const AUTOSAVE_DEBOUNCE_MS = 500
@@ -775,6 +777,11 @@ export function SessionSettingsTab() {
           <SessionTodosBlock todos={session.todos} />
         </Section>
 
+        {/* ADR-114 §9: рабочий каталог сессии — каталог проекта или worktree. */}
+        <Section title={t('worktrees.session.title')}>
+          <WorktreeSelector sessionId={session.id} projectId={session.project_id} />
+        </Section>
+
         {/* ADR-069 §9.3: прозрачность проектных инструкций (AGENTS.md chain/sources) */}
         <Section title={t('sessionTab.instructions.title')}>
           <ProjectInstructions sessionId={session.id} />
@@ -1310,6 +1317,87 @@ const TODO_PRIORITY_STYLES: Record<TodoPriority, { labelKey: string; className: 
   high: { labelKey: 'sessionTab.todo.priority.high', className: 'text-status-error' },
   medium: { labelKey: 'sessionTab.todo.priority.medium', className: 'text-status-warning' },
   low: { labelKey: 'sessionTab.todo.priority.low', className: 'text-muted-foreground' },
+}
+
+/**
+ * ADR-114 §9: селектор рабочего каталога сессии — каталог проекта или один из
+ * worktree'ов проекта.
+ *
+ * Привязка меняется через `PATCH /api/v2/sessions/:id { worktreeId }` (null —
+ * снять привязку). Ответ PATCH — обновлённая сессия, стор обновляет снимок
+ * привязки (`session.worktree`), поэтому шапка сессии показывает актуальный
+ * worktree без дополнительного запроса.
+ */
+function WorktreeSelector({ sessionId, projectId }: { sessionId: string; projectId: string | null }) {
+  const { t } = useI18n()
+  const { notify } = useNotification()
+  const worktrees = useWorktreesStore((s) => (projectId ? s.byProject[projectId] : undefined))
+  const loading = useWorktreesStore((s) => Boolean(projectId && s.loadingByProject[projectId]))
+  const refresh = useWorktreesStore((s) => s.refresh)
+  const bind = useWorktreesStore((s) => s.bind)
+  const session = useSessionsStore((s) => s.sessions.find((x) => x.id === sessionId))
+  const boundId = session?.worktree?.worktree_id ?? ''
+  const { run, isPending } = usePanelSettingSave({ sessionId })
+
+  useEffect(() => {
+    if (!projectId) return
+    void refresh(projectId)
+  }, [projectId, refresh])
+
+  const handleChange = async (value: string) => {
+    await run({
+      key: 'worktree',
+      run: () => bind(sessionId, value || null),
+      // Ошибку показываем сами: в сообщении нужен текст ответа сервера.
+      silentError: true,
+      onError: (err) => {
+        notify({
+          text: t('worktrees.session.bindError', {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+          type: 'error',
+          category: 'error',
+          sessionId,
+        })
+      },
+    })
+  }
+
+  if (!projectId) {
+    return (
+      <div className="rounded-lg border border-border bg-surface-inset px-3 py-2" data-testid="session-worktrees-empty">
+        <div className="text-xs text-muted-foreground">{t('worktrees.session.empty')}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="worktrees-panel space-y-1.5" data-testid="session-worktrees">
+      <select
+        value={boundId}
+        onChange={(e) => void handleChange(e.target.value)}
+        disabled={isPending('worktree')}
+        className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+        data-testid="session-worktree-select"
+      >
+        <option value="">{t('worktrees.session.projectDir')}</option>
+        {worktrees?.map((worktree) => (
+          <option key={worktree.id} value={worktree.id}>
+            {worktree.name} · {worktree.branch}
+          </option>
+        ))}
+      </select>
+      <div className="text-[0.625rem] text-muted-foreground/60">{t('worktrees.session.hint')}</div>
+      {loading && !worktrees && (
+        <div className="text-[0.625rem] text-muted-foreground/60">{t('worktrees.loading')}</div>
+      )}
+      {worktrees && worktrees.length === 0 && (
+        <div className="text-[0.625rem] text-muted-foreground/60" data-testid="session-worktrees-empty">
+          {t('worktrees.session.empty')}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function SessionTodosBlock({ todos }: { todos?: TodoItem[] | null }) {

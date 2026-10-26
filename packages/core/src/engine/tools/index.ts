@@ -59,6 +59,13 @@ import {
 } from './schedules.js';
 // Этап 1 roadmap 0.13 (блок 16): реестр фоновых прогонов — список и лог.
 import { processListTool, processLogsTool } from './processes.js';
+// ADR-114: инвентарь git-worktree'ов проекта (per-session рабочий каталог).
+import {
+  gitWorktreeListTool,
+  gitWorktreeCreateTool,
+  gitWorktreeRemoveTool,
+  gitWorktreePruneTool,
+} from './worktree.js';
 
 export { ToolRegistry } from './registry.js';
 export { zodToJsonSchema } from './json-schema.js';
@@ -143,6 +150,11 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   // Этап 1 roadmap 0.13 (блок 16): реестр фоновых прогонов
   processListTool,
   processLogsTool,
+  // ADR-114: git worktrees
+  gitWorktreeListTool,
+  gitWorktreeCreateTool,
+  gitWorktreeRemoveTool,
+  gitWorktreePruneTool,
 ];
 
 export function createToolRegistry(): ToolRegistry {

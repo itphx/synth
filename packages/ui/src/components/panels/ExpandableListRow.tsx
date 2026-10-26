@@ -12,8 +12,17 @@ const BADGE_TONES = {
 } as const
 
 /** Бейдж строки списка (scope/level/system/untrusted/unavailable). */
-export function RowBadge({ tone, children }: { tone: keyof typeof BADGE_TONES; children: ReactNode }) {
-  return <span className={BADGE_TONES[tone]}>{children}</span>
+export function RowBadge({
+  tone,
+  children,
+  className,
+}: {
+  tone: keyof typeof BADGE_TONES
+  children: ReactNode
+  /** Дополнительные классы (например, компактный размер бейджа). */
+  className?: string
+}) {
+  return <span className={cn(BADGE_TONES[tone], className)}>{children}</span>
 }
 
 /**

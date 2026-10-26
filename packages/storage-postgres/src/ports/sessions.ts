@@ -73,8 +73,14 @@ import {
 /** Часть `StorageContext`, которой владеет группа `sessions`. */
 export type SessionPorts = Pick<StorageContext, 'sessions'>;
 
-/** Колонки `sessions` (порядок — как в `001_init`). */
-const SESSION_FIELDS = [
+/**
+ * Колонки `sessions` (порядок — как в `001_init`).
+ *
+ * Экспортируется для unit-тестов сериализации (как `MESSAGE_MUTABLE_FIELDS`):
+ * тест проверяет, что новая колонка (`worktree`, ADR-114) реально попадает в
+ * `INSERT` и читается обратно.
+ */
+export const SESSION_FIELDS = [
   'id',
   'title',
   'icon',
@@ -88,6 +94,8 @@ const SESSION_FIELDS = [
   'user_id',
   'owner_id',
   'project_id',
+  // ADR-114: привязка сессии к worktree (jsonb, миграция 023).
+  'worktree',
   'todos',
   'prompt_states',
   'obfuscation_map',
@@ -116,8 +124,11 @@ const SESSION_FIELDS = [
   'cache_hit_rate',
 ] as const;
 
-const SESSION_JSON_FIELDS: ReadonlySet<string> = new Set([
+/** jsonb-колонки `sessions` (экспортируется для unit-тестов сериализации). */
+export const SESSION_JSON_FIELDS: ReadonlySet<string> = new Set([
   'mode_by_principal',
+  // ADR-114: привязка сессии к worktree (jsonb, миграция 023).
+  'worktree',
   'todos',
   'prompt_states',
   'obfuscation_map',

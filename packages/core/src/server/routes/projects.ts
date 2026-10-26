@@ -17,6 +17,9 @@ import { serializeProject } from '../serialize.js';
 import { isRemoteRef, toLocalId, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
+import type { WorktreeService, WorktreeUpdateDetail } from '../../engine/worktree/service.js';
+import { isWorktreeError, worktreeErrorHttpStatus } from '../../engine/worktree/errors.js';
+import { worktreeCreateSchema, worktreePruneSchema } from '@itphx/synth-shared';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -98,6 +101,27 @@ export interface ProjectRoutesOptions {
   getProjectSeeds?: () => Promise<{ mcp?: ProjectMcpSettings; skills?: ProjectSkillSettings }> | { mcp?: ProjectMcpSettings; skills?: ProjectSkillSettings };
   /** Менеджер сессий. Задан — регистрируется `GET /:id/stats`. */
   sessionManager?: ProjectStatsSource;
+  /**
+   * ADR-114: сервис worktree'ов проекта.
+   *
+   * Задан — регистрируется контур `/id/worktrees*` (список/создание/удаление/
+   * prune). Не задан — роутов нет (поведение прежнее). Сервис создаётся в
+   * composition root (`server/app/deps.ts`, `backend/app/deps.ts`) и
+   * передаётся готовым: он знает корень worktree'ов, порт инвентаря и хук
+   * `onUpdated` (публикация `worktree.updated`).
+   */
+  worktrees?: WorktreeService;
+  /**
+   * ADR-114: уведомление «инвентарь worktree'ов проекта изменился».
+   *
+   * Хук сервиса (`WorktreeService.onUpdated`) уже публикует событие шины,
+   * поэтому этот колбэк — только для вызывающих, которым нужно **дополнительное**
+   * уведомление (например, инвалидация кэша UI). Не задан — ничего не вызывается.
+   *
+   * Второй аргумент — что изменилось (`WorktreeUpdateDetail`): действие и,
+   * когда известно, id записи (ADR-114 §6).
+   */
+  onWorktreeUpdated?: (projectId: string, detail: WorktreeUpdateDetail) => void;
 }
 
 /**
@@ -476,6 +500,119 @@ export function createProjectRoutes(
     await store.delete(project.id);
     return c.body(null, 204);
   });
+
+  // ADR-114: контур worktree'ов проекта (инвентарь, создание, удаление, prune).
+  // Права — по правилам проекта (инвариант 21): чтение — право чтения,
+  // мутации — право изменения содержимого (`VIEWER` читает, но не мутирует).
+  if (opts.worktrees) {
+    const worktrees = opts.worktrees;
+
+    /** Ошибка подсистемы worktree → HTTP-ответ (код + статус из карты ошибок). */
+    const worktreeError = (c: Context, err: unknown): Response => {
+      if (!isWorktreeError(err)) {
+        return c.json(
+          { error: { code: 'INTERNAL_ERROR', message: err instanceof Error ? err.message : String(err) } },
+          500,
+        );
+      }
+      const status = worktreeErrorHttpStatus(err.code);
+      // `WORKTREE_DIRTY` — нужен явный `force`: признак отдаётся в теле,
+      // чтобы UI показал подтверждение, а не «ошибку без деталей».
+      const forceRequired = err.code === 'WORKTREE_DIRTY';
+      return c.json(
+        {
+          error: {
+            code: err.code,
+            message: err.message,
+            ...(forceRequired ? { forceRequired: true } : {}),
+          },
+        },
+        status,
+      );
+    };
+
+    // Список worktree'ов проекта.
+    app.get('/:id/worktrees', auth.requireAuth, async (c) => {
+      const project = await store.load(c.req.param('id'));
+      if (!project) return jsonNotFound(c);
+      const userId = await currentUserId(c);
+      if (!canRead(c, project, userId)) return jsonForbidden(c);
+      const summaries = await worktrees.list(project.id, project);
+      return c.json({ worktrees: summaries });
+    });
+
+    // Создание worktree'а. Статический сегмент `prune` объявлен ниже, но
+    // пути различаются по методу — конфликта нет.
+    app.post('/:id/worktrees', auth.requireAuth, async (c) => {
+      const project = await store.load(c.req.param('id'));
+      if (!project) return jsonNotFound(c);
+      const userId = await currentUserId(c);
+      if (!canEditContent(c, project, userId)) return jsonForbidden(c);
+
+      const body = await c.req.json().catch(() => ({}));
+      const parsed = worktreeCreateSchema.safeParse(body);
+      if (!parsed.success) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
+      }
+
+      try {
+        const result = await worktrees.create(project.id, project, parsed.data, userId);
+        opts.onWorktreeUpdated?.(project.id, { worktreeId: result.worktree.id, action: 'created' });
+        return c.json(
+          { worktree: result.worktree, ...(result.setup ? { setup: result.setup } : {}) },
+          201,
+        );
+      } catch (err) {
+        return worktreeError(c, err);
+      }
+    });
+
+    // Prune: записи без каталога + `git worktree prune`.
+    app.post('/:id/worktrees/prune', auth.requireAuth, async (c) => {
+      const project = await store.load(c.req.param('id'));
+      if (!project) return jsonNotFound(c);
+      const userId = await currentUserId(c);
+      if (!canEditContent(c, project, userId)) return jsonForbidden(c);
+      // Тело опционально: пустое/отсутствующее — успех. Непустое — строгая
+      // схема `worktreePruneSchema` (параметров у операции нет, лишнее поле —
+      // ошибка валидации, а не молчаливое игнорирование).
+      const rawBody = await c.req.json().catch(() => undefined);
+      const bodyIsEmpty = rawBody === undefined
+        || rawBody === null
+        || (typeof rawBody === 'object' && !Array.isArray(rawBody) && Object.keys(rawBody).length === 0);
+      if (!bodyIsEmpty) {
+        const parsedPrune = worktreePruneSchema.safeParse(rawBody);
+        if (!parsedPrune.success) {
+          return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedPrune.error.message } }, 400);
+        }
+      }
+      try {
+        const result = await worktrees.prune(project.id, project);
+        if (result.recordsRemoved > 0) opts.onWorktreeUpdated?.(project.id, { action: 'pruned' });
+        return c.json({ recordsRemoved: result.recordsRemoved, gitPruned: result.gitPruned });
+      } catch (err) {
+        return worktreeError(c, err);
+      }
+    });
+
+    // Удаление worktree'а: `?force=true` — снимать и с незакоммиченными
+    // изменениями; `?force` без значения тоже трактуется как true.
+    app.delete('/:id/worktrees/:wid', auth.requireAuth, async (c) => {
+      const project = await store.load(c.req.param('id'));
+      if (!project) return jsonNotFound(c);
+      const userId = await currentUserId(c);
+      if (!canEditContent(c, project, userId)) return jsonForbidden(c);
+      const forceParam = c.req.query('force');
+      const force = forceParam === 'true' || forceParam === '1' || forceParam === '';
+      try {
+        const removed = await worktrees.remove(project.id, c.req.param('wid'), project, force ? { force: true } : {});
+        opts.onWorktreeUpdated?.(project.id, { worktreeId: removed.id, action: 'removed' });
+        return c.body(null, 204);
+      } catch (err) {
+        return worktreeError(c, err);
+      }
+    });
+  }
 
   if (opts.sessionManager) {
     const sessionManager = opts.sessionManager;

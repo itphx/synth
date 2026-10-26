@@ -283,14 +283,15 @@ describe('исполнитель: лимиты и служебные эндпо�
       os: string;
       arch: string;
       node: string;
-      features?: { background?: boolean };
+      features?: { background?: boolean; secrets?: boolean };
     };
-    expect(body.protocol).toBe(3);
+    expect(body.protocol).toBe(4);
     expect(body.toolchain.git).toBe('git version 2.39.2');
     expect(body.os.length).toBeGreaterThan(0);
     expect(body.arch.length).toBeGreaterThan(0);
     expect(body.node.length).toBeGreaterThan(0);
     expect(body.features?.background).toBe(true);
+    expect(body.features?.secrets).toBe(true);
   });
 
   it('capabilities без токена — 401', async () => {
@@ -305,6 +306,6 @@ describe('исполнитель: лимиты и служебные эндпо�
     expect(res.status).toBe(200);
     const body = (await res.json()) as { status: string; protocol: number };
     expect(body.status).toBe('ok');
-    expect(body.protocol).toBe(3);
+    expect(body.protocol).toBe(4);
   });
 });

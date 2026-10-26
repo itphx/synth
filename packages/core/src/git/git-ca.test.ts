@@ -1,34 +1,24 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as undici from 'undici';
+import { GitService } from './git-service.js';
+import type { ExecRequest, ExecutionPort } from '../execution/ports/index.js';
+import { gitCaConfig, initTlsTrust, getTlsCaPath, _resetTlsTrustForTests } from '../security/tls.js';
 
 /**
- * ADR-099: доверие CA для git передаётся **пер-вызовом** через опции инстанса
- * `simple-git` (`config: ['http.sslCAInfo=<path>']`). Env-канал
- * (`GIT_SSL_CAINFO`) недоступен: `sanitizeGitEnv` вырезает `git*`-env, а
- * `allowEnvironment`-guard отклоняет задачу.
+ * ADR-099: доверие CA для git передаётся **пер-вызовом** (`-c http.sslCAInfo=<path>`)
+ * в argv через порт исполнения (`git/exec.ts`). Env-канал (`GIT_SSL_CAINFO`)
+ * недоступен: `sanitizeGitEnv` вырезает `git*`-env.
  *
- * Тест перехватывает создание инстанса `simple-git` (сеть не нужна) и проверяет
- * ровно те опции, с которыми `GitService` его создаёт.
+ * В remote-режиме CA control plane **не** передаётся: путь принадлежит
+ * control plane, у исполнителя своя политика доверия (ADR-077/ADR-099).
+ *
+ * Тест фиксирует argv на фейковом порте — сеть не нужна.
  */
-const spy = vi.hoisted(() => ({ calls: [] as unknown[][] }));
-
-vi.mock('simple-git', () => ({
-  simpleGit: (...args: unknown[]) => {
-    spy.calls.push(args);
-    const api: Record<string, unknown> = {};
-    api.env = () => api;
-    api.checkIsRepo = async () => true;
-    return api;
-  },
-}));
-
-const { GitService } = await import('./git-service.js');
-const { gitCaConfig, initTlsTrust, getTlsCaPath, _resetTlsTrustForTests } = await import(
-  '../security/tls.js'
-);
 
 /** CA-фикстура (самоподписанный тестовый серт) — валидный PEM. */
 const CERT_PATH = join(
@@ -39,43 +29,63 @@ const CERT_PATH = join(
   'tls-test-selfsigned.pem',
 );
 
-/** Опции последнего созданного инстанса (`simpleGit(baseDir, options)` либо `(options)`). */
-function lastInstanceOptions(): Record<string, unknown> {
-  const args = spy.calls.at(-1);
-  expect(args, 'simple-git не создавался').toBeDefined();
-  return args![args!.length - 1] as Record<string, unknown>;
+/** Порт-шпион: фиксирует argv/окружение, отвечает заданным stdout. */
+class CapturingPort implements ExecutionPort {
+  readonly calls: ExecRequest[] = [];
+  readonly isRemote: boolean;
+  stdout = 'true\n';
+
+  constructor(opts: { isRemote?: boolean } = {}) {
+    this.isRemote = opts.isRemote === true;
+  }
+
+  async execute(req: ExecRequest): Promise<{
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+    truncated: boolean;
+    durationMs: number;
+  }> {
+    this.calls.push(req);
+    return { stdout: this.stdout, stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+  }
 }
 
-describe('git-CA (ADR-099): опции инстанса simple-git', () => {
-  beforeEach(() => {
+/** Аргументы последнего git-вызова. */
+function lastArgs(port: CapturingPort): string[] {
+  const command = port.calls.at(-1)?.command;
+  if (command?.kind !== 'argv') throw new Error('git-вызов не найден');
+  return command.args ?? [];
+}
+
+describe('git-CA (ADR-099): argv порта исполнения', () => {
+  let root: string;
+  let ws: string;
+
+  beforeEach(async () => {
     _resetTlsTrustForTests();
-    spy.calls.length = 0;
+    root = await mkdtemp(join(tmpdir(), 'synth-git-ca-'));
+    ws = join(root, 'ws');
+    await mkdir(ws, { recursive: true });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     _resetTlsTrustForTests();
     // Возвращаем «чистый» глобальный dispatcher (initTlsTrust ставит свой).
     undici.setGlobalDispatcher(new undici.Agent());
+    await rm(root, { recursive: true, force: true });
   });
 
-  it('без CA — опции без config: только SSH/askpass-разрешения', async () => {
+  it('без CA — argv без `-c`', async () => {
     // Продакшн-путь: initTlsTrust вызывается всегда (даже без security.tls).
     await initTlsTrust(undefined, {});
     expect(getTlsCaPath()).toBeUndefined();
     expect(gitCaConfig()).toEqual([]);
 
-    await new GitService('/ws').isRepo('/ws/repo');
+    const port = new CapturingPort();
+    await new GitService(root, { execution: port }).isRepo(ws);
 
-    const opts = lastInstanceOptions();
-    expect(opts.config).toBeUndefined();
-    // GIT_UNSAFE_OPTIONS не сломаны.
-    expect(opts.unsafe).toEqual({ allowUnsafeSshCommand: true, allowUnsafeAskPass: true });
-    expect(opts.allowEnvironment).toEqual([
-      'GIT_TERMINAL_PROMPT',
-      'GIT_SSH_COMMAND',
-      'SSH_ASKPASS',
-      'SSH_ASKPASS_REQUIRE',
-    ]);
+    expect(lastArgs(port)).toEqual(['rev-parse', '--is-inside-work-tree']);
   });
 
   it('caPem (PEM без файла) git-каналу недоступен — CA не подставляется', async () => {
@@ -83,37 +93,49 @@ describe('git-CA (ADR-099): опции инстанса simple-git', () => {
     expect(getTlsCaPath()).toBeUndefined();
     expect(gitCaConfig()).toEqual([]);
 
-    await new GitService('/ws').isRepo('/ws/repo');
-    expect(lastInstanceOptions().config).toBeUndefined();
+    const port = new CapturingPort();
+    await new GitService(root, { execution: port }).isRepo(ws);
+    expect(lastArgs(port)).not.toContain('-c');
   });
 
-  it('с security.tls.caFile — в опции попадает http.sslCAInfo=<path>', async () => {
+  it('с security.tls.caFile — в argv попадает `-c http.sslCAInfo=<path>`', async () => {
     await initTlsTrust({ security: { tls: { caFile: CERT_PATH } } }, {});
 
     expect(getTlsCaPath()).toBe(CERT_PATH);
     expect(gitCaConfig()).toEqual([`http.sslCAInfo=${CERT_PATH}`]);
 
-    await new GitService('/ws').isRepo('/ws/repo');
+    const port = new CapturingPort();
+    await new GitService(root, { execution: port }).isRepo(ws);
 
-    const opts = lastInstanceOptions();
-    expect(opts.config).toEqual([`http.sslCAInfo=${CERT_PATH}`]);
-    // Разрешения SSH/askpass сохранены вместе с config.
-    expect(opts.unsafe).toEqual({ allowUnsafeSshCommand: true, allowUnsafeAskPass: true });
-    expect(opts.allowEnvironment).toContain('GIT_SSH_COMMAND');
+    expect(lastArgs(port)).toEqual([
+      '-c',
+      `http.sslCAInfo=${CERT_PATH}`,
+      'rev-parse',
+      '--is-inside-work-tree',
+    ]);
   });
 
-  it('инстанс без baseDir (clone) тоже получает CA', async () => {
+  it('clone получает CA пер-вызовом', async () => {
     await initTlsTrust({ security: { tls: { caFile: CERT_PATH } } }, {});
-    const service = new GitService('/ws');
-    // cloneRepo создаёт инстанс без baseDir (`createGit()`).
-    spy.calls.length = 0;
+    const port = new CapturingPort();
+
     try {
-      await service.cloneRepo('/ws', 'repos/x', 'https://example.invalid/x.git');
+      await new GitService(root, { execution: port }).cloneRepo(ws, 'repos/x', 'https://example.invalid/x.git');
     } catch {
-      // git-вызов мокнут — важны только опции инстанса.
+      // git-вызов не выполняется — важен только argv.
     }
-    const args = spy.calls.at(-1)!;
-    expect(args.length).toBe(1); // только options (без baseDir)
-    expect((args[0] as Record<string, unknown>).config).toEqual([`http.sslCAInfo=${CERT_PATH}`]);
+
+    const args = lastArgs(port);
+    expect(args.slice(0, 2)).toEqual(['-c', `http.sslCAInfo=${CERT_PATH}`]);
+    expect(args[2]).toBe('clone');
+  });
+
+  it('remote-порт: CA control plane в argv не передаётся', async () => {
+    await initTlsTrust({ security: { tls: { caFile: CERT_PATH } } }, {});
+    const port = new CapturingPort({ isRemote: true });
+    await new GitService(root, { execution: port }).isRepo(ws);
+
+    expect(lastArgs(port)).toEqual(['rev-parse', '--is-inside-work-tree']);
+    expect(lastArgs(port)).not.toContain('-c');
   });
 });

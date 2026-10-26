@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileStore } from './file-store.js';
@@ -206,6 +206,63 @@ describe('FileStore', () => {
     expect(loaded!.messages[0]!.content).toBe('legacy answer');
     expect(loaded!.messages[0]!.qa_pass).toBeUndefined();
     expect(loaded!.messages[0]!.qa_reason).toBeUndefined();
+  });
+
+  it('ADR-114: save → load сохраняет привязку к worktree (переживает рестарт)', async () => {
+    const session = makeSession({
+      id: 'with-worktree',
+      worktree: {
+        worktreeId: 'wkt_1',
+        projectId: 'proj-1',
+        repoPath: 'repo',
+        directory: '/workspaces/.worktrees/proj-1/feature-x',
+        branch: 'feature/x',
+      },
+    });
+    await store.save(session);
+
+    // На диске — snake_case (как соседние составные поля записи сессии).
+    const raw = JSON.parse(await readFile(join(tmpDir, 'sessions', 'with-worktree.json'), 'utf-8'));
+    expect(raw.worktree).toEqual({
+      worktree_id: 'wkt_1',
+      project_id: 'proj-1',
+      repo_path: 'repo',
+      directory: '/workspaces/.worktrees/proj-1/feature-x',
+      branch: 'feature/x',
+    });
+
+    const loaded = await store.load('with-worktree');
+    expect(loaded!.worktree).toEqual({
+      worktreeId: 'wkt_1',
+      projectId: 'proj-1',
+      repoPath: 'repo',
+      directory: '/workspaces/.worktrees/proj-1/feature-x',
+      branch: 'feature/x',
+    });
+  });
+
+  it('ADR-114: сессия без привязки читается как прежде (поле отсутствует)', async () => {
+    await store.save(makeSession({ id: 'no-worktree' }));
+
+    const raw = JSON.parse(await readFile(join(tmpDir, 'sessions', 'no-worktree.json'), 'utf-8'));
+    expect('worktree' in raw).toBe(false);
+
+    const loaded = await store.load('no-worktree');
+    expect(loaded).not.toBeNull();
+    expect(loaded!.worktree).toBeUndefined();
+  });
+
+  it('ADR-114: частичная привязка (без worktree_id/directory) игнорируется', async () => {
+    await store.save(makeSession({ id: 'partial-worktree' }));
+
+    // Ручная запись в JSON-файл: привязка без обязательных полей.
+    const path = join(tmpDir, 'sessions', 'partial-worktree.json');
+    const raw = JSON.parse(await readFile(path, 'utf-8'));
+    raw.worktree = { project_id: 'proj-1', branch: 'main' };
+    await writeFile(path, JSON.stringify(raw), 'utf-8');
+
+    const loaded = await store.load('partial-worktree');
+    expect(loaded!.worktree).toBeUndefined();
   });
 
   it('load несуществующей сессии возвращает null', async () => {

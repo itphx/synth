@@ -25,6 +25,7 @@ import {
   type Part,
   type Session,
   type SessionReference,
+  type SessionWorktree,
   type StickyNote,
   buildContentFromParts,
   generateId,
@@ -51,6 +52,11 @@ export interface SessionRow {
   user_id: string | null;
   owner_id: string | null;
   project_id: string | null;
+  /**
+   * ADR-114: привязка сессии к worktree (jsonb). В записях, созданных до
+   * миграции `023`, поля нет — чтение даёт `undefined`.
+   */
+  worktree?: unknown;
   todos: unknown;
   prompt_states: unknown;
   obfuscation_map: unknown;
@@ -425,6 +431,16 @@ export function serializeSession(session: Session): Record<string, unknown> {
     user_id: session.userId ?? null,
     owner_id: session.ownerId ?? null,
     project_id: session.projectId ?? null,
+    // ADR-114: привязка к worktree (объект в snake_case — как в JSON-файле).
+    worktree: session.worktree
+      ? {
+          worktree_id: session.worktree.worktreeId,
+          project_id: session.worktree.projectId,
+          ...(session.worktree.repoPath !== undefined ? { repo_path: session.worktree.repoPath } : {}),
+          directory: session.worktree.directory,
+          branch: session.worktree.branch,
+        }
+      : null,
     todos: session.todos ?? null,
     prompt_states: session.promptStates ?? null,
     obfuscation_map: session.obfuscationMap ?? null,
@@ -540,6 +556,34 @@ export function deserializeStickyNote(row: StickyNoteRow): StickyNote {
 }
 
 /**
+ * ADR-114: привязка сессии к worktree из jsonb-колонки `sessions.worktree`.
+ *
+ * Терпима к отсутствию поля (записи до миграции `023`) и к частичным
+ * значениям: привязка без `worktree_id`/`directory` бессмысленна — она
+ * игнорируется, сессия работает как прежде.
+ */
+export function deserializeSessionWorktree(data: unknown): SessionWorktree | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const raw = data as {
+    worktree_id?: unknown;
+    project_id?: unknown;
+    repo_path?: unknown;
+    directory?: unknown;
+    branch?: unknown;
+  };
+  const worktreeId = typeof raw.worktree_id === 'string' ? raw.worktree_id : '';
+  const directory = typeof raw.directory === 'string' ? raw.directory : '';
+  if (!worktreeId || !directory) return undefined;
+  return {
+    worktreeId,
+    projectId: typeof raw.project_id === 'string' ? raw.project_id : '',
+    ...(typeof raw.repo_path === 'string' ? { repoPath: raw.repo_path } : {}),
+    directory,
+    branch: typeof raw.branch === 'string' ? raw.branch : '',
+  };
+}
+
+/**
  * Строка `sessions` + child-данные → доменная сессия: дословный
  * `deserializeSession` файловой реализации (нормализация иконки/цвета,
  * `sessionOrigin || 'user'`, числовые/булевы дефолты, сборка
@@ -550,6 +594,8 @@ export function deserializeSession(
   children: SessionChildren,
 ): Session {
   const currentStream = row.current_stream as Record<string, unknown> | null | undefined;
+  // ADR-114: привязка к worktree (legacy-записи без поля → undefined).
+  const worktree = deserializeSessionWorktree(row.worktree);
 
   return {
     id: row.id,
@@ -571,6 +617,8 @@ export function deserializeSession(
     userId: row.user_id ?? undefined,
     ownerId: row.owner_id ?? undefined,
     projectId: row.project_id ?? undefined,
+    // ADR-114: привязка к worktree (legacy-записи без поля → undefined).
+    ...(worktree ? { worktree } : {}),
     messages: children.messages.map(deserializeMessage),
     pendingMessages: ((row.pending_messages as MessageRow[] | null) ?? []).map(deserializeMessage),
     steerInbox: ((row.steer_inbox as MessageRow[] | null) ?? []).map(deserializeMessage),

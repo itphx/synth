@@ -8,8 +8,10 @@ import { useNotification } from '@/hooks/useNotification'
 import { usePanelSettingSave } from '@/hooks/usePanelSettingSave'
 import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type ProjectData, type ProjectMcpResponse, type ProjectSkillsResponse, type EffectiveSkillEntry } from '@/lib/api/synthApi'
+import type { WorktreeSummary } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '@/components/ui/Toggle'
+import { Button } from '@/components/ui/button'
 import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
 import { useEntityEditStore } from '@/stores/entityEditStore'
 import { InfoField as Field, InfoSection as Section } from '@/components/ui/settings'
@@ -18,6 +20,8 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { CreateProjectPopover } from '@/components/panels/CreateProjectPopover'
 import { ExpandableListRow, RowBadge } from '@/components/panels/ExpandableListRow'
 import { PanelTab } from './PanelTab'
+import { useWorktreesStore } from '@/stores/worktreesStore'
+import { confirm } from '@/lib/confirm'
 import type { ProjectPlan, McpRegistryEntry } from '@itphx/synth-shared'
 
 export function ProjectTab() {
@@ -460,6 +464,13 @@ export function ProjectTab() {
         onSelect={(path) => setWorkspaceDraft(path)}
       />
 
+      {/* ADR-114 §9: инвентарь worktree'ов проекта (per-session рабочий каталог). */}
+      {project && session && (
+        <Section title={t('worktrees.title')}>
+          <WorktreesBlock projectId={project.id} sessionId={session.id} />
+        </Section>
+      )}
+
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={(next) => {
@@ -519,6 +530,300 @@ export function ProjectTab() {
         <ProjectLogBlock project={project} />
       </Section>
     </PanelTab>
+  )
+}
+
+/** Текст ошибки из неизвестного исключения. */
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+/**
+ * Нужен ли явный `force` для удаления: сервер отдаёт `409 WORKTREE_DIRTY` с
+ * `error.forceRequired = true` (ADR-114 §7.2) — молча снести незакоммиченные
+ * изменения нельзя, поэтому UI показывает второй шаг подтверждения.
+ */
+function isForceRequired(err: unknown): boolean {
+  const e = err as { forceRequired?: unknown; code?: unknown } | null
+  return e?.forceRequired === true || e?.code === 'WORKTREE_DIRTY'
+}
+
+/**
+ * ADR-114 §9: инвентарь worktree'ов проекта — список записей с действиями
+ * (создать/привязать/удалить/очистить).
+ *
+ * Источник истины — сервер (`GET /api/v2/projects/:id/worktrees`), live-обновление
+ * — событие `worktree.updated` (стор `stores/worktreesStore.ts`). Привязка
+ * сессии — `PATCH /api/v2/sessions/:id { worktreeId }`.
+ */
+function WorktreesBlock({ projectId, sessionId }: { projectId: string; sessionId: string }) {
+  const { t } = useI18n()
+  const { notify } = useNotification()
+
+  const worktrees = useWorktreesStore((s) => s.byProject[projectId])
+  const loading = useWorktreesStore((s) => Boolean(s.loadingByProject[projectId]))
+  const error = useWorktreesStore((s) => s.error)
+  const refresh = useWorktreesStore((s) => s.refresh)
+  const createWorktree = useWorktreesStore((s) => s.create)
+  const removeWorktree = useWorktreesStore((s) => s.remove)
+  const pruneWorktrees = useWorktreesStore((s) => s.prune)
+  const bindWorktree = useWorktreesStore((s) => s.bind)
+
+  const sessions = useSessionsStore((s) => s.sessions)
+  const currentSession = sessions.find((s) => s.id === sessionId)
+  const boundWorktreeId = currentSession?.worktree?.worktree_id ?? null
+  const sessionName = (id: string) => sessions.find((s) => s.id === id)?.name || id
+
+  const [formOpen, setFormOpen] = useState(false)
+  const [branch, setBranch] = useState('')
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!projectId) return
+    void refresh(projectId)
+  }, [projectId, refresh])
+
+  const handleCreate = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await createWorktree(projectId, {
+        ...(branch.trim() ? { branch: branch.trim() } : {}),
+        ...(name.trim() ? { name: name.trim() } : {}),
+      })
+      setBranch('')
+      setName('')
+      setFormOpen(false)
+      notify({ text: t('worktrees.created'), type: 'success', category: 'system', sessionId })
+    } catch (err) {
+      notify({ text: t('worktrees.createError', { error: errorText(err) }), type: 'error', category: 'error', sessionId })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** Удаление worktree: подтверждение → (при `forceRequired`) второй шаг → повтор с `force`. */
+  const handleRemove = async (worktree: WorktreeSummary) => {
+    const ok = await confirm({
+      title: t('worktrees.confirm.removeTitle'),
+      message: t('worktrees.confirm.removeMessage', { name: worktree.name }),
+      variant: 'danger',
+    })
+    if (!ok) return
+    try {
+      await removeWorktree(projectId, worktree.id)
+      notify({ text: t('worktrees.removed'), type: 'success', category: 'system', sessionId })
+      return
+    } catch (err) {
+      if (!isForceRequired(err)) {
+        notify({ text: t('worktrees.removeError', { error: errorText(err) }), type: 'error', category: 'error', sessionId })
+        return
+      }
+    }
+    // Второй шаг: в worktree есть незакоммиченные изменения — удаление снимет
+    // их вместе с каталогом (ADR-114 §7.2). Без явного подтверждения — отказ.
+    const forced = await confirm({
+      title: t('worktrees.confirm.forceTitle'),
+      message: t('worktrees.confirm.forceMessage', { name: worktree.name }),
+      variant: 'danger',
+    })
+    if (!forced) return
+    try {
+      await removeWorktree(projectId, worktree.id, { force: true })
+      notify({ text: t('worktrees.removed'), type: 'success', category: 'system', sessionId })
+    } catch (err) {
+      notify({ text: t('worktrees.removeError', { error: errorText(err) }), type: 'error', category: 'error', sessionId })
+    }
+  }
+
+  const handlePrune = async () => {
+    const ok = await confirm({
+      title: t('worktrees.confirm.pruneTitle'),
+      message: t('worktrees.confirm.pruneMessage'),
+      variant: 'warning',
+    })
+    if (!ok) return
+    try {
+      const result = await pruneWorktrees(projectId)
+      notify({
+        text: t('worktrees.pruned', { count: String(result.recordsRemoved) }),
+        type: 'success',
+        category: 'system',
+        sessionId,
+      })
+    } catch (err) {
+      notify({ text: t('worktrees.pruneError', { error: errorText(err) }), type: 'error', category: 'error', sessionId })
+    }
+  }
+
+  const handleAttach = async (worktree: WorktreeSummary) => {
+    try {
+      await bindWorktree(sessionId, worktree.id)
+      notify({ text: t('worktrees.session.bound', { name: worktree.name }), type: 'success', category: 'system', sessionId })
+    } catch (err) {
+      notify({ text: t('worktrees.session.bindError', { error: errorText(err) }), type: 'error', category: 'error', sessionId })
+    }
+  }
+
+  const handleDetach = async () => {
+    try {
+      await bindWorktree(sessionId, null)
+      notify({ text: t('worktrees.session.projectDir'), type: 'success', category: 'system', sessionId })
+    } catch (err) {
+      notify({ text: t('worktrees.session.bindError', { error: errorText(err) }), type: 'error', category: 'error', sessionId })
+    }
+  }
+
+  return (
+    <div className="worktrees-panel space-y-2" data-testid="project-worktrees">
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-[0.625rem] text-muted-foreground/60">{t('worktrees.description')}</div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setFormOpen((v) => !v)}
+            data-testid="worktrees-create-toggle"
+          >
+            {t('worktrees.create')}
+          </Button>
+          <Button
+            variant="outline-muted"
+            size="sm"
+            onClick={() => void handlePrune()}
+            disabled={busy}
+            data-testid="worktrees-prune"
+          >
+            {t('worktrees.action.prune')}
+          </Button>
+        </div>
+      </div>
+
+      {formOpen && (
+        <div className="space-y-2 rounded-lg border border-border bg-surface-inset px-3 py-2" data-testid="worktrees-create-form">
+          <input
+            type="text"
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            placeholder={t('worktrees.form.branchPlaceholder')}
+            aria-label={t('worktrees.form.branch')}
+            className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            data-testid="worktrees-branch-input"
+          />
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={t('worktrees.form.namePlaceholder')}
+            aria-label={t('worktrees.form.name')}
+            className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            data-testid="worktrees-name-input"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[0.625rem] text-muted-foreground/60">{t('worktrees.form.hint')}</span>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => void handleCreate()}
+              disabled={busy}
+              data-testid="worktrees-create-submit"
+            >
+              {t('worktrees.create')}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {loading && !worktrees && (
+        <div className="text-xs text-muted-foreground" data-testid="worktrees-loading">
+          {t('worktrees.loading')}
+        </div>
+      )}
+
+      {error && (
+        <div className="text-xs text-destructive" data-testid="worktrees-error">
+          {t('worktrees.loadError', { error })}
+        </div>
+      )}
+
+      {worktrees && worktrees.length === 0 && (
+        <div className="rounded-lg border border-border bg-surface-inset px-3 py-2" data-testid="worktrees-empty">
+          <div className="text-xs text-muted-foreground">{t('worktrees.empty')}</div>
+          <div className="mt-0.5 text-[0.625rem] text-muted-foreground/60">{t('worktrees.emptyHint')}</div>
+        </div>
+      )}
+
+      {worktrees && worktrees.length > 0 && (
+        <div className="flex flex-col gap-1.5" data-testid="worktrees-list">
+          {worktrees.map((worktree) => (
+            <ExpandableListRow
+              key={worktree.id}
+              testId={`worktree-${worktree.id}`}
+              name={worktree.name}
+              badges={
+                <>
+                  <span className="min-w-0 truncate font-mono text-[0.625rem] text-muted-foreground">
+                    {worktree.branch}
+                  </span>
+                  {worktree.dirty && (
+                    <RowBadge tone="danger" className="worktree-badge">
+                      {t('worktrees.badge.dirty')}
+                    </RowBadge>
+                  )}
+                  {worktree.exists === false && (
+                    <RowBadge tone="muted" className="worktree-badge">
+                      {t('worktrees.badge.missing')}
+                    </RowBadge>
+                  )}
+                  {worktree.attachedSessionId && (
+                    <RowBadge tone="primary" className="worktree-badge">
+                      {t('worktrees.badge.attached')}
+                    </RowBadge>
+                  )}
+                </>
+              }
+              aside={
+                <>
+                  {boundWorktreeId === worktree.id ? (
+                    <Button
+                      variant="outline-muted"
+                      size="sm"
+                      onClick={() => void handleDetach()}
+                      data-testid={`worktree-${worktree.id}-detach`}
+                    >
+                      {t('worktrees.action.detach')}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleAttach(worktree)}
+                      data-testid={`worktree-${worktree.id}-attach`}
+                    >
+                      {t('worktrees.action.attach')}
+                    </Button>
+                  )}
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => void handleRemove(worktree)}
+                    data-testid={`worktree-${worktree.id}-remove`}
+                  >
+                    {t('worktrees.action.remove')}
+                  </Button>
+                </>
+              }
+              details={
+                worktree.attachedSessionId
+                  ? t('worktrees.row.session', { name: sessionName(worktree.attachedSessionId) })
+                  : undefined
+              }
+            />
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

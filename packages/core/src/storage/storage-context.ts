@@ -68,6 +68,7 @@ import type {
   SSHKeyRepository,
   WebhookDeliveryRepository,
   WebhookRepository,
+  WorktreeRepository,
 } from './ports/index.js';
 
 // ── Файловые реализации ────────────────────────────────────────────────
@@ -124,6 +125,8 @@ import { FileMemoryIndexStore } from './file-memory-index-store.js';
 // фоновых прогонов (блок 1.2).
 import { FileQuestionStore } from './file-question-store.js';
 import { FileBackgroundRunStore } from './file-background-run-store.js';
+// Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
+import { FileWorktreeStore } from './file-worktree-store.js';
 import { ContextConfig } from '../engine/context/config.js';
 import { SSHKeyStore } from './ssh-key-store.js';
 import { FileBlobStore } from './file-blob-store.js';
@@ -177,6 +180,7 @@ import {
   MemoryWebhookDeliveryRepository,
   MemoryWebhookRepository,
   MemoryDedupRepository,
+  MemoryWorktreeRepository,
 } from './memory/index.js';
 
 /** Физический backend хранения (`storage.backend` в конфиге). */
@@ -421,6 +425,13 @@ export interface StorageContext {
    * PostgreSQL (`background_runs`, миграция 021).
    */
   backgroundRuns: BackgroundRunRepository;
+  /**
+   * Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов — per-session
+   * рабочий каталог (ADR-114). Реализовано файловым
+   * (`{dataDir}/worktrees.json`), in-memory и драйвером PostgreSQL
+   * (`documents`, `kind='worktree'` — без новой миграции).
+   */
+  worktrees: WorktreeRepository;
 }
 
 /** Параметры сборки слоя хранения (общие для file/memory). */
@@ -685,6 +696,9 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     // реестр фоновых прогонов (`processes/registry.json`).
     questions: new FileQuestionStore({ dataDir }),
     backgroundRuns: new FileBackgroundRunStore({ dataDir }),
+    // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree'ов
+    // (`worktrees.json`).
+    worktrees: new FileWorktreeStore({ dataDir }),
   };
 }
 
@@ -746,6 +760,8 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     // прогонов.
     questions: new MemoryQuestionRepository(),
     backgroundRuns: new MemoryBackgroundRunRepository(),
+    // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree'ов.
+    worktrees: new MemoryWorktreeRepository(),
   };
 }
 

@@ -371,6 +371,31 @@ export const SYSTEM_MESSAGES = {
   'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
   'git.repo_exists': 'Repository already exists at "{path}"',
 
+  // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
+  'worktree.directory_missing':
+    'The working directory of the linked git worktree "{path}" does not exist. '
+    + 'The worktree was probably deleted — the session cannot continue in another directory.',
+  'worktree.tool.deps_unavailable':
+    'Error: the git worktree service is not available in this instance',
+  'worktree.tool.no_project':
+    'Error: the session has no project — git worktree operations require a project',
+  'worktree.tool.list_empty': 'The project has no git worktrees',
+  'worktree.tool.list_header': 'Git worktrees of the project ({count}):',
+  'worktree.tool.list_row':
+    'name: {name} | branch: {branch} | directory: {directory} | dirty: {dirty} | attached session: {attached} | exists: {exists}',
+  'worktree.tool.created':
+    'Git worktree "{name}" created on branch "{branch}" (directory: {directory}, id: {worktree_id}). '
+    + 'It is not attached to any session yet — bind it with PATCH /api/v2/sessions/<sessionId> '
+    + 'and the "worktreeId" field, or let the user attach it in the UI.',
+  'worktree.tool.removed': 'Git worktree "{name}" removed',
+  'worktree.tool.pruned':
+    'Pruned git worktrees: {records} stale record(s) removed, git metadata pruned: {git_pruned}',
+  'worktree.tool.force_required':
+    'Error: git worktree "{name}" has uncommitted changes — repeat the call with force: true to remove it anyway',
+  'worktree.tool.busy':
+    'Error: git worktree "{name}" is attached to a live session ({session}) — detach the session first',
+  'worktree.tool.not_found': 'Error: git worktree "{id}" not found',
+
   // --- Внешние события и хуки (ADR-030 / ADR-089) ---
   'event.ingested': 'Event {id} ingested from source "{source}"',
   'event.routed.bound': 'Event routed to bound session {sessionId}',

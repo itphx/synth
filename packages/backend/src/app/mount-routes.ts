@@ -130,7 +130,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   app.get('/api/v2/openapi.json', auth.requireAuth, (c) => c.json(getPublicOpenApiDocument()));
 
   // Projects routes
-  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore));
+  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService));
 
   // ADR-091 (этап 2): портативный экспорт/импорт проекта (скачать/загрузить архив).
   // Managed RBAC: скачивание — право чтения проекта (owner/участник/LEAD/ADMIN),
@@ -200,6 +200,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
     // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
     deps.questionService,
+    // ADR-114: сервис worktree'ов — привязка сессии к worktree
+    // (`PATCH /api/v2/sessions/:id { worktreeId }`).
+    deps.worktreeService,
   ));
 
   // Messages routes
@@ -266,6 +269,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // читал бы git-данные чужого проекта по его id.
   app.route('/api/v2/git', createGitRoutes(auth, projectStore, config.workspacesRoot, {
     sshKeyStore,
+    execution: deps.executionPort,
     authorizeProject: async (c, projectId) => {
       const user = await auth.getCurrentUser(c);
       if (!user) return false;

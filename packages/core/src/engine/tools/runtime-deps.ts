@@ -88,6 +88,12 @@ export const TOOL_RUNTIME_DEP: Record<string, RuntimeDependency> = {
   git_show: 'git',
   git_blame: 'git',
   git_stash: 'git',
+  // ADR-114: тулы инвентаря git-worktree'ов — git тоже нужен
+  // (`git worktree add/remove/prune`).
+  git_worktree_list: 'git',
+  git_worktree_create: 'git',
+  git_worktree_remove: 'git',
+  git_worktree_prune: 'git',
 };
 
 /** Fail-open дефолт: все зависимости считаются доступными. */

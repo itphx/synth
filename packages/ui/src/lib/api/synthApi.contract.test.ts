@@ -10,13 +10,13 @@ import { synthApi } from './synthApi'
  */
 const EXPECTED_API_METHODS = [
   'addMcpRegistryEntry', 'addSessionReference', 'addStickyNote', 'answer', 'applyMigrations', 'approvePack', 'approvePlugin', 'auditRevealed',
-  'backupDownloadUrl', 'batchMessages', 'bindOAuthCredential', 'browseWorkspaceRoot', 'cancel', 'cancelPipelineRun', 'cancelQueueRetry', 'cancelRestore',
+  'backupDownloadUrl', 'batchMessages', 'bindOAuthCredential', 'bindWorktree', 'browseWorkspaceRoot', 'cancel', 'cancelPipelineRun', 'cancelQueueRetry', 'cancelRestore',
   'cancelSummarization', 'checkEgress', 'checkProxy',
   'checkUpdate', 'claimIdentity', 'clearAudit', 'clearProfilePassword', 'clearProxyPassword', 'clearQueue', 'clearSession',
   'clearWorkspacePolicy', 'cloneGitRepo', 'consolidateMemory', 'createAgentSshKey', 'createBackup', 'createDirectory',
   'createEventBindingKey', 'createEventRoute', 'createMemoryIndex', 'createOAuthCredential', 'createProject', 'createProjectPipeline', 'createProvider',
   'createSchedule', 'createServiceKey', 'createSession', 'createSkill',
-  'createSkillBundle', 'createSshKey', 'createTlsMapping', 'createUser', 'createWebhookSubscription',
+  'createSkillBundle', 'createSshKey', 'createTlsMapping', 'createUser', 'createWebhookSubscription', 'createWorktree',
   'deleteAgent', 'deleteBackup', 'deleteContextFile', 'deleteEntry', 'deleteEventBinding',
   'deleteEventBindingKey', 'deleteEventRoute', 'deleteMcpRegistryEntry', 'deleteMemoryIndex', 'deleteMessage',
   'deleteModel', 'deleteMyIdentity', 'deleteOAuthCredential', 'deleteProject', 'deleteProjectPipeline', 'deleteProvider',
@@ -50,10 +50,10 @@ const EXPECTED_API_METHODS = [
   'getWebhookSubscriptions', 'getWorkspacePolicy', 'getWorkspaceRoot', 'getWorkspaceSetting',
   'initGitRepo', 'installPlugin', 'instantiatePipelineTemplate', 'list', 'listAgentSshKeys', 'listAudit', 'listBackups', 'listDirectory', 'listEventBindings',
   'listMemoryFacts', 'listMemoryIndexes',
-  'listPipelineRuns', 'listPluginAudit', 'listPlugins', 'listProcesses', 'listSshKeys', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
-  'patchSessionMode', 'pinMessage', 'probeMcpServer', 'publishProject', 'publishProjectPipeline',
+  'listPipelineRuns', 'listPluginAudit', 'listPlugins', 'listProcesses', 'listSshKeys', 'listWorktrees', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
+  'patchSessionMode', 'pinMessage', 'probeMcpServer', 'pruneWorktrees', 'publishProject', 'publishProjectPipeline',
   'putSkillFile', 'readFile', 'rebuildMemoryIndex', 'refreshOAuthCredential', 'regenerateWebhookSecret', 'registerGitRepo',
-  'reloadSkills', 'removeCa', 'removeDefaultClient', 'removeGitRepo', 'removePlugin', 'removeProcess', 'removeProfileCa', 'removeProfileClient', 'removeSessionReference', 'reset', 'resetContextFile',
+  'reloadSkills', 'removeCa', 'removeDefaultClient', 'removeGitRepo', 'removePlugin', 'removeProcess', 'removeProfileCa', 'removeProfileClient', 'removeSessionReference', 'removeWorktree', 'reset', 'resetContextFile',
   'resetDecisionMetrics', 'resetDecisionSettings', 'resetDefaultAgent', 'resetDefaultModel', 'resetDictionary',
   'resetEgressPolicy', 'resetEventsSettings', 'resetGatewayPatterns', 'resetLlmGatewaySettings', 'resetMcpNetworkPolicy',
   'resetMcpPolicy', 'resetMcpSettings', 'resetPluginsSettings', 'resetProtectedPaths', 'resetProxy', 'resetSkillsSettings',
@@ -76,7 +76,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (342)', () => {
+  it('набор методов совпадает с зафиксированным (347)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

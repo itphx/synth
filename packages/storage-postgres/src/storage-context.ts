@@ -23,7 +23,9 @@
  *   - `buildMemoryPorts(deps)`     → `memoryFacts`/`memoryIndexes` (PROP-047 §2.1);
  *   - `buildQuestionPorts(deps)`   → `questions` (этап 1 roadmap 0.13, блок 1.3);
  *   - `buildBackgroundRunPorts(deps)` → `backgroundRuns` (этап 1 roadmap 0.13,
- *     блок 1.2 — фоновые саб-агенты и шелл-процессы).
+ *     блок 1.2 — фоновые саб-агенты и шелл-процессы);
+ *   - `buildWorktreePorts(deps)`   → `worktrees` (ADR-114 — инвентарь
+ *     git-worktree'ов; generic-таблица `documents`, `kind='worktree'`).
  *
  * Все доменные порты реализованы поверх SQL; FS/package-bound порты (`skills`,
  * `contextFiles`, `blobs`) — **файловые реализации** core (контент скиллов/
@@ -57,6 +59,7 @@ import { buildEventPorts } from './ports/events.js';
 import { buildPipelinePorts } from './ports/pipelines.js';
 import { buildQuestionPorts } from './ports/questions.js';
 import { buildBackgroundRunPorts } from './ports/background-runs.js';
+import { buildWorktreePorts } from './ports/worktrees.js';
 import { buildPluginLockPorts } from './ports/plugin-lock.js';
 import { buildPrincipalPorts } from './ports/principals.js';
 import { buildSessionPorts } from './ports/sessions.js';
@@ -194,6 +197,9 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // реестр фоновых прогонов (таблица `background_runs`) — миграция 021.
     ...buildQuestionPorts(deps),
     ...buildBackgroundRunPorts(deps),
+    // ADR-114: инвентарь git-worktree'ов — generic-таблица `documents`
+    // (`kind='worktree'`), без новой миграции.
+    ...buildWorktreePorts(deps),
     // FS/package-bound порты: остаются файловыми (см. шапку модуля).
     skills: file.skills,
     contextFiles: file.contextFiles,

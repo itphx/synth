@@ -45,6 +45,7 @@ import {
   describeSSHKeyRepository,
   describeWebhookDeliveryRepository,
   describeWebhookRepository,
+  describeWorktreeRepository,
 } from './index.js';
 import {
   MemoryAnalyticsRollupRepository,
@@ -91,6 +92,7 @@ import {
   MemorySSHKeyRepository,
   MemoryWebhookDeliveryRepository,
   MemoryWebhookRepository,
+  MemoryWorktreeRepository,
 } from '../memory/index.js';
 
 /**
@@ -303,6 +305,11 @@ describe('контрактные тесты in-memory реализаций по�
     'MemoryBackgroundRunRepository → BackgroundRunRepository',
     async () => ({ repo: new MemoryBackgroundRunRepository() }),
   );
+
+  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree'ов.
+  describeWorktreeRepository('MemoryWorktreeRepository → WorktreeRepository', async () => ({
+    repo: new MemoryWorktreeRepository(),
+  }));
 });
 
 /** Специфика memory-реализаций: изоляция экземпляров и замороженные дефолты. */

@@ -5,15 +5,19 @@ import type { SessionManager } from '../../sessions/manager.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
 import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js';
 import { SSHKeyStoreError } from '../../storage/ssh-key-store.js';
-import { createSshEnv, SshEnvError } from '../../git/ssh-env.js';
+import { toSshSecret } from '../../git/ssh-env.js';
+import type { ExecSecret } from '../../execution/ports/index.js';
 
 /**
- * ADR-076 §T6: SSH-окружение для сетевых git-тулов (`git_push`/`git_pull`).
+ * ADR-076 §T6: SSH-доступ для сетевых git-тулов (`git_push`/`git_pull`).
  *
  * По `cwd` находим запись реестра `project.repos` (по относительному пути к
- * корню workspace) и, если у неё задан `sshKeyId`, готовим `GIT_SSH_COMMAND`
- * через `createSshEnv`. Ключ не найден/не расшифрован или не удалось
- * подготовить SSH-окружение → типизированная ошибка (i18n-ключ), а не
+ * корню workspace) и, если у неё задан `sshKeyId`, готовим **секрет вызова**
+ * (`ExecSecret`, ADR-077 протокол 4) — значение приватного ключа, а не путь
+ * к файлу. Материализацию (временный ключ `0600` в каталоге `0700`) делает
+ * **точка исполнения**: в remote-режиме это исполнитель, и путь control plane
+ * в его контейнере не существует (ADR-077, «Обновлено 2026-10-26», (б)).
+ * Ключ не найден/не расшифрован → типизированная ошибка (i18n-ключ), а не
  * молчаливый фейл аутентификации.
  */
 
@@ -26,11 +30,17 @@ interface GitSshExtra {
 }
 
 export interface RepoGitEnvResult {
-  /** Дополнительные переменные окружения git (GIT_SSH_COMMAND); пусто — ambient ssh. */
-  env?: Record<string, string>;
-  /** Идемпотентная очистка временного ключа; no-op, если окружение не создавалось. */
+  /**
+   * Секреты вызова (SSH-ключ) — доставляются точке исполнения на время
+   * вызова; пусто — ambient ssh.
+   */
+  secrets?: ExecSecret[];
+  /**
+   * Идемпотентная очистка; no-op — материал готовит порт исполнения
+   * (оставлено ради совместимости сигнатуры вызывающих).
+   */
   cleanup: () => Promise<void>;
-  /** i18n-ключ ошибки (`sshkey.not_found` / `sshkey.decrypt_failed` / `sshkey.env_failed`). */
+  /** i18n-ключ ошибки (`sshkey.not_found` / `sshkey.decrypt_failed`). */
   error?: string;
   /** Параметры подстановки для `error`. */
   errorParams?: Record<string, string>;
@@ -38,22 +48,28 @@ export interface RepoGitEnvResult {
 
 const noopCleanup = async (): Promise<void> => {};
 
-/** Результат подготовки SSH-окружения по явному `sshKeyId` (ADR-076). */
+/** Результат подготовки SSH-доступа по явному `sshKeyId` (ADR-076). */
 export interface SshEnvByIdResult {
-  /** Дополнительные переменные окружения git (GIT_SSH_COMMAND); пусто — ambient ssh. */
-  env?: Record<string, string>;
-  /** Идемпотентная очистка временного ключа; no-op, если окружение не создавалось. */
+  /**
+   * Секреты вызова (SSH-ключ) — доставляются точке исполнения на время
+   * вызова; пусто — ambient ssh.
+   */
+  secrets?: ExecSecret[];
+  /**
+   * Идемпотентная очистка; no-op — материал готовит порт исполнения
+   * (оставлено ради совместимости сигнатуры вызывающих).
+   */
   cleanup: () => Promise<void>;
-  /** i18n-ключ ошибки (`sshkey.not_found` / `sshkey.env_failed`). */
+  /** i18n-ключ ошибки (`sshkey.not_found`). */
   error?: string;
   /** Параметры подстановки для `error`. */
   errorParams?: Record<string, string>;
 }
 
 /**
- * ADR-076: SSH-окружение по явному `sshKeyId` (без привязки к реестру проекта).
+ * ADR-076: SSH-доступ по явному `sshKeyId` (без привязки к реестру проекта).
  * Общий хелпер HTTP-роутов (`/api/v2/git`) и тулов управления репозиториями:
- * нет ключа/не расшифрован → `sshkey.not_found`; сбой подготовки → `sshkey.env_failed`.
+ * нет ключа/не расшифрован → `sshkey.not_found`.
  */
 export async function resolveSshEnvById(
   sshKeyStore: SSHKeyRepository | undefined,
@@ -71,15 +87,7 @@ export async function resolveSshEnvById(
     return { cleanup: noopCleanup, error: 'sshkey.not_found', errorParams: { id: sshKeyId } };
   }
 
-  try {
-    const ssh = await createSshEnv(revealed);
-    return { env: ssh.env, cleanup: ssh.cleanup };
-  } catch (err) {
-    if (err instanceof SshEnvError) {
-      return { cleanup: noopCleanup, error: 'sshkey.env_failed' };
-    }
-    throw err;
-  }
+  return { secrets: [toSshSecret(revealed)], cleanup: noopCleanup };
 }
 
 /** POSIX-нормализация относительного пути (`''`/`.` → `.`, убираем `./` и хвостовые `/`). */
@@ -98,14 +106,31 @@ function resolveProjectDir(project: Project, workspacesRoot?: string): string | 
 /**
  * ADR-076: запись реестра `project.repos` для каталога `cwd` — по относительному
  * пути от корня workspace проекта. `cwd` вне workspace → записи нет.
+ *
+ * ADR-114 §4: в сессии, привязанной к worktree, каталог `cwd` лежит **вне**
+ * `project.workspace` (worktree — вторичная копия), поэтому относительный
+ * путь не вычислим. Тогда запись ищется по `repoPath` — пути репозитория
+ * worktree **относительно `project.workspace`** (тот же контракт, что у
+ * `repo_path` в ADR-076; `.` — репозиторий в корне workspace).
  */
-function findRepoEntry(project: Project, cwd: string, workspacesRoot?: string): GitRepoConfig | null {
-  const projectDir = resolveProjectDir(project, workspacesRoot);
-  if (!projectDir) return null;
-
-  const rel = relative(projectDir, resolve(cwd));
-  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
-  const relPath = normalizeRelPath(rel);
+function findRepoEntry(
+  project: Project,
+  cwd: string,
+  workspacesRoot?: string,
+  repoPath?: string,
+): GitRepoConfig | null {
+  let relPath: string;
+  if (repoPath !== undefined) {
+    // Привязка к worktree: сопоставляем по пути репозитория, а не по `cwd`
+    // (каталог worktree лежит вне `project.workspace`).
+    relPath = normalizeRelPath(repoPath);
+  } else {
+    const projectDir = resolveProjectDir(project, workspacesRoot);
+    if (!projectDir) return null;
+    const rel = relative(projectDir, resolve(cwd));
+    if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+    relPath = normalizeRelPath(rel);
+  }
 
   for (const raw of project.repos ?? []) {
     const normalized = normalizeGitRepoConfig(raw);
@@ -149,7 +174,7 @@ export async function resolveProjectRepoEntry(ctx: ToolContext, cwd: string): Pr
   }
   if (!project) return { kind: 'no_project' };
 
-  const entry = findRepoEntry(project, cwd, extra.workspacesRoot);
+  const entry = findRepoEntry(project, cwd, extra.workspacesRoot, ctx.worktreeRepoPath);
   if (!entry) return { kind: 'not_registered' };
   return { kind: 'entry', entry, url: entry.url };
 }
@@ -171,7 +196,7 @@ export async function resolveRepoGitEnv(ctx: ToolContext, cwd: string): Promise<
   }
   if (!project) return { cleanup: noopCleanup };
 
-  const entry = findRepoEntry(project, cwd, extra.workspacesRoot);
+  const entry = findRepoEntry(project, cwd, extra.workspacesRoot, ctx.worktreeRepoPath);
   if (!entry?.sshKeyId) return { cleanup: noopCleanup };
 
   let revealed: { privateKey: string; passphrase?: string } | null;
@@ -187,13 +212,5 @@ export async function resolveRepoGitEnv(ctx: ToolContext, cwd: string): Promise<
     return { cleanup: noopCleanup, error: 'sshkey.not_found', errorParams: { id: entry.sshKeyId } };
   }
 
-  try {
-    const ssh = await createSshEnv(revealed);
-    return { env: ssh.env, cleanup: ssh.cleanup };
-  } catch (err) {
-    if (err instanceof SshEnvError) {
-      return { cleanup: noopCleanup, error: 'sshkey.env_failed' };
-    }
-    throw err;
-  }
+  return { secrets: [toSshSecret(revealed)], cleanup: noopCleanup };
 }

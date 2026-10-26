@@ -27,6 +27,7 @@ import {
   scrubExecutorMcpServers,
   scrubExecutorToken,
 } from './config.js';
+import { sweepStaleSshDirs } from './secrets.js';
 import { startExecutorServer } from './server.js';
 
 /** Код выхода при штатном завершении. */
@@ -48,6 +49,10 @@ export async function main(): Promise<void> {
   // команда не должна видеть секреты других MCP-серверов.
   scrubExecutorMcpServers();
 
+  // Sweep осиротевших каталогов SSH-ключа: прерванный процесс мог не дойти
+  // до `finally` — временный ключ не должен лежать в tmp (ADR-077, протокол 4).
+  const swept = await sweepStaleSshDirs().catch(() => 0);
+
   const handle = await startExecutorServer({
     token: config.token,
     workspaceRoot: config.workspaceRoot,
@@ -57,9 +62,12 @@ export async function main(): Promise<void> {
     maxBackgroundProcesses: config.backgroundMax,
     backgroundLogMaxBytes: config.backgroundLogMaxBytes,
     ...(config.backgroundLogDir ? { backgroundLogDir: config.backgroundLogDir } : {}),
+    ...(config.tlsCaFile ? { tlsCaFile: config.tlsCaFile } : {}),
     mcpServers: config.mcpServers,
     host: config.host,
     port: config.port,
+    // ADR-094: `/metrics` исполнителя (по умолчанию выключен → 404).
+    metricsEnabled: config.metricsEnabled,
   });
 
   console.log(
@@ -67,7 +75,10 @@ export async function main(): Promise<void> {
       `(workspace: ${config.workspaceRoot}; лимит команд: ${config.maxConcurrency}; ` +
       `потолок таймаута: ${config.maxTimeoutMs} мс; потолок вывода: ${config.maxOutputBytes} байт; ` +
       `лимит фоновых процессов: ${config.backgroundMax}; ` +
-      `MCP-серверов: ${config.mcpServers.length})`,
+      `MCP-серверов: ${config.mcpServers.length}; ` +
+      `метрики: ${config.metricsEnabled ? 'включены' : 'выключены'}; ` +
+      `CA доверия: ${config.tlsCaFile ? 'задан' : 'не задан'}; ` +
+      `удалено старых каталогов SSH: ${swept})`,
   );
 
   let stopping = false;

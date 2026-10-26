@@ -2851,6 +2851,30 @@ export const dict = {
   'git.repo_path_invalid': 'Недопустимый путь репозитория «{path}» (должен находиться внутри workspace проекта)',
   'git.repo_exists': 'Репозиторий уже существует по пути «{path}»',
 
+  // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
+  'worktree.directory_missing':
+    'Рабочий каталог привязанного git-worktree «{path}» не существует. '
+    + 'Каталог, вероятно, удалён — сессия не может продолжить работу в другом каталоге.',
+  'worktree.tool.deps_unavailable': 'Ошибка: сервис git-worktree в этом инстансе недоступен',
+  'worktree.tool.no_project':
+    'Ошибка: у сессии нет проекта — операции с git-worktree требуют проекта',
+  'worktree.tool.list_empty': 'В проекте нет git-worktree',
+  'worktree.tool.list_header': 'Git-worktree проекта ({count}):',
+  'worktree.tool.list_row':
+    'имя: {name} | ветка: {branch} | каталог: {directory} | грязный: {dirty} | привязанная сессия: {attached} | существует: {exists}',
+  'worktree.tool.created':
+    'Git-worktree «{name}» создан на ветке «{branch}» (каталог: {directory}, id: {worktree_id}). '
+    + 'К сессии он пока не привязан — привяжите его через PATCH /api/v2/sessions/<sessionId> '
+    + 'и поле «worktreeId» или позвольте пользователю привязать его в UI.',
+  'worktree.tool.removed': 'Git-worktree «{name}» удалён',
+  'worktree.tool.pruned':
+    'Очищены git-worktree: удалено записей без каталога — {records}, метаданные git очищены — {git_pruned}',
+  'worktree.tool.force_required':
+    'Ошибка: в git-worktree «{name}» есть незакоммиченные изменения — повторите вызов с force: true, чтобы удалить его принудительно',
+  'worktree.tool.busy':
+    'Ошибка: git-worktree «{name}» привязан к живой сессии ({session}) — сначала отвяжите сессию',
+  'worktree.tool.not_found': 'Ошибка: git-worktree «{id}» не найден',
+
   // --- Внешние события и хуки (ADR-030 / ADR-089) ---
   'event.ingested': 'Событие {id} получено из источника «{source}»',
   'event.routed.bound': 'Событие направлено в привязанную сессию {sessionId}',
@@ -4574,4 +4598,47 @@ export const dict = {
   'authority.agents.source': 'Источник',
   'authority.loadError': 'Не удалось загрузить данные полномочий: {error}',
   'authority.forbidden': 'Чтение реестра пакетов требует прав администратора',
+  // ADR-114: инвентарь git-worktree'ов (per-session рабочий каталог).
+  'worktrees.title': 'Worktree\'ы',
+  'worktrees.description': 'Вторичные рабочие копии репозитория — сессия может работать в своём каталоге.',
+  'worktrees.loading': 'Загрузка worktree\'ов...',
+  'worktrees.empty': 'Worktree\'ов нет',
+  'worktrees.emptyHint': 'Создайте worktree, чтобы дать сессии свою рабочую копию репозитория.',
+  'worktrees.loadError': 'Не удалось загрузить worktree\'ы: {error}',
+  'worktrees.create': 'Создать',
+  'worktrees.createTitle': 'Новый worktree',
+  'worktrees.form.branch': 'Ветка',
+  'worktrees.form.branchPlaceholder': 'feature/my-branch',
+  'worktrees.form.name': 'Имя каталога',
+  'worktrees.form.namePlaceholder': 'my-branch',
+  'worktrees.form.hint': 'Оставьте поля пустыми — ветку и имя каталога подберёт сервер.',
+  'worktrees.created': 'Worktree создан',
+  'worktrees.createError': 'Не удалось создать worktree: {error}',
+  'worktrees.action.attach': 'Привязать',
+  'worktrees.action.detach': 'Отвязать',
+  'worktrees.action.remove': 'Удалить',
+  'worktrees.action.prune': 'Очистить',
+  'worktrees.badge.dirty': 'изменения',
+  'worktrees.badge.attached': 'привязан',
+  'worktrees.badge.missing': 'нет каталога',
+  'worktrees.row.branch': 'Ветка: {branch}',
+  'worktrees.row.session': 'Сессия: {name}',
+  'worktrees.removed': 'Worktree удалён',
+  'worktrees.removeError': 'Не удалось удалить worktree: {error}',
+  'worktrees.pruned': 'Очищено: удалено записей — {count}',
+  'worktrees.pruneError': 'Не удалось очистить worktree\'ы: {error}',
+  'worktrees.confirm.removeTitle': 'Удалить worktree',
+  'worktrees.confirm.removeMessage': 'Удалить worktree «{name}»? Его каталог и ветка будут сняты.',
+  'worktrees.confirm.forceTitle': 'Удалить worktree с незакоммиченными изменениями',
+  'worktrees.confirm.forceMessage': 'В worktree «{name}» есть незакоммиченные изменения; удаление снимет их вместе с каталогом.',
+  'worktrees.confirm.pruneTitle': 'Очистить worktree\'ы',
+  'worktrees.confirm.pruneMessage': 'Удалить записи, у которых каталога уже нет, и выполнить git worktree prune?',
+  'worktrees.session.title': 'Рабочий каталог',
+  'worktrees.session.hint': 'Каталог worktree используется как рабочий каталог сессии.',
+  'worktrees.session.projectDir': 'Каталог проекта',
+  'worktrees.session.empty': 'В проекте нет worktree\'ов',
+  'worktrees.session.bound': 'Worktree: {name}',
+  'worktrees.session.bindError': 'Не удалось сменить рабочий каталог: {error}',
+  'worktrees.header.badge': 'worktree: {name} · {branch}',
+  'worktrees.header.badgeTitle': 'Открыть инвентарь worktree\'ов проекта',
 };

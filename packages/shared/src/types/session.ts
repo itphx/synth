@@ -1,6 +1,7 @@
 import type { PermissionConfig, McpServerToolSettings } from './permission.js';
 import type { Message } from './message.js';
 import type { PromptState } from './prompt.js';
+import type { SessionWorktree } from './worktree.js';
 
 // --- SessionOrigin ---
 export type SessionOrigin = 'user' | 'fork' | 'subagent';
@@ -275,6 +276,12 @@ export interface Session {
   userId?: string;
   ownerId?: string;
   projectId?: string;
+  /**
+   * ADR-114: привязка сессии к git-worktree — рабочий каталог сессии.
+   * Аддитивное поле: сессии, созданные до ADR-114, его не имеют и работают
+   * как прежде (каталог — `project.workspace`).
+   */
+  worktree?: SessionWorktree;
   /**
    * ADR-106 Ф4: участники сессии (потолок хода по роли). Аддитивное поле:
    * отсутствие = прежнее поведение. Для проектной сессии участники выводятся

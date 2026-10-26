@@ -68,6 +68,11 @@ function workspaceErrorResult(code: string, message: string) {
 /**
  * Привязывает сессию к проекту (ADR-040): ставит projectId, сбрасывает
  * planApproved (план берётся от нового проекта) и публикует session.moved.
+ *
+ * ADR-114 §3.4: привязка к worktree **снимается** — worktree принадлежит
+ * старому проекту, а чужая привязка дала бы сессии каталог вне её проекта.
+ * Факт снятия виден в событии `session.moved` (`worktree_detached`) и в ответе
+ * тула (`worktree_detached` в metadata).
  */
 export async function attachSessionToProject(
   sessionManager: SessionManager,
@@ -75,16 +80,24 @@ export async function attachSessionToProject(
   eventBus: EventBus | undefined,
   sessionId: string,
   projectId: string,
-): Promise<void> {
+): Promise<boolean> {
+  let worktreeDetached = false;
   await sessionManager.withLock(sessionId, async (s) => {
     s.projectId = projectId;
     s.planApproved = false;
+    // ADR-114: привязка к worktree принадлежит проекту — перенос её снимает.
+    if (s.worktree) {
+      s.worktree = undefined;
+      worktreeDetached = true;
+    }
     await sessionManager.saveSession(s);
   });
   eventBus?.publish(sessionId, 'session.moved', {
     session_id: sessionId,
     project_id: projectId,
+    ...(worktreeDetached ? { worktree_detached: true } : {}),
   });
+  return worktreeDetached;
 }
 
 function argError(toolName: string, issues: z.ZodIssue[]): string {
@@ -200,7 +213,7 @@ export const projectCreateTool: ToolDefinition = {
       };
     }
 
-    await attachSessionToProject(
+    const worktreeDetached = await attachSessionToProject(
       extra.sessionManager,
       extra.projectStore,
       extra.eventBus,
@@ -208,7 +221,13 @@ export const projectCreateTool: ToolDefinition = {
       project.id,
     );
 
-    const summary = { id: project.id, name: project.name, workspace: project.workspace ?? null };
+    const summary = {
+      id: project.id,
+      name: project.name,
+      workspace: project.workspace ?? null,
+      // ADR-114: привязка к worktree снята (привязка принадлежит проекту).
+      ...(worktreeDetached ? { worktree_detached: true } : {}),
+    };
     return {
       content: sm('project.created', { name: project.name, json: JSON.stringify(summary) }),
       metadata: summary,
@@ -269,7 +288,7 @@ export const projectAttachTool: ToolDefinition = {
       };
     }
 
-    await attachSessionToProject(
+    const worktreeDetached = await attachSessionToProject(
       extra.sessionManager,
       extra.projectStore,
       extra.eventBus,
@@ -279,7 +298,13 @@ export const projectAttachTool: ToolDefinition = {
 
     return {
       content: sm('project.attached', { name: project.name }),
-      metadata: { id: project.id, name: project.name },
+      metadata: {
+        id: project.id,
+        name: project.name,
+        // ADR-114: привязка к worktree снята (worktree принадлежит старому
+        // проекту — чужая привязка дала бы каталог вне нового проекта).
+        ...(worktreeDetached ? { worktree_detached: true } : {}),
+      },
     };
   },
 };

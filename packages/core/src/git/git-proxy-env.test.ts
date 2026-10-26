@@ -1,29 +1,45 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import * as undici from 'undici';
-
-const { envMock, simpleGitMock } = vi.hoisted(() => {
-  const env = vi.fn(function (this: unknown, ..._args: unknown[]) {
-    return this;
-  });
-  const git = vi.fn((..._args: unknown[]) => ({
-    env,
-    checkIsRepo: async () => true,
-  }));
-  return { envMock: env, simpleGitMock: git };
-});
-
-vi.mock('simple-git', () => ({
-  simpleGit: simpleGitMock,
-}));
-
 import { GitService, sanitizeGitEnv } from './git-service.js';
+import type { ExecRequest, ExecutionPort } from '../execution/ports/index.js';
 import { initTlsTrust, _resetTlsTrustForTests } from '../security/tls.js';
+
+/**
+ * ADR-099 (D2b): прокси/креды/no_proxy передаются git **через окружение**
+ * (`http_proxy`/`https_proxy`/`all_proxy`/`no_proxy`), а не argv/`-c`:
+ * пароль Basic не должен попадать в список аргументов процесса.
+ */
+
+/** Порт-шпион: фиксирует запросы (argv + env). */
+class CapturingPort implements ExecutionPort {
+  readonly calls: ExecRequest[] = [];
+
+  async execute(req: ExecRequest): Promise<{
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+    truncated: boolean;
+    durationMs: number;
+  }> {
+    this.calls.push(req);
+    return { stdout: 'true\n', stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+  }
+}
+
+/** Окружение последнего git-вызова. */
+function lastEnv(port: CapturingPort): Record<string, string> {
+  return port.calls.at(-1)?.env ?? {};
+}
+
+/** Аргументы последнего git-вызова. */
+function lastArgs(port: CapturingPort): string[] {
+  const command = port.calls.at(-1)?.command;
+  return command?.kind === 'argv' ? command.args ?? [] : [];
+}
 
 afterEach(() => {
   _resetTlsTrustForTests();
   undici.setGlobalDispatcher(new undici.Agent());
-  envMock.mockClear();
-  simpleGitMock.mockClear();
 });
 
 describe('git proxy env (D2b)', () => {
@@ -39,26 +55,25 @@ describe('git proxy env (D2b)', () => {
       {},
     );
 
-    await new GitService('/tmp').isRepo('/tmp');
+    const port = new CapturingPort();
+    await new GitService('/tmp', { execution: port }).isRepo('/tmp');
 
-    const env = envMock.mock.calls.at(-1)?.[0] as unknown as Record<string, string>;
+    const env = lastEnv(port);
     expect(env.http_proxy).toBe('http://user:pass@proxy.corp:3128');
     expect(env.https_proxy).toBe('http://user:pass@proxy.corp:3128');
     expect(env.all_proxy).toBe('http://user:pass@proxy.corp:3128');
     expect(env.no_proxy).toBe('localhost,.corp.example');
 
-    // Пароль и сам прокси не попадают в argv/options (только env).
-    const options = simpleGitMock.mock.calls.at(-1)?.[1] as unknown as
-      | { config?: string[] }
-      | undefined;
-    expect(options?.config ?? []).not.toContainEqual(expect.stringContaining('http.proxy'));
-    expect(JSON.stringify(simpleGitMock.mock.calls)).not.toContain('pass');
+    // Пароль и сам прокси не попадают в argv (только env).
+    expect(lastArgs(port).join(' ')).not.toContain('http.proxy');
+    expect(lastArgs(port).join(' ')).not.toContain('pass');
   });
 
   it('без прокси env не меняется (нет прокси-переменных)', async () => {
     await initTlsTrust({ proxy: { enabled: false } }, {});
-    await new GitService('/tmp').isRepo('/tmp');
-    const env = envMock.mock.calls.at(-1)?.[0] as unknown as Record<string, string>;
+    const port = new CapturingPort();
+    await new GitService('/tmp', { execution: port }).isRepo('/tmp');
+    const env = lastEnv(port);
     expect(env).not.toHaveProperty('http_proxy');
     expect(env).not.toHaveProperty('https_proxy');
     expect(env).not.toHaveProperty('all_proxy');
@@ -97,12 +112,14 @@ describe('git proxy env (D2b)', () => {
       },
       {},
     );
-    await new GitService('/tmp').isRepo('/tmp');
 
-    const env = envMock.mock.calls.at(-1)?.[0] as unknown as Record<string, string>;
+    const port = new CapturingPort();
+    await new GitService('/tmp', { execution: port }).isRepo('/tmp');
+
+    const env = lastEnv(port);
     expect(env.all_proxy).toBe('socks5h://user:pass@proxy.corp:1080');
     expect(env.https_proxy).toBe('socks5h://user:pass@proxy.corp:1080');
     expect(env.no_proxy).toBe('internal.example');
-    expect(JSON.stringify(simpleGitMock.mock.calls)).not.toContain('pass');
+    expect(lastArgs(port).join(' ')).not.toContain('pass');
   });
 });

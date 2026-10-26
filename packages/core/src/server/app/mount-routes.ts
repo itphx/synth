@@ -151,6 +151,9 @@ export function mountStandaloneRoutes(
       analytics,
       // Этап 1 roadmap 0.13 (блок 3): вопросы пользователю (`ask_user`).
       ...(deps.questionService ? { questionService: deps.questionService } : {}),
+      // ADR-114: сервис worktree'ов — привязка сессии к worktree
+      // (`PATCH /api/v2/sessions/:id { worktreeId }`).
+      ...(deps.worktreeService ? { worktreeService: deps.worktreeService } : {}),
       // ADR-107: вкладка «Память» — агрегаты памяти сессии.
       ...(deps.storageContext
         ? {
@@ -180,6 +183,8 @@ export function mountStandaloneRoutes(
     // ADR-075: автосоздание/нормализация workspace локальных проектов.
     getWorkspacesRoot: () => config.workspacesRoot ?? join(dataDir, 'workspaces'),
     getOutsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
+    // ADR-114: контур worktree'ов проекта (список/создание/удаление/prune).
+    ...(deps.worktreeService ? { worktrees: deps.worktreeService } : {}),
     // ADR-071 §2.4 / ADR-046 §4.5: сид скоупа нового проекта (снимок дефолтов).
     getProjectSeeds: async () => {
       const defaultMcpServers = Object.entries(config.mcpServers ?? {})
@@ -290,7 +295,7 @@ export function mountStandaloneRoutes(
     auth,
     projectStore,
     config.workspacesRoot ?? join(dataDir, 'workspaces'),
-    { sshKeyStore },
+    { sshKeyStore, execution: deps.executionPort },
   ));
 
   // SSH-ключи агентов (ADR-076 §T5): flat CRUD + nested-роуты агента.

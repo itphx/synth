@@ -19,9 +19,19 @@ import { HybridStatusIndicator } from './HybridStatusIndicator'
 import { PwaInstallButton } from './PwaInstallButton'
 import { useDevice } from '@/hooks/useDevice'
 import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
+import { useWorktreesStore, findWorktree } from '@/stores/worktreesStore'
 
 interface HeaderProps {
   onSettingsClick: () => void
+}
+
+/**
+ * Имя каталога из абсолютного пути — фолбэк для индикатора worktree'а,
+ * когда записи ещё нет в инвентаре проекта (список не загружен).
+ */
+function pathBasename(path: string): string {
+  const parts = path.replace(/[/\\]+$/, '').split(/[/\\]/)
+  return parts[parts.length - 1] || path
 }
 
 export const Header = ({ onSettingsClick }: HeaderProps) => {
@@ -42,6 +52,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const mobileRightOpen = useUIStore((s) => s.mobileRightOpen)
   const setMobileLeftOpen = useUIStore((s) => s.setMobileLeftOpen)
   const setMobileRightOpen = useUIStore((s) => s.setMobileRightOpen)
+  const setRightPanelTab = useUIStore((s) => s.setRightPanelTab)
   const user = useAuthStore((s) => s.user)
   const { deviceType } = useDevice()
   const isMobile = deviceType !== 'desktop'
@@ -72,6 +83,21 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const activeSession = sessionId ? sessions.find((s) => s.id === sessionId) : undefined
   const sessionModelId = (activeSession?.settings as Record<string, unknown>)?.model as string | undefined
   const effectiveModel = sessionModelId || selectedModelName
+
+  // ADR-114 §9: индикатор привязки сессии к worktree'у. Имя — из инвентаря
+  // проекта (по `worktree_id`), фолбэк — имя каталога на диске.
+  const worktreesByProject = useWorktreesStore((s) => s.byProject)
+  const sessionWorktree = activeSession?.worktree ?? null
+  const worktreeName = useMemo(() => {
+    if (!sessionWorktree) return null
+    const record = findWorktree({ byProject: worktreesByProject }, sessionWorktree.worktree_id)
+    return record?.name ?? pathBasename(sessionWorktree.directory)
+  }, [sessionWorktree, worktreesByProject])
+
+  const handleWorktreeClick = useCallback(() => {
+    setRightPanelTab('project')
+    if (isMobile) setMobileRightOpen(true)
+  }, [setRightPanelTab, setMobileRightOpen, isMobile])
 
   const contextWindowModel = useMemo(() => {
     return providersModels.find((m) => m.id === effectiveModel || m.name === effectiveModel)
@@ -332,6 +358,20 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
         <div className="flex shrink-0 items-center gap-0.5">
           <GlobalTransportIndicator />
           {deviceType === 'tablet' && <HybridStatusIndicator />}
+          {worktreeName && sessionWorktree && (
+            <button
+              onClick={handleWorktreeClick}
+              className="flex h-9 max-w-[9rem] items-center gap-1 rounded-lg px-1.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+              title={t('worktrees.header.badgeTitle')}
+              aria-label={t('worktrees.header.badge', { name: worktreeName, branch: sessionWorktree.branch })}
+              data-testid="header-worktree-indicator"
+            >
+              <Icon name="git-branch" className="size-4 shrink-0" />
+              <span className="truncate text-[0.625rem]">
+                {t('worktrees.header.badge', { name: worktreeName, branch: sessionWorktree.branch })}
+              </span>
+            </button>
+          )}
           <NotificationPopup />
           <AnalyticsButton />
           <PwaInstallButton />
@@ -611,6 +651,20 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
       <div className="flex items-center gap-2 shrink-0">
         <GlobalTransportIndicator />
         <HybridStatusIndicator />
+        {worktreeName && sessionWorktree && (
+          <button
+            onClick={handleWorktreeClick}
+            className="flex max-w-[14rem] items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+            title={t('worktrees.header.badgeTitle')}
+            aria-label={t('worktrees.header.badge', { name: worktreeName, branch: sessionWorktree.branch })}
+            data-testid="header-worktree-indicator"
+          >
+            <Icon name="git-branch" className="size-3.5 shrink-0" />
+            <span className="truncate text-[0.625rem]">
+              {t('worktrees.header.badge', { name: worktreeName, branch: sessionWorktree.branch })}
+            </span>
+          </button>
+        )}
         <NotificationPopup />
         <AnalyticsButton />
         <QuickSettingsPopup

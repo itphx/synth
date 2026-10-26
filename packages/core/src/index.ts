@@ -341,16 +341,21 @@ export {
   DEFAULT_SHELL_BINARY,
   EXECUTION_BASE_CAPABILITIES,
   EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
+  EXECUTION_SECRETS_UNSUPPORTED_CODE,
 } from './execution/ports/index.js';
 export type {
   ExecutionPort,
   ExecRequest,
   ExecResult,
   ExecCommand,
+  ExecSecret,
   ExecFailureReason,
   ExecutionErrorInit,
   ExecutionCapabilitySummary,
   ExecutionBaseCapability,
+  // ADR-094: приёмник метрик исполнения (узкий интерфейс — без реестра).
+  ExecutionMetricsOutcome,
+  ExecutionMetricsSink,
   ExecBackgroundChunk,
   ExecBackgroundExit,
   ExecBackgroundProcess,
@@ -650,6 +655,50 @@ export { FileQuestionStore } from './storage/file-question-store.js';
 export type { FileQuestionStoreConfig } from './storage/file-question-store.js';
 export { FileBackgroundRunStore } from './storage/file-background-run-store.js';
 export type { FileBackgroundRunStoreConfig } from './storage/file-background-run-store.js';
+// Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
+export { FileWorktreeStore } from './storage/file-worktree-store.js';
+export type { FileWorktreeStoreConfig } from './storage/file-worktree-store.js';
+// Этап 1 roadmap 0.13 (блок 1.4.1b): сервис worktree'ов (ADR-114) — git-операции,
+// lifecycle инвентаря, детект secondary worktree.
+export {
+  WorktreeService,
+  resolveWorktreeName,
+  WORKTREE_ERROR_CODES,
+  worktreeErrorHttpStatus,
+  isWorktreeError,
+  WorktreeError,
+  WorktreeNotFoundError,
+  WorktreeBusyError,
+  WorktreeDirtyError,
+  WorktreeBranchInvalidError,
+  WorktreeNameInvalidError,
+  WorktreeNotARepoError,
+  WorktreePathExistsError,
+  WorktreeGitFailedError,
+} from './engine/worktree/index.js';
+export type {
+  WorktreeServiceOptions,
+  WorktreeCreateResult,
+  WorktreeSetupResult,
+  WorktreeRemoveOptions,
+  WorktreePruneResult,
+  WorktreeSweepResult,
+  WorktreeSecondaryInfo,
+  WorktreeErrorCode,
+} from './engine/worktree/index.js';
+// ADR-114 §6: публикация `worktree.updated` в каналы сессий проекта.
+export {
+  publishWorktreeUpdated,
+  WORKTREE_EVENT_MAX_SESSIONS,
+} from './engine/worktree/index.js';
+export type {
+  WorktreeEventDeps,
+  WorktreeEventSessionSource,
+} from './engine/worktree/index.js';
+// ADR-114 §7.4: стартовый sweep осиротевших записей worktree'ов (фоново,
+// без падения старта) — общий хук для core и backend.
+export { startWorktreeSweeper } from './engine/worktree/index.js';
+export type { WorktreeSweeperTarget } from './engine/worktree/index.js';
 export type {
   SessionRepository,
   SessionFilter,
@@ -748,6 +797,8 @@ export type {
   // Этап 1 roadmap 0.13: вопросы пользователю и реестр фоновых прогонов.
   QuestionRepository,
   BackgroundRunRepository,
+  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
+  WorktreeRepository,
 } from './storage/ports/index.js';
 // ADR-105 (Ф0/Ф1): доменная ошибка хранилища внешних доступов — значение
 // (не только тип): её бросают реализации порта, в т.ч. PostgreSQL-драйвер
@@ -798,6 +849,8 @@ export {
   // Этап 1 roadmap 0.13: вопросы пользователю и реестр фоновых прогонов.
   MemoryQuestionRepository,
   MemoryBackgroundRunRepository,
+  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
+  MemoryWorktreeRepository,
 } from './storage/memory/index.js';
 // PROP-047 §2.1: in-memory реализации портов памяти. Имена классов совпадают с
 // именами портов (`MemoryFactRepository`), поэтому в публичном API они
@@ -1865,6 +1918,10 @@ export {
   setSynthReady,
   createLlmCallRecorder,
   normalizeRemoteOp,
+  // ADR-094/ADR-077: метрики пула исполнителей (`synth_executor_*`).
+  createExecutorMetricsCollector,
+  normalizeExecutorOutcome,
+  EXECUTOR_WAIT_BUCKETS,
   DATADIR_KINDS,
   SESSIONS_METRICS_INTERVAL_MS,
   STORAGE_RECORDS_INTERVAL_MS,

@@ -19,6 +19,8 @@
  * | `SYNTH_EXECUTOR_BACKGROUND_MAX` | нет | `8` | лимит живых фоновых процессов (ADR-077, шаг 7c) |
  * | `SYNTH_EXECUTOR_BACKGROUND_LOG_MAX_BYTES` | нет | `10485760` | лимит журнала фонового процесса на поток, байт |
  * | `SYNTH_EXECUTOR_BACKGROUND_LOG_DIR` | нет | `<tmp>/synth-exec-bg` | каталог журналов фоновых процессов |
+ * | `SYNTH_EXECUTOR_METRICS_ENABLED` | нет | `false` | экспорт метрик исполнителя (`GET /metrics`) |
+ * | `SYNTH_EXECUTOR_TLS_CA_FILE` | нет | — | файл CA доверия git (`http.sslCAInfo`); путь в окружении исполнителя |
  *
  * **Fail-closed**: без токена или без корня workspace процесс не стартует —
  * исполнитель без аутентификации или без границы рабочего каталога опаснее,
@@ -30,6 +32,11 @@
  * нет»**, а не ошибка: так отключается дефолт из образа (`ENV` во flavor'ах с
  * браузером, см. `docker/Dockerfile.executor`).
  *
+ * `SYNTH_EXECUTOR_TLS_CA_FILE` — **конфигурация** доверия, а не пользовательский
+ * секрет (ADR-077, «Обновлено 2026-10-26», (в)): задан, но файл не читается —
+ * **ошибка старта** (fail-closed). Иначе исполнитель считал бы, что доверяет
+ * CA, а на деле git-команды падали бы с невнятной ошибкой TLS.
+ *
  * Токен читается из env **один раз** при старте и удаляется из `process.env`
  * (см. `scrubExecutorToken`): иначе он попадёт в окружение дочерних процессов
  * и утечёт в текст команды, который видит модель. Так же вычищается
@@ -37,6 +44,7 @@
  * см. `scrubExecutorMcpServers`.
  */
 
+import { accessSync, constants } from 'node:fs';
 import { EXECUTOR_PROTOCOL_VERSION } from './protocol.js';
 import type { McpServerSpec } from './mcp.js';
 
@@ -53,6 +61,8 @@ export const EXECUTOR_ENV = {
   backgroundMax: 'SYNTH_EXECUTOR_BACKGROUND_MAX',
   backgroundLogMaxBytes: 'SYNTH_EXECUTOR_BACKGROUND_LOG_MAX_BYTES',
   backgroundLogDir: 'SYNTH_EXECUTOR_BACKGROUND_LOG_DIR',
+  metricsEnabled: 'SYNTH_EXECUTOR_METRICS_ENABLED',
+  tlsCaFile: 'SYNTH_EXECUTOR_TLS_CA_FILE',
 } as const;
 
 /** Дефолты исполнителя. */
@@ -64,6 +74,8 @@ export const EXECUTOR_DEFAULTS = {
   maxOutputBytes: 10 * 1024 * 1024,
   backgroundMax: 8,
   backgroundLogMaxBytes: 10 * 1024 * 1024,
+  /** ADR-094: метрики исполнителя выключены по умолчанию (`/metrics` → 404). */
+  metricsEnabled: false,
 } as const;
 
 /** Эффективная конфигурация исполнителя. */
@@ -88,8 +100,18 @@ export interface ExecutorConfig {
   backgroundLogMaxBytes: number;
   /** Каталог журналов фоновых процессов (не задан — дефолт сервиса). */
   backgroundLogDir?: string;
+  /**
+   * ADR-094: включён ли экспорт метрик исполнителя (`GET /metrics`).
+   * По умолчанию — выключено (эндпоинт отвечает 404).
+   */
+  metricsEnabled: boolean;
   /** MCP-серверы, которые исполнитель хостит у себя (stdio). */
   mcpServers: McpServerSpec[];
+  /**
+   * Файл CA доверия git (`http.sslCAInfo`) — путь в окружении исполнителя.
+   * Задан → исполнитель добавляет его в окружение вызова (ADR-077/ADR-099).
+   */
+  tlsCaFile?: string;
 }
 
 function requireEnvString(env: NodeJS.ProcessEnv, name: string): string {
@@ -112,6 +134,58 @@ function requirePositiveInt(env: NodeJS.ProcessEnv, name: string, fallback: numb
     );
   }
   return value;
+}
+
+/**
+ * Разбор пути к файлу CA доверия (ADR-077, «Обновлено 2026-10-26», (в)).
+ *
+ * CA — **конфигурация** исполнителя, а не пользовательский секрет: путь
+ * задаётся при старте, читаемость проверяется сразу. Задан, но файл не
+ * читается — **ошибка старта** (fail-closed): иначе исполнитель считал бы,
+ * что доверяет CA, а git-команды падали бы с невнятной ошибкой TLS.
+ *
+ * @param raw значение env (пустое/незаданное — CA не задан)
+ * @param envName имя переменной (для понятного текста ошибки)
+ */
+export function resolveTlsCaFile(raw: string | undefined, envName: string): string | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return undefined;
+  try {
+    accessSync(trimmed, constants.R_OK);
+  } catch {
+    throw new Error(
+      `[executor] ${envName}="${trimmed}" — файл CA недоступен для чтения (исполнитель не стартует, fail-closed)`,
+    );
+  }
+  return trimmed;
+}
+
+/**
+ * Разбор булева значения env (строгий).
+ *
+ * Допустимы только `true`/`false` (в любом регистре) и `1`/`0`. Невалидное
+ * значение — **ошибка старта**: молчаливый переход в `false` означал бы, что
+ * оператор включил метрики, а они молча не работают (или наоборот).
+ *
+ * @param raw значение env (пустое/незаданное — дефолт)
+ * @param envName имя переменной (для понятного текста ошибки)
+ * @param fallback значение по умолчанию
+ */
+export function resolveBooleanEnv(
+  raw: string | undefined,
+  envName: string,
+  fallback: boolean,
+): boolean {
+  if (raw === undefined) return fallback;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return fallback;
+  const normalized = trimmed.toLowerCase();
+  if (normalized === 'true' || normalized === '1') return true;
+  if (normalized === 'false' || normalized === '0') return false;
+  throw new Error(
+    `[executor] невалидное значение ${envName}="${raw}" — ожидается true/false (или 1/0)`,
+  );
 }
 
 /**
@@ -156,7 +230,13 @@ export function resolveExecutorConfig(env: NodeJS.ProcessEnv = process.env): Exe
       EXECUTOR_DEFAULTS.backgroundLogMaxBytes,
     ),
     backgroundLogDir: env[EXECUTOR_ENV.backgroundLogDir]?.trim() || undefined,
+    metricsEnabled: resolveBooleanEnv(
+      env[EXECUTOR_ENV.metricsEnabled],
+      EXECUTOR_ENV.metricsEnabled,
+      EXECUTOR_DEFAULTS.metricsEnabled,
+    ),
     mcpServers: parseMcpServerSpecs(env[EXECUTOR_ENV.mcpServers], EXECUTOR_ENV.mcpServers),
+    tlsCaFile: resolveTlsCaFile(env[EXECUTOR_ENV.tlsCaFile], EXECUTOR_ENV.tlsCaFile),
   };
 }
 

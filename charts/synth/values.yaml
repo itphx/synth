@@ -306,6 +306,18 @@ executor:
     # Потолок буфера вывода, байт.
     maxOutputBytes: 10485760
 
+  # Метрики исполнителя (ADR-077 шаг 7d; ADR-094) — **выключены по умолчанию**,
+  # как `metrics.enabled` у control plane (ADR-094 п. 4).
+  # true → env `SYNTH_EXECUTOR_METRICS_ENABLED=true`: у исполнителя появляется
+  # собственный `GET /metrics` (вне префиксов, как у backend'а) — 404 при
+  # выключенном, 401 без bearer-токена исполнителя, 200 с токеном
+  # (exposition 0.0.4, `no-store`).
+  # Скрейп пула — **отдельный job** Prometheus (не смешивать с job'ом
+  # backend'а: `synth_executor_commands_total` есть на обеих сторонах и
+  # считает разное). Примеры — README чарта, §«Метрики исполнителя».
+  metrics:
+    enabled: false
+
   # MCP-серверы, которые исполнитель хостит у себя (stdio, ADR-077 шаг B1).
   #
   # Элемент списка: { name, command, args, env }. Рендерится в env
@@ -408,6 +420,21 @@ executor:
     #     - to: [{ipBlock: {cidr: 203.0.113.0/24}}]
     #       ports: [{protocol: TCP, port: 443}]
     allowedEgress: []
+    # Дополнительные ingress-правила (формат networking.k8s.io/v1) — например,
+    # чтобы Prometheus из другого namespace скрейпил `/metrics` исполнителя.
+    # По умолчанию пусто → поведение не меняется: ingress остаётся только от
+    # pod'ов control plane. Правила добавляются **в дополнение** к штатному
+    # правилу, а не заменяют его.
+    # Пример:
+    #   metricsIngress:
+    #     - from:
+    #         - namespaceSelector:
+    #             matchLabels:
+    #               kubernetes.io/metadata.name: monitoring
+    #       ports:
+    #         - protocol: TCP
+    #           port: 5100
+    metricsIngress: []
 
   token:
     # Secret с токеном доверия `synth_exec_…`. Пусто → secrets.existingSecret.
@@ -418,6 +445,21 @@ executor:
     # значением в env SYNTH_EXECUTOR_TOKEN (secretKeyRef). Один Secret на обе
     # стороны — токен совпадает.
     secretKey: SYNTH_EXECUTION_TOKEN
+
+  tls:
+    # Доверие git у исполнителя (ADR-077 «Обновлено 2026-10-26», (в); ADR-099):
+    # CA — **конфигурация** исполнителя, а не пользовательский секрет.
+    # Пусто (дефолт) → CA не задан: git доверяет системному корню, том
+    # не монтируется, env SYNTH_EXECUTOR_TLS_CA_FILE не выставляется.
+    #
+    # Задан caSecret → Secret монтируется в /etc/synth/tls (readOnly), а
+    # исполнитель получает путь к файлу CA через env
+    # SYNTH_EXECUTOR_TLS_CA_FILE и добавляет его в окружение вызова
+    # (GIT_CONFIG_COUNT/GIT_CONFIG_KEY_0/GIT_CONFIG_VALUE_0 → http.sslCAInfo).
+    # Задан, но файл не читается — исполнитель НЕ СТАРТУЕТ (fail-closed).
+    caSecret: ""
+    # Ключ внутри caSecret (имя файла CA в Secret).
+    caKey: ca.pem
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Доверие TLS/CA исходящих соединений Synth (ADR-099, конфиг `security.tls`).

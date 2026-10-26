@@ -101,3 +101,6 @@ export * from './question.js';
 // Этап 1 roadmap 0.13: единый реестр фоновых прогонов (фоновые саб-агенты и
 // шелл-процессы) — типы записи и фильтра выборки.
 export * from './background.js';
+// Этап 1 roadmap 0.13 (блок 1.4): git worktrees — per-session рабочий каталог
+// (ADR-114): тип записи, тела HTTP-входа и привязка сессии.
+export * from './worktree.js';

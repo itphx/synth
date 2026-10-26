@@ -2533,6 +2533,15 @@ export const dict = {
   'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
   'git.repo_exists': 'Repository already exists at "{path}"',
 
+  // --- Git worktrees: per-session working directory (ADR-114) ---
+  'worktree.directory_missing':
+    'The working directory of the linked git worktree "{path}" does not exist. '
+    + 'The worktree was probably deleted — the session cannot continue in another directory.',
+  'worktree.tool.created':
+    'Git worktree "{name}" created on branch "{branch}" (directory: {directory}, id: {worktree_id}). '
+    + 'It is not attached to any session yet — bind it with PATCH /api/v2/sessions/<sessionId> '
+    + 'and the "worktreeId" field, or let the user attach it in the UI.',
+
   // --- Execution (ADR-077) ---
   'execution.remote_url_required':
     'Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
@@ -4184,4 +4193,47 @@ export const dict = {
   'authority.agents.source': 'Source',
   'authority.loadError': 'Failed to load authority data: {error}',
   'authority.forbidden': 'Reading the package registry requires administrator rights',
+  // ADR-114: инвентарь git-worktree'ов (per-session рабочий каталог).
+  'worktrees.title': 'Worktrees',
+  'worktrees.description': 'Secondary working copies of the repository — a session can work in its own directory.',
+  'worktrees.loading': 'Loading worktrees...',
+  'worktrees.empty': 'No worktrees',
+  'worktrees.emptyHint': 'Create a worktree to give the session its own working copy of the repository.',
+  'worktrees.loadError': 'Failed to load worktrees: {error}',
+  'worktrees.create': 'Create',
+  'worktrees.createTitle': 'New worktree',
+  'worktrees.form.branch': 'Branch',
+  'worktrees.form.branchPlaceholder': 'feature/my-branch',
+  'worktrees.form.name': 'Directory name',
+  'worktrees.form.namePlaceholder': 'my-branch',
+  'worktrees.form.hint': 'Leave the fields empty — the server picks the branch and the directory name.',
+  'worktrees.created': 'Worktree created',
+  'worktrees.createError': 'Failed to create worktree: {error}',
+  'worktrees.action.attach': 'Attach',
+  'worktrees.action.detach': 'Detach',
+  'worktrees.action.remove': 'Delete',
+  'worktrees.action.prune': 'Clean up',
+  'worktrees.badge.dirty': 'changes',
+  'worktrees.badge.attached': 'attached',
+  'worktrees.badge.missing': 'missing',
+  'worktrees.row.branch': 'Branch: {branch}',
+  'worktrees.row.session': 'Session: {name}',
+  'worktrees.removed': 'Worktree deleted',
+  'worktrees.removeError': 'Failed to delete worktree: {error}',
+  'worktrees.pruned': 'Cleaned up: {count} stale records removed',
+  'worktrees.pruneError': 'Failed to clean up worktrees: {error}',
+  'worktrees.confirm.removeTitle': 'Delete worktree',
+  'worktrees.confirm.removeMessage': 'Delete the worktree "{name}"? Its directory and branch will be removed.',
+  'worktrees.confirm.forceTitle': 'Delete worktree with uncommitted changes',
+  'worktrees.confirm.forceMessage': 'The worktree "{name}" has uncommitted changes; deleting it will remove them together with the directory.',
+  'worktrees.confirm.pruneTitle': 'Clean up worktrees',
+  'worktrees.confirm.pruneMessage': 'Remove the records whose directory no longer exists and run git worktree prune?',
+  'worktrees.session.title': 'Working directory',
+  'worktrees.session.hint': 'The worktree directory is used as the working directory of the session.',
+  'worktrees.session.projectDir': 'Project directory',
+  'worktrees.session.empty': 'The project has no worktrees',
+  'worktrees.session.bound': 'Worktree: {name}',
+  'worktrees.session.bindError': 'Failed to change the working directory: {error}',
+  'worktrees.header.badge': 'worktree: {name} · {branch}',
+  'worktrees.header.badgeTitle': 'Open the worktree inventory of the project',
 };
