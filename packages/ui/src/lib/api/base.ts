@@ -15,7 +15,11 @@ export async function fetchJSON<T>(url: string, options?: RequestInit): Promise<
     const msg = error.detail || error.error?.error || error.error?.message || `HTTP ${response.status}`
     // `code` (ADR-075) нужен вызывающему, чтобы отличать 409-подтверждение от прочих 409/403.
     const code = error.error?.code
-    throw Object.assign(new Error(msg), { status: response.status, code })
+    // `forceRequired` (ADR-114) — признак «нужен явный force» у 409: без него
+    // вызывающий не отличит подтверждение удаления (грязный worktree) от прочих
+    // конфликтов и не покажет второй шаг подтверждения.
+    const forceRequired = error.error?.forceRequired === true
+    throw Object.assign(new Error(msg), { status: response.status, code, forceRequired })
   }
   if (response.status === 204) return undefined as T
   return response.json()

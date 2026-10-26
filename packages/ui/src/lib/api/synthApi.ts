@@ -49,6 +49,7 @@ import { memoryApi } from './memory'
 import { sessionMemoryApi } from './session-memory'
 import { questionsApi } from './questions'
 import { processesApi } from './processes'
+import { worktreesApi } from './worktrees'
 
 export type { EntityOrigin } from './common'
 export type {
@@ -60,6 +61,7 @@ export type {
   ProjectMcpResponse,
 } from './projects'
 export type { SessionData, StickyNoteData, PromptInfoResponse } from './sessions'
+export type { SessionWorktreeBinding } from './sessions'
 export type { MessageListResponse } from './messages'
 export type {
   WorkspaceRootResponse,
@@ -379,6 +381,18 @@ export type {
   ProcessResponse,
   ProcessStopResponse,
 } from './processes'
+// ADR-114: инвентарь git-worktree'ов проекта (per-session рабочий каталог).
+export type {
+  WorktreeRecord,
+  WorktreeStrategy,
+  WorktreeSummary,
+  WorktreeUpdateAction,
+  WorktreeCreateInput,
+  WorktreeSetupResult,
+  WorktreeCreateResult,
+  WorktreePruneResult,
+  WorktreeListResponse,
+} from './worktrees'
 
 export const synthApi = {
   fetchJSON,
@@ -427,6 +441,8 @@ export const synthApi = {
   ...memoryApi,
   ...sessionMemoryApi,
   ...questionsApi,
+  // ADR-114: worktree'ы — имена домена уникальны (`list`/`get` уже заняты).
+  ...worktreesApi,
   // PROP-096/097: реестр фоновых прогонов. Короткие имена домена (`list`,
   // `get`) в barrel уже заняты (вопросы, метрики) — домен раскладывается
   // под своими префиксами, чтобы не переопределить чужие методы.

@@ -174,6 +174,25 @@ describe('transportStore dispatcher: fs.changed / project.updated', () => {
     })
   })
 
+  it('fs.changed не расширяет инвалидацию до полного перечитывания дерева', () => {
+    dispatch(makeEvent('fs.changed', 's1', {
+      session_id: 's1',
+      project_id: 'p1',
+      scope: 'file',
+      paths: ['a.txt'],
+      op: 'write',
+      tool: 'write_file',
+    }))
+    // Инвалидация остаётся точечной (`scope:'file'` + пути): полный `scope:'all'`
+    // перевёл бы `applyFsChange` на ветку refreshProject и выключил учёт
+    // fileRevisions/deletedFiles — открытый редактор не увидел бы изменение
+    // файла на диске.
+    expect(scheduleSpy.mock.calls.length).toBeGreaterThan(0)
+    for (const call of scheduleSpy.mock.calls) {
+      expect(call[1]).toMatchObject({ scope: 'file', paths: ['a.txt'] })
+    }
+  })
+
   it('project.updated перечитывает дерево Files', () => {
     dispatch(makeEvent('project.updated', 's1', { project_id: 'p1' }))
     expect(refreshSpy).toHaveBeenCalledWith('p1')

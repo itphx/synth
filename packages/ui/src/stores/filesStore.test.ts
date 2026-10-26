@@ -523,3 +523,59 @@ describe('filesStore.setDraft / clearDraft', () => {
     expect(useFilesStore.getState().draftContents['p1::a.txt']).toBeUndefined()
   })
 })
+
+describe('filesStore — каталог .worktrees скрыт всегда (ADR-114 §9)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useFilesStore.setState({
+      treesByProject: {},
+      revisionByProject: {},
+      fileRevisions: {},
+      deletedFiles: {},
+      expandedProjects: new Set<string>(),
+      expandedDirs: new Set<string>(),
+      showHidden: false,
+    })
+  })
+
+  it('loadFileTree: каталог .worktrees отсутствует в листинге даже при showHidden=true', async () => {
+    useFilesStore.setState({ showHidden: true })
+    mocks.listDirectory.mockResolvedValue({
+      entries: [entry('.worktrees', '.worktrees', true), entry('src', 'src', true)],
+    })
+
+    await useFilesStore.getState().loadFileTree('p1')
+
+    // Скрытые файлы запрошены (сервер их отдал), но каталог worktree'ов отфильтрован.
+    expect(mocks.listDirectory).toHaveBeenCalledWith('p1', '', true)
+    const names = useFilesStore.getState().treesByProject.p1!.map((e) => e.name)
+    expect(names).toEqual(['src'])
+    expect(names).not.toContain('.worktrees')
+  })
+
+  it('loadSubDirectory: .worktrees отфильтрован во вложенном каталоге', async () => {
+    mocks.listDirectory.mockResolvedValue({
+      entries: [entry('.worktrees', 'repo/.worktrees', true), entry('main.ts', 'repo/main.ts', false)],
+    })
+
+    await useFilesStore.getState().loadSubDirectory('p1', 'repo')
+
+    const names = useFilesStore.getState().treesByProject['p1/repo']!.map((e) => e.name)
+    expect(names).toEqual(['main.ts'])
+  })
+
+  it('refreshProject (fs.changed): .worktrees не появляется в дереве', async () => {
+    useFilesStore.setState({
+      treesByProject: { p1: [] },
+      expandedProjects: new Set(['p1']),
+    })
+    mocks.listDirectory.mockResolvedValue({
+      entries: [entry('.worktrees', '.worktrees', true), entry('a.txt', 'a.txt', false)],
+    })
+
+    await useFilesStore.getState().refreshProject('p1')
+
+    const names = useFilesStore.getState().treesByProject.p1!.map((e) => e.name)
+    expect(names).toEqual(['a.txt'])
+  })
+})

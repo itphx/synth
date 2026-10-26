@@ -12,6 +12,7 @@ import { useSkillsStore } from './skillsStore'
 import { useInstructionsStore } from './instructionsStore'
 import { usePipelinesStore } from './pipelinesStore'
 import { useProcessesStore } from './processesStore'
+import { useWorktreesStore } from './worktreesStore'
 import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData, MessageStatus, CostBreakdown } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
@@ -255,6 +256,19 @@ export function createDispatcher(): EventDispatcher {
     const sid = (event.sessionId as string)
       || (event.session_id as string)
       || (payload.session_id as string)
+
+    // ADR-114 §6: инвентарь worktree'ов проекта изменился. Событие идёт в
+    // каналы сессий проекта, поэтому проект берём из payload (не из `sid`).
+    // Разбираем ДО проверки `sid`: событие — сигнал «перечитай инвентарь».
+    if (type === 'worktree.updated') {
+      useWorktreesStore.getState().applyEvent(type, payload)
+      // Привязка/отвязка меняет рабочий каталог сессии — перечитываем сессию.
+      if (sid && (payload.action === 'attached' || payload.action === 'detached')) {
+        refreshSessionFromApi(sid)
+      }
+      return
+    }
+
     if (!sid) return
 
     const {
@@ -769,6 +783,8 @@ export function createDispatcher(): EventDispatcher {
         }
         useFilesStore.getState().scheduleRefresh(projectId, { scope, paths, workspaceChanged, op })
         scheduleGitRefresh(projectId)
+        // ADR-114: изменение структуры каталогов (worktree'и) — тот же проект.
+        useWorktreesStore.getState().applyEvent('fs.changed', { ...payload, project_id: projectId })
         break
       }
 
