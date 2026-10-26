@@ -1237,3 +1237,11 @@
 - **E2E на test:** агент задал вопрос (`expiresAt=None`) → пауза хода → `POST …/questions/:qid/answer` → tool result «The user answered …» → ассистент продолжил. SSE `/prompt` остаётся открытым, пока ход ждёт ответа (ожидаемо).
 - **Приёмка:** full workspace — typecheck 0, lint 0 errors, **10 511 тестов**; ui-док 20 тестов + визуальная проверка desktop/mobile (`synth/tmp/question-dock/`); adr-check/docs-link 0.
 - **Отложено:** адресные вопросы конкретному пользователю (обсуждение: `target` + проверка в `QuestionService.answer`, cancel — любому участнику; этапы 1–2).
+
+## 2026-10-26 — test 0.12.2-10: таймер вопроса и схема timeout
+
+- **Раскатано:** чарт `synth 0.12.2-10` (образы backend slim+full / ui / executor 0.12.2), бандлы `synth-test` и `synth-test-allinone` — `1/1`; деплой `synth-deploy fc3aafd`.
+- **Таймер в доке:** `user_question.asked` публикует `created_at`/`expires_at` (последнее — только при заданном таймауте); транспорт прокидывает `expiresAt` в `QuestionRecord`; шапка дока показывает `мм:сс` (≥1 ч — `ч:мм:сс`) с иконкой `time`, `tabular-nums`, видно и в свёрнутом виде, после истечения `00:00` (без минуса), без `expiresAt` — как раньше. `formatRemaining` + i18n ru/en.
+- **Схема `timeout`:** в описании поля и тула явно указано «top-level, не внутри вопроса» — модель больше не кладёт его в объект вопроса (в живой проверке было `arg error`, теперь одна корректная попытка).
+- **E2E на test:** агент задал вопрос с `timeout: 300000` → `expiresAt` = +5 мин, один вызов тула без ошибок аргументов; ответ через API → ход продолжился.
+- **Приёмка:** core 6557, ui 2047 (док: 20, таймер: 42), typecheck/lint 0; полный workspace ранее — 10 526 тестов.
