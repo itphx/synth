@@ -1229,3 +1229,11 @@
 - **UX уведомлений:** дубль сообщений устранён в ядре (единый `enqueueUserMessage`; в тестах на старом `core/dist` он ещё воспроизводился), отдельный дедуп тостов убран; уведомления приходят на старте и завершении; результат — карточка внутри системного `Notice`.
 - **Приёмка:** typecheck 0 · lint 0 errors · **10 490+ тестов** (с DSN: core 6751, executor 142, PG 201/201, ui 2025, shared 812, backend 702, plugin-memory 191, storage-postgres 65, sdk 24); adr-check/docs-link 0 ошибок.
 - **Замечания:** `assistant` не имеет capability `shell` (by design) — фоновые процессы запускает `developer`/`devops`; тестовые сессии e2e (`bg-remote-e2e*`, `tools-e2e`) оставлены на инстансе для проверки.
+
+## 2026-10-26 — test 0.12.2-6: вопрос (таймаут, свёрнутый док, подтверждение)
+
+- **Раскатано:** чарт `synth 0.12.2-6`, образы backend (slim+full)/ui/executor 0.12.2; бандлы `synth-test` и `synth-test-allinone` — `1/1`; деплой `synth-deploy 7637ee2`.
+- **`question`:** параметр `timeout` (мс, ≥300000, не рекомендуется), по умолчанию таймаута **нет** (`questions.timeoutMs=0`); `expiresAt` не пишется. UI-док: сворачивание (превью/бейдж «отвечено N/M», на мобильном), точки-пагинация, шаг «Проверка ответов» с «Изменить»/«Отправить». Уведомление `notify.question.asked` (тост, если сессия не активна) + непрочитанное в дереве.
+- **E2E на test:** агент задал вопрос (`expiresAt=None`) → пауза хода → `POST …/questions/:qid/answer` → tool result «The user answered …» → ассистент продолжил. SSE `/prompt` остаётся открытым, пока ход ждёт ответа (ожидаемо).
+- **Приёмка:** full workspace — typecheck 0, lint 0 errors, **10 511 тестов**; ui-док 20 тестов + визуальная проверка desktop/mobile (`synth/tmp/question-dock/`); adr-check/docs-link 0.
+- **Отложено:** адресные вопросы конкретному пользователю (обсуждение: `target` + проверка в `QuestionService.answer`, cancel — любому участнику; этапы 1–2).
