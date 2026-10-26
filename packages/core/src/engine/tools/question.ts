@@ -74,8 +74,9 @@ const questionToolSchema = z
       // обёртку `optional` и берёт описание внутреннего типа — иначе модель
       // не увидит ни единицы измерения, ни минимума.
       .describe(
-        'Optional answer timeout in milliseconds. By default the question waits indefinitely (no timeout). '
-        + 'Not recommended: it aborts waiting. Minimum 300000 (5 minutes).',
+        'Optional answer timeout in milliseconds — a top-level parameter of the tool call, not a field of a question. '
+        + 'By default the question waits indefinitely (no timeout). Not recommended: it aborts waiting. '
+        + 'Minimum 300000 (5 minutes).',
       )
       .optional(),
   })
@@ -89,7 +90,7 @@ export const questionTool: ToolDefinition = {
     + 'Give each question a short header and concrete options; put the recommended option first and mark it with "(Recommended)". '
     + 'A free-text "Type your own answer" option is added automatically - do not add your own free-text option. '
     + 'Set multiple=true only if several options can be chosen at once. '
-    + 'Set "timeout" only if the user explicitly wants the question to expire; it is not recommended.',
+    + 'Set the top-level "timeout" (not inside a question object) only if the user explicitly wants the question to expire; it is not recommended.',
   parameters: questionToolSchema,
   capabilities: [ToolCapability.QUESTION],
   async execute(args, ctx) {
