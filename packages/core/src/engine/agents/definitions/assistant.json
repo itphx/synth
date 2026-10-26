@@ -21,7 +21,9 @@
     "user",
     "memory",
     "pipeline",
-    "schedule"
+    "schedule",
+    "question",
+    "process"
   ],
   "icon": "robot-3",
   "color": "--status-success",

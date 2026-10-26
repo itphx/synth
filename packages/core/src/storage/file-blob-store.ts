@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { BlobStore } from './ports/blob-store.js';
 
@@ -58,6 +58,14 @@ export class FileBlobStore implements BlobStore {
     await rename(tmp, target);
     // `rename` сохраняет права tmp-файла; при явном `mode` фиксируем его поверх umask.
     if (opts?.mode !== undefined) await chmod(target, opts.mode);
+  }
+
+  async append(path: string, data: Buffer | string): Promise<void> {
+    this._validate(path);
+    const target = this._resolve(path);
+    await mkdir(dirname(target), { recursive: true });
+    const buf = typeof data === 'string' ? Buffer.from(data, 'utf-8') : data;
+    await appendFile(target, buf);
   }
 
   async delete(path: string): Promise<void> {

@@ -415,6 +415,34 @@ export class ContextConfig implements ContextFileRepository {
     return this._readPrompt(stem, 'system', language) ?? '';
   }
 
+  /**
+   * Требование «только текст» для финального шага-отчёта саб-агента,
+   * которого коснулся лимит шагов (механика opencode: принудительный
+   * финальный шаг с запретом инструментов).
+   *
+   * Файлы: prompts/system/MAX_STEPS.{lang}.md — только локализованные
+   * (базового MAX_STEPS.md нет). Override через {userDataDir}/user/system/ —
+   * стандартный механизм system-категории, проверяется первым.
+   * Плейсхолдер `{limit}` подставляет вызывающий код (лимит шагов агента).
+   * Возвращает пустую строку, если файл не найден.
+   */
+  getMaxStepsPrompt(language = 'ru'): string {
+    const stem = 'MAX_STEPS';
+
+    // 1. Пользовательский override system-категории
+    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
+    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
+    if (overrideLocalized) {
+      const content = this._readFile(overrideLocalized);
+      if (content) return content;
+    }
+    const overrideContent = this._readFile(overridePath);
+    if (overrideContent) return overrideContent;
+
+    // 2. Встроенный prompts/system/MAX_STEPS.{lang}.md
+    return this._readPrompt(stem, 'system', language) ?? '';
+  }
+
   getSummarizerPrompt(language = 'ru'): string {
     return this._readPrompt('SUMMARIZER', 'system', language) ?? '';
   }

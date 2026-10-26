@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-25 (управление памятью проекта и индексами — `PUT /projects/:id` `memory`, `PATCH /memory/indexes/:id`; автоматизация памяти — `POST /pipeline-templates/:tid/instantiate` с `ensure` и builtin-шаблоны `builtin:memory-*` (RU §5.35/§5.38, перевод §5.35 отстаёт); ADR-106 Ф5: §5.33 «Пакеты расширений» — сводка `authority`, `authorityActivation`; ADR-105 Ф4: §5.37 «Внешние доступы»; ADR-090 §5.36 «Плагины» — переведено; ADR-107 §5.38 «Память» (портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги; **§5.5** — `GET /sessions/:id/memory` для вкладки «Память» — переведено); перевод отстаёт (§5.32 — ADR-102, §5.34 — ADR-100, §5.35 — ADR-101).
+> ⚠️ RU-версия обновлена 2026-10-26 (ADR-112/ADR-111/PROP-096/097: **§5.5** — вопросы пользователю (`GET/POST /api/v2/sessions/:id/questions*`) и steering дочерней сессии саб-агента; **§3.2 «Фоновые прогоны и вопросы пользователю»** — перечень серверных событий `user_question.*`/`process.*`/`child.*`; **§5.39 «Фоновые прогоны»** — `/api/v2/processes*` (реестр фоновых прогонов: список/деталь/лог/stop/удаление; граничный guard, инварианты 16/21; деградированный режим хранилища — контур не монтируется, 404)) — **переведено**; RU-версия обновлена 2026-10-25 — **переведено**: §5.36 «Плагины» (ADR-090), §5.38 «Память» (ADR-107: портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги), §5.5 `GET /sessions/:id/memory` для вкладки «Память»; **перевод отстаёт** (§5.32 — ADR-102, аналитика и отчётность; §5.33 — ADR-100, пакеты расширений; §5.34 — ADR-100/ADR-051, пайплайны; §5.35 — ADR-101, пайплайны проекта/прогоны/шаблоны; §5.37 — ADR-105, внешние доступы — разделов в EN-файле нет).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -251,6 +251,28 @@ The approval registry only exists in the Authority layer's **enforced** mode (`a
 without `authority.shadow`); in shadow/disabled mode the reply is accepted as before (by session
 visibility) — see [ADR-106](../arch_decisions/adr-106-authority-layer.md) (in Russian).
 
+### 3.2. Background runs and user questions
+
+The events of the background work and of the "ask the user" flow are published in the
+**owner session channel** (`EventBus.publish(sessionId, …)`, ADR-009) — no new transport
+channels are introduced (ADR-024).
+
+| Event | When | `data` fields |
+|---|---|---|
+| `user_question.asked` | the agent asked a question and waits for an answer | `question_id`, `session_id`, `questions[]`, `created_at`, `expires_at?` (only when a deadline is set — the UI renders the countdown from it), `turn_id?`, `tool_call_id?`, `agent_role?` |
+| `user_question.answered` | the user answered | `question_id`, `session_id`, `answers[][]` |
+| `user_question.cancelled` | the question was cancelled (timeout, "Stop", a manual cancel) | `question_id`, `session_id`, `reason` |
+| `process.started` | a background shell command was started (`kind:'process'`) | `process_id`, `session_id`, `command`, `cwd`, `pid?`, `background_run_id`, `log_path` |
+| `process.exited` | the background process finished | `process_id`, `session_id`, `state` (`completed`/`failed`/`cancelled`/`orphaned`), `exit_code?`, `signal?`, `background_run_id` |
+| `process.stopped` | a stop of the background process was requested (once per run) | `process_id`, `session_id`, `background_run_id`, `reason` |
+| `child.completed` / `child.failed` / `child.cancelled` | a background subagent finished (success/error/cancel; `kind:'subagent'`) | `child_session_id`, `parent_session_id`, `state`, `background_run_id`, `description` |
+
+The `user_question.*` prefix is deliberately **not** `question.*`: `question.asked` is already
+taken by the meaning "the queue is stuck". The `process.stopped` event is published by the core
+on a successful stop request (`POST /api/v2/processes/:id/stop`, `reason` — the stop reason);
+the terminal status of the run arrives later — with the `process.exited` event (for a stopped
+process `state: 'cancelled'`).
+
 ---
 
 ## 4. LLM Proxy
@@ -352,6 +374,9 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | GET | `/api/v2/sessions/:id/prompt` | both | auth | System prompt composition (ADR-070): `manifest` + `history` + `promptState` + `lastPromptMeta` + `toolsDetail` (tools with `chars`/`estTokens` and the estimation flag, ADR-071 §2.8). `manifest.toolsPolicy`/`manifest.mcpPolicy` — the applied built-in/MCP policies (ADR-071 §2.3); entries: `tools` (stable/context) → `mcp.servers`/`mcp.tools`/`mcp.status` (volatile, not in `staticPrefixChars`) |
 | GET | `/api/v2/sessions/:id/memory` | both | auth | Session memory for the “Memory” tab (ADR-107): `provider.active`, `scope.projectId`, `lastContext` — `facts`/`recall` blocks from the **last** turn (`chars`/`estTokens`/`status`, `null` when there were no turns), `facts.active` (active facts in scope), `projectMemory` (`{enabled}` — effective project policy; `null` for a session without a project), `indexes` (total/project/instance/ready/building/failed + `items`: id/name/scope/state/enabled/projectId; `stale` is computed by the plugin and is not returned here; for `instance` `enabled` is always true), `readiness` (`ready`/`degraded`/`unavailable`). No fact/chunk texts; access — session read (prefix guard), no duplicate checks |
 | GET | `/api/v2/sessions/:id/stats` | both | auth | Usage statistics (ADR-070): messages + recursive subagent usage (the `task` tool), aggregates per agent/user (`computeSessionStats`) |
+| GET | `/api/v2/sessions/:id/questions` | both | auth (read) | The user questions of the session (stage 1 of roadmap 0.13 — block 3): `{questions: QuestionRecord[]}`; `?status=pending\|answered\|cancelled` (not set — all statuses), `?limit=` (default 50, maximum 200); the freshest records first. The question service is not wired — 503 `QUESTION_UNAVAILABLE` |
+| POST | `/api/v2/sessions/:id/questions/:qid/answer` | both | auth (**mutation**) | The user's answer to the question: `{answers: string[][]}` (by the question index; the values — from `options[].value`) → 200 `{question}`. A free-text answer is always allowed: any non-empty string of ≤ 1000 characters is valid (a value outside `options[].value` is not an error). 400 `VALIDATION_ERROR` (an invalid body/answer), 404 `NOT_FOUND` (there is no question **or** it belongs to another session), 409 `CONFLICT` (the question is already answered/cancelled) |
+| POST | `/api/v2/sessions/:id/questions/:qid/cancel` | both | auth (**mutation**) | Cancel the question: `{reason?}` → 200 `{question}`; the same 404/409 as in `answer` |
 | GET | `/api/v2/sessions/:id/messages` | both | auth | `{messages, session_id}` |
 | POST | `/api/v2/sessions/:id/clear` | both | auth | Clear the history (except pinned) |
 | POST | `/api/v2/sessions/:id/abort` | both | auth | Reliable Stop (ADR-005): sets the persistent `status.cancel_requested` flag; with a live stream — a graceful cancel, then stops the queue processor; `{status:'aborted'}`; 404 if there is no session (see below) |
@@ -382,7 +407,9 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 > **Injection order (ADR-104, stage 3).** The injection queue is **not strict FIFO**: the injections of the `interrupt` class (the `metadata.interrupt=true` marker) are applied first, then the `steer` class; **within a class** the order is FIFO (the order of enqueuing). The order is deterministic and does not depend on when the injection was enqueued. When the per-turn limit overflows, the lowest-priority injections (`steer`) are dropped first, and the surplus is published as `steer.dropped`.
 > **An injection is an input into the same turn, not an answer from the user (ADR-104, stage 3).** An injection **does not answer** for the user on `permission.asked` and **does not cancel** a pending permission confirmation: a turn waiting on `ask` applies the injection at the step boundary **after** the answer. An injection also **does not widen the permissions**: in the `plan` mode a mutating tool stays denied (the permission layer rule `plan.deny`), even if the injection text "allows" it.
 > **Hybrid: a single mode contract (ADR-104, stage 3).** The `mode` reaches the remote side: the HTTP prompt of a remote session (`remote:<id>`) forwards the body as is, and the local core's WS path passes `mode` in the request to the remote backend (previously the mode was lost — a remote session always ran as `queue`). The response/ack carries the **applied** mode: the local side applied the mode itself — `mode_applied:true`; the remote side applied it — `202` with `mode_applied:true`; the remote side did **not** apply it (no running turn on the remote side, or an older version) — `202 {status:'queued', mode_applied:false}` (the message went through the regular queue). The WS `queued` ack contains `mode` and `mode_applied` (backend and standalone).
-> **Steering limitations (ADR-104).** **There is a mode selector in the UI**: while a turn is running, the composer shows three modes — "queue" (`queue`), "intervene" (`steer`), "interrupt" (`interrupt`); in the feed, injected messages are marked with the "intervention in the turn" marker (`metadata.steer`), in the `interrupt` mode — with the "turn interrupted" marker (`metadata.interrupt`), and an aborted generation gets the "Interrupted" badge (`metadata.status === 'interrupted'`). In hybrid mode the local core does not intervene in the turn executed by the remote backend: the mode is applied by the side that owns the turn (the remote backend), and the client is told in the ack whether the mode was applied (`mode_applied`). **Remainder:** steering a background subagent is unavailable until [PROP-096](../arch_decisions/prop-096-background-subagent-sessions.md) — there are no non-blocking subagent sessions in the code yet; an injection into a child `task` session is persisted but does not enter its turn (the subagent cycle runs outside the orchestrator) and is not transferred to the parent's queue — the isolation of the queues is covered by `packages/core/src/queue/steering-subagent.test.ts`.
+> **Steering limitations (ADR-104).** **There is a mode selector in the UI**: while a turn is running, the composer shows three modes — "queue" (`queue`), "intervene" (`steer`), "interrupt" (`interrupt`); in the feed, injected messages are marked with the "intervention in the turn" marker (`metadata.steer`), in the `interrupt` mode — with the "turn interrupted" marker (`metadata.interrupt`), and an aborted generation gets the "Interrupted" badge (`metadata.status === 'interrupted'`). In hybrid mode the local core does not intervene in the turn executed by the remote backend: the mode is applied by the side that owns the turn (the remote backend), and the client is told in the ack whether the mode was applied (`mode_applied`).
+> **Steering a child subagent session (ADR-104 + ADR-111).** The mode also works for child subagent sessions, including background ones: `POST /api/v2/sessions/<child>/prompt` with `mode:'steer'` puts the message into the injection queue **of the child session**, and the child's cycle (`engine/tools/task/run-cycle.ts`) applies it at the step boundary — before the next LLM call, in the same turn (the `toolUse`/`toolResult` pairs are not broken). The injection is persisted in the child's history as a regular `user` reply with `metadata.steer=true` and published to the child's channel (`message.added`, `message.injected`); exceeding the limit — the `steer.dropped` event in the child's channel, the turn does not fail. `interrupt` for a child **does not cut the generation** (at the step boundary there is none left) and is applied as a regular intervention. The general rule of the section applies: a message enters the injection queue only if the child session has a running turn (a background run always does: the child session is marked busy; with no running turn `steer`/`interrupt` behave like `queue`). The parent and child queues are isolated: an injection into the parent's queue does not enter the child's turn and vice versa (the check — `packages/core/src/queue/steering-subagent.test.ts`).
+> **Questions and a restart (ADR-112).** The wait for an answer to a question lives in the process memory: after a restart the unfinished questions are marked `cancelled` with the reason `interrupted`, the turn is not resumed (like the other tool-loop pauses). The question record itself survives the restart (the journal in the `QuestionRepository`). By default the question waits for an answer **without a timeout** (`questions.timeoutMs = 0`); the `question` tool may set a deadline (`timeout`, ≥ 5 minutes — not recommended: it aborts the wait).
 
 ### 5.6 Messages — `/api/v2/messages`
 
@@ -1749,6 +1776,65 @@ curl 'http://localhost:5000/api/v2/memory/graph?entity=Fleet&depth=2&limit=50' \
   -H 'Authorization: Bearer admin-key-123'
 ```
 
+### 5.39 Background runs — `/api/v2/processes` (both, ADR-111/PROP-097)
+
+A single registry of the background work ([ADR-111](../arch_decisions/adr-111-background-subagent-sessions.md),
+PROP-096/PROP-097): two kinds of runs — `subagent` (a background child session of a
+subagent, `task({background: true})`) and `process` (a background shell command,
+`execute_shell({background: true})`). The registry record is persistent (the
+`BackgroundRunRepository` port, ADR-096), so the state of a run survives a UI reconnect
+and a service restart; the "live" cancel handles live in the process memory (after a
+restart the `running` records become `orphaned`).
+
+The `createProcessRoutes` factory is shared by core and backend; managed passes the
+project access rule (`packages/backend/src/routes/processes.ts`).
+
+| Method | Path | Build | RBAC (managed) | Purpose / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/processes` | both | auth | The run list `{runs}`; filters `sessionId`/`projectId`/`kind` (`subagent`/`process`)/`status` (`running`/`completed`/`failed`/`cancelled`/`orphaned`)/`limit` (default 50, maximum 200); an invalid `kind`/`status` → 400 `VALIDATION_ERROR`. Only the runs of the sessions available to the user are returned (the owner/a project member; `ADMIN`/`LEAD` — all) |
+| GET | `/api/v2/processes/:id` | both | auth | The run `{run}` (the whole registry record); no run → 404 `NOT_FOUND`, no owner session → 404, no rights → 403 `FORBIDDEN` |
+| GET | `/api/v2/processes/:id/logs` | both | auth | A segment of the background process log `{content, offset, nextOffset, totalBytes, truncated}`; only `kind:'process'` (for `subagent` → 400 `VALIDATION_ERROR`), no log file → 404 `NOT_FOUND`. `offset` — the offset in bytes from the beginning of the log, `limit` — the size of the output (default and maximum — 256 KiB) |
+| POST | `/api/v2/processes/:id/stop` | both | auth (**write**) | Stop the run → 200 `{status:'stopping'}` (the stop is asynchronous: the stop request arrives with the `process.stopped` event, the final status — with the `process.exited` event); the run is not `running` anymore or it runs in another process (it cannot be stopped from here) → 409 `CONFLICT` |
+| DELETE | `/api/v2/processes/:id` | both | auth (**write**) | Delete the registry record → **204**; the run is still `running` → 409 `CONFLICT` |
+
+**Access boundary (invariants 16/21).** The right to a run is the right to its **owner
+session**, and it is checked **at the boundary**, not in the handler: the guard resolves
+the registry record and its session owner **once** and puts the record into the Hono
+context (`guardedProcess`); there are no access checks in the handlers — otherwise the
+rules would diverge. The access kind is derived from the HTTP method (`read` — reading,
+`write` — a mutation): a project member with the view role (`VIEWER`) reads the run, but
+**cannot** stop or delete it (invariant 21). The managed role rules: the session owner;
+`ADMIN` — cross-cutting access; `LEAD` — cross-cutting access to the project content; a
+project member — `read` for any role, `write` — `OWNER`/`EDITOR`/`LEAD`/`ADMIN`. In
+standalone (core) the predicate of the single instance owner applies. The run list is
+filtered by the same rule: a record whose session is not visible does not appear in the
+output at all (the sessions are cached per request, not per process — the rights change,
+and a process cache would hand out stale decisions).
+
+**Degraded storage mode (ADR-098).** In the degraded mode the background work services
+are not created — the `/api/v2/processes` contour is **not mounted**, so all the endpoints
+of the section respond `404` (there is no contour).
+
+**Events.** The live changes arrive in the **owner session channel**
+(`process.started`/`process.stopped`/`process.exited`/`child.*`, ADR-009/ADR-024; no new
+transport channels) — the composition and the fields of the events — §3.2. A background
+subagent additionally publishes a notification into the parent's history and enqueues the
+parent's turn (an auto-turn) — see
+[ADR-111](../arch_decisions/adr-111-background-subagent-sessions.md).
+
+**Storage.** The registry — `{dataDir}/processes/registry.json` (ADR-005, an atomic write);
+PostgreSQL — the `background_runs` table (the `021_background_runs` migration of the
+`@itphx/synth-storage-postgres` driver, ADR-097). The logs of the background processes — a
+blob store (`BlobStore`), the path `processes/<id>.log`; the log write limit —
+`background.logMaxBytes` (the ceiling of the output per HTTP request — 256 KiB, these are
+different values).
+
+**UI.** The “Processes” tab of the right panel
+(`packages/ui/src/components/panels/ProcessesTab.tsx`): the run list (kind, status,
+command/description, time), the log of the background process, “Stop” and the deletion of
+the record. The refresh — the live events `process.*`/`child.*` plus a periodic re-read of
+the list while the tab is active.
+
 ---
 
 ## 6. Sources
@@ -1767,6 +1853,7 @@ curl 'http://localhost:5000/api/v2/memory/graph?entity=Fleet&depth=2&limit=50' \
 | Plugins (ADR-090) | `packages/core/src/server/routes/plugins.ts`, `packages/core/src/engine/plugins/*` (the host, the loader, the installer, the runtime), `packages/shared/src/types/{pack,plugin-audit,plugin-lock,plugin-scan,prompt-blocks,llm-filters,plugin-tools}.ts` |
 | Memory: the portal and the metrics (ADR-107, PROP-047) | `packages/core/src/server/routes/memory.ts`, `packages/core/src/metrics/collectors/memory.ts`, `packages/core/src/storage/ports/{memory-fact-repository,memory-index-repository}.ts`, `packages/core/src/engine/plugins/scoped-memory.ts` |
 | External credentials (ADR-105) | `packages/core/src/server/routes/oauth.ts`, `packages/core/src/engine/oauth/*` (client, service, registry, audit), `packages/core/src/storage/external-credential-store.ts`, `packages/core/src/storage/ports/{external-credential-repository,credential-audit-repository}.ts`, `packages/shared/src/types/external-credentials.ts` |
+| Background runs: the registry, the services, the HTTP contour (ADR-111, PROP-096/097) | `packages/core/src/server/routes/processes.ts`, `packages/core/src/engine/background/*`, `packages/core/src/engine/processes/*`, `packages/core/src/storage/ports/background-run-repository.ts`, `packages/backend/src/routes/processes.ts`, `packages/shared/src/types/background.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

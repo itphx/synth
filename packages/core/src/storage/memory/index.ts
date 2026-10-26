@@ -66,3 +66,8 @@ export { MemoryDocumentRepository } from './document-repository.js';
 // PROP-047 §2.1 (предпосылка A): порты памяти — факты и индексы с чанками.
 export { MemoryFactRepository } from './facts.js';
 export { MemoryIndexRepository } from './indexes.js';
+
+// Этап 1 roadmap 0.13: вопросы пользователю (блок 1.3) и единый реестр
+// фоновых прогонов (блок 1.2).
+export { MemoryQuestionRepository } from './questions.js';
+export { MemoryBackgroundRunRepository } from './background-runs.js';

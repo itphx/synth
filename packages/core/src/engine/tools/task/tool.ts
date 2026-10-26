@@ -4,16 +4,18 @@
  * ADR-095 (шаг 5): вынесено из `task.ts` без изменения поведения; общий цикл —
  * в `run-cycle.ts`, создание дочерней сессии — в `fork.ts`, промпт — в `prompt.ts`.
  */
-import { MessageRole, nowISO, generateId, makeTextPart, ToolCapability } from '@itphx/synth-shared';
-import type { ToolDefinition, Message, SessionSettings, ToolForLLM } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, generateStreamId, makeTextPart, ToolCapability } from '@itphx/synth-shared';
+import type { ToolDefinition, Message, SessionSettings, ToolForLLM, ToolContext, ToolResult } from '@itphx/synth-shared';
 import { normalizeAgentModes } from '../../agents/normalize.js';
-import type { LLMMessage } from '../../../providers/base.js';
+import type { CancellationToken, LLMMessage, BaseProvider } from '../../../providers/base.js';
 import { formatSkillsCatalogBlock } from '../../skills/catalog.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
+import { BackgroundLimitExceededError } from '../../background/types.js';
 import { publishMessageAdded } from './child-session.js';
 import { prepareChildSession, type PreparedChildSession } from './fork.js';
 import { buildSubagentUnavailableToolsSection, messageToLLMMessage, resolveSubagentPrompt } from './prompt.js';
-import { runSubagent } from './run-cycle.js';
+import { runSubagent, type SubagentRunConfig } from './run-cycle.js';
+import { appendResumeMarker, resumeInitialMessages } from './resume-target.js';
 import { taskParametersSchema, type TaskParams } from './args.js';
 import type { ContextMode, TaskExtra } from './types.js';
 
@@ -60,6 +62,25 @@ export const taskTool: ToolDefinition = {
       };
     }
 
+    // ─── Продолжение существующей дочерней сессии (`task_id`) ───────
+    // Продолжение идёт **синхронно в текущем ходе** (родитель ждёт): новая
+    // дочерняя сессия не создаётся, берётся история указанной (`PROP-096`
+    // §«Продолжение ребёнка»).
+    if (params.task_id) {
+      return await continueChildSession({ params, extra, ctx });
+    }
+
+    // ─── Фон недоступен → отказ ДО создания дочерней сессии ────────
+    // Проверка идёт до `prepareChildSession`: иначе при выключенном фоне
+    // оставался бы «пустой» ребёнок (сессия + `session.created`) без прогона.
+    if (params.background === true && (!extra.backgroundService || extra.backgroundEnabled === false)) {
+      return {
+        content: sm('task.background_disabled'),
+        isError: true,
+        metadata: { i18n: i18nMeta('task.background_disabled') },
+      };
+    }
+
     const contextMode: ContextMode = params.context_mode || 'none';
     const contextCount = params.context_count || DEFAULT_LAST_N;
     const systemPrompt = resolveSubagentPrompt(
@@ -71,10 +92,36 @@ export const taskTool: ToolDefinition = {
     const tools: ToolForLLM[] | undefined = extra.agentRegistry.getToolsForAgent(agentDef.id, extra.mcpServers);
     const maxSteps = agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS;
 
+    // ─── Выбор провайдера для саб-агента (ADR-034 Фаза 4) ────────────
+    // Резолвится ДО создания дочерней сессии: настройки ребёнка должны
+    // совпадать с фактической моделью прогона.
+    const resolution = await resolveSubagentProvider({
+      params,
+      extra,
+      parentSettings: extra.parentSessionSettings,
+    });
+    if (resolution.unavailable) {
+      const unavailableParams = {
+        provider: resolution.unavailable.provider,
+        model: resolution.unavailable.model,
+      };
+      return {
+        content: sm('task.model_unavailable', unavailableParams),
+        isError: true,
+        metadata: { i18n: i18nMeta('task.model_unavailable', unavailableParams) },
+      };
+    }
+
     // ─── Настройки роутинга для дочерней сессии (ADR-034 Фаза 4) ──
     const childRoutingOverrides: Partial<SessionSettings> = {};
-    if (params.model) childRoutingOverrides.model = params.model;
-    if (params.provider) childRoutingOverrides.provider = params.provider;
+    // Фактическая пара провайдер/модель прогона = настройки ребёнка
+    // (иначе дочерняя сессия указывала бы на модель, которой не шёл прогон).
+    if (resolution.providerName) childRoutingOverrides.provider = resolution.providerName;
+    if (resolution.modelName) childRoutingOverrides.model = resolution.modelName;
+    // Саб-агент идёт по модели, отличной от родительской — блок роутинга
+    // в его промпте остаётся осмысленным (как и при явном выборе модели).
+    const usesOwnModel = resolution.providerName !== resolution.parentProviderName
+      || resolution.modelName !== resolution.parentModelName;
     if (agentDef?.reasoningLevel) childRoutingOverrides.reasoningLevel = agentDef.reasoningLevel;
     if (params.routing_strategy) {
       if (params.routing_strategy === 'none') {
@@ -87,13 +134,6 @@ export const taskTool: ToolDefinition = {
     const subagentRoutingCfg = extra.routerConfig?.subagent;
     if (subagentRoutingCfg?.enabled && params.routing_strategy !== 'none') {
       childRoutingOverrides.routingEnabled = true;
-      // Если есть дефолтная модель саб-агента в конфиге и не переопределена
-      if (!params.model && subagentRoutingCfg.model) {
-        childRoutingOverrides.model = subagentRoutingCfg.model;
-      }
-      if (!params.provider && subagentRoutingCfg.provider) {
-        childRoutingOverrides.provider = subagentRoutingCfg.provider;
-      }
     }
 
     // ─── Создание дочерней сессии с контекстом (ADR-026/029) ────────
@@ -131,7 +171,7 @@ export const taskTool: ToolDefinition = {
       // Загружается из контекстных файлов prompts/system/ROUTING.{lang}.md
       const parentSettings = extra.parentSessionSettings;
       const routingEnabled = extra.routerConfig?.enabled && (parentSettings?.routingEnabled !== false);
-      const shouldShowRouting = routingEnabled || childRoutingOverrides.model || childRoutingOverrides.provider;
+      const shouldShowRouting = routingEnabled || usesOwnModel;
       if (shouldShowRouting && extra.routerConfig) {
         const lang = parentSettings?.language || 'ru';
         const template = extra.contextConfig?.getRoutingInstructions(lang) || '';
@@ -217,30 +257,11 @@ export const taskTool: ToolDefinition = {
     );
     if (unavailableSection) llmSystemPrompt += `\n\n${unavailableSection}`;
 
-    // ─── Выбор провайдера для саб-агента через роутер (ADR-034 Фаза 4) ──
-    let effectiveProvider = extra.provider;
-    let routingDecisionInfo: { providerName: string; modelName: string; strategy: string } | undefined;
-    const parentSettings = extra.parentSessionSettings;
-    if (extra.modelRouter && (parentSettings?.routingEnabled !== false) && extra.routerConfig) {
-      try {
-        const decision = await extra.modelRouter.route({
-          sessionSettings: parentSettings!,
-          userMessage: params.prompt,
-          systemPrompt: llmSystemPrompt,
-        });
-        const routedProvider = extra.modelRouter.getProvider(decision);
-        if (routedProvider && (decision.providerName !== parentSettings?.provider || decision.modelName !== parentSettings?.model)) {
-          effectiveProvider = routedProvider;
-          routingDecisionInfo = {
-            providerName: decision.providerName,
-            modelName: decision.modelName,
-            strategy: decision.strategy,
-          };
-        }
-      } catch {
-        // fallback на провайдер родителя
-      }
-    }
+    // ─── Провайдер прогона саб-агента (ADR-034 Фаза 4) ──────────────
+    // Резолв выполнен выше (до создания дочерней сессии) — здесь только
+    // фиксируем фактический провайдер и routing-решение для отчётности.
+    const effectiveProvider = resolution.provider;
+    const routingDecisionInfo = resolution.routingDecisionInfo;
 
     // ADR-070 §2.1/§1.5: system prompt передаётся ТОЛЬКО вторым аргументом
     // chatAsync (как в оркестраторе), в messages system-сообщения нет —
@@ -296,7 +317,7 @@ export const taskTool: ToolDefinition = {
     }
 
     // ─── Запуск цикла саб-агента: общий код для task и resume (ниже) ──
-    return runSubagent({
+    const runConfig: SubagentRunConfig = {
       subagentType: params.subagent_type,
       description: params.description,
       contextMode,
@@ -311,6 +332,425 @@ export const taskTool: ToolDefinition = {
       extra,
       ctx,
       retry: extra.retry,
-    });
+    };
+
+    // ─── Фоновый запуск (PROP-096) ───────────────────────────────────
+    // Родительский ход **не блокируется**: тул возвращает управление сразу,
+    // а по завершении ребёнка приходит уведомление (сообщение в истории
+    // родителя + автоход).
+    if (params.background === true) {
+      return await startBackgroundSubagent({ params, runConfig, extra, ctx });
+    }
+
+    return runSubagent(runConfig);
   },
 };
+
+/** Результат резолвинга провайдера/модели саб-агента. */
+interface SubagentProviderResolution {
+  /** Провайдер, которым реально пойдёт прогон саб-агента. */
+  provider: BaseProvider;
+  /** Пара provider/model фактического прогона. */
+  providerName: string;
+  modelName: string;
+  /** Пара provider/model родительской сессии (с ней сравнивается фактическая). */
+  parentProviderName: string;
+  parentModelName: string;
+  /** Routing-решение для отчётности (`<routed_by>`/metadata прогона). */
+  routingDecisionInfo?: { providerName: string; modelName: string; strategy: string };
+  /** Нужен не-родительский провайдер, но он недоступен — отказ тула. */
+  unavailable?: { provider: string; model: string };
+}
+
+/**
+ * Резолвинг провайдера/модели саб-агента (ADR-034 Фаза 4).
+ *
+ * Приоритет (сверху вниз):
+ *  1. **явные** `params.model`/`params.provider` — пара, заданная вызывающим
+ *     агентом (недостающее поле — из настроек родителя);
+ *  2. `routerConfig.subagent.{model,provider}` — дефолт инстанса для
+ *     саб-агентов (при `enabled !== false`), недостающее — из родителя;
+ *  3. `params.routing_strategy === 'none'` — пара родителя, роутер не зовём;
+ *  4. иначе — `modelRouter.route()` (прежнее поведение ADR-034).
+ *
+ * Пункты 1–2 роутер **не** зовут: провайдер резолвится напрямую через
+ * `modelRouter.getProvider()`. Если запрошенная пара недоступна (провайдер не
+ * настроен/модель неизвестна) — отказ тула `task.model_unavailable`, без тихого
+ * отката на родителя: иначе прогон ушёл бы на другой модели, чем запросили.
+ */
+async function resolveSubagentProvider(opts: {
+  params: TaskParams;
+  extra: TaskExtra;
+  parentSettings?: SessionSettings;
+}): Promise<SubagentProviderResolution> {
+  const { params, extra, parentSettings } = opts;
+
+  // Пара родителя: настройки сессии → провайдер родителя (fallback).
+  const parentProviderName = parentSettings?.provider || extra.provider?.name || '';
+  const parentModelName = parentSettings?.model || extra.provider?.model || '';
+  const base: SubagentProviderResolution = {
+    provider: extra.provider,
+    providerName: parentProviderName,
+    modelName: parentModelName,
+    parentProviderName,
+    parentModelName,
+  };
+
+  const subagentCfg = extra.routerConfig?.subagent;
+  const subagentCfgEnabled = subagentCfg !== undefined && subagentCfg.enabled !== false;
+  const explicitModel = params.model?.trim() || '';
+  const explicitProvider = params.provider?.trim() || '';
+  const cfgModel = subagentCfgEnabled ? (subagentCfg?.model?.trim() || '') : '';
+  const cfgProvider = subagentCfgEnabled ? (subagentCfg?.provider?.trim() || '') : '';
+
+  /** Резолв заданной пары через пул провайдеров роутера (без `route()`). */
+  const resolveRequestedPair = (
+    providerName: string,
+    modelName: string,
+    strategy: string,
+  ): SubagentProviderResolution => {
+    const requested = {
+      providerName,
+      modelName,
+      reason: 'explicit override',
+      strategy: 'default',
+    };
+    const resolved = extra.modelRouter?.getProvider(requested) ?? null;
+    if (resolved) {
+      return {
+        ...base,
+        provider: resolved,
+        providerName,
+        modelName,
+        routingDecisionInfo: { providerName, modelName, strategy },
+      };
+    }
+    // Провайдер недоступен. Если это ровно родительская пара — берём родителя
+    // (запроса на другую модель не было), иначе — явный отказ.
+    if (providerName === parentProviderName && modelName === parentModelName) {
+      return base;
+    }
+    return {
+      ...base,
+      providerName,
+      modelName,
+      unavailable: { provider: providerName, model: modelName },
+    };
+  };
+
+  // 1. Явные параметры тула — приоритет выше всего.
+  if (explicitModel || explicitProvider) {
+    return resolveRequestedPair(
+      explicitProvider || parentProviderName,
+      explicitModel || parentModelName,
+      'explicit',
+    );
+  }
+
+  // 2. Дефолт инстанса для саб-агентов (router.subagent).
+  if (cfgModel || cfgProvider) {
+    return resolveRequestedPair(
+      cfgProvider || parentProviderName,
+      cfgModel || parentModelName,
+      'subagent-config',
+    );
+  }
+
+  // 3. Роутинг выключен явно (`routing_strategy: 'none'`) — пара родителя,
+  //    роутер не зовём.
+  if (params.routing_strategy === 'none') {
+    return base;
+  }
+
+  // 4. Роутинг ADR-034 — прежнее поведение: решение роутера, при совпадении
+  //    с родителем — провайдер родителя.
+  if (extra.modelRouter && parentSettings && parentSettings.routingEnabled !== false && extra.routerConfig) {
+    try {
+      const decision = await extra.modelRouter.route({
+        sessionSettings: parentSettings,
+        userMessage: params.prompt,
+      });
+      const routedProvider = extra.modelRouter.getProvider(decision);
+      if (routedProvider && (decision.providerName !== parentProviderName || decision.modelName !== parentModelName)) {
+        return {
+          ...base,
+          provider: routedProvider,
+          providerName: decision.providerName,
+          modelName: decision.modelName,
+          routingDecisionInfo: {
+            providerName: decision.providerName,
+            modelName: decision.modelName,
+            strategy: decision.strategy,
+          },
+        };
+      }
+    } catch {
+      // fallback на провайдер родителя
+    }
+  }
+
+  return base;
+}
+
+/**
+ * Продолжение дочерней сессии саб-агента из тула `task` (`task_id`).
+ *
+ * Проверки: сессия существует, она — ребёнок **текущей** сессии, не занята.
+ * Далее — общий цикл саб-агента (`runSubagent`) в текущем ходе родителя:
+ * родитель ждёт результат, ответ приходит обычным `task_result`.
+ */
+async function continueChildSession(opts: {
+  params: TaskParams;
+  extra: TaskExtra;
+  ctx: ToolContext;
+}): Promise<ToolResult> {
+  const { params, extra, ctx } = opts;
+  const sessionManager = extra.sessionManager;
+  if (!sessionManager) {
+    return { content: sm('task.deps_unavailable'), isError: true };
+  }
+
+  const childId = params.task_id!;
+  const child = await sessionManager.getSession(childId);
+  if (!child) {
+    return {
+      content: sm('task.resume_session_not_found', { id: childId }),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.resume_session_not_found', { id: childId }) },
+    };
+  }
+  // Чужой ребёнок продолжить нельзя (только свой).
+  if (child.parentId !== ctx.sessionId) {
+    return {
+      content: sm('task.resume_foreign_child', { id: childId }),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.resume_foreign_child', { id: childId }) },
+    };
+  }
+  // Занятый ребёнок (идёт прогон) — продолжение невозможно.
+  if (child.status.blocked || child.currentStream) {
+    return {
+      content: sm('task.resume_child_busy', { id: childId }),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.resume_child_busy', { id: childId }) },
+    };
+  }
+
+  const agentRole = child.settings.agentRole || '';
+  const agentDef = agentRole ? extra.agentRegistry.get(agentRole) : undefined;
+  if (!agentDef || !normalizeAgentModes(agentDef.agentMode).includes('subagent')) {
+    return {
+      content: sm('task.resume_agent_not_found', { type: agentRole }),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.resume_agent_not_found', { type: agentRole }) },
+    };
+  }
+
+  const streamId = generateStreamId();
+  // Маркер продолжения — в историю ребёнка (общий помощник с HTTP-resume).
+  const freshChild = await appendResumeMarker(sessionManager, extra.eventBus, {
+    child,
+    parentSessionId: ctx.sessionId,
+    streamId,
+  });
+
+  const childExtra: TaskExtra = {
+    ...extra,
+    // Настройки ребёнка — его собственные (permission/настройки/язык).
+    parentSessionSettings: child.settings,
+    permissionConfig: child.settings.permission ?? extra.permissionConfig,
+    streamId,
+  };
+
+  return runSubagent({
+    subagentType: agentRole,
+    description: params.description || child.title || '',
+    contextMode: 'none',
+    maxSteps: agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS,
+    llmSystemPrompt: resolveSubagentPrompt(
+      agentDef,
+      agentRole,
+      child.settings.language,
+      extra.contextConfig?.systemPromptsDir,
+    ),
+    initialMessages: resumeInitialMessages(freshChild),
+    provider: extra.provider,
+    tools: extra.agentRegistry.getToolsForAgent(agentDef.id, extra.mcpServers),
+    childSessionId: child.id,
+    parentSessionId: ctx.sessionId,
+    extra: childExtra,
+    ctx,
+    retry: extra.retry,
+  });
+}
+
+/**
+ * Фоновый запуск саб-агента (PROP-096): тул возвращает управление сразу.
+ *
+ * Порядок: регистрация в реестре фоновых прогонов (лимиты) → блокировка
+ * дочерней сессии (`acquireLock` + `currentStream`) → cancel-токен в
+ * оркестраторе → detached-прогон → немедленный возврат `tool_result`.
+ *
+ * Фоновый ребёнок **независим** от родителя: свой `AbortController` (сигнал
+ * родителя его не касается) и свой `streamId`. Отмена — только
+ * `POST /sessions/<child>/abort`.
+ */
+async function startBackgroundSubagent(opts: {
+  params: TaskParams;
+  runConfig: SubagentRunConfig;
+  extra: TaskExtra;
+  ctx: ToolContext;
+}): Promise<ToolResult> {
+  const { params, runConfig, extra, ctx } = opts;
+  const service = extra.backgroundService;
+  if (!service || extra.backgroundEnabled === false) {
+    return {
+      content: sm('task.background_disabled'),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.background_disabled') },
+    };
+  }
+
+  const parentSessionId = extra.sessionId;
+  const childSessionId = runConfig.childSessionId;
+  const sessionManager = extra.sessionManager;
+  if (!parentSessionId || !childSessionId || !sessionManager) {
+    // Без дочерней сессии фоновый прогон неотличим от обычного — отказ.
+    return {
+      content: sm('task.deps_unavailable'),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.deps_unavailable') },
+    };
+  }
+
+  // 1. Регистрация в реестре фоновых прогонов (лимиты — здесь).
+  let record;
+  try {
+    record = await service.startSubagent({
+      sessionId: parentSessionId,
+      childSessionId,
+      agentRole: params.subagent_type,
+      description: params.description,
+    });
+  } catch (err) {
+    if (err instanceof BackgroundLimitExceededError) {
+      return {
+        content: sm('task.background_limit', { limit: String(err.limit) }),
+        isError: true,
+        metadata: {
+          background_run_limit: err.limitKind,
+          i18n: i18nMeta('task.background_limit', { limit: String(err.limit) }),
+        },
+      };
+    }
+    throw err;
+  }
+
+  // 2. Собственный сигнал отмены и свой streamId фонового прогона.
+  const backgroundAbort = new AbortController();
+  const streamId = generateStreamId();
+  const cancelToken: CancellationToken = {
+    cancelled: false,
+    cancel: () => {
+      cancelToken.cancelled = true;
+      backgroundAbort.abort();
+    },
+  };
+  extra.registerCancelToken?.(streamId, cancelToken);
+  // Хэндл отмены в реестре — остановка фонового прогона по его записи.
+  service.registerAbort(record.id, () => backgroundAbort.abort());
+
+  // 3. Блокировка дочерней сессии + маркер активности (`currentStream`) —
+  //    по образцу `orchestrator.startSubagentResume`: так работает
+  //    `POST /sessions/<child>/abort` и виден статус в UI.
+  const processId = `background:${record.id}`;
+  const acquired = await sessionManager.acquireLock(childSessionId, processId);
+  if (!acquired) {
+    extra.unregisterCancelToken?.(streamId);
+    backgroundAbort.abort();
+    await service.finish(record.id, { status: 'cancelled', summary: 'child session is busy' });
+    return {
+      content: sm('task.resume_child_busy', { id: childSessionId }),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.resume_child_busy', { id: childSessionId }) },
+    };
+  }
+  try {
+    await sessionManager.withLock(childSessionId, async (s) => {
+      s.currentStream = {
+        streamId,
+        message: params.description,
+        agentRole: params.subagent_type,
+        startedAt: nowISO(),
+        cancelled: false,
+      };
+      await sessionManager.saveSession(s);
+    });
+  } catch {
+    // Блокировка могла не записаться — прогон всё равно пойдёт, отмена
+    // останется доступна через реестр (`stop`).
+  }
+
+  // 4. Detached-прогон: собственный контекст (сигнал отмены — свой), без
+  //    публикации в родительский стрим (`publish` опционален в цикле).
+  const detachedExtra: TaskExtra = {
+    ...extra,
+    publish: undefined,
+    streamId,
+    // Сессия в extra остаётся **родительской** — по ней идут child.*-события.
+    sessionId: parentSessionId,
+    callId: extra.callId,
+  };
+  const detachedCtx: ToolContext = {
+    ...ctx,
+    messageId: streamId,
+    abortSignal: backgroundAbort.signal,
+  };
+
+  void runSubagent({ ...runConfig, extra: detachedExtra, ctx: detachedCtx })
+    .then(async (result) => {
+      const stoppedByUser = result.metadata?.stopped_by === 'user';
+      const status: 'completed' | 'failed' | 'cancelled' = result.isError
+        ? 'failed'
+        : stoppedByUser ? 'cancelled' : 'completed';
+      const finalContent = typeof result.metadata?.final_content === 'string'
+        ? (result.metadata.final_content as string)
+        : '';
+      const summary = status === 'completed'
+        ? (finalContent || result.content)
+        : status === 'cancelled'
+          ? (typeof result.metadata?.partial_output === 'string' ? (result.metadata.partial_output as string) : '')
+          : result.content;
+      await service.finish(record.id, { status, summary });
+    })
+    .catch((err: unknown) => {
+      void service.finish(record.id, { status: 'failed', summary: String(err) });
+    })
+    .finally(async () => {
+      extra.unregisterCancelToken?.(streamId);
+      try {
+        await sessionManager.withLock(childSessionId, async (s) => {
+          s.currentStream = undefined;
+          await sessionManager.saveSession(s);
+        });
+      } catch {
+        // сессия могла быть удалена
+      }
+      try {
+        await sessionManager.releaseLock(childSessionId, processId);
+      } catch {
+        // ignore
+      }
+    });
+
+  // 5. Немедленный возврат: родитель продолжает работать, уведомление придёт.
+  return {
+    content: sm('task.background_started', { id: childSessionId }),
+    metadata: {
+      child_session_id: childSessionId,
+      status: 'running',
+      background_run_id: record.id,
+      i18n: i18nMeta('task.background_started', { id: childSessionId }),
+    },
+  };
+}

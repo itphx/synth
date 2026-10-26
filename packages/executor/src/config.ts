@@ -16,6 +16,9 @@
  * | `SYNTH_EXECUTOR_MAX_TIMEOUT_MS` | нет | `120000` | потолок таймаута команды |
  * | `SYNTH_EXECUTOR_MAX_OUTPUT_BYTES` | нет | `10485760` | потолок буфера вывода |
  * | `SYNTH_EXECUTOR_MCP_SERVERS` | нет | `[]` | MCP-серверы, которые исполнитель хостит у себя (JSON-массив) |
+ * | `SYNTH_EXECUTOR_BACKGROUND_MAX` | нет | `8` | лимит живых фоновых процессов (ADR-077, шаг 7c) |
+ * | `SYNTH_EXECUTOR_BACKGROUND_LOG_MAX_BYTES` | нет | `10485760` | лимит журнала фонового процесса на поток, байт |
+ * | `SYNTH_EXECUTOR_BACKGROUND_LOG_DIR` | нет | `<tmp>/synth-exec-bg` | каталог журналов фоновых процессов |
  *
  * **Fail-closed**: без токена или без корня workspace процесс не стартует —
  * исполнитель без аутентификации или без границы рабочего каталога опаснее,
@@ -47,6 +50,9 @@ export const EXECUTOR_ENV = {
   maxTimeoutMs: 'SYNTH_EXECUTOR_MAX_TIMEOUT_MS',
   maxOutputBytes: 'SYNTH_EXECUTOR_MAX_OUTPUT_BYTES',
   mcpServers: 'SYNTH_EXECUTOR_MCP_SERVERS',
+  backgroundMax: 'SYNTH_EXECUTOR_BACKGROUND_MAX',
+  backgroundLogMaxBytes: 'SYNTH_EXECUTOR_BACKGROUND_LOG_MAX_BYTES',
+  backgroundLogDir: 'SYNTH_EXECUTOR_BACKGROUND_LOG_DIR',
 } as const;
 
 /** Дефолты исполнителя. */
@@ -56,6 +62,8 @@ export const EXECUTOR_DEFAULTS = {
   maxConcurrency: 4,
   maxTimeoutMs: 120_000,
   maxOutputBytes: 10 * 1024 * 1024,
+  backgroundMax: 8,
+  backgroundLogMaxBytes: 10 * 1024 * 1024,
 } as const;
 
 /** Эффективная конфигурация исполнителя. */
@@ -74,6 +82,12 @@ export interface ExecutorConfig {
   maxTimeoutMs: number;
   /** Потолок буфера вывода, байт. */
   maxOutputBytes: number;
+  /** Лимит живых фоновых процессов (ADR-077, шаг 7c). */
+  backgroundMax: number;
+  /** Лимит журнала фонового процесса на поток, байт. */
+  backgroundLogMaxBytes: number;
+  /** Каталог журналов фоновых процессов (не задан — дефолт сервиса). */
+  backgroundLogDir?: string;
   /** MCP-серверы, которые исполнитель хостит у себя (stdio). */
   mcpServers: McpServerSpec[];
 }
@@ -131,6 +145,17 @@ export function resolveExecutorConfig(env: NodeJS.ProcessEnv = process.env): Exe
       EXECUTOR_ENV.maxOutputBytes,
       EXECUTOR_DEFAULTS.maxOutputBytes,
     ),
+    backgroundMax: requirePositiveInt(
+      env,
+      EXECUTOR_ENV.backgroundMax,
+      EXECUTOR_DEFAULTS.backgroundMax,
+    ),
+    backgroundLogMaxBytes: requirePositiveInt(
+      env,
+      EXECUTOR_ENV.backgroundLogMaxBytes,
+      EXECUTOR_DEFAULTS.backgroundLogMaxBytes,
+    ),
+    backgroundLogDir: env[EXECUTOR_ENV.backgroundLogDir]?.trim() || undefined,
     mcpServers: parseMcpServerSpecs(env[EXECUTOR_ENV.mcpServers], EXECUTOR_ENV.mcpServers),
   };
 }

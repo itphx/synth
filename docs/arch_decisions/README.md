@@ -55,6 +55,9 @@
 | ADR-104 | Вмешательство в ход посреди генерации (steering) | ✅ Реализовано | [adr-104-mid-turn-steering.md](./adr-104-mid-turn-steering.md) |
 | ADR-105 | Внешние доступы — единый слой доступа к внешним сервисам (OAuth-коннекторы) | ✅ Реализовано | [adr-105-external-credentials.md](./adr-105-external-credentials.md) |
 | ADR-107 | Сервисы фасада плагинов — память, эмбеддинги, свои настройки | ✅ Реализовано | [adr-107-plugin-facade-services.md](./adr-107-plugin-facade-services.md) |
+| ADR-111 | Фоновые прогоны — неблокирующие саб-агенты и реестр | ✅ Реализовано | [adr-111-background-subagent-sessions.md](./adr-111-background-subagent-sessions.md) |
+| ADR-112 | Вопрос пользователю посреди хода (question) | ✅ Реализовано | [adr-112-user-questions-mid-turn.md](./adr-112-user-questions-mid-turn.md) |
+| ADR-113 | Фоновые процессы — реестр, control plane и исполнитель | ✅ Реализовано | [adr-113-background-processes.md](./adr-113-background-processes.md) |
 
 ## Частично
 
@@ -135,4 +138,4 @@
 
 ---
 
-Всего документов: 100 (Решения: 43, Частично: 17, Предложения: 30, Vision: 8, Icebox: 1, Legacy: 1).
+Всего документов: 103 (Решения: 46, Частично: 17, Предложения: 30, Vision: 8, Icebox: 1, Legacy: 1).

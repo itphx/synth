@@ -11,6 +11,7 @@ import {
   describeAnalyticsRollupRepository,
   describeAuthorityDecisionJournal,
   describeAuthorityPolicyRepository,
+  describeBackgroundRunRepository,
   describeBlobStore,
   describeContextFileRepository,
   describeDefaultsRepository,
@@ -28,6 +29,7 @@ import {
   describeMemoryIndexRepository,
   describePluginAuditRepository,
   describePluginLockRepository,
+  describeQuestionRepository,
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
   describeExternalCredentialRepository,
@@ -262,4 +264,11 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   // (`memory_facts`/`memory_indexes`/`memory_chunks`, миграция 017).
   describeMemoryFactRepository('PG → MemoryFactRepository', () => makePort('memoryFacts'));
   describeMemoryIndexRepository('PG → MemoryIndexRepository', () => makePort('memoryIndexes'));
+
+  // Этап 1 roadmap 0.13 (блок 1.3): вопросы пользователю (таблица `questions`).
+  describeQuestionRepository('PG → QuestionRepository', () => makePort('questions'));
+
+  // Этап 1 roadmap 0.13 (блок 1.2): реестр фоновых прогонов (таблица
+  // `background_runs`).
+  describeBackgroundRunRepository('PG → BackgroundRunRepository', () => makePort('backgroundRuns'));
 });

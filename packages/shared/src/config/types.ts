@@ -598,6 +598,51 @@ export const analyticsConfigSchema = z.object({
   retentionDays: z.number().int().default(400),
 });
 
+// --- Вопросы пользователю (этап 1 roadmap 0.13 — блок 3) ---
+
+/**
+ * Конфигурация подсистемы «вопрос пользователю» (`ask_user`).
+ *
+ * - `timeoutMs` — срок ожидания ответа на вопрос, мс. `0` — **без таймаута**
+ *   (дефолт): вопрос ждёт ответа, пока его не отменят вручную или не
+ *   прервётся ход; срок может задать тул `question` (`timeout`, ≥ 5 минут);
+ * - `retentionDays` — срок хранения терминальных записей вопросов (дни);
+ *   `<= 0` — без ограничения.
+ */
+export const questionsConfigSchema = z.object({
+  timeoutMs: z.number().int().min(0).default(0),
+  retentionDays: z.number().int().default(14),
+});
+
+// --- Фоновые прогоны (этап 1 roadmap 0.13 — блок 4) ---
+
+/**
+ * Конфигурация единого реестра фоновых прогонов (PROP-096/PROP-097).
+ *
+ * - `enabled` — мастер-выключатель фоновой работы: при `false` тул `task`
+ *   с `background: true` отказывает (`task.background_disabled`), как и
+ *   `execute_shell` с `background: true` (`process.background_disabled`);
+ * - `maxSubagentsPerSession` — максимум **одновременно идущих** фоновых
+ *   саб-агентов на одну родительскую сессию;
+ * - `maxProcessesPerSession` — максимум **одновременно идущих** фоновых
+ *   шелл-процессов на одну сессию-владельца (PROP-097);
+ * - `maxRunsPerSession` — максимум записей реестра на одну сессию-владельца
+ *   (защита от роста реестра; записи чистит retention);
+ * - `logMaxBytes` — предел размера лога фонового процесса, байт; `0` — без
+ *   ограничения. По превышении запись в лог прекращается, а в записи реестра
+ *   ставится `metadata.truncated`;
+ * - `retentionDays` — срок хранения терминальных записей реестра (дни);
+ *   `<= 0` — без ограничения.
+ */
+export const backgroundConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  maxSubagentsPerSession: z.number().int().min(0).default(2),
+  maxProcessesPerSession: z.number().int().min(0).default(5),
+  maxRunsPerSession: z.number().int().min(0).default(10),
+  logMaxBytes: z.number().int().min(0).default(10_485_760),
+  retentionDays: z.number().int().default(7),
+});
+
 // --- Authority-слой (ADR-106) ---
 
 /**
@@ -1225,6 +1270,8 @@ export const synthConfigSchema = z.object({
   decision: decisionConfigSchema.default({}),
   oauth: oauthConfigSchema.default({}),
   analytics: analyticsConfigSchema.default({}),
+  questions: questionsConfigSchema.default({}),
+  background: backgroundConfigSchema.default({}),
   metrics: metricsConfigSchema.default({}),
   authority: authorityConfigSchema.default({}),
   plugins: pluginsConfigSchema.default({}),
@@ -1275,6 +1322,10 @@ export type OAuthProviderConfig = z.infer<typeof oauthProviderConfigSchema>;
 /** ADR-105 (Ф3): секция `oauth` (каталог провайдеров). */
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
 export type AnalyticsConfig = z.infer<typeof analyticsConfigSchema>;
+/** Этап 1 roadmap 0.13 (блок 3): секция `questions` (таймаут ответа + retention). */
+export type QuestionsConfig = z.infer<typeof questionsConfigSchema>;
+/** Этап 1 roadmap 0.13 (блок 4): секция `background` (реестр фоновых прогонов). */
+export type BackgroundConfig = z.infer<typeof backgroundConfigSchema>;
 /** ADR-094: секция `metrics` (`enabled`). */
 export type MetricsConfig = z.infer<typeof metricsConfigSchema>;
 /** ADR-106 Ф1: секция `authority` (`enabled`/`shadow`). */

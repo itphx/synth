@@ -183,6 +183,12 @@ interface ExecutionPort {
   отмены): благодаря этому распознавание отмены (`isAbortError`) и тексты ошибок не
   изменились. Разбор ошибки на конкретные тексты (`ENOENT` → `tool.binary_missing`) остался
   в тулах — порт не знает про i18n-ключи.
+- **Проверка типа ошибки — структурная (`isExecutionError`), а не через `instanceof`.**
+  Клиент удалённого порта создаёт ошибку через динамический `import('@itphx/synth-core')`
+  (то есть из `dist`), а код в core импортирует класс из исходников — это **два разных
+  объекта класса**, и `instanceof` не срабатывает. Поэтому порт экспортирует
+  `isExecutionError(value): value is ExecutionError` — она опирается на стабильный признак
+  типа (`name === 'ExecutionError'`) и форму ошибки (`reason`/`message`).
 - **`stdin` не реализован.** Потребности в неинтерактивном вводе у домена нет: exec-API
   обслуживает только неинтерактивные команды (PTY/attach — вне объёма этой версии,
   [PROP-064](./arch_decisions/prop-064-ui-browser-terminal.md)). Поле не добавлено «на будущее» — при
@@ -286,7 +292,11 @@ interface ExecutionPort {
 | Метод | Путь | Назначение |
 |---|---|---|
 | `POST` | `/exec` | тело: `{ command: ExecCommand, cwd?, env?, timeoutMs?, maxOutputBytes? }` → `200 { stdout, stderr, exitCode, truncated, durationMs }`; при неудаче — код ошибки с телом `{ error: { reason, code, message, stdout, stderr, killed, signal, truncated, durationMs } }` (зеркалит `ExecutionError`) |
-| `GET` | `/capabilities` | `{ protocol: 2, toolchain: {git?, rg?, sh?, python3?}, os, arch, node }` — рукопожатие версии протокола и состава toolchain'а |
+| `POST` | `/exec/spawn` | тело: `{ command: ExecCommand, cwd?, env?, timeoutMs?, requires? }` → `201 { processId, pid }`; фоновый процесс (ADR-077, шаг 7c; ADR-113): `400` — невалидное тело или `cwd` вне workspace, `429` — превышен лимит живых фоновых процессов |
+| `GET` | `/exec/:processId` | `200 { processId, status, exitCode, signal, pid?, command, cwd, startedAt, finishedAt?, durationMs?, stdoutBytes, stderrBytes, truncated }` — состояние фонового процесса; `404` — процесс не найден |
+| `GET` | `/exec/:processId/logs` | `200 { processId, status, exitCode, signal, stdout: { content, offset, nextOffset }, stderr: { … }, totalBytes, truncated }`; query `stdoutOffset`/`stderrOffset`/`limit` (отрезок ≤ 256 КиБ, по умолчанию 64 КиБ); `404` — процесс не найден |
+| `POST` | `/exec/:processId/stop` | `200 { status: 'stopping' }` — остановка фонового процесса; тело `{ signal }` — `SIGTERM`\|`SIGKILL` (пустое тело — `SIGTERM` по умолчанию, иной сигнал — `400`); через 5 с после `SIGTERM` — `SIGKILL`; идемпотентно; `404` — процесс не найден |
+| `GET` | `/capabilities` | `{ protocol: 3, toolchain: {git?, rg?, sh?, python3?}, os, arch, node, features: { background } }` — рукопожатие версии протокола и состава toolchain'а |
 | `GET` | `/mcp/servers` | `[{ name, status, toolCount, error? }]` — состояние MCP-серверов исполнителя (`idle`/`up`/`down`); значения `env` не отдаются |
 | `GET` | `/mcp/tools` | `[{ server, name, description, inputSchema }]` — инструменты всех **поднятых** MCP-серверов |
 | `POST` | `/mcp/call` | тело: `{ server, tool, arguments? }` → `200 { content, isError }`; неизвестный сервер/инструмент → `404`, ошибка MCP → `500` с текстом ошибки (без секретов) |
@@ -303,9 +313,21 @@ interface ExecutionPort {
 - **Отмена:** разрыв HTTP-запроса → `AbortSignal` на сервере → SIGTERM процессу.
   Семантика «Стоп» (ADR-005) сохраняется: клиентский `AbortSignal` доезжает до
   исполнителя тем же эффектом, что и в inline-режиме.
-- **Версия протокола — 2** (было 1): добавлены MCP-эндпоинты, старый исполнитель
-  их не знает ⇒ **control plane и исполнитель обязаны быть одной версии**
-  (см. «Операционные следствия» в [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md)).
+- **Версия протокола — 3** (было 1 → 2 → 3): добавлены MCP-эндпоинты (v2) и
+  фоновые процессы (v3). Старый исполнитель их не знает ⇒ **control plane и
+  исполнитель обязаны быть одной версии** (см. «Операционные следствия» в
+  [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md)).
+- **Фоновые процессы — только с протоколом версии 3.** Ручкопожатие
+  (`GET /capabilities`) отдаёт `features: { background: true }`; control plane
+  **требует** этот признак (и версию ≥ 3), чтобы запускать фоновые процессы:
+  - адрес без `features.background` в кандидаты на фоновый запуск **не
+    попадает** (как адрес без нужного бинаря);
+  - если в пуле нет ни одного адреса с фоновыми процессами — отказ
+    `EBACKGROUND` (`EXECUTION_BACKGROUND_UNSUPPORTED_CODE`), который control plane
+    показывает как `background_unsupported` (`process.background_unsupported` —
+    тот же текст, что и для порта без `spawnBackground`);
+  - синхронные команды (`POST /exec`) от старого исполнителя работать
+    продолжают — требование касается только фонового запуска.
 
 ### 4.2.1. MCP-хостинг исполнителя (шаг B1)
 
@@ -425,12 +447,22 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   `packages/core/src/engine/tools/git.ts`, `packages/core/src/engine/tools/path-utils.ts`);
   выход за пределы → ошибка. Это **доверительная граница**, а не косметика: без неё
   удалённый порт превращается в выполнение команд в произвольном каталоге.
-- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 2`) и
+- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 3`) и
   состав toolchain'а (`git`/`rg`/`sh`/`python3`), ОС и архитектуру. Это источник правды для
   детекта внешних зависимостей в split-режиме (ADR-078): backend не должен считать
   `git`/`rg`/`sh` доступными там, где их нет. Версия протокола — **контракт совместимости**:
-  исполнитель версии 1 не знает MCP-эндпоинтов, поэтому control plane и пул
-  исполнителей обязаны обновляться вместе (ADR-077, операционные следствия шага A).
+  исполнитель версии 1 не знает MCP-эндпоинтов, версии 2 — фоновых процессов, поэтому control
+  plane и пул исполнителей обязаны обновляться вместе (ADR-077, операционные следствия шага A).
+  Поле `features` — **аддитивное**: `background: true` означает, что исполнитель умеет
+  `/exec/spawn` (фоновые процессы, ADR-077 шаг 7c).
+- **Требование `features.background` (фоновые процессы).** Control plane
+  **требует** этот признак (и версию протокола ≥ 3), чтобы запускать фоновые
+  процессы: адрес без `features.background` в кандидаты на фоновый запуск **не
+  попадает** (как адрес без нужного бинаря), а пул, в котором нет ни одного
+  такого адреса, даёт отказ `EBACKGROUND` → `background_unsupported`
+  (`process.background_unsupported` для модели). Синхронные команды от старого
+  исполнителя работать продолжают — требование касается только фонового
+  запуска.
 - **Egress-политика.** Обращения backend'а к исполнителю проходят через политику встроенных
   инструментов (`egress.tools`, `packages/shared/src/config/types.ts`) — адрес исполнителя должен
   быть разрешён; `POST /api/v2/settings/egress/check` (ADR-099) — offline-проверка без запроса.
@@ -816,7 +848,7 @@ Split-топология технически возможна и при одн�
   разделение секретов и меньший образ control plane; общий (один образ, разные роли через env) —
   проще CI и не нужен четвёртый образ в реестре (квота 500 МБ). Нужно решение до шага 5 (образ
   worker'а `synth-executor:<v>-<flavor>`).
-- **Взаимодействие с PROP-097** (реестр фоновых процессов). `execute_shell { background: true }` и
+- **Взаимодействие с ADR-113** (реестр фоновых процессов). `execute_shell { background: true }` и
   пул исполнителей — один и тот же механизм исполнения; реестр процессов должен быть общим (иначе
   фоновая команда «уедет» в worker'а, а UI-реестр останется в backend'е).
 - **Стоимость и квоты.** Кто платит за worker'ов (node pool, диск под workspace, квоты namespace)?
@@ -848,7 +880,7 @@ Split-топология технически возможна и при одн�
 - [ADR-023](./arch_decisions/adr-023-configuration.md) «Конфигурация» — приоритет CLI > env > config.yaml > defaults.
 - [ADR-052](./arch_decisions/adr-052-public-api-platform.md) «Публичная API-платформа» — образец машинных ключей.
 - [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) «Full-образы и базовое развёртывание» — all-in-one топология и состав образов.
-- [PROP-097](./arch_decisions/prop-097-background-processes-registry.md) «Фоновые процессы» — общий реестр фоновых процессов.
+- [ADR-113](./arch_decisions/adr-113-background-processes.md) «Фоновые процессы» — общий реестр фоновых процессов.
 - [PROP-049](./arch_decisions/prop-049-git-worktrees.md) «Git worktrees» — персональный cwd как будущая единица работы на исполнителе.
 - [PROP-080](./arch_decisions/prop-080-managed-hybrid-modes.md) / [PROP-081](./arch_decisions/prop-081-hybrid-policy-leak-protection.md) — гибрид: где исполняется local vs managed.
 - [PROP-064](./arch_decisions/prop-064-ui-browser-terminal.md) «UI-терминал» — PTY/attach вне объёма.

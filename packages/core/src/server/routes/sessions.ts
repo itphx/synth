@@ -5,7 +5,7 @@ import type { createMiddleware } from 'hono/factory';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer, RequestSessionService } from '../../index.js';
 import type { SessionTree } from '../../sessions/manager.js';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, createResolveAuthorName, PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS, isProjectIconKey, isProjectColorKey, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
-import type { Message, Session } from '@itphx/synth-shared';
+import type { Message, Session, QuestionStatus } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { enqueueUserMessage, enqueueSteerMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
 import { serializeSession, serializeMessage, redactSessionSecretValues } from '../serialize.js';
@@ -27,6 +27,14 @@ import { sessionAxes } from '../../analytics/recorder.js';
 import { MEMORY_NAMESPACE } from '../../engine/plugins/memory-namespace.js';
 import type { MemoryFactRepository } from '../../storage/ports/memory-fact-repository.js';
 import type { MemoryIndexRepository } from '../../storage/ports/memory-index-repository.js';
+// Этап 1 roadmap 0.13 (блок 3): «вопрос пользователю» (`ask_user`).
+import { questionAnswerSchema, questionCancelSchema } from '@itphx/synth-shared';
+import type { QuestionService } from '../../engine/question/service.js';
+import {
+  QuestionAlreadySettledError,
+  QuestionInvalidAnswerError,
+  QuestionNotFoundError,
+} from '../../engine/question/types.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -73,6 +81,13 @@ export interface SessionRoutesDeps {
     indexes: MemoryIndexRepository;
     isPluginActive: () => boolean;
   };
+  /**
+   * Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
+   *
+   * Не задан — вопросы в этой сборке не работают: `GET /:id/questions`
+   * отвечает 503, `POST .../answer|cancel` — 503.
+   */
+  questionService?: QuestionService;
 }
 
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
@@ -1393,6 +1408,150 @@ export function createSessionRoutes(
     });
 
     return c.json({ messages: merged.map((m, i) => serializeMessage(m, i)) }, 201);
+  });
+
+  // ===========================================================================
+  // Этап 1 roadmap 0.13 (блок 3): вопросы пользователю (`ask_user`).
+  //
+  // Вопрос — персистентная запись сессии: агент задал вопрос и ждёт ответа.
+  // Ответ приходит по `id` вопроса (`POST /:id/questions/:qid/answer`), поэтому
+  // маршруты живут внутри фабрики сессий — под тем же prefix-guard'ом доступа
+  // (инвариант 16: проверок доступа в обработчиках нет).
+  //
+  // Вид доступа выводится из HTTP-метода самим guard'ом:
+  // - `GET /:id/questions` — **чтение** (владелец сессии, ADMIN/LEAD, участник
+  //   проекта с правом чтения);
+  // - `POST /:id/questions/:qid/answer|cancel` — **write** (владелец сессии,
+  //   ADMIN/LEAD, участник проекта с правом изменения содержимого).
+  //
+  // Осознанное решение: ответ на вопрос отнесён к write-уровню, хотя сам
+  // ответ не меняет проект — это действие **пользователя** в ходе сессии
+  // (как `POST /:id/prompt`), поэтому VIEWER-участник проекта не отвечает.
+  // ===========================================================================
+
+  /** Статусы вопроса в фильтре `GET /:id/questions`. */
+  const QUESTION_STATUSES: readonly QuestionStatus[] = ['pending', 'answered', 'cancelled'];
+  /** Дефолтный лимит выборки вопросов. */
+  const DEFAULT_QUESTIONS_LIMIT = 50;
+  /** Верхняя граница лимита выборки вопросов. */
+  const MAX_QUESTIONS_LIMIT = 200;
+
+  /** Ответ 503 — сервис вопросов не подключён (сборка без подсистемы). */
+  const questionsUnavailable = (c: Context) =>
+    c.json({ error: { code: 'QUESTION_UNAVAILABLE', message: 'Вопросы пользователю недоступны' } }, 503);
+
+  // GET /api/v2/sessions/:id/questions — вопросы сессии.
+  app.get('/:id/questions', auth.requireAuth, scoped('sessions:read'), async (c) => {
+    const questionService = deps.questionService;
+    if (!questionService) return questionsUnavailable(c);
+
+    const status = c.req.query('status');
+    if (status !== undefined && !QUESTION_STATUSES.includes(status as QuestionStatus)) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: `Недопустимый status: ${status}` },
+      }, 400);
+    }
+    const limitRaw = c.req.query('limit');
+    let limit = DEFAULT_QUESTIONS_LIMIT;
+    if (limitRaw !== undefined) {
+      const parsedLimit = Number(limitRaw);
+      if (!Number.isFinite(parsedLimit) || parsedLimit < 1) {
+        return c.json({
+          error: { code: 'VALIDATION_ERROR', message: 'limit должен быть положительным числом' },
+        }, 400);
+      }
+      limit = Math.min(Math.floor(parsedLimit), MAX_QUESTIONS_LIMIT);
+    }
+
+    const questions = await questionService.list({
+      sessionId: c.req.param('id'),
+      ...(status ? { status: status as QuestionStatus } : {}),
+      limit,
+    });
+    return c.json({ questions });
+  });
+
+  // POST /api/v2/sessions/:id/questions/:qid/answer — ответ пользователя.
+  app.post('/:id/questions/:qid/answer', auth.requireAuth, scoped('sessions:prompt'), async (c) => {
+    const questionService = deps.questionService;
+    if (!questionService) return questionsUnavailable(c);
+
+    const body = await c.req.json().catch(() => null);
+    const parsed = questionAnswerSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'answers должен быть массивом массивов строк' },
+      }, 400);
+    }
+
+    const sessionId = c.req.param('id');
+    const questionId = c.req.param('qid');
+    // Вопрос другой сессии не виден — 404 (не 403: не выдаём факт существования).
+    const record = await questionService.get(questionId);
+    if (!record || record.sessionId !== sessionId) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Вопрос не найден' } }, 404);
+    }
+
+    try {
+      const answeredBy = await resolveUserId(c);
+      const question = await questionService.answer(questionId, parsed.data.answers, answeredBy);
+      return c.json({ question });
+    } catch (err) {
+      if (err instanceof QuestionAlreadySettledError) {
+        return c.json({
+          error: { code: 'CONFLICT', message: 'Вопрос уже закрыт (отвечен или отменён)' },
+        }, 409);
+      }
+      if (err instanceof QuestionInvalidAnswerError) {
+        return c.json({
+          error: { code: 'VALIDATION_ERROR', message: `Некорректный ответ: ${err.reason}` },
+        }, 400);
+      }
+      if (err instanceof QuestionNotFoundError) {
+        return c.json({ error: { code: 'NOT_FOUND', message: 'Вопрос не найден' } }, 404);
+      }
+      throw err;
+    }
+  });
+
+  // POST /api/v2/sessions/:id/questions/:qid/cancel — отмена вопроса.
+  app.post('/:id/questions/:qid/cancel', auth.requireAuth, scoped('sessions:prompt'), async (c) => {
+    const questionService = deps.questionService;
+    if (!questionService) return questionsUnavailable(c);
+
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = questionCancelSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'reason должен быть строкой' },
+      }, 400);
+    }
+
+    const sessionId = c.req.param('id');
+    const questionId = c.req.param('qid');
+    const record = await questionService.get(questionId);
+    if (!record || record.sessionId !== sessionId) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Вопрос не найден' } }, 404);
+    }
+
+    try {
+      const question = await questionService.cancel(
+        questionId,
+        parsed.data.reason ?? 'user',
+        await resolveUserId(c),
+      );
+      return c.json({ question });
+    } catch (err) {
+      if (err instanceof QuestionAlreadySettledError) {
+        return c.json({
+          error: { code: 'CONFLICT', message: 'Вопрос уже закрыт (отвечен или отменён)' },
+        }, 409);
+      }
+      if (err instanceof QuestionNotFoundError) {
+        return c.json({ error: { code: 'NOT_FOUND', message: 'Вопрос не найден' } }, 404);
+      }
+      throw err;
+    }
   });
 
   return app;

@@ -40,37 +40,21 @@ import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js
 import type { GitService } from '../../git/git-service.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import {
-  messageToLLMMessage, publishMessageAdded, resolveSubagentPrompt, runSubagent,
+  resolveSubagentPrompt, runSubagent,
   buildSubagentUnavailableToolsSection,
   type SubagentRetryConfig, type TaskExtra,
 } from './task.js';
+import {
+  SubagentResumeError,
+  appendResumeMarker,
+  loadResumeChild,
+  resumeInitialMessages,
+  type SubagentResumeErrorCode,
+} from './task/resume-target.js';
 
 /** Коды ошибок resume — route маппит их в HTTP-статусы (400/404/409). */
-export type SubagentResumeErrorCode =
-  | 'NOT_FOUND'
-  | 'NO_PARENT'
-  | 'PARENT_NOT_FOUND'
-  | 'LOCKED'
-  | 'AGENT_NOT_FOUND'
-  | 'NO_PROVIDER';
-
-export class SubagentResumeError extends Error {
-  constructor(
-    readonly code: SubagentResumeErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'SubagentResumeError';
-  }
-
-  get httpStatus(): number {
-    switch (this.code) {
-      case 'NOT_FOUND': return 404;
-      case 'LOCKED': return 409;
-      default: return 400;
-    }
-  }
-}
+export type { SubagentResumeErrorCode };
+export { SubagentResumeError };
 
 /** Итог resume — возвращается в фоне, в API отдаётся стартовый ответ 202. */
 export interface SubagentResumeResult {
@@ -152,19 +136,10 @@ export async function validateSubagentResume(
   deps: Pick<SubagentResumeDeps, 'sessionManager'>,
   childSessionId: string,
 ): Promise<ValidatedResume> {
-  const child = await deps.sessionManager.getSession(childSessionId);
-  if (!child) {
-    throw new SubagentResumeError('NOT_FOUND', sm('task.resume_session_not_found', { id: childSessionId }));
-  }
-  if (!child.parentId) {
-    throw new SubagentResumeError('NO_PARENT', sm('task.resume_no_parent', { id: childSessionId }));
-  }
-  if (child.status.blocked || child.currentStream) {
-    throw new SubagentResumeError('LOCKED', sm('task.resume_locked', { id: childSessionId }));
-  }
-  const parent = await deps.sessionManager.getSession(child.parentId);
+  const child = await loadResumeChild(deps.sessionManager, childSessionId);
+  const parent = await deps.sessionManager.getSession(child.parentId!);
   if (!parent) {
-    throw new SubagentResumeError('PARENT_NOT_FOUND', sm('task.resume_parent_not_found', { id: child.parentId }));
+    throw new SubagentResumeError('PARENT_NOT_FOUND', sm('task.resume_parent_not_found', { id: child.parentId! }));
   }
   return { child, parent };
 }
@@ -218,36 +193,15 @@ export async function runSubagentResume(
     const workspaceReady = deps.getWorkspaceReady ? await deps.getWorkspaceReady(child) : undefined;
 
     // ─── 2. Synthetic user-маркер resume в историю дочерней сессии ──
-    const markerText = sm('task.resume_marker');
-    const markerMsg: Message = {
-      id: generateId(),
-      role: MessageRole.USER,
-      seq: 0,
-      origin: 'local',
-      parts: [makeTextPart(markerText)],
-      content: markerText,
-      createdAt: nowISO(),
-      disabled: false,
-      pinned: false,
-      hidden: false,
-      author: 'user',
-      metadata: {
-        resume: true,
-        stream_id: streamId,
-        i18n: i18nMeta('task.resume_marker'),
-      },
-    };
-    const updatedChild = await deps.sessionManager.addMessage(child.id, markerMsg);
-    if (updatedChild) {
-      const idx = updatedChild.messages.length - 1;
-      await publishMessageAdded(deps.eventBus, parent.id, child.id, updatedChild.messages[idx]!, idx, updatedChild);
-    }
+    // Общий помощник продолжения (тот же, что у `task_id` в туле `task`).
+    const freshChild = await appendResumeMarker(deps.sessionManager, deps.eventBus, {
+      child,
+      parentSessionId: parent.id,
+      streamId,
+    });
 
     // ─── 3. История дочерней сессии → LLM-сообщения (system добавит runSubagent) ──
-    const freshChild = updatedChild ?? (await deps.sessionManager.getSession(child.id)) ?? child;
-    const initialMessages = freshChild.messages
-      .filter((m) => !m.hidden && !m.disabled)
-      .map(messageToLLMMessage);
+    const initialMessages = resumeInitialMessages(freshChild);
 
     let systemPrompt = resolveSubagentPrompt(
       agentDef,
@@ -405,7 +359,9 @@ export async function runSubagentResume(
 
     const parentMsg: Message = {
       id: generateId(),
-      role: MessageRole.INFO,
+      // Роль USER (не INFO): результат resume должен быть **виден модели** —
+      // INFO-сообщения в LLM-контекст не попадают.
+      role: MessageRole.USER,
       seq: 0,
       origin: 'local',
       parts: [makeTextPart(content)],
@@ -414,6 +370,7 @@ export async function runSubagentResume(
       disabled: false,
       pinned: false,
       hidden: false,
+      author: 'Subagent',
       metadata: {
         type: 'subagent_resumed_result',
         child_session_id: child.id,
@@ -452,7 +409,8 @@ export async function runSubagentResume(
       const content = sm('task.resume_failed', { type: 'resume', error: err.message });
       const parentMsg: Message = {
         id: generateId(),
-        role: MessageRole.INFO,
+        // Как и в успешном пути — USER-роль: ошибка resume тоже видна модели.
+        role: MessageRole.USER,
         seq: 0,
         origin: 'local',
         parts: [makeTextPart(content)],
@@ -461,6 +419,7 @@ export async function runSubagentResume(
         disabled: false,
         pinned: false,
         hidden: false,
+        author: 'Subagent',
         metadata: {
           type: 'subagent_resumed_result',
           child_session_id: child.id,

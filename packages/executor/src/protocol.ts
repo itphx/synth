@@ -52,6 +52,29 @@
  * - `POST /mcp/call` — тело `{ server, tool, arguments? }` → `{ content, isError }`;
  *   неизвестный сервер/инструмент → `404`, ошибка MCP → `500` с текстом ошибки
  *   (без секретов).
+ *
+ * ## Фоновые процессы (протокол 3)
+ *
+ * Фоновый процесс **переживает ход агента** (ADR-077, шаг 7c; PROP-097):
+ * в split-топологии он живёт **на исполнителе** — там, где есть toolchain и
+ * рабочий каталог.
+ *
+ * - `POST /exec/spawn` — тело `{ command, cwd?, env?, timeoutMs?, requires? }` →
+ *   `201 { processId, pid }`; `400` — невалидное тело или `cwd` вне workspace,
+ *   `429` — превышен лимит живых фоновых процессов;
+ * - `GET /exec/:processId` → `200 { processId, status, exitCode, signal, … }`;
+ *   `404` — процесс не найден;
+ * - `GET /exec/:processId/logs` → `200 { stdout, stderr, totalBytes, truncated, … }`;
+ *   query `stdoutOffset`/`stderrOffset`/`limit` (потолок отрезка — 256 КиБ,
+ *   по умолчанию — 64 КиБ); `404` — процесс не найден;
+ * - `POST /exec/:processId/stop` → `200 { status: 'stopping' }` (тело
+ *   `{ signal? }` — сигнал остановки: `SIGTERM` по умолчанию, допустимы только
+ *   `SIGTERM`/`SIGKILL`, прочие → `400 invalid_request`; через 5 с после
+ *   `SIGTERM` — `SIGKILL`); `404` — процесс не найден.
+ *
+ * Журналы — **раздельные** по потокам: `stdout` и `stderr` приходят
+ * отдельными отрезками со своими смещениями. Идентификатор процесса —
+ * `proc_<uuid>` (тот же формат, что у порта core).
  */
 
 import type { ExecCommand } from '@itphx/synth-core';
@@ -59,13 +82,16 @@ import type { ExecCommand } from '@itphx/synth-core';
 /**
  * Версия wire-протокола исполнителя.
  *
+ * **3** — добавлены фоновые процессы (`/exec/spawn`, `/exec/:processId`,
+ * `/exec/:processId/logs`, `/exec/:processId/stop`). Старый исполнитель
+ * (версии 1–2) их не знает ⇒ control plane и исполнитель обязаны быть
+ * **одной версии** (ADR-077, операционное следствие шага A: инвентарь пула
+ * приходит от исполнителя, а не вычисляется на стороне control plane).
+ *
  * **2** — добавлены MCP-эндпоинты (`/mcp/servers`, `/mcp/tools`,
- * `/mcp/call`). Старый исполнитель (версия 1) их не знает ⇒ control plane и
- * исполнитель обязаны быть **одной версии** (ADR-077, операционное следствие
- * шага A: инвентарь пула приходит от исполнителя, а не вычисляется на
- * стороне control plane).
+ * `/mcp/call`).
  */
-export const EXECUTOR_PROTOCOL_VERSION = 2;
+export const EXECUTOR_PROTOCOL_VERSION = 3;
 
 /** Причина неудачи на проводе. */
 export type ExecutorErrorReason =
@@ -147,6 +173,20 @@ export interface ExecutorCapabilities {
   arch: string;
   /** Версия Node.js исполнителя. */
   node: string;
+  /**
+   * Необязательные возможности исполнителя (аддитивно: старый control plane
+   * поле просто не читает).
+   *
+   * `background: true` — исполнитель умеет фоновые процессы
+   * (`/exec/spawn`, ADR-077 шаг 7c).
+   */
+  features?: ExecutorFeatures;
+}
+
+/** Необязательные возможности исполнителя. */
+export interface ExecutorFeatures {
+  /** Фоновые процессы (`POST /exec/spawn`). */
+  background?: boolean;
 }
 
 /** Ответ `GET /health`. */
@@ -155,6 +195,8 @@ export interface ExecutorHealth {
   protocol: number;
   uptimeSec: number;
   concurrency: { limit: number; active: number };
+  /** Фоновые процессы (ADR-077, шаг 7c). */
+  background?: { limit: number; active: number };
 }
 
 /**
@@ -338,6 +380,217 @@ export function parseExecRequestBody(
       return { ok: false, message: 'поле maxOutputBytes должно быть целым числом > 0' };
     }
     value.maxOutputBytes = raw.maxOutputBytes;
+  }
+
+  return { ok: true, value };
+}
+
+/** Тело запроса `POST /exec/spawn` — фоновый запуск команды. */
+export interface SpawnExecRequest {
+  /** Команда: shell-строка или argv (без shell). */
+  command: ExecCommand;
+  /** Рабочий каталог команды (внутри workspace исполнителя). */
+  cwd?: string;
+  /** Дополнительное окружение — мержится поверх окружения исполнителя. */
+  env?: Record<string, string>;
+  /**
+   * Таймаут процесса, мс (`0` или не задано — без таймаута: процесс живёт,
+   * пока жив; `> 0` — таймер `SIGTERM` → через 5 с `SIGKILL`).
+   */
+  timeoutMs?: number;
+  /**
+   * Требуемые бинари — принимаются, но **не проверяются**: проверка
+   * бинарных требований остаётся на слое тула (как в портовом контракте
+   * `ExecutionPort.spawnBackground`).
+   */
+  requires?: string[];
+}
+
+/** Тело успешного ответа `POST /exec/spawn`. */
+export interface SpawnExecResponse {
+  /** Идентификатор фонового процесса (`proc_<uuid>`). */
+  processId: string;
+  /** pid процесса ОС (не задан, если запуск не удался). */
+  pid?: number;
+}
+
+/** Статус фонового процесса. */
+export type BackgroundProcessStatus = 'running' | 'exited' | 'failed' | 'killed';
+
+/** Тело ответа `GET /exec/:processId` — состояние фонового процесса. */
+export interface BackgroundStatusResponse {
+  /** Идентификатор фонового процесса (`proc_<uuid>`). */
+  processId: string;
+  /** pid процесса ОС (не задан, если запуск не удался). */
+  pid?: number;
+  /** Команда запуска. */
+  command: ExecCommand;
+  /** Рабочий каталог. */
+  cwd: string;
+  /** Статус процесса. */
+  status: BackgroundProcessStatus;
+  /** Код завершения; `null` — процесс убит сигналом или ещё жив. */
+  exitCode: number | null;
+  /** Сигнал завершения; `null` — процесс вышел сам. */
+  signal: string | null;
+  /** Момент старта, мс. */
+  startedAt: number;
+  /** Момент завершения, мс (не задан, пока процесс жив). */
+  finishedAt?: number;
+  /** Длительность жизни процесса, мс (не задана, пока процесс жив). */
+  durationMs?: number;
+  /** Записано байт в stdout. */
+  stdoutBytes: number;
+  /** Записано байт в stderr. */
+  stderrBytes: number;
+  /** Хотя бы один поток упёрся в лимит журнала. */
+  truncated: boolean;
+}
+
+/** Отрезок журнала фонового процесса. */
+export interface BackgroundLogChunkBody {
+  /** Текст отрезка (UTF-8). */
+  content: string;
+  /** Смещение, с которого прочитан отрезок. */
+  offset: number;
+  /** Смещение следующего чтения. */
+  nextOffset: number;
+}
+
+/** Тело ответа `GET /exec/:processId/logs`. */
+export interface BackgroundLogsResponse {
+  /** Идентификатор фонового процесса (`proc_<uuid>`). */
+  processId: string;
+  /** Статус процесса. */
+  status: BackgroundProcessStatus;
+  /** Код завершения. */
+  exitCode: number | null;
+  /** Сигнал завершения. */
+  signal: string | null;
+  /** Отрезок stdout. */
+  stdout: BackgroundLogChunkBody;
+  /** Отрезок stderr. */
+  stderr: BackgroundLogChunkBody;
+  /** Всего записано байт (stdout + stderr). */
+  totalBytes: number;
+  /** Хотя бы один поток упёрся в лимит журнала. */
+  truncated: boolean;
+}
+
+/** Тело ответа `POST /exec/:processId/stop`. */
+export interface StopBackgroundResponse {
+  /** Процесс остановлен (или уже завершается) — `stopping`. */
+  status: 'stopping';
+}
+
+/**
+ * Сигналы остановки фонового процесса, которые принимает исполнитель.
+ *
+ * Белый список: `SIGTERM` — мягкое завершение, `SIGKILL` — немедленное.
+ * Прочие сигналы отклоняются (`400 invalid_request`): набор допустимых
+ * сигналов — часть контракта, а не поведение «как придёт».
+ */
+export const BACKGROUND_STOP_SIGNALS = ['SIGTERM', 'SIGKILL'] as const;
+
+/** Допустимый сигнал остановки фонового процесса. */
+export type BackgroundStopSignal = (typeof BACKGROUND_STOP_SIGNALS)[number];
+
+/** Тело запроса `POST /exec/:processId/stop`. */
+export interface StopBackgroundRequest {
+  /** Сигнал остановки (по умолчанию — `SIGTERM`). */
+  signal?: BackgroundStopSignal;
+}
+
+/**
+ * Разбор тела запроса `POST /exec/:processId/stop`.
+ *
+ * Пустое тело (или его отсутствие) — `SIGTERM` (прежнее поведение).
+ * Невалидный сигнал — отказ: `invalid_request`.
+ */
+export function parseStopBackgroundRequestBody(
+  body: unknown,
+): { ok: true; value: StopBackgroundRequest } | { ok: false; message: string } {
+  if (body === undefined || body === null) {
+    return { ok: true, value: {} };
+  }
+  if (typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, message: 'тело запроса должно быть JSON-объектом' };
+  }
+  const raw = body as Record<string, unknown>;
+  if (raw.signal === undefined) {
+    return { ok: true, value: {} };
+  }
+  if (
+    typeof raw.signal !== 'string' ||
+    !(BACKGROUND_STOP_SIGNALS as readonly string[]).includes(raw.signal)
+  ) {
+    return {
+      ok: false,
+      message: `поле signal должно быть одним из: ${BACKGROUND_STOP_SIGNALS.join(', ')}`,
+    };
+  }
+  return { ok: true, value: { signal: raw.signal as BackgroundStopSignal } };
+}
+
+/**
+ * Разбор тела запроса `POST /exec/spawn` → валидный запрос или причина отказа.
+ *
+ * Правила те же, что у `parseExecRequestBody`, но без `maxOutputBytes`
+ * (в фоне вывод не буферизуется) и с полем `requires`.
+ */
+export function parseSpawnExecRequestBody(
+  body: unknown,
+): { ok: true; value: SpawnExecRequest } | { ok: false; message: string } {
+  if (typeof body !== 'object' || body === null) {
+    return { ok: false, message: 'тело запроса должно быть JSON-объектом' };
+  }
+  const raw = body as Record<string, unknown>;
+  if (!isValidExecCommand(raw.command)) {
+    return {
+      ok: false,
+      message: 'поле command обязательно: {kind:"shell",command} или {kind:"argv",file,args?}',
+    };
+  }
+  const value: SpawnExecRequest = { command: raw.command };
+
+  if (raw.cwd !== undefined) {
+    if (typeof raw.cwd !== 'string' || raw.cwd.length === 0) {
+      return { ok: false, message: 'поле cwd должно быть непустой строкой' };
+    }
+    value.cwd = raw.cwd;
+  }
+
+  if (raw.env !== undefined) {
+    if (typeof raw.env !== 'object' || raw.env === null || Array.isArray(raw.env)) {
+      return { ok: false, message: 'поле env должно быть объектом со строковыми значениями' };
+    }
+    const env: Record<string, string> = {};
+    for (const [key, val] of Object.entries(raw.env as Record<string, unknown>)) {
+      if (typeof val !== 'string') {
+        return { ok: false, message: `поле env.${key} должно быть строкой` };
+      }
+      env[key] = val;
+    }
+    value.env = env;
+  }
+
+  if (raw.timeoutMs !== undefined) {
+    // Фоновый процесс по умолчанию **без таймаута** — порт передаёт `0`
+    // (`timeoutMs: 0`), поэтому ноль допустим; отрицательное значение — нет.
+    if (typeof raw.timeoutMs !== 'number' || !Number.isInteger(raw.timeoutMs) || raw.timeoutMs < 0) {
+      return { ok: false, message: 'поле timeoutMs должно быть целым числом >= 0' };
+    }
+    value.timeoutMs = raw.timeoutMs;
+  }
+
+  if (raw.requires !== undefined) {
+    if (
+      !Array.isArray(raw.requires) ||
+      !raw.requires.every((item) => typeof item === 'string' && item.length > 0)
+    ) {
+      return { ok: false, message: 'поле requires должно быть массивом непустых строк' };
+    }
+    value.requires = [...(raw.requires as string[])];
   }
 
   return { ok: true, value };

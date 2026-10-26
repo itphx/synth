@@ -82,12 +82,68 @@ export interface ExecResult {
   durationMs: number;
 }
 
+/** Кусок вывода фонового процесса. */
+export interface ExecBackgroundChunk {
+  /** Поток, из которого пришёл кусок. */
+  stream: 'stdout' | 'stderr';
+  /** Текст куска (UTF-8). */
+  data: string;
+}
+
+/** Завершение фонового процесса. */
+export interface ExecBackgroundExit {
+  /**
+   * Код завершения; `null` — процесс убит сигналом.
+   *
+   * Неудача запуска (нет бинарника, неверный `cwd`) — отрицательный код
+   * libuv (например `-2` для ENOENT), а не `null`.
+   */
+  exitCode: number | null;
+  /** Сигнал, завершивший процесс; `null` — процесс вышел сам. */
+  signal: string | null;
+  /** Длительность жизни процесса (мс). */
+  durationMs: number;
+}
+
+/** Хэндл фонового процесса (PROP-097). */
+export interface ExecBackgroundProcess {
+  /** Идентификатор фонового процесса (`proc_<uuid>`) — для реестра прогонов. */
+  readonly processId: string;
+  /** pid процесса ОС (если процесс запустился). */
+  readonly pid?: number;
+  /** Поток вывода; завершается вместе с процессом. */
+  readonly output: AsyncIterable<ExecBackgroundChunk>;
+  /** Промис завершения (резолвится один раз). */
+  readonly exited: Promise<ExecBackgroundExit>;
+  /** Сигнал процессу (по умолчанию SIGTERM). Не бросает. */
+  stop(signal?: NodeJS.Signals): void;
+}
+
 /**
  * Порт исполнения команд. Реализации: `InlineExecutionPort` (в процессе) и
  * `RemoteExecutionPort` (HTTP к исполнителю, шаг 7 плана ADR-077).
  */
 export interface ExecutionPort {
   execute(req: ExecRequest): Promise<ExecResult>;
+
+  /**
+   * Фоновый запуск команды (PROP-097). Не задан — фоновое исполнение
+   * недоступно в этой реализации (remote до шага 7c ADR-077).
+   *
+   * ## Отличия от `execute`
+   *
+   * Фоновый процесс **переживает ход** агента, поэтому:
+   *
+   * - `ExecRequest.signal` **не поддерживается** — отмена фонового процесса
+   *   делается только через `stop()` хэндла;
+   * - `ExecRequest.requires` **не проверяется** — проверка бинарных требований
+   *   остаётся на слое тула (как и в `execute`);
+   * - `ExecRequest.maxOutputBytes` **не применяется** — вывод не буферизуется
+   *   портом, а стримится кусками в `output`;
+   * - `ExecRequest.timeoutMs` (если `> 0`) — таймер, убивающий процесс
+   *   (`SIGTERM`, затем `SIGKILL` через 5 с).
+   */
+  spawnBackground?(req: ExecRequest): Promise<ExecBackgroundProcess>;
 
   /**
    * Доступен ли бинарь в окружении, где исполняется порт (ADR-077).
@@ -178,11 +234,19 @@ export const DEFAULT_SHELL_BINARY = 'sh';
 /** Лимит буфера вывода по умолчанию (10 МБ — как нынешний `maxBuffer`). */
 export const DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
+/**
+ * Код ошибки порта: **исполнитель не умеет фоновые процессы**.
+ *
+ * Удалённый порт сообщает это кодом в `ExecutionError.code` (исполнитель
+ * протокола < 3 не знает `/exec/spawn`); реестр фоновых прогонов
+ * (`engine/processes`) превращает его в `background_unsupported`
+ * (`process.background_unsupported` для модели).
+ */
+export const EXECUTION_BACKGROUND_UNSUPPORTED_CODE = 'EBACKGROUND';
+
 export interface ExecutionErrorInit {
   /** Текст ошибки (дословно как у процесса — его видит модель). */
   message: string;
-  /** Имя ошибки (`Error`/`AbortError`) — сохраняется, чтобы не сломать распознавание отмены. */
-  name?: string;
   /** Код: `'ENOENT'`, код выхода или `null`. */
   code?: string | number | null;
   /** Частичный stdout. */
@@ -205,6 +269,14 @@ export interface ExecutionErrorInit {
  * Типизированная ошибка исполнения (ADR-077). Несёт те же поля, что и
  * ошибка `execFile` (`code`/`stdout`/`stderr`/`killed`/`message`), поэтому
  * тексты, которые видит модель, не меняются.
+ *
+ * ## Имя класса — стабильный признак типа
+ *
+ * `name` всегда `ExecutionError`: по нему ошибка опознаётся **структурно**
+ * (`isExecutionError`) — в том числе когда она пришла из другой копии
+ * модуля (`src` против `dist`), где `instanceof` не срабатывает: это два
+ * разных объекта класса. Отмена опознаётся по `reason: 'aborted'`
+ * (не по имени — имя принадлежит типу ошибки).
  */
 export class ExecutionError extends Error {
   readonly reason: ExecFailureReason;
@@ -218,10 +290,10 @@ export class ExecutionError extends Error {
 
   constructor(init: ExecutionErrorInit) {
     super(init.message);
-    // Имя класса не подменяем: у отмены — `AbortError` (её распознаёт
-    // `isAbortError`), у прочих ошибок — `Error`. Дословность `String(err)`
-    // (её показывают тулы) сохраняется.
-    this.name = init.name ?? 'Error';
+    // Имя класса фиксировано: оно же — признак типа для структурной
+    // проверки (см. `isExecutionError`). Дословность текста ошибки
+    // (`init.message`) сохраняется — её показывают тулы.
+    this.name = 'ExecutionError';
     this.reason = init.reason;
     this.code = init.code ?? null;
     this.stdout = init.stdout ?? '';
@@ -231,6 +303,22 @@ export class ExecutionError extends Error {
     this.truncated = init.truncated === true;
     this.durationMs = init.durationMs ?? 0;
   }
+}
+
+/**
+ * Структурная проверка `ExecutionError` (устойчива к копиям класса: src/dist).
+ *
+ * `instanceof` здесь ненадёжен: клиент удалённого порта создаёт ошибку через
+ * динамический `import('@itphx/synth-core')` (то есть из `dist`), а код в
+ * core импортирует класс из исходников — это два разных объекта класса, и
+ * `instanceof` не срабатывает. Поэтому проверка опирается на стабильный
+ * признак типа (`name`) и на форму ошибки (`reason`/`message`).
+ */
+export function isExecutionError(value: unknown): value is ExecutionError {
+  if (value instanceof ExecutionError) return true;
+  if (typeof value !== 'object' || value === null) return false;
+  const e = value as { name?: unknown; reason?: unknown; message?: unknown };
+  return e.name === 'ExecutionError' && typeof e.reason === 'string' && typeof e.message === 'string';
 }
 
 /** Структурная проверка: переданное значение — порт исполнения. */

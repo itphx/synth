@@ -241,6 +241,85 @@ export type { StoredDictionary, DictionaryLanguage } from './engine/router/index
 export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
 
 export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
+// Этап 1 roadmap 0.13 (блок 3): подсистема «вопрос пользователю» (`ask_user`) —
+// сервис (постановка/ожидание/ответ/отмена), retention-очистка и типизированные
+// ошибки. Публично: managed-backend собирает тот же сервис (паритет core↔backend).
+export {
+  QuestionService,
+  startQuestionPruner,
+  validateAnswers,
+  MAX_FREE_ANSWER_LENGTH,
+  QUESTION_ERROR_CODES,
+  QuestionError,
+  QuestionNotFoundError,
+  QuestionAlreadySettledError,
+  QuestionInvalidAnswerError,
+} from './engine/question/index.js';
+export type {
+  QuestionServiceOptions,
+  QuestionLogger,
+  QuestionPrunerOptions,
+  QuestionAskInput,
+  QuestionOutcome,
+  QuestionListFilter,
+  QuestionErrorCode,
+  QuestionInvalidAnswerReason,
+} from './engine/question/index.js';
+// Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096 —
+// фоновые саб-агенты, PROP-097 — фоновые шелл-процессы): сервис реестра,
+// retention-очистка и типизированные ошибки. Публично: managed-backend собирает
+// тот же сервис (паритет core↔backend).
+export {
+  BackgroundRunService,
+  startBackgroundRunPruner,
+  buildSubagentNotification,
+  buildProcessNotification,
+  createBackgroundParentNotifier,
+  processLogPath,
+  PROCESS_LOG_DIR,
+  BACKGROUND_RUN_ID_PREFIX,
+  BACKGROUND_TERMINAL_STATUSES,
+  BACKGROUND_ERROR_CODES,
+  BackgroundRunError,
+  BackgroundLimitExceededError,
+} from './engine/background/index.js';
+export type {
+  BackgroundRunServiceOptions,
+  BackgroundRunPrunerOptions,
+  BackgroundParentNotifierDeps,
+  BackgroundErrorCode,
+  BackgroundFinalState,
+  BackgroundFinishPatch,
+  BackgroundLogger,
+  BackgroundProcessInput,
+  BackgroundRunLimits,
+  BackgroundRunState,
+  BackgroundSubagentInput,
+} from './engine/background/index.js';
+// PROP-097 (блок 5b): фоновые шелл-процессы — сервис запуска/остановки,
+// retention-очистка логов и типизированные ошибки. Публично: managed-backend
+// собирает тот же сервис (паритет core↔backend).
+export {
+  ProcessService,
+  startProcessLogPruner,
+  BackgroundUnsupportedError,
+  ProcessError,
+  PROCESS_ERROR_CODES,
+  PROCESS_LOG_FLUSH_BYTES,
+  PROCESS_LOG_FLUSH_INTERVAL_MS,
+  PROCESS_LOG_TAIL_LIMIT,
+} from './engine/processes/index.js';
+export type {
+  ProcessLogPrunerOptions,
+  ProcessErrorCode,
+  ProcessLimits,
+  ProcessLogger,
+  ProcessLogsOptions,
+  ProcessLogsResult,
+  ProcessServiceOptions,
+  ProcessSpawnInput,
+  ProcessSpawnResult,
+} from './engine/processes/index.js';
 // ADR-090: единая точка исполнения тулов (`safeParse → execute → catch`) и
 // сужение контекста для плагинных тулов. Публичны для managed-backend:
 // портал памяти вызывает админ-тул плагина через реестр тулов (ADR-107, М2).
@@ -256,10 +335,12 @@ export type { AutomationRuntime } from './engine/tools/automation-runtime.js';
 // (inline — в процессе; remote — отдельный сервис, шаг 7 плана).
 export {
   ExecutionError,
+  isExecutionError,
   isExecutionPort,
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_SHELL_BINARY,
   EXECUTION_BASE_CAPABILITIES,
+  EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
 } from './execution/ports/index.js';
 export type {
   ExecutionPort,
@@ -270,6 +351,9 @@ export type {
   ExecutionErrorInit,
   ExecutionCapabilitySummary,
   ExecutionBaseCapability,
+  ExecBackgroundChunk,
+  ExecBackgroundExit,
+  ExecBackgroundProcess,
 } from './execution/ports/index.js';
 export { InlineExecutionPort } from './execution/inline-execution-port.js';
 export { resolveExecutionPort, EXECUTION_PORT_KEY } from './execution/tool-port.js';
@@ -561,6 +645,11 @@ export { FileMemoryFactStore } from './storage/file-memory-fact-store.js';
 export type { FileMemoryFactStoreConfig } from './storage/file-memory-fact-store.js';
 export { FileMemoryIndexStore } from './storage/file-memory-index-store.js';
 export type { FileMemoryIndexStoreConfig } from './storage/file-memory-index-store.js';
+// Этап 1 roadmap 0.13: вопросы пользователю и реестр фоновых прогонов.
+export { FileQuestionStore } from './storage/file-question-store.js';
+export type { FileQuestionStoreConfig } from './storage/file-question-store.js';
+export { FileBackgroundRunStore } from './storage/file-background-run-store.js';
+export type { FileBackgroundRunStoreConfig } from './storage/file-background-run-store.js';
 export type {
   SessionRepository,
   SessionFilter,
@@ -656,6 +745,9 @@ export type {
   MemoryIndexSource,
   MemoryIndexStats,
   MemoryChunkRecord,
+  // Этап 1 roadmap 0.13: вопросы пользователю и реестр фоновых прогонов.
+  QuestionRepository,
+  BackgroundRunRepository,
 } from './storage/ports/index.js';
 // ADR-105 (Ф0/Ф1): доменная ошибка хранилища внешних доступов — значение
 // (не только тип): её бросают реализации порта, в т.ч. PostgreSQL-драйвер
@@ -703,6 +795,9 @@ export {
   // ADR-105 (Ф1): внешние доступы (OAuth-креды к коннекторам).
   MemoryExternalCredentialRepository,
   MemoryCredentialAuditRepository,
+  // Этап 1 roadmap 0.13: вопросы пользователю и реестр фоновых прогонов.
+  MemoryQuestionRepository,
+  MemoryBackgroundRunRepository,
 } from './storage/memory/index.js';
 // PROP-047 §2.1: in-memory реализации портов памяти. Имена классов совпадают с
 // именами портов (`MemoryFactRepository`), поэтому в публичном API они
@@ -952,6 +1047,7 @@ export type {
   SessionAccessPredicate,
   SessionAccessPredicateOptions,
   SessionAccessMessages,
+  SessionAccessKind,
 } from './server/session-access-guard.js';
 // ADR-105 (Ф3): право привязки внешнего доступа к коннектору — на границе.
 export { createCredentialBindGuard } from './server/credential-bind-guard.js';
@@ -1598,6 +1694,15 @@ export type {
   PipelineProjectRoutesOptions,
   PipelineProjectRouteMessages,
 } from './server/routes/pipeline-project-routes.js';
+// PROP-096/097: HTTP-контур единого реестра фоновых прогонов (список,
+// деталь, лог, остановка, удаление).
+export { createProcessRoutes } from './server/routes/processes.js';
+export type {
+  ProcessRoutesAuth,
+  ProcessRoutesDeps,
+  ProcessRoutesOptions,
+  ProcessRouteMessages,
+} from './server/routes/processes.js';
 // ADR-086 §5: установка пакетов расширений и реестр установок.
 export { createPacksRoutes } from './server/routes/packs.js';
 export type {

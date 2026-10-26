@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY, STEER_INTERRUPTED_METADATA_KEY, STEERING_ERROR_CODES } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
@@ -57,6 +57,11 @@ import { runSubagentResume, validateSubagentResume, SubagentResumeError, type Su
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
 import type { HookBus } from './hooks/hook-bus.js';
 import type { RequestSessionService } from './events/request-session.js';
+// Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю».
+import type { QuestionService } from './question/service.js';
+// Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
+import type { BackgroundRunService } from './background/service.js';
+import type { ProcessService } from './processes/service.js';
 
 import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, refreshRuntimeDeps, type RuntimeDeps } from './tools/runtime-deps.js';
 import { InlineExecutionPort } from '../execution/inline-execution-port.js';
@@ -81,6 +86,7 @@ import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
 // ADR-095 (шаг 6a): вынесенные модули оркестратора (тонкие делегации).
 import { computeMessageCost, resolveMessageModel, estimateUsage, estimatePromptChars as estimatePromptCharsFn, publishLiveUsage, aggregateSubagentStats, type PublishLiveUsageParams } from './orchestrator/usage.js';
 import { publishFsChange } from './orchestrator/fs-change.js';
+import { applySteerInjections } from './steering/apply.js';
 import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, joinAccumulatedTexts, type SaveAssistantMessageDeps, type AssistantMessageStatus } from './orchestrator/persistence.js';
 import { StreamMessageDraft, type StreamMessageRef } from './orchestrator/stream-persistence.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './orchestrator/errors.js';
@@ -387,6 +393,33 @@ export interface OrchestratorOptions {
    */
   isCancelRequested?: (sessionId: string) => Promise<boolean>;
   /**
+   * Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
+   *
+   * Не задан — тул `question` возвращает `question.deps_unavailable`
+   * (вопросы в этой сборке не работают).
+   */
+  questionService?: QuestionService;
+  /**
+   * Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
+   *
+   * Не задан — фоновый запуск саб-агента (`task` с `background: true`)
+   * недоступен (`task.background_disabled`).
+   */
+  backgroundService?: BackgroundRunService;
+  /**
+   * Этап 1 roadmap 0.13 (блок 4): фоновые прогоны разрешены инстансом
+   * (`background.enabled`). `false` — тул `task` с `background: true`
+   * отказывает (`task.background_disabled`). По умолчанию — разрешены.
+   */
+  backgroundEnabled?: boolean;
+  /**
+   * PROP-097 (блок 5b): сервис фоновых шелл-процессов.
+   *
+   * Не задан — тул `execute_shell` с `background: true` отказывает
+   * (`process.deps_unavailable`).
+   */
+  processService?: ProcessService;
+  /**
    * Шаг 2б: интервал (мс) персистентности частичного стрима. Черновик
    * assistant-сообщения создаётся сразу при первом непустом чанке, далее
    * обновляется не чаще интервала (или при приросте ≥4096 символов).
@@ -544,6 +577,29 @@ export class ChatOrchestrator {
    * границе цикла Tool Use даже без живого cancelToken (backoff/гонка).
    */
   private readonly _isCancelRequested: ((sessionId: string) => Promise<boolean>) | null;
+  /**
+   * Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (null — не задан).
+   */
+  private readonly _questionService: QuestionService | null;
+  /**
+   * Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов (null — не задан:
+   * фоновый запуск саб-агента недоступен).
+   */
+  private readonly _backgroundService: BackgroundRunService | null;
+  /** Этап 1 roadmap 0.13 (блок 4): фоновые прогоны разрешены инстансом. */
+  private readonly _backgroundEnabled: boolean;
+  /**
+   * PROP-097 (блок 5b): сервис фоновых шелл-процессов (null — не задан:
+   * режим `background: true` у `execute_shell` недоступен).
+   */
+  private readonly _processService: ProcessService | null;
+  /**
+   * Этап 1 roadmap 0.13 (блок 3): соответствие «ход (`streamId`) → сессия».
+   *
+   * Нужно для «Стопа»: `cancel(streamId)` знает только ход, а снимать открытые
+   * вопросы нужно у сессии.
+   */
+  private readonly _streamSessions = new Map<string, string>();
   /** Шаг 2б: интервал персистентности частичного стрима (мс). */
   private readonly _streamPersistIntervalMs: number;
   /** ADR-069 Фаза 1: конфиг проектных инструкций (null — выключено/не задано). */
@@ -781,6 +837,13 @@ export class ChatOrchestrator {
     this._getAutomationRuntime = options.getAutomationRuntime ?? null;
     this._isSchedulerActive = options.isSchedulerActive ?? null;
     this._isCancelRequested = options.isCancelRequested ?? null;
+    // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю.
+    this._questionService = options.questionService ?? null;
+    // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов + тумблер инстанса.
+    this._backgroundService = options.backgroundService ?? null;
+    this._backgroundEnabled = options.backgroundEnabled ?? true;
+    // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
+    this._processService = options.processService ?? null;
     this._streamPersistIntervalMs = options.streamPersistIntervalMs ?? 1000;
 
     // ADR-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
@@ -2718,6 +2781,10 @@ export class ChatOrchestrator {
     if (earlyResult) return earlyResult;
 
     try {
+      // Этап 1 roadmap 0.13 (блок 3): «ход → сессия» — нужно для «Стопа»:
+      // `cancel(streamId)` знает только ход, а снимать открытые вопросы нужно
+      // у сессии. Запись снимается в `finally` ниже.
+      this._streamSessions.set(streamId, session.id);
       // ADR-095 (шаг 6b-1): подготовка запроса (провайдер → MCP-скоуп →
       // state-сообщения → промпт Composer'ом → инструменты → cancel-токен)
       // вынесена в `orchestrator/phases/process-setup.ts`; порядок прежний.
@@ -2815,6 +2882,13 @@ export class ChatOrchestrator {
           cancelToken.cancelled
           || (this._isCancelRequested ? await this._isCancelRequested(session.id) : false)
         ) {
+          // Этап 1 roadmap 0.13 (блок 3): отмена хода снимает открытые
+          // вопросы сессии — иначе вопрос остался бы ждать ответа.
+          if (this._questionService) {
+            void this._questionService.cancelSession(session.id, 'aborted').catch(() => {
+              // Снятие вопросов не должно ронять отмену хода.
+            });
+          }
           cancelledBeforeFinal = true;
           break;
         }
@@ -3438,6 +3512,27 @@ export class ChatOrchestrator {
                   // ADR-046 §5: тул `skill` получает рантайм через ToolContext.extra
                   // (в ToolContext нет dataDir); саб-агенты — тот же объект.
                   skillRuntime: this._skillRuntime ?? undefined,
+                  // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю —
+                  // тул `question` задаёт вопрос и ждёт ответа.
+                  questionService: this._questionService ?? undefined,
+                  // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов —
+                  // тул `task` с `background: true` регистрирует фонового
+                  // саб-агента и возвращает управление сразу.
+                  backgroundService: this._backgroundService ?? undefined,
+                  backgroundEnabled: this._backgroundEnabled,
+                  // PROP-097 (блок 5b): сервис фоновых шелл-процессов —
+                  // тул `execute_shell` с `background: true` запускает команду
+                  // в фоне и возвращает управление сразу.
+                  processService: this._processService ?? undefined,
+                  // Регистрация cancel-токена фонового прогона: `POST
+                  // /sessions/<child>/abort` останавливает фонового ребёнка
+                  // через общую карту токенов оркестратора (по streamId).
+                  registerCancelToken: (id: string, token: CancellationToken) => {
+                    this.registerCancelToken(id, token);
+                  },
+                  unregisterCancelToken: (id: string) => {
+                    this.unregisterCancelToken(id);
+                  },
                   // ADR-046 §4.5: scope-гейты скиллов (система/проект/сессия).
                   skillScope: this._skillScopeFor(session, projectForState),
                   // ADR-069 §7: уже резолвленные проектные инструкции — в extra,
@@ -3815,6 +3910,10 @@ export class ChatOrchestrator {
         if (stopAfterDeny) break;
       }
 
+      // Этап 1 roadmap 0.13 (блок 3): конец хода — снимаем вопросы **этого**
+      // хода (оставшиеся `pending`). Вопросы других ходов/сессий не трогаем.
+      await this._cancelTurnQuestions(session.id, streamId);
+
       // ADR-095 (шаг 6b-1): эпилог (ветка отмены до финального сохранения,
       // фоллбек-тексты, quality-check/escalation, персист tool-chain, финальное
       // сообщение, `stream.done`, авто-тайтл, триггеры оптимизации контекста)
@@ -3844,12 +3943,48 @@ export class ChatOrchestrator {
         providerName: session.settings.provider,
         agentRole: effectiveAgentRole,
       });
+    } finally {
+      this._streamSessions.delete(streamId);
+    }
+  }
+
+  /**
+   * Этап 1 roadmap 0.13 (блок 3): снять открытые вопросы **этого хода**.
+   *
+   * Вопросы других ходов не трогаем (фильтр по `turnId`): снятие вопроса
+   * соседнего хода сломало бы его ожидание ответа. Ошибки не роняют ход.
+   */
+  private async _cancelTurnQuestions(sessionId: string, turnId: string): Promise<void> {
+    const service = this._questionService;
+    if (!service) return;
+    try {
+      const pending = await service.listPending(sessionId);
+      for (const record of pending) {
+        if (record.turnId !== turnId) continue;
+        try {
+          await service.cancel(record.id, 'turn_ended');
+        } catch {
+          // Уже закрыт (ответ пришёл гонкой) — не мешает.
+        }
+      }
+    } catch (err) {
+      warning('ORCHESTRATOR', `Не удалось снять вопросы хода: ${String(err)}`);
     }
   }
 
   cancel(streamId: string): void {
     const token = this._cancellationTokens.get(streamId);
     if (token) token.cancel();
+    // Этап 1 roadmap 0.13 (блок 3): «Стоп» снимает открытые вопросы сессии —
+    // иначе вопрос остался бы ждать ответа уже после отмены хода. Сигнал
+    // отмены тула (`toolAbortController`) снимает вопрос сам, но сигнал может
+    // не дойти (вопрос задан вне выполняющегося тула) — снимаем явно.
+    const sessionId = this._streamSessions.get(streamId);
+    if (sessionId && this._questionService) {
+      void this._questionService.cancelSession(sessionId, 'aborted').catch(() => {
+        // Отмена вопросов не должна ронять «Стоп».
+      });
+    }
   }
 
   /**
@@ -4326,54 +4461,25 @@ export class ChatOrchestrator {
     author: string,
     streamId: string,
   ): Promise<void> {
-    const { messages, dropped } = await this._sessionManager.takeSteerMessages(
-      session.id, MAX_STEER_INJECTIONS_PER_TURN,
-    );
-
-    // Лимит инъекций на ход: лишние сообщения отбрасываются (событие
-    // `steer.dropped`), а не копятся и не рвут tool-цепочку.
-    if (dropped.length > 0) {
-      publishChunk('steer.dropped', {
-        reason: 'limit',
-        // Машинный код — тот же, что отдаёт API (429 STEER_LIMIT_EXCEEDED).
-        code: STEERING_ERROR_CODES.limitExceeded,
-        limit: MAX_STEER_INJECTIONS_PER_TURN,
-        dropped_count: dropped.length,
-        error: sm('steer.limit_exceeded', { limit: String(MAX_STEER_INJECTIONS_PER_TURN) }),
-        i18n: i18nMeta('steer.limit_exceeded', { limit: String(MAX_STEER_INJECTIONS_PER_TURN) }),
-      });
-    }
-
-    for (const injected of messages) {
-      const persisted: Message = {
-        ...injected,
-        role: MessageRole.USER,
-        metadata: {
-          ...(injected.metadata ?? {}),
-          [STEER_METADATA_KEY]: true,
-          stream_id: (injected.metadata?.stream_id as string) || streamId,
-        },
-      };
-      const stored = await this._sessionManager.appendMessage(session.id, persisted);
-
-      // В контекст LLM — тем же маппингом, что и история сессии
-      // (`sessionMessagesToLlm`), чтобы атрибуция совпадала.
-      for (const llmMessage of sessionMessagesToLlmFn([persisted], agentRole, author)) {
-        currentMessages.push(llmMessage);
-      }
-
-      publishChunk('message.injected', {
-        stream_id: streamId,
+    // Общая точка применения инъекций (ADR-104) — её же использует цикл
+    // саб-агента (`engine/tools/task/run-cycle.ts`): семантика инъекции
+    // (лимит, порядок, маркеры, payload событий) не должна расходиться
+    // между основной сессией и дочерней.
+    await applySteerInjections({
+      sessionManager: this._sessionManager,
+      sessionId: session.id,
+      llmMessages: currentMessages,
+      toLlmMessages: (message) => sessionMessagesToLlmFn([message], agentRole, author),
+      persist: async (message) => {
+        const stored = await this._sessionManager.appendMessage(session.id, message);
         // Позиция сообщения в истории (0-based) — как в `GET /:id/messages`,
         // чтобы UI мог добавить его в ленту без полной перезагрузки.
-        message_index: (stored?.seq ?? persisted.seq) - 1,
-        message_id: persisted.id,
-        content: persisted.content,
-        author: persisted.author,
-        agent_role: persisted.agentRole,
-        metadata: persisted.metadata,
-      });
-    }
+        return { index: (stored?.seq ?? message.seq) - 1 };
+      },
+      publishInjected: (event) => publishChunk('message.injected', event),
+      publishDropped: (event) => publishChunk('steer.dropped', event),
+      streamId,
+    });
   }
 
   /**

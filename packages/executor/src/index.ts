@@ -6,7 +6,9 @@
  *
  * - **сервер исполнителя** (`createExecutorApp`/`startExecutorServer`) —
  *   HTTP/1.1 + JSON API: `POST /exec`, `GET /capabilities`, `GET /health`,
- *   а также MCP-хостинг: `GET /mcp/servers`, `GET /mcp/tools`,
+ *   фоновые процессы (`POST /exec/spawn`, `GET /exec/:processId`,
+ *   `GET /exec/:processId/logs`, `POST /exec/:processId/stop` — ADR-077,
+ *   шаг 7c), а также MCP-хостинг: `GET /mcp/servers`, `GET /mcp/tools`,
  *   `POST /mcp/call` (ADR-077, шаг B1);
  * - **клиент удалённого порта** (`createRemoteExecutionPort`, отдельный
  *   экспорт `@itphx/synth-executor/client`) — реализация `ExecutionPort` из
@@ -30,6 +32,7 @@ export {
   isPortFailureReason,
   isValidExecCommand,
   parseExecRequestBody,
+  parseSpawnExecRequestBody,
   errorResponse,
 } from './protocol.js';
 export type {
@@ -38,6 +41,7 @@ export type {
   ExecErrorBody,
   ExecErrorResponse,
   ExecutorCapabilities,
+  ExecutorFeatures,
   ExecutorHealth,
   ExecutorErrorReason,
   PortFailureReason,
@@ -45,6 +49,13 @@ export type {
   McpToolInfoBody,
   McpCallRequestBody,
   McpCallResultBody,
+  SpawnExecRequest,
+  SpawnExecResponse,
+  BackgroundProcessStatus,
+  BackgroundStatusResponse,
+  BackgroundLogChunkBody,
+  BackgroundLogsResponse,
+  StopBackgroundResponse,
 } from './protocol.js';
 export { parseMcpCallRequestBody } from './protocol.js';
 
@@ -74,6 +85,28 @@ export type { CwdResolution } from './workspace.js';
 // Слой исполнения.
 export { ExecService } from './exec-service.js';
 export type { ExecServiceOptions, ExecOutcome } from './exec-service.js';
+
+// Фоновые процессы (ADR-077, шаг 7c; PROP-097).
+export {
+  BackgroundExecService,
+  DEFAULT_MAX_BACKGROUND_PROCESSES,
+  DEFAULT_BACKGROUND_MAX_LOG_BYTES,
+  DEFAULT_BACKGROUND_LOG_DIR,
+  BACKGROUND_KILL_GRACE_MS,
+  BACKGROUND_PRUNE_INTERVAL_MS,
+  BACKGROUND_PRUNE_TTL_MS,
+  DEFAULT_LOG_READ_LIMIT,
+  MAX_LOG_READ_LIMIT,
+} from './background.js';
+export type {
+  BackgroundExecServiceOptions,
+  BackgroundProcessRecord,
+  BackgroundSpawnInput,
+  BackgroundSpawnOutcome,
+  BackgroundLogsOptions,
+  BackgroundLogsResult,
+  BackgroundLogChunk,
+} from './background.js';
 
 // Toolchain.
 export {

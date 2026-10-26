@@ -256,18 +256,31 @@
   режиму и проверка режима при старте —
   `ports/execution-port.ts`
   (`ExecutionPort`, `ExecRequest`, `ExecResult`, `ExecCommand` — union `shell`/`argv`,
-  `ExecutionError`, `DEFAULT_MAX_OUTPUT_BYTES`; **шаг A**: `ExecRequest.requires?: string[]`,
+  `ExecutionError`, `isExecutionError` — **структурная** проверка типа ошибки порта: клиент
+  удалённого порта создаёт ошибку через динамический `import()` (из `dist`), а core импортирует
+  класс из исходников — это два разных объекта класса, и `instanceof` не срабатывает; проверка
+  опирается на стабильный признак `name === 'ExecutionError'` и форму `reason`/`message`,
+  `DEFAULT_MAX_OUTPUT_BYTES`; **шаг A**: `ExecRequest.requires?: string[]`,
   `ExecutionPort.probe?(bin, args?)`, `ExecutionPort.capabilitySummary?(bin)`,
   `ExecutionCapabilitySummary`, `EXECUTION_BASE_CAPABILITIES = ['git','rg','sh']`,
   причина отказа `dependency_missing`), `inline-execution-port.ts`
-  (`InlineExecutionPort` — исполнение в процессе поверх `execFile`; `probe()` — поверх общей пробы),
+  (`InlineExecutionPort` — исполнение в процессе поверх `execFile`; `probe()` — поверх общей пробы;
+  **ADR-113**: `spawnBackground?(req)` — фоновый запуск через `spawn` (не `execFile`):
+  `processId` = `proc_<uuid>`, `pid`, поток `output` (`stdout`/`stderr` кусками), промис `exited`
+  (`exitCode`/`signal`/`durationMs`), `stop(signal='SIGTERM')`; `timeoutMs > 0` — таймер
+  (`unref`) `SIGTERM` → `SIGKILL` через 5 с; `requires`/`signal`/`maxOutputBytes` в фоне
+  не применяются (проверка бинарных требований — на слое тула, отмена — через `stop()`)),
   `probe.ts` (**единственная** проба `bin --version` через порт: `ENOENT` → `false`, прочая ошибка →
   `true`, fail-open, ADR-078), `contract/`
   (контрактный suite порта — обязателен для любой реализации, как `storage/contract/`;
   общий набор проверок + блоки `describeInlineOnlyExecutionChecks`/`describeRemoteOnlyExecutionChecks`
   — разделение намеренное: у remote `cwd` обязан лежать в workspace исполнителя, у inline
   такого ограничения нет; `probe`/`requires` проверяются в общем наборе, `dependency_missing` —
-  в remote-блоке), `remote.ts` (загрузчик удалённого порта: **динамический `import()`
+  в remote-блоке; **ADR-113**: блок `describeBackgroundExecutionChecks` — фоновый запуск
+  (поток вывода, `exitCode`, `stop()`, таймаут) — только там, где метод реализован;
+  **фоновый запуск — в обеих реализациях** (inline и remote, ADR-077 шаг 7c): в
+  remote-блоке проверяется, что `spawnBackground` **реализован** и что
+  containment `cwd` действует и для фонового запуска), `remote.ts` (загрузчик удалённого порта: **динамический `import()`
   по строке-константе** `'@itphx/synth-executor/client'` + локальный интерфейс модуля +
   каст — по образцу драйвера хранилища в `storage/storage-context.ts`; чтение токена из
   файла по `execution.remote.tokenSecret` — **fail-closed**, значение токена не логируется
@@ -277,7 +290,18 @@
   всех адресов, TTL `REMOTE_CAPABILITIES_TTL_MS = 120_000` с ленивым обновлением,
   `probe()`/`capabilitySummary()` по инвентарю, маршрутизация команды в адрес с нужными
   бинарями; адрес без нужного бинаря и не ответивший адрес из маршрутизации исключаются,
-  подходящего адреса нет → `dependency_missing`/`EDEPENDENCY` с текстом «в пуле: N из M»),
+  подходящего адреса нет → `dependency_missing`/`EDEPENDENCY` с текстом «в пуле: N из M»;
+  **фоновый запуск в remote** (ADR-077 шаг 7c; ADR-113): `spawnBackground` — опрос состояния
+  (`GET /exec/:id`, 500 мс) и журнала (`GET /exec/:id/logs`, 300 мс) исполнителя —
+  стриминга на проводе нет; `stop(signal)` уходит на исполнителя телом
+  `{ signal }` (`POST /exec/:id/stop`: `SIGTERM`|`SIGKILL`, иной сигнал — `400`),
+  поэтому конкретный сигнал доезжает, а не подменяется дефолтом сервера;
+  обёртка `RemoteExecutionPortWithExecutorMcp` пробрасывает
+  метод **только если его умеет внутренний порт** (иначе «фон не поддерживается» не
+  отличить от «метод есть, но падает»); исполнитель протокола < 3 (нет
+  `features.background`) → `ExecutionError.code = 'EBACKGROUND'`
+  (`EXECUTION_BACKGROUND_UNSUPPORTED_CODE`) → `background_unsupported` в
+  `engine/processes`),
   `factory.ts` (`createExecutionPortForConfig` — выбор порта по режиму: `inline` →
   `InlineExecutionPort`, `remote` → удалённый порт; экземпляр на каждый вызов, без
   process-глобальных синглтонов), `tool-port.ts` (`resolveExecutionPort(ctx)` — шов: берёт
@@ -323,7 +347,9 @@
   `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `dictionaries`, `mcp`, `skills`,
   `commands`, `skill-bundles`, `skill-scope`, `git`, `ssh-keys`, `events`, `identities`,
   `service-keys`, `webhooks`, `oauth` (ADR-105 Ф4: `/api/v2/oauth/credentials*` — выдача,
-  метаданные, refresh, отзыв, привязка к MCP-коннектору), `maintenance`, `analytics`.
+  метаданные, refresh, отзыв, привязка к MCP-коннектору), `maintenance`, `analytics`,
+  `processes` (ADR-111/PROP-096/097: `/api/v2/processes*` — единый реестр фоновых прогонов;
+  в деградированном режиме хранилища контур **не монтируется** → 404).
 - `maintenance/*` — ADR-091/ADR-092: обслуживание инстанса. `service.ts` — сервисный слой
   admin-API/UI (список/создание бэкапов, отложенное восстановление
   `scheduleRestore`/`getPendingRestore`/`cancelPendingRestore`, сводный статус; запросы —
@@ -516,6 +542,9 @@
   `PermissionCheckInput.toolSource`), а не по capability, — плагин с `file_read`/`search` не
   «выписывается» из правила `plugin`); `engine/security/*` — injection/shell/protected paths; `engine/security/secret-files.ts` — политика «файлы и каталоги секретов» (`isSecretFileName`/`isSecretDirectoryName`; список имён и каталогов + шаблоны `.env*`/`credentials*`/`secret(s)*`/`service-account*`/`id_*`/`*.pem|key|p12|pfx|jks|keystore|ppk|kdbx`/`*.tfstate*`; отдаётся плагину через `facade.security`, т.к. сканер расширений блокирует бандл за упоминание имён секретных файлов); слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
+  `ContextConfig.getMaxStepsPrompt(language)` — требование «только текст» для
+  финального шага-отчёта саб-агента по лимиту шагов (`prompts/system/MAX_STEPS.{lang}.md`;
+  override — `{dataDir}/user/system/MAX_STEPS.{lang}.md`; пустая строка, если файла нет).
   Системный промпт (ADR-070): `composer.ts` — `SystemPromptComposer` (единственная точка сборки
   промпта основной сессии и саб-агентов: `compose()` идемпотентно собирает из состояния, `manifest()` —
   манифест источников; типы `ComposedPrompt`/`PromptBlock`, **`PromptBlockProvider`-шов**
@@ -668,7 +697,17 @@
   tool-loop `runSubagent`, используемый и `task-resume.ts`), `prompt.ts`, `args.ts`, `types.ts`;
   `task.ts` — фасад-реэкспорт. Тулы `task`/`task-resume` собирают промпт
   саб-агента (`resolveSubagentPrompt`) — проектные инструкции (ADR-069) добавляются,
-  кроме `task(skip_context_files=true)`. Тулы управления проектом:
+  кроме `task(skip_context_files=true)`.
+  **Steering дочерней сессии (ADR-104 + ADR-111).** Цикл саб-агента применяет инъекции
+  **на границе шага** (`run-cycle.ts`): перед каждым LLM-вызовом вычитывается `steerInbox`
+  **сессии-ребёнка** (`sessionManager.takeSteerMessages`), сообщение персистится в истории
+  ребёнка как `user`-реплика с `metadata.steer`, попадает в LLM-контекст текущего хода
+  (`messageToLLMMessage`) и публикуется в канал ребёнка (`message.added` + `message.injected`);
+  превышение лимита — `steer.dropped` в канале ребёнка (ход не падает). `interrupt` для
+  ребёнка прогон **не** прерывает (на границе шага генерации нет) — применяется как обычная
+  инъекция. Общая точка применения инъекций для основной сессии и ребёнка —
+  `engine/steering/apply.ts` (`applySteerInjections`); оркестратор использует её же
+  (`ChatOrchestrator._applySteerInjections`). Очереди родителя и ребёнка изолированы. Тулы управления проектом:
   `project_update`/`project_workspace_set` (`project-manage.ts`) и
   `project_repo_clone|init|add|fetch|remove` (`project-repos.ts`) — проект берётся
   из сессии, смена workspace/регистрация репозиториев сохраняются `ProjectStore.save`
@@ -736,6 +775,22 @@
   опубликованный пайплайн проекта сессии, `bound`/`queue` — своя сессия или сессия своего
   проекта. Scope/правила области — в `engine/tools/automation-helpers.ts`
   (`loadScheduleScope`/`isScheduleInScope`/`ensureScheduleMutable`).
+  **Тулы реестра фоновых прогонов (ADR-111/PROP-097).** `process_list`/`process_logs`
+  (`engine/tools/processes.ts`) — чтение **единого** реестра фоновой работы (фоновые
+  саб-агенты и фоновые шелл-процессы) и лога фонового процесса. Скоуп — **«своя сессия +
+  дочерние»**: видны прогоны текущей сессии и прогоны её дочерних сессий (`task`); чужой
+  прогон выглядит как отсутствующий (`process.tool.not_found` — тот же текст, что и для
+  несуществующего, существование чужого ресурса не раскрывается). Только чтение: оба тула
+  разрешены в plan-режиме (`isPlanBlockedTool` их не блокирует), группа `process`
+  отключаема админом. Зависимости — из `ctx.extra`: `backgroundService` (реестр),
+  `processService` (лог), `sessionManager` (дети сессии); нет сервиса — понятный отказ
+  `process.tool.deps_unavailable`. **Лог есть только у `kind: 'process'`** — он читается из
+  `BlobStore` по пути записи реестра (`processes/<runId>.log`) через `ProcessService.logs`
+  (`offset`/`limit` в байтах, `truncated` — признак усечения лога при записи); у фонового
+  саб-агента лога нет — тул отдаёт **summary** прогона и id дочерней сессии (её история —
+  в `read_session_reference`). Capability `process` выдана агентам, которые ведут работу в
+  проекте (`assistant`/`developer`/`devops`/`admin`/`pm`/`qa`/`analyst`); у `explore`/
+  `general`/`auditor`/`title` её нет (тест — `engine/agents/capabilities.test.ts`).
   **Контекст плагинного тула сужается.** Для `source: 'plugin'` `executeToolDef` отдаёт только
   `sessionId`/`messageId`/`workingDir`/`agentRole?`/`projectId?`/`abortSignal?` (`narrowToolContext`): `extra` и `dataDir`
   плагину **не передаются** — симметрично `out-of-process` (по проводу те же три поля). Встроенные и
@@ -1198,6 +1253,52 @@
   напрямую, событие в `EventIngress`/Router **не публикуется**, `payload` статический, пайплайн
   должен быть опубликован; Job — `decision:'pipeline'` с `pipelineId`/`runId`
   (`SchedulerRuleProvider` для такой цели отдаёт `null`).
+- `engine/question/*` — ADR-112 (этап 1 roadmap 0.13 — блок 1.3): «вопрос пользователю»
+  (`ask_user`). `service.ts` (`QuestionService`: `ask`/`answer`/`cancel`/`list`/`listPending`/
+  `cancelSession`; ожидание ответа — в памяти процесса, таймер `unref`), `types.ts`
+  (вход/выход вопроса, коды ошибок `QuestionError`/`QuestionNotFoundError`/…), `prune.ts`
+  (`startQuestionPruner` — retention
+  терминальных записей, сразу + каждые 6 ч). Публикует `user_question.asked`/
+  `user_question.answered`/`user_question.cancelled` в канале сессии; в `user_question.asked`
+  payload несёт `created_at` и `expires_at` (ISO-8601; `expires_at` — только при заданном
+  таймауте) — по нему UI рисует обратный отсчёт. Тул — `engine/tools/
+  question.ts` (переводит ответы модели в записи вопросов). Порт — `QuestionRepository`
+  (`storage/ports/question-repository.ts`; файловый — `{dataDir}/questions.json`, в-памяти —
+  `storage/memory/questions.ts`, PG — миграция `021_background_runs`; контракт —
+  `storage/contract/question-repository.contract.ts`). Срок ожидания ответа по умолчанию **не
+  задан** (`questions.timeoutMs = 0` — без таймера, без `expiresAt`); срок может задать тул
+  `question` (`timeout`, ≥ 5 мин — не рекомендуется: по истечении вопрос снимается с причиной
+  `timeout`).
+- `engine/background/*` — ADR-111 (этап 1 roadmap 0.13 — блок 1.2): единый реестр фоновой
+  работы. `service.ts` (`BackgroundRunService`: `startSubagent`/`startProcess`/`finish`/`stop`/
+  `recoverOnStart`/`prune`/`buildSubagentNotification`; лимиты сессии — `background.*`;
+  старт публикует `child.started`/`process.started`, терминальный переход —
+  `process.exited`/`child.completed|failed|cancelled` в канал
+  сессии-владельца; `metadata` уведомления родителю несёт метки прогона —
+  `started_at`/`finished_at`/`duration_ms`/`exit_code`/`signal`/`command`/`cwd`/
+  `agent_role`/`description` — для карточки результата в UI; конверт `<process …>`/
+  `<subagent …>` для модели не меняется), `types.ts` (входы запуска, лимиты, коды ошибок, `BackgroundLimitExceededError`), `prune.ts`
+  (`startBackgroundRunPruner` — retention, чистятся только терминальные записи). Порт —
+  `BackgroundRunRepository` (`storage/ports/background-run-repository.ts`; файловый —
+  `{dataDir}/processes/registry.json` (`storage/file-background-run-store.ts`), в-памяти —
+  `storage/memory/background-runs.ts`, PG — `packages/storage-postgres/src/ports/
+  background-runs.ts`, миграция `021_background_runs`; контракт —
+  `storage/contract/background-run-repository.contract.ts`).
+  Мастер-выключатель `background.enabled` гейтит **оба** вида фоновой работы:
+  `task` (`task.background_disabled`) и `execute_shell` (`process.background_disabled`).
+- `engine/processes/*` — ADR-113 (ADR-111): фоновые шелл-процессы. `service.ts`
+  (`ProcessService`: `spawn` через `ExecutionPort.spawnBackground`, поток stdout/stderr в лог,
+  `stop`, `logs`; лимит записи лога — `background.logMaxBytes`; `stop` публикует
+  `process.stopped` в канал владельца — один раз на прогон, терминальный статус
+  приходит позже — `process.exited`), `types.ts`
+  (`BackgroundUnsupportedError` и пр.), `prune.ts` (очистка логов). Логи — blob-хранилище
+  (`BlobStore`), путь `processes/<id>.log`. **Фоновый запуск — в обеих реализациях**
+  (inline и remote, ADR-077 шаг 7c): в `remote` процесс живёт на исполнителе, control
+  plane наблюдает его опросом (журнал — 300 мс, состояние — 500 мс; стриминга на проводе
+  нет), поэтому лог в control plane появляется с задержкой опроса и **дублируется** с
+  журналом на исполнителе (до его `prune`). Исполнитель старой версии (протокол < 3, нет
+  `features.background`) → `ExecutionError.code = 'EBACKGROUND'`
+  (`EXECUTION_BACKGROUND_UNSUPPORTED_CODE`) → `background_unsupported`.
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
@@ -1217,6 +1318,13 @@
   миграция `014` — контрактный suite гоняется на **живой** БД, гейт `SYNTH_TEST_POSTGRES_DSN`);
   контент `provides.authority` пакета активируется в `authorityPolicy` при одобрении пакета и
   снимается при снятии установки (см. `engine/authority/activation.ts`));
+  `QuestionRepository` — персистентные записи вопросов пользователю (ADR-112; файловое —
+  `{dataDir}/questions.json`, в-памяти — `storage/memory/questions.ts`, PG — миграция
+  `021_background_runs`; контракт — `storage/contract/question-repository.contract.ts`);
+  `BackgroundRunRepository` — единый реестр фоновых прогонов (ADR-111; файловое —
+  `{dataDir}/processes/registry.json`, в-памяти — `storage/memory/background-runs.ts`, PG —
+  миграция `021_background_runs`; контракт —
+  `storage/contract/background-run-repository.contract.ts`);
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
   запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/
@@ -1229,7 +1337,9 @@
   `close?`/`locks?`/`health?`/`schemaMigrations?`/`purgeSchema?`/`degraded?`) + `createFileStorage`/`createMemoryStorage`/
   `createStorageContext` (`@deprecated`) и **async-каскад** `createStorageContextAsync`/`buildStorageContext`
   (backend по `storage.backend`, env `SYNTH_STORAGE_BACKEND`),
-  `storage/file-blob-store.ts` (`FileBlobStore`, порт `BlobStore`), `storage/defaults-store.ts`
+  `storage/file-blob-store.ts` (`FileBlobStore`, порт `BlobStore` — `read`/`write`/`append`/
+  `delete`/`exists`/`list`; `append` — дописывание в конец для журналов (логи фоновых процессов,
+  ADR-113), атомарность не требуется), `storage/defaults-store.ts`
   (`DefaultsStore` — перенесён из backend, там реэкспорт). Пайплайны ADR-101 — отдельные порты:
   `storage/ports/project-pipeline-repository.ts` (`ProjectPipelineRepository` — черновик пайплайна
   + журнал опубликованных версий; `scope` = `project`|`instance`, `installedBy` — провенанс пакета) и
@@ -1341,6 +1451,10 @@
 - `profiles.ts` — реестр серверных профилей гибрида.
 - `prompts/` (system, roles, subagents, security), `definitions/`
   (`protected-paths.json`, `shell-policy.json`), `dictionaries/` — ассеты движка.
+  `prompts/system/MAX_STEPS.{ru,en}.md` — требование «только текст» для
+  принудительного финального шага-отчёта саб-агента по лимиту шагов
+  (механика opencode; загрузчик — `ContextConfig.getMaxStepsPrompt`,
+  override — `{dataDir}/user/system/MAX_STEPS.{lang}.md`).
 
 ## Правила добавления тула / роута
 
@@ -1391,6 +1505,17 @@
   прав → 403, чужой ресурс под чужим id → 404. Шаблоны инстанца — отдельный
   `adminGuard` (ADMIN), инстанцирование дополнительно требует право изменения
   целевого проекта.
+  `createProcessRoutes` (PROP-096/097) — HTTP-контур единого реестра фоновых
+  прогонов (`GET /` — список с фильтрами `sessionId`/`projectId`/`kind`/`status`/
+  `limit`, `GET /:id` — деталь, `GET /:id/logs` — отрезок лога фонового
+  процесса, `POST /:id/stop` — остановка, `DELETE /:id` — удаление терминальной
+  записи). Доступ — **на границе** (инвариант 16): guard `processGuard` резолвит
+  запись реестра и её сессию-владельца **один раз**, кладёт запись в контекст
+  (`guardedProcess`), обработчики проверок доступа не содержат; вид доступа —
+  по HTTP-методу (`read`/`write`), `VIEWER` читает, но не мутирует (инвариант
+  21). Список прогонов фильтруется по доступу к сессии-владельцу (сессии кэшируются
+  на один запрос). Core-дефолт `isAllowed` — `createSessionAccessPredicate()`;
+  backend передаёт правило проекта (`routes/processes.ts`).
   `createSettingsRoutes` (ADR-089/ADR-084): `GET/PUT/DELETE /settings/events` — runtime-настройки
   раздела «События» (`fallbackEvents` из config, `onEventsChange` — live-применение,
   мутации под `eventsWriteGuard`; core — `requireAuth`, backend — ADMIN) и

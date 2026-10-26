@@ -6,7 +6,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   ProviderConfig, ModelConfig, ToolsDisabledConfig, WebhooksConfig,
-  SummarizationConfig, DecisionConfig,
+  SummarizationConfig, DecisionConfig, Message,
 } from '@itphx/synth-shared';
 import {
   ensureDataDir, parsePrincipalId, resolveDefaultWorkspace, resolveSecretKey, resolveStorageBackend,
@@ -43,6 +43,16 @@ import {
   SchedulerRuleProvider, SchedulerService, AlwaysLeader, FileLeader,
   createExternalIdentityResolver,
   startEventJournalPruner,
+  // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю + retention.
+  QuestionService,
+  startQuestionPruner,
+  // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов + retention.
+  BackgroundRunService,
+  startBackgroundRunPruner,
+  createBackgroundParentNotifier,
+  // PROP-097 (блок 5b): сервис фоновых шелл-процессов + retention логов.
+  ProcessService,
+  startProcessLogPruner,
   WebhookService, startWebhookDeliveryPruner,
   AnalyticsRecorder, attachAnalyticsActivityHooks, startAnalyticsRollupPruner, sessionAxes,
   createStorageContextAsync,
@@ -369,6 +379,106 @@ export async function createBackendDeps(
   // ADR-102: пользовательские сообщения персистит процессор — мера `messages_user`.
   queueManager.setAnalytics(analytics);
 
+  // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
+  //
+  // Паритет с standalone-core: тот же порт записи (ADR-096), тот же срок
+  // ожидания ответа из конфигурации `questions.timeoutMs` (`0` — без
+  // таймаута). Один инстанс на процесс: его получают и оркестратор (тул
+  // `question`), и HTTP-роуты сессий.
+  const questionService = storageDegraded
+    ? undefined
+    : new QuestionService({
+        repository: storageContext.questions,
+        eventBus,
+        timeoutMs: config.synth.questions.timeoutMs,
+      });
+  // Старт: открытые вопросы прошлого процесса не пережили рестарт (ожидание
+  // в памяти) — снимаем их с причиной `interrupted`. Best-effort: ошибка не
+  // роняет старт.
+  if (questionService) {
+    try {
+      await questionService.recoverOnStart();
+    } catch (err) {
+      console.warn(
+        `[questions] восстановление открытых вопросов не удалось: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  // Retention-очистка терминальных записей вопросов (сразу + каждые 6 ч).
+  const stopQuestionPruner = storageDegraded
+    ? () => {}
+    : startQuestionPruner(storageContext.questions, {
+        getRetentionDays: () => config.synth.questions.retentionDays,
+      });
+
+  // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
+  //
+  // Паритет с standalone-core: тот же порт записи (ADR-096), те же лимиты из
+  // конфигурации `background.*`. Один инстанс на процесс: его получают тул
+  // `task` (фоновый запуск саб-агента) и HTTP-точки обслуживания реестра.
+  //
+  // Уведомление родителя о завершении фонового прогона (ADR-111): ОДИН путь —
+  // постановка в очередь (`enqueueUserMessage`); процессор добавит сообщение в
+  // историю сам и опубликует `message.added` (двух копий больше нет).
+  // `processMessage` собирается ниже (после оркестратора) — нотификатор
+  // создаётся лениво, при первом вызове колбэка (он приходит только из
+  // фонового прогона, т.е. уже после старта).
+  let backgroundNotifier: ReturnType<typeof createBackgroundParentNotifier> | null = null;
+  const notifyBackgroundParent = async (
+    sessionId: string,
+    message: Message,
+  ): Promise<void> => {
+    backgroundNotifier ??= createBackgroundParentNotifier({
+      sessionManager,
+      eventBus,
+      processorManager: queueManager,
+      processMessage,
+    });
+    await backgroundNotifier(sessionId, message);
+  };
+  const backgroundService = storageDegraded
+    ? undefined
+    : new BackgroundRunService({
+        repository: storageContext.backgroundRuns,
+        eventBus,
+        limits: {
+          maxSubagentsPerSession: config.synth.background.maxSubagentsPerSession,
+          // PROP-097: лимит одновременных фоновых шелл-процессов на сессию.
+          maxProcessesPerSession: config.synth.background.maxProcessesPerSession,
+          maxRunsPerSession: config.synth.background.maxRunsPerSession,
+        },
+        // Точка сборки уведомления — здесь (глобальных синглтонов нет).
+        //
+        // ADR-036: обфускация user-сообщений НЕ применяется — уведомление
+        // системное (автор `Subagent`/`Process`), а не пользовательский ввод;
+        // секреты в исходящих LLM-запросах обфусцирует сам Gateway.
+        onNotifyParent: notifyBackgroundParent,
+      });
+  // Старт: прогоны прошлого процесса не пережили рестарт (хэндлы отмены — в
+  // памяти) — помечаем их `orphaned`. Best-effort: ошибка не роняет старт.
+  if (backgroundService) {
+    try {
+      await backgroundService.recoverOnStart();
+    } catch (err) {
+      console.warn(
+        `[background] восстановление фоновых прогонов не удалось: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  // Retention-очистка терминальных записей реестра (сразу + каждые 6 ч).
+  const stopBackgroundRunPruner = storageDegraded
+    ? () => {}
+    : startBackgroundRunPruner(storageContext.backgroundRuns, {
+        getRetentionDays: () => config.synth.background.retentionDays,
+      });
+  // PROP-097 (блок 5b): retention логов фоновых процессов. Создаётся **до**
+  // pruner'а записей реестра: лог удаляется, пока его запись ещё видна.
+  const stopProcessLogPruner = storageDegraded
+    ? () => {}
+    : startProcessLogPruner(storageContext.backgroundRuns, storageContext.blobs, {
+        getRetentionDays: () => config.synth.background.retentionDays,
+      });
+
   // ADR-094: доменные коллекторы. `metrics` приходит только при
   // `metrics.enabled=true` — иначе реестр остаётся пустым (`/metrics` → 404).
   // Фоновые таймеры `unref`-ятся; остановка — `stopMetricsCollectors` на
@@ -614,6 +724,22 @@ export async function createBackendDeps(
   const execution = executionConfig ?? resolveExecutionConfig(config.synth, process.env);
   const executionPort = await createExecutionPortForConfig(execution);
 
+  // PROP-097 (блок 5b): сервис фоновых шелл-процессов (паритет с standalone).
+  //
+  // Тот же порт исполнения, что у тулов (ADR-077): фон — это лишь способ
+  // ожидания, а не отдельный путь исполнения. Учёт прогона — общий реестр
+  // фоновых прогонов (`kind: 'process'`), лог — blob-хранилище (ADR-096).
+  // В деградированном режиме хранилища сервиса нет (писать некуда).
+  const processService = backgroundService
+    ? new ProcessService({
+        executionPort,
+        background: backgroundService,
+        blobs: storageContext.blobs,
+        eventBus,
+        limits: { maxLogBytes: config.synth.background.logMaxBytes },
+      })
+    : undefined;
+
   // ADR-070 §2.9.1/ADR-101: зависимости окружения (git/rg/sh) — детекция при
   // старте, fail-open при ошибке. Общий для оркестратора и движка пайплайнов
   // (контекст шага, ADR-101 §10).
@@ -753,6 +879,17 @@ export async function createBackendDeps(
     // многоитерационный Tool Use на границе итерации (backoff/гонка).
     isCancelRequested: async (sid) =>
       (await sessionManager.getSession(sid))?.status.cancelRequested === true,
+    // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» — тул
+    // `question` задаёт вопрос и ждёт ответа пользователя.
+    ...(questionService ? { questionService } : {}),
+    // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов — тул
+    // `task` с `background: true` регистрирует фонового саб-агента и
+    // возвращает управление сразу (PROP-096).
+    ...(backgroundService ? { backgroundService } : {}),
+    // PROP-097: сервис фоновых шелл-процессов — тот же экземпляр, что у
+    // реестра и тула `execute_shell` (через `ctx.extra.processService`).
+    ...(processService ? { processService } : {}),
+    backgroundEnabled: config.synth.background.enabled,
   });
 
   // ADR-090 (Ф5б-2): эффективный конфиг слоя = config.yaml (+env) поверх
@@ -1291,6 +1428,15 @@ export async function createBackendDeps(
     packs: packStore,
     eventBus,
     queueManager,
+    // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю (+ pruner).
+    questionService,
+    stopQuestionPruner,
+    // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов (+ pruner).
+    backgroundService,
+    stopBackgroundRunPruner,
+    // PROP-097 (блок 5b): сервис фоновых шелл-процессов (+ pruner логов).
+    processService,
+    stopProcessLogPruner,
     webhookStore,
     webhookDeliveryStore,
     webhookService,

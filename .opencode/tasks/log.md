@@ -1197,3 +1197,51 @@
 - **Доки:** `AGENTS.md` (две строки таблицы тулов + встроенные скиллы), `docs/PIPELINES.md` §2.17, `packages/core/AGENTS.md`.
 - **Приёмка:** build OK · typecheck 9/9 · lint 0 errors · **10 110 тестов** (core 6327 + 199 skip · ui 1928 · shared 804 · backend 689 · plugin-memory 191 · executor 96 · storage-postgres 51 + 14 skip · sdk 24) · adr-check 98/0 (30 предсуществующих warnings) · docs-link 926/0.
 - **Замечания:** `pipeline_instantiate` в чате гейтится правом изменения **своего** проекта (managed HTTP-контур — `ADMIN`; шаблоны инстанса тул только читает); расписание с целью `pipeline` сессию не создаёт — прогон в фоне, прогресс через `pipeline_run_status`.
+
+## 2026-10-26 — этап 1 roadmap 0.13: фоны (1.2) и вопрос пользователю (1.3)
+
+Ветка `stage1-backgrounds-questions` (от `master`), 12 коммитов; в master не смержено.
+
+- **1.3 `question` (ADR-112):** тул `question` (capability `QUESTION`, permission-группа, саб-агентам deny), `QuestionService` — персистентная запись (порт `QuestionRepository`, файл/PG миграция 021), ожидание в памяти внутри tool-loop, таймаут `questions.timeoutMs`, отмена по «Стоп»/концу хода, `recoverOnStart`→`interrupted`; HTTP `GET/POST /api/v2/sessions/:id/questions[/:qid/answer|cancel]` внутри фабрики сессий (prefix-guard); свободный ответ ≤1000 символов; события `user_question.*`; UI-док над композером (`QuestionDock`, `questionStore`, восстановление после перезагрузки).
+- **1.2a фоновые саб-агенты (ADR-111):** единый реестр `BackgroundRunRepository` (`kind: subagent|process`, `{dataDir}/processes/registry.json`, PG `background_runs`), `task({background:true})` → ранний возврат, свой abort/stream, блокировка ребёнка (`/abort` работает), лимиты, глубина 1, `orphaned` при рестарте; завершение → `child.completed|failed|cancelled` + сообщение в родителя (`role:USER`, `author:Subagent`) + автоход; `task({task_id})` — продолжение ребёнка; результат resume теперь `USER` (виден модели).
+- **Лимит шагов как в opencode:** `prompts/system/MAX_STEPS.{ru,en}.md` + `ContextConfig.getMaxStepsPrompt`; при исчерпании — принудительный финальный шаг-отчёт без инструментов (`tools` не передаются), ответ модели = `final_content`, `metadata.step_limit_reached`, страховочный `[steps_limit]`.
+- **1.2b фоновые процессы (PROP-097, inline):** `ExecutionPort.spawnBackground` + `BlobStore.append`; `ProcessService` (лог в blob, лимит `maxLogBytes`, stop SIGTERM→SIGKILL, `process.stopped`/`process.exited`, `fs.changed`); `execute_shell({background:true})`, гейт `background.enabled`; в `remote` — явная ошибка `background_unsupported` (остаток ADR-077 7c).
+- **API:** `/api/v2/processes` (list/detail/logs/stop/delete) с граничным guard'ом (read/write по методу, VIEWER не мутирует) + RBAC managed.
+- **UI:** вкладка «Процессы» (единый реестр процессов и фоновых саб-агентов, статусы, stop/delete, лог с авто-подгрузкой, фильтры, мобильный дровер).
+- **Доки:** ADR-111, ADR-112, PROP-096 → ADR (баннер), roadmap (1.2/1.3 закрыты), API_V2 §3.2/§5.39, CONFIGURATION `questions.*`/`background.*`, AGENTS (root/core/shared/ui/backend).
+- **Приёмка:** `pnpm typecheck` 0 · `lint` 0 errors · `test` 0 — **10 352 теста** (core 6481+210 skip · ui 1995 · shared 812 · backend 702 · plugin-memory 191 · executor 96 · storage-postgres 51+14 skip · sdk 24); PG-контракты прогнаны на живой БД; adr-check 0 ошибок, docs-link 0. Dev: `/ready` 200, `/api/v2/processes` 200, вкладка «Процессы» и мобильный дровер проверены визуально (скриншоты `tmp/stage1-processes-*.png`).
+- **Остатки:** remote-фоновые процессы (ADR-077 7c), steering фонового ребёнка (ADR-104), EN-перевод новых разделов, live-tail логов через WS (сейчас polling 2 с), `process.stopped` в UI помечает finishedAt до `process.exited` (косметика).
+
+## 2026-10-26 — этап 1, доведение: remote-фоны, steering, переводы, 0.12.2
+
+- **Remote-фоновые процессы (ADR-113, ADR-077 шаг 7c):** исполнитель `BackgroundExecService` + протокол v3 (`POST /exec/spawn`, `GET /exec/:id|/logs`, `POST /stop {signal: SIGTERM|SIGKILL}`); клиент remote-порта — `spawnBackground` с опросом статуса (500 мс) и логов (300 мс, раздельные потоки), маршрутизация по `requires`, старый исполнитель → `EBACKGROUND`/`background_unsupported`; контрактный suite прогнан против живого исполнителя (37/37). Попутно: `isExecutionError` (устойчив к копиям класса src/dist), таймеры опроса держат event loop (иначе CLI/тесты падали с unsettled await), `stop` уважает сигнал.
+- **Steering дочерней сессии (ADR-104 остаток):** общий хелпер `engine/steering/apply.ts`; `run-cycle` применяет `steerInbox` ребёнка на границе шага (персист, вплетение в следующий LLM-запрос, `message.added`/`message.injected`, `steer.dropped`), `interrupt` на границе = инъекция без срыва прогона.
+- **PROP-097 → ADR-113**; PROP-096 → ADR-111; ask_user → ADR-112. Roadmap: колонка «Статус» этапа 1 — 1.2 ✅ (ADR-111/113), 1.3 ✅ (ADR-112); 1.1/1.4/1.5 — не начаты.
+- **EN-переводы:** `docs/en/API_V2.md` (§3.2 события, §5.5 вопросы+steering, §5.39 processes), `docs/en/CONFIGURATION.md` (`questions.*`, `background.*`, env); RU §5.5 — заметка о рестарте (pending → `cancelled/interrupted`, ход не возобновляется).
+- **Приёмка:** typecheck 0 · lint 0 errors · **10 411 тестов** (core 6496+210 skip · ui 1995 · shared 812 · backend 702 · executor 140 · plugin-memory 191 · storage-postgres 51+14 skip · sdk 24); adr-check 0 ошибок (30 предупреждений — пре-existing), docs-link 0. Dev: remote-фон проверен на живом исполнителе (stdout/stderr, SIGTERM, exit 3), UI «Процессы» — визуально.
+- **Версия:** 0.12.2 (9 пакетов + `charts/synth/Chart.yaml`), деплой в test через `synth-deploy/scripts/build-and-publish.sh --app-version 0.12.2`.
+
+## 2026-10-26 — test: 0.12.2 (chart 0.12.2-4), remote-фоны и фиксы по e2e
+
+- **Раскатано на test:** образы `synth-backend:0.12.2` (+`-full`), `synth-ui:0.12.2`, `synth-executor:0.12.2-full`; чарт `synth 0.12.2-4`; бандлы `synth-test` и `synth-test-allinone` — `1/1`; `/health` → `version 0.12.2`. Деплой: `synth-deploy` `f196bcb`, pins `0.12.2` / `0.12.2-full`.
+- **E2E (remote, PG):** агент `developer` вызвал `execute_shell({background:true})` → процесс `running → completed`; уведомление `kind=process, state=completed, author=Process, process_id=proc_…`, `background_run_id=bgr_…`, команда в metadata; в чате — системный блок с раскрывающейся карточкой (без служебных тегов). `process_list` в агенте отвечает («No background runs» для новой сессии).
+- **Найдено и исправлено по e2e:** (1) PG терял `processId` — миграция `022` (`background_runs.process_id`) + маппинг порта, проверено на живой PG (schema 22); (2) executor отклонял `timeoutMs: 0` (фон без таймаута) — `/exec/spawn` теперь принимает `>= 0`.
+- **UX уведомлений:** дубль сообщений устранён в ядре (единый `enqueueUserMessage`; в тестах на старом `core/dist` он ещё воспроизводился), отдельный дедуп тостов убран; уведомления приходят на старте и завершении; результат — карточка внутри системного `Notice`.
+- **Приёмка:** typecheck 0 · lint 0 errors · **10 490+ тестов** (с DSN: core 6751, executor 142, PG 201/201, ui 2025, shared 812, backend 702, plugin-memory 191, storage-postgres 65, sdk 24); adr-check/docs-link 0 ошибок.
+- **Замечания:** `assistant` не имеет capability `shell` (by design) — фоновые процессы запускает `developer`/`devops`; тестовые сессии e2e (`bg-remote-e2e*`, `tools-e2e`) оставлены на инстансе для проверки.
+
+## 2026-10-26 — test 0.12.2-6: вопрос (таймаут, свёрнутый док, подтверждение)
+
+- **Раскатано:** чарт `synth 0.12.2-6`, образы backend (slim+full)/ui/executor 0.12.2; бандлы `synth-test` и `synth-test-allinone` — `1/1`; деплой `synth-deploy 7637ee2`.
+- **`question`:** параметр `timeout` (мс, ≥300000, не рекомендуется), по умолчанию таймаута **нет** (`questions.timeoutMs=0`); `expiresAt` не пишется. UI-док: сворачивание (превью/бейдж «отвечено N/M», на мобильном), точки-пагинация, шаг «Проверка ответов» с «Изменить»/«Отправить». Уведомление `notify.question.asked` (тост, если сессия не активна) + непрочитанное в дереве.
+- **E2E на test:** агент задал вопрос (`expiresAt=None`) → пауза хода → `POST …/questions/:qid/answer` → tool result «The user answered …» → ассистент продолжил. SSE `/prompt` остаётся открытым, пока ход ждёт ответа (ожидаемо).
+- **Приёмка:** full workspace — typecheck 0, lint 0 errors, **10 511 тестов**; ui-док 20 тестов + визуальная проверка desktop/mobile (`synth/tmp/question-dock/`); adr-check/docs-link 0.
+- **Отложено:** адресные вопросы конкретному пользователю (обсуждение: `target` + проверка в `QuestionService.answer`, cancel — любому участнику; этапы 1–2).
+
+## 2026-10-26 — test 0.12.2-10: таймер вопроса и схема timeout
+
+- **Раскатано:** чарт `synth 0.12.2-10` (образы backend slim+full / ui / executor 0.12.2), бандлы `synth-test` и `synth-test-allinone` — `1/1`; деплой `synth-deploy fc3aafd`.
+- **Таймер в доке:** `user_question.asked` публикует `created_at`/`expires_at` (последнее — только при заданном таймауте); транспорт прокидывает `expiresAt` в `QuestionRecord`; шапка дока показывает `мм:сс` (≥1 ч — `ч:мм:сс`) с иконкой `time`, `tabular-nums`, видно и в свёрнутом виде, после истечения `00:00` (без минуса), без `expiresAt` — как раньше. `formatRemaining` + i18n ru/en.
+- **Схема `timeout`:** в описании поля и тула явно указано «top-level, не внутри вопроса» — модель больше не кладёт его в объект вопроса (в живой проверке было `arg error`, теперь одна корректная попытка).
+- **E2E на test:** агент задал вопрос с `timeout: 300000` → `expiresAt` = +5 мин, один вызов тула без ошибок аргументов; ответ через API → ход продолжился.
+- **Приёмка:** core 6557, ui 2047 (док: 20, таймер: 42), typecheck/lint 0; полный workspace ранее — 10 526 тестов.

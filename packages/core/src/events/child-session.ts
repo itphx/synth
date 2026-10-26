@@ -61,9 +61,14 @@ export function extractChildSessionId(event: SessionEventLike): string | undefin
       const payload = data as ChildSessionUpdatedPayload;
       return readString(payload.session?.id) ?? readString(payload.child_session_id);
     }
+    // Этап 1 roadmap 0.13 (блок 4): терминальные события фонового
+    // саб-агента (PROP-096) — по ним хабы авто-подписываются на ребёнка.
     case 'child.message.added':
     case 'subagent.resume.started':
-    case 'subagent.resume.finished': {
+    case 'subagent.resume.finished':
+    case 'child.completed':
+    case 'child.failed':
+    case 'child.cancelled': {
       const payload = data as ChildSessionRefPayload;
       return readString(payload.child_session_id);
     }

@@ -11,6 +11,12 @@ import { SubagentPart, type SubagentPartData } from './SubagentPart'
 import { RetryStatus } from './RetryStatus'
 import { CommandMessage } from './CommandMessage'
 import { Notice, type NoticeVariant } from './Notice'
+import {
+  backgroundNoticeName,
+  backgroundToolCall,
+  resolveBackgroundKind,
+  resolveBackgroundState,
+} from './background-notice'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useAgentsStore } from '@/stores/agentsStore'
@@ -115,6 +121,10 @@ function ChatMessageInner({
   // ADR-051: сообщения планировщика (source:'cron') приходят как role:'user' с
   // metadata.scheduler === true — рисуем их служебным Notice, а не user-пузырём.
   const isScheduler = isUser && message.metadata?.scheduler === true
+  // ADR-111/ADR-113: уведомление о завершении фонового прогона приходит как
+  // role:'user' с metadata.type === 'background_run_result' — тоже системный
+  // блок (автор прогона — не текущий пользователь, конверт модели в UI лишний).
+  const isBackgroundResult = isUser && message.metadata?.type === 'background_run_result'
   // ADR-104: инъекция во время активного хода (metadata.steer === true) —
   // помечаем маркером «вмешательство в ход»; режим `interrupt`
   // (metadata.interrupt === true) — маркером «прерывание хода».
@@ -409,6 +419,98 @@ function ChatMessageInner({
       <div className="flex items-start">
         {selectionCheckboxEl}
         <div className="min-w-0 flex-1">{noticeEl}</div>
+      </div>
+    )
+  }
+
+  // ADR-111/ADR-113: уведомление о завершении фонового прогона — центрированный
+  // системный блок (`Notice`, как у сообщений планировщика): шапка с иконкой
+  // прогона и подписью «Фоновый процесс · <команда> · <статус>», внутри —
+  // сворачиваемая карточка результата (лог или итог прогона без конверта
+  // `<process …>`/`<subagent …>` — конверт нужен модели, в чате лишний).
+  // Действия — полный набор как у user-сообщения (внутри `Notice`).
+  if (isBackgroundResult) {
+    const metadata = message.metadata ?? undefined
+    const kind = resolveBackgroundKind(metadata)
+    const state = resolveBackgroundState(metadata)
+    const name = backgroundNoticeName(metadata, kind)
+    const baseLabel =
+      kind === 'subagent'
+        ? t('chat.notice.backgroundSubagent', { name })
+        : t('chat.notice.backgroundProcess', { name })
+    const stateLabel =
+      state === 'failed'
+        ? t('chat.notice.backgroundState.failed')
+        : state === 'cancelled'
+          ? t('chat.notice.backgroundState.cancelled')
+          : t('chat.notice.backgroundState.completed')
+    // Без имени («Фоновый процесс · ») убираем висящий разделитель.
+    const label = `${name ? baseLabel : baseLabel.replace(/\s*·\s*$/, '')} · ${stateLabel}`
+
+    const selectionCheckboxEl = selectionMode ? (
+      <div className="flex items-center self-stretch pr-1">
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={(e) => {
+            const ev = e.nativeEvent as MouseEvent
+            handleToggleSelect(ev.shiftKey ?? false)
+          }}
+          className="size-4 rounded border-border cursor-pointer accent-primary"
+        />
+      </div>
+    ) : null
+
+    const backgroundEl = (
+      <Notice
+        variant="process"
+        icon={kind === 'subagent' ? 'robot-2' : 'terminal-box'}
+        label={label}
+        ariaLabel={label}
+        meta={<MessageHeader message={message} metaOnly />}
+        actions={
+          showActions ? (
+            <MessageActions
+              embedded
+              showCopy={false}
+              messageIndex={message.index}
+              role={message.role}
+              disabled={message.disabled}
+              pinned={message.pinned}
+              canRetry={canRetry}
+              hasDebug={hasDebug}
+              debugActive={debugActive}
+              readOnly={readOnly}
+              hasStats={showStats}
+              statsContent={<MessageStats message={message} />}
+              onCopy={handleCopy}
+              onToggle={handleToggle}
+              onPin={handlePin}
+              onDelete={handleDelete}
+              onRetry={handleRetry}
+              onDebug={handleDebug}
+              onFork={handleFork}
+            />
+          ) : undefined
+        }
+        onCopy={handleCopy}
+        disabled={message.disabled}
+      >
+        <ToolCallPart
+          toolCall={backgroundToolCall(metadata, displayContent)}
+          resultFirst
+          plain
+          secrets={secrets}
+          sessionId={sessionId}
+        />
+      </Notice>
+    )
+
+    if (!selectionMode) return backgroundEl
+    return (
+      <div className="flex items-start">
+        {selectionCheckboxEl}
+        <div className="min-w-0 flex-1">{backgroundEl}</div>
       </div>
     )
   }

@@ -249,6 +249,28 @@ interface BusEvent { type: EventType; sessionId: string; data: Record<string, un
 `authority.shadow`); в shadow/выключенном режиме ответ принимается по-старому (по видимости сессии) —
 см. [ADR-106](./arch_decisions/adr-106-authority-layer.md).
 
+### 3.2. Фоновые прогоны и вопросы пользователю
+
+События фоновой работы и «вопрос пользователю» публикуются в **канале
+сессии-владельца** (`EventBus.publish(sessionId, …)`, ADR-009) — новых
+транспортных каналов не заводим (ADR-024).
+
+| Событие | Когда | Поля `data` |
+|---|---|---|
+| `user_question.asked` | агент задал вопрос и ждёт ответа | `question_id`, `session_id`, `questions[]`, `created_at`, `expires_at?` (только при заданном сроке — по нему UI рисует обратный отсчёт), `turn_id?`, `tool_call_id?`, `agent_role?` |
+| `user_question.answered` | пользователь ответил | `question_id`, `session_id`, `answers[][]` |
+| `user_question.cancelled` | вопрос отменён (таймаут, «Стоп», ручная отмена) | `question_id`, `session_id`, `reason` |
+| `process.started` | запущена фоновая шелл-команда (`kind:'process'`) | `process_id`, `session_id`, `command`, `cwd`, `pid?`, `background_run_id`, `log_path` |
+| `process.exited` | фоновый процесс завершён | `process_id`, `session_id`, `state` (`completed`/`failed`/`cancelled`/`orphaned`), `exit_code?`, `signal?`, `background_run_id` |
+| `process.stopped` | запрошена остановка фонового процесса (один раз на прогон) | `process_id`, `session_id`, `background_run_id`, `reason` |
+| `child.completed` / `child.failed` / `child.cancelled` | фоновый саб-агент завершился (успех/ошибка/отмена; `kind:'subagent'`) | `child_session_id`, `parent_session_id`, `state`, `background_run_id`, `description` |
+
+Префикс `user_question.*` — намеренно **не** `question.*`: `question.asked` уже
+занят смыслом «очередь зависла». Событие `process.stopped` публикуется ядром
+при успешном запросе остановки прогона (`POST /api/v2/processes/:id/stop`,
+`reason` — причина остановки); терминальный статус прогона приходит позже —
+событием `process.exited` (у остановленного процесса `state: 'cancelled'`).
+
 ---
 
 ## 4. LLM Proxy
@@ -350,6 +372,9 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/sessions/:id/prompt` | оба | auth | Состав системного промпта (ADR-070): `manifest` + `history` + `promptState` + `lastPromptMeta` + `toolsDetail` (тулы с `chars`/`estTokens` и флагом оценки, ADR-071 §2.8). `manifest.toolsPolicy`/`manifest.mcpPolicy` — применённые политики встроенных/MCP (ADR-071 §2.3); записи: `tools` (stable/context) → `mcp.servers`/`mcp.tools`/`mcp.status` (volatile, не в `staticPrefixChars`) |
 | GET | `/api/v2/sessions/:id/memory` | оба | auth | Память сессии для вкладки «Память» (ADR-107): `provider.active`, `scope.projectId`, `lastContext` — блоки `facts`/`recall` из **последнего** хода (`chars`/`estTokens`/`status`, `null` — ходов не было), `facts.active` (активные факты в скоупе), `projectMemory` (`{enabled}` — эффективная политика проекта; `null` — сессия без проекта), `indexes` (всего/project/instance/ready/building/failed + `items`: id/name/scope/state/enabled/projectId; `stale` вычисляется плагином и здесь не отдаётся; у `instance` `enabled` всегда true), `readiness` (`ready`/`degraded`/`unavailable`). Текстов фактов/чанков нет; доступ — чтение сессии (prefix-guard), без дублирующих проверок |
 | GET | `/api/v2/sessions/:id/stats` | оба | auth | Статистика usage (ADR-070): сообщения + рекурсивный usage саб-агентов (tool `task`), агрегаты по агентам/пользователям (`computeSessionStats`) |
+| GET | `/api/v2/sessions/:id/questions` | оба | auth (чтение) | Вопросы пользователю сессии (этап 1 roadmap 0.13 — блок 3): `{questions: QuestionRecord[]}`; `?status=pending\|answered\|cancelled` (не задан — все статусы), `?limit=` (дефолт 50, максимум 200); записи «свежие первыми». Сервис вопросов не подключён — 503 `QUESTION_UNAVAILABLE` |
+| POST | `/api/v2/sessions/:id/questions/:qid/answer` | оба | auth (**мутация**) | Ответ пользователя на вопрос: `{answers: string[][]}` (по индексу вопроса; значения — из `options[].value`) → 200 `{question}`. 400 `VALIDATION_ERROR` (тело/ответ невалидны), 404 `NOT_FOUND` (вопроса нет **или** он другой сессии), 409 `CONFLICT` (вопрос уже отвечен/отменён) |
+| POST | `/api/v2/sessions/:id/questions/:qid/cancel` | оба | auth (**мутация**) | Отмена вопроса: `{reason?}` → 200 `{question}`; те же 404/409, что и в `answer` |
 | GET | `/api/v2/sessions/:id/messages` | оба | auth | `{messages, session_id}` |
 | POST | `/api/v2/sessions/:id/clear` | оба | auth | Очистить историю (кроме pinned) |
 | POST | `/api/v2/sessions/:id/abort` | оба | auth | Надёжный «Стоп» (ADR-005): ставит персистентный флаг `status.cancel_requested`, при живом стриме — graceful-отмена, затем остановка процессора очереди; `{status:'aborted'}`; 404 если сессии нет (см. ниже) |
@@ -380,7 +405,9 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 > **Порядок применения инъекций (ADR-104, этап 3).** Очередь инъекций — **не строгий FIFO**: применяются сначала инъекции класса `interrupt` (маркер `metadata.interrupt=true`), затем класса `steer`; **внутри класса** порядок FIFO (порядок постановки). Порядок детерминирован и не зависит от момента постановки. При переполнении лимита хода первыми отбрасываются инъекции низшего приоритета (`steer`), лишние публикуются как `steer.dropped`.
 > **Инъекция — ввод в тот же ход, а не ответ пользователя (ADR-104, этап 3).** Инъекция **не отвечает** за пользователя на `permission.asked` и **не отменяет** ожидающее подтверждение прав: ход, стоящий на `ask`, применяет инъекцию на границе шага **после** ответа. Инъекция также **не расширяет права**: в режиме `plan` мутирующий тул остаётся запрещённым (правило `plan.deny` permission-слоя), даже если текст инъекции «разрешает» его.
 > **Гибрид: единый контракт режима (ADR-104, этап 3).** `mode` доезжает до удалённой стороны: HTTP-промпт удалённой сессии (`remote:<id>`) пробрасывает тело как есть, WS-путь локального core передаёт `mode` в запрос удалённого backend'а (раньше режим терялся — удалённая сессия всегда работала как `queue`). Ответ/ack несёт **применённый** режим: локальная сторона применила режим сама — `mode_applied:true`; удалённая сторона применила — `202` c `mode_applied:true`; удалённая сторона **не** применила (нет активного хода на удалённой стороне или старая версия) — `202 {status:'queued', mode_applied:false}` (сообщение ушло обычной очередью). WS-ack `queued` содержит `mode` и `mode_applied` (backend и standalone).
-> **Ограничения steering (ADR-104).** **UI-селектор режима есть**: при активном ходе композер показывает три режима — «в очередь» (`queue`), «вмешаться» (`steer`), «прервать» (`interrupt`); в ленте сообщения-инъекции помечаются маркером «вмешательство в ход» (`metadata.steer`), в режиме `interrupt` — маркером «прерывание хода» (`metadata.interrupt`), а прерванная генерация — бейджем «Прервано» (`metadata.status === 'interrupted'`). В гибриде локальный core не вмешивается в ход, который исполняет удалённый backend: режим применяет та сторона, которой принадлежит ход (удалённый backend), а клиент получает в ack, применился ли режим (`mode_applied`). **Остаток:** steering фонового саб-агента недоступен до [PROP-096](./arch_decisions/prop-096-background-subagent-sessions.md) — неблокирующих саб-агентских сессий в коде нет; инъекция в дочернюю `task`-сессию сохраняется, но в её ход не попадает (цикл саб-агента идёт мимо оркестратора) и в очередь родителя не переносится — изоляция очередей проверяется в `packages/core/src/queue/steering-subagent.test.ts`.
+> **Ограничения steering (ADR-104).** **UI-селектор режима есть**: при активном ходе композер показывает три режима — «в очередь» (`queue`), «вмешаться» (`steer`), «прервать» (`interrupt`); в ленте сообщения-инъекции помечаются маркером «вмешательство в ход» (`metadata.steer`), в режиме `interrupt` — маркером «прерывание хода» (`metadata.interrupt`), а прерванная генерация — бейджем «Прервано» (`metadata.status === 'interrupted'`). В гибриде локальный core не вмешивается в ход, который исполняет удалённый backend: режим применяет та сторона, которой принадлежит ход (удалённый backend), а клиент получает в ack, применился ли режим (`mode_applied`).
+> **Steering дочерней сессии саб-агента (ADR-104 + ADR-111).** Режим работает и для дочерних сессий саб-агентов, включая фоновые: `POST /api/v2/sessions/<child>/prompt` с `mode:'steer'` кладёт сообщение в очередь инъекций **сессии-ребёнка**, а цикл ребёнка (`engine/tools/task/run-cycle.ts`) применяет его на границе шага — перед следующим LLM-вызовом, в том же ходу (пары `toolUse`/`toolResult` не рвутся). Инъекция персистится в истории ребёнка как обычная `user`-реплика с `metadata.steer=true` и публикуется в канал ребёнка (`message.added`, `message.injected`); превышение лимита — событие `steer.dropped` в канале ребёнка, ход не падает. `interrupt` для ребёнка **не обрывает генерацию** (на границе шага её уже нет) и применяется как обычное вмешательство. Действует общее правило раздела: сообщение попадает в очередь инъекций, только если у сессии ребёнка есть активный ход (фоновый прогон — всегда: сессия ребёнка помечена занятой; нет активного хода — `steer`/`interrupt` работают как `queue`). Очереди родителя и ребёнка изолированы: инъекция в очередь родителя не попадает в ход ребёнка и наоборот (проверка — `packages/core/src/queue/steering-subagent.test.ts`).
+> **Вопросы и рестарт (ADR-112).** Ожидание ответа на вопрос живёт в памяти процесса: после рестарта незавершённые вопросы помечаются `cancelled` с причиной `interrupted`, ход не возобновляется (как и прочие паузы tool-loop). Сама запись вопроса рестарт переживает (журнал в `QuestionRepository`). По умолчанию вопрос ждёт ответа **без таймаута** (`questions.timeoutMs = 0`); срок ожидания задаёт тул `question` (`timeout`, ≥ 5 минут — не рекомендуется: ожидание обрывается).
 
 ### 5.6 Messages — `/api/v2/messages`
 
@@ -2072,6 +2099,66 @@ curl 'http://localhost:5000/api/v2/memory/graph?entity=Fleet&depth=2&limit=50' \
   -H 'Authorization: Bearer admin-key-123'
 ```
 
+### 5.39 Фоновые прогоны — `/api/v2/processes` (оба, ADR-111/PROP-097)
+
+Единый реестр фоновой работы ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
+PROP-096/PROP-097): два вида прогонов — `subagent` (фоновая дочерняя сессия
+саб-агента, `task({background: true})`) и `process` (фоновая шелл-команда,
+`execute_shell({background: true})`). Запись реестра персистентна (порт
+`BackgroundRunRepository`, ADR-096), поэтому состояние прогона переживает
+реконнект UI и рестарт сервиса; «живые» хэндлы отмены живут в памяти процесса
+(после рестарта записи `running` становятся `orphaned`).
+
+Фабрика `createProcessRoutes` — общая для core и backend; managed передаёт
+правило доступа по проекту (`packages/backend/src/routes/processes.ts`).
+
+| Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/processes` | оба | auth | Список прогонов `{runs}`; фильтры `sessionId`/`projectId`/`kind` (`subagent`/`process`)/`status` (`running`/`completed`/`failed`/`cancelled`/`orphaned`)/`limit` (по умолчанию 50, максимум 200); неверный `kind`/`status` → 400 `VALIDATION_ERROR`. Выдаются только прогоны сессий, доступных пользователю (владелец/участник проекта; `ADMIN`/`LEAD` — все) |
+| GET | `/api/v2/processes/:id` | оба | auth | Прогон `{run}` (запись реестра целиком); прогона нет → 404 `NOT_FOUND`, сессии-владельца нет → 404, нет прав → 403 `FORBIDDEN` |
+| GET | `/api/v2/processes/:id/logs` | оба | auth | Отрезок лога фонового процесса `{content, offset, nextOffset, totalBytes, truncated}`; только `kind:'process'` (для `subagent` → 400 `VALIDATION_ERROR`), файла лога нет → 404 `NOT_FOUND`. `offset` — смещение в байтах от начала лога, `limit` — размер выдачи (по умолчанию и максимум — 256 КиБ) |
+| POST | `/api/v2/processes/:id/stop` | оба | auth (**write**) | Остановить прогон → 200 `{status:'stopping'}` (остановка асинхронная: запрос остановки приходит событием `process.stopped`, итоговый статус — событием `process.exited`); прогон уже не `running` либо идёт в другом процессе (остановить отсюда нельзя) → 409 `CONFLICT` |
+| DELETE | `/api/v2/processes/:id` | оба | auth (**write**) | Удалить запись реестра → **204**; прогон ещё `running` → 409 `CONFLICT` |
+
+**Граница доступа (инварианты 16/21).** Право на прогон — это право на его
+**сессию-владельца**, и проверяется оно **на границе**, а не в обработчике:
+guard резолвит запись реестра и её сессию-владельца **один раз** и кладёт
+запись в контекст Hono (`guardedProcess`); в обработчиках проверок доступа
+нет — иначе правила разошлись бы. Вид доступа выводится из HTTP-метода
+(`read` — чтение, `write` — мутация): участник проекта с ролью просмотра
+(`VIEWER`) читает прогон, но **не** может его остановить или удалить
+(инвариант 21). Правила ролей managed: владелец сессии; `ADMIN` — сквозной
+доступ; `LEAD` — сквозной доступ к содержимому проекта; участник проекта —
+`read` любая роль, `write` — `OWNER`/`EDITOR`/`LEAD`/`ADMIN`. В standalone
+(core) действует предикат единственного владельца инстанса. Список прогонов
+фильтруется по тому же правилу: запись, чью сессию не видно, в выдаче не
+появляется вовсе (сессии кэшируются на один запрос, не на процесс — права
+меняются, кэш процесса раздавал бы устаревшие решения).
+
+**Деградированный режим хранилища (ADR-098).** В деградированном режиме
+сервисы фоновой работы не создаются — контур `/api/v2/processes` **не
+монтируется**, поэтому все эндпоинты раздела отвечают `404` (контура нет).
+
+**События.** Живые изменения приходят в **канале сессии-владельца**
+(`process.started`/`process.stopped`/`process.exited`/`child.*`, ADR-009/ADR-024;
+новых транспортных каналов нет) — состав и поля событий — §3.2. Фоновый
+саб-агент дополнительно публикует уведомление в историю родителя и ставит
+родительский ход в очередь (автоход) — по
+[ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md).
+
+**Хранилище.** Реестр — `{dataDir}/processes/registry.json` (ADR-005, атомарная
+запись); PostgreSQL — таблица `background_runs` (миграция `021_background_runs`
+драйвера `@itphx/synth-storage-postgres`, ADR-097). Логи фоновых процессов —
+blob-хранилище (`BlobStore`), путь `processes/<id>.log`; предел записи лога —
+`background.logMaxBytes` (потолок выдачи за один HTTP-запрос — 256 КиБ, это
+разные величины).
+
+**UI.** Вкладка «Процессы» правой панели
+(`packages/ui/src/components/panels/ProcessesTab.tsx`): список прогонов (вид,
+статус, команда/описание, время), лог фонового процесса, «Остановить» и
+удаление записи. Обновление — live-события `process.*`/`child.*` плюс
+периодическое перечитывание списка, пока вкладка активна.
+
 ## 6. Источники
 
 | Компонент | Файл |
@@ -2091,6 +2178,7 @@ curl 'http://localhost:5000/api/v2/memory/graph?entity=Fleet&depth=2&limit=50' \
 | Плагины (ADR-090) | `packages/core/src/server/routes/plugins.ts`, `packages/core/src/engine/plugins/*` (хост, загрузчик, установщик, рантайм), `packages/shared/src/types/{pack,plugin-audit,plugin-lock,plugin-scan,prompt-blocks,llm-filters,plugin-tools}.ts` |
 | Внешние доступы (ADR-105) | `packages/core/src/server/routes/oauth.ts`, `packages/core/src/engine/oauth/*` (клиент, сервис, реестр, аудит), `packages/core/src/storage/external-credential-store.ts`, `packages/core/src/storage/ports/{external-credential-repository,credential-audit-repository}.ts`, `packages/shared/src/types/external-credentials.ts` |
 | Память: портал и метрики (ADR-107, PROP-047) | `packages/core/src/server/routes/memory.ts`, `packages/core/src/metrics/collectors/memory.ts`, `packages/core/src/storage/ports/{memory-fact-repository,memory-index-repository}.ts`, `packages/core/src/engine/plugins/scoped-memory.ts` |
+| Фоновые прогоны: реестр, сервисы, HTTP-контур (ADR-111, PROP-096/097) | `packages/core/src/server/routes/processes.ts`, `packages/core/src/engine/background/*`, `packages/core/src/engine/processes/*`, `packages/core/src/storage/ports/background-run-repository.ts`, `packages/backend/src/routes/processes.ts`, `packages/shared/src/types/background.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

@@ -122,6 +122,7 @@ describe('RightPanel — порядок вкладок (ADR-071)', () => {
       'memory',
       'references',
       'scheduler',
+      'processes',
     ])
     expect(ids.indexOf('params')).toBe(0)
     expect(ids.indexOf('project')).toBe(1)
@@ -134,10 +135,15 @@ describe('RightPanel — порядок вкладок (ADR-071)', () => {
     expect(ids.indexOf('memory')).toBe(ids.indexOf('stats') + 1)
   })
 
+  it('вкладка «Процессы» идёт рядом с «Шедулером» (PROP-096/097)', () => {
+    const ids = RIGHT_TABS.map((tab) => tab.id)
+    expect(ids.indexOf('processes')).toBe(ids.indexOf('scheduler') + 1)
+  })
+
   it('сетка вкладок: 4 в первом ряду, остальные — во втором', () => {
-    // 7 вкладок без «Безопасности» (она только для ADMIN/AUDITOR).
+    // 8 вкладок без «Безопасности» (она только для ADMIN/AUDITOR).
     expect(RIGHT_TABS.slice(0, 4).length).toBe(4)
-    expect(RIGHT_TABS.slice(4).length).toBe(3)
+    expect(RIGHT_TABS.slice(4).length).toBe(4)
   })
 
   it('дефолтная вкладка правой панели — «Контекст»', () => {

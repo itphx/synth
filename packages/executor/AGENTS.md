@@ -40,11 +40,15 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
 - Собственных HTTP-агентов/диспетчеров пакет **не создаёт** (инвариант 22):
   исходящие запросы клиента — только через `egressFetch` из core.
 
-## Wire-протокол (версия 2)
+## Wire-протокол (версия 3)
 
 | Метод | Путь | Назначение | Авторизация |
 |---|---|---|---|
 | `POST` | `/exec` | выполнить команду | bearer-токен |
+| `POST` | `/exec/spawn` | запустить фоновый процесс | bearer-токен |
+| `GET` | `/exec/:processId` | состояние фонового процесса | bearer-токен |
+| `GET` | `/exec/:processId/logs` | отрезок журнала фонового процесса | bearer-токен |
+| `POST` | `/exec/:processId/stop` | остановить фоновой процесс | bearer-токен |
 | `GET` | `/capabilities` | версия протокола и состав toolchain'а (базовый словарь core + допсведения) | bearer-токен |
 | `GET` | `/mcp/servers` | состояние MCP-серверов исполнителя (`idle`/`up`/`down` + причина) | bearer-токен |
 | `GET` | `/mcp/tools` | инструменты поднятых MCP-серверов (ленивый старт) | bearer-токен |
@@ -60,20 +64,114 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
 - Ошибка — тело `{ error: { reason, code, message, stdout, stderr, killed,
   signal, truncated, durationMs } }` — зеркало `ExecutionError` из core.
 - Коды ответа — по классу ошибки: `400` — некорректный запрос или `cwd` вне
-  workspace; `401` — нет/неверный токен; `404` — неизвестный MCP-сервер или
-  инструмент; `429` — превышен лимит одновременных команд; `500` — прочие
-  ошибки исполнения (включая ненулевой код выхода).
+  workspace; `401` — нет/неверный токен; `404` — неизвестный MCP-сервер,
+  инструмент или фоновый процесс; `429` — превышен лимит одновременных команд
+  или живых фоновых процессов; `500` — прочие ошибки исполнения (включая
+  ненулевой код выхода).
 - `reason` на проводе: либо причина порта (`timeout` | `aborted` |
   `spawn_failed` | `nonzero_exit` | `max_output`), либо протокольная
   (`invalid_request` | `cwd_outside_workspace` | `unauthorized` | `not_found` |
   `too_many_requests` | `internal_error`). Клиент переносит причину порта как
   есть, протокольную — в `reason: 'spawn_failed'` с различающим `code`
   (`EWORKSPACE`/`EAUTH`/`ELIMIT`/`EINVAL`).
+- `GET /capabilities` — **аддитивно** отдаёт `features: { background: true }`
+  (признак фоновых процессов); старое поле `protocol` не меняет смысла.
 
-**Версия протокола — контракт совместимости.** `EXECUTOR_PROTOCOL_VERSION = 2`
-(в 1 не было `/mcp/*`): control plane и пул исполнителей обновляются **вместе**
-(то же правило, что для инвентаря пула, шаг A). Старый исполнитель MCP-маршрутов
-не знает, новый control plane получил бы `404`.
+**Версия протокола — контракт совместимости.** `EXECUTOR_PROTOCOL_VERSION = 3`
+(в 2 не было `/exec/spawn` и фоновых маршрутов, в 1 — `/mcp/*`): control plane
+и пул исполнителей обновляются **вместе** (то же правило, что для инвентаря
+пула, шаг A). Старый исполнитель фоновых маршрутов не знает, новый control
+plane получил бы `404`.
+
+### Фоновые процессы (ADR-077, шаг 7c; ADR-113)
+
+Фоновый процесс **переживает ход агента**; в split-топологии он живёт **на
+исполнителе** (там, где есть toolchain и рабочий каталог). Клиентская
+проводка в control plane — блок 9b (ADR-077).
+
+- `POST /exec/spawn` — тело `{ command, cwd?, env?, timeoutMs?, requires? }` →
+  `201 { processId, pid }`; `400` — невалидное тело или `cwd` вне workspace,
+  `429` — превышен лимит живых фоновых процессов.
+- `GET /exec/:processId` → `200 { processId, status, exitCode, signal, pid?,
+  command, cwd, startedAt, finishedAt?, durationMs?, stdoutBytes, stderrBytes,
+  truncated }`; `404` — процесс не найден.
+- `GET /exec/:processId/logs` → `200 { processId, status, exitCode, signal,
+  stdout: { content, offset, nextOffset }, stderr: { … }, totalBytes,
+  truncated }`; query `stdoutOffset`/`stderrOffset`/`limit` (отрезок ≤ 256 КиБ,
+  по умолчанию 64 КиБ); `404` — процесс не найден.
+- `POST /exec/:processId/stop` → `200 { status: 'stopping' }` (тело `{ signal }`:
+  `SIGTERM`|`SIGKILL`; пустое тело — `SIGTERM` по умолчанию, иной сигнал —
+  `400`; через 5 с — `SIGKILL`; идемпотентно); `404` — процесс
+  не найден.
+- Идентификатор процесса — `proc_<uuid>` (тот же формат, что у порта core).
+
+**Сервис** — `BackgroundExecService` (`src/background.ts`): реестр **в памяти**
+процесса исполнителя (у исполнителя нет доступа к каталогу данных инстанса),
+журналы — на диске.
+
+- Запуск — `child_process.spawn` (не `execFile`): процесс живёт после ответа
+  HTTP; `cwd` проходит **тот же** containment, что у `ExecService`
+  (`resolveContainedCwd`, логика не дублируется).
+- Журналы — **раздельные** по потокам: `<logDir>/<processId>.out.log` и
+  `.err.log` (каталог `0700`, файлы `0600`); лимит `maxLogBytes` — **на
+  поток**: при его достижении запись прекращается, выставляется `truncated`,
+  но **процесс не убивается**.
+- Лимит `maxProcesses` — на число **живых** процессов; превышение →
+  `too_many_requests` (429).
+- `timeoutMs > 0` — `SIGTERM`, через 5 с — `SIGKILL` (те же пауза и сигналы,
+  что у inline-порта в core); `stop()` идемпотентно.
+- Терминальные статусы: `exited` (код 0), `failed` (код ≠ 0), `killed`
+  (сигнал); неудача запуска — `failed` с отрицательным кодом libuv (`-2` =
+  ENOENT), как и в портовом контракте.
+- `requires` принимается, но **не проверяется** (проверка бинарных
+  требований — на слое тула).
+- `prune()` — удаляет терминальные записи старше часа вместе с журналами
+  (вызывается при запуске и раз в 10 мин, `unref`-таймер); `dispose()` —
+  останавливает живые процессы (`SIGTERM` → `SIGKILL`) и снимает таймер
+  (вызывается при остановке исполнителя: зомби-процессов не остаётся).
+- Клиентская проводка в control plane — **блок 9b (ADR-077)** — реализована:
+  клиент удалённого порта (`src/client.ts`) умеет `spawnBackground` (опрос
+  состояния и журнала процесса).
+
+**Порядок маршрутов критичен:** `/exec/spawn` объявлен **до**
+`/exec/:processId` (иначе «spawn» попал бы в параметр). Guard авторизации —
+`app.use('/exec', …)` **и** `app.use('/exec/*', …)`: первый покрывает только
+сам `/exec`, подпути (`/exec/spawn`, `/exec/:id/logs`) — второй.
+
+### Фоновые процессы в клиенте удалённого порта (ADR-077, шаг 7c)
+
+`RemoteExecutionPort.spawnBackground()` — **тот же контракт**, что у
+`InlineExecutionPort.spawnBackground` (core): `processId`/`pid`, поток вывода
+`output`, промис `exited`, `stop()`.
+
+- **Выбор адреса — тем же механизмом, что у `execute`:** по `requires`
+  (адрес без нужного бинаря и не ответивший адрес исключаются; нет
+  подходящего → `dependency_missing`/`EDEPENDENCY`; пул целиком недоступен →
+  `spawn_failed`/`EUNREACHABLE`). Дополнительно адрес должен уметь фоновые
+  процессы (`features.background` / протокол v3): старый исполнитель в
+  кандидаты не попадает, а отказ — `EBACKGROUND`
+  (`EXECUTION_BACKGROUND_UNSUPPORTED_CODE` в core → `background_unsupported`).
+- **Стриминга на проводе нет** — журнал приходит отрезками, поэтому клиент
+  **опросает** исполнителя: журнал `GET /exec/:id/logs` каждые
+  `REMOTE_BACKGROUND_LOG_POLL_MS` (300 мс, со смещениями `stdoutOffset`/
+  `stderrOffset`), состояние `GET /exec/:id` каждые
+  `REMOTE_BACKGROUND_STATUS_POLL_MS` (500 мс) до терминального статуса.
+- **Порядок вывода:** за тик — сначала stdout, затем stderr; поток завершается,
+  когда статус терминальный **и** оба смещения дочитаны до конца.
+- **`exited`** резолвится `{ exitCode, signal, durationMs }`; сеть/404 →
+  `exitCode: -1` и `signal: null` (хэндл не должен висеть).
+- **`stop(signal='SIGTERM')`** — `POST /exec/:id/stop` с телом `{ signal }`
+  (`SIGTERM`|`SIGKILL`; пустое тело — `SIGTERM` по умолчанию, иной сигнал —
+  `400`), best-effort (без исключений, повторный вызов — no-op); опрос состояния
+  при этом просыпается сразу.
+- **Слот одновременных вызовов не занимается:** фоновой процесс переживает
+  запрос — держать слот до его конца значило бы заблокировать пул.
+- **Ограничения:** журнал **дублируется** — он лежит на исполнителе (до
+  `prune()`, час) и одновременно пишется в control plane через `BlobStore`
+  (реестр фоновых прогонов, ADR-111/ADR-113). Вывод в control plane
+  попадает с задержкой опроса (300 мс), а не сразу. Пользовательский сигнал
+  доезжает до исполнителя: тело `POST /exec/:id/stop` несёт `{ signal }`
+  (`SIGTERM`|`SIGKILL`), серверная часть применяет именно его.
 
 ## Клиент удалённого порта
 
@@ -225,13 +323,17 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
 | `SYNTH_EXECUTOR_MAX_TIMEOUT_MS` | нет | `120000` | потолок таймаута команды |
 | `SYNTH_EXECUTOR_MAX_OUTPUT_BYTES` | нет | `10485760` | потолок буфера вывода |
 | `SYNTH_EXECUTOR_MCP_SERVERS` | нет | `[]` | MCP-серверы, которые хостит исполнитель: JSON-массив `{name,command,args,env}`; fail-closed на невалидном, `''` = серверов нет (отключает дефолт образа; у flavor'ов с браузером дефолт — Playwright MCP) |
+| `SYNTH_EXECUTOR_BACKGROUND_MAX` | нет | `8` | лимит живых фоновых процессов (ADR-077, шаг 7c) |
+| `SYNTH_EXECUTOR_BACKGROUND_LOG_MAX_BYTES` | нет | `10485760` | лимит журнала фонового процесса на поток, байт |
+| `SYNTH_EXECUTOR_BACKGROUND_LOG_DIR` | нет | `<tmp>/synth-exec-bg` | каталог журналов фоновых процессов |
 
 Без токена или без корня workspace процесс **не стартует** (fail-closed);
 невалидные числа — тоже ошибка (явная настройка оператора не должна молча
 превращаться в дефолт).
 
 Запуск: `node dist/main.js` (в образе — `/app/dist/main.js`). Graceful shutdown
-по `SIGINT`/`SIGTERM`.
+по `SIGINT`/`SIGTERM`: сервер закрывается, **фоновые процессы останавливаются**
+(`SIGTERM` → `SIGKILL`).
 
 ## Тесты и сборка
 
@@ -240,6 +342,18 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
   - `server.test.ts` — аутентификация (401/200), успех/ненулевой код/ENOENT/
     таймаут/лимит вывода, containment (абсолютный путь, `..`, симлинк наружу и
     внутрь), лимит параллельности (429), `capabilities`/`health`;
+  - `background.test.ts` — сервис фоновых процессов: запуск (`proc_`-id, pid),
+    раздельные логи stdout/stderr, статусы `exited`/`failed`/`killed`,
+    `stop()` (идемпотентность), таймаут, лимит живых процессов, усечение
+    журнала (`truncated`, процесс не убит), containment `cwd`, отрезки журнала
+    (offset/limit), `prune()` (терминальные записи и файлы — удаляются, живые —
+    нет);
+  - `server-background.test.ts` — HTTP-контур фоновых процессов: `spawn`
+    (201/`proc_`/pid), статус (`running`→`exited`/`failed`), логи (stdout и
+    stderr раздельно, offset/limit, `truncated`), `stop` (200 `stopping` →
+    `killed`, идемпотентность), 401 без токена, 404 неизвестного процесса,
+    400 невалидного тела и `cwd` вне workspace, 429 лимита процессов,
+    `capabilities` (`protocol: 3`, `features.background`), прежний `POST /exec`;
   - `client.test.ts` — round-robin, failover на следующий адрес, `failMode`
     (`fail`/`inline-fallback`), отмена по `AbortSignal`, очередь по
     `concurrency`, реконструкция ошибок сервера; **инвентарь пула и маршрутизация
@@ -247,6 +361,11 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
     адрес с нужной программой, отсутствие программы → `dependency_missing`/
     `EDEPENDENCY`, не ответивший адрес выпадает из маршрутизации, пул целиком
     недоступен → `EUNREACHABLE`, сводка пула (`missing`/`total`/`unreachable`);
+    **фоновый запуск (ADR-077 шаг 7c)**: `proc_`-id и pid, вывод stdout/stderr
+    потоком, `exited.exitCode === 0`, ненулевой код, `stop()` → killed с
+    непустым `signal`, недоступный адрес → ошибка запуска, исчезновение
+    исполнителя → `exited` резолвится (`exitCode: -1`), исполнитель протокола
+    v2 → `EBACKGROUND`, маршрутизация фонового запуска по `requires`;
   - `toolchain.test.ts` — состав toolchain'а: базовый словарь core + допсведения,
     различение `ENOENT` и «есть, но не поддержал `--version`»;
   - `mcp.test.ts` — MCP-хостинг: ленивый старт (реальный stdio-сервер на SDK —
@@ -286,3 +405,9 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
   иначе control plane и исполнитель разойдутся по составу пула.
 - Не отвечать на `probe` локальной пробой в обход инвентаря пула: клиент
   спрашивает `/capabilities`, а не «здесь есть программа» (ADR-077 шаг A).
+- Не дублировать логику containment'а в фоновом сервисе: используется **тот
+  же** `resolveContainedCwd`, что и у `ExecService`.
+- Не проверять `requires` в фоновом запуске: проверка бинарных требований —
+  на слое тула (как в портовом контракте `spawnBackground`).
+- Не убивать процесс при достижении лимита журнала: только `truncated` и
+  прекращение записи в поток.

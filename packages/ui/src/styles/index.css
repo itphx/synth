@@ -520,6 +520,32 @@ html.pointer-coarse .credentials-panel select {
   min-height: var(--control-height-touch);
 }
 
+/* Док вопросов агента (этап 1 roadmap 0.13 — блок 1.3): touch-таргеты ≥40px
+   в мобильных зонах (телефон/планшет) и при coarse-указателе (ADR-044). */
+html.device-phone .question-dock button:not([role="switch"]),
+html.device-tablet .question-dock button:not([role="switch"]),
+html.pointer-coarse .question-dock button:not([role="switch"]) {
+  min-height: var(--control-height-touch);
+  min-width: var(--control-height-touch);
+}
+
+html.device-phone .question-dock input:not([type="checkbox"]):not([type="radio"]),
+html.device-tablet .question-dock input:not([type="checkbox"]):not([type="radio"]),
+html.pointer-coarse .question-dock input:not([type="checkbox"]):not([type="radio"]) {
+  min-height: var(--control-height-touch);
+}
+
+/* Точки-сегменты дока вопросов — вторичная навигация по шагам: таргет
+   компактный (28px), иначе ячейка 40px съедает шапку и подпись
+   «Вопрос N из M» обрезается. Основные действия дока (шеврон,
+   «Назад»/«Далее», «Проверить», «Отправить», «Отменить») остаются ≥40px. */
+html.device-phone .question-dock button[data-question-dot],
+html.device-tablet .question-dock button[data-question-dot],
+html.pointer-coarse .question-dock button[data-question-dot] {
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+}
+
 /* Компактные подписи индикаторов на телефоне и при узкой центральной колонке
    (остаётся точка/иконка) */
 .device-hide-label {

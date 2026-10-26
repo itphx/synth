@@ -95,3 +95,9 @@ export * from './pipeline.js';
 // ADR-101: контракты пайплайна как второго движка (спецификация, узлы,
 // переходы, триггер, результат узла, прогон, журнал) — re-exported from pipeline-engine.ts
 export * from './pipeline-engine.js';
+// Этап 1 roadmap 0.13: «вопрос пользователю» (ask_user) — типы записи вопроса
+// + Zod-схемы HTTP-входа (ответа/отмены).
+export * from './question.js';
+// Этап 1 roadmap 0.13: единый реестр фоновых прогонов (фоновые саб-агенты и
+// шелл-процессы) — типы записи и фильтра выборки.
+export * from './background.js';

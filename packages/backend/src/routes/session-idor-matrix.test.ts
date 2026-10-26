@@ -53,6 +53,8 @@ import {
   FileStore,
   ProjectStore,
   createSessionSkillScopeRoutes,
+  MemoryQuestionRepository,
+  QuestionService,
 } from '@itphx/synth-core';
 import type { ChatOrchestrator } from '@itphx/synth-core';
 import type { Message, Project, User } from '@itphx/synth-shared';
@@ -134,6 +136,12 @@ const MATRIX: Row[] = [
   row('sessions', 'GET', '/:id/prompt'),
   // ADR-107: агрегаты памяти для вкладки «Память» — чтение сессии.
   row('sessions', 'GET', '/:id/memory'),
+  // Этап 1 roadmap 0.13 (блок 3): вопросы пользователю (`ask_user`).
+  // Чтение — по правилу чтения сессии; ответ/отмена — по правилу мутации
+  // (владелец/участник с правом изменения): ответ — действие пользователя.
+  row('sessions', 'GET', '/:id/questions'),
+  row('sessions', 'POST', '/:id/questions/:qid/answer', { status: 404 }),
+  row('sessions', 'POST', '/:id/questions/:qid/cancel', { status: 404 }),
   row('sessions', 'GET', '/:id/stats'),
   row('sessions', 'POST', '/:id/prompt', { status: 400 }), // пустое тело → VALIDATION_ERROR
   row('sessions', 'GET', '/:id/messages'),
@@ -357,6 +365,14 @@ async function buildWorld(tmpDir: string): Promise<World> {
     subscribeToSession: vi.fn().mockResolvedValue(undefined),
     unsubscribeFromSession: vi.fn(),
   };
+  // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» — те же
+  // маршруты, что и в реальном приложении (`GET /:id/questions`,
+  // `POST /:id/questions/:qid/answer|cancel`).
+  const questionService = new QuestionService({
+    repository: new MemoryQuestionRepository(),
+    eventBus,
+    timeoutMs: 60_000,
+  });
 
   // Проект: владелец `projectOwner`, участники `viewer` (VIEWER) и `editor` (EDITOR).
   const project = projectStore.create('Shared', 'projectOwner');
@@ -386,6 +402,15 @@ async function buildWorld(tmpDir: string): Promise<World> {
     eventHub as never,
     contextOptimizer as never,
     projectStore,
+    // profilesStore / resolveDefaultAgent / requestSessionService / analytics /
+    // memory — в песочнице не заданы.
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю.
+    questionService,
   ));
   app.route('/api/v2/messages', createBackendMessageRoutes(
     kit as never,
@@ -434,6 +459,7 @@ async function buildWorld(tmpDir: string): Promise<World> {
 
 function urlFor(base: Base, path: string, sessionId: string): string {
   const replaced = path
+    .replace(':qid', 'qst-none')
     .replace(':sessionId', sessionId)
     .replace(':id', sessionId)
     .replace(':index', '0')
@@ -453,6 +479,11 @@ function bodyFor(row: Row, world: World): string | undefined {
   if (p.endsWith('/notes')) return JSON.stringify({ content: 'note' });
   if (p.includes('/notes/')) return JSON.stringify({ content: 'updated' });
   if (p.endsWith('/skills')) return JSON.stringify({ name: 'skill-x', enabled: true });
+  // Этап 1 roadmap 0.13 (блок 3): ответ на вопрос (вопроса с таким id нет →
+  // 404, а не 400 валидации).
+  if (p.includes('/questions/') && p.endsWith('/answer')) {
+    return JSON.stringify({ answers: [['a']] });
+  }
   if (p.endsWith('/optimization')) return JSON.stringify({ summarization_enabled: true });
   return JSON.stringify({});
 }

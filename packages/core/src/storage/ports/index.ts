@@ -162,3 +162,7 @@ export type {
   MemoryIndexStats,
   MemoryChunkRecord,
 } from './memory-index-repository.js';
+// Этап 1 roadmap 0.13 (блок 1.3): порт вопросов пользователю.
+export type { QuestionRepository } from './question-repository.js';
+// Этап 1 roadmap 0.13 (блок 1.2): порт единого реестра фоновых прогонов.
+export type { BackgroundRunRepository } from './background-run-repository.js';

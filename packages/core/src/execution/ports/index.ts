@@ -15,11 +15,16 @@ export type {
   ExecFailureReason,
   ExecutionCapabilitySummary,
   ExecutionBaseCapability,
+  ExecBackgroundChunk,
+  ExecBackgroundExit,
+  ExecBackgroundProcess,
 } from './execution-port.js';
 export {
   ExecutionError,
+  isExecutionError,
   isExecutionPort,
   DEFAULT_SHELL_BINARY,
   DEFAULT_MAX_OUTPUT_BYTES,
   EXECUTION_BASE_CAPABILITIES,
+  EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
 } from './execution-port.js';

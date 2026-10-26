@@ -7,16 +7,18 @@ import { useGitStore } from './gitStore'
 import { useFilesStore } from './filesStore'
 import { useUIStore } from './useUIStore'
 import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
+import { useQuestionStore } from './questionStore'
 import { useSkillsStore } from './skillsStore'
 import { useInstructionsStore } from './instructionsStore'
 import { usePipelinesStore } from './pipelinesStore'
+import { useProcessesStore } from './processesStore'
 import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData, MessageStatus, CostBreakdown } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
 import type { SessionData } from '@/lib/api/synthApi'
 import { notifyMessage } from '@/hooks/useNotification'
 import { i18nText } from '@/lib/i18n/text'
-import type { SteerMode } from '@itphx/synth-shared/types'
+import type { QuestionItem, QuestionRecord, SteerMode } from '@itphx/synth-shared/types'
 
 type EventDispatcher = (event: WSEvent) => void
 
@@ -74,6 +76,137 @@ function mapCostBreakdown(raw: unknown): CostBreakdown | undefined {
   return raw as CostBreakdown
 }
 
+/**
+ * ADR-111/ADR-113: UI-уведомления о фоновой работе (старт/финиш).
+ *
+ * Дедупа нет: каждое пришедшее событие фоновой работы даёт уведомление —
+ * корневая причина дублей устранена в ядре (единый `enqueueUserMessage`),
+ * события шины не реплеятся, у реальных прогонов разные `background_run_id`.
+ */
+/** Стартовые события фоновой работы. */
+const BACKGROUND_START_EVENTS = new Set(['process.started', 'child.started'])
+
+/** Терминальные события фоновой работы. */
+const BACKGROUND_FINISH_EVENTS = new Set([
+  'process.exited',
+  'process.stopped',
+  'child.completed',
+  'child.failed',
+  'child.cancelled',
+])
+
+/** Максимальная длина имени прогона в уведомлении. */
+const BACKGROUND_NOTIFY_NAME_LIMIT = 80
+
+/** Терминальное состояние прогона по событию и payload. */
+function backgroundFinishState(
+  type: string,
+  payload: Record<string, unknown>,
+): 'completed' | 'failed' | 'cancelled' {
+  const state = payload.state
+  if (state === 'completed' || state === 'failed' || state === 'cancelled') return state
+  if (type === 'process.stopped') return 'cancelled'
+  if (type === 'child.failed') return 'failed'
+  if (type === 'child.cancelled') return 'cancelled'
+  return 'completed'
+}
+
+/**
+ * Имя прогона для уведомления: команда (процесс) или описание (саб-агент).
+ *
+ * Берётся из реестра фоновых прогонов (запись уже применена событием), иначе
+ * — из payload. Длинные значения обрезаются.
+ */
+function backgroundRunName(
+  isChild: boolean,
+  payload: Record<string, unknown>,
+): string {
+  const runId = typeof payload.background_run_id === 'string' ? payload.background_run_id : ''
+  const record = runId ? useProcessesStore.getState().byId[runId] : undefined
+  const raw = isChild
+    ? record?.description ?? payload.description
+    : record?.command ?? payload.command
+  const name = typeof raw === 'string' ? raw.trim() : ''
+  if (name.length <= BACKGROUND_NOTIFY_NAME_LIMIT) return name
+  return `${name.slice(0, BACKGROUND_NOTIFY_NAME_LIMIT - 1)}…`
+}
+
+/** Максимальная длина имени вопроса в уведомлении. */
+const QUESTION_NOTIFY_NAME_LIMIT = 60
+
+/**
+ * Имя вопроса для уведомления: короткий заголовок первого вопроса.
+ *
+ * Fallback — `question`; длинные значения обрезаются (как имя прогона).
+ */
+function questionNotifyName(questions: QuestionItem[] | undefined): string {
+  const header = questions?.[0]?.header
+  const name = typeof header === 'string' ? header.trim() : ''
+  if (!name) return 'question'
+  if (name.length <= QUESTION_NOTIFY_NAME_LIMIT) return name
+  return `${name.slice(0, QUESTION_NOTIFY_NAME_LIMIT - 1)}…`
+}
+
+/**
+ * Открыта ли сессия в **активной** центральной вкладке.
+ *
+ * Тост о вопросе нужен только для неактивной сессии: в открытой сессии док
+ * вопроса и так виден пользователю (прецедент openchamber — `permission-toast`).
+ * Непрочитанный счётчик в дереве инкрементит сам `notifyMessage`.
+ */
+function isSessionActive(sessionId: string): boolean {
+  const state = useUIStore.getState()
+  const activeTab = state.centerTabs.find((t) => t.id === state.activeCenterTabId)
+  return activeTab?.data?.sessionId === sessionId
+}
+
+/**
+ * Показать уведомление о фоновой работе (старт/финиш прогона).
+ *
+ * События, которые не относятся к фоновой работе, игнорируются. Каждое
+ * пришедшее событие даёт уведомление (дедупа нет).
+ */
+function notifyBackgroundRun(type: string, payload: Record<string, unknown>): void {
+  const isStart = BACKGROUND_START_EVENTS.has(type)
+  const isFinish = BACKGROUND_FINISH_EVENTS.has(type)
+  if (!isStart && !isFinish) return
+
+  const isChild = type.startsWith('child.')
+  const name = backgroundRunName(isChild, payload)
+  const sessionId =
+    (typeof payload.session_id === 'string' ? payload.session_id : undefined) ??
+    (typeof payload.parent_session_id === 'string' ? payload.parent_session_id : undefined)
+
+  if (isStart) {
+    notifyMessage({
+      text: i18nText(isChild ? 'notify.background.subagentStarted' : 'notify.background.started', { name }),
+      type: 'info',
+      category: 'system',
+      ...(sessionId ? { sessionId } : {}),
+    })
+    return
+  }
+
+  const state = backgroundFinishState(type, payload)
+  const textKey = isChild
+    ? state === 'failed'
+      ? 'notify.background.subagentFailed'
+      : state === 'cancelled'
+        ? 'notify.background.subagentCancelled'
+        : 'notify.background.subagentCompleted'
+    : state === 'failed'
+      ? 'notify.background.failed'
+      : state === 'cancelled'
+        ? 'notify.background.cancelled'
+        : 'notify.background.completed'
+  notifyMessage({
+    text: i18nText(textKey, { name }),
+    type: state === 'failed' ? 'error' : state === 'cancelled' ? 'warning' : 'success',
+    category: 'system',
+    ...(sessionId ? { sessionId } : {}),
+  })
+}
+
 interface TransportState {
   transportMode: TransportMode
   activeTransport: TransportKind
@@ -105,6 +238,17 @@ export function createDispatcher(): EventDispatcher {
     // как «бессессионные» (инвариант 6: новых транспортных каналов не заводим).
     if (type.startsWith('pipeline.')) {
       usePipelinesStore.getState().applyRunEvent(payload)
+      return
+    }
+
+    // PROP-096/097: события единого реестра фоновых прогонов
+    // (`process.*`/`child.*`). Они публикуются в канал сессии-владельца, но
+    // разбираются ДО проверки `sid`: id сессии лежит в payload, а в кадре
+    // WS его может не быть. Существующие подписки `child.*` не затрагиваются:
+    // в диспетчере других веток `child.*` нет.
+    if (type.startsWith('process.') || type.startsWith('child.')) {
+      useProcessesStore.getState().applyEvent(type, payload)
+      notifyBackgroundRun(type, payload)
       return
     }
 
@@ -473,6 +617,53 @@ export function createDispatcher(): EventDispatcher {
           askedAt: new Date().toISOString(),
           timeoutMs,
         })
+        break
+      }
+
+      // Вопросы пользователю (`ask_user`, этап 1 roadmap 0.13 — блок 1.3).
+      // ⚠️ Это НЕ `question.asked` — тот означает «очередь зависла» (см. выше).
+      case 'user_question.asked': {
+        const full = payload.question as QuestionRecord | undefined
+        const questionId = (payload.question_id as string | undefined) || full?.id
+        if (!questionId) break
+
+        const now = new Date().toISOString()
+        const record: QuestionRecord = full && typeof full === 'object'
+          ? { ...full, id: full.id || questionId, sessionId: full.sessionId || sid }
+          : {
+              id: questionId,
+              sessionId: sid,
+              status: 'pending',
+              questions: (payload.questions as QuestionItem[]) ?? [],
+              createdAt: now,
+              updatedAt: now,
+              // Срок ожидания из события (ISO-8601) — по нему UI рисует
+              // обратный отсчёт; без таймаута поля нет.
+              ...(payload.expires_at ? { expiresAt: String(payload.expires_at) } : {}),
+              ...(payload.turn_id ? { turnId: String(payload.turn_id) } : {}),
+              ...(payload.tool_call_id ? { toolCallId: String(payload.tool_call_id) } : {}),
+              ...(payload.agent_role ? { agentRole: String(payload.agent_role) } : {}),
+            }
+        useQuestionStore.getState().add(sid, record)
+        // Тост — только если сессия **не** открыта: в открытой сессии док
+        // вопроса и так виден пользователю. Непрочитанный счётчик в дереве
+        // инкрементит сам `notifyMessage` (то же правило, что в нём).
+        if (!isSessionActive(sid)) {
+          notifyMessage({
+            text: i18nText('notify.question.asked', { name: questionNotifyName(record.questions) }),
+            type: 'info',
+            category: 'system',
+            sessionId: sid,
+          })
+        }
+        break
+      }
+
+      // Вопрос закрыт (ответили или отменили) — из pending он уходит.
+      case 'user_question.answered':
+      case 'user_question.cancelled': {
+        const questionId = payload.question_id as string | undefined
+        if (questionId) useQuestionStore.getState().remove(sid, questionId)
         break
       }
 

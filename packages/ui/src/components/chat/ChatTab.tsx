@@ -13,6 +13,7 @@ import { ChatInput } from './ChatInput'
 import { DebugModal } from './DebugModal'
 import { QueuePanel } from './QueuePanel'
 import { PermissionRequestBar } from './PermissionRequestBar'
+import { QuestionDock } from './QuestionDock'
 import { StickyNotesPanel } from './StickyNotesPanel'
 import { StreamErrorPanel } from './StreamErrorPanel'
 import { SubagentResumeBar, type SubagentSessionError } from './SubagentResumeBar'
@@ -680,6 +681,10 @@ export function ChatTab({ tab }: ChatTabProps) {
 
           {!inputExpanded && !isSubagent && (
             <PermissionRequestBar sessionId={sessionId} />
+          )}
+
+          {!inputExpanded && !isSubagent && (
+            <QuestionDock sessionId={sessionId} />
           )}
 
           {isSubagent ? (

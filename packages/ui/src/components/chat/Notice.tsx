@@ -8,7 +8,7 @@ import { useI18n } from '@/lib/i18n'
  * единый центрированный блок. Текст внутри выровнен по левому краю, у блока
  * всегда есть шапка (иконка + подпись) и кнопка «Копировать».
  */
-export type NoticeVariant = 'command' | 'summary' | 'debug' | 'error' | 'info' | 'scheduler'
+export type NoticeVariant = 'command' | 'summary' | 'debug' | 'error' | 'info' | 'scheduler' | 'process'
 
 interface NoticeVariantStyle {
   /** Иконка по умолчанию. */
@@ -30,6 +30,9 @@ const VARIANT_STYLES: Record<NoticeVariant, NoticeVariantStyle> = {
   // ADR-051: сообщения планировщика (source:'cron') — нейтральный системный блок
   // с иконкой расписания; иконка совпадает с вкладкой «Шедулер».
   scheduler: { icon: 'calendar-schedule', box: 'bg-surface-inset border-border/40 text-foreground' },
+  // ADR-111/ADR-113: завершение фонового прогона — системный блок с иконкой
+  // терминала (шелл-процесс) или робота (фоновый саб-агент).
+  process: { icon: 'terminal-box', box: 'bg-surface-inset border-border/40 text-foreground' },
 }
 
 export interface NoticeProps {
@@ -84,7 +87,11 @@ export function Notice({
             style.mono && 'font-mono',
           )}
         >
-          <Icon name={icon ?? style.icon} className="size-3 shrink-0" />
+          <Icon
+            name={icon ?? style.icon}
+            className="size-3 shrink-0"
+            data-icon={icon ?? style.icon}
+          />
           {label && <span className="truncate">{label}</span>}
           {meta && <span className="ml-auto inline-flex items-center gap-1.5">{meta}</span>}
         </div>

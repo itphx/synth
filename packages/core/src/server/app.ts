@@ -131,6 +131,16 @@ export interface StandaloneConfig {
   oauthProviders?: SynthConfig['oauth']['providers'];
   /** ADR-102: конфигурация аналитики (`analytics.retentionDays`) из config.yaml. */
   analyticsConfig?: SynthConfig['analytics'];
+  /**
+   * Этап 1 roadmap 0.13 (блок 3): конфигурация «вопрос пользователю»
+   * (`questions.timeoutMs` — срок ожидания ответа, `questions.retentionDays`).
+   */
+  questionsConfig?: SynthConfig['questions'];
+  /**
+   * Этап 1 roadmap 0.13 (блок 4): конфигурация единого реестра фоновых
+   * прогонов (`background.enabled`/лимиты/retention — PROP-096).
+   */
+  backgroundConfig?: SynthConfig['background'];
   /** ADR-094: конфигурация метрик (`metrics.enabled`) из config.yaml/env. */
   metricsConfig?: SynthConfig['metrics'];
   /**
@@ -602,6 +612,17 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     stopEventJournalPruner: deps.stopEventJournalPruner,
     // ADR-102: остановка retention-очистки суточных роллапов аналитики.
     stopAnalyticsRollupPruner: deps.stopAnalyticsRollupPruner,
+    // Этап 1 roadmap 0.13 (блок 3): остановка retention-очистки вопросов и
+    // освобождение ожиданий ответа.
+    stopQuestionPruner: () => {
+      deps.stopQuestionPruner();
+      deps.questionService?.dispose();
+    },
+    // Этап 1 roadmap 0.13 (блок 4): остановка retention-очистки реестра
+    // фоновых прогонов.
+    stopBackgroundRunPruner: () => deps.stopBackgroundRunPruner(),
+    // PROP-097 (блок 5b): остановка retention-очистки логов фоновых процессов.
+    stopProcessLogPruner: () => deps.stopProcessLogPruner(),
     // ADR-052 (этап II): остановка движка webhooks и retention-очистки доставок.
     stopWebhookService: () => deps.webhookService.stop(),
     stopWebhookDeliveryPruner: () => deps.stopWebhookDeliveryPruner(),

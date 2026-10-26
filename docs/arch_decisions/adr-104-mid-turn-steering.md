@@ -1,6 +1,6 @@
 # ADR-104: Вмешательство в ход посреди генерации (steering)
 
-> **Статус:** ✅ Реализовано — этапы 1–3 (2026-10-23…24). Steering фонового ребёнка не входит в объём: он возможен только после [PROP-096](./prop-096-background-subagent-sessions.md) (фоновых сессий саб-агентов в коде нет).
+> **Статус:** ✅ Реализовано — этапы 1–3 (2026-10-23…24) + steering дочерней (фоновой) сессии саб-агента (2026-10-26, [ADR-111](./adr-111-background-subagent-sessions.md)).
 > **Дата:** 2026-10-23
 > **Парные документы (as-built):** [API_V2.md](../API_V2.md) §5.5 (поле `mode`) · [packages/ui/AGENTS.md](../../packages/ui/AGENTS.md) («Чат: режим отправки»)
 > **Связано:** [ADR-005](./adr-005-json-storage.md) («Стоп» — соседняя семантика отмены хода), [ADR-024](./adr-024-eventhub-transport.md) (доставка событий в UI), [ADR-039](./adr-039-plan-in-project.md) (состояние агента через Tool Use), [ADR-089](./adr-089-external-events-automation.md) (события сессии), [PROP-096](./prop-096-background-subagent-sessions.md) (фоновые саб-агенты)
@@ -77,18 +77,16 @@
   ход, а не ответ пользователя» (поведение при `ask`/`plan`) и единый контракт режима в гибриде
   (`mode` доезжает до remote, `mode_applied` в ответе/ack). Контракт — [API_V2.md](../API_V2.md)
   §5.5; UX — [packages/ui/AGENTS.md](../../packages/ui/AGENTS.md).
-- **Остаток — PROP-096 (фоновые саб-агенты).** Steering фонового ребёнка **недоступен до
-  [PROP-096](./prop-096-background-subagent-sessions.md)**: неблокирующих саб-агентских сессий в коде
-  нет, а механизма «инъекция в фоновую сессию» не существует. Что работает уже сейчас — очередь
-  инъекций адресна **конкретной** сессии: `steerInbox` — часть записи сессии (файл/память/БД), и
-  инъекция в дочернюю `task`-сессию не попадает в родительскую (и наоборот) — это разные записи
-  сессий. Проверка: `packages/core/src/queue/steering-subagent.test.ts` (персистентность очереди +
-  изоляция родителя и ребёнка).
-  Граница применения: инъекции вычитывает только оркестратор своей сессии
-  (`ChatOrchestrator._applySteerInjections`), а цикл саб-агента (`engine/tools/task/run-cycle.ts`)
-  идёт мимо оркестратора — поэтому инъекция в дочернюю `task`-сессию сохраняется, но в её ход
-  не попадает. Steering работает для сессии, чей ход ведёт оркестратор.
-  Ограничение зафиксировано только здесь: описания встроенных тулов — статические строки реестра
+- **Steering дочерней (фоновой) сессии саб-агента — реализован.** Граница шага — та же: цикл
+  саб-агента (`engine/tools/task/run-cycle.ts`) вычитывает очередь инъекций **своей** сессии перед
+  каждым LLM-вызовом и вплетает сообщение в текущий ход. Инъекция персистится в истории ребёнка как
+  обычная `user`-реплика с `metadata.steer`, публикуется как `message.added`/`message.injected` в
+  канал ребёнка; превышение лимита — событие `steer.dropped` в канале ребёнка (ход не падает).
+  `interrupt` для ребёнка **не прерывает прогон**: на границе шага генерации уже нет, поэтому
+  инъекция применяется как обычное вмешательство («вмешательство без завершения хода»).
+  Очереди родителя и ребёнка изолированы (разные записи сессий) — см.
+  [ADR-111](./adr-111-background-subagent-sessions.md) и `packages/core/src/queue/steering-subagent.test.ts`.
+- **Ограничение зафиксировано только здесь:** описания встроенных тулов — статические строки реестра
   (`ToolDefinition.description`), локализации у них нет, а i18n-словарь (`shared/i18n`) покрывает
   результаты тулов, а не их описания.
 - Существующие клиенты не ломаются: поле необязательное, неизвестное значение трактуется как `queue`.
@@ -96,12 +94,15 @@
 ## Статус в коде
 
 - API: `POST /api/v2/sessions/:id/prompt` и WS `send_message` — поле `mode` (`queue`/`steer`/`interrupt`), ответы `202 {status:'steered'|'interrupted', stream_id, pending_count, mode_applied}`, `429 STEER_LIMIT_EXCEEDED` (`docs/API_V2.md` §5.5).
-- Ядро: `queue/processor.ts` (`enqueueSteerMessage`), `sessions/manager.ts` (`steerInbox`, `takeSteerMessages` с приоритетом `interrupt` → `steer`), `engine/orchestrator.ts` (вычитка на границе шага, `_handleInterruptedGeneration`, `interrupt(streamId)`), `shared/types/steering.ts` (типы, лимит 5, порядок).
+- Ядро: `queue/processor.ts` (`enqueueSteerMessage`), `sessions/manager.ts` (`steerInbox`, `takeSteerMessages` с приоритетом `interrupt` → `steer`), `engine/steering/apply.ts` (**общая точка применения инъекций на границе шага** — её используют и оркестратор, и цикл саб-агента), `engine/orchestrator.ts` (вычитка на границе шага, `_handleInterruptedGeneration`, `interrupt(streamId)`), `engine/tools/task/run-cycle.ts` (граница шага цикла **дочерней/фоновой** сессии), `shared/types/steering.ts` (типы, лимит 5, порядок).
 - UI: `SendModeSelector`, маркеры вмешательства/прерывания, `resetStreamAccumulator` — `packages/ui/AGENTS.md`.
-- Тесты: `queue/steering.test.ts`, `engine/orchestrator-steering.test.ts`, `engine/orchestrator-interrupt.test.ts`, `server/routes/sessions-steering.test.ts`, `queue/steering-subagent.test.ts`.
+- Тесты: `queue/steering.test.ts`, `engine/orchestrator-steering.test.ts`, `engine/orchestrator-interrupt.test.ts`, `server/routes/sessions-steering.test.ts`, `queue/steering-subagent.test.ts`, `engine/tools/task/run-cycle.test.ts` (steering дочерней сессии).
 
 ## История
 
 - 2026-10-23 — решение принято; документ переведён из предложения PROP-098 (steering); этапы 1–2 реализованы 2026-10-23.
 - 2026-10-23 — детали возвращены в ADR (отдельный spec `docs/STEERING.md` удалён): контракт — API_V2.md §5.5, UX — packages/ui/AGENTS.md.
 - 2026-10-23 — закрыт этап 3: порядок применения инъекций (`interrupt` раньше `steer`, внутри класса FIFO), поведение при `ask`/`plan` (инъекция — ввод в тот же ход, а не ответ пользователя; права не расширяются), единый контракт режима в гибриде (`mode` доезжает до remote, `mode_applied` в ответе/ack), изоляция очереди родителя и `task`-ребёнка. Остаток — PROP-096 (фоновые саб-агенты).
+- 2026-10-26 — закрыт остаток по фоновым саб-агентам: steering дочерней сессии применяется на
+  границе шага её цикла (`engine/tools/task/run-cycle.ts`, общая точка — `engine/steering/apply.ts`),
+  `interrupt` для ребёнка действует на границе (как обычное вмешательство).

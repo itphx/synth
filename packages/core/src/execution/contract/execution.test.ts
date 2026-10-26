@@ -6,6 +6,10 @@
  * Реализация inline ограничений на `cwd` не имеет (команда исполняется в
  * процессе control plane) — это закреплено отдельным блоком проверок
  * «только inline» (`describeInlineOnlyExecutionChecks`).
+ *
+ * Фоновый запуск (PROP-097) реализован только в inline-режиме — он проверяется
+ * блоком `describeBackgroundExecutionChecks`; у удалённого порта метода нет
+ * (это закреплено в remote-блоке контракта).
  */
 
 import { afterAll, beforeAll } from 'vitest';
@@ -13,7 +17,11 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InlineExecutionPort } from '../inline-execution-port.js';
-import { describeExecutionPort, describeInlineOnlyExecutionChecks } from './index.js';
+import {
+  describeExecutionPort,
+  describeBackgroundExecutionChecks,
+  describeInlineOnlyExecutionChecks,
+} from './index.js';
 
 /** Каталог для проверок `cwd` (исполнение в процессе — любой путь допустим). */
 let cwd: string;
@@ -40,4 +48,5 @@ const harness = async () => ({
 });
 
 describeExecutionPort('InlineExecutionPort → ExecutionPort', harness);
+describeBackgroundExecutionChecks('InlineExecutionPort → ExecutionPort', harness);
 describeInlineOnlyExecutionChecks('InlineExecutionPort → ExecutionPort', harness);

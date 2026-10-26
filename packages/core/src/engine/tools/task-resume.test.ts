@@ -418,11 +418,18 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     // Финальный ответ саб-агента сохранён в дочерней сессии
     expect(c.messages.some((m) => m.role === MessageRole.ASSISTANT && m.content === 'RESUMED OK')).toBe(true);
 
-    // Итог в родительской сессии: INFO + metadata (записывается до очистки).
+    // Итог в родительской сессии: USER + metadata (записывается до очистки).
+    //
+    // Роль USER (не INFO) — намеренно: результат resume должен быть **виден
+    // модели** родителя (INFO-сообщения в LLM-контекст не попадают).
     const p = (await sessionManager.getSession(parent))!;
     const resumeResultMsg = p.messages.find((m) => m.metadata?.type === 'subagent_resumed_result');
     expect(resumeResultMsg).toBeDefined();
-    expect(resumeResultMsg!.role).toBe(MessageRole.INFO);
+    expect(resumeResultMsg!.role).toBe(MessageRole.USER);
+    // Сообщение видно модели: не скрыто и не эфемерно.
+    expect(resumeResultMsg!.hidden).not.toBe(true);
+    expect(resumeResultMsg!.ephemeral).toBeUndefined();
+    expect(resumeResultMsg!.author).toBe('Subagent');
     expect(resumeResultMsg!.metadata!.child_session_id).toBe(child);
     expect(resumeResultMsg!.metadata!.resume_status).toBe('completed');
     expect(resumeResultMsg!.content).toContain('RESUMED OK');

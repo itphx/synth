@@ -368,10 +368,12 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | План/ToDo | `plan_enter`, `plan_exit`, `plan_read`, `plan_list`, `plan_write`, `todo_write`, `todo_list`, `todo_add`, `todo_update`, `todo_delete` |
 | Пайплайны (ADR-101) | `pipeline_list`, `pipeline_get`, `pipeline_save`, `pipeline_publish`, `pipeline_delete`, `pipeline_run`, `pipeline_run_status`, `pipeline_run_list`, `pipeline_run_resume`, `pipeline_run_cancel`, `pipeline_templates`, `pipeline_instantiate` — capability `pipeline`; проект **только из сессии** (параметра `project_id` нет), чтение доступно участнику проекта, мутации (`save`/`publish`/`delete`/`run`/`resume`/`cancel`/`instantiate`) — только с правом изменения содержимого проекта (`VIEWER` только читает) и не в plan-режиме; прогон — только по **опубликованной** версии, одновременно у пайплайна не более одного активного прогона; `resume` — действие `approve` (ADR-106) |
 | Расписания (ADR-051) | `schedule_list`, `schedule_get`, `schedule_save`, `schedule_delete`, `schedule_run`, `schedule_jobs` — capability `schedule`; область «**свои + проект**» (свои расписания доступны и без проекта), мутации — по владению или праву изменения содержимого проекта, не в plan-режиме; триггер ровно один (`cron` 5 полей в UTC **или** `every` `30s\|15m\|1h\|24h`); цель `pipeline` требует **опубликованный** пайплайн и не создаёт сессию (прогон в фоне, прогресс — `pipeline_run_status`) |
+| Реестр фоновых прогонов (ADR-111/ADR-113) | `process_list`, `process_logs` — capability `process`; скоуп «своя сессия + дочерние»; только чтение, доступно в plan-режиме; лог — только у `kind: 'process'` |
+| Задачи | `task` (в т.ч. `background: true` — фоновый саб-агент, ADR-111; продолжатель — `task({task_id})`), `classify_conversation`, `read_session_reference` |
+| Вопрос пользователю (ADR-112) | `question` — capability `question`, группа правил `question`; пауза хода до ответа (срок — необязательный `timeout` ≥ 5 мин, по умолчанию таймаута нет); саб-агентам `deny`, в plan-режиме разрешён |
 | Проект | `get_project_info`, `list_repos`, `project_create`, `project_attach`, `project_update`, `project_workspace_set`, `project_repo_clone`, `project_repo_init`, `project_repo_add`, `project_repo_fetch`, `project_repo_remove` |
 | Лог/Инварианты | `project_log_write`, `project_log_read`, `project_invariants_read`, `project_invariants_write` |
 | Веб | `web_fetch`, `web_search` (DuckDuckGo, при anti-bot — fallback на Bing) |
-| Задачи | `task`, `classify_conversation`, `read_session_reference` |
 | Профиль | `profile_update` (capability `user` — выдан только Агенту `assistant`; онбординг владельца сессии: `display_name`/`email`/`phone`/`notes`, завершение интервью — `ProfileData.interviewCompleted`) |
 | Скиллы | `skill` (ADR-046: загрузка тела `SKILL.md` по имени + supporting-файлы; глобально отключается через `tools.disabled`) |
 
@@ -406,6 +408,8 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 Подробности, точки расширения и правила компонентов — [packages/ui/AGENTS.md](./packages/ui/AGENTS.md); панель настроек и контролы — ADR-072.
 
 - Панель «Сессия» в правой панели показывает план (`planContent`) и ToDo (`todos`); обновляется по WS-событиям `plan.approved`/`todos.updated` (полный refresh с сервера).
+- **Вопрос пользователю** — док над композером (`components/chat/QuestionDock.tsx`), не `PanelTab`: сворачивание, точки-сегменты, шаг проверки «вопрос → ответ» перед отправкой, обратный отсчёт по `expiresAt`. Тост `notify.question.asked` (только если сессия не активна) + непрочитанное в дереве. Детали — [packages/ui/AGENTS.md](./packages/ui/AGENTS.md).
+- **Фоновая работа** — вкладка «Процессы» правой панели (`components/panels/ProcessesTab.tsx`): единый реестр `GET /api/v2/processes` (шелл-процессы и фоновые саб-агенты), live по `process.*`/`child.*`, остановка/удаление/открытие дочерней сессии, лог процесса по `offset`. Уведомления `notify.background.*` на старт и терминальный переход.
 - Мутирующие тулы ядра публикуют `fs.changed` (`engine/fs-change.ts`): дерево Files, открытые редакторы и Git-вкладка обновляются с debounce; события несут `op` (`write`/`delete`/`mkdir`/`move` с `from`/`to`), дерево перечитывает только родительские каталоги, редактор уходит в `file.deletedOnDisk`. Read-only тулы событий не шлют.
 - Перенос/переименование (`filesStore.moveEntry`, DnD и диалог) перемапливает поддерево (`treesByProject`/`expandedDirs`/`fileRevisions`/`deletedFiles`/`draftContents`) и открытые вкладки (`useUIStore.remapFileTabs`), сохраняя несохранённые черновики; `op:'move'` из shell ремапится синхронно до debounce. Межпроектный перенос — серверный `/fs/move` с `targetProjectId` (не read/write/delete-хаком).
 - Перенос сессии между проектами (`session.moved`, в т.ч. `project_create`/`project_attach` агентом) обновляет `project_id` в сторе, список проектов и дерево Files.
@@ -575,6 +579,9 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | ADR-107 | Сервисы фасада плагинов — память, эмбеддинги, свои настройки | ✅ Реализовано | [adr-107](./docs/arch_decisions/adr-107-plugin-facade-services.md) |
 | PROP-109 | Централизация внешних агентных систем (федерация) | 🧩 Предложение | [prop-109](./docs/arch_decisions/prop-109-agent-system-federation.md) |
 | PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110](./docs/arch_decisions/prop-110-portal-platform.md) |
+| ADR-111 | Фоновые прогоны — неблокирующие саб-агенты и реестр | ✅ Реализовано | [adr-111](./docs/arch_decisions/adr-111-background-subagent-sessions.md) |
+| ADR-112 | Вопрос пользователю посреди хода (question) | ✅ Реализовано | [adr-112](./docs/arch_decisions/adr-112-user-questions-mid-turn.md) |
+| ADR-113 | Фоновые процессы — реестр, control plane и исполнитель | ✅ Реализовано | [adr-113](./docs/arch_decisions/adr-113-background-processes.md) |
 <!-- ad-index:end -->
 
 Правило: `docs/arch_decisions/` — единственный дом ADR/PROP; номера и файлы стабильны (ссылок на id по репозиторию — тысячи), файлы не переносятся и не удаляются.
@@ -594,6 +601,8 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | движки / engine | [ADR-018](./docs/arch_decisions/adr-018-session-engine-selection.md), [ADR-022](./docs/arch_decisions/adr-022-typescript-stack-runner.md). ⚠️ Поле `Session.engine` **удалено** из контракта (публичный OpenAPI/SDK, ответы `GET /sessions*`, `:id/messages`, тела POST/PATCH) — намеренное ломающее изменение; выбор и адаптеры движков — [PROP-050](./docs/arch_decisions/prop-050-external-engines-runner.md) |
 | UI / React / PWA | [ADR-019](./docs/arch_decisions/adr-019-react-spa.md), [ADR-044](./docs/arch_decisions/adr-044-mobile-adaptive-ui-pwa.md), [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) |
 | саб-агенты / контекст | [ADR-026](./docs/arch_decisions/adr-026-subagent-context-modes.md), [ADR-033](./docs/arch_decisions/adr-033-session-branching-merge.md) |
+| фоновые прогоны / процессы / саб-агенты в фоне | [ADR-111](./docs/arch_decisions/adr-111-background-subagent-sessions.md), [ADR-113](./docs/arch_decisions/adr-113-background-processes.md) |
+| вопрос пользователю посреди хода | [ADR-112](./docs/arch_decisions/adr-112-user-questions-mid-turn.md) |
 | permissions / plan-act | [ADR-025](./docs/arch_decisions/adr-025-plan-act-toggle.md), [ADR-028](./docs/arch_decisions/adr-028-plan-build-strictness.md), [ADR-029](./docs/arch_decisions/adr-029-granular-permissions.md) |
 | полномочия / роли / среды / «кто что может через агента» | [ADR-106](./docs/arch_decisions/adr-106-authority-layer.md), [docs/AUTHORITY.md](./docs/AUTHORITY.md), [ADR-025](./docs/arch_decisions/adr-025-plan-act-toggle.md), [ADR-029](./docs/arch_decisions/adr-029-granular-permissions.md), [ADR-089](./docs/arch_decisions/adr-089-external-events-automation.md) (права внешних отправителей) |
 | внешние доступы / OAuth-коннекторы / токены внешних сервисов | [ADR-105](./docs/arch_decisions/adr-105-external-credentials.md), [docs/EXTERNAL_ACCESS.md](./docs/EXTERNAL_ACCESS.md) |

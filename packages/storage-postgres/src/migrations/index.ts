@@ -29,6 +29,8 @@ import { MIGRATION_017_MEMORY } from './017-memory.js';
 import { MIGRATION_018_MEMORY_INDEX_SCOPE } from './018-memory-index-scope.js';
 import { MIGRATION_019_MEMORY_INDEX_ENABLED } from './019-memory-index-enabled.js';
 import { MIGRATION_020_PROJECT_MEMORY } from './020-project-memory.js';
+import { MIGRATION_021_BACKGROUND_RUNS } from './021-background-runs.js';
+import { MIGRATION_022_BACKGROUND_RUN_PROCESS_ID } from './022-background-run-process-id.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -62,6 +64,8 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 18, id: '018_memory_index_scope', sql: MIGRATION_018_MEMORY_INDEX_SCOPE },
   { version: 19, id: '019_memory_index_enabled', sql: MIGRATION_019_MEMORY_INDEX_ENABLED },
   { version: 20, id: '020_project_memory', sql: MIGRATION_020_PROJECT_MEMORY },
+  { version: 21, id: '021_background_runs', sql: MIGRATION_021_BACKGROUND_RUNS },
+  { version: 22, id: '022_background_run_process_id', sql: MIGRATION_022_BACKGROUND_RUN_PROCESS_ID },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

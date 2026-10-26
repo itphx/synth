@@ -8,7 +8,7 @@ export type ButtonVariant =
   | 'outline-primary'
   | 'outline-muted'
   | 'danger'
-export type ButtonSize = 'sm' | 'md'
+export type ButtonSize = 'sm' | 'md' | 'icon'
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   // У `primary`/`ghost` бордер прозрачный: без него высота `sm` была бы 28px,
@@ -24,6 +24,11 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
 const SIZE_CLASSES: Record<ButtonSize, string> = {
   sm: 'px-3 py-1.5 text-xs',
   md: 'px-4 py-2 text-sm',
+  // Иконочная кнопка: квадрат 32px без текстовых паддингов (иконка 16px).
+  // На тач-устройствах — 40px (ADR-044): глобальное правило
+  // `html.pointer-coarse .mobile-drawer-panel button…` покрывает только мобильный
+  // дровер, а панель может быть и в десктопной раскладке (планшет в ландшафте).
+  icon: 'size-8 pointer-coarse:size-10',
 }
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {

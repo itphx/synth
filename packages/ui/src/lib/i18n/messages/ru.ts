@@ -621,6 +621,7 @@ export const dict = {
   'rightPanel.tab.references': 'Ссылки',
   'rightPanel.tab.secrets': 'Безопасность',
   'rightPanel.tab.memory': 'Память',
+  'rightPanel.tab.processes': 'Процессы',
   'rightPanel.stats.projectStats': 'Статистика проекта',
   'rightPanel.stats.sessions': 'Сессий',
   'rightPanel.stats.inputTokens': 'Входные',
@@ -954,6 +955,47 @@ export const dict = {
   'rightPanel.scheduler.contextHint.text': 'Для сессий, запускаемых планировщиком, рекомендуется включить оптимизацию контекста — это снижает расход токенов.',
   'rightPanel.scheduler.contextHint.action': 'Открыть «Контекст»',
 
+  // Фоновые процессы и фоновые саб-агенты (PROP-096/097)
+  'processes.title': 'Фоновые процессы',
+  'processes.count': '{count, plural, one {# прогон} few {# прогона} many {# прогонов}}',
+  'processes.runningCount': '{count, plural, one {# выполняется} few {# выполняются} many {# выполняются}}',
+  'processes.empty': 'Фоновых процессов нет',
+  'processes.emptyHint': 'Фоновые шелл-команды и фоновые саб-агенты появятся здесь.',
+  'processes.loadError': 'Не удалось загрузить фоновые прогоны: {error}',
+  'processes.filter.title': 'Фильтр по виду',
+  'processes.filter.all': 'Все',
+  'processes.filter.process': 'Процессы',
+  'processes.filter.subagent': 'Саб-агенты',
+  'processes.filter.onlyCurrent': 'Только текущая сессия',
+  'processes.status.running': 'выполняется',
+  'processes.status.completed': 'завершён',
+  'processes.status.failed': 'ошибка',
+  'processes.status.cancelled': 'остановлен',
+  'processes.status.orphaned': 'потерян',
+  'processes.action.stop': 'Остановить',
+  'processes.action.remove': 'Удалить',
+  'processes.action.openSession': 'Открыть сессию',
+  'processes.action.showLog': 'Показать лог',
+  'processes.action.hideLog': 'Скрыть лог',
+  'processes.action.refreshLog': 'Обновить лог',
+  'processes.log.truncated': 'Лог обрезан (достигнут лимит записи)',
+  'processes.log.empty': 'Лог пуст',
+  'processes.log.error': 'Не удалось прочитать лог: {error}',
+  'processes.stopped': 'Фоновый прогон остановлен',
+  'processes.removed': 'Запись фонового прогона удалена',
+  'processes.failed': 'Не удалось выполнить действие: {error}',
+  'processes.confirm.stopTitle': 'Остановить фоновый прогон',
+  'processes.confirm.stopMessage': 'Остановить «{name}»?',
+  'processes.confirm.removeTitle': 'Удалить фоновый прогон',
+  'processes.confirm.removeMessage': 'Удалить «{name}» из реестра?',
+  'processes.row.cwd': 'Каталог',
+  'processes.row.session': 'Сессия',
+  'processes.row.agent': 'Агент',
+  'processes.row.elapsed': 'Выполняется',
+  'processes.row.finished': 'Завершён',
+  'processes.row.exitCode': 'Код выхода',
+  'processes.row.signal': 'Сигнал',
+
   // Center panel (tabs)
   'center.tab.chat': 'Чат',
   'center.tab.fileViewer': 'Просмотр',
@@ -1093,6 +1135,23 @@ export const dict = {
   'chat.notice.info': 'Инфо',
   'chat.notice.scheduler': 'Планировщик',
   'chat.notice.schedulerNamed': 'Планировщик · {name}',
+  // ADR-111/ADR-113: уведомление о завершении фонового прогона.
+  'chat.notice.backgroundProcess': 'Фоновый процесс · {name}',
+  'chat.notice.backgroundSubagent': 'Фоновый саб-агент · {name}',
+  'chat.notice.backgroundState.completed': 'завершён',
+  'chat.notice.backgroundState.failed': 'ошибка',
+  'chat.notice.backgroundState.cancelled': 'остановлен',
+  // ADR-111/ADR-113: UI-уведомления о старте/финише фоновой работы.
+  'notify.background.started': 'Фоновый процесс запущен: {name}',
+  'notify.background.subagentStarted': 'Фоновый саб-агент запущен: {name}',
+  'notify.background.completed': 'Фоновый процесс завершён: {name}',
+  'notify.background.failed': 'Фоновый процесс завершился с ошибкой: {name}',
+  'notify.background.cancelled': 'Фоновый процесс остановлен: {name}',
+  'notify.background.subagentCompleted': 'Фоновый саб-агент завершён: {name}',
+  'notify.background.subagentFailed': 'Фоновый саб-агент завершился с ошибкой: {name}',
+  'notify.background.subagentCancelled': 'Фоновый саб-агент остановлен: {name}',
+  // ADR-112: уведомление о вопросе пользователю (сессия не открыта).
+  'notify.question.asked': 'Агент ждёт ответа: {name}',
   'chat.notice.copy': 'Копировать',
 
   'chat.message.copied': 'Скопировано',
@@ -1185,6 +1244,36 @@ export const dict = {
   'permission.bar.noTimeout': 'ожидание без таймаута',
   'permission.bar.timeoutTitle': 'Время до авто-отклонения запроса',
   'permission.bar.grantedForSession': 'Инструмент {tool} разрешён для сессии',
+
+  // Вопросы пользователю (этап 1 roadmap 0.13 — блок 1.3): док над вводом.
+  'question.dock.title': 'Агент задал вопрос',
+  'question.dock.custom': 'Свой ответ',
+  'question.dock.submit': 'Ответить',
+  'question.dock.cancel': 'Отменить',
+  'question.dock.next': 'Далее',
+  'question.dock.prev': 'Назад',
+  'question.dock.progress': '{current} из {total}',
+  'question.dock.required': 'Ответьте на каждый вопрос',
+  'question.dock.failed': 'Не удалось отправить ответ',
+  'question.dock.cancelled': 'Вопрос отменён',
+  'question.dock.multipleHint': 'Можно выбрать несколько вариантов',
+  // Сворачивание дока и навигация по вопросам (точки вместо «1 из N»).
+  'question.dock.collapse': 'Свернуть',
+  'question.dock.expand': 'Развернуть',
+  'question.dock.collapsedTitle': 'Вопрос {current} из {total}',
+  'question.dock.collapsedSummary': 'отвечено {answered}/{total}',
+  'question.dock.dots.aria': 'Вопрос {n}',
+  // Итоговая проверка ответов перед отправкой.
+  'question.dock.review.open': 'Проверить',
+  'question.dock.review.title': 'Проверка ответов',
+  'question.dock.review.collapsed': 'Проверка ответов · {answered}/{total}',
+  'question.dock.review.edit': 'Изменить',
+  'question.dock.review.submit': 'Отправить',
+  'question.dock.review.back': 'Назад',
+  'question.dock.review.unanswered': 'Без ответа',
+  // Обратный отсчёт до истечения вопроса (в шапке дока).
+  'question.dock.timeLeft': 'Осталось {time}',
+  'question.dock.timeLeftAria': 'До истечения вопроса: {time}',
 
   'chat.error.rateLimit': 'Превышен лимит запросов. Пауза {sec}с...',
   'chat.error.retryCount': 'Попытка {current}/{max}',
@@ -2447,6 +2536,8 @@ export const dict = {
   'task.subagent_not_found': 'Сабагент «{type}» не найден. Доступные типы: {types}',
   'task.subagent_not_allowed': 'Агент «{type}» не может использоваться как сабагент (режимы: {modes})',
   'task.deps_unavailable': 'Ошибка: провайдер или реестр агентов недоступны для запуска сабагента',
+  'task.model_unavailable':
+    'Ошибка: модель «{provider}/{model}», запрошенная для сабагента, недоступна — провайдер не настроен или модель неизвестна',
   'task.subagent_exec_error_after_retries': 'Ошибка выполнения сабагента «{type}» после {attempts} попыток: {error}',
 
   // --- Возобновление дочерней сессии саб-агента (resume) ---
@@ -2460,6 +2551,22 @@ export const dict = {
   'task.resume_locked': 'Сессия {id} занята или уже возобновляется',
   'task.resume_agent_not_found': 'Агент «{type}» не найден или не может использоваться как сабагент',
   'task.resume_provider_unavailable': 'Провайдер не настроен для сессии {id} — возобновление невозможно',
+
+  // --- Фоновые саб-агенты и лимит шагов (этап 1 roadmap 0.13, блок 4) ---
+  'task.steps_limit':
+    '[steps_limit] Сабагент остановлен по лимиту шагов ({limit}).',
+  'task.steps_limit_empty':
+    'Сабагент исчерпал лимит шагов ({limit}) и не дал текстового ответа; продолжай по его истории или увеличь лимит',
+  'task.background_started':
+    'Сабагент работает в фоне (sessionID: {id}). Уведомление придёт автоматически; не опрашивай статус.',
+  'task.background_limit':
+    'Лимит фоновых сабагентов для этой сессии ({limit}) исчерпан — сначала заверши или отмени текущие фоновые запуски',
+  'task.background_disabled':
+    'Фоновые сабагенты отключены на инстансе (background.enabled = false) — запусти сабагента в обычном режиме',
+  'task.resume_foreign_child':
+    'Сессия {id} не является дочерней для текущей сессии — продолжить её отсюда нельзя',
+  'task.resume_child_busy':
+    'Сессия {id} занята или уже выполняется — продолжить её сейчас нельзя',
 
   // --- Тулы: общие ошибки и результаты ---
   'tool.args_error': 'Ошибка аргументов инструмента «{tool}»: {issues}',
@@ -2839,6 +2946,25 @@ export const dict = {
   // --- Исполнение (ADR-077) ---
   'execution.remote_url_required': 'Удалённый режим исполнения (execution.mode=remote) требует хотя бы один адрес исполнителя (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
   'execution.remote_unavailable': 'Удалённый режим исполнения (execution.mode=remote) недоступен: {reason}',
+
+  // --- Вопрос пользователю и фоновые процессы (этап 1 roadmap 0.13) ---
+  'question.answered': 'Пользователь ответил на вопросы: {answers}. Продолжай с учётом ответов.',
+  'question.cancelled': 'Пользователь отменил вопрос: {reason}',
+  'question.timeout': 'Вопрос истёк по таймауту',
+  'question.deps_unavailable': 'Механизм вопросов недоступен в этой сборке',
+  'process.background_started': 'Команда запущена в фоне (processId: {id}). Вывод: {log}',
+  'process.deps_unavailable': 'Фоновые процессы недоступны в этой сборке',
+  'process.background_limit':
+    'Достигнут лимит фоновых процессов для этой сессии ({limit}). Дождитесь завершения процесса или остановите его.',
+  'process.background_unsupported': 'Фоновое исполнение недоступно в текущем режиме исполнения',
+  'process.background_disabled': 'Фоновые процессы выключены (background.enabled: false)',
+  'process.tool.empty': 'Нет фоновых прогонов',
+  'process.tool.not_found': 'Фоновый прогон «{id}» не найден',
+  'process.tool.deps_unavailable': 'Реестр фоновых прогонов недоступен в этой сборке',
+  'process.tool.header': 'Фоновые прогоны ({count}):',
+  'process.tool.no_log': 'У этого фонового прогона нет лога',
+  'process.tool.child_history':
+    'История дочерней сессии {child_session} доступна через тул read_session_reference',
 
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',

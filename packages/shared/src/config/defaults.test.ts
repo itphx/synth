@@ -23,6 +23,22 @@ describe('defaultConfig', () => {
     expect(defaultConfig).toHaveProperty('scheduler');
     expect(defaultConfig).toHaveProperty('decision');
     expect(defaultConfig).toHaveProperty('metrics');
+    expect(defaultConfig).toHaveProperty('questions');
+  });
+
+  it('questions по умолчанию: без таймаута ответа, retention 14 дней (этап 1 roadmap 0.13)', () => {
+    expect(defaultConfig.questions).toEqual({ timeoutMs: 0, retentionDays: 14 });
+  });
+
+  it('background по умолчанию: 2 саб-агента, 5 процессов, лог 10 МиБ (PROP-096/PROP-097)', () => {
+    expect(defaultConfig.background).toEqual({
+      enabled: true,
+      maxSubagentsPerSession: 2,
+      maxProcessesPerSession: 5,
+      maxRunsPerSession: 10,
+      logMaxBytes: 10_485_760,
+      retentionDays: 7,
+    });
   });
 
   it('llm.defaultProvider и llm.defaultModel — пустые строки (зона админа)', () => {

@@ -43,6 +43,8 @@ export const SYSTEM_MESSAGES = {
   'task.subagent_not_found': 'Subagent "{type}" not found. Available types: {types}',
   'task.subagent_not_allowed': 'Agent "{type}" cannot be used as a subagent (modes: {modes})',
   'task.deps_unavailable': 'Error: provider or agent registry unavailable for subagent launch',
+  'task.model_unavailable':
+    'Error: the model "{provider}/{model}" requested for the subagent is unavailable — the provider is not configured or the model is unknown',
   'task.subagent_exec_error_after_retries': 'Subagent execution error "{type}" after {attempts} attempt(s): {error}',
 
   // --- Возобновление дочерней сессии саб-агента (resume) ---
@@ -56,6 +58,24 @@ export const SYSTEM_MESSAGES = {
   'task.resume_locked': 'Session {id} is busy or already being resumed',
   'task.resume_agent_not_found': 'Agent "{type}" not found or cannot be used as a subagent',
   'task.resume_provider_unavailable': 'Provider is not configured for session {id} — cannot resume',
+
+  // --- Фоновые саб-агенты и лимит шагов (этап 1 roadmap 0.13, блок 4) ---
+  // `[steps_limit]` — короткая страховка после отчёта саб-агента: причина
+  // (лимит шагов) и сам лимит. Подробности — в отчёте модели выше.
+  'task.steps_limit':
+    '[steps_limit] The subagent was stopped by the step limit ({limit}).',
+  'task.steps_limit_empty':
+    'The subagent exhausted the step limit ({limit}) and gave no textual answer; continue from its history or raise the limit',
+  'task.background_started':
+    'The subagent is running in the background (sessionID: {id}). You will be notified automatically; do not poll its status.',
+  'task.background_limit':
+    'The background subagent limit for this session ({limit}) is reached — finish or cancel the running background subagents first',
+  'task.background_disabled':
+    'Background subagents are disabled on this instance (background.enabled = false) — run the subagent in the foreground',
+  'task.resume_foreign_child':
+    'Session {id} is not a subagent session of the current session — it cannot be continued from here',
+  'task.resume_child_busy':
+    'Session {id} is busy or already running — it cannot be continued right now',
 
   // --- Тулы: общие ошибки и результаты ---
   'tool.args_error': 'Tool "{tool}" argument error: {issues}',
@@ -449,6 +469,27 @@ export const SYSTEM_MESSAGES = {
     'Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
   'execution.remote_unavailable':
     'Remote execution mode (execution.mode=remote) is unavailable: {reason}',
+
+  // --- Вопрос пользователю и фоновые процессы (этап 1 roadmap 0.13) ---
+  'question.answered': 'The user answered the questions: {answers}. Continue with the answers.',
+  'question.cancelled': 'The user cancelled the question: {reason}',
+  'question.timeout': 'The question expired by timeout',
+  'question.deps_unavailable': 'The question mechanism is unavailable in this build',
+  'process.background_started':
+    'Command started in the background (processId: {id}). Output: {log}',
+  'process.deps_unavailable': 'Background processes are unavailable in this build',
+  'process.background_limit':
+    'The limit of background processes for this session has been reached ({limit}). Wait for a running process to finish or stop it.',
+  'process.background_unsupported':
+    'Background execution is unavailable in the current execution mode',
+  'process.background_disabled': 'Background processes are disabled (background.enabled: false)',
+  'process.tool.empty': 'No background runs',
+  'process.tool.not_found': 'Background run "{id}" not found',
+  'process.tool.deps_unavailable': 'The background run registry is unavailable in this build',
+  'process.tool.header': 'Background runs ({count}):',
+  'process.tool.no_log': 'There is no log for this background run',
+  'process.tool.child_history':
+    'The history of the child session {child_session} is available via the read_session_reference tool',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

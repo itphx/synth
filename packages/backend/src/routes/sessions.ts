@@ -35,6 +35,8 @@ import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
 import type { ProjectRepository } from '@itphx/synth-core';
 import type { MemoryFactRepository, MemoryIndexRepository } from '@itphx/synth-core';
+// Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
+import type { QuestionService } from '@itphx/synth-core';
 import { createProjectAccess } from './projects.js';
 
 /**
@@ -82,6 +84,12 @@ export function createSessionRoutes(
     indexes: MemoryIndexRepository;
     isPluginActive: () => boolean;
   },
+  /**
+   * Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
+   *
+   * Не задан — маршруты вопросов отвечают 503 (подсистема не подключена).
+   */
+  questionService?: QuestionService,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -675,7 +683,7 @@ export function createSessionRoutes(
   // последней: статические/backend-only сегменты должны матчиться раньше.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}) },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}) },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,

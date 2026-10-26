@@ -17,7 +17,9 @@
     "runtime",
     "memory",
     "pipeline",
-    "schedule"
+    "schedule",
+    "question",
+    "process"
   ],
   "icon": "chart-line",
   "color": "--syntax-function",

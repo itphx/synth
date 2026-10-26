@@ -12,6 +12,15 @@ export interface BlobStore {
   read(path: string): Promise<Buffer | null>;
   /** Запись содержимого (атомарно), создание подкаталогов. */
   write(path: string, data: Buffer | string, opts?: { mode?: number }): Promise<void>;
+  /**
+   * Дописывание в конец файла; создаёт подкаталоги (файла нет — создаётся).
+   *
+   * Назначение — журналы (логи фоновых процессов, PROP-097): данные
+   * дописываются по мере поступления. Контракт атомарности **не** требуется
+   * (это append-only журнал, а не запись конфигурации) — зато не требуется и
+   * переписывание файла целиком при каждом чтении.
+   */
+  append(path: string, data: Buffer | string): Promise<void>;
   /** Удаление; отсутствие файла ошибкой не считается. */
   delete(path: string): Promise<void>;
   exists(path: string): Promise<boolean>;

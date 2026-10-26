@@ -21,7 +21,9 @@
     "runtime",
     "memory",
     "pipeline",
-    "schedule"
+    "schedule",
+    "question",
+    "process"
   ],
   "icon": "server",
   "color": "--syntax-type",

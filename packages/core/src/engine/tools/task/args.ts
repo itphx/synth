@@ -10,6 +10,8 @@ export const taskParametersSchema = z.object({
   prompt: z.string().describe('The task for the subagent to perform'),
   subagent_type: z.string().describe('Type of subagent: "general" or "explore"'),
   task_id: z.string().optional().describe('ID for resuming an existing subagent session'),
+  background: z.boolean().optional()
+    .describe('Run the subagent in the background and return control immediately; you will be notified automatically — do not poll its status'),
   context_mode: z.enum(['none', 'inherit', 'summary', 'last_n']).optional()
     .describe('Context passing mode: none — only prompt, inherit — full parent history, summary — compressed via LLM, last_n — last N messages (default: none)'),
   context_count: z.number().int().min(1).max(50).optional()

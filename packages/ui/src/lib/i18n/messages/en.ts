@@ -641,6 +641,7 @@ export const dict = {
   'rightPanel.tab.references': 'References',
   'rightPanel.tab.secrets': 'Security',
   'rightPanel.tab.memory': 'Memory',
+  'rightPanel.tab.processes': 'Processes',
   'rightPanel.stats.projectStats': 'Project stats',
   'rightPanel.stats.sessions': 'Sessions',
   'rightPanel.stats.inputTokens': 'Input',
@@ -974,6 +975,47 @@ export const dict = {
   'rightPanel.scheduler.contextHint.text': 'For sessions triggered by the scheduler, enabling context optimization is recommended — it reduces token usage.',
   'rightPanel.scheduler.contextHint.action': 'Open "Context"',
 
+  // Background processes and background sub-agents (PROP-096/097)
+  'processes.title': 'Background processes',
+  'processes.count': '{count, plural, one {# run} other {# runs}}',
+  'processes.runningCount': '{count, plural, one {# running} other {# running}}',
+  'processes.empty': 'No background processes',
+  'processes.emptyHint': 'Background shell commands and background sub-agents appear here.',
+  'processes.loadError': 'Failed to load background runs: {error}',
+  'processes.filter.title': 'Filter by kind',
+  'processes.filter.all': 'All',
+  'processes.filter.process': 'Processes',
+  'processes.filter.subagent': 'Sub-agents',
+  'processes.filter.onlyCurrent': 'Current session only',
+  'processes.status.running': 'running',
+  'processes.status.completed': 'completed',
+  'processes.status.failed': 'failed',
+  'processes.status.cancelled': 'cancelled',
+  'processes.status.orphaned': 'orphaned',
+  'processes.action.stop': 'Stop',
+  'processes.action.remove': 'Remove',
+  'processes.action.openSession': 'Open session',
+  'processes.action.showLog': 'Show log',
+  'processes.action.hideLog': 'Hide log',
+  'processes.action.refreshLog': 'Refresh log',
+  'processes.log.truncated': 'The log was truncated (write limit reached)',
+  'processes.log.empty': 'The log is empty',
+  'processes.log.error': 'Failed to read the log: {error}',
+  'processes.stopped': 'Background run stopped',
+  'processes.removed': 'Background run removed',
+  'processes.failed': 'Action failed: {error}',
+  'processes.confirm.stopTitle': 'Stop background run',
+  'processes.confirm.stopMessage': 'Stop "{name}"?',
+  'processes.confirm.removeTitle': 'Remove background run',
+  'processes.confirm.removeMessage': 'Remove "{name}" from the registry?',
+  'processes.row.cwd': 'Directory',
+  'processes.row.session': 'Session',
+  'processes.row.agent': 'Agent',
+  'processes.row.elapsed': 'Running for',
+  'processes.row.finished': 'Finished',
+  'processes.row.exitCode': 'Exit code',
+  'processes.row.signal': 'Signal',
+
   // Center panel (tabs)
   'center.tab.chat': 'Chat',
   'center.tab.fileViewer': 'Viewer',
@@ -1113,6 +1155,23 @@ export const dict = {
   'chat.notice.info': 'Info',
   'chat.notice.scheduler': 'Scheduler',
   'chat.notice.schedulerNamed': 'Scheduler · {name}',
+  // ADR-111/ADR-113: уведомление о завершении фонового прогона.
+  'chat.notice.backgroundProcess': 'Background process · {name}',
+  'chat.notice.backgroundSubagent': 'Background subagent · {name}',
+  'chat.notice.backgroundState.completed': 'completed',
+  'chat.notice.backgroundState.failed': 'failed',
+  'chat.notice.backgroundState.cancelled': 'stopped',
+  // ADR-111/ADR-113: UI-уведомления о старте/финише фоновой работы.
+  'notify.background.started': 'Background process started: {name}',
+  'notify.background.subagentStarted': 'Background subagent started: {name}',
+  'notify.background.completed': 'Background process completed: {name}',
+  'notify.background.failed': 'Background process failed: {name}',
+  'notify.background.cancelled': 'Background process stopped: {name}',
+  'notify.background.subagentCompleted': 'Background subagent completed: {name}',
+  'notify.background.subagentFailed': 'Background subagent failed: {name}',
+  'notify.background.subagentCancelled': 'Background subagent stopped: {name}',
+  // ADR-112: notification about a user question (the session is not open).
+  'notify.question.asked': 'Agent is waiting for an answer: {name}',
   'chat.notice.copy': 'Copy',
 
   'chat.message.copied': 'Copied',
@@ -1207,6 +1266,36 @@ export const dict = {
   'permission.bar.noTimeout': 'waiting without timeout',
   'permission.bar.timeoutTitle': 'Time until request auto-denied',
   'permission.bar.grantedForSession': 'Tool {tool} allowed for the session',
+
+  // User questions (stage 1 roadmap 0.13 — block 1.3): dock above the composer.
+  'question.dock.title': 'The agent asked a question',
+  'question.dock.custom': 'Your own answer',
+  'question.dock.submit': 'Answer',
+  'question.dock.cancel': 'Cancel',
+  'question.dock.next': 'Next',
+  'question.dock.prev': 'Back',
+  'question.dock.progress': '{current} of {total}',
+  'question.dock.required': 'Answer every question',
+  'question.dock.failed': 'Failed to send the answer',
+  'question.dock.cancelled': 'Question cancelled',
+  'question.dock.multipleHint': 'You can select multiple options',
+  // Dock collapsing and question navigation (dots instead of "1 of N").
+  'question.dock.collapse': 'Collapse',
+  'question.dock.expand': 'Expand',
+  'question.dock.collapsedTitle': 'Question {current} of {total}',
+  'question.dock.collapsedSummary': 'answered {answered}/{total}',
+  'question.dock.dots.aria': 'Question {n}',
+  // Final review of the answers before sending.
+  'question.dock.review.open': 'Review',
+  'question.dock.review.title': 'Review answers',
+  'question.dock.review.collapsed': 'Review answers · {answered}/{total}',
+  'question.dock.review.edit': 'Edit',
+  'question.dock.review.submit': 'Send',
+  'question.dock.review.back': 'Back',
+  'question.dock.review.unanswered': 'No answer',
+  // Countdown to the question expiry (dock header).
+  'question.dock.timeLeft': 'Time left {time}',
+  'question.dock.timeLeftAria': 'Question expires in {time}',
 
   'chat.error.rateLimit': 'Rate limit exceeded. Pause {sec}s...',
   'chat.error.retryCount': 'Attempt {current}/{max}',
@@ -2449,6 +2538,43 @@ export const dict = {
     'Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
   'execution.remote_unavailable':
     'Remote execution mode (execution.mode=remote) is unavailable: {reason}',
+
+  // --- Question to the user and background processes (stage 1 roadmap 0.13) ---
+  'question.answered': 'The user answered the questions: {answers}. Continue with the answers.',
+  'question.cancelled': 'The user cancelled the question: {reason}',
+  'question.timeout': 'The question expired by timeout',
+  'question.deps_unavailable': 'The question mechanism is unavailable in this build',
+  'process.background_started': 'Command started in the background (processId: {id}). Output: {log}',
+  'process.deps_unavailable': 'Background processes are unavailable in this build',
+  'process.background_limit':
+    'The limit of background processes for this session has been reached ({limit}). Wait for a running process to finish or stop it.',
+  'process.background_unsupported': 'Background execution is unavailable in the current execution mode',
+  'process.background_disabled': 'Background processes are disabled (background.enabled: false)',
+  'process.tool.empty': 'No background runs',
+  'process.tool.not_found': 'Background run "{id}" not found',
+  'process.tool.deps_unavailable': 'The background run registry is unavailable in this build',
+  'process.tool.header': 'Background runs ({count}):',
+  'process.tool.no_log': 'There is no log for this background run',
+  'process.tool.child_history':
+    'The history of the child session {child_session} is available via the read_session_reference tool',
+
+  // --- Фоновые саб-агенты и лимит шагов (этап 1 roadmap 0.13, блок 4) ---
+  'task.steps_limit':
+    '[steps_limit] The subagent was stopped by the step limit ({limit}).',
+  'task.steps_limit_empty':
+    'The subagent exhausted the step limit ({limit}) and gave no textual answer; continue from its history or raise the limit',
+  'task.background_started':
+    'The subagent is running in the background (sessionID: {id}). You will be notified automatically; do not poll its status.',
+  'task.background_limit':
+    'The background subagent limit for this session ({limit}) is reached — finish or cancel the running background subagents first',
+  'task.background_disabled':
+    'Background subagents are disabled on this instance (background.enabled = false) — run the subagent in the foreground',
+  'task.resume_foreign_child':
+    'Session {id} is not a subagent session of the current session — it cannot be continued from here',
+  'task.resume_child_busy':
+    'Session {id} is busy or already running — it cannot be continued right now',
+  'task.model_unavailable':
+    'Error: the model "{provider}/{model}" requested for the subagent is unavailable — the provider is not configured or the model is unknown',
 
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH keys',
