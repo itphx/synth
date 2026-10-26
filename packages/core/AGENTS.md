@@ -1259,7 +1259,9 @@
   (вход/выход вопроса, коды ошибок `QuestionError`/`QuestionNotFoundError`/…), `prune.ts`
   (`startQuestionPruner` — retention
   терминальных записей, сразу + каждые 6 ч). Публикует `user_question.asked`/
-  `user_question.answered`/`user_question.cancelled` в канале сессии. Тул — `engine/tools/
+  `user_question.answered`/`user_question.cancelled` в канале сессии; в `user_question.asked`
+  payload несёт `created_at` и `expires_at` (ISO-8601; `expires_at` — только при заданном
+  таймауте) — по нему UI рисует обратный отсчёт. Тул — `engine/tools/
   question.ts` (переводит ответы модели в записи вопросов). Порт — `QuestionRepository`
   (`storage/ports/question-repository.ts`; файловый — `{dataDir}/questions.json`, в-памяти —
   `storage/memory/questions.ts`, PG — миграция `021_background_runs`; контракт —

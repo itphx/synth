@@ -1293,6 +1293,9 @@ export const dict = {
   'question.dock.review.submit': 'Send',
   'question.dock.review.back': 'Back',
   'question.dock.review.unanswered': 'No answer',
+  // Countdown to the question expiry (dock header).
+  'question.dock.timeLeft': 'Time left {time}',
+  'question.dock.timeLeftAria': 'Question expires in {time}',
 
   'chat.error.rateLimit': 'Rate limit exceeded. Pause {sec}s...',
   'chat.error.retryCount': 'Attempt {current}/{max}',

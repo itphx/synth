@@ -5,6 +5,7 @@ import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi } from '@/lib/api/synthApi'
 import { useQuestionStore, pendingFor } from '@/stores/questionStore'
+import { formatRemaining } from '@/lib/formatDuration'
 import { cn } from '@/lib/utils'
 
 interface QuestionDockProps {
@@ -67,8 +68,12 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
   const [collapsed, setCollapsed] = useState(false)
   /** Текущий шаг дока: ответы или итоговая проверка. */
   const [phase, setPhase] = useState<DockPhase>('answer')
+  /** Текущее время — основа обратного отсчёта до истечения вопроса. */
+  const [now, setNow] = useState(() => Date.now())
 
   const recordId = record?.id
+  /** Срок ожидания ответа (ISO-8601) — без таймаута поля нет. */
+  const expiresAt = record?.expiresAt
 
   // Восстановление после перезагрузки: pending-вопросы сессии с сервера.
   // Ошибка загрузки — тихая (событие/следующая попытка покажут вопрос).
@@ -103,6 +108,17 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
     setCollapsed(false)
     setPhase('answer')
   }, [recordId])
+
+  // Обратный отсчёт до истечения вопроса: тик раз в секунду. Без срока
+  // ожидания (таймаут не задан) таймера нет. Отвеченный/отменённый вопрос
+  // уходит из `pending` — вместе с записью исчезает и таймер; по истечении
+  // срока сервер сам снимает вопрос (причина `timeout`).
+  useEffect(() => {
+    if (!expiresAt) return
+    setNow(Date.now())
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [recordId, expiresAt])
 
   const questions: QuestionItem[] = record?.questions ?? []
   const total = questions.length
@@ -267,6 +283,15 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
         ? t('question.dock.collapsedTitle', { current: step + 1, total })
         : t('question.dock.title')
 
+  /**
+   * Остаток до истечения вопроса («01:30») — `null`, если срок не задан.
+   * Истёкший отсчёт не уходит в минус: показываем «00:00» (вопрос снимет
+   * сервер, запись уйдёт из `pending` по событию).
+   */
+  const remainingLabel = expiresAt
+    ? formatRemaining(new Date(expiresAt).getTime() - now)
+    : null
+
   const primaryButtonClass =
     'flex items-center gap-1.5 rounded px-2.5 py-1 text-[0.6875rem] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors disabled:opacity-40 disabled:hover:bg-primary/15'
 
@@ -278,6 +303,17 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
       <div className="flex items-center gap-2 px-3 py-1.5">
         <Icon name="question" className="size-3.5 text-primary shrink-0" />
         <span className="min-w-0 flex-1 truncate text-xs text-foreground/90">{headerLabel}</span>
+        {remainingLabel !== null && (
+          <span
+            data-question-timer="true"
+            className="flex shrink-0 items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[0.625rem] tabular-nums text-primary"
+            aria-label={t('question.dock.timeLeftAria', { time: remainingLabel })}
+            title={t('question.dock.timeLeft', { time: remainingLabel })}
+          >
+            <Icon name="time" className="size-3 shrink-0" />
+            {remainingLabel}
+          </span>
+        )}
         {phase === 'answer' && total > 1 && (
           <div
             role="group"

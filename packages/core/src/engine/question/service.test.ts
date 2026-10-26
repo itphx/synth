@@ -67,6 +67,29 @@ describe('QuestionService — постановка вопроса и ожида�
     expect(outcome.status).toBe('answered');
   });
 
+  it('user_question.asked несёт created_at и expires_at (при таймауте)', async () => {
+    const { eventBus, service } = createService({ timeoutMs: 60_000 });
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe('s1', (e) => events.push({ type: e.type, data: e.data }));
+
+    const pending = service.ask({ sessionId: 's1', questions: QUESTIONS });
+    await Promise.resolve();
+
+    const asked = events.find((e) => e.type === 'user_question.asked');
+    expect(asked).toBeDefined();
+    // Момент постановки — всегда.
+    expect(asked!.data.created_at).toBeTruthy();
+    // Срок ожидания — при таймауте.
+    expect(asked!.data.expires_at).toBeTruthy();
+    expect(new Date(String(asked!.data.expires_at)).getTime()).toBeGreaterThan(
+      new Date(String(asked!.data.created_at)).getTime(),
+    );
+
+    const records = await service.listPending('s1');
+    await service.cancel(records[0]!.id, 'test');
+    await pending;
+  });
+
   it('ответ сохраняется, публикуется user_question.answered и разблокирует ожидание', async () => {
     const { repository, eventBus, service } = createService();
     const events: string[] = [];
@@ -350,6 +373,24 @@ describe('QuestionService — таймаут и отмена хода', () => {
     const record = (await repository.list())[0]!;
     expect(record.status).toBe('pending');
     expect(record.expiresAt).toBeUndefined();
+
+    const records = await service.listPending('s1');
+    await service.cancel(records[0]!.id, 'test');
+    await pending;
+  });
+
+  it('timeoutMs=0 — в user_question.asked нет expires_at, но есть created_at', async () => {
+    const { eventBus, service } = createService({ timeoutMs: 0 });
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe('s1', (e) => events.push({ type: e.type, data: e.data }));
+
+    const pending = service.ask({ sessionId: 's1', questions: QUESTIONS });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const asked = events.find((e) => e.type === 'user_question.asked');
+    expect(asked).toBeDefined();
+    expect(asked!.data.created_at).toBeTruthy();
+    expect(asked!.data.expires_at).toBeUndefined();
 
     const records = await service.listPending('s1');
     await service.cancel(records[0]!.id, 'test');

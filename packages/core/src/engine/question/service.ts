@@ -351,6 +351,10 @@ export class QuestionService {
       question_id: record.id,
       session_id: record.sessionId,
       questions: record.questions,
+      // Момент постановки и срок ожидания (ISO-8601) — UI рисует обратный
+      // отсчёт по `expires_at`; без таймаута поля нет.
+      created_at: record.createdAt,
+      ...(record.expiresAt ? { expires_at: record.expiresAt } : {}),
       ...(record.turnId ? { turn_id: record.turnId } : {}),
       ...(record.toolCallId ? { tool_call_id: record.toolCallId } : {}),
       ...(record.agentRole ? { agent_role: record.agentRole } : {}),

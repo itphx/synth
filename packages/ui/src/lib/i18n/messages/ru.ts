@@ -1271,6 +1271,9 @@ export const dict = {
   'question.dock.review.submit': 'Отправить',
   'question.dock.review.back': 'Назад',
   'question.dock.review.unanswered': 'Без ответа',
+  // Обратный отсчёт до истечения вопроса (в шапке дока).
+  'question.dock.timeLeft': 'Осталось {time}',
+  'question.dock.timeLeftAria': 'До истечения вопроса: {time}',
 
   'chat.error.rateLimit': 'Превышен лимит запросов. Пауза {sec}с...',
   'chat.error.retryCount': 'Попытка {current}/{max}',

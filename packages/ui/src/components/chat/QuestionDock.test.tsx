@@ -102,6 +102,8 @@ afterEach(async () => {
   }
   useQuestionStore.setState({ bySession: {} })
   vi.clearAllMocks()
+  // Тесты с fake-возвратами восстанавливают реальные часы.
+  vi.useRealTimers()
 })
 
 describe('QuestionDock (док вопросов агента над вводом)', () => {
@@ -628,5 +630,87 @@ describe('QuestionDock (док вопросов агента над вводом
     })
 
     expect(mocks.cancel).not.toHaveBeenCalled()
+  })
+})
+
+describe('QuestionDock — обратный отсчёт до истечения вопроса', () => {
+  /** Опорное время теста (fake-таймеры). */
+  const BASE = new Date('2026-01-01T00:00:00.000Z').getTime()
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(BASE)
+  })
+
+  /** Текст таймера в шапке дока (null — таймера нет). */
+  function timerText(container: HTMLElement): string | null {
+    return container.querySelector('[data-question-timer]')?.textContent?.trim() ?? null
+  }
+
+  /** Запись вопроса со сроком ожидания через `offsetMs` от опорного времени. */
+  function recordWithExpiry(offsetMs: number): QuestionRecord {
+    return makeRecord({ expiresAt: new Date(BASE + offsetMs).toISOString() })
+  }
+
+  it('с expiresAt показывает остаток и тикает раз в секунду', async () => {
+    setupQuestions([recordWithExpiry(90_000)])
+    const container = await renderDock()
+
+    expect(timerText(container)).toBe('01:30')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    expect(timerText(container)).toBe('01:28')
+  })
+
+  it('без expiresAt таймера нет', async () => {
+    setupQuestions()
+    const container = await renderDock()
+
+    expect(container.querySelector('[data-question-timer]')).toBeNull()
+  })
+
+  it('после истечения показывает 00:00 (не уходит в минус)', async () => {
+    setupQuestions([recordWithExpiry(90_000)])
+    const container = await renderDock()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(91_000)
+    })
+    expect(timerText(container)).toBe('00:00')
+  })
+
+  it('таймер виден и в свёрнутом виде', async () => {
+    setupQuestions([recordWithExpiry(90_000)])
+    const container = await renderDock()
+
+    const toggle = container.querySelector('[data-question-collapse]') as HTMLButtonElement
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(container.querySelector('[data-question-collapsed]')).not.toBeNull()
+    expect(timerText(container)).toBe('01:30')
+  })
+
+  it('у таймера есть подпись и aria-подпись', async () => {
+    setupQuestions([recordWithExpiry(90_000)])
+    const container = await renderDock()
+
+    const timer = container.querySelector('[data-question-timer]') as HTMLElement
+    expect(timer.getAttribute('title')).toBe('Осталось 01:30')
+    expect(timer.getAttribute('aria-label')).toBe('До истечения вопроса: 01:30')
+  })
+
+  it('отвеченный вопрос (ушёл из pending) — таймера нет', async () => {
+    setupQuestions([recordWithExpiry(90_000)])
+    const container = await renderDock()
+    expect(timerText(container)).toBe('01:30')
+
+    await act(async () => {
+      useQuestionStore.getState().remove(SESSION_ID, 'qst_1')
+    })
+    expect(container.querySelector('[data-question-timer]')).toBeNull()
   })
 })

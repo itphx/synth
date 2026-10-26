@@ -112,6 +112,29 @@ describe('transportStore dispatcher: user_question.* (вопросы польз�
     expect(records[0]!.createdAt).toBe('2026-01-01T00:00:00.000Z')
   })
 
+  it('user_question.asked — expires_at из payload доезжает до записи в сторе', () => {
+    dispatch(makeEvent('user_question.asked', 's1', {
+      question_id: 'qst_exp',
+      session_id: 's1',
+      questions: QUESTIONS,
+      expires_at: '2026-01-01T00:01:30.000Z',
+    }))
+
+    const records = useQuestionStore.getState().bySession['s1']!
+    expect(records[0]!.expiresAt).toBe('2026-01-01T00:01:30.000Z')
+  })
+
+  it('user_question.asked без expires_at — у записи нет срока (таймер не рисуем)', () => {
+    dispatch(makeEvent('user_question.asked', 's1', {
+      question_id: 'qst_no_exp',
+      session_id: 's1',
+      questions: QUESTIONS,
+    }))
+
+    const records = useQuestionStore.getState().bySession['s1']!
+    expect(records[0]!.expiresAt).toBeUndefined()
+  })
+
   it('user_question.asked без question_id — запись не создаётся', () => {
     dispatch(makeEvent('user_question.asked', 's1', { session_id: 's1', questions: QUESTIONS }))
 

@@ -637,6 +637,9 @@ export function createDispatcher(): EventDispatcher {
               questions: (payload.questions as QuestionItem[]) ?? [],
               createdAt: now,
               updatedAt: now,
+              // Срок ожидания из события (ISO-8601) — по нему UI рисует
+              // обратный отсчёт; без таймаута поля нет.
+              ...(payload.expires_at ? { expiresAt: String(payload.expires_at) } : {}),
               ...(payload.turn_id ? { turnId: String(payload.turn_id) } : {}),
               ...(payload.tool_call_id ? { toolCallId: String(payload.tool_call_id) } : {}),
               ...(payload.agent_role ? { agentRole: String(payload.agent_role) } : {}),
