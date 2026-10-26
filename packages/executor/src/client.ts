@@ -240,6 +240,8 @@ function normalizeUrl(url: string): string {
  * состояния) — состояние счётчиков относится к одному порту.
  */
 export class RemoteExecutionPort implements ExecutionPort {
+  /** Исполнение — на удалённом исполнителе (ADR-077). */
+  readonly isRemote = true;
   private readonly _urls: string[];
   private readonly _token: string;
   private readonly _timeoutMs: number;

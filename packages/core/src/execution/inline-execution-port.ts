@@ -150,6 +150,9 @@ function createBackgroundOutput(child: ChildProcess): AsyncIterable<ExecBackgrou
  * синглтонов не появляется (инвариант 24).
  */
 export class InlineExecutionPort implements ExecutionPort {
+  /** Исполнение — в процессе control plane (ADR-077). */
+  readonly isRemote = false;
+
   /**
    * ADR-077/ADR-078: наличие программы в окружении исполнения.
    *

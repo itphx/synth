@@ -795,9 +795,14 @@ export class ChatOrchestrator {
     });
     this._defaultWorkingDir = options.defaultWorkingDir ?? join(options.dataDir || '/var/synth/data', 'workspaces', 'default');
     this._workspacesRoot = options.workspacesRoot ?? join(options.dataDir || '/var/synth/data', 'workspaces');
+    // ADR-077: порт исполнения — inline по умолчанию (прежнее поведение).
+    // Собирается до git-сервиса: GitService исполняет git через тот же порт
+    // (в remote-режиме — на исполнителе, ADR-077).
+    this._executionPort = options.executionPort ?? new InlineExecutionPort();
     // ADR-075/ADR-076: git-сервис и режим/политика workspace для тулов управления
-    // проектом. gitService по умолчанию — над тем же workspacesRoot.
-    this._gitService = options.gitService ?? new GitService(this._workspacesRoot);
+    // проектом. gitService по умолчанию — над тем же workspacesRoot и портом.
+    this._gitService =
+      options.gitService ?? new GitService(this._workspacesRoot, { execution: this._executionPort });
     this._workspaceManaged = options.workspaceManaged === true;
     this._getWorkspaceOutsideRootPolicy = options.getWorkspaceOutsideRootPolicy ?? null;
     this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
@@ -820,8 +825,6 @@ export class ChatOrchestrator {
     this._skillsDisabled = options.skillsDisabled ?? { categories: [], groups: [], skills: [] };
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — fail-open по умолчанию.
     this._runtimeDeps = options.runtimeDeps ?? { ...ALL_RUNTIME_DEPS_AVAILABLE };
-    // ADR-077: порт исполнения — inline по умолчанию (прежнее поведение).
-    this._executionPort = options.executionPort ?? new InlineExecutionPort();
     // ADR-077 (шаг B2): в split-режиме MCP-серверы живут в исполнителе, а
     // удалённый порт несёт дескриптор пула. Оркестратор поднимает источник —
     // так managed-backend получает это без отдельной проводки в своей сборке

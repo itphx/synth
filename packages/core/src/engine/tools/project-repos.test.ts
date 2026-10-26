@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { simpleGit } from 'simple-git';
+import { promisify } from 'node:util';
 import {
   projectRepoCloneTool,
   projectRepoInitTool,
@@ -29,18 +30,18 @@ async function exists(path: string): Promise<boolean> {
 
 /** Bare-репозиторий с одним коммитом в `main` (для clone/fetch). */
 async function createBareRepo(base: string): Promise<string> {
+  const execFileAsync = promisify(execFile);
+  const git = (cwd: string, args: string[]) => execFileAsync('git', args, { cwd });
   const bare = join(base, 'origin.git');
   const work = join(base, 'work');
-  const g = simpleGit();
-  await g.raw(['init', '--bare', '--initial-branch=main', bare]);
-  await g.clone(bare, work);
-  const wg = simpleGit(work);
-  await wg.addConfig('user.email', 'test@example.com');
-  await wg.addConfig('user.name', 'Test');
+  await git(base, ['init', '--bare', '--initial-branch=main', bare]);
+  await git(base, ['clone', bare, work]);
+  await git(work, ['config', 'user.email', 'test@example.com']);
+  await git(work, ['config', 'user.name', 'Test']);
   await writeFile(join(work, 'README.md'), 'hello\n');
-  await wg.add('.');
-  await wg.commit('initial');
-  await wg.push('origin', 'main');
+  await git(work, ['add', '.']);
+  await git(work, ['commit', '-m', 'initial']);
+  await git(work, ['push', 'origin', 'main']);
   return bare;
 }
 

@@ -149,6 +149,8 @@ export async function isExecutorPackageAvailable(): Promise<boolean> {
  */
 class RemoteExecutionPortWithExecutorMcp implements ExecutionPort {
   readonly executorMcp: { readonly urls: string[]; readonly token: string };
+  /** Обёртка всегда удалённая (ADR-077): CA control plane не применяется. */
+  readonly isRemote = true;
   /** Фоновый запуск — есть только если внутренний порт его умеет. */
   readonly spawnBackground?: ExecutionPort['spawnBackground'];
   private readonly _inner: ExecutionPort;

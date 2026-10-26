@@ -91,10 +91,12 @@
   реализации — `execution/factory.ts` (`createExecutionPortForConfig`) при старте процесса;
   шов внедрения — `ctx.extra.executionPort` (`resolveExecutionPort(ctx)`);
   не-туловые точки (резолвер проектных инструкций, детект зависимостей, inline-shell) берут
-  тот же порт через композицию. Вне порта остаются операции, не относящиеся к агентским
-  командам: `simple-git` (`git/git-service.ts` — clone/fetch/init с SSH/CA-окружением), MCP
-  stdio (`engine/mcp/client.ts`), обслуживание (`maintenance/update.ts`) — они уезжают в
-  исполнитель по фазам 2–3 плана ADR-077.
+  тот же порт через композицию. `GitService` (`git/git-service.ts`) исполняет git
+  **через тот же порт** (`git/exec.ts`): clone/fetch/init/log — argv без shell,
+  `requires: ['git']`; в remote-режиме команды уходят исполнителю, поэтому slim-образ
+  control plane не содержит git. Вне порта остаются операции, не относящиеся к
+  агентским командам: MCP stdio (`engine/mcp/client.ts`), обслуживание
+  (`maintenance/update.ts`) — они уезжают в исполнитель по фазам 2–3 плана ADR-077.
 - **Доступность программы — вопрос порта, а не control plane (ADR-077 шаг A).**
   `ExecRequest.requires?: string[]` — бинарные требования команды; канонический словарь
   базовых возможностей — `EXECUTION_BASE_CAPABILITIES` (`git`/`rg`/`sh`) в
@@ -1300,11 +1302,13 @@
   `features.background`) → `ExecutionError.code = 'EBACKGROUND'`
   (`EXECUTION_BACKGROUND_UNSUPPORTED_CODE`) → `background_unsupported`.
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
-- `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
+- `git/*` — `git-service.ts` (clone/init/fetch/remove/log; публичный API не меняется,
+  исполнение — через `ExecutionPort`), `exec.ts` (argv git через порт: `requires: ['git']`,
+  общее окружение `sanitizeGitEnv` + `GIT_TERMINAL_PROMPT=0` + прокси, `maxOutputBytes`;
+  CA `-c http.sslCAInfo=<path>` — **только inline**, в remote-режиме доверие задаёт
+  исполнитель, ADR-099/ADR-077) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
-  `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`). ADR-099: доверие CA для
-  git-over-https — `simpleGit({ config: ['http.sslCAInfo=<path>'] })` из
-  `gitCaConfig()` (путь берётся из уже инициализированного `initTlsTrust`).
+  `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).
 - `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (41 — 39 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
   `ExternalCredentialRepository` — внешние доступы к коннекторам (ADR-105 Ф1; файловое/в-памяти
   хранилища — `ExternalCredentialStore`, контракт — `storage/contract/external-credential-repository.contract.ts`);

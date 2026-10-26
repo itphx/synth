@@ -1,11 +1,11 @@
 # ADR-077: Инструментальное окружение исполнения — единый порт ExecutionPort и режим remote
 
-> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула), **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`), **шаг B1** — исполнитель **хостит MCP-серверы у себя** (stdio) и отдаёт их инструменты и вызовы по HTTP (`GET /mcp/servers`, `GET /mcp/tools`, `POST /mcp/call`; эти эндпоинты появились в протоколе 2) и **шаг B2** — клиентская проводка MCP-stdio в control plane (источник `ExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе). **Актуальная версия протокола — 3** (фоновые процессы, ADR-113); совместимость проверяется полем `protocol` в `GET /capabilities`. Остаток — перенос git-операций control plane на `ExecutionPort` (вместо `simple-git`), метрики `synth_executor_*` + `/metrics` исполнителя + runbook (шаг 7d), доставка SSH/CA в split-режиме — см. «Обновлено 2026-10-26».
+> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула), **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`), **шаг B1** — исполнитель **хостит MCP-серверы у себя** (stdio) и отдаёт их инструменты и вызовы по HTTP (`GET /mcp/servers`, `GET /mcp/tools`, `POST /mcp/call`; эти эндпоинты появились в протоколе 2) и **шаг B2** — клиентская проводка MCP-stdio в control plane (источник `ExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе). **Актуальная версия протокола — 3** (фоновые процессы, ADR-113); совместимость проверяется полем `protocol` в `GET /capabilities`. Перенос git-операций control plane на `ExecutionPort` выполнен (`GitService` — argv через порт, `simple-git` удалён из core). Остаток — метрики `synth_executor_*` + `/metrics` исполнителя + runbook (шаг 7d), доставка SSH/CA в split-режиме — см. «Обновлено 2026-10-26».
 > **Дата:** 2026-10-21
 > **Обновлено:** 2026-10-26 — три решения по остатку исполнителя (детали и порядок — [docs/EXECUTION.md](../EXECUTION.md)):
 > **(а) git — через существующий порт, без новых git-эндпоинтов протокола.** Git-операции control plane
 > переводятся на argv (`ExecutionPort.execute`, `requires: ['git']`); класс `GitService` сохраняет
-> публичный API — меняется только внутренняя реализация, пакет `simple-git` удаляется из core.
+> публичный API — меняется только внутренняя реализация, пакет `simple-git` удалён из core.
 > **(б) SSH-материал — на время вызова.** Приватные SSH-ключи проектов доставляются исполнителю
 > аддитивным полем `secrets[]` в `POST /exec` (протокол 4): материализация в tmp исполнителя
 > (`mkdtemp`, каталог 0700, ключ 0600), удаление в `finally` + sweep `synth-ssh-*` при старте. В общий
@@ -151,8 +151,8 @@
 - **Плюсы:** у точки исполнения один контракт и один контрактный suite; split-топология (тонкий control plane +
   отдельные исполнители) стала возможной без переписывания домена; в исполнителе нет LLM-ключей и OIDC-секретов.
 - **Минусы:** ещё один порт и ещё один optional-пакет в сборке; удалённый режим добавляет сетевой отказ и
-  round-trip к каждой команде; MCP-stdio уже уехал в исполнителя (B1+B2), `simple-git` пока остаётся в
-  control plane — git-операции переводятся на тот же порт (см. «Обновлено 2026-10-26», (а)).
+  round-trip к каждой команде; MCP-stdio и git-операции уже уехали в исполнителя (B1+B2 и
+  «Обновлено 2026-10-26», (а)).
 - **Следствия:** образы разводятся по режиму (`synth-backend` — control plane, `synth-executor` — worker);
   `execution.*` — секция конфигурации, применяемая при старте; наблюдаемость исполнителя — отдельный `/metrics`
   (ADR-094).
@@ -311,8 +311,8 @@
   `executor-mcp.e2e.test.ts` (гейт по env `SYNTH_TEST_EXECUTOR_MCP_URL`/`_TOKEN`, как контрактный suite
   хранения по `SYNTH_TEST_POSTGRES_DSN`).
 - **Остаток:** метрики `synth_executor_*` + `/metrics` исполнителя + runbook переключения топологии
-  (шаг 7d); перенос git-операций control plane на `ExecutionPort` вместо `simple-git` (решение —
-  «Обновлено 2026-10-26», (а)); доставка SSH-материала и CA в split-режиме — там же, (б) и (в).
+  (шаг 7d); доставка SSH-материала и CA в split-режиме — см. «Обновлено 2026-10-26», (б) и (в).
+  Перенос git-операций control plane на `ExecutionPort` выполнен (там же, (а)).
 
 ## Связи
 

@@ -290,7 +290,7 @@ export function mountStandaloneRoutes(
     auth,
     projectStore,
     config.workspacesRoot ?? join(dataDir, 'workspaces'),
-    { sshKeyStore },
+    { sshKeyStore, execution: deps.executionPort },
   ));
 
   // SSH-ключи агентов (ADR-076 §T5): flat CRUD + nested-роуты агента.

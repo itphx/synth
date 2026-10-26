@@ -19,6 +19,7 @@ import {
   gitCommitQuerySchema,
 } from '@itphx/synth-shared';
 import { GitService, deriveRepoName, resolveRepoPath } from '../../git/git-service.js';
+import type { ExecutionPort } from '../../execution/ports/index.js';
 import { isSshUrl } from '../../git/ssh-env.js';
 import { resolveSshEnvById } from '../../engine/tools/git-ssh.js';
 import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js';
@@ -62,6 +63,11 @@ export interface GitRoutesOptions {
    * пользователь инстанса, доступ к проекту не разграничивается).
    */
   authorizeRead?: (c: Context, projectId: string) => Promise<boolean>;
+  /**
+   * ADR-077: порт исполнения git-команд. В remote-режиме те же команды уходят
+   * исполнителю (control plane без toolchain'а). Не задан — inline.
+   */
+  execution?: ExecutionPort;
 }
 
 interface RouteError {
@@ -154,7 +160,7 @@ export function createGitRoutes(
   opts: GitRoutesOptions = {},
 ): Hono {
   const app = new Hono();
-  const gitService = new GitService(workspacesRoot);
+  const gitService = new GitService(workspacesRoot, { execution: opts.execution });
   // `auth.requireAuth` уже навешан на write-эндпоинты выше, поэтому дефолтный
   // writeGuard — no-op (в backend передаётся requireAdmin/RBAC).
   const writeGuard: Middleware = opts.writeGuard ?? (async (_c, next) => { await next(); });

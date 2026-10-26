@@ -266,6 +266,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // читал бы git-данные чужого проекта по его id.
   app.route('/api/v2/git', createGitRoutes(auth, projectStore, config.workspacesRoot, {
     sshKeyStore,
+    execution: deps.executionPort,
     authorizeProject: async (c, projectId) => {
       const user = await auth.getCurrentUser(c);
       if (!user) return false;
