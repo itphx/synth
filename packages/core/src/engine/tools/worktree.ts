@@ -258,6 +258,9 @@ export const gitWorktreeCreateTool: ToolDefinition = {
         name: result.worktree.name,
         branch: result.worktree.branch,
         directory: result.worktree.directory,
+        // Id записи уходит **в текст**: без него агент не может привязать
+        // сессию к созданному worktree (в `metadata` модель не смотрит).
+        worktree_id: result.worktree.id,
       });
       return {
         content: result.setup && !result.setup.ok

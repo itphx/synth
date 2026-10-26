@@ -2537,6 +2537,10 @@ export const dict = {
   'worktree.directory_missing':
     'The working directory of the linked git worktree "{path}" does not exist. '
     + 'The worktree was probably deleted — the session cannot continue in another directory.',
+  'worktree.tool.created':
+    'Git worktree "{name}" created on branch "{branch}" (directory: {directory}, id: {worktree_id}). '
+    + 'It is not attached to any session yet — bind it with PATCH /api/v2/sessions/<sessionId> '
+    + 'and the "worktreeId" field, or let the user attach it in the UI.',
 
   // --- Execution (ADR-077) ---
   'execution.remote_url_required':

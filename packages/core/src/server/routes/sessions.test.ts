@@ -13,7 +13,7 @@ import { WorktreeService } from '../../engine/worktree/service.js';
 import { MemoryWorktreeRepository } from '../../storage/memory/worktrees.js';
 import type { AuthKit } from '../../auth/local.js';
 import { MessageRole, generateId, makeTextPart, nowISO, ProjectRole } from '@itphx/synth-shared';
-import type { ProfileStore } from '@itphx/synth-shared';
+import type { ProfileStore, Project } from '@itphx/synth-shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -1248,5 +1248,81 @@ describe('PATCH /api/v2/sessions/:id — привязка к worktree (ADR-114)'
     expect(res.status).toBe(400);
     const persisted = await sessionManager.getSession(session.id);
     expect(persisted?.worktree).toBeUndefined();
+  });
+
+  /**
+   * ADR-114 §3.4 — гонка привязки: проект сессии читается **до** лока, а
+   * параллельный перенос меняет его между чтением и локом.
+   *
+   * Имитация детерминированная: чтение инвентаря (`worktreeService.list`)
+   * — точка гонки — **во время вызова** переносит сессию в другой проект
+   * (запись в хранилище мимо лока — как чужой PATCH, успевший раньше).
+   *
+   * Ожидание: сессия не получает **чужой** worktree — привязанный worktree
+   * принадлежит тому же проекту, что и сессия. Если резолв записи сделан
+   * по проекту, прочитанному ДО лока, привязка «переезжает» вместе с
+   * сессией в чужой проект.
+   */
+  it('гонка: сессия, перенесённая между чтением и локом, не получает чужой worktree', async () => {
+    const app = new Hono();
+    const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    const projectStore = new ProjectStore({ dataDir: tmpDir });
+    const eventBus = new EventBus();
+    const orchestrator = createMockOrchestrator();
+    const worktreeService = new WorktreeService({
+      repository: new MemoryWorktreeRepository(),
+      workspacesRoot,
+      defaultWorkingDir: projectDir,
+    });
+
+    const projectA = projectStore.create('A', 'u1', { workspace: projectDir });
+    const projectB = projectStore.create('B', 'u1', { workspace: projectDir });
+    await projectStore.save(projectA);
+    await projectStore.save(projectB);
+
+    const inA = await worktreeService.create(projectA.id, projectA, { branch: 'feature/a', name: 'wt-a' });
+    const session = await sessionManager.createSession({
+      title: 'S', userId: 'local', projectId: projectA.id,
+    });
+
+    // Чтение инвентаря — точка гонки: переносим сессию в проект B.
+    const originalList = worktreeService.list.bind(worktreeService);
+    const listCalls: string[] = [];
+    worktreeService.list = async (projectId: string, project?: Project) => {
+      listCalls.push(projectId);
+      const current = await sessionManager.getSession(session.id);
+      if (current) {
+        await sessionManager.updateSession({ ...current, projectId: projectB.id });
+      }
+      return originalList(projectId, project);
+    };
+
+    const routes = createSessionRoutes(
+      createMockAuth(),
+      {
+        sessionManager,
+        eventBus,
+        queueManager: createMockQueueManager() as any,
+        processMessage: orchestrator.createProcessMessage(),
+        orchestrator: orchestrator as any,
+        projectStore,
+        worktreeService,
+      },
+    );
+    app.route('/api/v2/sessions', routes);
+
+    const res = await app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worktreeId: inA.worktree.id }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(listCalls).toEqual([projectA.id]);
+
+    const persisted = await sessionManager.getSession(session.id);
+    expect(persisted?.worktree?.worktreeId).toBe(inA.worktree.id);
+    // Worktree принадлежит проекту сессии — «чужой» worktree не привязывается.
+    expect(persisted?.worktree?.projectId).toBe(persisted?.projectId);
   });
 });

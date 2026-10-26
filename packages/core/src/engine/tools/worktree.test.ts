@@ -200,6 +200,9 @@ describe('git_worktree_* tools (ADR-114 §5)', () => {
       const id = result.metadata?.worktree_id as string;
       expect(id).toMatch(/^wkt_/);
       expect(result.content).toContain('feature/x');
+      // Id записи уходит **в текст** — без него агент не может привязать
+      // сессию к созданному worktree (`metadata` модель не видит).
+      expect(result.content).toContain(id);
 
       const record = await repository.get(id);
       expect(record).not.toBeNull();

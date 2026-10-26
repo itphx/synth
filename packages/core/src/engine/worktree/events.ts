@@ -6,6 +6,10 @@
  * worktree'ов — ресурс проекта, а не одной сессии, поэтому подписчики других
  * сессий того же проекта тоже должны увидеть изменение.
  *
+ * Payload — `{ project_id, worktree_id?, action }` (`WorktreeUpdatedPayload`):
+ * `action` позволяет UI отличить создание от удаления/привязки, не читая
+ * инвентарь; `worktree_id` — конкретная запись (нет — для prune/sweep).
+ *
  * Дополнительно публикуется `fs.changed { scope: 'all' }`: создание/удаление
  * worktree меняет структуру каталогов на диске, поэтому дерево Files и
  * открытые редакторы должны перечитать рабочее дерево (ADR-089/ADR-024).
@@ -14,7 +18,7 @@
  * **шину** и **источник сессий** (структурный интерфейс), а не `SessionManager`
  * целиком. Так его можно вызвать из deps, из HTTP-роутов и из тестов.
  */
-import type { Session } from '@itphx/synth-shared';
+import type { Session, WorktreeUpdatedPayload } from '@itphx/synth-shared';
 import type { EventBus } from '../../events/bus.js';
 
 /**
@@ -42,6 +46,16 @@ export interface WorktreeEventDeps {
   sessionStore: WorktreeEventSessionSource;
 }
 
+/** Что публикуем: проект, запись (если есть) и характер изменения. */
+export interface WorktreeUpdatedInput {
+  /** Проект-владелец инвентаря. */
+  projectId: string;
+  /** Id записи worktree (не задан — изменение по проекту целиком, prune/sweep). */
+  worktreeId?: string;
+  /** Что произошло: `created`/`removed`/`pruned`/`attached`/`detached`. */
+  action: WorktreeUpdatedPayload['action'];
+}
+
 /**
  * Опубликовать `worktree.updated` в каналы сессий проекта + `fs.changed`.
  *
@@ -51,16 +65,21 @@ export interface WorktreeEventDeps {
  */
 export async function publishWorktreeUpdated(
   deps: WorktreeEventDeps,
-  projectId: string,
+  input: WorktreeUpdatedInput,
 ): Promise<void> {
   let sessions: Session[];
   try {
-    sessions = await deps.sessionStore.listSessions({ projectId });
+    sessions = await deps.sessionStore.listSessions({ projectId: input.projectId });
   } catch {
     return;
   }
+  const payload: WorktreeUpdatedPayload = {
+    project_id: input.projectId,
+    ...(input.worktreeId !== undefined ? { worktree_id: input.worktreeId } : {}),
+    action: input.action,
+  };
   for (const session of sessions.slice(0, WORKTREE_EVENT_MAX_SESSIONS)) {
-    deps.eventBus.publish(session.id, 'worktree.updated', { project_id: projectId });
+    deps.eventBus.publish(session.id, 'worktree.updated', payload);
     // Инвалидация дерева Files: структура каталогов изменилась.
     deps.eventBus.publish(session.id, 'fs.changed', { scope: 'all' });
   }

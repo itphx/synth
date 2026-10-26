@@ -2863,9 +2863,9 @@ export const dict = {
   'worktree.tool.list_row':
     'имя: {name} | ветка: {branch} | каталог: {directory} | грязный: {dirty} | привязанная сессия: {attached} | существует: {exists}',
   'worktree.tool.created':
-    'Git-worktree «{name}» создан на ветке «{branch}» (каталог: {directory}). '
+    'Git-worktree «{name}» создан на ветке «{branch}» (каталог: {directory}, id: {worktree_id}). '
     + 'К сессии он пока не привязан — привяжите его через PATCH /api/v2/sessions/<sessionId> '
-    + 'и поле «worktreeId» (значение <worktreeId>) или позвольте пользователю привязать его в UI.',
+    + 'и поле «worktreeId» или позвольте пользователю привязать его в UI.',
   'worktree.tool.removed': 'Git-worktree «{name}» удалён',
   'worktree.tool.pruned':
     'Очищены git-worktree: удалено записей без каталога — {records}, метаданные git очищены — {git_pruned}',

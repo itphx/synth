@@ -1,4 +1,6 @@
 // --- Event types ---
+import type { WorktreeUpdateAction } from './worktree.js';
+
 export type EventType =
   | 'session.created'
   | 'session.updated'
@@ -104,3 +106,25 @@ export interface BusEvent {
   data: Record<string, unknown>;
   timestamp: string;
 }
+
+/**
+ * Payload события `worktree.updated` (ADR-114 §6) — инвентарь worktree'ов
+ * проекта изменился.
+ *
+ * Событие идёт в **каналы сессий проекта** (инвентарь — ресурс проекта, а не
+ * одной сессии), поэтому подписчики соседних сессий тоже видят изменение.
+ * `action` позволяет отличить создание от удаления/привязки без чтения
+ * инвентаря; `worktree_id` — конкретная запись (нет — для prune/sweep).
+ *
+ * Объявлен **type-алиасом** (не интерфейсом): алиас получает неявную
+ * index-signature и потомуassignable к `Record<string, unknown>` — payload
+ * шины (`EventBus.publish`) именно такой тип.
+ */
+export type WorktreeUpdatedPayload = {
+  /** Проект-владелец инвентаря. */
+  project_id: string;
+  /** Id записи worktree (не задан — изменение по проекту целиком). */
+  worktree_id?: string;
+  /** Что произошло (ADR-114 §6). */
+  action: WorktreeUpdateAction;
+};

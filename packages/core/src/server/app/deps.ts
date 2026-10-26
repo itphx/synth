@@ -803,8 +803,12 @@ export async function createStandaloneDeps(
           const sessions = await sessionManager.listSessions(undefined, { light: true });
           return sessions.find((s) => s.worktree?.worktreeId === worktreeId)?.id;
         },
-        onUpdated: (projectId: string) => {
-          void publishWorktreeUpdated({ eventBus, sessionStore: sessionManager }, projectId);
+        onUpdated: (projectId: string, detail) => {
+          void publishWorktreeUpdated({ eventBus, sessionStore: sessionManager }, {
+            projectId,
+            ...(detail.worktreeId !== undefined ? { worktreeId: detail.worktreeId } : {}),
+            action: detail.action,
+          });
         },
       });
 

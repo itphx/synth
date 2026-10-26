@@ -17,9 +17,9 @@ import { serializeProject } from '../serialize.js';
 import { isRemoteRef, toLocalId, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
-import type { WorktreeService } from '../../engine/worktree/service.js';
+import type { WorktreeService, WorktreeUpdateDetail } from '../../engine/worktree/service.js';
 import { isWorktreeError, worktreeErrorHttpStatus } from '../../engine/worktree/errors.js';
-import { worktreeCreateSchema } from '@itphx/synth-shared';
+import { worktreeCreateSchema, worktreePruneSchema } from '@itphx/synth-shared';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -117,8 +117,11 @@ export interface ProjectRoutesOptions {
    * Хук сервиса (`WorktreeService.onUpdated`) уже публикует событие шины,
    * поэтому этот колбэк — только для вызывающих, которым нужно **дополнительное**
    * уведомление (например, инвалидация кэша UI). Не задан — ничего не вызывается.
+   *
+   * Второй аргумент — что изменилось (`WorktreeUpdateDetail`): действие и,
+   * когда известно, id записи (ADR-114 §6).
    */
-  onWorktreeUpdated?: (projectId: string) => void;
+  onWorktreeUpdated?: (projectId: string, detail: WorktreeUpdateDetail) => void;
 }
 
 /**
@@ -554,7 +557,7 @@ export function createProjectRoutes(
 
       try {
         const result = await worktrees.create(project.id, project, parsed.data, userId);
-        opts.onWorktreeUpdated?.(project.id);
+        opts.onWorktreeUpdated?.(project.id, { worktreeId: result.worktree.id, action: 'created' });
         return c.json(
           { worktree: result.worktree, ...(result.setup ? { setup: result.setup } : {}) },
           201,
@@ -570,9 +573,22 @@ export function createProjectRoutes(
       if (!project) return jsonNotFound(c);
       const userId = await currentUserId(c);
       if (!canEditContent(c, project, userId)) return jsonForbidden(c);
+      // Тело опционально: пустое/отсутствующее — успех. Непустое — строгая
+      // схема `worktreePruneSchema` (параметров у операции нет, лишнее поле —
+      // ошибка валидации, а не молчаливое игнорирование).
+      const rawBody = await c.req.json().catch(() => undefined);
+      const bodyIsEmpty = rawBody === undefined
+        || rawBody === null
+        || (typeof rawBody === 'object' && !Array.isArray(rawBody) && Object.keys(rawBody).length === 0);
+      if (!bodyIsEmpty) {
+        const parsedPrune = worktreePruneSchema.safeParse(rawBody);
+        if (!parsedPrune.success) {
+          return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedPrune.error.message } }, 400);
+        }
+      }
       try {
         const result = await worktrees.prune(project.id, project);
-        if (result.recordsRemoved > 0) opts.onWorktreeUpdated?.(project.id);
+        if (result.recordsRemoved > 0) opts.onWorktreeUpdated?.(project.id, { action: 'pruned' });
         return c.json({ recordsRemoved: result.recordsRemoved, gitPruned: result.gitPruned });
       } catch (err) {
         return worktreeError(c, err);
@@ -589,8 +605,8 @@ export function createProjectRoutes(
       const forceParam = c.req.query('force');
       const force = forceParam === 'true' || forceParam === '1' || forceParam === '';
       try {
-        await worktrees.remove(project.id, c.req.param('wid'), project, force ? { force: true } : {});
-        opts.onWorktreeUpdated?.(project.id);
+        const removed = await worktrees.remove(project.id, c.req.param('wid'), project, force ? { force: true } : {});
+        opts.onWorktreeUpdated?.(project.id, { worktreeId: removed.id, action: 'removed' });
         return c.body(null, 204);
       } catch (err) {
         return worktreeError(c, err);

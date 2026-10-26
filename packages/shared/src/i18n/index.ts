@@ -693,7 +693,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'worktree.tool.list_empty': [],
   'worktree.tool.list_header': ["count"],
   'worktree.tool.list_row': ["name","branch","directory","dirty","attached","exists"],
-  'worktree.tool.created': ["name","branch","directory"],
+  'worktree.tool.created': ["name","branch","directory","worktree_id"],
   'worktree.tool.removed': ["name"],
   'worktree.tool.pruned': ["records","git_pruned"],
   'worktree.tool.force_required': ["name"],

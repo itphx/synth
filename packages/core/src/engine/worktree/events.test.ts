@@ -4,7 +4,9 @@
  *
  * Событие идёт в **каналы всех сессий проекта** (инвентарь worktree'ов —
  * ресурс проекта, а не одной сессии) + `fs.changed { scope: 'all' }`
- * (структура каталогов на диске изменилась).
+ * (структура каталогов на диске изменилась). Payload — `{ project_id,
+ * worktree_id?, action }`: по `action` UI отличает создание от удаления и
+ * привязки, не читая инвентарь.
  */
 import { describe, it, expect, vi } from 'vitest';
 import type { Session } from '@itphx/synth-shared';
@@ -35,14 +37,14 @@ function makeSource(sessions: Session[]): WorktreeEventSessionSource {
 }
 
 describe('publishWorktreeUpdated (ADR-114 §6)', () => {
-  it('публикует worktree.updated {project_id} и fs.changed {scope:"all"} в каналы сессий проекта', async () => {
+  it('публикует worktree.updated {project_id, action} и fs.changed {scope:"all"} в каналы сессий проекта', async () => {
     const { eventBus, published } = makeBus();
     const deps: WorktreeEventDeps = {
       eventBus,
       sessionStore: makeSource([fakeSession('s1'), fakeSession('s2')]),
     };
 
-    await publishWorktreeUpdated(deps, 'prj-1');
+    await publishWorktreeUpdated(deps, { projectId: 'prj-1', action: 'created' });
 
     expect(published).toHaveLength(4);
     expect(published.filter((p) => p.type === 'worktree.updated')).toHaveLength(2);
@@ -50,7 +52,7 @@ describe('publishWorktreeUpdated (ADR-114 §6)', () => {
 
     const updated = published.find((p) => p.type === 'worktree.updated')!;
     expect(updated.sessionId).toBe('s1');
-    expect(updated.data).toEqual({ project_id: 'prj-1' });
+    expect(updated.data).toEqual({ project_id: 'prj-1', action: 'created' });
 
     const fsChanged = published.find((p) => p.type === 'fs.changed')!;
     expect(fsChanged.sessionId).toBe('s1');
@@ -60,10 +62,31 @@ describe('publishWorktreeUpdated (ADR-114 §6)', () => {
     expect(published.filter((p) => p.sessionId === 's2')).toHaveLength(2);
   });
 
+  it('payload несёт id записи и действие (UI отличает создание от привязки)', async () => {
+    const { eventBus, published } = makeBus();
+    const deps: WorktreeEventDeps = {
+      eventBus,
+      sessionStore: makeSource([fakeSession('s1')]),
+    };
+
+    await publishWorktreeUpdated(deps, {
+      projectId: 'prj-1',
+      worktreeId: 'wkt_abc',
+      action: 'attached',
+    });
+
+    const updated = published.find((p) => p.type === 'worktree.updated')!;
+    expect(updated.data).toEqual({
+      project_id: 'prj-1',
+      worktree_id: 'wkt_abc',
+      action: 'attached',
+    });
+  });
+
   it('источник сессий запрашивается по id проекта', async () => {
     const { eventBus } = makeBus();
     const sessionStore = makeSource([]);
-    await publishWorktreeUpdated({ eventBus, sessionStore }, 'prj-42');
+    await publishWorktreeUpdated({ eventBus, sessionStore }, { projectId: 'prj-42', action: 'pruned' });
     expect(sessionStore.listSessions).toHaveBeenCalledWith({ projectId: 'prj-42' });
   });
 
@@ -71,7 +94,10 @@ describe('publishWorktreeUpdated (ADR-114 §6)', () => {
     const { eventBus, published } = makeBus();
 
     await expect(
-      publishWorktreeUpdated({ eventBus, sessionStore: makeSource([]) }, 'prj-1'),
+      publishWorktreeUpdated(
+        { eventBus, sessionStore: makeSource([]) },
+        { projectId: 'prj-1', action: 'removed' },
+      ),
     ).resolves.toBeUndefined();
     expect(published).toHaveLength(0);
   });
@@ -83,7 +109,10 @@ describe('publishWorktreeUpdated (ADR-114 §6)', () => {
     };
 
     await expect(
-      publishWorktreeUpdated({ eventBus, sessionStore }, 'prj-1'),
+      publishWorktreeUpdated(
+        { eventBus, sessionStore },
+        { projectId: 'prj-1', action: 'removed' },
+      ),
     ).resolves.toBeUndefined();
     expect(published).toHaveLength(0);
   });
@@ -94,7 +123,10 @@ describe('publishWorktreeUpdated (ADR-114 §6)', () => {
       fakeSession(`s${i}`),
     );
 
-    await publishWorktreeUpdated({ eventBus, sessionStore: makeSource(sessions) }, 'prj-1');
+    await publishWorktreeUpdated(
+      { eventBus, sessionStore: makeSource(sessions) },
+      { projectId: 'prj-1', action: 'created' },
+    );
 
     const channels = new Set(published.map((p) => p.sessionId));
     expect(channels.size).toBe(WORKTREE_EVENT_MAX_SESSIONS);

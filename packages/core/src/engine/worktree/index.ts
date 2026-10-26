@@ -14,6 +14,7 @@ export type {
   WorktreePruneResult,
   WorktreeSweepResult,
   WorktreeSecondaryInfo,
+  WorktreeUpdateDetail,
 } from './service.js';
 export {
   WORKTREE_ERROR_CODES,
@@ -38,4 +39,5 @@ export {
 export type {
   WorktreeEventDeps,
   WorktreeEventSessionSource,
+  WorktreeUpdatedInput,
 } from './events.js';

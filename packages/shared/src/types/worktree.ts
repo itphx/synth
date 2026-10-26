@@ -109,6 +109,27 @@ export interface SessionWorktree {
   branch: string;
 }
 
+/**
+ * Что именно изменилось в инвентаре worktree'ов (ADR-114 §6) — значение
+ * `action` события `worktree.updated`.
+ *
+ * - `created` — создана запись (каталог + ветка);
+ * - `removed` — запись удалена (каталог снят);
+ * - `pruned` — вычищены записи без каталога (prune/sweep);
+ * - `attached` — запись привязана к сессии;
+ * - `detached` — привязка снята (в т.ч. при переносе сессии в другой проект).
+ */
+export type WorktreeUpdateAction = 'created' | 'removed' | 'pruned' | 'attached' | 'detached';
+
+/** Канонический набор действий `worktree.updated`. */
+export const WORKTREE_UPDATE_ACTIONS: readonly WorktreeUpdateAction[] = [
+  'created',
+  'removed',
+  'pruned',
+  'attached',
+  'detached',
+];
+
 // ── Zod-схемы (HTTP-вход и запись) ─────────────────────────────────────────────
 
 /** Формат slug'а имени каталога worktree: строчные буквы/цифры, `-_.` внутри. */

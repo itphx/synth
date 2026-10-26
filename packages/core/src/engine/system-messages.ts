@@ -384,9 +384,9 @@ export const SYSTEM_MESSAGES = {
   'worktree.tool.list_row':
     'name: {name} | branch: {branch} | directory: {directory} | dirty: {dirty} | attached session: {attached} | exists: {exists}',
   'worktree.tool.created':
-    'Git worktree "{name}" created on branch "{branch}" (directory: {directory}). '
+    'Git worktree "{name}" created on branch "{branch}" (directory: {directory}, id: {worktree_id}). '
     + 'It is not attached to any session yet — bind it with PATCH /api/v2/sessions/<sessionId> '
-    + 'and the "worktreeId" field (value <worktreeId>), or let the user attach it in the UI.',
+    + 'and the "worktreeId" field, or let the user attach it in the UI.',
   'worktree.tool.removed': 'Git worktree "{name}" removed',
   'worktree.tool.pruned':
     'Pruned git worktrees: {records} stale record(s) removed, git metadata pruned: {git_pruned}',

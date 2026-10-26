@@ -290,6 +290,35 @@ describe('HTTP: /api/v2/projects/:id/worktrees* (ADR-114)', () => {
     expect(await repository.get(orphan.id)).toBeNull();
   });
 
+  it('POST /:id/worktrees/prune — пустое тело → 200 (тело опционально)', async () => {
+    const app = makeApp();
+    await createWorktree(app, { branch: 'feature/x', name: 'wt' });
+
+    const res = await app.request(`/api/v2/projects/${projectId}/worktrees/prune`, {
+      method: 'POST',
+      headers: header(),
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { recordsRemoved: number; gitPruned: boolean };
+    expect(body.recordsRemoved).toBe(0);
+  });
+
+  it('POST /:id/worktrees/prune — лишнее поле в теле → 400 VALIDATION_ERROR', async () => {
+    const app = makeApp();
+
+    const res = await app.request(`/api/v2/projects/${projectId}/worktrees/prune`, {
+      method: 'POST',
+      headers: header(),
+      body: JSON.stringify({ force: true }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+  });
+
   it('неизвестный проект → 404 на всех маршрутах worktrees', async () => {
     const app = makeApp();
     const get = await app.request('/api/v2/projects/nope/worktrees', { headers: header() });

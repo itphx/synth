@@ -17,8 +17,8 @@
  * - **инвентарь — только через порт** `WorktreeRepository` (ADR-096): сервис не
  *   пишет в `{dataDir}/worktrees.json` напрямую;
  * - сервис **не знает про транспорт**: обновление инвентаря сигнализируется
- *   вызывающему через `onUpdated(projectId)` — публикацию события делает тот,
- *   кто знает про шину (ADR-024);
+ *   вызывающему через `onUpdated(projectId, detail)` — публикацию события
+ *   делает тот, кто знает про шину (ADR-024);
  * - сервис **не знает про сессии**: привязанная сессия приходит через хук
  *   `resolveAttachedSession(worktreeId)` — так `SessionManager` не тащится в
  *   сервис.
@@ -34,6 +34,7 @@ import {
   type WorktreeCreateInput,
   type WorktreeRecord,
   type WorktreeSummary,
+  type WorktreeUpdateAction,
 } from '@itphx/synth-shared';
 import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
 import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionPort } from '../../execution/ports/index.js';
@@ -88,8 +89,25 @@ export interface WorktreeServiceOptions {
   defaultWorkingDir?: string;
   /** Id сессии, привязанной к worktree (если есть); ошибка хука — «привязки нет». */
   resolveAttachedSession?: (worktreeId: string) => Promise<string | undefined>;
-  /** Сигнал «инвентарь проекта изменился» (вызывающий публикует событие). */
-  onUpdated?: (projectId: string) => void;
+  /**
+   * Сигнал «инвентарь проекта изменился» (вызывающий публикует событие).
+   *
+   * Второй аргумент — **что** изменилось (ADR-114 §6): действие и, когда
+   * известно, id записи. Обратная совместимость: реализация с одним
+   * параметром остаётся валидной (TypeScript допускает меньше параметров).
+   */
+  onUpdated?: (projectId: string, detail: WorktreeUpdateDetail) => void;
+}
+
+/**
+ * Детали изменения инвентаря worktree'ов — для события `worktree.updated`
+ * (ADR-114 §6).
+ */
+export interface WorktreeUpdateDetail {
+  /** Id изменившейся записи (не задан — изменение по проекту целиком). */
+  worktreeId?: string;
+  /** Что произошло. */
+  action: WorktreeUpdateAction;
 }
 
 /** Итог выполнения startup-скрипта проекта. */
@@ -151,7 +169,7 @@ export class WorktreeService {
   private readonly _resolveAttachedSession:
     | ((worktreeId: string) => Promise<string | undefined>)
     | undefined;
-  private readonly _onUpdated: ((projectId: string) => void) | undefined;
+  private readonly _onUpdated: ((projectId: string, detail: WorktreeUpdateDetail) => void) | undefined;
 
   constructor(options: WorktreeServiceOptions) {
     this._repository = options.repository;
@@ -262,7 +280,7 @@ export class WorktreeService {
       ...(actor !== undefined ? { createdBy: actor } : {}),
     };
     await this._repository.save(record);
-    this._onUpdated?.(projectId);
+    this._onUpdated?.(projectId, { worktreeId: record.id, action: 'created' });
 
     const script = project.worktreeSetupScript?.trim();
     if (!script) return { worktree: record };
@@ -319,7 +337,7 @@ export class WorktreeService {
     if (repoRoot) await this._git(['worktree', 'prune'], repoRoot).catch(() => undefined);
 
     await this._repository.delete(record.id);
-    this._onUpdated?.(projectId);
+    this._onUpdated?.(projectId, { worktreeId: record.id, action: 'removed' });
     return record;
   }
 
@@ -350,7 +368,7 @@ export class WorktreeService {
       gitPruned = false;
     }
 
-    if (recordsRemoved > 0) this._onUpdated?.(projectId);
+    if (recordsRemoved > 0) this._onUpdated?.(projectId, { action: 'pruned' });
     return { recordsRemoved, gitPruned };
   }
 
@@ -371,7 +389,7 @@ export class WorktreeService {
       recordsRemoved += 1;
       touched.add(record.projectId);
     }
-    for (const projectId of touched) this._onUpdated?.(projectId);
+    for (const projectId of touched) this._onUpdated?.(projectId, { action: 'pruned' });
     return { recordsRemoved };
   }
 
