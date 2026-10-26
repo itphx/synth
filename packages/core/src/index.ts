@@ -658,6 +658,34 @@ export type { FileBackgroundRunStoreConfig } from './storage/file-background-run
 // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
 export { FileWorktreeStore } from './storage/file-worktree-store.js';
 export type { FileWorktreeStoreConfig } from './storage/file-worktree-store.js';
+// Этап 1 roadmap 0.13 (блок 1.4.1b): сервис worktree'ов (ADR-114) — git-операции,
+// lifecycle инвентаря, детект secondary worktree.
+export {
+  WorktreeService,
+  resolveWorktreeName,
+  WORKTREE_ERROR_CODES,
+  worktreeErrorHttpStatus,
+  isWorktreeError,
+  WorktreeError,
+  WorktreeNotFoundError,
+  WorktreeBusyError,
+  WorktreeDirtyError,
+  WorktreeBranchInvalidError,
+  WorktreeNameInvalidError,
+  WorktreeNotARepoError,
+  WorktreePathExistsError,
+  WorktreeGitFailedError,
+} from './engine/worktree/index.js';
+export type {
+  WorktreeServiceOptions,
+  WorktreeCreateResult,
+  WorktreeSetupResult,
+  WorktreeRemoveOptions,
+  WorktreePruneResult,
+  WorktreeSweepResult,
+  WorktreeSecondaryInfo,
+  WorktreeErrorCode,
+} from './engine/worktree/index.js';
 export type {
   SessionRepository,
   SessionFilter,
