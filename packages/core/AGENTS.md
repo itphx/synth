@@ -1307,6 +1307,17 @@
   журналом на исполнителе (до его `prune`). Исполнитель старой версии (протокол < 3, нет
   `features.background`) → `ExecutionError.code = 'EBACKGROUND'`
   (`EXECUTION_BACKGROUND_UNSUPPORTED_CODE`) → `background_unsupported`.
+- `engine/worktree/*` — ADR-114 (per-session рабочий каталог): `WorktreeService`
+  (`engine/worktree/service.ts` — git-операции **только** через порт `ExecutionPort` (ADR-077),
+  корень `{workspacesRoot}/.worktrees/<projectId>`, создание/удаление/prune/sweep, детект secondary
+  worktree, startup-скрипт проекта), `errors.ts` (типизированные ошибки с машинными кодами
+  `WORKTREE_*` — HTTP-статус по коду), `events.ts` (`worktree.updated` + `fs.changed` в каналы
+  сессий проекта, лимит 200); тулы `git_worktree_list|create|remove|prune`
+  (`engine/tools/worktree.ts` — проект только из сессии, в plan-режиме мутации запрещены,
+  `create` не привязывает сессию). Порт инвентаря — `storage/ports/worktree-repository.ts`
+  (ADR-096); привязка сессии — `Session.worktree` (в форме хранения — snake_case, PostgreSQL —
+  миграция `023_session_worktree`); резолв cwd — `engine/orchestrator.ts` (fail-closed при
+  исчезнувшем каталоге). Спецификация — `docs/WORKTREES.md`.
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log; публичный API не меняется,
   исполнение — через `ExecutionPort`), `exec.ts` (argv git через порт: `requires: ['git']`,

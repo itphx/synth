@@ -1,8 +1,9 @@
 # ADR-114: Git worktrees — per-session рабочий каталог
 
-> **Статус:** ⚠️ Частично — решение принято 2026-10-26; **реализовано хранение** (тип `WorktreeRecord`,
-> порт `WorktreeRepository` и три backend'а — файл/память/PostgreSQL, контрактный suite), **остаток —
-> поведение** (в коде нет ни тулов `git_worktree_*`, ни HTTP-контура, ни привязки сессии к worktree).
+> **Статус:** ⚠️ Частично — решение принято 2026-10-26; **ядро реализовано** (этап 1.4: порт
+> `WorktreeRepository` и три backend'а, сервис worktrees, привязка сессии с персистентностью,
+> резолв per-session cwd, тулы `git_worktree_*`, HTTP-контур, событие `worktree.updated`), **остаток —
+> UI** (§9). Подробности — в разделе «Статус в коде».
 > **Дата:** 2026-10-26
 > **Связано:** [ADR-014](./adr-014-project-container.md) (проект как контейнер сессий),
 > [ADR-029](./adr-029-granular-permissions.md) (группы правил permission-слоя),
@@ -89,31 +90,63 @@
 
 ## Статус в коде
 
-**Частично реализовано** (этап 1 roadmap 0.13 — блок 1.4.1a: контракт и хранение;
-поведение — следующий шаг).
+**Ядро реализовано, остаток — UI** (этап 1 roadmap 0.13 — блок 1.4; коммиты `3ce2060f`, `142cb652`,
+`b71bd40d`). Статус ADR остаётся `⚠️ Частично`: UI-контур (ADR-114 §9) ещё не сделан.
 
 Реализовано:
 
-- типы в `shared` (`packages/shared/src/types/worktree.ts`): `WorktreeRecord`,
+- **Контракт и хранение.** Типы в `shared` (`packages/shared/src/types/worktree.ts`): `WorktreeRecord`,
   `WorktreeCreateInput`, `WorktreeSummary`, `SessionWorktree` + Zod-схемы
   (`worktreeRecordSchema`/`worktreeCreateSchema`/`worktreePruneSchema`); аддитивные поля
-  `Session.worktree` и `Project.worktreeSetupScript`;
-- порт `WorktreeRepository` (`core/src/storage/ports/worktree-repository.ts`) и три
-  реализации: файловая (`{dataDir}/worktrees.json`), in-memory
-  (`core/src/storage/memory/worktrees.ts`) и PostgreSQL (generic-таблица `documents`,
-  `kind='worktree'`, **без новой миграции** — `packages/storage-postgres/src/ports/worktrees.ts`);
-- контрактный suite порта (`core/src/storage/contract/worktree-repository.contract.ts`) —
-  file/memory/PG.
+  `Session.worktree` и `Project.worktreeSetupScript`. Порт `WorktreeRepository`
+  (`core/src/storage/ports/worktree-repository.ts`) и три реализации: файловая
+  (`{dataDir}/worktrees.json`), in-memory (`core/src/storage/memory/worktrees.ts`) и PostgreSQL
+  (generic-таблица `documents`, `kind='worktree'`, **без новой миграции** —
+  `packages/storage-postgres/src/ports/worktrees.ts`); контрактный suite порта
+  (`core/src/storage/contract/worktree-repository.contract.ts`) — file/memory/PG.
+- **Сервис** `WorktreeService` (`core/src/engine/worktree/service.ts`): git-операции **только через
+  порт** `ExecutionPort` (ADR-077); корень каталогов `{workspacesRoot}/.worktrees/<projectId>`;
+  создание (`git worktree add`), удаление (с `force`), prune, sweep осиротевших записей, детект
+  secondary worktree (`git rev-parse --git-common-dir`), startup-скрипт проекта
+  (`project.worktreeSetupScript`, env `SYNTH_WORKTREE_BASE`/`SYNTH_WORKTREE_PATH`); типизированные
+  ошибки с машинными кодами `WORKTREE_*` (`core/src/engine/worktree/errors.ts`).
+- **Привязка сессии с персистентностью.** `Session.worktree` сериализуется в **snake_case**
+  (`worktree_id`/`project_id`/`repo_path`/`directory`/`branch`): файловый стор сессий и PostgreSQL
+  (колонка `sessions.worktree jsonb`, **миграция `023_session_worktree`**) — привязка переживает
+  рестарт. При смене проекта привязка снимается (`session.moved` с `worktree_detached`).
+- **Резолв per-session cwd.** Приоритет `session.worktree.directory` → `project.workspace` →
+  `defaultWorkingDir` (`core/src/engine/orchestrator.ts`); исчезнувший каталог — **fail-closed**
+  (i18n-ключ `worktree.directory_missing`, ADR-041), тихий фоллбек в `project.workspace` запрещён;
+  саб-агенты наследуют привязку родителя (одноуровнево, по `parentId`).
+- **Containment.** Относительные пути file/shell/git-тулов и `repo_path` считаются от каталога
+  worktree; внутри worktree `repo_path` — только `.`/пусто (иначе `git.repo_path_invalid`).
+- **Тулы.** `git_worktree_list` (capability `git_read`), `git_worktree_create|remove|prune`
+  (`git_write`) — `core/src/engine/tools/worktree.ts`; проект **только из сессии**, в plan-режиме
+  мутации запрещены (permission-слой, ADR-029), `create` сообщает `worktree_id` в тексте результата.
+- **HTTP-контур.** `GET/POST /api/v2/projects/:id/worktrees`,
+  `DELETE /api/v2/projects/:id/worktrees/:wid?force=true`, `POST /api/v2/projects/:id/worktrees/prune`,
+  `PATCH /api/v2/sessions/:id { worktreeId }` — общий для core и backend (права — по правилам
+  проекта, инвариант 21); полный контракт — [docs/WORKTREES.md](../WORKTREES.md) §5.
+- **Событие** `worktree.updated` (`core/src/engine/worktree/events.ts`): payload
+  `{ project_id, worktree_id?, action }` (`action` ∈ `created|removed|pruned|attached|detached`),
+  публикация в каналы сессий проекта (лимит 200) + `fs.changed { scope: 'all' }`; новых
+  транспортных каналов нет.
+- **Матрица доступа** — `packages/backend/src/routes/worktree-access-matrix.test.ts`
+  (владелец/`EDITOR`/`VIEWER`/`ADMIN`/`LEAD`/посторонний; `VIEWER` читает, мутации — 403).
+- **Тесты.** Тулы, HTTP, событие, привязка сессии, персистентность и матрица доступа — 69 тестов
+  (`core/src/engine/tools/worktree.test.ts`, `core/src/engine/worktree/*.test.ts`,
+  `core/src/server/routes/worktree-routes.test.ts`, `core/src/server/routes/sessions.test.ts`,
+  `packages/backend/src/routes/worktree-access-matrix.test.ts`).
 
-Не реализовано (поведение): `_resolveWorkingDir` (`core/src/engine/orchestrator.ts`) знает только
-`project.workspace` → `defaultWorkingDir`; git-тулы принимают `repo_path` относительно `project.workspace`
-(`core/src/engine/tools/git.ts`); сервис worktrees; резолв `session.worktree.directory` в
-`_resolveWorkingDir` и наследование привязки саб-агентами; тулы `git_worktree_*` и их правила
-permission-слоя; HTTP-роуты (`/api/v2/projects/:id/worktrees*`, `PATCH /api/v2/sessions/:id` с
-`worktreeId`); событие `worktree.updated`; UI (инвентарь в настройках проекта, селектор, индикатор,
-скрытие `.worktrees`).
+Не реализовано:
 
-## Связи
+- **UI (ADR-114 §9)** — инвентарь worktree'ов в настройках проекта, селектор worktree для новой
+  сессии, индикатор secondary worktree в шапке сессии, скрытие `.worktrees` в дереве Files,
+  переключение привязки из UI. Рабочий контур на сегодня — HTTP-контур (§5 спеки) и тулы.
+- Мелочи: вызов sweep'а осиротевших записей на старте процесса не подключён (метод сервиса есть,
+  стартового хука нет) и эндпоинты worktree'ов ещё не вынесены в `docs/API_V2.md`.
+
+---## Связи
 
 - [ADR-005](./adr-005-json-storage.md), [ADR-014](./adr-014-project-container.md),
   [ADR-024](./adr-024-eventhub-transport.md), [ADR-029](./adr-029-granular-permissions.md),
@@ -131,3 +164,7 @@ permission-слоя; HTTP-роуты (`/api/v2/projects/:id/worktrees*`, `PATCH 
 - 2026-10-26 — этап 1.4.1a: реализованы контракт и хранение — тип `WorktreeRecord` (+ Zod),
   порт `WorktreeRepository`, файловая/in-memory/PostgreSQL-реализации и контрактный suite;
   поведение (сервис, тулы, резолв cwd, HTTP, событие, UI) — остаток.
+- 2026-10-26 — этап 1.4: реализовано ядро (порт + три backend'а, сервис worktrees, привязка
+  сессии с персистентностью и миграцией `023_session_worktree`, резолв per-session cwd с
+  fail-closed и наследованием, containment, тулы `git_worktree_*`, HTTP-контур, событие
+  `worktree.updated`, матрица доступа и тесты); остаток — UI (§9).

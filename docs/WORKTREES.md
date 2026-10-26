@@ -9,11 +9,12 @@
 > `repo_path` — [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md); исполнение команд —
 > [docs/EXECUTION.md](./EXECUTION.md).
 >
-> **Статус документа:** контракт зафиксирован (ADR-114, 2026-10-26); **реализовано хранение**
-> (этап 1.4.1a): тип `WorktreeRecord` + Zod, порт `WorktreeRepository`, файловая/in-memory/
-> PostgreSQL-реализации и контрактный suite. **Поведения ещё нет**: сервис worktrees, резолв
-> `session.worktree.directory` в `_resolveWorkingDir`, тулы `git_worktree_*`, HTTP-роуты, событие
-> `worktree.updated` и UI — следующие шаги. Документ описывает целевое устройство; разделы
+> **Статус документа:** контракт зафиксирован (ADR-114, 2026-10-26) и **ядро реализовано**
+> (этап 1.4): порт `WorktreeRepository` + три backend'а, сервис worktrees (§2.4), привязка
+> сессии с персистентностью (§3.4), резолв per-session cwd с fail-closed (§3.1–§3.3),
+> тулы `git_worktree_*`, HTTP-контур (§5) и событие `worktree.updated` (§6). **Остаток — UI**
+> (§9): инвентарь в настройках проекта, селектор worktree, индикатор secondary worktree,
+> скрытие `.worktrees` в дереве Files. Документ описывает устройство подсистемы; разделы
 > «Статус в коде» в ADR-114 и этот блок статуса обновляются по мере реализации.
 
 ---
@@ -44,37 +45,43 @@
 | `id` | `wkt_<uuid>` | идентификатор записи; ключ документа в PostgreSQL и в списке UI |
 | `projectId` | `string` | проект-владелец записи (обязателен) |
 | `repoPath` | `string?` | репозиторий проекта относительно `project.workspace` (как `repo_path` в ADR-076); отсутствует — репозиторий в корне workspace |
-| `slug` | `string` | человекочитаемое имя каталога внутри `.worktrees/<projectId>/` |
+| `name` | `string` | человекочитаемое имя каталога (slug) внутри `.worktrees/<projectId>/`; в записи и в HTTP-теле — поле `name` |
 | `directory` | `string` | абсолютный путь каталога worktree на диске |
-| `branch` | `string` | ветка (`HEAD` — detached-состояние) |
-| `baseRef` | `string?` | база ветки при создании (`main`/`master`/SHA) |
-| `status` | `created \| attached \| detached \| removed` | состояние записи (см. §7) |
+| `branch` | `string` | ветка worktree (detached-состояние, `HEAD`, сервис не создаёт) |
+| `baseRef` | `string?` | база ветки при создании (`main`/`master`/SHA) — входной параметр `from`, в записи не хранится |
+| `status` | `created \| attached \| detached \| removed` | состояние записи — **вычисляется** сервисом, в записи не хранится (в сводке списка — `attachedSessionId`/`dirty`/`exists`, §5) |
 | `createdBy` | `string?` | пользователь, создавший запись (аудит, не авторизация) |
 | `createdAt` / `updatedAt` | ISO-8601 | `createdAt` **иммутабельно**; `updatedAt` ставит вызывающий (порт не подставляет «сейчас») |
-| `setupScriptRun` | `boolean` | выполнялся ли `project.worktreeSetupScript` для этой записи |
+| `setupScriptRun` | `boolean` | выполнялся ли `project.worktreeSetupScript` — в записи не хранится; итог операции — в ответе (`setup`, §7.6) |
 
-> **Что реализовано на шаге 1.4.1a (контракт хранения).** Запись, которую сегодня хранит порт:
+> **Факт по коду (этап 1.4).** Запись, которую сегодня хранит порт, — **финальная форма**:
 > `id`, `projectId`, `repoPath?`, `directory`, `branch`, `name` (slug каталога), `strategy`
 > (`git`), `createdAt`, `updatedAt`, `createdBy?` — итого **девять полей плюс два необязательных**.
-> Отличия от таблицы выше (их закрывает сервис и тулы — шаг 1.4.2):
+> Отличия от таблицы выше (их закрывает сервис, §2.4):
 > - имя каталога в записи — **`name`**, а не `slug` (в HTTP-теле — тоже `name`);
-> - поля жизненного цикла (`baseRef`, `status`, `setupScriptRun`) в записи **пока отсутствуют** —
->   они появляются вместе с сервисом (`status` — вычисляемое состояние, `baseRef` — база ветки,
->     `setupScriptRun` — признак выполнения startup-скрипта);
+> - полей жизненного цикла (`baseRef`, `status`, `setupScriptRun`) в записи **нет**: состояние
+>   **вычисляется** сервисом (привязанная сессия — `attachedSessionId` в сводке, «грязное»
+>   состояние — `dirty`, наличие каталога — `exists`), база ветки (`from`) — входной параметр
+>   создания, признак выполнения startup-скрипта — результат операции (`setup` в ответе);
 > - стратегия записи — **`strategy: 'git'`** (задел на другие стратегии, ADR-114 §5).
 
 ### 1.2. Инварианты
 
 1. `id` уникален в пределах инстанса; формат `wkt_<uuid>`.
-2. `slug` соответствует `^[a-z0-9][a-z0-9-]{0,63}$`; уникален **в пределах проекта**; `..`, `/`,
-   абсолютные пути и пробелы запрещены.
-3. `directory` — абсолютный путь, **строго** внутри `{workspacesRoot}/.worktrees/<projectId>/`; проверка
-   — лексическая **и** symlink-aware (по образцу `isInsideReal`/`resolveRealPath`, ADR-075/ADR-077).
-4. `branch` проходит `git check-ref-format`; допускается `HEAD` (detached).
+2. `name` соответствует `^[a-z0-9][a-z0-9._-]{0,63}$` (предел — 64 символа); уникален **в
+   пределах проекта** — коллизия разрешается детерминированным суффиксом `-2`, `-3`, … (до 20
+   попыток, дальше — `WORKTREE_PATH_EXISTS`); `..`, `/`, абсолютные пути и пробелы запрещены.
+3. `directory` — абсолютный путь, **строго** внутри `{workspacesRoot}/.worktrees/<projectId>/`;
+   по построению (корень — `join(workspacesRoot, '.worktrees', projectId)`, имя — slug);
+   симлинк-aware проверка — на уровне containment'а file/shell/git-тулов (§4).
+4. `branch` непустая, без пробелов, без `..` и без символов `~`, `^`, `:`, `?`, `*`, `[`, `\`
+   (`isValidWorktreeBranch`); detached-состояния (`HEAD`) сервис не создаёт — всегда создаётся
+   или переиспользуется ветка.
 5. `repoPath` — относительный путь внутри `project.workspace` (либо отсутствует); абсолютный путь и `..`
    запрещены — как `repo_path` в ADR-076.
-6. `status` соответствует фактическому состоянию: `attached` — есть хотя бы одна живая привязка сессии,
-   `detached` — привязок нет, каталог на месте, `removed` — запись удалена (в списке не хранится).
+6. Состояние записи **вычисляется**, а не хранится: привязанная сессия — `attachedSessionId` в
+   сводке списка, каталог на месте — `exists`, незакоммиченные изменения — `dirty`. Сама запись
+   переживает исчезновение каталога (её чистит `prune`/sweep, §7.3–§7.4).
 7. `createdAt` не меняется никогда; `updatedAt` — только вперёд.
 
 ### 1.3. Привязка сессии
@@ -93,6 +100,12 @@ Session.worktree?: {
 прежде). Значение — снимок на момент привязки: `directory` и `branch` копируются из записи, чтобы
 резолв cwd не требовал чтения порта на каждом ходу; актуальность записи проверяется при операциях
 (удаление/перенос).
+
+> **Форма в API и в хранилище.** Внутри ядра привязка — объект `SessionWorktree` (camelCase, как
+> выше). В **ответах API** (`GET`/`PATCH /api/v2/sessions/:id`) и в **форме хранения** сессии
+> (файловый стор, PostgreSQL) поле сериализуется в **snake_case**:
+> `{ worktree_id, project_id, repo_path, directory, branch }`; у сессии без привязки — `null`.
+> `repo_path` — `null`, если репозиторий в корне workspace.
 
 ---
 
@@ -122,7 +135,8 @@ Session.worktree?: {
 > как `PRIMARY KEY (kind, key)`; драйвер использует её через `createDocumentPort`
 > (`packages/storage-postgres/src/ports/principals-documents.ts`) для `providers`/`models`/`agents`
 > и напрямую — для worktree'ов (`packages/storage-postgres/src/ports/worktrees.ts`, ключ — `id`
-> записи, значение — запись целиком). Миграция `023` не нужна.
+> записи, значение — запись целиком). Для **записей** worktree миграция `023` не нужна; для
+> **привязки сессии** — нужна (`023_session_worktree`, §3.4).
 
 ### 2.3. Контрактный suite
 
@@ -132,6 +146,25 @@ Session.worktree?: {
 запись (без необязательных полей) читается без потерь. Прогон против живой БД — тот же гейт
 `SYNTH_TEST_POSTGRES_DSN`. Подключён к трём прогонам: `contract/file.test.ts`,
 `contract/memory.test.ts`, `contract/postgres.test.ts`.
+
+### 2.4. Сервис worktree'ов (слой поведения)
+
+`WorktreeService` (`packages/core/src/engine/worktree/service.ts`) — единственное место, где живёт
+поведение вокруг записи: git-операции, lifecycle, детект secondary worktree, startup-скрипт.
+
+| Ответственность | Как сделано |
+|---|---|
+| Исполнение git | **только через порт** `ExecutionPort` (`git/exec.ts`, ADR-077): argv без shell, `requires: ['git']`; в remote-режиме команды уходят исполнителю |
+| Запись инвентаря | **только через порт** `WorktreeRepository` (ADR-096) — сервис не пишет в `{dataDir}/worktrees.json` напрямую |
+| Корень каталогов | `{workspacesRoot}/.worktrees/<projectId>` (`rootFor`); имя каталога — slug, коллизия → суффикс `-2`, `-3`, … (до 20 попыток) |
+| Создание | `git worktree add` (с `-b <branch> <from>`, если база задана и существует; база не найдена → `WORKTREE_GIT_FAILED`, fail-closed) → запись → startup-скрипт (§7.6) |
+| Удаление | проверка привязки сессии → проверка «грязности» → `git worktree remove` (+ `--force`) → `git worktree prune` → удаление записи |
+| Prune | удаление **только** записей без каталога + `git worktree prune` (каталоги без записей не трогаются) |
+| Детект secondary | `git rev-parse --git-common-dir` / `--git-dir` / `--show-toplevel`; ошибка git → `isSecondary: false` (ход не ломается) |
+
+Сервис **не знает** про транспорт и про сессии: об изменении инвентаря он сообщает вызывающему
+через `onUpdated(projectId, { worktreeId?, action })` (событие публикует тот, кто знает про шину,
+ADR-024), а привязанную сессию получает через хук `resolveAttachedSession(worktreeId)`.
 
 ---
 
@@ -157,22 +190,30 @@ Session.worktree?: {
 
 ### 3.3. Наследование саб-агентами
 
-Саб-агент, созданный тулом `task` (ADR-111), **наследует привязку родителя**: в дочерней сессии
-`session.worktree` = привязка родителя (тот же `worktreeId`, тот же каталог). Наследование означает
-«тот же рабочий каталог», а не «свой worktree»: отдельный worktree саб-агенту не выдаётся — это
-осознанно (иначе каждый саб-агент плодил бы ветки и каталоги). Фоновая сессия (ADR-111) наследует так же.
+Саб-агент, созданный тулом `task` (ADR-111), **наследует привязку родителя**: резолв рабочего
+каталога дочерней сессии читает привязку родителя (по `parentId`). Наследование **одноуровневое**
+(читается ровно одна сессия-родитель, без рекурсии) и **наследуется, а не копируется**: поле
+`session.worktree` в дочерней сессии не появляется — ребёнок может получить собственную привязку
+позже (тогда она и станет приоритетной). Наследование означает «тот же рабочий каталог», а не
+«свой worktree»: отдельный worktree саб-агенту не выдаётся — это осознанно (иначе каждый
+саб-агент плодил бы ветки и каталоги). Фоновая сессия (ADR-111) наследует так же.
 
 ### 3.4. Где хранится привязка
 
-В самой сессии (`Session.worktree`) — переживает рестарт и не зависит от доступности порта при чтении.
-При переносе сессии в другой проект (`project_attach`, ADR-014) привязка **снимается**: worktree
-принадлежит проекту, и чужая привязка дала бы сессии каталог вне её проекта.
+В самой сессии (`Session.worktree`) — переживает рестарт и не зависит от доступности порта при
+чтении. Сериализация привязки **реализована**:
 
-> **Остаток реализации (важно).** Поле `Session.worktree` добавлено в контракт (`shared`,
-> шаг 1.4.1a), но его **сериализация** в портах сессий — ещё нет: файловый стор
-> (`SerializedSession`) и PostgreSQL-драйвер перечисляют поля явно, поэтому привязка пока
-> **не переживает рестарт**. Пункт обязателен для шага сервиса/тулов: без него резолв cwd после
-> рестарта молча ушёл бы в `project.workspace` — ровно тот сценарий, который ADR-114 запрещает.
+- файловый стор сессий (`SerializedSession`, `packages/core/src/storage/file-store.ts`) — поле
+  `worktree` в **snake_case** (`worktree_id`/`project_id`/`repo_path`/`directory`/`branch`);
+- PostgreSQL — колонка `sessions.worktree jsonb`, **миграция `023_session_worktree`**
+  (`packages/storage-postgres/src/migrations/023-session-worktree.ts`); миграция идемпотентна
+  (`IF NOT EXISTS`).
+
+При переносе сессии в другой проект (`project_attach`/`project_create`, ADR-014) привязка
+**снимается**: worktree принадлежит проекту, и чужая привязка дала бы сессии каталог вне её
+проекта. Снятие видно в событии `session.moved` (`worktree_detached: true`) и в ответе тула
+(`worktree_detached` в metadata); при смене проекта через `PATCH /api/v2/sessions/:id` — в
+событии `worktree.updated` с `action: 'detached'`.
 
 ---
 
@@ -204,9 +245,13 @@ Session.worktree?: {
 |---|---|---|
 | `git.repo_path_invalid` | git-тулы | `repo_path` — абсолютный путь или `..` внутри worktree |
 | `worktree.directory_missing` | резолв cwd | каталог привязанного worktree исчез (fail-closed) |
-| `worktree.not_found` | HTTP/тулы | записи нет (или она чужого проекта) |
-| `FORCE_REQUIRED` | HTTP `DELETE` | есть незакоммиченные изменения, нужен `force` |
+| `WORKTREE_NOT_FOUND` | HTTP/тулы | записи нет (или она чужого проекта) |
+| `WORKTREE_DIRTY` | HTTP `DELETE` | есть незакоммиченные изменения, нужен `force` (в теле ответа — `error.forceRequired: true`) |
 | `WORKTREE_BUSY` | HTTP `DELETE` | запись привязана к живой сессии |
+| `WORKTREE_GIT_FAILED` | HTTP/тулы | команда git завершилась ошибкой (в т.ч. несуществующая база ветки) |
+| `WORKTREE_NOT_A_REPO` | HTTP | указанный путь не git-репозиторий или у проекта нет рабочего каталога |
+| `WORKTREE_PATH_EXISTS` | HTTP | свободного имени каталога не нашлось (20 попыток) |
+| `WORKTREE_BRANCH_INVALID` / `WORKTREE_NAME_INVALID` | тулы | недопустимая ветка/имя — по HTTP **недостижимы** (валидация тела даёт `400 VALIDATION_ERROR`), живут в `metadata.worktree_error` ответа тула |
 
 ---
 
@@ -217,16 +262,25 @@ Session.worktree?: {
 
 | Метод | Путь | Тело | Ответ |
 |---|---|---|---|
-| `GET` | `/api/v2/projects/:id/worktrees` | — | `200 { worktrees: WorktreeRecord[] }` |
-| `POST` | `/api/v2/projects/:id/worktrees` | `{ name?, branch?, repoPath?, from? }` (`worktreeCreateSchema`) | `201 { worktree: WorktreeRecord }` |
-| `DELETE` | `/api/v2/projects/:id/worktrees/:wid` | `{ force?: boolean }` (или query `?force=true`) | `204` (пусто) |
-| `POST` | `/api/v2/projects/:id/worktrees/prune` | — (`worktreePruneSchema`: параметров нет) | `200 { removed: string[] }` (id удалённых записей) |
+| `GET` | `/api/v2/projects/:id/worktrees` | — | `200 { worktrees: WorktreeSummary[] }` |
+| `POST` | `/api/v2/projects/:id/worktrees` | `{ branch?, name?, repoPath?, from? }` (`worktreeCreateSchema`) | `201 { worktree: WorktreeRecord, setup?: { ok, exitCode?, error? } }` |
+| `DELETE` | `/api/v2/projects/:id/worktrees/:wid?force=true` | — (тело не читается) | `204` (пусто) |
+| `POST` | `/api/v2/projects/:id/worktrees/prune` | отсутствует/пустое; непустое — строгая схема | `200 { recordsRemoved: number, gitPruned: boolean }` |
 | `PATCH` | `/api/v2/sessions/:id` | `{ worktreeId: string \| null }` | `200` — обновлённая сессия |
 
-> **Имена полей HTTP-тела** (реализовано на шаге 1.4.1a, схема `worktreeCreateSchema` в
-> `packages/shared/src/types/worktree.ts`): имя каталога — **`name`** (не `slug`), база ветки —
-> **`from`** (не `baseRef`). Валидация: `name` — slug `^[a-z0-9][a-z0-9._-]{0,63}$`, `branch` —
-> без пробелов/`..`/`~`/`^`/`:`/`?`/`*`/`[`/`\`, `repoPath` — относительный путь без `..`.
+**Записи в ответах — camelCase** (`id`, `projectId`, `repoPath?`, `directory`, `branch`, `name`,
+`strategy`, `createdAt`, `updatedAt`, `createdBy?`); сводка списка добавляет **вычисляемые** поля
+`attachedSessionId?`, `dirty?`, `exists?` (в порт они не пишутся, §1.1). Поле `setup` в ответе
+`POST` присутствует **только** если у проекта задан `worktreeSetupScript` (§7.6).
+
+**Привязка сессии** — наоборот, в **snake_case** (§1.3): `GET /api/v2/sessions/:id` отдаёт поле
+`worktree` (`{ worktree_id, project_id, repo_path, directory, branch }` или `null`).
+
+> **Имена полей HTTP-тела** (реализовано, схемы в `packages/shared/src/types/worktree.ts`): имя
+> каталога — **`name`** (не `slug`), база ветки — **`from`** (не `baseRef`). Валидация: `name` —
+> slug `^[a-z0-9][a-z0-9._-]{0,63}$`, `branch` — без пробелов/`..`/`~`/`^`/`:`/`?`/`*`/`[`/`\`,
+> `repoPath` — относительный путь без `..`. Тело prune — **строгая** схема: лишнее поле →
+> `400 VALIDATION_ERROR` (пустое тело — успех).
 
 ### 5.1. Права
 
@@ -236,6 +290,10 @@ Session.worktree?: {
 | `POST`/`DELETE`/`prune` | право **изменения содержимого** проекта: `OWNER`, `EDITOR`, `LEAD`, `ADMIN` (инвариант 21 — `VIEWER` только читает и получает 403) |
 | `PATCH /api/v2/sessions/:id` | доступ к сессии по правилам prefix-guard'а (`server/session-access-guard.ts`): владелец, `ADMIN`/`LEAD`, участник проекта с правом изменения содержимого; чужая сессия — 404, а не 403 |
 
+Матрица доступа (владелец / `EDITOR` / `VIEWER` / `ADMIN` / `LEAD` / посторонний) — тест
+`packages/backend/src/routes/worktree-access-matrix.test.ts`: проверяет production-модуль и снимает
+перечень маршрутов со **смонтированного** приложения (появился `:id`-маршрут — тест красный).
+
 ### 5.2. Коды ответов
 
 | Код | Когда |
@@ -243,18 +301,27 @@ Session.worktree?: {
 | `200` | список, prune, успешный `PATCH` сессии |
 | `201` | создан worktree |
 | `204` | worktree удалён (тело пустое) |
-| `400` `VALIDATION_ERROR` | невалидный `slug`/`branch`/`repoPath`, неизвестное тело |
+| `400` `VALIDATION_ERROR` | невалидное тело (`name`/`branch`/`repoPath`/`from`), лишнее поле в теле prune; `worktreeId` — не строка и не `null`; у сессии нет проекта; сервис привязки недоступен в этом инстансе |
+| `400` `WORKTREE_NOT_A_REPO` | путь не git-репозиторий или у проекта нет рабочего каталога |
 | `403` `FORBIDDEN` | нет права изменения содержимого проекта (`VIEWER`) |
-| `404` `NOT_FOUND` | нет проекта, записи или сессии; запись чужого проекта — тоже 404 (факт существования не выдаётся) |
-| `409` `FORCE_REQUIRED` | удаление с незакоммиченными изменениями без `force` |
+| `404` `NOT_FOUND` | нет проекта или сессии |
+| `404` `WORKTREE_NOT_FOUND` | записи worktree нет (или она чужого проекта — факт существования не выдаётся) |
+| `409` `WORKTREE_DIRTY` | удаление с незакоммиченными изменениями без `force` (в теле — `error.forceRequired: true`) |
 | `409` `WORKTREE_BUSY` | удаление worktree, привязанного к живой сессии |
-| `409` `CONFLICT` | каталог/ветка уже существует (slug занят, ветка уже занята в другом worktree) |
+| `409` `WORKTREE_GIT_FAILED` | команда git завершилась ошибкой (в т.ч. база ветки не найдена) |
+| `409` `WORKTREE_PATH_EXISTS` | не нашлось свободного имени каталога |
+| `409` `WORKTREE_DIRECTORY_MISSING` | привязка к worktree, у которого нет каталога на диске (`PATCH /api/v2/sessions/:id`) |
 
-Ответы на `POST`/`GET` содержат **схему записи** `WorktreeRecord` (§1.1) — тот же контракт, что и в
-UI, и в тулах.
+Машинные коды `WORKTREE_BRANCH_INVALID`/`WORKTREE_NAME_INVALID` **по HTTP недостижимы**: тело
+валидируется Zod-схемой (`400 VALIDATION_ERROR`). Они живут в `metadata.worktree_error` ответов
+тулов `git_worktree_*`.
 
-> При реализации те же эндпоинты описываются в `docs/API_V2.md` (§5.x — раздел проектных
-> ресурсов); здесь — полный контракт, чтобы спека API и ADR не расходились.
+Привязка сессии резолвится **под локом сессии** (`SessionManager.withLock`): запись ищется в
+проекте сессии **после** возможного переноса сессии в другой проект — иначе параллельный перенос
+привязал бы worktree прежнего проекта.
+
+> **Остаток:** эти эндпоинты ещё не вынесены в `docs/API_V2.md` — спека API отстаёт; полный
+> контракт подсистемы — здесь (§5), решение — [ADR-114](./arch_decisions/adr-114-git-worktrees.md).
 
 ---
 
@@ -264,15 +331,31 @@ UI, и в тулах.
 
 | Тип | Канал | Данные |
 |---|---|---|
-| `worktree.updated` | канал действующей сессии (как `project.updated`, ADR-014) | `{ projectId, worktreeId?, action }`, где `action` ∈ `created \| removed \| pruned \| attached \| detached` |
+| `worktree.updated` | каналы **всех сессий проекта** (инвентарь — ресурс проекта, а не одной сессии) | `{ project_id, worktree_id?, action }`, где `action` ∈ `created \| removed \| pruned \| attached \| detached` |
 
-Минимальный контракт события — `{ projectId }`: по нему UI перечитывает инвентарь проекта и **инвалидирует
-дерево Files** (структура каталогов изменилась). Дополнительные поля — для точечного обновления строки
-инвентаря.
+Payload — в **snake_case** (как остальные события шины): `project_id` — проект-владелец инвентаря,
+`worktree_id` — конкретная запись (нет — для prune/sweep), `action` — что произошло. Минимальный
+контракт события — `{ project_id }`: по нему UI перечитывает инвентарь проекта и **инвалидирует
+дерево Files** (структура каталогов изменилась). `action` позволяет отличить создание от
+удаления/привязки, не читая инвентарь.
+
+Публикация ограничена **200 сессиями** проекта (`WORKTREE_EVENT_MAX_SESSIONS`): событие — сигнал
+«перечитай инвентарь», а не поток данных, поэтому перебор каналов не должен блокировать публикацию
+в проекте с тысячами сессий.
 
 Создание и удаление worktree меняют файлы на диске, поэтому дополнительно публикуется
 `fs.changed { scope: 'all' }` (существующий механизм ADR-089/ADR-024) — так дерево Files и открытые
 редакторы перечитывают рабочее дерево.
+
+Действия и их источники:
+
+| `action` | Когда |
+|---|---|
+| `created` | создан worktree (`POST /api/v2/projects/:id/worktrees`, тул `git_worktree_create`) |
+| `removed` | worktree удалён (`DELETE …`, тул `git_worktree_remove`) |
+| `pruned` | вычищены записи без каталога (`POST …/prune`, тул `git_worktree_prune`) |
+| `attached` | сессия привязана к worktree (`PATCH /api/v2/sessions/:id { worktreeId }`) |
+| `detached` | привязка снята (тот же `PATCH` с `worktreeId: null`; перенос сессии в другой проект) |
 
 ---
 
@@ -293,26 +376,36 @@ created ──привязка сессии──▶ attached ──отвязк
 - **detached** — привязок нет, каталог на месте.
 - **removed** — каталог снят (`git worktree remove`), запись удалена.
 
+> Состояния — **концептуальные**: отдельного поля `status` в записи нет (§1.2), их вычисляет
+> сервис — по привязанной сессии (`attachedSessionId` в сводке списка) и наличию каталога (`exists`).
+
 ### 7.2. Удаление
 
-- Есть **незакоммиченные изменения** → `409 FORCE_REQUIRED`: нужен явный `force: true`
-  (`git worktree remove --force`). Молчаливая потеря изменений недопустима.
-- Запись **привязана к живой сессии** → `409 WORKTREE_BUSY`: сначала отвязать сессию
-  (`PATCH /api/v2/sessions/:id { worktreeId: null }`).
+- Есть **незакоммиченные изменения** → `409 WORKTREE_DIRTY`: нужен явный `?force=true`
+  (`git worktree remove --force`). Молчаливая потеря изменений недопустима; в теле ответа —
+  `error.forceRequired: true`.
+- Запись **привязана к живой сессии** → `409 WORKTREE_BUSY` (даже с `force`): сначала отвязать
+  сессию (`PATCH /api/v2/sessions/:id { worktreeId: null }`).
+- Ошибка git → `409 WORKTREE_GIT_FAILED` (текст git — в сообщении).
 - Иначе → `204`, запись удаляется, каталог снимается.
 
 ### 7.3. Prune
 
 `POST /api/v2/projects/:id/worktrees/prune` — удаляет **только записи, у которых каталога уже нет**
 (запись осиротела: каталог удалили вручную, `git worktree prune` убрал его). Выполняется
-`git worktree prune` (чистка метаданных в общем `.git`) и удаление соответствующих записей. Ответ —
-`{ removed: string[] }`.
+`git worktree prune` (чистка метаданных в общем `.git`) и удаление соответствующих записей.
+Ответ — `{ recordsRemoved: number, gitPruned: boolean }`; `gitPruned: false` — репозиторий
+недоступен (записи всё равно вычищены). Каталоги без записей не трогаются: worktree, созданный
+вручную внутри `.worktrees/<projectId>/`, — собственность пользователя.
 
 ### 7.4. Sweep на старте
 
-При старте инстанса выполняется sweep осиротевших записей: записи, чей каталог отсутствует, удаляются
-(иначе UI показывал бы несуществующие worktree, а удаление — падало бы с «нет каталога»). Живые записи не
-трогаются; sweep **не** удаляет каталоги — только записи.
+Сервис умеет вычищать осиротевшие записи (`sweepOrphans()`): записи, чей каталог отсутствует,
+удаляются (иначе UI показывал бы несуществующие worktree, а удаление — падало бы с «нет каталога»);
+живые записи не трогаются, sweep **не** удаляет каталоги — только записи.
+
+> **Остаток:** вызов sweep'а на старте процесса **не подключён** — метод покрыт тестами, но
+> стартового хука нет. Пока осиротевшую запись чистит `prune` проекта (§7.3).
 
 ### 7.5. Автоудаления при архивации сессии — нет
 
@@ -322,18 +415,20 @@ Worktree переживает сессию: архивирование, закр
 
 ### 7.6. Startup-скрипт проекта
 
-Опциональный `project.worktreeSetupScript` — команда, выполняемая **один раз** после создания worktree
-(по образцу opencode). Исполнение — через `ExecutionPort` (ADR-077), argv/шелл по конфигурации проекта.
+Опциональный `project.worktreeSetupScript` — команда, выполняемая **один раз при создании
+worktree** (по образцу opencode). Исполнение — через `ExecutionPort` (ADR-077); в remote-режиме
+команда уходит исполнителю. Аргументы/шелл — по конфигурации проекта.
 
 | Параметр | Значение |
 |---|---|
-| Рабочий каталог | каталог worktree |
-| Окружение | `SYNTH_WORKTREE_BASE` — каталог основного репозитория; `SYNTH_WORKTREE_PATH` — каталог worktree |
-| Таймаут | ограничение команды (как у прочих команд через порт) |
-| Вывод | пишется в лог команды; итог — в ответе тула/операции |
-| Повтор | не выполняется повторно для той же записи (признак `setupScriptRun`) |
+| Рабочий каталог | каталог созданного worktree |
+| Окружение | `SYNTH_WORKTREE_BASE` — **корень worktree'ов проекта** (`{workspacesRoot}/.worktrees/<projectId>`); `SYNTH_WORKTREE_PATH` — каталог нового worktree |
+| Таймаут | 5 минут |
+| Вывод | пишется в лог порта исполнения; итог — в ответе операции (`setup.ok`/`setup.exitCode`/`setup.error`) |
+| Повтор | скрипт выполняется только в операции создания; для новой записи — снова |
 
-Сбой скрипта **не** удаляет созданный worktree: ошибка уходит в лог и в ответ операции, запись остаётся.
+Сбой скрипта **не** удаляет созданный worktree: ошибка уходит в лог и в ответ операции
+(`setup.ok = false`), запись остаётся.
 
 ---
 
@@ -359,9 +454,14 @@ Worktree переживает сессию: архивирование, закр
 
 ## 9. UI-поведение
 
-| Точка входа | Поведение |
+> ⚠️ **Не реализовано.** Раздел — **план** (ADR-114 §9). В коде UI worktree'ов нет: ни инвентаря
+> в настройках проекта, ни селектора worktree, ни индикатора secondary worktree, ни скрытия
+> `.worktrees` в дереве Files. Работающий контур — HTTP-контур (§5) и тулы `git_worktree_*`;
+> **UI — остаток ADR-114**.
+
+| Точка входа | Поведение (план) |
 |---|---|
-| Настройки проекта → «Worktrees» | инвентарь проекта (как «Workspaces» в opencode): slug, ветка, статус, число привязанных сессий; действия — создать, удалить (с подтверждением `force`), prune |
+| Настройки проекта → «Worktrees» | инвентарь проекта (как «Workspaces» в opencode): имя, ветка, состояние, число привязанных сессий; действия — создать, удалить (с подтверждением `force`), prune |
 | Создание сессии | селектор worktree проекта (если инвентарь непуст); по умолчанию — основной каталог проекта |
 | Шапка сессии | текущий worktree + **индикатор secondary worktree** (бейдж: каталог — вторичная копия, общий `.git`) |
 | Дерево Files | каталог `.worktrees` **скрыт** — исключение на сервере (даже при `includeHidden=true`), плюс исключение из поиска/глоба по файлам |
@@ -380,38 +480,40 @@ Worktree переживает сессию: архивирование, закр
 3. Привязка сессии → `PATCH /api/v2/sessions/:id { worktreeId }` → рабочий каталог сессии = каталог
    worktree (проверка через резолв cwd).
 4. Саб-агент (`task`) наследует привязку.
-5. Отвязка → `status` записи `detached`.
+5. Отвязка → в сводке пропадает `attachedSessionId`, событие `worktree.updated { action: 'detached' }`.
 6. Удаление → `204`, каталога нет, записи нет.
 7. `prune` удаляет запись без каталога и не трогает живые.
-8. Sweep на старте удаляет осиротевшую запись.
-9. Startup-скрипт выполняется один раз, получает `SYNTH_WORKTREE_BASE`/`SYNTH_WORKTREE_PATH`, его вывод
-   в логе; повторный вызов не выполняет.
-10. Remote-режим: команда уходит исполнителю, `cwd` — каталог worktree (ADR-077, контрактный suite порта).
+8. Startup-скрипт выполняется при создании, получает `SYNTH_WORKTREE_BASE` (корень worktree'ов
+   проекта) и `SYNTH_WORKTREE_PATH` (каталог worktree), его вывод — в логе; сбой не удаляет запись.
+9. Remote-режим: команда уходит исполнителю, `cwd` — каталог worktree (ADR-077, контрактный suite порта).
 
 ### 10.2. Негативная матрица
 
 | Сценарий | Ожидание |
 |---|---|
-| `slug` с `..`, `/`, пробелами, абсолютным путём | `400 VALIDATION_ERROR` |
-| `slug` длиннее 64 символов или с недопустимыми символами | `400 VALIDATION_ERROR` |
-| `branch`, не проходящая `git check-ref-format` | `400 VALIDATION_ERROR` |
+| `name` (slug) с `..`, `/`, пробелами, абсолютным путём | `400 VALIDATION_ERROR` |
+| `name` длиннее 64 символов или с недопустимыми символами | `400 VALIDATION_ERROR` |
+| `branch` с пробелами, `..` или запрещёнными символами (`~^:?*[\`) | `400 VALIDATION_ERROR` |
 | `repoPath` абсолютный или с `..` | `400 VALIDATION_ERROR` |
-| Дубль `slug` в проекте | `409 CONFLICT` |
-| Ветка уже занята в другом worktree | `409 CONFLICT` (ошибка git'а) |
-| Удаление с незакоммиченными изменениями без `force` | `409 FORCE_REQUIRED` |
-| То же с `force: true` | `204` |
+| Лишнее поле в теле prune | `400 VALIDATION_ERROR` |
+| `worktreeId` — не строка и не `null` | `400 VALIDATION_ERROR` |
+| Привязка к worktree, у которого нет каталога | `409 WORKTREE_DIRECTORY_MISSING` |
+| Дубль имени в проекте | имя разрешается суффиксом `-2`; исчерпание попыток → `409 WORKTREE_PATH_EXISTS` |
+| Ветка уже занята в другом worktree | `409 WORKTREE_GIT_FAILED` (текст git'а) |
+| Удаление с незакоммиченными изменениями без `force` | `409 WORKTREE_DIRTY` (+ `error.forceRequired: true`) |
+| То же с `?force=true` | `204` |
 | Удаление worktree, привязанного к живой сессии | `409 WORKTREE_BUSY` |
 | `repo_path` = абсолютный путь или `..` внутри worktree | `git.repo_path_invalid` |
 | Каталог привязанного worktree удалён вручную | резолв cwd → fail-closed `worktree.directory_missing`, **без** фоллбэка в `project.workspace` |
 | Выход за каталог worktree через `..`/симлинк | fail-closed (существующая логика containment) |
-| `.worktrees` в дереве Files | отсутствует (даже при `includeHidden=true`) и в выдаче поиска |
-| Права: `VIEWER` на `POST`/`DELETE` | `403 FORBIDDEN` |
+| Права: `VIEWER` на `POST`/`DELETE`/`prune` | `403 FORBIDDEN` |
 | Права: `VIEWER` на `GET` | `200` (только чтение) |
-| Права: посторонний (не участник проекта) на `GET`/`POST` | `404`/`403` по правилам проекта (существование не выдаётся) |
-| IDOR: `worktreeId` чужого проекта в `DELETE` | `404 NOT_FOUND` |
+| Права: посторонний (не участник проекта) на `GET`/`POST` | `403 FORBIDDEN` (существование не выдаётся) |
+| IDOR: `worktreeId` чужого проекта в `DELETE` | `404 WORKTREE_NOT_FOUND` |
+| IDOR: `worktreeId` чужого проекта в `PATCH /api/v2/sessions/:id` | `404 WORKTREE_NOT_FOUND` |
 | IDOR: `sessionId` чужой сессии в `PATCH` | `404 NOT_FOUND` (prefix-guard сессий) |
 | `plan`-режим: `git_worktree_create`/`remove`/`prune` | deny (группа `git_write`, ADR-029); `git_worktree_list` — allow |
-| Порядок маршрутов: `POST /worktrees/prune` vs `DELETE /worktrees/:wid` | статический сегмент `prune` объявлен раньше параметрического |
+| Порядок маршрутов: `POST /worktrees/prune` vs `DELETE /worktrees/:wid` | статический сегмент `prune` объявлен раньше параметрического (методы разные — конфликта нет) |
 | Контракт порта: file / memory / PostgreSQL | одинаковая семантика (upsert, фильтры, идемпотентность) |
 
 ---
@@ -439,3 +541,4 @@ Worktree переживает сессию: архивирование, закр
   миграции) реализации и контрактный suite (file/memory/PG). Уточнены имена полей: `name`
   (вместо `slug`), `from` (вместо `baseRef`), `strategy`; добавлен `deleteByProject`; сортировка
   списка — по `createdAt`. Поля жизненного цикла (`baseRef`/`status`/`setupScriptRun`) — с сервисом.
+- 2026-10-26 — этап 1.4 (поведение): реализованы сервис worktrees (`engine/worktree/service.ts`: git-операции через `ExecutionPort`, lifecycle, детект secondary, startup-скрипт), привязка сессии с персистентностью (файловый стор + миграция PG `023_session_worktree`), резолв per-session cwd (fail-closed, наследование саб-агентом), тулы `git_worktree_list|create|remove|prune`, HTTP-контур (`/api/v2/projects/:id/worktrees*`, `PATCH /api/v2/sessions/:id { worktreeId }`), событие `worktree.updated` + `fs.changed`, матрица доступа. Уточнены контракты: сводка списка — camelCase с вычисляемыми `attachedSessionId`/`dirty`/`exists`, привязка сессии и payload события — snake_case, `prune` → `{ recordsRemoved, gitPruned }`, коды ошибок — `WORKTREE_*` (вместо `FORCE_REQUIRED`/`CONFLICT`), `SYNTH_WORKTREE_BASE` — корень worktree'ов проекта. Остаток — UI (§9) и вызов sweep'а на старте (§7.4).

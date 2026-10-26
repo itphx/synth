@@ -29,7 +29,7 @@
 | 1.1 | **Данные: мультимодальный `Part` и blob-порт** | [PROP-085](./arch_decisions/prop-085-multimodal-input.md), [PROP-106](./arch_decisions/prop-106-file-ports-to-sql.md) (часть: `blobs`/`packs`/legacy-`pipelines`) | сообщение с изображением/аудио проходит от API до провайдера; вложение лежит в порте хранения, а не пишется мимо него; второй миграции не потребуется | — |
 | 1.2 | **Фоны: саб-агенты и процессы** | [ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md), [ADR-113](./arch_decisions/adr-113-background-processes.md) | дочерняя сессия/процесс живёт после ответа родителя, виден в реестре и в UI; реестр — через порты хранения, а не файлами | ✅ ADR-111/ADR-113 |
 | 1.3 | **`question`: вопрос посреди хода** | [ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md), [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) (HITL-гейт), [ADR-104](./arch_decisions/adr-104-mid-turn-steering.md) (границы хода) | ход замирает до ответа, ответ приходит как `resume` с `output`, вопрос и ответ видны в журнале | ✅ ADR-112 |
-| 1.4 | **per-session cwd / worktrees** | [ADR-114](./arch_decisions/adr-114-git-worktrees.md), [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md), [PROP-049](./arch_decisions/prop-049-git-worktrees.md) (исходное предложение), [docs/WORKTREES.md](./WORKTREES.md) (спецификация) | сессия работает в своём каталоге, инструменты и git не пересекаются между сессиями | 🚧 ADR-114 |
+| 1.4 | **per-session cwd / worktrees** | [ADR-114](./arch_decisions/adr-114-git-worktrees.md), [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md), [PROP-049](./arch_decisions/prop-049-git-worktrees.md) (исходное предложение), [docs/WORKTREES.md](./WORKTREES.md) (спецификация) | сессия работает в своём каталоге, инструменты и git не пересекаются между сессиями | 🚧 ADR-114 (ядро ✅, UI впереди) |
 | 1.5 | **Остаток исполнителя** | [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 7c–7d) | git (вместо `simple-git`) и MCP-stdio исполняются исполнителем, метрики `synth_executor_*` — в контракте [ADR-094](./arch_decisions/adr-094-observability-metrics.md) | ✅ ADR-077 (git, MCP, `synth_executor_*`) |
 
 **Статус на 2026-10-26:** 1.2 и 1.3 закрыты ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
@@ -38,10 +38,14 @@
 (протокол v3) — фоновые процессы поддержаны и в `inline`, и в `remote`
 ([ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) шаг 7c;
 ограничение — исполнитель протокола < 3, `background_unsupported`).
-**1.4 — решение принято** ([ADR-114](./arch_decisions/adr-114-git-worktrees.md), 2026-10-26): контракт
-per-session cwd на базе git worktree зафиксирован (корень внутри корня workspace, инвентарь доменным
-портом, привязка сессии аддитивным полем, тулы `git_worktree_*`, HTTP-контур и событие
-`worktree.updated`); спецификация — [docs/WORKTREES.md](./WORKTREES.md); **реализация впереди** (🚧).
+**1.4 — ядро реализовано, остался UI** ([ADR-114](./arch_decisions/adr-114-git-worktrees.md),
+2026-10-26): контракт per-session cwd на базе git worktree зафиксирован (корень внутри корня
+workspace, инвентарь доменным портом, привязка сессии аддитивным полем, тулы `git_worktree_*`,
+HTTP-контур и событие `worktree.updated`) и **реализован** (этап 1.4: порт + три backend'а, сервис
+worktrees, привязка сессии с персистентностью — миграция `023_session_worktree`, резолв cwd с
+fail-closed и наследованием, тулы, HTTP-контур, событие, матрица доступа и тесты); спецификация —
+[docs/WORKTREES.md](./WORKTREES.md); **остаток — UI** (🚧): инвентарь в настройках проекта, селектор
+worktree, индикатор secondary worktree, скрытие `.worktrees` в дереве Files.
 
 ### Этап 2 — доведение начатого (2a → 2b)
 
@@ -135,7 +139,7 @@ containment от каталога сессии, тулы `git_worktree_list|crea
 жизненный цикл (`forceRequired`, `prune`, sweep на старте, `project.worktreeSetupScript`), HTTP-контур
 `/api/v2/projects/:id/worktrees*` + `PATCH /api/v2/sessions/:id`, событие `worktree.updated`, UI) — из
 списка предложений снят; файл предложения остаётся в каталоге как исходная гипотеза; спецификация —
-[docs/WORKTREES.md](./WORKTREES.md); **реализация впереди** (🚧, блок 1.4).
+[docs/WORKTREES.md](./WORKTREES.md); **ядро реализовано** (🚧, блок 1.4), остался **UI**.
 
 Пометка: `PROP-097` решением **2026-10-26** переведён в
 [ADR-113](./arch_decisions/adr-113-background-processes.md) (фоновые процессы: единый реестр
