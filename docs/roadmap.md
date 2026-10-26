@@ -32,7 +32,8 @@
 | 1.4 | **per-session cwd / worktrees** | [ADR-114](./arch_decisions/adr-114-git-worktrees.md), [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md), [PROP-049](./arch_decisions/prop-049-git-worktrees.md) (исходное предложение), [docs/WORKTREES.md](./WORKTREES.md) (спецификация) | сессия работает в своём каталоге, инструменты и git не пересекаются между сессиями | ✅ ADR-114 (ядро + UI + sweep при старте) |
 | 1.5 | **Остаток исполнителя** | [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 7c–7d) | git (вместо `simple-git`) и MCP-stdio исполняются исполнителем, метрики `synth_executor_*` — в контракте [ADR-094](./arch_decisions/adr-094-observability-metrics.md) | ✅ ADR-077 (git, MCP, `synth_executor_*`) |
 
-**Статус на 2026-10-26:** 1.2 и 1.3 закрыты ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
+**Статус на 2026-10-27:** этап 1 закрыт на 4 из 5 — 1.2, 1.3, 1.4 и 1.5 реализованы и выпущены;
+остаётся 1.1 (мультимодальный `Part` и blob-порт). 1.2 и 1.3 закрыты ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
 [ADR-113](./arch_decisions/adr-113-background-processes.md),
 [ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md)); остаток 1.2 (remote-процессы) закрыт
 (протокол v3) — фоновые процессы поддержаны и в `inline`, и в `remote`
@@ -53,6 +54,9 @@ fail-closed и наследованием, тулы, HTTP-контур, собы
 `ExecutionPort`, SSH-ключи доставляются исполнителю **на время вызова** (протокол 4, `secrets[]`),
 CA — конфигурация исполнителя (`SYNTH_EXECUTOR_TLS_CA_FILE`), метрики `synth_executor_*` — на обеих
 сторонах и в чарте (ADR-094). Остаток этапа 1 — только п. 1.1 (мультимодальный `Part` и blob-порт).
+**Выпущено на test (2026-10-27):** приложение `0.12.3`, чарт `synth 0.12.3-2` (Helm-ревизия 53),
+образы `synth-backend/ui:0.12.3` и `synth-executor:0.12.3-full`; бандлы `synth-test` и
+`synth-gateway-telegram` — `1/1`, `GET /health` → `version 0.12.3`.
 
 ### Этап 2 — доведение начатого (2a → 2b)
 
