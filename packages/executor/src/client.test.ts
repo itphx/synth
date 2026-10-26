@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createServer } from 'node:http';
+import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { egressFetch, ExecutionError } from '@itphx/synth-core';
+import type { ExecBackgroundProcess, ExecutionPort } from '@itphx/synth-core';
 import { createRemoteExecutionPort, type ExecutorFetch } from './client.js';
 import { startExecutorServer, type ExecutorHandle } from './server.js';
 
@@ -12,6 +13,8 @@ const TOKEN = 'executor-client-token-test-1234567890';
 
 let workspace: string;
 let handles: ExecutorHandle[] = [];
+/** «Старые» исполнители (протокол v2 — без фоновых процессов). */
+let legacyServers: Server[] = [];
 
 beforeEach(async () => {
   workspace = await realpath(await mkdtemp(join(tmpdir(), 'synth-executor-client-')));
@@ -20,6 +23,10 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const handle of handles) await handle.close();
   handles = [];
+  for (const server of legacyServers) {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+  legacyServers = [];
   await rm(workspace, { recursive: true, force: true });
 });
 
@@ -290,5 +297,190 @@ describe('клиент удалённого порта: инвентарь пу�
     expect(summary?.missing).toBe(1);
     expect(summary?.total).toBe(2);
     expect(summary?.unreachable).toBe(0);
+  });
+});
+
+/**
+ * ADR-077 (шаг 7c): фоновый запуск в удалённом порте.
+ *
+ * Процесс живёт на исполнителе, клиент наблюдает его опросом (журнал — 300 мс,
+ * состояние — 500 мс) и отдаёт те же поля, что и inline-порт: `processId`,
+ * `pid`, поток вывода, промис `exited`, `stop()`.
+ */
+describe('клиент удалённого порта: фоновый запуск', () => {
+  /** Исполнитель протокола v2 — фоновых процессов не знает. */
+  async function startLegacyExecutor(): Promise<string> {
+    const server = createServer((req, res) => {
+      if (req.url === '/capabilities') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            protocol: 2,
+            toolchain: { sh: 'sh 5.2' },
+            os: process.platform,
+            arch: process.arch,
+            node: process.version,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: {
+            reason: 'not_found',
+            code: null,
+            message: 'не найдено',
+            stdout: '',
+            stderr: '',
+            killed: false,
+            signal: null,
+            truncated: false,
+            durationMs: 0,
+          },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const { port } = server.address() as AddressInfo;
+    legacyServers.push(server);
+    return `http://127.0.0.1:${port}`;
+  }
+
+  /** Запустить фоновый процесс (метод обязан быть — иначе тест бессмыслен). */
+  async function spawnBackground(
+    port: ExecutionPort,
+    command: string,
+    requires?: string[],
+  ): Promise<ExecBackgroundProcess> {
+    const spawn = port.spawnBackground;
+    if (!spawn) throw new Error('ожидалась поддержка фонового запуска');
+    return spawn.call(port, {
+      command: { kind: 'shell', command },
+      ...(requires ? { requires } : {}),
+    });
+  }
+
+  it('фоновый процесс: proc_-id, pid, вывод потоком, exited с кодом 0', async () => {
+    const handle = await startExecutor();
+    const port = createRemoteExecutionPort({ urls: [handle.url], token: TOKEN });
+
+    const bg = await spawnBackground(port, 'printf hi; printf err >&2');
+    expect(bg.processId).toMatch(/^proc_/);
+    expect(bg.pid).toBeGreaterThan(0);
+
+    const chunks: Array<{ stream: string; data: string }> = [];
+    for await (const chunk of bg.output) {
+      chunks.push({ stream: chunk.stream, data: chunk.data });
+    }
+    const stdout = chunks
+      .filter((c) => c.stream === 'stdout')
+      .map((c) => c.data)
+      .join('');
+    const stderr = chunks
+      .filter((c) => c.stream === 'stderr')
+      .map((c) => c.data)
+      .join('');
+    expect(stdout).toContain('hi');
+    expect(stderr).toContain('err');
+
+    const exit = await bg.exited;
+    expect(exit.exitCode).toBe(0);
+    expect(exit.signal).toBeNull();
+  });
+
+  it('ненулевой код завершения — в exitCode', async () => {
+    const handle = await startExecutor();
+    const port = createRemoteExecutionPort({ urls: [handle.url], token: TOKEN });
+
+    const bg = await spawnBackground(port, 'exit 3');
+    const exit = await bg.exited;
+    expect(exit.exitCode).toBe(3);
+    expect(exit.signal).toBeNull();
+  });
+
+  it('stop() — процесс завершается по сигналу (killed)', async () => {
+    const handle = await startExecutor();
+    const port = createRemoteExecutionPort({ urls: [handle.url], token: TOKEN });
+
+    const bg = await spawnBackground(port, 'sleep 5');
+    bg.stop();
+    const exit = await bg.exited;
+    expect(exit.signal).not.toBeNull();
+    expect(exit.exitCode).toBeNull();
+    // Повторный `stop()` — no-op (не бросает).
+    expect(() => bg.stop()).not.toThrow();
+  });
+
+  it('недоступный адрес — ошибка запуска (fail-closed)', async () => {
+    const dead = await deadPort();
+    const port = createRemoteExecutionPort({
+      urls: [`http://127.0.0.1:${dead}`],
+      token: TOKEN,
+      failMode: 'fail',
+    });
+
+    const err = await spawnBackground(port, 'sleep 1').catch((e) => e);
+    expect(err).toBeInstanceOf(ExecutionError);
+    expect((err as ExecutionError).reason).toBe('spawn_failed');
+    expect((err as ExecutionError).code).toBe('EUNREACHABLE');
+  });
+
+  it('исполнитель исчез — exited резолвится, а не висит', async () => {
+    const handle = await startExecutor();
+    const port = createRemoteExecutionPort({ urls: [handle.url], token: TOKEN });
+
+    const bg = await spawnBackground(port, 'sleep 5');
+    // HTTP-сервер исполнитетеля остановлен — состояние процесса недоступно.
+    await new Promise<void>((resolve) => handle.server.close(() => resolve()));
+
+    const exit = await bg.exited;
+    expect(exit.exitCode).toBe(-1);
+    expect(exit.signal).toBeNull();
+  });
+
+  it('исполнитель протокола v2 — фоновые процессы не поддержаны', async () => {
+    const url = await startLegacyExecutor();
+    const port = createRemoteExecutionPort({ urls: [url], token: TOKEN });
+
+    const err = await spawnBackground(port, 'sleep 1').catch((e) => e);
+    expect(err).toBeInstanceOf(ExecutionError);
+    expect((err as ExecutionError).code).toBe('EBACKGROUND');
+  });
+
+  it('requires: адрес без нужной программы исключается из маршрутизации', async () => {
+    const withGit = await startExecutorServer({
+      token: TOKEN,
+      workspaceRoot: workspace,
+      host: '127.0.0.1',
+      port: 0,
+      toolchain: { git: 'git version 2.39.2' },
+    });
+    handles.push(withGit);
+    const withoutGit = await startExecutorServer({
+      token: TOKEN,
+      workspaceRoot: workspace,
+      host: '127.0.0.1',
+      port: 0,
+      toolchain: { sh: 'sh 5.2' },
+    });
+    handles.push(withoutGit);
+
+    const spawnHits: string[] = [];
+    const counting: ExecutorFetch = async (url, init) => {
+      if (url.endsWith('/exec/spawn')) spawnHits.push(new URL(url).port);
+      return egressFetch(url, init);
+    };
+    const port = createRemoteExecutionPort({
+      urls: [withoutGit.url, withGit.url],
+      token: TOKEN,
+      fetchImpl: counting,
+    });
+
+    const bg = await spawnBackground(port, 'printf ok', ['git']);
+    const exit = await bg.exited;
+    expect(exit.exitCode).toBe(0);
+    // Запуск ушёл только к адресу, у которого есть требуемая программа.
+    expect(spawnHits).toEqual([String(withGit.port)]);
   });
 });

@@ -1,10 +1,10 @@
 # ADR-111: Фоновые прогоны — неблокирующие саб-агенты и реестр
 
-> **Статус:** ✅ Реализовано — решение принято 2026-10-26; фоновые **саб-агенты** в коде, фоновые процессы — PROP-097 (остаток).
+> **Статус:** ✅ Реализовано — решение принято 2026-10-26; фоновые **саб-агенты** в коде, фоновые процессы — PROP-097 (реализовано, в т.ч. в `remote`-режиме).
 > **Дата:** 2026-10-26
 > **Связано:** [ADR-026](./adr-026-subagent-context-modes.md) (режимы контекста саб-агента),
 > [ADR-033](./adr-033-session-branching-merge.md) (дочерняя сессия как ветка),
-> [ADR-077](./adr-077-runtime-toolchain.md) (исполнитель; шаг 7c — остаток),
+> [ADR-077](./adr-077-runtime-toolchain.md) (исполнитель; шаг 7c — фоновые процессы),
 > [ADR-089](./adr-089-external-events-automation.md) (события сессии, владелец, надёжный «Стоп»),
 > [ADR-096](./adr-096-storage-layer.md) (порты слоя хранения),
 > [ADR-104](./adr-104-mid-turn-steering.md) (границы хода; steering дочерней сессии),
@@ -68,9 +68,12 @@
   ещё думает, поэтому вставка в очередь обязана быть идемпотентной.
 - Фоновый ребёнок **независим**: свой `AbortController` и `streamId`; отмена родителя его не трогает,
   отмена ребёнка — `POST /sessions/<child>/abort`.
-- **Фоновые процессы в `remote`-режиме недоступны** (`background_unsupported`): порт исполнения не
-  умеет фоновый запуск — это остаток ADR-077 (шаг 7c). Для фоновых саб-агентов ограничение не
-  действует: они идут через LLM-путь, а не через порт команд.
+- **Фоновые процессы в `remote`-режиме поддержаны** (ADR-077, шаг 7c): процесс
+  живёт на исполнителе (там, где есть toolchain и рабочий каталог), control plane
+  наблюдает его опросом состояния и журнала. Ограничение осталось одно —
+  **исполнитель протокола < 3** (фоновых маршрутов не знает) → `background_unsupported`.
+  Для фоновых саб-агентов ограничение не действует: они идут через LLM-путь, а не
+  через порт команд.
 - **Steering дочерней сессии поддержан** (`POST /sessions/<child>/prompt` с `mode:'steer'`):
   инъекция кладётся в очередь инъекций сессии-ребёнка, а цикл ребёнка
   (`engine/tools/task/run-cycle.ts`) применяет её на границе шага — как в основной сессии
@@ -86,6 +89,7 @@
 |---|---|
 | Контракт записи | `shared/types/background.ts` (`BackgroundRunRecord`/`BackgroundRunFilter`/`BACKGROUND_RUN_TERMINAL_STATUSES`) |
 | Порт и реализации | `storage/ports/background-run-repository.ts`; `storage/file-background-run-store.ts` (`{dataDir}/processes/registry.json`), `storage/memory/background-runs.ts`, `packages/storage-postgres/src/ports/background-runs.ts` + миграция `021-background-runs.ts` |
+| Фоновый запуск в `remote` | `packages/executor/src/client.ts` (`RemoteExecutionPort.spawnBackground` — опрос состояния 500 мс и журнала 300 мс), `packages/core/src/execution/remote.ts` (проброс метода), `packages/core/src/execution/contract/remote.test.ts` (контрактный прогон) |
 | Сервис реестра | `engine/background/service.ts` (`BackgroundRunService`: `startSubagent`/`startProcess`/`finish`/`stop`/`recoverOnStart`/`prune`, `buildSubagentNotification`), `engine/background/types.ts`, `engine/background/prune.ts` |
 | Тул `task` | `engine/tools/task/tool.ts` (`startBackgroundSubagent` — порядок п. 2), `engine/tools/task/args.ts` (аргумент `background`), `engine/tools/task/resume-target.ts` (п. 4), `engine/tools/task/run-cycle.ts` (лимит шагов, п. 7), `engine/tools/task-resume.ts` |
 | Промпт лимита шагов | `prompts/system/MAX_STEPS.{ru,en}.md`; загрузчик — `ContextConfig.getMaxStepsPrompt` |
@@ -117,4 +121,7 @@
   реестр фоновых прогонов (порт `BackgroundRunRepository`), уведомление родителя с автоходом,
   продолжение ребёнка из тула, лимиты сессии и глубина 1, `orphaned` при рестарте, принудительный
   финальный шаг-отчёт по лимиту шагов, steering дочерней сессии (граница шага цикла ребёнка,
-  ADR-104). Остаток — фоновые процессы в `remote`-режиме (PROP-097, ADR-077 шаг 7c).
+  ADR-104).
+- 2026-10-26 — закрыт остаток по фоновым процессам: `remote`-режим поддерживает фоновый запуск
+  (ADR-077 шаг 7c, клиент удалённого порта опрашивает состояние и журнал процесса на исполнителе);
+  ограничение — исполнитель протокола < 3 (`background_unsupported`).

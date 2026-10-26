@@ -26,7 +26,12 @@
  *    (один раз на прогон); терминальный статус приходит позже — `process.exited`.
  */
 import type { BackgroundRunRecord, BackgroundRunStatus } from '@itphx/synth-shared';
-import type { ExecBackgroundProcess, ExecutionPort } from '../../execution/ports/index.js';
+import {
+  EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
+  isExecutionError,
+  type ExecBackgroundProcess,
+  type ExecutionPort,
+} from '../../execution/ports/index.js';
 import type { EventBus } from '../../events/bus.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
 import type { BackgroundRunService } from '../background/service.js';
@@ -196,7 +201,8 @@ export class ProcessService {
    * регистрация в реестре фоновых прогонов (лимиты) → запись лога → хэндл
    * отмены.
    *
-   * @throws BackgroundUnsupportedError — порт не умеет фоновый запуск.
+   * @throws BackgroundUnsupportedError — порт не умеет фоновый запуск
+   *   (в `remote`-режиме — исполнитель старой версии, протокол < 3).
    * @throws BackgroundLimitExceededError — лимит процессов сессии исчерпан
    *   (запущенный процесс при этом останавливается).
    */
@@ -208,15 +214,30 @@ export class ProcessService {
       );
     }
 
-    const proc = await spawnBackground({
-      command: { kind: 'shell', command: input.command, shell: 'sh' },
-      cwd: input.cwd,
-      ...(input.env ? { env: input.env } : {}),
-      // Фоновый процесс по умолчанию **без таймаута**: он переживает ход агента.
-      timeoutMs: input.timeoutMs ?? 0,
-      // Бинарное требование тула (`sh`) — как у синхронного запуска (ADR-077).
-      requires: toolRuntimeRequires('execute_shell'),
-    });
+    let proc: ExecBackgroundProcess;
+    try {
+      proc = await spawnBackground({
+        command: { kind: 'shell', command: input.command, shell: 'sh' },
+        cwd: input.cwd,
+        ...(input.env ? { env: input.env } : {}),
+        // Фоновый процесс по умолчанию **без таймаута**: он переживает ход агента.
+        timeoutMs: input.timeoutMs ?? 0,
+        // Бинарное требование тула (`sh`) — как у синхронного запуска (ADR-077).
+        requires: toolRuntimeRequires('execute_shell'),
+      });
+    } catch (err) {
+      // Удалённый исполнитель старой версии (протокол < 3) фоновых процессов
+      // не знает — для модели это то же «фон недоступен», а не «сбой запуска».
+      // Проверка типа — структурная (`isExecutionError`): ошибка приходит из
+      // другой копии модуля core (`dist`), где `instanceof` не срабатывает.
+      if (
+        isExecutionError(err) &&
+        err.code === EXECUTION_BACKGROUND_UNSUPPORTED_CODE
+      ) {
+        throw new BackgroundUnsupportedError(err.message);
+      }
+      throw err;
+    }
 
     let record: BackgroundRunRecord;
     try {

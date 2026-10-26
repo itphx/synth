@@ -333,10 +333,12 @@ export type { AutomationRuntime } from './engine/tools/automation-runtime.js';
 // (inline — в процессе; remote — отдельный сервис, шаг 7 плана).
 export {
   ExecutionError,
+  isExecutionError,
   isExecutionPort,
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_SHELL_BINARY,
   EXECUTION_BASE_CAPABILITIES,
+  EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
 } from './execution/ports/index.js';
 export type {
   ExecutionPort,

@@ -67,8 +67,10 @@
  * - `GET /exec/:processId/logs` → `200 { stdout, stderr, totalBytes, truncated, … }`;
  *   query `stdoutOffset`/`stderrOffset`/`limit` (потолок отрезка — 256 КиБ,
  *   по умолчанию — 64 КиБ); `404` — процесс не найден;
- * - `POST /exec/:processId/stop` → `200 { status: 'stopping' }` (сигнал по
- *   умолчанию — `SIGTERM`, через 5 с — `SIGKILL`); `404` — процесс не найден.
+ * - `POST /exec/:processId/stop` → `200 { status: 'stopping' }` (тело
+ *   `{ signal? }` — сигнал остановки: `SIGTERM` по умолчанию, допустимы только
+ *   `SIGTERM`/`SIGKILL`, прочие → `400 invalid_request`; через 5 с после
+ *   `SIGTERM` — `SIGKILL`); `404` — процесс не найден.
  *
  * Журналы — **раздельные** по потокам: `stdout` и `stderr` приходят
  * отдельными отрезками со своими смещениями. Идентификатор процесса —
@@ -476,6 +478,55 @@ export interface BackgroundLogsResponse {
 export interface StopBackgroundResponse {
   /** Процесс остановлен (или уже завершается) — `stopping`. */
   status: 'stopping';
+}
+
+/**
+ * Сигналы остановки фонового процесса, которые принимает исполнитель.
+ *
+ * Белый список: `SIGTERM` — мягкое завершение, `SIGKILL` — немедленное.
+ * Прочие сигналы отклоняются (`400 invalid_request`): набор допустимых
+ * сигналов — часть контракта, а не поведение «как придёт».
+ */
+export const BACKGROUND_STOP_SIGNALS = ['SIGTERM', 'SIGKILL'] as const;
+
+/** Допустимый сигнал остановки фонового процесса. */
+export type BackgroundStopSignal = (typeof BACKGROUND_STOP_SIGNALS)[number];
+
+/** Тело запроса `POST /exec/:processId/stop`. */
+export interface StopBackgroundRequest {
+  /** Сигнал остановки (по умолчанию — `SIGTERM`). */
+  signal?: BackgroundStopSignal;
+}
+
+/**
+ * Разбор тела запроса `POST /exec/:processId/stop`.
+ *
+ * Пустое тело (или его отсутствие) — `SIGTERM` (прежнее поведение).
+ * Невалидный сигнал — отказ: `invalid_request`.
+ */
+export function parseStopBackgroundRequestBody(
+  body: unknown,
+): { ok: true; value: StopBackgroundRequest } | { ok: false; message: string } {
+  if (body === undefined || body === null) {
+    return { ok: true, value: {} };
+  }
+  if (typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, message: 'тело запроса должно быть JSON-объектом' };
+  }
+  const raw = body as Record<string, unknown>;
+  if (raw.signal === undefined) {
+    return { ok: true, value: {} };
+  }
+  if (
+    typeof raw.signal !== 'string' ||
+    !(BACKGROUND_STOP_SIGNALS as readonly string[]).includes(raw.signal)
+  ) {
+    return {
+      ok: false,
+      message: `поле signal должно быть одним из: ${BACKGROUND_STOP_SIGNALS.join(', ')}`,
+    };
+  }
+  return { ok: true, value: { signal: raw.signal as BackgroundStopSignal } };
 }
 
 /**

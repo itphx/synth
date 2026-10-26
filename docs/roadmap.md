@@ -33,8 +33,9 @@
 | 1.5 | **Остаток исполнителя** | [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 7c–7d) | `simple-git` и MCP-stdio исполняются исполнителем, метрики `synth_executor_*` — в контракте [ADR-094](./arch_decisions/adr-094-observability-metrics.md) |
 
 **Статус на 2026-10-26:** 1.2 и 1.3 закрыты ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
-[ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md)); остаток 1.2 — фоновые процессы в `remote`-режиме
-([ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) шаг 7c).
+[ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md)) — фоновые процессы поддержаны
+и в `inline`, и в `remote` ([ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) шаг 7c;
+ограничение — исполнитель протокола < 3, `background_unsupported`).
 
 ### Этап 2 — доведение начатого (2a → 2b)
 
@@ -106,7 +107,7 @@
 | [PROP-083](./arch_decisions/prop-083-instance-customization-branding.md) | Кастомизация инстанса и брендинг | 🧩 Предложение | 2026-11-14 | приветственное окно, ватермарка; позже — locked settings |
 | [PROP-085](./arch_decisions/prop-085-multimodal-input.md) | Мультимодальный ввод (звук/изображения/видео) | 🧩 Предложение | 2026-11-14 | контракт `Part`; зависит от ADR-096/ADR-077 |
 | [PROP-093](./arch_decisions/prop-093-docs-versioning.md) | Версионирование документации портала | 🧩 Предложение | 2026-11-14 | вариант A (nginx) или B (`mike`) |
-| [PROP-097](./arch_decisions/prop-097-background-processes-registry.md) | Фоновые процессы: реестр + контроль через UI | 🧩 Предложение | 2026-11-14 | реализовано в `inline`: единый реестр (`BackgroundRunRepository`, `kind=process`), `execute_shell({background:true})`, API `/api/v2/processes*` и вкладка «Процессы»; остаток — remote-исполнение ([ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) шаг 7c, `background_unsupported`) |
+| [PROP-097](./arch_decisions/prop-097-background-processes-registry.md) | Фоновые процессы: реестр + контроль через UI | 🧩 Предложение | 2026-11-14 | реализовано в обеих топологиях: единый реестр (`BackgroundRunRepository`, `kind=process`), `execute_shell({background:true})`, API `/api/v2/processes*` и вкладка «Процессы»; `remote` — фоновый процесс живёт на исполнителе (протокол v3, `features.background`), control plane опрашивает состояние и журнал ([ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) шаг 7c) |
 | [PROP-099](./arch_decisions/prop-099-memory-footprint-optimization.md) | Оптимизация потребления памяти | 🧩 Предложение | 2026-11-14 | цель релиза 0.11; RSS-бюджет, bounded-кэши, лёгкие листинги; связано с ADR-096/ADR-094 |
 | [PROP-100](./arch_decisions/prop-100-ssrf-dns-rebinding.md) | SSRF: TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению | 🧩 Предложение | 2026-11-14 | дефекты 1–3 закрыты 2026-10-17 (единый `engine/net/egress-guard.ts`); прокси реализован (proxied-режим); остаток — пиннинг для direct/`noProxy`-хостов, наблюдаемость; класс SSRF/egress аудита |
 | [PROP-101](./arch_decisions/prop-101-local-installers-platforms.md) | Локальные инсталляторы и платформенная дистрибуция (Win/mac/Linux) | 🧩 Предложение | 2026-12-31 | реализация — до 1.0.0; CI Linux-only (нативные раннеры + подписи/нотаризация — пререквизиты); flatpak/snap не берём; этапы 0–3 |
@@ -126,8 +127,8 @@
 возвратом управления, уведомление родителя с автоходом, продолжение ребёнка из тула, лимиты сессии и
 глубина 1, `orphaned` при рестарте, принудительный финальный шаг-отчёт по лимиту шагов) — из списка
 предложений снят; файл предложения остаётся в каталоге как исходная гипотеза (на него ссылается
-ADR-104). Остаток (фоновые процессы в `remote`-режиме — ADR-077 шаг 7c) живёт в теле ADR-111 и в
-разделе «Частично реализовано» ниже (ADR-077).
+ADR-104). Фоновые процессы реализованы в обеих топологиях (ADR-077 шаг 7c) — в том числе
+в `remote`-режиме; ограничение — исполнитель протокола < 3 (`background_unsupported`).
 
 Пометка: `PROP-108` решением **2026-10-23** переведён в
 [ADR-106](./arch_decisions/adr-106-authority-layer.md) (Authority-слой: грант «действие × цель», `effective` —

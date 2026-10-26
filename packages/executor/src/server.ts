@@ -48,6 +48,7 @@ import {
   parseExecRequestBody,
   parseMcpCallRequestBody,
   parseSpawnExecRequestBody,
+  parseStopBackgroundRequestBody,
   type BackgroundLogsResponse,
   type BackgroundStatusResponse,
   type ExecutorCapabilities,
@@ -344,15 +345,31 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
     return c.json(body, 200);
   });
 
-  app.post('/exec/:processId/stop', (c) => {
+  app.post('/exec/:processId/stop', async (c) => {
     const id = c.req.param('processId');
     if (!background.status(id)) {
       const { status, body } = errorResponse('not_found', 'фоновый процесс не найден');
       return c.json(body, status);
     }
+    // Тело необязательно: пустое — сигнал по умолчанию (`SIGTERM`).
+    const text = await c.req.text();
+    let raw: unknown;
+    if (text.trim().length > 0) {
+      try {
+        raw = JSON.parse(text);
+      } catch {
+        const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+        return c.json(body, status);
+      }
+    }
+    const parsed = parseStopBackgroundRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
     // Сигнал по умолчанию — SIGTERM, через 5 с — SIGKILL (эскалация внутри
     // сервиса). Повторный вызов идемпотентен.
-    background.stop(id, 'SIGTERM');
+    background.stop(id, parsed.value.signal ?? 'SIGTERM');
     const body: StopBackgroundResponse = { status: 'stopping' };
     return c.json(body, 200);
   });

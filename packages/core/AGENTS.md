@@ -273,8 +273,10 @@
   — разделение намеренное: у remote `cwd` обязан лежать в workspace исполнителя, у inline
   такого ограничения нет; `probe`/`requires` проверяются в общем наборе, `dependency_missing` —
   в remote-блоке; **PROP-097**: блок `describeBackgroundExecutionChecks` — фоновый запуск
-  (поток вывода, `exitCode`, `stop()`, таймаут) — только там, где метод реализован; в
-  remote-блоке проверяется, что `spawnBackground` **не реализован** (шаг 7c ADR-077)), `remote.ts` (загрузчик удалённого порта: **динамический `import()`
+  (поток вывода, `exitCode`, `stop()`, таймаут) — только там, где метод реализован;
+  **фоновый запуск — в обеих реализациях** (inline и remote, ADR-077 шаг 7c): в
+  remote-блоке проверяется, что `spawnBackground` **реализован** и что
+  containment `cwd` действует и для фонового запуска), `remote.ts` (загрузчик удалённого порта: **динамический `import()`
   по строке-константе** `'@itphx/synth-executor/client'` + локальный интерфейс модуля +
   каст — по образцу драйвера хранилища в `storage/storage-context.ts`; чтение токена из
   файла по `execution.remote.tokenSecret` — **fail-closed**, значение токена не логируется
@@ -284,7 +286,15 @@
   всех адресов, TTL `REMOTE_CAPABILITIES_TTL_MS = 120_000` с ленивым обновлением,
   `probe()`/`capabilitySummary()` по инвентарю, маршрутизация команды в адрес с нужными
   бинарями; адрес без нужного бинаря и не ответивший адрес из маршрутизации исключаются,
-  подходящего адреса нет → `dependency_missing`/`EDEPENDENCY` с текстом «в пуле: N из M»),
+  подходящего адреса нет → `dependency_missing`/`EDEPENDENCY` с текстом «в пуле: N из M»;
+  **фоновый запуск в remote** (ADR-077 шаг 7c): `spawnBackground` — опрос состояния
+  (`GET /exec/:id`, 500 мс) и журнала (`GET /exec/:id/logs`, 300 мс) исполнителя —
+  стриминга на проводе нет; обёртка `RemoteExecutionPortWithExecutorMcp` пробрасывает
+  метод **только если его умеет внутренний порт** (иначе «фон не поддерживается» не
+  отличить от «метод есть, но падает»); исполнитель протокола < 3 (нет
+  `features.background`) → `ExecutionError.code = 'EBACKGROUND'`
+  (`EXECUTION_BACKGROUND_UNSUPPORTED_CODE`) → `background_unsupported` в
+  `engine/processes`),
   `factory.ts` (`createExecutionPortForConfig` — выбор порта по режиму: `inline` →
   `InlineExecutionPort`, `remote` → удалённый порт; экземпляр на каждый вызов, без
   process-глобальных синглтонов), `tool-port.ts` (`resolveExecutionPort(ctx)` — шов: берёт
@@ -1250,8 +1260,13 @@
   `process.stopped` в канал владельца — один раз на прогон, терминальный статус
   приходит позже — `process.exited`), `types.ts`
   (`BackgroundUnsupportedError` и пр.), `prune.ts` (очистка логов). Логи — blob-хранилище
-  (`BlobStore`), путь `processes/<id>.log`. В `remote`-режиме фоновый запуск не поддержан —
-  `background_unsupported` (остаток ADR-077, шаг 7c).
+  (`BlobStore`), путь `processes/<id>.log`. **Фоновый запуск — в обеих реализациях**
+  (inline и remote, ADR-077 шаг 7c): в `remote` процесс живёт на исполнителе, control
+  plane наблюдает его опросом (журнал — 300 мс, состояние — 500 мс; стриминга на проводе
+  нет), поэтому лог в control plane появляется с задержкой опроса и **дублируется** с
+  журналом на исполнителе (до его `prune`). Исполнитель старой версии (протокол < 3, нет
+  `features.background`) → `ExecutionError.code = 'EBACKGROUND'`
+  (`EXECUTION_BACKGROUND_UNSUPPORTED_CODE`) → `background_unsupported`.
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт

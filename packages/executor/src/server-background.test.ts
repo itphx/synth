@@ -282,6 +282,59 @@ describe('исполнитель: фоновые процессы — остан
     const finished = await waitStatus(app, processId);
     expect(finished.status).toBe('killed');
   });
+
+  it('stop — сигнал SIGKILL из тела учитывается', async () => {
+    const app = makeApp();
+    const { processId } = (await (
+      await postSpawn(app, { command: { kind: 'shell', command: 'sleep 30' } })
+    ).json()) as SpawnExecResponse;
+
+    const res = await app.request(`/exec/${processId}/stop`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ signal: 'SIGKILL' }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as StopBackgroundResponse).status).toBe('stopping');
+
+    const finished = await waitStatus(app, processId);
+    expect(finished.status).toBe('killed');
+    expect(finished.signal).toBe('SIGKILL');
+  });
+
+  it('stop — невалидный сигнал — 400 invalid_request (процесс не тронут)', async () => {
+    const app = makeApp();
+    const { processId } = (await (
+      await postSpawn(app, { command: { kind: 'shell', command: 'sleep 30' } })
+    ).json()) as SpawnExecResponse;
+
+    const res = await app.request(`/exec/${processId}/stop`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ signal: 'SIGINT' }),
+    });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+
+    // Процесс жив — отказ не остановил его.
+    const status = await app.request(`/exec/${processId}`, { headers: authHeaders() });
+    expect(((await status.json()) as BackgroundStatusResponse).status).toBe('running');
+  });
+
+  it('stop — невалидный JSON — 400 invalid_request', async () => {
+    const app = makeApp();
+    const { processId } = (await (
+      await postSpawn(app, { command: { kind: 'shell', command: 'sleep 30' } })
+    ).json()) as SpawnExecResponse;
+
+    const res = await app.request(`/exec/${processId}/stop`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: '{not json',
+    });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
 });
 
 describe('исполнитель: фоновые процессы — несуществующие и аутентификация', () => {

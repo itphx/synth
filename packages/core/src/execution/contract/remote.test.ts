@@ -20,6 +20,10 @@
  * каталог вне workspace исполнителя → отказ (`EWORKSPACE`). Эта проверка
  * вынесена в отдельный блок «только remote»
  * (`describeRemoteOnlyExecutionChecks`).
+ *
+ * Фоновый запуск в remote-режиме **поддержан** (ADR-077, шаг 7c) — общий
+ * блок `describeBackgroundExecutionChecks` (поток вывода, код завершения,
+ * `stop()`, таймаут).
  */
 
 import { afterAll, beforeAll, describe } from 'vitest';
@@ -28,7 +32,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExecutionPort } from '../ports/index.js';
 import { isExecutorPackageAvailable } from '../remote.js';
-import { describeExecutionPort, describeRemoteOnlyExecutionChecks } from './index.js';
+import {
+  describeBackgroundExecutionChecks,
+  describeExecutionPort,
+  describeRemoteOnlyExecutionChecks,
+} from './index.js';
 
 /** Пакет исполнителя (сервер). Аннотация `string` намеренная — `import()` не резолвится на этапе типов. */
 const EXECUTOR_PACKAGE: string = '@itphx/synth-executor';
@@ -140,5 +148,8 @@ describe.skipIf(!(await isExecutorPackageAvailable()))(
 
     describeExecutionPort('RemoteExecutionPort → ExecutionPort', harness);
     describeRemoteOnlyExecutionChecks('RemoteExecutionPort → ExecutionPort', harness);
+    // Фоновый запуск в remote-режиме поддержан (ADR-077, шаг 7c): клиент
+    // удалённого порта опрашивает состояние и журнал процесса.
+    describeBackgroundExecutionChecks('RemoteExecutionPort → ExecutionPort', harness);
   },
 );

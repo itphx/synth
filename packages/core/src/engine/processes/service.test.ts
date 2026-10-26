@@ -18,8 +18,13 @@ import { EventBus } from '../../events/bus.js';
 import { MemoryBlobStore } from '../../storage/memory/content.js';
 import { MemoryBackgroundRunRepository } from '../../storage/memory/background-runs.js';
 import { BackgroundRunService } from '../background/service.js';
-import type { ExecBackgroundExit, ExecutionPort } from '../../execution/ports/index.js';
+import {
+  EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
+  type ExecBackgroundExit,
+  type ExecutionPort,
+} from '../../execution/ports/index.js';
 import { ProcessService } from './service.js';
+import { BackgroundUnsupportedError } from './types.js';
 
 /** Заглушка порта исполнения: фоновый процесс не запускается, выход — вручную. */
 function createHarness() {
@@ -139,5 +144,44 @@ describe('ProcessService — остановка фонового процесс�
 
     expect(await h.service.stop('bgr_missing')).toBe(false);
     expect(h.events.filter((e) => e.type === 'process.stopped')).toHaveLength(0);
+  });
+
+  it('исполнитель без фоновых процессов — BackgroundUnsupportedError (ошибка из другой копии модуля)', async () => {
+    const repository = new MemoryBackgroundRunRepository();
+    const eventBus = new EventBus();
+    const background = new BackgroundRunService({
+      repository,
+      eventBus,
+      limits: { maxSubagentsPerSession: 0, maxProcessesPerSession: 0, maxRunsPerSession: 0 },
+      generateId: () => 'id-1',
+    });
+
+    // Ошибка — ровно та, что создаёт клиент удалённого порта: она приходит из
+    // другой копии модуля core (`dist`), поэтому `instanceof ExecutionError`
+    // не срабатывает — опознание идёт структурно (`isExecutionError`).
+    const foreignError = {
+      name: 'ExecutionError',
+      reason: 'spawn_failed',
+      message: 'исполнитель не поддерживает фоновые процессы',
+      code: EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
+    };
+    const executionPort = {
+      execute: async () => ({ stdout: '', stderr: '' }),
+      spawnBackground: async () => {
+        throw foreignError;
+      },
+    } as unknown as ExecutionPort;
+
+    const service = new ProcessService({
+      executionPort,
+      background,
+      blobs: new MemoryBlobStore(),
+      eventBus,
+      limits: { maxLogBytes: 1024 },
+    });
+
+    await expect(
+      service.spawn({ sessionId: 's1', command: 'sleep 60', cwd: '/tmp' }),
+    ).rejects.toBeInstanceOf(BackgroundUnsupportedError);
   });
 });

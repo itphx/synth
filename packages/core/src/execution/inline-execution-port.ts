@@ -72,7 +72,6 @@ function toExecutionError(err: unknown, durationMs: number): ExecutionError {
   const reason = classifyFailure(e);
   return new ExecutionError({
     message: e.message ?? '',
-    name: e.name,
     code: e.code,
     stdout: e.stdout,
     stderr: e.stderr,

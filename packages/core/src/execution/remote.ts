@@ -141,14 +141,25 @@ export async function isExecutorPackageAvailable(): Promise<boolean> {
  * исполнителя, не зная деталей загрузки пакета. Она прозрачно делегирует порт
  * и добавляет неизменяемый дескриптор `executorMcp` (адреса + токен); токен в
  * логи/ошибки не попадает.
+ *
+ * **Фоновый запуск** (`spawnBackground`, ADR-077 шаг 7c) пробрасывается
+ * **только если его умеет внутренний порт**: обёртка не должна превращать
+ * «фон не поддерживается» в «есть метод, но он падает» — иначе вызывающий
+ * (реестр фоновых прогонов) не сможет отличить одно от другого.
  */
 class RemoteExecutionPortWithExecutorMcp implements ExecutionPort {
   readonly executorMcp: { readonly urls: string[]; readonly token: string };
+  /** Фоновый запуск — есть только если внутренний порт его умеет. */
+  readonly spawnBackground?: ExecutionPort['spawnBackground'];
   private readonly _inner: ExecutionPort;
 
   constructor(inner: ExecutionPort, urls: string[], token: string) {
     this._inner = inner;
     this.executorMcp = { urls: [...urls], token };
+    const spawn = inner.spawnBackground;
+    if (spawn) {
+      this.spawnBackground = (req) => spawn.call(inner, req);
+    }
   }
 
   execute(req: Parameters<ExecutionPort['execute']>[0]): ReturnType<ExecutionPort['execute']> {

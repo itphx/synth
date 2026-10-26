@@ -33,11 +33,20 @@
  *
  * Для удалённой реализации каталог из `cwd` должен быть виден исполнителю
  * (общий том workspace) — контракт это предполагает.
+ *
+ * ## Проверка типа ошибки — структурная
+ *
+ * Ошибка проверяется предикатом `isExecutionError`, а не `instanceof`:
+ * клиент удалённого порта создаёт `ExecutionError` через динамический
+ * `import('@itphx/synth-core')` (то есть из `dist`), а контракт импортирует
+ * класс из исходников core — это два разных объекта класса, и `instanceof`
+ * не срабатывает. Структурная проверка (признак типа `name` + форма ошибки)
+ * работает с любой копией класса и не ослабляет сами проверки.
  */
 
 import { describe, expect, it } from 'vitest';
 import { realpath } from 'node:fs/promises';
-import { ExecutionError, type ExecutionPort } from '../ports/index.js';
+import { isExecutionError, type ExecutionError, type ExecutionPort } from '../ports/index.js';
 
 /**
  * Окружение реализации порта для прогона контракта.
@@ -108,7 +117,7 @@ export function describeExecutionPort(name: string, make: ExecutionPortHarnessFa
       const err = await captureError(
         port.execute({ command: { kind: 'shell', command: 'printf o; printf e 1>&2; exit 3' } }),
       );
-      expect(err).toBeInstanceOf(ExecutionError);
+      expect(isExecutionError(err)).toBe(true);
       expect(err.reason).toBe('nonzero_exit');
       expect(err.code).toBe(3);
       expect(err.stdout).toBe('o');
@@ -138,7 +147,7 @@ export function describeExecutionPort(name: string, make: ExecutionPortHarnessFa
       const err = await captureError(
         port.execute({ command: { kind: 'shell', command: 'sleep 5' }, timeoutMs: 300 }),
       );
-      expect(err).toBeInstanceOf(ExecutionError);
+      expect(isExecutionError(err)).toBe(true);
       expect(err.reason).toBe('timeout');
     });
 
@@ -151,7 +160,7 @@ export function describeExecutionPort(name: string, make: ExecutionPortHarnessFa
       });
       setTimeout(() => ac.abort(), 100);
       const err = await captureError(promise);
-      expect(err).toBeInstanceOf(ExecutionError);
+      expect(isExecutionError(err)).toBe(true);
       expect(err.reason).toBe('aborted');
     });
 
@@ -163,7 +172,7 @@ export function describeExecutionPort(name: string, make: ExecutionPortHarnessFa
           maxOutputBytes: 256,
         }),
       );
-      expect(err).toBeInstanceOf(ExecutionError);
+      expect(isExecutionError(err)).toBe(true);
       expect(err.reason).toBe('max_output');
       expect(err.truncated).toBe(true);
     });
@@ -173,7 +182,7 @@ export function describeExecutionPort(name: string, make: ExecutionPortHarnessFa
       const err = await captureError(
         port.execute({ command: { kind: 'argv', file: 'synth-exec-contract-missing-binary' } }),
       );
-      expect(err).toBeInstanceOf(ExecutionError);
+      expect(isExecutionError(err)).toBe(true);
       expect(err.reason).toBe('spawn_failed');
       expect(err.code).toBe('ENOENT');
     });
@@ -208,7 +217,7 @@ export function describeExecutionPort(name: string, make: ExecutionPortHarnessFa
 
 /**
  * Проверки фонового запуска (PROP-097) — для реализаций, которые его
- * поддерживают (сейчас — inline).
+ * поддерживают (inline и remote — обе, ADR-077 шаг 7c).
  *
  * Фоновый процесс — не то же, что `execute`: он не ждёт завершения, вывод
  * приходит потоком, а отмена делается через `stop()` хэндла. Проверяется:
@@ -219,8 +228,8 @@ export function describeExecutionPort(name: string, make: ExecutionPortHarnessFa
  *   - таймаут (`timeoutMs`) — процесс убивается по таймеру;
  *   - `processId`/`pid` заполнены, `exited` резолвится один раз.
  *
- * Реализация без `spawnBackground` (удалённый порт — до шага 7c ADR-077) этот
- * набор не проходит: блок подключается только там, где метод есть.
+ * Блок подключается только там, где метод есть: реализация без
+ * `spawnBackground` этот набор не проходит (проверки пропускаются).
  */
 export function describeBackgroundExecutionChecks(
   name: string,
@@ -326,15 +335,20 @@ export function describeInlineOnlyExecutionChecks(
  * Containment `cwd` — граница безопасности исполнителя: команда вне его
  * workspace не запускается вовсе (протокольная причина `cwd_outside_workspace`,
  * клиент переносит её как `reason: 'spawn_failed'` с кодом `EWORKSPACE`).
+ *
+ * Фоновый запуск в remote-режиме **поддержан** (ADR-077, шаг 7c): клиент
+ * удалённого порта реализует `spawnBackground` (опрос состояния и журнала).
+ * Проверяется, что метод есть и что containment действует и для фонового
+ * запуска.
  */
 export function describeRemoteOnlyExecutionChecks(
   name: string,
   make: ExecutionPortHarnessFactory,
 ): void {
   describe(`${name} — только remote`, () => {
-    it('фоновый запуск недоступен: метод не реализован (шаг 7c ADR-077)', async () => {
+    it('фоновый запуск поддержан: метод реализован', async () => {
       const { port } = await make();
-      expect(typeof port.spawnBackground).toBe('undefined');
+      expect(typeof port.spawnBackground).toBe('function');
     });
 
     it('cwd вне workspace исполнителя — отказ (EWORKSPACE), команда не запускается', async () => {
@@ -343,7 +357,20 @@ export function describeRemoteOnlyExecutionChecks(
       const err = await captureError(
         port.execute({ command: { kind: 'shell', command: 'pwd' }, cwd: dir }),
       );
-      expect(err).toBeInstanceOf(ExecutionError);
+      expect(isExecutionError(err)).toBe(true);
+      expect(err.reason).toBe('spawn_failed');
+      expect(err.code).toBe('EWORKSPACE');
+    });
+
+    it('фоновый запуск: cwd вне workspace исполнителя — отказ (EWORKSPACE)', async () => {
+      const { port, cwdOutside } = await make();
+      const spawn = port.spawnBackground;
+      if (!spawn) throw new Error('ожидалась поддержка фонового запуска');
+      const dir = cwdOutside ?? (await realpath('/tmp'));
+      const err = await captureError(
+        spawn.call(port, { command: { kind: 'shell', command: 'pwd' }, cwd: dir }),
+      );
+      expect(isExecutionError(err)).toBe(true);
       expect(err.reason).toBe('spawn_failed');
       expect(err.code).toBe('EWORKSPACE');
     });
@@ -356,7 +383,7 @@ export function describeRemoteOnlyExecutionChecks(
           requires: ['synth-exec-contract-missing-binary'],
         }),
       );
-      expect(err).toBeInstanceOf(ExecutionError);
+      expect(isExecutionError(err)).toBe(true);
       expect(err.reason).toBe('dependency_missing');
       expect(err.code).toBe('EDEPENDENCY');
       expect(err.message).toContain('synth-exec-contract-missing-binary');
