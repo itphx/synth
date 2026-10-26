@@ -2851,6 +2851,11 @@ export const dict = {
   'git.repo_path_invalid': 'Недопустимый путь репозитория «{path}» (должен находиться внутри workspace проекта)',
   'git.repo_exists': 'Репозиторий уже существует по пути «{path}»',
 
+  // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
+  'worktree.directory_missing':
+    'Рабочий каталог привязанного git-worktree «{path}» не существует. '
+    + 'Каталог, вероятно, удалён — сессия не может продолжить работу в другом каталоге.',
+
   // --- Внешние события и хуки (ADR-030 / ADR-089) ---
   'event.ingested': 'Событие {id} получено из источника «{source}»',
   'event.routed.bound': 'Событие направлено в привязанную сессию {sessionId}',

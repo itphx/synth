@@ -102,6 +102,27 @@ export function describeSessionRepository(
       expect(await repo.appendMessage('missing-session', makeMessage('orphan'))).toBeNull();
     });
 
+    it('ADR-114: привязка к worktree сохраняется round-trip; её отсутствие читается как undefined', async () => {
+      const { repo } = await make();
+      const worktree = {
+        worktreeId: 'wkt_contract',
+        projectId: 'proj-contract',
+        repoPath: 'repo',
+        directory: '/workspaces/.worktrees/proj-contract/feature-x',
+        branch: 'feature/x',
+      };
+
+      await repo.save(makeSession({ id: 'worktree-bound', worktree }));
+      const loaded = await repo.load('worktree-bound');
+      expect(loaded?.worktree).toEqual(worktree);
+
+      // Сессия без привязки — прежнее поведение (поля нет).
+      await repo.save(makeSession({ id: 'worktree-absent' }));
+      const without = await repo.load('worktree-absent');
+      expect(without).not.toBeNull();
+      expect(without!.worktree).toBeUndefined();
+    });
+
     it('updateMessage по seq: меняется только цель, id/seq/createdAt сохраняются, updatedAt сессии обновился', async () => {
       const { repo } = await make();
       const first = { ...makeMessage('first'), seq: 1, metadata: { keep: true } };

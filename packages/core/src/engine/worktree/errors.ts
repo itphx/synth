@@ -31,6 +31,8 @@ export const WORKTREE_ERROR_CODES = [
   'WORKTREE_NOT_A_REPO',
   /** Каталог/имя занято — свободного имени не нашлось. */
   'WORKTREE_PATH_EXISTS',
+  /** Каталог привязанного worktree исчез — резолв cwd fail-closed (ADR-114 §3.2). */
+  'WORKTREE_DIRECTORY_MISSING',
   /** Команда git завершилась ошибкой (fallback с текстом git). */
   'WORKTREE_GIT_FAILED',
 ] as const;
@@ -56,6 +58,7 @@ const HTTP_STATUS_BY_CODE: Record<WorktreeErrorCode, 400 | 404 | 409> = {
   WORKTREE_NAME_INVALID: 400,
   WORKTREE_NOT_A_REPO: 400,
   WORKTREE_PATH_EXISTS: 409,
+  WORKTREE_DIRECTORY_MISSING: 409,
   WORKTREE_GIT_FAILED: 409,
 };
 
@@ -177,6 +180,28 @@ export class WorktreePathExistsError extends WorktreeError {
     this.name = 'WorktreePathExistsError';
     this.worktreeName = worktreeName;
     this.directory = directory;
+  }
+}
+
+/**
+ * Каталог привязанного worktree исчез с диска — резолв рабочего каталога
+ * сессии **fail-closed** (ADR-114 §3.2): ход не стартует, тихий фоллбек в
+ * `project.workspace` запрещён (он перенёс бы правки сессии в чужое дерево).
+ *
+ * Текст для модели — по i18n-ключу `worktree.directory_missing` (ADR-041);
+ * класс несёт машинный код и путь каталога.
+ */
+export class WorktreeDirectoryMissingError extends WorktreeError {
+  /** Каталог привязки, которого нет на диске. */
+  readonly directory: string;
+  /** Id записи worktree (для журнала/UI). */
+  readonly worktreeId?: string;
+
+  constructor(directory: string, worktreeId?: string) {
+    super('WORKTREE_DIRECTORY_MISSING', `Каталог worktree не найден: ${directory}`);
+    this.name = 'WorktreeDirectoryMissingError';
+    this.directory = directory;
+    if (worktreeId !== undefined) this.worktreeId = worktreeId;
   }
 }
 

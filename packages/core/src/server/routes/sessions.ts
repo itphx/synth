@@ -643,15 +643,22 @@ export function createSessionRoutes(
     // read-modify-write сессии — только под `SessionManager.withLock`: без лока
     // параллельные PATCH/clear/skills затирают правки друг друга (lost update —
     // победитель сохраняет свой снапшот целиком). Внутри лока сессия перечитывается.
-    const { updatedSession, prevProjectId, prevTitle, projectChanged } = await sessionManager.withLock(id, async (s) => {
+    const { updatedSession, prevProjectId, prevTitle, projectChanged, worktreeDetached } = await sessionManager.withLock(id, async (s) => {
       const prevProjectId = s.projectId;
       let projectChanged = false;
+      let worktreeDetached = false;
       if (projectParam !== undefined) {
         const resolved = projectParam || undefined;
         if (prevProjectId !== resolved) {
           s.projectId = resolved;
           s.planApproved = false;
           projectChanged = true;
+          // ADR-114 §3.4: worktree принадлежит проекту — при переносе сессии
+          // привязка снимается (иначе каталог был бы вне нового проекта).
+          if (s.worktree) {
+            s.worktree = undefined;
+            worktreeDetached = true;
+          }
         }
       }
       if (body.name !== undefined) s.title = body.name;
@@ -673,7 +680,7 @@ export function createSessionRoutes(
         s.settings = { ...s.settings, ...parsed.data.settings };
       }
       await sessionManager.updateSession(s);
-      return { updatedSession: s, prevProjectId, prevTitle, projectChanged };
+      return { updatedSession: s, prevProjectId, prevTitle, projectChanged, worktreeDetached };
     });
 
     // Порядок публикации сохранён: renamed → updated → moved.
@@ -686,6 +693,9 @@ export function createSessionRoutes(
         session_id: updatedSession.id,
         project_id: updatedSession.projectId ?? null,
         prev_project_id: prevProjectId ?? null,
+        // ADR-114 §3.4: привязка к worktree снята (worktree принадлежит
+        // старому проекту) — факт снятия виден в событии.
+        ...(worktreeDetached ? { worktree_detached: true } : {}),
       });
     }
     return c.json(serializeSession(updatedSession, { agentRegistry }));

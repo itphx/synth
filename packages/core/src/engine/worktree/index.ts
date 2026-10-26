@@ -27,6 +27,7 @@ export {
   WorktreeNameInvalidError,
   WorktreeNotARepoError,
   WorktreePathExistsError,
+  WorktreeDirectoryMissingError,
   WorktreeGitFailedError,
 } from './errors.js';
 export type { WorktreeErrorCode } from './errors.js';

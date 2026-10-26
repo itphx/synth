@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Session, Message, SessionStatus, SessionSettings, SessionMode, Part, SessionOrigin, SessionReference, PromptState, PromptMeta, AuthorityPrincipal } from '@itphx/synth-shared';
+import type { Session, Message, SessionStatus, SessionSettings, SessionMode, Part, SessionOrigin, SessionReference, SessionWorktree, PromptState, PromptMeta, AuthorityPrincipal } from '@itphx/synth-shared';
 import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey, normalizeSessionParticipantRole, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
 import type { SessionFilter, SessionRepository } from './ports/session-repository.js';
 import { findMessageIndex, prepareMessageForAppend, prepareMessageForUpdate } from './message-write.js';
@@ -78,6 +78,18 @@ interface SerializedSessionParticipant {
   added_at?: string;
 }
 
+/**
+ * ADR-114: привязка сессии к worktree в форме хранения (snake_case — как
+ * соседние составные поля записи сессии).
+ */
+interface SerializedSessionWorktree {
+  worktree_id: string;
+  project_id: string;
+  repo_path?: string;
+  directory: string;
+  branch: string;
+}
+
 interface SerializedSession {
   id: string;
   title?: string;
@@ -98,6 +110,11 @@ interface SerializedSession {
   user_id?: string;
   owner_id?: string;
   project_id?: string;
+  /**
+   * ADR-114: привязка к worktree (аддитивно). В записях, созданных до
+   * ADR-114, поля нет — чтение даёт `undefined` (прежнее поведение).
+   */
+  worktree?: SerializedSessionWorktree;
   /** ADR-106 Ф4: участники сессии (потолок хода по роли). */
   participants?: SerializedSessionParticipant[];
   messages: SerializedMessage[];
@@ -281,6 +298,43 @@ function deserializeMessage(data: SerializedMessage): Message {
   };
 }
 
+/**
+ * ADR-114: привязка сессии к worktree → форма хранения (snake_case).
+ * Отсутствие привязки — `undefined` (поле не пишется вовсе).
+ */
+function serializeSessionWorktree(worktree: SessionWorktree): SerializedSessionWorktree {
+  return {
+    worktree_id: worktree.worktreeId,
+    project_id: worktree.projectId,
+    ...(worktree.repoPath !== undefined ? { repo_path: worktree.repoPath } : {}),
+    directory: worktree.directory,
+    branch: worktree.branch,
+  };
+}
+
+/**
+ * ADR-114: привязка из формы хранения → домен.
+ *
+ * Терпима к отсутствию поля (записи до ADR-114) и к частичным значениям:
+ * привязка без `worktree_id`/`directory` бессмысленна (нечего резолвить) —
+ * она игнорируется, сессия работает как прежде. Недостающие `project_id`/
+ * `branch` — пустая строка (поле необязательное по смыслу).
+ */
+function deserializeSessionWorktree(data: unknown): SessionWorktree | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const raw = data as Partial<SerializedSessionWorktree>;
+  const worktreeId = typeof raw.worktree_id === 'string' ? raw.worktree_id : '';
+  const directory = typeof raw.directory === 'string' ? raw.directory : '';
+  if (!worktreeId || !directory) return undefined;
+  return {
+    worktreeId,
+    projectId: typeof raw.project_id === 'string' ? raw.project_id : '',
+    ...(typeof raw.repo_path === 'string' ? { repoPath: raw.repo_path } : {}),
+    directory,
+    branch: typeof raw.branch === 'string' ? raw.branch : '',
+  };
+}
+
 function serializeSession(session: Session): SerializedSession {
   return {
     id: session.id,
@@ -300,6 +354,8 @@ function serializeSession(session: Session): SerializedSession {
     user_id: session.userId,
     owner_id: session.ownerId,
     project_id: session.projectId,
+    // ADR-114: привязка к worktree — не теряется при reload (переживает рестарт).
+    ...(session.worktree ? { worktree: serializeSessionWorktree(session.worktree) } : {}),
     // ADR-106 Ф4: участники сессии — не теряются при reload.
     participants: (session.participants ?? []).map((participant) => ({
       user_id: participant.userId,
@@ -362,6 +418,8 @@ function serializeSession(session: Session): SerializedSession {
 }
 
 function deserializeSession(data: SerializedSession): Session {
+  // ADR-114: привязка к worktree (legacy-записи без поля → undefined).
+  const worktree = deserializeSessionWorktree(data.worktree);
   return {
     id: data.id,
     title: data.title,
@@ -382,6 +440,8 @@ function deserializeSession(data: SerializedSession): Session {
     userId: data.user_id,
     ownerId: data.owner_id,
     projectId: data.project_id,
+    // ADR-114: привязка к worktree (legacy-записи без поля → undefined).
+    ...(worktree ? { worktree } : {}),
     // ADR-106 Ф4: участники сессии (потолок хода по роли).
     ...(data.participants && data.participants.length > 0
       ? {

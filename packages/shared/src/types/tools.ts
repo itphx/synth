@@ -105,6 +105,17 @@ export interface ToolContext {
    */
   projectId?: string;
   workingDir: string;
+  /**
+   * ADR-114: привязка сессии к git-worktree.
+   *
+   * `worktreeId` — id записи worktree (пусто — сессия не привязана: рабочий
+   * каталог = `project.workspace`). `worktreeRepoPath` — репозиторий worktree
+   * **относительно `project.workspace`** (`.` — репозиторий в корне
+   * workspace); по нему git-тулы ищут запись реестра `project.repos`
+   * (ADR-076), потому что каталог worktree лежит вне `project.workspace`.
+   */
+  worktreeId?: string;
+  worktreeRepoPath?: string;
   dataDir?: string;
   extra?: Record<string, unknown>;
 }

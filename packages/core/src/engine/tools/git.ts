@@ -87,12 +87,26 @@ export function resolveRepoCwd(repoPath: string, workingDir: string): string {
 /**
  * Рабочий каталог git-тула: приоритетно `repo_path` (относительно workspace,
  * containment), иначе legacy `path` (прежнее поведение `resolvePath`).
+ *
+ * ADR-114 §4: в сессии, привязанной к worktree, `repo_path` допускается
+ * **только** `.` (или пусто) — корень worktree. Любой другой путь
+ * (в т.ч. `..` и абсолютный) → `git.repo_path_invalid`: worktree — это
+ * вторичная копия того же репозитория, отдельного вложенного репозитория
+ * в ней нет. `path` (путь внутри репозитория) резолвится от `ctx.workingDir`
+ * как обычно — база отсчёта теперь каталог worktree.
  */
 function resolveGitCwd(
   params: { path?: string; repo_path?: string },
   ctx: ToolContext,
 ): string | ToolResult {
   if (params.repo_path !== undefined) {
+    if (ctx.worktreeId !== undefined && params.repo_path !== '' && params.repo_path !== '.') {
+      return {
+        content: sm('git.repo_path_invalid', { path: params.repo_path }),
+        isError: true,
+        metadata: { i18n: i18nMeta('git.repo_path_invalid', { path: params.repo_path }) },
+      };
+    }
     try {
       return resolveRepoCwd(params.repo_path, ctx.workingDir);
     } catch {

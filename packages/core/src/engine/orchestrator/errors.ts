@@ -11,6 +11,7 @@ import type { SessionManager } from '../../sessions/manager.js';
 import type { DebugCollector } from '../../debug.js';
 import { ContextLengthExceededError } from '../../providers/exceptions.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS } from '../llm-error.js';
+import { WorktreeDirectoryMissingError } from '../worktree/errors.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { warning } from '../../logger.js';
 import { estimateUsage } from './usage.js';
@@ -49,6 +50,15 @@ export interface LlmFailureContext {
  * metadata (UI локализует сам).
  */
 export function formatLlmError(error: unknown): { text: string; i18n?: ReturnType<typeof i18nMeta> } {
+  // ADR-114 §3.2: исчезнувший каталог worktree — fail-closed с i18n-ключом
+  // (`worktree.directory_missing`), а не текстом ошибки в лог-формате.
+  if (error instanceof WorktreeDirectoryMissingError) {
+    const params = { path: error.directory };
+    return {
+      text: sm('worktree.directory_missing', params),
+      i18n: i18nMeta('worktree.directory_missing', params),
+    };
+  }
   const raw = error instanceof Error ? error.message : String(error);
   const lower = raw.toLowerCase();
   if (lower.includes('abort') || lower.includes('operation was aborted') || lower.includes('timed out') || lower.includes('timeout')) {
@@ -100,14 +110,19 @@ export async function handleLlmFailure(
   const rawError = error instanceof Error ? error.message : String(error);
   const formatted = formatLlmError(error);
   const humanError = formatted.text;
+  // ADR-114 §3.2: каталог worktree исчез — повтор не поможет (фоллбек в
+  // `project.workspace` запрещён), поэтому ход невосстановим.
+  const worktreeMissing = error instanceof WorktreeDirectoryMissingError;
   // ContextLengthExceededError несёт русское сообщение («Контекстное окно
   // превышено») — текстовый классификатор его не распознаёт, поэтому тип
   // определяем по классу ошибки, чтобы UI показал дружелюбное сообщение.
   const errorType = ctx?.errorType
-    ?? (error instanceof ContextLengthExceededError
-      ? 'context_length'
-      : classifyLlmError(rawError));
-  const canRetry = isLlmErrorRecoverable(error, rawError, errorType);
+    ?? (worktreeMissing
+      ? 'worktree_directory_missing'
+      : error instanceof ContextLengthExceededError
+        ? 'context_length'
+        : classifyLlmError(rawError));
+  const canRetry = worktreeMissing ? false : isLlmErrorRecoverable(error, rawError, errorType);
 
   // ADR-070 §2.6 (Bug 1): assistant-сообщение об ошибке пишем только тогда,
   // когда повтора уже не будет (unrecoverable / последняя попытка / прямой

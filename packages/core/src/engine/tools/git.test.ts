@@ -593,3 +593,136 @@ describe('git tools — push/pull: remote привязан к реестру п�
     expect(gitArgvLists().some((args) => args[0] === 'pull')).toBe(false);
   });
 });
+
+/**
+ * ADR-114 §4: сессия, привязанная к worktree, работает в каталоге worktree
+ * (вторичная копия того же репозитория). Поэтому `repo_path` допускается
+ * **только** `.` (корень worktree): отдельного вложенного репозитория в
+ * worktree нет, а `..`/абсолютный путь увели бы из вторичной копии.
+ *
+ * Без привязки поведение прежнее: `repo_path` — относительный путь внутри
+ * workspace проекта (ADR-076).
+ */
+describe('git tools — repo_path в сессии с привязкой к worktree (ADR-114 §4)', () => {
+  let root: string;
+  let workspace: string;
+  let worktree: string;
+  let subRepo: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'synth-git-worktree-'));
+    workspace = join(root, 'workspace');
+    worktree = join(root, 'worktree');
+    subRepo = join(workspace, 'sub');
+    await mkdir(workspace, { recursive: true });
+    await mkdir(worktree, { recursive: true });
+    await mkdir(subRepo, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /** Вызовы, дошедшие до порта исполнения (ADR-077). */
+  interface ExecCall {
+    cwd?: string;
+    args?: string[];
+  }
+
+  /** Фейковый порт исполнения: команда не запускается, видны `cwd`/argv. */
+  function makeFakePort(calls: ExecCall[]) {
+    return {
+      async execute(req: { command: { kind: string; args?: string[] }; cwd?: string }) {
+        calls.push({
+          cwd: req.cwd,
+          args: req.command.kind === 'argv' ? req.command.args : undefined,
+        });
+        return { stdout: '## main\n', stderr: '', exitCode: 0, truncated: false, durationMs: 1 };
+      },
+    };
+  }
+
+  /** Контекст сессии с привязкой к worktree. */
+  function makeWorktreeCtx(calls: ExecCall[]): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: worktree,
+      worktreeId: 'wkt_test',
+      worktreeRepoPath: '.',
+      extra: { executionPort: makeFakePort(calls) },
+    };
+  }
+
+  it('repo_path=".." → git.repo_path_invalid (привязка к worktree)', async () => {
+    const calls: ExecCall[] = [];
+    const result = await gitStatusTool.execute({ repo_path: '..' }, makeWorktreeCtx(calls));
+
+    expect(result.isError).toBe(true);
+    expect((result.metadata?.i18n as { key?: string })?.key).toBe('git.repo_path_invalid');
+    // Команда не запускалась.
+    expect(calls).toHaveLength(0);
+  });
+
+  it('repo_path на подкаталог → git.repo_path_invalid (привязка к worktree)', async () => {
+    const calls: ExecCall[] = [];
+    const result = await gitStatusTool.execute({ repo_path: 'sub' }, makeWorktreeCtx(calls));
+
+    expect(result.isError).toBe(true);
+    expect((result.metadata?.i18n as { key?: string })?.key).toBe('git.repo_path_invalid');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('repo_path="." → команда исполняется в каталоге worktree', async () => {
+    const calls: ExecCall[] = [];
+    const result = await gitStatusTool.execute({ repo_path: '.' }, makeWorktreeCtx(calls));
+
+    expect(result.isError).toBeFalsy();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.cwd).toBe(worktree);
+    expect(result.metadata?.cwd).toBe(worktree);
+  });
+
+  it('без repo_path → команда исполняется в каталоге worktree', async () => {
+    const calls: ExecCall[] = [];
+    const result = await gitStatusTool.execute({}, makeWorktreeCtx(calls));
+
+    expect(result.isError).toBeFalsy();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.cwd).toBe(worktree);
+    expect(result.metadata?.cwd).toBe(worktree);
+  });
+
+  it('без привязки: repo_path на подкаталог workspace — прежнее поведение (разрешено)', async () => {
+    const calls: ExecCall[] = [];
+    const ctx: ToolContext = {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: workspace,
+      extra: { executionPort: makeFakePort(calls) },
+    };
+
+    const result = await gitStatusTool.execute({ repo_path: 'sub' }, ctx);
+
+    expect(result.isError).toBeFalsy();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.cwd).toBe(subRepo);
+    expect(result.metadata?.cwd).toBe(subRepo);
+  });
+
+  it('без привязки: repo_path=".." → git.repo_path_invalid (прежнее поведение)', async () => {
+    const calls: ExecCall[] = [];
+    const ctx: ToolContext = {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: workspace,
+      extra: { executionPort: makeFakePort(calls) },
+    };
+
+    const result = await gitStatusTool.execute({ repo_path: '..' }, ctx);
+
+    expect(result.isError).toBe(true);
+    expect((result.metadata?.i18n as { key?: string })?.key).toBe('git.repo_path_invalid');
+    expect(calls).toHaveLength(0);
+  });
+});

@@ -371,6 +371,11 @@ export const SYSTEM_MESSAGES = {
   'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
   'git.repo_exists': 'Repository already exists at "{path}"',
 
+  // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
+  'worktree.directory_missing':
+    'The working directory of the linked git worktree "{path}" does not exist. '
+    + 'The worktree was probably deleted — the session cannot continue in another directory.',
+
   // --- Внешние события и хуки (ADR-030 / ADR-089) ---
   'event.ingested': 'Event {id} ingested from source "{source}"',
   'event.routed.bound': 'Event routed to bound session {sessionId}',

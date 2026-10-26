@@ -323,6 +323,74 @@ describe('Session API Routes (PATCH mode)', () => {
       expect(moved?.project_id).toBe(p2.id);
       expect(moved?.prev_project_id).toBe(p1.id);
     });
+
+    /**
+     * ADR-114 §3.4: привязка к worktree принадлежит проекту — при переносе
+     * сессии в другой проект она снимается, и факт снятия виден в событии
+     * `session.moved` (`worktree_detached`).
+     */
+    it('смена проекта снимает привязку к worktree (session.moved: worktree_detached)', async () => {
+      const { app, sessionManager, projectStore, eventBus } = createTestApp(tmpDir);
+      const p1 = projectStore.create('P1', 'u1');
+      const p2 = projectStore.create('P2', 'u1');
+      await projectStore.save(p1);
+      await projectStore.save(p2);
+
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local', projectId: p1.id });
+      await sessionManager.withLock(session.id, async (s) => {
+        s.worktree = {
+          worktreeId: 'wkt_test',
+          projectId: p1.id,
+          directory: join(tmpDir, 'worktrees', 'feature-x'),
+          branch: 'feature/x',
+        };
+        await sessionManager.saveSession(s);
+      });
+
+      let moved: Record<string, unknown> | undefined;
+      eventBus.subscribe(session.id, (e) => {
+        if (e.type === 'session.moved') moved = e.data as Record<string, unknown>;
+      });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: p2.id }),
+      });
+      expect(res.status).toBe(200);
+      expect(moved).toBeTruthy();
+      expect(moved?.project_id).toBe(p2.id);
+      expect(moved?.worktree_detached).toBe(true);
+
+      // Привязка снята и сохранена в хранилище.
+      const persisted = await sessionManager.getSession(session.id);
+      expect(persisted?.projectId).toBe(p2.id);
+      expect(persisted?.worktree).toBeUndefined();
+    });
+
+    it('смена проекта без привязки к worktree: worktree_detached не публикуется', async () => {
+      const { app, sessionManager, projectStore, eventBus } = createTestApp(tmpDir);
+      const p1 = projectStore.create('P1', 'u1');
+      const p2 = projectStore.create('P2', 'u1');
+      await projectStore.save(p1);
+      await projectStore.save(p2);
+
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local', projectId: p1.id });
+
+      let moved: Record<string, unknown> | undefined;
+      eventBus.subscribe(session.id, (e) => {
+        if (e.type === 'session.moved') moved = e.data as Record<string, unknown>;
+      });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: p2.id }),
+      });
+      expect(res.status).toBe(200);
+      expect(moved).toBeTruthy();
+      expect(moved?.worktree_detached).toBeUndefined();
+    });
   });
 
   describe('GET /api/v2/sessions/:id/prompt (ADR-070 §2.5)', () => {

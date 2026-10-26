@@ -106,14 +106,31 @@ function resolveProjectDir(project: Project, workspacesRoot?: string): string | 
 /**
  * ADR-076: запись реестра `project.repos` для каталога `cwd` — по относительному
  * пути от корня workspace проекта. `cwd` вне workspace → записи нет.
+ *
+ * ADR-114 §4: в сессии, привязанной к worktree, каталог `cwd` лежит **вне**
+ * `project.workspace` (worktree — вторичная копия), поэтому относительный
+ * путь не вычислим. Тогда запись ищется по `repoPath` — пути репозитория
+ * worktree **относительно `project.workspace`** (тот же контракт, что у
+ * `repo_path` в ADR-076; `.` — репозиторий в корне workspace).
  */
-function findRepoEntry(project: Project, cwd: string, workspacesRoot?: string): GitRepoConfig | null {
-  const projectDir = resolveProjectDir(project, workspacesRoot);
-  if (!projectDir) return null;
-
-  const rel = relative(projectDir, resolve(cwd));
-  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
-  const relPath = normalizeRelPath(rel);
+function findRepoEntry(
+  project: Project,
+  cwd: string,
+  workspacesRoot?: string,
+  repoPath?: string,
+): GitRepoConfig | null {
+  let relPath: string;
+  if (repoPath !== undefined) {
+    // Привязка к worktree: сопоставляем по пути репозитория, а не по `cwd`
+    // (каталог worktree лежит вне `project.workspace`).
+    relPath = normalizeRelPath(repoPath);
+  } else {
+    const projectDir = resolveProjectDir(project, workspacesRoot);
+    if (!projectDir) return null;
+    const rel = relative(projectDir, resolve(cwd));
+    if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+    relPath = normalizeRelPath(rel);
+  }
 
   for (const raw of project.repos ?? []) {
     const normalized = normalizeGitRepoConfig(raw);
@@ -157,7 +174,7 @@ export async function resolveProjectRepoEntry(ctx: ToolContext, cwd: string): Pr
   }
   if (!project) return { kind: 'no_project' };
 
-  const entry = findRepoEntry(project, cwd, extra.workspacesRoot);
+  const entry = findRepoEntry(project, cwd, extra.workspacesRoot, ctx.worktreeRepoPath);
   if (!entry) return { kind: 'not_registered' };
   return { kind: 'entry', entry, url: entry.url };
 }
@@ -179,7 +196,7 @@ export async function resolveRepoGitEnv(ctx: ToolContext, cwd: string): Promise<
   }
   if (!project) return { cleanup: noopCleanup };
 
-  const entry = findRepoEntry(project, cwd, extra.workspacesRoot);
+  const entry = findRepoEntry(project, cwd, extra.workspacesRoot, ctx.worktreeRepoPath);
   if (!entry?.sshKeyId) return { cleanup: noopCleanup };
 
   let revealed: { privateKey: string; passphrase?: string } | null;

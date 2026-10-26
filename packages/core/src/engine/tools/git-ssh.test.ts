@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolContext } from '@itphx/synth-shared';
-import { resolveRepoGitEnv } from './git-ssh.js';
+import { resolveProjectRepoEntry, resolveRepoGitEnv } from './git-ssh.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { ProjectStore } from '../../storage/project-store.js';
@@ -188,5 +188,124 @@ describe('resolveRepoGitEnv (ADR-076 §T6, ADR-077 протокол 4)', () => {
     };
     const result = await resolveRepoGitEnv(ctx, tmpDir);
     expect(result.secrets).toBeUndefined();
+  });
+});
+
+/**
+ * ADR-114 §4: в сессии, привязанной к worktree, каталог `cwd` лежит **вне**
+ * `project.workspace` (worktree — вторичная копия репозитория), поэтому
+ * относительный путь от корня workspace вычислим не всегда. Запись реестра
+ * `project.repos` ищется по `worktreeRepoPath` — пути репозитория worktree
+ * относительно `project.workspace` (тот же контракт, что у `repo_path`).
+ */
+describe('resolveRepoGitEnv / resolveProjectRepoEntry — привязка к worktree (ADR-114 §4)', () => {
+  let root: string;
+  let workspace: string;
+  let worktree: string;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let sshKeyStore: SSHKeyStore;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'synth-git-ssh-worktree-'));
+    workspace = join(root, 'workspace');
+    worktree = join(root, 'worktree');
+    await mkdir(workspace, { recursive: true });
+    await mkdir(worktree, { recursive: true });
+    sessionManager = new SessionManager(new FileStore({ dataDir: root }));
+    projectStore = new ProjectStore({ dataDir: root });
+    sshKeyStore = new SSHKeyStore({ dataDir: root, env: process.env });
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /** Проект с реестром репозиториев и сессией в нём. */
+  async function seedProject(repos: Array<{ path: string; sshKeyId?: string }>): Promise<void> {
+    const project = projectStore.create('P', 'u1', { workspace, repos });
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ projectId: project.id, title: 'S' });
+    sessionId = session.id;
+  }
+
+  function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId,
+      messageId: 'm1',
+      workingDir: worktree,
+      extra: { sessionManager, projectStore, sessionId, sshKeyStore },
+      ...overrides,
+    };
+  }
+
+  it('worktreeRepoPath: запись реестра находится по пути репозитория, SSH-ключ отдаётся', async () => {
+    const key = await sshKeyStore.create({ name: 'k-wt', privateKey: PRIVATE_KEY });
+    await seedProject([{ path: 'repo', sshKeyId: key.id }]);
+
+    // `cwd` — каталог worktree (вне `project.workspace`), сопоставление идёт
+    // по `worktreeRepoPath`.
+    const ctx = makeCtx({ worktreeId: 'wkt_test', worktreeRepoPath: 'repo' });
+
+    const lookup = await resolveProjectRepoEntry(ctx, worktree);
+    expect(lookup.kind).toBe('entry');
+
+    const result = await resolveRepoGitEnv(ctx, worktree);
+    expect(result.error).toBeUndefined();
+    expect(result.secrets).toHaveLength(1);
+    expect(result.secrets?.[0]?.kind).toBe('ssh-key');
+    expect(result.secrets?.[0]?.privateKey).toBe(PRIVATE_KEY);
+    await expect(result.cleanup()).resolves.toBeUndefined();
+  });
+
+  it('worktreeRepoPath "." — репозиторий в корне workspace', async () => {
+    const key = await sshKeyStore.create({ name: 'k-root', privateKey: PRIVATE_KEY });
+    await seedProject([{ path: '.', sshKeyId: key.id }]);
+
+    const ctx = makeCtx({ worktreeId: 'wkt_test', worktreeRepoPath: '.' });
+
+    const lookup = await resolveProjectRepoEntry(ctx, worktree);
+    expect(lookup.kind).toBe('entry');
+
+    const result = await resolveRepoGitEnv(ctx, worktree);
+    expect(result.secrets?.[0]?.privateKey).toBe(PRIVATE_KEY);
+    await result.cleanup();
+  });
+
+  it('незарегистрированный worktreeRepoPath → not_registered (секретов нет)', async () => {
+    const key = await sshKeyStore.create({ name: 'k-miss', privateKey: PRIVATE_KEY });
+    await seedProject([{ path: 'repo', sshKeyId: key.id }]);
+
+    const ctx = makeCtx({ worktreeId: 'wkt_test', worktreeRepoPath: 'other-repo' });
+
+    const lookup = await resolveProjectRepoEntry(ctx, worktree);
+    expect(lookup.kind).toBe('not_registered');
+
+    const result = await resolveRepoGitEnv(ctx, worktree);
+    expect(result.secrets).toBeUndefined();
+    expect(result.error).toBeUndefined();
+    await expect(result.cleanup()).resolves.toBeUndefined();
+  });
+
+  it('без worktreeRepoPath — прежний поиск по cwd (регресс не введён)', async () => {
+    const key = await sshKeyStore.create({ name: 'k-plain', privateKey: PRIVATE_KEY });
+    await seedProject([{ path: 'repo', sshKeyId: key.id }]);
+
+    // cwd внутри workspace — запись находится, как и прежде (ADR-076).
+    const inside = await resolveProjectRepoEntry(makeCtx(), join(workspace, 'repo'));
+    expect(inside.kind).toBe('entry');
+    const insideEnv = await resolveRepoGitEnv(makeCtx(), join(workspace, 'repo'));
+    expect(insideEnv.secrets?.[0]?.privateKey).toBe(PRIVATE_KEY);
+    await insideEnv.cleanup();
+
+    // cwd вне workspace (каталог worktree) — записи нет: без `worktreeRepoPath`
+    // поиск идёт по относительному пути от корня workspace.
+    const outside = await resolveProjectRepoEntry(makeCtx(), worktree);
+    expect(outside.kind).toBe('not_registered');
+    const outsideEnv = await resolveRepoGitEnv(makeCtx(), worktree);
+    expect(outsideEnv.secrets).toBeUndefined();
+    expect(outsideEnv.error).toBeUndefined();
+    await outsideEnv.cleanup();
   });
 });

@@ -291,6 +291,8 @@ export const ENGINE_MESSAGE_KEYS = [
   'git.ssh_key_required',
   'git.repo_path_invalid',
   'git.repo_exists',
+  // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
+  'worktree.directory_missing',
   // --- Внешние события и хуки (ADR-030 / ADR-089) ---
   'event.ingested',
   'event.routed.bound',
@@ -673,6 +675,8 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'git.ssh_key_required': ["path"],
   'git.repo_path_invalid': ["path"],
   'git.repo_exists': ["path"],
+  // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
+  'worktree.directory_missing': ["path"],
   // --- Внешние события и хуки (ADR-030 / ADR-089) ---
   'event.ingested': ["id","source"],
   'event.routed.bound': ["sessionId"],

@@ -1,8 +1,8 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
 import { DebugCollector } from '../debug.js';
@@ -53,6 +53,7 @@ import type { SSHKeyRepository } from '../storage/ports/ssh-key-repository.js';
 import type { ProjectStoreLike } from '../storage/project-store.js';
 import { GitService } from '../git/git-service.js';
 import { MAX_DOOM_LOOP_COUNT } from './llm-error.js';
+import { WorktreeDirectoryMissingError } from './worktree/errors.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
 import type { HookBus } from './hooks/hook-bus.js';
@@ -2225,16 +2226,73 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Рабочий каталог сессии: `project.workspace` → `defaultWorkingDir`.
+   * ADR-114 §3.3: привязка сессии к worktree.
+   *
+   * Приоритет: собственная привязка сессии → привязка **родителя** (саб-агент
+   * наследует рабочий каталог родителя). Наследование — **одноуровневое**:
+   * читается ровно одна сессия родителя (`sessionStore`), без рекурсии глубже.
+   *
+   * Привязка **наследуется, а не копируется**: в дочерней сессии своё поле
+   * `worktree` не появляется — ребёнок может получить собственную привязку
+   * позже (тогда она и станет приоритетной).
+   */
+  private async _resolveSessionWorktree(session: Session): Promise<SessionWorktree | undefined> {
+    if (session.worktree) return session.worktree;
+    const parentId = session.parentId;
+    if (!parentId) return undefined;
+    try {
+      const parent = await this._sessionManager.getSession(parentId);
+      return parent?.worktree;
+    } catch {
+      // Родитель не прочитан — привязки нет (обычный путь резолва).
+      return undefined;
+    }
+  }
+
+  /**
+   * ADR-114 §3.1–§3.2: рабочий каталог сессии.
+   *
+   * Приоритет: `session.worktree.directory` (привязка к worktree) →
+   * `project.workspace` (ADR-075) → `defaultWorkingDir`.
+   *
+   * Каталог привязки отсутствует или не является каталогом — **fail-closed**:
+   * бросается {@link WorktreeDirectoryMissingError} (i18n-ключ
+   * `worktree.directory_missing`). Тихий фоллбек в `project.workspace`
+   * запрещён (ADR-114 §3.2): он перенёс бы правки сессии в чужое дерево.
+   *
    * `project` можно передать уже загруженным (ADR-071 §2.4) — тогда повторного
    * чтения `projectStore` не происходит; `undefined` — загрузить, `null` — проекта нет.
    */
   private async _resolveWorkingDir(session: Session, project?: Project | null): Promise<string> {
+    const resolved = await this._resolveSessionWorkingDir(session, project);
+    return resolved.workingDir;
+  }
+
+  /**
+   * ADR-114 §3: рабочий каталог сессии **и** её привязка (одним чтением).
+   *
+   * Вызывающий, которому нужны оба значения (сборка `ToolContext`), берёт их
+   * отсюда — иначе привязка родителя читалась бы дважды за ход.
+   */
+  private async _resolveSessionWorkingDir(
+    session: Session,
+    project?: Project | null,
+  ): Promise<{ workingDir: string; worktree?: SessionWorktree }> {
+    const binding = await this._resolveSessionWorktree(session);
+    if (binding) {
+      const directory = normalize(binding.directory);
+      // Каталог привязки создаёт сервис worktrees — резолв только проверяет.
+      const stats = await stat(directory).catch(() => null);
+      if (!stats?.isDirectory()) {
+        throw new WorktreeDirectoryMissingError(directory, binding.worktreeId);
+      }
+      return { workingDir: directory, worktree: binding };
+    }
     const projectWorkspace = await this._resolveProjectWorkspace(session, project);
-    if (projectWorkspace) return projectWorkspace;
+    if (projectWorkspace) return { workingDir: projectWorkspace };
     const dir = this._defaultWorkingDir;
     await mkdir(dir, { recursive: true }).catch(() => {});
-    return dir;
+    return { workingDir: dir };
   }
 
   /**
@@ -2513,7 +2571,16 @@ export class ChatOrchestrator {
     const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
     // ADR-071 §2.4: проект загружаем один раз — для рабочего каталога и Composer.
     const project = await this._loadProject(session);
-    const workingDir = await this._resolveWorkingDir(session, project);
+    // ADR-114 §3.2: диагностика **не** должна падать из-за исчезнувшего
+    // каталога worktree (ход — fail-closed, здесь только read-only отчёт):
+    // показываем fallback-каталог, а каталог привязки — в подсказке.
+    let workingDir: string;
+    try {
+      workingDir = await this._resolveWorkingDir(session, project);
+    } catch (e) {
+      if (!(e instanceof WorktreeDirectoryMissingError)) throw e;
+      workingDir = this._defaultWorkingDir;
+    }
     const workspaceReady = (await this._resolveProjectWorkspace(session, project)) !== null;
     const language = session.settings.language || 'ru';
 
@@ -2693,15 +2760,35 @@ export class ChatOrchestrator {
       ...(effectiveAgentRole ? { agentId: effectiveAgentRole } : {}),
       participants: deriveSessionParticipants(session, projectForState),
     });
-    let workingDir = await this._resolveWorkingDir(session, projectForState);
+    // ADR-070 §2.6: старт прогона — для per-message duration_ms (полная
+    // длительность у финального сообщения потока, включая tool-chain).
+    const streamStartedAt = Date.now();
+    const debugCollector = new DebugCollector(session.settings.debugEnabled);
+    // ADR-114 §3: рабочий каталог сессии и её привязка к worktree (одним
+    // чтением). Привязка нужна тулам (containment от каталога worktree,
+    // поиск записи реестра git), каталог — permission-слою и file/shell-тулам.
+    let workingDir: string;
+    let sessionWorktree: SessionWorktree | undefined;
+    try {
+      ({ workingDir, worktree: sessionWorktree } = await this._resolveSessionWorkingDir(session, projectForState));
+    } catch (e) {
+      // ADR-114 §3.2: каталог привязанного worktree исчез — ход **не стартует**
+      // (тихий фоллбек в `project.workspace` запрещён), и повтор не поможет:
+      // ошибка уходит через общий обработчик сбоя хода (`canRetry: false`).
+      if (!(e instanceof WorktreeDirectoryMissingError)) throw e;
+      return this._handleLlmFailure(session.id, streamId, e, attempt, {
+        debugCollector,
+        durationMs: Date.now() - streamStartedAt,
+        model: session.settings.model,
+        providerName: session.settings.provider,
+        agentRole: effectiveAgentRole,
+      });
+    }
     // ADR-075: permission-гейт `workspace` — file/shell/git-тулы блокируются,
     // пока у проекта не задан рабочий каталог. `workingDir` при этом всё равно
     // резолвится (fallback default) — он нужен промпту/контексту, но путь
     // инструментов остаётся невалидным до появления workspace.
     let workspaceReady = (await this._resolveProjectWorkspace(session, projectForState)) !== null;
-    // ADR-070 §2.6: старт прогона — для per-message duration_ms (полная
-    // длительность у финального сообщения потока, включая tool-chain).
-    const streamStartedAt = Date.now();
 
     // ADR-025: режим Plan/Act — runtime-состояние сессии + строгость из настроек
     const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
@@ -2761,8 +2848,6 @@ export class ChatOrchestrator {
 
     // Уровень размышлений агента: если агент не задал — берём настройку сессии
     const effectiveReasoningLevel = agentDef?.reasoningLevel ?? session.settings.reasoningLevel;
-
-    const debugCollector = new DebugCollector(session.settings.debugEnabled);
 
     // ADR-070 §2.9.1/ADR-077: перечитать доступность внешних программ (git/rg/sh)
     // перед ходом. Снимок на старте устаревает: в split-режиме состав пула
@@ -3489,6 +3574,18 @@ export class ChatOrchestrator {
                 abortSignal: toolAbortController.signal,
                 agentRole: effectiveAgentRole,
                 workingDir,
+                // ADR-114: привязка к worktree — containment от каталога
+                // worktree (git-тулы: `repo_path` только `.`) и поиск записи
+                // реестра `project.repos` по `worktreeRepoPath` (каталог
+                // worktree лежит вне `project.workspace`).
+                ...(sessionWorktree
+                  ? {
+                    worktreeId: sessionWorktree.worktreeId,
+                    // Репозиторий worktree относительно `project.workspace`;
+                    // `.` — репозиторий в корне workspace.
+                    worktreeRepoPath: sessionWorktree.repoPath ?? '.',
+                  }
+                  : {}),
                 extra: {
                   provider,
                   agentRegistry: this._agentRegistry,
@@ -3815,10 +3912,18 @@ export class ChatOrchestrator {
             if (refreshed) {
               session.projectId = refreshed.projectId;
               session.planApproved = refreshed.planApproved;
+              // ADR-114: привязка к worktree принадлежит проекту — при смене
+              // проекта она снимается (attachSessionToProject сбрасывает поле).
+              session.worktree = refreshed.worktree;
               planApproved = Boolean(refreshed.planApproved);
             }
             projectForState = await this._loadProject(session);
-            workingDir = await this._resolveWorkingDir(session, projectForState);
+            // ADR-114: привязка могла смениться — резолвим каталог и привязку
+            // вместе (одним чтением).
+            ({
+              workingDir,
+              worktree: sessionWorktree,
+            } = await this._resolveSessionWorkingDir(session, projectForState));
             workspaceReady = (await this._resolveProjectWorkspace(session, projectForState)) !== null;
             const rebuilt = this._buildToolSelection({
               session, agentDef, effectiveAgentRole, activeMcpServers, providerType: provider.type,

@@ -2533,6 +2533,11 @@ export const dict = {
   'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
   'git.repo_exists': 'Repository already exists at "{path}"',
 
+  // --- Git worktrees: per-session working directory (ADR-114) ---
+  'worktree.directory_missing':
+    'The working directory of the linked git worktree "{path}" does not exist. '
+    + 'The worktree was probably deleted — the session cannot continue in another directory.',
+
   // --- Execution (ADR-077) ---
   'execution.remote_url_required':
     'Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
