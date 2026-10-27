@@ -66,12 +66,16 @@ import {
   gitWorktreeRemoveTool,
   gitWorktreePruneTool,
 } from './worktree.js';
+// ADR-115: повторная привязка файла из workspace — вложение в диалог.
+import { attachWorkspaceFileTool } from './attach-workspace-file.js';
 
 export { ToolRegistry } from './registry.js';
 export { zodToJsonSchema } from './json-schema.js';
 
 export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   readFileTool,
+  // ADR-115: файл из workspace → вложение диалога (медиа-часть следующего хода)
+  attachWorkspaceFileTool,
   listDirectoryTool,
   globTool,
   writeFileTool,

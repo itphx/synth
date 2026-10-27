@@ -515,6 +515,22 @@ export const SYSTEM_MESSAGES = {
   'process.tool.no_log': 'There is no log for this background run',
   'process.tool.child_history':
     'The history of the child session {child_session} is available via the read_session_reference tool',
+
+  // --- Повторная привязка файла из workspace (ADR-115) ---
+  // Тул `attach_workspace_file`: текст доставленного user-сообщения и результаты
+  // привязки/отказов. Канал LLM — en (ADR-041); UI переводит по `metadata.i18n`.
+  'attach.message.from_workspace': 'File from the working directory: {path}',
+  'attach.tool.attached':
+    'File "{path}" attached to the dialog; it will be passed to the model on the next turn',
+  'attach.tool.deps_unavailable': 'Attaching files is unavailable in this build',
+  'attach.tool.delivery_unavailable':
+    'File was uploaded, but message delivery to the session is unavailable in this context — the model will not see it',
+  'attach.tool.disabled': 'Attachments are disabled on this instance',
+  'attach.tool.not_found': 'File "{path}" not found in the working directory',
+  'attach.tool.not_a_file': '"{path}" is not a file',
+  'attach.tool.too_large': 'File "{path}" is {size} bytes — the attachment limit is {limit} bytes',
+  'attach.tool.unsupported_mime': 'File "{path}" cannot be attached: {detail}',
+  'attach.tool.unrecognized': 'File "{path}" format was not recognized — it cannot be attached',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

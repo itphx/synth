@@ -402,6 +402,17 @@ export const ENGINE_MESSAGE_KEYS = [
   'process.tool.header',
   'process.tool.no_log',
   'process.tool.child_history',
+  // --- Повторная привязка файла из workspace (ADR-115) ---
+  'attach.message.from_workspace',
+  'attach.tool.attached',
+  'attach.tool.deps_unavailable',
+  'attach.tool.delivery_unavailable',
+  'attach.tool.disabled',
+  'attach.tool.not_found',
+  'attach.tool.not_a_file',
+  'attach.tool.too_large',
+  'attach.tool.unsupported_mime',
+  'attach.tool.unrecognized',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -796,6 +807,16 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'process.tool.header': ["count"],
   'process.tool.no_log': [],
   'process.tool.child_history': ["child_session"],
+  'attach.message.from_workspace': ["path"],
+  'attach.tool.attached': ["path"],
+  'attach.tool.deps_unavailable': [],
+  'attach.tool.delivery_unavailable': [],
+  'attach.tool.disabled': [],
+  'attach.tool.not_found': ["path"],
+  'attach.tool.not_a_file': ["path"],
+  'attach.tool.too_large': ["path","size","limit"],
+  'attach.tool.unsupported_mime': ["path","detail"],
+  'attach.tool.unrecognized': ["path"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

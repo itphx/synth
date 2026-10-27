@@ -3098,6 +3098,20 @@ export const dict = {
   'process.tool.child_history':
     'История дочерней сессии {child_session} доступна через тул read_session_reference',
 
+  // --- Повторная привязка файла из workspace (ADR-115) ---
+  'attach.message.from_workspace': 'Файл из рабочего каталога: {path}',
+  'attach.tool.attached':
+    'Файл «{path}» приложен к диалогу и будет передан модели следующим ходом',
+  'attach.tool.deps_unavailable': 'Привязка файлов недоступна в этой сборке',
+  'attach.tool.delivery_unavailable':
+    'Файл загружен, но доставка сообщения в сессию в этом контексте недоступна — модель его не увидит',
+  'attach.tool.disabled': 'Вложения отключены на этом инстансе',
+  'attach.tool.not_found': 'Файл «{path}» не найден в рабочем каталоге',
+  'attach.tool.not_a_file': '«{path}» — не файл',
+  'attach.tool.too_large': 'Файл «{path}» весит {size} Б — предел вложения {limit} Б',
+  'attach.tool.unsupported_mime': 'Файл «{path}» нельзя приложить: {detail}',
+  'attach.tool.unrecognized': 'Формат файла «{path}» не распознан — приложить его нельзя',
+
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',
   'sshKeys.description': 'SSH-ключи per-agent для git-операций. Приватные ключи и парольные фразы шифруются at-rest и не отображаются после сохранения.',

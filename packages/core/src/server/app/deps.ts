@@ -979,6 +979,11 @@ export async function createStandaloneDeps(
     // ADR-115: `attachments.workspaceFallback` — материализация отброшенных
     // вложений в workspace; live-конфиг (проверяется на каждый ход).
     attachmentsConfig: () => attachmentsSettings.getConfig(),
+    // ADR-115: привязка файла из workspace к диалогу (`attach_workspace_file`):
+    // доставка user-сообщения — тот же нотификатор, что у фоновых прогонов
+    // (очередь + автоход); порт ссылок на blob-объекты — из контекста хранения.
+    deliverUserMessage: notifyBackgroundParent,
+    blobRefs: storageContext.blobRefs,
     defaultWorkingDir,
     workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
     // ADR-075: тулы проекта (workspace) читают live-политику вне root.

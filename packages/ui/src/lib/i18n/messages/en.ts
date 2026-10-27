@@ -2675,6 +2675,20 @@ export const dict = {
   'process.tool.child_history':
     'The history of the child session {child_session} is available via the read_session_reference tool',
 
+  // --- Повторная привязка файла из workspace (ADR-115) ---
+  'attach.message.from_workspace': 'File from the working directory: {path}',
+  'attach.tool.attached':
+    'File "{path}" attached to the dialog; it will be passed to the model on the next turn',
+  'attach.tool.deps_unavailable': 'Attaching files is unavailable in this build',
+  'attach.tool.delivery_unavailable':
+    'File was uploaded, but message delivery to the session is unavailable in this context — the model will not see it',
+  'attach.tool.disabled': 'Attachments are disabled on this instance',
+  'attach.tool.not_found': 'File "{path}" not found in the working directory',
+  'attach.tool.not_a_file': '"{path}" is not a file',
+  'attach.tool.too_large': 'File "{path}" is {size} bytes — the attachment limit is {limit} bytes',
+  'attach.tool.unsupported_mime': 'File "{path}" cannot be attached: {detail}',
+  'attach.tool.unrecognized': 'File "{path}" format was not recognized — it cannot be attached',
+
   // --- Фоновые саб-агенты и лимит шагов (этап 1 roadmap 0.13, блок 4) ---
   'task.steps_limit':
     '[steps_limit] The subagent was stopped by the step limit ({limit}).',

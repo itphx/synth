@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentsConfig } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir, stat } from 'node:fs/promises';
@@ -59,6 +59,7 @@ import type { WorktreeService } from './worktree/service.js';
 // ADR-115: гидратация вложений сообщений (blob → base64) перед LLM-вызовом.
 import { createHydrateDeps, hydrateMessageAttachments, type DroppedAttachmentRef, type HydrateDeps } from './attachments/hydrate.js';
 import { materializeAttachment } from './attachments/materialize.js';
+import { AttachmentService } from './attachments/service.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
 import type { HookBus } from './hooks/hook-bus.js';
@@ -68,6 +69,7 @@ import type { QuestionService } from './question/service.js';
 // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
 import type { BackgroundRunService } from './background/service.js';
 import type { ProcessService } from './processes/service.js';
+import type { BlobRefRepository } from '../storage/ports/blob-ref-repository.js';
 
 import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, refreshRuntimeDeps, type RuntimeDeps } from './tools/runtime-deps.js';
 import { InlineExecutionPort } from '../execution/inline-execution-port.js';
@@ -454,6 +456,25 @@ export interface OrchestratorOptions {
    */
   processService?: ProcessService;
   /**
+   * ADR-115: доставка user-сообщения в сессию — очередь + автоход.
+   *
+   * Точка сборки передаёт тот же нотификатор, что и `background.onNotifyParent`
+   * (`notifyBackgroundParent` в `server/app/deps.ts` / `backend/app/deps.ts`):
+   * сообщение попадает в `pendingMessages`, процессор добавляет его в историю и
+   * запускает ход. Нужна тулу `attach_workspace_file`: приложенный файл —
+   * обычное user-сообщение с медиа-частью, а не результат тула.
+   * Не задана — привязка файла отказывает (`attach.tool.delivery_unavailable`).
+   */
+  deliverUserMessage?: (sessionId: string, message: Message) => Promise<void>;
+  /**
+   * ADR-115: порт учёта ссылок на объекты blob-хранилища (`StorageContext.blobRefs`).
+   *
+   * Нужен тулу `attach_workspace_file`: созданное им сообщение ссылается на
+   * объект вложения, и без записи ссылки GC счёл бы объект сиротой по TTL.
+   * Не задан — ссылка не пишется (best-effort, привязка работает).
+   */
+  blobRefs?: BlobRefRepository;
+  /**
    * ADR-114: сервис worktree'ов — тулы `git_worktree_*`.
    *
    * Не задан — тулы worktree недоступны (`worktree.tool.deps_unavailable`).
@@ -657,6 +678,21 @@ export class ChatOrchestrator {
    * режим `background: true` у `execute_shell` недоступен).
    */
   private readonly _processService: ProcessService | null;
+  /**
+   * ADR-115: доставка user-сообщения в сессию (очередь + автоход) — хук
+   * `attach_workspace_file` (null — не задан: привязка файла отказывает).
+   */
+  private readonly _deliverUserMessage: ((sessionId: string, message: Message) => Promise<void>) | null;
+  /**
+   * ADR-115: порт учёта ссылок на blob-объекты (`StorageContext.blobRefs`);
+   * `null` — не задан (ссылка сообщения не пишется — best-effort).
+   */
+  private readonly _blobRefs: BlobRefRepository | null;
+  /**
+   * ADR-115: сервис вложений для тула `attach_workspace_file` (лениво — поверх
+   * blob-порта, как гидратация: отдельный экземпляр не создаёт состояния).
+   */
+  private _attachmentService: AttachmentService | null = null;
   /**
    * ADR-114: сервис worktree'ов (null — не задан: тулы `git_worktree_*`
    * недоступны).
@@ -926,6 +962,10 @@ export class ChatOrchestrator {
     this._processService = options.processService ?? null;
     // ADR-114: сервис worktree'ов (тулы `git_worktree_*`).
     this._worktreeService = options.worktreeService ?? null;
+    // ADR-115: доставка user-сообщения (тул `attach_workspace_file`) — тот же
+    // нотификатор, что у фоновых прогонов; порт ссылок на blob-объекты.
+    this._deliverUserMessage = options.deliverUserMessage ?? null;
+    this._blobRefs = options.blobRefs ?? null;
     this._streamPersistIntervalMs = options.streamPersistIntervalMs ?? 1000;
 
     // ADR-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
@@ -2025,6 +2065,24 @@ export class ChatOrchestrator {
       );
     }
     return this._attachmentHydrateDeps;
+  }
+
+  /**
+   * ADR-115: сервис вложений для тула `attach_workspace_file`.
+   *
+   * Тот же blob-порт, что у гидратации (`StorageContext.blobs`, ADR-096/ADR-116);
+   * конфиг — live-резолвер `attachments.*` (runtime-настройки применяются без
+   * рестарта). Фоллбэк по `dataDir` — только для тестов/прямого конструирования.
+   */
+  private _getAttachmentService(): AttachmentService {
+    if (!this._attachmentService) {
+      this._attachmentService = new AttachmentService({
+        blobs: this._blobs
+          ?? createFileStorage({ dataDir: this._dataDir, env: process.env }).blobs,
+        config: () => this._attachmentsConfig?.() ?? attachmentsConfigSchema.parse({}),
+      });
+    }
+    return this._attachmentService;
   }
 
   /**
@@ -3760,6 +3818,13 @@ export class ChatOrchestrator {
                   // тул `execute_shell` с `background: true` запускает команду
                   // в фоне и возвращает управление сразу.
                   processService: this._processService ?? undefined,
+                  // ADR-115: привязка файла из workspace к диалогу — сервис
+                  // вложений, live-конфиг (ранние проверки), доставка
+                  // user-сообщения (очередь + автоход) и учёт ссылок на blob.
+                  attachmentService: this._getAttachmentService(),
+                  attachmentsConfig: this._attachmentsConfig ?? undefined,
+                  deliverUserMessage: this._deliverUserMessage ?? undefined,
+                  blobRefs: this._blobRefs ?? undefined,
                   // ADR-114: сервис worktree'ов — тулы `git_worktree_*`.
                   worktreeService: this._worktreeService ?? undefined,
                   // Регистрация cancel-токена фонового прогона: `POST

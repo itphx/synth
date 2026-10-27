@@ -144,6 +144,37 @@ export interface MediaPartData {
   (удаляется вместе с проектом/чистится пользователем). Предотвращения дублей между ходами —
   дедуп по содержимому при том же имени; имена не «уникализируются» идентификатором сообщения.
 
+### Повторная привязка файла из workspace
+
+**Решение 2026-10-27.** Материализованный файл (`<workspace>/attachments/<name>`) доступен агенту, но
+**медиа-файл повторно прочитать нечем**: `read_file` читает только UTF-8 (`engine/tools/fs-read.ts`), а
+`ToolResult` умеет отдавать лишь строку — медиа-блоков в результатах тулов нет. Круг замыкает тул
+`attach_workspace_file` (`packages/core/src/engine/tools/attach-workspace-file.ts`): файл с диска
+загружается в сервис вложений и доставляется в сессию **обычным user-сообщением** с медиа-частью,
+поэтому следующий ход получает вложение штатной гидратацией — тот же путь, что у загруженного из UI.
+
+- **Что делает.** `attach_workspace_file(path, name?)` → `AttachmentService.upload` (байты + имя) →
+  `AttachmentService.buildMediaPart` (тип части по MIME, sidecar-метаданные) → сообщение `role: user`
+  с медиа-частью, `content` = текст + плейсхолдер (`appendMediaPlaceholders`),
+  `metadata.source: 'workspace-attachment'` → `deliverUserMessage` (очередь + автоход; тот же
+  нотификатор, что у фоновых прогонов). В результате тула — `blob_path`/`mime`/`size`/`message_id`.
+- **Границы.** Только внутри рабочего каталога: абсолютный путь, `..` за пределы workspace и побег
+  через симлинк отклоняются (`path-utils`, тем же результатом `permission.external_directory_default`);
+  путь объявлен в `TOOL_PATH_PARAMS`, поэтому file-паттерны правил (`read`/`external_directory`)
+  действуют и здесь. Capability — `file_read` (группы `read`/`file_read`): доступность как у
+  read-тулов, в plan-режиме тул не блокируется (файлы проекта он не меняет).
+- **Лимиты и allowlist — общие**, второй политики нет: размер проверяется по `stat` **до** чтения
+  файла (`attachments.maxBytesPerFile`), MIME/модальности/белый список/SVG-запрет — в
+  `AttachmentService.upload` (единственная точка записи байтов); выключенные вложения
+  (`attachments.enabled: false`) — отказ до чтения.
+- **Доставка обязательна.** Нет `deliverUserMessage` (контекст без очереди) — честный отказ
+  `attach.tool.delivery_unavailable`, а не «тихий» успех: файл загружен, но модель его не увидит.
+  Ссылка на объект пишется в `blob_refs` (`ownerKind: 'message'`) — иначе GC счёл бы объект сиротой
+  по TTL; сбой учёта ссылки привязку не отменяет (best-effort).
+- **Text-only модель.** Вложение сохраняется как обычно, а гидратация отбрасывает его по модальности:
+  модель получает штатный блок `[ATTACHMENTS NOT DELIVERED]` с путём в workspace (§«Отброшенное
+  вложение не теряется») — то есть честное «не доставлено», а не молчаливую потерю.
+
 ## Модальности входа модели
 
 **Решение 2026-10-27: единственный источник истины — каталог провайдера при синхронизации моделей.**
@@ -268,6 +299,10 @@ export interface MediaPartData {
 - отброшенное вложение (`modality`/`limit`/`unavailable`) материализуется в `<workspace>/attachments/`
   (`engine/attachments/materialize.ts`), путь сообщается модели блоком `[ATTACHMENTS NOT DELIVERED]`
   (шаблон — `prompts/system/ATTACHMENTS_DROPPED.{ru,en}.md`); нет workspace — блок без пути;
+- повторная привязка файла из workspace — тул `attach_workspace_file`
+  (`engine/tools/attach-workspace-file.ts`, ADR-115 §«Повторная привязка файла из workspace»):
+  containment внутри workspace, `stat` до чтения, общие лимиты/allowlist `attachments.*`, доставка
+  user-сообщением через очередь (`deliverUserMessage`), `blob_refs` для нового сообщения;
 - UI: композер (кнопка/drag&drop/paste, `prepareAttachmentFiles`: HEIC→JPEG, office→текст+картинки
   с группой), чипы и галерея, отправка `attachments`, рендер в ленте (изображения сеткой, audio/video
   `controls`, файлы чипом), гейт модальностей по `modalities`;
@@ -308,3 +343,12 @@ export interface MediaPartData {
   шаблон блока — системные промпты `packages/core/prompts/system/ATTACHMENTS_DROPPED.{ru,en}.md`
   (плейсхолдер `{items}`, override `{userDataDir}/user/system/`), нет шаблона — техническая строка на
   английском. Захардкоженные русские строки из `hydrate.ts` убраны. Без workspace — без пути.
+- 2026-10-27 — **повторная привязка файла из workspace** (`attach_workspace_file`): материализованный
+  файл нельзя прочитать через `read_file` (UTF-8), а `ToolResult` не несёт медиа — поэтому тул
+  загружает файл в сервис вложений и доставляет его **user-сообщением** через очередь
+  (`deliverUserMessage`), и следующий ход получает вложение штатной гидратацией. Границы: только
+  workspace (абсолютный путь/`..`/симлинк — отказ), лимиты и allowlist — общие `attachments.*`
+  (размер по `stat` до чтения), запись `blob_refs` для нового сообщения; text-only модель получает
+  обычный блок `[ATTACHMENTS NOT DELIVERED]`. Шаблон блока обновлён: текстовые файлы — `read_file`,
+  PDF/изображения/аудио/видео — `attach_workspace_file` либо shell-обработка (`pdftotext`, OCR,
+  `ffprobe`), неподдержанный формат — сообщить пользователю.
