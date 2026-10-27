@@ -26,16 +26,17 @@
 
 | # | Цель | Документы | Критерий готовности | Статус |
 |---|---|---|---|---|
-| 1.1 | **Данные: мультимодальный `Part`, blob-подложка и состояние инстанса в SQL** | [ADR-115](./arch_decisions/adr-115-multimodal-input.md), [ADR-116](./arch_decisions/adr-116-instance-state-and-blob-ports.md) (приняты 2026-10-27) | изображение/аудио проходит от API до провайдера; байты вложения — на томе через blob-порт, в БД — только ссылки (`blob_refs`); `packs`/legacy-`pipelines`/`skills`/`contextFiles` переведены в SQL; повторной миграции данных не потребуется | — |
+| 1.1 | **Данные: мультимодальный `Part`, blob-подложка и состояние инстанса в SQL** | [ADR-115](./arch_decisions/adr-115-multimodal-input.md), [ADR-116](./arch_decisions/adr-116-instance-state-and-blob-ports.md) (приняты и реализованы 2026-10-27) | изображение/аудио проходит от API до провайдера; байты вложения — на томе через blob-порт, в БД — только ссылки (`blob_refs`); `packs`/legacy-`pipelines`/`skills`/`contextFiles` переведены в SQL; повторной миграции данных не потребуется | — |
 | 1.2 | **Фоны: саб-агенты и процессы** | [ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md), [ADR-113](./arch_decisions/adr-113-background-processes.md) | дочерняя сессия/процесс живёт после ответа родителя, виден в реестре и в UI; реестр — через порты хранения, а не файлами | ✅ ADR-111/ADR-113 |
 | 1.3 | **`question`: вопрос посреди хода** | [ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md), [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) (HITL-гейт), [ADR-104](./arch_decisions/adr-104-mid-turn-steering.md) (границы хода) | ход замирает до ответа, ответ приходит как `resume` с `output`, вопрос и ответ видны в журнале | ✅ ADR-112 |
 | 1.4 | **per-session cwd / worktrees** | [ADR-114](./arch_decisions/adr-114-git-worktrees.md), [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md), [PROP-049](./arch_decisions/prop-049-git-worktrees.md) (исходное предложение), [docs/WORKTREES.md](./WORKTREES.md) (спецификация) | сессия работает в своём каталоге, инструменты и git не пересекаются между сессиями | ✅ ADR-114 (ядро + UI + sweep при старте) |
 | 1.5 | **Остаток исполнителя** | [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 7c–7d) | git (вместо `simple-git`) и MCP-stdio исполняются исполнителем, метрики `synth_executor_*` — в контракте [ADR-094](./arch_decisions/adr-094-observability-metrics.md) | ✅ ADR-077 (git, MCP, `synth_executor_*`) |
 
 **Статус на 2026-10-27:** этап 1 закрыт на 4 из 5 — 1.2, 1.3, 1.4 и 1.5 реализованы и выпущены;
-остаётся 1.1 (мультимодальный `Part`, blob-подложка и состояние инстанса в SQL) — решения приняты
-([ADR-115](./arch_decisions/adr-115-multimodal-input.md), [ADR-116](./arch_decisions/adr-116-instance-state-and-blob-ports.md)),
-код не начат. 1.2 и 1.3 закрыты ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
+остаётся 1.1 (мультимодальный `Part`, blob-подложка и состояние инстанса в SQL) — решения приняты и
+**реализованы** ([ADR-115](./arch_decisions/adr-115-multimodal-input.md),
+[ADR-116](./arch_decisions/adr-116-instance-state-and-blob-ports.md)); этап закрывается релизом 0.13.0
+после проверки на test. 1.2 и 1.3 закрыты ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
 [ADR-113](./arch_decisions/adr-113-background-processes.md),
 [ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md)); остаток 1.2 (remote-процессы) закрыт
 (протокол v3) — фоновые процессы поддержаны и в `inline`, и в `remote`
@@ -77,9 +78,9 @@ CA — конфигурация исполнителя (`SYNTH_EXECUTOR_TLS_CA_F
 - Артефакты прогонов пайплайнов кладутся в тот же blob-порт (`artifacts/<runId>/…`) — это закрывает
   открытый вопрос ADR-101 «отдельное хранилище артефактов» без второго хранилища.
 
-Оба решения приняты 2026-10-27 ([ADR-115](./arch_decisions/adr-115-multimodal-input.md),
+Оба решения приняты 2026-10-27 и реализованы ([ADR-115](./arch_decisions/adr-115-multimodal-input.md),
 [ADR-116](./arch_decisions/adr-116-instance-state-and-blob-ports.md)); файлы предложений остаются в
-каталоге как история. Этап 1 закрывается их реализацией — блок 1.1.
+каталоге как история. Открытые остатки — в «Статус в коде» каждого ADR.
 
 **Выпущено на test (2026-10-27):** приложение `0.12.3`, чарт `synth 0.12.3-2` (Helm-ревизия 53),
 образы `synth-backend/ui:0.12.3` и `synth-executor:0.12.3-full`; бандлы `synth-test` и

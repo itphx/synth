@@ -1,7 +1,8 @@
 # ADR-116: Состояние инстанса в SQL и blob-порты на томе
 
-> **Статус:** ⚠️ Частично — решение принято 2026-10-27, **в коде не реализовано**; остаток — вся
-> реализация (четыре порта в SQL, `blob_refs`, том/RWX-опция), см. «Статус в коде».
+> **Статус:** ⚠️ Частично — решение принято 2026-10-27 и **реализовано** (четыре порта в SQL,
+> `blob_refs`, смена корня blob-хранилища, опция блоб-тома с RWX-валидацией); остаток — онлайн-бэкап БД
+> и живая миграция, см. «Статус в коде».
 > **Дата:** 2026-10-27
 > **Принято из:** [PROP-106](./prop-106-file-ports-to-sql.md) (исходная гипотеза; файл остаётся как история).
 > **Связано:** [ADR-096](./adr-096-storage-layer.md) (доменные порты и контрактный suite),
@@ -152,21 +153,41 @@ CREATE INDEX blob_refs_owner_idx ON blob_refs (owner_kind, owner_id);
 
 ## Статус в коде
 
-**Не реализовано** (проверено 2026-10-27):
+**Реализовано (2026-10-27):**
 
-- В драйвере PostgreSQL 5 файловых портов: `packages/storage-postgres/src/storage-context.ts:195-215`
-  (`skills`, `contextFiles`, `blobs`, `pipelines`, `packs`).
-- `packs` — `{dataDir}/packs.json` с `AsyncLock` в процессе (`storage/file-pack-store.ts:19,26,32`).
-- legacy `pipelines` — `{dataDir}/pipelines/{definitions,instances}.json` (`storage/file-pipeline-store.ts`).
-- `skills` — дерево `{dataDir}/skills/<name>/` (`storage/skill-store.ts`); порт отдаёт пути
-  (`ports/skill-repository.ts:14-16`).
-- `contextFiles` — слияние образа и `{dataDir}/context/{user,roles}`; геттеры синхронные
-  (`ports/context-file-repository.ts`).
-- `blobs` — `FileBlobStore({ root: dataDir })`; единственный потребитель — логи процессов
-  (`engine/background/service.ts:44-48`); учёта ссылок нет.
-- `synth storage migrate` не переносит `skills`/`contextFiles`/`packs`/legacy `pipelines`
-  (`maintenance/storage-migrate.ts:11-24`).
-- Managed PVC `data` — `accessMode: ReadWriteOnce` (`charts/synth/values.yaml:51`); отдельного блоб-тома нет.
+- `blob_refs` — порт (file/memory/PG) + миграция `024_blob_refs`; `blobs` остаётся файловым, корень
+  `{dataDir}/blobs` (+ one-time перенос логов `processes/`, реестр фоновых прогонов не переносится);
+- `packs` и legacy `pipelines` — SQL (`025_packs_pipelines`): `pack_installations`,
+  `pipeline_definitions`, `pipeline_instances`; установка/снятие пакета согласованы с реестром;
+- `skills` — `026_instance_skills` (метаданные) + содержимое в `blobs` (`skills/<name>/…`);
+  `SkillRepository` больше не отдаёт путей (`listFiles`), домен (discovery/loader/service/watcher)
+  читает через порт, подпись кэша — «имя + размер SKILL.md»;
+- `contextFiles` (пользовательская часть) — `027_context_files`; синхронные геттеры читают
+  процесс-локальный кэш, инвалидация по `max(updated_at)` с TTL 5 с; системные промпты образа — ФС;
+- `synth storage migrate` переносит `packs`, legacy `pipelines`, `skills` (целиком через порт),
+  `contextFiles` — в обе стороны; `blobs` не переносится никогда;
+- драйвер PostgreSQL больше не собирает файловый контекст: рантайм-импорт core сужен до
+  `FileBlobStore` + `prepareBlobRoot`/`blobRootPath` и `ContextConfig` (системные промпты);
+- чарт: `backend.blobs.enabled` (отдельный PVC/`existingClaim`, mount `<dataDir>/blobs`),
+  `fail` при `replicaCount > 1` без `ReadWriteMany` на томе с блобами;
+- контрактный suite гоняет `packs`/`pipelines`/`skills`/`contextFiles` на живом PostgreSQL
+  (в CI — задача `test-postgres`).
+
+**Остаток:**
+
+- `synth backup` по-прежнему снимает файловый периметр отдельно от БД: согласованный онлайн-срез
+  (PITR/дамп в тот же момент) — остаток ADR-091, не решён этим ADR;
+- вне объёма и остаются файловыми: `commands/*.md`, код плагинов (`plugin/installed`, карантин,
+  approvals), `secrets/`, `workspaces/`, `audit/*.jsonl`, `meta.json`, `backups/`, кэши;
+- retention артефактов прогонов не введён (`removeRun` есть, вызывать негде — удаления прогонов нет);
+- `packs.files` хранится в `jsonb`; отдельная таблица `pack_files` не заводилась;
+- живая миграция «на лету» (переключение портов без остановки) не сделана.
+
+## Открытые вопросы
+
+1. `packs.files` — оставить `jsonb` (сейчас) или вынести в `pack_files` при росте пакетов?
+2. Нужен ли режим миграции без простоя (двойное чтение) и какой приоритет при расхождении?
+3. Retention артефактов прогонов: TTL по возрасту прогона или явная очистка админом?
 
 ## Открытые вопросы
 

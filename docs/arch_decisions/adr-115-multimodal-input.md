@@ -1,7 +1,8 @@
 # ADR-115: Мультимодальный ввод — вложения сообщений (Part, blob-порт, API, UI)
 
-> **Статус:** ⚠️ Частично — решение принято 2026-10-27, **в коде не реализовано** (весь объём — блок 1.1
-> roadmap 0.13.0); остаток — вся реализация, см. «Статус в коде».
+> **Статус:** ⚠️ Частично — решение принято 2026-10-27 и **реализовано** (контракт `Part`, blob-порт,
+> HTTP-контур, провайдеры, gateway, UI, экспорт/импорт проекта); остаток — перенос вложений в гибриде,
+> персист черновиков вложений между сессиями, предобработка (ASR/OCR/видео), см. «Статус в коде».
 > **Дата:** 2026-10-27
 > **Принято из:** [PROP-085](./prop-085-multimodal-input.md) (исходная гипотеза; файл остаётся как история).
 > **Связано:** [ADR-096](./adr-096-storage-layer.md) (доменные порты и файловые реализации),
@@ -195,26 +196,43 @@ export interface MediaPartData {
 
 ## Статус в коде
 
-**Не реализовано** (проверено 2026-10-27):
+**Реализовано (2026-10-27), волна 1.1:**
 
-- `PartType` без медиа-типов (`packages/shared/src/types/message.ts:19`).
-- `buildContentFromParts` не знает медиа (`packages/shared/src/utils/index.ts:194`) — неизвестный тип →
-  `''` (тихая потеря).
-- `LLMMessage.content: string` (`packages/core/src/providers/base.ts:151-154`); провайдеры собирают только
-  текст (`providers/openai.ts:369`, `providers/anthropic.ts:443-467`).
-- Blob-подложка есть и работает для логов (`engine/background/service.ts:44-48`), учёта ссылок нет.
-- HTTP-контура вложений нет; `POST /fs/upload` — только файлы рабочего каталога.
-- UI: кнопка вложения инертна (`packages/ui/src/components/chat/ChatInput.tsx:496`).
-- Модальностей моделей нет (`packages/shared/src/model-metadata.ts` — только окно).
+- контракт: `PartType` + `image|audio|video|file`, `MediaPartData`, `makeMediaPart`,
+  плейсхолдер в `buildContentFromParts` (`packages/shared/src/types/message.ts`,
+  `packages/shared/src/utils/index.ts`), `mediaPartSchema`;
+- модальности моделей: `KNOWN_MODEL_MODALITIES`/`resolveModelModalities`, отдаются `GET /api/v2/models`;
+- хранение: `BlobStore.stat/readStream`, корень `{dataDir}/blobs`, `AttachmentService`
+  (MIME по сигнатуре, лимиты, запрет SVG, вычищение EXIF/PNG-метаданных до хеширования,
+  content-addressed `attachments/<sha2>/<sha256>`, sidecar с именем), `blobRefs` (миграция `024`);
+- HTTP: `POST /sessions/:id/attachments`, `GET /sessions/:id/attachments/:partId`
+  (Range/206/416, `ETag`/304, HEAD, `Content-Disposition: inline`), `attachments: string[]`
+  в `POST /prompt` → медиа-части + ссылки, pruner сирот (старт + 6 ч);
+- LLM: `LLMMessage.attachments`, гидратация из blob-порта (лимит 20 МиБ, фильтр по модальностям),
+  OpenAI `image_url`/`input_audio`, Anthropic `image`/`document`; gateway не обфусцирует и не логирует
+  base64 (payload-лог и debug-снимок — сводкой `{mime,name,sizeBytes}`);
+- UI: композер (кнопка/drag&drop/paste, `prepareAttachmentFiles`: HEIC→JPEG, office→текст+картинки
+  с группой), чипы и галерея, отправка `attachments`, рендер в ленте (изображения сеткой, audio/video
+  `controls`, файлы чипом), гейт модальностей по `modalities`;
+- переносимость: портативный экспорт/импорт проекта (формат 2) переносит байты вложений и `blob_refs`;
+- метрики `synth_attachment_*`; доки — `docs/API_V2.md` §5.6.1, `docs/CONFIGURATION.md`.
+
+**Остаток:**
+
+- гибрид (`remote/transfer.ts`, publish/fork) байты вложений не переносит — медиа-части на удалённой
+  стороне остаются с неразрешённым `blobPath`;
+- черновики вложений не переживают переключение сессии (`attachmentDrafts` из §«UI»);
+- предобработка вне объёма: ASR/OCR/извлечение кадров/конвертация на сервере (видео принимается как `file`);
+- `transcript` заполняется только тем, что пришло с клиента/провайдера.
 
 ## Открытые вопросы
 
-1. Формат аддитивного поля вложений в prompt-API: `attachments: string[]` (id) или объекты с
-   `partId`/`role`? Предлагается массив id.
-2. Где считать стоимость медиа: в `usage` провайдера (если он её отдаёт) или оценкой по размеру?
-3. Квота на сессию (`maxBytesPerSession`) — считаем по `blob_refs` или по сумме `size` в частях?
-4. Кто вычищает EXIF: клиент (до загрузки) или сервер (после)? Предлагается сервер (единая точка).
-5. Нужен ли `transcript` для аудио в 0.13 без серверного ASR (только то, что пришло с клиента/провайдера)?
+Решено при реализации: вложения в промпте — `attachments: string[]` (blob-пути); квота сессии считается
+по сумме `size` медиа-частей истории; EXIF/метаданные вычищает сервер до хеширования. Остаются:
+
+1. Где считать стоимость медиа: в `usage` провайдера (если он её отдаёт) или оценкой по размеру?
+2. `transcript` для аудио без серверного ASR — только то, что пришло с клиента/провайдера?
+3. Как переносить байты вложений в гибриде (publish/fork, `remote/transfer`)?
 
 ## История
 
