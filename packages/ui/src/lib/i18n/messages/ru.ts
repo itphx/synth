@@ -1323,6 +1323,10 @@ export const dict = {
   'chat.attachments.gallery.prev': 'Предыдущее изображение',
   'chat.attachments.gallery.next': 'Следующее изображение',
   'chat.attachments.gallery.counter': '{index} / {total}',
+  'chat.attachments.dropHint': 'Отпустите файлы, чтобы прикрепить',
+  'chat.attachments.waitUpload': 'Дождитесь загрузки вложений',
+  'chat.attachments.added': '{count, plural, one {Прикреплён # файл} few {Прикреплено # файла} many {Прикреплено # файлов}}',
+  'chat.attachments.error.prepare': 'Не удалось подготовить файл',
 
   // Plan/Act режим сессии (ADR-025)
   'chat.mode.title': 'Режим сессии: План (только чтение) / Действия (полный доступ) / YOLO (автоподтверждение)',

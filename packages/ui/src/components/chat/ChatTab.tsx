@@ -196,7 +196,7 @@ export function ChatTab({ tab }: ChatTabProps) {
   )
 
   const handleSend = useCallback(
-    async (text: string, agentRole?: string, mode?: SteerMode) => {
+    async (text: string, agentRole?: string, mode?: SteerMode, attachmentIds?: string[]) => {
       const { activeAgentId, defaultAgentId } = useAgentsStore.getState()
       const effectiveAgentRole = agentRole || activeAgentId || defaultAgentId || undefined
 
@@ -206,10 +206,13 @@ export function ChatTab({ tab }: ChatTabProps) {
       try {
         const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
         useChatStore.getState().setStreamRetry(sessionId, null)
-        await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode)
+        // ADR-115: id загруженных вложений уходят в тело запроса промпта.
+        await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode, attachmentIds)
         notify({ text: t('chat.message.sent'), type: 'info', category: 'message', sessionId })
       } catch (e) {
         notify({ text: `${t('chat.error.sendFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
+        // Ошибку пробрасываем композеру: он не очищает вложения при неудаче.
+        throw e
       }
     },
     [sessionId, notify, t]

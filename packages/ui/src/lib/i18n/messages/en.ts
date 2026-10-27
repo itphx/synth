@@ -1343,6 +1343,10 @@ export const dict = {
   'chat.attachments.gallery.prev': 'Previous image',
   'chat.attachments.gallery.next': 'Next image',
   'chat.attachments.gallery.counter': '{index} / {total}',
+  'chat.attachments.dropHint': 'Drop files to attach',
+  'chat.attachments.waitUpload': 'Wait for the attachments to finish uploading',
+  'chat.attachments.added': '{count, plural, one {Attached # file} other {Attached # files}}',
+  'chat.attachments.error.prepare': 'Failed to prepare the file',
 
   // Session Plan/Act mode (ADR-025)
   'chat.mode.title': 'Session mode: Plan (read-only) / Act (full access) / YOLO (auto-approve)',

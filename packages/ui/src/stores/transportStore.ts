@@ -217,8 +217,20 @@ interface TransportState {
   connect: (mode: TransportMode, override?: 'ws' | 'sse') => void
   disconnect: () => void
   setTransportMode: (mode: TransportMode) => void
-  /** `mode` — ADR-104: режим отправки (`queue` по умолчанию, `steer` — вмешательство, `interrupt` — прерывание). */
-  sendMessage: (sessionId: string, text: string, agentRole?: string, provider?: string, model?: string, mode?: SteerMode) => Promise<void>
+  /**
+   * ADR-104: `mode` — режим отправки. ADR-115: `attachmentIds` — id
+   * загруженных вложений (`partId`); WS-кадр `send_message` их не несёт,
+   * поэтому с вложениями сообщение уходит HTTP-путём.
+   */
+  sendMessage: (
+    sessionId: string,
+    text: string,
+    agentRole?: string,
+    provider?: string,
+    model?: string,
+    mode?: SteerMode,
+    attachmentIds?: string[],
+  ) => Promise<void>
   cancel: (sessionId: string) => void
   sendPermissionReply: (sessionId: string, approvalId: string, approved: boolean, once?: boolean) => void
   sendPermissionHold: (sessionId: string, approvalId: string) => void
@@ -1190,13 +1202,23 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     get().connect(mode)
   },
 
-  sendMessage: async (sessionId, text, agentRole, provider, model, mode) => {
-    if (transport && transportReady && transport.getTransport() === 'ws') {
+  sendMessage: async (sessionId, text, agentRole, provider, model, mode, attachmentIds) => {
+    // ADR-115: вложения передаются только в теле `POST /sessions/:id/prompt` —
+    // WS-кадр `send_message` такого поля не знает. С вложениями идём HTTP-путём
+    // даже при живом WS, иначе файлы молча потерялись бы.
+    const hasAttachments = (attachmentIds?.length ?? 0) > 0
+    if (!hasAttachments && transport && transportReady && transport.getTransport() === 'ws') {
       console.debug('[TransportStore] sendMessage via WS:', sessionId)
       await transport.sendMessage(sessionId, text, agentRole, provider, model, mode)
     } else {
       console.debug('[TransportStore] sendMessage via HTTP POST:', sessionId, `(ready=${transportReady}, transport=${transport?.getTransport()})`)
-      await synthApi.enqueueMessage(sessionId, text, { agentRole, model, provider, mode })
+      await synthApi.enqueueMessage(sessionId, text, {
+        agentRole,
+        model,
+        provider,
+        mode,
+        attachments: attachmentIds,
+      })
     }
   },
 

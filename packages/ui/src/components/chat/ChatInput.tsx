@@ -1,10 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
+import type { ClipboardEvent as ReactClipboardEvent } from 'react'
 import { Icon } from '../icon/Icon'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
 import { useI18n } from '@/lib/i18n'
 import { useDevice } from '@/hooks/useDevice'
 import { useChatStore } from '@/stores/chatStore'
 import { confirm } from '@/lib/confirm'
+import { notifyMessage } from '@/hooks/useNotification'
+import { prepareAttachmentFiles, type PreparedAttachment } from '@/lib/attachments/prepare'
+import { useAttachmentsStore } from '@/stores/attachmentsStore'
 import { MentionPopup } from './MentionPopup'
 import { CommandAutocomplete } from './CommandAutocomplete'
 import { ModelSelector } from './ModelSelector'
@@ -12,6 +16,11 @@ import { AgentModeSelector } from './AgentModeSelector'
 import { PlanActModeToggle } from './PlanActModeToggle'
 import { ReasoningLevelSelector } from './ReasoningLevelSelector'
 import { SendModeSelector } from './SendModeSelector'
+import { AttachmentButton } from './attachments/AttachmentButton'
+import { AttachedFilesList } from './attachments/AttachedFilesList'
+import { AttachmentGallery } from './attachments/AttachmentGallery'
+import { useAttachmentDrop } from './attachments/useAttachmentDrop'
+import { useAttachmentPaste } from './attachments/useAttachmentPaste'
 import type { AgentInfo } from '@/lib/api/synthApi'
 import type { CommandSummary } from '@itphx/synth-shared'
 import { DEFAULT_STEER_MODE, type SteerMode } from '@itphx/synth-shared/types'
@@ -24,8 +33,15 @@ interface ChatInputProps {
    * ADR-104: отправка сообщения. Третий аргумент — режим отправки
    * (`queue` по умолчанию, `steer` — вмешательство в активный ход,
    * `interrupt` — прерывание текущей генерации с продолжением хода).
+   * ADR-115: четвёртый аргумент — id загруженных вложений (`partId`); пустой
+   * список не передаётся — тело запроса остаётся прежним.
    */
-  onSend: (text: string, agentRole?: string, mode?: SteerMode) => Promise<void>
+  onSend: (
+    text: string,
+    agentRole?: string,
+    mode?: SteerMode,
+    attachments?: string[],
+  ) => Promise<void>
   /**
    * ADR-104: режим отправки по умолчанию для этого композера (значение задаёт
    * вызывающий код). В UI режим выбирается селектором композера — только при
@@ -187,6 +203,22 @@ export function ChatInput({
   const valueRef = useRef(value)
   valueRef.current = value
 
+  // ADR-115: черновики вложений сессии (загрузка, чипы, ошибки) живут в сторе.
+  const addFiles = useAttachmentsStore((state) => state.addFiles)
+  const clearAttachments = useAttachmentsStore((state) => state.clear)
+  const disposeAttachments = useAttachmentsStore((state) => state.dispose)
+  const draftAttachments = useAttachmentsStore((state) => state.bySession[sessionId])
+  // Незавершённая загрузка блокирует отправку: серверу нужны готовые `partId`.
+  const pendingUpload = useAttachmentsStore((state) => state.hasPending(sessionId))
+  const [gallery, setGallery] = useState<{ open: boolean; index: number }>({ open: false, index: 0 })
+
+  /**
+   * Освобождение object URL при смене сессии и размонтировании композера.
+   * `dispose` удаляет и сами черновики: они принадлежат этой сессии и её
+   * композеру, переносить их в другую сессию нельзя (attachmentDrafts — later).
+   */
+  useEffect(() => () => disposeAttachments(sessionId), [sessionId, disposeAttachments])
+
   const autoResize = useCallback(() => {
     const el = textareaRef.current
     if (!el) return
@@ -301,9 +333,122 @@ export function ChatInput({
     }
   }
 
+  /**
+   * ADR-115: отправка текста (с тегами или без) вместе с вложениями.
+   *
+   * Вложения уходят только с первой частью: один и тот же `partId` не должен
+   * попасть в несколько сообщений (иначе вложения дублируются). Пустой список
+   * не передаём — тело запроса остаётся прежним.
+   */
+  const sendWithAttachments = useCallback(
+    async (text: string, parts: TagPart[] | null) => {
+      const readyIds = useAttachmentsStore.getState().readyPartIds(sessionId)
+      const attachmentIds = readyIds.length > 0 ? readyIds : undefined
+
+      if (!parts) {
+        await onSend(text, undefined, effectiveMode, attachmentIds)
+        return
+      }
+      for (let index = 0; index < parts.length; index += 1) {
+        const part = parts[index]!
+        await onSend(part.text, part.agentRole, effectiveMode, index === 0 ? attachmentIds : undefined)
+      }
+    },
+    [onSend, effectiveMode, sessionId],
+  )
+
+  /**
+   * ADR-115: подготовка файлов и постановка их в очередь загрузки.
+   *
+   * `prepareAttachmentFiles` делает файл пригодным к отправке: MIME по
+   * содержимому, HEIC → JPEG, office-документ → текст + изображения. Части
+   * одного документа несут общий `groupId` — их кладём отдельным вызовом,
+   * чтобы каскадное удаление группы работало; остальные — одной пачкой.
+   */
+  const attachFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return
+
+      // Имена, уже занятые в композере: подготовка не должна создать дубль.
+      const reserved = new Set(
+        (useAttachmentsStore.getState().bySession[sessionId] ?? []).map((item) => item.name),
+      )
+
+      const prepared: PreparedAttachment[] = []
+      try {
+        for (const file of files) {
+          const entries = await prepareAttachmentFiles(file, reserved)
+          for (const entry of entries) reserved.add(entry.file.name)
+          prepared.push(...entries)
+        }
+      } catch {
+        notifyMessage({
+          text: t('chat.attachments.error.prepare'),
+          type: 'error',
+          category: 'error',
+          sessionId,
+        })
+        return
+      }
+      if (prepared.length === 0) return
+
+      const plain: File[] = []
+      const groups = new Map<string, File[]>()
+      for (const entry of prepared) {
+        if (entry.groupId) {
+          const bucket = groups.get(entry.groupId) ?? []
+          bucket.push(entry.file)
+          groups.set(entry.groupId, bucket)
+        } else {
+          plain.push(entry.file)
+        }
+      }
+
+      if (plain.length > 0) await addFiles(sessionId, plain)
+      for (const [groupId, groupFiles] of groups) {
+        await addFiles(sessionId, groupFiles, { groupId })
+      }
+
+      notifyMessage({
+        text: t('chat.attachments.added', { count: prepared.length }),
+        type: 'info',
+        category: 'message',
+        sessionId,
+      })
+    },
+    [addFiles, sessionId, t],
+  )
+
+  const { isDragging, dropProps } = useAttachmentDrop((files) => {
+    void attachFiles(files)
+  })
+
+  // Вставка файлов из буфера (скриншоты). Текст не ломаем: если в буфере есть
+  // и текст, и файл — файл забираем, а вставку текста оставляем браузеру.
+  const pasteFiles = useAttachmentPaste()
+  const handlePaste = useCallback(
+    (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+      const files = pasteFiles(event.nativeEvent)
+      if (files.length === 0) return
+
+      let hasText = false
+      try {
+        hasText = (event.clipboardData?.getData('text/plain') ?? '').length > 0
+      } catch {
+        hasText = false
+      }
+      if (!hasText) event.preventDefault()
+      void attachFiles(files)
+    },
+    [pasteFiles, attachFiles],
+  )
+
   const handleSend = useCallback(async () => {
     const text = value.trim()
     if (!text) return
+    // ADR-115: пока вложение не загружено, отправлять нечего — серверу нужны
+    // готовые `partId`; кнопка в этом состоянии заблокирована.
+    if (useAttachmentsStore.getState().hasPending(sessionId)) return
 
     const parts = splitMessageWithTags(text, agents)
 
@@ -323,18 +468,20 @@ export function ChatInput({
       textareaRef.current.style.height = 'auto'
     }
 
-    if (!parts) {
-      await onSend(text, undefined, effectiveMode)
-    } else {
-      for (const part of parts) {
-        await onSend(part.text, part.agentRole, effectiveMode)
-      }
+    try {
+      await sendWithAttachments(text, parts)
+    } catch {
+      // Ошибку показал вызывающий код (ChatTab). Вложения оставляем в
+      // композере: пользователь может повторить отправку без повторной загрузки.
+      return
     }
-  }, [value, agents, onSend, effectiveMode])
+    clearAttachments(sessionId)
+  }, [value, agents, sendWithAttachments, sessionId, clearAttachments])
 
   const handleEnqueue = useCallback(async () => {
     const text = value.trim()
     if (!text) return
+    if (useAttachmentsStore.getState().hasPending(sessionId)) return
 
     const parts = splitMessageWithTags(text, agents)
 
@@ -357,14 +504,13 @@ export function ChatInput({
     // Отправка во время активного хода (ADR-104): режим — общий для
     // композера (`effectiveMode`): `queue` — в очередь, `steer` — вмешаться
     // в текущий ход (выбор делает селектор композера).
-    if (!parts) {
-      await onSend(text, undefined, effectiveMode)
-    } else {
-      for (const part of parts) {
-        await onSend(part.text, part.agentRole, effectiveMode)
-      }
+    try {
+      await sendWithAttachments(text, parts)
+    } catch {
+      return
     }
-  }, [value, agents, onSend, effectiveMode])
+    clearAttachments(sessionId)
+  }, [value, agents, sendWithAttachments, sessionId, clearAttachments])
 
   const handleCreateNote = () => {
     const text = value.trim()
@@ -438,6 +584,8 @@ export function ChatInput({
       className={`chat-composer relative overflow-visible mx-auto mt-2 mb-2 w-4/5 ${
         expanded ? 'flex-1 flex h-full' : 'shrink-0'
       }`}
+      {...dropProps}
+      data-dragging={isDragging || undefined}
     >
       <div
         className={`relative overflow-visible rounded-xl border border-border/80 bg-surface-subtle focus-within:border-primary/50 px-2 py-2 w-full @container ${
@@ -447,6 +595,15 @@ export function ChatInput({
           borderRadius: CHAT_INPUT_RADIUS,
         }}
       >
+        {draftAttachments && draftAttachments.length > 0 && (
+          <div className="px-2 pb-1 pt-2">
+            <AttachedFilesList
+              sessionId={sessionId}
+              onOpenImage={(index) => setGallery({ open: true, index })}
+            />
+          </div>
+        )}
+
         <div className={`pt-1 pl-2 pr-2 relative ${expanded ? 'flex-1 min-h-0' : ''}`}>
           <textarea
             ref={textareaRef}
@@ -459,7 +616,9 @@ export function ChatInput({
             onChange={handleInput}
             onKeyDown={handleKeyDown}
             onMouseUp={handleMouseUp}
+            onPaste={handlePaste}
           />
+
           <OverlayScrollbar
             containerRef={textareaRef as React.RefObject<HTMLElement>}
             minThumbSize={24}
@@ -493,7 +652,7 @@ export function ChatInput({
           }`}
         >
           <div className="flex shrink-0 items-center gap-0.5">
-            <FooterBtn icon="attachment-2" title={t('chat.footer.attach')} />
+            <AttachmentButton sessionId={sessionId} />
             <FooterBtn
               icon={expanded ? 'fullscreen-exit' : 'fullscreen'}
               title={expanded ? t('chat.footer.collapse') : t('chat.footer.expand')}
@@ -513,9 +672,9 @@ export function ChatInput({
                 <SendModeSelector value={selectedMode} onChange={setSelectedMode} />
                 <button
                   onClick={handleEnqueue}
-                  disabled={!value.trim()}
+                  disabled={!value.trim() || pendingUpload}
                   className="inline-flex items-center justify-center rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                  title={sendActionTitle(effectiveMode, t)}
+                  title={pendingUpload ? t('chat.attachments.waitUpload') : sendActionTitle(effectiveMode, t)}
                 >
                   <Icon name="arrow-up" className="size-5" />
                 </button>
@@ -540,9 +699,9 @@ export function ChatInput({
                 </button>
                 <button
                   onClick={handleSend}
-                  disabled={!value.trim()}
+                  disabled={!value.trim() || pendingUpload}
                   className="inline-flex items-center justify-center rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                  title={t('chat.input.send')}
+                  title={pendingUpload ? t('chat.attachments.waitUpload') : t('chat.input.send')}
                 >
                   <Icon name="send-plane" className="size-5" />
                 </button>
@@ -551,6 +710,27 @@ export function ChatInput({
           </div>
         </div>
       </div>
+
+      {isDragging && (
+        <div
+          className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-2 border-dashed border-primary bg-background/85"
+          style={{ borderRadius: CHAT_INPUT_RADIUS }}
+          data-testid="attachment-drop-overlay"
+        >
+          <span className="flex items-center gap-2 text-sm font-medium text-primary">
+            <Icon name="attachment-2" className="size-4" />
+            {t('chat.attachments.dropHint')}
+          </span>
+        </div>
+      )}
+
+      <AttachmentGallery
+        sessionId={sessionId}
+        open={gallery.open}
+        index={gallery.index}
+        onIndexChange={(index) => setGallery({ open: true, index })}
+        onOpenChange={(open) => setGallery((prev) => ({ ...prev, open }))}
+      />
     </div>
   )
 }

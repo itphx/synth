@@ -205,6 +205,22 @@ describe('sessionsApi — очередь промпта (прямой fetch)', (
     expect('mode' in body).toBe(false)
   })
 
+  it('enqueueMessage: вложения уходят в тело только непустым списком (ADR-115)', async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 202, json: async () => ({}) } as unknown as Response)
+
+    await synthApi.enqueueMessage('s1', 'файл', {
+      streamId: 'sid-5',
+      attachments: ['part-1', 'part-2'],
+    })
+    let body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.attachments).toEqual(['part-1', 'part-2'])
+
+    fetchMock.mockClear()
+    await synthApi.enqueueMessage('s1', 'без файлов', { streamId: 'sid-6', attachments: [] })
+    body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect('attachments' in body).toBe(false)
+  })
+
   it('enqueueMessage: ошибка → Error из detail', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ detail: 'сессия занята' }, 409))
 

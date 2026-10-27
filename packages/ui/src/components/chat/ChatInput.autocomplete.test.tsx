@@ -139,7 +139,7 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
-    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, undefined)
+    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, undefined, undefined)
   })
 
   it('после подстановки Enter передаёт режим отправки композера (ADR-104)', async () => {
@@ -158,7 +158,7 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
-    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, 'steer')
+    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, 'steer', undefined)
   })
 
   it('«Добавить в очередь» во время стрима передаёт тот же контракт onSend (ADR-104)', async () => {
@@ -172,7 +172,7 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
-    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, 'queue')
+    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, 'queue', undefined)
   })
 
   it('поповер имеет фиксированный зазор над рамкой композера (не зависит от высоты textarea)', async () => {
@@ -215,7 +215,7 @@ describe('ChatInput — селектор режима отправки (ADR-104)
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
-    expect(mocks.onSend).toHaveBeenCalledWith('остановись на шаге 2', undefined, 'steer')
+    expect(mocks.onSend).toHaveBeenCalledWith('остановись на шаге 2', undefined, 'steer', undefined)
   })
 
   it('выбор «прервать» уходит третьим аргументом onSend (interrupt)', async () => {
@@ -232,7 +232,7 @@ describe('ChatInput — селектор режима отправки (ADR-104)
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
-    expect(mocks.onSend).toHaveBeenCalledWith('прерви и сделай иначе', undefined, 'interrupt')
+    expect(mocks.onSend).toHaveBeenCalledWith('прерви и сделай иначе', undefined, 'interrupt', undefined)
   })
 
   it('без активного хода селектора нет и режим в запрос не уходит', async () => {
@@ -249,7 +249,8 @@ describe('ChatInput — селектор режима отправки (ADR-104)
     })
 
     // Третьим аргументом `mode` не уходит — в теле запроса поля `mode` нет.
-    expect(mocks.onSend).toHaveBeenCalledWith('обычное сообщение', undefined, undefined)
+    // Четвёртый аргумент — id загруженных вложений (ADR-115); здесь их нет.
+    expect(mocks.onSend).toHaveBeenCalledWith('обычное сообщение', undefined, undefined, undefined)
   })
 
   it('в режиме «в очередь» mode уходит как queue (в тело запроса не попадает)', async () => {
@@ -263,7 +264,7 @@ describe('ChatInput — селектор режима отправки (ADR-104)
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
-    expect(mocks.onSend).toHaveBeenCalledWith('дождись конца хода', undefined, 'queue')
+    expect(mocks.onSend).toHaveBeenCalledWith('дождись конца хода', undefined, 'queue', undefined)
     // `queue` отбрасывается API-слоем — поле `mode` в тело запроса не уходит
     // (`lib/api/sessions.ts`; покрыто в `lib/api/synthApi.sessions.test.ts`).
   })

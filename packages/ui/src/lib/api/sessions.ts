@@ -244,6 +244,11 @@ export const sessionsApi = {
      * совместимость).
      */
     mode?: SteerMode
+    /**
+     * ADR-115: id загруженных вложений (`partId`). Непустой список уходит в
+     * тело как `attachments`; пустой — поле не появляется.
+     */
+    attachments?: string[]
   }): Promise<void> {
     const body: Record<string, unknown> = {
       content: message,
@@ -253,6 +258,9 @@ export const sessionsApi = {
       model: options?.model,
       messageId: options?.streamId || `stream-${Date.now()}`,
       ...(options?.mode && options.mode !== 'queue' ? { mode: options.mode } : {}),
+      ...(options?.attachments && options.attachments.length > 0
+        ? { attachments: options.attachments }
+        : {}),
     }
 
     const response = await fetch(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`, {
