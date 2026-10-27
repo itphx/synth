@@ -1693,6 +1693,21 @@ export {
   // HTTP-роута и встроенных тулов агента).
   listPipelineTemplates,
   instantiatePipelineFromTemplate,
+  // ADR-101 §9 / ADR-116: артефакты прогонов — blob-порт + `blob_refs`
+  // (`ownerKind: 'pipeline-run'`); отдельного хранилища артефактов нет.
+  DEFAULT_PIPELINE_ARTIFACT_MAX_BYTES,
+  isPipelineArtifactPath,
+  PIPELINE_ARTIFACT_DIR,
+  PipelineArtifactError,
+  PipelineArtifactStore,
+  sanitizeArtifactName,
+  sanitizeRunId,
+} from './engine/pipelines/index.js';
+export type {
+  PipelineArtifactEntry,
+  PipelineArtifactErrorCode,
+  PipelineArtifactInput,
+  PipelineArtifactStoreDeps,
 } from './engine/pipelines/index.js';
 export type {
   AgentStepExecutorOptions,
@@ -1708,6 +1723,7 @@ export type {
   PipelineExitEventBusLike,
   PipelineExitHandler,
   PipelineExitIngressLike,
+  PipelineExitResult,
   PipelineExitSessionManagerLike,
   PipelineGate,
   PipelineGateDecision,

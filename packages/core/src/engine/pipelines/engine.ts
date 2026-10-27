@@ -41,7 +41,14 @@
  */
 import { generateId, nowISO } from '@itphx/synth-shared';
 import { pipelineSpecSchema, validatePipelineSpec } from '@itphx/synth-shared';
-import type { EventType, PipelineNode, PipelineRunEventType, PipelineSpec, StepResult } from '@itphx/synth-shared';
+import type {
+  EventType,
+  PipelineArtifact,
+  PipelineNode,
+  PipelineRunEventType,
+  PipelineSpec,
+  StepResult,
+} from '@itphx/synth-shared';
 
 import { error as logError, info as logInfo, warning as logWarning } from '../../logger.js';
 import type { PipelineRunRecord } from '../../storage/ports/index.js';
@@ -53,7 +60,7 @@ import {
   startGateTimeout,
 } from './gate.js';
 import { resolveSpecVars, resolveStepInput } from './mapping.js';
-import { sanitizeRecord, sanitizeTrigger } from './payload.js';
+import { sanitizeRecord, sanitizeTrigger, sanitizeValue } from './payload.js';
 import { MAX_PIPELINE_TRANSITIONS, nextNodeId } from './planner.js';
 import { buildPipelineStepContext, type PipelineStepContext } from './step-context.js';
 import {
@@ -965,6 +972,9 @@ export class PipelineEngine {
     const trigger = state.record.trigger ?? { kind: 'manual' };
     const output = state.prev?.output ?? {};
     const applied: Record<string, unknown>[] = [];
+    // ADR-116: артефакты выходов (blob-порт) — в результат выхода и событие
+    // `pipeline.run.finished`; UI/агент берут ссылки оттуда, а не из workspace.
+    const artifacts: PipelineArtifact[] = [];
 
     for (const exit of state.spec.exits ?? []) {
       const ctx: PipelineExitContext = {
@@ -984,7 +994,10 @@ export class PipelineEngine {
       let failure: { code: string; message: string } | undefined;
       for (const handler of this._exitHandlers) {
         try {
-          await handler.handle(ctx);
+          const result = await handler.handle(ctx);
+          if (result && Array.isArray(result.artifacts) && result.artifacts.length > 0) {
+            artifacts.push(...result.artifacts);
+          }
         } catch (err) {
           failure = {
             code: 'pipeline.exit_failed',
@@ -1011,6 +1024,10 @@ export class PipelineEngine {
     await this._appendEvent(state.record.id, 'run.finished', {
       status: 'done',
       exits: applied,
+      // ADR-116: артефакты прогона — **на верхнем уровне** payload'а. Внутрь
+      // `exits[i]` их не кладём: санитизация payload'а ограничивает глубину
+      // (массив артефактов оказался бы на глубине предела и был бы вырезан).
+      ...(artifacts.length > 0 ? { artifacts } : {}),
       ...(sanitizeRecord(output) ? { output: sanitizeRecord(output) } : {}),
     });
     this._publish('pipeline.run.finished', {
@@ -1018,6 +1035,8 @@ export class PipelineEngine {
       status: 'done',
       exits: applied.length,
       durationMs,
+      // ADR-116: список артефактов прогона — аддитивное поле события.
+      ...(artifacts.length > 0 ? { artifacts: sanitizeValue(artifacts) } : {}),
     });
     try {
       this._metrics?.onRunFinished({ status: 'done', durationMs });

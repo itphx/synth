@@ -635,6 +635,8 @@ export function mountStandaloneRoutes(
       // ADR-101: общий реестр активных прогонов (soft-lock + отмена) —
       // тот же экземпляр, что у встроенных тулов агента.
       runControl: deps.pipelineRunControl,
+      // ADR-116: раздача артефактов прогона (blob-порт).
+      artifacts: deps.pipelineArtifacts,
     },
   ));
 

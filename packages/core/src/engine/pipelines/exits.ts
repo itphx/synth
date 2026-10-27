@@ -6,7 +6,7 @@
  * | Вид | Действие |
  * |---|---|
  * | `session` | создать/продолжить сессию проекта и передать в неё результат шага |
- * | `file` | записать артефакт в workspace проекта (containment, ADR-075) |
+ * | `file` | записать артефакт в workspace проекта (containment, ADR-075) и в blob-порт (ADR-116) |
  * | `gateway` | опубликовать событие наружу (ADR-089/ADR-052/ADR-087) |
  * | `none` | ничего не делать |
  *
@@ -24,7 +24,7 @@
  *   шага (секреты вырезаны, глубина/длина ограничены).
  */
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type {
@@ -38,6 +38,8 @@ import type {
 } from '@itphx/synth-shared';
 
 import { error as logError, warning as logWarning } from '../../logger.js';
+import type { PipelineArtifactStore } from './artifacts.js';
+import { PipelineArtifactError } from './artifacts.js';
 import { sanitizeRecord } from './payload.js';
 import { resolvePipelinePath } from './paths.js';
 import type { PipelineProjectStoreLike } from './step-context.js';
@@ -45,6 +47,7 @@ import type {
   PipelineEngineLogger,
   PipelineExitContext,
   PipelineExitHandler,
+  PipelineExitResult,
   PipelineLlmDefaults,
 } from './types.js';
 
@@ -113,6 +116,12 @@ export interface PipelineExitDeps {
   resolveLlmDefaults?: () => PipelineLlmDefaults | Promise<PipelineLlmDefaults>;
   /** Владелец инстанса, когда у прогона нет проекта (ADR-089). */
   resolveOwnerId?: () => string | Promise<string>;
+  /**
+   * Хранилище артефактов прогонов (ADR-101 §9, ADR-116): выход `file`
+   * **дополнительно** кладёт байты в blob-порт. Не задано — артефакт остаётся
+   * только в workspace проекта (поведение прежнее).
+   */
+  artifacts?: PipelineArtifactStore | null;
   /** Логгер (по умолчанию — логгер ядра). */
   logger?: PipelineEngineLogger;
 }
@@ -134,20 +143,19 @@ const defaultLogger: PipelineEngineLogger = {
 export function createPipelineExitHandler(deps: PipelineExitDeps = {}): PipelineExitHandler {
   const logger = deps.logger ?? defaultLogger;
   return {
-    async handle(ctx: PipelineExitContext): Promise<void> {
+    async handle(ctx: PipelineExitContext): Promise<PipelineExitResult | void> {
       switch (ctx.exit.kind) {
         case 'session':
           await handleSessionExit(ctx, deps, logger);
-          return;
+          return undefined;
         case 'file':
-          await handleFileExit(ctx, deps, logger);
-          return;
+          return handleFileExit(ctx, deps, logger);
         case 'gateway':
           await handleGatewayExit(ctx, deps, logger);
-          return;
+          return undefined;
         case 'none':
           // Выход без внешнего следа — ничего не делаем.
-          return;
+          return undefined;
       }
     },
   };
@@ -228,12 +236,17 @@ async function handleSessionExit(
  * проекта. Абсолютный путь, `..` за пределы workspace и отсутствие
  * workspace — отказ (ошибка обработчика; прогон при этом не падает —
  * движок ловит ошибку и пишет в лог).
+ *
+ * ADR-116: после успешной записи в workspace **те же байты** кладутся в
+ * blob-порт (`PipelineArtifactStore`) — артефакт переживает очистку
+ * workspace и доступен по HTTP/из события. Превышение лимита артефакта —
+ * не ошибка прогона: предупреждение в лог, файл остаётся только в workspace.
  */
 async function handleFileExit(
   ctx: PipelineExitContext,
   deps: PipelineExitDeps,
   logger: PipelineEngineLogger,
-): Promise<void> {
+): Promise<PipelineExitResult | void> {
   const file = ctx.exit.file;
   const rawPath = file?.path?.trim();
   if (!rawPath) {
@@ -258,6 +271,46 @@ async function handleFileExit(
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, content, 'utf8');
   logger.info(LOG_GROUP, `прогон ${ctx.runId}: артефакт записан в workspace проекта`);
+
+  const store = deps.artifacts;
+  if (!store) return undefined;
+
+  const name = basename(rawPath);
+  const bytes = Buffer.from(content, 'utf8');
+  // Лимит проверяем до записи: слишком большой файл в blob-порт не кладём
+  // (workspace-копия уже записана), прогон при этом не падает.
+  if (bytes.length > store.maxBytes) {
+    logger.warning(
+      LOG_GROUP,
+      `прогон ${ctx.runId}: артефакт «${name}» (${bytes.length} Б) превышает предел ` +
+        `${store.maxBytes} Б — в blob-хранилище не записан`,
+    );
+    return undefined;
+  }
+
+  try {
+    const artifact = await store.put(ctx.runId, {
+      name,
+      bytes,
+      mime: guessArtifactMime(name),
+    });
+    logger.info(
+      LOG_GROUP,
+      `прогон ${ctx.runId}: артефакт «${name}» сохранён в blob-хранилище (${artifact.path ?? ''})`,
+    );
+    return { artifacts: [artifact] };
+  } catch (err) {
+    // Ошибка blob-порта не отменяет выход: файл в workspace уже записан.
+    if (err instanceof PipelineArtifactError && err.code === 'too_large') {
+      logger.warning(LOG_GROUP, `прогон ${ctx.runId}: артефакт «${name}» не сохранён — ${err.message}`);
+    } else {
+      logger.warning(
+        LOG_GROUP,
+        `прогон ${ctx.runId}: не удалось сохранить артефакт «${name}» в blob-хранилище: ${errorMessage(err)}`,
+      );
+    }
+    return undefined;
+  }
 }
 
 /**
@@ -409,6 +462,43 @@ function resolveFileContent(ctx: PipelineExitContext, contentFrom?: string): str
     if (value !== undefined && value !== null) return JSON.stringify(value, null, 2);
   }
   return JSON.stringify(sanitizeRecord(ctx.output) ?? {}, null, 2);
+}
+
+/**
+ * MIME по расширению имени (для `Content-Type` при раздаче артефакта).
+ * Неизвестное расширение — `undefined`: отдаётся `application/octet-stream`.
+ */
+function guessArtifactMime(name: string): string | undefined {
+  const ext = extname(name).toLowerCase();
+  switch (ext) {
+    case '.md':
+    case '.markdown':
+      return 'text/markdown; charset=utf-8';
+    case '.txt':
+    case '.log':
+      return 'text/plain; charset=utf-8';
+    case '.json':
+      return 'application/json; charset=utf-8';
+    case '.csv':
+      return 'text/csv; charset=utf-8';
+    case '.html':
+    case '.htm':
+      return 'text/html; charset=utf-8';
+    case '.xml':
+      return 'application/xml; charset=utf-8';
+    case '.yml':
+    case '.yaml':
+      return 'application/yaml; charset=utf-8';
+    case '.pdf':
+      return 'application/pdf';
+    case '.png':
+      return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    default:
+      return undefined;
+  }
 }
 
 /** Текст ошибки (для лога). */

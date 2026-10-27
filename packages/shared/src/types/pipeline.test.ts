@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   eventMatchSchema,
+  isBlobPipelineArtifact,
+  pipelineArtifactSchema,
   pipelineDefinitionSchema,
   pipelineInstanceSchema,
   pipelineInstanceStatusSchema,
@@ -182,5 +184,35 @@ describe('Экземпляр пайплайна', () => {
     for (const status of ['pending', 'running', 'done', 'failed', 'skipped']) {
       expect(pipelineStepStateSchema.safeParse({ id: 's1', status }).success).toBe(true);
     }
+  });
+});
+
+describe('Артефакт-объект blob-хранилища (ADR-101 §9 / ADR-116)', () => {
+  it('старый вид артефакта (kind + from) остаётся валидным', () => {
+    const parsed = pipelineArtifactSchema.safeParse({ kind: 'draft', from: 'review' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(isBlobPipelineArtifact(parsed.data)).toBe(false);
+  });
+
+  it('принимает kind: blob с path/mime/size/name и распознаётся предикатом', () => {
+    const parsed = pipelineArtifactSchema.safeParse({
+      kind: 'blob',
+      path: 'artifacts/prun_1/report.md',
+      mime: 'text/markdown; charset=utf-8',
+      size: 5,
+      name: 'report.md',
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(isBlobPipelineArtifact(parsed.data)).toBe(true);
+    }
+  });
+
+  it('blob без path и отрицательный size — не проходят схему/предикат', () => {
+    expect(pipelineArtifactSchema.safeParse({ kind: 'blob' }).success).toBe(true);
+    expect(isBlobPipelineArtifact({ kind: 'blob' })).toBe(false);
+    expect(
+      pipelineArtifactSchema.safeParse({ kind: 'blob', path: 'x', size: -1 }).success,
+    ).toBe(false);
   });
 });

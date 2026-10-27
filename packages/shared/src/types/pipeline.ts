@@ -37,11 +37,25 @@ export const eventMatchSchema = z.object({
 export type EventMatch = z.infer<typeof eventMatchSchema>;
 
 /**
+ * Вид артефакта-объекта blob-хранилища (ADR-101 §9, ADR-116 §3).
+ *
+ * Байты артефакта прогона лежат в общем blob-порте, `path` — путь объекта
+ * (`artifacts/<runId>/<name>`); учёт ссылок — `blob_refs`
+ * (`ownerKind: 'pipeline-run'`). Отдельного хранилища артефактов нет
+ * (решение 2026-10-27, ADR-101 §«Открытые вопросы»).
+ */
+export const PIPELINE_ARTIFACT_BLOB_KIND = 'blob';
+
+/**
  * Артефакт шага (ADR-100: передача артефактов между шагами): что шаг
  * произвёл (`kind`) и откуда взялось (`from`).
+ *
+ * Поля `path`/`mime`/`size`/`name` — **аддитивное** расширение для
+ * артефакта-объекта (`kind: 'blob'`, ADR-116): старые записи без них
+ * остаются валидными.
  */
 export const pipelineArtifactSchema = z.object({
-  /** Вид артефакта (напр. `draft`, `report`). */
+  /** Вид артефакта (напр. `draft`, `report`, `blob`). */
   kind: z.string().min(1),
   /** Идентификатор артефакта (если он адресуем). */
   id: z.string().optional(),
@@ -51,6 +65,14 @@ export const pipelineArtifactSchema = z.object({
   source: z.string().optional(),
   /** Тип события, породившего артефакт (для артефакта-события). */
   type: z.string().optional(),
+  /** Путь объекта в blob-хранилище (`kind: 'blob'`, ADR-116). */
+  path: z.string().optional(),
+  /** MIME-тип содержимого артефакта-объекта. */
+  mime: z.string().optional(),
+  /** Размер содержимого артефакта-объекта, байт. */
+  size: z.number().int().min(0).optional(),
+  /** Имя файла артефакта-объекта (для раздачи/`Content-Disposition`). */
+  name: z.string().optional(),
   /**
    * Данные артефакта (напр. payload события, которым шаг продвинул автомат).
    * Именно это «содержимое» получает следующий шаг пайплайна.
@@ -58,6 +80,24 @@ export const pipelineArtifactSchema = z.object({
   payload: z.record(z.string(), z.unknown()).optional(),
 });
 export type PipelineArtifact = z.infer<typeof pipelineArtifactSchema>;
+
+/** Артефакт-объект blob-хранилища: `kind: 'blob'` и известный путь. */
+export type PipelineBlobArtifact = PipelineArtifact & {
+  kind: typeof PIPELINE_ARTIFACT_BLOB_KIND;
+  path: string;
+};
+
+/** Является ли артефакт объектом blob-хранилища (`kind: 'blob'` + `path`). */
+export function isBlobPipelineArtifact(
+  artifact: PipelineArtifact | null | undefined,
+): artifact is PipelineBlobArtifact {
+  return (
+    !!artifact &&
+    artifact.kind === PIPELINE_ARTIFACT_BLOB_KIND &&
+    typeof artifact.path === 'string' &&
+    artifact.path.length > 0
+  );
+}
 
 /**
  * Шаг пайплайна.

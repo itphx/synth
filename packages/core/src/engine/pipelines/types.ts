@@ -17,6 +17,7 @@ import type {
   PipelineRunTrigger,
   PipelineSpec,
   StepResult,
+  PipelineArtifact,
 } from '@itphx/synth-shared';
 import type { EventType } from '@itphx/synth-shared';
 import type { BaseProvider } from '../../providers/base.js';
@@ -340,14 +341,32 @@ export interface PipelineEventPublisher {
 }
 
 /**
+ * Результат обработки выхода пайплайна (ADR-101 §9, ADR-116).
+ *
+ * Обработчик может вернуть артефакты, произведённые выходом (выход `file`
+ * кладёт байты в blob-порт и возвращает `kind: 'blob'`). Движок складывает их
+ * в результат выхода в журнале прогона и в событие `pipeline.run.finished` —
+ * UI и агент видят ссылки, не читая workspace.
+ */
+export interface PipelineExitResult {
+  /** Артефакты, произведённые выходом (необязательно). */
+  artifacts?: PipelineArtifact[];
+}
+
+/**
  * Обработчик выхода пайплайна — **точка расширения** движка (ADR-101 §9).
  *
  * В Э3 используется no-op реализация: выходы фиксируются в журнале прогона,
  * но не исполняются. Э5 подключает реальные обработчики, не меняя движок.
  */
 export interface PipelineExitHandler {
-  /** Обработка выхода пайплайна. */
-  handle(ctx: PipelineExitContext): Promise<void> | void;
+  /**
+   * Обработка выхода пайплайна.
+   *
+   * Возврат `void` — прежнее поведение (артефактов нет); `PipelineExitResult`
+   * — выход сообщает, что произвёл (ADR-116: артефакты прогона).
+   */
+  handle(ctx: PipelineExitContext): Promise<PipelineExitResult | void> | PipelineExitResult | void;
 }
 
 /** No-op обработчик выхода (значение по умолчанию в Э3). */

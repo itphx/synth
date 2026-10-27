@@ -17,6 +17,9 @@ import {
   MemoryPipelineRunRepository,
   MemoryProjectPipelineRepository,
 } from '../../storage/memory/index.js';
+import { MemoryBlobRefRepository } from '../../storage/memory/blob-refs.js';
+import { FileBlobStore } from '../../storage/file-blob-store.js';
+import { PipelineArtifactStore } from './artifacts.js';
 import { createPipelineExitHandler } from './exits.js';
 import { PipelineEngine } from './engine.js';
 import type { PipelineExitContext, StepExecutor } from './types.js';
@@ -218,6 +221,59 @@ describe('выход file', () => {
     await expect(
       handler.handle(exitContext({ kind: 'file', file: { path: 'report.md' } })),
     ).rejects.toThrow(/рабочего каталога/);
+  });
+
+  it('ADR-116: после workspace те же байты кладутся в blob-порт и возвращается артефакт', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'synth-pipeline-'));
+    const blobDir = await mkdtemp(join(tmpdir(), 'synth-pipeline-blobs-'));
+    const blobs = new FileBlobStore({ root: join(blobDir, 'blobs') });
+    const refs = new MemoryBlobRefRepository();
+    const artifacts = new PipelineArtifactStore({ blobs, blobRefs: refs });
+    const handler = createPipelineExitHandler({
+      projectStore: projectStoreMock({ ownerId: 'owner-1', workspace }),
+      artifacts,
+    });
+
+    const result = await handler.handle(
+      exitContext({ kind: 'file', file: { path: 'out/report.md', contentFrom: 'text' } }),
+    );
+
+    // Артефакт — объект blob-хранилища с адресуемым путём и MIME по расширению.
+    expect(result?.artifacts).toHaveLength(1);
+    const artifact = result!.artifacts![0]!;
+    expect(artifact).toMatchObject({
+      kind: 'blob',
+      path: 'artifacts/prun_1/report.md',
+      name: 'report.md',
+    });
+    expect(artifact.mime).toContain('text/markdown');
+    expect((await artifacts.read({ path: artifact.path! }))?.toString('utf8')).toContain('готово');
+    // Ссылка владельца записана — объект не считается осиротевшим.
+    expect(await refs.listByOwner('pipeline-run', 'prun_1')).toContain(artifact.path);
+    // Файл в workspace при этом на месте.
+    expect(await readFile(join(workspace, 'out', 'report.md'), 'utf8')).toContain('готово');
+  });
+
+  it('ADR-116: файл больше лимита — workspace пишется, blob пропускается, прогон не падает', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'synth-pipeline-'));
+    const blobDir = await mkdtemp(join(tmpdir(), 'synth-pipeline-blobs-'));
+    const blobs = new FileBlobStore({ root: join(blobDir, 'blobs') });
+    const refs = new MemoryBlobRefRepository();
+    // Предел меньше содержимого выхода (`{ text: 'готово', … }`).
+    const artifacts = new PipelineArtifactStore({ blobs, blobRefs: refs, maxBytes: 4 });
+    const handler = createPipelineExitHandler({
+      projectStore: projectStoreMock({ ownerId: 'owner-1', workspace }),
+      artifacts,
+    });
+
+    const result = await handler.handle(
+      exitContext({ kind: 'file', file: { path: 'out/big.md', contentFrom: 'text' } }),
+    );
+
+    // Выход не падает и не отдаёт артефакт; файл в workspace записан.
+    expect(result).toBeUndefined();
+    expect(await blobs.list('artifacts/')).toEqual([]);
+    expect(await readFile(join(workspace, 'out', 'big.md'), 'utf8')).toContain('готово');
   });
 });
 

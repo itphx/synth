@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { Readable } from 'node:stream';
+
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
@@ -9,17 +12,20 @@ import {
   pipelineRunTriggerSchema,
 } from '@itphx/synth-shared';
 import type {
+  PipelineArtifact,
   PipelineRunStatus,
   PipelineRunTrigger,
   Project,
 } from '@itphx/synth-shared';
 import type {
   PipelineRecord,
+  PipelineRunEventRecord,
   PipelineRunRecord,
   PipelineRunRepository,
   ProjectPipelineRepository,
 } from '../../storage/ports/index.js';
 import type { PipelineRepository } from '../../storage/ports/pipeline-repository.js';
+import type { PipelineArtifactStore } from '../../engine/pipelines/artifacts.js';
 import type { ProjectRepository } from '../../storage/ports/project-repository.js';
 import { PipelineEngineError } from '../../engine/pipelines/index.js';
 import type { PipelineEngine } from '../../engine/pipelines/index.js';
@@ -87,6 +93,8 @@ export interface PipelineProjectRouteMessages {
   pipelineNotFound: (c: Context) => string;
   /** Прогон не найден (404). */
   runNotFound: (c: Context) => string;
+  /** Артефакт прогона не найден (404). */
+  artifactNotFound: (c: Context) => string;
   /** Проект не найден (404). */
   projectNotFound: (c: Context) => string;
   /** Шаблон инстанса не найден (404). */
@@ -116,6 +124,7 @@ export interface PipelineProjectRouteMessages {
 const DEFAULT_MESSAGES: PipelineProjectRouteMessages = {
   pipelineNotFound: () => 'Пайплайн не найден',
   runNotFound: () => 'Прогон не найден',
+  artifactNotFound: () => 'Артефакт прогона не найден',
   projectNotFound: () => 'Проект не найден',
   templateNotFound: () => 'Шаблон пайплайна не найден',
   forbidden: () => 'Доступ запрещён',
@@ -153,6 +162,12 @@ export interface PipelineProjectRoutesDeps {
    * встроенными тулами агента; в инстансе всегда передаётся общий).
    */
   runControl?: PipelineRunControl;
+  /**
+   * Хранилище артефактов прогонов (ADR-101 §9, ADR-116) — раздача байтов
+   * (`GET /pipeline-runs/:runId/artifacts/:name`). Не задано — артефактов нет
+   * (404), остальной контур пайплайнов работает как прежде.
+   */
+  artifacts?: PipelineArtifactStore;
 }
 
 export interface PipelineProjectRoutesOptions {
@@ -294,6 +309,56 @@ const instantiateBodySchema = z.object({
 });
 
 // ────────────────────────────── Утилиты ──────────────────────────────
+
+/**
+ * Метаданные артефакта из журнала прогона: `run.finished` → `artifacts[]`
+ * (ADR-116). `null` — записи нет (MIME неизвестен).
+ */
+async function findArtifactMeta(
+  runs: PipelineRunRepository,
+  runId: string,
+  path: string,
+): Promise<PipelineArtifact | null> {
+  let events: PipelineRunEventRecord[] = [];
+  try {
+    events = await runs.listEvents(runId, { limit: 1000 });
+  } catch {
+    return null;
+  }
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i]!;
+    if (event.type !== 'run.finished') continue;
+    const artifacts = event.payload?.artifacts;
+    if (!Array.isArray(artifacts)) continue;
+    const hit = artifacts.find(
+      (item): item is PipelineArtifact =>
+        !!item && typeof item === 'object' && (item as PipelineArtifact).path === path,
+    );
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** ETag артефакта — хеш пути: путь уникален в пределах прогона и неизменяем. */
+function artifactEtag(path: string): string {
+  return `"${createHash('sha256').update(path).digest('hex')}"`;
+}
+
+/** Совпадает ли `If-None-Match` с ETag (в т.ч. `*` и список через запятую). */
+function matchesEtag(header: string | undefined, etag: string): boolean {
+  if (!header) return false;
+  return header
+    .split(',')
+    .map((value) => value.trim())
+    .some((value) => value === '*' || value === etag);
+}
+
+/** `Content-Disposition: attachment` с UTF-8-именем (RFC 6266/5987). */
+function artifactDisposition(name: string): string {
+  const safe = (name || 'artifact').replace(/["\\\r\n]/g, '_');
+  const encoded = encodeURIComponent(name || 'artifact');
+  return `attachment; filename="${safe}"; filename*=UTF-8''${encoded}`;
+}
 
 // ────────────────────────────── Фабрика ──────────────────────────────
 
@@ -772,6 +837,47 @@ export function createPipelineProjectRoutes(
     const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 1000) : 200;
     const events = await deps.runs.listEvents(run.id, { limit });
     return c.json({ run, events });
+  });
+
+  // GET /api/v2/pipeline-runs/:runId/artifacts/:name — байты артефакта прогона.
+  //
+  // ADR-101 §9 + ADR-116: байты лежат в blob-порте (`artifacts/<runId>/<name>`),
+  // отдельного хранилища артефактов нет. Доступ — те же права, что у чтения
+  // прогона (`runGuard('read')`: право чтения проекта, ADR-089 §5.5/§5.8);
+  // проверок в обработчике нет (инвариант 16).
+  app.get('/pipeline-runs/:runId/artifacts/:name', auth.requireAuth, runGuard('read'), async (c) => {
+    const run = guardedRun(c);
+    const store = deps.artifacts;
+    const notFound = () =>
+      c.json({ error: { code: 'NOT_FOUND', message: messages.artifactNotFound(c) } }, 404);
+    if (!store) return notFound();
+
+    const entry = await store.find(run.id, c.req.param('name'));
+    if (!entry) return notFound();
+
+    // MIME и исходное имя — из журнала прогона (`run.finished` → `artifacts[]`):
+    // отдельного индекса метаданных артефактов нет — журнал и есть источник.
+    const meta = await findArtifactMeta(deps.runs, run.id, entry.path);
+    const etag = artifactEtag(entry.path);
+    const headers: Record<string, string> = {
+      'Content-Type': meta?.mime ?? 'application/octet-stream',
+      'Content-Disposition': artifactDisposition(meta?.name ?? entry.name),
+      'Content-Length': String(entry.size),
+      ETag: etag,
+      // Объект неизменяем (уникальный путь прогона), как у вложений (ADR-115).
+      'Cache-Control': 'private, max-age=86400',
+    };
+
+    if (matchesEtag(c.req.header('if-none-match'), etag)) {
+      return c.body(null, 304, headers);
+    }
+
+    const stream = await store.readStream({ path: entry.path });
+    if (!stream) return notFound();
+    return new Response(Readable.toWeb(stream) as unknown as ReadableStream, {
+      status: 200,
+      headers,
+    });
   });
 
   // POST /api/v2/pipeline-runs/:runId/resume — HITL-действие человека.

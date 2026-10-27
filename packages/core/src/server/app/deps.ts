@@ -85,6 +85,8 @@ import {
   createAgentStepExecutor,
   createPipelineExitHandler,
   createPipelineMetrics,
+  // ADR-101 §9 / ADR-116: артефакты прогонов — blob-порт + `blob_refs`.
+  PipelineArtifactStore,
   ensureBuiltinPipelines,
   toCoreProviderConfig,
   ProviderFactory,
@@ -707,8 +709,13 @@ export async function createStandaloneDeps(
 
   // ADR-046: сервис скиллов — discovery (instance/project/config.paths) + запись
   // instance-дерева + каталог в промпт и тул `skill`.
+  // ADR-116: instance-скиллы — порт слоя хранения (`storageContext.skills`):
+  // при `storage.backend=postgres` это метаданные в SQL + содержимое в blobs,
+  // при file/memory — файловый/в-памяти стор. Без передачи порта сервис создал
+  // бы собственный файловый `SkillStore` и писал мимо backend'а.
   const skillService = new SkillService({
     dataDir,
+    store: storageContext.skills,
     configPaths: config.skillsConfig?.paths,
     urls: config.skillsConfig?.urls,
     trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
@@ -1342,6 +1349,14 @@ export async function createStandaloneDeps(
     }
   };
   const pipelineWorkspacesRoot = config.workspacesRoot ?? join(dataDir, 'workspaces');
+  // ADR-101 §9 / ADR-116: артефакты прогонов — байты в общем blob-порте,
+  // отдельного хранилища артефактов нет (решение 2026-10-27). Тот же инстанс
+  // получают выход `file` (запись) и HTTP-раздача артефактов (`GET
+  // /pipeline-runs/:runId/artifacts/:name`).
+  const pipelineArtifacts = new PipelineArtifactStore({
+    blobs: storageContext.blobs,
+    blobRefs: storageContext.blobRefs,
+  });
   const pipelineEngine = new PipelineEngine({
     // ADR-096: порты спецификаций пайплайнов и прогонов — из контекста хранения.
     pipelines: storageContext.projectPipelines,
@@ -1360,6 +1375,8 @@ export async function createStandaloneDeps(
         projectStore,
         eventBus,
         ingress: eventIngress,
+        // ADR-116: выход `file` дополнительно кладёт байты в blob-порт.
+        artifacts: pipelineArtifacts,
         workspacesRoot: pipelineWorkspacesRoot,
         resolveLlmDefaults,
         // ADR-089: владелец сессии, созданной выходом, — человек-владелец
@@ -1562,6 +1579,9 @@ export async function createStandaloneDeps(
     pipelines: pipelineStore,
     // ADR-101 (Э5): движок пайплайнов (второй движок) — HTTP-роутов нет (Э6).
     pipelineEngine,
+    // ADR-101 §9 / ADR-116: хранилище артефактов прогонов — раздача байтов
+    // в HTTP-контуре пайплайнов (`createPipelineProjectRoutes`).
+    pipelineArtifacts,
     // ADR-101: реестр активных прогонов — общий для HTTP-роута пайплайнов и
     // встроенных тулов агента (soft-lock + отмена идущего прогона).
     pipelineRunControl,

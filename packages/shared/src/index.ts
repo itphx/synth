@@ -131,6 +131,8 @@ export type {
 } from './types/catalog.js';
 // ADR-051/ADR-100: контракт пайплайна (определение, шаг, состояние, экземпляр).
 export {
+  PIPELINE_ARTIFACT_BLOB_KIND,
+  isBlobPipelineArtifact,
   pipelineStepKindSchema,
   eventMatchSchema,
   pipelineArtifactSchema,
@@ -147,6 +149,7 @@ export type {
   PipelineStepKind,
   EventMatch,
   PipelineArtifact,
+  PipelineBlobArtifact,
   PipelineStep,
   PipelineErrorPolicy,
   PipelineDefinition,

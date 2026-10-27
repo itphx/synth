@@ -83,6 +83,23 @@ export {
   PIPELINE_ERROR_CODES,
 } from './types.js';
 export { createPipelineExitHandler } from './exits.js';
+// ADR-101 §9 / ADR-116: артефакты прогонов — байты в blob-порте, учёт ссылок
+// в `blob_refs` (`ownerKind: 'pipeline-run'`), отдельного хранилища нет.
+export {
+  DEFAULT_PIPELINE_ARTIFACT_MAX_BYTES,
+  isPipelineArtifactPath,
+  PIPELINE_ARTIFACT_DIR,
+  PipelineArtifactError,
+  PipelineArtifactStore,
+  sanitizeArtifactName,
+  sanitizeRunId,
+} from './artifacts.js';
+export type {
+  PipelineArtifactEntry,
+  PipelineArtifactErrorCode,
+  PipelineArtifactInput,
+  PipelineArtifactStoreDeps,
+} from './artifacts.js';
 // ADR-101: управление активными прогонами — общий экземпляр для HTTP-роута
 // и встроенных тулов агента (soft-lock + отмена идущего прогона).
 export { PipelineRunControl } from './run-control.js';
@@ -136,6 +153,7 @@ export type {
   PipelineEventPublisher,
   PipelineExitContext,
   PipelineExitHandler,
+  PipelineExitResult,
   PipelineGate,
   PipelineGateDecision,
   PipelineGateKind,

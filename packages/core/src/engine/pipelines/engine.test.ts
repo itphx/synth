@@ -426,6 +426,57 @@ describe('PipelineEngine', () => {
     expect(exits[0]?.kind).toBe('file');
   });
 
+  it('ADR-116: артефакты выхода попадают в результат выхода журнала и в событие прогона', async () => {
+    const pipelines = new MemoryProjectPipelineRepository();
+    const runs = new MemoryPipelineRunRepository();
+    const now = new Date().toISOString();
+    const pipelineSpec = spec([{ id: 'a', kind: 'tool', tool: 'noop' }], {
+      exits: [{ kind: 'file', file: { path: 'report.md' } }],
+    });
+    await pipelines.savePipeline({
+      id: 'p1',
+      scope: 'project',
+      projectId: 'proj-1',
+      name: pipelineSpec.name,
+      draftVersion: 2,
+      publishedVersion: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await pipelines.saveVersion({
+      pipelineId: 'p1',
+      version: 1,
+      spec: pipelineSpec,
+      publishedAt: now,
+    });
+    const published: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const artifact = {
+      kind: 'blob',
+      id: 'artifacts/run/report.md',
+      path: 'artifacts/run/report.md',
+      name: 'report.md',
+      mime: 'text/markdown; charset=utf-8',
+      size: 5,
+    };
+    const engine = new PipelineEngine({
+      pipelines,
+      runs,
+      executors: [executor('tool', () => ({ status: 'ok', attempt: 1 }))],
+      exits: [{ handle: () => ({ artifacts: [artifact] }) }],
+      eventBus: { publishInstance: (type, data) => published.push({ type, data: data ?? {} }) },
+    });
+
+    const run = await engine.run({ pipelineId: 'p1', trigger });
+
+    const events = await runs.listEvents(run.id);
+    const finished = events.find((event) => event.type === 'run.finished');
+    expect(finished?.payload?.artifacts).toEqual([artifact]);
+
+    // Событие прогона — аддитивное поле `artifacts` (UI берёт ссылки оттуда).
+    const event = published.find((item) => item.type === 'pipeline.run.finished');
+    expect(event?.data.artifacts).toEqual([artifact]);
+  });
+
   it('неопубликованный пайплайн — ошибка pipeline.not_published', async () => {
     const { engine } = await setup(spec([{ id: 'a', kind: 'tool', tool: 'noop' }]), [], {
       published: false,
