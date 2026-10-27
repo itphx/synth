@@ -1,6 +1,6 @@
 /**
  * Unit-тесты реестра миграций PostgreSQL-драйвера: новая миграция
- * `026_instance_skills` (ADR-116) зарегистрирована, идемпотентна и стоит
+ * `027_context_files` (ADR-116) зарегистрирована, идемпотентна и стоит
  * последней по версии.
  *
  * Живая БД не нужна: проверяется сам SQL (идемпотентность `IF NOT EXISTS`,
@@ -14,6 +14,7 @@ import { MIGRATION_023_SESSION_WORKTREE } from './023-session-worktree.js';
 import { MIGRATION_024_BLOB_REFS } from './024-blob-refs.js';
 import { MIGRATION_025_PACKS_PIPELINES } from './025-packs-pipelines.js';
 import { MIGRATION_026_INSTANCE_SKILLS } from './026-instance-skills.js';
+import { MIGRATION_027_CONTEXT_FILES } from './027-context-files.js';
 import { MIGRATIONS, latestSchemaVersion } from './index.js';
 
 describe('миграция 023_session_worktree (ADR-114)', () => {
@@ -93,12 +94,11 @@ describe('миграция 025_packs_pipelines (ADR-116)', () => {
 });
 
 describe('миграция 026_instance_skills (ADR-116)', () => {
-  it('зарегистрирована в реестре под версией 26 и последняя по версии', () => {
+  it('зарегистрирована в реестре под версией 26', () => {
     const migration = MIGRATIONS.find((m) => m.version === 26);
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('026_instance_skills');
     expect(migration!.sql).toBe(MIGRATION_026_INSTANCE_SKILLS);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(26);
   });
 
   it('заводит таблицу метаданных скиллов: имя — ключ, frontmatter jsonb', () => {
@@ -110,6 +110,28 @@ describe('миграция 026_instance_skills (ADR-116)', () => {
 
   it('идемпотентна (IF NOT EXISTS)', () => {
     expect(MIGRATION_026_INSTANCE_SKILLS).not.toMatch(/CREATE TABLE(?! IF NOT EXISTS)/);
+  });
+});
+
+describe('миграция 027_context_files (ADR-116)', () => {
+  it('зарегистрирована в реестре под версией 27 и последняя по версии', () => {
+    const migration = MIGRATIONS.find((m) => m.version === 27);
+    expect(migration).toBeDefined();
+    expect(migration!.id).toBe('027_context_files');
+    expect(migration!.sql).toBe(MIGRATION_027_CONTEXT_FILES);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(27);
+  });
+
+  it('заводит таблицу файлов контекста: ключ (category, filename), content text', () => {
+    expect(MIGRATION_027_CONTEXT_FILES).toContain('CREATE TABLE IF NOT EXISTS context_files');
+    expect(MIGRATION_027_CONTEXT_FILES).toMatch(/category\s+text NOT NULL/);
+    expect(MIGRATION_027_CONTEXT_FILES).toMatch(/filename\s+text NOT NULL/);
+    expect(MIGRATION_027_CONTEXT_FILES).toMatch(/content\s+text NOT NULL/);
+    expect(MIGRATION_027_CONTEXT_FILES).toContain('PRIMARY KEY (category, filename)');
+  });
+
+  it('идемпотентна (IF NOT EXISTS)', () => {
+    expect(MIGRATION_027_CONTEXT_FILES).not.toMatch(/CREATE TABLE(?! IF NOT EXISTS)/);
   });
 });
 

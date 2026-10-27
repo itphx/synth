@@ -229,6 +229,7 @@ export class MemoryContextFileRepository implements ContextFileRepository {
         category,
         size: Buffer.byteLength(content, 'utf-8'),
         modifiedAt: Date.now(),
+        enabled: this._enabledFiles.includes(filename),
       };
     });
   }
@@ -236,7 +237,9 @@ export class MemoryContextFileRepository implements ContextFileRepository {
   getFile(filename: string, category: ContextCategory): ContextFileContent | null {
     const content = this._files.get(this._key(category, filename));
     if (content === undefined) return null;
-    return { filename, content, isSystem: false, isOverridden: false, category };
+    // Паритет с файловой реализацией: прочитанный пользовательский файл —
+    // override (системного файла категории `user` нет).
+    return { filename, content, isSystem: false, isOverridden: true, category };
   }
 
   async saveFile(filename: string, content: string, category: ContextCategory): Promise<boolean> {

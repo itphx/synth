@@ -16,11 +16,14 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ContextConfig } from '@itphx/synth-core';
 import { PostgresStorageSchemaError } from './errors.js';
 import { assertSchemaCurrent, readSchemaVersion, runMigrations } from './migrate.js';
 import { MIGRATIONS, latestSchemaVersion } from './migrations/index.js';
 import { createPostgresConnection, type PostgresConnection } from './pool.js';
 import { createPostgresStorage } from './postgres-storage.js';
+import { PgContextFileRepository } from './ports/context-files.js';
+import type { PortDeps } from './ports/deps.js';
 
 const DSN = process.env.SYNTH_TEST_POSTGRES_DSN;
 const describePg = DSN ? describe : describe.skip;
@@ -99,11 +102,83 @@ describePg('PostgreSQL-драйвер: smoke (подключение, мигра
     expect(await ctx.sessions.list()).toEqual([]);
     expect(await ctx.projects.list()).toEqual([]);
     expect(await ctx.eventBindings.list()).toEqual([]);
-    // FS/package-bound порты — файловые реализации.
+    // ADR-116: `blobs` остаётся файловым по конструкции, `skills`/`contextFiles` —
+    // SQL (метаданные/строки), содержимое скиллов — в blob-сторе.
     expect(typeof ctx.blobs.read).toBe('function');
     expect(typeof ctx.skills.listNames).toBe('function');
     expect(typeof ctx.contextFiles.listAllFiles).toBe('function');
     // ADR-097: соединение удерживается в контексте — закрываем явно.
     await ctx.close?.();
+  });
+});
+
+/**
+ * ADR-116: `PgContextFileRepository` — пользовательские файлы контекста в SQL,
+ * синхронные геттеры на процесс-локальном кэше, инвалидация по сигнатуре
+ * `max(updated_at)`.
+ */
+describePg('PG-драйвер: файлы контекста — кэш и инвалидация (ADR-116)', () => {
+  let schema: string;
+  let conn: PostgresConnection;
+
+  /** Порт с собственным кэшем (имитация второго процесса/реплики). */
+  async function makePort(signatureTtlMs: number): Promise<PgContextFileRepository> {
+    // Порт файлов контекста не использует `coreSync` (это sync-данные
+    // словарей/секретов) — для теста достаточно соединения.
+    const deps = { connection: conn, dataDir: DATA_DIR, coreSync: {} } as unknown as PortDeps;
+    const userDataDir = join(DATA_DIR, 'context');
+    const systemPromptsDir = new ContextConfig({ userDataDir }).systemPromptsDir;
+    const port = new PgContextFileRepository(deps, {
+      systemPromptsDir,
+      createConfig: (overrides) =>
+        new ContextConfig({ userDataDir, systemPromptsDir, overrides }),
+      signatureTtlMs,
+    });
+    await port.initialize();
+    return port;
+  }
+
+  beforeEach(async () => {
+    schema = uniqueSchema();
+    conn = createPostgresConnection({ connectionString: DSN, schema });
+    await runMigrations(conn, { schema });
+  });
+
+  afterEach(async () => {
+    await conn.dropSchema(schema);
+  });
+
+  it('запись видна сразу; чужая правка подхватывается по сигнатуре updated_at', async () => {
+    const a = await makePort(0);
+    const b = await makePort(0);
+
+    expect(await a.saveFile('ABOUT.md', '# A', 'user')).toBe(true);
+    expect(a.getFile('ABOUT.md', 'user')?.content).toBe('# A');
+    await a.pendingRefresh();
+
+    // Пауза: сигнатура сравнивается по миллисекундам.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(await b.saveFile('ABOUT.md', '# B', 'user')).toBe(true);
+
+    // Синхронное чтение у `a` отдаёт свой кэш и запускает фоновую проверку.
+    expect(a.getFile('ABOUT.md', 'user')?.content).toBe('# A');
+    await a.pendingRefresh();
+    expect(a.getFile('ABOUT.md', 'user')?.content).toBe('# B');
+  });
+
+  it('listAllFiles видит файл из БД; restoreFile снимает override', async () => {
+    const port = await makePort(0);
+    await port.saveFile('NOTES.md', 'заметка', 'user');
+
+    const file = port
+      .listAllFiles()
+      .find((entry) => entry.category === 'user' && entry.filename === 'NOTES.md');
+    expect(file).toBeDefined();
+    expect(file!.size).toBe(Buffer.byteLength('заметка', 'utf-8'));
+
+    expect(await port.restoreFile('NOTES.md', 'user')).toBe(true);
+    expect(port.getFile('NOTES.md', 'user')).toBeNull();
+    // Повторное восстановление — false (override'а уже нет).
+    expect(await port.restoreFile('NOTES.md', 'user')).toBe(false);
   });
 });

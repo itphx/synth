@@ -14,16 +14,19 @@
 // defaults, providers/models/agents, eventBindings, eventRoutes, eventApiKeys,
 // eventJournal, identityClaims, schedules, jobs, webhooks, webhookDeliveries,
 // sshKeys, serviceKeys, mcpRegistry, skillBundles, skills (instance-скиллы —
-// заголовок и содержимое через порт), packs (реестр установок пакетов
-// расширений, ADR-086 §5), pipelines (legacy-пайплайны инстанса —
-// определения и экземпляры, ADR-051/ADR-100), maintenanceAudit.
+// заголовок и содержимое через порт), contextFiles (пользовательские файлы
+// контекста/промптов: `user`/`role` и override системных), packs (реестр
+// установок пакетов расширений, ADR-086 §5), pipelines (legacy-пайплайны
+// инстанса — определения и экземпляры, ADR-051/ADR-100), maintenanceAudit.
 //
 // ── Что НЕ переносится (осознанно) ────────────────────────────────────────
 // - `dedup` — транзиентный (окно идемпотентности событий живёт минуты);
-// - `blobs`/`contextFiles` — **файловые в обоих backend'ах** (драйвер
-//   postgres отдаёт их файловыми реализациями core), переезжать нечему:
-//   blob-стор (`{dataDir}/blobs`) общий для file/postgres, содержимое скиллов
-//   пишется в него портом `skills` (отдельной сущности «blobs» в переносе нет);
+// - `blobs` — **файловый в обоих backend'ах** (драйвер postgres отдаёт его
+//   файловой реализацией core), переезжать нечему: blob-стор
+//   (`{dataDir}/blobs`) общий для file/postgres, содержимое скиллов пишется в
+//   него портом `skills` (отдельной сущности «blobs» в переносе нет);
+// - системные промпты образа (`{packageRoot}/prompts`) — часть пакета, не
+//   данные инстанса (переносятся только пользовательские override'ы);
 // - файловый периметр вне портов: `audit/*.jsonl` (LLM Gateway), prompts,
 //   `meta.json`, `workspaces/`, `secrets/master.key` — см. ADR-091/ADR-092;
 // - `meta.json` (версия схемы данных инстанса) — контур `synth migrate`.
@@ -820,6 +823,46 @@ async function copySkills(src: StorageContext, dst: StorageContext, ctx: CopyCon
 }
 
 /**
+ * Пользовательские файлы контекста/промптов (ADR-069/ADR-070, ADR-116):
+ * `user`/`role` и override системных промптов (`system`). Системные промпты
+ * образа — часть пакета, не переносятся.
+ *
+ * Идемпотентность — по `(category, filename)`: наличие проверяется по
+ * пользовательским записям цели (`listAllFiles`, `!isSystem || isOverridden`);
+ * существующие не перезаписываются. Содержимое читается `getFile` (override
+ * приоритетнее системного файла).
+ */
+async function copyContextFiles(
+  src: StorageContext,
+  dst: StorageContext,
+  ctx: CopyContext,
+): Promise<Counter> {
+  const counter: Counter = { copied: 0, skipped: 0 };
+  // Пользовательские записи: файлы `user`/кастомные роли и override системных.
+  const userEntries = <T extends { isSystem: boolean; isOverridden: boolean }>(files: T[]): T[] =>
+    files.filter((file) => !file.isSystem || file.isOverridden);
+  const existing = new Set(
+    userEntries(dst.contextFiles.listAllFiles()).map((file) => `${file.category}\0${file.filename}`),
+  );
+
+  for (const file of userEntries(src.contextFiles.listAllFiles())) {
+    const key = `${file.category}\0${file.filename}`;
+    const content = src.contextFiles.getFile(file.filename, file.category)?.content;
+    if (content === undefined) {
+      counter.skipped += 1;
+      continue;
+    }
+    await _copyOne(
+      ctx.dryRun,
+      existing.has(key),
+      () => dst.contextFiles.saveFile(file.filename, content, file.category).then(() => undefined),
+      counter,
+    );
+  }
+  return counter;
+}
+
+/**
  * Реестр установок пакетов расширений (ADR-086 §5): ключ записи — имя пакета.
  * Запись переносится целиком, включая `manifest`, `files` (содержимое
  * отложенной установки) и `provides` (id'ы поставленных сущностей).
@@ -936,6 +979,8 @@ const ENTITY_MIGRATORS: readonly EntityMigrator[] = [
   // ADR-116: instance-скиллы (метаданные через порт; содержимое — в общий
   // blob-стор, пишется тем же вызовом порта).
   { entity: 'skills', copy: copySkills },
+  // ADR-116: пользовательские файлы контекста/промптов (системные — из пакета).
+  { entity: 'contextFiles', copy: copyContextFiles },
   // ADR-116: реестр установок пакетов (ADR-086 §5) и legacy-пайплайны
   // (ADR-051/ADR-100). Порядок: пакеты → пайплайны (пайплайн может быть
   // поставлен пакетом — FK нет, порядок лишь для читаемости отчёта).

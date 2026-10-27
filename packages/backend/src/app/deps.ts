@@ -709,8 +709,11 @@ export async function createBackendDeps(
   }
 
   // ADR-046: сервис скиллов (discovery + instance-запись + каталог промпта).
+  // ADR-116: instance-скиллы — порт слоя хранения (`storageContext.skills`):
+  // при `storage.backend=postgres` это метаданные в SQL + содержимое в blobs.
   const skillService = new SkillService({
     dataDir,
+    store: storageContext.skills,
     configPaths: config.synth.skills.paths,
     urls: config.synth.skills.urls,
     trustedProjectDirs: config.synth.skills.trustedProjectDirs,

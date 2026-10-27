@@ -215,7 +215,7 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
     (key) => ({ name: key } as unknown as ProviderConfig),
   );
 
-  describeContextFileRepository('PG → ContextFileRepository (file-backed)', () => makePort('contextFiles'));
+  describeContextFileRepository('PG → ContextFileRepository', () => makePort('contextFiles'));
   describeSecretPatternRepository('PG → SecretPatternRepository', () => makePort('secretPatterns'));
   describeProtectedPathsRepository('PG → ProtectedPathsRepository', () => makePort('protectedPaths'));
 

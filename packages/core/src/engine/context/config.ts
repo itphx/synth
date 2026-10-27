@@ -49,6 +49,146 @@ const CATEGORY_DIRS: Record<ContextCategory, string> = {
 interface ContextConfigOptions {
   userDataDir: string;
   systemPromptsDir?: string;
+  /**
+   * Источник пользовательских override-файлов (ADR-116). Не задан — файловый
+   * (`{userDataDir}/user`, `{userDataDir}/roles`, `{userDataDir}/user/system`),
+   * как раньше; в PostgreSQL-драйвере — процесс-локальный кэш таблицы
+   * `context_files` (`PgContextFileRepository`).
+   */
+  overrides?: ContextOverrideSource;
+}
+
+/** Пользовательский override-файл (категория + имя + размер/время). */
+export interface ContextOverrideEntry {
+  category: ContextCategory;
+  filename: string;
+  content?: string;
+  size: number;
+  /** Время последней записи, мс (эпоха). */
+  modifiedAt: number;
+}
+
+/**
+ * Источник пользовательских override-файлов порта `ContextFileRepository`
+ * (ADR-096/ADR-116).
+ *
+ * Синхронный (сборка промпта на горячем пути). Файловая реализация читает
+ * `{userDataDir}`, PostgreSQL-драйвер — процесс-локальный кэш строк таблицы
+ * `context_files` (прогрев — `warm()`/`reload()`).
+ */
+export interface ContextOverrideSource {
+  /** Есть ли override (без чтения содержимого). */
+  has(category: ContextCategory, filename: string): boolean;
+  /** Содержимое override (`null` — нет файла). */
+  read(category: ContextCategory, filename: string): string | null;
+  /** Все пользовательские файлы (без системных промптов образа). */
+  list(): ContextOverrideEntry[];
+}
+
+/** Путь пользовательского override-файла в файловой раскладке. */
+function userOverridePath(
+  dirs: { promptsDir: string; rolesDir: string },
+  category: ContextCategory,
+  filename: string,
+): string {
+  if (category === 'role') return join(dirs.rolesDir, filename);
+  if (category === 'user') return join(dirs.promptsDir, filename);
+  return join(dirs.promptsDir, CATEGORY_DIRS[category], filename);
+}
+
+/** Рекурсивный список `.md`-файлов; `filename` — относительный путь от `baseDir`. */
+function scanMarkdownFiles(
+  baseDir: string,
+  onFile: (filename: string, size: number, modifiedAt: number) => void,
+): void {
+  const walk = (currentDir: string, relDir: string): void => {
+    let entries;
+    try {
+      entries = readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = join(currentDir, entry.name);
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(fullPath, rel);
+        continue;
+      }
+      if (!entry.name.endsWith('.md')) continue;
+      try {
+        const s = statSync(fullPath);
+        onFile(rel, s.size, s.mtimeMs);
+      } catch {
+        // гонка удаления — пропускаем
+      }
+    }
+  };
+  walk(baseDir, '');
+}
+
+/**
+ * Файловый источник override-файлов (поведение прежнее): `{userDataDir}/user/*.md`
+ * — категория `user`, `{userDataDir}/roles/*.md` — `role`,
+ * `{userDataDir}/user/system/**` — override системных промптов.
+ */
+export class FileContextOverrideSource implements ContextOverrideSource {
+  constructor(private readonly _dirs: { promptsDir: string; rolesDir: string }) {}
+
+  has(category: ContextCategory, filename: string): boolean {
+    return existsSync(userOverridePath(this._dirs, category, filename));
+  }
+
+  read(category: ContextCategory, filename: string): string | null {
+    return readTextFile(userOverridePath(this._dirs, category, filename));
+  }
+
+  list(): ContextOverrideEntry[] {
+    const out: ContextOverrideEntry[] = [];
+    // Роли — плоский каталог (имя файла = имя роли).
+    try {
+      for (const entry of readdirSync(this._dirs.rolesDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+        try {
+          const s = statSync(join(this._dirs.rolesDir, entry.name));
+          out.push({ category: 'role', filename: entry.name, size: s.size, modifiedAt: s.mtimeMs });
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // каталога нет
+    }
+    // Пользовательские файлы — верхний уровень.
+    try {
+      for (const entry of readdirSync(this._dirs.promptsDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+        try {
+          const s = statSync(join(this._dirs.promptsDir, entry.name));
+          out.push({ category: 'user', filename: entry.name, size: s.size, modifiedAt: s.mtimeMs });
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // каталога нет
+    }
+    // Override системных промптов — `user/system/**`.
+    scanMarkdownFiles(join(this._dirs.promptsDir, CATEGORY_DIRS.system), (filename, size, modifiedAt) => {
+      out.push({ category: 'system', filename, size, modifiedAt });
+    });
+    return out;
+  }
+}
+
+/** Чтение текстового файла; `null` — нет файла/ошибка. */
+function readTextFile(path: string): string | null {
+  try {
+    if (!existsSync(path)) return null;
+    return readFileSync(path, 'utf-8');
+  } catch {
+    return null;
+  }
 }
 
 export class ContextConfig implements ContextFileRepository {
@@ -57,12 +197,17 @@ export class ContextConfig implements ContextFileRepository {
   readonly userRolesDir: string;
 
   private _enabledFiles: string[] = [];
+  private readonly _overrides: ContextOverrideSource;
 
   constructor(options: ContextConfigOptions) {
     this.systemPromptsDir = options.systemPromptsDir ?? resolveSystemPromptsDir();
     this.userPromptsDir = join(options.userDataDir, 'user');
     this.userRolesDir = join(options.userDataDir, 'roles');
     this._enabledFiles = ['SOUL.md', 'COMPANY.md', 'ABOUT.md'];
+    this._overrides = options.overrides ?? new FileContextOverrideSource({
+      promptsDir: this.userPromptsDir,
+      rolesDir: this.userRolesDir,
+    });
   }
 
   private _getLocalizedPath(basePath: string, stem: string, language: string): string | null {
@@ -79,6 +224,31 @@ export class ContextConfig implements ContextFileRepository {
     if (category === 'role') return join(this.userRolesDir, filename);
     if (category === 'user') return join(this.userPromptsDir, filename);
     return join(this.userPromptsDir, CATEGORY_DIRS[category], filename);
+  }
+
+  /**
+   * Локализованное имя override-файла в той же поддиректории:
+   * `system/MODE_PLAN.md` + `ru` → `system/MODE_PLAN.ru.md`.
+   */
+  private _localizedOverrideName(filename: string, stem: string, language: string): string {
+    const slash = filename.lastIndexOf('/');
+    const dir = slash >= 0 ? filename.slice(0, slash + 1) : '';
+    return `${dir}${stem}.${language}.md`;
+  }
+
+  /** Override-файл: локализованный вариант, затем базовый (как раньше). */
+  private _readOverridePair(
+    category: ContextCategory,
+    filename: string,
+    stem: string,
+    language: string,
+  ): string | null {
+    const localized = this._overrides.read(
+      category,
+      this._localizedOverrideName(filename, stem, language),
+    );
+    if (localized) return localized;
+    return this._overrides.read(category, filename);
   }
 
   private _readFile(path: string): string | null {
@@ -107,88 +277,80 @@ export class ContextConfig implements ContextFileRepository {
 
   listAllFiles(): ContextFileInfo[] {
     const files: ContextFileInfo[] = [];
-    const overriddenRoles: Set<string> = new Set();
-    const overriddenRolePaths: Map<string, string> = new Map();
+    const overrides = this._overrides.list();
+    const byKey = new Map(
+      overrides.map((entry) => [`${entry.category}\0${entry.filename}`, entry] as const),
+    );
 
-    if (existsSync(this.userRolesDir)) {
-      try {
-        for (const e of readdirSync(this.userRolesDir, { withFileTypes: true })) {
-          if (!e.isFile() || !e.name.endsWith('.md')) continue;
-          const p = join(this.userRolesDir, e.name);
-          overriddenRoles.add(e.name);
-          overriddenRolePaths.set(e.name, p);
-        }
-      } catch { /* ignore */ }
-    }
+    // 1. Системные роли и системные промпты (промпты образа — всегда ФС).
+    const systemRoleNames = new Set<string>();
+    const systemPaths = new Set<string>();
+    scanMarkdownFiles(this._resolveSystemPath('role'), (filename, size, modifiedAt) => {
+      const name = filename.split('/').pop() ?? filename;
+      systemRoleNames.add(name);
+      const override = byKey.get(`role\0${name}`);
+      files.push({
+        filename: name,
+        isSystem: true,
+        isOverridden: override !== undefined,
+        category: 'role',
+        // У перекрытой роли размер/время — из override (паритет с прежним поведением).
+        size: override?.size ?? size,
+        modifiedAt: override?.modifiedAt ?? modifiedAt,
+      });
+    });
+    scanMarkdownFiles(this._resolveSystemPath('system'), (filename, size, modifiedAt) => {
+      systemPaths.add(filename);
+      files.push({
+        filename,
+        isSystem: true,
+        isOverridden: byKey.has(`system\0${filename}`),
+        category: 'system',
+        size,
+        modifiedAt,
+      });
+    });
 
-    for (const category of ['role', 'system'] as const) {
-      const systemDir = this._resolveSystemPath(category);
-      if (!existsSync(systemDir)) continue;
-
-      try {
-        this._collectFilesRecursive(systemDir, systemDir, category, overriddenRoles, overriddenRolePaths, files);
-      } catch { /* ignore */ }
-    }
-
-    // кастомные роли только в userRolesDir
-    const roleFileNames = files.filter(f => f.category === 'role').map(f => f.filename);
-    for (const [name, p] of overriddenRolePaths) {
-      if (roleFileNames.includes(name)) continue;
-      try {
-        const s = statSync(p);
+    // 2. Пользовательские файлы и override'ы (не системные).
+    for (const entry of overrides) {
+      const enabled = this._enabledFiles.includes(entry.filename);
+      if (entry.category === 'role') {
+        if (systemRoleNames.has(entry.filename)) continue;
         files.push({
-          filename: name,
+          filename: entry.filename,
           isSystem: false,
           isOverridden: false,
           category: 'role',
-          size: s.size,
-          modifiedAt: s.mtimeMs,
-          enabled: this._enabledFiles.includes(name),
+          size: entry.size,
+          modifiedAt: entry.modifiedAt,
+          enabled,
         });
-      } catch { /* ignore */ }
-    }
-
-    // user files из userPromptsDir
-    if (existsSync(this.userPromptsDir)) {
-      try {
-        for (const e of readdirSync(this.userPromptsDir, { withFileTypes: true })) {
-          if (!e.isFile() || !e.name.endsWith('.md')) continue;
-          const p = join(this.userPromptsDir, e.name);
-          const s = statSync(p);
-          files.push({
-            filename: e.name,
-            isSystem: false,
-            isOverridden: false,
-            category: 'user',
-            size: s.size,
-            modifiedAt: s.mtimeMs,
-            enabled: this._enabledFiles.includes(e.name),
-          });
-        }
-      } catch { /* ignore */ }
-    }
-
-    // Осиротевшие overrides в system поддиректории userPromptsDir
-    const seenByCategory: Record<string, Set<string>> = {};
-    for (const cat of ['system'] as const) {
-      seenByCategory[cat] = new Set(files.filter(f => f.category === cat).map(f => f.filename));
-      const overrideDir = join(this.userPromptsDir, CATEGORY_DIRS[cat]);
-      if (existsSync(overrideDir)) {
-        for (const e of readdirSync(overrideDir, { withFileTypes: true })) {
-          if (!e.isFile() || !e.name.endsWith('.md')) continue;
-          if (seenByCategory[cat]!.has(e.name)) continue;
-          const p = join(overrideDir, e.name);
-          const s = statSync(p);
-          files.push({
-            filename: e.name,
-            isSystem: false,
-            isOverridden: true,
-            category: cat,
-            size: s.size,
-            modifiedAt: s.mtimeMs,
-          });
-        }
+        continue;
       }
+      if (entry.category === 'user') {
+        // `listAllFiles` показывает только верхний уровень (паритет с ФС-раскладкой).
+        if (entry.filename.includes('/')) continue;
+        files.push({
+          filename: entry.filename,
+          isSystem: false,
+          isOverridden: false,
+          category: 'user',
+          size: entry.size,
+          modifiedAt: entry.modifiedAt,
+          enabled,
+        });
+        continue;
+      }
+      // override системного промпта, которого нет в образе (осиротевший).
+      if (systemPaths.has(entry.filename)) continue;
+      files.push({
+        filename: entry.filename,
+        isSystem: false,
+        isOverridden: true,
+        category: 'system',
+        size: entry.size,
+        modifiedAt: entry.modifiedAt,
+      });
     }
 
     files.sort((a, b) => {
@@ -198,67 +360,20 @@ export class ContextConfig implements ContextFileRepository {
     return files;
   }
 
-  private _collectFilesRecursive(
-    baseDir: string,
-    currentDir: string,
-    category: ContextCategory,
-    overriddenRoles: Set<string>,
-    overriddenRolePaths: Map<string, string>,
-    files: ContextFileInfo[],
-  ): void {
-    for (const e of readdirSync(currentDir, { withFileTypes: true })) {
-      const fullPath = join(currentDir, e.name);
-      if (e.isDirectory()) {
-        this._collectFilesRecursive(baseDir, fullPath, category, overriddenRoles, overriddenRolePaths, files);
-        continue;
-      }
-      if (!e.name.endsWith('.md')) continue;
-
-      const relativePath = fullPath.substring(baseDir.length + 1);
-
-      let statSource = fullPath;
-      let isOverridden = false;
-
-      if (category === 'role') {
-        isOverridden = overriddenRoles.has(e.name);
-        if (isOverridden) statSource = overriddenRolePaths.get(e.name)!;
-      } else {
-        isOverridden = existsSync(this._resolveOverridePath(category, e.name));
-      }
-
-      try {
-        const s = statSync(statSource);
-        files.push({
-          filename: category === 'role' ? e.name : relativePath,
-          isSystem: true,
-          isOverridden,
-          category,
-          size: s.size,
-          modifiedAt: s.mtimeMs,
-        });
-      } catch { /* ignore */ }
-    }
-  }
-
   // --- Чтение файла ---
 
   getFile(filename: string, category: ContextCategory): ContextFileContent | null {
-    const overridePath = this._resolveOverridePath(category, filename);
-    if (existsSync(overridePath)) {
-      const content = this._readFile(overridePath);
-      if (content !== null) {
-        return { filename, content, isSystem: false, isOverridden: true, category };
-      }
+    const override = this._overrides.read(category, filename);
+    if (override !== null) {
+      return { filename, content: override, isSystem: false, isOverridden: true, category };
     }
 
     if (category === 'user') return null;
 
     const systemPath = join(this._resolveSystemPath(category), filename);
-    if (existsSync(systemPath)) {
-      const content = this._readFile(systemPath);
-      if (content !== null) {
-        return { filename, content, isSystem: true, isOverridden: false, category };
-      }
+    const content = this._readFile(systemPath);
+    if (content !== null) {
+      return { filename, content, isSystem: true, isOverridden: false, category };
     }
 
     return null;
@@ -321,22 +436,26 @@ export class ContextConfig implements ContextFileRepository {
 
   getRolePrompt(agentId: string, contextFileOverride?: string, language = 'ru'): string | null {
     const contextFile = contextFileOverride || `${agentId.toUpperCase()}.md`;
-
-    // 1. Проверяем пользовательский override в roles/
-    const userRolePath = this._resolveOverridePath('role', contextFile);
-    if (this._readFile(userRolePath)) return this._readFile(userRolePath);
-
     const stem = contextFile.replace(/\.md$/, '');
-    const userLocalized = this._getLocalizedPath(userRolePath, stem, language);
-    if (userLocalized && this._readFile(userLocalized)) return this._readFile(userLocalized);
+
+    // 1. Пользовательский override в roles/ (базовый, затем локализованный).
+    const roleOverride = this._overrides.read('role', contextFile);
+    if (roleOverride) return roleOverride;
+    const roleLocalized = this._overrides.read(
+      'role',
+      this._localizedOverrideName(contextFile, stem, language),
+    );
+    if (roleLocalized) return roleLocalized;
 
     // 2. fallback: user/ категория (только при явном contextFileOverride)
     if (contextFileOverride) {
-      const userPath = this._resolveOverridePath('user', contextFile);
-      const content = this._readFile(userPath);
-      if (content) return content;
-      const userLoc = this._getLocalizedPath(userPath, stem, language);
-      if (userLoc && this._readFile(userLoc)) return this._readFile(userLoc);
+      const userOverride = this._overrides.read('user', contextFile);
+      if (userOverride) return userOverride;
+      const userLocalized = this._overrides.read(
+        'user',
+        this._localizedOverrideName(contextFile, stem, language),
+      );
+      if (userLocalized) return userLocalized;
     }
 
     // 3. Системный prompts/roles/
@@ -375,14 +494,8 @@ export class ContextConfig implements ContextFileRepository {
     const stem = 'SCHEDULER';
 
     // 1. Пользовательский override system-категории
-    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
-    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
-    if (overrideLocalized) {
-      const content = this._readFile(overrideLocalized);
-      if (content) return content;
-    }
-    const overrideContent = this._readFile(overridePath);
-    if (overrideContent) return overrideContent;
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
 
     // 2. Встроенный prompts/system/SCHEDULER.{lang}.md
     return this._readPrompt(stem, 'system', language) ?? '';
@@ -402,14 +515,8 @@ export class ContextConfig implements ContextFileRepository {
     const stem = 'SCHEDULER_TURN';
 
     // 1. Пользовательский override system-категории
-    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
-    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
-    if (overrideLocalized) {
-      const content = this._readFile(overrideLocalized);
-      if (content) return content;
-    }
-    const overrideContent = this._readFile(overridePath);
-    if (overrideContent) return overrideContent;
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
 
     // 2. Встроенный prompts/system/SCHEDULER_TURN.{lang}.md
     return this._readPrompt(stem, 'system', language) ?? '';
@@ -430,14 +537,8 @@ export class ContextConfig implements ContextFileRepository {
     const stem = 'MAX_STEPS';
 
     // 1. Пользовательский override system-категории
-    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
-    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
-    if (overrideLocalized) {
-      const content = this._readFile(overrideLocalized);
-      if (content) return content;
-    }
-    const overrideContent = this._readFile(overridePath);
-    if (overrideContent) return overrideContent;
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
 
     // 2. Встроенный prompts/system/MAX_STEPS.{lang}.md
     return this._readPrompt(stem, 'system', language) ?? '';
@@ -502,14 +603,8 @@ export class ContextConfig implements ContextFileRepository {
     const stem = messageId;
 
     // 1. Пользовательский override system-категории (каталог security/)
-    const overridePath = this._resolveOverridePath('system', `security/${stem}.md`);
-    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
-    if (overrideLocalized) {
-      const content = this._readFile(overrideLocalized);
-      if (content) return this._substParams(content, params);
-    }
-    const overrideContent = this._readFile(overridePath);
-    if (overrideContent) return this._substParams(overrideContent, params);
+    const override = this._readOverridePair('system', `security/${stem}.md`, stem, language);
+    if (override) return this._substParams(override, params);
 
     // 2. Встроенный prompts/security/{stem}.{lang}.md → {stem}.md
     const basePath = join(this.systemPromptsDir, 'security', `${stem}.md`);
@@ -549,14 +644,8 @@ export class ContextConfig implements ContextFileRepository {
     const stem = `MODE_${mode.toUpperCase()}`;
 
     // 1. Пользовательский override system-категории
-    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
-    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
-    if (overrideLocalized) {
-      const content = this._readFile(overrideLocalized);
-      if (content) return content;
-    }
-    const overrideContent = this._readFile(overridePath);
-    if (overrideContent) return overrideContent;
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
 
     // 2. Встроенный prompts/system/MODE_{X}.{lang}.md
     return this._readPrompt(stem, 'system', language);
@@ -588,14 +677,8 @@ export class ContextConfig implements ContextFileRepository {
         : 'PLAN_MODE_STRICT_NOT_APPROVED';
 
     // 1. Пользовательский override system-категории
-    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
-    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
-    if (overrideLocalized) {
-      const content = this._readFile(overrideLocalized);
-      if (content) return content;
-    }
-    const overrideContent = this._readFile(overridePath);
-    if (overrideContent) return overrideContent;
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
 
     // 2. Встроенный prompts/system/{stem}.{lang}.md
     return this._readPrompt(stem, 'system', language);
@@ -611,14 +694,8 @@ export class ContextConfig implements ContextFileRepository {
     const stem = 'PLAN_GUIDE';
 
     // 1. Пользовательский override system-категории
-    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
-    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
-    if (overrideLocalized) {
-      const content = this._readFile(overrideLocalized);
-      if (content) return content;
-    }
-    const overrideContent = this._readFile(overridePath);
-    if (overrideContent) return overrideContent;
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
 
     // 2. Встроенный prompts/system/PLAN_GUIDE.{lang}.md
     return this._readPrompt(stem, 'system', language);
@@ -637,14 +714,8 @@ export class ContextConfig implements ContextFileRepository {
     const stem = 'MODE_POLICY';
 
     // 1. Пользовательский override system-категории
-    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
-    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
-    if (overrideLocalized) {
-      const content = this._readFile(overrideLocalized);
-      if (content) return content;
-    }
-    const overrideContent = this._readFile(overridePath);
-    if (overrideContent) return overrideContent;
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
 
     // 2. Встроенный prompts/system/MODE_POLICY.{lang}.md
     return this._readPrompt(stem, 'system', language);
@@ -660,14 +731,8 @@ export class ContextConfig implements ContextFileRepository {
     const stem = 'CLASSIFICATION';
 
     // 1. Пользовательский override system-категории
-    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
-    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
-    if (overrideLocalized) {
-      const content = this._readFile(overrideLocalized);
-      if (content) return content;
-    }
-    const overrideContent = this._readFile(overridePath);
-    if (overrideContent) return overrideContent;
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
 
     // 2. Встроенный prompts/system/CLASSIFICATION.{lang}.md
     return this._readPrompt(stem, 'system', language) ?? '';

@@ -87,3 +87,7 @@ export type { LegacyPipelinePorts } from './ports/legacy-pipelines.js';
 // содержимое — в blob-сторе (`skills/<name>/…`); порт не отдаёт путей.
 export { buildSkillPorts, PgSkillRepository } from './ports/skills.js';
 export type { SkillPorts } from './ports/skills.js';
+// ADR-116: файлы контекста — пользовательская часть в SQL (`context_files`,
+// миграция 027), системные промпты образа остаются ФС.
+export { buildContextFilePorts, PgContextFileRepository } from './ports/context-files.js';
+export type { ContextFilePorts, ContextFilePortOptions, ContextOverrideSourceLike } from './ports/context-files.js';

@@ -87,8 +87,11 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
   (await modelStore.list()).forEach((m) => modelCache.set(m.id, m));
 
   // ADR-046: сервис скиллов + slash-команд (резолвинг в core до LLM).
+  // ADR-116: instance-скиллы — порт хранения (`storage.skills`), иначе сервис
+  // создал бы собственный файловый стор и писал бы мимо backend'а.
   const skillService = new SkillService({
     dataDir,
+    store: storage.skills,
     configPaths: options.config.skills?.paths,
     urls: options.config.skills?.urls,
     trustedProjectDirs: options.config.skills?.trustedProjectDirs,

@@ -153,6 +153,10 @@ async function seed(ctx: StorageContext): Promise<void> {
     body: 'тело скилла',
     files: { 'reference/note.md': 'заметка' },
   });
+  // ADR-116: пользовательские файлы контекста/промптов (SQL в PG-драйвере).
+  await ctx.contextFiles.saveFile('ABOUT.md', '# о проекте', 'user');
+  await ctx.contextFiles.saveFile('MY_ROLE.md', 'роль', 'role');
+  await ctx.contextFiles.saveFile('MODE_PLAN.ru.md', 'свой промпт режима', 'system');
   // ADR-116: реестр установок пакетов и legacy-пайплайны инстанса.
   await ctx.packs.save({
     name: 'synth-media',
@@ -271,6 +275,12 @@ describe('migrateStorageData — перенос данных через порт
       'reference/note.md',
     ]);
     expect(await target!.skills.readFile('media-hub', 'reference/note.md')).toBe('заметка');
+    // ADR-116: файлы контекста — только пользовательские (системные — из пакета).
+    expect(target!.contextFiles.getFile('ABOUT.md', 'user')?.content).toBe('# о проекте');
+    expect(target!.contextFiles.getFile('MY_ROLE.md', 'role')?.content).toBe('роль');
+    expect(target!.contextFiles.getFile('MODE_PLAN.ru.md', 'system')?.content).toBe(
+      'свой промпт режима',
+    );
     expect((await target!.packs.get('synth-media'))?.provides.skills).toEqual(['draft']);
     expect((await target!.pipelines.getDefinition('release'))?.name).toBe('Релиз');
     expect((await target!.pipelines.getInstance('run-1'))?.pipelineId).toBe('release');

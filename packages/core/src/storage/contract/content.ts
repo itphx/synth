@@ -157,26 +157,74 @@ export function describeDocumentRepository<T>(
   });
 }
 
-/** Паспорт порта `ContextFileRepository`. */
-export function describeContextFileRepository(  name: string,
+/**
+ * Паспорт порта `ContextFileRepository` (ADR-069/ADR-070, ADR-096, ADR-116).
+ *
+ * Проверяется поведение, общее для file/memory/PG:
+ * - `listAllFiles` — массив (системные промпты образа + пользовательские файлы),
+ *   `systemPromptsDir` — непустая строка (корень промптов; у in-memory —
+ *   виртуальный);
+ * - `getEnabledFiles`/`setEnabledFiles` — процесс-локальный список включённых файлов;
+ * - сохранение/чтение/удаление/восстановление пользовательского файла;
+ * - после `saveFile` файл виден в `listAllFiles` с той же категорией и размером;
+ * - системные промпты читаются (геттеры возвращают строку/null, но не бросают).
+ */
+export function describeContextFileRepository(
+  name: string,
   make: () => Promise<{ repo: ContextFileRepository; dispose?: () => Promise<void> }>,
 ): void {
   describe(name, () => {
-    it('listAllFiles — массив; enabled-файлы round-trip', async () => {
+    it('listAllFiles — массив; enabled-файлы round-trip; systemPromptsDir задан', async () => {
       const { repo } = await make();
       expect(Array.isArray(repo.listAllFiles())).toBe(true);
+      expect(typeof repo.systemPromptsDir).toBe('string');
+      expect(repo.systemPromptsDir.length).toBeGreaterThan(0);
       repo.setEnabledFiles(['SOUL.md']);
       expect(repo.getEnabledFiles()).toEqual(['SOUL.md']);
     });
 
-    it('saveFile/getFile/deleteFile для user-категории', async () => {
+    it('saveFile/getFile/deleteFile/restoreFile для user-категории', async () => {
       const { repo } = await make();
       expect(repo.getFile('CUSTOM.md', 'user')).toBeNull();
       expect(await repo.saveFile('CUSTOM.md', '# custom', 'user')).toBe(true);
       const read = repo.getFile('CUSTOM.md', 'user');
       expect(read?.content).toBe('# custom');
+      expect(read?.isSystem).toBe(false);
+      expect(read?.isOverridden).toBe(true);
+
+      // Восстановление = снятие override.
+      expect(await repo.restoreFile('CUSTOM.md', 'user')).toBe(true);
+      expect(repo.getFile('CUSTOM.md', 'user')).toBeNull();
+      // Повторное удаление — false (нечего снимать).
+      expect(await repo.deleteFile('CUSTOM.md', 'user')).toBe(false);
+
+      expect(await repo.saveFile('CUSTOM.md', '# again', 'user')).toBe(true);
       expect(await repo.deleteFile('CUSTOM.md', 'user')).toBe(true);
       expect(repo.getFile('CUSTOM.md', 'user')).toBeNull();
+    });
+
+    it('сохранённый файл виден в listAllFiles (категория/размер)', async () => {
+      const { repo } = await make();
+      await repo.saveFile('NOTES.md', 'заметка', 'user');
+      await repo.saveFile('MY_ROLE.md', 'роль', 'role');
+
+      const files = repo.listAllFiles();
+      const notes = files.find((file) => file.category === 'user' && file.filename === 'NOTES.md');
+      expect(notes).toBeDefined();
+      expect(notes?.isSystem).toBe(false);
+      expect(notes?.size).toBe(Buffer.byteLength('заметка', 'utf-8'));
+
+      const role = files.find((file) => file.category === 'role' && file.filename === 'MY_ROLE.md');
+      expect(role).toBeDefined();
+      expect(role?.isSystem).toBe(false);
+      expect(role?.enabled).toBe(false);
+    });
+
+    it('системные промпты читаются (геттеры не бросают)', async () => {
+      const { repo } = await make();
+      expect(typeof repo.getRules('ru')).toBe('string');
+      expect(typeof repo.getModePolicy('ru') === 'string' || repo.getModePolicy('ru') === null).toBe(true);
+      expect(typeof repo.getClassificationInstructions('ru')).toBe('string');
     });
   });
 }
