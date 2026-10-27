@@ -16,7 +16,7 @@ import { ModelSelector } from './ModelSelector'
 import { AgentModeSelector } from './AgentModeSelector'
 import { PlanActModeToggle } from './PlanActModeToggle'
 import { ReasoningLevelSelector } from './ReasoningLevelSelector'
-import { SendModeSelector } from './SendModeSelector'
+import { SteerToggle } from './SteerToggle'
 import { AttachmentButton } from './attachments/AttachmentButton'
 import { AttachedFilesList } from './attachments/AttachedFilesList'
 import { AttachmentGallery } from './attachments/AttachmentGallery'
@@ -24,7 +24,7 @@ import { useAttachmentDrop } from './attachments/useAttachmentDrop'
 import { useAttachmentPaste } from './attachments/useAttachmentPaste'
 import type { AgentInfo } from '@/lib/api/synthApi'
 import type { CommandSummary } from '@itphx/synth-shared'
-import { DEFAULT_STEER_MODE, type SteerMode } from '@itphx/synth-shared/types'
+import type { SteerMode } from '@itphx/synth-shared/types'
 import { mediaPartPlaceholder, mediaTypeOfMime } from '@itphx/synth-shared/utils'
 
 interface ChatInputProps {
@@ -46,8 +46,9 @@ interface ChatInputProps {
   ) => Promise<void>
   /**
    * ADR-104: режим отправки по умолчанию для этого композера (значение задаёт
-   * вызывающий код). В UI режим выбирается селектором композера — только при
-   * активном ходе; без хода вмешаться некуда, и сообщение уходит очередью.
+   * вызывающий код). Во время активного хода режим выбирается тумблером
+   * `SteerToggle` (вмешаться / в очередь); без хода вмешаться некуда, и
+   * сообщение уходит очередью.
    */
   sendMode?: SteerMode
   onStop: () => void
@@ -108,8 +109,9 @@ function attachmentModalityKind(mimeType: string): AttachmentModalityKind | null
 
 /**
  * ADR-104: заголовок кнопки отправки во время активного хода — по выбранному
- * режиму (`queue`/`steer`/`interrupt`). Без активного хода режим не действует,
- * поэтому подпись обычная («в очередь»).
+ * режиму. В UI переключаются только `queue`/`steer`; `interrupt` остаётся
+ * валидным значением контракта (API), поэтому ветка сохранена как fallback.
+ * Без активного хода режим не действует — подпись обычная («в очередь»).
  */
 function sendActionTitle(mode: SteerMode | undefined, t: (key: string) => string): string {
   if (mode === 'steer') return t('chat.steer.mode.steer')
@@ -243,9 +245,10 @@ export function ChatInput({
   // касается десктопов с тачскрином (isTouch = pointer: coarse).
   const { isTouch } = useDevice()
   const [value, setValue] = useState('')
-  // ADR-104: режим отправки, выбранный в селекторе композера (виден только
-  // при активном ходе). Начальное значение — `sendMode` вызывающего кода.
-  const [selectedMode, setSelectedMode] = useState<SteerMode>(sendMode ?? DEFAULT_STEER_MODE)
+  // ADR-104: режим отправки при активном ходе. По умолчанию — `queue`:
+  // сообщение уходит в очередь, вмешательство включает тумблер. `interrupt`
+  // из UI больше не выставляется (для обрыва есть отдельная кнопка «Стоп»).
+  const [selectedMode, setSelectedMode] = useState<'queue' | 'steer'>('queue')
   const retryText = useChatStore((s) => s.retryInputBySession[sessionId])
   const [mentionState, setMentionState] = useState<{
     query: string
@@ -296,14 +299,9 @@ export function ChatInput({
     autoResize()
   }, [value, autoResize])
 
-  // Смена режима по умолчанию от вызывающего кода — сбрасывает выбор селектора.
-  useEffect(() => {
-    setSelectedMode(sendMode ?? DEFAULT_STEER_MODE)
-  }, [sendMode])
-
   /**
-   * Режим отправки, который уходит в запрос. Во время активного хода — выбранный
-   * в селекторе (`queue`/`steer`/`interrupt`); без хода — режим вызывающего кода
+   * Режим отправки, который уходит в запрос. Во время активного хода — выбор
+   * тумблера (`queue`/`steer`); без хода — режим вызывающего кода
    * (в UI это `queue`, поле `mode` в теле запроса не появляется — его
    * отбрасывает `lib/api/sessions.ts`).
    */
@@ -655,12 +653,15 @@ export function ChatInput({
 
     // Отправка во время активного хода (ADR-104): режим — общий для
     // композера (`effectiveMode`): `queue` — в очередь, `steer` — вмешаться
-    // в текущий ход (выбор делает селектор композера).
+    // в текущий ход (выбор делает тумблер `SteerToggle`).
     try {
       await sendWithAttachments(text, parts)
     } catch {
       return
     }
+    // Успешно отправили — тумблер снова в `queue`: следующее сообщение не должно
+    // уйти «вмешательством» случайно.
+    setSelectedMode('queue')
     clearAttachments(sessionId)
   }, [value, agents, sendWithAttachments, sessionId, clearAttachments])
 
@@ -822,7 +823,10 @@ export function ChatInput({
 
             {isStreaming ? (
               <div className="flex shrink-0 items-center gap-0.5">
-                <SendModeSelector value={selectedMode} onChange={setSelectedMode} />
+                <SteerToggle
+                  active={selectedMode === 'steer'}
+                  onToggle={() => setSelectedMode(selectedMode === 'steer' ? 'queue' : 'steer')}
+                />
                 <button
                   onClick={handleEnqueue}
                   disabled={!value.trim() || pendingUpload}

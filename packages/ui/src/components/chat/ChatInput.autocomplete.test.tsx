@@ -191,23 +191,24 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
   })
 })
 
-describe('ChatInput — селектор режима отправки (ADR-104)', () => {
-  it('при активном ходе селектор режима виден (queue|steer|interrupt)', async () => {
+describe('ChatInput — режим отправки при активном ходе (ADR-104)', () => {
+  it('при активном ходе есть тумблер «вмешаться», по умолчанию выключен', async () => {
     const container = await renderInput({ isStreaming: true })
 
-    expect(container.querySelector('[data-testid="send-mode-selector"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="send-mode-queue"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="send-mode-steer"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="send-mode-interrupt"]')).not.toBeNull()
+    const toggle = container.querySelector('[data-testid="steer-toggle"]') as HTMLButtonElement
+    expect(toggle).not.toBeNull()
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('выбор «вмешаться» уходит третьим аргументом onSend', async () => {
+  it('клик по тумблеру — сообщение уходит как «вмешаться» (steer)', async () => {
     const container = await renderInput({ isStreaming: true })
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    const toggle = container.querySelector('[data-testid="steer-toggle"]') as HTMLButtonElement
 
     await act(async () => {
-      (container.querySelector('[data-testid="send-mode-steer"]') as HTMLButtonElement).click()
+      toggle.click()
     })
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
     await act(async () => {
       setTextareaValue(textarea, 'остановись на шаге 2')
     })
@@ -218,28 +219,53 @@ describe('ChatInput — селектор режима отправки (ADR-104)
     expect(mocks.onSend).toHaveBeenCalledWith('остановись на шаге 2', undefined, 'steer', undefined)
   })
 
-  it('выбор «прервать» уходит третьим аргументом onSend (interrupt)', async () => {
+  it('повторный клик по тумблеру возвращает отправку в очередь (queue)', async () => {
     const container = await renderInput({ isStreaming: true })
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    const toggle = container.querySelector('[data-testid="steer-toggle"]') as HTMLButtonElement
 
     await act(async () => {
-      (container.querySelector('[data-testid="send-mode-interrupt"]') as HTMLButtonElement).click()
+      toggle.click()
     })
     await act(async () => {
-      setTextareaValue(textarea, 'прерви и сделай иначе')
+      toggle.click()
+    })
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    await act(async () => {
+      setTextareaValue(textarea, 'дождись конца хода')
     })
     await act(async () => {
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
-    expect(mocks.onSend).toHaveBeenCalledWith('прерви и сделай иначе', undefined, 'interrupt', undefined)
+    expect(mocks.onSend).toHaveBeenCalledWith('дождись конца хода', undefined, 'queue', undefined)
   })
 
-  it('без активного хода селектора нет и режим в запрос не уходит', async () => {
+  it('после успешной отправки «вмешательством» тумблер снова выключен', async () => {
+    const container = await renderInput({ isStreaming: true })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    const toggle = container.querySelector('[data-testid="steer-toggle"]') as HTMLButtonElement
+
+    await act(async () => {
+      toggle.click()
+    })
+    await act(async () => {
+      setTextareaValue(textarea, 'врежься в ход')
+    })
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+
+    expect(mocks.onSend).toHaveBeenCalledWith('врежься в ход', undefined, 'steer', undefined)
+    // Следующее сообщение не должно уйти «вмешательством» случайно.
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('без активного хода тумблера нет и режим в запрос не уходит', async () => {
     const container = await renderInput()
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
 
-    expect(container.querySelector('[data-testid="send-mode-selector"]')).toBeNull()
+    expect(container.querySelector('[data-testid="steer-toggle"]')).toBeNull()
 
     await act(async () => {
       setTextareaValue(textarea, 'обычное сообщение')
@@ -253,8 +279,8 @@ describe('ChatInput — селектор режима отправки (ADR-104)
     expect(mocks.onSend).toHaveBeenCalledWith('обычное сообщение', undefined, undefined, undefined)
   })
 
-  it('в режиме «в очередь» mode уходит как queue (в тело запроса не попадает)', async () => {
-    const container = await renderInput({ isStreaming: true, sendMode: 'queue' })
+  it('в режиме «в очередь» по умолчанию mode уходит как queue (в тело запроса не попадает)', async () => {
+    const container = await renderInput({ isStreaming: true })
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
 
     await act(async () => {
