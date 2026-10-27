@@ -81,14 +81,18 @@
 | ADR-102 | Аналитика и отчётность инстанса | ⚠️ Частично | [adr-102-analytics-reports.md](./adr-102-analytics-reports.md) |
 | ADR-103 | Ядро шлюзов (`@itphx/synth-gateway-core`) и контракт канала | ⚠️ Частично | [adr-103-gateway-core-channel-contract.md](./adr-103-gateway-core-channel-contract.md) |
 | ADR-106 | Authority-слой — полномочия пользователей и агентов как контент; Ф0–Ф5 реализованы (остаток — UI «Полномочия» и flavor-роли) | ⚠️ Частично | [adr-106-authority-layer.md](./adr-106-authority-layer.md) |
+| ADR-115 | Мультимодальный ввод — вложения сообщений (Part, blob-порт, API, UI) | ⚠️ Частично | [adr-115-multimodal-input.md](./adr-115-multimodal-input.md) |
+| ADR-116 | Состояние инстанса в SQL и blob-порты на томе | ⚠️ Частично | [adr-116-instance-state-and-blob-ports.md](./adr-116-instance-state-and-blob-ports.md) |
 
 ## Принятые предложения (история)
 
 | ID | Тема | Статус | Файл |
 |----|------|--------|------|
 | PROP-049 | Git worktrees: тулы `git_worktree_*`, per-session cwd, детект secondary worktree, UI | ✅ Принято (ADR-114) | [prop-049-git-worktrees.md](./prop-049-git-worktrees.md) |
+| PROP-085 | Мультимодальный ввод (звук, изображения, видео): типы `Part`, blob-хранилище вложений, предобработка (ASR/OCR/кадры), UI-композер | ✅ Принято (ADR-115) | [prop-085-multimodal-input.md](./prop-085-multimodal-input.md) |
 | PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | ✅ Принято (ADR-111) | [prop-096-background-subagent-sessions.md](./prop-096-background-subagent-sessions.md) |
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | ✅ Принято (ADR-113) | [prop-097-background-processes-registry.md](./prop-097-background-processes-registry.md) |
+| PROP-106 | Файловые порты инстанса в SQL: единое состояние при нескольких репликах | ✅ Принято (ADR-116) | [prop-106-file-ports-to-sql.md](./prop-106-file-ports-to-sql.md) |
 
 ## Предложения
 
@@ -111,14 +115,12 @@
 | PROP-081 | Политики гибрида и защита от утечек: серверные политики (forbidden/remote-only/full, publish/fork allow | 🧩 Предложение | [prop-081-hybrid-policy-leak-protection.md](./prop-081-hybrid-policy-leak-protection.md) |
 | PROP-082 | Flavor-образы с toolchain: `slim`/`core`/`dev`/`devops`/`browser`/`full` (alpine + debian) для local containerized и managed single-instance | 🧩 Предложение | [prop-082-full-images-deployment.md](./prop-082-full-images-deployment.md) |
 | PROP-083 | Кастомизация инстанса и брендинг: приветственное окно (+повторный вызов), конфиг брендинга (название/лого-подпись/ватермарка), серверная выдача; на потом — locked settings | 🧩 Предложение | [prop-083-instance-customization-branding.md](./prop-083-instance-customization-branding.md) |
-| PROP-085 | Мультимодальный ввод (звук, изображения, видео): типы `Part`, blob-хранилище вложений, предобработка (ASR/OCR/кадры), UI-композер | 🧩 Предложение | [prop-085-multimodal-input.md](./prop-085-multimodal-input.md) |
 | PROP-093 | Версионирование документации: версионные подкаталоги портала + селектор (вариант A под текущий nginx-деплой) или `mike` (вариант B при GitHub Pages), тегирование `synth-docs`, политика хранения | 🧩 Предложение | [prop-093-docs-versioning.md](./prop-093-docs-versioning.md) |
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099-memory-footprint-optimization.md](./prop-099-memory-footprint-optimization.md) |
 | PROP-100 | SSRF и TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению (дефекты 1–3 закрыты; остаток — пиннинг) | 🧩 Предложение | [prop-100-ssrf-dns-rebinding.md](./prop-100-ssrf-dns-rebinding.md) |
 | PROP-101 | Локальные инсталляторы и платформенная дистрибуция (Windows / macOS / Linux) | 🧩 Предложение | [prop-101-local-installers-platforms.md](./prop-101-local-installers-platforms.md) |
 | PROP-104 | Внешний транспорт событий: публикация между репликами control plane | 🧩 Предложение | [prop-104-external-event-transport.md](./prop-104-external-event-transport.md) |
 | PROP-105 | Координация в нескольких репликах: сессии, очередь, общее состояние | 🧩 Предложение | [prop-105-multi-replica-coordination.md](./prop-105-multi-replica-coordination.md) |
-| PROP-106 | Файловые порты инстанса в SQL: единое состояние при нескольких репликах | 🧩 Предложение | [prop-106-file-ports-to-sql.md](./prop-106-file-ports-to-sql.md) |
 | PROP-109 | Централизация внешних агентных систем (федерация) | 🧩 Предложение | [prop-109-agent-system-federation.md](./prop-109-agent-system-federation.md) |
 | PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110-portal-platform.md](./prop-110-portal-platform.md) |
 | PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧊 Icebox | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
@@ -144,4 +146,4 @@
 
 ---
 
-Всего документов: 104 (Решения: 47, Частично: 17, Принятые предложения: 3, Предложения: 27, Vision: 8, Icebox: 1, Legacy: 1).
+Всего документов: 106 (Решения: 47, Частично: 19, Принятые предложения: 5, Предложения: 25, Vision: 8, Icebox: 1, Legacy: 1).
