@@ -4,14 +4,22 @@ import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import { cn } from '@/lib/utils'
 import {
+  MODALITY_FAMILIES,
   synthApi,
+  type AttachmentsRuntimeSettings,
   type AttachmentsSettings,
   type AttachmentsSettingsInfo,
+  type ModelInfo,
+  type ModalityFamily,
+  type ModalityModelRef,
 } from '@/lib/api/synthApi'
+import { useProvidersStore } from '@/stores/providersStore'
 import { Icon } from '../icon/Icon'
+import { SelectContent, SelectItem } from '../ui/select'
 import {
   InfoField,
   NumberField,
+  SelectField,
   SettingsActions,
   SettingsPanel,
   SettingsSection,
@@ -44,7 +52,71 @@ const ATTACHMENTS_FIELDS = [
   'gcDays',
   'workspaceFallback',
   'allowedMimePrefixes',
+  'modalityModels',
 ] as const
+
+/** Значение select строки «модель по модальности», когда назначения нет. */
+export const NOT_SET_MODALITY_MODEL = '__none__'
+
+/** Значения aux-моделей по семействам в черновике формы (`null` — не задано). */
+export type ModalityModelForm = Record<ModalityFamily, ModalityModelRef | null>
+
+/** Модель каталога, принимающая модальность, — вариант select'а строки. */
+export interface ModalityModelOption {
+  /** Значение select'а: устойчивый ключ пары (`provider/model`). */
+  key: string
+  ref: ModalityModelRef
+  label: string
+}
+
+/** Ключ пары provider+model (провайдер без `/`, поэтому ключ однозначен). */
+export function modalityModelKey(ref: ModalityModelRef): string {
+  return `${ref.provider}/${ref.model}`
+}
+
+/**
+ * Модели каталога, у которых `modalities` содержит семейство (ADR-115).
+ *
+ * Модели без известных модальностей не предлагаются: сервер всё равно отклонит
+ * такую aux-модель — нельзя проверить, принимает ли она формат.
+ */
+export function modelsForModality(
+  models: ReadonlyArray<Pick<ModelInfo, 'name' | 'provider' | 'modalities'>>,
+  family: ModalityFamily,
+): ModalityModelOption[] {
+  const options: ModalityModelOption[] = []
+  for (const model of models) {
+    if (!Array.isArray(model.modalities) || !model.modalities.includes(family)) continue
+    const ref: ModalityModelRef = { provider: model.provider, model: model.name }
+    options.push({ key: modalityModelKey(ref), ref, label: `${model.provider} / ${model.name}` })
+  }
+  return options
+}
+
+/** Назначения из настроек → черновик (все четыре семейства, `null` — не задано). */
+export function modalityModelsForm(
+  settings: Pick<AttachmentsSettings, 'modalityModels'>,
+): ModalityModelForm {
+  const source = settings.modalityModels ?? {}
+  const form = {} as ModalityModelForm
+  for (const family of MODALITY_FAMILIES) {
+    const ref = source[family]
+    form[family] = ref ? { provider: ref.provider, model: ref.model } : null
+  }
+  return form
+}
+
+/** Черновик назначений → тело PUT (все ключи; пустое — `null` = снять запись). */
+function modalityModelsBody(
+  form: ModalityModelForm,
+): Record<ModalityFamily, ModalityModelRef | null> {
+  const body = {} as Record<ModalityFamily, ModalityModelRef | null>
+  for (const family of MODALITY_FAMILIES) {
+    const ref = form[family]
+    body[family] = ref ? { provider: ref.provider, model: ref.model } : null
+  }
+  return body
+}
 
 /**
  * Черновик формы (ADR-072): числа — строками, чтобы пользователь мог стереть
@@ -67,6 +139,8 @@ export interface AttachmentsForm {
   workspaceFallback: boolean
   /** Белый список MIME-префиксов одной строкой через запятую. */
   mimePrefixes: string
+  /** ADR-115: aux-модели по семействам вложений (`null` — не задана). */
+  modalityModels: ModalityModelForm
 }
 
 /** Байты → MiB для поля ввода: до 2 знаков, без лишних нулей. */
@@ -127,6 +201,7 @@ export function formFromAttachments(settings: AttachmentsSettings): AttachmentsF
     gcDays: String(settings.gcDays),
     workspaceFallback: settings.workspaceFallback,
     mimePrefixes: formatMimePrefixes(settings.allowedMimePrefixes),
+    modalityModels: modalityModelsForm(settings),
   }
 }
 
@@ -145,14 +220,18 @@ export function isEnvLockedField(envLocked: readonly string[], field: string): b
  * все поля: неизменённые берутся из сохранённых настроек (байты без потерь от
  * пересчёта MiB), изменённые — из черновика. Поля из `envLocked` не отправляются:
  * значение задано через env и переопределяется только там (иначе сервер вернёт 409).
+ *
+ * `modalityModels` (ADR-115) уходит целиком — все четыре ключа, `null` для
+ * снятых назначений: патч заменяет runtime-секцию назначений, поэтому иначе
+ * сервер сохранил бы прежние записи семейств.
  */
 export function buildAttachmentsBody(
   draft: AttachmentsForm,
   saved: AttachmentsForm,
   savedSettings: AttachmentsSettings,
   envLocked: readonly string[] = [],
-): Partial<AttachmentsSettings> {
-  const body: Partial<AttachmentsSettings> = {
+): AttachmentsRuntimeSettings {
+  const body: AttachmentsRuntimeSettings = {
     enabled: draft.enabled,
     modalities: {
       image: draft.image,
@@ -181,6 +260,7 @@ export function buildAttachmentsBody(
       draft.mimePrefixes === saved.mimePrefixes
         ? [...savedSettings.allowedMimePrefixes]
         : parseMimePrefixes(draft.mimePrefixes).values,
+    modalityModels: modalityModelsBody(draft.modalityModels),
   }
 
   for (const field of ATTACHMENTS_FIELDS) {
@@ -234,9 +314,10 @@ function runningModalities(settings: AttachmentsSettings): string {
 /**
  * ADR-115 / ADR-072: админ-раздел «Мультимодальный ввод» — runtime-настройки
  * вложений сообщений (`GET/PUT/DELETE /settings/attachments`): мастер-выключатель,
- * поддерживаемые модальности, лимиты размера/количества, срок хранения
- * осиротевших файлов, сохранение несовместимых вложений в рабочий каталог и
- * белый список MIME. Мутации — ADMIN (guard сервера).
+ * поддерживаемые модальности, модели обработки по модальностям (`modalityModels`),
+ * лимиты размера/количества, срок хранения осиротевших файлов, сохранение
+ * несовместимых вложений в рабочий каталог и белый список MIME. Мутации — ADMIN
+ * (guard сервера).
  *
  * Поля из `envLocked` в UI недоступны и в тело PUT не попадают: значение задано
  * через env и переопределяется только там. Изменения применяются сразу
@@ -245,6 +326,8 @@ function runningModalities(settings: AttachmentsSettings): string {
 export function MultimodalSettings() {
   const { t } = useI18n()
   const { notify } = useNotification()
+  const catalogModels = useProvidersStore((s) => s.models)
+  const loadModels = useProvidersStore((s) => s.loadModels)
 
   const [info, setInfo] = useState<AttachmentsSettingsInfo | null>(null)
   const [defaults, setDefaults] = useState<AttachmentsSettings | null>(null)
@@ -283,6 +366,20 @@ export function MultimodalSettings() {
   useEffect(() => {
     void load()
   }, [load])
+
+  // Каталог моделей нужен для выбора aux-моделей: если он ещё не загружен
+  // (админка «Модели» не открывалась), читаем существующим доменом стора.
+  useEffect(() => {
+    if (useProvidersStore.getState().models.length === 0) void loadModels()
+  }, [loadModels])
+
+  const modalityOptions = useMemo(() => {
+    const byFamily = {} as Record<ModalityFamily, ModalityModelOption[]>
+    for (const family of MODALITY_FAMILIES) {
+      byFamily[family] = modelsForModality(catalogModels, family)
+    }
+    return byFamily
+  }, [catalogModels])
 
   const envLocked = info?.envLocked ?? []
   const locked = useCallback(
@@ -517,7 +614,91 @@ export function MultimodalSettings() {
         )}
       </SettingsSection>
 
-      {/* 4. Лимиты: размер файла/сессии в MiB (в API — байты), файлов в сообщении */}
+      {/* 4. Модели по модальностям: aux-модели обработки вложений (ADR-115) */}
+      <SettingsSection
+        id="attachments-modality-models"
+        title={t('settings.attachments.modalityModels.title')}
+        description={t('settings.attachments.modalityModels.description')}
+        tooltip={t('settings.help.attachments.section.attachments-modality-models')}
+      >
+        {current && (
+          <>
+            {MODALITY_FAMILIES.map((family) => {
+              const options = modalityOptions[family]
+              const selected = current.modalityModels[family]
+              const selectedKey = selected ? modalityModelKey(selected) : NOT_SET_MODALITY_MODEL
+              const offered = options.some((option) => option.key === selectedKey)
+              const items = [
+                {
+                  value: NOT_SET_MODALITY_MODEL,
+                  label: t('settings.attachments.modalityModels.none'),
+                },
+                ...options.map((option) => ({ value: option.key, label: option.label })),
+              ]
+              return (
+                <div
+                  key={family}
+                  className="min-w-0"
+                  data-testid={`attachments-modality-row-${family}`}
+                >
+                  <SelectField
+                    label={t(`settings.attachments.modalityModels.${family}`)}
+                    tooltip={t(`settings.help.attachments.modalityModels.${family}`)}
+                    value={selectedKey}
+                    onValueChange={(value) => {
+                      const next = options.find((option) => option.key === value)
+                      draft.update({
+                        modalityModels: {
+                          ...current.modalityModels,
+                          [family]: next ? next.ref : null,
+                        },
+                      })
+                    }}
+                    disabled={locked('modalityModels')}
+                    ariaLabel={t(`settings.attachments.modalityModels.${family}`)}
+                    triggerTestId={`attachments-modality-${family}`}
+                    items={items}
+                  >
+                    <SelectContent>
+                      {items.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </SelectField>
+
+                  {/* Каталог загружен, но назначенная модель не заявляет эту модальность
+                      (модель отключена/без `modalities`) — сервер отклонит сохранение. */}
+                  {selected && !offered && catalogModels.length > 0 && (
+                    <p
+                      data-testid={`attachments-modality-warning-${family}`}
+                      className="text-xs text-status-warning break-words"
+                    >
+                      {t('settings.attachments.modalityModels.incompatible', { model: selectedKey })}
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+
+            <p className="text-xs text-muted-foreground break-words" data-testid="attachments-modality-hint">
+              {t('settings.attachments.modalityModels.hint')}
+            </p>
+
+            {locked('modalityModels') && (
+              <p
+                data-testid="attachments-modality-env-locked"
+                className="text-xs text-status-warning break-words"
+              >
+                {t('settings.attachments.envLocked')}
+              </p>
+            )}
+          </>
+        )}
+      </SettingsSection>
+
+      {/* 5. Лимиты: размер файла/сессии в MiB (в API — байты), файлов в сообщении */}
       <SettingsSection
         id="attachments-limits"
         title={t('settings.attachments.limits.title')}
@@ -569,7 +750,7 @@ export function MultimodalSettings() {
         )}
       </SettingsSection>
 
-      {/* 5. Хранение: срок жизни осиротевших вложений */}
+      {/* 6. Хранение: срок жизни осиротевших вложений */}
       <SettingsSection
         id="attachments-storage"
         title={t('settings.attachments.storage.title')}
@@ -594,7 +775,7 @@ export function MultimodalSettings() {
         )}
       </SettingsSection>
 
-      {/* 6. Поведение: несовместимые вложения → рабочий каталог */}
+      {/* 7. Поведение: несовместимые вложения → рабочий каталог */}
       <SettingsSection
         id="attachments-behavior"
         title={t('settings.attachments.behavior.title')}
@@ -614,7 +795,7 @@ export function MultimodalSettings() {
         )}
       </SettingsSection>
 
-      {/* 7. Белый список MIME + действия черновика */}
+      {/* 8. Белый список MIME + действия черновика */}
       <SettingsSection
         id="attachments-mime"
         title={t('settings.attachments.mime.title')}

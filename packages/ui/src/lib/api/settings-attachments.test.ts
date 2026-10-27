@@ -86,6 +86,52 @@ describe('attachmentsApi — runtime-настройки вложений (ADR-11
     )
   })
 
+  // ADR-115: назначения aux-моделей по семействам — `null` снимает запись семейства.
+  it('updateAttachmentsSettings: modalityModels с null уходит как есть', async () => {
+    const saved = {
+      modalityModels: {
+        image: { provider: 'openai', model: 'gpt-4o' },
+        audio: null,
+      },
+    }
+    const body = {
+      ...INFO,
+      saved,
+      attachments: {
+        ...ATTACHMENTS,
+        modalityModels: { image: { provider: 'openai', model: 'gpt-4o' } },
+      },
+    }
+    fetchMock.mockResolvedValue(jsonResponse(body))
+
+    const patch = {
+      modalityModels: {
+        image: { provider: 'openai', model: 'gpt-4o' },
+        pdf: null,
+        audio: null,
+        video: null,
+      },
+    }
+    await expect(synthApi.updateAttachmentsSettings(patch)).resolves.toEqual(body)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v2/settings/attachments',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ attachments: patch }),
+      }),
+    )
+  })
+
+  it('getAttachmentsSettings: сохранённый патч (saved) с null читается из ответа', async () => {
+    const withSaved = { ...INFO, saved: { modalityModels: { image: null } } }
+    fetchMock.mockResolvedValue(jsonResponse(withSaved))
+
+    const res = await synthApi.getAttachmentsSettings()
+    expect(res.saved).toEqual({ modalityModels: { image: null } })
+    expect(res.attachments.modalityModels).toBeUndefined()
+  })
+
   it('прокидывает сообщение и статус ошибки API', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({ error: { code: 'FORBIDDEN', message: 'admin only' } }, 403),

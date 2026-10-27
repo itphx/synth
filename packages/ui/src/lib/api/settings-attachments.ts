@@ -17,6 +17,33 @@ export interface AttachmentsModalities {
   video: boolean
 }
 
+/**
+ * ADR-115: семейство вложений — ключ назначения aux-модели
+ * (`attachments.modalityModels`). Совпадает с ключами `modalities`.
+ */
+export type ModalityFamily = 'image' | 'pdf' | 'audio' | 'video'
+
+/** Семейства вложений в каноническом порядке (как в API). */
+export const MODALITY_FAMILIES: readonly ModalityFamily[] = ['image', 'pdf', 'audio', 'video']
+
+/**
+ * ADR-115: ссылка на aux-модель обработки семейства — ключ каталога
+ * (`provider` + `model`), как у модели по умолчанию инстанса.
+ */
+export interface ModalityModelRef {
+  provider: string
+  model: string
+}
+
+/** Эффективные назначения aux-моделей (семейства без записи — не настроены). */
+export type ModalityModels = Partial<Record<ModalityFamily, ModalityModelRef>>
+
+/**
+ * ADR-115: патч назначений — `null` снимает запись семейства
+ * (`{modalityModels: {image: null}}`), отсутствие ключа оставляет базу из config.
+ */
+export type ModalityModelsPatch = Partial<Record<ModalityFamily, ModalityModelRef | null>>
+
 /** ADR-115: настройки мультимодального ввода (вложения сообщений). */
 export interface AttachmentsSettings {
   /** Вложения включены (мастер-выключатель приёма файлов). */
@@ -35,6 +62,21 @@ export interface AttachmentsSettings {
   workspaceFallback: boolean
   /** Белый список MIME-префиксов (например `image/`, `application/pdf`). */
   allowedMimePrefixes: string[]
+  /**
+   * ADR-115: модели обработки по семействам вложений. Пустая запись семейства —
+   * обработка не настроена (вложение, которое модель сессии не принимает,
+   * отбрасывается с путём в workspace).
+   */
+  modalityModels?: ModalityModels
+}
+
+/**
+ * ADR-115: runtime-патч секции `attachments` (тело `PUT`). Отличается от
+ * `Partial<AttachmentsSettings>` только `modalityModels`: `null` снимает
+ * назначение семейства.
+ */
+export type AttachmentsRuntimeSettings = Omit<Partial<AttachmentsSettings>, 'modalityModels'> & {
+  modalityModels?: ModalityModelsPatch
 }
 
 /**
@@ -44,6 +86,12 @@ export interface AttachmentsSettings {
 export interface AttachmentsSettingsInfo {
   attachments: AttachmentsSettings
   defaults: AttachmentsSettings
+  /**
+   * Сохранённый runtime-патч как есть: `null` в `modalityModels` — снятое
+   * назначение семейства, `{}` — runtime-значений нет. Опционален: старые
+   * сборки ядра поле не отдают.
+   */
+  saved?: AttachmentsRuntimeSettings
   /** Runtime-override присутствует (settings.json / PG). */
   isOverridden: boolean
   source: AttachmentsSource
@@ -63,7 +111,7 @@ export const attachmentsApi = {
 
   /** PUT /settings/attachments — частичное обновление (`{attachments: patch}`). */
   async updateAttachmentsSettings(
-    patch: Partial<AttachmentsSettings>,
+    patch: AttachmentsRuntimeSettings,
   ): Promise<AttachmentsSettingsInfo> {
     return fetchJSON<AttachmentsSettingsInfo>(`${BASE_URL}/settings/attachments`, {
       method: 'PUT',

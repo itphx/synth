@@ -181,8 +181,15 @@ export type {
   AttachmentsSource,
   AttachmentsModalities,
   AttachmentsSettings,
+  AttachmentsRuntimeSettings,
   AttachmentsSettingsInfo,
+  ModalityFamily,
+  ModalityModelRef,
+  ModalityModels,
+  ModalityModelsPatch,
 } from './settings-attachments'
+// ADR-115: канонический порядок семейств вложений (ключи `modalityModels`).
+export { MODALITY_FAMILIES } from './settings-attachments'
 export type {
   CreateEventBindingKeyInput,
   UpdateEventBindingKeyPatch,
