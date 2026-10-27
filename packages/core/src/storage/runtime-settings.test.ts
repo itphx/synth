@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings } from './runtime-settings.js';
+import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels } from './runtime-settings.js';
 
 describe('RuntimeSettingsStore.clear* (ADR-072 Ф2)', () => {
   let tmpDir: string;
@@ -657,6 +657,8 @@ describe('resolveAttachmentsSettings (ADR-115)', () => {
       maxBytesPerSession: 1024 * 1024 * 1024,
       allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
       workspaceFallback: true,
+      // ADR-115: назначений aux-моделей нет — обработка не настроена.
+      modalityModels: {},
       gcDays: 30,
     });
   });
@@ -759,19 +761,114 @@ describe('resolveAttachmentsSettings (ADR-115)', () => {
   });
 });
 
+describe('resolveAttachmentsSettings: modalityModels (ADR-115)', () => {
+  it('config: назначения из config.yaml попадают в эффективные настройки', () => {
+    const resolved = resolveAttachmentsSettings({
+      config: {
+        modalityModels: {
+          image: { provider: 'openai', model: 'gpt-4o' },
+          pdf: { provider: 'anthropic', model: 'claude-sonnet-4' },
+        },
+      },
+      env: {},
+    });
+    expect(resolved.source).toBe('config');
+    expect(resolved.effective.modalityModels).toEqual({
+      image: { provider: 'openai', model: 'gpt-4o' },
+      pdf: { provider: 'anthropic', model: 'claude-sonnet-4' },
+    });
+  });
+
+  it('runtime дополняет config по семействам (разные модальности)', () => {
+    const resolved = resolveAttachmentsSettings({
+      config: { modalityModels: { image: { provider: 'openai', model: 'gpt-4o' } } },
+      runtime: { modalityModels: { audio: { provider: 'local', model: 'whisper' } } },
+      env: {},
+    });
+    expect(resolved.source).toBe('runtime');
+    expect(resolved.effective.modalityModels).toEqual({
+      image: { provider: 'openai', model: 'gpt-4o' },
+      audio: { provider: 'local', model: 'whisper' },
+    });
+  });
+
+  it('runtime перекрывает одну модальность, не трогая остальные', () => {
+    const resolved = resolveAttachmentsSettings({
+      config: {
+        modalityModels: {
+          image: { provider: 'openai', model: 'gpt-4o' },
+          pdf: { provider: 'anthropic', model: 'claude-sonnet-4' },
+        },
+      },
+      runtime: { modalityModels: { image: { provider: 'local', model: 'llava' } } },
+      env: {},
+    });
+    expect(resolved.effective.modalityModels).toEqual({
+      image: { provider: 'local', model: 'llava' },
+      pdf: { provider: 'anthropic', model: 'claude-sonnet-4' },
+    });
+  });
+
+  it('null в runtime снимает запись семейства (в т.ч. заданную в config)', () => {
+    const resolved = resolveAttachmentsSettings({
+      config: {
+        modalityModels: {
+          image: { provider: 'openai', model: 'gpt-4o' },
+          pdf: { provider: 'anthropic', model: 'claude-sonnet-4' },
+        },
+      },
+      runtime: { modalityModels: { image: null } },
+      env: {},
+    });
+    expect(resolved.effective.modalityModels).toEqual({
+      pdf: { provider: 'anthropic', model: 'claude-sonnet-4' },
+    });
+  });
+
+  it('невалидная ссылка в config игнорируется, в runtime — снимает запись', () => {
+    expect(
+      resolveAttachmentsSettings({
+        config: { modalityModels: { image: { provider: '', model: 'gpt-4o' } } },
+        env: {},
+      }).effective.modalityModels,
+    ).toEqual({});
+    expect(
+      resolveAttachmentsSettings({
+        config: { modalityModels: { image: { provider: 'openai', model: 'gpt-4o' } } },
+        runtime: { modalityModels: { image: { provider: ' ', model: '' } } },
+        env: {},
+      }).effective.modalityModels,
+    ).toEqual({});
+  });
+
+  it('mergeModalityModels: порядок ключей канонический (стабильное сравнение секций)', () => {
+    const merged = mergeModalityModels(
+      { video: { provider: 'v', model: 'm' }, image: { provider: 'i', model: 'm' } },
+      undefined,
+    );
+    expect(Object.keys(merged)).toEqual(['image', 'video']);
+  });
+});
+
 describe('createLiveAttachmentsSettings (ADR-115)', () => {
   it('setRuntime применяется к getConfig сразу', () => {
     const live = createLiveAttachmentsSettings({ env: {} });
     expect(live.getConfig().enabled).toBe(true);
 
-    live.setRuntime({ enabled: false, modalities: { video: false } as never });
+    live.setRuntime({
+      enabled: false,
+      modalities: { video: false } as never,
+      modalityModels: { image: { provider: 'openai', model: 'gpt-4o' } },
+    });
     expect(live.getConfig().enabled).toBe(false);
     expect(live.getConfig().modalities.video).toBe(false);
+    expect(live.getConfig().modalityModels).toEqual({ image: { provider: 'openai', model: 'gpt-4o' } });
     expect(live.resolve().source).toBe('runtime');
 
-    // Сброс runtime — возврат к config/default.
+    // Сброс runtime — возврат к config/default (в т.ч. снятие aux-моделей).
     live.setRuntime({});
     expect(live.getConfig().enabled).toBe(true);
+    expect(live.getConfig().modalityModels).toEqual({});
     expect(live.resolve().source).toBe('default');
   });
 

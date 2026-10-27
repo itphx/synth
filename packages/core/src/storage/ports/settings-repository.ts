@@ -19,7 +19,7 @@ import type {
   PluginsRuntimeSettings,
   RuntimeSettings,
   SecurityRuntimeSettings,
-  AttachmentsSettings,
+  AttachmentsRuntimeSettings,
 } from '../runtime-settings.js';
 
 /**
@@ -134,7 +134,7 @@ export interface SettingsRepository {
    * `attachments`). Применяются сразу (резолвер читается на каждый вызов) —
    * `restartRequired: false` в API.
    */
-  getAttachments(): Promise<Partial<AttachmentsSettings>>;
-  setAttachments(config: Partial<AttachmentsSettings>): Promise<void>;
+  getAttachments(): Promise<AttachmentsRuntimeSettings>;
+  setAttachments(config: AttachmentsRuntimeSettings): Promise<void>;
   clearAttachments(): Promise<void>;
 }

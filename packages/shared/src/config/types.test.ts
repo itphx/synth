@@ -350,4 +350,46 @@ describe('attachmentsConfigSchema (ADR-115)', () => {
     expect(attachmentsConfigSchema.safeParse({ maxBytesPerFile: 0 }).success).toBe(false);
     expect(attachmentsConfigSchema.safeParse({ maxFilesPerMessage: -1 }).success).toBe(false);
   });
+
+  it('modalityModels: необязательное поле — без него настройка не задана', () => {
+    const parsed = attachmentsConfigSchema.parse({});
+    expect(parsed.modalityModels).toBeUndefined();
+    // Отсутствие записи ≠ ошибка: обработка не настроена (вложение отбрасывается).
+    expect(attachmentsConfigSchema.safeParse({ modalityModels: {} }).success).toBe(true);
+  });
+
+  it('modalityModels: валидные ссылки по семействам принимаются частично', () => {
+    const parsed = attachmentsConfigSchema.parse({
+      modalityModels: {
+        image: { provider: 'openai', model: 'gpt-4o' },
+        audio: { provider: 'local', model: 'whisper' },
+      },
+    });
+    expect(parsed.modalityModels).toEqual({
+      image: { provider: 'openai', model: 'gpt-4o' },
+      audio: { provider: 'local', model: 'whisper' },
+    });
+    expect(parsed.modalityModels?.pdf).toBeUndefined();
+    expect(parsed.modalityModels?.video).toBeUndefined();
+  });
+
+  it('modalityModels: невалидная ссылка (пустые provider/model, лишний ключ) → ошибка', () => {
+    expect(
+      attachmentsConfigSchema.safeParse({ modalityModels: { image: { provider: '', model: 'gpt-4o' } } }).success,
+    ).toBe(false);
+    expect(
+      attachmentsConfigSchema.safeParse({ modalityModels: { image: { provider: 'openai' } } }).success,
+    ).toBe(false);
+    // Лишние ключи в ссылке отбрасываются (как у остальных схем каталога).
+    expect(
+      attachmentsConfigSchema.parse({ modalityModels: { image: { provider: 'openai', model: 'x', extra: 1 } } })
+        .modalityModels?.image,
+    ).toEqual({ provider: 'openai', model: 'x' });
+    // Неизвестное семейство (например, модель-модальность `text`) схемой не
+    // принимается как ключ: поле отбрасывается (HTTP-роут отвечает 400).
+    expect(
+      attachmentsConfigSchema.parse({ modalityModels: { text: { provider: 'openai', model: 'gpt-4o' } } })
+        .modalityModels,
+    ).toEqual({});
+  });
 });

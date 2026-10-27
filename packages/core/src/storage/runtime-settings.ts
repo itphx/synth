@@ -1,8 +1,8 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig } from '@itphx/synth-shared';
-import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '@itphx/synth-shared';
+import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig, AttachmentFamily, ModalityModelAssignments, ModalityModelRef } from '@itphx/synth-shared';
+import { ATTACHMENT_FAMILIES, DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '@itphx/synth-shared';
 import { defaultConfig, parseAttachmentsModalities } from '@itphx/synth-shared/config';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 import type { SettingsRepository } from './ports/settings-repository.js';
@@ -151,9 +151,30 @@ export interface PluginsRuntimeSettings {
 /**
  * ADR-115: полная эффективная секция вложений сообщений — ровно схема
  * `attachmentsConfigSchema` (`enabled`, `modalities`, лимиты, префиксы,
- * `workspaceFallback`, `gcDays`).
+ * `workspaceFallback`, `modalityModels`, `gcDays`).
  */
 export type AttachmentsSettings = AttachmentsConfig;
+
+/**
+ * ADR-115: runtime-патч назначений aux-моделей по семействам.
+ *
+ * `null` — **удалить** запись семейства (в `config.yaml` `null` недопустим,
+ * поэтому тип шире, чем `AttachmentsSettings['modalityModels']`); `undefined`
+ * (ключа нет) — база сохраняется; объект — заменяет запись семейства. Именно
+ * так `PUT /api/v2/settings/attachments` кодирует удаление:
+ * `{attachments: {modalityModels: {image: null}}}`.
+ */
+export type ModalityModelsRuntimePatch = Partial<Record<AttachmentFamily, ModalityModelRef | null>>;
+
+/**
+ * ADR-115: runtime-патч секции `attachments`.
+ *
+ * Отличается от `Partial<AttachmentsSettings>` ровно одним полем —
+ * `modalityModels`, где допускается `null` (удаление записи семейства).
+ */
+export type AttachmentsRuntimeSettings = Omit<Partial<AttachmentsSettings>, 'modalityModels'> & {
+  modalityModels?: ModalityModelsRuntimePatch;
+};
 
 /** Источник эффективного значения настроек вложений (приоритет убывает). */
 export type AttachmentsSource = 'env' | 'runtime' | 'config' | 'default';
@@ -243,9 +264,10 @@ export interface RuntimeSettings {
   /**
    * ADR-115: runtime-настройки вложений сообщений (админка). Частичный патч
    * секции `attachments`; применяется **сразу** (сервис вложений, промпт и
-   * GC читают резолвер на каждый вызов), без рестарта.
+   * GC читают резолвер на каждый вызов), без рестарта. В `modalityModels`
+   * допускается `null` — снятие записи семейства (ADR-115).
    */
-  attachments?: Partial<AttachmentsSettings>;
+  attachments?: AttachmentsRuntimeSettings;
 }
 
 /**
@@ -439,8 +461,70 @@ export function mergePluginsConfig(
 }
 
 /**
+ * ADR-115: нормализовать назначения aux-моделей (только валидные ссылки,
+ * канонический порядок ключей — иначе `sameAttachments` сравнивал бы разный
+ * порядок ключей как разные секции).
+ *
+ * Невалидная ссылка (пустой `provider`/`model`) трактуется как отсутствие
+ * настройки: значение из `config.yaml` не валидируется по каталогу (это
+ * ответственность владельца конфига), но мусор в нём не должен попадать в
+ * эффективные настройки.
+ */
+function normalizeModalityModels(
+  assignments?: ModalityModelAssignments,
+): ModalityModelAssignments {
+  const result: ModalityModelAssignments = {};
+  for (const family of ATTACHMENT_FAMILIES) {
+    const ref = assignments?.[family];
+    if (!ref) continue;
+    const provider = typeof ref.provider === 'string' ? ref.provider.trim() : '';
+    const model = typeof ref.model === 'string' ? ref.model.trim() : '';
+    if (!provider || !model) continue;
+    result[family] = { provider, model };
+  }
+  return result;
+}
+
+/**
+ * ADR-115: наложить runtime-патч `modalityModels` на базу (config.yaml).
+ *
+ * - ключа семейства нет в патче → запись базы сохраняется (runtime дополняет);
+ * - `null` → запись удаляется (настройка снимается, вложение снова
+ *   отбрасывается с путём в workspace, если модель его не принимает);
+ * - объект → заменяет запись семейства (валидность по каталогу проверяет
+ *   `PUT /api/v2/settings/attachments`, не резолвер);
+ * - пустая ссылка → запись считается снятой.
+ */
+export function mergeModalityModels(
+  base: ModalityModelAssignments | undefined,
+  patch: ModalityModelsRuntimePatch | undefined,
+): ModalityModelAssignments {
+  const merged = normalizeModalityModels(base);
+  if (!patch) return merged;
+
+  for (const family of ATTACHMENT_FAMILIES) {
+    if (!(family in patch)) continue;
+    const value = patch[family];
+    if (value === undefined) continue;
+    if (value === null) {
+      delete merged[family];
+      continue;
+    }
+    const provider = typeof value.provider === 'string' ? value.provider.trim() : '';
+    const model = typeof value.model === 'string' ? value.model.trim() : '';
+    if (!provider || !model) {
+      delete merged[family];
+      continue;
+    }
+    merged[family] = { provider, model };
+  }
+  return merged;
+}
+
+/**
  * ADR-115: нормализовать секцию `attachments` до полного вида (вложенные
- * `modalities` и список префиксов мёржатся с дефолтами схемы).
+ * `modalities`, назначения `modalityModels` и список префиксов мёржатся с
+ * дефолтами схемы).
  */
 function normalizeAttachments(config?: Partial<AttachmentsConfig>): AttachmentsSettings {
   const defaults = defaultConfig.attachments;
@@ -449,6 +533,7 @@ function normalizeAttachments(config?: Partial<AttachmentsConfig>): AttachmentsS
     ...(config ?? {}),
     modalities: { ...defaults.modalities, ...(config?.modalities ?? {}) },
     allowedMimePrefixes: [...(config?.allowedMimePrefixes ?? defaults.allowedMimePrefixes)],
+    modalityModels: normalizeModalityModels(config?.modalityModels),
   };
 }
 
@@ -537,7 +622,7 @@ function sameAttachments(a: AttachmentsSettings, b: AttachmentsSettings): boolea
  */
 export function resolveAttachmentsSettings(params: {
   config?: Partial<AttachmentsConfig>;
-  runtime?: Partial<AttachmentsSettings>;
+  runtime?: AttachmentsRuntimeSettings;
   env?: NodeJS.ProcessEnv;
 }): ResolvedAttachmentsSettings {
   const defaults = normalizeAttachments(undefined);
@@ -547,7 +632,7 @@ export function resolveAttachmentsSettings(params: {
   const lockedSet = new Set(locked);
 
   /** Runtime-патч без env-зафиксированных полей. */
-  const patch: Partial<AttachmentsSettings> = {};
+  const patch: AttachmentsRuntimeSettings = {};
   for (const key of Object.keys(runtime) as Array<keyof AttachmentsSettings>) {
     if (lockedSet.has(key)) continue;
     (patch as Record<string, unknown>)[key] = runtime[key];
@@ -555,6 +640,12 @@ export function resolveAttachmentsSettings(params: {
   const patchModalities = patch.modalities
     ? { ...base.modalities, ...patch.modalities }
     : undefined;
+  // ADR-115: назначения aux-моделей мержатся **по семействам** (runtime
+  // дополняет config, `null` снимает запись семейства).
+  const modalityModels = mergeModalityModels(
+    base.modalityModels,
+    patch.modalityModels as ModalityModelsRuntimePatch | undefined,
+  );
 
   const effective: AttachmentsSettings = {
     enabled: envValues.enabled ?? patch.enabled ?? base.enabled,
@@ -566,6 +657,7 @@ export function resolveAttachmentsSettings(params: {
       ? [...patch.allowedMimePrefixes]
       : base.allowedMimePrefixes,
     workspaceFallback: envValues.workspaceFallback ?? patch.workspaceFallback ?? base.workspaceFallback,
+    modalityModels,
     gcDays: envValues.gcDays ?? patch.gcDays ?? base.gcDays,
   };
 
@@ -588,9 +680,9 @@ export function resolveAttachmentsSettings(params: {
  */
 export interface LiveAttachmentsSettings {
   /** Текущий runtime-патч. */
-  getRuntime(): Partial<AttachmentsSettings>;
+  getRuntime(): AttachmentsRuntimeSettings;
   /** Заменить runtime-патч (после записи в порт настроек). */
-  setRuntime(next: Partial<AttachmentsSettings>): void;
+  setRuntime(next: AttachmentsRuntimeSettings): void;
   /** Полный резолв (источник + envLocked). */
   resolve(): ResolvedAttachmentsSettings;
   /** Эффективная секция (то, что читают сервис/промпт/pruner). */
@@ -600,7 +692,7 @@ export interface LiveAttachmentsSettings {
 /** Собрать живое состояние настроек вложений (ADR-115). */
 export function createLiveAttachmentsSettings(params: {
   config?: Partial<AttachmentsConfig>;
-  runtime?: Partial<AttachmentsSettings>;
+  runtime?: AttachmentsRuntimeSettings;
   env?: NodeJS.ProcessEnv;
 }): LiveAttachmentsSettings {
   let runtime = params.runtime ?? {};
@@ -1047,12 +1139,12 @@ export class RuntimeSettingsStore implements SettingsRepository {
   }
 
   /** ADR-115: runtime-настройки вложений, {} — не заданы. */
-  async getAttachments(): Promise<Partial<AttachmentsSettings>> {
+  async getAttachments(): Promise<AttachmentsRuntimeSettings> {
     const settings = await this.load();
     return settings.attachments ?? {};
   }
 
-  async setAttachments(config: Partial<AttachmentsSettings>): Promise<void> {
+  async setAttachments(config: AttachmentsRuntimeSettings): Promise<void> {
     await this._update((current) => ({ ...current, attachments: config }));
   }
 

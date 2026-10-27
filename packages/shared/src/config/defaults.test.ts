@@ -36,6 +36,8 @@ describe('defaultConfig', () => {
       maxBytesPerSession: 1024 * 1024 * 1024,
       allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
       workspaceFallback: true,
+      // ADR-115: модели обработки по модальностям не назначены (обработка не настроена).
+      modalityModels: {},
       gcDays: 30,
     });
   });

@@ -679,6 +679,43 @@ export const attachmentModalitiesSchema = z.object({
 });
 
 /**
+ * ADR-115: ключи семейств вложений в каноническом порядке.
+ *
+ * Те же ключи используют `attachments.modalities` и
+ * `attachments.modalityModels`. Не путать с модальностями **модели**
+ * (`AttachmentModality` из `model-metadata.ts` — у неё есть ещё `text`).
+ */
+export const ATTACHMENT_FAMILIES = ['image', 'pdf', 'audio', 'video'] as const;
+
+/**
+ * ADR-115: ссылка на модель обработки модальности (aux-модель).
+ *
+ * `provider` + `model` — ключ каталога (`ModelConfig`), как у модели по
+ * умолчанию инстанса. Модель сессии при этом **не меняется**: aux-модель
+ * получает только вложение (описание/извлечённый текст), а диалог
+ * продолжается на модели сессии.
+ */
+export const modalityModelRefSchema = z.object({
+  provider: z.string().min(1),
+  model: z.string().min(1),
+});
+
+/**
+ * ADR-115: назначения aux-моделей по семействам вложений.
+ *
+ * Отсутствие записи по семейству = обработка **не настроена** (текущее
+ * поведение: вложение, которое модель сессии не принимает, отбрасывается с
+ * путём в workspace). `auto`-значений нет: нативная поддержка определяется
+ * по модальностям модели сессии (`ModelConfig.modalities`).
+ */
+export const modalityModelsSchema = z.object({
+  image: modalityModelRefSchema.optional(),
+  pdf: modalityModelRefSchema.optional(),
+  audio: modalityModelRefSchema.optional(),
+  video: modalityModelRefSchema.optional(),
+});
+
+/**
  * ADR-115 §7: конфигурация вложений сообщений (multipart-загрузка + раздача).
  *
  * - `enabled` — мастер-выключатель вложений: `false` — загрузка и приём
@@ -692,6 +729,10 @@ export const attachmentModalitiesSchema = z.object({
  *   все префиксы разрешены; список — объектный ключ, остаётся в config.yaml);
  * - `workspaceFallback` — резервный путь хранения вложений в workspace проекта
  *   (когда blob-хранилище недоступно); применяется оркестратором;
+ * - `modalityModels` — модели обработки по семействам (ADR-115, aux-модели):
+ *   если модель сессии не принимает модальность, вложение обрабатывает
+ *   указанная модель, а в диалог попадает текстовый результат. Нет записи —
+ *   обработка не настроена (вложение отбрасывается с путём в workspace);
  * - `gcDays` — срок хранения осиротевших объектов (дней; `<= 0` — без
  *   ограничения).
  */
@@ -705,6 +746,7 @@ export const attachmentsConfigSchema = z.object({
     .array(z.string().min(1))
     .default(['image/', 'audio/', 'application/pdf', 'text/']),
   workspaceFallback: z.boolean().default(true),
+  modalityModels: modalityModelsSchema.optional(),
   gcDays: z.number().int().min(0).default(30),
 });
 
@@ -1376,6 +1418,17 @@ export type AttachmentModalitiesConfig = z.infer<typeof attachmentModalitiesSche
 export type AttachmentsConfig = z.infer<typeof attachmentsConfigSchema>;
 /** ADR-115: ключ семейства вложений (`image`/`pdf`/`audio`/`video`). */
 export type AttachmentModality = keyof AttachmentModalitiesConfig;
+/**
+ * ADR-115: синоним ключа семейства вложений (публичный экспорт).
+ *
+ * Отдельное имя — чтобы не конфликтовать с `AttachmentModality` из
+ * `model-metadata.ts` (модальности модели, включают `text`).
+ */
+export type AttachmentFamily = AttachmentModality;
+/** ADR-115: ссылка на aux-модель обработки модальности. */
+export type ModalityModelRef = z.infer<typeof modalityModelRefSchema>;
+/** ADR-115: назначения aux-моделей по семействам (нет записи — не настроено). */
+export type ModalityModelAssignments = Partial<Record<AttachmentFamily, ModalityModelRef>>;
 /** ADR-094: секция `metrics` (`enabled`). */
 export type MetricsConfig = z.infer<typeof metricsConfigSchema>;
 /** ADR-106 Ф1: секция `authority` (`enabled`/`shadow`). */

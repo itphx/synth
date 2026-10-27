@@ -25,7 +25,7 @@ import {
   createContextRoutes as createCoreContextRoutes,
   createMetricsSettingsRoutes,
   // ADR-115: админ-раздел «Вложения» — runtime-настройки мультимодального ввода.
-  createAttachmentsSettingsRoutes,
+  createAttachmentsSettingsRoutes, createModalityModelLookup,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createProcessRoutes,
@@ -577,6 +577,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       live: deps.attachmentsSettings,
       securityAudit,
       env: process.env,
+      // ADR-115: проверка `modalityModels` по каталогу (провайдер + модель +
+      // модальности модели) — до записи runtime-патча.
+      lookupModel: createModalityModelLookup({ providers: providerStore, models: modelStore }),
     },
     {
       readGuard: auth.requirePermission('ADMIN'),

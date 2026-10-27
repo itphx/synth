@@ -1583,6 +1583,7 @@ background:
 | `attachments.maxBytesPerSession` | Предел суммарного объёма вложений сессии (по частям в истории сообщений); превышение при промпте → `413 PAYLOAD_TOO_LARGE`. Env — `SYNTH_ATTACHMENTS_MAX_BYTES_PER_SESSION` | `1073741824` (1 ГиБ) |
 | `attachments.allowedMimePrefixes` | Белый список MIME-**префиксов**; пустой список — разрешены все. `image/svg+xml` запрещён всегда (XSS). **Только `config.yaml`** (список не имеет плоского env-представления). | `["image/", "audio/", "application/pdf", "text/"]` |
 | `attachments.workspaceFallback` | Резервное хранение вложений в workspace проекта, когда blob-хранилище недоступно. Env — `SYNTH_ATTACHMENTS_WORKSPACE_FALLBACK`. **Пока только настройка**: применение в оркестраторе — отдельная задача | `true` |
+| `attachments.modalityModels` | Модели **обработки** по семействам вложений (aux-модели, ADR-115): `image`/`pdf`/`audio`/`video` → `{provider, model}`. Если модель сессии модальность не принимает, вложение обрабатывает указанная модель, а в диалог попадает текстовый результат. **Только `config.yaml`** (env нет) | `{}` (не настроено) |
 | `attachments.gcDays` | Срок хранения **осиротевших** объектов (нет ссылок в `blob_refs`), дни; `0` — без ограничения (объекты не чистятся по сроку). Env — `SYNTH_ATTACHMENTS_GC_DAYS` | `30` |
 
 ```yaml
@@ -1595,6 +1596,11 @@ attachments:
   # Список — только в config.yaml; пустой список = все префиксы разрешены.
   allowedMimePrefixes: ["image/", "audio/", "application/pdf", "text/"]
   workspaceFallback: true
+  # ADR-115: aux-модели по семействам (provider/model из каталога моделей).
+  # Записи нет — обработка не настроена (вложение отбрасывается с путём).
+  modalityModels:
+    image: { provider: openai, model: gpt-4o }
+    audio: { provider: local, model: whisper }
   gcDays: 30
 ```
 
@@ -1603,9 +1609,18 @@ attachments:
   runtime их не перекрывает: попытка задать другое значение через UI → `409 CONFLICT`.
 - **Runtime-настройки (ADR-115).** Админ-раздел «Вложения» (API —
   `GET/PUT/DELETE /api/v2/settings/attachments`, [API_V2.md](./API_V2.md) §5.21) меняет
-  `enabled`/`modalities`/лимиты/`workspaceFallback`/`gcDays` **без рестарта**: сервис вложений,
+  `enabled`/`modalities`/лимиты/`workspaceFallback`/`modalityModels`/`gcDays` **без рестарта**: сервис вложений,
   постановка промпта и GC читают резолвер на каждый вызов (`restartRequired: false`).
   Изменения пишутся в аудит политик (`scope: "attachments"`).
+- **Модели обработки по модальностям (`attachments.modalityModels`, ADR-115).** Модель сессии
+  **не меняется**: aux-модель получает только вложение (описание/извлечённый текст), а диалог
+  продолжается на модели сессии. Приоритет — **нативный путь**: если модель сессии принимает
+  модальность (`ModelConfig.modalities`), вложение уходит ей как есть, а aux-модель не вызывается.
+  Нет записи для семейства — обработка не настроена, и вложение, которое модель сессии не принимает,
+  отбрасывается с путём в workspace (текущее поведение). `auto`-значений нет — нативная поддержка
+  определяется по модальностям модели. Настройка проверяется по каталогу: провайдер и модель должны
+  существовать, а модель — заявлять нужную модальность (иначе `PUT /settings/attachments` → `400`).
+  Env-оверрайдов нет (слишком дробно) — только `config.yaml` и runtime (UI/API).
 - **Env — скаляры + `modalities`.** В реестре env-оверрайдов (ADR-023) два boolean
   (`SYNTH_ATTACHMENTS_ENABLED`/`SYNTH_ATTACHMENTS_WORKSPACE_FALLBACK`), четыре числовых ключа и
   csv `SYNTH_ATTACHMENTS_MODALITIES`; список префиксов (`allowedMimePrefixes`) — только `config.yaml`.

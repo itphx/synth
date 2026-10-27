@@ -3,9 +3,11 @@
  *
  * Контракт (согласован с UI):
  * - `GET    /api/v2/settings/attachments` — эффективные настройки, дефолты,
- *   источник, env-зафиксированные поля, live-значение;
- * - `PUT    /api/v2/settings/attachments` `{attachments: Partial<AttachmentsSettings>}`
- *   — runtime-override (применяется **сразу**, без рестарта);
+ *   сохранённый runtime-патч (`saved`), источник, env-зафиксированные поля,
+ *   live-значение;
+ * - `PUT    /api/v2/settings/attachments` `{attachments: AttachmentsRuntimeSettings}`
+ *   — runtime-override (применяется **сразу**, без рестарта); в
+ *   `modalityModels` значение `null` снимает запись семейства;
  * - `DELETE /api/v2/settings/attachments` — сброс runtime к env/config/default.
  *
  * Приоритет эффективного значения: env > runtime (`settings.json`/PG) >
@@ -13,17 +15,32 @@
  * `envLocked` и не перезаписываются runtime; попытка задать их другим
  * значением → 409 `CONFLICT`. `restartRequired` — всегда `false`: сервис
  * вложений, промпт и GC читают резолвер на каждый вызов.
+ *
+ * `modalityModels` (ADR-115) — модели обработки по семействам вложений: до
+ * записи проверяются по каталогу (провайдер + модель + известные модальности
+ * модели), иначе `400 VALIDATION_ERROR`; частичных сохранений нет.
  */
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
-import { generateId, nowISO, type AttachmentsConfig } from '@itphx/synth-shared';
+import {
+  ATTACHMENT_FAMILIES,
+  generateId,
+  nowISO,
+  type AttachmentFamily,
+  type AttachmentsConfig,
+  type ModelConfig,
+  type ProviderConfig,
+} from '@itphx/synth-shared';
 import type { SettingsRepository } from '../../storage/ports/settings-repository.js';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
+import type { DocumentRepository } from '../../storage/ports/document-repository.js';
 import {
   resolveAttachmentsSettings,
+  type AttachmentsRuntimeSettings,
   type AttachmentsSettings,
   type LiveAttachmentsSettings,
+  type ModalityModelsRuntimePatch,
   type ResolvedAttachmentsSettings,
 } from '../../storage/runtime-settings.js';
 
@@ -39,10 +56,51 @@ const SETTINGS_KEYS = new Set<keyof AttachmentsSettings>([
   'maxBytesPerSession',
   'allowedMimePrefixes',
   'workspaceFallback',
+  'modalityModels',
   'gcDays',
 ]);
 
-const MODALITY_KEYS = ['image', 'pdf', 'audio', 'video'] as const;
+const MODALITY_KEYS = ATTACHMENT_FAMILIES;
+
+/**
+ * Результат проверки модели в каталоге (ADR-115).
+ *
+ * `modalities` не задано/пусто — модальности модели **неизвестны**: настройка
+ * aux-модели бессмысленна (нельзя понять, принимает ли она семейство),
+ * поэтому `PUT` отвечает 400 и просит синхронизировать каталог.
+ */
+export type ModalityModelCatalogEntry =
+  | { found: false; reason: 'provider' | 'model' }
+  | { found: true; modalities?: readonly string[] };
+
+/** Проверка «провайдер + модель» по каталогу (ADR-115). */
+export type ModalityModelLookup = (
+  provider: string,
+  model: string,
+) => Promise<ModalityModelCatalogEntry>;
+
+/**
+ * Собрать проверку каталога для `modalityModels` из портов «провайдеры» и
+ * «модели» (ключ модели — `<provider>/<model>`, как у модели по умолчанию).
+ * Одна реализация на core и backend — правила не разъедутся.
+ */
+export function createModalityModelLookup(stores: {
+  providers: DocumentRepository<ProviderConfig>;
+  models: DocumentRepository<ModelConfig>;
+}): ModalityModelLookup {
+  return async (provider, model) => {
+    const providerConfig = await stores.providers.load(provider);
+    if (!providerConfig) return { found: false, reason: 'provider' };
+    const modelConfig = await stores.models.load(`${provider}/${model}`);
+    if (!modelConfig) return { found: false, reason: 'model' };
+    return { found: true, modalities: modelConfig.modalities };
+  };
+}
+
+/** Что модель заявляет (для текста ошибки; пусто — ничего). */
+function describeModalities(modalities: readonly string[]): string {
+  return modalities.length > 0 ? modalities.join(', ') : 'ничего не заявлено';
+}
 
 /** Зависимости фабрики. */
 export interface AttachmentsSettingsDeps {
@@ -55,6 +113,11 @@ export interface AttachmentsSettingsDeps {
    * вложений и pruner'а): после PUT/DELETE обновляется без рестарта.
    */
   live?: LiveAttachmentsSettings;
+  /**
+   * Каталог моделей/провайдеров для проверки `modalityModels` (ADR-115).
+   * Не передан — проверка пропускается (урезанные сборки/тесты).
+   */
+  lookupModel?: ModalityModelLookup;
   /** Аудит изменений настроек (best-effort). */
   securityAudit?: SecurityAuditRepository;
   /** Актор (id пользователя) для записей аудита. */
@@ -78,14 +141,26 @@ export interface AttachmentsSettingsOptions {
   messages?: AttachmentsSettingsMessages;
 }
 
-const DEFAULT_INVALID_SETTINGS = 'attachments: некорректные настройки';
+/**
+ * Дефолтное сообщение об ошибке валидации: причина **всегда** включается —
+ * без неё админ не поймёт, какое поле и почему отклонено (в частности,
+ * несовместимая aux-модель в `modalityModels`).
+ */
+const DEFAULT_INVALID_SETTINGS = (detail: string) => `attachments: ${detail}`;
 const DEFAULT_ENV_LOCKED = (field: string) =>
   `attachments.${field}: задано через переменную окружения — изменение из UI недоступно`;
 
 /** Ответ GET/PUT/DELETE — контракт с UI. */
 export interface AttachmentsSettingsView {
+  /** Эффективные настройки (env > runtime > config > defaults). */
   attachments: AttachmentsSettings;
+  /** База без runtime и env (к чему вернёт `DELETE`). */
   defaults: AttachmentsSettings;
+  /**
+   * Сохранённый runtime-патч как есть (ADR-115): `null` в `modalityModels` —
+   * снятая настройка семейства. `{}` — runtime-значения нет.
+   */
+  saved: AttachmentsRuntimeSettings;
   isOverridden: boolean;
   source: ResolvedAttachmentsSettings['source'];
   envLocked: string[];
@@ -97,12 +172,12 @@ export interface AttachmentsSettingsView {
 /** Разбор PUT-тела: частичный патч секции `attachments`. */
 function validateAttachmentsSettings(
   value: unknown,
-): { ok: true; value: Partial<AttachmentsSettings> } | { ok: false; detail: string } {
+): { ok: true; value: AttachmentsRuntimeSettings } | { ok: false; detail: string } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return { ok: false, detail: 'ожидается объект настроек' };
   }
   const source = value as Record<string, unknown>;
-  const result: Partial<AttachmentsSettings> = {};
+  const result: AttachmentsRuntimeSettings = {};
 
   for (const [rawKey, rawValue] of Object.entries(source)) {
     const key = rawKey as keyof AttachmentsSettings;
@@ -124,7 +199,7 @@ function validateAttachmentsSettings(
           if (typeof enabled !== 'boolean') {
             return { ok: false, detail: `modalities.${modality}: ожидается boolean` };
           }
-          modalities[modality as (typeof MODALITY_KEYS)[number]] = enabled;
+          modalities[modality as AttachmentFamily] = enabled;
         }
         result.modalities = modalities as AttachmentsSettings['modalities'];
         break;
@@ -157,6 +232,53 @@ function validateAttachmentsSettings(
         result.allowedMimePrefixes = prefixes;
         break;
       }
+      case 'modalityModels': {
+        if (!rawValue || typeof rawValue !== 'object' || Array.isArray(rawValue)) {
+          return {
+            ok: false,
+            detail: `modalityModels: ожидается объект {${ATTACHMENT_FAMILIES.join(',')}}`,
+          };
+        }
+        const assignments: ModalityModelsRuntimePatch = {};
+        for (const [family, entry] of Object.entries(rawValue as Record<string, unknown>)) {
+          if (!(ATTACHMENT_FAMILIES as readonly string[]).includes(family)) {
+            return {
+              ok: false,
+              detail: `modalityModels.${family}: неизвестная модальность (ожидается ${ATTACHMENT_FAMILIES.join('|')})`,
+            };
+          }
+          const familyKey = family as AttachmentFamily;
+          // `null` — снять настройку семейства (ADR-115).
+          if (entry === null) {
+            assignments[familyKey] = null;
+            continue;
+          }
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+            return {
+              ok: false,
+              detail: `modalityModels.${family}: ожидается {provider, model} или null`,
+            };
+          }
+          const rawProvider = (entry as { provider?: unknown }).provider;
+          const rawModel = (entry as { model?: unknown }).model;
+          // Пустой объект — эквивалент `null` («обработка не настроена»).
+          if (rawProvider === undefined && rawModel === undefined) {
+            assignments[familyKey] = null;
+            continue;
+          }
+          const provider = typeof rawProvider === 'string' ? rawProvider.trim() : '';
+          const model = typeof rawModel === 'string' ? rawModel.trim() : '';
+          if (!provider || !model) {
+            return {
+              ok: false,
+              detail: `modalityModels.${family}: ожидаются непустые provider и model (или null для удаления)`,
+            };
+          }
+          assignments[familyKey] = { provider, model };
+        }
+        result.modalityModels = assignments;
+        break;
+      }
     }
   }
 
@@ -164,11 +286,52 @@ function validateAttachmentsSettings(
 }
 
 /**
+ * Проверить назначения aux-моделей по каталогу (ADR-115).
+ *
+ * Возвращает текст ошибки (что именно не так: модальность, модель, какие
+ * модальности у неё заявлены) или `undefined`. Частичных сохранений нет —
+ * вызов идёт **до** записи runtime-патча.
+ */
+async function validateModalityModels(
+  patch: ModalityModelsRuntimePatch,
+  lookup: ModalityModelLookup,
+): Promise<string | undefined> {
+  for (const family of ATTACHMENT_FAMILIES) {
+    if (!(family in patch)) continue;
+    const ref = patch[family];
+    if (!ref) continue; // null — снятие настройки, проверять нечего
+
+    const entry = await lookup(ref.provider, ref.model);
+    if (!entry.found) {
+      return entry.reason === 'provider'
+        ? `modalityModels.${family}: провайдер "${ref.provider}" не найден в каталоге`
+        : `modalityModels.${family}: модель "${ref.provider}/${ref.model}" не найдена в каталоге`;
+    }
+
+    const modalities = entry.modalities ?? [];
+    if (modalities.length === 0) {
+      return (
+        `modalityModels.${family}: у модели "${ref.provider}/${ref.model}" неизвестны модальности — ` +
+        'сначала синхронизируйте каталог (POST /api/v2/models/fetch) и повторите: без этого нельзя проверить, ' +
+        `принимает ли модель модальность ${family}`
+      );
+    }
+    if (!modalities.includes(family)) {
+      return (
+        `modalityModels.${family}: модель "${ref.provider}/${ref.model}" не принимает модальность ${family} ` +
+        `(заявленные модальности: ${describeModalities(modalities)})`
+      );
+    }
+  }
+  return undefined;
+}
+
+/**
  * Первое поле патча, заданное через env с другим значением (→ 409).
  * Сравнение — по эффективному значению (env уже применён).
  */
 function findEnvConflict(
-  patch: Partial<AttachmentsSettings>,
+  patch: AttachmentsRuntimeSettings,
   resolved: ResolvedAttachmentsSettings,
 ): string | undefined {
   const locked = new Set(resolved.envLocked);
@@ -194,7 +357,7 @@ export function createAttachmentsSettingsRoutes(
   const writeGuard = opts.writeGuard ?? auth.requireAuth;
   const invalidSettings =
     opts.messages?.invalidSettings ??
-    (() => DEFAULT_INVALID_SETTINGS);
+    ((_c: Context, detail: string) => DEFAULT_INVALID_SETTINGS(detail));
   const envLockedMessage =
     opts.messages?.envLocked ??
     ((_c: Context, field: string) => DEFAULT_ENV_LOCKED(field));
@@ -243,6 +406,7 @@ export function createAttachmentsSettingsRoutes(
     return {
       attachments: resolved.effective,
       defaults: defaults.effective,
+      saved: runtime,
       isOverridden: Object.keys(runtime).length > 0,
       source: resolved.source,
       envLocked: resolved.envLocked,
@@ -274,6 +438,21 @@ export function createAttachmentsSettingsRoutes(
         { error: { code: 'CONFLICT', message: envLockedMessage(c, conflict) } },
         409,
       );
+    }
+
+    // ADR-115: `modalityModels` проверяется по каталогу **до** записи —
+    // несовместимая aux-модель не должна сохраняться (частичных патчей нет).
+    if (deps.lookupModel) {
+      const detail = await validateModalityModels(
+        parsed.value.modalityModels ?? {},
+        deps.lookupModel,
+      );
+      if (detail) {
+        return c.json(
+          { error: { code: 'VALIDATION_ERROR', message: invalidSettings(c, detail) } },
+          400,
+        );
+      }
     }
 
     await deps.settingsStore.setAttachments(parsed.value);

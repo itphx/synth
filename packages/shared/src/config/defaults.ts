@@ -233,6 +233,10 @@ export const defaultConfig: SynthConfig = {
     maxBytesPerSession: 1024 * 1024 * 1024,
     allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
     workspaceFallback: true,
+    // ADR-115: модели обработки по семействам (aux-модели). Пусто — обработка
+    // не настроена: вложение, которое модель сессии не принимает, отбрасывается
+    // с путём в workspace (текущее поведение).
+    modalityModels: {},
     gcDays: 30,
   },
   metrics: {
