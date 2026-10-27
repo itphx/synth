@@ -1247,6 +1247,11 @@ export const dict = {
   'notify.background.subagentCompleted': 'Background subagent completed: {name}',
   'notify.background.subagentFailed': 'Background subagent failed: {name}',
   'notify.background.subagentCancelled': 'Background subagent stopped: {name}',
+  // ADR-111 §detach: moving a running run to the background.
+  'chat.background.move': 'Move to background',
+  'chat.background.hint': 'ctrl+b',
+  'notify.background.moved': 'Moved to background: {count}',
+  'notify.background.moveFailed': 'Failed to move to background',
   // ADR-112: notification about a user question (the session is not open).
   'notify.question.asked': 'Agent is waiting for an answer: {name}',
   'chat.notice.copy': 'Copy',

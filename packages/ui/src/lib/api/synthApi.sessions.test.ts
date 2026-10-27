@@ -301,3 +301,41 @@ describe('sessionsApi — sticky notes и оптимизация контекс�
     )
   })
 })
+
+describe('sessionsApi — перевод идущего прогона в фон (ADR-111 §detach)', () => {
+  it('backgroundSession: POST /background без тела, когда тип не задан', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ sessionId: 's1', detached: [] }))
+
+    const response = await synthApi.backgroundSession('s1')
+
+    const [, init] = fetchMock.mock.calls[0] as [string, Record<string, unknown>]
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v2/sessions/s1/background',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(init.body).toBeUndefined()
+    expect(response).toEqual({ sessionId: 's1', detached: [] })
+  })
+
+  it('backgroundSession: id кодируется, `type` уходит в тело', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      sessionId: 's 1',
+      detached: [{ id: 'child-1', kind: 'subagent', title: 'researcher' }],
+    }))
+
+    const response = await synthApi.backgroundSession('s 1', { type: 'subagent' })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v2/sessions/s%201/background',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ type: 'subagent' }) }),
+    )
+    expect(response.detached).toHaveLength(1)
+    expect(response.detached[0]).toMatchObject({ id: 'child-1', kind: 'subagent' })
+  })
+
+  it('backgroundSession: ошибка API пробрасывается с текстом detail', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ detail: 'detach unsupported', error: { code: 'DETACH_UNSUPPORTED' } }, 400))
+
+    await expect(synthApi.backgroundSession('s1')).rejects.toThrow('detach unsupported')
+  })
+})

@@ -1,13 +1,27 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
+
+const mocks = vi.hoisted(() => ({
+  backgroundSession: vi.fn(),
+}))
+
+vi.mock('@/lib/api/synthApi', () => ({
+  synthApi: { backgroundSession: mocks.backgroundSession },
+}))
+
+vi.mock('@/hooks/useNotification', () => ({
+  notifyMessage: vi.fn(),
+  useNotification: () => ({ notify: vi.fn() }),
+}))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import { StreamingPlaceholder } from './StreamingPlaceholder'
-import type { StreamState } from '@/stores/chatStore'
+import { type StreamState, type LiveToolCall } from '@/stores/chatStore'
+import { resetChatStore } from '@/stores/testUtils'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -32,6 +46,7 @@ function makeStream(partial: Partial<StreamState> = {}): StreamState {
 async function renderPlaceholder(
   stream: StreamState,
   locale: 'en' | 'ru' = 'en',
+  sessionId?: string,
 ): Promise<HTMLElement> {
   useI18nStore.setState({
     locale,
@@ -45,7 +60,7 @@ async function renderPlaceholder(
   await act(async () => {
     root.render(
       <I18nProvider>
-        <StreamingPlaceholder stream={stream} onStop={() => {}} />
+        <StreamingPlaceholder stream={stream} sessionId={sessionId} onStop={() => {}} />
       </I18nProvider>,
     )
   })
@@ -153,5 +168,101 @@ describe('StreamingPlaceholder — live-статистика (ADR-070 §2.6)', (
     const text = el.textContent ?? ''
     expect(text).toContain('~ 0.05 ₽')
     expect(text).not.toContain('~ 0.05 $')
+  })
+})
+
+/** Live-тул-вызов для строки активности хода. */
+function makeLiveCall(partial: Partial<LiveToolCall>): LiveToolCall {
+  return {
+    callId: 'call-1',
+    name: 'task',
+    args: {},
+    status: 'running',
+    startedAt: '2026-10-27T00:00:00.000Z',
+    iteration: 0,
+    ...partial,
+  }
+}
+
+describe('StreamingPlaceholder — «В фон» (ADR-111 §detach)', () => {
+  beforeEach(() => {
+    mocks.backgroundSession.mockReset()
+    mocks.backgroundSession.mockResolvedValue({
+      sessionId: 's1',
+      detached: [{ id: 'child-1', kind: 'subagent' }],
+    })
+    resetChatStore()
+  })
+
+  it('running task → кнопка есть; клик переводит все прогоны сессии (без type)', async () => {
+    const container = await renderPlaceholder(
+      makeStream({ toolCalls: [makeLiveCall({ name: 'task' })] }),
+      'en',
+      's1',
+    )
+    const button = container.querySelector('button[aria-label="Move to background"]')
+    expect(button).not.toBeNull()
+
+    await act(async () => {
+      ;(button as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(mocks.backgroundSession).toHaveBeenCalledTimes(1)
+    expect(mocks.backgroundSession).toHaveBeenCalledWith('s1', undefined)
+  })
+
+  it('running execute_shell → кнопка есть', async () => {
+    const container = await renderPlaceholder(
+      makeStream({ toolCalls: [makeLiveCall({ name: 'execute_shell' })] }),
+      'en',
+      's1',
+    )
+    expect(container.querySelector('button[aria-label="Move to background"]')).not.toBeNull()
+  })
+
+  it('running read_file (не блокирующий прогон) → кнопки нет', async () => {
+    const container = await renderPlaceholder(
+      makeStream({ toolCalls: [makeLiveCall({ name: 'read_file' })] }),
+      'en',
+      's1',
+    )
+    expect(container.querySelector('button[aria-label="Move to background"]')).toBeNull()
+  })
+
+  it('завершённый task (status done) → кнопки нет', async () => {
+    const container = await renderPlaceholder(
+      makeStream({ toolCalls: [makeLiveCall({ name: 'task', status: 'done' })] }),
+      'en',
+      's1',
+    )
+    expect(container.querySelector('button[aria-label="Move to background"]')).toBeNull()
+  })
+
+  it('без sessionId кнопки нет (некуда слать запрос)', async () => {
+    const container = await renderPlaceholder(
+      makeStream({ toolCalls: [makeLiveCall({ name: 'task' })] }),
+      'en',
+    )
+    expect(container.querySelector('button[aria-label="Move to background"]')).toBeNull()
+  })
+
+  it('ход не стримит → кнопки нет', async () => {
+    const container = await renderPlaceholder(
+      makeStream({ isStreaming: false, toolCalls: [makeLiveCall({ name: 'task' })] }),
+      'en',
+      's1',
+    )
+    expect(container.querySelector('button[aria-label="Move to background"]')).toBeNull()
+  })
+
+  it('ru-локаль: подпись/подсказка локализованы', async () => {
+    const container = await renderPlaceholder(
+      makeStream({ toolCalls: [makeLiveCall({ name: 'task' })] }),
+      'ru',
+      's1',
+    )
+    const button = container.querySelector('button[aria-label="В фон"]') as HTMLElement | null
+    expect(button).not.toBeNull()
+    expect(button!.title).toContain('ctrl+b')
   })
 })

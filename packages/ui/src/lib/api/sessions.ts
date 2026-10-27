@@ -112,6 +112,37 @@ export interface StickyNoteData {
   disabled: boolean
 }
 
+/** Вид блокирующего прогона, который можно перевести в фон (ADR-111 §detach). */
+export type BackgroundDetachKind = 'subagent' | 'process'
+
+/** Переведённый в фон прогон в ответе `POST /sessions/:id/background`. */
+export interface BackgroundDetachItem {
+  /** id прогона (для `subagent` — id дочерней сессии). */
+  id: string
+  kind: BackgroundDetachKind
+  /** Человеческое имя прогона (команда шелла / описание саб-агента), если известно. */
+  title?: string
+}
+
+/** Прогон, который перевести не удалось (ответ `POST /sessions/:id/background`). */
+export interface BackgroundDetachFailure {
+  id: string
+  kind: BackgroundDetachKind
+  /** Код отказа (`DETACH_UNSUPPORTED`, ...). */
+  code: string
+  message?: string
+}
+
+/**
+ * Ответ `POST /sessions/:id/background` (ADR-111 §detach): пустой `detached` —
+ * штатный исход «нечего переводить», а не ошибка.
+ */
+export interface BackgroundSessionResponse {
+  sessionId: string
+  detached: BackgroundDetachItem[]
+  failed?: BackgroundDetachFailure[]
+}
+
 /** ADR-070 §2.5: ответ GET /sessions/:id/prompt — состав системного промпта. */
 export interface PromptInfoResponse {
   manifest: PromptManifest
@@ -281,6 +312,24 @@ export const sessionsApi = {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/abort`, {
       method: 'POST',
     })
+  },
+
+  /**
+   * ADR-111 §detach: перевести идущие блокирующие прогоны сессии в фон.
+   * Тело необязательно — без `type` переводятся все (саб-агенты и шелл);
+   * пустой `detached` в ответе — «нечего переводить» (не ошибка).
+   */
+  async backgroundSession(
+    sessionId: string,
+    opts?: { type?: BackgroundDetachKind },
+  ): Promise<BackgroundSessionResponse> {
+    return fetchJSON<BackgroundSessionResponse>(
+      `${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/background`,
+      {
+        method: 'POST',
+        ...(opts?.type ? { body: JSON.stringify({ type: opts.type }) } : {}),
+      },
+    )
   },
 
   // API v2: возобновить прерванную/ошибочную дочернюю сессию саб-агента (202, выполнение фоновое)

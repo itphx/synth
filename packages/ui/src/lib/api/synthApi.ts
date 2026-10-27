@@ -63,6 +63,12 @@ export type {
 } from './projects'
 export type { SessionData, StickyNoteData, PromptInfoResponse } from './sessions'
 export type { SessionWorktreeBinding } from './sessions'
+export type {
+  BackgroundDetachFailure,
+  BackgroundDetachItem,
+  BackgroundDetachKind,
+  BackgroundSessionResponse,
+} from './sessions'
 export type { MessageListResponse } from './messages'
 export type {
   WorkspaceRootResponse,

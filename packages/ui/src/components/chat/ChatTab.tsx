@@ -18,6 +18,7 @@ import { QuestionDock } from './QuestionDock'
 import { StickyNotesPanel } from './StickyNotesPanel'
 import { StreamErrorPanel } from './StreamErrorPanel'
 import { SubagentResumeBar, type SubagentSessionError } from './SubagentResumeBar'
+import { useBackgroundHotkey } from './useBackgroundHotkey'
 import type { CenterTab } from '@/stores/useUIStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useAttachmentsStore, type RestorableAttachment } from '@/stores/attachmentsStore'
@@ -112,6 +113,10 @@ export function ChatTab({ tab }: ChatTabProps) {
   const finalError = finalErrorBySession[sessionId] || null
   const isStreaming = Object.values(streams).some((s) => s.isStreaming)
   const hasActiveStream = Object.values(streams).some((s) => s.isStreaming)
+
+  // ADR-111 §detach: `ctrl+b` переводит все блокирующие прогоны активной сессии
+  // в фон — только пока ход идёт (вне стрима переводить нечего).
+  useBackgroundHotkey(sessionId, isStreaming)
   const isEmpty = messages.length === 0 && !hasActiveStream && pending.length === 0 && !summarizationPending
   const debugMessage = debugModalSessionId && debugModalMessageIndex != null
     ? messages.find((m) => m.index === debugModalMessageIndex) ?? null

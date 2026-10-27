@@ -336,6 +336,12 @@ interface ChatStore {
   addToolCall: (sessionId: string, streamId: string, tc: LiveToolCall) => void
   updateToolCallResult: (sessionId: string, streamId: string, callId: string, result: { content: string; isError?: boolean; metadata?: Record<string, unknown> }) => void
   updateToolCallSubagentProgress: (sessionId: string, streamId: string, callId: string, patch: { reasoning?: string; content?: string; iteration?: number }) => void
+  /**
+   * ADR-111 §detach: переведённые в фон блокирующие прогоны (`task`/`execute_shell`)
+   * больше не ждут в активном ходе. `callIds` не заданы — снимаются все running
+   * парты этих тулов сессии (то, что переводит кнопка хода и `ctrl+b`).
+   */
+  dropDetachedToolCalls: (sessionId: string, callIds?: string[]) => void
   finishStream: (sessionId: string, streamId: string, metadata: StreamDoneMetadata) => void
   cancelStream: (sessionId: string, streamId: string, status?: MessageStatus, extra?: {
     usage?: UsageData
@@ -711,6 +717,30 @@ export const useChatStore = create<ChatStore>((set) => ({
       updated[idx] = { ...tc, subagentReasoningBlocks: reasoningBlocks, subagentIntermediateTextBlocks: intermediateTextBlocks }
       sessionStreams[streamId] = { ...existing, toolCalls: updated }
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
+    }),
+
+  dropDetachedToolCalls: (sessionId, callIds) =>
+    set((s) => {
+      const sessionStreams = s.streamingBySession[sessionId]
+      if (!sessionStreams) return s
+      const targets = callIds && callIds.length > 0 ? new Set(callIds) : null
+      let changed = false
+      const nextStreams: Record<string, StreamState> = {}
+      for (const [streamId, streamState] of Object.entries(sessionStreams)) {
+        const toolCalls = streamState.toolCalls.filter((tc) =>
+          targets
+            ? !targets.has(tc.callId)
+            : !(tc.status === 'running' && (tc.name === 'task' || tc.name === 'execute_shell')),
+        )
+        if (toolCalls.length === streamState.toolCalls.length) {
+          nextStreams[streamId] = streamState
+          continue
+        }
+        changed = true
+        nextStreams[streamId] = { ...streamState, toolCalls }
+      }
+      if (!changed) return s
+      return { streamingBySession: { ...s.streamingBySession, [sessionId]: nextStreams } }
     }),
 
   finishStream: (sessionId, streamId, metadata) =>

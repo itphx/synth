@@ -253,6 +253,7 @@ export function MessageList({
             <StreamingPlaceholder
               key={stream.streamId}
               stream={stream}
+              sessionId={sessionId}
               onStop={onStop}
               retry={retry?.streamId === stream.streamId ? retry : null}
               onRetryNow={onRetryNow}

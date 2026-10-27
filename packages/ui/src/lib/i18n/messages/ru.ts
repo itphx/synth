@@ -1227,6 +1227,11 @@ export const dict = {
   'notify.background.subagentCompleted': 'Фоновый саб-агент завершён: {name}',
   'notify.background.subagentFailed': 'Фоновый саб-агент завершился с ошибкой: {name}',
   'notify.background.subagentCancelled': 'Фоновый саб-агент остановлен: {name}',
+  // ADR-111 §detach: перевод идущего прогона в фон.
+  'chat.background.move': 'В фон',
+  'chat.background.hint': 'ctrl+b',
+  'notify.background.moved': 'Переведено в фон: {count}',
+  'notify.background.moveFailed': 'Не удалось перевести в фон',
   // ADR-112: уведомление о вопросе пользователю (сессия не открыта).
   'notify.question.asked': 'Агент ждёт ответа: {name}',
   'chat.notice.copy': 'Копировать',

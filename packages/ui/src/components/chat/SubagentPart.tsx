@@ -5,6 +5,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/chatStore'
 import { notifyMessage } from '@/hooks/useNotification'
 import { synthApi } from '@/lib/api/synthApi'
+import { moveSessionToBackground } from '@/lib/backgroundDetach'
 import { MarkdownContent } from './MarkdownContent'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
@@ -40,6 +41,11 @@ export interface SubagentPartData {
   callId?: string
   /** true для live-блока (идёт стрим) — retry-статус актуален только в нём. */
   live?: boolean
+  /**
+   * ADR-111 §detach: прогон саб-агента ещё идёт — в шапке доступна кнопка
+   * «В фон». Для исторических (завершённых) блоков не выставляется.
+   */
+  running?: boolean
   errorInfo?: SubagentErrorInfo
   reasoning_blocks?: Array<{ text: string; iteration: number }>
   intermediate_text_blocks?: Array<{ text: string; iteration: number }>
@@ -51,6 +57,9 @@ export interface SubagentPartData {
 export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
   const { t } = useI18n()
   const [expanded, setExpanded] = useState(false)
+  // ADR-111 §detach: запрос перевода в фон — в полёте / уже переведён.
+  const [detaching, setDetaching] = useState(false)
+  const [detached, setDetached] = useState(false)
 
   // Состояния retry/resume привязаны к сессии открытой вкладки (родитель или ребёнок).
   const activeTab = useUIStore((s) => s.centerTabs.find((tb) => tb.id === s.activeCenterTabId))
@@ -134,6 +143,28 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
     })
   }
 
+  /**
+   * ADR-111 §detach: перевести идущий прогон в фон. Запрос — к сессии открытого
+   * чата (владельцу блокирующего вызова `task`), а не к дочерней сессии саб-агента:
+   * переводится именно текущий ход родителя.
+   */
+  const handleBackground = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!sid || detaching || detached) return
+    setDetaching(true)
+    void moveSessionToBackground(sid, {
+      type: 'subagent',
+      callIds: subagent.callId ? [subagent.callId] : undefined,
+    })
+      .then((response) => {
+        if (response) setDetached(true)
+      })
+      .finally(() => setDetaching(false))
+  }
+
+  // Кнопка «В фон» — только у идущего прогона и только когда известна сессия-владелец.
+  const canDetach = subagent.running === true && !!sid && !detached
+
   const errorRecoverable = isRecoverableErrorType(subagent.errorInfo?.errorType)
   const errorAttemptsLabel = subagent.errorInfo?.attempts != null
     ? t('chat.subagent.errorAttempts', {
@@ -163,16 +194,33 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
             {shortSessionId}
           </span>
         )}
-        {subagent.sessionId && (
-          <button
-            type="button"
-            className="ml-auto inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[0.625rem] text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 transition-colors cursor-pointer"
-            onClick={handleOpenSession}
-            title={subagent.sessionId}
-          >
-            <Icon name="external-link" className="size-3" />
-            {t('chat.subagent.open')}
-          </button>
+        {(canDetach || subagent.sessionId) && (
+          <span className="ml-auto inline-flex items-center gap-1">
+            {canDetach && (
+              <button
+                type="button"
+                disabled={detaching}
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[0.625rem] text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-default disabled:hover:bg-transparent"
+                onClick={handleBackground}
+                title={t('chat.background.hint')}
+                aria-label={t('chat.background.move')}
+              >
+                <Icon name="download" className="size-3" />
+                {t('chat.background.move')}
+              </button>
+            )}
+            {subagent.sessionId && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[0.625rem] text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 transition-colors cursor-pointer"
+                onClick={handleOpenSession}
+                title={subagent.sessionId}
+              >
+                <Icon name="external-link" className="size-3" />
+                {t('chat.subagent.open')}
+              </button>
+            )}
+          </span>
         )}
         {subagent.steps != null && (
           <span className="text-[0.625rem] text-muted-foreground/60">

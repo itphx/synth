@@ -1,4 +1,4 @@
-import { Fragment } from 'react'
+import { Fragment, useState } from 'react'
 import { cn, resolveColor } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { useAgentsStore } from '@/stores/agentsStore'
@@ -9,6 +9,7 @@ import { ToolCallPart } from './ToolCallPart'
 import { SubagentPart, type SubagentPartData } from './SubagentPart'
 import { MarkdownContent } from './MarkdownContent'
 import { buildUsageSegments } from '@/lib/statsSegments'
+import { moveSessionToBackground } from '@/lib/backgroundDetach'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { RetryStatus } from './RetryStatus'
@@ -51,6 +52,8 @@ function toSubagentPartData(node: ToolCallNode): SubagentPartData {
     sessionId: meta.child_session_id as string | undefined,
     callId: node.call.callId,
     live: true,
+    // ADR-111 §detach: пока вызов `task` не завершён — прогон идёт, «В фон» доступна.
+    running: node.call.status === 'running',
     errorInfo: {
       isError: node.call.result?.isError === true || meta.error === true,
       attempts: meta.attempts as number | undefined,
@@ -146,17 +149,35 @@ function buildTimeline(
 interface StreamingPlaceholderProps {
   stream: StreamState
   onStop: () => void
+  /** Сессия-владелец хода: нужна кнопке «В фон» (ADR-111 §detach). */
+  sessionId?: string
   /** Статус повторной попытки: показываем вместо «крутилки» */
   retry?: StreamRetry | null
   onRetryNow?: () => void
   onCancelRetry?: () => void
 }
 
-export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCancelRetry }: StreamingPlaceholderProps) {
+export function StreamingPlaceholder({ stream, onStop, sessionId, retry, onRetryNow, onCancelRetry }: StreamingPlaceholderProps) {
   const agents = useAgentsStore((s) => s.agents)
   const providers = useProvidersStore((s) => s.providers)
   const { t } = useI18n()
   const intermediateTextMode = useUIStore((s) => s.intermediateTextDisplay)
+
+  // ADR-111 §detach: «В фон» одной кнопкой на весь ход — только когда есть что
+  // переводить (running `task`/`execute_shell`) и ход ещё идёт.
+  const [detaching, setDetaching] = useState(false)
+  const detachTargets = (stream.toolCalls || []).filter(
+    (call) => call.status === 'running' && (call.name === 'task' || call.name === 'execute_shell'),
+  )
+  const canDetach = stream.isStreaming && !!sessionId && detachTargets.length > 0
+
+  const handleBackground = () => {
+    if (!sessionId || detaching) return
+    setDetaching(true)
+    void moveSessionToBackground(sessionId, {
+      callIds: detachTargets.map((call) => call.callId),
+    }).finally(() => setDetaching(false))
+  }
 
   const isSummary = stream.agentRole === 'summary'
   const isDebug = stream.agentRole === 'debug'
@@ -301,6 +322,17 @@ export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCanc
                       ))}
                     </div>
                   </StatsPopoverButton>
+                )}
+                {canDetach && (
+                  <button
+                    onClick={handleBackground}
+                    disabled={detaching}
+                    title={`${t('chat.background.move')} (${t('chat.background.hint')})`}
+                    aria-label={t('chat.background.move')}
+                    className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
+                  >
+                    <Icon name="download" className="size-3.5" />
+                  </button>
                 )}
                 <button
                   onClick={onStop}

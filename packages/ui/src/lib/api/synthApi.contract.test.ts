@@ -10,7 +10,7 @@ import { synthApi } from './synthApi'
  */
 const EXPECTED_API_METHODS = [
   'addMcpRegistryEntry', 'addSessionReference', 'addStickyNote', 'answer', 'applyMigrations', 'approvePack', 'approvePlugin', 'auditRevealed',
-  'backupDownloadUrl', 'batchMessages', 'bindOAuthCredential', 'bindWorktree', 'browseWorkspaceRoot', 'cancel', 'cancelPipelineRun', 'cancelQueueRetry', 'cancelRestore',
+  'backgroundSession', 'backupDownloadUrl', 'batchMessages', 'bindOAuthCredential', 'bindWorktree', 'browseWorkspaceRoot', 'cancel', 'cancelPipelineRun', 'cancelQueueRetry', 'cancelRestore',
   'cancelSummarization', 'checkEgress', 'checkProxy',
   'checkUpdate', 'claimIdentity', 'clearAudit', 'clearProfilePassword', 'clearProxyPassword', 'clearQueue', 'clearSession',
   'clearWorkspacePolicy', 'cloneGitRepo', 'consolidateMemory', 'createAgentSshKey', 'createBackup', 'createDirectory',
@@ -76,7 +76,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (350)', () => {
+  it('набор методов совпадает с зафиксированным (351)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 
