@@ -1310,6 +1310,20 @@ export const dict = {
   'chat.footer.collapse': 'Свернуть',
   'chat.footer.mode': 'Режим',
 
+  // Вложения (ADR-115)
+  'chat.attachments.attach': 'Прикрепить файл',
+  'chat.attachments.remove': 'Удалить',
+  'chat.attachments.removeNamed': 'Удалить «{name}»',
+  'chat.attachments.retry': 'Повторить загрузку',
+  'chat.attachments.uploading': 'Загрузка…',
+  'chat.attachments.error.upload': 'Не удалось загрузить файл',
+  'chat.attachments.error.tooLarge': 'Файл больше {max}',
+  'chat.attachments.error.tooMany': 'Не больше {max} файлов в сообщении',
+  'chat.attachments.gallery.close': 'Закрыть',
+  'chat.attachments.gallery.prev': 'Предыдущее изображение',
+  'chat.attachments.gallery.next': 'Следующее изображение',
+  'chat.attachments.gallery.counter': '{index} / {total}',
+
   // Plan/Act режим сессии (ADR-025)
   'chat.mode.title': 'Режим сессии: План (только чтение) / Действия (полный доступ) / YOLO (автоподтверждение)',
   'chat.mode.plan': 'План',

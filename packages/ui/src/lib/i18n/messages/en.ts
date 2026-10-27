@@ -1330,6 +1330,20 @@ export const dict = {
   'chat.footer.collapse': 'Collapse',
   'chat.footer.mode': 'Mode',
 
+  // Attachments (ADR-115)
+  'chat.attachments.attach': 'Attach file',
+  'chat.attachments.remove': 'Remove',
+  'chat.attachments.removeNamed': 'Remove “{name}”',
+  'chat.attachments.retry': 'Retry upload',
+  'chat.attachments.uploading': 'Uploading…',
+  'chat.attachments.error.upload': 'Failed to upload the file',
+  'chat.attachments.error.tooLarge': 'File is larger than {max}',
+  'chat.attachments.error.tooMany': 'No more than {max} files per message',
+  'chat.attachments.gallery.close': 'Close',
+  'chat.attachments.gallery.prev': 'Previous image',
+  'chat.attachments.gallery.next': 'Next image',
+  'chat.attachments.gallery.counter': '{index} / {total}',
+
   // Session Plan/Act mode (ADR-025)
   'chat.mode.title': 'Session mode: Plan (read-only) / Act (full access) / YOLO (auto-approve)',
   'chat.mode.plan': 'Plan',
