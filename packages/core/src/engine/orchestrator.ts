@@ -1,5 +1,5 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentsConfig, ModelConfig } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir, stat } from 'node:fs/promises';
@@ -9,7 +9,8 @@ import { DebugCollector } from '../debug.js';
 
 import { computeUsageCost } from '../providers/usage.js';
 
-import type { LLMMessage, CancellationToken, BaseProvider, SystemPromptPayload, CachePolicy } from '../providers/base.js';
+import type { LLMMessage, LLMAttachment, CancellationToken, BaseProvider, SystemPromptPayload, CachePolicy } from '../providers/base.js';
+import { ProviderFactory } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import type { ContextOptimizerGatewayHooks } from './context/optimizer.js';
@@ -58,6 +59,7 @@ import { WorktreeDirectoryMissingError } from './worktree/errors.js';
 import type { WorktreeService } from './worktree/service.js';
 // ADR-115: гидратация вложений сообщений (blob → base64) перед LLM-вызовом.
 import { createHydrateDeps, hydrateMessageAttachments, type DroppedAttachmentRef, type HydrateDeps } from './attachments/hydrate.js';
+import { deriveModalityText } from './attachments/derive.js';
 import { materializeAttachment } from './attachments/materialize.js';
 import { AttachmentService } from './attachments/service.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
@@ -73,7 +75,7 @@ import { ActiveRunRegistry } from './background/active-runs.js';
 import type { ProcessService } from './processes/service.js';
 import type { BlobRefRepository } from '../storage/ports/blob-ref-repository.js';
 
-import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, refreshRuntimeDeps, type RuntimeDeps } from './tools/runtime-deps.js';
+import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, isFfmpegAvailable, refreshRuntimeDeps, type RuntimeDeps } from './tools/runtime-deps.js';
 import { InlineExecutionPort } from '../execution/inline-execution-port.js';
 import type { ExecutionPort } from '../execution/ports/index.js';
 import { getToolTrust } from './security/trust.js';
@@ -109,6 +111,8 @@ import { runProcessEarly, type ProcessEarlyDeps } from './orchestrator/phases/pr
 import { runProcessFinalize, type ProcessFinalizeDeps } from './orchestrator/phases/process-finalize.js';
 import { runProcessSetup, withoutMemoryPluginTools, type ProcessSetupDeps, type MemoryContextEntry } from './orchestrator/phases/process-setup.js';
 import type { AnalyticsRecorder } from '../analytics/recorder.js';
+import { sessionAxes } from '../analytics/recorder.js';
+import { toCoreProviderConfig } from './router/index.js';
 
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
 /** Порог заполненности контекстного окна (%), после которого публикуем context.limit_warning. */
@@ -719,6 +723,12 @@ export class ChatOrchestrator {
    * blob-порта, как гидратация: отдельный экземпляр не создаёт состояния).
    */
   private _attachmentService: AttachmentService | null = null;
+  /**
+   * ADR-115: blob-порт для обработки вложения aux-моделью (кэш результата и
+   * производные объекты). Тот же порт, что у гидратации; фоллбэк по `dataDir`
+   * создаётся один раз.
+   */
+  private _attachmentBlobs: BlobStore | null = null;
   /**
    * ADR-114: сервис worktree'ов (null — не задан: тулы `git_worktree_*`
    * недоступны).
@@ -2122,8 +2132,172 @@ export class ChatOrchestrator {
     return this._contextConfig?.getAttachmentsDroppedTemplate(language) ?? '';
   }
 
+  /**
+   * ADR-115: blob-порт обработки вложения (кэш результата aux-модели и
+   * производные объекты). Тот же порт, что у гидратации; фоллбэк по `dataDir`
+   * — только для тестов/прямого конструирования без порта.
+   */
+  private _resolveAttachmentBlobs(): BlobStore {
+    if (!this._attachmentBlobs) {
+      this._attachmentBlobs = this._blobs
+        ?? createFileStorage({ dataDir: this._dataDir, env: process.env }).blobs;
+    }
+    return this._attachmentBlobs;
+  }
+
+  /**
+   * ADR-115 §«Модели обработки по модальностям»: колбэк обработки вложения
+   * aux-моделью для гидратации (native → aux-текст → отброс).
+   *
+   * Модель сессии **не меняется**: aux — отдельный вызов через
+   * `GatewayProvider` (ADR-036), а в диалог попадает текст результата. Модель
+   * обработки резолвится по семейству из live-настроек
+   * (`attachments.modalityModels`), поэтому включение/смена модели в админке
+   * действует без рестарта. Настройки нет — `undefined` (прежний путь
+   * «отброшено + материализация»).
+   *
+   * Ошибки не пробрасываются: `null` + предупреждение в лог — гидратация тогда
+   * идёт обычным путём отброса (ход не падает).
+   */
+  private _buildAttachmentDerive(
+    session: Session | undefined,
+    language: string,
+  ): ((input: {
+    blobPath: string;
+    mime: string;
+    name?: string;
+    family: AttachmentFamily;
+  }) => Promise<string | null>) | undefined {
+    const configured = this._attachmentsConfig?.().modalityModels;
+    if (!configured || Object.keys(configured).length === 0) return undefined;
+
+    return async (input) => {
+      // Резолвим на каждом вызове: семейство могло быть снято/переназначено
+      // после включения настройки (live-резолвер, без рестарта).
+      const target = this._attachmentsConfig?.().modalityModels?.[input.family];
+      if (!target) return null;
+
+      try {
+        const sharedConfig = this._providerLoader(target.provider);
+        if (!sharedConfig) {
+          warning(
+            'ATTACHMENTS',
+            `Модель обработки "${target.provider}/${target.model}" не найдена (семейство ${input.family})`,
+          );
+          return null;
+        }
+        const rawProvider = ProviderFactory.create(
+          target.provider,
+          toCoreProviderConfig(sharedConfig, target.model),
+        );
+        // Инвариант 3: LLM-вызов только через GatewayProvider. Обёртка с
+        // привязкой к сессии (карта обфускации/аудит), без сессии — пул-вариант.
+        const provider = session
+          ? this._wrapWithGateway(rawProvider, session)
+          : this.wrapProviderWithGateway(rawProvider);
+
+        // Часть собирает тот же сервис, что и загрузку: blobPath/mime/имя +
+        // sidecar-метаданные (для видео — длительность кадров).
+        const built = await this._getAttachmentService().buildMediaPart(input.blobPath);
+        if (!built) {
+          warning('ATTACHMENTS', `Вложение ${input.blobPath} не разрешено для обработки`);
+          return null;
+        }
+        // `hasFfmpeg` в derive синхронный: пробу через порт (ADR-077) делаем
+        // заранее — она кэшируется по инстансу порта на TTL.
+        const hasFfmpeg = await isFfmpegAvailable(this._executionPort).catch(() => false);
+        const blobs = this._resolveAttachmentBlobs();
+        const result = await deriveModalityText(
+          {
+            family: input.family,
+            mime: input.mime,
+            ...(input.name ? { name: input.name } : {}),
+            blobPath: input.blobPath,
+            part: makeMediaPart(built.type, built.data),
+            provider: target.provider,
+            model: target.model,
+            language: language === 'en' ? 'en' : 'ru',
+          },
+          {
+            blobs,
+            blobsRead: (path) => blobs.read(path),
+            hasFfmpeg: () => hasFfmpeg,
+            promptTemplate: (lang) => this._contextConfig?.getMediaDeriveTemplate(lang) ?? '',
+            log: (message) => warning('ATTACHMENTS', message),
+            chat: async (parts, prompt) => {
+              const attachments: LLMAttachment[] = [];
+              for (const part of parts) {
+                const data = part.data as Partial<MediaPartData> | undefined;
+                if (!data || typeof data.blobPath !== 'string' || data.blobPath === '') continue;
+                const bytes = await blobs.read(data.blobPath);
+                if (!bytes) continue;
+                attachments.push({
+                  mime: typeof data.mime === 'string' ? data.mime : 'application/octet-stream',
+                  ...(typeof data.name === 'string' && data.name ? { name: data.name } : {}),
+                  base64: bytes.toString('base64'),
+                });
+              }
+              if (attachments.length === 0) {
+                throw new Error('aux-вызов: нет читаемых частей вложения');
+              }
+              const response = await provider.chat([{
+                id: 'attachment-derive',
+                role: 'user',
+                content: prompt,
+                attachments,
+                usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                disabled: false,
+                pinned: false,
+                branchId: '',
+              }]);
+              // Учёт расхода aux-вызова (ADR-102): отдельный бакет по осям
+              // aux-модели — не смешивается с моделью сессии.
+              this._recordDeriveUsage(session, target, response.usage);
+              return { text: response.content };
+            },
+          },
+        );
+        return result.ok ? result.text : null;
+      } catch (err) {
+        warning(
+          'ATTACHMENTS',
+          `Обработка вложения ${input.blobPath} (${input.family}) не удалась: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return null;
+      }
+    };
+  }
+
+  /**
+   * ADR-102: расход aux-вызова обработки вложения (best-effort).
+   *
+   * Отдельная запись `usage` с осями aux-модели (`provider`/`model`) —
+   * стоимость видна в аналитике и не приписывается модели сессии. Счётчики
+   * сессии (`Session.inputTokens`/… ) не трогаем: это не токены её сообщения.
+   */
+  private _recordDeriveUsage(
+    session: Session | undefined,
+    ref: { provider: string; model: string },
+    usage: TokenUsage | undefined,
+  ): void {
+    if (!this._analytics?.enabled || !usage) return;
+    try {
+      const cost = this._computeMessageCost(ref.model, usage);
+      void this._analytics.recordUsage({
+        ...sessionAxes(session ?? null),
+        provider: ref.provider,
+        model: ref.model,
+        usage,
+        requests: 1,
+        ...(cost ? { costByCurrency: { [cost.currency]: cost.costUsd } } : {}),
+      });
+    } catch {
+      // best-effort: аналитика не должна ломать обработку вложения
+    }
+  }
+
   /** ADR-095 (шаг 6b-1): зависимости вынесенной подготовки запроса `_processMessage`. */
-  private _processSetupDeps(): ProcessSetupDeps {
+  private _processSetupDeps(session?: Session): ProcessSetupDeps {
     return {
       routeProvider: (session, message, reasoningLevel, debugCollector) =>
         this._routeProvider(session, message, reasoningLevel, debugCollector),
@@ -2171,9 +2345,19 @@ export class ChatOrchestrator {
       // `false` — файл не сохраняем, в блоке остаётся только причина.
       hydrateAttachments: (messages, source, target) => {
         const workspaceFallback = this._attachmentsConfig?.().workspaceFallback !== false;
+        const modalities = this._resolveModalities?.(target.providerName, target.modelId);
+        // ADR-115: модальность не принята — сначала aux-модель семейства, и
+        // только затем прежний путь (отброс + материализация). Не настроено —
+        // `undefined` (derive не вызывается).
+        const derive = this._buildAttachmentDerive(session, target.language);
         return hydrateMessageAttachments(messages, source, this._getAttachmentHydrateDeps(), {
-          modalities: this._resolveModalities?.(target.providerName, target.modelId),
+          modalities,
           noticeTemplate: this._attachmentsDroppedTemplate(target.language),
+          // Модель сессии и её модальности — для блока «не доставлено»: модель
+          // видит, чего не хватает, и может предложить другую (тул `list_models`).
+          modelLabel: `${target.providerName}/${target.modelId}`,
+          ...(modalities && modalities.length > 0 ? { modelModalities: modalities } : {}),
+          ...(derive ? { derive } : {}),
           // Пустой `workingDir` (workspace не готов) — материализация вернёт null:
           // путь модели не сообщается.
           ...(workspaceFallback
@@ -3100,7 +3284,7 @@ export class ChatOrchestrator {
         session, message, signal, streamStartedAt, debugCollector, streamId,
         projectForState, workingDir, workspaceReady, agentDef, effectiveAgentRole,
         effectiveReasoningLevel, sessionMode, planMode, planApproved, author, attempt,
-      }, this._processSetupDeps());
+      }, this._processSetupDeps(session));
       if (setup.failed) return setup.result;
       const {
         provider, providerName, modelName, routingDecision, language,
@@ -3131,6 +3315,16 @@ export class ChatOrchestrator {
       let fallbackI18n: ReturnType<typeof i18nMeta> | undefined;
       /** Были ли deny-отказы за цикл (для осмысленного fallback пустого ответа). */
       let hadDeny = false;
+      /**
+       * Был ли отказ именно **ролевой** (`matchedRule: 'role.unavailable'`):
+       * тул не для этого агента, а не нарушение политики. Такой отказ
+       * останавливает ход после текущей итерации — следующая LLM-итерация
+       * бессмысленна (модель не получит новых прав), а финальный текст
+       * объясняет делегацию через `@`.
+       */
+      let roleBlocked = false;
+      let roleBlockedTool: string | undefined;
+      let roleBlockedAgent: string | undefined;
       /** Отмена до финального сохранения (до входа в итерацию, во время тула) —
        *  завершать обработку как отмену, а не как пустой ответ. */
       let cancelledBeforeFinal = false;
@@ -3782,6 +3976,15 @@ export class ChatOrchestrator {
               params: permissionDecision.params as Record<string, string> | undefined,
             });
             hadDeny = true;
+            // ADR-070 §2.9.1: ролевой отказ — не инцидент ИБ, а «инструмент не
+            // для этого агента». Повторные вызовы и следующая итерация модели
+            // ничего не изменят — запоминаем причину и завершаем ход после
+            // обработки tool-call'ов текущей итерации.
+            if (permissionDecision.matchedRule === 'role.unavailable') {
+              roleBlocked = true;
+              roleBlockedTool = toolName;
+              roleBlockedAgent = effectiveAgentRole;
+            }
           } else {
             if (toolDef) {
               toolResult = await executeToolDef(toolDef, toolArgs, {
@@ -4254,6 +4457,10 @@ export class ChatOrchestrator {
 
         toolIteration++;
         if (stopAfterDeny) break;
+        // Ролевой отказ (тул недоступен агенту): следующая LLM-итерация не
+        // нужна — модель не получит новых прав. Уже собранные `tool_result`
+        // остаются в истории (как при ask-deny).
+        if (roleBlocked) break;
       }
 
       // Этап 1 roadmap 0.13 (блок 3): конец хода — снимаем вопросы **этого**
@@ -4269,6 +4476,7 @@ export class ChatOrchestrator {
         {
           cancelledBeforeFinal, lastChunkModel, finalModel, finalUsage, finalContent, fallbackI18n,
           hadDeny, stopAfterDeny, denyStopReason, toolIteration, maxIterations,
+          roleBlocked, roleBlockedTool, roleBlockedAgent,
           lastIterationPromptChars, allReasoning, allIntermediateTexts, allToolCalls,
           currentMessages, promptMeta, loadedTokenRatio, routingDecision,
           provider, providerName, effectiveAgentRole, effectiveReasoningLevel, finalSystemPrompt,

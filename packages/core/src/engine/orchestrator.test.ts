@@ -1829,3 +1829,212 @@ describe('ChatOrchestrator._routeProvider — ADR-036 единая обёртк�
     expect((res!.provider as unknown as { _inner: unknown })._inner).toBe(raw);
   });
 });
+
+/**
+ * ADR-115 §«Модели обработки по модальностям»: проводка derive в гидратацию.
+ *
+ * Проверяем шов `_processSetupDeps().hydrateAttachments` — ровно то, что
+ * получает ход: при заданном `attachments.modalityModels.<family>` гидратация
+ * получает `derive` (aux-вызов вместо байтов), подпись модели и её модальности;
+ * без настройки — прежний путь отброса с материализацией.
+ */
+class MockAuxProvider extends BaseProvider {
+  /** Сколько раз aux-модель получила запрос (по факту вызова `chat`). */
+  static calls = 0;
+
+  async chat(): Promise<import('@itphx/synth-shared').LLMResponse> {
+    MockAuxProvider.calls += 1;
+    return {
+      content: 'ОПИСАНИЕ КАРТИНКИ',
+      model: this.model,
+      usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+    };
+  }
+
+  async *chatAsync(): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    // Обработка вложения идёт только через `chat`; генератор — заглушка.
+    yield { content: '', isFinal: true, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
+  }
+
+  getProviderName(): string {
+    return 'mockaux';
+  }
+}
+
+describe('ChatOrchestrator: derive модальностей (ADR-115)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+
+  const BLOB_PATH = 'attachments/aa/plan';
+  const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-orch-derive-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    MockAuxProvider.calls = 0;
+    ProviderFactory.register('mockaux', MockAuxProvider);
+  });
+
+  afterEach(async () => {
+    ProviderFactory['_providers'].delete('mockaux');
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function baseConfig(): AttachmentsConfig {
+    return attachmentsConfigSchema.parse({});
+  }
+
+  /** Сообщение с картинкой: модель принимает только текст → aux-путь. */
+  function makeInput(): { messages: LLMMessage[]; source: Message[] } {
+    const part: Part = {
+      id: 'p-image',
+      type: 'image',
+      data: {
+        blobPath: BLOB_PATH,
+        sha256: 'a'.repeat(64),
+        mime: 'image/png',
+        size: PNG_BYTES.length,
+        name: 'plan.png',
+      } satisfies MediaPartData,
+    };
+    const source: Message[] = [{
+      id: 'src-1',
+      role: MessageRole.USER,
+      seq: 1,
+      origin: 'local',
+      parts: [makeTextPart('[image: plan.png]'), part],
+      content: '[image: plan.png]',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    }];
+    const messages: LLMMessage[] = [{
+      id: 'src-1',
+      role: 'user',
+      content: '[image: plan.png]',
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      disabled: false,
+      pinned: false,
+      branchId: '',
+    }];
+    return { messages, source };
+  }
+
+  async function makeOrchestrator(opts: {
+    attachmentsConfig?: () => AttachmentsConfig;
+    auxProvider?: boolean;
+    contextConfig?: unknown;
+  } = {}): Promise<ChatOrchestrator> {
+    const blobs = new MemoryBlobStore();
+    await blobs.write(BLOB_PATH, PNG_BYTES);
+    return new ChatOrchestrator({
+      sessionManager,
+      eventBus: new EventBus(),
+      contextBuilder: makeCtxBuilder(),
+      // `null` — aux-провайдер «не найден» (ошибка конфигурации обработки).
+      providerLoader: (name: string) => (opts.auxProvider === false
+        ? null
+        : { name, type: 'mockaux', baseUrl: '', apiKey: '', defaultModel: 'vision-1' } as unknown as import('@itphx/synth-shared').ProviderConfig),
+      dataDir: tmpDir,
+      projectStore,
+      blobs,
+      resolveModelModalities: () => ['text'],
+      ...(opts.attachmentsConfig ? { attachmentsConfig: opts.attachmentsConfig } : {}),
+      ...(opts.contextConfig ? { contextConfig: opts.contextConfig as never } : {}),
+    });
+  }
+
+  async function hydrate(orch: ChatOrchestrator): Promise<LLMMessage> {
+    const deps = (orch as unknown as {
+      _processSetupDeps(): {
+        hydrateAttachments?: (
+          messages: LLMMessage[],
+          source: Message[],
+          target: { providerName: string; modelId: string; language: string; workingDir: string },
+        ) => Promise<LLMMessage[]>;
+      };
+    })._processSetupDeps();
+    expect(deps.hydrateAttachments).toBeTypeOf('function');
+    const { messages, source } = makeInput();
+    const result = await deps.hydrateAttachments!(messages, source, {
+      providerName: 'test',
+      modelId: 'text-only',
+      language: 'en',
+      workingDir: tmpDir,
+    });
+    expect(result).toHaveLength(1);
+    return result[0]!;
+  }
+
+  it('modalityModels.image задан → текст в content, байты модели не отправляются', async () => {
+    const orch = await makeOrchestrator({
+      attachmentsConfig: () => ({
+        ...baseConfig(),
+        modalityModels: { image: { provider: 'mockaux', model: 'vision-1' } },
+      }),
+    });
+
+    const message = await hydrate(orch);
+
+    expect(MockAuxProvider.calls).toBe(1);
+    expect(message.attachments).toBeUndefined();
+    expect(message.content).toBe('[image: plan.png]\n\n[image: plan.png]\nОПИСАНИЕ КАРТИНКИ');
+    expect(message.debug?.attachmentsDerived).toBe(1);
+    expect(message.debug?.attachmentsDropped).toBeUndefined();
+    // Успешная обработка — материализация не нужна.
+    await expect(stat(join(tmpDir, 'attachments', 'plan.png'))).rejects.toThrow();
+  });
+
+  it('настройки нет → derive не строится, прежний путь отброса с путём', async () => {
+    const orch = await makeOrchestrator();
+    const build = (orch as unknown as {
+      _buildAttachmentDerive(session?: Session, language?: string): unknown;
+    })._buildAttachmentDerive(undefined, 'en');
+    expect(build).toBeUndefined();
+
+    const message = await hydrate(orch);
+
+    expect(MockAuxProvider.calls).toBe(0);
+    expect(message.content).toContain('; path: attachments/plan.png');
+    expect(message.debug?.attachmentsDropped).toHaveLength(1);
+    expect((await stat(join(tmpDir, 'attachments', 'plan.png'))).isFile()).toBe(true);
+  });
+
+  it('aux-провайдер не найден → null и отброс (ход не падает)', async () => {
+    const orch = await makeOrchestrator({
+      auxProvider: false,
+      attachmentsConfig: () => ({
+        ...baseConfig(),
+        modalityModels: { image: { provider: 'missing', model: 'x' } },
+      }),
+    });
+
+    const message = await hydrate(orch);
+
+    expect(MockAuxProvider.calls).toBe(0);
+    expect(message.content).toContain('— modality');
+    expect(message.debug?.attachmentsDropped).toHaveLength(1);
+    expect(message.debug?.attachmentsDerived).toBeUndefined();
+  });
+
+  it('блок «не доставлено»: модель сессии и её модальности подставлены', async () => {
+    const orch = await makeOrchestrator({
+      auxProvider: false,
+      attachmentsConfig: () => ({
+        ...baseConfig(),
+        modalityModels: { image: { provider: 'missing', model: 'x' } },
+      }),
+      contextConfig: {
+        getAttachmentsDroppedTemplate: () => 'model={model}; modalities={modalities}\n{items}',
+        getMediaDeriveTemplate: () => 'derive',
+      },
+    });
+
+    const message = await hydrate(orch);
+
+    expect(message.content).toContain('model=test/text-only; modalities=text');
+  });
+});

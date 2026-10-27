@@ -15,6 +15,13 @@
  *    не задан — справочника в ядре нет, каталог провайдера их не сообщил) —
  *    фильтра нет: вложения отправляются как есть, ошибку непринятого типа
  *    вернёт провайдер (тихая потеря вложения недопустима);
+ *  - ADR-115 §«Модели обработки по модальностям»: если модальность не принята,
+ *    но задан `options.derive` (aux-модель семейства), вложение уходит ей, а в
+ *    `content` сообщения дописывается текстовый результат (`[image: name]` +
+ *    текст). Байты модели сессии при этом не отправляются; ошибка/пустой
+ *    результат aux-вызова → прежний путь (`reason: 'modality'` + путь в
+ *    workspace). Модель сессии не меняется — она вообще не участвует в aux-
+ *    вызове;
  *  - суммарный объём base64 ограничен (`MAX_ATTACHMENT_BASE64_BYTES`): при
  *    превышении отбрасываются **самые старые** вложения (с начала истории), а
  *    на сообщении остаётся пометка `reason: 'limit'` — промпт не ломается;
@@ -36,6 +43,7 @@ import type { Readable } from 'node:stream';
 import {
   attachmentsConfigSchema,
   MessageRole,
+  type AttachmentFamily,
   type AttachmentModality,
   type MediaPartData,
   type Message,
@@ -91,10 +99,34 @@ export interface HydrateOptions {
   /**
    * ADR-115: шаблон блока «вложения не доставлены» из
    * `prompts/system/ATTACHMENTS_DROPPED.{lang}.md` (`{items}` — список строк
-   * `- {name} ({mime}) — {reason}`). Пусто/не задан — короткая техническая
-   * строка на английском (канал LLM, ADR-041).
+   * `- {name} ({mime}) — {reason}`; `{model}`/`{modalities}` — текущая модель и
+   * её модальности). Пусто/не задан — короткая техническая строка на английском
+   * (канал LLM, ADR-041).
    */
   noticeTemplate?: string;
+  /**
+   * ADR-115: подпись модели сессии для блока «вложения не доставлены»
+   * (`provider/model`). Не задана — в плейсхолдер `{model}` уходит `—`.
+   */
+  modelLabel?: string;
+  /**
+   * ADR-115: модальности модели сессии для блока «вложения не доставлены»
+   * (плейсхолдер `{modalities}`). Не заданы/пусто — `—`.
+   */
+  modelModalities?: readonly string[];
+  /**
+   * ADR-115 §«Модели обработки по модальностям»: обработка вложения aux-моделью
+   * семейства. Вызывается только когда модальности модели **известны** и
+   * модальность вложения в них не входит. Успех (непустой текст) — вложение не
+   * отправляется, текст дописывается в `content`; `null`/ошибка — прежний путь
+   * (`reason: 'modality'` + материализация). Не задан — derive не выполняется.
+   */
+  derive?: (input: {
+    blobPath: string;
+    mime: string;
+    name?: string;
+    family: AttachmentFamily;
+  }) => Promise<string | null>;
   /**
    * ADR-115: материализация отброшенного вложения в рабочий каталог проекта —
    * возвращает путь относительно workspace (или `null`). Ошибка/отсутствие
@@ -128,6 +160,15 @@ interface DroppedEntry {
   path: string | null;
 }
 
+/** Вложение, обработанное aux-моделью: текст вместо байтов (ADR-115). */
+interface DerivedEntry {
+  /** Семейство вложения (`image`/`pdf`/`audio`/`video`) — префикс блока. */
+  family: AttachmentFamily;
+  name?: string;
+  /** Текст результата — как есть, без экранирования. */
+  text: string;
+}
+
 /**
  * Строка списка отброшенных вложений: `- {name} ({mime}) — {reason}`;
  * `name` неизвестно — только `{mime}`. Материализованный файл — `; path: …`.
@@ -151,12 +192,36 @@ function fallbackLine(entry: DroppedEntry): string {
 }
 
 /** Блок для `content` LLM-сообщения: шаблон с `{items}` либо fallback-строки. */
-function dropsBlock(entries: readonly DroppedEntry[], noticeTemplate: string | undefined): string {
+function dropsBlock(
+  entries: readonly DroppedEntry[],
+  noticeTemplate: string | undefined,
+  modelLabel: string | undefined,
+  modelModalities: readonly string[] | undefined,
+): string {
   const items = entries.map(dropLine).join('\n');
   const template = noticeTemplate ?? '';
   if (template.trim().length === 0) return entries.map(fallbackLine).join('\n');
   // split/join — подстановка без интерпретации `$`-паттернов в именах файлов.
-  return template.split('{items}').join(items);
+  // `{model}`/`{modalities}` подставляются до `{items}`: имена файлов могут
+  // содержать фигурные скобки, и подстановка по ним уже не должна прогоняться.
+  const model = modelLabel && modelLabel.trim() !== '' ? modelLabel : '—';
+  const modalities = modelModalities && modelModalities.length > 0
+    ? modelModalities.join(', ')
+    : '—';
+  return template
+    .split('{model}').join(model)
+    .split('{modalities}').join(modalities)
+    .split('{items}').join(items);
+}
+
+/**
+ * Блоки производного текста для `content` (ADR-115): каждый — с пустой строки,
+ * `[<family>: <name>]` (без имени — `[<family>]`) и текстом как есть.
+ */
+function derivedBlocks(entries: readonly DerivedEntry[]): string {
+  return entries
+    .map((entry) => `\n\n[${entry.family}${entry.name ? `: ${entry.name}` : ''}]\n${entry.text}`)
+    .join('');
 }
 
 /** Ссылка на вложение в истории сообщения. */
@@ -200,7 +265,7 @@ function mediaPartRefs(message: Message): MediaPartRef[] {
  * Модальность вложения, пересылаемая байтами: `text` (его содержимое уже в
  * `content`) и неизвестные типы не отправляются и «отброшенными» не считаются.
  */
-function byteModality(mime: string): AttachmentModality | null {
+function byteModality(mime: string): AttachmentFamily | null {
   const modality = attachmentModalityOf(mime);
   return modality !== null && modality !== 'text' ? modality : null;
 }
@@ -244,8 +309,10 @@ export async function hydrateMessageAttachments(
     blobPath: string;
   }> = [];
   const droppedByMessage = new Map<number, DroppedEntry[]>();
+  const derivedByMessage = new Map<number, DerivedEntry[]>();
   let modalityDropped = 0;
   let unavailableDropped = 0;
+  let derivedCount = 0;
 
   /** Пометить вложение, отброшенное при гидратации (в `debug` + лог). */
   const addDrop = (messageIndex: number, blobPath: string, drop: DroppedAttachment): void => {
@@ -254,6 +321,41 @@ export async function hydrateMessageAttachments(
     droppedByMessage.set(messageIndex, list);
     if (drop.reason === 'modality') modalityDropped += 1;
     if (drop.reason === 'unavailable') unavailableDropped += 1;
+  };
+
+  /**
+   * ADR-115: обработать вложение aux-моделью вместо отправки байтов.
+   *
+   * `true` — текст получен (вложение не отправляется, блок попадёт в
+   * `content`); `false` — обработка не удалась (вызывающий идёт прежним путём
+   * «отброшено + материализация»). Ошибка aux-вызова не роняет ход.
+   */
+  const tryDerive = async (
+    messageIndex: number,
+    input: { blobPath: string; mime: string; name?: string; family: AttachmentFamily },
+  ): Promise<boolean> => {
+    if (!options.derive) return false;
+    try {
+      const text = await options.derive(input);
+      if (typeof text !== 'string' || text.trim() === '') return false;
+      const list = derivedByMessage.get(messageIndex) ?? [];
+      list.push({
+        family: input.family,
+        ...(input.name ? { name: input.name } : {}),
+        text,
+      });
+      derivedByMessage.set(messageIndex, list);
+      derivedCount += 1;
+      options.log?.(
+        `[attachments] вложение ${input.blobPath} обработано моделью-обработчиком (${input.family})`,
+      );
+      return true;
+    } catch (err) {
+      options.log?.(
+        `[attachments] не удалось обработать вложение ${input.blobPath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
+    }
   };
 
   const limit = Math.min(messages.length, included.length);
@@ -265,6 +367,15 @@ export async function hydrateMessageAttachments(
       const modality = byteModality(ref.mime);
       if (modality === null) continue;
       if (allowedModalities && !allowedModalities.has(modality)) {
+        // Модальность не принята: сначала пробуем aux-модель семейства (байты
+        // модели сессии не отправляются). Не удалось — прежний путь отброса.
+        const derived = await tryDerive(index, {
+          blobPath: ref.blobPath,
+          mime: ref.mime,
+          ...(ref.name ? { name: ref.name } : {}),
+          family: modality,
+        });
+        if (derived) continue;
         // Байты не читаем — размер неизвестен (0).
         addDrop(index, ref.blobPath, {
           mime: ref.mime,
@@ -290,9 +401,17 @@ export async function hydrateMessageAttachments(
         const metaModality = byteModality(meta.mime);
         if (metaModality === null) continue;
         if (allowedModalities && !allowedModalities.has(metaModality)) {
+          const name = meta.name ?? ref.name;
+          const derived = await tryDerive(index, {
+            blobPath: ref.blobPath,
+            mime: meta.mime,
+            ...(name ? { name } : {}),
+            family: metaModality,
+          });
+          if (derived) continue;
           addDrop(index, ref.blobPath, {
             mime: meta.mime,
-            ...(meta.name ?? ref.name ? { name: meta.name ?? ref.name } : {}),
+            ...(name ? { name } : {}),
             sizeBytes: meta.size,
             reason: 'modality',
           });
@@ -346,8 +465,15 @@ export async function hydrateMessageAttachments(
       `[attachments] отброшено вложений: ${unavailableDropped} (причина: unavailable — объект недоступен)`,
     );
   }
+  if (derivedCount > 0) {
+    options.log?.(
+      `[attachments] обработано вложений моделью-обработчиком: ${derivedCount} (текст добавлен в сообщение)`,
+    );
+  }
 
-  if (candidates.length === 0 && droppedByMessage.size === 0) return messages;
+  if (candidates.length === 0 && droppedByMessage.size === 0 && derivedByMessage.size === 0) {
+    return messages;
+  }
 
   // 2. Лимит объёма: отбрасываем самые старые вложения (с начала истории).
   const totalBase64 = candidates.reduce((sum, item) => sum + item.attachment.base64.length, 0);
@@ -404,25 +530,45 @@ export async function hydrateMessageAttachments(
   return messages.map((message, index) => {
     const attachments = attachmentsByMessage.get(index);
     const dropped = droppedByMessage.get(index);
-    if ((!attachments || attachments.length === 0) && (!dropped || dropped.length === 0)) {
+    const derived = derivedByMessage.get(index);
+    if (
+      (!attachments || attachments.length === 0)
+      && (!dropped || dropped.length === 0)
+      && (!derived || derived.length === 0)
+    ) {
       return message;
     }
 
     const next: LLMMessage = { ...message };
     if (attachments && attachments.length > 0) next.attachments = attachments;
+    let content = message.content;
+    // ADR-115: производный текст — вместо байтов вложения (модель сессии его
+    // не принимает): блоки идут в порядке частей сообщения.
+    if (derived && derived.length > 0) content = `${content}${derivedBlocks(derived)}`;
     if (dropped && dropped.length > 0) {
       // Модель должна видеть, что вложение не доставлено и почему: иначе
       // плейсхолдер `[file: …]` толкает её искать файл на диске. Один блок на
       // сообщение (даже если отброшено несколько), порядок — как в обработке
       // (модальность по частям, затем лимит объёма).
-      next.content = `${message.content}\n\n${dropsBlock(dropped, options.noticeTemplate)}`;
+      content = `${content}\n\n${dropsBlock(dropped, options.noticeTemplate, options.modelLabel, options.modelModalities)}`;
+    }
+    if (content !== message.content) next.content = content;
+
+    const debugExtra: Record<string, unknown> = {};
+    if (dropped && dropped.length > 0) {
       const previous = Array.isArray(message.debug?.attachmentsDropped)
         ? (message.debug!.attachmentsDropped as DroppedAttachment[])
         : [];
-      next.debug = {
-        ...(message.debug ?? {}),
-        attachmentsDropped: [...previous, ...dropped.map((entry) => entry.drop)],
-      };
+      debugExtra.attachmentsDropped = [...previous, ...dropped.map((entry) => entry.drop)];
+    }
+    if (derived && derived.length > 0) {
+      const previous = typeof message.debug?.attachmentsDerived === 'number'
+        ? (message.debug!.attachmentsDerived as number)
+        : 0;
+      debugExtra.attachmentsDerived = previous + derived.length;
+    }
+    if (Object.keys(debugExtra).length > 0) {
+      next.debug = { ...(message.debug ?? {}), ...debugExtra };
     }
     return next;
   });

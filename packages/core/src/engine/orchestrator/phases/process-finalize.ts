@@ -58,6 +58,15 @@ export interface ProcessFinalizeState {
   fallbackI18n: ReturnType<typeof i18nMeta> | undefined;
   /** Были ли deny-отказы за цикл (для осмысленного fallback пустого ответа). */
   hadDeny: boolean;
+  /**
+   * Был ли отказ **ролевой** (`matchedRule: 'role.unavailable'`): тул недоступен
+   * текущему агенту (ADR-070 §2.9.1). Приоритетнее `hadDeny` в фоллбек-тексте —
+   * это не инцидент ИБ, а подсказка делегировать задачу через `@`.
+   * Опционально — обратная совместимость с прежними вызовами.
+   */
+  roleBlocked?: boolean;
+  roleBlockedTool?: string;
+  roleBlockedAgent?: string;
   stopAfterDeny: boolean;
   denyStopReason: string | undefined;
   toolIteration: number;
@@ -135,6 +144,7 @@ export async function runProcessFinalize(
     allToolCalls, allIntermediateTexts, allReasoning,
     lastIterationPromptChars, promptMeta, toolIteration, maxIterations,
     stopAfterDeny, denyStopReason, hadDeny, routingDecision, effectiveReasoningLevel,
+    roleBlocked, roleBlockedTool, roleBlockedAgent,
     currentMessages, loadedTokenRatio, finalSystemPrompt, currentDraft,
   } = state;
   let { finalContent, finalModel, finalUsage, fallbackI18n } = state;
@@ -214,10 +224,18 @@ export async function runProcessFinalize(
   // с пустым finalContent — подставляем осмысленное сообщение, чтобы
   // в истории не оставалось пустого assistant-сообщения.
   if (!finalContent) {
-    finalContent = hadDeny
-      ? sm('session.denied_blocked')
-      : sm('session.empty_response');
-    fallbackI18n = i18nMeta(hadDeny ? 'session.denied_blocked' : 'session.empty_response');
+    if (roleBlocked) {
+      // Ролевой отказ: тул не для этого агента — говорим об этом прямо, без
+      // «заблокировано политикой безопасности» (это не инцидент ИБ).
+      const params = { tool: roleBlockedTool ?? '', agent: roleBlockedAgent ?? '' };
+      finalContent = sm('session.role_tool_blocked', params);
+      fallbackI18n = i18nMeta('session.role_tool_blocked', params);
+    } else {
+      finalContent = hadDeny
+        ? sm('session.denied_blocked')
+        : sm('session.empty_response');
+      fallbackI18n = i18nMeta(hadDeny ? 'session.denied_blocked' : 'session.empty_response');
+    }
   }
 
   // 7.5. Quality check + escalation (ADR-034)

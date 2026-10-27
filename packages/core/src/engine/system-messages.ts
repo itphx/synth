@@ -25,6 +25,7 @@ export const SYSTEM_MESSAGES = {
   'session.stopped': 'Processing stopped: {reason}',
   'session.stopped_reason_denied': 'the user denied the request',
   'session.denied_blocked': 'Could not proceed: the action was blocked by the security policy',
+  'session.role_tool_blocked': 'Could not proceed: tool "{tool}" is unavailable to agent "{agent}" — delegate the task via @ (e.g. @developer or @general) or explain it to the user.',
   'session.empty_response': 'Could not complete the request: the model response was empty',
   'session.dialog_title': 'Dialog — {id}',
   'session.default_title': 'New session',

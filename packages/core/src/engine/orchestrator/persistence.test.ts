@@ -54,6 +54,7 @@ describe('resolveAssistantStatus / isAssistantMessageStatus', () => {
     const cases: Array<[string, AssistantMessageStatus]> = [
       ['session.stopped', 'stopped'],
       ['session.denied_blocked', 'stopped'],
+      ['session.role_tool_blocked', 'stopped'],
       ['session.max_iterations', 'limit'],
       ['session.empty_response', 'error'],
       ['router.timeout', 'error'],

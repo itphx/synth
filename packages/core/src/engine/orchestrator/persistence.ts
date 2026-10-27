@@ -69,6 +69,7 @@ export function resolveAssistantStatus(
   switch (key) {
     case 'session.stopped':
     case 'session.denied_blocked':
+    case 'session.role_tool_blocked':
       return 'stopped';
     case 'session.max_iterations':
       return 'limit';

@@ -336,6 +336,63 @@ describe('runProcessFinalize', () => {
         status: 'error',
       });
     });
+
+    it('ролевой deny + пустой ответ → role_tool_blocked с tool/agent (status stopped)', async () => {
+      const sessionId = await makeSession();
+      const deps = makeDeps();
+
+      await runProcessFinalize(
+        makeArgs(sessionId),
+        makeState({
+          finalContent: '',
+          hadDeny: true,
+          roleBlocked: true,
+          roleBlockedTool: 'execute_shell',
+          roleBlockedAgent: 'assistant',
+        }),
+        deps,
+      );
+
+      const expected = sm('session.role_tool_blocked', {
+        tool: 'execute_shell',
+        agent: 'assistant',
+      });
+      const saveCall = (deps.saveAssistantMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(saveCall[1]).toBe(expected);
+      expect(saveCall[17]).toMatchObject({
+        i18n: {
+          key: 'session.role_tool_blocked',
+          params: { tool: 'execute_shell', agent: 'assistant' },
+        },
+      });
+      expect(published[0]!.data).toMatchObject({ content: expected, status: 'stopped' });
+      // Ролевой отказ не маскируется под «заблокировано политикой безопасности».
+      expect(published[0]!.data.content).not.toBe(sm('session.denied_blocked'));
+    });
+
+    it('ролевой deny не перетирает непустой ответ модели', async () => {
+      const sessionId = await makeSession();
+      const deps = makeDeps();
+
+      await runProcessFinalize(
+        makeArgs(sessionId),
+        makeState({
+          finalContent: 'Сам не смог — предлагаю делегировать @developer',
+          hadDeny: true,
+          roleBlocked: true,
+          roleBlockedTool: 'execute_shell',
+          roleBlockedAgent: 'assistant',
+        }),
+        deps,
+      );
+
+      const saveCall = (deps.saveAssistantMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(saveCall[1]).toBe('Сам не смог — предлагаю делегировать @developer');
+      expect(published[0]!.data).toMatchObject({
+        content: 'Сам не смог — предлагаю делегировать @developer',
+        status: 'completed',
+      });
+    });
   });
 
   describe('успешный путь', () => {

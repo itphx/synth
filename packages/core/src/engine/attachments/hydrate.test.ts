@@ -2,7 +2,7 @@
  * ADR-115: гидратация вложений (blob → base64) и лимит объёма.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MessageRole, type MediaPartData, type Message, type Part } from '@itphx/synth-shared';
 import type { LLMMessage } from '../../providers/base.js';
 import {
@@ -488,5 +488,169 @@ describe('hydrateMessageAttachments (ADR-115)', () => {
     expect(result[0]).not.toBe(messages[0]);
     expect(JSON.stringify(messages)).toBe(messagesBefore);
     expect(JSON.stringify(source)).toBe(sourceBefore);
+  });
+});
+
+/**
+ * ADR-115 §«Модели обработки по модальностям»: derive в гидратации —
+ * native → aux-текст → отброс.
+ */
+describe('hydrateMessageAttachments: derive (ADR-115)', () => {
+  function imageSource(): Message[] {
+    return [
+      sourceMessage({
+        parts: [
+          mediaPart('image', { blobPath: 'attachments/aa/image', name: 'plan.png' }),
+        ],
+      }),
+    ];
+  }
+
+  it('модальность не принята + derive → текст в content, вложения нет, debug.attachmentsDerived=1', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const derive = vi.fn(async () => 'Схема зала и подписи');
+
+    const result = await hydrateMessageAttachments([llmMessage()], imageSource(), deps, {
+      modalities: ['text'],
+      derive,
+    });
+
+    expect(derive).toHaveBeenCalledTimes(1);
+    expect(derive).toHaveBeenCalledWith({
+      blobPath: 'attachments/aa/image',
+      mime: 'image/png',
+      name: 'plan.png',
+      family: 'image',
+    });
+    // Байты модели сессии не отправляются: вместо вложения — текст.
+    expect(result[0]!.attachments).toBeUndefined();
+    expect(result[0]!.content).toBe('вопрос\n\n[image: plan.png]\nСхема зала и подписи');
+    expect(result[0]!.debug?.attachmentsDerived).toBe(1);
+    expect(result[0]!.debug?.attachmentsDropped).toBeUndefined();
+    expect(deps.reads).toEqual([]);
+  });
+
+  it('derive → null: прежний путь — отброс и материализация', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const derive = vi.fn(async () => null);
+    const refs: Array<{ reason: string }> = [];
+
+    const result = await hydrateMessageAttachments([llmMessage()], imageSource(), deps, {
+      modalities: ['text'],
+      derive,
+      noticeTemplate: '{items}',
+      materialize: async (ref) => {
+        refs.push({ reason: ref.reason });
+        return 'attachments/plan.png';
+      },
+    });
+
+    expect(derive).toHaveBeenCalledTimes(1);
+    expect(result[0]!.attachments).toBeUndefined();
+    expect(result[0]!.content).toBe(
+      'вопрос\n\n- plan.png (image/png) — modality; path: attachments/plan.png',
+    );
+    expect(result[0]!.debug?.attachmentsDropped).toEqual([
+      { mime: 'image/png', name: 'plan.png', sizeBytes: 0, reason: 'modality' },
+    ]);
+    expect(result[0]!.debug?.attachmentsDerived).toBeUndefined();
+    expect(refs).toEqual([{ reason: 'modality' }]);
+  });
+
+  it('ошибка derive → отброс, ход не падает, предупреждение в лог', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const logs: string[] = [];
+
+    const result = await hydrateMessageAttachments([llmMessage()], imageSource(), deps, {
+      modalities: ['text'],
+      derive: async () => {
+        throw new Error('aux down');
+      },
+      log: (message) => logs.push(message),
+    });
+
+    expect(result[0]!.content).toContain('[attachment not delivered: plan.png (image/png) — modality]');
+    expect(result[0]!.debug?.attachmentsDropped).toHaveLength(1);
+    expect(logs.some((line) => line.includes('aux down'))).toBe(true);
+  });
+
+  it('поддерживаемая модальность → derive не вызывается', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const derive = vi.fn(async () => 'не должно вызываться');
+
+    const result = await hydrateMessageAttachments([llmMessage()], imageSource(), deps, {
+      modalities: ['text', 'image'],
+      derive,
+    });
+
+    expect(derive).not.toHaveBeenCalled();
+    expect(result[0]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+    expect(result[0]!.debug?.attachmentsDerived).toBeUndefined();
+  });
+
+  it('модальности модели неизвестны → derive не вызывается (нечего сравнивать)', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const derive = vi.fn(async () => 'не должно вызываться');
+
+    const result = await hydrateMessageAttachments([llmMessage()], imageSource(), deps, { derive });
+
+    expect(derive).not.toHaveBeenCalled();
+    expect(result[0]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+    expect(result[0]!.debug?.attachmentsDerived).toBeUndefined();
+  });
+
+  it('блок «не доставлено»: {model} и {modalities} подставлены, без них — «—»', async () => {
+    const deps = makeDeps({ 'attachments/aa/pdf': PDF_BYTES });
+    const source = [
+      sourceMessage({
+        parts: [
+          mediaPart('file', { blobPath: 'attachments/aa/pdf', mime: 'application/pdf', name: 'док.pdf' }),
+        ],
+      }),
+    ];
+    const template = 'model={model}; modalities={modalities}\n{items}';
+
+    const withModel = await hydrateMessageAttachments([llmMessage()], source, deps, {
+      modalities: ['text'],
+      noticeTemplate: template,
+      modelLabel: 'itphx/text-small',
+      modelModalities: ['text'],
+    });
+    expect(withModel[0]!.content).toContain('model=itphx/text-small; modalities=text');
+    expect(withModel[0]!.content).toContain('- док.pdf (application/pdf) — modality');
+
+    const withoutModel = await hydrateMessageAttachments([llmMessage()], source, deps, {
+      modalities: ['text'],
+      noticeTemplate: template,
+    });
+    expect(withoutModel[0]!.content).toContain('model=—; modalities=—');
+  });
+
+  it('несколько вложений: derive для одного, отброс другого — оба блока в порядке частей', async () => {
+    const deps = makeDeps({
+      'attachments/aa/image': PNG_BYTES,
+      'attachments/aa/pdf': PDF_BYTES,
+    });
+    const source = [
+      sourceMessage({
+        parts: [
+          mediaPart('image', { blobPath: 'attachments/aa/image', name: 'фото.png' }),
+          mediaPart('file', { blobPath: 'attachments/aa/pdf', mime: 'application/pdf', name: 'док.pdf' }),
+        ],
+      }),
+    ];
+
+    const result = await hydrateMessageAttachments([llmMessage()], source, deps, {
+      modalities: ['text'],
+      noticeTemplate: '{items}',
+      derive: async (input) => (input.family === 'image' ? 'описание фото' : null),
+    });
+
+    expect(result[0]!.content).toBe(
+      'вопрос\n\n[image: фото.png]\nописание фото'
+        + '\n\n- док.pdf (application/pdf) — modality',
+    );
+    expect(result[0]!.debug?.attachmentsDerived).toBe(1);
+    expect(result[0]!.debug?.attachmentsDropped).toHaveLength(1);
   });
 });
