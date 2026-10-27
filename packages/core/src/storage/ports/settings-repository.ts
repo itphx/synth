@@ -19,6 +19,7 @@ import type {
   PluginsRuntimeSettings,
   RuntimeSettings,
   SecurityRuntimeSettings,
+  AttachmentsSettings,
 } from '../runtime-settings.js';
 
 /**
@@ -127,4 +128,13 @@ export interface SettingsRepository {
   getProxySettings(): Promise<Partial<ProxyConfig> | undefined>;
   setProxySettings(config: Partial<ProxyConfig>): Promise<void>;
   clearProxySettings(): Promise<void>;
+
+  /**
+   * ADR-115: runtime-настройки вложений сообщений (частичный патч секции
+   * `attachments`). Применяются сразу (резолвер читается на каждый вызов) —
+   * `restartRequired: false` в API.
+   */
+  getAttachments(): Promise<Partial<AttachmentsSettings>>;
+  setAttachments(config: Partial<AttachmentsSettings>): Promise<void>;
+  clearAttachments(): Promise<void>;
 }

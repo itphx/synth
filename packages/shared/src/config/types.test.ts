@@ -323,13 +323,25 @@ describe('backgroundConfigSchema (PROP-096/PROP-097)', () => {
  * ADR-115: секция `attachments` — лимиты и политика вложений сообщений.
  */
 describe('attachmentsConfigSchema (ADR-115)', () => {
-  it('дефолт: 25 МиБ на файл, 10 файлов, 1 ГиБ на сессию, GC 30 дней', () => {
+  it('дефолт: включены, все семейства, 25 МиБ на файл, 10 файлов, 1 ГиБ на сессию, GC 30 дней', () => {
     expect(attachmentsConfigSchema.parse({})).toEqual({
+      enabled: true,
+      modalities: { image: true, pdf: true, audio: true, video: true },
       maxBytesPerFile: 26_214_400,
       maxFilesPerMessage: 10,
       maxBytesPerSession: 1_073_741_824,
       allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+      workspaceFallback: true,
       gcDays: 30,
+    });
+  });
+
+  it('частичный modalities дополняется дефолтами (prefault)', () => {
+    expect(attachmentsConfigSchema.parse({ modalities: { video: false } }).modalities).toEqual({
+      image: true,
+      pdf: true,
+      audio: true,
+      video: false,
     });
   });
 

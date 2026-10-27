@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig } from './runtime-settings.js';
+import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings } from './runtime-settings.js';
 
 describe('RuntimeSettingsStore.clear* (ADR-072 Ф2)', () => {
   let tmpDir: string;
@@ -600,5 +600,187 @@ describe('mergePluginsConfig (ADR-090)', () => {
     });
     expect(mergePluginsConfig(base, {})).toMatchObject({ llmFilterTimeoutMs: 1500 });
     expect(mergePluginsConfig(undefined, {})).toMatchObject({ llmFilterTimeoutMs: 1000 });
+  });
+});
+
+describe('RuntimeSettingsStore.attachments (ADR-115)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-runtime-settings-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('getAttachments возвращает {} без runtime-настроек', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await store.getAttachments()).toEqual({});
+  });
+
+  it('set/getAttachments сохраняет патч и переживает рестарт', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setAttachments({ enabled: false, gcDays: 0, modalities: { video: false } as never });
+
+    const saved = await store.getAttachments();
+    expect(saved.enabled).toBe(false);
+    expect(saved.gcDays).toBe(0);
+    expect(saved.modalities).toEqual({ video: false });
+
+    const restarted = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect((await restarted.getAttachments()).enabled).toBe(false);
+  });
+
+  it('clearAttachments удаляет только attachments', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setAttachments({ enabled: false });
+    await store.setMetrics({ enabled: true });
+    await store.clearAttachments();
+
+    const settings = await store.load();
+    expect(settings.attachments).toBeUndefined();
+    expect(settings.metrics).toEqual({ enabled: true });
+  });
+});
+
+describe('resolveAttachmentsSettings (ADR-115)', () => {
+  it('дефолты схемы, если не задано ничего', () => {
+    const resolved = resolveAttachmentsSettings({ env: {} });
+    expect(resolved.source).toBe('default');
+    expect(resolved.envLocked).toEqual([]);
+    expect(resolved.effective).toEqual({
+      enabled: true,
+      modalities: { image: true, pdf: true, audio: true, video: true },
+      maxBytesPerFile: 25 * 1024 * 1024,
+      maxFilesPerMessage: 10,
+      maxBytesPerSession: 1024 * 1024 * 1024,
+      allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+      workspaceFallback: true,
+      gcDays: 30,
+    });
+  });
+
+  it('config: источник config, вложенные modalities мёржатся с дефолтами', () => {
+    const resolved = resolveAttachmentsSettings({
+      config: { enabled: false, maxBytesPerFile: 1024, modalities: { video: false } as never },
+      env: {},
+    });
+    expect(resolved.source).toBe('config');
+    expect(resolved.effective.enabled).toBe(false);
+    expect(resolved.effective.maxBytesPerFile).toBe(1024);
+    // Незаданные семейства — из дефолтов схемы.
+    expect(resolved.effective.modalities).toEqual({
+      image: true,
+      pdf: true,
+      audio: true,
+      video: false,
+    });
+  });
+
+  it('runtime перекрывает config, незаданные поля остаются из config', () => {
+    const resolved = resolveAttachmentsSettings({
+      config: { enabled: false, maxFilesPerMessage: 5, modalities: { image: false } as never },
+      runtime: { gcDays: 7, modalities: { audio: false } as never },
+      env: {},
+    });
+    expect(resolved.source).toBe('runtime');
+    expect(resolved.effective.enabled).toBe(false);
+    expect(resolved.effective.maxFilesPerMessage).toBe(5);
+    expect(resolved.effective.gcDays).toBe(7);
+    // Вложенный merge: выключенное в config семейство остаётся выключенным.
+    expect(resolved.effective.modalities).toEqual({
+      image: false,
+      pdf: true,
+      audio: false,
+      video: true,
+    });
+  });
+
+  it('env приоритетнее runtime и config; поля попадают в envLocked', () => {
+    const resolved = resolveAttachmentsSettings({
+      config: { enabled: true },
+      runtime: { enabled: true, gcDays: 7 },
+      env: { SYNTH_ATTACHMENTS_ENABLED: 'false', SYNTH_ATTACHMENTS_GC_DAYS: '0' },
+    });
+    expect(resolved.source).toBe('env');
+    expect(resolved.effective.enabled).toBe(false);
+    expect(resolved.effective.gcDays).toBe(0);
+    expect(resolved.envLocked).toEqual(['enabled', 'gcDays']);
+  });
+
+  it('env модульности: csv перечисляет включённые семейства', () => {
+    const resolved = resolveAttachmentsSettings({
+      env: { SYNTH_ATTACHMENTS_MODALITIES: 'image,pdf' },
+    });
+    expect(resolved.source).toBe('env');
+    expect(resolved.effective.modalities).toEqual({
+      image: true,
+      pdf: true,
+      audio: false,
+      video: false,
+    });
+    expect(resolved.envLocked).toEqual(['modalities']);
+  });
+
+  it('невалидные env-значения игнорируются (без блокировки поля)', () => {
+    const resolved = resolveAttachmentsSettings({
+      config: { gcDays: 5 },
+      env: {
+        SYNTH_ATTACHMENTS_ENABLED: 'maybe',
+        SYNTH_ATTACHMENTS_GC_DAYS: '-1',
+        SYNTH_ATTACHMENTS_MODALITIES: 'telepathy',
+      },
+    });
+    expect(resolved.source).toBe('config');
+    expect(resolved.effective.enabled).toBe(true);
+    expect(resolved.effective.gcDays).toBe(5);
+    expect(resolved.envLocked).toEqual([]);
+  });
+
+  it('envLocked-поле не перекрывается runtime', () => {
+    const resolved = resolveAttachmentsSettings({
+      runtime: { enabled: true },
+      env: { SYNTH_ATTACHMENTS_ENABLED: 'false' },
+    });
+    expect(resolved.effective.enabled).toBe(false);
+    expect(resolved.envLocked).toEqual(['enabled']);
+  });
+
+  it('workspaceFallback из env/config', () => {
+    expect(
+      resolveAttachmentsSettings({ env: { SYNTH_ATTACHMENTS_WORKSPACE_FALLBACK: '0' } })
+        .effective.workspaceFallback,
+    ).toBe(false);
+    expect(
+      resolveAttachmentsSettings({ config: { workspaceFallback: false }, env: {} })
+        .effective.workspaceFallback,
+    ).toBe(false);
+  });
+});
+
+describe('createLiveAttachmentsSettings (ADR-115)', () => {
+  it('setRuntime применяется к getConfig сразу', () => {
+    const live = createLiveAttachmentsSettings({ env: {} });
+    expect(live.getConfig().enabled).toBe(true);
+
+    live.setRuntime({ enabled: false, modalities: { video: false } as never });
+    expect(live.getConfig().enabled).toBe(false);
+    expect(live.getConfig().modalities.video).toBe(false);
+    expect(live.resolve().source).toBe('runtime');
+
+    // Сброс runtime — возврат к config/default.
+    live.setRuntime({});
+    expect(live.getConfig().enabled).toBe(true);
+    expect(live.resolve().source).toBe('default');
+  });
+
+  it('env приоритетнее runtime и в живом состоянии', () => {
+    const live = createLiveAttachmentsSettings({
+      env: { SYNTH_ATTACHMENTS_ENABLED: 'false' },
+    });
+    live.setRuntime({ enabled: true });
+    expect(live.getConfig().enabled).toBe(false);
+    expect(live.resolve().envLocked).toEqual(['enabled']);
   });
 });

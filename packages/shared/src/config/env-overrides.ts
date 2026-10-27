@@ -83,8 +83,12 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'background', key: 'maxRunsPerSession', type: 'number' },
   { section: 'background', key: 'logMaxBytes', type: 'number' },
   { section: 'background', key: 'retentionDays', type: 'number' },
-  // attachments (ADR-115): лимиты вложений сообщений. Список MIME-префиксов
-  // (`allowedMimePrefixes`) — объектный ключ, остаётся в config.yaml.
+  // attachments (ADR-115): вложения сообщений. Семейства MIME
+  // (`SYNTH_ATTACHMENTS_MODALITIES`, csv) — объектный ключ, обрабатывается
+  // отдельно (`applyAttachmentsModalitiesEnvOverride`); список префиксов
+  // (`allowedMimePrefixes`) остаётся только в config.yaml.
+  { section: 'attachments', key: 'enabled', type: 'boolean' },
+  { section: 'attachments', key: 'workspaceFallback', type: 'boolean' },
   { section: 'attachments', key: 'maxBytesPerFile', type: 'number' },
   { section: 'attachments', key: 'maxFilesPerMessage', type: 'number' },
   { section: 'attachments', key: 'maxBytesPerSession', type: 'number' },
@@ -219,6 +223,80 @@ export function applyEnvOverrides<T extends Record<string, unknown>>(
 }
 
 /**
+ * ADR-115: env-имя списка включённых семейств вложений.
+ *
+ * Значение — csv из `image,pdf,audio,video`; перечисленные семейства
+ * включаются, отсутствующие — выключаются (полный список заменяется).
+ * Пустая строка — «не задано».
+ */
+export const ATTACHMENTS_MODALITIES_ENV = 'SYNTH_ATTACHMENTS_MODALITIES';
+
+/** Канонические семейства вложений (порядок — как в схеме). */
+export const ATTACHMENT_MODALITY_KEYS = ['image', 'pdf', 'audio', 'video'] as const;
+export type AttachmentModalityKey = (typeof ATTACHMENT_MODALITY_KEYS)[number];
+
+/**
+ * Разобрать csv семейств вложений. Неизвестные элементы пропускаются с warn;
+ * если валидных нет — `undefined` (значение игнорируется, как невалидный env).
+ */
+export function parseAttachmentsModalities(
+  raw: string,
+): Record<AttachmentModalityKey, boolean> | undefined {
+  const tokens = raw
+    .split(',')
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => part !== '');
+  if (tokens.length === 0) return undefined;
+
+  const enabled = new Set<AttachmentModalityKey>();
+  for (const token of tokens) {
+    if ((ATTACHMENT_MODALITY_KEYS as readonly string[]).includes(token)) {
+      enabled.add(token as AttachmentModalityKey);
+    } else {
+      console.warn(
+        `[config] неизвестное семейство вложений "${token}" в ${ATTACHMENTS_MODALITIES_ENV} — пропущено`,
+      );
+    }
+  }
+  if (enabled.size === 0) return undefined;
+  return {
+    image: enabled.has('image'),
+    pdf: enabled.has('pdf'),
+    audio: enabled.has('audio'),
+    video: enabled.has('video'),
+  };
+}
+
+/**
+ * Применить csv-оверрайд `SYNTH_ATTACHMENTS_MODALITIES` к секции `attachments`
+ * (список перечисляет только **включённые** семейства). Невалидное значение —
+ * warn и игнор (fail-soft, как у остальных env-оверрайдов).
+ */
+function applyAttachmentsModalitiesEnvOverride<T extends Record<string, unknown>>(
+  config: T,
+  env: NodeJS.ProcessEnv,
+): void {
+  const raw = env[ATTACHMENTS_MODALITIES_ENV];
+  if (raw === undefined || raw === '') return;
+
+  const parsed = parseAttachmentsModalities(raw);
+  if (!parsed) {
+    console.warn(
+      `[config] невалидное значение ${ATTACHMENTS_MODALITIES_ENV}="${raw}" — игнорируется`,
+    );
+    return;
+  }
+
+  const current = config.attachments;
+  const attachments =
+    current !== null && typeof current === 'object' && !Array.isArray(current)
+      ? { ...(current as Record<string, unknown>) }
+      : {};
+  attachments.modalities = parsed;
+  (config as Record<string, unknown>).attachments = attachments;
+}
+
+/**
  * ADR-105 (Ф3): env-оверрайд каталога OAuth-провайдеров (`oauth.providers`).
  *
  * Значение — JSON-объект «имя → описание». Провайдер из env заменяет
@@ -298,6 +376,7 @@ export function applyObjectEnvOverrides<T extends Record<string, unknown>>(
   config: T,
   env: NodeJS.ProcessEnv = process.env,
 ): T {
+  applyAttachmentsModalitiesEnvOverride(config, env);
   applyOAuthProvidersEnvOverride(config, env);
 
   const raw = env[BOOTSTRAP_SERVICE_KEYS_ENV];

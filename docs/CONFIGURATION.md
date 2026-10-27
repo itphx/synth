@@ -1576,29 +1576,44 @@ background:
 
 | Поле | Назначение | По умолчанию |
 |------|-----------|--------------|
+| `attachments.enabled` | Мастер-выключатель вложений: `false` — загрузка запрещена (`415 attachments_disabled`), ссылки `attachments` в промпте отклоняются. Env — `SYNTH_ATTACHMENTS_ENABLED` | `true` |
+| `attachments.modalities` | Семейства MIME, включаемые по отдельности: `image`/`pdf`/`audio`/`video`; выключенное семейство → `415 UNSUPPORTED_MEDIA_TYPE` (и на загрузке, и при постановке промпта). Env — `SYNTH_ATTACHMENTS_MODALITIES` (csv **включённых**, напр. `image,pdf`; отсутствующие выключаются) | все `true` |
 | `attachments.maxBytesPerFile` | Предел размера одного файла, байт; превышение → `413 PAYLOAD_TOO_LARGE`. Env — `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE` | `26214400` (25 МиБ) |
 | `attachments.maxFilesPerMessage` | Предел числа вложений в одном сообщении (проверяется при постановке промпта); превышение → `400 VALIDATION_ERROR`. Env — `SYNTH_ATTACHMENTS_MAX_FILES_PER_MESSAGE` | `10` |
 | `attachments.maxBytesPerSession` | Предел суммарного объёма вложений сессии (по частям в истории сообщений); превышение при промпте → `413 PAYLOAD_TOO_LARGE`. Env — `SYNTH_ATTACHMENTS_MAX_BYTES_PER_SESSION` | `1073741824` (1 ГиБ) |
 | `attachments.allowedMimePrefixes` | Белый список MIME-**префиксов**; пустой список — разрешены все. `image/svg+xml` запрещён всегда (XSS). **Только `config.yaml`** (список не имеет плоского env-представления). | `["image/", "audio/", "application/pdf", "text/"]` |
+| `attachments.workspaceFallback` | Резервное хранение вложений в workspace проекта, когда blob-хранилище недоступно. Env — `SYNTH_ATTACHMENTS_WORKSPACE_FALLBACK`. **Пока только настройка**: применение в оркестраторе — отдельная задача | `true` |
 | `attachments.gcDays` | Срок хранения **осиротевших** объектов (нет ссылок в `blob_refs`), дни; `0` — без ограничения (объекты не чистятся по сроку). Env — `SYNTH_ATTACHMENTS_GC_DAYS` | `30` |
 
 ```yaml
 attachments:
+  enabled: true
+  modalities: { image: true, pdf: true, audio: true, video: true }
   maxBytesPerFile: 26214400
   maxFilesPerMessage: 10
   maxBytesPerSession: 1073741824
   # Список — только в config.yaml; пустой список = все префиксы разрешены.
   allowedMimePrefixes: ["image/", "audio/", "application/pdf", "text/"]
+  workspaceFallback: true
   gcDays: 30
 ```
 
-- **Env — только скаляры.** В реестре env-оверрайдов (ADR-023) четыре числовых ключа; счётчики
-  `maxBytes*`/`maxFiles*` и `gcDays` можно задать через `SYNTH_ATTACHMENTS_*`, список префиксов —
-  нет.
-- **Где применяется.** `maxBytesPerFile` и белый список — при загрузке
-  (`POST /sessions/:id/attachments`); `maxFilesPerMessage`, `maxBytesPerSession` — при постановке
-  сообщения (`POST /sessions/:id/prompt`); `gcDays` — фоновый pruner (сразу при старте и далее
-  каждые 6 часов, `unref`-таймер).
+- **Приоритет источников.** `SYNTH_ATTACHMENTS_*` (env) > runtime (UI, `settings.json`/PG) >
+  `config.yaml` `attachments` > defaults схемы. Поля, заданные env, фиксируются (`envLocked`) и
+  runtime их не перекрывает: попытка задать другое значение через UI → `409 CONFLICT`.
+- **Runtime-настройки (ADR-115).** Админ-раздел «Вложения» (API —
+  `GET/PUT/DELETE /api/v2/settings/attachments`, [API_V2.md](./API_V2.md) §5.21) меняет
+  `enabled`/`modalities`/лимиты/`workspaceFallback`/`gcDays` **без рестарта**: сервис вложений,
+  постановка промпта и GC читают резолвер на каждый вызов (`restartRequired: false`).
+  Изменения пишутся в аудит политик (`scope: "attachments"`).
+- **Env — скаляры + `modalities`.** В реестре env-оверрайдов (ADR-023) два boolean
+  (`SYNTH_ATTACHMENTS_ENABLED`/`SYNTH_ATTACHMENTS_WORKSPACE_FALLBACK`), четыре числовых ключа и
+  csv `SYNTH_ATTACHMENTS_MODALITIES`; список префиксов (`allowedMimePrefixes`) — только `config.yaml`.
+- **Где применяется.** `enabled` и `modalities` — при загрузке
+  (`POST /sessions/:id/attachments`) и при постановке сообщения; `maxBytesPerFile` и белый
+  список — при загрузке; `maxFilesPerMessage`, `maxBytesPerSession` — при постановке сообщения
+  (`POST /sessions/:id/prompt`); `gcDays` — фоновый pruner (сразу при старте и далее каждые
+  6 часов, `unref`-таймер). Все значения читаются через live-резолвер на каждый вызов.
 - **GC не удаляет живые объекты.** Критерий — `countRefs(blobPath) === 0` **и** объект старше
   `gcDays`; ссылки снимаются при удалении сообщения/сессии, поэтому общий (дедуплицированный) объект
   переживает удаление одного из сообщений. Sidecar-метаданные (`<sha256>.json`) удаляются вместе с

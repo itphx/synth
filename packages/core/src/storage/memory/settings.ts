@@ -39,6 +39,7 @@ import type {
   PluginsRuntimeSettings,
   RuntimeSettings,
   SecurityRuntimeSettings,
+  AttachmentsSettings,
 } from '../runtime-settings.js';
 import type { AppearanceDefaults, DefaultsRepository, DictionaryRepository, ProtectedPathsRepository, SecretPatternRepository, SettingsRepository } from '../ports/index.js';
 import type { SecretPattern, SecretPatternsRaw } from '../../engine/gateway/secret-pattern-store.js';
@@ -330,6 +331,19 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearProxySettings(): Promise<void> {
     this._clear('proxy');
+  }
+
+  /** ADR-115: runtime-настройки вложений сообщений. */
+  async getAttachments(): Promise<Partial<AttachmentsSettings>> {
+    return structuredClone(this._settings.attachments ?? {});
+  }
+
+  async setAttachments(config: Partial<AttachmentsSettings>): Promise<void> {
+    this._patch({ attachments: config });
+  }
+
+  async clearAttachments(): Promise<void> {
+    this._clear('attachments');
   }
 }
 

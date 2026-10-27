@@ -667,23 +667,44 @@ export const authorityConfigSchema = z.object({
 // --- Вложения сообщений (ADR-115) ---
 
 /**
+ * ADR-115: семейства вложений, включаемые/выключаемые по отдельности.
+ * Ключ соответствует семейству MIME: `image/*`, `application/pdf`,
+ * `audio/*`, `video/*`.
+ */
+export const attachmentModalitiesSchema = z.object({
+  image: z.boolean().default(true),
+  pdf: z.boolean().default(true),
+  audio: z.boolean().default(true),
+  video: z.boolean().default(true),
+});
+
+/**
  * ADR-115 §7: конфигурация вложений сообщений (multipart-загрузка + раздача).
  *
+ * - `enabled` — мастер-выключатель вложений: `false` — загрузка и приём
+ *   `attachments` в промпте запрещены (`415 attachments_disabled`);
+ * - `modalities` — какие семейства MIME разрешены (`image`/`pdf`/`audio`/`video`);
+ *   выключенное семейство → `415 UNSUPPORTED_MEDIA_TYPE`;
  * - `maxBytesPerFile` — предел размера одного файла, байт;
  * - `maxFilesPerMessage` — предел числа вложений в одном сообщении;
  * - `maxBytesPerSession` — предел суммарного объёма вложений сессии, байт;
  * - `allowedMimePrefixes` — белый список MIME-префиксов (не пустой список —
  *   все префиксы разрешены; список — объектный ключ, остаётся в config.yaml);
+ * - `workspaceFallback` — резервный путь хранения вложений в workspace проекта
+ *   (когда blob-хранилище недоступно); применяется оркестратором;
  * - `gcDays` — срок хранения осиротевших объектов (дней; `<= 0` — без
  *   ограничения).
  */
 export const attachmentsConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  modalities: attachmentModalitiesSchema.prefault({}),
   maxBytesPerFile: z.number().int().min(1).default(25 * 1024 * 1024),
   maxFilesPerMessage: z.number().int().min(1).default(10),
   maxBytesPerSession: z.number().int().min(1).default(1024 * 1024 * 1024),
   allowedMimePrefixes: z
     .array(z.string().min(1))
     .default(['image/', 'audio/', 'application/pdf', 'text/']),
+  workspaceFallback: z.boolean().default(true),
   gcDays: z.number().int().min(0).default(30),
 });
 
@@ -1351,7 +1372,10 @@ export type QuestionsConfig = z.infer<typeof questionsConfigSchema>;
 /** Этап 1 roadmap 0.13 (блок 4): секция `background` (реестр фоновых прогонов). */
 export type BackgroundConfig = z.infer<typeof backgroundConfigSchema>;
 /** ADR-115: секция `attachments` (лимиты и политика вложений сообщений). */
+export type AttachmentModalitiesConfig = z.infer<typeof attachmentModalitiesSchema>;
 export type AttachmentsConfig = z.infer<typeof attachmentsConfigSchema>;
+/** ADR-115: ключ семейства вложений (`image`/`pdf`/`audio`/`video`). */
+export type AttachmentModality = keyof AttachmentModalitiesConfig;
 /** ADR-094: секция `metrics` (`enabled`). */
 export type MetricsConfig = z.infer<typeof metricsConfigSchema>;
 /** ADR-106 Ф1: секция `authority` (`enabled`/`shadow`). */

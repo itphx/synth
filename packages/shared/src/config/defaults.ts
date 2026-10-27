@@ -222,13 +222,17 @@ export const defaultConfig: SynthConfig = {
     retentionDays: 7,
   },
   attachments: {
-    // ADR-115: лимиты и политика вложений сообщений (байты на файл, число
-    // файлов в сообщении, суммарный объём на сессию, белый список MIME,
-    // срок хранения осиротевших объектов).
+    // ADR-115: вложения сообщений. Мастер-выключатель, семейства MIME,
+    // лимиты (байты на файл, число файлов в сообщении, суммарный объём на
+    // сессию), белый список MIME, резервное хранение в workspace и срок
+    // хранения осиротевших объектов.
+    enabled: true,
+    modalities: { image: true, pdf: true, audio: true, video: true },
     maxBytesPerFile: 25 * 1024 * 1024,
     maxFilesPerMessage: 10,
     maxBytesPerSession: 1024 * 1024 * 1024,
     allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+    workspaceFallback: true,
     gcDays: 30,
   },
   metrics: {

@@ -5,7 +5,9 @@ import {
   applyObjectEnvOverrides,
   BOOTSTRAP_SERVICE_KEYS_ENV,
   OAUTH_PROVIDERS_ENV,
+  ATTACHMENTS_MODALITIES_ENV,
   envOverrideName,
+  parseAttachmentsModalities,
   parseEnvValue,
   toSnakeCase,
 } from './env-overrides.js';
@@ -101,7 +103,16 @@ describe('applyEnvOverrides (ADR-023)', () => {
       analytics: { retentionDays: 400 },
       questions: { timeoutMs: 600_000, retentionDays: 14 },
       background: { enabled: true, maxSubagentsPerSession: 2, maxProcessesPerSession: 5, maxRunsPerSession: 10, logMaxBytes: 10_485_760 },
-      attachments: { maxBytesPerFile: 26_214_400, maxFilesPerMessage: 10, maxBytesPerSession: 1_073_741_824, gcDays: 30 },
+      attachments: {
+        enabled: true,
+        modalities: { image: true, pdf: true, audio: true, video: true },
+        maxBytesPerFile: 26_214_400,
+        maxFilesPerMessage: 10,
+        maxBytesPerSession: 1_073_741_824,
+        allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+        workspaceFallback: true,
+        gcDays: 30,
+      },
       metrics: { enabled: false },
     };
   }
@@ -127,6 +138,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
       SYNTH_ATTACHMENTS_MAX_FILES_PER_MESSAGE: '4',
       SYNTH_ATTACHMENTS_MAX_BYTES_PER_SESSION: '104857600',
       SYNTH_ATTACHMENTS_GC_DAYS: '7',
+      SYNTH_ATTACHMENTS_ENABLED: '0',
+      SYNTH_ATTACHMENTS_WORKSPACE_FALLBACK: 'false',
       SYNTH_METRICS_ENABLED: 'true',
     });
 
@@ -150,11 +163,15 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(cfg.questions).toEqual({ timeoutMs: 0, retentionDays: 7 });
     // PROP-097: лимит фоновых процессов и предел размера лога.
     expect(cfg.background).toMatchObject({ maxProcessesPerSession: 3, logMaxBytes: 2048 });
-    // ADR-115: лимиты вложений сообщений.
+    // ADR-115: лимиты и мастер-выключатель вложений сообщений.
     expect(cfg.attachments).toEqual({
+      enabled: false,
+      modalities: { image: true, pdf: true, audio: true, video: true },
       maxBytesPerFile: 10_485_760,
       maxFilesPerMessage: 4,
       maxBytesPerSession: 104_857_600,
+      allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+      workspaceFallback: false,
       gcDays: 7,
     });
     // ADR-094: Helm ставит SYNTH_METRICS_ENABLED — имя env должно совпадать.
@@ -254,6 +271,80 @@ describe('applyEnvOverrides (ADR-023)', () => {
       embeddingProvider: 'ollama',
       embeddingModel: 'nomic-embed-text',
     });
+  });
+});
+
+/**
+ * ADR-115: csv-оверрайд семейств вложений (`SYNTH_ATTACHMENTS_MODALITIES`).
+ */
+describe('attachments modalities env (ADR-115)', () => {
+  function makeConfig(): Record<string, unknown> {
+    return {
+      attachments: {
+        enabled: true,
+        modalities: { image: true, pdf: true, audio: true, video: true },
+        allowedMimePrefixes: ['image/'],
+        gcDays: 30,
+      },
+    };
+  }
+
+  it('parseAttachmentsModalities: перечисленные включены, остальные выключены', () => {
+    expect(parseAttachmentsModalities('image,audio')).toEqual({
+      image: true,
+      pdf: false,
+      audio: true,
+      video: false,
+    });
+    expect(parseAttachmentsModalities(' IMAGE , pdf ')).toEqual({
+      image: true,
+      pdf: true,
+      audio: false,
+      video: false,
+    });
+  });
+
+  it('parseAttachmentsModalities: мусор → undefined, неизвестные элементы пропускаются', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(parseAttachmentsModalities('nope')).toBeUndefined();
+    expect(parseAttachmentsModalities('image,nope')).toEqual({
+      image: true,
+      pdf: false,
+      audio: false,
+      video: false,
+    });
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('applyObjectEnvOverrides заменяет modalities целиком, прочие ключи сохраняются', () => {
+    const cfg = applyObjectEnvOverrides(makeConfig(), {
+      [ATTACHMENTS_MODALITIES_ENV]: 'image,pdf',
+    });
+    expect(cfg.attachments).toEqual({
+      enabled: true,
+      modalities: { image: true, pdf: true, audio: false, video: false },
+      allowedMimePrefixes: ['image/'],
+      gcDays: 30,
+    });
+  });
+
+  it('пустое/невалидное значение env — секция не меняется', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const empty = applyObjectEnvOverrides(makeConfig(), { [ATTACHMENTS_MODALITIES_ENV]: '' });
+    expect((empty.attachments as Record<string, unknown>).modalities).toEqual({
+      image: true,
+      pdf: true,
+      audio: true,
+      video: true,
+    });
+    const invalid = applyObjectEnvOverrides(makeConfig(), { [ATTACHMENTS_MODALITIES_ENV]: 'nope' });
+    expect((invalid.attachments as Record<string, unknown>).modalities).toEqual({
+      image: true,
+      pdf: true,
+      audio: true,
+      video: true,
+    });
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -1,8 +1,9 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig } from '@itphx/synth-shared';
+import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig } from '@itphx/synth-shared';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '@itphx/synth-shared';
+import { defaultConfig, parseAttachmentsModalities } from '@itphx/synth-shared/config';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 import type { SettingsRepository } from './ports/settings-repository.js';
 
@@ -148,6 +149,26 @@ export interface PluginsRuntimeSettings {
 }
 
 /**
+ * ADR-115: полная эффективная секция вложений сообщений — ровно схема
+ * `attachmentsConfigSchema` (`enabled`, `modalities`, лимиты, префиксы,
+ * `workspaceFallback`, `gcDays`).
+ */
+export type AttachmentsSettings = AttachmentsConfig;
+
+/** Источник эффективного значения настроек вложений (приоритет убывает). */
+export type AttachmentsSource = 'env' | 'runtime' | 'config' | 'default';
+
+/** Результат резолвинга секции `attachments` (env > runtime > config > defaults). */
+export interface ResolvedAttachmentsSettings {
+  /** Эффективные значения — их читает сервис вложений, промпт и pruner. */
+  effective: AttachmentsSettings;
+  /** Источник эффективного значения. */
+  source: AttachmentsSource;
+  /** Поля (camelCase), заданные через env: runtime их не перекрывает. */
+  envLocked: string[];
+}
+
+/**
  * Модель по умолчанию инстанса — явная пара `provider` + `model`.
  *
  * Задаётся в UI (раздел «Модели») и хранится в runtime-настройках
@@ -219,6 +240,12 @@ export interface RuntimeSettings {
    * Применяется при следующем старте процесса (dispatcher start-only).
    */
   proxy?: Partial<ProxyConfig>;
+  /**
+   * ADR-115: runtime-настройки вложений сообщений (админка). Частичный патч
+   * секции `attachments`; применяется **сразу** (сервис вложений, промпт и
+   * GC читают резолвер на каждый вызов), без рестарта.
+   */
+  attachments?: Partial<AttachmentsSettings>;
 }
 
 /**
@@ -408,6 +435,185 @@ export function mergePluginsConfig(
       mode: r.hybrid?.mode ?? base?.hybrid?.mode ?? 'off',
       allow: r.hybrid?.allow ?? base?.hybrid?.allow ?? [],
     },
+  };
+}
+
+/**
+ * ADR-115: нормализовать секцию `attachments` до полного вида (вложенные
+ * `modalities` и список префиксов мёржатся с дефолтами схемы).
+ */
+function normalizeAttachments(config?: Partial<AttachmentsConfig>): AttachmentsSettings {
+  const defaults = defaultConfig.attachments;
+  return {
+    ...defaults,
+    ...(config ?? {}),
+    modalities: { ...defaults.modalities, ...(config?.modalities ?? {}) },
+    allowedMimePrefixes: [...(config?.allowedMimePrefixes ?? defaults.allowedMimePrefixes)],
+  };
+}
+
+/** Скалярные env-ключи секции `attachments` (ADR-115). */
+const ATTACHMENTS_ENV_SCALARS: ReadonlyArray<{
+  key: keyof AttachmentsSettings;
+  env: string;
+  type: 'boolean' | 'number';
+  /** `gcDays` допускает 0; у лимитов — строго положительные. */
+  allowZero?: boolean;
+}> = [
+  { key: 'enabled', env: 'SYNTH_ATTACHMENTS_ENABLED', type: 'boolean' },
+  { key: 'workspaceFallback', env: 'SYNTH_ATTACHMENTS_WORKSPACE_FALLBACK', type: 'boolean' },
+  { key: 'maxBytesPerFile', env: 'SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE', type: 'number' },
+  { key: 'maxFilesPerMessage', env: 'SYNTH_ATTACHMENTS_MAX_FILES_PER_MESSAGE', type: 'number' },
+  { key: 'maxBytesPerSession', env: 'SYNTH_ATTACHMENTS_MAX_BYTES_PER_SESSION', type: 'number' },
+  { key: 'gcDays', env: 'SYNTH_ATTACHMENTS_GC_DAYS', type: 'number', allowZero: true },
+];
+
+/**
+ * ADR-115: прочитать env-значения секции `attachments`.
+ *
+ * Валидное значение фиксируется в `envLocked` (runtime его не перекрывает);
+ * невалидное — warn и игнор (fail-soft, как у `applyEnvOverrides`). Список
+ * MIME-префиксов через env не задаётся (остаётся в config.yaml).
+ */
+function readAttachmentsEnv(env: NodeJS.ProcessEnv): {
+  values: Partial<AttachmentsSettings>;
+  locked: string[];
+} {
+  const values: Partial<AttachmentsSettings> = {};
+  const locked: string[] = [];
+
+  for (const def of ATTACHMENTS_ENV_SCALARS) {
+    const raw = env[def.env];
+    if (raw === undefined || raw === '') continue;
+
+    if (def.type === 'boolean') {
+      const value = raw.toLowerCase();
+      if (value === 'true' || value === '1') {
+        (values as Record<string, unknown>)[def.key] = true;
+        locked.push(def.key);
+      } else if (value === 'false' || value === '0') {
+        (values as Record<string, unknown>)[def.key] = false;
+        locked.push(def.key);
+      } else {
+        console.warn(`[config] невалидное значение ${def.env}="${raw}" (ожидается boolean) — игнорируется`);
+      }
+      continue;
+    }
+
+    const n = Number(raw);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < (def.allowZero ? 0 : 1)) {
+      console.warn(`[config] невалидное значение ${def.env}="${raw}" (ожидается целое ${def.allowZero ? '≥ 0' : '> 0'}) — игнорируется`);
+      continue;
+    }
+    (values as Record<string, unknown>)[def.key] = n;
+    locked.push(def.key);
+  }
+
+  const rawModalities = env.SYNTH_ATTACHMENTS_MODALITIES;
+  if (rawModalities !== undefined && rawModalities !== '') {
+    const parsed = parseAttachmentsModalities(rawModalities);
+    if (parsed) {
+      values.modalities = parsed;
+      locked.push('modalities');
+    }
+  }
+
+  return { values, locked };
+}
+
+/** Сравнение двух полных секций `attachments` (для источника `config`). */
+function sameAttachments(a: AttachmentsSettings, b: AttachmentsSettings): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * ADR-115: эффективные настройки вложений — приоритет
+ * **env > runtime > config.yaml > defaults**.
+ *
+ * Функция чистая (без I/O): её вызывают сервис вложений (`upload`), промпт
+ * (`POST /sessions/:id/prompt`) и GC на **каждый** вызов — поэтому runtime-
+ * изменения из админки применяются без рестарта. Поля, заданные env, попадают
+ * в `envLocked` и не перезаписываются runtime.
+ */
+export function resolveAttachmentsSettings(params: {
+  config?: Partial<AttachmentsConfig>;
+  runtime?: Partial<AttachmentsSettings>;
+  env?: NodeJS.ProcessEnv;
+}): ResolvedAttachmentsSettings {
+  const defaults = normalizeAttachments(undefined);
+  const base = normalizeAttachments(params.config);
+  const runtime = params.runtime ?? {};
+  const { values: envValues, locked } = readAttachmentsEnv(params.env ?? process.env);
+  const lockedSet = new Set(locked);
+
+  /** Runtime-патч без env-зафиксированных полей. */
+  const patch: Partial<AttachmentsSettings> = {};
+  for (const key of Object.keys(runtime) as Array<keyof AttachmentsSettings>) {
+    if (lockedSet.has(key)) continue;
+    (patch as Record<string, unknown>)[key] = runtime[key];
+  }
+  const patchModalities = patch.modalities
+    ? { ...base.modalities, ...patch.modalities }
+    : undefined;
+
+  const effective: AttachmentsSettings = {
+    enabled: envValues.enabled ?? patch.enabled ?? base.enabled,
+    modalities: envValues.modalities ?? patchModalities ?? base.modalities,
+    maxBytesPerFile: envValues.maxBytesPerFile ?? patch.maxBytesPerFile ?? base.maxBytesPerFile,
+    maxFilesPerMessage: envValues.maxFilesPerMessage ?? patch.maxFilesPerMessage ?? base.maxFilesPerMessage,
+    maxBytesPerSession: envValues.maxBytesPerSession ?? patch.maxBytesPerSession ?? base.maxBytesPerSession,
+    allowedMimePrefixes: patch.allowedMimePrefixes
+      ? [...patch.allowedMimePrefixes]
+      : base.allowedMimePrefixes,
+    workspaceFallback: envValues.workspaceFallback ?? patch.workspaceFallback ?? base.workspaceFallback,
+    gcDays: envValues.gcDays ?? patch.gcDays ?? base.gcDays,
+  };
+
+  let source: AttachmentsSource;
+  if (locked.length > 0) source = 'env';
+  else if (Object.keys(patch).length > 0) source = 'runtime';
+  else if (!sameAttachments(base, defaults)) source = 'config';
+  else source = 'default';
+
+  return { effective, source, envLocked: locked };
+}
+
+/**
+ * ADR-115: живое состояние настроек вложений процесса.
+ *
+ * Хранит runtime-патч в памяти (инициализируется из `settings.json`/PG при
+ * старте, обновляется роутом `/settings/attachments`). Резолвер синхронный —
+ * его можно передавать в сервис вложений и pruner: они читают значение на
+ * каждый вызов.
+ */
+export interface LiveAttachmentsSettings {
+  /** Текущий runtime-патч. */
+  getRuntime(): Partial<AttachmentsSettings>;
+  /** Заменить runtime-патч (после записи в порт настроек). */
+  setRuntime(next: Partial<AttachmentsSettings>): void;
+  /** Полный резолв (источник + envLocked). */
+  resolve(): ResolvedAttachmentsSettings;
+  /** Эффективная секция (то, что читают сервис/промпт/pruner). */
+  getConfig(): AttachmentsSettings;
+}
+
+/** Собрать живое состояние настроек вложений (ADR-115). */
+export function createLiveAttachmentsSettings(params: {
+  config?: Partial<AttachmentsConfig>;
+  runtime?: Partial<AttachmentsSettings>;
+  env?: NodeJS.ProcessEnv;
+}): LiveAttachmentsSettings {
+  let runtime = params.runtime ?? {};
+  const env = params.env ?? process.env;
+  const resolve = (): ResolvedAttachmentsSettings =>
+    resolveAttachmentsSettings({ config: params.config, runtime, env });
+  return {
+    getRuntime: () => runtime,
+    setRuntime: (next) => {
+      runtime = next ?? {};
+    },
+    resolve,
+    getConfig: () => resolve().effective,
   };
 }
 
@@ -836,6 +1042,24 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.proxy;
+      return next;
+    });
+  }
+
+  /** ADR-115: runtime-настройки вложений, {} — не заданы. */
+  async getAttachments(): Promise<Partial<AttachmentsSettings>> {
+    const settings = await this.load();
+    return settings.attachments ?? {};
+  }
+
+  async setAttachments(config: Partial<AttachmentsSettings>): Promise<void> {
+    await this._update((current) => ({ ...current, attachments: config }));
+  }
+
+  async clearAttachments(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.attachments;
       return next;
     });
   }
