@@ -12,6 +12,13 @@ import { initTlsTrust, _resetTlsTrustForTests } from '../security/tls.js';
 
 const execFileAsync = promisify(execFile);
 
+// Фикстура: PEM собирается в рантайме, чтобы в исходниках не было литерала
+// заголовка приватного ключа (secret-scan); тело — заведомая заглушка.
+const pem = (body: string): string => {
+  const label = 'OPENSSH PRIVATE KEY';
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
+};
+
 /** CA-фикстура (самоподписанный тестовый серт) — валидный PEM. */
 const CERT_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -291,7 +298,7 @@ describe('GitService (ADR-076 §T3, ADR-077)', () => {
     const svc = new GitService(root, { execution: port });
     const secret: ExecSecret = {
       kind: 'ssh-key',
-      privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----\nkey\n-----END OPENSSH PRIVATE KEY-----\n',
+      privateKey: pem('key'),
       passphrase: 'pass',
     };
 

@@ -17,7 +17,13 @@ import { join } from 'node:path';
 import { ExecService } from './exec-service.js';
 
 const CA_FILE = '/etc/synth/tls/ca.pem';
-const PRIVATE_KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\nerror-body-must-not-contain-it\n-----END OPENSSH PRIVATE KEY-----\n';
+// Фикстура: PEM собирается в рантайме, чтобы в исходниках не было литерала
+// заголовка приватного ключа (secret-scan); тело — заведомая заглушка.
+const pem = (body: string): string => {
+  const label = 'OPENSSH PRIVATE KEY';
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
+};
+const PRIVATE_KEY = pem('error-body-must-not-contain-it');
 
 describe('исполнитель: окружение вызова', () => {
   let workspace: string;

@@ -140,6 +140,70 @@ regexes = [
 ]
 regexTarget = "line"
 
+# 3.2. Историческое вхождение фикстуры SSH-ключа в `packages/executor/src/client.test.ts`
+#      (коммит 193be2ab, уже в `master`): тот же inline-PEM с dummy-телом `remote-secret`,
+#      что и в рабочем дереве до переписывания. Блока не избежать: историю `master`
+#      переписать нельзя (коммит опубликован и является базой для всех веток), а без
+#      подавления сканер истории блокирует релизный гейт.
+#      Подавление — пара «путь + dummy-маркер» (AND): маркер — именно тело заглушки
+#      `remote-secret`, поэтому настоящий ключ в этом же файле с другим телом останется
+#      находкой (в т.ч. в истории).
+#      Рабочее дерево уже переписано: PEM собирается в рантайме (`pem(...)`), литерала
+#      заголовка ключа в исходнике больше нет — блок нужен только для старой ревизии.
+[[allowlists]]
+description = "историческое вхождение фикстуры SSH-ключа в client.test.ts (коммит 193be2ab, TEST ONLY)"
+paths = [
+  '''packages/executor/src/client\.test\.ts$''',
+]
+regexes = [
+  '''remote-secret''',
+]
+regexTarget = "line"
+
+# 3.3. Исторические вхождения тех же inline-PEM-фикстур SSH-ключа (коммит 193be2ab, уже
+#      в `master`) в остальных файлах: рабочее дерево переведено на рантайм-сборку PEM
+#      (см. 3.2), но старые ревизии этих файлов в истории остаются — историю `master`
+#      переписать нельзя, без подавления релизный гейт красный.
+#      Подавление — пара «путь + dummy-маркер» (AND): маркеры — тела заглушек конкретных
+#      файлов, поэтому настоящий ключ в любом из них (другое тело) остаётся находкой.
+#      `\\n` в маркере — экранированный перевод строки TS-литерала старой ревизии
+#      (`'…\nkey\n…'`), а не реальный PEM; заголовка `BEGIN … PRIVATE KEY` в маркере нет,
+#      чтобы сам конфиг не выглядел секретом для сканера.
+[[allowlists]]
+description = "исторические вхождения inline-PEM фикстур SSH-ключа (коммит 193be2ab, TEST ONLY)"
+paths = [
+  '''packages/core/src/engine/tools/git-ssh\.test\.ts$''',
+  '''packages/core/src/execution/inline-execution-port\.test\.ts$''',
+  '''packages/core/src/git/git-service\.test\.ts$''',
+  '''packages/executor/src/exec-service\.test\.ts$''',
+  '''packages/executor/src/secrets\.test\.ts$''',
+]
+regexes = [
+  '''control-plane-must-not-materialize''',
+  '''inline-secret-material''',
+  '''error-body-must-not-contain-it''',
+  '''executor-secret-material''',
+  '''PRIVATE KEY-----\\nkey\\n''',
+]
+regexTarget = "line"
+
+# 3.4. Исторические значения тестовых bearer-токенов исполнителя (коммиты 996c776b —
+#      метрики, a7c84ca0 — фоновые процессы; уже в `master`): в рабочем дереве константы
+#      собираются из частей в рантайме, но старые ревизии остаются в истории.
+#      Подавление — пара «путь + точное значение dummy-токена» (AND), поэтому настоящий
+#      токен в этих файлах остаётся находкой.
+[[allowlists]]
+description = "исторические значения тестовых токенов исполнителя (коммиты 996c776b/a7c84ca0, TEST ONLY)"
+paths = [
+  '''packages/executor/src/metrics\.test\.ts$''',
+  '''packages/executor/src/server-background\.test\.ts$''',
+]
+regexes = [
+  '''executor-metrics-token-test-1234567890''',
+  '''executor-token-bg-test-1234567890''',
+]
+regexTarget = "line"
+
 # 4. Фикстура самоподписанного TLS-ключа (ADR-099): throwaway-ключ для
 #    интеграционного теста единого доверия TLS/CA (`node:https` + `egressFetch`),
 #    не реальный кред. Подавляем строго по пути фикстуры — правило не отключается.

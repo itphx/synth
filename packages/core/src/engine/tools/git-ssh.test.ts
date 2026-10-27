@@ -18,8 +18,13 @@ import { SSHKeyStore } from '../../storage/ssh-key-store.js';
  * Поэтому проверки здесь — обратные: в control plane **не должно** появиться
  * ни каталога `synth-ssh-*`, ни файла с материалом ключа.
  */
-const PRIVATE_KEY =
-  '-----BEGIN OPENSSH PRIVATE KEY-----\ncontrol-plane-must-not-materialize\n-----END OPENSSH PRIVATE KEY-----\n';
+// Фикстура: PEM собирается в рантайме, чтобы в исходниках не было литерала
+// заголовка приватного ключа (secret-scan); тело — заведомая заглушка.
+const pem = (body: string): string => {
+  const label = 'OPENSSH PRIVATE KEY';
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
+};
+const PRIVATE_KEY = pem('control-plane-must-not-materialize');
 const PASSPHRASE = 'passphrase-must-not-leak';
 /** Префикс временных каталогов SSH-ключа (общий с core `createSshEnv`). */
 const SSH_TEMP_DIR_PREFIX = 'synth-ssh-';

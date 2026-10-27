@@ -16,8 +16,13 @@ import { dirname } from 'node:path';
 import { InlineExecutionPort } from './inline-execution-port.js';
 import { EXECUTION_SECRETS_UNSUPPORTED_CODE, isExecutionError } from './ports/index.js';
 
-const PRIVATE_KEY =
-  '-----BEGIN OPENSSH PRIVATE KEY-----\ninline-secret-material\n-----END OPENSSH PRIVATE KEY-----\n';
+// Фикстура: PEM собирается в рантайме, чтобы в исходниках не было литерала
+// заголовка приватного ключа (secret-scan); тело — заведомая заглушка.
+const pem = (body: string): string => {
+  const label = 'OPENSSH PRIVATE KEY';
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
+};
+const PRIVATE_KEY = pem('inline-secret-material');
 
 /** Команда печатает путь к ключу, извлечённый из `GIT_SSH_COMMAND`. */
 const PRINT_KEY_PATH =

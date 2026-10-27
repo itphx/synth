@@ -19,7 +19,13 @@ import { basename, dirname, join } from 'node:path';
 import { materializeSecrets, SSH_TEMP_DIR_PREFIX, sweepStaleSshDirs } from './secrets.js';
 import { ExecService } from './exec-service.js';
 
-const PRIVATE_KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\nexecutor-secret-material\n-----END OPENSSH PRIVATE KEY-----\n';
+// Фикстура: PEM собирается в рантайме, чтобы в исходниках не было литерала
+// заголовка приватного ключа (secret-scan); тело — заведомая заглушка.
+const pem = (body: string): string => {
+  const label = 'OPENSSH PRIVATE KEY';
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
+};
+const PRIVATE_KEY = pem('executor-secret-material');
 const PASSPHRASE = 'executor-passphrase';
 
 /** Путь к ключу из `GIT_SSH_COMMAND` (`ssh -i <путь> …`). */

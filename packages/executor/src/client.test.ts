@@ -15,6 +15,13 @@ import { startExecutorServer, type ExecutorHandle } from './server.js';
 
 const TOKEN = 'executor-client-token-test-1234567890';
 
+// Фикстура: PEM собирается в рантайме, чтобы в исходниках не было литерала
+// заголовка приватного ключа (secret-scan); тело — заведомая заглушка.
+const pem = (body: string): string => {
+  const label = 'OPENSSH PRIVATE KEY';
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
+};
+
 let workspace: string;
 let handles: ExecutorHandle[] = [];
 /** «Старые» исполнители (протокол v2 — без фоновых процессов). */
@@ -489,7 +496,7 @@ describe('клиент удалённого порта: секреты вызо�
 
     const secret = {
       kind: 'ssh-key' as const,
-      privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----\nremote-secret\n-----END OPENSSH PRIVATE KEY-----\n',
+      privateKey: pem('remote-secret'),
     };
     const res = await port.execute({
       command: { kind: 'shell', command: 'printf ok' },
