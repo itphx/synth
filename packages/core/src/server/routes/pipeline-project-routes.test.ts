@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import { ProjectRole } from '@itphx/synth-shared';
@@ -11,6 +14,9 @@ import { MemoryPipelineRepository } from '../../storage/memory/content.js';
 import type { ProjectRepository } from '../../storage/ports/project-repository.js';
 import type { PipelineDefinitionRecord } from '../../storage/ports/pipeline-repository.js';
 import { PipelineEngine } from '../../engine/pipelines/index.js';
+import { PipelineArtifactStore } from '../../engine/pipelines/artifacts.js';
+import { FileBlobStore } from '../../storage/file-blob-store.js';
+import { MemoryBlobRefRepository } from '../../storage/memory/blob-refs.js';
 import { gateDecisionResult } from '../../engine/pipelines/index.js';
 import type { StepExecutionContext, StepExecutor, StepOutcome } from '../../engine/pipelines/index.js';
 
@@ -125,6 +131,8 @@ function createHarness(options: {
   serviceScopes?: string[];
   /** Legacy-определения пайплайнов (шаблоны инстанса, ADR-100). */
   templates?: PipelineDefinitionRecord[];
+  /** ADR-116: хранилище артефактов прогонов (раздача байтов). */
+  artifacts?: PipelineArtifactStore;
 } = { projects: [] }) {
   const pipelines = new MemoryProjectPipelineRepository();
   const runs = new MemoryPipelineRunRepository();
@@ -157,7 +165,14 @@ function createHarness(options: {
     '/api/v2',
     createPipelineProjectRoutes(
       createMockAuth(),
-      { pipelines, runs, engine, projects, templates },
+      {
+        pipelines,
+        runs,
+        engine,
+        projects,
+        templates,
+        ...(options.artifacts ? { artifacts: options.artifacts } : {}),
+      },
       {
         getCurrentUserId: () => userId,
         canReadProject: options.canRead,
@@ -1009,6 +1024,110 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body: JSON.stringify({ spec: spec() }),
       });
       expect(create.status).toBe(201);
+    });
+  });
+
+  describe('Артефакты прогона (ADR-116)', () => {
+    /** Артефактное хранилище поверх in-memory ссылок и временного каталога. */
+    async function artifactsHarness() {
+      const dir = await mkdtemp(join(tmpdir(), 'synth-pipeline-artifacts-routes-'));
+      const blobs = new FileBlobStore({ root: join(dir, 'blobs') });
+      const refs = new MemoryBlobRefRepository();
+      return { artifacts: new PipelineArtifactStore({ blobs, blobRefs: refs }), blobs, refs };
+    }
+
+    /** Прогон проекта с журналом, где выход сообщил артефакт (ADR-116). */
+    async function seedRun(
+      runs: MemoryPipelineRunRepository,
+      overrides: Partial<{ projectId: string; runId: string }> = {},
+    ) {
+      const runId = overrides.runId ?? 'prun_1';
+      const projectId = overrides.projectId ?? 'proj-1';
+      const now = new Date().toISOString();
+      await runs.saveRun({
+        id: runId,
+        pipelineId: 'pl_1',
+        version: 1,
+        spec: spec({ status: 'published', projectId }),
+        projectId,
+        status: 'done',
+        createdAt: now,
+        updatedAt: now,
+      });
+      await runs.appendEvent({
+        runId,
+        ts: now,
+        type: 'run.finished',
+        payload: {
+          status: 'done',
+          exits: [{ kind: 'file', file: { path: 'out/report.md' } }],
+          artifacts: [
+            {
+              kind: 'blob',
+              path: `artifacts/${runId}/report.md`,
+              name: 'report.md',
+              mime: 'text/markdown; charset=utf-8',
+              size: 5,
+            },
+          ],
+        },
+      });
+      return runId;
+    }
+
+    it('GET /pipeline-runs/:runId/artifacts/:name — байты с Content-Type/ETag/Disposition', async () => {
+      const { artifacts } = await artifactsHarness();
+      const { app, runs } = createHarness({ projects, artifacts });
+      const runId = await seedRun(runs);
+      await artifacts.put(runId, { name: 'report.md', bytes: Buffer.from('отчёт') });
+
+      const res = await app.request(`/api/v2/pipeline-runs/${runId}/artifacts/report.md`);
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Content-Type')).toContain('text/markdown');
+      expect(res.headers.get('Content-Disposition')).toContain('attachment');
+      expect(res.headers.get('Content-Disposition')).toContain('report.md');
+      expect(res.headers.get('ETag')).toBeTruthy();
+      expect(res.headers.get('Content-Length')).toBe(String(Buffer.byteLength('отчёт')));
+      expect(await res.text()).toBe('отчёт');
+
+      // Условный запрос: объект неизменяем.
+      const cached = await app.request(`/api/v2/pipeline-runs/${runId}/artifacts/report.md`, {
+        headers: { 'If-None-Match': res.headers.get('ETag') as string },
+      });
+      expect(cached.status).toBe(304);
+    });
+
+    it('нет артефакта — 404; нет хранилища артефактов — тоже 404', async () => {
+      const { artifacts } = await artifactsHarness();
+      const { app, runs } = createHarness({ projects, artifacts });
+      const runId = await seedRun(runs);
+
+      const missing = await app.request(`/api/v2/pipeline-runs/${runId}/artifacts/missing.md`);
+      expect(missing.status).toBe(404);
+      const body: any = await missing.json();
+      expect(body.error.code).toBe('NOT_FOUND');
+
+      // Прогон без артефактов (хранилище не подключено) — ничего не раздаём.
+      const headless = createHarness({ projects });
+      await seedRun(headless.runs, { runId: 'prun_2' });
+      const noStore = await headless.app.request(
+        '/api/v2/pipeline-runs/prun_2/artifacts/report.md',
+      );
+      expect(noStore.status).toBe(404);
+    });
+
+    it('нет права чтения проекта — 403 (права те же, что у чтения прогона)', async () => {
+      const { artifacts } = await artifactsHarness();
+      const { app, runs } = createHarness({
+        projects,
+        artifacts,
+        canRead: (_c, project) => project.id === 'proj-1',
+      });
+      const runId = await seedRun(runs, { projectId: 'proj-2', runId: 'prun_3' });
+
+      const res = await app.request(`/api/v2/pipeline-runs/${runId}/artifacts/report.md`);
+      expect(res.status).toBe(403);
     });
   });
 });
