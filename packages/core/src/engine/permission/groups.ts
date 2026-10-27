@@ -12,7 +12,7 @@ import { ToolCapability, type ToolSource } from '@itphx/synth-shared';
 // blob-хранилище вложений), поэтому его группа — как у файловых read-тулов.
 // `list_models` — каталог моделей инстанса (только чтение, ADR-115), тоже `read`.
 const READ_TOOLS = ['read_file', 'list_directory', 'glob', 'attach_workspace_file', 'list_models'];
-const WRITE_TOOLS = ['write_file', 'edit_file', 'create_directory', 'delete_file'];
+const WRITE_TOOLS = ['write_file', 'edit_file', 'create_directory', 'delete_file', 'save_attachment'];
 const GIT_READ_TOOLS = ['git_status', 'git_diff', 'git_log', 'git_branch_list', 'git_show', 'git_blame', 'git_worktree_list'];
 const GIT_WRITE_TOOLS = [
   'git_commit',
@@ -191,6 +191,9 @@ export const TOOL_PATH_PARAMS: Record<string, string[]> = {
   // ADR-115: путь к файлу из workspace — file-паттерны правил (`read`/
   // `external_directory`) применяются к привязке вложения так же, как к чтению.
   attach_workspace_file: ['path'],
+  // ADR-115: выгрузка вложения в workspace — путь назначения участвует в
+  // file-паттернах (`edit`/`external_directory`), как у записи файлов.
+  save_attachment: ['path'],
   list_directory: ['path'],
   glob: ['path'],
   write_file: ['file_path'],

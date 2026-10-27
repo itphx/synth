@@ -175,6 +175,38 @@ export interface MediaPartData {
   модель получает штатный блок `[ATTACHMENTS NOT DELIVERED]` с путём в workspace (§«Отброшенное
   вложение не теряется») — то есть честное «не доставлено», а не молчаливую потерю.
 
+### Сохранение вложения в workspace
+
+**Решение 2026-10-27.** Доставленное вложение живёт **только** в blob-хранилище: в сообщении лежит
+ссылка (`MediaPartData.blobPath`), байтов там нет. Материализация (§«Отброшенное вложение не
+теряется») касается лишь **отброшенных** файлов, агенту же нужен и доставленный оригинал — например,
+чтобы прогнать его через shell (`pdftotext`, `ffprobe`), положить в репозиторий или обработать
+скриптом. Тул `save_attachment` (`packages/core/src/engine/tools/save-attachment.ts`) выгружает
+вложение текущей сессии в рабочий каталог:
+
+- **Поиск — только в текущей сессии.** Источник — `messages[].parts[]` сессии `ctx.sessionId`
+  (`ctx.extra.sessionManager.getSession`); медиа-части (`image`/`audio`/`video`/`file`) с валидным
+  `data {blobPath, sha256, mime, size, name?}`. Селектор: `sha256` — точное совпадение;
+  `name` — по имени файла (совпадений больше одного → **ошибка** `attach.tool.ambiguous` со списком
+  `name (sha8, messageId)` и подсказкой передать `sha256`, а не «первое попавшееся»); ничего не
+  задано — **последнее** медиа-вложение сессии. Нет вложений — `attach.tool.no_attachment`, нет
+  совпадений — `attach.tool.not_found`.
+- **Только объекты вложений.** `blobPath` обязан быть из `attachments/` (проверка в туле и в
+  `AttachmentService.resolve`/`read`): логи процессов, артефакты и прочие blob'ы через этот контур
+  не выгружаются — иначе тул стал бы универсальным читателем хранилища.
+- **Куда.** `path` — относительный путь в workspace (по умолчанию `attachments/<name|sha8>`; имя
+  санитайзится общей функцией `sanitizeAttachmentName`). Родительские каталоги создаются;
+  containment — как у `attach_workspace_file` (`path-utils`: абсолютный путь, `..` и побег через
+  симлинк → отказ), путь объявлен в `TOOL_PATH_PARAMS`, поэтому file-паттерны правил действуют.
+- **Без перезаписи.** Байты пишутся потоком во временный файл `.tmp-<uuid>` того же каталога и
+  публикуются **без перезаписи** (`link`, fallback `copyFile` с `COPYFILE_EXCL` — `rename` молча
+  заменил бы существующий файл); занятое имя → `attach.tool.exists` с подсказкой указать другой
+  `path`, временный файл убирается в любом исходе. Лимитов размера нет (файл уже принят
+  `attachments.*`), проверяется только непустота объекта.
+- **Права.** Capability `file_write` (это запись в workspace), группа записи — plan-режим тул
+  блокирует (ADR-025/ADR-029). Результат — `{content: attach.tool.saved, metadata: {path, blob_path,
+  sha256, mime, size}}`; ошибки — ключи `attach.tool.*` (ADR-041).
+
 ## Модальности входа модели
 
 **Решение 2026-10-27: единственный источник истины — каталог провайдера при синхронизации моделей.**
@@ -474,6 +506,10 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   (`engine/tools/attach-workspace-file.ts`, ADR-115 §«Повторная привязка файла из workspace»):
   containment внутри workspace, `stat` до чтения, общие лимиты/allowlist `attachments.*`, доставка
   user-сообщением через очередь (`deliverUserMessage`), `blob_refs` для нового сообщения;
+- выгрузка доставленного вложения в workspace — тул `save_attachment`
+  (`engine/tools/save-attachment.ts`, ADR-115 §«Сохранение вложения в workspace»): поиск медиа-части
+  в текущей сессии (по `sha256`/`name`/последнее), чтение объекта через `AttachmentService.resolve`/
+  `read`, containment и публикация без перезаписи (`link`), capability `file_write`;
 - UI: композер (кнопка/drag&drop/paste, `prepareAttachmentFiles`: HEIC→JPEG, office→текст+картинки
   с группой), чипы и галерея, отправка `attachments`, рендер в ленте (изображения сеткой, audio/video
   `controls`, файлы чипом), гейт модальностей по `modalities`;
@@ -550,6 +586,13 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   обычный блок `[ATTACHMENTS NOT DELIVERED]`. Шаблон блока обновлён: текстовые файлы — `read_file`,
   PDF/изображения/аудио/видео — `attach_workspace_file` либо shell-обработка (`pdftotext`, OCR,
   `ffprobe`), неподдержанный формат — сообщить пользователю.
+- 2026-10-27 — **сохранение вложения в workspace** (`save_attachment`): доставленное вложение
+  доступно агенту только по ссылке в blob, поэтому тул ищет медиа-часть в **текущей сессии**
+  (`sha256` / `name` / последнее), читает объект через `AttachmentService` и кладёт файл в workspace
+  (по умолчанию `attachments/<name|sha8>`). Неоднозначное имя — ошибка со списком `name (sha8,
+  messageId)` и подсказкой `sha256`; containment как у `attach_workspace_file`; публикация без
+  перезаписи (`link`/`COPYFILE_EXCL`), занятое имя → `attach.tool.exists`. Группа записи (plan-режим
+  блокирует), capability `file_write`.
 - 2026-10-27 — **модели обработки по модальностям** (этап 1: конфиг + API, по образцу Hermes Agent):
   `attachments.modalityModels` (`provider`+`model` на семейство), runtime-патч с `null` для снятия
   записи, валидация по каталогу до записи; модель сессии не меняется, нативный путь приоритетнее,

@@ -3126,15 +3126,24 @@ export const dict = {
   'attach.message.from_workspace': 'Файл из рабочего каталога: {path}',
   'attach.tool.attached':
     'Файл «{path}» приложен к диалогу и будет передан модели следующим ходом',
-  'attach.tool.deps_unavailable': 'Привязка файлов недоступна в этой сборке',
+  'attach.tool.deps_unavailable': 'Вложения недоступны в этой сборке',
   'attach.tool.delivery_unavailable':
     'Файл загружен, но доставка сообщения в сессию в этом контексте недоступна — модель его не увидит',
   'attach.tool.disabled': 'Вложения отключены на этом инстансе',
-  'attach.tool.not_found': 'Файл «{path}» не найден в рабочем каталоге',
+  'attach.tool.not_found': 'Файл или вложение «{path}» не найдены',
   'attach.tool.not_a_file': '«{path}» — не файл',
   'attach.tool.too_large': 'Файл «{path}» весит {size} Б — предел вложения {limit} Б',
   'attach.tool.unsupported_mime': 'Файл «{path}» нельзя приложить: {detail}',
   'attach.tool.unrecognized': 'Формат файла «{path}» не распознан — приложить его нельзя',
+
+  // --- Сохранение вложения в workspace (ADR-115): тул `save_attachment` ---
+  'attach.tool.saved': 'Вложение сохранено в «{path}» ({size} Б)',
+  'attach.tool.ambiguous':
+    'Под «{query}» подходят несколько вложений: {list}. Передай sha256, чтобы выбрать точное',
+  'attach.tool.no_attachment': 'В этой сессии нет медиа-вложений',
+  'attach.tool.exists':
+    'Файл «{path}» уже есть в рабочем каталоге — укажи другой path, чтобы сохранить вложение',
+  'attach.tool.save_failed': 'Не удалось сохранить вложение: {error}',
 
   // --- Каталог моделей для агента (ADR-115): тул `list_models` ---
   'models.list.header': 'Модели (фильтр: {filter}; показано {shown} из {total}):',

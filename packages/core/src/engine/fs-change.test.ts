@@ -19,6 +19,23 @@ describe('resolveFsChange', () => {
       .toEqual({ scope: 'file', paths: ['src/a.ts'], op: 'delete' });
   });
 
+  it('save_attachment (путь от тула относительный) → op write', () => {
+    // `save_attachment` кладёт в metadata относительный путь (`attachments/<name>`),
+    // а не абсолютный, как `write_file`: путь резолвится от рабочего каталога.
+    expect(resolveFsChange('save_attachment', { path: 'attachments/a.png' }, WS))
+      .toEqual({ scope: 'file', paths: ['attachments/a.png'], op: 'write' });
+  });
+
+  it('save_attachment с абсолютным путём внутри workspace → op write', () => {
+    expect(resolveFsChange('save_attachment', { path: '/tmp/project-ws/attachments/a.png' }, WS))
+      .toEqual({ scope: 'file', paths: ['attachments/a.png'], op: 'write' });
+  });
+
+  it('save_attachment вне workspace → all', () => {
+    expect(resolveFsChange('save_attachment', { path: '../outside/a.png' }, WS)).toEqual({ scope: 'all' });
+    expect(resolveFsChange('save_attachment', { path: '/etc/passwd' }, WS)).toEqual({ scope: 'all' });
+  });
+
   it('create_directory внутри workspace → file + op mkdir', () => {
     expect(resolveFsChange('create_directory', { path: '/tmp/project-ws/dir' }, WS))
       .toEqual({ scope: 'file', paths: ['dir'], op: 'mkdir' });

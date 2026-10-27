@@ -2700,15 +2700,24 @@ export const dict = {
   'attach.message.from_workspace': 'File from the working directory: {path}',
   'attach.tool.attached':
     'File "{path}" attached to the dialog; it will be passed to the model on the next turn',
-  'attach.tool.deps_unavailable': 'Attaching files is unavailable in this build',
+  'attach.tool.deps_unavailable': 'Attachments are unavailable in this build',
   'attach.tool.delivery_unavailable':
     'File was uploaded, but message delivery to the session is unavailable in this context — the model will not see it',
   'attach.tool.disabled': 'Attachments are disabled on this instance',
-  'attach.tool.not_found': 'File "{path}" not found in the working directory',
+  'attach.tool.not_found': 'File or attachment "{path}" not found',
   'attach.tool.not_a_file': '"{path}" is not a file',
   'attach.tool.too_large': 'File "{path}" is {size} bytes — the attachment limit is {limit} bytes',
   'attach.tool.unsupported_mime': 'File "{path}" cannot be attached: {detail}',
   'attach.tool.unrecognized': 'File "{path}" format was not recognized — it cannot be attached',
+
+  // --- Сохранение вложения в workspace (ADR-115): тул `save_attachment` ---
+  'attach.tool.saved': 'Attachment saved to "{path}" ({size} bytes)',
+  'attach.tool.ambiguous':
+    'Several attachments match "{query}": {list}. Pass sha256 to pick one exactly',
+  'attach.tool.no_attachment': 'This session has no media attachments',
+  'attach.tool.exists':
+    'File "{path}" already exists in the working directory — pass another path to save the attachment',
+  'attach.tool.save_failed': 'Failed to save the attachment: {error}',
 
   // --- Каталог моделей для агента (ADR-115): тул `list_models` ---
   'models.list.header': 'Models (filter: {filter}; shown {shown} of {total}):',

@@ -68,6 +68,8 @@ import {
 } from './worktree.js';
 // ADR-115: повторная привязка файла из workspace — вложение в диалог.
 import { attachWorkspaceFileTool } from './attach-workspace-file.js';
+// ADR-115: выгрузка доставленного вложения сессии в рабочий каталог.
+import { saveAttachmentTool } from './save-attachment.js';
 // ADR-115: каталог моделей инстанса для агента (модальности, текущая пара,
 // назначения aux-моделей).
 import { listModelsTool } from './list-models.js';
@@ -79,6 +81,8 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   readFileTool,
   // ADR-115: файл из workspace → вложение диалога (медиа-часть следующего хода)
   attachWorkspaceFileTool,
+  // ADR-115: доставленное вложение сессии → файл в рабочем каталоге
+  saveAttachmentTool,
   // ADR-115: каталог моделей — модальности, текущая пара, назначения aux-моделей
   listModelsTool,
   listDirectoryTool,

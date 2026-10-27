@@ -37,6 +37,9 @@ const FILE_TOOL_OPS: Record<string, FsChangeOp> = {
   edit_file: 'write',
   delete_file: 'delete',
   create_directory: 'mkdir',
+  // ADR-115: выгрузка вложения в workspace создаёт файл — дерево Files должно
+  // обновиться. Путь в metadata относительный (`attachments/<name>`).
+  save_attachment: 'write',
 };
 
 /** Тулы записи в единичный файл/каталог — могут дать точный относительный путь. */
@@ -195,7 +198,10 @@ export function resolveFsChange(
     return { scope: 'all' };
   }
 
-  const rel = relative(resolve(workingDir), resolve(rawPath));
+  // Путь резолвится **от рабочего каталога**: `write_file`/`edit_file` кладут в
+  // metadata абсолютный путь, `save_attachment` — относительный
+  // (`attachments/<name>`); `resolve` абсолютный путь оставляет как есть.
+  const rel = relative(resolve(workingDir), resolve(workingDir, rawPath));
   // Путь вне workspace (`..`, абсолютный) или совпадает с корнем — обновляем всё.
   if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     return { scope: 'all' };
