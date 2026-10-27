@@ -2709,6 +2709,8 @@ export const dict = {
   'attach.tool.too_large': 'File "{path}" is {size} bytes — the attachment limit is {limit} bytes',
   'attach.tool.unsupported_mime': 'File "{path}" cannot be attached: {detail}',
   'attach.tool.unrecognized': 'File "{path}" format was not recognized — it cannot be attached',
+  'attach.tool.queued':
+    'File "{name}" will be sent as an attachment of the reply at the end of this turn',
 
   // --- Сохранение вложения в workspace (ADR-115): тул `save_attachment` ---
   'attach.tool.saved': 'Attachment saved to "{path}" ({size} bytes)',

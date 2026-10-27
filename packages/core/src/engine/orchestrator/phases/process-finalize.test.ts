@@ -15,8 +15,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { BusEvent, LLMChunk, LLMResponse, Message, TokenUsage } from '@itphx/synth-shared';
+import { MessageRole, generateId, makeMediaPart, makeTextPart, nowISO } from '@itphx/synth-shared';
+import type { BusEvent, LLMChunk, LLMResponse, Message, Part, TokenUsage } from '@itphx/synth-shared';
 import { FileStore } from '../../../storage/file-store.js';
 import { SessionManager } from '../../../sessions/manager.js';
 import { EventBus } from '../../../events/bus.js';
@@ -69,6 +69,8 @@ describe('runProcessFinalize', () => {
   let published: Array<{ event: string; data: Record<string, unknown> }>;
   let order: string[];
   let debugCollector: DebugCollector;
+  /** ADR-115 (outbound): ссылки на объекты вложений ответа (best-effort). */
+  let blobRefs: { add: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-orch-finalize-'));
@@ -79,6 +81,7 @@ describe('runProcessFinalize', () => {
     published = [];
     order = [];
     debugCollector = new DebugCollector(false);
+    blobRefs = { add: vi.fn(async () => undefined) };
   });
 
   afterEach(async () => {
@@ -151,7 +154,7 @@ describe('runProcessFinalize', () => {
     const saveSpy = vi.fn(async (...args: Parameters<SaveAssistantMessageFn>) => {
       order.push('saveAssistantMessage');
       return saveAssistantMessage(
-        { sessionManager, eventBus, obfMapStore: null, modelPriceLoader: null },
+        { sessionManager, eventBus, obfMapStore: null, modelPriceLoader: null, blobRefs: blobRefs as never },
         ...args,
       );
     });
@@ -596,6 +599,170 @@ describe('runProcessFinalize', () => {
 
       expect(published[0]!.data.content).toBe('ответ модели');
       expect(events.find((e) => e.type === 'message.quality_check')!.data).toMatchObject({ qa_pass: false });
+    });
+  });
+
+  describe('вложения ответа (ADR-115, outbound)', () => {
+    /** sha256 виду «aa…»/«bb…» — валидная 64-символьная hex-строка. */
+    function shaOf(fill: string): string {
+      return fill.repeat(64).slice(0, 64);
+    }
+
+    function mediaPart(type: 'image' | 'audio' | 'video' | 'file', fill: string, name?: string): Part {
+      const sha256 = shaOf(fill);
+      return makeMediaPart(type, {
+        blobPath: `attachments/${sha256.slice(0, 2)}/${sha256}`,
+        sha256,
+        mime: type === 'file' ? 'application/pdf' : `${type}/png`,
+        size: 1024,
+        ...(name ? { name } : {}),
+      });
+    }
+
+    /**
+     * Зависимости с сохранением ответа «с медиа-частями»: реальный
+     * `saveAssistantMessage` пишет только текстовую часть, поэтому части
+     * проставляются сразу после сохранения (так выглядит ответ с вложениями).
+     */
+    function depsWithParts(parts: Part[]): ProcessFinalizeDeps {
+      const save = vi.fn(async (...args: Parameters<SaveAssistantMessageFn>) => {
+        const content = await saveAssistantMessage(
+          { sessionManager, eventBus, obfMapStore: null, modelPriceLoader: null },
+          ...args,
+        );
+        const [sessionId, , streamId] = args;
+        const messages = (await sessionManager.getSession(sessionId))?.messages ?? [];
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const message = messages[i]!;
+          if (message.role !== MessageRole.ASSISTANT) continue;
+          if (message.metadata?.stream_id !== streamId) continue;
+          await sessionManager.updateMessage(sessionId, { ...message, parts });
+          break;
+        }
+        return content;
+      });
+      return makeDeps({ saveAssistantMessage: save as unknown as SaveAssistantMessageFn });
+    }
+
+    it('image + pdf → stream.done.attachments с sha/mime/size/name в порядке частей', async () => {
+      const sessionId = await makeSession();
+      const deps = depsWithParts([
+        makeTextPart('вот файлы'),
+        mediaPart('image', 'a', 'photo.png'),
+        mediaPart('file', 'b', 'report.pdf'),
+      ]);
+
+      await runProcessFinalize(makeArgs(sessionId), makeState(), deps);
+
+      const done = published.find((p) => p.event === 'stream.done')!;
+      expect(done.data.attachments).toEqual([
+        { sha256: shaOf('a'), mime: 'image/png', size: 1024, name: 'photo.png' },
+        { sha256: shaOf('b'), mime: 'application/pdf', size: 1024, name: 'report.pdf' },
+      ]);
+    });
+
+    it('без медиа — поля attachments нет (прежний контракт события)', async () => {
+      const sessionId = await makeSession();
+
+      await runProcessFinalize(makeArgs(sessionId), makeState(), makeDeps());
+
+      const done = published.find((p) => p.event === 'stream.done')!;
+      expect('attachments' in done.data).toBe(false);
+    });
+
+    it('части без валидной формы игнорируются, вложения пользователя не попадают', async () => {
+      const sessionId = await makeSession();
+      // Медиа-часть в сообщении пользователя — не ответ: в stream.done её нет.
+      const user = (await sessionManager.getSession(sessionId))!.messages[0]!;
+      await sessionManager.updateMessage(sessionId, {
+        ...user,
+        parts: [makeTextPart('вопрос'), mediaPart('image', 'c', 'user.png')],
+      });
+
+      const deps = depsWithParts([
+        makeTextPart('ответ'),
+        // битые формы: без данных, без blobPath, sha не 64 hex, size не число
+        { id: generateId(), type: 'image', data: {} },
+        { id: generateId(), type: 'file', data: { sha256: shaOf('d'), mime: 'text/plain', size: 1 } },
+        {
+          id: generateId(),
+          type: 'image',
+          data: { blobPath: 'attachments/zz/zz', sha256: 'zz', mime: 'image/png', size: 1 },
+        },
+        {
+          id: generateId(),
+          type: 'audio',
+          data: { blobPath: `attachments/${shaOf('e').slice(0, 2)}/${shaOf('e')}`, sha256: shaOf('e'), mime: 'audio/mpeg', size: 'много' },
+        },
+        mediaPart('image', 'f'),
+      ]);
+
+      await runProcessFinalize(makeArgs(sessionId), makeState(), deps);
+
+      const done = published.find((p) => p.event === 'stream.done')!;
+      expect(done.data.attachments).toEqual([
+        { sha256: shaOf('f'), mime: 'image/png', size: 1024 },
+      ]);
+    });
+
+    it('часть из коллектора (`outboundParts`) попадает в финальное сообщение и stream.done', async () => {
+      const sessionId = await makeSession();
+      const part = mediaPart('image', '1', 'diagram.png');
+
+      // Реальный производитель (`send_attachment`) — часть в коллекторе хода;
+      // финализация обязана сама добавить её к финальному сообщению.
+      await runProcessFinalize(
+        makeArgs(sessionId),
+        makeState({ outboundParts: [part] }),
+        makeDeps(),
+      );
+
+      const stored = (await sessionManager.getSession(sessionId))!;
+      const assistant = stored.messages.find((m) => m.role === MessageRole.ASSISTANT)!;
+      expect(assistant.parts).toHaveLength(2);
+      expect(assistant.parts[0]!.type).toBe('text');
+      expect(assistant.parts[1]).toMatchObject({ type: 'image', data: { name: 'diagram.png' } });
+
+      const done = published.find((p) => p.event === 'stream.done')!;
+      expect(done.data.attachments).toEqual([
+        { sha256: shaOf('1'), mime: 'image/png', size: 1024, name: 'diagram.png' },
+      ]);
+
+      // Ссылка на объект учтена с id **сохранённого** сообщения (GC, ADR-115).
+      expect(blobRefs.add).toHaveBeenCalledWith({
+        blobPath: `attachments/${shaOf('1').slice(0, 2)}/${shaOf('1')}`,
+        ownerKind: 'message',
+        ownerId: assistant.id,
+      });
+    });
+
+    it('без коллектора (`outboundParts` не задан) — прежнее поведение', async () => {
+      const sessionId = await makeSession();
+
+      await runProcessFinalize(makeArgs(sessionId), makeState(), makeDeps());
+
+      const stored = (await sessionManager.getSession(sessionId))!;
+      const assistant = stored.messages.find((m) => m.role === MessageRole.ASSISTANT)!;
+      expect(assistant.parts).toHaveLength(1);
+      expect(assistant.parts[0]!.type).toBe('text');
+      expect(blobRefs.add).not.toHaveBeenCalled();
+    });
+
+    it('ветка отмены части не сохраняет и не отправляет (объект остаётся до GC)', async () => {
+      const sessionId = await makeSession();
+
+      await runProcessFinalize(
+        makeArgs(sessionId),
+        makeState({ cancelledBeforeFinal: true, finalContent: 'обрывок', outboundParts: [mediaPart('image', '2', 'x.png')] }),
+        makeDeps(),
+      );
+
+      const stored = (await sessionManager.getSession(sessionId))!;
+      const assistant = stored.messages.find((m) => m.role === MessageRole.ASSISTANT)!;
+      expect(assistant.parts).toHaveLength(1);
+      expect(published.map((p) => p.event)).toEqual(['stream.cancelled']);
+      expect(published[0]!.data).not.toHaveProperty('attachments');
+      expect(blobRefs.add).not.toHaveBeenCalled();
     });
   });
 });

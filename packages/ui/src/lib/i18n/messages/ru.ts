@@ -3135,6 +3135,7 @@ export const dict = {
   'attach.tool.too_large': 'Файл «{path}» весит {size} Б — предел вложения {limit} Б',
   'attach.tool.unsupported_mime': 'Файл «{path}» нельзя приложить: {detail}',
   'attach.tool.unrecognized': 'Формат файла «{path}» не распознан — приложить его нельзя',
+  'attach.tool.queued': 'Файл «{name}» будет отправлен вложением в ответ в конце этого хода',
 
   // --- Сохранение вложения в workspace (ADR-115): тул `save_attachment` ---
   'attach.tool.saved': 'Вложение сохранено в «{path}» ({size} Б)',

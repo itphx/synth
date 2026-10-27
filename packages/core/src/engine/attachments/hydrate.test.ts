@@ -699,3 +699,100 @@ describe('hydrateMessageAttachments: derive (ADR-115)', () => {
     expect(result[0]!.debug?.attachmentsDropped).toHaveLength(1);
   });
 });
+
+/**
+ * ADR-115: вложения собираются только из реплик пользователя. Медиа в
+ * assistant-сообщении — исходящее (шлюзы/UI через `stream.done.attachments`),
+ * провайдеру не отправляется.
+ */
+describe('hydrateMessageAttachments: только реплики пользователя', () => {
+  /** Assistant-сообщение с медиа-частью (исходящее вложение). */
+  function assistantImageSource(): Message[] {
+    return [
+      sourceMessage({
+        id: 'src-assistant',
+        role: MessageRole.ASSISTANT,
+        parts: [mediaPart('image', { blobPath: 'attachments/aa/image', name: 'plan.png' })],
+      }),
+    ];
+  }
+
+  it('медиа assistant-сообщения пропускается полностью: без вложения, derive и пометок', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const derive = vi.fn(async () => 'не должно вызываться');
+    const messages = [llmMessage({ role: 'assistant' })];
+
+    const result = await hydrateMessageAttachments(messages, assistantImageSource(), deps, {
+      // Модальность не принята — при обходе роли это вызвало бы derive.
+      modalities: ['text'],
+      derive,
+    });
+
+    // Сообщение не тронуто: ни байтов, ни блока «не доставлено», ни debug-записей.
+    expect(result[0]).toBe(messages[0]);
+    expect(result[0]!.attachments).toBeUndefined();
+    expect(result[0]!.content).toBe('вопрос');
+    expect(result[0]!.content).not.toContain('ATTACHMENTS NOT DELIVERED');
+    expect(result[0]!.content).not.toContain('[attachment not delivered');
+    expect(result[0]!.debug?.attachmentsDropped).toBeUndefined();
+    expect(result[0]!.debug?.attachmentsDerived).toBeUndefined();
+    expect(derive).not.toHaveBeenCalled();
+    expect(deps.reads).toEqual([]);
+  });
+
+  it('та же часть в реплике пользователя — прежнее поведение (derive, затем вложение)', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const userSource = [sourceMessage({ parts: [mediaPart('image', { blobPath: 'attachments/aa/image', name: 'plan.png' })] })];
+
+    // Модальность не принята → текст aux-модели вместо байтов.
+    const derived = await hydrateMessageAttachments([llmMessage()], userSource, deps, {
+      modalities: ['text'],
+      derive: async () => 'Схема зала',
+    });
+    expect(derived[0]!.content).toBe('вопрос\n\n[image: plan.png]\nСхема зала');
+    expect(derived[0]!.debug?.attachmentsDerived).toBe(1);
+
+    // Модальность принята → байты вложения.
+    const native = await hydrateMessageAttachments([llmMessage()], userSource, deps, {
+      modalities: ['text', 'image'],
+    });
+    expect(native[0]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+  });
+
+  it('смешанная история: обрабатывается только user, медиа assistant не считается и в лимите', async () => {
+    const deps = makeDeps({
+      'attachments/aa/u1': PNG_BYTES,
+      'attachments/aa/image': PNG_BYTES,
+      'attachments/aa/u2': PNG_BYTES,
+    });
+    const source = [
+      sourceMessage({ id: 'u1', parts: [mediaPart('image', { blobPath: 'attachments/aa/u1' })] }),
+      sourceMessage({
+        id: 'a1',
+        role: MessageRole.ASSISTANT,
+        parts: [mediaPart('image', { blobPath: 'attachments/aa/image' })],
+      }),
+      sourceMessage({ id: 'u2', parts: [mediaPart('image', { blobPath: 'attachments/aa/u2' })] }),
+    ];
+    const base64Length = PNG_BYTES.toString('base64').length;
+
+    const result = await hydrateMessageAttachments(
+      [llmMessage({ id: 'm-u1' }), llmMessage({ id: 'm-a1', role: 'assistant' }), llmMessage({ id: 'm-u2' })],
+      source,
+      deps,
+      // Лимит ровно на два вложения: если бы часть assistant считалась,
+      // самым старым оказалось бы `u1` и оно было бы отброшено по лимиту.
+      { modalities: ['image'], maxTotalBase64Bytes: base64Length * 2 },
+    );
+
+    expect(deps.reads).toEqual(['attachments/aa/u1', 'attachments/aa/u2']);
+    expect(result[0]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+    expect(result[0]!.debug?.attachmentsDropped).toBeUndefined();
+    // Assistant-сообщение не тронуто и в лимит не попало.
+    expect(result[1]!.attachments).toBeUndefined();
+    expect(result[1]!.debug?.attachmentsDropped).toBeUndefined();
+    expect(result[1]!.content).toBe('вопрос');
+    expect(result[2]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+    expect(result[2]!.debug?.attachmentsDropped).toBeUndefined();
+  });
+});

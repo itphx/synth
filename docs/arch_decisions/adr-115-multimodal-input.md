@@ -207,6 +207,34 @@ export interface MediaPartData {
   блокирует (ADR-025/ADR-029). Результат — `{content: attach.tool.saved, metadata: {path, blob_path,
   sha256, mime, size}}`; ошибки — ключи `attach.tool.*` (ADR-041).
 
+### Отправка файла в ответе (`send_attachment`)
+
+**Решение 2026-10-27.** Обратное направление к `save_attachment`: файл из workspace уходит
+**получателю ответа** — во внешний канал (Telegram/VK) он попадает как вложение ответа, потому что
+шлюз раздаёт только `stream.done.attachments`. Тул `send_attachment`
+(`packages/core/src/engine/tools/send-attachment.ts`):
+
+- **Файл из workspace.** `path` — относительный путь; containment как у `attach_workspace_file`
+  (`path-utils`: абсолютный путь, `..` и побег через симлинк → отказ), путь объявлен в
+  `TOOL_PATH_PARAMS`, поэтому file-паттерны правил действуют. Capability `file_read`, группа `read`:
+  workspace не мутируется, plan-режим тул не блокирует.
+- **Проверки до чтения.** `attachments.enabled`, `stat` (файл существует, это файл, `0 < size ≤
+  attachments.maxBytesPerFile`); MIME/модальность/белый список — в `AttachmentService.upload`
+  (единственная точка записи байтов). `name` — имя для получателя (по умолчанию `basename`).
+- **Не отправка, а очередь.** Часть (`image|audio|video|file` по MIME) складывается в
+  **коллектор хода** (`ctx.extra.outboundAttachments`, создаётся в `_processMessage`), а к
+  сообщению её добавляет финализация: `saveAssistantMessage` собирает `parts` = текст **+**
+  накопленные медиа-части, поэтому они попадают и в историю, и в `stream.done.attachments`
+  (через `collectOutboundAttachments`). После сохранения — `blobRefs.add({ownerKind:'message',
+  ownerId: <id сообщения>})` (best-effort): иначе GC удалил бы объект по TTL.
+- **Один ход, никаких «полуотправок».** Части живут ровно один ход: ошибка/отмена до финального
+  сохранения ничего не отправляет (объект остаётся в blob без ссылки и вычищается pruner'ом),
+  промежуточные tool-chain сообщения вложений не несут.
+- **Ошибки** — ключи `attach.tool.*` (ADR-041): `not_found`, `not_a_file`, `too_large`, `disabled`,
+  `unrecognized` (MIME не распознан/запрещён, пустой файл), `deps_unavailable` (нет сервиса
+  вложений или коллектора — «тихий» успех недопустим); успех — `attach.tool.queued` с `metadata
+  {path, blob_path, mime, size, name}`.
+
 ## Модальности входа модели
 
 **Решение 2026-10-27: единственный источник истины — каталог провайдера при синхронизации моделей.**
@@ -496,6 +524,18 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   шлюзы и пайплайны кладут файл в blob до появления сессии/сообщения; объект без `blob_refs`
   живёт `attachments.gcDays` и удаляется тем же pruner'ом (отдельного TTL нет); core — `requireAuth`,
   managed — плюс scope service-key `events:ingest`;
+- **outbound: `stream.done.attachments` + раздача по sha** (шлюзы отправляют вложения ответа
+  наружу, не обращаясь к сессии): событие `stream.done` несёт аддитивное
+  `attachments?: Array<{sha256, mime, size, name?}>` — медиа-части **финального**
+  assistant-сообщения хода (`collectOutboundAttachments`,
+  `engine/orchestrator/phases/process-finalize.ts`), порядок — как в сообщении, битые части
+  игнорируются, без медиа — поля нет; байты забираются `GET /api/v2/attachments/:sha256`
+  (content-addressed `attachments/<sha2>/<sha>`, тот же auth/scope, что у staging; `Range` нет,
+  `HEAD` есть, `404` на неизвестный/не-hex sha);
+- **продюсер вложений ответа — тул `send_attachment`** (§«Отправка файла в ответе»): файл из
+  workspace → `AttachmentService.upload` → медиа-часть в коллекторе хода → `parts` финального
+  сообщения (`saveAssistantMessage`) + `blobRefs.add` с id сообщения; отмена/ошибка хода ничего
+  не отправляет;
 - LLM: `LLMMessage.attachments`, гидратация из blob-порта (лимит 20 МиБ, фильтр по модальностям),
   OpenAI `image_url`/`input_audio`, Anthropic `image`/`document`; gateway не обфусцирует и не логирует
   base64 (payload-лог и debug-снимок — сводкой `{mime,name,sizeBytes}`);

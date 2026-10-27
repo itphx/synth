@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -3302,6 +3302,10 @@ export class ChatOrchestrator {
       // 6. Tool loop — stream LLM, execute tools, continue until no tool calls
       let toolIteration = 0;
       const currentMessages: LLMMessage[] = [...baseLlmMessages];
+      // ADR-115 (outbound): медиа-части ответа хода — их складывает тул
+      // `send_attachment`, а к финальному сообщению добавляет финализация
+      // (оттуда — в `stream.done.attachments`). Живёт ровно один ход.
+      const outboundParts: Part[] = [];
       const doomLoopTracker: Map<string, number> = new Map();
       let finalContent = '';
       let allReasoning: Array<{ text: string; iteration: number }> = [];
@@ -4062,6 +4066,15 @@ export class ChatOrchestrator {
                   // user-сообщения (очередь + автоход) и учёт ссылок на blob.
                   attachmentService: this._getAttachmentService(),
                   attachmentsConfig: this._attachmentsConfig ?? undefined,
+                  // ADR-115 (outbound): коллектор медиа-частей ответа хода —
+                  // тул `send_attachment` кладёт часть, финализация добавляет её
+                  // к финальному сообщению. Не отправка сразу: при отмене/ошибке
+                  // хода ничего не уходит (объект остаётся в blob до GC).
+                  outboundAttachments: {
+                    add: (part: Part) => {
+                      outboundParts.push(part);
+                    },
+                  },
                   // ADR-115: каталог моделей инстанса — тул `list_models`
                   // (модальности, текущая пара, назначения aux-моделей).
                   listModels: this._listModels ?? undefined,
@@ -4485,6 +4498,8 @@ export class ChatOrchestrator {
           currentMessages, promptMeta, loadedTokenRatio, routingDecision,
           provider, providerName, effectiveAgentRole, effectiveReasoningLevel, finalSystemPrompt,
           currentDraft,
+          // ADR-115 (outbound): медиа-части ответа (`send_attachment`).
+          outboundParts,
         },
         this._processFinalizeDeps(),
       );
@@ -4881,6 +4896,9 @@ export class ChatOrchestrator {
       obfMapStore: this._obfMapStore,
       modelPriceLoader: this._modelPriceLoader,
       analytics: this._analytics ?? undefined,
+      // ADR-115 (outbound): ссылки на объекты вложений ответа — иначе GC
+      // удалит их по TTL, хотя сообщение на них ссылается.
+      blobRefs: this._blobRefs ?? undefined,
     };
   }
 
@@ -5136,6 +5154,8 @@ export class ChatOrchestrator {
     precomputedCost?: ReturnType<typeof computeUsageCost>,
     /** Шаг 2б: обновить существующий черновик частичного стрима вместо append. */
     existing?: { id: string; seq: number },
+    /** ADR-115 (outbound): медиа-части ответа хода (после текста). */
+    extraParts?: Part[],
   ): Promise<string> {
     return saveAssistantMessage(
       this._persistenceDeps(),
@@ -5160,6 +5180,7 @@ export class ChatOrchestrator {
       promptMeta,
       precomputedCost,
       existing,
+      extraParts,
     );
   }
 

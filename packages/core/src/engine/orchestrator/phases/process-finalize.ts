@@ -11,7 +11,15 @@
  * цикла передаётся объектом (`ProcessFinalizeState`). Функция всегда
  * возвращает `{}` — как и прежний код в этой точке.
  */
-import type { PromptMeta, ReasoningLevel, Session, TokenUsage } from '@itphx/synth-shared';
+import type {
+  MediaPartData,
+  Message,
+  Part,
+  PromptMeta,
+  ReasoningLevel,
+  Session,
+  TokenUsage,
+} from '@itphx/synth-shared';
 import { MessageRole } from '@itphx/synth-shared';
 import type { DebugCollector } from '../../../debug.js';
 import type { SessionManager } from '../../../sessions/manager.js';
@@ -91,6 +99,14 @@ export interface ProcessFinalizeState {
    * завершилась tool_chain-сообщением.
    */
   currentDraft?: { id: string; seq: number } | null;
+  /**
+   * ADR-115 (outbound): медиа-части ответа, накопленные тулом `send_attachment`
+   * за ход. Добавляются к **финальному** сообщению (после текста) — оттуда их
+   * читает `collectOutboundAttachments` для `stream.done.attachments`.
+   * Ветка отмены их не сохраняет (ход не завершён — ничего не отправляем).
+   * Не задано/пусто — прежнее поведение.
+   */
+  outboundParts?: Part[];
 }
 
 /** Зависимости эпилога `_processMessage`. */
@@ -132,6 +148,81 @@ export interface ProcessFinalizeDeps {
   unregister: (streamId: string) => void;
 }
 
+/**
+ * ADR-115 (outbound): вложение ответа для внешних каналов — **метаданные**
+ * объекта, без байтов. Шлюз (Telegram/VK) забирает байты по sha256
+ * (`GET /api/v2/attachments/:sha256`) и не обращается к сессии.
+ */
+export interface OutboundAttachmentRef {
+  /** SHA-256 содержимого (адрес объекта в контуре вложений). */
+  sha256: string;
+  /** MIME по содержимому. */
+  mime: string;
+  /** Размер в байтах. */
+  size: number;
+  /** Имя файла (санитайз), если известно. */
+  name?: string;
+}
+
+/** Медиа-типы частей сообщения (ADR-115) — кандидаты на outbound-раздачу. */
+const OUTBOUND_PART_TYPES: readonly string[] = ['image', 'audio', 'video', 'file'];
+
+/** SHA-256 в шестнадцатеричном виде — адрес объекта вложения. */
+const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
+
+/**
+ * `Part.data` → ссылка на вложение при строгом совпадении формы.
+ *
+ * Части приходят из истории (в т.ч. после импорта/PG), поэтому доверять форме
+ * нельзя: без `blobPath`/`sha256`/`mime`/`size` часть не считается вложением и
+ * в `stream.done` не попадает.
+ */
+function toOutboundRef(data: unknown): OutboundAttachmentRef | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const raw = data as Partial<MediaPartData>;
+  if (typeof raw.blobPath !== 'string' || raw.blobPath === '') return null;
+  if (typeof raw.sha256 !== 'string' || !SHA256_PATTERN.test(raw.sha256)) return null;
+  if (typeof raw.mime !== 'string' || raw.mime === '') return null;
+  if (typeof raw.size !== 'number' || !Number.isFinite(raw.size) || raw.size < 0) return null;
+  return {
+    sha256: raw.sha256.toLowerCase(),
+    mime: raw.mime,
+    size: raw.size,
+    ...(typeof raw.name === 'string' && raw.name ? { name: raw.name } : {}),
+  };
+}
+
+/**
+ * Вложения **финального** assistant-сообщения хода (ADR-115, outbound).
+ *
+ * Источник — сообщение, сохранённое этим же ходом (`metadata.stream_id`), а не
+ * вся история: шлюзу нужны вложения **ответа**, а не присланные пользователем.
+ * Порядок — как в сообщении; части без валидной формы игнорируются.
+ * Промежуточные tool-chain сообщения хода (`metadata.tool_chain`) не считаются.
+ */
+export function collectOutboundAttachments(
+  messages: readonly Message[],
+  streamId: string,
+): OutboundAttachmentRef[] {
+  let finalMessage: Message | undefined;
+  for (const message of messages) {
+    if (message.role !== MessageRole.ASSISTANT) continue;
+    if (message.metadata?.stream_id !== streamId) continue;
+    if (message.metadata?.tool_chain === true) continue;
+    finalMessage = message;
+  }
+  if (!finalMessage || !Array.isArray(finalMessage.parts)) return [];
+
+  const found: OutboundAttachmentRef[] = [];
+  for (const part of finalMessage.parts) {
+    if (!part || typeof part.type !== 'string') continue;
+    if (!OUTBOUND_PART_TYPES.includes(part.type)) continue;
+    const ref = toOutboundRef(part.data);
+    if (ref) found.push(ref);
+  }
+  return found;
+}
+
 /** Финализация хода: завершение как отмена, quality-check, персист, `stream.done`. */
 export async function runProcessFinalize(
   args: ProcessFinalizeArgs,
@@ -145,7 +236,7 @@ export async function runProcessFinalize(
     lastIterationPromptChars, promptMeta, toolIteration, maxIterations,
     stopAfterDeny, denyStopReason, hadDeny, routingDecision, effectiveReasoningLevel,
     roleBlocked, roleBlockedTool, roleBlockedAgent,
-    currentMessages, loadedTokenRatio, finalSystemPrompt, currentDraft,
+    currentMessages, loadedTokenRatio, finalSystemPrompt, currentDraft, outboundParts,
   } = state;
   let { finalContent, finalModel, finalUsage, fallbackI18n } = state;
 
@@ -320,6 +411,9 @@ export async function runProcessFinalize(
     promptMeta,
     messageCost,
     currentDraft ?? undefined,
+    // ADR-115 (outbound): медиа-части ответа (`send_attachment`) — в историю
+    // финального сообщения и, через него, в `stream.done.attachments`.
+    outboundParts,
   );
 
   // ADR-071 §2.6: калибровка chars-per-token по факту (promptChars / inputTokens)
@@ -357,6 +451,17 @@ export async function runProcessFinalize(
     if (Object.keys(secrets).length > 0) {
       doneData.metadata = { secrets };
     }
+  }
+
+  // ADR-115 (outbound): вложения финального ответа — аддитивное поле, только
+  // метаданные (`sha256`/`mime`/`size`/`name`). Байты шлюз забирает по sha
+  // (`GET /api/v2/attachments/:sha256`), доступ к сессии ему не нужен.
+  // Нет медиа-частей — поля нет вовсе (прежний контракт события).
+  const attachments = updatedSession
+    ? collectOutboundAttachments(updatedSession.messages, streamId)
+    : [];
+  if (attachments.length > 0) {
+    doneData.attachments = attachments;
   }
 
   if (stopAfterDeny) {

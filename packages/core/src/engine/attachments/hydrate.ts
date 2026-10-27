@@ -9,6 +9,13 @@
  * Правила:
  *  - сообщения сопоставляются с исходной историей **по индексу** (порядок
  *    тот же, что отфильтровал `sessionMessagesToLlm`);
+ *  - вложения собираются **только** из реплик пользователя (`MessageRole.USER`):
+ *    медиа в assistant-сообщении — исходящее (для шлюзов/UI через
+ *    `stream.done.attachments`), в контекст провайдера оно не идёт — часть
+ *    провайдеров (OpenAI) вложения ассистента отвергает. Такие части
+ *    пропускаются полностью: без LLM-вложения, без `derive`, без блока
+ *    «не доставлено» и без `debug.attachmentsDropped` (в лимит объёма тоже
+ *    не попадают);
  *  - вложения, модальность которых модель **точно** не принимает, не
  *    отправляются: в лог уходит сводка, а на сообщении остаётся пометка
  *    `reason: 'modality'`. Модальности модели неизвестны (`options.modalities`
@@ -364,7 +371,14 @@ export async function hydrateMessageAttachments(
 
   const limit = Math.min(messages.length, included.length);
   for (let index = 0; index < limit; index++) {
-    const refs = mediaPartRefs(included[index]!);
+    const current = included[index]!;
+    // Вложения — только из реплик пользователя: медиа в assistant-сообщении
+    // исходящее (для шлюзов/UI через `stream.done.attachments`), в контекст
+    // провайдера не идёт — часть провайдеров (OpenAI) вложения ассистента
+    // отвергает. Пропускаем роль целиком: ни байтов, ни `derive`, ни пометки
+    // «не доставлено», ни записи в `debug`, ни учёта в лимите объёма.
+    if (current.role !== MessageRole.USER) continue;
+    const refs = mediaPartRefs(current);
     if (refs.length === 0) continue;
 
     for (const ref of refs) {

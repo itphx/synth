@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MessageRole } from '@itphx/synth-shared';
+import { MessageRole, makeMediaPart } from '@itphx/synth-shared';
 import type { BusEvent, Message, TokenUsage } from '@itphx/synth-shared';
 import { FileStore } from '../../storage/file-store.js';
 import { SessionManager } from '../../sessions/manager.js';
@@ -195,6 +195,74 @@ describe('saveAssistantMessage / persistToolChain', () => {
     const added = events.filter((e) => e.type === 'message.added');
     expect(added).toHaveLength(1);
     expect(added[0]!.data).toMatchObject({ message_index: 0, role: MessageRole.ASSISTANT, content: 'ответ' });
+  });
+
+  it('ADR-115 (outbound): медиа-части (`extraParts`) — в `parts` после текста + ссылки blob', async () => {
+    const session = await newSession();
+    const blobPath = 'attachments/ab/deadbeef';
+    const part = makeMediaPart('image', {
+      blobPath,
+      sha256: 'deadbeef',
+      mime: 'image/png',
+      size: 8,
+      name: 'shot.png',
+    });
+    const addRef = vi.fn(async () => undefined);
+
+    await saveAssistantMessage(
+      deps({ blobRefs: { add: addRef } as never }),
+      session.id, 'держи файл', 'stream1', 'developer', USAGE, 'm', undefined,
+      debugCollector, false, 'prov',
+      MessageRole.ASSISTANT, undefined, false,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      // `existing` не задан — черновика нет
+      undefined,
+      // ADR-115: медиа-часть ответа
+      [part],
+    );
+
+    const saved = (await sessionManager.getSession(session.id))!.messages[0]!;
+    expect(saved.parts).toHaveLength(2);
+    expect(saved.parts[0]!.type).toBe('text');
+    expect(saved.parts[1]).toMatchObject({ type: 'image', data: { blobPath } });
+    // Ссылка — с id **сохранённого** сообщения, иначе GC удалит объект по TTL.
+    expect(addRef).toHaveBeenCalledWith({ blobPath, ownerKind: 'message', ownerId: saved.id });
+  });
+
+  it('ADR-115 (outbound): без `extraParts` — только текст, ссылки не пишутся', async () => {
+    const session = await newSession();
+    const addRef = vi.fn(async () => undefined);
+
+    await saveAssistantMessage(
+      deps({ blobRefs: { add: addRef } as never }),
+      session.id, 'просто текст', 'stream1', undefined, USAGE, 'm', undefined,
+      debugCollector, false, 'prov',
+    );
+
+    const saved = (await sessionManager.getSession(session.id))!.messages[0]!;
+    expect(saved.parts).toHaveLength(1);
+    expect(saved.parts[0]!.type).toBe('text');
+    expect(addRef).not.toHaveBeenCalled();
+  });
+
+  it('ADR-115 (outbound): ошибка учёта ссылки не отменяет сохранение (best-effort)', async () => {
+    const session = await newSession();
+    const addRef = vi.fn(async () => {
+      throw new Error('blob_refs недоступен');
+    });
+
+    await expect(
+      saveAssistantMessage(
+        deps({ blobRefs: { add: addRef } as never }),
+        session.id, 'ответ', 'stream1', undefined, USAGE, 'm', undefined,
+        debugCollector, false, 'prov',
+        MessageRole.ASSISTANT, undefined, false,
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+        undefined,
+        [makeMediaPart('file', { blobPath: 'attachments/cd/x', sha256: 'cd', mime: 'application/pdf', size: 1 })],
+      ),
+    ).resolves.toBe('ответ');
+    expect((await sessionManager.getSession(session.id))!.messages[0]!.parts).toHaveLength(2);
   });
 
   it('явный metadataExtra.status приоритетнее вывода из i18n; невалидный — отбрасывается', async () => {

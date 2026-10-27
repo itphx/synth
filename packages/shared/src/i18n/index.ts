@@ -418,6 +418,8 @@ export const ENGINE_MESSAGE_KEYS = [
   'attach.tool.too_large',
   'attach.tool.unsupported_mime',
   'attach.tool.unrecognized',
+  // --- Отправка файла в ответе (ADR-115): тул `send_attachment` ---
+  'attach.tool.queued',
   // --- Сохранение вложения в workspace (ADR-115): тул `save_attachment` ---
   'attach.tool.saved',
   'attach.tool.ambiguous',
@@ -840,6 +842,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'attach.tool.too_large': ["path","size","limit"],
   'attach.tool.unsupported_mime': ["path","detail"],
   'attach.tool.unrecognized': ["path"],
+  'attach.tool.queued': ["name"],
   'attach.tool.saved': ["path","size"],
   'attach.tool.ambiguous': ["query","list"],
   'attach.tool.no_attachment': [],

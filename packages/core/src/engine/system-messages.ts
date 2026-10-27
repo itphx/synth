@@ -536,6 +536,12 @@ export const SYSTEM_MESSAGES = {
   'attach.tool.unsupported_mime': 'File "{path}" cannot be attached: {detail}',
   'attach.tool.unrecognized': 'File "{path}" format was not recognized — it cannot be attached',
 
+  // --- Отправка файла в ответе (ADR-115): тул `send_attachment` ---
+  // Файл из workspace уходит в blob-хранилище и прикрепляется к **финальному**
+  // сообщению хода: шлюз (Telegram/VK) получает его в `stream.done.attachments`.
+  'attach.tool.queued':
+    'File "{name}" will be sent as an attachment of the reply at the end of this turn',
+
   // --- Сохранение вложения в workspace (ADR-115): тул `save_attachment` ---
   // Байты берутся из blob-хранилища по ссылке из медиа-части сессии; файл
   // публикуется в workspace без перезаписи существующего.

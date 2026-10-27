@@ -7,8 +7,9 @@
  * `_joinAccumulatedTexts`; тип `AssistantMessageStatus` реэкспортируется из
  * `orchestrator.ts` (публичный контракт).
  */
-import type { Message, PromptMeta, TokenUsage } from '@itphx/synth-shared';
+import type { Message, Part, PromptMeta, TokenUsage } from '@itphx/synth-shared';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
+import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { DebugCollector } from '../../debug.js';
@@ -238,6 +239,12 @@ export interface SaveAssistantMessageDeps {
   modelPriceLoader: ModelPriceLoader | null;
   /** ADR-102: сборщик `usage`-роллапа (не задан — запись не выполняется). */
   analytics?: AnalyticsRecorder;
+  /**
+   * ADR-115 (outbound): учёт ссылок на объекты blob-хранилища. Нужен, когда к
+   * сообщению прикреплены медиа-части (`extraParts`): без ссылки GC сочёл бы
+   * объект сиротой по TTL. Best-effort — ошибка не отменяет сохранение.
+   */
+  blobRefs?: BlobRefRepository;
 }
 
 /** Ссылка на уже созданное сообщение (черновик частичного стрима, шаг 2б). */
@@ -273,6 +280,13 @@ export type SaveAssistantMessageFn = (
    * (`updateMessage`) вместо `addMessage`, чтобы в истории не было дубля.
    */
   existing?: ExistingMessageRef,
+  /**
+   * ADR-115 (outbound): медиа-части ответа, накопленные тулом `send_attachment`
+   * за ход. Добавляются в `parts` **после** текста: оттуда их читает
+   * `collectOutboundAttachments` (вложения финального сообщения →
+   * `stream.done.attachments`). Пусто/не задано — прежнее поведение.
+   */
+  extraParts?: Part[],
 ) => Promise<string>;
 
 export async function saveAssistantMessage(
@@ -305,6 +319,8 @@ export async function saveAssistantMessage(
   precomputedCost?: UsageCost | null,
   /** Шаг 2б: обновить существующий черновик вместо создания нового сообщения. */
   existing?: ExistingMessageRef,
+  /** ADR-115 (outbound): медиа-части ответа хода (после текста). */
+  extraParts?: Part[],
 ): Promise<string> {
   const sessionManager = deps.sessionManager;
   const finalContent = content;
@@ -378,7 +394,8 @@ export async function saveAssistantMessage(
     role,
     seq: existing?.seq ?? 0, // filled by addMessage (или уже назначен черновиком)
     origin: 'local',
-    parts: [makeTextPart(finalContent)],
+    // ADR-115 (outbound): текст + медиа-части ответа (`send_attachment`).
+    parts: [makeTextPart(finalContent), ...(extraParts ?? [])],
     content: finalContent,
     createdAt: nowISO(),
     disabled: false,
@@ -410,6 +427,25 @@ export async function saveAssistantMessage(
     }
   } else {
     await sessionManager.addMessage(sessionId, msg);
+  }
+
+  // ADR-115 (outbound): сообщение ссылается на объекты вложений — учитываем
+  // ссылки, иначе GC удалит их по TTL, а получатель останется без файла.
+  // Best-effort: учёт ссылок — производная, он не отменяет сохранение.
+  if (extraParts && extraParts.length > 0 && deps.blobRefs) {
+    for (const part of extraParts) {
+      const data = part?.data as { blobPath?: unknown } | undefined;
+      if (!data || typeof data.blobPath !== 'string' || data.blobPath === '') continue;
+      try {
+        await deps.blobRefs.add({
+          blobPath: data.blobPath,
+          ownerKind: 'message',
+          ownerId: msg.id,
+        });
+      } catch {
+        // учёт ссылок — производная: не роняет ход и не отменяет сообщение
+      }
+    }
   }
 
   // ADR-102 §3: шов записи `usage` — значение уже посчитано (usage/model/cost/

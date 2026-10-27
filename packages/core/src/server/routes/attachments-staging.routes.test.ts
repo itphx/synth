@@ -236,4 +236,101 @@ describe('HTTP: staging-загрузка вложений (ADR-115)', () => {
 
     expect(res.status).toBe(201);
   });
+
+  describe('GET /api/v2/attachments/:sha256 — раздача по sha (outbound шлюзов)', () => {
+    /** Загрузить байты и вернуть их sha256 + blobPath. */
+    async function uploadedSha(app: Hono, bytes = pngBytes()): Promise<{ sha256: string; blobPath: string }> {
+      const res = await upload(app, bytes);
+      expect(res.status).toBe(201);
+      return (await res.json()) as { sha256: string; blobPath: string };
+    }
+
+    it('200: байты, Content-Type и Content-Length по существующему sha', async () => {
+      const { app } = createHarness();
+      const { sha256 } = await uploadedSha(app);
+
+      const res = await app.request(`/api/v2/attachments/${sha256}`);
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toBe('image/png');
+      expect(res.headers.get('content-length')).toBe(String(pngBytes().length));
+      expect(res.headers.get('cache-control')).toBe('private, no-store');
+      expect(Buffer.from(await res.arrayBuffer())).toEqual(pngBytes());
+    });
+
+    it('sha в верхнем регистре нормализуется (адресация content-addressed)', async () => {
+      const { app } = createHarness();
+      const { sha256 } = await uploadedSha(app);
+
+      const res = await app.request(`/api/v2/attachments/${sha256.toUpperCase()}`);
+
+      expect(res.status).toBe(200);
+      expect(Buffer.from(await res.arrayBuffer())).toEqual(pngBytes());
+    });
+
+    it('HEAD: те же заголовки без тела', async () => {
+      const { app } = createHarness();
+      const { sha256 } = await uploadedSha(app);
+
+      const res = await app.request(`/api/v2/attachments/${sha256}`, { method: 'HEAD' });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toBe('image/png');
+      expect(res.headers.get('content-length')).toBe(String(pngBytes().length));
+      expect(await res.text()).toBe('');
+    });
+
+    it('404 NOT_FOUND: неизвестный (но валидный по форме) sha', async () => {
+      const { app } = createHarness();
+
+      const res = await app.request(`/api/v2/attachments/${'a'.repeat(64)}`);
+
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('NOT_FOUND');
+    });
+
+    it('404 NOT_FOUND: не-hex и неполный sha — объект не ищется', async () => {
+      const { app } = createHarness();
+
+      for (const bad of ['zz', 'z'.repeat(64), 'a'.repeat(63), 'a'.repeat(65)]) {
+        const res = await app.request(`/api/v2/attachments/${bad}`);
+        expect(res.status, `sha=${bad}`).toBe(404);
+        const body = (await res.json()) as { error: { code: string } };
+        expect(body.error.code, `sha=${bad}`).toBe('NOT_FOUND');
+      }
+    });
+
+    it('404 NOT_FOUND: произвольный blob вне контура вложений не раздаётся', async () => {
+      const { app, blobs } = createHarness();
+      // Объект лежит вне `attachments/`, но его sha всё равно запрашивается
+      // по адресу вложений — контур ограничен каталогом.
+      const sha256 = 'b'.repeat(64);
+      await blobs.write(`logs/${sha256}`, Buffer.from('секрет'));
+
+      const res = await app.request(`/api/v2/attachments/${sha256}`);
+
+      expect(res.status).toBe(404);
+    });
+
+    it('401 UNAUTHORIZED: гейт покрывает и раздачу по sha', async () => {
+      const { app } = createHarness({
+        auth: { requireAuth: async (c) => c.json({ error: { code: 'UNAUTHORIZED' } }, 401) },
+      });
+
+      const res = await app.request(`/api/v2/attachments/${'a'.repeat(64)}`);
+
+      expect(res.status).toBe(401);
+    });
+
+    it('403 SCOPE_REQUIRED: scope-гейт service-key покрывает раздачу', async () => {
+      const { app } = createHarness({
+        guard: async (c) => c.json({ error: { code: 'SCOPE_REQUIRED' } }, 403),
+      });
+
+      const res = await app.request(`/api/v2/attachments/${'a'.repeat(64)}`);
+
+      expect(res.status).toBe(403);
+    });
+  });
 });

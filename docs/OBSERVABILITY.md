@@ -205,9 +205,9 @@ Probes Helm: liveness — `/health` (или `/ready` с большим `failureT
 
 | Метрика | Тип | Лейблы | Смысл / обновление |
 |---|---|---|---|
-| `synth_attachment_uploads_total` | counter | `outcome` (`ok`/`too_large`/`unsupported`), `kind` (`image`/`audio`/`video`/`file`) | Исход загрузки `POST /sessions/:id/attachments`: `ok` — принят, `too_large` — `413`, `unsupported` — `415` (MIME вне белого списка/запрещён, пустой файл); на попытку, дошедшую до сервиса вложений (ранние `413` по `Content-Length` и `400` без файла не считаются) |
+| `synth_attachment_uploads_total` | counter | `outcome` (`ok`/`too_large`/`unsupported`), `kind` (`image`/`audio`/`video`/`file`) | Исход загрузки `POST /sessions/:id/attachments` и staging `POST /api/v2/attachments`: `ok` — принят, `too_large` — `413`, `unsupported` — `415` (MIME вне белого списка/запрещён, пустой файл); на попытку, дошедшую до сервиса вложений (ранние `413` по `Content-Length` и `400` без файла не считаются) |
 | `synth_attachment_upload_bytes` | histogram | `kind` (`image`/`audio`/`video`/`file`) | Размер **принятого** файла после вычищения метаданных, байт (только `outcome=ok`); корзины 1 КиБ … 64 МиБ |
-| `synth_attachment_downloads_total` | counter | `outcome` (`ok`/`not_found`) | Выдача байтов `GET/HEAD /sessions/:id/attachments/:partId`: `ok` — объект найден и ответ отдан/условный (`200`/`206`/`304`/`416`), `not_found` — части/объекта нет (`404`) |
+| `synth_attachment_downloads_total` | counter | `outcome` (`ok`/`not_found`) | Выдача байтов `GET/HEAD /sessions/:id/attachments/:partId` и `GET/HEAD /api/v2/attachments/:sha256` (outbound шлюзов): `ok` — объект найден и ответ отдан/условный (`200`/`206`/`304`/`416`), `not_found` — части/объекта нет (`404`, в т.ч. невалидный sha) |
 | `synth_attachment_gc_removed_total` | counter | — | Объекты, удалённые фоновым pruner'ом осиротевших вложений (нет ссылок в `blob_refs` и истёк `attachments.gcDays`); sidecar-метаданные удаляются вместе с объектом и отдельно не считаются |
 
 **Кардинальность безопасна.** Наборы значений закрыты: `outcome` — 3 доменных значения у загрузки и

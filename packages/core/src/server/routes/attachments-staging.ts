@@ -7,6 +7,14 @@
  * из шага; полученный `blobPath` дальше передаётся в `POST /sessions/:id/prompt`
  * (`attachments: string[]`) или используется как артефакт прогона.
  *
+ * `GET /api/v2/attachments/:sha256` — раздача байтов **по sha256** (outbound-
+ * контур шлюзов): финальные вложения ответа приходят в `stream.done`
+ * (`attachments[].sha256`), а байты забираются здесь — без доступа к сессии.
+ * Content-addressed путь объекта выводится из хеша
+ * (`attachments/<sha[0:2]>/<sha>`), поэтому контур ограничен тем же каталогом
+ * (`isAttachmentPath`), а не произвольными blob'ами. `Range` не поддерживается
+ * (шлюзу он не нужен), `HEAD` отдаёт те же заголовки без тела.
+ *
  * Почему отдельный роут, а не `POST /sessions/:id/attachments`: staging-объект
  * **не привязан к сессии** — адресация content-addressed (`attachments/<sha2>/
  * <sha256>`), объект общий, ссылки (`blob_refs`) появляются только когда путь
@@ -20,15 +28,17 @@
  *
  * Auth: фабрика принимает минимальный контракт `{requireAuth}`; core монтирует
  * под `requireAuth`, backend дополнительно вешает scope-гейт
- * (`opts.guard`, service-key — `events:ingest`). Лимиты и разбор multipart —
- * те же, что у загрузки в сессию (`readAttachmentUploadForm`).
+ * (`opts.guard`, service-key — `events:ingest`). Гейт навешивается на `/*`,
+ * поэтому покрывает и раздачу по sha (не только `POST /`). Лимиты и разбор
+ * multipart — те же, что у загрузки в сессию (`readAttachmentUploadForm`).
  */
+import { Readable } from 'node:stream';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { AttachmentsConfig } from '@itphx/synth-shared';
 import { getAttachmentMetricsHook } from '../../metrics/collectors/attachments.js';
-import { AttachmentError } from '../../engine/attachments/service.js';
+import { ATTACHMENT_DIR, AttachmentError } from '../../engine/attachments/service.js';
 import type { AttachmentService, UploadedAttachmentMeta } from '../../engine/attachments/service.js';
 import {
   attachmentErrorResponse,
@@ -36,6 +46,9 @@ import {
   readAttachmentUploadForm,
   type AttachmentRouteMessages,
 } from './attachments.js';
+
+/** SHA-256 в шестнадцатеричном виде — единственная допустимая адресация раздачи. */
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -94,8 +107,10 @@ export function createStagingAttachmentRoutes(
   const resolveConfig = (): AttachmentsConfig =>
     typeof deps.config === 'function' ? deps.config() : deps.config;
 
-  app.use('/', auth.requireAuth);
-  if (opts.guard) app.use('/', opts.guard);
+  // Гейт навешивается на `/*`: покрывает и `POST /` (загрузка), и
+  // `GET /:sha256` (раздача) — `use('/')` матчил бы только корень.
+  app.use('/*', auth.requireAuth);
+  if (opts.guard) app.use('/*', opts.guard);
 
   app.post('/', async (c) => {
     const config = resolveConfig();
@@ -133,6 +148,52 @@ export function createStagingAttachmentRoutes(
       if (err instanceof AttachmentError) return attachmentErrorResponse(c, err, messages);
       throw err;
     }
+  });
+
+  // GET /:sha256 — байты вложения по sha256 (outbound-контур шлюзов).
+  //
+  // Адрес объекта выводится из хеша (content-addressed), поэтому раздавать
+  // что-то вне `attachments/` через роут нельзя; `AttachmentService.resolve`/
+  // `read` дополнительно отказывают на чужих путях. Невалидный sha и
+  // отсутствующий объект неотличимы (404) — существование не раскрывается.
+  app.get('/:sha256', async (c) => {
+    // ADR-094: исход раздачи — `ok`/`not_found`; id и пути в лейблы не идут.
+    const metrics = getAttachmentMetricsHook();
+    const notFound = () => {
+      metrics?.onDownload({ outcome: 'not_found' });
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.attachmentNotFound(c) } }, 404);
+    };
+
+    const sha256 = c.req.param('sha256').trim().toLowerCase();
+    if (!SHA256_PATTERN.test(sha256)) return notFound();
+
+    const blobPath = `${ATTACHMENT_DIR}/${sha256.slice(0, 2)}/${sha256}`;
+    const resolved = await deps.service.resolve(blobPath);
+    if (!resolved) return notFound();
+
+    // `Cache-Control: private, no-store` — staging-объект не кэшируется
+    // посредниками; `Range` не поддерживаем (шлюзу нужен весь файл).
+    const headers: Record<string, string> = {
+      'Content-Type': resolved.mime,
+      'Content-Length': String(resolved.stat.size),
+      'Cache-Control': 'private, no-store',
+    };
+
+    // HEAD — те же заголовки без тела и без открытия потока (дескриптор файла
+    // иначе висел бы до сборки мусора).
+    if (c.req.method === 'HEAD') {
+      metrics?.onDownload({ outcome: 'ok' });
+      return c.body(null, 200, headers);
+    }
+
+    const stream = await deps.service.read(blobPath);
+    if (!stream) return notFound();
+    metrics?.onDownload({ outcome: 'ok' });
+    // Отдаём потоком (без буферизации в память), как раздача вложения сессии.
+    return new Response(Readable.toWeb(stream) as unknown as ReadableStream, {
+      status: 200,
+      headers,
+    });
   });
 
   return app;

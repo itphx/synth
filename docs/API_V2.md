@@ -411,6 +411,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 > **Ограничения steering (ADR-104).** **UI-селектор режима есть**: при активном ходе композер показывает три режима — «в очередь» (`queue`), «вмешаться» (`steer`), «прервать» (`interrupt`); в ленте сообщения-инъекции помечаются маркером «вмешательство в ход» (`metadata.steer`), в режиме `interrupt` — маркером «прерывание хода» (`metadata.interrupt`), а прерванная генерация — бейджем «Прервано» (`metadata.status === 'interrupted'`). В гибриде локальный core не вмешивается в ход, который исполняет удалённый backend: режим применяет та сторона, которой принадлежит ход (удалённый backend), а клиент получает в ack, применился ли режим (`mode_applied`).
 > **Steering дочерней сессии саб-агента (ADR-104 + ADR-111).** Режим работает и для дочерних сессий саб-агентов, включая фоновые: `POST /api/v2/sessions/<child>/prompt` с `mode:'steer'` кладёт сообщение в очередь инъекций **сессии-ребёнка**, а цикл ребёнка (`engine/tools/task/run-cycle.ts`) применяет его на границе шага — перед следующим LLM-вызовом, в том же ходу (пары `toolUse`/`toolResult` не рвутся). Инъекция персистится в истории ребёнка как обычная `user`-реплика с `metadata.steer=true` и публикуется в канал ребёнка (`message.added`, `message.injected`); превышение лимита — событие `steer.dropped` в канале ребёнка, ход не падает. `interrupt` для ребёнка **не обрывает генерацию** (на границе шага её уже нет) и применяется как обычное вмешательство. Действует общее правило раздела: сообщение попадает в очередь инъекций, только если у сессии ребёнка есть активный ход (фоновый прогон — всегда: сессия ребёнка помечена занятой; нет активного хода — `steer`/`interrupt` работают как `queue`). Очереди родителя и ребёнка изолированы: инъекция в очередь родителя не попадает в ход ребёнка и наоборот (проверка — `packages/core/src/queue/steering-subagent.test.ts`).
 > **Вопросы и рестарт (ADR-112).** Ожидание ответа на вопрос живёт в памяти процесса: после рестарта незавершённые вопросы помечаются `cancelled` с причиной `interrupted`, ход не возобновляется (как и прочие паузы tool-loop). Сама запись вопроса рестарт переживает (журнал в `QuestionRepository`). По умолчанию вопрос ждёт ответа **без таймаута** (`questions.timeoutMs = 0`); срок ожидания задаёт тул `question` (`timeout`, ≥ 5 минут — не рекомендуется: ожидание обрывается).
+> **Вложения ответа — `stream.done.attachments` (ADR-115, outbound).** Событие `stream.done` (SSE `POST /sessions/:id/prompt`, `GET /sessions/:id/events`) несёт аддитивное `attachments?: Array<{sha256, mime, size, name?}>` — медиа-части **финального** assistant-сообщения хода (`image`/`audio`/`video`/`file`) в порядке сообщения; без медиа-частей поля нет. Байты шлюз забирает по sha: `GET /api/v2/attachments/:sha256` (§5.6.1) — доступ к сессии ему не нужен. Форма поля, источник и коды раздачи — §5.6.1.
 
 ### 5.6 Messages — `/api/v2/messages`
 
@@ -490,6 +491,27 @@ multipart), `401`, `403 FORBIDDEN` (чужая сессия, prefix-guard), `404
 | Метод | Путь | Сборка | RBAC | Назначение |
 |---|---|---|---|---|
 | POST | `/api/v2/attachments` | оба | core — `requireAuth`; managed — `requireAuth` + service-key scope `events:ingest` | staging-загрузка файла вне сессии → **201** `{id, blobPath, sha256, mime, size, name?}` |
+| GET / HEAD | `/api/v2/attachments/:sha256` | оба | core — `requireAuth`; managed — `requireAuth` + service-key scope `events:ingest` | байты вложения **по sha256** (outbound-контур шлюзов): `200` (поток) с `Content-Type`, `Content-Length`, `Cache-Control: private, no-store`; `HEAD` — те же заголовки без тела; `404 NOT_FOUND` — объекта нет либо sha не 64 hex (существование не раскрывается) |
+
+**Outbound-вложения ответа — `stream.done.attachments` + раздача по sha (ADR-115).** Шлюзу
+(Telegram/VK) не нужен доступ к сессии, чтобы отправить финальные вложения ответа наружу: событие
+`stream.done` (SSE-стрим `POST /sessions/:id/prompt` и `GET /sessions/:id/events`, §5.5) несёт
+**аддитивное** поле
+
+```ts
+attachments?: Array<{ sha256: string; mime: string; size: number; name?: string }>
+```
+
+Источник — медиа-части (`image`/`audio`/`video`/`file`) **финального** assistant-сообщения хода
+(сообщение с этим `stream_id`; вложения пользователя и промежуточные tool-chain сообщения не
+учитываются), порядок — как в сообщении. Части без валидной формы (`sha256` не 64 hex, пустой
+`mime`, нечисловой `size`) игнорируются; медиа-частей нет — **поля нет вовсе** (прежний контракт
+события не меняется). Байты забираются по sha: `GET /api/v2/attachments/:sha256` — адрес объекта
+выводится из хеша (`attachments/<sha[0:2]>/<sha256>`, content-addressed), т.е. раздаётся только
+контур вложений, а не произвольные blob-объекты. `Range` не поддерживается (шлюзу нужен весь
+файл), `HEAD` — можно. Авторизация — та же, что у staging-загрузки (`requireAuth`; managed —
+service-key scope `events:ingest`); объект должен существовать: без ссылок `blob_refs` он живёт до
+`attachments.gcDays` (см. ниже), ссылка из сообщения продлевает его жизнь.
 
 **GC staging-объектов.** Объект не привязан к сессии: ссылка `blob_refs` появляется только когда
 `blobPath` попадёт в сообщение (или артефакт). Пока ссылок нет, действует общий критерий GC —
@@ -1802,7 +1824,7 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 | DELETE | `/api/v2/projects/:id/pipelines/:pid` | оба | право изменения проекта | Удалить пайплайн и его версии → **204**; прогоны **остаются** (прогон самодостаточен) |
 | POST | `/api/v2/projects/:id/pipelines/:pid/publish` | оба | право изменения проекта | Опубликовать черновик: неизменяемая версия `publishedVersion`, черновик переезжает на следующую версию → 200 `{pipeline, published}`; повторная публикация без изменений идемпотентна (версии не плодит); черновика нет → 409 `CONFLICT` |
 | GET | `/api/v2/projects/:id/pipelines/:pid/runs` | оба | право чтения проекта | Прогоны пайплайна `{runs}`; фильтры `status` (`pending`/`running`/`awaiting_human`/`done`/`failed`/`cancelled`), `limit` (дефолт 100, максимум 1000); неизвестный `status` → 400 `VALIDATION_ERROR` |
-| POST | `/api/v2/projects/:id/pipelines/:pid/runs` | оба | право изменения проекта | Запуск прогона: тело `{trigger?, version?}` (по умолчанию — последняя опубликованная версия, триггер `manual`) → **201** `{run}`; прогон идёт **в фоне** — клиент следит по событиям `pipeline.run.*`; опубликованной версии нет → 409 `pipeline.not_published` |
+| POST | `/api/v2/projects/:id/pipelines/:pid/runs` | оба | право изменения проекта | Запуск прогона: тело `{trigger?, version?, attachments?}` (по умолчанию — последняя опубликованная версия, триггер `manual`) → **201** `{run}`; прогон идёт **в фоне** — клиент следит по событиям `pipeline.run.*`; опубликованной версии нет → 409 `pipeline.not_published`; `attachments[]` не прошли проверку → 400 `VALIDATION_ERROR` |
 | GET | `/api/v2/pipeline-runs/:runId` | оба | право чтения проекта прогона | Прогон и журнал `{run, events}` (события: `run.started`/`node.started`/`node.finished`/`edge.taken`/`gate.awaiting`/`run.finished`/`run.failed`); `limit` — последние N событий (дефолт 200, максимум 1000) |
 | GET | `/api/v2/pipeline-runs/:runId/artifacts/:name` | оба | право чтения проекта прогона | Байты артефакта-объекта прогона (`kind: 'blob'`): `Content-Type`, `Content-Disposition: attachment`, `Content-Length`, `ETag`, `Cache-Control: private, max-age=86400`; `If-None-Match` → `304`; нет артефакта или blob-контур не подключён → `404 NOT_FOUND` |
 | POST | `/api/v2/pipeline-runs/:runId/resume` | оба | право изменения проекта прогона | HITL-решение человека: тело `{approved, output?, comment?}` → 200 `{run}`; прогон не ждёт решения → 409 `pipeline.invalid_state` |
@@ -1820,6 +1842,19 @@ MIME/имени для выдачи) и в событии `pipeline.run.finished
 пределах прогона и неизменяем). Автоматического retention артефактов **нет**: ни TTL, ни удаления прогонов
 через API, байты живут в blob-хранилище до ручной чистки (известное ограничение, см.
 [PIPELINES.md](./PIPELINES.md) §2.10.2).
+
+**Вложения прогона (ADR-115 × ADR-101).** Тело запуска принимает `attachments[]` — ссылки на объекты
+staging-загрузки (`POST /api/v2/attachments`), форма та же, что у вложения внешнего события
+(ADR-089): `{blobPath, sha256, mime, size, name?}`, `blobPath` — только внутри `attachments/`
+(структурный потолок массива — 50). Ссылки проверяются **до** старта прогона теми же правилами, что
+и приём события: объект существует, `sha256`/`mime`/`size` совпадают со sidecar, лимиты
+`attachments.maxFilesPerMessage` / `maxBytesPerFile` / `maxBytesPerSession`. Любое расхождение →
+**400 `VALIDATION_ERROR`** (`problems`: «не найдено», «не совпадает с объектом», «превышает предел»);
+без сервиса вложений или порта `blob_refs` прогоны с вложениями отклоняются (fail-closed). Принятые
+ссылки ложатся под `trigger.payload.attachments` (доступны шагам без маппинга) и регистрируются в
+`blob_refs` владельцем `pipeline-run` (иначе GC удалил бы объект, на который ссылается прогон).
+Доставка в шаг — общий путь сессий (очистка метаданных, фильтр модальностей, `derive` для text-only
+модели, лимит base64); устройство — [PIPELINES.md](./PIPELINES.md) §2.10.3.
 
 **Коды ошибок раздела:** `UNAUTHORIZED` (401), `FORBIDDEN` (403 — права проекта), `SCOPE_REQUIRED`
 (403 — service-key без `automation:install`), `PROJECT_FORBIDDEN` (403 — service-key вне
