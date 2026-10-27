@@ -237,6 +237,49 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
       expect(refs).toEqual([uploaded.blobPath]);
     });
 
+    it('маркер, пришедший из композера, не дублируется в content', async () => {
+      const { app, sessionManager } = createHarness();
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const uploaded = (await (await upload(app, session.id, pngBytes())).json()) as {
+        blobPath: string;
+      };
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: 'смотри [image: photo.png]',
+          attachments: [uploaded.blobPath],
+          mode: 'steer',
+        }),
+      });
+      expect(res.status).toBe(202);
+
+      const stored = await sessionManager.getSession(session.id);
+      const message = stored!.steerInbox!.at(-1)!;
+      expect(message.content.split('[image: photo.png]')).toHaveLength(2);
+      expect(message.content).toBe('смотри [image: photo.png]');
+    });
+
+    it('без маркера в тексте — маркер дописывается в content', async () => {
+      const { app, sessionManager } = createHarness();
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const uploaded = (await (await upload(app, session.id, pngBytes())).json()) as {
+        blobPath: string;
+      };
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'смотри', attachments: [uploaded.blobPath], mode: 'steer' }),
+      });
+      expect(res.status).toBe(202);
+
+      const stored = await sessionManager.getSession(session.id);
+      const message = stored!.steerInbox!.at(-1)!;
+      expect(message.content).toBe('смотри\n[image: photo.png]');
+    });
+
     it('неизвестный путь вложения → 400 VALIDATION_ERROR с перечнем', async () => {
       const { app, sessionManager } = createHarness();
       const session = await sessionManager.createSession({ title: 'S', userId: 'local' });

@@ -293,4 +293,83 @@ describe('ChatInput — вложения (ADR-115)', () => {
     ])
     expect(mocks.uploadSessionAttachment).toHaveBeenCalledTimes(1)
   })
+
+  it('выбор файла вставляет маркер вложения в текст', async () => {
+    const container = await renderInput()
+    const input = container.querySelector('[data-testid="attachment-input"]') as HTMLInputElement
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await uploadFiles(input, [new File(['hello'], 'a.txt', { type: 'text/plain' })])
+
+    expect(textarea.value).toBe('[file: a.txt]')
+  })
+
+  it('вставка изображения из буфера даёт маркер [image: …]', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      const event = new Event('paste', { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'clipboardData', {
+        value: {
+          types: ['Files'],
+          files: [new File(['shot'], 'shot.png', { type: 'image/png' })],
+          items: [],
+          getData: () => '',
+        },
+      })
+      textarea.dispatchEvent(event)
+    })
+    await flush()
+
+    expect(textarea.value).toBe('[image: shot.png]')
+  })
+
+  it('маркер вставляется на позицию каретки', async () => {
+    const container = await renderInput()
+    const input = container.querySelector('[data-testid="attachment-input"]') as HTMLInputElement
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    setTextareaValue(textarea, 'привет мир')
+    textarea.focus()
+    textarea.setSelectionRange(6, 6)
+
+    await uploadFiles(input, [new File(['hello'], 'a.txt', { type: 'text/plain' })])
+    // Каретка восстанавливается после перерисовки `value` (setTimeout 0).
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(textarea.value).toBe('привет [file: a.txt] мир')
+    expect(textarea.selectionStart).toBe('привет [file: a.txt]'.length)
+  })
+
+  it('повторное прикрепление того же файла не добавляет второй маркер', async () => {
+    const container = await renderInput()
+    const input = container.querySelector('[data-testid="attachment-input"]') as HTMLInputElement
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await uploadFiles(input, [new File(['hello'], 'a.txt', { type: 'text/plain' })])
+    await uploadFiles(input, [new File(['hello'], 'a.txt', { type: 'text/plain' })])
+
+    expect(textarea.value).toBe('[file: a.txt]')
+  })
+
+  it('удаление чипа убирает маркер из текста', async () => {
+    const container = await renderInput()
+    const input = container.querySelector('[data-testid="attachment-input"]') as HTMLInputElement
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await uploadFiles(input, [new File(['hello'], 'a.txt', { type: 'text/plain' })])
+    setTextareaValue(textarea, 'посмотри [file: a.txt]')
+
+    const removeButton = container.querySelector('[aria-label="Remove “a.txt”"]') as HTMLElement | null
+    expect(removeButton).toBeTruthy()
+    await act(async () => {
+      removeButton!.click()
+    })
+    await flush()
+
+    expect(textarea.value).toBe('посмотри')
+  })
 })

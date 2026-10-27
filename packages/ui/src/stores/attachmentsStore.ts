@@ -19,11 +19,12 @@ export type AttachmentErrorReason = 'too_many' | 'too_large' | 'upload_failed'
 export interface DraftAttachment {
   /** Локальный id (чип существует до и после загрузки). */
   id: string
-  file: File
+  /** Исходный файл; у восстановленных из истории (`restore`) его нет. */
+  file?: File
   name: string
   mimeType: string
   size: number
-  /** Локальный object URL для изображений (иначе `''`). */
+  /** Локальный object URL для изображений (иначе `''`); у восстановленных — URL контента. */
   previewUrl: string
   /** Группа элементов из одного источника — удаление каскадное. */
   groupId?: string
@@ -37,6 +38,16 @@ export interface DraftAttachment {
   blobPath?: string
 }
 
+/** Вложение, восстановленное в композер из истории сообщения (`retry`). */
+export interface RestorableAttachment {
+  blobPath: string
+  mimeType: string
+  size: number
+  name?: string
+  partId: string
+  previewUrl?: string
+}
+
 interface AttachmentsState {
   bySession: Record<string, DraftAttachment[]>
   /** Добавить файлы и сразу начать их загрузку. */
@@ -47,6 +58,11 @@ interface AttachmentsState {
   clear: (sessionId: string) => void
   /** Повторить загрузку элемента, упавшего с ошибкой. */
   retry: (sessionId: string, id: string) => Promise<void>
+  /**
+   * Восстановить готовые вложения из истории сообщения («Повторить»): у них
+   * нет исходного `File`, но есть серверный `blobPath` (он же `partId`).
+   */
+  restore: (sessionId: string, items: RestorableAttachment[]) => void
   /** id успешно загруженных вложений — тело запроса отправки сообщения. */
   readyPartIds: (sessionId: string) => string[]
   /** Есть незавершённые загрузки — отправку блокируем. */
@@ -89,6 +105,9 @@ function createPreviewUrl(file: File, mimeType: string): string {
 
 function revokePreviewUrl(item: DraftAttachment): void {
   if (!item.previewUrl) return
+  // Освобождаем только локальные object URL: у восстановленных вложений
+  // `previewUrl` — обычный HTTP-адрес контента, его отзывать нельзя.
+  if (!item.previewUrl.startsWith('blob:')) return
   if (typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') return
   try {
     URL.revokeObjectURL(item.previewUrl)
@@ -136,14 +155,15 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
   /** Загрузка элемента: `pending` → `uploading` → `ready` / `error`. */
   async function upload(sessionId: string, id: string): Promise<void> {
     const item = get().bySession[sessionId]?.find((entry) => entry.id === id)
-    if (!item) return
+    if (!item || !item.file) return
+    const file = item.file
 
     const controller = new AbortController()
     controllers.set(controllerKey(sessionId, id), controller)
     patch(sessionId, id, { upload: 'uploading', error: undefined })
 
     try {
-      const uploaded = await uploadSessionAttachment(sessionId, item.file, {
+      const uploaded = await uploadSessionAttachment(sessionId, file, {
         signal: controller.signal,
       })
       if (controller.signal.aborted) return
@@ -250,6 +270,9 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
       const list = get().bySession[sessionId] ?? []
       const item = list.find((entry) => entry.id === id)
       if (!item || item.upload !== 'error') return
+      // У восстановленного из истории элемента нет `File` — загружать нечего;
+      // состояние (уже готовое вложение) не трогаем.
+      if (!item.file) return
 
       // Причину-лимит повторно проверяем: файл мог уменьшиться/освободиться место.
       if (item.file.size > MAX_FILE_BYTES) {
@@ -265,6 +288,37 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
       }
 
       await upload(sessionId, id)
+    },
+
+    restore(sessionId, items) {
+      if (items.length === 0) return
+      set((state) => {
+        const list = state.bySession[sessionId] ?? []
+        const next = list.slice()
+        // Дедуп по blob-пути: одно и то же вложение не должно появиться дважды
+        // (например, повторный «Повторить» того же сообщения).
+        const seen = new Set(
+          next.map((item) => item.blobPath).filter((path): path is string => !!path),
+        )
+        for (const item of items) {
+          if (next.length >= MAX_FILES_PER_MESSAGE) break
+          if (seen.has(item.blobPath)) continue
+          seen.add(item.blobPath)
+          next.push({
+            id: createLocalId(),
+            name: item.name ?? item.blobPath.split('/').pop() ?? item.blobPath,
+            mimeType: item.mimeType,
+            size: item.size,
+            previewUrl: item.previewUrl ?? '',
+            upload: 'ready',
+            // Серверный id вложения равен blob-пути (`POST /sessions/:id/attachments`).
+            partId: item.blobPath,
+            blobPath: item.blobPath,
+          })
+        }
+        if (next.length === list.length) return state
+        return { bySession: { ...state.bySession, [sessionId]: next } }
+      })
     },
 
     readyPartIds(sessionId) {

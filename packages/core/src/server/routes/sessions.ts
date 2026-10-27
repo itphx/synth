@@ -42,7 +42,7 @@ import { AttachmentService } from '../../engine/attachments/service.js';
 import { createAttachmentRoutes } from './attachments.js';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
-import { makeMediaPart, buildContentFromParts } from '@itphx/synth-shared';
+import { makeMediaPart, appendMediaPlaceholders } from '@itphx/synth-shared';
 import type { Part } from '@itphx/synth-shared';
 
 const LOCAL_USER_ID = 'local';
@@ -1338,9 +1338,11 @@ export function createSessionRoutes(
       }
     }
 
-    // `content` — производная от частей: медиа-часть даёт плейсхолдер
+    // `content` — производная от частей: медиа-часть оставляет плейсхолдер
     // (`[image: name.png]`), иначе факт вложения теряется в строковых производных.
-    const messageContent = messageParts.length > 1 ? buildContentFromParts(messageParts) : content;
+    // Маркер может прийти уже из композера (он вставляет его при прикреплении) —
+    // тогда второй раз он не добавляется (appendMediaPlaceholders).
+    const messageContent = appendMediaPlaceholders(content, messageParts);
 
     const streamId = body.messageId || generateStreamId();
     const author = await resolveAuthor(c);

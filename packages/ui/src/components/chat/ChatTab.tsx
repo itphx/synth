@@ -6,6 +6,7 @@ import { useChatStore, type MessageData, type QueuedMessage, type StreamState } 
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useTransportStore } from '@/stores/transportStore'
 import { synthApi, type AgentInfo, type StickyNoteData } from '@/lib/api/synthApi'
+import { attachmentContentUrl } from '@/lib/api/attachments'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { MessageList } from './MessageList'
@@ -19,7 +20,8 @@ import { StreamErrorPanel } from './StreamErrorPanel'
 import { SubagentResumeBar, type SubagentSessionError } from './SubagentResumeBar'
 import type { CenterTab } from '@/stores/useUIStore'
 import { useUIStore } from '@/stores/useUIStore'
-import { DEFAULT_STEER_MODE, type SteerMode } from '@itphx/synth-shared/types'
+import { useAttachmentsStore, type RestorableAttachment } from '@/stores/attachmentsStore'
+import { DEFAULT_STEER_MODE, type MediaPartData, type Part, type SteerMode } from '@itphx/synth-shared/types'
 
 interface ChatTabProps {
   tab: CenterTab
@@ -32,6 +34,45 @@ const EMPTY_STREAMS: Record<string, StreamState> = {}
 const EMPTY_PENDING: QueuedMessage[] = []
 const EMPTY_STICKY: StickyNoteData[] = []
 const EMPTY_INDICES: Set<number> = new Set()
+
+/**
+ * ADR-115: восстановить вложения сообщения в композер («Повторить»).
+ *
+ * У медиа-части есть `blobPath` (серверный id вложения) и метаданные; исходного
+ * `File` в истории нет, поэтому элементы сразу `ready`. Для изображений
+ * `previewUrl` — URL контента (локального object URL уже не существует).
+ */
+function restoreAttachmentsFromMessage(
+  sessionId: string,
+  parts: Part[] | null | undefined,
+): void {
+  if (!parts || parts.length === 0) return
+  const items: RestorableAttachment[] = []
+  for (const part of parts) {
+    if (
+      part.type !== 'image' &&
+      part.type !== 'audio' &&
+      part.type !== 'video' &&
+      part.type !== 'file'
+    ) {
+      continue
+    }
+    const data = part.data as MediaPartData | undefined
+    if (!data || typeof data.blobPath !== 'string' || data.blobPath === '') continue
+    const mimeType = typeof data.mime === 'string' && data.mime !== '' ? data.mime : 'application/octet-stream'
+    items.push({
+      blobPath: data.blobPath,
+      mimeType,
+      size: typeof data.size === 'number' ? data.size : 0,
+      name: data.name,
+      partId: part.id,
+      previewUrl: mimeType.toLowerCase().startsWith('image/')
+        ? attachmentContentUrl(sessionId, part.id)
+        : undefined,
+    })
+  }
+  if (items.length > 0) useAttachmentsStore.getState().restore(sessionId, items)
+}
 
 export function ChatTab({ tab }: ChatTabProps) {
   const { t } = useI18n()
@@ -386,6 +427,10 @@ export function ChatTab({ tab }: ChatTabProps) {
         const result = await synthApi.retryMessage(sessionId, msg.index)
         const reloadResult = await synthApi.getSessionMessages(sessionId)
         setMessages(sessionId, reloadResult.messages)
+        // ADR-115: вложения возвращаются в композер вместе с текстом (маркеры
+        // уже в `content` — повторной вставки не будет). `restore` — до
+        // `setRetryInput`, чтобы к моменту появления текста чипы уже были.
+        restoreAttachmentsFromMessage(sessionId, msg.parts)
         setRetryInput(sessionId, result.content)
         notify({ text: t('chat.message.retrying'), type: 'info', category: 'message', sessionId })
       } catch {

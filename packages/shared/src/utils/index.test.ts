@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { generateId, generateStreamId, formatISODate, nowISO, safeJsonParse, atomicWrite, AsyncLock, pickLocalized, stripNullBytes, stripNullBytesDeep, makeMediaPart, makeTextPart, buildContentFromParts } from './index.js';
+import { generateId, generateStreamId, formatISODate, nowISO, safeJsonParse, atomicWrite, AsyncLock, pickLocalized, stripNullBytes, stripNullBytesDeep, makeMediaPart, makeTextPart, buildContentFromParts, mediaTypeOfMime, appendMediaPlaceholders } from './index.js';
 
 describe('generateId', () => {
   it('возвращает строку в формате timestamp-counter-random', () => {
@@ -295,5 +295,62 @@ describe('makeMediaPart / buildContentFromParts (ADR-115)', () => {
     for (const type of ['image', 'audio', 'video', 'file'] as const) {
       expect(buildContentFromParts([makeMediaPart(type, data)])).toBe(`[${type}: photo.png]`);
     }
+  });
+
+  it('не дублирует плейсхолдер, уже присутствующий в тексте', () => {
+    const content = buildContentFromParts([
+      makeTextPart('смотри [image: photo.png]'),
+      makeMediaPart('image', data),
+    ]);
+    expect(content).toBe('смотри [image: photo.png]');
+  });
+});
+
+describe('mediaTypeOfMime (ADR-115)', () => {
+  it('определяет тип по MIME (как partTypeOf ядра)', () => {
+    expect(mediaTypeOfMime('image/png')).toBe('image');
+    expect(mediaTypeOfMime('audio/mpeg')).toBe('audio');
+    expect(mediaTypeOfMime('video/mp4')).toBe('video');
+    expect(mediaTypeOfMime('application/pdf')).toBe('file');
+    expect(mediaTypeOfMime('text/plain')).toBe('file');
+  });
+
+  it('не зависит от регистра и пробелов', () => {
+    expect(mediaTypeOfMime(' IMAGE/PNG ')).toBe('image');
+  });
+});
+
+describe('appendMediaPlaceholders (ADR-115)', () => {
+  const image = (name: string) =>
+    makeMediaPart('image', { blobPath: `attachments/ab/${name}`, sha256: 'sha', mime: 'image/png', size: 1, name });
+
+  it('дописывает маркеры медиа-частей через перевод строки', () => {
+    expect(appendMediaPlaceholders('смотри', [image('photo.png')])).toBe(
+      'смотри\n[image: photo.png]',
+    );
+  });
+
+  it('пустой текст не получает ведущего перевода строки', () => {
+    expect(appendMediaPlaceholders('', [image('photo.png')])).toBe('[image: photo.png]');
+  });
+
+  it('не дублирует маркер, уже набранный вручную (идемпотентность)', () => {
+    const text = 'смотри [image: photo.png]';
+    expect(appendMediaPlaceholders(text, [image('photo.png')])).toBe(text);
+    expect(appendMediaPlaceholders(text, [image('photo.png')])).toBe(text);
+  });
+
+  it('добавляет только отсутствующие маркеры и сохраняет порядок частей', () => {
+    const result = appendMediaPlaceholders('текст [image: first.png]', [
+      image('first.png'),
+      image('second.png'),
+    ]);
+    expect(result).toBe('текст [image: first.png]\n[image: second.png]');
+  });
+
+  it('игнорирует не-медиа части и возвращает текст как есть', () => {
+    const text = 'просто текст';
+    expect(appendMediaPlaceholders(text, [makeTextPart('просто текст')])).toBe(text);
+    expect(appendMediaPlaceholders('', [])).toBe('');
   });
 });

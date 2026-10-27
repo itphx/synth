@@ -16,6 +16,11 @@ export interface AttachedFilesListProps {
   sessionId: string
   /** Клик по превью изображения — открыть галерею (индекс среди изображений). */
   onOpenImage?: (index: number) => void
+  /**
+   * Удалённые элементы (имена): при каскаде по `groupId` — имена всей группы.
+   * Нужен композеру, чтобы убрать маркеры вложений из текста.
+   */
+  onRemove?: (names: string[]) => void
 }
 
 /** Иконка типа файла из реестра `Icon` (svg-наборы не тянем). */
@@ -58,7 +63,7 @@ export function attachmentErrorText(
  * Две строки композера: превью изображений (64×64, клик — галерея) и чипы
  * прочих файлов. Показывается только когда есть что показывать.
  */
-export function AttachedFilesList({ sessionId, onOpenImage }: AttachedFilesListProps) {
+export function AttachedFilesList({ sessionId, onOpenImage, onRemove }: AttachedFilesListProps) {
   const { t } = useI18n()
   const items = useAttachmentsStore((state) => state.bySession[sessionId])
   const remove = useAttachmentsStore((state) => state.remove)
@@ -68,6 +73,15 @@ export function AttachedFilesList({ sessionId, onOpenImage }: AttachedFilesListP
 
   const images = items.filter(isImageAttachment)
   const files = items.filter((item) => !isImageAttachment(item))
+
+  /** Удаление элемента; при каскаде по `groupId` сообщаем имена всей группы. */
+  const handleRemove = (item: DraftAttachment) => {
+    const removed = item.groupId
+      ? items.filter((entry) => entry.groupId === item.groupId)
+      : [item]
+    remove(sessionId, item.id)
+    onRemove?.(removed.map((entry) => entry.name))
+  }
 
   const errorText = (item: DraftAttachment): string =>
     attachmentErrorText(t, item.error)
@@ -112,7 +126,7 @@ export function AttachedFilesList({ sessionId, onOpenImage }: AttachedFilesListP
               </button>
               <button
                 type="button"
-                onClick={() => remove(sessionId, item.id)}
+                onClick={() => handleRemove(item)}
                 aria-label={removeLabel(item)}
                 title={removeLabel(item)}
                 className={cn(
@@ -176,7 +190,7 @@ export function AttachedFilesList({ sessionId, onOpenImage }: AttachedFilesListP
               )}
               <button
                 type="button"
-                onClick={() => remove(sessionId, item.id)}
+                onClick={() => handleRemove(item)}
                 aria-label={removeLabel(item)}
                 title={removeLabel(item)}
                 className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-interactive-hover hover:text-foreground pointer-coarse:size-6"

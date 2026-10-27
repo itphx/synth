@@ -214,32 +214,87 @@ export function mediaPartPlaceholder(type: MediaPartType, data: unknown): string
   return label ? `[${type}: ${label}]` : `[${type}]`;
 }
 
+/**
+ * ADR-115: тип медиа-части по MIME.
+ *
+ * Совпадает с `partTypeOf` ядра (`engine/attachments/service.ts`) — композеру
+ * нужен тот же маппинг, чтобы маркер в тексте совпал с серверным.
+ */
+export function mediaTypeOfMime(mime: string): MediaPartType {
+  const normalized = mime.trim().toLowerCase();
+  if (normalized.startsWith('image/')) return 'image';
+  if (normalized.startsWith('audio/')) return 'audio';
+  if (normalized.startsWith('video/')) return 'video';
+  return 'file';
+}
+
+/**
+ * ADR-115: дописать в текст отсутствующие плейсхолдеры медиа-частей.
+ *
+ * Сервер строит `content` из частей, но маркер может прийти уже из композера
+ * (пользователь набрал его сам или он был вставлен при прикреплении). Поэтому
+ * добавляются только те плейсхолдеры, которых в тексте ещё нет — иначе один
+ * файл дал бы два вхождения. Не-медиа части игнорируются; пустой текст не
+ * получает ведущего перевода строки.
+ */
+export function appendMediaPlaceholders(text: string, parts: Part[]): string {
+  let result = text;
+  for (const part of parts) {
+    if (
+      part.type !== 'image' &&
+      part.type !== 'audio' &&
+      part.type !== 'video' &&
+      part.type !== 'file'
+    ) {
+      continue;
+    }
+    const placeholder = mediaPartPlaceholder(part.type, part.data);
+    if (result.includes(placeholder)) continue;
+    result = result === '' ? placeholder : `${result}\n${placeholder}`;
+  }
+  return result;
+}
+
 export function buildContentFromParts(parts: Part[]): string {
-  return parts
-    .map((p) => {
-      if (p.type === 'text') return String(p.data ?? '');
-      if (p.type === 'reasoning') return `<reasoning>${String(p.data ?? '')}</reasoning>`;
-      if (p.type === 'tool_use') {
-        const d = p.data as Record<string, unknown>;
-        return `<tool_call name="${d.name ?? ''}">${JSON.stringify(d.args ?? {})}</tool_call>`;
-      }
-      if (p.type === 'tool_result') {
-        const d = p.data as Record<string, unknown>;
-        const isError = d.isError ? ' error="true"' : '';
-        return `<tool_result${isError}>${String(d.content ?? '')}</tool_result>`;
-      }
-      if (p.type === 'session_reference') {
-        const d = p.data as Record<string, unknown>;
-        const summary = d.autoSummary ?? d.auto_summary ?? '';
-        return `<session_reference session_id="${d.sessionId ?? d.session_id ?? ''}" label="${d.label ?? ''}">${String(summary)}</session_reference>`;
-      }
-      // ADR-115: медиа-часть (вложение) — плейсхолдер с именем файла.
-      if (p.type === 'image' || p.type === 'audio' || p.type === 'video' || p.type === 'file') {
-        return mediaPartPlaceholder(p.type, p.data);
-      }
-      return '';
-    })
-    .join('\n');
+  const chunks: string[] = [];
+  for (const p of parts) {
+    // ADR-115: медиа-часть (вложение) — плейсхолдер с именем файла. Если он уже
+    // есть в тексте (маркер вставил композер или пользователь набрал вручную),
+    // второй раз не добавляем — иначе строковая производная задвоит вложение.
+    if (p.type === 'image' || p.type === 'audio' || p.type === 'video' || p.type === 'file') {
+      const placeholder = mediaPartPlaceholder(p.type, p.data);
+      if (chunks.join('\n').includes(placeholder)) continue;
+      chunks.push(placeholder);
+      continue;
+    }
+    if (p.type === 'text') {
+      chunks.push(String(p.data ?? ''));
+      continue;
+    }
+    if (p.type === 'reasoning') {
+      chunks.push(`<reasoning>${String(p.data ?? '')}</reasoning>`);
+      continue;
+    }
+    if (p.type === 'tool_use') {
+      const d = p.data as Record<string, unknown>;
+      chunks.push(`<tool_call name="${d.name ?? ''}">${JSON.stringify(d.args ?? {})}</tool_call>`);
+      continue;
+    }
+    if (p.type === 'tool_result') {
+      const d = p.data as Record<string, unknown>;
+      const isError = d.isError ? ' error="true"' : '';
+      chunks.push(`<tool_result${isError}>${String(d.content ?? '')}</tool_result>`);
+      continue;
+    }
+    if (p.type === 'session_reference') {
+      const d = p.data as Record<string, unknown>;
+      const summary = d.autoSummary ?? d.auto_summary ?? '';
+      chunks.push(`<session_reference session_id="${d.sessionId ?? d.session_id ?? ''}" label="${d.label ?? ''}">${String(summary)}</session_reference>`);
+      continue;
+    }
+    chunks.push('');
+  }
+  return chunks.join('\n');
 }
 
 // --- Provider icon helpers (общие для core/backend роутеров провайдеров) ---

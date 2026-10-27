@@ -24,6 +24,7 @@ import { useAttachmentPaste } from './attachments/useAttachmentPaste'
 import type { AgentInfo } from '@/lib/api/synthApi'
 import type { CommandSummary } from '@itphx/synth-shared'
 import { DEFAULT_STEER_MODE, type SteerMode } from '@itphx/synth-shared/types'
+import { mediaPartPlaceholder, mediaTypeOfMime } from '@itphx/synth-shared/utils'
 
 interface ChatInputProps {
   sessionId: string
@@ -63,6 +64,28 @@ export interface TagPart {
 const TAG_REGEX = /@(\w+)/g
 const MAX_TAGS = 3
 const CHAT_INPUT_RADIUS = 'var(--radius-xl)'
+/** ADR-115: все типы маркеров вложения — точный тип мог быть нормализован сервером. */
+const MEDIA_PLACEHOLDER_TYPES = ['image', 'audio', 'video', 'file'] as const
+
+/**
+ * ADR-115: убрать из текста первое вхождение маркера вложения с этим именем.
+ *
+ * Проверяются все четыре типа: при прикреплении тип выводится по MIME
+ * композера, а сервер мог нормализовать его по содержимому. Вместе с маркером
+ * убирается один предшествующий пробел/перевод строки — иначе на месте чипа
+ * остались бы двойной пробел или пустая строка.
+ */
+function removeMediaPlaceholder(text: string, name: string): string {
+  for (const type of MEDIA_PLACEHOLDER_TYPES) {
+    const marker = `[${type}: ${name}]`
+    const index = text.indexOf(marker)
+    if (index < 0) continue
+    const previous = index > 0 ? text[index - 1] : ''
+    const start = previous === ' ' || previous === '\n' ? index - 1 : index
+    return text.slice(0, start) + text.slice(index + marker.length)
+  }
+  return text
+}
 
 /**
  * ADR-104: заголовок кнопки отправки во время активного хода — по выбранному
@@ -310,6 +333,58 @@ export function ChatInput({
     textareaRef.current.focus()
   }
 
+  /**
+   * ADR-115: вставить маркеры вложений в текст на позицию каретки.
+   *
+   * Плейсхолдеры уже присутствующие в тексте пропускаются (сервер тоже не
+   * дублирует маркер при приёме промпта). Перед первым маркером ставится
+   * пробел, если слева не пробел и не начало строки; несколько маркеров идут
+   * через пробел. Каретка остаётся сразу после вставленного текста.
+   */
+  const insertMediaMarkers = useCallback((markers: string[]) => {
+    if (markers.length === 0) return
+    const current = valueRef.current
+    const fresh = markers.filter((marker) => !current.includes(marker))
+    if (fresh.length === 0) return
+
+    const el = textareaRef.current
+    const caret = el?.selectionStart ?? current.length
+    const before = current.slice(0, caret)
+    const after = current.slice(caret)
+    const needsSpace = before.length > 0 && !/\s$/.test(before)
+    const inserted = `${needsSpace ? ' ' : ''}${fresh.join(' ')}`
+    const nextValue = `${before}${inserted}${after}`
+
+    valueRef.current = nextValue
+    setValue(nextValue)
+
+    const nextCaret = caret + inserted.length
+    const restoreCaret = () => {
+      const target = textareaRef.current
+      if (!target) return
+      target.focus()
+      try {
+        target.setSelectionRange(nextCaret, nextCaret)
+      } catch {
+        // Поле могло потерять фокус — каретка не критична для вставки.
+      }
+    }
+    // Сразу — до коммита React (uncontrolled-состояние DOM), затем после
+    // перерисовки value, иначе браузер сбросит каретку в конец.
+    restoreCaret()
+    setTimeout(restoreCaret, 0)
+  }, [])
+
+  /** ADR-115: убрать маркеры удалённых чипов (каскад группы — все имена). */
+  const removeAttachmentMarkers = useCallback((names: string[]) => {
+    if (names.length === 0) return
+    let next = valueRef.current
+    for (const name of names) next = removeMediaPlaceholder(next, name)
+    if (next === valueRef.current) return
+    valueRef.current = next
+    setValue(next)
+  }, [])
+
   const handleMouseUp = () => {
     const el = textareaRef.current
     if (!el || mentionState) return
@@ -392,6 +467,20 @@ export function ChatInput({
       }
       if (prepared.length === 0) return
 
+      // ADR-115: маркеры в текст композера — по одному на файл; у частей одного
+      // документа (`groupId`) маркер один (на первом элементе группы).
+      const markers: string[] = []
+      const markerGroups = new Set<string>()
+      for (const entry of prepared) {
+        if (entry.groupId) {
+          if (markerGroups.has(entry.groupId)) continue
+          markerGroups.add(entry.groupId)
+        }
+        markers.push(
+          mediaPartPlaceholder(mediaTypeOfMime(entry.mimeType), { name: entry.file.name }),
+        )
+      }
+
       const plain: File[] = []
       const groups = new Map<string, File[]>()
       for (const entry of prepared) {
@@ -409,6 +498,8 @@ export function ChatInput({
         await addFiles(sessionId, groupFiles, { groupId })
       }
 
+      insertMediaMarkers(markers)
+
       notifyMessage({
         text: t('chat.attachments.added', { count: prepared.length }),
         type: 'info',
@@ -416,7 +507,7 @@ export function ChatInput({
         sessionId,
       })
     },
-    [addFiles, sessionId, t],
+    [addFiles, insertMediaMarkers, sessionId, t],
   )
 
   const { isDragging, dropProps } = useAttachmentDrop((files) => {
@@ -600,6 +691,7 @@ export function ChatInput({
             <AttachedFilesList
               sessionId={sessionId}
               onOpenImage={(index) => setGallery({ open: true, index })}
+              onRemove={removeAttachmentMarkers}
             />
           </div>
         )}

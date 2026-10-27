@@ -38,7 +38,7 @@ function draft(overrides: Partial<DraftAttachment> & { name: string }): DraftAtt
   return { ...base, ...overrides }
 }
 
-async function renderList(props: { onOpenImage?: (index: number) => void } = {}): Promise<HTMLElement> {
+async function renderList(props: { onOpenImage?: (index: number) => void; onRemove?: (names: string[]) => void } = {}): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -47,7 +47,7 @@ async function renderList(props: { onOpenImage?: (index: number) => void } = {})
   await act(async () => {
     root.render(
       <I18nProvider>
-        <AttachedFilesList sessionId={SESSION} onOpenImage={props.onOpenImage} />
+        <AttachedFilesList sessionId={SESSION} onOpenImage={props.onOpenImage} onRemove={props.onRemove} />
       </I18nProvider>,
     )
   })
@@ -129,6 +129,46 @@ describe('AttachedFilesList', () => {
     await click(removeButton!)
 
     expect(useAttachmentsStore.getState().bySession[SESSION]).toHaveLength(0)
+  })
+
+  it('сообщает имена удалённых элементов через onRemove', async () => {
+    const onRemove = vi.fn()
+    useAttachmentsStore.setState({
+      bySession: {
+        [SESSION]: [
+          draft({ name: 'photo.png', mimeType: 'image/png', previewUrl: 'blob:photo' }),
+          draft({ name: 'a.txt' }),
+        ],
+      },
+    })
+
+    const container = await renderList({ onRemove })
+    const removeButton = container.querySelector('[aria-label="Remove “a.txt”"]') as HTMLElement | null
+    await click(removeButton!)
+
+    expect(onRemove).toHaveBeenCalledWith(['a.txt'])
+  })
+
+  it('при каскаде по groupId сообщает имена всей группы', async () => {
+    const onRemove = vi.fn()
+    useAttachmentsStore.setState({
+      bySession: {
+        [SESSION]: [
+          draft({ name: 'doc.txt', groupId: 'g1', groupSize: 2 }),
+          draft({ name: 'page1.png', mimeType: 'image/png', groupId: 'g1', groupSize: 2 }),
+          draft({ name: 'other.txt' }),
+        ],
+      },
+    })
+
+    const container = await renderList({ onRemove })
+    const removeButton = container.querySelector('[aria-label="Remove “doc.txt”"]') as HTMLElement | null
+    await click(removeButton!)
+
+    expect(onRemove).toHaveBeenCalledWith(['doc.txt', 'page1.png'])
+    expect(useAttachmentsStore.getState().bySession[SESSION]!.map((item) => item.name)).toEqual([
+      'other.txt',
+    ])
   })
 
   it('открывает галерею по клику на превью', async () => {

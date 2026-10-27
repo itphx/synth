@@ -164,6 +164,92 @@ describe('attachmentsStore: ошибки и повтор', () => {
   })
 })
 
+describe('attachmentsStore: восстановление из истории', () => {
+  it('restore добавляет ready-элементы, readyPartIds отдаёт blobPath', () => {
+    useAttachmentsStore.getState().restore(SESSION, [
+      {
+        blobPath: 'attachments/ab/one',
+        mimeType: 'image/png',
+        size: 100,
+        name: 'photo.png',
+        partId: 'part-1',
+        previewUrl: '/api/v2/sessions/s1/attachments/part-1',
+      },
+      { blobPath: 'attachments/ab/two', mimeType: 'text/plain', size: 10, partId: 'part-2' },
+    ])
+
+    const list = items()
+    expect(list).toHaveLength(2)
+    expect(list.every((item) => item.upload === 'ready')).toBe(true)
+    expect(list[0]!.blobPath).toBe('attachments/ab/one')
+    expect(list[0]!.partId).toBe('attachments/ab/one')
+    expect(list[0]!.previewUrl).toBe('/api/v2/sessions/s1/attachments/part-1')
+    expect(list[0]!.file).toBeUndefined()
+    expect(list[1]!.name).toBe('two')
+    expect(useAttachmentsStore.getState().readyPartIds(SESSION)).toEqual([
+      'attachments/ab/one',
+      'attachments/ab/two',
+    ])
+  })
+
+  it('не добавляет дубликат с тем же blobPath', () => {
+    const item = { blobPath: 'attachments/ab/one', mimeType: 'image/png', size: 1, partId: 'p' }
+    useAttachmentsStore.getState().restore(SESSION, [item])
+    useAttachmentsStore.getState().restore(SESSION, [item])
+
+    expect(items()).toHaveLength(1)
+  })
+
+  it('соблюдает MAX_FILES_PER_MESSAGE и не трогает существующие элементы', async () => {
+    await useAttachmentsStore.getState().addFiles(SESSION, [makeFile('existing.txt')])
+    const existingId = items()[0]!.id
+
+    const restored = Array.from({ length: MAX_FILES_PER_MESSAGE + 2 }, (_, i) => ({
+      blobPath: `attachments/ab/${i}`,
+      mimeType: 'text/plain',
+      size: 1,
+      partId: `p${i}`,
+    }))
+    useAttachmentsStore.getState().restore(SESSION, restored)
+
+    const list = items()
+    expect(list).toHaveLength(MAX_FILES_PER_MESSAGE)
+    expect(list[0]!.id).toBe(existingId)
+  })
+
+  it('retry без исходного File ничего не делает', async () => {
+    useAttachmentsStore.getState().restore(SESSION, [
+      { blobPath: 'attachments/ab/one', mimeType: 'text/plain', size: 1, partId: 'p' },
+    ])
+    const draft = items()[0]!
+    useAttachmentsStore.setState({
+      bySession: { [SESSION]: [{ ...draft, upload: 'error', error: 'upload_failed' }] },
+    })
+
+    await useAttachmentsStore.getState().retry(SESSION, draft.id)
+
+    expect(items()[0]!.upload).toBe('error')
+    expect(mocks.uploadSessionAttachment).not.toHaveBeenCalled()
+  })
+
+  it('dispose не отзывает http-превью восстановленных вложений', () => {
+    useAttachmentsStore.getState().restore(SESSION, [
+      {
+        blobPath: 'attachments/ab/one',
+        mimeType: 'image/png',
+        size: 1,
+        partId: 'p',
+        previewUrl: '/api/v2/sessions/s1/attachments/p',
+      },
+    ])
+
+    useAttachmentsStore.getState().dispose(SESSION)
+
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled()
+    expect(useAttachmentsStore.getState().bySession[SESSION]).toBeUndefined()
+  })
+})
+
 describe('attachmentsStore: группы, clear и dispose', () => {
   it('удаление элемента с groupId убирает всю группу', async () => {
     await useAttachmentsStore
