@@ -9,9 +9,15 @@ const mocks = vi.hoisted(() => ({
   onStop: vi.fn(),
   onCreateNote: vi.fn(),
   uploadSessionAttachment: vi.fn(),
+  prepareAttachmentFiles: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: { getCommands: mocks.getCommands } }))
+// Подготовка файла мокается: проверяем, что выбор через `AttachmentButton`
+// идёт единым путём (prepare → группы → стор), а не в обход.
+vi.mock('@/lib/attachments/prepare', () => ({
+  prepareAttachmentFiles: mocks.prepareAttachmentFiles,
+}))
 vi.mock('@/lib/api/attachments', () => ({
   uploadSessionAttachment: mocks.uploadSessionAttachment,
   attachmentContentUrl: (sessionId: string, partId: string) =>
@@ -112,6 +118,10 @@ beforeEach(() => {
     mime: file.type || 'text/plain',
     size: file.size,
   }))
+  // Пропускаем файл как есть — тесты про путь подготовки, а не про её шаги.
+  mocks.prepareAttachmentFiles.mockImplementation(async (file: File) => [
+    { file, mimeType: file.type || 'text/plain' },
+  ])
   Object.defineProperty(URL, 'createObjectURL', {
     value: vi.fn(() => 'blob:mock'),
     configurable: true,
@@ -156,6 +166,21 @@ describe('ChatInput — вложения (ADR-115)', () => {
     expect(mocks.onSend).toHaveBeenCalledWith('привет', undefined, undefined, ['srv_a.txt'])
     expect(useAttachmentsStore.getState().bySession[SESSION] ?? []).toHaveLength(0)
     expect(container.querySelector('[data-testid="attachment-file"]')).toBeNull()
+  })
+
+  it('выбор файла через кнопку идёт через prepareAttachmentFiles', async () => {
+    const container = await renderInput()
+    const input = container.querySelector('[data-testid="attachment-input"]') as HTMLInputElement
+    const file = new File(['hello'], 'a.txt', { type: 'text/plain' })
+
+    await uploadFiles(input, [file])
+
+    expect(mocks.prepareAttachmentFiles).toHaveBeenCalledTimes(1)
+    expect(mocks.prepareAttachmentFiles).toHaveBeenCalledWith(file, expect.any(Set))
+    expect((useAttachmentsStore.getState().bySession[SESSION] ?? []).map((item) => item.name)).toEqual([
+      'a.txt',
+    ])
+    expect(mocks.uploadSessionAttachment).toHaveBeenCalledTimes(1)
   })
 
   it('пока идёт загрузка, отправка заблокирована', async () => {

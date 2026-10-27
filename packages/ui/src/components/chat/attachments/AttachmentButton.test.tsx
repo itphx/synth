@@ -37,7 +37,10 @@ function stubDesktop(): void {
   }))
 }
 
-async function renderButton(disabled?: boolean): Promise<HTMLElement> {
+async function renderButton(
+  disabled?: boolean,
+  onFiles?: (files: File[]) => void | Promise<void>,
+): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -46,7 +49,7 @@ async function renderButton(disabled?: boolean): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <AttachmentButton sessionId={SESSION} disabled={disabled} />
+        <AttachmentButton sessionId={SESSION} disabled={disabled} onFiles={onFiles} />
       </I18nProvider>,
     )
   })
@@ -124,8 +127,21 @@ describe('AttachmentButton', () => {
     expect(mocks.uploadSessionAttachment).toHaveBeenCalledTimes(1)
   })
 
-  it('не добавляет файлы при disabled', async () => {
-    const container = await renderButton(true)
+  it('с переданным onFiles отдаёт файлы наружу и не трогает стор', async () => {
+    const onFiles = vi.fn()
+    const container = await renderButton(undefined, onFiles)
+    const input = container.querySelector('[data-testid="attachment-input"]') as HTMLInputElement
+    const file = new File(['hello'], 'a.txt', { type: 'text/plain' })
+
+    await uploadFiles(input, [file])
+
+    expect(onFiles).toHaveBeenCalledTimes(1)
+    expect(onFiles).toHaveBeenCalledWith([file])
+    expect(useAttachmentsStore.getState().bySession[SESSION] ?? []).toHaveLength(0)
+    expect(mocks.uploadSessionAttachment).not.toHaveBeenCalled()
+  })
+
+  it('не добавляет файлы при disabled', async () => {    const container = await renderButton(true)
     const button = container.querySelector('button') as HTMLButtonElement
     const input = container.querySelector('[data-testid="attachment-input"]') as HTMLInputElement
     const clickSpy = vi.spyOn(input, 'click')

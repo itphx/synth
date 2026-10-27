@@ -12,6 +12,13 @@ import { useAttachmentsStore } from '@/stores/attachmentsStore'
 export interface AttachmentButtonProps {
   sessionId: string
   disabled?: boolean
+  /**
+   * Готовый путь подготовки файлов (ADR-115). Композер передаёт сюда
+   * `attachFiles` — подготовка (MIME, HEIC, office-группы) и стор живут в
+   * одном месте. Без пропа кнопка работает автономно: кладёт файлы в стор
+   * напрямую, без подготовки.
+   */
+  onFiles?: (files: File[]) => void | Promise<void>
 }
 
 /**
@@ -20,7 +27,11 @@ export interface AttachmentButtonProps {
  * Меню выбора источника (файлы/контекст) пока не нужно: на телефоне и на
  * десктопе работает один и тот же системный диалог (ADR-044).
  */
-export function AttachmentButton({ sessionId, disabled = false }: AttachmentButtonProps) {
+export function AttachmentButton({
+  sessionId,
+  disabled = false,
+  onFiles,
+}: AttachmentButtonProps) {
   const { t } = useI18n()
   const { deviceType } = useDevice()
   const inputRef = useRef<HTMLInputElement>(null)
@@ -30,7 +41,12 @@ export function AttachmentButton({ sessionId, disabled = false }: AttachmentButt
     const files = Array.from(event.target.files ?? [])
     // Сбрасываем значение: повторный выбор того же файла должен снова срабатывать.
     event.target.value = ''
-    if (files.length > 0) void addFiles(sessionId, files)
+    if (files.length === 0) return
+    if (onFiles) {
+      void onFiles(files)
+      return
+    }
+    void addFiles(sessionId, files)
   }
 
   return (

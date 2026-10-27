@@ -652,7 +652,7 @@ export function ChatInput({
           }`}
         >
           <div className="flex shrink-0 items-center gap-0.5">
-            <AttachmentButton sessionId={sessionId} />
+            <AttachmentButton sessionId={sessionId} onFiles={attachFiles} />
             <FooterBtn
               icon={expanded ? 'fullscreen-exit' : 'fullscreen'}
               title={expanded ? t('chat.footer.collapse') : t('chat.footer.expand')}
