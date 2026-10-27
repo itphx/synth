@@ -96,6 +96,21 @@ export { setSynthReady } from './ready.js';
 export { createLlmCallRecorder } from './llm.js';
 export type { LlmCallInfo, LlmCallOutcome } from './llm.js';
 export {
+  createAttachmentMetrics,
+  setAttachmentMetricsHook,
+  getAttachmentMetricsHook,
+  normalizeAttachmentKind,
+  normalizeAttachmentUploadOutcome,
+  normalizeAttachmentDownloadOutcome,
+  ATTACHMENT_UPLOAD_BYTES_BUCKETS,
+} from './attachments.js';
+export type {
+  AttachmentDownloadOutcome,
+  AttachmentMetricKind,
+  AttachmentMetricsHooks,
+  AttachmentUploadOutcome,
+} from './attachments.js';
+export {
   createExecutorMetricsCollector,
   normalizeExecutorOutcome,
   EXECUTOR_WAIT_BUCKETS,

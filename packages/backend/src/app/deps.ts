@@ -79,6 +79,10 @@ import {
   createExecutorMetricsCollector,
   createWebhookMetrics,
   createEventMetrics,
+  // ADR-094/ADR-115: метрики вложений (`synth_attachment_*`) + установка их
+  // sink'а (сервис вложений собирается внутри фабрики роутов сессий).
+  createAttachmentMetrics,
+  setAttachmentMetricsHook,
   // ADR-106 Ф1/Ф2: счётчик решений Authority-слоя (`synth_authority_decisions_total`)
   // и guard-слоя (решение считается; в enforced-режиме — применяется).
   createAuthorityMetrics,
@@ -488,6 +492,9 @@ export async function createBackendDeps(
     : startProcessLogPruner(storageContext.backgroundRuns, storageContext.blobs, {
         getRetentionDays: () => config.synth.background.retentionDays,
       });
+  // ADR-094/ADR-115: метрики вложений (`synth_attachment_*`) — создаются до GC,
+  // чтобы счётчик удалённых объектов был доступен при первом прогоне.
+  const attachmentMetrics = metrics ? createAttachmentMetrics(metrics) : undefined;
   // ADR-115: GC осиротевших вложений (нет ссылок `blob_refs` + объект старше
   // `attachments.gcDays`; `<= 0` — без ограничения).
   const stopAttachmentPruner = storageDegraded
@@ -496,6 +503,7 @@ export async function createBackendDeps(
         blobs: storageContext.blobs,
         blobRefs: storageContext.blobRefs,
         gcDays: () => config.synth.attachments.gcDays,
+        ...(attachmentMetrics ? { metrics: attachmentMetrics } : {}),
       });
 
   // ADR-094: доменные коллекторы. `metrics` приходит только при
@@ -511,6 +519,9 @@ export async function createBackendDeps(
   // лейблы только `action`/`effect`/`source`, без id (ADR-094).
   const authorityMetrics = metrics ? createAuthorityMetrics(metrics) : undefined;
   if (metrics) {
+    // ADR-115: сервис вложений собирается внутри фабрики роутов сессий, куда
+    // метрики не прокинуть — ставим хуки в sink коллектора (снимается на stop).
+    stopMetricsCollectors.push(setAttachmentMetricsHook(attachmentMetrics ?? null));
     stopMetricsCollectors.push(attachBusMetrics(metrics, eventBus));
     stopMetricsCollectors.push(startSessionMetrics(metrics, sessionManager));
     stopMetricsCollectors.push(

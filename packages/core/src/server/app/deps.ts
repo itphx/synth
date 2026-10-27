@@ -59,6 +59,10 @@ import {
   createSchedulerMetrics,
   createWebhookMetrics,
   createEventMetrics,
+  // ADR-094/ADR-115: метрики вложений (`synth_attachment_*`) + установка их
+  // sink'а (сервис вложений собирается внутри фабрики роутов сессий).
+  createAttachmentMetrics,
+  setAttachmentMetricsHook,
   // ADR-106 Ф1: счётчик решений Authority-слоя (`synth_authority_decisions_total`).
   createAuthorityMetrics,
   // ADR-094/ADR-077: метрики пула исполнителей (`synth_executor_*`) — приёмник
@@ -528,6 +532,10 @@ export async function createStandaloneDeps(
     : startProcessLogPruner(storageContext.backgroundRuns, storageContext.blobs, {
         getRetentionDays: () => config.backgroundConfig?.retentionDays ?? 7,
       });
+  // ADR-094/ADR-115: метрики вложений (`synth_attachment_*`) — создаются до GC,
+  // чтобы счётчик удалённых объектов был доступен при первом прогоне.
+  // `metrics` приходит только при `metrics.enabled=true`.
+  const attachmentMetrics = metrics ? createAttachmentMetrics(metrics) : undefined;
   // ADR-115: GC осиротевших вложений. Критерий — нет ссылок (`blob_refs`) И
   // объект старше `attachments.gcDays` (живой объект может быть старым —
   // удалять по возрасту нельзя). `gcDays <= 0` — без ограничения.
@@ -537,6 +545,7 @@ export async function createStandaloneDeps(
         blobs: storageContext.blobs,
         blobRefs: storageContext.blobRefs,
         gcDays: () => config.attachmentsConfig?.gcDays ?? 30,
+        ...(attachmentMetrics ? { metrics: attachmentMetrics } : {}),
       });
 
   // ADR-094: доменные коллекторы. `metrics` приходит только при
@@ -552,6 +561,9 @@ export async function createStandaloneDeps(
   // лейблы только `action`/`effect`/`source`, без id (ADR-094).
   const authorityMetrics = metrics ? createAuthorityMetrics(metrics) : undefined;
   if (metrics) {
+    // ADR-115: сервис вложений собирается внутри фабрики роутов сессий, куда
+    // метрики не прокинуть — ставим хуки в sink коллектора (снимается на stop).
+    stopMetricsCollectors.push(setAttachmentMetricsHook(attachmentMetrics ?? null));
     stopMetricsCollectors.push(attachBusMetrics(metrics, eventBus));
     stopMetricsCollectors.push(startSessionMetrics(metrics, sessionManager));
     stopMetricsCollectors.push(

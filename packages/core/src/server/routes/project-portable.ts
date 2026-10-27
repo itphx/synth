@@ -227,6 +227,11 @@ export function createProjectPortableRoutes(
   // инициатору (`deps.canExportSecrets`: managed — ADMIN/LEAD, standalone —
   // локальный владелец); иначе 403 FORBIDDEN. Факт включается в аудит
   // `export.created` (`details.withSecrets`).
+  //
+  // ВЛОЖЕНИЯ (ADR-115): байты вложений сообщений переносятся вместе с проектом
+  // **по умолчанию** (формат архива 2, `attachments/<sha2>/<sha256>`); отдельного
+  // query-флага нет — отключение остаётся внутренней опцией `exportProject`
+  // (`withAttachments: false`), т.к. архив с медиа заметно крупнее.
   app.get('/:id/export', readGuard, async (c) => {
     const id = c.req.param('id');
     const project = await deps.getProject(id);

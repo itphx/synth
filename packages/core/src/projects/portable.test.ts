@@ -5,14 +5,20 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MessageRole } from '@itphx/synth-shared';
-import type { Message, Part } from '@itphx/synth-shared';
+import type { AttachmentsConfig, Message, Part } from '@itphx/synth-shared';
 import { SessionManager } from '../sessions/manager.js';
+import { AttachmentService } from '../engine/attachments/service.js';
 import { createFileStorage } from '../storage/storage-context.js';
 import { MemoryMaintenanceAuditRepository } from '../storage/memory/index.js';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import { readFileFromTarGz, readTarGz, writeTarGz, type ArchiveSource } from '../maintenance/archive.js';
 import { buildBombArchive } from '../test-helpers/archive-bomb.js';
-import { ProjectPortableError, exportProject, importProject } from './portable.js';
+import {
+  PROJECT_EXPORT_FORMAT_VERSION,
+  ProjectPortableError,
+  exportProject,
+  importProject,
+} from './portable.js';
 
 /** Реальный секрет в карте обфускации сессии (плейсхолдер → значение). */
 const REAL_SECRET = 'sk-live-DO-NOT-LEAK';
@@ -791,5 +797,277 @@ describe('portable export/import проекта (ADR-091)', () => {
     });
     expect(robust.bytes).toBeGreaterThan(0);
     expect(createHash('sha256').update(await readFile(robust.path)).digest('hex')).toBeTruthy();
+  });
+});
+
+/**
+ * ADR-115: переносимость вложений сообщений в портативном архиве проекта.
+ *
+ * Архив формата 2 несёт байты вложений (`attachments/<sha2>/<sha256>`), адрес
+ * content-addressed — части сообщений при импорте не переписываются; на объект
+ * создаётся ссылка `blob_refs` (иначе GC счёл бы его сиротой). Архив версии 1
+ * (без вложений) импортируется как раньше: медиа-части дают предупреждение.
+ */
+describe('portable: вложения сообщений (ADR-115)', () => {
+  let tmpDir: string;
+  let src: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-portable-attachments-'));
+    src = join(tmpDir, 'src');
+    await mkdir(src, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Конфиг вложений для тестов переноса. */
+  function attachmentsConfig(): AttachmentsConfig {
+    return {
+      maxBytesPerFile: 1024 * 1024,
+      maxFilesPerMessage: 10,
+      maxBytesPerSession: 10 * 1024 * 1024,
+      allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
+      gcDays: 30,
+    };
+  }
+
+  /** Минимальный PNG (сигнатура + IHDR + IEND, CRC-заглушки). */
+  function pngBytes(): Buffer {
+    const chunk = (type: string, data: Buffer): Buffer => {
+      const length = Buffer.alloc(4);
+      length.writeUInt32BE(data.length);
+      return Buffer.concat([length, Buffer.from(type, 'latin1'), data, Buffer.alloc(4)]);
+    };
+    return Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk('IHDR', Buffer.alloc(13, 1)),
+      chunk('IEND', Buffer.alloc(0)),
+    ]);
+  }
+
+  /** Проект с сессией, у сообщения — медиа-часть и объект в blob-хранилище. */
+  async function makeProjectWithAttachment(name = 'С вложением') {
+    const storage = createFileStorage({ dataDir: src });
+    const service = new AttachmentService({ blobs: storage.blobs, config: attachmentsConfig() });
+    const uploaded = await service.upload({ sessionId: 'tmp', bytes: pngBytes(), name: 'photo.png' });
+
+    const project = storage.projects.create(name, 'local');
+    await storage.projects.save(project);
+    const manager = new SessionManager(storage.sessions, { projectStore: storage.projects });
+    const session = await manager.createSession({ title: 'С фото', projectId: project.id });
+    session.messages = [
+      {
+        id: 'm1',
+        role: MessageRole.USER,
+        seq: 1,
+        origin: 'local',
+        parts: [
+          { id: 'text-1', type: 'text', data: 'смотри' },
+          {
+            id: 'part-1',
+            type: 'image',
+            data: {
+              blobPath: uploaded.blobPath,
+              sha256: uploaded.sha256,
+              mime: uploaded.mime,
+              size: uploaded.size,
+              name: 'photo.png',
+            },
+          },
+        ],
+        content: 'смотри [image: photo.png]',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        disabled: false,
+        pinned: false,
+        hidden: false,
+      } as Message,
+    ];
+    await manager.saveSession(session);
+    await storage.blobRefs.add({ blobPath: uploaded.blobPath, ownerKind: 'message', ownerId: 'm1' });
+
+    const bytes = await storage.blobs.read(uploaded.blobPath);
+    return { projectId: project.id, uploaded, bytes: bytes as Buffer };
+  }
+
+  it('экспорт кладёт байты вложений и объявляет формат 2', async () => {
+    const { projectId, uploaded, bytes } = await makeProjectWithAttachment();
+    const exported = await exportProject({ dataDir: src, projectId, out: tmpDir });
+
+    expect(exported.attachments).toBe(1);
+    const manifestRaw = await readFileFromTarGz(exported.path, 'manifest.json');
+    const manifest = JSON.parse(manifestRaw?.toString('utf-8') ?? '{}') as {
+      formatVersion: number;
+      withAttachments: boolean;
+      attachments: number;
+    };
+    expect(manifest.formatVersion).toBe(PROJECT_EXPORT_FORMAT_VERSION);
+    expect(manifest.withAttachments).toBe(true);
+    expect(manifest.attachments).toBe(1);
+
+    const inArchive = await readFileFromTarGz(exported.path, uploaded.blobPath);
+    expect(inArchive?.equals(bytes)).toBe(true);
+  });
+
+  it('импорт восстанавливает байты (sha256 совпадает), sidecar и blob_refs', async () => {
+    const { projectId, uploaded, bytes } = await makeProjectWithAttachment();
+    const exported = await exportProject({ dataDir: src, projectId, out: tmpDir });
+
+    const dst = join(tmpDir, 'dst');
+    await mkdir(dst, { recursive: true });
+    const result = await importProject({ dataDir: dst, archive: exported.path, yes: true });
+
+    expect(result.attachmentsImported).toBe(1);
+    expect(result.attachmentsSkipped).toBe(0);
+    expect(result.warnings).toEqual([]);
+
+    const dstStorage = createFileStorage({ dataDir: dst });
+    const restored = await dstStorage.blobs.read(uploaded.blobPath);
+    expect(restored?.equals(bytes)).toBe(true);
+    expect(createHash('sha256').update(restored as Buffer).digest('hex')).toBe(uploaded.sha256);
+    // Sidecar пересоздан из данных части (имя файла переживает перенос).
+    const sidecar = await dstStorage.blobs.read(`${uploaded.blobPath}.json`);
+    expect(sidecar).toBeTruthy();
+    expect(JSON.parse((sidecar as Buffer).toString('utf-8'))).toMatchObject({
+      mime: 'image/png',
+      name: 'photo.png',
+      sha256: uploaded.sha256,
+    });
+
+    // Часть сообщения сохранена с тем же content-addressed путём.
+    const sessions = await new SessionManager(dstStorage.sessions).listSessions({
+      projectId: result.projectId,
+    });
+    expect(sessions).toHaveLength(1);
+    const part = sessions[0]?.messages[0]?.parts.find((p) => p.type === 'image');
+    expect((part?.data as Record<string, unknown>).blobPath).toBe(uploaded.blobPath);
+
+    // Ссылка владельца объекта (GC не тронет живое вложение).
+    expect(await dstStorage.blobRefs.listByOwner('message', 'm1')).toEqual([uploaded.blobPath]);
+    expect(await dstStorage.blobRefs.countRefs(uploaded.blobPath)).toBe(1);
+  });
+
+  it('withAttachments: false — байты не переносятся, импорт сообщает о dangling', async () => {
+    const { projectId, uploaded } = await makeProjectWithAttachment();
+    const exported = await exportProject({
+      dataDir: src,
+      projectId,
+      out: tmpDir,
+      withAttachments: false,
+    });
+    expect(exported.attachments).toBe(0);
+    expect(await readFileFromTarGz(exported.path, uploaded.blobPath)).toBeNull();
+
+    const dst = join(tmpDir, 'dst-noattachments');
+    await mkdir(dst, { recursive: true });
+    const result = await importProject({ dataDir: dst, archive: exported.path, yes: true });
+
+    expect(result.attachmentsImported).toBe(0);
+    expect(result.attachmentsSkipped).toBe(1);
+    expect(result.warnings.join('\n')).toContain('dangling');
+    const dstStorage = createFileStorage({ dataDir: dst });
+    expect(await dstStorage.blobs.exists(uploaded.blobPath)).toBe(false);
+    // Сообщение и часть импортированы (импорт не падает).
+    const sessions = await new SessionManager(dstStorage.sessions).listSessions({
+      projectId: result.projectId,
+    });
+    expect(sessions[0]?.messages).toHaveLength(1);
+  });
+
+  it('архив формата 1 (без вложений) импортируется обратно совместимо', async () => {
+    const sha = 'a'.repeat(64);
+    const sessionPayload = {
+      title: 'Старая сессия',
+      messages: [
+        {
+          id: 'm-old',
+          role: 'user',
+          seq: 1,
+          origin: 'local',
+          parts: [
+            {
+              id: 'part-old',
+              type: 'image',
+              data: {
+                blobPath: `attachments/${sha.slice(0, 2)}/${sha}`,
+                sha256: sha,
+                mime: 'image/png',
+                size: 3,
+                name: 'old.png',
+              },
+            },
+          ],
+          content: 'старое сообщение',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          disabled: false,
+          pinned: false,
+          hidden: false,
+        },
+      ],
+    };
+
+    const staging = join(tmpDir, 'legacy');
+    await mkdir(staging, { recursive: true });
+    const projectPath = join(staging, 'project.json');
+    const sessionPath = join(staging, 'session.json');
+    await writeFile(projectPath, JSON.stringify({ name: 'Старый проект' }));
+    await writeFile(sessionPath, JSON.stringify(sessionPayload));
+    const files: Array<{ path: string; absPath: string }> = [
+      { path: 'project.json', absPath: projectPath },
+      { path: 'sessions/old.json', absPath: sessionPath },
+    ];
+    const entries = [];
+    for (const file of files) {
+      const content = await readFile(file.absPath);
+      entries.push({
+        path: file.path,
+        size: content.length,
+        sha256: createHash('sha256').update(content).digest('hex'),
+      });
+    }
+    const sources: ArchiveSource[] = files.map((file) => ({
+      path: file.path,
+      type: 'file',
+      absPath: file.absPath,
+      mode: 0o644,
+    }));
+    const archivePath = join(tmpDir, 'legacy-v1.synth-project.tar.gz');
+    await writeTarGz(archivePath, sources, {
+      extraFile: {
+        path: 'manifest.json',
+        content: Buffer.from(
+          JSON.stringify({
+            tool: 'synth-project-export',
+            formatVersion: 1,
+            exportedAt: '2026-01-01T00:00:00.000Z',
+            instanceVersion: '0.12.0',
+            project: { id: 'old-project', name: 'Старый проект' },
+            sessions: 1,
+            withWorkspace: false,
+            entries,
+          }),
+        ),
+      },
+    });
+
+    const dst = join(tmpDir, 'legacy-dst');
+    await mkdir(dst, { recursive: true });
+    const result = await importProject({ dataDir: dst, archive: archivePath, yes: true });
+
+    expect(result.sessionsImported).toBe(1);
+    expect(result.messagesImported).toBe(1);
+    expect(result.attachmentsImported).toBe(0);
+    expect(result.attachmentsSkipped).toBe(1);
+    expect(result.warnings.join('\n')).toContain('dangling');
+
+    const dstStorage = createFileStorage({ dataDir: dst });
+    const sessions = await new SessionManager(dstStorage.sessions).listSessions({
+      projectId: result.projectId,
+    });
+    const media = sessions[0]?.messages[0]?.parts.find((p) => p.type === 'image');
+    expect((media?.data as Record<string, unknown>).blobPath).toBe(
+      `attachments/${sha.slice(0, 2)}/${sha}`,
+    );
   });
 });

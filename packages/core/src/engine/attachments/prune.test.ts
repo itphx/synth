@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileBlobStore } from '../../storage/file-blob-store.js';
 import { FileBlobRefRepository } from '../../storage/file-blob-ref-repository.js';
+import { MetricsRegistry } from '../../metrics/registry.js';
+import { createAttachmentMetrics } from '../../metrics/collectors/attachments.js';
 import { startAttachmentPruner } from './prune.js';
 
 const DAY = 24 * 3600_000;
@@ -101,6 +103,26 @@ describe('startAttachmentPruner (ADR-115)', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(await blobs.exists(blobPath)).toBe(true);
+    stop();
+  });
+
+  it('считает удалённые объекты в synth_attachment_gc_removed_total (ADR-094)', async () => {
+    await seedObject('f'.repeat(64));
+    await seedObject('9'.repeat(64));
+    const registry = new MetricsRegistry();
+
+    const stop = startAttachmentPruner({
+      blobs,
+      blobRefs,
+      gcDays: 30,
+      now: () => Date.now() + 40 * DAY,
+      intervalMs: 60 * 60_000,
+      metrics: createAttachmentMetrics(registry),
+    });
+
+    await vi.waitFor(() => {
+      expect(registry.render().text).toContain('synth_attachment_gc_removed_total 2');
+    });
     stop();
   });
 

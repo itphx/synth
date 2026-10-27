@@ -42,6 +42,7 @@ import {
   slugifyWorkspaceName,
 } from '@itphx/synth-shared';
 import type {
+  MediaPartData,
   Message,
   Part,
   Project,
@@ -54,6 +55,7 @@ import type {
 import { SessionManager } from '../sessions/manager.js';
 import { createFileStorage, type StorageContext } from '../storage/storage-context.js';
 import { provisionManagedWorkspace } from '../engine/workspace-provision.js';
+import { isAttachmentPath } from '../engine/attachments/service.js';
 import { stripSessionSecrets } from '../engine/gateway/obfuscation-map-store.js';
 import { isInsideReal, resolveRealPath } from '../engine/tools/path-utils.js';
 import { serializeProject } from '../server/serialize.js';
@@ -72,6 +74,26 @@ import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-au
 
 /** Префикс staging-каталога экспорта в `{dataDir}/tmp`. */
 const EXPORT_STAGING_PREFIX = 'project-export-';
+
+/**
+ * Версия формата портативного архива проекта.
+ *
+ * - `1` — `manifest.json` + `project.json` + `sessions/**` (+ `workspace/**`);
+ * - `2` — добавлены байты вложений сообщений (`attachments/<sha2>/<sha256>`,
+ *   ADR-115): путь объекта content-addressed, поэтому при импорте `blobPath`
+ *   частей сообщений не меняются, а существующий объект не дублируется.
+ *
+ * Чтение **обратно совместимо**: архив версии 1 импортируется как раньше —
+ * медиа-части без байтов в архиве дают предупреждение, а не ошибку.
+ */
+export const PROJECT_EXPORT_FORMAT_VERSION = 2;
+
+/** Минимальная поддерживаемая версия формата архива (обратная совместимость). */
+export const PROJECT_EXPORT_MIN_FORMAT_VERSION = 1;
+
+/** Медиа-типы частей сообщения (вложение, есть `data.blobPath`). */
+const MEDIA_PART_TYPES = new Set<string>(['image', 'audio', 'video', 'file']);
+
 
 /** Код ошибки портативного экспорта/импорта проекта (ADR-091). */
 export type ProjectPortableErrorCode =
@@ -104,7 +126,8 @@ export interface ProjectExportEntry {
 /** Манифест архива портативного экспорта проекта (ADR-091). */
 export interface ProjectExportManifest {
   tool: 'synth-project-export';
-  formatVersion: 1;
+  /** Версия формата (`PROJECT_EXPORT_FORMAT_VERSION`; 1 — архив без вложений). */
+  formatVersion: number;
   exportedAt: string;
   /** `SYNTH_VERSION` на момент экспорта. */
   instanceVersion: string;
@@ -113,6 +136,10 @@ export interface ProjectExportManifest {
   /** Число экспортированных локальных сессий. */
   sessions: number;
   withWorkspace: boolean;
+  /** ADR-115: байты вложений сообщений в архиве (поле отсутствует в версии 1). */
+  withAttachments?: boolean;
+  /** ADR-115: число объектов вложений в архиве (версия 2+). */
+  attachments?: number;
   /** Записи архива (без `manifest.json`). */
   entries: ProjectExportEntry[];
 }
@@ -135,6 +162,16 @@ export interface ExportProjectOptions {
    * локальный владелец); факт фиксируется в аудите `export.created`.
    */
   withSecrets?: boolean;
+  /**
+   * ADR-115: переносить **байты** вложений сообщений (по умолчанию `true`).
+   *
+   * Вложения лежат в blob-хранилище тома и по своей природе крупнее истории
+   * сессий, поэтому архив может заметно вырасти. Отключение — осознанный выбор
+   * вызывающего (внутренняя опция функции; CLI-флага нет): части сообщений
+   * переносятся, а байты на целевом инстансе окажутся «висячими» — импорт
+   * сообщит о них предупреждением. Молчаливого урезания по порогу размера нет.
+   */
+  withAttachments?: boolean;
   /** Корень локальных workspace (по умолчанию `{dataDir}/workspaces`). */
   workspacesRoot?: string;
   /** ADR-092: аудит-журнал обслуживания (best-effort; ошибка записи не ломает операцию). */
@@ -157,6 +194,8 @@ export interface ExportProjectResult {
   sessions: number;
   entries: number;
   withWorkspace: boolean;
+  /** ADR-115: число объектов вложений, положенных в архив. */
+  attachments: number;
 }
 
 /** Опции `importProject` (ADR-091). */
@@ -210,6 +249,16 @@ export interface ImportProjectResult {
   workspaceRestored: boolean;
   /** Маппинг старый id → новый id (по импортированным сессиям). */
   idMap: Record<string, string>;
+  /** ADR-115: объектов вложений записано в blob-хранилище (с `blob_refs`). */
+  attachmentsImported: number;
+  /**
+   * ADR-115: вложений, которые не удалось восстановить (нет байтов в архиве —
+   * dangling, либо не совпала контрольная сумма). Не ошибка импорта: части
+   * сообщений сохраняются, байты просто отсутствуют.
+   */
+  attachmentsSkipped: number;
+  /** Предупреждения импорта (пропущенные вложения и причины) — не ошибки. */
+  warnings: string[];
 }
 
 /**
@@ -364,6 +413,8 @@ export async function exportProject(opts: ExportProjectOptions): Promise<ExportP
       projectId: opts.projectId,
       sessions: result.sessions,
       workspace: result.withWorkspace,
+      // ADR-115: вложения переносятся вместе с проектом (байты в архиве).
+      attachments: result.attachments,
       // security-фикс 0.11.3: факт включения секретов в архив — в аудите.
       withSecrets: !!opts.withSecrets,
       bytes: result.bytes,
@@ -376,6 +427,7 @@ async function _exportProject(opts: ExportProjectOptions): Promise<ExportProject
   const log = opts.log ?? ((): void => {});
   const dataDir = resolve(opts.dataDir);
   const withWorkspace = !!opts.withWorkspace;
+  const withAttachments = opts.withAttachments !== false;
   const workspacesRoot = opts.workspacesRoot ? resolve(opts.workspacesRoot) : join(dataDir, 'workspaces');
   // ADR-096: готовый контекст (любой backend) либо `file`-контекст по `dataDir`.
   const storage = opts.storage ?? createFileStorage({ dataDir });
@@ -429,6 +481,42 @@ async function _exportProject(opts: ExportProjectOptions): Promise<ExportProject
       sources.push({ path: `sessions/${session.id}.json`, type: 'file', absPath: path, mode: 0o644 });
     }
 
+    // attachments/<sha2>/<sha256> — ADR-115: байты вложений сообщений.
+    // Путь в архиве совпадает с `blobPath` (content-addressed), поэтому импорт
+    // восстанавливает объект по тому же адресу и не переписывает части сообщений.
+    // Отсутствующий объект (dangling: GC/удалён вручную) — пропуск с предупреждением,
+    // архив не роняем.
+    let attachmentCount = 0;
+    let attachmentSkipped = 0;
+    if (withAttachments) {
+      const seenBlobs = new Set<string>();
+      for (const session of localSessions) {
+        for (const message of session.messages ?? []) {
+          for (const part of message.parts ?? []) {
+            if (!MEDIA_PART_TYPES.has(part.type)) continue;
+            const blobPath = (part.data as Partial<MediaPartData> | undefined)?.blobPath;
+            if (typeof blobPath !== 'string' || !isAttachmentPath(blobPath)) continue;
+            if (seenBlobs.has(blobPath)) continue;
+            seenBlobs.add(blobPath);
+            const bytes = await storage.blobs.read(blobPath);
+            if (!bytes) {
+              attachmentSkipped++;
+              log(`  пропущено вложение без байтов: ${blobPath} (dangling)`);
+              continue;
+            }
+            const absPath = join(staging, ...blobPath.split('/'));
+            await mkdir(dirname(absPath), { recursive: true });
+            await writeFile(absPath, bytes);
+            sources.push({ path: blobPath, type: 'file', absPath, mode: 0o644 });
+            attachmentCount++;
+          }
+        }
+      }
+      if (attachmentSkipped > 0) {
+        log(`Предупреждение: вложений без байтов — ${attachmentSkipped} (в архив не попали).`);
+      }
+    }
+
     // workspace/** — опционально (--with-workspace); секретов там нет.
     if (withWorkspace) {
       const projectDir = resolveLocalWorkspace(
@@ -456,12 +544,14 @@ async function _exportProject(opts: ExportProjectOptions): Promise<ExportProject
 
     const manifest: ProjectExportManifest = {
       tool: 'synth-project-export',
-      formatVersion: 1,
+      formatVersion: PROJECT_EXPORT_FORMAT_VERSION,
       exportedAt: nowISO(),
       instanceVersion: SYNTH_VERSION,
       project: { id: project.id, name: project.name },
       sessions: localSessions.length,
       withWorkspace,
+      withAttachments,
+      attachments: attachmentCount,
       entries,
     };
 
@@ -474,7 +564,14 @@ async function _exportProject(opts: ExportProjectOptions): Promise<ExportProject
     });
     const bytes = (await stat(outPath)).size;
     log(`Экспорт проекта «${project.name}»: ${outPath}`);
-    return { path: outPath, bytes, sessions: localSessions.length, entries: entries.length, withWorkspace };
+    return {
+      path: outPath,
+      bytes,
+      sessions: localSessions.length,
+      entries: entries.length,
+      withWorkspace,
+      attachments: attachmentCount,
+    };
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
@@ -513,7 +610,11 @@ async function _readManifest(
   if (!manifest || manifest.tool !== 'synth-project-export') {
     throw new ProjectPortableError('invalid-archive', 'Архив не является экспортом проекта Synth (неверный tool).');
   }
-  if (typeof manifest.formatVersion !== 'number' || manifest.formatVersion > 1) {
+  if (
+    typeof manifest.formatVersion !== 'number'
+    || manifest.formatVersion < PROJECT_EXPORT_MIN_FORMAT_VERSION
+    || manifest.formatVersion > PROJECT_EXPORT_FORMAT_VERSION
+  ) {
     throw new ProjectPortableError('invalid-archive', `Неподдерживаемая версия формата архива: ${String(manifest.formatVersion)}.`);
   }
   if (!Array.isArray(manifest.entries)) {
@@ -563,6 +664,8 @@ async function _verifyArchive(
         if (
           entry.path === 'project.json'
           || entry.path.startsWith('sessions/')
+          // ADR-115: байты вложений (формат архива 2+; в версии 1 их нет).
+          || entry.path.startsWith('attachments/')
           || entry.path === 'workspace'
           || entry.path.startsWith('workspace/')
         ) {
@@ -682,11 +785,13 @@ async function _importProject(opts: ImportProjectOptions): Promise<ImportProject
   }
 
   if (dryRun) {
+    const archiveAttachments = [...collected.keys()].filter((path) => path.startsWith('attachments/')).length;
     log(`[dry-run] Импорт проекта из ${archive}`);
     log(`  проект-источник: ${manifest.project.name} (${manifest.project.id})`);
     log(`  целевой проект: ${opts.mergeInto ? `существующий ${opts.mergeInto}` : `новый «${name}»`}`);
     log(`  сессий к импорту: ${sessionFiles.length}`);
     log(`  сообщений к импорту: ${messagesTotal}`);
+    log(`  вложений в архиве: ${archiveAttachments}`);
     log(`  workspace: ${withWorkspace && manifest.withWorkspace ? 'будет восстановлен' : 'нет'}`);
     log('  (dry-run: изменения не записаны)');
     return {
@@ -695,6 +800,9 @@ async function _importProject(opts: ImportProjectOptions): Promise<ImportProject
       messagesImported: messagesTotal,
       workspaceRestored: false,
       idMap: {},
+      attachmentsImported: 0,
+      attachmentsSkipped: 0,
+      warnings: [],
     };
   }
 
@@ -756,6 +864,10 @@ async function _importProject(opts: ImportProjectOptions): Promise<ImportProject
 
   let sessionsImported = 0;
   let messagesImported = 0;
+  // ADR-115: восстановление байтов вложений (blob-порт + `blob_refs`).
+  let attachmentsImported = 0;
+  let attachmentsSkipped = 0;
+  const attachmentWarnings = new Set<string>();
   for (const item of staged) {
     const data = item.data;
     const session = item.session;
@@ -777,6 +889,12 @@ async function _importProject(opts: ImportProjectOptions): Promise<ImportProject
       message.parts = message.parts.map((part) => _rewriteReferencePart(part, mapping));
     }
     session.messages = messages;
+    // ADR-115: байты вложений — до сохранения сессии, чтобы ссылки `blob_refs`
+    // уже существовали (иначе GC мог бы удалить объект как осиротевший).
+    const attachmentStats = await _importMessageAttachments(storage, messages, collected);
+    attachmentsImported += attachmentStats.imported;
+    attachmentsSkipped += attachmentStats.skipped;
+    for (const warning of attachmentStats.warnings) attachmentWarnings.add(warning);
     session.pendingMessages = [];
     session.todos = Array.isArray(data.todos) ? (data.todos as Session['todos']) : undefined;
     session.stickyNotes = Array.isArray(data.stickyNotes)
@@ -830,7 +948,90 @@ async function _importProject(opts: ImportProjectOptions): Promise<ImportProject
     workspaceRestored = await _restoreWorkspace(storage, target, workspacesRoot, collected, log);
   }
 
-  return { projectId: target.id, sessionsImported, messagesImported, workspaceRestored, idMap };
+  return {
+    projectId: target.id,
+    sessionsImported,
+    messagesImported,
+    workspaceRestored,
+    idMap,
+    attachmentsImported,
+    attachmentsSkipped,
+    warnings: [...attachmentWarnings],
+  };
+}
+
+/** Статистика восстановления вложений одного шага импорта. */
+interface AttachmentImportStats {
+  imported: number;
+  skipped: number;
+  warnings: string[];
+}
+
+/**
+ * ADR-115: восстановить байты вложений сообщений из архива в blob-порт цели.
+ *
+ * - адрес объекта **content-addressed** (`attachments/<sha2>/<sha256>`), поэтому
+ *   `blobPath` частей сообщения не меняется; уже существующий объект (дедуп) не
+ *   перезаписывается;
+ * - sidecar (`<sha>.json`) с метаданными создаётся из данных части, если его нет —
+ *   имя файла и MIME переживают перенос;
+ * - на объект фиксируется ссылка `blob_refs` (`ownerKind: 'message'`) — иначе GC
+ *   считал бы объект осиротевшим;
+ * - отсутствующий в архиве объект (dangling) или несовпадение sha256 — **пропуск
+ *   с предупреждением**: части сообщения сохраняются, импорт не падает.
+ */
+async function _importMessageAttachments(
+  storage: StorageContext,
+  messages: Message[],
+  collected: Map<string, Buffer>,
+): Promise<AttachmentImportStats> {
+  const warnings = new Set<string>();
+  let imported = 0;
+  let skipped = 0;
+
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      if (!MEDIA_PART_TYPES.has(part.type)) continue;
+      const data = (part.data ?? {}) as Partial<MediaPartData>;
+      const blobPath = data.blobPath;
+      if (typeof blobPath !== 'string' || !isAttachmentPath(blobPath)) continue;
+
+      const bytes = collected.get(blobPath);
+      if (!bytes) {
+        skipped++;
+        warnings.add(`вложение отсутствует в архиве (dangling): ${blobPath}`);
+        continue;
+      }
+      const actualSha = createHash('sha256').update(bytes).digest('hex');
+      const pathSha = blobPath.split('/').pop() ?? '';
+      if ((typeof data.sha256 === 'string' && data.sha256 !== actualSha) || pathSha !== actualSha) {
+        skipped++;
+        warnings.add(`контрольная сумма вложения не совпадает: ${blobPath}`);
+        continue;
+      }
+
+      if (!(await storage.blobs.exists(blobPath))) {
+        await storage.blobs.write(blobPath, bytes);
+      }
+      const sidecarPath = `${blobPath}.json`;
+      if (!(await storage.blobs.exists(sidecarPath))) {
+        const sidecar = {
+          mime: typeof data.mime === 'string' && data.mime ? data.mime : 'application/octet-stream',
+          size: bytes.length,
+          sha256: actualSha,
+          ...(typeof data.name === 'string' && data.name ? { name: data.name } : {}),
+          ...(typeof data.width === 'number' ? { width: data.width } : {}),
+          ...(typeof data.height === 'number' ? { height: data.height } : {}),
+          ...(typeof data.durationMs === 'number' ? { durationMs: data.durationMs } : {}),
+        };
+        await storage.blobs.write(sidecarPath, JSON.stringify(sidecar));
+      }
+      await storage.blobRefs.add({ blobPath, ownerKind: 'message', ownerId: message.id });
+      imported++;
+    }
+  }
+
+  return { imported, skipped, warnings: [...warnings] };
 }
 
 /**

@@ -409,6 +409,13 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
  * 1. getProject → создать локальный проект (workspace = {workspacesRoot}/{slug}).
  * 2. Сессии: listSessions(remoteProjectId) → exportSession → createSession + история.
  * 3. Файлы: remoteWalk → fsDownload → запись в локальный workspace.
+ *
+ * ⚠️ Остаток (ADR-115): байты **вложений сообщений** здесь не переносятся —
+ * exportSession отдаёт историю с медиа-частями (blobPath), но не содержимое
+ * blob-хранилища удалённого инстанса. Части на локальном инстансе останутся без
+ * байтов (dangling) до отдельной задачи: перенос вложений гибрида требует
+ * контракта скачивания объекта по `blobPath` (пока его нет). Портативный
+ * экспорт/импорт проекта (`projects/portable.ts`, формат 2) вложения переносит.
  */
 export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promise<TransferStats> {
   const {

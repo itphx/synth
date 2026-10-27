@@ -18,6 +18,11 @@ import { EventBus } from '../../events/bus.js';
 import { FileStore } from '../../storage/file-store.js';
 import { FileBlobStore } from '../../storage/file-blob-store.js';
 import { FileBlobRefRepository } from '../../storage/file-blob-ref-repository.js';
+import { MetricsRegistry } from '../../metrics/registry.js';
+import {
+  createAttachmentMetrics,
+  setAttachmentMetricsHook,
+} from '../../metrics/collectors/attachments.js';
 import type { AuthKit } from '../../auth/local.js';
 
 /** Мок auth: requireAuth — no-op (single-user режим core). */
@@ -85,6 +90,8 @@ interface HarnessOptions {
   /** Считать ход активным (нужно, чтобы промпт шёл режимом `steer` без SSE). */
   turnActive?: boolean;
   config?: Partial<AttachmentsConfig>;
+  /** ADR-094: поставить sink метрик вложений (иначе вызовы — no-op). */
+  metrics?: boolean;
 }
 
 describe('HTTP: вложения сообщений (ADR-115)', () => {
@@ -95,11 +102,14 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
   });
 
   afterEach(async () => {
+    setAttachmentMetricsHook(null);
     await rm(tmpDir, { recursive: true, force: true });
   });
 
   function createHarness(options: HarnessOptions = {}) {
     const app = new Hono();
+    const registry = new MetricsRegistry();
+    if (options.metrics) setAttachmentMetricsHook(createAttachmentMetrics(registry));
     const fileStore = new FileStore({ dataDir: tmpDir });
     const sessionManager = new SessionManager(fileStore);
     const eventBus = new EventBus();
@@ -127,7 +137,7 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
         : {},
     ));
 
-    return { app, sessionManager, blobs, blobRefs };
+    return { app, sessionManager, blobs, blobRefs, registry };
   }
 
   /** Загрузить файл через HTTP (multipart, поле `file`). */
@@ -387,6 +397,80 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
       const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
       const res = await app.request(`/api/v2/sessions/${session.id}/attachments/part-1`);
       expect(res.status).toBe(403);
+    });
+  });
+
+  // ADR-094: инкременты метрик вложений — загрузка (успех/ошибка) и раздача.
+  describe('метрики вложений (ADR-094)', () => {
+    it('upload ok → synth_attachment_uploads_total{outcome="ok",kind="image"}', async () => {
+      const { app, sessionManager, registry } = createHarness({ metrics: true });
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const res = await upload(app, session.id, pngBytes());
+      expect(res.status).toBe(201);
+
+      const text = registry.render().text;
+      expect(text).toContain('synth_attachment_uploads_total{outcome="ok",kind="image"} 1');
+      expect(text).toContain('synth_attachment_upload_bytes_count{kind="image"} 1');
+    });
+
+    it('upload ошибки: too_large и unsupported попадают в счётчик', async () => {
+      const tooLarge = createHarness({ metrics: true, config: { maxBytesPerFile: 20 } });
+      const s1 = await tooLarge.sessionManager.createSession({ title: 'S', userId: 'local' });
+      expect((await upload(tooLarge.app, s1.id, pngBytes())).status).toBe(413);
+      expect(tooLarge.registry.render().text).toContain(
+        'synth_attachment_uploads_total{outcome="too_large",kind="image"} 1',
+      );
+
+      setAttachmentMetricsHook(null);
+      const unsupported = createHarness({ metrics: true });
+      const s2 = await unsupported.sessionManager.createSession({ title: 'S', userId: 'local' });
+      const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+      expect((await upload(unsupported.app, s2.id, svg, 'pic.svg', 'image/svg+xml')).status).toBe(415);
+      expect(unsupported.registry.render().text).toContain(
+        'synth_attachment_uploads_total{outcome="unsupported",kind="image"} 1',
+      );
+    });
+
+    it('download: ok и not_found', async () => {
+      const { app, sessionManager, registry } = createHarness({ metrics: true });
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const uploaded = (await (await upload(app, session.id, pngBytes())).json()) as {
+        blobPath: string; sha256: string; mime: string; size: number;
+      };
+      await sessionManager.withLock(session.id, async (locked) => {
+        locked.messages.push({
+          id: 'msg-1',
+          role: 'user',
+          seq: 1,
+          origin: 'local',
+          parts: [
+            {
+              id: 'part-1',
+              type: 'image',
+              data: {
+                blobPath: uploaded.blobPath,
+                sha256: uploaded.sha256,
+                mime: uploaded.mime,
+                size: uploaded.size,
+                name: 'photo.png',
+              },
+            },
+          ],
+          content: 'см.',
+          createdAt: new Date().toISOString(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+        } as Message);
+        await sessionManager.updateSession(locked);
+      });
+
+      expect((await app.request(`/api/v2/sessions/${session.id}/attachments/part-1`)).status).toBe(200);
+      expect((await app.request(`/api/v2/sessions/${session.id}/attachments/nope`)).status).toBe(404);
+
+      const text = registry.render().text;
+      expect(text).toContain('synth_attachment_downloads_total{outcome="ok"} 1');
+      expect(text).toContain('synth_attachment_downloads_total{outcome="not_found"} 1');
     });
   });
 });

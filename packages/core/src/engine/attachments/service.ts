@@ -16,6 +16,11 @@ import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import type { Readable } from 'node:stream';
 import type { AttachmentsConfig, MediaPartData, MediaPartType } from '@itphx/synth-shared';
+import {
+  getAttachmentMetricsHook,
+  type AttachmentMetricKind,
+  type AttachmentMetricsHooks,
+} from '../../metrics/collectors/attachments.js';
 import type { BlobReadRange, BlobStore } from '../../storage/ports/blob-store.js';
 import { looksLikeSvg, normalizeMime, sniffMime } from './sniff-mime.js';
 import { stripMetadata } from './strip-metadata.js';
@@ -82,17 +87,30 @@ export interface AttachmentServiceDeps {
   config: AttachmentsConfig;
   /** Лог предупреждений (по умолчанию `console.warn`). */
   log?: (message: string) => void;
+  /**
+   * ADR-094: метрики вложений (`synth_attachment_*`). Не задан — берётся
+   * модульный sink (`getAttachmentMetricsHook`), который ставит контейнер
+   * зависимостей при `metrics.enabled=true`; выключенные метрики — no-op.
+   */
+  metrics?: AttachmentMetricsHooks;
 }
 
 export class AttachmentService {
   private readonly _blobs: BlobStore;
   private readonly _config: AttachmentsConfig;
   private readonly _log: (message: string) => void;
+  private readonly _metrics?: AttachmentMetricsHooks;
 
   constructor(deps: AttachmentServiceDeps) {
     this._blobs = deps.blobs;
     this._config = deps.config;
     this._log = deps.log ?? ((message) => console.warn(message));
+    this._metrics = deps.metrics;
+  }
+
+  /** Метрики вложений: явные из опций приоритетнее модульного sink'а. */
+  private get _metricsHooks(): AttachmentMetricsHooks | null {
+    return this._metrics ?? getAttachmentMetricsHook();
   }
 
   /**
@@ -106,10 +124,16 @@ export class AttachmentService {
     declaredMime?: string;
   }): Promise<UploadedAttachmentMeta> {
     const raw = input.bytes;
+    // ADR-094: метрики попыток — вид вложения best-effort (сигнатура → MIME),
+    // чтобы отказ тоже был размечен (невалидный MIME всё равно имеет вид).
+    const metrics = this._metricsHooks;
+    const kind = metrics ? uploadKindHint(raw, input.declaredMime) : 'file';
     if (raw.length === 0) {
+      metrics?.onUpload({ outcome: 'unsupported', kind });
       throw new AttachmentError('unsupported_mime', 'Пустой файл: MIME по содержимому не определяется');
     }
     if (raw.length > this._config.maxBytesPerFile) {
+      metrics?.onUpload({ outcome: 'too_large', kind });
       throw new AttachmentError(
         'too_large',
         `Размер вложения ${raw.length} Б превышает предел ${this._config.maxBytesPerFile} Б`,
@@ -117,7 +141,12 @@ export class AttachmentService {
     }
 
     const mime = this._resolveMime(raw, input.declaredMime);
-    this._assertAllowed(mime);
+    try {
+      this._assertAllowed(mime);
+    } catch (err) {
+      metrics?.onUpload({ outcome: 'unsupported', kind: partTypeOf(mime) });
+      throw err;
+    }
 
     // Метаданные вычищаются до хеширования: адрес описывает то, что реально лежит.
     const bytes = stripMetadata(raw, mime);
@@ -140,6 +169,7 @@ export class AttachmentService {
       await this._writeSidecar(blobPath, sidecar);
     }
 
+    metrics?.onUpload({ outcome: 'ok', kind: partTypeOf(mime), bytes: bytes.length });
     return {
       id: blobPath,
       blobPath,
@@ -280,6 +310,20 @@ export function partTypeOf(mime: string): MediaPartType {
   if (mime.startsWith('audio/')) return 'audio';
   if (mime.startsWith('video/')) return 'video';
   return 'file';
+}
+
+/**
+ * ADR-094: вид вложения для метрики попытки загрузки — по сигнатуре содержимого,
+ * иначе по заявленному MIME, иначе `file`. Нужен и на отказе (лимит/формат),
+ * где итоговый MIME ещё не определён.
+ */
+function uploadKindHint(bytes: Buffer, declaredMime?: string): AttachmentMetricKind {
+  const sniffed = sniffMime(bytes);
+  if (sniffed) return partTypeOf(sniffed);
+  // SVG сигнатуры не имеет, но запрещён всегда — вид всё равно `image`.
+  if (looksLikeSvg(bytes)) return 'image';
+  const normalized = normalizeMime(declaredMime);
+  return normalized ? partTypeOf(normalized) : 'file';
 }
 
 /**

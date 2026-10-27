@@ -1964,6 +1964,14 @@ export {
   createWebhookMetrics,
   createEventMetrics,
   createPipelineMetrics,
+  // ADR-094/ADR-115: метрики вложений сообщений (`synth_attachment_*`).
+  createAttachmentMetrics,
+  setAttachmentMetricsHook,
+  getAttachmentMetricsHook,
+  normalizeAttachmentKind,
+  normalizeAttachmentUploadOutcome,
+  normalizeAttachmentDownloadOutcome,
+  ATTACHMENT_UPLOAD_BYTES_BUCKETS,
   // ADR-106 Ф1: решения Authority-слоя (`synth_authority_decisions_total`).
   createAuthorityMetrics,
   normalizeAuthorityAction,
@@ -2010,6 +2018,11 @@ export type {
   WebhookDeliveryMetrics,
   WebhookDeliveryOutcome,
   EventMetricsHooks,
+  // ADR-094/ADR-115: хуки метрик вложений.
+  AttachmentDownloadOutcome,
+  AttachmentMetricKind,
+  AttachmentMetricsHooks,
+  AttachmentUploadOutcome,
   // ADR-106 Ф1: хуки метрик Authority-слоя.
   AuthorityMetricAction,
   AuthorityMetricEffect,

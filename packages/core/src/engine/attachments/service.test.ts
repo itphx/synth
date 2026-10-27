@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AttachmentsConfig } from '@itphx/synth-shared';
 import { FileBlobStore } from '../../storage/file-blob-store.js';
+import { MetricsRegistry } from '../../metrics/registry.js';
+import { createAttachmentMetrics } from '../../metrics/collectors/attachments.js';
 import { AttachmentError, AttachmentService, isAttachmentPath, partTypeOf } from './service.js';
 import { sniffMime } from './sniff-mime.js';
 
@@ -286,5 +288,79 @@ describe('sniffMime / isAttachmentPath (ADR-115)', () => {
     expect(isAttachmentPath('processes/run.log')).toBe(false);
     expect(isAttachmentPath('attachments/../etc/passwd')).toBe(false);
     expect(isAttachmentPath('')).toBe(false);
+  });
+});
+
+/**
+ * ADR-094: сервис вложений инкрементирует метрики попыток загрузки
+ * (`synth_attachment_uploads_total{outcome,kind}`, `synth_attachment_upload_bytes`).
+ */
+describe('AttachmentService: метрики загрузки (ADR-094)', () => {
+  let tmpDir: string;
+  let blobs: FileBlobStore;
+  let registry: MetricsRegistry;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-attachments-metrics-'));
+    blobs = new FileBlobStore({ root: join(tmpDir, 'blobs') });
+    registry = new MetricsRegistry();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('ok: счётчик по исходу/виду и гистограмма размера принятого файла', async () => {
+    const service = new AttachmentService({
+      blobs,
+      config: testConfig(),
+      metrics: createAttachmentMetrics(registry),
+    });
+    const meta = await service.upload({ sessionId: 's1', bytes: pngWithText(), name: 'a.png' });
+
+    const text = registry.render().text;
+    expect(text).toContain('synth_attachment_uploads_total{outcome="ok",kind="image"} 1');
+    expect(text).toContain(`synth_attachment_upload_bytes_sum{kind="image"} ${meta.size}`);
+    expect(text).toContain('synth_attachment_upload_bytes_count{kind="image"} 1');
+  });
+
+  it('too_large: исход `too_large`, гистограмма не наблюдает файл', async () => {
+    const service = new AttachmentService({
+      blobs,
+      config: testConfig({ maxBytesPerFile: 16 }),
+      metrics: createAttachmentMetrics(registry),
+    });
+    await expect(service.upload({ sessionId: 's1', bytes: pngWithText() })).rejects.toMatchObject({
+      code: 'too_large',
+    });
+
+    const text = registry.render().text;
+    expect(text).toContain('synth_attachment_uploads_total{outcome="too_large",kind="image"} 1');
+    expect(text).not.toContain('synth_attachment_upload_bytes_count');
+  });
+
+  it('unsupported: запрещённый MIME (SVG) и пустой файл', async () => {
+    const service = new AttachmentService({
+      blobs,
+      config: testConfig(),
+      metrics: createAttachmentMetrics(registry),
+    });
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    await expect(service.upload({ sessionId: 's1', bytes: svg })).rejects.toMatchObject({
+      code: 'unsupported_mime',
+    });
+    await expect(service.upload({ sessionId: 's1', bytes: Buffer.alloc(0) })).rejects.toMatchObject({
+      code: 'unsupported_mime',
+    });
+
+    const text = registry.render().text;
+    expect(text).toContain('synth_attachment_uploads_total{outcome="unsupported",kind="image"} 1');
+    expect(text).toContain('synth_attachment_uploads_total{outcome="unsupported",kind="file"} 1');
+  });
+
+  it('без метрик загрузка работает как раньше (no-op)', async () => {
+    const service = new AttachmentService({ blobs, config: testConfig() });
+    const meta = await service.upload({ sessionId: 's1', bytes: pngWithText() });
+    expect(meta.mime).toBe('image/png');
   });
 });

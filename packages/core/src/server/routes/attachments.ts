@@ -15,7 +15,8 @@ import type { Context } from 'hono';
 import { Readable } from 'node:stream';
 import type { AttachmentsConfig, Message, Part, Session } from '@itphx/synth-shared';
 import type { SessionManager } from '../../index.js';
-import { AttachmentError } from '../../engine/attachments/service.js';
+import { getAttachmentMetricsHook } from '../../metrics/collectors/attachments.js';
+import { AttachmentError, partTypeOf } from '../../engine/attachments/service.js';
 import type { AttachmentService } from '../../engine/attachments/service.js';
 
 /** Доступные виды медиа-частей (последняя часть пути раздачи). */
@@ -79,6 +80,8 @@ export function createAttachmentRoutes(
 
     const declaredLength = Number.parseInt(c.req.header('content-length') ?? '', 10);
     if (Number.isFinite(declaredLength) && declaredLength > config.maxBytesPerFile + multipartOverheadBytes) {
+      // ADR-094: отказ до разбора тела — вид вложения ещё неизвестен (`file`).
+      getAttachmentMetricsHook()?.onUpload({ outcome: 'too_large', kind: 'file' });
       return c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.tooLarge(c) } }, 413);
     }
 
@@ -95,6 +98,12 @@ export function createAttachmentRoutes(
     // Ранняя проверка заявленного размера — до чтения тела в память.
     const declaredSize = (uploaded as { size?: unknown }).size;
     if (typeof declaredSize === 'number' && declaredSize > config.maxBytesPerFile) {
+      // ADR-094: вид известен из заявленного MIME части (сервис уже не вызывается).
+      const declaredMime = (uploaded as { type?: unknown }).type;
+      getAttachmentMetricsHook()?.onUpload({
+        outcome: 'too_large',
+        kind: typeof declaredMime === 'string' && declaredMime ? partTypeOf(declaredMime) : 'file',
+      });
       return c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.tooLarge(c) } }, 413);
     }
 
@@ -140,20 +149,22 @@ export function createAttachmentRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     const partId = c.req.param('partId');
-    const media = findMediaPart(session, partId);
-    if (!media) {
+    // ADR-094: исход раздачи — `ok` (объект отдан, в т.ч. 304/206/416) или
+    // `not_found` (нет части/объекта). Id сессии/части в лейблы не идут.
+    const metrics = getAttachmentMetricsHook();
+    const notFound = () => {
+      metrics?.onDownload({ outcome: 'not_found' });
       return c.json({ error: { code: 'NOT_FOUND', message: messages.attachmentNotFound(c) } }, 404);
-    }
+    };
+    const media = findMediaPart(session, partId);
+    if (!media) return notFound();
 
     const blobPath = (media.data as { blobPath?: unknown }).blobPath;
-    if (typeof blobPath !== 'string' || blobPath === '') {
-      return c.json({ error: { code: 'NOT_FOUND', message: messages.attachmentNotFound(c) } }, 404);
-    }
+    if (typeof blobPath !== 'string' || blobPath === '') return notFound();
 
     const resolved = await service.resolve(blobPath);
-    if (!resolved) {
-      return c.json({ error: { code: 'NOT_FOUND', message: messages.attachmentNotFound(c) } }, 404);
-    }
+    if (!resolved) return notFound();
+    metrics?.onDownload({ outcome: 'ok' });
 
     const etag = `"${resolved.sha256}"`;
     const headers: Record<string, string> = {
@@ -187,18 +198,14 @@ export function createAttachmentRoutes(
       };
       if (headOnly) return c.body(null, 206, rangeHeaders);
       const stream = await service.read(blobPath, { start: range.start, end: range.end });
-      if (!stream) {
-        return c.json({ error: { code: 'NOT_FOUND', message: messages.attachmentNotFound(c) } }, 404);
-      }
+      if (!stream) return notFound();
       return streamResponse(stream, 206, rangeHeaders);
     }
 
     const fullHeaders = { ...headers, 'Content-Length': String(total) };
     if (headOnly) return c.body(null, 200, fullHeaders);
     const stream = await service.read(blobPath);
-    if (!stream) {
-      return c.json({ error: { code: 'NOT_FOUND', message: messages.attachmentNotFound(c) } }, 404);
-    }
+    if (!stream) return notFound();
     return streamResponse(stream, 200, fullHeaders);
   });
 
