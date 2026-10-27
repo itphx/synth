@@ -359,8 +359,9 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
   },
   {
     // ADR-107 / PROP-047: портал памяти — read-only просмотр фактов и индексов.
+    // Память — AI-подсистема (эмбеддинги/recall), не эксплуатация.
     id: 'memory',
-    group: 'adminOps',
+    group: 'adminAi',
     labelKey: 'settings.category.memory',
     icon: 'lightbulb',
     roles: ['ADMIN'],
@@ -376,9 +377,10 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     ],
   },
   {
-    // ADR-115: runtime-настройки вложений (мультимодальный ввод).
+    // ADR-115: runtime-настройки вложений (мультимодальный ввод) —
+    // это AI-слой (модальности/aux-модели), не эксплуатация.
     id: 'attachments',
-    group: 'adminOps',
+    group: 'adminAi',
     labelKey: 'settings.category.attachments',
     icon: 'image',
     roles: ['ADMIN'],

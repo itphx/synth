@@ -2,10 +2,18 @@ import { describe, expect, it } from 'vitest'
 
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
-import { normalizeSettingsQuery, searchSettings } from './settings-catalog'
+import { SETTINGS_CATEGORIES, normalizeSettingsQuery, searchSettings } from './settings-catalog'
 
 const t = (key: string) => (enDict as Record<string, string>)[key] ?? key
 const tRu = (key: string) => (ruDict as Record<string, string>)[key] ?? key
+
+describe('settings-catalog — группы категорий', () => {
+  it('«Память» и «Мультимодальный ввод» — в AI, не в эксплуатации', () => {
+    const byId = new Map(SETTINGS_CATEGORIES.map((category) => [category.id, category]))
+    expect(byId.get('memory')?.group).toBe('adminAi')
+    expect(byId.get('attachments')?.group).toBe('adminAi')
+  })
+})
 
 describe('settings-catalog — searchSettings', () => {
   it('пустой запрос не возвращает результатов', () => {
