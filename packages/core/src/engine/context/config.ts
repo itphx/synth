@@ -577,6 +577,26 @@ export class ContextConfig implements ContextFileRepository {
     return this._readPrompt(stem, 'system', language) ?? '';
   }
 
+  /**
+   * ADR-115: шаблон промпта для модели **обработки** вложения (aux-модель).
+   *
+   * Файлы: prompts/system/MEDIA_DERIVE.{lang}.md — только локализованные
+   * (базового MEDIA_DERIVE.md нет). Override через `{userDataDir}/user/system/` —
+   * стандартный механизм system-категории, проверяется первым.
+   * Плейсхолдеры `{modality}` и `{name}` подставляет вызывающий код
+   * (`engine/attachments/derive.ts`). Пустая строка, если файла нет.
+   */
+  getMediaDeriveTemplate(language = 'ru'): string {
+    const stem = 'MEDIA_DERIVE';
+
+    // 1. Пользовательский override system-категории
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
+
+    // 2. Встроенный prompts/system/MEDIA_DERIVE.{lang}.md
+    return this._readPrompt(stem, 'system', language) ?? '';
+  }
+
   getStickyNotesTemplate(language = 'ru'): string {
     return this._readPrompt('STICKY_NOTES', 'system', language) ?? '';
   }

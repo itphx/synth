@@ -36,10 +36,28 @@ import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
 import { probeBinaryThroughPort } from '../../execution/probe.js';
 import type { ExecutionPort } from '../../execution/ports/index.js';
 
-export type RuntimeDependency = 'git' | 'rg' | 'sh';
+export type RuntimeDependency = 'git' | 'rg' | 'sh' | 'ffmpeg';
 
-/** Все зависимости — в порядке проверки (тот же, что и словарь core, ADR-077). */
-export const RUNTIME_DEPENDENCIES: readonly RuntimeDependency[] = ['git', 'rg', 'sh'];
+/**
+ * Зависимости, входящие в **снимок** `RuntimeDeps` (требования встроенных
+ * тулов). `ffmpeg` — программа слоя обработки медиа (ADR-115): в снимок не
+ * входит, проверяется по запросу (`isFfmpegAvailable`).
+ */
+export type ToolRuntimeDependency = Exclude<RuntimeDependency, 'ffmpeg'>;
+
+/** Все зависимости тулов — в порядке проверки (тот же, что и словарь core, ADR-077). */
+export const RUNTIME_DEPENDENCIES: readonly ToolRuntimeDependency[] = ['git', 'rg', 'sh'];
+
+/**
+ * ADR-115: программы обработки медиа (aux-модели, `engine/attachments/derive.ts`).
+ *
+ * Отдельный список, а не часть `RUNTIME_DEPENDENCIES`: `ffmpeg` не является
+ * требованием встроенного тула, поэтому в снимок `RuntimeDeps` (его читает
+ * permission-слой и отдаёт модель) он не входит — иначе изменился бы контракт
+ * снимка для всех потребителей. Доступность проверяется по запросу
+ * (`isFfmpegAvailable`, тот же TTL и кэш «по экземпляру порта»).
+ */
+export const MEDIA_RUNTIME_DEPENDENCIES: readonly RuntimeDependency[] = ['ffmpeg'];
 
 export interface RuntimeDeps {
   git: boolean;
@@ -61,6 +79,7 @@ export const RUNTIME_DEP_BINARY: Record<RuntimeDependency, string> = {
   git: 'git',
   rg: 'rg (ripgrep)',
   sh: 'sh',
+  ffmpeg: 'ffmpeg',
 };
 
 /** Фактические имена бинарников для пробинга (`--version`). */
@@ -68,13 +87,14 @@ export const RUNTIME_DEP_COMMAND: Record<RuntimeDependency, string> = {
   git: 'git',
   rg: 'rg',
   sh: 'sh',
+  ffmpeg: 'ffmpeg',
 };
 
 /**
  * Соответствие встроенных тулов внешней зависимости. Тулы без внешней
  * зависимости в карте отсутствуют (файловые/plan/todo/web/task/skill).
  */
-export const TOOL_RUNTIME_DEP: Record<string, RuntimeDependency> = {
+export const TOOL_RUNTIME_DEP: Record<string, ToolRuntimeDependency> = {
   grep_files: 'rg',
   execute_shell: 'sh',
   git_status: 'git',
@@ -100,7 +120,10 @@ export const TOOL_RUNTIME_DEP: Record<string, RuntimeDependency> = {
 export const ALL_RUNTIME_DEPS_AVAILABLE: RuntimeDeps = { git: true, rg: true, sh: true };
 
 /** Доступна ли зависимость. `undefined` (детекция не выполнена) → доступна (fail-open). */
-export function isRuntimeDepAvailable(deps: RuntimeDeps | undefined, dep: RuntimeDependency): boolean {
+export function isRuntimeDepAvailable(
+  deps: RuntimeDeps | undefined,
+  dep: ToolRuntimeDependency,
+): boolean {
   if (!deps) return true;
   return deps[dep] !== false;
 }
@@ -110,7 +133,7 @@ export function isRuntimeDepAvailable(deps: RuntimeDeps | undefined, dep: Runtim
  */
 export function runtimeDepUnavailableDetail(
   deps: RuntimeDeps | undefined,
-  dep: RuntimeDependency,
+  dep: ToolRuntimeDependency,
 ): string | undefined {
   return deps?.details?.[dep];
 }
@@ -261,11 +284,71 @@ export function detectRuntimeDeps(
   return promise;
 }
 
+/** Кэш детекции `ffmpeg` — тот же приём, что у снимка тулов (см. выше). */
+interface MediaDepsCacheEntry {
+  promise: Promise<boolean>;
+  /** Момент создания записи (мс). */
+  at: number;
+}
+
+let mediaCacheByPort = new WeakMap<ExecutionPort, MediaDepsCacheEntry>();
+let mediaInlineCache: MediaDepsCacheEntry | undefined;
+
+/**
+ * ADR-115: есть ли `ffmpeg` для обработки медиа (транскод аудио, кадры видео).
+ *
+ * Проба — через **порт** исполнения (ADR-077): в split-режиме доступность
+ * определяет состав пула исполнителей, а не control plane; в inline — локальная
+ * проба `ffmpeg --version` (fail-open: неоднозначная ошибка → доступен).
+ * Кэш — по экземпляру порта на `RUNTIME_DEPS_CACHE_TTL_MS` (как у снимка
+ * зависимостей тулов): бессрочный кэш залипал бы на «нет ffmpeg» после
+ * раскатки исполнителя.
+ *
+ * Результат — промис (дедупликация параллельных проверок одного хода); ошибки
+ * пробы не бросаются: порт/проба бросили → `false` (обработка не выполняется,
+ * вложение идёт обычным путём).
+ */
+export function isFfmpegAvailable(
+  execution?: ExecutionPort,
+  opts: { ttlMs?: number; now?: number } = {},
+): Promise<boolean> {
+  const ttlMs = opts.ttlMs ?? RUNTIME_DEPS_CACHE_TTL_MS;
+  const now = opts.now ?? Date.now();
+
+  const detect = async (port: ExecutionPort): Promise<boolean> => {
+    const bin = RUNTIME_DEP_COMMAND.ffmpeg;
+    try {
+      const available =
+        typeof port.probe === 'function'
+          ? await port.probe(bin)
+          : await probeBinaryThroughPort(port, bin);
+      return available;
+    } catch {
+      return false;
+    }
+  };
+
+  if (!execution) {
+    if (mediaInlineCache && now - mediaInlineCache.at < ttlMs) return mediaInlineCache.promise;
+    const promise = detect(new InlineExecutionPort());
+    mediaInlineCache = { promise, at: now };
+    return promise;
+  }
+
+  const cached = mediaCacheByPort.get(execution);
+  if (cached && now - cached.at < ttlMs) return cached.promise;
+  const promise = detect(execution);
+  mediaCacheByPort.set(execution, { promise, at: now });
+  return promise;
+}
+
 /** Сброс кэша детекции (тесты). */
 export function resetRuntimeDepsCache(): void {
   inlineCache = undefined;
+  mediaInlineCache = undefined;
   // WeakMap не очищается — пересоздаём (записи старых инстансов портов теряются).
   cacheByPort = new WeakMap<ExecutionPort, DepsCacheEntry>();
+  mediaCacheByPort = new WeakMap<ExecutionPort, MediaDepsCacheEntry>();
 }
 
 /**

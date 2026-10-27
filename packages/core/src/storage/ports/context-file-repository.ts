@@ -41,6 +41,12 @@ export interface ContextFileRepository {
    * Пустая строка — шаблона нет (вызывающий код берёт техническую строку).
    */
   getAttachmentsDroppedTemplate(language?: string): string;
+  /**
+   * ADR-115: шаблон промпта для модели **обработки** вложения
+   * (prompts/system/MEDIA_DERIVE.{lang}.md, плейсхолдеры `{modality}` и `{name}`).
+   * Пустая строка — шаблона нет (вызывающий берёт техническую инструкцию).
+   */
+  getMediaDeriveTemplate(language?: string): string;
   getStickyNotesTemplate(language?: string): string;
   getRoutingInstructions(language?: string): string;
   getRules(language?: string): string;

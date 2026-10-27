@@ -199,6 +199,10 @@ export class PgContextFileRepository implements ContextFileRepository, ContextOv
     return this._config.getAttachmentsDroppedTemplate(language);
   }
 
+  getMediaDeriveTemplate(language?: string): string {
+    return this._config.getMediaDeriveTemplate(language);
+  }
+
   getStickyNotesTemplate(language?: string): string {
     return this._config.getStickyNotesTemplate(language);
   }

@@ -360,6 +360,23 @@ export type {
   ResolvedAttachment,
   UploadedAttachmentMeta,
 } from './engine/attachments/index.js';
+// ADR-115: обработка вложения моделью-обработчиком (aux) — текст вместо байтов.
+export {
+  deriveModalityText,
+  deriveCacheKey,
+  deriveCachePath,
+  splitJpegFrames,
+  DERIVE_CACHE_DIR,
+  MAX_VIDEO_FRAMES,
+  MAX_DERIVED_BYTES,
+} from './engine/attachments/index.js';
+export type {
+  DeriveDeps,
+  DeriveFailureReason,
+  DeriveFamily,
+  DeriveInput,
+  DeriveResult,
+} from './engine/attachments/index.js';
 // ADR-090: единая точка исполнения тулов (`safeParse → execute → catch`) и
 // сужение контекста для плагинных тулов. Публичны для managed-backend:
 // портал памяти вызывает админ-тул плагина через реестр тулов (ADR-107, М2).

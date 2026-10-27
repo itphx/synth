@@ -516,6 +516,73 @@ describe('ContextConfig.getAttachmentsDroppedTemplate (ADR-115)', () => {
   });
 });
 
+describe('ContextConfig.getMediaDeriveTemplate (ADR-115, aux-модель)', () => {
+  let userDataDir: string;
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'synth-media-derive-'));
+  });
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true });
+  });
+
+  it('ru → инструкция с {modality}/{name}, en → английская, fr → пустая строка', async () => {
+    const config = new ContextConfig({ userDataDir });
+
+    const ru = config.getMediaDeriveTemplate('ru');
+    expect(ru).toContain('{modality}');
+    expect(ru).toContain('{name}');
+    expect(ru).toContain('транскрипция');
+    expect(ru).toContain('pdf');
+
+    const en = config.getMediaDeriveTemplate('en');
+    expect(en).toContain('{modality}');
+    expect(en).toContain('{name}');
+    expect(en).toContain('transcript');
+    expect(en).not.toContain('транскрипция');
+
+    // Локализованного файла для неизвестного языка нет — шаблона нет.
+    expect(config.getMediaDeriveTemplate('fr')).toBe('');
+  });
+
+  it('override из system-категории приоритетнее встроенного', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(
+      join(userDataDir, 'user', 'system', 'MEDIA_DERIVE.md'),
+      'ПОЛЬЗОВАТЕЛЬСКИЙ MEDIA {modality} {name}',
+      'utf-8',
+    );
+
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getMediaDeriveTemplate('ru')).toBe(
+      'ПОЛЬЗОВАТЕЛЬСКИЙ MEDIA {modality} {name}',
+    );
+  });
+
+  it('локализованный override приоритетнее базового', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(
+      join(userDataDir, 'user', 'system', 'MEDIA_DERIVE.en.md'),
+      'EN MEDIA {modality}',
+      'utf-8',
+    );
+
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getMediaDeriveTemplate('en')).toBe('EN MEDIA {modality}');
+  });
+
+  it('нет файла (пустой каталог промптов) → пустая строка', async () => {
+    const emptyPrompts = await mkdtemp(join(tmpdir(), 'synth-empty-prompts-'));
+    try {
+      const config = new ContextConfig({ userDataDir, systemPromptsDir: emptyPrompts });
+      expect(config.getMediaDeriveTemplate('ru')).toBe('');
+    } finally {
+      await rm(emptyPrompts, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('ContextConfig.getInterviewTemplate (онбординг)', () => {
   let userDataDir: string;
 

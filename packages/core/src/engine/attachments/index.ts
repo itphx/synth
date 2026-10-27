@@ -25,3 +25,19 @@ export { startAttachmentPruner } from './prune.js';
 export type { AttachmentPrunerOptions } from './prune.js';
 export { materializeAttachment, sanitizeAttachmentName, ATTACHMENTS_DIR } from './materialize.js';
 export type { MaterializeAttachmentInput } from './materialize.js';
+export {
+  deriveModalityText,
+  deriveCacheKey,
+  deriveCachePath,
+  splitJpegFrames,
+  DERIVE_CACHE_DIR,
+  MAX_VIDEO_FRAMES,
+  MAX_DERIVED_BYTES,
+} from './derive.js';
+export type {
+  DeriveDeps,
+  DeriveFailureReason,
+  DeriveFamily,
+  DeriveInput,
+  DeriveResult,
+} from './derive.js';

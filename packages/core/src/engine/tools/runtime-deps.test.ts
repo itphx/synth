@@ -4,6 +4,7 @@ import {
   RUNTIME_DEP_BINARY,
   TOOL_RUNTIME_DEP,
   detectRuntimeDeps,
+  isFfmpegAvailable,
   isRuntimeDepAvailable,
   probeBinary,
   refreshRuntimeDeps,
@@ -325,5 +326,49 @@ describe('runtime-deps: TTL-кэш детекта (ADR-077)', () => {
       sh: true,
       details: { git: 'git: отсутствует в 1 из 1 адресов пула' },
     });
+  });
+});
+
+describe('isFfmpegAvailable (ADR-115: обработка медиа)', () => {
+  const TTL = 60_000;
+
+  beforeEach(() => {
+    resetRuntimeDepsCache();
+  });
+
+  it('detect через порт: есть ffmpeg → true', async () => {
+    const port = new CapabilityPort({ ffmpeg: true });
+    expect(await isFfmpegAvailable(port, { ttlMs: TTL, now: 0 })).toBe(true);
+    expect(port.probes).toEqual(['ffmpeg']);
+  });
+
+  it('detect через порт: нет ffmpeg → false', async () => {
+    const port = new CapabilityPort({ ffmpeg: false });
+    expect(await isFfmpegAvailable(port, { ttlMs: TTL, now: 0 })).toBe(false);
+  });
+
+  it('кэш по экземпляру порта: повторный вызов не пробует бинарь снова', async () => {
+    const port = new CapabilityPort({ ffmpeg: true });
+    const first = isFfmpegAvailable(port, { ttlMs: TTL, now: 0 });
+    const second = isFfmpegAvailable(port, { ttlMs: TTL, now: TTL / 2 });
+    expect(second).toBe(first);
+    await first;
+    expect(port.probes).toHaveLength(1);
+  });
+
+  it('после TTL проба повторяется (состав пула меняется)', async () => {
+    const port = new CapabilityPort({ ffmpeg: true });
+    await isFfmpegAvailable(port, { ttlMs: TTL, now: 0 });
+    await isFfmpegAvailable(port, { ttlMs: TTL, now: TTL + 1 });
+    expect(port.probes).toHaveLength(2);
+  });
+
+  it('ошибка пробы → false (обработка не выполняется, без исключения)', async () => {
+    const port = new FailingProbePort();
+    expect(await isFfmpegAvailable(port, { ttlMs: TTL, now: 0 })).toBe(false);
+  });
+
+  it('runtimeRequires("ffmpeg") → требование бинаря (ADR-077)', () => {
+    expect(runtimeRequires('ffmpeg')).toEqual(['ffmpeg']);
   });
 });
