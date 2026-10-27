@@ -31,6 +31,12 @@ export interface DetailedModelInfo {
   parameterSize?: string;
   quantization?: string;
   capabilities?: string[];
+  /**
+   * ADR-115: модальности входа, сообщённые каталогом провайдера
+   * (`architecture` у OpenAI-совместимых RouterAI/OpenRouter). Не задано —
+   * провайдер их не сообщает, действует справочник.
+   */
+  modalities?: AttachmentModality[];
 }
 
 /**

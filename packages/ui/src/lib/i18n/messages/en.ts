@@ -1347,6 +1347,12 @@ export const dict = {
   'chat.attachments.waitUpload': 'Wait for the attachments to finish uploading',
   'chat.attachments.added': '{count, plural, one {Attached # file} other {Attached # files}}',
   'chat.attachments.error.prepare': 'Failed to prepare the file',
+  'chat.attachments.modelUnsupported':
+    'The model {model} does not accept {kind} — the attachment will not reach it. Switch models.',
+  'chat.attachments.kind.image': 'images',
+  'chat.attachments.kind.audio': 'audio',
+  'chat.attachments.kind.video': 'video',
+  'chat.attachments.kind.pdf': 'PDF',
 
   // Attachments in a sent message (ADR-115, D2c)
   'chat.message.attachments.open': 'Open',

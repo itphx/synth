@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { JsonStoreLike } from '../../storage/json-store.js';
-import type { ModelConfig, ProviderConfig, ContextSource } from '@itphx/synth-shared';
+import type { ModelConfig, ProviderConfig, ContextSource, AttachmentModality } from '@itphx/synth-shared';
 import type { DefaultModelPair } from '../../storage/runtime-settings.js';
 import { hasPriceInput, lookupContextWindow, parseCurrencyInput, resolveModelModalities } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/index.js';
@@ -92,6 +92,45 @@ function collectApiPrices(model: ApiPriceFields): ApiPriceFields | undefined {
     cacheReadPrice: model.cacheReadPrice,
     cacheWritePrice: model.cacheWritePrice,
   };
+}
+
+/** Известные модальности вложения (ADR-115). */
+const ATTACHMENT_MODALITIES: readonly AttachmentModality[] = ['text', 'image', 'pdf', 'audio', 'video'];
+
+/**
+ * ADR-115: модальности из тела запроса модели (ручной override).
+ *
+ * - поле не передано → сохранить существующее значение;
+ * - `null` → сбросить (модальности снова берутся из справочника);
+ * - массив → отфильтровать до известных значений и дедуплицировать.
+ */
+function resolveModalitiesInput(
+  raw: unknown,
+  existing?: AttachmentModality[],
+): AttachmentModality[] | undefined {
+  if (raw === null) return undefined;
+  if (raw === undefined) return existing;
+  if (!Array.isArray(raw)) return existing;
+
+  const result: AttachmentModality[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const value = item.trim().toLowerCase() as AttachmentModality;
+    if (!ATTACHMENT_MODALITIES.includes(value) || result.includes(value)) continue;
+    result.push(value);
+  }
+  return result.length > 0 ? result : undefined;
+}
+
+/** Совпадают ли наборы модальностей (порядок не важен). */
+function sameModalities(
+  a: readonly AttachmentModality[] | undefined,
+  b: readonly AttachmentModality[] | undefined,
+): boolean {
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((modality) => set.has(modality));
 }
 
 /** Минимальный auth-контракт фабрики: в core и backend общий (структурно, как в dictionaries.ts). */
@@ -230,6 +269,10 @@ export function createModelRoutes(
             : undefined;
           // Токенные цены от провайдера (B1 отфильтровал non-token тарифы).
           const apiPrices = collectApiPrices(model);
+          // ADR-115: модальности входа, если каталог провайдера их сообщает.
+          const apiModalities = model.modalities && model.modalities.length > 0
+            ? model.modalities
+            : undefined;
 
           if (!existing) {
             // Новая модель
@@ -254,6 +297,10 @@ export function createModelRoutes(
             }
             if (provider.currency) {
               newModel.currency = provider.currency;
+            }
+            // ADR-115: модальности из каталога провайдера — в конфиг модели.
+            if (apiModalities) {
+              newModel.modalities = [...apiModalities];
             }
             await modelStore.save(fullId, newModel);
             modelCache.set(fullId, newModel);
@@ -300,6 +347,14 @@ export function createModelRoutes(
             }
             changed = true;
             totalPriced++;
+          }
+
+          // Модальности (ADR-115): приоритет API — как у окна контекста. Ручное
+          // значение не затираем, когда API модальности не сообщает; обновляем,
+          // только если набор отличается.
+          if (apiModalities && !sameModalities(existing.modalities, apiModalities)) {
+            existing.modalities = [...apiModalities];
+            changed = true;
           }
 
           totalFetched++;
@@ -414,9 +469,10 @@ export function createModelRoutes(
           currency: m.currency,
           /**
            * ADR-115: модальности входа модели (какие вложения она принимает).
-           * Аддитивное поле: неизвестная модель → консервативно `['text']`.
+           * Конфиг модели (каталог провайдера / ручной override) приоритетнее
+           * справочника; неизвестная модель → консервативно `['text']`.
            */
-          modalities: resolveModelModalities(m.provider, m.name),
+          modalities: m.modalities ?? resolveModelModalities(m.provider, m.name),
         })),
       };
     });
@@ -462,6 +518,9 @@ export function createModelRoutes(
         ? undefined
         : (hasConcretePriceInput(body) ? 'manual' : existing?.priceSource);
 
+    // ADR-115: модальности модели — ручной override (аддитивно к каталогу API).
+    const modalities = resolveModalitiesInput(body.modalities, existing?.modalities);
+
     const model: ModelConfig = {
       id: modelId,
       name: body.name || existing?.name || modelId,
@@ -480,6 +539,7 @@ export function createModelRoutes(
       cacheWritePrice,
       priceSource,
       currency,
+      ...(modalities ? { modalities } : {}),
     };
 
     await modelStore.save(modelId, model);

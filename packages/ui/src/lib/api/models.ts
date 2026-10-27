@@ -20,6 +20,12 @@ export interface ModelInfo {
   cache_write_price?: number
   /** Валюта цен модели; отсутствует → валюта провайдера → USD. */
   currency?: string
+  /**
+   * ADR-115: модальности входа модели (`text`/`image`/`pdf`/`audio`/`video`).
+   * Сервер отдаёт поле в `GET /models` и молча отбрасывает вложения, тип которых
+   * модель не принимает; отсутствие поля — «неизвестно», ограничений не накладываем.
+   */
+  modalities?: string[]
 }
 
 export interface ModelGroup {

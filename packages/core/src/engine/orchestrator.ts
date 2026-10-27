@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, resolveModelModalities } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -189,6 +189,15 @@ export interface OrchestratorOptions {
    * `_getAttachmentHydrateDeps`).
    */
   blobs?: BlobStore;
+  /**
+   * ADR-115: модальности модели из её конфига (`ModelConfig.modalities`).
+   *
+   * Резолвер задаётся точкой сборки (по `modelCache`): конфиг модели —
+   * источник истины, потому что каталог провайдера знает о vision-возможностях
+   * больше захардкоженного справочника (например, `deepseek-v4.1-flash`).
+   * Не задан или вернул `undefined` — действует `resolveModelModalities`.
+   */
+  resolveModelModalities?: (providerName: string, modelId: string) => AttachmentModality[] | undefined;
   /**
    * ADR-034/ADR-035: порт словарей классификации (микро-слой, threat-scan,
    * проектные инструкции). Продакшн передаёт `StorageContext.dictionaries`;
@@ -561,6 +570,12 @@ export class ChatOrchestrator {
    */
   private readonly _blobs: BlobStore | null;
   /**
+   * ADR-115: модальности модели из её конфига (`ModelConfig.modalities` —
+   * каталог провайдера или ручной override). Приоритетнее справочника;
+   * `undefined` — у модели значение не задано, действует `resolveModelModalities`.
+   */
+  private readonly _resolveModalities: ((providerName: string, modelId: string) => AttachmentModality[] | undefined) | null;
+  /**
    * ADR-115: порты чтения вложений для гидратации (лениво — поверх blob-порта
    * по `dataDir`, как ssh-ключи/словари ниже). `null` — ещё не созданы.
    */
@@ -851,6 +866,8 @@ export class ChatOrchestrator {
     // ADR-115/ADR-116: в проде blob-порт приходит инъекцией
     // (`StorageContext.blobs`); фоллбэк для тестов — в `_getAttachmentHydrateDeps`.
     this._blobs = options.blobs ?? null;
+    // ADR-115: модальности из конфига модели приоритетнее справочника.
+    this._resolveModalities = options.resolveModelModalities ?? null;
     this._gatewayPayloadLogPath = options.gatewayPayloadLogPath
       ?? join(options.dataDir || '/var/synth/data', 'audit', 'llm-payloads.jsonl');
     this._cachePolicy = options.cachePolicy ?? 'auto';
@@ -2025,9 +2042,14 @@ export class ChatOrchestrator {
         this._cancellationTokens.set(streamId, token);
       },
       // ADR-115: вложения — blob → base64 с фильтром модальностей модели хода.
+      // Приоритет: конфиг модели (каталог провайдера / ручной override) →
+      // справочник `resolveModelModalities`. Отброшенные по модальности
+      // вложения не теряются молча — уходят сводкой в лог.
       hydrateAttachments: (messages, source, target) =>
         hydrateMessageAttachments(messages, source, this._getAttachmentHydrateDeps(), {
-          modalities: resolveModelModalities(target.providerName, target.modelId),
+          modalities: this._resolveModalities?.(target.providerName, target.modelId)
+            ?? resolveModelModalities(target.providerName, target.modelId),
+          log: (message) => warning('ATTACHMENTS', message),
         }),
       // ADR-107: телеметрия блоков памяти в промпте хода.
       ...(this._onMemoryContext ? { onMemoryContext: this._onMemoryContext } : {}),

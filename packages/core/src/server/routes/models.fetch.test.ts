@@ -71,6 +71,28 @@ describe('routes/models (core): POST /fetch', () => {
     expect(stores.modelCache.get('p1/m2')).toMatchObject({ id: 'p1/m2', provider: 'p1' });
   });
 
+  it('модальности из каталога: пишутся новой модели и обновляются при отличии', async () => {
+    await stores.modelStore.save('p1/m1', {
+      id: 'p1/m1', name: 'm1', provider: 'p1', enabled: true, modalities: ['text'],
+    });
+    vi.spyOn(ProviderFactory, 'create').mockReturnValue({
+      listModelsDetailed: vi.fn().mockResolvedValue([
+        { id: 'm1', modalities: ['text', 'image'] },
+        { id: 'm2', modalities: ['text', 'image'] },
+        { id: 'm3' },
+      ]),
+    } as never);
+
+    const res = await stores.app.request('/fetch?provider=p1', { method: 'POST' });
+    expect(res.status).toBe(200);
+
+    expect((await stores.modelStore.load('p1/m1'))?.modalities).toEqual(['text', 'image']);
+    expect((await stores.modelStore.load('p1/m2'))?.modalities).toEqual(['text', 'image']);
+    // API модальности не сообщил — поле не появляется (действует справочник).
+    expect((await stores.modelStore.load('p1/m3'))?.modalities).toBeUndefined();
+    expect(stores.modelCache.get('p1/m2')?.modalities).toEqual(['text', 'image']);
+  });
+
   it('?provider= ограничивает синхронизацию одним провайдером', async () => {
     await stores.providerStore.save('p2', {
       name: 'p2', type: 'openai', baseUrl: 'http://provider2.local', enabled: true,

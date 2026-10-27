@@ -1,3 +1,5 @@
+import type { AttachmentModality } from '../model-metadata.js';
+
 // --- Currency ---
 /** Валюта цен моделей. Отсутствует у модели → валюта провайдера → USD. */
 export const CURRENCIES = ['RUB', 'USD', 'CNY'] as const;
@@ -107,4 +109,12 @@ export interface ModelConfig {
   priceSource?: PriceSource;
   /** Валюта цен модели; отсутствует → валюта провайдера → USD. */
   currency?: Currency;
+  /**
+   * ADR-115: модальности входа модели (какие вложения она принимает).
+   *
+   * Источник — каталог провайдера (`architecture.input_modalities` при
+   * синхронизации моделей) либо ручной override в админке. Не задано —
+   * модальности берутся из справочника `resolveModelModalities`.
+   */
+  modalities?: AttachmentModality[];
 }

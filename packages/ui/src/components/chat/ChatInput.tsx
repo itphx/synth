@@ -5,6 +5,7 @@ import { OverlayScrollbar } from '../ui/OverlayScrollbar'
 import { useI18n } from '@/lib/i18n'
 import { useDevice } from '@/hooks/useDevice'
 import { useChatStore } from '@/stores/chatStore'
+import { useProvidersStore } from '@/stores/providersStore'
 import { confirm } from '@/lib/confirm'
 import { notifyMessage } from '@/hooks/useNotification'
 import { prepareAttachmentFiles, type PreparedAttachment } from '@/lib/attachments/prepare'
@@ -85,6 +86,24 @@ function removeMediaPlaceholder(text: string, name: string): string {
     return text.slice(0, start) + text.slice(index + marker.length)
   }
   return text
+}
+
+/**
+ * ADR-115: модальность вложения, которую можно сверить с `modalities` модели.
+ *
+ * Проверяются только типы, которые сервер молча отбрасывает, если модель их не
+ * принимает. Остальные файлы (текст, документы, код) модель получает как текст —
+ * ограничения нет, поэтому `null`.
+ */
+type AttachmentModalityKind = 'image' | 'audio' | 'video' | 'pdf'
+
+function attachmentModalityKind(mimeType: string): AttachmentModalityKind | null {
+  const mime = mimeType.toLowerCase().split(';', 1)[0]?.trim() ?? ''
+  if (mime.startsWith('image/')) return 'image'
+  if (mime.startsWith('audio/')) return 'audio'
+  if (mime.startsWith('video/')) return 'video'
+  if (mime === 'application/pdf') return 'pdf'
+  return null
 }
 
 /**
@@ -186,6 +205,24 @@ export function splitMessageWithTags(message: string, agents: AgentInfo[]): TagP
   }
 
   return parts.length > 0 ? parts : null
+}
+
+/**
+ * ADR-115: модальности выбранной в композере модели.
+ *
+ * `null` — модель не найдена, `modalities` нет или список пуст: тогда сверять
+ * нечего и предупреждать нельзя (консервативно «неизвестно»).
+ */
+function selectedModelModalities(): { name: string; modalities: string[] } | null {
+  const { models, selectedModelName, selectedProviderName } = useProvidersStore.getState()
+  if (!selectedModelName) return null
+  const model = models.find(
+    (item) =>
+      item.name === selectedModelName &&
+      (!selectedProviderName || item.provider === selectedProviderName),
+  )
+  if (!model?.modalities || model.modalities.length === 0) return null
+  return { name: model.name, modalities: model.modalities }
 }
 
 export function ChatInput({
@@ -466,6 +503,30 @@ export function ChatInput({
         return
       }
       if (prepared.length === 0) return
+
+      // ADR-115: сервер молча отбрасывает вложения, тип которых модель не
+      // принимает. Предупреждаем один раз на вызов, но прикрепление не
+      // блокируем — модель можно сменить до отправки.
+      const targetModel = selectedModelModalities()
+      if (targetModel) {
+        const unsupported = prepared
+          .map((entry) => attachmentModalityKind(entry.mimeType))
+          .find(
+            (kind): kind is AttachmentModalityKind =>
+              !!kind && !targetModel.modalities.includes(kind),
+          )
+        if (unsupported) {
+          notifyMessage({
+            text: t('chat.attachments.modelUnsupported', {
+              model: targetModel.name,
+              kind: t(`chat.attachments.kind.${unsupported}`),
+            }),
+            type: 'warning',
+            category: 'message',
+            sessionId,
+          })
+        }
+      }
 
       // ADR-115: маркеры в текст композера — по одному на файл; у частей одного
       // документа (`groupId`) маркер один (на первом элементе группы).

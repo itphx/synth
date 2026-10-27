@@ -112,4 +112,34 @@ describe('resolveModelModalities', () => {
     modalities.push('audio');
     expect(resolveModelModalities('openai', 'gpt-4o')).toEqual(['text', 'image', 'pdf']);
   });
+
+  it('побеждает самый длинный ключ, а не порядок в объекте (deepseek)', () => {
+    expect(resolveModelModalities('deepseek', 'deepseek-v4.1-flash-1017')).toEqual(['text', 'image']);
+    expect(resolveModelModalities('routerai', 'deepseek/deepseek-v4.1-flash-1017')).toEqual([
+      'text',
+      'image',
+    ]);
+    expect(resolveModelModalities('deepseek', 'deepseek-v4-flash-vision-exp')).toEqual([
+      'text',
+      'image',
+    ]);
+    // Остальные семейства по-прежнему только текст.
+    expect(resolveModelModalities('deepseek', 'deepseek-v4-pro')).toEqual(['text']);
+  });
+
+  it('локальные vision-семейства: VL / multimodal', () => {
+    expect(resolveModelModalities('ollama', 'qwen2.5-vl-32b')).toEqual(['text', 'image']);
+    expect(resolveModelModalities('ollama', 'qwen3-vl:8b')).toEqual(['text', 'image']);
+    expect(resolveModelModalities('ollama', 'llava-1.6')).toEqual(['text', 'image']);
+    expect(resolveModelModalities('ollama', 'phi-4-multimodal')).toEqual([
+      'text',
+      'image',
+      'audio',
+    ]);
+    expect(resolveModelModalities('ollama', 'mistral-small-3.1')).toEqual(['text', 'image']);
+    expect(resolveModelModalities('ollama', 'gemma-3-27b')).toEqual(['text', 'image']);
+    // Обычные (текстовые) семейства не задеты.
+    expect(resolveModelModalities('ollama', 'qwen2.5-coder-32b')).toEqual(['text']);
+    expect(resolveModelModalities('ollama', 'mistral-small-latest')).toEqual(['text']);
+  });
 });

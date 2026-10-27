@@ -1327,6 +1327,12 @@ export const dict = {
   'chat.attachments.waitUpload': 'Дождитесь загрузки вложений',
   'chat.attachments.added': '{count, plural, one {Прикреплён # файл} few {Прикреплено # файла} many {Прикреплено # файлов}}',
   'chat.attachments.error.prepare': 'Не удалось подготовить файл',
+  'chat.attachments.modelUnsupported':
+    'Модель {model} не принимает {kind} — вложение не дойдёт до неё. Смените модель.',
+  'chat.attachments.kind.image': 'изображения',
+  'chat.attachments.kind.audio': 'аудио',
+  'chat.attachments.kind.video': 'видео',
+  'chat.attachments.kind.pdf': 'PDF',
 
   // Вложения отправленного сообщения (ADR-115, D2c)
   'chat.message.attachments.open': 'Открыть',

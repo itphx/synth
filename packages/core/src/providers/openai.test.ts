@@ -474,6 +474,30 @@ describe('OpenAIProvider — listModelsDetailed', () => {
     expect(models).toEqual([{ id: 'plain-model' }]);
   });
 
+  it('architecture: input_modalities и modality → модальности модели', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [
+        {
+          id: 'deepseek/deepseek-v4.1-flash',
+          architecture: { modality: 'text+image->text', input_modalities: ['text', 'image'] },
+        },
+        { id: 'legacy/vision', architecture: { modality: 'text+image+file->text' } },
+        { id: 'text-only', architecture: { input_modalities: ['text'] } },
+        { id: 'no-architecture' },
+      ],
+    })));
+
+    const provider = new OpenAIProvider(baseParams);
+    const models = await provider.listModelsDetailed();
+
+    expect(models[0]).toMatchObject({ id: 'deepseek/deepseek-v4.1-flash', modalities: ['text', 'image'] });
+    // `file` у OpenAI-совместимых каталогов — документы (pdf).
+    expect(models[1]).toMatchObject({ modalities: ['text', 'image', 'pdf'] });
+    expect(models[2]).toMatchObject({ modalities: ['text'] });
+    // Ничего не распознано — поле не задаётся (действует справочник).
+    expect(models[3]).not.toHaveProperty('modalities');
+  });
+
   it('не падает при отсутствии data[]', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({})));
 

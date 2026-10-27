@@ -181,8 +181,28 @@ describe('hydrateMessageAttachments (ADR-115)', () => {
     expect(MAX_ATTACHMENT_BASE64_BYTES).toBe(20 * 1024 * 1024);
   });
 
-  it('не мутирует входные сообщения и исходную историю', async () => {
+  it('модальность не принята: вложение помечается reason=modality, в лог — сводка', async () => {
     const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const source = [sourceMessage({ parts: [mediaPart('image', { blobPath: 'attachments/aa/image' })] })];
+    const logs: string[] = [];
+
+    const result = await hydrateMessageAttachments([llmMessage()], source, deps, {
+      modalities: ['text'],
+      log: (message) => logs.push(message),
+    });
+
+    expect(result[0]!.attachments).toBeUndefined();
+    expect(result[0]!.debug?.attachmentsDropped).toEqual([
+      { mime: 'image/png', sizeBytes: 0, reason: 'modality' },
+    ]);
+    // Байты отсечённого по модальности вложения не читаются.
+    expect(deps.reads).toEqual([]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('1');
+    expect(logs[0]).toContain('modality');
+  });
+
+  it('не мутирует входные сообщения и исходную историю', async () => {    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
     const source = [sourceMessage({ parts: [mediaPart('image', { blobPath: 'attachments/aa/image' })] })];
     const messages = [llmMessage()];
     const messagesBefore = JSON.stringify(messages);

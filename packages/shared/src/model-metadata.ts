@@ -45,6 +45,21 @@ export const KNOWN_MODEL_MODALITIES: Record<string, AttachmentModality[]> = {
   'gemini-2.0': ['text', 'image', 'pdf', 'audio', 'video'],
   'gemini-1.5': ['text', 'image', 'pdf', 'audio', 'video'],
 
+  // Локальные/открытые vision-модели: текст + изображения (семейство без
+  // суффикса `-vl`/`-vision` остаётся текстовым — см. ниже).
+  'deepseek-v4.1-flash': ['text', 'image'],
+  'deepseek-v4-flash-vision': ['text', 'image'],
+  'deepseek-vl': ['text', 'image'],
+  'qwen2.5-vl': ['text', 'image'],
+  'qwen3-vl': ['text', 'image'],
+  'llama-3.2-vision': ['text', 'image'],
+  'llava': ['text', 'image'],
+  'minicpm-v': ['text', 'image'],
+  'internvl': ['text', 'image'],
+  'gemma-3': ['text', 'image'],
+  'phi-4-multimodal': ['text', 'image', 'audio'],
+  'mistral-small-3': ['text', 'image'],
+
   // Остальные известные модели — только текст.
   'deepseek': ['text'],
   'mistral': ['text'],
@@ -207,11 +222,24 @@ export function lookupContextWindow(modelId: string): { window: number; source: 
 const DEFAULT_MODEL_MODALITIES: AttachmentModality[] = ['text'];
 
 /**
+ * Ключи справочника модальностей, отсортированные по убыванию длины.
+ *
+ * Поиск по префиксу идёт по **самому длинному** совпавшему ключу: иначе исход
+ * решал бы порядок вставки в объект и общий `deepseek` (только текст) съедал бы
+ * `deepseek-v4.1-flash` (текст + изображения).
+ */
+const MODALITY_KEYS_BY_LENGTH: ReadonlyArray<readonly [string, AttachmentModality[]]> =
+  Object.entries(KNOWN_MODEL_MODALITIES)
+    .map(([key, modalities]) => [key.toLowerCase(), modalities] as const)
+    .sort(([a], [b]) => b.length - a.length);
+
+/**
  * ADR-115: модальности входа модели (какие вложения она принимает).
  *
  * Порядок поиска (как у `lookupContextWindow`): точное совпадение → id без
- * суффикса даты (`:2024-08-06`, `:free`, `:beta`) → совпадение по префиксу.
- * Ключ с именем провайдера (`openai/gpt-4o`) проверяется раньше «голого» id.
+ * суффикса даты (`:2024-08-06`, `:free`, `:beta`) → совпадение по префиксу
+ * (самый длинный ключ). Ключ с именем провайдера (`openai/gpt-4o`)
+ * проверяется раньше «голого» id.
  *
  * Модели в справочнике нет → **консервативный фолбэк** `['text']`: вложение
  * такой модели не отправляется (ADR-115 §4), а не уходит «наугад».
@@ -240,8 +268,8 @@ export function resolveModelModalities(
       if (base) return [...base];
     }
 
-    for (const [knownId, modalities] of Object.entries(KNOWN_MODEL_MODALITIES)) {
-      if (key.startsWith(knownId.toLowerCase())) {
+    for (const [knownId, modalities] of MODALITY_KEYS_BY_LENGTH) {
+      if (key.startsWith(knownId)) {
         return [...modalities];
       }
     }

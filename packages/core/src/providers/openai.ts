@@ -1,4 +1,4 @@
-import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
+import type { AttachmentModality, LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
 import {
   BaseProvider,
   fetchModelsCatalog,
@@ -19,6 +19,54 @@ import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
 import { resolveModelModalities } from '@itphx/synth-shared';
 // ADR-099: запросы провайдера — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
+
+/**
+ * ADR-115: модальности каталога моделей → наши (`AttachmentModality`).
+ * `file` у OpenAI-совместимых каталогов — документы, поэтому маппится в `pdf`;
+ * неизвестные значения игнорируются.
+ */
+const CATALOG_MODALITY_MAP: Record<string, AttachmentModality> = {
+  text: 'text',
+  image: 'image',
+  audio: 'audio',
+  video: 'video',
+  file: 'pdf',
+  pdf: 'pdf',
+};
+
+/**
+ * ADR-115: модальности входа из `architecture` каталога `/models`.
+ *
+ * RouterAI/OpenRouter отдают `architecture: {modality: 'text+image->text',
+ * input_modalities: ['text', 'image']}`. Неизвестные значения игнорируются;
+ * ничего не распознано — `undefined` (поле не задаётся, действует справочник).
+ */
+function parseArchitectureModalities(
+  architecture: Record<string, unknown> | undefined,
+): AttachmentModality[] | undefined {
+  if (!architecture || typeof architecture !== 'object') return undefined;
+
+  const collected = new Set<AttachmentModality>();
+  const add = (value: unknown): void => {
+    if (typeof value !== 'string') return;
+    const mapped = CATALOG_MODALITY_MAP[value.trim().toLowerCase()];
+    if (mapped) collected.add(mapped);
+  };
+
+  const input = architecture.input_modalities;
+  if (Array.isArray(input)) {
+    for (const item of input) add(item);
+  }
+
+  // `modality` описывает пару «вход → выход»: берём только входную часть.
+  const modality = architecture.modality;
+  if (typeof modality === 'string') {
+    const [inputs] = modality.split('->');
+    for (const part of (inputs ?? '').split('+')) add(part);
+  }
+
+  return collected.size > 0 ? [...collected] : undefined;
+}
 
 export class OpenAIProvider extends BaseProvider {
   getProviderName(): string {
@@ -344,6 +392,12 @@ export class OpenAIProvider extends BaseProvider {
 
     const contextWindow = toNonNegativeNumber(raw.context_length);
     if (contextWindow !== undefined && contextWindow > 0) result.contextWindow = contextWindow;
+
+    // ADR-115: модальности входа из каталога провайдера.
+    const modalities = parseArchitectureModalities(
+      raw.architecture as Record<string, unknown> | undefined,
+    );
+    if (modalities) result.modalities = modalities;
 
     const parsed = parseTokenPricing(
       raw.pricing as Record<string, unknown> | undefined,

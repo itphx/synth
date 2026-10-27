@@ -68,4 +68,46 @@ describe('routes/models (core): модальности входа модели (
     const model = body.groups.find((g) => g.provider.name === 'openai')!.models[0]!;
     expect(model.modalities).toEqual(['text']);
   });
+
+  it('модальности из конфига модели приоритетнее справочника', async () => {
+    // Справочник знает семейство `deepseek` как текстовое — конфиг с каталога
+    // провайдера (text+image) должен выигрывать.
+    await stores.modelStore.save('openai/deepseek-v4.1-flash-1017', {
+      id: 'openai/deepseek-v4.1-flash-1017',
+      name: 'deepseek-v4.1-flash-1017',
+      provider: 'openai',
+      enabled: true,
+      modalities: ['text', 'image'],
+    });
+
+    const res = await stores.app.request('/');
+    const body = (await res.json()) as ModelsResponse;
+    const model = body.groups.find((g) => g.provider.name === 'openai')!.models[0]!;
+    expect(model.modalities).toEqual(['text', 'image']);
+  });
+
+  it('POST / принимает modalities (ручной override), мусор отфильтровывается', async () => {
+    const res = await stores.app.request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'openai/my-vision',
+        provider: 'openai',
+        modalities: ['text', 'image', 'bogus', 'image'],
+      }),
+    });
+    expect(res.status).toBe(201);
+
+    const saved = await stores.modelStore.load('openai/my-vision');
+    expect(saved?.modalities).toEqual(['text', 'image']);
+
+    // `null` — сброс к справочнику.
+    const reset = await stores.app.request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'openai/my-vision', provider: 'openai', modalities: null }),
+    });
+    expect(reset.status).toBe(200);
+    expect((await stores.modelStore.load('openai/my-vision'))?.modalities).toBeUndefined();
+  });
 });

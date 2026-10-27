@@ -950,6 +950,21 @@ export async function createStandaloneDeps(
     // ADR-115/ADR-116: blob-порт гидратации вложений — из контекста хранения,
     // без фоллбэка по `dataDir` (иначе standalone смотрел бы в другой корень).
     blobs: storageContext.blobs,
+    // ADR-115: модальности модели из её конфига (каталог провайдера или ручной
+    // override) приоритетнее захардкоженного справочника — иначе общий ключ
+    // `deepseek` (только текст) отсекал бы vision-модели.
+    resolveModelModalities: (providerName: string, modelId: string) => {
+      const direct = modelCache.get(`${providerName}/${modelId}`) ?? modelCache.get(modelId);
+      if (direct?.modalities?.length) return direct.modalities;
+      let prefixMatch: ModelConfig['modalities'];
+      for (const model of modelCache.values()) {
+        if (model.provider !== providerName || !model.modalities?.length) continue;
+        if (model.name === modelId) return model.modalities;
+        // В сессии имя может нести суффикс (например, `-1017`).
+        if (!prefixMatch && modelId.startsWith(model.name)) prefixMatch = model.modalities;
+      }
+      return prefixMatch;
+    },
     defaultWorkingDir,
     workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
     // ADR-075: тулы проекта (workspace) читают live-политику вне root.

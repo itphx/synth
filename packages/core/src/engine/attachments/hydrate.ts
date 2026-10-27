@@ -9,10 +9,11 @@
  * Правила:
  *  - сообщения сопоставляются с исходной историей **по индексу** (порядок
  *    тот же, что отфильтровал `sessionMessagesToLlm`);
- *  - вложения, модальность которых модель не принимает, не отправляются;
+ *  - вложения, модальность которых модель не принимает, не отправляются: в лог
+ *    уходит сводка, а на сообщении остаётся пометка `reason: 'modality'`;
  *  - суммарный объём base64 ограничен (`MAX_ATTACHMENT_BASE64_BYTES`): при
  *    превышении отбрасываются **самые старые** вложения (с начала истории), а
- *    на сообщении остаётся пометка в `debug` — промпт не ломается;
+ *    на сообщении остаётся пометка `reason: 'limit'` — промпт не ломается;
  *  - ошибка чтения объекта → вложение пропускается (в `content` уже есть
  *    плейсхолдер `[image: …]`), ход не падает;
  *  - входные `messages` не мутируются — возвращаются новые объекты.
@@ -67,12 +68,17 @@ export interface HydrateOptions {
 /** Медиа-типы частей сообщения (только они несут вложение). */
 const MEDIA_PART_TYPES: ReadonlySet<string> = new Set(['image', 'audio', 'video', 'file']);
 
-/** Вложение, отброшенное по лимиту объёма (пометка в `debug`). */
+/** Вложение, отброшенное при гидратации (пометка в `debug`). */
 interface DroppedAttachment {
   mime: string;
   name?: string;
+  /** Размер в байтах; `0` — объект не читался (модальность отсекла раньше). */
   sizeBytes: number;
-  reason: 'limit';
+  /**
+   * `limit` — превышен суммарный объём base64;
+   * `modality` — модель не принимает такую модальность вложения.
+   */
+  reason: 'limit' | 'modality';
 }
 
 /** Ссылка на вложение в истории сообщения. */
@@ -112,12 +118,13 @@ function mediaPartRefs(message: Message): MediaPartRef[] {
   return refs;
 }
 
-/** Вложение проходит ли фильтр модальностей модели. */
-function isModalityAllowed(mime: string, modalities: readonly AttachmentModality[] | undefined): boolean {
+/**
+ * Модальность вложения, пересылаемая байтами: `text` (его содержимое уже в
+ * `content`) и неизвестные типы не отправляются и «отброшенными» не считаются.
+ */
+function byteModality(mime: string): AttachmentModality | null {
   const modality = attachmentModalityOf(mime);
-  if (modality === null || modality === 'text') return false;
-  if (!modalities) return true;
-  return modalities.includes(modality);
+  return modality !== null && modality !== 'text' ? modality : null;
 }
 
 /** Поток в буфер (порт `readStream` отдаёт `Readable`). */
@@ -148,17 +155,47 @@ export async function hydrateMessageAttachments(
 
   // 1. Читаем все допустимые вложения в хронологическом порядке.
   const candidates: Array<{ messageIndex: number; attachment: LLMAttachment; sizeBytes: number }> = [];
+  const droppedByMessage = new Map<number, DroppedAttachment[]>();
+  let modalityDropped = 0;
+
+  /** Пометить вложение, отброшенное фильтром модальностей модели. */
+  const dropByModality = (messageIndex: number, drop: Omit<DroppedAttachment, 'reason'>): void => {
+    const list = droppedByMessage.get(messageIndex) ?? [];
+    list.push({ ...drop, reason: 'modality' });
+    droppedByMessage.set(messageIndex, list);
+    modalityDropped += 1;
+  };
+
   const limit = Math.min(messages.length, included.length);
   for (let index = 0; index < limit; index++) {
     const refs = mediaPartRefs(included[index]!);
     if (refs.length === 0) continue;
 
     for (const ref of refs) {
-      if (!isModalityAllowed(ref.mime, options.modalities)) continue;
+      const modality = byteModality(ref.mime);
+      if (modality === null) continue;
+      if (options.modalities && !options.modalities.includes(modality)) {
+        // Байты не читаем — размер неизвестен (0).
+        dropByModality(index, {
+          mime: ref.mime,
+          ...(ref.name ? { name: ref.name } : {}),
+          sizeBytes: 0,
+        });
+        continue;
+      }
       try {
         const meta = await deps.resolve(ref.blobPath);
         if (!meta) continue;
-        if (!isModalityAllowed(meta.mime, options.modalities)) continue;
+        const metaModality = byteModality(meta.mime);
+        if (metaModality === null) continue;
+        if (options.modalities && !options.modalities.includes(metaModality)) {
+          dropByModality(index, {
+            mime: meta.mime,
+            ...(meta.name ?? ref.name ? { name: meta.name ?? ref.name } : {}),
+            sizeBytes: meta.size,
+          });
+          continue;
+        }
         const bytes = await deps.read(ref.blobPath);
         if (!bytes) continue;
         candidates.push({
@@ -179,7 +216,15 @@ export async function hydrateMessageAttachments(
     }
   }
 
-  if (candidates.length === 0) return messages;
+  // Вложения, отсечённые модальностью, не теряются молча: в лог — сводка,
+  // в `debug.attachmentsDropped` — запись с причиной (для отладки).
+  if (modalityDropped > 0) {
+    options.log?.(
+      `[attachments] отброшено вложений: ${modalityDropped} (причина: modality — модель не принимает такой тип)`,
+    );
+  }
+
+  if (candidates.length === 0 && droppedByMessage.size === 0) return messages;
 
   // 2. Лимит объёма: отбрасываем самые старые вложения (с начала истории).
   const totalBase64 = candidates.reduce((sum, item) => sum + item.attachment.base64.length, 0);
@@ -194,7 +239,6 @@ export async function hydrateMessageAttachments(
 
   // 3. Сборка результата без мутации входа.
   const attachmentsByMessage = new Map<number, LLMAttachment[]>();
-  const droppedByMessage = new Map<number, DroppedAttachment[]>();
 
   candidates.forEach((candidate, position) => {
     if (position < droppedCount) {

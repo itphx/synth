@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   onCreateNote: vi.fn(),
   uploadSessionAttachment: vi.fn(),
   prepareAttachmentFiles: vi.fn(),
+  notifyMessage: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: { getCommands: mocks.getCommands } }))
@@ -24,7 +25,7 @@ vi.mock('@/lib/api/attachments', () => ({
     `/api/v2/sessions/${sessionId}/attachments/${partId}`,
 }))
 vi.mock('@/hooks/useNotification', () => ({
-  notifyMessage: vi.fn(),
+  notifyMessage: mocks.notifyMessage,
   useNotification: () => ({ notify: vi.fn() }),
 }))
 vi.mock('@/hooks/useDevice', () => ({ useDevice: () => ({ isTouch: false, deviceType: 'desktop' }) }))
@@ -40,6 +41,7 @@ import { ChatInput } from './ChatInput'
 import { useChatStore } from '@/stores/chatStore'
 import { useSkillsStore } from '@/stores/skillsStore'
 import { useAttachmentsStore } from '@/stores/attachmentsStore'
+import { useProvidersStore } from '@/stores/providersStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -107,6 +109,13 @@ function sendButton(container: HTMLElement): HTMLButtonElement {
   return button as HTMLButtonElement
 }
 
+/** Тост о модальности: единственный `warning`, который шлёт композер. */
+function modelModalityWarnings(): Array<Record<string, unknown>> {
+  return mocks.notifyMessage.mock.calls
+    .map(([options]) => options as Record<string, unknown>)
+    .filter((options) => options.type === 'warning')
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.getCommands.mockResolvedValue({ commands: [], diagnostics: [] })
@@ -135,6 +144,12 @@ beforeEach(() => {
   useChatStore.setState({ retryInputBySession: {} })
   useSkillsStore.setState({ commands: null, commandsLoading: false, commandsError: null })
   useAttachmentsStore.setState({ bySession: {} })
+  useProvidersStore.setState({
+    models: [],
+    selectedProviderName: null,
+    selectedModelName: null,
+    modelGroups: [],
+  })
 })
 
 afterEach(async () => {
@@ -371,5 +386,92 @@ describe('ChatInput — вложения (ADR-115)', () => {
     await flush()
 
     expect(textarea.value).toBe('посмотри')
+  })
+
+  it('предупреждает, если модель не принимает изображения, но вложение прикрепляет', async () => {
+    useProvidersStore.setState({
+      models: [
+        {
+          id: 'm1',
+          name: 'text-only',
+          provider: 'p1',
+          enabled: true,
+          isDefault: false,
+          modalities: ['text'],
+        },
+      ],
+      selectedProviderName: 'p1',
+      selectedModelName: 'text-only',
+    })
+
+    const container = await renderInput()
+    const input = container.querySelector('[data-testid="attachment-input"]') as HTMLInputElement
+
+    await uploadFiles(input, [new File(['png'], 'shot.png', { type: 'image/png' })])
+
+    const warnings = modelModalityWarnings()
+    expect(warnings).toHaveLength(1)
+    expect(String(warnings[0]!.text)).toContain('text-only')
+    expect(String(warnings[0]!.text)).toContain(enDict['chat.attachments.kind.image'])
+    expect(warnings[0]!.category).toBe('message')
+    expect(warnings[0]!.sessionId).toBe(SESSION)
+    // Прикрепление не блокируется: пользователь может сменить модель.
+    expect(
+      (useAttachmentsStore.getState().bySession[SESSION] ?? []).map((item) => item.name),
+    ).toEqual(['shot.png'])
+  })
+
+  it('не предупреждает, если модель принимает изображения', async () => {
+    useProvidersStore.setState({
+      models: [
+        {
+          id: 'm1',
+          name: 'vision',
+          provider: 'p1',
+          enabled: true,
+          isDefault: false,
+          modalities: ['text', 'image'],
+        },
+      ],
+      selectedProviderName: 'p1',
+      selectedModelName: 'vision',
+    })
+
+    const container = await renderInput()
+    const input = container.querySelector('[data-testid="attachment-input"]') as HTMLInputElement
+
+    await uploadFiles(input, [new File(['png'], 'shot.png', { type: 'image/png' })])
+
+    expect(modelModalityWarnings()).toEqual([])
+    expect(
+      (useAttachmentsStore.getState().bySession[SESSION] ?? []).map((item) => item.name),
+    ).toEqual(['shot.png'])
+  })
+
+  it('не предупреждает, если модель не найдена или модальности неизвестны', async () => {
+    useProvidersStore.setState({
+      models: [
+        {
+          id: 'm1',
+          name: 'no-modalities',
+          provider: 'p1',
+          enabled: true,
+          isDefault: false,
+        },
+      ],
+      selectedProviderName: 'p1',
+      selectedModelName: 'no-modalities',
+    })
+
+    const container = await renderInput()
+    const input = container.querySelector('[data-testid="attachment-input"]') as HTMLInputElement
+
+    await uploadFiles(input, [new File(['png'], 'shot.png', { type: 'image/png' })])
+    expect(modelModalityWarnings()).toEqual([])
+
+    // Модель исчезла из каталога — сверять не с чем, предупреждения нет.
+    useProvidersStore.setState({ selectedModelName: 'ghost' })
+    await uploadFiles(input, [new File(['png2'], 'shot2.png', { type: 'image/png' })])
+    expect(modelModalityWarnings()).toEqual([])
   })
 })
