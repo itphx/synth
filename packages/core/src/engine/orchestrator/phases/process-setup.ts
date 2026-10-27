@@ -308,7 +308,17 @@ export interface ProcessSetupDeps {
   hydrateAttachments?: (
     messages: LLMMessage[],
     source: Message[],
-    target: { providerName: string; modelId: string },
+    target: {
+      providerName: string;
+      modelId: string;
+      /** Язык сессии — для шаблона блока «вложения не доставлены» (ADR-115). */
+      language: string;
+      /**
+       * Рабочий каталог сессии для материализации отброшенных вложений;
+       * пустая строка — workspace не готов, файлы не сохраняются.
+       */
+      workingDir: string;
+    },
   ) => Promise<LLMMessage[]>;
   /**
    * ADR-107: телеметрия блоков памяти, ушедших в промпт хода (метрики
@@ -622,6 +632,10 @@ export async function runProcessSetup(
       baseLlmMessages = await deps.hydrateAttachments(baseLlmMessages, messagesForLlm, {
         providerName,
         modelId: provider.model || modelName || session.settings.model || '',
+        language,
+        // Материализация отброшенных вложений — только при готовом workspace:
+        // адрес файла модели даём лишь тогда, когда его можно создать.
+        workingDir: workspaceReady ? workingDir : '',
       });
     } catch (err) {
       warning(

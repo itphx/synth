@@ -427,10 +427,13 @@ async function buildWorld(tmpDir: string): Promise<World> {
       blobs: new FileBlobStore({ root: join(tmpDir, 'blobs') }),
       blobRefs: new FileBlobRefRepository({ dataDir: tmpDir }),
       config: {
+        enabled: true,
+        modalities: { image: true, pdf: true, audio: true, video: true },
         maxBytesPerFile: 1024 * 1024,
         maxFilesPerMessage: 10,
         maxBytesPerSession: 10 * 1024 * 1024,
         allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+        workspaceFallback: true,
         gcDays: 30,
       },
     },

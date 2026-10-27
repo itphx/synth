@@ -19,10 +19,13 @@ import { sniffMime } from './sniff-mime.js';
 /** Умолчания схемы `attachments` для тестов (лимиты намеренно небольшие). */
 function testConfig(overrides: Partial<AttachmentsConfig> = {}): AttachmentsConfig {
   return {
+    enabled: true,
+    modalities: { image: true, pdf: true, audio: true, video: true },
     maxBytesPerFile: 1024 * 1024,
     maxFilesPerMessage: 10,
     maxBytesPerSession: 10 * 1024 * 1024,
     allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+    workspaceFallback: true,
     gcDays: 30,
     ...overrides,
   };
@@ -141,6 +144,38 @@ describe('AttachmentService (ADR-115)', () => {
       await expect(
         local.upload({ sessionId: 's1', bytes, declaredMime: 'text/plain' }),
       ).rejects.toMatchObject({ code: 'unsupported_mime' });
+    });
+
+    it('мастер-выключатель enabled=false → attachments_disabled', async () => {
+      const local = new AttachmentService({ blobs, config: testConfig({ enabled: false }) });
+      await expect(
+        local.upload({ sessionId: 's1', bytes: pngWithText() }),
+      ).rejects.toMatchObject({ code: 'attachments_disabled' });
+    });
+
+    it('выключенное семейство modalities → unsupported_mime', async () => {
+      const local = new AttachmentService({
+        blobs,
+        config: testConfig({ modalities: { image: false, pdf: true, audio: true, video: true } }),
+      });
+      await expect(
+        local.upload({ sessionId: 's1', bytes: pngWithText() }),
+      ).rejects.toMatchObject({ code: 'unsupported_mime' });
+      // Другие семейства по-прежнему принимаются.
+      const pdf = await local.upload({ sessionId: 's1', bytes: pdfBytes() });
+      expect(pdf.mime).toBe('application/pdf');
+    });
+
+    it('резолвер конфига читается на каждый вызов (runtime без рестарта)', async () => {
+      let config = testConfig();
+      const live = new AttachmentService({ blobs, config: () => config });
+      const first = await live.upload({ sessionId: 's1', bytes: pngWithText() });
+      expect(first.mime).toBe('image/png');
+
+      config = testConfig({ enabled: false });
+      await expect(
+        live.upload({ sessionId: 's1', bytes: pdfBytes() }),
+      ).rejects.toMatchObject({ code: 'attachments_disabled' });
     });
 
     it('неизвестная сигнатура → заявленный тип, затем application/octet-stream', async () => {

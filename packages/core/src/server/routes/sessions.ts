@@ -38,7 +38,7 @@ import {
 import type { WorktreeService } from '../../engine/worktree/service.js';
 import { publishWorktreeUpdated, type WorktreeUpdatedInput } from '../../engine/worktree/events.js';
 // ADR-115: вложения сообщений — сервис (blob-хранилище + лимиты) и роуты загрузки/раздачи.
-import { AttachmentService } from '../../engine/attachments/service.js';
+import { AttachmentService, attachmentModalityOf } from '../../engine/attachments/service.js';
 import { createAttachmentRoutes } from './attachments.js';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
@@ -115,7 +115,11 @@ export interface SessionRoutesDeps {
   attachments?: {
     blobs: BlobStore;
     blobRefs?: BlobRefRepository;
-    config: AttachmentsConfig;
+    /**
+     * Настройки вложений: статический снимок **или** резолвер (runtime-настройки
+     * из админки применяются на каждый вызов, ADR-115).
+     */
+    config: AttachmentsConfig | (() => AttachmentsConfig);
   };
 }
 
@@ -133,6 +137,10 @@ export interface SessionRouteMessages {
   attachmentsInvalid: (c: Context, paths: string[]) => string;
   /** ADR-115: контур вложений не подключён (`deps.attachments` не задан). */
   attachmentsUnavailable: (c: Context) => string;
+  /** ADR-115: вложения выключены администратором (`attachments.enabled=false`). */
+  attachmentsDisabled: (c: Context) => string;
+  /** ADR-115: семейство MIME выключено в `attachments.modalities`. */
+  attachmentsModalityDisabled: (c: Context, mime: string) => string;
   /** ADR-115: вложений больше, чем `attachments.maxFilesPerMessage`. */
   attachmentsLimitExceeded: (c: Context, max: number) => string;
   /** ADR-115: превышена квота сессии `attachments.maxBytesPerSession`. */
@@ -247,6 +255,9 @@ const DEFAULT_MESSAGES: SessionRouteMessages = {
   attachmentsInvalid: (_c: Context, paths: string[]) =>
     `Вложения не найдены или недопустимы: ${paths.join(', ')}`,
   attachmentsUnavailable: () => 'Вложения не поддерживаются в этой сборке',
+  attachmentsDisabled: () => 'Вложения отключены администратором',
+  attachmentsModalityDisabled: (_c: Context, mime: string) =>
+    `Категория вложений для типа ${mime} отключена в настройках`,
   attachmentsLimitExceeded: (_c: Context, max: number) =>
     `Слишком много вложений в сообщении (макс. ${max})`,
   tooLarge: () => 'Суммарный объём вложений сессии превышает допустимый',
@@ -450,17 +461,21 @@ export function createSessionRoutes(
   /**
    * ADR-115: контур вложений — монтируется **внутрь** приложения сессий, то есть
    * под тем же prefix-guard'ом (вид доступа `read`/`write` решает он, инвариант 16).
-   * Сервис собирается здесь: blob-порт + учёт ссылок + лимиты из конфига.
+   * Сервис собирается здесь: blob-порт + учёт ссылок + резолвер настроек
+   * (runtime из админки применяется на каждый вызов, без рестарта).
    */
-  const attachmentConfig = deps.attachments?.config;
+  const resolveAttachmentConfig = (): AttachmentsConfig => {
+    const source = deps.attachments!.config;
+    return typeof source === 'function' ? source() : source;
+  };
   const attachmentService = deps.attachments
-    ? new AttachmentService({ blobs: deps.attachments.blobs, config: deps.attachments.config })
+    ? new AttachmentService({ blobs: deps.attachments.blobs, config: resolveAttachmentConfig })
     : undefined;
-  if (attachmentService && attachmentConfig) {
+  if (attachmentService) {
     app.route(
       '/',
       createAttachmentRoutes(
-        { sessionManager, service: attachmentService, config: attachmentConfig },
+        { sessionManager, service: attachmentService, config: resolveAttachmentConfig },
         { messages: { sessionNotFound: messages.sessionNotFound } },
       ),
     );
@@ -1282,11 +1297,17 @@ export function createSessionRoutes(
         400,
       );
     }
-    const attachmentConfig = deps.attachments?.config;
+    const attachmentConfig = deps.attachments ? resolveAttachmentConfig() : undefined;
     if (attachmentPaths && attachmentPaths.length > 0) {
       if (!attachmentService || !attachmentConfig) {
         return c.json(
           { error: { code: 'VALIDATION_ERROR', message: messages.attachmentsUnavailable(c) } },
+          400,
+        );
+      }
+      if (!attachmentConfig.enabled) {
+        return c.json(
+          { error: { code: 'attachments_disabled', message: messages.attachmentsDisabled(c) } },
           400,
         );
       }
@@ -1312,6 +1333,20 @@ export function createSessionRoutes(
         if (!media) {
           broken.push(blobPath);
           continue;
+        }
+        // ADR-115: семейство MIME могло быть выключено после загрузки
+        // (runtime-настройка) — тогда вложение не уходит провайдеру.
+        const modality = attachmentModalityOf(media.data.mime);
+        if (modality && attachmentConfig?.modalities?.[modality] === false) {
+          return c.json(
+            {
+              error: {
+                code: 'UNSUPPORTED_MEDIA_TYPE',
+                message: messages.attachmentsModalityDisabled(c, media.data.mime),
+              },
+            },
+            415,
+          );
         }
         messageParts.push(makeMediaPart(media.type, media.data));
         addedBytes += media.data.size;

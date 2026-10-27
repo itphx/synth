@@ -35,6 +35,12 @@ export interface ContextFileRepository {
   getSummarizerPrompt(language?: string): string;
   getUserContextTemplate(language?: string): string;
   getCompressedDialogTemplate(language?: string): string;
+  /**
+   * ADR-115: шаблон блока «вложения не доставлены» для LLM-сообщения
+   * (prompts/system/ATTACHMENTS_DROPPED.{lang}.md, плейсхолдер `{items}`).
+   * Пустая строка — шаблона нет (вызывающий код берёт техническую строку).
+   */
+  getAttachmentsDroppedTemplate(language?: string): string;
   getStickyNotesTemplate(language?: string): string;
   getRoutingInstructions(language?: string): string;
   getRules(language?: string): string;

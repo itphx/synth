@@ -1586,8 +1586,8 @@ export { createSkillBundleRoutes } from './server/routes/skill-bundles.js';
 export type { SkillBundleRoutesDeps, SkillBundleRoutesOptions, SkillBundleRoutesMessages } from './server/routes/skill-bundles.js';
 export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './server/routes/skill-scope.js';
 export type { SkillScopeRoutesDeps, SkillScopeRoutesOptions } from './server/routes/skill-scope.js';
-export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig } from './storage/runtime-settings.js';
-export type { RuntimeSettings, LlmGatewayRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings, MetricsRuntimeSettings, DefaultModelPair } from './storage/runtime-settings.js';
+export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings } from './storage/runtime-settings.js';
+export type { RuntimeSettings, LlmGatewayRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings, MetricsRuntimeSettings, DefaultModelPair, AttachmentsSettings, AttachmentsSource, ResolvedAttachmentsSettings, LiveAttachmentsSettings } from './storage/runtime-settings.js';
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
 export { createLocalAuth } from './auth/local.js';
 export type { AuthKit, LocalAuthConfig } from './auth/local.js';
@@ -1814,6 +1814,14 @@ export type {
   AttachmentRoutesOptions,
   AttachmentRouteMessages,
 } from './server/routes/attachments.js';
+// ADR-115: админ-раздел «Вложения» — runtime-настройки `/api/v2/settings/attachments`.
+export { createAttachmentsSettingsRoutes } from './server/routes/settings-attachments.js';
+export type {
+  AttachmentsSettingsDeps,
+  AttachmentsSettingsOptions,
+  AttachmentsSettingsMessages,
+  AttachmentsSettingsView,
+} from './server/routes/settings-attachments.js';
 export type {
   ProcessRoutesAuth,
   ProcessRoutesDeps,

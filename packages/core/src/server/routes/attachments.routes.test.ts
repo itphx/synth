@@ -11,7 +11,7 @@ import type { Context, Next } from 'hono';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AttachmentsConfig, Message, Session } from '@itphx/synth-shared';
+import type { AttachmentsConfig, Message, Part, Session } from '@itphx/synth-shared';
 import { createSessionRoutes } from './sessions.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { EventBus } from '../../events/bus.js';
@@ -60,10 +60,13 @@ function createMockOrchestrator() {
 
 function attachmentsConfig(overrides: Partial<AttachmentsConfig> = {}): AttachmentsConfig {
   return {
+    enabled: true,
+    modalities: { image: true, pdf: true, audio: true, video: true },
     maxBytesPerFile: 1024 * 1024,
     maxFilesPerMessage: 10,
     maxBytesPerSession: 10 * 1024 * 1024,
     allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+    workspaceFallback: true,
     gcDays: 30,
     ...overrides,
   };
@@ -90,6 +93,8 @@ interface HarnessOptions {
   /** Считать ход активным (нужно, чтобы промпт шёл режимом `steer` без SSE). */
   turnActive?: boolean;
   config?: Partial<AttachmentsConfig>;
+  /** Резолвер настроек (ADR-115): меняется между запросами — runtime без рестарта. */
+  configResolver?: () => AttachmentsConfig;
   /** ADR-094: поставить sink метрик вложений (иначе вызовы — no-op). */
   metrics?: boolean;
 }
@@ -129,7 +134,8 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
         attachments: {
           blobs,
           blobRefs,
-          config: attachmentsConfig(options.config),
+          // ADR-115: снимок или резолвер (runtime-настройки читаются на каждый запрос).
+          config: options.configResolver ?? attachmentsConfig(options.config),
         },
       },
       options.canAccess
@@ -208,6 +214,26 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
       const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
       const res = await upload(app, session.id, svg, 'pic.svg', 'image/svg+xml');
       expect(res.status).toBe(415);
+    });
+
+    it('415 attachments_disabled: мастер-выключатель вложений', async () => {
+      const { app, sessionManager } = createHarness({ config: { enabled: false } });
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const res = await upload(app, session.id, pngBytes());
+      expect(res.status).toBe(415);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('attachments_disabled');
+    });
+
+    it('415 UNSUPPORTED_MEDIA_TYPE: семейство MIME выключено (modalities)', async () => {
+      const { app, sessionManager } = createHarness({
+        config: { modalities: { image: false, pdf: true, audio: true, video: true } },
+      });
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const res = await upload(app, session.id, pngBytes());
+      expect(res.status).toBe(415);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('UNSUPPORTED_MEDIA_TYPE');
     });
   });
 
@@ -313,6 +339,45 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
       });
       expect(res.status).toBe(400);
     });
+
+    it('400 attachments_disabled: вложения выключили после загрузки', async () => {
+      let live = attachmentsConfig();
+      const { app, sessionManager } = createHarness({ configResolver: () => live });
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const uploaded = (await (await upload(app, session.id, pngBytes())).json()) as {
+        blobPath: string;
+      };
+
+      // Runtime-настройка из админки: мастер-выключатель (без рестарта).
+      live = { ...live, enabled: false };
+      const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'смотри', attachments: [uploaded.blobPath], mode: 'steer' }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('attachments_disabled');
+    });
+
+    it('415 UNSUPPORTED_MEDIA_TYPE: семейство выключили после загрузки', async () => {
+      let live = attachmentsConfig();
+      const { app, sessionManager } = createHarness({ configResolver: () => live });
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const uploaded = (await (await upload(app, session.id, pngBytes())).json()) as {
+        blobPath: string;
+      };
+
+      live = { ...live, modalities: { ...live.modalities, image: false } };
+      const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'смотри', attachments: [uploaded.blobPath], mode: 'steer' }),
+      });
+      expect(res.status).toBe(415);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('UNSUPPORTED_MEDIA_TYPE');
+    });
   });
 
   describe('GET /:id/attachments/:partId', () => {
@@ -322,9 +387,11 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
       sessionManager: SessionManager,
       bytes: Buffer,
       name = 'photo.png',
+      mime = 'image/png',
+      partType: Part['type'] = 'image',
     ): Promise<{ session: Session; partId: string; sha256: string; size: number }> {
       const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
-      const uploaded = (await (await upload(app, session.id, bytes, name)).json()) as {
+      const uploaded = (await (await upload(app, session.id, bytes, name, mime)).json()) as {
         blobPath: string; sha256: string; mime: string; size: number;
       };
       await sessionManager.withLock(session.id, async (locked) => {
@@ -337,7 +404,7 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
             { id: 'text-1', type: 'text', data: 'смотри' },
             {
               id: 'part-1',
-              type: 'image',
+              type: partType,
               data: {
                 blobPath: uploaded.blobPath,
                 sha256: uploaded.sha256,
@@ -374,6 +441,43 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
 
       const body = Buffer.from(await res.arrayBuffer());
       expect(body.equals(bytes)).toBe(true);
+    });
+
+    it('200: кириллическое имя — ASCII в filename, UTF-8 в filename* (GET и HEAD)', async () => {
+      const { app, sessionManager } = createHarness();
+      const name = 'Планировка квартиры.pdf';
+      const bytes = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n');
+      const { session, partId, size } = await seedMessagePart(
+        app,
+        sessionManager,
+        bytes,
+        name,
+        'application/pdf',
+        'file',
+      );
+
+      // Раньше не-ASCII имя попадало в `filename="…"` и сборка заголовков
+      // падала (ByteString, 500). Теперь `filename=` — ASCII-fallback.
+      for (const method of ['GET', 'HEAD'] as const) {
+        const res = await app.request(`/api/v2/sessions/${session.id}/attachments/${partId}`, {
+          method,
+        });
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-type')).toBe('application/pdf');
+        expect(res.headers.get('content-length')).toBe(String(size));
+        expect(res.headers.get('etag')).toBeTruthy();
+
+        const disposition = res.headers.get('content-disposition') ?? '';
+        expect(disposition.startsWith('inline;')).toBe(true);
+        const asciiName = /filename="([^"]*)"/.exec(disposition)?.[1];
+        expect(asciiName).toBeTruthy();
+        // В Latin-1-заголовке — только печатный ASCII.
+        expect(/^[\x20-\x7E]+$/.test(asciiName!)).toBe(true);
+        expect(asciiName).not.toContain('Планировка');
+        // Настоящее имя — RFC 5987 (UTF-8, percent-encoding).
+        expect(disposition).toContain(`filename*=UTF-8''${encodeURIComponent(name)}`);
+        expect(disposition).toContain("filename*=UTF-8''%D0%9F");
+      }
     });
 
     it('206: диапазон байтов с Content-Range', async () => {

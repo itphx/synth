@@ -24,6 +24,8 @@ import {
   DEFAULT_AGENT_ID, registerStoredAgents,
   AuditLogger, mergeLlmGatewayConfig, mergeSecurityConfig,
   mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig,
+  // ADR-115: живое состояние runtime-настроек вложений (`/settings/attachments`).
+  createLiveAttachmentsSettings,
   createEgressPolicyResolver, createEgressLogSink,
   configureEgressRuntime, startEgressLogPruner,
   // ADR-105 (Ф3): источник access-токена для MCP-коннекторов + OAuth-сервис.
@@ -351,6 +353,14 @@ export async function createBackendDeps(
   const egressLogConfig = config.synth.egress.log;
   const egressLog = createEgressLogSink(egressRequests, { enabled: () => egressLogConfig.enabled });
   configureEgressRuntime({ resolver: egressResolver, log: egressLog });
+  // ADR-115: живое состояние настроек вложений. Приоритет env > runtime
+  // (`settings.json`/PG) > config.yaml > defaults; мутации — админ-API
+  // `/api/v2/settings/attachments`. Резолвер синхронный: сервис вложений,
+  // промпт и GC читают его на каждый вызов (применение без рестарта).
+  const attachmentsSettings = createLiveAttachmentsSettings({
+    config: config.synth.attachments,
+    runtime: await settingsStore.getAttachments(),
+  });
   const stopEgressLogPruner = storageDegraded || !egressLogConfig.enabled
     ? () => {}
     : startEgressLogPruner(egressRequests, { getRetentionDays: () => egressLogConfig.retentionDays });
@@ -502,7 +512,7 @@ export async function createBackendDeps(
     : startAttachmentPruner({
         blobs: storageContext.blobs,
         blobRefs: storageContext.blobRefs,
-        gcDays: () => config.synth.attachments.gcDays,
+        gcDays: () => attachmentsSettings.getConfig().gcDays,
         ...(attachmentMetrics ? { metrics: attachmentMetrics } : {}),
       });
 
@@ -914,6 +924,9 @@ export async function createBackendDeps(
       }
       return prefixMatch;
     },
+    // ADR-115: `attachments.workspaceFallback` — материализация отброшенных
+    // вложений в workspace; live-конфиг (проверяется на каждый ход).
+    attachmentsConfig: () => attachmentsSettings.getConfig(),
     workspacesRoot: config.workspacesRoot,
     // ADR-075: backend — managed-режим, workspace вне workspacesRoot запрещён.
     workspaceManaged: true,
@@ -1550,6 +1563,8 @@ export async function createBackendDeps(
     stopProcessLogPruner,
     // ADR-115: GC осиротевших вложений сообщений.
     stopAttachmentPruner,
+    // ADR-115: живое состояние настроек вложений (сервис/промпт/GC + админ-API).
+    attachmentsSettings,
     // ADR-114: сервис worktree'ов — HTTP-контур проектов и привязка сессии.
     worktreeService,
     webhookStore,

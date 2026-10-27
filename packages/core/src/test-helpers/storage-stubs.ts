@@ -48,6 +48,7 @@ export function stubContextFiles(
     getSummarizerPrompt: (): string => '',
     getUserContextTemplate: (): string => '',
     getCompressedDialogTemplate: (): string => '',
+    getAttachmentsDroppedTemplate: (): string => '',
     getStickyNotesTemplate: (): string => '',
     getRoutingInstructions: (): string => '',
     getRules: (): string => '',

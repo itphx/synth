@@ -556,6 +556,27 @@ export class ContextConfig implements ContextFileRepository {
     return this._readPrompt('COMPRESSED_DIALOG', 'system', language) ?? '';
   }
 
+  /**
+   * ADR-115: блок «вложения не доставлены» для LLM-сообщения (шаблон с
+   * плейсхолдером `{items}` — списком отброшенных вложений).
+   *
+   * Файлы: prompts/system/ATTACHMENTS_DROPPED.{lang}.md — только локализованные
+   * (базового ATTACHMENTS_DROPPED.md нет). Override через
+   * {userDataDir}/user/system/ — стандартный механизм system-категории,
+   * проверяется первым. Возвращает пустую строку, если файла нет (вызывающий
+   * код переходит на короткую техническую строку).
+   */
+  getAttachmentsDroppedTemplate(language = 'ru'): string {
+    const stem = 'ATTACHMENTS_DROPPED';
+
+    // 1. Пользовательский override system-категории
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
+
+    // 2. Встроенный prompts/system/ATTACHMENTS_DROPPED.{lang}.md
+    return this._readPrompt(stem, 'system', language) ?? '';
+  }
+
   getStickyNotesTemplate(language = 'ru'): string {
     return this._readPrompt('STICKY_NOTES', 'system', language) ?? '';
   }

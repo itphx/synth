@@ -24,6 +24,8 @@ import {
   createSettingsRoutes, createDictionaryRoutes, createAuditRoutes as createSecurityAuditRoutes, currentEgressLog,
   createContextRoutes as createCoreContextRoutes,
   createMetricsSettingsRoutes,
+  // ADR-115: админ-раздел «Вложения» — runtime-настройки мультимодального ввода.
+  createAttachmentsSettingsRoutes,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createProcessRoutes,
@@ -203,11 +205,12 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     // ADR-114: сервис worktree'ов — привязка сессии к worktree
     // (`PATCH /api/v2/sessions/:id { worktreeId }`).
     deps.worktreeService,
-    // ADR-115: вложения сообщений — blob-порт, учёт ссылок, лимиты из конфига.
+    // ADR-115: вложения сообщений — blob-порт, учёт ссылок; лимиты читаются
+    // резолвером на каждый запрос (runtime-настройки из админки без рестарта).
     {
       blobs: deps.storageContext.blobs,
       blobRefs: deps.storageContext.blobRefs,
-      config: config.synth.attachments,
+      config: () => deps.attachmentsSettings.getConfig(),
     },
   ));
 
@@ -554,6 +557,26 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         deps.orchestrator.setPromptBlockMaxChars(effective.promptBlockMaxChars);
         deps.orchestrator.setLlmFilterTimeoutMs(effective.llmFilterTimeoutMs);
       },
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
+
+  // ADR-115: админ-раздел «Вложения» — runtime-настройки мультимодального
+  // ввода. Managed RBAC — **ADMIN** (чтение и запись): мастер-выключатель,
+  // семейства MIME и лимиты — политика инстанса. Применяется сразу
+  // (`restartRequired: false`): сервис вложений, промпт и GC читают резолвер
+  // на каждый вызов.
+  app.route('/api/v2/settings', createAttachmentsSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.synth.attachments,
+      live: deps.attachmentsSettings,
+      securityAudit,
+      env: process.env,
     },
     {
       readGuard: auth.requirePermission('ADMIN'),

@@ -108,7 +108,11 @@ export function createSessionRoutes(
   attachments?: {
     blobs: BlobStore;
     blobRefs?: BlobRefRepository;
-    config: AttachmentsConfig;
+    /**
+     * Настройки вложений: снимок **или** резолвер (ADR-115) — runtime-настройки
+     * из админки (`/api/v2/settings/attachments`) применяются на каждый вызов.
+     */
+    config: AttachmentsConfig | (() => AttachmentsConfig);
   },
 ): Hono {
   const app = new Hono();

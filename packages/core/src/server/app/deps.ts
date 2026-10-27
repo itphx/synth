@@ -116,6 +116,7 @@ import { attachExecutorMcpSource } from '../../engine/mcp/executor-mcp-source.js
 import {
   mergeLlmGatewayConfig, mergeSecurityConfig,
   mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig,
+  createLiveAttachmentsSettings,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
 import { AuthorityGuard } from '../../engine/authority/guard.js';
@@ -294,6 +295,14 @@ export async function createStandaloneDeps(
   // Egress: живой резолвер политики (settings.json → config.yaml → дефолт) и
   // журнал внешних запросов. Резолвер читает стор на каждый запрос — без
   // стартового снимка/кэша (live-применение без рестарта).
+  // ADR-115: живое состояние настроек вложений. Инициализируется runtime-значением
+  // (`settings.json`/PG), обновляется роутом `/api/v2/settings/attachments`;
+  // сервис вложений, промпт и GC читают резолвер на каждый вызов (без рестарта).
+  const attachmentsSettings = createLiveAttachmentsSettings({
+    config: config.attachmentsConfig,
+    runtime: await settingsStore.getAttachments(),
+  });
+
   // ADR-102: сборщик роллапов аналитики (write-path) — только через порт слоя
   // хранения; в деградации выключен (чтоб не писать домен в файловый фоллбек).
   const analytics = storageDegraded ? undefined : new AnalyticsRecorder({ repo: analyticsRollups });
@@ -538,13 +547,14 @@ export async function createStandaloneDeps(
   const attachmentMetrics = metrics ? createAttachmentMetrics(metrics) : undefined;
   // ADR-115: GC осиротевших вложений. Критерий — нет ссылок (`blob_refs`) И
   // объект старше `attachments.gcDays` (живой объект может быть старым —
-  // удалять по возрасту нельзя). `gcDays <= 0` — без ограничения.
+  // удалять по возрасту нельзя). `gcDays <= 0` — без ограничения. Значение
+  // читается на каждом прогоне (runtime-настройка применяется без рестарта).
   const stopAttachmentPruner = storageDegraded
     ? () => {}
     : startAttachmentPruner({
         blobs: storageContext.blobs,
         blobRefs: storageContext.blobRefs,
-        gcDays: () => config.attachmentsConfig?.gcDays ?? 30,
+        gcDays: () => attachmentsSettings.getConfig().gcDays,
         ...(attachmentMetrics ? { metrics: attachmentMetrics } : {}),
       });
 
@@ -966,6 +976,9 @@ export async function createStandaloneDeps(
       }
       return prefixMatch;
     },
+    // ADR-115: `attachments.workspaceFallback` — материализация отброшенных
+    // вложений в workspace; live-конфиг (проверяется на каждый ход).
+    attachmentsConfig: () => attachmentsSettings.getConfig(),
     defaultWorkingDir,
     workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
     // ADR-075: тулы проекта (workspace) читают live-политику вне root.
@@ -1571,6 +1584,8 @@ export async function createStandaloneDeps(
     stopProcessLogPruner,
     // ADR-115: GC осиротевших вложений сообщений.
     stopAttachmentPruner,
+    // ADR-115: живое состояние настроек вложений (сервис/промпт/GC + админ-API).
+    attachmentsSettings,
     // ADR-114: сервис worktree'ов — HTTP-контур проектов и привязка сессии.
     worktreeService,
     webhooksConfig,

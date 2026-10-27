@@ -825,10 +825,13 @@ describe('portable: вложения сообщений (ADR-115)', () => {
   /** Конфиг вложений для тестов переноса. */
   function attachmentsConfig(): AttachmentsConfig {
     return {
+      enabled: true,
+      modalities: { image: true, pdf: true, audio: true, video: true },
       maxBytesPerFile: 1024 * 1024,
       maxFilesPerMessage: 10,
       maxBytesPerSession: 10 * 1024 * 1024,
       allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
+      workspaceFallback: true,
       gcDays: 30,
     };
   }

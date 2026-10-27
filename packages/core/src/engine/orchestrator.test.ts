@@ -18,8 +18,8 @@ import type { ContextBuilder } from './context/builder.js';
 import { ContextConfig } from './context/config.js';
 import { createToolRegistry } from './tools/index.js';
 import { createAgentRegistry } from './agents/index.js';
-import { generateId, MessageRole, nowISO, makeTextPart, ToolCapability } from '@itphx/synth-shared';
-import type { Session, Message, SecurityConfig, SessionSettings } from '@itphx/synth-shared';
+import { generateId, MessageRole, nowISO, makeTextPart, ToolCapability, attachmentsConfigSchema } from '@itphx/synth-shared';
+import type { Session, Message, SecurityConfig, SessionSettings, AttachmentsConfig, MediaPartData, Part } from '@itphx/synth-shared';
 
 function makeCtxBuilder(): ContextBuilder {
   return {
@@ -216,6 +216,165 @@ describe('ChatOrchestrator._resolveWorkingDir', () => {
     const fallbackDeps = (fallback as unknown as { _getAttachmentHydrateDeps(): HydrateDeps })
       ._getAttachmentHydrateDeps();
     await expect(fallbackDeps.read(blobPath)).resolves.toBeNull();
+  });
+});
+
+/**
+ * ADR-115: `attachments.workspaceFallback` управляет материализацией
+ * отброшенного вложения в `<workspace>/attachments/`.
+ *
+ * Проверяем на уровне шва `_processSetupDeps().hydrateAttachments` — это ровно
+ * то, что получает ход: `materialize` передаётся только при включённом
+ * резервном пути, настройка читается на каждый вызов (live).
+ */
+describe('ChatOrchestrator: attachments.workspaceFallback (ADR-115)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+
+  const BLOB_PATH = 'attachments/aa/plan';
+  const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-orch-att-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Конфиг вложений с дефолтами схемы (как в продакшене до runtime-патча). */
+  function baseConfig(): AttachmentsConfig {
+    return attachmentsConfigSchema.parse({});
+  }
+
+  /** Сообщение с вложением-картинкой: модель принимает только текст → drop. */
+  function makeInput(): { messages: LLMMessage[]; source: Message[] } {
+    const part: Part = {
+      id: 'p-image',
+      type: 'image',
+      data: {
+        blobPath: BLOB_PATH,
+        sha256: 'a'.repeat(64),
+        mime: 'image/png',
+        size: PNG_BYTES.length,
+        name: 'plan.png',
+      } satisfies MediaPartData,
+    };
+    const source: Message[] = [{
+      id: 'src-1',
+      role: MessageRole.USER,
+      seq: 1,
+      origin: 'local',
+      parts: [makeTextPart('[image: plan.png]'), part],
+      content: '[image: plan.png]',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    }];
+    const messages: LLMMessage[] = [{
+      id: 'src-1',
+      role: 'user',
+      content: '[image: plan.png]',
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      disabled: false,
+      pinned: false,
+      branchId: '',
+    }];
+    return { messages, source };
+  }
+
+  async function makeOrchestrator(attachmentsConfig?: () => AttachmentsConfig): Promise<ChatOrchestrator> {
+    const blobs = new MemoryBlobStore();
+    await blobs.write(BLOB_PATH, PNG_BYTES);
+    return new ChatOrchestrator({
+      sessionManager,
+      eventBus: new EventBus(),
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: () => null,
+      dataDir: tmpDir,
+      projectStore,
+      blobs,
+      // Модель «только текст»: картинка гарантированно отбрасывается (reason: modality).
+      resolveModelModalities: () => ['text'],
+      ...(attachmentsConfig ? { attachmentsConfig } : {}),
+    });
+  }
+
+  /** Вызвать гидратацию хода (шов `_processSetupDeps`) и вернуть LLM-сообщение. */
+  async function hydrate(orch: ChatOrchestrator): Promise<LLMMessage> {
+    const deps = (orch as unknown as {
+      _processSetupDeps(): {
+        hydrateAttachments?: (
+          messages: LLMMessage[],
+          source: Message[],
+          target: { providerName: string; modelId: string; language: string; workingDir: string },
+        ) => Promise<LLMMessage[]>;
+      };
+    })._processSetupDeps();
+    expect(deps.hydrateAttachments).toBeTypeOf('function');
+    const { messages, source } = makeInput();
+    const result = await deps.hydrateAttachments!(messages, source, {
+      providerName: 'test',
+      modelId: 'text-only',
+      language: 'en',
+      workingDir: tmpDir,
+    });
+    expect(result).toHaveLength(1);
+    return result[0]!;
+  }
+
+  async function attachmentsDirExists(): Promise<boolean> {
+    try {
+      return (await stat(join(tmpDir, 'attachments'))).isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
+  it('workspaceFallback: false — файл не сохраняется, в блоке только причина', async () => {
+    const orch = await makeOrchestrator(() => ({ ...baseConfig(), workspaceFallback: false }));
+
+    const message = await hydrate(orch);
+
+    expect(message.content).toContain('modality');
+    expect(message.content).not.toContain('; path:');
+    expect(message.debug?.attachmentsDropped).toHaveLength(1);
+    expect(await attachmentsDirExists()).toBe(false);
+  });
+
+  it('workspaceFallback: true — файл материализуется, путь попадает в блок', async () => {
+    const orch = await makeOrchestrator(() => ({ ...baseConfig(), workspaceFallback: true }));
+
+    const message = await hydrate(orch);
+
+    expect(message.content).toContain('; path: attachments/plan.png');
+    expect((await stat(join(tmpDir, 'attachments', 'plan.png'))).isFile()).toBe(true);
+  });
+
+  it('опция не задана — материализация включена (поведение по умолчанию)', async () => {
+    const orch = await makeOrchestrator();
+
+    const message = await hydrate(orch);
+
+    expect(message.content).toContain('; path: attachments/plan.png');
+    expect((await stat(join(tmpDir, 'attachments', 'plan.png'))).isFile()).toBe(true);
+  });
+
+  it('настройка читается на каждый ход (live): false → true без пересоздания', async () => {
+    let workspaceFallback = false;
+    const orch = await makeOrchestrator(() => ({ ...baseConfig(), workspaceFallback }));
+
+    const first = await hydrate(orch);
+    expect(first.content).not.toContain('; path:');
+    expect(await attachmentsDirExists()).toBe(false);
+
+    workspaceFallback = true;
+    const second = await hydrate(orch);
+    expect(second.content).toContain('; path: attachments/plan.png');
   });
 });
 

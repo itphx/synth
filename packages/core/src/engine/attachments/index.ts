@@ -1,6 +1,6 @@
 /**
- * Вложения сообщений (ADR-115): сервис, определение MIME, вычищение метаданных
- * и GC осиротевших объектов.
+ * Вложения сообщений (ADR-115): сервис, определение MIME, вычищение метаданных,
+ * GC осиротевших объектов и материализация отброшенного вложения в workspace.
  */
 
 export {
@@ -23,3 +23,5 @@ export { sniffMime, looksLikeSvg, normalizeMime } from './sniff-mime.js';
 export { stripMetadata } from './strip-metadata.js';
 export { startAttachmentPruner } from './prune.js';
 export type { AttachmentPrunerOptions } from './prune.js';
+export { materializeAttachment, sanitizeAttachmentName, ATTACHMENTS_DIR } from './materialize.js';
+export type { MaterializeAttachmentInput } from './materialize.js';

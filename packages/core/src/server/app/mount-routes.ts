@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import type { SecurityConfig, WorkspaceOutsideRootPolicy, ProviderConfig, ModelConfig } from '@itphx/synth-shared';
-import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, SYNTH_VERSION, defaultConfig } from '@itphx/synth-shared';
+import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, SYNTH_VERSION } from '@itphx/synth-shared';
 import {
   KeyRateLimiter, DEFAULT_AGENT_ID,
   createSessionRoutes, createProjectRoutes,
@@ -24,6 +24,7 @@ import {
   createAnalyticsRoutes, AnalyticsService,
   createStorageContextAsync,
   createMetricsSettingsRoutes,
+  createAttachmentsSettingsRoutes,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createProcessRoutes,
@@ -170,7 +171,9 @@ export function mountStandaloneRoutes(
             attachments: {
               blobs: deps.storageContext.blobs,
               blobRefs: deps.storageContext.blobRefs,
-              config: config.attachmentsConfig ?? defaultConfig.attachments,
+              // ADR-115: резолвер, а не снимок — runtime-настройки из админки
+              // (`/api/v2/settings/attachments`) применяются без рестарта.
+              config: () => deps.attachmentsSettings.getConfig(),
             },
           }
         : {}),
@@ -518,6 +521,21 @@ export function mountStandaloneRoutes(
       getStorageBackend: () => ctx.metrics.storageBackend,
       getUptimeSec: ctx.metrics.getUptimeSec,
       version: SYNTH_VERSION,
+    },
+  ));
+
+  // ADR-115: админ-раздел «Вложения» — runtime-настройки мультимодального
+  // ввода (`/api/v2/settings/attachments`). Применяются **сразу** (сервис
+  // вложений, промпт и GC читают резолвер на каждый вызов). Core —
+  // `requireAuth` (single-user).
+  app.route('/api/v2/settings', createAttachmentsSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.attachmentsConfig,
+      live: deps.attachmentsSettings,
+      securityAudit,
+      env: process.env,
     },
   ));
 

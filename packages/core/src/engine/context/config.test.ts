@@ -448,6 +448,74 @@ describe('ContextConfig.getMaxStepsPrompt (финальный шаг-отчёт 
   });
 });
 
+describe('ContextConfig.getAttachmentsDroppedTemplate (ADR-115)', () => {
+  let userDataDir: string;
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'synth-attachments-dropped-'));
+  });
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true });
+  });
+
+  it('ru → блок [ATTACHMENTS NOT DELIVERED] с {items}, en → английский, fr → пустая строка', async () => {
+    const config = new ContextConfig({ userDataDir });
+
+    const ru = config.getAttachmentsDroppedTemplate('ru');
+    expect(ru).toContain('[ATTACHMENTS NOT DELIVERED]');
+    expect(ru).toContain('{items}');
+    expect(ru).toContain('modality');
+    expect(ru).toContain('limit');
+    expect(ru).toContain('unavailable');
+    expect(ru).toContain('read_file');
+
+    const en = config.getAttachmentsDroppedTemplate('en');
+    expect(en).toContain('[ATTACHMENTS NOT DELIVERED]');
+    expect(en).toContain('{items}');
+    expect(en).not.toContain('рабочем каталоге проекта');
+
+    // Локализованного файла для неизвестного языка нет — шаблона нет.
+    expect(config.getAttachmentsDroppedTemplate('fr')).toBe('');
+  });
+
+  it('override из system-категории приоритетнее встроенного', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(
+      join(userDataDir, 'user', 'system', 'ATTACHMENTS_DROPPED.md'),
+      'ПОЛЬЗОВАТЕЛЬСКИЙ ATTACHMENTS {items}',
+      'utf-8',
+    );
+
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getAttachmentsDroppedTemplate('ru')).toBe('ПОЛЬЗОВАТЕЛЬСКИЙ ATTACHMENTS {items}');
+  });
+
+  it('локализованный override приоритетнее базового', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(
+      join(userDataDir, 'user', 'system', 'ATTACHMENTS_DROPPED.en.md'),
+      'EN ATTACHMENTS {items}',
+      'utf-8',
+    );
+
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getAttachmentsDroppedTemplate('en')).toBe('EN ATTACHMENTS {items}');
+  });
+
+  it('нет файла (неизвестная категория промптов) → пустая строка', async () => {
+    // Пустой каталог системных промптов: шаблона нет — вызывающий код берёт
+    // техническую строку (en fallback в hydrate).
+    const emptyPrompts = await mkdtemp(join(tmpdir(), 'synth-empty-prompts-'));
+    try {
+      const config = new ContextConfig({ userDataDir, systemPromptsDir: emptyPrompts });
+      expect(config.getAttachmentsDroppedTemplate('ru')).toBe('');
+    } finally {
+      await rm(emptyPrompts, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('ContextConfig.getInterviewTemplate (онбординг)', () => {
   let userDataDir: string;
 

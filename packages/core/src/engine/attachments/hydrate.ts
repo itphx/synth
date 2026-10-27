@@ -18,8 +18,17 @@
  *  - суммарный объём base64 ограничен (`MAX_ATTACHMENT_BASE64_BYTES`): при
  *    превышении отбрасываются **самые старые** вложения (с начала истории), а
  *    на сообщении остаётся пометка `reason: 'limit'` — промпт не ломается;
- *  - ошибка чтения объекта → вложение пропускается (в `content` уже есть
- *    плейсхолдер `[image: …]`), ход не падает;
+ *  - ошибка чтения объекта → вложение помечается `reason: 'unavailable'` и
+ *    пропускается (в `content` уже есть плейсхолдер `[image: …]`), ход не падает;
+ *  - каждое отброшенное вложение видно **модели**: к `content` LLM-сообщения
+ *    дописывается один блок `[ATTACHMENTS NOT DELIVERED]` со списком (только в
+ *    LLM-сообщение, сохранённая история сессии не меняется) — иначе модель
+ *    видит лишь плейсхолдер и пытается искать файл на диске. Текст блока —
+ *    шаблон `prompts/system/ATTACHMENTS_DROPPED.{lang}.md` (`options.noticeTemplate`);
+ *    шаблона нет — короткая техническая строка на английском (канал LLM, ADR-041);
+ *  - если `options.materialize` умеет положить файл в рабочий каталог проекта,
+ *    в строке появляется `; path: <путь>`: модель может прочитать файл
+ *    инструментами (ADR-115, «решение 2026-10-27»);
  *  - входные `messages` не мутируются — возвращаются новые объекты.
  */
 
@@ -56,6 +65,17 @@ export interface HydrateDeps {
   read(blobPath: string): Promise<Buffer | null>;
 }
 
+/** Причина отброса вложения. */
+export type AttachmentDropReason = 'limit' | 'modality' | 'unavailable';
+
+/** Ссылка на отброшенное вложение для материализации в workspace. */
+export interface DroppedAttachmentRef {
+  name?: string;
+  mime: string;
+  blobPath: string;
+  reason: AttachmentDropReason;
+}
+
 /** Опции гидратации. */
 export interface HydrateOptions {
   /**
@@ -68,6 +88,19 @@ export interface HydrateOptions {
   maxTotalBase64Bytes?: number;
   /** Лог предупреждений (по умолчанию — молча). */
   log?: (message: string) => void;
+  /**
+   * ADR-115: шаблон блока «вложения не доставлены» из
+   * `prompts/system/ATTACHMENTS_DROPPED.{lang}.md` (`{items}` — список строк
+   * `- {name} ({mime}) — {reason}`). Пусто/не задан — короткая техническая
+   * строка на английском (канал LLM, ADR-041).
+   */
+  noticeTemplate?: string;
+  /**
+   * ADR-115: материализация отброшенного вложения в рабочий каталог проекта —
+   * возвращает путь относительно workspace (или `null`). Ошибка/отсутствие
+   * workspace не мешают ходу: строка просто останется без пути.
+   */
+  materialize?: (ref: DroppedAttachmentRef) => Promise<string | null>;
 }
 
 /** Медиа-типы частей сообщения (только они несут вложение). */
@@ -77,13 +110,53 @@ const MEDIA_PART_TYPES: ReadonlySet<string> = new Set(['image', 'audio', 'video'
 interface DroppedAttachment {
   mime: string;
   name?: string;
-  /** Размер в байтах; `0` — объект не читался (модальность отсекла раньше). */
+  /** Размер в байтах; `0` — объект не читался (модальность/ошибка отсекли раньше). */
   sizeBytes: number;
   /**
    * `limit` — превышен суммарный объём base64;
-   * `modality` — модель не принимает такую модальность вложения.
+   * `modality` — модель не принимает такую модальность вложения;
+   * `unavailable` — объект не прочитан (нет, битый, порт вернул `null`/ошибку).
    */
-  reason: 'limit' | 'modality';
+  reason: AttachmentDropReason;
+}
+
+/** Отброшенное вложение + путь объекта (нужен для материализации). */
+interface DroppedEntry {
+  drop: DroppedAttachment;
+  blobPath: string;
+  /** Относительный путь материализованной копии (`null` — не сохранили). */
+  path: string | null;
+}
+
+/**
+ * Строка списка отброшенных вложений: `- {name} ({mime}) — {reason}`;
+ * `name` неизвестно — только `{mime}`. Материализованный файл — `; path: …`.
+ */
+function dropLine(entry: DroppedEntry): string {
+  const { drop } = entry;
+  const target = drop.name ? `${drop.name} (${drop.mime})` : drop.mime;
+  const line = `- ${target} — ${drop.reason}`;
+  return entry.path ? `${line}; path: ${entry.path}` : line;
+}
+
+/**
+ * Техническая строка на случай, когда шаблона нет (файла prompts нет/он пуст).
+ * Английский — канал LLM (ADR-041); формат — как у прежней пометки.
+ */
+function fallbackLine(entry: DroppedEntry): string {
+  const { drop } = entry;
+  const target = drop.name ? `${drop.name} (${drop.mime})` : drop.mime;
+  const line = `[attachment not delivered: ${target} — ${drop.reason}]`;
+  return entry.path ? `${line}; path: ${entry.path}` : line;
+}
+
+/** Блок для `content` LLM-сообщения: шаблон с `{items}` либо fallback-строки. */
+function dropsBlock(entries: readonly DroppedEntry[], noticeTemplate: string | undefined): string {
+  const items = entries.map(dropLine).join('\n');
+  const template = noticeTemplate ?? '';
+  if (template.trim().length === 0) return entries.map(fallbackLine).join('\n');
+  // split/join — подстановка без интерпретации `$`-паттернов в именах файлов.
+  return template.split('{items}').join(items);
 }
 
 /** Ссылка на вложение в истории сообщения. */
@@ -164,16 +237,23 @@ export async function hydrateMessageAttachments(
     : null;
 
   // 1. Читаем все допустимые вложения в хронологическом порядке.
-  const candidates: Array<{ messageIndex: number; attachment: LLMAttachment; sizeBytes: number }> = [];
-  const droppedByMessage = new Map<number, DroppedAttachment[]>();
+  const candidates: Array<{
+    messageIndex: number;
+    attachment: LLMAttachment;
+    sizeBytes: number;
+    blobPath: string;
+  }> = [];
+  const droppedByMessage = new Map<number, DroppedEntry[]>();
   let modalityDropped = 0;
+  let unavailableDropped = 0;
 
-  /** Пометить вложение, отброшенное фильтром модальностей модели. */
-  const dropByModality = (messageIndex: number, drop: Omit<DroppedAttachment, 'reason'>): void => {
+  /** Пометить вложение, отброшенное при гидратации (в `debug` + лог). */
+  const addDrop = (messageIndex: number, blobPath: string, drop: DroppedAttachment): void => {
     const list = droppedByMessage.get(messageIndex) ?? [];
-    list.push({ ...drop, reason: 'modality' });
+    list.push({ drop, blobPath, path: null });
     droppedByMessage.set(messageIndex, list);
-    modalityDropped += 1;
+    if (drop.reason === 'modality') modalityDropped += 1;
+    if (drop.reason === 'unavailable') unavailableDropped += 1;
   };
 
   const limit = Math.min(messages.length, included.length);
@@ -186,28 +266,48 @@ export async function hydrateMessageAttachments(
       if (modality === null) continue;
       if (allowedModalities && !allowedModalities.has(modality)) {
         // Байты не читаем — размер неизвестен (0).
-        dropByModality(index, {
+        addDrop(index, ref.blobPath, {
           mime: ref.mime,
           ...(ref.name ? { name: ref.name } : {}),
           sizeBytes: 0,
+          reason: 'modality',
         });
         continue;
       }
       try {
         const meta = await deps.resolve(ref.blobPath);
-        if (!meta) continue;
+        if (!meta) {
+          // Объекта нет/путь не разрешён — модель должна узнать, что вложение
+          // не доставлено, иначе пойдёт искать файл на диске.
+          addDrop(index, ref.blobPath, {
+            mime: ref.mime,
+            ...(ref.name ? { name: ref.name } : {}),
+            sizeBytes: 0,
+            reason: 'unavailable',
+          });
+          continue;
+        }
         const metaModality = byteModality(meta.mime);
         if (metaModality === null) continue;
         if (allowedModalities && !allowedModalities.has(metaModality)) {
-          dropByModality(index, {
+          addDrop(index, ref.blobPath, {
             mime: meta.mime,
             ...(meta.name ?? ref.name ? { name: meta.name ?? ref.name } : {}),
             sizeBytes: meta.size,
+            reason: 'modality',
           });
           continue;
         }
         const bytes = await deps.read(ref.blobPath);
-        if (!bytes) continue;
+        if (!bytes) {
+          addDrop(index, ref.blobPath, {
+            mime: meta.mime,
+            ...(meta.name ?? ref.name ? { name: meta.name ?? ref.name } : {}),
+            sizeBytes: meta.size,
+            reason: 'unavailable',
+          });
+          continue;
+        }
         candidates.push({
           messageIndex: index,
           attachment: {
@@ -216,12 +316,20 @@ export async function hydrateMessageAttachments(
             base64: bytes.toString('base64'),
           },
           sizeBytes: meta.size > 0 ? meta.size : bytes.length,
+          blobPath: ref.blobPath,
         });
       } catch (err) {
-        // Битый объект не должен ломать ход: плейсхолдер в `content` уже есть.
+        // Битый объект не должен ломать ход: плейсхолдер в `content` уже есть,
+        // а модели уходит пометка, что вложение не доставлено.
         options.log?.(
           `[attachments] не удалось прочитать вложение ${ref.blobPath}: ${err instanceof Error ? err.message : String(err)}`,
         );
+        addDrop(index, ref.blobPath, {
+          mime: ref.mime,
+          ...(ref.name ? { name: ref.name } : {}),
+          sizeBytes: 0,
+          reason: 'unavailable',
+        });
       }
     }
   }
@@ -231,6 +339,11 @@ export async function hydrateMessageAttachments(
   if (modalityDropped > 0) {
     options.log?.(
       `[attachments] отброшено вложений: ${modalityDropped} (причина: modality — модель не принимает такой тип)`,
+    );
+  }
+  if (unavailableDropped > 0) {
+    options.log?.(
+      `[attachments] отброшено вложений: ${unavailableDropped} (причина: unavailable — объект недоступен)`,
     );
   }
 
@@ -252,20 +365,41 @@ export async function hydrateMessageAttachments(
 
   candidates.forEach((candidate, position) => {
     if (position < droppedCount) {
-      const list = droppedByMessage.get(candidate.messageIndex) ?? [];
-      list.push({
+      addDrop(candidate.messageIndex, candidate.blobPath, {
         mime: candidate.attachment.mime,
         ...(candidate.attachment.name ? { name: candidate.attachment.name } : {}),
         sizeBytes: candidate.sizeBytes,
         reason: 'limit',
       });
-      droppedByMessage.set(candidate.messageIndex, list);
       return;
     }
     const list = attachmentsByMessage.get(candidate.messageIndex) ?? [];
     list.push(candidate.attachment);
     attachmentsByMessage.set(candidate.messageIndex, list);
   });
+
+  // 4. Материализация отброшенного в рабочем каталоге (ADR-115): файл не
+  // отправлен модели, но пользователь его приложил — путь даёт доступ тулами.
+  // Ошибка материализации не мешает ходу: строка останется без пути.
+  if (options.materialize && droppedByMessage.size > 0) {
+    for (const entries of droppedByMessage.values()) {
+      for (const entry of entries) {
+        try {
+          entry.path = await options.materialize({
+            ...(entry.drop.name ? { name: entry.drop.name } : {}),
+            mime: entry.drop.mime,
+            blobPath: entry.blobPath,
+            reason: entry.drop.reason,
+          });
+        } catch (err) {
+          entry.path = null;
+          options.log?.(
+            `[attachments] не удалось сохранить вложение ${entry.blobPath}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+    }
+  }
 
   return messages.map((message, index) => {
     const attachments = attachmentsByMessage.get(index);
@@ -277,12 +411,17 @@ export async function hydrateMessageAttachments(
     const next: LLMMessage = { ...message };
     if (attachments && attachments.length > 0) next.attachments = attachments;
     if (dropped && dropped.length > 0) {
+      // Модель должна видеть, что вложение не доставлено и почему: иначе
+      // плейсхолдер `[file: …]` толкает её искать файл на диске. Один блок на
+      // сообщение (даже если отброшено несколько), порядок — как в обработке
+      // (модальность по частям, затем лимит объёма).
+      next.content = `${message.content}\n\n${dropsBlock(dropped, options.noticeTemplate)}`;
       const previous = Array.isArray(message.debug?.attachmentsDropped)
         ? (message.debug!.attachmentsDropped as DroppedAttachment[])
         : [];
       next.debug = {
         ...(message.debug ?? {}),
-        attachmentsDropped: [...previous, ...dropped],
+        attachmentsDropped: [...previous, ...dropped.map((entry) => entry.drop)],
       };
     }
     return next;

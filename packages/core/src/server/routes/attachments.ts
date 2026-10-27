@@ -29,6 +29,8 @@ export interface AttachmentRouteMessages {
   fileRequired: (c: Context) => string;
   tooLarge: (c: Context) => string;
   unsupportedMime: (c: Context, detail: string) => string;
+  /** ADR-115: вложения выключены администратором (`attachments.enabled=false`). */
+  attachmentsDisabled: (c: Context) => string;
 }
 
 const DEFAULT_MESSAGES: AttachmentRouteMessages = {
@@ -37,13 +39,18 @@ const DEFAULT_MESSAGES: AttachmentRouteMessages = {
   fileRequired: () => 'Файл не передан (ожидается поле file)',
   tooLarge: () => 'Размер вложения превышает допустимый',
   unsupportedMime: (_c, detail) => `Тип вложения не поддерживается: ${detail}`,
+  attachmentsDisabled: () => 'Вложения отключены администратором',
 };
 
 export interface AttachmentRoutesDeps {
   sessionManager: SessionManager;
   service: AttachmentService;
-  /** Лимиты вложений (`attachments.*`) — ранняя проверка тела до буферизации. */
-  config: AttachmentsConfig;
+  /**
+   * Лимиты вложений (`attachments.*`) — ранняя проверка тела до буферизации.
+   * Статический снимок **или** резолвер (ADR-115): runtime-настройки читаются
+   * на каждый запрос.
+   */
+  config: AttachmentsConfig | (() => AttachmentsConfig);
 }
 
 export interface AttachmentRoutesOptions {
@@ -61,7 +68,10 @@ export function createAttachmentRoutes(
 ): Hono {
   const app = new Hono();
   const messages: AttachmentRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
-  const { sessionManager, service, config } = deps;
+  const { sessionManager, service } = deps;
+  /** Эффективные настройки на текущий запрос (ADR-115: runtime без рестарта). */
+  const resolveConfig = (): AttachmentsConfig =>
+    typeof deps.config === 'function' ? deps.config() : deps.config;
   /**
    * Запас на multipart-обвязку (границы, заголовки частей): `formData()`
    * буферизует всё тело в память, поэтому по заявленному `content-length`
@@ -76,6 +86,14 @@ export function createAttachmentRoutes(
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    const config = resolveConfig();
+    if (!config.enabled) {
+      getAttachmentMetricsHook()?.onUpload({ outcome: 'unsupported', kind: 'file' });
+      return c.json(
+        { error: { code: 'attachments_disabled', message: messages.attachmentsDisabled(c) } },
+        415,
+      );
     }
 
     const declaredLength = Number.parseInt(c.req.header('content-length') ?? '', 10);
@@ -126,6 +144,12 @@ export function createAttachmentRoutes(
       if (err instanceof AttachmentError) {
         if (err.code === 'too_large') {
           return c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.tooLarge(c) } }, 413);
+        }
+        if (err.code === 'attachments_disabled') {
+          return c.json(
+            { error: { code: 'attachments_disabled', message: messages.attachmentsDisabled(c) } },
+            415,
+          );
         }
         return c.json(
           {
@@ -265,10 +289,20 @@ function matchesEtag(header: string | undefined, etag: string): boolean {
     .some((value) => value === '*' || value === etag);
 }
 
-/** `Content-Disposition: inline` с UTF-8-именем (RFC 6266/5987). */
+/**
+ * `Content-Disposition: inline` с UTF-8-именем (RFC 6266/5987).
+ *
+ * Значение HTTP-заголовка — Latin-1 (`ByteString`): не-ASCII символ в
+ * `filename="…"` роняет сборку `Response` (`TypeError: Cannot convert argument
+ * to a ByteString`, 500 на раздаче файла с кириллическим именем). Поэтому в
+ * `filename=` уходит ASCII-fallback (не-ASCII, кавычки, `\`, CR/LF → `_`),
+ * а настоящее имя передаётся рядом в `filename*` (UTF-8, RFC 5987).
+ */
 function contentDisposition(name: string | undefined): string {
-  const safe = (name ?? 'attachment').replace(/["\\\r\n]/g, '_');
-  const encoded = encodeURIComponent(name ?? 'attachment');
+  const raw = name ?? 'attachment';
+  const ascii = raw.replace(/[^\x20-\x7E]|["\\]/g, '_');
+  const safe = ascii === '' ? 'attachment' : ascii;
+  const encoded = encodeURIComponent(raw);
   return `inline; filename="${safe}"; filename*=UTF-8''${encoded}`;
 }
 

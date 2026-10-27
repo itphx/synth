@@ -117,6 +117,33 @@ export interface MediaPartData {
 | `engine/orchestrator/prompt-info.ts` | `PromptHistoryInfo.attachments` уже считает нетекстовые части (`:230-243`) — начинает учитывать медиа |
 | `engine/context/token-ratio.ts` | приблизительный учёт токенов медиа (по размеру/разрешению), чтобы бюджет промпта не «врал» |
 
+### Отброшенное вложение не теряется: материализация в workspace
+
+**Решение 2026-10-27.** Если вложение **не уходит** провайдеру (модель не принимает модальность —
+`reason: modality`; превышен суммарный лимит base64 — `limit`; объект недоступен — `unavailable`),
+байты всё равно сохраняются в рабочем каталоге проекта, а модели сообщается путь:
+
+- Материализация — `packages/core/src/engine/attachments/materialize.ts`
+  (`materializeAttachment`): `<workspace>/attachments/<name>`, имя санитайзится (последний сегмент
+  пути, без `..`/управляющих символов/кавычек, пусто → `attachment-<sha8>` от содержимого),
+  публикация атомарная (`tmp` в том же каталоге → `link`/`copyFile` с `COPYFILE_EXCL`), существующий
+  файл **не перезаписывается**; совпадающее содержимое дедуплицируется (тот же путь, копий нет),
+  иначе суффикс `-2`, `-3`, … . Возвращается путь **относительно workspace** (`attachments/<name>`);
+  ошибки (нет workspace/прав, объект не прочитан) → `null` — ход не падает.
+- Модель видит блок `[ATTACHMENTS NOT DELIVERED]` (один на сообщение, добавляется к `content`
+  LLM-сообщения; сохранённая история сессии не меняется): список `- {name} ({mime}) — {reason}`
+  и `; path: <путь>` у материализованных. Файл доступен инструментам (`read_file`/`glob`/shell) —
+  модель может прочитать его, обработать иначе или честно сказать пользователю, что формат не поддержан.
+- Шаблон блока — системный контекстный файл `packages/core/prompts/system/ATTACHMENTS_DROPPED.{ru,en}.md`
+  (плейсхолдер `{items}`; загрузка — `ContextConfig.getAttachmentsDroppedTemplate(language)`, override —
+  `{userDataDir}/user/system/ATTACHMENTS_DROPPED.{lang}.md`). Файла нет/он пуст — короткая техническая
+  строка на английском (канал LLM, ADR-041).
+- Workspace не готов (нет `project.workspace`/worktree) — материализация не выполняется, путь модели
+  не сообщается (блок остаётся со списком причин).
+- Уборка `attachments/` в workspace не автоматизирована: каталог живёт как обычные файлы проекта
+  (удаляется вместе с проектом/чистится пользователем). Предотвращения дублей между ходами —
+  дедуп по содержимому при том же имени; имена не «уникализируются» идентификатором сообщения.
+
 ## Модальности входа модели
 
 **Решение 2026-10-27: единственный источник истины — каталог провайдера при синхронизации моделей.**
@@ -238,6 +265,9 @@ export interface MediaPartData {
 - LLM: `LLMMessage.attachments`, гидратация из blob-порта (лимит 20 МиБ, фильтр по модальностям),
   OpenAI `image_url`/`input_audio`, Anthropic `image`/`document`; gateway не обфусцирует и не логирует
   base64 (payload-лог и debug-снимок — сводкой `{mime,name,sizeBytes}`);
+- отброшенное вложение (`modality`/`limit`/`unavailable`) материализуется в `<workspace>/attachments/`
+  (`engine/attachments/materialize.ts`), путь сообщается модели блоком `[ATTACHMENTS NOT DELIVERED]`
+  (шаблон — `prompts/system/ATTACHMENTS_DROPPED.{ru,en}.md`); нет workspace — блок без пути;
 - UI: композер (кнопка/drag&drop/paste, `prepareAttachmentFiles`: HEIC→JPEG, office→текст+картинки
   с группой), чипы и галерея, отправка `attachments`, рендер в ленте (изображения сеткой, audio/video
   `controls`, файлы чипом), гейт модальностей по `modalities`;
@@ -250,6 +280,7 @@ export interface MediaPartData {
   стороне остаются с неразрешённым `blobPath`;
 - черновики вложений не переживают переключение сессии (`attachmentDrafts` из §«UI»);
 - предобработка вне объёма: ASR/OCR/извлечение кадров/конвертация на сервере (видео принимается как `file`);
+- уборка `<workspace>/attachments/` не автоматизирована — каталог живёт как обычные файлы проекта;
 - `transcript` заполняется только тем, что пришло с клиента/провайдера.
 
 ## Открытые вопросы
@@ -271,3 +302,9 @@ export interface MediaPartData {
   единственный источник истины — каталог провайдера при синхронизации моделей → `ModelConfig.modalities`
   (+ ручной override). `GET /api/v2/models` отдаёт `modalities` только при заданном значении; неизвестные
   модальности → вложения **не** фильтруются (ошибку непринятого типа возвращает провайдер).
+- 2026-10-27 — **отброшенное вложение сохраняется в workspace** (решение владельца): при `modality`/`limit`/
+  `unavailable` файл материализуется в `<workspace>/attachments/<name>` (атомарно, дедуп по содержимому,
+  существующее не перезаписывается) и модели сообщается путь в блоке `[ATTACHMENTS NOT DELIVERED]`;
+  шаблон блока — системные промпты `packages/core/prompts/system/ATTACHMENTS_DROPPED.{ru,en}.md`
+  (плейсхолдер `{items}`, override `{userDataDir}/user/system/`), нет шаблона — техническая строка на
+  английском. Захардкоженные русские строки из `hydrate.ts` убраны. Без workspace — без пути.

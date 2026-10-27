@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentsConfig } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -57,7 +57,8 @@ import { MAX_DOOM_LOOP_COUNT } from './llm-error.js';
 import { WorktreeDirectoryMissingError } from './worktree/errors.js';
 import type { WorktreeService } from './worktree/service.js';
 // ADR-115: гидратация вложений сообщений (blob → base64) перед LLM-вызовом.
-import { createHydrateDeps, hydrateMessageAttachments, type HydrateDeps } from './attachments/hydrate.js';
+import { createHydrateDeps, hydrateMessageAttachments, type DroppedAttachmentRef, type HydrateDeps } from './attachments/hydrate.js';
+import { materializeAttachment } from './attachments/materialize.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
 import type { HookBus } from './hooks/hook-bus.js';
@@ -199,6 +200,17 @@ export interface OrchestratorOptions {
    * вложений их **не** фильтрует (решение 2026-10-27).
    */
   resolveModelModalities?: (providerName: string, modelId: string) => AttachmentModality[] | undefined;
+  /**
+   * ADR-115: live-конфиг вложений (`attachments.*`, runtime-настройки поверх
+   * config). Читается **на каждый ход** — изменение `workspaceFallback`
+   * применяется без рестарта.
+   *
+   * `workspaceFallback: false` — отброшенное вложение **не** сохраняется в
+   * `<workspace>/attachments/`: в блоке `[ATTACHMENTS NOT DELIVERED]` остаётся
+   * только причина, без `path`. Не задан (или `true`) — материализация включена
+   * (поведение по умолчанию).
+   */
+  attachmentsConfig?: () => AttachmentsConfig;
   /**
    * ADR-034/ADR-035: порт словарей классификации (микро-слой, threat-scan,
    * проектные инструкции). Продакшн передаёт `StorageContext.dictionaries`;
@@ -577,6 +589,12 @@ export class ChatOrchestrator {
    */
   private readonly _resolveModalities: ((providerName: string, modelId: string) => AttachmentModality[] | undefined) | null;
   /**
+   * ADR-115: live-конфиг вложений (runtime-настройки поверх config).
+   * `undefined` — резолвер не задан: `workspaceFallback` считается включённым
+   * (поведение по умолчанию), материализация отброшенных вложений выполняется.
+   */
+  private readonly _attachmentsConfig?: () => AttachmentsConfig;
+  /**
    * ADR-115: порты чтения вложений для гидратации (лениво — поверх blob-порта
    * по `dataDir`, как ssh-ключи/словари ниже). `null` — ещё не созданы.
    */
@@ -869,6 +887,9 @@ export class ChatOrchestrator {
     this._blobs = options.blobs ?? null;
     // ADR-115: модальности из конфига модели приоритетнее справочника.
     this._resolveModalities = options.resolveModelModalities ?? null;
+    // ADR-115: live-конфиг вложений — проверяется на каждый ход в
+    // `_processSetupDeps().hydrateAttachments` (без рестарта).
+    if (options.attachmentsConfig) this._attachmentsConfig = options.attachmentsConfig;
     this._gatewayPayloadLogPath = options.gatewayPayloadLogPath
       ?? join(options.dataDir || '/var/synth/data', 'audit', 'llm-payloads.jsonl');
     this._cachePolicy = options.cachePolicy ?? 'auto';
@@ -2006,6 +2027,15 @@ export class ChatOrchestrator {
     return this._attachmentHydrateDeps;
   }
 
+  /**
+   * ADR-115: шаблон блока «вложения не доставлены» для LLM-сообщения
+   * (`prompts/system/ATTACHMENTS_DROPPED.{lang}.md`). Файла нет / порт его не
+   * отдаёт — пустая строка: гидратация возьмёт техническую строку (en).
+   */
+  private _attachmentsDroppedTemplate(language: string): string {
+    return this._contextConfig?.getAttachmentsDroppedTemplate(language) ?? '';
+  }
+
   /** ADR-095 (шаг 6b-1): зависимости вынесенной подготовки запроса `_processMessage`. */
   private _processSetupDeps(): ProcessSetupDeps {
     return {
@@ -2047,11 +2077,33 @@ export class ChatOrchestrator {
       // ручной override); справочника нет. Модальности неизвестны — фильтра
       // нет, вложение уходит провайдеру как есть (его ошибку увидит
       // пользователь — тихая потеря вложения недопустима).
-      hydrateAttachments: (messages, source, target) =>
-        hydrateMessageAttachments(messages, source, this._getAttachmentHydrateDeps(), {
+      // Отброшенное вложение не теряется: копия кладётся в
+      // `<workspace>/attachments/`, путь сообщается модели блоком
+      // `[ATTACHMENTS NOT DELIVERED]` (шаблон — prompts/system, язык сессии).
+      // Резервный путь в workspace — под runtime-настройкой
+      // `attachments.workspaceFallback` (читается на каждый ход, live):
+      // `false` — файл не сохраняем, в блоке остаётся только причина.
+      hydrateAttachments: (messages, source, target) => {
+        const workspaceFallback = this._attachmentsConfig?.().workspaceFallback !== false;
+        return hydrateMessageAttachments(messages, source, this._getAttachmentHydrateDeps(), {
           modalities: this._resolveModalities?.(target.providerName, target.modelId),
+          noticeTemplate: this._attachmentsDroppedTemplate(target.language),
+          // Пустой `workingDir` (workspace не готов) — материализация вернёт null:
+          // путь модели не сообщается.
+          ...(workspaceFallback
+            ? {
+                materialize: (ref: DroppedAttachmentRef) => materializeAttachment({
+                  read: (blobPath) => this._getAttachmentHydrateDeps().read(blobPath),
+                  blobPath: ref.blobPath,
+                  name: ref.name,
+                  mime: ref.mime,
+                  workingDir: target.workingDir,
+                }),
+              }
+            : {}),
           log: (message) => warning('ATTACHMENTS', message),
-        }),
+        });
+      },
       // ADR-107: телеметрия блоков памяти в промпте хода.
       ...(this._onMemoryContext ? { onMemoryContext: this._onMemoryContext } : {}),
     };

@@ -303,6 +303,10 @@ export class MemoryContextFileRepository implements ContextFileRepository {
     return '';
   }
 
+  getAttachmentsDroppedTemplate(): string {
+    return '';
+  }
+
   getStickyNotesTemplate(): string {
     return '';
   }

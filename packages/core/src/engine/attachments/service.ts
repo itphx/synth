@@ -31,7 +31,7 @@ export const ATTACHMENT_DIR = 'attachments';
 export const ATTACHMENT_SIDECAR_SUFFIX = '.json';
 
 /** Код ошибки загрузки — маппится в HTTP на границе (`413`/`415`). */
-export type AttachmentErrorCode = 'too_large' | 'unsupported_mime';
+export type AttachmentErrorCode = 'too_large' | 'unsupported_mime' | 'attachments_disabled';
 
 /** Отказ загрузки вложения (лимит размера / недопустимый тип). */
 export class AttachmentError extends Error {
@@ -84,7 +84,14 @@ interface AttachmentSidecar {
 
 export interface AttachmentServiceDeps {
   blobs: BlobStore;
-  config: AttachmentsConfig;
+  /**
+   * Конфигурация вложений: статический снимок **или** резолвер (ADR-115).
+   *
+   * Резолвер читается на **каждый** вызов (`upload`): настройки из админки
+   * (`/api/v2/settings/attachments`) применяются без рестарта. Чтение
+   * (`resolve`/`read`/`buildMediaPart`) конфиг не использует.
+   */
+  config: AttachmentsConfig | (() => AttachmentsConfig);
   /** Лог предупреждений (по умолчанию `console.warn`). */
   log?: (message: string) => void;
   /**
@@ -97,15 +104,23 @@ export interface AttachmentServiceDeps {
 
 export class AttachmentService {
   private readonly _blobs: BlobStore;
-  private readonly _config: AttachmentsConfig;
+  private readonly _configSource: AttachmentsConfig | (() => AttachmentsConfig);
   private readonly _log: (message: string) => void;
   private readonly _metrics?: AttachmentMetricsHooks;
 
   constructor(deps: AttachmentServiceDeps) {
     this._blobs = deps.blobs;
-    this._config = deps.config;
+    this._configSource = deps.config;
     this._log = deps.log ?? ((message) => console.warn(message));
     this._metrics = deps.metrics;
+  }
+
+  /**
+   * Эффективная конфигурация на текущий момент (ADR-115): резолвер читается
+   * на каждый вызов — runtime-настройки из админки применяются сразу.
+   */
+  private get _config(): AttachmentsConfig {
+    return typeof this._configSource === 'function' ? this._configSource() : this._configSource;
   }
 
   /** Метрики вложений: явные из опций приоритетнее модульного sink'а. */
@@ -124,25 +139,32 @@ export class AttachmentService {
     declaredMime?: string;
   }): Promise<UploadedAttachmentMeta> {
     const raw = input.bytes;
+    // ADR-115: конфигурация читается на каждый вызов — runtime-настройки
+    // (мастер-выключатель, модальности, лимиты) применяются без рестарта.
+    const config = this._config;
     // ADR-094: метрики попыток — вид вложения best-effort (сигнатура → MIME),
     // чтобы отказ тоже был размечен (невалидный MIME всё равно имеет вид).
     const metrics = this._metricsHooks;
     const kind = metrics ? uploadKindHint(raw, input.declaredMime) : 'file';
+    if (!config.enabled) {
+      metrics?.onUpload({ outcome: 'unsupported', kind });
+      throw new AttachmentError('attachments_disabled', 'Вложения отключены администратором');
+    }
     if (raw.length === 0) {
       metrics?.onUpload({ outcome: 'unsupported', kind });
       throw new AttachmentError('unsupported_mime', 'Пустой файл: MIME по содержимому не определяется');
     }
-    if (raw.length > this._config.maxBytesPerFile) {
+    if (raw.length > config.maxBytesPerFile) {
       metrics?.onUpload({ outcome: 'too_large', kind });
       throw new AttachmentError(
         'too_large',
-        `Размер вложения ${raw.length} Б превышает предел ${this._config.maxBytesPerFile} Б`,
+        `Размер вложения ${raw.length} Б превышает предел ${config.maxBytesPerFile} Б`,
       );
     }
 
     const mime = this._resolveMime(raw, input.declaredMime);
     try {
-      this._assertAllowed(mime);
+      this._assertAllowed(mime, config);
     } catch (err) {
       metrics?.onUpload({ outcome: 'unsupported', kind: partTypeOf(mime) });
       throw err;
@@ -250,15 +272,24 @@ export class AttachmentService {
     return normalizeMime(declaredMime) ?? 'application/octet-stream';
   }
 
-  /** Проверка белого списка MIME (SVG запрещён всегда). */
-  private _assertAllowed(mime: string): void {
+  /** Проверка модальности и белого списка MIME (SVG запрещён всегда). */
+  private _assertAllowed(mime: string, config: AttachmentsConfig): void {
+    // ADR-115: выключенное семейство (`image`/`pdf`/`audio`/`video`) — отказ,
+    // даже если MIME проходит белый список префиксов.
+    const modality = attachmentModalityOf(mime);
+    if (modality && config.modalities?.[modality] === false) {
+      throw new AttachmentError(
+        'unsupported_mime',
+        `Категория вложений «${modality}» отключена в настройках`,
+      );
+    }
     if (mime === 'image/svg+xml') {
       throw new AttachmentError(
         'unsupported_mime',
         'Тип image/svg+xml запрещён: SVG может нести скрипт (XSS)',
       );
     }
-    const prefixes = this._config.allowedMimePrefixes ?? [];
+    const prefixes = config.allowedMimePrefixes ?? [];
     if (prefixes.length === 0) return;
     if (prefixes.some((prefix) => mime.startsWith(prefix))) return;
     throw new AttachmentError(
@@ -310,6 +341,18 @@ export function partTypeOf(mime: string): MediaPartType {
   if (mime.startsWith('audio/')) return 'audio';
   if (mime.startsWith('video/')) return 'video';
   return 'file';
+}
+
+/**
+ * ADR-115: семейство вложений по MIME (`image`/`pdf`/`audio`/`video`).
+ * `null` — MIME не относится к настраиваемым семействам (напр. `text/*`).
+ */
+export function attachmentModalityOf(mime: string): 'image' | 'pdf' | 'audio' | 'video' | null {
+  if (mime.startsWith('image/')) return 'image';
+  if (mime === 'application/pdf' || mime.startsWith('application/pdf')) return 'pdf';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('video/')) return 'video';
+  return null;
 }
 
 /**
