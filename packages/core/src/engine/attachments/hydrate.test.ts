@@ -570,6 +570,20 @@ describe('hydrateMessageAttachments: derive (ADR-115)', () => {
     ];
   }
 
+  function videoSource(): Message[] {
+    return [
+      sourceMessage({
+        parts: [
+          mediaPart('video', {
+            blobPath: 'attachments/aa/clip.mp4',
+            mime: 'video/mp4',
+            name: 'clip.mp4',
+          }),
+        ],
+      }),
+    ];
+  }
+
   it('модальность не принята + derive → текст в content, вложения нет, debug.attachmentsDerived=1', async () => {
     const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
     const derive = vi.fn(async () => 'Схема зала и подписи');
@@ -691,6 +705,39 @@ describe('hydrateMessageAttachments: derive (ADR-115)', () => {
     expect(result[0]!.attachments).toBeUndefined();
     expect(result[0]!.content).toBe('вопрос\n\n[audio: voice.ogg]\nтранскрипт голосового');
     expect(result[0]!.debug?.attachmentsDerived).toBe(1);
+    expect(deps.reads).toEqual([]);
+  });
+
+  it('video не доставляется нативно (адаптеры его не кодируют) + derive → кадры текстом', async () => {
+    const deps = makeDeps({ 'attachments/aa/clip.mp4': Buffer.from('ftyp') });
+    const derive = vi.fn(async () => 'На кадрах: двор и две машины');
+
+    const result = await hydrateMessageAttachments([llmMessage()], videoSource(), deps, {
+      modalities: ['text', 'video'],
+      canDeliverNative: () => false,
+      derive,
+    });
+
+    expect(derive).toHaveBeenCalledTimes(1);
+    expect(result[0]!.attachments).toBeUndefined();
+    expect(result[0]!.content).toBe('вопрос\n\n[video: clip.mp4]\nНа кадрах: двор и две машины');
+    expect(result[0]!.debug?.attachmentsDerived).toBe(1);
+  });
+
+  it('video без aux-модели → отброс modality, без тихой потери', async () => {
+    const deps = makeDeps({ 'attachments/aa/clip.mp4': Buffer.from('ftyp') });
+
+    const result = await hydrateMessageAttachments([llmMessage()], videoSource(), deps, {
+      modalities: ['text', 'video'],
+      canDeliverNative: () => false,
+      noticeTemplate: '{items}',
+    });
+
+    expect(result[0]!.attachments).toBeUndefined();
+    expect(result[0]!.content).toBe('вопрос\n\n- clip.mp4 (video/mp4) — modality');
+    expect(result[0]!.debug?.attachmentsDropped).toEqual([
+      { mime: 'video/mp4', name: 'clip.mp4', sizeBytes: 0, reason: 'modality' },
+    ]);
     expect(deps.reads).toEqual([]);
   });
 
