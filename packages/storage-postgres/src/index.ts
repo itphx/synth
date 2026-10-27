@@ -74,3 +74,12 @@ export type { ExternalCredentialPorts } from './ports/external-credentials.js';
 // `blob_refs`, миграция 024); байты объектов остаются на томе.
 export { buildBlobRefPorts, PgBlobRefRepository } from './ports/blob-refs.js';
 export type { BlobRefPorts } from './ports/blob-refs.js';
+// ADR-116: реестр установок пакетов расширений (ADR-086 §5; таблица
+// `pack_installations`, миграция 025) — SQL вместо переходно файловой реализации.
+export { buildPackPorts, PgPackRepository } from './ports/packs.js';
+export type { PackPorts } from './ports/packs.js';
+// ADR-116: legacy-пайплайны инстанса (ADR-051/ADR-100; таблицы
+// `pipeline_definitions`/`pipeline_instances`, миграция 025) — не путать с
+// движком пайплайнов ADR-101 (`ports/pipelines.ts`).
+export { buildLegacyPipelinePorts, PgPipelineRepository } from './ports/legacy-pipelines.js';
+export type { LegacyPipelinePorts } from './ports/legacy-pipelines.js';

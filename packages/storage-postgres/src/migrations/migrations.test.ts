@@ -1,6 +1,6 @@
 /**
  * Unit-тесты реестра миграций PostgreSQL-драйвера: новая миграция
- * `024_blob_refs` (ADR-115/ADR-116) зарегистрирована, идемпотентна и стоит
+ * `025_packs_pipelines` (ADR-116) зарегистрирована, идемпотентна и стоит
  * последней по версии.
  *
  * Живая БД не нужна: проверяется сам SQL (идемпотентность `IF NOT EXISTS`,
@@ -12,6 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import { MIGRATION_023_SESSION_WORKTREE } from './023-session-worktree.js';
 import { MIGRATION_024_BLOB_REFS } from './024-blob-refs.js';
+import { MIGRATION_025_PACKS_PIPELINES } from './025-packs-pipelines.js';
 import { MIGRATIONS, latestSchemaVersion } from './index.js';
 
 describe('миграция 023_session_worktree (ADR-114)', () => {
@@ -31,12 +32,11 @@ describe('миграция 023_session_worktree (ADR-114)', () => {
 });
 
 describe('миграция 024_blob_refs (ADR-115/ADR-116)', () => {
-  it('зарегистрирована в реестре под версией 24 и последняя по версии', () => {
+  it('зарегистрирована в реестре под версией 24', () => {
     const migration = MIGRATIONS.find((m) => m.version === 24);
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('024_blob_refs');
     expect(migration!.sql).toBe(MIGRATION_024_BLOB_REFS);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(24);
   });
 
   it('заводит таблицу blob_refs с первичным ключом по тройке и индексом по владельцу', () => {
@@ -50,6 +50,45 @@ describe('миграция 024_blob_refs (ADR-115/ADR-116)', () => {
   it('идемпотентна (IF NOT EXISTS)', () => {
     expect(MIGRATION_024_BLOB_REFS).not.toMatch(/CREATE TABLE(?! IF NOT EXISTS)/);
     expect(MIGRATION_024_BLOB_REFS).not.toMatch(/CREATE INDEX(?! IF NOT EXISTS)/);
+  });
+});
+
+describe('миграция 025_packs_pipelines (ADR-116)', () => {
+  it('зарегистрирована в реестре под версией 25 и последняя по версии', () => {
+    const migration = MIGRATIONS.find((m) => m.version === 25);
+    expect(migration).toBeDefined();
+    expect(migration!.id).toBe('025_packs_pipelines');
+    expect(migration!.sql).toBe(MIGRATION_025_PACKS_PIPELINES);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(25);
+  });
+
+  it('заводит таблицу реестра установок пакетов с ключом по имени', () => {
+    expect(MIGRATION_025_PACKS_PIPELINES).toContain(
+      'CREATE TABLE IF NOT EXISTS pack_installations',
+    );
+    expect(MIGRATION_025_PACKS_PIPELINES).toMatch(/name\s+text PRIMARY KEY/);
+    expect(MIGRATION_025_PACKS_PIPELINES).toMatch(/provides\s+jsonb NOT NULL/);
+    expect(MIGRATION_025_PACKS_PIPELINES).toMatch(/installed_at\s+timestamptz NOT NULL/);
+  });
+
+  it('заводит определения и экземпляры legacy-пайплайнов с индексами выборки', () => {
+    expect(MIGRATION_025_PACKS_PIPELINES).toContain(
+      'CREATE TABLE IF NOT EXISTS pipeline_definitions',
+    );
+    expect(MIGRATION_025_PACKS_PIPELINES).toContain(
+      'CREATE TABLE IF NOT EXISTS pipeline_instances',
+    );
+    expect(MIGRATION_025_PACKS_PIPELINES).toContain(
+      'CREATE INDEX IF NOT EXISTS pipeline_instances_pipeline_idx ON pipeline_instances (pipeline_id);',
+    );
+    expect(MIGRATION_025_PACKS_PIPELINES).toContain(
+      'CREATE INDEX IF NOT EXISTS pipeline_instances_created_idx ON pipeline_instances (created_at DESC);',
+    );
+  });
+
+  it('идемпотентна (IF NOT EXISTS)', () => {
+    expect(MIGRATION_025_PACKS_PIPELINES).not.toMatch(/CREATE TABLE(?! IF NOT EXISTS)/);
+    expect(MIGRATION_025_PACKS_PIPELINES).not.toMatch(/CREATE INDEX(?! IF NOT EXISTS)/);
   });
 });
 

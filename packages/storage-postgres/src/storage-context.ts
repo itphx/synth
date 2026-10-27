@@ -28,11 +28,17 @@
  *     git-worktree'ов; generic-таблица `documents`, `kind='worktree'`).
  *   - `buildBlobRefPorts(deps)`    → `blobRefs` (ADR-115/ADR-116 — учёт ссылок
  *     на объекты blob-хранилища; таблица `blob_refs`).
+ *   - `buildPackPorts(deps)`       → `packs` (ADR-086 §5 — реестр установок
+ *     пакетов расширений; таблица `pack_installations`).
+ *   - `buildLegacyPipelinePorts(deps)` → `pipelines` (ADR-051/ADR-100 — реестр
+ *     определений и экземпляров инстанса; таблицы `pipeline_definitions`/
+ *     `pipeline_instances`). Не путать с `buildPipelinePorts` (ADR-101).
  *
  * Все доменные порты реализованы поверх SQL; FS/package-bound порты (`skills`,
  * `contextFiles`, `blobs`) — **файловые реализации** core (контент скиллов/
  * prompts-ролей и blob-дерево остаются на диске; ADR-091/ADR-092: ФС-периметр
- * вне портов).
+ * вне портов). `packs` и legacy `pipelines` — **SQL** (ADR-116): таблицы
+ * `pack_installations`/`pipeline_definitions`/`pipeline_instances`, миграция 025.
  *
  * Осознанное исключение: драйвер в этой части **импортирует core рантаймом**
  * (`createFileStorage`), чтобы переиспользовать уже проверенные файловые
@@ -59,6 +65,10 @@ import { buildMemoryPorts } from './ports/memory.js';
 import type { CoreSyncDeps, PortDeps } from './ports/deps.js';
 import { buildEventPorts } from './ports/events.js';
 import { buildPipelinePorts } from './ports/pipelines.js';
+// ADR-116: реестр установок пакетов (ADR-086 §5) и legacy-пайплайны
+// (ADR-051/ADR-100) переведены в SQL (миграция `025_packs_pipelines`).
+import { buildPackPorts } from './ports/packs.js';
+import { buildLegacyPipelinePorts } from './ports/legacy-pipelines.js';
 import { buildQuestionPorts } from './ports/questions.js';
 import { buildBackgroundRunPorts } from './ports/background-runs.js';
 import { buildWorktreePorts } from './ports/worktrees.js';
@@ -211,12 +221,11 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     skills: file.skills,
     contextFiles: file.contextFiles,
     blobs: file.blobs,
-    // ADR-051/ADR-100 (пайплайны) и ADR-086 §5 (реестр установок пакетов) —
-    // переходно файловые (тот же FS/package-bound класс портов, что и выше):
-    // SQL-реализация этих двух портов в драйвере ещё не заведена, домен к ним
-    // ещё не подключён (ADR-090 отложен). Контрактный suite проходит и на них
-    // (файловая реализация core), поэтому поведение backend'ов совпадает.
-    pipelines: file.pipelines,
-    packs: file.packs,
+    // ADR-116: реестр установок пакетов (ADR-086 §5) и legacy-пайплайны
+    // (ADR-051/ADR-100) — SQL-реализации (таблицы `pack_installations` /
+    // `pipeline_definitions` / `pipeline_instances`, миграция 025). До ADR-116
+    // они были переходно файловыми; контрактный suite проверяет SQL.
+    ...buildPackPorts(deps),
+    ...buildLegacyPipelinePorts(deps),
   };
 }

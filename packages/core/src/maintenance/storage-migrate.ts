@@ -13,7 +13,9 @@
 // projects (с `members`), profiles, settings (мапинг `load()` → сеттеры порта),
 // defaults, providers/models/agents, eventBindings, eventRoutes, eventApiKeys,
 // eventJournal, identityClaims, schedules, jobs, webhooks, webhookDeliveries,
-// sshKeys, serviceKeys, mcpRegistry, skillBundles, maintenanceAudit.
+// sshKeys, serviceKeys, mcpRegistry, skillBundles, packs (реестр установок
+// пакетов расширений, ADR-086 §5), pipelines (legacy-пайплайны инстанса —
+// определения и экземпляры, ADR-051/ADR-100), maintenanceAudit.
 //
 // ── Что НЕ переносится (осознанно) ────────────────────────────────────────
 // - `dedup` — транзиентный (окно идемпотентности событий живёт минуты);
@@ -37,6 +39,7 @@ import { readdir } from 'node:fs/promises';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { resolveStorageBackend } from '@itphx/synth-shared';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
+import { PIPELINE_INSTANCE_MAX_LIMIT } from '../storage/ports/pipeline-repository.js';
 import {
   buildStorageContext,
   type StorageBackendKind,
@@ -768,6 +771,58 @@ async function copySkillBundles(src: StorageContext, dst: StorageContext, ctx: C
   return counter;
 }
 
+/**
+ * Реестр установок пакетов расширений (ADR-086 §5): ключ записи — имя пакета.
+ * Запись переносится целиком, включая `manifest`, `files` (содержимое
+ * отложенной установки) и `provides` (id'ы поставленных сущностей).
+ */
+async function copyPacks(src: StorageContext, dst: StorageContext, ctx: CopyContext): Promise<Counter> {
+  const counter: Counter = { copied: 0, skipped: 0 };
+  for (const pack of await src.packs.list()) {
+    await _copyOne(
+      ctx.dryRun,
+      (await dst.packs.get(pack.name)) !== null,
+      () => dst.packs.save(pack),
+      counter,
+    );
+  }
+  return counter;
+}
+
+/**
+ * Legacy-пайплайны инстанса (ADR-051/ADR-100): определения, затем экземпляры
+ * прогонов — upsert по `id`. Провенанс (`installedBy`) и состояние шагов
+ * переносятся как есть; экземпляры читаются с потолком порта (1000) —
+ * превышение сопровождается предупреждением.
+ */
+async function copyPipelines(src: StorageContext, dst: StorageContext, ctx: CopyContext): Promise<Counter> {
+  const counter: Counter = { copied: 0, skipped: 0 };
+  for (const definition of await src.pipelines.listDefinitions()) {
+    await _copyOne(
+      ctx.dryRun,
+      (await dst.pipelines.getDefinition(definition.id)) !== null,
+      () => dst.pipelines.saveDefinition(definition),
+      counter,
+    );
+  }
+  const instances = await src.pipelines.listInstances({ limit: PIPELINE_INSTANCE_MAX_LIMIT });
+  if (instances.length >= PIPELINE_INSTANCE_MAX_LIMIT) {
+    ctx.warn(
+      `Предупреждение: экземпляров пайплайнов больше потолка порта (${PIPELINE_INSTANCE_MAX_LIMIT}) — ` +
+        `перенесены последние ${PIPELINE_INSTANCE_MAX_LIMIT}.`,
+    );
+  }
+  for (const instance of instances) {
+    await _copyOne(
+      ctx.dryRun,
+      (await dst.pipelines.getInstance(instance.id)) !== null,
+      () => dst.pipelines.saveInstance(instance),
+      counter,
+    );
+  }
+  return counter;
+}
+
 /** Аудит-журнал обслуживания: append-only, идентификатор — `ma_…`; исходный порядок. */
 async function copyMaintenanceAudit(src: StorageContext, dst: StorageContext, ctx: CopyContext): Promise<Counter> {
   const counter: Counter = { copied: 0, skipped: 0 };
@@ -830,6 +885,11 @@ const ENTITY_MIGRATORS: readonly EntityMigrator[] = [
   { entity: 'serviceKeys', copy: copyServiceKeys },
   { entity: 'mcpRegistry', copy: copyMcpRegistry },
   { entity: 'skillBundles', copy: copySkillBundles },
+  // ADR-116: реестр установок пакетов (ADR-086 §5) и legacy-пайплайны
+  // (ADR-051/ADR-100). Порядок: пакеты → пайплайны (пайплайн может быть
+  // поставлен пакетом — FK нет, порядок лишь для читаемости отчёта).
+  { entity: 'packs', copy: copyPacks },
+  { entity: 'pipelines', copy: copyPipelines },
   { entity: 'maintenanceAudit', copy: copyMaintenanceAudit },
   { entity: 'securityAudit', copy: copySecurityAudit },
   { entity: 'egressRequests', copy: copyEgressRequests },

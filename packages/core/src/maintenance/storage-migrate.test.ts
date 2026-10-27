@@ -146,6 +146,35 @@ async function seed(ctx: StorageContext): Promise<void> {
     origin: 'instance',
   });
   await ctx.skillBundles.set({ name: 'bundle-1', description: 'b', skills: ['a'] } as unknown as SkillBundle);
+  // ADR-116: реестр установок пакетов и legacy-пайплайны инстанса.
+  await ctx.packs.save({
+    name: 'synth-media',
+    version: '1.0.0',
+    kind: 'pack',
+    packType: 'skills',
+    description: 'медиа-пак',
+    status: 'active',
+    requiresApproval: false,
+    provides: { agents: [], skills: ['draft'], mcp: [], pipelines: [] },
+    installedAt: ISO,
+    updatedAt: ISO,
+  });
+  await ctx.pipelines.saveDefinition({
+    id: 'release',
+    name: 'Релиз',
+    steps: [{ id: 'step-1', kind: 'agent', prompt: 'собери релиз' }],
+    createdAt: ISO,
+    updatedAt: ISO,
+  });
+  await ctx.pipelines.saveInstance({
+    id: 'run-1',
+    pipelineId: 'release',
+    status: 'pending',
+    steps: [{ id: 'step-1', status: 'pending' }],
+    attempts: 0,
+    createdAt: ISO,
+    updatedAt: ISO,
+  });
   await ctx.maintenanceAudit.append({ id: 'ma-1', ts: ISO, op: 'backup.created', status: 'ok' });
 }
 
@@ -229,6 +258,9 @@ describe('migrateStorageData — перенос данных через порт
     expect((await target!.serviceKeys.list()).map((key) => key.label)).toEqual(['svc']);
     expect((await target!.mcpRegistry.getByName('srv'))?.name).toBe('srv');
     expect(await target!.skillBundles.exists('bundle-1')).toBe(true);
+    expect((await target!.packs.get('synth-media'))?.provides.skills).toEqual(['draft']);
+    expect((await target!.pipelines.getDefinition('release'))?.name).toBe('Релиз');
+    expect((await target!.pipelines.getInstance('run-1'))?.pipelineId).toBe('release');
     expect((await target!.maintenanceAudit.list()).map((entry) => entry.id)).toEqual(['ma-1']);
 
     // service-key и ключи привязок переносятся как есть (hash/prefix/id), webhooks — нет.
@@ -252,6 +284,9 @@ describe('migrateStorageData — перенос данных через порт
     expect(await target!.schedules.list()).toHaveLength(1);
     expect(await target!.maintenanceAudit.list()).toHaveLength(1);
     expect(await target!.eventBindings.list()).toHaveLength(1);
+    expect(await target!.packs.list()).toHaveLength(1);
+    expect(await target!.pipelines.listDefinitions()).toHaveLength(1);
+    expect(await target!.pipelines.listInstances()).toHaveLength(1);
   });
 
   it('service-key и event-ключ переносятся с исходными id/hash/prefix — выданные токены работают', async () => {

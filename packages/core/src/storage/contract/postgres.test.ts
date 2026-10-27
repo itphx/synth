@@ -253,9 +253,11 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
     makePort('credentialAudit'),
   );
 
-  // ADR-051/ADR-100 + ADR-086 §5: переходно файловые порты драйвера.
-  describePipelineRepository('PG → PipelineRepository (file-backed)', () => makePort('pipelines'));
-  describePackRepository('PG → PackRepository (file-backed)', () => makePort('packs'));
+  // ADR-051/ADR-100 + ADR-086 §5 + ADR-116: реестр установок пакетов и
+  // legacy-пайплайны инстанса — SQL (таблицы `pack_installations` /
+  // `pipeline_definitions` / `pipeline_instances`, миграция 025).
+  describePipelineRepository('PG → PipelineRepository', () => makePort('pipelines'));
+  describePackRepository('PG → PackRepository', () => makePort('packs'));
 
   // ADR-101 (Pipeline Engine): спецификации пайплайнов, прогоны и журнал.
   describeProjectPipelineRepository('PG → ProjectPipelineRepository', () =>
