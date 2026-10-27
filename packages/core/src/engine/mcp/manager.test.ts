@@ -1,13 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { McpManager } from './manager.js';
-import type { McpServerConfig, ToolContext, ToolDefinition } from '@itphx/synth-shared';
-import { ToolCapability } from '@itphx/synth-shared';
+import type { McpServerConfig, ToolContext, ToolDefinition, AttachmentsConfig } from '@itphx/synth-shared';
+import { attachmentsConfigSchema, ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { SessionManager } from '../../sessions/manager.js';
+import { AttachmentService } from '../attachments/service.js';
+import { MemoryBlobStore } from '../../storage/memory/content.js';
 
 const mockClientConnect = vi.fn<() => Promise<void>>();
 const mockClientDisconnect = vi.fn<() => Promise<void>>();
-const mockClientCallTool = vi.fn<() => Promise<{ content: string; isError: boolean }>>();
+const mockClientCallTool = vi.fn<() => Promise<{
+  content: string;
+  isError: boolean;
+  attachments?: Array<{ mime: string; name?: string; base64: string }>;
+}>>();
 /** Аргументы фактических вызовов McpClient.callTool (name, args, _meta). */
 let mockClientCallToolArgs: Array<{ name: string; args: Record<string, unknown>; meta?: Record<string, unknown> }> = [];
 let mockClientTools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> = [];
@@ -463,5 +469,142 @@ describe('McpManager', () => {
       manager.setNetworkPolicy({ mode: 'deny', list: ['10.0.0.0/8'] });
       await expect(manager.probeServer('http-srv')).rejects.toThrow('сетевой политикой');
     });
+  });
+});
+
+// ─── ADR-115 §«Медиа из инструментов»: MCP-результат → blob ─────────────────
+//
+// Клиент отдаёт base64 (транспорт), менеджер пишет байты через
+// `AttachmentService` (единственная точка записи) и возвращает **ссылки** в
+// `ToolResult.attachments`. Проверяем: успех, отсутствие сервиса, дедуп по
+// `blobPath`, отказ `upload` (пропуск, не падение) и `isError` (без загрузки).
+
+describe('McpManager: вложения MCP-результата (ADR-115)', () => {
+  /** PNG-сигнатура + полезная нагрузка (MIME определяется по содержимому). */
+  const PNG = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from('mcp-screenshot'),
+  ]);
+  const PNG_B64 = PNG.toString('base64');
+
+  function makeService(overrides: Partial<AttachmentsConfig> = {}) {
+    const config: AttachmentsConfig = { ...attachmentsConfigSchema.parse({}), ...overrides };
+    const service = new AttachmentService({
+      blobs: new MemoryBlobStore(),
+      config: () => config,
+    });
+    const upload = vi.spyOn(service, 'upload');
+    return { service, upload, config };
+  }
+
+  function makeCtx(extra: Record<string, unknown> = {}): ToolContext {
+    return { sessionId: 'sess-att', messageId: 'msg-1', workingDir: '/tmp', extra };
+  }
+
+  let localManager: McpManager;
+  let localRegistry: ToolRegistry;
+
+  beforeEach(() => {
+    mockClientConnect.mockResolvedValue(undefined);
+    mockClientCallTool.mockResolvedValue({ content: 'готово', isError: false });
+    mockClientTools = [{ name: 'screenshot', description: 'Снимок', inputSchema: { type: 'object' } }];
+    mockClientConnected = true;
+    localManager = new McpManager();
+    localManager.setConfig({ 'test-server': makeStdioConfig() });
+    localRegistry = makeMockToolRegistry();
+  });
+
+  it('image → upload → ToolResult.attachments (ссылка, не байты)', async () => {
+    mockClientCallTool.mockResolvedValueOnce({
+      content: 'снимок готов',
+      isError: false,
+      attachments: [{ mime: 'image/png', base64: PNG_B64 }],
+    });
+    const { service, upload } = makeService();
+    await localManager.registerTools('test-server', localRegistry);
+    const tool = localRegistry.get('test-server_screenshot')!;
+
+    const result = await tool.execute({}, makeCtx({ attachmentService: service }));
+
+    expect(result.isError).toBe(false);
+    expect(result.content).toBe('снимок готов');
+    expect(result.attachments).toHaveLength(1);
+    const ref = result.attachments![0]!;
+    expect(ref.blobPath).toMatch(/^attachments\/[0-9a-f]{2}\/[0-9a-f]{64}$/);
+    expect(ref.mime).toBe('image/png');
+    expect(ref.size).toBe(PNG.length);
+    expect(ref.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(upload.mock.calls[0]![0]).toMatchObject({ sessionId: 'sess-att', declaredMime: 'image/png' });
+  });
+
+  it('нет сервиса вложений — текст без вложений, без падения', async () => {
+    mockClientCallTool.mockResolvedValueOnce({
+      content: 'снимок готов',
+      isError: false,
+      attachments: [{ mime: 'image/png', base64: PNG_B64 }],
+    });
+    await localManager.registerTools('test-server', localRegistry);
+    const tool = localRegistry.get('test-server_screenshot')!;
+
+    const result = await tool.execute({}, makeCtx());
+
+    expect(result.content).toBe('снимок готов');
+    expect(result.attachments).toBeUndefined();
+  });
+
+  it('несколько блоков: дедуп по blobPath, разные — обе ссылки', async () => {
+    const other = Buffer.concat([PNG, Buffer.from('-2')]);
+    mockClientCallTool.mockResolvedValueOnce({
+      content: 'два кадра',
+      isError: false,
+      attachments: [
+        { mime: 'image/png', base64: PNG_B64 },
+        { mime: 'image/png', base64: PNG_B64 }, // те же байты — тот же объект
+        { mime: 'image/png', base64: other.toString('base64') },
+      ],
+    });
+    const { service } = makeService();
+    await localManager.registerTools('test-server', localRegistry);
+    const tool = localRegistry.get('test-server_screenshot')!;
+
+    const result = await tool.execute({}, makeCtx({ attachmentService: service }));
+
+    expect(result.attachments).toHaveLength(2);
+    expect(new Set(result.attachments!.map((ref) => ref.blobPath)).size).toBe(2);
+  });
+
+  it('отказ upload (вложения отключены) — пропуск, вызов не падает', async () => {
+    mockClientCallTool.mockResolvedValueOnce({
+      content: 'снимок готов',
+      isError: false,
+      attachments: [{ mime: 'image/png', base64: PNG_B64 }],
+    });
+    const { service } = makeService({ enabled: false });
+    await localManager.registerTools('test-server', localRegistry);
+    const tool = localRegistry.get('test-server_screenshot')!;
+
+    const result = await tool.execute({}, makeCtx({ attachmentService: service }));
+
+    expect(result.content).toBe('снимок готов');
+    expect(result.isError).toBe(false);
+    expect(result.attachments).toBeUndefined();
+  });
+
+  it('isError: вложения не загружаются', async () => {
+    mockClientCallTool.mockResolvedValueOnce({
+      content: 'упало',
+      isError: true,
+      attachments: [{ mime: 'image/png', base64: PNG_B64 }],
+    });
+    const { service, upload } = makeService();
+    await localManager.registerTools('test-server', localRegistry);
+    const tool = localRegistry.get('test-server_screenshot')!;
+
+    const result = await tool.execute({}, makeCtx({ attachmentService: service }));
+
+    expect(result.isError).toBe(true);
+    expect(result.attachments).toBeUndefined();
+    expect(upload).not.toHaveBeenCalled();
   });
 });

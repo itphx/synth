@@ -152,7 +152,38 @@ export interface McpToolInfo {
 export interface McpToolResult {
   content: string;
   isError: boolean;
+  /**
+   * ADR-115/ADR-077: нетекстовые блоки результата (`image`/`audio`/
+   * `resource.blob`) в base64 — их материализует в blob-хранилище control plane
+   * (`McpManager` → `AttachmentService`). `isError` → не собираются.
+   */
+  attachments?: McpAttachmentPayload[];
 }
+
+/**
+ * Вложение MCP-результата на проводе (ADR-115).
+ *
+ * `base64` — **без** `data:`-префикса; `mime` — из блока MCP (`mimeType`),
+ * истинный тип определит сервис вложений control plane по сигнатуре.
+ */
+export interface McpAttachmentPayload {
+  mime: string;
+  /** Имя файла: у `resource` — из `uri`, у `image`/`audio` в MCP его нет. */
+  name?: string;
+  base64: string;
+}
+
+/**
+ * Потолок одного вложения, байт (как в core-клиенте — 25 МиБ).
+ *
+ * Значение — транспортная отсечка: блок больше не декодируется дальше и не
+ * едет по проводу. Настоящий лимит файла применяет control plane
+ * (`AttachmentService`, `attachments.maxBytesPerFile`).
+ */
+export const MCP_ATTACHMENT_MAX_BYTES_PER_FILE = 25 * 1024 * 1024;
+
+/** Суммарный потолок вложений одного вызова, байт (как в core — 20 МиБ). */
+export const MCP_ATTACHMENT_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
 
 /** Класс ошибки MCP-хоста (HTTP-слой превращает её в код ответа). */
 export type ExecutorMcpErrorKind =
@@ -321,22 +352,31 @@ export class ExecutorMcpHost {
         this._toolTimeoutMs,
         `Таймаут вызова инструмента "${tool}" (${this._toolTimeoutMs} мс)`,
       );
-      const textParts = extractText(result.content);
+      const parts = collectMcpContent(result.content);
       if (result.isError) {
         // Текст ошибки инструмента — тоже «текст ошибки»: секреты из env
-        // сервера вычищаются (сервер мог напечатать свой токен).
+        // сервера вычищаются (сервер мог напечатать свой токен). Вложения
+        // ошибки не собираются — в контекст не тащим мусор сбоя.
         return {
-          content: redactSecrets(textParts.join('\n') || 'Инструмент вернул ошибку', entry.spec),
+          content: redactSecrets(parts.texts.join('\n') || 'Инструмент вернул ошибку', entry.spec),
           isError: true,
         };
       }
-      let content = textParts.join('\n') || 'Инструмент выполнен (пустой результат)';
+      let content =
+        parts.texts.join('\n') ||
+        (parts.attachments.length > 0
+          ? attachmentsOnlyText(parts.attachments.length)
+          : 'Инструмент выполнен (пустой результат)');
       if (content.length > MCP_MAX_RESULT_CHARS) {
         content =
           content.slice(0, MCP_MAX_RESULT_CHARS) +
           `\n\n...(усечено, полный размер: ${content.length} символов)`;
       }
-      return { content, isError: false };
+      return {
+        content,
+        isError: false,
+        ...(parts.attachments.length > 0 ? { attachments: parts.attachments } : {}),
+      };
     } catch (err) {
       if (err instanceof ExecutorMcpError) throw err;
       this._recordError(entry);
@@ -509,14 +549,117 @@ async function withTimeout<T>(
   }
 }
 
-/** Текстовые части результата MCP-вызова. */
-function extractText(content: unknown): string[] {
-  if (!Array.isArray(content)) return [];
-  const parts: string[] = [];
-  for (const item of content as Array<{ type?: unknown; text?: unknown }>) {
-    if (item?.type === 'text' && typeof item.text === 'string') parts.push(item.text);
+/** Текстовые и нетекстовые части результата MCP-вызова. */
+export interface McpContentParts {
+  texts: string[];
+  attachments: McpAttachmentPayload[];
+}
+
+/** Пределы вложений (по умолчанию — константы модуля). */
+export interface McpAttachmentLimits {
+  maxBytesPerFile?: number;
+  maxTotalBytes?: number;
+}
+
+/** Строгий разбор base64 (Node молча игнорирует мусор — сверяем обратное кодирование). */
+function decodeBase64Strict(data: string): Buffer | null {
+  const compact = data.replace(/\s+/g, '');
+  if (compact.length === 0 || compact.length % 4 !== 0) return null;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) return null;
+  try {
+    const bytes = Buffer.from(compact, 'base64');
+    if (bytes.length === 0) return null;
+    if (bytes.toString('base64').replace(/=+$/, '') !== compact.replace(/=+$/, '')) return null;
+    return bytes;
+  } catch {
+    return null;
   }
-  return parts;
+}
+
+/** Имя файла из `uri` ресурса (последний сегмент пути). */
+function resourceNameFromUri(uri: unknown): string | undefined {
+  if (typeof uri !== 'string' || uri.length === 0) return undefined;
+  const segment = uri.split(/[\\/]/).filter((part) => part.length > 0).pop();
+  if (!segment) return undefined;
+  try {
+    const decoded = decodeURIComponent(segment).trim();
+    return decoded.length > 0 ? decoded : undefined;
+  } catch {
+    return segment;
+  }
+}
+
+/**
+ * Разложить `content` MCP-вызова на текст и вложения (ADR-115).
+ *
+ * Правила **как в core-клиенте** (`packages/core/src/engine/mcp/client.ts`,
+ * `collectMcpContent`): `text`/`resource.text` — текст, `image`/`audio`/
+ * `resource.blob` — вложения; битый base64, пустой блок и превышение капов
+ * пропускаются (вызов не падает). Свой парсер здесь потому, что исполнитель не
+ * зависит от core рантаймом; расхождение правил ловится тестами обеих сторон.
+ */
+export function collectMcpContent(
+  content: unknown,
+  limits: McpAttachmentLimits = {},
+): McpContentParts {
+  const maxPerFile = limits.maxBytesPerFile ?? MCP_ATTACHMENT_MAX_BYTES_PER_FILE;
+  const maxTotal = limits.maxTotalBytes ?? MCP_ATTACHMENT_MAX_TOTAL_BYTES;
+  const texts: string[] = [];
+  const attachments: McpAttachmentPayload[] = [];
+  let total = 0;
+
+  const addAttachment = (mime: string, data: string, name?: string): void => {
+    const bytes = decodeBase64Strict(data);
+    if (!bytes) return;
+    if (bytes.length > maxPerFile) return;
+    if (total + bytes.length > maxTotal) return;
+    total += bytes.length;
+    attachments.push({ mime, base64: bytes.toString('base64'), ...(name ? { name } : {}) });
+  };
+
+  if (!Array.isArray(content)) return { texts, attachments };
+
+  for (const raw of content as Array<Record<string, unknown>>) {
+    if (!raw || typeof raw !== 'object') continue;
+    const type = raw.type;
+
+    if (type === 'text') {
+      if (typeof raw.text === 'string' && raw.text.length > 0) texts.push(raw.text);
+      continue;
+    }
+
+    if (type === 'image' || type === 'audio') {
+      if (typeof raw.data !== 'string' || raw.data.length === 0) continue;
+      const mime =
+        typeof raw.mimeType === 'string' && raw.mimeType.length > 0
+          ? raw.mimeType
+          : 'application/octet-stream';
+      addAttachment(mime, raw.data);
+      continue;
+    }
+
+    if (type === 'resource') {
+      const resource = raw.resource;
+      if (!resource || typeof resource !== 'object') continue;
+      const fields = resource as Record<string, unknown>;
+      const mime =
+        typeof fields.mimeType === 'string' && fields.mimeType.length > 0
+          ? fields.mimeType
+          : 'application/octet-stream';
+      if (typeof fields.blob === 'string' && fields.blob.length > 0) {
+        addAttachment(mime, fields.blob, resourceNameFromUri(fields.uri));
+        continue;
+      }
+      if (typeof fields.text === 'string' && fields.text.length > 0) texts.push(fields.text);
+    }
+  }
+
+  return { texts, attachments };
+}
+
+/** Заглушка текста, когда инструмент вернул только вложения (i18n-ключ `tool.mcp_attachments_only`). */
+function attachmentsOnlyText(count: number): string {
+  return `Инструмент вернул ${count} вложений (текста нет)`;
 }
 
 /** Код ошибки MCP «таймаут запроса» (`ErrorCode.RequestTimeout`). */

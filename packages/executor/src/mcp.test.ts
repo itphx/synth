@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   ExecutorMcpError,
   ExecutorMcpHost,
+  collectMcpContent,
   type McpServerSpec,
 } from './mcp.js';
 
@@ -247,5 +248,89 @@ describe('MCP-хостинг исполнителя: ошибки типизир
     const err = new ExecutorMcpError('unknown_tool', 'нет такого');
     expect(err).toBeInstanceOf(Error);
     expect(err.kind).toBe('unknown_tool');
+  });
+});
+
+// ─── ADR-115: вложения MCP-результата ──────────────────────────────────────
+//
+// Исполнитель не пишет блобы (у него нет каталога данных инстанса): он отдаёт
+// нетекстовые блоки в base64 (`attachments`), а материализует их control plane
+// (`McpManager` → `AttachmentService`). Проверяем извлечение блоков и капы.
+
+/** Те же байты, что отдаёт фикстура (`FIXTURE_PNG_BASE64` в test-fixtures). */
+const PNG_BASE64 = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.from('mcp-fixture-image'),
+]).toString('base64');
+
+describe('MCP-хостинг исполнителя: вложения (ADR-115)', () => {
+  it('текст + image: текст в content, картинка во вложениях', async () => {
+    const host = makeHost([spec()]);
+    const result = await host.callTool('test-mcp', 'shot', {});
+    expect(result.isError).toBe(false);
+    expect(result.content).toBe('снимок готов');
+    expect(result.attachments).toEqual([{ mime: 'image/png', base64: PNG_BASE64 }]);
+  });
+
+  it('только image: content — заглушка «N вложений (текста нет)»', async () => {
+    const host = makeHost([spec()]);
+    const result = await host.callTool('test-mcp', 'shot_only', {});
+    expect(result.content).toBe('Инструмент вернул 1 вложений (текста нет)');
+    expect(result.attachments).toHaveLength(1);
+  });
+
+  it('isError: вложения не собираются', async () => {
+    const host = makeHost([spec()]);
+    const result = await host.callTool('test-mcp', 'failing_shot', {});
+    expect(result.isError).toBe(true);
+    expect(result.content).toBe('снимок не удался');
+    expect(result.attachments).toBeUndefined();
+  });
+
+  it('resource с blob — вложение с именем из uri', async () => {
+    const host = makeHost([spec()]);
+    const result = await host.callTool('test-mcp', 'blob_resource', {});
+    expect(result.attachments).toEqual([
+      { mime: 'image/png', base64: PNG_BASE64, name: 'photo.png' },
+    ]);
+  });
+
+  it('resource с text — текст, а не вложение', async () => {
+    const host = makeHost([spec()]);
+    const result = await host.callTool('test-mcp', 'text_resource', {});
+    expect(result.content).toBe('# readme');
+    expect(result.attachments).toBeUndefined();
+  });
+});
+
+describe('collectMcpContent: капы (ADR-115)', () => {
+  const image = (data: string) => ({ type: 'image', data, mimeType: 'image/png' });
+
+  it('битый base64 — блок пропускается (SDK такое не пропускает, но граница своя)', () => {
+    const parts = collectMcpContent([
+      { type: 'image', data: 'не-base64-%%%', mimeType: 'image/png' },
+      { type: 'text', text: 'текст остаётся' },
+    ]);
+    expect(parts.attachments).toHaveLength(0);
+    expect(parts.texts).toEqual(['текст остаётся']);
+  });
+
+  it('превышение предела на файл — блок пропускается', () => {
+    const parts = collectMcpContent([image(PNG_BASE64)], { maxBytesPerFile: 4 });
+    expect(parts.attachments).toHaveLength(0);
+  });
+
+  it('суммарный предел — лишние блоки пропускаются', () => {
+    const size = Buffer.from(PNG_BASE64, 'base64').length;
+    const parts = collectMcpContent([image(PNG_BASE64), image(PNG_BASE64)], {
+      maxTotalBytes: size + 1,
+    });
+    expect(parts.attachments).toHaveLength(1);
+  });
+
+  it('неизвестный тип блока игнорируется', () => {
+    const parts = collectMcpContent([{ type: 'resource_link', uri: 'file:///x' }, image(PNG_BASE64)]);
+    expect(parts.texts).toEqual([]);
+    expect(parts.attachments).toHaveLength(1);
   });
 });

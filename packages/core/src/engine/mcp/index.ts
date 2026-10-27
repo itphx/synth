@@ -1,5 +1,13 @@
-export { McpClient, MAX_TOOL_RESULT_CHARS } from './client.js';
-export type { McpToolDef, McpToolResult, McpClientLike, McpClientOptions } from './client.js';
+export { McpClient, MAX_TOOL_RESULT_CHARS, collectMcpContent, mcpAttachmentsOnlyText, MCP_ATTACHMENT_MAX_BYTES_PER_FILE, MCP_ATTACHMENT_MAX_TOTAL_BYTES } from './client.js';
+export type {
+  McpToolDef,
+  McpToolResult,
+  McpAttachmentPayload,
+  McpAttachmentLimits,
+  McpContentParts,
+  McpClientLike,
+  McpClientOptions,
+} from './client.js';
 export {
   McpCredentialError,
   createCredentialFetch,

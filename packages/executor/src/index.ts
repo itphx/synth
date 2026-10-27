@@ -51,6 +51,7 @@ export type {
   McpToolInfoBody,
   McpCallRequestBody,
   McpCallResultBody,
+  McpAttachmentPayloadBody,
   SpawnExecRequest,
   SpawnExecResponse,
   BackgroundProcessStatus,
@@ -138,6 +139,9 @@ export {
   MCP_CIRCUIT_THRESHOLD,
   MCP_CIRCUIT_COOLDOWN_MS,
   MCP_INHERITED_ENV_VARS,
+  MCP_ATTACHMENT_MAX_BYTES_PER_FILE,
+  MCP_ATTACHMENT_MAX_TOTAL_BYTES,
+  collectMcpContent,
   sanitizeError,
   redactSecrets,
 } from './mcp.js';
@@ -148,6 +152,9 @@ export type {
   McpToolDef,
   McpToolInfo,
   McpToolResult,
+  McpAttachmentPayload,
+  McpAttachmentLimits,
+  McpContentParts,
   ExecutorMcpErrorKind,
   ExecutorMcpHostOptions,
 } from './mcp.js';

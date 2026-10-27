@@ -229,4 +229,28 @@ describe('исполнитель: MCP-эндпоинты — вызов инст
     expect(res.status).toBe(200);
     expect(await res.text()).not.toContain('super-secret-value');
   });
+
+  // ADR-115 (протокол 5): нетекстовые блоки едут отдельным полем `attachments`,
+  // а текстовый ответ остаётся прежним (поле аддитивное — старый клиент его не читает).
+  it('ответ с вложениями — attachments в теле', async () => {
+    const app = makeApp([spec()]);
+    const res = await call(app, { server: 'test-mcp', tool: 'shot' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      content: string;
+      isError: boolean;
+      attachments?: Array<{ mime: string; base64: string; name?: string }>;
+    };
+    expect(body.content).toBe('снимок готов');
+    expect(body.attachments).toHaveLength(1);
+    expect(body.attachments![0]!.mime).toBe('image/png');
+    expect(body.attachments![0]!.base64.length).toBeGreaterThan(0);
+  });
+
+  it('текстовый ответ — без поля attachments (старый клиент не падает)', async () => {
+    const app = makeApp([spec()]);
+    const res = await call(app, { server: 'test-mcp', tool: 'echo', arguments: { text: 'ок' } });
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('attachments');
+  });
 });

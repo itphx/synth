@@ -108,6 +108,13 @@ import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
 /**
  * Версия wire-протокола исполнителя.
  *
+ * **5** — вложения MCP-результата (`attachments[]` в ответе `POST /mcp/call`,
+ * ADR-115/ADR-077): нетекстовые блоки (`image`/`audio`/`resource.blob`)
+ * передаются в base64, control plane материализует их в blob-хранилище.
+ * Признак — `features.mcpAttachments: true`. Старый исполнитель (≤ 4) вложений
+ * не отдаёт — control plane работает как прежде, только с текстом (деградация
+ * без падения).
+ *
  * **4** — добавлены секреты вызова (`secrets[]` в `POST /exec`, ADR-077,
  * «Обновлено 2026-10-26», (б)). Старый исполнитель (версии 1–3) их не знает ⇒
  * control plane и исполнитель обязаны быть **одной версии** (ADR-077,
@@ -120,7 +127,7 @@ import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
  * **2** — добавлены MCP-эндпоинты (`/mcp/servers`, `/mcp/tools`,
  * `/mcp/call`).
  */
-export const EXECUTOR_PROTOCOL_VERSION = 4;
+export const EXECUTOR_PROTOCOL_VERSION = 5;
 
 /** Причина неудачи на проводе. */
 export type ExecutorErrorReason =
@@ -217,6 +224,9 @@ export interface ExecutorCapabilities {
    *
    * `secrets: true` — исполнитель принимает секреты вызова (`secrets[]` в
    * `POST /exec`, протокол 4).
+   *
+   * `mcpAttachments: true` — исполнитель отдаёт нетекстовые вложения
+   * MCP-результата (`attachments[]` в `POST /mcp/call`, протокол 5, ADR-115).
    */
   features?: ExecutorFeatures;
 }
@@ -227,6 +237,8 @@ export interface ExecutorFeatures {
   background?: boolean;
   /** Секреты вызова (`secrets[]` в `POST /exec`, протокол 4). */
   secrets?: boolean;
+  /** Вложения MCP-результата (`attachments[]` в `POST /mcp/call`, протокол 5). */
+  mcpAttachments?: boolean;
 }
 
 /** Ответ `GET /health`. */
@@ -280,6 +292,22 @@ export interface McpCallResultBody {
   content: string;
   /** Инструмент отработал с ошибкой (сам вызов состоялся). */
   isError: boolean;
+  /**
+   * ADR-115 (протокол 5): нетекстовые блоки результата в base64. Поле
+   * аддитивное — старый control plane его просто не читает; `isError` → не
+   * заполняется.
+   */
+  attachments?: McpAttachmentPayloadBody[];
+}
+
+/** Вложение MCP-результата на проводе (ADR-115). */
+export interface McpAttachmentPayloadBody {
+  /** MIME из блока MCP (`mimeType`); уточняется сервисом вложений control plane. */
+  mime: string;
+  /** Имя файла, если оно есть в блоке (`resource.uri`). */
+  name?: string;
+  /** Содержимое в base64 (без `data:`-префикса). */
+  base64: string;
 }
 
 /** Разбор тела запроса `POST /mcp/call` → валидный запрос или причина отказа. */

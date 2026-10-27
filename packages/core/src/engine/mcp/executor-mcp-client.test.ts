@@ -120,6 +120,88 @@ describe('ExecutorMcpClient: вызов через /mcp/call', () => {
     expect(result.content).toContain('не найден у исполнителя');
   });
 
+  it('ADR-115: attachments ответа исполнителя пробрасываются в McpToolResult', async () => {
+    const fetchImpl = makeFetch((url) => {
+      if (url.endsWith('/mcp/tools')) return json([]);
+      if (url.endsWith('/mcp/servers')) return json([{ name: 'playwright-mcp', status: 'up', toolCount: 0 }]);
+      return json({
+        content: 'снимок готов',
+        isError: false,
+        attachments: [
+          { mime: 'image/png', base64: 'iVBORw0KGgo=', name: 'shot.png' },
+          { mime: 'audio/wav', base64: 'UklGRg==' },
+          { mime: '', base64: 'AAAA' }, // невалидная запись — пропускается
+        ],
+      });
+    });
+    const pool = new ExecutorMcpPool({ urls: ['http://exec-a'], token: TOKEN, fetchImpl });
+    const client = new ExecutorMcpClient('playwright-mcp', pool);
+    await client.connect();
+
+    const result = await client.callTool('browser_screenshot', {});
+
+    expect(result.content).toBe('снимок готов');
+    expect(result.attachments).toEqual([
+      { mime: 'image/png', base64: 'iVBORw0KGgo=', name: 'shot.png' },
+      { mime: 'audio/wav', base64: 'UklGRg==' },
+    ]);
+  });
+
+  it('ADR-115: только вложения без текста — заглушка про количество', async () => {
+    const fetchImpl = makeFetch((url) => {
+      if (url.endsWith('/mcp/tools')) return json([]);
+      if (url.endsWith('/mcp/servers')) return json([{ name: 'playwright-mcp', status: 'up', toolCount: 0 }]);
+      return json({
+        content: '',
+        isError: false,
+        attachments: [{ mime: 'image/png', base64: 'iVBORw0KGgo=' }],
+      });
+    });
+    const pool = new ExecutorMcpPool({ urls: ['http://exec-a'], token: TOKEN, fetchImpl });
+    const client = new ExecutorMcpClient('playwright-mcp', pool);
+    await client.connect();
+
+    const result = await client.callTool('browser_screenshot', {});
+
+    expect(result.content).toBe('Инструмент вернул 1 вложений (текста нет)');
+    expect(result.attachments).toHaveLength(1);
+  });
+
+  it('ADR-115: isError — вложения из ответа не берутся', async () => {
+    const fetchImpl = makeFetch((url) => {
+      if (url.endsWith('/mcp/tools')) return json([]);
+      if (url.endsWith('/mcp/servers')) return json([{ name: 'playwright-mcp', status: 'up', toolCount: 0 }]);
+      return json({
+        content: 'упало',
+        isError: true,
+        attachments: [{ mime: 'image/png', base64: 'iVBORw0KGgo=' }],
+      });
+    });
+    const pool = new ExecutorMcpPool({ urls: ['http://exec-a'], token: TOKEN, fetchImpl });
+    const client = new ExecutorMcpClient('playwright-mcp', pool);
+    await client.connect();
+
+    const result = await client.callTool('browser_screenshot', {});
+
+    expect(result.isError).toBe(true);
+    expect(result.attachments).toBeUndefined();
+  });
+
+  it('ADR-115: старый исполнитель без поля attachments — только текст, без падения', async () => {
+    const fetchImpl = makeFetch((url) => {
+      if (url.endsWith('/mcp/tools')) return json([]);
+      if (url.endsWith('/mcp/servers')) return json([{ name: 'playwright-mcp', status: 'up', toolCount: 0 }]);
+      return json({ content: 'старый ответ', isError: false });
+    });
+    const pool = new ExecutorMcpPool({ urls: ['http://exec-a'], token: TOKEN, fetchImpl });
+    const client = new ExecutorMcpClient('playwright-mcp', pool);
+    await client.connect();
+
+    const result = await client.callTool('browser_screenshot', {});
+
+    expect(result).toEqual({ content: 'старый ответ', isError: false });
+  });
+
   it('усекает результат до 30 000 символов', async () => {
     const long = 'x'.repeat(MAX_TOOL_RESULT_CHARS + 500);
     const fetchImpl = makeFetch((url) => {

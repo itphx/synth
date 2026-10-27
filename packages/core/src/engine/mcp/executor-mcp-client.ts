@@ -33,9 +33,20 @@
  * Все запросы — через `egressFetch` (ADR-099, инвариант 22), а не `fetch`.
  * Bearer-токен исполнителя не логируется и вычищается из текстов ошибок
  * (сервер мог его отразить в теле).
+ *
+ * ## Вложения (ADR-115, протокол 5)
+ *
+ * Исполнитель отдаёт нетекстовые блоки MCP-результата (`image`/`audio`/
+ * `resource.blob`) полем `attachments[]` в ответе `POST /mcp/call`
+ * (`features.mcpAttachments`, протокол 5). Здесь они разбираются и
+ * пробрасываются в `McpToolResult.attachments` без декодирования — в
+ * blob-хранилище их пишет `McpManager` через `AttachmentService`.
+ * **Деградация:** исполнитель протокола ≤ 4 поля не отдаёт — результат
+ * остаётся текстовым, вызов не падает (проверять версию для этого не нужно:
+ * поле аддитивное).
  */
 
-import type { McpClientLike, McpToolDef, McpToolResult } from './client.js';
+import type { McpAttachmentPayload, McpClientLike, McpToolDef, McpToolResult } from './client.js';
 import { MAX_TOOL_RESULT_CHARS } from './client.js';
 import { egressFetch } from '../../security/tls.js';
 import { error as logError } from '../../logger.js';
@@ -98,6 +109,33 @@ export interface ExecutorMcpToolInfo {
 interface ExecutorMcpCallResult {
   content?: unknown;
   isError?: unknown;
+  /**
+   * ADR-115 (протокол 5): нетекстовые вложения MCP-результата. Старый
+   * исполнитель поля не отдаёт — работаем как прежде (только текст).
+   */
+  attachments?: unknown;
+}
+
+/**
+ * Разобрать `attachments` ответа исполнителя.
+ *
+ * Валидация структурная (mime/base64 — непустые строки): байты заново не
+ * декодируются, кап объёма уже применён исполнителем, а настоящий лимит файла
+ * проверит `AttachmentService.upload` на стороне control plane (единственная
+ * точка записи). Некорректные записи пропускаются — результат вызова важнее.
+ */
+function parseAttachments(raw: unknown): McpAttachmentPayload[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const attachments: McpAttachmentPayload[] = [];
+  for (const item of raw as Array<Record<string, unknown>>) {
+    if (!item || typeof item !== 'object') continue;
+    const mime = typeof item.mime === 'string' && item.mime.length > 0 ? item.mime : undefined;
+    const base64 = typeof item.base64 === 'string' && item.base64.length > 0 ? item.base64 : undefined;
+    if (!mime || !base64) continue;
+    const name = typeof item.name === 'string' && item.name.length > 0 ? item.name : undefined;
+    attachments.push({ mime, base64, ...(name ? { name } : {}) });
+  }
+  return attachments.length > 0 ? attachments : undefined;
 }
 
 /**
@@ -379,16 +417,21 @@ export class ExecutorMcpClient implements McpClientLike {
 
       const raw = typeof result?.content === 'string' ? result.content : '';
       const isError = result?.isError === true;
+      const attachments = isError ? undefined : parseAttachments(result?.attachments);
       let content = raw;
       if (!content) {
-        content = isError ? 'Инструмент вернул ошибку' : 'Инструмент выполнен (пустой результат)';
+        content = isError
+          ? 'Инструмент вернул ошибку'
+          : attachments
+            ? `Инструмент вернул ${attachments.length} вложений (текста нет)`
+            : 'Инструмент выполнен (пустой результат)';
       }
       if (content.length > MAX_TOOL_RESULT_CHARS) {
         content =
           content.slice(0, MAX_TOOL_RESULT_CHARS) +
           `\n\n...(усечено, полный размер: ${content.length} символов)`;
       }
-      return { content, isError };
+      return { content, isError, ...(attachments ? { attachments } : {}) };
     } catch (err) {
       const msg =
         err instanceof ExecutorMcpHttpError && err.status === 404

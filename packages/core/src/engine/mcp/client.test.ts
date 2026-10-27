@@ -4,9 +4,18 @@ import { egressFetch } from '../../security/tls.js';
 import { resetEgressProxyState, setEgressProxyConfig } from '../../security/proxy-state.js';
 import { resolveProxyConfig, type McpServerConfig } from '@itphx/synth-shared';
 
+/** Блок MCP-контента в тестах: текст и нетекстовые блоки (ADR-115). */
+type MockContentBlock = {
+  type: string;
+  text?: string;
+  data?: string;
+  mimeType?: string;
+  resource?: { uri?: string; mimeType?: string; blob?: string; text?: string };
+};
+
 const mockConnect = vi.fn<() => Promise<void>>();
 const mockListTools = vi.fn<() => Promise<{ tools: Array<{ name: string; description?: string; inputSchema: Record<string, unknown> }> }>>();
-const mockCallTool = vi.fn<(params: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }>; isError: boolean }>>();
+const mockCallTool = vi.fn<(params: Record<string, unknown>) => Promise<{ content: MockContentBlock[]; isError: boolean }>>();
 const mockClose = vi.fn<() => Promise<void>>();
 let mockInstructions: string | undefined;
 
@@ -347,5 +356,189 @@ describe('McpClient (пограничные случаи)', () => {
       url: undefined,
     } as McpServerConfig);
     await expect(client.connect()).rejects.toThrow('не указан URL');
+  });
+});
+
+describe('McpClient: вложения MCP-результата (ADR-115)', () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const PNG_B64 = PNG.toString('base64');
+
+  let client: McpClient;
+
+  /** Клиент с подключением (лимиты — по умолчанию или из теста). */
+  async function connectClient(
+    opts: { attachmentLimits?: { maxBytesPerFile?: number; maxTotalBytes?: number } } = {},
+  ): Promise<McpClient> {
+    const created = new McpClient('attachments', makeStdioConfig(), {
+      ...(opts.attachmentLimits ? { attachmentLimits: opts.attachmentLimits } : {}),
+    });
+    await created.connect();
+    return created;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConnect.mockResolvedValue(undefined);
+    mockClose.mockResolvedValue(undefined);
+    mockListTools.mockResolvedValue({ tools: [] });
+  });
+
+  afterEach(async () => {
+    if (client?.isConnected) await client.disconnect();
+  });
+
+  it('текст + image: текст в content, картинка во вложениях', async () => {
+    client = await connectClient();
+    mockCallTool.mockResolvedValueOnce({
+      content: [
+        { type: 'text', text: 'снимок готов' },
+        { type: 'image', data: PNG_B64, mimeType: 'image/png' },
+      ],
+      isError: false,
+    });
+
+    const result = await client.callTool('screenshot', {});
+
+    expect(result.isError).toBe(false);
+    expect(result.content).toBe('снимок готов');
+    expect(result.attachments).toEqual([{ mime: 'image/png', base64: PNG_B64 }]);
+  });
+
+  it('только image: content — заглушка «N вложений (текста нет)»', async () => {
+    client = await connectClient();
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: 'image', data: PNG_B64, mimeType: 'image/png' }],
+      isError: false,
+    });
+
+    const result = await client.callTool('screenshot', {});
+
+    expect(result.content).toBe('Инструмент вернул 1 вложений (текста нет)');
+    expect(result.attachments).toHaveLength(1);
+  });
+
+  it('audio-блок тоже становится вложением', async () => {
+    client = await connectClient();
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: 'audio', data: PNG_B64, mimeType: 'audio/wav' }],
+      isError: false,
+    });
+
+    const result = await client.callTool('record', {});
+
+    expect(result.attachments).toEqual([{ mime: 'audio/wav', base64: PNG_B64 }]);
+  });
+
+  it('isError: вложения не собираются (в контекст не тащим мусор сбоя)', async () => {
+    client = await connectClient();
+    mockCallTool.mockResolvedValueOnce({
+      content: [
+        { type: 'text', text: 'упало' },
+        { type: 'image', data: PNG_B64, mimeType: 'image/png' },
+      ],
+      isError: true,
+    });
+
+    const result = await client.callTool('screenshot', {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toBe('упало');
+    expect(result.attachments).toBeUndefined();
+  });
+
+  it('битый base64 пропускается (без падения вызова)', async () => {
+    client = await connectClient();
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: 'image', data: 'не-base64-%%%', mimeType: 'image/png' }],
+      isError: false,
+    });
+
+    const result = await client.callTool('screenshot', {});
+
+    expect(result.isError).toBe(false);
+    expect(result.attachments).toBeUndefined();
+    expect(result.content).toBe('Инструмент выполнен (пустой результат)');
+  });
+
+  it('превышение предела на файл — блок пропускается', async () => {
+    client = await connectClient({ attachmentLimits: { maxBytesPerFile: 4 } });
+    mockCallTool.mockResolvedValueOnce({
+      content: [
+        { type: 'text', text: 'слишком большой' },
+        { type: 'image', data: PNG_B64, mimeType: 'image/png' },
+      ],
+      isError: false,
+    });
+
+    const result = await client.callTool('screenshot', {});
+
+    expect(result.attachments).toBeUndefined();
+    expect(result.content).toBe('слишком большой');
+  });
+
+  it('превышение суммарного предела — лишние блоки пропускаются', async () => {
+    client = await connectClient({ attachmentLimits: { maxTotalBytes: PNG.length + 1 } });
+    mockCallTool.mockResolvedValueOnce({
+      content: [
+        { type: 'text', text: 'два кадра' },
+        { type: 'image', data: PNG_B64, mimeType: 'image/png' },
+        { type: 'image', data: PNG_B64, mimeType: 'image/png' },
+      ],
+      isError: false,
+    });
+
+    const result = await client.callTool('screenshot', {});
+
+    expect(result.attachments).toHaveLength(1);
+  });
+
+  it('resource с blob — вложение с именем из uri', async () => {
+    client = await connectClient();
+    mockCallTool.mockResolvedValueOnce({
+      content: [
+        {
+          type: 'resource',
+          resource: { uri: 'file:///tmp/dir/photo.png', mimeType: 'image/png', blob: PNG_B64 },
+        },
+      ],
+      isError: false,
+    });
+
+    const result = await client.callTool('read_resource', {});
+
+    expect(result.attachments).toEqual([
+      { mime: 'image/png', base64: PNG_B64, name: 'photo.png' },
+    ]);
+    expect(result.content).toBe('Инструмент вернул 1 вложений (текста нет)');
+  });
+
+  it('resource с text — это текст, а не вложение', async () => {
+    client = await connectClient();
+    mockCallTool.mockResolvedValueOnce({
+      content: [
+        { type: 'resource', resource: { uri: 'file:///tmp/readme.md', mimeType: 'text/markdown', text: '# readme' } },
+      ],
+      isError: false,
+    });
+
+    const result = await client.callTool('read_resource', {});
+
+    expect(result.content).toBe('# readme');
+    expect(result.attachments).toBeUndefined();
+  });
+
+  it('текст + resource.text склеиваются (поведение прежнее)', async () => {
+    client = await connectClient();
+    mockCallTool.mockResolvedValueOnce({
+      content: [
+        { type: 'text', text: 'первая' },
+        { type: 'resource', resource: { uri: 'file:///tmp/a.txt', text: 'вторая' } },
+      ],
+      isError: false,
+    });
+
+    const result = await client.callTool('read_resource', {});
+
+    expect(result.content).toBe('первая\nвторая');
   });
 });

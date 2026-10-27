@@ -2,8 +2,9 @@ import { z } from 'zod';
 import type { McpServerConfig, McpNetworkPolicy, McpRegistryAuthor, McpRegistryOrigin, McpRegistryTrust, ToolDefinition } from '@itphx/synth-shared';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
-import type { ToolContext, ToolResult } from '@itphx/synth-shared';
-import { McpClient, type McpClientLike } from './client.js';
+import type { ToolContext, ToolResult, ToolAttachmentRef } from '@itphx/synth-shared';
+import { McpClient, type McpClientLike, type McpToolResult } from './client.js';
+import type { AttachmentService } from '../attachments/service.js';
 import type { McpCredentialSource } from './credential-auth.js';
 import type { ExecutorMcpSource } from './executor-mcp-source.js';
 import { evaluateMcpNetworkAccess, hostFromUrl, isHttpMcpConfig } from './network-policy.js';
@@ -522,9 +523,11 @@ export class McpManager {
           if (sessionManager) {
             const store = new ObfuscationMapStore(sessionManager);
             const restored = await store.restoreForArgs(ctx.sessionId, args);
-            return client.callTool(tool.name, restored as Record<string, unknown>, meta);
+            const result = await client.callTool(tool.name, restored as Record<string, unknown>, meta);
+            return this._withAttachments(result, ctx, fullName);
           }
-          return client.callTool(tool.name, args, meta);
+          const result = await client.callTool(tool.name, args, meta);
+          return this._withAttachments(result, ctx, fullName);
         },
         jsonSchema: tool.inputSchema,
       };
@@ -540,6 +543,78 @@ export class McpManager {
       `Зарегистрировано ${registeredNames.length} инструментов сервера "${serverName}"`,
     );
     return registeredNames;
+  }
+
+  /**
+   * ADR-115 §«Медиа из инструментов»: вложения MCP-результата → blob-хранилище.
+   *
+   * Клиент отдаёт base64 (транспорт), а в `ToolResult` уходят **ссылки**
+   * (`ToolAttachmentRef`): байты пишет единственная точка записи —
+   * `AttachmentService.upload` (content-addressed дедуп, MIME по сигнатуре,
+   * модальности и лимиты `attachments.*`).
+   *
+   * Деградация (никогда не роняет вызов инструмента):
+   * - `isError` — вложения не собираются (мусор сбоя в контекст не тащим);
+   * - нет `ctx.extra.attachmentService` — возвращается только текст, причина в лог;
+   * - ошибка/лимит `upload` — блок пропускается, причина в лог.
+   */
+  private async _withAttachments(
+    result: McpToolResult,
+    ctx: ToolContext,
+    toolName: string,
+  ): Promise<ToolResult> {
+    const payloads = result.isError ? [] : (result.attachments ?? []);
+    if (payloads.length === 0) {
+      return { content: result.content, isError: result.isError };
+    }
+
+    const service = ctx.extra?.attachmentService as AttachmentService | undefined;
+    if (!service) {
+      warning(
+        `MCP`,
+        `"${toolName}": вложений ${payloads.length}, но сервис вложений недоступен — возвращён только текст`,
+      );
+      return { content: result.content, isError: result.isError };
+    }
+
+    const refs: ToolAttachmentRef[] = [];
+    const seen = new Set<string>();
+    for (const item of payloads) {
+      try {
+        const bytes = Buffer.from(item.base64, 'base64');
+        if (bytes.length === 0) {
+          warning(`MCP`, `"${toolName}": пустое вложение ${item.mime} пропущено`);
+          continue;
+        }
+        const meta = await service.upload({
+          sessionId: ctx.sessionId,
+          bytes,
+          declaredMime: item.mime,
+          ...(item.name ? { name: item.name } : {}),
+        });
+        // Дедуп по blobPath: одинаковые байты — один объект (content-addressed).
+        if (seen.has(meta.blobPath)) continue;
+        seen.add(meta.blobPath);
+        refs.push({
+          blobPath: meta.blobPath,
+          sha256: meta.sha256,
+          mime: meta.mime,
+          size: meta.size,
+          ...(meta.name ? { name: meta.name } : {}),
+        });
+      } catch (err) {
+        warning(
+          `MCP`,
+          `"${toolName}": вложение ${item.mime} не сохранено: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    return {
+      content: result.content,
+      isError: result.isError,
+      ...(refs.length > 0 ? { attachments: refs } : {}),
+    };
   }
 
   async deregisterTools(serverName: string, toolRegistry: ToolRegistry): Promise<void> {

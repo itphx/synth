@@ -21,7 +21,12 @@
  * - `boom` — возвращает ошибку инструмента (`isError`);
  * - `huge` — возвращает большой текст (проверка усечения);
  * - `slow` — спит `sleepMs` (по умолчанию 5000) мс (проверка таймаута вызова);
- * - `suicide` — завершает процесс сервера (проверка падения на лету).
+ * - `suicide` — завершает процесс сервера (проверка падения на лету);
+ * - `shot` — текст + блок `image` (вложение, ADR-115);
+ * - `shot_only` — только блок `image` (текста нет — заглушка);
+ * - `failing_shot` — `isError` + блок `image` (вложения ошибки не собираются);
+ * - `blob_resource` — блок `resource` с `blob` (вложение с именем из `uri`);
+ * - `text_resource` — блок `resource` с `text` (это текст, не вложение).
  *
  * Запуск: `node test-fixtures/mcp-stdio-server.mjs [--mode=normal]`
  */
@@ -30,6 +35,15 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { writeFileSync } from 'node:fs';
+
+/**
+ * Тестовый «скриншот»: PNG-сигнатура + полезная нагрузка. Значение совпадает в
+ * тестах (`mcp.test.ts`) — фикстура и проверка договариваются о байтах.
+ */
+const FIXTURE_PNG_BASE64 = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.from('mcp-fixture-image'),
+]).toString('base64');
 
 const modeArg = process.argv.find((arg) => arg.startsWith('--mode='));
 const mode = modeArg ? modeArg.slice('--mode='.length) : 'normal';
@@ -88,6 +102,31 @@ if (mode === 'hang') {
         description: 'Завершает процесс сервера',
         inputSchema: { type: 'object', properties: {} },
       },
+      {
+        name: 'shot',
+        description: 'Текст + картинка (вложение)',
+        inputSchema: { type: 'object', properties: {} },
+      },
+      {
+        name: 'shot_only',
+        description: 'Только картинка (без текста)',
+        inputSchema: { type: 'object', properties: {} },
+      },
+      {
+        name: 'failing_shot',
+        description: 'Ошибка инструмента с картинкой',
+        inputSchema: { type: 'object', properties: {} },
+      },
+      {
+        name: 'blob_resource',
+        description: 'Ресурс с base64-blob',
+        inputSchema: { type: 'object', properties: {} },
+      },
+      {
+        name: 'text_resource',
+        description: 'Ресурс с текстом',
+        inputSchema: { type: 'object', properties: {} },
+      },
     ],
   }));
 
@@ -119,6 +158,45 @@ if (mode === 'hang') {
       case 'suicide':
         setTimeout(() => process.exit(0), 10);
         return { content: [{ type: 'text', text: 'сервер уходит' }] };
+      case 'shot':
+        return {
+          content: [
+            { type: 'text', text: 'снимок готов' },
+            { type: 'image', data: FIXTURE_PNG_BASE64, mimeType: 'image/png' },
+          ],
+        };
+      case 'shot_only':
+        return { content: [{ type: 'image', data: FIXTURE_PNG_BASE64, mimeType: 'image/png' }] };
+      case 'failing_shot':
+        return {
+          isError: true,
+          content: [
+            { type: 'text', text: 'снимок не удался' },
+            { type: 'image', data: FIXTURE_PNG_BASE64, mimeType: 'image/png' },
+          ],
+        };
+      case 'blob_resource':
+        return {
+          content: [
+            {
+              type: 'resource',
+              resource: {
+                uri: 'file:///tmp/shots/photo.png',
+                mimeType: 'image/png',
+                blob: FIXTURE_PNG_BASE64,
+              },
+            },
+          ],
+        };
+      case 'text_resource':
+        return {
+          content: [
+            {
+              type: 'resource',
+              resource: { uri: 'file:///tmp/readme.md', mimeType: 'text/markdown', text: '# readme' },
+            },
+          ],
+        };
       default:
         return {
           isError: true,

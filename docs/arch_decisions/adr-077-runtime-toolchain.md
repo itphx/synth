@@ -1,6 +1,6 @@
 # ADR-077: Инструментальное окружение исполнения — единый порт ExecutionPort и режим remote
 
-> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула), **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`), **шаг B1** — исполнитель **хостит MCP-серверы у себя** (stdio) и отдаёт их инструменты и вызовы по HTTP (`GET /mcp/servers`, `GET /mcp/tools`, `POST /mcp/call`; эти эндпоинты появились в протоколе 2) и **шаг B2** — клиентская проводка MCP-stdio в control plane (источник `ExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе). **Актуальная версия протокола — 4** (секреты вызова `secrets[]`, ADR-077 «Обновлено 2026-10-26», (б); фоновые процессы — v3, ADR-113); совместимость проверяется полем `protocol` в `GET /capabilities`. Перенос git-операций control plane на `ExecutionPort` выполнен (`GitService` — argv через порт, `simple-git` удалён из core). **Доставка SSH/CA в split-режиме — реализована** (см. «Обновлено 2026-10-26», (б) и (в)). **Шаг 7d — реализован**: метрики `synth_executor_*` (control plane и исполнитель), собственный `/metrics` исполнителя, скрейп пула и алерты — по шагам этого ADR остатка нет; вне его — образ worker'а и flavor'ы (PROP-082), квоты (шаг 10), workspace-v2 (шаг 11) и runbook переключения топологии (шаг 12), поэтому статус остаётся «⚠️ Частично».
+> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула), **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`), **шаг B1** — исполнитель **хостит MCP-серверы у себя** (stdio) и отдаёт их инструменты и вызовы по HTTP (`GET /mcp/servers`, `GET /mcp/tools`, `POST /mcp/call`; эти эндпоинты появились в протоколе 2) и **шаг B2** — клиентская проводка MCP-stdio в control plane (источник `ExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе). **Актуальная версия протокола — 5** (вложения MCP-результата `attachments[]` в `POST /mcp/call` и `features.mcpAttachments`, ADR-115, «Обновлено 2026-10-27»; секреты вызова `secrets[]` — v4, фоновые процессы — v3, ADR-113); совместимость проверяется полем `protocol` в `GET /capabilities`. Перенос git-операций control plane на `ExecutionPort` выполнен (`GitService` — argv через порт, `simple-git` удалён из core). **Доставка SSH/CA в split-режиме — реализована** (см. «Обновлено 2026-10-26», (б) и (в)). **Шаг 7d — реализован**: метрики `synth_executor_*` (control plane и исполнитель), собственный `/metrics` исполнителя, скрейп пула и алерты — по шагам этого ADR остатка нет; вне его — образ worker'а и flavor'ы (PROP-082), квоты (шаг 10), workspace-v2 (шаг 11) и runbook переключения топологии (шаг 12), поэтому статус остаётся «⚠️ Частично».
 > **Дата:** 2026-10-21
 > **Обновлено:** 2026-10-26 — три решения по остатку исполнителя (детали и порядок — [docs/EXECUTION.md](../EXECUTION.md)):
 > **(а) git — через существующий порт, без новых git-эндпоинтов протокола.** Git-операции control plane
@@ -22,6 +22,13 @@
 > `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=http.sslCAInfo`, `GIT_CONFIG_VALUE_0=<путь>`;
 > `gitCaConfig()` control plane в remote-режиме **не** применяется (иначе в argv попал бы путь файла,
 > которого в исполнителе нет). Это соответствует ADR-099: источник доверия один, применяется при старте.
+> **Обновлено:** 2026-10-27 — **вложения MCP-результата (протокол 5).** `POST /mcp/call` отдаёт
+> аддитивное `attachments: [{mime, name?, base64}]` (нетекстовые блоки `image`/`audio`/
+> `resource.blob`), признак поддержки — `features.mcpAttachments: true` в `GET /capabilities`;
+> исполнитель ≤ 4 поля не отдаёт — control plane работает как прежде, только с текстом (деградация
+> без падения); пределы — 25 МиБ на файл и 20 МиБ на вызов, при `isError` вложения не собираются.
+> Детали — п. 9 («Вложения MCP-результата») и [ADR-115](./adr-115-multimodal-input.md)
+> §«Медиа из инструментов».
 > **Связано:** [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md) (образец портов и контрактного suite), [ADR-099](./adr-099-egress-tls-trust.md) (доверенная граница и исходящий транспорт), [ADR-092](./adr-092-instance-lifecycle-maintenance.md) (рестарт, exit 75), [ADR-094](./adr-094-observability-metrics.md) (метрики), [ADR-075](./adr-075-project-workspace-provisioning.md) (workspace), [ADR-076](./adr-076-git-repo-registry-ssh.md) (git-реестр и SSH), [ADR-078](./adr-078-runtime-dependency-availability.md) (детект зависимостей), [ADR-036](./adr-036-llm-gateway.md) (в исполнителе LLM-ключей нет), [ADR-038](./adr-038-npm-packages.md) (поставка пакета); детали и формат — [docs/EXECUTION.md](../EXECUTION.md) (Spec).
 
 ## Контекст
@@ -39,8 +46,9 @@
    `DEFAULT_MAX_OUTPUT_BYTES` (10 МБ).
 2. **Две взаимозаменяемые реализации.** `InlineExecutionPort` — исполнение в процессе control plane (прежнее
    поведение). Удалённая — HTTP/1.1 + JSON к исполнителю: exec-API `/exec`, `/capabilities`, `/health`,
-   протокол `EXECUTOR_PROTOCOL_VERSION = 3` (1 → 2 — MCP-эндпоинты шага B1, 2 → 3 — фоновые
-   процессы, ADR-113), bearer-токен
+   протокол `EXECUTOR_PROTOCOL_VERSION = 5` (1 → 2 — MCP-эндпоинты шага B1, 2 → 3 — фоновые
+   процессы, ADR-113, 3 → 4 — секреты вызова, «Обновлено 2026-10-26», 4 → 5 — вложения
+   MCP-результата, «Обновлено 2026-10-27»), bearer-токен
    `synth_exec_…` **из файла** (`execution.remote.tokenSecret` — путь, не значение; инвариант 13).
    Исполнитель поставляется отдельным in-tree пакетом
    `@itphx/synth-executor` (`packages/executor`), который core подключает **динамическим `import()`**
@@ -103,9 +111,31 @@
      исполнителя MCP-серверы закрываются (дочерние процессы, включая Chromium, не остаются жить).
    - **Поверхность HTTP (эндпоинты появились в протоколе 2):** `GET /mcp/servers` → `[{name, status, toolCount, error?}]`,
      `GET /mcp/tools` → `[{server, name, description, inputSchema}]`, `POST /mcp/call`
-     `{server, tool, arguments}` → `{content, isError}`; неизвестный сервер/инструмент → `404`,
+     `{server, tool, arguments}` → `{content, isError, attachments?}` (последнее — протокол 5);
+     неизвестный сервер/инструмент → `404`,
      ошибка MCP → `500` с текстом ошибки. Всё — **под тем же bearer-токеном**, что и остальные
      эндпоинты исполнителя.
+   - **Вложения MCP-результата (протокол 5, ADR-115).** MCP отдаёт результат **блоками**: `text`,
+     `image`, `audio`, `resource` (`{uri, mimeType, blob|text}`). Раньше исполнитель брал только
+     `text` — скриншоты Playwright и бинарные ресурсы терялись молча. Теперь нетекстовые блоки
+     складываются в `attachments: [{mime, name?, base64}]` (`base64` — без `data:`-префикса;
+     `name` — из `uri` ресурса), а в `content` остаётся текст, либо заглушка
+     «N вложений (текста нет)». Признак поддержки — `features.mcpAttachments: true` в
+     `GET /capabilities` (поле `features` аддитивное).
+     - **Деградация без падения:** исполнитель протокола ≤ 4 поля `attachments` не отдаёт, а
+       control plane (`ExecutorMcpClient`) его не требует — версию для этого проверять не нужно,
+       результат остаётся текстовым. Обратно тоже безопасно: старый control plane аддитивное поле
+       не читает.
+     - **Лимиты — транспортные** (`MCP_ATTACHMENT_MAX_BYTES_PER_FILE` = 25 МиБ на файл,
+       `MCP_ATTACHMENT_MAX_TOTAL_BYTES` = 20 МиБ на вызов; одинаковы в core-клиенте и в
+       исполнителе): блок сверх предела, битый base64 и пустой блок **пропускаются** с логом,
+       вызов не падает. Истинный лимит файла (модальности, allowlist MIME, `attachments.maxBytesPerFile`)
+       применяет `AttachmentService` control plane — единственная точка записи байтов.
+     - **`isError` → вложений нет** (ни исполнитель, ни core-клиент их не собирают): результат
+       сбоя в контекст не тащим.
+     - **Кто пишет блобы:** исполнитель их **не** пишет (у него нет каталога данных инстанса) —
+       он только передаёт base64; запись делает control plane (`McpManager` → `AttachmentService.upload`),
+       см. [ADR-115](./adr-115-multimodal-input.md) §«Медиа из инструментов».
    - **Граница шага:** B1 — **серверная** часть; **B2 (клиентская проводка в control plane) —
      реализована**: источник `ExecutorMcpSource` (`packages/core/src/engine/mcp/executor-mcp-source.ts`)
      и транспорт `executor-mcp-client.ts` подключаются в deps (`attachExecutorMcpSource`), тулы
@@ -185,11 +215,12 @@
     process-глобальные решения не переинициализируются на лету).
 - **Операционные следствия шага B1 (MCP-хостинг исполнителя):**
   - **(а) Версия протокола — контракт совместимости.** Добавление эндпоинтов `/mcp/*` подняло версию
-    протокола до **2** (актуальная версия — **3**: фоновые процессы, ADR-113): старый исполнитель этих
+    протокола до **2** (актуальная версия — **5**: фоновые процессы — 3, ADR-113; секреты вызова — 4;
+    вложения MCP-результата — 5): старый исполнитель этих
     эндпоинтов не знает. Значит **control plane и пул исполнителей обязаны быть совместимы** — то же
     правило, что и для инвентаря пула (шаг A, следствие (а)): обновление пула ⇒ обновление control plane
     (или наоборот). Совместимость проверяется **на проводе**: поле `protocol` в `GET /capabilities`
-    (и аддитивный `features`, напр. `background` для протокола ≥ 3).
+    (и аддитивный `features`, напр. `background` для протокола ≥ 3, `mcpAttachments` — для ≥ 5).
   - **(б) Секреты MCP-серверов живут в исполнителе.** `env` сервера (токены SCM-хостингов) приходят
     в исполнитель из Secret и **не покидают** его: в ответах `/mcp/servers` значений нет, тексты
     ошибок вычищаются, переменная `SYNTH_EXECUTOR_MCP_SERVERS` убирается из `process.env` — иначе
@@ -235,7 +266,7 @@
   `contract/remote.test.ts`.
 - **Реализации:** `packages/core/src/execution/inline-execution-port.ts` (в процессе) и удалённая —
   `packages/core/src/execution/remote.ts` (динамический `import()` `@itphx/synth-executor/client`, fail-closed,
-  чтение токена из файла) + пакет `packages/executor/` (`protocol.ts` — `EXECUTOR_PROTOCOL_VERSION = 4`,
+  чтение токена из файла) + пакет `packages/executor/` (`protocol.ts` — `EXECUTOR_PROTOCOL_VERSION = 5`,
   `client.ts` — `RemoteExecutionPort`, `server.ts`, `mcp.ts` — хостинг MCP-серверов, `exec-service.ts`,
   `secrets.ts` — материализация секретов вызова и sweep `synth-ssh-*`, `auth.ts`,
   `workspace.ts` — containment `cwd`, `toolchain.ts`, `config.ts` (`SYNTH_EXECUTOR_TLS_CA_FILE`),
@@ -319,6 +350,23 @@
   `execution.mode=remote`), тесты `executor-mcp-source.test.ts`, `executor-mcp-client.test.ts` и e2e
   `executor-mcp.e2e.test.ts` (гейт по env `SYNTH_TEST_EXECUTOR_MCP_URL`/`_TOKEN`, как контрактный suite
   хранения по `SYNTH_TEST_POSTGRES_DSN`).
+- **Вложения MCP-результата (протокол 5, ADR-115):** `packages/executor/src/mcp.ts`
+  (`collectMcpContent` — `text`/`resource.text` → текст, `image`/`audio`/`resource.blob` → вложения;
+  константы `MCP_ATTACHMENT_MAX_BYTES_PER_FILE` = 25 МиБ / `MCP_ATTACHMENT_MAX_TOTAL_BYTES` = 20 МиБ,
+  строгий `decodeBase64Strict`), `packages/executor/src/protocol.ts` (`McpAttachmentPayloadBody`,
+  `McpCallResultBody.attachments`, `ExecutorFeatures.mcpAttachments`),
+  `packages/executor/src/server.ts` (`features.mcpAttachments: true` в `GET /capabilities`,
+  `attachments` в ответе `POST /mcp/call` только при успехе);
+  `packages/core/src/engine/mcp/client.ts` (`McpAttachmentPayload`, `McpToolResult.attachments`,
+  `collectMcpContent`, `mcpAttachmentsOnlyText`, те же константы пределов),
+  `packages/core/src/engine/mcp/executor-mcp-client.ts` (`parseAttachments` — аддитивное поле
+  исполнителя, старый исполнитель ≤ 4 → только текст), `packages/core/src/engine/mcp/manager.ts`
+  (`McpManager._withAttachments` — `AttachmentService.upload`, `ToolResult.attachments`,
+  дедуп по `blobPath`, `isError`/нет сервиса/ошибка upload → только текст);
+  тесты `packages/core/src/engine/mcp/client.test.ts`, `executor-mcp-client.test.ts`,
+  `manager.test.ts` (успех, без сервиса, дедуп, `isError`, лимиты, битый base64, старый исполнитель),
+  `packages/executor/src/mcp.test.ts`, `mcp-routes.test.ts`, `protocol.test.ts`,
+  фикстура `packages/executor/test-fixtures/mcp-stdio-server.mjs`.
 - **Секреты вызова и доверие git (протокол 4):** `packages/core/src/execution/ports/execution-port.ts`
   (`ExecSecret`, `ExecRequest.secrets`, `EXECUTION_SECRETS_UNSUPPORTED_CODE`),
   `packages/core/src/execution/secret-env.ts` (материализация в inline-режиме),
@@ -404,3 +452,12 @@
   отдельным job'ом с `executor.networkPolicy.metricsIngress`, алерты `synth-executor`, runbook
   диагностики в `docs/MAINTENANCE.md`); по шагам ADR остатка нет — статус остаётся «⚠️ Частично»
   по причинам вне этого ADR (PROP-082, квоты, workspace-v2, runbook переключения топологии).
+- 2026-10-27 — **протокол 5: вложения MCP-результата (ADR-115).** `POST /mcp/call` отдаёт аддитивное
+  `attachments: [{mime, name?, base64}]` — нетекстовые блоки `image`/`audio`/`resource.blob`
+  (раньше брались только `text`, скриншоты Playwright терялись молча); признак —
+  `features.mcpAttachments: true` в `GET /capabilities`. Деградация: исполнитель ≤ 4 поля не отдаёт —
+  результат остаётся текстовым, вызов не падает (проверка версии не нужна — поле аддитивное).
+  Транспортные пределы — 25 МиБ на файл и 20 МиБ на вызов (битый base64/превышение → блок
+  пропускается с логом); при `isError` вложения не собираются. Пишет байты только control plane
+  (`McpManager` → `AttachmentService.upload`, дедуп по `blobPath`), исполнитель блобов не знает
+  (у него нет каталога данных инстанса).

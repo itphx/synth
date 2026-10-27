@@ -406,7 +406,7 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
       arch: process.arch,
       node: process.version,
       // Аддитивно: старый control plane поле не читает.
-      features: { background: true, secrets: true },
+      features: { background: true, secrets: true, mcpAttachments: true },
     };
     return c.json(body, 200);
   });
@@ -444,7 +444,15 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
         parsed.value.tool,
         parsed.value.arguments ?? {},
       );
-      const body: McpCallResultBody = { content: result.content, isError: result.isError };
+      const body: McpCallResultBody = {
+        content: result.content,
+        isError: result.isError,
+        // ADR-115 (протокол 5): вложения отдаём только при успехе — поле
+        // аддитивное, старый control plane его не читает.
+        ...(result.attachments && result.attachments.length > 0
+          ? { attachments: result.attachments }
+          : {}),
+      };
       return c.json(body, 200);
     } catch (err) {
       if (err instanceof ExecutorMcpError) {

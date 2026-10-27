@@ -245,6 +245,16 @@ export interface MediaPartData {
 вставляет ссылки в **текущий** ход, поэтому модель видит вложение уже на следующей итерации Tool
 Use, а не на следующем ходу.
 
+**MCP-инструменты (протокол исполнителя 5).** Инструмент с MCP-стороны тоже приносит медиа:
+`McpClient` (stdio) и `ExecutorMcpClient` (remote, ответ `POST /mcp/call`) раскладывают `content`
+на текст и нетекстовые блоки (`image`/`audio`/`resource.blob`) в `McpToolResult.attachments`
+(base64 без `data:`-префикса; транспортные капы — 25 МиБ на файл и 20 МиБ на вызов, при `isError`
+не собираются), а `McpManager` грузит байты через `AttachmentService.upload` и отдаёт
+`ToolResult.attachments` ссылками (дедуп по `blobPath`). Дальше действует **штатный шов**
+`ChatOrchestrator._injectToolAttachments` — тот же, что у `web_fetch`: блобы пишет только control
+plane, исполнитель их не знает. Исполнитель протокола ≤ 4 поля `attachments` не отдаёт — результат
+остаётся текстовым, вызов не падает ([ADR-077](./adr-077-runtime-toolchain.md) п. 9).
+
 - **Шов и проверка ссылок.** Тул отдаёт **ссылку**, не байты. Оркестратор валидирует каждую
   ссылку (`isToolAttachmentRefValid`): `blobPath` строго под `attachments/` (`isAttachmentPath`,
   без `..`), `sha256` — ровно 64 hex, `mime` непустой, `size > 0`, `name?` — строка. Невалидная

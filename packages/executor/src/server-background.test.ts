@@ -415,17 +415,18 @@ describe('исполнитель: фоновые процессы — несущ
 });
 
 describe('исполнитель: протокол и прежние маршруты', () => {
-  it('capabilities — протокол 4 и признаки фоновых процессов и секретов', async () => {
+  it('capabilities — протокол 5 и признаки фоновых процессов, секретов и вложений MCP', async () => {
     const app = makeApp();
     const res = await app.request('/capabilities', { headers: authHeaders() });
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       protocol: number;
-      features?: { background?: boolean; secrets?: boolean };
+      features?: { background?: boolean; secrets?: boolean; mcpAttachments?: boolean };
     };
-    expect(body.protocol).toBe(4);
+    expect(body.protocol).toBe(5);
     expect(body.features?.background).toBe(true);
     expect(body.features?.secrets).toBe(true);
+    expect(body.features?.mcpAttachments).toBe(true);
   });
 
   it('health — счётчики фоновых процессов', async () => {
@@ -436,7 +437,7 @@ describe('исполнитель: протокол и прежние маршр�
       protocol: number;
       background?: { limit: number; active: number };
     };
-    expect(body.protocol).toBe(4);
+    expect(body.protocol).toBe(5);
     expect(body.background?.limit).toBeGreaterThan(0);
     expect(body.background?.active).toBe(0);
   });
