@@ -330,7 +330,7 @@ describe('attachmentsConfigSchema (ADR-115)', () => {
       maxBytesPerFile: 26_214_400,
       maxFilesPerMessage: 10,
       maxBytesPerSession: 1_073_741_824,
-      allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+      allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
       workspaceFallback: true,
       gcDays: 30,
     });

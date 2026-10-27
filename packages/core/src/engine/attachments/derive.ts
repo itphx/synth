@@ -46,6 +46,9 @@
 
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { makeMediaPart, type MediaPartData, type Part } from '@itphx/synth-shared';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
 
@@ -111,8 +114,8 @@ export interface DeriveDeps {
   /** Есть ли `ffmpeg` в окружении (см. `isFfmpegAvailable`, ADR-078). */
   hasFfmpeg: () => boolean;
   /**
-   * Запуск `ffmpeg` с байтами на stdin; stdout — кусками. Не задан — реальный
-   * `spawn('ffmpeg', …)` (в тестах всегда инъекция).
+   * Запуск `ffmpeg` с байтами входа; stdout — кусками. Не задан — реальный
+   * `spawn('ffmpeg', …)` с временным файлом (в тестах всегда инъекция).
    */
   runFfmpeg?: (args: string[], input: Buffer) => Promise<Buffer[]>;
   /**
@@ -253,15 +256,28 @@ function describeError(err: unknown): string {
 }
 
 /**
- * Реальный запуск `ffmpeg`: байты на stdin, stdout — кусками.
+ * Реальный запуск `ffmpeg`: вход — временный файл, stdout — кусками.
  *
- * Только через `spawn` с argv (без shell): имена фильтров/путей не проходят
- * через интерпретатор. Таймаут и предел вывода — чтобы зависший или
- * раздувшийся транскод не держал ход сессии.
+ * MP4/WebM с `moov` в конце не читаются из неразмеченного stdin (`partial
+ * file` → `Could not open encoder before EOF`), поэтому байты сначала
+ * сохраняются во временный файл, а `pipe:0` заменяется на путь. Файл удаляется
+ * в `finally`; таймаут и предел вывода — чтобы зависший/раздувшийся транскод не
+ * держал ход сессии. Только `spawn` с argv (без shell).
  */
-function runFfmpegSpawn(args: string[], input: Buffer): Promise<Buffer[]> {
+async function runFfmpegSpawn(args: string[], input: Buffer): Promise<Buffer[]> {
+  const dir = await mkdtemp(join(tmpdir(), 'synth-ffmpeg-'));
+  const inputPath = join(dir, 'input.bin');
+  try {
+    await writeFile(inputPath, input);
+    return await spawnFfmpeg(args.map((arg) => (arg === 'pipe:0' ? inputPath : arg)));
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+function spawnFfmpeg(args: string[]): Promise<Buffer[]> {
   return new Promise<Buffer[]>((resolve, reject) => {
-    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
     const chunks: Buffer[] = [];
     const errors: Buffer[] = [];
     let size = 0;
@@ -291,8 +307,6 @@ function runFfmpegSpawn(args: string[], input: Buffer): Promise<Buffer[]> {
       chunks.push(chunk);
     });
     child.stderr.on('data', (chunk: Buffer) => errors.push(chunk));
-    // EPIPE, если ffmpeg завершился раньше, чем дописан stdin.
-    child.stdin.on('error', () => undefined);
     child.on('error', (err) => finish(err));
     child.on('close', (code) => {
       if (code === 0) {
@@ -302,8 +316,6 @@ function runFfmpegSpawn(args: string[], input: Buffer): Promise<Buffer[]> {
       const tail = Buffer.concat(errors).toString('utf-8').trim().slice(-400);
       finish(new Error(`ffmpeg вышел с кодом ${code}${tail ? `: ${tail}` : ''}`));
     });
-
-    child.stdin.end(input);
   });
 }
 

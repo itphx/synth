@@ -34,7 +34,7 @@ describe('defaultConfig', () => {
       maxBytesPerFile: 25 * 1024 * 1024,
       maxFilesPerMessage: 10,
       maxBytesPerSession: 1024 * 1024 * 1024,
-      allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+      allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
       workspaceFallback: true,
       // ADR-115: модели обработки по модальностям не назначены (обработка не настроена).
       modalityModels: {},

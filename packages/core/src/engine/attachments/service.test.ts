@@ -27,7 +27,7 @@ function testConfig(overrides: Partial<AttachmentsConfig> = {}): AttachmentsConf
     maxBytesPerFile: 1024 * 1024,
     maxFilesPerMessage: 10,
     maxBytesPerSession: 10 * 1024 * 1024,
-    allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+    allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
     workspaceFallback: true,
     gcDays: 30,
     ...overrides,

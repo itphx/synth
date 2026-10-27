@@ -109,7 +109,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
         maxBytesPerFile: 26_214_400,
         maxFilesPerMessage: 10,
         maxBytesPerSession: 1_073_741_824,
-        allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+        allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
         workspaceFallback: true,
         gcDays: 30,
       },
@@ -170,7 +170,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       maxBytesPerFile: 10_485_760,
       maxFilesPerMessage: 4,
       maxBytesPerSession: 104_857_600,
-      allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+      allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
       workspaceFallback: false,
       gcDays: 7,
     });

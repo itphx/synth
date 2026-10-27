@@ -751,7 +751,7 @@ export const attachmentsConfigSchema = z.object({
   maxBytesPerMessage: z.number().int().min(1).optional(),
   allowedMimePrefixes: z
     .array(z.string().min(1))
-    .default(['image/', 'audio/', 'application/pdf', 'text/']),
+    .default(['image/', 'audio/', 'video/', 'application/pdf', 'text/']),
   workspaceFallback: z.boolean().default(true),
   modalityModels: modalityModelsSchema.optional(),
   gcDays: z.number().int().min(0).default(30),

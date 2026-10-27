@@ -448,7 +448,7 @@ content-addressed, поэтому повторная загрузка тех ж�
 `mime` определяется по
 сигнатуре содержимого, а не по заявленному клиентом; `image/svg+xml` запрещён всегда (XSS), а
 разрешённые типы задаёт `attachments.allowedMimePrefixes` (по умолчанию `image/`, `audio/`,
-`application/pdf`, `text/`). `name` санитайзится (basename, без управляющих символов, ≤ 200 символов)
+`video/`, `application/pdf`, `text/`). `name` санитайзится (basename, без управляющих символов, ≤ 200 символов)
 и в `blobPath` не входит.
 
 **Лимиты и коды.**
