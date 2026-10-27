@@ -108,10 +108,10 @@ export interface HydrateOptions {
    */
   modalities?: readonly AttachmentModality[];
   /**
-   * ADR-115: может ли провайдер хода принять аудиофайл с таким MIME нативно
-   * (предикат `supportsNativeAudio`). `false` — формат транспортом не
-   * поддерживается (напр. ogg для Anthropic-протокола): вложение идёт через
-   * aux-модель или помечается недоставленным, а не теряется молча.
+   * ADR-115: может ли провайдер хода принять вложение с таким MIME нативно
+   * (предикат `supportsNativeAudio`). Для `video` адаптеры пока не кодируют
+   * видеофайл — предикат вернёт `false`, и вложение пойдёт через aux-модель
+   * (кадры) либо будет помечено недоставленным, а не потеряно молча.
    */
   canDeliverNative?: (mime: string) => boolean;
   /** Предел суммарного base64 (по умолчанию `MAX_ATTACHMENT_BASE64_BYTES`). */
@@ -401,7 +401,7 @@ export async function hydrateMessageAttachments(
       const modalityUnsupported = allowedModalities !== null && !allowedModalities.has(modality);
       // Транспорт провайдера может не уметь конкретный контейнер (ogg у
       // Anthropic-протокола), хотя модальность `audio` в каталоге есть.
-      const transportUnsupported = modality === 'audio'
+      const transportUnsupported = (modality === 'audio' || modality === 'video')
         && options.canDeliverNative !== undefined
         && !options.canDeliverNative(ref.mime);
       if (modalityUnsupported || transportUnsupported) {
@@ -452,7 +452,7 @@ export async function hydrateMessageAttachments(
         }
         const metaModality = byteModality(meta.mime);
         if (metaModality === null) continue;
-        const metaTransportUnsupported = metaModality === 'audio'
+        const metaTransportUnsupported = (metaModality === 'audio' || metaModality === 'video')
           && options.canDeliverNative !== undefined
           && !options.canDeliverNative(meta.mime);
         if ((allowedModalities && !allowedModalities.has(metaModality)) || metaTransportUnsupported) {

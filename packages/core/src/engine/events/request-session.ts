@@ -182,6 +182,22 @@ export function eventToMessageText(event: SynthEvent): string {
     if (typeof text === 'string' && text.length > 0) return text;
   }
   if ((event.attachments?.length ?? 0) > 0) return '';
+
+  if (payload && typeof payload === 'object') {
+    const obj = payload as {
+      chatId?: unknown;
+      messageId?: unknown;
+      attachment?: { kind?: unknown };
+    };
+    // Telegram/шлюзовое сообщение без текста и без вложения (video_note,
+    // sticker, сбой загрузки): служебный payload в диалог не отдаём. Модель
+    // должна видеть хотя бы вид сообщения, а не `{chatId, from, …}`.
+    if (obj.chatId !== undefined || obj.messageId !== undefined) {
+      const kind = typeof obj.attachment?.kind === 'string' ? obj.attachment.kind : 'message';
+      return `[${kind}]`;
+    }
+  }
+
   const serialized = JSON.stringify(payload);
   return typeof serialized === 'string' ? serialized : '';
 }

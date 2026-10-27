@@ -1498,6 +1498,34 @@ describe('eventToMessage: вложения события (ADR-115 × ADR-089)',
     expect(eventToMessageText(event({ source: 'ci', payload: { build: 42 } }))).toBe('{"build":42}');
   });
 
+  it('Telegram-сообщение без текста и вложений → маркер, не JSON', () => {
+    const e = event({
+      payload: {
+        chatId: '450316139',
+        chatType: 'private',
+        messageId: 105,
+        from: { id: '450316139', isExternal: true },
+      },
+    });
+
+    expect(eventToMessageText(e)).toBe('[message]');
+    expect(eventToMessage(e).content).toBe('[message]');
+    expect(eventToMessage(e).content).not.toContain('chatId');
+  });
+
+  it('Telegram-сообщение без вложения знает его вид (video_note) — маркер с видом', () => {
+    const e = event({
+      payload: {
+        chatId: '450316139',
+        messageId: 105,
+        attachment: { kind: 'video_note', fileId: 'vn1' },
+      },
+    });
+
+    expect(eventToMessageText(e)).toBe('[video_note]');
+    expect(eventToMessage(e).content).not.toContain('fileId');
+  });
+
   it('вложение с текстом → текст и плейсхолдер, JSON не подмешивается', () => {
     const msg = eventToMessage(withAttachments([attachment()]));
 
