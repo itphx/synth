@@ -10,8 +10,10 @@ import {
   pipelineSpecSchema,
   pipelineRunStatusSchema,
   pipelineRunTriggerSchema,
+  eventAttachmentRefSchema,
 } from '@itphx/synth-shared';
 import type {
+  EventAttachmentRef,
   PipelineArtifact,
   PipelineRunStatus,
   PipelineRunTrigger,
@@ -26,6 +28,12 @@ import type {
 } from '../../storage/ports/index.js';
 import type { PipelineRepository } from '../../storage/ports/pipeline-repository.js';
 import type { PipelineArtifactStore } from '../../engine/pipelines/artifacts.js';
+import type { AttachmentService } from '../../engine/attachments/service.js';
+import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
+import {
+  PipelineAttachmentError,
+  validatePipelineAttachments,
+} from '../../engine/pipelines/attachments.js';
 import type { ProjectRepository } from '../../storage/ports/project-repository.js';
 import { PipelineEngineError } from '../../engine/pipelines/index.js';
 import type { PipelineEngine } from '../../engine/pipelines/index.js';
@@ -168,6 +176,23 @@ export interface PipelineProjectRoutesDeps {
    * (404), остальной контур пайплайнов работает как прежде.
    */
   artifacts?: PipelineArtifactStore;
+  /**
+   * ADR-115 × ADR-101: сервис вложений — проверка ссылок `attachments[]` в
+   * теле запуска прогона (объект существует, метаданные совпадают со sidecar)
+   * и источник лимитов (`attachments.maxFilesPerMessage`/`maxBytesPerFile`/
+   * `maxBytesPerSession`).
+   *
+   * Не задан — прогоны с вложениями отклоняются (400 `VALIDATION_ERROR`):
+   * без сверки со sidecar в прогон можно подставить чужой/изменённый объект.
+   */
+  attachments?: AttachmentService;
+  /**
+   * ADR-115 × ADR-116: порт учёта blob-ссылок — вложения прогона
+   * регистрируются владельцем `pipeline-run` (иначе GC удалил бы объект,
+   * хотя прогон на него ссылается). Не задан — прогоны с вложениями
+   * отклоняются (fail-closed).
+   */
+  blobRefs?: BlobRefRepository;
 }
 
 export interface PipelineProjectRoutesOptions {
@@ -281,6 +306,16 @@ const runBodySchema = z.object({
   trigger: pipelineRunTriggerSchema.optional(),
   /** Версия спецификации (по умолчанию — последняя опубликованная). */
   version: z.number().int().min(1).optional(),
+  /**
+   * ADR-115 × ADR-101: вложения прогона — ссылки на объекты staging-загрузки
+   * (`POST /api/v2/attachments`, форма — как у вложения события, ADR-089).
+   *
+   * Проверяются **до** старта прогона: контур `attachments/`, наличие объекта,
+   * совпадение `sha256`/`mime`/`size` со sidecar, лимиты прогона. Жёсткий
+   * потолок схемы (50) — только структурный; фактический предел —
+   * `attachments.maxFilesPerMessage` (проверяет сервис вложений).
+   */
+  attachments: z.array(eventAttachmentRefSchema).max(50).optional(),
 });
 
 /** Тело HITL-действия (возобновление прогона). */
@@ -358,6 +393,40 @@ function artifactDisposition(name: string): string {
   const safe = (name || 'artifact').replace(/["\\\r\n]/g, '_');
   const encoded = encodeURIComponent(name || 'artifact');
   return `attachment; filename="${safe}"; filename*=UTF-8''${encoded}`;
+}
+
+/**
+ * ADR-115 × ADR-101: учесть ссылки на вложения прогона (`blob_refs`).
+ *
+ * Без ссылки GC (`attachments.gcDays`) удалил бы объект, хотя прогон на него
+ * ссылается. Best-effort: ошибка учёта не отменяет старт (ссылка —
+ * производная), пишется в лог. Возвращает число учтённых ссылок.
+ */
+async function addRunAttachmentRefs(
+  blobRefs: BlobRefRepository | undefined,
+  runId: string,
+  attachments: readonly EventAttachmentRef[],
+  log: (message: string) => void,
+): Promise<number> {
+  if (!blobRefs || attachments.length === 0 || !runId) return 0;
+  let added = 0;
+  for (const attachment of attachments) {
+    try {
+      await blobRefs.add({
+        blobPath: attachment.blobPath,
+        ownerKind: 'pipeline-run',
+        ownerId: runId,
+      });
+      added += 1;
+    } catch (err) {
+      log(
+        `[pipelines] не удалось учесть ссылку на вложение ${attachment.blobPath}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+  return added;
 }
 
 // ────────────────────────────── Фабрика ──────────────────────────────
@@ -808,9 +877,29 @@ export function createPipelineProjectRoutes(
 
       const trigger: PipelineRunTrigger = parsed.data.trigger ?? { kind: 'manual' };
 
+      // ADR-115 × ADR-101: вложения прогона проверяются **до** старта прогона
+      // (та же политика, что у приёма события): неверная ссылка не должна
+      // дойти ни до движка, ни до журнала.
+      let attachments: EventAttachmentRef[] = [];
+      try {
+        attachments = await validatePipelineAttachments(
+          deps.attachments,
+          deps.blobRefs,
+          parsed.data.attachments,
+        );
+      } catch (err) {
+        if (err instanceof PipelineAttachmentError) {
+          return invalid(c, [err.message], messages.invalidBody(c));
+        }
+        throw err;
+      }
+
       // Запуск — через общий реестр активных прогонов (`run-control.ts`):
       // soft-lock «не запустить второй прогон того же пайплайна» и отмена
       // идущего прогона работают одинаково для HTTP и для встроенных тулов.
+      // Вложения — вход прогона (`input`), он ложится **под** `trigger.payload`:
+      // путь маппинга `trigger.payload.attachments`, а значения явного payload
+      // триггера имеют приоритет.
       try {
         const started = await runControl.startRun({
           engine: deps.engine,
@@ -819,7 +908,19 @@ export function createPipelineProjectRoutes(
           version,
           projectId,
           trigger,
+          ...(attachments.length > 0 ? { input: { attachments } } : {}),
         });
+        if (attachments.length > 0) {
+          // Учёт ссылок владельцем `pipeline-run`: без него GC счёл бы объекты
+          // осиротевшими, хотя прогон на них ссылается. Best-effort: прогон уже
+          // идёт, ошибка учёта не отменяет его (ссылка — производная).
+          await addRunAttachmentRefs(
+            deps.blobRefs,
+            started.run.id,
+            attachments,
+            (message) => console.warn(message),
+          );
+        }
         return c.json({ run: started.run }, 201);
       } catch (err) {
         const mapped = engineError(c, err);

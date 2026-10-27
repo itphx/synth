@@ -12,6 +12,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { LLMResponse, PipelineNode, ToolContext, ToolDefinition } from '@itphx/synth-shared';
@@ -31,6 +32,8 @@ import type {
 } from '../../context/composer.js';
 import { SystemPromptComposer as RealSystemPromptComposer } from '../../context/composer.js';
 import type { PipelineStepContext } from '../step-context.js';
+import type { PipelineArtifactStore } from '../artifacts.js';
+import type { AttachmentService } from '../../attachments/service.js';
 import { isStepGateOutcome, type StepExecutionContext } from '../types.js';
 import { createAgentStepExecutor } from './agent-step.js';
 
@@ -810,5 +813,253 @@ describe('Tool-Use-цикл agent-шага (ADR-101 §4, Э4.3b)', () => {
     expect(outcome.status).toBe('ok');
     const toolMessages = (calls[1]?.messages ?? []).filter((msg) => msg.role === 'tool');
     expect(toolMessages).toHaveLength(1);
+  });
+});
+
+/**
+ * ADR-115 × ADR-101: вложения шага пайплайна.
+ *
+ * Проверяется сквозной путь исполнителя `agent`: вход прогона
+ * (`trigger.payload.attachments`), blob-артефакты предыдущего шага
+ * (`prev.artifacts`), гидратация в `LLMAttachment` первого сообщения, очистка
+ * метаданных на границе отправки, лимит суммарного base64, обработка
+ * text-only модели (derive) и пометка «не доставлено» без инфраструктуры.
+ */
+describe('вложения agent-шага (ADR-115 × ADR-101)', () => {
+  /** JPEG-сегмент: маркер + длина (включая саму длину) + данные. */
+  function jpegSegment(marker: number, payload: Buffer): Buffer {
+    const header = Buffer.alloc(4);
+    header[0] = 0xff;
+    header[1] = marker;
+    header.writeUInt16BE(payload.length + 2, 2);
+    return Buffer.concat([header, payload]);
+  }
+
+  /** JPEG с EXIF (APP1): провайдеру эти байты уходить не должны. */
+  function jpegWithExif(): Buffer {
+    return Buffer.concat([
+      Buffer.from([0xff, 0xd8]),
+      jpegSegment(0xe1, Buffer.from('Exif\0\0GPS', 'latin1')),
+      jpegSegment(0xdb, Buffer.from([1, 2, 3, 4])),
+      jpegSegment(0xda, Buffer.alloc(8, 9)),
+      Buffer.from([0x12, 0x34, 0x56, 0x78]),
+      Buffer.from([0xff, 0xd9]),
+    ]);
+  }
+
+  /** Объект blob-«хранилища» теста. */
+  interface FakeBlob {
+    bytes: Buffer;
+    mime: string;
+    name?: string;
+  }
+
+  /**
+   * Сервис вложений-заглушка: только то, что читает гидратация шага
+   * (`config`/`resolve`/`read`). Настоящий сервис проверяется своими тестами.
+   */
+  function makeAttachmentService(blobs: Record<string, FakeBlob>): AttachmentService {
+    return {
+      config: {
+        enabled: true,
+        modalities: {},
+        maxBytesPerFile: 25 * 1024 * 1024,
+        maxFilesPerMessage: 10,
+        maxBytesPerSession: 1024 * 1024 * 1024,
+        allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+        workspaceFallback: false,
+        gcDays: 30,
+      },
+      resolve: async (blobPath: string) => {
+        const blob = blobs[blobPath];
+        if (!blob) return null;
+        return {
+          blobPath,
+          mime: blob.mime,
+          size: blob.bytes.length,
+          sha256: 'a'.repeat(64),
+          ...(blob.name ? { name: blob.name } : {}),
+          stat: { size: blob.bytes.length, mtimeMs: 0 },
+        };
+      },
+      read: async (blobPath: string) => {
+        const blob = blobs[blobPath];
+        return blob ? Readable.from([blob.bytes]) : null;
+      },
+    } as unknown as AttachmentService;
+  }
+
+  /** Хранилище артефактов-заглушка: `read` по пути объекта (ADR-116). */
+  function makeArtifactStore(files: Record<string, Buffer>): PipelineArtifactStore {
+    return {
+      read: async (input: { path: string }) => files[input.path] ?? null,
+    } as unknown as PipelineArtifactStore;
+  }
+
+  /** Ссылка на вложение входа прогона (форма вложения события, ADR-089). */
+  function attachmentRef(blob: FakeBlob, blobPath: string) {
+    return {
+      blobPath,
+      sha256: 'a'.repeat(64),
+      mime: blob.mime,
+      size: blob.bytes.length,
+      ...(blob.name ? { name: blob.name } : {}),
+    };
+  }
+
+  it('вложение входа прогона → LLMAttachment первого сообщения, JPEG без APP1', async () => {
+    const original = jpegWithExif();
+    const blobPath = 'attachments/ab/deadbeef';
+    const blob: FakeBlob = { bytes: original, mime: 'image/jpeg', name: 'photo.jpg' };
+    const { provider, calls } = makeProvider(() => okResponse('ок'));
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor();
+
+    await executor.execute(
+      makeCtx(makeNode(), {
+        trigger: { kind: 'manual', payload: { attachments: [attachmentRef(blob, blobPath)] } },
+        attachments: {
+          service: makeAttachmentService({ [blobPath]: blob }),
+          resolveModalities: () => ['text', 'image'],
+        },
+        llm: {
+          composer,
+          resolveProvider: () => provider,
+          resolveLlmDefaults: () => ({ provider: 'mock', model: 'mock-model' }),
+        },
+      }),
+    );
+
+    const attachments = calls[0]?.messages[0]?.attachments ?? [];
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.mime).toBe('image/jpeg');
+    expect(attachments[0]?.name).toBe('photo.jpg');
+    const sent = Buffer.from(attachments[0]?.base64 ?? '', 'base64');
+    // Оригинал в blob остался с EXIF, провайдеру ушла очищенная копия.
+    expect(original.includes(Buffer.from('Exif\0\0GPS', 'latin1'))).toBe(true);
+    expect(sent.includes(Buffer.from('Exif\0\0GPS', 'latin1'))).toBe(false);
+    expect(sent.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
+  });
+
+  it('превышение лимита base64 → вложение не отправлено, в тексте пометка', async () => {
+    const blobPath = 'attachments/ab/big-image';
+    const blob: FakeBlob = { bytes: jpegWithExif(), mime: 'image/jpeg', name: 'big.jpg' };
+    const { provider, calls } = makeProvider(() => okResponse('ок'));
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor();
+
+    await executor.execute(
+      makeCtx(makeNode(), {
+        trigger: { kind: 'manual', payload: { attachments: [attachmentRef(blob, blobPath)] } },
+        attachments: {
+          service: makeAttachmentService({ [blobPath]: blob }),
+          resolveModalities: () => ['text', 'image'],
+          // Меньше одного base64-объекта — вложение отсекается по объёму.
+          maxTotalBase64Bytes: 8,
+        },
+        llm: {
+          composer,
+          resolveProvider: () => provider,
+          resolveLlmDefaults: () => ({ provider: 'mock', model: 'mock-model' }),
+        },
+      }),
+    );
+
+    expect(calls[0]?.messages[0]?.attachments ?? []).toHaveLength(0);
+    const content = calls[0]?.messages[0]?.content ?? '';
+    expect(content).toContain('limit');
+    expect(content).toContain('big.jpg');
+  });
+
+  it('blob-артефакт предыдущего шага (prev.artifacts) → вложение шага', async () => {
+    const artifactPath = 'artifacts/prun_1/report.bin';
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 7]);
+    const { provider, calls } = makeProvider(() => okResponse('ок'));
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor();
+
+    await executor.execute(
+      makeCtx(makeNode(), {
+        prev: {
+          status: 'ok',
+          output: {},
+          attempt: 1,
+          artifacts: [
+            {
+              kind: 'blob',
+              path: artifactPath,
+              name: 'report.png',
+              mime: 'image/png',
+              size: bytes.length,
+            },
+          ],
+        },
+        attachments: {
+          artifacts: makeArtifactStore({ [artifactPath]: bytes }),
+          resolveModalities: () => ['text', 'image'],
+        },
+        llm: {
+          composer,
+          resolveProvider: () => provider,
+          resolveLlmDefaults: () => ({ provider: 'mock', model: 'mock-model' }),
+        },
+      }),
+    );
+
+    const attachments = calls[0]?.messages[0]?.attachments ?? [];
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.mime).toBe('image/png');
+    expect(attachments[0]?.name).toBe('report.png');
+    expect(attachments[0]?.base64).toBe(bytes.toString('base64'));
+  });
+
+  it('text-only модель → derive-текст в сообщении, байты не отправлены', async () => {
+    const blobPath = 'attachments/ab/photo';
+    const blob: FakeBlob = { bytes: jpegWithExif(), mime: 'image/jpeg', name: 'photo.jpg' };
+    const { provider, calls } = makeProvider(() => okResponse('ок'));
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor();
+
+    await executor.execute(
+      makeCtx(makeNode(), {
+        trigger: { kind: 'manual', payload: { attachments: [attachmentRef(blob, blobPath)] } },
+        attachments: {
+          service: makeAttachmentService({ [blobPath]: blob }),
+          // Модель шага текстовая: картинку принимает только aux-модель.
+          resolveModalities: () => ['text'],
+          derive: async () => 'на фото — кошка',
+        },
+        llm: {
+          composer,
+          resolveProvider: () => provider,
+          resolveLlmDefaults: () => ({ provider: 'mock', model: 'mock-model' }),
+        },
+      }),
+    );
+
+    expect(calls[0]?.messages[0]?.attachments ?? []).toHaveLength(0);
+    const content = calls[0]?.messages[0]?.content ?? '';
+    expect(content).toContain('[image: photo.jpg]');
+    expect(content).toContain('на фото — кошка');
+  });
+
+  it('нет blob-инфраструктуры → техническая пометка о не доставленном вложении', async () => {
+    const blobPath = 'attachments/ab/photo';
+    const blob: FakeBlob = { bytes: jpegWithExif(), mime: 'image/jpeg', name: 'photo.jpg' };
+    const { provider, calls } = makeProvider(() => okResponse('ок'));
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor();
+
+    await executor.execute(
+      makeCtx(makeNode(), {
+        trigger: { kind: 'manual', payload: { attachments: [attachmentRef(blob, blobPath)] } },
+        llm: { composer, resolveProvider: () => provider },
+      }),
+    );
+
+    expect(calls[0]?.messages[0]?.attachments ?? []).toHaveLength(0);
+    const content = calls[0]?.messages[0]?.content ?? '';
+    expect(content).toContain('[attachment not delivered: photo.jpg (image/jpeg) — unavailable');
+    expect(content).toContain(blobPath);
   });
 });

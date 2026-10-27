@@ -677,6 +677,10 @@ export function mountStandaloneRoutes(
       runControl: deps.pipelineRunControl,
       // ADR-116: раздача артефактов прогона (blob-порт).
       artifacts: deps.pipelineArtifacts,
+      // ADR-115 × ADR-101: вложения прогона — проверка ссылок в теле запуска
+      // (тот же сервис вложений, что у приёма событий) и учёт в `blob_refs`.
+      attachments: deps.pipelineAttachments,
+      blobRefs: deps.storageContext.blobRefs,
     },
   ));
 

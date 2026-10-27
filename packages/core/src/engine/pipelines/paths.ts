@@ -13,6 +13,7 @@
  * | `prev.output.*` | Выход предыдущего шага (`StepResult.output`)     |
  * | `prev.status`   | Статус предыдущего шага (`ok`/`failed`/…)        |
  * | `prev.error.code` | Код ошибки предыдущего шага                    |
+ * | `prev.artifacts`  | Артефакты предыдущего шага (ADR-116; `kind:'blob'` — ссылка на объект) |
  * | `trigger.payload.*` | Payload триггера прогона                     |
  * | `trigger.kind` / `trigger.source` / `trigger.type` | Атрибуты триггера   |
  * | `vars.*`        | Переменные спецификации (`spec.vars`)            |
@@ -69,6 +70,11 @@ function buildRoot(ctx: PipelinePathContext): Record<string, unknown> {
       ? {
           status: prev.status,
           output: prev.output ?? {},
+          // ADR-116: артефакты шага доступны маппингу (`prev.artifacts`):
+          // агентский шаг прикладывает объекты `kind:'blob'` как вложения.
+          // Пустой список не подставляется — иначе `exists` на `prev.artifacts`
+          // стал бы истинным там, где артефактов нет (fail-soft семантика путей).
+          ...(prev.artifacts && prev.artifacts.length > 0 ? { artifacts: prev.artifacts } : {}),
           error: prev.error ? { code: prev.error.code, message: prev.error.message } : undefined,
         }
       : undefined,

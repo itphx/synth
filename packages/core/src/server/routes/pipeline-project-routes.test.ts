@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import { ProjectRole } from '@itphx/synth-shared';
+import { attachmentsConfigSchema } from '@itphx/synth-shared';
 import type { PipelineSpec, Project } from '@itphx/synth-shared';
 import { createPipelineProjectRoutes } from './pipeline-project-routes.js';
 import { MemoryProjectPipelineRepository, MemoryPipelineRunRepository } from '../../storage/memory/pipelines.js';
@@ -17,6 +18,8 @@ import { PipelineEngine } from '../../engine/pipelines/index.js';
 import { PipelineArtifactStore } from '../../engine/pipelines/artifacts.js';
 import { FileBlobStore } from '../../storage/file-blob-store.js';
 import { MemoryBlobRefRepository } from '../../storage/memory/blob-refs.js';
+import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
+import { AttachmentService } from '../../engine/attachments/service.js';
 import { gateDecisionResult } from '../../engine/pipelines/index.js';
 import type { StepExecutionContext, StepExecutor, StepOutcome } from '../../engine/pipelines/index.js';
 
@@ -133,6 +136,10 @@ function createHarness(options: {
   templates?: PipelineDefinitionRecord[];
   /** ADR-116: хранилище артефактов прогонов (раздача байтов). */
   artifacts?: PipelineArtifactStore;
+  /** ADR-115 × ADR-101: сервис вложений (проверка `attachments[]` запуска). */
+  attachments?: AttachmentService;
+  /** ADR-115 × ADR-116: порт учёта blob-ссылок (владелец `pipeline-run`). */
+  blobRefs?: BlobRefRepository;
 } = { projects: [] }) {
   const pipelines = new MemoryProjectPipelineRepository();
   const runs = new MemoryPipelineRunRepository();
@@ -172,6 +179,8 @@ function createHarness(options: {
         projects,
         templates,
         ...(options.artifacts ? { artifacts: options.artifacts } : {}),
+        ...(options.attachments ? { attachments: options.attachments } : {}),
+        ...(options.blobRefs ? { blobRefs: options.blobRefs } : {}),
       },
       {
         getCurrentUserId: () => userId,
@@ -1128,6 +1137,258 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
 
       const res = await app.request(`/api/v2/pipeline-runs/${runId}/artifacts/report.md`);
       expect(res.status).toBe(403);
+    });
+  });
+
+  describe('Вложения прогона (ADR-115 × ADR-101)', () => {
+    /**
+     * Сервис вложений поверх in-memory ссылок и временного каталога.
+     *
+     * Конфиг — резолвер: тест может изменить лимиты после загрузки (загрузка
+     * проверяет только `maxBytesPerFile`, остальные — валидация прогона).
+     */
+    async function attachmentHarness(overrides: Record<string, unknown> = {}) {
+      const dir = await mkdtemp(join(tmpdir(), 'synth-pipeline-attachments-routes-'));
+      const blobs = new FileBlobStore({ root: join(dir, 'blobs') });
+      const config = attachmentsConfigSchema.parse({ enabled: true, ...overrides });
+      const service = new AttachmentService({ blobs, config: () => config });
+      const refs = new MemoryBlobRefRepository();
+      return { service, refs, config };
+    }
+
+    /** Опубликовать пайплайн из одного human-узла и вернуть его id. */
+    async function createPublished(app: Hono): Promise<string> {
+      const created = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spec: spec() }),
+      });
+      const { pipeline } = (await created.json()) as any;
+      await app.request(`/api/v2/projects/proj-1/pipelines/${pipeline.id}/publish`, { method: 'POST' });
+      return pipeline.id;
+    }
+
+    /** Ссылка на вложение в форме тела запуска (`EventAttachmentRef`). */
+    function ref(uploaded: {
+      blobPath: string;
+      sha256: string;
+      mime: string;
+      size: number;
+      name?: string;
+    }) {
+      return {
+        blobPath: uploaded.blobPath,
+        sha256: uploaded.sha256,
+        mime: uploaded.mime,
+        size: uploaded.size,
+        ...(uploaded.name ? { name: uploaded.name } : {}),
+      };
+    }
+
+    /** POST запуска прогона с телом. */
+    function startRun(app: Hono, pipelineId: string, body: unknown) {
+      return app.request(`/api/v2/projects/proj-1/pipelines/${pipelineId}/runs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    }
+
+    it('POST /runs — 201, вложения в `run.trigger.payload.attachments` и в `blob_refs`', async () => {
+      const { service, refs } = await attachmentHarness();
+      const { app } = createHarness({ projects, attachments: service, blobRefs: refs });
+      const pipelineId = await createPublished(app);
+
+      const uploaded = await service.upload({
+        bytes: Buffer.from('задание'),
+        name: 'note.txt',
+        declaredMime: 'text/plain',
+      });
+
+      const res = await startRun(app, pipelineId, { attachments: [ref(uploaded)] });
+
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      // Вход прогона лёг под `trigger.payload` (путь маппинга шага).
+      expect(body.run.trigger.payload.attachments).toEqual([
+        {
+          blobPath: uploaded.blobPath,
+          sha256: uploaded.sha256,
+          mime: uploaded.mime,
+          size: uploaded.size,
+          name: 'note.txt',
+        },
+      ]);
+      // Ссылка учтена владельцем прогона: GC не удалит объект.
+      expect(await refs.listByOwner('pipeline-run', body.run.id)).toEqual([uploaded.blobPath]);
+    });
+
+    it('POST /runs — вложения без сервиса вложений отклоняются (fail-closed)', async () => {
+      const { app } = createHarness({ projects });
+      const pipelineId = await createPublished(app);
+
+      const res = await startRun(app, pipelineId, {
+        attachments: [
+          {
+            blobPath: 'attachments/aa/deadbeef',
+            sha256: 'a'.repeat(64),
+            mime: 'text/plain',
+            size: 5,
+          },
+        ],
+      });
+
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.problems.join(' ')).toContain('не подключён сервис вложений');
+    });
+
+    it('POST /runs — 400 на несуществующий объект вложения', async () => {
+      const { service, refs } = await attachmentHarness();
+      const { app } = createHarness({ projects, attachments: service, blobRefs: refs });
+      const pipelineId = await createPublished(app);
+
+      const res = await startRun(app, pipelineId, {
+        attachments: [
+          {
+            blobPath: 'attachments/aa/missing',
+            sha256: 'a'.repeat(64),
+            mime: 'text/plain',
+            size: 5,
+          },
+        ],
+      });
+
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.problems.join(' ')).toContain('не найдено');
+    });
+
+    it('POST /runs — 400 при несовпадении sha256/mime/size со sidecar', async () => {
+      const { service, refs } = await attachmentHarness();
+      const { app } = createHarness({ projects, attachments: service, blobRefs: refs });
+      const pipelineId = await createPublished(app);
+
+      const uploaded = await service.upload({
+        bytes: Buffer.from('данные'),
+        name: 'data.txt',
+        declaredMime: 'text/plain',
+      });
+
+      const cases: Array<{ patch: Record<string, unknown>; expected: string }> = [
+        { patch: { sha256: 'b'.repeat(64) }, expected: 'sha256' },
+        { patch: { mime: 'application/pdf' }, expected: 'mime' },
+        { patch: { size: uploaded.size + 1 }, expected: 'size' },
+      ];
+      for (const testCase of cases) {
+        const res = await startRun(app, pipelineId, {
+          attachments: [{ ...ref(uploaded), ...testCase.patch }],
+        });
+        expect(res.status).toBe(400);
+        const body: any = await res.json();
+        expect(body.error.code).toBe('VALIDATION_ERROR');
+        expect(body.error.problems.join(' ')).toContain(testCase.expected);
+      }
+    });
+
+    it('POST /runs — 400 при превышении `maxFilesPerMessage`', async () => {
+      const { service, refs } = await attachmentHarness({ maxFilesPerMessage: 1 });
+      const { app } = createHarness({ projects, attachments: service, blobRefs: refs });
+      const pipelineId = await createPublished(app);
+
+      const first = await service.upload({
+        bytes: Buffer.from('первый'),
+        name: 'a.txt',
+        declaredMime: 'text/plain',
+      });
+      const second = await service.upload({
+        bytes: Buffer.from('второй'),
+        name: 'b.txt',
+        declaredMime: 'text/plain',
+      });
+
+      const res = await startRun(app, pipelineId, {
+        attachments: [ref(first), ref(second)],
+      });
+
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.problems.join(' ')).toContain('предел 1');
+    });
+
+    it('POST /runs — 400 при превышении `maxBytesPerFile`', async () => {
+      const { service, refs, config } = await attachmentHarness({ maxBytesPerFile: 1024 });
+      const { app } = createHarness({ projects, attachments: service, blobRefs: refs });
+      const pipelineId = await createPublished(app);
+
+      const uploaded = await service.upload({
+        bytes: Buffer.from('x'.repeat(100)),
+        name: 'big.txt',
+        declaredMime: 'text/plain',
+      });
+      // Лимит уменьшен после загрузки: проверяется валидация прогона.
+      config.maxBytesPerFile = 10;
+
+      const res = await startRun(app, pipelineId, { attachments: [ref(uploaded)] });
+
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.problems.join(' ')).toContain('превышает предел 10');
+    });
+
+    it('POST /runs — 400 при превышении `maxBytesPerSession` (суммарный объём)', async () => {
+      const { service, refs } = await attachmentHarness({
+        maxBytesPerFile: 1024,
+        maxBytesPerSession: 15,
+      });
+      const { app } = createHarness({ projects, attachments: service, blobRefs: refs });
+      const pipelineId = await createPublished(app);
+
+      const first = await service.upload({
+        bytes: Buffer.from('x'.repeat(10)),
+        name: 'a.txt',
+        declaredMime: 'text/plain',
+      });
+      const second = await service.upload({
+        bytes: Buffer.from('y'.repeat(10)),
+        name: 'b.txt',
+        declaredMime: 'text/plain',
+      });
+
+      const res = await startRun(app, pipelineId, {
+        attachments: [ref(first), ref(second)],
+      });
+
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.problems.join(' ')).toContain('Суммарный объём');
+    });
+
+    it('POST /runs — 400 на `blobPath` вне контура `attachments/`', async () => {
+      const { service, refs } = await attachmentHarness();
+      const { app } = createHarness({ projects, attachments: service, blobRefs: refs });
+      const pipelineId = await createPublished(app);
+
+      const res = await startRun(app, pipelineId, {
+        attachments: [
+          {
+            blobPath: 'artifacts/ab/secret',
+            sha256: 'a'.repeat(64),
+            mime: 'text/plain',
+            size: 5,
+          },
+        ],
+      });
+
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.problems.join(' ')).toContain('attachments/');
     });
   });
 });

@@ -107,6 +107,24 @@ export type {
   PipelineRunStartOptions,
   PipelineRunStartResult,
 } from './run-control.js';
+// ADR-115 × ADR-101: вложения прогона — проверка ссылок до старта, сбор ссылок
+// шага (вход прогона, маппинг, blob-артефакты) и гидратация через общий путь
+// сессий (`hydrateMessageAttachments`); обработка text-only через derive.
+export {
+  collectStepAttachmentRefs,
+  createPipelineAttachmentDerive,
+  hydrateStepAttachments,
+  PIPELINE_ATTACHMENTS_MAX_FILES,
+  PipelineAttachmentError,
+  validatePipelineAttachments,
+} from './attachments.js';
+export type {
+  PipelineAttachmentDeriveDeps,
+  PipelineAttachmentErrorReason,
+  PipelineAttachmentRef,
+  PipelineAttachmentSource,
+  StepAttachmentHydrationOptions,
+} from './attachments.js';
 // ADR-101: авторские операции над пайплайном проекта (черновик/публикация/
 // удаление) — общие для HTTP-роута и встроенных тулов агента.
 export {
@@ -158,8 +176,10 @@ export type {
   PipelineGateDecision,
   PipelineGateKind,
   PipelineLlmDefaults,
+  PipelineAttachmentDerive,
   PipelinePathContext,
   PipelineRunOptions,
+  PipelineStepAttachments,
   PipelineStepLlmRuntime,
   StepExecutionContext,
   StepExecutor,

@@ -441,6 +441,7 @@ export {
   refreshRuntimeDeps,
   resetRuntimeDepsCache,
   isRuntimeDepAvailable,
+  isFfmpegAvailable,
   runtimeDepUnavailableDetail,
   runtimeRequires,
   toolRuntimeRequires,
@@ -1738,12 +1739,25 @@ export {
   PipelineArtifactStore,
   sanitizeArtifactName,
   sanitizeRunId,
+  // ADR-115 × ADR-101: вложения прогона (проверка ссылок, сбор для шага,
+  // гидратация общим путём, derive для text-only модели).
+  collectStepAttachmentRefs,
+  createPipelineAttachmentDerive,
+  hydrateStepAttachments,
+  PIPELINE_ATTACHMENTS_MAX_FILES,
+  PipelineAttachmentError,
+  validatePipelineAttachments,
 } from './engine/pipelines/index.js';
 export type {
   PipelineArtifactEntry,
   PipelineArtifactErrorCode,
   PipelineArtifactInput,
   PipelineArtifactStoreDeps,
+  PipelineAttachmentDeriveDeps,
+  PipelineAttachmentErrorReason,
+  PipelineAttachmentRef,
+  PipelineAttachmentSource,
+  StepAttachmentHydrationOptions,
 } from './engine/pipelines/index.js';
 export type {
   AgentStepExecutorOptions,
@@ -1777,7 +1791,9 @@ export type {
   PipelineSkillsCatalogLike,
   PipelineStepContext,
   PipelineStepContextDeps,
+  PipelineStepAttachments,
   PipelineStepLlmRuntime,
+  PipelineAttachmentDerive,
   PipelineToolLookup,
   PipelineToolPermissionCheck,
   PipelineToolRegistryLike,

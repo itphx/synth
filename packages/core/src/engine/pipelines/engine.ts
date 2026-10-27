@@ -74,6 +74,7 @@ import {
   type PipelineGate,
   type PipelineGateDecision,
   type PipelineRunOptions,
+  type PipelineStepAttachments,
   type PipelineStepLlmRuntime,
   type StepExecutionContext,
   type StepExecutor,
@@ -164,6 +165,8 @@ export class PipelineEngine {
   private readonly _stepContextDeps: PipelineEngineDeps;
   /** LLM-контур шага (ADR-101 §4) — прокидывается в контекст исполнения. */
   private readonly _llm: PipelineStepLlmRuntime | undefined;
+  /** Инфраструктура вложений шага (ADR-115 × ADR-101). */
+  private readonly _stepAttachments: PipelineStepAttachments | undefined;
   /** Шина инстансных событий (ADR-101 §2.12) — публикация `pipeline.run.*`. */
   private readonly _eventBus: PipelineEventPublisher | null;
   /** Метрики прогонов (ADR-094, `synth_pipeline_*`). */
@@ -191,6 +194,19 @@ export class PipelineEngine {
           ...(deps.resolveLlmDefaults ? { resolveLlmDefaults: deps.resolveLlmDefaults } : {}),
         }
       : undefined;
+    // ADR-115 × ADR-101: инфраструктура вложений шага собирается один раз;
+    // нет ни одного источника — шаг работает без вложений (прежнее поведение).
+    const attachments: PipelineStepAttachments = {
+      ...(deps.attachments ? { service: deps.attachments } : {}),
+      ...(deps.artifacts ? { artifacts: deps.artifacts } : {}),
+      ...(deps.resolveModalities ? { resolveModalities: deps.resolveModalities } : {}),
+      ...(deps.deriveAttachment ? { derive: deps.deriveAttachment } : {}),
+      ...(deps.attachmentsNoticeTemplate
+        ? { noticeTemplate: deps.attachmentsNoticeTemplate }
+        : {}),
+    };
+    this._stepAttachments =
+      Object.keys(attachments).length > 0 ? attachments : undefined;
     this._logger = deps.logger ?? {
       info: (group, message) => logInfo(group, message),
       warning: (group, message) => logWarning(group, message),
@@ -741,12 +757,13 @@ export class PipelineEngine {
     };
 
     const withLlm = this._llm ? { llm: this._llm } : {};
+    const withAttachments = this._stepAttachments ? { attachments: this._stepAttachments } : {};
     try {
       const step = await buildPipelineStepContext(ctx, this._stepContextDeps);
-      return { ...ctx, step, ...withLlm };
+      return { ...ctx, step, ...withLlm, ...withAttachments };
     } catch {
       // Контекст шага — вспомогательный: его отсутствие не роняет шаг.
-      return { ...ctx, ...withLlm };
+      return { ...ctx, ...withLlm, ...withAttachments };
     }
   }
 

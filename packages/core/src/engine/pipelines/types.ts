@@ -19,9 +19,12 @@ import type {
   StepResult,
   PipelineArtifact,
 } from '@itphx/synth-shared';
+import type { AttachmentFamily, AttachmentModality } from '@itphx/synth-shared';
 import type { EventType } from '@itphx/synth-shared';
 import type { BaseProvider } from '../../providers/base.js';
 import type { PipelineMetricsHooks } from '../../metrics/collectors/pipelines.js';
+import type { AttachmentService } from '../attachments/service.js';
+import type { PipelineArtifactStore } from './artifacts.js';
 import type {
   PipelineRunRecord,
   PipelineRunRepository,
@@ -151,6 +154,53 @@ export interface PipelineStepLlmRuntime {
 }
 
 /**
+ * Обработчик вложения aux-моделью семейства (ADR-115) для шага пайплайна.
+ *
+ * Вызывается, когда модель шага **не принимает** модальность вложения: вместо
+ * байтов в текст шага попадает результат обработки. Вызов LLM — только через
+ * `GatewayProvider` (ADR-036), поэтому провайдер приходит из точки сборки.
+ */
+export type PipelineAttachmentDerive = (input: {
+  /** Путь объекта в blob-хранилище. */
+  blobPath: string;
+  /** MIME-тип содержимого. */
+  mime: string;
+  /** Имя файла (если известно). */
+  name?: string;
+  /** Семейство вложения (`image`/`pdf`/`audio`/`video`). */
+  family: AttachmentFamily;
+  /** Язык шага (промпт обработки). */
+  language?: 'ru' | 'en';
+}) => Promise<string | null>;
+
+/**
+ * Инфраструктура вложений шага (ADR-115 × ADR-101).
+ *
+ * Собирается **движком** из `PipelineEngineDeps` и кладётся в контекст шага:
+ * исполнитель вида `agent` читает объекты вложений/артефактов, а параметры
+ * гидратации (модальности модели, derive, шаблон пометок) задаёт точка сборки.
+ * Не задана — шаг работает без вложений (прежнее поведение).
+ */
+export interface PipelineStepAttachments {
+  /** Сервис вложений: чтение объектов `attachments/…` (ADR-115). */
+  service?: AttachmentService;
+  /** Хранилище артефактов прогона: чтение объектов `artifacts/…` (ADR-116). */
+  artifacts?: PipelineArtifactStore;
+  /**
+   * Модальности модели шага из конфига модели инстанса. Не задано —
+   * модальности неизвестны, фильтра нет (как у сессии: ошибку типа вернёт
+   * провайдер).
+   */
+  resolveModalities?: (provider: string, model: string) => readonly AttachmentModality[] | undefined;
+  /** Обработка вложения aux-моделью (text-only модель шага). */
+  derive?: PipelineAttachmentDerive;
+  /** Шаблон блока «вложения не доставлены» (`prompts/system/ATTACHMENTS_DROPPED`). */
+  noticeTemplate?: (language: string) => string;
+  /** Предел суммарного base64 на шаг (по умолчанию — как у сессии, 20 МиБ). */
+  maxTotalBase64Bytes?: number;
+}
+
+/**
  * Контекст исполнения шага — всё, что нужно исполнителю (ADR-101 §1).
  *
  * Вход шага (`input`) — **результат маппинга**, а не «вся история»: пути
@@ -195,6 +245,12 @@ export interface StepExecutionContext {
    * исполнитель вида `agent` падает с `pipeline.agent_unavailable`.
    */
   llm?: PipelineStepLlmRuntime;
+  /**
+   * Вложения шага (ADR-115 × ADR-101): чтение объектов вложений прогона и
+   * артефактов шагов, модальности модели шага и обработчик derive. Задаётся
+   * **движком** из `PipelineEngineDeps`; не задан — вложений в шаге нет.
+   */
+  attachments?: PipelineStepAttachments;
   /**
    * Решение оператора по гейту (ADR-101 §6). Задаётся **только** при повторном
    * исполнении узла после `resume`: исполнитель не запрашивает гейт заново, а
@@ -426,6 +482,35 @@ export interface PipelineEngineDeps extends PipelineStepContextDeps {
    * funnel'а сессий.
    */
   resolveLlmDefaults?: () => PipelineLlmDefaults | Promise<PipelineLlmDefaults>;
+  /**
+   * ADR-115 × ADR-101: сервис вложений — чтение объектов вложений прогона
+   * (`attachments/…`) исполнителем вида `agent` и источник лимитов.
+   *
+   * Не задан — вложения шагу не доставляются (шаг работает как раньше), а
+   * ссылки на вложения в тексте шага помечаются как не доставленные.
+   */
+  attachments?: AttachmentService | null;
+  /**
+   * ADR-116 × ADR-101: хранилище артефактов прогона — blob-объекты предыдущих
+   * шагов (`StepResult.artifacts` с `kind: 'blob'`) как вложения шага.
+   */
+  artifacts?: PipelineArtifactStore | null;
+  /**
+   * ADR-115: модальности модели шага — из конфига модели инстанса. Не задано —
+   * модальности неизвестны, гидратация их не фильтрует.
+   */
+  resolveModalities?: (provider: string, model: string) => readonly AttachmentModality[] | undefined;
+  /**
+   * ADR-115 × ADR-101: обработка вложения aux-моделью (text-only модель шага).
+   * Не задано — вложение не доставляется, модель видит пометку.
+   */
+  deriveAttachment?: PipelineAttachmentDerive | null;
+  /**
+   * ADR-115: шаблон блока «вложения не доставлены» для языка шага
+   * (`prompts/system/ATTACHMENTS_DROPPED.{lang}.md`). Не задан — техническая
+   * строка на английском (канал LLM, ADR-041).
+   */
+  attachmentsNoticeTemplate?: (language: string) => string;
   /**
    * Шина инстансных событий (ADR-101 §2.12) — движок публикует в неё
    * `pipeline.run.*` (старт/финиш прогона, шаг, ожидание человека, ошибка).

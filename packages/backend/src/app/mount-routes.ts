@@ -409,6 +409,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       // ADR-116: раздача артефактов прогона (blob-порт) — тот же store, что у
       // выхода `file` движка пайплайнов (без него route всегда 404).
       artifacts: deps.pipelineArtifacts,
+      // ADR-115 × ADR-101: вложения прогона — проверка ссылок в теле запуска
+      // (тот же сервис вложений, что у приёма событий) и учёт в `blob_refs`.
+      attachments: deps.pipelineAttachments,
+      blobRefs: deps.storageContext.blobRefs,
     },
     {
       writeGuard: auth.requireAuth,

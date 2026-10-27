@@ -43,6 +43,18 @@
  *   значения обрезаются до `MAX_INPUT_VALUE_CHARS`;
  * - `undefined` пропускается, `null` — как `null`.
  *
+ * ## Вложения (ADR-115 × ADR-101)
+ *
+ * К первому (единственному) user-сообщению шага прикладываются вложения:
+ * вход прогона (`trigger.payload.attachments`), ссылки из маппинга (`ctx.input`)
+ * и blob-артефакты предыдущего шага (`prev.artifacts` с `kind: 'blob'`). Сбор —
+ * `collectStepAttachmentRefs`, гидратация — `hydrateStepAttachments` (**тот же**
+ * путь, что у сессий: `hydrateMessageAttachments`): очистка метаданных на
+ * границе отправки, фильтр модальностей модели шага, derive для text-only
+ * модели, лимит суммарного base64 (`MAX_ATTACHMENT_BASE64_BYTES`) и блок-пометка
+ * «вложения не доставлены» в тексте шага. Нет инфраструктуры чтения — в тексте
+ * шага остаётся техническая пометка (модель знает, что вложение было).
+ *
  * ## Точки расширения для Э4.3b (цикл вызовов тулов)
  *
  * Цикл добавляется **в одном месте** — `executeAgentStep`:
@@ -123,6 +135,7 @@ import { zodToJsonSchema } from '../../tools/json-schema.js';
 import type { PipelineStepContext } from '../step-context.js';
 import { sanitizeValue } from '../payload.js';
 import type { PipelinePermissionDeps } from '../permissions.js';
+import { collectStepAttachmentRefs, hydrateStepAttachments } from '../attachments.js';
 import type {
   PipelineEngineLogger,
   PipelineGate,
@@ -246,10 +259,10 @@ export async function executeAgentStep(
     }));
   }
 
-  // 4. Подготовка шага: системный промпт, сообщение шага, тулы, локальная
-  //    история. Собирается один раз на попытку — цикл Э4.3b переиспользует
-  //    то же состояние.
-  const state = await prepareAgentStep(ctx, provider, llm);
+  // 4. Подготовка шага: системный промпт, сообщение шага, вложения, тулы,
+  //    локальная история. Собирается один раз на попытку — цикл Э4.3b
+  //    переиспользует то же состояние.
+  const state = await prepareAgentStep(ctx, provider, llm, defaults, logger);
 
   // 5. Tool-Use-цикл (Э4.3b): LLM-вызов → вызовы тулов → повторный вызов.
   return runToolUseLoop(ctx, state, opts, logger, defaults);
@@ -525,6 +538,8 @@ async function prepareAgentStep(
   ctx: StepExecutionContext,
   provider: BaseProvider,
   llm: NonNullable<StepExecutionContext['llm']>,
+  defaults?: { provider?: string; model?: string },
+  logger?: PipelineEngineLogger,
 ): Promise<AgentStepState> {
   const step = ctx.step;
   const tools = toLlmTools(step?.availableTools ?? []);
@@ -569,9 +584,61 @@ async function prepareAgentStep(
   return {
     provider,
     system,
-    messages: [userMessage(buildStepUserMessage(ctx))],
+    messages: await buildStepMessages(ctx, buildStepUserMessage(ctx), defaults, logger ?? defaultLogger),
     tools,
   };
+}
+
+/**
+ * Сообщения шага: пользовательское сообщение + вложения (ADR-115 × ADR-101).
+ *
+ * Вложения входа прогона (`trigger.payload.attachments`), ссылки из маппинга
+ * (`ctx.input`) и blob-артефакты предыдущего шага прикладываются к **первому**
+ * (единственному) user-сообщению шага через общий путь сессий —
+ * `hydrateStepAttachments` (`hydrateMessageAttachments`): base64 с очисткой
+ * метаданных, фильтр модальностей модели шага, derive для text-only модели,
+ * лимит объёма и блок-пометка о не доставленных вложениях в тексте.
+ *
+ * Вложений нет — сообщение собирается как раньше (ровно один объект, без
+ * обращения к blob-порту).
+ */
+async function buildStepMessages(
+  ctx: StepExecutionContext,
+  content: string,
+  defaults: { provider?: string; model?: string } | undefined,
+  logger: PipelineEngineLogger,
+): Promise<LLMMessage[]> {
+  const base = userMessage(content);
+  const refs = collectStepAttachmentRefs(ctx);
+  if (refs.length === 0) return [base];
+
+  const runtime = ctx.attachments;
+  const language: 'ru' | 'en' = ctx.step?.language === 'en' ? 'en' : 'ru';
+  const modalities =
+    runtime?.resolveModalities && defaults?.provider && defaults?.model
+      ? runtime.resolveModalities(defaults.provider, defaults.model)
+      : undefined;
+  const derive = runtime?.derive;
+
+  return hydrateStepAttachments({
+    messages: [base],
+    refs,
+    ...(runtime ? { runtime } : {}),
+    options: {
+      ...(modalities && modalities.length > 0 ? { modalities } : {}),
+      // Язык шага передаётся обработчику здесь: фабрика derive создаётся при
+      // сборке инстанса и языка шага не знает.
+      ...(derive ? { derive: (input) => derive({ ...input, language }) } : {}),
+      ...(runtime?.noticeTemplate ? { noticeTemplate: runtime.noticeTemplate(language) } : {}),
+      ...(defaults?.provider && defaults?.model
+        ? { modelLabel: `${defaults.provider}/${defaults.model}` }
+        : {}),
+      ...(runtime?.maxTotalBase64Bytes
+        ? { maxTotalBase64Bytes: runtime.maxTotalBase64Bytes }
+        : {}),
+      log: (message) => logger.warning(LOG_GROUP, message),
+    },
+  });
 }
 
 /**

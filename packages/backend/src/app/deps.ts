@@ -34,6 +34,8 @@ import {
   SkillService, resolveProjectSkillSeed,
   CommandService,
   detectRuntimeDeps, syncProvidersFromEnv,
+  // ADR-115 × ADR-101: доступность `ffmpeg` — обработчик вложения aux-моделью шага.
+  isFfmpegAvailable,
   HookBus,
   startEphemeralSweeper,
   assertInstanceDataNotTooNew,
@@ -107,6 +109,8 @@ import {
   createAgentStepExecutor,
   createPipelineExitHandler,
   createPipelineMetrics,
+  // ADR-115 × ADR-101: вложения прогона — derive для text-only модели шага.
+  createPipelineAttachmentDerive,
   ensureBuiltinPipelines,
   toCoreProviderConfig,
   ProviderFactory,
@@ -874,6 +878,31 @@ export async function createBackendDeps(
       })
     : undefined;
 
+  /**
+   * ADR-115: модальности модели — только из её конфига (каталог провайдера при
+   * синхронизации моделей либо ручной override). Справочника модальностей в
+   * ядре нет (решение 2026-10-27): не нашли — `undefined`, и гидратация
+   * вложений их не фильтрует (ошибку модальности вернёт провайдер).
+   *
+   * Один резолвер на инстанс: тот же нужен шагам пайплайна (ADR-115 × ADR-101),
+   * иначе сессии и прогоны разошлись бы по фильтру модальностей.
+   */
+  const resolveModelModalities = (
+    providerName: string,
+    modelId: string,
+  ): ModelConfig['modalities'] => {
+    const direct = modelCache.get(`${providerName}/${modelId}`) ?? modelCache.get(modelId);
+    if (direct?.modalities?.length) return direct.modalities;
+    let prefixMatch: ModelConfig['modalities'];
+    for (const model of modelCache.values()) {
+      if (model.provider !== providerName || !model.modalities?.length) continue;
+      if (model.name === modelId) return model.modalities;
+      // В сессии имя может нести суффикс (например, `-1017`).
+      if (!prefixMatch && modelId.startsWith(model.name)) prefixMatch = model.modalities;
+    }
+    return prefixMatch;
+  };
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -909,22 +938,9 @@ export async function createBackendDeps(
     // ADR-115/ADR-116: blob-порт гидратации вложений — из контекста хранения
     // (managed: тот же корень, что у раздачи/записи blob'ов).
     blobs: storageContext.blobs,
-    // ADR-115: модальности модели — только из её конфига (каталог провайдера
-    // при синхронизации моделей либо ручной override). Справочника модальностей
-    // в ядре нет (решение 2026-10-27): не нашли — `undefined`, и гидратация
-    // вложений их не фильтрует (ошибку модальности вернёт провайдер).
-    resolveModelModalities: (providerName: string, modelId: string) => {
-      const direct = modelCache.get(`${providerName}/${modelId}`) ?? modelCache.get(modelId);
-      if (direct?.modalities?.length) return direct.modalities;
-      let prefixMatch: ModelConfig['modalities'];
-      for (const model of modelCache.values()) {
-        if (model.provider !== providerName || !model.modalities?.length) continue;
-        if (model.name === modelId) return model.modalities;
-        // В сессии имя может нести суффикс (например, `-1017`).
-        if (!prefixMatch && modelId.startsWith(model.name)) prefixMatch = model.modalities;
-      }
-      return prefixMatch;
-    },
+    // ADR-115: модальности модели — из её конфига (общий резолвер инстанса,
+    // выше: им же пользуются шаги пайплайнов).
+    resolveModelModalities,
     // ADR-115: `attachments.workspaceFallback` — материализация отброшенных
     // вложений в workspace; live-конфиг (проверяется на каждый ход).
     attachmentsConfig: () => attachmentsSettings.getConfig(),
@@ -1398,6 +1414,35 @@ export async function createBackendDeps(
     composer: orchestrator.getComposer(),
     resolveProvider: resolvePipelineProvider,
     resolveLlmDefaults,
+    // ADR-115 × ADR-101: вложения прогона — тот же сервис вложений, что у
+    // приёма событий (чтение `attachments/…`, sidecar-метаданные, лимиты) и
+    // тот же blob-порт артефактов, что у HTTP-раздачи (`artifacts/…`).
+    attachments: eventAttachmentService,
+    artifacts: pipelineArtifacts,
+    resolveModalities: resolveModelModalities,
+    deriveAttachment: createPipelineAttachmentDerive({
+      config: () => attachmentsSettings.getConfig(),
+      attachments: eventAttachmentService,
+      blobs: storageContext.blobs,
+      // Инвариант 3: LLM-вызов только через gateway — провайдер aux-модели
+      // обёрнут той же обвязкой, что и провайдер шага.
+      resolveProvider: async (provider, model) => {
+        try {
+          const sharedConfig = providerLoader(provider);
+          if (!sharedConfig) return null;
+          return orchestrator.wrapProviderWithGateway(
+            ProviderFactory.create(provider, toCoreProviderConfig(sharedConfig, model)),
+          );
+        } catch {
+          return null;
+        }
+      },
+      hasFfmpeg: () => isFfmpegAvailable(executionPort).catch(() => false),
+      promptTemplate: (language) => contextConfig.getMediaDeriveTemplate(language),
+      language: 'ru',
+      log: (message) => console.warn(message),
+    }),
+    attachmentsNoticeTemplate: (language) => contextConfig.getAttachmentsDroppedTemplate(language),
     // ADR-101 §10: контекст шага — те же объекты, что собраны для сессий.
     projectStore,
     toolRegistry,
@@ -1574,6 +1619,9 @@ export async function createBackendDeps(
     // ADR-101 §9/ADR-116: хранилище артефактов прогонов поверх blob-порта —
     // получает HTTP-раздача `GET /pipeline-runs/:runId/artifacts/:name`.
     pipelineArtifacts,
+    // ADR-115 × ADR-101: сервис вложений — проверка `attachments[]` в теле
+    // запуска прогона (тот же экземпляр, что у приёма событий).
+    pipelineAttachments: eventAttachmentService,
     // ADR-101: реестр активных прогонов — общий для HTTP-роута пайплайнов и
     // встроенных тулов агента (soft-lock + отмена идущего прогона).
     pipelineRunControl,
