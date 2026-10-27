@@ -1,14 +1,17 @@
 import { create } from 'zustand'
+import { appendReasoningBlock, type ReasoningBlock } from '@itphx/synth-shared/utils'
 import type { Part } from '@itphx/synth-shared/types'
 import type { StickyNoteData } from '@/lib/api/synthApi'
 import { costCurrencyKey } from '@/lib/currency'
 
 export type DebugData = Record<string, unknown>;
 
-export interface ReasoningBlockData {
-  text: string
-  iteration: number
-}
+/**
+ * Блок рассуждений в ленте. Тип и хелпер накопления живут в shared: провайдер
+ * шлёт reasoning кумулятивно, и ядро (финальные `reasoning_blocks`) и UI должны
+ * склеивать его одинаково. Алиас сохранён ради существующих импортов.
+ */
+export type ReasoningBlockData = ReasoningBlock
 
 export interface IntermediateTextBlockData {
   text: string
@@ -241,24 +244,6 @@ function isUsageOnlyStream(st: StreamState | undefined): boolean {
   return !!st && !st.hasContent && st.content.length === 0 && st.toolCalls.length === 0
 }
 
-/**
- * ADR-070 §2.6: накопление reasoning-блоков по итерациям. Внутри одной итерации
- * более длинный текст заменяет предыдущий; новая итерация — отдельный блок.
- */
-function appendReasoningBlock(
-  blocks: ReasoningBlockData[],
-  text: string,
-  iteration: number,
-): ReasoningBlockData[] {
-  if (!text || !text.trim()) return blocks
-  if (blocks.length === 0) return [{ text, iteration }]
-  const last = blocks[blocks.length - 1]!
-  if (last.iteration === iteration && text.length >= last.text.length) {
-    return [...blocks.slice(0, -1), { ...last, text }]
-  }
-  return [...blocks, { text, iteration }]
-}
-
 /** ADR-070 §2.6: накопление промежуточного текста; в итерации текст перезаписывается. */
 function appendIntermediateBlock(
   blocks: IntermediateTextBlockData[],
@@ -320,6 +305,13 @@ interface ChatStore {
    * сохраняем: следующая итерация продолжит ту же генерацию.
    */
   resetStreamAccumulator: (sessionId: string, streamId: string) => void
+  /**
+   * `stream.retry`: повторная попытка начинается с чистого текста (как в финале),
+   * поэтому сбрасывается весь аккумулятор попытки, включая tool-вызовы неудачной
+   * попытки, — иначе в ленте остаются висящие карточки инструментов и дубли
+   * рассуждений. Стрим при этом остаётся живым.
+   */
+  resetStreamAttempt: (sessionId: string, streamId: string) => void
   updateStreamUsage: (sessionId: string, streamId: string, data: {
     usage?: UsageData
     costUsd?: number
@@ -420,6 +412,12 @@ export const useChatStore = create<ChatStore>((set) => ({
   startStream: (sessionId, streamId, agentRole, model, provider) =>
     set((s) => {
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
+      // Один ход на сессию. Записи с другим streamId, всё ещё помеченные
+      // `isStreaming`, осиротели: их `stream.done` потерян (разрыв WS, рестарт
+      // сервера). Убираем их, иначе рядом с новым ответом висят их плейсхолдеры.
+      for (const [id, state] of Object.entries(sessionStreams)) {
+        if (id !== streamId && state.isStreaming) delete sessionStreams[id]
+      }
       sessionStreams[streamId] = {
         streamId,
         agentRole,
@@ -478,6 +476,27 @@ export const useChatStore = create<ChatStore>((set) => ({
         intermediateTextBlocks: [],
         hasContent: false,
         _lastContentLen: 0,
+      }
+      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
+    }),
+
+  // `stream.retry`: новая попытка начинается с чистого текста, как и финальное
+  // сообщение. Сбрасываем весь аккумулятор попытки (включая tool-вызовы), чтобы
+  // неудачная попытка не суммировалась с повтором.
+  resetStreamAttempt: (sessionId, streamId) =>
+    set((s) => {
+      const existing = s.streamingBySession[sessionId]?.[streamId]
+      if (!existing) return s
+      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
+      sessionStreams[streamId] = {
+        ...existing,
+        content: '',
+        reasoningBlocks: [],
+        intermediateTextBlocks: [],
+        toolCalls: [],
+        hasContent: false,
+        _lastContentLen: 0,
+        isStreaming: true,
       }
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),

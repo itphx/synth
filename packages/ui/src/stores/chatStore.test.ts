@@ -509,6 +509,63 @@ function cmdMessage(partial: Partial<MessageData>): MessageData {
   }
 }
 
+describe('chatStore: рассуждения и осиротевшие стримы', () => {
+  it('кумулятивный reasoning провайдера даёт один блок', () => {
+    const store = useChatStore.getState()
+    store.startStream('s1', 'st1', null)
+
+    // Провайдер шлёт накопленный текст, а не дельту.
+    for (const chunk of ['Дума', 'Думаю', 'Думаю дальше']) {
+      store.updateStreamChunk('s1', 'st1', '', chunk, undefined, undefined, 0)
+    }
+    // Продолжение в следующей итерации — всё то же рассуждение.
+    store.updateStreamChunk('s1', 'st1', '', 'Думаю дальше и ещё', undefined, undefined, 1)
+
+    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
+    expect(st.reasoningBlocks).toHaveLength(1)
+    expect(st.reasoningBlocks[0]).toEqual({ text: 'Думаю дальше и ещё', iteration: 1 })
+  })
+
+  it('startStream убирает осиротевший стрим той же сессии (потерян stream.done)', () => {
+    const store = useChatStore.getState()
+    store.startStream('s1', 'st-old', null)
+    store.updateStreamChunk('s1', 'st-old', 'незавершённый текст', '')
+    // Другой ход другой сессии не трогаем.
+    store.startStream('s2', 'st-other', null)
+
+    store.startStream('s1', 'st-new', null)
+
+    const streams = useChatStore.getState().streamingBySession['s1']!
+    expect(Object.keys(streams)).toEqual(['st-new'])
+    expect(streams['st-new']!.isStreaming).toBe(true)
+    expect(useChatStore.getState().streamingBySession['s2']!['st-other']).toBeDefined()
+  })
+
+  it('resetStreamAttempt сбрасывает текст, рассуждения и tool-вызовы, стрим остаётся живым', () => {
+    const store = useChatStore.getState()
+    store.startStream('s1', 'st1', null)
+    store.updateStreamChunk('s1', 'st1', 'частичный', 'Дума')
+    store.addToolCall('s1', 'st1', {
+      callId: 'call-1',
+      name: 'read_file',
+      args: {},
+      status: 'running',
+      startedAt: '2026-09-23T00:00:00Z',
+      iteration: 0,
+    })
+
+    store.resetStreamAttempt('s1', 'st1')
+
+    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
+    expect(st.content).toBe('')
+    expect(st.reasoningBlocks).toEqual([])
+    expect(st.intermediateTextBlocks).toEqual([])
+    expect(st.toolCalls).toEqual([])
+    expect(st.hasContent).toBe(false)
+    expect(st.isStreaming).toBe(true)
+  })
+})
+
 describe('chatStore: addMessage upsert (ADR-046 §7.1)', () => {
   it('повторный message.added по тому же index не дублирует, объединяет metadata', () => {
     const store = useChatStore.getState()

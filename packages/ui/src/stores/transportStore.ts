@@ -289,6 +289,7 @@ export function createDispatcher(): EventDispatcher {
       updateStreamChunk,
       updateStreamUsage,
       resetStreamAccumulator,
+      resetStreamAttempt,
       clearUsageStream,
       updateLiveSubagentUsage,
       finishStream,
@@ -598,6 +599,11 @@ export function createDispatcher(): EventDispatcher {
         const retryInMs = (payload.retry_in as number) || 5000
         const attempt = (payload.attempt as number) || 1
         const maxRetries = (payload.max_retries as number) || 3
+
+        // Новая попытка начинается с чистого текста: сбрасываем аккумулятор
+        // неудачной попытки (контент/рассуждения/тулы), иначе в ленте остаются
+        // её висящие блоки, а рассуждения суммируются с повтором.
+        if (streamId) resetStreamAttempt(sid, streamId)
 
         setStreamRetry(sid, {
           streamId,

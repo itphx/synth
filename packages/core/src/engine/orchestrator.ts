@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, resolveModelModalities } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, resolveModelModalities, appendReasoningBlock } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir, stat } from 'node:fs/promises';
@@ -2977,7 +2977,7 @@ export class ChatOrchestrator {
       const currentMessages: LLMMessage[] = [...baseLlmMessages];
       const doomLoopTracker: Map<string, number> = new Map();
       let finalContent = '';
-      const allReasoning: Array<{ text: string; iteration: number }> = [];
+      let allReasoning: Array<{ text: string; iteration: number }> = [];
       const allIntermediateTexts: Array<{ text: string; iteration: number }> = [];
       let finalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
@@ -3355,7 +3355,9 @@ export class ChatOrchestrator {
         finalModel = chunkModel ?? finalModel;
 
         if (accumulatedReasoning) {
-          allReasoning.push({ text: accumulatedReasoning, iteration: toolIteration });
+          // Накопление через общий с UI хелпер: провайдер шлёт reasoning
+          // кумулятивно, повтор в новой итерации не должен дать дубль.
+          allReasoning = appendReasoningBlock(allReasoning, accumulatedReasoning, toolIteration);
         }
 
         // No tool calls — final response

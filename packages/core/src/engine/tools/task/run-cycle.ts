@@ -6,7 +6,7 @@
  * (`task-resume.ts`). ADR-095 (шаг 5): вынесено из `task.ts` без изменения
  * поведения.
  */
-import { MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, appendReasoningBlock } from '@itphx/synth-shared';
 import type { Message, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult } from '@itphx/synth-shared';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../../providers/base.js';
 import { EventBus } from '../../../events/bus.js';
@@ -407,7 +407,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     let subagentReasoning = '';
     let subagentDenied = false;
 
-    const allSubagentReasoning: Array<{ text: string; iteration: number }> = [];
+    let allSubagentReasoning: Array<{ text: string; iteration: number }> = [];
     const allSubagentIntermediateTexts: Array<{ text: string; iteration: number }> = [];
     const allSubagentToolCalls: Array<{
       name: string; args: Record<string, unknown>; id?: string;
@@ -800,7 +800,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // порядок: размышления идут на step N, а вызовы — на N+1.
       const stepIteration = iteration;
       if (reasoning) {
-        allSubagentReasoning.push({ text: reasoning, iteration: stepIteration });
+        // Тот же общий хелпер, что у основного стрима: кумулятивный reasoning
+        // не должен давать дубль при повторе в новой итерации.
+        allSubagentReasoning = appendReasoningBlock(allSubagentReasoning, reasoning, stepIteration);
       }
 
       if (!toolCalls || toolCalls.length === 0) {

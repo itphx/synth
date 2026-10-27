@@ -178,6 +178,10 @@ export { globMatch } from './glob.js';
 
 export { slugifyWorkspaceName, uniqueWorkspaceName, MAX_WORKSPACE_SLUG_LENGTH } from './workspace.js';
 
+// --- Блоки рассуждений модели (общий хелпер UI и ядра) ---
+
+export { appendReasoningBlock, type ReasoningBlock } from './reasoning.js';
+
 // --- Part helpers ---
 
 import type { MediaPartData, MediaPartType, Part, PartType } from '../types/index.js';
