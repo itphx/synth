@@ -11,6 +11,7 @@ import { SubagentPart, type SubagentPartData } from './SubagentPart'
 import { RetryStatus } from './RetryStatus'
 import { CommandMessage } from './CommandMessage'
 import { Notice, type NoticeVariant } from './Notice'
+import { MessageAttachments, hasMediaParts } from './attachments/MessageAttachments'
 import {
   backgroundNoticeName,
   backgroundToolCall,
@@ -66,6 +67,11 @@ function getIntermediateTextBlocks(message: MessageData): IntermediateTextBlockD
 
 interface ChatMessageProps {
   message: MessageData
+  /**
+   * Сессия сообщения — для URL вложений (`/sessions/:id/attachments/:partId`).
+   * Не задана — берётся из активной центральной вкладки.
+   */
+  sessionId?: string
   // Колбэки принимают сообщение/индекс: MessageList передаёт стабильные ссылки,
   // а ChatMessage связывает их с конкретным сообщением внутри (см. useCallback ниже).
   // Это нужно, чтобы React.memo(ChatMessage) сравнивал пропсы по ссылке.
@@ -98,6 +104,7 @@ export interface PendingStreamStatus {
 
 function ChatMessageInner({
   message,
+  sessionId: sessionIdProp,
   onCopy,
   onToggle,
   onPin,
@@ -145,7 +152,9 @@ function ChatMessageInner({
   // Реестр агентов — подсветка `@`-упоминаний в сообщениях пользователя.
   const agents = useAgentsStore((s) => s.agents)
   const activeTab = useUIStore((s) => s.centerTabs.find((t) => t.id === s.activeCenterTabId))
-  const sessionId = (activeTab?.data?.sessionId as string) || undefined
+  // Сессия — из пропа (MessageList/ChatTab), фоллбек — активная вкладка:
+  // от неё зависят URL вложений и подсветка плейсхолдеров секретов.
+  const sessionId = sessionIdProp || (activeTab?.data?.sessionId as string) || undefined
   // Отладка открыта глобально (chatStore) — подсветить кнопку только у того
   // сообщения и сессии, для которых вызвано окно.
   const debugModalSessionId = useChatStore((s) => s.debugModalSessionId)
@@ -254,6 +263,11 @@ function ChatMessageInner({
     : null
   const displayContent = bottomContent ?? message.content
 
+  // ADR-115: вложения приходят частями сообщения (у user и у assistant —
+  // ассистент может вернуть картинку/файл через тул).
+  const messageParts = message.parts ?? []
+  const hasAttachments = hasMediaParts(messageParts)
+
   // ADR-046 §7.1: reasoning / intermediate / tool-call блоки. Для assistant
   // рендерятся в пузыре напрямую, для summary/debug — внутри Notice-тела.
   const partsContent = isAssistant || isSummary || isDebug
@@ -325,12 +339,14 @@ function ChatMessageInner({
 
   // ADR-070 §2.6: пустой отменённый ответ (отмена до первого токена) всё равно
   // показываем — статус «Остановлено» и статистика идут через metadata.
+  // ADR-115: сообщение только из вложений (картинка от ассистента без текста) — тоже рендерим.
   if (
     !displayContent &&
     !message.reasoning &&
     liveToolCalls.length === 0 &&
     reasoningBlocks.length === 0 &&
     intermediateTextBlocks.length === 0 &&
+    !hasAttachments &&
     !showStats
   ) return null
 
@@ -642,6 +658,10 @@ function ChatMessageInner({
             onOriginClick={handleOriginClick}
             processing={pending?.status === 'processing'}
           />
+        )}
+
+        {hasAttachments && sessionId && (
+          <MessageAttachments sessionId={sessionId} parts={messageParts} />
         )}
 
         {displayContent && (

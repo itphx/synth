@@ -1328,6 +1328,13 @@ export const dict = {
   'chat.attachments.added': '{count, plural, one {Прикреплён # файл} few {Прикреплено # файла} many {Прикреплено # файлов}}',
   'chat.attachments.error.prepare': 'Не удалось подготовить файл',
 
+  // Вложения отправленного сообщения (ADR-115, D2c)
+  'chat.message.attachments.open': 'Открыть',
+  'chat.message.attachments.audio': 'Аудио',
+  'chat.message.attachments.video': 'Видео',
+  'chat.message.attachments.file': 'Файл',
+  'chat.message.attachments.imageAlt': 'Изображение «{name}»',
+
   // Plan/Act режим сессии (ADR-025)
   'chat.mode.title': 'Режим сессии: План (только чтение) / Действия (полный доступ) / YOLO (автоподтверждение)',
   'chat.mode.plan': 'План',

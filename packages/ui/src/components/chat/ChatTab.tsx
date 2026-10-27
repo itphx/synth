@@ -642,6 +642,7 @@ export function ChatTab({ tab }: ChatTabProps) {
             <MessageList
               messages={messages}
               streams={streams}
+              sessionId={sessionId}
               onCopy={handleCopy}
               onToggle={handleToggle}
               onPin={handlePin}

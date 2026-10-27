@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { Part } from '@itphx/synth-shared/types'
 import type { StickyNoteData } from '@/lib/api/synthApi'
 import { costCurrencyKey } from '@/lib/currency'
 
@@ -23,11 +24,8 @@ export interface MessageData {
   seq?: number
   origin?: string
   source_msg_id?: string | null
-  parts?: Array<{
-    id: string
-    type: string
-    data: unknown
-  }> | null
+  /** ADR-115: части сообщения; медиа — `image`/`audio`/`video`/`file` с `MediaPartData`. */
+  parts?: Part[] | null
   role: string
   content: string
   tool_calls?: Array<{

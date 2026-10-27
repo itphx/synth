@@ -10,6 +10,8 @@ import type { MessageData, StreamState, StreamRetry } from '@/stores/chatStore'
 interface MessageListProps {
   messages: MessageData[]
   streams: Record<string, StreamState>
+  /** Сессия — для URL вложений сообщений (ADR-115). */
+  sessionId?: string
   onCopy: (msg: MessageData) => void
   onToggle: (msg: MessageData) => void
   onPin: (msg: MessageData) => void
@@ -58,6 +60,7 @@ function computePending(
 export function MessageList({
   messages,
   streams,
+  sessionId,
   onCopy,
   onToggle,
   onPin,
@@ -203,6 +206,7 @@ export function MessageList({
                     <div key={msg.id || msg.index} data-index={vi.index} ref={virtualizer.measureElement}>
                       <ChatMessage
                         message={msg}
+                        sessionId={sessionId}
                         onCopy={onCopy}
                         onToggle={onToggle}
                         onPin={onPin}
@@ -226,6 +230,7 @@ export function MessageList({
                 <ChatMessage
                   key={msg.id || `${msg.role}-${msg.index}-${msg.created_at}`}
                   message={msg}
+                  sessionId={sessionId}
                   onCopy={onCopy}
                   onToggle={onToggle}
                   onPin={onPin}

@@ -7,9 +7,21 @@ import { useI18n } from '@/lib/i18n'
 import { useAttachmentsStore } from '@/stores/attachmentsStore'
 import { isImageAttachment } from './AttachedFilesList'
 
+/** Изображение галереи: URL байтов (сообщение) или blob-URL превью (черновик). */
+export interface AttachmentGalleryImage {
+  url: string
+  name: string
+}
+
 export interface AttachmentGalleryProps {
-  sessionId: string
-  /** Текущий индекс среди изображений композера. */
+  /** Сессия черновиков композера (не нужна, если передан готовый список). */
+  sessionId?: string
+  /**
+   * Готовый список изображений (вложения отправленного сообщения).
+   * Без него галерея берёт превью из черновиков композера этой сессии.
+   */
+  images?: AttachmentGalleryImage[]
+  /** Текущий индекс среди изображений. */
   index: number
   onIndexChange: (index: number) => void
   open: boolean
@@ -24,14 +36,20 @@ export interface AttachmentGalleryProps {
  */
 export function AttachmentGallery({
   sessionId,
+  images: imagesProp,
   index,
   onIndexChange,
   open,
   onOpenChange,
 }: AttachmentGalleryProps) {
   const { t } = useI18n()
-  const items = useAttachmentsStore((state) => state.bySession[sessionId])
-  const images = (items ?? []).filter(isImageAttachment)
+  const draftItems = useAttachmentsStore((state) => state.bySession[sessionId ?? ''])
+  // Готовый список (сообщение) важнее стора черновиков композера.
+  const images: AttachmentGalleryImage[] =
+    imagesProp ??
+    (draftItems ?? [])
+      .filter(isImageAttachment)
+      .map((item) => ({ url: item.previewUrl, name: item.name }))
 
   if (images.length === 0) return null
 
@@ -93,9 +111,9 @@ export function AttachmentGallery({
           </button>
 
           <div className="flex min-w-0 flex-1 items-center justify-center">
-            {image.previewUrl ? (
+            {image.url ? (
               <img
-                src={image.previewUrl}
+                src={image.url}
                 alt={image.name}
                 data-testid="attachment-gallery-image"
                 className="max-h-[70vh] w-auto max-w-full rounded-lg object-contain"

@@ -1348,6 +1348,13 @@ export const dict = {
   'chat.attachments.added': '{count, plural, one {Attached # file} other {Attached # files}}',
   'chat.attachments.error.prepare': 'Failed to prepare the file',
 
+  // Attachments in a sent message (ADR-115, D2c)
+  'chat.message.attachments.open': 'Open',
+  'chat.message.attachments.audio': 'Audio',
+  'chat.message.attachments.video': 'Video',
+  'chat.message.attachments.file': 'File',
+  'chat.message.attachments.imageAlt': 'Image “{name}”',
+
   // Session Plan/Act mode (ADR-025)
   'chat.mode.title': 'Session mode: Plan (read-only) / Act (full access) / YOLO (auto-approve)',
   'chat.mode.plan': 'Plan',
