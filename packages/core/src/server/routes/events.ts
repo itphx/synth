@@ -11,8 +11,8 @@ import {
   SERVICE_SCOPE_SETS,
 } from '@itphx/synth-shared';
 import type { EventBinding } from '@itphx/synth-shared';
-import type { EventIngress } from '../../engine/events/ingest.js';
-import type { EventIngestInput } from '../../engine/events/ingest.js';
+import { EventAttachmentError } from '../../engine/events/ingest.js';
+import type { EventIngress, EventIngestInput } from '../../engine/events/ingest.js';
 import type { EventKeyCredential } from '../../engine/events/credential.js';
 import { KeyRateLimiter } from '../../engine/events/key-rate-limiter.js';
 import { EventApiKeyConflictError, isEventApiKeySecret } from '../../storage/event-api-key-store.js';
@@ -313,6 +313,13 @@ export function createEventRoutes(
         201,
       );
     } catch (err) {
+      // ADR-115 × ADR-089: кривые ссылки на вложения — ошибка запроса, а не
+      // внутренняя ошибка сервера (нет объекта/метаданные не совпали/лимит).
+      if (err instanceof EventAttachmentError) {
+        return c.json({
+          error: { code: 'VALIDATION_ERROR', message: err.message },
+        }, 400);
+      }
       return c.json({
         error: { code: 'INTERNAL_ERROR', message: err instanceof Error ? err.message : String(err) },
       }, 500);

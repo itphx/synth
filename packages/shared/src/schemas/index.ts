@@ -635,6 +635,28 @@ export const eventIdentitySchema = z.object({
   roles: z.array(z.string()).optional(),
 });
 
+/**
+ * ADR-115 × ADR-089: ссылка на вложение внешнего события.
+ *
+ * `blobPath` ограничен контуром вложений (`attachments/…`) — через событие нельзя
+ * сослаться на произвольный объект blob-хранилища (артефакты, логи, скиллы).
+ * `sha256` — 64 hex-символа (content-addressed адрес), `mime`/`size` — непустые.
+ */
+export const eventAttachmentRefSchema = z.object({
+  blobPath: z
+    .string()
+    .min(1)
+    .max(512)
+    .regex(/^attachments\/[A-Za-z0-9][A-Za-z0-9._/-]*$/, 'blobPath должен быть внутри attachments/')
+    // `attachments/../…` формально проходит regex — сегменты `..` запрещены явно
+    // (паритет с `isAttachmentPath` ядра: ссылка не должна выходить из контура).
+    .refine((value) => !value.includes('..'), 'blobPath не должен содержать «..»'),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/, 'sha256 должен быть 64 hex-символа'),
+  mime: z.string().min(1).max(255),
+  size: z.number().int().positive(),
+  name: z.string().min(1).max(200).optional(),
+});
+
 /** ADR-089: схема нормализованного внешнего события (`payload` не типизируется). */
 export const synthEventSchema = z.object({
   id: z.string().min(1),
@@ -644,6 +666,8 @@ export const synthEventSchema = z.object({
   identity: eventIdentitySchema.prefault({}),
   dedupKey: z.string().min(1),
   ts: z.string().min(1),
+  // ADR-115 × ADR-089: ссылки на вложения (аддитивно).
+  attachments: z.array(eventAttachmentRefSchema).optional(),
 });
 
 /** ADR-089: режимы доставки `EventBinding` (без `drop`). */
@@ -684,15 +708,40 @@ export const sessionRequestSchema = z.object({
 /**
  * ADR-089: вход приёма внешнего события (`POST /api/v2/events`). `id`/`dedupKey`/`ts`
  * нормализуются `EventIngress`, поэтому здесь опциональны.
+ *
+ * ADR-115 × ADR-089: `attachments[]` — до 10 ссылок на вложения (жёсткий предел;
+ * фактический лимит `attachments.maxFilesPerMessage` проверяет ingress). Если
+ * вложения переданы, `dedupKey` **обязателен**: ключ идемпотентности по умолчанию
+ * строится из `payload` и для бинарного содержимого нестабилен.
  */
-export const eventIngestSchema = z.object({
+const eventIngestBaseSchema = z.object({
   source: z.string().min(1),
   type: z.string().min(1),
   payload: z.unknown().optional(),
   identity: eventIdentitySchema.optional(),
-  dedupKey: z.string().optional(),
+  dedupKey: z.string().min(1).optional(),
   ts: z.string().optional(),
+  attachments: z.array(eventAttachmentRefSchema).max(10).optional(),
 });
+
+/**
+ * ADR-115 × ADR-089: вложения без явного `dedupKey` — отказ на уровне схемы
+ * (`400 VALIDATION_ERROR`), иначе дедуп-ключ зависел бы от содержимого вложений.
+ */
+function requireDedupKeyForAttachments(
+  value: { attachments?: unknown[]; dedupKey?: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (Array.isArray(value.attachments) && value.attachments.length > 0 && !value.dedupKey) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['dedupKey'],
+      message: 'attachments требуют явного dedupKey',
+    });
+  }
+}
+
+export const eventIngestSchema = eventIngestBaseSchema.superRefine(requireDedupKeyForAttachments);
 
 export type EventIngestRequest = z.infer<typeof eventIngestSchema>;
 
@@ -763,8 +812,11 @@ export type EventBindingApiKeyCreatedRequest = z.infer<typeof eventBindingApiKey
 /**
  * ADR-089: вход `POST /events` при аутентификации API-ключом привязки. Как
  * `eventIngestSchema`, но `source` опционален — источник берётся из привязки.
+ * ADR-115 × ADR-089: правило «вложения требуют `dedupKey`» действует и здесь.
  */
-export const eventKeyIngestSchema = eventIngestSchema.partial({ source: true });
+export const eventKeyIngestSchema = eventIngestBaseSchema
+  .partial({ source: true })
+  .superRefine(requireDedupKeyForAttachments);
 
 export type EventKeyIngestRequest = z.infer<typeof eventKeyIngestSchema>;
 

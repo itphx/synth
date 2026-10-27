@@ -1,17 +1,28 @@
 import type {
+  EventAttachmentRef,
   EventBinding,
   EventIdentity,
   EventType,
   Message,
+  Part,
   RouteDecision,
   Session,
   SessionRequest,
   SessionSettings,
   SynthEvent,
 } from '@itphx/synth-shared';
-import { MessageRole, generateId, nowISO } from '@itphx/synth-shared';
+import {
+  MessageRole,
+  appendMediaPlaceholders,
+  generateId,
+  makeMediaPart,
+  makeTextPart,
+  mediaTypeOfMime,
+  nowISO,
+} from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import { parseTtl } from '../../sessions/ephemeral.js';
+import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import type { EventBindingRepository } from '../../storage/ports/event-binding-repository.js';
 import type { HookBus } from '../hooks/hook-bus.js';
 import type { EventRouter } from './event-router.js';
@@ -218,8 +229,9 @@ function eventAuthorFromPayload(event: SynthEvent): string | undefined {
  * поведение.
  */
 export function eventToMessage(event: SynthEvent): Message {
-  const content = eventToMessageText(event);
+  const text = eventToMessageText(event);
   const isCron = event.source === 'cron';
+  const attachments = event.attachments ?? [];
 
   const metadata: Record<string, unknown> = {
     source: event.source,
@@ -228,6 +240,8 @@ export function eventToMessage(event: SynthEvent): Message {
     ...(event.identity?.principalId ? { principal_id: event.identity.principalId } : {}),
     ...(event.identity?.chatKey ? { chat_key: event.identity.chatKey } : {}),
     ...(event.identity?.threadKey ? { thread_key: event.identity.threadKey } : {}),
+    // ADR-115 × ADR-089: счётчик вложений — для аудита/UI (байты — в blob).
+    ...(attachments.length > 0 ? { attachments_count: attachments.length } : {}),
   };
 
   if (isCron) {
@@ -250,12 +264,30 @@ export function eventToMessage(event: SynthEvent): Message {
     ? 'Scheduler'
     : eventAuthorFromPayload(event) ?? event.identity?.principalId;
 
+  // ADR-115 × ADR-089: вложения события — медиа-части сообщения (текст первым,
+  // порядок ссылок события сохраняется). `content` — текст + плейсхолдеры
+  // `[image: name]`: без них факт вложения «испарился» бы в строковых
+  // производных (экспорт, поиск, PG-маппинг `messages.content`).
+  const parts: Part[] = [makeTextPart(text)];
+  for (const attachment of attachments) {
+    parts.push(
+      makeMediaPart(mediaTypeOfMime(attachment.mime), {
+        blobPath: attachment.blobPath,
+        sha256: attachment.sha256,
+        mime: attachment.mime,
+        size: attachment.size,
+        ...(attachment.name ? { name: attachment.name } : {}),
+      }),
+    );
+  }
+  const content = attachments.length > 0 ? appendMediaPlaceholders(text, parts) : text;
+
   return {
     id: generateId(),
     role: MessageRole.USER,
     seq: 0,
     origin: 'local',
-    parts: [{ id: generateId(), type: 'text', data: content }],
+    parts,
     content,
     ...(author ? { author } : {}),
     createdAt: nowISO(),
@@ -264,6 +296,45 @@ export function eventToMessage(event: SynthEvent): Message {
     hidden: false,
     metadata,
   };
+}
+
+/**
+ * ADR-115 × ADR-089: привязать вложения события к сообщению (учёт `blob_refs`).
+ *
+ * Без ссылки GC (`attachments.gcDays`) удалил бы объект, хотя сообщение на него
+ * ссылается. Вызывается **после** успешной постановки сообщения в очередь:
+ * `ownerId` — id того же сообщения, которое попадёт в историю (`eventToMessage`
+ * генерирует его до постановки, обфускация id сохраняет).
+ *
+ * Best-effort: ошибка учёта не отменяет доставку (ссылка — производная),
+ * пишется в лог. Возвращает число учтённых ссылок (для тестов/диагностики).
+ */
+export async function addEventAttachmentRefs(
+  blobRefs: BlobRefRepository | undefined,
+  event: SynthEvent,
+  messageId: string,
+  log: (message: string) => void = (message) => console.warn(message),
+): Promise<number> {
+  const attachments: EventAttachmentRef[] = event.attachments ?? [];
+  if (!blobRefs || attachments.length === 0 || !messageId) return 0;
+  let added = 0;
+  for (const attachment of attachments) {
+    try {
+      await blobRefs.add({
+        blobPath: attachment.blobPath,
+        ownerKind: 'message',
+        ownerId: messageId,
+      });
+      added += 1;
+    } catch (err) {
+      log(
+        `[events] не удалось учесть ссылку на вложение ${attachment.blobPath}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+  return added;
 }
 
 /**

@@ -484,7 +484,8 @@ multipart), `401`, `403 FORBIDDEN` (чужая сессия, prefix-guard), `404
 пайплайны — из шага. Контракт запроса/ответа тот же, что у загрузки в сессию (`multipart/form-data`,
 поле `file`; необязательное `name`) → **201** `{id, blobPath, sha256, mime, size, name?}`, ошибки —
 те же (`400`, `413`, `415`). Полученный `blobPath` дальше передаётся в `POST /sessions/:id/prompt`
-(`attachments: string[]`) или используется как артефакт прогона.
+(`attachments: string[]`), в `POST /api/v2/events` (§5.26 — `attachments[]` со ссылками и
+метаданными) или используется как артефакт прогона.
 
 | Метод | Путь | Сборка | RBAC | Назначение |
 |---|---|---|---|---|
@@ -1076,7 +1077,7 @@ Real-time — SSE `GET /api/v2/events` и WS `/ws/events` (см. §3). Приё�
 |---|---|---|---|---|
 | GET | `/api/v2/events` | оба | auth | Глобальный SSE-поток `BusEvent` (фоллбек WS) |
 | WS | `/ws/events` | оба | auth | Основной real-time-канал (см. §3) |
-| POST | `/api/v2/events` | оба | auth/ключ + rate limit | Приём нормализованного внешнего события. Обычный путь: `Authorization: Bearer <пользовательский ключ>` → тело `{source, type, payload?, identity?, dedupKey?, ts?}` (`eventIngestSchema`). Путь по API-ключу привязки: `Authorization: Bearer synth_evt_…` — **без пользовательских кред**, `source` опционален (`eventKeyIngestSchema`; source/чат/тред берутся из привязки; конфликт `source` → 400), событие форсированно маршрутизируется в привязку. Ответ в обоих случаях → `201 {event, decision, sessionId}` + **опциональное** `identityHint?: {code, expiresAt}` (ADR-089 claim-flow: одноразовый код подтверждения владения идентичностью; заполняется только когда отправитель не сопознан — `resolveExternalIdentity` → `null` — и задан `identity.principalId`); `sessionId` — id сессии или `null` при `drop`; при decision-маршрутизации (`events.decisionRouting`) `decision` несёт `confidence` и диагностические `signals`, напр. `agent:<id>`/`model:<p/m>`/`latency:<ms>ms`); неверный/отозванный/истёкший ключ → 401 `UNAUTHORIZED`; невалидное тело → 400 `VALIDATION_ERROR`, сбой материализации → 500 `INTERNAL_ERROR` (решение всё равно пишется в журнал). Rate limit (managed — 120/мин) применяется к обоим путям до выбора способа аутентификации; per-key лимит (лимит ключа либо глобальный `events.keyRateLimitPerMinute`) → 429 `RATE_LIMITED`; мастер-выключатель `events.enabled: false` → 503 `UNAVAILABLE`. Использование ключа пишется в журнал (`keyId`/`principalId`) |
+| POST | `/api/v2/events` | оба | auth/ключ + rate limit | Приём нормализованного внешнего события. Обычный путь: `Authorization: Bearer <пользовательский ключ>` → тело `{source, type, payload?, identity?, dedupKey?, ts?, attachments?}` (`eventIngestSchema`). Путь по API-ключу привязки: `Authorization: Bearer synth_evt_…` — **без пользовательских кред**, `source` опционален (`eventKeyIngestSchema`; source/чат/тред берутся из привязки; конфликт `source` → 400), событие форсированно маршрутизируется в привязку. Ответ в обоих случаях → `201 {event, decision, sessionId}` + **опциональное** `identityHint?: {code, expiresAt}` (ADR-089 claim-flow: одноразовый код подтверждения владения идентичностью; заполняется только когда отправитель не сопознан — `resolveExternalIdentity` → `null` — и задан `identity.principalId`); `sessionId` — id сессии или `null` при `drop`; при decision-маршрутизации (`events.decisionRouting`) `decision` несёт `confidence` и диагностические `signals`, напр. `agent:<id>`/`model:<p/m>`/`latency:<ms>ms`); неверный/отозванный/истёкший ключ → 401 `UNAUTHORIZED`; невалидное тело → 400 `VALIDATION_ERROR`, сбой материализации → 500 `INTERNAL_ERROR` (решение всё равно пишется в журнал). Вложения события (`attachments[]`) — см. ниже. Rate limit (managed — 120/мин) применяется к обоим путям до выбора способа аутентификации; per-key лимит (лимит ключа либо глобальный `events.keyRateLimitPerMinute`) → 429 `RATE_LIMITED`; мастер-выключатель `events.enabled: false` → 503 `UNAVAILABLE`. Использование ключа пишется в журнал (`keyId`/`principalId`) |
 | GET | `/api/v2/events/bindings` | оба | auth | Список привязок `{bindings}` |
 | POST | `/api/v2/events/bindings` | оба | LEAD/ADMIN | Upsert привязки по `source`+`chatKey`/`threadKey` (`eventBindingInputSchema`): `{source, chatKey?, threadKey?, sessionId?, mode: bound\|ephemeral\|queue, agentTemplate?, project?}`; совпавшая по ключу запись заменяется (id сохраняется) → 200, иначе 201 |
 | DELETE | `/api/v2/events/bindings/:id` | оба | LEAD/ADMIN | Удалить привязку → 204 (каскадно удаляются её API-ключи); нет записи → 404 `NOT_FOUND` |
@@ -1130,6 +1131,91 @@ API-ключи привязок (`EventBindingApiKey`, `{dataDir}/events/api-key
 (`decision.pipeline`) и в журнал решений. В целях `bound`/`queue` сессия
 фиксирована, поэтому поле там **отвергается** (400 `VALIDATION_ERROR`), а не
 игнорируется.
+**Вложения события (`attachments[]`).** Аддитивное поле тела (`eventIngestSchema`, ADR-115 × ADR-089):
+событие несёт **ссылки** на объекты blob-хранилища, байты через него не идут. Отправитель сначала
+загружает файл (staging `POST /api/v2/attachments` или загрузка в сессию, §5.6.1) и передаёт
+в событии путь объекта вместе с метаданными. Метаданные дублируются намеренно: получатель сверяет
+их со sidecar объекта, поэтому подмена ссылки на чужой или изменённый объект отклоняется на приёме.
+
+```json
+{
+  "source": "telegram",
+  "type": "message",
+  "dedupKey": "tg:chat:-1001234567890:msg:4711",
+  "payload": { "text": "что на фото?" },
+  "identity": { "principalId": "tg:777", "chatKey": "chat:telegram:-1001234567890" },
+  "attachments": [
+    {
+      "blobPath": "attachments/4f/4f0c9b1d2e3a5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4",
+      "sha256": "4f0c9b1d2e3a5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4",
+      "mime": "image/png",
+      "size": 184320,
+      "name": "photo.png"
+    }
+  ]
+}
+```
+
+| Поле ссылки | Требование |
+|---|---|
+| `blobPath` | только контур вложений: `attachments/<sha2>/<sha256>`, ≤ 512 символов, без сегментов `..`; объект другого контура (`packs/`, `processes/`, логи, содержимое скиллов) сослать нельзя |
+| `sha256` | ровно 64 hex-символа — адрес объекта (content-addressed) |
+| `mime` | непустой MIME по содержимому (≤ 255), **совпадает** со sidecar объекта |
+| `size` | целое положительное, байты; **совпадает** со sidecar |
+| `name` | необязательное, 1–200 символов; в `blobPath` не входит (санитайз — как у загрузки) |
+
+**Обязательный `dedupKey`.** Непустой `attachments[]` требует **явного** `dedupKey` (иначе
+`400 VALIDATION_ERROR`; проверяют и схема запроса, и ingress). Причина: ключ идемпотентности
+по умолчанию строится из `source`/`type`/`chatKey|threadKey`/`payload` (JSON) и для вложений
+нестабилен — одно и то же сообщение, доставленное дважды с разным представлением вложений,
+получило бы разные ключи и обработалось дважды; dedup-ключ не должен зависеть от содержимого
+вложений. Пустой массив эквивалентен отсутствию поля (ключ не требуется).
+
+**Проверка ссылок и лимиты.** Вложения проверяются **до** Router'а, дедупа и журнала: отклонённое
+событие не «занимает» dedup-ключ и не попадает в журнал решений. Все отказы — `400 VALIDATION_ERROR`,
+причина — в `error.message` с индексом элемента.
+
+| Что проверяется | Источник лимита / правило | Нарушение |
+|---|---|---|
+| `dedupKey` при непустых вложениях | схема запроса + ingress | `400 VALIDATION_ERROR` |
+| количество ссылок | `attachments.maxFilesPerMessage` (по умолчанию 10); схема запроса допускает не более 10 элементов — действует меньший предел | `400 VALIDATION_ERROR` |
+| `blobPath` внутри `attachments/`, без `..` | контур вложений (ADR-115) | `400 VALIDATION_ERROR` |
+| объект существует | `AttachmentService.resolve` | `400 VALIDATION_ERROR` |
+| `sha256`/`mime`/`size` совпадают со sidecar | там же | `400 VALIDATION_ERROR` |
+| размер файла | `attachments.maxBytesPerFile` | `400 VALIDATION_ERROR` |
+| контур вложений подключён в сборке | fail-closed: без сервиса вложений событие с вложениями отклоняется — иначе можно было бы подставить ссылку на несуществующий или чужой объект | `400 VALIDATION_ERROR` |
+
+**Доставка.** Сообщение собирает `eventToMessage`: первая часть — текст, далее по одной медиа-части
+на ссылку в порядке `attachments[]`; тип части выводится из `mime` (`image/*` → `image`,
+`audio/*` → `audio`, `video/*` → `video`, иначе `file`). Байты в сообщение не копируются — части
+ссылаются на тот же объект blob-хранилища. В производном `content` каждая медиа-часть даёт
+плейсхолдер (`[image: photo.png]`, без имени — `[image]`, для прочих типов — `[file: …]` и т. д.),
+который дописывается с новой строки, если его ещё нет в тексте, — поэтому факт вложения не теряется
+в экспорте, поиске и маппинге `messages.content`; в `metadata`
+попадает `attachments_count` (для аудита и UI). Дубли в `attachments[]` не схлопываются — каждый
+элемент становится отдельной частью (дедуп самих байтов делает blob-контур: адрес content-addressed).
+
+**Ссылки `blob_refs` и GC.** После успешной постановки сообщения в очередь регистрируются ссылки
+`blob_refs` (`ownerKind: 'message'`, `ownerId` — id сообщения). Шаг обязателен по смыслу: объект
+без ссылок удаляет фоновый pruner по `attachments.gcDays` (30 дней по умолчанию), хотя сообщение
+на него ссылается. Учёт — best-effort: ошибка записи ссылки не отменяет доставку (пишется в лог).
+Staging-объект, который так и не попал в сообщение, живёт до `gcDays` и затем удаляется по общему
+критерию GC (нет ссылок **и** возраст больше срока).
+
+**Рекомендуемый порядок для шлюзов.** 1) `POST /api/v2/attachments` (§5.6.1) — получить из ответа
+`blobPath`/`sha256`/`mime`/`size`; 2) `POST /api/v2/events` с `attachments[]` и явным `dedupKey`.
+Обратный порядок (событие со ссылкой на ещё не загруженный объект) даёт `400 VALIDATION_ERROR`,
+поэтому «загрузить → отправить событие» — единственный надёжный путь; один объект можно
+переиспользовать в нескольких событиях.
+
+**Чего вложения не меняют.** Права и идентичность: те же правила, что у события без вложений
+(база — роли профиля отправителя, `identity.roles` только сужают, несопознанный отправитель прав
+не получает) — вложения не дают событию дополнительных прав и не влияют на маршрутизацию.
+Медиа не обезличивается и не очищается на приёме: байты лежат в blob как есть, срез метаданных
+(EXIF/IPTC/XMP) выполняется только на границе отправки провайдеру (ADR-115). Тип файла не
+«угадывается» по заявлению клиента: `mime` обязан совпадать со sidecar, а допустимые типы
+ограничивает загрузка (`attachments.allowedMimePrefixes`, SVG запрещён).
+
 Цепочка обработки и журнал — `docs/ARCHITECTURE.md` («Внешние события и хуки»), ADR-089.
 
 > `POST /api/v2/sessions` теперь идёт через единый funnel `RequestSessionService`

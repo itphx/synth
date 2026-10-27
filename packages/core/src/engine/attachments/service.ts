@@ -127,6 +127,17 @@ export class AttachmentService {
     return typeof this._configSource === 'function' ? this._configSource() : this._configSource;
   }
 
+  /**
+   * Конфигурация вложений только для чтения (лимиты/модальности).
+   *
+   * Нужна потребителям, которые не загружают байты, а **проверяют** ссылки:
+   * приём внешних событий (ADR-089) сверяет количество и размеры вложений
+   * события с теми же лимитами, что действуют на загрузку.
+   */
+  get config(): AttachmentsConfig {
+    return this._config;
+  }
+
   /** Метрики вложений: явные из опций приоритетнее модульного sink'а. */
   private get _metricsHooks(): AttachmentMetricsHooks | null {
     return this._metrics ?? getAttachmentMetricsHook();

@@ -3,14 +3,15 @@ import type { Mock } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { EventBinding, EventIdentity, Session, SynthEvent } from '@itphx/synth-shared';
+import type { EventAttachmentRef, EventBinding, EventIdentity, Session, SynthEvent } from '@itphx/synth-shared';
 import { FileStore } from '../../storage/file-store.js';
+import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { EventBindingStore } from '../../storage/event-binding-store.js';
 import { EventJournalStore } from '../../storage/event-journal-store.js';
 import { HookBus } from '../hooks/hook-bus.js';
 import { EventRouter } from './event-router.js';
-import { RequestSessionService, eventToMessage, eventToMessageText } from './request-session.js';
+import { RequestSessionService, eventToMessage, eventToMessageText, addEventAttachmentRefs } from './request-session.js';
 import type { EventDelivery } from './types.js';
 
 const event = (overrides: Partial<SynthEvent> = {}): SynthEvent => ({
@@ -1370,5 +1371,157 @@ describe('RequestSessionService (ADR-089)', () => {
     expect(msg.author).toBe('Scheduler');
     expect(msg.metadata?.scheduler).toBe(true);
     expect(msg.metadata?.principal_id).toBeUndefined();
+  });
+});
+
+/**
+ * ADR-115 × ADR-089: сборка сообщения из события с вложениями.
+ *
+ * Части: текст первым, затем медиа-части в порядке ссылок события; `content`
+ * получает плейсхолдеры `[image: name]` (иначе факт вложения теряется в
+ * строковых производных), `metadata.attachments_count` — для аудита.
+ */
+describe('eventToMessage: вложения события (ADR-115 × ADR-089)', () => {
+  const sha = (n: number): string => String(n).repeat(64);
+
+  const attachment = (overrides: Partial<EventAttachmentRef> = {}): EventAttachmentRef => ({
+    blobPath: `attachments/ab/${sha(1)}`,
+    sha256: sha(1),
+    mime: 'image/png',
+    size: 2048,
+    name: 'photo.png',
+    ...overrides,
+  });
+
+  const withAttachments = (attachments: EventAttachmentRef[]): SynthEvent =>
+    event({ payload: { text: 'смотри' }, attachments });
+
+  it('текстовая часть первая, затем медиа-часть с данными объекта', () => {
+    const ref = attachment();
+    const msg = eventToMessage(withAttachments([ref]));
+
+    expect(msg.parts).toHaveLength(2);
+    expect(msg.parts[0]).toMatchObject({ type: 'text', data: 'смотри' });
+    expect(msg.parts[1]).toMatchObject({
+      type: 'image',
+      data: {
+        blobPath: ref.blobPath,
+        sha256: ref.sha256,
+        mime: ref.mime,
+        size: ref.size,
+        name: 'photo.png',
+      },
+    });
+    expect(msg.metadata?.attachments_count).toBe(1);
+    // `source` не меняется — поле остаётся источником события.
+    expect(msg.metadata?.source).toBe('telegram');
+    expect(msg.role).toBe('user');
+  });
+
+  it('content получает плейсхолдер вложения (appendMediaPlaceholders)', () => {
+    const msg = eventToMessage(withAttachments([attachment()]));
+
+    expect(msg.content).toBe('смотри\n[image: photo.png]');
+    expect(msg.parts[0]?.data).toBe('смотри');
+  });
+
+  it('порядок частей повторяет порядок `attachments[]`; тип — по MIME', () => {
+    const image = attachment();
+    const audio = attachment({
+      blobPath: `attachments/cd/${sha(2)}`,
+      sha256: sha(2),
+      mime: 'audio/mpeg',
+      size: 512,
+      name: 'voice.mp3',
+    });
+    const file = attachment({
+      blobPath: `attachments/ef/${sha(3)}`,
+      sha256: sha(3),
+      mime: 'application/pdf',
+      size: 4096,
+      name: 'doc.pdf',
+    });
+    const msg = eventToMessage(withAttachments([image, audio, file]));
+
+    expect(msg.parts.map((part) => part.type)).toEqual(['text', 'image', 'audio', 'file']);
+    expect(msg.content).toBe('смотри\n[image: photo.png]\n[audio: voice.mp3]\n[file: doc.pdf]');
+    expect(msg.metadata?.attachments_count).toBe(3);
+  });
+
+  it('вложение без имени — плейсхолдер без подписи', () => {
+    const msg = eventToMessage(withAttachments([attachment({ name: undefined })]));
+    expect(msg.content).toBe('смотри\n[image]');
+  });
+
+  it('без вложений сообщение не меняется (одна текстовая часть, нет attachments_count)', () => {
+    const msg = eventToMessage(event({ payload: { text: 'hi' } }));
+    expect(msg.parts).toHaveLength(1);
+    expect(msg.metadata?.attachments_count).toBeUndefined();
+    expect(msg.content).toBe('hi');
+  });
+});
+
+/**
+ * ADR-115 × ADR-089: привязка вложений события к сообщению (`blob_refs`).
+ *
+ * Без ссылки GC удалил бы объект по `attachments.gcDays`, хотя сообщение на него
+ * ссылается. `ownerId` — id того же сообщения, которое попадает в историю.
+ */
+describe('addEventAttachmentRefs (ADR-115 × ADR-089)', () => {
+  const eventWith = (attachments: EventAttachmentRef[]): SynthEvent =>
+    event({ payload: { text: 'hi' }, attachments });
+
+  it('пишет ссылки с ownerKind=message и id сообщения', async () => {
+    const add = vi.fn(async () => {});
+    const refs = { add } as unknown as BlobRefRepository;
+    const attachments: EventAttachmentRef[] = [
+      { blobPath: `attachments/aa/${'a'.repeat(64)}`, sha256: 'a'.repeat(64), mime: 'image/png', size: 1 },
+      { blobPath: `attachments/bb/${'b'.repeat(64)}`, sha256: 'b'.repeat(64), mime: 'audio/mpeg', size: 2 },
+    ];
+    const message = eventToMessage(eventWith(attachments));
+
+    const added = await addEventAttachmentRefs(refs, eventWith(attachments), message.id);
+
+    expect(added).toBe(2);
+    expect(add).toHaveBeenCalledTimes(2);
+    expect(add).toHaveBeenNthCalledWith(1, {
+      blobPath: attachments[0]!.blobPath,
+      ownerKind: 'message',
+      ownerId: message.id,
+    });
+    expect(add).toHaveBeenNthCalledWith(2, {
+      blobPath: attachments[1]!.blobPath,
+      ownerKind: 'message',
+      ownerId: message.id,
+    });
+  });
+
+  it('без порта/вложений — no-op', async () => {
+    const add = vi.fn(async () => {});
+    expect(await addEventAttachmentRefs(undefined, eventWith([]), 'msg_1')).toBe(0);
+    expect(
+      await addEventAttachmentRefs({ add } as unknown as BlobRefRepository, eventWith([]), 'msg_1'),
+    ).toBe(0);
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it('ошибка порта не отменяет доставку — best-effort лог', async () => {
+    const add = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    const log = vi.fn();
+    const attachments: EventAttachmentRef[] = [
+      { blobPath: `attachments/aa/${'a'.repeat(64)}`, sha256: 'a'.repeat(64), mime: 'image/png', size: 1 },
+    ];
+
+    const added = await addEventAttachmentRefs(
+      { add } as unknown as BlobRefRepository,
+      eventWith(attachments),
+      'msg_1',
+      log,
+    );
+
+    expect(added).toBe(0);
+    expect(log).toHaveBeenCalledOnce();
   });
 });

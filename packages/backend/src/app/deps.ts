@@ -40,6 +40,7 @@ import {
   applyStartupMigrations,
   applyPendingRestore,
   EventRouter, RequestSessionService, EventIngress, eventToMessage,
+  addEventAttachmentRefs, AttachmentService,
   ProjectRuleProvider, DecisionRuleProvider,
   PipelineTracker,
   SchedulerRuleProvider, SchedulerService, AlwaysLeader, FileLeader,
@@ -1278,21 +1279,40 @@ export async function createBackendDeps(
       if (mode === 'run') {
         // ADR-036: обфускация user-сообщения ДО сохранения в историю (паритет с
         // prompt-путём — core routes/sessions.ts).
-        await enqueueUserMessage(
+        const queued = await enqueueUserMessage(
           sessionManager, eventBus, sessionId, message, queueManager, processMessage,
           (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
         );
+        // ADR-115 × ADR-089: ссылки на вложения события — только после успешной
+        // постановки (иначе GC удалит объект, на который сообщение не ссылается).
+        if (queued) {
+          await addEventAttachmentRefs(storageContext.blobRefs, event, message.id);
+        }
       } else {
         // ADR-036: `defer` тоже кладёт сообщение в историю — обфусцируем до
         // постановки. Старт процессора не выполняем (только очередь владельца).
         message = await orchestrator.obfuscateUserMessageForHistory(sessionId, message);
-        await sessionManager.addPendingMessage(sessionId, message);
+        const queued = await sessionManager.addPendingMessage(sessionId, message);
+        if (queued) {
+          await addEventAttachmentRefs(storageContext.blobRefs, event, message.id);
+        }
       }
     },
   });
 
   // ADR-089: ingress-точка приёма внешних событий (Этап 6).
-  const eventIngress = new EventIngress({ requestSessionService, metrics: eventMetrics });
+  // ADR-115 × ADR-089: сервис вложений проверяет ссылки `attachments[]` события
+  // (объект есть, метаданные совпадают со sidecar) и даёт лимиты
+  // `attachments.maxFilesPerMessage`/`maxBytesPerFile` (runtime-настройки — живые).
+  const eventAttachmentService = new AttachmentService({
+    blobs: storageContext.blobs,
+    config: () => attachmentsSettings.getConfig(),
+  });
+  const eventIngress = new EventIngress({
+    requestSessionService,
+    metrics: eventMetrics,
+    attachments: eventAttachmentService,
+  });
 
   // ADR-101 (Э5): движок пайплайнов — второй движок рядом с оркестратором
   // (ADR-101 §1). Собирается в точке сборки (никаких глобальных синглтонов):

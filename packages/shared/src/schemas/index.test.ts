@@ -16,6 +16,9 @@ import {
   isProjectIconKey,
   isProjectColorKey,
   synthEventSchema,
+  eventIngestSchema,
+  eventKeyIngestSchema,
+  eventAttachmentRefSchema,
   eventIdentitySchema,
   eventBindingSchema,
   sessionRequestSchema,
@@ -277,6 +280,98 @@ describe('synthEventSchema (ADR-089)', () => {
   it('eventIdentitySchema: поля опциональны', () => {
     expect(eventIdentitySchema.safeParse({}).success).toBe(true);
     expect(eventIdentitySchema.safeParse({ principalId: 'u1', roles: ['ADMIN'] }).success).toBe(true);
+  });
+});
+
+describe('eventIngestSchema: вложения события (ADR-115 × ADR-089)', () => {
+  const sha = 'a'.repeat(64);
+  const ref = {
+    blobPath: `attachments/aa/${sha}`,
+    sha256: sha,
+    mime: 'image/png',
+    size: 1024,
+    name: 'photo.png',
+  };
+  const base = {
+    source: 'telegram',
+    type: 'message',
+    payload: { text: 'смотри' },
+    dedupKey: 'tg:update:42',
+  };
+
+  it('валидный набор вложений проходит и сохраняется', () => {
+    const parsed = eventIngestSchema.safeParse({ ...base, attachments: [ref] });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.attachments).toEqual([ref]);
+  });
+
+  it('вложения без dedupKey — отказ (ключ идемпотентности не должен зависеть от содержимого)', () => {
+    const { dedupKey: _dedupKey, ...withoutKey } = base;
+    const parsed = eventIngestSchema.safeParse({ ...withoutKey, attachments: [ref] });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.some((issue) => issue.path.join('.') === 'dedupKey')).toBe(true);
+    }
+  });
+
+  it('пустой массив вложений dedupKey не требует (аддитивная совместимость)', () => {
+    const { dedupKey: _dedupKey, ...withoutKey } = base;
+    expect(eventIngestSchema.safeParse({ ...withoutKey, attachments: [] }).success).toBe(true);
+  });
+
+  it('blobPath вне attachments/ — отказ', () => {
+    for (const blobPath of [
+      'artifacts/aa/obj',
+      '/attachments/aa/obj',
+      'attachments/../secrets/master.key',
+      'attachments/aa/../../etc/passwd',
+      'blobs/attachments/aa/obj',
+    ]) {
+      expect(eventAttachmentRefSchema.safeParse({ ...ref, blobPath }).success).toBe(false);
+      expect(eventIngestSchema.safeParse({ ...base, attachments: [{ ...ref, blobPath }] }).success).toBe(
+        false,
+      );
+    }
+  });
+
+  it('sha256 не 64 hex — отказ', () => {
+    for (const sha256 of ['abc', 'A'.repeat(64), 'g'.repeat(64), `${'a'.repeat(63)}z`]) {
+      expect(eventAttachmentRefSchema.safeParse({ ...ref, sha256 }).success).toBe(false);
+    }
+  });
+
+  it('mime/size обязательны и положительны', () => {
+    expect(eventAttachmentRefSchema.safeParse({ ...ref, mime: '' }).success).toBe(false);
+    expect(eventAttachmentRefSchema.safeParse({ ...ref, size: 0 }).success).toBe(false);
+    expect(eventAttachmentRefSchema.safeParse({ ...ref, size: -1 }).success).toBe(false);
+    expect(eventAttachmentRefSchema.safeParse({ ...ref, size: 1.5 }).success).toBe(false);
+  });
+
+  it('жёсткий предел — 10 вложений в событии', () => {
+    const ten = Array.from({ length: 10 }, () => ref);
+    expect(eventIngestSchema.safeParse({ ...base, attachments: ten }).success).toBe(true);
+    expect(eventIngestSchema.safeParse({ ...base, attachments: [...ten, ref] }).success).toBe(false);
+  });
+
+  it('eventKeyIngestSchema: source опционален, правило dedupKey действует', () => {
+    const { source: _source, ...withoutSource } = base;
+    expect(eventKeyIngestSchema.safeParse({ ...withoutSource, attachments: [ref] }).success).toBe(true);
+    const { dedupKey: _dedupKey, ...noKey } = base;
+    expect(eventKeyIngestSchema.safeParse({ ...noKey, attachments: [ref] }).success).toBe(false);
+  });
+
+  it('synthEventSchema принимает attachments (аддитивное поле)', () => {
+    const parsed = synthEventSchema.safeParse({
+      id: 'evt_1',
+      source: 'telegram',
+      type: 'message',
+      payload: null,
+      dedupKey: 'dedup-1',
+      ts: '2026-10-08T00:00:00Z',
+      attachments: [ref],
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.attachments).toEqual([ref]);
   });
 });
 

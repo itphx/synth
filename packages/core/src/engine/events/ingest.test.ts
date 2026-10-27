@@ -1,6 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
-import type { RouteDecision, Session, SynthEvent } from '@itphx/synth-shared';
-import { EventIngress } from './ingest.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { AttachmentsConfig, EventAttachmentRef, RouteDecision, Session, SynthEvent } from '@itphx/synth-shared';
+import { FileBlobStore } from '../../storage/file-blob-store.js';
+import { AttachmentService } from '../attachments/service.js';
+import { EventAttachmentError, EventIngress } from './ingest.js';
 import type { RequestSessionService } from './request-session.js';
 
 function createMockService(result?: {
@@ -112,5 +117,237 @@ describe('EventIngress (ADR-089)', () => {
     await expect(failIngress.ingest({ source: 'telegram', type: 'message' })).rejects.toThrow('boom');
     expect(onIngest).toHaveBeenLastCalledWith({ source: 'telegram', outcome: 'error' });
     expect(onIngest).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * ADR-115 × ADR-089: вложения внешнего события.
+ *
+ * Шлюз загружает байты в staging (`POST /api/v2/attachments`) и передаёт в
+ * событии ссылку. Приём проверяет ссылку **до** роутинга: объект существует,
+ * метаданные совпадают со sidecar, количество/размер в пределах конфига.
+ */
+describe('EventIngress: вложения события (ADR-115 × ADR-089)', () => {
+  /** PNG-сигнатура (sniffMime → image/png). */
+  const pngBytes = (): Buffer =>
+    Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('rest', 'latin1'),
+    ]);
+
+  let tmpDir: string;
+  let blobs: FileBlobStore;
+  let service: AttachmentService;
+
+  const attachmentConfig = (overrides: Partial<AttachmentsConfig> = {}): AttachmentsConfig => ({
+    enabled: true,
+    modalities: { image: true, pdf: true, audio: true, video: true },
+    maxBytesPerFile: 1024 * 1024,
+    maxFilesPerMessage: 10,
+    maxBytesPerSession: 10 * 1024 * 1024,
+    allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+    workspaceFallback: true,
+    gcDays: 30,
+    ...overrides,
+  });
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-events-attachments-'));
+    blobs = new FileBlobStore({ root: join(tmpDir, 'blobs') });
+    service = new AttachmentService({ blobs, config: attachmentConfig() });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Загрузить вложение в staging и получить ссылку для события. */
+  const uploadRef = async (name = 'photo.png'): Promise<EventAttachmentRef> => {
+    const meta = await service.upload({ bytes: pngBytes(), name });
+    return {
+      blobPath: meta.blobPath,
+      sha256: meta.sha256,
+      mime: meta.mime,
+      size: meta.size,
+      ...(meta.name ? { name: meta.name } : {}),
+    };
+  };
+
+  it('валидное событие с вложениями проходит и сохраняет `attachments` в SynthEvent', async () => {
+    const ref = await uploadRef();
+    const svc = createMockService();
+    const ingress = new EventIngress({ requestSessionService: svc, attachments: service });
+
+    const res = await ingress.ingest({
+      source: 'telegram',
+      type: 'message',
+      payload: { text: 'смотри' },
+      dedupKey: 'tg:update:1',
+      attachments: [ref],
+    });
+
+    expect(res.event.attachments).toEqual([ref]);
+    expect(svc.handleEvent).toHaveBeenCalledOnce();
+    const passed = (svc.handleEvent as unknown as { mock: { calls: SynthEvent[][] } }).mock.calls[0]![0]!;
+    expect(passed.attachments).toEqual([ref]);
+    expect(passed.dedupKey).toBe('tg:update:1');
+  });
+
+  it('без вложений проверка не выполняется (сервис можно не передавать)', async () => {
+    const svc = createMockService();
+    const ingress = new EventIngress({ requestSessionService: svc });
+
+    const res = await ingress.ingest({ source: 'ci', type: 'ci_event', payload: { build: 1 } });
+    expect(res.event.attachments).toBeUndefined();
+    expect(svc.handleEvent).toHaveBeenCalledOnce();
+  });
+
+  it('вложения без явного dedupKey — отказ до роутинга', async () => {
+    const ref = await uploadRef();
+    const svc = createMockService();
+    const ingress = new EventIngress({ requestSessionService: svc, attachments: service });
+
+    await expect(
+      ingress.ingest({ source: 'telegram', type: 'message', payload: { text: 'x' }, attachments: [ref] }),
+    ).rejects.toMatchObject({ name: 'EventAttachmentError', reason: 'dedup_key_required' });
+    expect(svc.handleEvent).not.toHaveBeenCalled();
+  });
+
+  it('несуществующий blobPath — отказ `not_found`', async () => {
+    const ref = await uploadRef();
+    const missing: EventAttachmentRef = {
+      ...ref,
+      blobPath: `attachments/zz/${'0'.repeat(64)}`,
+    };
+    const ingress = new EventIngress({ requestSessionService: createMockService(), attachments: service });
+
+    await expect(
+      ingress.ingest({
+        source: 'telegram',
+        type: 'message',
+        dedupKey: 'tg:update:2',
+        attachments: [missing],
+      }),
+    ).rejects.toMatchObject({ reason: 'not_found' });
+  });
+
+  it('несовпадение MIME/sha256/size с объектом — отказ `metadata_mismatch`', async () => {
+    const ref = await uploadRef();
+    const ingress = new EventIngress({ requestSessionService: createMockService(), attachments: service });
+
+    const variants: EventAttachmentRef[] = [
+      { ...ref, mime: 'audio/mpeg' },
+      { ...ref, sha256: 'b'.repeat(64) },
+      { ...ref, size: ref.size + 1 },
+    ];
+    for (const attachment of variants) {
+      await expect(
+        ingress.ingest({
+          source: 'telegram',
+          type: 'message',
+          dedupKey: 'tg:update:3',
+          attachments: [attachment],
+        }),
+      ).rejects.toMatchObject({ reason: 'metadata_mismatch' });
+    }
+  });
+
+  it('blobPath вне attachments/ — отказ `invalid_path` (событие не принимается)', async () => {
+    const ingress = new EventIngress({ requestSessionService: createMockService(), attachments: service });
+
+    await expect(
+      ingress.ingest({
+        source: 'telegram',
+        type: 'message',
+        dedupKey: 'tg:update:4',
+        attachments: [
+          { blobPath: 'processes/run.log', sha256: 'a'.repeat(64), mime: 'text/plain', size: 10 },
+        ],
+      }),
+    ).rejects.toMatchObject({ reason: 'invalid_path' });
+  });
+
+  it('лимит количества — по конфигу (`maxFilesPerMessage`), иначе жёсткий 10', async () => {
+    const limited = new AttachmentService({
+      blobs,
+      config: attachmentConfig({ maxFilesPerMessage: 2 }),
+    });
+    const ref = await uploadRef();
+    const ingress = new EventIngress({ requestSessionService: createMockService(), attachments: limited });
+
+    await expect(
+      ingress.ingest({
+        source: 'telegram',
+        type: 'message',
+        dedupKey: 'tg:update:5',
+        attachments: [ref, ref, ref],
+      }),
+    ).rejects.toMatchObject({ reason: 'too_many' });
+
+    // Без сервиса — жёсткий предел EVENT_ATTACHMENTS_MAX_FILES (10).
+    const hard = new EventIngress({ requestSessionService: createMockService() });
+    await expect(
+      hard.ingest({
+        source: 'telegram',
+        type: 'message',
+        dedupKey: 'tg:update:6',
+        attachments: Array.from({ length: 11 }, () => ref),
+      }),
+    ).rejects.toMatchObject({ reason: 'too_many' });
+  });
+
+  it('размер файла больше `maxBytesPerFile` — отказ `too_large`', async () => {
+    const ref = await uploadRef();
+    // Лимит применяется на приёме: объект мог быть загружен при другом (большем) лимите.
+    const strict = new AttachmentService({
+      blobs,
+      config: attachmentConfig({ maxBytesPerFile: 4 }),
+    });
+    const ingress = new EventIngress({ requestSessionService: createMockService(), attachments: strict });
+
+    await expect(
+      ingress.ingest({
+        source: 'telegram',
+        type: 'message',
+        dedupKey: 'tg:update:7',
+        attachments: [ref],
+      }),
+    ).rejects.toMatchObject({ reason: 'too_large' });
+  });
+
+  it('сервис вложений не передан — fail-closed `attachments_unavailable`', async () => {
+    const ref = await uploadRef();
+    const ingress = new EventIngress({ requestSessionService: createMockService() });
+
+    const err = await ingress
+      .ingest({
+        source: 'telegram',
+        type: 'message',
+        dedupKey: 'tg:update:8',
+        attachments: [ref],
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EventAttachmentError);
+    expect(err).toMatchObject({ reason: 'attachments_unavailable' });
+  });
+
+  it('ADR-094: отказ по вложениям считается в метриках как error', async () => {
+    const onIngest = vi.fn();
+    const ingress = new EventIngress({
+      requestSessionService: createMockService(),
+      attachments: service,
+      metrics: { onIngest, onDecision: vi.fn() },
+    });
+    const ref = await uploadRef();
+
+    await expect(
+      ingress.ingest({
+        source: 'telegram',
+        type: 'message',
+        dedupKey: 'tg:update:9',
+        attachments: [{ ...ref, mime: 'audio/mpeg' }],
+      }),
+    ).rejects.toMatchObject({ reason: 'metadata_mismatch' });
+    expect(onIngest).toHaveBeenLastCalledWith({ source: 'telegram', outcome: 'error' });
   });
 });

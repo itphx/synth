@@ -1371,6 +1371,9 @@ export { MemoryDedupStore, FileDedupStore } from './engine/events/dedup-store.js
 export type { DedupStore, FileDedupStoreConfig } from './engine/events/dedup-store.js';
 export { EventIngress } from './engine/events/ingest.js';
 export type { EventIngestInput, EventIngressDeps } from './engine/events/ingest.js';
+// ADR-115 × ADR-089: отказ валидации вложений события (на роуте — 400).
+export { EventAttachmentError, EVENT_ATTACHMENTS_MAX_FILES } from './engine/events/ingest.js';
+export type { EventAttachmentErrorReason } from './engine/events/ingest.js';
 // ADR-089/ADR-052: контекст машинной аутентификации по API-ключу привязки.
 export type { EventKeyCredential } from './engine/events/credential.js';
 // ADR-089/ADR-052: in-memory per-key rate limiter приёма событий.
@@ -1379,6 +1382,7 @@ export {
   RequestSessionService,
   eventToMessage,
   eventToMessageText,
+  addEventAttachmentRefs,
 } from './engine/events/request-session.js';
 export type {
   RequestSessionOptions,

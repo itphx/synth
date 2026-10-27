@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-26 (ADR-112/ADR-111/PROP-096/097: **§5.5** — вопросы пользователю (`GET/POST /api/v2/sessions/:id/questions*`) и steering дочерней сессии саб-агента; **§3.2 «Фоновые прогоны и вопросы пользователю»** — перечень серверных событий `user_question.*`/`process.*`/`child.*`; **§5.39 «Фоновые прогоны»** — `/api/v2/processes*` (реестр фоновых прогонов: список/деталь/лог/stop/удаление; граничный guard, инварианты 16/21; деградированный режим хранилища — контур не монтируется, 404)) — **переведено**; RU-версия обновлена 2026-10-25 — **переведено**: §5.36 «Плагины» (ADR-090), §5.38 «Память» (ADR-107: портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги), §5.5 `GET /sessions/:id/memory` для вкладки «Память»; **перевод отстаёт** (§5.32 — ADR-102, аналитика и отчётность; §5.33 — ADR-100, пакеты расширений; §5.34 — ADR-100/ADR-051, пайплайны; §5.35 — ADR-101, пайплайны проекта/прогоны/шаблоны; §5.37 — ADR-105, внешние доступы — разделов в EN-файле нет).
+> ⚠️ RU-версия обновлена 2026-10-27 (§5.26 — «Вложения события» (`attachments[]`), ADR-115 × ADR-089) — **переведено**; RU-версия обновлена 2026-10-26 (ADR-112/ADR-111/PROP-096/097: **§5.5** — вопросы пользователю (`GET/POST /api/v2/sessions/:id/questions*`) и steering дочерней сессии саб-агента; **§3.2 «Фоновые прогоны и вопросы пользователю»** — перечень серверных событий `user_question.*`/`process.*`/`child.*`; **§5.39 «Фоновые прогоны»** — `/api/v2/processes*` (реестр фоновых прогонов: список/деталь/лог/stop/удаление; граничный guard, инварианты 16/21; деградированный режим хранилища — контур не монтируется, 404)) — **переведено**; RU-версия обновлена 2026-10-25 — **переведено**: §5.36 «Плагины» (ADR-090), §5.38 «Память» (ADR-107: портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги), §5.5 `GET /sessions/:id/memory` для вкладки «Память»; **перевод отстаёт** (§5.6.1 — ADR-115, вложения сообщений, staging-загрузка и лимиты; §5.32 — ADR-102, аналитика и отчётность; §5.33 — ADR-100, пакеты расширений; §5.34 — ADR-100/ADR-051, пайплайны; §5.35 — ADR-101, пайплайны проекта/прогоны/шаблоны; §5.37 — ADR-105, внешние доступы — разделов в EN-файле нет).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -981,7 +981,7 @@ events, managing bindings and routing rules (ADR-089; the single factory
 |---|---|---|---|---|
 | GET | `/api/v2/events` | both | auth | Global SSE stream of `BusEvent` (WS fallback) |
 | WS | `/ws/events` | both | auth | Primary real-time channel (see §3) |
-| POST | `/api/v2/events` | both | auth/key + rate limit | Accepting a normalized external event. Regular path: `Authorization: Bearer <user key>` → body `{source, type, payload?, identity?, dedupKey?, ts?}` (`eventIngestSchema`). The binding-key path: `Authorization: Bearer synth_evt_…` — **without user credentials**, `source` is optional (`eventKeyIngestSchema`; source/chat/thread are taken from the binding; a `source` conflict → 400), the event is forcibly routed into the binding. The response in both cases → `201 {event, decision, sessionId}` + **optional** `identityHint?: {code, expiresAt}` (ADR-089 claim flow: a one-time code confirming identity ownership; it is filled in only when the sender is not identified — `resolveExternalIdentity` → `null` — and `identity.principalId` is set); `sessionId` — the session id or `null` on `drop`; with decision routing (`events.decisionRouting`) `decision` carries `confidence` and diagnostic `signals`, e.g. `agent:<id>`/`model:<p/m>`/`latency:<ms>ms`); an invalid/revoked/expired key → 401 `UNAUTHORIZED`; an invalid body → 400 `VALIDATION_ERROR`, a materialization failure → 500 `INTERNAL_ERROR` (the decision is still written to the journal). The rate limit (managed — 120/min) applies to both paths before the authentication method is chosen; the per-key limit (the key's limit or the global `events.keyRateLimitPerMinute`) → 429 `RATE_LIMITED`; the master switch `events.enabled: false` → 503 `UNAVAILABLE`. Key usage is written to the journal (`keyId`/`principalId`) |
+| POST | `/api/v2/events` | both | auth/key + rate limit | Accepting a normalized external event. Regular path: `Authorization: Bearer <user key>` → body `{source, type, payload?, identity?, dedupKey?, ts?, attachments?}` (`eventIngestSchema`). The binding-key path: `Authorization: Bearer synth_evt_…` — **without user credentials**, `source` is optional (`eventKeyIngestSchema`; source/chat/thread are taken from the binding; a `source` conflict → 400), the event is forcibly routed into the binding. The response in both cases → `201 {event, decision, sessionId}` + **optional** `identityHint?: {code, expiresAt}` (ADR-089 claim flow: a one-time code confirming identity ownership; it is filled in only when the sender is not identified — `resolveExternalIdentity` → `null` — and `identity.principalId` is set); `sessionId` — the session id or `null` on `drop`; with decision routing (`events.decisionRouting`) `decision` carries `confidence` and diagnostic `signals`, e.g. `agent:<id>`/`model:<p/m>`/`latency:<ms>ms`); an invalid/revoked/expired key → 401 `UNAUTHORIZED`; an invalid body → 400 `VALIDATION_ERROR`, a materialization failure → 500 `INTERNAL_ERROR` (the decision is still written to the journal). Event attachments (`attachments[]`) — see below. The rate limit (managed — 120/min) applies to both paths before the authentication method is chosen; the per-key limit (the key's limit or the global `events.keyRateLimitPerMinute`) → 429 `RATE_LIMITED`; the master switch `events.enabled: false` → 503 `UNAVAILABLE`. Key usage is written to the journal (`keyId`/`principalId`) |
 | GET | `/api/v2/events/bindings` | both | auth | List of bindings `{bindings}` |
 | POST | `/api/v2/events/bindings` | both | LEAD/ADMIN | Upsert a binding by `source`+`chatKey`/`threadKey` (`eventBindingInputSchema`): `{source, chatKey?, threadKey?, sessionId?, mode: bound\|ephemeral\|queue, agentTemplate?, project?}`; a record matching by key is replaced (the id is preserved) → 200, otherwise 201 |
 | DELETE | `/api/v2/events/bindings/:id` | both | LEAD/ADMIN | Delete a binding → 204 (its API keys are deleted cascadingly); no record → 404 `NOT_FOUND` |
@@ -1035,6 +1035,93 @@ underpins the accounting of pipeline instances and the gates (e.g. a rule on the
 Router's decision (`decision.pipeline`) and into the decision journal. In the
 `bound`/`queue` targets the session is fixed, so the field is **rejected** there
 (400 `VALIDATION_ERROR`) rather than ignored.
+**Event attachments (`attachments[]`).** An additive body field (`eventIngestSchema`, ADR-115 × ADR-089):
+the event carries **references** to blob-store objects; the bytes never travel through it. The sender
+first uploads the file (staging `POST /api/v2/attachments` or an upload into a session — §5.6.1, RU only for now) and then
+passes the object path together with its metadata. The metadata is duplicated deliberately: the receiver
+compares it with the object's sidecar, so substituting a reference to a foreign or modified object is
+rejected on ingestion.
+
+```json
+{
+  "source": "telegram",
+  "type": "message",
+  "dedupKey": "tg:chat:-1001234567890:msg:4711",
+  "payload": { "text": "what is on the photo?" },
+  "identity": { "principalId": "tg:777", "chatKey": "chat:telegram:-1001234567890" },
+  "attachments": [
+    {
+      "blobPath": "attachments/4f/4f0c9b1d2e3a5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4",
+      "sha256": "4f0c9b1d2e3a5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4",
+      "mime": "image/png",
+      "size": 184320,
+      "name": "photo.png"
+    }
+  ]
+}
+```
+
+| Reference field | Requirement |
+|---|---|
+| `blobPath` | the attachment contour only: `attachments/<sha2>/<sha256>`, ≤ 512 characters, no `..` segments; an object of another contour (`packs/`, `processes/`, logs, skill content) cannot be referenced |
+| `sha256` | exactly 64 hex characters — the object address (content-addressed) |
+| `mime` | a non-empty MIME by content (≤ 255) that **matches** the object's sidecar |
+| `size` | a positive integer, bytes; **matches** the sidecar |
+| `name` | optional, 1–200 characters; not part of `blobPath` (sanitized as on upload) |
+
+**Required `dedupKey`.** A non-empty `attachments[]` requires an **explicit** `dedupKey` (otherwise
+`400 VALIDATION_ERROR`; both the request schema and the ingress check it). The reason: the default
+idempotency key is built from `source`/`type`/`chatKey|threadKey`/`payload` (JSON) and is unstable for
+attachments — the same message delivered twice with a different representation of its attachments would
+get different keys and be processed twice; a dedup key must not depend on the attachments' content.
+An empty array is equivalent to the field being absent (no key required).
+
+**Checks and limits.** Attachments are validated **before** the Router, dedup and the journal: a rejected
+event does not "claim" the dedup key and does not reach the decision journal. Every rejection is
+`400 VALIDATION_ERROR`, with the reason in `error.message` including the element index.
+
+| What is checked | Limit source / rule | Violation |
+|---|---|---|
+| `dedupKey` with non-empty attachments | request schema + ingress | `400 VALIDATION_ERROR` |
+| number of references | `attachments.maxFilesPerMessage` (default 10); the request schema allows at most 10 elements — the smaller limit applies | `400 VALIDATION_ERROR` |
+| `blobPath` inside `attachments/`, no `..` | the attachment contour (ADR-115) | `400 VALIDATION_ERROR` |
+| the object exists | `AttachmentService.resolve` | `400 VALIDATION_ERROR` |
+| `sha256`/`mime`/`size` match the sidecar | same | `400 VALIDATION_ERROR` |
+| file size | `attachments.maxBytesPerFile` | `400 VALIDATION_ERROR` |
+| the attachment contour is wired in the build | fail-closed: without an attachment service an event with attachments is rejected — otherwise a reference to a nonexistent or foreign object could be injected | `400 VALIDATION_ERROR` |
+
+**Delivery.** The message is assembled by `eventToMessage`: the first part is the text, then one media
+part per reference in `attachments[]` order; the part type is derived from `mime` (`image/*` → `image`,
+`audio/*` → `audio`, `video/*` → `video`, otherwise `file`). The bytes are not copied into the message —
+the parts reference the same blob-store object. In the derived `content` every media part contributes a
+placeholder (`[image: photo.png]`, `[image]` without a name, `[file: …]` and so on for other types),
+appended on a new line when it is not already present in the text — so the fact of an attachment is not
+lost in exports, search and the `messages.content` mapping; `metadata`
+gets `attachments_count` (for audit and the UI). Duplicates in `attachments[]` are not collapsed — each
+element becomes a separate part (the bytes themselves are deduplicated by the blob contour: the address
+is content-addressed).
+
+**`blob_refs` and GC.** After the message is successfully queued, `blob_refs` are registered
+(`ownerKind: 'message'`, `ownerId` — the message id). The step is essential: an object without references
+is deleted by the background pruner according to `attachments.gcDays` (30 days by default) even though a
+message references it. The bookkeeping is best-effort: a failed reference write does not cancel delivery
+(it is logged). A staging object that never reaches a message lives until `gcDays` and is then removed by
+the general GC criterion (no references **and** older than the period).
+
+**Recommended order for gateways.** 1) `POST /api/v2/attachments` (§5.6.1, RU) — take
+`blobPath`/`sha256`/`mime`/`size` from the response; 2) `POST /api/v2/events` with `attachments[]` and an
+explicit `dedupKey`. The reverse order (an event referencing an object that is not uploaded yet) yields
+`400 VALIDATION_ERROR`, so "upload → send the event" is the only reliable path; one object can be reused
+across several events.
+
+**What attachments do not change.** Permissions and identity: the same rules as for an event without
+attachments (the base is the sender profile's roles, `identity.roles` only narrow them, an unidentified
+sender gets no rights) — attachments grant no extra rights and do not affect routing. Media is neither
+anonymized nor cleaned on ingestion: the bytes are stored as they are, and metadata stripping
+(EXIF/IPTC/XMP) happens only at the provider-send boundary (ADR-115). The file type is not "guessed" from
+the client's claim: `mime` must match the sidecar, while allowed types are constrained by the upload
+(`attachments.allowedMimePrefixes`, SVG is forbidden).
+
 The processing chain and the journal — `docs/ARCHITECTURE.md` ("External events and hooks"), ADR-089.
 
 > `POST /api/v2/sessions` now goes through the single funnel `RequestSessionService`

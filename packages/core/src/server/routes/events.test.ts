@@ -868,3 +868,90 @@ describe('Events API Routes (ADR-089)', () => {
     expect(call[1].ownerId).toBe('u-9');
   });
 });
+
+/**
+ * ADR-115 × ADR-089: вложения события на HTTP-границе.
+ *
+ * Кривые ссылки — ошибка запроса (`400 VALIDATION_ERROR`), а не 500: шлюз должен
+ * получить понятный отказ и не ретраить событие как «внутреннюю ошибку».
+ */
+describe('Events API: вложения события (ADR-115 × ADR-089)', () => {
+  let tmpDir: string;
+  let bindingStore: EventBindingStore;
+  let apiKeyStore: EventApiKeyStore;
+  let journal: EventJournalStore;
+  let routeRuleStore: RouteRuleStore;
+
+  const makeApp = (ingress: EventIngress) => {
+    const app = new Hono();
+    app.route(
+      '/api/v2/events',
+      createEventRoutes(
+        createMockAuth(),
+        { ingress, bindingStore, apiKeyStore, journal, routeRuleStore },
+        {},
+      ),
+    );
+    return app;
+  };
+
+  const attachment = {
+    blobPath: `attachments/aa/${'a'.repeat(64)}`,
+    sha256: 'a'.repeat(64),
+    mime: 'image/png',
+    size: 1024,
+  };
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-event-attachments-'));
+    bindingStore = new EventBindingStore({ dataDir: tmpDir });
+    apiKeyStore = new EventApiKeyStore({ dataDir: tmpDir });
+    journal = new EventJournalStore({ dataDir: tmpDir });
+    routeRuleStore = new RouteRuleStore({ dataDir: tmpDir });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('POST / — вложения без dedupKey → 400 VALIDATION_ERROR', async () => {
+    const app = makeApp(createIngress({ kind: 'bound', sessionId: 's1' }, { id: 's1' } as Session));
+
+    const res = await app.request('/api/v2/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'telegram',
+        type: 'message',
+        payload: { text: 'hi' },
+        attachments: [attachment],
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('POST / — отказ проверки ссылки (нет сервиса вложений) → 400, не 500', async () => {
+    const app = makeApp(createIngress({ kind: 'bound', sessionId: 's1' }, { id: 's1' } as Session));
+
+    const res = await app.request('/api/v2/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'telegram',
+        type: 'message',
+        payload: { text: 'hi' },
+        dedupKey: 'tg:update:1',
+        attachments: [attachment],
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain('вложен');
+  });
+});
