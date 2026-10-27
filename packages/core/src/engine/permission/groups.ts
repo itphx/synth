@@ -10,7 +10,8 @@ import { ToolCapability, type ToolSource } from '@itphx/synth-shared';
 
 // ADR-115: `attach_workspace_file` читает файл проекта (запись — только в
 // blob-хранилище вложений), поэтому его группа — как у файловых read-тулов.
-const READ_TOOLS = ['read_file', 'list_directory', 'glob', 'attach_workspace_file'];
+// `list_models` — каталог моделей инстанса (только чтение, ADR-115), тоже `read`.
+const READ_TOOLS = ['read_file', 'list_directory', 'glob', 'attach_workspace_file', 'list_models'];
 const WRITE_TOOLS = ['write_file', 'edit_file', 'create_directory', 'delete_file'];
 const GIT_READ_TOOLS = ['git_status', 'git_diff', 'git_log', 'git_branch_list', 'git_show', 'git_blame', 'git_worktree_list'];
 const GIT_WRITE_TOOLS = [

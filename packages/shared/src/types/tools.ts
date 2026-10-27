@@ -56,6 +56,16 @@ export const ToolCapability = {
    * (`WORKSPACE_CAPABILITIES`) — реестр доступен и без workspace.
    */
   PROCESS: 'process',
+  /**
+   * Каталог моделей (ADR-115): тул `list_models` — модели инстанса с
+   * модальностями, текущая пара и назначения aux-моделей.
+   *
+   * Отдельная capability по той же причине, что `pipeline`/`schedule`/`process`:
+   * каталог — доменный ресурс инстанса, а не примитив ядра. Capability **не**
+   * привязана к рабочему каталогу проекта (`WORKSPACE_CAPABILITIES`) — каталог
+   * доступен и без workspace, и разрешён в plan-режиме (только чтение).
+   */
+  MODELS: 'models',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -89,6 +99,10 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.PROCESS]: {
     label: 'Фоновые процессы',
     description: 'process_list, process_logs',
+  },
+  [ToolCapability.MODELS]: {
+    label: 'Модели',
+    description: 'list_models',
   },
 };
 

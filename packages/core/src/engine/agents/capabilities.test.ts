@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { ToolCapability } from '@itphx/synth-shared';
 import { loadSystemAgentDefinitions } from './index.js';
 import { processListTool, processLogsTool } from '../tools/processes.js';
+import { listModelsTool } from '../tools/list-models.js';
 import { computeToolAvailability } from '../permission/availability.js';
 
 /** Агенты, которым нужны capability пайплайнов и расписаний. */
@@ -126,5 +127,45 @@ describe('Дефолтные агенты — capability process (этап 1 roa
       expect(availability.available, `${id} → ${tool.name}`).toBe(false);
       expect(availability.reason, `${id} → ${tool.name}`).toBe('role');
     }
+  });
+});
+
+/**
+ * ADR-115: capability `models` — каталог моделей инстанса для агента
+ * (тул `list_models`: модальности, текущая пара, назначения aux-моделей).
+ *
+ * Тул только читает каталог и не привязан к рабочему каталогу проекта, поэтому
+ * capability выдают **все** агенты, у которых вообще есть инструменты: иначе
+ * агент не смог бы предложить модель под вложение или выбрать модель
+ * саб-агенту (`task({provider, model})`). Исключение — `title` (генератор
+ * заголовков без инструментов вовсе).
+ */
+describe('Дефолтные агенты — capability models (ADR-115)', () => {
+  const agents = loadSystemAgentDefinitions();
+  const byId = new Map(agents.map((a) => [a.id, a]));
+
+  it('каждый агент с инструментами видит list_models', () => {
+    for (const agent of agents) {
+      if (agent.capabilities.length === 0) continue;
+      expect(agent.capabilities, agent.id).toContain(ToolCapability.MODELS);
+      const availability = computeToolAvailability(
+        listModelsTool.name,
+        listModelsTool.capabilities,
+        { agentCapabilities: agent.capabilities, sessionMode: 'act' },
+      );
+      expect(availability.available, `${agent.id} → ${listModelsTool.name}`).toBe(true);
+    }
+  });
+
+  it('title (без инструментов) не видит list_models', () => {
+    const title = byId.get('title');
+    expect(title, 'агент title не найден').toBeDefined();
+    expect(title!.capabilities).not.toContain(ToolCapability.MODELS);
+    const availability = computeToolAvailability(
+      listModelsTool.name,
+      listModelsTool.capabilities,
+      { agentCapabilities: title!.capabilities, sessionMode: 'act' },
+    );
+    expect(availability).toEqual({ available: false, reason: 'role' });
   });
 });

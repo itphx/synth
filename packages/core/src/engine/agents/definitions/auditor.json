@@ -15,7 +15,8 @@
     "git_read",
     "mcp",
     "runtime",
-    "memory"
+    "memory",
+    "models"
   ],
   "icon": "shield-check",
   "color": "--status-warning",

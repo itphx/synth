@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentsConfig } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentsConfig, ModelConfig } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -215,6 +215,15 @@ export interface OrchestratorOptions {
    * (поведение по умолчанию).
    */
   attachmentsConfig?: () => AttachmentsConfig;
+  /**
+   * ADR-115: каталог моделей инстанса для агента (тул `list_models`).
+   *
+   * Отдаёт все модели инстанса (`ModelConfig` из каталога провайдеров/ручных
+   * override) — тул фильтрует их по модальности/провайдеру и показывает
+   * назначения `attachments.modalityModels`. Не задан — тул недоступен
+   * (`models.list.deps_unavailable`): дампа каталога «из ниоткуда» нет.
+   */
+  listModels?: () => Promise<ModelConfig[]>;
   /**
    * ADR-034/ADR-035: порт словарей классификации (микро-слой, threat-scan,
    * проектные инструкции). Продакшн передаёт `StorageContext.dictionaries`;
@@ -618,6 +627,12 @@ export class ChatOrchestrator {
    */
   private readonly _attachmentsConfig?: () => AttachmentsConfig;
   /**
+   * ADR-115: каталог моделей инстанса для агента (`list_models`).
+   * `undefined` — резолвер не задан: тул отвечает
+   * `models.list.deps_unavailable` (дампа каталога «из ниоткуда» нет).
+   */
+  private readonly _listModels?: () => Promise<ModelConfig[]>;
+  /**
    * ADR-115: порты чтения вложений для гидратации (лениво — поверх blob-порта
    * по `dataDir`, как ssh-ключи/словари ниже). `null` — ещё не созданы.
    */
@@ -937,6 +952,8 @@ export class ChatOrchestrator {
     // ADR-115: live-конфиг вложений — проверяется на каждый ход в
     // `_processSetupDeps().hydrateAttachments` (без рестарта).
     if (options.attachmentsConfig) this._attachmentsConfig = options.attachmentsConfig;
+    // ADR-115: каталог моделей для тула `list_models` (live — читается на вызов).
+    if (options.listModels) this._listModels = options.listModels;
     this._gatewayPayloadLogPath = options.gatewayPayloadLogPath
       ?? join(options.dataDir || '/var/synth/data', 'audit', 'llm-payloads.jsonl');
     this._cachePolicy = options.cachePolicy ?? 'auto';
@@ -3838,6 +3855,9 @@ export class ChatOrchestrator {
                   // user-сообщения (очередь + автоход) и учёт ссылок на blob.
                   attachmentService: this._getAttachmentService(),
                   attachmentsConfig: this._attachmentsConfig ?? undefined,
+                  // ADR-115: каталог моделей инстанса — тул `list_models`
+                  // (модальности, текущая пара, назначения aux-моделей).
+                  listModels: this._listModels ?? undefined,
                   deliverUserMessage: this._deliverUserMessage ?? undefined,
                   blobRefs: this._blobRefs ?? undefined,
                   // ADR-114: сервис worktree'ов — тулы `git_worktree_*`.

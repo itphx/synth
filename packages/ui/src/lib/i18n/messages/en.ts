@@ -2696,6 +2696,16 @@ export const dict = {
   'attach.tool.unsupported_mime': 'File "{path}" cannot be attached: {detail}',
   'attach.tool.unrecognized': 'File "{path}" format was not recognized — it cannot be attached',
 
+  // --- Каталог моделей для агента (ADR-115): тул `list_models` ---
+  'models.list.header': 'Models (filter: {filter}; shown {shown} of {total}):',
+  'models.list.current': 'Current: {model} ({modalities})',
+  'models.list.defaults': 'Assigned by modality: {assignments}',
+  'models.list.skipped': 'Skipped models with unknown modalities: {count}',
+  'models.list.empty': 'No models found',
+  'models.list.provider_unknown': 'Provider "{provider}" not found in the model catalog',
+  'models.list.deps_unavailable': 'The model catalog is unavailable in this build',
+  'models.list.unavailable': 'The model catalog is unavailable: {reason}',
+
   // --- Фоновые саб-агенты и лимит шагов (этап 1 roadmap 0.13, блок 4) ---
   'task.steps_limit':
     '[steps_limit] The subagent was stopped by the step limit ({limit}).',

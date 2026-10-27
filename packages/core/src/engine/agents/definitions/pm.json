@@ -21,7 +21,8 @@
     "pipeline",
     "schedule",
     "question",
-    "process"
+    "process",
+    "models"
   ],
   "icon": "clipboard",
   "color": "--primary",

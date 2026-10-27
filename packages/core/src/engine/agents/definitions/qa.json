@@ -22,7 +22,8 @@
     "pipeline",
     "schedule",
     "question",
-    "process"
+    "process",
+    "models"
   ],
   "icon": "bug",
   "color": "--syntax-number",

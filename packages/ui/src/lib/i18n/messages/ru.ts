@@ -3120,6 +3120,16 @@ export const dict = {
   'attach.tool.unsupported_mime': 'Файл «{path}» нельзя приложить: {detail}',
   'attach.tool.unrecognized': 'Формат файла «{path}» не распознан — приложить его нельзя',
 
+  // --- Каталог моделей для агента (ADR-115): тул `list_models` ---
+  'models.list.header': 'Модели (фильтр: {filter}; показано {shown} из {total}):',
+  'models.list.current': 'Текущая: {model} ({modalities})',
+  'models.list.defaults': 'Назначены по модальностям: {assignments}',
+  'models.list.skipped': 'Пропущено моделей без известных модальностей: {count}',
+  'models.list.empty': 'Модели не найдены',
+  'models.list.provider_unknown': 'Провайдер «{provider}» не найден в каталоге моделей',
+  'models.list.deps_unavailable': 'Каталог моделей недоступен в этой сборке',
+  'models.list.unavailable': 'Каталог моделей недоступен: {reason}',
+
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',
   'sshKeys.description': 'SSH-ключи per-agent для git-операций. Приватные ключи и парольные фразы шифруются at-rest и не отображаются после сохранения.',

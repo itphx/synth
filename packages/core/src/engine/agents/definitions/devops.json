@@ -23,7 +23,8 @@
     "pipeline",
     "schedule",
     "question",
-    "process"
+    "process",
+    "models"
   ],
   "icon": "server",
   "color": "--syntax-type",

@@ -417,6 +417,15 @@ export const ENGINE_MESSAGE_KEYS = [
   'attach.tool.too_large',
   'attach.tool.unsupported_mime',
   'attach.tool.unrecognized',
+  // --- Каталог моделей для агента (ADR-115): тул `list_models` ---
+  'models.list.header',
+  'models.list.current',
+  'models.list.defaults',
+  'models.list.skipped',
+  'models.list.empty',
+  'models.list.provider_unknown',
+  'models.list.deps_unavailable',
+  'models.list.unavailable',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -823,6 +832,14 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'attach.tool.too_large': ["path","size","limit"],
   'attach.tool.unsupported_mime': ["path","detail"],
   'attach.tool.unrecognized': ["path"],
+  'models.list.header': ["filter","shown","total"],
+  'models.list.current': ["model","modalities"],
+  'models.list.defaults': ["assignments"],
+  'models.list.skipped': ["count"],
+  'models.list.empty': [],
+  'models.list.provider_unknown': ["provider"],
+  'models.list.deps_unavailable': [],
+  'models.list.unavailable': ["reason"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

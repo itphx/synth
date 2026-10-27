@@ -23,7 +23,8 @@
     "pipeline",
     "schedule",
     "question",
-    "process"
+    "process",
+    "models"
   ],
   "icon": "robot-3",
   "color": "--status-success",
