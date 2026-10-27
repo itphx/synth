@@ -13,6 +13,7 @@ import {
   describeAuthorityPolicyRepository,
   describeBackgroundRunRepository,
   describeBlobStore,
+  describeBlobRefRepository,
   describeContextFileRepository,
   describeDefaultsRepository,
   describeDedupRepository,
@@ -218,6 +219,10 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
 
   describeBlobStore('PG → BlobStore (file-backed)', () => makePort('blobs'));
   describeDefaultsRepository('PG → DefaultsRepository', () => makePort('defaults'));
+
+  // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища — таблица
+  // `blob_refs` (миграция 024); SQL-реализация, не файловая.
+  describeBlobRefRepository('PG → BlobRefRepository', () => makePort('blobRefs'));
 
   // ADR-105 (Ф1): внешние доступы к коннекторам (таблица `external_credentials`,
   // миграция 011; шифрование токенов — core-хелперами, мастер-ключ в `{dataDir}`).

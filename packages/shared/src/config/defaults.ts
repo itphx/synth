@@ -221,6 +221,16 @@ export const defaultConfig: SynthConfig = {
     // Срок хранения терминальных записей реестра (дни; <= 0 — без ограничения).
     retentionDays: 7,
   },
+  attachments: {
+    // ADR-115: лимиты и политика вложений сообщений (байты на файл, число
+    // файлов в сообщении, суммарный объём на сессию, белый список MIME,
+    // срок хранения осиротевших объектов).
+    maxBytesPerFile: 25 * 1024 * 1024,
+    maxFilesPerMessage: 10,
+    maxBytesPerSession: 1024 * 1024 * 1024,
+    allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+    gcDays: 30,
+  },
   metrics: {
     // ADR-094: экспорт Prometheus-метрик выключен по умолчанию (`GET /metrics` → 404).
     enabled: false,

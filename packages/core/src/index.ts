@@ -639,6 +639,9 @@ export type { JsonStoreConfig, JsonStoreLike } from './storage/json-store.js';
 // ADR-096 (W2.1): доменные порты слоя хранения + файловая реализация BlobStore.
 export { FileBlobStore } from './storage/file-blob-store.js';
 export type { FileBlobStoreConfig } from './storage/file-blob-store.js';
+// ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (файловая реализация).
+export { FileBlobRefRepository } from './storage/file-blob-ref-repository.js';
+export type { FileBlobRefRepositoryConfig } from './storage/file-blob-ref-repository.js';
 // ADR-051/ADR-100: файловая реализация порта пайплайнов.
 export { FilePipelineStore } from './storage/file-pipeline-store.js';
 export type { FilePipelineStoreConfig } from './storage/file-pipeline-store.js';
@@ -799,6 +802,12 @@ export type {
   BackgroundRunRepository,
   // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
   WorktreeRepository,
+  // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (дедуп/GC).
+  BlobRefRepository,
+  BlobRef,
+  BlobOwnerKind,
+  BlobStat,
+  BlobReadRange,
 } from './storage/ports/index.js';
 // ADR-105 (Ф0/Ф1): доменная ошибка хранилища внешних доступов — значение
 // (не только тип): её бросают реализации порта, в т.ч. PostgreSQL-драйвер
@@ -851,6 +860,8 @@ export {
   MemoryBackgroundRunRepository,
   // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
   MemoryWorktreeRepository,
+  // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища.
+  MemoryBlobRefRepository,
 } from './storage/memory/index.js';
 // PROP-047 §2.1: in-memory реализации портов памяти. Имена классов совпадают с
 // именами портов (`MemoryFactRepository`), поэтому в публичном API они

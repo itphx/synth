@@ -26,6 +26,8 @@
  *     блок 1.2 — фоновые саб-агенты и шелл-процессы);
  *   - `buildWorktreePorts(deps)`   → `worktrees` (ADR-114 — инвентарь
  *     git-worktree'ов; generic-таблица `documents`, `kind='worktree'`).
+ *   - `buildBlobRefPorts(deps)`    → `blobRefs` (ADR-115/ADR-116 — учёт ссылок
+ *     на объекты blob-хранилища; таблица `blob_refs`).
  *
  * Все доменные порты реализованы поверх SQL; FS/package-bound порты (`skills`,
  * `contextFiles`, `blobs`) — **файловые реализации** core (контент скиллов/
@@ -60,6 +62,8 @@ import { buildPipelinePorts } from './ports/pipelines.js';
 import { buildQuestionPorts } from './ports/questions.js';
 import { buildBackgroundRunPorts } from './ports/background-runs.js';
 import { buildWorktreePorts } from './ports/worktrees.js';
+// ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (таблица `blob_refs`).
+import { buildBlobRefPorts } from './ports/blob-refs.js';
 import { buildPluginLockPorts } from './ports/plugin-lock.js';
 import { buildPrincipalPorts } from './ports/principals.js';
 import { buildSessionPorts } from './ports/sessions.js';
@@ -200,6 +204,9 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // ADR-114: инвентарь git-worktree'ов — generic-таблица `documents`
     // (`kind='worktree'`), без новой миграции.
     ...buildWorktreePorts(deps),
+    // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища — таблица
+    // `blob_refs` (миграция 024). Байты объектов остаются на томе (`blobs`).
+    ...buildBlobRefPorts(deps),
     // FS/package-bound порты: остаются файловыми (см. шапку модуля).
     skills: file.skills,
     contextFiles: file.contextFiles,

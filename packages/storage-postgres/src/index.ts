@@ -70,3 +70,7 @@ export type { AuthorityPorts } from './ports/authority.js';
 // миграция 011; шифрование токенов — core-хелперами через ленивый `import()`).
 export { buildExternalCredentialPorts } from './ports/external-credentials.js';
 export type { ExternalCredentialPorts } from './ports/external-credentials.js';
+// ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (таблица
+// `blob_refs`, миграция 024); байты объектов остаются на томе.
+export { buildBlobRefPorts, PgBlobRefRepository } from './ports/blob-refs.js';
+export type { BlobRefPorts } from './ports/blob-refs.js';

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { generateId, generateStreamId, formatISODate, nowISO, safeJsonParse, atomicWrite, AsyncLock, pickLocalized, stripNullBytes, stripNullBytesDeep } from './index.js';
+import { generateId, generateStreamId, formatISODate, nowISO, safeJsonParse, atomicWrite, AsyncLock, pickLocalized, stripNullBytes, stripNullBytesDeep, makeMediaPart, makeTextPart, buildContentFromParts } from './index.js';
 
 describe('generateId', () => {
   it('возвращает строку в формате timestamp-counter-random', () => {
@@ -257,5 +257,43 @@ describe('stripNullBytesDeep', () => {
     expect(stripNullBytesDeep(undefined)).toBeUndefined();
     const str = 'a\u0000b';
     expect(stripNullBytesDeep(str)).toBe('ab');
+  });
+});
+
+/**
+ * ADR-115: медиа-части сообщений (вложения) — плейсхолдер в строковых
+ * производных и конструктор части.
+ */
+describe('makeMediaPart / buildContentFromParts (ADR-115)', () => {
+  const data = {
+    blobPath: 'attachments/ab/abcd',
+    sha256: 'abcd',
+    mime: 'image/png',
+    size: 12,
+    name: 'photo.png',
+  };
+
+  it('makeMediaPart создаёт часть нужного типа с данными', () => {
+    const part = makeMediaPart('image', data);
+    expect(part.type).toBe('image');
+    expect(part.data).toEqual(data);
+    expect(part.id).toBeTruthy();
+  });
+
+  it('медиа-часть даёт плейсхолдер с именем файла', () => {
+    const content = buildContentFromParts([makeTextPart('привет'), makeMediaPart('image', data)]);
+    expect(content).toContain('[image: photo.png]');
+  });
+
+  it('медиа-часть без имени даёт плейсхолдер только с типом', () => {
+    const { name: _name, ...withoutName } = data;
+    const content = buildContentFromParts([makeMediaPart('file', withoutName)]);
+    expect(content).toBe('[file]');
+  });
+
+  it('все медиа-типы поддержаны', () => {
+    for (const type of ['image', 'audio', 'video', 'file'] as const) {
+      expect(buildContentFromParts([makeMediaPart(type, data)])).toBe(`[${type}: photo.png]`);
+    }
   });
 });

@@ -180,7 +180,7 @@ export { slugifyWorkspaceName, uniqueWorkspaceName, MAX_WORKSPACE_SLUG_LENGTH } 
 
 // --- Part helpers ---
 
-import type { Part, PartType } from '../types/index.js';
+import type { MediaPartData, MediaPartType, Part, PartType } from '../types/index.js';
 import type { ProfileStore } from '../interfaces/index.js';
 
 export function makePart(type: PartType, data: unknown): Part {
@@ -189,6 +189,29 @@ export function makePart(type: PartType, data: unknown): Part {
 
 export function makeTextPart(text: string): Part {
   return makePart('text', text);
+}
+
+/**
+ * ADR-115: медиа-часть вложения (ссылка на blob + метаданные).
+ */
+export function makeMediaPart(type: MediaPartType, data: MediaPartData): Part {
+  return makePart(type, data);
+}
+
+/**
+ * ADR-115: плейсхолдер медиа-части для строковых производных (`content`).
+ *
+ * Вложение обязано оставить след в тексте: иначе факт вложения «испаряется»
+ * без ошибки (экспорт, поиск, PG-маппинг `messages.content`). Формат —
+ * `[<type>: <name>]`, без имени — `[<type>]`.
+ */
+export function mediaPartPlaceholder(type: MediaPartType, data: unknown): string {
+  const name =
+    typeof data === 'object' && data !== null
+      ? (data as { name?: unknown }).name
+      : undefined;
+  const label = typeof name === 'string' && name.trim() !== '' ? name.trim() : undefined;
+  return label ? `[${type}: ${label}]` : `[${type}]`;
 }
 
 export function buildContentFromParts(parts: Part[]): string {
@@ -209,6 +232,10 @@ export function buildContentFromParts(parts: Part[]): string {
         const d = p.data as Record<string, unknown>;
         const summary = d.autoSummary ?? d.auto_summary ?? '';
         return `<session_reference session_id="${d.sessionId ?? d.session_id ?? ''}" label="${d.label ?? ''}">${String(summary)}</session_reference>`;
+      }
+      // ADR-115: медиа-часть (вложение) — плейсхолдер с именем файла.
+      if (p.type === 'image' || p.type === 'audio' || p.type === 'video' || p.type === 'file') {
+        return mediaPartPlaceholder(p.type, p.data);
       }
       return '';
     })

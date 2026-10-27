@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import type {
   ContextCategory,
   ContextFileContent,
@@ -29,6 +30,8 @@ import type { CreateSkillInput, UpdateSkillMarkdownInput } from '../skill-store.
 import type { RotateMasterKeyOptions, RotateMasterKeyResult } from '../ssh-key-store.js';
 import { SSHKeyStoreError } from '../ssh-key-store.js';
 import type {
+  BlobReadRange,
+  BlobStat,
   BlobStore,
   ContextFileRepository,
   PackInstallation,
@@ -338,6 +341,8 @@ export class MemoryContextFileRepository implements ContextFileRepository {
 /** Порт blob-дерева поверх `Map` (семантика `FileBlobStore`, containment). */
 export class MemoryBlobStore implements BlobStore {
   private readonly _blobs = new Map<string, Buffer>();
+  /** Время последней записи объекта (мс) — для `stat().mtimeMs`. */
+  private readonly _mtimes = new Map<string, number>();
 
   /** Валидация относительного пути (без выхода за корень). */
   private _validate(path: string): void {
@@ -356,6 +361,7 @@ export class MemoryBlobStore implements BlobStore {
     void opts;
     this._validate(path);
     this._blobs.set(path, typeof data === 'string' ? Buffer.from(data, 'utf-8') : Buffer.from(data));
+    this._mtimes.set(path, Date.now());
   }
 
   async append(path: string, data: Buffer | string): Promise<void> {
@@ -363,11 +369,13 @@ export class MemoryBlobStore implements BlobStore {
     const chunk = typeof data === 'string' ? Buffer.from(data, 'utf-8') : Buffer.from(data);
     const current = this._blobs.get(path);
     this._blobs.set(path, current ? Buffer.concat([current, chunk]) : chunk);
+    this._mtimes.set(path, Date.now());
   }
 
   async delete(path: string): Promise<void> {
     this._validate(path);
     this._blobs.delete(path);
+    this._mtimes.delete(path);
   }
 
   async exists(path: string): Promise<boolean> {
@@ -384,6 +392,28 @@ export class MemoryBlobStore implements BlobStore {
       entries.push({ path, size: data.byteLength });
     }
     return entries.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /** ADR-115: метаданные объекта (размер/mtime); `null` — объекта нет. */
+  async stat(path: string): Promise<BlobStat | null> {
+    this._validate(path);
+    const buf = this._blobs.get(path);
+    if (!buf) return null;
+    return { size: buf.byteLength, mtimeMs: this._mtimes.get(path) ?? 0 };
+  }
+
+  /**
+   * ADR-115: потоковое чтение объекта; диапазон — включительно с обоих
+   * концов (как у `fs`). `null` — объекта нет.
+   */
+  async readStream(path: string, opts?: BlobReadRange): Promise<Readable | null> {
+    this._validate(path);
+    const buf = this._blobs.get(path);
+    if (!buf) return null;
+    const start = opts?.start !== undefined ? Math.max(0, opts.start) : 0;
+    const end = opts?.end !== undefined ? opts.end : buf.byteLength - 1;
+    const chunk = buf.subarray(start, end + 1);
+    return Readable.from([chunk]);
   }
 }
 

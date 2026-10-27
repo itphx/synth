@@ -28,6 +28,7 @@ import type {
   AuthorityDecisionJournal,
   AuthorityPolicyRepository,
   BackgroundRunRepository,
+  BlobRefRepository,
   BlobStore,
   ContextFileRepository,
   DedupRepository,
@@ -130,6 +131,8 @@ import { FileWorktreeStore } from './file-worktree-store.js';
 import { ContextConfig } from '../engine/context/config.js';
 import { SSHKeyStore } from './ssh-key-store.js';
 import { FileBlobStore } from './file-blob-store.js';
+// ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (дедуп/GC).
+import { FileBlobRefRepository } from './file-blob-ref-repository.js';
 import type { LeaderFactoryOptions, Mutex, MutexFactoryOptions } from './mutex.js';
 import type { SchedulerLeader } from '../engine/scheduler/leader.js';
 import { setStorageDegradedState } from '../engine/permission/storage-state.js';
@@ -141,6 +144,7 @@ import {
   MemoryAuthorityPolicyRepository,
   MemoryBackgroundRunRepository,
   MemoryBlobStore,
+  MemoryBlobRefRepository,
   MemoryContextFileRepository,
   MemoryDefaultsRepository,
   MemoryDictionaryRepository,
@@ -377,6 +381,13 @@ export interface StorageContext {
    */
   credentialAudit: CredentialAuditRepository;
   blobs: BlobStore;
+  /**
+   * ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища. Байты лежат на
+   * томе (`blobs`), а ссылки — в общем хранилище: по ним дедуп (по
+   * содержимому) и детерминированный GC (ссылок не осталось → объект можно
+   * удалять).
+   */
+  blobRefs: BlobRefRepository;
   /** ADR-051/ADR-100: определения и экземпляры пайплайнов. */
   pipelines: PipelineRepository;
   /** ADR-086 §5: реестр установок пакетов расширений. */
@@ -674,6 +685,8 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     // ADR-105 (Ф4): журнал операций со слоем доступов (`audit/credentials.jsonl`).
     credentialAudit: new FileCredentialAuditStore({ dataDir }),
     blobs: new FileBlobStore({ root: dataDir }),
+    // ADR-115/ADR-116: ссылки на объекты blob-хранилища (`blob-refs.json`).
+    blobRefs: new FileBlobRefRepository({ dataDir }),
     // ADR-051/ADR-100: пайплайны — определения (`pipelines/definitions.json`)
     // и экземпляры (`pipelines/instances.json`).
     pipelines: new FilePipelineStore({ dataDir }),
@@ -746,6 +759,8 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     externalCredentials: new MemoryExternalCredentialRepository(),
     credentialAudit: new MemoryCredentialAuditRepository(),
     blobs: new MemoryBlobStore(),
+    // ADR-115/ADR-116: ссылки на объекты blob-хранилища.
+    blobRefs: new MemoryBlobRefRepository(),
     pipelines: new MemoryPipelineRepository(),
     packs: new MemoryPackRepository(),
     projectPipelines: new MemoryProjectPipelineRepository(),

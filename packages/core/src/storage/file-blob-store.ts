@@ -1,6 +1,8 @@
+import { createReadStream } from 'node:fs';
 import { appendFile, chmod, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import type { Readable } from 'node:stream';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import type { BlobStore } from './ports/blob-store.js';
+import type { BlobReadRange, BlobStat, BlobStore } from './ports/blob-store.js';
 
 export interface FileBlobStoreConfig {
   /** Корень blob-хранилища (абсолютный или относительный путь). */
@@ -94,6 +96,41 @@ export class FileBlobStore implements BlobStore {
       ? all.filter((e) => e.path === baseRel || e.path.startsWith(`${baseRel}/`))
       : all;
     return filtered.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /**
+   * ADR-115: метаданные объекта (размер/mtime) — `null`, если объекта нет
+   * или это не обычный файл.
+   */
+  async stat(path: string): Promise<BlobStat | null> {
+    this._validate(path);
+    try {
+      const s = await stat(this._resolve(path));
+      if (!s.isFile()) return null;
+      return { size: s.size, mtimeMs: s.mtimeMs };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ADR-115: потоковое чтение объекта; диапазон — включительно с обоих
+   * концов (как у `fs.createReadStream`). `null` — объекта нет (поток не
+   * создаётся — вызывающий отдаёт 404 без чтения).
+   */
+  async readStream(path: string, opts?: BlobReadRange): Promise<Readable | null> {
+    this._validate(path);
+    const target = this._resolve(path);
+    try {
+      const s = await stat(target);
+      if (!s.isFile()) return null;
+    } catch {
+      return null;
+    }
+    return createReadStream(target, {
+      ...(opts?.start !== undefined ? { start: opts.start } : {}),
+      ...(opts?.end !== undefined ? { end: opts.end } : {}),
+    });
   }
 
   /** Рекурсивный обход с относительными (posix-style) путями. */

@@ -24,6 +24,17 @@ describe('defaultConfig', () => {
     expect(defaultConfig).toHaveProperty('decision');
     expect(defaultConfig).toHaveProperty('metrics');
     expect(defaultConfig).toHaveProperty('questions');
+    expect(defaultConfig).toHaveProperty('attachments');
+  });
+
+  it('attachments по умолчанию: 25 МиБ на файл, 10 файлов, 1 ГиБ на сессию, GC 30 дней (ADR-115)', () => {
+    expect(defaultConfig.attachments).toEqual({
+      maxBytesPerFile: 25 * 1024 * 1024,
+      maxFilesPerMessage: 10,
+      maxBytesPerSession: 1024 * 1024 * 1024,
+      allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+      gcDays: 30,
+    });
   });
 
   it('questions по умолчанию: без таймаута ответа, retention 14 дней (этап 1 roadmap 0.13)', () => {

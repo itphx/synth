@@ -57,6 +57,9 @@ export {
   MemoryPackRepository,
 } from './content.js';
 
+// ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (дедуп/GC).
+export { MemoryBlobRefRepository } from './blob-refs.js';
+
 // ADR-101 (Pipeline Engine): спецификации пайплайнов, прогоны и журнал выполнения.
 export { MemoryProjectPipelineRepository, MemoryPipelineRunRepository } from './pipelines.js';
 

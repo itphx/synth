@@ -83,6 +83,12 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'background', key: 'maxRunsPerSession', type: 'number' },
   { section: 'background', key: 'logMaxBytes', type: 'number' },
   { section: 'background', key: 'retentionDays', type: 'number' },
+  // attachments (ADR-115): лимиты вложений сообщений. Список MIME-префиксов
+  // (`allowedMimePrefixes`) — объектный ключ, остаётся в config.yaml.
+  { section: 'attachments', key: 'maxBytesPerFile', type: 'number' },
+  { section: 'attachments', key: 'maxFilesPerMessage', type: 'number' },
+  { section: 'attachments', key: 'maxBytesPerSession', type: 'number' },
+  { section: 'attachments', key: 'gcDays', type: 'number' },
   // metrics (ADR-094): Helm ставит `SYNTH_METRICS_ENABLED` — имя должно совпадать.
   { section: 'metrics', key: 'enabled', type: 'boolean' },
   // authority (ADR-106 Ф1): мастер-выключатель слоя и режим наблюдения.

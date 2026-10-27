@@ -32,6 +32,7 @@ import { MIGRATION_020_PROJECT_MEMORY } from './020-project-memory.js';
 import { MIGRATION_021_BACKGROUND_RUNS } from './021-background-runs.js';
 import { MIGRATION_022_BACKGROUND_RUN_PROCESS_ID } from './022-background-run-process-id.js';
 import { MIGRATION_023_SESSION_WORKTREE } from './023-session-worktree.js';
+import { MIGRATION_024_BLOB_REFS } from './024-blob-refs.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -68,6 +69,7 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 21, id: '021_background_runs', sql: MIGRATION_021_BACKGROUND_RUNS },
   { version: 22, id: '022_background_run_process_id', sql: MIGRATION_022_BACKGROUND_RUN_PROCESS_ID },
   { version: 23, id: '023_session_worktree', sql: MIGRATION_023_SESSION_WORKTREE },
+  { version: 24, id: '024_blob_refs', sql: MIGRATION_024_BLOB_REFS },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

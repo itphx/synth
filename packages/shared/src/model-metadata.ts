@@ -4,6 +4,61 @@
  * Источники: официальная документация провайдеров, OpenRouter.
  */
 
+/**
+ * ADR-115: модальность входа модели — какие типы вложений она принимает.
+ *
+ * `text` — обычный текстовый промпт (есть у любой модели); остальные — vision/
+ * pdf/audio/video. Карта `KNOWN_MODEL_MODALITIES` — **эталон** известных
+ * моделей; для неизвестной модели действует консервативный фолбэк `['text']`
+ * (вложение модель без поддержки не получит — ADR-115 §4).
+ */
+export type AttachmentModality = 'text' | 'image' | 'pdf' | 'audio' | 'video';
+
+/** Модальности, которые принимает модель (по справочнику известных моделей). */
+export const KNOWN_MODEL_MODALITIES: Record<string, AttachmentModality[]> = {
+  // OpenAI — текст + изображения (+ файлы-pdf у моделей с file-input).
+  'gpt-4o-audio-preview': ['text', 'audio', 'image'],
+  'gpt-4o-mini-audio-preview': ['text', 'audio', 'image'],
+  'gpt-4o': ['text', 'image', 'pdf'],
+  'gpt-4o-mini': ['text', 'image', 'pdf'],
+  'gpt-4.1': ['text', 'image', 'pdf'],
+  'gpt-4.1-mini': ['text', 'image', 'pdf'],
+  'gpt-4.1-nano': ['text', 'image', 'pdf'],
+  'gpt-4-turbo': ['text', 'image'],
+  'o4-mini': ['text', 'image'],
+  'o3-mini': ['text', 'image'],
+  'o3': ['text', 'image'],
+  'o1': ['text', 'image'],
+
+  // Anthropic — текст + изображения + документы (pdf).
+  'claude-3-opus': ['text', 'image', 'pdf'],
+  'claude-3-sonnet': ['text', 'image', 'pdf'],
+  'claude-3-haiku': ['text', 'image', 'pdf'],
+  'claude-3-5-sonnet': ['text', 'image', 'pdf'],
+  'claude-3-5-haiku': ['text', 'image', 'pdf'],
+  'claude-sonnet-4': ['text', 'image', 'pdf'],
+  'claude-haiku-4': ['text', 'image', 'pdf'],
+  'claude-opus-4': ['text', 'image', 'pdf'],
+
+  // Google — текст + изображения + документы + аудио/видео.
+  'gemini-2.5': ['text', 'image', 'pdf', 'audio', 'video'],
+  'gemini-2.0': ['text', 'image', 'pdf', 'audio', 'video'],
+  'gemini-1.5': ['text', 'image', 'pdf', 'audio', 'video'],
+
+  // Остальные известные модели — только текст.
+  'deepseek': ['text'],
+  'mistral': ['text'],
+  'codestral': ['text'],
+  'ministral': ['text'],
+  'llama': ['text'],
+  'qwen': ['text'],
+  'qwq': ['text'],
+  'command-r': ['text'],
+  'command-a': ['text'],
+  'pixtral': ['text', 'image'],
+  'jamba': ['text'],
+};
+
 export const KNOWN_MODEL_WINDOWS: Record<string, number> = {
   // OpenAI
   'gpt-4o': 128_000,
@@ -146,4 +201,64 @@ export function lookupContextWindow(modelId: string): { window: number; source: 
   }
 
   return { window: 0, source: 'unknown' };
+}
+
+/** Консервативный фолбэк для неизвестной модели (ADR-115): только текст. */
+const DEFAULT_MODEL_MODALITIES: AttachmentModality[] = ['text'];
+
+/**
+ * ADR-115: модальности входа модели (какие вложения она принимает).
+ *
+ * Порядок поиска (как у `lookupContextWindow`): точное совпадение → id без
+ * суффикса даты (`:2024-08-06`, `:free`, `:beta`) → совпадение по префиксу.
+ * Ключ с именем провайдера (`openai/gpt-4o`) проверяется раньше «голого» id.
+ *
+ * Модели в справочнике нет → **консервативный фолбэк** `['text']`: вложение
+ * такой модели не отправляется (ADR-115 §4), а не уходит «наугад».
+ */
+export function resolveModelModalities(
+  providerName: string | undefined,
+  modelId: string,
+): AttachmentModality[] {
+  const candidates: string[] = [];
+  if (providerName) {
+    const provider = providerName.trim().toLowerCase();
+    if (provider !== '') candidates.push(`${provider}/${modelId}`);
+  }
+  candidates.push(modelId);
+
+  for (const candidate of candidates) {
+    const key = normalizeModelKey(candidate);
+    if (key === '') continue;
+
+    const exact = KNOWN_MODEL_MODALITIES[key];
+    if (exact) return [...exact];
+
+    const baseId = key.split(':')[0]!;
+    if (baseId !== key) {
+      const base = KNOWN_MODEL_MODALITIES[baseId];
+      if (base) return [...base];
+    }
+
+    for (const [knownId, modalities] of Object.entries(KNOWN_MODEL_MODALITIES)) {
+      if (key.startsWith(knownId.toLowerCase())) {
+        return [...modalities];
+      }
+    }
+  }
+
+  return [...DEFAULT_MODEL_MODALITIES];
+}
+
+/**
+ * Нормализация id модели для поиска в справочниках: нижний регистр, без
+ * префикса провайдера (`openai/gpt-4o` → `gpt-4o`).
+ */
+function normalizeModelKey(modelId: string): string {
+  let key = modelId.toLowerCase();
+  const slashIdx = key.lastIndexOf('/');
+  if (slashIdx >= 0) {
+    key = key.slice(slashIdx + 1);
+  }
+  return key;
 }

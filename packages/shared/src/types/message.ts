@@ -16,7 +16,55 @@ export enum MessageRole {
 }
 
 // --- Part ---
-export type PartType = 'text' | 'tool_use' | 'tool_result' | 'reasoning' | 'session_reference';
+/**
+ * Типы частей сообщения.
+ *
+ * ADR-115: к текстовым/служебным добавлены медиа-типы (`image`/`audio`/
+ * `video`/`file`) — вложения сообщений. Текстовые части не меняются
+ * (обратная совместимость).
+ */
+export type PartType =
+  | 'text'
+  | 'tool_use'
+  | 'tool_result'
+  | 'reasoning'
+  | 'session_reference'
+  | 'image'
+  | 'audio'
+  | 'video'
+  | 'file';
+
+/** Медиа-типы части сообщения (ADR-115) — вложение. */
+export type MediaPartType = 'image' | 'audio' | 'video' | 'file';
+
+/**
+ * ADR-115 §«Модель контента»: данные медиа-части — ссылка на blob в
+ * blob-хранилище + метаданные. Байты в сообщении не лежат (том, ADR-116),
+ * поэтому часть переносима и переживает пересборку бэкапа.
+ */
+export interface MediaPartData {
+  /** Путь объекта в blob-хранилище (`attachments/<sha2>/<sha256>`). */
+  blobPath: string;
+  /** SHA-256 содержимого (content-addressed, дедуп/GC). */
+  sha256: string;
+  /** MIME-тип по содержимому. */
+  mime: string;
+  /** Размер в байтах. */
+  size: number;
+  /** Имя файла (санитайз; в `blobPath` не входит). */
+  name?: string;
+  /** Ширина изображения/кадра, px. */
+  width?: number;
+  /** Высота изображения/кадра, px. */
+  height?: number;
+  /** Длительность аудио/видео, мс. */
+  durationMs?: number;
+  /**
+   * Текстовая расшифровка (ASR/OCR/извлечение из документа) — подставляется
+   * в контекст вместо байтов.
+   */
+  transcript?: string;
+}
 
 export interface Part {
   id: string;

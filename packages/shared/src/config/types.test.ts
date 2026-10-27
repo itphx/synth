@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('mcpServerConfigSchema (ADR-071 §2.2)', () => {
@@ -316,5 +316,26 @@ describe('backgroundConfigSchema (PROP-096/PROP-097)', () => {
   it('отрицательные лимиты отклоняются', () => {
     expect(backgroundConfigSchema.safeParse({ maxProcessesPerSession: -1 }).success).toBe(false);
     expect(backgroundConfigSchema.safeParse({ logMaxBytes: -1 }).success).toBe(false);
+  });
+});
+
+/**
+ * ADR-115: секция `attachments` — лимиты и политика вложений сообщений.
+ */
+describe('attachmentsConfigSchema (ADR-115)', () => {
+  it('дефолт: 25 МиБ на файл, 10 файлов, 1 ГиБ на сессию, GC 30 дней', () => {
+    expect(attachmentsConfigSchema.parse({})).toEqual({
+      maxBytesPerFile: 26_214_400,
+      maxFilesPerMessage: 10,
+      maxBytesPerSession: 1_073_741_824,
+      allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+      gcDays: 30,
+    });
+  });
+
+  it('нулевой срок GC допустим (без ограничения), отрицательные лимиты — нет', () => {
+    expect(attachmentsConfigSchema.parse({ gcDays: 0 }).gcDays).toBe(0);
+    expect(attachmentsConfigSchema.safeParse({ maxBytesPerFile: 0 }).success).toBe(false);
+    expect(attachmentsConfigSchema.safeParse({ maxFilesPerMessage: -1 }).success).toBe(false);
   });
 });

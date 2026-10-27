@@ -1116,3 +1116,28 @@ export type AnalyticsReportRowInput = z.infer<typeof analyticsReportRowSchema>;
 export type AnalyticsReportInput = z.infer<typeof analyticsReportSchema>;
 export type AnalyticsExportFormatInput = z.infer<typeof analyticsExportFormatSchema>;
 export type AnalyticsSummaryInput = z.infer<typeof analyticsSummarySchema>;
+
+// --- Медиа-часть сообщения (ADR-115) ---
+
+/** Медиа-типы части сообщения (ADR-115) — вложение. */
+export const mediaPartTypeSchema = z.enum(['image', 'audio', 'video', 'file']);
+
+/**
+ * ADR-115 §«Модель контента»: данные медиа-части — ссылка на blob в
+ * blob-хранилище + метаданные. Обязательны `blobPath`/`sha256`/`mime`/`size`;
+ * остальное — необязательные метаданные (имя, размеры, длительность,
+ * текстовая расшифровка).
+ */
+export const mediaPartSchema = z.object({
+  blobPath: z.string().min(1),
+  sha256: z.string().min(1),
+  mime: z.string().min(1),
+  size: z.number().int().min(0),
+  name: z.string().optional(),
+  width: z.number().int().min(0).optional(),
+  height: z.number().int().min(0).optional(),
+  durationMs: z.number().int().min(0).optional(),
+  transcript: z.string().optional(),
+});
+
+export type MediaPartInput = z.infer<typeof mediaPartSchema>;

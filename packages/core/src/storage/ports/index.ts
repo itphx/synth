@@ -91,7 +91,17 @@ export type {
   CredentialAuditRepository,
   CredentialAuditListOptions,
 } from './credential-audit-repository.js';
-export type { BlobStore } from './blob-store.js';
+export type {
+  BlobStat,
+  BlobReadRange,
+  BlobStore,
+} from './blob-store.js';
+// ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (дедуп/GC).
+export type {
+  BlobOwnerKind,
+  BlobRef,
+  BlobRefRepository,
+} from './blob-ref-repository.js';
 export type { DefaultsRepository, AppearanceDefaults } from './defaults-repository.js';
 // ADR-051/ADR-100: пайплайны (определения + экземпляры).
 export type {

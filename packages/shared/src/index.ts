@@ -242,6 +242,8 @@ export {
   decisionConfigSchema,
   type PluginsConfig,
   pluginsConfigSchema,
+  type AttachmentsConfig,
+  attachmentsConfigSchema,
   type WebhooksConfig,
   webhooksConfigSchema,
   type RemoteConfig,

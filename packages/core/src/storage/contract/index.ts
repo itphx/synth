@@ -61,6 +61,9 @@ export { describeProtectedPathsRepository } from './content.js';
 export { describeBlobStore } from './misc.js';
 export { describeDefaultsRepository } from './misc.js';
 
+// ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (дедуп/GC).
+export { describeBlobRefRepository } from './blob-ref-repository.contract.js';
+
 // ADR-051/ADR-100 (пайплайны) и ADR-086 §5 (реестр установок пакетов).
 export { describePipelineRepository } from './pipeline-repository.contract.js';
 export { describePackRepository } from './pack-repository.contract.js';

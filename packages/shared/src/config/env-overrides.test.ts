@@ -37,6 +37,10 @@ describe('toSnakeCase / envOverrideName (ADR-023)', () => {
     expect(envOverrideName({ section: 'metrics', key: 'enabled', type: 'boolean' })).toBe(
       'SYNTH_METRICS_ENABLED',
     );
+    // ADR-115: лимиты вложений.
+    expect(envOverrideName({ section: 'attachments', key: 'maxBytesPerFile', type: 'number' })).toBe(
+      'SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE',
+    );
   });
 
   it('реестр содержит уникальные env-имена', () => {
@@ -97,6 +101,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       analytics: { retentionDays: 400 },
       questions: { timeoutMs: 600_000, retentionDays: 14 },
       background: { enabled: true, maxSubagentsPerSession: 2, maxProcessesPerSession: 5, maxRunsPerSession: 10, logMaxBytes: 10_485_760 },
+      attachments: { maxBytesPerFile: 26_214_400, maxFilesPerMessage: 10, maxBytesPerSession: 1_073_741_824, gcDays: 30 },
       metrics: { enabled: false },
     };
   }
@@ -118,6 +123,10 @@ describe('applyEnvOverrides (ADR-023)', () => {
       SYNTH_QUESTIONS_RETENTION_DAYS: '7',
       SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION: '3',
       SYNTH_BACKGROUND_LOG_MAX_BYTES: '2048',
+      SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE: '10485760',
+      SYNTH_ATTACHMENTS_MAX_FILES_PER_MESSAGE: '4',
+      SYNTH_ATTACHMENTS_MAX_BYTES_PER_SESSION: '104857600',
+      SYNTH_ATTACHMENTS_GC_DAYS: '7',
       SYNTH_METRICS_ENABLED: 'true',
     });
 
@@ -141,6 +150,13 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(cfg.questions).toEqual({ timeoutMs: 0, retentionDays: 7 });
     // PROP-097: лимит фоновых процессов и предел размера лога.
     expect(cfg.background).toMatchObject({ maxProcessesPerSession: 3, logMaxBytes: 2048 });
+    // ADR-115: лимиты вложений сообщений.
+    expect(cfg.attachments).toEqual({
+      maxBytesPerFile: 10_485_760,
+      maxFilesPerMessage: 4,
+      maxBytesPerSession: 104_857_600,
+      gcDays: 7,
+    });
     // ADR-094: Helm ставит SYNTH_METRICS_ENABLED — имя env должно совпадать.
     expect(cfg.metrics).toEqual({ enabled: true });
   });

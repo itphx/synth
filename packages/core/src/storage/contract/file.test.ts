@@ -9,6 +9,7 @@ import {
   describeAuthorityPolicyRepository,
   describeBackgroundRunRepository,
   describeBlobStore,
+  describeBlobRefRepository,
   describeContextFileRepository,
   describeCredentialAuditRepository,
   describeDedupRepository,
@@ -83,6 +84,8 @@ import { ContextConfig } from '../../engine/context/config.js';
 import { SecretPatternStore } from '../../engine/gateway/secret-pattern-store.js';
 import { ProtectedPathsStore } from '../../engine/security/protected-paths-store.js';
 import { FileBlobStore } from '../file-blob-store.js';
+// ADR-115/ADR-116: ссылки на объекты blob-хранилища (`blob-refs.json`).
+import { FileBlobRefRepository } from '../file-blob-ref-repository.js';
 import { FilePipelineStore } from '../file-pipeline-store.js';
 import { FilePackStore } from '../file-pack-store.js';
 import { FileProjectPipelineStore } from '../file-project-pipeline-store.js';
@@ -308,6 +311,11 @@ describe('контрактные тесты файловых реализаци�
     const dir = await tmp();
     return { repo: new FileBlobStore({ root: join(dir, 'blobs') }) };
   });
+
+  // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища.
+  describeBlobRefRepository('FileBlobRefRepository → BlobRefRepository', async () => ({
+    repo: new FileBlobRefRepository({ dataDir: await tmp() }),
+  }));
 
   // ADR-051/ADR-100: пайплайны (определения + экземпляры).
   describePipelineRepository('FilePipelineStore → PipelineRepository', async () => ({

@@ -664,6 +664,29 @@ export const authorityConfigSchema = z.object({
   shadow: z.boolean().default(true),
 });
 
+// --- Вложения сообщений (ADR-115) ---
+
+/**
+ * ADR-115 §7: конфигурация вложений сообщений (multipart-загрузка + раздача).
+ *
+ * - `maxBytesPerFile` — предел размера одного файла, байт;
+ * - `maxFilesPerMessage` — предел числа вложений в одном сообщении;
+ * - `maxBytesPerSession` — предел суммарного объёма вложений сессии, байт;
+ * - `allowedMimePrefixes` — белый список MIME-префиксов (не пустой список —
+ *   все префиксы разрешены; список — объектный ключ, остаётся в config.yaml);
+ * - `gcDays` — срок хранения осиротевших объектов (дней; `<= 0` — без
+ *   ограничения).
+ */
+export const attachmentsConfigSchema = z.object({
+  maxBytesPerFile: z.number().int().min(1).default(25 * 1024 * 1024),
+  maxFilesPerMessage: z.number().int().min(1).default(10),
+  maxBytesPerSession: z.number().int().min(1).default(1024 * 1024 * 1024),
+  allowedMimePrefixes: z
+    .array(z.string().min(1))
+    .default(['image/', 'audio/', 'application/pdf', 'text/']),
+  gcDays: z.number().int().min(0).default(30),
+});
+
 // --- Наблюдаемость: Prometheus-метрики (ADR-094) ---
 
 /**
@@ -1272,6 +1295,7 @@ export const synthConfigSchema = z.object({
   analytics: analyticsConfigSchema.default({}),
   questions: questionsConfigSchema.default({}),
   background: backgroundConfigSchema.default({}),
+  attachments: attachmentsConfigSchema.default({}),
   metrics: metricsConfigSchema.default({}),
   authority: authorityConfigSchema.default({}),
   plugins: pluginsConfigSchema.default({}),
@@ -1326,6 +1350,8 @@ export type AnalyticsConfig = z.infer<typeof analyticsConfigSchema>;
 export type QuestionsConfig = z.infer<typeof questionsConfigSchema>;
 /** Этап 1 roadmap 0.13 (блок 4): секция `background` (реестр фоновых прогонов). */
 export type BackgroundConfig = z.infer<typeof backgroundConfigSchema>;
+/** ADR-115: секция `attachments` (лимиты и политика вложений сообщений). */
+export type AttachmentsConfig = z.infer<typeof attachmentsConfigSchema>;
 /** ADR-094: секция `metrics` (`enabled`). */
 export type MetricsConfig = z.infer<typeof metricsConfigSchema>;
 /** ADR-106 Ф1: секция `authority` (`enabled`/`shadow`). */

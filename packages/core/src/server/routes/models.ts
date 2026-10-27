@@ -4,7 +4,7 @@ import type { createMiddleware } from 'hono/factory';
 import type { JsonStoreLike } from '../../storage/json-store.js';
 import type { ModelConfig, ProviderConfig, ContextSource } from '@itphx/synth-shared';
 import type { DefaultModelPair } from '../../storage/runtime-settings.js';
-import { hasPriceInput, lookupContextWindow, parseCurrencyInput } from '@itphx/synth-shared';
+import { hasPriceInput, lookupContextWindow, parseCurrencyInput, resolveModelModalities } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/index.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
@@ -412,6 +412,11 @@ export function createModelRoutes(
           cacheWritePrice: m.cacheWritePrice,
           priceSource: m.priceSource,
           currency: m.currency,
+          /**
+           * ADR-115: модальности входа модели (какие вложения она принимает).
+           * Аддитивное поле: неизвестная модель → консервативно `['text']`.
+           */
+          modalities: resolveModelModalities(m.provider, m.name),
         })),
       };
     });

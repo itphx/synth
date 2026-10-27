@@ -6,6 +6,7 @@ import {
   describeAuthorityPolicyRepository,
   describeBackgroundRunRepository,
   describeBlobStore,
+  describeBlobRefRepository,
   describeContextFileRepository,
   describeCredentialAuditRepository,
   describeDefaultsRepository,
@@ -53,6 +54,7 @@ import {
   MemoryAuthorityPolicyRepository,
   MemoryBackgroundRunRepository,
   MemoryBlobStore,
+  MemoryBlobRefRepository,
   MemoryContextFileRepository,
   MemoryCredentialAuditRepository,
   MemoryDefaultsRepository,
@@ -256,6 +258,11 @@ describe('контрактные тесты in-memory реализаций по�
 
   describeBlobStore('MemoryBlobStore → BlobStore', async () => ({
     repo: new MemoryBlobStore(),
+  }));
+
+  // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища.
+  describeBlobRefRepository('MemoryBlobRefRepository → BlobRefRepository', async () => ({
+    repo: new MemoryBlobRefRepository(),
   }));
 
   describeDefaultsRepository('MemoryDefaultsRepository → DefaultsRepository', async () => ({

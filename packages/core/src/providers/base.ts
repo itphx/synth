@@ -148,10 +148,33 @@ export async function fetchModelsCatalog(
   }
 }
 
+/**
+ * ADR-115 §3: вложение в LLM-вызове (типовая часть контракта).
+ *
+ * Байты лежат в blob-хранилище, а провайдеру уходит **уже прочитанное**
+ * содержимое в base64. На этом шаге контракт только объявлен: чтение из
+ * `BlobStore` и маппинг в форматы провайдеров — следующий шаг (ADR-115
+ * §«Провайдеры и gateway»).
+ */
+export interface LLMAttachment {
+  /** MIME-тип вложения (`image/png`, `application/pdf`, …). */
+  mime: string;
+  /** Имя файла (необязательно — для подписи у провайдера). */
+  name?: string;
+  /** Содержимое вложения в base64 (без data-URL-префикса). */
+  base64: string;
+}
+
 export interface LLMMessage {
   id: string;
   role: string;
   content: string;
+  /**
+   * ADR-115: вложения сообщения (рядом с текстовым `content` — порядок:
+   * сначала текст, затем вложения). Поле необязательное: текстовые сообщения
+   * ведут себя как раньше.
+   */
+  attachments?: LLMAttachment[];
   usage: TokenUsage;
   debug?: Record<string, unknown>;
   model?: string;
