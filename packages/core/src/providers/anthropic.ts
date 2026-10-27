@@ -6,6 +6,7 @@ import {
   redactAttachmentPayloadForDebug,
   resolveSystemPromptText,
   parseTokenPricing,
+  supportsNativeAudio,
   toNonNegativeNumber,
   type DetailedModelInfo,
   type LLMAttachment,
@@ -518,7 +519,10 @@ export class AnthropicProvider extends BaseProvider {
    *
    *  - `image/*` → `{type:'image', source:{type:'base64', media_type, data}}`;
    *  - `application/pdf` → `{type:'document', source:{type:'base64', media_type:'application/pdf', data}}`;
-   *  - audio/video не поддерживаются API — пропускаются.
+   *  - `audio/*` → `{type:'audio', source:{type:'base64', media_type, data}}` —
+   *    расширение RouterAI (проверено: wav и ogg); официальный Anthropic API
+   *    аудио не принимает, поэтому блок отправляется только для RouterAI.
+   *  - video и прочее не поддерживаются — пропускаются.
    *
    * Фильтра по справочнику модальностей здесь **нет** (ADR-115): провайдер
    * кодирует всё, что ему передали, и пропускает только типы, которых
@@ -541,6 +545,14 @@ export class AnthropicProvider extends BaseProvider {
         parts.push({
           type: 'document',
           source: { type: 'base64', media_type: 'application/pdf', data: attachment.base64 },
+        });
+      } else if (supportsNativeAudio('anthropic', this.url, mime)) {
+        // RouterAI расширяет Anthropic-протокол аудио-блоком; официальный
+        // Anthropic его не знает. Надёжно декодируется только wav (ogg/mp3
+        // возвращают 200, но модель аудио не слышит) — предикат это учитывает.
+        parts.push({
+          type: 'audio',
+          source: { type: 'base64', media_type: 'audio/wav', data: attachment.base64 },
         });
       }
     }

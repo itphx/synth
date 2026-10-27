@@ -3134,6 +3134,8 @@ export const dict = {
   'attach.tool.not_a_file': '«{path}» — не файл',
   'attach.tool.too_large': 'Файл «{path}» весит {size} Б — предел вложения {limit} Б',
   'attach.tool.unsupported_mime': 'Файл «{path}» нельзя приложить: {detail}',
+  'attach.tool.modality_unsupported':
+    'Файл «{path}» не приложен: текущая модель не принимает вложения типа «{modality}». Назначь модель обработки для этой модальности (Настройки → «Мультимодальный ввод», modalityModels) или попроси пользователя прислать текст или описание — повторная привязка файла не поможет',
   'attach.tool.unrecognized': 'Формат файла «{path}» не распознан — приложить его нельзя',
   'attach.tool.queued': 'Файл «{name}» будет отправлен вложением в ответ в конце этого хода',
 

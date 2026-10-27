@@ -19,6 +19,9 @@
  * - размер больше `maxBytesPerFile` → отказ **по `stat`** (файл не читается,
  *   `upload` не вызывается);
  * - `AttachmentError('unsupported_mime')` из `upload` → отказ с ключом типа;
+ * - модальности модели: семейство не принято и aux-модели нет → отказ
+ *   `attach.tool.modality_unsupported` без загрузки/доставки; aux назначена,
+ *   семейство принято или модальности неизвестны → привязка работает;
  * - нет `deliverUserMessage` → `attach.tool.delivery_unavailable`;
  * - `buildMediaPart → null` (объект не распознан) → `attach.tool.unrecognized`;
  * - permission-слой: группа `file_read`, путь в `TOOL_PATH_PARAMS`.
@@ -316,6 +319,80 @@ describe('attach_workspace_file — привязка файла из workspace (
       expect(result.isError).toBe(true);
       expect(errorKey(result)).toBe('attach.tool.deps_unavailable');
       expect(delivered).toHaveLength(0);
+    });
+  });
+
+  /**
+   * ADR-115: модель не принимает семейство файла и aux-модели для него нет —
+   * привязка отменяется **до** загрузки и доставки. Иначе модель повторяла бы
+   * вызов (вложение всё равно отбросили бы) и уходила в цикл.
+   */
+  describe('модальности модели: заведомо отбрасываемое не доставляем', () => {
+    /** Байты с сигнатурой PNG (семейство определяется по содержимому). */
+    const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+
+    it('модель без audio, aux-модели нет → `modality_unsupported`, доставки нет', async () => {
+      await writeFile(join(workspace, 'voice.oga'), `OggS${'x'.repeat(32)}`);
+
+      const result = await attachWorkspaceFileTool.execute(
+        { path: 'voice.oga' },
+        makeCtx(makeExtra({ modelModalities: ['text', 'image'] })),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(errorKey(result)).toBe('attach.tool.modality_unsupported');
+      expect(result.metadata).toMatchObject({ modality: 'audio' });
+      // Ни загрузки, ни user-сообщения, ни ссылки на blob — цикл не воспроизводится.
+      expect(service.upload).not.toHaveBeenCalled();
+      expect(delivered).toHaveLength(0);
+      expect(addedRefs).toHaveLength(0);
+    });
+
+    it('aux-модель семейства назначена → привязка разрешена (derive обработает следующим ходом)', async () => {
+      await writeFile(join(workspace, 'voice.oga'), `OggS${'x'.repeat(32)}`);
+      const config: AttachmentsConfig = {
+        ...attachmentsConfigSchema.parse({}),
+        modalityModels: { audio: { provider: 'local', model: 'whisper' } },
+      };
+
+      const result = await attachWorkspaceFileTool.execute(
+        { path: 'voice.oga' },
+        makeCtx(
+          makeExtra({
+            modelModalities: ['text', 'image'],
+            attachmentsConfig: () => config,
+          }),
+        ),
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(service.upload).toHaveBeenCalledTimes(1);
+      expect(delivered).toHaveLength(1);
+    });
+
+    it('модель принимает семейство → привязка разрешена', async () => {
+      await writeFile(join(workspace, 'shot.png'), PNG_BYTES);
+
+      const result = await attachWorkspaceFileTool.execute(
+        { path: 'shot.png' },
+        makeCtx(makeExtra({ modelModalities: ['text', 'image'] })),
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(service.upload).toHaveBeenCalledTimes(1);
+      expect(delivered).toHaveLength(1);
+    });
+
+    it('модальности модели неизвестны → прежнее поведение (привязка)', async () => {
+      await writeFile(join(workspace, 'voice.oga'), `OggS${'x'.repeat(32)}`);
+      const extra = makeExtra();
+      delete extra.modelModalities; // поле не передано вовсе
+
+      const result = await attachWorkspaceFileTool.execute({ path: 'voice.oga' }, makeCtx(extra));
+
+      expect(result.isError).toBeFalsy();
+      expect(service.upload).toHaveBeenCalledTimes(1);
+      expect(delivered).toHaveLength(1);
     });
   });
 

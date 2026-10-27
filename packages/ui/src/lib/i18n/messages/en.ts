@@ -2708,6 +2708,8 @@ export const dict = {
   'attach.tool.not_a_file': '"{path}" is not a file',
   'attach.tool.too_large': 'File "{path}" is {size} bytes — the attachment limit is {limit} bytes',
   'attach.tool.unsupported_mime': 'File "{path}" cannot be attached: {detail}',
+  'attach.tool.modality_unsupported':
+    'File "{path}" is not attached: the current model does not accept {modality} attachments. Assign an auxiliary model for this modality (Settings → "Multimodal input", modalityModels) or ask the user to send the text or a description — re-attaching the file will not help',
   'attach.tool.unrecognized': 'File "{path}" format was not recognized — it cannot be attached',
   'attach.tool.queued':
     'File "{name}" will be sent as an attachment of the reply at the end of this turn',

@@ -610,8 +610,19 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   с `modalities`/`derive`, бюджет 4 / `attachments.maxBytesPerMessage`); тесты —
   `engine/orchestrator-tool-attachments.test.ts`, `engine/tools/web.test.ts`;
 - LLM: `LLMMessage.attachments`, гидратация из blob-порта (лимит 20 МиБ, фильтр по модальностям),
-  OpenAI `image_url`/`input_audio`, Anthropic `image`/`document`; gateway не обфусцирует и не логирует
-  base64 (payload-лог и debug-снимок — сводкой `{mime,name,sizeBytes}`);
+  OpenAI `image_url`/`input_audio`, Anthropic `image`/`document`/`audio`; gateway не обфусцирует и
+  не логирует base64 (payload-лог и debug-снимок — сводкой `{mime,name,sizeBytes}`);
+  - **форматы аудио** — предикат `supportsNativeAudio(type, baseUrl, mime)` (`providers/base.ts`):
+    официальный OpenAI — wav/mp3; RouterAI (OpenAI-протокол) — wav/mp3 и ogg/opus
+    (`input_audio` с `format:'ogg'`); Anthropic-протокол — **только wav и только RouterAI**
+    (официальный Anthropic аудио не принимает; Anthropic-совместимый RouterAI на ogg/mp3 отвечает
+    200, но модель аудио не слышит — проверено на живом API 2026-10-27). Предикат используют
+    адаптеры при сборке контента и гидратация (`canDeliverNative`) — формат вне списка не теряется
+    молча, а уходит в aux или в блок «не доставлено»;
+  - **aux важнее нативного пути для аудио**: при заданной `attachments.modalityModels.audio`
+    аудио-вложение всегда обрабатывается aux-моделью (Hermes), даже если модель сессии заявляет
+    `audio` в каталоге — контейнеры голосовых слишком разнородны (ogg/opus/m4a), а провайдерский
+    нативный путь для них часто неполный;
 - отброшенное вложение (`modality`/`limit`/`unavailable`) материализуется в `<workspace>/attachments/`
   (`engine/attachments/materialize.ts`), путь сообщается модели блоком `[ATTACHMENTS NOT DELIVERED]`
   (шаблон — `prompts/system/ATTACHMENTS_DROPPED.{ru,en}.md`); нет workspace — блок без пути;
@@ -647,7 +658,9 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   live-резолвер `attachments.modalityModels`), текст дописывается в `content` LLM-сообщения
   (`[<family>: <name>]` + текст, `debug.attachmentsDerived`), расход пишется в аналитику отдельным
   бакетом по осям aux-модели; блок `[ATTACHMENTS NOT DELIVERED]` получил `{model}`/`{modalities}`
-  и подсказку про `list_models`/`attach_workspace_file`.
+  и подсказку про `list_models`/настройку модели обработки (повторно прикладывать файл нельзя —
+  он будет отброшен снова). Гидратация получает `canDeliverNative` (предикат форматов аудио
+  провайдера) и при заданной aux-модели обрабатывает аудио через неё до нативного пути.
 
 **Остаток:**
 

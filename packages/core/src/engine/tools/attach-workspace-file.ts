@@ -22,6 +22,13 @@
  * - **Лимиты и allowlist — общие** (`attachments.*`): размер проверяется по
  *   `stat` **до** чтения файла, MIME/модальность/белый список — в
  *   `AttachmentService.upload` (единственная точка записи байтов).
+ * - **Заведомо отбрасываемое не ставим в очередь.** Если модальности текущей
+ *   модели известны и не содержат семейство файла, а aux-модель семейства не
+ *   назначена (`attachments.modalityModels`), вложение всё равно было бы
+ *   отброшено гидратацией — тул возвращает отказ
+ *   `attach.tool.modality_unsupported` и **не** доставляет user-сообщение
+ *   (иначе модель зацикливалась: приложила → снова отброшено → приложила).
+ *   Модальности неизвестны — прежнее поведение (тихая потеря недопустима).
  * - **Доставка — через хук оркестратора** (`deliverUserMessage`: очередь +
  *   автоход). Хука нет — честная ошибка, а не «тихий» успех: файл загружен,
  *   но модель его не увидит.
@@ -48,8 +55,10 @@ import {
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import {
   AttachmentError,
+  attachmentModalityOf,
   type AttachmentService,
 } from '../attachments/service.js';
+import { sniffMime } from '../attachments/sniff-mime.js';
 import { isAborted, abortedResult } from './abort.js';
 import {
   isSymlinkEscape,
@@ -74,12 +83,17 @@ export const ATTACH_WORKSPACE_FILE_TOOL = 'attach_workspace_file';
  *   автоход). Не задан — отказ `attach.tool.delivery_unavailable`.
  * - `blobRefs` — учёт ссылок на объекты blob-хранилища: сообщение ссылается на
  *   объект, иначе GC (ADR-115) сочёл бы его сиротой по TTL.
+ * - `modelModalities` — модальности **текущей** модели хода (из каталога
+ *   провайдера, тот же резолвер, что у гидратации). Нужны, чтобы не
+ *   доставлять заведомо отбрасываемое вложение. Не заданы (модальности
+ *   неизвестны) — фильтра нет, прежнее поведение.
  */
 export interface AttachWorkspaceFileExtra {
   attachmentService?: AttachmentService;
   attachmentsConfig?: () => AttachmentsConfig;
   deliverUserMessage?: (sessionId: string, message: Message) => Promise<void>;
   blobRefs?: BlobRefRepository;
+  modelModalities?: readonly string[];
 }
 
 /** Единый текст ошибки разбора аргументов (как у соседних тулов). */
@@ -186,11 +200,33 @@ export const attachWorkspaceFileTool: ToolDefinition = {
       );
     }
 
+    // ADR-115: заведомо отбрасываемое вложение в очередь не ставим. MIME
+    // определяется по сигнатуре (как в `AttachmentService`), поэтому байты
+    // читаются один раз — они же уходят в `upload`.
+    const bytes = await readFile(resolvedPath);
+    const sniffed = sniffMime(bytes);
+    const family = sniffed ? attachmentModalityOf(sniffed) : null;
+    const modelModalities = extra?.modelModalities;
+    if (
+      family
+      && modelModalities
+      && modelModalities.length > 0
+      && !modelModalities.includes(family)
+      // Назначена aux-модель семейства — гидратация отдаст модели текст, привязка осмысленна.
+      && !config.modalityModels?.[family]
+    ) {
+      return failureResult(
+        'attach.tool.modality_unsupported',
+        { path: params.path, modality: family },
+        { path: resolvedPath, modality: family, mime: sniffed },
+      );
+    }
+
     let meta;
     try {
       meta = await service.upload({
         sessionId: ctx.sessionId,
-        bytes: await readFile(resolvedPath),
+        bytes,
         ...(params.name ? { name: params.name } : {}),
       });
     } catch (err) {

@@ -6,6 +6,7 @@ import {
   redactAttachmentPayloadForDebug,
   resolveSystemPromptText,
   parseTokenPricing,
+  supportsNativeAudio,
   toNonNegativeNumber,
   type DetailedModelInfo,
   type LLMAttachment,
@@ -445,6 +446,9 @@ export class OpenAIProvider extends BaseProvider {
    *    (формат OpenAI-совместимых API; RouterAI принимает так PDF и читает документ);
    *  - `audio/wav` (в т.ч. `audio/x-wav`) → `input_audio` c `format:'wav'`;
    *  - `audio/mpeg`/`audio/mp3` → `input_audio` c `format:'mp3'`;
+   *  - `audio/ogg`/`audio/opus`/`audio/oga` → `input_audio` c `format:'ogg'`
+   *    (расширение RouterAI; официальный OpenAI знает только wav/mp3,
+   *    поэтому формат отправляется только для RouterAI);
    *  - прочие типы не отправляются — плейсхолдер уже в тексте.
    *
    * Фильтра по справочнику модальностей здесь **нет** (ADR-115): провайдер
@@ -488,6 +492,15 @@ export class OpenAIProvider extends BaseProvider {
         parts.push({
           type: 'input_audio',
           input_audio: { data: attachment.base64, format: 'mp3' },
+        });
+        continue;
+      }
+      if (supportsNativeAudio('openai', this.url, mime)) {
+        // Голосовые Telegram — ogg/opus; RouterAI принимает их как
+        // `input_audio` с форматом `ogg` (проверено), официальный OpenAI — нет.
+        parts.push({
+          type: 'input_audio',
+          input_audio: { data: attachment.base64, format: 'ogg' },
         });
       }
     }

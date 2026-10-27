@@ -616,6 +616,10 @@ describe('AnthropicProvider — вложения (ADR-115)', () => {
     return new AnthropicProvider({ ...baseParams, model }) as unknown as AnthropicPrivate;
   }
 
+  function providerWithUrl(url: string): AnthropicPrivate {
+    return new AnthropicProvider({ ...baseParams, url }) as unknown as AnthropicPrivate;
+  }
+
   it('изображение → image-блок с base64-source', () => {
     const formatted = providerWithModel('claude-sonnet-4-20250514')._formatMessages([
       makeMessage({ content: 'что на фото?', attachments: [imageAttachment] }),
@@ -644,12 +648,34 @@ describe('AnthropicProvider — вложения (ADR-115)', () => {
     ]);
   });
 
-  it('аудио не кодируется — API Anthropic его не принимает', () => {
+  it('аудио не кодируется — официальный API Anthropic его не принимает', () => {
     const formatted = providerWithModel('claude-sonnet-4-20250514')._formatMessages([
       makeMessage({ content: 'послушай', attachments: [audioAttachment] }),
     ]);
 
     expect(formatted[0]!.content).toEqual([{ type: 'text', text: 'послушай' }]);
+  });
+
+  it('аудио wav у RouterAI → audio-блок; ogg не отправляется (не декодируется)', () => {
+    const formatted = providerWithUrl('https://routerai.ru/api/v1/messages')._formatMessages([
+      makeMessage({
+        content: 'послушай',
+        attachments: [
+          audioAttachment,
+          { mime: 'audio/ogg', base64: 'T2dnUw==' },
+        ],
+      }),
+    ]);
+
+    // ogg RouterAI возвращает 200, но модель аудио не слышит (проверено на
+    // живом API) — такой файл должен идти через aux-модель, а не нативно.
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'послушай' },
+      {
+        type: 'audio',
+        source: { type: 'base64', media_type: 'audio/wav', data: 'UklGRg==' },
+      },
+    ]);
   });
 
   it('картинка у модели вне справочника → image-блок (провайдер не фильтрует)', () => {

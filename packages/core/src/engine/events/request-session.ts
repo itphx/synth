@@ -165,9 +165,15 @@ export interface RequestSessionServiceDeps {
 
 /**
  * ADR-089: извлекает текст сообщения из нормализованного события. Если `payload` —
- * объект с непустым строковым `text`, возвращает его; иначе сериализует payload
- * (`JSON.stringify` с fallback на пустую строку). Экспортируется для тестов и
- * инъектируемого `deliver`.
+ * объект с непустым строковым `text`, возвращает его.
+ *
+ * ADR-115 × ADR-089: у **медиа-события** (голосовое/фото из шлюза) текста нет,
+ * но есть вложения — возвращается пустая строка. Служебный `payload`
+ * (`{chatId, attachment: {kind: 'voice', …}}`) в диалог и модель не уходит:
+ * `content` соберётся из плейсхолдеров вложений (`appendMediaPlaceholders`).
+ * JSON-сериализация payload остаётся только для событий **без** вложений
+ * (ci/webhook и прочие служебные события — там это единственный осмысленный
+ * текст). Экспортируется для тестов и инъектируемого `deliver`.
  */
 export function eventToMessageText(event: SynthEvent): string {
   const payload = event.payload;
@@ -175,6 +181,7 @@ export function eventToMessageText(event: SynthEvent): string {
     const text = (payload as { text?: unknown }).text;
     if (typeof text === 'string' && text.length > 0) return text;
   }
+  if ((event.attachments?.length ?? 0) > 0) return '';
   const serialized = JSON.stringify(payload);
   return typeof serialized === 'string' ? serialized : '';
 }
@@ -267,7 +274,9 @@ export function eventToMessage(event: SynthEvent): Message {
   // ADR-115 × ADR-089: вложения события — медиа-части сообщения (текст первым,
   // порядок ссылок события сохраняется). `content` — текст + плейсхолдеры
   // `[image: name]`: без них факт вложения «испарился» бы в строковых
-  // производных (экспорт, поиск, PG-маппинг `messages.content`).
+  // производных (экспорт, поиск, PG-маппинг `messages.content`). Медиа-событие
+  // без текста даёт `content` **ровно из плейсхолдеров** — служебный payload
+  // (`chatId`, `attachment`) в сообщение не попадает.
   const parts: Part[] = [makeTextPart(text)];
   for (const attachment of attachments) {
     parts.push(

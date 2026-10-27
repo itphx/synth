@@ -89,7 +89,11 @@ function makeDeps(blobs: Record<string, Buffer>): HydrateDeps & { reads: string[
         ? 'application/pdf'
         : blobPath.includes('jpeg')
           ? 'image/jpeg'
-          : 'image/png';
+          : blobPath.endsWith('.ogg')
+            ? 'audio/ogg'
+            : blobPath.endsWith('.wav')
+              ? 'audio/wav'
+              : 'image/png';
       return { mime, size: bytes.length, sha256: 'a'.repeat(64), name: blobPath.split('/').pop() };
     },
     read: async (blobPath) => {
@@ -551,6 +555,21 @@ describe('hydrateMessageAttachments: derive (ADR-115)', () => {
     ];
   }
 
+  function audioSource(mime = 'audio/ogg', name = 'voice.ogg'): Message[] {
+    const ext = mime === 'audio/wav' ? 'wav' : 'ogg';
+    return [
+      sourceMessage({
+        parts: [
+          mediaPart('audio', {
+            blobPath: `attachments/aa/voice.${ext}`,
+            mime,
+            name,
+          }),
+        ],
+      }),
+    ];
+  }
+
   it('модальность не принята + derive → текст в content, вложения нет, debug.attachmentsDerived=1', async () => {
     const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
     const derive = vi.fn(async () => 'Схема зала и подписи');
@@ -633,15 +652,172 @@ describe('hydrateMessageAttachments: derive (ADR-115)', () => {
     expect(result[0]!.debug?.attachmentsDerived).toBeUndefined();
   });
 
-  it('модальности модели неизвестны → derive не вызывается (нечего сравнивать)', async () => {
-    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
-    const derive = vi.fn(async () => 'не должно вызываться');
+  it('поддерживаемая audio + derive → текст (явная aux-модель важнее нативного пути)', async () => {
+    const deps = makeDeps({ 'attachments/aa/voice.ogg': Buffer.from('OggS') });
+    const derive = vi.fn(async () => 'транскрипт голосового');
 
+    const result = await hydrateMessageAttachments([llmMessage()], audioSource(), deps, {
+      modalities: ['text', 'audio'],
+      derive,
+    });
+
+    expect(derive).toHaveBeenCalledTimes(1);
+    expect(derive).toHaveBeenCalledWith({
+      blobPath: 'attachments/aa/voice.ogg',
+      mime: 'audio/ogg',
+      name: 'voice.ogg',
+      family: 'audio',
+    });
+    expect(result[0]!.attachments).toBeUndefined();
+    expect(result[0]!.content).toBe('вопрос\n\n[audio: voice.ogg]\nтранскрипт голосового');
+    expect(result[0]!.debug?.attachmentsDerived).toBe(1);
+    expect(deps.reads).toEqual([]);
+  });
+
+  it('audio-формат не поддержан транспортом + derive → текст (не теряется молча)', async () => {
+    const deps = makeDeps({ 'attachments/aa/voice.ogg': Buffer.from('OggS') });
+    const derive = vi.fn(async () => 'транскрипт голосового');
+
+    // Модальность `audio` в каталоге есть, но протокол не умеет ogg
+    // (Anthropic-совместимый): без aux вложение должно стать «недоставленным»,
+    // а не пропасть у провайдера.
+    const result = await hydrateMessageAttachments([llmMessage()], audioSource(), deps, {
+      modalities: ['text', 'audio'],
+      canDeliverNative: () => false,
+      derive,
+    });
+
+    expect(derive).toHaveBeenCalledTimes(1);
+    expect(result[0]!.attachments).toBeUndefined();
+    expect(result[0]!.content).toBe('вопрос\n\n[audio: voice.ogg]\nтранскрипт голосового');
+    expect(result[0]!.debug?.attachmentsDerived).toBe(1);
+    expect(deps.reads).toEqual([]);
+  });
+
+  it('audio-формат не поддержан транспортом, derive нет → отброс modality', async () => {
+    const deps = makeDeps({ 'attachments/aa/voice.ogg': Buffer.from('OggS') });
+
+    const result = await hydrateMessageAttachments([llmMessage()], audioSource(), deps, {
+      modalities: ['text', 'audio'],
+      canDeliverNative: () => false,
+      noticeTemplate: '{items}',
+    });
+
+    expect(result[0]!.attachments).toBeUndefined();
+    expect(result[0]!.content).toBe('вопрос\n\n- voice.ogg (audio/ogg) — modality');
+    expect(result[0]!.debug?.attachmentsDropped).toEqual([
+      { mime: 'audio/ogg', name: 'voice.ogg', sizeBytes: 0, reason: 'modality' },
+    ]);
+    expect(deps.reads).toEqual([]);
+  });
+
+  it('audio wav поддержан транспортом, derive null → нативно', async () => {
+    const deps = makeDeps({ 'attachments/aa/voice.wav': Buffer.from('RIFF0000') });
+
+    const result = await hydrateMessageAttachments(
+      [llmMessage()],
+      audioSource('audio/wav', 'voice.wav'),
+      deps,
+      {
+        modalities: ['text', 'audio'],
+        derive: async () => null,
+        canDeliverNative: (mime) => mime === 'audio/wav',
+      },
+    );
+
+    expect(result[0]!.attachments?.[0]?.mime).toBe('audio/wav');
+    expect(result[0]!.debug?.attachmentsDropped).toBeUndefined();
+    expect(deps.reads).toEqual(['attachments/aa/voice.wav']);
+  });
+
+  it('модальности неизвестны + derive → текст в content, вложения нет, debug.attachmentsDerived=1', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const derive = vi.fn(async () => 'Схема зала и подписи');
+
+    // Каталог провайдера модальностей не сообщил (`modalities` не задан), но
+    // aux-модель семейства назначена: провайдер может молча выкинуть тип —
+    // вместо байтов в диалог идёт текст.
     const result = await hydrateMessageAttachments([llmMessage()], imageSource(), deps, { derive });
 
-    expect(derive).not.toHaveBeenCalled();
+    expect(derive).toHaveBeenCalledTimes(1);
+    expect(derive).toHaveBeenCalledWith({
+      blobPath: 'attachments/aa/image',
+      mime: 'image/png',
+      name: 'plan.png',
+      family: 'image',
+    });
+    expect(result[0]!.attachments).toBeUndefined();
+    expect(result[0]!.content).toBe('вопрос\n\n[image: plan.png]\nСхема зала и подписи');
+    expect(result[0]!.debug?.attachmentsDerived).toBe(1);
+    // Ни отброса, ни чтения байтов: вложение обработано aux-моделью.
+    expect(result[0]!.debug?.attachmentsDropped).toBeUndefined();
+    expect(deps.reads).toEqual([]);
+  });
+
+  it('модальности неизвестны + derive → whitespace-текст: нативно (успех — только непустой)', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+
+    const result = await hydrateMessageAttachments([llmMessage()], imageSource(), deps, {
+      derive: async () => '   \n',
+    });
+
     expect(result[0]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
     expect(result[0]!.debug?.attachmentsDerived).toBeUndefined();
+  });
+
+  it('модальности неизвестны + derive → null: прежнее поведение (нативно, без drop-блока)', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const derive = vi.fn(async () => null);
+    const refs: string[] = [];
+
+    const result = await hydrateMessageAttachments([llmMessage()], imageSource(), deps, {
+      derive,
+      noticeTemplate: '{items}',
+      materialize: async (ref) => {
+        refs.push(ref.reason);
+        return 'attachments/plan.png';
+      },
+    });
+
+    expect(derive).toHaveBeenCalledTimes(1);
+    // Модальности неизвестны — тихая потеря запрещена: вложение уходит как
+    // есть, решение за провайдером.
+    expect(result[0]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+    expect(result[0]!.content).toBe('вопрос');
+    expect(result[0]!.content).not.toContain('attachment not delivered');
+    expect(result[0]!.debug?.attachmentsDropped).toBeUndefined();
+    expect(result[0]!.debug?.attachmentsDerived).toBeUndefined();
+    expect(refs).toEqual([]);
+    expect(deps.reads).toEqual(['attachments/aa/image']);
+  });
+
+  it('модальности неизвестны + ошибка derive → нативно, ход не падает', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const logs: string[] = [];
+
+    const result = await hydrateMessageAttachments([llmMessage()], imageSource(), deps, {
+      derive: async () => {
+        throw new Error('aux down');
+      },
+      log: (message) => logs.push(message),
+    });
+
+    expect(result[0]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+    expect(result[0]!.debug?.attachmentsDropped).toBeUndefined();
+    expect(result[0]!.debug?.attachmentsDerived).toBeUndefined();
+    expect(logs.some((line) => line.includes('aux down'))).toBe(true);
+  });
+
+  it('модальности неизвестны + derive не задан → нативно (derive не вызывается)', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+
+    const result = await hydrateMessageAttachments([llmMessage()], imageSource(), deps, {
+      modalities: [],
+    });
+
+    expect(result[0]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+    expect(result[0]!.debug?.attachmentsDerived).toBeUndefined();
+    expect(result[0]!.debug?.attachmentsDropped).toBeUndefined();
   });
 
   it('блок «не доставлено»: {model} и {modalities} подставлены, без них — «—»', async () => {

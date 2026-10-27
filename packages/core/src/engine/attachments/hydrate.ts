@@ -28,7 +28,11 @@
  *    текст). Байты модели сессии при этом не отправляются; ошибка/пустой
  *    результат aux-вызова → прежний путь (`reason: 'modality'` + путь в
  *    workspace). Модель сессии не меняется — она вообще не участвует в aux-
- *    вызове;
+ *    вызове. **Модальности неизвестны, но aux-модель назначена** — derive тоже
+ *    пробуем (сравнивать не с чем, и провайдер может молча выкинуть тип —
+ *    например, Anthropic не принимает audio): успех — текст вместо байтов,
+ *    неудача — прежнее поведение (нативно, решает провайдер). При **известной
+ *    поддерживаемой** модальности derive не вызывается никогда;
  *  - суммарный объём base64 ограничен (`MAX_ATTACHMENT_BASE64_BYTES`): при
  *    превышении отбрасываются **самые старые** вложения (с начала истории), а
  *    на сообщении остаётся пометка `reason: 'limit'` — промпт не ломается;
@@ -103,6 +107,13 @@ export interface HydrateOptions {
    * поддержанные типы.
    */
   modalities?: readonly AttachmentModality[];
+  /**
+   * ADR-115: может ли провайдер хода принять аудиофайл с таким MIME нативно
+   * (предикат `supportsNativeAudio`). `false` — формат транспортом не
+   * поддерживается (напр. ogg для Anthropic-протокола): вложение идёт через
+   * aux-модель или помечается недоставленным, а не теряется молча.
+   */
+  canDeliverNative?: (mime: string) => boolean;
   /** Предел суммарного base64 (по умолчанию `MAX_ATTACHMENT_BASE64_BYTES`). */
   maxTotalBase64Bytes?: number;
   /** Лог предупреждений (по умолчанию — молча). */
@@ -127,10 +138,13 @@ export interface HydrateOptions {
   modelModalities?: readonly string[];
   /**
    * ADR-115 §«Модели обработки по модальностям»: обработка вложения aux-моделью
-   * семейства. Вызывается только когда модальности модели **известны** и
-   * модальность вложения в них не входит. Успех (непустой текст) — вложение не
-   * отправляется, текст дописывается в `content`; `null`/ошибка — прежний путь
-   * (`reason: 'modality'` + материализация). Не задан — derive не выполняется.
+   * семейства. Вызывается, когда модальность вложения **точно** не входит в
+   * модальности модели, а также когда модальности модели **неизвестны** (тогда
+   * сравнить не с чем, и провайдер может молча выкинуть тип). Успех (непустой
+   * текст) — вложение не отправляется, текст дописывается в `content`;
+   * `null`/ошибка — прежний путь (`reason: 'modality'` + материализация для
+   * известной неподдерживаемой модальности, нативная отправка для неизвестных).
+   * Не задан — derive не выполняется.
    */
   derive?: (input: {
     blobPath: string;
@@ -384,9 +398,15 @@ export async function hydrateMessageAttachments(
     for (const ref of refs) {
       const modality = byteModality(ref.mime);
       if (modality === null) continue;
-      if (allowedModalities && !allowedModalities.has(modality)) {
-        // Модальность не принята: сначала пробуем aux-модель семейства (байты
-        // модели сессии не отправляются). Не удалось — прежний путь отброса.
+      const modalityUnsupported = allowedModalities !== null && !allowedModalities.has(modality);
+      // Транспорт провайдера может не уметь конкретный контейнер (ogg у
+      // Anthropic-протокола), хотя модальность `audio` в каталоге есть.
+      const transportUnsupported = modality === 'audio'
+        && options.canDeliverNative !== undefined
+        && !options.canDeliverNative(ref.mime);
+      if (modalityUnsupported || transportUnsupported) {
+        // Модальность/формат не приняты: сначала пробуем aux-модель семейства
+        // (байты модели сессии не отправляются). Не удалось — отброс.
         const derived = await tryDerive(index, {
           blobPath: ref.blobPath,
           mime: ref.mime,
@@ -403,6 +423,20 @@ export async function hydrateMessageAttachments(
         });
         continue;
       }
+      // Аудио с назначенной aux-моделью обрабатываем всегда (Hermes:
+      // явный выбор модели обработки важнее нативного пути — форматы
+      // голосовых/записей слишком разнородны). Для остальных модальностей
+      // aux применяется, только когда модальности модели неизвестны.
+      // Неудача — прежнее поведение (нативно), ход не падает.
+      if (options.derive && (modality === 'audio' || allowedModalities === null)) {
+        const derived = await tryDerive(index, {
+          blobPath: ref.blobPath,
+          mime: ref.mime,
+          ...(ref.name ? { name: ref.name } : {}),
+          family: modality,
+        });
+        if (derived) continue;
+      }
       try {
         const meta = await deps.resolve(ref.blobPath);
         if (!meta) {
@@ -418,7 +452,10 @@ export async function hydrateMessageAttachments(
         }
         const metaModality = byteModality(meta.mime);
         if (metaModality === null) continue;
-        if (allowedModalities && !allowedModalities.has(metaModality)) {
+        const metaTransportUnsupported = metaModality === 'audio'
+          && options.canDeliverNative !== undefined
+          && !options.canDeliverNative(meta.mime);
+        if ((allowedModalities && !allowedModalities.has(metaModality)) || metaTransportUnsupported) {
           const name = meta.name ?? ref.name;
           const derived = await tryDerive(index, {
             blobPath: ref.blobPath,

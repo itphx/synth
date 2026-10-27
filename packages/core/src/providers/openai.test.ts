@@ -538,11 +538,16 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
 
   const imageAttachment = { mime: 'image/png', name: 'photo.png', base64: 'iVBORw0KGgo=' };
   const wavAttachment = { mime: 'audio/wav', base64: 'UklGRg==' };
+  const oggAttachment = { mime: 'audio/ogg', base64: 'T2dnUw==' };
   const pdfAttachment = { mime: 'application/pdf', base64: 'JVBERi0=' };
   const namedPdfAttachment = { mime: 'application/pdf', name: 'plan.pdf', base64: 'JVBERi0=' };
 
   function providerWithModel(model: string): OpenAIPrivate {
     return new OpenAIProvider({ ...baseParams, model }) as unknown as OpenAIPrivate;
+  }
+
+  function providerWithUrl(url: string): OpenAIPrivate {
+    return new OpenAIProvider({ ...baseParams, url }) as unknown as OpenAIPrivate;
   }
 
   it('изображение у vision-модели → content массивом: text + image_url', () => {
@@ -565,6 +570,25 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
       { type: 'text', text: 'расшифруй' },
       { type: 'input_audio', input_audio: { data: 'UklGRg==', format: 'wav' } },
     ]);
+  });
+
+  it('ogg у RouterAI → input_audio format=ogg (расширение; голос Telegram)', () => {
+    const formatted = providerWithUrl('https://routerai.ru/api/v1/chat/completions')._formatMessages([
+      makeMessage({ role: 'user', content: 'расшифруй', attachments: [oggAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'расшифруй' },
+      { type: 'input_audio', input_audio: { data: 'T2dnUw==', format: 'ogg' } },
+    ]);
+  });
+
+  it('ogg у обычного OpenAI-провайдера → аудио не отправляется', () => {
+    const formatted = providerWithModel('gpt-4o-audio-preview')._formatMessages([
+      makeMessage({ role: 'user', content: 'расшифруй', attachments: [oggAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toBe('расшифруй');
   });
 
   it('провайдер не фильтрует по справочнику: аудио кодируется и у модели без audio', () => {

@@ -10,7 +10,7 @@ import { DebugCollector } from '../debug.js';
 import { computeUsageCost } from '../providers/usage.js';
 
 import type { LLMMessage, LLMAttachment, CancellationToken, BaseProvider, SystemPromptPayload, CachePolicy } from '../providers/base.js';
-import { ProviderFactory } from '../providers/base.js';
+import { ProviderFactory, supportsNativeAudio } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import type { ContextOptimizerGatewayHooks } from './context/optimizer.js';
@@ -2560,8 +2560,21 @@ export class ChatOrchestrator {
         // только затем прежний путь (отброс + материализация). Не настроено —
         // `undefined` (derive не вызывается).
         const derive = this._buildAttachmentDerive(session, target.language);
+        // ADR-115: транспортные возможности провайдера (контейнеры аудио).
+        // Модальность в каталоге может включать `audio`, но протокол не умеет
+        // конкретный формат (ogg у Anthropic-совместимых) — тогда вложение
+        // идёт через aux или помечается недоставленным, а не теряется молча.
+        const providerConfig = this._providerLoader(target.providerName);
+        const canDeliverNative = providerConfig
+          ? (mime: string) => supportsNativeAudio(
+              providerConfig.type ?? '',
+              providerConfig.baseUrl ?? '',
+              mime,
+            )
+          : undefined;
         return hydrateMessageAttachments(messages, source, this._getAttachmentHydrateDeps(), {
           modalities,
+          ...(canDeliverNative ? { canDeliverNative } : {}),
           noticeTemplate: this._attachmentsDroppedTemplate(target.language),
           // Модель сессии и её модальности — для блока «не доставлено»: модель
           // видит, чего не хватает, и может предложить другую (тул `list_models`).
@@ -4272,6 +4285,15 @@ export class ChatOrchestrator {
                   // user-сообщения (очередь + автоход) и учёт ссылок на blob.
                   attachmentService: this._getAttachmentService(),
                   attachmentsConfig: this._attachmentsConfig ?? undefined,
+                  // ADR-115: модальности **текущей** модели хода — тул
+                  // `attach_workspace_file` не доставляет заведомо отбрасываемое
+                  // вложение (иначе модель повторяла привязку и уходила в цикл).
+                  // Источник тот же, что у гидратации; `undefined` — модальности
+                  // неизвестны (фильтра нет).
+                  modelModalities: this._resolveModalities?.(
+                    providerName,
+                    provider.model || modelName || session.settings.model || '',
+                  ),
                   // ADR-115 (outbound): коллектор медиа-частей ответа хода —
                   // тул `send_attachment` кладёт часть, финализация добавляет её
                   // к финальному сообщению. Не отправка сразу: при отмене/ошибке

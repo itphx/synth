@@ -1459,6 +1459,52 @@ describe('eventToMessage: вложения события (ADR-115 × ADR-089)',
     expect(msg.metadata?.attachments_count).toBeUndefined();
     expect(msg.content).toBe('hi');
   });
+
+  it('медиа-событие без текста: content — один плейсхолдер, служебного payload нет', () => {
+    // Голосовое из Telegram-шлюза: `payload.text` нет, есть вложение.
+    const voice = attachment({
+      blobPath: `attachments/cd/${sha(2)}`,
+      sha256: sha(2),
+      mime: 'audio/ogg',
+      size: 1024,
+      name: 'file_1.oga',
+    });
+    const e = event({
+      payload: { chatId: '-100123', attachment: { kind: 'voice', fileId: 'AgADvoice' } },
+      attachments: [voice],
+    });
+
+    expect(eventToMessageText(e)).toBe('');
+
+    const msg = eventToMessage(e);
+    // Ровно один плейсхолдер — без текстовой метки-дубля и без JSON.
+    expect(msg.content).toBe('[audio: file_1.oga]');
+    expect(msg.content.match(/\[audio:/g)).toHaveLength(1);
+    // Служебные поля шлюза в диалог и модель не уходят.
+    expect(msg.content).not.toContain('chatId');
+    expect(msg.content).not.toContain('fileId');
+    expect(msg.content).not.toContain('{');
+    // Текстовая часть — пустая (текста в событии не было), медиа-часть на месте.
+    expect(msg.parts[0]).toMatchObject({ type: 'text', data: '' });
+    expect(msg.parts[1]).toMatchObject({ type: 'audio' });
+    // Счётчик вложений для аудита сохранён.
+    expect(msg.metadata?.attachments_count).toBe(1);
+  });
+
+  it('без текста и без вложений → прежний JSON-payload (служебные события)', () => {
+    const msg = eventToMessage(event({ source: 'ci', payload: { build: 42 } }));
+
+    expect(msg.content).toBe('{"build":42}');
+    expect(eventToMessageText(event({ source: 'ci', payload: { build: 42 } }))).toBe('{"build":42}');
+  });
+
+  it('вложение с текстом → текст и плейсхолдер, JSON не подмешивается', () => {
+    const msg = eventToMessage(withAttachments([attachment()]));
+
+    expect(msg.content).toBe('смотри\n[image: photo.png]');
+    expect(msg.content).not.toContain('{');
+    expect(eventToMessageText(withAttachments([attachment()]))).toBe('смотри');
+  });
 });
 
 /**

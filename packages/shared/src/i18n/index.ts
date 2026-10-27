@@ -417,6 +417,7 @@ export const ENGINE_MESSAGE_KEYS = [
   'attach.tool.not_a_file',
   'attach.tool.too_large',
   'attach.tool.unsupported_mime',
+  'attach.tool.modality_unsupported',
   'attach.tool.unrecognized',
   // --- Отправка файла в ответе (ADR-115): тул `send_attachment` ---
   'attach.tool.queued',
@@ -841,6 +842,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'attach.tool.not_a_file': ["path"],
   'attach.tool.too_large': ["path","size","limit"],
   'attach.tool.unsupported_mime': ["path","detail"],
+  'attach.tool.modality_unsupported': ["path","modality"],
   'attach.tool.unrecognized': ["path"],
   'attach.tool.queued': ["name"],
   'attach.tool.saved': ["path","size"],

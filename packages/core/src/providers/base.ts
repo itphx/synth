@@ -400,6 +400,44 @@ export function resolveSystemPromptText(input: SystemPromptInput | undefined): s
   return text || undefined;
 }
 
+/** RouterAI — прокси с расширениями протоколов (аудио, PDF-файлы и т.п.). */
+export function isRouterAiUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === 'routerai.ru' || host.endsWith('.routerai.ru');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * ADR-115: может ли провайдер данного типа/хоста принять аудиофайл с таким
+ * MIME **нативно** (без aux-модели и конвертации).
+ *
+ *  - официальный OpenAI — wav/mp3;
+ *  - RouterAI (OpenAI-протокол) — wav/mp3 и ogg/opus (`input_audio` с
+ *    `format:'ogg'`, проверено на живом API);
+ *  - Anthropic-протокол — только wav и только RouterAI: официальный Anthropic
+ *    аудио не принимает, а Anthropic-совместимый RouterAI для ogg/mp3 отвечает
+ *    200, но модель аудио не слышит (галлюцинирует) — такие форматы должны
+ *    идти через aux-модель.
+ *
+ * Гидратация использует предикат, чтобы не терять вложение молча: формат вне
+ * списка обрабатывается aux-моделью или помечается как недоставленный.
+ */
+export function supportsNativeAudio(providerType: string, baseUrl: string, mime: string): boolean {
+  const normalized = mime.toLowerCase().split(';')[0]!.trim();
+  const wav = normalized === 'audio/wav' || normalized === 'audio/x-wav' || normalized === 'audio/wave';
+  const mp3 = normalized === 'audio/mpeg' || normalized === 'audio/mp3';
+  const ogg = normalized === 'audio/ogg' || normalized === 'audio/opus' || normalized === 'audio/oga';
+  const routerAi = isRouterAiUrl(baseUrl);
+  if (providerType === 'anthropic') return wav && routerAi;
+  if (providerType === 'openai' || providerType === 'generic') {
+    return wav || mp3 || (ogg && routerAi);
+  }
+  return false;
+}
+
 export abstract class BaseProvider {
   url: string;
   apiKey: string;

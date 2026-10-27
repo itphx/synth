@@ -469,11 +469,21 @@ describe('ContextConfig.getAttachmentsDroppedTemplate (ADR-115)', () => {
     expect(ru).toContain('limit');
     expect(ru).toContain('unavailable');
     expect(ru).toContain('read_file');
+    // Подсказка не провоцирует цикл: повторную привязку файла тулом не советуем,
+    // а отправляем к настройке модели обработки модальности.
+    expect(ru).toContain('modalityModels');
+    expect(ru).not.toContain('pdftotext');
+    expect(ru).not.toContain('attach_workspace_file');
+    expect(ru).toContain('Не прикладывай');
 
     const en = config.getAttachmentsDroppedTemplate('en');
     expect(en).toContain('[ATTACHMENTS NOT DELIVERED]');
     expect(en).toContain('{items}');
     expect(en).not.toContain('рабочем каталоге проекта');
+    expect(en).toContain('modalityModels');
+    expect(en).not.toContain('pdftotext');
+    expect(en).not.toContain('attach_workspace_file');
+    expect(en).toContain('Do not attach these files again');
 
     // Локализованного файла для неизвестного языка нет — шаблона нет.
     expect(config.getAttachmentsDroppedTemplate('fr')).toBe('');
