@@ -37,6 +37,7 @@ import { AddonsSettings } from "./AddonsSettings"
 import { PluginsSettings } from "./PluginsSettings"
 import { MaintenanceSettings } from "./MaintenanceSettings"
 import { ObservabilitySettings } from "./ObservabilitySettings"
+import { MultimodalSettings } from "./MultimodalSettings"
 import { MemorySettings } from "./MemorySettings"
 import { DashboardPanel } from "../admin/DashboardPanel"
 import { SessionsPanel } from "../admin/SessionsPanel"
@@ -334,6 +335,7 @@ export const SettingsModal = () => {
             {activePage === "plugins" && <PluginsSettings />}
             {activePage === "maintenance" && <MaintenanceSettings />}
             {activePage === "metrics" && <ObservabilitySettings />}
+            {activePage === "attachments" && <MultimodalSettings />}
             {activePage === "memory" && <MemorySettings />}
             {activePage === "security" && <SecuritySettings />}
             {activePage === "network" && <NetworkSettings />}

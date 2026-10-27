@@ -94,8 +94,23 @@ describe('settings-catalog — searchSettings', () => {
     )
   })
 
-  it('находит раздел «Полномочия» по названию и синонимам', () => {
-    // ADR-106 §11: категория и записи раздела участвуют в поиске.
+  it('находит раздел «Мультимодальный ввод» по названию и синонимам', () => {
+    // ADR-115: категория runtime-настроек вложений участвует в поиске.
+    expect(searchSettings(t, 'multimodal').categories.map((category) => category.id)).toContain(
+      'attachments',
+    )
+    expect(searchSettings(tRu, 'вложения').categories.map((category) => category.id)).toContain(
+      'attachments',
+    )
+    expect(searchSettings(tRu, 'белый список').entries.map((entry) => entry.id)).toContain(
+      'attachments.mime',
+    )
+    expect(searchSettings(tRu, 'модальности').entries.map((entry) => entry.id)).toContain(
+      'attachments.modalities',
+    )
+  })
+
+  it('находит раздел «Полномочия» по названию и синонимам', () => {    // ADR-106 §11: категория и записи раздела участвуют в поиске.
     expect(searchSettings(t, 'authority').categories.map((category) => category.id)).toContain(
       'authority',
     )

@@ -39,6 +39,7 @@ import { egressApi } from './egress'
 import { proxyApi } from './proxy'
 import { tlsApi } from './tls'
 import { observabilityApi } from './observability'
+import { attachmentsApi } from './settings-attachments'
 import { hybridApi } from './hybrid'
 import { instructionsApi } from './instructions'
 import { packsApi } from './packs'
@@ -170,6 +171,12 @@ export type {
   MetricsSettingsInfo,
   MetricsStatus,
 } from './observability'
+export type {
+  AttachmentsSource,
+  AttachmentsModalities,
+  AttachmentsSettings,
+  AttachmentsSettingsInfo,
+} from './settings-attachments'
 export type {
   CreateEventBindingKeyInput,
   UpdateEventBindingKeyPatch,
@@ -432,6 +439,9 @@ export const synthApi = {
   ...proxyApi,
   ...tlsApi,
   ...observabilityApi,
+  // ADR-115: runtime-настройки вложений — имена с префиксом домена, чтобы не
+  // переопределить короткие `get`/`update`/`reset` соседних доменов.
+  ...attachmentsApi,
   ...hybridApi,
   ...instructionsApi,
   ...packsApi,

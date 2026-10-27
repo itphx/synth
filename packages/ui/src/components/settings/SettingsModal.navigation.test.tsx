@@ -44,6 +44,7 @@ vi.mock('./ServiceKeysSettings', () => ({ ServiceKeysSettings: () => <div>servic
 vi.mock('./WebhooksSettings', () => ({ WebhooksSettings: () => <div>webhooks-page</div> }))
 vi.mock('./MaintenanceSettings', () => ({ MaintenanceSettings: () => <div>maintenance-page</div> }))
 vi.mock('./ObservabilitySettings', () => ({ ObservabilitySettings: () => <div>metrics-page</div> }))
+vi.mock('./MultimodalSettings', () => ({ MultimodalSettings: () => <div>attachments-page</div> }))
 vi.mock('./MemorySettings', () => ({ MemorySettings: () => <div>memory-page</div> }))
 vi.mock('../admin/DashboardPanel', () => ({ DashboardPanel: () => <div>dashboard-page</div> }))
 vi.mock('../admin/SessionsPanel', () => ({ SessionsPanel: () => <div>sessions-page</div> }))
@@ -124,6 +125,27 @@ describe('SettingsModal — группы и роли', () => {
     expect(text.indexOf('Integrations')).toBeLessThan(text.indexOf('Operations'))
   })
 
+  // ADR-115: админ-раздел «Мультимодальный ввод» — только ADMIN и без advanced.
+  it('ADMIN видит «Multimodal input», клик открывает раздел', async () => {
+    await renderModal()
+
+    expect(navText()).toContain('Multimodal input')
+
+    const button = [...document.querySelectorAll('nav button')].find((item) =>
+      item.textContent?.includes('Multimodal input'),
+    ) as HTMLButtonElement | undefined
+    expect(button).toBeTruthy()
+
+    await act(async () => {
+      button!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(useUIStore.getState().settingsPage).toBe('attachments')
+    expect(document.body.textContent).toContain('attachments-page')
+    // Раздел не advanced: режим «Расширенные» не включается.
+    expect(useUIStore.getState().settingsShowAdvanced).toBe(false)
+  })
+
   it('USER видит личные категории без админских групп', async () => {
     useAuthStore.setState({ user: { roles: ['USER'] } as never })
     await renderModal()
@@ -136,6 +158,7 @@ describe('SettingsModal — группы и роли', () => {
     expect(text).not.toContain('Integrations')
     expect(text).not.toContain('Operations')
     expect(text).not.toContain('Providers')
+    expect(text).not.toContain('Multimodal input')
   })
 })
 
