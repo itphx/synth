@@ -2672,6 +2672,8 @@ export const dict = {
     'The limit of background processes for this session has been reached ({limit}). Wait for a running process to finish or stop it.',
   'process.background_unsupported': 'Background execution is unavailable in the current execution mode',
   'process.background_disabled': 'Background processes are disabled (background.enabled: false)',
+  'process.detached_started':
+    'Command moved to the background (processId: {id}). Output: {log}',
   'process.tool.empty': 'No background runs',
   'process.tool.not_found': 'Background run "{id}" not found',
   'process.tool.deps_unavailable': 'The background run registry is unavailable in this build',

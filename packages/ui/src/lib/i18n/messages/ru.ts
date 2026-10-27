@@ -2690,6 +2690,7 @@ export const dict = {
   'tool.empty_output': '(пустой вывод)',
   'tool.output_truncated': '\n... (вывод усечён)',
   'tool.shell_error': 'Ошибка: {message}',
+  'tool.shell_timeout': 'Команда прервана по таймауту через {timeout} мс',
   'tool.command_failed_default': 'Команда завершилась с ошибкой',
   'tool.aborted': 'Выполнение прервано пользователем.',
   'tool.binary_missing': 'Инструмент «{tool}» недоступен: в окружении не установлена программа «{binary}»',
@@ -3095,6 +3096,8 @@ export const dict = {
     'Достигнут лимит фоновых процессов для этой сессии ({limit}). Дождитесь завершения процесса или остановите его.',
   'process.background_unsupported': 'Фоновое исполнение недоступно в текущем режиме исполнения',
   'process.background_disabled': 'Фоновые процессы выключены (background.enabled: false)',
+  'process.detached_started':
+    'Команда переведена в фон (processId: {id}). Вывод: {log}',
   'process.tool.empty': 'Нет фоновых прогонов',
   'process.tool.not_found': 'Фоновый прогон «{id}» не найден',
   'process.tool.deps_unavailable': 'Реестр фоновых прогонов недоступен в этой сборке',

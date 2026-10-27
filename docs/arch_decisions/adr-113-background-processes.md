@@ -1,6 +1,6 @@
 # ADR-113: Фоновые процессы — реестр, control plane и исполнитель
 
-> **Статус:** ✅ Реализовано — 2026-10-26 (inline и remote, протокол исполнителя v3). Detach идущего шелла — контракт зафиксирован 2026-10-27 (см. «Detach идущего шелла»; реализация впереди).
+> **Статус:** ✅ Реализовано — 2026-10-26 (inline и remote, протокол исполнителя v3). Detach идущего шелла — реализовано 2026-10-27 (см. «Detach идущего шелла»): контракт порта менять не понадобилось — хэндл даёт существующий `spawnBackground`.
 > **Дата:** 2026-10-26
 > **Связано:** [ADR-077](./adr-077-runtime-toolchain.md) (исполнитель; шаг 7c — фоновые процессы),
 > [ADR-111](./adr-111-background-subagent-sessions.md) (единый реестр фоновых прогонов, фоновые саб-агенты),
@@ -65,38 +65,54 @@
 
 ## Detach идущего шелла
 
-Перевод уже идущего `execute_shell` в фон (ADR-111 «Перевод идущего прогона в фон (detach)»)
-требует того, чего у порта исполнения сегодня нет: **хэндла процесса**.
+Перевод уже идущего `execute_shell` в фон (ADR-111 «Перевод идущего прогона в фон (detach)»).
+**Контракт порта менять не понадобилось:** хэндл живого процесса уже отдаёт фоновый запуск
+(`ExecutionPort.spawnBackground` → `ExecBackgroundProcess`: `processId`/`pid`, поток `output`,
+промис `exited`, `stop(signal)`), — и он реализован в **обеих** реализациях порта (inline и
+remote, протокол исполнителя ≥ 3). Поэтому `execute()` остаётся как есть, а foreground-путь тула
+просто идёт через `spawnBackground`.
 
-1. **Чего не хватает.** `ExecutionPort.execute()` возвращает `{ stdout, stderr }` **после**
-   завершения команды — отвязывать нечего: ни `pid`, ни потоков, ни промиса завершения, ни
-   способа остановить. Поэтому detach шелла — **расширение контракта порта**, а не правка
-   `ProcessService`.
-2. **Контракт хэндла.** `execute()` (либо отдельный метод порта) отдаёт хэндл живого
-   процесса: `pid`, `processId?` (идентификатор на исполнителе), `stdout`/`stderr` (потоки
-   или буфер с offset'ом), `exited` (промис `{ code, signal }`), `stop(signal)`.
-   `inline`-реализация берёт его из `spawn` (не `execFile`); `remote`/исполнитель — из
-   `POST /exec/spawn` (протокол ≥ 3) с опросом `GET /exec/:id` и `GET /exec/:id/logs` и
-   остановкой `POST /exec/:id/stop` — те же маршруты, что у фонового запуска (п. 5).
-3. **Что делает detach.** `ProcessService.startProcess` регистрирует запись `kind:'process'`
-   **из готового хэндла** (`pid`/`processId` уже известны — второй процесс не запускается),
-   поднимает `ProcessLogWriter` на `processes/<id>.log` (`BlobStore`, лимит
-   `background.logMaxBytes`) и **дописывает** в журнал уже полученный вывод из накопленного
-   буфера; `ctx.abortSignal` родительского хода от процесса **отвязывается** — отмена хода
-   его больше не убивает. Остановка — только `POST /api/v2/processes/:id/stop`
-   (`SIGTERM` → `SIGKILL`, п. 2).
-4. **Событие.** Публикуется `process.detached` (`{ session_id, kind:'process', id,
-   background_run_id?, title? }`, канал сессии-владельца); `process.started` не публикуется
-   (прогон уже шёл), терминальные — обычные `process.stopped`/`process.exited`, уведомление
-   родителю с хвостом лога — как при обычном фоновом запуске (п. 4 «Решение»).
-5. **Ограничение split-режима.** Хэндл возможен, только если исполнитель его отдаёт:
-   протокол < 3 (`background_unsupported`) или порт без контракта хэндла (старый клиент,
-   чужой драйвер исполнения) → detach **честно** отклоняется — `DETACH_UNSUPPORTED`
-   (`400` на HTTP, ошибка тула в агенте). «Тихого» fallback нет: отвязать шелл, не имея
-   хэндла, значит потерять процесс.
-6. **Восстановление после рестарта.** Маркер «в фоне, уведомление не доставлено» и пометка
+1. **Условие detach-режима.** `execute_shell` без `background: true` запускает команду через
+   `spawnBackground`, если доступны **все** условия: реестр активных прогонов сессии
+   (`extra.activeRuns`, ADR-111), сервис фоновых процессов (`extra.processService`),
+   метод `spawnBackground` у порта и `background.enabled !== false`. Иначе — прежний путь через
+   `execute` (поведение не меняется). Таймаут, окружение и `requires` — те же; таймаут применяет
+   `spawnBackground` (`SIGTERM` → `SIGKILL`), лимит буфера вывода тул считает сам
+   (`DEFAULT_MAX_OUTPUT_BYTES` на поток, флаг `truncated`), «Стоп» до detach — `handle.stop('SIGTERM')`
+   по `ctx.abortSignal`.
+2. **Один читатель вывода.** До detach вывод читает тул, после — сервис: переход идёт через
+   `DetachableShellOutput` (обёртка над **тем же** итератором хэндла). Кусок, пришедший в момент
+   передачи (уже запрошенный `next()`), возвращается в очередь обёртки — сервис получает его
+   первым, потери и двойного учёта нет.
+3. **Что делает detach (`ProcessService.adopt`).** Процесс **не перезапускается**: запись
+   `kind:'process'` создаётся из готового хэндла (`pid`/`processId` уже известны), поднимается
+   `ProcessLogWriter` на `processes/<id>.log` (`BlobStore`, лимит `background.logMaxBytes`), и в
+   журнал **дописывается префикс** — вывод, накопленный тулом до перевода (`bufferedStdout` +
+   `bufferedStderr`, тот же порядок, что и у чанков), затем сервис продолжает читать тот же
+   итератор. Подписка на `ctx.abortSignal` снимается: отмена хода процесс больше не убивает,
+   остановка — только `POST /api/v2/processes/:id/stop` (`SIGTERM` → `SIGKILL`).
+4. **Событие.** `process.started` публикует сам `startProcess` (UI создаёт по нему запись в
+   реестре), дополнительно публикуется `process.detached` (`{ session_id, kind:'process', id,
+   process_id, background_run_id, title? }`, канал сессии-владельца) — это семантика «прогон был
+   блокирующим и отвязан посреди хода». Терминальные события — обычные
+   `process.stopped`/`process.exited`, уведомление родителю с хвостом лога — как при обычном
+   фоновом запуске (п. 4 «Решение»). Тул возвращает модели `process.detached_started`
+   (`{id, log}`) и `metadata {process_id, background_run_id, log_path, detached: true}`.
+5. **Отказ перевода не теряет процесс.** Если `adopt` отказал (лимит прогонов сессии →
+   `BackgroundLimitExceededError`), реестр активных прогонов кладёт отказ в `failed`
+   (`BACKGROUND_LIMIT`), а тул **продолжает ждать** команду в foreground: процесс жив, вывод
+   читается дальше, результат — обычный.
+6. **Ограничение split-режима.** Хэндл возможен, только если исполнитель его отдаёт: порт без
+   `spawnBackground` (старый исполнитель, протокол < 3 → `BackgroundUnsupportedError`) —
+   detach-путь **не включается**, foreground работает как раньше. «Тихого» fallback нет: отвязать
+   шелл, не имея хэндла, значит потерять процесс.
+7. **Восстановление после рестарта.** Маркер «в фоне, уведомление не доставлено» и пометка
    «отменён из-за перезапуска» для прогона, которого уже нет, — те же, что у фонового
    запуска (ADR-111 п. 3/п. 6): маркер живёт в порте хранения, авто-возврата в foreground нет.
+8. **Границы.** PTY/интерактивного ввода нет (как и у фонового запуска); вывод — `sh -c` с
+   накоплением в буфер, а не терминальная сессия. Вывод, потерянный на проводном опросе
+   remote-исполнителя (журнал там читается отрезками), в лог control plane попадает с задержкой
+   опроса — как и у обычного фонового запуска (п. 5 «Решение»).
 
 ## Последствия и границы
 
@@ -116,14 +132,14 @@
 |---|---|
 | Контракт записи | `shared/types/background.ts` (`BackgroundRunRecord`, `BackgroundRunKind = 'subagent' \| 'process'`) |
 | Порт и реализации | `core/storage/ports/background-run-repository.ts`; `core/storage/file-background-run-store.ts` (`{dataDir}/processes/registry.json`), `core/storage/memory/background-runs.ts`, `packages/storage-postgres/src/ports/background-runs.ts` + миграция `021-background-runs.ts` |
-| Сервис процессов | `core/engine/processes/{service,types,prune}.ts` (`ProcessService`: `spawn`/`stop`/`list`/`get`/`logs`, `SIGTERM` → `SIGKILL` через 5 с, `fs.changed {scope:'all'}`) |
+| Сервис процессов | `core/engine/processes/{service,types,prune}.ts` (`ProcessService`: `spawn`/`adopt`/`stop`/`list`/`get`/`logs`, `SIGTERM` → `SIGKILL` через 5 с, `fs.changed {scope:'all'}`; `adopt` — приём идущего процесса из готового хэндла, префикс лога, `process.detached`) |
 | Реестр фоновых прогонов | `core/engine/background/{service,types,prune}.ts` (`BackgroundRunService` — общий реестр, ADR-111) |
-| Тул `execute_shell` | `core/engine/tools/shell.ts` (аргумент `background`, ответ `{process_id, background_run_id, log_path, status}`) |
+| Тул `execute_shell` | `core/engine/tools/shell.ts` (аргумент `background`, ответ `{process_id, background_run_id, log_path, status}`), `core/engine/tools/shell-detachable.ts` (detach-готовый foreground-путь: `spawnBackground`, `DetachableShellOutput`, регистрация в `activeRuns`, `adopt` при detach) |
 | Порт исполнения | `core/execution/ports/execution-port.ts` (`ExecutionPort.spawnBackground?`, `isExecutionError` — устойчивая структурная проверка типа), `core/execution/inline-execution-port.ts` (`spawnBackground` через `spawn`, не `execFile`) |
 | Исполнитель | `packages/executor/src/background.ts` (`BackgroundExecService`), `packages/executor/src/server.ts` (маршруты `/exec/*`), `packages/executor/src/protocol.ts` (`EXECUTOR_PROTOCOL_VERSION = 3`, `BACKGROUND_STOP_SIGNALS`), `packages/executor/src/client.ts` (`RemoteExecutionPort.spawnBackground` — опрос состояния 500 мс и журнала 300 мс, `POST /exec/:id/stop` с `{signal}`) |
 | HTTP-контур | `core/server/routes/processes.ts` (guard `processGuard` на границе; list/detail/logs/stop/delete) |
 | UI | `ui/components/panels/ProcessesTab.tsx`, домен API `ui/lib/api/processes.ts` |
-| Тесты | `core/engine/processes/service.test.ts`, `packages/executor/src/{background,server-background,client}.test.ts` |
+| Тесты | `core/engine/processes/{service,service.adopt}.test.ts`, `core/engine/tools/shell-detachable.test.ts`, `packages/executor/src/{background,server-background,client}.test.ts` |
 
 ## Открытые вопросы
 
@@ -148,8 +164,19 @@
   вкладка UI «Процессы»; **remote** — протокол исполнителя v3 (`POST /exec/spawn`, `GET /exec/:id`,
   `GET /exec/:id/logs`, `POST /exec/:id/stop` с `{signal}`), опрос состояния и журнала, старый
   исполнитель → `background_unsupported`.
-- 2026-10-27 — зафиксирован контракт detach шелла (ADR-111 §detach): `ExecutionPort` обязан
-  отдавать **хэндл процесса** (`pid`/`processId`/потоки/`exited`/`stop`), detach регистрирует
-  запись из готового хэндла, поднимает `ProcessLogWriter`, отвязывает `ctx.abortSignal` и
-  публикует `process.detached`; порт без хэндла → `DETACH_UNSUPPORTED` (без «тихого» fallback).
-  Реализация — следующий шаг.
+- 2026-10-27 — зафиксирован контракт detach шелла (ADR-111 §detach): хэндл процесса
+  (`pid`/`processId`/потоки/`exited`/`stop`), регистрация записи из готового хэндла, отвязка
+  `ctx.abortSignal`, событие `process.detached`; порт без хэндла → detach отклоняется (без
+  «тихого» fallback).
+- 2026-10-27 — detach идущего шелла **реализован**. Уточнение к контракту: расширять
+  `ExecutionPort` не понадобилось — хэндл уже даёт `spawnBackground` (inline и remote,
+  протокол ≥ 3), поэтому `execute()` не менялся. Foreground-путь тула идёт через
+  `spawnBackground` при `activeRuns` + `processService` + `spawnBackground` +
+  `background.enabled !== false` (`engine/tools/shell-detachable.ts`); detach передаёт **тот
+  же** хэндл и итератор вывода в `ProcessService.adopt` (запись `kind:'process'` из готового
+  хэндла, префикс лога из накопленных буферов, `process.started` от реестра +
+  `process.detached`, `SIGTERM`→`SIGKILL` через `POST /processes/:id/stop`), ключи i18n
+  `process.detached_started` и `tool.shell_timeout`. Отказ `adopt` (лимит) не ломает
+  foreground: тул продолжает читать команду. Порт без `spawnBackground` (старый исполнитель)
+  → detach-режим не включается, foreground работает как раньше; `DETACH_UNSUPPORTED` не
+  понадобился.

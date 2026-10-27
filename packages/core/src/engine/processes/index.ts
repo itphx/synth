@@ -15,6 +15,7 @@ export {
   PROCESS_LOG_FLUSH_BYTES,
   PROCESS_LOG_FLUSH_INTERVAL_MS,
   PROCESS_LOG_TAIL_LIMIT,
+  type ProcessAdoptInput,
   type ProcessErrorCode,
   type ProcessLimits,
   type ProcessLogger,

@@ -9,10 +9,11 @@ import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
 import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError } from '../../execution/ports/index.js';
 import { BackgroundLimitExceededError } from '../background/types.js';
+import type { ActiveRunRegistry } from '../background/active-runs.js';
 import { BackgroundUnsupportedError } from '../processes/types.js';
 import type { ProcessService } from '../processes/service.js';
+import { MAX_OUTPUT_LENGTH, isDetachableShellEnabled, runDetachableShell } from './shell-detachable.js';
 
-const MAX_OUTPUT_LENGTH = 100_000;
 const DEFAULT_TIMEOUT = 30_000;
 
 /**
@@ -22,11 +23,18 @@ const DEFAULT_TIMEOUT = 30_000;
  * режим `background: true` недоступен (`process.deps_unavailable`).
  *
  * `backgroundEnabled` — фоновые прогоны разрешены инстансом (`background.enabled`).
- * `false` — режим `background: true` отказывает (`process.background_disabled`).
+ * `false` — режим `background: true` отказывает (`process.background_disabled`),
+ * а detach-путь (ADR-113) не включается.
+ *
+ * `activeRuns` — реестр активных (блокирующих) прогонов сессии (ADR-111
+ * §detach): вместе с `processService` делает foreground-запуск detach-готовым
+ * (команда идёт через `spawnBackground`, `POST /sessions/:id/background`
+ * переводит её в фон без перезапуска).
  */
 export interface ShellToolExtra {
   processService?: ProcessService;
   backgroundEnabled?: boolean;
+  activeRuns?: ActiveRunRegistry;
 }
 
 export const executeShellTool: ToolDefinition = {
@@ -66,11 +74,28 @@ export const executeShellTool: ToolDefinition = {
       return await startBackgroundProcess(params, command, cwd, ctx);
     }
 
+    // ADR-113 §«Detach идущего шелла»: когда хэндл процесса доступен (есть
+    // реестр активных прогонов, сервис фоновых процессов и `spawnBackground`
+    // у порта), команда идёт через `spawnBackground` — тот же результат в
+    // обычном случае и возможность перевести её в фон без перезапуска.
+    // Иначе — прежний путь через `execute` (поведение не меняется).
+    const port = resolveExecutionPort(ctx);
+    if (isDetachableShellEnabled(ctx, port)) {
+      return await runDetachableShell({
+        ctx,
+        port,
+        command,
+        displayCommand: params.command,
+        cwd,
+        timeoutMs: timeout,
+      });
+    }
+
     try {
       // ADR-077: исполнение — через порт (inline-реализация повторяет
       // прежний `sh -c`: тот же бинарь, таймаут, maxBuffer 10 МБ и окружение
       // `{...process.env, HOME: process.env.HOME || '/root'}`).
-      const { stdout, stderr } = await resolveExecutionPort(ctx).execute({
+      const { stdout, stderr } = await port.execute({
         command: { kind: 'shell', command, shell: 'sh' },
         // ADR-077: бинарное требование тула (`sh`) — в remote-режиме команда
         // уходит в адрес пула, где оболочка есть. Inline-режим поле игнорирует.

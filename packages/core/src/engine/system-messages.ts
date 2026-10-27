@@ -86,6 +86,7 @@ export const SYSTEM_MESSAGES = {
   'tool.empty_output': '(empty output)',
   'tool.output_truncated': '\n... (output truncated)',
   'tool.shell_error': 'Error: {message}',
+  'tool.shell_timeout': 'Command timed out after {timeout} ms',
   'tool.command_failed_default': 'Command failed',
   'tool.aborted': 'Execution interrupted by the user.',
   'tool.binary_missing':
@@ -508,6 +509,8 @@ export const SYSTEM_MESSAGES = {
   'process.background_unsupported':
     'Background execution is unavailable in the current execution mode',
   'process.background_disabled': 'Background processes are disabled (background.enabled: false)',
+  'process.detached_started':
+    'Command moved to the background (processId: {id}). Output: {log}',
   'process.tool.empty': 'No background runs',
   'process.tool.not_found': 'Background run "{id}" not found',
   'process.tool.deps_unavailable': 'The background run registry is unavailable in this build',

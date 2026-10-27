@@ -29,6 +29,7 @@ import type { BackgroundRunRecord, BackgroundRunStatus } from '@itphx/synth-shar
 import {
   EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
   isExecutionError,
+  type ExecBackgroundChunk,
   type ExecBackgroundProcess,
   type ExecutionPort,
 } from '../../execution/ports/index.js';
@@ -41,6 +42,7 @@ import {
   PROCESS_LOG_FLUSH_BYTES,
   PROCESS_LOG_FLUSH_INTERVAL_MS,
   PROCESS_LOG_TAIL_LIMIT,
+  type ProcessAdoptInput,
   type ProcessLogsOptions,
   type ProcessLogsResult,
   type ProcessLogger,
@@ -51,6 +53,14 @@ import {
 
 /** Пауза между «мягким» и «жёстким» убийством процесса (SIGTERM → SIGKILL). */
 const KILL_GRACE_MS = 5_000;
+
+/**
+ * Предел ожидания закрытия потока вывода после завершения процесса, мс.
+ *
+ * Поток закрывается вместе с процессом (контракт порта), но порт, который этого
+ * не сделал, не должен подвесить запись реестра в `running` навсегда.
+ */
+const OUTPUT_DRAIN_TIMEOUT_MS = 2_000;
 
 /** Живой фоновый процесс (в памяти процесса — хэндлы отмены). */
 interface LiveProcess {
@@ -262,44 +272,81 @@ export class ProcessService {
 
     const logPath = record.logPath ?? '';
     const writer = new ProcessLogWriter(this._blobs, logPath, this._limits.maxLogBytes, this._logger);
-    this._live.set(record.id, {
-      proc,
-      writer,
-      sessionId: record.sessionId,
-      processId: record.processId ?? record.id,
-    });
-
-    // Остановка по записи реестра (`BackgroundRunService.stop` → хэндл отмены).
-    this._background.registerAbort(record.id, () => {
-      void this.stop(record.id);
-    });
-
-    // Вывод процесса → лог.
-    void this._consume(proc.output, writer);
-
-    // Завершение процесса → терминальный статус, уведомление, fs.changed.
-    void proc.exited
-      .then(async (exit) => {
-        await writer.flush();
-        const live = this._live.get(record.id);
-        if (live?.killTimer) {
-          clearTimeout(live.killTimer);
-          live.killTimer = undefined;
-        }
-        this._live.delete(record.id);
-        await this._finish(record, writer, exit.exitCode, exit.signal);
-      })
-      .catch((err: unknown) => {
-        this._logger.warn?.(
-          `[ProcessService] завершение фонового процесса ${record.id} не удалось: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
+    this._track(record, proc, proc.output, writer);
 
     return {
       runId: record.id,
       processId: proc.processId,
       logPath,
       ...(proc.pid !== undefined ? { pid: proc.pid } : {}),
+    };
+  }
+
+  /**
+   * Принять **уже идущий** процесс в фон (ADR-113 §«Detach идущего шелла»).
+   *
+   * Процесс не перезапускается и порт не вызывается: хэндл
+   * (`ExecutionPort.spawnBackground` → `ExecBackgroundProcess`) и итератор его
+   * вывода передаёт вызывающий (тул `execute_shell`). Дальше — та же механика,
+   * что у `spawn`: запись реестра (`kind: 'process'`, лимиты проверяет
+   * `startProcess`), лог в `BlobStore`, `stop` через реестр прогонов,
+   * терминальный переход и уведомление родителя.
+   *
+   * Префикс лога — вывод, который команда успела выдать в foreground
+   * (`bufferedStdout` + `bufferedStderr`): в журнал он пишется первым, в том же
+   * виде, в каком его накапливал тул (без разделителей — как и чанки
+   * `_consume`), иначе журнал начинался бы «с середины».
+   *
+   * Завершение уже случившегося процесса обрабатывается штатно: `exited`
+   * резолвлен → запись сразу уходит в терминальный статус, `runId` всё равно
+   * возвращается (переводить уже нечего, но вызывающему нужен результат).
+   *
+   * @throws BackgroundLimitExceededError — лимит прогонов сессии исчерпан.
+   *   Процесс при этом **не** останавливается: тул продолжает читать его вывод
+   *   в foreground.
+   */
+  async adopt(input: ProcessAdoptInput): Promise<ProcessSpawnResult> {
+    const record = await this._background.startProcess({
+      sessionId: input.sessionId,
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      command: input.command,
+      cwd: input.cwd,
+      ...(input.pid !== undefined ? { pid: input.pid } : {}),
+      processId: input.processId,
+    });
+
+    const logPath = record.logPath ?? '';
+
+    // Событие перевода в фон: `process.started` уже опубликован `startProcess`
+    // (UI создаёт по нему запись в реестре), `process.detached` — семантика
+    // «этот прогон был блокирующим и отвязан посреди хода» (ADR-111 §detach).
+    this._eventBus.publish(record.sessionId, 'process.detached', {
+      session_id: record.sessionId,
+      kind: 'process',
+      id: record.id,
+      process_id: record.processId ?? record.id,
+      background_run_id: record.id,
+      ...(input.title ? { title: input.title } : {}),
+    });
+
+    const writer = new ProcessLogWriter(this._blobs, logPath, this._limits.maxLogBytes, this._logger);
+    const prefix = `${input.bufferedStdout}${input.bufferedStderr}`;
+    if (prefix) writer.push(prefix);
+
+    this._track(
+      record,
+      input.handle,
+      // Итератор переданного хэндла читается как поток: сервис — единственный
+      // читатель с этого момента (тул снял подписку на «Стоп» и не читает).
+      { [Symbol.asyncIterator]: () => input.iterator },
+      writer,
+    );
+
+    return {
+      runId: record.id,
+      processId: record.processId ?? input.processId,
+      logPath,
+      ...(input.pid !== undefined ? { pid: input.pid } : {}),
     };
   }
 
@@ -398,6 +445,58 @@ export class ProcessService {
   }
 
   /**
+   * Взять процесс под наблюдение: живой хэндл, чтение вывода, терминальный
+   * переход.
+   *
+   * Общая часть `spawn` (процесс только что запущен) и `adopt` (процесс идёт с
+   * момента запуска в foreground): разница только в том, откуда взят хэндл и
+   * итератор вывода.
+   */
+  private _track(
+    record: BackgroundRunRecord,
+    proc: ExecBackgroundProcess,
+    output: AsyncIterable<ExecBackgroundChunk>,
+    writer: ProcessLogWriter,
+  ): void {
+    this._live.set(record.id, {
+      proc,
+      writer,
+      sessionId: record.sessionId,
+      processId: record.processId ?? record.id,
+    });
+
+    // Остановка по записи реестра (`BackgroundRunService.stop` → хэндл отмены).
+    this._background.registerAbort(record.id, () => {
+      void this.stop(record.id);
+    });
+
+    // Вывод процесса → лог.
+    const consumed = this._consume(output, writer);
+
+    // Завершение процесса → терминальный статус, уведомление, fs.changed.
+    void proc.exited
+      .then(async (exit) => {
+        // Контракт порта: поток вывода закрывается вместе с процессом. Ждём его,
+        // чтобы последний кусок не потерялся в логе и в summary уведомления.
+        // Ожидание ограничено — несоответствующий порт не подвесит запись.
+        await Promise.race([consumed, delay(OUTPUT_DRAIN_TIMEOUT_MS)]);
+        await writer.flush();
+        const live = this._live.get(record.id);
+        if (live?.killTimer) {
+          clearTimeout(live.killTimer);
+          live.killTimer = undefined;
+        }
+        this._live.delete(record.id);
+        await this._finish(record, writer, exit.exitCode, exit.signal);
+      })
+      .catch((err: unknown) => {
+        this._logger.warn?.(
+          `[ProcessService] завершение фонового процесса ${record.id} не удалось: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+  }
+
+  /**
    * Терминальный статус процесса: `SIGTERM`/сигнал → `cancelled`, нулевой код
    * → `completed`, иначе `failed`.
    */
@@ -434,7 +533,7 @@ export class ProcessService {
 
   /** Перекачка вывода процесса в писатель лога. */
   private async _consume(
-    output: AsyncIterable<{ stream: 'stdout' | 'stderr'; data: string }>,
+    output: AsyncIterable<ExecBackgroundChunk>,
     writer: ProcessLogWriter,
   ): Promise<void> {
     try {
@@ -449,7 +548,7 @@ export class ProcessService {
   }
 
   /** Слив вывода без записи (процесс отклонён реестром — лог не нужен). */
-  private async _drain(output: AsyncIterable<{ stream: 'stdout' | 'stderr'; data: string }>): Promise<void> {
+  private async _drain(output: AsyncIterable<ExecBackgroundChunk>): Promise<void> {
     try {
       for await (const chunk of output) {
         // вывод не нужен — только освобождаем поток
@@ -459,4 +558,12 @@ export class ProcessService {
       // поток уже закрыт — не страшно
     }
   }
+}
+
+/** Пауза-предохранитель (таймер `unref` — процесс не держим). */
+function delay(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
 }

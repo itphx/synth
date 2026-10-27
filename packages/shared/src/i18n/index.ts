@@ -58,6 +58,8 @@ export const ENGINE_MESSAGE_KEYS = [
   'tool.empty_output',
   'tool.output_truncated',
   'tool.shell_error',
+  // ADR-113 §detach: сообщение о таймауте detach-готового foreground-пути.
+  'tool.shell_timeout',
   'tool.command_failed_default',
   'tool.aborted',
   'tool.binary_missing',
@@ -396,6 +398,8 @@ export const ENGINE_MESSAGE_KEYS = [
   'process.background_limit',
   'process.background_unsupported',
   'process.background_disabled',
+  // ADR-113 §detach: идущая команда переведена в фон (без перезапуска).
+  'process.detached_started',
   'process.tool.empty',
   'process.tool.not_found',
   'process.tool.deps_unavailable',
@@ -464,6 +468,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'tool.empty_output': [],
   'tool.output_truncated': [],
   'tool.shell_error': ["message"],
+  'tool.shell_timeout': ["timeout"],
   'tool.command_failed_default': [],
   'tool.aborted': [],
   'tool.binary_missing': ["tool","binary"],
@@ -801,6 +806,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'process.background_limit': ["limit"],
   'process.background_unsupported': [],
   'process.background_disabled': [],
+  'process.detached_started': ["id","log"],
   'process.tool.empty': [],
   'process.tool.not_found': ["id"],
   'process.tool.deps_unavailable': [],

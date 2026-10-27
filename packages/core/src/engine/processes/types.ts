@@ -5,7 +5,7 @@
  * `kind: 'process'`), здесь — только типы **сервиса**: вход запуска, результат
  * запуска, чтение лога и типизированные ошибки.
  */
-import type { ExecutionPort } from '../../execution/ports/index.js';
+import type { ExecBackgroundChunk, ExecBackgroundProcess, ExecutionPort } from '../../execution/ports/index.js';
 import type { EventBus } from '../../events/bus.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
 import type { BackgroundRunService } from '../background/service.js';
@@ -92,6 +92,43 @@ export interface ProcessSpawnResult {
   logPath: string;
   /** pid процесса ОС (если процесс запустился). */
   pid?: number;
+}
+
+/**
+ * Вход перевода **идущего** процесса в фон (ADR-113 §«Detach идущего шелла»).
+ *
+ * Отличие от `ProcessSpawnInput`: процесс **уже запущен** — порт не вызывается,
+ * сервис получает готовый хэндл (`ExecBackgroundProcess.spawnBackground`) и
+ * итератор вывода, с которого продолжает читать. Вывод, полученный до перевода
+ * (буферы foreground-ожидания), дописывается в лог префиксом — иначе журнал
+ * начался бы «с середины».
+ */
+export interface ProcessAdoptInput {
+  /** Сессия-владелец (та, в ходе которой шла команда). */
+  sessionId: string;
+  /** Проект сессии-владельца (необязательно). */
+  projectId?: string;
+  /** Команда (shell-строка). */
+  command: string;
+  /** Рабочий каталог команды. */
+  cwd: string;
+  /** pid уже запущенного процесса ОС (если известен). */
+  pid?: number;
+  /** Идентификатор процесса у порта исполнения (`proc_<uuid>`). */
+  processId: string;
+  /** Хэндл живого процесса — второй экземпляр команды **не** запускается. */
+  handle: ExecBackgroundProcess;
+  /**
+   * Итератор вывода **того же** хэндла: сервис продолжает читать с него.
+   * Передаётся уже «отвязанным» от тула — в каждый момент читатель один.
+   */
+  iterator: AsyncIterator<ExecBackgroundChunk>;
+  /** Накопленный stdout команды до перевода в фон (префикс лога). */
+  bufferedStdout: string;
+  /** Накопленный stderr команды до перевода в фон (префикс лога). */
+  bufferedStderr: string;
+  /** Короткое имя процесса (для события `process.detached`; в реестр не пишется). */
+  title?: string;
 }
 
 /** Параметры чтения лога процесса. */
