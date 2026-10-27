@@ -94,6 +94,44 @@ describe('routes/models (core): POST /fetch', () => {
     expect(stores.modelCache.get('p1/m2')?.modalities).toEqual(['text', 'image']);
   });
 
+  it('anthropic-тип: `pdf` приписывается мультимодальной модели каталога', async () => {
+    await stores.providerStore.save('pa', {
+      name: 'pa', type: 'anthropic', baseUrl: 'http://anthropic.local', enabled: true,
+    });
+    vi.spyOn(ProviderFactory, 'create').mockReturnValue({
+      listModelsDetailed: vi.fn().mockResolvedValue([
+        // Каталог RouterAI перечисляет `image`/`video`, но не `file`, хотя PDF
+        // принимается блоком `document` (проверено на minimax-m3.1-flash).
+        { id: 'vision', modalities: ['text', 'image', 'video'] },
+        // Текстовой модели `pdf` не приписывается.
+        { id: 'text-only', modalities: ['text'] },
+        // Уже есть `pdf` — дубля не появляется.
+        { id: 'with-pdf', modalities: ['text', 'image', 'pdf'] },
+      ]),
+    } as never);
+
+    const res = await stores.app.request('/fetch?provider=pa', { method: 'POST' });
+    expect(res.status).toBe(200);
+
+    expect((await stores.modelStore.load('pa/vision'))?.modalities)
+      .toEqual(['text', 'image', 'video', 'pdf']);
+    expect((await stores.modelStore.load('pa/text-only'))?.modalities).toEqual(['text']);
+    expect((await stores.modelStore.load('pa/with-pdf'))?.modalities)
+      .toEqual(['text', 'image', 'pdf']);
+  });
+
+  it('openai-тип: `pdf` из каталога не добавляется (правило только для anthropic)', async () => {
+    vi.spyOn(ProviderFactory, 'create').mockReturnValue({
+      listModelsDetailed: vi.fn().mockResolvedValue([
+        { id: 'm1', modalities: ['text', 'image'] },
+      ]),
+    } as never);
+
+    const res = await stores.app.request('/fetch?provider=p1', { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect((await stores.modelStore.load('p1/m1'))?.modalities).toEqual(['text', 'image']);
+  });
+
   it('?provider= ограничивает синхронизацию одним провайдером', async () => {
     await stores.providerStore.save('p2', {
       name: 'p2', type: 'openai', baseUrl: 'http://provider2.local', enabled: true,

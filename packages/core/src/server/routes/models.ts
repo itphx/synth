@@ -133,6 +133,29 @@ function sameModalities(
   return b.every((modality) => set.has(modality));
 }
 
+/**
+ * ADR-115: PDF для Anthropic-совместимого каталога.
+ *
+ * Каталог RouterAI не перечисляет `file` у части мультимодальных моделей
+ * Anthropic-эндпоинта (`input_modalities: ['text','image','video']`), хотя PDF
+ * принимается блоком `document` — проверено живым запросом на
+ * `minimax/minimax-m3.1-flash`. Поэтому `pdf` добавляется к модальностям
+ * каталога, когда провайдер — Anthropic-типа, а модель мультимодальна
+ * (`image`/`video`). Текстовой модели (`['text']`) `pdf` не приписывается:
+ * провайдер кодирует всё переданное, и лишняя модальность открыла бы отправку
+ * документа в модель, которая его не читает. Ручной override не трогается —
+ * правило применяется только к тому, что сообщил каталог.
+ */
+function withAnthropicPdf(
+  modalities: AttachmentModality[] | undefined,
+  providerType: string,
+): AttachmentModality[] | undefined {
+  if (!modalities || providerType !== 'anthropic') return modalities;
+  if (!modalities.includes('image') && !modalities.includes('video')) return modalities;
+  if (modalities.includes('pdf')) return modalities;
+  return [...modalities, 'pdf'];
+}
+
 /** Минимальный auth-контракт фабрики: в core и backend общий (структурно, как в dictionaries.ts). */
 export interface ModelRoutesAuth {
   requireAuth: Middleware;
@@ -270,9 +293,12 @@ export function createModelRoutes(
           // Токенные цены от провайдера (B1 отфильтровал non-token тарифы).
           const apiPrices = collectApiPrices(model);
           // ADR-115: модальности входа, если каталог провайдера их сообщает.
-          const apiModalities = model.modalities && model.modalities.length > 0
-            ? model.modalities
-            : undefined;
+          // Anthropic-тип: `pdf` приписывается мультимодальной модели (каталог
+          // RouterAI не перечисляет `file`, хотя `document` принимается).
+          const apiModalities = withAnthropicPdf(
+            model.modalities && model.modalities.length > 0 ? model.modalities : undefined,
+            provider.type,
+          );
 
           if (!existing) {
             // Новая модель

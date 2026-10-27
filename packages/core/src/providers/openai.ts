@@ -19,6 +19,18 @@ import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
 // ADR-099: запросы провайдера — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
 
+/**
+ * Имя файла для `file`-блока вложения (ADR-115).
+ *
+ * Значение уходит в JSON-тело запроса, поэтому убираем символы, ломающие
+ * подпись/экранирование (`"`, `\`) и переводы строк; пустой результат
+ * заменяем на `document.pdf` — у каталога имя необязательно.
+ */
+function sanitizeAttachmentFileName(name: string | undefined): string {
+  const cleaned = (name ?? '').replace(/["\\\r\n\t]/g, '').trim();
+  return cleaned.length > 0 ? cleaned : 'document.pdf';
+}
+
 export class OpenAIProvider extends BaseProvider {
   getProviderName(): string {
     return this.name;
@@ -429,9 +441,11 @@ export class OpenAIProvider extends BaseProvider {
    * ADR-115: части контента OpenAI для вложений.
    *
    *  - `image/*` → `{type:'image_url', image_url:{url:'data:<mime>;base64,…'}}`;
+   *  - `application/pdf` → `{type:'file', file:{filename, file_data:'data:application/pdf;base64,…'}}`
+   *    (формат OpenAI-совместимых API; RouterAI принимает так PDF и читает документ);
    *  - `audio/wav` (в т.ч. `audio/x-wav`) → `input_audio` c `format:'wav'`;
    *  - `audio/mpeg`/`audio/mp3` → `input_audio` c `format:'mp3'`;
-   *  - прочие типы (PDF и т.п.) не отправляются — плейсхолдер уже в тексте.
+   *  - прочие типы не отправляются — плейсхолдер уже в тексте.
    *
    * Фильтра по справочнику модальностей здесь **нет** (ADR-115): провайдер
    * кодирует всё, что ему передали, и пропускает только типы, которые
@@ -448,6 +462,18 @@ export class OpenAIProvider extends BaseProvider {
         parts.push({
           type: 'image_url',
           image_url: { url: `data:${attachment.mime};base64,${attachment.base64}` },
+        });
+        continue;
+      }
+      if (mime === 'application/pdf') {
+        // PDF — отдельным `file`-блоком с data-URL: RouterAI (OpenAI-тип)
+        // принимает документ только так, иначе вложение теряется на провайдере.
+        parts.push({
+          type: 'file',
+          file: {
+            filename: sanitizeAttachmentFileName(attachment.name),
+            file_data: `data:application/pdf;base64,${attachment.base64}`,
+          },
         });
         continue;
       }

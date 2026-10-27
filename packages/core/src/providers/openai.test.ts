@@ -539,6 +539,7 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
   const imageAttachment = { mime: 'image/png', name: 'photo.png', base64: 'iVBORw0KGgo=' };
   const wavAttachment = { mime: 'audio/wav', base64: 'UklGRg==' };
   const pdfAttachment = { mime: 'application/pdf', base64: 'JVBERi0=' };
+  const namedPdfAttachment = { mime: 'application/pdf', name: 'plan.pdf', base64: 'JVBERi0=' };
 
   function providerWithModel(model: string): OpenAIPrivate {
     return new OpenAIProvider({ ...baseParams, model }) as unknown as OpenAIPrivate;
@@ -590,12 +591,58 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
     ]);
   });
 
-  it('PDF не маппится в OpenAI-части → строковый content не меняется', () => {
+  it('PDF → file-блок с data-URL (RouterAI принимает документ только так)', () => {
     const formatted = providerWithModel('gpt-4o')._formatMessages([
       makeMessage({ role: 'user', content: 'документ', attachments: [pdfAttachment] }),
     ]);
 
-    expect(formatted[0]!.content).toBe('документ');
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'документ' },
+      {
+        type: 'file',
+        file: { filename: 'document.pdf', file_data: 'data:application/pdf;base64,JVBERi0=' },
+      },
+    ]);
+  });
+
+  it('PDF с именем → filename берётся из вложения', () => {
+    const formatted = providerWithModel('gpt-4o')._formatMessages([
+      makeMessage({ role: 'user', content: 'план', attachments: [namedPdfAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'план' },
+      {
+        type: 'file',
+        file: { filename: 'plan.pdf', file_data: 'data:application/pdf;base64,JVBERi0=' },
+      },
+    ]);
+  });
+
+  it('имя PDF санитайзится: кавычки и переводы строк убираются', () => {
+    const formatted = providerWithModel('gpt-4o')._formatMessages([
+      makeMessage({
+        role: 'user',
+        content: 'документ',
+        attachments: [{ mime: 'application/pdf', name: 'pl"an\\\n.pdf', base64: 'JVBERi0=' }],
+      }),
+    ]);
+
+    const part = (formatted[0]!.content as Array<Record<string, unknown>>)[1]!;
+    expect((part.file as Record<string, unknown>).filename).toBe('plan.pdf');
+  });
+
+  it('имя PDF из одних запрещённых символов → document.pdf', () => {
+    const formatted = providerWithModel('gpt-4o')._formatMessages([
+      makeMessage({
+        role: 'user',
+        content: 'документ',
+        attachments: [{ mime: 'application/pdf', name: '"\\\r\n', base64: 'JVBERi0=' }],
+      }),
+    ]);
+
+    const part = (formatted[0]!.content as Array<Record<string, unknown>>)[1]!;
+    expect((part.file as Record<string, unknown>).filename).toBe('document.pdf');
   });
 
   it('текстовое сообщение без вложений остаётся строкой', () => {
