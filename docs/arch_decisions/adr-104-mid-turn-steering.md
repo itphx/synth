@@ -95,7 +95,7 @@
 
 - API: `POST /api/v2/sessions/:id/prompt` и WS `send_message` — поле `mode` (`queue`/`steer`/`interrupt`), ответы `202 {status:'steered'|'interrupted', stream_id, pending_count, mode_applied}`, `429 STEER_LIMIT_EXCEEDED` (`docs/API_V2.md` §5.5).
 - Ядро: `queue/processor.ts` (`enqueueSteerMessage`), `sessions/manager.ts` (`steerInbox`, `takeSteerMessages` с приоритетом `interrupt` → `steer`), `engine/steering/apply.ts` (**общая точка применения инъекций на границе шага** — её используют и оркестратор, и цикл саб-агента), `engine/orchestrator.ts` (вычитка на границе шага, `_handleInterruptedGeneration`, `interrupt(streamId)`), `engine/tools/task/run-cycle.ts` (граница шага цикла **дочерней/фоновой** сессии), `shared/types/steering.ts` (типы, лимит 5, порядок).
-- UI: `SendModeSelector`, маркеры вмешательства/прерывания, `resetStreamAccumulator` — `packages/ui/AGENTS.md`.
+- UI: `SteerToggle` (иконочный тумблер «вмешаться»; очередь — обычная кнопка отправки, прерывание — кнопка «Стоп»), маркеры вмешательства/прерывания, `resetStreamAccumulator`/`resetStreamAttempt` — `packages/ui/AGENTS.md`.
 - Тесты: `queue/steering.test.ts`, `engine/orchestrator-steering.test.ts`, `engine/orchestrator-interrupt.test.ts`, `server/routes/sessions-steering.test.ts`, `queue/steering-subagent.test.ts`, `engine/tools/task/run-cycle.test.ts` (steering дочерней сессии).
 
 ## История
