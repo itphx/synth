@@ -566,6 +566,33 @@ describe('AnthropicProvider — listModelsDetailed', () => {
     await expect(provider.listModelsDetailed()).resolves.toEqual([]);
   });
 
+  it('RouterAI: architecture.input_modalities → модальности модели', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [
+        {
+          id: 'minimax/minimax-m3.1-flash',
+          name: 'MiniMax M3.1 Flash',
+          context_length: 1000000,
+          architecture: {
+            modality: 'text+image+video->text',
+            input_modalities: ['text', 'image', 'video'],
+          },
+        },
+        { id: 'minimax/minimax-m2.7', architecture: { modality: 'text->text' } },
+      ],
+    })));
+
+    const provider = new AnthropicProvider(baseParams);
+    const models = await provider.listModelsDetailed();
+
+    expect(models[0]).toMatchObject({
+      id: 'minimax/minimax-m3.1-flash',
+      modalities: ['text', 'image', 'video'],
+    });
+    // Только текст — модальность задана каталогом явно.
+    expect(models[1]).toMatchObject({ id: 'minimax/minimax-m2.7', modalities: ['text'] });
+  });
+
   it('сетевой сбой не оставляет активный таймер (try/finally)', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')));
@@ -617,12 +644,29 @@ describe('AnthropicProvider — вложения (ADR-115)', () => {
     ]);
   });
 
-  it('аудио не поддерживается — фильтр модальностей/маппинг отбрасывают вложение', () => {
+  it('аудио не кодируется — API Anthropic его не принимает', () => {
     const formatted = providerWithModel('claude-sonnet-4-20250514')._formatMessages([
       makeMessage({ content: 'послушай', attachments: [audioAttachment] }),
     ]);
 
     expect(formatted[0]!.content).toEqual([{ type: 'text', text: 'послушай' }]);
+  });
+
+  it('картинка у модели вне справочника → image-блок (провайдер не фильтрует)', () => {
+    // Регрессия: `minimax/minimax-m3.1-flash` (RouterAI, тип anthropic) —
+    // vision-модель, которой нет в справочнике; второй фильтр по
+    // `resolveModelModalities` отбрасывал её вложения.
+    const formatted = providerWithModel('minimax/minimax-m3.1-flash')._formatMessages([
+      makeMessage({ content: 'что на фото?', attachments: [imageAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'что на фото?' },
+      {
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' },
+      },
+    ]);
   });
 
   it('текстовое сообщение без вложений — прежний [{type:text}]', () => {

@@ -9,6 +9,56 @@ import { egressFetch } from '../security/tls.js';
 const MODELS_CATALOG_TIMEOUT_MS = 10_000;
 
 /**
+ * ADR-115: модальности каталога моделей → наши (`AttachmentModality`).
+ * `file` у OpenAI-совместимых каталогов — документы, поэтому маппится в `pdf`;
+ * неизвестные значения игнорируются.
+ */
+export const CATALOG_MODALITY_MAP: Record<string, AttachmentModality> = {
+  text: 'text',
+  image: 'image',
+  audio: 'audio',
+  video: 'video',
+  file: 'pdf',
+  pdf: 'pdf',
+};
+
+/**
+ * ADR-115: модальности входа из `architecture` каталога `/models`.
+ *
+ * RouterAI/OpenRouter отдают `architecture: {modality: 'text+image->text',
+ * input_modalities: ['text', 'image']}` — одинаково для OpenAI- и
+ * Anthropic-совместимых эндпоинтов, поэтому парсер общий для провайдеров
+ * (`providers/base.ts`). Неизвестные значения игнорируются; ничего не
+ * распознано — `undefined` (поле не задаётся, действует справочник).
+ */
+export function parseArchitectureModalities(
+  architecture: Record<string, unknown> | undefined,
+): AttachmentModality[] | undefined {
+  if (!architecture || typeof architecture !== 'object') return undefined;
+
+  const collected = new Set<AttachmentModality>();
+  const add = (value: unknown): void => {
+    if (typeof value !== 'string') return;
+    const mapped = CATALOG_MODALITY_MAP[value.trim().toLowerCase()];
+    if (mapped) collected.add(mapped);
+  };
+
+  const input = architecture.input_modalities;
+  if (Array.isArray(input)) {
+    for (const item of input) add(item);
+  }
+
+  // `modality` описывает пару «вход → выход»: берём только входную часть.
+  const modality = architecture.modality;
+  if (typeof modality === 'string') {
+    const [inputs] = modality.split('->');
+    for (const part of (inputs ?? '').split('+')) add(part);
+  }
+
+  return collected.size > 0 ? [...collected] : undefined;
+}
+
+/**
  * Модель с расширенными метаданными, которые отдают каталоги провайдеров
  * (контекст, лимиты, цены, размер и т.п.). Используется синхронизацией
  * `POST /models/fetch`, чтобы записать цены/лимиты в конфиг модели.

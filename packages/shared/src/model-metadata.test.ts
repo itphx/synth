@@ -127,6 +127,18 @@ describe('resolveModelModalities', () => {
     expect(resolveModelModalities('deepseek', 'deepseek-v4-pro')).toEqual(['text']);
   });
 
+  it('MiniMax M3 — vision (каталог RouterAI: text+image+video)', () => {
+    expect(resolveModelModalities('routerai-anthropic', 'minimax/minimax-m3.1-flash')).toEqual([
+      'text',
+      'image',
+      'video',
+    ]);
+    // Более короткий ключ семейства тоже vision.
+    expect(resolveModelModalities('minimax', 'minimax-m3')).toEqual(['text', 'image', 'video']);
+    // M2 — текстовая модель: ключа M3 в её id нет, картинки не «протекают».
+    expect(resolveModelModalities('minimax', 'minimax-m2.7')).toEqual(['text']);
+  });
+
   it('локальные vision-семейства: VL / multimodal', () => {
     expect(resolveModelModalities('ollama', 'qwen2.5-vl-32b')).toEqual(['text', 'image']);
     expect(resolveModelModalities('ollama', 'qwen3-vl:8b')).toEqual(['text', 'image']);

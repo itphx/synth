@@ -1,8 +1,8 @@
-import type { AttachmentModality, LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
+import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
 import {
   BaseProvider,
   fetchModelsCatalog,
-  filterAttachmentsByModalities,
+  parseArchitectureModalities,
   redactAttachmentPayloadForDebug,
   resolveSystemPromptText,
   parseTokenPricing,
@@ -16,57 +16,8 @@ import {
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
-import { resolveModelModalities } from '@itphx/synth-shared';
 // ADR-099: запросы провайдера — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
-
-/**
- * ADR-115: модальности каталога моделей → наши (`AttachmentModality`).
- * `file` у OpenAI-совместимых каталогов — документы, поэтому маппится в `pdf`;
- * неизвестные значения игнорируются.
- */
-const CATALOG_MODALITY_MAP: Record<string, AttachmentModality> = {
-  text: 'text',
-  image: 'image',
-  audio: 'audio',
-  video: 'video',
-  file: 'pdf',
-  pdf: 'pdf',
-};
-
-/**
- * ADR-115: модальности входа из `architecture` каталога `/models`.
- *
- * RouterAI/OpenRouter отдают `architecture: {modality: 'text+image->text',
- * input_modalities: ['text', 'image']}`. Неизвестные значения игнорируются;
- * ничего не распознано — `undefined` (поле не задаётся, действует справочник).
- */
-function parseArchitectureModalities(
-  architecture: Record<string, unknown> | undefined,
-): AttachmentModality[] | undefined {
-  if (!architecture || typeof architecture !== 'object') return undefined;
-
-  const collected = new Set<AttachmentModality>();
-  const add = (value: unknown): void => {
-    if (typeof value !== 'string') return;
-    const mapped = CATALOG_MODALITY_MAP[value.trim().toLowerCase()];
-    if (mapped) collected.add(mapped);
-  };
-
-  const input = architecture.input_modalities;
-  if (Array.isArray(input)) {
-    for (const item of input) add(item);
-  }
-
-  // `modality` описывает пару «вход → выход»: берём только входную часть.
-  const modality = architecture.modality;
-  if (typeof modality === 'string') {
-    const [inputs] = modality.split('->');
-    for (const part of (inputs ?? '').split('+')) add(part);
-  }
-
-  return collected.size > 0 ? [...collected] : undefined;
-}
 
 export class OpenAIProvider extends BaseProvider {
   getProviderName(): string {
@@ -431,9 +382,9 @@ export class OpenAIProvider extends BaseProvider {
         content: msg.content,
       };
 
-      // ADR-115: вложения — content становится массивом частей. Если модель
-      // модальность не принимает (или тип не маппится у OpenAI), остаётся
-      // прежняя строка — текстовый путь не меняется.
+      // ADR-115: вложения — content становится массивом частей. Если
+      // кодируемых у OpenAI частей нет (модальности отфильтрованы выше или тип
+      // не маппится), остаётся прежняя строка — текстовый путь не меняется.
       const mediaParts = this._mediaContentParts(msg.attachments);
       if (mediaParts.length > 0) {
         entry.content = [
@@ -482,13 +433,16 @@ export class OpenAIProvider extends BaseProvider {
    *  - `audio/mpeg`/`audio/mp3` → `input_audio` c `format:'mp3'`;
    *  - прочие типы (PDF и т.п.) не отправляются — плейсхолдер уже в тексте.
    *
-   * Фильтр модальностей — по справочнику модели (`resolveModelModalities`):
-   * неизвестная модель получает `['text']`, т.е. вложения не уходят.
+   * Фильтра по справочнику модальностей здесь **нет** (ADR-115): провайдер
+   * кодирует всё, что ему передали, и пропускает только типы, которые
+   * физически не умеет кодировать. Модальности фильтруются выше — гидратация
+   * (`hydrateMessageAttachments` + `ModelConfig.modalities`/`resolveModelModalities`);
+   * второй фильтр по неполному справочнику отбрасывал валидные вложения
+   * (например, vision-модель каталога, которой в справочнике нет).
    */
   private _mediaContentParts(attachments: LLMAttachment[] | undefined): Array<Record<string, unknown>> {
-    const modalities = resolveModelModalities(undefined, this.model);
     const parts: Array<Record<string, unknown>> = [];
-    for (const attachment of filterAttachmentsByModalities(attachments, modalities)) {
+    for (const attachment of attachments ?? []) {
       const mime = attachment.mime.toLowerCase();
       if (mime.startsWith('image/')) {
         parts.push({

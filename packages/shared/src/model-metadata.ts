@@ -60,6 +60,13 @@ export const KNOWN_MODEL_MODALITIES: Record<string, AttachmentModality[]> = {
   'phi-4-multimodal': ['text', 'image', 'audio'],
   'mistral-small-3': ['text', 'image'],
 
+  // MiniMax: M3 — vision-модели (каталог RouterAI отдаёт для них
+  // `input_modalities: ['text','image','video']`). Ключ длиннее семейства
+  // `minimax`, поэтому «самое длинное совпадение» даёт `minimax-m3.1-flash`
+  // картинку, а `minimax-m2.7` остаётся текстовым.
+  'minimax-m3': ['text', 'image', 'video'],
+  'minimax-m3.1': ['text', 'image', 'video'],
+
   // Остальные известные модели — только текст.
   'deepseek': ['text'],
   'mistral': ['text'],

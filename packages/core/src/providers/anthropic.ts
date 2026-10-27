@@ -2,7 +2,7 @@ import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
 import {
   BaseProvider,
   fetchModelsCatalog,
-  filterAttachmentsByModalities,
+  parseArchitectureModalities,
   redactAttachmentPayloadForDebug,
   resolveSystemPromptText,
   parseTokenPricing,
@@ -17,7 +17,6 @@ import {
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ProviderError, ContextLengthExceededError, RateLimitError } from './exceptions.js';
-import { resolveModelModalities } from '@itphx/synth-shared';
 // ADR-099: запросы провайдера — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
 
@@ -60,7 +59,7 @@ export class AnthropicProvider extends BaseProvider {
    *    `max_tokens` → maxOutputTokens, `display_name` → name (поля nullable).
    *  - RouterAI с типом anthropic отдаёт OpenRouter-каталог на том же пути:
    *    `context_length` → contextWindow, `pricing`/`pricing_units` → цены за 1M
-   *    токенов (только токенные тарифы).
+   *    токенов (только токенные тарифы), `architecture` → модальности входа.
    */
   async listModelsDetailed(): Promise<DetailedModelInfo[]> {
     const models = await fetchModelsCatalog(this._modelsUrl(), this._getHeaders());
@@ -92,6 +91,14 @@ export class AnthropicProvider extends BaseProvider {
     if (contextLength !== undefined && contextLength > 0 && result.contextWindow === undefined) {
       result.contextWindow = contextLength;
     }
+
+    // ADR-115: модальности входа из каталога провайдера (`architecture` у
+    // RouterAI/OpenRouter; общий парсер с OpenAI-провайдером). Без этого поля
+    // модель считалась текстовой и вложения отбрасывались гидратацией.
+    const modalities = parseArchitectureModalities(
+      raw.architecture as Record<string, unknown> | undefined,
+    );
+    if (modalities) result.modalities = modalities;
 
     const parsed = parseTokenPricing(
       raw.pricing as Record<string, unknown> | undefined,
@@ -491,8 +498,8 @@ export class AnthropicProvider extends BaseProvider {
    * ADR-115: контент user-сообщения блоками.
    *
    * Вложение (image/pdf) добавляется к тексту; audio/video Anthropic не
-   * принимает и они пропускаются. Если вложений нет (или модель их не
-   * принимает) — ровно прежний `[{type:'text', text}]` (текстовый путь не
+   * принимает и они пропускаются. Если вложений нет (или кодируемых частей не
+   * получилось) — ровно прежний `[{type:'text', text}]` (текстовый путь не
    * меняется).
    */
   private _contentWithAttachments(msg: LLMMessage): Array<Record<string, unknown>> {
@@ -511,15 +518,19 @@ export class AnthropicProvider extends BaseProvider {
    *
    *  - `image/*` → `{type:'image', source:{type:'base64', media_type, data}}`;
    *  - `application/pdf` → `{type:'document', source:{type:'base64', media_type:'application/pdf', data}}`;
-   *  - audio/video — не поддерживаются, пропускаются.
+   *  - audio/video не поддерживаются API — пропускаются.
    *
-   * Фильтр модальностей — по справочнику модели (`resolveModelModalities`):
-   * неизвестная модель получает `['text']`, т.е. вложения не уходят.
+   * Фильтра по справочнику модальностей здесь **нет** (ADR-115): провайдер
+   * кодирует всё, что ему передали, и пропускает только типы, которых
+   * физически не умеет. Модальности фильтруются выше — гидратация
+   * (`hydrateMessageAttachments` + `ModelConfig.modalities`/`resolveModelModalities`);
+   * второй фильтр по неполному справочнику отбрасывал валидные вложения
+   * (например, `minimax/minimax-m3.1-flash` в каталоге RouterAI — vision-модель,
+   * которой в справочнике нет).
    */
   private _mediaContentParts(attachments: LLMAttachment[] | undefined): Array<Record<string, unknown>> {
-    const modalities = resolveModelModalities(undefined, this.model);
     const parts: Array<Record<string, unknown>> = [];
-    for (const attachment of filterAttachmentsByModalities(attachments, modalities)) {
+    for (const attachment of attachments ?? []) {
       const mime = attachment.mime.toLowerCase();
       if (mime.startsWith('image/')) {
         parts.push({

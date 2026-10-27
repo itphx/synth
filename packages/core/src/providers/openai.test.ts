@@ -566,12 +566,28 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
     ]);
   });
 
-  it('вложение неподдерживаемой модальности отбрасывается (аудио у gpt-4o)', () => {
+  it('провайдер не фильтрует по справочнику: аудио кодируется и у модели без audio', () => {
+    // Модальности отфильтрованы выше (гидратация по конфигу модели); второй
+    // фильтр по справочнику отбрасывал валидные вложения — его больше нет.
     const formatted = providerWithModel('gpt-4o')._formatMessages([
       makeMessage({ role: 'user', content: 'текст', attachments: [wavAttachment] }),
     ]);
 
-    expect(formatted[0]!.content).toBe('текст');
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'текст' },
+      { type: 'input_audio', input_audio: { data: 'UklGRg==', format: 'wav' } },
+    ]);
+  });
+
+  it('картинка у модели вне справочника → image_url (не отбрасывается)', () => {
+    const formatted = providerWithModel('minimax/minimax-m3.1-flash')._formatMessages([
+      makeMessage({ role: 'user', content: 'что на фото?', attachments: [imageAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'что на фото?' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } },
+    ]);
   });
 
   it('PDF не маппится в OpenAI-части → строковый content не меняется', () => {
