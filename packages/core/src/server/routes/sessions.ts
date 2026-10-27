@@ -5,7 +5,7 @@ import type { createMiddleware } from 'hono/factory';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer, RequestSessionService } from '../../index.js';
 import type { SessionTree } from '../../sessions/manager.js';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, createResolveAuthorName, PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS, isProjectIconKey, isProjectColorKey, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
-import type { Message, Session, QuestionStatus, SessionWorktree } from '@itphx/synth-shared';
+import type { Message, Session, QuestionStatus, SessionWorktree, AttachmentsConfig } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { enqueueUserMessage, enqueueSteerMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
 import { serializeSession, serializeMessage, redactSessionSecretValues } from '../serialize.js';
@@ -37,6 +37,13 @@ import {
 } from '../../engine/question/types.js';
 import type { WorktreeService } from '../../engine/worktree/service.js';
 import { publishWorktreeUpdated, type WorktreeUpdatedInput } from '../../engine/worktree/events.js';
+// ADR-115: вложения сообщений — сервис (blob-хранилище + лимиты) и роуты загрузки/раздачи.
+import { AttachmentService } from '../../engine/attachments/service.js';
+import { createAttachmentRoutes } from './attachments.js';
+import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
+import type { BlobStore } from '../../storage/ports/blob-store.js';
+import { makeMediaPart, buildContentFromParts } from '@itphx/synth-shared';
+import type { Part } from '@itphx/synth-shared';
 
 const LOCAL_USER_ID = 'local';
 
@@ -97,6 +104,19 @@ export interface SessionRoutesDeps {
    * Не задан — поле `worktreeId` в PATCH игнорируется (привязка недоступна).
    */
   worktreeService?: WorktreeService;
+  /**
+   * ADR-115: вложения сообщений — blob-хранилище, учёт ссылок и лимиты
+   * (`POST /:id/attachments`, `GET /:id/attachments/:partId`,
+   * `attachments` в теле промпта).
+   *
+   * Не задан — контур вложений не монтируется, поле `attachments` в промпте
+   * даёт `400 VALIDATION_ERROR` (молча терять вложение нельзя).
+   */
+  attachments?: {
+    blobs: BlobStore;
+    blobRefs?: BlobRefRepository;
+    config: AttachmentsConfig;
+  };
 }
 
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
@@ -107,6 +127,16 @@ export interface SessionRouteMessages {
   queueFull: (c: Context, max: number) => string;
   /** ADR-104: превышен лимит инъекций на ход (`mode: 'steer'`/`'interrupt'`). */
   steerLimitExceeded: (c: Context, max: number) => string;
+  /** ADR-115: `attachments` в теле промпта — не массив непустых строк. */
+  invalidAttachments: (c: Context) => string;
+  /** ADR-115: указанные пути объектов не найдены/невалидны (перечень). */
+  attachmentsInvalid: (c: Context, paths: string[]) => string;
+  /** ADR-115: контур вложений не подключён (`deps.attachments` не задан). */
+  attachmentsUnavailable: (c: Context) => string;
+  /** ADR-115: вложений больше, чем `attachments.maxFilesPerMessage`. */
+  attachmentsLimitExceeded: (c: Context, max: number) => string;
+  /** ADR-115: превышена квота сессии `attachments.maxBytesPerSession`. */
+  tooLarge: (c: Context) => string;
 }
 
 export interface SessionRoutesOptions {
@@ -213,7 +243,76 @@ const DEFAULT_MESSAGES: SessionRouteMessages = {
   queueFull: (_c: Context, max: number) => `Очередь сообщений заполнена (макс. ${max})`,
   steerLimitExceeded: (_c: Context, max: number) =>
     `Достигнут лимит вмешательств в ход (макс. ${max} сообщений на ход)`,
+  invalidAttachments: () => 'Поле attachments должно быть массивом непустых путей объектов',
+  attachmentsInvalid: (_c: Context, paths: string[]) =>
+    `Вложения не найдены или недопустимы: ${paths.join(', ')}`,
+  attachmentsUnavailable: () => 'Вложения не поддерживаются в этой сборке',
+  attachmentsLimitExceeded: (_c: Context, max: number) =>
+    `Слишком много вложений в сообщении (макс. ${max})`,
+  tooLarge: () => 'Суммарный объём вложений сессии превышает допустимый',
 };
+
+/**
+ * ADR-115: нормализация `attachments` из тела промпта.
+ * `undefined` — поля не было; `null` — поле есть, но невалидно (не массив
+ * непустых строк). Дубли путей схлопываются (content-addressed: тот же объект).
+ */
+function normalizeAttachmentPaths(value: unknown): string[] | null | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) return null;
+  const paths: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || item.trim() === '') return null;
+    paths.push(item.trim());
+  }
+  return Array.from(new Set(paths));
+}
+
+/** ADR-115: медиа-части сообщения (для учёта квоты сессии и ссылок на объекты). */
+function mediaPartsOf(parts: Part[]): Array<{ blobPath: string; size: number }> {
+  const result: Array<{ blobPath: string; size: number }> = [];
+  for (const part of parts) {
+    if (part.type !== 'image' && part.type !== 'audio' && part.type !== 'video' && part.type !== 'file') {
+      continue;
+    }
+    const data = part.data as { blobPath?: unknown; size?: unknown };
+    if (typeof data?.blobPath !== 'string') continue;
+    result.push({
+      blobPath: data.blobPath,
+      size: typeof data.size === 'number' ? data.size : 0,
+    });
+  }
+  return result;
+}
+
+/** ADR-115: суммарный объём вложений в истории сессии (квота `maxBytesPerSession`). */
+function sessionAttachmentBytes(session: Session): number {
+  let total = 0;
+  for (const message of session.messages) {
+    for (const media of mediaPartsOf(message.parts)) total += media.size;
+  }
+  return total;
+}
+
+/**
+ * ADR-115: зафиксировать ссылки сообщения на объекты вложений (`blob_refs`).
+ * Best-effort: сбой учёта не отменяет принятое сообщение (GC потом увидит
+ * объект сиротой только по TTL — данные не теряются).
+ */
+async function registerAttachmentRefs(
+  blobRefs: BlobRefRepository | undefined,
+  messageId: string,
+  parts: Part[],
+): Promise<void> {
+  if (!blobRefs) return;
+  try {
+    for (const media of mediaPartsOf(parts)) {
+      await blobRefs.add({ blobPath: media.blobPath, ownerKind: 'message', ownerId: messageId });
+    }
+  } catch {
+    // учёт ссылок — производная: сообщение уже принято
+  }
+}
 
 /** Сообщение о недопустимом значении метаданных с перечнем допустимых ключей. */
 function invalidMetaMessage(label: 'icon' | 'color', value: unknown, allowed: readonly string[]): string {
@@ -346,6 +445,25 @@ export function createSessionRoutes(
     app.use('/:id', sessionAccessGuard);
     app.use('/:id/*', auth.requireAuth);
     app.use('/:id/*', sessionAccessGuard);
+  }
+
+  /**
+   * ADR-115: контур вложений — монтируется **внутрь** приложения сессий, то есть
+   * под тем же prefix-guard'ом (вид доступа `read`/`write` решает он, инвариант 16).
+   * Сервис собирается здесь: blob-порт + учёт ссылок + лимиты из конфига.
+   */
+  const attachmentConfig = deps.attachments?.config;
+  const attachmentService = deps.attachments
+    ? new AttachmentService({ blobs: deps.attachments.blobs, config: deps.attachments.config })
+    : undefined;
+  if (attachmentService && attachmentConfig) {
+    app.route(
+      '/',
+      createAttachmentRoutes(
+        { sessionManager, service: attachmentService, config: attachmentConfig },
+        { messages: { sessionNotFound: messages.sessionNotFound } },
+      ),
+    );
   }
 
   /**
@@ -893,6 +1011,14 @@ export function createSessionRoutes(
     }
     await sessionManager.deleteSession(session.id);
     queueManager.stop(session.id);
+    // ADR-115: сообщения удалены вместе с сессией — снимаем ссылки на объекты
+    // вложений (нести туда `removeByOwner` не нужно — владелец именно сообщение).
+    if (deps.attachments?.blobRefs) {
+      const blobRefs = deps.attachments.blobRefs;
+      for (const message of session.messages) {
+        await blobRefs.removeByOwner('message', message.id).catch(() => 0);
+      }
+    }
     if (!publishDeletedBefore) {
       eventBus.publish(session.id, 'session.deleted', { session_id: session.id });
     }
@@ -1144,6 +1270,78 @@ export function createSessionRoutes(
     // участника проекта и сквозной обзор ADMIN/LEAD. Здесь остаётся только
     // специфика тела запроса (проверка контента выше).
 
+    // ADR-115: вложения — пути объектов blob-хранилища (`attachments/<sha2>/<sha256>`),
+    // полученные из `POST /sessions/:id/attachments`. Порядок частей: текст,
+    // затем вложения. Неизвестный/невалидный путь — 400 с перечнем проблемных
+    // (молча терять вложение нельзя: модель получила бы текст без картинки).
+    const rawAttachments = (body as { attachments?: unknown }).attachments;
+    const attachmentPaths = normalizeAttachmentPaths(rawAttachments);
+    if (rawAttachments !== undefined && !attachmentPaths) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: messages.invalidAttachments(c) } },
+        400,
+      );
+    }
+    const attachmentConfig = deps.attachments?.config;
+    if (attachmentPaths && attachmentPaths.length > 0) {
+      if (!attachmentService || !attachmentConfig) {
+        return c.json(
+          { error: { code: 'VALIDATION_ERROR', message: messages.attachmentsUnavailable(c) } },
+          400,
+        );
+      }
+      if (attachmentPaths.length > attachmentConfig.maxFilesPerMessage) {
+        return c.json(
+          {
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: messages.attachmentsLimitExceeded(c, attachmentConfig.maxFilesPerMessage),
+            },
+          },
+          400,
+        );
+      }
+    }
+
+    const messageParts: Part[] = [{ id: generateStreamId(), type: 'text', data: content }];
+    if (attachmentPaths && attachmentPaths.length > 0 && attachmentService) {
+      const broken: string[] = [];
+      let addedBytes = 0;
+      for (const blobPath of attachmentPaths) {
+        const media = await attachmentService.buildMediaPart(blobPath);
+        if (!media) {
+          broken.push(blobPath);
+          continue;
+        }
+        messageParts.push(makeMediaPart(media.type, media.data));
+        addedBytes += media.data.size;
+      }
+      if (broken.length > 0) {
+        return c.json(
+          {
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: messages.attachmentsInvalid(c, broken),
+            },
+          },
+          400,
+        );
+      }
+      // Квота сессии считается по частям сообщений (а не по ссылкам): она про
+      // объём, который реально уйдёт провайдеру из этой сессии.
+      const sessionLimit = attachmentConfig?.maxBytesPerSession;
+      if (sessionLimit && addedBytes > 0) {
+        const used = sessionAttachmentBytes(session);
+        if (used + addedBytes > sessionLimit) {
+          return c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.tooLarge(c) } }, 413);
+        }
+      }
+    }
+
+    // `content` — производная от частей: медиа-часть даёт плейсхолдер
+    // (`[image: name.png]`), иначе факт вложения теряется в строковых производных.
+    const messageContent = messageParts.length > 1 ? buildContentFromParts(messageParts) : content;
+
     const streamId = body.messageId || generateStreamId();
     const author = await resolveAuthor(c);
     // ADR-106 Ф4: принципал ввода фиксируется **при приёме ввода** (здесь —
@@ -1156,8 +1354,8 @@ export function createSessionRoutes(
       role: MessageRole.USER,
       seq: session.messages.length + 1,
       origin: 'local',
-      parts: [{ id: generateStreamId(), type: 'text', data: content }],
-      content,
+      parts: messageParts,
+      content: messageContent,
       createdAt: nowISO(),
       disabled: false,
       pinned: false,
@@ -1188,6 +1386,9 @@ export function createSessionRoutes(
           },
         }, 429);
       }
+      // ADR-115: сообщение принято — фиксируем ссылки на объекты вложений
+      // (по ним работает дедуп и GC; снимаются при удалении сообщения).
+      await registerAttachmentRefs(deps.attachments?.blobRefs, message.id, messageParts);
       if (interruptMode) {
         // Прерываем текущую генерацию: ход НЕ завершается («Стоп» — отдельный
         // механизм, ADR-005) — обрывается только стрим, а сообщение
@@ -1218,6 +1419,9 @@ export function createSessionRoutes(
         error: { code: 'QUEUE_FULL', message: messages.queueFull(c, 5) },
       }, 429);
     }
+
+    // ADR-115: сообщение принято — фиксируем ссылки на объекты вложений.
+    await registerAttachmentRefs(deps.attachments?.blobRefs, message.id, messageParts);
 
     const signal = c.req.raw.signal;
 
@@ -1516,6 +1720,15 @@ export function createSessionRoutes(
       forkOptions.ownerId = owner;
     }
     const fork = await sessionManager.forkSession(c.req.param('id'), forkOptions);
+    // ADR-115: форк копирует сообщения (с вложениями) под новыми id — копия тоже
+    // владелец объектов (`blob_refs`), иначе после удаления исходного сообщения
+    // GC счёл бы объект сиротой, а форк показывал бы битую картинку.
+    if (deps.attachments?.blobRefs) {
+      const blobRefs = deps.attachments.blobRefs;
+      for (const message of fork.messages) {
+        await registerAttachmentRefs(blobRefs, message.id, message.parts);
+      }
+    }
     // См. POST /: подписка EventHub до publish (иначе session.fork.created теряется).
     await opts.onSessionForked?.(await resolveUserId(c), fork.id);
     eventBus.publish(fork.id, 'session.fork.created', serializeSession(fork, { agentRegistry }));
@@ -1575,6 +1788,15 @@ export function createSessionRoutes(
       anchorMessageId,
       summarize,
     });
+
+    // ADR-115: скопированные сообщения получают собственные ссылки на объекты
+    // вложений (иначе GC мог бы удалить объект, на который смотрит копия).
+    if (deps.attachments?.blobRefs) {
+      const blobRefs = deps.attachments.blobRefs;
+      for (const message of merged) {
+        await registerAttachmentRefs(blobRefs, message.id, message.parts);
+      }
+    }
 
     eventBus.publish(c.req.param('id'), 'session.messages.merged', {
       messages: merged.map((m, i) => serializeMessage(m, i)),

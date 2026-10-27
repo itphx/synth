@@ -35,6 +35,8 @@ import {
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов + retention логов.
   ProcessService,
   startProcessLogPruner,
+  // ADR-115: GC осиротевших вложений сообщений (blob-хранилище + `blob_refs`).
+  startAttachmentPruner,
   // ADR-114: сервис worktree'ов (per-session рабочий каталог) + публикация
   // `worktree.updated` в каналы сессий проекта.
   WorktreeService,
@@ -523,6 +525,16 @@ export async function createStandaloneDeps(
     ? () => {}
     : startProcessLogPruner(storageContext.backgroundRuns, storageContext.blobs, {
         getRetentionDays: () => config.backgroundConfig?.retentionDays ?? 7,
+      });
+  // ADR-115: GC осиротевших вложений. Критерий — нет ссылок (`blob_refs`) И
+  // объект старше `attachments.gcDays` (живой объект может быть старым —
+  // удалять по возрасту нельзя). `gcDays <= 0` — без ограничения.
+  const stopAttachmentPruner = storageDegraded
+    ? () => {}
+    : startAttachmentPruner({
+        blobs: storageContext.blobs,
+        blobRefs: storageContext.blobRefs,
+        gcDays: () => config.attachmentsConfig?.gcDays ?? 30,
       });
 
   // ADR-094: доменные коллекторы. `metrics` приходит только при
@@ -1509,6 +1521,8 @@ export async function createStandaloneDeps(
     // PROP-097 (блок 5b): сервис фоновых шелл-процессов (+ pruner логов).
     processService,
     stopProcessLogPruner,
+    // ADR-115: GC осиротевших вложений сообщений.
+    stopAttachmentPruner,
     // ADR-114: сервис worktree'ов — HTTP-контур проектов и привязка сессии.
     worktreeService,
     webhooksConfig,

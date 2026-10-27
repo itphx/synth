@@ -258,6 +258,8 @@ program
       questionsConfig: synth.questions,
       // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов (PROP-096).
       backgroundConfig: synth.background,
+      // ADR-115: лимиты вложений сообщений (attachments.*).
+      attachmentsConfig: synth.attachments,
       // ADR-094: конфигурация метрик (`metrics.enabled`, env SYNTH_METRICS_ENABLED).
       metricsConfig: synth.metrics,
       // ADR-106 Ф1: Authority-слой (по умолчанию выключен).
@@ -358,6 +360,9 @@ program
       // PROP-097 (блок 5b): остановить retention-очистку логов фоновых
       // процессов.
       appHandle.stopProcessLogPruner?.();
+
+      // ADR-115: остановить GC осиротевших вложений сообщений.
+      appHandle.stopAttachmentPruner?.();
 
       // ADR-094: снять readiness до остановки коллекторов — скрейп в момент
       // shutdown видит `synth_ready 0`.

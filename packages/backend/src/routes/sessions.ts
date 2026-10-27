@@ -35,6 +35,8 @@ import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
 import type { ProjectRepository } from '@itphx/synth-core';
 import type { MemoryFactRepository, MemoryIndexRepository } from '@itphx/synth-core';
+import type { BlobRefRepository, BlobStore } from '@itphx/synth-core';
+import type { AttachmentsConfig } from '@itphx/synth-shared';
 // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
 import type { QuestionService } from '@itphx/synth-core';
 // ADR-114: сервис worktree'ов — привязка сессии к worktree.
@@ -99,6 +101,15 @@ export function createSessionRoutes(
    * Не задан — поле `worktreeId` в PATCH игнорируется (привязка недоступна).
    */
   worktreeService?: WorktreeService,
+  /**
+   * ADR-115: вложения сообщений — blob-порт, учёт ссылок и лимиты
+   * (прокидывается в core-фабрику: загрузка/раздача + `attachments` в промпте).
+   */
+  attachments?: {
+    blobs: BlobStore;
+    blobRefs?: BlobRefRepository;
+    config: AttachmentsConfig;
+  },
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -692,7 +703,7 @@ export function createSessionRoutes(
   // последней: статические/backend-only сегменты должны матчиться раньше.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}) },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}) },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,

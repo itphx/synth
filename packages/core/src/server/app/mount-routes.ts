@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import type { SecurityConfig, WorkspaceOutsideRootPolicy, ProviderConfig, ModelConfig } from '@itphx/synth-shared';
-import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, SYNTH_VERSION } from '@itphx/synth-shared';
+import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, SYNTH_VERSION, defaultConfig } from '@itphx/synth-shared';
 import {
   KeyRateLimiter, DEFAULT_AGENT_ID,
   createSessionRoutes, createProjectRoutes,
@@ -161,6 +161,16 @@ export function mountStandaloneRoutes(
               facts: deps.storageContext.memoryFacts,
               indexes: deps.storageContext.memoryIndexes,
               isPluginActive: () => deps.pluginRuntime.host.isActive(MEMORY_PLUGIN_NAME),
+            },
+          }
+        : {}),
+      // ADR-115: вложения сообщений — blob-порт, учёт ссылок и лимиты.
+      ...(deps.storageContext
+        ? {
+            attachments: {
+              blobs: deps.storageContext.blobs,
+              blobRefs: deps.storageContext.blobRefs,
+              config: config.attachmentsConfig ?? defaultConfig.attachments,
             },
           }
         : {}),
@@ -370,7 +380,11 @@ export function mountStandaloneRoutes(
   // Messages (batch operations)
   app.route('/api/v2/messages', createMessageRoutes(
     auth, sessionManager, () => getClient(),
-    { localOwnerResolver: deps.localOwnerResolver },
+    {
+      localOwnerResolver: deps.localOwnerResolver,
+      // ADR-115: удаление сообщения снимает ссылки на объекты вложений (`blob_refs`).
+      ...(deps.storageContext ? { blobRefs: deps.storageContext.blobRefs } : {}),
+    },
   ));
 
   // Settings (runtime-настройки для UI, раздел «Проекты»)

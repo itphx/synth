@@ -320,6 +320,31 @@ export type {
   ProcessSpawnInput,
   ProcessSpawnResult,
 } from './engine/processes/index.js';
+// ADR-115: вложения сообщений — сервис (MIME по сигнатуре, лимиты, вычищение
+// метаданных, content-addressed адресация) и GC осиротевших объектов. Публично:
+// managed-backend собирает тот же сервис (паритет core↔backend).
+export {
+  AttachmentService,
+  AttachmentError,
+  isAttachmentPath,
+  partTypeOf,
+  sanitizeFileName,
+  ATTACHMENT_DIR,
+  ATTACHMENT_SIDECAR_SUFFIX,
+  startAttachmentPruner,
+  sniffMime,
+  looksLikeSvg,
+  normalizeMime,
+  stripMetadata,
+} from './engine/attachments/index.js';
+export type {
+  AttachmentServiceDeps,
+  AttachmentErrorCode,
+  AttachmentPrunerOptions,
+  BuiltMediaPart,
+  ResolvedAttachment,
+  UploadedAttachmentMeta,
+} from './engine/attachments/index.js';
 // ADR-090: единая точка исполнения тулов (`safeParse → execute → catch`) и
 // сужение контекста для плагинных тулов. Публичны для managed-backend:
 // портал памяти вызывает админ-тул плагина через реестр тулов (ADR-107, М2).
@@ -639,6 +664,8 @@ export type { JsonStoreConfig, JsonStoreLike } from './storage/json-store.js';
 // ADR-096 (W2.1): доменные порты слоя хранения + файловая реализация BlobStore.
 export { FileBlobStore } from './storage/file-blob-store.js';
 export type { FileBlobStoreConfig } from './storage/file-blob-store.js';
+// ADR-115/ADR-116: корень blob-хранилища (`{dataDir}/blobs`) и его подготовка.
+export { prepareBlobRoot, blobRootPath, BLOB_ROOT_DIR } from './storage/blob-root.js';
 // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (файловая реализация).
 export { FileBlobRefRepository } from './storage/file-blob-ref-repository.js';
 export type { FileBlobRefRepositoryConfig } from './storage/file-blob-ref-repository.js';
@@ -1761,6 +1788,13 @@ export type {
 // PROP-096/097: HTTP-контур единого реестра фоновых прогонов (список,
 // деталь, лог, остановка, удаление).
 export { createProcessRoutes } from './server/routes/processes.js';
+// ADR-115: HTTP-контур вложений (загрузка multipart + раздача байтов с Range).
+export { createAttachmentRoutes } from './server/routes/attachments.js';
+export type {
+  AttachmentRoutesDeps,
+  AttachmentRoutesOptions,
+  AttachmentRouteMessages,
+} from './server/routes/attachments.js';
 export type {
   ProcessRoutesAuth,
   ProcessRoutesDeps,

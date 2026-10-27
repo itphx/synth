@@ -8,6 +8,7 @@ import type { Session } from '@itphx/synth-shared';
 import { createSessionAccessGuard, createSessionAccessPredicate } from '../session-access-guard.js';
 import type { SessionAccessKind } from '../session-access-guard.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
+import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -50,6 +51,13 @@ export interface MessageRoutesOptions {
    * при доступе к сессии. Managed не задаёт (id реальные).
    */
   localOwnerResolver?: LocalOwnerResolver;
+  /**
+   * ADR-115: учёт ссылок на объекты blob-хранилища. Сообщения действительно
+   * удаляются (splice) — при удалении снимаем ссылки владельца
+   * (`ownerKind: 'message'`), иначе объект вложений никогда не станет
+   * сиротой и не будет вычищен GC.
+   */
+  blobRefs?: BlobRefRepository;
 }
 
 const LOCAL_USER_ID = 'local';
@@ -92,6 +100,7 @@ export function createMessageRoutes(
   const hasRemoteGetter = getRemoteClient !== undefined;
   const messages: MessageRouteMessages = { ...DEFAULT_MESSAGES, ...opts?.messages };
   const onMessagesChanged = opts?.onMessagesChanged;
+  const blobRefs = opts?.blobRefs;
   const resolveUserId = opts?.resolveUserId ?? (() => LOCAL_USER_ID);
   const accessPredicate = createSessionAccessPredicate({
     canAccess: opts?.canAccess,
@@ -158,12 +167,23 @@ export function createMessageRoutes(
     const session = await sessionManager.getSession(sessionId);
     if (!session) return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
 
+    // ADR-115: id сообщений, которые будут удалены — зафиксировать ДО операции
+    // (после splice индексы съезжают). Ссылки на объекты вложений снимаются
+    // по id: иначе объект вложений никогда не станет сиротой и не уйдёт в GC.
+    const deletedMessageIds = action === 'delete' && blobRefs
+      ? indices.map((index) => session.messages[index]?.id).filter((id): id is string => !!id)
+      : [];
+
     const result = await sessionManager.batchMessageOperation(
       sessionId,
       action as 'pin' | 'toggle' | 'delete',
       indices,
       state,
     );
+
+    for (const messageId of deletedMessageIds) {
+      await blobRefs!.removeByOwner('message', messageId).catch(() => 0);
+    }
 
     await onMessagesChanged?.(sessionId, c);
 
@@ -271,9 +291,12 @@ export function createMessageRoutes(
     }
 
     await sessionManager.withLock(sessionId, async (locked) => {
+      // ADR-115: сообщение удаляется — снимаем его ссылки на объекты вложений.
+      const removedId = locked.messages[index]?.id;
       locked.messages.splice(index, 1);
       locked.messages.forEach((m, i) => { m.seq = i + 1; });
       await sessionManager.updateSession(locked);
+      if (blobRefs && removedId) await blobRefs.removeByOwner('message', removedId).catch(() => 0);
     });
 
     await onMessagesChanged?.(sessionId, c);

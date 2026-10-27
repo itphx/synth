@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { SessionManager, ContextOptimizer, EventBus, ProjectRepository } from '@itphx/synth-core';
+import type { SessionManager, ContextOptimizer, EventBus, ProjectRepository, BlobRefRepository } from '@itphx/synth-core';
 import { createMessageRoutes as createCoreMessageRoutes } from '@itphx/synth-core';
 import type { Session } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
@@ -19,6 +19,8 @@ export function createMessageRoutes(
   contextOptimizer: ContextOptimizer | null,
   eventBus: EventBus,
   projectStore?: ProjectRepository,
+  /** ADR-115: учёт ссылок на объекты blob-хранилища (снятие при удалении). */
+  blobRefs?: BlobRefRepository,
 ): Hono {
   const app = new Hono();
   const recalcCanSummarize = createRecalcCanSummarize({ sessionManager, contextOptimizer, eventBus });
@@ -39,6 +41,8 @@ export function createMessageRoutes(
         forbidden: (c) => t('auth.forbidden', undefined, c),
       },
       onMessagesChanged: (sessionId) => recalcCanSummarize(sessionId),
+      // ADR-115: ссылки на объекты вложений снимаются при удалении сообщения.
+      ...(blobRefs ? { blobRefs } : {}),
       resolveUserId: async (c) => (await kit.getCurrentUser(c))?.id ?? '',
       canAccess: (session, c, userId) =>
         isSessionOwner(session, userId)

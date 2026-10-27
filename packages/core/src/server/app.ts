@@ -141,6 +141,12 @@ export interface StandaloneConfig {
    * прогонов (`background.enabled`/лимиты/retention — PROP-096).
    */
   backgroundConfig?: SynthConfig['background'];
+  /**
+   * ADR-115: конфигурация вложений сообщений (`attachments.*` — лимиты размера,
+   * число файлов, белый список MIME, срок хранения осиротевших объектов).
+   * Не задана — умолчания схемы (`defaultConfig.attachments`).
+   */
+  attachmentsConfig?: SynthConfig['attachments'];
   /** ADR-094: конфигурация метрик (`metrics.enabled`) из config.yaml/env. */
   metricsConfig?: SynthConfig['metrics'];
   /**
@@ -623,6 +629,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     stopBackgroundRunPruner: () => deps.stopBackgroundRunPruner(),
     // PROP-097 (блок 5b): остановка retention-очистки логов фоновых процессов.
     stopProcessLogPruner: () => deps.stopProcessLogPruner(),
+    // ADR-115: остановка GC осиротевших вложений сообщений.
+    stopAttachmentPruner: () => deps.stopAttachmentPruner(),
     // ADR-052 (этап II): остановка движка webhooks и retention-очистки доставок.
     stopWebhookService: () => deps.webhookService.stop(),
     stopWebhookDeliveryPruner: () => deps.stopWebhookDeliveryPruner(),

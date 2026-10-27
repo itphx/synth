@@ -130,6 +130,8 @@ export interface BackendAppHandle {
    * PROP-097 (блок 5b): остановка retention-очистки логов фоновых процессов.
    */
   stopProcessLogPruner: () => void;
+  /** ADR-115: остановка GC осиротевших вложений сообщений. */
+  stopAttachmentPruner: () => void;
   /** ADR-052 (этап II): реестр подписок webhooks (для тестов/диагностики). */
   webhookStore: WebhookRepository;
   /** ADR-052 (этап II): движок исходящих webhooks. */
@@ -463,6 +465,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       stopBackgroundRunPruner: () => deps.stopBackgroundRunPruner(),
       // PROP-097 (блок 5b): retention-очистка логов фоновых процессов.
       stopProcessLogPruner: () => deps.stopProcessLogPruner(),
+      // ADR-115: GC осиротевших вложений сообщений.
+      stopAttachmentPruner: () => deps.stopAttachmentPruner(),
       // ADR-052 (этап II): реестр подписок и движок webhooks + остановка на shutdown.
       webhookStore: deps.webhookStore,
       webhookService: deps.webhookService,

@@ -203,10 +203,20 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     // ADR-114: сервис worktree'ов — привязка сессии к worktree
     // (`PATCH /api/v2/sessions/:id { worktreeId }`).
     deps.worktreeService,
+    // ADR-115: вложения сообщений — blob-порт, учёт ссылок, лимиты из конфига.
+    {
+      blobs: deps.storageContext.blobs,
+      blobRefs: deps.storageContext.blobRefs,
+      config: config.synth.attachments,
+    },
   ));
 
   // Messages routes
-  app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, contextOptimizer, eventBus, projectStore));
+  app.route('/api/v2/messages', createMessageRoutes(
+    auth, sessionManager, contextOptimizer, eventBus, projectStore,
+    // ADR-115: удаление сообщения снимает ссылки на объекты вложений.
+    deps.storageContext.blobRefs,
+  ));
 
   // Queue routes
   app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage, projectStore));

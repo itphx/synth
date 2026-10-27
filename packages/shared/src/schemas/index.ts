@@ -225,6 +225,12 @@ export const promptRequestSchema = z.object({
    * `interrupt` — прерывание текущей генерации с продолжением хода.
    */
   mode: z.enum(STEER_MODES).default(DEFAULT_STEER_MODE),
+  /**
+   * ADR-115: пути объектов вложений в blob-хранилище (`attachments/<sha2>/<sha256>`),
+   * полученные из `POST /sessions/:id/attachments`. Аддитивное поле: без него
+   * поведение промпта прежнее. Порядок частей сообщения — текст, затем вложения.
+   */
+  attachments: z.array(z.string().min(1)).max(50).optional(),
 });
 
 export const spaLoginSchema = z.object({

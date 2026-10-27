@@ -55,6 +55,9 @@ import {
   createSessionSkillScopeRoutes,
   MemoryQuestionRepository,
   QuestionService,
+  // ADR-115: вложения сообщений — файловые порты (blob-хранилище + `blob_refs`).
+  FileBlobStore,
+  FileBlobRefRepository,
 } from '@itphx/synth-core';
 import type { ChatOrchestrator } from '@itphx/synth-core';
 import type { Message, Project, User } from '@itphx/synth-shared';
@@ -156,6 +159,12 @@ const MATRIX: Row[] = [
   row('sessions', 'POST', '/:id/references', { status: 201 }),
   row('sessions', 'DELETE', '/:id/references/:refSid', { status: 204 }),
   row('sessions', 'POST', '/:id/messages/merge', { status: 400 }), // пустое тело → VALIDATION_ERROR
+
+  // --- ADR-115: вложения сообщений (core-фабрика внутри приложения сессий) ---
+  // Чтение байтов — правило чтения сессии; неизвестная часть → 404 (объект не
+  // раскрывается). Загрузка — мутация; тело не multipart → 400 валидации.
+  row('sessions', 'GET', '/:id/attachments/:partId', { status: 404 }),
+  row('sessions', 'POST', '/:id/attachments', { status: 400 }),
 
   // --- backend-only session routes ---
   // MCP-скоуп сессии: владелец|ADMIN (ADR-071 §2.4) — участники/LEAD НЕ имеют доступа.
@@ -411,6 +420,20 @@ async function buildWorld(tmpDir: string): Promise<World> {
     undefined,
     // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю.
     questionService,
+    // ADR-114: сервис worktree'ов в песочнице не задан.
+    undefined,
+    // ADR-115: вложения — тот же контур, что в production (`POST/GET :id/attachments`).
+    {
+      blobs: new FileBlobStore({ root: join(tmpDir, 'blobs') }),
+      blobRefs: new FileBlobRefRepository({ dataDir: tmpDir }),
+      config: {
+        maxBytesPerFile: 1024 * 1024,
+        maxFilesPerMessage: 10,
+        maxBytesPerSession: 10 * 1024 * 1024,
+        allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
+        gcDays: 30,
+      },
+    },
   ));
   app.route('/api/v2/messages', createBackendMessageRoutes(
     kit as never,

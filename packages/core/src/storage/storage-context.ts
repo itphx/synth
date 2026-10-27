@@ -131,6 +131,8 @@ import { FileWorktreeStore } from './file-worktree-store.js';
 import { ContextConfig } from '../engine/context/config.js';
 import { SSHKeyStore } from './ssh-key-store.js';
 import { FileBlobStore } from './file-blob-store.js';
+// ADR-115/ADR-116: корень blob-хранилища — `{dataDir}/blobs` (+ переезд логов).
+import { blobRootPath, prepareBlobRoot } from './blob-root.js';
 // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (дедуп/GC).
 import { FileBlobRefRepository } from './file-blob-ref-repository.js';
 import type { LeaderFactoryOptions, Mutex, MutexFactoryOptions } from './mutex.js';
@@ -610,6 +612,19 @@ interface PostgresStorageDriverModule {
 const POSTGRES_DRIVER_PACKAGE: string = '@itphx/synth-storage-postgres';
 
 /**
+ * Blob-хранилище файлового backend'а (ADR-115/ADR-116).
+ *
+ * Корень — `{dataDir}/blobs`, а не `dataDir`: у порта относительные пути, и
+ * `processes/<id>.log` больше не делит каталог с реестром фоновых прогонов
+ * (`{dataDir}/processes/registry.json`). Подготовка корня (создание + переезд
+ * логов старой раскладки) — идемпотентная синхронная функция в `blob-root.ts`.
+ */
+function createBlobStore(dataDir: string): FileBlobStore {
+  prepareBlobRoot(dataDir);
+  return new FileBlobStore({ root: blobRootPath(dataDir) });
+}
+
+/**
  * Файловый backend: те же реализации и аргументы, что собирал
  * `packages/core/src/server/app/deps.ts` (побайтово то же поведение).
  */
@@ -684,7 +699,11 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     }),
     // ADR-105 (Ф4): журнал операций со слоем доступов (`audit/credentials.jsonl`).
     credentialAudit: new FileCredentialAuditStore({ dataDir }),
-    blobs: new FileBlobStore({ root: dataDir }),
+    // ADR-115/ADR-116: байты на томе — собственный корень `{dataDir}/blobs`;
+    // все пути порта относительные (`attachments/…`, `processes/…`, `skills/…`).
+    // `prepareBlobRoot` идемпотентно создаёт каталог и переносит логи фоновых
+    // процессов старой раскладки (`{dataDir}/processes/<id>.log`).
+    blobs: createBlobStore(dataDir),
     // ADR-115/ADR-116: ссылки на объекты blob-хранилища (`blob-refs.json`).
     blobRefs: new FileBlobRefRepository({ dataDir }),
     // ADR-051/ADR-100: пайплайны — определения (`pipelines/definitions.json`)

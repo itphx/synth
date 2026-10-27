@@ -53,6 +53,8 @@ import {
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов + retention логов.
   ProcessService,
   startProcessLogPruner,
+  // ADR-115: GC осиротевших вложений сообщений.
+  startAttachmentPruner,
   // ADR-114: сервис worktree'ов (per-session рабочий каталог) + публикация
   // `worktree.updated` в каналы сессий проекта.
   WorktreeService,
@@ -484,6 +486,15 @@ export async function createBackendDeps(
     ? () => {}
     : startProcessLogPruner(storageContext.backgroundRuns, storageContext.blobs, {
         getRetentionDays: () => config.synth.background.retentionDays,
+      });
+  // ADR-115: GC осиротевших вложений (нет ссылок `blob_refs` + объект старше
+  // `attachments.gcDays`; `<= 0` — без ограничения).
+  const stopAttachmentPruner = storageDegraded
+    ? () => {}
+    : startAttachmentPruner({
+        blobs: storageContext.blobs,
+        blobRefs: storageContext.blobRefs,
+        gcDays: () => config.synth.attachments.gcDays,
       });
 
   // ADR-094: доменные коллекторы. `metrics` приходит только при
@@ -1489,6 +1500,8 @@ export async function createBackendDeps(
     // PROP-097 (блок 5b): сервис фоновых шелл-процессов (+ pruner логов).
     processService,
     stopProcessLogPruner,
+    // ADR-115: GC осиротевших вложений сообщений.
+    stopAttachmentPruner,
     // ADR-114: сервис worktree'ов — HTTP-контур проектов и привязка сессии.
     worktreeService,
     webhookStore,
