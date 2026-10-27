@@ -3,6 +3,11 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   resolve: {
+    // zod 4 обязателен для @hono/zod-openapi 1.x: `.openapi()` навешивается
+    // `extendZodWithOpenApi` на прототип конкретного экземпляра модуля. Vite иначе
+    // может загрузить zod дважды (через symlink пакета и через .pnpm-копию
+    // зависимости), и shared-схемы остаются без метода. Dedupe — один экземпляр.
+    dedupe: ['zod'],
     alias: [
       {
         // Self-reference пакета: клиент удалённого порта (`@itphx/synth-executor`)
@@ -19,6 +24,16 @@ export default defineConfig({
   },
   test: {
     name: '@itphx/synth-core',
+    // zod 4: `@hono/zod-openapi` 1.x навешивает `.openapi()` на прототип **своего**
+    // экземпляра zod (`extendZodWithOpenApi`). Если Vite загрузит zod в свой граф,
+    // а `@itphx/synth-shared` (externalized) — через Node, экземпляры разойдутся и
+    // shared-схемы останутся без `.openapi()`. Внешнего zod хватает, чтобы оба
+    // пути вели в один модуль.
+    server: {
+      deps: {
+        external: ['zod'],
+      },
+    },
     include: ['src/**/*.test.ts'],
     // ADR-097 (W5): загрузка модуля-драйвера БД вынесена из тестов на уровень
     // модуля (top-level preload в тест-файлах — см. `storage-context.degraded.test.ts`

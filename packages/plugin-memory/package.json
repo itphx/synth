@@ -23,16 +23,16 @@
     "test:watch": "vitest"
   },
   "peerDependencies": {
-    "@itphx/synth-shared": "workspace:*",
-    "@itphx/synth-core": "workspace:*"
+    "@itphx/synth-core": "workspace:*",
+    "@itphx/synth-shared": "workspace:*"
   },
   "devDependencies": {
-    "@itphx/synth-shared": "workspace:*",
     "@itphx/synth-core": "workspace:*",
+    "@itphx/synth-shared": "workspace:*",
     "@types/node": "^22.0.0",
     "esbuild": "^0.28.0",
     "typescript": "^5.8.0",
-    "zod": "^3.24.0"
+    "zod": "^4.6.7"
   },
   "engines": {
     "node": ">=22.0.0"

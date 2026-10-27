@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest';
+import { z } from 'zod';
 import {
   gitRepoConfigSchema,
   normalizeGitRepoConfig,
+  patchObjectSchema,
   projectCreateSchema,
   projectUpdateSchema,
   sshKeyCreateSchema,
   sshKeyUpdateSchema,
   sessionCreateSchema,
+  sessionSettingsSchema,
   sessionUpdateSchema,
   normalizeIconKey,
   normalizeColorKey,
@@ -134,6 +137,37 @@ describe('sshKeyCreateSchema (ADR-076)', () => {
       expect('id' in parsed.data).toBe(false);
       expect('createdAt' in parsed.data).toBe(false);
     }
+  });
+});
+
+describe('patchObjectSchema — патч не заполняет отсутствующие ключи (zod 4)', () => {
+  it('пустой патч → пустой объект (дефолты не протекают)', () => {
+    expect(patchObjectSchema(sessionSettingsSchema).parse({})).toEqual({});
+  });
+
+  it('переданные ключи проходят с валидацией исходной схемы', () => {
+    const parsed = patchObjectSchema(sessionSettingsSchema).parse({ temperature: 0.1 });
+    expect(parsed).toEqual({ temperature: 0.1 });
+    // ограничения исходной схемы сохранены
+    expect(patchObjectSchema(sessionSettingsSchema).safeParse({ temperature: 5 }).success).toBe(false);
+  });
+
+  it('вложенный prefault не подставляется при отсутствии ключа', () => {
+    const schema = z.object({ nested: z.object({ x: z.string().default('q') }).prefault({}) });
+    expect(patchObjectSchema(schema).parse({})).toEqual({});
+    // переданный ключ по-прежнему валидируется по исходной схеме
+    expect(patchObjectSchema(schema).parse({ nested: {} })).toEqual({ nested: { x: 'q' } });
+  });
+
+  it('sessionUpdateSchema: PATCH settings не заполняет дефолты', () => {
+    const parsed = sessionUpdateSchema.parse({ settings: { provider: 'ollama' } });
+    expect(parsed.settings).toEqual({ provider: 'ollama' });
+  });
+
+  it('create-схема сессии по-прежнему применяет дефолты', () => {
+    const parsed = sessionCreateSchema.parse({ settings: {} });
+    expect(parsed.settings?.temperature).toBe(0.7);
+    expect(parsed.settings?.maxTokens).toBe(4096);
   });
 });
 

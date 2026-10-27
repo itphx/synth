@@ -25,7 +25,7 @@ export const permissionRuleSchema = z.union([
 export type PermissionRule = z.infer<typeof permissionRuleSchema>;
 
 export const permissionConfigSchema = z.object({
-  rules: z.record(z.string(), permissionRuleSchema).default({}),
+  rules: z.record(z.string(), permissionRuleSchema).prefault({}),
   askTimeoutMs: z.number().int().min(0).default(30_000),
 });
 

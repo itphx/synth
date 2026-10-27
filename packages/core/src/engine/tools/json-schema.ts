@@ -8,69 +8,88 @@ type JsonSchema =
   | { type: 'object'; description?: string; properties: Record<string, JsonSchema>; required?: string[] }
   | { anyOf: JsonSchema[]; description?: string };
 
-export function zodToJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
+/**
+ * Внутренняя структура `_def` zod 4: у обёрток (`default`/`optional`/`pipe`) —
+ * `innerType`/`in`, у перечислений — `entries`, у литералов — `values`,
+ * у строк/чисел проверки лежат в `_zod.def.checks`.
+ */
+type Zod4CheckDef = {
+  check?: string;
+  format?: string;
+  value?: number;
+  inclusive?: boolean;
+};
+
+type Zod4Def = {
+  innerType?: z.ZodType;
+  in?: z.ZodType;
+  discriminator?: string;
+  entries?: Record<string, unknown>;
+  values?: unknown[];
+  checks?: Array<{ _zod?: { def?: Zod4CheckDef } } | undefined>;
+};
+
+function def(schema: z.ZodType): Zod4Def {
+  return (schema as unknown as { _def: Zod4Def })._def;
+}
+
+export function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
   return _convert(schema) as Record<string, unknown>;
 }
 
-function _convert(schema: z.ZodTypeAny): JsonSchema {
+function _convert(schema: z.ZodType): JsonSchema {
   let processed = schema;
 
-  if (processed instanceof z.ZodDefault) {
-    processed = processed._def.innerType;
+  // Обёртки zod 4: default/optional разворачиваются в innerType, pipe (transform) — в `in`.
+  while (
+    processed instanceof z.ZodDefault ||
+    processed instanceof z.ZodOptional ||
+    processed instanceof z.ZodPipe
+  ) {
+    processed =
+      processed instanceof z.ZodPipe ? def(processed).in! : def(processed).innerType!;
   }
 
-  if (processed instanceof z.ZodOptional) {
-    processed = processed._def.innerType;
-  }
-
-  if (processed instanceof z.ZodEffects) {
-    processed = processed._def.schema;
-  }
-
-  if (processed instanceof z.ZodBranded) {
-    processed = processed._def.type;
-  }
-
-  if (processed instanceof z.ZodPipeline) {
-    processed = processed._def.in;
-  }
+  const description = processed.description;
 
   if (processed instanceof z.ZodNullable) {
-    const result = _convert(processed._def.innerType);
-    if ('type' in result && result.type === 'string' && result.enum) {
-      return { anyOf: [result, { type: 'null' }], description: result.description };
-    }
+    const result = _convert(def(processed).innerType!);
     return { anyOf: [result, { type: 'null' }], description: result.description };
   }
 
-  const description = processed._def.description;
-
   if (processed instanceof z.ZodString) {
-    const checks = processed._def.checks || [];
+    const checks = def(processed).checks ?? [];
     const result: { type: 'string'; description?: string; enum?: string[]; format?: string } = { type: 'string' };
     if (description) result.description = description;
 
     for (const check of checks) {
-      if (check.kind === 'datetime') result.format = 'date-time';
-      if (check.kind === 'email') result.format = 'email';
-      if (check.kind === 'url') result.format = 'uri';
-      if (check.kind === 'uuid') result.format = 'uuid';
-      if (check.kind === 'ip') result.format = 'ip';
+      const checkDef = check?._zod?.def;
+      if (checkDef?.check !== 'string_format') continue;
+      if (checkDef.format === 'datetime') result.format = 'date-time';
+      if (checkDef.format === 'email') result.format = 'email';
+      if (checkDef.format === 'url') result.format = 'uri';
+      if (checkDef.format === 'uuid') result.format = 'uuid';
+      if (checkDef.format === 'ip') result.format = 'ip';
     }
     return result;
   }
 
   if (processed instanceof z.ZodNumber) {
-    const checks = processed._def.checks || [];
+    const checks = def(processed).checks ?? [];
     const result: { type: 'number' | 'integer'; description?: string; minimum?: number; maximum?: number } = {
-      type: processed._def.coerce ? 'number' : 'number',
+      type: 'number',
     };
     if (description) result.description = description;
 
     for (const check of checks) {
-      if (check.kind === 'int') result.type = 'integer';
-      if (check.kind === 'min') result.minimum = check.value;
-      if (check.kind === 'max') result.maximum = check.value;
+      const checkDef = check?._zod?.def;
+      if (checkDef?.check === 'number_format' && checkDef.format === 'safeint') result.type = 'integer';
+      if (checkDef?.check === 'greater_than' && checkDef.inclusive !== false && typeof checkDef.value === 'number') {
+        result.minimum = checkDef.value;
+      }
+      if (checkDef?.check === 'less_than' && checkDef.inclusive !== false && typeof checkDef.value === 'number') {
+        result.maximum = checkDef.value;
+      }
     }
     return result;
   }
@@ -83,17 +102,17 @@ function _convert(schema: z.ZodTypeAny): JsonSchema {
     return {
       type: 'array',
       description,
-      items: _convert(processed._def.type),
+      items: _convert(processed.element as unknown as z.ZodType),
     };
   }
 
   if (processed instanceof z.ZodObject) {
-    const shape = processed._def.shape();
+    const shape = processed.shape;
     const properties: Record<string, JsonSchema> = {};
     const required: string[] = [];
 
     for (const [key, value] of Object.entries(shape)) {
-      properties[key] = _convert(value as z.ZodTypeAny);
+      properties[key] = _convert(value);
       if (!(value instanceof z.ZodOptional) && !(value instanceof z.ZodDefault)) {
         required.push(key);
       }
@@ -109,47 +128,22 @@ function _convert(schema: z.ZodTypeAny): JsonSchema {
     return result;
   }
 
-  if (processed instanceof z.ZodEnum || processed instanceof z.ZodNativeEnum) {
-    const values = processed instanceof z.ZodEnum
-      ? processed._def.values
-      : Object.values(processed._def.values).filter((v) => typeof v === 'string');
-    return { type: 'string', description, enum: values as string[] };
+  if (processed instanceof z.ZodEnum) {
+    // zod 4: и `z.enum`, и `z.nativeEnum` — это `ZodEnum`; числовые значения нативного
+    // enum отбрасываем — JSON-схема тула описывает только строковые варианты.
+    const values = Object.values(def(processed).entries ?? {}).filter(
+      (value): value is string => typeof value === 'string',
+    );
+    return { type: 'string', description, enum: values };
   }
 
-  if (processed instanceof z.ZodUnion) {
-    const options = processed._def.options as z.ZodTypeAny[];
-    return {
-      anyOf: options.map((opt) => _convert(opt)),
-      description,
-    };
-  }
-
-  if (processed instanceof z.ZodRecord) {
-    return {
-      type: 'object',
-      description: description || 'Record of key-value pairs',
-      properties: {},
-    };
-  }
-
-  if (processed instanceof z.ZodLiteral) {
-    const value = processed._def.value;
-    if (typeof value === 'string') return { type: 'string', description, enum: [value] };
-    if (typeof value === 'number') return { type: 'number', description, minimum: value, maximum: value };
-    if (typeof value === 'boolean') return { type: 'boolean', description };
-    return { type: 'string', description };
-  }
-
-  if (processed instanceof z.ZodAny) {
-    return { type: 'string', description: description || 'any value' };
-  }
-
+  // discriminatedUnion — наследник ZodUnion, поэтому проверяется ДО него.
   if (processed instanceof z.ZodDiscriminatedUnion) {
     // discriminatedUnion → объектная схема с единым enum-дискриминатором.
     // Без этого схема падала в fallback {type:'string'}, а DeepSeek строго
     // требует верхнеуровневый type:'object' для tool-параметров.
-    const options = processed._def.options as z.ZodTypeAny[];
-    const discriminator = processed._def.discriminator;
+    const options = processed.options as z.ZodType[];
+    const discriminator = def(processed).discriminator ?? '';
     const properties: Record<string, JsonSchema> = {};
     const values: string[] = [];
 
@@ -186,6 +180,34 @@ function _convert(schema: z.ZodTypeAny): JsonSchema {
     };
     if (description) result.description = description;
     return result;
+  }
+
+  if (processed instanceof z.ZodUnion) {
+    const options = processed.options as z.ZodType[];
+    return {
+      anyOf: options.map((opt) => _convert(opt)),
+      description,
+    };
+  }
+
+  if (processed instanceof z.ZodRecord) {
+    return {
+      type: 'object',
+      description: description || 'Record of key-value pairs',
+      properties: {},
+    };
+  }
+
+  if (processed instanceof z.ZodLiteral) {
+    const value = def(processed).values?.[0];
+    if (typeof value === 'string') return { type: 'string', description, enum: [value] };
+    if (typeof value === 'number') return { type: 'number', description, minimum: value, maximum: value };
+    if (typeof value === 'boolean') return { type: 'boolean', description };
+    return { type: 'string', description };
+  }
+
+  if (processed instanceof z.ZodAny) {
+    return { type: 'string', description: description || 'any value' };
   }
 
   return { type: 'string', description: description || '' };

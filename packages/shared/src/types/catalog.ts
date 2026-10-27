@@ -187,7 +187,7 @@ export const catalogEntrySchema = z
     /** История версий записи. */
     versions: z.array(catalogVersionSchema).default([]),
     /** Источник-специфичные поля (рейтинги, даты, автор). */
-    extra: z.record(z.string(), z.unknown()).default({}),
+    extra: z.record(z.string(), z.unknown()).prefault({}),
   })
   .superRefine(refinePackType);
 export type CatalogEntry = z.infer<typeof catalogEntrySchema>;

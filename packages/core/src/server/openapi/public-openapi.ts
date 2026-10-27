@@ -17,17 +17,19 @@
  * Единый формат ошибок — `publicErrorSchema` (`{error:{code,message}}`).
  *
  * **Именование схем.** Модели `components.schemas` получают имена через
- * `.openapi('Name')`. По данным `@asteasolutions/zod-to-openapi@7` (используется
- * `@hono/zod-openapi@0.19.x`) вызов `.openapi()` возвращает **новую** инстанцию
+ * `.openapi('Name')`. По данным `@asteasolutions/zod-to-openapi@9` (используется
+ * `@hono/zod-openapi@1.x`) вызов `.openapi()` возвращает **новую** инстанцию
  * схемы и не мутирует исходную, поэтому обернуть shared-схему в именованную модель
  * безопасно: экспортируемый из `@itphx/synth-shared` объект остаётся неизменным,
  * а именованный алиас локально переиспользуется в `createRoute`.
  *
  * Сгенерированный документ отдаётся ручкой `GET /api/v2/openapi.json` (за `requireAuth`).
  */
+import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import {
   SYNTH_VERSION,
+  sharedZod,
   eventBindingApiKeyCreateSchema,
   eventBindingApiKeyCreatedSchema,
   eventBindingApiKeySchema,
@@ -45,6 +47,32 @@ import {
   sessionUpdateSchema,
   synthEventSchema,
 } from '@itphx/synth-shared';
+
+/**
+ * zod 4: `.openapi()` навешивается `extendZodWithOpenApi` на прототип
+ * **конкретного** экземпляра zod (не глобально). `@hono/zod-openapi` расширяет
+ * свой экземпляр, а схемы `@itphx/synth-shared` построены экземпляром shared
+ * (`sharedZod`) — в тест-графе (часть модулей идёт через Vite, часть через Node)
+ * это разные экземпляры, и shared-схемы оставались без метода. Поэтому
+ * расширяем явно тот экземпляр, которым созданы схемы. Повторный вызов
+ * безопасен: внутри есть guard по `ZodType.prototype.openapi`.
+ */
+extendZodWithOpenApi(sharedZod);
+
+/**
+ * Пересоздать инстанцию shared-схемы перед `.openapi()`.
+ *
+ * В zod 4 методы схемы устанавливаются **в собственные свойства инстанса** при
+ * его создании (`$constructor` копирует члены трейтов), а не наследуются по
+ * прототипу. Shared-схемы создаются при импорте `@itphx/synth-shared` — раньше,
+ * чем здесь вызывается `extendZodWithOpenApi`, поэтому на исходных инстансах
+ * `.openapi()` отсутствует. `clone()` создаёт инстанцию из того же определения
+ * (`_zod.def`) уже с расширенным набором методов; исходный экспорт shared при
+ * этом не мутируется.
+ */
+function reopened<T extends z.ZodTypeAny>(schema: T): T {
+  return schema.clone();
+}
 
 // --- Единый формат ошибок публичных роутов ---
 
@@ -94,41 +122,41 @@ const BEARER_SECURITY: Array<Record<string, string[]>> = [{ bearerAuth: [] }];
 
 // --- Именованные модели на базе shared-схем ---
 
-const SynthEvent = synthEventSchema.openapi('SynthEvent', {
+const SynthEvent = reopened(synthEventSchema).openapi('SynthEvent', {
   description: 'Нормализованное внешнее событие (ADR-089).',
 });
-const EventBinding = eventBindingSchema.openapi('EventBinding', {
+const EventBinding = reopened(eventBindingSchema).openapi('EventBinding', {
   description: 'Устойчивая привязка внешнего адреса (source/chat/thread) к сессии или шаблону.',
 });
-const EventBindingInput = eventBindingInputSchema.openapi('EventBindingInput', {
+const EventBindingInput = reopened(eventBindingInputSchema).openapi('EventBindingInput', {
   description: 'Вход upsert-привязки (без `id`).',
 });
-const EventBindingApiKey = eventBindingApiKeySchema.openapi('EventBindingApiKey', {
+const EventBindingApiKey = reopened(eventBindingApiKeySchema).openapi('EventBindingApiKey', {
   description: 'Метаданные API-ключа привязки (без секрета и хеша).',
 });
-const EventBindingApiKeyCreate = eventBindingApiKeyCreateSchema.openapi('EventBindingApiKeyCreate', {
+const EventBindingApiKeyCreate = reopened(eventBindingApiKeyCreateSchema).openapi('EventBindingApiKeyCreate', {
   description: 'Тело создания API-ключа привязки.',
 });
-const EventBindingApiKeyUpdate = eventBindingApiKeyUpdateSchema.openapi('EventBindingApiKeyUpdate', {
+const EventBindingApiKeyUpdate = reopened(eventBindingApiKeyUpdateSchema).openapi('EventBindingApiKeyUpdate', {
   description: 'Тело обновления API-ключа привязки (`null` — сброс поля).',
 });
-const EventBindingApiKeyCreated = eventBindingApiKeyCreatedSchema.openapi('EventBindingApiKeyCreated', {
+const EventBindingApiKeyCreated = reopened(eventBindingApiKeyCreatedSchema).openapi('EventBindingApiKeyCreated', {
   description: 'Созданный API-ключ: метаданные + plaintext-секрет (показывается один раз).',
 });
-const EventIngest = eventIngestSchema.openapi('EventIngest', {
+const EventIngest = reopened(eventIngestSchema).openapi('EventIngest', {
   description:
     'Тело приёма внешнего события. Для пути по API-ключу привязки `source` опционален и берётся из привязки.',
 });
-const EventRouteRule = eventRouteRuleSchema.openapi('EventRouteRule', {
+const EventRouteRule = reopened(eventRouteRuleSchema).openapi('EventRouteRule', {
   description: 'Правило маршрутизации событий «событие → сессия» (ADR-089).',
 });
-const EventRouteRuleUpsert = eventRouteRuleUpsertSchema.openapi('EventRouteRuleUpsert', {
+const EventRouteRuleUpsert = reopened(eventRouteRuleUpsertSchema).openapi('EventRouteRuleUpsert', {
   description: 'Вход upsert-правила маршрутизации (необязательный `id` — обновление).',
 });
-const SessionCreate = sessionCreateSchema.openapi('SessionCreate', {
+const SessionCreate = reopened(sessionCreateSchema).openapi('SessionCreate', {
   description: 'Тело создания сессии.',
 });
-const SessionPatch = sessionUpdateSchema
+const SessionPatch = reopened(sessionUpdateSchema)
   .extend({
     title: z.string().min(1).max(200).optional(),
     mode: z.enum(['plan', 'act', 'yolo']).optional(),
@@ -137,16 +165,16 @@ const SessionPatch = sessionUpdateSchema
   .openapi('SessionPatch', {
     description: 'Тело обновления сессии (частичное).',
   });
-const ScheduleInput = scheduleInputSchema.openapi('ScheduleInput', {
+const ScheduleInput = reopened(scheduleInputSchema).openapi('ScheduleInput', {
   description: 'Тело создания/обновления расписания (ровно одно из `cron`/`every`).',
 });
-const Schedule = scheduleSchema.openapi('Schedule', {
+const Schedule = reopened(scheduleSchema).openapi('Schedule', {
   description: 'Сущность расписания планировщика (ADR-051).',
 });
-const ScheduleJob = scheduleJobSchema.openapi('ScheduleJob', {
+const ScheduleJob = reopened(scheduleJobSchema).openapi('ScheduleJob', {
   description: 'Запись Job-истории срабатывания расписания (ADR-051).',
 });
-const SessionPrompt = promptRequestSchema.openapi('SessionPrompt', {
+const SessionPrompt = reopened(promptRequestSchema).openapi('SessionPrompt', {
   description: 'Тело отправки сообщения в сессию (очередь + SSE-поток хода).',
 });
 
@@ -252,7 +280,7 @@ const ScheduleJobListResponse = z
 const ChatMessage = z.object({
   role: z.string().min(1),
   content: z.string().nullable(),
-  tool_calls: z.array(z.record(z.unknown())).optional(),
+  tool_calls: z.array(z.record(z.string(), z.unknown())).optional(),
   tool_call_id: z.string().optional(),
   reasoning_content: z.string().optional(),
   name: z.string().optional(),
@@ -267,7 +295,7 @@ const ChatCompletionsRequest = z
     top_p: z.number().optional(),
     stream: z.boolean().optional(),
     stream_options: z.object({ include_usage: z.boolean().optional() }).optional(),
-    tools: z.array(z.record(z.unknown())).optional(),
+    tools: z.array(z.record(z.string(), z.unknown())).optional(),
     session_id: z.string().optional(),
     provider: z.string().optional(),
   })
@@ -285,7 +313,7 @@ const ChatCompletionsResponse = z
         message: z.object({
           role: z.string(),
           content: z.string().nullable(),
-          tool_calls: z.array(z.record(z.unknown())).optional(),
+          tool_calls: z.array(z.record(z.string(), z.unknown())).optional(),
           reasoning_content: z.string().optional(),
         }),
         finish_reason: z.string().nullable(),

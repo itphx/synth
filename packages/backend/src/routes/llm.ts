@@ -47,7 +47,7 @@ import type {
 const chatMessageSchema = z.object({
   role: z.string().min(1),
   content: z.string().nullable(),
-  tool_calls: z.array(z.record(z.unknown())).optional(),
+  tool_calls: z.array(z.record(z.string(), z.unknown())).optional(),
   tool_call_id: z.string().optional(),
   reasoning_content: z.string().optional(),
   name: z.string().optional(),
@@ -66,7 +66,7 @@ const chatCompletionsSchema = z.object({
   // OpenAIProvider всегда шлёт stream_options.include_usage, но поле принимаем
   // явно, чтобы Zod его не срезал (контракт запроса).
   stream_options: z.object({ include_usage: z.boolean().optional() }).optional(),
-  tools: z.array(z.record(z.unknown())).optional(),
+  tools: z.array(z.record(z.string(), z.unknown())).optional(),
   session_id: z.string().optional(),
   // Имя серверного провайдера (шлют remote-зеркала RemoteProvider в гибриде).
   // Опционально — старые клиенты без поля работают как раньше (резолв по модели).

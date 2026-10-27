@@ -607,7 +607,7 @@ export const packProvidesSchema = z
     tools: packToolsProvideSchema.default([]),
     promptBlocks: z.array(packPromptBlockProvideSchema).default([]),
     llmFilters: z.array(packLlmFilterProvideSchema).default([]),
-    authority: packAuthorityProvidesSchema.default({}),
+    authority: packAuthorityProvidesSchema.prefault({}),
   })
   .passthrough();
 export type PackProvides = z.infer<typeof packProvidesSchema>;

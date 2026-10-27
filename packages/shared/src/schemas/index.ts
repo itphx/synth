@@ -17,6 +17,16 @@ import {
 import type { GitRepoConfig, ProjectIconKey, ProjectColorKey, SessionParticipantRole } from '../types/index.js';
 import { ToolCapability } from '../types/tools.js';
 
+/**
+ * Экземпляр zod, которым построены **все** схемы этого пакета.
+ *
+ * В zod 4 `extendZodWithOpenApi` навешивает `.openapi()` на прототип
+ * **конкретного** экземпляра модуля (а не глобально). Потребителю, который
+ * расширяет zod (публичный OpenAPI в core), нужно расширять ровно тот экземпляр,
+ * которым созданы shared-схемы, — иначе у них не будет `.openapi()`.
+ */
+export { z as sharedZod };
+
 export const messageRoleSchema = z.nativeEnum(MessageRole);
 export const globalRoleSchema = z.nativeEnum(GlobalRole);
 export const projectRoleSchema = z.nativeEnum(ProjectRole);
@@ -66,6 +76,42 @@ export const tokenUsageSchema = z.object({
   outputTokens: z.number().int().min(0),
   totalTokens: z.number().int().min(0),
 });
+
+/**
+ * Снять у поля патча дефолт (`ZodDefault`/`ZodPrefault`), сохранив валидацию.
+ *
+ * zod 4 подставляет дефолт даже под `.optional()` (дефолт делает вход
+ * опциональным и применяется к `undefined`), поэтому «снять» его можно только
+ * развернув обёртку (`unwrap` есть у обоих типов). Пустое значение без обёртки —
+ * как есть.
+ */
+function withoutDefault(field: z.ZodTypeAny): z.ZodTypeAny {
+  const type = (field as unknown as { _zod?: { def?: { type?: string } } })._zod?.def?.type;
+  if (type !== 'default' && type !== 'prefault') return field;
+  const unwrap = (field as unknown as { unwrap?: () => z.ZodTypeAny }).unwrap;
+  return typeof unwrap === 'function' ? withoutDefault(unwrap.call(field)) : field;
+}
+
+/**
+ * Патч-схема объекта: как `.partial()`, но **без дефолтов**.
+ *
+ * Для PATCH отсутствующий ключ означает «не менять», а `.partial()` в zod 4
+ * протекает дефолтами: `pluginsConfigSchema.partial().parse({})` возвращает
+ * объект со всеми значениями по умолчанию, и частичный патч затирает чужие
+ * настройки. Поэтому поля берутся из `shape`, у каждого снимается дефолт и
+ * навешивается `.optional()`. Набор ключей и правила валидации остаются из
+ * исходной схемы (единственный источник правды). `.strict()` вызывается
+ * потребителем, если нужен отказ на неизвестный ключ.
+ */
+export function patchObjectSchema<S extends z.ZodRawShape>(
+  schema: z.ZodObject<S>,
+): z.ZodObject<{ [K in keyof S]: z.ZodOptional<S[K]> }> {
+  const patchShape: Record<string, z.ZodTypeAny> = {};
+  for (const [key, field] of Object.entries(schema.shape)) {
+    patchShape[key] = withoutDefault(field as z.ZodTypeAny).optional();
+  }
+  return z.object(patchShape) as unknown as z.ZodObject<{ [K in keyof S]: z.ZodOptional<S[K]> }>;
+}
 
 export const sessionSettingsSchema = z.object({
   provider: z.string().optional(),
@@ -120,7 +166,9 @@ export const sessionUpdateSchema = z.object({
   // passthrough: настройки сессии содержат поля вне sessionSettingsSchema
   // (mcpServers, routing*, microFirst, embedding*, permission, mcpToolSettings, llmGateway),
   // их нельзя терять при PATCH — известные поля валидируются, неизвестные пропускаются.
-  settings: sessionSettingsSchema.partial().passthrough().optional(),
+  // `patchObjectSchema` (а не `.partial()`): отсутствующий ключ не должен получать
+  // дефолт из схемы — иначе PATCH сбрасывает настройки, которые не передавали.
+  settings: patchObjectSchema(sessionSettingsSchema).passthrough().optional(),
 });
 
 /**
@@ -593,7 +641,7 @@ export const synthEventSchema = z.object({
   source: z.string().min(1),
   type: z.string().min(1),
   payload: z.unknown(),
-  identity: eventIdentitySchema.default({}),
+  identity: eventIdentitySchema.prefault({}),
   dedupKey: z.string().min(1),
   ts: z.string().min(1),
 });
@@ -1001,7 +1049,7 @@ export const scheduleInputSchema = z
     every: z.string().optional(),
     target: scheduleTargetSchema,
     prompt: z.string().optional(),
-    payload: z.record(z.unknown()).optional(),
+    payload: z.record(z.string(), z.unknown()).optional(),
     ownerId: z.string().optional(),
     catchUp: z.enum(['skip', 'once']).optional(),
   })
@@ -1017,7 +1065,7 @@ export const scheduleSchema = z
     every: z.string().optional(),
     target: scheduleTargetSchema,
     prompt: z.string().optional(),
-    payload: z.record(z.unknown()).optional(),
+    payload: z.record(z.string(), z.unknown()).optional(),
     ownerId: z.string().optional(),
     catchUp: z.enum(['skip', 'once']).optional(),
     createdAt: z.string().min(1),
@@ -1069,7 +1117,7 @@ export const analyticsDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 export const analyticsRollupBucketSchema = z.object({
   family: analyticsFamilySchema,
   day: analyticsDaySchema,
-  dimensions: z.record(z.string(), z.string()).default({}),
+  dimensions: z.record(z.string(), z.string()).prefault({}),
   measures: z.record(z.string(), z.number()),
   costByCurrency: z.record(z.string(), z.number()).optional(),
 });
@@ -1091,7 +1139,7 @@ export type AnalyticsRollupQueryInput = z.infer<typeof analyticsRollupQuerySchem
  * дериваты `ANALYTICS_DERIVED_MEASURES`). `costByCurrency` опускается, если пусто.
  */
 export const analyticsReportRowSchema = z.object({
-  dimensions: z.record(z.string(), z.string()).default({}),
+  dimensions: z.record(z.string(), z.string()).prefault({}),
   measures: z.record(z.string(), z.number()),
   costByCurrency: z.record(z.string(), z.number()).optional(),
 });

@@ -71,6 +71,7 @@ import {
   catalogTrustLevelSchema,
   generateId,
   isKnownScope,
+  patchObjectSchema,
   pluginsConfigSchema,
   PLUGIN_INVOKE_SCOPE,
 } from '@itphx/synth-shared';
@@ -978,12 +979,14 @@ const DEFAULT_INVALID_SETTINGS = 'plugins: некорректные runtime-на
 /**
  * Схема тела `PUT /api/v2/settings/plugins`: частичный патч секции `plugins`.
  *
- * Строится из `pluginsConfigSchema` (shared) через `.partial()` — набор ключей
- * и правила значений не дублируются; `.strict()` — неизвестный ключ это 400
- * (опечатка в имени политики не должна «тихо» игнорироваться: админ решил бы,
- * что ограничение включено).
+ * Строится из `pluginsConfigSchema` (shared) через `patchObjectSchema` — набор
+ * ключей и правила значений не дублируются, а дефолты в патч не протекают
+ * (`.partial()` в zod 4 заполняет отсутствующие ключи значениями по умолчанию,
+ * из-за чего частичный патч затирал чужие настройки); `.strict()` — неизвестный
+ * ключ это 400 (опечатка в имени политики не должна «тихо» игнорироваться:
+ * админ решил бы, что ограничение включено).
  */
-export const pluginsSettingsPatchSchema = pluginsConfigSchema.partial().strict();
+export const pluginsSettingsPatchSchema = patchObjectSchema(pluginsConfigSchema).strict();
 
 /** Снимок настроек слоя плагинов (ответ GET/PUT/DELETE). */
 interface PluginsSettingsView {

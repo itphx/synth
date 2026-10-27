@@ -60,7 +60,7 @@ function codeToStatus(code: string): number {
 function toRouteError(err: unknown): RouteError {
   if (err instanceof ZodError) {
     return {
-      error: err.errors.map((e) => e.message).join('; ') || 'Некорректное тело запроса',
+      error: err.issues.map((e) => e.message).join('; ') || 'Некорректное тело запроса',
       code: 'VALIDATION_ERROR',
     };
   }

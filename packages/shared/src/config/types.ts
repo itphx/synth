@@ -87,7 +87,7 @@ export const storageConfigSchema = z.object({
    */
   backend: z.enum(['file', 'memory', 'postgres']).optional(),
   /** ADR-097: параметры PostgreSQL-backend (используются при `backend: postgres`). */
-  postgres: postgresStorageConfigSchema.default({}),
+  postgres: postgresStorageConfigSchema.prefault({}),
   /**
    * ADR-098 (волна 5): поведение при недоступности выбранного backend —
    * `fallback-file` (перейти на файловое хранилище в `fallbackDir`, default) |
@@ -180,7 +180,7 @@ export const executionRemoteConfigSchema = z.object({
 /** ADR-077: секция `execution` — топология исполнения (параметр запуска). */
 export const executionConfigSchema = z.object({
   mode: z.enum(EXECUTION_MODES).default('inline'),
-  remote: executionRemoteConfigSchema.default({}),
+  remote: executionRemoteConfigSchema.prefault({}),
 });
 
 export const authConfigSchema = z.object({
@@ -231,7 +231,7 @@ export const runnerConfigSchema = z.object({
     opencode: z.number().int().default(4100),
     cline: z.number().int().default(4200),
     synth: z.number().int().default(4300),
-  }).default({}),
+  }).prefault({}),
   proxyPort: z.number().int().min(1).max(65535).default(9090),
 });
 
@@ -249,7 +249,7 @@ export const i18nConfigSchema = z.object({
 });
 
 export const loggingConfigSchema = z.object({
-  groups: z.record(z.string(), z.string()).default({}),
+  groups: z.record(z.string(), z.string()).prefault({}),
 });
 
 export const tsmConfigSchema = z.object({
@@ -329,8 +329,8 @@ export const mcpNetworkPolicySchema = z.object({
 });
 
 export const mcpConfigSchema = z.object({
-  servers: z.record(z.string(), mcpServerConfigSchema).default({}),
-  networkPolicy: mcpNetworkPolicySchema.default({}),
+  servers: z.record(z.string(), mcpServerConfigSchema).prefault({}),
+  networkPolicy: mcpNetworkPolicySchema.prefault({}),
   /**
    * ADR-071 §2.3: глобальная админская политика включения **MCP**-инструментов.
    * Независима от `tools.policy` (только встроенные). Per-session override —
@@ -356,7 +356,7 @@ export const toolsDisabledConfigSchema = createToolsDisabledSchema(false);
 export const toolsConfigSchema = z.object({
   policy: z.enum(TOOLS_POLICIES).default('auto'),
   /** ADR-071 §2.6: instance-wide отключение инструментов (admin). */
-  disabled: toolsDisabledConfigSchema.default({}),
+  disabled: toolsDisabledConfigSchema.prefault({}),
 });
 
 // --- Скиллы (ADR-046) ---
@@ -386,7 +386,7 @@ export const skillsConfigSchema = z.object({
    * для экспансии `metadata.synth.requires_toolsets` в проверку доступности
    * скилла (union с `requires_capabilities`).
    */
-  toolsets: z.record(z.string(), z.array(z.enum(toolCapabilityValues))).default({}),
+  toolsets: z.record(z.string(), z.array(z.enum(toolCapabilityValues))).prefault({}),
 });
 
 // --- Slash-команды (ADR-046 §7) ---
@@ -404,7 +404,7 @@ export const commandsConfigSchema = z.object({
       mode: z.enum(COMMAND_CONFLICT_MODES).default('bundle-wins'),
       namespacePrefix: z.boolean().default(false),
     })
-    .default({}),
+    .prefault({}),
   maxArgumentsLength: z.number().int().min(1).default(10_000),
   maxRenderedBytes: z.number().int().min(1).default(200_000),
 });
@@ -486,7 +486,7 @@ export const eventsConfigSchema = z.object({
    * владелец не переопределяется (аутентифицированный пользователь запроса,
    * `identity.principalId` или `resolveOwnerId`).
    */
-  identityMap: z.record(z.string(), z.string()).default({}),
+  identityMap: z.record(z.string(), z.string()).prefault({}),
 });
 
 // --- Планировщик расписаний (ADR-051 срез / ADR-089) ---
@@ -583,7 +583,7 @@ export const oauthProvidersSchema = z.record(z.string().min(1), oauthProviderCon
  * провайдера нечем (refresh вернёт понятную ошибку).
  */
 export const oauthConfigSchema = z.object({
-  providers: oauthProvidersSchema.default({}),
+  providers: oauthProvidersSchema.prefault({}),
 });
 
 // --- Аналитика и отчётность (ADR-102) ---
@@ -846,7 +846,7 @@ export const pluginsConfigSchema = z.object({
    * отвергает server-scoped токен плагина, чей `plugin_id` вне списка
    * (Уровень 2, server-scoped токены).
    */
-  hybrid: pluginsHybridConfigSchema.default({}),
+  hybrid: pluginsHybridConfigSchema.prefault({}),
 });
 
 // --- Egress-политика (shared формат tools/webhooks/MCP) ---
@@ -876,9 +876,9 @@ export const egressLogConfigSchema = z.object({
  * использует тот же формат (mode `deny|allow` + `exceptions`).
  */
 export const egressConfigSchema = z.object({
-  tools: egressPolicySchema.default({}),
-  webhooks: webhooksEgressPolicySchema.default({}),
-  log: egressLogConfigSchema.default({}),
+  tools: egressPolicySchema.prefault({}),
+  webhooks: webhooksEgressPolicySchema.prefault({}),
+  log: egressLogConfigSchema.prefault({}),
 });
 
 // --- Проектные инструкции (ADR-069) ---
@@ -943,8 +943,8 @@ export const instructionsConfigSchema = z.object({
   minChars: z.number().int().min(1).default(20_000),
   /** Верхняя граница динамического капа (ceiling). */
   maxCharsCeiling: z.number().int().min(1).default(500_000),
-  lazy: instructionsLazyConfigSchema.default({}),
-  fetch: instructionsFetchConfigSchema.default({}),
+  lazy: instructionsLazyConfigSchema.prefault({}),
+  fetch: instructionsFetchConfigSchema.prefault({}),
   sources: z.array(instructionSourceConfigSchema).default([]),
   /** Проекты (id), где автозагрузка выключена. */
   excludeProjects: z.array(z.string()).default([]),
@@ -1012,8 +1012,8 @@ export const securityTlsConfigSchema = z.object({
 });
 
 export const securityConfigSchema = z.object({
-  promptInjection: promptInjectionConfigSchema.default({}),
-  protectedPaths: protectedPathsConfigSchema.default({}),
+  promptInjection: promptInjectionConfigSchema.prefault({}),
+  protectedPaths: protectedPathsConfigSchema.prefault({}),
   /** ADR-099: единый механизм доверия TLS/CA для исходящих соединений. */
   tls: securityTlsConfigSchema.optional(),
   /**
@@ -1171,8 +1171,8 @@ export const llmGatewayConfigSchema = z.object({
   logPayloads: z.boolean().default(false),
   /** Путь к JSONL полного лога; по умолчанию {dataDir}/audit/llm-payloads.jsonl. */
   payloadLogPath: z.string().default(''),
-  rateLimit: llmGatewayRateLimitConfigSchema.default({}),
-  audit: llmGatewayAuditConfigSchema.default({}),
+  rateLimit: llmGatewayRateLimitConfigSchema.prefault({}),
+  audit: llmGatewayAuditConfigSchema.prefault({}),
 });
 
 // --- Router (ADR-034) ---
@@ -1181,15 +1181,15 @@ export const routerContentConfigSchema = z.object({
   coding: z.object({
     provider: z.string().default(''),
     model: z.string().default(''),
-  }).default({}),
+  }).prefault({}),
   chat: z.object({
     provider: z.string().default(''),
     model: z.string().default(''),
-  }).default({}),
+  }).prefault({}),
   research: z.object({
     provider: z.string().default(''),
     model: z.string().default(''),
-  }).default({}),
+  }).prefault({}),
 });
 
 export const routerEscalationConfigSchema = z.object({
@@ -1233,10 +1233,10 @@ export const microFirstConfigSchema = z.object({
 export const routerConfigSchema = z.object({
   enabled: z.boolean().default(true),
   strategy: z.enum(['content', 'cost', 'content+cost', 'auto']).default('auto'),
-  content: routerContentConfigSchema.default({}),
-  escalation: routerEscalationConfigSchema.default({}),
-  cost: routerCostConfigSchema.default({}),
-  subagent: routerSubagentConfigSchema.default({}),
+  content: routerContentConfigSchema.prefault({}),
+  escalation: routerEscalationConfigSchema.prefault({}),
+  cost: routerCostConfigSchema.prefault({}),
+  subagent: routerSubagentConfigSchema.prefault({}),
 });
 
 // --- Remote (гибридный режим) ---
@@ -1255,7 +1255,7 @@ export const remoteConfigSchema = z.object({
       /** OIDC client_id (public client). Для device flow. */
       clientId: z.string().default(''),
     })
-    .default({}),
+    .prefault({}),
   /** Куда идут LLM-запросы локальных сессий: server (централизация) | local. По умолчанию server. */
   llm: z.enum(['server', 'local']).default('server'),
   worlds: z
@@ -1263,52 +1263,52 @@ export const remoteConfigSchema = z.object({
       local: z.boolean().default(true),
       remote: z.boolean().default(true),
     })
-    .default({}),
+    .prefault({}),
   /** Путь к файлу credentials (пусто → ~/.config/synth/credentials.json). */
   credentialsPath: z.string().default(''),
   timeoutMs: z.number().int().min(1).default(15000),
 });
 
 export const synthConfigSchema = z.object({
-  server: serverConfigSchema.default({}),
-  storage: storageConfigSchema.default({}),
-  execution: executionConfigSchema.default({}),
-  auth: authConfigSchema.default({}),
-  llm: llmConfigSchema.default({}),
-  core: coreConfigSchema.default({}),
-  runner: runnerConfigSchema.default({}),
-  ui: uiConfigSchema.default({}),
-  i18n: i18nConfigSchema.default({}),
-  logging: loggingConfigSchema.default({}),
-  tsm: tsmConfigSchema.default({}),
-  session: sessionConfigSchema.default({}),
-  context: contextConfigSchema.default({}),
-  summarization: summarizationConfigSchema.default({}),
-  mcp: mcpConfigSchema.default({}),
-  tools: toolsConfigSchema.default({}),
-  skills: skillsConfigSchema.default({}),
-  commands: commandsConfigSchema.default({}),
-  events: eventsConfigSchema.default({}),
-  scheduler: schedulerConfigSchema.default({}),
-  decision: decisionConfigSchema.default({}),
-  oauth: oauthConfigSchema.default({}),
-  analytics: analyticsConfigSchema.default({}),
-  questions: questionsConfigSchema.default({}),
-  background: backgroundConfigSchema.default({}),
-  attachments: attachmentsConfigSchema.default({}),
-  metrics: metricsConfigSchema.default({}),
-  authority: authorityConfigSchema.default({}),
-  plugins: pluginsConfigSchema.default({}),
-  egress: egressConfigSchema.default({}),
-  webhooks: webhooksConfigSchema.default({}),
-  instructions: instructionsConfigSchema.default({}),
-  router: routerConfigSchema.default({}),
-  proxy: proxyConfigSchema.default({}),
-  remote: remoteConfigSchema.default({}),
-  microFirst: microFirstConfigSchema.default({}),
-  llmGateway: llmGatewayConfigSchema.default({}),
-  permission: permissionConfigSchema.default({}),
-  security: securityConfigSchema.default({}),
+  server: serverConfigSchema.prefault({}),
+  storage: storageConfigSchema.prefault({}),
+  execution: executionConfigSchema.prefault({}),
+  auth: authConfigSchema.prefault({}),
+  llm: llmConfigSchema.prefault({}),
+  core: coreConfigSchema.prefault({}),
+  runner: runnerConfigSchema.prefault({}),
+  ui: uiConfigSchema.prefault({}),
+  i18n: i18nConfigSchema.prefault({}),
+  logging: loggingConfigSchema.prefault({}),
+  tsm: tsmConfigSchema.prefault({}),
+  session: sessionConfigSchema.prefault({}),
+  context: contextConfigSchema.prefault({}),
+  summarization: summarizationConfigSchema.prefault({}),
+  mcp: mcpConfigSchema.prefault({}),
+  tools: toolsConfigSchema.prefault({}),
+  skills: skillsConfigSchema.prefault({}),
+  commands: commandsConfigSchema.prefault({}),
+  events: eventsConfigSchema.prefault({}),
+  scheduler: schedulerConfigSchema.prefault({}),
+  decision: decisionConfigSchema.prefault({}),
+  oauth: oauthConfigSchema.prefault({}),
+  analytics: analyticsConfigSchema.prefault({}),
+  questions: questionsConfigSchema.prefault({}),
+  background: backgroundConfigSchema.prefault({}),
+  attachments: attachmentsConfigSchema.prefault({}),
+  metrics: metricsConfigSchema.prefault({}),
+  authority: authorityConfigSchema.prefault({}),
+  plugins: pluginsConfigSchema.prefault({}),
+  egress: egressConfigSchema.prefault({}),
+  webhooks: webhooksConfigSchema.prefault({}),
+  instructions: instructionsConfigSchema.prefault({}),
+  router: routerConfigSchema.prefault({}),
+  proxy: proxyConfigSchema.prefault({}),
+  remote: remoteConfigSchema.prefault({}),
+  microFirst: microFirstConfigSchema.prefault({}),
+  llmGateway: llmGatewayConfigSchema.prefault({}),
+  permission: permissionConfigSchema.prefault({}),
+  security: securityConfigSchema.prefault({}),
 });
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>;

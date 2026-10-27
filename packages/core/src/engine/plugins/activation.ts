@@ -452,7 +452,7 @@ export interface PluginToolDefinition {
   /** Описание для модели. */
   description: string;
   /** Параметры (zod-схема) — как у встроенных тулов. */
-  parameters: z.ZodTypeAny;
+  parameters: z.ZodTypeAny<any>;
   /** Capabilities тула (обязательны; `mcp` зарезервирована). */
   capabilities: ToolCapability[];
   /** Исполнитель. Получает те же `params`/`ctx`, что и встроенные тулы. */
