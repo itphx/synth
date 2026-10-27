@@ -33,12 +33,16 @@
  *   - `buildLegacyPipelinePorts(deps)` → `pipelines` (ADR-051/ADR-100 — реестр
  *     определений и экземпляров инстанса; таблицы `pipeline_definitions`/
  *     `pipeline_instances`). Не путать с `buildPipelinePorts` (ADR-101).
+ *   - `buildSkillPorts(deps, blobs)` → `skills` (ADR-046 §4 / ADR-116 —
+ *     метаданные в таблице `instance_skills`, содержимое — в blob-сторе
+ *     `skills/<name>/…`).
  *
- * Все доменные порты реализованы поверх SQL; FS/package-bound порты (`skills`,
- * `contextFiles`, `blobs`) — **файловые реализации** core (контент скиллов/
- * prompts-ролей и blob-дерево остаются на диске; ADR-091/ADR-092: ФС-периметр
- * вне портов). `packs` и legacy `pipelines` — **SQL** (ADR-116): таблицы
- * `pack_installations`/`pipeline_definitions`/`pipeline_instances`, миграция 025.
+ * Все доменные порты реализованы поверх SQL; FS/package-bound порты
+ * (`contextFiles`, `blobs`) — **файловые реализации** core (контент промптов/
+ * ролей и blob-дерево остаются на диске; ADR-091/ADR-092: ФС-периметр вне
+ * портов). `packs`, legacy `pipelines` и `skills` — **SQL** (ADR-116): таблицы
+ * `pack_installations`/`pipeline_definitions`/`pipeline_instances` (миграция 025)
+ * и `instance_skills` (миграция 026; содержимое скиллов — в blob-сторе).
  *
  * Осознанное исключение: драйвер в этой части **импортирует core рантаймом**
  * (`createFileStorage`), чтобы переиспользовать уже проверенные файловые
@@ -69,6 +73,9 @@ import { buildPipelinePorts } from './ports/pipelines.js';
 // (ADR-051/ADR-100) переведены в SQL (миграция `025_packs_pipelines`).
 import { buildPackPorts } from './ports/packs.js';
 import { buildLegacyPipelinePorts } from './ports/legacy-pipelines.js';
+// ADR-116: instance-скиллы — метаданные в SQL (`instance_skills`, миграция 026),
+// содержимое — в blob-сторе (`skills/<name>/…`).
+import { buildSkillPorts } from './ports/skills.js';
 import { buildQuestionPorts } from './ports/questions.js';
 import { buildBackgroundRunPorts } from './ports/background-runs.js';
 import { buildWorktreePorts } from './ports/worktrees.js';
@@ -218,9 +225,11 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // `blob_refs` (миграция 024). Байты объектов остаются на томе (`blobs`).
     ...buildBlobRefPorts(deps),
     // FS/package-bound порты: остаются файловыми (см. шапку модуля).
-    skills: file.skills,
     contextFiles: file.contextFiles,
     blobs: file.blobs,
+    // ADR-116: instance-скиллы — метаданные в SQL (`instance_skills`,
+    // миграция 026), содержимое — в том же blob-сторе (`skills/<name>/…`).
+    ...buildSkillPorts(deps, file.blobs),
     // ADR-116: реестр установок пакетов (ADR-086 §5) и legacy-пайплайны
     // (ADR-051/ADR-100) — SQL-реализации (таблицы `pack_installations` /
     // `pipeline_definitions` / `pipeline_instances`, миграция 025). До ADR-116

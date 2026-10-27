@@ -34,6 +34,7 @@ import { MIGRATION_022_BACKGROUND_RUN_PROCESS_ID } from './022-background-run-pr
 import { MIGRATION_023_SESSION_WORKTREE } from './023-session-worktree.js';
 import { MIGRATION_024_BLOB_REFS } from './024-blob-refs.js';
 import { MIGRATION_025_PACKS_PIPELINES } from './025-packs-pipelines.js';
+import { MIGRATION_026_INSTANCE_SKILLS } from './026-instance-skills.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -72,6 +73,7 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 23, id: '023_session_worktree', sql: MIGRATION_023_SESSION_WORKTREE },
   { version: 24, id: '024_blob_refs', sql: MIGRATION_024_BLOB_REFS },
   { version: 25, id: '025_packs_pipelines', sql: MIGRATION_025_PACKS_PIPELINES },
+  { version: 26, id: '026_instance_skills', sql: MIGRATION_026_INSTANCE_SKILLS },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

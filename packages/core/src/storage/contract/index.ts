@@ -50,7 +50,8 @@ export { describeExternalCredentialRepository } from './external-credential-repo
 export { describeCredentialAuditRepository } from './credential-audit-repository.contract.js';
 
 export { describeMcpRegistryRepository } from './content.js';
-export { describeSkillRepository } from './content.js';
+// ADR-116: порт скиллов больше не отдаёт файловых путей (listFiles вместо root).
+export { describeSkillRepository } from './skill-repository.contract.js';
 export { describeSkillBundleRepository } from './content.js';
 export { describeDictionaryRepository } from './content.js';
 export { describeDocumentRepository } from './content.js';

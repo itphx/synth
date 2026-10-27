@@ -9,9 +9,9 @@ import { refreshRemoteCatalogs } from './remote.js';
 import { SkillRegistry } from './registry.js';
 import { buildSkillCatalog, toSkillSummary, type ComposerSkillsCatalog } from './catalog.js';
 import {
-  collectSupportingFiles,
+  listSupportingFiles,
   loadSkill,
-  readSupportingFile as readSkillSupportingFile,
+  readSkillSupportingFile,
 } from './loader.js';
 import { resolveSkillRule } from '../permission/evaluator.js';
 import { missingCapabilities } from './scope.js';
@@ -79,6 +79,9 @@ export class SkillService {
         urls: opts.urls,
         skillsCacheDir: this._cacheDir,
         trustedProjectDirs: opts.trustedProjectDirs,
+        // ADR-116: instance-скиллы читаются через порт (метаданные в SQL,
+        // содержимое в blobs) — ФС-каталог `{dataDir}/skills` домену не виден.
+        instanceSkills: this._store,
         home: opts.home ?? homedir(),
       }),
     });
@@ -137,7 +140,7 @@ export class SkillService {
     const skill = await this._registry.get(name, { projectWorkspace: opts?.projectWorkspace });
     if (!skill) return undefined;
     const summary = toSkillSummary(skill, { capabilities: opts?.capabilities, toolsets: this._toolsets });
-    const files = skill.trusted ? await collectSupportingFiles(skill.dir) : [];
+    const files = skill.trusted ? await listSupportingFiles(skill) : [];
     return { ...summary, meta: skill.meta, body: skill.trusted ? skill.body : '', files };
   }
 
@@ -185,7 +188,7 @@ export class SkillService {
   ): Promise<string | undefined> {
     const skill = await this._registry.get(name, { projectWorkspace: opts?.projectWorkspace });
     if (!skill || !skill.trusted) return undefined;
-    return readSkillSupportingFile(skill.dir, relPath);
+    return readSkillSupportingFile(skill, relPath);
   }
 
   /** Принудительный ре-скан (POST /api/v2/skills/reload). */
@@ -207,9 +210,9 @@ export class SkillService {
 
   async updateInstance(name: string, patch: UpdateSkillMarkdownInput): Promise<SkillDetail | undefined> {
     await this._store.updateMarkdown(name, patch);
-    // Инвалидация кэша реестра: сигнатура ленивой инвалидации
-    // (`floor(mtimeMs):size`) не отличает перезапись `SKILL.md` в ту же
-    // миллисекунду при неизменном размере — без сброса `detail()` вернёт
+    // Инвалидация кэша реестра: подпись источника (`floor(mtimeMs):size` для ФС,
+    // размер/состав файлов для порта, ADR-116) не отличает перезапись `SKILL.md`
+    // в ту же миллисекунду при неизменном размере — без сброса `detail()` вернёт
     // устаревшее содержимое (ADR-046 §8.3).
     this.reload();
     return this.detail(name);
@@ -227,7 +230,8 @@ export class SkillService {
   }
 
   async listInstanceFiles(name: string): Promise<string[]> {
-    return collectSupportingFiles(this._store.skillDir(name));
+    const files = await this._store.listFiles(name);
+    return files.map((file) => file.path);
   }
 
   async readInstanceFile(name: string, relPath: string): Promise<string | null> {
@@ -244,10 +248,5 @@ export class SkillService {
     const deleted = await this._store.deleteFile(name, relPath);
     if (deleted) this.reload();
     return deleted;
-  }
-
-  /** Абсолютный путь каталога instance-скилла (для API-ответов). */
-  instanceDir(name: string): string {
-    return this._store.skillDir(name);
   }
 }

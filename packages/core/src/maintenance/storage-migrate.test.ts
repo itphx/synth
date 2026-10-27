@@ -146,6 +146,13 @@ async function seed(ctx: StorageContext): Promise<void> {
     origin: 'instance',
   });
   await ctx.skillBundles.set({ name: 'bundle-1', description: 'b', skills: ['a'] } as unknown as SkillBundle);
+  // ADR-116: instance-скилл (метаданные + supporting-файл) — порт `skills`.
+  await ctx.skills.create({
+    name: 'media-hub',
+    description: 'медиа-скилл',
+    body: 'тело скилла',
+    files: { 'reference/note.md': 'заметка' },
+  });
   // ADR-116: реестр установок пакетов и legacy-пайплайны инстанса.
   await ctx.packs.save({
     name: 'synth-media',
@@ -258,6 +265,12 @@ describe('migrateStorageData — перенос данных через порт
     expect((await target!.serviceKeys.list()).map((key) => key.label)).toEqual(['svc']);
     expect((await target!.mcpRegistry.getByName('srv'))?.name).toBe('srv');
     expect(await target!.skillBundles.exists('bundle-1')).toBe(true);
+    // ADR-116: скилл перенесён портом — заголовок, тело и supporting-файлы.
+    expect((await target!.skills.readMarkdown('media-hub')) ?? '').toContain('тело скилла');
+    expect((await target!.skills.listFiles('media-hub')).map((file) => file.path)).toEqual([
+      'reference/note.md',
+    ]);
+    expect(await target!.skills.readFile('media-hub', 'reference/note.md')).toBe('заметка');
     expect((await target!.packs.get('synth-media'))?.provides.skills).toEqual(['draft']);
     expect((await target!.pipelines.getDefinition('release'))?.name).toBe('Релиз');
     expect((await target!.pipelines.getInstance('run-1'))?.pipelineId).toBe('release');
@@ -287,6 +300,8 @@ describe('migrateStorageData — перенос данных через порт
     expect(await target!.packs.list()).toHaveLength(1);
     expect(await target!.pipelines.listDefinitions()).toHaveLength(1);
     expect(await target!.pipelines.listInstances()).toHaveLength(1);
+    expect(await target!.skills.listNames()).toEqual(['media-hub']);
+    expect(await target!.skills.listFiles('media-hub')).toHaveLength(1);
   });
 
   it('service-key и event-ключ переносятся с исходными id/hash/prefix — выданные токены работают', async () => {

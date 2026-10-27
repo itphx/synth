@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SkillService } from './service.js';
 import { urlCacheDir } from './discovery.js';
+import { buildSkillContentBlock } from './loader.js';
 import { SkillStore, type UpdateSkillMarkdownInput } from '../../storage/skill-store.js';
+import { MemorySkillRepository } from '../../storage/memory/index.js';
 import type { HostResolver } from '../mcp/network-policy.js';
 
 let root: string;
@@ -280,7 +282,12 @@ describe('SkillService — instance CRUD инвалидирует кэш рее�
       override async updateMarkdown(name: string, patch: UpdateSkillMarkdownInput): Promise<void> {
         await super.updateMarkdown(name, patch);
         if (this.restoreSeconds !== null) {
-          await utimes(join(this.skillDir(name), 'SKILL.md'), this.restoreSeconds, this.restoreSeconds);
+          // Файловая раскладка — деталь реализации `SkillStore` (порт путей не отдаёт).
+          await utimes(
+            join(dataDir, 'skills', name, 'SKILL.md'),
+            this.restoreSeconds,
+            this.restoreSeconds,
+          );
         }
       }
     }
@@ -296,5 +303,63 @@ describe('SkillService — instance CRUD инвалидирует кэш рее�
     const detail = await service.updateInstance('a', { description: 'new', body: 'new body' });
     expect(detail?.description).toBe('new');
     expect(detail?.body).toContain('new body');
+  });
+});
+
+describe('SkillService — instance-скиллы через порт (ADR-116: SQL + blobs)', () => {
+  it('скилл виден, supporting-файлы читаются портом, правки видны после изменения', async () => {
+    const dataDir = join(root, 'data');
+    const store = new MemorySkillRepository();
+    await store.create({
+      name: 'ported',
+      description: 'портовый',
+      body: 'body v1',
+      files: { 'notes/a.md': 'A' },
+    });
+
+    const service = new SkillService({ dataDir, home: join(root, 'home'), store });
+
+    const detail = await service.detail('ported');
+    expect(detail?.description).toBe('портовый');
+    expect(detail?.files).toEqual(['notes/a.md']);
+    expect(await service.readSupportingFile('ported', 'notes/a.md')).toBe('A');
+
+    const loaded = await service.load('ported');
+    expect(loaded?.files).toEqual(['notes/a.md']);
+    // ФС-пути порт не отдаёт: base directory — виртуальный blob-каталог.
+    expect(loaded?.dir).toBe('blob:skills/ported');
+    expect(
+      buildSkillContentBlock(loaded!.summary, loaded!.body, loaded!.dir, loaded!.files),
+    ).toContain('instance store');
+
+    // Правка «в обход» сервиса: подпись порт-источника (размер SKILL.md)
+    // меняется — реестр пере-сканирует без явного reload().
+    await store.updateMarkdown('ported', { body: 'body v2 (длиннее)' });
+    const rescanned = await service.get('ported');
+    expect(rescanned?.body).toContain('body v2');
+  });
+
+  it('instance CRUD через сервис: создание/файлы/удаление видны сразу', async () => {
+    const dataDir = join(root, 'data');
+    const store = new MemorySkillRepository();
+    const service = new SkillService({ dataDir, home: join(root, 'home'), store });
+
+    const created = await service.createInstance({
+      name: 'fresh',
+      description: 'свежий',
+      body: 'body',
+      files: { 'ref/a.md': 'a' },
+    });
+    expect(created?.files).toEqual(['ref/a.md']);
+    expect(await service.listInstanceFiles('fresh')).toEqual(['ref/a.md']);
+
+    await service.writeInstanceFile('fresh', 'ref/b.md', 'b');
+    expect((await service.detail('fresh'))?.files).toEqual(['ref/a.md', 'ref/b.md']);
+
+    expect(await service.deleteInstanceFile('fresh', 'ref/b.md')).toBe(true);
+    expect((await service.detail('fresh'))?.files).toEqual(['ref/a.md']);
+
+    expect(await service.removeInstance('fresh')).toBe(true);
+    expect(await service.detail('fresh')).toBeUndefined();
   });
 });

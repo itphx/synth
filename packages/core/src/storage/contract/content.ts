@@ -7,7 +7,6 @@ import type {
   ProtectedPathsRepository,
   SecretPatternRepository,
   SkillBundleRepository,
-  SkillRepository,
 } from '../ports/index.js';
 import type { McpServerConfig, SkillBundle } from '@itphx/synth-shared';
 
@@ -47,43 +46,6 @@ export function describeMcpRegistryRepository(
 
       expect(await repo.seedFromConfig({ seeded: mcpConfig })).toBe(1);
       expect(await repo.seedFromConfig({ seeded: mcpConfig })).toBe(0);
-    });
-  });
-}
-
-/** Паспорт порта `SkillRepository`. */
-export function describeSkillRepository(
-  name: string,
-  make: () => Promise<{ repo: SkillRepository; dispose?: () => Promise<void> }>,
-): void {
-  describe(name, () => {
-    it('create/read/listNames/remove; listNames пустого — []', async () => {
-      const { repo } = await make();
-      expect(await repo.listNames()).toEqual([]);
-      expect(await repo.readMarkdown('nope')).toBeNull();
-      expect(await repo.remove('nope')).toBe(false);
-
-      await repo.create({ name: 'alpha', description: 'первый' });
-      expect(await repo.exists('alpha')).toBe(true);
-      expect(await repo.listNames()).toEqual(['alpha']);
-      expect(await repo.readMarkdown('alpha')).toContain('первый');
-
-      await repo.updateMarkdown('alpha', { description: 'обновлён' });
-      expect(await repo.readMarkdown('alpha')).toContain('обновлён');
-
-      expect(await repo.remove('alpha')).toBe(true);
-      expect(await repo.listNames()).toEqual([]);
-    });
-
-    it('дубль скилла → ошибка; supporting-файлы читаются/пишутся/удаляются', async () => {
-      const { repo } = await make();
-      await repo.create({ name: 'beta', description: 'd' });
-      await expect(repo.create({ name: 'beta', description: 'd' })).rejects.toThrow();
-
-      await repo.writeFile('beta', 'notes/readme.md', 'hello');
-      expect(await repo.readFile('beta', 'notes/readme.md')).toBe('hello');
-      expect(await repo.deleteFile('beta', 'notes/readme.md')).toBe(true);
-      expect(await repo.readFile('beta', 'notes/readme.md')).toBeNull();
     });
   });
 }

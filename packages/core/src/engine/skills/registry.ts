@@ -67,7 +67,9 @@ export class SkillRegistry {
   }
 
   private async _loadSource(source: SkillSource): Promise<SkillScanResult> {
-    const signature = await this._watcher.snapshot(source.dir);
+    // ADR-116: ключ кэша — `dir` источника; у порт-источника это стабильная
+    // метка (`instance:skills`), а не путь.
+    const signature = await this._watcher.snapshot(source);
     const cached = this._cache.get(source.dir);
     if (cached && cached.signature === signature && cached.trusted === source.trusted) {
       return cached.result;

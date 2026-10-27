@@ -3,8 +3,10 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { SkillDiagnostic } from '@itphx/synth-shared';
+import type { SkillRepository } from '../../storage/ports/skill-repository.js';
 import { parseSkillFile } from './parser.js';
 import { expandHome, isProjectTrusted } from './trust.js';
+import { BLOB_SKILL_DIR_PREFIX, PORT_SKILLS_SOURCE_DIR } from './types.js';
 import type { DiscoveredSkill, SkillScanResult, SkillSource } from './types.js';
 
 /** Подкаталог проекта для проектных скиллов (ADR-046 §4.1). */
@@ -71,6 +73,12 @@ export interface BuildSkillSourcesOptions {
   skillsCacheDir?: string;
   /** `config.skills.trustedProjectDirs`. */
   trustedProjectDirs?: readonly string[];
+  /**
+   * ADR-116: порт instance-скиллов. Задан — instance-источник читается через
+   * порт (`listNames`/`readMarkdown`/`listFiles`), а не обходом `{dataDir}/skills`.
+   * Не задан (совместимость: тесты, внешние вызовы) — прежний ФС-каталог.
+   */
+  instanceSkills?: SkillRepository;
   home?: string;
 }
 
@@ -98,13 +106,26 @@ export function buildSkillSources(opts: BuildSkillSourcesOptions): SkillSource[]
     });
   }
 
-  sources.push({
-    scope: 'instance',
-    level: 'system',
-    origin: 'instance',
-    dir: join(opts.dataDir, 'skills'),
-    trusted: true,
-  });
+  // ADR-116: instance-скиллы — через порт (метаданные в SQL, содержимое в blobs);
+  // без порта — прежний ФС-каталог (совместимость внешних вызовов).
+  sources.push(
+    opts.instanceSkills
+      ? {
+        scope: 'instance',
+        level: 'system',
+        origin: 'instance',
+        dir: PORT_SKILLS_SOURCE_DIR,
+        trusted: true,
+        repository: opts.instanceSkills,
+      }
+      : {
+        scope: 'instance',
+        level: 'system',
+        origin: 'instance',
+        dir: join(opts.dataDir, 'skills'),
+        trusted: true,
+      },
+  );
 
   for (const raw of opts.configPaths ?? []) {
     const expanded = expandHome(raw.trim(), home);
@@ -154,8 +175,13 @@ export function buildSkillSources(opts: BuildSkillSourcesOptions): SkillSource[]
 /**
  * Сканирует каталог-источник: подкаталоги с `SKILL.md`, парсинг и валидация.
  * Отсутствие каталога — не ошибка (источник вклада не даёт).
+ *
+ * ADR-116: источник с портом (`source.repository`) сканируется через порт —
+ * ФС-путей у instance-скиллов больше нет.
  */
 export async function scanSkillSource(source: SkillSource): Promise<SkillScanResult> {
+  if (source.repository) return scanSkillRepositorySource(source, source.repository);
+
   const skills: DiscoveredSkill[] = [];
   const diagnostics: SkillDiagnostic[] = [];
 
@@ -202,6 +228,65 @@ export async function scanSkillSource(source: SkillSource): Promise<SkillScanRes
       source,
       trusted: source.trusted,
       mtimeMs,
+    });
+  }
+
+  return { skills, diagnostics };
+}
+
+/**
+ * ADR-116: скан instance-источника через порт `SkillRepository` — без обхода
+ * каталога. Содержимое (`SKILL.md`) читается `readMarkdown`, supporting-файлы
+ * перечисляет `listFiles` (пути домен получает только как относительные).
+ *
+ * `dir`/`file` у найденных скиллов — виртуальные (blob-раскладка): ФС-пути
+ * порт не отдаёт. `mtimeMs` — 0 (ленивая инвалидация кэша для порт-источника
+ * считается по сигнатуре порта, см. `SkillWatcher`).
+ */
+export async function scanSkillRepositorySource(
+  source: SkillSource,
+  repository: SkillRepository,
+): Promise<SkillScanResult> {
+  const skills: DiscoveredSkill[] = [];
+  const diagnostics: SkillDiagnostic[] = [];
+
+  let names: string[];
+  try {
+    names = await repository.listNames();
+  } catch {
+    return { skills, diagnostics };
+  }
+
+  for (const name of names) {
+    const location = `${BLOB_SKILL_DIR_PREFIX}skills/${name}`;
+    let raw: string | null;
+    try {
+      raw = await repository.readMarkdown(name);
+    } catch {
+      raw = null;
+    }
+    if (raw === null) continue; // нет `SKILL.md` — не скилл
+
+    const parsed = parseSkillFile(raw, name);
+    for (const issue of parsed.issues) {
+      diagnostics.push({
+        ...issue,
+        level: issue.code === 'none-invocation' ? 'warning' : 'error',
+        skill: name,
+        dir: location,
+      });
+    }
+    if (!parsed.skill) continue;
+
+    skills.push({
+      name: parsed.skill.name,
+      meta: parsed.skill.meta,
+      body: parsed.skill.body,
+      dir: location,
+      file: `skills/${name}/SKILL.md`,
+      source,
+      trusted: source.trusted,
+      mtimeMs: 0,
     });
   }
 

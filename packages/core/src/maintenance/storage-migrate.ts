@@ -13,14 +13,17 @@
 // projects (с `members`), profiles, settings (мапинг `load()` → сеттеры порта),
 // defaults, providers/models/agents, eventBindings, eventRoutes, eventApiKeys,
 // eventJournal, identityClaims, schedules, jobs, webhooks, webhookDeliveries,
-// sshKeys, serviceKeys, mcpRegistry, skillBundles, packs (реестр установок
-// пакетов расширений, ADR-086 §5), pipelines (legacy-пайплайны инстанса —
+// sshKeys, serviceKeys, mcpRegistry, skillBundles, skills (instance-скиллы —
+// заголовок и содержимое через порт), packs (реестр установок пакетов
+// расширений, ADR-086 §5), pipelines (legacy-пайплайны инстанса —
 // определения и экземпляры, ADR-051/ADR-100), maintenanceAudit.
 //
 // ── Что НЕ переносится (осознанно) ────────────────────────────────────────
 // - `dedup` — транзиентный (окно идемпотентности событий живёт минуты);
-// - `blobs`/`skills`/`contextFiles` — **файловые в обоих backend'ах** (драйвер
-//   postgres отдаёт их файловыми реализациями core), переезжать нечему;
+// - `blobs`/`contextFiles` — **файловые в обоих backend'ах** (драйвер
+//   postgres отдаёт их файловыми реализациями core), переезжать нечему:
+//   blob-стор (`{dataDir}/blobs`) общий для file/postgres, содержимое скиллов
+//   пишется в него портом `skills` (отдельной сущности «blobs» в переносе нет);
 // - файловый периметр вне портов: `audit/*.jsonl` (LLM Gateway), prompts,
 //   `meta.json`, `workspaces/`, `secrets/master.key` — см. ADR-091/ADR-092;
 // - `meta.json` (версия схемы данных инстанса) — контур `synth migrate`.
@@ -37,7 +40,7 @@
 // продолжают работать (ADR-096, регрессия «401 после миграции»).
 import { readdir } from 'node:fs/promises';
 import type { SynthConfig } from '@itphx/synth-shared';
-import { resolveStorageBackend } from '@itphx/synth-shared';
+import { parseFrontmatter, resolveStorageBackend } from '@itphx/synth-shared';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import { PIPELINE_INSTANCE_MAX_LIMIT } from '../storage/ports/pipeline-repository.js';
 import {
@@ -772,6 +775,51 @@ async function copySkillBundles(src: StorageContext, dst: StorageContext, ctx: C
 }
 
 /**
+ * Instance-скиллы (ADR-046 §4): переносятся **портом** — заголовок
+ * (`readMarkdown` → `create` с `frontmatter`) и supporting-файлы
+ * (`listFiles`/`readFile` → `create.files`).
+ *
+ * Содержимое в PostgreSQL-драйвере живёт в blob-сторе
+ * (`{dataDir}/blobs/skills/<name>/…`), который **общий** для обоих backend'ов
+ * (он файловый по конструкции, ADR-116): отдельной сущности «blobs» в переносе
+ * нет — байты пишет сам порт. Идемпотентность — по имени скилла: существующие
+ * не перезаписываются.
+ */
+async function copySkills(src: StorageContext, dst: StorageContext, ctx: CopyContext): Promise<Counter> {
+  const counter: Counter = { copied: 0, skipped: 0 };
+  for (const name of await src.skills.listNames()) {
+    await _copyOne(
+      ctx.dryRun,
+      await dst.skills.exists(name),
+      async () => {
+        const markdown = await src.skills.readMarkdown(name);
+        if (markdown === null) return;
+        const frontmatter = parseFrontmatter(markdown);
+        const files: Record<string, string> = {};
+        for (const file of await src.skills.listFiles(name)) {
+          const content = await src.skills.readFile(name, file.path);
+          if (content !== null) files[file.path] = content;
+        }
+        const rawDescription = frontmatter.data.description;
+        const description =
+          typeof rawDescription === 'string' && rawDescription.trim().length > 0
+            ? rawDescription.trim()
+            : name;
+        await dst.skills.create({
+          name,
+          description,
+          body: frontmatter.body,
+          files,
+          frontmatter: frontmatter.data,
+        });
+      },
+      counter,
+    );
+  }
+  return counter;
+}
+
+/**
  * Реестр установок пакетов расширений (ADR-086 §5): ключ записи — имя пакета.
  * Запись переносится целиком, включая `manifest`, `files` (содержимое
  * отложенной установки) и `provides` (id'ы поставленных сущностей).
@@ -885,6 +933,9 @@ const ENTITY_MIGRATORS: readonly EntityMigrator[] = [
   { entity: 'serviceKeys', copy: copyServiceKeys },
   { entity: 'mcpRegistry', copy: copyMcpRegistry },
   { entity: 'skillBundles', copy: copySkillBundles },
+  // ADR-116: instance-скиллы (метаданные через порт; содержимое — в общий
+  // blob-стор, пишется тем же вызовом порта).
+  { entity: 'skills', copy: copySkills },
   // ADR-116: реестр установок пакетов (ADR-086 §5) и legacy-пайплайны
   // (ADR-051/ADR-100). Порядок: пакеты → пайплайны (пайплайн может быть
   // поставлен пакетом — FK нет, порядок лишь для читаемости отчёта).

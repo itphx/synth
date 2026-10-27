@@ -68,7 +68,7 @@ interface MemorySkill {
   markdown: string;
 }
 
-/** Порт instance-скиллов — дерево в `Map`, виртуальные пути `/memory/skills`. */
+/** Порт instance-скиллов — дерево в `Map` (путей наружу не отдаёт, ADR-116). */
 export class MemorySkillRepository implements SkillRepository {
   private readonly _skills = new Map<string, MemorySkill>();
   /** supporting-файлы: ключ `\`${name}\0${rel}\`` (независимо от наличия `SKILL.md`). */
@@ -76,15 +76,6 @@ export class MemorySkillRepository implements SkillRepository {
 
   private _fileKey(name: string, rel: string): string {
     return `${name}\0${rel}`;
-  }
-
-  root(): string {
-    return '/memory/skills';
-  }
-
-  skillDir(name: string): string {
-    assertSkillName(name);
-    return `${this.root()}/${name}`;
   }
 
   async exists(name: string): Promise<boolean> {
@@ -107,8 +98,11 @@ export class MemorySkillRepository implements SkillRepository {
       if (!target) throw new Error(`Небезопасный путь supporting-файла: ${rel}`);
       this._files.set(this._fileKey(input.name, target), body);
     }
+    const data: Record<string, unknown> = { ...(input.frontmatter ?? {}) };
+    data.name = input.name;
+    data.description = input.description;
     this._skills.set(input.name, {
-      markdown: stringifyFrontmatter({ name: input.name, description: input.description }, input.body ?? ''),
+      markdown: stringifyFrontmatter(data, input.body ?? ''),
     });
   }
 
@@ -157,6 +151,19 @@ export class MemorySkillRepository implements SkillRepository {
     this._files.delete(this._fileKey(name, target));
     // Как `SkillStore.deleteFile`: удаление отсутствующего файла — не ошибка.
     return true;
+  }
+
+  /** Supporting-файлы (рекурсивно, без `SKILL.md`) с размерами, по возрастанию пути. */
+  async listFiles(name: string): Promise<Array<{ path: string; size: number }>> {
+    const prefix = `${name}\0`;
+    const files: Array<{ path: string; size: number }> = [];
+    for (const [key, content] of this._files) {
+      if (!key.startsWith(prefix)) continue;
+      const rel = key.slice(prefix.length);
+      if (rel === 'SKILL.md') continue;
+      files.push({ path: rel, size: Buffer.byteLength(content, 'utf-8') });
+    }
+    return files.sort((a, b) => a.path.localeCompare(b.path));
   }
 }
 

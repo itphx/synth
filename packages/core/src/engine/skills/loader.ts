@@ -3,6 +3,7 @@ import { join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { SkillSummary } from '@itphx/synth-shared';
 import { t as sm } from '../system-messages.js';
+import { BLOB_SKILL_DIR_PREFIX } from './types.js';
 import type { DiscoveredSkill, LoadedSkill } from './types.js';
 
 /** ADR-046 §5: не более 10 supporting-файлов в выдаче тула `skill`. */
@@ -36,6 +37,20 @@ export async function collectSupportingFiles(skillDir: string): Promise<string[]
   return out.sort();
 }
 
+/**
+ * ADR-116: supporting-файлы скилла по его источнику. Порт-источник (instance из
+ * SQL/blobs) — `listFiles` порта; ФС-источник (project/config/external/url) —
+ * обход каталога.
+ */
+export async function listSupportingFiles(skill: DiscoveredSkill): Promise<string[]> {
+  const repository = skill.source.repository;
+  if (repository) {
+    const files = await repository.listFiles(skill.name);
+    return files.map((file) => file.path);
+  }
+  return collectSupportingFiles(skill.dir);
+}
+
 /** Безопасно резолвит supporting-файл внутри каталога скилла (защита от `..`). */
 export function resolveSkillFile(skillDir: string, relPath: string): string | null {
   const base = resolve(skillDir);
@@ -56,6 +71,22 @@ export async function readSupportingFile(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * ADR-116: чтение supporting-файла скилла по источнику: порт (`readFile`) либо
+ * ФС (`readSupportingFile`). Нет файла/небезопасный путь — `undefined`.
+ */
+export async function readSkillSupportingFile(
+  skill: DiscoveredSkill,
+  relPath: string,
+): Promise<string | undefined> {
+  const repository = skill.source.repository;
+  if (repository) {
+    const content = await repository.readFile(skill.name, relPath);
+    return content ?? undefined;
+  }
+  return readSupportingFile(skill.dir, relPath);
 }
 
 /**
@@ -93,6 +124,10 @@ export function truncateSkillOutput(content: string): string {
 /**
  * ADR-046 §5 (по образцу opencode): `<skill_content>` + тело + base directory +
  * `<skill_files>` (до 10 путей, без содержимого).
+ *
+ * ADR-116: у instance-скиллов из порта ФС-пути нет (`dir` — `blob:skills/<name>`),
+ * поэтому вместо base directory подсказка читать файлы тулом `skill`
+ * (`file_path`).
  */
 export function buildSkillContentBlock(
   summary: SkillSummary,
@@ -107,9 +142,18 @@ export function buildSkillContentBlock(
     '',
     body.trim(),
     '',
-    `Base directory for this skill: ${pathToFileURL(dir).href}`,
-    'Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.',
   ];
+  if (dir.startsWith(BLOB_SKILL_DIR_PREFIX)) {
+    lines.push(
+      'This skill is stored in the instance store (no filesystem directory).',
+      'Read its supporting files with the `skill` tool (name + file_path).',
+    );
+  } else {
+    lines.push(
+      `Base directory for this skill: ${pathToFileURL(dir).href}`,
+      'Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.',
+    );
+  }
   if (shown.length > 0) {
     lines.push('<skill_files>');
     for (const f of shown) lines.push(`<file>${f}</file>`);
@@ -121,7 +165,7 @@ export function buildSkillContentBlock(
 
 /** Загружает тело + supporting-файлы найденного скилла. */
 export async function loadSkill(skill: DiscoveredSkill, summary: SkillSummary): Promise<LoadedSkill> {
-  const files = await collectSupportingFiles(skill.dir);
+  const files = await listSupportingFiles(skill);
   return {
     summary,
     meta: skill.meta,

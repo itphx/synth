@@ -202,7 +202,9 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   describeWebhookDeliveryRepository('PG → WebhookDeliveryRepository', () => makePort('webhookDeliveries'));
 
   describeMcpRegistryRepository('PG → McpRegistryRepository', () => makePort('mcpRegistry'));
-  describeSkillRepository('PG → SkillRepository (file-backed)', () => makePort('skills'));
+  // ADR-116: instance-скиллы — метаданные в SQL (`instance_skills`, миграция 026),
+  // содержимое — в blob-сторе (файловом внутри драйвера): контракт без путей.
+  describeSkillRepository('PG → SkillRepository', () => makePort('skills'));
   describeSkillBundleRepository('PG → SkillBundleRepository', () => makePort('skillBundles'));
   describeDictionaryRepository('PG → DictionaryRepository', () => makePort('dictionaries'));
 

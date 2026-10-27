@@ -6,6 +6,17 @@ import type {
   SkillScope,
   SkillSummary,
 } from '@itphx/synth-shared';
+import type { SkillRepository } from '../../storage/ports/skill-repository.js';
+
+/**
+ * Виртуальный каталог instance-скиллов, приходящих из порта (ADR-116):
+ * содержимое живёт в blob-сторе/на диске, ФС-пути домену не отдаются. Значение —
+ * стабильный идентификатор источника (ключ кэша реестра), а не путь.
+ */
+export const PORT_SKILLS_SOURCE_DIR = 'instance:skills';
+
+/** Префикс виртуального каталога скилла в blob-сторе: `blob:skills/<name>`. */
+export const BLOB_SKILL_DIR_PREFIX = 'blob:';
 
 /**
  * Происхождение каталога-источника (ADR-046 §4.2/§4.3).
@@ -20,10 +31,19 @@ export interface SkillSource {
   scope: SkillScope;
   level: SkillLevel;
   origin: SkillOrigin;
-  /** Абсолютный путь каталога, содержащего подкаталоги-скиллы. */
+  /**
+   * Идентификатор каталога-источника: абсолютный путь для ФС-источников либо
+   * стабильная метка порта (`instance:skills`, ADR-116).
+   */
   dir: string;
   /** Доверен ли каталог (project-trust гейт, §4.4). */
   trusted: boolean;
+  /**
+   * ADR-116: instance-источник из порта `SkillRepository` (метаданные в SQL,
+   * содержимое — в blob-сторе). Задан — сканирование идёт через порт
+   * (`listNames`/`readMarkdown`/`listFiles`), а не обходом каталога.
+   */
+  repository?: SkillRepository;
 }
 
 /** Найденный и провалидированный скилл. */
@@ -31,9 +51,12 @@ export interface DiscoveredSkill {
   name: string;
   meta: SkillMeta;
   body: string;
-  /** Абсолютный путь каталога скилла (base directory). */
+  /**
+   * Идентификатор каталога скилла: абсолютный путь для ФС-источников либо
+   * виртуальный blob-каталог для порт-источника (`blob:skills/<name>`).
+   */
   dir: string;
-  /** Абсолютный путь `SKILL.md`. */
+  /** Путь `SKILL.md`: абсолютный для ФС-источников, blob-путь для порт-источника. */
   file: string;
   source: SkillSource;
   /** `false` — скилл виден в реестре, но не грузится (§4.4). */

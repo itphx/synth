@@ -83,3 +83,7 @@ export type { PackPorts } from './ports/packs.js';
 // движком пайплайнов ADR-101 (`ports/pipelines.ts`).
 export { buildLegacyPipelinePorts, PgPipelineRepository } from './ports/legacy-pipelines.js';
 export type { LegacyPipelinePorts } from './ports/legacy-pipelines.js';
+// ADR-116: instance-скиллы — метаданные в SQL (`instance_skills`, миграция 026),
+// содержимое — в blob-сторе (`skills/<name>/…`); порт не отдаёт путей.
+export { buildSkillPorts, PgSkillRepository } from './ports/skills.js';
+export type { SkillPorts } from './ports/skills.js';
