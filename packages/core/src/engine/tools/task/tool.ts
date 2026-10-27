@@ -15,6 +15,7 @@ import { publishMessageAdded } from './child-session.js';
 import { prepareChildSession, type PreparedChildSession } from './fork.js';
 import { buildSubagentUnavailableToolsSection, messageToLLMMessage, resolveSubagentPrompt } from './prompt.js';
 import { runSubagent, type SubagentRunConfig } from './run-cycle.js';
+import { runDetachableSubagent } from './detachable.js';
 import { appendResumeMarker, resumeInitialMessages } from './resume-target.js';
 import { taskParametersSchema, type TaskParams } from './args.js';
 import type { ContextMode, TaskExtra } from './types.js';
@@ -342,7 +343,12 @@ export const taskTool: ToolDefinition = {
       return await startBackgroundSubagent({ params, runConfig, extra, ctx });
     }
 
-    return runSubagent(runConfig);
+    // ─── Detach (ADR-111 §detach) ───────────────────────────────────
+    // Прогон регистрируется в реестре активных прогонов сессии: `POST
+    // /sessions/:id/background` может перевести его в фон, и тогда блокирующее
+    // ожидание вернёт модели «переведено в фон». Без реестра/сервиса фоновых
+    // прогонов — прежний блокирующий путь без изменений.
+    return runDetachableSubagent({ params, runConfig, extra, ctx });
   },
 };
 

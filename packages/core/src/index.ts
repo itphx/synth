@@ -299,6 +299,18 @@ export type {
   BackgroundRunState,
   BackgroundSubagentInput,
 } from './engine/background/index.js';
+// ADR-111 §detach: реестр активных (блокирующих) прогонов сессии — публично,
+// потому что его тип входит в контракт оркестратора (`ChatOrchestrator.activeRuns`)
+// и в тесты backend (матрица доступа к `:id`-маршрутам).
+export { ActiveRunRegistry } from './engine/background/index.js';
+export type {
+  ActiveRunDetachResult,
+  ActiveRunFailure,
+  ActiveRunFilter,
+  ActiveRunHandle,
+  ActiveRunKind,
+  ActiveRunSummary,
+} from './engine/background/index.js';
 // PROP-097 (блок 5b): фоновые шелл-процессы — сервис запуска/остановки,
 // retention-очистка логов и типизированные ошибки. Публично: managed-backend
 // собирает тот же сервис (паритет core↔backend).

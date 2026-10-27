@@ -92,6 +92,10 @@ export type EventType =
   | 'process.started'
   | 'process.exited'
   | 'process.stopped'
+  // ADR-111 §detach: идущий блокирующий прогон переведён в фон
+  // (`POST /sessions/:id/background`). `process.started` при этом НЕ публикуется —
+  // прогон уже шёл.
+  | 'process.detached'
   // Этап 1 roadmap 0.13 (блок 1.2): фоновые дочерние сессии саб-агентов
   // (PROP-096).
   | 'child.started'

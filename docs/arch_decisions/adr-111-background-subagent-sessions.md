@@ -1,6 +1,6 @@
 # ADR-111: Фоновые прогоны — неблокирующие саб-агенты и реестр
 
-> **Статус:** ✅ Реализовано — решение принято 2026-10-26; фоновые **саб-агенты** в коде, фоновые процессы — [ADR-113](./adr-113-background-processes.md). Detach идущего прогона — контракт зафиксирован 2026-10-27 (реализация впереди, см. раздел «Перевод идущего прогона в фон»).
+> **Статус:** ✅ Реализовано — решение принято 2026-10-26; фоновые **саб-агенты** в коде, фоновые процессы — [ADR-113](./adr-113-background-processes.md). Detach идущего прогона — контракт зафиксирован 2026-10-27, **ядро реализовано** (реестр активных прогонов, `POST /api/v2/sessions/:id/background`, событие `process.detached`); шелл (`execute_shell`) и UI — в работе.
 > **Дата:** 2026-10-26
 > **Связано:** [ADR-026](./adr-026-subagent-context-modes.md) (режимы контекста саб-агента),
 > [ADR-033](./adr-033-session-branching-merge.md) (дочерняя сессия как ветка),
@@ -122,10 +122,12 @@ opencode (`background blocking tools`).
      ошибкой: `200 {detached: [], sessionId}` — «нечего переводить» штатный исход.
 4. **API.** `POST /api/v2/sessions/:id/background`; тело необязательно —
    `{ "type": "subagent" | "process" }` (нет тела/поля — все блокирующие прогоны сессии);
-   ответ `200 { detached: [{ id, kind, title? }], sessionId }`. Ошибки: `400` — неизвестный
-   `type` (`VALIDATION_ERROR`); `400 DETACH_UNSUPPORTED` — отвязать нельзя (порт исполнения
-   не даёт хэндл процесса, см. [ADR-113](./adr-113-background-processes.md) «Detach идущего
-   шелла»); `403`/`404` — правила доступа к сессии.
+   ответ `200 { detached: [{ id, kind, title? }], sessionId, failed?: [{ id, kind, code, message? }] }`
+   (успех — только `detached`; прогон, который перевести не удалось, идёт в `failed` с кодом
+   `BACKGROUND_LIMIT` либо `DETACH_FAILED`, остальные при этом переводятся). Ошибки: `400` — неизвестный
+   `type` (`VALIDATION_ERROR`); `400 DETACH_UNSUPPORTED` — отвязать нельзя (удалённая сессия гибрида;
+   для шелла — порт исполнения не даёт хэндл процесса, см. [ADR-113](./adr-113-background-processes.md)
+   «Detach идущего шелла»); `403`/`404` — правила доступа к сессии.
 5. **Событие `process.detached`** — в канал сессии-владельца (ADR-009/ADR-024, инварианты
    6/18; новых каналов нет): `{ session_id, kind: 'subagent' | 'process', id,
    child_session_id?, background_run_id?, title? }`. Публикуется **один раз** на прогон;
@@ -177,7 +179,7 @@ opencode (`background blocking tools`).
 | Точки сборки | `server/app/deps.ts`, `backend/app/deps.ts` (`backgroundService`, `onNotifyParent` — запись в историю + постановка в очередь, `backgroundEnabled`) |
 | Конфиг | `shared/config/{types,defaults}.ts` — секция `background` (`enabled`, `maxSubagentsPerSession`, `maxProcessesPerSession`, `maxRunsPerSession`, `logMaxBytes`, `retentionDays`) |
 | Тесты | `engine/background/service.test.ts`, `engine/tools/task/tool.test.ts`, `events/child-session.test.ts` |
-| Detach идущего прогона (контракт) | согласовано 2026-10-27, см. раздел «Перевод идущего прогона в фон»: `POST /api/v2/sessions/:id/background`, событие `process.detached`, расширение контракта хэндла процесса (`ExecutionPort`, [ADR-113](./adr-113-background-processes.md)); **реализации в коде пока нет** — раздел фиксирует контракт |
+| Detach идущего прогона (ядро) | **Реализовано** (2026-10-27), см. раздел «Перевод идущего прогона в фон»: реестр активных (блокирующих) прогонов — `engine/background/active-runs.ts` (`ActiveRunRegistry`, in-memory процесса control plane; PROP-105 — будущее), хэндл саб-агента — `engine/tools/task/detachable.ts` (`runDetachableSubagent`: свой `AbortController` с начала прогона, свой `streamId`/cancel-токен, публикация в родительский стрим отключается, `process.detached` в канал родителя), роут — `server/routes/sessions.ts` (`POST /:id/background`), поле `ChatOrchestrator.activeRuns` + `TaskExtra.activeRuns`. Шелл (`execute_shell` — расширение контракта хэндла процесса `ExecutionPort`, [ADR-113](./adr-113-background-processes.md)) и UI (кнопка «В фон», `ctrl+b`) — **в работе** |
 
 ## Открытые вопросы
 
@@ -213,5 +215,9 @@ opencode (`background blocking tools`).
   `execute_shell` в фон): односторонний переход, `POST /api/v2/sessions/:id/background`
   (идемпотентный, тип опционален, права — write на сессию), событие `process.detached`, независимость
   от отмены родителя, ровно одно уведомление при доставке at-least-once, маркер «уведомление не
-  доставлено» через порт хранения, «отменён из-за перезапуска» для исчезнувшего прогона. Реализация —
-  следующий шаг; детали хэндла процесса — ADR-113 «Detach идущего шелла».
+  доставлено» через порт хранения, «отменён из-за перезапуска» для исчезнувшего прогона. Детали
+  хэндла процесса — ADR-113 «Detach идущего шелла».
+- 2026-10-27 — **ядро detach реализовано**: реестр активных (блокирующих) прогонов
+  (`engine/background/active-runs.ts`), detach саб-агента (`engine/tools/task/detachable.ts`),
+  `POST /api/v2/sessions/:id/background` (`server/routes/sessions.ts`), событие `process.detached`
+  в канале сессии-владельца. Шелл и UI — в работе.

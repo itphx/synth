@@ -68,6 +68,8 @@ import type { RequestSessionService } from './events/request-session.js';
 import type { QuestionService } from './question/service.js';
 // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
 import type { BackgroundRunService } from './background/service.js';
+// ADR-111 §detach: реестр активных (блокирующих) прогонов сессии.
+import { ActiveRunRegistry } from './background/active-runs.js';
 import type { ProcessService } from './processes/service.js';
 import type { BlobRefRepository } from '../storage/ports/blob-ref-repository.js';
 
@@ -671,6 +673,15 @@ export class ChatOrchestrator {
    * фоновый запуск саб-агента недоступен).
    */
   private readonly _backgroundService: BackgroundRunService | null;
+  /**
+   * ADR-111 §detach: реестр активных (блокирующих) прогонов сессии —
+   * `POST /api/v2/sessions/:id/background` переводит их в фон.
+   *
+   * Живёт в памяти процесса control plane (хэндл detach непереносим; PROP-105 —
+   * будущее). Один экземпляр на оркестратор: `task` регистрирует хэндл, роут
+   * зовёт `detachAll`.
+   */
+  readonly activeRuns = new ActiveRunRegistry();
   /** Этап 1 roadmap 0.13 (блок 4): фоновые прогоны разрешены инстансом. */
   private readonly _backgroundEnabled: boolean;
   /**
@@ -3814,6 +3825,10 @@ export class ChatOrchestrator {
                   // саб-агента и возвращает управление сразу.
                   backgroundService: this._backgroundService ?? undefined,
                   backgroundEnabled: this._backgroundEnabled,
+                  // ADR-111 §detach: реестр активных (блокирующих) прогонов —
+                  // `task` регистрирует в нём хэндл, `POST /sessions/:id/background`
+                  // переводит прогон в фон.
+                  activeRuns: this.activeRuns,
                   // PROP-097 (блок 5b): сервис фоновых шелл-процессов —
                   // тул `execute_shell` с `background: true` запускает команду
                   // в фоне и возвращает управление сразу.

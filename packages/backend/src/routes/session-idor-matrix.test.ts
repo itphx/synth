@@ -53,6 +53,7 @@ import {
   FileStore,
   ProjectStore,
   createSessionSkillScopeRoutes,
+  ActiveRunRegistry,
   MemoryQuestionRepository,
   QuestionService,
   // ADR-115: вложения сообщений — файловые порты (blob-хранилище + `blob_refs`).
@@ -150,6 +151,9 @@ const MATRIX: Row[] = [
   row('sessions', 'GET', '/:id/messages'),
   row('sessions', 'POST', '/:id/clear'),
   row('sessions', 'POST', '/:id/abort'),
+  // ADR-111 §detach: перевод идущих блокирующих прогонов в фон — мутация
+  // сессии (право изменения содержимого проекта, VIEWER → 403).
+  row('sessions', 'POST', '/:id/background'),
   row('sessions', 'POST', '/:id/resume-subagent', { status: 202 }),
   row('sessions', 'POST', '/:id/summarize', { status: 400 }),
   row('sessions', 'GET', '/:id/children'),
@@ -350,6 +354,10 @@ function createMockOrchestrator() {
     getModelPricing: vi.fn().mockReturnValue(null),
     resolveMcpServers: vi.fn().mockResolvedValue([]),
     startSubagentResume: vi.fn().mockResolvedValue({ status: 'resumed' }),
+    // ADR-111 §detach: реестр активных (блокирующих) прогонов сессии —
+    // `POST /:id/background` без зарегистрированных прогонов отвечает 200
+    // пустой сводкой (нечего переводить).
+    activeRuns: new ActiveRunRegistry(),
   };
 }
 

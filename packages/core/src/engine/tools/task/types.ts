@@ -26,6 +26,8 @@ import type { GitService } from '../../../git/git-service.js';
 import type { QuestionService } from '../../question/service.js';
 // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
 import type { BackgroundRunService } from '../../background/service.js';
+// ADR-111 §detach: реестр активных (блокирующих) прогонов сессии.
+import type { ActiveRunRegistry } from '../../background/active-runs.js';
 import type { CancellationToken } from '../../../providers/base.js';
 
 export interface TaskExtra {
@@ -118,6 +120,14 @@ export interface TaskExtra {
    * отказывает (`task.background_disabled`). Не задан — разрешены.
    */
   backgroundEnabled?: boolean;
+  /**
+   * ADR-111 §detach: реестр **активных (блокирующих)** прогонов сессии.
+   *
+   * Пока прогон идёт в ходе модели, его хэндл лежит здесь —
+   * `POST /sessions/:id/background` переводит такие прогоны в фон. Не задан —
+   * detach недоступен (тул работает как обычный блокирующий прогон).
+   */
+  activeRuns?: ActiveRunRegistry;
   /**
    * Этап 1 roadmap 0.13 (блок 4): регистрация cancel-токена фонового прогона
    * в оркестраторе — чтобы `POST /sessions/<child>/abort` останавливал фонового

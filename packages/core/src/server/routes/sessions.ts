@@ -42,6 +42,8 @@ import { AttachmentService, attachmentModalityOf } from '../../engine/attachment
 import { createAttachmentRoutes } from './attachments.js';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
+// ADR-111 §detach: вид блокирующего прогона (`POST /:id/background`).
+import type { ActiveRunKind } from '../../engine/background/active-runs.js';
 import { makeMediaPart, appendMediaPlaceholders } from '@itphx/synth-shared';
 import type { Part } from '@itphx/synth-shared';
 
@@ -145,6 +147,10 @@ export interface SessionRouteMessages {
   attachmentsLimitExceeded: (c: Context, max: number) => string;
   /** ADR-115: превышена квота сессии `attachments.maxBytesPerSession`. */
   tooLarge: (c: Context) => string;
+  /** ADR-111 §detach: неизвестный `type` в теле перевода в фон (400 `VALIDATION_ERROR`). */
+  detachInvalidType?: (c: Context) => string;
+  /** ADR-111 §detach: перевод в фон в этой сборке не поддержан (400 `DETACH_UNSUPPORTED`). */
+  detachUnsupported?: (c: Context) => string;
 }
 
 export interface SessionRoutesOptions {
@@ -261,6 +267,8 @@ const DEFAULT_MESSAGES: SessionRouteMessages = {
   attachmentsLimitExceeded: (_c: Context, max: number) =>
     `Слишком много вложений в сообщении (макс. ${max})`,
   tooLarge: () => 'Суммарный объём вложений сессии превышает допустимый',
+  detachInvalidType: () => 'Неизвестный тип блокирующего прогона (ожидается subagent или process)',
+  detachUnsupported: () => 'Перевод идущего прогона в фон в этой сборке не поддерживается',
 };
 
 /**
@@ -1606,6 +1614,74 @@ export function createSessionRoutes(
     // ADR-102: мера `activity.aborts` — на осях `user`/`project` сессии.
     void analytics?.recordActivity('aborts', sessionAxes(session));
     return c.json({ status: 'aborted' });
+  });
+
+  // POST /api/v2/sessions/:id/background — перевести идущие **блокирующие**
+  // прогоны сессии в фон (ADR-111 §detach).
+  //
+  // Перевод односторонний: прогон продолжается уже как фоновый (свой
+  // `AbortController`/`streamId`, публикация в родительский стрим отключена), а
+  // блокирующее ожидание тула возвращает модели «переведено в фон». Доступ
+  // проверяет граничный prefix-guard (`/:id/*`, вид доступа `write` из метода) —
+  // в обработчике проверок нет (инвариант 16).
+  app.post('/:id/background', auth.requireAuth, scoped('sessions:prompt'), async (c) => {
+    const id = c.req.param('id');
+    // Гибрид: detach требует ЖИВОЙ хэндл прогона в этом процессе. Удалённая
+    // сессия его не даёт (и маршрута у remote-клиента нет) — fail-closed, без
+    // «тихого» ответа: иначе пользователь считал бы прогон переведённым.
+    if (hasRemoteGetter && isRemoteRef(id)) {
+      return c.json({
+        error: {
+          code: 'DETACH_UNSUPPORTED',
+          message: (messages.detachUnsupported ?? DEFAULT_MESSAGES.detachUnsupported!)(c),
+        },
+      }, 400);
+    }
+    const session = await sessionManager.getSession(id);
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+
+    // Тело необязательно: `{type?: 'subagent'|'process'}`; нет тела/поля — все
+    // блокирующие прогоны сессии.
+    let type: ActiveRunKind | undefined;
+    const raw = await c.req.text().catch(() => '');
+    if (raw.trim()) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: (messages.detachInvalidType ?? DEFAULT_MESSAGES.detachInvalidType!)(c),
+          },
+        }, 400);
+      }
+      if (parsed !== null && typeof parsed === 'object' && 'type' in parsed) {
+        const value = (parsed as { type?: unknown }).type;
+        if (value !== undefined && value !== null) {
+          if (value !== 'subagent' && value !== 'process') {
+            return c.json({
+              error: {
+                code: 'VALIDATION_ERROR',
+                message: (messages.detachInvalidType ?? DEFAULT_MESSAGES.detachInvalidType!)(c),
+              },
+            }, 400);
+          }
+          type = value;
+        }
+      }
+    }
+
+    const result = await orchestrator.activeRuns.detachAll(id, type ? { type } : {});
+    // Пустой `detached` — штатный исход (нечего переводить), не ошибка.
+    // `failed` не включаем пустым массивом, чтобы не менять контракт ответа.
+    return c.json({
+      sessionId: id,
+      detached: result.detached,
+      ...(result.failed.length > 0 ? { failed: result.failed } : {}),
+    });
   });
 
   // POST /api/v2/sessions/:id/resume-subagent — возобновить прерванную/ошибочную

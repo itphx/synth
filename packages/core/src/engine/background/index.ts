@@ -34,3 +34,14 @@ export {
   type BackgroundRunState,
   type BackgroundSubagentInput,
 } from './types.js';
+export {
+  ActiveRunRegistry,
+  ACTIVE_RUN_DETACH_FAILED_CODE,
+  ACTIVE_RUN_LIMIT_CODE,
+  type ActiveRunDetachResult,
+  type ActiveRunFailure,
+  type ActiveRunFilter,
+  type ActiveRunHandle,
+  type ActiveRunKind,
+  type ActiveRunSummary,
+} from './active-runs.js';
