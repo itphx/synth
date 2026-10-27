@@ -1567,6 +1567,45 @@ background:
   запрос остановки (один раз на прогон); терминальный статус приходит позже —
   `process.exited`.
 
+### Вложения сообщений (`attachments.*`, ADR-115)
+
+Лимиты и политика вложений (мультимодальный ввод — [ADR-115](./arch_decisions/adr-115-multimodal-input.md),
+контракт API — [API_V2.md](./API_V2.md) §5.6.1). Байты **не** пишутся в БД: они лежат на томе в
+`{dataDir}/blobs` (вложения — content-addressed), в базе — только учёт ссылок `blob_refs`
+([ADR-116](./arch_decisions/adr-116-instance-state-and-blob-ports.md)).
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `attachments.maxBytesPerFile` | Предел размера одного файла, байт; превышение → `413 PAYLOAD_TOO_LARGE`. Env — `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE` | `26214400` (25 МиБ) |
+| `attachments.maxFilesPerMessage` | Предел числа вложений в одном сообщении (проверяется при постановке промпта); превышение → `400 VALIDATION_ERROR`. Env — `SYNTH_ATTACHMENTS_MAX_FILES_PER_MESSAGE` | `10` |
+| `attachments.maxBytesPerSession` | Предел суммарного объёма вложений сессии (по частям в истории сообщений); превышение при промпте → `413 PAYLOAD_TOO_LARGE`. Env — `SYNTH_ATTACHMENTS_MAX_BYTES_PER_SESSION` | `1073741824` (1 ГиБ) |
+| `attachments.allowedMimePrefixes` | Белый список MIME-**префиксов**; пустой список — разрешены все. `image/svg+xml` запрещён всегда (XSS). **Только `config.yaml`** (список не имеет плоского env-представления). | `["image/", "audio/", "application/pdf", "text/"]` |
+| `attachments.gcDays` | Срок хранения **осиротевших** объектов (нет ссылок в `blob_refs`), дни; `0` — без ограничения (объекты не чистятся по сроку). Env — `SYNTH_ATTACHMENTS_GC_DAYS` | `30` |
+
+```yaml
+attachments:
+  maxBytesPerFile: 26214400
+  maxFilesPerMessage: 10
+  maxBytesPerSession: 1073741824
+  # Список — только в config.yaml; пустой список = все префиксы разрешены.
+  allowedMimePrefixes: ["image/", "audio/", "application/pdf", "text/"]
+  gcDays: 30
+```
+
+- **Env — только скаляры.** В реестре env-оверрайдов (ADR-023) четыре числовых ключа; счётчики
+  `maxBytes*`/`maxFiles*` и `gcDays` можно задать через `SYNTH_ATTACHMENTS_*`, список префиксов —
+  нет.
+- **Где применяется.** `maxBytesPerFile` и белый список — при загрузке
+  (`POST /sessions/:id/attachments`); `maxFilesPerMessage`, `maxBytesPerSession` — при постановке
+  сообщения (`POST /sessions/:id/prompt`); `gcDays` — фоновый pruner (сразу при старте и далее
+  каждые 6 часов, `unref`-таймер).
+- **GC не удаляет живые объекты.** Критерий — `countRefs(blobPath) === 0` **и** объект старше
+  `gcDays`; ссылки снимаются при удалении сообщения/сессии, поэтому общий (дедуплицированный) объект
+  переживает удаление одного из сообщений. Sidecar-метаданные (`<sha256>.json`) удаляются вместе с
+  объектом.
+- Бэкап и перенос: байты входят в файловый периметр (`synth backup` их включает), но
+  `synth storage migrate` их **не** переносит — см. [MAINTENANCE.md](./MAINTENANCE.md).
+
 ### Наблюдаемость (`metrics.*`, ADR-094)
 
 Экспорт Prometheus-метрик и разделение liveness/readiness. Полный каталог метрик, скрейп, алерты и

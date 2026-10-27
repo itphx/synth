@@ -195,7 +195,7 @@ flowchart LR
 ## Слой хранения (backend'ы)
 
 Физическое хранение вынесено за **доменные порты** ([ADR-096](./arch_decisions/adr-096-storage-layer.md)):
-домен работает с `StorageContext` (`packages/core/src/storage/ports/*`, 30 портов), а backend подменяем.
+домен работает с `StorageContext` (`packages/core/src/storage/ports/*`, 47 портов), а backend подменяем.
 Точка сборки — `packages/core/src/storage/storage-context.ts` (`createFileStorage`/`createMemoryStorage` +
 асинхронный каскад `createStorageContextAsync`/`buildStorageContext`); выбор — `storage.backend`
 (`file`|`memory`|`postgres`, env `SYNTH_STORAGE_BACKEND`).
@@ -203,7 +203,39 @@ flowchart LR
 - **`file`** (default) — `FileStore`/`JsonStore`, JSON + атомарная запись tmp→rename ([ADR-005](./arch_decisions/adr-005-json-storage.md)); **`memory`** — in-memory (герметичные тесты, эталон семантики).
 - **`postgres`** — второй selectable backend ([ADR-096](./arch_decisions/adr-096-storage-layer.md)): отдельный in-tree пакет-драйвер **`@itphx/synth-storage-postgres`** ([ADR-097](./arch_decisions/adr-097-storage-provider-class.md)), подключаемый core **динамическим `import()`**; `pg` — optional. Любой backend обязан пройти контрактный suite `packages/core/src/storage/contract/*` («паспорт порта»); прогон драйвера против живой БД гейтится env `SYNTH_TEST_POSTGRES_DSN`.
 - **Деградированный режим** ([ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)): при недоступности БД сервис поднимается на файловом фоллбеке в строгом read-only (ADMIN-only, `/health` → `degraded`); авто-возврата нет — только рестарт. Ошибки конфигурации/зависимостей/«схема новее» — fail-closed.
-- **За портами не всё:** «файловый периметр» остаётся file-специфичным/гибридным — секреты в `secrets/` (мастер-ключ, API-ключи), `meta.json`/`synth migrate`, `workspaces/`, содержимое скиллов и промптов, аудит-журналы (`audit/*.jsonl`), URL-кэши инструкций ([ADR-091](./arch_decisions/adr-091-backup-restore-transfer.md)/[ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)).
+- **За портами не всё:** «файловый периметр» остаётся file-специфичным/гибридным — секреты в `secrets/` (мастер-ключ, API-ключи), `meta.json`/`synth migrate`, `workspaces/`, байты blob-хранилища (`blobs/`, см. ниже), аудит-журналы (`audit/*.jsonl`), URL-кэши инструкций ([ADR-091](./arch_decisions/adr-091-backup-restore-transfer.md)/[ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)).
+
+### Blob-хранилище и учёт ссылок (`{dataDir}/blobs`, ADR-115/ADR-116)
+
+Байты, которые не ложатся в таблицы (вложения сообщений
+([ADR-115](./arch_decisions/adr-115-multimodal-input.md)), артефакты прогонов пайплайнов,
+содержимое instance-скиллов, логи фоновых процессов), живут на томе в `{dataDir}/blobs` через порт
+`BlobStore`. Пути относительные: вложения — content-addressed (`attachments/<sha2>/<sha256>`),
+остальное — по стабильному пути (`artifacts/<runId>/<name>`, `skills/<name>/…`,
+`processes/<id>.log`). `FileBlobStore` создаётся с корнем `{dataDir}/blobs`
+(`storage/blob-root.ts`), при старте каталог создаётся, а логи процессов из старой раскладки
+переезжают внутрь (best-effort).
+
+- **Порт `blobs` — файловый по конструкции** в обоих backend'ах ([ADR-116](./arch_decisions/adr-116-instance-state-and-blob-ports.md)):
+  байты не пишутся в БД, `pg_dump` не раздувается медиа, а в деградированном режиме
+  ([ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)) вложения остаются читаемыми.
+- **Учёт ссылок — в БД:** порт `blob_refs` (`blob_path`, `owner_kind`, `owner_id`; владельцы —
+  `message`/`pipeline-run`/`skill`/`process`, миграция `024_blob_refs`). По ссылкам работают дедуп по
+  содержимому и детерминированный GC: объект удаляется, когда ссылок не осталось (и истёк TTL для
+  сирот). `blobs` **никогда** не участвует в `synth storage migrate` — байты не меняют backend.
+- **В SQL переведены четыре порта состояния инстанса** (миграции `025`–`027`): `packs` (реестр
+  установок пакетов), legacy `pipelines` (ADR-100), `skills` (метаданные instance-скиллов; содержимое
+  — в `blobs`) и `contextFiles` (пользовательские промпты/роли; системные промпты образа остаются на
+  ФС). Это снимает расхождение состояния между репликами; `contextFiles` держит процесс-локальный кэш,
+  инвалидируемый по `max(updated_at)` таблицы (TTL 5 с).
+- **Том.** По умолчанию один — `backend.persistence` (`{dataDir}`, блобы в `{dataDir}/blobs`).
+  Отдельный блоб-том — опция чарта `backend.blobs.enabled` (второй PVC или `blobs.existingClaim`
+  с нужным `accessMode`; по умолчанию `false`, блобы на основном томе, монтирование `<dataDir>/blobs`).
+  При `backend.replicaCount > 1` том с блобами обязан быть `ReadWriteMany`, иначе реплики видят разные
+  файлы; чарт падает на рендере при `RWO`-томе с блобами. Это ограничение деплоя, а не кода.
+
+Хранение данных инстанса при `storage.backend=postgres` — **две** процедуры (БД + том), см.
+[MAINTENANCE.md](./MAINTENANCE.md) §«PostgreSQL как backend хранения».
 
 ## Структура монорепозитория
 

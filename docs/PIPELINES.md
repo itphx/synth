@@ -390,7 +390,7 @@ Payload проходит общую санитизацию журнала (§2.1
 | Вид | Что делает |
 |---|---|
 | `session` | создаёт/продолжает сессию (выход шага — её вход) |
-| `file` | кладёт артефакт в workspace проекта |
+| `file` | кладёт артефакт в workspace проекта (и, если подключён blob-порт, — копию в blob-хранилище, §2.10.2) |
 | `gateway` | публикует событие/вызывает webhook наружу (ADR-087/ADR-052) |
 | `none` | прогон завершается без внешнего следа |
 
@@ -404,7 +404,7 @@ Payload проходит общую санитизацию журнала (§2.1
 | Вид | Что именно делается | Ключевые правила |
 |---|---|---|
 | `session` | новая сессия в проекте прогона (`SessionManager.createSession`) — **владелец — владелец проекта** (ADR-089); результат шага кладётся сообщением (`author: 'Pipeline'`, `metadata.pipeline`); `session.created` публикуется в канал сессии, хабы подписывают владельца (инвариант 18) | `exit.session.sessionId` — **продолжение** существующей сессии (владелец не меняется); агент — `exit.session.agent`, модель — дефолты инстанса (`resolveLlmDefaults`) |
-| `file` | артефакт пишется в **workspace проекта** (ADR-075); содержимое — `exit.file.contentFrom` (путь в данных прогона) либо весь выход шага (JSON) | **containment**: путь только **относительный**; абсолютный путь, `..` за пределы workspace и отсутствие workspace — **отказ**; каталоги создаются, файл перезаписывается |
+| `file` | артефакт пишется в **workspace проекта** (ADR-075); содержимое — `exit.file.contentFrom` (путь в данных прогона) либо весь выход шага (JSON). **Дополнительно** (ADR-116) те же байты кладутся в blob-порт (`artifacts/<runId>/<name>`, лимит 50 МиБ) — артефакт переживает очистку workspace и доступен по HTTP/из события (§2.10.2) | **containment**: путь только **относительный**; абсолютный путь, `..` за пределы workspace и отсутствие workspace — **отказ**; каталоги создаются, файл перезаписывается |
 | `gateway` | событие публикуется **наружу** через ingress внешних событий (`EventIngress.ingest`, ADR-089) — источник `pipeline`, тип — `exit.gateway.event` (по умолчанию `pipeline.completed`); payload — **санитизированный** результат шага (секреты вырезаны) | дополнительно событие уходит в **инстансный канал** шины (`pipeline.completed`) — его видят исходящие webhooks (ADR-052) и UI; адресная доставка по `exit.gateway.webhookId` не реализована (подписки срабатывают по типу события) |
 | `none` | ничего не делает | — |
 
@@ -428,6 +428,26 @@ const exits = [
   }),
 ];
 ```
+
+#### 2.10.2. Артефакты прогона (blob-объекты, ADR-116)
+
+> **Реализовано (Э5 + ADR-116):** `packages/core/src/engine/pipelines/artifacts.ts`
+> (`PipelineArtifactStore`), запись — выход `file` в `engine/pipelines/exits.ts`, раздача —
+> `GET /api/v2/pipeline-runs/:runId/artifacts/:name` (`server/routes/pipeline-project-routes.ts`).
+> Отдельного хранилища артефактов **нет**: байты лежат в общем blob-порте (ADR-096/ADR-116), учёт
+> ссылок — `blob_refs` (`ownerKind: 'pipeline-run'`), поэтому артефакт переживает удаление пайплайна.
+
+| Что | Где / как |
+|---|---|
+| Раскладка | `artifacts/<runId>/<name>` в `{dataDir}/blobs`; имя — basename из `exit.file.path` (санитайз: без `/`, `\`, `..`, управляющих символов, ≤ 200), коллизии в пределах прогона разводятся суффиксом `-2`, `-3`, … |
+| Лимит | **50 МиБ** на файл (`PipelineArtifactStore.maxBytes`), проверяется **до** записи; превышение — предупреждение в лог, прогон не падает, файл остаётся только в workspace |
+| Метаданные | `PipelineArtifact` с `kind: 'blob'` и полями `path`/`name`/`mime`/`size`; список — в payload `run.finished.artifacts[]` и в событии `pipeline.run.finished.artifacts[]` (аддитивное поле); отдельного индекса нет — источник истины журнал прогона |
+| Скачивание | `GET /api/v2/pipeline-runs/:runId/artifacts/:name` — права **чтения** прогона (право чтения проекта; guard на границе, инвариант 16); поток, `Content-Type` и `Content-Disposition: attachment` из журнала, `ETag` (хеш пути), `Cache-Control: private`; `If-None-Match` → `304`; нет артефакта/прогона или blob-контур не подключён → `404` (контракт — [API_V2.md](./API_V2.md) §5.35) |
+| Retention | **Нет** — автоматической очистки артефактов не реализовано (известное ограничение): ни TTL, ни удаления прогонов через API нет, байты живут, пока существует объект в blob-хранилище. `PipelineArtifactStore.removeRun` умеет снять каталог `artifacts/<runId>/` и ссылки владельца, но вызывающих путей в движке/API нет — чистка ручная |
+
+Артефакт в workspace и его blob-копия — **одни и те же байты**, но живут раздельно: очистка
+workspace проекта не ломает скачивание, а недоступность blob-порта не отменяет выход (файл уже
+записан в workspace).
 
 ### 2.11. Проектная привязка и шаблоны
 
@@ -489,7 +509,7 @@ const exits = [
 | `pipeline.run.node_started` | начало попытки узла | `runId`, `pipelineId`, `version`, `projectId?`, `node`, `nodeKind`, `attempt` |
 | `pipeline.run.node_finished` | узел завершён (попытка) | те же поля + `status`, `durationMs?`, `errorCode?` (**только код**, не текст ошибки) |
 | `pipeline.run.awaiting_human` | прогон встал на ожидание решения | те же поля + `node`, `gateKind` (`human`/`tool_approval`), `timeoutSec?` (вопрос оператора и аргументы инструмента — **в журнале прогона**, не в событии) |
-| `pipeline.run.finished` | прогон завершён штатно | те же поля + `status: 'done'`, `exits` (число выходов), `durationMs` |
+| `pipeline.run.finished` | прогон завершён штатно | те же поля + `status: 'done'`, `exits` (число выходов), `durationMs`, `artifacts?` (список blob-артефактов прогона, §2.10.2; аддитивное поле, только если артефакты есть) |
 | `pipeline.run.failed` | прогон провален/отменён | те же поля + `status` (`failed`/`cancelled`), `code`, `node?`, `durationMs` |
 | `pipeline.completed` | выход `gateway` — публикация наружу | `source: 'pipeline'`, `type` (из `exit.gateway.event`), санитизированный результат шага |
 

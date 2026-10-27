@@ -112,9 +112,12 @@ home), [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md) (масте�
 2. Снимите архив: `synth backup --out /backup/` (каталог или файл; по умолчанию — текущий каталог).
    Исключаются по умолчанию: `backups/`, `tmp/`, `logs/`, `.doctor-probe`, `*.lock`, `workspaces/`
    (без `--with-workspace`), `secrets/` (без `--with-secrets`). При `storage.backend=postgres` архив
-   **не содержит данных БД** (сессии/проекты/настройки) — он снимает только файловый периметр, в манифест
-   пишется `storageBackend: postgres`; данные БД бэкапьте средствами СУБД (`pg_dump`/PITR — см.
-   «PostgreSQL как backend хранения»).
+   **не содержит данных БД** (сессии/проекты/настройки/скиллы/промпты) — он снимает только файловый
+   периметр, в манифест пишется `storageBackend: postgres`; данные БД бэкапьте средствами СУБД
+   (`pg_dump`/PITR — см. «PostgreSQL как backend хранения»). Байты (`{dataDir}/blobs` — вложения,
+   артефакты прогонов, содержимое скиллов, логи процессов) — часть файлового периметра и в архив
+   **входят**. Итого при БД-backend'е полный бэкап — **две** процедуры: дамп БД + архив тома
+   (или снапшот PVC, см. п. 6); порознь ни одна не полна.
 3. **Секреты.** `--with-secrets` включает `secrets/` — архив становится **секретом сам по себе**:
    храните `0600` вне публичных мест; без мастер-ключа часть данных нерасшифровываема, но и бэкап
    **без** него не восстановит зашифрованные SSH-ключи.
@@ -140,6 +143,10 @@ home), [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md) (масте�
 без `fail`.
 
 1. **Остановите сервис** — восстановление перезаписывает каталог данных.
+   При `storage.backend=postgres` порядок **двух** процедур: сначала БД (`pg_restore`/PITR — средствами
+   СУБД), затем файловый периметр (`synth restore`, включая `{dataDir}/blobs`), затем `synth doctor`.
+   Если БД откатили, а том оставили новее — вложения/артефакты будут ссылаться на объекты, которых
+   в БД уже нет (и наоборот); откатывайте оба периметра к одному моменту.
 2. Предпросмотр: `synth restore <archive> --dry-run` — проверяются манифест/формат/версия схемы/
    контрольные суммы, печатается план (в т.ч. список удаляемых элементов) **без записи**.
 3. Применение: `synth restore <archive> --yes`. Без `--dry-run` и без `--yes` — отказ.
@@ -354,13 +361,27 @@ idMap}` (маппинг старый id → новый id). Лимит загр�
    в манифест пишется `storageBackend: postgres` и выводится предупреждение о неполноте архива. Данные БД
    бэкапьте средствами СУБД: `pg_dump`/`pg_basebackup`/pgBackRest, PITR по WAL. Для согласованного среза
    останавливайте сервис (или используйте снапшот тома); `--live` полноты БД не гарантирует.
+   **Полный бэкап БД-режима — две процедуры:** (1) дамп/снапшот БД и (2) архив тома (`synth backup` или
+   снапшот PVC). В том входят и байты blob-хранилища (`{dataDir}/blobs`: вложения сообщений, артефакты
+   прогонов, содержимое instance-скиллов, логи процессов) — без них восстановленные сообщения и прогоны
+   потеряют файлы (ссылки в БД останутся, объектов не будет).
 5. **`synth restore`.** Восстанавливает каталог данных (файловый периметр) — БД это **не** трогает.
    Порядок: остановить сервис → восстановить БД (`pg_restore`/PITR) → при необходимости `synth restore` для
-   файлового периметра → `synth doctor`. Если схема БД отстаёт — `synth migrate`.
+   файлового периметра (**включая `blobs`**) → `synth doctor`. Оба периметра — к одному моменту времени;
+   если схема БД отстаёт — `synth migrate`.
 6. **`synth uninstall --purge-db`.** По умолчанию данные **БД не удаляются** (команда об этом сообщает).
    Удаление схемы БД — только явным `--purge-db`, который осмыслен **только** при `storage.backend=postgres`
    (иначе — ошибка, fail-closed) и требует `--purge` и `--yes`; выполняется `DROP SCHEMA … CASCADE`
    (необратимо).
+7. **Том и блобы.** По умолчанию блобы лежат на основном томе — `{dataDir}/blobs` (`backend.persistence`,
+   `ReadWriteOnce` при одной реплике). Отдельный блоб-том — опция чарта `backend.blobs.enabled`
+   (второй PVC `synth-backend-blobs` или `blobs.existingClaim`, свой `accessMode`; по умолчанию `false`),
+   монтируется в `<dataDir>/blobs`. При
+   `backend.replicaCount > 1` том с блобами обязан быть **`ReadWriteMany`** (как общий workspace
+   исполнителя, ADR-077): иначе реплики видят разные вложения и артефакты; чарт в этом случае падает
+   на рендере, если `accessMode` тому не `ReadWriteMany`
+   ([ADR-116](./arch_decisions/adr-116-instance-state-and-blob-ports.md)). Байты **не** переносятся
+   `synth storage migrate` — при смене backend'а том остаётся тем же.
 
 ### Деградированный режим (БД недоступна)
 
@@ -514,7 +535,11 @@ SYNTH_STORAGE_BACKEND=postgres synth doctor --json
 **Что переносится:** `sessions` (с `messages`/`references`/`checkpoints`/`stickyNotes`), `projects`
 (с `members`), `profiles`, `settings`, `defaults`, `providers`/`models`/`agents`, события
 (`eventBindings`/`eventRoutes`/`eventApiKeys`/`eventJournal`/`identityClaims`), `schedules`/`jobs`,
-`webhooks`/`webhookDeliveries`, `sshKeys`, `serviceKeys`, `mcpRegistry`, `skillBundles`, `maintenanceAudit`.
+`webhooks`/`webhookDeliveries`, `sshKeys`, `serviceKeys`, `mcpRegistry`, `skillBundles`, **`skills`**
+(instance-скиллы: заголовок и содержимое — через порт), **`contextFiles`** (пользовательские файлы
+контекста/промптов: `user`/`role` и override системных), **`packs`** (реестр установок пакетов
+расширений), **`pipelines`** (legacy-пайплайны ADR-100: определения и экземпляры), `maintenanceAudit`
+(четыре последних порта переведены в SQL — [ADR-116](./arch_decisions/adr-116-instance-state-and-blob-ports.md)).
 Ключи доступа (`serviceKeys`/`eventApiKeys`) переносятся **как есть**: сохраняются `id`, `prefix` и
 at-rest sha256-хеш, поэтому токены, выданные до миграции, продолжают работать (регрессия
 «401 после миграции» исправлена; см. «Service-key: перенос и легаси-восстановление»).
@@ -529,13 +554,15 @@ at-rest sha256-хеш, поэтому токены, выданные до миг
 - `identityClaims` и `dedup` — транзиентные/инстанс-локальные (окно идемпотентности событий живёт
   минуты) — не переносятся;
 - `blobs` (байты вложений, артефактов прогонов, содержимого скиллов и логов процессов) — **файловый по
-  конструкции** в обоих backend'ах: байты живут на томе, в БД — только `blob_refs`; переносить нечего
-  ([PROP-106](./arch_decisions/prop-106-file-ports-to-sql.md), решение 2026-10-27);
-- `skills`/`contextFiles` — **файловые в обоих backend'ах** до реализации PROP-106 (драйвер `postgres`
-  отдаёт их файловыми реализациями core); после перевода в SQL появятся в списке переносимых;
-- файловый периметр вне портов — `skills/`, `skill-bundles/`, `context/`, `audit/*.jsonl`, `meta.json`,
-  `workspaces/`, `secrets/` (`master.key`, `postgres-password`, `ssh-keys/`), `auth/`, `gateway/`,
-  `security/` — остаётся файловым по конструкции (ожидаемо, не потеря данных); копируется/переносится
+  конструкции** в обоих backend'ах: байты живут на томе (`{dataDir}/blobs`), в БД — только `blob_refs`;
+  переносить нечего, `synth storage migrate` их не трогает **никогда**
+  ([ADR-116](./arch_decisions/adr-116-instance-state-and-blob-ports.md)). Содержимое скиллов
+  переезжает **вместе с портом `skills`** (метаданные — в SQL, тело — в тот же blob-стор, который общий
+  для обоих backend'ов), отдельной сущности «blobs» в отчёте нет;
+- файловый периметр вне портов — `blobs/` (байты: вложения, артефакты, содержимое скиллов, логи
+  процессов), `skill-bundles/`, `audit/*.jsonl`, `meta.json`, `workspaces/`, `secrets/` (`master.key`,
+  `postgres-password`, `ssh-keys/`), `auth/`, `gateway/`, `security/` — остаётся файловым по конструкции
+  (ожидаемо, не потеря данных); копируется/переносится
   отдельно ([ADR-091](./arch_decisions/adr-091-backup-restore-transfer.md)/[ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)).
 
 **Fail-closed (перенос отменяется с ошибкой — данные не пишутся):**
@@ -1068,7 +1095,7 @@ kubectl -n synth exec deploy/synth-backend -- sh -lc '
 
 | Путь | Почему |
 |---|---|
-| `skills/` | discovery скиллов идёт с ФС и в БД-режиме (файловая реализация core) |
+| `blobs/` | байты blob-хранилища (вложения сообщений, артефакты прогонов, содержимое instance-скиллов, логи процессов) — файловые по конструкции, в БД только `blob_refs` (ADR-116) |
 | `workspaces/` | рабочие каталоги проектов, не данные хранилища |
 | `backups/` | архивы, в т.ч. снятый перед миграцией |
 | `secrets/master.key` | мастер-ключ at-rest (SSH-ключи и пр.) |

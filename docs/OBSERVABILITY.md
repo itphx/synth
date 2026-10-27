@@ -196,6 +196,27 @@ Probes Helm: liveness — `/health` (или `/ready` с большим `failureT
 | `synth_storage_degraded` | gauge | — | `1` — файловый read-only фоллбек (ADR-098), `0` — норма; фон, **60 с** |
 | `synth_storage_backend_info` | gauge | `backend` (`file`/`postgres`/`memory`) | Информация о backend, значение `1`; фон, **60 с** |
 
+### Вложения сообщений (ADR-115)
+
+Загрузка/раздача вложений (API — [API_V2.md](./API_V2.md) §5.6.1, лимиты —
+[CONFIGURATION.md](./CONFIGURATION.md) §«Вложения сообщений»). Лейблы — только фиксированные наборы
+(`outcome`, `kind`); путей объектов (`blobPath`), `sha256`, имён файлов, id сессий и пользователей в
+лейблах нет.
+
+| Метрика | Тип | Лейблы | Смысл / обновление |
+|---|---|---|---|
+| `synth_attachment_uploads_total` | counter | `outcome` (`ok`/`too_large`/`unsupported`), `kind` (`image`/`audio`/`video`/`file`) | Исход загрузки `POST /sessions/:id/attachments`: `ok` — принят, `too_large` — `413`, `unsupported` — `415` (MIME вне белого списка/запрещён, пустой файл); на попытку, дошедшую до сервиса вложений (ранние `413` по `Content-Length` и `400` без файла не считаются) |
+| `synth_attachment_upload_bytes` | histogram | `kind` (`image`/`audio`/`video`/`file`) | Размер **принятого** файла после вычищения метаданных, байт (только `outcome=ok`); корзины 1 КиБ … 64 МиБ |
+| `synth_attachment_downloads_total` | counter | `outcome` (`ok`/`not_found`) | Выдача байтов `GET/HEAD /sessions/:id/attachments/:partId`: `ok` — объект найден и ответ отдан/условный (`200`/`206`/`304`/`416`), `not_found` — части/объекта нет (`404`) |
+| `synth_attachment_gc_removed_total` | counter | — | Объекты, удалённые фоновым pruner'ом осиротевших вложений (нет ссылок в `blob_refs` и истёк `attachments.gcDays`); sidecar-метаданные удаляются вместе с объектом и отдельно не считаются |
+
+**Кардинальность безопасна.** Наборы значений закрыты: `outcome` — 3 доменных значения у загрузки и
+2 у выдачи, `kind` — 4 (совпадают с типами медиа-частей), у GC-счётчика лейблов нет; неизвестное
+значение нормализуется в `other` — набор остаётся конечным, а произвольные данные (MIME целиком,
+`blobPath`, `sha256`, имя файла, id сессии/части) в лейблы не попадают — серии не «взрываются»
+(ADR-094 п. 5). Ошибка метрик не влияет на загрузку/выдачу/GC. При `metrics.enabled=false` рекордер
+не создаётся (no-op).
+
 ### События, шедулер, webhooks, гибрид, decision
 
 | Метрика | Тип | Лейблы | Смысл / обновление |

@@ -368,7 +368,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/sessions/:id/export` | backend | auth | Экспорт Session (внутренний формат, camelCase — формат publish/fork не изменён). Маршрут зарегистрирован **после** prefix-guard'а (`app.use('/:id')`/`app.use('/:id/*')`), поэтому **доступ к сессии решает единый guard** — проверок доступа в обработчике нет (инвариант 16). Карта обфускации Gateway (ADR-036) — **отдельная привилегия**, которую решает route-level guard `createSessionExportGuard`: **полный экспорт** (`obfuscationMap` и `messages[].metadata.secrets` включены) — **владельцу сессии** (`ownerId ?? userId`), `ADMIN` и `AUDITOR` (тот же набор привилегий, что у `GET /:id/secrets`); прочие читатели сессии (участник проекта `VIEWER`/`EDITOR`, владелец проекта, не владеющий сессией, `LEAD`) — **200 с очищенным телом** (карты нет, весь остальной разговор переносится без изменений; очистка — на копии, сохранённая сессия не меняется); нет доступа на чтение сессии → 403 `FORBIDDEN`; сессии нет → 404 `NOT_FOUND`; rate limit 10/60 c → 429 `RATE_LIMITED` |
 | POST | `/api/v2/sessions/import` | backend | auth | Импорт сессии из экспорта → 201 |
 | GET | `/api/v2/sessions/:id/status` | оба | auth | `{blocked, pending_count, processor_running}` |
-| POST | `/api/v2/sessions/:id/prompt` | оба | auth | Поставить сообщение в очередь, вернуть **SSE-стрим**; поле `mode` (`queue`\|`steer`\|`interrupt`, по умолчанию `queue`) — вмешательство в ход (ADR-104, см. ниже) |
+| POST | `/api/v2/sessions/:id/prompt` | оба | auth | Поставить сообщение в очередь, вернуть **SSE-стрим**; поле `mode` (`queue`\|`steer`\|`interrupt`, по умолчанию `queue`) — вмешательство в ход (ADR-104, см. ниже); аддитивное `attachments: string[]` (`blobPath`) — вложения сообщения (§5.6.1) |
 | GET | `/api/v2/sessions/:id/prompt` | оба | auth | Состав системного промпта (ADR-070): `manifest` + `history` + `promptState` + `lastPromptMeta` + `toolsDetail` (тулы с `chars`/`estTokens` и флагом оценки, ADR-071 §2.8). `manifest.toolsPolicy`/`manifest.mcpPolicy` — применённые политики встроенных/MCP (ADR-071 §2.3); записи: `tools` (stable/context) → `mcp.servers`/`mcp.tools`/`mcp.status` (volatile, не в `staticPrefixChars`) |
 | GET | `/api/v2/sessions/:id/memory` | оба | auth | Память сессии для вкладки «Память» (ADR-107): `provider.active`, `scope.projectId`, `lastContext` — блоки `facts`/`recall` из **последнего** хода (`chars`/`estTokens`/`status`, `null` — ходов не было), `facts.active` (активные факты в скоупе), `projectMemory` (`{enabled}` — эффективная политика проекта; `null` — сессия без проекта), `indexes` (всего/project/instance/ready/building/failed + `items`: id/name/scope/state/enabled/projectId; `stale` вычисляется плагином и здесь не отдаётся; у `instance` `enabled` всегда true), `readiness` (`ready`/`degraded`/`unavailable`). Текстов фактов/чанков нет; доступ — чтение сессии (prefix-guard), без дублирующих проверок |
 | GET | `/api/v2/sessions/:id/stats` | оба | auth | Статистика usage (ADR-070): сообщения + рекурсивный usage саб-агентов (tool `task`), агрегаты по агентам/пользователям (`computeSessionStats`) |
@@ -419,6 +419,72 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | DELETE | `/api/v2/messages/:sessionId/:index` | оба | auth | Удалить сообщение |
 | POST | `/api/v2/messages/:sessionId/:index/retry` | оба | auth | Отключить с index и вернуть текст `{content}` |
 | GET | `/api/v2/messages/:sessionId/:index/debug` | оба | auth | Отладочные данные сообщения |
+
+### 5.6.1 Вложения сообщений — `/api/v2/sessions/:id/attachments*` (оба, ADR-115)
+
+Мультимодальный ввод ([ADR-115](./arch_decisions/adr-115-multimodal-input.md)): файл загружается
+отдельным запросом, в сообщение попадает **ссылка** на объект blob-хранилища (`blobPath`), а байты
+раздаются через API (не прямой ссылкой на файл). Байты лежат на томе (`{dataDir}/blobs`, content-addressed),
+учёт ссылок — `blob_refs` ([ADR-116](./arch_decisions/adr-116-instance-state-and-blob-ports.md);
+устройство — [ARCHITECTURE.md](./ARCHITECTURE.md) §«Слой хранения»). Лимиты — секция `attachments`
+([CONFIGURATION.md](./CONFIGURATION.md) §«Вложения сообщений»).
+
+| Метод | Путь | Сборка | RBAC | Назначение / req-resp |
+|---|---|---|---|---|
+| POST | `/api/v2/sessions/:id/attachments` | оба | auth + **запись** сессии (prefix-guard) | multipart, поле `file` — **один файл за запрос** (необязательное поле `name` — имя для метаданных) → **201** `{id, blobPath, sha256, mime, size, name?}` |
+| GET / HEAD | `/api/v2/sessions/:id/attachments/:partId` | оба | auth + **чтение** сессии (prefix-guard) | Байты вложения: `200` (поток), `206` при `Range`, `304` при совпадении `ETag`, `416` при некорректном диапазоне; `HEAD` — те же заголовки без тела |
+
+**Ответ загрузки.** `id` равен `blobPath` — путь объекта `attachments/<sha2>/<sha256>`; адресация
+content-addressed, поэтому повторная загрузка тех же байтов возвращает тот же путь (дедуп).
+`sha256` — хеш уже **очищенных** байтов: у JPEG и PNG вычищаются метаданные (EXIF/IPTC/XMP),
+остальные форматы не разбираются (байты как есть — «вычистить наполовину» хуже, чем не трогать).
+`mime` определяется по
+сигнатуре содержимого, а не по заявленному клиентом; `image/svg+xml` запрещён всегда (XSS), а
+разрешённые типы задаёт `attachments.allowedMimePrefixes` (по умолчанию `image/`, `audio/`,
+`application/pdf`, `text/`). `name` санитайзится (basename, без управляющих символов, ≤ 200 символов)
+и в `blobPath` не входит.
+
+**Лимиты и коды.**
+
+| Лимит | Где проверяется | По умолчанию | Нарушение |
+|---|---|---|---|
+| `attachments.maxBytesPerFile` | загрузка | 25 МиБ | `413 PAYLOAD_TOO_LARGE` (по `Content-Length` — до чтения тела, с запасом 64 КиБ на multipart-обвязку; затем по фактическому размеру) |
+| `attachments.allowedMimePrefixes`, запрет SVG | загрузка | см. выше | `415 UNSUPPORTED_MEDIA_TYPE` |
+| `attachments.maxFilesPerMessage` | `POST …/prompt` | 10 | `400 VALIDATION_ERROR` |
+| контракт OpenAPI/SDK (`promptRequestSchema`) | публикуемая схема §5.30 | не более **50** путей в `attachments` | `400 VALIDATION_ERROR` при валидации схемой; HTTP-обработчик проверяет `maxFilesPerMessage` (см. выше) |
+| `attachments.maxBytesPerSession` | `POST …/prompt` | 1 ГиБ | `413 PAYLOAD_TOO_LARGE` |
+| `attachments.gcDays` | GC (фон) | 30 дней | — (объект без ссылок старше срока удаляется) |
+
+Квота сессии считается по **сумме `size` медиа-частей в истории сессии**, а не по ссылкам, и
+проверяется при постановке сообщения (загрузка файла квоту не проверяет — «лишний» объект станет
+сиротой и уйдёт по `gcDays`). Прочие коды загрузки: `400 VALIDATION_ERROR` (нет поля `file`/битый
+multipart), `401`, `403 FORBIDDEN` (чужая сессия, prefix-guard), `404 NOT_FOUND` (сессии нет),
+`415 UNSUPPORTED_MEDIA_TYPE` (тип вне белого списка, SVG; сюда же попадает пустой файл — MIME по
+содержимому не определяется).
+
+**Раздача (`GET`/`HEAD`).** `:partId` — id **медиа-части сообщения** (`image`/`audio`/`video`/`file`),
+а не `id` из ответа загрузки; путь объекта (`blobPath`) передаётся только в теле промпта. Доступ
+решает единый prefix-guard на границе (инвариант 16): чтение — владелец, участник проекта (любая
+роль, включая `VIEWER`), `ADMIN`/`LEAD`; чужой → `403`, нет сессии/части/объекта → `404` (без утечки
+существования). Заголовки: `Content-Type`, `Content-Length`, `Accept-Ranges: bytes`,
+`ETag` (sha256 в кавычках), `Cache-Control: private, max-age=86400`,
+`Content-Disposition: inline` (RFC 6266/5987, имя санитайзится). `If-None-Match` (в т.ч. `*` и список)
+→ `304`. `Range`: один диапазон (`bytes=start-end`, `bytes=start-`, `bytes=-N`) → `206` с
+`Content-Range`; множественные/нечисловые заголовки → объект целиком (`200`); числовой диапазон вне
+объекта (или `end < start`) → `416` с `Content-Range: bytes */<size>`.
+
+**Вложения в промпте.** Тело `POST /api/v2/sessions/:id/prompt` принимает аддитивное
+`attachments?: string[]` — массив **`blobPath`**, полученных из загрузки (не `partId`); дубли
+схлопываются. Порядок частей сообщения — текст, затем вложения; тип части выводится из MIME
+(`image/*` → `image`, `audio/*` → `audio`, `video/*` → `video`, иначе `file`). В производном
+строковом `content` каждая медиа-часть даёт плейсхолдер (`[image: name.png]`, без имени — `[image]`),
+поэтому факт вложения не теряется в экспорте, поиске и маппинге истории. Неизвестный/битый путь →
+`400 VALIDATION_ERROR` со списком таких путей (молча терять вложение нельзя); контур вложений не
+подключён в сборке → `400`. Ссылки `blob_refs` пишутся при создании сообщения (`ownerKind: 'message'`);
+форк и merge сообщений создают **свои** ссылки на те же объекты; при удалении сообщения/сессии
+ссылки снимаются, и объект без ссылок старше `gcDays` удаляет фоновый pruner (вместе с
+sidecar-метаданными). Метрики — `synth_attachment_*`
+([OBSERVABILITY.md](./OBSERVABILITY.md) §«Вложения сообщений»).
 
 ### 5.7 Queue — `/api/v2/queue`
 
@@ -1618,10 +1684,22 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 | GET | `/api/v2/projects/:id/pipelines/:pid/runs` | оба | право чтения проекта | Прогоны пайплайна `{runs}`; фильтры `status` (`pending`/`running`/`awaiting_human`/`done`/`failed`/`cancelled`), `limit` (дефолт 100, максимум 1000); неизвестный `status` → 400 `VALIDATION_ERROR` |
 | POST | `/api/v2/projects/:id/pipelines/:pid/runs` | оба | право изменения проекта | Запуск прогона: тело `{trigger?, version?}` (по умолчанию — последняя опубликованная версия, триггер `manual`) → **201** `{run}`; прогон идёт **в фоне** — клиент следит по событиям `pipeline.run.*`; опубликованной версии нет → 409 `pipeline.not_published` |
 | GET | `/api/v2/pipeline-runs/:runId` | оба | право чтения проекта прогона | Прогон и журнал `{run, events}` (события: `run.started`/`node.started`/`node.finished`/`edge.taken`/`gate.awaiting`/`run.finished`/`run.failed`); `limit` — последние N событий (дефолт 200, максимум 1000) |
+| GET | `/api/v2/pipeline-runs/:runId/artifacts/:name` | оба | право чтения проекта прогона | Байты артефакта-объекта прогона (`kind: 'blob'`): `Content-Type`, `Content-Disposition: attachment`, `Content-Length`, `ETag`, `Cache-Control: private, max-age=86400`; `If-None-Match` → `304`; нет артефакта или blob-контур не подключён → `404 NOT_FOUND` |
 | POST | `/api/v2/pipeline-runs/:runId/resume` | оба | право изменения проекта прогона | HITL-решение человека: тело `{approved, output?, comment?}` → 200 `{run}`; прогон не ждёт решения → 409 `pipeline.invalid_state` |
 | POST | `/api/v2/pipeline-runs/:runId/cancel` | оба | право изменения проекта прогона | Отмена прогона → 200 `{run}` (статус `cancelled`); прогон уже завершён → 409 `CONFLICT` |
 | GET | `/api/v2/pipeline-templates` | оба | **ADMIN** / auth | Шаблоны инстанса `{templates}`: `format` (`adr-100` — legacy-определение пакета, `adr-101` — запись `scope:'instance'`), `name`, `version`, `installedBy?`, `steps` (legacy) или `spec` |
 | POST | `/api/v2/pipeline-templates/:tid/instantiate` | оба | **ADMIN** / auth + право изменения целевого проекта | Инстанцировать шаблон в проект: тело `{projectId, name?, ensure?}` → **201** `{pipeline, created:true}` (черновик, `draftVersion: 1`, `installedBy.templateId` — id шаблона). `ensure:true` — идемпотентно: если в проекте уже есть пайплайн этого шаблона, **200** `{pipeline, created:false}`. Шаблон не конвертируется → 409 `PIPELINE_TEMPLATE_UNSUPPORTED`; нет шаблона/проекта → 404. Встроенные шаблоны памяти: `builtin:memory-consolidation` (сессия → факты), `builtin:memory-consolidate-facts` (дубли фактов), `builtin:memory-reindex` (все проектные индексы) |
+
+**Артефакты прогона (ADR-101 §9 + ADR-116).** Выход `file` пишет файл в workspace проекта **и те же
+байты** — в общий blob-порт по пути `artifacts/<runId>/<name>` (отдельного хранилища артефактов нет,
+лимит 50 МиБ на файл; превышение — предупреждение в лог, файл остаётся только в workspace). Артефакт
+описывается `PipelineArtifact` с `kind: 'blob'` и полями `path`/`name`/`mime`/`size`; список артефактов
+прогона — **на верхнем уровне** payload'а `run.finished` (`run.finished.payload.artifacts[]`, источник
+MIME/имени для выдачи) и в событии `pipeline.run.finished.artifacts[]` (аддитивное поле). Отдельного
+индекса метаданных нет — источник истины журнал прогона. `ETag` выдачи — хеш **пути** (путь уникален в
+пределах прогона и неизменяем). Автоматического retention артефактов **нет**: ни TTL, ни удаления прогонов
+через API, байты живут в blob-хранилище до ручной чистки (известное ограничение, см.
+[PIPELINES.md](./PIPELINES.md) §2.10.2).
 
 **Коды ошибок раздела:** `UNAUTHORIZED` (401), `FORBIDDEN` (403 — права проекта), `SCOPE_REQUIRED`
 (403 — service-key без `automation:install`), `PROJECT_FORBIDDEN` (403 — service-key вне
@@ -1651,7 +1729,9 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 **Хранилище.** Черновики и версии — порт `ProjectPipelineRepository`
 (`{dataDir}/pipelines/{pipelines,versions}.json`), прогоны и журнал — `PipelineRunRepository`
 (`{dataDir}/pipelines/{runs.json,run-events.jsonl}`); при `storage.backend=postgres` — драйвер
-`@itphx/synth-storage-postgres` (ADR-097).
+`@itphx/synth-storage-postgres` (ADR-097). Артефакты прогонов (`kind: 'blob'`) — байты в общем
+blob-порте (`{dataDir}/blobs/artifacts/<runId>/<name>`, учёт ссылок — `blob_refs`), метаданные — в
+журнале прогона (ADR-116).
 
 **UI.** Экран пайплайнов/прогонов и визуальный редактор **реализованы** (ADR-101 §5.35): вкладка
 «Пайплайны», страницы пайплайна и прогона, HITL-действия, редактор `@xyflow/react`.
