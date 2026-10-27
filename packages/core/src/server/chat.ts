@@ -223,9 +223,11 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
     dataDir,
     toolRegistry,
     agentRegistry,
-    // ADR-096 (W2.4): порты хранилищ (SSH-ключи, словари) — из контекста, без фоллбэков.
+    // ADR-096 (W2.4): порты хранилищ (SSH-ключи, словари, blob) — из контекста, без фоллбэков.
     sshKeyStore: storage.sshKeys,
     dictionaryStore: storage.dictionaries,
+    // ADR-115/ADR-116: гидратация вложений читает blob-порт контекста хранения.
+    blobs: storage.blobs,
     defaultWorkingDir,
     workspacesRoot,
     permissionConfig: options.config.permission,

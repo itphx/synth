@@ -39,6 +39,7 @@ import { DecisionContentClassifier } from './router/decision-content-classifier.
 import { ProviderPool } from './router/provider-pool.js';
 import { QualityChecker } from './router/quality-checker.js';
 import type { DictionaryRepository } from '../storage/ports/dictionary-repository.js';
+import type { BlobStore } from '../storage/ports/blob-store.js';
 import { MicroPipeline } from './router/micro/index.js';
 import { TaskClassifier } from './router/micro/task-classifier.js';
 import { RulesModel, EmbeddingModel, MicroLlmModel, DecisionModel } from './router/micro/models/index.js';
@@ -181,6 +182,13 @@ export interface OrchestratorOptions {
    * использует ambient ssh (реестр/ключи недоступны).
    */
   sshKeyStore?: SSHKeyRepository;
+  /**
+   * ADR-115/ADR-116: blob-порт для гидратации вложений сообщений (blob → base64
+   * перед LLM-вызовом). Продакшн передаёт `StorageContext.blobs`; не задан —
+   * фоллбэк по `dataDir` (тесты/прямое конструирование, см.
+   * `_getAttachmentHydrateDeps`).
+   */
+  blobs?: BlobStore;
   /**
    * ADR-034/ADR-035: порт словарей классификации (микро-слой, threat-scan,
    * проектные инструкции). Продакшн передаёт `StorageContext.dictionaries`;
@@ -546,6 +554,13 @@ export class ChatOrchestrator {
   private _promptBlockMaxChars: number | undefined;
   private readonly _dataDir: string;
   /**
+   * ADR-115/ADR-116: blob-порт для гидратации вложений (инъекция из контекста
+   * хранения). `null` — порт не передан: фоллбэк по `dataDir` собирается
+   * лениво в `_getAttachmentHydrateDeps` (не создаём каталог данных в
+   * конструкторе).
+   */
+  private readonly _blobs: BlobStore | null;
+  /**
    * ADR-115: порты чтения вложений для гидратации (лениво — поверх blob-порта
    * по `dataDir`, как ssh-ключи/словари ниже). `null` — ещё не созданы.
    */
@@ -833,6 +848,9 @@ export class ChatOrchestrator {
     this._securityConfig = options.securityConfig
       ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true }, secretKey: '' };
     this._dataDir = options.dataDir || '/var/synth/data';
+    // ADR-115/ADR-116: в проде blob-порт приходит инъекцией
+    // (`StorageContext.blobs`); фоллбэк для тестов — в `_getAttachmentHydrateDeps`.
+    this._blobs = options.blobs ?? null;
     this._gatewayPayloadLogPath = options.gatewayPayloadLogPath
       ?? join(options.dataDir || '/var/synth/data', 'audit', 'llm-payloads.jsonl');
     this._cachePolicy = options.cachePolicy ?? 'auto';
@@ -1956,14 +1974,15 @@ export class ChatOrchestrator {
   }
 
   /**
-   * ADR-115: порты чтения вложений. Лениво, поверх blob-порта по `dataDir`
-   * (байты — файловые по конструкции, ADR-116); продакшн-контекст хранения
-   * даёт тот же корень.
+   * ADR-115: порты чтения вложений. Порт приходит инъекцией из контекста
+   * хранения (`StorageContext.blobs`, ADR-096/ADR-116); фоллбэк по `dataDir` —
+   * только для тестов и прямого конструирования без порта.
    */
   private _getAttachmentHydrateDeps(): HydrateDeps {
     if (!this._attachmentHydrateDeps) {
       this._attachmentHydrateDeps = createHydrateDeps(
-        createFileStorage({ dataDir: this._dataDir, env: process.env }).blobs,
+        this._blobs
+          ?? createFileStorage({ dataDir: this._dataDir, env: process.env }).blobs,
       );
     }
     return this._attachmentHydrateDeps;

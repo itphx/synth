@@ -8,6 +8,8 @@ import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { SSHKeyStore } from '../storage/ssh-key-store.js';
+import { MemoryBlobStore } from '../storage/memory/content.js';
+import type { HydrateDeps } from './attachments/hydrate.js';
 import { EventBus } from '../events/bus.js';
 import { ProviderFactory, BaseProvider, resolveSystemPromptText } from '../providers/base.js';
 import { GatewayProvider } from './gateway/gateway-provider.js';
@@ -187,6 +189,33 @@ describe('ChatOrchestrator._resolveWorkingDir', () => {
       sshKeyStore: store,
     });
     expect((orch as unknown as { _sshKeyStore: unknown })._sshKeyStore).toBe(store);
+  });
+
+  it('ADR-115/ADR-116: переданный blob-порт используется гидратацией вложений', async () => {
+    // Байты только в memory-порте: если бы гидратация читала диск по `dataDir`,
+    // объект не нашёлся бы.
+    const blobs = new MemoryBlobStore();
+    const blobPath = 'attachments/ab/deadbeef';
+    await blobs.write(blobPath, Buffer.from('image-bytes'));
+
+    const orch = new ChatOrchestrator({
+      sessionManager,
+      eventBus: new EventBus(),
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: () => null,
+      dataDir: tmpDir,
+      projectStore,
+      blobs,
+    });
+    const deps = (orch as unknown as { _getAttachmentHydrateDeps(): HydrateDeps })
+      ._getAttachmentHydrateDeps();
+    await expect(deps.read(blobPath)).resolves.toEqual(Buffer.from('image-bytes'));
+
+    // Без инъекции тот же путь не читается (фоллбэк смотрит в `{dataDir}/blobs`).
+    const fallback = makeOrchestrator();
+    const fallbackDeps = (fallback as unknown as { _getAttachmentHydrateDeps(): HydrateDeps })
+      ._getAttachmentHydrateDeps();
+    await expect(fallbackDeps.read(blobPath)).resolves.toBeNull();
   });
 });
 

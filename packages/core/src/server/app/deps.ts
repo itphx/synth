@@ -935,6 +935,9 @@ export async function createStandaloneDeps(
     sshKeyStore,
     // ADR-096 (W2.4): словари классификации — порт из контекста хранения.
     dictionaryStore,
+    // ADR-115/ADR-116: blob-порт гидратации вложений — из контекста хранения,
+    // без фоллбэка по `dataDir` (иначе standalone смотрел бы в другой корень).
+    blobs: storageContext.blobs,
     defaultWorkingDir,
     workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
     // ADR-075: тулы проекта (workspace) читают live-политику вне root.

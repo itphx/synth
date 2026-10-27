@@ -89,6 +89,7 @@ import {
   createApprovalCoverageResolver,
   startEventJournalMetrics,
   // ADR-101 (Э5): движок пайплайнов, исполнители шагов, обработчики выходов.
+  PipelineArtifactStore,
   PipelineEngine,
   // ADR-101: реестр активных прогонов (soft-lock + отмена) — общий экземпляр
   // для HTTP-роута пайплайнов и встроенных тулов агента.
@@ -883,6 +884,9 @@ export async function createBackendDeps(
     sshKeyStore,
     // ADR-096 (W2.4): словари классификации — порт из контекста хранения.
     dictionaryStore,
+    // ADR-115/ADR-116: blob-порт гидратации вложений — из контекста хранения
+    // (managed: тот же корень, что у раздачи/записи blob'ов).
+    blobs: storageContext.blobs,
     workspacesRoot: config.workspacesRoot,
     // ADR-075: backend — managed-режим, workspace вне workspacesRoot запрещён.
     workspaceManaged: true,
@@ -1274,6 +1278,14 @@ export async function createBackendDeps(
       return null;
     }
   };
+  // ADR-101 §9 / ADR-116: артефакты прогонов — байты в общем blob-порте
+  // (отдельного хранилища артефактов нет). Тот же инстанс получают выход `file`
+  // (запись) и HTTP-раздача артефактов прогона (`GET
+  // /pipeline-runs/:runId/artifacts/:name`), иначе route отдавал бы 404.
+  const pipelineArtifacts = new PipelineArtifactStore({
+    blobs: storageContext.blobs,
+    blobRefs: storageContext.blobRefs,
+  });
   const pipelineEngine = new PipelineEngine({
     // ADR-096: порты спецификаций пайплайнов и прогонов — из контекста хранения.
     pipelines: storageContext.projectPipelines,
@@ -1292,6 +1304,9 @@ export async function createBackendDeps(
         projectStore,
         eventBus,
         ingress: eventIngress,
+        // ADR-116: выход `file` дополнительно кладёт байты в blob-порт —
+        // артефакт прогона переживает очистку workspace.
+        artifacts: pipelineArtifacts,
         workspacesRoot: config.workspacesRoot,
         resolveLlmDefaults,
         // ADR-089: владелец сессии, созданной выходом, — владелец проекта
@@ -1487,6 +1502,9 @@ export async function createBackendDeps(
     pipelines: pipelineStore,
     // ADR-101 (Э5): движок пайплайнов (второй движок) — HTTP-роутов нет (Э6).
     pipelineEngine,
+    // ADR-101 §9/ADR-116: хранилище артефактов прогонов поверх blob-порта —
+    // получает HTTP-раздача `GET /pipeline-runs/:runId/artifacts/:name`.
+    pipelineArtifacts,
     // ADR-101: реестр активных прогонов — общий для HTTP-роута пайплайнов и
     // встроенных тулов агента (soft-lock + отмена идущего прогона).
     pipelineRunControl,

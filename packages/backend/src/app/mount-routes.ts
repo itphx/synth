@@ -402,6 +402,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       // ADR-101: общий реестр активных прогонов (soft-lock + отмена) —
       // тот же экземпляр, что у встроенных тулов агента.
       runControl: deps.pipelineRunControl,
+      // ADR-116: раздача артефактов прогона (blob-порт) — тот же store, что у
+      // выхода `file` движка пайплайнов (без него route всегда 404).
+      artifacts: deps.pipelineArtifacts,
     },
     {
       writeGuard: auth.requireAuth,
