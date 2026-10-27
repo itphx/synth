@@ -49,8 +49,10 @@
    `estimateTokens`, debug и маппинг истории остаются текстовыми; провайдер сам собирает массив частей
    запроса. Порядок — текст, затем вложения.
 4. **Провайдеры** маппят вложения в свои форматы: OpenAI (`image_url`, `input_audio`), Anthropic
-   (`image`, `document`), Gemini (inline). Для модели без нужной модальности вложение **не отправляется**,
-   модель получает плейсхолдер + системную пометку, пользователь — предупреждение (i18n-ключ), не 500.
+   (`image`, `document`), Gemini (inline). Вложение, модальность которого модель **точно** не принимает
+   (модальности известны из конфига модели), не отправляется: модель получает плейсхолдер + системную
+   пометку, пользователь — предупреждение (i18n-ключ), не 500. Если модальности модели **неизвестны**,
+   вложение отправляется как есть — тихая потеря запрещена (см. §«Модальности входа модели»).
 5. **Gateway** (инвариант 3) остаётся единственным путём: обфускация/guard/payload-лог работают **только**
    с текстом (`content`, `systemPrompt`, сериализованный `tools`); бинарь не сканируется и не логируется —
    в журнал попадают только ссылки `{blobPath, sha256, size, mime}`. Обфускация на медиа не
@@ -115,6 +117,28 @@ export interface MediaPartData {
 | `engine/orchestrator/prompt-info.ts` | `PromptHistoryInfo.attachments` уже считает нетекстовые части (`:230-243`) — начинает учитывать медиа |
 | `engine/context/token-ratio.ts` | приблизительный учёт токенов медиа (по размеру/разрешению), чтобы бюджет промпта не «врал» |
 
+## Модальности входа модели
+
+**Решение 2026-10-27: единственный источник истины — каталог провайдера при синхронизации моделей.**
+
+- `POST /api/v2/models/fetch` забирает каталог провайдера (`architecture.input_modalities` и
+  `architecture.modality`, одинаково у OpenAI- и Anthropic-совместимых эндпоинтов) и пишет результат в
+  `ModelConfig.modalities` (парсер — `parseArchitectureModalities`, `packages/core/src/providers/base.ts`).
+- Ручной override — `POST /api/v2/models` (`modalities: ['text','image',…]`, `null` — сброс). Он же
+  остаётся способом задать модальности там, где каталог их не сообщает.
+- Захардкоженный справочник модальностей (`KNOWN_MODEL_MODALITIES` / `resolveModelModalities` /
+  `DEFAULT_MODEL_MODALITIES` / `MODALITY_KEYS_BY_LENGTH` в `packages/shared/src/model-metadata.ts`)
+  **удалён**: актуализировать его некому, а поиск по «самому длинному префиксу» давал неверные ответы —
+  vision-модель без ключа в справочнике выглядела текстовой, и её вложения молча терялись.
+  Тип `AttachmentModality` оставлен (конфиг модели, схемы, провайдеры).
+- `GET /api/v2/models` отдаёт `modalities` **только если они заданы**; отсутствие поля в JSON и есть
+  «модальности неизвестны» (фоллбэка `['text']` нет).
+- Гидратация (`packages/core/src/engine/attachments/hydrate.ts`) при неизвестных модальностях
+  **не фильтрует**: вложение уходит провайдеру как есть, а ошибку непринятого типа возвращает провайдер и
+  видит пользователь. Тихая потеря вложения недопустима — это и был баг, из-за которого справочник удалён.
+- UI предупреждает о несовместимом вложении только при **известных** модальностях (`models[].modalities`
+  есть и не пуст); поля нет — гейт не применяется, отправка не блокируется.
+
 ## API и лимиты
 
 - Загрузка — multipart (`@hono/node-server` уже используется для `/fs/upload`); лимит — из конфига,
@@ -172,7 +196,7 @@ export interface MediaPartData {
 | сразу готово к отправке | состояние `uploading → ready → error`; чип с прогрессом, повтор при ошибке |
 | `file://` и server-path как «вложение» | `blobPath` + API-URL для превью (`/api/v2/sessions/:id/attachments/:partId`) |
 | документы распаковываются и уходят текстом | так же: извлечённый текст — отдельная `text`-часть/`transcript`, байты документа — `file`-часть |
-| модель-гейт по `modalities.input` приходит с сервера OpenCode | поле модальностей добавляется в метаданные модели (`shared/model-metadata.ts` + конфиг), отдаётся в `GET /models` |
+| модель-гейт по `modalities.input` приходит с сервера OpenCode | модальности — поле конфига модели (`ModelConfig.modalities`: каталог провайдера при синхронизации / ручной override), отдаётся в `GET /models`, когда задано; нет — гейт не применяется |
 
 Что **не** берём из референса: вкладки-гости, трекеры/issues/PR как вложения, VS Code-интеграцию,
 `file://`-пути (у нас — workspace и `@`-упоминания), dictation-режим (голосовой ввод — отдельная задача
@@ -201,7 +225,10 @@ export interface MediaPartData {
 - контракт: `PartType` + `image|audio|video|file`, `MediaPartData`, `makeMediaPart`,
   плейсхолдер в `buildContentFromParts` (`packages/shared/src/types/message.ts`,
   `packages/shared/src/utils/index.ts`), `mediaPartSchema`;
-- модальности моделей: `KNOWN_MODEL_MODALITIES`/`resolveModelModalities`, отдаются `GET /api/v2/models`;
+- модальности моделей: источник — каталог провайдера (`architecture.input_modalities`/`modality`) при
+  `POST /models/fetch` → `ModelConfig.modalities` (+ ручной override `POST /models`); отдаются
+  `GET /api/v2/models`, только если заданы; справочника в ядре нет, неизвестные модальности →
+  вложения не фильтруются (решение 2026-10-27, §«Модальности входа модели»);
 - хранение: `BlobStore.stat/readStream`, корень `{dataDir}/blobs`, `AttachmentService`
   (MIME по сигнатуре, лимиты, запрет SVG, вычищение EXIF/PNG-метаданных до хеширования,
   content-addressed `attachments/<sha2>/<sha256>`, sidecar с именем), `blobRefs` (миграция `024`);
@@ -239,3 +266,8 @@ export interface MediaPartData {
 - 2026-10-27 — принято как ADR-115 из [PROP-085](./prop-085-multimodal-input.md). Зафиксировано: байты на
   томе через `BlobStore` (не в БД), `blob_refs` для дедупа и GC, аддитивное `attachments` в LLM-контракте,
   UI по образцу OpenChamber (`tmp/refs/openchamber`), видео/ASR/OCR — вне объёма.
+- 2026-10-27 — **уточнение по модальностям** (по факту бага «вложение теряется молча»): захардкоженный
+  справочник (`KNOWN_MODEL_MODALITIES`/`resolveModelModalities`/`DEFAULT_MODEL_MODALITIES`) удалён;
+  единственный источник истины — каталог провайдера при синхронизации моделей → `ModelConfig.modalities`
+  (+ ручной override). `GET /api/v2/models` отдаёт `modalities` только при заданном значении; неизвестные
+  модальности → вложения **не** фильтруются (ошибку непринятого типа возвращает провайдер).

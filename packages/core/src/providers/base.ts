@@ -265,22 +265,6 @@ export function attachmentModalityOf(mime: string): AttachmentModality | null {
   return null;
 }
 
-/**
- * ADR-115 §4: оставить только вложения, которые модель принимает.
- * Текстовая модальность байтами не отправляется — исключается всегда.
- */
-export function filterAttachmentsByModalities(
-  attachments: readonly LLMAttachment[] | undefined,
-  modalities: readonly AttachmentModality[],
-): LLMAttachment[] {
-  if (!attachments || attachments.length === 0) return [];
-  const allowed = new Set(modalities);
-  return attachments.filter((attachment) => {
-    const modality = attachmentModalityOf(attachment.mime);
-    return modality !== null && modality !== 'text' && allowed.has(modality);
-  });
-}
-
 /** Признак объекта-контейнера base64-данных вложения (для отладки). */
 function isAttachmentDataHolder(value: Record<string, unknown>): boolean {
   return (

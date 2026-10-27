@@ -950,9 +950,10 @@ export async function createStandaloneDeps(
     // ADR-115/ADR-116: blob-порт гидратации вложений — из контекста хранения,
     // без фоллбэка по `dataDir` (иначе standalone смотрел бы в другой корень).
     blobs: storageContext.blobs,
-    // ADR-115: модальности модели из её конфига (каталог провайдера или ручной
-    // override) приоритетнее захардкоженного справочника — иначе общий ключ
-    // `deepseek` (только текст) отсекал бы vision-модели.
+    // ADR-115: модальности модели — только из её конфига (каталог провайдера
+    // при синхронизации моделей либо ручной override). Справочника модальностей
+    // в ядре нет (решение 2026-10-27): не нашли — `undefined`, и гидратация
+    // вложений их не фильтрует (ошибку модальности вернёт провайдер).
     resolveModelModalities: (providerName: string, modelId: string) => {
       const direct = modelCache.get(`${providerName}/${modelId}`) ?? modelCache.get(modelId);
       if (direct?.modalities?.length) return direct.modalities;

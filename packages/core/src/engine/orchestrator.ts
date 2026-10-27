@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, resolveModelModalities, appendReasoningBlock } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir, stat } from 'node:fs/promises';
@@ -193,9 +193,10 @@ export interface OrchestratorOptions {
    * ADR-115: модальности модели из её конфига (`ModelConfig.modalities`).
    *
    * Резолвер задаётся точкой сборки (по `modelCache`): конфиг модели —
-   * источник истины, потому что каталог провайдера знает о vision-возможностях
-   * больше захардкоженного справочника (например, `deepseek-v4.1-flash`).
-   * Не задан или вернул `undefined` — действует `resolveModelModalities`.
+   * единственный источник истины (каталог провайдера при синхронизации либо
+   * ручной override); справочника модальностей в ядре нет.
+   * Не задан или вернул `undefined` — модальности неизвестны, гидратация
+   * вложений их **не** фильтрует (решение 2026-10-27).
    */
   resolveModelModalities?: (providerName: string, modelId: string) => AttachmentModality[] | undefined;
   /**
@@ -571,8 +572,8 @@ export class ChatOrchestrator {
   private readonly _blobs: BlobStore | null;
   /**
    * ADR-115: модальности модели из её конфига (`ModelConfig.modalities` —
-   * каталог провайдера или ручной override). Приоритетнее справочника;
-   * `undefined` — у модели значение не задано, действует `resolveModelModalities`.
+   * каталог провайдера или ручной override). `undefined` — у модели значение
+   * не задано (модальности неизвестны): вложения не фильтруются.
    */
   private readonly _resolveModalities: ((providerName: string, modelId: string) => AttachmentModality[] | undefined) | null;
   /**
@@ -2042,13 +2043,13 @@ export class ChatOrchestrator {
         this._cancellationTokens.set(streamId, token);
       },
       // ADR-115: вложения — blob → base64 с фильтром модальностей модели хода.
-      // Приоритет: конфиг модели (каталог провайдера / ручной override) →
-      // справочник `resolveModelModalities`. Отброшенные по модальности
-      // вложения не теряются молча — уходят сводкой в лог.
+      // Источник модальностей — только конфиг модели (каталог провайдера /
+      // ручной override); справочника нет. Модальности неизвестны — фильтра
+      // нет, вложение уходит провайдеру как есть (его ошибку увидит
+      // пользователь — тихая потеря вложения недопустима).
       hydrateAttachments: (messages, source, target) =>
         hydrateMessageAttachments(messages, source, this._getAttachmentHydrateDeps(), {
-          modalities: this._resolveModalities?.(target.providerName, target.modelId)
-            ?? resolveModelModalities(target.providerName, target.modelId),
+          modalities: this._resolveModalities?.(target.providerName, target.modelId),
           log: (message) => warning('ATTACHMENTS', message),
         }),
       // ADR-107: телеметрия блоков памяти в промпте хода.

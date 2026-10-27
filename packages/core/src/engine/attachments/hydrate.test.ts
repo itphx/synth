@@ -139,6 +139,36 @@ describe('hydrateMessageAttachments (ADR-115)', () => {
     });
   });
 
+  it('модальности неизвестны (не заданы) → вложение уходит, фильтра нет', async () => {
+    const deps = makeDeps({ 'attachments/aa/pdf': PDF_BYTES });
+    const source = [
+      sourceMessage({ parts: [mediaPart('file', { blobPath: 'attachments/aa/pdf', mime: 'application/pdf' })] }),
+    ];
+
+    // Модальности модели неизвестны (каталог провайдера их не сообщил):
+    // вложение отправляется как есть — ошибку непринятого типа вернёт
+    // провайдер, тихой потери вложения быть не должно.
+    const result = await hydrateMessageAttachments([llmMessage()], source, deps);
+
+    expect(result[0]!.attachments?.[0]).toEqual({
+      mime: 'application/pdf',
+      name: 'pdf',
+      base64: PDF_BYTES.toString('base64'),
+    });
+    expect(result[0]!.debug?.attachmentsDropped).toBeUndefined();
+    expect(deps.reads).toEqual(['attachments/aa/pdf']);
+  });
+
+  it('пустой список модальностей трактуется как «неизвестны» — без фильтра', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const source = [sourceMessage({ parts: [mediaPart('image', { blobPath: 'attachments/aa/image' })] })];
+
+    const result = await hydrateMessageAttachments([llmMessage()], source, deps, { modalities: [] });
+
+    expect(result[0]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+    expect(result[0]!.debug?.attachmentsDropped).toBeUndefined();
+  });
+
   it('ошибка чтения объекта → вложение пропускается, ход не падает', async () => {
     const deps = makeDeps({});
     const source = [

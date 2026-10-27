@@ -4,7 +4,7 @@ import type { createMiddleware } from 'hono/factory';
 import type { JsonStoreLike } from '../../storage/json-store.js';
 import type { ModelConfig, ProviderConfig, ContextSource, AttachmentModality } from '@itphx/synth-shared';
 import type { DefaultModelPair } from '../../storage/runtime-settings.js';
-import { hasPriceInput, lookupContextWindow, parseCurrencyInput, resolveModelModalities } from '@itphx/synth-shared';
+import { hasPriceInput, lookupContextWindow, parseCurrencyInput } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/index.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
@@ -101,7 +101,7 @@ const ATTACHMENT_MODALITIES: readonly AttachmentModality[] = ['text', 'image', '
  * ADR-115: модальности из тела запроса модели (ручной override).
  *
  * - поле не передано → сохранить существующее значение;
- * - `null` → сбросить (модальности снова берутся из справочника);
+ * - `null` → сбросить (модальности модели снова неизвестны — вложения не фильтруются);
  * - массив → отфильтровать до известных значений и дедуплицировать.
  */
 function resolveModalitiesInput(
@@ -469,10 +469,12 @@ export function createModelRoutes(
           currency: m.currency,
           /**
            * ADR-115: модальности входа модели (какие вложения она принимает).
-           * Конфиг модели (каталог провайдера / ручной override) приоритетнее
-           * справочника; неизвестная модель → консервативно `['text']`.
+           * Только из конфига модели: каталог провайдера (`POST /models/fetch`)
+           * либо ручной override (`POST /models`). Не заданы — поля нет:
+           * «модальности неизвестны», ограничение не применяется (справочника
+           * модальностей в ядре нет — решение 2026-10-27).
            */
-          modalities: m.modalities ?? resolveModelModalities(m.provider, m.name),
+          ...(m.modalities && m.modalities.length > 0 ? { modalities: m.modalities } : {}),
         })),
       };
     });

@@ -88,7 +88,8 @@ describe('routes/models (core): POST /fetch', () => {
 
     expect((await stores.modelStore.load('p1/m1'))?.modalities).toEqual(['text', 'image']);
     expect((await stores.modelStore.load('p1/m2'))?.modalities).toEqual(['text', 'image']);
-    // API модальности не сообщил — поле не появляется (действует справочник).
+    // API модальности не сообщил — поле не появляется (модальности неизвестны,
+    // ограничение не применяется).
     expect((await stores.modelStore.load('p1/m3'))?.modalities).toBeUndefined();
     expect(stores.modelCache.get('p1/m2')?.modalities).toEqual(['text', 'image']);
   });

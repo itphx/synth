@@ -9,8 +9,12 @@
  * Правила:
  *  - сообщения сопоставляются с исходной историей **по индексу** (порядок
  *    тот же, что отфильтровал `sessionMessagesToLlm`);
- *  - вложения, модальность которых модель не принимает, не отправляются: в лог
- *    уходит сводка, а на сообщении остаётся пометка `reason: 'modality'`;
+ *  - вложения, модальность которых модель **точно** не принимает, не
+ *    отправляются: в лог уходит сводка, а на сообщении остаётся пометка
+ *    `reason: 'modality'`. Модальности модели неизвестны (`options.modalities`
+ *    не задан — справочника в ядре нет, каталог провайдера их не сообщил) —
+ *    фильтра нет: вложения отправляются как есть, ошибку непринятого типа
+ *    вернёт провайдер (тихая потеря вложения недопустима);
  *  - суммарный объём base64 ограничен (`MAX_ATTACHMENT_BASE64_BYTES`): при
  *    превышении отбрасываются **самые старые** вложения (с начала истории), а
  *    на сообщении остаётся пометка `reason: 'limit'` — промпт не ломается;
@@ -55,8 +59,9 @@ export interface HydrateDeps {
 /** Опции гидратации. */
 export interface HydrateOptions {
   /**
-   * Модальности модели (`resolveModelModalities`). Не задано — без фильтра
-   * (отправляются все поддержанные типы).
+   * Модальности модели из её конфига (`ModelConfig.modalities`). Не задано
+   * (или пусто) — модальности неизвестны, фильтра нет: отправляются все
+   * поддержанные типы.
    */
   modalities?: readonly AttachmentModality[];
   /** Предел суммарного base64 (по умолчанию `MAX_ATTACHMENT_BASE64_BYTES`). */
@@ -152,6 +157,11 @@ export async function hydrateMessageAttachments(
 ): Promise<LLMMessage[]> {
   const included = includedSourceMessages(source);
   const maxTotal = options.maxTotalBase64Bytes ?? MAX_ATTACHMENT_BASE64_BYTES;
+  // Модальности неизвестны (не заданы или пусты) — фильтра нет: вложение,
+  // которое модель не примет, отклонит провайдер (ошибка видна пользователю).
+  const allowedModalities = options.modalities && options.modalities.length > 0
+    ? new Set<AttachmentModality>(options.modalities)
+    : null;
 
   // 1. Читаем все допустимые вложения в хронологическом порядке.
   const candidates: Array<{ messageIndex: number; attachment: LLMAttachment; sizeBytes: number }> = [];
@@ -174,7 +184,7 @@ export async function hydrateMessageAttachments(
     for (const ref of refs) {
       const modality = byteModality(ref.mime);
       if (modality === null) continue;
-      if (options.modalities && !options.modalities.includes(modality)) {
+      if (allowedModalities && !allowedModalities.has(modality)) {
         // Байты не читаем — размер неизвестен (0).
         dropByModality(index, {
           mime: ref.mime,
@@ -188,7 +198,7 @@ export async function hydrateMessageAttachments(
         if (!meta) continue;
         const metaModality = byteModality(meta.mime);
         if (metaModality === null) continue;
-        if (options.modalities && !options.modalities.includes(metaModality)) {
+        if (allowedModalities && !allowedModalities.has(metaModality)) {
           dropByModality(index, {
             mime: meta.mime,
             ...(meta.name ?? ref.name ? { name: meta.name ?? ref.name } : {}),
