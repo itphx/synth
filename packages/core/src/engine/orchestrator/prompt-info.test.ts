@@ -233,6 +233,30 @@ describe('buildPromptHistoryInfo — read-only слой истории', () => {
     expect(info.excluded).toEqual({ disabled: 1, hidden: 1, info: 1 });
   });
 
+  it('отключённая user-реплика выключает весь свой ход в истории промпта', () => {
+    const messages = [
+      msg({ role: MessageRole.USER, content: 'q1', author: 'user' }),
+      msg({ role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'developer' }),
+      msg({ role: MessageRole.USER, content: 'q2', author: 'user', disabled: true }),
+      msg({
+        role: MessageRole.ASSISTANT,
+        content: 'a2',
+        agentRole: 'developer',
+        toolCalls: [{ id: 't1', function: { name: 'read_file' } }],
+      }),
+      msg({ role: MessageRole.TOOL, content: 'result', toolCallId: 't1' }),
+      msg({ role: MessageRole.USER, content: 'q3', author: 'user' }),
+      msg({ role: MessageRole.ASSISTANT, content: 'a3', agentRole: 'developer' }),
+    ];
+    const session = makeSession(messages, { userId: 'user' });
+
+    const info = buildPromptHistoryInfo(session, 'developer');
+
+    // q2 + её assistant + tool-результат.
+    expect(info.excluded.disabled).toBe(3);
+    expect(info.messages.count).toBe(4);
+  });
+
   it('chars включает content + JSON(toolUse) + reasoning; estTokens — по ratio', () => {
     const messages = [
       msg({ role: MessageRole.USER, content: 'вопрос', author: 'user' }),

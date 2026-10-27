@@ -11,6 +11,7 @@ import { MessageRole } from '@itphx/synth-shared';
 import type { LLMMessage } from '../../providers/base.js';
 import { PLACEHOLDER_PATTERN } from '../gateway/index.js';
 import { wrapStateContent } from '../context/state-messages.js';
+import { suppressDisabledTurns } from '../context/disabled-turns.js';
 import { estimateTokens, DEFAULT_CHARS_PER_TOKEN } from '../context/token-ratio.js';
 import { estimateMediaTokens } from '../context/media-tokens.js';
 import type { InjectionPolicy } from '../security/prompt-injection.js';
@@ -179,7 +180,10 @@ export function buildPromptHistoryInfo(
   agentRole?: string,
   tokenRatio: number = DEFAULT_CHARS_PER_TOKEN,
 ): PromptHistoryInfo {
-  const sent = sessionMessagesToLlm(session.messages, agentRole, session.userId);
+  // Отключённая пользовательская реплика выключает весь свой ход — зеркалим
+  // то же подавление, что и в реальном ходе (`process-setup`).
+  const contextMessages = suppressDisabledTurns(session.messages);
+  const sent = sessionMessagesToLlm(contextMessages, agentRole, session.userId);
 
   // Сообщения: chars = content + JSON(toolUse) + reasoning, estTokens — по
   // калиброванному chars-per-token (как в манифесте промпта).
@@ -197,7 +201,7 @@ export function buildPromptHistoryInfo(
 
   // State-сообщения: role system (не disabled/hidden), текст — как уходит в LLM.
   const stateMap = new Map<string, { count: number; chars: number }>();
-  for (const msg of session.messages) {
+  for (const msg of contextMessages) {
     if (msg.role !== MessageRole.SYSTEM || msg.disabled || msg.hidden) continue;
     const type = typeof msg.metadata?.type === 'string' ? msg.metadata.type : 'state';
     const entry = stateMap.get(type) ?? { count: 0, chars: 0 };
@@ -216,7 +220,7 @@ export function buildPromptHistoryInfo(
 
   // Исключённые: ровно то, что отфильтровывает `sessionMessagesToLlm`.
   const excluded = { disabled: 0, hidden: 0, info: 0 };
-  for (const msg of session.messages) {
+  for (const msg of contextMessages) {
     if (msg.disabled) excluded.disabled += 1;
     if (msg.hidden) excluded.hidden += 1;
     if (msg.role === MessageRole.INFO) excluded.info += 1;
@@ -229,7 +233,7 @@ export function buildPromptHistoryInfo(
   // оценками (см. `media-tokens.ts`) — добавляем их к текстовой оценке
   // `messages.estTokens`. Формат `PromptHistoryInfo` не меняется.
   let mediaTokens = 0;
-  for (const msg of session.messages) {
+  for (const msg of contextMessages) {
     if (msg.disabled || msg.hidden || msg.role === MessageRole.INFO) continue;
     if (msg.role === MessageRole.ASSISTANT && msg.metadata?.status === 'error') continue;
     mediaTokens += estimateMediaTokens(msg.parts);

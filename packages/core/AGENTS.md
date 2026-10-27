@@ -66,6 +66,13 @@
   Осиротевших `tool`-сообщений (без предшествующего `tool_calls`) в выдаче быть не
   должно: это ломает OpenAI-совместимые API и Anthropic (`tool_result` требует
   парный `tool_use`).
+- Отключение **user**-реплики (`disabled`) выключает весь её ход:
+  `suppressDisabledTurns` (`engine/context/disabled-turns.ts`) подавляет
+  assistant/tool/error до следующей user-реплики; system-state и summary
+  остаются. Отключённый assistant с `toolCalls` подавляет свои tool-результаты
+  (иначе они осиротеют). Функция применяется в `process-setup` до optimizer и в
+  `buildPromptHistoryInfo` — диагностика `GET /sessions/:id/prompt` совпадает с
+  реальной отправкой (`excluded.disabled` считает подавленный ход целиком).
 - Любой LLM-вызов — через `GatewayProvider`
   (`engine/gateway/gateway-provider.ts`: guard, обфускация, rate limit, аудит);
   провайдера напрямую не дёргать (ADR-036).

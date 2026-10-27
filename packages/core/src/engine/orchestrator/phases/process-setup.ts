@@ -44,6 +44,7 @@ import type { LazyInstructionsLoader } from '../../context/lazy-instructions.js'
 import type { RoutingDecision } from '../../router/router.js';
 import type { LlmFailureContext } from '../errors.js';
 import { syncStateMessages } from '../../context/state-messages.js';
+import { suppressDisabledTurns } from '../../context/disabled-turns.js';
 import { agentKeyOf, buildPromptState, computeExpected, isBlockChanged, isPrefixUnchanged, type PromptStateReason } from '../../context/prompt-state.js';
 import { sessionMessagesToLlm, resolveTurnQuery } from '../prompt-info.js';
 import { DEFAULT_CHARS_PER_TOKEN } from '../../context/token-ratio.js';
@@ -432,10 +433,15 @@ export async function runProcessSetup(
     session.messages.push(...stateSync.added);
   }
 
-  // 2. Build context (сначала получить summary из сообщений)
+  // 2. Build context (сначала получить summary из сообщений).
+  // Отключение пользовательской реплики выключает весь её ход: без этого
+  // assistant/tool-хвост уходил модели, хотя сама реплика отключена.
+  const contextSession = session.messages.some((m) => m.disabled)
+    ? { ...session, messages: suppressDisabledTurns(session.messages) }
+    : session;
   const optimizedMessages = deps.optimizer
-    ? deps.optimizer.getMessagesForLlm(session)
-    : session.messages;
+    ? deps.optimizer.getMessagesForLlm(contextSession)
+    : contextSession.messages;
 
   const summaryContent = optimizedMessages
     .filter((m) => m.role === MessageRole.SUMMARY)
