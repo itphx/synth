@@ -3,6 +3,8 @@ import { nowISO, generateStreamId, generateId, MessageRole, MAX_STEER_INJECTIONS
 import type { SessionManager } from '../sessions/manager.js';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { EventBus } from '../events/bus.js';
+// ADR-115: части сообщения в live-событии — иначе UI не покажет вложение до перезагрузки.
+import { snapshotPartsForEvent } from '../events/part-snapshot.js';
 import type { ContextOptimizer } from '../engine/context/optimizer.js';
 import { isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../engine/llm-error.js';
 import type { AnalyticsRecorder } from '../analytics/recorder.js';
@@ -331,6 +333,9 @@ export class QueueProcessor {
             message_index: userMsgIndex,
             role: message.role,
             content: message.content.slice(0, 500),
+            // ADR-115: части сообщения (медиа — как есть, текст — с лимитом).
+            // Без них UI-лента не покажет вложение до перезагрузки страницы.
+            parts: snapshotPartsForEvent(message.parts),
             author: message.author,
             agent_role: message.agentRole,
             metadata: message.metadata || undefined,

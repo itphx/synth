@@ -10,6 +10,9 @@ export type { SessionStatsDeps } from './sessions/stats.js';
 export { EventBus, INSTANCE_EVENT_CHANNEL, sseEventStream } from './events/bus.js';
 export { extractChildSessionId, extractCreatedSession } from './events/child-session.js';
 export type { CreatedSessionTarget } from './events/child-session.js';
+// ADR-115: части сообщения для live-событий (`message.added`/`message.injected`).
+export { snapshotPartsForEvent, DEFAULT_EVENT_PART_TEXT_LIMIT } from './events/part-snapshot.js';
+export type { EventPartSnapshot } from './events/part-snapshot.js';
 export { HookBus, HOOK_ASYNC_TIMEOUT_MS } from './engine/hooks/index.js';
 export type { HookHandler, HookRegistrationOptions, HookEmitResult } from './engine/hooks/index.js';
 // ADR-090: загрузчик плагинов (`PluginHost`). Ф1: исполнение кода

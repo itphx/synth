@@ -341,6 +341,9 @@ export function createDispatcher(): EventDispatcher {
           reasoning: (src.reasoning as string) || undefined,
           intermediate_text_blocks: src.intermediate_text_blocks as Array<{ text: string; iteration: number }> | undefined,
           tool_calls: (src.tool_calls as MessageData['tool_calls']) ?? null,
+          // ADR-115: части сообщения — медиа-вложения в живой ленте (до
+          // перезагрузки), иначе остаётся только текстовый плейсхолдер.
+          parts: (src.parts as MessageData['parts']) ?? undefined,
           usage,
           metadata: src.metadata as Record<string, unknown> | undefined,
           disabled: false,
@@ -370,6 +373,8 @@ export function createDispatcher(): EventDispatcher {
           id: (payload.message_id as string) || undefined,
           role: 'user',
           content: (payload.content as string) || '',
+          // ADR-115: части (медиа) инъекции — миниатюра в живой ленте.
+          parts: (payload.parts as MessageData['parts']) ?? undefined,
           agent_role: (payload.agent_role as string) || undefined,
           author: (payload.author as string) || undefined,
           metadata,

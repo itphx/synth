@@ -15,6 +15,9 @@ import type { Message, MessageI18n } from '@itphx/synth-shared';
 import type { LLMMessage } from '../../providers/base.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+// ADR-115: части сообщения в live-событии — иначе UI не покажет вложение до перезагрузки.
+import { snapshotPartsForEvent } from '../../events/part-snapshot.js';
+import type { EventPartSnapshot } from '../../events/part-snapshot.js';
 
 /**
  * Payload события `message.injected` — инъекция применена на границе шага.
@@ -30,6 +33,11 @@ export type SteerInjectedEvent = {
   message_id: string;
   /** Текст инъекции. */
   content: string;
+  /**
+   * ADR-115: части применённого сообщения (медиа — как есть, текст — с лимитом).
+   * Аддитивное поле: без него UI-лента не покажет вложение до перезагрузки.
+   */
+  parts?: EventPartSnapshot[];
   /** Автор ввода (кто вмешался). */
   author?: string;
   /** Роль агента-получателя. */
@@ -132,6 +140,8 @@ export async function applySteerInjections(opts: SteerInjectionApplyOptions): Pr
       message_index: stored.index,
       message_id: persisted.id,
       content: persisted.content,
+      // ADR-115: части (медиа) — для миниатюры в живой ленте.
+      parts: snapshotPartsForEvent(persisted.parts),
       author: persisted.author,
       agent_role: persisted.agentRole,
       metadata: persisted.metadata,

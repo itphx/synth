@@ -6,7 +6,7 @@ import { QueueProcessor } from './processor.js';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
-import { generateId, MessageRole, nowISO, makeTextPart } from '@itphx/synth-shared';
+import { generateId, MessageRole, nowISO, makeTextPart, makeMediaPart } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
 import type { BusEvent } from '@itphx/synth-shared';
 
@@ -455,5 +455,80 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
     expect(s!.pendingMessages).toHaveLength(0);
     expect(s!.status.cancelRequested).toBeUndefined();
     expect(s!.currentStream).toBeUndefined();
+  });
+});
+
+describe('QueueProcessor — message.added с вложением (ADR-115)', () => {
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-qparts-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('публикует parts: медиа-часть как есть, текст обрезан до 500', async () => {
+    const longText = 'а'.repeat(900);
+    const session = await sessionManager.createSession({ title: 'Parts' });
+    const msg: Message = {
+      ...makeMessage(),
+      parts: [
+        makeTextPart(longText),
+        makeMediaPart('image', {
+          blobPath: 'attachments/ab/abcdef',
+          sha256: 'abcdef',
+          mime: 'image/jpeg',
+          size: 2048,
+          name: 'Yeti 2.jpg',
+        }),
+      ],
+      content: `[image: Yeti 2.jpg] ${longText}`,
+    };
+    await sessionManager.addPendingMessage(session.id, msg);
+
+    const events = collectEvents(eventBus, session.id);
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => ({}));
+    await processor.start();
+
+    const added = events.find((e) => e.type === 'message.added');
+    expect(added).toBeDefined();
+    const parts = added!.data.parts as Array<{ type: string; data: unknown }>;
+    expect(parts).toHaveLength(2);
+    expect(parts[0]!.type).toBe('text');
+    expect(parts[0]!.data).toHaveLength(500);
+    expect(parts[1]!.type).toBe('image');
+    expect(parts[1]!.data).toMatchObject({
+      blobPath: 'attachments/ab/abcdef',
+      mime: 'image/jpeg',
+      size: 2048,
+      name: 'Yeti 2.jpg',
+    });
+    // content события по-прежнему обрезан (отдельная задача — не раздувать событие).
+    expect((added!.data.content as string).length).toBeLessThanOrEqual(500);
+    // Сообщение в истории не испорчено снимком для события.
+    const s = await sessionManager.getSession(session.id);
+    const saved = s!.messages.find((m) => m.id === msg.id)!;
+    expect((saved.parts[0]!.data as string)).toHaveLength(900);
+  });
+
+  it('текстовое сообщение без вложения → parts содержит только текст', async () => {
+    const session = await sessionManager.createSession({ title: 'NoParts' });
+    const msg: Message = { ...makeMessage(), parts: [] };
+    await sessionManager.addPendingMessage(session.id, msg);
+
+    const events = collectEvents(eventBus, session.id);
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => ({}));
+    await processor.start();
+
+    const added = events.find((e) => e.type === 'message.added');
+    expect(added).toBeDefined();
+    const parts = added!.data.parts as Array<{ type: string }>;
+    expect(parts.map((p) => p.type)).toEqual(['text']);
   });
 });
