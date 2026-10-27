@@ -1,12 +1,14 @@
 /**
- * Вычищение метаданных из изображений перед записью в blob-хранилище
- * (ADR-115 §«Лимиты и безопасность»: EXIF/IPTC не должны уезжать провайдеру).
+ * Вычищение метаданных из изображений на границе отправки провайдеру
+ * (ADR-115 §«Приватность» — в blob хранится оригинал, EXIF/IPTC не должны
+ * уезжать провайдеру).
  *
  * Свой минимальный парсер без зависимостей (инвариант 12): JPEG — удаление
  * сегментов `APP1` (`FFE1`, EXIF/XMP) и `APP2` (`FFE2`, ICC/IPTC); PNG —
  * удаление чанков `eXIf`, `tEXt`, `iTXt`, `zTXt`. Остальные форматы (WebP,
  * GIF, HEIC, PDF, аудио/видео) не разбираются — байты остаются как есть:
- * «вычистить наполовину» хуже, чем не трогать (порча файла).
+ * «вычистить наполовину» хуже, чем не трогать (порча файла). Обрезанная
+ * структура (нет `SOS`/`EOI` у JPEG, нет `IEND` у PNG) тоже возвращается как есть.
  */
 
 /** Маркер начала сегмента JPEG. */
@@ -53,6 +55,8 @@ function stripJpegMetadata(bytes: Buffer): Buffer {
 
   const out: Buffer[] = [bytes.subarray(0, 2)];
   let offset = 2;
+  // Дошли до SOS/EOI — структура целая. Нет — файл обрезан: не рискуем.
+  let terminated = false;
 
   while (offset + 1 < bytes.length) {
     if (bytes[offset] !== JPEG_MARKER) return bytes; // не маркер — структура не наша
@@ -68,7 +72,8 @@ function stripJpegMetadata(bytes: Buffer): Buffer {
     // Маркеры без длины: EOI/временные.
     if (marker === JPEG_EOI || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) {
       out.push(bytes.subarray(offset));
-      return Buffer.concat(out);
+      terminated = true;
+      break;
     }
 
     if (offset + 3 >= bytes.length) return bytes;
@@ -78,7 +83,8 @@ function stripJpegMetadata(bytes: Buffer): Buffer {
     if (marker === JPEG_SOS) {
       // Заголовок SOS копируем вместе со сжатыми данными до конца.
       out.push(bytes.subarray(offset));
-      return Buffer.concat(out);
+      terminated = true;
+      break;
     }
 
     if (!JPEG_DROP_MARKERS.has(marker)) {
@@ -87,7 +93,8 @@ function stripJpegMetadata(bytes: Buffer): Buffer {
     offset += 2 + length;
   }
 
-  return Buffer.concat(out);
+  // Обрезанный файл (нет SOS/EOI) — возвращаем оригинал, а не «половину».
+  return terminated ? Buffer.concat(out) : bytes;
 }
 
 /**
@@ -102,6 +109,8 @@ function stripPngMetadata(bytes: Buffer): Buffer {
 
   const out: Buffer[] = [bytes.subarray(0, 8)];
   let offset = 8;
+  // Дошли до IEND — структура целая. Нет — файл обрезан: не рискуем.
+  let terminated = false;
 
   while (offset + 8 <= bytes.length) {
     const length = bytes.readUInt32BE(offset);
@@ -116,9 +125,11 @@ function stripPngMetadata(bytes: Buffer): Buffer {
     if (type === PNG_END_CHUNK) {
       // После IEND данных быть не должно, но если есть — сохраняем как есть.
       if (offset < bytes.length) out.push(bytes.subarray(offset));
+      terminated = true;
       break;
     }
   }
 
-  return Buffer.concat(out);
+  // Обрезанный PNG (нет IEND) — возвращаем оригинал, а не «половину».
+  return terminated ? Buffer.concat(out) : bytes;
 }

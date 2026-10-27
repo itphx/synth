@@ -1,11 +1,13 @@
 /**
- * ADR-115: сервис вложений — MIME по сигнатуре, лимиты, вычищение метаданных,
- * content-addressed адресация (дедуп) и метаданные чтения.
+ * ADR-115: сервис вложений — MIME по сигнатуре, лимиты, адресация
+ * (content-addressed, дедуп) и метаданные чтения. Оригинальные байты
+ * сохраняются: очистка метаданных — на границе отправки провайдеру.
  *
  * Байты синтетические: PNG/JPEG собираются вручную (с текстовым чанком/EXIF-
- * сегментом), поэтому тест проверяет именно парсеры, а не внешние файлы.
+ * сегментом), поэтому тест проверяет именно сохранение оригинала.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +17,7 @@ import { MetricsRegistry } from '../../metrics/registry.js';
 import { createAttachmentMetrics } from '../../metrics/collectors/attachments.js';
 import { AttachmentError, AttachmentService, isAttachmentPath, partTypeOf } from './service.js';
 import { sniffMime } from './sniff-mime.js';
+import { stripMetadata } from './strip-metadata.js';
 
 /** Умолчания схемы `attachments` для тестов (лимиты намеренно небольшие). */
 function testConfig(overrides: Partial<AttachmentsConfig> = {}): AttachmentsConfig {
@@ -188,30 +191,45 @@ describe('AttachmentService (ADR-115)', () => {
       expect(fallback.mime).toBe('application/octet-stream');
     });
 
-    it('вычищает EXIF (APP1/APP2) из JPEG, сохраняя остальные сегменты', async () => {
-      const meta = await service.upload({ sessionId: 's1', bytes: jpegWithExif(), name: 'photo.jpg' });
+    it('сохраняет оригинал JPEG: EXIF (APP1/APP2) остаётся в blob', async () => {
+      const bytes = jpegWithExif();
+      const meta = await service.upload({ sessionId: 's1', bytes, name: 'photo.jpg' });
       const stored = (await blobs.read(meta.blobPath))!;
 
-      expect(stored.includes(Buffer.from('Exif\0\0GPS', 'latin1'))).toBe(false);
-      expect(stored.includes(Buffer.from('ICC_PROFILE', 'latin1'))).toBe(false);
-      // SOI, DQT, SOS-данные и EOI на месте.
-      expect(stored.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
-      expect(stored.subarray(-2)).toEqual(Buffer.from([0xff, 0xd9]));
-      expect(stored.includes(Buffer.from([0x12, 0x34, 0x56, 0x78]))).toBe(true);
-      expect(stored.includes(Buffer.from([0x01, 0x02, 0x03, 0x04]))).toBe(true);
+      // ADR-115 §«Приватность»: upload не чистит метаданные — скачивание и
+      // материализация отдают оригинал; очистка — на границе отправки.
+      expect(stored).toEqual(bytes);
+      expect(stored.includes(Buffer.from('Exif\0\0GPS', 'latin1'))).toBe(true);
+      expect(stored.includes(Buffer.from('ICC_PROFILE', 'latin1'))).toBe(true);
       expect(meta.mime).toBe('image/jpeg');
+      // sha256/размер sidecar-метаданных — по сырым байтам.
+      expect(meta.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
+      expect(meta.size).toBe(bytes.length);
     });
 
-    it('вычищает текстовые чанки (tEXt) из PNG, сохраняя IHDR/IEND', async () => {
-      const meta = await service.upload({ sessionId: 's1', bytes: pngWithText() });
+    it('сохраняет оригинал PNG: текстовые чанки (tEXt) остаются в blob', async () => {
+      const bytes = pngWithText();
+      const meta = await service.upload({ sessionId: 's1', bytes });
       const stored = (await blobs.read(meta.blobPath))!;
 
-      expect(stored.includes(Buffer.from('секретное-гео', 'latin1'))).toBe(false);
-      expect(stored.includes(Buffer.from('tEXt', 'latin1'))).toBe(false);
-      expect(stored.includes(Buffer.from('IHDR', 'latin1'))).toBe(true);
-      expect(stored.includes(Buffer.from('IEND', 'latin1'))).toBe(true);
-      // Размер в метаданных — размер записанного (уже очищенного) объекта.
-      expect(meta.size).toBe(stored.length);
+      expect(stored).toEqual(bytes);
+      expect(stored.includes(Buffer.from('секретное-гео', 'latin1'))).toBe(true);
+      expect(stored.includes(Buffer.from('tEXt', 'latin1'))).toBe(true);
+      expect(meta.size).toBe(bytes.length);
+      expect(meta.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
+    });
+
+    it('дедуплицирует по сырым байтам: очищенная копия — отдельный объект', async () => {
+      const raw = jpegWithExif();
+      const cleaned = stripMetadata(raw, 'image/jpeg');
+      expect(cleaned.length).toBeLessThan(raw.length);
+
+      const first = await service.upload({ sessionId: 's1', bytes: raw });
+      const second = await service.upload({ sessionId: 's1', bytes: cleaned });
+
+      expect(second.blobPath).not.toBe(first.blobPath);
+      expect(first.sha256).toBe(createHash('sha256').update(raw).digest('hex'));
+      expect(second.sha256).toBe(createHash('sha256').update(cleaned).digest('hex'));
     });
 
     it('не трогает байты форматов без парсера (PDF)', async () => {

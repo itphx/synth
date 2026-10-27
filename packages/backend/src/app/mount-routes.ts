@@ -26,6 +26,7 @@ import {
   createMetricsSettingsRoutes,
   // ADR-115: админ-раздел «Вложения» — runtime-настройки мультимодального ввода.
   createAttachmentsSettingsRoutes, createModalityModelLookup,
+  createStagingAttachmentRoutes, AttachmentService,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createProcessRoutes,
@@ -585,6 +586,23 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       readGuard: auth.requirePermission('ADMIN'),
       writeGuard: auth.requirePermission('ADMIN'),
     },
+  ));
+
+  // ADR-115: staging-загрузка без сессии — `POST /api/v2/attachments`
+  // (шлюзы принимают файл из внешнего канала, пайплайны — из шага). Managed:
+  // `requireAuth` + scope-гейт service-key `events:ingest` (у шлюзов он уже
+  // есть; для интерактивных кред — no-op). Объект не привязан к сессии: без
+  // ссылки `blob_refs` живёт `attachments.gcDays` до GC.
+  app.route('/api/v2/attachments', createStagingAttachmentRoutes(
+    { requireAuth: auth.requireAuth, getCurrentUser: auth.getCurrentUser },
+    {
+      service: new AttachmentService({
+        blobs: deps.storageContext.blobs,
+        config: () => deps.attachmentsSettings.getConfig(),
+      }),
+      config: () => deps.attachmentsSettings.getConfig(),
+    },
+    { guard: scopeGuard('events:ingest') },
   ));
 
   // ADR-107 / PROP-047 §2.1: портал памяти в ядре — чтение фактов и индексов

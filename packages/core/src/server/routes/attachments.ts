@@ -33,7 +33,8 @@ export interface AttachmentRouteMessages {
   attachmentsDisabled: (c: Context) => string;
 }
 
-const DEFAULT_MESSAGES: AttachmentRouteMessages = {
+/** Сообщения по умолчанию (core: русские литералы; backend передаёт `t()`). */
+export const DEFAULT_MESSAGES: AttachmentRouteMessages = {
   sessionNotFound: () => 'Сессия не найдена',
   attachmentNotFound: () => 'Вложение не найдено',
   fileRequired: () => 'Файл не передан (ожидается поле file)',
@@ -72,15 +73,6 @@ export function createAttachmentRoutes(
   /** Эффективные настройки на текущий запрос (ADR-115: runtime без рестарта). */
   const resolveConfig = (): AttachmentsConfig =>
     typeof deps.config === 'function' ? deps.config() : deps.config;
-  /**
-   * Запас на multipart-обвязку (границы, заголовки частей): `formData()`
-   * буферизует всё тело в память, поэтому по заявленному `content-length`
-   * отсекаем заведомо большие запросы до чтения. Лживый/отсутствующий заголовок
-   * не проходит дальше без проверки — фактический размер проверяется ниже и в
-   * сервисе (`maxBytesPerFile`).
-   */
-  const multipartOverheadBytes = 64 * 1024;
-
   // POST /:id/attachments — загрузка одного файла (multipart, поле `file`).
   app.post('/:id/attachments', async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
@@ -96,72 +88,19 @@ export function createAttachmentRoutes(
       );
     }
 
-    const declaredLength = Number.parseInt(c.req.header('content-length') ?? '', 10);
-    if (Number.isFinite(declaredLength) && declaredLength > config.maxBytesPerFile + multipartOverheadBytes) {
-      // ADR-094: отказ до разбора тела — вид вложения ещё неизвестен (`file`).
-      getAttachmentMetricsHook()?.onUpload({ outcome: 'too_large', kind: 'file' });
-      return c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.tooLarge(c) } }, 413);
-    }
-
-    const formData = await c.req.formData().catch(() => null);
-    if (!formData) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.fileRequired(c) } }, 400);
-    }
-    const rawFile = formData.get('file');
-    const uploaded = Array.isArray(rawFile) ? rawFile[0] : rawFile;
-    if (!uploaded || typeof uploaded === 'string') {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.fileRequired(c) } }, 400);
-    }
-
-    // Ранняя проверка заявленного размера — до чтения тела в память.
-    const declaredSize = (uploaded as { size?: unknown }).size;
-    if (typeof declaredSize === 'number' && declaredSize > config.maxBytesPerFile) {
-      // ADR-094: вид известен из заявленного MIME части (сервис уже не вызывается).
-      const declaredMime = (uploaded as { type?: unknown }).type;
-      getAttachmentMetricsHook()?.onUpload({
-        outcome: 'too_large',
-        kind: typeof declaredMime === 'string' && declaredMime ? partTypeOf(declaredMime) : 'file',
-      });
-      return c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.tooLarge(c) } }, 413);
-    }
-
-    const bytes = Buffer.from(await uploaded.arrayBuffer());
-    const rawName = formData.get('name');
-    const name =
-      typeof rawName === 'string' && rawName.trim() !== ''
-        ? rawName
-        : (uploaded as { name?: string }).name;
+    const form = await readAttachmentUploadForm(c, config, messages);
+    if (!form.ok) return form.response;
 
     try {
       const meta = await service.upload({
         sessionId: session.id,
-        bytes,
-        ...(name ? { name } : {}),
-        ...(uploaded.type ? { declaredMime: uploaded.type } : {}),
+        bytes: form.bytes,
+        ...(form.name ? { name: form.name } : {}),
+        ...(form.declaredMime ? { declaredMime: form.declaredMime } : {}),
       });
       return c.json(meta, 201);
     } catch (err) {
-      if (err instanceof AttachmentError) {
-        if (err.code === 'too_large') {
-          return c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.tooLarge(c) } }, 413);
-        }
-        if (err.code === 'attachments_disabled') {
-          return c.json(
-            { error: { code: 'attachments_disabled', message: messages.attachmentsDisabled(c) } },
-            415,
-          );
-        }
-        return c.json(
-          {
-            error: {
-              code: 'UNSUPPORTED_MEDIA_TYPE',
-              // Ключ i18n + detail: клиенту важно понимать, что именно не так с типом.
-              message: messages.unsupportedMime(c, err.message),
-            },
-          },
-          415,
-        );
-      }
+      if (err instanceof AttachmentError) return attachmentErrorResponse(c, err, messages);
       throw err;
     }
   });
@@ -234,6 +173,127 @@ export function createAttachmentRoutes(
   });
 
   return app;
+}
+
+/** Запас на multipart-обвязку (границы, заголовки частей), байт. */
+export const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
+
+/** Результат разбора multipart-загрузки: байты + имя либо готовый HTTP-отказ. */
+export type AttachmentUploadForm =
+  | { ok: true; bytes: Buffer; name?: string; declaredMime?: string }
+  | { ok: false; response: Response };
+
+/**
+ * Разбор multipart-загрузки одного файла (поле `file`) с ранними лимитами.
+ *
+ * Общий для загрузки в сессию (`POST /:id/attachments`) и staging-загрузки
+ * (`POST /api/v2/attachments`, ADR-115): одинаковые проверки
+ * `content-length`/`size`, одинаковые коды (`413`/`400`).
+ *
+ * `formData()` буферизует всё тело в память, поэтому по заявленному
+ * `content-length` отсекаем заведомо большие запросы до чтения. Лживый или
+ * отсутствующий заголовок не проходит дальше без проверки — фактический размер
+ * проверяется ниже и в сервисе (`maxBytesPerFile`).
+ */
+export async function readAttachmentUploadForm(
+  c: Context,
+  config: AttachmentsConfig,
+  messages: AttachmentRouteMessages,
+): Promise<AttachmentUploadForm> {
+  const declaredLength = Number.parseInt(c.req.header('content-length') ?? '', 10);
+  if (
+    Number.isFinite(declaredLength)
+    && declaredLength > config.maxBytesPerFile + MULTIPART_OVERHEAD_BYTES
+  ) {
+    // ADR-094: отказ до разбора тела — вид вложения ещё неизвестен (`file`).
+    getAttachmentMetricsHook()?.onUpload({ outcome: 'too_large', kind: 'file' });
+    return {
+      ok: false,
+      response: c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.tooLarge(c) } }, 413),
+    };
+  }
+
+  const formData = await c.req.formData().catch(() => null);
+  if (!formData) {
+    return {
+      ok: false,
+      response: c.json(
+        { error: { code: 'VALIDATION_ERROR', message: messages.fileRequired(c) } },
+        400,
+      ),
+    };
+  }
+  const rawFile = formData.get('file');
+  const uploaded = Array.isArray(rawFile) ? rawFile[0] : rawFile;
+  if (!uploaded || typeof uploaded === 'string') {
+    return {
+      ok: false,
+      response: c.json(
+        { error: { code: 'VALIDATION_ERROR', message: messages.fileRequired(c) } },
+        400,
+      ),
+    };
+  }
+
+  // Ранняя проверка заявленного размера — до чтения тела в память.
+  const declaredSize = (uploaded as { size?: unknown }).size;
+  if (typeof declaredSize === 'number' && declaredSize > config.maxBytesPerFile) {
+    // ADR-094: вид известен из заявленного MIME части (сервис уже не вызывается).
+    const declaredMime = (uploaded as { type?: unknown }).type;
+    getAttachmentMetricsHook()?.onUpload({
+      outcome: 'too_large',
+      kind: typeof declaredMime === 'string' && declaredMime ? partTypeOf(declaredMime) : 'file',
+    });
+    return {
+      ok: false,
+      response: c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.tooLarge(c) } }, 413),
+    };
+  }
+
+  const bytes = Buffer.from(await uploaded.arrayBuffer());
+  const rawName = formData.get('name');
+  const name =
+    typeof rawName === 'string' && rawName.trim() !== ''
+      ? rawName
+      : (uploaded as { name?: string }).name;
+
+  return {
+    ok: true,
+    bytes,
+    ...(name ? { name } : {}),
+    ...(uploaded.type ? { declaredMime: uploaded.type } : {}),
+  };
+}
+
+/**
+ * HTTP-ответ на отказ `AttachmentService.upload`: `too_large` → `413`,
+ * `attachments_disabled`/`unsupported_mime` → `415`. Общий для обоих контуров
+ * загрузки (сессия и staging).
+ */
+export function attachmentErrorResponse(
+  c: Context,
+  err: AttachmentError,
+  messages: AttachmentRouteMessages,
+): Response {
+  if (err.code === 'too_large') {
+    return c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.tooLarge(c) } }, 413);
+  }
+  if (err.code === 'attachments_disabled') {
+    return c.json(
+      { error: { code: 'attachments_disabled', message: messages.attachmentsDisabled(c) } },
+      415,
+    );
+  }
+  return c.json(
+    {
+      error: {
+        code: 'UNSUPPORTED_MEDIA_TYPE',
+        // Ключ i18n + detail: клиенту важно понимать, что именно не так с типом.
+        message: messages.unsupportedMime(c, err.message),
+      },
+    },
+    415,
+  );
 }
 
 /** Медиа-часть сообщения по её id (только сообщения этой сессии). */

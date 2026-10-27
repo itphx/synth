@@ -1574,6 +1574,11 @@ background:
 `{dataDir}/blobs` (вложения — content-addressed), в базе — только учёт ссылок `blob_refs`
 ([ADR-116](./arch_decisions/adr-116-instance-state-and-blob-ports.md)).
 
+В blob хранятся **оригинальные** байты (EXIF/метаданные при загрузке не теряются): очистка
+`stripMetadata` применяется только на границе отправки провайдеру (гидратация вложений, aux-вызов),
+поэтому скачивание через API отдаёт оригинал. Staging-загрузка без сессии
+(`POST /api/v2/attachments`) использует те же лимиты; объект без ссылок живёт `attachments.gcDays`.
+
 | Поле | Назначение | По умолчанию |
 |------|-----------|--------------|
 | `attachments.enabled` | Мастер-выключатель вложений: `false` — загрузка запрещена (`415 attachments_disabled`), ссылки `attachments` в промпте отклоняются. Env — `SYNTH_ATTACHMENTS_ENABLED` | `true` |
@@ -1646,7 +1651,8 @@ attachments:
   (`SYNTH_ATTACHMENTS_ENABLED`/`SYNTH_ATTACHMENTS_WORKSPACE_FALLBACK`), четыре числовых ключа и
   csv `SYNTH_ATTACHMENTS_MODALITIES`; список префиксов (`allowedMimePrefixes`) — только `config.yaml`.
 - **Где применяется.** `enabled` и `modalities` — при загрузке
-  (`POST /sessions/:id/attachments`) и при постановке сообщения; `maxBytesPerFile` и белый
+  (`POST /sessions/:id/attachments`, staging `POST /api/v2/attachments`) и при постановке сообщения;
+  `maxBytesPerFile` и белый
   список — при загрузке; `maxFilesPerMessage`, `maxBytesPerSession` — при постановке сообщения
   (`POST /sessions/:id/prompt`); `gcDays` — фоновый pruner (сразу при старте и далее каждые
   6 часов, `unref`-таймер). Все значения читаются через live-резолвер на каждый вызов.

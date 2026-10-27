@@ -14,6 +14,27 @@ import {
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
 const PDF_BYTES = Buffer.from('%PDF-1.7\n');
 
+/** JPEG-сегмент: маркер + длина (включая саму длину) + данные. */
+function jpegSegment(marker: number, payload: Buffer): Buffer {
+  const header = Buffer.alloc(4);
+  header[0] = 0xff;
+  header[1] = marker;
+  header.writeUInt16BE(payload.length + 2, 2);
+  return Buffer.concat([header, payload]);
+}
+
+/** JPEG с EXIF (APP1): провайдеру эти байты уходить не должны. */
+function jpegWithExif(): Buffer {
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    jpegSegment(0xe1, Buffer.from('Exif\0\0GPS', 'latin1')),
+    jpegSegment(0xdb, Buffer.from([1, 2, 3, 4])),
+    jpegSegment(0xda, Buffer.alloc(8, 9)),
+    Buffer.from([0x12, 0x34, 0x56, 0x78]),
+    Buffer.from([0xff, 0xd9]),
+  ]);
+}
+
 function mediaPart(type: Part['type'], data: Partial<MediaPartData>): Part {
   return {
     id: `p-${type}`,
@@ -64,7 +85,11 @@ function makeDeps(blobs: Record<string, Buffer>): HydrateDeps & { reads: string[
     resolve: async (blobPath) => {
       const bytes = blobs[blobPath];
       if (!bytes) return null;
-      const mime = blobPath.endsWith('pdf') ? 'application/pdf' : 'image/png';
+      const mime = blobPath.endsWith('pdf')
+        ? 'application/pdf'
+        : blobPath.includes('jpeg')
+          ? 'image/jpeg'
+          : 'image/png';
       return { mime, size: bytes.length, sha256: 'a'.repeat(64), name: blobPath.split('/').pop() };
     },
     read: async (blobPath) => {
@@ -93,8 +118,28 @@ describe('hydrateMessageAttachments (ADR-115)', () => {
     expect(deps.reads).toEqual(['attachments/aa/image']);
   });
 
-  it('сопоставляет сообщения по индексу с учётом фильтра sessionMessagesToLlm (disabled)', async () => {
-    const deps = makeDeps({
+  it('отдаёт провайдеру очищенные байты (без APP1/EXIF), blob не меняется', async () => {
+    const raw = jpegWithExif();
+    const deps = makeDeps({ 'attachments/aa/jpeg': raw });
+    const source = [
+      sourceMessage({ parts: [mediaPart('image', { blobPath: 'attachments/aa/jpeg' })] }),
+    ];
+
+    const result = await hydrateMessageAttachments([llmMessage()], source, deps, {
+      modalities: ['image'],
+    });
+
+    const sent = Buffer.from(result[0]!.attachments![0]!.base64, 'base64');
+    // Очистка метаданных — на границе отправки: APP1 в base64 не попадает.
+    expect(sent.includes(Buffer.from('Exif\0\0GPS', 'latin1'))).toBe(false);
+    expect(sent.length).toBeLessThan(raw.length);
+    expect(sent.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
+    expect(sent.subarray(-2)).toEqual(Buffer.from([0xff, 0xd9]));
+    // В blob лежит оригинал — чтение не изменилось.
+    expect(await deps.read('attachments/aa/jpeg')).toEqual(raw);
+  });
+
+  it('сопоставляет сообщения по индексу с учётом фильтра sessionMessagesToLlm (disabled)', async () => {    const deps = makeDeps({
       'attachments/aa/skip': PNG_BYTES,
       'attachments/aa/image': PNG_BYTES,
     });

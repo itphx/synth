@@ -6,7 +6,7 @@ import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
-import type { SecurityConfig, WorkspaceOutsideRootPolicy, ProviderConfig, ModelConfig } from '@itphx/synth-shared';
+import type { SecurityConfig, WorkspaceOutsideRootPolicy, ProviderConfig, ModelConfig, AttachmentsConfig } from '@itphx/synth-shared';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, SYNTH_VERSION } from '@itphx/synth-shared';
 import {
   KeyRateLimiter, DEFAULT_AGENT_ID,
@@ -25,6 +25,7 @@ import {
   createStorageContextAsync,
   createMetricsSettingsRoutes,
   createAttachmentsSettingsRoutes, createModalityModelLookup,
+  createStagingAttachmentRoutes, AttachmentService,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createProcessRoutes,
@@ -541,6 +542,24 @@ export function mountStandaloneRoutes(
       lookupModel: createModalityModelLookup({ providers: providerStore, models: modelStore }),
     },
   ));
+
+  // ADR-115: staging-загрузка без сессии — `POST /api/v2/attachments`
+  // (шлюзы/пайплайны). Core — `requireAuth` (single-user). Объект не привязан
+  // к сессии: без ссылки `blob_refs` живёт `attachments.gcDays` до GC.
+  if (deps.storageContext) {
+    const stagingAttachmentConfig = (): AttachmentsConfig =>
+      deps.attachmentsSettings.getConfig();
+    app.route('/api/v2/attachments', createStagingAttachmentRoutes(
+      { requireAuth: auth.requireAuth },
+      {
+        service: new AttachmentService({
+          blobs: deps.storageContext.blobs,
+          config: stagingAttachmentConfig,
+        }),
+        config: stagingAttachmentConfig,
+      },
+    ));
+  }
 
   // ADR-090 (Ф5б-2): runtime-настройки слоя плагинов
   // (`/api/v2/settings/plugins`). `restartRequired` — всегда true: рантайм

@@ -27,6 +27,9 @@
  *    на сообщении остаётся пометка `reason: 'limit'` — промпт не ломается;
  *  - ошибка чтения объекта → вложение помечается `reason: 'unavailable'` и
  *    пропускается (в `content` уже есть плейсхолдер `[image: …]`), ход не падает;
+ *  - ADR-115 §«Приватность»: в blob лежит **оригинал**, а провайдеру уходят
+ *    очищенные байты — `stripMetadata` (JPEG/PNG) применяется здесь, на границе
+ *    отправки; остальные форматы идут как есть;
  *  - каждое отброшенное вложение видно **модели**: к `content` LLM-сообщения
  *    дописывается один блок `[ATTACHMENTS NOT DELIVERED]` со списком (только в
  *    LLM-сообщение, сохранённая история сессии не меняется) — иначе модель
@@ -55,6 +58,7 @@ import {
   type LLMMessage,
 } from '../../providers/base.js';
 import { AttachmentService } from './service.js';
+import { stripMetadata } from './strip-metadata.js';
 
 /** Предел суммарного base64-объёма вложений в одном запросе (20 МиБ). */
 export const MAX_ATTACHMENT_BASE64_BYTES = 20 * 1024 * 1024;
@@ -432,7 +436,9 @@ export async function hydrateMessageAttachments(
           attachment: {
             mime: meta.mime,
             ...(meta.name ?? ref.name ? { name: meta.name ?? ref.name } : {}),
-            base64: bytes.toString('base64'),
+            // ADR-115 §«Приватность»: провайдеру — байты без EXIF/метаданных,
+            // blob не меняется (там оригинал).
+            base64: stripMetadata(bytes, meta.mime).toString('base64'),
           },
           sizeBytes: meta.size > 0 ? meta.size : bytes.length,
           blobPath: ref.blobPath,

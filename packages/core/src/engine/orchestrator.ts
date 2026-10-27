@@ -62,6 +62,7 @@ import { createHydrateDeps, hydrateMessageAttachments, type DroppedAttachmentRef
 import { deriveModalityText } from './attachments/derive.js';
 import { materializeAttachment } from './attachments/materialize.js';
 import { AttachmentService } from './attachments/service.js';
+import { stripMetadata } from './attachments/strip-metadata.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
 import type { HookBus } from './hooks/hook-bus.js';
@@ -2231,10 +2232,13 @@ export class ChatOrchestrator {
                 if (!data || typeof data.blobPath !== 'string' || data.blobPath === '') continue;
                 const bytes = await blobs.read(data.blobPath);
                 if (!bytes) continue;
+                const mime = typeof data.mime === 'string' ? data.mime : 'application/octet-stream';
                 attachments.push({
-                  mime: typeof data.mime === 'string' ? data.mime : 'application/octet-stream',
+                  mime,
                   ...(typeof data.name === 'string' && data.name ? { name: data.name } : {}),
-                  base64: bytes.toString('base64'),
+                  // ADR-115 §«Приватность»: aux-модель получает байты без
+                  // EXIF/метаданных (в blob лежит оригинал).
+                  base64: stripMetadata(bytes, mime).toString('base64'),
                 });
               }
               if (attachments.length === 0) {

@@ -1842,7 +1842,16 @@ export type {
   AttachmentRoutesDeps,
   AttachmentRoutesOptions,
   AttachmentRouteMessages,
+  AttachmentUploadForm,
 } from './server/routes/attachments.js';
+// ADR-115: staging-загрузка без сессии (шлюзы/пайплайны) — `POST /api/v2/attachments`.
+export { createStagingAttachmentRoutes } from './server/routes/attachments-staging.js';
+export type {
+  StagingAttachmentAuditInfo,
+  StagingAttachmentRoutesAuth,
+  StagingAttachmentRoutesDeps,
+  StagingAttachmentRoutesOptions,
+} from './server/routes/attachments-staging.js';
 // ADR-115: админ-раздел «Вложения» — runtime-настройки `/api/v2/settings/attachments`.
 export { createAttachmentsSettingsRoutes, createModalityModelLookup } from './server/routes/settings-attachments.js';
 export type { ModalityModelLookup, ModalityModelCatalogEntry } from './server/routes/settings-attachments.js';

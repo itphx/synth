@@ -2,8 +2,13 @@
  * Сервис вложений сообщений (ADR-115 §«Хранение», §«API и лимиты»).
  *
  * Единственная точка записи/чтения байтов вложения: MIME по сигнатуре, лимиты
- * из конфига, вычищение метаданных, content-addressed адресация
- * (`attachments/<sha2>/<sha256>`) и sidecar-метаданные рядом с объектом.
+ * из конфига, content-addressed адресация (`attachments/<sha2>/<sha256>`) и
+ * sidecar-метаданные рядом с объектом.
+ *
+ * ADR-115 §«Приватность»: в blob пишутся **оригинальные** байты (EXIF и прочие
+ * метаданные не теряются — скачивание через API и материализация отдают
+ * оригинал). Очистка (`stripMetadata`) выполняется на границе отправки
+ * провайдеру — `hydrate.ts` и aux-вызов оркестратора.
  *
  * Почему sidecar: в промпт уходит только путь объекта (`attachments/ab/<sha>`),
  * а имя файла и MIME должны пережить отправку — они лежат в
@@ -23,7 +28,6 @@ import {
 } from '../../metrics/collectors/attachments.js';
 import type { BlobReadRange, BlobStore } from '../../storage/ports/blob-store.js';
 import { looksLikeSvg, normalizeMime, sniffMime } from './sniff-mime.js';
-import { stripMetadata } from './strip-metadata.js';
 
 /** Каталог вложений в blob-хранилище (относительный путь порта). */
 export const ATTACHMENT_DIR = 'attachments';
@@ -129,11 +133,15 @@ export class AttachmentService {
   }
 
   /**
-   * Загрузить вложение: проверить размер и MIME, вычистить метаданные,
-   * записать объект (если такого содержимого ещё нет) и sidecar.
+   * Загрузить вложение: проверить размер и MIME, записать объект (если такого
+   * содержимого ещё нет) и sidecar.
+   *
+   * `sessionId` не используется (адресация content-addressed, объект общий):
+   * параметр оставлен для существующих вызовов; staging-загрузка шлюзов и
+   * пайплайнов вызывает `upload` без него.
    */
   async upload(input: {
-    sessionId: string;
+    sessionId?: string;
     bytes: Buffer;
     name?: string;
     declaredMime?: string;
@@ -170,8 +178,10 @@ export class AttachmentService {
       throw err;
     }
 
-    // Метаданные вычищаются до хеширования: адрес описывает то, что реально лежит.
-    const bytes = stripMetadata(raw, mime);
+    // ADR-115 §«Приватность»: адрес и sidecar описывают **оригинал** — байты в
+    // blob не меняются. Метаданные срезаются только при отправке провайдеру
+    // (`hydrate.ts`, aux-вызов оркестратора), а не на записи.
+    const bytes = raw;
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const blobPath = `${ATTACHMENT_DIR}/${sha256.slice(0, 2)}/${sha256}`;
     const name = sanitizeFileName(input.name);
