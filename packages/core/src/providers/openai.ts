@@ -2,10 +2,13 @@ import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
 import {
   BaseProvider,
   fetchModelsCatalog,
+  filterAttachmentsByModalities,
+  redactAttachmentPayloadForDebug,
   resolveSystemPromptText,
   parseTokenPricing,
   toNonNegativeNumber,
   type DetailedModelInfo,
+  type LLMAttachment,
   type LLMMessage,
   type SystemPromptInput,
   type CancellationToken,
@@ -13,6 +16,7 @@ import {
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
+import { resolveModelModalities } from '@itphx/synth-shared';
 // ADR-099: запросы провайдера — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
 
@@ -45,7 +49,9 @@ export class OpenAIProvider extends BaseProvider {
     this._applyPromptCacheKey(body, systemPrompt);
 
     const headers = this._getHeaders();
-    debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
+    if (debugCollector?.enabled) {
+      debugCollector.captureApiRequest(this.url, 'POST', headers, redactAttachmentPayloadForDebug(body));
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
@@ -101,7 +107,9 @@ export class OpenAIProvider extends BaseProvider {
     this._applyPromptCacheKey(body, systemPrompt);
 
     const headers = this._getHeaders();
-    debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
+    if (debugCollector?.enabled) {
+      debugCollector.captureApiRequest(this.url, 'POST', headers, redactAttachmentPayloadForDebug(body));
+    }
 
     let accumulatedContent = '';
     let accumulatedReasoning = '';
@@ -369,6 +377,17 @@ export class OpenAIProvider extends BaseProvider {
         content: msg.content,
       };
 
+      // ADR-115: вложения — content становится массивом частей. Если модель
+      // модальность не принимает (или тип не маппится у OpenAI), остаётся
+      // прежняя строка — текстовый путь не меняется.
+      const mediaParts = this._mediaContentParts(msg.attachments);
+      if (mediaParts.length > 0) {
+        entry.content = [
+          ...(msg.content ? [{ type: 'text', text: msg.content }] : []),
+          ...mediaParts,
+        ];
+      }
+
       if (msg.toolUse) {
         // Нормализация function.arguments: объект → JSON-строка. OpenAI-совместимые
         // API (DeepSeek через open-webui) требуют строку и возвращают 400
@@ -399,6 +418,46 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     return formatted;
+  }
+
+  /**
+   * ADR-115: части контента OpenAI для вложений.
+   *
+   *  - `image/*` → `{type:'image_url', image_url:{url:'data:<mime>;base64,…'}}`;
+   *  - `audio/wav` (в т.ч. `audio/x-wav`) → `input_audio` c `format:'wav'`;
+   *  - `audio/mpeg`/`audio/mp3` → `input_audio` c `format:'mp3'`;
+   *  - прочие типы (PDF и т.п.) не отправляются — плейсхолдер уже в тексте.
+   *
+   * Фильтр модальностей — по справочнику модели (`resolveModelModalities`):
+   * неизвестная модель получает `['text']`, т.е. вложения не уходят.
+   */
+  private _mediaContentParts(attachments: LLMAttachment[] | undefined): Array<Record<string, unknown>> {
+    const modalities = resolveModelModalities(undefined, this.model);
+    const parts: Array<Record<string, unknown>> = [];
+    for (const attachment of filterAttachmentsByModalities(attachments, modalities)) {
+      const mime = attachment.mime.toLowerCase();
+      if (mime.startsWith('image/')) {
+        parts.push({
+          type: 'image_url',
+          image_url: { url: `data:${attachment.mime};base64,${attachment.base64}` },
+        });
+        continue;
+      }
+      if (mime === 'audio/wav' || mime === 'audio/x-wav' || mime === 'audio/wave') {
+        parts.push({
+          type: 'input_audio',
+          input_audio: { data: attachment.base64, format: 'wav' },
+        });
+        continue;
+      }
+      if (mime === 'audio/mpeg' || mime === 'audio/mp3') {
+        parts.push({
+          type: 'input_audio',
+          input_audio: { data: attachment.base64, format: 'mp3' },
+        });
+      }
+    }
+    return parts;
   }
 
   /**

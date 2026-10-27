@@ -299,6 +299,18 @@ export interface ProcessSetupDeps {
   loadTokenRatio: (model: string | undefined) => Promise<number | undefined>;
   registerCancelToken: (streamId: string, token: CancellationToken) => void;
   /**
+   * ADR-115: гидратация вложений сообщений (blob → base64 + фильтр
+   * модальностей модели) перед отправкой провайдеру.
+   *
+   * Не задана — вложения не отправляются (текстовый путь прежний); LLM-вызов
+   * от этого не меняется для сообщений без вложений.
+   */
+  hydrateAttachments?: (
+    messages: LLMMessage[],
+    source: Message[],
+    target: { providerName: string; modelId: string },
+  ) => Promise<LLMMessage[]>;
+  /**
    * ADR-107: телеметрия блоков памяти, ушедших в промпт хода (метрики
    * `synth_memory_context_*`).
    *
@@ -348,7 +360,7 @@ export async function runProcessSetup(
       ),
     };
   }
-  const { provider, providerName, decision: routingDecision } = routeResult;
+  const { provider, providerName, modelName, decision: routingDecision } = routeResult;
 
   debugCollector.captureSessionInfo(session.id, provider.model, provider.name, {
     provider_type: provider.type,
@@ -599,7 +611,25 @@ export async function runProcessSetup(
 
   // 3. Convert messages for LLM (без summary — они уже в system prompt)
   const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
-  const baseLlmMessages = sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
+  let baseLlmMessages = sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
+
+  // ADR-115: вложения — гидратация ссылок blob → base64 и фильтр модальностей
+  // модели непосредственно перед отправкой. Ошибка чтения отдельного объекта
+  // не должна ронять ход: функция возвращает сообщения без этого вложения
+  // (плейсхолдер `[image: …]` уже в тексте).
+  if (deps.hydrateAttachments && baseLlmMessages.length > 0) {
+    try {
+      baseLlmMessages = await deps.hydrateAttachments(baseLlmMessages, messagesForLlm, {
+        providerName,
+        modelId: provider.model || modelName || session.settings.model || '',
+      });
+    } catch (err) {
+      warning(
+        'ATTACHMENTS',
+        `Не удалось подготовить вложения: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   // 4. Get tools from registry. ADR-070 §2.9 + ADR-071 §2.1/§2.3: встроенные —
   // постоянно, MCP — только активных серверов сессии; каждый слой в своём
@@ -663,7 +693,7 @@ export async function runProcessSetup(
   return {
     failed: false,
     state: {
-      provider, providerName, modelName: routeResult.modelName, routingDecision, language,
+      provider, providerName, modelName, routingDecision, language,
       activeMcpServers, activeMcpSet, toolsPolicy, mcpPolicy,
       baseLlmMessages, finalSystemPrompt, tools, promptMeta,
       skillsCatalog, projectInstructions, loadedTokenRatio, messagesForLlm,

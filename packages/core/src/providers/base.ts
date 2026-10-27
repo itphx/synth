@@ -1,4 +1,4 @@
-import type { TokenUsage, LLMChunk, LLMResponse, ReasoningLevel, Currency, DecisionQuestion, DecisionResponse } from '@itphx/synth-shared';
+import type { AttachmentModality, TokenUsage, LLMChunk, LLMResponse, ReasoningLevel, Currency, DecisionQuestion, DecisionResponse } from '@itphx/synth-shared';
 import type { DebugCollector } from '../debug.js';
 import { warning } from '../logger.js';
 import { ProviderError } from './exceptions.js';
@@ -190,6 +190,102 @@ export interface LLMMessage {
   groupId?: string;
   agentRole?: string;
 }
+
+/**
+ * ADR-115 §4: модальность вложения по MIME-типу.
+ *
+ * `text/*` — текстовая модальность (байтами не отправляется: содержимое уже
+ * в `content`), `application/pdf` — `pdf`, остальные `file`-типы — `null`
+ * (провайдеру не отправляются).
+ */
+export function attachmentModalityOf(mime: string): AttachmentModality | null {
+  const normalized = (mime ?? '').toLowerCase().trim();
+  if (!normalized) return null;
+  if (normalized.startsWith('image/')) return 'image';
+  if (normalized === 'application/pdf') return 'pdf';
+  if (normalized.startsWith('audio/')) return 'audio';
+  if (normalized.startsWith('video/')) return 'video';
+  if (normalized.startsWith('text/')) return 'text';
+  return null;
+}
+
+/**
+ * ADR-115 §4: оставить только вложения, которые модель принимает.
+ * Текстовая модальность байтами не отправляется — исключается всегда.
+ */
+export function filterAttachmentsByModalities(
+  attachments: readonly LLMAttachment[] | undefined,
+  modalities: readonly AttachmentModality[],
+): LLMAttachment[] {
+  if (!attachments || attachments.length === 0) return [];
+  const allowed = new Set(modalities);
+  return attachments.filter((attachment) => {
+    const modality = attachmentModalityOf(attachment.mime);
+    return modality !== null && modality !== 'text' && allowed.has(modality);
+  });
+}
+
+/** Признак объекта-контейнера base64-данных вложения (для отладки). */
+function isAttachmentDataHolder(value: Record<string, unknown>): boolean {
+  return (
+    value.type === 'input_audio'
+    || value.type === 'image'
+    || value.type === 'document'
+    || typeof value.media_type === 'string'
+    || (typeof value.format === 'string' && typeof value.data === 'string')
+  );
+}
+
+function redactValue(value: unknown, dataField: boolean): { value: unknown; changed: boolean } {
+  if (typeof value === 'string') {
+    if (value.startsWith('data:') && value.includes(';base64,')) {
+      const mime = value.slice(5, value.indexOf(';base64,'));
+      return { value: `data:${mime};base64,<redacted>`, changed: true };
+    }
+    if (dataField) {
+      return { value: `<redacted ${value.length}b>`, changed: true };
+    }
+    return { value, changed: false };
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((item) => {
+      const result = redactValue(item, dataField);
+      if (result.changed) changed = true;
+      return result.value;
+    });
+    return { value: changed ? next : value, changed };
+  }
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const holder = isAttachmentDataHolder(record);
+    let changed = false;
+    const next: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(record)) {
+      // `data` внутри блока вложения — всегда base64: вырезаем независимо от
+      // длины (у мелких файлов она может быть небольшой).
+      const result = redactValue(item, holder && key === 'data');
+      if (result.changed) changed = true;
+      next[key] = result.value;
+    }
+    return { value: changed ? next : value, changed };
+  }
+  return { value, changed: false };
+}
+
+/**
+ * ADR-115 §«Gateway»: убрать base64 вложений из отладочного снимка запроса.
+ *
+ * `DebugCollector.captureApiRequest` сохраняет тело запроса как есть; после
+ * маппинга вложений в форматы провайдеров там оказались бы data-URL и
+ * base64-данные. В отладочный снимок они не попадают: data-URL заменяется на
+ * `data:<mime>;base64,<redacted>`, поля `data` внутри блоков вложения — на
+ * пометку с длиной. Объект без вложений возвращается тем же (без копий).
+ */
+export function redactAttachmentPayloadForDebug<T>(body: T): T {
+  return redactValue(body, false).value as T;
+}
+
 
 export interface CancellationToken {
   cancelled: boolean;

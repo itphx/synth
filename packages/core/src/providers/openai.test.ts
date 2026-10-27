@@ -506,3 +506,63 @@ describe('OpenAIProvider — listModelsDetailed', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe('OpenAIProvider — вложения (ADR-115)', () => {
+  type OpenAIPrivate = {
+    _formatMessages(messages: LLMMessage[], systemPrompt?: string): Array<Record<string, unknown>>;
+  };
+
+  const imageAttachment = { mime: 'image/png', name: 'photo.png', base64: 'iVBORw0KGgo=' };
+  const wavAttachment = { mime: 'audio/wav', base64: 'UklGRg==' };
+  const pdfAttachment = { mime: 'application/pdf', base64: 'JVBERi0=' };
+
+  function providerWithModel(model: string): OpenAIPrivate {
+    return new OpenAIProvider({ ...baseParams, model }) as unknown as OpenAIPrivate;
+  }
+
+  it('изображение у vision-модели → content массивом: text + image_url', () => {
+    const formatted = providerWithModel('gpt-4o')._formatMessages([
+      makeMessage({ role: 'user', content: 'что на фото?', attachments: [imageAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'что на фото?' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } },
+    ]);
+  });
+
+  it('аудио wav у audio-модели → input_audio format=wav', () => {
+    const formatted = providerWithModel('gpt-4o-audio-preview')._formatMessages([
+      makeMessage({ role: 'user', content: 'расшифруй', attachments: [wavAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'расшифруй' },
+      { type: 'input_audio', input_audio: { data: 'UklGRg==', format: 'wav' } },
+    ]);
+  });
+
+  it('вложение неподдерживаемой модальности отбрасывается (аудио у gpt-4o)', () => {
+    const formatted = providerWithModel('gpt-4o')._formatMessages([
+      makeMessage({ role: 'user', content: 'текст', attachments: [wavAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toBe('текст');
+  });
+
+  it('PDF не маппится в OpenAI-части → строковый content не меняется', () => {
+    const formatted = providerWithModel('gpt-4o')._formatMessages([
+      makeMessage({ role: 'user', content: 'документ', attachments: [pdfAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toBe('документ');
+  });
+
+  it('текстовое сообщение без вложений остаётся строкой', () => {
+    const formatted = providerWithModel('gpt-4o')._formatMessages([
+      makeMessage({ role: 'user', content: 'просто текст' }),
+    ]);
+
+    expect(formatted[0]!.content).toBe('просто текст');
+  });
+});

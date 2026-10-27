@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, resolveModelModalities } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir, stat } from 'node:fs/promises';
@@ -55,6 +55,8 @@ import { GitService } from '../git/git-service.js';
 import { MAX_DOOM_LOOP_COUNT } from './llm-error.js';
 import { WorktreeDirectoryMissingError } from './worktree/errors.js';
 import type { WorktreeService } from './worktree/service.js';
+// ADR-115: гидратация вложений сообщений (blob → base64) перед LLM-вызовом.
+import { createHydrateDeps, hydrateMessageAttachments, type HydrateDeps } from './attachments/hydrate.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
 import type { HookBus } from './hooks/hook-bus.js';
@@ -543,6 +545,11 @@ export class ChatOrchestrator {
   /** Бюджет символов на блок плагина; мутабелен (runtime-настройка). */
   private _promptBlockMaxChars: number | undefined;
   private readonly _dataDir: string;
+  /**
+   * ADR-115: порты чтения вложений для гидратации (лениво — поверх blob-порта
+   * по `dataDir`, как ssh-ключи/словари ниже). `null` — ещё не созданы.
+   */
+  private _attachmentHydrateDeps: HydrateDeps | null = null;
   /** Путь к JSONL полного лога запросов/ответов LLM (передаётся в GatewayProvider). */
   private readonly _gatewayPayloadLogPath: string | undefined;
   /** Внешний audit-logger (backend/runner) — переиспользуется при live-включении gateway. */
@@ -1948,6 +1955,20 @@ export class ChatOrchestrator {
     };
   }
 
+  /**
+   * ADR-115: порты чтения вложений. Лениво, поверх blob-порта по `dataDir`
+   * (байты — файловые по конструкции, ADR-116); продакшн-контекст хранения
+   * даёт тот же корень.
+   */
+  private _getAttachmentHydrateDeps(): HydrateDeps {
+    if (!this._attachmentHydrateDeps) {
+      this._attachmentHydrateDeps = createHydrateDeps(
+        createFileStorage({ dataDir: this._dataDir, env: process.env }).blobs,
+      );
+    }
+    return this._attachmentHydrateDeps;
+  }
+
   /** ADR-095 (шаг 6b-1): зависимости вынесенной подготовки запроса `_processMessage`. */
   private _processSetupDeps(): ProcessSetupDeps {
     return {
@@ -1984,6 +2005,11 @@ export class ChatOrchestrator {
       registerCancelToken: (streamId, token) => {
         this._cancellationTokens.set(streamId, token);
       },
+      // ADR-115: вложения — blob → base64 с фильтром модальностей модели хода.
+      hydrateAttachments: (messages, source, target) =>
+        hydrateMessageAttachments(messages, source, this._getAttachmentHydrateDeps(), {
+          modalities: resolveModelModalities(target.providerName, target.modelId),
+        }),
       // ADR-107: телеметрия блоков памяти в промпте хода.
       ...(this._onMemoryContext ? { onMemoryContext: this._onMemoryContext } : {}),
     };

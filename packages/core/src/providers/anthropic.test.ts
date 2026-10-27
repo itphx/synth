@@ -575,3 +575,61 @@ describe('AnthropicProvider — listModelsDetailed', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe('AnthropicProvider — вложения (ADR-115)', () => {
+  type AnthropicPrivate = {
+    _formatMessages(messages: LLMMessage[]): Array<Record<string, unknown>>;
+  };
+
+  const imageAttachment = { mime: 'image/png', name: 'photo.png', base64: 'iVBORw0KGgo=' };
+  const pdfAttachment = { mime: 'application/pdf', base64: 'JVBERi0=' };
+  const audioAttachment = { mime: 'audio/wav', base64: 'UklGRg==' };
+
+  function providerWithModel(model: string): AnthropicPrivate {
+    return new AnthropicProvider({ ...baseParams, model }) as unknown as AnthropicPrivate;
+  }
+
+  it('изображение → image-блок с base64-source', () => {
+    const formatted = providerWithModel('claude-sonnet-4-20250514')._formatMessages([
+      makeMessage({ content: 'что на фото?', attachments: [imageAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'что на фото?' },
+      {
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' },
+      },
+    ]);
+  });
+
+  it('PDF → document-блок с media_type application/pdf', () => {
+    const formatted = providerWithModel('claude-sonnet-4-20250514')._formatMessages([
+      makeMessage({ content: 'разбери документ', attachments: [pdfAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'разбери документ' },
+      {
+        type: 'document',
+        source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERi0=' },
+      },
+    ]);
+  });
+
+  it('аудио не поддерживается — фильтр модальностей/маппинг отбрасывают вложение', () => {
+    const formatted = providerWithModel('claude-sonnet-4-20250514')._formatMessages([
+      makeMessage({ content: 'послушай', attachments: [audioAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([{ type: 'text', text: 'послушай' }]);
+  });
+
+  it('текстовое сообщение без вложений — прежний [{type:text}]', () => {
+    const formatted = providerWithModel('claude-sonnet-4-20250514')._formatMessages([
+      makeMessage({ content: 'просто текст' }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([{ type: 'text', text: 'просто текст' }]);
+  });
+});

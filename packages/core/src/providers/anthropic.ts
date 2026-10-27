@@ -2,10 +2,13 @@ import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
 import {
   BaseProvider,
   fetchModelsCatalog,
+  filterAttachmentsByModalities,
+  redactAttachmentPayloadForDebug,
   resolveSystemPromptText,
   parseTokenPricing,
   toNonNegativeNumber,
   type DetailedModelInfo,
+  type LLMAttachment,
   type LLMMessage,
   type SystemPromptInput,
   type CachePolicy,
@@ -14,6 +17,7 @@ import {
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ProviderError, ContextLengthExceededError, RateLimitError } from './exceptions.js';
+import { resolveModelModalities } from '@itphx/synth-shared';
 // ADR-099: запросы провайдера — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
 
@@ -122,7 +126,9 @@ export class AnthropicProvider extends BaseProvider {
     this._applyCacheControl(body, systemPrompt);
 
     const headers = this._getHeaders();
-    debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
+    if (debugCollector?.enabled) {
+      debugCollector.captureApiRequest(this.url, 'POST', headers, redactAttachmentPayloadForDebug(body));
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
@@ -180,7 +186,9 @@ export class AnthropicProvider extends BaseProvider {
     this._applyCacheControl(body, systemPrompt);
 
     const headers = this._getHeaders();
-    debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
+    if (debugCollector?.enabled) {
+      debugCollector.captureApiRequest(this.url, 'POST', headers, redactAttachmentPayloadForDebug(body));
+    }
 
     info('ANTHROPIC', `чатAsync: url=${this.url}, model=${this.model}`);
 
@@ -471,12 +479,61 @@ export class AnthropicProvider extends BaseProvider {
 
       formatted.push({
         role: msg.role,
-        content: [{ type: 'text', text: msg.content }],
+        content: this._contentWithAttachments(msg),
       });
     }
 
     flushToolResults();
     return formatted;
+  }
+
+  /**
+   * ADR-115: контент user-сообщения блоками.
+   *
+   * Вложение (image/pdf) добавляется к тексту; audio/video Anthropic не
+   * принимает и они пропускаются. Если вложений нет (или модель их не
+   * принимает) — ровно прежний `[{type:'text', text}]` (текстовый путь не
+   * меняется).
+   */
+  private _contentWithAttachments(msg: LLMMessage): Array<Record<string, unknown>> {
+    const mediaParts = this._mediaContentParts(msg.attachments);
+    if (mediaParts.length === 0) {
+      return [{ type: 'text', text: msg.content }];
+    }
+    return [
+      ...(msg.content ? [{ type: 'text', text: msg.content }] : []),
+      ...mediaParts,
+    ];
+  }
+
+  /**
+   * ADR-115: части контента Anthropic для вложений.
+   *
+   *  - `image/*` → `{type:'image', source:{type:'base64', media_type, data}}`;
+   *  - `application/pdf` → `{type:'document', source:{type:'base64', media_type:'application/pdf', data}}`;
+   *  - audio/video — не поддерживаются, пропускаются.
+   *
+   * Фильтр модальностей — по справочнику модели (`resolveModelModalities`):
+   * неизвестная модель получает `['text']`, т.е. вложения не уходят.
+   */
+  private _mediaContentParts(attachments: LLMAttachment[] | undefined): Array<Record<string, unknown>> {
+    const modalities = resolveModelModalities(undefined, this.model);
+    const parts: Array<Record<string, unknown>> = [];
+    for (const attachment of filterAttachmentsByModalities(attachments, modalities)) {
+      const mime = attachment.mime.toLowerCase();
+      if (mime.startsWith('image/')) {
+        parts.push({
+          type: 'image',
+          source: { type: 'base64', media_type: attachment.mime, data: attachment.base64 },
+        });
+      } else if (mime === 'application/pdf') {
+        parts.push({
+          type: 'document',
+          source: { type: 'base64', media_type: 'application/pdf', data: attachment.base64 },
+        });
+      }
+    }
+    return parts;
   }
 
   /**

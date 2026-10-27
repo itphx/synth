@@ -12,6 +12,7 @@ import type { LLMMessage } from '../../providers/base.js';
 import { PLACEHOLDER_PATTERN } from '../gateway/index.js';
 import { wrapStateContent } from '../context/state-messages.js';
 import { estimateTokens, DEFAULT_CHARS_PER_TOKEN } from '../context/token-ratio.js';
+import { estimateMediaTokens } from '../context/media-tokens.js';
 import type { InjectionPolicy } from '../security/prompt-injection.js';
 
 /**
@@ -224,8 +225,14 @@ export function buildPromptHistoryInfo(
   // Вложения: нетекстовые части отправляемых сообщений.
   let attachmentCount = 0;
   let attachmentChars = 0;
+  // ADR-115: медиа-части стоят модели не по символам, а фиксированными
+  // оценками (см. `media-tokens.ts`) — добавляем их к текстовой оценке
+  // `messages.estTokens`. Формат `PromptHistoryInfo` не меняется.
+  let mediaTokens = 0;
   for (const msg of session.messages) {
     if (msg.disabled || msg.hidden || msg.role === MessageRole.INFO) continue;
+    if (msg.role === MessageRole.ASSISTANT && msg.metadata?.status === 'error') continue;
+    mediaTokens += estimateMediaTokens(msg.parts);
     for (const part of msg.parts) {
       if (part.type === 'text') continue;
       attachmentCount += 1;
@@ -237,7 +244,11 @@ export function buildPromptHistoryInfo(
   }
 
   return {
-    messages: { count: sent.length, chars, estTokens: estimateTokens(chars, tokenRatio) },
+    messages: {
+      count: sent.length,
+      chars,
+      estTokens: estimateTokens(chars, tokenRatio) + mediaTokens,
+    },
     stateMessages,
     excluded,
     attachments: { count: attachmentCount, chars: attachmentChars },
