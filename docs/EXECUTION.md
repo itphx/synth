@@ -14,7 +14,8 @@
 > MCP-серверы у себя (**B1**: `SYNTH_EXECUTOR_MCP_SERVERS`, эндпоинты `/mcp/servers`, `/mcp/tools`,
 > `/mcp/call` — появились в протоколе **2**), а control plane к ним подключён (**B2**: `ExecutorMcpSource` +
 > `attachExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе); **актуальная версия
-> протокола — 4** (секреты вызова `secrets[]`, ADR-077 «Обновлено 2026-10-26», (б); фон — v3, ADR-113),
+> протокола — 5** (вложения MCP-результата `attachments[]` в `POST /mcp/call`, `features.mcpAttachments`,
+> ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077 «Обновлено 2026-10-26», (б); фон — протокол 3, ADR-113),
 > совместимость — по полю `protocol` в `GET /capabilities`.
 > Остаток — `inline-shell` (шаг 9) и runbook переключения топологии (шаг 12).
 > Метрики `synth_executor_*` + `/metrics` исполнителя + диагностика
@@ -316,10 +317,10 @@ interface ExecutionPort {
 | `GET` | `/exec/:processId` | `200 { processId, status, exitCode, signal, pid?, command, cwd, startedAt, finishedAt?, durationMs?, stdoutBytes, stderrBytes, truncated }` — состояние фонового процесса; `404` — процесс не найден |
 | `GET` | `/exec/:processId/logs` | `200 { processId, status, exitCode, signal, stdout: { content, offset, nextOffset }, stderr: { … }, totalBytes, truncated }`; query `stdoutOffset`/`stderrOffset`/`limit` (отрезок ≤ 256 КиБ, по умолчанию 64 КиБ); `404` — процесс не найден |
 | `POST` | `/exec/:processId/stop` | `200 { status: 'stopping' }` — остановка фонового процесса; тело `{ signal }` — `SIGTERM`\|`SIGKILL` (пустое тело — `SIGTERM` по умолчанию, иной сигнал — `400`); через 5 с после `SIGTERM` — `SIGKILL`; идемпотентно; `404` — процесс не найден |
-| `GET` | `/capabilities` | `{ protocol: 4, toolchain: {git?, rg?, sh?, python3?}, os, arch, node, features: { background, secrets } }` — рукопожатие версии протокола и состава toolchain'а |
+| `GET` | `/capabilities` | `{ protocol: 5, toolchain: {git?, rg?, sh?, python3?}, os, arch, node, features: { background, secrets, mcpAttachments } }` — рукопожатие версии протокола и состава toolchain'а |
 | `GET` | `/mcp/servers` | `[{ name, status, toolCount, error? }]` — состояние MCP-серверов исполнителя (`idle`/`up`/`down`); значения `env` не отдаются |
 | `GET` | `/mcp/tools` | `[{ server, name, description, inputSchema }]` — инструменты всех **поднятых** MCP-серверов |
-| `POST` | `/mcp/call` | тело: `{ server, tool, arguments? }` → `200 { content, isError }`; неизвестный сервер/инструмент → `404`, ошибка MCP → `500` с текстом ошибки (без секретов) |
+| `POST` | `/mcp/call` | тело: `{ server, tool, arguments? }` → `200 { content, isError, attachments? }`; `attachments[]` — аддитивное поле протокола **5** (ADR-115): нетекстовые блоки результата (`image`/`audio`/`resource.blob`) в base64 без `data:`-префикса, `{mime, base64, name?}`, до 25 МиБ на файл и 20 МиБ на вызов, при `isError` не собираются; неизвестный сервер/инструмент → `404`, ошибка MCP → `500` с текстом ошибки (без секретов) |
 | `GET` | `/health` | живость исполнителя |
 
 - Тело `/exec` — проекция `ExecRequest`
@@ -333,11 +334,26 @@ interface ExecutionPort {
 - **Отмена:** разрыв HTTP-запроса → `AbortSignal` на сервере → SIGTERM процессу.
   Семантика «Стоп» (ADR-005) сохраняется: клиентский `AbortSignal` доезжает до
   исполнителя тем же эффектом, что и в inline-режиме.
-- **Версия протокола — 4** (было 1 → 2 → 3 → 4): добавлены MCP-эндпоинты (v2),
-  фоновые процессы (v3) и **секреты вызова** (v4, ADR-077 «Обновлено 2026-10-26», (б)).
-  Старый исполнитель их не знает ⇒ **control plane и
+- **Версия протокола — 5** (было 1 → 2 → 3 → 4 → 5): добавлены MCP-эндпоинты (v2),
+  фоновые процессы (v3), **секреты вызова** (v4, ADR-077 «Обновлено 2026-10-26», (б))
+  и **вложения MCP-результата** (v5, ADR-115: `attachments[]` в `POST /mcp/call`,
+  признак `features.mcpAttachments`). Старый исполнитель их не знает ⇒ **control plane и
   исполнитель обязаны быть одной версии** (см. «Операционные следствия» в
   [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md)).
+- **Вложения MCP-результата — только с протоколом 5 (деградация, а не отказ).**
+  `POST /mcp/call` отдаёт аддитивное `attachments[]`: нетекстовые блоки
+  (`image`/`audio`/`resource.blob`) в base64 **без** `data:`-префикса, поля
+  `{mime, base64, name?}`. Транспортные капы — 25 МиБ на файл и 20 МиБ на вызов
+  (битый base64, пустой блок и превышение капа пропускаются — вызов не падает);
+  при `isError: true` вложения **не собираются** (в контекст не тащим мусор сбоя).
+  Байты в blob пишет **только control plane** — `McpManager` грузит их через
+  `AttachmentService` и отдаёт модели штатным швом `ToolResult.attachments`
+  (тот же, что у `web_fetch({include_media})`), исполнитель про хранилище не знает.
+  Исполнитель протокола ≤ 4 поля не отдаёт — результат остаётся **текстовым**,
+  вызов не падает: поле аддитивное, версию для этого не проверяют (в отличие от
+  `features.background`/`features.secrets`, где нужен отказ, а не деградация).
+  Разбор — `packages/core/src/engine/mcp/executor-mcp-client.ts`,
+  `McpManager` (`engine/mcp/manager.ts`).
 - **Фоновые процессы — только с протоколом версии 3.** Ручкопожатие
   (`GET /capabilities`) отдаёт `features: { background: true }`; control plane
   **требует** этот признак (и версию ≥ 3), чтобы запускать фоновые процессы:
@@ -368,6 +384,12 @@ MCP-серверы исполнитель — у него и toolchain, и Chrom
   (`@modelcontextprotocol/sdk`, `StdioClientTransport`): connect 60 c, вызов
   инструмента 120 c, усечение результата до 30 000 символов, circuit breaker
   (5 ошибок → 60 c). Свой MCP-клиент не пишется.
+- **Вложения результата (протокол 5, ADR-115).** Нетекстовые блоки (`image`/`audio`/
+  `resource.blob`) отдаются полем `attachments[]` в `POST /mcp/call` — base64 **без**
+  `data:`-префикса, `{mime, base64, name?}`; капы транспорта — 25 МиБ на файл и 20 МиБ на
+  вызов, при `isError` вложения не собираются. Правила разбора — **как в core-клиенте**
+  (`collectMcpContent`: битый base64/пустой блок/превышение капа пропускаются, вызов не
+  падает); расхождение ловится тестами обеих сторон. В blob их пишет только control plane.
 - **Жизненный цикл — ленивый:** сервер поднимается при первом обращении
   (`GET /mcp/tools` — все серверы, `POST /mcp/call` — нужный). Неудачный старт
   не ломает исполнитель: сервер получает статус `down` с причиной, а
@@ -511,16 +533,17 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   `packages/core/src/engine/tools/git.ts`, `packages/core/src/engine/tools/path-utils.ts`);
   выход за пределы → ошибка. Это **доверительная граница**, а не косметика: без неё
   удалённый порт превращается в выполнение команд в произвольном каталоге.
-- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 4`) и
+- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 5`) и
   состав toolchain'а (`git`/`rg`/`sh`/`python3`), ОС и архитектуру. Это источник правды для
   детекта внешних зависимостей в split-режиме (ADR-078): backend не должен считать
   `git`/`rg`/`sh` доступными там, где их нет. Версия протокола — **контракт совместимости**:
   исполнитель версии 1 не знает MCP-эндпоинтов, версии 2 — фоновых процессов, версии 3 —
-  секретов вызова, поэтому control
+  секретов вызова, версии 4 — вложений MCP-результата (§4.2), поэтому control
   plane и пул исполнителей обязаны обновляться вместе (ADR-077, операционные следствия шага A).
   Поле `features` — **аддитивное**: `background: true` означает, что исполнитель умеет
   `/exec/spawn` (фоновые процессы, ADR-077 шаг 7c), `secrets: true` — что принимает
-  `secrets[]` в `POST /exec` (протокол 4, см. §4.2.2).
+  `secrets[]` в `POST /exec` (протокол 4, см. §4.2.2), `mcpAttachments: true` — что отдаёт
+  вложения MCP-результата в `POST /mcp/call` (протокол 5, ADR-115).
 - **Требование `features.secrets` (секреты вызова).** Control plane
   **требует** этот признак (и версию протокола ≥ 4), чтобы доставлять SSH-ключ:
   адрес без `features.secrets` в кандидаты на вызов с секретами **не попадает**
@@ -536,6 +559,12 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   (`process.background_unsupported` для модели). Синхронные команды от старого
   исполнителя работать продолжают — требование касается только фонового
   запуска.
+- **`features.mcpAttachments` — признак, а не требование.** В отличие от
+  `background`/`secrets`, control plane **не** отказывает адресу без этого
+  признака: `attachments[]` в ответе `/mcp/call` — аддитивное поле. Исполнитель
+  протокола ≤ 4 работает как прежде (результат только текстом), версию для
+  деградации не проверяют: отказ означал бы, что MCP-тулы пропали из-за
+  старого воркера, хотя вызов исправно исполняется.
 - **Egress-политика.** Обращения backend'а к исполнителю проходят через политику встроенных
   инструментов (`egress.tools`, `packages/shared/src/config/types.ts`) — адрес исполнителя должен
   быть разрешён; `POST /api/v2/settings/egress/check` (ADR-099) — offline-проверка без запроса.
@@ -592,7 +621,7 @@ Workspace проекта (`project.workspace`, [ADR-075](./arch_decisions/adr-07
 |---|---|---|---|
 | **1** | `execute_shell` (`packages/core/src/engine/tools/shell.ts`), `grep_files`/`rg` (`packages/core/src/engine/tools/search.ts`), python через shell | FS-роуты, provisioning workspace, git-реестр, хранение, LLM-вызовы, permission-слой, MCP stdio | Минимальный шов, максимальный выигрыш: shell — самая «тяжёлая» и самая частая операция; git и MCP требуют доставки ключей/реестров, поэтому идут позже. **Реализовано** (шаг 7c) |
 | **2** | git-тулы (`packages/core/src/engine/tools/git.ts`) + доставка SSH-материала | git-реестр `project.repos` (в backend'е), расшифровка и выдача ключей (в backend'е) | SSH-ключи per-agent шифрованы at-rest (`enc:v1:…`, AES-256-GCM) в `{dataDir}/secrets/ssh-keys/` (`packages/core/src/storage/ssh-key-store.ts`). **Решение (ADR-077, «Обновлено 2026-10-26»)**: git-операции control plane — argv через существующий `ExecutionPort` (`requires: ['git']`, без новых git-эндпоинтов); SSH-ключи — аддитивное поле `secrets[]` в `POST /exec` (протокол 4), материализация в tmp исполнителя (`mkdtemp`, 0700/0600), удаление в `finally` + sweep `synth-ssh-*` при старте. **Реализовано**: git-операции control plane — argv через `ExecutionPort` (`requires: ['git']`), SSH-ключ — секрет вызова (`secrets[]`), CA — конфигурация исполнителя (`SYNTH_EXECUTOR_TLS_CA_FILE` → `GIT_CONFIG_*`) |
-| **3** | MCP stdio-серверы (`packages/core/src/engine/mcp/client.ts`) и inline-shell (`packages/core/src/engine/commands/inline-shell.ts`) | MCP-реестр и политики ([ADR-071](./arch_decisions/adr-071-mcp-servers-prompt.md)), конфигурация серверов | MCP stdio — это `spawn` с окружением; в исполнителе нужен свой реестр бинарей и своя доставка конфигурации. **MCP-stdio — реализовано** (B1+B2, протокол 3; эндпоинты `/mcp/*` — с протокола 2); `inline-shell` — остаток (шаг 9) |
+| **3** | MCP stdio-серверы (`packages/core/src/engine/mcp/client.ts`) и inline-shell (`packages/core/src/engine/commands/inline-shell.ts`) | MCP-реестр и политики ([ADR-071](./arch_decisions/adr-071-mcp-servers-prompt.md)), конфигурация серверов | MCP stdio — это `spawn` с окружением; в исполнителе нужен свой реестр бинарей и своя доставка конфигурации. **MCP-stdio — реализовано** (B1+B2, эндпоинты `/mcp/*` — с протокола 2; вложения MCP-результата — с протокола 5, ADR-115); `inline-shell` — остаток (шаг 9) |
 
 **Что не уезжает ни в одной фазе:**
 
@@ -845,7 +874,7 @@ backend'а. Данные не затронуты (workspace — тот же то
 | `synth_sessions_active` / `synth_queue_pending` — про сессии и очередь **сообщений**, не про исполнение | `packages/core/src/metrics/collectors/sessions.ts:26`, `:30` |
 | Порт исполнения: `ExecutionPort` + `InlineExecutionPort` + контрактный suite (шаг 1) | `packages/core/src/execution/ports/execution-port.ts:1`, `packages/core/src/execution/inline-execution-port.ts:1`, `packages/core/src/execution/contract/execution.ts:1` |
 | Секция `execution` в конфиге, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed на старте (шаг 3) | `packages/shared/src/config/execution.ts:1`, `packages/shared/src/config/types.ts:178`, `packages/shared/src/config/defaults.ts:32`, `packages/core/src/execution/startup.ts:1`, `packages/core/src/main.ts:110` |
-| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 4**: секреты вызова `secrets[]`, ADR-077 «Обновлено 2026-10-26», (б)); осталось: образ worker'а и flavor'ы — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено**; **метрики `synth_executor_*` + `/metrics` исполнителя + алерты + runbook — выполнено** (шаг 7d) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `packages/core/src/metrics/collectors/executor.ts:1`, `packages/executor/src/metrics.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
+| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 5**: вложения MCP-результата `attachments[]`/`features.mcpAttachments`, ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077 «Обновлено 2026-10-26», (б)); осталось: образ worker'а и flavor'ы — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено**; **метрики `synth_executor_*` + `/metrics` исполнителя + алерты + runbook — выполнено** (шаг 7d) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `packages/core/src/metrics/collectors/executor.ts:1`, `packages/executor/src/metrics.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
 | Слой хранения — образец портов: 30 доменных портов, контрактный suite, `createFileStorage`/`createMemoryStorage`/`createPostgresStorage`/`createStorageContextAsync`/`buildStorageContext` | `packages/core/src/storage/ports/`, `packages/core/src/storage/contract/index.ts:1`, `packages/core/src/storage/storage-context.ts:467`, `:529`, `:599`, `:847`, `:917` |
 | Ограничения >1 реплики: файловая БД не масштабируется; RWO PVC; `FileMutex` (эксклюзивный `mkdir` + stale-takeover) работает только на общем FS; `scheduler.leaderElection: none`, `crossProcessLocks: false` (в PG — `PgMutex`/`PgLeader`) | `charts/synth/values.yaml:11`, `:45`; `packages/core/src/storage/file-mutex.ts:33`, `:48`; `packages/core/src/storage/mutex.ts:7`; `packages/shared/src/config/defaults.ts:155` |
 | Рестарт инстанса — graceful shutdown с exit code 75, режимы `disabled`/`process`/`supervisor` | `packages/core/src/server/restart.ts:20`, `:23`; `packages/core/src/main.ts:81` |
@@ -1035,7 +1064,7 @@ Split-топология технически возможна и при одн�
   fail-closed проверки рендера; при `executor.enabled: false` рендер не меняется); документ переведён в
   класс **Spec** — решение в ADR-077, детали здесь.
 - 2026-10-26 — снято расхождение с кодом: MCP-stdio **реализовано целиком** (B1+B2, эндпоинты `/mcp/*`
-  с протокола 2, актуальная версия протокола — 3), «остатка B2» больше нет; §9 помечает серию
+  с протокола 2; на тот момент протокол был 3), «остатка B2» больше нет; §9 помечает серию
   `synth_executor_*` и `/metrics` исполнителя как **план** (шаг 7d); SSH/CA приведены к решению
   ADR-077 («Обновлено 2026-10-26»): ключи — `secrets[]` на время вызова (протокол 4), CA — конфигурация
   исполнителя; git вынесен в отдельный шаг (5.2 плана этапа) — ADR-077 (а).
@@ -1051,3 +1080,11 @@ Split-топология технически возможна и при одн�
   (`executor.networkPolicy.metricsIngress`), алерты `synth-executor`; значения чарта
   `executor.metrics.enabled` и `executor.networkPolicy.metricsIngress`. Серии двух сторон
   **не суммируются** (`commands_total` считает разное) — различать по `job`.
+- 2026-10-27 — **протокол 5: вложения MCP-результата** (ADR-115). `POST /mcp/call` отдаёт
+  аддитивное `attachments[]` (`{mime, base64, name?}` — нетекстовые блоки `image`/`audio`/
+  `resource.blob`, base64 без `data:`-префикса), признак — `features.mcpAttachments`;
+  транспортные капы 25 МиБ на файл / 20 МиБ на вызов, при `isError` вложения не собираются.
+  Байты в blob пишет только control plane (`AttachmentService` → `ToolResult.attachments`,
+  шов `_injectToolAttachments`, тот же, что у `web_fetch({include_media})`). Деградация —
+  **не отказ**: исполнитель протокола ≤ 4 отдаёт только текст, вызов не падает (поле
+  аддитивное, версия для этого не проверяется).

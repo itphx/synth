@@ -40,7 +40,7 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
 - Собственных HTTP-агентов/диспетчеров пакет **не создаёт** (инвариант 22):
   исходящие запросы клиента — только через `egressFetch` из core.
 
-## Wire-протокол (версия 4)
+## Wire-протокол (версия 5)
 
 | Метод | Путь | Назначение | Авторизация |
 |---|---|---|---|
@@ -52,7 +52,7 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
 | `GET` | `/capabilities` | версия протокола и состав toolchain'а (базовый словарь core + допсведения) | bearer-токен |
 | `GET` | `/mcp/servers` | состояние MCP-серверов исполнителя (`idle`/`up`/`down` + причина) | bearer-токен |
 | `GET` | `/mcp/tools` | инструменты поднятых MCP-серверов (ленивый старт) | bearer-токен |
-| `POST` | `/mcp/call` | вызов инструмента MCP-сервера | bearer-токен |
+| `POST` | `/mcp/call` | вызов инструмента MCP-сервера (`{server, tool, arguments}` → `{content, isError, attachments?}`; `attachments` — протокол 5) | bearer-токен |
 | `GET` | `/health` | liveness исполнителя | без токена |
 | `GET` | `/metrics` | метрики исполнителя (`synth_executor_*`) | bearer-токен |
 
@@ -76,16 +76,19 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
   `too_many_requests` | `internal_error`). Клиент переносит причину порта как
   есть, протокольную — в `reason: 'spawn_failed'` с различающим `code`
   (`EWORKSPACE`/`EAUTH`/`ELIMIT`/`EINVAL`).
-- `GET /capabilities` — **аддитивно** отдаёт `features: { background: true, secrets: true }`
-  (признаки фоновых процессов и секретов вызова); старое поле `protocol` не меняет смысла.
+- `GET /capabilities` — **аддитивно** отдаёт `features: { background: true, secrets: true, mcpAttachments: true }`
+  (признаки фоновых процессов, секретов вызова и вложений MCP-результата); старое поле `protocol` не меняет смысла.
 
-**Версия протокола — контракт совместимости.** `EXECUTOR_PROTOCOL_VERSION = 4`
-(в 3 не было `/exec/spawn` и фоновых маршрутов, в 2 — `/mcp/*`, в 1 — базовый
-`/exec`): control plane
+**Версия протокола — контракт совместимости.** `EXECUTOR_PROTOCOL_VERSION = 5`
+(в 4 не было `attachments` в ответе `/mcp/call`, в 3 не было `/exec/spawn` и фоновых
+маршрутов, в 2 — `/mcp/*`, в 1 — базовый `/exec`): control plane
 и пул исполнителей обновляются **вместе** (то же правило, что для инвентаря
 пула, шаг A). Старый исполнитель фоновых маршрутов не знает, новый control
 plane получил бы `404`; исполнитель протокола < 4 не знает `secrets[]` — control
-plane отказывает такому вызову с `ESECRETS` (см. «Секреты вызова»).
+plane отказывает такому вызову с `ESECRETS` (см. «Секреты вызова»); исполнитель
+протокола ≤ 4 не отдаёт `attachments` — результат MCP-вызова остаётся текстовым,
+версию для этого **проверять не нужно** (поле аддитивное, см. «Вложения
+MCP-результата»).
 
 ### Секреты вызова (ADR-077, протокол 4)
 
@@ -127,6 +130,32 @@ SSH-ключ с необязательной passphrase, ADR-076). Control plane
   `GIT_CONFIG_KEY_0=http.sslCAInfo`, `GIT_CONFIG_VALUE_0=<путь>`. Порядок
   наложения окружения: `env` вызова → CA-тройка `GIT_CONFIG_*` → env секрета
   (перекрывает всё — материал доставлен явно для этой команды).
+
+### Вложения MCP-результата (ADR-115, протокол 5)
+
+Исполнитель **не знает** blob-хранилища Synth: он лишь раскладывает `content`
+MCP-вызова на текст и нетекстовые блоки и отдаёт их в base64 — блобы пишет
+**только control plane** (`McpManager` → `AttachmentService`).
+
+- **Разбор — `collectMcpContent`** (`mcp.ts`, экспорт пакета): `text` и
+  `resource.text` → текст, `image`/`audio` → вложения (`mimeType`, иначе
+  `application/octet-stream`), `resource` с `blob` → вложение (`mime` из
+  `mimeType`, `name` — последний сегмент `uri`). Прочие блоки
+  (`resource_link` и неизвестные) пропускаются.
+- **Формат на проводе:** `attachments: [{ mime, name?, base64 }]` (base64 **без**
+  `data:`-префикса). Поле аддитивное и необязательное: пустой список → поля нет.
+- **Лимиты — транспортные:** `MCP_ATTACHMENT_MAX_BYTES_PER_FILE` = 25 МиБ на файл и
+  `MCP_ATTACHMENT_MAX_TOTAL_BYTES` = 20 МиБ на вызов (те же константы, что в
+  core-клиенте; расхождение правил ловится тестами обеих сторон). Истинный лимит
+  файла применяет `AttachmentService` control plane (`attachments.maxBytesPerFile`).
+- **Отказы не роняют вызов:** битый base64 (строгая проверка обратным
+  кодированием), пустой блок и превышение капов → блок **пропускается**, текст
+  результата сохраняется. `isError: true` → вложения **не собираются** и в ответе
+  не появляются (результат не считается доставленным).
+- **Свой парсер — осознанно:** исполнитель не зависит от core рантаймом (только
+  `import type`), поэтому `collectMcpContent` здесь — копия правил, а не импорт.
+  Меняешь правила разбора/капы — правь обе стороны и тесты
+  (`packages/executor/src/mcp.test.ts`, `packages/core/src/engine/mcp/client.test.ts`).
 
 ### Фоновые процессы (ADR-077, шаг 7c; ADR-113)
 
@@ -424,7 +453,7 @@ SSH-ключ с необязательной passphrase, ADR-076). Control plane
     stderr раздельно, offset/limit, `truncated`), `stop` (200 `stopping` →
     `killed`, идемпотентность), 401 без токена, 404 неизвестного процесса,
     400 невалидного тела и `cwd` вне workspace, 429 лимита процессов,
-    `capabilities` (`protocol: 3`, `features.background`), прежний `POST /exec`;
+    `capabilities` (`protocol: 5`, `features.background`), прежний `POST /exec`;
   - `client.test.ts` — round-robin, failover на следующий адрес, `failMode`
     (`fail`/`inline-fallback`), отмена по `AbortSignal`, очередь по
     `concurrency`, реконструкция ошибок сервера; **инвентарь пула и маршрутизация
@@ -442,10 +471,12 @@ SSH-ключ с необязательной passphrase, ADR-076). Control plane
   - `mcp.test.ts` — MCP-хостинг: ленивый старт (реальный stdio-сервер на SDK —
     фикстура `test-fixtures/mcp-stdio-server.mjs`), `idle`→`up`, `down` с
     причиной, переподнятие, circuit breaker, таймауты, усечение, `redactSecrets`,
-    `close()` завершает дочерний процесс;
+    `close()` завершает дочерний процесс; **вложения (ADR-115, протокол 5)** —
+    `collectMcpContent` (`image`/`audio`/`resource.blob` → `attachments`, битый
+    base64 и превышение капов пропускаются, `isError` → без вложений);
   - `mcp-routes.test.ts` — `/mcp/servers|tools|call` под bearer: 401, 404
     (`not_found`), 400, `down` после неудачного спавна (ENOENT), секреты не
-    попадают в ответ;
+    попадают в ответ; ответ с вложениями несёт `attachments`, текстовый — без поля;
   - `config.test.ts` — fail-closed разбор env (в т.ч. `SYNTH_EXECUTOR_MCP_SERVERS`:
     строгий JSON, `''` = пустой список; `SYNTH_EXECUTOR_TLS_CA_FILE` — файл должен
     быть читаемым, иначе ошибка старта);

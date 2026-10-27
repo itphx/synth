@@ -85,6 +85,15 @@
 - Хранилище — только через порты слоя хранения (`StorageContext`, ADR-096); файловая
   реализация — `FileStore`/`JsonStore`/… (JSON + атомарная запись tmp→rename,
   ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя.
+- **Вложения — только через `AttachmentService` (ADR-115).** Байты медиа живут в blob-порте
+  (`{dataDir}/blobs`, content-addressed `attachments/<sha2>/<sha256>`), в сообщении — ссылка
+  (`MediaPartData`); **единственная точка записи байтов** — `AttachmentService.upload`
+  (MIME по сигнатуре, лимиты `attachments.*`, allowlist, запрет SVG). Оригинал хранится как
+  есть, `stripMetadata` применяется **только на границе отправки провайдеру** (гидратация/aux-вызов).
+  Второй политики лимитов/MIME не заводить: тулы, события и пайплайны ходят сюда же.
+  Учёт ссылок — порт `BlobRefRepository` (`blob_refs`; `ownerKind`
+  `message`|`pipeline-run`|`skill`|`process`), GC сирот — `startAttachmentPruner`
+  (нет ссылок **и** старше `attachments.gcDays`).
 - Исполнение агентских команд — **только через порт** `ExecutionPort` (`execution/ports`), а не
   прямым `execFile`; реализация по умолчанию — `InlineExecutionPort` (в процессе), удалённая —
   шаг 7b плана ADR-077 (пакет `@itphx/synth-executor`, динамический `import()`). Выбор
@@ -350,12 +359,14 @@
   window 60 c, ключ — `keyId`) — после `requireAuth`, до роутов; `rateLimitPerMinute`
   ключа, 0/не задан — без лимита, превышение → 429 `RATE_LIMITED` (паритет с backend).
   При старте — `applyBootstrapServiceKeys` (ADR-052/O1: installer-ключи из `security.bootstrapServiceKeys`).
-- `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107), `messages`, `projects` (`memory` — политика памяти проекта),
+- `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107; `POST /:id/background` — detach блокирующих прогонов, ADR-111; вложенные маршруты `attachments.ts` — `POST /:id/attachments` / `GET /:id/attachments/:partId`), `messages`, `projects` (`memory` — политика памяти проекта),
   `project-transfer`, `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `dictionaries`, `mcp`, `skills`,
   `commands`, `skill-bundles`, `skill-scope`, `git`, `ssh-keys`, `events`, `identities`,
   `service-keys`, `webhooks`, `oauth` (ADR-105 Ф4: `/api/v2/oauth/credentials*` — выдача,
   метаданные, refresh, отзыв, привязка к MCP-коннектору), `maintenance`, `analytics`,
+  `attachments-staging` (ADR-115: `/api/v2/attachments` — staging-загрузка без сессии и раздача
+  по `sha256`), `settings-attachments` (`/settings/attachments` — runtime-настройки вложений),
   `processes` (ADR-111/PROP-096/097: `/api/v2/processes*` — единый реестр фоновых прогонов;
   в деградированном режиме хранилища контур **не монтируется** → 404).
 - `maintenance/*` — ADR-091/ADR-092: обслуживание инстанса. `service.ts` — сервисный слой
@@ -504,7 +515,40 @@
   + `QueueProcessorManager.requestStop`; без процессора флаг снимается).
 - `server/fs-workspace.ts` — резолв workspace проекта для FS-роутов
   (`resolveProjectWorkspace`, ADR-075) и детект бинарных файлов (`isTextFile`).
+- `engine/attachments/*` — ADR-115: вложения сообщений (сервис, MIME, приватность, GC,
+  материализация, обработка aux-моделью). Устройство и правила — §«Вложения (ADR-115)» ниже.
 - `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use); опциональная зависимость `isCancelRequested` (персистентный флаг сессии) останавливает многоитерационный Tool Use (верх `while (toolIteration < maxIterations)`), когда живой cancelToken недоступен. ADR-095 (шаг 6a): самостоятельные методы вынесены в `engine/orchestrator/*` (`usage`, `fs-change`, `errors`, `persistence`, `routing`, `prompt-info`, `commands`, `debug`, `summarization`) — класс делегирует через тонкие обёртки/`*Deps()`-геттеры; (шаг 6b-1): из `_processMessage` вынесены фазы `engine/orchestrator/phases/*` — `process-early.ts` (системные сообщения, `/`-команды, micro-first), `process-setup.ts` (подготовка запроса: провайдер → MCP → state → Composer → тулы), `process-finalize.ts` (эпилог: отмена/фоллбеки/quality-check+escalation/персист/`stream.done`/авто-тайтл); в `_processMessage` остались пролог-скаляры, тело цикла Tool Use и его обработчики. Сборка промпта (ADR-070): `getPromptInfo(session)` → `PromptDiagnostics` (manifest + `history` + `promptState` активного агента + `lastPromptMeta` + `toolsDetail`), `_buildPromptHistoryInfo` зеркалит `_sessionMessagesToLlm`; state-сообщения (`syncStateMessages`) превращаются в синтетические user-сообщения `<system-state>`; `promptStates[agentKey]` читается/пишется по generation, `_cachePolicy` (`llm.cache`) уезжает в `SystemPromptPayload`; `_filterToolsByMode` удалён — список тулов постоянен.
+  **Вложения из тулов (`_injectToolAttachments`, ADR-115).** Вызывается на границе
+  итерации Tool Use — **после** того как все результаты итерации попали в `currentMessages`
+  (`allToolCalls` с полем `iteration`) и **до** следующего LLM-вызова; порядок строго
+  `assistant(tool_use) → tool(tool_result) → user(media)` (media-реплика — отдельное
+  user-сообщение после буфера `tool_result`, пары не рвутся). Каждая ссылка
+  `ToolResult.attachments` валидируется (`isToolAttachmentRefValid`: `blobPath` строго под
+  `attachments/`, `sha256` 64 hex, `mime`, `size > 0`), дубли по `blobPath` схлопываются,
+  бюджет — `MAX_TOOL_ATTACHMENTS_PER_TURN = 4` и `attachments.maxBytesPerMessage`
+  (по умолчанию 20 МиБ); лишнее отбрасывается с логом (текст результата модель всё равно видит).
+  Принятое вложение — отдельное сообщение `role: user`, `author: 'Tool'`,
+  `metadata {source: 'tool-attachment', tool, call_id}`, публикуется в канал сессии
+  (`message.added`/`session.updated`) и пишет ссылку в `blob_refs` (best-effort); байты
+  в блобы кладёт только control plane — тул отдаёт ссылку, не base64.
+  **Ролевой отказ останавливает ход.** `matchedRule: 'role.unavailable'` (тул недоступен
+  агенту) — следующая LLM-итерация не запускается: уже собранные `tool_result` остаются в
+  истории, финальный текст — `session.role_tool_blocked` (`{tool}`, `{agent}`; статус
+  `stopped`, `process-finalize.ts` + `persistence.ts`). Иначе модель бесконечно повторяла бы
+  вызов, на который у неё нет прав.
+  **Detach блокирующих прогонов (ADR-111 §detach).** `activeRuns: ActiveRunRegistry`
+  (`engine/background/active-runs.ts`, в памяти процесса) хранит хэндлы переводов в фон:
+  `task` (саб-агент) и `execute_shell` регистрируют `{id, kind, title?, detach()}` на время
+  блокирующего ожидания, `POST /api/v2/sessions/:id/background` (`server/routes/sessions.ts`)
+  вызывает `detachAll(sessionId, {type?})` → прогон продолжается уже фоновым (свой
+  `AbortController`/`streamId`, публикация в родительский стрим отключена), а ход получает
+  «переведено в фон»; публикуется `process.detached`. Ответ — `{sessionId, detached[], failed?}`
+  (пустой `detached` — штатный исход, не ошибка); гибридная (`remote:`) сессия — `400
+  DETACH_UNSUPPORTED` (живого хэндла в этом процессе нет); повторный detach идемпотентен.
+  **Исходящие вложения ответа.** `stream.done` несёт аддитивное
+  `attachments?: Array<{sha256, mime, size, name?}>` — медиа-части **финального**
+  assistant-сообщения хода (`collectOutboundAttachments`, `phases/process-finalize.ts`;
+  `saveAssistantMessage` собирает `parts` = текст + накопленные `send_attachment`-части).
   **Seam-методы для движка пайплайнов (ADR-101):** `getComposer()` — тот же инстанс
   `SystemPromptComposer`, что у сессий (промпт агентского шага собирается той же
   подсистемой — иначе разойдутся блоки, политики и кэш-маркеры);
@@ -639,6 +683,13 @@
   (404/сеть/таймаут) повторяется через `EXECUTOR_MCP_SOURCE_RETRY_MS` (15 с) — иначе backend,
   стартовавший раньше пода исполнителя, «запоминал» пустой состав на весь TTL; успешный
   пустой ответ — валидный снимок и живёт до TTL.
+  **Вложения MCP-результата (ADR-115, протокол исполнителя 5):** `McpClient` (stdio/HTTP) и
+  `ExecutorMcpClient` раскладывают `content` на текст и нетекстовые блоки
+  (`collectMcpContent`: `text`/`resource.text` → текст, `image`/`audio`/`resource.blob` →
+  `McpToolResult.attachments` в base64), `McpManager` пишет их через `AttachmentService.upload`
+  и отдаёт `ToolResult.attachments` ссылками (дедуп по `blobPath`); транспортные капы — 25 МиБ
+  на файл и 20 МиБ на вызов, `isError` → без вложений. Исполнитель ≤ 4 поля не отдаёт —
+  результат остаётся текстовым, вызов не падает.
   **`idle` = «ещё не поднят», а не «недоступен»** (ленивый старт исполнителя: сервер
   поднимает `GET /mcp/tools`, а `GET /mcp/servers` только показывает состояние): источник
   активирует сервер вызовом `/mcp/tools` и перечитывает `/mcp/servers` (после активации
@@ -685,7 +736,8 @@
   (`` !`cmd` ``) — opt-in через `execute_shell`; встроенная `/init` (ADR-069) —
   prompt-команда генерации/обновления `AGENTS.md` (`INIT_INSTRUCTION_PATH`). Тесты — `engine/commands/*.test.ts`.
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
-  plan, todo, project, task, skill, profile_update). Реестр держит **три слоя** по
+  plan, todo, project, task, skill, profile_update, вложения `attach_workspace_file`/
+  `save_attachment`/`send_attachment`, каталог `list_models`). Реестр держит **три слоя** по
   `ToolDefinition.source` (`builtin` | `mcp` | `plugin`, ADR-071 §2.1 + ADR-090):
   `registerPlugin(tool, pluginName)` — единственный путь регистрации плагинного тула, **атомарная**
   валидация с отказом `invalid_name`/`invalid_definition`/`invalid_capability`/`name_conflict`;
@@ -745,6 +797,28 @@
   при доступном агенту `profile_update` (гейт `_interviewEligible` — `_availabilityPredicate` +
   `_isAdminDisabled`, fail-closed без тула); стор приходит через `ToolContext.extra.profilesStore`,
   нет владельца — понятная ошибка.
+  **Тулы вложений (ADR-115).** `attach_workspace_file` (`attach-workspace-file.ts`,
+  capability `file_read`) — файл из workspace (`stat` до чтения, containment: абсолютный путь/`..`/
+  симлинк наружу → отказ) загружается через `AttachmentService.upload` и доставляется в сессию
+  **user-сообщением** с медиа-частью (`deliverUserMessage`, `metadata.source: 'workspace-attachment'`):
+  следующий ход получает вложение штатной гидратацией; нет доставки — честный отказ
+  `attach.tool.delivery_unavailable`. `save_attachment` (`save-attachment.ts`, `file_write`) —
+  обратное: медиа-часть **текущей** сессии (`sha256`/`name`/последняя; неоднозначное имя →
+  `attach.tool.ambiguous`) выгружается в workspace без перезаписи (`link`/`COPYFILE_EXCL`,
+  занято → `attach.tool.exists`). `send_attachment` (`send-attachment.ts`, `file_read`) — файл
+  уходит **получателю ответа**: часть кладётся в коллектор хода (`ctx.extra.outboundAttachments`),
+  финализация добавляет её в `parts` финального assistant-сообщения и в `stream.done.attachments`
+  (шлюзы раздают только их); ошибка/отмена хода ничего не отправляет. Три тула работают только
+  с объектами `attachments/` и общими лимитами `attachments.*` — второй политики нет.
+  `list_models` (`list-models.ts`) — capability `models` (группа `read`, разрешён в plan-режиме):
+  каталог инстанса через `extra.listModels` (`modelStore.list()`) — `provider/model` +
+  модальности, текущая пара и `defaultFor` (семейства из `attachments.modalityModels`); без
+  аргументов ответ компактный, фильтры `modality`/`provider`, `limit` 1..50.
+  `web_fetch({include_media})` (`web.ts`): медиа-ответ читается **стримом с капом**
+  (`attachments.maxBytesPerFile`, до чтения — `content-length`), кладётся в blob через
+  `AttachmentService` и возвращается в `ToolResult.attachments` (без `include_media` бинарь не
+  читается вовсе — модель получает подсказку); SSRF-политика и TLS не меняются
+  (`fetchWithEgressGuard`/`egressFetch`, ADR-099).
   **Тулы пайплайнов (ADR-101, B1).** `pipeline_list`/`pipeline_get`/`pipeline_save`/
   `pipeline_publish`/`pipeline_delete` (`engine/tools/pipeline-authoring.ts`) — чтение и
   авторство спецификации пайплайна **проекта сессии**; проект берётся только из сессии
@@ -1164,7 +1238,18 @@
   `human-step.ts` (HITL-вопрос с таймаутом), `agent-step.ts` (**свой Tool-Use-цикл внутри
   движка**: LLM — только через `GatewayProvider`; `ask` → гейт `tool_approval` →
   `resume` применяет одобрение к тому же вызову), `common.ts` (общая «проверка права +
-  вызов тула»). Точки расширения: `StepExecutor` (по виду узла), `PipelineExitHandler`,
+  вызов тула»). **Вложения прогона (ADR-115 × ADR-101, `engine/pipelines/attachments.ts`)**:
+  прогон носит только ссылки (байты — в blob, ADR-116), вход — `trigger.payload.attachments`,
+  проверяется до старта теми же правилами, что приём события (`validatePipelineAttachments`:
+  контур `attachments/`, объект существует, метаданные совпадают со sidecar, лимиты
+  `maxFilesPerMessage`/`maxBytesPerFile`/`maxBytesPerSession`; без сервиса/порта — fail-closed);
+  `collectStepAttachmentRefs` собирает ссылки шага из входа, значений маппинга (`ctx.input`, корни
+  путей — `prev.output.*`/`prev.artifacts`/`trigger.payload.*`/`vars.*`) и артефактов
+  предыдущего шага с `kind: 'blob'`, а `hydrateStepAttachments` гидрирует их **тем же**
+  путём, что сессии (`hydrateMessageAttachments`: `stripMetadata`, лимит base64, фильтр
+  модальностей, `derive`). Материализации отброшенного в workspace у шага **нет** — модель
+  видит только причину; ссылки прогона регистрируются в `blob_refs`
+  (`ownerKind: 'pipeline-run'`). Точки расширения: `StepExecutor` (по виду узла), `PipelineExitHandler`,
   зависимости `PipelineEngineDeps` (`projectStore`/`toolRegistry`/`mcpManager`/
   `instructionsResolver`/`agentRegistry`/`skillsCatalog`/`exits`/`metrics`) — глобальных
   синглтонов нет, сборка — в `server/app/deps.ts` (standalone) и `backend/app/deps.ts`
@@ -1228,7 +1313,16 @@
   внешнего отправителя → `{userId, displayName?, roles?} | null`: override `identityMap` (по `principalId`,
   затем `chatKey`; роли не несёт) → профиль по `parsePrincipalId` (`identities`, + роли профиля);
   `getIdentityMap` — геттер для live-обновления runtime-настройки; без кэша),
-  `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam),
+  `EventIngress` (ingest/нормализация) — **вложения события** (ADR-115 × ADR-089):
+  `attachments?: EventAttachmentRef[]` проверяются **до** роутинга/дедупа
+  (`_validateAttachments`: явный `dedupKey` обязателен — ключ по умолчанию строится из
+  `payload` и для бинарного содержимого нестабилен; количество ≤ `attachments.maxFilesPerMessage`
+  (без сервиса — жёсткий 10), путь строго под `attachments/`, объект существует и метаданные
+  (`sha256`/`mime`/`size`) совпадают со sidecar, размер ≤ `maxBytesPerFile`; нет сервиса
+  вложений → fail-closed `attachments_unavailable`). В сообщение сессии вложения попадают
+  медиа-частями (`eventToMessage` + `appendMediaPlaceholders`), ссылки пишутся в `blob_refs`
+  (`ownerKind: 'message'`); отказ — `EventAttachmentError` (400 `VALIDATION_ERROR` на роуте).
+  `RouteRuleProvider` (seam),
   `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`; в цели
   `ephemeral`/`bind` — необязательное поле `pipeline: {id, step}` («ссылка на шаг
   пайплайна: эта сессия — шаг `step` пайплайна `id`») — **семантическое** поле
@@ -1380,8 +1474,13 @@
   `createStorageContext` (`@deprecated`) и **async-каскад** `createStorageContextAsync`/`buildStorageContext`
   (backend по `storage.backend`, env `SYNTH_STORAGE_BACKEND`),
   `storage/file-blob-store.ts` (`FileBlobStore`, порт `BlobStore` — `read`/`write`/`append`/
-  `delete`/`exists`/`list`; `append` — дописывание в конец для журналов (логи фоновых процессов,
-  ADR-113), атомарность не требуется), `storage/defaults-store.ts`
+  `delete`/`exists`/`list`, плюс аддитивные `stat` и `readStream({start?, end?})` для раздачи
+  вложений без чтения в память (ADR-115: `Range`/`206`/`416`, `HEAD`); `append` — дописывание
+  в конец для журналов (логи фоновых процессов,
+  ADR-113), атомарность не требуется), `storage/file-blob-ref-repository.ts` (порт
+  `BlobRefRepository` — учёт ссылок на blob-объекты, ADR-115/ADR-116: тройка
+  `(blobPath, ownerKind, ownerId)`, `ownerKind` ∈ `message`|`pipeline-run`|`skill`|`process`,
+  `add` идемпотентен; по нему дедуп и GC сирот), `storage/defaults-store.ts`
   (`DefaultsStore` — перенесён из backend, там реэкспорт). Пайплайны ADR-101 — отдельные порты:
   `storage/ports/project-pipeline-repository.ts` (`ProjectPipelineRepository` — черновик пайплайна
   + журнал опубликованных версий; `scope` = `project`|`instance`, `installedBy` — провенанс пакета) и
@@ -1422,6 +1521,11 @@
   `runtimeInstall`/`trustFloor`/`scan`/`allowlist`/`denylist`/`remoteAllowlist`/`exactHostExceptions`/
   `promptBlockMaxChars`/`executionEnabled` (главный переключатель исполнения кода плагинов, default
   `false`); приоритет runtime > config > defaults; `getPlugins`/`setPlugins`/`clearPlugins`),
+  `attachments` + live-состояние (`createLiveAttachmentsSettings`, ADR-115: runtime-патч секции
+  `attachments` — `enabled`/`modalities`/лимиты/`workspaceFallback`/`allowedMimePrefixes`/
+  `modalityModels`/`gcDays`; резолвер `resolveAttachmentsSettings` — env `SYNTH_ATTACHMENTS_*` >
+  runtime > config > defaults, `modalityModels` собирается по семействам; применяется **сразу**,
+  сервис вложений и pruner читают значение на каждый вызов),
   `McpRegistryStore` (единый реестр MCP, ADR-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (ADR-046), `SSHKeyStore`
   (`secrets/ssh-keys`, шифрование at-rest, ADR-076),
@@ -1583,6 +1687,55 @@
     расширяет `canManage`/`canEditContent`) и `resolveElevated` (`GET /` — все проекты).
   Правила по ролям — `docs/API_V2.md` §5.5/§5.8, контекст — ADR-089.
 
+## Вложения (ADR-115)
+
+Мультимодальный ввод: изображение/аудио/видео/файл как часть сообщения. Байты — только
+в blob-порте (том), в сообщении — ссылка; спека — [ADR-115](../../docs/arch_decisions/adr-115-multimodal-input.md),
+blob-порты и `blob_refs` — ADR-116.
+
+- **Модель контента.** `PartType` дополнен `image`/`audio`/`video`/`file`, данные части —
+  `MediaPartData` (`blobPath`, `sha256`, `mime`, `size`, `name?`, `width?`/`height?`/
+  `durationMs?`, `transcript?`). Медиа-часть обязана давать в `content` плейсхолдер
+  (`[image: name.png]`) — иначе строковые производные (поиск, экспорт, PG-маппинг) теряют
+  факт вложения.
+- **Сервис (`engine/attachments/service.ts`).** `AttachmentService` — единственная точка
+  записи байтов: MIME по **сигнатуре** (не по заявленному), лимиты `attachments.*`, allowlist
+  префиксов, запрет `image/svg+xml` (XSS), content-addressed путь `attachments/<sha2>/<sha256>`
+  + sidecar с именем; `resolve`/`read` отдают только объекты из `attachments/`
+  (`isAttachmentPath` — логи и артефакты через этот контур не читаются). `stat`/`readStream`
+  в blob-порте дают раздачу потоком (`Range`/`ETag`/`HEAD`).
+- **Гидратация (`hydrate.ts`) — граница отправки.** Ссылки → `LLMAttachment[]` только из
+  реплик **user** (медиа в assistant — исходящее, провайдеру не идёт и в лимит не попадает);
+  порядок исходов: **native** (модальность модели известна и принимается) → **derive**
+  (назначена aux-модель семейства — в диалог идёт текст) → **drop** (`reason: modality|limit|
+  unavailable`). Модальности **неизвестны** — фильтра нет (вложение уходит как есть: тихая
+  потеря запрещена). Суммарный base64 ограничен (`MAX_ATTACHMENT_BASE64_BYTES` 20 МиБ,
+  отбрасываются самые старые); здесь же `stripMetadata` (JPEG/PNG — EXIF/IPTC/XMP/PNG-текст):
+  в blob лежит **оригинал**, очистка — только при отправке провайдеру (и в aux-вызове).
+  Отброшенное видно модели блоком `[ATTACHMENTS NOT DELIVERED]`
+  (`prompts/system/ATTACHMENTS_DROPPED.{ru,en}.md`, `{model}`/`{modalities}`) — сохранённая
+  история не меняется.
+- **Материализация (`materialize.ts`).** Отброшенное вложение кладётся в
+  `<workspace>/attachments/<name>` (имя санитайзится, публикация атомарная без перезаписи,
+  дедуп по содержимому, иначе суффикс `-2`, `-3`), модели сообщается путь; нет workspace/прав —
+  `null` (ход не падает). Уборка каталога не автоматизирована.
+- **Обработка модальностей (`derive.ts`).** `deriveModalityText`: `image`/`pdf` — как есть,
+  `audio` — `wav`/`mp3` как есть либо транскод `ffmpeg` в wav 16 кГц mono, `video` — только
+  кадры (до 5) через `ffmpeg`; производные объекты и кэш — в `attachments/.derived/`
+  (ключ `sha256(blobPath|provider/model|family)`); вызов — только через `GatewayProvider`;
+  ошибка/пустой ответ → обычный отброс (исключений не бросает). `ffmpeg` — внешняя
+  зависимость (`isFfmpegAvailable` через порт исполнения, ADR-078), нет — `no_ffmpeg`.
+  Модель сессии не меняется; расход aux-вызова — отдельная запись аналитики по её осям.
+- **HTTP.** Загрузка в сессию — `POST /sessions/:id/attachments` (multipart, поле `file`),
+  раздача — `GET /sessions/:id/attachments/:partId` (доступ решает prefix-guard); **staging без
+  сессии** — `POST /api/v2/attachments` и раздача по `GET /api/v2/attachments/:sha256`
+  (шлюзы/пайплайны; объект без ссылок живёт `attachments.gcDays`); `attachments: string[]` в
+  `POST /prompt` добавляет медиа-части. Лимиты — `attachments.*`, нарушение → `413`/`415`.
+- **События и прогоны.** Вложения внешнего события проверяются `EventIngress` (dedupKey
+  обязателен); вложения прогона пайплайна — `engine/pipelines/attachments.ts` (вход, маппинг,
+  `prev.artifacts`). Подробности — в «Карте модулей».
+- **Метрики** — `synth_attachment_*` (загрузки/выдачи/GC; ADR-094: имена и лейблы — контракт).
+
 ## MCP
 
 - Транспорты: stdio (`StdioClientTransport`) и Streamable HTTP
@@ -1590,6 +1743,19 @@
   пробрасываются в HTTP-транспорт (`requestInit: { headers }`) — auth/tenant-заголовки.
 - Лимиты: connect 60 c; tool timeout 120 c (`config.timeout`, мс); результат
   усечён до 30 000 символов (`MAX_TOOL_RESULT`).
+- **Вложения результата (ADR-115 × ADR-077, протокол исполнителя 5).** MCP отдаёт результат
+  блоками: `text`, `image`, `audio`, `resource` (`{uri, mimeType, blob|text}`). Раньше брался
+  только `text` — скриншоты Playwright и бинарные ресурсы выбрасывались молча. Теперь
+  нетекстовые блоки идут в `McpToolResult.attachments` (base64 без `data:`-префикса), а
+  `McpManager` пишет их в blob через `AttachmentService.upload` и возвращает
+  `ToolResult.attachments` ссылками — дальше работает штатный шов оркестратора
+  (`_injectToolAttachments`), блобы пишет только control plane. Капы здесь **транспортные**
+  (25 МиБ/файл, 20 МиБ/вызов, `MCP_ATTACHMENT_MAX_*`); истинный лимит файла — конфиг
+  `attachments.maxBytesPerFile`. Битый base64/превышение капа → блок пропускается, вызов не
+  падает; `isError` → вложений нет. Инструмент, вернувший **только** вложения, получает
+  текстовую заглушку-счётчик (`mcpAttachmentsOnlyText`, пока литеральная строка — ключ
+  `tool.mcp_attachments_only` зарезервирован в комментарии). Текст результата по-прежнему
+  проходит матрицу доверия/IPI, а байты — нет (как пользовательские вложения).
 - Circuit breaker: 5 ошибок → блокировка на 60 c (`engine/mcp/manager.ts`).
 - Тулы регистрируются с префиксом `{serverName}_{toolName}` и capability
   `ToolCapability.MCP`; деобфускация аргументов — в `execute` через `ObfuscationMapStore`.
@@ -1663,6 +1829,9 @@
 - Не хардкодить permission-проверки в тулах (ADR-025/028/029).
 - Не возвращать строки движка без i18n-ключа (ADR-041).
 - Не вводить TSM/JSON-блок состояния — только Tool Use (ADR-039).
+- Не писать байты вложений в blob мимо `AttachmentService`: он один делает MIME по сигнатуре, лимиты `attachments.*`, allowlist префиксов, запрет SVG и content-addressed путь с sidecar (ADR-115).
+- Не обходить `blob_refs`: у каждого объекта-ссылки есть владелец (`message`/`pipeline-run`/`skill`/`process`); объект без ссылок уходит в GC через `attachments.gcDays` — «забытая» ссылка = потеря файла.
+- Не ждать от guard/обфускации/сканера эффекта на бинарных вложениях: они работают только с текстом (`content`/`systemPrompt`/`tools`); метаданные (EXIF/IPTC/PNG-текст) срезает `stripMetadata` **на границе отправки** провайдеру, в blob лежит оригинал (ADR-115 §«Приватность»).
 - Не дублировать спеку API (`docs/API_V2.md`) и общие правила корня.
 
 ## Куда смотреть
@@ -1678,3 +1847,5 @@
 | План/todo, Tool Use | ADR-039 |
 | Ошибки LLM / i18n | ADR-041 |
 | Гибрид | ADR-042, ADR-045 |
+| Вложения сообщений (медиа-части, гидратация, лимиты) | ADR-115 |
+| Blob-порты на томе, `blob_refs`, блоб-том | ADR-116 |

@@ -58,14 +58,17 @@ ADR-097): реализация доменных портов `StorageContext` (`
 Волна **3a — инфраструктура драйвера** (готова): пул/подключение, схема БД и
 миграции, сборка контекста. Волна **3b — порты** (готова): все доменные порты
 `StorageContext` реализованы и проходят контрактный suite
-(`packages/core/src/storage/contract/postgres.test.ts` → 145/145 против
-живого PostgreSQL 17). Проводка домена — через `storage.backend = postgres`.
+(`packages/core/src/storage/contract/postgres.test.ts`, гейт `SYNTH_TEST_POSTGRES_DSN`) против
+живого PostgreSQL 17. Проводка домена — через `storage.backend = postgres`.
 
-**Текущий статус (сводно).** Реализованы: 40 из 40 доменных портов (группы
+**Текущий статус (сводно).** Реализованы: 48 из 48 доменных портов (группы
 `ports/*`; включая `analyticsRollups` — ADR-102 и `projectPipelines`/`pipelineRuns` —
 ADR-101, SQL-реализация поверх `pipeline_specs`/`pipeline_versions`/`pipeline_runs`/
-`pipeline_run_events`, а также `pluginAudit` — ADR-090 и `pluginLock` — PROP-068 §4.4 /
-ADR-090), лёгкие выборки `@future-backend` (в т.ч. `listLight`/`loadLight` — метаданные
+`pipeline_run_events`, `pluginAudit` — ADR-090 и `pluginLock` — PROP-068 §4.4 / ADR-090,
+`blobRefs` — ADR-115/ADR-116). Единственный **не-SQL** порт — `blobs` (файловый по
+конструкции, ADR-116 §2): байты на томе, в БД только `blob_refs`; `packs`, legacy
+`pipelines`, `skills` и `contextFiles` переведены в SQL (ADR-116, миграции 025–027).
+Лёгкие выборки `@future-backend` (в т.ч. `listLight`/`loadLight` — метаданные
 сессий без истории, `ports/sessions.ts`), точечная запись сообщений `appendMessage`/`updateMessage`
 (одна строка `messages` в транзакции под per-session advisory-локом; `save` остаётся полной заменой
 истории для импорта/ветвления), координация на session-level
@@ -93,6 +96,26 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
 Контрактный suite — `storage/contract/external-credential-repository.contract.ts`
 (file/memory/PG).
 
+**Порт учёта ссылок на blob-объекты** (`BlobRefRepository`, ADR-115/ADR-116) — **реализован**:
+`ports/blob-refs.ts` + `buildBlobRefPorts` в `storage-context.ts`, таблица `blob_refs`
+(миграция `024`). Хранится только учёт ссылок — байты на томе (`blobs`, файловый порт по
+конструкции), FK на таблицу блобов нет; существование объекта проверяет `BlobStore`.
+- `owner_kind text NOT NULL` **без CHECK**: допустимые виды владельца задаёт тип порта
+  `BlobOwnerKind` в core (`message` | `pipeline-run` | `skill` | `process`). Новый вид
+  владельца — правка типа/контракта, миграция не нужна (валидация на уровне домена, не БД).
+- PK — тройка `(blob_path, owner_kind, owner_id)` (отсюда идемпотентный `add`:
+  `ON CONFLICT DO NOTHING`), индекс `blob_refs_owner_idx` по `(owner_kind, owner_id)`;
+  `removeByOwner` — `DELETE … RETURNING`.
+- `created_at` у ссылки есть, но **TTL считается не по ней**: staging-объекты без ссылок
+  удаляет pruner core (`engine/attachments/prune.ts`) по `mtime` объекта blob-порта и
+  `attachments.gcDays` (условие — `countRefs === 0` **и** объект старше срока). В БД —
+  только ссылки, никакого собственного планировщика.
+
+**Runtime-настройки вложений** (`attachments`, ADR-115) отдельной таблицы **не имеют** — идут
+через generic `settings(key text PRIMARY KEY, value jsonb)` (миграция `001`): секция в
+`SECTION_KEYS` порта `ports/principals-settings.ts` (`getAttachments`/`setAttachments`/
+`deleteAttachments`), значение — runtime-патч, дефолты/config/env резолвит core.
+
 - **Подключение (`pool.ts`).** `createPostgresConnection(config)` → `PostgresConnection`
   с ленивым `pg.Pool` (модуль `pg` не required на импорте). Дефолты: `poolMax=10`
   (session-advisory-локи держат соединения), `statement_timeout=15s`,
@@ -109,11 +132,8 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
 - **Схема и миграции (`migrations/*`, `migrate.ts`).** Свой контур версионирования
   (НЕ `meta.json`/ADR-092): таблица `synth_schema_migrations(version int PK, id text,
   applied_at timestamptz)` в схеме драйвера. SQL-миграции — **inline TS-строки**
-  (`src/migrations/001-init.ts`, `002-egress-audit.ts`, `003-analytics-rollups.ts`,
-  `004-pipeline-engine.ts`, `005-pipeline-provenance.ts`, `006-plugin-audit.ts`,
-  `007-plugin-lock.ts`, `008-plugin-audit-scan.ts`, `009-plugin-lock-previous.ts`,
-  `010-plugin-lock-mode.ts`, `011-session-steer-inbox.ts`, `012-external-credentials.ts`,
-  `014-session-mode-by-principal.ts`, `015-authority.ts`) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
+  (`src/migrations/001-init.ts` … `027-context-files.ts`; **27 миграций**, реестр —
+  `src/migrations/index.ts`, версии строго возрастают) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
   Миграции **006–009** — слой плагинов (PROP-090): `006_plugin_audit` (таблица `plugin_audit`,
   `seq bigserial` — порядок «свежие первыми»), `007_plugin_lock` (таблица `plugin_lock`, PK — имя
   плагина; upsert — `ON CONFLICT`; `installed_at` при перезаписи сохраняется),
@@ -126,6 +146,17 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
   `015_authority` — таблицы Authority-слоя (ADR-106 Ф0/Ф1): `authority_policy` (одна строка
   `id='instance'`, документ политики — `jsonb`) и `authority_decisions` (append-only,
   `seq bigserial` — порядок «свежие первыми»; индексы по `action`/`effect`/`source`).
+  `013_service_key_plugin_id` — внутренняя колонка `plugin_id` у service-key (ADR-090 Ф7,
+  привязка токена к плагину; публичный контракт `/service-keys` не меняется).
+  `016_credential_audit` — таблица `credential_audit` (ADR-105 Ф4; секретов нет).
+  `017_memory` — `memory_facts`/`memory_indexes`/`memory_chunks` (вектор — `jsonb`, без
+  `pgvector`), `018`/`019` — `scope`/`enabled` у индексов памяти, `020` — `projects.memory`
+  (ADR-107). `021_background_runs` — `questions` (ADR-112) и `background_runs` (ADR-111/ADR-113),
+  `022` — `process_id` прогона, `023` — `sessions.worktree` (ADR-114).
+  `024_blob_refs` — `blob_refs` (ADR-115/ADR-116, см. ниже). `025_packs_pipelines` —
+  `pack_installations`/`pipeline_definitions`/`pipeline_instances` (ADR-086 §5/ADR-100),
+  `026_instance_skills` — `instance_skills` (frontmatter в SQL, содержимое — в blob),
+  `027_context_files` — `context_files` (системные промпты образа остаются ФС).
   Все идемпотентны.
   `runMigrations(conn, { schema })`: `CREATE SCHEMA IF NOT EXISTS` → advisory-лок
   (`synth:migrate:<schema>`) → применение по возрастанию версии (каждая миграция —
@@ -321,7 +352,7 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
   `CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public;` в базе прогона; тогда
   `DROP SCHEMA … CASCADE` его не трогает, а `search_path = <схема>, public`
   находит опкласс. С этим обходом весь контрактный suite core проходит против
-  живой БД: 145/145 (в т.ч. `PG → PluginLockRepository` — 10/10,
+  живой БД (в т.ч. `PG → PluginLockRepository` — 10/10,
   `PG → PluginAuditRepository` — 7/7, `PG → ExternalCredentialRepository` — 13/13).
 
 ## Критерий приёмки
@@ -352,7 +383,9 @@ workspace) остаются file-специфичными ([ADR-091](../../docs/
   **Контрактный прогон портов** живёт в core — `packages/core/src/storage/contract/postgres.test.ts`
   (тот же гейт `SYNTH_TEST_POSTGRES_DSN`, уникальная схема на каждый `make()`,
   `vi.setConfig({ testTimeout: 30000 })` — миграции под параллельной нагрузкой):
-  проходят **все** блоки контрактного suite (36 портов; `AnalyticsRollupRepository` — 11 блоков,
+  проходят **все** блоки контрактного suite (48 доменных портов; `models`/`agents`
+  идут тем же блоком `DocumentRepository`, что `providers`, поэтому блоков меньше, чем портов;
+  `AnalyticsRollupRepository` — 11 блоков,
   `PluginLockRepository` — 10 блоков, `PluginAuditRepository` — 7 блоков,
   `ExternalCredentialRepository` — 13 блоков).
   Пример: `SYNTH_TEST_POSTGRES_DSN="postgres://synth:<pw>@127.0.0.1:5432/synth_test" pnpm --filter @itphx/synth-storage-postgres test`.

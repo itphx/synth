@@ -73,6 +73,17 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - ADR-102: секция `analytics` (`retentionDays`, default `400`; `<= 0` — хранение без
   ограничения; `analyticsConfigSchema` + `AnalyticsConfig`), скалярный env-оверрайд
   `SYNTH_ANALYTICS_RETENTION_DAYS` по общему правилу секций.
+- ADR-115: секция `attachments` (мультимодальный ввод) — `enabled`, `modalities`
+  (`image`/`pdf`/`audio`/`video`, ключи — `ATTACHMENT_FAMILIES`; не путать с `AttachmentModality`
+  модели, где есть ещё `text`), `maxBytesPerFile`, `maxFilesPerMessage`, `maxBytesPerSession`,
+  `maxBytesPerMessage` (**optional**, без дефолта — бюджет инъекции вложений тулов на ход, читает
+  оркестратор), `allowedMimePrefixes`, `workspaceFallback`, `modalityModels` (aux-модели по
+  семействам, `{provider, model}`; отсутствие записи — обработка не настроена), `gcDays`;
+  `attachmentsConfigSchema`/`attachmentsModalitiesSchema`/`modalityModelsSchema` +
+  `AttachmentsConfig`. Env: скалярные `SYNTH_ATTACHMENTS_*` (`enabled`/`workspaceFallback`/лимиты/
+  `gcDays`) через `ENV_OVERRIDES`, семейства — csv `SYNTH_ATTACHMENTS_MODALITIES`
+  (`ATTACHMENTS_MODALITIES_ENV`); `modalityModels`/`allowedMimePrefixes` — только config.yaml.
+  Runtime-override — core (`RuntimeSettings.attachments`), схема остаётся аддитивной.
 - Этап 1 roadmap 0.13: секция `questions` (`timeoutMs` — срок ожидания ответа,
   default `0` — **без таймаута**; `retentionDays` — срок хранения терминальных записей, default `14`;
   `questionsConfigSchema` + `QuestionsConfig`) и секция `background` (`enabled` —
@@ -370,6 +381,15 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   **не** `question.*` — `question.asked` уже занят смыслом «очередь зависла»),
   `process.started`/`process.exited`/`process.stopped` и `child.completed`/`child.failed`/
   `child.cancelled`; все публикуются в **канале сессии** (ADR-009/ADR-024, новых каналов нет).
+- ADR-115: **вложения** — медиа-части (`MediaPartType` = `image`/`audio`/`video`/`file`,
+  `MediaPartData`: `blobPath`/`sha256`/`mime`/`size`/`name?`/`width?`/`height?`/`durationMs?`/
+  `transcript?`; медиа-часть даёт плейсхолдер в `content`, `makeMediaPart`) и ссылки на объекты
+  blob-хранилища: `ToolResult.attachments?: ToolAttachmentRef[]` (`{blobPath, sha256, mime, size,
+  name?}` — **аддитивно**, тул отдаёт ссылки, а не байты) и `SynthEvent.attachments?:
+  EventAttachmentRef[]` (та же форма). Zod — `eventAttachmentRefSchema` (контур `attachments/`,
+  без `..`); `eventIngestSchema`/`eventKeyIngestSchema` через `requireDedupKeyForAttachments`
+  требуют явный `dedupKey` при непустых вложениях (иначе ключ идемпотентности зависел бы от
+  содержимого).
 - ADR-089: внешняя идентичность профиля — тип `ExternalIdentity` (`provider` (префикс principalId,
   напр. `tg`) / `externalId` (числовой id источника строкой) / `username?`/`displayName?` —
   display-кэш, НЕ ключ / `linkedAt` ISO / `linkedBy?`); `ProfileData.identities?: ExternalIdentity[]`
@@ -402,7 +422,17 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `task.background_disabled` — фоновый саб-агент (ADR-111);
   `process.background_started` (`{id}`, `{log}`), `process.deps_unavailable`,
   `process.background_limit` (`{limit}`), `process.background_unsupported` — фоновый
-  шелл-процесс (ADR-111/PROP-097).
+  шелл-процесс (ADR-111/PROP-097); `process.detached_started` (`{id}`, `{log}`) — команда,
+  переведённая в фон в ходе хода (ADR-113 §detach; не путать с переводом всей сессии в фон,
+  ADR-111 §detach).
+- ADR-115: `attach.*` — вложения: `attach.message.from_workspace` (`{path}` — вложение
+  материализовано в workspace), `attach.tool.*` (`attached`/`not_found`/`not_a_file`/`too_large`/
+  `unsupported_mime`/`unrecognized`/`disabled`/`deps_unavailable`/`delivery_unavailable`/
+  `queued`/`saved`/`ambiguous`/`no_attachment`/`exists`/`save_failed`) и `models.list.*`
+  (`header`/`current`/`defaults`/`skipped`/`empty`/`provider_unknown`/`deps_unavailable`/
+  `unavailable`) — тул `list_models`. `session.role_tool_blocked` (`{tool}`, `{agent}`) —
+  ролевой deny: en-текст в core `engine/system-messages.ts`, ru — в UI-словаре
+  (`messages/ru.ts`), в en-словаре UI её нет намеренно (как у прочих engine-строк).
 
 ## Тесты и сборка
 
