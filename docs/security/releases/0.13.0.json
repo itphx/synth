@@ -1,0 +1,59 @@
+{
+  "schema": "synth.security.audit/v1",
+  "version": "0.13.0",
+  "commit": "186bf4eee7a4f7a826434d54b593caf7154b8528",
+  "date": "2026-10-27",
+  "auditor": {
+    "name": "opencode (аудит-агент, deepseek-flash), роль read-only",
+    "role": "AUDITOR",
+    "mode": "read-only"
+  },
+  "status": "approved_with_exceptions",
+  "summary": "Аудит релиза 0.13.0 (блок 1.1: мультимодальные вложения и blob-подложка, состояние инстанса в SQL, артефакты прогонов; плюс апгрейд зависимостей по ратчету). Проверены: secret-scan дерева и истории (0 находок), негативная матрица авторизации сессий (92 теста), ратчет зависимостей (critical 0, high 28 ≤ baseline 31, прямых 0) и обзор изменений по 7 классам. Не проверялось: живой прогон ci.yaml на GitVerse — ветка не запушена на момент аудита, прогон обязателен перед тегом (п.5 чек-листа). На что смотреть в релизе: вложения не хранятся в БД (только blob_refs), EXIF вычищается до хеширования, новые маршруты вложений/артефактов не имеют проверок в обработчиках и живут под единым prefix-guard, base64 вложений не попадает в payload-лог/обфускацию.",
+  "checks": {
+    "secret-scan": {
+      "status": "pass",
+      "command": "node scripts/secret-scan.mjs --mode worktree,commits,blobs --report tmp/security/secret-scan-0.13.0.json",
+      "result": "ЧИСТО — находок нет. Просканировано: worktree 2608 файлов, 783025 строк истории, 15318 blob-ов; подавлено allowlist 83, все — тестовые фикстуры и исторические вхождения (см. exceptions[historical-test-fixture-allowlists]). Рабочее дерево 8 фикстур переписано на сборку PEM/токенов в рантайме — литералов ключей в исходниках больше нет.",
+      "date": "2026-10-27"
+    },
+    "auth-matrix": {
+      "status": "pass",
+      "command": "pnpm --filter @itphx/synth-backend exec vitest run src/routes/sessions-access.test.ts src/routes/session-idor-matrix.test.ts",
+      "result": "92 теста passed, 0 failed (policy.authMatrix.minTests = 8). Матрица дополнена двумя строками для вложений (GET/HEAD — чтение сессии, POST — запись; неизвестная часть → 404); строка артефактов прогона проверяется через права чтения прогона. Проверки живут на границе (prefix-guard/runGuard), в обработчиках доступа нет.",
+      "date": "2026-10-27"
+    },
+    "ci-baseline": {
+      "status": "pass",
+      "command": "pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm test && helm lint charts/synth",
+      "result": "Локальный baseline на коммите аудита: frozen-lockfile — ok; typecheck — 9/9 пакетов без ошибок; lint — 0 errors (380/27/194 warnings — предсуществующие no-explicit-any); тесты — shared 861, core 6869 (+238 skipped), sdk 24, ui 2244 (+1 todo), backend 721, executor 191, plugin-memory 191, storage-postgres 72 (+16 skipped); helm lint — 1 chart, 0 failed. Прогон ci.yaml на GitVerse на момент аудита не выполнялся (ветка не запушена) — обязателен перед тегом.",
+      "date": "2026-10-27"
+    },
+    "dependencies": {
+      "status": "pass",
+      "command": "pnpm audit --json && node scripts/security-gate.mjs --only dependencies --skip-tests",
+      "result": "Профиль ратчета post-upgrade: critical 0/0, high 28/31, moderate 19, low 3; прямых уязвимых модулей 0. Снято в этом релизе: dompurify 3.4.5 → 3.4.17 (critical GHSA-cg2g-xh64-v4q7 + high), vite 8.0.13 → 8.3.5 (2 high), zod 3.25.76 → 4.6.7 (high GHSA-mrhx-c7xc-m3w5, в v3 патча нет) с @hono/zod-openapi 1.6.3. Гейт по зависимостям: PASS (1 pass / 0 fail).",
+      "date": "2026-10-27"
+    },
+    "security-review": {
+      "status": "pass",
+      "command": "docs/security/AUDIT-CHECKLIST.md §3 (обзор изменений релиза по 7 вопросам)",
+      "result": "(1) Новые внешние входы: POST/GET /api/v2/sessions/:id/attachments (multipart, Range), attachments[] в prompt, GET /api/v2/pipeline-runs/:runId/artifacts/:name; events/webhooks/MCP-поверхности не менялись. (2) Авторизация/IDOR: маршруты вложений смонтированы внутри приложения сессий под единым prefix-guard (read для GET/HEAD, write для POST), артефакты — под runGuard('read') и правами проекта; в обработчиках проверок нет; матрица IDOR расширена и зелёная. (3) Containment путей: blob-пути ограничены префиксом attachments/ (isAttachmentPath), имена артефактов и runId санитайзятся (без .., \\, NUL), workspace-контейнмент не менялся. (4) SSRF/egress: новых исходящих каналов нет — вложения уходят провайдеру inline (base64) через существующий провайдерский транспорт с TLS-политикой; gateway не сканирует и не обфусцирует base64, payload-лог и debug-снимок заменяют его сводкой {mime,name,sizeBytes} (тесты). (5) Секреты/ключи: EXIF/PNG-метаданные вычищаются до хеширования (sha256 описывает лежащие байты), содержимое — на томе (content-addressed), в БД только blob_refs; секреты инстанса (master.key, api-key, executor-token) не затронуты. (6) Supply-chain/артефакты: ратчет зелёный, апгрейды выше; blob-том — опция чарта (PVC), секретов в чарт/образы не добавлено. (7) Доки vs факт: обновлены docs/API_V2.md §5.6.1/§5.35, CONFIGURATION (attachments.*), ARCHITECTURE (blob-порт и SQL-порты), MAINTENANCE (две процедуры бэкапа, storage migrate без blobs, RWX при replicaCount>1), OBSERVABILITY (synth_attachment_*), PIPELINES (артефакты, retention нет); утверждения сверены с кодом, расхождений не найдено.",
+      "date": "2026-10-27"
+    }
+  },
+  "exceptions": [
+    {
+      "id": "historical-test-fixture-allowlists",
+      "scope": "В .gitleaks.toml добавлены три узких блока «путь + dummy-маркер» для исторических вхождений тестовых фикстур: inline-PEM заглушки в коммите 193be2ab (6 файлов: git-ssh.test.ts, inline-execution-port.test.ts, git-service.test.ts, client.test.ts, exec-service.test.ts, secrets.test.ts) и тестовые токены исполнителя в коммитах 996c776b/a7c84ca0 (metrics.test.ts, server-background.test.ts). Рабочее дерево переписано на сборку PEM/токенов в рантайме — литералов в исходниках нет; блоки нужны только для неизменяемой истории master.",
+      "justification": "Историю master переписать нельзя (опубликована, зеркалируется на GitHub), а без подавления secret-scan истории блокирует релизный гейт. Подавление не path-only: каждый блок требует совпадения пути И dummy-тела заглушки (control-plane-must-not-materialize, inline-secret-material, error-body-must-not-contain-it, executor-secret-material, PRIVATE KEY-----\\nkey\\n, remote-secret, executor-metrics-token-test-1234567890, executor-token-bg-test-1234567890), поэтому настоящий ключ/токен с другим телом в тех же файлах остаётся находкой. Path-only блоков в этом релизе не добавлялось.",
+      "followUp": "При следующем обновлении фикстур предпочитать генерируемые в рантайме значения (уже сделано в рабочем дереве); исторические блоки не расширять, при переезде истории — удалить вместе с ревизиями. Список подавлений и их причины перечисляются сканером (--list-allowlists) и зафиксированы в .gitleaks.toml.",
+      "owner": "владелец контура безопасности инстанса",
+      "dueRelease": "0.14.0 (ревизия при следующем релизе)"
+    }
+  ],
+  "artifacts": {
+    "evidence": "tmp/security/evidence-0.13.0.json",
+    "ci_run": "не выполнен на момент аудита: ветка feat/0.13-data-layer-attachments не запушена; перед тегом обязателен зелёный прогон ci.yaml на коммите релиза (п.5 чек-листа)"
+  }
+}
