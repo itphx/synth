@@ -1,0 +1,29 @@
+{{- /* ADR-116: отдельный том блобов (вложения, артефакты, логи, содержимое
+       instance-скиллов). Создаётся только при `backend.blobs.enabled` и пустом
+       `backend.blobs.existingClaim`; по умолчанию блобы лежат внутри тома
+       данных (`{dataDir}/blobs` на PVC backend.persistence). */ -}}
+{{- $b := .Values.backend.blobs | default dict -}}
+{{- if and $b.enabled (not $b.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "synth.backend.blobsClaim" . }}
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+  {{- if $b.keepOnUninstall }}
+  # Аннотация обязана быть в манифесте релиза: Helm при uninstall фильтрует
+  # ресурсы по манифесту и не видит аннотацию, проставленную вручную на живом PVC.
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  accessModes:
+    - {{ $b.accessMode | default "ReadWriteMany" }}
+  {{- with $b.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $b.size | default "20Gi" }}
+{{- end }}

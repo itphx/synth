@@ -32,6 +32,24 @@ app.kubernetes.io/component: backend
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{- /* ADR-116: корень данных backend'а внутри контейнера (том `data`). */ -}}
+{{- define "synth.backend.dataMountPath" -}}
+/var/synth/data
+{{- end }}
+
+{{- /* ADR-116: точка монтирования блобов — `<dataDir>/blobs`, вложена в том
+       данных (блобы — файловый порт по конструкции: байты на томе, в БД только
+       `blob_refs`). */ -}}
+{{- define "synth.backend.blobsMountPath" -}}
+{{ include "synth.backend.dataMountPath" . }}/blobs
+{{- end }}
+
+{{- /* ADR-116: claim тома блобов (существующий или созданный чартом). */ -}}
+{{- define "synth.backend.blobsClaim" -}}
+{{- $b := .Values.backend.blobs | default dict -}}
+{{- $b.existingClaim | default (printf "%s-blobs" (include "synth.backend.fullname" .)) -}}
+{{- end }}
+
 {{- define "synth.ui.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "synth.name" . }}
 app.kubernetes.io/component: ui

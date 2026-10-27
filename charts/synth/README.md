@@ -120,6 +120,11 @@ ingress:
 | `backend.providers` | `[]` | Список LLM-провайдеров (`name/type/url/model/apiKey`) |
 | `backend.persistence.*` | `enabled: true`, `10Gi` | PVC для JSON-данных |
 | `backend.persistence.keepOnUninstall` | `false` | Не удалять PVC при `helm uninstall` (аннотация `helm.sh/resource-policy: keep` в манифесте релиза); для окружений, где данные нельзя терять |
+| `backend.blobs.enabled` | `false` | Отдельный PVC под блобы (`{dataDir}/blobs`, ADR-116): `false` — блобы внутри тома `data` (см. «Блобы и несколько реплик») |
+| `backend.blobs.size` / `.storageClass` | `20Gi` / `""` | Размер и класс тома блобов (пусто → класс по умолчанию кластера); при `backend.replicaCount > 1` класс должен уметь `ReadWriteMany` |
+| `backend.blobs.accessMode` | `ReadWriteMany` | Режим доступа тома блобов; при `backend.replicaCount > 1` не-RWX режим → ошибка рендера (fail-closed) |
+| `backend.blobs.existingClaim` | `""` | Готовый claim блобов (чарт PVC не создаёт, `accessMode` не проверяет) |
+| `backend.blobs.keepOnUninstall` | `false` | Не удалять PVC блобов при `helm uninstall` (аннотация `helm.sh/resource-policy: keep`) |
 | `backend.extraEnv` | `{}` | Доп. env для backend |
 | `backend.restartMode` | `process` | Restart из UI: `process` \| `supervisor` \| `disabled` (env `SYNTH_RESTART_MODE`, см. «Перезапуск инстанса из UI») |
 | `backend.config` | `{}` | Декларативный `config.yaml` backend (монтируется в `/etc/synth`); сюда же домерживается секция `storage` из значений ниже |
@@ -275,7 +280,15 @@ backend:
   replicaCount: 2
   service:
     sessionAffinity: ClientIP
+  persistence:
+    accessMode: ReadWriteMany   # блобы общие для всех реплик (ADR-116), нужен RWX-класс
 ```
+
+При `backend.replicaCount > 1` нужен ещё и **RWX-том под блобы** (вложения,
+артефакты, логи): иначе рендер чарта падает — см. «Блобы и несколько реплик». В
+примере выше режим тома данных задан явно; без RWX-класса
+(`backend.persistence.accessMode: ReadWriteMany`) или отдельного
+`backend.blobs.enabled: true` с RWX-классом `helm template` завершится ошибкой.
 
 По умолчанию `None` — обычная балансировка, поле в манифест Service не попадает (дефолтный рендер
 чарта не меняется побайтово).
@@ -750,6 +763,8 @@ PVC (`backend.persistence.*`) остаётся смонтированным в `
 - `meta.json` — версия схемы данных инстанса (ADR-092);
 - `workspaces/` — рабочие каталоги проектов (файлы агента) и файловый фоллбек
   (`storage.fallbackDir`, по умолчанию `{dataDir}/fallback`);
+- `blobs/` — корень blob-порта (вложения, артефакты, логи, содержимое скиллов;
+  ADR-116) — байты остаются на томе даже при БД, см. «Блобы и несколько реплик»;
 - `backups/` — архивы `synth backup`, если они пишутся в каталог данных.
 
 Данные (сессии, проекты, сообщения, провайдеры/модели/агенты, события,
@@ -775,6 +790,69 @@ PVC (`backend.persistence.*`) остаётся смонтированным в `
 выполняется. Реализация — параллельная волна ADR-096; чарт лишь доводит значения
 до `config.yaml` (env-переменных у этих ключей нет). Значение `storage.backend`
 валидируется приложением (при неизвестном — ошибка старта), чарт его не проверяет.
+
+## Блобы и несколько реплик
+
+Блобы — это байты вложений сообщений, артефактов, логов фоновых процессов и
+содержимого instance-скиллов (ADR-116). Порт `BlobStore` остаётся **файловым по
+конструкции**: в базе лежат только ссылки (`blob_refs`), сами объекты — на томе,
+корень — `{dataDir}/blobs` (в контейнере `/var/synth/data/blobs`).
+
+| Что | Где лежит |
+|---|---|
+| `{dataDir}/blobs` — корень blob-порта | том блобов: подкаталог тома `data`, а при `backend.blobs.enabled: true` — отдельный PVC |
+| `{dataDir}/secrets` — мастер-ключ at-rest, api-key, SSH-ключи | том `data` (всегда) |
+| `{dataDir}/workspaces` — файлы проектов | том `data` либо общий том `executor.workspace`, если включён исполнитель |
+
+### Когда нужен RWX
+
+Каталог блобов читают и пишут **все** реплики backend'а: вложение, загруженное
+через реплику A, должно читаться с реплики B (картинка в истории, повторный ход
+агента, лог фонового процесса). Поэтому:
+
+- `backend.replicaCount: 1` (дефолт) — достаточно RWO: блобы лежат внутри тома
+  `data` (`backend.persistence.accessMode: ReadWriteOnce`), отдельный PVC не нужен;
+- `backend.replicaCount > 1` — том с блобами обязан быть `ReadWriteMany`
+  (NFS/CephFS/…). Иначе рендер чарта **падает с понятной ошибкой**: называется
+  ключ (`backend.persistence.accessMode` или `backend.blobs.accessMode`) и
+  текущее значение. Это намеренный fail-closed: с RWO каждая реплика увидела бы
+  только свой том, и блобы «расползлись» бы по подам.
+
+Проверка не применяется, если принесён готовый claim
+(`backend.persistence.existingClaim` или `backend.blobs.existingClaim`): режим
+такого тома задан вне чарта.
+
+### Чем отличается `backend.blobs.enabled`
+
+```yaml
+backend:
+  replicaCount: 2
+  service:
+    sessionAffinity: ClientIP
+  blobs:
+    enabled: true
+    size: 20Gi
+    storageClass: nfs-rwx       # класс с поддержкой ReadWriteMany
+    accessMode: ReadWriteMany
+```
+
+- `false` (дефолт) — **один том**: блобы лежат в `{dataDir}/blobs` на PVC
+  `backend.persistence` (`synth-backend-data` по умолчанию);
+- `true` — **отдельный PVC** (`synth-backend-blobs` по умолчанию) монтируется в
+  `/var/synth/data/blobs` (вложенное монтирование — см. «Вложенное монтирование
+  (путь внутри пути)» в разделе исполнителя), том `data` остаётся под данные и
+  секреты. Опция нужна, когда класс данных не умеет RWX, а под блобы есть
+  отдельный RWX-класс, — или когда блобы растут и их хочется масштабировать
+  независимо от данных;
+- `backend.blobs.existingClaim` — свой claim: чарт PVC не создаёт, только
+  монтирует указанный; `backend.blobs.keepOnUninstall` — не удалять PVC блобов
+  при `helm uninstall` (аннотация `helm.sh/resource-policy: keep` в манифесте).
+
+Путь `{dataDir}/blobs` — это корень blob-порта: опцией чарта он не меняется
+(пути внутри порта относительные — `attachments/…`, `artifacts/…`, `skills/…`,
+`processes/…`). В отдельный том `workspaces` и `secrets` **не переезжают**:
+`workspaces` — это `executor.workspace` (общий том исполнения, ADR-077), а
+`secrets` всегда живёт в томе данных (мастер-ключ at-rest, ADR-076).
 
 ## Исполнитель (split-режим, ADR-077)
 

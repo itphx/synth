@@ -48,17 +48,19 @@
  * `instance_skills` (миграция 026; содержимое скиллов — в blob-сторе) и
  * `context_files` (миграция 027; системные промпты образа остаются ФС).
  *
- * Осознанное исключение: драйвер в этой части **импортирует core рантаймом**
- * (`createFileStorage`), чтобы переиспользовать уже проверенные файловые
- * реализации, а не дублировать их. Для портов БД core по-прежнему не тянется:
- * порты подключаются динамическим `import()` из core по `storage.backend`.
+ * Рантайм-импорт core сужен до трёх точечных вещей (ADR-116): `FileBlobStore` +
+ * `prepareBlobRoot`/`blobRootPath` (blob-порт — файловый по конструкции, корень
+ * `{dataDir}/blobs`) и `ContextConfig` (системные промпты образа — его резолвер;
+ * пользовательская часть контекста в SQL). Файловый контекст
+ * (`createFileStorage`) драйвер **не собирает**. Для портов БД core по-прежнему
+ * не тянется: порты подключаются динамическим `import()` из core по
+ * `storage.backend`.
  */
 
 import { join } from 'node:path';
-import { createFileStorage } from '@itphx/synth-core';
-// ADR-116: файлы контекста — системные промпты ФС, пользовательская часть в SQL.
-// `ContextConfig` нужен как системная часть композиции (исключение пакета: ФС-порты).
-import { ContextConfig } from '@itphx/synth-core';
+// ADR-116: точечный рантайм-импорт core — blob-порт (файловый по конструкции) и
+// `ContextConfig` как источник каталога системных промптов образа.
+import { blobRootPath, ContextConfig, FileBlobStore, prepareBlobRoot } from '@itphx/synth-core';
 import type {
   StorageContext,
   StorageHealth,
@@ -102,9 +104,9 @@ export interface BuildPostgresContextOptions {
   dataDir: string;
   secretKey?: string;
   env?: NodeJS.ProcessEnv;
-  /** Каталог системных словарей (пробрасывается группе `content`/файловым портам). */
+  /** Каталог системных словарей (пробрасывается группе `content`). */
   systemDictionariesDir?: string;
-  /** Корень пользовательских промптов/ролей (композиция `contextFiles`: системные промпты ФС). */
+  /** Корень пользовательских промптов/ролей (композиция `contextFiles`: системные промпты — ФС образа). */
   contextUserDataDir?: string;
   /**
    * ADR-097: живое соединение драйвера — удерживается в контексте, порты БД
@@ -117,16 +119,12 @@ export interface BuildPostgresContextOptions {
 
 /** Собрать `StorageContext`: доменные порты (SQL) + blob-стор (ФС) + `close`. */
 export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): StorageContext {
-  // Файловый контекст переиспользуется ради blob-стора (`blobs` — файловый по
-  // конструкции) и как источник системных промптов для `contextFiles`
-  // (пользовательская часть — SQL); прочие его порты не задействованы.
-  const file = createFileStorage({
-    dataDir: opts.dataDir,
-    secretKey: opts.secretKey,
-    env: opts.env,
-    systemDictionariesDir: opts.systemDictionariesDir,
-    contextUserDataDir: opts.contextUserDataDir,
-  });
+  // ADR-116: blob-стор остаётся файловым по конструкции, поэтому создаётся
+  // точечно (а не сборкой всего файлового контекста) с тем же корнем, что у
+  // файлового backend'а — `{dataDir}/blobs`. `prepareBlobRoot` идемпотентно
+  // создаёт каталог и переносит логи старой раскладки.
+  prepareBlobRoot(opts.dataDir);
+  const blobs = new FileBlobStore({ root: blobRootPath(opts.dataDir) });
 
   const background: Promise<unknown>[] = [];
 
@@ -134,7 +132,11 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
   // ФС. Каталог пользовательских файлов тот же, что у файловой реализации
   // (используется лишь как путь по умолчанию для композиции).
   const contextUserDataDir = opts.contextUserDataDir ?? join(opts.dataDir, 'context');
-  const systemPromptsDir = file.contextFiles.systemPromptsDir;
+  // Каталог системных промптов образа резолвит сам `ContextConfig`
+  // (`{root}/prompts`, fallback `{root}/dist/prompts`) — берём его у класса,
+  // чтобы поведение не разошлось с файловой реализацией; файловый контекст ради
+  // этого не нужен.
+  const systemPromptsDir = new ContextConfig({ userDataDir: contextUserDataDir }).systemPromptsDir;
 
   const deps: PortDeps = {
     connection: opts.connection,
@@ -244,11 +246,11 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     ...buildBlobRefPorts(deps),
     // ADR-116: blob-стор остаётся файловым по конструкции (байты вложений,
     // логов, содержимого скиллов — на томе; в БД только `blob_refs`).
-    blobs: file.blobs,
+    blobs,
     // ADR-116: пользовательские файлы контекста/промптов — SQL
-    // (`context_files`, миграция 027); системные промпты образа — ФС через
-    // `ContextConfig` (композиция: системные методы делегируются файловой
-    // реализации, пользовательские читаются из кэша таблицы).
+    // (`context_files`, миграция 027); системные промпты образа — ФС по пути
+    // `ContextConfig.systemPromptsDir` (композиция читает их напрямую, а
+    // пользовательские override — из кэша таблицы).
     ...buildContextFilePorts(deps, {
       systemPromptsDir,
       createConfig: (overrides) =>
@@ -256,7 +258,7 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     }),
     // ADR-116: instance-скиллы — метаданные в SQL (`instance_skills`,
     // миграция 026), содержимое — в том же blob-сторе (`skills/<name>/…`).
-    ...buildSkillPorts(deps, file.blobs),
+    ...buildSkillPorts(deps, blobs),
     // ADR-116: реестр установок пакетов (ADR-086 §5) и legacy-пайплайны
     // (ADR-051/ADR-100) — SQL-реализации (таблицы `pack_installations` /
     // `pipeline_definitions` / `pipeline_instances`, миграция 025). До ADR-116

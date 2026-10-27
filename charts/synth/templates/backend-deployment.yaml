@@ -12,6 +12,25 @@
 {{- if and $authApiKey.enabled .Values.backend.oidc.enabled -}}
 {{- fail "backend.auth.apiKey.enabled и backend.oidc.enabled взаимоисключающие: включите либо API-key (SYNTH_API_KEY), либо OIDC, но не оба" -}}
 {{- end -}}
+{{- /* ADR-116: блобы (вложения, артефакты, логи, содержимое скиллов) живут на
+       томе — `{dataDir}/blobs`. Этот каталог читают и пишут ВСЕ реплики backend'а,
+       поэтому при replicaCount > 1 том с блобами обязан быть ReadWriteMany:
+       иначе каждая реплика увидит только свой том, и blob-ссылки «поедут».
+       Внешний claim (existingClaim) не проверяем — его режим задан вне чарта. */ -}}
+{{- $blobs := .Values.backend.blobs | default dict -}}
+{{- if gt (int .Values.backend.replicaCount) 1 -}}
+{{- $blobVolumeMode := .Values.backend.persistence.accessMode -}}
+{{- $blobVolume := "backend.persistence.accessMode" -}}
+{{- $blobExternalClaim := .Values.backend.persistence.existingClaim -}}
+{{- if $blobs.enabled -}}
+{{- $blobVolumeMode = $blobs.accessMode | default "ReadWriteMany" -}}
+{{- $blobVolume = "backend.blobs.accessMode" -}}
+{{- $blobExternalClaim = $blobs.existingClaim -}}
+{{- end -}}
+{{- if and (not $blobExternalClaim) (ne $blobVolumeMode "ReadWriteMany") -}}
+{{- fail (printf "backend.replicaCount=%d: том с блобами должен быть ReadWriteMany, а %s = %q. Блобы (вложения, артефакты, логи, содержимое скиллов) — общий каталог {dataDir}/blobs для всех реплик, при RWO каждая реплика увидит только свой том (ADR-116). Варианты: backend.blobs.enabled: true с RWX-классом (backend.blobs.storageClass/accessMode), RWX-класс у backend.persistence, свой claim (backend.persistence.existingClaim / backend.blobs.existingClaim) — либо backend.replicaCount: 1" (int .Values.backend.replicaCount) $blobVolume $blobVolumeMode) -}}
+{{- end -}}
+{{- end -}}
 {{- /* ADR-077: split-режим — control plane получает адрес пула исполнителей
        и ПУТЬ к файлу с токеном (значение токена в env/ConfigMap не попадает,
        инвариант 13). */ -}}
@@ -194,7 +213,13 @@ spec:
           {{- end }}
           volumeMounts:
             - name: data
-              mountPath: /var/synth/data
+              mountPath: {{ include "synth.backend.dataMountPath" . }}
+            {{- /* ADR-116: отдельный том блобов монтируется внутрь тома данных —
+                   `<dataDir>/blobs` (вложенное монтирование, см. README чарта). */}}
+            {{- if $blobs.enabled }}
+            - name: blobs
+              mountPath: {{ include "synth.backend.blobsMountPath" . }}
+            {{- end }}
             {{- if include "synth.backend.hasConfigMap" . }}
             - name: config
               mountPath: /etc/synth
@@ -265,6 +290,13 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "synth.backend.fullname" . }}-data
           {{- end }}
+        {{- /* ADR-116: отдельный PVC блобов (включён опцией backend.blobs.enabled);
+               при существующем claim'е чарт его не создаёт — только монтирует. */}}
+        {{- if $blobs.enabled }}
+        - name: blobs
+          persistentVolumeClaim:
+            claimName: {{ include "synth.backend.blobsClaim" . }}
+        {{- end }}
         {{- if include "synth.backend.hasConfigMap" . }}
         - name: config
           configMap:

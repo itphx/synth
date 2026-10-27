@@ -38,17 +38,17 @@ ADR-097): реализация доменных портов `StorageContext` (`
   Цикл **намеренный** и разрешён `ignoreWorkspaceCycles: true` в корневом
   `pnpm-workspace.yaml` (pnpm ≥12 иначе роняет рекурсивные `pnpm typecheck`/`lint`/`test`
   с `ERR_PNPM_TASK_CYCLE`; между задачами зависимостей нет).
-  **Осознанное исключение** (волна 3a): FS/package-bound порты (`skills`,
-  `contextFiles`, `blobs`) отдаются **файловыми реализациями** `core`
-  (`createFileStorage`), поэтому `storage-context.ts` импортирует `core` рантаймом.
-  Импорт core — только за файловыми портами; порты БД тянутся core'ом динамически
+  **Осознанное исключение** (сужено ADR-116): `blobs` — файловый порт **по
+  конструкции** (байты вложений, артефактов, содержимого скиллов и логов живут на
+  томе, в БД только `blob_refs`), поэтому `storage-context.ts` импортирует core
+  рантаймом — но только точечно: `FileBlobStore` + `prepareBlobRoot`/`blobRootPath`
+  (корень `{dataDir}/blobs`) и `ContextConfig` (резолвер каталога системных
+  промптов образа, `prompts/` → fallback `dist/prompts/`). Файловый контекст
+  (`createFileStorage`) драйвер **не собирает**; `packs`/`skills`/`contextFiles`/
+  legacy `pipelines` — SQL (ADR-116). Порты БД тянутся core'ом динамически
   (`import()` по строке), статической зависимости core от драйвера нет. Runtime-хелперы
   core (доменные ошибки, крипто) в остальных портах грузятся **ленивым**
   `import()` внутри async-методов.
-  **Граница (ADR-116):** `blobs` остаётся файловым **по конструкции** (байты вложений,
-  артефактов, содержимого скиллов и логов — на томе, в БД только `blob_refs`), а
-  `packs`/`skills`/`contextFiles`/legacy `pipelines` переводятся в SQL; после перевода
-  рантайм-импорт `core` в драйвере сужается до `FileBlobStore`.
 - `pg` — **`optionalDependencies`**: отсутствие драйвера не ломает импорт модуля
   (`pool.ts` подключает его лениво, `import()` внутри функции), а standalone/локальный
   home не тянут БД. Типы — `@types/pg` в `devDependencies`.
@@ -197,12 +197,13 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
   `{ kind:'postgres', ...buildSessionPorts, ...buildPrincipalPorts,
   ...buildEventPorts, ...buildContentPorts, ...buildAuditPorts, ...buildAnalyticsPorts,
   ...buildAuthorityPorts, ...buildExternalCredentialPorts, ...buildPipelinePorts,
-  skills/contextFiles/blobs, pipelines, packs, close }`;
-  `skills`/`contextFiles`/`blobs` — **файловые** реализации `createFileStorage`
-  (FS/package-bound, см. исключение выше); `pipelines`/`packs` (ADR-100/ADR-086 §5) —
-  тоже **файловые** (SQL-реализации этих портов в драйвере пока нет). ADR-116: `blobs`
-  остаётся файловым **по конструкции** (байты на томе, в БД только `blob_refs`), а
-  `skills`/`contextFiles`/`pipelines`/`packs` переводятся в SQL. `ports/stub.ts`
+  skills/contextFiles, blobs, pipelines, packs, close }`.
+  `skills`/`contextFiles`/`packs`/legacy `pipelines` — **SQL** (ADR-116: таблицы
+  `instance_skills`/`context_files`/`pack_installations`/`pipeline_definitions`+
+  `pipeline_instances`); `blobs` — файловый **по конструкции** (байты на томе, в БД
+  только `blob_refs`). Рантайм-импорт core сужен до `FileBlobStore` +
+  `prepareBlobRoot`/`blobRootPath` и `ContextConfig` (каталог системных промптов
+  образа); файловый контекст драйвер не собирает. `ports/stub.ts`
   (`notImplementedPort`) оставлен как исторический экспорт, но портами не используется.
 - **Схема — источник истины.** Ранее правили `001-init` **на месте** (схема была
   нигде не развёрнута); сейчас схема версионируется миграциями `001-init` →
@@ -347,7 +348,7 @@ workspace) остаются file-специфичными ([ADR-091](../../docs/
   dev-Postgres: каждый тест создаёт **уникальную схему** (`synth_test_<random>`) +
   миграции, `afterEach` — `DROP SCHEMA … CASCADE`. Проверяет подключение,
   применение/идемпотентность миграций, fail-closed «версия новее», сборка
-  контекста (реализованные порты отвечают, FS/package-bound — файловые).
+  контекста (реализованные порты отвечают, `blobs` — файловый по конструкции).
   **Контрактный прогон портов** живёт в core — `packages/core/src/storage/contract/postgres.test.ts`
   (тот же гейт `SYNTH_TEST_POSTGRES_DSN`, уникальная схема на каждый `make()`,
   `vi.setConfig({ testTimeout: 30000 })` — миграции под параллельной нагрузкой):
@@ -362,8 +363,10 @@ workspace) остаются file-специфичными ([ADR-091](../../docs/
 ## Чего не делать
 
 - Не импортировать `pg` на верхнем уровне модуля (только ленивый `import()` внутри функции).
-- Не тянуть core рантаймом **кроме** файловых FS/package-bound портов
-  (`createFileStorage` в `storage-context.ts`) — типы и прочее только `import type`.
+- Не тянуть core рантаймом шире точечного исключения ADR-116 в `storage-context.ts`
+  (`FileBlobStore` + `prepareBlobRoot`/`blobRootPath`, `ContextConfig` для каталога
+  системных промптов; файловый контекст `createFileStorage` не собирать) — типы и
+  прочее только `import type`.
 - Не добавлять собственных точек сборки хранения мимо `StorageContext`/портов (ADR-096).
 - Не дублировать `local home`/файловые пути: драйвер получает `dataDir` из общего `StorageContextConfig`.
 - Не хранить SQL-миграции как внешние ассеты — только inline TS-строки

@@ -55,6 +55,27 @@ backend:
     # (Ручной kubectl annotate живого PVC не работает — Helm смотрит манифест релиза.)
     keepOnUninstall: false
 
+  # Блобы (ADR-116): вложения сообщений, артефакты, логи фоновых процессов и
+  # содержимое instance-скиллов. По умолчанию лежат внутри тома данных
+  # (`{dataDir}/blobs` на PVC backend.persistence) — один том на инстанс.
+  # Блобами пользуются ВСЕ реплики backend'а, поэтому при replicaCount > 1 том с
+  # ними обязан быть ReadWriteMany (рендер чарта падает с понятной ошибкой,
+  # если это не так). Подробности — README чарта, «Блобы и несколько реплик».
+  blobs:
+    # false — блобы лежат внутри data (по умолчанию один том);
+    # true — отдельный PVC, монтируется в <dataDir>/blobs.
+    enabled: false
+    size: 20Gi
+    # "" = storageClass по умолчанию кластера; для нескольких реплик нужен
+    # класс, поддерживающий ReadWriteMany (NFS/CephFS/…).
+    storageClass: ""
+    accessMode: ReadWriteMany
+    # Существующий claim (тогда чарт PVC не создаёт и accessMode не проверяет).
+    existingClaim: ""
+    # true → PVC блобов не удаляется при `helm uninstall` (аннотация
+    # helm.sh/resource-policy: keep в манифесте релиза) — как у persistence.
+    keepOnUninstall: false
+
   # OIDC (Keycloak/иной IdP). issuer/client_id/redirect_uri → ConfigMap.
   # client_secret берётся из Secret secrets.existingSecret по ключу SYNTH_OIDC_CLIENT_SECRET.
   # Пример включения (плейсхолдеры <...> заменить):
