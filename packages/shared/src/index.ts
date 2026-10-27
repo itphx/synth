@@ -7,6 +7,7 @@ export {
   type ToolForLLM,
   type ToolContext,
   type ToolResult,
+  type ToolAttachmentRef,
   type ToolExecutor,
   type PendingToolCall,
   type CompletedToolCall,

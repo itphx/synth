@@ -1586,6 +1586,7 @@ background:
 | `attachments.maxBytesPerFile` | Предел размера одного файла, байт; превышение → `413 PAYLOAD_TOO_LARGE`. Env — `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE` | `26214400` (25 МиБ) |
 | `attachments.maxFilesPerMessage` | Предел числа вложений в одном сообщении (проверяется при постановке промпта); превышение → `400 VALIDATION_ERROR`. Env — `SYNTH_ATTACHMENTS_MAX_FILES_PER_MESSAGE` | `10` |
 | `attachments.maxBytesPerSession` | Предел суммарного объёма вложений сессии (по частям в истории сообщений); превышение при промпте → `413 PAYLOAD_TOO_LARGE`. Env — `SYNTH_ATTACHMENTS_MAX_BYTES_PER_SESSION` | `1073741824` (1 ГиБ) |
+| `attachments.maxBytesPerMessage` | Бюджет вложений, которые **инструменты** прикладывают к текущему ходу (`ToolResult.attachments`, ADR-115 §«Медиа из инструментов»): суммарный объём одной инъекции, байт. Не задано — дефолт оркестратора **20 МиБ** (`DEFAULT_TOOL_ATTACHMENT_MAX_BYTES`); лишнее отбрасывается с логом. На лимиты пользовательских вложений (`maxBytesPerFile`/`maxFilesPerMessage`/`maxBytesPerSession`) не влияет. **Только `config.yaml`** (env нет) | не задано → 20 МиБ |
 | `attachments.allowedMimePrefixes` | Белый список MIME-**префиксов**; пустой список — разрешены все. `image/svg+xml` запрещён всегда (XSS). **Только `config.yaml`** (список не имеет плоского env-представления). | `["image/", "audio/", "application/pdf", "text/"]` |
 | `attachments.workspaceFallback` | Резервное хранение вложений в workspace проекта, когда blob-хранилище недоступно. Env — `SYNTH_ATTACHMENTS_WORKSPACE_FALLBACK`. **Пока только настройка**: применение в оркестраторе — отдельная задача | `true` |
 | `attachments.modalityModels` | Модели **обработки** по семействам вложений (aux-модели, ADR-115): `image`/`pdf`/`audio`/`video` → `{provider, model}`. Если модель сессии модальность не принимает, вложение обрабатывает указанная модель, а в диалог попадает текстовый результат. **Только `config.yaml`** (env нет) | `{}` (не настроено) |
@@ -1598,6 +1599,8 @@ attachments:
   maxBytesPerFile: 26214400
   maxFilesPerMessage: 10
   maxBytesPerSession: 1073741824
+  # Бюджет вложений инструментов на ход (ADR-115); не задано — 20 МиБ.
+  # maxBytesPerMessage: 20971520
   # Список — только в config.yaml; пустой список = все префиксы разрешены.
   allowedMimePrefixes: ["image/", "audio/", "application/pdf", "text/"]
   workspaceFallback: true

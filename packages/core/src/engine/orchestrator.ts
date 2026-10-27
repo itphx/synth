@@ -1,5 +1,5 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir, stat } from 'node:fs/promises';
@@ -61,7 +61,8 @@ import type { WorktreeService } from './worktree/service.js';
 import { createHydrateDeps, hydrateMessageAttachments, type DroppedAttachmentRef, type HydrateDeps } from './attachments/hydrate.js';
 import { deriveModalityText } from './attachments/derive.js';
 import { materializeAttachment } from './attachments/materialize.js';
-import { AttachmentService } from './attachments/service.js';
+import { AttachmentService, isAttachmentPath } from './attachments/service.js';
+import { serializeMessage, serializeSession } from '../server/serialize.js';
 import { stripMetadata } from './attachments/strip-metadata.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
@@ -118,6 +119,41 @@ import { toCoreProviderConfig } from './router/index.js';
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
 /** Порог заполненности контекстного окна (%), после которого публикуем context.limit_warning. */
 const CONTEXT_LIMIT_WARNING_PERCENT = 90;
+
+/**
+ * ADR-115 §«Медиа из инструментов»: сколько вложений тулов вставляется в ход.
+ *
+ * Предел защищает контекст: один `web_fetch` по пяти URL или MCP-сервер с
+ * десятком скриншотов не должен раздувать промпт. Лишние ссылки отбрасываются
+ * с логом — модель всё равно видит текст результата тула.
+ */
+const MAX_TOOL_ATTACHMENTS_PER_TURN = 4;
+/**
+ * ADR-115 §«Медиа из инструментов»: бюджет инъекции, если
+ * `attachments.maxBytesPerMessage` не задан (20 МиБ — как общий предел
+ * base64-вложений запроса, `MAX_ATTACHMENT_BASE64_BYTES`).
+ */
+const DEFAULT_TOOL_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
+/** `sha256` ссылки на объект: ровно 64 hex-символа (content-addressed адрес). */
+const TOOL_ATTACHMENT_SHA256_RE = /^[0-9a-f]{64}$/;
+
+/**
+ * ADR-115 §«Медиа из инструментов»: проверка ссылки, которую вернул тул.
+ *
+ * Недоверенный ввод (MCP-сервер/плагин/веб-контент): `blobPath` обязан быть
+ * объектом вложений (`attachments/`, без `..`), `sha256` — 64 hex, `mime`
+ * непустой, `size` > 0. Иначе ссылка отбрасывается — иначе тул мог бы подсунуть
+ * модели произвольный blob (лог процесса, артефакт, чужой объект).
+ */
+function isToolAttachmentRefValid(ref: ToolAttachmentRef): boolean {
+  if (!ref || typeof ref !== 'object') return false;
+  if (typeof ref.blobPath !== 'string' || !isAttachmentPath(ref.blobPath)) return false;
+  if (typeof ref.sha256 !== 'string' || !TOOL_ATTACHMENT_SHA256_RE.test(ref.sha256)) return false;
+  if (typeof ref.mime !== 'string' || ref.mime.trim() === '') return false;
+  if (typeof ref.size !== 'number' || !Number.isFinite(ref.size) || ref.size <= 0) return false;
+  if (ref.name !== undefined && typeof ref.name !== 'string') return false;
+  return true;
+}
 
 /**
  * ADR-070 §2.6: статус ответа ассистента для строки статистики в UI.
@@ -2122,6 +2158,176 @@ export class ChatOrchestrator {
       });
     }
     return this._attachmentService;
+  }
+
+  /**
+   * ADR-115 §«Медиа из инструментов»: вставить медиа-результаты тулов итерации
+   * в **текущий** ход.
+   *
+   * Тул возвращает ссылки (`ToolResult.attachments`), а не байты. Каждая
+   * ссылка становится отдельной user-репликой (`author: 'Tool'`,
+   * `metadata.source: 'tool-attachment'`), которая:
+   *  - персистится в историю (`addMessage`) и публикуется (`message.added`,
+   *    `session.updated`) — чат UI видит вложение сразу;
+   *  - учитывается в `blob_refs` (`ownerKind: 'message'`) — иначе GC счёл бы
+   *    объект сиротой (best-effort);
+   *  - маппится в LLM-сообщение и **точечно** гидратируется теми же
+   *    настройками, что и история (`modalities`/`derive`/`materialize`/язык),
+   *    затем дописывается в `currentMessages` **после** tool-результатов.
+   *
+   * Порядок обязателен: assistant(tool_use) → tool(tool_result) → user(media).
+   * Anthropic собирает все tool_result итерации в одно user-сообщение, поэтому
+   * media-реплика идёт отдельным сообщением строго после буфера — пары
+   * `tool_use`/`tool_result` не рвутся.
+   */
+  private async _injectToolAttachments(args: {
+    session: Session;
+    /** Все tool-вызовы хода (фильтруются по `iteration`). */
+    toolCalls: Array<Record<string, unknown>>;
+    iteration: number;
+    currentMessages: LLMMessage[];
+    providerName: string;
+    modelId: string;
+    language: string;
+    workingDir: string;
+    workspaceReady: boolean;
+    agentRole?: string;
+    author?: string;
+    publishChunk: (event: string, data: Record<string, unknown>) => void;
+  }): Promise<void> {
+    const config = this._attachmentsConfig?.() ?? attachmentsConfigSchema.parse({});
+    const maxBytes = config.maxBytesPerMessage ?? DEFAULT_TOOL_ATTACHMENT_MAX_BYTES;
+    const picked: Array<{ ref: ToolAttachmentRef; tool: string; callId: string }> = [];
+    const seen = new Set<string>();
+    let totalBytes = 0;
+
+    // Сбор — в порядке tool-результатов итерации; дубли по `blobPath` схлопываются
+    // (один и тот же объект из двух тулов — одно вложение), бюджет хода общий.
+    for (const call of args.toolCalls) {
+      if (call.iteration !== args.iteration) continue;
+      const result = call.result as { attachments?: unknown; isError?: boolean } | undefined;
+      // Ошибка тула — вложений не берём: результат не считается доставленным.
+      if (!result || result.isError === true) continue;
+      if (!Array.isArray(result.attachments)) continue;
+      for (const ref of result.attachments as ToolAttachmentRef[]) {
+        if (!isToolAttachmentRefValid(ref)) {
+          warning(
+            'ATTACHMENTS',
+            `вложение тула ${String(call.name ?? '?')} отброшено: невалидная ссылка `
+            + `(${JSON.stringify({ blobPath: ref?.blobPath, mime: ref?.mime, size: ref?.size })})`,
+          );
+          continue;
+        }
+        if (seen.has(ref.blobPath)) continue;
+        if (picked.length >= MAX_TOOL_ATTACHMENTS_PER_TURN) {
+          warning(
+            'ATTACHMENTS',
+            `вложение ${ref.blobPath} отброшено: предел ${MAX_TOOL_ATTACHMENTS_PER_TURN} вложений тулов за ход`,
+          );
+          continue;
+        }
+        if (totalBytes + ref.size > maxBytes) {
+          warning(
+            'ATTACHMENTS',
+            `вложение ${ref.blobPath} отброшено: бюджет хода ${maxBytes} Б превышен `
+            + `(уже ${totalBytes} Б + ${ref.size} Б)`,
+          );
+          continue;
+        }
+        seen.add(ref.blobPath);
+        totalBytes += ref.size;
+        picked.push({ ref, tool: String(call.name ?? ''), callId: String(call.id ?? '') });
+      }
+    }
+    if (picked.length === 0) return;
+
+    // Гидратация — тот же шов, что у истории (`_processSetupDeps`): модальности
+    // модели хода, aux-модели семейств, материализация в workspace, язык.
+    const hydrate = this._processSetupDeps(args.session).hydrateAttachments;
+
+    for (const item of picked) {
+      const { ref } = item;
+      try {
+        const data: MediaPartData = {
+          blobPath: ref.blobPath,
+          sha256: ref.sha256,
+          mime: ref.mime,
+          size: ref.size,
+          ...(ref.name ? { name: ref.name } : {}),
+        };
+        const parts = [makeMediaPart(mediaTypeOfMime(ref.mime), data)];
+        const message: Message = {
+          id: generateId(),
+          role: MessageRole.USER,
+          seq: 0,
+          origin: 'local',
+          parts,
+          content: appendMediaPlaceholders('', parts),
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          author: 'Tool',
+          metadata: {
+            source: 'tool-attachment',
+            tool: item.tool,
+            call_id: item.callId,
+          },
+        };
+
+        const updated = await this._sessionManager.addMessage(args.session.id, message);
+        if (updated) {
+          const index = updated.messages.length - 1;
+          args.publishChunk('message.added', {
+            message: serializeMessage(updated.messages[index]!, index),
+            index,
+          });
+          args.publishChunk('session.updated', serializeSession(updated));
+        }
+        // Учёт ссылки: без него GC удалил бы объект по TTL, хотя сообщение на
+        // него ссылается. Best-effort — вложение уже в истории.
+        if (this._blobRefs) {
+          try {
+            await this._blobRefs.add({
+              blobPath: ref.blobPath,
+              ownerKind: 'message',
+              ownerId: message.id,
+            });
+          } catch {
+            // учёт ссылок — производная: не отменяет вложение и не роняет ход
+          }
+        }
+
+        const llm = sessionMessagesToLlmFn([message], args.agentRole, args.author);
+        let hydrated = llm;
+        if (hydrate) {
+          try {
+            hydrated = await hydrate(llm, [message], {
+              providerName: args.providerName,
+              modelId: args.modelId,
+              language: args.language,
+              workingDir: args.workspaceReady ? args.workingDir : '',
+            });
+          } catch (err) {
+            // Без гидратации модель увидит хотя бы плейсхолдер — ход не падает.
+            warning(
+              'ATTACHMENTS',
+              `не удалось подготовить вложение тула ${ref.blobPath}: `
+              + `${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+        args.currentMessages.push(...hydrated);
+      } catch (err) {
+        // Инъекция вложения — вспомогательный шаг: текст результата тула у
+        // модели уже есть, поэтому ошибка не отменяет ход.
+        warning(
+          'ATTACHMENTS',
+          `вложение тула ${ref.blobPath} не вставлено: `
+          + `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   /**
@@ -4463,6 +4669,30 @@ export class ChatOrchestrator {
         if (!stopAfterDeny && (cancelToken.cancelled || toolAbortController.signal.aborted)) {
           cancelledBeforeFinal = true;
           break;
+        }
+
+        // ADR-115 §«Медиа из инструментов»: вложения результатов тулов этой
+        // итерации — отдельной user-репликой в текущий ход (после tool-сообщений,
+        // до следующего LLM-вызова). Отмена/ошибка/deny/ролевой отказ следующую
+        // итерацию не запускают — инъекция не нужна.
+        if (!stopAfterDeny && !roleBlocked) {
+          await this._injectToolAttachments({
+            session,
+            // Накопленные результаты хода (`allToolCalls`), а не сырые
+            // `toolCalls` ответа модели: у последних нет ни `result`, ни
+            // `iteration` — инъекция не увидела бы ни одного вложения.
+            toolCalls: allToolCalls,
+            iteration: toolIteration,
+            currentMessages,
+            providerName,
+            modelId: provider.model || modelName || session.settings.model || '',
+            language,
+            workingDir,
+            workspaceReady,
+            agentRole: effectiveAgentRole,
+            author,
+            publishChunk,
+          });
         }
 
         publishChunk('tool_call.loop', {

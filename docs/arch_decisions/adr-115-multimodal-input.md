@@ -235,6 +235,63 @@ export interface MediaPartData {
   вложений или коллектора — «тихий» успех недопустим); успех — `attach.tool.queued` с `metadata
   {path, blob_path, mime, size, name}`.
 
+### Медиа из инструментов (`ToolResult.attachments`)
+
+**Решение 2026-10-27.** Инструмент, который получил медиа (первый — `web_fetch` с
+`include_media`), **не** возвращает байты в `content` (это строка: бинарь превратился бы в мусор
+в контексте) и **не** пишет их сам: объект кладётся в blob через `AttachmentService`, а в
+результате тула появляется аддитивное поле `ToolResult.attachments: ToolAttachmentRef[]`
+(`{blobPath, sha256, mime, size, name?}`, `packages/shared/src/types/tools.ts`). Оркестратор
+вставляет ссылки в **текущий** ход, поэтому модель видит вложение уже на следующей итерации Tool
+Use, а не на следующем ходу.
+
+- **Шов и проверка ссылок.** Тул отдаёт **ссылку**, не байты. Оркестратор валидирует каждую
+  ссылку (`isToolAttachmentRefValid`): `blobPath` строго под `attachments/` (`isAttachmentPath`,
+  без `..`), `sha256` — ровно 64 hex, `mime` непустой, `size > 0`, `name?` — строка. Невалидная
+  ссылка отбрасывается с предупреждением (`ATTACHMENTS`), текст результата тула модель всё равно
+  получает. Это граница недоверия: MCP-сервер/плагин/веб-контент не могут подсунуть модели
+  произвольный объект (лог процесса, артефакт, чужое вложение).
+- **Порядок сообщений.** `ChatOrchestrator._injectToolAttachments` вызывается на границе
+  итерации Tool Use: **после** того как все результаты итерации попали в `currentMessages`
+  (накопленные `allToolCalls` с полем `iteration`), и **до** следующего LLM-вызова. В запросе
+  порядок строго `assistant(tool_use) → tool(tool_result) → user(media)`. Anthropic собирает
+  `tool_result` итерации в **одно** user-сообщение (буфер в `_formatMessages`), поэтому
+  media-реплика идёт отдельным сообщением строго после буфера — пары `tool_use`/`tool_result`
+  не рвутся (`orchestrator-tool-attachments.test.ts`, кейс «Anthropic: media-реплика идёт после
+  user(tool_result)»).
+- **История и живые события.** На каждое принятое вложение создаётся отдельное сообщение:
+  `role: user`, `author: 'Tool'`, `content` из плейсхолдеров (`appendMediaPlaceholders` →
+  `[image: name]`), `metadata {source: 'tool-attachment', tool, call_id}`. Оно персистится
+  (`SessionManager.addMessage`) и публикуется в канал сессии (`message.added` +
+  `session.updated`): чат показывает вложение сразу, без перезагрузки. В `blob_refs` добавляется
+  ссылка `{ownerKind: 'message', ownerId}` (best-effort) — иначе GC счёл бы объект сиротой.
+- **Гидратация — тот же шов, что у истории.** Ссылка маппится в LLM-сообщение
+  (`sessionMessagesToLlm`) и гидрируется `hydrateAttachments` оркестратора: модальности модели
+  хода (`ModelConfig.modalities`), `attachments.modalityModels`/`derive` для text-only моделей,
+  материализация в workspace и блок `[ATTACHMENTS NOT DELIVERED]` — ровно те же правила, что для
+  пользовательских вложений. Байты модели сессии не уходят, если она модальность не принимает:
+  в диалог попадает производный текст aux-модели (`derive`). Ошибка чтения/гидратации ход не
+  роняет: модель видит хотя бы плейсхолдер, в лог — предупреждение.
+- **Бюджет хода.** Не более `MAX_TOOL_ATTACHMENTS_PER_TURN = 4` вложений за **ход** (не за тул) и
+  суммарно не более `attachments.maxBytesPerMessage`; не задано — `DEFAULT_TOOL_ATTACHMENT_MAX_BYTES`
+  (20 МиБ — как общий предел base64-вложений запроса). Порядок — порядок результатов итерации;
+  дубли по `blobPath` схлопываются (один объект из двух тулов — одно вложение); лишнее и
+  превышающее бюджет отбрасывается с логом (модель всё равно видит текст результата). Предел
+  защищает контекст: один `web_fetch` по десяти URL не должен раздувать промпт.
+- **`isError` и отказы.** Результат с `isError: true` вложений не даёт (результат не считается
+  доставленным). Отмена, ask-deny и ролевой отказ следующую итерацию не запускают — инъекции нет.
+- **Безопасность.** SSRF — на туле: `web_fetch` ходит через `fetchWithEgressGuard`/`egressFetch`
+  (ADR-099), т.е. медиа скачивается только с разрешённого адреса. Размер ограничен **до** чтения
+  (`content-length`) и потоковым капом (`attachments.maxBytesPerFile`), затем повторно проверяется
+  `AttachmentService` (размер, MIME по сигнатуре, модальности, allowlist, запрет SVG). IPI: текст
+  результата тула идёт по обычной матрице доверия (`applyPolicy`/обёртка контента), а **байты
+  вложения не сканируются и не обфусцируются** — как и пользовательские вложения (§«Провайдеры и
+  gateway»); имя файла санитайзится при материализации.
+- **Assistant-медиа в контекст не идёт.** Гидратация собирает вложения только из `role: user`;
+  медиа в assistant — исходящее (`stream.done.attachments`, `send_attachment`) и провайдеру не
+  отправляется (OpenAI такие части отвергает). Media-реплика тула — `user`, поэтому проходит
+  штатно.
+
 ## Модальности входа модели
 
 **Решение 2026-10-27: единственный источник истины — каталог провайдера при синхронизации моделей.**
@@ -536,6 +593,12 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   workspace → `AttachmentService.upload` → медиа-часть в коллекторе хода → `parts` финального
   сообщения (`saveAssistantMessage`) + `blobRefs.add` с id сообщения; отмена/ошибка хода ничего
   не отправляет;
+- **медиа из инструментов** (`ToolResult.attachments`, §«Медиа из инструментов»): `ToolAttachmentRef`
+  + аддитивное поле результата; `web_fetch({include_media})` — стрим с капом, upload и ссылки
+  (`engine/tools/web.ts`); инъекция в текущий ход `ChatOrchestrator._injectToolAttachments`
+  (user-реплика после tool-результатов, `message.added`/`session.updated`, `blob_refs`, гидратация
+  с `modalities`/`derive`, бюджет 4 / `attachments.maxBytesPerMessage`); тесты —
+  `engine/orchestrator-tool-attachments.test.ts`, `engine/tools/web.test.ts`;
 - LLM: `LLMMessage.attachments`, гидратация из blob-порта (лимит 20 МиБ, фильтр по модальностям),
   OpenAI `image_url`/`input_audio`, Anthropic `image`/`document`; gateway не обфусцирует и не логирует
   base64 (payload-лог и debug-снимок — сводкой `{mime,name,sizeBytes}`);

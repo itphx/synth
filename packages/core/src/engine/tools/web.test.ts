@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { parseDuckDuckGoResults, parseBingResults, webSearchTool, webFetchTool, _setWebFetchHostResolver } from './web.js';
 import { configureEgressRuntime, resetEgressRuntime } from '../net/egress-runtime.js';
-import type { ToolContext } from '@itphx/synth-shared';
+import { attachmentsConfigSchema } from '@itphx/synth-shared';
+import type { AttachmentsConfig, ToolContext } from '@itphx/synth-shared';
+import { AttachmentService } from '../attachments/service.js';
+import { MemoryBlobStore } from '../../storage/memory/content.js';
 
 // Тестовый DNS-резолвер SSRF-проверки web_fetch: все хосты, кроме localhost,
 // считаются публичными (иначе проверка уйдёт в реальный DNS и заблокирует
@@ -533,5 +536,291 @@ describe('web tools — прерывание по «Стоп» (abortSignal)', (
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.metadata?.interrupted).toBe(true);
+  });
+});
+
+// ─── ADR-115 §«Медиа из инструментов»: web_fetch + include_media ────────────
+//
+// Проверяем шов «тул → ссылка на blob»: медиа читается стримом с капом, байты
+// уходят в `AttachmentService.upload`, а в результат — `attachments[]`.
+// Текстовые ветки (отказы) не роняют вызов и не тянут тело ответа.
+
+/** PNG-сигнатура + полезная нагрузка: сервис определяет MIME по содержимому. */
+const PNG_BYTES = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.from('png-body-for-web-fetch'),
+]);
+const PDF_BYTES = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF');
+
+interface AttachmentsEnv {
+  service: AttachmentService;
+  upload: ReturnType<typeof vi.spyOn>;
+  config: AttachmentsConfig;
+}
+
+/** Сервис вложений на in-memory blob-порте с live-конфигом. */
+function makeAttachmentsEnv(overrides: Partial<AttachmentsConfig> = {}): AttachmentsEnv {
+  const blobs = new MemoryBlobStore();
+  const config: AttachmentsConfig = { ...attachmentsConfigSchema.parse({}), ...overrides };
+  const service = new AttachmentService({ blobs, config: () => config });
+  const upload = vi.spyOn(service, 'upload');
+  return { service, upload, config };
+}
+
+/** Контекст web_fetch с сервисом вложений (как упаковывает оркестратор). */
+function mediaCtx(env: AttachmentsEnv, overrides: Partial<ToolContext> = {}): ToolContext {
+  return makeCtx({
+    extra: {
+      attachmentService: env.service,
+      attachmentsConfig: () => env.config,
+    },
+    ...overrides,
+  });
+}
+
+/** Ответ с бинарным телом и заголовками. */
+function binaryResponse(bytes: Buffer, mime: string, headers: Record<string, string> = {}): Response {
+  return new Response(new Uint8Array(bytes), {
+    status: 200,
+    headers: { 'content-type': mime, 'content-length': String(bytes.length), ...headers },
+  });
+}
+
+/**
+ * Ответ с потоковым телом и шпионом на `body.getReader`: `Response` может
+ * заранее подтянуть чанк в буфер, поэтому «тело не читалось» проверяем по
+ * обращению к читателю, а не по счётчику `pull` источника.
+ */
+function streamResponse(
+  bytes: Buffer,
+  mime: string,
+  headers: Record<string, string> = {},
+): { response: Response; getReader: ReturnType<typeof vi.spyOn> } {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(bytes));
+      controller.close();
+    },
+  });
+  const response = new Response(body, {
+    status: 200,
+    headers: { 'content-type': mime, ...headers },
+  });
+  const getReader = vi.spyOn(response.body!, 'getReader');
+  return { response, getReader };
+}
+
+describe('webFetchTool — include_media (ADR-115)', () => {
+  it('image/png с include_media: вложение в результате + текст с плейсхолдером', async () => {
+    const env = makeAttachmentsEnv();
+    vi.stubGlobal('fetch', vi.fn(async () => binaryResponse(PNG_BYTES, 'image/png')));
+
+    const result = await webFetchTool.execute(
+      { url: 'https://cdn.example/picture.png', include_media: true },
+      mediaCtx(env),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.attachments).toHaveLength(1);
+    const [ref] = result.attachments!;
+    expect(ref!.mime).toBe('image/png');
+    expect(ref!.size).toBe(PNG_BYTES.length);
+    expect(ref!.blobPath.startsWith('attachments/')).toBe(true);
+    expect(ref!.name).toBe('picture.png');
+    expect(ref!.sha256).toMatch(/^[0-9a-f]{64}$/);
+    // В тексте — маркер вложения (модель и строка истории не теряют факт медиа).
+    expect(result.content).toContain('### https://cdn.example/picture.png');
+    expect(result.content).toContain('[image: picture.png] attached to the dialog');
+    expect(env.upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('application/pdf с include_media: вложение типа file', async () => {
+    const env = makeAttachmentsEnv();
+    vi.stubGlobal('fetch', vi.fn(async () => binaryResponse(PDF_BYTES, 'application/pdf')));
+
+    const result = await webFetchTool.execute(
+      { url: 'https://cdn.example/doc.pdf', include_media: true },
+      mediaCtx(env),
+    );
+
+    expect(result.attachments).toHaveLength(1);
+    expect(result.attachments![0]!.mime).toBe('application/pdf');
+    expect(result.content).toContain('[file: doc.pdf] attached to the dialog');
+  });
+
+  it('имя из Content-Disposition приоритетнее пути URL', async () => {
+    const env = makeAttachmentsEnv();
+    vi.stubGlobal('fetch', vi.fn(async () => binaryResponse(PNG_BYTES, 'image/png', {
+      'content-disposition': 'attachment; filename="shot-01.png"',
+    })));
+
+    const result = await webFetchTool.execute(
+      { url: 'https://cdn.example/download', include_media: true },
+      mediaCtx(env),
+    );
+
+    expect(result.attachments![0]!.name).toBe('shot-01.png');
+  });
+
+  it('превышение лимита (content-length) — без вложения и без чтения тела, с причиной', async () => {
+    const env = makeAttachmentsEnv({ maxBytesPerFile: 64 });
+    const { response, getReader } = streamResponse(PNG_BYTES, 'image/png', {
+      'content-length': '1000000',
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => response));
+
+    const result = await webFetchTool.execute(
+      { url: 'https://cdn.example/huge.png', include_media: true },
+      mediaCtx(env),
+    );
+
+    expect(result.attachments).toBeUndefined();
+    expect(result.content).toContain('include_media: file is too large');
+    expect(env.upload).not.toHaveBeenCalled();
+    // Ранняя проверка: тело не запрашивалось вовсе.
+    expect(getReader).not.toHaveBeenCalled();
+  });
+
+  it('превышение лимита без content-length — чтение обрывается по капу', async () => {
+    const env = makeAttachmentsEnv({ maxBytesPerFile: 8 });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(PNG_BYTES.subarray(0, 6)));
+          controller.enqueue(new Uint8Array(PNG_BYTES.subarray(6)));
+          controller.close();
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'image/png' } },
+    )));
+
+    const result = await webFetchTool.execute(
+      { url: 'https://cdn.example/stream.png', include_media: true },
+      mediaCtx(env),
+    );
+
+    expect(result.attachments).toBeUndefined();
+    expect(result.content).toContain('include_media: file is too large');
+    expect(env.upload).not.toHaveBeenCalled();
+  });
+
+  it('attachments.enabled=false — отказ с причиной, тело не читается', async () => {
+    const env = makeAttachmentsEnv({ enabled: false });
+    const { response, getReader } = streamResponse(PNG_BYTES, 'image/png');
+    vi.stubGlobal('fetch', vi.fn(async () => response));
+
+    const result = await webFetchTool.execute(
+      { url: 'https://cdn.example/picture.png', include_media: true },
+      mediaCtx(env),
+    );
+
+    expect(result.attachments).toBeUndefined();
+    expect(result.content).toContain('include_media: attachments are disabled on this instance');
+    expect(env.upload).not.toHaveBeenCalled();
+    expect(getReader).not.toHaveBeenCalled();
+  });
+
+  it('MIME вне allowlist (SVG) — отказ сервиса, вызов не падает', async () => {
+    const env = makeAttachmentsEnv();
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    vi.stubGlobal('fetch', vi.fn(async () => binaryResponse(svg, 'image/svg+xml')));
+
+    const result = await webFetchTool.execute(
+      { url: 'https://cdn.example/logo.svg', include_media: true },
+      mediaCtx(env),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.attachments).toBeUndefined();
+    expect(result.content).toContain('include_media:');
+    expect(result.content).toMatch(/svg/i);
+  });
+
+  it('нет attachmentService — причина в тексте, без падения', async () => {
+    const fetchMock = vi.fn(async () => binaryResponse(PNG_BYTES, 'image/png'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webFetchTool.execute(
+      { url: 'https://cdn.example/picture.png', include_media: true },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.attachments).toBeUndefined();
+    expect(result.content).toContain('include_media: attachments are unavailable in this build');
+  });
+
+  it('include_media=false: бинарь не читается и не декодируется как текст', async () => {
+    const env = makeAttachmentsEnv();
+    const { response, getReader } = streamResponse(PNG_BYTES, 'image/png');
+    vi.stubGlobal('fetch', vi.fn(async () => response));
+
+    const result = await webFetchTool.execute(
+      { url: 'https://cdn.example/picture.png' },
+      mediaCtx(env),
+    );
+
+    expect(result.attachments).toBeUndefined();
+    expect(env.upload).not.toHaveBeenCalled();
+    expect(getReader).not.toHaveBeenCalled();
+    expect(result.content).toContain('[binary content: image/png]');
+    expect(result.content).toContain('include_media=true');
+  });
+
+  it('несколько URL: медиа и текст изолированы, ошибка одного не мешает другому', async () => {
+    const env = makeAttachmentsEnv({ maxBytesPerFile: 64 });
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      const target = String(url);
+      if (target.endsWith('picture.png')) return binaryResponse(PNG_BYTES, 'image/png');
+      if (target.endsWith('huge.png')) {
+        return new Response(new Uint8Array(PNG_BYTES), {
+          status: 200,
+          headers: { 'content-type': 'image/png', 'content-length': '1000000' },
+        });
+      }
+      return new Response('<html><body><p>plain page</p></body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webFetchTool.execute(
+      {
+        urls: ['https://cdn.example/picture.png', 'https://cdn.example/huge.png', 'https://site.example/'],
+        include_media: true,
+      },
+      mediaCtx(env),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.attachments).toHaveLength(1);
+    expect(result.content).toContain('[image: picture.png] attached to the dialog');
+    expect(result.content).toContain('include_media: file is too large');
+    expect(result.content).toContain('plain page');
+  });
+
+  it('редирект на приватный адрес по-прежнему блокируется при include_media', async () => {
+    _setWebFetchHostResolver(async (host) => (host === 'internal.example' ? ['10.0.0.5'] : ['93.184.216.34']));
+    configureEgressRuntime({
+      resolver: {
+        resolveTools: async () => ({ mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] }),
+      },
+    });
+    const env = makeAttachmentsEnv();
+    const fetchMock = vi.fn(async () => new Response(null, {
+      status: 302,
+      headers: { location: 'https://internal.example/secret.png' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webFetchTool.execute(
+      { url: 'https://cdn.example/picture.png', include_media: true },
+      mediaCtx(env),
+    );
+
+    expect(result.attachments).toBeUndefined();
+    expect(result.content).toMatch(/Blocked by the network policy|заблокирован/i);
+    expect(env.upload).not.toHaveBeenCalled();
   });
 });

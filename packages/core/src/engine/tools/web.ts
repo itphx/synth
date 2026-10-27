@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import { parse } from 'parse5';
-import { ToolCapability } from '@itphx/synth-shared';
-import type { ToolDefinition } from '@itphx/synth-shared';
+import { attachmentsConfigSchema, mediaPartPlaceholder, mediaTypeOfMime, ToolCapability } from '@itphx/synth-shared';
+import type { AttachmentsConfig, ToolAttachmentRef, ToolDefinition } from '@itphx/synth-shared';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, isAbortError, signalAborted, abortedResult } from './abort.js';
+import { AttachmentError, type AttachmentService } from '../attachments/service.js';
 import { EgressBlockedError, fetchWithEgressGuard } from '../net/egress-guard.js';
 import type { EgressLogSink } from '../net/egress-guard.js';
 import { egressFetch } from '../../security/tls.js';
@@ -379,6 +380,211 @@ function fetchWithSsrfGuard(
   );
 }
 
+// ─── ADR-115: медиа в web_fetch ─────────────────────────────────────────────
+//
+// `ToolResult.content` — строка, поэтому раньше `web_fetch` декодировал любой
+// ответ как UTF-8 (бинарь превращался в мусор в контексте модели). Теперь
+// медиа (`image/*`, `application/pdf`, `audio/*`, `video/*`) по явному
+// `include_media` читается **стримом с капом**, кладётся в blob-хранилище
+// через `AttachmentService.upload` и возвращается ссылкой в
+// `ToolResult.attachments` — оркестратор вставит её в текущий ход
+// user-репликой (ADR-115 §«Медиа из инструментов»).
+//
+// Без `include_media` бинарь не читается вовсе: вместо мусора — одна
+// поясняющая строка (модель понимает, что там файл, и может повторить вызов
+// с `include_media: true`). Текстовые блоки — канал LLM (en, ADR-041),
+// формат — как у остальных блоков `web_fetch` (`### {url}` + абзац).
+
+const TEXTUAL_MIME_PREFIXES = ['text/'];
+const TEXTUAL_MIME_EXACT = new Set([
+  'application/json',
+  'application/ld+json',
+  'application/xml',
+  'application/xhtml+xml',
+  'application/javascript',
+  'application/x-javascript',
+  'application/ecmascript',
+  'application/x-www-form-urlencoded',
+  'application/graphql',
+  'application/yaml',
+  'application/x-yaml',
+]);
+
+/** Семейство медиа по MIME (`null` — не медиа). */
+export function mediaKindOfMime(mime: string): 'image' | 'pdf' | 'audio' | 'video' | null {
+  const normalized = mime.trim().toLowerCase();
+  if (normalized.startsWith('image/')) return 'image';
+  if (normalized === 'application/pdf' || normalized.startsWith('application/pdf')) return 'pdf';
+  if (normalized.startsWith('audio/')) return 'audio';
+  if (normalized.startsWith('video/')) return 'video';
+  return null;
+}
+
+/**
+ * Бинарный ли ответ: медиа, `application/octet-stream` и всё, что не текстовый
+ * MIME (JSON/XML/JS/YAML — текстовые). Нужно только для решения «не вызывать
+ * `text()`», декодирования как текста здесь нет.
+ */
+export function isBinaryContentType(mime: string): boolean {
+  const normalized = mime.trim().toLowerCase();
+  if (mediaKindOfMime(normalized)) return true;
+  if (normalized.startsWith('application/octet-stream')) return true;
+  if (TEXTUAL_MIME_EXACT.has(normalized)) return false;
+  if (normalized.endsWith('+json') || normalized.endsWith('+xml')) return false;
+  return !TEXTUAL_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+/** MIME из заголовка `content-type` без параметров. */
+function normalizeContentType(contentType: string): string {
+  return contentType.split(';')[0]?.trim().toLowerCase() ?? '';
+}
+
+/** Имя файла: `Content-Disposition` → последний сегмент пути URL → `download`. */
+export function attachmentNameFromResponse(response: Response, url: string): string {
+  const disposition = response.headers.get('content-disposition') ?? '';
+  const extended = /filename\*\s*=\s*[^']*''([^;]+)/i.exec(disposition);
+  const plain = /filename\s*=\s*"?([^";]+)"?/i.exec(disposition);
+  const raw = extended?.[1] ?? plain?.[1];
+  if (raw) {
+    let decoded = raw.trim();
+    try {
+      decoded = decodeURIComponent(decoded);
+    } catch {
+      // битая percent-кодировка — оставляем как есть
+    }
+    const cleaned = decoded.split(/[\\/]/).pop()?.trim();
+    if (cleaned) return cleaned;
+  }
+  try {
+    const fromPath = decodeURIComponent(new URL(url).pathname.split('/').pop() ?? '').trim();
+    if (fromPath) return fromPath;
+  } catch {
+    // невалидный URL (не должен случаться — нормализован выше)
+  }
+  return 'download';
+}
+
+type CappedBodyRead =
+  | { ok: true; bytes: Buffer }
+  | { ok: false; reason: 'too_large' | 'empty' };
+
+/**
+ * Прочитать тело потоком с капом. Никакого `arrayBuffer()`/`text()`: при
+ * превышении лимита чтение прекращается, соединение закрывается —
+ * гигабайтный ответ в память не тянется.
+ */
+async function readBodyCapped(
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+): Promise<CappedBodyRead> {
+  if (!body) return { ok: false, reason: 'empty' };
+  const reader = body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      return { ok: false, reason: 'too_large' };
+    }
+    chunks.push(Buffer.from(value));
+  }
+  if (total === 0) return { ok: false, reason: 'empty' };
+  return { ok: true, bytes: Buffer.concat(chunks) };
+}
+
+/**
+ * Зависимости `web_fetch` из `ToolContext.extra` (упаковка — оркестратор).
+ *
+ * - `attachmentService` — сервис вложений (ADR-115): единственная точка записи
+ *   байтов, MIME по сигнатуре, allowlist/модальности и лимиты. Не задан —
+ *   медиа не скачивается, в тексте — причина.
+ * - `attachmentsConfig` — live-конфиг `attachments.*` (`enabled`,
+ *   `maxBytesPerFile`); не задан — дефолты схемы.
+ */
+export interface WebFetchExtra {
+  attachmentService?: AttachmentService;
+  attachmentsConfig?: () => AttachmentsConfig;
+}
+
+/** Результат скачивания медиа: ссылка для `attachments` либо причина отказа. */
+type FetchedMedia =
+  | { ok: true; ref: ToolAttachmentRef; line: string }
+  | { ok: false; message: string };
+
+/**
+ * Скачать медиа-ответ и положить в blob-хранилище.
+ *
+ * Порядок: `enabled` (до сети) → ранняя проверка `content-length` → потоковое
+ * чтение с капом `maxBytesPerFile` → `AttachmentService.upload` (повторно
+ * проверяет размер, MIME по сигнатуре, модальности и allowlist). Любой отказ —
+ * текстовая строка с причиной: остальные URL вызова не страдают.
+ */
+async function fetchMediaAttachment(
+  response: Response,
+  url: string,
+  mime: string,
+  ctxExtra: WebFetchExtra | undefined,
+  sessionId: string,
+): Promise<FetchedMedia> {
+  const service = ctxExtra?.attachmentService;
+  if (!service) {
+    return { ok: false, message: 'include_media: attachments are unavailable in this build' };
+  }
+  const config = ctxExtra?.attachmentsConfig?.() ?? attachmentsConfigSchema.parse({});
+  if (!config.enabled) {
+    return { ok: false, message: 'include_media: attachments are disabled on this instance' };
+  }
+  const limit = config.maxBytesPerFile;
+  // Ранняя проверка: сервер сам сказал, что отдаёт больше лимита — тело не читаем.
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > limit) {
+    return {
+      ok: false,
+      message: `include_media: file is too large (${declared} bytes, limit ${limit} bytes)`,
+    };
+  }
+
+  const read = await readBodyCapped(response.body, limit);
+  if (!read.ok) {
+    return {
+      ok: false,
+      message: read.reason === 'too_large'
+        ? `include_media: file is too large (limit ${limit} bytes)`
+        : 'include_media: empty response body',
+    };
+  }
+
+  const name = attachmentNameFromResponse(response, url);
+  try {
+    const meta = await service.upload({ sessionId, bytes: read.bytes, name });
+    const type = mediaTypeOfMime(meta.mime);
+    const ref: ToolAttachmentRef = {
+      blobPath: meta.blobPath,
+      sha256: meta.sha256,
+      mime: meta.mime,
+      size: meta.size,
+      ...(meta.name ? { name: meta.name } : {}),
+    };
+    return {
+      ok: true,
+      ref,
+      line: `${mediaPartPlaceholder(type, { name: meta.name ?? name })} attached to the dialog`,
+    };
+  } catch (err) {
+    if (err instanceof AttachmentError) {
+      if (err.code === 'too_large') {
+        return { ok: false, message: `include_media: file is too large (limit ${limit} bytes)` };
+      }
+      return { ok: false, message: `include_media: ${err.message}` };
+    }
+    throw err;
+  }
+}
+
 // ─── Тулы ────────────────────────────────────────────────────────────────────
 
 export const webFetchTool: ToolDefinition = {
@@ -393,6 +599,12 @@ export const webFetchTool: ToolDefinition = {
     format: z.enum(['text', 'markdown', 'html']).optional().default('markdown')
       .describe('The format to return the content in (default: markdown)'),
     timeout: z.number().int().min(1).max(120).optional().describe('Timeout per URL in seconds (max 120)'),
+    include_media: z.boolean().optional().default(false)
+      .describe(
+        'Download image/pdf/audio/video responses and attach them to the dialog '
+        + '(the model sees them on the next step). Default: false — binary responses '
+        + 'are described instead of being decoded as text.',
+      ),
   }),
   capabilities: [ToolCapability.WEB],
   async execute(args, ctx) {
@@ -407,7 +619,9 @@ export const webFetchTool: ToolDefinition = {
       urls?: string[];
       format?: 'text' | 'markdown' | 'html';
       timeout?: number;
+      include_media?: boolean;
     };
+    const includeMedia = params.include_media === true;
 
     const rawUrls = params.urls && params.urls.length > 0 ? params.urls : (params.url ? [params.url] : []);
     if (rawUrls.length === 0) {
@@ -427,6 +641,8 @@ export const webFetchTool: ToolDefinition = {
     };
 
     const blocks: string[] = [];
+    // ADR-115: ссылки на скачанные медиа — оркестратор вставит их в текущий ход.
+    const attachments: ToolAttachmentRef[] = [];
 
     for (const url of urls) {
       // «Стоп» пришёл между URL — оставшиеся не загружаем
@@ -447,6 +663,38 @@ export const webFetchTool: ToolDefinition = {
         }
 
         const contentType = response.headers.get('content-type') || '';
+        const mime = normalizeContentType(contentType);
+
+        // ADR-115: медиа-ответ — по явному `include_media` (скачивание + вложение
+        // в диалог). Без флага тело не читаем: бинарь, декодированный как текст —
+        // мусор в контексте. `enabled=false`/лимит/тип вне allowlist — строка с
+        // причиной, а не падение всего вызова.
+        if (mediaKindOfMime(mime)) {
+          if (!includeMedia) {
+            blocks.push(
+              `### ${url}\n\n[binary content: ${mime}] not read as text — `
+              + 'call web_fetch with include_media=true to attach it to the dialog',
+            );
+            continue;
+          }
+          const fetched = await fetchMediaAttachment(
+            response, url, mime, ctx.extra as WebFetchExtra | undefined, ctx.sessionId,
+          );
+          if (fetched.ok) {
+            attachments.push(fetched.ref);
+            blocks.push(`### ${url}\n\n${fetched.line}`);
+          } else {
+            blocks.push(`### ${url}\n\n${fetched.message}`);
+          }
+          continue;
+        }
+
+        // Прочий бинарь (`application/octet-stream`, архивы, …) — тоже не текст.
+        if (isBinaryContentType(mime)) {
+          blocks.push(`### ${url}\n\n[binary content: ${mime}] not read as text`);
+          continue;
+        }
+
         const rawText = await response.text();
         let content: string;
 
@@ -500,6 +748,7 @@ export const webFetchTool: ToolDefinition = {
     return {
       content: blocks.join('\n\n---\n\n'),
       metadata: { urls, count: urls.length },
+      ...(attachments.length > 0 ? { attachments } : {}),
     };
   },
 };

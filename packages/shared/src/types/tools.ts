@@ -134,10 +134,45 @@ export interface ToolContext {
   extra?: Record<string, unknown>;
 }
 
+/**
+ * ADR-115 §«Медиа из инструментов»: ссылка на вложение, которое тул положил в
+ * blob-хранилище и хочет показать модели.
+ *
+ * Тул **не** возвращает байты: в результате — только адрес объекта и
+ * метаданные (та же content-addressed схема, что у вложений сообщений).
+ * Оркестратор вставляет ссылки в текущий ход отдельной user-репликой, и
+ * модель получает их штатной гидратацией на следующей итерации.
+ *
+ * Поля обязательные (кроме `name`): `blobPath` — путь порта `BlobStore`,
+ * `sha256` — 64 hex-символа, `mime`, `size` > 0. Невалидные ссылки
+ * отбрасываются с логом (текст результата тула модель всё равно получит).
+ */
+export interface ToolAttachmentRef {
+  /** Путь объекта в blob-хранилище (обязан быть под `attachments/`). */
+  blobPath: string;
+  /** SHA-256 объекта (64 hex). */
+  sha256: string;
+  /** MIME-тип по содержимому (sniff сервиса вложений). */
+  mime: string;
+  /** Размер в байтах (> 0). */
+  size: number;
+  /** Имя файла для модели/UI (необязательно). */
+  name?: string;
+}
+
 export interface ToolResult {
   content: string;
   isError?: boolean;
   metadata?: Record<string, unknown>;
+  /**
+   * ADR-115: вложения результата тула (ссылки на объекты blob-хранилища).
+   *
+   * Аддитивное поле: тулы, которые умеют отдавать медиа (например
+   * `web_fetch` с `include_media`), складывают сюда ссылки; оркестратор
+   * превращает их в user-реплику текущего хода. Тул без поля работает как
+   * прежде — результат остаётся текстом.
+   */
+  attachments?: ToolAttachmentRef[];
 }
 
 export type ToolExecutor = (params: unknown, ctx: ToolContext) => Promise<ToolResult>;

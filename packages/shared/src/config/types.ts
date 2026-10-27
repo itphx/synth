@@ -725,6 +725,9 @@ export const modalityModelsSchema = z.object({
  * - `maxBytesPerFile` — предел размера одного файла, байт;
  * - `maxFilesPerMessage` — предел числа вложений в одном сообщении;
  * - `maxBytesPerSession` — предел суммарного объёма вложений сессии, байт;
+ * - `maxBytesPerMessage` — бюджет вложений, которые **тулы** прикладывают к
+ *   текущему ходу (`ToolResult.attachments`, ADR-115 §«Медиа из инструментов»):
+ *   суммарный объём одной инъекции. Не задано — дефолт оркестратора (20 МиБ);
  * - `allowedMimePrefixes` — белый список MIME-префиксов (не пустой список —
  *   все префиксы разрешены; список — объектный ключ, остаётся в config.yaml);
  * - `workspaceFallback` — резервный путь хранения вложений в workspace проекта
@@ -742,6 +745,10 @@ export const attachmentsConfigSchema = z.object({
   maxBytesPerFile: z.number().int().min(1).default(25 * 1024 * 1024),
   maxFilesPerMessage: z.number().int().min(1).default(10),
   maxBytesPerSession: z.number().int().min(1).default(1024 * 1024 * 1024),
+  // ADR-115 §«Медиа из инструментов»: бюджет инъекции вложений тулов на ход.
+  // `optional` (без дефолта): значение читает оркестратор (fallback 20 МиБ),
+  // конфиг-схема остаётся аддитивной для существующих снимков.
+  maxBytesPerMessage: z.number().int().min(1).optional(),
   allowedMimePrefixes: z
     .array(z.string().min(1))
     .default(['image/', 'audio/', 'application/pdf', 'text/']),
