@@ -508,22 +508,11 @@ export interface OrchestratorOptions {
    */
   processService?: ProcessService;
   /**
-   * ADR-115: доставка user-сообщения в сессию — очередь + автоход.
-   *
-   * Точка сборки передаёт тот же нотификатор, что и `background.onNotifyParent`
-   * (`notifyBackgroundParent` в `server/app/deps.ts` / `backend/app/deps.ts`):
-   * сообщение попадает в `pendingMessages`, процессор добавляет его в историю и
-   * запускает ход. Нужна тулу `attach_workspace_file`: приложенный файл —
-   * обычное user-сообщение с медиа-частью, а не результат тула.
-   * Не задана — привязка файла отказывает (`attach.tool.delivery_unavailable`).
-   */
-  deliverUserMessage?: (sessionId: string, message: Message) => Promise<void>;
-  /**
    * ADR-115: порт учёта ссылок на объекты blob-хранилища (`StorageContext.blobRefs`).
    *
-   * Нужен тулу `attach_workspace_file`: созданное им сообщение ссылается на
-   * объект вложения, и без записи ссылки GC счёл бы объект сиротой по TTL.
-   * Не задан — ссылка не пишется (best-effort, привязка работает).
+   * Нужен инъекции вложений из `ToolResult.attachments`: сообщение хода
+   * ссылается на объект, и без записи ссылки GC счёл бы объект сиротой по TTL.
+   * Не задан — ссылка не пишется (best-effort, вложение работает).
    */
   blobRefs?: BlobRefRepository;
   /**
@@ -745,11 +734,6 @@ export class ChatOrchestrator {
    * режим `background: true` у `execute_shell` недоступен).
    */
   private readonly _processService: ProcessService | null;
-  /**
-   * ADR-115: доставка user-сообщения в сессию (очередь + автоход) — хук
-   * `attach_workspace_file` (null — не задан: привязка файла отказывает).
-   */
-  private readonly _deliverUserMessage: ((sessionId: string, message: Message) => Promise<void>) | null;
   /**
    * ADR-115: порт учёта ссылок на blob-объекты (`StorageContext.blobRefs`);
    * `null` — не задан (ссылка сообщения не пишется — best-effort).
@@ -1037,9 +1021,7 @@ export class ChatOrchestrator {
     this._processService = options.processService ?? null;
     // ADR-114: сервис worktree'ов (тулы `git_worktree_*`).
     this._worktreeService = options.worktreeService ?? null;
-    // ADR-115: доставка user-сообщения (тул `attach_workspace_file`) — тот же
-    // нотификатор, что у фоновых прогонов; порт ссылок на blob-объекты.
-    this._deliverUserMessage = options.deliverUserMessage ?? null;
+    // ADR-115: порт ссылок на blob-объекты (инъекция вложений тулов).
     this._blobRefs = options.blobRefs ?? null;
     this._streamPersistIntervalMs = options.streamPersistIntervalMs ?? 1000;
 
@@ -4306,7 +4288,6 @@ export class ChatOrchestrator {
                   // ADR-115: каталог моделей инстанса — тул `list_models`
                   // (модальности, текущая пара, назначения aux-моделей).
                   listModels: this._listModels ?? undefined,
-                  deliverUserMessage: this._deliverUserMessage ?? undefined,
                   blobRefs: this._blobRefs ?? undefined,
                   // ADR-114: сервис worktree'ов — тулы `git_worktree_*`.
                   worktreeService: this._worktreeService ?? undefined,

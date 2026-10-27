@@ -948,10 +948,8 @@ export async function createBackendDeps(
     // тот же `modelStore`, что у `GET /api/v2/models` (каталог провайдеров +
     // ручные override), поэтому модальности совпадают с UI.
     listModels: () => modelStore.list(),
-    // ADR-115: привязка файла из workspace к диалогу (`attach_workspace_file`):
-    // доставка user-сообщения — тот же нотификатор, что у фоновых прогонов
-    // (очередь + автоход); порт ссылок на blob-объекты — из контекста хранения.
-    deliverUserMessage: notifyBackgroundParent,
+    // ADR-115: порт ссылок на blob-объекты — для инъекции вложений тулов
+    // (`ToolResult.attachments`, включая `attach_workspace_file`).
     blobRefs: storageContext.blobRefs,
     workspacesRoot: config.workspacesRoot,
     // ADR-075: backend — managed-режим, workspace вне workspacesRoot запрещён.

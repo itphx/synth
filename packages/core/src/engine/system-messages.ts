@@ -525,7 +525,7 @@ export const SYSTEM_MESSAGES = {
   // привязки/отказов. Канал LLM — en (ADR-041); UI переводит по `metadata.i18n`.
   'attach.message.from_workspace': 'File from the working directory: {path}',
   'attach.tool.attached':
-    'File "{path}" attached to the dialog; it will be passed to the model on the next turn',
+    'File "{path}" attached; it will be available to the model on the next step of this turn',
   'attach.tool.deps_unavailable': 'Attachments are unavailable in this build',
   'attach.tool.delivery_unavailable':
     'File was uploaded, but message delivery to the session is unavailable in this context — the model will not see it',

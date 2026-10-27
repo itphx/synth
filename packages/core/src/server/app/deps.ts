@@ -999,10 +999,8 @@ export async function createStandaloneDeps(
     // источники — каталог провайдеров и ручные override (тот же `modelStore`,
     // что у `GET /api/v2/models`), поэтому модальности совпадают с UI.
     listModels: () => modelStore.list(),
-    // ADR-115: привязка файла из workspace к диалогу (`attach_workspace_file`):
-    // доставка user-сообщения — тот же нотификатор, что у фоновых прогонов
-    // (очередь + автоход); порт ссылок на blob-объекты — из контекста хранения.
-    deliverUserMessage: notifyBackgroundParent,
+    // ADR-115: порт ссылок на blob-объекты — для инъекции вложений тулов
+    // (`ToolResult.attachments`, включая `attach_workspace_file`).
     blobRefs: storageContext.blobRefs,
     defaultWorkingDir,
     workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),

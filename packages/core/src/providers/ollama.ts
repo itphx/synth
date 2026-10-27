@@ -550,6 +550,16 @@ export class OllamaProvider extends BaseProvider {
       }
 
       const entry: Record<string, unknown> = { role: msg.role, content: msg.content };
+      // ADR-115: Ollama принимает изображения массивом base64 в поле
+      // `images` сообщения (без data-URI). Остальные типы (audio/pdf/video)
+      // здесь не кодируются: модель без соответствующей capability их не
+      // увидит — гидратация заранее отбрасывает/обрабатывает aux-моделью.
+      if (msg.attachments?.length) {
+        const images = msg.attachments
+          .filter((attachment) => attachment.mime.toLowerCase().startsWith('image/'))
+          .map((attachment) => attachment.base64);
+        if (images.length > 0) entry.images = images;
+      }
       if (msg.toolUse) {
         // Старые сессии хранят arguments строкой — приводим к объекту
         // перед отправкой, иначе Ollama вернёт 400.

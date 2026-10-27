@@ -595,3 +595,58 @@ describe('OllamaProvider — listModelsDetailed (метаданные и fallbac
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe('OllamaProvider — вложения (ADR-115)', () => {
+  const provider = new OllamaProvider(baseParams) as unknown as OllamaPrivate;
+  const imageAttachment = { mime: 'image/jpeg', name: 'photo.jpg', base64: 'iVBORw0KGgo=' };
+  const audioAttachment = { mime: 'audio/ogg', name: 'voice.oga', base64: 'T2dnUw==' };
+
+  it('изображение → массив base64 в поле images (без data-URI)', () => {
+    const formatted = provider._formatMessages([
+      makeMessage({
+        role: 'user',
+        content: 'что на фото?',
+        attachments: [imageAttachment],
+      }),
+    ]);
+
+    expect(formatted[0]!.images).toEqual(['iVBORw0KGgo=']);
+    expect(formatted[0]!.content).toBe('что на фото?');
+  });
+
+  it('несколько изображений сохраняют порядок', () => {
+    const formatted = provider._formatMessages([
+      makeMessage({
+        role: 'user',
+        content: 'сравни',
+        attachments: [
+          imageAttachment,
+          { mime: 'image/png', base64: 'iVBORw0KGgo=' },
+        ],
+      }),
+    ]);
+
+    expect(formatted[0]!.images).toEqual(['iVBORw0KGgo=', 'iVBORw0KGgo=']);
+  });
+
+  it('аудио не кодируется (модель без audio capability)', () => {
+    const formatted = provider._formatMessages([
+      makeMessage({
+        role: 'user',
+        content: 'послушай',
+        attachments: [audioAttachment],
+      }),
+    ]);
+
+    expect(formatted[0]!.images).toBeUndefined();
+    expect(formatted[0]!.content).toBe('послушай');
+  });
+
+  it('без вложений поле images не появляется', () => {
+    const formatted = provider._formatMessages([
+      makeMessage({ role: 'user', content: 'просто текст' }),
+    ]);
+
+    expect(formatted[0]!.images).toBeUndefined();
+  });
+});

@@ -806,10 +806,11 @@
   нет владельца — понятная ошибка.
   **Тулы вложений (ADR-115).** `attach_workspace_file` (`attach-workspace-file.ts`,
   capability `file_read`) — файл из workspace (`stat` до чтения, containment: абсолютный путь/`..`/
-  симлинк наружу → отказ) загружается через `AttachmentService.upload` и доставляется в сессию
-  **user-сообщением** с медиа-частью (`deliverUserMessage`, `metadata.source: 'workspace-attachment'`):
-  следующий ход получает вложение штатной гидратацией; нет доставки — честный отказ
-  `attach.tool.delivery_unavailable`. `save_attachment` (`save-attachment.ts`, `file_write`) —
+  симлинк наружу → отказ) загружается через `AttachmentService.upload` и возвращается в
+  `ToolResult.attachments`: оркестратор (`_injectToolAttachments`) вставляет медиа-часть в
+  `currentMessages` **следующей итерации текущего хода**. Нового user-сообщения в очереди нет —
+  иначе модель не видит результат в текущем ходе и зацикливается на повторных вызовах.
+  `blob_refs` пишет инъекция оркестратора. `save_attachment` (`save-attachment.ts`, `file_write`) —
   обратное: медиа-часть **текущей** сессии (`sha256`/`name`/последняя; неоднозначное имя →
   `attach.tool.ambiguous`) выгружается в workspace без перезаписи (`link`/`COPYFILE_EXCL`,
   занято → `attach.tool.exists`). `send_attachment` (`send-attachment.ts`, `file_read`) — файл

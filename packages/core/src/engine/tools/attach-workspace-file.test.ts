@@ -9,9 +9,8 @@
  * временном каталоге (`mkdtemp`).
  *
  * Что проверяется:
- * - успех: байты и имя доехали до `upload`, user-сообщение отдано доставке
- *   (роль, медиа-часть, `content` с плейсхолдером, `metadata.source`), ссылка
- *   на объект учтена, в результате — `metadata.blob_path`;
+ * - успех: байты и имя доехали до `upload`, в результате — `attachments`
+ *   (ссылка для инъекции в текущий ход, без очереди) и `metadata.blob_path`;
  * - containment: `../…`, абсолютный путь, побег через симлинк → `isError`,
  *   `upload` не вызывается;
  * - нет файла / каталог вместо файла → разные ключи отказа;
@@ -22,7 +21,7 @@
  * - модальности модели: семейство не принято и aux-модели нет → отказ
  *   `attach.tool.modality_unsupported` без загрузки/доставки; aux назначена,
  *   семейство принято или модальности неизвестны → привязка работает;
- * - нет `deliverUserMessage` → `attach.tool.delivery_unavailable`;
+ * - результат содержит `attachments` для инъекции в текущий ход;
  * - `buildMediaPart → null` (объект не распознан) → `attach.tool.unrecognized`;
  * - permission-слой: группа `file_read`, путь в `TOOL_PATH_PARAMS`.
  */
@@ -33,7 +32,6 @@ import { join } from 'node:path';
 import {
   attachmentsConfigSchema,
   generateId,
-  MessageRole,
   type AttachmentsConfig,
   type Message,
   type ToolContext,
@@ -41,7 +39,6 @@ import {
 import { attachWorkspaceFileTool } from './attach-workspace-file.js';
 import { AttachmentError } from '../attachments/service.js';
 import type { AttachmentService } from '../attachments/service.js';
-import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import { TOOL_PATH_PARAMS, getToolGroups } from '../permission/groups.js';
 
 /** Мок сервиса вложений: только методы, которые зовёт тул. */
@@ -74,14 +71,6 @@ describe('attach_workspace_file — привязка файла из workspace (
   function makeExtra(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
       attachmentService: service as unknown as AttachmentService,
-      deliverUserMessage: async (sessionId: string, message: Message) => {
-        delivered.push({ sessionId, message });
-      },
-      blobRefs: {
-        add: async (ref: { blobPath: string; ownerKind: string; ownerId: string }) => {
-          addedRefs.push(ref);
-        },
-      } as unknown as BlobRefRepository,
       ...overrides,
     };
   }
@@ -124,7 +113,7 @@ describe('attach_workspace_file — привязка файла из workspace (
   });
 
   describe('успешная привязка', () => {
-    it('загружает файл и доставляет user-сообщение с медиа-частью', async () => {
+    it('возвращает attachments для инъекции в текущий ход (без очереди)', async () => {
       await writeFile(join(workspace, 'shot.png'), 'PNGDATA1');
 
       const result = await attachWorkspaceFileTool.execute(
@@ -140,29 +129,20 @@ describe('attach_workspace_file — привязка файла из workspace (
       expect(uploadArg.name).toBeUndefined();
       expect(service.buildMediaPart).toHaveBeenCalledWith(BLOB_PATH);
 
-      // Сообщение — пользовательское, с медиа-частью и меткой происхождения.
-      expect(delivered).toHaveLength(1);
-      const { sessionId, message } = delivered[0]!;
-      expect(sessionId).toBe('sess-1');
-      expect(message.role).toBe(MessageRole.USER);
-      expect(message.parts).toHaveLength(1);
-      expect(message.parts[0]!.type).toBe('image');
-      expect(message.parts[0]!.data).toMatchObject({ blobPath: BLOB_PATH, mime: 'image/png' });
-      expect(message.metadata?.source).toBe('workspace-attachment');
-      expect(message.metadata?.path).toBe('shot.png');
-      // ADR-115: факт вложения обязан оставить след в тексте (`content`).
-      expect(message.content).toContain('[image: shot.png]');
-
-      // Ссылка на объект учтена: иначе GC (ADR-115) счёл бы его сиротой.
-      expect(addedRefs).toEqual([
-        { blobPath: BLOB_PATH, ownerKind: 'message', ownerId: message.id },
-      ]);
-
+      // ADR-115: вложение уходит в `ToolResult.attachments`, оркестратор
+      // вставляет его в `currentMessages` того же хода. User-сообщения и
+      // очереди нет — иначе модель зацикливалась.
+      expect(result.attachments).toEqual([{
+        blobPath: BLOB_PATH,
+        sha256: 'deadbeef',
+        mime: 'image/png',
+        size: 8,
+      }]);
+      expect(delivered).toHaveLength(0);
       expect(result.metadata).toMatchObject({
         blob_path: BLOB_PATH,
         mime: 'image/png',
         path: 'shot.png',
-        message_id: message.id,
       });
     });
 
@@ -187,19 +167,15 @@ describe('attach_workspace_file — привязка файла из workspace (
       expect(service.upload).toHaveBeenCalledTimes(1);
     });
 
-    it('сбой учёта ссылки не отменяет привязку (best-effort)', async () => {
+    it('результат пригоден для инъекции (attachments + metadata)', async () => {
       await writeFile(join(workspace, 'shot.png'), 'PNGDATA1');
-      const extra = makeExtra({
-        blobRefs: {
-          add: async () => {
-            throw new Error('blob_refs недоступен');
-          },
-        } as unknown as BlobRefRepository,
-      });
-
-      const result = await attachWorkspaceFileTool.execute({ path: 'shot.png' }, makeCtx(extra));
+      const result = await attachWorkspaceFileTool.execute(
+        { path: 'shot.png' },
+        makeCtx(makeExtra()),
+      );
       expect(result.isError).toBeFalsy();
-      expect(delivered).toHaveLength(1);
+      expect(result.attachments).toHaveLength(1);
+      expect(result.metadata).toMatchObject({ blob_path: BLOB_PATH, path: 'shot.png' });
     });
   });
 
@@ -367,7 +343,7 @@ describe('attach_workspace_file — привязка файла из workspace (
 
       expect(result.isError).toBeFalsy();
       expect(service.upload).toHaveBeenCalledTimes(1);
-      expect(delivered).toHaveLength(1);
+      expect(result.attachments).toHaveLength(1);
     });
 
     it('модель принимает семейство → привязка разрешена', async () => {
@@ -380,7 +356,7 @@ describe('attach_workspace_file — привязка файла из workspace (
 
       expect(result.isError).toBeFalsy();
       expect(service.upload).toHaveBeenCalledTimes(1);
-      expect(delivered).toHaveLength(1);
+      expect(result.attachments).toHaveLength(1);
     });
 
     it('модальности модели неизвестны → прежнее поведение (привязка)', async () => {
@@ -392,7 +368,7 @@ describe('attach_workspace_file — привязка файла из workspace (
 
       expect(result.isError).toBeFalsy();
       expect(service.upload).toHaveBeenCalledTimes(1);
-      expect(delivered).toHaveLength(1);
+      expect(result.attachments).toHaveLength(1);
     });
   });
 
@@ -429,18 +405,17 @@ describe('attach_workspace_file — привязка файла из workspace (
       expect(delivered).toHaveLength(0);
     });
 
-    it('нет `deliverUserMessage` → честный отказ, а не «тихий» успех', async () => {
+    it('успешный результат всегда несёт attachments (инъекция в текущий ход)', async () => {
       await writeFile(join(workspace, 'shot.png'), 'PNGDATA1');
-      const extra = makeExtra();
-      delete extra.deliverUserMessage;
 
-      const result = await attachWorkspaceFileTool.execute({ path: 'shot.png' }, makeCtx(extra));
+      const result = await attachWorkspaceFileTool.execute(
+        { path: 'shot.png' },
+        makeCtx(makeExtra()),
+      );
 
-      expect(result.isError).toBe(true);
-      expect(errorKey(result)).toBe('attach.tool.delivery_unavailable');
-      // Файл уже загружен — в metadata видно, что именно не доставлено.
+      expect(result.isError).toBeFalsy();
+      expect(result.attachments).toHaveLength(1);
       expect(result.metadata).toMatchObject({ blob_path: BLOB_PATH });
-      expect(addedRefs).toHaveLength(0);
     });
 
     it('`buildMediaPart → null` (объект не распознан) → `unrecognized`', async () => {

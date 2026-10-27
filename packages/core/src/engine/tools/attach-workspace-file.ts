@@ -29,9 +29,11 @@
  *   `attach.tool.modality_unsupported` и **не** доставляет user-сообщение
  *   (иначе модель зацикливалась: приложила → снова отброшено → приложила).
  *   Модальности неизвестны — прежнее поведение (тихая потеря недопустима).
- * - **Доставка — через хук оркестратора** (`deliverUserMessage`: очередь +
- *   автоход). Хука нет — честная ошибка, а не «тихий» успех: файл загружен,
- *   но модель его не увидит.
+ * - **Доставка — в текущий ход.** Тул возвращает `ToolResult.attachments`;
+ *   оркестратор (`_injectToolAttachments`) вставляет медиа-часть в
+ *   `currentMessages` следующей итерации того же хода. Нового user-сообщения
+ *   в очередь **нет** — иначе модель не видит результат в текущем ходе и
+ *   зацикливается на повторных вызовах.
  * - Чисел метрик не добавляем: `upload`/`buildMediaPart` сами пишут
  *   `synth_attachment_*` (ADR-094).
  */
@@ -39,20 +41,13 @@ import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, relative, sep } from 'node:path';
 import { z } from 'zod';
 import {
-  appendMediaPlaceholders,
   attachmentsConfigSchema,
-  generateId,
-  makeMediaPart,
-  MessageRole,
-  nowISO,
   ToolCapability,
   type AttachmentsConfig,
-  type Message,
   type ToolContext,
   type ToolDefinition,
   type ToolResult,
 } from '@itphx/synth-shared';
-import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import {
   AttachmentError,
   attachmentModalityOf,
@@ -79,10 +74,6 @@ export const ATTACH_WORKSPACE_FILE_TOOL = 'attach_workspace_file';
  * - `attachmentsConfig` — live-конфиг `attachments.*` (резолвер): ранние
  *   проверки (`enabled`, `maxBytesPerFile`) **до** чтения файла. Не задан —
  *   дефолты схемы (как у сервиса без runtime-настроек).
- * - `deliverUserMessage` — доставка user-сообщения в сессию (очередь +
- *   автоход). Не задан — отказ `attach.tool.delivery_unavailable`.
- * - `blobRefs` — учёт ссылок на объекты blob-хранилища: сообщение ссылается на
- *   объект, иначе GC (ADR-115) сочёл бы его сиротой по TTL.
  * - `modelModalities` — модальности **текущей** модели хода (из каталога
  *   провайдера, тот же резолвер, что у гидратации). Нужны, чтобы не
  *   доставлять заведомо отбрасываемое вложение. Не заданы (модальности
@@ -91,8 +82,6 @@ export const ATTACH_WORKSPACE_FILE_TOOL = 'attach_workspace_file';
 export interface AttachWorkspaceFileExtra {
   attachmentService?: AttachmentService;
   attachmentsConfig?: () => AttachmentsConfig;
-  deliverUserMessage?: (sessionId: string, message: Message) => Promise<void>;
-  blobRefs?: BlobRefRepository;
   modelModalities?: readonly string[];
 }
 
@@ -260,60 +249,10 @@ export const attachWorkspaceFileTool: ToolDefinition = {
       );
     }
 
-    const deliver = extra?.deliverUserMessage;
-    if (!deliver) {
-      return failureResult(
-        'attach.tool.delivery_unavailable',
-        {},
-        { path: resolvedPath, blob_path: meta.blobPath, mime: meta.mime, size: meta.size },
-      );
-    }
-
-    // Сообщение — как пользовательское: роль USER, автор `User`, медиа-часть
-    // несёт ссылку на объект, `content` — короткий текст (в чате локализуется
-    // по `metadata.i18n`) + плейсхолдер вложения: без него факт привязки
-    // «испаряется» в строковых производных (экспорт, поиск, PG-маппинг) —
-    // ADR-115 §«Модель контента».
-    const contentParams = { path: params.path };
-    const parts = [makeMediaPart(part.type, part.data)];
-    const content = appendMediaPlaceholders(sm('attach.message.from_workspace', contentParams), parts);
-    const message: Message = {
-      id: generateId(),
-      role: MessageRole.USER,
-      seq: 0,
-      origin: 'local',
-      parts,
-      content,
-      createdAt: nowISO(),
-      disabled: false,
-      pinned: false,
-      hidden: false,
-      ephemeral: false,
-      author: 'User',
-      metadata: {
-        source: 'workspace-attachment',
-        path: params.path,
-        mime: meta.mime,
-        size: meta.size,
-        i18n: i18nMeta('attach.message.from_workspace', contentParams),
-      },
-    };
-
-    await deliver(ctx.sessionId, message);
-    // Учёт ссылки на объект: без него GC (ADR-115) удалил бы вложение по TTL,
-    // хотя сообщение на него ссылается. Best-effort — сообщение уже доставлено.
-    if (extra?.blobRefs) {
-      try {
-        await extra.blobRefs.add({
-          blobPath: meta.blobPath,
-          ownerKind: 'message',
-          ownerId: message.id,
-        });
-      } catch {
-        // учёт ссылок — производная: не отменяет привязку и не роняет ход
-      }
-    }
-
+    // Вложение возвращаем в результате тула: оркестратор вставит медиа-часть
+    // в `currentMessages` следующей итерации этого же хода
+    // (`_injectToolAttachments`). Нового user-сообщения в очереди нет —
+    // модель видит вложение сразу и не зацикливается на повторных вызовах.
     return {
       content: sm('attach.tool.attached', { path: params.path }),
       metadata: {
@@ -322,8 +261,14 @@ export const attachWorkspaceFileTool: ToolDefinition = {
         mime: meta.mime,
         size: meta.size,
         path: params.path,
-        message_id: message.id,
       },
+      attachments: [{
+        blobPath: meta.blobPath,
+        sha256: meta.sha256,
+        mime: meta.mime,
+        size: meta.size,
+        ...(meta.name ? { name: meta.name } : {}),
+      }],
     };
   },
 };
