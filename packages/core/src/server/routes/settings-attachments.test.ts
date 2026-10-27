@@ -18,7 +18,10 @@ import type { AttachmentsConfig } from '@itphx/synth-shared';
 import { RuntimeSettingsStore } from '../../storage/runtime-settings.js';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
 import { createLiveAttachmentsSettings } from '../../storage/runtime-settings.js';
-import { createAttachmentsSettingsRoutes } from './settings-attachments.js';
+import {
+  createAttachmentsSettingsRoutes,
+  type ModalityModelLookup,
+} from './settings-attachments.js';
 
 const requireAuth = async (_c: Context, next: Next) => { await next(); };
 const deny = async (c: HonoContext) => c.json({ error: { code: 'FORBIDDEN', message: 'deny' } }, 403);
@@ -45,8 +48,25 @@ interface AppOptions {
   config?: Partial<AttachmentsConfig>;
   env?: NodeJS.ProcessEnv;
   audit?: SecurityAuditRepository;
+  /** Каталог моделей для проверки `modalityModels` (ADR-115). */
+  lookupModel?: ModalityModelLookup;
   writeGuard?: (c: Context, next: Next) => Promise<Response | void>;
   readGuard?: (c: Context, next: Next) => Promise<Response | void>;
+}
+
+/**
+ * Каталог в памяти: провайдер → модель → модальности (`undefined` — неизвестны,
+ * как если модель ещё не синхронизирована через `POST /models/fetch`).
+ */
+function createCatalog(
+  providers: Record<string, Record<string, string[] | undefined>>,
+): ModalityModelLookup {
+  return async (provider, model) => {
+    const models = providers[provider];
+    if (!models) return { found: false, reason: 'provider' };
+    if (!(model in models)) return { found: false, reason: 'model' };
+    return { found: true, modalities: models[model] };
+  };
 }
 
 function createApp(options: AppOptions) {
@@ -61,6 +81,7 @@ function createApp(options: AppOptions) {
       live,
       env: options.env ?? {},
       ...(options.audit ? { securityAudit: options.audit } : {}),
+      ...(options.lookupModel ? { lookupModel: options.lookupModel } : {}),
     },
     {
       ...(options.readGuard ? { readGuard: options.readGuard as never } : {}),
@@ -104,9 +125,12 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
       maxBytesPerSession: 1024 * 1024 * 1024,
       allowedMimePrefixes: ['image/', 'audio/', 'application/pdf', 'text/'],
       workspaceFallback: true,
+      modalityModels: {},
       gcDays: 30,
     });
     expect(body.defaults).toEqual(body.attachments);
+    // ADR-115: сохранённого runtime-патча нет.
+    expect(body.saved).toEqual({});
     expect(body.isOverridden).toBe(false);
     expect(body.source).toBe('default');
     expect(body.envLocked).toEqual([]);
@@ -282,5 +306,203 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
     };
     const { app } = createApp({ dataDir, audit: failingAudit, env: {} });
     expect((await put(app, { attachments: { gcDays: 2 } })).status).toBe(200);
+  });
+  // --- ADR-115: модели обработки по модальностям (aux-модели) ---
+
+  it('PUT modalityModels: валидная модель сохраняется, живой резолвер её видит', async () => {
+    const catalog = createCatalog({ openai: { 'gpt-4o': ['text', 'image'] } });
+    const { app, live } = createApp({ dataDir, lookupModel: catalog, env: {} });
+
+    const res = await put(app, {
+      attachments: { modalityModels: { image: { provider: 'openai', model: 'gpt-4o' } } },
+    });
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.attachments.modalityModels).toEqual({
+      image: { provider: 'openai', model: 'gpt-4o' },
+    });
+    // `saved` — сохранённый runtime-патч (как есть).
+    expect(body.saved.modalityModels).toEqual({ image: { provider: 'openai', model: 'gpt-4o' } });
+    expect(body.source).toBe('runtime');
+    expect(live.getConfig().modalityModels).toEqual({
+      image: { provider: 'openai', model: 'gpt-4o' },
+    });
+
+    // Настройки вложений при этом не меняются.
+    expect(body.attachments.enabled).toBe(true);
+    expect(body.attachments.modalities).toEqual({ image: true, pdf: true, audio: true, video: true });
+  });
+
+  it('PUT modalityModels: runtime дополняет config, null снимает запись семейства', async () => {
+    const catalog = createCatalog({
+      openai: { 'gpt-4o': ['text', 'image'] },
+      local: { whisper: ['text', 'audio'] },
+    });
+    const { app } = createApp({
+      dataDir,
+      lookupModel: catalog,
+      config: {
+        modalityModels: {
+          image: { provider: 'openai', model: 'gpt-4o' },
+          pdf: { provider: 'openai', model: 'gpt-4o' },
+        },
+      },
+      env: {},
+    });
+
+    // Добавляем audio — image/pdf из config остаются.
+    const added = await json(await put(app, {
+      attachments: { modalityModels: { audio: { provider: 'local', model: 'whisper' } } },
+    }));
+    expect(added.attachments.modalityModels).toEqual({
+      image: { provider: 'openai', model: 'gpt-4o' },
+      pdf: { provider: 'openai', model: 'gpt-4o' },
+      audio: { provider: 'local', model: 'whisper' },
+    });
+
+    // `null` снимает семейство (в т.ч. заданное в config).
+    const removed = await json(await put(app, {
+      attachments: { modalityModels: { image: null } },
+    }));
+    expect(removed.attachments.modalityModels).toEqual({
+      pdf: { provider: 'openai', model: 'gpt-4o' },
+    });
+    expect(removed.saved.modalityModels).toEqual({ image: null });
+  });
+
+  it('PUT modalityModels: пустой объект — эквивалент null (снять настройку)', async () => {
+    const catalog = createCatalog({ openai: { 'gpt-4o': ['text', 'image'] } });
+    const { app } = createApp({
+      dataDir,
+      lookupModel: catalog,
+      config: { modalityModels: { image: { provider: 'openai', model: 'gpt-4o' } } },
+      env: {},
+    });
+    const body = await json(await put(app, { attachments: { modalityModels: { image: {} } } }));
+    expect(body.attachments.modalityModels).toEqual({});
+    expect(body.saved.modalityModels).toEqual({ image: null });
+  });
+
+  it('PUT modalityModels: неизвестный провайдер → 400, запись не меняется', async () => {
+    const catalog = createCatalog({ openai: { 'gpt-4o': ['text', 'image'] } });
+    const { app, live } = createApp({ dataDir, lookupModel: catalog, env: {} });
+
+    const ok = await put(app, {
+      attachments: { modalityModels: { image: { provider: 'openai', model: 'gpt-4o' } } },
+    });
+    expect(ok.status).toBe(200);
+
+    const res = await put(app, {
+      attachments: { modalityModels: { audio: { provider: 'ghost', model: 'x' } } },
+    });
+    expect(res.status).toBe(400);
+    const err = (await json(res)).error;
+    expect(err.code).toBe('VALIDATION_ERROR');
+    expect(err.message).toContain('modalityModels.audio');
+    expect(err.message).toContain('провайдер "ghost" не найден');
+
+    // Частичной записи нет: и runtime, и живой резолвер — прежние.
+    const view = await json(await app.request('/api/v2/settings/attachments'));
+    expect(view.saved.modalityModels).toEqual({ image: { provider: 'openai', model: 'gpt-4o' } });
+    expect(live.getConfig().modalityModels).toEqual({ image: { provider: 'openai', model: 'gpt-4o' } });
+  });
+
+  it('PUT modalityModels: неизвестная модель → 400 с ключом provider/model', async () => {
+    const catalog = createCatalog({ openai: { 'gpt-4o': ['text', 'image'] } });
+    const { app } = createApp({ dataDir, lookupModel: catalog, env: {} });
+    const res = await put(app, {
+      attachments: { modalityModels: { image: { provider: 'openai', model: 'ghost-vision' } } },
+    });
+    expect(res.status).toBe(400);
+    expect((await json(res)).error.message).toContain('модель "openai/ghost-vision" не найдена');
+  });
+
+  it('PUT modalityModels: модель не принимает модальность → 400 со списком её модальностей', async () => {
+    const catalog = createCatalog({ openai: { 'gpt-3.5-turbo': ['text', 'pdf'] } });
+    const { app, live } = createApp({ dataDir, lookupModel: catalog, env: {} });
+    const res = await put(app, {
+      attachments: { modalityModels: { image: { provider: 'openai', model: 'gpt-3.5-turbo' } } },
+    });
+    expect(res.status).toBe(400);
+    const message = (await json(res)).error.message;
+    expect(message).toContain('modalityModels.image');
+    expect(message).toContain('openai/gpt-3.5-turbo');
+    expect(message).toContain('не принимает модальность image');
+    expect(message).toContain('text, pdf');
+    // Ничего не записали.
+    expect(live.getConfig().modalityModels).toEqual({});
+  });
+
+  it('PUT modalityModels: модальности модели неизвестны → 400 с просьбой синхронизировать каталог', async () => {
+    const catalog = createCatalog({ openai: { 'gpt-4o': undefined } });
+    const { app } = createApp({ dataDir, lookupModel: catalog, env: {} });
+    const res = await put(app, {
+      attachments: { modalityModels: { image: { provider: 'openai', model: 'gpt-4o' } } },
+    });
+    expect(res.status).toBe(400);
+    const message = (await json(res)).error.message;
+    expect(message).toContain('неизвестны модальности');
+    expect(message).toContain('POST /api/v2/models/fetch');
+  });
+
+  it('PUT modalityModels: ошибки формата → 400 (неизвестная модальность, пустой ref)', async () => {
+    const catalog = createCatalog({ openai: { 'gpt-4o': ['text', 'image'] } });
+    const { app } = createApp({ dataDir, lookupModel: catalog, env: {} });
+
+    const invalid = [
+      { attachments: { modalityModels: true } },
+      { attachments: { modalityModels: { text: { provider: 'openai', model: 'gpt-4o' } } } },
+      { attachments: { modalityModels: { image: 'gpt-4o' } } },
+      { attachments: { modalityModels: { image: { provider: 'openai', model: '' } } } },
+    ];
+    for (const body of invalid) {
+      const res = await put(app, body);
+      expect(res.status).toBe(400);
+      expect((await json(res)).error.code).toBe('VALIDATION_ERROR');
+    }
+  });
+
+  it('DELETE сбрасывает и modalityModels (возврат к config)', async () => {
+    const catalog = createCatalog({
+      openai: { 'gpt-4o': ['text', 'image'] },
+      local: { whisper: ['text', 'audio'] },
+    });
+    const { app, live } = createApp({
+      dataDir,
+      lookupModel: catalog,
+      config: { modalityModels: { image: { provider: 'openai', model: 'gpt-4o' } } },
+      env: {},
+    });
+
+    await put(app, { attachments: { modalityModels: { audio: { provider: 'local', model: 'whisper' } } } });
+    expect(live.getConfig().modalityModels).toEqual({
+      image: { provider: 'openai', model: 'gpt-4o' },
+      audio: { provider: 'local', model: 'whisper' },
+    });
+
+    const restored = await json(await app.request('/api/v2/settings/attachments', { method: 'DELETE' }));
+    expect(restored.attachments.modalityModels).toEqual({
+      image: { provider: 'openai', model: 'gpt-4o' },
+    });
+    expect(restored.saved).toEqual({});
+    expect(live.getConfig().modalityModels).toEqual({
+      image: { provider: 'openai', model: 'gpt-4o' },
+    });
+  });
+
+  it('аудит: в before/after попадает modalityModels', async () => {
+    const catalog = createCatalog({ openai: { 'gpt-4o': ['text', 'image'] } });
+    const audit = createAudit();
+    const { app } = createApp({ dataDir, lookupModel: catalog, audit, env: {} });
+    await put(app, {
+      attachments: { modalityModels: { image: { provider: 'openai', model: 'gpt-4o' } } },
+    });
+
+    const entry = audit.entries[0] as {
+      before: { modalityModels?: unknown };
+      after: { modalityModels?: unknown };
+    };
+    expect(entry.after.modalityModels).toEqual({ image: { provider: 'openai', model: 'gpt-4o' } });
+    expect(entry.before.modalityModels).toEqual({});
   });
 });
