@@ -514,7 +514,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | ADR-046 | Скиллы и slash-команды: формат SKILL.md, discovery, progressive disclosure, core-тул skill, команды/bundles, scope-API, UI (настройки/панели/статистика/`/`-автокомплит); остаток — install/trust/подписи и backend-админка каталога (PROP-068) | ⚠️ Частично | [adr-046](./docs/arch_decisions/adr-046-skills-and-slash-commands.md) |
 | PROP-047 | Память Synth (Gbrain + композиция): storage backbone, RAG по памяти и коду/докам, компрессия tool output, 4-layer retrieval, Obsidian bridge | 🧩 Предложение (vision) | [prop-047](./docs/arch_decisions/prop-047-memory-gbrain.md) |
 | PROP-048 | Self-help скиллы и admin-MCP: dogfooding-развёртывание, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN | 🧩 Предложение | [prop-048](./docs/arch_decisions/prop-048-self-help-skills-admin-mcp.md) |
-| PROP-049 | Git worktrees: тулы `git_worktree_*`, per-session cwd на базе worktree, детект secondary worktree, UI | 🧩 Предложение | [prop-049](./docs/arch_decisions/prop-049-git-worktrees.md) |
+| PROP-049 | Git worktrees: тулы `git_worktree_*`, per-session cwd на базе worktree, детект secondary worktree, UI | ✅ Принято (ADR-114) | [prop-049](./docs/arch_decisions/prop-049-git-worktrees.md) |
 | PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090, маршрутизация по `Session.engine` | 🧊 Icebox | [prop-050](./docs/arch_decisions/prop-050-external-engines-runner.md) |
 | ADR-051 | Шедулер и пайплайны (облегчённый n8n): `SchedulerService`, cron/interval-источник `schedule_fired` через Router (ADR-089), API/UI расписаний; Job-история, catch-up, force-run — да; семы/file-based мульти-инстанс — default OFF; пайплайны вынесены в ADR-100/ADR-101 (движок реализован), гибрид-размещение — нет | ⚠️ Частично | [adr-051](./docs/arch_decisions/adr-051-scheduler-pipelines.md) |
 | ADR-052 | Публичная API-платформа: per-service **service-key** со **scopes** + **проектной проекцией** (`allowedProjects`), public-**OpenAPI**, **SDK**, **webhooks**; **tenants исключены** (self-host: изоляция = инстанс, группировка = проект, ADR-014); этапы I–IV закрыты 2026-10-13 | ✅ Реализовано | [adr-052](./docs/arch_decisions/adr-052-public-api-platform.md) |
@@ -560,9 +560,9 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | ADR-094 | Наблюдаемость — Prometheus-метрики, liveness/readiness и эксплуатационные алерты | ⚠️ Частично | [adr-094](./docs/arch_decisions/adr-094-observability-metrics.md) |
 | ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ✅ Реализовано | [adr-095](./docs/arch_decisions/adr-095-god-object-decomposition.md) |
 | ADR-096 | Единый слой хранения — доменные порты с взаимозаменяемыми backend'ами | ✅ Реализовано | [adr-096](./docs/arch_decisions/adr-096-storage-layer.md) |
-| PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | 🧩 Предложение | [prop-096](./docs/arch_decisions/prop-096-background-subagent-sessions.md) |
+| PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | ✅ Принято (ADR-111) | [prop-096](./docs/arch_decisions/prop-096-background-subagent-sessions.md) |
 | ADR-097 | Класс расширения «хранилище» (storage) — контракт портов, драйверы из коробки | ⚠️ Частично | [adr-097](./docs/arch_decisions/adr-097-storage-provider-class.md) |
-| PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097](./docs/arch_decisions/prop-097-background-processes-registry.md) |
+| PROP-097 | Фоновые процессы — реестр и контроль через UI | ✅ Принято (ADR-113) | [prop-097](./docs/arch_decisions/prop-097-background-processes-registry.md) |
 | ADR-098 | Деградированный режим и восстановление хранилища | ⚠️ Частично | [adr-098](./docs/arch_decisions/adr-098-storage-degraded-recovery.md) |
 | ADR-099 | Единый egress-слой — доверие TLS/CA (и mTLS) для исходящих соединений | ⚠️ Частично | [adr-099](./docs/arch_decisions/adr-099-egress-tls-trust.md) |
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099](./docs/arch_decisions/prop-099-memory-footprint-optimization.md) |

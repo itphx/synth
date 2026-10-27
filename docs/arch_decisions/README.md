@@ -1,6 +1,6 @@
 # Архитектурные решения и предложения (ADR / PROP)
 
-> Индекс каталога: **ADR** — принятые решения (`adr-*.md`), **PROP** — предложения (`prop-*.md`).
+> Индекс каталога: **ADR** — принятые решения (`adr-*.md`), **PROP** — предложения (`prop-*.md`); принятое предложение остаётся в каталоге как история со статусом `✅ Принято (ADR-NNN)`.
 > Правила ведения, жизненный цикл и классы документов — [docs/ARCH_DECISIONS.md](../ARCH_DECISIONS.md);
 > предложения и сроки решений — [docs/roadmap.md](../roadmap.md).
 > Номера стабильны: файлы не переносятся и не удаляются (ссылок на id по репозиторию — тысячи).
@@ -82,6 +82,14 @@
 | ADR-103 | Ядро шлюзов (`@itphx/synth-gateway-core`) и контракт канала | ⚠️ Частично | [adr-103-gateway-core-channel-contract.md](./adr-103-gateway-core-channel-contract.md) |
 | ADR-106 | Authority-слой — полномочия пользователей и агентов как контент; Ф0–Ф5 реализованы (остаток — UI «Полномочия» и flavor-роли) | ⚠️ Частично | [adr-106-authority-layer.md](./adr-106-authority-layer.md) |
 
+## Принятые предложения (история)
+
+| ID | Тема | Статус | Файл |
+|----|------|--------|------|
+| PROP-049 | Git worktrees: тулы `git_worktree_*`, per-session cwd, детект secondary worktree, UI | ✅ Принято (ADR-114) | [prop-049-git-worktrees.md](./prop-049-git-worktrees.md) |
+| PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | ✅ Принято (ADR-111) | [prop-096-background-subagent-sessions.md](./prop-096-background-subagent-sessions.md) |
+| PROP-097 | Фоновые процессы — реестр и контроль через UI | ✅ Принято (ADR-113) | [prop-097-background-processes-registry.md](./prop-097-background-processes-registry.md) |
+
 ## Предложения
 
 | ID | Тема | Статус | Файл |
@@ -89,7 +97,6 @@
 | PROP-031 | Verification синт | 🧩 Предложение | [prop-031-verification-agent.md](./prop-031-verification-agent.md) |
 | PROP-037 | Security step перед коммитом | 🧩 Предложение | [prop-037-commit-security-step.md](./prop-037-commit-security-step.md) |
 | PROP-048 | Self-help скиллы и admin-MCP: dogfooding, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN | 🧩 Предложение | [prop-048-self-help-skills-admin-mcp.md](./prop-048-self-help-skills-admin-mcp.md) |
-| PROP-049 | Git worktrees: тулы `git_worktree_*`, per-session cwd, детект secondary worktree, UI | 🧩 Предложение | [prop-049-git-worktrees.md](./prop-049-git-worktrees.md) |
 | PROP-053 | CLI и TUI: паритет публикуемого и dev-CLI, CLI как клиент API v2, TUI | 🧩 Предложение | [prop-053-cli-tui.md](./prop-053-cli-tui.md) |
 | PROP-054 | Kanban-доска, backlog: интерактивная доска поверх `project.plan`, глобальный backlog, assignee/WIP | 🧩 Предложение | [prop-054-kanban-backlog.md](./prop-054-kanban-backlog.md) |
 | PROP-056 | MCP-сервер Synth и скиллы для внешних агентов: MCP над API v2, auth, права, форматы конфигов клиентов | 🧩 Предложение | [prop-056-synth-mcp-server.md](./prop-056-synth-mcp-server.md) |
@@ -106,8 +113,6 @@
 | PROP-083 | Кастомизация инстанса и брендинг: приветственное окно (+повторный вызов), конфиг брендинга (название/лого-подпись/ватермарка), серверная выдача; на потом — locked settings | 🧩 Предложение | [prop-083-instance-customization-branding.md](./prop-083-instance-customization-branding.md) |
 | PROP-085 | Мультимодальный ввод (звук, изображения, видео): типы `Part`, blob-хранилище вложений, предобработка (ASR/OCR/кадры), UI-композер | 🧩 Предложение | [prop-085-multimodal-input.md](./prop-085-multimodal-input.md) |
 | PROP-093 | Версионирование документации: версионные подкаталоги портала + селектор (вариант A под текущий nginx-деплой) или `mike` (вариант B при GitHub Pages), тегирование `synth-docs`, политика хранения | 🧩 Предложение | [prop-093-docs-versioning.md](./prop-093-docs-versioning.md) |
-| PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | 🧩 Предложение | [prop-096-background-subagent-sessions.md](./prop-096-background-subagent-sessions.md) |
-| PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097-background-processes-registry.md](./prop-097-background-processes-registry.md) |
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099-memory-footprint-optimization.md](./prop-099-memory-footprint-optimization.md) |
 | PROP-100 | SSRF и TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению (дефекты 1–3 закрыты; остаток — пиннинг) | 🧩 Предложение | [prop-100-ssrf-dns-rebinding.md](./prop-100-ssrf-dns-rebinding.md) |
 | PROP-101 | Локальные инсталляторы и платформенная дистрибуция (Windows / macOS / Linux) | 🧩 Предложение | [prop-101-local-installers-platforms.md](./prop-101-local-installers-platforms.md) |
@@ -139,4 +144,4 @@
 
 ---
 
-Всего документов: 104 (Решения: 47, Частично: 17, Предложения: 30, Vision: 8, Icebox: 1, Legacy: 1).
+Всего документов: 104 (Решения: 47, Частично: 17, Принятые предложения: 3, Предложения: 27, Vision: 8, Icebox: 1, Legacy: 1).

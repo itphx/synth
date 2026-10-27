@@ -2,7 +2,7 @@
 
 > ⚠️ **Принято как [ADR-114](./adr-114-git-worktrees.md) (2026-10-26).** Файл оставлен как история: правило каталога — файлы не удаляются (см. [ARCH_DECISIONS.md](../ARCH_DECISIONS.md) §3 «Формат ADR: заморозка на одну страницу»).
 
-> **Статус:** 🧩 Предложение — Git worktrees: тулы `git_worktree_*`, per-session cwd на базе worktree, детект secondary worktree, UI
+> **Статус:** ✅ Принято (ADR-114) — Git worktrees: тулы `git_worktree_*`, per-session cwd на базе worktree, детект secondary worktree, UI
 > **Решение до:** 2026-11-14
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D4, идея 4 + Obsidian `Фичи.md`).

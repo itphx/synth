@@ -9,13 +9,15 @@
  * Что делает:
  *   1. `--write` — парсит `> **Статус:**` (канонический токен) и H1 каждого `docs/arch_decisions/adr-*.md`
  *      и `docs/arch_decisions/prop-*.md` и пересобирает: таблицы в `docs/arch_decisions/README.md`
- *      (Решения / Частично / Предложения / Vision / Заменено / Отклонено / Legacy) и строки индекса
- *      ADR/PROP в `AGENTS.md` (между маркерами `<!-- ad-index:start -->` / `<!-- ad-index:end -->`).
+ *      (Решения / Частично / Принятые предложения (история) / Предложения / Vision / Заменено /
+ *      Отклонено / Legacy) и строки индекса ADR/PROP в `AGENTS.md` (между маркерами
+ *      `<!-- ad-index:start -->` / `<!-- ad-index:end -->`).
  *   2. проверяет, что все относительные ссылки на `adr-*.md` / `prop-*.md` (в md/ts/tsx) резолвятся, что
  *      каждый документ присутствует в индексе и что нет ссылок на несуществующий документ (упоминания
  *      «голых» номеров прототипных ADR 001–021 — warning).
- *   3. предупреждает, если `✅ Реализовано` без раздела «Статус в коде»/«Реализация», и если
- *      actionable-предложение (`🧩 Предложение`) без строки `> **Решение до:**`.
+ *   3. предупреждает, если `✅ Реализовано` без раздела «Статус в коде»/«Реализация», если
+ *      actionable-предложение (`🧩 Предложение`) без строки `> **Решение до:**`, и если
+ *      `✅ Принято` указано без существующего `(ADR-NNN)` (или не у предложения).
  *
  * Классы документов, правила ведения и жизненный цикл — docs/ARCH_DECISIONS.md.
  */
@@ -46,6 +48,7 @@ const TOKEN_PARTIAL = '⚠️ Частично';
 const TOKEN_PROPOSAL = '🧩 Предложение';
 const TOKEN_VISION = '🧩 Предложение (vision)';
 const TOKEN_ICEBOX = '🧊 Icebox';
+const TOKEN_ADOPTED = '✅ Принято';
 const TOKEN_SUPERSEDED = '⛔ Заменено';
 const TOKEN_REJECTED = '🗑 Отклонено';
 
@@ -53,6 +56,7 @@ const TOKEN_REJECTED = '🗑 Отклонено';
 const SECTIONS = [
   { title: 'Решения', tokens: [TOKEN_DONE] },
   { title: 'Частично', tokens: [TOKEN_PARTIAL] },
+  { title: 'Принятые предложения (история)', tokens: [TOKEN_ADOPTED] },
   { title: 'Предложения', tokens: [TOKEN_PROPOSAL, TOKEN_ICEBOX] },
   { title: 'Vision', tokens: [TOKEN_VISION] },
   { title: 'Заменено', tokens: [TOKEN_SUPERSEDED] },
@@ -122,6 +126,8 @@ function walk(dir, out = []) {
 /** Канонический токен статуса по строке `> **Статус:** …`. */
 function detectToken(statusLine) {
   if (!statusLine) return null;
+  // Принятое предложение: файл остаётся в каталоге как история, статус терминальный.
+  if (/Принято/.test(statusLine)) return TOKEN_ADOPTED;
   if (statusLine.includes(TOKEN_VISION)) return TOKEN_VISION;
   if (statusLine.includes(TOKEN_ICEBOX)) return TOKEN_ICEBOX;
   if (statusLine.includes(TOKEN_PROPOSAL)) return TOKEN_PROPOSAL;
@@ -147,6 +153,7 @@ function parseDocFile(path, legacy) {
   const titleLine = (text.match(DOC_TITLE_RE) || [])[1] || fileName;
   const statusLine = (text.match(STATUS_RE) || [])[1] || '';
   const deadline = (text.match(DEADLINE_RE) || [])[1] || '';
+  const adoptedMatch = statusLine.match(/Принято\s*\(ADR-(\d+)\)/);
   return {
     num,
     kind,
@@ -157,6 +164,7 @@ function parseDocFile(path, legacy) {
     title: titleLine.trim(),
     status: statusLine.trim(),
     token: detectToken(statusLine),
+    adoptedAs: adoptedMatch ? adoptedMatch[1] : null,
     deadline: deadline.trim(),
     legacy: Boolean(legacy),
     hasImplSection: IMPL_SECTION_RE.test(text),
@@ -206,13 +214,20 @@ function parseDescriptions(text, { stripLinks = false } = {}) {
 
 const README_HEADER = `# Архитектурные решения и предложения (ADR / PROP)
 
-> Индекс каталога: **ADR** — принятые решения (\`adr-*.md\`), **PROP** — предложения (\`prop-*.md\`).
+> Индекс каталога: **ADR** — принятые решения (\`adr-*.md\`), **PROP** — предложения (\`prop-*.md\`); принятое предложение остаётся в каталоге как история со статусом \`✅ Принято (ADR-NNN)\`.
 > Правила ведения, жизненный цикл и классы документов — [docs/ARCH_DECISIONS.md](../ARCH_DECISIONS.md);
 > предложения и сроки решений — [docs/roadmap.md](../roadmap.md).
 > Номера стабильны: файлы не переносятся и не удаляются (ссылок на id по репозиторию — тысячи).
 
 Таблицы собираются автоматически — вручную не правь:
 \`node scripts/adr-check.mjs --write\` (проверка — \`node scripts/adr-check.mjs\`).`;
+
+/** Ячейка статуса: у принятого предложения — с номером ADR. */
+function statusCell(doc) {
+  return doc.token === TOKEN_ADOPTED && doc.adoptedAs
+    ? `${TOKEN_ADOPTED} (ADR-${doc.adoptedAs})`
+    : doc.token || '—';
+}
 
 function renderReadme(docs, descriptions) {
   const lines = [README_HEADER, ''];
@@ -225,7 +240,7 @@ function renderReadme(docs, descriptions) {
     lines.push('| ID | Тема | Статус | Файл |', '|----|------|--------|------|');
     for (const doc of rows) {
       const desc = descriptions.get(doc.id) || doc.title;
-      lines.push(`| ${doc.id} | ${desc} | ${doc.token} | [${doc.fileName}](./${doc.fileName}) |`);
+      lines.push(`| ${doc.id} | ${desc} | ${statusCell(doc)} | [${doc.fileName}](./${doc.fileName}) |`);
     }
     lines.push('');
   }
@@ -242,6 +257,7 @@ function renderReadme(docs, descriptions) {
   const counts = [
     `Решения: ${docs.filter((d) => d.token === TOKEN_DONE).length}`,
     `Частично: ${docs.filter((d) => d.token === TOKEN_PARTIAL).length}`,
+    `Принятые предложения: ${docs.filter((d) => d.token === TOKEN_ADOPTED).length}`,
     `Предложения: ${docs.filter((d) => d.token === TOKEN_PROPOSAL).length}`,
     `Vision: ${docs.filter((d) => d.token === TOKEN_VISION).length}`,
     `Icebox: ${docs.filter((d) => d.token === TOKEN_ICEBOX).length}`,
@@ -261,7 +277,7 @@ function renderAgentsIndex(docs, descriptions) {
   ];
   for (const doc of docs.filter((d) => !d.legacy)) {
     const desc = descriptions.get(doc.id) || doc.title;
-    lines.push(`| ${doc.id} | ${desc} | ${doc.token || '—'} | [${doc.id.toLowerCase()}](./${doc.rel}) |`);
+    lines.push(`| ${doc.id} | ${desc} | ${statusCell(doc)} | [${doc.id.toLowerCase()}](./${doc.rel}) |`);
   }
   lines.push(INDEX_END);
   return lines.join('\n');
@@ -371,6 +387,19 @@ function checkStatusIntegrity(docs) {
     }
     if (doc.token === null) {
       warn(`${doc.rel}: неканонический статус — «${doc.status || 'нет строки Статус'}»`);
+    }
+    if (doc.token === TOKEN_ADOPTED) {
+      if (doc.kind !== 'PROP') warn(`${doc.rel}: статус «${TOKEN_ADOPTED}» допустим только для предложения`);
+      if (!doc.adoptedAs) warn(`${doc.rel}: «${TOKEN_ADOPTED}» без ссылки на ADR — ожидается «Принято (ADR-NNN)»`);
+      else if (!docs.some((d) => d.kind === 'ADR' && d.num === doc.adoptedAs)) {
+        warn(`${doc.rel}: принято как ADR-${doc.adoptedAs}, но такого ADR в каталоге нет`);
+      }
+    }
+    if (doc.kind === 'ADR' && [TOKEN_PROPOSAL, TOKEN_VISION, TOKEN_ICEBOX, TOKEN_ADOPTED].includes(doc.token)) {
+      warn(`${doc.rel}: статус предложения у ADR — «${doc.status}»`);
+    }
+    if (doc.kind === 'PROP' && (doc.token === TOKEN_DONE || doc.token === TOKEN_PARTIAL)) {
+      warn(`${doc.rel}: ADR-статус у предложения — используйте «${TOKEN_ADOPTED} (ADR-NNN)»`);
     }
   }
 }
