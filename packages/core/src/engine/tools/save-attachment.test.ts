@@ -68,7 +68,7 @@ describe('save_attachment — сохранение вложения сессии
   /** Вложение в «blob-хранилище» + медиа-часть сообщения. */
   function addAttachment(
     bytes: string,
-    options: { name?: string; mime?: string; messageId?: string; blobPath?: string } = {},
+    options: { name?: string; mime?: string; messageId?: string; blobPath?: string; seq?: number } = {},
   ): { blobPath: string; sha256: string; messageId: string } {
     const buffer = Buffer.from(bytes);
     const sha256 = createHash('sha256').update(buffer).digest('hex');
@@ -87,16 +87,17 @@ describe('save_attachment — сохранение вложения сессии
           size: buffer.length,
           ...(options.name ? { name: options.name } : {}),
         }),
+        options.seq,
       ),
     );
     return { blobPath, sha256, messageId };
   }
 
-  function makeMessage(id: string, part: Message['parts'][number]): Message {
+  function makeMessage(id: string, part: Message['parts'][number], seq = 0): Message {
     return {
       id,
       role: MessageRole.USER,
-      seq: 0,
+      seq,
       origin: 'local',
       parts: [part],
       content: '',
@@ -275,6 +276,37 @@ describe('save_attachment — сохранение вложения сессии
 
       expect(result.isError).toBeFalsy();
       expect((await readFile(join(workspace, 'attachments', 'third.png'))).toString()).toBe('THIRD');
+    });
+
+    it('выбор конкретного сообщения по `message_seq` — не «последнее вложение»', async () => {
+      addAttachment('OLD', { name: 'old.png', seq: 5, messageId: 'msg-old' });
+      addAttachment('NEW', { name: 'new.png', seq: 9, messageId: 'msg-new' });
+
+      const result = await saveAttachmentTool.execute({ message_seq: 5 }, makeCtx());
+
+      expect(result.isError).toBeFalsy();
+      expect((await readFile(join(workspace, 'attachments', 'old.png'))).toString()).toBe('OLD');
+      expect(result.metadata?.sha256).toBe(createHash('sha256').update('OLD').digest('hex'));
+    });
+
+    it('выбор сообщения по `message_id` + `name`', async () => {
+      addAttachment('A', { name: 'clip.mp4', seq: 5, messageId: 'msg-a' });
+      addAttachment('B', { name: 'clip.mp4', seq: 9, messageId: 'msg-b' });
+
+      const result = await saveAttachmentTool.execute(
+        { message_id: 'msg-a', name: 'clip.mp4' },
+        makeCtx(),
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect((await readFile(join(workspace, 'attachments', 'clip.mp4'))).toString()).toBe('A');
+    });
+
+    it('сообщение без вложений → `not_found`, без отката к последнему', async () => {
+      addAttachment('AAA', { name: 'a.png', seq: 5 });
+      const result = await saveAttachmentTool.execute({ message_seq: 6 }, makeCtx());
+      expect(result.isError).toBe(true);
+      expect(errorKey(result)).toBe('attach.tool.not_found');
     });
 
     it('текстовые части не считаются вложениями', async () => {

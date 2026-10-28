@@ -338,6 +338,46 @@ function audioTranscodeArgs(): string[] {
 }
 
 /**
+ * Аргументы упаковки аудио в MP4 с чёрным видео-треком.
+ *
+ * Нужно моделям с `video`, но без `audio`: они принимают видеофайл, а
+ * отдельную аудиодорожку — нет. Чёрный кадр — техническая «подложка», чтобы
+ * контейнер был валидным видео; модель слышит звук, а системная пометка
+ * сообщает, что визуального содержимого в оригинале не было.
+ *
+ * `frag_keyframe+empty_moov` — MP4 пишется в stdout без seek (moov вперёд).
+ */
+function audioAsVideoArgs(): string[] {
+  return [
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-i',
+    'pipe:0',
+    '-f',
+    'lavfi',
+    '-i',
+    'color=c=black:s=640x360:r=2',
+    '-shortest',
+    '-c:v',
+    'libx264',
+    '-preset',
+    'veryfast',
+    '-pix_fmt',
+    'yuv420p',
+    '-c:a',
+    'aac',
+    '-b:a',
+    '96k',
+    '-movflags',
+    'frag_keyframe+empty_moov',
+    '-f',
+    'mp4',
+    'pipe:1',
+  ];
+}
+
+/**
  * Аргументы извлечения кадров: до `MAX_VIDEO_FRAMES` кадров JPEG на stdout.
  *
  * Длительность известна (`part.data.durationMs`) — частота выбирается так,
@@ -506,6 +546,112 @@ async function buildParts(
     parts.push(makeMediaPart('image', stored));
   }
   return { ok: true, parts };
+}
+
+/** Вход упаковки аудио в видео (без готовой `Part`). */
+export interface WrapAudioAsVideoInput {
+  blobPath: string;
+  mime: string;
+  name?: string;
+  provider: string;
+  model: string;
+}
+
+/** Результат упаковки аудио в видео: производная часть + её байты. */
+export interface WrappedAudioAsVideo {
+  part: MediaPartData;
+  bytes: Buffer;
+}
+
+/**
+ * Упаковать аудио в MP4 с чёрным видео-треком (ADR-115).
+ *
+ * Для моделей, которые заявляют `video`, но не `audio`: отдельную аудиодорожку
+ * они не принимают, а видеофайл — принимают (RouterAI `video_url`). Видеоряд —
+ * чёрный placeholder; модель слышит звук, а в текст сообщения добавляется
+ * пометка, что оригинала «только звук».
+ *
+ * Возвращает `null`, если ffmpeg недоступен/не справился или объект пуст.
+ * Ничего не бросает.
+ */
+export async function wrapAudioAsVideo(
+  input: WrapAudioAsVideoInput,
+  deps: DeriveDeps,
+): Promise<WrappedAudioAsVideo | null> {
+  const log = deps.log ?? (() => undefined);
+  if (!input.blobPath) {
+    log(`[MediaDerive] аудио без blobPath (${input.mime}) — упаковка в видео невозможна`);
+    return null;
+  }
+  if (!mimeMatchesFamily(input.mime, 'audio')) {
+    log(`[MediaDerive] MIME ${input.mime} не аудио — упаковка в видео невозможна`);
+    return null;
+  }
+  if (!hasFfmpeg(deps)) {
+    log(`[MediaDerive] audio-as-video: нужен ffmpeg (${input.mime}) — программы нет в окружении`);
+    return null;
+  }
+
+  // Ключ отдельный от аудио-транскода (`-video`): один и тот же blob может
+  // обрабатываться и как wav для aux, и как MP4 для video-модели.
+  const key = `${deriveCacheKey({ ...input, family: 'audio' })}-video`;
+  const cachedPath = `${DERIVE_CACHE_DIR}/${key}.mp4`;
+  try {
+    if (await deps.blobs.exists(cachedPath)) {
+      const cached = await readBlob(deps, cachedPath);
+      if (cached && cached.length > 0) {
+        return {
+          part: {
+            blobPath: cachedPath,
+            sha256: sha256Hex(cached),
+            mime: 'video/mp4',
+            size: cached.length,
+            name: audioVideoName(input.name),
+          },
+          bytes: cached,
+        };
+      }
+    }
+  } catch {
+    // Кэш — оптимизация; ошибка чтения не мешает пересборке.
+  }
+
+  const source = await readBlob(deps, input.blobPath);
+  if (!source || source.length === 0) {
+    log(`[MediaDerive] объект аудио не прочитан (${input.blobPath})`);
+    return null;
+  }
+
+  const run = deps.runFfmpeg ?? runFfmpegSpawn;
+  let output: Buffer[];
+  try {
+    output = await run(audioAsVideoArgs(), source);
+  } catch (err) {
+    log(`[MediaDerive] ffmpeg не упаковал аудио в видео (${input.mime}): ${describeError(err)}`);
+    return null;
+  }
+  const mp4 = output[0];
+  if (!mp4 || mp4.length === 0) {
+    log(`[MediaDerive] ffmpeg вернул пустой MP4 (${input.mime})`);
+    return null;
+  }
+  if (mp4.length > MAX_DERIVED_BYTES) {
+    log(`[MediaDerive] упакованное видео больше ${MAX_DERIVED_BYTES} байт (${input.mime})`);
+    return null;
+  }
+
+  const stored = await storeDerived(deps, key, '.mp4', mp4, 'video/mp4');
+  if (!stored) return null;
+  return {
+    part: { ...stored, name: audioVideoName(input.name) },
+    bytes: mp4,
+  };
+}
+
+/** Имя аудио-в-видео: базовое имя исходника с расширением `.mp4`. */
+function audioVideoName(name: string | undefined): string {
+  const base = (name ?? 'audio').replace(/\.[^.]+$/, '').trim() || 'audio';
+  return `${base}.mp4`;
 }
 
 /**

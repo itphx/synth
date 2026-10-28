@@ -307,6 +307,10 @@ export class MemoryContextFileRepository implements ContextFileRepository {
     return '';
   }
 
+  getAudioAsVideoNote(): string {
+    return '';
+  }
+
   getMediaDeriveTemplate(): string {
     return '';
   }

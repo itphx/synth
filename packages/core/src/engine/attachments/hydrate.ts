@@ -74,6 +74,14 @@ import { stripMetadata } from './strip-metadata.js';
 /** Предел суммарного base64-объёма вложений в одном запросе (20 МиБ). */
 export const MAX_ATTACHMENT_BASE64_BYTES = 20 * 1024 * 1024;
 
+/**
+ * Пометка к аудио, упакованному в видео (ADR-115): модель слышит звук, но
+ * должна знать, что визуального содержимого в оригинале не было.
+ */
+export const AUDIO_AS_VIDEO_NOTE =
+  '[audio-only source: the original attachment contains sound only; '
+  + 'the video track is a black placeholder]';
+
 /** Метаданные вложения, нужные гидратации (без байтов). */
 export interface HydrateAttachmentMeta {
   mime: string;
@@ -109,11 +117,27 @@ export interface HydrateOptions {
   modalities?: readonly AttachmentModality[];
   /**
    * ADR-115: может ли провайдер хода принять вложение с таким MIME нативно
-   * (предикат `supportsNativeAudio`). Для `video` адаптеры пока не кодируют
-   * видеофайл — предикат вернёт `false`, и вложение пойдёт через aux-модель
-   * (кадры) либо будет помечено недоставленным, а не потеряно молча.
+   * (`supportsNativeAudio` / `supportsNativeVideo`). Аудио-контейнеры и видео
+   * зависят от протокола: RouterAI принимает `video_url`, официальный
+   * OpenAI/Anthropic — нет (там видео идёт кадрами через aux). Предикат `false`
+   * → aux/derive или явный drop, без тихой потери.
    */
   canDeliverNative?: (mime: string) => boolean;
+  /**
+   * ADR-115: упаковать аудио в MP4 с чёрным видео-треком для моделей с
+   * `video` (но без `audio`). Возвращает производную часть и её байты; `null` —
+   * упаковка невозможна (нет ffmpeg/ошибка) → обычный путь derive/drop.
+   */
+  wrapAudioAsVideo?: (input: {
+    blobPath: string;
+    mime: string;
+    name?: string;
+  }) => Promise<{ part: MediaPartData; bytes: Buffer } | null>;
+  /**
+   * ADR-115: текст пометки к аудио-в-видео (`prompts/system/AUDIO_AS_VIDEO`).
+   * Пусто/не задан — встроенная техническая строка.
+   */
+  audioAsVideoNote?: string;
   /** Предел суммарного base64 (по умолчанию `MAX_ATTACHMENT_BASE64_BYTES`). */
   maxTotalBase64Bytes?: number;
   /** Лог предупреждений (по умолчанию — молча). */
@@ -335,6 +359,7 @@ export async function hydrateMessageAttachments(
   }> = [];
   const droppedByMessage = new Map<number, DroppedEntry[]>();
   const derivedByMessage = new Map<number, DerivedEntry[]>();
+  const audioAsVideoNotes = new Map<number, string>();
   let modalityDropped = 0;
   let unavailableDropped = 0;
   let derivedCount = 0;
@@ -383,6 +408,14 @@ export async function hydrateMessageAttachments(
     }
   };
 
+  // Аудио→видео применяем только к **текущей** реплике пользователя: старые
+  // голосовые уже имеют транскрипт (или были обработаны), и повторно гонять
+  // их MP4 в каждый ход — лишний объём/стоимость.
+  let lastUserIndex = -1;
+  for (let i = 0; i < included.length; i += 1) {
+    if (included[i]!.role === MessageRole.USER) lastUserIndex = i;
+  }
+
   const limit = Math.min(messages.length, included.length);
   for (let index = 0; index < limit; index++) {
     const current = included[index]!;
@@ -398,6 +431,51 @@ export async function hydrateMessageAttachments(
     for (const ref of refs) {
       const modality = byteModality(ref.mime);
       if (modality === null) continue;
+
+      // ADR-115: модель принимает видео, но не аудио — упаковываем аудио в MP4
+      // с чёрным видеорядом и отдаём нативно. Это единственный способ «дать
+      // услышать» звук модели без модальности `audio` (RouterAI video_url).
+      const canWrapAudioAsVideo = modality === 'audio'
+        && index === lastUserIndex
+        && allowedModalities !== null
+        && allowedModalities.has('video')
+        && !allowedModalities.has('audio')
+        && options.wrapAudioAsVideo !== undefined
+        && options.canDeliverNative?.('video/mp4') === true;
+      if (canWrapAudioAsVideo) {
+        try {
+          const wrapped = await options.wrapAudioAsVideo!({
+            blobPath: ref.blobPath,
+            mime: ref.mime,
+            ...(ref.name ? { name: ref.name } : {}),
+          });
+          if (wrapped) {
+            candidates.push({
+              messageIndex: index,
+              attachment: {
+                mime: wrapped.part.mime,
+                ...(wrapped.part.name ? { name: wrapped.part.name } : {}),
+                // Байты производного MP4 — уже результат обработки, метаданные
+                // изображений/аудио здесь не применимы; stripMetadata вернёт их.
+                base64: stripMetadata(wrapped.bytes, wrapped.part.mime).toString('base64'),
+              },
+              sizeBytes: wrapped.bytes.length,
+              blobPath: wrapped.part.blobPath,
+            });
+            audioAsVideoNotes.set(index, wrapped.part.blobPath);
+            options.log?.(
+              `[attachments] аудио ${ref.blobPath} упаковано в видео для модели с video без audio`,
+            );
+            continue;
+          }
+        } catch (err) {
+          options.log?.(
+            `[attachments] не удалось упаковать аудио в видео ${ref.blobPath}: `
+              + `${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
       const modalityUnsupported = allowedModalities !== null && !allowedModalities.has(modality);
       // Транспорт провайдера может не уметь конкретный контейнер (ogg у
       // Anthropic-протокола), хотя модальность `audio` в каталоге есть.
@@ -608,6 +686,18 @@ export async function hydrateMessageAttachments(
       // сообщение (даже если отброшено несколько), порядок — как в обработке
       // (модальность по частям, затем лимит объёма).
       content = `${content}\n\n${dropsBlock(dropped, options.noticeTemplate, options.modelLabel, options.modelModalities)}`;
+    }
+    const audioAsVideoPath = audioAsVideoNotes.get(index);
+    if (
+      audioAsVideoPath
+      && !dropped?.some((entry) => entry.blobPath === audioAsVideoPath)
+    ) {
+      // Системная пометка: в оригинале был только звук, видео — техническая
+      // подложка. Без неё модель может решить, что видит чёрный кадр.
+      const note = options.audioAsVideoNote?.trim()
+        ? options.audioAsVideoNote.trim()
+        : AUDIO_AS_VIDEO_NOTE;
+      content = `${content}\n\n${note}`;
     }
     if (content !== message.content) next.content = content;
 

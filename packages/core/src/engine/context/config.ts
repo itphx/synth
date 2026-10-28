@@ -578,6 +578,24 @@ export class ContextConfig implements ContextFileRepository {
   }
 
   /**
+   * ADR-115: пометка к аудио, упакованному в видео для модели с `video`, но
+   * без `audio` (чёрный видеоряд — техническая подложка, оригинал — только
+   * звук). Файлы: prompts/system/AUDIO_AS_VIDEO.{lang}.md; override —
+   * `{userDataDir}/user/system/`. Пустая строка — вызывающий использует
+   * встроенную техническую пометку.
+   */
+  getAudioAsVideoNote(language = 'ru'): string {
+    const stem = 'AUDIO_AS_VIDEO';
+
+    // 1. Пользовательский override system-категории
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
+
+    // 2. Встроенный prompts/system/AUDIO_AS_VIDEO.{lang}.md
+    return this._readPrompt(stem, 'system', language) ?? '';
+  }
+
+  /**
    * ADR-115: шаблон промпта для модели **обработки** вложения (aux-модель).
    *
    * Файлы: prompts/system/MEDIA_DERIVE.{lang}.md — только локализованные

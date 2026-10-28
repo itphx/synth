@@ -187,11 +187,12 @@ export interface MediaPartData {
 
 - **Поиск — только в текущей сессии.** Источник — `messages[].parts[]` сессии `ctx.sessionId`
   (`ctx.extra.sessionManager.getSession`); медиа-части (`image`/`audio`/`video`/`file`) с валидным
-  `data {blobPath, sha256, mime, size, name?}`. Селектор: `sha256` — точное совпадение;
-  `name` — по имени файла (совпадений больше одного → **ошибка** `attach.tool.ambiguous` со списком
-  `name (sha8, messageId)` и подсказкой передать `sha256`, а не «первое попавшееся»); ничего не
-  задано — **последнее** медиа-вложение сессии. Нет вложений — `attach.tool.no_attachment`, нет
-  совпадений — `attach.tool.not_found`.
+  `data {blobPath, sha256, mime, size, name?}`. Селекторы комбинируются: сначала сообщение
+  (`message_id` — внутренний id, `message_seq` — порядковый номер), затем внутри него `sha256` —
+  точное совпадение, `name` — по имени файла (совпадений больше одного → **ошибка**
+  `attach.tool.ambiguous` со списком `name (sha8, messageId)` и подсказкой передать `sha256`, а не
+  «первое попавшееся»); ничего не задано — **последнее** медиа-вложение сессии. Нет вложений —
+  `attach.tool.no_attachment`, нет совпадений/сообщения — `attach.tool.not_found`.
 - **Только объекты вложений.** `blobPath` обязан быть из `attachments/` (проверка в туле и в
   `AttachmentService.resolve`/`read`): логи процессов, артефакты и прочие blob'ы через этот контур
   не выгружаются — иначе тул стал бы универсальным читателем хранилища.
@@ -207,6 +208,23 @@ export interface MediaPartData {
 - **Права.** Capability `file_write` (это запись в workspace), группа записи — plan-режим тул
   блокирует (ADR-025/ADR-029). Результат — `{content: attach.tool.saved, metadata: {path, blob_path,
   sha256, mime, size}}`; ошибки — ключи `attach.tool.*` (ADR-041).
+
+### Повторное скачивание вложения из Telegram
+
+**Решение 2026-10-28.** Если первая загрузка входящего вложения сорвалась (обрыв прокси/сети),
+событие доходит с пометкой `[вложение пропущено: …]`, а байтов в сессии нет. Шлюз помнит метаданные
+входящих сообщений (`state/inbound-messages.json`: `chatId`+`messageId` → `file_id`/`kind`/`size`,
+TTL 14 суток, лимит 500) и отдаёт MCP-тул **`tg_download_attachment`**:
+`{messageId, chatId?, kind?, fileId?}` → `getFile`/`downloadFile` с теми же повторами → MCP-ресурс
+(`resource.blob`, base64) + метаданные. Ядро (`collectMcpContent`) кладёт байты в blob и через
+`ToolResult.attachments` прикрепляет к **текущему** ходу — без нового user-сообщения в очереди.
+
+- `tg_status` отдаёт `recentInbound` (последние `messageId`/`kind`/`at` привязанного чата) — по нему
+  агент находит нужное сообщение.
+- Сообщение-источник в истории несёт `metadata.external_message_id`/`external_chat_id` (ADR-089) —
+  id для тула.
+- Ограничение: Bot API не отдаёт `getMessage`; нужен сохранённый `file_id` (или явный `fileId`).
+  Байты идут через MCP-ресурс, поэтому действуют транспортные капы 25 МиБ/файл (`MCP_ATTACHMENT_*`).
 
 ### Отправка файла в ответе (`send_attachment`)
 
@@ -406,11 +424,11 @@ aux-модели задаются конфигом `auxiliary.<task>.{provider,m
   путём отброса.
 - **Что уходит aux-модели.** `image` и `pdf` — часть как есть; `audio` — `wav`/`mp3` как есть,
   остальные контейнеры (`ogg`/`m4a`/`flac`/…) транскодируются `ffmpeg` в `wav` 16 кГц mono
-  (многие провайдеры принимают только wav/mp3); `video` — **только через кадры**: `ffmpeg`
-  извлекает до 5 кадров JPEG (равномерно по длительности, если она известна из
-  `part.data.durationMs`; иначе `fps=1`, не более пяти), кадры уходят image-частями, промпт просит
-  описать содержимое по кадрам. Видео-входа у провайдеров практически нет, поэтому «отправить
-  видеофайл как есть» не используется.
+  (многие провайдеры принимают только wav/mp3); `video` — нативно у RouterAI (`video_url`),
+  у остальных — через кадры: `ffmpeg` извлекает до 5 кадров JPEG (равномерно по длительности, если
+  она известна из `part.data.durationMs`; иначе `fps=1`, не более пяти), кадры уходят image-частями,
+  промпт просит описать содержимое по кадрам. Для модели с `video`, но без `audio`, аудио текущей
+  реплики упаковывается в MP4 с чёрным видеорядом (`wrapAudioAsVideo`) и уходит нативно.
 - **Производные объекты.** Транскод и кадры пишутся в blob-хранилище
   (`attachments/.derived/<ключ>.wav|<ключ>-<i>.jpg`): `MediaPartData` **не** несёт base64
   (часть всегда ссылается на объект, ADR-115/ADR-116), поэтому aux-вызов читает их тем же путём,
@@ -625,9 +643,18 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
     аудио-вложение всегда обрабатывается aux-моделью (Hermes), даже если модель сессии заявляет
     `audio` в каталоге — контейнеры голосовых слишком разнородны (ogg/opus/m4a), а провайдерский
     нативный путь для них часто неполный;
-  - **видео не уходит нативно**: ни один адаптер не кодирует видеофайл в контент провайдера;
-    гидратация считает транспорт `video` неподдерживаемым и применяет aux-модель (кадры через
-    `ffmpeg`) либо помечает вложение недоставленным — тихой потери нет;
+  - **видео — нативно у RouterAI, иначе кадры**: OpenAI-совместимый RouterAI принимает
+    `{type:'video_url', video_url:{url:'data:video/mp4;base64,…'}}` (проверено на живом API
+    2026-10-28: модель видит и слышит ролик); официальный OpenAI/Anthropic такого блока не знают —
+    там гидратация считает транспорт `video` неподдерживаемым и применяет aux-модель (кадры через
+    `ffmpeg`) либо помечает вложение недоставленным — тихой потери нет. Предикат —
+    `supportsNativeVideo(type, baseUrl)` (`providers/base.ts`);
+  - **аудио → видео для модели с `video`, но без `audio`**: текущая (последняя) реплика
+    пользователя упаковывается `ffmpeg` в MP4 с чёрным видеорядом (`wrapAudioAsVideo`,
+    `derive.ts`; `-movflags frag_keyframe+empty_moov`), уходит нативно как `video`, а в `content`
+    добавляется пометка `prompts/system/AUDIO_AS_VIDEO.{ru,en}.md` — «оригинал содержал только
+    звук». Старые аудио-реплики не переупаковываются (уже имеют транскрипт/не тратят объём каждый
+    ход); упаковка возможна только при нативном видео у провайдера;
 - отброшенное вложение (`modality`/`limit`/`unavailable`) материализуется в `<workspace>/attachments/`
   (`engine/attachments/materialize.ts`), путь сообщается модели блоком `[ATTACHMENTS NOT DELIVERED]`
   (шаблон — `prompts/system/ATTACHMENTS_DROPPED.{ru,en}.md`); нет workspace — блок без пути;
@@ -654,7 +681,8 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   `createModalityModelLookup` в core и backend);
 - **обработка медиа (этап 2, §«Модели обработки по модальностям» → «Реализация»):**
   `deriveModalityText` (`engine/attachments/derive.ts`) — image/pdf как есть, audio wav/mp3 как есть
-  либо транскод `ffmpeg` в wav 16 кГц mono, video — только кадры (до 5) через `ffmpeg`; кэш результата
+  либо транскод `ffmpeg` в wav 16 кГц mono, video — нативно у RouterAI либо кадры (до 5) через
+  `ffmpeg`; аудио для video-only модели — MP4 с чёрным видеорядом; кэш результата
   `attachments/.derived/<sha256>.json`, производные объекты в blob; промпты
   `prompts/system/MEDIA_DERIVE.{ru,en}.md` + `ContextConfig.getMediaDeriveTemplate`; детект `ffmpeg`
   (`isFfmpegAvailable`, ADR-078);
@@ -693,6 +721,12 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
 - 2026-10-27 — принято как ADR-115 из [PROP-085](./prop-085-multimodal-input.md). Зафиксировано: байты на
   томе через `BlobStore` (не в БД), `blob_refs` для дедупа и GC, аддитивное `attachments` в LLM-контракте,
   UI по образцу OpenChamber (`tmp/refs/openchamber`), видео/ASR/OCR — вне объёма.
+- 2026-10-28 — **видео нативно у RouterAI, аудио-в-видео, повторное скачивание.**
+  `supportsNativeVideo` + `video_url` в OpenAI-адаптере; `wrapAudioAsVideo` (MP4 с чёрным
+  видеорядом) для моделей с `video` без `audio` + `AUDIO_AS_VIDEO.{ru,en}.md`; `save_attachment`
+  получил выбор сообщения (`message_id`/`message_seq`); шлюз хранит `file_id` входящих сообщений
+  (`state/inbound-messages.json`) и отдаёт MCP-тул `tg_download_attachment` (повторное скачивание
+  после обрыва прокси; байты — MCP-ресурсом в текущий ход).
 - 2026-10-27 — **этап 2: обработка медиа.** Добавлены сервис `deriveModalityText` (aux-модель →
   текст, модель сессии не меняется), промпты `MEDIA_DERIVE.{ru,en}.md` и загрузчик
   `getMediaDeriveTemplate`, детект `ffmpeg` (`isFfmpegAvailable`, ADR-078), кэш результатов в blob

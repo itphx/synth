@@ -15,6 +15,7 @@ import {
   deriveCachePath,
   deriveModalityText,
   splitJpegFrames,
+  wrapAudioAsVideo,
   type DeriveDeps,
   type DeriveFamily,
   type DeriveInput,
@@ -223,6 +224,52 @@ describe('deriveModalityText: audio', () => {
     expect(result).toEqual({ ok: false, reason: 'failed' });
     expect(deps.chat).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining('ffmpeg'));
+  });
+});
+
+describe('wrapAudioAsVideo', () => {
+  it('ogg → MP4 с чёрным видеорядом; производная часть video/mp4 и байты', async () => {
+    const mp4 = Buffer.from('ftyp-mp4-data');
+    const deps = makeDeps({
+      bytes: Buffer.from('OggS'),
+      hasFfmpeg: true,
+      runFfmpeg: async () => [mp4],
+    });
+    const input = {
+      blobPath: BLOB_PATH,
+      mime: 'audio/ogg',
+      name: 'голос.ogg',
+      provider: 'routerai',
+      model: 'minimax/minimax-m3.1-flash',
+    };
+
+    const result = await wrapAudioAsVideo(input, deps);
+
+    expect(result?.bytes).toEqual(mp4);
+    expect(result?.part.mime).toBe('video/mp4');
+    expect(result?.part.name).toBe('голос.mp4');
+    expect(result?.part.size).toBe(mp4.length);
+    expect(result?.part.blobPath).toContain('attachments/.derived/');
+    expect(await deps.blobs.read(result!.part.blobPath)).toEqual(mp4);
+    expect(deps.runFfmpegSpy).toHaveBeenCalledWith(
+      expect.arrayContaining(['-f', 'mp4', 'pipe:1', '-shortest', '-c:a', 'aac']),
+      Buffer.from('OggS'),
+    );
+  });
+
+  it('нет ffmpeg → null (hydrate уйдёт в обычный derive/drop)', async () => {
+    const deps = makeDeps({ bytes: Buffer.from('OggS'), hasFfmpeg: false });
+    expect(
+      await wrapAudioAsVideo(
+        {
+          blobPath: BLOB_PATH,
+          mime: 'audio/ogg',
+          provider: 'routerai',
+          model: 'm',
+        },
+        deps,
+      ),
+    ).toBeNull();
   });
 });
 

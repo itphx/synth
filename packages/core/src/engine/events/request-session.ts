@@ -256,6 +256,15 @@ export function eventToMessage(event: SynthEvent): Message {
   const isCron = event.source === 'cron';
   const attachments = event.attachments ?? [];
 
+  const payloadObject =
+    event.payload && typeof event.payload === 'object'
+      ? (event.payload as { messageId?: unknown; chatId?: unknown })
+      : {};
+  const externalMessageId =
+    typeof payloadObject.messageId === 'number' || typeof payloadObject.messageId === 'string'
+      ? String(payloadObject.messageId)
+      : undefined;
+
   const metadata: Record<string, unknown> = {
     source: event.source,
     event_id: event.id,
@@ -263,6 +272,12 @@ export function eventToMessage(event: SynthEvent): Message {
     ...(event.identity?.principalId ? { principal_id: event.identity.principalId } : {}),
     ...(event.identity?.chatKey ? { chat_key: event.identity.chatKey } : {}),
     ...(event.identity?.threadKey ? { thread_key: event.identity.threadKey } : {}),
+    // ADR-089/ADR-115: id сообщения во внешнем канале (Telegram) — по нему
+    // шлюз может повторно скачать вложение (`tg_download_attachment`).
+    ...(externalMessageId ? { external_message_id: externalMessageId } : {}),
+    ...(typeof payloadObject.chatId === 'string' || typeof payloadObject.chatId === 'number'
+      ? { external_chat_id: String(payloadObject.chatId) }
+      : {}),
     // ADR-115 × ADR-089: счётчик вложений — для аудита/UI (байты — в blob).
     ...(attachments.length > 0 ? { attachments_count: attachments.length } : {}),
   };

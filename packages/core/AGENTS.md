@@ -811,9 +811,10 @@
   `currentMessages` **следующей итерации текущего хода**. Нового user-сообщения в очереди нет —
   иначе модель не видит результат в текущем ходе и зацикливается на повторных вызовах.
   `blob_refs` пишет инъекция оркестратора. `save_attachment` (`save-attachment.ts`, `file_write`) —
-  обратное: медиа-часть **текущей** сессии (`sha256`/`name`/последняя; неоднозначное имя →
-  `attach.tool.ambiguous`) выгружается в workspace без перезаписи (`link`/`COPYFILE_EXCL`,
-  занято → `attach.tool.exists`). `send_attachment` (`send-attachment.ts`, `file_read`) — файл
+  обратное: медиа-часть **текущей** сессии выгружается в workspace без перезаписи
+  (`link`/`COPYFILE_EXCL`, занято → `attach.tool.exists`); селекторы комбинируются — сообщение
+  (`message_id`/`message_seq`), затем `sha256`/`name`/последняя; неоднозначное имя →
+  `attach.tool.ambiguous`, нет вложений в указанном сообщении → `attach.tool.not_found`. `send_attachment` (`send-attachment.ts`, `file_read`) — файл
   уходит **получателю ответа**: часть кладётся в коллектор хода (`ctx.extra.outboundAttachments`),
   финализация добавляет её в `parts` финального assistant-сообщения и в `stream.done.attachments`
   (шлюзы раздают только их); ошибка/отмена хода ничего не отправляет. Три тула работают только
@@ -1719,11 +1720,15 @@ blob-порты и `blob_refs` — ADR-116.
   **drop** (`reason: modality|limit|unavailable`). Для **аудио** при заданной
   `attachments.modalityModels.audio` derive идёт **до** native (явный выбор модели обработки
   важнее нативного пути — голосовые контейнеры слишком разнородны). `canDeliverNative`
-  (`supportsNativeAudio`): провайдер может не уметь контейнер, хотя модальность `audio` в
-  каталоге есть — тогда derive/drop вместо молчаливой потери. Матрица: официальный OpenAI —
-  wav/mp3; RouterAI (OpenAI) — wav/mp3/ogg; Anthropic-протокол — только wav и только RouterAI
-  (официальный Anthropic аудио не принимает, Anthropic-совместимый RouterAI ogg/mp3 не слышит).
+  (`supportsNativeAudio`/`supportsNativeVideo`): провайдер может не уметь контейнер, хотя
+  модальность в каталоге есть — тогда derive/drop вместо молчаливой потери. Матрица: официальный
+  OpenAI — wav/mp3, видео нет; RouterAI (OpenAI) — wav/mp3/ogg и **видео** через `video_url`;
+  Anthropic-протокол — только wav и только RouterAI (официальный Anthropic аудио не принимает,
+  Anthropic-совместимый RouterAI ogg/mp3 не слышит; видео — нет).
   Модальности **неизвестны** — фильтра нет (вложение уходит как есть: тихая потеря запрещена).
+  Модель с `video`, но без `audio`: аудио **текущей** реплики упаковывается `ffmpeg` в MP4 с
+  чёрным видеорядом (`wrapAudioAsVideo`, `AUDIO_AS_VIDEO.{ru,en}.md`) и уходит нативно; старые
+  аудио-реплики не переупаковываются.
   Суммарный base64 ограничен (`MAX_ATTACHMENT_BASE64_BYTES` 20 МиБ, отбрасываются самые старые);
   здесь же `stripMetadata` (JPEG/PNG — EXIF/IPTC/XMP/PNG-текст): в blob лежит **оригинал**,
   очистка — только при отправке провайдеру (и в aux-вызове).
@@ -1735,8 +1740,9 @@ blob-порты и `blob_refs` — ADR-116.
   дедуп по содержимому, иначе суффикс `-2`, `-3`), модели сообщается путь; нет workspace/прав —
   `null` (ход не падает). Уборка каталога не автоматизирована.
 - **Обработка модальностей (`derive.ts`).** `deriveModalityText`: `image`/`pdf` — как есть,
-  `audio` — `wav`/`mp3` как есть либо транскод `ffmpeg` в wav 16 кГц mono, `video` — только
-  кадры (до 5) через `ffmpeg`; производные объекты и кэш — в `attachments/.derived/`
+  `audio` — `wav`/`mp3` как есть либо транскод `ffmpeg` в wav 16 кГц mono, `video` — нативно у
+  RouterAI либо кадры (до 5) через `ffmpeg`; `wrapAudioAsVideo` — аудио → MP4 с чёрным видеорядом
+  для модели с `video` без `audio`; производные объекты и кэш — в `attachments/.derived/`
   (ключ `sha256(blobPath|provider/model|family)`); вызов — только через `GatewayProvider`;
   ошибка/пустой ответ → обычный отброс (исключений не бросает). `ffmpeg` — внешняя
   зависимость (`isFfmpegAvailable` через порт исполнения, ADR-078), нет — `no_ffmpeg`.

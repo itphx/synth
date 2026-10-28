@@ -540,6 +540,7 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
   const wavAttachment = { mime: 'audio/wav', base64: 'UklGRg==' };
   const oggAttachment = { mime: 'audio/ogg', base64: 'T2dnUw==' };
   const pdfAttachment = { mime: 'application/pdf', base64: 'JVBERi0=' };
+  const videoAttachment = { mime: 'video/mp4', base64: 'AAAAIGZ0eXA=' };
   const namedPdfAttachment = { mime: 'application/pdf', name: 'plan.pdf', base64: 'JVBERi0=' };
 
   function providerWithModel(model: string): OpenAIPrivate {
@@ -613,6 +614,28 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
       { type: 'text', text: 'что на фото?' },
       { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } },
     ]);
+  });
+
+  it('видео у RouterAI → video_url (data-URL), модель видит/слышит ролик', () => {
+    const formatted = providerWithUrl('https://routerai.ru/api/v1/chat/completions')._formatMessages([
+      makeMessage({ role: 'user', content: 'что на видео?', attachments: [videoAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'что на видео?' },
+      {
+        type: 'video_url',
+        video_url: { url: 'data:video/mp4;base64,AAAAIGZ0eXA=' },
+      },
+    ]);
+  });
+
+  it('видео у обычного OpenAI → не отправляется (нет video_url)', () => {
+    const formatted = providerWithModel('gpt-4o')._formatMessages([
+      makeMessage({ role: 'user', content: 'что на видео?', attachments: [videoAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toBe('что на видео?');
   });
 
   it('PDF → file-блок с data-URL (RouterAI принимает документ только так)', () => {

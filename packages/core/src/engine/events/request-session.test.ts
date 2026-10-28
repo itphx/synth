@@ -1498,6 +1498,16 @@ describe('eventToMessage: вложения события (ADR-115 × ADR-089)',
     expect(eventToMessageText(event({ source: 'ci', payload: { build: 42 } }))).toBe('{"build":42}');
   });
 
+  it('сообщение внешнего канала сохраняет external_message_id/chat_id (для повторного скачивания)', () => {
+    const msg = eventToMessage(event({
+      payload: { chatId: '450316139', messageId: 108, text: 'видео' },
+    }));
+    expect(msg.metadata).toMatchObject({
+      external_message_id: '108',
+      external_chat_id: '450316139',
+    });
+  });
+
   it('Telegram-сообщение без текста и вложений → маркер, не JSON', () => {
     const e = event({
       payload: {

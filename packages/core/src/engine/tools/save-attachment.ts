@@ -78,6 +78,8 @@ const MEDIA_PART_TYPES: readonly string[] = ['image', 'audio', 'video', 'file'];
 /** Найденная медиа-часть: сообщение-владелец + данные объекта. */
 interface AttachmentCandidate {
   messageId: string;
+  /** Порядковый номер сообщения в сессии (`seq`), если он есть. */
+  messageSeq?: number;
   type: MediaPartType;
   data: MediaPartData;
 }
@@ -135,7 +137,9 @@ function toMediaData(type: PartType, data: unknown): MediaPartData | null {
 }
 
 /** Все медиа-вложения сессии в порядке истории (старые → новые). */
-function collectAttachments(messages: readonly { id: string; parts?: unknown }[]): AttachmentCandidate[] {
+function collectAttachments(
+  messages: readonly { id: string; seq?: number; parts?: unknown }[],
+): AttachmentCandidate[] {
   const found: AttachmentCandidate[] = [];
   for (const message of messages) {
     if (!Array.isArray(message.parts)) continue;
@@ -143,7 +147,12 @@ function collectAttachments(messages: readonly { id: string; parts?: unknown }[]
       if (!part || typeof part.type !== 'string') continue;
       const data = toMediaData(part.type, part.data);
       if (!data) continue;
-      found.push({ messageId: message.id, type: part.type as MediaPartType, data });
+      found.push({
+        messageId: message.id,
+        ...(typeof message.seq === 'number' ? { messageSeq: message.seq } : {}),
+        type: part.type as MediaPartType,
+        data,
+      });
     }
   }
   return found;
@@ -161,11 +170,21 @@ export const saveAttachmentTool: ToolDefinition = {
   description:
     'Save an attachment of the current session to the project working directory as a file '
     + '(image, audio, video, PDF, …), so that shell and file tools can process it. Attachments are '
-    + 'searched in the session history: pass sha256 to pick an exact one, name to pick by file name, '
-    + 'or nothing to take the latest media attachment. Path is relative to the working directory '
-    + '(default attachments/<name|sha8>); absolute paths and paths outside the working directory are '
-    + 'rejected, and an existing file is never overwritten.',
+    + 'searched in the session history: pass message_id or message_seq to restrict the search to one '
+    + 'message, sha256 to pick an exact attachment, name to pick by file name, or nothing to take the '
+    + 'latest media attachment. Selectors combine: message first, then sha256/name within it. Path is '
+    + 'relative to the working directory (default attachments/<name|sha8>); absolute paths and paths '
+    + 'outside the working directory are rejected, and an existing file is never overwritten.',
   parameters: z.object({
+    message_id: z
+      .string()
+      .optional()
+      .describe('Internal session message id (as in the message history) to search attachments in'),
+    message_seq: z
+      .number()
+      .int()
+      .optional()
+      .describe('Session message ordinal (seq, as shown by read_session_reference)'),
     name: z
       .string()
       .optional()
@@ -192,10 +211,18 @@ export const saveAttachmentTool: ToolDefinition = {
         parsed.error.issues.map((i) => `${i.path.join('.') || 'root'}: ${i.message}`).join('; '),
       );
     }
-    const params = parsed.data as { name?: string; sha256?: string; path?: string };
+    const params = parsed.data as {
+      message_id?: string;
+      message_seq?: number;
+      name?: string;
+      sha256?: string;
+      path?: string;
+    };
     // Пустая строка — «не задано»: модель часто присылает "" вместо отсутствия поля.
     const wantName = params.name?.trim() ? params.name.trim() : undefined;
     const wantSha = params.sha256?.trim() ? params.sha256.trim() : undefined;
+    const wantMessageId = params.message_id?.trim() ? params.message_id.trim() : undefined;
+    const wantSeq = params.message_seq;
 
     const extra = ctx.extra as SaveAttachmentExtra | undefined;
     const service = extra?.attachmentService;
@@ -206,7 +233,29 @@ export const saveAttachmentTool: ToolDefinition = {
 
     // Вложения ищутся только в текущей сессии: чужую историю тул не читает.
     const session = await sessions.getSession(ctx.sessionId);
-    const candidates = session ? collectAttachments(session.messages) : [];
+    let candidates = session ? collectAttachments(session.messages) : [];
+
+    // Явный выбор сообщения — до выбора вложения. Так «последнее вложение»
+    // не подменяет файл из другого хода (частый случай: агент сохраняет
+    // вложение, а в сессии есть более позднее/раннее медиа).
+    if (wantMessageId !== undefined || wantSeq !== undefined) {
+      candidates = candidates.filter((candidate) =>
+        (wantMessageId === undefined || candidate.messageId === wantMessageId)
+        && (wantSeq === undefined || candidate.messageSeq === wantSeq),
+      );
+      if (candidates.length === 0) {
+        return failureResult(
+          'attach.tool.not_found',
+          {
+            path: wantMessageId ?? `seq ${wantSeq}`,
+          },
+          {
+            ...(wantMessageId !== undefined ? { message_id: wantMessageId } : {}),
+            ...(wantSeq !== undefined ? { message_seq: wantSeq } : {}),
+          },
+        );
+      }
+    }
 
     let selected: AttachmentCandidate | undefined;
     if (wantSha) {

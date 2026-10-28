@@ -89,11 +89,13 @@ function makeDeps(blobs: Record<string, Buffer>): HydrateDeps & { reads: string[
         ? 'application/pdf'
         : blobPath.includes('jpeg')
           ? 'image/jpeg'
-          : blobPath.endsWith('.ogg')
-            ? 'audio/ogg'
-            : blobPath.endsWith('.wav')
-              ? 'audio/wav'
-              : 'image/png';
+          : blobPath.endsWith('.mp4')
+            ? 'video/mp4'
+            : blobPath.endsWith('.ogg')
+              ? 'audio/ogg'
+              : blobPath.endsWith('.wav')
+                ? 'audio/wav'
+                : 'image/png';
       return { mime, size: bytes.length, sha256: 'a'.repeat(64), name: blobPath.split('/').pop() };
     },
     read: async (blobPath) => {
@@ -722,6 +724,79 @@ describe('hydrateMessageAttachments: derive (ADR-115)', () => {
     expect(result[0]!.attachments).toBeUndefined();
     expect(result[0]!.content).toBe('вопрос\n\n[video: clip.mp4]\nНа кадрах: двор и две машины');
     expect(result[0]!.debug?.attachmentsDerived).toBe(1);
+  });
+
+  it('video нативно (RouterAI video_url) → байты уходят провайдеру, без derive', async () => {
+    const deps = makeDeps({ 'attachments/aa/clip.mp4': Buffer.from('ftyp') });
+    const derive = vi.fn(async () => 'не должен вызываться');
+
+    const result = await hydrateMessageAttachments([llmMessage()], videoSource(), deps, {
+      modalities: ['text', 'video'],
+      canDeliverNative: () => true,
+      derive,
+    });
+
+    expect(derive).not.toHaveBeenCalled();
+    expect(result[0]!.attachments).toEqual([
+      {
+        mime: 'video/mp4',
+        name: 'clip.mp4',
+        base64: Buffer.from('ftyp').toString('base64'),
+      },
+    ]);
+    // Плейсхолдер уже в content сообщения (его ставит `eventToMessage`);
+    // нативная доставка content не меняет.
+    expect(result[0]!.content).toBe('вопрос');
+  });
+
+  it('audio → видео для модели с video без audio: MP4 + пометка «только звук»', async () => {
+    const deps = makeDeps({ 'attachments/aa/voice.ogg': Buffer.from('OggS') });
+    const derive = vi.fn(async () => 'не должен вызываться');
+    const wrapAudioAsVideo = vi.fn(async () => ({
+      part: {
+        blobPath: 'attachments/.derived/audio-video.mp4',
+        sha256: 'b'.repeat(64),
+        mime: 'video/mp4',
+        size: 4,
+        name: 'voice.mp4',
+      },
+      bytes: Buffer.from('MP4!'),
+    }));
+
+    const result = await hydrateMessageAttachments([llmMessage()], audioSource(), deps, {
+      modalities: ['text', 'video'],
+      canDeliverNative: (mime) => mime === 'video/mp4',
+      derive,
+      wrapAudioAsVideo,
+    });
+
+    expect(wrapAudioAsVideo).toHaveBeenCalledTimes(1);
+    expect(derive).not.toHaveBeenCalled();
+    expect(result[0]!.attachments).toEqual([
+      {
+        mime: 'video/mp4',
+        name: 'voice.mp4',
+        base64: Buffer.from('MP4!').toString('base64'),
+      },
+    ]);
+    expect(result[0]!.content).toContain('audio-only source');
+    expect(result[0]!.content).toContain('black placeholder');
+  });
+
+  it('audio → видео не удалось → обычный derive (транскрипт)', async () => {
+    const deps = makeDeps({ 'attachments/aa/voice.ogg': Buffer.from('OggS') });
+    const derive = vi.fn(async () => 'транскрипт');
+    const wrapAudioAsVideo = vi.fn(async () => null);
+
+    const result = await hydrateMessageAttachments([llmMessage()], audioSource(), deps, {
+      modalities: ['text', 'video'],
+      canDeliverNative: (mime) => mime === 'video/mp4',
+      derive,
+      wrapAudioAsVideo,
+    });
+
+    expect(derive).toHaveBeenCalledTimes(1);
+    expect(result[0]!.content).toBe('вопрос\n\n[audio: voice.ogg]\nтранскрипт');
   });
 
   it('video без aux-модели → отброс modality, без тихой потери', async () => {

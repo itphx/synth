@@ -7,6 +7,7 @@ import {
   resolveSystemPromptText,
   parseTokenPricing,
   supportsNativeAudio,
+  supportsNativeVideo,
   toNonNegativeNumber,
   type DetailedModelInfo,
   type LLMAttachment,
@@ -442,6 +443,8 @@ export class OpenAIProvider extends BaseProvider {
    * ADR-115: части контента OpenAI для вложений.
    *
    *  - `image/*` → `{type:'image_url', image_url:{url:'data:<mime>;base64,…'}}`;
+   *  - `video/*` (RouterAI) → `{type:'video_url', video_url:{url:'data:<mime>;base64,…'}}`
+   *    (проверено: модель видит и слышит ролик);
    *  - `application/pdf` → `{type:'file', file:{filename, file_data:'data:application/pdf;base64,…'}}`
    *    (формат OpenAI-совместимых API; RouterAI принимает так PDF и читает документ);
    *  - `audio/wav` (в т.ч. `audio/x-wav`) → `input_audio` c `format:'wav'`;
@@ -478,6 +481,15 @@ export class OpenAIProvider extends BaseProvider {
             filename: sanitizeAttachmentFileName(attachment.name),
             file_data: `data:application/pdf;base64,${attachment.base64}`,
           },
+        });
+        continue;
+      }
+      if (mime.startsWith('video/') && supportsNativeVideo('openai', this.url)) {
+        // RouterAI принимает видео как `video_url` (data-URL); официальный
+        // OpenAI/Anthropic такого блока не знают — там видео идёт кадрами.
+        parts.push({
+          type: 'video_url',
+          video_url: { url: `data:${attachment.mime};base64,${attachment.base64}` },
         });
         continue;
       }

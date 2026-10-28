@@ -438,6 +438,18 @@ export function supportsNativeAudio(providerType: string, baseUrl: string, mime:
   return false;
 }
 
+/**
+ * ADR-115: может ли провайдер принять **видеофайл** нативно.
+ *
+ * Проверено на живом API: RouterAI (OpenAI-совместимый) принимает
+ * `{type:'video_url', video_url:{url:'data:video/mp4;base64,…'}}` и модель
+ * видит/слышит ролик. Официальный OpenAI и Anthropic такого блока не знают;
+ * для них видео по-прежнему идёт кадрами через aux-модель.
+ */
+export function supportsNativeVideo(providerType: string, baseUrl: string): boolean {
+  return (providerType === 'openai' || providerType === 'generic') && isRouterAiUrl(baseUrl);
+}
+
 export abstract class BaseProvider {
   url: string;
   apiKey: string;

@@ -10,7 +10,7 @@ import { DebugCollector } from '../debug.js';
 import { computeUsageCost } from '../providers/usage.js';
 
 import type { LLMMessage, LLMAttachment, CancellationToken, BaseProvider, SystemPromptPayload, CachePolicy } from '../providers/base.js';
-import { ProviderFactory, supportsNativeAudio } from '../providers/base.js';
+import { ProviderFactory, supportsNativeAudio, supportsNativeVideo } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import type { ContextOptimizerGatewayHooks } from './context/optimizer.js';
@@ -59,7 +59,7 @@ import { WorktreeDirectoryMissingError } from './worktree/errors.js';
 import type { WorktreeService } from './worktree/service.js';
 // ADR-115: гидратация вложений сообщений (blob → base64) перед LLM-вызовом.
 import { createHydrateDeps, hydrateMessageAttachments, type DroppedAttachmentRef, type HydrateDeps } from './attachments/hydrate.js';
-import { deriveModalityText } from './attachments/derive.js';
+import { deriveModalityText, wrapAudioAsVideo as wrapAudioAsVideoPart } from './attachments/derive.js';
 import { materializeAttachment } from './attachments/materialize.js';
 import { AttachmentService, isAttachmentPath } from './attachments/service.js';
 import { serializeMessage, serializeSession } from '../server/serialize.js';
@@ -2542,21 +2542,56 @@ export class ChatOrchestrator {
         // только затем прежний путь (отброс + материализация). Не настроено —
         // `undefined` (derive не вызывается).
         const derive = this._buildAttachmentDerive(session, target.language);
-        // ADR-115: транспортные возможности провайдера (контейнеры аудио).
-        // Модальность в каталоге может включать `audio`, но протокол не умеет
-        // конкретный формат (ogg у Anthropic-совместимых) — тогда вложение
-        // идёт через aux или помечается недоставленным, а не теряется молча.
+        // ADR-115: транспортные возможности провайдера (контейнеры аудио/видео).
+        // Модальность в каталоге может включать `audio`/`video`, но протокол не
+        // умеет конкретный контейнер (ogg у Anthropic, видео у официального
+        // OpenAI) — тогда вложение идёт через aux или помечается недоставленным,
+        // а не теряется молча.
         const providerConfig = this._providerLoader(target.providerName);
         const canDeliverNative = providerConfig
           ? (mime: string) => supportsNativeAudio(
               providerConfig.type ?? '',
               providerConfig.baseUrl ?? '',
               mime,
-            )
+            ) || (mime.toLowerCase().startsWith('video/') && supportsNativeVideo(
+              providerConfig.type ?? '',
+              providerConfig.baseUrl ?? '',
+            ))
+          : undefined;
+        // ADR-115: аудио → MP4 с чёрным видеорядом для моделей с `video`, но
+        // без `audio`. ffmpeg проверяем лениво — только если такой случай
+        // реально встретится в истории.
+        const blobs = this._resolveAttachmentBlobs();
+        let ffmpegAvailable: boolean | undefined;
+        const wrapAudioAsVideo = providerConfig
+          ? async (input: { blobPath: string; mime: string; name?: string }) => {
+              if (ffmpegAvailable === undefined) {
+                ffmpegAvailable = await isFfmpegAvailable(this._executionPort).catch(() => false);
+              }
+              return wrapAudioAsVideoPart(
+                {
+                  ...input,
+                  provider: target.providerName,
+                  model: target.modelId,
+                },
+                {
+                  blobs,
+                  blobsRead: (path) => blobs.read(path),
+                  hasFfmpeg: () => ffmpegAvailable === true,
+                  // Упаковка не вызывает aux-модель; chat обязателен типом.
+                  chat: async () => ({ text: '' }),
+                  log: (message) => warning('ATTACHMENTS', message),
+                },
+              );
+            }
           : undefined;
         return hydrateMessageAttachments(messages, source, this._getAttachmentHydrateDeps(), {
           modalities,
           ...(canDeliverNative ? { canDeliverNative } : {}),
+          ...(wrapAudioAsVideo ? { wrapAudioAsVideo } : {}),
+          ...(this._contextConfig?.getAudioAsVideoNote
+            ? { audioAsVideoNote: this._contextConfig.getAudioAsVideoNote(target.language) }
+            : {}),
           noticeTemplate: this._attachmentsDroppedTemplate(target.language),
           // Модель сессии и её модальности — для блока «не доставлено»: модель
           // видит, чего не хватает, и может предложить другую (тул `list_models`).
