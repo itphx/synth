@@ -309,25 +309,51 @@ jobs:
       - name: Рендер шаблонов
         run: bash scripts/ci-helm.sh template synth charts/synth
 
-  # Образы (PROP-082, шаг 6): сборка flavor'ов + smoke-тесты.
+  # Образы (PROP-082, шаг 6): проверка, что Dockerfile'ы собираются.
   #
   # Публикации здесь НЕТ: образы публикуются по тегу релиза
   # (`.gitverse/workflows/release.yaml` → джоба `publish-images-gitea`,
-  # реестр Gitea `git.itphx.ru`). Здесь — только проверка, что flavor'ы
-  # собираются и что toolchain внутри них работает.
+  # реестр Gitea `git.itphx.ru`). Там собираются ВСЕ flavor'ы и `slim` —
+  # отдельным шагом kaniko на flavor и с `--cache=true` (кэш слоёв в
+  # `synth-buildcache`), поэтому дорогие стадии не пересобираются заново.
+  #
+  # В CI проверяем только `core` обоих образов (backend + executor):
+  #   * kaniko собирает не только целевую стадию, но и стадии, объявленные в
+  #     Dockerfile РАНЬШЕ неё (кэша в CI нет: `--no-push` без `--cache`);
+  #   * `slim` объявлен последним — после `dev`/`full`, а те выполняют
+  #     `install-tier-4.sh` (npm MCP-серверы). На раннере GitVerse
+  #     registry.npmjs.org отваливается по таймауту 300 с, и шаг `slim`
+  #     упирался в потолок джобы (~30 мин) — джоба падала не из-за своего
+  #     кода. В логе шага это видно: `Building stage 'dev' [idx: '3']`,
+  #     `Building stage 'browser' [idx: '5']` (предки пересобирались
+  #     заново), затем `curl: (28) ... Timeout was reached`;
+  #   * `core` идёт сразу после `build`, поэтому занимает ~2.5 мин и проверяет
+  #     главное для CI: стадию `build` (pnpm install + сборка пакетов) и
+  #     рантайм control plane/исполнителя.
+  # Итог: покрытие flavor-матрицы в CI сознательно сужено до `core`; остальные
+  # flavor'ы и `slim` проверяются на релизе (`publish-images-gitea` +
+  # `scripts/publish-images.sh`).
   #
   # Раннер GitVerse может быть без docker-демона (прецедент: сборка arm64
   # образов в release.yaml — best-effort с предупреждением). Поэтому два пути:
-  #   * демон есть → `docker build` + `scripts/smoke-image.sh` для КАЖДОГО
-  #     flavor'а; провал сборки или проверки ВАЛИТ джобу;
-  #   * демона нет → kaniko `--no-push` (проверка, что Dockerfile собирается в
-  #     CI-контуре) и предупреждение «smoke-тесты пропущены». Полная матрица
-  #     flavor'ов собирается и публикуется в release.yaml по тегу.
+  #   * демон есть → `docker build` + `scripts/smoke-image.sh` для flavor'ов
+  #     (`scripts/ci-images.sh`, матрица НЕ сужена: docker переиспользует слои
+  #     между flavor'ами, стадии-предки не пересобираются); провал сборки или
+  #     проверки ВАЛИТ джобу;
+  #   * демона нет → kaniko `--no-push` только для `core` (см. выше) и
+  #     предупреждение «smoke-тесты пропущены».
+  # На раннере GitVerse демона нет (диагностика всегда даёт available=false),
+  # поэтому фактически работает только kaniko-ветка; docker-путь оставлен как
+  # есть — он не исполнялся и сужать его «на всякий случай» смысла нет.
+  #
+  # Потолок: раннер GitVerse убивает джобу примерно на 30-й минуте независимо
+  # от `timeout-minutes` (замер: 30:01 при выставленных 90). Ставим 25, чтобы
+  # вместо невнятного `context deadline exceeded` был честный таймаут.
   images:
     name: Образы (сборка + smoke)
     runs-on: ubuntu-latest
     needs: [test-backend, test-executor]
-    timeout-minutes: 90
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -346,7 +372,7 @@ jobs:
         if: ${{ steps.dockerdaemon.outputs.available == 'true' }}
         run: bash scripts/ci-images.sh
 
-      # kaniko без push: проверяем, что flavor-стадии Dockerfile'ов собираются
+      # kaniko без push: проверяем, что целевые стадии Dockerfile'ов собираются
       # в CI-контуре (kaniko не задаёт BUILDPLATFORM/TARGETPLATFORM — это
       # важно для flavor-стадий, см. PROP-082, «Multistage-сборка»).
       - name: Сборка synth-backend:core (kaniko, без push)
@@ -357,18 +383,6 @@ jobs:
             --context=dir://${{ gitverse.workspace }}
             --dockerfile=docker/Dockerfile.backend
             --target=core
-            --no-push
-            --snapshot-mode=redo
-            --verbosity=info
-
-      - name: Сборка synth-backend:slim (kaniko, без push)
-        if: ${{ steps.dockerdaemon.outputs.available != 'true' }}
-        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
-        with:
-          args: >-
-            --context=dir://${{ gitverse.workspace }}
-            --dockerfile=docker/Dockerfile.backend
-            --target=slim
             --no-push
             --snapshot-mode=redo
             --verbosity=info
