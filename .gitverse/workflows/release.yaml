@@ -419,6 +419,13 @@ jobs:
           echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
 
       - name: Ожидание доступности версии в npmjs
+        # Страж не должен сам валить сборку: на облачном пуле egress до
+        # registry.npmjs.org нестабилен (на 0.12.4 — `HTTP 000` у всех пакетов
+        # при том, что в том же прогоне джоба npm видела их опубликованными).
+        # Если сеть есть — ждём; если нет — идём собирать: образ `synth` сам
+        # делает `npm install -g @itphx/synth@<v>` и упадёт с понятной ошибкой,
+        # если пакета действительно нет.
+        continue-on-error: true
         run: bash scripts/wait-npm-version.sh "${{ steps.docker_tags.outputs.version }}"
 
       # Авторизация сразу в двух реестрах: gitverse.ru (как раньше) и ghcr.io
