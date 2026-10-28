@@ -432,10 +432,22 @@ export class BackgroundExecService {
     // Дождаться записи уже принятых кусков: иначе чтение сразу после
     // завершения процесса могло бы не увидеть хвост вывода.
     await Promise.all([entry.stdoutChain, entry.stderrChain]);
-    const [stdout, stderr] = await Promise.all([
+    let [stdout, stderr] = await Promise.all([
       this._readLog(entry.outPath, stdoutOffset, limit),
       this._readLog(entry.errPath, stderrOffset, limit),
     ]);
+    // Гонка «чтение ↔ последняя дописка»: `close` мог прийти между снимком
+    // цепочки записи и чтением файла, тогда терминальный статус уже виден, а
+    // байты ещё не на диске. Процесс короткий (например `printf hi`) — поток
+    // вывода закрывался бы пустым. Если по счётчикам вывод был, а прочитали
+    // пусто — ждём цепочки ещё раз и перечитываем.
+    if (entry.stdoutBytes + entry.stderrBytes > 0 && stdout.content === '' && stderr.content === '') {
+      await Promise.all([entry.stdoutChain, entry.stderrChain]);
+      [stdout, stderr] = await Promise.all([
+        this._readLog(entry.outPath, stdoutOffset, limit),
+        this._readLog(entry.errPath, stderrOffset, limit),
+      ]);
+    }
     return {
       status: entry.status,
       exitCode: entry.exitCode,
