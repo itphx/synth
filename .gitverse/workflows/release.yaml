@@ -395,7 +395,13 @@ jobs:
   # нет RUN (см. docker/Dockerfile*).
   build-docker:
     name: Docker образ
-    needs: [build, publish-npmjs]
+    # Зависимость от джобы npm снята: она проверяет видимость версии через
+    # registry.npmjs.org, а сеть раннера до реестра бывает настолько медленной,
+    # что джоба не укладывается в потолок (0.12.4: 8 пакетов опубликованы,
+    # джоба висела на проверке). Реальная гарантия осталась ниже — шаг
+    # «Ожидание доступности версии в npmjs» (scripts/wait-npm-version.sh):
+    # если версии нет, сборка образа падает здесь же.
+    needs: [build]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -864,6 +870,11 @@ jobs:
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Бандлы качают Node и ripgrep из сети раннера (кэш /root/.cache живёт не
+    # на всех раннерах). На 0.12.4 сборка упала с «нет сети и нет кэша
+    # ripgrep» — бандлы нужны только как ассеты для закрытого контура, поэтому
+    # джоба best-effort: релиз (страница, npm, образы, зеркало) не страдает.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -914,7 +925,7 @@ jobs:
   # и при неудаче лишь предупреждает, не роняя джобу.
   create-release:
     name: GitVerse Release
-    needs: [build, changelog, publish-npmjs, offline-images, offline-bundles]
+    needs: [build, changelog, publish-npmjs, offline-images]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1085,7 +1096,7 @@ jobs:
   # чтобы не сломать рабочий релизный CI. Порядок гарантирован через needs.
   publish-github:
     name: GitHub-зеркало (refs + Release)
-    needs: [build, changelog, build-docker, offline-images, offline-bundles]
+    needs: [build, changelog, build-docker, offline-images]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
