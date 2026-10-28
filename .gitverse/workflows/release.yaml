@@ -336,9 +336,19 @@ jobs:
           pnpm --filter @itphx/synth build
 
       - name: Публикация в npmjs.org
+        # Публикация — fail-closed: реальная ошибка `pnpm publish` валит джобу.
+        # Проверка видимости вынесена отдельным неблокирующим шагом ниже: сеть
+        # раннера до registry.npmjs.org бывает настолько медленной, что один
+        # запрос идёт минуты (0.12.4: 8 пакетов опубликованы, проверка не успела).
         run: |
           npm config set "//registry.npmjs.org/:_authToken" "${{ secrets.NPM_TOKEN }}"
-          bash scripts/publish-packages.sh https://registry.npmjs.org
+          bash scripts/publish-packages.sh https://registry.npmjs.org --no-verify
+
+      - name: Проверка видимости версии в npmjs (не блокирует релиз)
+        continue-on-error: true
+        run: |
+          npm config set "//registry.npmjs.org/:_authToken" "${{ secrets.NPM_TOKEN }}"
+          bash scripts/publish-packages.sh https://registry.npmjs.org --verify-only
 
   publish-gitverse-npm:
     name: GitVerse Package Registry

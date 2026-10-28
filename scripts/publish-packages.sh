@@ -35,10 +35,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 VERIFY_ONLY=0
+NO_VERIFY=0
 POSITIONAL=()
 for arg in "$@"; do
     case "$arg" in
         --verify-only) VERIFY_ONLY=1 ;;
+        --no-verify) NO_VERIFY=1 ;;
         *) POSITIONAL+=("$arg") ;;
     esac
 done
@@ -104,6 +106,7 @@ echo "━━━ publish-packages ━━━"
 echo "  Реестр:   $REGISTRY"
 echo "  Версия:   $VERSION"
 [ "$VERIFY_ONLY" = "1" ] && echo "  Режим:    только проверка (--verify-only)"
+[ "$NO_VERIFY" = "1" ] && echo "  Режим:    без проверки видимости (--no-verify)"
 echo ""
 
 PUBLISHED=0
@@ -134,6 +137,17 @@ if [ "$VERIFY_ONLY" != "1" ]; then
 fi
 
 # --- Проверка, что версии реально доступны в реестре ---
+#
+# `--no-verify` отделяет публикацию от проверки: в CI проверка идёт отдельным
+# шагом (release.yaml) и не валит релиз. Причина — сеть раннера до
+# registry.npmjs.org: на 0.12.4 один запрос к реестру занимал минуты, и
+# проверка не уложилась в бюджет, хотя все 8 пакетов были опубликованы.
+if [ "$NO_VERIFY" = "1" ]; then
+    echo ""
+    echo "Проверка видимости пропущена (--no-verify)."
+    exit 0
+fi
+
 # pnpm может напечатать "Published", но версия останется в automated review
 # («Validating») и будет отдавать 404. npm публикует версию с задержкой
 # (автоматический review/репликация; наблюдалось 4–6 мин), поэтому ждём
