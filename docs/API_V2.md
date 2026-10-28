@@ -455,6 +455,7 @@ content-addressed, поэтому повторная загрузка тех ж�
 
 | Лимит | Где проверяется | По умолчанию | Нарушение |
 |---|---|---|---|
+| `attachments.enabled` | загрузка и staging | `true` | `415 attachments_disabled` — вложения выключены администратором: клиенту показывать, что отправка вложений недоступна (повтор запроса не поможет; код общий для загрузки в сессию и staging) |
 | `attachments.maxBytesPerFile` | загрузка | 25 МиБ | `413 PAYLOAD_TOO_LARGE` (по `Content-Length` — до чтения тела, с запасом 64 КиБ на multipart-обвязку; затем по фактическому размеру) |
 | `attachments.allowedMimePrefixes`, запрет SVG | загрузка | см. выше | `415 UNSUPPORTED_MEDIA_TYPE` |
 | `attachments.maxFilesPerMessage` | `POST …/prompt` | 10 | `400 VALIDATION_ERROR` |
@@ -467,7 +468,8 @@ content-addressed, поэтому повторная загрузка тех ж�
 сиротой и уйдёт по `gcDays`). Прочие коды загрузки: `400 VALIDATION_ERROR` (нет поля `file`/битый
 multipart), `401`, `403 FORBIDDEN` (чужая сессия, prefix-guard), `404 NOT_FOUND` (сессии нет),
 `415 UNSUPPORTED_MEDIA_TYPE` (тип вне белого списка, SVG; сюда же попадает пустой файл — MIME по
-содержимому не определяется).
+содержимому не определяется), `415 attachments_disabled` (вложения выключены администратором —
+`attachments.enabled=false`; клиенту код говорит, что дело в настройке инстанса, а не в файле).
 
 **Раздача (`GET`/`HEAD`).** `:partId` — id **медиа-части сообщения** (`image`/`audio`/`video`/`file`),
 а не `id` из ответа загрузки; путь объекта (`blobPath`) передаётся только в теле промпта. Доступ
@@ -484,7 +486,8 @@ multipart), `401`, `403 FORBIDDEN` (чужая сессия, prefix-guard), `404
 которых нет пользовательской сессии: шлюзы (Telegram/VK) принимают файл из внешнего канала,
 пайплайны — из шага. Контракт запроса/ответа тот же, что у загрузки в сессию (`multipart/form-data`,
 поле `file`; необязательное `name`) → **201** `{id, blobPath, sha256, mime, size, name?}`, ошибки —
-те же (`400`, `413`, `415`). Полученный `blobPath` дальше передаётся в `POST /sessions/:id/prompt`
+те же (`400`, `413`, `415`, включая `415 attachments_disabled` при выключенных вложениях).
+Полученный `blobPath` дальше передаётся в `POST /sessions/:id/prompt`
 (`attachments: string[]`), в `POST /api/v2/events` (§5.26 — `attachments[]` со ссылками и
 метаданными) или используется как артефакт прогона.
 
