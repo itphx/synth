@@ -106,7 +106,11 @@ jobs:
   lint-and-test:
     name: CI проверки
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Полный рекурсивный прогон (8 пакетов, ui и core — самые долгие) занимает ~13 мин,
+    # плюс install/сборка/typecheck/lint ~2.5 мин. 15 не хватало: релиз 0.12.4 упал
+    # ровно на 15:00 в шаге «Тесты» (run 1945719). Потолок раннера GitVerse — ~30 мин,
+    # поэтому выше поднимать смысла нет.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
