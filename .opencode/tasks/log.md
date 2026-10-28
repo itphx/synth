@@ -1338,3 +1338,11 @@
 - **Доки:** ADR-113 (блок «Обновлено 2026-10-28»), `docs/EXECUTION.md` (`/exec/:processId/stop` — сигнал группе), `packages/executor/AGENTS.md` (раздел остановки).
 - **Запись аудита обновлена** под новый коммит аудита `dfc5c8c1` и прогон 1945567; гейт `security-gate --version 0.12.4` — 5 pass / 0 fail.
 - **Коммит:** `dfc5c8c1`.
+
+## 2026-10-28 — test 0.12.4: сборка, публикация в Gitea, Fleet
+
+- **Собрано/опубликовано** (из `feat/0.13-data-layer-attachments`, HEAD `d400779a`): `git.itphx.ru/itphx/synth-backend:0.12.4`, `synth-ui:0.12.4`, `synth-executor:0.12.4-full`; Helm-чарт `synth 0.12.4-2` (appVersion 0.12.4, HTTP 201, скачан и сверен). Скрипт `synth-deploy/scripts/build-and-publish.sh --test-only --app-version 0.12.4` (dry-run → реальный прогон, лог `synth-deploy/tmp/deploy-0.12.4.log`).
+- **Деплой:** `synth-deploy` `f38e1d7` `test: 0.12.4` → `main`; Fleet GitRepo `synth` `Ready=True`, бандл `synth-test` 1/1; Helm `synth-test` ревизия **54** (chart `0.12.4-2`, app `0.12.4`), `synth-test-allinone` ревизия 33.
+- **Проверки:** `https://synth.k3s.itphx.loc/health` → `{"status":"healthy","version":"0.12.4"}`; `/ready` → `ready/storage ok/0.12.4`; rollout backend 1/1, ui 1/1, executor 2/2; imageID совпадают с digest'ами публикации; в `dist/background.js` исполнителя есть фикс `process.kill(-pid)` (`d400779a`); smoke `/worktrees`, `/memory/status`, `/metrics` → 401 (как ожидается).
+- **Откат:** `helm -n synth rollback synth-test 53` (+ `synth-test-allinone 32`) и `git revert f38e1d7` в `synth-deploy`. Внимание: теги образов мутабельны — после релизной джобы `publish-images-gitea` откат на 54 перестанет возвращать тот же код; безопасная точка — ревизия 53 (0.12.3).
+- **Расхождения:** чарт получился `0.12.4-2`, а dry-run показывал `0.12.4-1` (в реестре `-1` нет; существующие версии не перезаписаны). `synth-test-allinone` остался на backend `0.12.2-full` (скрипт не пинит `backend-image-tag` без `BACKEND_FLAVOR`) — прежнее состояние, не регрессия.
