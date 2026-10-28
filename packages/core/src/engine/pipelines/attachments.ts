@@ -607,7 +607,6 @@ export function createPipelineAttachmentDerive(
         },
         {
           blobs: deps.blobs,
-          blobsRead: (path) => deps.blobs.read(path),
           hasFfmpeg: () => hasFfmpeg,
           ...(deps.promptTemplate ? { promptTemplate: deps.promptTemplate } : {}),
           log,

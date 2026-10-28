@@ -56,9 +56,11 @@
 
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { makeMediaPart, type MediaPartData, type Part } from '@itphx/synth-shared';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
 
@@ -125,15 +127,18 @@ export interface DeriveDeps {
   /** Blob-хранилище: кэш результата и производные объекты. */
   blobs: BlobStore;
   /**
-   * Сырое чтение байтов объекта для `ffmpeg`. Не задано — используется
-   * `blobs.read` (порт умеет отдавать содержимое целиком).
+   * Сырое чтение байтов объекта для `ffmpeg` (совместимость/инъекция). Задан —
+   * blob читается целиком (`blobsRead`/`blobs.read`) и передаётся буфером; не
+   * задан — поток `blobs.readStream` во временный файл (в памяти целиком не
+   * держится).
    */
   blobsRead?: (path: string) => Promise<Buffer | null>;
   /** Есть ли `ffmpeg` в окружении (см. `isFfmpegAvailable`, ADR-078). */
   hasFfmpeg: () => boolean;
   /**
-   * Запуск `ffmpeg` с байтами входа; stdout — кусками. Не задан — реальный
-   * `spawn('ffmpeg', …)` с временным файлом (в тестах всегда инъекция).
+   * Запуск `ffmpeg` с байтами входа; stdout — кусками (инъекция тестов и
+   * встраивания). Не задан — реальный `spawn('ffmpeg', …)`, вход — временный
+   * файл, в который blob пишется потоком (`blobs.readStream`).
    */
   runFfmpeg?: (args: string[], input: Buffer) => Promise<Buffer[]>;
   /**
@@ -281,20 +286,79 @@ function describeError(err: unknown): string {
  * Реальный запуск `ffmpeg`: вход — временный файл, stdout — кусками.
  *
  * MP4/WebM с `moov` в конце не читаются из неразмеченного stdin (`partial
- * file` → `Could not open encoder before EOF`), поэтому байты сначала
- * сохраняются во временный файл, а `pipe:0` заменяется на путь. Файл удаляется
- * в `finally`; таймаут и предел вывода — чтобы зависший/раздувшийся транскод не
- * держал ход сессии. Только `spawn` с argv (без shell).
+ * file` → `Could not open encoder before EOF`), поэтому `pipe:0` заменяется на
+ * путь к файлу. Файл удаляется в `finally`; таймаут и предел вывода — чтобы
+ * зависший/раздувшийся транскод не держал ход сессии. Только `spawn` с argv
+ * (без shell).
+ */
+function spawnFfmpegOnPath(args: string[], inputPath: string): Promise<Buffer[]> {
+  return spawnFfmpeg(args.map((arg) => (arg === 'pipe:0' ? inputPath : arg)));
+}
+
+/**
+ * Совместимый буферный путь: объект уже прочитан целиком (`blobsRead`/инъекция
+ * `runFfmpeg`) — байты кладутся во временный файл и `ffmpeg` получает путь.
  */
 async function runFfmpegSpawn(args: string[], input: Buffer): Promise<Buffer[]> {
   const dir = await mkdtemp(join(tmpdir(), 'synth-ffmpeg-'));
   const inputPath = join(dir, 'input.bin');
   try {
     await writeFile(inputPath, input);
-    return await spawnFfmpeg(args.map((arg) => (arg === 'pipe:0' ? inputPath : arg)));
+    return await spawnFfmpegOnPath(args, inputPath);
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+/**
+ * Потоковый путь (по умолчанию): blob пишется во временный файл через
+ * `BlobStore.readStream`, `ffmpeg` получает **путь** — объект целиком в памяти
+ * не держится (видео бывает крупным). `null` — объект не прочитан/пуст (та же
+ * причина отказа, что и у буферного пути). Временный каталог удаляется в
+ * `finally` при любом исходе: успех, ошибка чтения, сбой `ffmpeg`, таймаут.
+ */
+async function runFfmpegStream(
+  deps: DeriveDeps,
+  blobPath: string,
+  args: string[],
+): Promise<Buffer[] | null> {
+  const dir = await mkdtemp(join(tmpdir(), 'synth-ffmpeg-'));
+  const inputPath = join(dir, 'input.bin');
+  try {
+    // Ошибка чтения — та же причина отказа, что и «объект не прочитан».
+    const stream = await deps.blobs.readStream(blobPath).catch(() => null);
+    if (!stream) return null;
+    try {
+      await pipeline(stream, createWriteStream(inputPath));
+    } catch (err) {
+      deps.log?.(
+        `[MediaDerive] объект не записан во временный файл (${blobPath}): ${describeError(err)}`,
+      );
+      return null;
+    }
+    const info = await stat(inputPath).catch(() => null);
+    if (!info || info.size === 0) return null;
+    return await spawnFfmpegOnPath(args, inputPath);
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * Запуск `ffmpeg` для blob-объекта. По умолчанию — поток во временный файл;
+ * при инъекциях (`runFfmpeg`/`blobsRead`) — прежний буферный контракт.
+ * `null` — объект не прочитан/пуст.
+ */
+async function runFfmpegForBlob(
+  deps: DeriveDeps,
+  blobPath: string,
+  args: string[],
+): Promise<Buffer[] | null> {
+  const run = deps.runFfmpeg;
+  if (!run && !deps.blobsRead) return runFfmpegStream(deps, blobPath, args);
+  const bytes = await readBlob(deps, blobPath);
+  if (!bytes || bytes.length === 0) return null;
+  return run ? run(args, bytes) : runFfmpegSpawn(args, bytes);
 }
 
 function spawnFfmpeg(args: string[]): Promise<Buffer[]> {
@@ -488,21 +552,16 @@ async function buildParts(
     return { ok: false, reason: 'no_ffmpeg' };
   }
 
-  const bytes = await readBlob(deps, data.blobPath);
-  if (!bytes || bytes.length === 0) {
-    log(`[MediaDerive] объект вложения не прочитан (${data.blobPath})`);
-    return { ok: false, reason: 'failed' };
-  }
-
-  const run = deps.runFfmpeg ?? runFfmpegSpawn;
-  let output: Buffer[];
+  const args = input.family === 'audio' ? audioTranscodeArgs() : videoFrameArgs(data.durationMs);
+  let output: Buffer[] | null;
   try {
-    output = await run(
-      input.family === 'audio' ? audioTranscodeArgs() : videoFrameArgs(data.durationMs),
-      bytes,
-    );
+    output = await runFfmpegForBlob(deps, data.blobPath, args);
   } catch (err) {
     log(`[MediaDerive] ffmpeg не справился (${input.family}, ${input.mime}): ${describeError(err)}`);
+    return { ok: false, reason: 'failed' };
+  }
+  if (!output) {
+    log(`[MediaDerive] объект вложения не прочитан (${data.blobPath})`);
     return { ok: false, reason: 'failed' };
   }
 
@@ -589,18 +648,15 @@ export async function deriveVideoAudioText(
   }
 
   const key = deriveCacheKey({ ...input, family: 'video-audio' });
-  const source = await readBlob(deps, input.blobPath);
-  if (!source || source.length === 0) {
-    log(`[MediaDerive] video-audio: объект не прочитан (${input.blobPath})`);
-    return { ok: false, reason: 'failed' };
-  }
-
-  const run = deps.runFfmpeg ?? runFfmpegSpawn;
-  let output: Buffer[];
+  let output: Buffer[] | null;
   try {
-    output = await run(audioTranscodeArgs(true), source);
+    output = await runFfmpegForBlob(deps, input.blobPath, audioTranscodeArgs(true));
   } catch (err) {
     log(`[MediaDerive] video-audio: ffmpeg не извлёк дорожку (${input.mime}): ${describeError(err)}`);
+    return { ok: false, reason: 'failed' };
+  }
+  if (!output) {
+    log(`[MediaDerive] video-audio: объект не прочитан (${input.blobPath})`);
     return { ok: false, reason: 'failed' };
   }
   const wav = output[0];

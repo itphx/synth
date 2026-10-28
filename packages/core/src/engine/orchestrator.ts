@@ -2483,7 +2483,6 @@ export class ChatOrchestrator {
     const blobs = this._resolveAttachmentBlobs();
     return {
       blobs,
-      blobsRead: (path) => blobs.read(path),
       hasFfmpeg: () => hasFfmpeg,
       promptTemplate: (lang) => this._contextConfig?.getMediaDeriveTemplate(lang) ?? '',
       log: (message) => warning('ATTACHMENTS', message),

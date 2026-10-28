@@ -7,6 +7,10 @@
  * внешние сбои не бросаются наружу.
  */
 
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { delimiter, dirname, join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import type { MediaPartData, Part } from '@itphx/synth-shared';
 import { MemoryBlobStore } from '../../storage/memory/content.js';
@@ -65,12 +69,16 @@ function makeInput(
   };
 }
 
-/** Зависимости с моками; `bytes` — исходный объект вложения. */
+/**
+ * Зависимости с моками; `bytes` — исходный объект вложения.
+ * `runFfmpeg: null` — инъекции нет: derive идёт реальным потоковым путём
+ * (`spawn` по временному файлу, `ffmpeg` берётся из `PATH`).
+ */
 function makeDeps(
   opts: {
     bytes?: Buffer;
     hasFfmpeg?: boolean;
-    runFfmpeg?: DeriveDeps['runFfmpeg'];
+    runFfmpeg?: DeriveDeps['runFfmpeg'] | null;
     text?: string;
   } = {},
 ): DeriveDeps & {
@@ -82,12 +90,14 @@ function makeDeps(
   if (opts.bytes) void blobs.write(BLOB_PATH, opts.bytes);
   const chat = vi.fn(async () => ({ text: opts.text ?? 'ОПИСАНИЕ' }));
   const runFfmpegSpy = vi.fn(
-    opts.runFfmpeg ?? (async (): Promise<Buffer[]> => [Buffer.from('derived')]),
+    opts.runFfmpeg || (async (): Promise<Buffer[]> => [Buffer.from('derived')]),
   );
   const deps: DeriveDeps = {
     blobs,
     chat: chat as unknown as DeriveDeps['chat'],
-    runFfmpeg: runFfmpegSpy as unknown as DeriveDeps['runFfmpeg'],
+    ...(opts.runFfmpeg === null
+      ? {}
+      : { runFfmpeg: runFfmpegSpy as unknown as DeriveDeps['runFfmpeg'] }),
     hasFfmpeg: () => opts.hasFfmpeg ?? false,
     promptTemplate: (language) =>
       language === 'ru'
@@ -95,6 +105,42 @@ function makeDeps(
         : 'MODALITY {modality}, FILE {name}. Return only the result.',
   };
   return { ...deps, blobs, chat, runFfmpegSpy };
+}
+
+/**
+ * Поддельный `ffmpeg` в `PATH` (реальный путь `spawn` без shell): запоминает
+ * путь входного файла и его содержимое, тело скрипта формирует stdout/код
+ * выхода. Нужен, чтобы проверить потоковую передачу blob и удаление временного
+ * файла без настоящего бинарника.
+ */
+async function withFakeFfmpeg(
+  body: string,
+  fn: (state: { capture: string; copy: string }) => Promise<void>,
+): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), 'synth-fake-ffmpeg-'));
+  const capture = join(dir, 'input-path');
+  const copy = join(dir, 'input-copy');
+  const script = [
+    '#!/bin/sh',
+    'while [ $# -gt 0 ]; do',
+    '  if [ "$1" = "-i" ]; then',
+    `    printf '%s' "$2" > '${capture}'`,
+    `    cat "$2" > '${copy}'`,
+    '  fi',
+    '  shift',
+    'done',
+    body,
+    '',
+  ].join('\n');
+  await writeFile(join(dir, 'ffmpeg'), script, { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${dir}${delimiter}${previousPath ?? ''}`;
+  try {
+    await fn({ capture, copy });
+  } finally {
+    process.env.PATH = previousPath;
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 describe('deriveModalityText: image / pdf', () => {
@@ -405,6 +451,57 @@ describe('deriveModalityText: video', () => {
     const result = await deriveModalityText(makeInput('video', { mime: 'video/mp4' }), deps);
     expect(result).toEqual({ ok: false, reason: 'failed' });
     expect(deps.chat).not.toHaveBeenCalled();
+  });
+});
+
+describe('deriveModalityText: потоковая передача blob в ffmpeg', () => {
+  it('видео: объект пишется во временный файл потоком, ffmpeg получает путь, файл удаляется', async () => {
+    // Один JPEG-кадр в stdout поддельного ffmpeg.
+    await withFakeFfmpeg("printf '\\377\\330\\377\\340\\001\\002\\377\\331'", async ({ capture, copy }) => {
+      const bytes = Buffer.from('....ftyp-streamed');
+      const deps = makeDeps({ bytes, hasFfmpeg: true, runFfmpeg: null });
+      const readStreamSpy = vi.spyOn(deps.blobs, 'readStream');
+
+      const result = await deriveModalityText(makeInput('video', { mime: 'video/mp4' }), deps);
+
+      expect(result.ok).toBe(true);
+      // Blob читается потоком, а не целиком через `read`.
+      expect(readStreamSpy).toHaveBeenCalledWith(BLOB_PATH);
+      // ffmpeg получил путь: по нему лежит ровно содержимое blob.
+      expect(await readFile(copy)).toEqual(bytes);
+      const inputPath = (await readFile(capture, 'utf-8')).trim();
+      expect(inputPath).not.toBe('');
+      // Временный файл и каталог удалены в `finally`.
+      expect(existsSync(inputPath)).toBe(false);
+      expect(existsSync(dirname(inputPath))).toBe(false);
+    });
+  });
+
+  it('пустой объект: ffmpeg не запускается, derive → failed', async () => {
+    await withFakeFfmpeg("printf '\\377\\330\\377\\331'", async ({ capture }) => {
+      const deps = makeDeps({ bytes: Buffer.alloc(0), hasFfmpeg: true, runFfmpeg: null });
+
+      const result = await deriveModalityText(makeInput('video', { mime: 'video/mp4' }), deps);
+
+      expect(result).toEqual({ ok: false, reason: 'failed' });
+      // Поддельный ffmpeg не вызывался — пустой файл ему не отдаётся.
+      expect(existsSync(capture)).toBe(false);
+    });
+  });
+
+  it('сбой ffmpeg: derive → failed, временный файл всё равно удалён', async () => {
+    await withFakeFfmpeg('echo "boom" >&2\nexit 1', async ({ capture }) => {
+      const deps = makeDeps({ bytes: Buffer.from('....ftyp'), hasFfmpeg: true, runFfmpeg: null });
+
+      const result = await deriveModalityText(makeInput('video', { mime: 'video/mp4' }), deps);
+
+      expect(result).toEqual({ ok: false, reason: 'failed' });
+      expect(deps.chat).not.toHaveBeenCalled();
+      const inputPath = (await readFile(capture, 'utf-8')).trim();
+      expect(inputPath).not.toBe('');
+      expect(existsSync(inputPath)).toBe(false);
+      expect(existsSync(dirname(inputPath))).toBe(false);
+    });
   });
 });
 
