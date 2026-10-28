@@ -814,8 +814,12 @@ jobs:
 
       - name: Загрузить offline-образы как артефакт
         uses: actions/upload-artifact@v4
+        # Квота хранилища артефактов в GitVerse ограничена (на 0.12.4 —
+        # `413 maximum allowed artifact storage quota exceeded` на ~67 МиБ).
+        # Архивы образов — best-effort (см. выше), квота не должна валить релиз.
+        continue-on-error: true
         with:
-          # Артефакта может не быть: сборка offline-образов best-effort (нет демона).
+          # Артефакта может быть: сборка offline-образов best-effort (нет демона).
           if-no-files-found: ignore
           name: offline-images
           path: |
@@ -862,13 +866,18 @@ jobs:
 
       - name: Загрузить бандлы как артефакт
         uses: actions/upload-artifact@v4
+        # Четыре архива по ~67 МиБ не влезают в квоту хранилища артефактов
+        # GitVerse (413 на 0.12.4). Бандлы никуда не публикуются — это
+        # CI-артефакт для ручного скачивания, поэтому квота не должна
+        # останавливать релиз: сборка бандлов уже проверена шагом выше.
+        continue-on-error: true
         with:
           name: offline-bundles
           path: |
             dist/offline/*.tar.gz
             dist/offline/*.zip
             dist/offline/SHA256SUMS
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 14
 
   # --- GitVerse Release ---
@@ -928,6 +937,9 @@ jobs:
 
       - name: Скачать portable-бандлы
         uses: actions/download-artifact@v4
+        # Артефакт может отсутствовать: загрузка упирается в квоту хранилища
+        # GitVerse (413). Бандлы — best-effort, ассеты релиза не блокируют.
+        continue-on-error: true
         with:
           name: offline-bundles
           path: tmp/offline-bundles
@@ -1085,6 +1097,9 @@ jobs:
 
       - name: Скачать portable-бандлы
         uses: actions/download-artifact@v4
+        # Артефакт может отсутствовать: загрузка упирается в квоту хранилища
+        # GitVerse (413). Бандлы — best-effort, ассеты релиза не блокируют.
+        continue-on-error: true
         with:
           name: offline-bundles
           path: tmp/offline-bundles
