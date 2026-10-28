@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react'
 import type { ClipboardEvent as ReactClipboardEvent } from 'react'
 import { Icon } from '../icon/Icon'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
@@ -265,6 +265,24 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const valueRef = useRef(value)
   valueRef.current = value
+  // ADR-115: позиция каретки после программной вставки маркеров. Применяется в
+  // layout-эффекте уже после коммита React: синхронная установка и `setTimeout`
+  // гонялись с перерисовкой, и браузер сбрасывал каретку в конец текста.
+  const pendingCaretRef = useRef<number | null>(null)
+
+  useLayoutEffect(() => {
+    const caret = pendingCaretRef.current
+    if (caret === null) return
+    pendingCaretRef.current = null
+    const el = textareaRef.current
+    if (!el) return
+    el.focus()
+    try {
+      el.setSelectionRange(caret, caret)
+    } catch {
+      // Поле могло потерять фокус — каретка не критична для вставки.
+    }
+  }, [value])
 
   // ADR-115: черновики вложений сессии (загрузка, чипы, ошибки) живут в сторе.
   const addFiles = useAttachmentsStore((state) => state.addFiles)
@@ -391,23 +409,11 @@ export function ChatInput({
     const nextValue = `${before}${inserted}${after}`
 
     valueRef.current = nextValue
+    // Каретку ставим только после коммита нового `value` — в layout-эффекте
+    // выше. Синхронный вызов и `setTimeout` гонялись с перерисовкой, и
+    // браузер сбрасывал каретку в конец текста.
+    pendingCaretRef.current = caret + inserted.length
     setValue(nextValue)
-
-    const nextCaret = caret + inserted.length
-    const restoreCaret = () => {
-      const target = textareaRef.current
-      if (!target) return
-      target.focus()
-      try {
-        target.setSelectionRange(nextCaret, nextCaret)
-      } catch {
-        // Поле могло потерять фокус — каретка не критична для вставки.
-      }
-    }
-    // Сразу — до коммита React (uncontrolled-состояние DOM), затем после
-    // перерисовки value, иначе браузер сбросит каретку в конец.
-    restoreCaret()
-    setTimeout(restoreCaret, 0)
   }, [])
 
   /** ADR-115: убрать маркеры удалённых чипов (каскад группы — все имена). */

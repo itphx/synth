@@ -38,15 +38,18 @@ async function waitTerminal(
   svc: BackgroundExecService,
   id: string,
 ): Promise<BackgroundProcessRecord> {
+  // Запас выведен из продакшн-эскалации: timeoutMs (300 мс в тесте на таймаут)
+  // + пауза до SIGKILL (BACKGROUND_KILL_GRACE_MS = 5 с) + сборка записи в _onClose.
+  // Потолок ниже `testTimeout` пакета (20 с): иначе вместо понятной ошибки
+  // ожидания тест падал бы таймаутом vitest.
   const deadline = Date.now() + 10_000;
   for (;;) {
     const record = svc.status(id);
     if (record && record.status !== 'running') return record;
     if (Date.now() > deadline) throw new Error(`фоновый процесс ${id} не завершился`);
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 20);
-      timer.unref?.();
-    });
+    // unref здесь не нужен и вреден: собственное ожидание теста должно держать
+    // event loop живым, иначе промис может не разрешиться до конца теста.
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
   }
 }
 
@@ -107,9 +110,14 @@ describe('фоновые процессы: запуск и статус', () => 
 });
 
 describe('фоновые процессы: остановка и таймаут', () => {
+  // Обе проверки бьют по пути kill (`stop` и таймаут-таймер). Команда запускается
+  // argv-формой, без промежуточной оболочки: `sh -c` на части окружений форкает
+  // команду, SIGTERM получает только оболочка, а `close` ждёт, пока потомок
+  // закроет пайпы stdout/stderr — на CI это давало «процесс не завершился» через
+  // 10 с на `sleep 30`. Здесь проверяется доставка сигнала, а не семантика shell.
   it('stop — процесс убит сигналом, повторный вызов идемпотентен', async () => {
     const svc = makeService();
-    const outcome = await svc.spawn({ command: { kind: 'shell', command: 'sleep 30' } });
+    const outcome = await svc.spawn({ command: { kind: 'argv', file: 'sleep', args: ['30'] } });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(svc.stop(outcome.processId)).toBe(true);
@@ -123,7 +131,7 @@ describe('фоновые процессы: остановка и таймаут'
   it('таймаут — процесс убит по истечении', async () => {
     const svc = makeService();
     const outcome = await svc.spawn({
-      command: { kind: 'shell', command: 'sleep 30' },
+      command: { kind: 'argv', file: 'sleep', args: ['30'] },
       timeoutMs: 300,
     });
     expect(outcome.ok).toBe(true);

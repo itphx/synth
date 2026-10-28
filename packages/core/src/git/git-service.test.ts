@@ -51,9 +51,17 @@ function thrownCode(fn: () => unknown): string {
   throw new Error('ожидалось исключение');
 }
 
-/** Запуск git в тесте напрямую (без GitService) — подготовка репозиториев. */
+/**
+ * Запуск git в тесте напрямую (без GitService) — подготовка репозиториев.
+ * Identity передаётся пер-вызовом: тест не зависит от глобального/системного
+ * git-конфига окружения (в CI его нет и `git commit` падал с «Author identity unknown»).
+ */
 async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, { cwd });
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-c', 'user.name=Тест Юникод', '-c', 'user.email=test@example.com', ...args],
+    { cwd },
+  );
   return stdout;
 }
 
