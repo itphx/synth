@@ -143,14 +143,14 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_DECISION_CONFIDENCE_THRESHOLD` | number | `decision.confidenceThreshold` |
 | `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
-| `SYNTH_QUESTIONS_TIMEOUT_MS` | number | `questions.timeoutMs` (stage 1 of roadmap 0.13 — block 3) |
-| `SYNTH_QUESTIONS_RETENTION_DAYS` | number | `questions.retentionDays` (stage 1 of roadmap 0.13 — block 3) |
-| `SYNTH_BACKGROUND_ENABLED` | boolean | `background.enabled` (stage 1 of roadmap 0.13 — block 4) |
-| `SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION` | number | `background.maxSubagentsPerSession` (stage 1 of roadmap 0.13 — block 4) |
-| `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION` | number | `background.maxProcessesPerSession` (stage 1 of roadmap 0.13 — block 4) |
-| `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | number | `background.maxRunsPerSession` (stage 1 of roadmap 0.13 — block 4) |
-| `SYNTH_BACKGROUND_LOG_MAX_BYTES` | number | `background.logMaxBytes` (stage 1 of roadmap 0.13 — block 4) |
-| `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (stage 1 of roadmap 0.13 — block 4) |
+| `SYNTH_QUESTIONS_TIMEOUT_MS` | number | `questions.timeoutMs` (stage 1 of roadmap 0.12.4 — block 3) |
+| `SYNTH_QUESTIONS_RETENTION_DAYS` | number | `questions.retentionDays` (stage 1 of roadmap 0.12.4 — block 3) |
+| `SYNTH_BACKGROUND_ENABLED` | boolean | `background.enabled` (stage 1 of roadmap 0.12.4 — block 4) |
+| `SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION` | number | `background.maxSubagentsPerSession` (stage 1 of roadmap 0.12.4 — block 4) |
+| `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION` | number | `background.maxProcessesPerSession` (stage 1 of roadmap 0.12.4 — block 4) |
+| `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | number | `background.maxRunsPerSession` (stage 1 of roadmap 0.12.4 — block 4) |
+| `SYNTH_BACKGROUND_LOG_MAX_BYTES` | number | `background.logMaxBytes` (stage 1 of roadmap 0.12.4 — block 4) |
+| `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (stage 1 of roadmap 0.12.4 — block 4) |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON array | `security.bootstrapServiceKeys` (an object env override, ADR-052/O1; see below) |
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; master switch of the authority layer) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — observation, `false` — enforcement) |
@@ -1451,7 +1451,7 @@ plugins:
   A model change **marks the built indexes as `stale`** (the fingerprint holds the actual
   `provider/model`): they have to be rebuilt (`synth memory rebuild <indexId>`).
 
-### User questions (`questions.*`, stage 1 of roadmap 0.13 — block 3)
+### User questions (`questions.*`, stage 1 of roadmap 0.12.4 — block 3)
 
 The section sets the behaviour of the "ask the user" subsystem (the `question` tool): the
 agent asks a question with answer options and the turn **waits** for the user's answer.
@@ -1480,7 +1480,7 @@ questions:
 - **Events** — `user_question.asked` / `user_question.answered` /
   `user_question.cancelled` in the session channel (ADR-009/ADR-024, no new channels).
 
-### Background runs (`background.*`, stage 1 of roadmap 0.13 — block 4)
+### Background runs (`background.*`, stage 1 of roadmap 0.12.4 — block 4)
 
 The section sets the behaviour of the single registry of the background work: background
 **subagents** (`task({background: true})`, PROP-096/ADR-111) and background **shell

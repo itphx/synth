@@ -143,14 +143,14 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
 | `SYNTH_ANALYTICS_RETENTION_DAYS` | number | `analytics.retentionDays` |
-| `SYNTH_QUESTIONS_TIMEOUT_MS` | number | `questions.timeoutMs` (этап 1 roadmap 0.13 — блок 3) |
-| `SYNTH_QUESTIONS_RETENTION_DAYS` | number | `questions.retentionDays` (этап 1 roadmap 0.13 — блок 3) |
-| `SYNTH_BACKGROUND_ENABLED` | boolean | `background.enabled` (этап 1 roadmap 0.13 — блок 4) |
-| `SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION` | number | `background.maxSubagentsPerSession` (этап 1 roadmap 0.13 — блок 4) |
-| `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION` | number | `background.maxProcessesPerSession` (этап 1 roadmap 0.13 — блок 4) |
-| `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | number | `background.maxRunsPerSession` (этап 1 roadmap 0.13 — блок 4) |
-| `SYNTH_BACKGROUND_LOG_MAX_BYTES` | number | `background.logMaxBytes` (этап 1 roadmap 0.13 — блок 4) |
-| `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (этап 1 roadmap 0.13 — блок 4) |
+| `SYNTH_QUESTIONS_TIMEOUT_MS` | number | `questions.timeoutMs` (этап 1 roadmap 0.12.4 — блок 3) |
+| `SYNTH_QUESTIONS_RETENTION_DAYS` | number | `questions.retentionDays` (этап 1 roadmap 0.12.4 — блок 3) |
+| `SYNTH_BACKGROUND_ENABLED` | boolean | `background.enabled` (этап 1 roadmap 0.12.4 — блок 4) |
+| `SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION` | number | `background.maxSubagentsPerSession` (этап 1 roadmap 0.12.4 — блок 4) |
+| `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION` | number | `background.maxProcessesPerSession` (этап 1 roadmap 0.12.4 — блок 4) |
+| `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | number | `background.maxRunsPerSession` (этап 1 roadmap 0.12.4 — блок 4) |
+| `SYNTH_BACKGROUND_LOG_MAX_BYTES` | number | `background.logMaxBytes` (этап 1 roadmap 0.12.4 — блок 4) |
+| `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (этап 1 roadmap 0.12.4 — блок 4) |
 | `SYNTH_METRICS_ENABLED` | boolean | `metrics.enabled` |
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; мастер-выключатель слоя полномочий) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — наблюдение, `false` — принуждение) |
@@ -1484,7 +1484,7 @@ analytics:
   ключей и PII в значениях нет; дериваты (`cache_hit_rate`, `output_tps`, …)
   не персистятся, а считаются на чтении.
 
-### Вопросы пользователю (`questions.*`, этап 1 roadmap 0.13 — блок 3)
+### Вопросы пользователю (`questions.*`, этап 1 roadmap 0.12.4 — блок 3)
 
 Секция задаёт поведение подсистемы «вопрос пользователю» (тул `question`): агент
 задаёт вопрос с вариантами ответа, ход **ждёт** ответа пользователя. Ответ
@@ -1512,7 +1512,7 @@ questions:
 - **События** — `user_question.asked` / `user_question.answered` /
   `user_question.cancelled` в канале сессии (ADR-009/ADR-024, новых каналов нет).
 
-### Фоновые прогоны (background.*, этап 1 roadmap 0.13 — блок 4)
+### Фоновые прогоны (background.*, этап 1 roadmap 0.12.4 — блок 4)
 
 Секция задаёт поведение единого реестра фоновой работы: фоновые **саб-агенты**
 (`task({background: true})`, PROP-096/ADR-111) и фоновые **шелл-процессы**

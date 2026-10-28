@@ -3,7 +3,7 @@
 > **Статус:** 🧊 Icebox — Runner внешних движков (opencode/cline): EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy
 > **Пересмотр:** в рамках [PROP-109](./prop-109-agent-system-federation.md) как `kind: runner-engine` — спрос на
 > отдельный продукт «Runner» на 2026-10-24 отсутствует, задача переформулирована как централизация внешних
-> агентных систем; не ранее 0.13
+> агентных систем; не ранее 0.12.4
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D5, идея 5 + [ADR-018](./adr-018-session-engine-selection.md),
 > [ADR-022](./adr-022-typescript-stack-runner.md), `docs/ARCHITECTURE.md`).

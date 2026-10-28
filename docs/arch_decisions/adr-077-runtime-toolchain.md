@@ -1,6 +1,6 @@
 # ADR-077: Инструментальное окружение исполнения — единый порт ExecutionPort и режим remote
 
-> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула), **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`), **шаг B1** — исполнитель **хостит MCP-серверы у себя** (stdio) и отдаёт их инструменты и вызовы по HTTP (`GET /mcp/servers`, `GET /mcp/tools`, `POST /mcp/call`; эти эндпоинты появились в протоколе 2) и **шаг B2** — клиентская проводка MCP-stdio в control plane (источник `ExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе). **Актуальная версия протокола — 5** (вложения MCP-результата `attachments[]` в `POST /mcp/call` и `features.mcpAttachments`, ADR-115, «Обновлено 2026-10-27»; секреты вызова `secrets[]` — v4, фоновые процессы — v3, ADR-113); совместимость проверяется полем `protocol` в `GET /capabilities`. Перенос git-операций control plane на `ExecutionPort` выполнен (`GitService` — argv через порт, `simple-git` удалён из core). **Доставка SSH/CA в split-режиме — реализована** (см. «Обновлено 2026-10-26», (б) и (в)). **Шаг 7d — реализован**: метрики `synth_executor_*` (control plane и исполнитель), собственный `/metrics` исполнителя, скрейп пула и алерты — по шагам этого ADR остатка нет; вне его — образ worker'а и flavor'ы (PROP-082), квоты (шаг 10), workspace-v2 (шаг 11) и runbook переключения топологии (шаг 12), поэтому статус остаётся «⚠️ Частично».
+> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула), **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`), **шаг B1** — исполнитель **хостит MCP-серверы у себя** (stdio) и отдаёт их инструменты и вызовы по HTTP (`GET /mcp/servers`, `GET /mcp/tools`, `POST /mcp/call`; эти эндпоинты появились в протоколе 2) и **шаг B2** — клиентская проводка MCP-stdio в control plane (источник `ExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе). **Актуальная версия протокола — 5** (вложения MCP-результата `attachments[]` в `POST /mcp/call` и `features.mcpAttachments`, ADR-115, «Обновлено 2026-10-27»; секреты вызова `secrets[]` — v4, фоновые процессы — v3, ADR-113); совместимость проверяется полем `protocol` в `GET /capabilities`. Перенос git-операций control plane на `ExecutionPort` выполнен (`GitService` — argv через порт, `simple-git` удалён из core). **Доставка SSH/CA в split-режиме — реализована** (см. «Обновлено 2026-10-26», (б) и (в)). **Шаг 7d — реализован**: метрики `synth_executor_*` (control plane и исполнитель), собственный `/metrics` исполнителя, скрейп пула и алерты — по шагам этого ADR остатка нет; вне его — квоты (шаг 10), workspace-v2 (шаг 11) и runbook переключения топологии (шаг 12), поэтому статус остаётся «⚠️ Частично». Образ worker'а и flavor-матрица — **реализованы**: исходное предложение [PROP-082](./prop-082-full-images-deployment.md) переведено в этот ADR 2026-10-28.
 > **Дата:** 2026-10-21
 > **Обновлено:** 2026-10-26 — три решения по остатку исполнителя (детали и порядок — [docs/EXECUTION.md](../EXECUTION.md)):
 > **(а) git — через существующий порт, без новых git-эндпоинтов протокола.** Git-операции control plane
@@ -400,10 +400,11 @@
   **Двойного счёта нет:** `synth_executor_commands_total` есть на обеих сторонах и считает разное
   (доставленные вызовы vs исполненные команды) — суммировать серии двух job'ов нельзя.
 - **Остаток:** по шагам этого ADR **остатка нет** — метрики `synth_executor_*`, `/metrics`
-  исполнителя, алерты и runbook диагностики реализованы (шаг 7d). Вне этого ADR остаются: образ
-  worker'а и flavor'ы ([PROP-082](./prop-082-full-images-deployment.md), шаги 4–6), квоты и
+  исполнителя, алерты и runbook диагностики реализованы (шаг 7d). Вне этого ADR остаются: квоты и
   изоляция (шаг 10), workspace-v2 (шаг 11) и runbook переключения топологии (шаг 12 —
-  [docs/EXECUTION.md](../EXECUTION.md) §12.2), поэтому статус остаётся «⚠️ Частично».
+  [docs/EXECUTION.md](../EXECUTION.md) §12.2), поэтому статус остаётся «⚠️ Частично». Образ worker'а
+  и flavor-матрица — **реализованы** (шаги 4–6; [PROP-082](./prop-082-full-images-deployment.md) принят
+  в этот ADR 2026-10-28).
   Перенос git-операций control plane на `ExecutionPort` выполнен
   («Обновлено 2026-10-26», (а)); доставка SSH-материала и CA — **реализована** (там же, (б) и (в)).
 
@@ -461,3 +462,8 @@
   пропускается с логом); при `isError` вложения не собираются. Пишет байты только control plane
   (`McpManager` → `AttachmentService.upload`, дедуп по `blobPath`), исполнитель блобов не знает
   (у него нет каталога данных инстанса).
+- 2026-10-28 — **[PROP-082](./prop-082-full-images-deployment.md) переведён в этот ADR**: образ worker'а
+  `synth-executor:<v>-<flavor>` и flavor-матрица (`slim`/`core`/`dev`/`devops`/`browser`/`full`,
+  alpine + debian), distro-aware установка тулчейна и публикация flavor-образов реализованы (шаги 4–6
+  предложения). Из остатка ADR пункт «образ worker'а и flavor'ы» снят; остаток — шаги 10–12
+  (квоты и изоляция, workspace-v2, runbook переключения топологии).

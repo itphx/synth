@@ -1,11 +1,12 @@
 # PROP-082: Full-образы и базовое развёртывание (flavor'ы с toolchain)
 
-> **Статус:** 🧩 Предложение — all-in-one образ (control plane + toolchain + исполнитель) и образы worker'ов; flavor'ы `slim`/`core`/`dev`/`devops`/`browser`/`full`; переключатель топологии — `execution.mode` (ADR-077)
-> **Решение до:** 2026-11-14
+> ⚠️ **Принято как [ADR-077](./adr-077-runtime-toolchain.md) (2026-10-28).** Файл оставлен как история: правило каталога — файлы не удаляются (см. [ARCH_DECISIONS.md](../ARCH_DECISIONS.md) §4 «Канонические статусы»).
+
+> **Статус:** ✅ Принято (ADR-077) — all-in-one образ (control plane + toolchain + исполнитель), worker-образы `synth-executor` и flavor-матрица (`slim`/`core`/`dev`/`devops`/`browser`/`full`); переключатель топологии — `execution.mode`
 > **Дата:** 2026-10-21
 > **Источник:** переработано 2026-10-21 (проработка двух топологий развёртывания: all-in-one vs отдельные контейнеры-исполнители)
 > **Согласовано:** Debian для `browser`/`full`; `buildah` вместо `kaniko`; docker — только CLI (без socket); `lite` → `core`; публикация flavor'ов — в **приватный реестр Gitea** `git.itphx.ru` (не в Docker Hub).
-> **Ближайший шаг:** split-топология (ADR-077, шаги 7–10). Шаги 1–6 сделаны.
+> **Ближайший шаг:** остаток шага 6 (расширить cleanup на репозитории Gitea) и шаги 7–12 — владелец [ADR-077](./adr-077-runtime-toolchain.md) (split-топология, изоляция и квоты, workspace-v2).
 
 **Решение:** развёртывание Synth описывается **двумя топологиями одной конфигурации**. По умолчанию (`execution.mode: inline`) работает **all-in-one** — один контейнер, в котором рядом живут control plane (backend), toolchain (набор инструментов для агентских тулов) и рантайм исполнителя. Вторая топология (`execution.mode: remote`) — **split**: control plane без toolchain'а (`synth-backend:<v>`) плюс отдельные контейнеры-исполнители (`synth-executor:<v>-<flavor>`). Переключатель — **параметр запуска** (секция `execution` в `config.yaml`, env `SYNTH_EXECUTION_MODE`, CLI `--execution-mode`), смена топологии — только перезапуск процесса. Исполнитель и all-in-one образ — **один и тот же код**: он умеет работать и отдельным сервисом, и локально внутри backend'а; различает их только порт исполнения `ExecutionPort` (в репозитории есть — шаг 1 плана реализации; см. «Дельта», п. 1). Split-топология, доверенная граница backend → исполнитель, S3 и жизненный цикл worker'ов — предмет [ADR-077](./adr-077-runtime-toolchain.md); здесь фиксируются all-in-one, flavor-матрица образов и единая модель переключения.
 
@@ -847,8 +848,21 @@ Managed-деплой сегодня — **одна** реплика backend'а, 
 
 Split-топология технически возможна и при одной реплике control plane (пул worker'ов масштабируется независимо); PostgreSQL обязателен для масштабирования самого control plane — больше одной реплики.
 
+## Реализация
+
+Проверено в коде на 2026-10-28 (шаги 1–6 «Порядка реализации» закрыты):
+
+- **Образы и flavor-матрица.** `docker/Dockerfile.backend` — multistage-сборка со стадиями `build`/`core`/`dev`/`devops`/`browser`/`full` и отдельной `slim` (control plane без toolchain'а); `docker/Dockerfile.executor` — те же стадии для образа worker'а `synth-executor:<v>-<flavor>`. Тяжёлые flavor'ы `browser`/`full` собраны на `node:22-bookworm-slim` (Debian), остальные — на `node:22-alpine`.
+- **Distro-aware установка инструментов.** `docker/install-hard-deps.sh`, `docker/install-tier-0.sh`…`install-tier-4.sh`, `docker/install-buildah.sh`, `docker/install-db-clients.sh`, `docker/install-diag.sh`, `docker/install-docker-cli.sh` (общие функции — `docker/install-lib.sh`): состав пакетов тира зависит от дистрибутива стадии; docker ставится как CLI, без socket.
+- **Единый переключатель топологии.** `execution.mode` (`inline`/`remote`) — параметр запуска; `docker-compose.yml` содержит оба профиля: `all-in-one` (backend с toolchain'ом, `inline`) и `split` (backend `slim` с `SYNTH_EXECUTION_MODE=remote` и `SYNTH_EXECUTION_REMOTE_URL`, отдельный сервис `synth-executor` и общий том workspace).
+- **Helm.** `charts/synth/values.yaml`: пул `executor.*` (Deployment/Service, `executor.workspace.accessMode: ReadWriteMany`), отдельный том блобов `backend.blobs` (по умолчанию выключен — блобы живут на основном томе).
+- **Публикация и проверка.** Flavor-образы и образы исполнителей публикует джоба `publish-images-gitea` в `.gitverse/workflows/release.yaml` (приватный Gitea `git.itphx.ru/itphx/*`, версионные теги `<v>-<flavor>`); сборка/публикация — `scripts/publish-images.sh`, smoke — `scripts/smoke-image.sh`/`scripts/ci-images.sh`, сквозной тест control plane ↔ исполнитель — `scripts/e2e-executor.sh`, авторизация в реестре — `scripts/docker-auth-gitea.sh`, offline-образы для закрытого контура — `scripts/offline-images.sh`.
+
+Открытый остаток шага 6 — расширить cleanup на репозитории Gitea; шаги 7–12 (executor-сервис, изоляция и квоты, workspace-v2) ведутся в [ADR-077](./adr-077-runtime-toolchain.md).
+
 ## История
 
+- 2026-10-28 — переведён в [ADR-077](./adr-077-runtime-toolchain.md): all-in-one образ, worker-образы `synth-executor`, flavor-матрица и переключатель `execution.mode` реализованы; шаги 7–12 продолжаются в ADR-077. Файл оставлен как история.
 - 2026-10-21 — переработано: all-in-one образ (control plane + toolchain + исполнитель), образы worker'ов, flavor-матрица и единый переключатель топологии `execution.mode` (ADR-077).
 - 2026-10-21 — шаг 2: multistage `docker/Dockerfile.backend` (стадии `build`/`core`/`slim`), distro-aware скрипты тиров, flavor `core` (hard deps + tier 0) — решение по arm64: **вариант A** (per-arch, QEMU/binfmt для flavor'ов; `slim` без `RUN` — multi-arch без эмуляции).
 - 2026-10-21 — шаги 4–5: flavor'ы dev/devops (alpine) и browser/full (debian) + образы исполнителей; замеры и решения по yq/docker-CLI/Playwright; 2026-10-22 — шаг 6: решение владельца — **все** flavor'ы публикуются в приватный Gitea `git.itphx.ru/itphx/…` (в `gitverse.ru`/`ghcr.io` — только базовые образы, Docker Hub не используется).

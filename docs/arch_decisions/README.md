@@ -89,6 +89,7 @@
 | ID | Тема | Статус | Файл |
 |----|------|--------|------|
 | PROP-049 | Git worktrees: тулы `git_worktree_*`, per-session cwd, детект secondary worktree, UI | ✅ Принято (ADR-114) | [prop-049-git-worktrees.md](./prop-049-git-worktrees.md) |
+| PROP-082 | Flavor-образы с toolchain: `slim`/`core`/`dev`/`devops`/`browser`/`full` (alpine + debian) для local containerized и managed single-instance | ✅ Принято (ADR-077) | [prop-082-full-images-deployment.md](./prop-082-full-images-deployment.md) |
 | PROP-085 | Мультимодальный ввод (звук, изображения, видео): типы `Part`, blob-хранилище вложений, предобработка (ASR/OCR/кадры), UI-композер | ✅ Принято (ADR-115) | [prop-085-multimodal-input.md](./prop-085-multimodal-input.md) |
 | PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | ✅ Принято (ADR-111) | [prop-096-background-subagent-sessions.md](./prop-096-background-subagent-sessions.md) |
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | ✅ Принято (ADR-113) | [prop-097-background-processes-registry.md](./prop-097-background-processes-registry.md) |
@@ -113,7 +114,6 @@
 | PROP-074 | Скрытие вместо удаления: soft-delete проектов/сессий/сообщений, исключение из LLM-контекста, read-only режим ADMIN/AUDITOR, restore/purge — ADMIN | 🧩 Предложение | [prop-074-soft-delete-retention.md](./prop-074-soft-delete-retention.md) |
 | PROP-080 | Управляемый гибрид: режимы-полюса, идентичность и установка локально: режим — параметр запуска, без runtime-переключения, standalone=ADMIN / hybrid=роли сервера, «Установить локально» | 🧩 Предложение | [prop-080-managed-hybrid-modes.md](./prop-080-managed-hybrid-modes.md) |
 | PROP-081 | Политики гибрида и защита от утечек: серверные политики (forbidden/remote-only/full, publish/fork allow | 🧩 Предложение | [prop-081-hybrid-policy-leak-protection.md](./prop-081-hybrid-policy-leak-protection.md) |
-| PROP-082 | Flavor-образы с toolchain: `slim`/`core`/`dev`/`devops`/`browser`/`full` (alpine + debian) для local containerized и managed single-instance | 🧩 Предложение | [prop-082-full-images-deployment.md](./prop-082-full-images-deployment.md) |
 | PROP-083 | Кастомизация инстанса и брендинг: приветственное окно (+повторный вызов), конфиг брендинга (название/лого-подпись/ватермарка), серверная выдача; на потом — locked settings | 🧩 Предложение | [prop-083-instance-customization-branding.md](./prop-083-instance-customization-branding.md) |
 | PROP-093 | Версионирование документации: версионные подкаталоги портала + селектор (вариант A под текущий nginx-деплой) или `mike` (вариант B при GitHub Pages), тегирование `synth-docs`, политика хранения | 🧩 Предложение | [prop-093-docs-versioning.md](./prop-093-docs-versioning.md) |
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099-memory-footprint-optimization.md](./prop-099-memory-footprint-optimization.md) |
@@ -146,4 +146,4 @@
 
 ---
 
-Всего документов: 106 (Решения: 47, Частично: 19, Принятые предложения: 5, Предложения: 25, Vision: 8, Icebox: 1, Legacy: 1).
+Всего документов: 106 (Решения: 47, Частично: 19, Принятые предложения: 6, Предложения: 24, Vision: 8, Icebox: 1, Legacy: 1).
