@@ -1,0 +1,59 @@
+{
+  "schema": "synth.security.audit/v1",
+  "version": "0.12.4",
+  "commit": "92f492bf",
+  "date": "2026-10-28",
+  "auditor": {
+    "name": "opencode (аудит-агент, deepseek-v4.1-flash), роль read-only",
+    "role": "AUDITOR",
+    "mode": "read-only"
+  },
+  "status": "approved_with_exceptions",
+  "summary": "Аудит релиза 0.12.4 (мультимодальные вложения и blob-подложка, состояние инстанса в SQL, артефакты прогонов пайплайнов; плюс апгрейд зависимостей по ратчету). Проверены: secret-scan дерева и истории (0 находок, 83 подавления — тестовые фикстуры), негативная матрица авторизации сессий (93 теста), ратчет зависимостей (critical 0/0, high 27 ≤ baseline 31, прямых 0) и обзор изменений по 7 классам чек-листа; дополнительно — полный локальный baseline и зелёный прогон ci.yaml на GitVerse на коммите аудита, включая контрактный suite портов хранилища на живой PostgreSQL. Найдено и закрыто в этом релизе: два LOW — недокументированный ответ 415 attachments_disabled в §5.6.1 API_V2 и буферизация видео-blob целиком в память при derive (теперь поток во временный файл с уборкой в finally на всех исходах), плюс HIGH в поставляемых образах — body-parser 2.3.0 (GHSA-27r3-jxmh-p828) поднят до 2.4.0. На что смотреть в релизе: вложения не хранятся в БД (только blob_refs), метаданные изображений срезаются только на границе отправки провайдеру (оригиналы на томе — как есть, ADR-115), новые маршруты вложений и артефактов живут под единым prefix-guard (в обработчиках проверок доступа нет), base64 вложений не попадает в payload-лог и карту обфускации Gateway. Дополнительно к находкам: три красных теста CI (core/git, executor/background, ui/ChatInput) оказались зависимостью тестов от окружения раннера, а не дефектами продукта — исправлены в тестах без ослабления проверок (git identity пер-вызовом, argv-форма для пути kill, восстановление каретки после коммита React); секрет-скан, ратчет и матрица авторизации после правок прогнаны повторно.",
+  "checks": {
+    "secret-scan": {
+      "status": "pass",
+      "command": "node scripts/secret-scan.mjs --mode worktree,commits,blobs --json",
+      "result": "ЧИСТО — находок нет. Просканировано: worktree 2651 файл, 809748 строк истории, 15795 blob-ов; подавлено allowlist 83 — все тестовые фикстуры и исторические вхождения (см. exceptions[historical-test-fixture-allowlists]). Те же правила отработали в CI (джоба «Secret-scan (дерево + история)» — success).",
+      "date": "2026-10-28"
+    },
+    "auth-matrix": {
+      "status": "pass",
+      "command": "pnpm --filter @itphx/synth-backend exec vitest run src/routes/sessions-access.test.ts src/routes/session-idor-matrix.test.ts",
+      "result": "93 теста, 93 passed / 0 failed (2 файла: sessions-access.test.ts, session-idor-matrix.test.ts). Матрица покрывает все :id-маршруты сессий; диф относительно master — только добавления (+34 строки, маршруты вложений/артефактов), новых :id-маршрутов вне матрицы нет.",
+      "date": "2026-10-28"
+    },
+    "ci-baseline": {
+      "status": "pass",
+      "command": "CI GitVerse: ci.yaml run 1945240 на коммите аудита 92f492bf (14 джоб) + ci-docs.yaml run 1945239",
+      "result": "ЗЕЛЁНЫЙ: ci.yaml run 1945240 на коммите аудита 92f492bf (GitVerse, ветка feature/0.13-data-layer-attachments) — все 14 джоб success: линт+typecheck, тесты shared/core/executor/storage-postgres/backend/sdk/ui/plugin-memory, контрактный suite портов хранилища на живой PostgreSQL (ADR-097), secret-scan дерева и истории, аудит зависимостей, Helm lint+template, образы (сборка+smoke). ci-docs.yaml 1945239 — success. Предыдущий прогон 1943461 был красным по трём тестам (core/git, executor/background, ui/ChatInput) и джобе `images`; найдены причины в тестах и в CI-конфигурации (не в продукте) и исправлены: git identity передаётся пер-вызовом, путь kill в тесте таймаута идёт argv-формой (оболочка, форкающая команду, оставляла потомка с открытыми пайпами), каретка в ChatInput восстанавливается после коммита React; джоба `images` сужена до flavor `core` (kaniko без кэша пересобирал предков; полная матрица и `slim` — на релизе). Waiver'ов нет: ни один красный результат не перенесён в исключения.",
+      "date": "2026-10-28"
+    },
+    "dependencies": {
+      "status": "pass",
+      "command": "pnpm audit --json && node scripts/security-gate.mjs --only dependencies --skip-tests",
+      "result": "Профиль ратчета post-upgrade: critical 0/0, high 27/31, moderate 20, low 3; прямых уязвимых модулей 0. Снято в этом релизе: high GHSA-27r3-jxmh-p828 (body-parser 2.3.0 → 2.4.0, DoS хвостовыми байтами после сжатого тела) — ранее 28 high. Гейт по зависимостям: PASS (27 pass / 4 fail, все остаточные — транзитивные high без патча в пределах semver).",
+      "date": "2026-10-28"
+    },
+    "security-review": {
+      "status": "pass",
+      "command": "docs/security/AUDIT-CHECKLIST.md §3 (обзор изменений релиза по 7 вопросам)",
+      "result": "(1) Новые внешние входы: staging-загрузка и раздача вложений (POST/GET /api/v2/attachments, GET/HEAD по sha256), вложения в prompt/событиях/прогонах пайплайнов, GET /api/v2/pipeline-runs/:runId/artifacts/:name, runtime-настройки вложений и модальностей. Поверхности events/webhooks/MCP не расширялись. (2) Авторизация/IDOR: маршруты вложений смонтированы внутри приложения сессий под единым prefix-guard (read для GET/HEAD, write для POST), артефакты прогона — под runGuard('read') и правами проекта; в обработчиках проверок доступа нет (инвариант 16); матрица IDOR 93 теста зелёная, диф матрицы относительно master — только добавления (+34 строки). (3) Containment путей: blob-пути ограничены префиксом attachments/ (isAttachmentPath), имена артефактов и runId санитайзятся (без .., обратного слэша, NUL), материализация отброшенных вложений — strict containment внутри workspace, публикация без перезаписи. (4) SSRF/egress: новых исходящих каналов нет — вложения уходят провайдеру inline через существующий провайдерский транспорт с политикой TLS (ADR-099); адресная политика встроенных инструментов и webhooks не менялась; проверено, что derive видео/аудио не порождает сетевых вызовов (ffmpeg локальный, путь к файлу — внутри temp-каталога, уборка в finally). (5) Секреты/ключи: оригиналы вложений лежат на томе content-addressed, в БД только blob_refs; EXIF/IPTC/XMP срезаются ИСКЛЮЧИТЕЛЬНО на границе отправки провайдеру (выдача через API и материализация в workspace отдают оригинал — ADR-115, заявленное поведение сверено с кодом); base64 не сканируется Gateway и заменяется сводкой {mime,name,sizeBytes} в payload-логе; секреты инстанса (master.key, api-key, executor-token) не затронуты. (6) Supply-chain/артефакты релиза: ратчет зелёный, апгрейды зависимостей в пределах semver (в т.ч. body-parser 2.4.0 внутри диапазона express ^2.2.1, без overrides), Dockerfile'ы не менялись, тегов latest нет, .dockerignore чист, квоты распаковки архивов на месте. Одно изменение CI внесено этим релизом и осознанно: джоба `images` перестала собирать flavor `slim` (kaniko без кэша пересобирал предков `dev`/`browser`/`full` и падал по таймауту registry.npmjs.org; потолок раннера ~30 мин). Покрытие flavor-матрицы в CI сужено до `core` обоих образов; полная матрица и `slim` собираются на релизе (`publish-images-gitea` с `--cache=true`). Проверка стадии `build` и рантайма control plane/исполнителя в CI сохранена, публикации из CI нет — ослабления контура поставки артефактов нет. (7) Доки vs факт: найдено одно расхождение — §5.6.1 API_V2 не описывал ответ 415 attachments_disabled; исправлено в этом релизе. Остальные проверенные утверждения CONFIGURATION/OBSERVABILITY/ARCHITECTURE/PIPELINES/API_V2 сверены с кодом и верны; отдельно исправлено устаревшее утверждение прежней записи аудита о вычистке метаданных «до хеширования» — фактически очистка происходит только при отправке провайдеру.",
+      "date": "2026-10-28"
+    }
+  },
+  "exceptions": [
+    {
+      "id": "historical-test-fixture-allowlists",
+      "scope": "В .gitleaks.toml три узких блока «путь + dummy-маркер» для исторических вхождений тестовых фикстур: inline-PEM заглушки в коммите 193be2ab (6 файлов: git-ssh.test.ts, inline-execution-port.test.ts, git-service.test.ts, client.test.ts, exec-service.test.ts, secrets.test.ts) и тестовые токены исполнителя в коммитах 996c776b/a7c84ca0 (metrics.test.ts, server-background.test.ts). Рабочее дерево переписано на сборку PEM/токенов в рантайме — литералов в исходниках нет; блоки нужны только для неизменяемой истории master.",
+      "justification": "Историю master переписать нельзя (опубликована, зеркалируется на GitHub), а без подавления secret-scan истории блокирует релизный гейт. Подавление не path-only: каждый блок требует совпадения пути И dummy-тела заглушки (control-plane-must-not-materialize, inline-secret-material, error-body-must-not-contain-it, executor-secret-material, PRIVATE KEY-----\\nkey\\n, remote-secret, executor-metrics-token-test-1234567890, executor-token-bg-test-1234567890), поэтому настоящий ключ или токен с другим телом в тех же файлах остаётся находкой. Path-only блоков в этом релизе не добавлялось.",
+      "followUp": "При следующем обновлении фикстур предпочитать генерируемые в рантайме значения (уже сделано в рабочем дереве); исторические блоки не расширять, при переезде истории — удалить вместе с ревизиями. Список подавлений и их причины перечисляются сканером (--list-allowlists) и зафиксированы в .gitleaks.toml.",
+      "owner": "владелец контура безопасности инстанса",
+      "dueRelease": "0.12.5"
+    }
+  ],
+  "artifacts": {
+    "evidence": "tmp/security/evidence-0.12.4.json",
+    "ci_run": "1945240 — ci.yaml, commit 92f492bf, status success, 14/14 джоб success (2026-10-28T10:09:09Z → 10:20:28Z); рядом ci-docs.yaml 1945239 — success"
+  }
+}
