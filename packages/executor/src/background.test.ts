@@ -110,14 +110,12 @@ describe('фоновые процессы: запуск и статус', () => 
 });
 
 describe('фоновые процессы: остановка и таймаут', () => {
-  // Обе проверки бьют по пути kill (`stop` и таймаут-таймер). Команда запускается
-  // argv-формой, без промежуточной оболочки: `sh -c` на части окружений форкает
-  // команду, SIGTERM получает только оболочка, а `close` ждёт, пока потомок
-  // закроет пайпы stdout/stderr — на CI это давало «процесс не завершился» через
-  // 10 с на `sleep 30`. Здесь проверяется доставка сигнала, а не семантика shell.
+  // Обе проверки бьют по пути kill (`stop` и таймаут-таймер) shell-формой —
+  // как в реальных вызовах. Сигнал уходит группе процессов, поэтому исход не
+  // зависит от того, форкает ли оболочка команду или исполняет её собой.
   it('stop — процесс убит сигналом, повторный вызов идемпотентен', async () => {
     const svc = makeService();
-    const outcome = await svc.spawn({ command: { kind: 'argv', file: 'sleep', args: ['30'] } });
+    const outcome = await svc.spawn({ command: { kind: 'shell', command: 'sleep 30' } });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(svc.stop(outcome.processId)).toBe(true);
@@ -131,11 +129,26 @@ describe('фоновые процессы: остановка и таймаут'
   it('таймаут — процесс убит по истечении', async () => {
     const svc = makeService();
     const outcome = await svc.spawn({
-      command: { kind: 'argv', file: 'sleep', args: ['30'] },
+      command: { kind: 'shell', command: 'sleep 30' },
       timeoutMs: 300,
     });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
+    const record = await waitTerminal(svc, outcome.processId);
+    expect(record.status).toBe('killed');
+    expect(record.signal).toBe('SIGTERM');
+  });
+
+  // Регрессия: сигнал уходит группе процессов, а не только прямому ребёнку.
+  // `sleep 30 & wait` гарантирует форк — команда становится потомком оболочки и
+  // наследует её пайпы. Если гасить только оболочку, `sleep` остаётся жить,
+  // `close` не приходит и запись висит в `running` до его естественного выхода.
+  it('stop — гасит всё дерево процессов, а не только оболочку', async () => {
+    const svc = makeService();
+    const outcome = await svc.spawn({ command: { kind: 'shell', command: 'sleep 30 & wait' } });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(svc.stop(outcome.processId)).toBe(true);
     const record = await waitTerminal(svc, outcome.processId);
     expect(record.status).toBe('killed');
     expect(record.signal).toBe('SIGTERM');

@@ -342,9 +342,17 @@ export class BackgroundExecService {
         // Базовое окружение — всё `process.env`; `env` запроса мержится поверх.
         env: { ...process.env, ...(input.env ?? {}) },
         stdio: ['ignore', 'pipe', 'pipe'],
-        // Фоновый процесс — ребёнок исполнителя, а не отдельная группа:
-        // он не должен переживать завершение родителя «сам по себе».
-        detached: false,
+        // Своя группа процессов (POSIX): `stop`/таймаут должны гасить всё дерево,
+        // а не только прямого ребёнка — иначе shell-форма, где оболочка форкает
+        // команду (`sh -c 'sleep 30'` в busybox/на части раннеров), оставляет
+        // потомка живым: он держит унаследованные пайпы, `close` не приходит, и
+        // запись висит в `running` до естественного выхода команды. Гарантию
+        // «не переживает исполнителя» это не отменяет: `dispose()` гасит группу
+        // сам, а при SIGKILL исполнителя осиротевший ребёнок и раньше оставался
+        // живым (PR_SET_PDEATHSIG в Node недоступен).
+        // На Windows групп процессов в таком виде нет (`process.kill(-pid)`
+        // не поддерживается) — там остаётся прямое убийство ребёнка.
+        detached: process.platform !== 'win32',
       });
 
       const entry: BackgroundEntry = {
@@ -495,11 +503,7 @@ export class BackgroundExecService {
     await this._waitExit(running, DISPOSE_GRACE_MS);
     for (const entry of running) {
       if (entry.status !== 'running') continue;
-      try {
-        entry.child?.kill('SIGKILL');
-      } catch {
-        // Процесс уже завершён — ничего делать не нужно.
-      }
+      this._signal(entry, 'SIGKILL');
     }
     await this._waitExit(running, DISPOSE_GRACE_MS);
   }
@@ -599,6 +603,33 @@ export class BackgroundExecService {
   }
 
   /**
+   * Отправить сигнал процессу и его потомкам.
+   *
+   * POSIX: ребёнок запускается лидером собственной группы (`detached: true`),
+   * поэтому `kill(-pid)` достаёт всё дерево. Иначе сигнал получает только
+   * оболочка, а форкнутая ею команда остаётся жить: `close` не приходит, пока
+   * потомок не закроет пайпы. Если группы уже нет — падаем на прямое убийство.
+   */
+  private _signal(entry: BackgroundEntry, signal: NodeJS.Signals): void {
+    const child = entry.child;
+    if (!child) return;
+    const pid = child.pid;
+    if (process.platform !== 'win32' && pid !== undefined) {
+      try {
+        process.kill(-pid, signal);
+        return;
+      } catch {
+        // Группы нет (или pid не лидер) — ниже пробуем прямое убийство.
+      }
+    }
+    try {
+      child.kill(signal);
+    } catch {
+      // Процесс уже завершён (или сигнал недопустим) — не страшно.
+    }
+  }
+
+  /**
    * Остановить процесс сигналом и запланировать эскалацию.
    *
    * Повторный вызов ничего не делает: эскалация `SIGKILL` не дублируется.
@@ -607,17 +638,9 @@ export class BackgroundExecService {
     if (entry.status !== 'running') return;
     if (entry.stopRequested) return;
     entry.stopRequested = true;
-    try {
-      entry.child?.kill(signal);
-    } catch {
-      // Процесс уже завершён (или сигнал недопустим) — не страшно.
-    }
+    this._signal(entry, signal);
     entry.killTimer = setTimeout(() => {
-      try {
-        entry.child?.kill('SIGKILL');
-      } catch {
-        // Процесс уже завершён — не страшно.
-      }
+      this._signal(entry, 'SIGKILL');
     }, BACKGROUND_KILL_GRACE_MS);
     entry.killTimer.unref?.();
   }
