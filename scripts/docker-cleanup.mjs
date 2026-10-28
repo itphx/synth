@@ -14,6 +14,10 @@
  *   GV_REGISTRY — хост реестра (по умолчанию gitverse.ru)
  *   GV_OWNER    — владелец пакетов в реестре (по умолчанию itphx)
  *   GV_TOKEN    — токен с правами на container registry (обязателен)
+ *   GV_KEEP_TAGS — теги через запятую, которые НЕ удаляются (обычно версия,
+ *                 которая публикуется этим прогоном). Без этого «очистили →
+ *                 не хватило квоты → публикация упала» оставляет реестр пустым
+ *                 (так случилось на 0.12.4: synth-backend остался без версий).
  */
 
 const registry = process.env.GV_REGISTRY || 'gitverse.ru';
@@ -23,6 +27,13 @@ if (!token) {
   console.error('GV_TOKEN не задан');
   process.exit(1);
 }
+
+const keepTags = new Set(
+  (process.env.GV_KEEP_TAGS || '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean),
+);
 
 const images = process.argv.slice(2);
 if (!images.length) {
@@ -55,6 +66,10 @@ for (const img of images) {
   const tags = (await list.json()).tags || [];
   console.log(`[clean] ${repo}: теги ${tags.length ? tags.join(', ') : '(пусто)'}`);
   for (const tag of tags) {
+    if (keepTags.has(tag)) {
+      console.log(`  = ${tag}: сохранён (GV_KEEP_TAGS)`);
+      continue;
+    }
     const head = await req('HEAD', `${repo}/manifests/${tag}`);
     const digest = head && head.headers.get('docker-content-digest');
     if (!digest) {

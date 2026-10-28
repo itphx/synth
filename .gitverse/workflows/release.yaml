@@ -456,6 +456,11 @@ jobs:
       - name: Очистка старых Docker-образов (gitverse)
         env:
           GV_TOKEN: ${{ secrets.GV_TOKEN }}
+          # Версию, которую публикуем сейчас, не удаляем: если публикация
+          # упрётся в квоту реестра, рабочий образ в реестре останется
+          # (на 0.12.4 очистка снесла все теги, а synth-backend так и не
+          # опубликовался — реестр остался без backend-образа).
+          GV_KEEP_TAGS: ${{ steps.docker_tags.outputs.version }}
         run: node scripts/docker-cleanup.mjs synth synth-backend synth-ui
 
       # Политика образов: все три БАЗОВЫХ образа (synth, synth-backend, synth-ui)
