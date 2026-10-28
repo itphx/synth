@@ -425,8 +425,9 @@ jobs:
         # Если сеть есть — ждём; если нет — идём собирать: образ `synth` сам
         # делает `npm install -g @itphx/synth@<v>` и упадёт с понятной ошибкой,
         # если пакета действительно нет.
-        continue-on-error: true
-        run: bash scripts/wait-npm-version.sh "${{ steps.docker_tags.outputs.version }}"
+        run: |
+          bash scripts/wait-npm-version.sh "${{ steps.docker_tags.outputs.version }}" \
+            || echo "::warning::версия 0.12.4 не подтверждена в npmjs (сеть раннера) — идём собирать образ"
 
       # Авторизация сразу в двух реестрах: gitverse.ru (как раньше) и ghcr.io
       # (все три базовых образа — synth/synth-backend/synth-ui — зеркалируются
@@ -932,7 +933,7 @@ jobs:
   # и при неудаче лишь предупреждает, не роняя джобу.
   create-release:
     name: GitVerse Release
-    needs: [build, changelog, publish-npmjs, offline-images]
+    needs: [build, changelog, publish-npmjs]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1103,7 +1104,7 @@ jobs:
   # чтобы не сломать рабочий релизный CI. Порядок гарантирован через needs.
   publish-github:
     name: GitHub-зеркало (refs + Release)
-    needs: [build, changelog, build-docker, offline-images]
+    needs: [build, changelog]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
