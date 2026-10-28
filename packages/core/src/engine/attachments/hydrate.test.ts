@@ -749,54 +749,82 @@ describe('hydrateMessageAttachments: derive (ADR-115)', () => {
     expect(result[0]!.content).toBe('вопрос');
   });
 
-  it('audio → видео для модели с video без audio: MP4 + пометка «только звук»', async () => {
+  it('audio у модели без audio → derive-текст, вложения нет (обёртки нет)', async () => {
     const deps = makeDeps({ 'attachments/aa/voice.ogg': Buffer.from('OggS') });
-    const derive = vi.fn(async () => 'не должен вызываться');
-    const wrapAudioAsVideo = vi.fn(async () => ({
-      part: {
-        blobPath: 'attachments/.derived/audio-video.mp4',
-        sha256: 'b'.repeat(64),
-        mime: 'video/mp4',
-        size: 4,
-        name: 'voice.mp4',
-      },
-      bytes: Buffer.from('MP4!'),
-    }));
+    const derive = vi.fn(async () => 'транскрипт голосового');
 
+    // Модель принимает video, но не audio: аудио уходит aux-модели (derive),
+    // а не упаковывается в MP4 — видео-модальность не даёт звука.
     const result = await hydrateMessageAttachments([llmMessage()], audioSource(), deps, {
       modalities: ['text', 'video'],
       canDeliverNative: (mime) => mime === 'video/mp4',
       derive,
-      wrapAudioAsVideo,
     });
 
-    expect(wrapAudioAsVideo).toHaveBeenCalledTimes(1);
+    expect(derive).toHaveBeenCalledTimes(1);
+    expect(result[0]!.attachments).toBeUndefined();
+    expect(result[0]!.content).toBe('вопрос\n\n[audio: voice.ogg]\nтранскрипт голосового');
+    expect(result[0]!.debug?.attachmentsDropped).toBeUndefined();
+  });
+
+  it('видео нативно + модель без audio → кадры нативно и транскрипт дорожки блоком', async () => {
+    const deps = makeDeps({ 'attachments/aa/clip.mp4': Buffer.from('ftyp') });
+    const derive = vi.fn(async () => 'не должен вызываться');
+    const deriveVideoAudio = vi.fn(async () => 'на записи: «привет, это тест»');
+
+    const result = await hydrateMessageAttachments([llmMessage()], videoSource(), deps, {
+      modalities: ['text', 'video'],
+      canDeliverNative: () => true,
+      derive,
+      deriveVideoAudio,
+    });
+
+    // Видео всё равно уходит нативно: транскрипт — дополнение, не замена.
+    expect(deriveVideoAudio).toHaveBeenCalledWith({
+      blobPath: 'attachments/aa/clip.mp4',
+      mime: 'video/mp4',
+      name: 'clip.mp4',
+    });
     expect(derive).not.toHaveBeenCalled();
     expect(result[0]!.attachments).toEqual([
       {
         mime: 'video/mp4',
-        name: 'voice.mp4',
-        base64: Buffer.from('MP4!').toString('base64'),
+        name: 'clip.mp4',
+        base64: Buffer.from('ftyp').toString('base64'),
       },
     ]);
-    expect(result[0]!.content).toContain('audio-only source');
-    expect(result[0]!.content).toContain('black placeholder');
+    expect(result[0]!.content).toBe(
+      'вопрос\n\n[video-audio: clip.mp4]\nна записи: «привет, это тест»',
+    );
+    expect(result[0]!.debug?.attachmentsDerived).toBe(1);
   });
 
-  it('audio → видео не удалось → обычный derive (транскрипт)', async () => {
-    const deps = makeDeps({ 'attachments/aa/voice.ogg': Buffer.from('OggS') });
-    const derive = vi.fn(async () => 'транскрипт');
-    const wrapAudioAsVideo = vi.fn(async () => null);
+  it('видео нативно, deriveVideoAudio нет → прежнее поведение без транскрипта', async () => {
+    const deps = makeDeps({ 'attachments/aa/clip.mp4': Buffer.from('ftyp') });
+    const derive = vi.fn(async () => 'не должен вызываться');
+    const deriveVideoAudio = vi.fn(async () => 'не должен вызываться');
 
-    const result = await hydrateMessageAttachments([llmMessage()], audioSource(), deps, {
-      modalities: ['text', 'video'],
-      canDeliverNative: (mime) => mime === 'video/mp4',
+    // Модель принимает audio — транскрипт не нужен.
+    const withAudio = await hydrateMessageAttachments([llmMessage()], videoSource(), deps, {
+      modalities: ['text', 'video', 'audio'],
+      canDeliverNative: () => true,
       derive,
-      wrapAudioAsVideo,
+      deriveVideoAudio,
     });
+    expect(withAudio[0]!.attachments?.[0]?.mime).toBe('video/mp4');
+    expect(withAudio[0]!.content).toBe('вопрос');
+    expect(deriveVideoAudio).not.toHaveBeenCalled();
 
-    expect(derive).toHaveBeenCalledTimes(1);
-    expect(result[0]!.content).toBe('вопрос\n\n[audio: voice.ogg]\nтранскрипт');
+    // Модель без audio, а aux-модель аудио не назначена — без транскрипта.
+    const withoutAux = await hydrateMessageAttachments([llmMessage()], videoSource(), deps, {
+      modalities: ['text', 'video'],
+      canDeliverNative: () => true,
+      derive,
+      deriveVideoAudio: async () => null,
+    });
+    expect(withoutAux[0]!.attachments?.[0]?.mime).toBe('video/mp4');
+    expect(withoutAux[0]!.content).toBe('вопрос');
+    expect(withoutAux[0]!.debug?.attachmentsDerived).toBeUndefined();
   });
 
   it('video без aux-модели → отброс modality, без тихой потери', async () => {

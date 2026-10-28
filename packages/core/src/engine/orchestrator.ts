@@ -59,7 +59,7 @@ import { WorktreeDirectoryMissingError } from './worktree/errors.js';
 import type { WorktreeService } from './worktree/service.js';
 // ADR-115: гидратация вложений сообщений (blob → base64) перед LLM-вызовом.
 import { createHydrateDeps, hydrateMessageAttachments, type DroppedAttachmentRef, type HydrateDeps } from './attachments/hydrate.js';
-import { deriveModalityText, wrapAudioAsVideo as wrapAudioAsVideoPart } from './attachments/derive.js';
+import { deriveModalityText, deriveVideoAudioText, type DeriveDeps } from './attachments/derive.js';
 import { materializeAttachment } from './attachments/materialize.js';
 import { AttachmentService, isAttachmentPath } from './attachments/service.js';
 import { serializeMessage, serializeSession } from '../server/serialize.js';
@@ -2367,24 +2367,6 @@ export class ChatOrchestrator {
       if (!target) return null;
 
       try {
-        const sharedConfig = this._providerLoader(target.provider);
-        if (!sharedConfig) {
-          warning(
-            'ATTACHMENTS',
-            `Модель обработки "${target.provider}/${target.model}" не найдена (семейство ${input.family})`,
-          );
-          return null;
-        }
-        const rawProvider = ProviderFactory.create(
-          target.provider,
-          toCoreProviderConfig(sharedConfig, target.model),
-        );
-        // Инвариант 3: LLM-вызов только через GatewayProvider. Обёртка с
-        // привязкой к сессии (карта обфускации/аудит), без сессии — пул-вариант.
-        const provider = session
-          ? this._wrapWithGateway(rawProvider, session)
-          : this.wrapProviderWithGateway(rawProvider);
-
         // Часть собирает тот же сервис, что и загрузку: blobPath/mime/имя +
         // sidecar-метаданные (для видео — длительность кадров).
         const built = await this._getAttachmentService().buildMediaPart(input.blobPath);
@@ -2395,7 +2377,8 @@ export class ChatOrchestrator {
         // `hasFfmpeg` в derive синхронный: пробу через порт (ADR-077) делаем
         // заранее — она кэшируется по инстансу порта на TTL.
         const hasFfmpeg = await isFfmpegAvailable(this._executionPort).catch(() => false);
-        const blobs = this._resolveAttachmentBlobs();
+        const deps = this._buildAuxDeriveDeps(session, target, hasFfmpeg);
+        if (!deps) return null;
         const result = await deriveModalityText(
           {
             family: input.family,
@@ -2407,47 +2390,7 @@ export class ChatOrchestrator {
             model: target.model,
             language: language === 'en' ? 'en' : 'ru',
           },
-          {
-            blobs,
-            blobsRead: (path) => blobs.read(path),
-            hasFfmpeg: () => hasFfmpeg,
-            promptTemplate: (lang) => this._contextConfig?.getMediaDeriveTemplate(lang) ?? '',
-            log: (message) => warning('ATTACHMENTS', message),
-            chat: async (parts, prompt) => {
-              const attachments: LLMAttachment[] = [];
-              for (const part of parts) {
-                const data = part.data as Partial<MediaPartData> | undefined;
-                if (!data || typeof data.blobPath !== 'string' || data.blobPath === '') continue;
-                const bytes = await blobs.read(data.blobPath);
-                if (!bytes) continue;
-                const mime = typeof data.mime === 'string' ? data.mime : 'application/octet-stream';
-                attachments.push({
-                  mime,
-                  ...(typeof data.name === 'string' && data.name ? { name: data.name } : {}),
-                  // ADR-115 §«Приватность»: aux-модель получает байты без
-                  // EXIF/метаданных (в blob лежит оригинал).
-                  base64: stripMetadata(bytes, mime).toString('base64'),
-                });
-              }
-              if (attachments.length === 0) {
-                throw new Error('aux-вызов: нет читаемых частей вложения');
-              }
-              const response = await provider.chat([{
-                id: 'attachment-derive',
-                role: 'user',
-                content: prompt,
-                attachments,
-                usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-                disabled: false,
-                pinned: false,
-                branchId: '',
-              }]);
-              // Учёт расхода aux-вызова (ADR-102): отдельный бакет по осям
-              // aux-модели — не смешивается с моделью сессии.
-              this._recordDeriveUsage(session, target, response.usage);
-              return { text: response.content };
-            },
-          },
+          deps,
         );
         return result.ok ? result.text : null;
       } catch (err) {
@@ -2457,6 +2400,127 @@ export class ChatOrchestrator {
         );
         return null;
       }
+    };
+  }
+
+  /**
+   * ADR-115: транскрипт аудиодорожки видео для гидратации.
+   *
+   * `video`-модальность доставляет **только кадры**, поэтому для модели с
+   * `video`, но без `audio`, дорожка извлекается `ffmpeg` и уходит aux-модели
+   * аудио (`attachments.modalityModels.audio`); текст дописывается в `content`
+   * рядом с видео. Модель сессии не меняется; aux не назначена — `undefined`
+   * (прежнее поведение: видео нативно, без транскрипта).
+   */
+  private _buildVideoAudioDerive(
+    session: Session | undefined,
+    language: string,
+  ): ((input: {
+    blobPath: string;
+    mime: string;
+    name?: string;
+  }) => Promise<string | null>) | undefined {
+    if (!this._attachmentsConfig?.().modalityModels?.audio) return undefined;
+
+    return async (input) => {
+      // Резолвим на каждом вызове: aux-модель аудио могли снять/сменить.
+      const target = this._attachmentsConfig?.().modalityModels?.audio;
+      if (!target) return null;
+      try {
+        const hasFfmpeg = await isFfmpegAvailable(this._executionPort).catch(() => false);
+        const deps = this._buildAuxDeriveDeps(session, target, hasFfmpeg);
+        if (!deps) return null;
+        const result = await deriveVideoAudioText(
+          {
+            mime: input.mime,
+            ...(input.name ? { name: input.name } : {}),
+            blobPath: input.blobPath,
+            provider: target.provider,
+            model: target.model,
+            language: language === 'en' ? 'en' : 'ru',
+          },
+          deps,
+        );
+        return result.ok ? result.text : null;
+      } catch (err) {
+        warning(
+          'ATTACHMENTS',
+          `Транскрипт аудиодорожки ${input.blobPath} не удался: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return null;
+      }
+    };
+  }
+
+  /**
+   * ADR-115: зависимости aux-вызова модели обработки — общий шов `derive` и
+   * транскрипта дорожки видео: провайдер через `GatewayProvider` (инвариант 3),
+   * чтение blob, промпт-шаблон и учёт расхода отдельным бакетом аналитики.
+   * `null` — модель обработки не найдена в каталоге провайдеров.
+   */
+  private _buildAuxDeriveDeps(
+    session: Session | undefined,
+    target: { provider: string; model: string },
+    hasFfmpeg: boolean,
+  ): DeriveDeps | null {
+    const sharedConfig = this._providerLoader(target.provider);
+    if (!sharedConfig) {
+      warning(
+        'ATTACHMENTS',
+        `Модель обработки "${target.provider}/${target.model}" не найдена`,
+      );
+      return null;
+    }
+    const rawProvider = ProviderFactory.create(
+      target.provider,
+      toCoreProviderConfig(sharedConfig, target.model),
+    );
+    // Инвариант 3: LLM-вызов только через GatewayProvider. Обёртка с
+    // привязкой к сессии (карта обфускации/аудит), без сессии — пул-вариант.
+    const provider = session
+      ? this._wrapWithGateway(rawProvider, session)
+      : this.wrapProviderWithGateway(rawProvider);
+    const blobs = this._resolveAttachmentBlobs();
+    return {
+      blobs,
+      blobsRead: (path) => blobs.read(path),
+      hasFfmpeg: () => hasFfmpeg,
+      promptTemplate: (lang) => this._contextConfig?.getMediaDeriveTemplate(lang) ?? '',
+      log: (message) => warning('ATTACHMENTS', message),
+      chat: async (parts, prompt) => {
+        const attachments: LLMAttachment[] = [];
+        for (const part of parts) {
+          const data = part.data as Partial<MediaPartData> | undefined;
+          if (!data || typeof data.blobPath !== 'string' || data.blobPath === '') continue;
+          const bytes = await blobs.read(data.blobPath);
+          if (!bytes) continue;
+          const mime = typeof data.mime === 'string' ? data.mime : 'application/octet-stream';
+          attachments.push({
+            mime,
+            ...(typeof data.name === 'string' && data.name ? { name: data.name } : {}),
+            // ADR-115 §«Приватность»: aux-модель получает байты без
+            // EXIF/метаданных (в blob лежит оригинал).
+            base64: stripMetadata(bytes, mime).toString('base64'),
+          });
+        }
+        if (attachments.length === 0) {
+          throw new Error('aux-вызов: нет читаемых частей вложения');
+        }
+        const response = await provider.chat([{
+          id: 'attachment-derive',
+          role: 'user',
+          content: prompt,
+          attachments,
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          disabled: false,
+          pinned: false,
+          branchId: '',
+        }]);
+        // Учёт расхода aux-вызова (ADR-102): отдельный бакет по осям
+        // aux-модели — не смешивается с моделью сессии.
+        this._recordDeriveUsage(session, target, response.usage);
+        return { text: response.content };
+      },
     };
   }
 
@@ -2558,46 +2622,21 @@ export class ChatOrchestrator {
               providerConfig.baseUrl ?? '',
             ))
           : undefined;
-        // ADR-115: аудио → MP4 с чёрным видеорядом для моделей с `video`, но
-        // без `audio`. ffmpeg проверяем лениво — только если такой случай
-        // реально встретится в истории.
-        const blobs = this._resolveAttachmentBlobs();
-        let ffmpegAvailable: boolean | undefined;
-        const wrapAudioAsVideo = providerConfig
-          ? async (input: { blobPath: string; mime: string; name?: string }) => {
-              if (ffmpegAvailable === undefined) {
-                ffmpegAvailable = await isFfmpegAvailable(this._executionPort).catch(() => false);
-              }
-              return wrapAudioAsVideoPart(
-                {
-                  ...input,
-                  provider: target.providerName,
-                  model: target.modelId,
-                },
-                {
-                  blobs,
-                  blobsRead: (path) => blobs.read(path),
-                  hasFfmpeg: () => ffmpegAvailable === true,
-                  // Упаковка не вызывает aux-модель; chat обязателен типом.
-                  chat: async () => ({ text: '' }),
-                  log: (message) => warning('ATTACHMENTS', message),
-                },
-              );
-            }
-          : undefined;
+        // ADR-115: транскрипт аудиодорожки видео — `video`-модальность
+        // доставляет только кадры, звук модели не доходит. Для модели с
+        // `video`, но без `audio`, дорожка уходит aux-модели аудио, текст
+        // дописывается рядом с видео. Нет aux — прежнее поведение.
+        const deriveVideoAudio = this._buildVideoAudioDerive(session, target.language);
         return hydrateMessageAttachments(messages, source, this._getAttachmentHydrateDeps(), {
           modalities,
           ...(canDeliverNative ? { canDeliverNative } : {}),
-          ...(wrapAudioAsVideo ? { wrapAudioAsVideo } : {}),
-          ...(this._contextConfig?.getAudioAsVideoNote
-            ? { audioAsVideoNote: this._contextConfig.getAudioAsVideoNote(target.language) }
-            : {}),
           noticeTemplate: this._attachmentsDroppedTemplate(target.language),
           // Модель сессии и её модальности — для блока «не доставлено»: модель
           // видит, чего не хватает, и может предложить другую (тул `list_models`).
           modelLabel: `${target.providerName}/${target.modelId}`,
           ...(modalities && modalities.length > 0 ? { modelModalities: modalities } : {}),
           ...(derive ? { derive } : {}),
+          ...(deriveVideoAudio ? { deriveVideoAudio } : {}),
           // Пустой `workingDir` (workspace не готов) — материализация вернёт null:
           // путь модели не сообщается.
           ...(workspaceFallback

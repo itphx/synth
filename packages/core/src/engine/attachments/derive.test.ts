@@ -14,8 +14,8 @@ import {
   deriveCacheKey,
   deriveCachePath,
   deriveModalityText,
+  deriveVideoAudioText,
   splitJpegFrames,
-  wrapAudioAsVideo,
   type DeriveDeps,
   type DeriveFamily,
   type DeriveInput,
@@ -227,49 +227,102 @@ describe('deriveModalityText: audio', () => {
   });
 });
 
-describe('wrapAudioAsVideo', () => {
-  it('ogg → MP4 с чёрным видеорядом; производная часть video/mp4 и байты', async () => {
-    const mp4 = Buffer.from('ftyp-mp4-data');
+describe('deriveVideoAudioText (аудиодорожка видео)', () => {
+  const input = {
+    mime: 'video/mp4',
+    name: 'ролик.mp4',
+    blobPath: BLOB_PATH,
+    provider: 'aux',
+    model: 'audio-1',
+    language: 'ru' as const,
+  };
+
+  it('извлекает дорожку (-vn) и отдаёт aux-модели аудио; результат кэшируется', async () => {
+    const wav = Buffer.from('RIFF....WAVE');
     const deps = makeDeps({
-      bytes: Buffer.from('OggS'),
+      bytes: Buffer.from('....ftyp'),
       hasFfmpeg: true,
-      runFfmpeg: async () => [mp4],
+      runFfmpeg: async () => [wav],
+      text: 'транскрипт речи',
     });
-    const input = {
-      blobPath: BLOB_PATH,
-      mime: 'audio/ogg',
-      name: 'голос.ogg',
-      provider: 'routerai',
-      model: 'minimax/minimax-m3.1-flash',
-    };
 
-    const result = await wrapAudioAsVideo(input, deps);
+    const result = await deriveVideoAudioText(input, deps);
 
-    expect(result?.bytes).toEqual(mp4);
-    expect(result?.part.mime).toBe('video/mp4');
-    expect(result?.part.name).toBe('голос.mp4');
-    expect(result?.part.size).toBe(mp4.length);
-    expect(result?.part.blobPath).toContain('attachments/.derived/');
-    expect(await deps.blobs.read(result!.part.blobPath)).toEqual(mp4);
-    expect(deps.runFfmpegSpy).toHaveBeenCalledWith(
-      expect.arrayContaining(['-f', 'mp4', 'pipe:1', '-shortest', '-c:a', 'aac']),
-      Buffer.from('OggS'),
+    expect(result).toEqual({ ok: true, text: 'транскрипт речи', cached: false });
+    const [args, stdin] = deps.runFfmpegSpy.mock.calls[0]! as unknown as [string[], Buffer];
+    // `-vn` — без него ffmpeg пишет видеопоток в wav и падает.
+    expect(args).toEqual(
+      expect.arrayContaining(['-vn', '-i', 'pipe:0', '-f', 'wav', '-ar', '16000', '-ac', '1', 'pipe:1']),
     );
+    expect(stdin.toString()).toBe('....ftyp');
+
+    const [parts, prompt] = deps.chat.mock.calls[0]! as unknown as [Part[], string];
+    expect(parts).toHaveLength(1);
+    expect(parts[0]!.type).toBe('audio');
+    const data = parts[0]!.data as MediaPartData;
+    expect(data.mime).toBe('audio/wav');
+    expect(data.blobPath).toBe(
+      `attachments/.derived/${deriveCacheKey({ ...input, family: 'video-audio' })}.wav`,
+    );
+    expect(await deps.blobs.read(data.blobPath)).toEqual(wav);
+    // Промпт — как для аудио (транскрипт), а не «описание по кадрам».
+    expect(prompt).toContain('audio');
+    expect(prompt).toContain('ролик.mp4');
+
+    const cachePath = deriveCachePath({ ...input, family: 'video-audio' });
+    expect((await deps.blobs.read(cachePath))?.toString('utf-8')).toContain('транскрипт речи');
   });
 
-  it('нет ffmpeg → null (hydrate уйдёт в обычный derive/drop)', async () => {
-    const deps = makeDeps({ bytes: Buffer.from('OggS'), hasFfmpeg: false });
-    expect(
-      await wrapAudioAsVideo(
-        {
-          blobPath: BLOB_PATH,
-          mime: 'audio/ogg',
-          provider: 'routerai',
-          model: 'm',
-        },
-        deps,
-      ),
-    ).toBeNull();
+  it('повторный вызов — из кэша: ffmpeg и aux-модель не вызываются', async () => {
+    const deps = makeDeps({
+      bytes: Buffer.from('....ftyp'),
+      hasFfmpeg: true,
+      runFfmpeg: async () => [Buffer.from('RIFF....WAVE')],
+      text: 'транскрипт речи',
+    });
+    await deriveVideoAudioText(input, deps);
+    deps.chat.mockClear();
+    deps.runFfmpegSpy.mockClear();
+
+    const second = await deriveVideoAudioText(input, deps);
+
+    expect(second).toEqual({ ok: true, text: 'транскрипт речи', cached: true });
+    expect(deps.chat).not.toHaveBeenCalled();
+    expect(deps.runFfmpegSpy).not.toHaveBeenCalled();
+  });
+
+  it('нет ffmpeg → no_ffmpeg, aux-модель не вызывается', async () => {
+    const deps = makeDeps({ bytes: Buffer.from('....ftyp'), hasFfmpeg: false });
+
+    const result = await deriveVideoAudioText(input, deps);
+
+    expect(result).toEqual({ ok: false, reason: 'no_ffmpeg' });
+    expect(deps.chat).not.toHaveBeenCalled();
+    expect(deps.runFfmpegSpy).not.toHaveBeenCalled();
+  });
+
+  it('MIME не видео → unsupported (транскод не запускается)', async () => {
+    const deps = makeDeps({ bytes: Buffer.from('OggS'), hasFfmpeg: true });
+
+    const result = await deriveVideoAudioText({ ...input, mime: 'audio/ogg' }, deps);
+
+    expect(result).toEqual({ ok: false, reason: 'unsupported' });
+    expect(deps.runFfmpegSpy).not.toHaveBeenCalled();
+  });
+
+  it('aux-модель упала → failed, без исключения', async () => {
+    const log = vi.fn();
+    const deps = makeDeps({
+      bytes: Buffer.from('....ftyp'),
+      hasFfmpeg: true,
+      runFfmpeg: async () => [Buffer.from('RIFF....WAVE')],
+    });
+    deps.chat.mockRejectedValueOnce(new Error('aux down'));
+
+    const result = await deriveVideoAudioText(input, { ...deps, log });
+
+    expect(result).toEqual({ ok: false, reason: 'failed' });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('aux-модель'));
   });
 });
 

@@ -23,6 +23,16 @@
  *    как image-части, а промпт просит описать содержимое по кадрам. Нет
  *    `ffmpeg` → `no_ffmpeg`.
  *
+ * ## Аудиодорожка видео
+ *
+ * `video`-модальность провайдера означает **только кадры**: аудиодорожка файла
+ * не доставляется (RouterAI `video_url` — проверено на живом API: модель видит
+ * кадры, но звука не получает). Поэтому для модели, которая принимает `video`,
+ * но не `audio`, дорожка извлекается `ffmpeg` и отдаётся aux-модели аудио
+ * (`deriveVideoAudioText`), а в диалог рядом с видео идёт текст транскрипта.
+ * Кэш — отдельное семейство ключа `video-audio`; ошибки не роняют ход (видео
+ * уходит нативно, без транскрипта).
+ *
  * Байты, полученные обработкой (транскод, кадры), кладутся в blob-хранилище
  * (`attachments/.derived/<key>.<ext>`) — `MediaPartData` **не** несёт base64,
  * часть всегда ссылается на объект (ADR-115/ADR-116), поэтому aux-вызов читает
@@ -69,6 +79,14 @@ const FFMPEG_TIMEOUT_MS = 60_000;
 
 /** Семейство вложения, для которого ищется модель обработки. */
 export type DeriveFamily = 'image' | 'pdf' | 'audio' | 'video';
+
+/**
+ * Семейство ключа кэша: обычное семейство либо транскрипт аудиодорожки видео
+ * (`video-audio` — отдельная запись, чтобы не смешивать с обработкой самого
+ * видео и его аудио-транскодом).
+ */
+export type DeriveCacheFamily = DeriveFamily | 'video-audio';
+
 
 /** Причина, по которой обработка не дала текста. */
 export type DeriveFailureReason = 'no_ffmpeg' | 'unsupported' | 'failed';
@@ -156,18 +174,19 @@ function sha256Hex(value: string | Buffer): string {
 }
 
 /**
- * Ключ кэша результата: содержимое объекта (path), модель обработки и семейство.
+ * Ключ кэша результата: содержимое объекта (path), модель обработки и семейство
+ * (для транскрипта дорожки видео — `video-audio`).
  * hex — пригодно как имя файла и как основа имени производных объектов.
  */
 export function deriveCacheKey(
-  input: Pick<DeriveInput, 'blobPath' | 'provider' | 'model' | 'family'>,
+  input: Pick<DeriveInput, 'blobPath' | 'provider' | 'model'> & { family: DeriveCacheFamily },
 ): string {
   return sha256Hex(`${input.blobPath}|${input.provider}/${input.model}|${input.family}`);
 }
 
 /** Путь файла кэша результата (`attachments/.derived/<key>.json`). */
 export function deriveCachePath(
-  input: Pick<DeriveInput, 'blobPath' | 'provider' | 'model' | 'family'>,
+  input: Pick<DeriveInput, 'blobPath' | 'provider' | 'model'> & { family: DeriveCacheFamily },
 ): string {
   return `${DERIVE_CACHE_DIR}/${deriveCacheKey(input)}.json`;
 }
@@ -186,7 +205,10 @@ function mimeMatchesFamily(mime: string, family: DeriveFamily): boolean {
 }
 
 /** Промпт для aux-модели: шаблон языка с подстановкой `{modality}`/`{name}`. */
-function renderPrompt(input: DeriveInput, deps: DeriveDeps): string {
+function renderPrompt(
+  input: { family: string; name?: string; language: 'ru' | 'en' },
+  deps: DeriveDeps,
+): string {
   let fromFile = '';
   try {
     fromFile = deps.promptTemplate?.(input.language) ?? '';
@@ -319,12 +341,18 @@ function spawnFfmpeg(args: string[]): Promise<Buffer[]> {
   });
 }
 
-/** Аргументы транскодирования аудио в wav 16 кГц mono. */
-function audioTranscodeArgs(): string[] {
+/**
+ * Аргументы транскодирования аудио в wav 16 кГц mono.
+ *
+ * `dropVideo` — извлечение **аудиодорожки видеофайла**: без `-vn` ffmpeg
+ * пытается писать видеопоток в wav-контейнер и падает.
+ */
+function audioTranscodeArgs(dropVideo = false): string[] {
   return [
     '-hide_banner',
     '-loglevel',
     'error',
+    ...(dropVideo ? ['-vn'] : []),
     '-i',
     'pipe:0',
     '-f',
@@ -333,46 +361,6 @@ function audioTranscodeArgs(): string[] {
     '16000',
     '-ac',
     '1',
-    'pipe:1',
-  ];
-}
-
-/**
- * Аргументы упаковки аудио в MP4 с чёрным видео-треком.
- *
- * Нужно моделям с `video`, но без `audio`: они принимают видеофайл, а
- * отдельную аудиодорожку — нет. Чёрный кадр — техническая «подложка», чтобы
- * контейнер был валидным видео; модель слышит звук, а системная пометка
- * сообщает, что визуального содержимого в оригинале не было.
- *
- * `frag_keyframe+empty_moov` — MP4 пишется в stdout без seek (moov вперёд).
- */
-function audioAsVideoArgs(): string[] {
-  return [
-    '-hide_banner',
-    '-loglevel',
-    'error',
-    '-i',
-    'pipe:0',
-    '-f',
-    'lavfi',
-    '-i',
-    'color=c=black:s=640x360:r=2',
-    '-shortest',
-    '-c:v',
-    'libx264',
-    '-preset',
-    'veryfast',
-    '-pix_fmt',
-    'yuv420p',
-    '-c:a',
-    'aac',
-    '-b:a',
-    '96k',
-    '-movflags',
-    'frag_keyframe+empty_moov',
-    '-f',
-    'mp4',
     'pipe:1',
   ];
 }
@@ -548,110 +536,106 @@ async function buildParts(
   return { ok: true, parts };
 }
 
-/** Вход упаковки аудио в видео (без готовой `Part`). */
-export interface WrapAudioAsVideoInput {
-  blobPath: string;
+/** Вход транскрипта аудиодорожки видео (ADR-115). */
+export interface DeriveVideoAudioInput {
+  /** MIME видео-объекта. */
   mime: string;
   name?: string;
+  blobPath: string;
+  /** Провайдер aux-модели аудио (`attachments.modalityModels.audio`). */
   provider: string;
+  /** Имя aux-модели аудио. */
   model: string;
-}
-
-/** Результат упаковки аудио в видео: производная часть + её байты. */
-export interface WrappedAudioAsVideo {
-  part: MediaPartData;
-  bytes: Buffer;
+  /** Язык промпта/ответа. */
+  language: 'ru' | 'en';
 }
 
 /**
- * Упаковать аудио в MP4 с чёрным видео-треком (ADR-115).
+ * Транскрипт аудиодорожки видео (ADR-115).
  *
- * Для моделей, которые заявляют `video`, но не `audio`: отдельную аудиодорожку
- * они не принимают, а видеофайл — принимают (RouterAI `video_url`). Видеоряд —
- * чёрный placeholder; модель слышит звук, а в текст сообщения добавляется
- * пометка, что оригинала «только звук».
+ * `video`-модальность у провайдера означает **кадры**: аудиодорожка файла
+ * модели не доставляется (RouterAI `video_url` — проверено на живом API
+ * 2026-10-28: модель видит кадры, звука не получает). Поэтому для модели с
+ * `video`, но без `audio`, дорожка извлекается `ffmpeg` (`-vn`, wav 16 кГц mono)
+ * и уходит aux-модели аудио; текст возвращается вызывающему и дописывается в
+ * `content` рядом с видео.
  *
- * Возвращает `null`, если ffmpeg недоступен/не справился или объект пуст.
- * Ничего не бросает.
+ * Кэш — отдельное семейство ключа `video-audio` (по blob + aux-модели), поэтому
+ * aux-вызов не повторяется каждый ход. Ничего не бросает: нет `ffmpeg`, пустая
+ * дорожка, сбой aux — `{ok:false}` + `log`, вызывающий оставляет прежнее
+ * поведение (видео нативно, без транскрипта).
  */
-export async function wrapAudioAsVideo(
-  input: WrapAudioAsVideoInput,
+export async function deriveVideoAudioText(
+  input: DeriveVideoAudioInput,
   deps: DeriveDeps,
-): Promise<WrappedAudioAsVideo | null> {
+): Promise<DeriveResult> {
   const log = deps.log ?? (() => undefined);
   if (!input.blobPath) {
-    log(`[MediaDerive] аудио без blobPath (${input.mime}) — упаковка в видео невозможна`);
-    return null;
+    log(`[MediaDerive] video-audio: нет blobPath (${input.mime})`);
+    return { ok: false, reason: 'unsupported' };
   }
-  if (!mimeMatchesFamily(input.mime, 'audio')) {
-    log(`[MediaDerive] MIME ${input.mime} не аудио — упаковка в видео невозможна`);
-    return null;
+  if (!mimeMatchesFamily(input.mime, 'video')) {
+    log(`[MediaDerive] video-audio: MIME ${input.mime} не видео — транскрипт невозможен`);
+    return { ok: false, reason: 'unsupported' };
   }
+
+  const cachePath = deriveCachePath({ ...input, family: 'video-audio' });
+  const cached = await readCache(deps, cachePath);
+  if (cached !== null) return { ok: true, text: cached, cached: true };
+
   if (!hasFfmpeg(deps)) {
-    log(`[MediaDerive] audio-as-video: нужен ffmpeg (${input.mime}) — программы нет в окружении`);
-    return null;
+    log(`[MediaDerive] video-audio: нужен ffmpeg (${input.mime}) — программы нет в окружении`);
+    return { ok: false, reason: 'no_ffmpeg' };
   }
 
-  // Ключ отдельный от аудио-транскода (`-video`): один и тот же blob может
-  // обрабатываться и как wav для aux, и как MP4 для video-модели.
-  const key = `${deriveCacheKey({ ...input, family: 'audio' })}-video`;
-  const cachedPath = `${DERIVE_CACHE_DIR}/${key}.mp4`;
-  try {
-    if (await deps.blobs.exists(cachedPath)) {
-      const cached = await readBlob(deps, cachedPath);
-      if (cached && cached.length > 0) {
-        return {
-          part: {
-            blobPath: cachedPath,
-            sha256: sha256Hex(cached),
-            mime: 'video/mp4',
-            size: cached.length,
-            name: audioVideoName(input.name),
-          },
-          bytes: cached,
-        };
-      }
-    }
-  } catch {
-    // Кэш — оптимизация; ошибка чтения не мешает пересборке.
-  }
-
+  const key = deriveCacheKey({ ...input, family: 'video-audio' });
   const source = await readBlob(deps, input.blobPath);
   if (!source || source.length === 0) {
-    log(`[MediaDerive] объект аудио не прочитан (${input.blobPath})`);
-    return null;
+    log(`[MediaDerive] video-audio: объект не прочитан (${input.blobPath})`);
+    return { ok: false, reason: 'failed' };
   }
 
   const run = deps.runFfmpeg ?? runFfmpegSpawn;
   let output: Buffer[];
   try {
-    output = await run(audioAsVideoArgs(), source);
+    output = await run(audioTranscodeArgs(true), source);
   } catch (err) {
-    log(`[MediaDerive] ffmpeg не упаковал аудио в видео (${input.mime}): ${describeError(err)}`);
-    return null;
+    log(`[MediaDerive] video-audio: ffmpeg не извлёк дорожку (${input.mime}): ${describeError(err)}`);
+    return { ok: false, reason: 'failed' };
   }
-  const mp4 = output[0];
-  if (!mp4 || mp4.length === 0) {
-    log(`[MediaDerive] ffmpeg вернул пустой MP4 (${input.mime})`);
-    return null;
+  const wav = output[0];
+  if (!wav || wav.length === 0) {
+    log(`[MediaDerive] video-audio: ffmpeg вернул пустой wav (${input.mime})`);
+    return { ok: false, reason: 'failed' };
   }
-  if (mp4.length > MAX_DERIVED_BYTES) {
-    log(`[MediaDerive] упакованное видео больше ${MAX_DERIVED_BYTES} байт (${input.mime})`);
-    return null;
+  if (wav.length > MAX_DERIVED_BYTES) {
+    log(`[MediaDerive] video-audio: дорожка больше ${MAX_DERIVED_BYTES} байт (${input.mime})`);
+    return { ok: false, reason: 'failed' };
+  }
+  const stored = await storeDerived(deps, key, '.wav', wav, 'audio/wav');
+  if (!stored) return { ok: false, reason: 'failed' };
+
+  let text: string;
+  try {
+    // Промпт — как для аудио-вложения (дословный транскрипт), а не «описание
+    // по кадрам»: aux-модель обрабатывает именно звук.
+    const response = await deps.chat(
+      [makeMediaPart('audio', stored)],
+      renderPrompt({ family: 'audio', ...(input.name ? { name: input.name } : {}), language: input.language }, deps),
+    );
+    text = typeof response?.text === 'string' ? response.text.trim() : '';
+  } catch (err) {
+    log(`[MediaDerive] video-audio: aux-модель не ответила (${input.mime}): ${describeError(err)}`);
+    return { ok: false, reason: 'failed' };
   }
 
-  const stored = await storeDerived(deps, key, '.mp4', mp4, 'video/mp4');
-  if (!stored) return null;
-  return {
-    part: { ...stored, name: audioVideoName(input.name) },
-    bytes: mp4,
-  };
-}
+  if (text === '') {
+    log(`[MediaDerive] video-audio: aux-модель вернула пустой результат (${input.mime})`);
+    return { ok: false, reason: 'failed' };
+  }
 
-/** Имя аудио-в-видео: базовое имя исходника с расширением `.mp4`. */
-function audioVideoName(name: string | undefined): string {
-  const base = (name ?? 'audio').replace(/\.[^.]+$/, '').trim() || 'audio';
-  return `${base}.mp4`;
+  await writeCache(deps, cachePath, text);
+  return { ok: true, text, cached: false };
 }
 
 /**

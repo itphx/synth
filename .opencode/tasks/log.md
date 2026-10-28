@@ -1304,3 +1304,13 @@
 - Помечены: PROP-049 → ADR-114, PROP-096 → ADR-111, PROP-097 → ADR-113. PROP-082 оставлен предложением:
   остаток (flavor-роли, ADR-106) ещё открыт.
 - Проверки: `adr-check` 0 ошибок, `docs-link-check` 0 ошибок (58 файлов, 1033 ссылки).
+
+## 2026-10-28 — мультимодальный ввод: откат «аудио-в-видео» и транскрипт дорожки видео
+
+- **Тип:** bug fix + feature (ADR-115). **Исполнитель:** @fixer (приёмка — оркестратор).
+- **Причина:** обход `wrapAudioAsVideo` (bb7c9082) исходил из ложной посылки «модель с `video` слышит дорожку MP4». Проверено на живом RouterAI: `minimax/minimax-m3.1-flash` (`input_modalities: text,image,video`) на том же MP4 с речью отвечает `NO_AUDIO`, reasoning — «only visual frames… no sound transcript accessible»; контроль `google/gemini-3.5-flash` даёт транскрипт (`audio_tokens: 79`). `video` = только кадры.
+- **Симптом:** в сессии `mvrmkgow` (Telegram 450316139) голосовое пришло как MP4 с чёрным кадром; модель заявила «не слышу», спасла aux-модель (gemini). В сессии `mvr47l0e` модель ошибочно отчиталась «слышу сам» — это был aux-транскрипт.
+- **Сделано:** удалены `wrapAudioAsVideo`, `AUDIO_AS_VIDEO.*`, `getAudioAsVideoNote` (core/config/порт/memory/PG/стабы); аудио снова идёт штатным `derive` через `attachments.modalityModels.audio`; добавлен `deriveVideoAudioText` (ffmpeg `-vn` → wav 16k mono → aux-модель аудио, кэш `video-audio`, блок `[video-audio: <name>]` рядом с нативно отправленным видео); `derive`/`video-audio` используют общий шов `_buildAuxDeriveDeps`; обновлены ADR-115, корневой и core `AGENTS.md`, тесты.
+- **Проверка:** `pnpm typecheck` 0; `pnpm lint` 0 errors; `pnpm build` OK; core `pnpm test` — 473 files / 7288 tests passed (238 skipped); adr-check / docs-link-check — 0 ошибок; `grep` по `wrapAudioAsVideo|AUDIO_AS_VIDEO` в src/dist — пусто.
+- **Остаток:** dev-core работает на старом `dist` — нужен рестарт для живого сценария; живой smoke (голосовое → aux, видео → кадры + `[video-audio]`) не прогонялся; отдельно — обрыв `getFile` через прокси в Telegram-шлюзе (4 ретрая не спасли) и недоступность `execute_shell` у `assistant`.
+- **Коммит:** `fix(attachments): убрать audio-as-video, транскрипт дорожки видео` (по явной просьбе пользователя).

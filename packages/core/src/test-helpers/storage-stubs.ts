@@ -49,7 +49,6 @@ export function stubContextFiles(
     getUserContextTemplate: (): string => '',
     getCompressedDialogTemplate: (): string => '',
     getAttachmentsDroppedTemplate: (): string => '',
-    getAudioAsVideoNote: (): string => '',
     getMediaDeriveTemplate: (): string => '',
     getStickyNotesTemplate: (): string => '',
     getRoutingInstructions: (): string => '',

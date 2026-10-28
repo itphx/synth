@@ -42,11 +42,6 @@ export interface ContextFileRepository {
    */
   getAttachmentsDroppedTemplate(language?: string): string;
   /**
-   * ADR-115: пометка к аудио, упакованному в видео для модели с `video`, но
-   * без `audio` (prompts/system/AUDIO_AS_VIDEO.{lang}.md).
-   */
-  getAudioAsVideoNote(language?: string): string;
-  /**
    * ADR-115: шаблон промпта для модели **обработки** вложения
    * (prompts/system/MEDIA_DERIVE.{lang}.md, плейсхолдеры `{modality}` и `{name}`).
    * Пустая строка — шаблона нет (вызывающий берёт техническую инструкцию).

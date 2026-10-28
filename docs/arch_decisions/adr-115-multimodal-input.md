@@ -427,8 +427,14 @@ aux-модели задаются конфигом `auxiliary.<task>.{provider,m
   (многие провайдеры принимают только wav/mp3); `video` — нативно у RouterAI (`video_url`),
   у остальных — через кадры: `ffmpeg` извлекает до 5 кадров JPEG (равномерно по длительности, если
   она известна из `part.data.durationMs`; иначе `fps=1`, не более пяти), кадры уходят image-частями,
-  промпт просит описать содержимое по кадрам. Для модели с `video`, но без `audio`, аудио текущей
-  реплики упаковывается в MP4 с чёрным видеорядом (`wrapAudioAsVideo`) и уходит нативно.
+  промпт просит описать содержимое по кадрам. `video`-модальность провайдера означает **только
+  кадры** — аудиодорожка файла модели не доставляется (проверено на живом API 2026-10-28:
+  `minimax/minimax-m3.1-flash` на видео/MP4 с речью отвечает `NO_AUDIO`, в reasoning — «only visual
+  frames»). Поэтому для модели с `video`, но без `audio`, дорожка извлекается `ffmpeg` (`-vn`,
+  wav 16 кГц mono) и отдаётся aux-модели **аудио** (`deriveVideoAudioText`), а транскрипт
+  дописывается в `content` блоком `[video-audio: <name>]` рядом с видео; само видео уходит нативно.
+  Нет aux-модели аудио/`ffmpeg`/пустой результат — прежнее поведение (видео нативно, без
+  транскрипта), ход не падает.
 - **Производные объекты.** Транскод и кадры пишутся в blob-хранилище
   (`attachments/.derived/<ключ>.wav|<ключ>-<i>.jpg`): `MediaPartData` **не** несёт base64
   (часть всегда ссылается на объект, ADR-115/ADR-116), поэтому aux-вызов читает их тем же путём,
@@ -645,16 +651,22 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
     нативный путь для них часто неполный;
   - **видео — нативно у RouterAI, иначе кадры**: OpenAI-совместимый RouterAI принимает
     `{type:'video_url', video_url:{url:'data:video/mp4;base64,…'}}` (проверено на живом API
-    2026-10-28: модель видит и слышит ролик); официальный OpenAI/Anthropic такого блока не знают —
-    там гидратация считает транспорт `video` неподдерживаемым и применяет aux-модель (кадры через
-    `ffmpeg`) либо помечает вложение недоставленным — тихой потери нет. Предикат —
-    `supportsNativeVideo(type, baseUrl)` (`providers/base.ts`);
-  - **аудио → видео для модели с `video`, но без `audio`**: текущая (последняя) реплика
-    пользователя упаковывается `ffmpeg` в MP4 с чёрным видеорядом (`wrapAudioAsVideo`,
-    `derive.ts`; `-movflags frag_keyframe+empty_moov`), уходит нативно как `video`, а в `content`
-    добавляется пометка `prompts/system/AUDIO_AS_VIDEO.{ru,en}.md` — «оригинал содержал только
-    звук». Старые аудио-реплики не переупаковываются (уже имеют транскрипт/не тратят объём каждый
-    ход); упаковка возможна только при нативном видео у провайдера;
+    2026-10-28: модель видит **кадры**; аудиодорожку провайдер не доставляет — на файле с речью
+    `minimax/minimax-m3.1-flash` отвечает `NO_AUDIO`, в reasoning «only visual frames»; контраст —
+    `google/gemini-3.5-flash` на том же файле даёт транскрипт и `audio_tokens`); официальный
+    OpenAI/Anthropic такого блока не знают — там гидратация считает транспорт `video`
+    неподдерживаемым и применяет aux-модель (кадры через `ffmpeg`) либо помечает вложение
+    недоставленным — тихой потери нет. Предикат — `supportsNativeVideo(type, baseUrl)`
+    (`providers/base.ts`);
+  - **транскрипт аудиодорожки видео для модели с `video`, но без `audio`**: дорожка извлекается
+    `ffmpeg` (`-vn`, wav 16 кГц mono) и уходит aux-модели **аудио**
+    (`attachments.modalityModels.audio`, `deriveVideoAudioText` в `derive.ts`); результат —
+    блок `[video-audio: <name>]` в `content` LLM-сообщения рядом с видео. Видео при этом уходит
+    нативно; кэш — по blob + aux-модели с отдельным семейством ключа `video-audio`, поэтому
+    aux-вызов не повторяется каждый ход. Aux не назначена, `ffmpeg` нет, пустой/ошибочный
+    результат — прежнее поведение (видео нативно, без транскрипта), ход не падает. Аудио-в-видео
+    (MP4 с чёрным кадром) **отменено** — модель со `video` без `audio` звука не получает,
+    обход только жёг токены на кадры (2026-10-28);
 - отброшенное вложение (`modality`/`limit`/`unavailable`) материализуется в `<workspace>/attachments/`
   (`engine/attachments/materialize.ts`), путь сообщается модели блоком `[ATTACHMENTS NOT DELIVERED]`
   (шаблон — `prompts/system/ATTACHMENTS_DROPPED.{ru,en}.md`); нет workspace — блок без пути;
@@ -682,7 +694,8 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
 - **обработка медиа (этап 2, §«Модели обработки по модальностям» → «Реализация»):**
   `deriveModalityText` (`engine/attachments/derive.ts`) — image/pdf как есть, audio wav/mp3 как есть
   либо транскод `ffmpeg` в wav 16 кГц mono, video — нативно у RouterAI либо кадры (до 5) через
-  `ffmpeg`; аудио для video-only модели — MP4 с чёрным видеорядом; кэш результата
+  `ffmpeg`; `deriveVideoAudioText` — транскрипт аудиодорожки видео (`-vn` + aux-модель аудио,
+  отдельное семейство кэша `video-audio`); кэш результата
   `attachments/.derived/<sha256>.json`, производные объекты в blob; промпты
   `prompts/system/MEDIA_DERIVE.{ru,en}.md` + `ContextConfig.getMediaDeriveTemplate`; детект `ffmpeg`
   (`isFfmpegAvailable`, ADR-078);
@@ -695,6 +708,10 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   и подсказку про `list_models`/настройку модели обработки (повторно прикладывать файл нельзя —
   он будет отброшен снова). Гидратация получает `canDeliverNative` (предикат форматов аудио
   провайдера) и при заданной aux-модели обрабатывает аудио через неё до нативного пути.
+- **транскрипт дорожки видео (2026-10-28):** `HydrateOptions.deriveVideoAudio` +
+  `_buildVideoAudioDerive` (aux-модель аудио) и `deriveVideoAudioText` — видео уходит нативно, а
+  рядом в `content` появляется блок `[video-audio: <name>]`; `DerivedEntry.label` задаёт заголовок
+  блока, общий шов aux-вызова вынесен в `_buildAuxDeriveDeps`.
 
 **Остаток:**
 
@@ -721,12 +738,25 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
 - 2026-10-27 — принято как ADR-115 из [PROP-085](./prop-085-multimodal-input.md). Зафиксировано: байты на
   томе через `BlobStore` (не в БД), `blob_refs` для дедупа и GC, аддитивное `attachments` в LLM-контракте,
   UI по образцу OpenChamber (`tmp/refs/openchamber`), видео/ASR/OCR — вне объёма.
-- 2026-10-28 — **видео нативно у RouterAI, аудио-в-видео, повторное скачивание.**
-  `supportsNativeVideo` + `video_url` в OpenAI-адаптере; `wrapAudioAsVideo` (MP4 с чёрным
-  видеорядом) для моделей с `video` без `audio` + `AUDIO_AS_VIDEO.{ru,en}.md`; `save_attachment`
+- 2026-10-28 — **видео нативно у RouterAI, повторное скачивание; аудио-в-видео — откатано.**
+  `supportsNativeVideo` + `video_url` в OpenAI-адаптере; `save_attachment`
   получил выбор сообщения (`message_id`/`message_seq`); шлюз хранит `file_id` входящих сообщений
   (`state/inbound-messages.json`) и отдаёт MCP-тул `tg_download_attachment` (повторное скачивание
   после обрыва прокси; байты — MCP-ресурсом в текущий ход).
+  ~~`wrapAudioAsVideo` (MP4 с чёрным видеорядом) для моделей с `video` без `audio` +
+  `AUDIO_AS_VIDEO.{ru,en}.md`~~ — **откатано в тот же день** (см. следующую запись):
+  предпосылка «модель слышит дорожку» не подтвердилась.
+- 2026-10-28 — **откат «аудио-в-видео», транскрипт дорожки видео через aux.** Проверено на живом
+  API: RouterAI `minimax/minimax-m3.1-flash` (`architecture.input_modalities` = text/image/video,
+  без audio) на MP4 с речью отвечает `NO_AUDIO` («only visual frames»), контроль
+  `google/gemini-3.5-flash` на том же файле даёт транскрипт (`audio_tokens: 79`). Значит `video`
+  у таких моделей = только кадры, а обход только вводил модель в заблуждение и жёг токены на кадры
+  (6112 prompt-токенов на 18-секундный чёрный ролик). Убраны `wrapAudioAsVideo`/
+  `AUDIO_AS_VIDEO.{ru,en}.md` и `ContextFileRepository.getAudioAsVideoNote`; аудио у модели без
+  `audio` снова идёт aux-моделью (`derive`) либо отбрасывается с материализацией. Вместо обхода:
+  для видео у модели с `video` без `audio` дорожка извлекается `ffmpeg` (`-vn`) и уходит aux-модели
+  аудио, транскрипт — блок `[video-audio: <name>]` рядом с нативно доставленным видео
+  (`deriveVideoAudioText`, семейство кэша `video-audio`; нет aux/`ffmpeg` — прежнее поведение).
 - 2026-10-27 — **этап 2: обработка медиа.** Добавлены сервис `deriveModalityText` (aux-модель →
   текст, модель сессии не меняется), промпты `MEDIA_DERIVE.{ru,en}.md` и загрузчик
   `getMediaDeriveTemplate`, детект `ffmpeg` (`isFfmpegAvailable`, ADR-078), кэш результатов в blob
