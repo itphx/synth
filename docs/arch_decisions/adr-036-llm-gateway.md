@@ -58,6 +58,8 @@
 
 Стриминг ответа идёт как есть (с плейсхолдерами) — никаких буферов и задержек. Деобфускация только на финальном собранном ответе (chat) и в точках потребления.
 
+**Паттерны детекции (`DEFAULT_PATTERNS` в `secret-detector.ts`):** встроенный набор regex (OpenAI/GitHub/AWS/Google/Stripe/Bearer, email, номера карт по Luhn); набор можно переопределить извне (`SecretPatternStore`) — email-regex при этом остаётся прежним. Email-паттерн **не срабатывает на authority URL** (`user@host:path`, `scheme://user@host/path`, `//user@host/path`), чтобы обфускация не ломала git/ssh-ссылки в промпте и истории (`git@gitverse.ru:itphx/synth.git`); реальные email (`user@example.com` в тексте, `email: текст`) по-прежнему обфусцируются.
+
 **Output Guard:**
 - Детекция секретов в ответе модели (галлюцинированные ключи, extraction-попытки) — пишется в аудит `output_guard`
 - Подозрительные URL и команды

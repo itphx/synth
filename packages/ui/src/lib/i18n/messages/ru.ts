@@ -2025,6 +2025,12 @@ export const dict = {
   'admin.agents.cap.mcp': 'MCP',
   'admin.agents.cap.runtime': 'runtime',
   'admin.agents.cap.user': 'пользователь',
+  'admin.agents.cap.memory': 'память',
+  'admin.agents.cap.pipeline': 'пайплайны',
+  'admin.agents.cap.schedule': 'расписания',
+  'admin.agents.cap.question': 'вопрос пользователю',
+  'admin.agents.cap.process': 'фоновые процессы',
+  'admin.agents.cap.models': 'модели',
 
   // Subagent fields
   'admin.agents.agentMode': 'Тип агента',

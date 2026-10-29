@@ -147,6 +147,8 @@ describe('AgentRegistry — набор ролей (leader/fixer/tester/researche
   it('assistant сохранён', () => {
     expect(registry.get('assistant')).toBeDefined();
     expect(registry.get('assistant')!.agentMode).toEqual(['primary']);
+    // Универсальный агент: запись файлов и git есть — shell тоже нужен
+    expect(registry.get('assistant')!.capabilities).toContain(ToolCapability.SHELL);
     // capability `user` (`profile_update`) — сабагенту не отдаём
     expect(registry.getSubagents().map((a) => a.id)).not.toContain('assistant');
   });
@@ -201,11 +203,15 @@ describe('AgentRegistry — набор ролей (leader/fixer/tester/researche
     }
   });
 
-  it('leader без shell и без file_write (только чтение и делегирование)', () => {
+  it('leader: все capability, кроме user (profile_update)', () => {
     const caps = registry.get('leader')!.capabilities;
-    expect(caps).not.toContain(ToolCapability.SHELL);
-    expect(caps).not.toContain(ToolCapability.FILE_WRITE);
-    expect(caps).toContain(ToolCapability.TASK);
+    const all = Object.values(ToolCapability);
+    expect(new Set(caps)).toEqual(new Set(all.filter((c) => c !== ToolCapability.USER)));
+  });
+
+  it('tester без web (промпт запрещает сеть)', () => {
+    const caps = registry.get('tester')!.capabilities;
+    expect(caps).not.toContain(ToolCapability.WEB);
   });
 
   it('researcher без shell и web (read-only)', () => {
@@ -225,7 +231,7 @@ describe('AgentRegistry.getToolsForAgent (ADR-070 §2.9)', () => {
 
     expect(agentTools).toBeDefined();
     expect(agentTools!.map((t) => t.function.name).sort()).toEqual(allNames);
-    // assistant без capability shell — но тул всё равно виден модели
+    // assistant с capability shell — тул виден модели
     // (недоступность обеспечивает permission-слой: unavailable(role)).
     expect(allNames).toContain('execute_shell');
   });

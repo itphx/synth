@@ -4,10 +4,10 @@
  * Capability `pipeline`/`schedule` — **отключаемые админом** доменные
  * возможности (ADR-071 §2.3.1): выдавать их нужно осознанно.
  *
- * - получают capability: `assistant`, `devops`, `admin` — агенты, которые
- *   ведут автоматизацию инстанса и проекта;
- * - не получают: `leader` (оркестратор делегирует, автором пайплайнов и
- *   расписаний не является), `fixer`/`tester` (у них другой инструментарий),
+ * - получают capability: `assistant`, `devops`, `admin`, `leader` — агенты,
+ *   которые ведут автоматизацию инстанса и проекта, а также лидер (получает
+ *   все capability, кроме `user`, — включая авторство пайплайнов и расписаний);
+ * - не получают: `fixer`/`tester` (у них другой инструментарий),
  *   `researcher` (read-only исследователь), `security-auditor` (read-only аудит
  *   безопасности), `explore`/`general` (сабагенты без домена проекта), `title`
  *   (системный генератор заголовков, без инструментов вовсе).
@@ -23,18 +23,19 @@ import { computeToolAvailability } from '../permission/availability.js';
 /**
  * Агенты, которым нужны capability пайплайнов и расписаний: авторство и запуск
  * автоматизации инстанса/проекта.
- * `leader` делегирует работу и автором не является, `fixer`/`tester` пайплайны
- * и расписания не ведут — у них другой инструментарий.
+ * `leader` получает полный набор capability (всё, кроме `user`) — значит и
+ * пайплайны с расписаниями; `fixer`/`tester` пайплайны и расписания не ведут —
+ * у них другой инструментарий.
  */
-const WITH_AUTOMATION = ['assistant', 'devops', 'admin'];
+const WITH_AUTOMATION = ['assistant', 'devops', 'admin', 'leader'];
 /**
  * Вопрос пользователю и реестр фоновых прогонов — шире автоматизации: нужны и
  * оркестратору, и исполнителям (спросить человека, посмотреть свою фоновую работу).
  */
-const WITH_AUTOMATION_AND_EXECUTORS = [...WITH_AUTOMATION, 'leader', 'fixer', 'tester'];
+const WITH_AUTOMATION_AND_EXECUTORS = [...WITH_AUTOMATION, 'fixer', 'tester'];
 /** Агенты, которым capability пайплайнов/расписаний не выдаётся. */
 const WITHOUT_AUTOMATION = [
-  'leader', 'fixer', 'tester', 'researcher', 'security-auditor', 'explore', 'general', 'title',
+  'fixer', 'tester', 'researcher', 'security-auditor', 'explore', 'general', 'title',
 ];
 /** Агенты, которым не выдаётся ни `question`, ни `process`. */
 const WITHOUT_AUTOMATION_AND_EXECUTORS = [

@@ -247,10 +247,12 @@ describe('migrateLegacyStoredAgents', () => {
     expect(leader.displayName).toBe(builtinLeader.displayName);
     expect(leader.description).toBe(builtinLeader.description);
     expect(leader.contextFile).toBe('LEADER.md');
-    // Права — встроенные: PM-права (`file_write`/`git_write`) не переезжают.
+    // Права — встроенные (набор из PM-записи не переезжает).
     expect(leader.capabilities).toEqual(builtinLeader.capabilities);
-    expect(leader.capabilities).not.toContain('file_write');
-    expect(leader.capabilities).not.toContain('git_write');
+    // Признак «взято встроенное»: capability, которой у прежнего `pm` не было.
+    expect(leader.capabilities).toContain('shell');
+    // `user` (`profile_update`) лидеру не выдаётся — это его единственное исключение.
+    expect(leader.capabilities).not.toContain('user');
     // Лимиты шагов — встроенные (у `pm` было `maxSteps: 0` — без ограничений).
     expect(leader.maxSteps).toBe(builtinLeader.maxSteps);
     // Запись сохранена как пользовательская (override встроенного).

@@ -12,6 +12,7 @@
     "file_read",
     "file_write",
     "search",
+    "shell",
     "web",
     "git_read",
     "git_write",

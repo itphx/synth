@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { ENGINE_MESSAGE_KEYS } from '@itphx/synth-shared/i18n'
+import { TOOL_CAPABILITY_META } from '@itphx/synth-shared/types'
 import { dict as ruDict } from './ru'
 import { dict as enDict } from './en'
 
@@ -95,5 +96,22 @@ describe('UI-словари en ↔ ru (паритет)', () => {
       }
     }
     expect(mismatches, `расхождения параметров:\n${mismatches.join('\n')}`).toEqual([])
+  })
+})
+
+/**
+ * Бейджи capability в админке «Агенты» строятся динамически по каноническому
+ * реестру shared (`TOOL_CAPABILITY_META`), поэтому новый ключ реестра без
+ * перевода показывался бы сырым `admin.agents.cap.<key>`.
+ */
+describe('capability-ключи админки «Агенты»', () => {
+  it('у каждой capability из shared есть ru/en-перевод', () => {
+    const missing = Object.keys(TOOL_CAPABILITY_META).flatMap((key) => {
+      const dictKey = `admin.agents.cap.${key}`
+      return [has(ru, dictKey) ? null : `ru:${dictKey}`, has(en, dictKey) ? null : `en:${dictKey}`].filter(
+        (v): v is string => v !== null,
+      )
+    })
+    expect(missing, `нет переводов: ${missing.join(', ')}`).toEqual([])
   })
 })

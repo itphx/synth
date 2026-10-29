@@ -3,12 +3,15 @@
  * останавливает ход. Модель получает `tool_result` с причиной и продолжает
  * работу — может выбрать другой инструмент или дать текстовый ответ.
  *
- * Регресс бага сессии `mvqh7e8u-3-5lxg77a5`: агент `assistant` (нет capability
- * `shell`) вызывал `execute_shell`, получал ролевой deny, и ход умирал, хотя
- * доступный `project_repo_clone` мог решить задачу. Теперь: следующий
- * LLM-вызов происходит, доступный тул исполняется, ход завершается штатно.
- * Фоллбек `session.role_tool_blocked` остаётся только на случай пустого
- * финального ответа модели.
+ * Регресс бага сессии `mvqh7e8u-3-5lxg77a5`: агент без capability `shell`
+ * вызывал `execute_shell`, получал ролевой deny, и ход умирал, хотя доступный
+ * `project_repo_clone` мог решить задачу. Теперь: следующий LLM-вызов
+ * происходит, доступный тул исполняется, ход завершается штатно. Фоллбек
+ * `session.role_tool_blocked` остаётся только на случай пустого финального
+ * ответа модели.
+ *
+ * В тесте роль — `researcher` (read-only, без `shell`): у `assistant` после
+ * расширения capability shell появился, и ролевой deny на нём не воспроизвести.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -62,7 +65,7 @@ interface ScriptChunk {
 }
 
 /**
- * Провайдер: 1-й вызов — `execute_shell` (агенту `assistant` недоступен по
+ * Провайдер: 1-й вызов — `execute_shell` (агенту `researcher` недоступен по
  * роли), 2-й — доступный `read_file`, 3-й — текст. Все три вызова ожидаются:
  * deny не обрывает ход, модель пробует другой инструмент.
  */
@@ -226,8 +229,8 @@ async function makeHarness(providerName: string): Promise<Harness> {
   const session = await sessionManager.createSession({
     title: 'RoleDeny',
     projectId: project.id,
-    // `assistant` не имеет capability `shell` — `execute_shell` недоступен по роли.
-    settings: { provider: providerName, model: 'm', systemPrompt: 'test', agentRole: 'assistant' },
+    // `researcher` не имеет capability `shell` — `execute_shell` недоступен по роли.
+    settings: { provider: providerName, model: 'm', systemPrompt: 'test', agentRole: 'researcher' },
   });
   await sessionManager.addMessage(session.id, makeMessage());
   // Доступный тул `read_file` читает этот файл — доказательство, что после
@@ -329,13 +332,13 @@ describe('ChatOrchestrator: deny не останавливает ход', () => 
       // Вторая LLM-итерация состоялась (ход не оборван отказом).
       expect(MockRoleDenyEmptyProvider.calls).toBe(2);
 
-      const expectedText = sm('session.role_tool_blocked', { tool: 'execute_shell', agent: 'assistant' });
+      const expectedText = sm('session.role_tool_blocked', { tool: 'execute_shell', agent: 'researcher' });
       const stored = (await h.sessionManager.getSession(h.sessionId))!;
       const final = stored.messages.filter((m) => m.role === MessageRole.ASSISTANT).at(-1)!;
       expect(final.content).toBe(expectedText);
       expect(final.metadata?.i18n).toEqual({
         key: 'session.role_tool_blocked',
-        params: { tool: 'execute_shell', agent: 'assistant' },
+        params: { tool: 'execute_shell', agent: 'researcher' },
       });
       expect(final.metadata?.status).toBe('stopped');
 

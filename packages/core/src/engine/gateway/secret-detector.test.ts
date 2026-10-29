@@ -38,6 +38,36 @@ describe('detectSecrets', () => {
     expect(detectSecrets(`пишите на ${EMAIL}`)).toContain(EMAIL);
   });
 
+  // Регрессия ADR-036: authority URL — не почта, иначе обфускация ломает git/ssh-ссылки.
+  it('НЕ детектит email в SCP-подобном SSH (user@host:path)', () => {
+    expect(detectSecrets('git@gitverse.ru:itphx/synth.git')).toEqual([]);
+    expect(detectSecrets('git clone git@github.com:org/repo.git')).toEqual([]);
+  });
+
+  it('НЕ детектит email в URL со схемой', () => {
+    expect(detectSecrets('ssh://git@gitverse.ru/itphx/synth.git')).toEqual([]);
+    expect(detectSecrets('git+ssh://git@gitverse.ru/itphx/synth.git')).toEqual([]);
+    expect(detectSecrets('https://user@example.com/path')).toEqual([]); // URL authority, не почта
+  });
+
+  it('НЕ детектит email в URL без пути (конец строки)', () => {
+    expect(detectSecrets('ssh://git@gitverse.ru')).toEqual([]);
+    expect(detectSecrets('https://user@example.com')).toEqual([]);
+  });
+
+  it('detectSecrets: email без `:`/`/` после — по-прежнему почта', () => {
+    expect(detectSecrets('git@example.com')).toContain('git@example.com');
+    expect(detectSecrets('пишите user@example.com')).toContain(EMAIL); // без `//` — почта
+  });
+
+  it('двоеточие с пробелом после email — не URL, а почта', () => {
+    expect(detectSecrets('contact user@example.com: please')).toContain(EMAIL);
+  });
+
+  it('user@example.com:8080 — host:port, не email', () => {
+    expect(detectSecrets('user@example.com:8080')).toEqual([]);
+  });
+
   it('находит валидную по Luhn карту', () => {
     expect(detectSecrets(`номер ${CARD_VALID}`)).toContain(CARD_VALID);
   });

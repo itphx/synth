@@ -174,13 +174,16 @@ describe('ChatOrchestrator: устаревшая роль агента (алиа
     expect(stored.settings.agentRole).toBe('pm');
   });
 
-  it('pm → leader: ограничения берутся у leader (shell недоступен, чтение — да)', async () => {
+  it('pm → leader: ограничения берутся у leader (shell доступен, profile_update — нет)', async () => {
     const stored = (await h.sessionManager.getSession(h.sessionId))!;
     const info = await h.orchestrator.getPromptInfo(stored);
-    const shell = info.toolsDetail.find((t) => t.name === 'execute_shell')!;
-    expect(shell.available).toBe(false);
-    expect(shell.reason).toBe('role');
+    // Лидер получает все capability, кроме `user`: запись/команды доступны…
+    expect(info.toolsDetail.find((t) => t.name === 'execute_shell')!.available).toBe(true);
     expect(info.toolsDetail.find((t) => t.name === 'read_file')!.available).toBe(true);
+    // …а `profile_update` — нет (единственное исключение).
+    const profile = info.toolsDetail.find((t) => t.name === 'profile_update')!;
+    expect(profile.available).toBe(false);
+    expect(profile.reason).toBe('role');
   });
 
   it('история с меткой pm остаётся «своей»: без атрибуции [pm]: и без смены роли', () => {
@@ -246,14 +249,16 @@ describe('ChatOrchestrator: неизвестная роль агента → ф�
     expect(stored.settings.agentRole).toBe('legacy-unknown');
   });
 
-  it('ограничения роли берутся у assistant: execute_shell недоступен по роли', async () => {
+  it('фоллбек на assistant: применяется его набор capability (роль-отказов нет — он универсален)', async () => {
     const stored = (await h.sessionManager.getSession(h.sessionId))!;
     const info = await h.orchestrator.getPromptInfo(stored);
-    const shell = info.toolsDetail.find((t) => t.name === 'execute_shell')!;
-    expect(shell.available).toBe(false);
-    expect(shell.reason).toBe('role');
-    // assistant умеет читать файлы — тул остаётся доступным
-    expect(info.toolsDetail.find((t) => t.name === 'read_file')!.available).toBe(true);
+    // `assistant` — универсальный агент: у него все capability, поэтому
+    // ограничений по роли нет. Факт применения роли проверяет тест промпта выше
+    // (`[ROLE: ASSISTANT]`); здесь — что fallback не оставляет тулы выключенными.
+    for (const name of ['read_file', 'write_file', 'execute_shell', 'profile_update']) {
+      expect(info.toolsDetail.find((t) => t.name === name)!.available, name).toBe(true);
+    }
+    expect(info.toolsDetail.filter((t) => !t.available && t.reason === 'role')).toEqual([]);
   });
 
   it('известная роль не затронута фоллбеком: fixer получает свой промпт и shell', async () => {

@@ -54,9 +54,40 @@ function _isValidLuhn(candidate: string): boolean {
 }
 
 /**
+ * Считается ли найденный email частью authority URL (а не почтой)?
+ *
+ * Email-паттерн ловит `git@gitverse.ru` в `git@gitverse.ru:itphx/synth.git`
+ * (граница слова перед `:`/`/`), из-за чего обфускация ломала git/ssh-ссылки
+ * в промпте и истории. URL-контекст:
+ * - SCP-подобный SSH: сразу после совпадения `:` и непустой путь без ведущего
+ *   пробела (`git@host:path`, `user@host:2222/path`);
+ * - схема + `://` перед совпадением и `/` или конец строки после
+ *   (`ssh://git@host/path`, `git+ssh://git@host/path`, `https://user@host/path`,
+ *   `ssh://git@host`, `https://user@host`);
+ * - protocol-relative `//user@host/path` (перед совпадением `//`, после `/`).
+ *
+ * `email: текст` (двоеточие + пробел) и обычный `user@example.com` в предложении
+ * остаются почтой.
+ */
+function _isUrlAuthorityEmail(text: string, index: number, raw: string): boolean {
+  const after = text[index + raw.length] ?? '';
+
+  // SCP-подобный SSH: `user@host:path` — двоеточие и непустой путь без ведущего пробела.
+  if (after === ':') {
+    const rest = text.slice(index + raw.length + 1);
+    return rest.length > 0 && !/^\s/.test(rest);
+  }
+
+  // `scheme://user@host/path`, `scheme://user@host` и protocol-relative `//user@host/path`
+  // — перед совпадением `//`; после — `/` или конец строки (URL без пути).
+  if (after !== '/' && after !== '') return false;
+  return text.slice(0, index).endsWith('//');
+}
+
+/**
  * Находит подстроки-секреты в тексте.
  * Возвращает уникальные значения. Для ключей применяется порог длины MIN_KEY_LENGTH,
- * для номеров карт — проверка Luhn.
+ * для номеров карт — проверка Luhn, для email — отсев authority URL (см. `_isUrlAuthorityEmail`).
  * @param patterns паттерны детекции; по умолчанию — DEFAULT_PATTERNS.
  */
 export function detectSecrets(
@@ -77,7 +108,10 @@ export function detectSecrets(
 
       if (type === 'card') {
         if (!_isValidLuhn(raw)) continue;
-      } else if (type !== 'email') {
+      } else if (type === 'email') {
+        // Authority URL (git/ssh) — не почта: обфускация ломала бы ссылку (ADR-036).
+        if (_isUrlAuthorityEmail(text, match.index, match[0])) continue;
+      } else {
         if (raw.length < MIN_KEY_LENGTH) continue;
       }
 

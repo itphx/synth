@@ -731,7 +731,10 @@
   `leader` мог делегировать инфраструктуру (CI/CD, деплой) и серверные задачи
   (systemd, пакеты, сеть, диски) через `task`; `assistant`/`leader` — только `primary`
   (у `assistant` capability `user`/`profile_update`, `leader` — сам не вызывается как
-  сабагент, без рекурсии),
+  сабагент, без рекурсии). **`leader` получает все capability, кроме `user`**
+  (`profile_update`), включая запись (`file_write`/`git_write`), `shell`, `pipeline` и
+  `schedule`: крупные изменения он делегирует исполнителям, сам делает быстрые проверки
+  и мелкие правки (промпт `LEADER.{ru,en}.md` согласован с этим набором).
   `title` — `system`. Список сабагентов берётся из определений (`AgentRegistry.getSubagents`),
   отдельного статического перечня нет.
 - `engine/authority/*` — ADR-106: слой полномочий (модель — `shared/types/authority.ts`).

@@ -2043,6 +2043,12 @@ export const dict = {
   'admin.agents.cap.mcp': 'MCP',
   'admin.agents.cap.runtime': 'runtime',
   'admin.agents.cap.user': 'user',
+  'admin.agents.cap.memory': 'memory',
+  'admin.agents.cap.pipeline': 'pipelines',
+  'admin.agents.cap.schedule': 'schedules',
+  'admin.agents.cap.question': 'user question',
+  'admin.agents.cap.process': 'background processes',
+  'admin.agents.cap.models': 'models',
 
   // Subagent fields
   'admin.agents.agentMode': 'Agent type',

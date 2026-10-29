@@ -66,6 +66,22 @@ describe('obfuscateSecrets', () => {
     expect(result.text).toBe('новый ⟦SYNTH_SECRET_2⟧');
     expect(result.map['⟦SYNTH_SECRET_2⟧']).toBe(SK2);
   });
+
+  // Регрессия ADR-036: authority URL git/ssh не должен обфусцироваться.
+  it('не трогает git/ssh-ссылку (authority URL — не email)', () => {
+    const text = 'git clone git@gitverse.ru:itphx/synth.git';
+    const result = obfuscateSecrets(text, {});
+    expect(result.text).toBe(text);
+    expect(result.map).toEqual({});
+    expect(result.found).toEqual([]);
+  });
+
+  it('по-прежнему обфусцирует реальный email в тексте', () => {
+    const result = obfuscateSecrets('email user@example.com', {});
+    expect(result.text).toBe('email ⟦SYNTH_SECRET_1⟧');
+    expect(result.map).toEqual({ '⟦SYNTH_SECRET_1⟧': 'user@example.com' });
+    expect(result.found).toEqual(['user@example.com']);
+  });
 });
 
 describe('deobfuscateSecrets', () => {
