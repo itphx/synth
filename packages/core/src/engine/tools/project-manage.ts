@@ -16,6 +16,7 @@ import { provisionWorkspace } from '../workspace-provision.js';
 import { isAborted, abortedResult } from './abort.js';
 import { canEditProject } from './project-access.js';
 import { t as sm, i18n as i18nMeta, type SystemMessageKey } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 export interface ProjectManageExtra {
   sessionManager?: SessionManager;
@@ -100,12 +101,6 @@ export async function attachSessionToProject(
   return worktreeDetached;
 }
 
-function argError(toolName: string, issues: z.ZodIssue[]): string {
-  return sm('tool.args_error', { tool: toolName, issues: issues
-    .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
-    .join('; ') });
-}
-
 const NO_PROJECT_LOG_ERROR = sm('project.log_no_project');
 const NO_PROJECT_INVARIANTS_ERROR = sm('project.invariants_no_project');
 
@@ -160,7 +155,7 @@ export const projectCreateTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: argError(this.name, parsed.error.issues), isError: true };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { name: string; description?: string; workspace?: string };
 
@@ -248,7 +243,7 @@ export const projectAttachTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: argError(this.name, parsed.error.issues), isError: true };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { projectId: string };
 
@@ -354,7 +349,7 @@ export const projectUpdateTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: argError(this.name, parsed.error.issues), isError: true };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { name?: string; description?: string; icon?: string | null; color?: string | null };
 
@@ -419,7 +414,7 @@ export const projectWorkspaceSetTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: argError(this.name, parsed.error.issues), isError: true };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { workspace: string; confirmOutsideRoot?: boolean };
 
@@ -503,7 +498,7 @@ export const projectLogWriteTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: argError(this.name, parsed.error.issues), isError: true };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { text: string };
 
@@ -633,7 +628,7 @@ export const projectInvariantsWriteTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: argError(this.name, parsed.error.issues), isError: true };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { invariants: string };
 

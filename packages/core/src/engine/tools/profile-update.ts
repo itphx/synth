@@ -4,6 +4,7 @@ import type { ToolDefinition, ProfileStore } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 /**
  * Онбординг-интервью (PROP-083): агент сохраняет ответы пользователя в профиль
@@ -38,12 +39,6 @@ const profileUpdateSchema = z
     { message: 'at least one field must be provided' },
   );
 
-function argError(toolName: string, issues: z.ZodIssue[]): string {
-  return sm('tool.args_error', { tool: toolName, issues: issues
-    .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
-    .join('; ') });
-}
-
 export const profileUpdateTool: ToolDefinition = {
   name: 'profile_update',
   description:
@@ -67,7 +62,7 @@ export const profileUpdateTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: argError(this.name, parsed.error.issues), isError: true };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as {
       display_name?: string;

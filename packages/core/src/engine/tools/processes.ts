@@ -36,6 +36,7 @@ import type { ProcessService } from '../processes/service.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 /**
  * Зависимости тулов из `ToolContext.extra` (упаковка — оркестратор).
@@ -76,18 +77,6 @@ const RUN_STATUSES = ['running', 'completed', 'failed', 'cancelled', 'orphaned']
 
 /** Виды фоновой работы (фильтр `process_list`). */
 const RUN_KINDS = ['subagent', 'process'] as const;
-
-/** Единый текст ошибки разбора аргументов (как у соседних тулов). */
-function argError(toolName: string, issues: z.ZodIssue[]): ToolResult {
-  return {
-    content: sm('tool.args_error', {
-      tool: toolName,
-      issues: issues.map((i) => `${i.path.join('.') || 'root'}: ${i.message}`).join('; '),
-    }),
-    isError: true,
-    metadata: { i18n: i18nMeta('tool.args_error', { tool: toolName }) },
-  };
-}
 
 /** Единый отказ «реестр недоступен» (сервис/реестр не подключены). */
 function depsUnavailable(): ToolResult {
@@ -212,7 +201,7 @@ export const processListTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
 
     const parsed = this.parameters.safeParse(args);
-    if (!parsed.success) return argError(this.name, parsed.error.issues);
+    if (!parsed.success) return argErrorResult(this.name, parsed.error.issues);
     const params = parsed.data as {
       status?: BackgroundRunStatus;
       kind?: BackgroundRunKind;
@@ -302,7 +291,7 @@ export const processLogsTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
 
     const parsed = this.parameters.safeParse(args);
-    if (!parsed.success) return argError(this.name, parsed.error.issues);
+    if (!parsed.success) return argErrorResult(this.name, parsed.error.issues);
     const params = parsed.data as {
       process_id: string;
       stream?: 'stdout' | 'stderr' | 'combined';

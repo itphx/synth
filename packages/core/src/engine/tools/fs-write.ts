@@ -7,6 +7,7 @@ import { resolvePath, validateInputPath, isSymlinkEscapeInRoots, toolRoots, path
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 export function generateUnifiedDiff(oldText: string, newText: string, filePath: string): string {
   const oldLines = oldText.split('\n');
@@ -77,7 +78,7 @@ export const writeFileTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { file_path: string; content: string };
     validateInputPath(params.file_path, 'file_path');
@@ -123,7 +124,7 @@ export const editFileTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { file_path: string; old_string: string; new_string: string; replace_all?: boolean };
     validateInputPath(params.file_path, 'file_path');
@@ -197,7 +198,7 @@ export const createDirectoryTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { path: string };
     validateInputPath(params.path, 'path');
@@ -224,7 +225,7 @@ export const deleteFileTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { file_path: string };
     validateInputPath(params.file_path, 'file_path');

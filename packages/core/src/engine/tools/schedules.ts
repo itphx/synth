@@ -51,23 +51,13 @@ import {
 } from './automation-helpers.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 /** Дефолтный размер выборки истории срабатываний. */
 const DEFAULT_LIMIT = 20;
 
 /** Абсолютный потолок выборки истории срабатываний. */
 const MAX_LIMIT = 100;
-
-/** Единый текст ошибки разбора аргументов (как у соседних тулов). */
-function argError(toolName: string, issues: z.ZodIssue[]): ToolResult {
-  return {
-    content: sm('tool.args_error', {
-      tool: toolName,
-      issues: issues.map((i) => `${i.path.join('.') || 'root'}: ${i.message}`).join('; '),
-    }),
-    isError: true,
-  };
-}
 
 /** Единый отказ «расписание не найдено» (нет такого или оно вне области). */
 function scheduleNotFound(scheduleId: string): ToolResult {
@@ -248,7 +238,7 @@ export const scheduleListTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return argError(this.name, parsed.error.issues);
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { include_disabled?: boolean };
 
@@ -307,7 +297,7 @@ export const scheduleGetTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return argError(this.name, parsed.error.issues);
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { schedule_id: string };
 
@@ -376,7 +366,7 @@ export const scheduleSaveTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return argError(this.name, parsed.error.issues);
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as {
       schedule_id?: string;
@@ -500,7 +490,7 @@ export const scheduleDeleteTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return argError(this.name, parsed.error.issues);
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { schedule_id: string };
 
@@ -550,7 +540,7 @@ export const scheduleRunTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return argError(this.name, parsed.error.issues);
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { schedule_id: string };
 
@@ -615,7 +605,7 @@ export const scheduleJobsTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return argError(this.name, parsed.error.issues);
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { schedule_id?: string; limit?: number };
 

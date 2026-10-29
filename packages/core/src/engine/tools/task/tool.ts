@@ -11,6 +11,7 @@ import type { CancellationToken, LLMMessage, BaseProvider } from '../../../provi
 import type { ModelRouter } from '../../router/router.js';
 import { formatSkillsCatalogBlock } from '../../skills/catalog.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
+import { argErrorResult } from '../arg-error.js';
 import { BackgroundLimitExceededError } from '../../background/types.js';
 import { publishMessageAdded } from './child-session.js';
 import { prepareChildSession, type PreparedChildSession } from './fork.js';
@@ -40,7 +41,7 @@ export const taskTool: ToolDefinition = {
   async execute(args, ctx) {
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as TaskParams;
     const extra = ctx.extra as TaskExtra | undefined;

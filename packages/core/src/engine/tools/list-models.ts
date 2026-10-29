@@ -40,6 +40,7 @@ import {
 } from '@itphx/synth-shared';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 /** Имя тула (используется в текстах и в permission-группах). */
 export const LIST_MODELS_TOOL = 'list_models';
@@ -93,15 +94,6 @@ function defaultFamilies(model: ModelConfig, config?: AttachmentsConfig): Attach
   return out;
 }
 
-/** Единый текст ошибки разбора аргументов (как у соседних тулов). */
-function argsErrorResult(toolName: string, issues: string): ToolResult {
-  return {
-    content: sm('tool.args_error', { tool: toolName, issues }),
-    isError: true,
-    metadata: { i18n: i18nMeta('tool.args_error', { tool: toolName }) },
-  };
-}
-
 /** Отказ с ключом i18n и (необязательным) блоком metadata. */
 function failureResult(
   key: Parameters<typeof sm>[0],
@@ -148,10 +140,7 @@ export const listModelsTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args ?? {});
     if (!parsed.success) {
-      return argsErrorResult(
-        this.name,
-        parsed.error.issues.map((i) => `${i.path.join('.') || 'root'}: ${i.message}`).join('; '),
-      );
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as {
       modality?: AttachmentFamily;

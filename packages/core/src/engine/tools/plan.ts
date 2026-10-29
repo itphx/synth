@@ -15,6 +15,7 @@ import { isAborted, abortedResult } from './abort.js';
 import { canEditProject } from './project-access.js';
 import { loadSessionProject } from './project-manage.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 export interface PlanToolExtra {
   sessionManager?: SessionManager;
@@ -113,12 +114,6 @@ async function updateSessionMode(
   } catch {
     return false;
   }
-}
-
-function argError(toolName: string, issues: z.ZodIssue[]): string {
-  return sm('tool.args_error', { tool: toolName, issues: issues
-    .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
-    .join('; ') });
 }
 
 export const planEnterTool: ToolDefinition = {
@@ -377,7 +372,7 @@ export const planWriteTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: argError(this.name, parsed.error.issues), isError: true };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as PlanWriteInput;
     const extra = ctx.extra as PlanToolExtra | undefined;

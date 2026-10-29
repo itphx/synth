@@ -17,7 +17,7 @@
  */
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
-import type { ToolDefinition, ToolResult } from '@itphx/synth-shared';
+import type { ToolDefinition } from '@itphx/synth-shared';
 import {
   instantiatePipelineFromTemplate,
   listPipelineTemplates,
@@ -25,17 +25,7 @@ import {
 import { getAutomation, depsUnavailable, ensureCanEdit, loadAutomationScope } from './automation-helpers.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
-
-/** Единый текст ошибки разбора аргументов (как у соседних тулов). */
-function argError(toolName: string, issues: z.ZodIssue[]): ToolResult {
-  return {
-    content: sm('tool.args_error', {
-      tool: toolName,
-      issues: issues.map((i) => `${i.path.join('.') || 'root'}: ${i.message}`).join('; '),
-    }),
-    isError: true,
-  };
-}
+import { argErrorResult } from './arg-error.js';
 
 // ───────────────────────────── pipeline_templates ─────────────────────────────
 
@@ -106,7 +96,7 @@ export const pipelineInstantiateTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return argError(this.name, parsed.error.issues);
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { template_id: string; name?: string; ensure?: boolean };
 

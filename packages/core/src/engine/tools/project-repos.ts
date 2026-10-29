@@ -26,6 +26,7 @@ import { canEditProject } from './project-access.js';
 import { resolveSshEnvById } from './git-ssh.js';
 import { buildSshKeyRequiredResult } from './ssh-keys.js';
 import { t as sm, i18n as i18nMeta, type SystemMessageKey } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 /**
  * ADR-076: тулы управления git-репозиториями проекта (clone/init/add/fetch/remove).
@@ -48,12 +49,6 @@ interface ProjectReposExtra {
 
 function getExtra(ctx: ToolContext): ProjectReposExtra {
   return (ctx.extra ?? {}) as ProjectReposExtra;
-}
-
-function argError(toolName: string, issues: z.ZodIssue[]): string {
-  return sm('tool.args_error', { tool: toolName, issues: issues
-    .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
-    .join('; ') });
 }
 
 function missingDepsError(toolName: string): ToolResult {
@@ -221,7 +216,7 @@ export const projectRepoCloneTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: argError(this.name, parsed.error.issues), isError: true };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { url: string; path?: string; name?: string; branch?: string; sshKeyId?: string };
 
@@ -306,7 +301,7 @@ export const projectRepoInitTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: argError(this.name, parsed.error.issues), isError: true };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { path: string; defaultBranch?: string; name?: string };
 
@@ -359,7 +354,7 @@ export const projectRepoAddTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: argError(this.name, parsed.error.issues), isError: true };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as {
       path: string; name?: string; url?: string; type?: 'https' | 'ssh'; defaultBranch?: string; sshKeyId?: string;
@@ -407,7 +402,7 @@ export const projectRepoFetchTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: argError(this.name, parsed.error.issues), isError: true };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { id?: string; path?: string };
 
@@ -487,7 +482,7 @@ export const projectRepoRemoveTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: argError(this.name, parsed.error.issues), isError: true };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { id?: string; path?: string };
 

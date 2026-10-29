@@ -7,6 +7,7 @@ import { deobfuscateArgs } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { resolveRepoGitEnv, resolveProjectRepoEntry } from './git-ssh.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 import type { SystemMessageKey } from '../system-messages.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
@@ -224,15 +225,6 @@ export function validateGitValue(value: string, kind: GitValueKind): string | nu
   return null;
 }
 
-/** Отказ по значению параметра — через существующий механизм ошибок тула. */
-function gitArgError(tool: string, issues: string): ToolResult {
-  return {
-    content: sm('tool.args_error', { tool, issues }),
-    isError: true,
-    metadata: { i18n: i18nMeta('tool.args_error', { tool, issues }) },
-  };
-}
-
 /** Сравнение URL репозитория: хвостовой `/` и `.git` несущественны. */
 function sameGitUrl(a: string, b: string): boolean {
   const normalize = (url: string): string => url.trim().replace(/\/+$/, '').replace(/\.git$/i, '');
@@ -353,7 +345,7 @@ export const gitDiffTool: ToolDefinition = {
     // Пустая строка — как и раньше, просто не попадает в argv.
     if (params.commit) {
       const commitError = validateGitValue(params.commit, 'ref');
-      if (commitError) return gitArgError(this.name, `commit: ${commitError}`);
+      if (commitError) return argErrorResult(this.name, `commit: ${commitError}`);
     }
 
     try {
@@ -514,16 +506,16 @@ export const gitPushTool: ToolDefinition = {
     // Значения от модели не должны стать флагом git (`--force`) или refspec
     // (`+refs/heads/*:refs/heads/*` — mirror-push, `:refs/heads/x` — удаление ветки).
     const remoteError = validateGitValue(remote, 'remote');
-    if (remoteError) return gitArgError(this.name, `remote: ${remoteError}`);
+    if (remoteError) return argErrorResult(this.name, `remote: ${remoteError}`);
     if (branch) {
       const branchError = validateGitValue(branch, 'branch');
-      if (branchError) return gitArgError(this.name, `branch: ${branchError}`);
+      if (branchError) return argErrorResult(this.name, `branch: ${branchError}`);
     }
 
     // ADR-076: remote обязан быть зарегистрирован в проекте — иначе push ушёл бы
     // на произвольный хост (обход egress-адресной политики, ADR-099).
     const registryError = await resolveRegistryRemote(ctx, cwd, remote, 'push');
-    if (registryError) return gitArgError(this.name, `remote: ${registryError}`);
+    if (registryError) return argErrorResult(this.name, `remote: ${registryError}`);
 
     // ADR-076 §T6: SSH-окружение по реестру проекта (сетевой тул).
     const ssh = await resolveRepoGitEnv(ctx, cwd);
@@ -593,16 +585,16 @@ export const gitPullTool: ToolDefinition = {
 
     // Значения от модели не должны стать флагом git или refspec'ом.
     const remoteError = validateGitValue(remote, 'remote');
-    if (remoteError) return gitArgError(this.name, `remote: ${remoteError}`);
+    if (remoteError) return argErrorResult(this.name, `remote: ${remoteError}`);
     if (branch) {
       const branchError = validateGitValue(branch, 'branch');
-      if (branchError) return gitArgError(this.name, `branch: ${branchError}`);
+      if (branchError) return argErrorResult(this.name, `branch: ${branchError}`);
     }
 
     // ADR-076: remote обязан быть зарегистрирован в проекте — иначе pull ушёл бы
     // на произвольный хост (обход egress-адресной политики, ADR-099).
     const registryError = await resolveRegistryRemote(ctx, cwd, remote, 'pull');
-    if (registryError) return gitArgError(this.name, `remote: ${registryError}`);
+    if (registryError) return argErrorResult(this.name, `remote: ${registryError}`);
 
     // ADR-076 §T6: SSH-окружение по реестру проекта (сетевой тул).
     const ssh = await resolveRepoGitEnv(ctx, cwd);
@@ -667,7 +659,7 @@ export const gitCheckoutTool: ToolDefinition = {
 
     // Значение от модели не должно стать флагом git (`-f`, `-B`, `--orphan`).
     const targetError = validateGitValue(restored.target, 'ref');
-    if (targetError) return gitArgError(this.name, `target: ${targetError}`);
+    if (targetError) return argErrorResult(this.name, `target: ${targetError}`);
 
     try {
       // `--` перед target НЕ ставим: в `git checkout` он означает «восстановить
@@ -788,7 +780,7 @@ export const gitShowTool: ToolDefinition = {
     // Значение от модели не должно стать флагом git (`--output=…`, `--ext-diff`).
     const object = params.object ?? 'HEAD';
     const objectError = validateGitValue(object, 'ref');
-    if (objectError) return gitArgError(this.name, `object: ${objectError}`);
+    if (objectError) return argErrorResult(this.name, `object: ${objectError}`);
 
     try {
       // `--` перед object НЕ ставим: в `git show` он переключает разбор на

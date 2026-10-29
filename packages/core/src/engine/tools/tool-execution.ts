@@ -9,6 +9,7 @@
 import type { ToolContext, ToolDefinition, ToolResult } from '@itphx/synth-shared';
 import { stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
 import { i18n as i18nMeta, t as sm } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 import { errorText } from './error-text.js';
 
 /** Структурный источник локализованных security-сообщений (ContextConfig). */
@@ -127,16 +128,9 @@ export async function executeToolDef(
 ): Promise<ToolResult> {
   const parsed = toolDef.parameters.safeParse(toolArgs);
   if (!parsed.success) {
-    // Одна и та же строка уходит и в текст, и в `metadata.i18n`: иначе UI
-    // подставлял бы в шаблон пустое место вместо `{issues}` (ADR-041).
-    const issues = parsed.error.issues
-      .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
-      .join('; ');
-    return {
-      content: sm('tool.args_error', { tool: toolName, issues }),
-      isError: true,
-      metadata: { i18n: i18nMeta('tool.args_error', { tool: toolName, issues }) },
-    };
+    // Один контракт content+metadata: текст и `metadata.i18n` строит хелпер,
+    // иначе UI подставлял бы в шаблон пустое место вместо `{issues}` (ADR-041).
+    return argErrorResult(toolName, parsed.error.issues);
   }
 
   try {

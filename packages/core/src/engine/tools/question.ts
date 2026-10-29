@@ -18,6 +18,7 @@ import type { ToolDefinition, QuestionItem } from '@itphx/synth-shared';
 import type { QuestionService } from '../question/service.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 /**
  * Зависимости тула из `ToolContext.extra` (упаковка — оркестратор).
@@ -108,18 +109,7 @@ export const questionTool: ToolDefinition = {
     }
 
     const parsed = this.parameters.safeParse(args);
-    if (!parsed.success) {
-      return {
-        content: sm('tool.args_error', {
-          tool: this.name,
-          issues: parsed.error.issues
-            .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
-            .join('; '),
-        }),
-        isError: true,
-        metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) },
-      };
-    }
+    if (!parsed.success) return argErrorResult(this.name, parsed.error.issues);
 
     const questions = parsed.data.questions as QuestionItem[];
     const sessionId = ctx.sessionId;

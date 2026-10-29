@@ -5,6 +5,7 @@ import { resolvePath, validateInputPath, isSymlinkEscapeInRoots, toolRoots, path
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
 import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError } from '../../execution/ports/index.js';
@@ -62,7 +63,7 @@ export const executeShellTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { command: string; timeout?: number; cwd?: string; background?: boolean };
     const timeout = params.timeout ?? DEFAULT_TIMEOUT;

@@ -211,7 +211,12 @@ describe('ssh_keys_list (ADR-076)', () => {
     );
 
     expect(result.isError).toBe(true);
-    expect(result.metadata?.i18n).toEqual({ key: 'tool.args_error', params: { tool: SSH_KEYS_LIST_TOOL } });
+    expect(result.metadata?.i18n).toMatchObject({
+      key: 'tool.args_error',
+      params: { tool: SSH_KEYS_LIST_TOOL },
+    });
+    const params = (result.metadata?.i18n as { params?: Record<string, unknown> }).params;
+    expect(String(params?.issues)).toContain('agent_id');
   });
 });
 

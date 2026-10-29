@@ -10,6 +10,7 @@ import { isAborted, abortedResult } from './abort.js';
 import { sniffBinary } from './fs-read.js';
 import { generateUnifiedDiff } from './fs-write.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 /** Лимит правок за один вызов (защита от «мегапатча» в один tool_call). */
 export const MAX_PATCH_EDITS = 50;
@@ -67,7 +68,7 @@ export const patchTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const edits = parsed.data.edits;
 

@@ -33,6 +33,7 @@ import type { SessionManager } from '../../sessions/manager.js';
 import type { WorktreeService } from '../worktree/service.js';
 import { isWorktreeError } from '../worktree/errors.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 /**
  * Зависимости тулов из `ToolContext.extra` (упаковка — оркестратор).
@@ -69,18 +70,6 @@ function noProject(): ToolResult {
     content: sm('worktree.tool.no_project'),
     isError: true,
     metadata: { i18n: i18nMeta('worktree.tool.no_project') },
-  };
-}
-
-/** Ошибка разбора аргументов — общий текст соседних тулов. */
-function argError(toolName: string, issues: z.ZodIssue[]): ToolResult {
-  return {
-    content: sm('tool.args_error', {
-      tool: toolName,
-      issues: issues.map((i) => `${i.path.join('.') || 'root'}: ${i.message}`).join('; '),
-    }),
-    isError: true,
-    metadata: { i18n: i18nMeta('tool.args_error', { tool: toolName }) },
   };
 }
 
@@ -244,7 +233,7 @@ export const gitWorktreeCreateTool: ToolDefinition = {
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(params: unknown, ctx: ToolContext): Promise<ToolResult> {
     const parsed = worktreeCreateParamsSchema.safeParse(params ?? {});
-    if (!parsed.success) return argError('git_worktree_create', parsed.error.issues);
+    if (!parsed.success) return argErrorResult('git_worktree_create', parsed.error.issues);
     const loaded = await loadWorktreeContext(ctx);
     if (!loaded.ok) return loaded.error;
     try {
@@ -293,20 +282,16 @@ export const gitWorktreeRemoveTool: ToolDefinition = {
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(params: unknown, ctx: ToolContext): Promise<ToolResult> {
     const parsed = worktreeRemoveParamsSchema.safeParse(params ?? {});
-    if (!parsed.success) return argError('git_worktree_remove', parsed.error.issues);
+    if (!parsed.success) return argErrorResult('git_worktree_remove', parsed.error.issues);
     const loaded = await loadWorktreeContext(ctx);
     if (!loaded.ok) return loaded.error;
 
     const { name, worktreeId, force } = parsed.data;
     if (!name && !worktreeId) {
-      return {
-        content: sm('tool.args_error', {
-          tool: 'git_worktree_remove',
-          issues: 'name: either "name" or "worktreeId" is required',
-        }),
-        isError: true,
-        metadata: { i18n: i18nMeta('tool.args_error', { tool: 'git_worktree_remove' }) },
-      };
+      return argErrorResult(
+        'git_worktree_remove',
+        'name: either "name" or "worktreeId" is required',
+      );
     }
 
     let targetId = worktreeId;
@@ -375,7 +360,7 @@ export const gitWorktreePruneTool: ToolDefinition = {
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(params: unknown, ctx: ToolContext): Promise<ToolResult> {
     const parsed = worktreePruneParamsSchema.safeParse(params ?? {});
-    if (!parsed.success) return argError('git_worktree_prune', parsed.error.issues);
+    if (!parsed.success) return argErrorResult('git_worktree_prune', parsed.error.issues);
     const loaded = await loadWorktreeContext(ctx);
     if (!loaded.ok) return loaded.error;
     try {

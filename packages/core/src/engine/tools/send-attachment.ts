@@ -55,6 +55,7 @@ import {
   validateInputPath,
 } from './path-utils.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 /** Имя тула (используется в текстах и в permission-группах). */
 export const SEND_ATTACHMENT_TOOL = 'send_attachment';
@@ -89,15 +90,6 @@ export interface SendAttachmentExtra {
   attachmentService?: AttachmentService;
   attachmentsConfig?: () => AttachmentsConfig;
   outboundAttachments?: OutboundAttachmentCollector;
-}
-
-/** Единый текст ошибки разбора аргументов (как у соседних тулов). */
-function argsErrorResult(toolName: string, issues: string): ToolResult {
-  return {
-    content: sm('tool.args_error', { tool: toolName, issues }),
-    isError: true,
-    metadata: { i18n: i18nMeta('tool.args_error', { tool: toolName }) },
-  };
 }
 
 /** Отказ с ключом i18n и (необязательным) блоком metadata. */
@@ -142,16 +134,13 @@ export const sendAttachmentTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return argsErrorResult(
-        this.name,
-        parsed.error.issues.map((i) => `${i.path.join('.') || 'root'}: ${i.message}`).join('; '),
-      );
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { path: string; name?: string };
     try {
       validateInputPath(params.path, 'path');
     } catch (err) {
-      return argsErrorResult(this.name, err instanceof Error ? err.message : String(err));
+      return argErrorResult(this.name, err instanceof Error ? err.message : String(err));
     }
     // Абсолютный путь — не «внешний доступ по правилу», а отказ: файл
     // отправляется из проекта (как `attach_workspace_file`).

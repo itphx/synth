@@ -12,6 +12,7 @@ import { resolveToolsEgressPolicy, currentEgressLog } from '../net/egress-runtim
 import type { EgressPolicy } from '@itphx/synth-shared';
 import type { HostResolver } from '../mcp/network-policy.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 const MAX_RESPONSE_SIZE = 50_000;
 const MAX_FETCH_URLS = 5;
@@ -614,7 +615,7 @@ export const webFetchTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as {
       url?: string;
@@ -771,7 +772,7 @@ export const webSearchTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { query: string; max_results?: number };
     const limit = params.max_results ?? 10;

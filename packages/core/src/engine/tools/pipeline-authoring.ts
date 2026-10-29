@@ -44,6 +44,7 @@ import {
 } from './automation-helpers.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { argErrorResult } from './arg-error.js';
 
 /**
  * Спецификация в теле тула: серверные поля (`id`/`version`/`status`/
@@ -56,17 +57,6 @@ const pipelineSpecArgSchema = pipelineSpecSchema.partial({
   status: true,
   projectId: true,
 });
-
-/** Единый текст ошибки разбора аргументов (как у соседних тулов). */
-function argError(toolName: string, issues: z.ZodIssue[]): ToolResult {
-  return {
-    content: sm('tool.args_error', {
-      tool: toolName,
-      issues: issues.map((i) => `${i.path.join('.') || 'root'}: ${i.message}`).join('; '),
-    }),
-    isError: true,
-  };
-}
 
 /** Единый отказ «пайплайн не найден» (нет такого или он чужой). */
 function pipelineNotFound(pipelineId: string): ToolResult {
@@ -182,7 +172,7 @@ export const pipelineGetTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return argError(this.name, parsed.error.issues);
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { pipeline_id: string; version?: number };
 
@@ -277,7 +267,7 @@ export const pipelineSaveTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return argError(this.name, parsed.error.issues);
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as {
       pipeline_id?: string;
@@ -355,7 +345,7 @@ export const pipelinePublishTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return argError(this.name, parsed.error.issues);
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { pipeline_id: string };
 
@@ -416,7 +406,7 @@ export const pipelineDeleteTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return argError(this.name, parsed.error.issues);
+      return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { pipeline_id: string };
 
