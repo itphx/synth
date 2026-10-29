@@ -1356,3 +1356,13 @@
 - **Найден и исправлен дефект пайплайна:** `docker-cleanup.mjs` удалял ВСЕ теги трёх образов до публикации, а публикация `synth-backend` упёрлась в квоту → `gitverse.ru/itphx/synth-backend` остался без версий. Теперь `GV_KEEP_TAGS` (в CI — версия из тега) не даёт удалить публикуемую версию; backend восстановлен пушем `local/synth-backend:0.12.4`.
 - **Прочие правки CI этого релиза:** `continue-on-error` не действует на `run:`-шаги в форке GitVerse (страж npm глушится в shell); `create-release`/`publish-github` не зависят от образов и offline-артефактов; `offline-bundles` best-effort; `build-docker` не ждёт джобу npm; `publish-npmjs` — публикация fail-closed, проверка видимости неблокирующая.
 - **Остаток:** flavor-образы в Gitea (`slim`/`dev`/`devops`/`browser`/`full`, образы исполнителя) — CI-джоба не прошла; test-контур не пострадал (он на 0.12.4 из локальной сборки). Квота хранилища реестра/артефактов GitVerse остаётся узким местом; self-hosted раннер (`act_runner 6.0.2`) признан официально поддерживаемым — набор для установки подготовлен.
+
+## 2026-10-29 — локальная ВМ под GitVerse Runner (libvirt)
+
+- **Тип:** infra/server. **Исполнитель:** @admin + оркестратор (регистрация).
+- **ВМ:** `gv-runner-01` (q35, **UEFI/OVMF secboot** — образ Debian 13 через BIOS не грузится), 8 vCPU (1×4×2), 16 ГиБ + swap 4 ГиБ, Debian **13.7 trixie**, ядро 6.12-cloud. Диски: vda 20 ГиБ (`/`, store1), vdb 40 ГиБ (`/var/lib/docker`, store2), vdc 20 ГиБ (`/srv`, store1); монтирование по UUID, ФС помечены `LABEL=docker`/`LABEL=work`.
+- **Сеть:** NAT `default`, 192.168.121.205, DHCP-резервация по MAC `52:54:00:7a:1c:01` в постоянной конфигурации сети.
+- **Софт:** Docker CE 29.9.2 (`data-root=/var/lib/docker`, ротация логов 50m×3), Node v22.23.4, pnpm 12.14.0, `act_runner` **4.2.0** (`/opt/act_runner`), weekly prune-таймер, journald 500M, fstrim.
+- **Раннер:** зарегистрирован на уровне организации (`https://gitverse.ru`), имя `gv-runner-01`, метки `self-hosted,linux,x64,ubuntu-latest,synth-ci` (host-режим), `capacity: 1`, `timeout: 90m`, кэш `/srv/cache/act`, workdir `/srv/work`; `act_runner.service` enabled/active, `virsh autostart` вкл.
+- **Важно:** буквы `/dev/sdX` в госте нестабильны между загрузками — в этой ВМ использовать `/dev/disk/by-label/{docker,work}`, не буквы.
+- **Остаток:** smoke-прогон CI на новом раннере (нужен запуск workflow; `ci.yaml` без `workflow_dispatch`), проверка `uses: docker://…` в host-режиме.
