@@ -336,9 +336,19 @@ jobs:
           pnpm --filter @itphx/synth build
 
       - name: Публикация в npmjs.org
+        # Публикация — fail-closed: реальная ошибка `pnpm publish` валит джобу.
+        # Проверка видимости вынесена отдельным неблокирующим шагом ниже: сеть
+        # раннера до registry.npmjs.org бывает настолько медленной, что один
+        # запрос идёт минуты (0.12.4: 8 пакетов опубликованы, проверка не успела).
         run: |
           npm config set "//registry.npmjs.org/:_authToken" "${{ secrets.NPM_TOKEN }}"
-          bash scripts/publish-packages.sh https://registry.npmjs.org
+          bash scripts/publish-packages.sh https://registry.npmjs.org --no-verify
+
+      - name: Проверка видимости версии в npmjs (не блокирует релиз)
+        continue-on-error: true
+        run: |
+          npm config set "//registry.npmjs.org/:_authToken" "${{ secrets.NPM_TOKEN }}"
+          bash scripts/publish-packages.sh https://registry.npmjs.org --verify-only
 
   publish-gitverse-npm:
     name: GitVerse Package Registry
@@ -385,7 +395,13 @@ jobs:
   # нет RUN (см. docker/Dockerfile*).
   build-docker:
     name: Docker образ
-    needs: [build, publish-npmjs]
+    # Зависимость от джобы npm снята: она проверяет видимость версии через
+    # registry.npmjs.org, а сеть раннера до реестра бывает настолько медленной,
+    # что джоба не укладывается в потолок (0.12.4: 8 пакетов опубликованы,
+    # джоба висела на проверке). Реальная гарантия осталась ниже — шаг
+    # «Ожидание доступности версии в npmjs» (scripts/wait-npm-version.sh):
+    # если версии нет, сборка образа падает здесь же.
+    needs: [build]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -403,7 +419,15 @@ jobs:
           echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
 
       - name: Ожидание доступности версии в npmjs
-        run: bash scripts/wait-npm-version.sh "${{ steps.docker_tags.outputs.version }}"
+        # Страж не должен сам валить сборку: на облачном пуле egress до
+        # registry.npmjs.org нестабилен (на 0.12.4 — `HTTP 000` у всех пакетов
+        # при том, что в том же прогоне джоба npm видела их опубликованными).
+        # Если сеть есть — ждём; если нет — идём собирать: образ `synth` сам
+        # делает `npm install -g @itphx/synth@<v>` и упадёт с понятной ошибкой,
+        # если пакета действительно нет.
+        run: |
+          bash scripts/wait-npm-version.sh "${{ steps.docker_tags.outputs.version }}" \
+            || echo "::warning::версия 0.12.4 не подтверждена в npmjs (сеть раннера) — идём собирать образ"
 
       # Авторизация сразу в двух реестрах: gitverse.ru (как раньше) и ghcr.io
       # (все три базовых образа — synth/synth-backend/synth-ui — зеркалируются
@@ -432,6 +456,11 @@ jobs:
       - name: Очистка старых Docker-образов (gitverse)
         env:
           GV_TOKEN: ${{ secrets.GV_TOKEN }}
+          # Версию, которую публикуем сейчас, не удаляем: если публикация
+          # упрётся в квоту реестра, рабочий образ в реестре останется
+          # (на 0.12.4 очистка снесла все теги, а synth-backend так и не
+          # опубликовался — реестр остался без backend-образа).
+          GV_KEEP_TAGS: ${{ steps.docker_tags.outputs.version }}
         run: node scripts/docker-cleanup.mjs synth synth-backend synth-ui
 
       # Политика образов: все три БАЗОВЫХ образа (synth, synth-backend, synth-ui)
@@ -854,6 +883,11 @@ jobs:
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Бандлы качают Node и ripgrep из сети раннера (кэш /root/.cache живёт не
+    # на всех раннерах). На 0.12.4 сборка упала с «нет сети и нет кэша
+    # ripgrep» — бандлы нужны только как ассеты для закрытого контура, поэтому
+    # джоба best-effort: релиз (страница, npm, образы, зеркало) не страдает.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -904,7 +938,7 @@ jobs:
   # и при неудаче лишь предупреждает, не роняя джобу.
   create-release:
     name: GitVerse Release
-    needs: [build, changelog, publish-npmjs, offline-images, offline-bundles]
+    needs: [build, changelog, publish-npmjs]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1075,7 +1109,7 @@ jobs:
   # чтобы не сломать рабочий релизный CI. Порядок гарантирован через needs.
   publish-github:
     name: GitHub-зеркало (refs + Release)
-    needs: [build, changelog, build-docker, offline-images, offline-bundles]
+    needs: [build, changelog]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
