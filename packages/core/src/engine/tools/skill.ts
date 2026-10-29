@@ -35,12 +35,13 @@ export const skillTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
+      const issues = parsed.error.issues
+        .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
+        .join('; ');
       return {
-        content: sm('skill.args_error', {
-          issues: parsed.error.issues.map((i) => `${i.path.join('.') || 'root'}: ${i.message}`).join('; '),
-        }),
+        content: sm('skill.args_error', { issues }),
         isError: true,
-        metadata: { i18n: i18nMeta('skill.args_error') },
+        metadata: { i18n: i18nMeta('skill.args_error', { issues }) },
       };
     }
     const params = parsed.data as { name: string; file_path?: string };
@@ -92,15 +93,16 @@ export const skillTool: ToolDefinition = {
       ? runtime.missingCapabilities(skill.meta, agentCapabilities)
       : missingCapabilities(skill.meta, agentCapabilities);
     if (missing.length > 0) {
+      const delegation = {
+        name: params.name,
+        capabilities: missing.join(', '),
+        agent: ctx.agentRole || 'unknown',
+      };
       return {
-        content: sm('skill.delegation', {
-          name: params.name,
-          capabilities: missing.join(', '),
-          agent: ctx.agentRole || 'unknown',
-        }),
+        content: sm('skill.delegation', delegation),
         isError: true,
         metadata: {
-          i18n: i18nMeta('skill.delegation', { name: params.name, capabilities: missing.join(', ') }),
+          i18n: i18nMeta('skill.delegation', delegation),
           unavailable: 'capabilities',
         },
       };

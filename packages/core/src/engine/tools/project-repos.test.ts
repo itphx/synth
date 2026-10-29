@@ -378,6 +378,30 @@ describe('project repos tools (ADR-076)', () => {
     expect(stored.repos ?? []).toHaveLength(0);
   });
 
+  it('add: `app` и `./app` — одна запись с каноническим путём и тем же id', async () => {
+    await mkdir(join(workspacesRoot, 'proj', 'app'), { recursive: true });
+
+    const first = await projectRepoAddTool.execute(
+      { path: 'app', url: 'https://example.com/app.git' },
+      makeCtx(),
+    );
+    expect(first.isError).toBeUndefined();
+    const firstId = first.metadata?.id as string;
+    expect(firstId).toBeTruthy();
+
+    const second = await projectRepoAddTool.execute({ path: './app' }, makeCtx());
+    expect(second.isError).toBeUndefined();
+    expect(second.metadata?.id).toBe(firstId);
+    // В реестре путь канонизирован — `./app` не заводит вторую запись.
+    expect(second.metadata?.path).toBe('app');
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.repos).toHaveLength(1);
+    expect(stored.repos?.[0]).toMatchObject({ id: firstId, path: 'app' });
+    // url второй регистрацией (без url) не затирается.
+    expect(stored.repos?.[0]?.url).toBe('https://example.com/app.git');
+  });
+
   it('fetch: обновляет lastFetch успешно', async () => {
     const bare = await createBareRepo(root);
     await projectRepoCloneTool.execute({ url: `file://${bare}`, path: 'app' }, makeCtx());
@@ -446,7 +470,7 @@ describe('project repos tools (ADR-076)', () => {
       expect(result.metadata?.path).toBe('app');
       const stored = (await projectStore.load(projectId))!;
       expect(stored.repos?.[0]?.lastFetch).not.toBe('2000-01-01T00:00:00.000Z');
-      // Реестр не переписывается: `path` хранится как задан.
+      // В реестре канонический путь: косметика входа (`./app`, `app/`) не сохраняется.
       expect(stored.repos?.[0]?.path).toBe('app');
     }
   });

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { isAbsolute, normalize, resolve } from 'node:path';
 import { z } from 'zod';
 import { nowISO, ToolCapability, normalizeGitRepoConfig } from '@itphx/synth-shared';
@@ -16,6 +15,7 @@ import type { ProjectStoreContract } from '../../storage/project-store.js';
 import type { EventBus } from '../../events/bus.js';
 import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js';
 import { GitService, deriveRepoName } from '../../git/git-service.js';
+import { findRepoEntry, upsertRepoEntry, type RepoRegistryInput } from '../../git/repo-registry.js';
 import { inspectRepoPath } from '../../git/repo-occupancy.js';
 import type { RepoOccupancyInfo } from '../../git/repo-occupancy.js';
 import { isSshUrl } from '../../git/ssh-env.js';
@@ -65,11 +65,14 @@ function i18nError(key: SystemMessageKey, params?: Record<string, string>): Tool
 }
 
 function toolExecError(tool: string, err: unknown): ToolResult {
+  // git-слой бросает и plain-объекты `{ error, code }` — `String(err)` от них
+  // дал бы `[object Object]` (см. tools/error-text.ts). Тот же текст уходит в
+  // `metadata.i18n`, иначе UI рендерил бы шаблон с пустым `{error}`.
+  const error = errorText(err);
   return {
-    // git-слой бросает и plain-объекты `{ error, code }` — `String(err)` от них
-    // дал бы `[object Object]` (см. tools/error-text.ts).
-    content: sm('tool.exec_error', { tool, error: errorText(err) }),
+    content: sm('tool.exec_error', { tool, error }),
     isError: true,
+    metadata: { i18n: i18nMeta('tool.exec_error', { tool, error }) },
   };
 }
 
@@ -108,69 +111,20 @@ function normalizeRepos(project: Project): GitRepoConfig[] {
   return out;
 }
 
-/** Upsert записи реестра (по `id` либо `path`), сохранение проекта (как HTTP-роут). */
+/**
+ * Upsert записи реестра (`id` либо путь) и сохранение проекта.
+ *
+ * Сравнение/канонизация пути — общий шов `git/repo-registry.ts` (тот же, что у
+ * HTTP-роутов): `./app` и `app` — одна запись, в реестре путь канонический.
+ */
 async function registerRepo(
   store: ProjectStoreContract,
   project: Project,
-  input: {
-    id?: string;
-    path: string;
-    name?: string;
-    url?: string;
-    type?: 'https' | 'ssh';
-    defaultBranch?: string;
-    sshKeyId?: string;
-    lastFetch?: string;
-  },
+  input: RepoRegistryInput,
 ): Promise<GitRepoConfig> {
-  const repos = normalizeRepos(project);
-  const byId = input.id ? repos.findIndex((r) => r.id === input.id) : -1;
-  const existing = byId >= 0 ? repos[byId] : repos.find((r) => r.path === input.path);
-
-  const entry: GitRepoConfig = {
-    id: existing?.id ?? input.id ?? randomUUID(),
-    path: input.path,
-    name: input.name ?? existing?.name,
-    url: input.url ?? existing?.url,
-    type: input.type ?? existing?.type,
-    defaultBranch: input.defaultBranch ?? existing?.defaultBranch,
-    sshKeyId: input.sshKeyId ?? existing?.sshKeyId,
-    lastFetch: input.lastFetch ?? existing?.lastFetch,
-  };
-
-  const next = existing
-    ? repos.map((r) => (r === existing ? entry : r))
-    : [...repos, entry];
+  const { entry, next } = upsertRepoEntry(normalizeRepos(project), input);
   await store.save({ ...project, repos: next, updatedAt: nowISO() });
   return entry;
-}
-
-function findRepo(repos: GitRepoConfig[], id?: string, path?: string): GitRepoConfig | undefined {
-  if (id) return repos.find((r) => r.id === id);
-  const wanted = comparableRepoPath(path);
-  // Пустой аргумент (`undefined`/'' как и прежде) запись не ищет: иначе он
-  // совпал бы с записью пустого пути (корень workspace).
-  if (!wanted) return undefined;
-  return repos.find((r) => comparableRepoPath(r.path) === wanted);
-}
-
-/**
- * Путь записи реестра в виде, пригодном для сравнения: косметика записи
- * (ведущие `./`, дублирующиеся `/`, хвостовой `/`) не должна мешать найти
- * репозиторий — `project_repo_fetch {path: "./app/"}` ищет ту же запись, что и
- * `path: "app"`.
- *
- * Это **только сравнение**, не резолв: `..`-сегменты и абсолютные пути
- * остаются как есть, поэтому на запись они по-прежнему не матчатся, а
- * containment проверяется отдельно (`GitService.resolveRepoPath`). Сам `path`
- * в реестре хранится как задан — нормализация его не переписывает.
- */
-function comparableRepoPath(path: string | undefined): string {
-  if (!path) return '';
-  return path
-    .replace(/^(?:\.\/)+/, '')
-    .replace(/\/{2,}/g, '/')
-    .replace(/\/+$/, '');
 }
 
 function deriveType(url?: string): 'https' | 'ssh' | undefined {
@@ -453,7 +407,7 @@ export const projectRepoFetchTool: ToolDefinition = {
     const { extra, store, project, wsAbs, git } = loaded;
 
     const repos = normalizeRepos(project);
-    const entry = findRepo(repos, params.id, params.path);
+    const entry = findRepoEntry(repos, params.id, params.path);
     if (!entry) {
       return i18nError('project.repo_not_found', { path: params.path ?? params.id ?? '' });
     }
@@ -533,7 +487,7 @@ export const projectRepoRemoveTool: ToolDefinition = {
     const { extra, store, project } = loaded;
 
     const repos = normalizeRepos(project);
-    const entry = findRepo(repos, params.id, params.path);
+    const entry = findRepoEntry(repos, params.id, params.path);
     if (!entry) {
       return i18nError('project.repo_not_found', { path: params.path ?? params.id ?? '' });
     }

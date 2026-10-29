@@ -4688,12 +4688,13 @@ export class ChatOrchestrator {
               const applied = applyPolicy(toolResult.content, piConfig.mode, detection);
 
               if (applied.blocked) {
+                const matches = detection.matches.slice(0, 5).join(', ');
                 toolResult = {
-                  content: sm('security.injection_blocked', { tool: toolName, matches: detection.matches.slice(0, 5).join(', ') }),
+                  content: sm('security.injection_blocked', { tool: toolName, matches }),
                   isError: true,
                   metadata: {
                     ...toolResult.metadata,
-                    i18n: i18nMeta('security.injection_blocked', { tool: toolName }),
+                    i18n: i18nMeta('security.injection_blocked', { tool: toolName, matches }),
                     injection_suspicious: true,
                     injection_matches: detection.matches,
                   },

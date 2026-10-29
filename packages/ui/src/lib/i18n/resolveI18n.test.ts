@@ -65,6 +65,30 @@ describe('resolveI18n (ru-словарь)', () => {
   })
 })
 
+describe('resolveI18n: неполные params движкового ключа (ADR-041)', () => {
+  const content = 'Tool "project_repo_fetch" execution error: not a git repository'
+
+  it('движковый ключ с полными params → RU-перевод', () => {
+    expect(
+      resolveI18n(
+        { key: 'tool.exec_error', params: { tool: 'project_repo_fetch', error: 'not a git repository' } },
+        content,
+        ruDict,
+      ),
+    ).toBe('Ошибка выполнения инструмента «project_repo_fetch»: not a git repository')
+  })
+
+  it('движковый ключ без обязательного параметра → content, без сырого {error}', () => {
+    const resolved = resolveI18n({ key: 'tool.exec_error', params: { tool: 'x' } }, content, ruDict)
+    expect(resolved).toBe(content)
+    expect(resolved).not.toContain('{error}')
+  })
+
+  it('UI-ключ вне контракта движка резолвится как раньше', () => {
+    expect(resolveI18n({ key: 'panel.saved' }, 'Saved', ruDict)).toBe('Настройки сохранены')
+  })
+})
+
 describe('resolveI18n (en-словарь, core-ключи не дублируются)', () => {
   it('core-ключа нет в enDict → fallback на content (en)', () => {
     expect(resolveI18n({ key: 'micro.greeting' }, 'Hi! How can I help you?', enDict)).toBe(

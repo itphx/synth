@@ -169,6 +169,48 @@ describe('Git API Routes (ADR-076 §T3)', () => {
     expect(saved?.repos).toHaveLength(1);
   });
 
+  it('register `./app` поверх `app` не создаёт дубль (канонический путь)', async () => {
+    const app = makeApp();
+    const first = await post(app, '/repos/register', { projectId, path: 'app', url: 'https://example.com/app.git' });
+    expect(first.status).toBe(200);
+    const firstEntry = await first.json() as { id: string };
+
+    const second = await post(app, '/repos/register', { projectId, path: './app' });
+    expect(second.status).toBe(200);
+    const secondEntry = await second.json() as { id: string; path: string; url?: string };
+    expect(secondEntry.id).toBe(firstEntry.id);
+    // Косметика снята: в реестре канонический путь.
+    expect(secondEntry.path).toBe('app');
+    expect(secondEntry.url).toBe('https://example.com/app.git');
+
+    const saved = await projectStore.load(projectId);
+    expect(saved?.repos).toHaveLength(1);
+    expect(saved?.repos?.[0]?.path).toBe('app');
+  });
+
+  it('fetch по косметике пути (`./app`) находит запись реестра', async () => {
+    const app = makeApp();
+    const bare = await createBareRepo(root);
+    await post(app, '/repos/clone', { projectId, url: `file://${bare}`, path: 'app' });
+
+    const res = await post(app, '/repos/fetch', { projectId, path: './app' });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { path: string };
+    expect(body.path).toBe('app');
+  });
+
+  it('remove по косметике пути (`./app`) находит запись реестра', async () => {
+    const app = makeApp();
+    const bare = await createBareRepo(root);
+    await post(app, '/repos/clone', { projectId, url: `file://${bare}`, path: 'app' });
+
+    const res = await post(app, '/repos/remove', { projectId, path: './app' });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { removed: { path: string } };
+    expect(body.removed.path).toBe('app');
+    expect((await projectStore.load(projectId))?.repos ?? []).toHaveLength(0);
+  });
+
   it('remove с deleteLocal удаляет каталог и запись', async () => {
     const app = makeApp();
     const bare = await createBareRepo(root);

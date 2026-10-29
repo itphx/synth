@@ -70,15 +70,26 @@ export function formatLlmError(error: unknown): { text: string; i18n?: ReturnTyp
   return { text: raw };
 }
 
-/** i18n-ключ по типу ошибки (ADR-041) для metadata assistant-сообщения об ошибке. */
-export function errorTypeI18n(errorType: string): ReturnType<typeof i18nMeta> | undefined {
+/**
+ * i18n-ключ по типу ошибки (ADR-041) для metadata assistant-сообщения об ошибке.
+ *
+ * `ctx.providerName` нужен ключу `router.provider_not_found` (в en-шаблоне есть
+ * `{provider}`): без параметра UI показал бы сырой плейсхолдер. Имя неизвестно —
+ * metadata прежняя (без `params`), локализация деградирует на `content`.
+ */
+export function errorTypeI18n(
+  errorType: string,
+  ctx?: { providerName?: string },
+): ReturnType<typeof i18nMeta> | undefined {
   switch (errorType) {
     case 'timeout': return i18nMeta('router.timeout');
     case 'network_error': return i18nMeta('router.network_error');
     case 'rate_limit': return i18nMeta('router.rate_limit_exceeded');
     case 'context_length': return i18nMeta('router.context_length_exceeded');
     case 'no_user_query': return i18nMeta('router.no_user_query');
-    case 'provider_not_found': return i18nMeta('router.provider_not_found');
+    case 'provider_not_found': return ctx?.providerName
+      ? i18nMeta('router.provider_not_found', { provider: ctx.providerName })
+      : i18nMeta('router.provider_not_found');
     default: return undefined;
   }
 }
@@ -137,7 +148,7 @@ export async function handleLlmFailure(
         ctx.promptChars ?? 0,
         (ctx.content ?? '').length,
       );
-      const i18n = formatted.i18n ?? errorTypeI18n(errorType);
+      const i18n = formatted.i18n ?? errorTypeI18n(errorType, { providerName: ctx.providerName });
       await deps.saveAssistantMessage(
         sessionId, humanError, streamId, ctx.agentRole,
         estimated.usage, ctx.model, undefined, ctx.debugCollector, false, ctx.providerName,

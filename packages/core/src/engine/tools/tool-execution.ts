@@ -9,6 +9,7 @@
 import type { ToolContext, ToolDefinition, ToolResult } from '@itphx/synth-shared';
 import { stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
 import { i18n as i18nMeta, t as sm } from '../system-messages.js';
+import { errorText } from './error-text.js';
 
 /** Структурный источник локализованных security-сообщений (ContextConfig). */
 export interface SecurityMessageSource {
@@ -126,15 +127,15 @@ export async function executeToolDef(
 ): Promise<ToolResult> {
   const parsed = toolDef.parameters.safeParse(toolArgs);
   if (!parsed.success) {
+    // Одна и та же строка уходит и в текст, и в `metadata.i18n`: иначе UI
+    // подставлял бы в шаблон пустое место вместо `{issues}` (ADR-041).
+    const issues = parsed.error.issues
+      .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
+      .join('; ');
     return {
-      content: sm('tool.args_error', {
-        tool: toolName,
-        issues: parsed.error.issues
-          .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
-          .join('; '),
-      }),
+      content: sm('tool.args_error', { tool: toolName, issues }),
       isError: true,
-      metadata: { i18n: i18nMeta('tool.args_error', { tool: toolName }) },
+      metadata: { i18n: i18nMeta('tool.args_error', { tool: toolName, issues }) },
     };
   }
 
@@ -148,10 +149,13 @@ export async function executeToolDef(
       ...(result.metadata ? { metadata: stripNullBytesDeep(result.metadata) } : {}),
     };
   } catch (execError) {
+    // git-слой и MCP бросают plain-объекты `{ error, code }`: `String()` дал бы
+    // `[object Object]` (см. `error-text.ts`).
+    const error = errorText(execError);
     return {
-      content: sm('tool.exec_error', { tool: toolName, error: String(execError) }),
+      content: sm('tool.exec_error', { tool: toolName, error }),
       isError: true,
-      metadata: { i18n: i18nMeta('tool.exec_error', { tool: toolName }) },
+      metadata: { i18n: i18nMeta('tool.exec_error', { tool: toolName, error }) },
     };
   }
 }

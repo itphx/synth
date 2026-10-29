@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { Hono } from 'hono';
@@ -19,6 +18,7 @@ import {
   gitCommitQuerySchema,
 } from '@itphx/synth-shared';
 import { GitService, deriveRepoName, resolveRepoPath } from '../../git/git-service.js';
+import { findRepoEntry, upsertRepoEntry, type RepoRegistryInput } from '../../git/repo-registry.js';
 import { inspectRepoPath } from '../../git/repo-occupancy.js';
 import type { RepoOccupancyInfo } from '../../git/repo-occupancy.js';
 import type { ExecutionPort, ExecSecret } from '../../execution/ports/index.js';
@@ -105,18 +105,6 @@ type RouteStatus = 400 | 403 | 404 | 409 | 500 | 504;
  * выполнено по другому (IDOR).
  */
 export const GIT_PROJECT_ID_CONTEXT_KEY = 'gitProjectId';
-
-/** Вход upsert записи реестра (merge с существующей по `id`/`path`). */
-interface RegisterInput {
-  id?: string;
-  path: string;
-  name?: string;
-  url?: string;
-  type?: 'https' | 'ssh';
-  defaultBranch?: string;
-  sshKeyId?: string;
-  lastFetch?: string;
-}
 
 function codeToStatus(code: string): RouteStatus {
   switch (code) {
@@ -324,33 +312,13 @@ export function createGitRoutes(
     return { secrets: res.secrets, cleanup: res.cleanup };
   }
 
-  /** Upsert записи реестра (по `id` либо `path`), сохранение проекта. */
-  async function registerRepo(project: Project, input: RegisterInput): Promise<GitRepoConfig> {
-    const repos = normalizeRepos(project);
-    const byId = input.id ? repos.findIndex((r) => r.id === input.id) : -1;
-    const existing = byId >= 0 ? repos[byId] : repos.find((r) => r.path === input.path);
-
-    const entry: GitRepoConfig = {
-      id: existing?.id ?? input.id ?? randomUUID(),
-      path: input.path,
-      name: input.name ?? existing?.name,
-      url: input.url ?? existing?.url,
-      type: input.type ?? existing?.type,
-      defaultBranch: input.defaultBranch ?? existing?.defaultBranch,
-      sshKeyId: input.sshKeyId ?? existing?.sshKeyId,
-      lastFetch: input.lastFetch ?? existing?.lastFetch,
-    };
-
-    const next = existing
-      ? repos.map((r) => (r === existing ? entry : r))
-      : [...repos, entry];
+  /** Upsert записи реестра (`id` либо путь) и сохранение проекта. */
+  async function registerRepo(project: Project, input: RepoRegistryInput): Promise<GitRepoConfig> {
+    // Сравнение/канонизация пути — общий шов с тулами (`git/repo-registry.ts`):
+    // `./app` и `app` — одна запись, в реестре путь канонический.
+    const { entry, next } = upsertRepoEntry(normalizeRepos(project), input);
     await projectStore.save({ ...project, repos: next, updatedAt: nowISO() });
     return entry;
-  }
-
-  function findRepo(repos: GitRepoConfig[], id?: string, path?: string): GitRepoConfig | undefined {
-    if (id) return repos.find((r) => r.id === id);
-    return repos.find((r) => r.path === path);
   }
 
   /**
@@ -511,7 +479,7 @@ export function createGitRoutes(
       const project = await loadProject(authorizedProjectId(c));
 
       const repos = normalizeRepos(project);
-      const removed = findRepo(repos, body.id, body.path);
+      const removed = findRepoEntry(repos, body.id, body.path);
       if (!removed) {
         throw { error: 'Репозиторий не найден в реестре', code: 'NOT_FOUND' } satisfies RouteError;
       }
@@ -542,7 +510,7 @@ export function createGitRoutes(
       const project = await loadProject(authorizedProjectId(c));
 
       const repos = normalizeRepos(project);
-      const entry = findRepo(repos, body.id, body.path);
+      const entry = findRepoEntry(repos, body.id, body.path);
       if (!entry) {
         throw { error: 'Репозиторий не найден в реестре', code: 'NOT_FOUND' } satisfies RouteError;
       }
