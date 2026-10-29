@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -340,6 +340,28 @@ describe('project repos tools (ADR-076)', () => {
     expect(result.content).toMatch(/git\.cloneTimeoutMs/);
     expect(await exists(join(workspacesRoot, 'proj', 'slow'))).toBe(false);
     expect(port.calls.at(-1)?.timeoutMs).toBe(777);
+  });
+
+  it('clone: путь заняли во время клона (гонка) → git.repo_exists с путём', async () => {
+    // Занятость проверяется до `cloneRepo`, но `rename` может упереться в чужой
+    // каталог: git-слой бросает plain-объект `{ error, code }`.
+    const spy = vi.spyOn(gitService, 'cloneRepo').mockRejectedValueOnce({
+      error: 'Репозиторий уже существует по пути «app»',
+      code: 'git.repo_exists',
+    });
+    try {
+      const result = await projectRepoCloneTool.execute(
+        { url: 'https://example.com/app.git', path: 'app' },
+        makeCtx(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).not.toContain('[object Object]');
+      // Тот же ключ, что у HTTP-роута (409 `git.repo_exists`) — UI локализует сам.
+      expect(result.metadata?.i18n).toEqual({ key: 'git.repo_exists', params: { path: 'app' } });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('fetch: таймаут → git.fetch_timeout с {timeout}', async () => {

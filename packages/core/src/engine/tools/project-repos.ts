@@ -154,7 +154,8 @@ function repoOccupiedResult(relPath: string, info: RepoOccupancyInfo): ToolResul
 
 /**
  * Ошибка сетевой git-операции: таймаут — отдельным actionable-сообщением
- * (`git.clone_timeout`/`git.fetch_timeout`), остальное — общим текстом.
+ * (`git.clone_timeout`/`git.fetch_timeout`), «путь заняли во время клона» —
+ * `git.repo_exists` (с путём), остальное — общим текстом.
  */
 function repoOpError(tool: string, err: unknown, timeoutMs?: number, repoPath?: string): ToolResult {
   const code = (err as { code?: unknown } | null | undefined)?.code;
@@ -169,6 +170,14 @@ function repoOpError(tool: string, err: unknown, timeoutMs?: number, repoPath?: 
   // Сообщение называет путь и следующий шаг — иначе агент повторяет fetch.
   if (code === 'NOT_FOUND' && repoPath) {
     return i18nError('git.repo_not_a_repo', { path: repoPath });
+  }
+  // Гонка клона: занятость проверяется до `cloneRepo`, но путь могут занять
+  // между проверкой и `rename` — git-слой бросает plain-объект
+  // `{ error, code: 'git.repo_exists' }`. Без маппинга он уходил бы модели
+  // русским текстом без пути и следующего шага; ключ тот же, что у HTTP-роута
+  // (409 `git.repo_exists`).
+  if (code === 'git.repo_exists' && repoPath) {
+    return i18nError('git.repo_exists', { path: repoPath });
   }
   return toolExecError(tool, err);
 }
@@ -256,7 +265,7 @@ export const projectRepoCloneTool: ToolDefinition = {
         ssh.secrets ? { secrets: ssh.secrets } : undefined,
       );
     } catch (err) {
-      return repoOpError(this.name, err, git.cloneTimeoutMs);
+      return repoOpError(this.name, err, git.cloneTimeoutMs, relPath);
     } finally {
       await ssh.cleanup();
     }
