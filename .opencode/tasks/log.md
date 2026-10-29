@@ -1396,3 +1396,14 @@
   - Тулы: `read_file` (offset/limit, 2000 строк/50 КБ, длинные строки, бинарь, каталог), `glob` (rg, hidden/limit, без ложной mtime-сортировки), `grep_files` (literal/caseSensitive/hidden/limit), `patch` (атомарная JSON-правка нескольких файлов), описания `execute_shell`/`edit_file`/`web_fetch`/`task`.
 - **Проверка:** `pnpm build` — OK; `pnpm test` — shared 881, core 7528, backend 727, executor 205, plugin-memory 191, storage-postgres 72, ui 2348, sdk 24; `pnpm typecheck` 0; `pnpm lint` 0 errors; adr-check/docs-link 0 ошибок; dev-backend smoke `health/ready/agents` OK (запущен и остановлен).
 - **Остаток:** test-инстанс не пересобирался (пользователь тестирует dev); authority/trust roots — закрыто; шаг 0 LEADER не добавляли (решение пользователя); `patch` — JSON-правки, не unified diff.
+
+## 2026-10-29 — фон: доставка в разрыв хода, целостность tool-пар, очередь UI, управление прогонами
+
+- **Тип:** feature + bug fix (референс — opencode `session/inbox.ts`, openchamber `QueuedMessagesStrip`). **Исполнители:** @fixer ×7 (ядро/UI/тесты/доки), приёмка — @tester ×5 (2 FAIL → 3 доработки). **Коммиты:** `7a2e231c` (feat), `7a0823c4` (docs/AGENTS).
+- **Симптом:** результаты фоновых процессов приходили только после хода, а если предыдущий ход оставил `assistant(tool_calls)` без пары (doom-loop), DeepSeek отвечал `insufficient tool messages following tool_calls` в каждом автоходе.
+- **Сделано (ядро):** доставка уведомлений по правилу opencode — идёт ход → `steerInbox` (граница шага), нет → `pendingMessages` + автоход; остаток `background_run_result` не дропается (`turn_ended` — с автостартом, `aborted`/дочерняя — без); ретрансляция из дочерней сессии в корень (компактный конверт `started_in*`, `<tail>` только при `failed`, `relayed*`), при активном ходе ребёнка — только ему.
+- **Сделано (целостность):** doom-loop / кривой вызов / исключение тула персистят tool-результат; `mode_change` после батча; `recoverStreamingMessages` перед каждым pending-сообщением.
+- **Сделано (API/UI):** `POST /queue/:id/steer` (id/index, 202/404/409/429, без потери при 429), адресация строк очереди по `id` (`message_id` в `message.queued`); `QueuePanel` — «В разрыв»/«Вернуть»/«Удалить», превью/вложения, Notice «запущено в «…»».
+- **Сделано (тулы):** `process_stop` (running; процесс SIGTERM→SIGKILL, саб-агент — abort ребёнка), `process_delete` (только терминальные); скоуп «своя + дочерние», в plan запрещены; `process_list`/`process_logs` без изменений.
+- **Проверка:** build shared/core/backend OK; `pnpm typecheck` 0; `pnpm lint` 0 errors (194 прежних warning); core 7738 passed, ui 2376, backend 728; docs-link-check/adr-check 0 ошибок.
+- **Остаток:** drag-reorder очереди, переход из Notice в дочернюю сессию, живой прогон в браузере (Playwright), живой гибрид (`queueSteer` на реальном remote).
