@@ -5,8 +5,8 @@
     "ru": "Лидер"
   },
   "description": {
-    "en": "Task leader: decomposition, delegation, acceptance",
-    "ru": "Лидер задач: декомпозиция, делегирование, приёмка"
+    "en": "Development team lead: distributes tasks among executors, coordinates work, and accepts the result",
+    "ru": "Лидер команды разработки: распределяет задачи между исполнителями, координирует работу и принимает результат"
   },
   "capabilities": [
     "file_read",

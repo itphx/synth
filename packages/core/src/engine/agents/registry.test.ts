@@ -180,6 +180,8 @@ describe('AgentRegistry — набор ролей (leader/fixer/tester/researche
     expect(leader.displayName).toBe('Лидер');
     // Слово не должно вернуться ни в имя, ни в описание роли
     expect(leader.description ?? '').not.toContain('Оркестратор');
+    // Формулировка роли: лидер команды разработки (не абстрактное «лидерство»)
+    expect(leader.description ?? '').toContain('команды разработки');
   });
 
   it.each(['fixer', 'tester', 'researcher', 'security-auditor', 'devops', 'admin'])(

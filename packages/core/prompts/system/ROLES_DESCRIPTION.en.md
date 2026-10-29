@@ -5,7 +5,7 @@ The following roles are available:
 | ID | Name | Description |
 |----|------|-------------|
 | assistant | Assistant | General-purpose assistant for everyday tasks |
-| leader | Leader | Task decomposition, delegation to executors, acceptance |
+| leader | Leader | Development team lead: distributes tasks among executors, coordinates work, accepts the result |
 | fixer | Fixer | Bug fixing: investigate → fix → verify |
 | tester | Tester | Tests, regression, evidence of working state |
 | researcher | Researcher | Architecture and dependency research (read-only) |
