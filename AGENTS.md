@@ -471,6 +471,15 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 
 **Протокол исполнителя — версия 5** (`EXECUTOR_PROTOCOL_VERSION`; совместимость — по полю `protocol` в `GET /capabilities`, спецификация — [docs/EXECUTION.md](./docs/EXECUTION.md)): 2 — MCP-эндпоинты, 3 — фоновые процессы, 4 — секреты вызова (`secrets[]`), **5 — вложения MCP-результата (ADR-115)**. `POST /mcp/call` отдаёт аддитивное `attachments[]` (нетекстовые блоки `image`/`audio`/`resource.blob` в base64 без `data:`-префикса), признак — `features.mcpAttachments`; транспортные капы — 25 МиБ на файл и 20 МиБ на вызов, при `isError` вложения не собираются. Байты в blob пишет **только control plane** (`AttachmentService` + штатный шов `ToolResult.attachments`, тот же, что у `web_fetch`), исполнитель про blob'ы ничего не знает. Исполнитель протокола ≤ 4 поля не отдаёт — результат остаётся **текстовым**, вызов не падает (деградация молчаливая и безопасная: поле аддитивное, версию для этого не проверяют).
 
+### CI-раннеры
+
+Джобы CI исполняются на **self-hosted раннере** (метка `runs-on: synth-ci`, host-режим): доступен
+docker-демон, нет облачного лимита в 30 минут, кэш pnpm/docker переиспользуется между прогонами.
+Облачные раннеры GitVerse остаются площадкой для чужих репозиториев; fallback-ветки workflow (kaniko
+в джобе `images`) сохранены на случай облака. Устройство, эксплуатация и диагностика — в **приватном**
+репозитории `synth-deploy` (`docs/CI_RUNNERS.md`); локальная топология (адреса, пути, гипервизор)
+в публичных документах не описывается.
+
 ### GitVerse CI — особенности
 
 1. **`actions/setup-node@v4`** — не использовать; вместо него `npm install -g pnpm@latest`.
@@ -479,6 +488,8 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 4. **`${GITHUB_REF_NAME}`** — синтаксис GitHub; в GitVerse: `echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||'`.
 5. Версия Node.js в раннере — 22 (предустановлена).
 6. **Префикс `GITVERSE_` запрещён** в именах секретов; использовать `GV_`.
+7. **Лимит 30 минут и отсутствие docker-демона — свойства облачных раннеров.** Джобы Synth идут на
+   self-hosted `synth-ci` (docker есть, лимита нет); kaniko-ветки в `images` оставлены как fallback.
 
 Порядок сборки в CI: `pnpm install --frozen-lockfile` → `pnpm --filter @itphx/synth-shared build` (обязательно перед typecheck) → `pnpm --filter @itphx/synth-core build` (нужно для backend и для typecheck драйвера-хранилища) → `pnpm --filter @itphx/synth-executor build` (исполнитель; типы ссылаются на dist core) → `pnpm --filter @itphx/synth-storage-postgres build` → `pnpm typecheck` → `pnpm lint` → `pnpm test`. Без сборки shared/core typecheck не найдёт типы. Рекурсивные задачи (`pnpm typecheck`/`lint`/`test` = `pnpm --recursive run …`) идут по **намеренным** циклам `core ↔ @itphx/synth-storage-postgres` и `core ↔ @itphx/synth-executor` (core подключает оба пакета динамическим `import()`, пакеты — peer-dep на core) — они разрешены `ignoreWorkspaceCycles: true` в `pnpm-workspace.yaml` (pnpm ≥12 иначе роняет их с `ERR_PNPM_TASK_CYCLE`; между самими задачами зависимостей нет — порядок сборки задают явные `--filter` выше). Драйвер собирается и в релизном гейте `lint-and-test` (`release.yaml`): рекурсивный `pnpm test` включает тесты деградации core, которые не гейтятся `SYNTH_TEST_POSTGRES_DSN`, но динамически импортируют `@itphx/synth-storage-postgres` — без его `dist` прогон падает. Рекурсивные задачи идут последовательно по пакетам (`workspaceConcurrency: 1` в `pnpm-workspace.yaml`): иначе vitest пакетов конкурируют за CPU и тесты деградации `core` ловят `Test timed out in 20000ms`. Контрактный suite драйвера хранения против **живой** PostgreSQL — отдельная задача `test-postgres` (`SYNTH_TEST_POSTGRES_DSN`; БД поднимает `scripts/ci-postgres.sh`: секрет `GV_TEST_POSTGRES_DSN` → локальный `initdb` → docker `postgres:17-alpine`).
 

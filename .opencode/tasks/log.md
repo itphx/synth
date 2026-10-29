@@ -1357,12 +1357,42 @@
 - **Прочие правки CI этого релиза:** `continue-on-error` не действует на `run:`-шаги в форке GitVerse (страж npm глушится в shell); `create-release`/`publish-github` не зависят от образов и offline-артефактов; `offline-bundles` best-effort; `build-docker` не ждёт джобу npm; `publish-npmjs` — публикация fail-closed, проверка видимости неблокирующая.
 - **Остаток:** flavor-образы в Gitea (`slim`/`dev`/`devops`/`browser`/`full`, образы исполнителя) — CI-джоба не прошла; test-контур не пострадал (он на 0.12.4 из локальной сборки). Квота хранилища реестра/артефактов GitVerse остаётся узким местом; self-hosted раннер (`act_runner 6.0.2`) признан официально поддерживаемым — набор для установки подготовлен.
 
-## 2026-10-29 — локальная ВМ под GitVerse Runner (libvirt)
+## 2026-10-29 — локальная ВМ под CI-раннеры (libvirt)
 
 - **Тип:** infra/server. **Исполнитель:** @admin + оркестратор (регистрация).
-- **ВМ:** `gv-runner-01` (q35, **UEFI/OVMF secboot** — образ Debian 13 через BIOS не грузится), 8 vCPU (1×4×2), 16 ГиБ + swap 4 ГиБ, Debian **13.7 trixie**, ядро 6.12-cloud. Диски: vda 20 ГиБ (`/`, store1), vdb 40 ГиБ (`/var/lib/docker`, store2), vdc 20 ГиБ (`/srv`, store1); монтирование по UUID, ФС помечены `LABEL=docker`/`LABEL=work`.
-- **Сеть:** NAT `default`, 192.168.121.205, DHCP-резервация по MAC `52:54:00:7a:1c:01` в постоянной конфигурации сети.
-- **Софт:** Docker CE 29.9.2 (`data-root=/var/lib/docker`, ротация логов 50m×3), Node v22.23.4, pnpm 12.14.0, `act_runner` **4.2.0** (`/opt/act_runner`), weekly prune-таймер, journald 500M, fstrim.
-- **Раннер:** зарегистрирован на уровне организации (`https://gitverse.ru`), имя `gv-runner-01`, метки `self-hosted,linux,x64,ubuntu-latest,synth-ci` (host-режим), `capacity: 1`, `timeout: 90m`, кэш `/srv/cache/act`, workdir `/srv/work`; `act_runner.service` enabled/active, `virsh autostart` вкл.
-- **Важно:** буквы `/dev/sdX` в госте нестабильны между загрузками — в этой ВМ использовать `/dev/disk/by-label/{docker,work}`, не буквы.
-- **Остаток:** smoke-прогон CI на новом раннере (нужен запуск workflow; `ci.yaml` без `workflow_dispatch`), проверка `uses: docker://…` в host-режиме.
+- **ВМ:** Debian 13 (trixie), UEFI/OVMF (cloud-образ не грузится через BIOS), 8 vCPU (1×4×2), 16 ГиБ + swap 4 ГиБ. Диски 30/40/40 ГиБ (система / docker / рабочий том), монтирование по UUID и LABEL.
+- **Сеть:** NAT libvirt + DHCP-резервация по MAC. Доступ — SSH по ключу.
+- **Софт:** Docker CE, Node 22, pnpm 12.14.0, `act_runner` 6.0.2, weekly docker-prune, journald 500M, fstrim.
+- **Раннер GitVerse:** org-level, host-режим, метки `self-hosted, linux, x64, debian-13, synth-ci`, `capacity: 1`, `timeout: 90m`, кэш и workdir на отдельном томе; служба enabled, autostart ВМ.
+- **Важно:** буквы `/dev/sdX` в госте нестабильны — использовать только `/dev/disk/by-label/*` и UUID.
+- **Smoke:** временная ветка с workflow `runs-on: synth-ci` — успех (host info, docker hello-world, контейнерное действие).
+- **Детали эксплуатации:** приватный `synth-deploy/docs/CI_RUNNERS.md`.
+
+## 2026-10-29 — CI-раннеры: диски, метки, Gitea
+
+- **Диски:** перенесены на отдельный том и расширены до 30/40/40 ГиБ; корень вырастил `x-systemd.growfs`, docker/work — `resize2fs`.
+- **Метки GitVerse-раннера:** `ubuntu-latest` убран как вводящий в заблуждение (машина на Debian 13, host-режим). Объявлено: `self-hosted, linux, x64, debian-13, synth-ci`.
+- **Пайплайн:** `runs-on: ubuntu-latest` → `runs-on: synth-ci` во всех джобах `.gitverse/workflows/{ci,ci-docs,release}.yaml` (30 замен), коммит **f0d33b9f** (без push).
+- **Gitea-раннер:** `gitea-runner` v5.2.4 (sha256 сверен) для Gitea 1.27.2 (внутренний Gitea), org-level, метки `self-hosted, linux, x64, debian-13, gitea-ci`, `capacity: 1`, `timeout: 90m`; служба active/enabled, `declare successfully`.
+- **Остаток:** smoke-прогон на Gitea-раннере (workflow `runs-on: gitea-ci`); push f0d33b9f не делался.
+
+## 2026-10-29 — переименование ВМ раннера
+
+- **Домен/файлы:** домен, диски, seed ISO и NVRAM переименованы (NVRAM — вручную пользователем, каталог root-only).
+- **Гость:** hostname, `/etc/hosts`, `preserve_hostname: true`, `Description` юнита, `.runner` (`name`) — обновлены; reboot-тест пройден.
+- **Сеть:** DHCP-запись переименована (MAC/IP те же). Autostart вкл.
+- **Нюанс:** имя раннера на стороне GitVerse задаётся при регистрации и локально не меняется — для смены нужна перерегистрация (старая запись удаляется в UI).
+- **Дополнение:** раннер перерегистрирован (новый id 12577, старый 12562 удалён в UI); smoke-прогон — success. Бэкапы старого бинарника и `.runner` удалены.
+
+## 2026-10-29 — test/dev: критический разбор сессии mvt0kttv (permission/abort, роли, тулы)
+
+- **Тип:** bug fix + parity с opencode. **Исполнители:** @fixer ×5 (пакеты), приёмка — оркестратор. Коммита нет (по правилу — только по просьбе).
+- **Инцидент:** сессия `mvt0kttv-3-4zh4x3e7` (проект Synth, агент `pm`). Причины: устаревший stored-агент `pm` после смены набора ролей; UI на SSE не мог ответить на `permission.asked` (WS-only `permission_reply`); «Стоп» не прерывал `waitForDecision`; `read_file` игнорировал `offset/limit`; `task`/`glob`/`read_file` описания обещали не то, что делает рантайм.
+- **Сделано:**
+  - HTTP-ответ на подтверждение `POST /sessions/:id/permissions/:approvalId` (allow/deny/hold; тот же реестр подтверждений, `APPROVAL_DENIED`), UI-fallback при SSE, очистка полосы на `stream.done`/`stream.cancelled`/«Стоп»; «Стоп» резолвит `cancelled` в `waitForDecision`.
+  - Миграция stored-агентов `pm→leader`, `developer→fixer`, `qa→tester`, `analyst→researcher`, `auditor→security-auditor` + runtime-алиас для старых сессий; тест полноты ролевых файлов RU/EN.
+  - deny больше не обрывает ход (tool_result + продолжение; предохранитель 5 одинаковых deny + лимит шагов).
+  - Периметр: `ToolContext.allowedRoots` (worktree → корень проекта), `session.info` с границами, authority/trust учитывают roots; `patch` для authority/trust.
+  - Тулы: `read_file` (offset/limit, 2000 строк/50 КБ, длинные строки, бинарь, каталог), `glob` (rg, hidden/limit, без ложной mtime-сортировки), `grep_files` (literal/caseSensitive/hidden/limit), `patch` (атомарная JSON-правка нескольких файлов), описания `execute_shell`/`edit_file`/`web_fetch`/`task`.
+- **Проверка:** `pnpm build` — OK; `pnpm test` — shared 881, core 7528, backend 727, executor 205, plugin-memory 191, storage-postgres 72, ui 2348, sdk 24; `pnpm typecheck` 0; `pnpm lint` 0 errors; adr-check/docs-link 0 ошибок; dev-backend smoke `health/ready/agents` OK (запущен и остановлен).
+- **Остаток:** test-инстанс не пересобирался (пользователь тестирует dev); authority/trust roots — закрыто; шаг 0 LEADER не добавляли (решение пользователя); `patch` — JSON-правки, не unified diff.

@@ -29,6 +29,8 @@ description: CI/CD GitVerse для Synth: workflow-файлы, секреты, �
 3. **`${...}` в inline bash** — GitVerse парсит как Go-шаблон, скрипт падает. Выносить сложный bash в отдельный файл (см. `scripts/changelog.sh`).
 4. **`${GITHUB_REF_NAME}`** — синтаксис GitHub, в GitVerse: `echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||'`
 5. Версия Node.js в раннере: 22 (предустановлена).
+6. **Джобы идут на self-hosted раннере** (метка `synth-ci`): docker-демон есть, облачного лимита
+   30 минут нет, кэш pnpm/docker сохраняется. Эксплуатация — приватный `synth-deploy/docs/CI_RUNNERS.md`.
 
 ## Грабли (проверено на 0.10.1)
 
