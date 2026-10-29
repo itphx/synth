@@ -270,11 +270,34 @@ The split is done via `paths`/`paths-ignore`: `ci.yaml` has `docs/**` and `**/*.
 
 ### Starting a release
 
+> **Rule: releases are tagged from `master` only.** A tag on a feature branch is formally valid (it points at
+> a specific commit) but leaves `master` behind the release — "the release exists, the code is not in master"
+> (that is what happened with 0.12.4). On top of that, `release.yaml` takes the npm version from
+> `packages/synth/package.json` and the Helm/Docker/offline version from the tag: without a bump commit in the
+> tagged tree, publishing goes out under the **previous** version (on 0.12.4 npm packages shipped as `0.12.3`
+> and the run had to be cancelled).
+
+**Order (mandatory):**
+
+1. Merge the working branch into `master` and push: `git checkout master && git merge --ff-only <branch> && git push origin master`.
+2. Wait for a green `ci.yaml` on `master` (that is the audit commit).
+3. Bump the version in a single `master` commit: 8 × `packages/*/package.json`, `packages/shared/src/version.ts`,
+   `charts/synth/Chart.yaml` (`version` + `appVersion`). Confirm `ci.yaml` is green on that commit.
+4. Add the internal audit record `docs/security/releases/<version>.json` (`security-gate` requires it).
+5. Create an **annotated** tag on the commit that contains the record and push it:
+   `git tag -a v<version> -m "…" && git push origin v<version>`.
+6. Do not re-create the tag or cancel a run mid-flight: pushing the tag again starts a new run while the
+   previous one's jobs still hold slots, and GitVerse may kill both (observed: all jobs marked `failure`
+   at the same second, including steps that never started).
+
+Manual alternative (no tag):
+
 1. **Dry-run:** `workflow_dispatch` with `dry_run: true` — a check without publishing
 2. **Real publishing:** `workflow_dispatch` with `dry_run: false` (inputs: `bump` patch/minor/major, `pre_release`)
-3. **Automatically:** create a `vX.Y.Z` tag and push it — the workflow starts on the tag push (skips the bump stage, the version is taken from the tag)
+   — this path performs the bump, commit and tag itself.
 
-The manual `workflow_dispatch` is kept in `release.yaml` (items 1–2) — this is the only way to start a build/publish without a tag.
+Re-running on the same tag is idempotent: npm versions already in the registry are skipped, the Helm chart is
+overwritten with identical content, and CI artifacts and offline builds are best-effort.
 
 Release workflow: version bump (version.ts + package.json + `charts/synth/Chart.yaml`) → CI checks → build → CHANGELOG → npmjs publish → GitVerse npm publish → Docker (kaniko → `gitverse.ru/itphx/{synth,synth-backend,synth-ui}` + `ghcr.io/itphx/{synth,synth-backend,synth-ui}`) → Helm chart publish (`publish-helm`) → create the GitVerse Release → GitHub mirror (`publish-github`: push `main`+tags, GitHub Release).
 

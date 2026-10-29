@@ -64,9 +64,20 @@ pnpm test
 
 ## Запуск релиза
 
-1. Dry-run: `workflow_dispatch` с `dry_run: true` — проверка без публикации
-2. Реальная публикация: `workflow_dispatch` с `dry_run: false`
-3. Или вручную: создать тег `vX.Y.Z` и запушить — workflow запустится автоматически
+**Правило: релиз тегируется только с `master`.** Тег на feature-ветке оставляет `master` позади релиза
+(«релиз есть, а кода в master нет» — так вышло на 0.12.4), а `release.yaml` берёт версию npm-пакетов из
+`packages/synth/package.json`: без bump-коммита в теге npm уходит под прежней версией.
+
+Порядок:
+
+1. слить ветку в `master`, запушить, дождаться зелёного `ci.yaml`;
+2. bump версии (8 × `packages/*/package.json`, `packages/shared/src/version.ts`, `charts/synth/Chart.yaml`) — коммит в `master`;
+3. запись аудита `docs/security/releases/<version>.json` (её требует `security-gate`);
+4. аннотированный тег на коммит с записью → `git push origin v<version>`;
+5. не пересоздавать тег и не отменять прогон внахлёст — новый push тега при незавершённых джобах
+   предыдущего прогона приводит к тому, что платформа снимает оба.
+
+Ручные варианты: `workflow_dispatch` с `dry_run: true` (проверка) и с `dry_run: false` (bump + коммит + тег сам).
 
 ## Локальная проверка перед пушем
 
