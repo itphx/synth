@@ -219,19 +219,28 @@ ADR-024), а привязанную сессию получает через х�
 
 ## 4. Containment
 
+**Периметр сессии — рабочий каталог сессии ИЛИ корень проекта** (как в opencode: `FileAccess.resolve`
+считает internal и `location.directory`, и project worktree). У сессии в worktree рабочий каталог —
+каталог worktree, но основной checkout проекта (`project.workspace`) «внешним» не считается: агент
+читает/правит файлы той и другой копии без подтверждения на каждый путь. Технически это
+`ToolContext.allowedRoots` (= `[project.workspace]`, если он отличается от рабочего каталога) и
+`toolRoots`/`isSymlinkEscapeInRoots` (`engine/tools/path-utils.ts`); относительные пути и `cwd`
+shell/git по-прежнему считаются **от каталога worktree**.
+
 ### 4.1. Что разрешено
 
 | Операция | База отсчёта | Правило |
 |---|---|---|
-| file-тулы (`read_file`, `write_file`, `list_directory`, `glob`, …) | каталог worktree | относительные пути — только внутри; абсолютные — как сейчас, с проверкой `protected-paths` |
-| `execute_shell` | каталог worktree | `cwd` команды — каталог worktree (или его подкаталог) |
+| file-тулы (`read_file`, `write_file`, `list_directory`, `glob`, …) | каталог worktree | относительные пути — от worktree; containment — worktree **или** корень проекта; абсолютные пути вне периметра — `protected-paths` + permission-слой (`external_directory`) |
+| `execute_shell` | каталог worktree | `cwd` команды — worktree, его подкаталог или каталог в корне проекта |
 | git-тулы | каталог worktree | `repo_path` — только `.` или пусто |
 | `repo_path` внутри worktree | каталог worktree | `.`/пусто — корень worktree; абсолютный путь или `..` → ошибка `git.repo_path_invalid` (ADR-076) |
 
 ### 4.2. Что запрещено
 
-- Выход за пределы каталога worktree через `..`, абсолютный путь или симлинк наружу — fail-closed
-  (существующая логика `isInsideReal`/`resolveRealPath`, ADR-075/ADR-077).
+- Выход за пределы **периметра** (каталог worktree и корень проекта) через `..`, абсолютный путь или
+  симлинк наружу обоих корней — fail-closed (логика `resolveRealPath`/`isSymlinkEscapeInRoots`,
+  ADR-075/ADR-077). Симлинк из worktree в основной checkout — **не** побег: это часть периметра.
 - Политика `workspaceOutsideRoot` (ADR-075) к worktrees **не применяется**: их корень внутри
   `workspacesRoot` по построению, исключений и подтверждений не требуется.
 - В remote-режиме исполнитель проверяет `cwd` дополнительно (ADR-077, `resolveContainedCwd`): каталог
@@ -579,7 +588,7 @@ coarse-указателе.
 | Удаление worktree, привязанного к живой сессии | `409 WORKTREE_BUSY` |
 | `repo_path` = абсолютный путь или `..` внутри worktree | `git.repo_path_invalid` |
 | Каталог привязанного worktree удалён вручную | резолв cwd → fail-closed `worktree.directory_missing`, **без** фоллбэка в `project.workspace` |
-| Выход за каталог worktree через `..`/симлинк | fail-closed (существующая логика containment) |
+| Выход за периметр (worktree **и** корень проекта) через `..`/симлинк | fail-closed (containment); симлинк worktree → корень проекта разрешён |
 | Права: `VIEWER` на `POST`/`DELETE`/`prune` | `403 FORBIDDEN` |
 | Права: `VIEWER` на `GET` | `200` (только чтение) |
 | Права: посторонний (не участник проекта) на `GET`/`POST` | `403 FORBIDDEN` (существование не выдаётся) |

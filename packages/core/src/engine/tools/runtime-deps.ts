@@ -107,7 +107,12 @@ export const RUNTIME_DEP_COMMAND: Record<RuntimeDependency, string> = {
  * зависимости в карте отсутствуют (файловые/plan/todo/web/task/skill).
  */
 export const TOOL_RUNTIME_DEP: Record<string, ToolRuntimeDependency> = {
+  // Поиск: `grep_files` и `glob` идут через ripgrep (`rg` — единственная
+  // реализация на стороне порта исполнения; в remote-режиме команда уходит
+  // в адрес пула, где ripgrep есть). Нет `rg` — оба тула недоступны по
+  // причине `dependency` (ADR-078), собственного обхода ФС у них нет.
   grep_files: 'rg',
+  glob: 'rg',
   // Оболочка тула — `bash`, не `sh`: `sh` в образах это dash/busybox ash, а
   // bash-синтаксис агентских команд в них не работает (fail-closed без bash).
   execute_shell: 'bash',

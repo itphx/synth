@@ -31,7 +31,7 @@ import { createStateMessage, findLastStateMessage, buildModeChangeContent, build
 import type { ToolRegistry } from './tools/registry.js';
 import type { AutomationRuntime } from './tools/automation-runtime.js';
 import type { AgentRegistry } from './agents/registry.js';
-import { DEFAULT_AGENT_ID } from './agents/index.js';
+import { DEFAULT_AGENT_ID, resolveAgentRoleAlias } from './agents/index.js';
 import type { McpManager } from './mcp/manager.js';
 import { attachExecutorMcpFromDescriptor } from './mcp/executor-mcp-source.js';
 import { resolveMcpScope, type McpScopeDecision } from './mcp/scope.js';
@@ -123,6 +123,11 @@ import { sessionAxes } from '../analytics/recorder.js';
 import { toCoreProviderConfig } from './router/index.js';
 
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
+/**
+ * Порог одинаковых deny-вызовов подряд, после которого ход завершается
+ * (deny не обрывает ход, но и бесконечно повторяться не должен).
+ */
+const MAX_REPEATED_DENY_COUNT = 5;
 /** Порог заполненности контекстного окна (%), после которого публикуем context.limit_warning. */
 const CONTEXT_LIMIT_WARNING_PERCENT = 90;
 
@@ -159,6 +164,26 @@ function isToolAttachmentRefValid(ref: ToolAttachmentRef): boolean {
   if (typeof ref.size !== 'number' || !Number.isFinite(ref.size) || ref.size <= 0) return false;
   if (ref.name !== undefined && typeof ref.name !== 'string') return false;
   return true;
+}
+
+/**
+ * Периметр файловых/shell/git-тулов сессии: рабочий каталог **или** корень
+ * проекта.
+ *
+ * Зачем: сессия, привязанная к git-worktree (ADR-114), работает в каталоге
+ * worktree, а основной checkout проекта (`project.workspace`) лежит вне его —
+ * но остаётся «своим» (как в opencode: `FileAccess.resolve` считает internal
+ * и `location.directory`, и project worktree). Иначе агент в worktree не мог бы
+ * прочитать файл основной копии без подтверждения на каждый путь.
+ *
+ * Возвращает `undefined`, когда дополнительный корень не нужен или дублирует
+ * `workingDir` (обычная сессия без worktree — поведение не меняется).
+ */
+function resolveAllowedRoots(workingDir: string, projectRoot: string | null): string[] | undefined {
+  if (!projectRoot) return undefined;
+  const root = normalize(projectRoot);
+  if (root === normalize(workingDir)) return undefined;
+  return [root];
 }
 
 /**
@@ -613,8 +638,9 @@ export class ChatOrchestrator {
   /**
    * Роли, для которых уже предупреждали о фоллбеке на агента по умолчанию
    * (`_resolveAgentDefinition`): у старых сессий `settings.agentRole` может
-   * ссылаться на удалённую роль, и предупреждение не должно литься в лог на
-   * каждом ходе.
+   * ссылаться на удалённую роль (алиасы прежнего набора — `pm` → `leader` —
+   * сюда не попадают: они резолвятся штатно), и предупреждение не должно
+   * литься в лог на каждом ходе.
    */
   private readonly _warnedUnknownAgentRoles = new Set<string>();
   private readonly _mcpManager: McpManager | null;
@@ -814,15 +840,40 @@ export class ChatOrchestrator {
   }
 
   /**
+   * Эффективная роль агента с учётом алиасов прежнего набора ролей.
+   *
+   * У старых сессий `settings.agentRole` может хранить id роли, которой в
+   * текущем наборе нет (`pm`, `developer`, `qa`, `analyst`, `auditor`): набор
+   * заменён на `leader`/`fixer`/`tester`/`researcher`/`security-auditor`, но
+   * метка в сессии историческая и не переписывается. Правило:
+   *  - роль не задана — как есть;
+   *  - реестр знает роль — как есть;
+   *  - иначе алиас (`pm` → `leader`) существует и целевой агент есть в
+   *    реестре — возвращается алиас (промпт, capabilities, лимиты — целевого
+   *    агента);
+   *  - иначе исходная роль: дальше сработает прежний фоллбек `assistant`
+   *    (`_resolveAgentDefinition` с предупреждением).
+   */
+  private _resolveEffectiveAgentRole(agentRole: string | undefined): string | undefined {
+    if (!agentRole || !this._agentRegistry) return agentRole;
+    if (this._agentRegistry.get(agentRole)) return agentRole;
+    const alias = resolveAgentRoleAlias(agentRole);
+    if (alias && this._agentRegistry.get(alias)) return alias;
+    return agentRole;
+  }
+
+  /**
    * Определение агента по роли с фоллбеком на агента по умолчанию.
    *
    * В инстансах с историей `settings.agentRole` может ссылаться на роль,
    * которой больше нет в наборе (например, удалённая роль из прежнего набора
-   * `pm`/`developer`/`qa`/…). Ход не должен ни падать, ни оставаться без
-   * ограничений роли: неизвестная роль даёт **определение агента по умолчанию**
-   * (`DEFAULT_AGENT_ID` — `assistant`) с предупреждением в лог. Поэтому
-   * capabilities/maxSteps/prompt берутся у `assistant`, а строка `effectiveAgentRole`
-   * остаётся прежней (attribution, аналитика, `promptStates` — историческая метка).
+   * `pm`/`developer`/`qa`/…). Сначала пробуется алиас прежней роли
+   * (`resolveAgentRoleAlias`: `pm` → `leader`), и только если его нет в
+   * реестре — **определение агента по умолчанию** (`DEFAULT_AGENT_ID` —
+   * `assistant`) с предупреждением в лог. Ход не должен ни падать, ни
+   * оставаться без ограничений роли (иначе неизвестная роль = «агент без
+   * ограничений», fail-open). Строка `effectiveAgentRole` при фоллбеке остаётся
+   * прежней (attribution, аналитика, `promptStates` — историческая метка).
    *
    * Предупреждение печатается один раз на роль за жизнь процесса (см.
    * `_warnedUnknownAgentRoles`), иначе старые сессии писали бы его на каждом ходе.
@@ -832,6 +883,12 @@ export class ChatOrchestrator {
     if (!agentRole || !this._agentRegistry) return undefined;
     const found = this._agentRegistry.get(agentRole);
     if (found) return found;
+    // Алиас прежней роли: не ошибка и не повод для предупреждения.
+    const alias = resolveAgentRoleAlias(agentRole);
+    if (alias) {
+      const aliased = this._agentRegistry.get(alias);
+      if (aliased) return aliased;
+    }
     if (!this._warnedUnknownAgentRoles.has(agentRole)) {
       this._warnedUnknownAgentRoles.add(agentRole);
       warning(
@@ -1640,6 +1697,8 @@ export class ChatOrchestrator {
     agentDef: AgentDefinition | undefined;
     effectiveAgentRole: string | undefined;
     workingDir: string;
+    /** Корень проекта (`project.workspace`, абсолютный) — блок `session.info` (ADR-114). */
+    projectRoot?: string | null;
     language: string;
     summaryContent?: string;
     toolsPolicy: Exclude<ToolsPolicy, 'auto'>;
@@ -1665,7 +1724,7 @@ export class ChatOrchestrator {
     turnId?: string;
   }): ComposerContext {
     const {
-      session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
+      session, agentDef, effectiveAgentRole, workingDir, projectRoot, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio, mcpServers, project, toolSelection, debugCollector,
       skillsCatalog, instructions, schedulerActive, interviewEligible, schedulerCurrentTurn,
       query, turnId,
@@ -1676,6 +1735,9 @@ export class ChatOrchestrator {
       agentRole: effectiveAgentRole,
       agentContextFile: agentDef?.contextFile,
       workingDir,
+      // ADR-114: корень проекта — в `session.info` рядом с рабочим каталогом
+      // сессии, если сессия работает в worktree.
+      ...(projectRoot ? { projectRoot } : {}),
       language,
       routingEnabled: !!this._router && session.settings.routingEnabled !== false,
       gatewayEnabled: !!this._gatewayConfig,
@@ -1969,6 +2031,8 @@ export class ChatOrchestrator {
     streamId: string;
     effectiveAgentRole: string | undefined;
     workingDir: string;
+    /** ADR-114: периметр сессии (рабочий каталог + корень проекта). */
+    allowedRoots?: readonly string[];
     /** ADR-046 §7.4: evaluator для inline shell — тот же, что в tool-loop. */
     permissionEvaluator: PermissionEvaluator;
     sessionMode: SessionMode;
@@ -1982,7 +2046,7 @@ export class ChatOrchestrator {
     authorityTurn?: AuthorityTurnContext;
   }): Promise<ProcessMessageResult | null> {
     if (!this._commandRuntime) return null;
-    const { session, message, signal, publishChunk, debugCollector, streamId, effectiveAgentRole, workingDir, permissionEvaluator, sessionMode, planMode, planApproved, attempt, authorityTurn } = args;
+    const { session, message, signal, publishChunk, debugCollector, streamId, effectiveAgentRole, workingDir, allowedRoots, permissionEvaluator, sessionMode, planMode, planApproved, attempt, authorityTurn } = args;
     const input = (message.content ?? '').trim();
     if (!input.startsWith('/')) return null;
 
@@ -1999,6 +2063,8 @@ export class ChatOrchestrator {
         toolName: 'execute_shell',
         params: { command },
         workingDir,
+        // ADR-114: тот же периметр, что у обычных тулов (worktree + корень проекта).
+        ...(allowedRoots ? { allowedRoots } : {}),
         sessionMode,
         planMode,
         planApproved,
@@ -3313,7 +3379,7 @@ export class ChatOrchestrator {
    * `promptStates` не пишется, `captureSystemPromptParts` не вызывается.
    */
   async getPromptInfo(session: Session): Promise<PromptDiagnostics> {
-    const effectiveAgentRole = session.settings.agentRole;
+    const effectiveAgentRole = this._resolveEffectiveAgentRole(session.settings.agentRole);
     const agentDef = this._resolveAgentDefinition(effectiveAgentRole);
     // ADR-071 §2.4: проект загружаем один раз — для рабочего каталога и Composer.
     const project = await this._loadProject(session);
@@ -3327,7 +3393,8 @@ export class ChatOrchestrator {
       if (!(e instanceof WorktreeDirectoryMissingError)) throw e;
       workingDir = this._defaultWorkingDir;
     }
-    const workspaceReady = (await this._resolveProjectWorkspace(session, project)) !== null;
+    const projectRoot = await this._resolveProjectWorkspace(session, project);
+    const workspaceReady = projectRoot !== null;
     const language = session.settings.language || 'ru';
 
     const optimizedMessages = this._optimizer
@@ -3379,7 +3446,7 @@ export class ChatOrchestrator {
     });
     const schedulerActive = await this._resolveSchedulerActive(session);
     const ctx: ComposerContext = this._buildComposerContext({
-      session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
+      session, agentDef, effectiveAgentRole, workingDir, projectRoot, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio,
       // ADR-071 §2.2: блоки `mcp.servers`/`mcp.status` — все серверы эффективного набора.
       mcpServers: this._collectComposerMcpServers(mcpDecisions),
@@ -3478,7 +3545,9 @@ export class ChatOrchestrator {
     attempt?: number,
   ): Promise<ProcessMessageResult> {
     const streamId = (message.metadata?.stream_id as string) || 'unknown';
-    const effectiveAgentRole = message.agentRole || session.settings.agentRole;
+    const effectiveAgentRole = this._resolveEffectiveAgentRole(
+      message.agentRole || session.settings.agentRole,
+    );
     const author = message.author || 'unknown';
     // ADR-106 Ф4: принципал хода — зафиксирован **при приёме ввода**
     // (постановка сообщения в очередь). При исполнении из `pendingMessages`
@@ -3537,7 +3606,12 @@ export class ChatOrchestrator {
     // пока у проекта не задан рабочий каталог. `workingDir` при этом всё равно
     // резолвится (fallback default) — он нужен промпту/контексту, но путь
     // инструментов остаётся невалидным до появления workspace.
-    let workspaceReady = (await this._resolveProjectWorkspace(session, projectForState)) !== null;
+    let projectRoot = await this._resolveProjectWorkspace(session, projectForState);
+    let workspaceReady = projectRoot !== null;
+    // Периметр сессии (ADR-114): сессия в worktree считает «своими» и рабочий
+    // каталог worktree, и корень проекта (`project.workspace`) — как в opencode
+    // (`FileAccess.resolve`: internal = location.directory ИЛИ project worktree).
+    let allowedRoots = resolveAllowedRoots(workingDir, projectRoot);
 
     // ADR-025: режим Plan/Act — runtime-состояние сессии + строгость из настроек
     const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
@@ -3612,6 +3686,7 @@ export class ChatOrchestrator {
     const earlyResult = await runProcessEarly({
       session, message, signal, publishChunk, debugCollector, streamId,
       effectiveAgentRole, effectiveReasoningLevel, workingDir, attempt,
+      ...(allowedRoots ? { allowedRoots } : {}),
       permissionEvaluator, sessionMode, planMode, planApproved, streamStartedAt,
       authorityTurn,
     }, this._processEarlyDeps());
@@ -3627,7 +3702,7 @@ export class ChatOrchestrator {
       // вынесена в `orchestrator/phases/process-setup.ts`; порядок прежний.
       const setup = await runProcessSetup({
         session, message, signal, streamStartedAt, debugCollector, streamId,
-        projectForState, workingDir, workspaceReady, agentDef, effectiveAgentRole,
+        projectForState, workingDir, projectRoot, workspaceReady, agentDef, effectiveAgentRole,
         effectiveReasoningLevel, sessionMode, planMode, planApproved, author, attempt,
       }, this._processSetupDeps(session));
       if (setup.failed) return setup.result;
@@ -3658,20 +3733,29 @@ export class ChatOrchestrator {
       // `finalModel` ещё не обновлён (ADR-070 §2.6, Bug 2).
       let lastChunkModel: string | undefined;
       const allToolCalls: Array<Record<string, unknown>> = [];
-      let stopAfterDeny = false;
-      let denyStopReason: string | undefined;
       /** metadata.i18n подставленного финального фоллбека (лимит итераций / deny / пустой ответ). */
       let fallbackI18n: ReturnType<typeof i18nMeta> | undefined;
       /** Были ли deny-отказы за цикл (для осмысленного fallback пустого ответа). */
       let hadDeny = false;
       /**
        * Был ли отказ именно **ролевой** (`matchedRule: 'role.unavailable'`):
-       * тул не для этого агента, а не нарушение политики. Такой отказ
-       * останавливает ход после текущей итерации — следующая LLM-итерация
-       * бессмысленна (модель не получит новых прав), а финальный текст
-       * объясняет делегацию через `@`.
+       * тул не для этого агента, а не нарушение политики. Ход **не**
+       * останавливается — модель получает `tool_result` с причиной и может
+       * выбрать другой инструмент. Флаг нужен только для фоллбек-текста
+       * (`session.role_tool_blocked`), если содержательного ответа так и не
+       * последовало.
        */
       let roleBlocked = false;
+      /**
+       * Защита от бесконечного повтора одинаковых deny-вызовов. Doom-loop
+       * намеренно не трогает deny (каждая попытка получает объяснение), а
+       * у агента может не быть лимита шагов (`DEFAULT_MAX_ITERATIONS` —
+       * `Infinity`). После {@link MAX_REPEATED_DENY_COUNT} одинаковых отказов
+       * подряд ход завершается фоллбек-текстом (`session.denied_blocked`).
+       */
+      let denyRepeatKey: string | undefined;
+      let denyRepeatCount = 0;
+      let denyLoopExceeded = false;
       let roleBlockedTool: string | undefined;
       let roleBlockedAgent: string | undefined;
       /** Отмена до финального сохранения (до входа в итерацию, во время тула) —
@@ -4171,6 +4255,9 @@ export class ChatOrchestrator {
             toolName,
             params: toolArgs,
             workingDir,
+            // ADR-114: периметр сессии — рабочий каталог + корень проекта
+            // (сессия в worktree). Внутри него путь не считается внешним.
+            ...(allowedRoots ? { allowedRoots } : {}),
             capabilities: toolDef?.capabilities,
             // ADR-106 Ф1: контекст хода для shadow-наблюдения (на решение не влияет).
             authorityContext: {
@@ -4254,7 +4341,6 @@ export class ChatOrchestrator {
 
           let executeTool = !hookBlocked && permissionDecision.action === 'allow';
           let deniedReason: string | undefined;
-          let userDenied = false;
 
           if (!hookBlocked && permissionDecision.action === 'deny') {
             deniedReason = this._securityMessage(permissionDecision, 'en')
@@ -4292,6 +4378,9 @@ export class ChatOrchestrator {
                 ...(bindingTarget ? { target: bindingTarget } : {}),
               },
               effectivePermissionConfig.askTimeoutMs,
+              // «Стоп» снимает ожидание подтверждения (иначе инструмент висел
+              // бы до ask-таймаута): отмена хода резолвит `cancelled:true`.
+              toolAbortController.signal,
             );
             if (approval.approved) {
               executeTool = true;
@@ -4305,15 +4394,18 @@ export class ChatOrchestrator {
                 });
               }
             } else {
-              const why = approval.timeout
-                ? sm('permission.ask_timeout')
-                : approval.noSubscribers
-                  ? sm('permission.ask_no_subscribers')
-                  : sm('permission.ask_denied');
+              // `cancelled` — снято отменой хода, а не ответом пользователя:
+              // это не отказ пользователя, ход завершит штатная отмена.
+              const why = approval.cancelled
+                ? sm('permission.ask_cancelled')
+                : approval.timeout
+                  ? sm('permission.ask_timeout')
+                  : approval.noSubscribers
+                    ? sm('permission.ask_no_subscribers')
+                    : sm('permission.ask_denied');
               const baseDeny = this._securityMessage(permissionDecision, 'en')
                 ?? `Permission denied: ${permissionDecision.reason}`;
               deniedReason = `${baseDeny} (${why})`;
-              userDenied = !approval.timeout && !approval.noSubscribers;
             }
           }
 
@@ -4353,16 +4445,29 @@ export class ChatOrchestrator {
               params: permissionDecision.params as Record<string, string> | undefined,
             });
             hadDeny = true;
-            // ADR-070 §2.9.1: ролевой отказ — не инцидент ИБ, а «инструмент не
-            // для этого агента». Повторные вызовы и следующая итерация модели
-            // ничего не изменят — запоминаем причину и завершаем ход после
-            // обработки tool-call'ов текущей итерации.
+            // ADR-070 §2.9.1 (обновлено 2026-10-29): отказ — ролевой,
+            // пользовательский или политики — возвращается модели как обычный
+            // `tool_result`; следующая LLM-итерация запускается штатно, модель
+            // может выбрать другой инструмент. Ролевой отказ запоминаем только
+            // для фоллбек-текста, если содержательного ответа не будет.
             if (permissionDecision.matchedRule === 'role.unavailable') {
               roleBlocked = true;
               roleBlockedTool = toolName;
               roleBlockedAgent = effectiveAgentRole;
             }
+            // Предохранитель от бесконечного повтора одного и того же
+            // deny-вызова (doom-loop такие вызовы намеренно не считает).
+            const denyKey = `${toolName}:${JSON.stringify(toolArgs)}`;
+            denyRepeatCount = denyRepeatKey === denyKey ? denyRepeatCount + 1 : 1;
+            denyRepeatKey = denyKey;
+            if (denyRepeatCount >= MAX_REPEATED_DENY_COUNT) {
+              denyLoopExceeded = true;
+            }
           } else {
+            // Вызов разрешён и исполняется — прогресс есть, счётчик
+            // повторяющихся отказов сбрасываем.
+            denyRepeatKey = undefined;
+            denyRepeatCount = 0;
             if (toolDef) {
               toolResult = await executeToolDef(toolDef, toolArgs, {
                 sessionId: session.id,
@@ -4376,6 +4481,9 @@ export class ChatOrchestrator {
                 abortSignal: toolAbortController.signal,
                 agentRole: effectiveAgentRole,
                 workingDir,
+                // ADR-114: perimeter сессии — containment по рабочему каталогу
+                // worktree **и** корню проекта; относительные пути — от worktree.
+                ...(allowedRoots ? { allowedRoots } : {}),
                 // ADR-114: привязка к worktree — containment от каталога
                 // worktree (git-тулы: `repo_path` только `.`) и поиск записи
                 // реестра `project.repos` по `worktreeRepoPath` (каталог
@@ -4561,6 +4669,8 @@ export class ChatOrchestrator {
               toolArgs,
               workingDir,
               toolDef?.capabilities,
+              // ADR-114: периметр доверия — рабочий каталог + корень проекта.
+              allowedRoots,
             );
             if (trustInfo) {
               const piConfig = this._securityConfig.promptInjection;
@@ -4762,7 +4872,10 @@ export class ChatOrchestrator {
               workingDir,
               worktree: sessionWorktree,
             } = await this._resolveSessionWorkingDir(session, projectForState));
-            workspaceReady = (await this._resolveProjectWorkspace(session, projectForState)) !== null;
+            projectRoot = await this._resolveProjectWorkspace(session, projectForState);
+            workspaceReady = projectRoot !== null;
+            // Периметр мог измениться вместе с каталогом/проектом (ADR-114).
+            allowedRoots = resolveAllowedRoots(workingDir, projectRoot);
             const rebuilt = this._buildToolSelection({
               session, agentDef, effectiveAgentRole, activeMcpServers, providerType: provider.type,
               sessionMode, planMode, planApproved, workspaceReady,
@@ -4827,47 +4940,49 @@ export class ChatOrchestrator {
             branchId: '',
             toolCallId: tcId,
           });
-
-          // ADR-029: пользователь отклонил запрос (ask→deny) — прекращаем
-          // обработку: не продолжаем цикл LLM, но уже выполненные tool_result
-          // и промежуточные ответы остаются в истории (сохраняются ниже).
-          if (userDenied) {
-            stopAfterDeny = true;
-            denyStopReason = deniedReason;
-            break;
-          }
         }
 
         // Отмена между тулами итерации (например во время IPI-обработки) —
         // тоже завершаем как отмену, а не идём на следующую LLM-итерацию.
-        if (!stopAfterDeny && (cancelToken.cancelled || toolAbortController.signal.aborted)) {
+        // «Стоп» приоритетнее любого deny: ход завершается как отмена.
+        if (cancelToken.cancelled || toolAbortController.signal.aborted) {
           cancelledBeforeFinal = true;
+          break;
+        }
+
+        // Защита от бесконечного повтора одинаковых deny-вызовов: tool_result
+        // итерации уже в истории (пары assistant(tool_use) → tool не рвутся),
+        // следующую LLM-итерацию не запускаем. Финальный текст — фоллбек
+        // `session.denied_blocked` (hadDeny), см. process-finalize.
+        if (denyLoopExceeded) {
+          warning(
+            'ORCHESTRATOR',
+            `Повторяющиеся deny-вызовы (${denyRepeatCount} подряд) — ход завершается`,
+          );
           break;
         }
 
         // ADR-115 §«Медиа из инструментов»: вложения результатов тулов этой
         // итерации — отдельной user-репликой в текущий ход (после tool-сообщений,
-        // до следующего LLM-вызова). Отмена/ошибка/deny/ролевой отказ следующую
-        // итерацию не запускают — инъекция не нужна.
-        if (!stopAfterDeny && !roleBlocked) {
-          await this._injectToolAttachments({
-            session,
-            // Накопленные результаты хода (`allToolCalls`), а не сырые
-            // `toolCalls` ответа модели: у последних нет ни `result`, ни
-            // `iteration` — инъекция не увидела бы ни одного вложения.
-            toolCalls: allToolCalls,
-            iteration: toolIteration,
-            currentMessages,
-            providerName,
-            modelId: provider.model || modelName || session.settings.model || '',
-            language,
-            workingDir,
-            workspaceReady,
-            agentRole: effectiveAgentRole,
-            author,
-            publishChunk,
-          });
-        }
+        // до следующего LLM-вызова). Отменённый ход следующую итерацию не
+        // запускает — инъекция не нужна; deny-результаты вложений не несут.
+        await this._injectToolAttachments({
+          session,
+          // Накопленные результаты хода (`allToolCalls`), а не сырые
+          // `toolCalls` ответа модели: у последних нет ни `result`, ни
+          // `iteration` — инъекция не увидела бы ни одного вложения.
+          toolCalls: allToolCalls,
+          iteration: toolIteration,
+          currentMessages,
+          providerName,
+          modelId: provider.model || modelName || session.settings.model || '',
+          language,
+          workingDir,
+          workspaceReady,
+          agentRole: effectiveAgentRole,
+          author,
+          publishChunk,
+        });
 
         publishChunk('tool_call.loop', {
           stream_id: streamId,
@@ -4877,11 +4992,6 @@ export class ChatOrchestrator {
         });
 
         toolIteration++;
-        if (stopAfterDeny) break;
-        // Ролевой отказ (тул недоступен агенту): следующая LLM-итерация не
-        // нужна — модель не получит новых прав. Уже собранные `tool_result`
-        // остаются в истории (как при ask-deny).
-        if (roleBlocked) break;
       }
 
       // Этап 1 roadmap 0.13 (блок 3): конец хода — снимаем вопросы **этого**
@@ -4896,7 +5006,7 @@ export class ChatOrchestrator {
         { session, streamId, publishChunk, debugCollector, streamStartedAt, streamTiming },
         {
           cancelledBeforeFinal, lastChunkModel, finalModel, finalUsage, finalContent, fallbackI18n,
-          hadDeny, stopAfterDeny, denyStopReason, toolIteration, maxIterations,
+          hadDeny, toolIteration, maxIterations,
           roleBlocked, roleBlockedTool, roleBlockedAgent,
           lastIterationPromptChars, allReasoning, allIntermediateTexts, allToolCalls,
           currentMessages, promptMeta, loadedTokenRatio, routingDecision,

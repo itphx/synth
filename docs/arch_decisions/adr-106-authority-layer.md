@@ -79,6 +79,12 @@
   `014`). Остаток — UI-раздел «Полномочия» (read-only) и flavor-роли (PROP-082); ограничения as-built —
   политика читается снимком при старте процесса (эффект виден после рестарта) и PG-контракт портов
   Authority гоняется только в CI (`SYNTH_TEST_POSTGRES_DSN`).
+- **Обновлено 2026-10-29.** Периметр цели — `workingDir` **+ `allowedRoots`** (ADR-114: у сессии в
+  git-worktree `project.workspace` тоже «свой», а не «внешний»): `path` — путь внутри любого корня,
+  `outside` — только вне обоих; `ref` считается от того корня, в котором лежит путь. Поле аддитивное
+  (`AuthorityTargetInput`/`AuthorityRuleCompilationInput`/`AuthorityShadowInput.allowedRoots`), без него
+  поведение прежнее. Тул `patch` (`edits[].file_path`) учитывается выводом цели и матрицей доверия
+  (`security/trust.ts`); пути собирает общий `extractPathParams`.
 
 ## История
 

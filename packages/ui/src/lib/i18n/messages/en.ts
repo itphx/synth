@@ -1381,6 +1381,7 @@ export const dict = {
   'permission.bar.noTimeout': 'waiting without timeout',
   'permission.bar.timeoutTitle': 'Time until request auto-denied',
   'permission.bar.grantedForSession': 'Tool {tool} allowed for the session',
+  'permission.bar.replyFailed': 'Could not send the answer — the request is still open',
 
   // User questions (stage 1 roadmap 0.13 — block 1.3): dock above the composer.
   'question.dock.title': 'The agent asked a question',

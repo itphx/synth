@@ -1,20 +1,188 @@
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { open, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
-import { resolvePath, validateInputPath, isSymlinkEscape, pathEscapesWorkspaceResult } from './path-utils.js';
+import { resolvePath, validateInputPath, isSymlinkEscapeInRoots, toolRoots, pathEscapesWorkspaceResult, isIgnoredSearchPath } from './path-utils.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { resolveExecutionPort } from '../../execution/tool-port.js';
+import { toolRuntimeRequires } from './runtime-deps.js';
+import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError } from '../../execution/ports/index.js';
+
+/**
+ * Пределы `read_file` — паритет с opencode
+ * (`packages/core/src/tool/read-filesystem.ts`: `MAX_READ_LINES`/`MAX_READ_BYTES`/
+ * `MAX_LINE_LENGTH`). Каталог читается теми же пределами (строк = записей).
+ */
+export const MAX_READ_LINES = 2_000;
+export const MAX_READ_BYTES = 50 * 1024;
+/** Максимальная длина одной возвращаемой строки (дальше — суффикс-маркер). */
+export const MAX_LINE_LENGTH = 2_000;
+/** Сколько первых байт смотрим, чтобы отличить бинарь от текста. */
+const BINARY_SNIFF_BYTES = 8 * 1024;
+/** Доля непечатных байт, при которой файл считается бинарным. */
+const BINARY_NON_PRINTABLE_RATIO = 0.3;
+
+/** `glob`: сколько путей возвращать по умолчанию и максимум. */
+export const DEFAULT_GLOB_LIMIT = 100;
+export const MAX_GLOB_LIMIT = 1_000;
+
+interface DirectoryPage {
+  lines: string[];
+  /** Всего записей в каталоге (не только попавших в страницу). */
+  totalEntries: number;
+  truncated: boolean;
+}
+
+/**
+ * Страница листинга каталога: сначала каталоги, потом файлы, внутри группы —
+ * по имени; у записей есть размер. `offset` — 0-based, `limit` — записей.
+ *
+ * Общая точка для `read_file` (путь-каталог) и `list_directory`, чтобы два
+ * листинга не расходились по формату и порядку.
+ */
+async function listDirectoryPage(dirPath: string, offset: number, limit: number): Promise<DirectoryPage> {
+  const entries = await readdir(dirPath, { withFileTypes: true });
+  const sorted = [...entries].sort((a, b) => {
+    if (a.isDirectory() && !b.isDirectory()) return -1;
+    if (!a.isDirectory() && b.isDirectory()) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  const lines: string[] = [];
+  let bytes = 0;
+  let truncated = false;
+  for (const entry of sorted.slice(offset)) {
+    if (lines.length >= limit || bytes >= MAX_READ_BYTES) {
+      truncated = true;
+      break;
+    }
+    const fullPath = join(dirPath, entry.name);
+    const suffix = entry.isDirectory() ? '/' : '';
+    let text: string;
+    try {
+      const info = await stat(fullPath);
+      text = `${entry.name}${suffix} (${info.size} bytes)`;
+    } catch {
+      text = `${entry.name}${suffix}`;
+    }
+    const size = Buffer.byteLength(text, 'utf-8') + (lines.length > 0 ? 1 : 0);
+    if (bytes + size > MAX_READ_BYTES) {
+      truncated = true;
+      break;
+    }
+    lines.push(text);
+    bytes += size;
+  }
+
+  return { lines, totalEntries: sorted.length, truncated };
+}
+
+/**
+ * Похож ли буфер на бинарный: NUL-байт или высокая доля непечатных символов.
+ * Байты ≥ 0x80 — это UTF-8 (кириллица и т.п.), они печатные.
+ */
+function looksBinary(buf: Buffer): boolean {
+  if (buf.length === 0) return false;
+  let nonPrintable = 0;
+  for (const byte of buf) {
+    if (byte === 0) return true;
+    // \t (9), \n (10), \r (13) — обычный текст
+    if (byte === 9 || byte === 10 || byte === 13) continue;
+    if (byte < 32 || byte === 127) nonPrintable++;
+  }
+  return nonPrintable / buf.length > BINARY_NON_PRINTABLE_RATIO;
+}
+
+/** Первые `BINARY_SNIFF_BYTES` байт файла → признак «это бинарь». */
+export async function sniffBinary(filePath: string): Promise<boolean> {
+  const handle = await open(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(BINARY_SNIFF_BYTES);
+    const { bytesRead } = await handle.read(buf, 0, BINARY_SNIFF_BYTES, 0);
+    return looksBinary(buf.subarray(0, bytesRead));
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Обрезка слишком длинной строки с маркером (в вывод не уходит «простыня»). */
+function clampLine(line: string): string {
+  if (line.length <= MAX_LINE_LENGTH) return line;
+  return line.slice(0, MAX_LINE_LENGTH) + sm('fsread.line_truncated');
+}
+
+interface TextPage {
+  /** Строки вывода с исходной 1-based нумерацией (`N: текст`). */
+  lines: string[];
+  totalLines: number;
+  truncated: boolean;
+  /** Размер вывода в байтах (UTF-8). */
+  bytes: number;
+}
+
+/**
+ * Страница текстового файла: читаем потоком через `readline` — в память не
+ * поднимается всё содержимое даже большого файла. `offset` — 0-based,
+ * нумерация строк в выводе — исходная 1-based (первая строка страницы имеет
+ * номер `offset + 1`).
+ *
+ * `totalLines` считаем тем же проходом до EOF (счётчик, без хранения строк):
+ * метаданные честно сообщают размер файла, а память остаётся постоянной.
+ */
+async function readTextPage(filePath: string, offset: number, limit: number): Promise<TextPage> {
+  const stream = createReadStream(filePath, { encoding: 'utf-8' });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+
+  const lines: string[] = [];
+  let lineNo = 0;
+  let totalLines = 0;
+  let bytes = 0;
+  let truncated = false;
+
+  try {
+    for await (const raw of rl) {
+      lineNo += 1;
+      totalLines = lineNo;
+      if (lineNo <= offset) continue;
+      if (lines.length >= limit || bytes >= MAX_READ_BYTES) {
+        truncated = true;
+        continue;
+      }
+      const text = clampLine(raw);
+      const line = `${lineNo}: ${text}`;
+      const size = Buffer.byteLength(line, 'utf-8') + (lines.length > 0 ? 1 : 0);
+      if (bytes + size > MAX_READ_BYTES) {
+        truncated = true;
+        continue;
+      }
+      lines.push(line);
+      bytes += size;
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+
+  return { lines, totalLines, truncated, bytes };
+}
 
 export const readFileTool: ToolDefinition = {
   name: 'read_file',
   description:
-    'Read contents of a file from the local filesystem. You can access any file directly by using this tool.',
+    'Read the contents of a file or directory. Each text line is prefixed by its 1-based line number as "N: <content>"; '
+    + 'the prefix is for reference only and is not part of the file content. '
+    + 'Binary files are not decoded (use attach_workspace_file for images/PDFs, execute_shell with file/xxd for other bytes). '
+    + `Defaults to and is capped at ${MAX_READ_LINES} lines and ${MAX_READ_BYTES / 1024} KB of output; long lines are truncated. `
+    + 'Use offset and limit to read large files or directories in sections; use grep_files to find specific content. '
+    + 'Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
   parameters: z.object({
-    file_path: z.string().optional().describe('Path to the file to read (absolute or relative to the working directory; defaults to working directory)'),
-    offset: z.number().int().min(0).optional().describe('Line offset to start reading from (0-based)'),
-    limit: z.number().int().min(1).optional().describe('Maximum number of lines to read'),
+    file_path: z.string().optional().describe('Path to the file or directory to read (absolute or relative to the working directory; defaults to working directory)'),
+    offset: z.number().int().min(0).optional().describe('Line or directory entry to start reading from (0-based)'),
+    limit: z.number().int().min(1).optional().describe(`Maximum number of lines or directory entries to read (defaults to and capped at ${MAX_READ_LINES})`),
   }),
   capabilities: [ToolCapability.FILE_READ],
   async execute(args, ctx) {
@@ -27,27 +195,63 @@ export const readFileTool: ToolDefinition = {
     const params = parsed.data as { file_path?: string; offset?: number; limit?: number };
     if (params.file_path !== undefined) validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
-    if (isSymlinkEscape(ctx.workingDir, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
-
-    let content = await readFile(resolvedPath, 'utf-8');
-    const lines = content.split('\n');
-    const totalLines = lines.length;
+    if (isSymlinkEscapeInRoots(toolRoots(ctx), resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
     const offset = params.offset ?? 0;
-    const limit = params.limit ?? totalLines;
+    const limit = Math.min(params.limit ?? MAX_READ_LINES, MAX_READ_LINES);
+    const info = await stat(resolvedPath);
 
-    if (offset > 0 || limit < totalLines) {
-      content = lines.slice(offset, offset + limit).join('\n');
+    // Каталог: отдаём листинг (те же правила, что у list_directory), а не ошибку чтения.
+    if (info.isDirectory()) {
+      const page = await listDirectoryPage(resolvedPath, offset, limit);
+      const lines = [...page.lines];
+      if (page.truncated) lines.push(sm('fsread.directory_truncated', { count: String(page.lines.length) }));
+      return {
+        content: lines.join('\n') || sm('fsread.empty_directory'),
+        metadata: {
+          path: resolvedPath,
+          type: 'directory',
+          totalEntries: page.totalEntries,
+          offset,
+          limit,
+          truncated: page.truncated,
+          bytes: Buffer.byteLength(lines.join('\n'), 'utf-8'),
+        },
+      };
     }
 
-    let output = '';
-    for (let i = 0; i < lines.length; i++) {
-      output += `${i + 1}: ${lines[i]}\n`;
+    if (await sniffBinary(resolvedPath)) {
+      // Бинарный файл модели как текст не отдаём: «кракозябры» бесполезны и
+      // занимают бюджет контекста. Подсказываем правильный инструмент.
+      return {
+        content: sm('fsread.binary', { path: params.file_path ?? resolvedPath }),
+        isError: true,
+        metadata: { path: resolvedPath, type: 'binary', i18n: i18nMeta('fsread.binary', { path: params.file_path ?? resolvedPath }) },
+      };
     }
+
+    const page = await readTextPage(resolvedPath, offset, limit);
+    const lines = [...page.lines];
+    if (page.truncated) lines.push(sm('fsread.truncated', { count: String(page.lines.length) }));
+
+    // Пустой файл и `offset` за концом — разные случаи: пустой говорит сам за
+    // себя, для второго подсказываем фактическое число строк.
+    const content = lines.join('\n')
+      || (page.totalLines === 0
+        ? sm('fsread.empty_file')
+        : sm('fsread.offset_out_of_range', { offset: String(offset), total: String(page.totalLines) }));
 
     return {
-      content: output,
-      metadata: { path: resolvedPath, totalLines, offset, limit },
+      content,
+      metadata: {
+        path: resolvedPath,
+        type: 'file',
+        totalLines: page.totalLines,
+        offset,
+        limit,
+        truncated: page.truncated,
+        bytes: page.bytes,
+      },
     };
   },
 };
@@ -55,7 +259,7 @@ export const readFileTool: ToolDefinition = {
 export const listDirectoryTool: ToolDefinition = {
   name: 'list_directory',
   description:
-    'List files and directories in a given path. Use this to explore the project structure.',
+    'List files and directories in a given path. Use this to explore the project structure. Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
   parameters: z.object({
     path: z.string().optional().describe('Path to the directory to list (absolute or relative to the working directory; defaults to working directory)'),
   }),
@@ -70,29 +274,15 @@ export const listDirectoryTool: ToolDefinition = {
     const params = parsed.data as { path?: string };
     if (params.path !== undefined) validateInputPath(params.path, 'path');
     const resolvedPath = resolvePath(params.path, ctx.workingDir);
-    if (isSymlinkEscape(ctx.workingDir, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+    if (isSymlinkEscapeInRoots(toolRoots(ctx), resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
-    const entries = await readdir(resolvedPath, { withFileTypes: true });
-    const lines: string[] = [];
-
-    for (const entry of entries.sort((a, b) => {
-      if (a.isDirectory() && !b.isDirectory()) return -1;
-      if (!a.isDirectory() && b.isDirectory()) return 1;
-      return a.name.localeCompare(b.name);
-    })) {
-      const fullPath = join(resolvedPath, entry.name);
-      try {
-        const info = await stat(fullPath);
-        const suffix = entry.isDirectory() ? '/' : '';
-        lines.push(`${entry.name}${suffix} (${info.size} bytes)`);
-      } catch {
-        lines.push(`${entry.name}${entry.isDirectory() ? '/' : ''}`);
-      }
-    }
+    const page = await listDirectoryPage(resolvedPath, 0, MAX_READ_LINES);
+    const lines = [...page.lines];
+    if (page.truncated) lines.push(sm('fsread.directory_truncated', { count: String(page.lines.length) }));
 
     return {
       content: lines.join('\n') || sm('fsread.empty_directory'),
-      metadata: { path: resolvedPath, count: entries.length },
+      metadata: { path: resolvedPath, count: page.totalEntries, truncated: page.truncated },
     };
   },
 };
@@ -100,10 +290,15 @@ export const listDirectoryTool: ToolDefinition = {
 export const globTool: ToolDefinition = {
   name: 'glob',
   description:
-    'Find files matching a glob pattern. Returns matching file paths sorted by modification time.',
+    'Find files matching a glob pattern (examples: "**/*.ts", "src/**/*.tsx"). Returns matching paths relative to the search directory, sorted by name. '
+    + `Returns at most ${DEFAULT_GLOB_LIMIT} paths by default (limit up to ${MAX_GLOB_LIMIT}); hidden files are skipped unless hidden=true and .git is always excluded. `
+    + 'Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
   parameters: z.object({
     pattern: z.string().describe('Glob pattern to match files against (e.g., "src/**/*.ts")'),
     path: z.string().optional().describe('Directory to search in (absolute or relative to the working directory; defaults to working directory)'),
+    hidden: z.boolean().optional().describe('Include hidden files and directories (default: false)'),
+    limit: z.number().int().min(1).max(MAX_GLOB_LIMIT).optional()
+      .describe(`Maximum number of matching files to return (default: ${DEFAULT_GLOB_LIMIT}, max: ${MAX_GLOB_LIMIT})`),
   }),
   capabilities: [ToolCapability.FILE_READ, ToolCapability.SEARCH],
   async execute(args, ctx) {
@@ -113,31 +308,65 @@ export const globTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
-    const params = parsed.data as { pattern: string; path?: string };
+    const params = parsed.data as { pattern: string; path?: string; hidden?: boolean; limit?: number };
     if (params.path !== undefined) validateInputPath(params.path, 'path');
     const searchDir = resolvePath(params.path, ctx.workingDir);
-    if (isSymlinkEscape(ctx.workingDir, searchDir)) return pathEscapesWorkspaceResult(searchDir);
+    if (isSymlinkEscapeInRoots(toolRoots(ctx), searchDir)) return pathEscapesWorkspaceResult(searchDir);
 
-    const { glob } = await import('node:fs/promises');
-    const { relative: rel } = await import('node:path');
+    const limit = Math.min(params.limit ?? DEFAULT_GLOB_LIMIT, MAX_GLOB_LIMIT);
+
+    // Поиск — через `rg --files` (как opencode): учитывает .gitignore, отдаёт
+    // пути относительно `cwd`. Скрытые — только по запросу; `.git` не сыплем.
+    const rgArgs = ['--files', '--color', 'never'];
+    if (params.hidden) rgArgs.push('--hidden');
+    rgArgs.push('--glob', params.pattern, '--glob', '!.git/**');
 
     try {
-      const files = [];
-      const basePattern = join(searchDir, params.pattern);
-      for await (const file of glob(basePattern, { withFileTypes: false })) {
-        const relPath = rel(searchDir, file as string);
-        files.push(relPath);
-      }
+      const { stdout } = await resolveExecutionPort(ctx).execute({
+        command: { kind: 'argv', file: 'rg', args: rgArgs },
+        // ADR-077: бинарное требование тула (`rg`) — в remote-режиме команда
+        // уходит в адрес пула, где ripgrep есть.
+        requires: toolRuntimeRequires('glob'),
+        cwd: searchDir,
+        timeoutMs: 30_000,
+        // «Стоп» (toolAbortController.abort) убивает процесс SIGTERM
+        signal: ctx.abortSignal,
+        maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+      });
+
+      // Сортировка по имени: обход `rg` не детерминирован, а модели нужен
+      // стабильный порядок (раньше описание обещало сортировку по mtime — это
+      // было неправдой). Служебные пути (`.git`, скрытые без `hidden`) —
+      // отсекаем сами: маска `--glob` перекрывает скрытие рипгрепа.
+      const hidden = params.hidden === true;
+      const files = stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .filter((path) => !isIgnoredSearchPath(path, hidden))
+        .sort();
+      const selected = files.slice(0, limit);
+      const truncated = files.length > limit;
+
+      const lines = [...selected];
+      if (truncated) lines.push(sm('fsread.glob_truncated', { count: String(selected.length), total: String(files.length) }));
 
       return {
-        content: files.length > 0 ? files.join('\n') : sm('fsread.no_files'),
-        metadata: { pattern: params.pattern, count: files.length },
+        content: lines.length > 0 ? lines.join('\n') : sm('fsread.no_files'),
+        metadata: { pattern: params.pattern, count: selected.length, total: files.length, truncated },
       };
-    } catch {
+    } catch (err: unknown) {
+      // Прерывание по «Стоп» — единый маркер отмены, не «ошибка поиска»
+      if (isAborted(ctx)) return abortedResult(this.name);
+      const execError = err as ExecutionError;
+      // rg: код 1 — «файлов не найдено», это не ошибка
+      if (execError.code === 1) {
+        return { content: sm('fsread.no_files'), metadata: { pattern: params.pattern, count: 0, total: 0 } };
+      }
       return {
         content: sm('fsread.glob_error'),
         isError: true,
-        metadata: { pattern: params.pattern },
+        metadata: { pattern: params.pattern, i18n: i18nMeta('fsread.glob_error') },
       };
     }
   },

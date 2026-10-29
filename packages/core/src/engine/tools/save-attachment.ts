@@ -31,7 +31,7 @@
 import { randomUUID } from 'node:crypto';
 import { constants as fsConstants, createWriteStream } from 'node:fs';
 import { copyFile, link, mkdir, rm, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, sep } from 'node:path';
+import { dirname, isAbsolute } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { z } from 'zod';
 import {
@@ -48,9 +48,11 @@ import { sanitizeAttachmentName } from '../attachments/materialize.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { isAborted, abortedResult } from './abort.js';
 import {
-  isSymlinkEscape,
+  isLexicallyInside,
+  isSymlinkEscapeInRoots,
   pathEscapesWorkspaceResult,
   resolvePath,
+  toolRoots,
   validateInputPath,
 } from './path-utils.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
@@ -106,10 +108,9 @@ function failureResult(
   };
 }
 
-/** Лексическая проверка вхождения пути в рабочий каталог (без ФС). */
-function isLexicallyInsideWorkspace(workingDir: string, candidate: string): boolean {
-  const rel = relative(workingDir, candidate);
-  return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+/** Лексическая проверка вхождения пути в любой из корней perimeter'а (без ФС). */
+function isLexicallyInsideRoots(roots: readonly string[], candidate: string): boolean {
+  return roots.some((root) => isLexicallyInside(root, candidate));
 }
 
 /**
@@ -342,11 +343,12 @@ export const saveAttachmentTool: ToolDefinition = {
     // Абсолютный путь — отказ, а не «внешний доступ по правилу»: тул выгружает
     // файл проекта внутрь workspace (как `attach_workspace_file`).
     if (isAbsolute(relPath)) return pathEscapesWorkspaceResult(relPath);
+    const roots = toolRoots(ctx);
     const resolvedPath = resolvePath(relPath, ctx.workingDir);
-    if (!isLexicallyInsideWorkspace(ctx.workingDir, resolvedPath)) {
+    if (!isLexicallyInsideRoots(roots, resolvedPath)) {
       return pathEscapesWorkspaceResult(resolvedPath);
     }
-    if (isSymlinkEscape(ctx.workingDir, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+    if (isSymlinkEscapeInRoots(roots, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
     // Существующий файл не перезаписываем: сначала честная проверка (быстрый
     // отказ до чтения blob), затем публикация без перезаписи (`link`/EXCL).

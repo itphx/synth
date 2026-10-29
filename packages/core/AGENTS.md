@@ -526,6 +526,15 @@
   `BackgroundRunService.stopBySession` — останавливает и живые прогоны дочерних сессий,
   фоновых саб-агентов и их процессы, дерево `parentId` до глубины 5, best-effort —
   решение 2026-10-28).
+  Там же `POST /:id/permissions/:approvalId` — **HTTP-ответ на подтверждение**
+  (`permission.asked`) для SSE/не-WS клиентов: то же решение, что у WS-кадра
+  `permission_reply` (при подключённом реестре — `ApprovalRegistry.claim`,
+  403 `APPROVAL_DENIED` с `details.reason`), `hold` публикует `permission.hold`;
+  опция `resolvePermissionResponder` задаёт аутентифицированного принципала
+  (core — локальный пользователь с ролью `ADMIN`). Ожидание подтверждения
+  снимается «Стопом»: `PermissionApprovalManager.waitForDecision(..., signal)`
+  (ADR-005) резолвится `{approved:false, cancelled:true}` без публикации
+  `permission.asked`, причина в результате тула — ключ `permission.ask_cancelled`.
 - `server/fs-workspace.ts` — резолв workspace проекта для FS-роутов
   (`resolveProjectWorkspace`, ADR-075) и детект бинарных файлов (`isTextFile`).
 - `engine/attachments/*` — ADR-115: вложения сообщений (сервис, MIME, приватность, GC,
@@ -564,11 +573,16 @@
   `metadata {source: 'tool-attachment', tool, call_id}`, публикуется в канал сессии
   (`message.added`/`session.updated`) и пишет ссылку в `blob_refs` (best-effort); байты
   в блобы кладёт только control plane — тул отдаёт ссылку, не base64.
-  **Ролевой отказ останавливает ход.** `matchedRule: 'role.unavailable'` (тул недоступен
-  агенту) — следующая LLM-итерация не запускается: уже собранные `tool_result` остаются в
-  истории, финальный текст — `session.role_tool_blocked` (`{tool}`, `{agent}`; статус
-  `stopped`, `process-finalize.ts` + `persistence.ts`). Иначе модель бесконечно повторяла бы
-  вызов, на который у неё нет прав.
+  **Deny не останавливает ход (обновлено 2026-10-29).** Любой отказ permission-слоя —
+  `role.unavailable` (тул недоступен агенту), ask→deny пользователя или запрет политики —
+  возвращается модели как обычный `tool_result` с причиной; следующая LLM-итерация
+  запускается, модель может выбрать другой инструмент. Защита от зацикливания: doom-loop,
+  лимит шагов/итераций (`AgentDefinition.maxSteps`, `session.max_iterations`) и счётчик
+  одинаковых deny-вызовов (`MAX_REPEATED_DENY_COUNT = 5` подряд → ход завершается).
+  `session.role_tool_blocked` (`{tool}`, `{agent}`; статус `stopped`) — только фоллбек-текст,
+  если модель так и не дала содержательного ответа (`process-finalize.ts` + `persistence.ts`).
+  Саб-агент `task` ведёт себя так же (`run-cycle.ts`): `subagentDenied` — лишь фоллбек
+  `task.stopped_by_deny`, цикл после deny продолжается; предохранитель — лимит шагов.
   **Detach блокирующих прогонов (ADR-111 §detach).** `activeRuns: ActiveRunRegistry`
   (`engine/background/active-runs.ts`, в памяти процесса) хранит хэндлы переводов в фон:
   `task` (саб-агент) и `execute_shell` регистрируют `{id, kind, title?, detach()}` на время
@@ -701,6 +715,18 @@
   читает только каталог: без этого агент, поставленный пакетом расширения (ADR-086),
   после рестарта не резолвился в Router (`agentTemplate` → `null`, сессия не создавалась).
   Вызывается в `server/app/deps.ts` и `backend/app/deps.ts` (обе сборки — async).
+  **Миграция прежнего набора ролей** (`migrations.ts`, `LEGACY_AGENT_ROLE_ALIASES`:
+  `pm`→`leader`, `developer`→`fixer`, `qa`→`tester`, `analyst`→`researcher`,
+  `auditor`→`security-auditor`) — `migrateLegacyStoredAgents(store)` вызывается там же
+  **до** `registerStoredAgents`: в сторе оставались полные копии прежних встроенных
+  агентов (PM-идентичность/права при подменённом `contextFile`), из-за чего в списке
+  жили две роли, а старая работала с чужими правами. Переносятся только пользовательские
+  настройки (`enabled`/`provider`/`model`/`temperature`/`topP`/`topK`/`reasoningLevel`/`groups`),
+  остальное — из встроенного определения целевого агента; существующая целевая запись не
+  перетирается, устаревшая удаляется, вызов идемпотентен. Runtime-алиас —
+  `ChatOrchestrator._resolveEffectiveAgentRole` (метка `session.settings.agentRole`
+  остаётся исторической). Полнота ролевых файлов (RU+EN на каждый `contextFile`) —
+  тест `definitions.test.ts` (падает при переименовании роли без правки агента).
 - `engine/authority/*` — ADR-106: слой полномочий (модель — `shared/types/authority.ts`).
   **`activation.ts`** — активация контента `provides.authority` пакета в **политику инстанса**
   (чистые функции; запись делает `server/routes/packs.ts`): активация — при одобрении пакета
@@ -713,6 +739,9 @@
   **Политика — снимок при старте процесса**: резолвер собирается в `server/app/deps.ts` /
   `backend/app/deps.ts` из прочитанной политики; изменение после старта (в т.ч. активация
   контента) видно **только после рестарта** (инвариант 24).
+  **Периметр цели** `target.ts`/`compile.ts`/`security/trust.ts` — `workingDir` + `allowedRoots`
+  (ADR-114): путь в корне проекта — `path` (не `outside`), `ref` — от того корня, где лежит путь;
+  тул `patch` учитывается по `edits[].file_path` (общий `extractPathParams` в `permission/groups.ts`).
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP; `executor-mcp-source.ts` +
   `executor-mcp-client.ts` — состав MCP-серверов пула исполнителей и вызовы их инструментов
   поверх HTTP API исполнителя (ADR-077, шаг B2): TTL снимка 120 с, а **неудачный** discovery
@@ -774,7 +803,15 @@
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
   plan, todo, project, task, skill, profile_update, вложения `attach_workspace_file`/
   `save_attachment`/`send_attachment`, каталог `list_models`, метаданные SSH-ключей
-  `ssh_keys_list`). Реестр держит **три слоя** по
+  `ssh_keys_list`). Атомарная мультифайловая правка — `patch` (`patch.ts`):
+  JSON-массив `edits[]` (`file_path`/`old_string`/`new_string`/`replace_all`), 1..50
+  правок за вызов, **всё-или-ничего** — все правки проверяются и применяются в
+  памяти до записи, при любой ошибке ни один файл не меняется; запись атомарна
+  по файлу (tmp в том же каталоге → rename), при сбое посередине — best-effort
+  откат оригиналов; бинарный файл, не-обычный файл, превышение размера и
+  абсолютный путь вне периметра — отказ. Вложенные пути `edits[].file_path`
+  собирает `extractPaths` permission-слоя (file-паттерны, `external_directory`,
+  `protected_paths`). Реестр держит **три слоя** по
   `ToolDefinition.source` (`builtin` | `mcp` | `plugin`, ADR-071 §2.1 + ADR-090):
   `registerPlugin(tool, pluginName)` — единственный путь регистрации плагинного тула, **атомарная**
   валидация с отказом `invalid_name`/`invalid_definition`/`invalid_capability`/`name_conflict`;
@@ -788,7 +825,24 @@
   `deregister`/`deregisterByCapability` работают с плагинными как с обычными.
   git-тулы принимают необязательный `repo_path`
   (containment внутри `project.workspace`), SSH-окружение — `engine/tools/git-ssh.ts`
-  (ADR-076; ошибки — `sshkey.env_failed`). Тул `task` (ADR-095 шаг 5) разбит на
+  (ADR-076; ошибки — `sshkey.env_failed`). **Файловые и поисковые тулы — паритет с
+  opencode** (`fs-read.ts`, `search.ts`): `read_file` читает **потоком**
+  (`createReadStream`+`readline`, память постоянна) страницу `offset`/`limit`
+  (`offset` 0-based, дефолт и максимум — **2000** строк, жёсткий cap **50 КБ**
+  вывода, строка ≤ 2000 символов с маркером), нумерация в выводе — исходная
+  1-based (`N: …`, префикс только для чтения); бинарь определяется по первым
+  8 КБ (NUL/доля непечатных) и возвращается ошибкой с подсказкой
+  (`attach_workspace_file` для картинок/PDF, `execute_shell`+`file`/`xxd` для
+  остального), путь-каталог отдаёт **листинг** (каталоги → файлы, размеры, те же
+  лимиты, `metadata.type='directory'`); `metadata` —
+  `{path,type,totalLines|totalEntries,offset,limit,truncated,bytes}`. `glob` — на
+  `rg --files` (`cwd` = каталог поиска, `hidden`, `limit` 100/макс 1000,
+  сортировка по имени, `.git` и скрытые без `hidden` отсекает общий фильтр
+  `isIgnoredSearchPath` в `path-utils.ts`); `grep_files` — `literal`,
+  `caseSensitive` (default true), `hidden`, `limit` 100/макс 1000 (лимит общий по
+  строкам совпадений). Оба тула объявлены зависимыми от `rg`
+  (`TOOL_RUNTIME_DEP`). `execute_shell` принимает `cwd` (относительно рабочего
+  каталога), оболочка — bash, большой вывод усекается маркером. Тул `task` (ADR-095 шаг 5) разбит на
   `engine/tools/task/*`: `tool.ts` (`taskTool`), `fork.ts` (fork/контекст-режимы ADR-026 +
   permissions), `child-session.ts` (создание/сообщения/события), `run-cycle.ts` (общий
   tool-loop `runSubagent`, используемый и `task-resume.ts`), `prompt.ts`, `args.ts`, `types.ts`;
@@ -1693,6 +1747,15 @@
   доступность — по capability, а не по имени в оркестраторе.
 - Права на тул — правилами permission-слоя (`engine/permission/*`), не `if`
   внутри `execute`.
+- **Containment файлового тула — по периметру сессии.** `ToolContext.workingDir` —
+  база для относительных путей; `ToolContext.allowedRoots` — дополнительные
+  абсолютные корни (у сессии в git-worktree это `project.workspace`, ADR-114).
+  Путь «свой», если он внутри **любого** корня: проверка —
+  `isSymlinkEscapeInRoots(toolRoots(ctx), candidate)` (`engine/tools/path-utils.ts`,
+  учитывает симлинки; побег = лексически внутри корня, реально — вне всех).
+  `resolvePath(...)` всегда от `ctx.workingDir`. Внешний путь «своим» не считается:
+  его гейтит permission-слой (`external_directory` → ask/deny), в самом туле
+  проверок прав нет.
 - Строки `description` и результаты — через `t()`/`i18n()`
   (`engine/system-messages.ts`, ключи `shared/i18n`), не литералами (ADR-041).
 - Публичный роут: фабрика в `server/routes/*`, монтирование в `server/app.ts`

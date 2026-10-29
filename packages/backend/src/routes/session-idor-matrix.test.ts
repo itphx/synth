@@ -163,6 +163,9 @@ const MATRIX: Row[] = [
   row('sessions', 'POST', '/:id/references', { status: 201 }),
   row('sessions', 'DELETE', '/:id/references/:refSid', { status: 204 }),
   row('sessions', 'POST', '/:id/messages/merge', { status: 400 }), // пустое тело → VALIDATION_ERROR
+  // HTTP-ответ на подтверждение (SSE/не-WS): мутация сессии (право изменения
+  // содержимого проекта, VIEWER → 403). Пустое тело → 400 VALIDATION_ERROR.
+  row('sessions', 'POST', '/:id/permissions/:approvalId', { status: 400 }),
 
   // --- ADR-115: вложения сообщений (core-фабрика внутри приложения сессий) ---
   // Чтение байтов — правило чтения сессии; неизвестная часть → 404 (объект не

@@ -5,10 +5,11 @@
  * (ADR-106 §«Инварианты модели», п. 2). Здесь вызов тула превращается в
  * пару «действие × цель»:
  *
- * - `path:<относительный путь>` — файл/каталог **внутри** workspace. Путь
- *   приводится к относительному: сырых абсолютных путей в журнале решений и
- *   метриках быть не должно (инвариант 25, ADR-094).
- * - `outside:<токен>` — путь **вне** workspace (ADR-106 Ф2). Отдельный вид
+ * - `path:<относительный путь>` — файл/каталог **внутри периметра сессии**
+ *   (рабочий каталог или `allowedRoots`, ADR-114). Путь приводится к
+ *   относительному от того корня, в котором лежит: сырых абсолютных путей в
+ *   журнале решений и метриках быть не должно (инвариант 25, ADR-094).
+ * - `outside:<токен>` — путь **вне периметра** (ADR-106 Ф2). Отдельный вид
  *   цели: к таким путям относятся правило `external_directory` и его
  *   fail-closed дефолт. Ссылка — неразличимый токен (хэш абсолютного пути):
  *   сырой путь в журнал не попадает, а сопоставление с шаблоном гранта идёт по
@@ -25,9 +26,8 @@ import { relative } from 'node:path';
 
 import type { AuthorityTarget } from '@itphx/synth-shared';
 
-import { resolvePath } from '../tools/path-utils.js';
-import { isInsideWorkingDir } from '../permission/evaluator.js';
-import { TOOL_PATH_PARAMS } from '../permission/groups.js';
+import { resolvePath, isInsideAnyRoot } from '../tools/path-utils.js';
+import { extractPathParams } from '../permission/groups.js';
 import { authorityTargetKindForTool } from './actions.js';
 
 /** Вход вывода цели. */
@@ -36,6 +36,11 @@ export interface AuthorityTargetInput {
   params: Record<string, unknown>;
   /** Рабочий каталог (workspace проекта). */
   workingDir: string;
+  /**
+   * Дополнительные абсолютные корни периметра (ADR-114: `project.workspace` у
+   * сессии в git-worktree). Путь внутри любого из них — `path`, а не `outside`.
+   */
+  allowedRoots?: readonly string[];
   /** Идентификатор сессии — цель вида `session:`. */
   sessionId: string;
   capabilities?: readonly string[];
@@ -71,7 +76,30 @@ export interface ResolvedAuthorityPath {
 }
 
 /**
- * Резолв файлового пути тула: внутри рабочего каталога → `path`, вне → `outside`.
+ * Периметр цели: рабочий каталог + дополнительные корни (`allowedRoots`).
+ * Порядок важен: `ref` считается от **первого** корня, в котором лежит путь.
+ */
+function perimeterRoots(workingDir: string, allowedRoots?: readonly string[]): string[] {
+  const roots: string[] = [];
+  for (const root of [workingDir, ...(allowedRoots ?? [])]) {
+    if (typeof root === 'string' && root.trim() !== '' && !roots.includes(root)) roots.push(root);
+  }
+  return roots;
+}
+
+/** Относительная ссылка пути от корня (`'.'` — сам корень). */
+function relativeRef(root: string, absolute: string): string {
+  const rel = relative(root, absolute).split('\\').join('/');
+  return rel === '' ? '.' : rel;
+}
+
+/**
+ * Резолв файлового пути тула: внутри **любого** корня периметра (`workingDir`
+ * или `allowedRoots`) → `path`, вне всех → `outside`.
+ *
+ * `ref` — относительный путь от первого корня, в котором лежит путь (`'.'` для
+ * самого корня); сырой абсолютный путь остаётся только в `absolute` (для
+ * сопоставления с шаблоном гранта, в журнал не попадает).
  *
  * Единая точка для вывода цели (`deriveAuthorityTarget`) и компиляции грантов
  * (`compile.ts`): вид цели обязан совпадать в обоих местах, иначе грант
@@ -81,19 +109,19 @@ export function resolveAuthorityPathTarget(
   toolName: string,
   params: Record<string, unknown>,
   workingDir: string,
+  allowedRoots?: readonly string[],
 ): ResolvedAuthorityPath | undefined {
-  const paramNames = TOOL_PATH_PARAMS[toolName] ?? [];
-  for (const name of paramNames) {
-    const value = params[name];
-    if (typeof value !== 'string' || value.trim() === '') continue;
-    const absolute = resolvePath(value, workingDir);
-    if (!isInsideWorkingDir(absolute, workingDir)) {
-      return { kind: 'outside', ref: outsideTargetRef(absolute), absolute };
+  const roots = perimeterRoots(workingDir, allowedRoots);
+  // `patch` несёт пути в `edits[].file_path` — общий сборщик их понимает.
+  const raw = extractPathParams(toolName, params)[0];
+  if (raw === undefined) return undefined;
+  const absolute = resolvePath(raw, workingDir);
+  for (const root of roots) {
+    if (isInsideAnyRoot(absolute, [root])) {
+      return { kind: 'path', ref: relativeRef(root, absolute), absolute };
     }
-    const rel = relative(workingDir, absolute).split('\\').join('/');
-    return { kind: 'path', ref: rel === '' ? '.' : rel, absolute };
   }
-  return undefined;
+  return { kind: 'outside', ref: outsideTargetRef(absolute), absolute };
 }
 
 /**
@@ -152,17 +180,31 @@ function deriveWorkspaceTarget(input: AuthorityTargetInput): DerivedAuthorityTar
     typeof raw === 'string' && raw.trim() !== ''
       ? resolvePath(raw, input.workingDir)
       : input.workingDir;
-  const inside = isInsideWorkingDir(absolute, input.workingDir);
-  const rel = inside ? relative(input.workingDir, absolute).split('\\').join('/') : '';
+  const roots = perimeterRoots(input.workingDir, input.allowedRoots);
+  for (const root of roots) {
+    if (isInsideAnyRoot(absolute, [root])) {
+      return {
+        target: { kind: 'workspace', ref: relativeRef(root, absolute) },
+        altRefs: [absolute],
+      };
+    }
+  }
+  // Вне периметра — прежнее поведение: рабочая область без относительного
+  // пути (`workspace:.`); сам факт выхода гейтит permission-слой.
   return {
-    target: { kind: 'workspace', ref: rel === '' ? '.' : rel },
+    target: { kind: 'workspace', ref: '.' },
     altRefs: [absolute],
   };
 }
 
 /** Файловая цель: относительный путь внутри workspace или `outside` — вне его. */
 function derivePathTarget(input: AuthorityTargetInput): DerivedAuthorityTarget {
-  const resolved = resolveAuthorityPathTarget(input.toolName, input.params, input.workingDir);
+  const resolved = resolveAuthorityPathTarget(
+    input.toolName,
+    input.params,
+    input.workingDir,
+    input.allowedRoots,
+  );
   if (!resolved) {
     // Файловый тул без пути — цель не определена.
     return { altRefs: [] };

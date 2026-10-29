@@ -50,6 +50,12 @@ export interface AuthorityShadowInput extends AuthorityShadowContext {
   toolName: string;
   params: Record<string, unknown>;
   workingDir: string;
+  /**
+   * Дополнительные абсолютные корни периметра (ADR-114: корень проекта у
+   * сессии в git-worktree). Аддитивное поле: не задано — периметр только
+   * `workingDir` (прежнее поведение).
+   */
+  allowedRoots?: readonly string[];
   capabilities?: readonly string[];
   toolSource?: ToolSource;
   sessionMode?: SessionMode;

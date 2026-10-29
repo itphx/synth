@@ -1402,8 +1402,9 @@ describe('ChatOrchestrator — список тулов постоянен по �
 // ADR-070 §2.9: тулы постоянны и по роли — агент видит ВСЕ тулы; недоступные
 // помечаются permission-слоем как unavailable(role). Неизвестная роль
 // (например, удалённая в новой версии) резолвится в агента по умолчанию
-// (`assistant`) — набор тулов как у него; `role` undefined — по-прежнему НОЛЬ
-// тулов (safety-fallback).
+// (`assistant`) — набор тулов как у него; роль прежнего набора (`pm` → `leader`)
+// резолвится алиасом без фоллбека (см. `LEGACY_AGENT_ROLE_ALIASES`);
+// `role` undefined — по-прежнему НОЛЬ тулов (safety-fallback).
 describe('ChatOrchestrator — список тулов постоянен по роли (ADR-070 §2.9)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
@@ -1463,16 +1464,31 @@ describe('ChatOrchestrator — список тулов постоянен по �
   it('agentRole задан, но агент не найден в реестре: фоллбек на агента по умолчанию (assistant)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      // Роль `pm` удалена из набора (этап 1 roadmap 0.13) — у старых сессий
-      // `settings.agentRole` может на неё ссылаться. Ход не падает и не идёт
-      // без ограничений роли: определение берётся у агента по умолчанию.
-      const names = await runAgentRole('pm');
+      // Роль, которой нет ни в реестре, ни среди алиасов прежнего набора
+      // (`LEGACY_AGENT_ROLE_ALIASES`) — у старых сессий `settings.agentRole`
+      // может на неё ссылаться. Ход не падает и не идёт без ограничений роли:
+      // определение берётся у агента по умолчанию.
+      const names = await runAgentRole('legacy-unknown');
       const assistantNames = await runAgentRole('assistant');
       expect(names.length).toBeGreaterThan(0);
       expect(names.sort()).toEqual(assistantNames.sort());
       // О фоллбеке сообщают один раз на роль (в лог, не в ответ модели).
       const warned = warn.mock.calls.map((call) => call.map(String).join(' '));
-      expect(warned.some((line) => line.includes('pm'))).toBe(true);
+      expect(warned.some((line) => line.includes('legacy-unknown'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('прежняя роль pm — алиас leader: фоллбека нет, предупреждения нет', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const names = await runAgentRole('pm');
+      // Список тулов постоянен (ADR-070 §2.9): наличие тула не зависит от роли.
+      expect(names.length).toBeGreaterThan(0);
+      // `pm` резолвится алиасом на `leader` — это не «неизвестная роль».
+      const warned = warn.mock.calls.map((call) => call.map(String).join(' '));
+      expect(warned.some((line) => line.includes('Неизвестная роль агента «pm»'))).toBe(false);
     } finally {
       warn.mockRestore();
     }

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolContext, ToolDefinition, ToolResult } from '@itphx/synth-shared';
-import { resolvePath, validateInputPath, isSymlinkEscape, pathEscapesWorkspaceResult } from './path-utils.js';
+import { resolvePath, validateInputPath, isSymlinkEscapeInRoots, toolRoots, pathEscapesWorkspaceResult } from './path-utils.js';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
@@ -40,8 +40,12 @@ export interface ShellToolExtra {
 export const executeShellTool: ToolDefinition = {
   name: 'execute_shell',
   description:
-    'Execute a shell command (bash). Returns stdout and stderr. Use only for legitimate development tasks. Commands run in the working directory. Timeout: 30 seconds. '
+    'Execute a shell command (bash) and return its output (stdout and stderr). Use only for legitimate development tasks. '
+    + 'Commands run in the project working directory, or in `cwd` when given (absolute or relative to the working directory). '
+    + 'Timeout: 30 seconds by default (set timeout to change it, max 120000 ms). '
     + 'The interpreter is bash ([[ … ]], arrays, pipefail, ${var,,} work). If bash is not installed in the environment, the tool is unavailable. '
+    + 'Prefer dedicated tools over shell commands when possible (read_file/list_directory/glob/grep_files and the git_* tools): they are safer and their output is structured. '
+    + 'Large output is truncated (a truncation marker is appended) — filter the output in the command instead of dumping everything. '
     + 'Set background=true to run the command in the background: it returns immediately, the full output is written to a log file, and a notification with the result arrives automatically — do not poll for the status.',
   parameters: z.object({
     command: z.string().describe('The command to execute (e.g., "npm test", "ls -la")'),
@@ -64,7 +68,7 @@ export const executeShellTool: ToolDefinition = {
     const timeout = params.timeout ?? DEFAULT_TIMEOUT;
     if (params.cwd !== undefined) validateInputPath(params.cwd, 'cwd');
     const cwd = resolvePath(params.cwd, ctx.workingDir);
-    if (isSymlinkEscape(ctx.workingDir, cwd)) return pathEscapesWorkspaceResult(cwd);
+    if (isSymlinkEscapeInRoots(toolRoots(ctx), cwd)) return pathEscapesWorkspaceResult(cwd);
 
     // ADR-036: деобфускация в точке потребления — команда может содержать ⟦SYNTH_SECRET_N⟧
     const command = await deobfuscateText(ctx, params.command);

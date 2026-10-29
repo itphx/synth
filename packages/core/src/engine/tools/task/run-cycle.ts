@@ -1052,6 +1052,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           toolName,
           params: toolArgs,
           workingDir: ctx.workingDir,
+          // ADR-114: периметр дочерней сессии тот же, что у родителя (она
+          // наследует рабочий каталог worktree) — корень проекта тоже «свой».
+          ...(ctx.allowedRoots && ctx.allowedRoots.length > 0 ? { allowedRoots: ctx.allowedRoots } : {}),
           capabilities: toolDef?.capabilities,
           agentCapabilities: subagentDef?.capabilities,
           sessionMode: childSessionMode,
@@ -1209,10 +1212,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           }
         }
 
-        // ADR-029: пользователь отклонил ask саб-агента — прекращаем выполнение.
+        // ADR-029 (обновлено 2026-10-29): отказ (в т.ч. ask→deny) больше не
+        // обрывает цикл — модель получает `tool_result` и может выбрать другой
+        // инструмент. Флаг нужен только для фоллбек-текста `task.stopped_by_deny`,
+        // если содержательного ответа не будет.
         if (subagentUserDenied) {
           subagentDenied = true;
-          break;
         }
       }
 
@@ -1222,8 +1227,6 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         iteration: stepIteration,
         total_tool_calls: toolCalls.length,
       });
-
-      if (subagentDenied) break;
     }
 
     // Отмена до/после цикла (например сигнал уже абортирован на входе или

@@ -315,6 +315,30 @@ export const sessionsApi = {
   },
 
   /**
+   * Ответ на запрос подтверждения прав (`permission.asked`) **по HTTP** —
+   * путь для SSE/не-WS транспорта (WS-кадр `permission_reply` там недоступен).
+   * Семантика та же, что у WS: `allow|deny` проходит через реестр подтверждений,
+   * `hold` — «остановить таймер» (запрос ждёт ответа без авто-отклонения).
+   *
+   * 403 `APPROVAL_DENIED` приходит с `details.reason`
+   * (`already_consumed`/`no_grant`/…): `already_consumed` — запрос уже отвечен
+   * (для UI это успех, полосу надо убрать).
+   */
+  async permissionReply(
+    sessionId: string,
+    approvalId: string,
+    body: { action: 'allow' | 'deny' | 'hold'; once?: boolean },
+  ): Promise<{ status: 'ok'; action: 'allow' | 'deny' | 'hold' }> {
+    return fetchJSON(
+      `${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(approvalId)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+    )
+  },
+
+  /**
    * ADR-111 §detach: перевести идущие блокирующие прогоны сессии в фон.
    * Тело необязательно — без `type` переводятся все (саб-агенты и шелл);
    * пустой `detached` в ответе — «нечего переводить» (не ошибка).

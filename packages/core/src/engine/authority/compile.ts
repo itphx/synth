@@ -42,7 +42,8 @@ import type {
   ToolSource,
 } from '@itphx/synth-shared';
 
-import { extractPaths, isInsideWorkingDir, matchPathPattern } from '../permission/evaluator.js';
+import { extractPaths, matchPathPattern } from '../permission/evaluator.js';
+import { isInsideAnyRoot } from '../tools/path-utils.js';
 import { getToolGroups } from '../permission/groups.js';
 import { matchShellCommandPattern } from '../security/shell-guard.js';
 import { authorityActionForTool, authorityTargetKindForTool } from './actions.js';
@@ -53,6 +54,11 @@ export interface AuthorityRuleCompilationInput {
   toolName: string;
   params: Record<string, unknown>;
   workingDir: string;
+  /**
+   * Дополнительные абсолютные корни периметра (ADR-114: корень проекта у
+   * сессии в git-worktree). Путь внутри них — `path`, а не `outside`.
+   */
+  allowedRoots?: readonly string[];
   capabilities?: readonly string[];
   toolSource?: ToolSource;
   config: PermissionConfig;
@@ -84,28 +90,32 @@ export function compileAuthorityGrantsForTool(
 
   const rules = input.config.rules ?? {};
   const paths = extractPaths(input.toolName, input.params, input.workingDir);
+  // Периметр: рабочий каталог + дополнительные корни (worktree, ADR-114).
+  const roots = input.allowedRoots && input.allowedRoots.length > 0
+    ? [input.workingDir, ...input.allowedRoots]
+    : [input.workingDir];
   const liftAsk = input.sessionMode === 'yolo';
-  // Вид цели: файловый тул — `path` (внутри рабочего каталога) или `outside`
+  // Вид цели: файловый тул — `path` (внутри периметра) или `outside`
   // (вне его); прочие тулы — `workspace`/`session`/`external`/`mcp`.
   const kind = resolveTargetKind(input, baseKind);
 
   // 1. Правило по конкретному имени тула.
   const toolRule = rules[input.toolName];
   if (toolRule !== undefined) {
-    const grants = ruleToGrants(toolRule, action, kind, paths, input.workingDir, liftAsk);
+    const grants = ruleToGrants(toolRule, action, kind, paths, roots, liftAsk);
     if (grants.length > 0) return grants;
   }
 
-  // 2. external_directory — только для путей вне рабочего каталога.
+  // 2. external_directory — только для путей вне периметра.
   //
   // Порядок permission-слоя (ADR-029/ADR-075): правило по имени тула → правило
   // `external_directory` → fail-closed дефолт (`ask`; в plan-режиме — `deny`).
   // Групповые правила и `'*'` для внешних путей **не** применяются — так же,
   // как в permission-слое.
-  if (hasOutsidePath(paths, input.workingDir)) {
+  if (hasOutsidePath(paths, input.workingDir, input.allowedRoots)) {
     const extRule = rules['external_directory'];
     if (extRule !== undefined) {
-      const grants = ruleToGrants(extRule, action, kind, paths, input.workingDir, liftAsk);
+      const grants = ruleToGrants(extRule, action, kind, paths, roots, liftAsk);
       if (grants.length > 0) return grants;
     }
     // Дефолт permission-слоя — `ask` (fail-closed). В `yolo` правило сессии его
@@ -123,7 +133,7 @@ export function compileAuthorityGrantsForTool(
       const grants = shellRuleToGrants(rule, action, kind, input.params, liftAsk);
       if (grants.length > 0) return grants;
     } else {
-      const grants = ruleToGrants(rule, action, kind, paths, input.workingDir, liftAsk);
+      const grants = ruleToGrants(rule, action, kind, paths, roots, liftAsk);
       if (grants.length > 0) return grants;
     }
   }
@@ -131,7 +141,7 @@ export function compileAuthorityGrantsForTool(
   // 4. Глобальное правило '*'.
   const starRule = rules['*'];
   if (starRule !== undefined) {
-    const grants = ruleToGrants(starRule, action, kind, paths, input.workingDir, liftAsk);
+    const grants = ruleToGrants(starRule, action, kind, paths, roots, liftAsk);
     if (grants.length > 0) return grants;
   }
 
@@ -143,20 +153,38 @@ export function compileAuthorityGrantsForTool(
  * Вид цели вызова: файловый тул — `path`/`outside`, остальные — как есть.
  *
  * Совпадает с выводом цели (`deriveAuthorityTarget`) — иначе грант не покроет
- * цель и решение станет `deny('no_grant')`.
+ * цель и решение станет `deny('no_grant')`. Путь внутри `workingDir` **или**
+ * `allowedRoots` — `path`; `outside` — только вне обоих.
  */
-function resolveTargetKind(
+export function resolveTargetKind(
   input: AuthorityRuleCompilationInput,
   baseKind: string,
 ): string {
   if (baseKind !== 'path') return baseKind;
-  const resolved = resolveAuthorityPathTarget(input.toolName, input.params, input.workingDir);
+  const resolved = resolveAuthorityPathTarget(
+    input.toolName,
+    input.params,
+    input.workingDir,
+    input.allowedRoots,
+  );
   return resolved?.kind ?? baseKind;
 }
 
-/** Есть ли у вызова путь вне рабочего каталога. */
-function hasOutsidePath(paths: string[], workingDir: string): boolean {
-  return paths.some((p) => !isInsideWorkingDir(p, workingDir));
+/**
+ * Есть ли у вызова путь вне периметра (`workingDir` + `allowedRoots`).
+ *
+ * Путь внутри любого дополнительного корня (корень проекта у сессии в
+ * git-worktree, ADR-114) внешним не считается — так же, как в permission-слое.
+ */
+export function hasOutsidePath(
+  paths: string[],
+  workingDir: string,
+  allowedRoots?: readonly string[],
+): boolean {
+  const roots = allowedRoots && allowedRoots.length > 0
+    ? [workingDir, ...allowedRoots]
+    : [workingDir];
+  return paths.some((p) => !isInsideAnyRoot(p, roots));
 }
 
 /**
@@ -175,7 +203,7 @@ function ruleToGrants(
   action: string,
   kind: string,
   paths: string[],
-  workingDir: string,
+  roots: readonly string[],
   liftAsk: boolean,
 ): AuthorityGrant[] {
   if (typeof rule === 'string') {
@@ -196,7 +224,9 @@ function ruleToGrants(
     // Файловый паттерн применим только к файловым видам цели.
     if (!isFileTargetKind(kind)) continue;
     for (const path of paths) {
-      if (matchPathPattern(pattern, path, workingDir)) {
+      // Относительный паттерн сверяется с путём от рабочего каталога и от
+      // дополнительных корней периметра (`path:<rel>` цели — от того корня).
+      if (matchPathPattern(pattern, path, roots[0] ?? '', roots.slice(1))) {
         return [
           { action, targetPattern: `${kind}:${pattern}`, effect: liftEffect(effect, liftAsk) },
         ];

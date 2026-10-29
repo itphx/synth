@@ -1,7 +1,7 @@
 import { realpathSync, lstatSync } from 'node:fs';
 import { basename, dirname, isAbsolute, normalize, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
-import type { MessageI18n } from '@itphx/synth-shared';
+import type { MessageI18n, ToolContext } from '@itphx/synth-shared';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 const HOME = homedir();
@@ -120,6 +120,55 @@ export function isSymlinkEscape(root: string, candidate: string): boolean {
   return !isInsideReal(root, candidate);
 }
 
+// ---------------------------------------------------------------------------
+// Perimeter сессии: рабочий каталог + дополнительные корни (allowedRoots)
+// ---------------------------------------------------------------------------
+
+/**
+ * Корни perimeter'а сессии: рабочий каталог (`workingDir`) и дополнительные
+ * разрешённые корни (`allowedRoots`).
+ *
+ * Зачем: сессия в git-worktree (ADR-114) работает в каталоге worktree, а
+ * основной checkout проекта (`project.workspace`) для неё — не «внешний мир»,
+ * а вторая часть того же периметра. Относительные пути при этом по-прежнему
+ * резолвятся от `workingDir`.
+ *
+ * Возвращаются абсолютные нормализованные пути без пустых значений и дублей
+ * (порядок сохраняется: `workingDir` первым).
+ */
+export function toolRoots(ctx: Pick<ToolContext, 'workingDir' | 'allowedRoots'>): string[] {
+  const roots: string[] = [];
+  for (const raw of [ctx.workingDir, ...(ctx.allowedRoots ?? [])]) {
+    if (typeof raw !== 'string' || raw.trim() === '') continue;
+    const abs = isAbsolute(raw) ? normalize(raw) : resolve(raw);
+    if (!roots.includes(abs)) roots.push(abs);
+  }
+  return roots;
+}
+
+/**
+ * Путь внутри **любого** из корней — с учётом симлинков (семантика
+ * `isInsideWorkingDir`, но по списку корней).
+ *
+ * Лексически лежащий внутри, но ведущий через симлинк наружу, внутренним не
+ * считается; не разрешается (битый симлинк/цикл) — `false` (fail-closed).
+ */
+export function isInsideAnyRoot(candidate: string, roots: readonly string[]): boolean {
+  return roots.some((root) => isLexicallyInside(root, candidate) && isInsideReal(root, candidate));
+}
+
+/**
+ * Побег через симлинк за пределы **всех** корней perimeter'а: путь лексически
+ * внутри какого-то корня, но после разыменования не внутри ни одного.
+ *
+ * Путь, лексически лежащий вне всех корней, «побегом» не является — это обычный
+ * внешний доступ, и его гейтит permission-слой (`external_directory`).
+ */
+export function isSymlinkEscapeInRoots(roots: readonly string[], candidate: string): boolean {
+  if (!roots.some((root) => isLexicallyInside(root, candidate))) return false;
+  return !roots.some((root) => isInsideReal(root, candidate));
+}
+
 /**
  * Результат-ошибка tool-вызова при попытке выйти за пределы рабочего каталога
  * через симлинк. Текст — из общего ключа `external_directory` (путь вне workspace).
@@ -135,4 +184,27 @@ export function pathEscapesWorkspaceResult(path: string): {
     isError: true,
     metadata: { path, i18n: i18nMeta('permission.external_directory_default', params) },
   };
+}
+
+/**
+ * Служебный путь поиска (`glob`/`grep_files`), который не должен попадать в
+ * вывод.
+ *
+ * Фильтр нужен поверх флагов ripgrep: явный `--glob <pattern>` перекрывает
+ * собственное скрытие рипгрепа (файл `.hidden.ts` подходит под маску `*.ts`),
+ * а негативный `--glob '!.git/**'` матчится относительно `cwd` процесса, а не
+ * каталога поиска — если путь передан аргументом, `.git` не исключается.
+ * Поэтому служебные пути отсекаем по сегментам относительного пути:
+ *
+ *   - `.git` (на любой глубине, включая вложенные репозитории) — всегда;
+ *   - любые сегменты с точкой в начале — когда `hidden` не запрошен.
+ *
+ * @param relPath путь относительно каталога поиска (`/` или `\` — разделитель)
+ * @param hidden  запрошены ли скрытые файлы (`hidden: true`)
+ */
+export function isIgnoredSearchPath(relPath: string, hidden: boolean): boolean {
+  // `.`/`..` — навигация, а не имена файлов (иначе путь `../x` считался бы скрытым)
+  const segments = relPath.split(/[\\/]+/).filter((segment) => Boolean(segment) && segment !== '.' && segment !== '..');
+  if (segments.some((segment) => segment === '.git')) return true;
+  return !hidden && segments.some((segment) => segment.startsWith('.'));
 }

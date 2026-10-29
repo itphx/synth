@@ -50,6 +50,10 @@ import type { ActiveRunKind } from '../../engine/background/active-runs.js';
 import type { BackgroundRunService } from '../../engine/background/service.js';
 import { makeMediaPart, appendMediaPlaceholders } from '@itphx/synth-shared';
 import type { Part } from '@itphx/synth-shared';
+// ADR-106 Ф3 / ADR-005: HTTP-ответ на подтверждение (`permission_reply` без WS)
+// принимает решение через тот же реестр подтверждений.
+import type { ApprovalRegistry } from '../../engine/permission/approval.js';
+import type { AuthorityPrincipal } from '@itphx/synth-shared';
 
 const LOCAL_USER_ID = 'local';
 
@@ -135,6 +139,13 @@ export interface SessionRoutesDeps {
      */
     config: AttachmentsConfig | (() => AttachmentsConfig);
   };
+  /**
+   * ADR-106 Ф3: реестр подтверждений — ответ на запрос подтверждения
+   * (`POST /:id/permissions/:approvalId`) принимает только носитель
+   * покрывающего гранта. Не задан — слой Authority выключен/в shadow,
+   * поведение прежнее (ответ принимается по факту доступа к сессии).
+   */
+  approvalRegistry?: ApprovalRegistry;
 }
 
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
@@ -163,6 +174,10 @@ export interface SessionRouteMessages {
   detachInvalidType?: (c: Context) => string;
   /** ADR-111 §detach: перевод в фон в этой сборке не поддержан (400 `DETACH_UNSUPPORTED`). */
   detachUnsupported?: (c: Context) => string;
+  /** Невалидный ответ на подтверждение: неизвестный `action` или пустой `approvalId` (400). */
+  permissionInvalid: (c: Context) => string;
+  /** Отказ реестра подтверждений (403 `APPROVAL_DENIED`): ответ не принят. */
+  permissionDenied: (c: Context, reason: string) => string;
 }
 
 export interface SessionRoutesOptions {
@@ -260,6 +275,12 @@ export interface SessionRoutesOptions {
    * (участник проекта, `LEAD` без владения) значения вычищаются.
    */
   canRevealSecrets?: (c: Context, session: Session) => boolean | Promise<boolean>;
+  /**
+   * Принципал, отвечающий на запрос подтверждения (ADR-106 Ф3) — **аутентифицированный**
+   * пользователь запроса, а не присланный клиентом. Backend передаёт роли
+   * пользователя, core — локального пользователя с ролью `ADMIN`.
+   */
+  resolvePermissionResponder?: (c: Context) => AuthorityPrincipal | Promise<AuthorityPrincipal>;
 }
 
 const DEFAULT_MESSAGES: SessionRouteMessages = {
@@ -281,6 +302,8 @@ const DEFAULT_MESSAGES: SessionRouteMessages = {
   tooLarge: () => 'Суммарный объём вложений сессии превышает допустимый',
   detachInvalidType: () => 'Неизвестный тип блокирующего прогона (ожидается subagent или process)',
   detachUnsupported: () => 'Перевод идущего прогона в фон в этой сборке не поддерживается',
+  permissionInvalid: () => 'Невалидный ответ на подтверждение: ожидается action = allow | deny | hold',
+  permissionDenied: (_c: Context, reason: string) => `Подтверждение не принято: ${reason}`,
 };
 
 /**
@@ -435,6 +458,16 @@ export function createSessionRoutes(
   const mergeMiddleware = opts.mergeMiddleware ?? [];
   const messages: SessionRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
   const resolveAuthorName = createResolveAuthorName(deps.profilesStore);
+  /**
+   * Принципал ответа на подтверждение по умолчанию (standalone): единственный
+   * локальный пользователь, роль `ADMIN` (как и весь core-режим). Backend
+   * передаёт реального пользователя и его роли (`opts.resolvePermissionResponder`).
+   */
+  const defaultPermissionResponder = async (c: Context): Promise<AuthorityPrincipal> => ({
+    kind: 'user',
+    id: (await resolveUserId(c)) || LOCAL_USER_ID,
+    roles: ['ADMIN'],
+  });
   // ADR-052 (этап I): scope-гейты service-key и проектная проекция сессии.
   const scoped = opts.scopeGuard ?? requireScope;
   const serviceProjectProjection = opts.serviceProjectProjection ?? checkServiceProjectProjection;
@@ -1658,6 +1691,103 @@ export function createSessionRoutes(
     // ADR-102: мера `activity.aborts` — на осях `user`/`project` сессии.
     void analytics?.recordActivity('aborts', sessionAxes(session));
     return c.json({ status: 'aborted' });
+  });
+
+  // POST /api/v2/sessions/:id/permissions/:approvalId — ответ на запрос
+  // подтверждения **по HTTP** (ADR-029/ADR-106 Ф3).
+  //
+  // Зачем: WS-кадр `permission_reply` существует только в WS-транспорте. Клиент
+  // на SSE/HTTP (фоллбек после падения WS) не мог ответить вовсе — запрос висел
+  // до ask-таймаута. Семантика та же, что у WS: `allow|deny` проходят через
+  // реестр подтверждений (ответ принимает носитель покрывающего гранта), `hold`
+  // («остановить таймер») реестр не трогает.
+  //
+  // Тело: `{action: 'allow'|'deny'|'hold', once?: boolean, turn_id?: string,
+  // digest?: string}`. Доступ — граничный prefix-guard (`/:id/*`, вид доступа
+  // `write` из метода); в обработчике проверок нет (инвариант 16).
+  app.post('/:id/permissions/:approvalId', auth.requireAuth, async (c) => {
+    const id = c.req.param('id');
+    const approvalId = (c.req.param('approvalId') ?? '').trim();
+    const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    const rawAction = body?.action;
+    const action = rawAction === 'allow' || rawAction === 'deny' || rawAction === 'hold'
+      ? rawAction
+      : undefined;
+    if (!approvalId || !action) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: messages.permissionInvalid(c) } },
+        400,
+      );
+    }
+    const session = await sessionManager.getSession(id);
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+
+    // «Остановить таймер»: авто-отклонение по таймауту снимается, запрос ждёт
+    // ответа. Реестр не трогаем — привязка ещё нужна для ответа.
+    if (action === 'hold') {
+      eventBus.publish(id, 'permission.hold', { approval_id: approvalId, session_id: id });
+      return c.json({ status: 'ok', action: 'hold' });
+    }
+
+    const approved = action === 'allow';
+    const once = typeof body?.once === 'boolean' ? body.once : undefined;
+    const turnId = typeof body?.turn_id === 'string' && body.turn_id.trim() !== ''
+      ? body.turn_id
+      : undefined;
+
+    // Реестр не задан (слой Authority выключен/в shadow) — поведение прежнее:
+    // ответ принимается по факту доступа к сессии.
+    const registry = deps.approvalRegistry;
+    if (!registry) {
+      eventBus.publish(id, 'permission.replied', {
+        approval_id: approvalId,
+        session_id: id,
+        approved,
+        action,
+        ...(once !== undefined ? { once } : {}),
+        ...(turnId ? { turn_id: turnId } : {}),
+      });
+      return c.json({ status: 'ok', action });
+    }
+
+    // Принципал-отвечающий — **аутентифицированный** (клиенту не доверяем).
+    const responder = await (opts.resolvePermissionResponder ?? defaultPermissionResponder)(c);
+    const claim = await registry.claim(approvalId, id, responder, {
+      ...(turnId ? { turnId } : {}),
+      ...(typeof body?.digest === 'string' && body.digest !== '' ? { digest: body.digest } : {}),
+    });
+    if (!claim.ok) {
+      // Отказ (нет гранта / повторный ответ / чужой ход): подтверждение не
+      // принимается, действие не выполняется.
+      eventBus.publish(id, 'permission.replied', {
+        approval_id: approvalId,
+        session_id: id,
+        approved: false,
+        action: 'deny',
+        reason: claim.reason,
+      });
+      return c.json({
+        error: {
+          code: 'APPROVAL_DENIED',
+          message: messages.permissionDenied(c, claim.reason),
+          details: { reason: claim.reason },
+        },
+      }, 403);
+    }
+    eventBus.publish(id, 'permission.replied', {
+      approval_id: approvalId,
+      session_id: id,
+      approved,
+      action,
+      ...(once !== undefined ? { once } : {}),
+      // Привязка — из реестра (серверный источник истины).
+      principal: responder,
+      turn_id: claim.binding?.turnId,
+      digest: claim.binding?.digest,
+    });
+    return c.json({ status: 'ok', action });
   });
 
   // POST /api/v2/sessions/:id/background — перевести идущие **блокирующие**

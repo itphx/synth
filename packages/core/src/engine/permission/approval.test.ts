@@ -212,4 +212,35 @@ describe('PermissionApprovalManager — ask flow', () => {
     const decision = await pending;
     expect(decision.timeout).toBe(true);
   });
+
+  it('отмена хода (AbortSignal) во время ожидания резолвит cancelled сразу, не ждёт таймаут', async () => {
+    const asked: string[] = [];
+    bus.subscribe('s1', (e) => asked.push(e.type));
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    // Таймаут заведомо больше времени теста — иначе тест не отличил бы
+    // «отмену» от авто-отклонения.
+    const pending = manager.waitForDecision('s1', request, 10_000, controller.signal);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(asked).toContain('permission.asked');
+
+    controller.abort();
+    const decision = await pending;
+    expect(decision.approved).toBe(false);
+    expect(decision.cancelled).toBe(true);
+    expect(decision.timeout).toBeUndefined();
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+  });
+
+  it('уже отменённый сигнал — сразу cancelled без публикации permission.asked', async () => {
+    const asked: string[] = [];
+    bus.subscribe('s1', (e) => asked.push(e.type));
+    const controller = new AbortController();
+    controller.abort();
+
+    const decision = await manager.waitForDecision('s1', request, 10_000, controller.signal);
+    expect(decision.approved).toBe(false);
+    expect(decision.cancelled).toBe(true);
+    expect(asked).not.toContain('permission.asked');
+  });
 });

@@ -15,6 +15,21 @@ import { suppressDisabledTurns } from '../context/disabled-turns.js';
 import { estimateTokens, DEFAULT_CHARS_PER_TOKEN } from '../context/token-ratio.js';
 import { estimateMediaTokens } from '../context/media-tokens.js';
 import type { InjectionPolicy } from '../security/prompt-injection.js';
+import { resolveAgentRoleAlias } from '../agents/index.js';
+
+/**
+ * Роль для сравнения «своё/чужое»: алиас прежнего набора (`pm` → `leader`)
+ * нормализуется к целевому id.
+ *
+ * Без нормализации старая сессия после включения алиаса теряла бы собственную
+ * историю: `settings.agentRole='pm'` даёт эффективную роль `leader`, прошлые
+ * assistant-сообщения несут метку `pm` — они выглядели бы «сообщениями другого
+ * агента» и уходили бы модели user-текстом с префиксом `[pm]:`.
+ */
+function normalizeRoleForOwnership(role: string | undefined): string | undefined {
+  if (!role) return role;
+  return resolveAgentRoleAlias(role) ?? role;
+}
 
 /**
  * Маппинг истории сессии в LLM-сообщения (ADR-070 §2.8, ADR-041, tool-chain).
@@ -73,10 +88,13 @@ export function sessionMessagesToLlm(
 
     // Сообщение считается «своим», если agentRole не задан (легаси/сабагент —
     // иначе такие assistant порождали бы сирот) или совпадает с активным
-    // агентом. User — по автору.
+    // агентом. Роли прежнего набора сравниваются по алиасу (`pm` ≡ `leader`):
+    // метка в истории может быть исторической. User — по автору.
     const isOwnAssistant =
       role === MessageRole.ASSISTANT &&
-      (msg.agentRole === undefined || msg.agentRole === currentAgentRole);
+      (msg.agentRole === undefined ||
+        msg.agentRole === currentAgentRole ||
+        normalizeRoleForOwnership(msg.agentRole) === normalizeRoleForOwnership(currentAgentRole));
     const isOwnUser = role === MessageRole.USER && msg.author === currentAuthor;
     const hasToolCalls =
       role === MessageRole.ASSISTANT && !!msg.toolCalls && msg.toolCalls.length > 0;

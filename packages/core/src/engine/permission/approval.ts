@@ -48,6 +48,11 @@ export interface ApprovalDecision {
   timeout?: boolean;
   /** true — у сессии не было подписчиков, спрашивать было некому */
   noSubscribers?: boolean;
+  /**
+   * true — ожидание снято отменой хода («Стоп», `AbortSignal`), а не ответом
+   * пользователя: не отказ и не таймаут, решения по запросу нет.
+   */
+  cancelled?: boolean;
   /** Решение пользователя в новом формате WS permission_reply: allow | deny. */
   action?: 'allow' | 'deny';
   /** true — разрешить только один раз (не добавлять allow-правило в сессию). */
@@ -124,11 +129,24 @@ export class PermissionApprovalManager {
     private readonly _options: { registry?: ApprovalRegistry } = {},
   ) {}
 
+  /**
+   * Запросить подтверждение и дождаться ответа.
+   *
+   * `signal` — отмена хода («Стоп», ADR-005): уже отменённый сигнал даёт
+   * `cancelled:true` без публикации `permission.asked`; отмена во время
+   * ожидания снимает таймер/подписку и резолвит тем же `cancelled:true`.
+   */
   async waitForDecision(
     sessionId: string,
     request: ApprovalRequest,
     timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<ApprovalDecision> {
+    // «Стоп» до начала ожидания: не публикуем `permission.asked` — спрашивать
+    // уже некого и незачем (запрос отменён вместе с ходом).
+    if (signal?.aborted) {
+      return { approved: false, cancelled: true };
+    }
     if (this._eventBus.subscriberCount(sessionId) === 0) {
       return { approved: false, noSubscribers: true };
     }
@@ -155,9 +173,16 @@ export class PermissionApprovalManager {
         done = true;
         if (timer) clearTimeout(timer);
         unsub();
+        if (signal) signal.removeEventListener('abort', abortListener);
         this._options.registry?.close(request.approvalId);
         resolve(decision);
       };
+
+      // «Стоп» посреди ожидания: снимаем таймер/подписку и сразу отдаём
+      // `cancelled` — иначе инструмент висел бы до ask-таймаута (инцидент:
+      // отмена хода не прерывала `waitForDecision`).
+      const abortListener = (): void => finish({ approved: false, cancelled: true });
+      signal?.addEventListener('abort', abortListener, { once: true });
 
       // Подписка ДО публикации: EventBus.publish синхронный, иначе ответ
       // мгновенного подписчика (имитация UI) был бы потерян.

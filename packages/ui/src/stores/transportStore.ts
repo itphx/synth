@@ -17,6 +17,7 @@ import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData, MessageStatus, CostBreakdown } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
 import type { SessionData } from '@/lib/api/synthApi'
+import { sessionsApi } from '@/lib/api/sessions'
 import { notifyMessage } from '@/hooks/useNotification'
 import { i18nText } from '@/lib/i18n/text'
 import type { QuestionItem, QuestionRecord, SteerMode } from '@itphx/synth-shared/types'
@@ -75,6 +76,16 @@ function mapUsage(raw: unknown): {
 function mapCostBreakdown(raw: unknown): CostBreakdown | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   return raw as CostBreakdown
+}
+
+/**
+ * Ответ на подтверждение уже принят (403 `APPROVAL_DENIED` с
+ * `details.reason === 'already_consumed'`): полагать ошибкой нечего — запрос
+ * закрыт, полосу надо убрать.
+ */
+function isAlreadyConsumed(err: unknown): boolean {
+  const details = (err as { details?: { reason?: unknown } } | null)?.details
+  return details?.reason === 'already_consumed'
 }
 
 /**
@@ -266,8 +277,13 @@ interface TransportState {
     attachmentIds?: string[],
   ) => Promise<void>
   cancel: (sessionId: string) => void
-  sendPermissionReply: (sessionId: string, approvalId: string, approved: boolean, once?: boolean) => void
-  sendPermissionHold: (sessionId: string, approvalId: string) => void
+  /**
+   * Ответ на запрос подтверждения. `true` — ответ доставлен (WS-кадр или HTTP),
+   * `false` — доставить не удалось (полосу не убирать: запрос ещё открыт).
+   */
+  sendPermissionReply: (sessionId: string, approvalId: string, approved: boolean, once?: boolean) => Promise<boolean>
+  /** «Остановить таймер» — та же семантика доставки, что у `sendPermissionReply`. */
+  sendPermissionHold: (sessionId: string, approvalId: string) => Promise<boolean>
   markSessionOpen: (sid: string) => void
   markSessionClosed: (sid: string) => void
 }
@@ -550,6 +566,9 @@ export function createDispatcher(): EventDispatcher {
         finishStream(sid, payload.stream_id as string, metadata)
         setStreamRetry(sid, null)
         setFinalStreamError(sid, null)
+        // Ход завершён — висящих запросов подтверждения по нему быть не может
+        // (ask снят ответом/отменой/таймаутом): полосу убираем.
+        usePermissionStore.getState().clearSession(sid)
 
         const pendingCount = payload.pending_count as number | undefined
         if (pendingCount !== undefined && pendingCount > 0) {
@@ -586,6 +605,9 @@ export function createDispatcher(): EventDispatcher {
           },
         )
         setStreamRetry(sid, null)
+        // Отмена («Стоп»)/таймаут снимают ожидание подтверждения на бэкенде —
+        // полоса не должна оставаться после отмены.
+        usePermissionStore.getState().clearSession(sid)
         break
       }
 
@@ -1290,6 +1312,9 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
   },
 
   cancel: (sessionId) => {
+    // Запрос подтверждения больше не актуален: «Стоп» снимает ожидание на
+    // бэкенде (ask отменяется вместе с ходом), полоса должна исчезнуть сразу.
+    usePermissionStore.getState().clearSession(sessionId)
     if (transport && transportReady && transport.getTransport() === 'ws') {
       console.debug('[TransportStore] cancel via WS:', sessionId)
       transport.cancel(sessionId)
@@ -1299,24 +1324,44 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     }
   },
 
-  sendPermissionReply: (sessionId, approvalId, approved, once) => {
+  sendPermissionReply: async (sessionId, approvalId, approved, once) => {
     if (transport && transportReady && transport.getTransport() === 'ws') {
       console.debug('[TransportStore] sendPermissionReply via WS:', sessionId, approvalId, approved, once)
       transport.sendPermissionReply(sessionId, approvalId, approved, once)
-    } else {
-      // Нет WS-соединения: backend сам сбросит ask по таймауту.
-      console.warn('[TransportStore] sendPermissionReply: WS not connected, request will time out', sessionId, approvalId)
+      return true
+    }
+    // WS нет (SSE/фоллбек после разрыва): отвечаем HTTP-путём — иначе запрос
+    // висел бы до ask-таймаута (инцидент на test: «Запретить» терялся).
+    try {
+      console.debug('[TransportStore] sendPermissionReply via HTTP POST:', sessionId, approvalId, approved)
+      await sessionsApi.permissionReply(sessionId, approvalId, {
+        action: approved ? 'allow' : 'deny',
+        ...(once !== undefined ? { once } : {}),
+      })
+      return true
+    } catch (err) {
+      // 403 `already_consumed` — запрос уже отвечен (гонка с полосой/WS):
+      // для UI это успех, полосу можно убрать.
+      if (isAlreadyConsumed(err)) return true
+      console.warn('[TransportStore] sendPermissionReply failed:', sessionId, approvalId, err)
+      return false
     }
   },
 
-  sendPermissionHold: (sessionId, approvalId) => {
+  sendPermissionHold: async (sessionId, approvalId) => {
     if (transport && transportReady && transport.getTransport() === 'ws') {
       console.debug('[TransportStore] sendPermissionHold via WS:', sessionId, approvalId)
       transport.sendPermissionHold(sessionId, approvalId)
-    } else {
-      // Нет WS-соединения: остановить таймер не получится — сохраняем hold локально,
-      // бэкенд сбросит ask по таймауту.
-      console.warn('[TransportStore] sendPermissionHold: WS not connected', sessionId, approvalId)
+      return true
+    }
+    try {
+      console.debug('[TransportStore] sendPermissionHold via HTTP POST:', sessionId, approvalId)
+      await sessionsApi.permissionReply(sessionId, approvalId, { action: 'hold' })
+      return true
+    } catch (err) {
+      if (isAlreadyConsumed(err)) return true
+      console.warn('[TransportStore] sendPermissionHold failed:', sessionId, approvalId, err)
+      return false
     }
   },
 

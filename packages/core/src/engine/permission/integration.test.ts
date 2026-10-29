@@ -328,7 +328,7 @@ class MockDenyProvider extends BaseProvider {
         }],
       };
     }
-    return { content: 'Второй вызов — не должен случиться' };
+    return { content: 'Отказ учтён — объясняю без записи файла' };
   }
 
   async chat(
@@ -665,7 +665,7 @@ describe('ChatOrchestrator × permissions — once:false и deny (ADR-029)', () 
     for (const unsub of unsubs) unsub();
   });
 
-  it('ask→deny от пользователя — обработка завершается, история tool_result сохраняется', async () => {
+  it('ask→deny от пользователя — ход продолжается, tool_result с причиной, без stopped_by_deny', async () => {
     let sessionId = '';
     const unsubs: Array<() => void> = [];
     const { result, chunks } = await runRaw('mockdeny', { rules: { write_file: 'ask' }, askTimeoutMs: 2000 }, {
@@ -685,24 +685,32 @@ describe('ChatOrchestrator × permissions — once:false и deny (ADR-029)', () 
     });
     expect(result.error).toBeUndefined();
 
-    // Цикл LLM не продолжается: провайдер вызван ровно один раз
-    expect(MockDenyProvider.calls).toBe(1);
+    // Цикл LLM продолжается: отказ вернулся модели как tool_result.
+    expect(MockDenyProvider.calls).toBe(2);
 
     // Файл не создан
     await expect(access(join(tmpDir, 'deny.txt'))).rejects.toThrow();
 
-    // stream.done помечен как остановленный пользователем
+    // tool_result отказа содержит причину «denied by the user»
+    const denyResult = chunks
+      .filter((c) => c.event === 'tool_call.result')
+      .map((c) => c.data.result as { content: string; isError?: boolean })[0]!;
+    expect(denyResult.isError).toBe(true);
+    expect(denyResult.content).toContain('denied by the user');
+
+    // Ход завершён ответом модели, а не признаком «остановлен отказом».
     const done = chunks.find((c) => c.event === 'stream.done');
     expect(done).toBeDefined();
-    expect(done!.data.stopped_by_deny).toBe(true);
-    expect(done!.data.deny_reason).toContain('denied by the user');
+    expect(done!.data.stopped_by_deny).toBeUndefined();
+    expect(done!.data.deny_reason).toBeUndefined();
+    expect(done!.data.content).toBe('Отказ учтён — объясняю без записи файла');
 
     // История сохранена: финальное сообщение ассистента с tool_results
     const session = (await sessionManager.getSession(sessionId))!;
     const assistant = [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT);
     expect(assistant).toBeDefined();
     expect((assistant!.metadata as Record<string, unknown>).tool_results).toBeDefined();
-    expect(assistant!.content).toContain('Processing stopped');
+    expect(assistant!.content).toBe('Отказ учтён — объясняю без записи файла');
     for (const unsub of unsubs) unsub();
   });
 

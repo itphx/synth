@@ -93,7 +93,9 @@ describe('runtime-deps (ADR-070 §2.9.1)', () => {
   });
 
   it('TOOL_RUNTIME_DEP: покрытие встроенных тулов с внешней зависимостью', () => {
+    // Поиск — только через ripgrep: и grep_files, и glob
     expect(TOOL_RUNTIME_DEP.grep_files).toBe('rg');
+    expect(TOOL_RUNTIME_DEP.glob).toBe('rg');
     // Оболочка тула — bash, не sh (в образах `sh` это dash/busybox ash).
     expect(TOOL_RUNTIME_DEP.execute_shell).toBe('bash');
     for (const name of [
@@ -118,6 +120,7 @@ describe('runtime-deps (ADR-070 §2.9.1)', () => {
     expect(runtimeRequires('git')).toEqual(['git']);
     expect(toolRuntimeRequires('execute_shell')).toEqual(['bash']);
     expect(toolRuntimeRequires('grep_files')).toEqual(['rg']);
+    expect(toolRuntimeRequires('glob')).toEqual(['rg']);
     expect(toolRuntimeRequires('git_status')).toEqual(['git']);
     expect(toolRuntimeRequires('read_file')).toEqual([]);
   });

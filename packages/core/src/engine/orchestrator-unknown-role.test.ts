@@ -1,12 +1,15 @@
 /**
- * Фоллбек неизвестной роли агента на роль по умолчанию (`DEFAULT_AGENT_ID`).
+ * Резолвинг роли агента: алиасы прежнего набора и фоллбек на роль по умолчанию.
  *
- * В инстансах с историей у сессий может остаться `settings.agentRole` с id роли,
- * которой больше нет в наборе (прежние `pm`/`developer`/`qa`/…): определения и
- * ролевые промпты удалены. Требование: ход не падает, промпт не пустой,
- * ограничения роли не исчезают (иначе неизвестная роль = «агент без ограничений»
- * — fail-open), и в лог уходит предупреждение. Метка роли в сессии при этом
- * сохраняется: она историческая (attribution, аналитика, `promptStates`).
+ * В инстансах с историей у сессий может остаться `settings.agentRole` с id роли
+ * прежнего набора (`pm`/`developer`/`qa`/`analyst`/`auditor`). Для них работает
+ * алиас на актуальную роль (`pm` → `leader`): промпт, capabilities и лимиты
+ * берутся у целевого агента, предупреждения нет. Действительно неизвестная роль
+ * (нет ни в реестре, ни в алиасах) по-прежнему даёт фоллбек `DEFAULT_AGENT_ID`:
+ * ход не падает, промпт не пустой, ограничения роли не исчезают (иначе
+ * неизвестная роль = «агент без ограничений» — fail-open), в лог уходит
+ * предупреждение. Метка роли в сессии при этом сохраняется: она историческая
+ * (attribution, аналитика, `promptStates`).
  *
  * Проверяется через реальный `ContextBuilder`/`ContextConfig`: именно он читает
  * `prompts/roles/<CONTEXT_FILE>` для блока `role`.
@@ -22,7 +25,7 @@ import { FileStore } from '../storage/file-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { EventBus } from '../events/bus.js';
 import { createToolRegistry } from './tools/index.js';
-import { createAgentRegistry, DEFAULT_AGENT_ID } from './agents/index.js';
+import { createAgentRegistry, DEFAULT_AGENT_ID, LEGACY_AGENT_ROLE_ALIASES } from './agents/index.js';
 import { ContextConfig } from './context/config.js';
 import { ContextBuilder } from './context/builder.js';
 import { ProviderFactory, BaseProvider, resolveSystemPromptText } from '../providers/base.js';
@@ -141,6 +144,73 @@ async function runTurn(h: Harness & { sessionId: string }): Promise<void> {
   );
 }
 
+describe('ChatOrchestrator: устаревшая роль агента (алиас прежнего набора)', () => {
+  let h: Harness & { sessionId: string };
+
+  beforeEach(async () => {
+    ProviderFactory.register('rolefallback', RoleFallbackProvider);
+    RoleFallbackProvider.calls = 0;
+    RoleFallbackProvider.lastSystemPrompt = undefined;
+    // `pm` — роль прежнего набора; набор заменён, но `settings.agentRole` у
+    // старых сессий хранит прежнюю метку.
+    h = await makeHarness('pm');
+  });
+
+  afterEach(async () => {
+    ProviderFactory['_providers'].delete('rolefallback');
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('pm → leader: промпт целевой роли, метка в сессии остаётся pm', async () => {
+    await runTurn(h);
+
+    expect(RoleFallbackProvider.calls).toBe(1);
+    const prompt = RoleFallbackProvider.lastSystemPrompt ?? '';
+    expect(prompt).toContain('[ROLE: LEADER]');
+    expect(prompt).not.toContain('[ROLE: PM]');
+
+    // Метка историческая — не переписывается (attribution/аналитика).
+    const stored = (await h.sessionManager.getSession(h.sessionId))!;
+    expect(stored.settings.agentRole).toBe('pm');
+  });
+
+  it('pm → leader: ограничения берутся у leader (shell недоступен, чтение — да)', async () => {
+    const stored = (await h.sessionManager.getSession(h.sessionId))!;
+    const info = await h.orchestrator.getPromptInfo(stored);
+    const shell = info.toolsDetail.find((t) => t.name === 'execute_shell')!;
+    expect(shell.available).toBe(false);
+    expect(shell.reason).toBe('role');
+    expect(info.toolsDetail.find((t) => t.name === 'read_file')!.available).toBe(true);
+  });
+
+  it('история с меткой pm остаётся «своей»: без атрибуции [pm]: и без смены роли', () => {
+    const past: Message = {
+      id: generateId(),
+      role: MessageRole.ASSISTANT,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('старый ответ')],
+      content: 'старый ответ',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      author: 'pm',
+      agentRole: 'pm',
+    };
+
+    // Активный агент — leader (алиас pm): прошлый ход принадлежит ему же.
+    const own = ChatOrchestrator._sessionMessagesToLlm([past], 'leader');
+    expect(own[0]!.role).toBe('assistant');
+    expect(own[0]!.content).toBe('старый ответ');
+
+    // Контроль: действительно чужая роль остаётся атрибутированной.
+    const foreign = ChatOrchestrator._sessionMessagesToLlm([past], 'fixer');
+    expect(foreign[0]!.role).toBe('user');
+    expect(foreign[0]!.content).toBe('[pm]: старый ответ');
+  });
+});
+
 describe('ChatOrchestrator: неизвестная роль агента → фоллбек на DEFAULT_AGENT_ID', () => {
   let h: Harness & { sessionId: string };
 
@@ -148,8 +218,8 @@ describe('ChatOrchestrator: неизвестная роль агента → ф�
     ProviderFactory.register('rolefallback', RoleFallbackProvider);
     RoleFallbackProvider.calls = 0;
     RoleFallbackProvider.lastSystemPrompt = undefined;
-    // `pm` — роль прежнего набора: определения и промпта в поставке больше нет.
-    h = await makeHarness('pm');
+    // Роль, которой нет ни в реестре, ни среди алиасов прежнего набора.
+    h = await makeHarness('legacy-unknown');
   });
 
   afterEach(async () => {
@@ -163,7 +233,7 @@ describe('ChatOrchestrator: неизвестная роль агента → ф�
     expect(RoleFallbackProvider.calls).toBe(1);
     const prompt = RoleFallbackProvider.lastSystemPrompt ?? '';
     expect(prompt).toContain('[ROLE: ASSISTANT]');
-    expect(prompt).not.toContain('[ROLE: PM]');
+    expect(prompt).not.toContain('[ROLE: LEGACY-UNKNOWN]');
 
     const stored = (await h.sessionManager.getSession(h.sessionId))!;
     const lastAssistant = [...stored.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT);
@@ -173,7 +243,7 @@ describe('ChatOrchestrator: неизвестная роль агента → ф�
   it('метка роли в сессии сохраняется (attribution/аналитика/история)', async () => {
     await runTurn(h);
     const stored = (await h.sessionManager.getSession(h.sessionId))!;
-    expect(stored.settings.agentRole).toBe('pm');
+    expect(stored.settings.agentRole).toBe('legacy-unknown');
   });
 
   it('ограничения роли берутся у assistant: execute_shell недоступен по роли', async () => {
@@ -204,5 +274,12 @@ describe('ChatOrchestrator: неизвестная роль агента → ф�
     const registry = createAgentRegistry();
     expect(DEFAULT_AGENT_ID).toBe('assistant');
     expect(registry.get(DEFAULT_AGENT_ID)).toBeDefined();
+  });
+
+  it('каждый алиас прежнего набора ведёт на существующего агента', () => {
+    const registry = createAgentRegistry();
+    for (const [legacy, target] of Object.entries(LEGACY_AGENT_ROLE_ALIASES)) {
+      expect(registry.get(target), `${legacy} → ${target}`).toBeDefined();
+    }
   });
 });

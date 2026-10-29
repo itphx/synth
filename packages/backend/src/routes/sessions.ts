@@ -44,6 +44,8 @@ import type { WorktreeService } from '@itphx/synth-core';
 // ADR-111/ADR-113: реестр фоновых прогонов — «Стоп» останавливает и детей
 // (решение 2026-10-28).
 import type { BackgroundRunService } from '@itphx/synth-core';
+// ADR-106 Ф3: реестр подтверждений — HTTP-ответ на подтверждение.
+import type { ApprovalRegistry } from '@itphx/synth-core';
 import { createProjectAccess } from './projects.js';
 
 /**
@@ -123,6 +125,12 @@ export function createSessionRoutes(
    * решение 2026-10-28. Не задан — прежнее поведение (только свой стрим/очередь).
    */
   backgroundService?: BackgroundRunService,
+  /**
+   * ADR-106 Ф3: реестр подтверждений — HTTP-ответ на подтверждение
+   * (`POST /:id/permissions/:approvalId`) принимает решение через него, как и
+   * WS-кадр `permission_reply`. Не задан — слой Authority выключен/в shadow.
+   */
+  approvalRegistry?: ApprovalRegistry,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -716,7 +724,7 @@ export function createSessionRoutes(
   // последней: статические/backend-only сегменты должны матчиться раньше.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}) },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}) },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,
@@ -740,6 +748,12 @@ export function createSessionRoutes(
         return projects.map((p) => p.id);
       },
       resolveAuthor: async (c) => (await kit.getCurrentUser(c))!.username,
+      // ADR-106 Ф3: принципал ответа на подтверждение — аутентифицированный
+      // пользователь запроса (клиенту не доверяем) и его роли инстанса.
+      resolvePermissionResponder: async (c) => {
+        const user = await kit.getCurrentUser(c);
+        return { kind: 'user', id: user?.id ?? '', roles: user?.roles ?? [] };
+      },
       promptMessageId: 'stream',
       publishRenamed: false,
       publishDeletedBefore: false,

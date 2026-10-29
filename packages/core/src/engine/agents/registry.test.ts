@@ -132,7 +132,11 @@ describe('createAgentRegistry', () => {
 describe('AgentRegistry — набор ролей (leader/fixer/tester/researcher/security-auditor)', () => {
   const registry = createAgentRegistry();
 
-  /** Удалённый набор ролей: у старых сессий в `settings.agentRole` может остаться id. */
+  /**
+   * Удалённый набор ролей: у старых сессий в `settings.agentRole` может остаться id.
+   * В реестре его нет, но оркестратор резолвит алиас (`LEGACY_AGENT_ROLE_ALIASES`:
+   * `pm` → `leader` и т.д.) — см. `orchestrator-unknown-role.test.ts`.
+   */
   it.each(['pm', 'developer', 'qa', 'analyst', 'auditor', 'reviewer', 'no-such-role'])(
     'агента %s больше нет в реестре',
     (id) => {

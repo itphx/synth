@@ -152,6 +152,12 @@ export interface ProcessSetupArgs {
   streamId: string;
   projectForState: Project | null;
   workingDir: string;
+  /**
+   * Корень проекта (`project.workspace`, абсолютный) — для блока `session.info`:
+   * у сессии в worktree он отличается от рабочего каталога сессии (ADR-114).
+   * `null` — рабочего каталога проекта нет.
+   */
+  projectRoot?: string | null;
   workspaceReady: boolean;
   agentDef: AgentDefinition | undefined;
   effectiveAgentRole: string | undefined;
@@ -259,6 +265,8 @@ export interface ProcessSetupDeps {
     agentDef: AgentDefinition | undefined;
     effectiveAgentRole: string | undefined;
     workingDir: string;
+    /** Корень проекта (`project.workspace`) — блок `session.info` (ADR-114). */
+    projectRoot?: string | null;
     language: string;
     summaryContent?: string;
     toolsPolicy: Exclude<ToolsPolicy, 'auto'>;
@@ -341,7 +349,7 @@ export async function runProcessSetup(
 ): Promise<ProcessSetupOutcome> {
   const {
     session, message, signal, streamStartedAt, debugCollector, streamId,
-    projectForState, workingDir, workspaceReady, agentDef, effectiveAgentRole,
+    projectForState, workingDir, projectRoot, workspaceReady, agentDef, effectiveAgentRole,
     effectiveReasoningLevel, sessionMode, planMode, planApproved, author, attempt,
   } = args;
 
@@ -513,6 +521,9 @@ export async function runProcessSetup(
   const schedulerActive = await deps.resolveSchedulerActive(session);
   const composerCtx: ComposerContext = deps.buildComposerContext({
     session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
+    // ADR-114: фактический рабочий каталог сессии может отличаться от корня
+    // проекта (worktree) — Composer показывает оба и объявляет границы периметра.
+    projectRoot,
     // ADR-071 §2.3: `toolsPolicy` влияет на тир `tools`, `mcpPolicy` — на
     // инструкцию `tools.guide`; MCP-блоки всегда volatile.
     toolsPolicy, mcpPolicy, tokenRatio,

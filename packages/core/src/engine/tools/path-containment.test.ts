@@ -190,3 +190,121 @@ describe('containment файловых тулов с симлинками', () =
     expect(d.action).toBe('allow');
   });
 });
+
+/**
+ * Периметр сессии в git-worktree (ADR-114): рабочий каталог сессии **или**
+ * корень проекта. Путь в основном checkout проекта — не «внешний» и не побег;
+ * наружу обоих корней — по-прежнему побег/внешний доступ.
+ */
+describe('containment сессии в worktree: рабочий каталог + корень проекта', () => {
+  let tmpDir: string;
+  let worktree: string;
+  let projectRoot: string;
+  let outside: string;
+
+  function makeCtx(extra: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: worktree,
+      allowedRoots: [projectRoot],
+      ...extra,
+    };
+  }
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-worktree-'));
+    worktree = join(tmpDir, 'worktree');
+    projectRoot = join(tmpDir, 'project');
+    outside = join(tmpDir, 'outside');
+    await mkdir(worktree, { recursive: true });
+    await mkdir(projectRoot, { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(projectRoot, 'main-file.txt'), 'main-data');
+    await writeFile(join(worktree, 'wt-file.txt'), 'wt-data');
+    await writeFile(join(outside, 'secret.txt'), 'TOP-SECRET');
+
+    // Симлинк из worktree в основной checkout (репозиторий/общий каталог проекта).
+    await symlink(projectRoot, join(worktree, 'to-main'));
+    // Симлинк наружу обоих корней.
+    await symlink(outside, join(worktree, 'escape'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('read_file: симлинк из worktree в основной checkout — не побег, чтение разрешено', async () => {
+    const res = await readFileTool.execute({ file_path: 'to-main/main-file.txt' }, makeCtx());
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('main-data');
+  });
+
+  it('read_file: абсолютный путь в корень проекта при allowedRoots — разрешён', async () => {
+    const res = await readFileTool.execute({ file_path: join(projectRoot, 'main-file.txt') }, makeCtx());
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('main-data');
+  });
+
+  it('read_file: симлинк наружу обоих корней — побег даже с allowedRoots', async () => {
+    const res = await readFileTool.execute({ file_path: 'escape/secret.txt' }, makeCtx());
+    expect(res.isError).toBe(true);
+    expect(res.content).not.toContain('TOP-SECRET');
+  });
+
+  it('write_file: симлинк в корень проекта — разрешён, файл создаётся в основном checkout', async () => {
+    const res = await writeFileTool.execute({ file_path: 'to-main/new.txt', content: 'ok' }, makeCtx());
+    expect(res.isError).toBeFalsy();
+    expect(await readFile(join(projectRoot, 'new.txt'), 'utf-8')).toBe('ok');
+  });
+
+  it('execute_shell: cwd в корне проекта при allowedRoots — разрешён', async () => {
+    const res = await executeShellTool.execute({ command: 'pwd', cwd: projectRoot }, makeCtx());
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain(projectRoot);
+  });
+
+  it('permission: путь в корне проекта без allowedRoots → ask (внешний)', () => {
+    const evaluator = new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 });
+    const d = evaluator.check({
+      toolName: 'read_file',
+      params: { file_path: join(projectRoot, 'main-file.txt') },
+      workingDir: worktree,
+    });
+    expect(d.action).toBe('ask');
+    expect(d.matchedRule).toBe('external_directory.default');
+  });
+
+  it('permission: путь в корне проекта с allowedRoots → allow (внутри периметра)', () => {
+    const evaluator = new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 });
+    const d = evaluator.check({
+      toolName: 'read_file',
+      params: { file_path: join(projectRoot, 'main-file.txt') },
+      workingDir: worktree,
+      allowedRoots: [projectRoot],
+    });
+    expect(d.action).toBe('allow');
+  });
+
+  it('permission: путь внутри работы worktree при allowedRoots — allow', () => {
+    const evaluator = new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 });
+    const d = evaluator.check({
+      toolName: 'read_file',
+      params: { file_path: 'wt-file.txt' },
+      workingDir: worktree,
+      allowedRoots: [projectRoot],
+    });
+    expect(d.action).toBe('allow');
+  });
+
+  it('permission: симлинк наружу обоих корней при allowedRoots → ask', () => {
+    const evaluator = new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 });
+    const d = evaluator.check({
+      toolName: 'read_file',
+      params: { file_path: 'escape/secret.txt' },
+      workingDir: worktree,
+      allowedRoots: [projectRoot],
+    });
+    expect(d.action).toBe('ask');
+  });
+});

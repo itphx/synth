@@ -323,6 +323,15 @@ describe('ContextConfig.getModePolicy (ADR-070 §3.1)', () => {
     expect(config.getModePolicy('fr')).toBeNull();
   });
 
+  it('границы рабочего каталога описаны на обоих языках', async () => {
+    // Инцидент на test: агент читал каталог данных инстанса абсолютным путём
+    // (permission `ask`). Инструкция должна явно говорить, что файловые/
+    // поисковые/shell/git-инструменты работают только внутри workspace проекта.
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getModePolicy('ru')).toContain('[ГРАНИЦЫ РАБОЧЕГО КАТАЛОГА]');
+    expect(config.getModePolicy('en')).toContain('[WORKSPACE BOUNDARY]');
+  });
+
   it('override из system-категории приоритетнее встроенного', async () => {
     await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
     await writeFile(join(userDataDir, 'user', 'system', 'MODE_POLICY.md'), 'ПОЛЬЗОВАТЕЛЬСКАЯ ПОЛИТИКА', 'utf-8');

@@ -216,6 +216,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     // ADR-111 §detach: «Стоп» останавливает и живые дочерние прогоны
     // (фоновые саб-агенты и их процессы) — решение 2026-10-28.
     deps.backgroundService,
+    // ADR-106 Ф3: HTTP-ответ на подтверждение проходит через тот же реестр,
+    // что и WS-кадр `permission_reply`.
+    deps.approvalRegistry,
   ));
 
   // Messages routes

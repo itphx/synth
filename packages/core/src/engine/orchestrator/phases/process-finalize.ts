@@ -83,8 +83,6 @@ export interface ProcessFinalizeState {
   roleBlocked?: boolean;
   roleBlockedTool?: string;
   roleBlockedAgent?: string;
-  stopAfterDeny: boolean;
-  denyStopReason: string | undefined;
   toolIteration: number;
   maxIterations: number;
   lastIterationPromptChars: number;
@@ -242,7 +240,7 @@ export async function runProcessFinalize(
     cancelledBeforeFinal, lastChunkModel, provider, providerName, effectiveAgentRole,
     allToolCalls, allIntermediateTexts, allReasoning,
     lastIterationPromptChars, promptMeta, toolIteration, maxIterations,
-    stopAfterDeny, denyStopReason, hadDeny, routingDecision, effectiveReasoningLevel,
+    hadDeny, routingDecision, effectiveReasoningLevel,
     roleBlocked, roleBlockedTool, roleBlockedAgent,
     currentMessages, loadedTokenRatio, finalSystemPrompt, currentDraft, outboundParts,
   } = state;
@@ -331,18 +329,10 @@ export async function runProcessFinalize(
     fallbackI18n = i18nMeta('session.max_iterations');
   }
 
-  // ADR-029: пользователь отклонил ask — обработка завершена. Фиксируем
-  // причину в финальном сообщении (история tool_result уже собрана).
-  if (stopAfterDeny && !finalContent) {
-    const reason = denyStopReason ?? sm('session.stopped_reason_denied');
-    finalContent = sm('session.stopped', { reason });
-    fallbackI18n = i18nMeta('session.stopped', { reason });
-  }
-
   // Защита от пустого финального ответа: если цикл завершился (в т.ч.
-  // через doom loop / лимит итераций / модель вернула пустой контент)
-  // с пустым finalContent — подставляем осмысленное сообщение, чтобы
-  // в истории не оставалось пустого assistant-сообщения.
+  // через doom loop / лимит итераций / серию deny / модель вернула пустой
+  // контент) с пустым finalContent — подставляем осмысленное сообщение,
+  // чтобы в истории не оставалось пустого assistant-сообщения.
   if (!finalContent) {
     if (roleBlocked) {
       // Ролевой отказ: тул не для этого агента — говорим об этом прямо, без
@@ -503,11 +493,6 @@ export async function runProcessFinalize(
     : [];
   if (attachments.length > 0) {
     doneData.attachments = attachments;
-  }
-
-  if (stopAfterDeny) {
-    doneData.stopped_by_deny = true;
-    doneData.deny_reason = denyStopReason;
   }
 
   const debugInfo = debugCollector.getDebugInfo();

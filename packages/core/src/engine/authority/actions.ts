@@ -97,6 +97,9 @@ const TOOL_ACTIONS: Readonly<Record<string, string>> = {
   // Запись.
   write_file: 'write',
   edit_file: 'write',
+  // Атомарная мультифайловая правка: JSON `edits[].file_path` (ADR-116 не
+  // касается; пути собирает `extractPathParams`).
+  patch: 'write',
   create_directory: 'write',
   delete_file: 'write',
   plan_write: 'write',
@@ -203,6 +206,8 @@ const TOOL_TARGET_KINDS: Readonly<Record<string, string>> = {
   grep_files: 'path',
   write_file: 'path',
   edit_file: 'path',
+  // Цель `patch` — по первому `edits[].file_path` (как `edit_file`).
+  patch: 'path',
   create_directory: 'path',
   delete_file: 'path',
   execute_shell: 'workspace',

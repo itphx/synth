@@ -29,7 +29,8 @@ export const taskTool: ToolDefinition = {
   name: 'task',
   description:
     'Launch a new agent to handle complex, multistep tasks autonomously. '
-    + 'Available subagent types: "general" (full tool access), "explore" (read-only code exploration). '
+    + 'subagent_type is taken from the agent registry — any agent whose mode includes "subagent" (for example general, explore, fixer, tester, researcher, security-auditor; '
+    + 'general has full tool access, explore is read-only code exploration). An unknown type returns the list of available types. '
     + 'Use for tasks that require multiple tool calls. '
     + 'Set skip_context_files=true to omit project instruction files (AGENTS.md) from the subagent prompt. '
     + 'IMPORTANT: You must NOT ask the user to use the task tool — use it yourself proactively.',

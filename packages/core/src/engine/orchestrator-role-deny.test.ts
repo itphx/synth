@@ -1,17 +1,18 @@
 /**
- * ADR-070 §2.9.1: ролевой отказ (`matchedRule: 'role.unavailable'`) останавливает
- * ход после первой же итерации.
+ * ADR-070 §2.9.1 (обновлено 2026-10-29): отказ permission-слоя больше **не**
+ * останавливает ход. Модель получает `tool_result` с причиной и продолжает
+ * работу — может выбрать другой инструмент или дать текстовый ответ.
  *
  * Регресс бага сессии `mvqh7e8u-3-5lxg77a5`: агент `assistant` (нет capability
- * `shell`) дважды вызывал `execute_shell`, получал deny от permission-слоя,
- * затем возвращал пустой ответ — и пользователь видел общий
- * `session.denied_blocked` («действие заблокировано политикой безопасности»,
- * звучит как инцидент ИБ). Теперь: второго LLM-вызова нет, tool_result отказа
- * остаётся в истории, финальный текст — `session.role_tool_blocked` с tool/agent.
+ * `shell`) вызывал `execute_shell`, получал ролевой deny, и ход умирал, хотя
+ * доступный `project_repo_clone` мог решить задачу. Теперь: следующий
+ * LLM-вызов происходит, доступный тул исполняется, ход завершается штатно.
+ * Фоллбек `session.role_tool_blocked` остаётся только на случай пустого
+ * финального ответа модели.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ChatOrchestrator } from './orchestrator.js';
@@ -55,25 +56,37 @@ function makeMessage(): Message {
   };
 }
 
+interface ScriptChunk {
+  content: string;
+  toolCalls?: Record<string, unknown>[];
+}
+
 /**
- * Провайдер: первый (и единственный ожидаемый) вызов — `execute_shell`
- * (агенту `assistant` недоступен по роли), второй — текст. Второго вызова быть
- * не должно: иначе тест увидит его в `calls`.
+ * Провайдер: 1-й вызов — `execute_shell` (агенту `assistant` недоступен по
+ * роли), 2-й — доступный `read_file`, 3-й — текст. Все три вызова ожидаются:
+ * deny не обрывает ход, модель пробует другой инструмент.
  */
 class MockRoleDenyProvider extends BaseProvider {
   static calls = 0;
 
-  private _next(): { content: string; toolCalls?: Record<string, unknown>[] } {
-    if (MockRoleDenyProvider.calls === 0) {
-      return {
+  protected _script(): ScriptChunk[] {
+    return [
+      {
         content: '',
         toolCalls: [{
           id: 'call_role0',
           function: { name: 'execute_shell', arguments: JSON.stringify({ command: 'git log --oneline' }) },
         }],
-      };
-    }
-    return { content: 'вторая итерация — быть не должно' };
+      },
+      {
+        content: '',
+        toolCalls: [{
+          id: 'call_read0',
+          function: { name: 'read_file', arguments: JSON.stringify({ file_path: 'notes.txt' }) },
+        }],
+      },
+      { content: 'shell недоступен — прочитал файл и объяснил' },
+    ];
   }
 
   async chat(
@@ -81,7 +94,8 @@ class MockRoleDenyProvider extends BaseProvider {
     _systemPrompt?: string,
     _tools?: Record<string, unknown>[],
   ): Promise<import('@itphx/synth-shared').LLMResponse> {
-    const next = this._next();
+    const script = this._script();
+    const next = script[Math.min(MockRoleDenyProvider.calls, script.length - 1)]!;
     MockRoleDenyProvider.calls++;
     return {
       content: next.content,
@@ -98,7 +112,8 @@ class MockRoleDenyProvider extends BaseProvider {
     _debugCollector?: unknown,
     _cancellationToken?: CancellationToken,
   ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
-    const next = this._next();
+    const script = this._script();
+    const next = script[Math.min(MockRoleDenyProvider.calls, script.length - 1)]!;
     MockRoleDenyProvider.calls++;
     yield {
       content: next.content,
@@ -114,6 +129,61 @@ class MockRoleDenyProvider extends BaseProvider {
   }
 }
 
+/** Провайдер: 1-й вызов — ролевой deny, 2-й — пустой ответ (фоллбек-текст). */
+class MockRoleDenyEmptyProvider extends BaseProvider {
+  static calls = 0;
+
+  private _next(): ScriptChunk {
+    if (MockRoleDenyEmptyProvider.calls === 0) {
+      return {
+        content: '',
+        toolCalls: [{
+          id: 'call_role0',
+          function: { name: 'execute_shell', arguments: JSON.stringify({ command: 'git log --oneline' }) },
+        }],
+      };
+    }
+    return { content: '' };
+  }
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
+    const next = this._next();
+    MockRoleDenyEmptyProvider.calls++;
+    return {
+      content: next.content,
+      model: this.model,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      toolCalls: next.toolCalls,
+    };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const next = this._next();
+    MockRoleDenyEmptyProvider.calls++;
+    yield {
+      content: next.content,
+      isFinal: true,
+      toolCalls: next.toolCalls,
+      model: this.model,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    };
+  }
+
+  getProviderName(): string {
+    return 'mockroleempty';
+  }
+}
+
 interface Harness {
   orchestrator: ChatOrchestrator;
   sessionManager: SessionManager;
@@ -122,7 +192,7 @@ interface Harness {
   sessionId: string;
 }
 
-async function makeHarness(): Promise<Harness> {
+async function makeHarness(providerName: string): Promise<Harness> {
   const tmpDir = await mkdtemp(join(tmpdir(), 'synth-role-deny-'));
   const store = new FileStore({ dataDir: tmpDir });
   const sessionManager = new SessionManager(store);
@@ -140,7 +210,7 @@ async function makeHarness(): Promise<Harness> {
     providerLoader: (name: string) => {
       return {
         name,
-        type: 'mockroledeny',
+        type: providerName,
         baseUrl: '',
         apiKey: '',
         defaultModel: 'm',
@@ -157,68 +227,123 @@ async function makeHarness(): Promise<Harness> {
     title: 'RoleDeny',
     projectId: project.id,
     // `assistant` не имеет capability `shell` — `execute_shell` недоступен по роли.
-    settings: { provider: 'mockroledeny', model: 'm', systemPrompt: 'test', agentRole: 'assistant' },
+    settings: { provider: providerName, model: 'm', systemPrompt: 'test', agentRole: 'assistant' },
   });
   await sessionManager.addMessage(session.id, makeMessage());
+  // Доступный тул `read_file` читает этот файл — доказательство, что после
+  // deny модель может выполнить другой инструмент.
+  await writeFile(join(tmpDir, 'notes.txt'), 'содержимое notes\n', 'utf8');
   return { orchestrator, sessionManager, eventBus, tmpDir, sessionId: session.id };
 }
 
-describe('ChatOrchestrator: ролевой deny останавливает ход', () => {
-  let h: Harness;
+async function runHarness(h: Harness): Promise<{
+  result: import('./orchestrator.js').ProcessMessageResult;
+  published: Array<{ event: string; data: Record<string, unknown> }>;
+}> {
+  const published: Array<{ event: string; data: Record<string, unknown> }> = [];
+  const processMessage = h.orchestrator.createProcessMessage();
+  const session = (await h.sessionManager.getSession(h.sessionId))!;
+  const userMessage = session.messages.find((m) => m.role === MessageRole.USER)!;
+  const result = await processMessage(
+    session,
+    userMessage,
+    new AbortController().signal,
+    (event, data) => published.push({ event, data }),
+  );
+  return { result, published };
+}
 
-  beforeEach(async () => {
+describe('ChatOrchestrator: deny не останавливает ход', () => {
+  beforeEach(() => {
     ProviderFactory.register('mockroledeny', MockRoleDenyProvider);
+    ProviderFactory.register('mockroleempty', MockRoleDenyEmptyProvider);
     MockRoleDenyProvider.calls = 0;
-    h = await makeHarness();
+    MockRoleDenyEmptyProvider.calls = 0;
   });
 
   afterEach(async () => {
-    await rm(h.tmpDir, { recursive: true, force: true });
+    ProviderFactory['_providers'].delete('mockroledeny');
+    ProviderFactory['_providers'].delete('mockroleempty');
+    MockRoleDenyProvider.calls = 0;
+    MockRoleDenyEmptyProvider.calls = 0;
   });
 
-  it('один role.unavailable → нет второй LLM-итерации, tool_result в истории, финал — session.role_tool_blocked', async () => {
-    const published: Array<{ event: string; data: Record<string, unknown> }> = [];
-    const processMessage = h.orchestrator.createProcessMessage();
-    const session = (await h.sessionManager.getSession(h.sessionId))!;
-    const userMessage = session.messages.find((m) => m.role === MessageRole.USER)!;
+  it('ролевой deny → следующая LLM-итерация, доступный тул исполняется, ход завершается нормально', async () => {
+    const h = await makeHarness('mockroledeny');
+    try {
+      const { result, published } = await runHarness(h);
 
-    const result = await processMessage(
-      session,
-      userMessage,
-      new AbortController().signal,
-      (event, data) => published.push({ event, data }),
-    );
+      expect(result.error).toBeUndefined();
+      // Первый (deny), второй (read_file) и третий (текст) вызовы состоялись.
+      expect(MockRoleDenyProvider.calls).toBe(3);
 
-    expect(result.error).toBeUndefined();
-    // Второго LLM-вызова нет — цикл прерван после итерации с роль-отказом.
-    expect(MockRoleDenyProvider.calls).toBe(1);
+      const stored = (await h.sessionManager.getSession(h.sessionId))!;
+      // tool-chain сохранён: два assistant(tool_calls) и два tool_result.
+      const toolResults = stored.messages.filter((m) => m.role === MessageRole.TOOL);
+      expect(toolResults).toHaveLength(2);
 
-    const stored = (await h.sessionManager.getSession(h.sessionId))!;
-    // tool-chain сохранён: assistant(tool_calls) → tool_result отказа.
-    const assistantWithCalls = stored.messages.find(
-      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) > 0,
-    );
-    expect(assistantWithCalls).toBeDefined();
-    const toolResult = stored.messages.find((m) => m.role === MessageRole.TOOL);
-    expect(toolResult).toBeDefined();
-    expect(toolResult!.toolCallId).toBe('call_role0');
-    expect((toolResult!.metadata as Record<string, unknown> | undefined)?.permission).toMatchObject({
-      action: 'deny',
-      matched_rule: 'role.unavailable',
-    });
+      const denied = toolResults.find((m) => m.toolCallId === 'call_role0')!;
+      expect(denied).toBeDefined();
+      expect((denied.metadata as Record<string, unknown> | undefined)?.permission).toMatchObject({
+        action: 'deny',
+        matched_rule: 'role.unavailable',
+      });
+      expect(denied.content).toContain('Permission denied');
+      // Событие tool_call.result несёт isError (UI/модель видят отказ явно).
+      const denyChunk = published.find(
+        (p) => p.event === 'tool_call.result'
+          && (p.data.result as { isError?: boolean } | undefined)?.isError === true
+          && ((p.data.result as { content?: string }).content ?? '').includes('Permission denied'),
+      );
+      expect(denyChunk).toBeDefined();
 
-    // Финальное сообщение — новый ключ, а не «заблокировано политикой ИБ».
-    const final = stored.messages.filter((m) => m.role === MessageRole.ASSISTANT).at(-1)!;
-    const expectedText = sm('session.role_tool_blocked', { tool: 'execute_shell', agent: 'assistant' });
-    expect(final.content).toBe(expectedText);
-    expect(final.metadata?.i18n).toEqual({
-      key: 'session.role_tool_blocked',
-      params: { tool: 'execute_shell', agent: 'assistant' },
-    });
-    expect(final.metadata?.status).toBe('stopped');
+      // Доступный тул после deny исполнен (не deny): содержимое файла в результате.
+      const ok = toolResults.find((m) => m.toolCallId === 'call_read0')!;
+      expect(ok).toBeDefined();
+      expect(ok.content).toContain('содержимое notes');
 
-    const done = published.find((p) => p.event === 'stream.done');
-    expect(done?.data).toMatchObject({ content: expectedText, status: 'stopped' });
-    expect(done?.data.stopped_by_deny).toBeUndefined();
+      // Ход завершён содержательным ответом модели, а не фоллбеком отказа.
+      const final = stored.messages.filter((m) => m.role === MessageRole.ASSISTANT).at(-1)!;
+      expect(final.content).toBe('shell недоступен — прочитал файл и объяснил');
+      expect(final.metadata?.i18n).toBeUndefined();
+      expect(final.metadata?.status).not.toBe('stopped');
+
+      const done = published.find((p) => p.event === 'stream.done');
+      expect(done?.data).toMatchObject({
+        content: 'shell недоступен — прочитал файл и объяснил',
+        status: 'completed',
+      });
+      expect(done?.data.stopped_by_deny).toBeUndefined();
+      expect(done?.data.deny_reason).toBeUndefined();
+    } finally {
+      await rm(h.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ролевой deny + пустой ответ модели → фоллбек session.role_tool_blocked (status stopped)', async () => {
+    const h = await makeHarness('mockroleempty');
+    try {
+      const { result, published } = await runHarness(h);
+
+      expect(result.error).toBeUndefined();
+      // Вторая LLM-итерация состоялась (ход не оборван отказом).
+      expect(MockRoleDenyEmptyProvider.calls).toBe(2);
+
+      const expectedText = sm('session.role_tool_blocked', { tool: 'execute_shell', agent: 'assistant' });
+      const stored = (await h.sessionManager.getSession(h.sessionId))!;
+      const final = stored.messages.filter((m) => m.role === MessageRole.ASSISTANT).at(-1)!;
+      expect(final.content).toBe(expectedText);
+      expect(final.metadata?.i18n).toEqual({
+        key: 'session.role_tool_blocked',
+        params: { tool: 'execute_shell', agent: 'assistant' },
+      });
+      expect(final.metadata?.status).toBe('stopped');
+
+      const done = published.find((p) => p.event === 'stream.done');
+      expect(done?.data).toMatchObject({ content: expectedText, status: 'stopped' });
+      expect(done?.data.stopped_by_deny).toBeUndefined();
+    } finally {
+      await rm(h.tmpDir, { recursive: true, force: true });
+    }
   });
 });

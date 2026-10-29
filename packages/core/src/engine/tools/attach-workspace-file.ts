@@ -38,7 +38,7 @@
  *   `synth_attachment_*` (ADR-094).
  */
 import { readFile, stat } from 'node:fs/promises';
-import { isAbsolute, relative, sep } from 'node:path';
+import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import {
   attachmentsConfigSchema,
@@ -56,9 +56,11 @@ import {
 import { sniffMime } from '../attachments/sniff-mime.js';
 import { isAborted, abortedResult } from './abort.js';
 import {
-  isSymlinkEscape,
+  isLexicallyInside,
+  isSymlinkEscapeInRoots,
   pathEscapesWorkspaceResult,
   resolvePath,
+  toolRoots,
   validateInputPath,
 } from './path-utils.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
@@ -107,10 +109,9 @@ function failureResult(
   };
 }
 
-/** Лексическая проверка вхождения пути в рабочий каталог (без ФС). */
-function isLexicallyInsideWorkspace(workingDir: string, candidate: string): boolean {
-  const rel = relative(workingDir, candidate);
-  return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+/** Лексическая проверка вхождения пути в любой из корней perimeter'а (без ФС). */
+function isLexicallyInsideRoots(roots: readonly string[], candidate: string): boolean {
+  return roots.some((root) => isLexicallyInside(root, candidate));
 }
 
 export const attachWorkspaceFileTool: ToolDefinition = {
@@ -150,11 +151,12 @@ export const attachWorkspaceFileTool: ToolDefinition = {
     // Абсолютный путь — не «внешний доступ по правилу», а отказ: тул прикладывает
     // файл проекта из workspace (иначе агент тянул бы в диалог файлы хоста).
     if (isAbsolute(params.path)) return pathEscapesWorkspaceResult(params.path);
+    const roots = toolRoots(ctx);
     const resolvedPath = resolvePath(params.path, ctx.workingDir);
-    if (!isLexicallyInsideWorkspace(ctx.workingDir, resolvedPath)) {
+    if (!isLexicallyInsideRoots(roots, resolvedPath)) {
       return pathEscapesWorkspaceResult(resolvedPath);
     }
-    if (isSymlinkEscape(ctx.workingDir, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+    if (isSymlinkEscapeInRoots(roots, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
     const extra = ctx.extra as AttachWorkspaceFileExtra | undefined;
     const service = extra?.attachmentService;

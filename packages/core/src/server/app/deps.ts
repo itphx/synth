@@ -14,7 +14,7 @@ import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
-  DEFAULT_AGENT_ID, registerStoredAgents,
+  DEFAULT_AGENT_ID, registerStoredAgents, migrateLegacyStoredAgents,
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
   isFfmpegAvailable,
   EventRouter, RequestSessionService, EventIngress, eventToMessage,
@@ -722,6 +722,24 @@ export async function createStandaloneDeps(
   // фасад плагинов (`PluginRuntime` → `PluginHost`) регистрирует их — экземпляр
   // обязан быть общим, иначе плагинные блоки в промпт не попадут.
   const promptBlocks = new PromptBlockRegistry();
+
+  // Набор ролей прежней поставки (`pm`/`developer`/`qa`/`analyst`/`auditor`)
+  // заменён на `leader`/`fixer`/`tester`/`researcher`/`security-auditor`, но в
+  // сторе остаются полные копии прежних встроенных агентов. Без миграции в
+  // списке живут две роли сразу, а старая несёт подменённый `contextFile` при
+  // прежней идентичности/правах (агент получает чужую роль с чужими правами).
+  // Переносим пользовательские настройки в целевого встроенного агента,
+  // устаревшую запись удаляем; идемпотентно.
+  try {
+    const migratedAgents = await migrateLegacyStoredAgents(agentStore);
+    if (migratedAgents.length > 0) {
+      console.info(`[agents] миграция устаревших агентов: ${migratedAgents.join(', ')}`);
+    }
+  } catch (err) {
+    console.warn(
+      `[agents] не удалось мигрировать устаревших агентов: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   // ADR-096 + ADR-086 §5: агенты из **стора** — в реестр при старте.
   // `createAgentRegistry` читает только файловый каталог `{dataDir}/agents`,

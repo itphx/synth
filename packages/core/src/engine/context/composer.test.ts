@@ -1162,3 +1162,99 @@ describe('SystemPromptComposer', () => {
     });
   });
 });
+
+/**
+ * ADR-114: сессия в git-worktree — `session.info` показывает фактический
+ * рабочий каталог сессии и корень проекта, а также объявляет границы периметра.
+ */
+describe('session.info — периметр сессии (write-up: worktree + корень проекта)', () => {
+  let userDataDir: string;
+  let builder: ContextBuilder;
+  let composer: SystemPromptComposer;
+  const SESSION_WORKDIR = '/ws/.worktrees/feat-x';
+  const PROJECT_ROOT = '/ws';
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'synth-composer-info-'));
+    await mkdir(join(userDataDir, 'user'), { recursive: true });
+    await mkdir(join(userDataDir, 'roles'), { recursive: true });
+    await writeFile(join(userDataDir, 'roles', 'ASSISTANT.md'), 'ROLE-MARKER', 'utf-8');
+    builder = new ContextBuilder(new ContextConfig({ userDataDir }));
+    composer = new SystemPromptComposer({
+      contextBuilder: builder,
+      contextConfig: makeContextConfig(),
+      projectStore: makeProjectStore(),
+    });
+  });
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true });
+  });
+
+  /** Свой `ComposerContext` — `makeCtx` объявлен внутри другого `describe`. */
+  function ctxFor(session: ComposerSessionLike, extra: Partial<ComposerContext> = {}): ComposerContext {
+    return {
+      session,
+      workingDir: '/ws',
+      language: 'ru',
+      routingEnabled: false,
+      gatewayEnabled: true,
+      ...extra,
+    };
+  }
+
+  it('RU: рабочий каталог сессии, корень проекта и границы периметра', async () => {
+    const session = makeSession({ projectId: 'p1' });
+    const { system } = await composer.compose(ctxFor(session, {
+      workingDir: SESSION_WORKDIR,
+      projectRoot: PROJECT_ROOT,
+    }));
+
+    expect(system).toContain(`Рабочий каталог сессии: ${SESSION_WORKDIR}`);
+    expect(system).toContain(`Корень проекта: ${PROJECT_ROOT}`);
+    // границы: периметр и предупреждение про каталог данных инстанса
+    expect(system).toContain('Файловые, поисковые, shell- и git-инструменты работают внутри рабочего каталога сессии и корня проекта.');
+    expect(system).toContain('Каталог данных инстанса (agents/, secrets/, auth/, sessions/, projects/ других проектов)');
+    expect(system).toContain('Относительные пути указывай от рабочего каталога');
+    // старый неоднозначный текст не остаётся
+    expect(system).not.toContain(`Рабочий каталог: ${PROJECT_ROOT}`);
+  });
+
+  it('RU: без worktree (корень проекта = рабочий каталог) — без строки «Корень проекта»', async () => {
+    const session = makeSession({ projectId: 'p1' });
+    const { system } = await composer.compose(ctxFor(session, {
+      workingDir: PROJECT_ROOT,
+      projectRoot: PROJECT_ROOT,
+    }));
+
+    expect(system).toContain(`Рабочий каталог сессии: ${PROJECT_ROOT}`);
+    expect(system).not.toContain('Корень проекта:');
+  });
+
+  it('EN: session working directory, project root и границы периметра', async () => {
+    const session = makeSession({ projectId: 'p1', settings: { language: 'en' } });
+    const { system } = await composer.compose(ctxFor(session, {
+      workingDir: SESSION_WORKDIR,
+      projectRoot: PROJECT_ROOT,
+      language: 'en',
+    }));
+
+    expect(system).toContain(`Session working directory: ${SESSION_WORKDIR}`);
+    expect(system).toContain(`Project root: ${PROJECT_ROOT}`);
+    expect(system).toContain('File, search, shell and git tools work inside the session working directory and the project root.');
+    expect(system).toContain('The instance data directory (agents/, secrets/, auth/, sessions/, projects/ of other projects)');
+    expect(system).toContain('Use relative paths from the working directory');
+  });
+
+  it('сессия без проекта: фактический рабочий каталог + те же границы', async () => {
+    const session = makeSession();
+    const { system } = await composer.compose(ctxFor(session, {
+      workingDir: SESSION_WORKDIR,
+    }));
+
+    expect(system).toContain('Проект: отсутствует');
+    expect(system).toContain(`Рабочий каталог сессии: ${SESSION_WORKDIR}`);
+    expect(system).toContain('[ГРАНИЦЫ РАБОЧЕГО КАТАЛОГА]');
+    expect(system).toContain('Каталог данных инстанса');
+  });
+});

@@ -43,6 +43,11 @@ export interface ProcessCommandArgs {
   streamId: string;
   effectiveAgentRole: string | undefined;
   workingDir: string;
+  /**
+   * ADR-114: периметр сессии (рабочий каталог + корень проекта для сессии в
+   * worktree). Передаётся в inline-shell тем же permission-слоем.
+   */
+  allowedRoots?: readonly string[];
   permissionEvaluator: PermissionEvaluator;
   sessionMode: SessionMode;
   planMode: PlanMode;
@@ -108,6 +113,8 @@ export interface ProcessEarlyArgs {
   effectiveAgentRole: string | undefined;
   effectiveReasoningLevel: ReasoningLevel | undefined;
   workingDir: string;
+  /** ADR-114: периметр сессии (рабочий каталог + корень проекта для worktree). */
+  allowedRoots?: readonly string[];
   attempt: number | undefined;
   permissionEvaluator: PermissionEvaluator;
   sessionMode: SessionMode;
@@ -134,6 +141,7 @@ export async function runProcessEarly(
   const {
     session, message, signal, publishChunk, debugCollector, streamId,
     effectiveAgentRole, effectiveReasoningLevel, workingDir, attempt,
+    allowedRoots,
     permissionEvaluator, sessionMode, planMode, planApproved, streamStartedAt,
     authorityTurn,
   } = args;
@@ -151,6 +159,7 @@ export async function runProcessEarly(
     const commandResult = await deps.handleCommand({
       session, message, signal, publishChunk, debugCollector, streamId,
       effectiveAgentRole, workingDir, attempt,
+      ...(allowedRoots ? { allowedRoots } : {}),
       permissionEvaluator, sessionMode, planMode, planApproved,
       authorityTurn,
     });

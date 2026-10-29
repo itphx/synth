@@ -213,6 +213,14 @@ export interface ComposerContext {
   /** Файл контекста агента (contextFile). */
   agentContextFile?: string;
   workingDir: string;
+  /**
+   * Корень проекта (`project.workspace`, абсолютный) — если сессия работает во
+   * вторичном каталоге (git-worktree, ADR-114) и он отличается от `workingDir`.
+   *
+   * В `session.info` показываются **оба**: фактический рабочий каталог сессии и
+   * корень проекта, иначе модель считала бы основной checkout «внешним».
+   */
+  projectRoot?: string;
   language: string;
   /** Для блока `[CLASSIFICATION]` (config-gate routingEnabled, ADR-034). */
   routingEnabled: boolean;
@@ -779,7 +787,7 @@ export class SystemPromptComposer {
       key: 'session.info',
       tier: 'context',
       order: 30,
-      content: this._buildSessionContext(session, ctx.workingDir, project, lang),
+      content: this._buildSessionContext(session, ctx.workingDir, project, lang, ctx.projectRoot),
       provenance: session.projectId ? `projects/${session.projectId}` : 'session.info',
     });
 
@@ -1078,15 +1086,23 @@ export class SystemPromptComposer {
     workingDir: string,
     project: Project | null,
     lang: string,
+    projectRoot?: string,
   ): string {
     const lines: string[] = [];
+    const en = lang === 'en';
+    // Корень проекта показываем только если он действительно отличается от
+    // фактического рабочего каталога сессии (worktree, ADR-114).
+    const extraRoot = projectRoot && projectRoot !== workingDir ? projectRoot : undefined;
 
     if (session.projectId) {
       if (project) {
-        lines.push('[ИНФОРМАЦИЯ О СЕССИИ]');
-        lines.push(`Проект: ${project.name}`);
-        lines.push(`ID проекта: ${session.projectId}`);
-        lines.push(`Рабочий каталог: ${project.workspace || workingDir}`);
+        lines.push(en ? '[SESSION INFO]' : '[ИНФОРМАЦИЯ О СЕССИИ]');
+        lines.push(`${en ? 'Project' : 'Проект'}: ${project.name}`);
+        lines.push(`${en ? 'Project ID' : 'ID проекта'}: ${session.projectId}`);
+        lines.push(`${en ? 'Session working directory' : 'Рабочий каталог сессии'}: ${workingDir}`);
+        if (extraRoot) {
+          lines.push(`${en ? 'Project root' : 'Корень проекта'}: ${extraRoot}`);
+        }
 
         const invariants = project.invariants?.trim();
         if (invariants) {
@@ -1095,14 +1111,19 @@ export class SystemPromptComposer {
           lines.push(project.invariants);
         }
       } else {
-        lines.push('[ИНФОРМАЦИЯ О СЕССИИ]');
-        lines.push(`Проект: не найден (id: ${session.projectId})`);
-        lines.push(`Рабочий каталог: ${workingDir}`);
+        lines.push(en ? '[SESSION INFO]' : '[ИНФОРМАЦИЯ О СЕССИИ]');
+        lines.push(en
+          ? `Project: not found (id: ${session.projectId})`
+          : `Проект: не найден (id: ${session.projectId})`);
+        lines.push(`${en ? 'Session working directory' : 'Рабочий каталог сессии'}: ${workingDir}`);
+        if (extraRoot) {
+          lines.push(`${en ? 'Project root' : 'Корень проекта'}: ${extraRoot}`);
+        }
       }
-    } else if (lang === 'en') {
+    } else if (en) {
       lines.push('[SESSION INFO]');
       lines.push('Project: none');
-      lines.push(`Working directory: ${workingDir}`);
+      lines.push(`Session working directory: ${workingDir}`);
       lines.push(
         'Limitations: a plan is unavailable (the plan is bound to a project). '
         + 'File and git tools operate within the working directory. Todo is available.',
@@ -1114,7 +1135,7 @@ export class SystemPromptComposer {
     } else {
       lines.push('[ИНФОРМАЦИЯ О СЕССИИ]');
       lines.push('Проект: отсутствует');
-      lines.push(`Рабочий каталог: ${workingDir}`);
+      lines.push(`Рабочий каталог сессии: ${workingDir}`);
       lines.push(
         'Ограничения: план недоступен (план привязан к проекту). '
         + 'Файловые и git-инструменты работают в рамках рабочего каталога. Todo доступен.',
@@ -1122,6 +1143,38 @@ export class SystemPromptComposer {
       lines.push(
         'Если задача требует длительной работы с файлами, git или планом — предложи пользователю '
         + 'создать проект и перенести сессию в него.',
+      );
+    }
+
+    // Границы периметра — тот же смысл, что в `MODE_POLICY` (`[ГРАНИЦЫ РАБОЧЕГО
+    // КАТАЛОГА]`), но с фактическими путями сессии. Каталог данных инстанса
+    // называем семантически (`agents/`, `secrets/`, …) — реальный `dataDir` в
+    // промпт не подставляем (путь инстанса модели знать не нужно).
+    lines.push('');
+    lines.push(en ? '[WORKSPACE BOUNDARY]' : '[ГРАНИЦЫ РАБОЧЕГО КАТАЛОГА]');
+    if (en) {
+      lines.push(
+        'File, search, shell and git tools work inside the session working directory and the project root.',
+      );
+      lines.push(
+        'The instance data directory (agents/, secrets/, auth/, sessions/, projects/ of other projects) '
+        + 'is outside the perimeter; access to it is only allowed on an explicit user request.',
+      );
+      lines.push(
+        'Use relative paths from the working directory; absolute paths outside the perimeter require '
+        + 'confirmation and are normally denied.',
+      );
+    } else {
+      lines.push(
+        'Файловые, поисковые, shell- и git-инструменты работают внутри рабочего каталога сессии и корня проекта.',
+      );
+      lines.push(
+        'Каталог данных инстанса (agents/, secrets/, auth/, sessions/, projects/ других проектов) — '
+        + 'вне периметра; доступ к нему — только по явной просьбе пользователя.',
+      );
+      lines.push(
+        'Относительные пути указывай от рабочего каталога; абсолютные пути вне периметра потребуют '
+        + 'подтверждения и обычно будут отклонены.',
       );
     }
 

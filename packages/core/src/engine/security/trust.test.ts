@@ -4,6 +4,7 @@ import { ToolCapability } from '@itphx/synth-shared';
 import { getToolTrust } from './trust.js';
 
 const WS = '/tmp/synth-ws';
+const PROJECT = '/tmp/synth-project';
 
 describe('getToolTrust — матрица доверия', () => {
   it('web_fetch → untrusted, источник web, URL', () => {
@@ -115,5 +116,76 @@ describe('getToolTrust — матрица доверия', () => {
 
   it('неизвестный тул → null', () => {
     expect(getToolTrust('unknown_tool', {}, WS)).toBeNull();
+  });
+});
+
+describe('getToolTrust — периметр allowedRoots (ADR-114)', () => {
+  it('read_file в корне проекта: без roots untrusted, с roots trusted', () => {
+    const file = join(PROJECT, 'src', 'a.ts');
+    expect(getToolTrust('read_file', { file_path: file }, WS)?.trust).toBe('untrusted');
+    expect(getToolTrust('read_file', { file_path: file }, WS, undefined, [PROJECT])?.trust)
+      .toBe('trusted');
+  });
+
+  it('write_file в корне проекта с roots → trusted', () => {
+    const t = getToolTrust('write_file', { file_path: 'src/a.ts' }, WS, undefined, [PROJECT]);
+    // Относительный путь резолвится от рабочего каталога — остаётся внутри.
+    expect(t?.trust).toBe('trusted');
+    const inProject = getToolTrust(
+      'write_file',
+      { file_path: join(PROJECT, 'src', 'a.ts') },
+      WS,
+      undefined,
+      [PROJECT],
+    );
+    expect(inProject?.trust).toBe('trusted');
+  });
+
+  it('patch: все пути внутри roots → trusted', () => {
+    const t = getToolTrust(
+      'patch',
+      {
+        edits: [
+          { file_path: join(PROJECT, 'src', 'a.ts'), old_string: 'a', new_string: 'b' },
+          { file_path: 'src/b.ts', old_string: 'c', new_string: 'd' },
+        ],
+      },
+      WS,
+      undefined,
+      [PROJECT],
+    );
+    expect(t?.trust).toBe('trusted');
+    expect(t?.source).toBe('file');
+  });
+
+  it('patch: один путь снаружи → untrusted', () => {
+    const t = getToolTrust(
+      'patch',
+      {
+        edits: [
+          { file_path: join(PROJECT, 'src', 'a.ts'), old_string: 'a', new_string: 'b' },
+          { file_path: '/etc/passwd', old_string: 'c', new_string: 'd' },
+        ],
+      },
+      WS,
+      undefined,
+      [PROJECT],
+    );
+    expect(t?.trust).toBe('untrusted');
+  });
+
+  it('patch без roots: путь в корне проекта → untrusted', () => {
+    const t = getToolTrust(
+      'patch',
+      { edits: [{ file_path: join(PROJECT, 'src', 'a.ts'), old_string: 'a', new_string: 'b' }] },
+      WS,
+    );
+    expect(t?.trust).toBe('untrusted');
+  });
+
+  it('patch: пустой/битый список edits → trusted (нечего оборачивать)', () => {
+    expect(getToolTrust('patch', { edits: [] }, WS)?.trust).toBe('trusted');
+    expect(getToolTrust('patch', { edits: 'nope' }, WS)?.trust).toBe('trusted');
+    expect(getToolTrust('patch', {}, WS)?.trust).toBe('trusted');
   });
 });

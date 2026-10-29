@@ -3,12 +3,12 @@ import { dirname } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
-import { resolvePath, validateInputPath, isSymlinkEscape, pathEscapesWorkspaceResult } from './path-utils.js';
+import { resolvePath, validateInputPath, isSymlinkEscapeInRoots, toolRoots, pathEscapesWorkspaceResult } from './path-utils.js';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
-function generateUnifiedDiff(oldText: string, newText: string, filePath: string): string {
+export function generateUnifiedDiff(oldText: string, newText: string, filePath: string): string {
   const oldLines = oldText.split('\n');
   const newLines = newText.split('\n');
   const result: string[] = [];
@@ -66,7 +66,7 @@ function longestCommonSubsequence(a: string[], b: string[]): [number, number][] 
 export const writeFileTool: ToolDefinition = {
   name: 'write_file',
   description:
-    'Write content to a file. Creates the file if it does not exist, overwrites if it does. Parent directories are created automatically.',
+    'Write content to a file. Creates the file if it does not exist, overwrites if it does. Parent directories are created automatically. Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
   parameters: z.object({
     file_path: z.string().describe('Path to the file to write (absolute or relative to the working directory)'),
     content: z.string().describe('Content to write to the file'),
@@ -82,7 +82,7 @@ export const writeFileTool: ToolDefinition = {
     const params = parsed.data as { file_path: string; content: string };
     validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
-    if (isSymlinkEscape(ctx.workingDir, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+    if (isSymlinkEscapeInRoots(toolRoots(ctx), resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
     // ADR-036: деобфускация в точке потребления — контент может содержать ⟦SYNTH_SECRET_N⟧
     const content = await deobfuscateText(ctx, params.content);
@@ -107,7 +107,10 @@ export const writeFileTool: ToolDefinition = {
 export const editFileTool: ToolDefinition = {
   name: 'edit_file',
   description:
-    'Make exact string replacements in a file. The edit will FAIL if old_string is not unique in the file. Provide enough context to make the match unique.',
+    'Make exact string replacements in a file. The edit will FAIL if old_string is not unique in the file. '
+    + 'read_file prefixes every line with its number ("N: "); that prefix is for reading only — never include it in old_string or new_string. '
+    + 'If the match is ambiguous, provide more surrounding context (or use replace_all). CRLF line endings are preserved when they are present in old_string. '
+    + 'Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
   parameters: z.object({
     file_path: z.string().describe('Path to the file to modify (absolute or relative to the working directory)'),
     old_string: z.string().describe('Text to replace (must be unique in file)'),
@@ -125,7 +128,7 @@ export const editFileTool: ToolDefinition = {
     const params = parsed.data as { file_path: string; old_string: string; new_string: string; replace_all?: boolean };
     validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
-    if (isSymlinkEscape(ctx.workingDir, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+    if (isSymlinkEscapeInRoots(toolRoots(ctx), resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
     // ADR-036: деобфускация в точке потребления — текст патча может содержать ⟦SYNTH_SECRET_N⟧
     const oldString = await deobfuscateText(ctx, params.old_string);
@@ -184,7 +187,7 @@ export const editFileTool: ToolDefinition = {
 
 export const createDirectoryTool: ToolDefinition = {
   name: 'create_directory',
-  description: 'Create a new directory. Creates parent directories as needed.',
+  description: 'Create a new directory. Creates parent directories as needed. Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
   parameters: z.object({
     path: z.string().describe('Path to the directory to create (absolute or relative to the working directory)'),
   }),
@@ -199,7 +202,7 @@ export const createDirectoryTool: ToolDefinition = {
     const params = parsed.data as { path: string };
     validateInputPath(params.path, 'path');
     const resolvedPath = resolvePath(params.path, ctx.workingDir);
-    if (isSymlinkEscape(ctx.workingDir, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+    if (isSymlinkEscapeInRoots(toolRoots(ctx), resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
     await mkdir(resolvedPath, { recursive: true });
     return {
@@ -211,7 +214,7 @@ export const createDirectoryTool: ToolDefinition = {
 
 export const deleteFileTool: ToolDefinition = {
   name: 'delete_file',
-  description: 'Delete a file at the specified path.',
+  description: 'Delete a file at the specified path. Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
   parameters: z.object({
     file_path: z.string().describe('Path to the file to delete (absolute or relative to the working directory)'),
   }),
@@ -226,7 +229,7 @@ export const deleteFileTool: ToolDefinition = {
     const params = parsed.data as { file_path: string };
     validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
-    if (isSymlinkEscape(ctx.workingDir, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+    if (isSymlinkEscapeInRoots(toolRoots(ctx), resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
     await rm(resolvedPath, { force: false });
     return {

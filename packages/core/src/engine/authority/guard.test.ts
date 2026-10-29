@@ -285,6 +285,68 @@ describe('Authority-guard (Ф2) — права только сужаются', (
   });
 });
 
+describe('Authority-guard (Ф2) — периметр сессии (ADR-114)', () => {
+  const PROJECT_ROOT = '/workspace/other-project';
+
+  it('путь в корне проекта при allowedRoots → цель path, грант покрывает (allow)', async () => {
+    const { journal, guard } = makeGuard();
+    const evaluator = new PermissionEvaluator(ALLOW_ALL, { authorityGate: guard.gate });
+
+    const decision = evaluator.check({
+      toolName: 'write_file',
+      params: { file_path: `${PROJECT_ROOT}/src/a.ts`, content: 'x' },
+      workingDir: CWD,
+      allowedRoots: [PROJECT_ROOT],
+      sessionMode: 'act',
+    });
+    await guard.flush();
+
+    expect(decision.action).toBe('allow');
+    const entries = await journal.list();
+    expect(entries[0]!.target).toBe('path:src/a.ts');
+    expect(entries[0]!.effect).toBe('allow');
+  });
+
+  it('тот же путь без allowedRoots → outside (прежнее поведение)', async () => {
+    const { journal, guard } = makeGuard();
+    const evaluator = new PermissionEvaluator(ALLOW_ALL, { authorityGate: guard.gate });
+
+    const decision = evaluator.check({
+      toolName: 'write_file',
+      params: { file_path: `${PROJECT_ROOT}/src/a.ts`, content: 'x' },
+      workingDir: CWD,
+      sessionMode: 'act',
+    });
+    await guard.flush();
+
+    // Внешний путь — дефолт permission-слоя ask.
+    expect(decision.action).toBe('ask');
+    const entries = await journal.list();
+    expect(entries[0]!.target.startsWith('outside:')).toBe(true);
+  });
+
+  it('patch в корне проекта при allowedRoots → path (не outside)', async () => {
+    const { journal, guard } = makeGuard();
+    const evaluator = new PermissionEvaluator(ALLOW_ALL, { authorityGate: guard.gate });
+
+    const decision = evaluator.check({
+      toolName: 'patch',
+      params: {
+        edits: [{ file_path: `${PROJECT_ROOT}/src/a.ts`, old_string: 'a', new_string: 'b' }],
+      },
+      workingDir: CWD,
+      allowedRoots: [PROJECT_ROOT],
+      sessionMode: 'act',
+    });
+    await guard.flush();
+
+    expect(decision.action).toBe('allow');
+    const entries = await journal.list();
+    expect(entries[0]!.action).toBe('write');
+    expect(entries[0]!.target).toBe('path:src/a.ts');
+  });
+});
+
 describe('Authority-guard (Ф2) — журнал и отказоустойчивость', () => {
   it('enforced-запись не содержит permissionEffect', async () => {
     const { journal, guard } = makeGuard();

@@ -1,5 +1,10 @@
 export { AgentRegistry } from './registry.js';
 export { isModeApplicable } from './mode.js';
+export {
+  LEGACY_AGENT_ROLE_ALIASES,
+  resolveAgentRoleAlias,
+  migrateLegacyStoredAgents,
+} from './migrations.js';
 
 /**
  * Агент по умолчанию при первом развёртывании: стартовый агент новой сессии

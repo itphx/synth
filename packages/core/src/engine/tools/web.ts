@@ -590,8 +590,10 @@ async function fetchMediaAttachment(
 export const webFetchTool: ToolDefinition = {
   name: 'web_fetch',
   description:
-    'Fetch content from URLs and convert to readable text. Supports up to 5 URLs at once. '
-    + 'Use this to retrieve and analyze web content.',
+    'Fetch content from URLs and convert it to readable text (read-only: it does not change anything on disk). '
+    + `Supports up to ${MAX_FETCH_URLS} URLs at once (format defaults to markdown; text/html are also available). `
+    + 'Use this to retrieve and analyze web content. Long pages are truncated to a preview (a truncation marker is appended). '
+    + 'By default binary responses (image/pdf/audio/video) are described, not decoded; set include_media=true to download them and attach them to the dialog so the model sees them on the next step.',
   parameters: z.object({
     url: z.string().optional().describe('The URL to fetch content from'),
     urls: z.array(z.string()).max(MAX_FETCH_URLS).optional()

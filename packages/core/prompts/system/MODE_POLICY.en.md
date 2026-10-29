@@ -25,3 +25,14 @@ Some tools may be **unavailable** at the moment:
   file/shell/git tools are unavailable until a project is created/attached and its
   working directory is set; do this via `project_create`/`project_attach` and
   `project_workspace_set`, then continue the work.
+
+[WORKSPACE BOUNDARY]
+
+File, search, shell and git tools work only inside the project working directory:
+- use **relative** paths (relative to the project working directory); an absolute
+  path outside it triggers a confirmation request and is normally denied;
+- instance service directories (data, roles, agent definitions) are not project
+  files — do not read them with file tools;
+- get instance/project/model facts with `get_project_info`, `list_models`, `skill`
+  and similar tools;
+- if you need a file outside the working directory, ask the user.

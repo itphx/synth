@@ -181,6 +181,9 @@ export function mountStandaloneRoutes(
             },
           }
         : {}),
+      // ADR-106 Ф3: HTTP-ответ на подтверждение принимает решение через тот же
+      // реестр, что и WS-кадр `permission_reply`.
+      ...(deps.approvalRegistry ? { approvalRegistry: deps.approvalRegistry } : {}),
     },
     {
       resolveDefaultAgent: getDefaultAgentId,

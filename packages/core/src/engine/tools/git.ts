@@ -2,7 +2,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition, ToolContext, ToolResult } from '@itphx/synth-shared';
-import { resolvePath, validateInputPath, isSymlinkEscape, isInsideReal, pathEscapesWorkspaceResult } from './path-utils.js';
+import { resolvePath, validateInputPath, isSymlinkEscapeInRoots, toolRoots, isInsideReal, pathEscapesWorkspaceResult } from './path-utils.js';
 import { deobfuscateArgs } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { resolveRepoGitEnv, resolveProjectRepoEntry } from './git-ssh.js';
@@ -119,7 +119,7 @@ function resolveGitCwd(
   }
   if (params.path !== undefined) validateInputPath(params.path, 'path');
   const resolved = resolvePath(params.path, ctx.workingDir);
-  if (isSymlinkEscape(ctx.workingDir, resolved)) return pathEscapesWorkspaceResult(resolved);
+  if (isSymlinkEscapeInRoots(toolRoots(ctx), resolved)) return pathEscapesWorkspaceResult(resolved);
   return resolved;
 }
 

@@ -9,6 +9,8 @@
  *    подтверждений (`ApprovalRegistry.claim`). Перепись: все места публикации
  *    `permission.replied` в `packages/core/src` и `packages/backend/src`
  *    перечислены явно (`DECISION_POINTS`); новый путь без реестра роняет тест.
+ *    HTTP-ответ на подтверждение (`POST /api/v2/sessions/:id/permissions/:approvalId`,
+ *    для SSE/не-WS клиентов) — тоже место решения и тоже в списке.
  *    (Инструментации «по смонтированному приложению» здесь нет: WS-обработчик
  *    не является Hono-роутом, поэтому перепись снимается по исходникам — так же,
  *    как инвариант 17 требует перечислять места, а не «чинить по списку».)
@@ -268,6 +270,8 @@ function replyFrame(actor: Actor, approvalId: string, digest?: string): string {
 const DECISION_POINTS = [
   'packages/backend/src/app/listen.ts',
   'packages/core/src/server/app/ws-events.ts',
+  // HTTP-ответ на подтверждение (SSE/не-WS клиенты) — тот же реестр.
+  'packages/core/src/server/routes/sessions.ts',
 ];
 
 /** Корень монорепозитория (по расположению этого файла). */

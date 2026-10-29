@@ -200,3 +200,74 @@ describe('external_directory — граничные случаи путей', ()
     expect(check('list_directory', { path: '/workspace' }).action).toBe('ask');
   });
 });
+
+/**
+ * Периметр сессии в git-worktree (ADR-114): `allowedRoots` — дополнительные
+ * абсолютные корни, внутри которых путь внешним **не** считается. Без него
+ * поведение прежнее (fail-closed `ask`).
+ */
+describe('external_directory — allowedRoots (сессия в worktree)', () => {
+  const WORKTREE = '/workspaces/project/.worktrees/feat-x';
+  const PROJECT_ROOT = '/workspaces/project';
+
+  function checkRoots(
+    roots: readonly string[] | undefined,
+    filePath: string,
+    opts: { sessionMode?: SessionMode } = {},
+  ) {
+    return new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 }).check({
+      toolName: 'read_file',
+      params: { file_path: filePath },
+      workingDir: WORKTREE,
+      ...(roots ? { allowedRoots: roots } : {}),
+      sessionMode: opts.sessionMode ?? 'act',
+      planMode: 'auto',
+      planApproved: false,
+    });
+  }
+
+  it('без allowedRoots путь в корне проекта → ask', () => {
+    const d = checkRoots(undefined, join(PROJECT_ROOT, 'src', 'main.ts'));
+    expect(d.action).toBe('ask');
+    expect(d.matchedRule).toBe('external_directory.default');
+  });
+
+  it('с allowedRoots путь в корне проекта → allow', () => {
+    const d = checkRoots([PROJECT_ROOT], join(PROJECT_ROOT, 'src', 'main.ts'));
+    expect(d.action).toBe('allow');
+  });
+
+  it('с allowedRoots путь внутри worktree по-прежнему allow', () => {
+    const d = checkRoots([PROJECT_ROOT], join(WORKTREE, 'src', 'main.ts'));
+    expect(d.action).toBe('allow');
+  });
+
+  it('с allowedRoots путь вне обоих корней → ask (fail-closed не ослаблен)', () => {
+    const d = checkRoots([PROJECT_ROOT], '/etc/hosts');
+    expect(d.action).toBe('ask');
+    expect(d.matchedRule).toBe('external_directory.default');
+  });
+
+  it('с allowedRoots в plan-режиме путь вне периметра → deny (как раньше)', () => {
+    const d = checkRoots([PROJECT_ROOT], '/etc/hosts', { sessionMode: 'plan' });
+    expect(d.action).toBe('deny');
+  });
+
+  it('явное правило external_directory сохраняет приоритет и для путей внутри корня проекта', () => {
+    const cfg: PermissionConfig = {
+      rules: { external_directory: { [`${PROJECT_ROOT}/secrets/*`]: 'deny' } },
+      askTimeoutMs: 30_000,
+    };
+    const d = new PermissionEvaluator(cfg).check({
+      toolName: 'read_file',
+      params: { file_path: join(PROJECT_ROOT, 'secrets', 'k.txt') },
+      workingDir: WORKTREE,
+      allowedRoots: [PROJECT_ROOT],
+      sessionMode: 'act',
+      planMode: 'auto',
+      planApproved: false,
+    });
+    // Внутри периметра правило external_directory не применяется (путь не внешний).
+    expect(d.action).toBe('allow');
+  });
+});

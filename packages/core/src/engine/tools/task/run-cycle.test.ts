@@ -667,7 +667,7 @@ describe('run-cycle — permission-слой саб-агента (ADR-029)', () =
     expect(saved.settings.permission!.rules.noop).toBe('allow');
   });
 
-  it('ask denied пользователем: тул не исполняется, цикл прерывается stopped_by_deny', async () => {
+  it('ask denied пользователем: тул не исполняется, но цикл продолжается (модель получает tool_result)', async () => {
     const parent = await sessionManager.createSession({ title: 'P' });
     const bus = new EventBus();
     bus.subscribe(parent.id, (e) => {
@@ -680,7 +680,7 @@ describe('run-cycle — permission-слой саб-агента (ADR-029)', () =
     });
     const { provider, calls } = scriptedProvider([
       [toolCallChunk('noop')],
-      [{ isFinal: true, content: 'should not happen' }],
+      [{ isFinal: true, content: 'продолжил после отказа' }],
     ]);
     const { registry, counters } = makeRegistry({ noop: () => ({ content: 'ok' }) });
 
@@ -693,8 +693,37 @@ describe('run-cycle — permission-слой саб-агента (ADR-029)', () =
     }));
 
     expect(counters.noop).toBeUndefined();
-    // Вторая LLM-итерация не запускается — отказ прерывает цикл.
-    expect(calls()).toBe(1);
+    // Вторая LLM-итерация запускается — отказ вернулся модели как tool_result.
+    expect(calls()).toBe(2);
+    expect(result.content).toContain('продолжил после отказа');
+  });
+
+  it('ask denied + пустой финальный ответ → фоллбек task.stopped_by_deny', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const bus = new EventBus();
+    bus.subscribe(parent.id, (e) => {
+      if (e.type === 'permission.asked') {
+        bus.publish(parent.id, 'permission.replied', {
+          approval_id: (e.data as Record<string, unknown>).approval_id,
+          action: 'deny',
+        });
+      }
+    });
+    const { provider, calls } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [{ isFinal: true, content: '' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider, eventBus: bus, sessionManager, sessionId: parent.id, toolRegistry: registry,
+        permissionConfig: { rules: { noop: 'ask' }, askTimeoutMs: 1000 },
+      }),
+      parentSessionId: parent.id,
+    }));
+
+    expect(calls()).toBe(2);
     expect(result.content).toContain('the user denied the tool execution request');
   });
 

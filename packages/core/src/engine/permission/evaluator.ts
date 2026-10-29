@@ -1,7 +1,7 @@
 import { relative } from 'node:path';
 import { globMatch, ToolCapability } from '@itphx/synth-shared';
 import type { PermissionAction, PermissionConfig, PermissionDecision, PermissionRule, PlanMode, SessionMode, McpServerToolSettings, McpToolAvailability, ToolSource } from '@itphx/synth-shared';
-import { resolvePath, isLexicallyInside, isInsideReal } from '../tools/path-utils.js';
+import { resolvePath, isLexicallyInside, isInsideReal, isInsideAnyRoot } from '../tools/path-utils.js';
 import { t as sm } from '../system-messages.js';
 import { computeToolAvailability, isWorkspaceDependentTool, isToolAvailableInDegradedMode } from './availability.js';
 import { isStorageDegraded } from './storage-state.js';
@@ -12,7 +12,17 @@ import {
   TOOL_RUNTIME_DEP,
   type RuntimeDeps,
 } from '../tools/runtime-deps.js';
-import { getToolGroups, TOOL_PATH_PARAMS, PIPELINE_WRITE_TOOLS, SCHEDULE_WRITE_TOOLS } from './groups.js';
+import {
+  extractPathParams,
+  getToolGroups,
+  PIPELINE_WRITE_TOOLS,
+  SCHEDULE_WRITE_TOOLS,
+} from './groups.js';
+
+// Реэкспорт: историческое место `extractPathParams` — этот модуль (его
+// импортировали тесты и внешние потребители). Реализация — в `groups.ts`,
+// чтобы Authority-слой и trust не тянули permission-evaluator.
+export { extractPathParams };
 import type {
   AuthorityGateHook,
   AuthorityGateResult,
@@ -28,6 +38,14 @@ export interface PermissionCheckInput {
   toolName: string;
   params: Record<string, unknown>;
   workingDir: string;
+  /**
+   * Дополнительные абсолютные корни perimeter'а сессии (например
+   * `project.workspace` для сессии в git-worktree, ADR-114): путь внутри них
+   * **не** считается внешним и не уходит в ветку `external_directory`.
+   *
+   * Сами пути из параметров по-прежнему резолвятся от `workingDir`.
+   */
+  allowedRoots?: readonly string[];
   capabilities?: readonly string[];
   /**
    * ADR-090: источник тула (`ToolDefinition.source`).
@@ -254,6 +272,7 @@ export class PermissionEvaluator {
         toolName: input.toolName,
         params: input.params,
         workingDir: input.workingDir,
+        ...(input.allowedRoots ? { allowedRoots: input.allowedRoots } : {}),
         capabilities: input.capabilities,
         toolSource: input.toolSource,
         sessionMode: input.sessionMode,
@@ -333,6 +352,7 @@ export class PermissionEvaluator {
         toolName: input.toolName,
         params: input.params,
         workingDir: input.workingDir,
+        ...(input.allowedRoots ? { allowedRoots: input.allowedRoots } : {}),
         capabilities: input.capabilities,
         toolSource: input.toolSource,
         sessionMode: input.sessionMode,
@@ -508,11 +528,8 @@ export class PermissionEvaluator {
     // Проверяем СЫРЫЕ параметры-пути (до resolvePath), чтобы checkPath мог раскрыть
     // `~`, `$HOME`, `$PWD` и относительные пути (extractPaths резолвит без `~`).
     if (protectedPaths && protectedPathsEnabled !== false) {
-      const rawPaths: string[] = [];
-      for (const name of (TOOL_PATH_PARAMS[toolName] ?? [])) {
-        const v = params[name];
-        if (typeof v === 'string' && v.trim() !== '') rawPaths.push(v);
-      }
+      // Сырые пути (включая вложенные `edits[].file_path` у `patch`) — до resolvePath.
+      const rawPaths: string[] = extractPathParams(toolName, params);
       for (const p of rawPaths) {
         const cp = checkPath(p, workingDir, protectedPaths);
         if (cp.action === 'deny') {
@@ -570,6 +587,11 @@ export class PermissionEvaluator {
   ): PermissionDecision {
     const { toolName, params, workingDir, capabilities, toolSource, sessionMode, planMode, planApproved } = input;
     const { paths, isFile, shellCommand } = ctx;
+    // Perimeter сессии: рабочий каталог + дополнительные корни (`allowedRoots`).
+    // Путь внутри любого из них внешним не считается (сессия в worktree, ADR-114).
+    const roots: readonly string[] = input.allowedRoots && input.allowedRoots.length > 0
+      ? [workingDir, ...input.allowedRoots]
+      : [workingDir];
 
     // ADR-046 §8.1: per-skill permissions — правило `skill` (строка или glob по
     // имени скилла). `deny` скрывает скилл из каталога; `ask` спрашивает.
@@ -596,7 +618,7 @@ export class PermissionEvaluator {
     if (isFile) {
       const extRule = this._rules['external_directory'];
       for (const p of paths) {
-        if (isInsideWorkingDir(p, workingDir)) continue;
+        if (isInsideAnyRoot(p, roots)) continue;
         const d = extRule !== undefined
           ? this._resolveRule('external_directory', extRule, [p], workingDir)
           : undefined;
@@ -749,23 +771,29 @@ export function extractPaths(
   params: Record<string, unknown>,
   workingDir: string,
 ): string[] {
-  const paramNames = TOOL_PATH_PARAMS[toolName];
-  if (!paramNames || paramNames.length === 0) return [];
-  const result: string[] = [];
-  for (const name of paramNames) {
-    const value = params[name];
-    if (typeof value === 'string' && value.trim() !== '') {
-      result.push(resolvePath(value, workingDir));
-    }
-  }
-  return result;
+  return extractPathParams(toolName, params).map((value) => resolvePath(value, workingDir));
 }
 
-/** Совпадает ли путь с паттерном (абсолютный или относительный от workingDir). */
-export function matchPathPattern(pattern: string, absolutePath: string, workingDir: string): boolean {
+/**
+ * Совпадает ли путь с паттерном.
+ *
+ * Паттерн проверяется по абсолютному пути, затем — по относительному от
+ * `workingDir` и от дополнительных корней периметра (`allowedRoots`, ADR-114:
+ * сессия в worktree — корень проекта тоже часть периметра). Так правило
+ * `read: { 'src/*': 'allow' }` покрывает файл в корне проекта, даже если
+ * рабочий каталог сессии — каталог worktree.
+ */
+export function matchPathPattern(
+  pattern: string,
+  absolutePath: string,
+  workingDir: string,
+  allowedRoots?: readonly string[],
+): boolean {
   if (globMatch(pattern, absolutePath)) return true;
-  if (isInsideWorkingDir(absolutePath, workingDir)) {
-    const rel = relative(workingDir, absolutePath);
+  const dirs = [workingDir, ...(allowedRoots ?? [])];
+  for (const dir of dirs) {
+    if (!isInsideWorkingDir(absolutePath, dir)) continue;
+    const rel = relative(dir, absolutePath).split('\\').join('/');
     if (globMatch(pattern, rel)) return true;
   }
   return false;

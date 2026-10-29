@@ -141,7 +141,9 @@ describe('ADR-077: точки исполнения ходят в порт с п�
     expect(req.command.kind).toBe('argv');
     expect(req.command).toMatchObject({ kind: 'argv', file: 'rg' });
     const args = (req.command as { args?: string[] }).args ?? [];
-    expect(args.slice(0, 5)).toEqual(['--line-number', '--no-heading', '--color', 'never', '-n']);
+    // `-n` больше не дублируется: ровно один флаг номера строки, затем
+    // явный регистр (default — case-sensitive).
+    expect(args.slice(0, 5)).toEqual(['--line-number', '--no-heading', '--color', 'never', '--case-sensitive']);
     expect(args[args.length - 2]).toBe('hit');
     expect(args[args.length - 1]).toBe(tmpDir);
     expect(req.timeoutMs).toBe(30_000);

@@ -1359,6 +1359,7 @@ export const dict = {
   'permission.bar.noTimeout': 'ожидание без таймаута',
   'permission.bar.timeoutTitle': 'Время до авто-отклонения запроса',
   'permission.bar.grantedForSession': 'Инструмент {tool} разрешён для сессии',
+  'permission.bar.replyFailed': 'Не удалось отправить ответ — запрос остался открытым',
 
   // Вопросы пользователю (этап 1 roadmap 0.13 — блок 1.3): док над вводом.
   'question.dock.title': 'Агент задал вопрос',
@@ -2744,11 +2745,27 @@ export const dict = {
   'fs.replace_multiple': 'Ошибка: найдено {count} совпадений заменяемой строки. Уточните контекст для уникального совпадения.',
   'fs.dir_created': 'Каталог создан: {path}',
   'fs.file_deleted': 'Файл удалён: {path}',
+  'fs.patch_applied': 'Патч применён: файлов — {files}, замен — {replacements}',
+  'fs.patch_file_line': '{path}: {count} замен',
+  'fs.patch_not_found': 'Ошибка: правка №{index} не нашла свой текст в файле «{path}»',
+  'fs.patch_multiple': 'Ошибка: правка №{index} нашла {count} совпадений в файле «{path}». Уточните контекст или включите replace_all.',
+  'fs.patch_write_failed': 'Ошибка: не удалось записать результат патча для «{path}»: {error}',
+  'fs.patch_file_missing': 'Ошибка: файл для патча не найден: {path}',
+  'fs.patch_not_regular': 'Ошибка: цель патча — не обычный файл: {path}',
+  'fs.patch_too_large': 'Ошибка: файл «{path}» слишком велик для атомарного патча ({bytes} байт, предел {limit})',
+  'fs.patch_binary': 'Нельзя править бинарный файл: {path}',
 
   // --- Чтение файлов (fs-read) ---
   'fsread.empty_directory': '(пустой каталог)',
+  'fsread.empty_file': '(пустой файл)',
   'fsread.no_files': '(файлы не найдены)',
   'fsread.glob_error': '(ошибка поиска файлов)',
+  'fsread.truncated': '... (показаны первые {count} строк; файл больше)',
+  'fsread.directory_truncated': '... (показаны первые {count} записей; в каталоге есть ещё)',
+  'fsread.line_truncated': '... (строка обрезана)',
+  'fsread.offset_out_of_range': '(смещение {offset} вне диапазона: в файле {total} строк)',
+  'fsread.binary': 'Нельзя прочитать бинарный файл: {path}. Чтобы показать модели изображение или PDF, используйте attach_workspace_file; для остальных байтов — execute_shell (file, xxd, head -c).',
+  'fsread.glob_truncated': '... (показаны первые {count} из {total} файлов; уточните шаблон или увеличьте лимит)',
 
   // --- Веб (web_fetch / web_search) ---
   'web.duckduckgo_blocked': 'DuckDuckGo временно блокирует запросы (anti-bot защита)',
@@ -2768,7 +2785,7 @@ export const dict = {
 
   // --- Поиск ---
   'search.no_matches': '(совпадений не найдено)',
-  'search.matches_truncated': '... (показаны 200 из {total} совпадений)',
+  'search.matches_truncated': '... (показаны {shown} из {total} совпадений)',
   'search.rg_not_installed': '(rg (ripgrep) не установлен. Поиск недоступен)',
   'search.error': 'Ошибка поиска: {error}',
 
@@ -2897,6 +2914,7 @@ export const dict = {
   'permission.rule_prefix_matched': 'правило «{key}.*» → {action}',
   'permission.rule_command_matched': 'правило «{key}.{pattern}» → {action} (команда: {command})',
   'permission.ask_timeout': 'истекло время ожидания подтверждения',
+  'permission.ask_cancelled': 'отменено пользователем',
   'permission.ask_no_subscribers': 'нет подключённого пользователя для подтверждения',
   'permission.ask_denied': 'отклонено пользователем',
   'permission.authority_denied_unknown': 'Действие «{action}» не покрыто слоем полномочий (неизвестное действие или цель) — отказано',

@@ -8,7 +8,11 @@ import { z } from 'zod';
 export const taskParametersSchema = z.object({
   description: z.string().describe('A short (3-5 words) description of the task'),
   prompt: z.string().describe('The task for the subagent to perform'),
-  subagent_type: z.string().describe('Type of subagent: "general" or "explore"'),
+  subagent_type: z.string().describe(
+    'Subagent type from the agent registry: any agent whose mode includes "subagent" '
+    + '(for example general, explore, fixer, tester, researcher, security-auditor). '
+    + 'An unknown type returns the list of available types',
+  ),
   task_id: z.string().optional().describe('ID for resuming an existing subagent session'),
   background: z.boolean().optional()
     .describe('Run the subagent in the background and return control immediately; you will be notified automatically — do not poll its status'),

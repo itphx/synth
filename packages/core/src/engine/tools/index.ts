@@ -2,6 +2,8 @@ import type { ToolDefinition } from '@itphx/synth-shared';
 import { ToolRegistry } from './registry.js';
 import { readFileTool, listDirectoryTool, globTool } from './fs-read.js';
 import { writeFileTool, editFileTool, createDirectoryTool, deleteFileTool } from './fs-write.js';
+// Атомарная мультифайловая правка в формате JSON-правок (всё-или-ничего).
+import { patchTool } from './patch.js';
 import { executeShellTool } from './shell.js';
 import { grepFilesTool } from './search.js';
 import { webFetchTool, webSearchTool } from './web.js';
@@ -95,6 +97,8 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   globTool,
   writeFileTool,
   editFileTool,
+  // Атомарная мультифайловая правка: JSON-правки, всё-или-ничего
+  patchTool,
   createDirectoryTool,
   deleteFileTool,
   executeShellTool,

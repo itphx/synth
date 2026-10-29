@@ -441,7 +441,8 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `queued`/`saved`/`ambiguous`/`no_attachment`/`exists`/`save_failed`) и `models.list.*`
   (`header`/`current`/`defaults`/`skipped`/`empty`/`provider_unknown`/`deps_unavailable`/
   `unavailable`) — тул `list_models`. `session.role_tool_blocked` (`{tool}`, `{agent}`) —
-  ролевой deny: en-текст в core `engine/system-messages.ts`, ru — в UI-словаре
+  фоллбек-текст ролевого deny (ход больше не обрывается отказом; ключ — только при пустом
+  финальном ответе модели): en-текст в core `engine/system-messages.ts`, ru — в UI-словаре
   (`messages/ru.ts`), в en-словаре UI её нет намеренно (как у прочих engine-строк).
 
 ## Тесты и сборка

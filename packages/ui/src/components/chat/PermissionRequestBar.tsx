@@ -47,9 +47,23 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
   const toolDisplayName = getToolDisplayName(current.toolName)
   const hasDetails = !!current.reason || Object.keys(current.params).length > 0
 
-  const handleAction = (approved: boolean, once?: boolean) => {
+  const handleAction = async (approved: boolean, once?: boolean) => {
+    const sent = await useTransportStore
+      .getState()
+      .sendPermissionReply(sessionId, current.approvalId, approved, once)
+    if (!sent) {
+      // Ответ не доставлен (сеть/HTTP): запрос остаётся открытым — убирать
+      // полосу нельзя, иначе пользователь думает, что ответил, а ask висит
+      // до таймаута.
+      notify({
+        text: t('permission.bar.replyFailed'),
+        type: 'error',
+        category: 'system',
+        sessionId,
+      })
+      return
+    }
     usePermissionStore.getState().removeRequest(sessionId, current.approvalId)
-    useTransportStore.getState().sendPermissionReply(sessionId, current.approvalId, approved, once)
     if (approved && once === false) {
       notify({
         text: t('permission.bar.grantedForSession', { tool: toolDisplayName }),
@@ -70,9 +84,20 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
     return `${m}:${String(s).padStart(2, '0')}`
   }
 
-  const handleHold = () => {
+  const handleHold = async () => {
+    const sent = await useTransportStore.getState().sendPermissionHold(sessionId, current.approvalId)
+    if (!sent) {
+      // «Остановить таймер» не доставлен — локально таймер не снимаем (иначе
+      // UI думает, что запрос без таймаута, а бэкенд его сбросит).
+      notify({
+        text: t('permission.bar.replyFailed'),
+        type: 'error',
+        category: 'system',
+        sessionId,
+      })
+      return
+    }
     usePermissionStore.getState().holdRequest(sessionId, current.approvalId)
-    useTransportStore.getState().sendPermissionHold(sessionId, current.approvalId)
   }
 
   return (

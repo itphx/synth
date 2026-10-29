@@ -21,7 +21,7 @@ const READ_TOOLS = [
   'list_models',
   'send_attachment',
 ];
-const WRITE_TOOLS = ['write_file', 'edit_file', 'create_directory', 'delete_file', 'save_attachment'];
+const WRITE_TOOLS = ['write_file', 'edit_file', 'create_directory', 'delete_file', 'save_attachment', 'patch'];
 // ADR-076: `ssh_keys_list` — метаданные SSH-ключей инстанса. Группа `git_read`
 // (capability `git_read`, как у остальных читающих git-тулов), поэтому в
 // plan-режиме тул разрешён; к рабочему каталогу проекта он не привязан
@@ -231,6 +231,45 @@ export const TOOL_PATH_PARAMS: Record<string, string[]> = {
   git_stash: ['path'],
 };
 
+/**
+ * Сырые файловые параметры тула (до `resolvePath`).
+ *
+ * Обычный случай — плоская карта `TOOL_PATH_PARAMS`. Особый случай — тул
+ * `patch`: пути лежат во вложенном массиве `edits[].file_path`, поэтому
+ * плоская карта их не описывает. Ветка нужна, чтобы файловые паттерны правил,
+ * `external_directory`, `protected_paths`, Authority-слой и матрица доверия
+ * работали для `patch` так же, как для `write_file`/`edit_file`.
+ *
+ * Функция живёт здесь, а не в `evaluator.ts`: её используют и permission-слой,
+ * и Authority-слой (`authority/target.ts`), и trust (`security/trust.ts`), а
+ * `groups.ts` не импортирует движок — цикла зависимостей нет.
+ */
+export function extractPathParams(
+  toolName: string,
+  params: Record<string, unknown>,
+): string[] {
+  if (toolName === 'patch') {
+    const edits = params.edits;
+    if (!Array.isArray(edits)) return [];
+    const result: string[] = [];
+    for (const edit of edits) {
+      const value = (edit as { file_path?: unknown } | null | undefined)?.file_path;
+      if (typeof value === 'string' && value.trim() !== '') result.push(value);
+    }
+    return result;
+  }
+  const paramNames = TOOL_PATH_PARAMS[toolName];
+  if (!paramNames || paramNames.length === 0) return [];
+  const result: string[] = [];
+  for (const name of paramNames) {
+    const value = params[name];
+    if (typeof value === 'string' && value.trim() !== '') {
+      result.push(value);
+    }
+  }
+  return result;
+}
+
 /** Группы, к которым принадлежит тул (по имени и по capabilities). */
 export function getToolGroups(
   toolName: string,
@@ -274,5 +313,7 @@ export function getToolGroups(
 
 /** Есть ли у тула файловые параметры (read/edit/external_directory имеют смысл). */
 export function isFileTool(toolName: string): boolean {
+  // `patch` несёт пути во вложенном `edits[]` — плоской карты TOOL_PATH_PARAMS нет.
+  if (toolName === 'patch') return true;
   return (TOOL_PATH_PARAMS[toolName]?.length ?? 0) > 0;
 }

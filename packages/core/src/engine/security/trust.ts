@@ -8,8 +8,8 @@
  * classify_conversation).
  */
 import { ToolCapability } from '@itphx/synth-shared';
-import { resolvePath } from '../tools/path-utils.js';
-import { isInsideWorkingDir } from '../permission/evaluator.js';
+import { resolvePath, isInsideAnyRoot } from '../tools/path-utils.js';
+import { extractPathParams } from '../permission/groups.js';
 import type { TrustLevel } from './prompt-injection.js';
 
 export interface ToolTrustInfo {
@@ -69,9 +69,18 @@ const FILE_TOOLS: Record<string, string> = {
   delete_file: 'file_path',
 };
 
-function fileTrust(pathParam: string | undefined, workingDir: string): TrustLevel {
+function fileTrust(
+  pathParam: string | undefined,
+  workingDir: string,
+  allowedRoots?: readonly string[],
+): TrustLevel {
   const resolved = resolvePath(pathParam, workingDir);
-  return isInsideWorkingDir(resolved, workingDir) ? 'trusted' : 'untrusted';
+  // Периметр — рабочий каталог + дополнительные корни (ADR-114: корень проекта
+  // у сессии в git-worktree); путь в любом из них — доверенный.
+  const roots = allowedRoots && allowedRoots.length > 0
+    ? [workingDir, ...allowedRoots]
+    : [workingDir];
+  return isInsideAnyRoot(resolved, roots) ? 'trusted' : 'untrusted';
 }
 
 /**
@@ -83,6 +92,7 @@ export function getToolTrust(
   params: Record<string, unknown>,
   workingDir: string,
   capabilities?: ToolCapability[],
+  allowedRoots?: readonly string[],
 ): ToolTrustInfo | null {
   if (SYSTEM_TOOLS.has(toolName)) return null;
 
@@ -124,11 +134,22 @@ export function getToolTrust(
     return { trust: 'trusted', source: 'project', attrs: {} };
   }
 
+  // `patch` — мультифайловая правка: все `edits[].file_path` должны быть в
+  // периметре. Пустой/битый список — доверенный (нечего оборачивать).
+  if (toolName === 'patch') {
+    const pathStrs = extractPathParams('patch', params);
+    if (pathStrs.length === 0) return { trust: 'trusted', source: 'file', attrs: {} };
+    const trust: TrustLevel = pathStrs.every((p) => fileTrust(p, workingDir, allowedRoots) === 'trusted')
+      ? 'trusted'
+      : 'untrusted';
+    return { trust, source: 'file', attrs: { PATH: pathStrs.join(', ') } };
+  }
+
   const filePathParam = FILE_TOOLS[toolName];
   if (filePathParam) {
     const raw = params[filePathParam];
     const pathStr = typeof raw === 'string' ? raw : undefined;
-    const trust = fileTrust(pathStr, workingDir);
+    const trust = fileTrust(pathStr, workingDir, allowedRoots);
     return {
       trust,
       source: 'file',

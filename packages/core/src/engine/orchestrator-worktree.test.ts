@@ -112,6 +112,8 @@ function makeUserMessage(content = 'выполни задачу'): Message {
 /** Снимок контекста тула, в котором был вызван зонд `probe_cwd`. */
 interface ProbeCall {
   workingDir: string;
+  /** ADR-114: периметр сессии — корень проекта рядом с каталогом worktree. */
+  allowedRoots?: string[];
   worktreeId?: string;
   worktreeRepoPath?: string;
 }
@@ -153,6 +155,7 @@ describe('ChatOrchestrator — per-session cwd привязки к worktree (ADR
       async execute(_args, ctx: ToolContext) {
         probeCalls.push({
           workingDir: ctx.workingDir,
+          allowedRoots: ctx.allowedRoots,
           worktreeId: ctx.worktreeId,
           worktreeRepoPath: ctx.worktreeRepoPath,
         });
@@ -261,6 +264,9 @@ describe('ChatOrchestrator — per-session cwd привязки к worktree (ADR
     // реестра git по `worktreeRepoPath`).
     expect(probeCalls[0]!.worktreeId).toBe('wkt_test');
     expect(probeCalls[0]!.worktreeRepoPath).toBe('.');
+    // Периметр сессии: каталог worktree **или** корень проекта — файловые тулы
+    // считают «своими» оба (основной checkout не «внешний»).
+    expect(probeCalls[0]!.allowedRoots).toEqual([normalize(projectWorkspace)]);
   });
 
   it('каталог привязки исчез: ход завершается управляемой ошибкой, повтор не предлагается', async () => {
@@ -387,5 +393,7 @@ describe('ChatOrchestrator — per-session cwd привязки к worktree (ADR
     // Привязки нет — и тулы её не видят (прежнее поведение).
     expect(probeCalls[0]!.worktreeId).toBeUndefined();
     expect(probeCalls[0]!.worktreeRepoPath).toBeUndefined();
+    // Корень проекта не дублируется: рабочий каталог уже совпадает с ним.
+    expect(probeCalls[0]!.allowedRoots).toBeUndefined();
   });
 });

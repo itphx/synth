@@ -129,8 +129,6 @@ describe('runProcessFinalize', () => {
       finalContent: 'ответ модели',
       fallbackI18n: undefined,
       hadDeny: false,
-      stopAfterDeny: false,
-      denyStopReason: undefined,
       toolIteration: 1,
       maxIterations: 10,
       lastIterationPromptChars: 400,
@@ -290,37 +288,22 @@ describe('runProcessFinalize', () => {
       expect(published[0]!.data).toMatchObject({ content: 'готово', status: 'completed' });
     });
 
-    it('deny: контент остановки, флаг stopped_by_deny и причина в событии', async () => {
+    it('deny без финального текста → denied_blocked; поля stopped_by_deny/deny_reason не публикуются', async () => {
       const sessionId = await makeSession();
       const deps = makeDeps();
 
       await runProcessFinalize(
         makeArgs(sessionId),
-        makeState({ finalContent: '', stopAfterDeny: true, denyStopReason: 'the user denied the request' }),
+        makeState({ finalContent: '', hadDeny: true }),
         deps,
       );
 
       expect(published[0]!.data).toMatchObject({
-        content: sm('session.stopped', { reason: 'the user denied the request' }),
+        content: sm('session.denied_blocked'),
         status: 'stopped',
-        stopped_by_deny: true,
-        deny_reason: 'the user denied the request',
       });
-    });
-
-    it('deny без причины → дефолтная причина', async () => {
-      const sessionId = await makeSession();
-      const deps = makeDeps();
-
-      await runProcessFinalize(
-        makeArgs(sessionId),
-        makeState({ finalContent: '', stopAfterDeny: true, denyStopReason: undefined }),
-        deps,
-      );
-
-      expect(published[0]!.data.content).toBe(
-        sm('session.stopped', { reason: sm('session.stopped_reason_denied') }),
-      );
+      expect(published[0]!.data.stopped_by_deny).toBeUndefined();
+      expect(published[0]!.data.deny_reason).toBeUndefined();
     });
 
     it('пустой ответ после deny-блокировок → denied_blocked (status stopped); без deny → empty_response (status error)', async () => {

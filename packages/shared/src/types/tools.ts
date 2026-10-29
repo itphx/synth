@@ -120,6 +120,18 @@ export interface ToolContext {
   projectId?: string;
   workingDir: string;
   /**
+   * Дополнительные абсолютные корни, внутри которых файловые/поисковые/shell-
+   * и git-тулы считаются «своими» (perimeter сессии).
+   *
+   * `workingDir` остаётся **базой для относительных** путей (и каталогом
+   * исполнения shell/git): относительный путь резолвится от него. Containment
+   * же проверяется по `workingDir` + `allowedRoots` — так сессия в git-worktree
+   * (ADR-114) видит и рабочий каталог worktree, и корень проекта
+   * (`project.workspace`), как в opencode (`FileAccess.resolve`:
+   * internal = location.directory ИЛИ project worktree).
+   */
+  allowedRoots?: string[];
+  /**
    * ADR-114: привязка сессии к git-worktree.
    *
    * `worktreeId` — id записи worktree (пусто — сессия не привязана: рабочий

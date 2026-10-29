@@ -108,11 +108,29 @@ export const SYSTEM_MESSAGES = {
   'fs.replace_multiple': 'Error: found {count} matches of the replacement string. Provide more context for a unique match.',
   'fs.dir_created': 'Directory created: {path}',
   'fs.file_deleted': 'File deleted: {path}',
+  // Мультифайловая атомарная правка (`patch`, JSON-edits): всё-или-ничего.
+  'fs.patch_applied': 'Patch applied: {files} files, {replacements} replacements',
+  'fs.patch_file_line': '{path}: {count} replacements',
+  'fs.patch_not_found': 'Error: patch edit #{index} did not find its text in "{path}"',
+  'fs.patch_multiple': 'Error: patch edit #{index} matched {count} times in "{path}". Provide more context or set replace_all.',
+  'fs.patch_write_failed': 'Error: failed to write patch result for "{path}": {error}',
+  'fs.patch_file_missing': 'Error: patch target file not found: {path}',
+  'fs.patch_not_regular': 'Error: patch target is not a regular file: {path}',
+  'fs.patch_too_large': 'Error: file "{path}" is too large for atomic patching ({bytes} bytes, limit {limit})',
+  'fs.patch_binary': 'Cannot patch binary file: {path}',
 
   // --- Чтение файлов (fs-read) ---
   'fsread.empty_directory': '(empty directory)',
+  'fsread.empty_file': '(empty file)',
   'fsread.no_files': '(no files found)',
   'fsread.glob_error': '(file search error)',
+  'fsread.truncated': '... (showing the first {count} lines; the file is larger)',
+  'fsread.directory_truncated': '... (showing the first {count} entries; the directory has more)',
+  'fsread.line_truncated': '... (line truncated)',
+  'fsread.offset_out_of_range': '(offset {offset} is out of range: the file has {total} lines)',
+  'fsread.binary':
+    'Cannot read binary file: {path}. To show an image or PDF to the model use attach_workspace_file; to inspect other bytes use execute_shell (file, xxd, head -c).',
+  'fsread.glob_truncated': '... (showing the first {count} of {total} files; refine the pattern or raise the limit)',
 
   // --- Веб (web_fetch / web_search) ---
   'web.duckduckgo_blocked': 'DuckDuckGo is temporarily blocking requests (anti-bot challenge)',
@@ -132,7 +150,7 @@ export const SYSTEM_MESSAGES = {
 
   // --- Поиск ---
   'search.no_matches': '(no matches found)',
-  'search.matches_truncated': '... (showing 200 of {total} matches)',
+  'search.matches_truncated': '... (showing {shown} of {total} matches)',
   'search.rg_not_installed': '(rg (ripgrep) is not installed. Search is unavailable)',
   'search.error': 'Search error: {error}',
 
@@ -269,6 +287,7 @@ export const SYSTEM_MESSAGES = {
   'permission.rule_prefix_matched': 'rule "{key}.*" → {action}',
   'permission.rule_command_matched': 'rule "{key}.{pattern}" → {action} (command: {command})',
   'permission.ask_timeout': 'approval timed out',
+  'permission.ask_cancelled': 'cancelled by user',
   'permission.ask_no_subscribers': 'no connected user to approve',
   'permission.ask_denied': 'denied by the user',
   'permission.authority_denied_unknown':
