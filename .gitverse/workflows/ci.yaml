@@ -32,7 +32,7 @@ on:
 jobs:
   lint-and-typecheck:
     name: Линтинг + Typecheck
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +59,7 @@ jobs:
 
   test-shared:
     name: Тесты @itphx/synth-shared
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     needs: lint-and-typecheck
     timeout-minutes: 5
     steps:
@@ -73,7 +73,7 @@ jobs:
 
   test-core:
     name: Тесты @itphx/synth-core
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     needs: test-shared
     timeout-minutes: 10
     steps:
@@ -98,7 +98,7 @@ jobs:
   # (vitest исполняет исходники).
   test-executor:
     name: Тесты @itphx/synth-executor
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     needs: test-shared
     timeout-minutes: 10
     steps:
@@ -114,7 +114,7 @@ jobs:
 
   test-storage-postgres:
     name: Тесты @itphx/synth-storage-postgres
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     needs: test-shared
     timeout-minutes: 5
     steps:
@@ -141,7 +141,7 @@ jobs:
   # SYNTH_PG_REQUIRE: '1' (после подтверждения, что БД поднимается на раннере).
   test-postgres:
     name: Контрактный suite на живой PostgreSQL (ADR-097)
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     needs: test-shared
     timeout-minutes: 20
     steps:
@@ -169,7 +169,7 @@ jobs:
 
   test-backend:
     name: Тесты @itphx/synth-backend
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     needs: test-shared
     timeout-minutes: 10
     steps:
@@ -185,7 +185,7 @@ jobs:
 
   test-sdk:
     name: Тесты @itphx/synth-sdk
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     needs: test-shared
     timeout-minutes: 5
     steps:
@@ -199,7 +199,7 @@ jobs:
 
   test-ui:
     name: Тесты @itphx/synth-ui
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     needs: test-shared
     timeout-minutes: 15
     steps:
@@ -220,7 +220,7 @@ jobs:
   # (vitest исполняет исходники) — нужен только в релизном контуре.
   test-plugin-memory:
     name: Тесты @itphx/synth-plugin-memory
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     needs: test-shared
     timeout-minutes: 10
     steps:
@@ -240,7 +240,7 @@ jobs:
   # (правила и allowlist — scripts/secret-scan.mjs + .gitleaks.toml).
   secret-scan:
     name: Secret-scan (дерево + история)
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -261,7 +261,7 @@ jobs:
   #   этап 4: `--audit-level=moderate`.
   audit:
     name: Аудит зависимостей (report-only)
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     continue-on-error: true
     timeout-minutes: 10
     steps:
@@ -292,7 +292,7 @@ jobs:
   # пишется, какой источник сработал, а при полном отказе печатается диагностика.
   helm-lint:
     name: Helm-чарт (lint + template)
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -351,7 +351,7 @@ jobs:
   # вместо невнятного `context deadline exceeded` был честный таймаут.
   images:
     name: Образы (сборка + smoke)
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     needs: [test-backend, test-executor]
     timeout-minutes: 25
     steps:

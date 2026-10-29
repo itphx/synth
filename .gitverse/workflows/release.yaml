@@ -29,7 +29,7 @@ jobs:
   version-bump:
     name: Bump версии
     if: ${{ gitverse.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     outputs:
       version: ${{ steps.bump.outputs.new_version }}
       prev_version: ${{ steps.bump.outputs.current_version }}
@@ -105,7 +105,7 @@ jobs:
   # --- CI проверки ---
   lint-and-test:
     name: CI проверки
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     # Полный рекурсивный прогон (8 пакетов, ui и core — самые долгие) занимает ~13 мин,
     # плюс install/сборка/typecheck/lint ~2.5 мин. 15 не хватало: релиз 0.12.4 упал
     # ровно на 15:00 в шаге «Тесты» (run 1945719). Потолок раннера GitVerse — ~30 мин,
@@ -163,7 +163,7 @@ jobs:
   # dry_run -> --soft: замечания печатаются, но не блокируют (прогон пайплайна без публикации).
   security-gate:
     name: Внутренний аудит безопасности
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -207,7 +207,7 @@ jobs:
     # security-gate обязателен: без успешного внутреннего аудита (запись релизуемой версии
     # + secret-scan + матрица авторизации + ратчет зависимостей) артефакты не собираются.
     needs: [lint-and-test, security-gate]
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -241,7 +241,7 @@ jobs:
   changelog:
     name: Генерация CHANGELOG
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -286,7 +286,7 @@ jobs:
     name: Событие релиза (synth-media)
     needs: [changelog]
     if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 5
     continue-on-error: true
     steps:
@@ -317,7 +317,7 @@ jobs:
     name: npmjs.org
     needs: [build]
     if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -354,7 +354,7 @@ jobs:
     name: GitVerse Package Registry
     needs: [build]
     if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -403,7 +403,7 @@ jobs:
     # если версии нет, сборка образа падает здесь же.
     needs: [build]
     if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
@@ -587,7 +587,7 @@ jobs:
     name: Flavor-образы (Gitea)
     needs: [build, publish-npmjs]
     if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -816,7 +816,7 @@ jobs:
     name: Offline-образы (amd64+arm64)
     needs: [build-docker]
     if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -881,7 +881,7 @@ jobs:
     name: Portable-бандлы (linux/darwin/win)
     needs: [build]
     if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 30
     # Бандлы качают Node и ripgrep из сети раннера (кэш /root/.cache живёт не
     # на всех раннерах). На 0.12.4 сборка упала с «нет сети и нет кэша
@@ -940,7 +940,7 @@ jobs:
     name: GitVerse Release
     needs: [build, changelog, publish-npmjs]
     if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -1056,7 +1056,7 @@ jobs:
     name: Helm-чарт (публикация)
     needs: [build]
     if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -1111,7 +1111,7 @@ jobs:
     name: GitHub-зеркало (refs + Release)
     needs: [build, changelog]
     if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: synth-ci
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
