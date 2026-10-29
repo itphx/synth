@@ -20,6 +20,7 @@ import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage,
+  requeueMessages,
   createToolRegistry, createAgentRegistry, McpManager,
   DEFAULT_AGENT_ID, registerStoredAgents, migrateLegacyStoredAgents,
   AuditLogger, mergeLlmGatewayConfig, mergeSecurityConfig,
@@ -456,6 +457,38 @@ export async function createBackendDeps(
   // создаётся лениво, при первом вызове колбэка (он приходит только из
   // фонового прогона, т.е. уже после старта).
   let backgroundNotifier: ReturnType<typeof createBackgroundParentNotifier> | null = null;
+  /**
+   * ADR-111/ADR-113: идёт ли ход в сессии (одна функция на нотификатор и
+   * матрицу ретрансляции результата из дочерней сессии).
+   */
+  const isBackgroundTurnActive = async (sid: string): Promise<boolean> => {
+    if (queueManager.isRunning(sid)) return true;
+    const current = await sessionManager.getSession(sid);
+    const stream = current?.currentStream;
+    if (!stream || stream.cancelled) return false;
+    return current?.status?.cancelRequested !== true;
+  };
+
+  /**
+   * Корень дерева сессий (обход `parentId` вверх, глубина ≤ 5, защита от
+   * циклов). Ошибка/нет сессии → `null` (fail-safe: доставим владельцу).
+   */
+  const resolveRootSession = async (
+    sessionId: string,
+  ): Promise<{ id: string; title?: string } | null> => {
+    let current = await sessionManager.getSession(sessionId);
+    if (!current) return null;
+    const seen = new Set<string>([current.id]);
+    for (let depth = 0; depth < 5 && current.parentId; depth += 1) {
+      if (seen.has(current.parentId)) break;
+      const parent = await sessionManager.getSession(current.parentId);
+      if (!parent) break;
+      seen.add(parent.id);
+      current = parent;
+    }
+    return { id: current.id, ...(current.title ? { title: current.title } : {}) };
+  };
+
   const notifyBackgroundParent = async (
     sessionId: string,
     message: Message,
@@ -465,8 +498,29 @@ export async function createBackendDeps(
       eventBus,
       processorManager: queueManager,
       processMessage,
+      isTurnActive: isBackgroundTurnActive,
     });
     await backgroundNotifier(sessionId, message);
+  };
+
+  /**
+   * ADR-111/ADR-113 × ADR-104: остаток steer-очереди в конце хода возвращается
+   * в обычную очередь (`autostart` — нормальное завершение; после «Стопа» — нет).
+   */
+  const requeueBackgroundNotices = async (
+    sessionId: string,
+    messages: Message[],
+    autostart: boolean,
+  ): Promise<void> => {
+    await requeueMessages({
+      sessionManager,
+      eventBus,
+      sessionId,
+      messages,
+      ...(autostart
+        ? { autostart: { processorManager: queueManager, processMessage, eventBus } }
+        : {}),
+    });
   };
   const backgroundService = storageDegraded
     ? undefined
@@ -485,6 +539,10 @@ export async function createBackendDeps(
         // системное (автор `Subagent`/`Process`), а не пользовательский ввод;
         // секреты в исходящих LLM-запросах обфусцирует сам Gateway.
         onNotifyParent: notifyBackgroundParent,
+        // ADR-111/ADR-113: матрица доставки — прогон из дочерней сессии без
+        // активного хода ретранслируется в корень (дочернюю не будим).
+        isTurnActive: isBackgroundTurnActive,
+        resolveRootSessionId: resolveRootSession,
         // «Стоп» сессии останавливает и живые прогоны детей (ADR-111 §detach,
         // решение 2026-10-28): дерево обходит сам сервис (глубина ≤ 5).
         getChildSessionIds: async (parentId) =>
@@ -1050,6 +1108,9 @@ export async function createBackendDeps(
     // `task` с `background: true` регистрирует фонового саб-агента и
     // возвращает управление сразу (PROP-096).
     ...(backgroundService ? { backgroundService } : {}),
+    // ADR-111/ADR-113 × ADR-104: остаток steer-очереди в конце хода — в очередь.
+    requeueBackgroundNotices: (sessionId, messages, opts) =>
+      requeueBackgroundNotices(sessionId, messages, opts.autostart),
     // PROP-097: сервис фоновых шелл-процессов — тот же экземпляр, что у
     // реестра и тула `execute_shell` (через `ctx.extra.processService`).
     ...(processService ? { processService } : {}),

@@ -20,13 +20,13 @@
  * - permission-слой: `process_list`/`process_logs` разрешены в plan-режиме,
  *   группа `process` отключаема админом.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolContext } from '@itphx/synth-shared';
 import { generateId } from '@itphx/synth-shared';
-import { processListTool, processLogsTool } from './processes.js';
+import { processListTool, processLogsTool, processStopTool, processDeleteTool } from './processes.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { MemoryBackgroundRunRepository } from '../../storage/memory/background-runs.js';
@@ -306,15 +306,108 @@ describe('Встроенные тулы реестра фоновых прого
     });
   });
 
+  describe('process_stop / process_delete', () => {
+    it('process_stop: running-процесс → stop вызван, текст успеха со статусом', async () => {
+      const run = await background.startProcess({ sessionId, command: 'npm test', cwd: tmpDir });
+      const abort = vi.fn();
+      background.registerAbort(run.id, abort);
+
+      const result = await processStopTool.execute({ id: run.id }, makeCtx());
+
+      expect(result.isError).toBeUndefined();
+      expect(abort).toHaveBeenCalledTimes(1);
+      expect(result.content).toContain(run.id);
+      expect(result.content).toContain('stopped');
+      expect(result.metadata).toMatchObject({ id: run.id, status: 'running' });
+    });
+
+    it('process_stop: running-сабагент → stop вызван', async () => {
+      const run = await background.startSubagent({
+        sessionId,
+        childSessionId,
+        agentRole: 'explore',
+      });
+      const abort = vi.fn();
+      background.registerAbort(run.id, abort);
+
+      const result = await processStopTool.execute({ id: run.id }, makeCtx());
+
+      expect(result.isError).toBeUndefined();
+      expect(abort).toHaveBeenCalledTimes(1);
+      expect(result.metadata).toMatchObject({ id: run.id, kind: 'subagent' });
+    });
+
+    it('process_stop: терминальный и без хэндла → process.tool.not_running', async () => {
+      const finished = await background.startProcess({ sessionId, command: 'true', cwd: tmpDir });
+      await background.finish(finished.id, { status: 'completed', exitCode: 0 });
+
+      const terminal = await processStopTool.execute({ id: finished.id }, makeCtx());
+      expect(terminal.isError).toBe(true);
+      expect(terminal.content).toBe(`Background run "${finished.id}" is not running`);
+
+      const running = await background.startProcess({ sessionId, command: 'sleep 1', cwd: tmpDir });
+      const noHandle = await processStopTool.execute({ id: running.id }, makeCtx());
+      expect(noHandle.isError).toBe(true);
+      expect(noHandle.metadata?.i18n).toMatchObject({ key: 'process.tool.not_running' });
+    });
+
+    it('process_stop: чужой/несуществующий id → process.tool.not_found', async () => {
+      const other = await sessionManager.createSession({ title: 'Other' });
+      const foreign = await background.startProcess({ sessionId: other.id, command: 'x', cwd: tmpDir });
+
+      const foreignResult = await processStopTool.execute({ id: foreign.id }, makeCtx());
+      const missingResult = await processStopTool.execute({ id: 'bgr_missing' }, makeCtx());
+
+      for (const result of [foreignResult, missingResult]) {
+        expect(result.isError).toBe(true);
+        expect(result.metadata?.i18n).toMatchObject({ key: 'process.tool.not_found' });
+      }
+    });
+
+    it('process_delete: терминальный → remove вызван, повторный → not_found', async () => {
+      const run = await background.startProcess({ sessionId, command: 'true', cwd: tmpDir });
+      await background.finish(run.id, { status: 'completed', exitCode: 0 });
+      const remove = vi.spyOn(repository, 'remove');
+
+      const result = await processDeleteTool.execute({ id: run.id }, makeCtx());
+      expect(result.isError).toBeUndefined();
+      expect(remove).toHaveBeenCalledWith(run.id);
+      expect(result.content).toContain('deleted');
+
+      const again = await processDeleteTool.execute({ id: run.id }, makeCtx());
+      expect(again.isError).toBe(true);
+      expect(again.metadata?.i18n).toMatchObject({ key: 'process.tool.not_found' });
+    });
+
+    it('process_delete: running → process.tool.running, remove не вызван', async () => {
+      const run = await background.startProcess({ sessionId, command: 'sleep 1', cwd: tmpDir });
+      const remove = vi.spyOn(repository, 'remove');
+
+      const result = await processDeleteTool.execute({ id: run.id }, makeCtx());
+
+      expect(result.isError).toBe(true);
+      expect(result.metadata?.i18n).toMatchObject({ key: 'process.tool.running' });
+      expect(remove).not.toHaveBeenCalled();
+      expect(await repository.get(run.id)).not.toBeNull();
+    });
+  });
+
   describe('permissions', () => {
     it('process_list/process_logs разрешены в plan-режиме', () => {
       expect(isPlanBlockedTool('process_list', processListTool.capabilities)).toBe(false);
       expect(isPlanBlockedTool('process_logs', processLogsTool.capabilities)).toBe(false);
     });
 
+    it('process_stop/process_delete в plan-режиме заблокированы', () => {
+      expect(isPlanBlockedTool('process_stop', processStopTool.capabilities)).toBe(true);
+      expect(isPlanBlockedTool('process_delete', processDeleteTool.capabilities)).toBe(true);
+    });
+
     it('группа process отключаема админом (тулы попадают в неё по capability)', () => {
       expect(getToolGroups('process_list', processListTool.capabilities)).toContain('process');
       expect(getToolGroups('process_logs', processLogsTool.capabilities)).toContain('process');
+      expect(getToolGroups('process_stop', processStopTool.capabilities)).toContain('process');
+      expect(getToolGroups('process_delete', processDeleteTool.capabilities)).toContain('process');
     });
   });
 });

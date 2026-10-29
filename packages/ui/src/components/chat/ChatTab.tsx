@@ -13,6 +13,7 @@ import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { DebugModal } from './DebugModal'
 import { QueuePanel } from './QueuePanel'
+import { mediaPartsOf } from './attachments/MessageAttachments'
 import { PermissionRequestBar } from './PermissionRequestBar'
 import { QuestionDock } from './QuestionDock'
 import { StickyNotesPanel } from './StickyNotesPanel'
@@ -73,6 +74,19 @@ function restoreAttachmentsFromMessage(
     })
   }
   if (items.length > 0) useAttachmentsStore.getState().restore(sessionId, items)
+}
+
+/**
+ * `pending_messages` сессии → строка очереди (`QueuedMessage`).
+ * ADR-115: число вложений считаем по медиа-частям сообщения.
+ */
+export function toQueuedMessage(pm: MessageData): QueuedMessage {
+  return {
+    id: pm.id,
+    content: pm.content,
+    agentRole: pm.agent_role || null,
+    attachmentCount: mediaPartsOf(pm.parts).length,
+  }
 }
 
 export function ChatTab({ tab }: ChatTabProps) {
@@ -189,10 +203,7 @@ export function ChatTab({ tab }: ChatTabProps) {
               || Object.values(streamingBySession[sessionId] || {}).some((s) => s.isStreaming)
             const displayMsgs = hasActiveStream ? pendingMsgs.slice(1) : pendingMsgs
             if (displayMsgs.length > 0) {
-              setPendingMessages(sessionId, displayMsgs.map((pm) => ({
-                content: pm.content,
-                agentRole: pm.agent_role || null,
-              })))
+              setPendingMessages(sessionId, displayMsgs.map(toQueuedMessage))
               updateQueueCount(sessionId, displayMsgs.length)
             }
           }
@@ -476,6 +487,35 @@ export function ChatTab({ tab }: ChatTabProps) {
     }
   }, [sessionId, setSummarizationPending, notify, t])
 
+  /**
+   * Полный рефреш очереди с сервера: после отказа steer (409 `NO_ACTIVE_TURN`,
+   * 429 лимит инъекций) локальное состояние могло разойтись с серверным.
+   * Семантика та же, что у первичной загрузки: при живом стриме первый
+   * pending-элемент — текущее сообщение хода, в списке очереди его нет.
+   */
+  const refreshQueueFromApi = useCallback(async () => {
+    try {
+      const session = await synthApi.getSession(sessionId)
+      const data = session as unknown as Record<string, unknown>
+      const pendingMsgs = data.pending_messages as MessageData[] | undefined
+      if (!pendingMsgs || pendingMsgs.length === 0) {
+        clearQueueState(sessionId)
+        return
+      }
+      const hasActiveStream = data.current_stream != null
+        || Object.values(useChatStore.getState().streamingBySession[sessionId] || {}).some((s) => s.isStreaming)
+      const displayMsgs = hasActiveStream ? pendingMsgs.slice(1) : pendingMsgs
+      if (displayMsgs.length === 0) {
+        clearQueueState(sessionId)
+        return
+      }
+      setPendingMessages(sessionId, displayMsgs.map(toQueuedMessage))
+      updateQueueCount(sessionId, displayMsgs.length)
+    } catch {
+      // Сеть/сервер недоступны — оставляем UI как есть, ошибку показал вызывающий.
+    }
+  }, [sessionId, clearQueueState, setPendingMessages, updateQueueCount])
+
   const handleResumeQueue = useCallback(async () => {
     try {
       await synthApi.resumeQueue(sessionId)
@@ -514,8 +554,15 @@ export function ChatTab({ tab }: ChatTabProps) {
   }, [sessionId, setPendingMessages, clearQueueState, setRetryInput, notify, t])
 
   const handleReturnMsg = useCallback(async (uiIndex: number) => {
+    const queued = pending[uiIndex]
+    // Адресация — только по серверному id: индекс мог сдвинуться (стрим/очередь).
+    if (!queued?.id) {
+      notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
+      void refreshQueueFromApi()
+      return
+    }
     try {
-      const resp = await synthApi.returnQueue(sessionId, uiIndex)
+      const resp = await synthApi.returnQueue(sessionId, { id: queued.id })
       const data = resp as { texts?: string[] }
       if (data?.texts && data.texts.length > 0) {
         setRetryInput(sessionId, data.texts[0])
@@ -536,7 +583,66 @@ export function ChatTab({ tab }: ChatTabProps) {
     } catch {
       notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
     }
-  }, [sessionId, setPendingMessages, setRetryInput, notify, t])
+  }, [sessionId, setPendingMessages, setRetryInput, notify, t, pending, refreshQueueFromApi])
+
+  /**
+   * Локальное снятие элемента очереди после успешного действия (steer/удаление):
+   * та же арифметика, что у возврата в редактор (`handleReturnMsg`).
+   */
+  const dropPendingAt = useCallback((uiIndex: number) => {
+    const store = useChatStore.getState()
+    const cur = store.pendingBySession[sessionId] || []
+    store.setPendingMessages(sessionId, cur.filter((_, i) => i !== uiIndex))
+    const qs = store.queueBySession[sessionId]
+    if (qs && qs.pendingCount > 0) {
+      if (qs.pendingCount <= 1) {
+        store.clearQueueState(sessionId)
+      } else {
+        store.updateQueueCount(sessionId, qs.pendingCount - 1)
+      }
+    }
+  }, [sessionId])
+
+  /** «В разрыв»: принудительный steer сообщения из очереди в текущий ход (ADR-104). */
+  const handleSteerMsg = useCallback(async (uiIndex: number) => {
+    const queued = pending[uiIndex]
+    if (!queued?.id) {
+      notify({ text: t('chat.error.steerQueue'), type: 'error', category: 'queue', sessionId })
+      void refreshQueueFromApi()
+      return
+    }
+    try {
+      await synthApi.steerQueue(sessionId, { id: queued.id })
+      dropPendingAt(uiIndex)
+      notify({ text: t('chat.queue.steered'), type: 'success', category: 'queue', sessionId })
+    } catch {
+      // 409 `NO_ACTIVE_TURN`/`CONFLICT` / 429 лимит инъекций / 404: локально
+      // ничего не меняем и перечитываем очередь целиком — иначе UI разойдётся.
+      notify({ text: t('chat.error.steerQueue'), type: 'error', category: 'queue', sessionId })
+      void refreshQueueFromApi()
+    }
+  }, [sessionId, dropPendingAt, refreshQueueFromApi, notify, t, pending])
+
+  /** «Удалить»: сообщение снимается с сервера, возвращённый текст выбрасывается. */
+  const handleRemoveMsg = useCallback(async (uiIndex: number) => {
+    const queued = pending[uiIndex]
+    if (!queued?.id) {
+      notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
+      void refreshQueueFromApi()
+      return
+    }
+    try {
+      const resp = await synthApi.returnQueue(sessionId, { id: queued.id })
+      const data = resp as { texts?: string[] }
+      if (data?.texts && data.texts.length > 0) {
+        dropPendingAt(uiIndex)
+      } else {
+        notify({ text: t('chat.queue.empty'), type: 'info', category: 'queue', sessionId })
+      }
+    } catch {
+      notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
+    }
+  }, [sessionId, dropPendingAt, refreshQueueFromApi, notify, t, pending])
 
   // --- Selection mode handlers ---
 
@@ -726,10 +832,13 @@ export function ChatTab({ tab }: ChatTabProps) {
               pending={pending}
               isStalled={queue?.isStalled ?? false}
               pendingCount={queue?.pendingCount ?? 0}
+              canSteer={isStreaming}
               onResume={handleResumeQueue}
               onClear={handleClearQueue}
               onReturnAll={handleReturnQueue}
               onReturnMsg={handleReturnMsg}
+              onSteerMsg={handleSteerMsg}
+              onRemoveMsg={handleRemoveMsg}
             />
           )}
 

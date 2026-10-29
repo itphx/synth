@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type { SessionManager, QueueProcessorManager, ChatOrchestrator, EventBus, ProjectRepository } from '@itphx/synth-core';
 import { createQueueRoutes as createCoreQueueRoutes } from '@itphx/synth-core';
-import type { Session } from '@itphx/synth-shared';
+import type { Session, Message } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
 import { createProjectAccess } from './projects.js';
 
@@ -18,6 +18,8 @@ export function createQueueRoutes(
   eventBus: EventBus,
   processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>,
   projectStore?: ProjectRepository,
+  /** ADR-036: обфускация user-сообщения (та же, что у `POST /sessions/:id/prompt`). */
+  obfuscate?: (sessionId: string, message: Message) => Promise<Message>,
 ): Hono {
   const app = new Hono();
   const { canReadProject, canEditProjectContent } = createProjectAccess(kit);
@@ -61,6 +63,7 @@ export function createQueueRoutes(
           ? canReadProject(ctx, project, userId)
           : canEditProjectContent(ctx, project, userId);
       },
+      ...(obfuscate ? { obfuscate } : {}),
     },
   ));
 

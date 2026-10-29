@@ -21,7 +21,8 @@ import { buildMaxStepsPrompt, maxStepsAssistantMessage } from '../../llm/max-ste
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { createChildSessionLifecycle, publishMessageAdded } from './child-session.js';
 import { messageToLLMMessage } from './prompt.js';
-import { applySteerInjections, dropSteerInjections } from '../../steering/apply.js';
+import { applySteerInjections, dropSteerInjections, isBackgroundNoticeMessage } from '../../steering/apply.js';
+import { requeueMessages } from '../../../queue/processor.js';
 import type { ContextMode, SubagentRetryConfig, TaskExtra } from './types.js';
 
 /** Retry саб-агента: максимум попыток LLM-вызова (единая политика — LLM_MAX_ATTEMPTS). */
@@ -370,6 +371,18 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         streamId: extra.streamId,
         publishDropped: (event) => {
           extra.eventBus?.publish(childSessionId, 'steer.dropped', event);
+        },
+        // ADR-111/ADR-113: уведомления фоновых прогонов не теряем — возвращаем
+        // в очередь ребёнка. Автостарта нет: процессора очереди у дочерней
+        // сессии нет (`createProcessor` здесь недоступен), сообщение ждёт.
+        isRequeuable: isBackgroundNoticeMessage,
+        requeue: async (messages) => {
+          await requeueMessages({
+            sessionManager,
+            eventBus: extra.eventBus,
+            sessionId: childSessionId,
+            messages,
+          });
         },
       });
     } catch {

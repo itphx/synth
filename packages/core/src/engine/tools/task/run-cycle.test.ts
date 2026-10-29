@@ -1138,6 +1138,44 @@ describe('run-cycle — steering дочерней сессии (ADR-104)', () =>
     expect(saved.messages.some((m) => m.content === 'позднее сообщение')).toBe(false);
   });
 
+  it('остаток background_run_result в конце прогона ребёнка возвращается в pendingMessages (без автостарта)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const bus = new EventBus();
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    bus.subscribe(child.id, (e) => { events.push({ type: e.type, data: e.data as Record<string, unknown> }); });
+    const chatAsync = vi.fn(() => (async function* () {
+      // Уведомление фонового прогона пришло во время последней генерации:
+      // границы шага уже не будет.
+      await sessionManager.enqueueSteerMessage(child.id, {
+        ...steerMessage('<process>ok</process>'),
+        author: 'Process',
+        metadata: { type: 'background_run_result', kind: 'process' },
+      });
+      yield { isFinal: true, content: 'done' };
+    })());
+    const provider = { model: 'test-model', name: 'test-provider', chatAsync } as unknown as BaseProvider;
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, eventBus: bus }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+    expect(chatAsync).toHaveBeenCalledTimes(1);
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    // Уведомление не потеряно: оно в обычной очереди ребёнка.
+    expect(saved.steerInbox ?? []).toHaveLength(0);
+    expect(saved.pendingMessages).toHaveLength(1);
+    expect(saved.pendingMessages[0]!.metadata?.type).toBe('background_run_result');
+    // В историю оно не попало (персистить будет тот, кто обработает очередь).
+    expect(saved.messages.some((m) => m.metadata?.type === 'background_run_result')).toBe(false);
+    // Дропа уведомления нет.
+    expect(events.some((e) => e.type === 'steer.dropped')).toBe(false);
+  });
+
   it('без дочерней сессии поведение прежнее: инъекция в родителя не попадает в ход саб-агента', async () => {
     const parent = await sessionManager.createSession({ title: 'P' });
     await sessionManager.enqueueSteerMessage(parent.id, steerMessage('вмешательство в родителя'), 10);

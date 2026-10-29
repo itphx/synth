@@ -2,6 +2,28 @@
 
 import { BASE_URL, fetchJSON } from './base'
 
+/**
+ * Адресация элемента очереди (ADR-104): `id` приоритетнее `index`; число —
+ * обратная совместимость (= `index`).
+ */
+export type QueueTarget = number | { id?: string; index?: number }
+
+function targetQuery(target?: QueueTarget): string {
+  if (typeof target === 'number') return `?index=${target}`
+  if (target && typeof target.id === 'string' && target.id !== '') {
+    return `?id=${encodeURIComponent(target.id)}`
+  }
+  if (target && target.index !== undefined) return `?index=${target.index}`
+  return ''
+}
+
+function targetBody(target?: QueueTarget): Record<string, unknown> {
+  if (typeof target === 'number') return { index: target }
+  if (target && typeof target.id === 'string' && target.id !== '') return { id: target.id }
+  if (target && target.index !== undefined) return { index: target.index }
+  return {}
+}
+
 export const queueApi = {
   // Очередь (API v2 — /queue/:sessionId)
   async clearQueue(sessionId: string): Promise<void> {
@@ -10,11 +32,25 @@ export const queueApi = {
     })
   },
 
-  async returnQueue(sessionId: string, index?: number): Promise<{ texts: string[] }> {
+  async returnQueue(sessionId: string, target?: QueueTarget): Promise<{ texts: string[] }> {
     const base = `${BASE_URL}/queue/${encodeURIComponent(sessionId)}/return`
-    const url = index !== undefined ? `${base}?index=${index}` : base
-    return fetchJSON(url, {
+    return fetchJSON(`${base}${targetQuery(target)}`, {
       method: 'POST',
+    })
+  },
+
+  /**
+   * Принудительный steer: сообщение из очереди уходит в текущий ход (ADR-104).
+   * Адресация — `id` (приоритет) или `index`; без них сервер берёт первое.
+   * Ответ 202; 409 `NO_ACTIVE_TURN`/`CONFLICT`, 429 при лимите инъекций, 404 — нет элемента.
+   */
+  async steerQueue(
+    sessionId: string,
+    target?: QueueTarget,
+  ): Promise<{ steered: boolean; pending_count: number }> {
+    return fetchJSON(`${BASE_URL}/queue/${encodeURIComponent(sessionId)}/steer`, {
+      method: 'POST',
+      ...(target !== undefined ? { body: JSON.stringify(targetBody(target)) } : {}),
     })
   },
 

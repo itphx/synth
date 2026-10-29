@@ -533,6 +533,16 @@ export interface OrchestratorOptions {
    */
   backgroundService?: BackgroundRunService;
   /**
+   * ADR-111/ADR-113 × ADR-104: вернуть в очередь уведомления фоновых прогонов,
+   * оставшиеся в steer-очереди к концу хода (границы шага уже не будет).
+   * Не задан — остаток снимается как прежде (`steer.dropped`).
+   */
+  requeueBackgroundNotices?: (
+    sessionId: string,
+    messages: Message[],
+    opts: { autostart: boolean },
+  ) => Promise<void>;
+  /**
    * Этап 1 roadmap 0.13 (блок 4): фоновые прогоны разрешены инстансом
    * (`background.enabled`). `false` — тул `task` с `background: true`
    * отказывает (`task.background_disabled`). По умолчанию — разрешены.
@@ -771,6 +781,12 @@ export class ChatOrchestrator {
    * фоновый запуск саб-агента недоступен).
    */
   private readonly _backgroundService: BackgroundRunService | null;
+  /**
+   * ADR-111/ADR-113 × ADR-104: возврат остатка steer-очереди в обычную очередь
+   * (уведомления фоновых прогонов не теряются). `null` — не задан.
+   */
+  private readonly _requeueBackgroundNotices:
+    ((sessionId: string, messages: Message[], opts: { autostart: boolean }) => Promise<void>) | null;
   /**
    * ADR-111 §detach: реестр активных (блокирующих) прогонов сессии —
    * `POST /api/v2/sessions/:id/background` переводит их в фон.
@@ -1136,6 +1152,7 @@ export class ChatOrchestrator {
     this._questionService = options.questionService ?? null;
     // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов + тумблер инстанса.
     this._backgroundService = options.backgroundService ?? null;
+    this._requeueBackgroundNotices = options.requeueBackgroundNotices ?? null;
     this._backgroundEnabled = options.backgroundEnabled ?? true;
     this._subagentMaxInputTokens = options.subagentMaxInputTokens ?? DEFAULT_SUBAGENT_MAX_INPUT_TOKENS;
     // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
@@ -2813,6 +2830,9 @@ export class ChatOrchestrator {
       unregister: (streamId) => {
         this._cancellationTokens.delete(streamId);
       },
+      ...(this._requeueBackgroundNotices
+        ? { requeueBackgroundNotices: this._requeueBackgroundNotices }
+        : {}),
     };
   }
 
@@ -4202,11 +4222,51 @@ export class ChatOrchestrator {
         });
 
         // Execute each tool call
+        // ADR-070 §2.8: durable state-сообщение о смене режима (plan_enter/
+        // plan_exit) вставляется **после всего батча** tool-вызовов итерации —
+        // иначе оно встало бы между tool-результатами батча и разорвало
+        // цепочку assistant(tool_calls) → tool.
+        let modeChangePending = false;
         for (const tc of toolCalls) {
           const tcId = (tc.id as string) || `call_${Date.now()}`;
           const func = tc.function as { name: string; arguments: string | Record<string, unknown> } | undefined;
 
-          if (!func?.name) continue;
+          if (!func?.name) {
+            // «Кривой» вызов модели (нет имени инструмента): пропустить его
+            // нельзя — assistant(tool_calls) остался бы без парного tool, и
+            // следующий LLM-вызов упал бы у провайдера («tool_calls must be
+            // followed by tool messages»). Пишем error-результат и продолжаем.
+            const malformed = {
+              content: sm('tool.malformed_call', { tool: 'unknown', id: tcId }),
+              isError: true,
+              metadata: {
+                i18n: i18nMeta('tool.malformed_call', { tool: 'unknown', id: tcId }),
+              },
+            };
+            currentMessages.push({
+              id: '',
+              role: 'tool',
+              content: malformed.content,
+              usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              disabled: false,
+              pinned: false,
+              branchId: '',
+              toolCallId: tcId,
+            });
+            publishChunk('tool_call.result', {
+              stream_id: streamId,
+              session_id: session.id,
+              call_id: tcId,
+              name: 'unknown',
+              result: malformed,
+              iteration: toolIteration,
+            });
+            await this._persistToolResult(
+              session.id, streamId, providerName, effectiveAgentRole,
+              chunkModel ?? finalModel, 'unknown', {}, tcId, malformed,
+            );
+            continue;
+          }
 
           const toolName = func.name;
           let toolArgs: Record<string, unknown>;
@@ -4296,16 +4356,37 @@ export class ChatOrchestrator {
 
             if (doomCount >= MAX_DOOM_LOOP_COUNT) {
               warning('ORCHESTRATOR', `Doom loop detected: ${toolName} called ${doomCount} times with same args`);
+              const doomParams = { tool: toolName, count: String(doomCount) };
+              const doomResult = {
+                content: sm('tool.doom_loop', doomParams),
+                isError: true,
+                metadata: { i18n: i18nMeta('tool.doom_loop', doomParams) },
+              };
               currentMessages.push({
                 id: '',
                 role: 'tool',
-                content: sm('tool.doom_loop', { tool: toolName, count: String(doomCount) }),
+                content: doomResult.content,
                 usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
                 disabled: false,
                 pinned: false,
                 branchId: '',
                 toolCallId: tcId,
               });
+              publishChunk('tool_call.result', {
+                stream_id: streamId,
+                session_id: session.id,
+                call_id: tcId,
+                name: toolName,
+                result: doomResult,
+                iteration: toolIteration,
+              });
+              // Пара assistant(tool_calls) → tool обязана попасть в историю:
+              // иначе первый же LLM-вызов следующего хода падает у провайдера
+              // («tool_calls must be followed by tool messages»).
+              await this._persistToolResult(
+                session.id, streamId, providerName, effectiveAgentRole,
+                chunkModel ?? finalModel, toolName, toolArgs, tcId, doomResult,
+              );
               continue;
             }
           }
@@ -4468,8 +4549,27 @@ export class ChatOrchestrator {
             // повторяющихся отказов сбрасываем.
             denyRepeatKey = undefined;
             denyRepeatCount = 0;
+            // Исключение тула — это результат тула, а не падение хода:
+            // модель получает error-результат и продолжает (как у deny).
+            // Пара assistant(tool_calls) → tool при этом не рвётся.
+            const runTool = async (
+              exec: () => Promise<{ content: string; isError?: boolean; metadata?: Record<string, unknown> }>,
+            ): Promise<{ content: string; isError?: boolean; metadata?: Record<string, unknown> }> => {
+              try {
+                return await exec();
+              } catch (execErr) {
+                const errorText = execErr instanceof Error ? execErr.message : String(execErr);
+                warning('ORCHESTRATOR', `Tool "${toolName}" execution failed: ${errorText}`);
+                const params = { tool: toolName, error: errorText };
+                return {
+                  content: sm('tool.exec_error', params),
+                  isError: true,
+                  metadata: { i18n: i18nMeta('tool.exec_error', params) },
+                };
+              }
+            };
             if (toolDef) {
-              toolResult = await executeToolDef(toolDef, toolArgs, {
+              toolResult = await runTool(() => executeToolDef(toolDef, toolArgs, {
                 sessionId: session.id,
                 messageId: (message.metadata?.stream_id as string) || streamId,
                 // Проект сессии — метаданные хода: плагинный тул (память)
@@ -4618,7 +4718,7 @@ export class ChatOrchestrator {
                   // ADR-070: live-стоимость саб-агента тем же загрузчиком цен.
                   modelPriceLoader: this._modelPriceLoader ?? undefined,
                 },
-              }, toolName);
+              }, toolName));
             } else {
               toolResult = {
                 content: sm('tool.not_found', { tool: toolName }),
@@ -4796,30 +4896,17 @@ export class ChatOrchestrator {
           }
 
           // ADR-025/ADR-070 §2.8: после plan_enter/plan_exit обновляем локальный
-          // режим и добавляем durable mode_change state-сообщение в историю +
-          // синтетическое user-сообщение в текущий диалог. System prompt
-          // mid-turn больше не пересобирается (смена режима его не меняет).
+          // режим; durable mode_change state-сообщение вставляется **после всего
+          // батча** tool-вызовов итерации (ниже) — иначе оно разрывало бы пары
+          // assistant(tool_calls) → tool. System prompt mid-turn больше не
+          // пересобирается (смена режима его не меняет).
           if (!toolResult.isError && toolName === 'plan_enter') {
             sessionMode = 'plan';
-            await this._appendModeChangeState(
-              session, sessionMode, planMode, planApproved, language, currentMessages,
-              this._collectUnavailableTools(
-                session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
-                { builtin: toolsPolicy !== 'available', mcp: mcpPolicy !== 'available' },
-                workspaceReady,
-              ),
-            );
+            modeChangePending = true;
           } else if (!toolResult.isError && toolName === 'plan_exit') {
             planApproved = true;
             sessionMode = 'act';
-            await this._appendModeChangeState(
-              session, sessionMode, planMode, planApproved, language, currentMessages,
-              this._collectUnavailableTools(
-                session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
-                { builtin: toolsPolicy !== 'available', mcp: mcpPolicy !== 'available' },
-                workspaceReady,
-              ),
-            );
+            modeChangePending = true;
             // ADR-030: `plan_approved` — неблокирующий эмит после утверждения
             // плана. planContent читаем из свежего проекта только при наличии
             // обработчиков (иначе лишний диск-IO и поведение не меняется).
@@ -4941,6 +5028,21 @@ export class ChatOrchestrator {
             branchId: '',
             toolCallId: tcId,
           });
+        }
+
+        // ADR-070 §2.8: durable `mode_change` — после ВСЕХ tool-результатов
+        // итерации (пары assistant(tool_calls) → tool не разорваны) и до
+        // следующего LLM-вызова. Синтетическое user-сообщение с
+        // `<system-state>` тоже дописывается здесь — в текущий диалог.
+        if (modeChangePending) {
+          await this._appendModeChangeState(
+            session, sessionMode, planMode, planApproved, language, currentMessages,
+            this._collectUnavailableTools(
+              session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
+              { builtin: toolsPolicy !== 'available', mcp: mcpPolicy !== 'available' },
+              workspaceReady,
+            ),
+          );
         }
 
         // Отмена между тулами итерации (например во время IPI-обработки) —
@@ -5604,8 +5706,8 @@ export class ChatOrchestrator {
     toolArgs: Record<string, unknown>,
     toolCallId: string,
     toolResult: { content: string; isError?: boolean; metadata?: Record<string, unknown> },
-  ): Promise<void> {
-    await this._sessionManager.appendMessage(sessionId, {
+  ): Promise<boolean> {
+    const saved = await this._sessionManager.appendMessage(sessionId, {
       id: generateId(),
       role: MessageRole.TOOL,
       seq: 0,
@@ -5629,6 +5731,16 @@ export class ChatOrchestrator {
         args: toolArgs,
       },
     });
+    if (!saved) {
+      // Диагностика: цепочка tool-пар могла остаться разорванной — следующий
+      // ход вылечит её `recoverStreamingMessages`, но факт нужно видеть в логе.
+      warning(
+        'ORCHESTRATOR',
+        `tool_result для вызова ${toolCallId} (${toolName}) не сохранён в истории сессии ${sessionId}`,
+      );
+      return false;
+    }
+    return true;
   }
 
   /**

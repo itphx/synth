@@ -43,6 +43,18 @@
    `<subagent sessionID=… state=…><summary>…</summary></subagent>`; затем родительский ход ставится в
    очередь (автоход). INFO-уведомление (вне LLM-контекста) отклонено осознанно: результат фоновой
    работы обязан попасть в контекст родителя, иначе о нём никто не узнает.
+   **Матрица доставки.** Идёт ход у сессии-владельца → уведомление в очередь
+   инъекций и вклинивается на границе шага (steer); хода нет → обычная очередь +
+   автоход. Если прогон запущен в **дочерней** сессии: её ход идёт → только ей
+   (steer, ретрансляции нет); хода нет → **только в корень** дерева
+   (`resolveRootSessionId`, обход `parentId` вверх ≤ 5), дочернюю не будим.
+   Ретрансляция — компактная (`buildRelayedProcessNotification`/
+   `buildRelayedSubagentNotification`): в конверте `started_in`/`started_in_title`/
+   `agent`, у процесса `<log background_run_id=…/>`, хвост лога — только при
+   `failed`; у саб-агента `summary` остаётся целиком. Metadata:
+   `relayed: true`, `relayed_from_session_id`, `relayed_from_title`,
+   `relayed_agent_role` + обычные метки прогона. Ошибка резолва корня —
+   fail-safe: доставка владельцу + `warn`.
 4. **Продолжение ребёнка — один общий хелпер.** `task({task_id})` продолжает ту же дочернюю сессию из
    тула (синхронно, в текущем ходе родителя); HTTP-путь `POST /sessions/:id/resume-subagent`
    (возобновление прерванного ребёнка) использует ту же логику «загрузить → проверить → добавить
@@ -188,6 +200,7 @@ opencode (`background blocking tools`).
 | Фоновый запуск в `remote` | `packages/executor/src/client.ts` (`RemoteExecutionPort.spawnBackground` — опрос состояния 500 мс и журнала 300 мс), `packages/core/src/execution/remote.ts` (проброс метода), `packages/core/src/execution/contract/remote.test.ts` (контрактный прогон) — подробно: [ADR-113](./adr-113-background-processes.md) |
 | Сервис реестра | `engine/background/service.ts` (`BackgroundRunService`: `startSubagent`/`startProcess`/`finish`/`stop`/`recoverOnStart`/`prune`, `buildSubagentNotification`), `engine/background/types.ts`, `engine/background/prune.ts` |
 | Тул `task` | `engine/tools/task/tool.ts` (`startBackgroundSubagent` — порядок п. 2), `engine/tools/task/args.ts` (аргумент `background`), `engine/tools/task/resume-target.ts` (п. 4), `engine/tools/task/run-cycle.ts` (лимит шагов, п. 7), `engine/tools/task-resume.ts` |
+| Тулы реестра (агент) | `engine/tools/processes.ts`: `process_list`/`process_logs` (чтение, в plan разрешены), `process_stop`/`process_delete` (мутации, в plan заблокированы — `PLAN_BLOCKED_AUTOMATION_TOOLS`); скоуп «своя сессия + дочерние», удаление — только терминальных записей (`BackgroundRunService.remove`); capability `process` |
 | Промпт лимита шагов | `prompts/system/MAX_STEPS.{ru,en}.md`; загрузчик — `ContextConfig.getMaxStepsPrompt` |
 | Steering ребёнка (ADR-104) | `engine/steering/apply.ts` (общая точка применения инъекций на границе шага), `engine/tools/task/run-cycle.ts` (граница шага цикла ребёнка); тесты — `engine/tools/task/run-cycle.test.ts` |
 | События и история | `child.completed/failed/cancelled` в канал родителя; уведомление — `buildSubagentNotification` (`metadata.type = 'background_run_result'`) |

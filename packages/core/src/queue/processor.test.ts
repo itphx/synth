@@ -1,11 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { QueueProcessor } from './processor.js';
+import { QueueProcessor, enqueueUserMessage, requeueMessages } from './processor.js';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
+import { sessionMessagesToLlm } from '../engine/orchestrator/prompt-info.js';
 import { generateId, MessageRole, nowISO, makeTextPart, makeMediaPart } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
 import type { BusEvent } from '@itphx/synth-shared';
@@ -530,5 +531,233 @@ describe('QueueProcessor — message.added с вложением (ADR-115)', () 
     expect(added).toBeDefined();
     const parts = added!.data.parts as Array<{ type: string }>;
     expect(parts.map((p) => p.type)).toEqual(['text']);
+  });
+});
+
+/**
+ * Шаг 2б (расширение): битая цепочка лечится перед КАЖДЫМ сообщением
+ * очереди, а не только перед первым. Процессор живёт несколько ходов —
+ * цепочка, оставленная предыдущим ходом, иначе роняла бы следующий LLM-вызов
+ * («tool_calls must be followed by tool messages»).
+ */
+describe('QueueProcessor — ремонт битой цепочки перед каждым сообщением', () => {
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-qrecover-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('assistant(tool_calls) без пары от первого хода лечится перед вторым сообщением', async () => {
+    const session = await sessionManager.createSession({ title: 'Recover' });
+    // Два pending-сообщения — процессор обработает их в одном инстансе.
+    await sessionManager.addPendingMessage(session.id, makeMessage());
+    await sessionManager.addPendingMessage(session.id, makeMessage());
+
+    let calls = 0;
+    /** Состояние осиротевшего assistant на момент входа в processMessage. */
+    const orphanDisabledAtCall: boolean[] = [];
+
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => {
+      calls++;
+      if (calls === 1) {
+        // Первый ход оставляет assistant(tool_calls) БЕЗ tool-результата
+        // (как сработавший doom-loop/сбой до персиста результата).
+        await sessionManager.addMessage(session.id, {
+          id: generateId(),
+          role: MessageRole.ASSISTANT,
+          seq: 0,
+          origin: 'local',
+          parts: [makeTextPart('')],
+          content: '',
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          toolCalls: [{ id: 'call_orphan', function: { name: 'read_file', arguments: '{}' } }],
+          metadata: { stream_id: 'prev-stream', tool_chain: true },
+        });
+      }
+      const fresh = await sessionManager.getSession(session.id);
+      const orphan = fresh!.messages.find(
+        (m) => m.toolCalls?.some((c) => c.id === 'call_orphan'),
+      );
+      orphanDisabledAtCall.push(orphan?.disabled === true);
+      return {};
+    });
+
+    await processor.start();
+
+    expect(calls).toBe(2);
+    // Перед ПЕРВЫМ сообщением цепочки ещё не было — ремонт нечего делать.
+    expect(orphanDisabledAtCall[0]).toBe(false);
+    // Перед ВТОРЫМ — битая цепочка уже помечена (recovery на каждое сообщение).
+    expect(orphanDisabledAtCall[1]).toBe(true);
+
+    const saved = (await sessionManager.getSession(session.id))!;
+    const orphan = saved.messages.find((m) => m.toolCalls?.some((c) => c.id === 'call_orphan'))!;
+    expect(orphan.disabled).toBe(true);
+    expect(orphan.metadata?.interrupted).toBe(true);
+
+    // LLM-диалог валиден: осиротевший assistant(toolUse) не отдаётся модели.
+    const llm = sessionMessagesToLlm(saved.messages, undefined, 'user');
+    expect(llm.some((m) => m.role === 'assistant' && (m.toolUse?.length ?? 0) > 0)).toBe(false);
+  });
+});
+
+/**
+ * ADR-104 × ADR-111/ADR-113: возврат уведомлений в обычную очередь.
+ * Маркеры инъекции снимаются (это уже не «вмешательство в ход»), а
+ * переполнение `pendingMessages` не теряется молча — публикуется `steer.dropped`.
+ */
+describe('requeueMessages — маркеры и переполнение очереди', () => {
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-requeue-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('снимает маркеры steer/interrupt перед постановкой в pendingMessages', async () => {
+    const session = await sessionManager.createSession({ title: 'R' });
+    const message = makeMessage();
+    message.metadata = { ...message.metadata, steer: true, interrupt: true, type: 'background_run_result' };
+    const events: BusEvent[] = [];
+    eventBus.subscribe(session.id, (e) => events.push(e));
+
+    const result = await requeueMessages({
+      sessionManager,
+      eventBus,
+      sessionId: session.id,
+      messages: [message],
+    });
+
+    expect(result).toEqual({ requeued: 1, dropped: 0 });
+    const queued = events.find((e) => e.type === 'message.queued');
+    expect(queued).toBeDefined();
+    // Аддитивное поле: UI адресует строку по серверному id.
+    expect(queued!.data.message_id).toBe(message.id);
+    const saved = (await sessionManager.getSession(session.id))!;
+    expect(saved.pendingMessages).toHaveLength(1);
+    expect(saved.pendingMessages[0]!.metadata?.steer).toBeUndefined();
+    expect(saved.pendingMessages[0]!.metadata?.interrupt).toBeUndefined();
+    expect(saved.pendingMessages[0]!.metadata?.type).toBe('background_run_result');
+  });
+
+  it('переполнение pending: steer.dropped, элемент не добавлен', async () => {
+    const session = await sessionManager.createSession({ title: 'R' });
+    for (let i = 0; i < 5; i++) {
+      await sessionManager.addPendingMessage(session.id, makeMessage());
+    }
+    const events: BusEvent[] = [];
+    eventBus.subscribe(session.id, (e) => events.push(e));
+
+    const result = await requeueMessages({
+      sessionManager,
+      eventBus,
+      sessionId: session.id,
+      messages: [makeMessage()],
+    });
+
+    expect(result).toEqual({ requeued: 0, dropped: 1 });
+    expect((await sessionManager.getSession(session.id))!.pendingMessages).toHaveLength(5);
+    const dropped = events.find((e) => e.type === 'steer.dropped');
+    expect(dropped).toBeDefined();
+    expect(dropped!.data.reason).toBe('limit');
+    expect(dropped!.data.dropped_count).toBe(1);
+    expect(events.some((e) => e.type === 'message.queued')).toBe(false);
+  });
+});
+
+/**
+ * «Стоп» очищает очередь, но уведомления о завершении фоновых прогонов
+ * (ADR-111/ADR-113) не теряются — иначе результат фоновой работы исчез бы.
+ */
+describe('QueueProcessor — «Стоп» сохраняет background_run_result', () => {
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-qstop-notice-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('после стопа уведомление остаётся в pending, остальное снято', async () => {
+    const session = await sessionManager.createSession({ title: 'Q' });
+    await sessionManager.addPendingMessage(session.id, makeMessage());
+    const notice: Message = {
+      ...makeMessage(),
+      author: 'Process',
+      metadata: { type: 'background_run_result', kind: 'process' },
+    };
+    await sessionManager.addPendingMessage(session.id, notice);
+
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => ({}));
+    const run = processor.start();
+    processor.requestStop();
+    await run;
+
+    const saved = (await sessionManager.getSession(session.id))!;
+    expect(saved.pendingMessages.map((m) => m.metadata?.type)).toEqual(['background_run_result']);
+    expect(saved.pendingMessages[0]!.author).toBe('Process');
+    expect(saved.status.blocked).toBeUndefined();
+    expect(saved.currentStream).toBeUndefined();
+  });
+});
+
+/** `message.queued` несёт `message_id` — UI адресует строку очереди по id. */
+describe('enqueueUserMessage — message_id в событии очереди', () => {
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-qenqueue-id-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('message.queued.message_id = id сообщения', async () => {
+    const session = await sessionManager.createSession({ title: 'Q' });
+    const events: BusEvent[] = [];
+    eventBus.subscribe(session.id, (e) => events.push(e));
+    const message = makeMessage();
+
+    await enqueueUserMessage(
+      sessionManager,
+      eventBus,
+      session.id,
+      message,
+      { createProcessor: vi.fn() } as never,
+      (async () => ({})) as never,
+    );
+
+    const queued = events.find((e) => e.type === 'message.queued');
+    expect(queued).toBeDefined();
+    expect(queued!.data.message_id).toBe(message.id);
   });
 });

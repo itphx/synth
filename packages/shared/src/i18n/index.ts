@@ -56,6 +56,9 @@ export const ENGINE_MESSAGE_KEYS = [
   'task.resume_child_busy',
   'tool.args_error',
   'tool.exec_error',
+  // Вызов инструмента без имени/идентификатора — результат всё равно должен
+  // быть записан парным `tool`-сообщением (иначе у провайдера рвётся цепочка).
+  'tool.malformed_call',
   'tool.not_found',
   'tool.permission_denied_default',
   'tool.doom_loop',
@@ -442,6 +445,11 @@ export const ENGINE_MESSAGE_KEYS = [
   'process.tool.header',
   'process.tool.no_log',
   'process.tool.child_history',
+  // ADR-111: управление фоновыми прогонами из агента.
+  'process.tool.not_running',
+  'process.tool.running',
+  'process.tool.stopped',
+  'process.tool.deleted',
   // --- Повторная привязка файла из workspace (ADR-115) ---
   'attach.message.from_workspace',
   'attach.tool.attached',
@@ -520,6 +528,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'task.resume_child_busy': ["id"],
   'tool.args_error': ["tool","issues"],
   'tool.exec_error': ["tool","error"],
+  'tool.malformed_call': ["tool","id"],
   'tool.not_found': ["tool"],
   'tool.permission_denied_default': [],
   'tool.doom_loop': ["tool","count"],
@@ -904,6 +913,10 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'process.tool.header': ["count"],
   'process.tool.no_log': [],
   'process.tool.child_history': ["child_session"],
+  'process.tool.not_running': ["id"],
+  'process.tool.running': ["id"],
+  'process.tool.stopped': ["id","status"],
+  'process.tool.deleted': ["id"],
   'attach.message.from_workspace': ["path"],
   'attach.tool.attached': ["path"],
   'attach.tool.deps_unavailable': [],

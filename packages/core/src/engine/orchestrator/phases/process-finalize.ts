@@ -34,7 +34,7 @@ import type { ProviderOverrides } from '../routing.js';
 import { autoTitleSession } from '../../../sessions/auto-title.js';
 import { warning } from '../../../logger.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
-import { dropSteerInjections } from '../../steering/apply.js';
+import { dropSteerInjections, isBackgroundNoticeMessage } from '../../steering/apply.js';
 import type { StreamTiming } from '../stream-stats.js';
 
 /** Результат эпилога `_processMessage` (структурно = `ProcessMessageResult`). */
@@ -159,6 +159,18 @@ export interface ProcessFinalizeDeps {
     overrides?: ProviderOverrides,
   ) => BaseProvider | null;
   unregister: (streamId: string) => void;
+  /**
+   * ADR-111/ADR-113 × ADR-104: вернуть в очередь уведомления фоновых прогонов,
+   * оставшиеся в steer-очереди к концу хода (потерять результат нельзя).
+   * `opts.autostart` — поднять ли ход: обычное завершение (`turn_ended`) — да,
+   * «Стоп» (`aborted`) — нет.
+   * Не задан — остаток снимается как прежде (`steer.dropped`).
+   */
+  requeueBackgroundNotices?: (
+    sessionId: string,
+    messages: Message[],
+    opts: { autostart: boolean },
+  ) => Promise<void>;
 }
 
 /**
@@ -266,6 +278,18 @@ export async function runProcessFinalize(
       reason: cancelledBeforeFinal ? 'aborted' : 'turn_ended',
       streamId,
       publishDropped: (event) => publishChunk('steer.dropped', event),
+      // ADR-111/ADR-113: уведомления фоновых прогонов не дропаем — они
+      // возвращаются в обычную очередь (ход закончился/остановлен, границы
+      // шага уже не будет). Результат фоновой работы терять нельзя.
+      ...(deps.requeueBackgroundNotices
+        ? {
+          isRequeuable: isBackgroundNoticeMessage,
+          requeue: (messages: Message[]) =>
+            deps.requeueBackgroundNotices!(session.id, messages, {
+              autostart: !cancelledBeforeFinal,
+            }),
+        }
+        : {}),
     });
   } catch (err) {
     warning(

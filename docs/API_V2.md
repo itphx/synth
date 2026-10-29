@@ -157,7 +157,7 @@ backend и standalone монтируют одну и ту же фабрику.
 | `SCOPE_REQUIRED` | service-key без нужного scope (ADR-052; только для service-key) |
 | `PROJECT_FORBIDDEN` | service-key с `allowedProjects` без доступа к проекту (ADR-052) |
 | `NOT_FOUND` | отсутствие сессии/проекта/провайдера/модели/агента/файла/лога |
-| `CONFLICT` | дубли MCP-сервера, retry-состояние |
+| `CONFLICT` | дубли MCP-сервера, retry-состояние, `steer` сообщения текущего хода (ADR-104) |
 | `ALREADY_EXISTS`, `IS_DIRECTORY`, `DIR_NOT_EMPTY`, `PATH_TRAVERSAL`, `PERMISSION_DENIED` | ФС |
 | `WORKSPACE_OUTSIDE_ROOT_DENIED`, `WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`, `WORKSPACE_CREATE_FAILED`, `WORKSPACE_POLICY_READ_ONLY`, `WORKSPACE_ROOT_NOT_CONFIGURED`, `PROTECTED_PATH_DENIED`, `WORKSPACE_NOT_FOUND`, `WORKSPACE_NOT_SET`, `NOT_A_DIRECTORY` | workspace/ФС (ADR-075) |
 | `git.ssh_key_required`, `git.repo_path_invalid`, `git.repo_exists` | git-реестр (ADR-076, shared-форма) |
@@ -165,6 +165,7 @@ backend и standalone монтируют одну и ту же фабрику.
 | `PROJECT_NOT_FOUND`, `NOT_AVAILABLE` | сессии/настройки |
 | `RATE_LIMITED`, `QUEUE_FULL` | лимиты и очередь |
 | `STEER_LIMIT_EXCEEDED` | режимы отправки сообщения (ADR-104) |
+| `NO_ACTIVE_TURN` | `POST /api/v2/queue/:sessionId/steer` без активного хода (ADR-104) |
 | `INVALID_ACTION`, `INVALID_INDICES` | batch-операции сообщений |
 | `MODEL_NOT_FOUND`, `MODEL_DISABLED`, `MODEL_MISMATCH`, `PROVIDER_NOT_FOUND`, `PROVIDER_DISABLED`, `PROVIDER_ERROR`, `PROVIDER_CONFIG_ERROR`, `CONTEXT_LENGTH_EXCEEDED` | LLM Proxy |
 | `MCP_CONNECT_ERROR` | probe MCP |
@@ -556,10 +557,13 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 | Метод | Путь | Сборка | RBAC | Назначение |
 |---|---|---|---|---|
 | POST | `/api/v2/queue/:sessionId/clear` | оба | auth | Очистить очередь `{cleared:true}` |
-| POST | `/api/v2/queue/:sessionId/return` | оба | auth | Вернуть тексты `{texts}`; `?index=N` |
+| POST | `/api/v2/queue/:sessionId/return` | оба | auth | Вернуть тексты `{texts}`; адресация `?id=<id>` (приоритет) или `?index=N`; без них — вся очередь |
+| POST | `/api/v2/queue/:sessionId/steer` | оба | auth | Отправить сообщение из очереди «в разрыв» активного хода (ADR-104): тело `{id?: string; index?: number}` (`id` приоритетнее, `index` — совместимость; по умолчанию `0`). Сначала сообщение ставится в очередь инъекций, и только при успехе снимается из `pendingMessages` (по `id`) и его user-копия из истории (по `metadata.stream_id`, активный стрим не трогается). `202 {steered:true, pending_count}` (`pending_count` — длина `pendingMessages`); нет сообщения по `id`/индексу или сессии → `404 NOT_FOUND`; сообщение уже выполняется в текущем ходе → `409 CONFLICT`; активного хода нет → `409 NO_ACTIVE_TURN` (сообщение остаётся в очереди); превышен лимит инъекций → `429 STEER_LIMIT_EXCEEDED` (очередь и история не тронуты). Гибрид — через `queueSteer` (`remote:<id>`) |
 | POST | `/api/v2/queue/:sessionId/resume` | оба | auth | Возобновить обработку `{resumed, pending_count}` |
 | POST | `/api/v2/queue/:sessionId/retry-now` | оба | auth | Немедленный повтор при backoff |
 | POST | `/api/v2/queue/:sessionId/cancel-retry` | оба | auth | Отменить повторные попытки |
+
+> **`steer` из очереди (ADR-104).** В отличие от `POST /sessions/:id/prompt` с `mode:'steer'` (создаёт новое сообщение), `POST /queue/:sessionId/steer` **переносит** уже стоящее в очереди сообщение в текущий ход. Адресация — по серверному `id` (приоритет) или `index`; порядок: сначала постановка в `steerInbox`, и только при успехе — снятие из `pendingMessages` по `id` и удаление user-копии из истории по `metadata.stream_id` (активный стрим не трогается) — при 429 очередь и история остаются нетронутыми. Сообщение текущего хода отправить «в разрыв» нельзя (`409 CONFLICT`); кнопка в UI показывается только при активном ходе, без него — `409 NO_ACTIVE_TURN` (сообщение не теряется). Событие `message.queued` несёт аддитивное `message_id` (id pending-сообщения) — UI адресует строки очереди по нему, а не по индексу. Legacy `?index=abc` (нецелый/отрицательный) → `400 VALIDATION_ERROR`, а не «вся очередь». Доступ — граничный prefix-guard (`createSessionAccessGuard`), новых проверок в обработчике нет.
 
 ### 5.8 Projects — `/api/v2/projects`
 

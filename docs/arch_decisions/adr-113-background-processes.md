@@ -56,6 +56,16 @@
    (`background_limit_exceeded` — ошибка тула, ход не падает). Считаются только **живые**
    (`running`) прогоны: терминальные записи — история реестра, её чистит retention
    (ADR-111 п. 6), и лимит она не занимает.
+   **Доставка и ретрансляция (та же матрица, что ADR-111 п. 3).** Идёт ход у
+   владельца → steer на границе шага; нет → очередь + автоход. Прогон из
+   **дочерней** сессии без активного хода → только в корень, компактным
+   `buildRelayedProcessNotification`: `<process … started_in=… started_in_title=…
+   agent=…>` с `<log background_run_id="<id>"/>` (id записи реестра — его принимает
+   `process_logs` аргументом `process_id`) и `<tail>` **только при `failed`**;
+   дочернюю не будим. Metadata: `relayed: true`, `relayed_from_session_id`,
+   `relayed_from_title`, `relayed_agent_role`, `background_run_id`, `state`,
+   `command`, метки времени/длительности. Ошибка резолва корня — fail-safe:
+   доставка владельцу + `warn`.
 5. **Remote: процесс живёт на исполнителе, протокол v3.** Исполнитель (`@itphx/synth-executor`)
    держит `BackgroundExecService` (реестр — в памяти процесса исполнителя, журналы — на диске
    исполнителя, раздельные `stdout`/`stderr`) и отдаёт четыре маршрута:

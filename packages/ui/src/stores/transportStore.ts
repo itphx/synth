@@ -365,7 +365,10 @@ export function createDispatcher(): EventDispatcher {
         const content = (payload.message as string) || ''
         const agentRole = payload.agent_role as string | undefined
         const pendingCount = (payload.pending_count as number) || 1
-        addPendingMessage(sid, { content, agentRole: agentRole || null })
+        const id = typeof payload.message_id === 'string' && payload.message_id !== ''
+          ? payload.message_id
+          : undefined
+        addPendingMessage(sid, { ...(id ? { id } : {}), content, agentRole: agentRole || null })
         updateQueueCount(sid, pendingCount)
         break
       }

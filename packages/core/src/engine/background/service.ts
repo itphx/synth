@@ -87,6 +87,20 @@ export interface BackgroundRunServiceOptions {
    * самой сессии.
    */
   getChildSessionIds?: (sessionId: string) => Promise<string[]>;
+  /**
+   * ADR-111/ADR-113: идёт ли ход в сессии-владельце. Если прогон запущен в
+   * **дочерней** сессии и её ход не идёт — результат ретранслируется в корень
+   * (дочернюю не будим). Не задан — поведение прежнее (доставка владельцу).
+   */
+  isTurnActive?: (sessionId: string) => Promise<boolean>;
+  /**
+   * ADR-111/ADR-113: корень дерева сессий по `parentId` (глубина ≤ 5, защита от
+   * циклов). Не задан — ретрансляции нет (обратная совместимость). Ошибка
+   * резолва — fail-safe: доставка владельцу.
+   */
+  resolveRootSessionId?: (
+    sessionId: string,
+  ) => Promise<{ id: string; title?: string } | null>;
 }
 
 /**
@@ -107,6 +121,12 @@ export class BackgroundRunService {
   private readonly _onNotifyParent?: (sessionId: string, message: Message) => void | Promise<void>;
   /** Дочерние сессии по `parentId` (не задан — `stopBySession` без рекурсии). */
   private readonly _getChildSessionIds?: (sessionId: string) => Promise<string[]>;
+  /** Идёт ли ход в сессии (не задан — ретрансляции нет). */
+  private readonly _isTurnActive?: (sessionId: string) => Promise<boolean>;
+  /** Резолвер корня дерева сессий (не задан — ретрансляции нет). */
+  private readonly _resolveRootSessionId?: (
+    sessionId: string,
+  ) => Promise<{ id: string; title?: string } | null>;
   /** Активные прогоны: `id` → хэндл отмены. */
   private readonly _aborts = new Map<string, { abort: (reason?: string) => void }>();
 
@@ -123,6 +143,8 @@ export class BackgroundRunService {
     this._now = options.now ?? defaultNow;
     this._onNotifyParent = options.onNotifyParent;
     this._getChildSessionIds = options.getChildSessionIds;
+    this._isTurnActive = options.isTurnActive;
+    this._resolveRootSessionId = options.resolveRootSessionId;
   }
 
   /**
@@ -248,6 +270,17 @@ export class BackgroundRunService {
       );
     }
     return true;
+  }
+
+  /**
+   * Удалить запись реестра (тонкий делегат порта, ADR-096).
+   *
+   * Guard'а здесь нет намеренно: право решает вызывающий (тул
+   * `process_delete` проверяет скоуп/статус, HTTP-роут — доступ на границе).
+   * `false` — записи не было.
+   */
+  async remove(id: string): Promise<boolean> {
+    return this._repository.remove(id);
   }
 
   /**
@@ -497,35 +530,76 @@ export class BackgroundRunService {
    */
   private async _notifyParent(record: BackgroundRunRecord): Promise<void> {
     if (!this._onNotifyParent) return;
-    if (record.kind === 'process') {
-      const state = record.status === 'completed' ? 'completed'
-        : record.status === 'failed' ? 'failed'
-          : record.status === 'cancelled' ? 'cancelled'
-            : 'failed';
-      const message = buildProcessNotification(record, state);
-      try {
-        await this._onNotifyParent(record.sessionId, message);
-      } catch (err) {
-        this._logger.warn?.(
-          `[BackgroundRunService] уведомление родителя о процессе ${record.id} не удалось: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-      return;
-    }
-    if (record.kind !== 'subagent') return;
-    const state = record.status === 'completed' ? 'completed'
-      : record.status === 'failed' ? 'failed'
-        : record.status === 'cancelled' ? 'cancelled'
-          : 'failed';
-    const message = buildSubagentNotification(record, state);
+    if (record.kind !== 'process' && record.kind !== 'subagent') return;
+    const state = backgroundStateOf(record);
+
+    // ADR-111/ADR-113: матрица доставки. Прогон в дочерней сессии без
+    // активного хода → только в корень (компактное ретранслированное
+    // сообщение); иначе — владельцу, как раньше (steer/очередь решает нотификатор).
+    const relayTarget = await this._resolveRelayTarget(record.sessionId);
+    const targetId = relayTarget?.id ?? record.sessionId;
+    const message = relayTarget
+      ? record.kind === 'process'
+        ? buildRelayedProcessNotification(record, state, relayTarget)
+        : buildRelayedSubagentNotification(record, state, relayTarget)
+      : record.kind === 'process'
+        ? buildProcessNotification(record, state)
+        : buildSubagentNotification(record, state);
+
     try {
-      await this._onNotifyParent(record.sessionId, message);
+      await this._onNotifyParent(targetId, message);
     } catch (err) {
       this._logger.warn?.(
-        `[BackgroundRunService] уведомление родителя о прогоне ${record.id} не удалось: ${err instanceof Error ? err.message : String(err)}`,
+        `[BackgroundRunService] уведомление о ${record.kind === 'process' ? 'процессе' : 'прогоне'} ${record.id} не удалось: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
+
+  /**
+   * Куда ретранслировать результат (ADR-111/ADR-113).
+   *
+   * `null` — доставляем владельцу (корень, ход владельца идёт, резолвер не
+   * задан или упал). Иначе — id корня и подпись «где запускалось».
+   *
+   * Fail-safe: ошибка резолва корня/состояния хода — доставка владельцу
+   * (уведомление не теряем) + `warn`.
+   */
+  private async _resolveRelayTarget(
+    ownerSessionId: string,
+  ): Promise<{ id: string; sessionId: string; title?: string } | null> {
+    if (!this._resolveRootSessionId || !this._isTurnActive) return null;
+    let root: { id: string; title?: string } | null;
+    try {
+      root = await this._resolveRootSessionId(ownerSessionId);
+    } catch (err) {
+      this._logger.warn?.(
+        `[BackgroundRunService] корень сессии ${ownerSessionId} не определён: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+    if (!root || root.id === ownerSessionId) return null;
+
+    let active: boolean;
+    try {
+      active = await this._isTurnActive(ownerSessionId);
+    } catch (err) {
+      this._logger.warn?.(
+        `[BackgroundRunService] состояние хода ${ownerSessionId} не определено: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+    // Ход дочерней идёт — доставляем только ей (steer), ретрансляции нет.
+    if (active) return null;
+    // Дочернюю не будим: результат уходит в корень.
+    return { id: root.id, sessionId: ownerSessionId, ...(root.title ? { title: root.title } : {}) };
+  }
+}
+
+/** Терминальное состояние прогона (единая нормализация для уведомлений). */
+function backgroundStateOf(record: BackgroundRunRecord): 'completed' | 'failed' | 'cancelled' {
+  if (record.status === 'completed') return 'completed';
+  if (record.status === 'cancelled') return 'cancelled';
+  return 'failed';
 }
 
 /**
@@ -543,6 +617,7 @@ export function buildSubagentNotification(
     `<subagent sessionID="${record.childSessionId ?? ''}" state="${state}" description="${record.description ?? ''}">`,
     '<summary>',
     summary,
+    '</summary>',
     '</subagent>',
   ].join('\n');
   return {
@@ -634,6 +709,132 @@ export function buildProcessNotification(
       ...(record.finishedAt ? { finished_at: record.finishedAt } : {}),
       ...durationMetadata(record),
     },
+  };
+}
+
+/** Куда ретранслирован результат (ADR-111/ADR-113). */
+export interface RelayedNotificationTarget {
+  /** Сессия, в которую доставляем (корень дерева). */
+  id: string;
+  /** Сессия-владелец прогона (где он запускался) — для `started_in`. */
+  sessionId: string;
+  /** Заголовок сессии-владельца (если известен). */
+  title?: string;
+}
+
+/** Общие metadata ретранслированного уведомления (ADR-111/ADR-113). */
+function relayedMetadata(
+  record: BackgroundRunRecord,
+  state: 'completed' | 'failed' | 'cancelled',
+  target: RelayedNotificationTarget,
+): Record<string, unknown> {
+  return {
+    type: 'background_run_result',
+    relayed: true,
+    relayed_from_session_id: target.sessionId,
+    ...(target.title ? { relayed_from_title: target.title } : {}),
+    ...(record.agentRole ? { relayed_agent_role: record.agentRole } : {}),
+    background_run_id: record.id,
+    kind: record.kind,
+    state,
+    ...(record.command ? { command: record.command } : {}),
+    ...(record.description ? { description: record.description } : {}),
+    ...(record.processId ? { process_id: record.processId } : {}),
+    ...(record.childSessionId ? { child_session_id: record.childSessionId } : {}),
+    started_at: record.startedAt,
+    ...(record.finishedAt ? { finished_at: record.finishedAt } : {}),
+    ...durationMetadata(record),
+  };
+}
+
+/**
+ * Компактное ретранслированное уведомление о фоновом **процессе**
+ * (ADR-111/ADR-113).
+ *
+ * Формат — данные для модели, без прозы: в конверте есть `started_in` /
+ * `started_in_title` (где запускалось) и `<log background_run_id=…/>` вместо
+ * хвоста лога. Хвост (`<tail>`) добавляется **только при `failed`**.
+ */
+export function buildRelayedProcessNotification(
+  record: BackgroundRunRecord,
+  state: 'completed' | 'failed' | 'cancelled',
+  target: RelayedNotificationTarget,
+): Message {
+  const stateLabel = state === 'completed' ? 'exited'
+    : state === 'failed' ? 'failed'
+      : 'killed';
+  const attrs = [
+    `processID="${escapeXmlAttr(record.processId ?? record.id)}"`,
+    `state="${stateLabel}"`,
+    `command="${escapeXmlAttr(record.command ?? '')}"`,
+    ...(record.exitCode !== undefined ? [`exit="${record.exitCode}"`] : []),
+    `started_in="${escapeXmlAttr(target.sessionId)}"`,
+    ...(target.title ? [`started_in_title="${escapeXmlAttr(target.title)}"`] : []),
+    ...(record.agentRole ? [`agent="${escapeXmlAttr(record.agentRole)}"`] : []),
+  ];
+  const tail = record.summary ?? '';
+  const content = [
+    `<process ${attrs.join(' ')}>`,
+    `<log background_run_id="${escapeXmlAttr(record.id)}"/>`,
+    ...(state === 'failed' && tail ? ['<tail>', tail, '</tail>'] : []),
+    '</process>',
+  ].join('\n');
+  return {
+    id: generateMessageId(),
+    role: MessageRole.USER,
+    seq: 0,
+    origin: 'local',
+    parts: [makeTextPart(content)],
+    content,
+    createdAt: nowISO(),
+    disabled: false,
+    pinned: false,
+    hidden: false,
+    ephemeral: false,
+    author: 'Process',
+    metadata: relayedMetadata(record, state, target),
+  };
+}
+
+/**
+ * Компактное ретранслированное уведомление о фоновом **саб-агенте**
+ * (ADR-111/ADR-113): конверт с `started_in`/`started_in_title`/`agent`,
+ * итог (`summary`) — целиком (это результат сабагента, не лог).
+ */
+export function buildRelayedSubagentNotification(
+  record: BackgroundRunRecord,
+  state: 'completed' | 'failed' | 'cancelled',
+  target: RelayedNotificationTarget,
+): Message {
+  const attrs = [
+    `sessionID="${record.childSessionId ?? ''}"`,
+    `state="${state}"`,
+    `description="${escapeXmlAttr(record.description ?? '')}"`,
+    `started_in="${escapeXmlAttr(target.sessionId)}"`,
+    ...(target.title ? [`started_in_title="${escapeXmlAttr(target.title)}"`] : []),
+    ...(record.agentRole ? [`agent="${escapeXmlAttr(record.agentRole)}"`] : []),
+  ];
+  const content = [
+    `<subagent ${attrs.join(' ')}>`,
+    '<summary>',
+    record.summary ?? '',
+    '</summary>',
+    '</subagent>',
+  ].join('\n');
+  return {
+    id: generateMessageId(),
+    role: MessageRole.USER,
+    seq: 0,
+    origin: 'local',
+    parts: [makeTextPart(content)],
+    content,
+    createdAt: nowISO(),
+    disabled: false,
+    pinned: false,
+    hidden: false,
+    ephemeral: false,
+    author: 'Subagent',
+    metadata: relayedMetadata(record, state, target),
   };
 }
 

@@ -1268,6 +1268,8 @@ export const dict = {
   'chat.notice.backgroundState.completed': 'completed',
   'chat.notice.backgroundState.failed': 'failed',
   'chat.notice.backgroundState.cancelled': 'stopped',
+  // ADR-111/ADR-113: ретрансляция результата из дочерней сессии.
+  'chat.backgroundNotice.relayedFrom': 'started in “{title}”',
   // ADR-111/ADR-113: UI-уведомления о старте/финише фоновой работы.
   'notify.background.started': 'Background process started: {name}',
   'notify.background.subagentStarted': 'Background subagent started: {name}',
@@ -1364,6 +1366,9 @@ export const dict = {
   'chat.queue.resumed': 'Queue processing resumed',
   'chat.queue.returned': 'Queue returned',
   'chat.queue.empty': 'Queue is empty',
+  'chat.queue.steer': 'Send now',
+  'chat.queue.remove': 'Remove',
+  'chat.queue.steered': 'Sent into the running turn',
 
   'permission.bar.request': 'Tool "{tool}" requests permission',
   'permission.bar.waiting': '{count} more',
@@ -1425,6 +1430,7 @@ export const dict = {
   'chat.error.clearQueue': 'Failed to clear queue',
   'chat.error.sendFailed': 'Send failed:',
   'chat.error.returnQueue': 'Failed to return queue',
+  'chat.error.steerQueue': 'Could not send into the running turn',
   'chat.error.toggleMessage': 'Failed to toggle message',
   'chat.error.pinMessage': 'Failed to pin message',
   'chat.error.deleteMessage': 'Failed to delete message',

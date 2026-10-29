@@ -16,7 +16,12 @@
 import { describe, it, expect } from 'vitest';
 import { ToolCapability } from '@itphx/synth-shared';
 import { loadSystemAgentDefinitions } from './index.js';
-import { processListTool, processLogsTool } from '../tools/processes.js';
+import {
+  processListTool,
+  processLogsTool,
+  processStopTool,
+  processDeleteTool,
+} from '../tools/processes.js';
 import { listModelsTool } from '../tools/list-models.js';
 import { computeToolAvailability } from '../permission/availability.js';
 
@@ -110,7 +115,7 @@ describe('Дефолтные агенты — capability process (этап 1 roa
   const agents = loadSystemAgentDefinitions();
   const byId = new Map(agents.map((a) => [a.id, a]));
 
-  const PROCESS_TOOLS = [processListTool, processLogsTool];
+  const PROCESS_TOOLS = [processListTool, processLogsTool, processStopTool, processDeleteTool];
 
   it.each(WITH_AUTOMATION_AND_EXECUTORS)('%s имеет capability process', (id) => {
     const agent = byId.get(id);

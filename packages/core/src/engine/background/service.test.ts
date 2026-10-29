@@ -37,6 +37,11 @@ function createService(opts?: {
   limits?: Partial<BackgroundRunLimits>;
   onNotifyParent?: (sessionId: string, message: Message) => void | Promise<void>;
   getChildSessionIds?: (sessionId: string) => Promise<string[]>;
+  isTurnActive?: (sessionId: string) => Promise<boolean>;
+  resolveRootSessionId?: (
+    sessionId: string,
+  ) => Promise<{ id: string; title?: string } | null>;
+  logger?: { warn?: (message: string) => void; error?: (message: string) => void };
 }) {
   const repository = new MemoryBackgroundRunRepository();
   const eventBus = new EventBus();
@@ -58,6 +63,9 @@ function createService(opts?: {
         notifications.push({ sessionId, message });
       }),
     ...(opts?.getChildSessionIds ? { getChildSessionIds: opts.getChildSessionIds } : {}),
+    ...(opts?.isTurnActive ? { isTurnActive: opts.isTurnActive } : {}),
+    ...(opts?.resolveRootSessionId ? { resolveRootSessionId: opts.resolveRootSessionId } : {}),
+    ...(opts?.logger ? { logger: opts.logger } : {}),
   });
   return { repository, eventBus, service, notifications };
 }
@@ -444,6 +452,10 @@ describe('BackgroundRunService — уведомление родителя', () 
     expect(message.metadata?.started_at).toBe(record.startedAt);
     expect(message.metadata?.finished_at).toBeTruthy();
     expect(typeof message.metadata?.duration_ms).toBe('number');
+    // Конверт закрывает <summary> — иначе модель/парсер не разбирает блок.
+    expect(message.content).toContain('<summary>');
+    expect(message.content).toContain('</summary>');
+    expect(message.content).toContain('отчёт готов');
   });
 
   it('без onNotifyParent сервис работает без уведомлений (точка сборки не задана)', async () => {
@@ -736,5 +748,161 @@ describe('BackgroundRunService — прочее', () => {
 
     expect((await service.get(record.id))?.childSessionId).toBe('child-1');
     expect(await service.get('bgr_missing')).toBeNull();
+  });
+});
+
+/**
+ * ADR-111/ADR-113: матрица доставки результата фонового прогона.
+ *
+ * | где запущен | идёт ход владельца | куда |
+ * | основная/корень | — | владельцу (как раньше) |
+ * | дочерняя | да | только владельцу (steer) |
+ * | дочерняя | нет | только в корень, компактно (дочернюю не будим) |
+ */
+describe('BackgroundRunService — ретрансляция из дочерней сессии в корень', () => {
+  it('дочерняя без хода → только корень, компактно (без tail при completed)', async () => {
+    const { service, notifications } = createService({
+      resolveRootSessionId: async (sid) =>
+        sid === 'child-1' ? { id: 'root-1', title: 'Корень' } : { id: sid },
+      isTurnActive: async () => false,
+    });
+
+    const record = await service.startProcess({
+      sessionId: 'child-1',
+      command: 'npm test',
+      cwd: '/work',
+    });
+    await service.finish(record.id, { status: 'completed', summary: '5 passed', exitCode: 0 });
+
+    // Только в корень — дочернюю не будим.
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]!.sessionId).toBe('root-1');
+    const message = notifications[0]!.message;
+    expect(message.metadata).toMatchObject({
+      type: 'background_run_result',
+      relayed: true,
+      relayed_from_session_id: 'child-1',
+      relayed_from_title: 'Корень',
+      background_run_id: record.id,
+      state: 'completed',
+      command: 'npm test',
+    });
+    expect(message.content).toContain('started_in="child-1"');
+    expect(message.content).toContain('started_in_title="Корень"');
+    expect(message.content).toContain(`background_run_id="${record.id}"`);
+    // Успех — без хвоста лога.
+    expect(message.content).not.toContain('<tail>');
+    expect(message.content).not.toContain('5 passed');
+    // Нет и обычного хвоста процесса как тела.
+    expect(message.content).not.toContain('<summary>');
+  });
+
+  it('дочерняя без хода, failed → хвост лога есть', async () => {
+    const { service, notifications } = createService({
+      resolveRootSessionId: async () => ({ id: 'root-1', title: 'Корень' }),
+      isTurnActive: async () => false,
+    });
+
+    const record = await service.startProcess({ sessionId: 'child-1', command: 'npm test', cwd: '/work' });
+    await service.finish(record.id, { status: 'failed', summary: 'boom: 1 failed', exitCode: 1 });
+
+    const message = notifications[0]!.message;
+    expect(notifications[0]!.sessionId).toBe('root-1');
+    expect(message.metadata?.state).toBe('failed');
+    expect(message.content).toContain('state="failed"');
+    expect(message.content).toContain('exit="1"');
+    expect(message.content).toContain('<tail>');
+    expect(message.content).toContain('boom: 1 failed');
+  });
+
+  it('дочерняя с активным ходом → только владельцу, ретрансляции нет', async () => {
+    const { service, notifications } = createService({
+      resolveRootSessionId: async () => ({ id: 'root-1', title: 'Корень' }),
+      isTurnActive: async () => true,
+    });
+
+    const record = await service.startProcess({ sessionId: 'child-1', command: 'npm test', cwd: '/work' });
+    await service.finish(record.id, { status: 'completed', summary: '5 passed' });
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]!.sessionId).toBe('child-1');
+    expect(notifications[0]!.message.metadata?.relayed).toBeUndefined();
+    // Обычный формат сохранён (хвост — тело процесса).
+    expect(notifications[0]!.message.content).toContain('5 passed');
+    expect(notifications[0]!.message.content).not.toContain('started_in=');
+  });
+
+  it('прогон в корне → владельцу, как раньше', async () => {
+    const { service, notifications } = createService({
+      resolveRootSessionId: async () => ({ id: 'root-1', title: 'Корень' }),
+      isTurnActive: async () => false,
+    });
+
+    const record = await service.startProcess({ sessionId: 'root-1', command: 'npm test', cwd: '/work' });
+    await service.finish(record.id, { status: 'completed', summary: '5 passed' });
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]!.sessionId).toBe('root-1');
+    expect(notifications[0]!.message.metadata?.relayed).toBeUndefined();
+  });
+
+  it('субагент из дочерней без хода → в корень, summary целиком, started_in указан', async () => {
+    const { service, notifications } = createService({
+      resolveRootSessionId: async () => ({ id: 'root-1', title: 'Корень' }),
+      isTurnActive: async () => false,
+    });
+
+    const record = await service.startSubagent({
+      sessionId: 'child-1',
+      childSessionId: 'grandchild-1',
+      agentRole: 'researcher',
+      description: 'собрать факты',
+    });
+    await service.finish(record.id, { status: 'completed', summary: 'факты собраны' });
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]!.sessionId).toBe('root-1');
+    const message = notifications[0]!.message;
+    expect(message.metadata).toMatchObject({
+      relayed: true,
+      relayed_from_session_id: 'child-1',
+      relayed_from_title: 'Корень',
+      relayed_agent_role: 'researcher',
+      child_session_id: 'grandchild-1',
+    });
+    expect(message.content).toContain('<subagent ');
+    expect(message.content).toContain('started_in="child-1"');
+    expect(message.content).toContain('agent="researcher"');
+    // Итог саб-агента — целиком (не лог), конверт <summary> закрыт.
+    expect(message.content).toContain('факты собраны');
+    expect(message.content).toContain('</summary>');
+  });
+
+  it('резолв корня упал → доставка владельцу (fail-safe) + warn', async () => {
+    const warn = vi.fn();
+    const { service, notifications } = createService({
+      resolveRootSessionId: async () => { throw new Error('store down'); },
+      isTurnActive: async () => false,
+      logger: { warn },
+    });
+
+    const record = await service.startProcess({ sessionId: 'child-1', command: 'npm test', cwd: '/work' });
+    await service.finish(record.id, { status: 'completed', summary: '5 passed' });
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]!.sessionId).toBe('child-1');
+    expect(notifications[0]!.message.metadata?.relayed).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('resolveRootSessionId не задан → поведение прежнее (владельцу)', async () => {
+    const { service, notifications } = createService({ isTurnActive: async () => false });
+
+    const record = await service.startProcess({ sessionId: 'child-1', command: 'npm test', cwd: '/work' });
+    await service.finish(record.id, { status: 'completed', summary: '5 passed' });
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]!.sessionId).toBe('child-1');
+    expect(notifications[0]!.message.metadata?.relayed).toBeUndefined();
   });
 });

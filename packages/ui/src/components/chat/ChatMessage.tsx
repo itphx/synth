@@ -14,6 +14,7 @@ import { Notice, type NoticeVariant } from './Notice'
 import { MessageAttachments, hasMediaParts } from './attachments/MessageAttachments'
 import {
   backgroundNoticeName,
+  backgroundNoticeRelayedFrom,
   backgroundToolCall,
   resolveBackgroundKind,
   resolveBackgroundState,
@@ -461,7 +462,11 @@ function ChatMessageInner({
           ? t('chat.notice.backgroundState.cancelled')
           : t('chat.notice.backgroundState.completed')
     // Без имени («Фоновый процесс · ») убираем висящий разделитель.
-    const label = `${name ? baseLabel : baseLabel.replace(/\s*·\s*$/, '')} · ${stateLabel}`
+    const relayedFrom = backgroundNoticeRelayedFrom(metadata)
+    const relayedSuffix = relayedFrom
+      ? ` · ${t('chat.backgroundNotice.relayedFrom', { title: relayedFrom })}`
+      : ''
+    const label = `${name ? baseLabel : baseLabel.replace(/\s*·\s*$/, '')} · ${stateLabel}${relayedSuffix}`
 
     const selectionCheckboxEl = selectionMode ? (
       <div className="flex items-center self-stretch pr-1">

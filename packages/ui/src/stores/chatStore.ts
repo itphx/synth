@@ -226,8 +226,12 @@ export interface QueueState {
 }
 
 export interface QueuedMessage {
+  /** Серверный id pending-сообщения (`pending_messages[].id`) — адресация по id. */
+  id?: string
   content: string
   agentRole?: string | null
+  /** ADR-115: число вложений сообщения (для строки очереди); нет данных — 0. */
+  attachmentCount?: number
 }
 
 /**

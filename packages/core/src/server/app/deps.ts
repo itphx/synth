@@ -13,7 +13,7 @@ import { ensureDataDir, parsePrincipalId, readTlsRuntimeSettings, SYNTH_VERSION 
 import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
-  enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
+  enqueueUserMessage, requeueMessages, createToolRegistry, createAgentRegistry, McpManager,
   DEFAULT_AGENT_ID, registerStoredAgents, migrateLegacyStoredAgents,
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
   isFfmpegAvailable,
@@ -497,6 +497,42 @@ export async function createStandaloneDeps(
   // `processMessage` собирается ниже (после оркестратора) — нотификатор
   // создаётся лениво, при первом вызове колбэка (он приходит только из
   // фонового прогона, т.е. уже после старта).
+  /**
+   * ADR-111/ADR-113: идёт ли ход в сессии. Активный ход → уведомление
+   * вклинивается в него (`steerInbox`), иначе — обычная очередь + автоход.
+   * `currentStream.cancelled` — ход уже отменяется, инъекция не нужна.
+   * Одна функция на нотификатор и матрицу ретрансляции (ниже).
+   */
+  const isBackgroundTurnActive = async (sid: string): Promise<boolean> => {
+    if (queueManager.isRunning(sid)) return true;
+    const current = await sessionManager.getSession(sid);
+    const stream = current?.currentStream;
+    if (!stream || stream.cancelled) return false;
+    return current?.status?.cancelRequested !== true;
+  };
+
+  /**
+   * Корень дерева сессий (обход `parentId` вверх, глубина ≤ 5, защита от
+   * циклов) — для ретрансляции результата фонового прогона из дочерней сессии.
+   * Возвращает `{id, title}`; ошибка/нет сессии → `null` (fail-safe: доставим
+   * владельцу, как раньше).
+   */
+  const resolveRootSession = async (
+    sessionId: string,
+  ): Promise<{ id: string; title?: string } | null> => {
+    let current = await sessionManager.getSession(sessionId);
+    if (!current) return null;
+    const seen = new Set<string>([current.id]);
+    for (let depth = 0; depth < 5 && current.parentId; depth += 1) {
+      if (seen.has(current.parentId)) break;
+      const parent = await sessionManager.getSession(current.parentId);
+      if (!parent) break;
+      seen.add(parent.id);
+      current = parent;
+    }
+    return { id: current.id, ...(current.title ? { title: current.title } : {}) };
+  };
+
   let backgroundNotifier: ReturnType<typeof createBackgroundParentNotifier> | null = null;
   const notifyBackgroundParent = async (
     sessionId: string,
@@ -507,8 +543,31 @@ export async function createStandaloneDeps(
       eventBus,
       processorManager: queueManager,
       processMessage,
+      isTurnActive: isBackgroundTurnActive,
     });
     await backgroundNotifier(sessionId, message);
+  };
+
+  /**
+   * ADR-111/ADR-113 × ADR-104: остаток steer-очереди в конце хода не теряется.
+   * Уведомления фоновых прогонов возвращаются в `pendingMessages`; `autostart`
+   * поднимает ход (нормальное завершение), при «Стопе» — нет (ждём пользователя).
+   * `processMessage` объявлен ниже — вызов происходит уже в рантайме.
+   */
+  const requeueBackgroundNotices = async (
+    sessionId: string,
+    messages: Message[],
+    autostart: boolean,
+  ): Promise<void> => {
+    await requeueMessages({
+      sessionManager,
+      eventBus,
+      sessionId,
+      messages,
+      ...(autostart
+        ? { autostart: { processorManager: queueManager, processMessage, eventBus } }
+        : {}),
+    });
   };
   const backgroundService = storageDegraded
     ? undefined
@@ -523,6 +582,10 @@ export async function createStandaloneDeps(
         },
         // Точка сборки уведомления — здесь (глобальных синглтонов нет).
         onNotifyParent: notifyBackgroundParent,
+        // ADR-111/ADR-113: матрица доставки — если прогон запущен в дочерней
+        // сессии и её ход не идёт, результат ретранслируется в корень.
+        isTurnActive: isBackgroundTurnActive,
+        resolveRootSessionId: resolveRootSession,
         // «Стоп» сессии останавливает и живые прогоны детей (ADR-111 §detach,
         // решение 2026-10-28): дерево обходит сам сервис (глубина ≤ 5).
         getChildSessionIds: async (parentId) =>
@@ -1096,6 +1159,10 @@ export async function createStandaloneDeps(
     // `task` с `background: true` регистрирует фонового саб-агента и
     // возвращает управление сразу (PROP-096).
     ...(backgroundService ? { backgroundService } : {}),
+    // ADR-111/ADR-113 × ADR-104: ход закончился, а в steer-очереди остались
+    // уведомления фоновых прогонов — возвращаем их в очередь и поднимаем ход.
+    requeueBackgroundNotices: (sessionId, messages, opts) =>
+      requeueBackgroundNotices(sessionId, messages, opts.autostart),
     // PROP-097: сервис фоновых шелл-процессов — тот же экземпляр, что у
     // реестра и тула `execute_shell` (через `ctx.extra.processService`).
     ...(processService ? { processService } : {}),

@@ -159,7 +159,7 @@ Actual codes (from the code):
 | `SCOPE_REQUIRED` | service key without the required scope (ADR-052; service key only) |
 | `PROJECT_FORBIDDEN` | service key with `allowedProjects` and no access to the project (ADR-052) |
 | `NOT_FOUND` | a missing session/project/provider/model/agent/file/log |
-| `CONFLICT` | MCP server duplicates, retry state |
+| `CONFLICT` | MCP server duplicates, retry state, `steer` of the current-turn message (ADR-104) |
 | `ALREADY_EXISTS`, `IS_DIRECTORY`, `DIR_NOT_EMPTY`, `PATH_TRAVERSAL`, `PERMISSION_DENIED` | filesystem |
 | `WORKSPACE_OUTSIDE_ROOT_DENIED`, `WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`, `WORKSPACE_CREATE_FAILED`, `WORKSPACE_POLICY_READ_ONLY`, `WORKSPACE_ROOT_NOT_CONFIGURED`, `PROTECTED_PATH_DENIED`, `WORKSPACE_NOT_FOUND`, `WORKSPACE_NOT_SET`, `NOT_A_DIRECTORY` | workspace/filesystem (ADR-075) |
 | `git.ssh_key_required`, `git.repo_path_invalid`, `git.repo_exists` | git registry (ADR-076, shared form) |
@@ -167,6 +167,7 @@ Actual codes (from the code):
 | `PROJECT_NOT_FOUND`, `NOT_AVAILABLE` | sessions/settings |
 | `RATE_LIMITED`, `QUEUE_FULL` | rate limits and the queue |
 | `STEER_LIMIT_EXCEEDED` | message sending modes (ADR-104) |
+| `NO_ACTIVE_TURN` | `POST /api/v2/queue/:sessionId/steer` with no running turn (ADR-104) |
 | `INVALID_ACTION`, `INVALID_INDICES` | message batch operations |
 | `MODEL_NOT_FOUND`, `MODEL_DISABLED`, `MODEL_MISMATCH`, `PROVIDER_NOT_FOUND`, `PROVIDER_DISABLED`, `PROVIDER_ERROR`, `PROVIDER_CONFIG_ERROR`, `CONTEXT_LENGTH_EXCEEDED` | LLM Proxy |
 | `MCP_CONNECT_ERROR` | MCP probe |
@@ -442,10 +443,13 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | Method | Path | Build | RBAC | Purpose |
 |---|---|---|---|---|
 | POST | `/api/v2/queue/:sessionId/clear` | both | auth | Clear the queue `{cleared:true}` |
-| POST | `/api/v2/queue/:sessionId/return` | both | auth | Return texts `{texts}`; `?index=N` |
+| POST | `/api/v2/queue/:sessionId/return` | both | auth | Return texts `{texts}`; address by `?id=<id>` (priority) or `?index=N`; neither — the whole queue |
+| POST | `/api/v2/queue/:sessionId/steer` | both | auth | Send a queued message "into the break" of the running turn (ADR-104): body `{id?: string; index?: number}` (`id` has priority, `index` is compatibility; default `0`). The message is first put into the injection queue and only on success removed from `pendingMessages` (by `id`) and its user copy from the history (by `metadata.stream_id`, the active stream is untouched). `202 {steered:true, pending_count}` (`pending_count` is the `pendingMessages` length); no message at the `id`/index or no session → `404 NOT_FOUND`; the message is already running in the current turn → `409 CONFLICT`; no running turn → `409 NO_ACTIVE_TURN` (the message stays queued); injection limit exceeded → `429 STEER_LIMIT_EXCEEDED` (queue and history untouched). Hybrid — via `queueSteer` (`remote:<id>`) |
 | POST | `/api/v2/queue/:sessionId/resume` | both | auth | Resume processing `{resumed, pending_count}` |
 | POST | `/api/v2/queue/:sessionId/retry-now` | both | auth | Immediate retry during backoff |
 | POST | `/api/v2/queue/:sessionId/cancel-retry` | both | auth | Cancel the retry attempts |
+
+> **`steer` from the queue (ADR-104).** Unlike `POST /sessions/:id/prompt` with `mode:'steer'` (creates a new message), `POST /queue/:sessionId/steer` **moves** an already queued message into the running turn. Addressing is by the server `id` (priority) or `index`; the order is: put into `steerInbox` first, and only on success remove from `pendingMessages` by `id` and delete the user copy from the history by `metadata.stream_id` (the active stream is untouched) — on 429 the queue and history stay untouched. The message of the current turn cannot be steered (`409 CONFLICT`); the UI shows the button only while a turn is running, otherwise `409 NO_ACTIVE_TURN` (the message is not lost). The `message.queued` event carries an additive `message_id` (pending message id) — the UI addresses queue rows by it, not by index. A legacy `?index=abc` (non-integer/negative) → `400 VALIDATION_ERROR`, not "the whole queue". Access — the boundary prefix-guard (`createSessionAccessGuard`); no extra checks in the handler.
 
 ### 5.8 Projects — `/api/v2/projects`
 

@@ -134,6 +134,9 @@ export function isEditTool(toolName: string, capabilities?: readonly string[]): 
 const PLAN_BLOCKED_AUTOMATION_TOOLS: ReadonlySet<string> = new Set([
   ...PIPELINE_WRITE_TOOLS,
   ...SCHEDULE_WRITE_TOOLS,
+  // Управление фоновыми прогонами (ADR-111): чтение разрешено, мутации — нет.
+  'process_stop',
+  'process_delete',
 ]);
 
 export function isPlanBlockedTool(toolName: string, capabilities?: readonly string[]): boolean {

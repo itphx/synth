@@ -39,12 +39,6 @@ export class QueueProcessor {
   private _activeController: AbortController | null = null;
   private _backoffTimer: ReturnType<typeof setTimeout> | null = null;
   private _backoffResolver: (() => void) | null = null;
-  /**
-   * Шаг 2б: восстановление «зависших» после падения/рестарта сообщений
-   * выполняется один раз на инстанс процессора (до первой установки
-   * `currentStream`), best-effort.
-   */
-  private _streamRecoveryDone = false;
 
   constructor(
     private sessionId: string,
@@ -124,7 +118,12 @@ export class QueueProcessor {
 
     const streamId = await this.sessionManager.withLock(this.sessionId, async (s) => {
       const id = s.currentStream?.streamId;
-      s.pendingMessages = [];
+      // «Стоп» очищает очередь, но уведомления о завершении фоновых прогонов
+      // (ADR-111/ADR-113) не теряются: результат фоновой работы остаётся ждать
+      // следующего хода (автостарта нет — ход остановил пользователь).
+      s.pendingMessages = s.pendingMessages.filter(
+        (m) => m.metadata?.type === 'background_run_result',
+      );
       s.status.blocked = undefined;
       s.status.blockedAt = undefined;
       s.status.cancelRequested = undefined;
@@ -211,19 +210,6 @@ export class QueueProcessor {
   }
 
   private async _run(): Promise<void> {
-    // Шаг 2б: после падения/рестарта в истории могли остаться черновики
-    // частичного стрима (`metadata.streaming`) и assistant(tool_calls) без пары.
-    // Чиним один раз на инстанс процессора, до установки нового `currentStream`;
-    // сбой recovery не должен ломать очередь.
-    if (!this._streamRecoveryDone) {
-      this._streamRecoveryDone = true;
-      try {
-        await this.sessionManager.recoverStreamingMessages(this.sessionId);
-      } catch {
-        // best-effort
-      }
-    }
-
     while (!this._cancelled) {
       let session: Session | null;
 
@@ -244,6 +230,19 @@ export class QueueProcessor {
       }
 
       if (session.pendingMessages.length === 0) break;
+
+      // Шаг 2б: после падения/рестарта (или doom-loop прежнего хода) в истории
+      // могли остаться черновики частичного стрима (`metadata.streaming`) и
+      // assistant(tool_calls) без парного tool. Ремонт — **перед каждым**
+      // сообщением очереди, а не один раз на процессор: процессор переживает
+      // несколько ходов, и битая цепочка предыдущего хода иначе роняла бы
+      // первый же LLM-вызов следующего. Функция идемпотентна и пишет только
+      // при изменениях. Сбой recovery не должен ломать очередь.
+      try {
+        await this.sessionManager.recoverStreamingMessages(this.sessionId);
+      } catch {
+        // best-effort
+      }
 
       // Проверка: ожидается ли суммаризация перед следующим сообщением?
       if (this.contextOptimizer && session.summarizationPending) {
@@ -828,6 +827,7 @@ export async function enqueueUserMessage(
 
   eventBus.publish(sessionId, 'message.queued', {
     stream_id: enqueueStreamId,
+    message_id: message.id,
     pending_count: session.pendingMessages.length,
     message: message.content,
     agent_role: message.agentRole,
@@ -837,4 +837,87 @@ export async function enqueueUserMessage(
   processorManager.createProcessor(sessionId, sessionManager, eventBus, processMessage);
 
   return session;
+}
+
+/** Опции возврата сообщений в обычную очередь (`pendingMessages`). */
+export interface RequeueMessagesOptions {
+  /** Менеджер сессий — запись в `pendingMessages`. */
+  sessionManager: SessionManager;
+  /** Шина событий сессии — публикация `message.queued` (не задана — без события). */
+  eventBus?: EventBus;
+  /** Сессия, в очередь которой возвращаются сообщения. */
+  sessionId: string;
+  /** Сообщения для возврата (порядок сохраняется). */
+  messages: Message[];
+  /**
+   * Автозапуск хода после возврата. Не задан — сообщения остаются в очереди
+   * до следующего действия пользователя (например, после «Стопа»).
+   */
+  autostart?: {
+    processorManager: QueueProcessorManager;
+    processMessage: ProcessMessageFn;
+    /** Шина сессии — процессор публикует в неё события хода. */
+    eventBus: EventBus;
+  };
+}
+
+/**
+ * Вернуть сообщения в обычную очередь (`pendingMessages`).
+ *
+ * Общий путь для остатка steer-очереди (ADR-104 × ADR-111/ADR-113): уведомления
+ * фоновых прогонов не теряются ни в конце хода, ни при «Стопе». Сообщение
+ * получает `stream_id` (как в `enqueueUserMessage`), публикуется `message.queued`
+ * и — при `autostart` — поднимается процессор очереди.
+ *
+ * Очередь переполнена (`MAX_PENDING`) — сообщение не принято: публикуется
+ * `steer.dropped` (`reason: 'limit'`), как у `enqueueSteerMessage`; вызывающий
+ * не получает ошибки: это уведомление, а не пользовательский ввод.
+ */
+export async function requeueMessages(
+  opts: RequeueMessagesOptions,
+): Promise<{ requeued: number; dropped: number }> {
+  let requeued = 0;
+  let dropped = 0;
+  for (const message of opts.messages) {
+    if (!message.metadata) message.metadata = {};
+    // Возврат в обычную очередь — это уже не «вмешательство в ход»: маркеры
+    // steer/interrupt снимаем, иначе UI рисует сообщение как инъекцию.
+    delete message.metadata[STEER_METADATA_KEY];
+    delete message.metadata[STEER_INTERRUPT_METADATA_KEY];
+    const streamId = (message.metadata.stream_id as string | undefined) || generateStreamId();
+    message.metadata.stream_id = streamId;
+    const session = await opts.sessionManager.addPendingMessage(
+      opts.sessionId, message, MAX_PENDING,
+    );
+    if (!session) {
+      dropped++;
+      opts.eventBus?.publish(opts.sessionId, 'steer.dropped', {
+        reason: 'limit',
+        code: STEERING_ERROR_CODES.limitExceeded,
+        limit: MAX_PENDING,
+        dropped_count: 1,
+        error: sm('steer.limit_exceeded', { limit: String(MAX_PENDING) }),
+        i18n: i18nMeta('steer.limit_exceeded', { limit: String(MAX_PENDING) }),
+      });
+      continue;
+    }
+    requeued++;
+    opts.eventBus?.publish(opts.sessionId, 'message.queued', {
+      stream_id: streamId,
+      message_id: message.id,
+      pending_count: session.pendingMessages.length,
+      message: message.content,
+      agent_role: message.agentRole,
+      author: message.author,
+    });
+  }
+  if (requeued > 0 && opts.autostart) {
+    opts.autostart.processorManager.createProcessor(
+      opts.sessionId,
+      opts.sessionManager,
+      opts.autostart.eventBus,
+      opts.autostart.processMessage,
+    );
+  }
+  return { requeued, dropped };
 }

@@ -89,6 +89,9 @@ export const SYSTEM_MESSAGES = {
   // --- Тулы: общие ошибки и результаты ---
   'tool.args_error': 'Tool "{tool}" argument error: {issues}',
   'tool.exec_error': 'Tool "{tool}" execution error: {error}',
+  // Вызов без имени инструмента: результат обязателен — иначе assistant(tool_calls)
+  // остаётся без парного tool и следующий LLM-вызов падает у провайдера.
+  'tool.malformed_call': 'Error: malformed tool call "{tool}" (id: {id}) — the call was not executed',
   'tool.not_found': 'Tool "{tool}" not found',
   'tool.permission_denied_default': 'Access denied by the security policy',
   'tool.doom_loop': 'Error: tool "{tool}" called {count} time(s) with the same arguments. Loop broken.',
@@ -586,6 +589,10 @@ export const SYSTEM_MESSAGES = {
   'process.tool.no_log': 'There is no log for this background run',
   'process.tool.child_history':
     'The history of the child session {child_session} is available via the read_session_reference tool',
+  'process.tool.not_running': 'Background run "{id}" is not running',
+  'process.tool.running': 'Background run "{id}" is still running — stop it first with process_stop',
+  'process.tool.stopped': 'Background run "{id}" stopped (status: {status})',
+  'process.tool.deleted': 'Background run "{id}" deleted',
 
   // --- Повторная привязка файла из workspace (ADR-115) ---
   // Тул `attach_workspace_file`: текст доставленного user-сообщения и результаты

@@ -338,6 +338,52 @@ class MockOneToolThenTextProvider extends BaseProvider {
   }
 }
 
+/**
+ * Провайдер со сценарием (массив шагов): каждый `chatAsync` отдаёт один шаг.
+ * Нужен для точечных сценариев (кривой tool call, исключение тула, батч тулов).
+ */
+class MockScriptProvider extends BaseProvider {
+  static script: Array<{ content: string; toolCalls?: Record<string, unknown>[] }> = [];
+  static calls = 0;
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
+    const step = MockScriptProvider.script[Math.min(MockScriptProvider.calls, MockScriptProvider.script.length - 1)]!;
+    MockScriptProvider.calls++;
+    return {
+      content: step.content,
+      model: this.model,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      toolCalls: step.toolCalls,
+    };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const step = MockScriptProvider.script[Math.min(MockScriptProvider.calls, MockScriptProvider.script.length - 1)]!;
+    MockScriptProvider.calls++;
+    yield {
+      content: step.content,
+      isFinal: true,
+      toolCalls: step.toolCalls,
+      model: this.model,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    };
+  }
+
+  getProviderName(): string {
+    return 'mockscript';
+  }
+}
+
 /** Провайдер: всегда возвращает пустой контент без toolCalls (модель «не ответила»). */
 class MockEmptyProvider extends BaseProvider {
   async chat(
@@ -371,7 +417,7 @@ interface Harness {
   sessionId: string;
 }
 
-async function makeHarness(providerName: string): Promise<Harness> {
+async function makeHarness(providerName: string, toolRegistry = createToolRegistry()): Promise<Harness> {
   const tmpDir = await mkdtemp(join(tmpdir(), 'synth-deny-abort-'));
   const store = new FileStore({ dataDir: tmpDir });
   const sessionManager = new SessionManager(store);
@@ -387,7 +433,7 @@ async function makeHarness(providerName: string): Promise<Harness> {
     providerLoader: (name: string) => {
       return { name, type: providerName, baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
     },
-    toolRegistry: createToolRegistry(),
+    toolRegistry,
     permissionConfig: { rules: {}, askTimeoutMs: 1000 } as PermissionConfig,
     projectStore,
     defaultWorkingDir: tmpDir,
@@ -426,6 +472,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     ProviderFactory.register('mockempty', MockEmptyProvider);
     ProviderFactory.register('mockfailaftertool', MockFailAfterToolProvider);
     ProviderFactory.register('mockonetool', MockOneToolThenTextProvider);
+    ProviderFactory.register('mockscript', MockScriptProvider);
     MockDenyLoopProvider.calls = 0;
     MockAbortProvider.calls = 0;
     MockAbortNoModelProvider.calls = 0;
@@ -433,6 +480,8 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     MockDoomProvider.calls = 0;
     MockFailAfterToolProvider.calls = 0;
     MockOneToolThenTextProvider.calls = 0;
+    MockScriptProvider.calls = 0;
+    MockScriptProvider.script = [];
   });
 
   afterEach(async () => {
@@ -444,6 +493,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     ProviderFactory['_providers'].delete('mockempty');
     ProviderFactory['_providers'].delete('mockfailaftertool');
     ProviderFactory['_providers'].delete('mockonetool');
+    ProviderFactory['_providers'].delete('mockscript');
   });
 
   it('deny 3+ раза: каждый deny даёт tool_call.result с объяснением политики, без «Цикл прерван»; пустой ответ модели подставлен', async () => {
@@ -779,15 +829,18 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
-  it('doom loop для НЕ-deny повторяющихся вызовов сохранён: 3-й одинаковый вызов не публикует tool_call.result', async () => {
+  it('doom loop для НЕ-deny повторяющихся вызовов: 3-й вызов тоже даёт tool_call.result (error) и парный tool в истории', async () => {
     const h = await makeHarness('mockdoom');
     const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
     const result = await run(h, new AbortController().signal, (event, data) => chunks.push({ event, data }));
     expect(result.error).toBeUndefined();
 
-    // Первые два вызова read_file выполнились (tool_call.result), третий заглушён doom loop
+    // Первые два вызова read_file выполнились, третий заглушён doom loop —
+    // результат всё равно публикуется (ADR: пара assistant(tool_calls) → tool
+    // обязана существовать, иначе следующий LLM-вызов падает у провайдера).
     const toolResults = chunks.filter((c) => c.event === 'tool_call.result');
-    expect(toolResults).toHaveLength(2);
+    expect(toolResults).toHaveLength(3);
+    expect((toolResults[2]!.data.result as { isError?: boolean }).isError).toBe(true);
 
     // Провайдер вызван 4 раза: 3 tool-итерации + финальный текст
     expect(MockDoomProvider.calls).toBe(4);
@@ -815,6 +868,132 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     expect(assistant).toBeDefined();
     expect(assistant!.content).toBe('Could not complete the request: the model response was empty');
     expect(assistant!.metadata?.status).toBe('error');
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('doom-loop: парный tool персистится, sessionMessagesToLlm даёт валидный диалог', async () => {
+    const h = await makeHarness('mockdoom');
+    const result = await run(h, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    // Третий (doom) вызов тоже имеет tool-сообщение.
+    const thirdTool = session.messages.find((m) => m.role === MessageRole.TOOL && m.toolCallId === 'call_r2');
+    expect(thirdTool).toBeDefined();
+    expect(thirdTool!.content).toContain('Loop broken');
+
+    const llm = sessionMessagesToLlm(session.messages, 'fixer', 'user');
+    for (let i = 0; i < llm.length; i++) {
+      const m = llm[i]!;
+      if (m.role !== 'assistant' || !m.toolUse?.length) continue;
+      const ids = m.toolUse.map((tc) => tc.id as string);
+      // Все tool-результаты батча — сразу за assistant(toolUse), без user между.
+      let cursor = i + 1;
+      const seen: string[] = [];
+      while (cursor < llm.length && llm[cursor]!.role === 'tool') {
+        seen.push(llm[cursor]!.toolCallId as string);
+        cursor++;
+      }
+      expect(seen).toEqual(ids);
+    }
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('кривой tool call без function.name: error-результат tool.malformed_call, пара не рвётся', async () => {
+    MockScriptProvider.script = [
+      { content: '', toolCalls: [{ id: 'call_bad' }] },
+      { content: 'Готово' },
+    ];
+    const h = await makeHarness('mockscript');
+    const result = await run(h, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const tool = session.messages.find((m) => m.role === MessageRole.TOOL && m.toolCallId === 'call_bad');
+    expect(tool).toBeDefined();
+    expect(tool!.content).toContain('malformed tool call');
+
+    const llm = sessionMessagesToLlm(session.messages, 'fixer', 'user');
+    const assistant = llm.find((m) => m.role === 'assistant' && m.toolUse?.some((tc) => tc.id === 'call_bad'));
+    expect(assistant).toBeDefined();
+    const idx = llm.indexOf(assistant!);
+    expect(llm[idx + 1]).toMatchObject({ role: 'tool', toolCallId: 'call_bad' });
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('исключение в туле: error-результат tool.exec_error, ход продолжается', async () => {
+    MockScriptProvider.script = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call_boom', function: { name: 'boom', arguments: '{}' } }],
+      },
+      { content: 'Готово' },
+    ];
+    const registry = createToolRegistry();
+    registry.register({
+      name: 'boom',
+      description: 'always throws',
+      parameters: z.object({}).passthrough(),
+      capabilities: [],
+      async execute() { throw new Error('boom!'); },
+    } as unknown as ToolDefinition);
+    const h = await makeHarness('mockscript', registry);
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const result = await run(h, new AbortController().signal, (event, data) => chunks.push({ event, data }));
+    expect(result.error).toBeUndefined();
+
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const tool = session.messages.find((m) => m.role === MessageRole.TOOL && m.toolCallId === 'call_boom');
+    expect(tool).toBeDefined();
+    expect(tool!.content).toContain('execution error');
+    expect(tool!.content).toContain('boom!');
+
+    const llm = sessionMessagesToLlm(session.messages, 'fixer', 'user');
+    const idx = llm.findIndex((m) => m.role === 'assistant' && m.toolUse?.some((tc) => tc.id === 'call_boom'));
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(llm[idx + 1]).toMatchObject({ role: 'tool', toolCallId: 'call_boom' });
+    // Ход не упал — модель получила результат и ответила текстом.
+    const done = chunks.find((c) => c.event === 'stream.done')!;
+    expect(done.data.content).toBe('Готово');
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('plan_enter + второй тул в одном батче: mode_change пишется после всех tool-результатов', async () => {
+    MockScriptProvider.script = [
+      {
+        content: '',
+        toolCalls: [
+          { id: 'call_plan', function: { name: 'plan_enter', arguments: '{}' } },
+          { id: 'call_list', function: { name: 'list_directory', arguments: JSON.stringify({ path: '.' }) } },
+        ],
+      },
+      { content: 'Готово' },
+    ];
+    const h = await makeHarness('mockscript');
+    const result = await run(h, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const assistantIdx = session.messages.findIndex(
+      (m) => m.role === MessageRole.ASSISTANT && m.toolCalls?.some((tc) => tc.id === 'call_plan'),
+    );
+    expect(assistantIdx).toBeGreaterThanOrEqual(0);
+    const planIdx = session.messages.findIndex((m) => m.role === MessageRole.TOOL && m.toolCallId === 'call_plan');
+    const listIdx = session.messages.findIndex((m) => m.role === MessageRole.TOOL && m.toolCallId === 'call_list');
+    // Первое mode_change могло быть записано при входе в ход (syncStateMessages) —
+    // ищем именно durable state-сообщение ПОСЛЕ батча тулов.
+    const stateIdx = session.messages.findIndex(
+      (m, i) => i > assistantIdx && m.metadata?.type === 'mode_change',
+    );
+    expect(planIdx).toBeGreaterThanOrEqual(0);
+    expect(listIdx).toBeGreaterThanOrEqual(0);
+    expect(stateIdx).toBeGreaterThan(planIdx);
+    expect(stateIdx).toBeGreaterThan(listIdx);
+
+    // Между assistant(tool_calls) и его tool-результатами нет user/state.
+    expect(session.messages[assistantIdx + 1]!.toolCallId).toBe('call_plan');
+    expect(session.messages[assistantIdx + 2]!.toolCallId).toBe('call_list');
+    expect(stateIdx).toBe(assistantIdx + 3);
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 });

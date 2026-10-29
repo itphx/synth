@@ -64,7 +64,7 @@ const EXPECTED_API_METHODS = [
   'saveMcpNetworkPolicy', 'saveMcpPolicy', 'saveMcpToolSettings', 'saveModel',
   'saveProtectedPaths', 'saveProxy', 'saveSecuritySettings', 'saveToolsDisabled', 'saveToolsPolicy',
   'scanGitRepos', 'scheduleRestore', 'setDefaultAgent', 'setDefaultClient', 'setDefaultModel', 'setEnabled', 'setMemoryIndexEnabled', 'setProfilePassword', 'setProxyPassword', 'setToken', 'setWorkspacePolicy', 'setWorkspaceSetting', 'startPipelineRun',
-  'status', 'stopGeneration', 'stopProcess', 'summarizeSession', 'testProvider', 'testProxyRoute', 'testWebhookSubscription',
+  'status', 'steerQueue', 'stopGeneration', 'stopProcess', 'summarizeSession', 'testProvider', 'testProxyRoute', 'testWebhookSubscription',
   'toggleAgent', 'toggleContextFile', 'toggleMessage', 'uninstallPack', 'unlinkAgentSshKey', 'updateAttachmentsSettings',
   'updateDecisionSettings', 'updateEventBindingKey', 'updateEventsSettings', 'updateMcpRegistryEntry',
   'updateOptimization', 'updatePlugin', 'updatePluginsSettings', 'updateProject', 'updateProjectMcp', 'updateProjectPipeline', 'updateProjectSkills',
@@ -76,7 +76,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (352)', () => {
+  it('набор методов совпадает с зафиксированным (353)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

@@ -68,10 +68,11 @@ describe('createBackgroundParentNotifier — один путь (очередь)'
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  /** Мок `SessionManager`: очередь (`addPendingMessage`) и история (`addMessage`). */
+  /** Мок `SessionManager`: очередь (`addPendingMessage`), история (`addMessage`), steer. */
   function mockSessionManager(opts?: {
     pendingResult?: Session | null;
     addMessageResult?: Session | null;
+    steerResult?: { accepted: boolean; pending: number };
   }) {
     const addPendingMessage = vi.fn(async () =>
       opts?.pendingResult === undefined ? baseSession : opts.pendingResult,
@@ -80,8 +81,11 @@ describe('createBackgroundParentNotifier — один путь (очередь)'
       if (opts?.addMessageResult === null) return null;
       return { ...baseSession, messages: [...baseSession.messages, message] };
     });
-    const manager = { addPendingMessage, addMessage };
-    return { manager, addPendingMessage, addMessage };
+    const enqueueSteerMessage = vi.fn(async (_sessionId: string, _message: Message) =>
+      opts?.steerResult ?? { accepted: true, pending: 1 },
+    );
+    const manager = { addPendingMessage, addMessage, enqueueSteerMessage };
+    return { manager, addPendingMessage, addMessage, enqueueSteerMessage };
   }
 
   it('успех: сообщение ставится в очередь ровно один раз, addMessage не вызывается', async () => {
@@ -164,6 +168,79 @@ describe('createBackgroundParentNotifier — один путь (очередь)'
 
     expect(addMessage).toHaveBeenCalledTimes(1);
     expect(events).toHaveLength(0);
+  });
+
+  it('активный ход: уведомление уходит в steerInbox, очередь и автоход не трогаются', async () => {
+    const { manager, addPendingMessage, addMessage, enqueueSteerMessage } = mockSessionManager();
+    const eventBus = new EventBus();
+    const events: Array<{ type: string }> = [];
+    eventBus.subscribe('session-1', (e) => events.push({ type: e.type }));
+    const createProcessor = vi.fn();
+    const notify = createBackgroundParentNotifier({
+      sessionManager: manager as unknown as SessionManager,
+      eventBus,
+      processorManager: { createProcessor } as unknown as QueueProcessorManager,
+      processMessage: (async () => ({})) as unknown as ProcessMessageFn,
+      isTurnActive: async () => true,
+    });
+
+    const message = buildNotification();
+    await notify('session-1', message);
+
+    // Ровно один путь: инъекция в текущий ход.
+    expect(enqueueSteerMessage).toHaveBeenCalledTimes(1);
+    expect(addPendingMessage).not.toHaveBeenCalled();
+    expect(addMessage).not.toHaveBeenCalled();
+    expect(createProcessor).not.toHaveBeenCalled();
+    // Маркер вмешательства выставлен — сообщение вклинится в ход.
+    expect(message.metadata?.steer).toBe(true);
+    // Обычная очередь не публикуется (её нет).
+    expect(events.map((e) => e.type)).not.toContain('message.queued');
+    expect(events.map((e) => e.type)).not.toContain('message.added');
+  });
+
+  it('хода нет: уведомление уходит в pendingMessages (прежний путь очереди)', async () => {
+    const { manager, addPendingMessage, enqueueSteerMessage } = mockSessionManager();
+    const eventBus = new EventBus();
+    const createProcessor = vi.fn();
+    const notify = createBackgroundParentNotifier({
+      sessionManager: manager as unknown as SessionManager,
+      eventBus,
+      processorManager: { createProcessor } as unknown as QueueProcessorManager,
+      processMessage: (async () => ({})) as unknown as ProcessMessageFn,
+      isTurnActive: async () => false,
+    });
+
+    await notify('session-1', buildNotification());
+
+    expect(enqueueSteerMessage).not.toHaveBeenCalled();
+    expect(addPendingMessage).toHaveBeenCalledTimes(1);
+    expect(createProcessor).toHaveBeenCalledTimes(1);
+  });
+
+  it('лимит инъекций: маркер steer снят, уведомление не потеряно — уходит в очередь', async () => {
+    const { manager, addPendingMessage, addMessage, enqueueSteerMessage } = mockSessionManager({
+      steerResult: { accepted: false, pending: 5 },
+    });
+    const eventBus = new EventBus();
+    const createProcessor = vi.fn();
+    const notify = createBackgroundParentNotifier({
+      sessionManager: manager as unknown as SessionManager,
+      eventBus,
+      processorManager: { createProcessor } as unknown as QueueProcessorManager,
+      processMessage: (async () => ({})) as unknown as ProcessMessageFn,
+      isTurnActive: async () => true,
+    });
+
+    const message = buildNotification();
+    await notify('session-1', message);
+
+    expect(enqueueSteerMessage).toHaveBeenCalledTimes(1);
+    // Не принято инъекцией → обычная очередь (не fallback в историю).
+    expect(addPendingMessage).toHaveBeenCalledTimes(1);
+    expect(addMessage).not.toHaveBeenCalled();
+    // Признак инъекции не «протёк» в обычное сообщение очереди.
+    expect(message.metadata?.steer).toBeUndefined();
   });
 });
 

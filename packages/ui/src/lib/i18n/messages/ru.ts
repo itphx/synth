@@ -1248,6 +1248,8 @@ export const dict = {
   'chat.notice.backgroundState.completed': 'завершён',
   'chat.notice.backgroundState.failed': 'ошибка',
   'chat.notice.backgroundState.cancelled': 'остановлен',
+  // ADR-111/ADR-113: ретрансляция результата из дочерней сессии.
+  'chat.backgroundNotice.relayedFrom': 'запущено в «{title}»',
   // ADR-111/ADR-113: UI-уведомления о старте/финише фоновой работы.
   'notify.background.started': 'Фоновый процесс запущен: {name}',
   'notify.background.subagentStarted': 'Фоновый саб-агент запущен: {name}',
@@ -1342,6 +1344,9 @@ export const dict = {
   'chat.queue.resumed': 'Обработка очереди возобновлена',
   'chat.queue.returned': 'Очередь возвращена',
   'chat.queue.empty': 'Очередь пуста',
+  'chat.queue.steer': 'В разрыв',
+  'chat.queue.remove': 'Удалить',
+  'chat.queue.steered': 'Отправлено в текущий ход',
 
   'permission.bar.request': 'Инструмент «{tool}» запрашивает разрешение',
   'permission.bar.waiting': 'ещё {count}',
@@ -1404,6 +1409,7 @@ export const dict = {
   'chat.error.clearQueue': 'Ошибка очистки очереди',
   'chat.error.sendFailed': 'Ошибка отправки:',
   'chat.error.returnQueue': 'Ошибка возврата очереди',
+  'chat.error.steerQueue': 'Не удалось отправить в текущий ход',
   'chat.error.toggleMessage': 'Ошибка переключения сообщения',
   'chat.error.pinMessage': 'Ошибка закрепления сообщения',
   'chat.error.deleteMessage': 'Ошибка удаления сообщения',
@@ -2733,6 +2739,7 @@ export const dict = {
   // --- Тулы: общие ошибки и результаты ---
   'tool.args_error': 'Ошибка аргументов инструмента «{tool}»: {issues}',
   'tool.exec_error': 'Ошибка выполнения инструмента «{tool}»: {error}',
+  'tool.malformed_call': 'Ошибка: некорректный вызов инструмента «{tool}» (id: {id}) — вызов не выполнен',
   'tool.not_found': 'Инструмент «{tool}» не найден',
   'tool.permission_denied_default': 'Доступ запрещён политикой безопасности',
   'tool.doom_loop': 'Ошибка: инструмент «{tool}» вызван {count} раз(а) с теми же аргументами. Цикл прерван.',
@@ -3209,6 +3216,10 @@ export const dict = {
   'process.tool.no_log': 'У этого фонового прогона нет лога',
   'process.tool.child_history':
     'История дочерней сессии {child_session} доступна через тул read_session_reference',
+  'process.tool.not_running': 'Фоновый прогон «{id}» не выполняется',
+  'process.tool.running': 'Фоновый прогон «{id}» ещё выполняется — сначала остановите его через process_stop',
+  'process.tool.stopped': 'Фоновый прогон «{id}» остановлен (статус: {status})',
+  'process.tool.deleted': 'Запись фонового прогона «{id}» удалена',
 
   // --- Повторная привязка файла из workspace (ADR-115) ---
   'attach.message.from_workspace': 'Файл из рабочего каталога: {path}',

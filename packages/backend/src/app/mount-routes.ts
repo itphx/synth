@@ -229,7 +229,11 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   ));
 
   // Queue routes
-  app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage, projectStore));
+  app.route('/api/v2/queue', createQueueRoutes(
+    auth, sessionManager, queueManager, eventBus, processMessage, projectStore,
+    // ADR-036: обфускация user-сообщения при /queue/:sessionId/steer.
+    (sessionId, message) => orchestrator.obfuscateUserMessageForHistory(sessionId, message),
+  ));
 
   // FS routes (ADR-075): core-фабрика, managed поверх workspace проекта.
   // ADR-089 (P0): доступ к проекту обязателен — иначе любой USER читал/писал бы

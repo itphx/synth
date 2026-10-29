@@ -219,6 +219,7 @@ const MATRIX: Row[] = [
   // --- core queue routes ---
   row('queue', 'POST', '/:sessionId/clear'),
   row('queue', 'POST', '/:sessionId/return'),
+  row('queue', 'POST', '/:sessionId/steer', { status: 404 }), // нет pending-сообщения
   row('queue', 'POST', '/:sessionId/resume'),
   row('queue', 'POST', '/:sessionId/retry-now'),
   row('queue', 'POST', '/:sessionId/cancel-retry'),

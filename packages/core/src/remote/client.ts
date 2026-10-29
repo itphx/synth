@@ -80,6 +80,19 @@ export interface RequestOptions {
   rawBody?: RequestInit['body'];
 }
 
+/**
+ * Адресация элемента очереди для `return`/`steer` (ADR-104): `id` приоритетнее
+ * `index`; число — обратная совместимость (= `index`).
+ */
+export type QueueTarget = number | { id?: string; index?: number };
+
+/** Индекс очереди — неотрицательное целое (иначе запрос не отправляем). */
+function assertQueueIndex(index: number): void {
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error('index должен быть неотрицательным целым');
+  }
+}
+
 export class RemoteBackendClient {
   private readonly _backendUrl: string;
   private readonly _getToken: () => Promise<string | null>;
@@ -378,9 +391,40 @@ export class RemoteBackendClient {
     return this.request<unknown>('POST', `/api/v2/queue/${encodeURIComponent(sessionId)}/clear`);
   }
 
-  queueReturn(sessionId: string, index?: number): Promise<unknown> {
-    const qs = index !== undefined ? `?index=${index}` : '';
-    return this.request<unknown>('POST', `/api/v2/queue/${encodeURIComponent(sessionId)}/return${qs}`);
+  async queueReturn(sessionId: string, target?: QueueTarget): Promise<unknown> {
+    const base = `/api/v2/queue/${encodeURIComponent(sessionId)}/return`;
+    let qs = '';
+    if (typeof target === 'number') {
+      assertQueueIndex(target);
+      qs = `?index=${target}`;
+    } else if (target && typeof target === 'object') {
+      if (typeof target.id === 'string' && target.id !== '') {
+        qs = `?id=${encodeURIComponent(target.id)}`;
+      } else if (target.index !== undefined) {
+        assertQueueIndex(target.index);
+        qs = `?index=${target.index}`;
+      }
+    }
+    return this.request<unknown>('POST', `${base}${qs}`);
+  }
+
+  /** ADR-104: отправить сообщение из очереди «в разрыв» активного хода. */
+  async queueSteer(sessionId: string, target?: QueueTarget): Promise<unknown> {
+    let body: { id: string } | { index: number } | Record<string, never> = {};
+    if (typeof target === 'number') {
+      assertQueueIndex(target);
+      body = { index: target };
+    } else if (target && typeof target.id === 'string' && target.id !== '') {
+      body = { id: target.id };
+    } else if (target && target.index !== undefined) {
+      assertQueueIndex(target.index);
+      body = { index: target.index };
+    }
+    return this.request<unknown>(
+      'POST',
+      `/api/v2/queue/${encodeURIComponent(sessionId)}/steer`,
+      body,
+    );
   }
 
   queueResume(sessionId: string): Promise<unknown> {

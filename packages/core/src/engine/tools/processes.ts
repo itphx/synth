@@ -1,6 +1,6 @@
 /**
  * Этап 1 roadmap 0.13 (блок 16): тулы реестра фоновых прогонов —
- * `process_list` и `process_logs`.
+ * `process_list`, `process_logs`, `process_stop`, `process_delete`.
  *
  * Паритет с UI-вкладкой «Процессы» (ADR-111/PROP-097) и с opencode: агент
  * видит **тот же** реестр фоновой работы, что и человек, и может читать лог
@@ -14,9 +14,10 @@
  *   запущенного внутри ребёнка, `sessionId` — сам ребёнок). Чужой прогон
  *   выглядит как отсутствующий (`process.tool.not_found`) — существование
  *   чужого ресурса не раскрывается.
- * - **Только чтение.** Ни один из тулов ничего не мутирует; в plan-режиме
- *   оба разрешены (см. `isPlanBlockedTool` — список блокируемых имён их не
- *   содержит).
+ * - **Чтение и управление.** `process_list`/`process_logs` ничего не мутируют
+ *   и разрешены в plan-режиме; `process_stop`/`process_delete` мутирующие и в
+ *   plan-режиме заблокированы (`PLAN_BLOCKED_AUTOMATION_TOOLS`), удаление —
+ *   только терминальных записей.
  * - **Лог есть только у `kind: 'process'`.** У фонового саб-агента лога нет:
  *   его история живёт в дочерней сессии (`read_session_reference`).
  * - Тексты — только через ключи `shared/i18n` (ADR-041).
@@ -193,7 +194,7 @@ export const processListTool: ToolDefinition = {
     'List background runs of the current session and its child sessions: background subagents and background shell commands. '
     + 'Returns the id, kind, status, command or description, start/finish time, exit code and the child session id. '
     + 'Use it to check whether a background job is still running or has finished; do not poll in a loop — '
-    + 'a notification with the result arrives automatically.',
+    + 'a notification with the result arrives automatically. For a background subagent its history is available via read_session_reference.',
   parameters: processListSchema,
   capabilities: [ToolCapability.PROCESS],
   async execute(args, ctx) {
@@ -364,6 +365,125 @@ export const processLogsTool: ToolDefinition = {
         total_bytes: logs.totalBytes,
         truncated: logs.truncated === true,
       },
+    };
+  },
+};
+
+// ─────────────────────────────── process_stop ───────────────────────────────
+
+const processRefSchema = z
+  .object({
+    id: z
+      .string()
+      .min(1)
+      .describe('Id of the background run record (bgr_...) as returned by process_list'),
+  })
+  .strict();
+
+/** Прогон не выполняется (терминальный или без живого хэндла отмены). */
+function notRunning(runId: string): ToolResult {
+  return {
+    content: sm('process.tool.not_running', { id: runId }),
+    isError: true,
+    metadata: { i18n: i18nMeta('process.tool.not_running', { id: runId }) },
+  };
+}
+
+/** Прогон ещё выполняется — сначала `process_stop`. */
+function stillRunning(runId: string): ToolResult {
+  return {
+    content: sm('process.tool.running', { id: runId }),
+    isError: true,
+    metadata: { i18n: i18nMeta('process.tool.running', { id: runId }) },
+  };
+}
+
+/**
+ * Найти прогон в скоупе «своя сессия + дочерние».
+ *
+ * `null` — прогона нет или он чужой (одинаковый ответ `process.tool.not_found`,
+ * существование чужого ресурса не раскрывается).
+ */
+async function findRunInScope(
+  ctx: ToolContext,
+  extra: ProcessToolsExtra | undefined,
+  registry: BackgroundRunService,
+  runId: string,
+): Promise<BackgroundRunRecord | null> {
+  const record = await registry.get(runId);
+  if (!record) return null;
+  const scope = await resolveScope(ctx, extra);
+  return scope.has(record.sessionId) ? record : null;
+}
+
+export const processStopTool: ToolDefinition = {
+  name: 'process_stop',
+  description:
+    'Stop a running background run (a background subagent or a background shell command) by the id of its '
+    + 'background run record (from process_list). The registry scope is the current session and its child sessions. '
+    + 'Only running runs can be stopped; events process.stopped/process.exited are published by the service.',
+  parameters: processRefSchema,
+  capabilities: [ToolCapability.PROCESS],
+  async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
+
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) return argErrorResult(this.name, parsed.error.issues);
+    const params = parsed.data as { id: string };
+
+    const extra = ctx.extra as ProcessToolsExtra | undefined;
+    const registry = extra?.backgroundService;
+    if (!registry) return depsUnavailable();
+
+    const record = await findRunInScope(ctx, extra, registry, params.id);
+    if (!record) return runNotFound(params.id);
+    if (record.status !== 'running') return notRunning(params.id);
+
+    const stopped = await registry.stop(params.id);
+    if (!stopped) return notRunning(params.id);
+
+    // Статус мог обновиться асинхронно (терминальный переход публикует сервис).
+    const updated = (await registry.get(params.id)) ?? record;
+    return {
+      content: sm('process.tool.stopped', { id: params.id, status: updated.status }),
+      metadata: { id: params.id, status: updated.status, kind: updated.kind },
+    };
+  },
+};
+
+// ────────────────────────────── process_delete ──────────────────────────────
+
+export const processDeleteTool: ToolDefinition = {
+  name: 'process_delete',
+  description:
+    'Delete a finished background run record by its id (from process_list). Only terminal runs can be deleted; '
+    + 'a running run must be stopped first with process_stop. The registry scope is the current session and its child sessions.',
+  parameters: processRefSchema,
+  capabilities: [ToolCapability.PROCESS],
+  async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
+
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) return argErrorResult(this.name, parsed.error.issues);
+    const params = parsed.data as { id: string };
+
+    const extra = ctx.extra as ProcessToolsExtra | undefined;
+    const registry = extra?.backgroundService;
+    if (!registry) return depsUnavailable();
+
+    const record = await findRunInScope(ctx, extra, registry, params.id);
+    if (!record) return runNotFound(params.id);
+    if (record.status === 'running') return stillRunning(params.id);
+
+    // Guard — в туле (сервисный `remove` намеренно тонкий делегат порта).
+    const removed = await registry.remove(params.id);
+    if (!removed) return runNotFound(params.id);
+
+    return {
+      content: sm('process.tool.deleted', { id: params.id }),
+      metadata: { id: params.id, kind: record.kind, status: record.status },
     };
   },
 };

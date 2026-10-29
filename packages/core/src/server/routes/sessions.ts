@@ -25,7 +25,8 @@ import type { LocalOwnerResolver } from '../local-owner.js';
 import type { AnalyticsRecorder } from '../../analytics/recorder.js';
 import { sessionAxes } from '../../analytics/recorder.js';
 import { MEMORY_NAMESPACE } from '../../engine/plugins/memory-namespace.js';
-import { dropSteerInjections } from '../../engine/steering/apply.js';
+import { dropSteerInjections, isBackgroundNoticeMessage } from '../../engine/steering/apply.js';
+import { requeueMessages } from '../../queue/processor.js';
 import type { MemoryFactRepository } from '../../storage/ports/memory-fact-repository.js';
 import type { MemoryIndexRepository } from '../../storage/ports/memory-index-repository.js';
 // Этап 1 roadmap 0.13 (блок 3): «вопрос пользователю» (`ask_user`).
@@ -1668,6 +1669,12 @@ export function createSessionRoutes(
         reason: 'aborted',
         streamId: session.currentStream?.streamId,
         publishDropped: (event) => deps.eventBus.publish(id, 'steer.dropped', event),
+        // ADR-111/ADR-113: уведомления фоновых прогонов не дропаем, а
+        // возвращаем в очередь. Автостарта нет — ход остановил пользователь.
+        isRequeuable: isBackgroundNoticeMessage,
+        requeue: async (messages) => {
+          await requeueMessages({ sessionManager, eventBus: deps.eventBus, sessionId: id, messages });
+        },
       });
     } catch (err) {
       console.warn(

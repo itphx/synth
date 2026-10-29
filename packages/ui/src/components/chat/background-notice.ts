@@ -83,6 +83,18 @@ export function backgroundNoticeName(
 }
 
 /**
+ * ADR-111/ADR-113: ретранслированное уведомление — подпись «где запускалось».
+ * `undefined` — обычное (неретранслированное) уведомление.
+ */
+export function backgroundNoticeRelayedFrom(
+  metadata: Record<string, unknown> | null | undefined,
+): string | undefined {
+  if (metadata?.relayed !== true) return undefined;
+  return metaString(metadata.relayed_from_title)
+    ?? metaString(metadata.relayed_from_session_id);
+}
+
+/**
  * Снять конверт модели (`<process …>`/`<subagent …>`) — вернуть тело.
  *
  * Если конверт не распознан — текст возвращается как есть.

@@ -336,7 +336,12 @@ export function mountStandaloneRoutes(
   // Queue
   app.route('/api/v2/queue', createQueueRoutes(
     auth, sessionManager, queueManager, eventBus, processMessage, () => getClient(),
-    { localOwnerResolver: deps.localOwnerResolver },
+    {
+      localOwnerResolver: deps.localOwnerResolver,
+      // ADR-036: та же обфускация, что у `POST /sessions/:id/prompt`.
+      obfuscate: (sessionId, message) =>
+        orchestrator.obfuscateUserMessageForHistory(sessionId, message),
+    },
   ));
 
   // Updates

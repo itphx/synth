@@ -129,6 +129,27 @@ describe('queueApi — очередь сессии (путь /queue/:sessionId)'
     )
   })
 
+  it('steerQueue: index уходит в тело только при задании', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ steered: true, pending_count: 1 }))
+
+    const resp = await synthApi.steerQueue('s1')
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/queue/s1/steer',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).body).toBeUndefined()
+    expect(resp).toEqual({ steered: true, pending_count: 1 })
+
+    await synthApi.steerQueue('s1', 2)
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/queue/s1/steer',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ index: 2 }),
+      }),
+    )
+  })
+
   it('retryQueueNow / cancelQueueRetry: POST-подпути', async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 204, json: async () => undefined } as unknown as Response)
 
@@ -142,6 +163,44 @@ describe('queueApi — очередь сессии (путь /queue/:sessionId)'
     expect(fetchMock).toHaveBeenLastCalledWith(
       '/api/v2/queue/s1/cancel-retry',
       expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
+  it('returnQueue: id приоритетнее index (query ?id=)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ texts: [] }))
+
+    await synthApi.returnQueue('s1', { id: 'msg-1', index: 3 })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/queue/s1/return?id=msg-1',
+      expect.objectContaining({ method: 'POST' }),
+    )
+
+    await synthApi.returnQueue('s1', { index: 3 })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/queue/s1/return?index=3',
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
+  it('steerQueue: id уходит в тело и приоритетнее index', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ steered: true, pending_count: 0 }))
+
+    await synthApi.steerQueue('s1', { id: 'msg-1', index: 3 })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/queue/s1/steer',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ id: 'msg-1' }),
+      }),
+    )
+
+    await synthApi.steerQueue('s1', { index: 3 })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/queue/s1/steer',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ index: 3 }),
+      }),
     )
   })
 })

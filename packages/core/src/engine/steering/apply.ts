@@ -174,6 +174,26 @@ export interface SteerDropOptions {
   reason: Exclude<SteerDroppedReason, 'limit'>;
   /** id стрима хода — попадает в событие. */
   streamId?: string;
+  /**
+   * ADR-111/ADR-113: сообщение, которое нельзя терять при снятии очереди —
+   * вместо `steer.dropped` его возвращают в обычную очередь (`requeue`).
+   * Сейчас это уведомления о завершении фонового прогона
+   * (`metadata.type === 'background_run_result'`).
+   */
+  isRequeuable?: (message: Message) => boolean;
+  /** Возврат отфильтрованных сообщений в очередь (`pendingMessages`). */
+  requeue?: (messages: Message[]) => Promise<void>;
+}
+
+/**
+ * Уведомление о завершении фонового прогона (ADR-111/ADR-113).
+ *
+ * Такие сообщения не «внезапный ввод пользователя»: потерять результат
+ * фоновой работы нельзя, поэтому при снятии steer-очереди они возвращаются
+ * в обычную очередь (`pendingMessages`) вместо `steer.dropped`.
+ */
+export function isBackgroundNoticeMessage(message: Message): boolean {
+  return message.metadata?.type === 'background_run_result';
 }
 
 /**
@@ -183,15 +203,30 @@ export interface SteerDropOptions {
  * закончился, границы уже не будет — оставшиеся сообщения иначе применились бы
  * в начале следующего хода и выглядели «внезапным отдельным сообщением».
  * Снятые сообщения **не** персистятся (в историю не попадают) — о них сообщает
- * событие `steer.dropped` с причиной и количеством.
+ * событие `steer.dropped` с причиной и количеством. Исключение —
+ * `isRequeuable`/`requeue` (ADR-111/ADR-113): уведомления фоновых прогонов
+ * возвращаются в обычную очередь, чтобы результат работы не терялся.
  *
- * Возвращает снятые сообщения (для тестов/диагностики); пустая очередь — `[]`
- * и событие не публикуется.
+ * Возвращает **снятые** (не возвращённые в очередь) сообщения — для
+ * тестов/диагностики; пустая очередь — `[]`, событие не публикуется.
  */
 export async function dropSteerInjections(opts: SteerDropOptions): Promise<Message[]> {
   const { sessionManager, sessionId, publishDropped, reason, streamId } = opts;
-  const dropped = await sessionManager.clearSteerInbox(sessionId);
-  if (dropped.length === 0) return dropped;
+  const cleared = await sessionManager.clearSteerInbox(sessionId);
+  if (cleared.length === 0) return [];
+
+  // ADR-111/ADR-113: уведомления фоновых прогонов не теряем — возвращаем их в
+  // обычную очередь (ход закончился/остановлен, границы шага уже не будет).
+  let dropped = cleared;
+  if (opts.isRequeuable && opts.requeue) {
+    const requeued: Message[] = [];
+    dropped = [];
+    for (const message of cleared) {
+      (opts.isRequeuable(message) ? requeued : dropped).push(message);
+    }
+    if (requeued.length > 0) await opts.requeue(requeued);
+  }
+  if (dropped.length === 0) return [];
 
   const key = reason === 'aborted' ? 'steer.dropped_aborted' : 'steer.dropped_turn_ended';
   const params = { count: String(dropped.length) };

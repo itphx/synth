@@ -2,8 +2,14 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { SessionManager, QueueProcessorManager, ChatOrchestrator, EventBus } from '../../index.js';
-import { generateStreamId, MessageRole } from '@itphx/synth-shared';
-import type { Session } from '@itphx/synth-shared';
+import {
+  generateStreamId,
+  MessageRole,
+  MAX_STEER_INJECTIONS_PER_TURN,
+  STEERING_ERROR_CODES,
+} from '@itphx/synth-shared';
+import type { Message, Session } from '@itphx/synth-shared';
+import { enqueueSteerMessage } from '../../queue/processor.js';
 import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregate.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import { createSessionAccessGuard, createSessionAccessPredicate } from '../session-access-guard.js';
@@ -23,6 +29,12 @@ export interface QueueRouteMessages {
   sessionNotFound: (c: Context) => string;
   messageNotFoundIndex: (c: Context) => string;
   forbidden: (c: Context) => string;
+  /** `POST /:sessionId/steer` — активного хода нет (409 NO_ACTIVE_TURN). */
+  noActiveTurn: (c: Context) => string;
+  /** `POST /:sessionId/steer` — сообщение уже выполняется в текущем ходе (409). */
+  messageAlreadyRunning: (c: Context) => string;
+  /** `POST /:sessionId/steer` — превышен лимит инъекций (429). */
+  steerLimitExceeded: (c: Context, limit: number) => string;
 }
 
 export interface QueueRoutesOptions {
@@ -46,6 +58,11 @@ export interface QueueRoutesOptions {
    * при доступе к сессии. Managed не задаёт (id реальные).
    */
   localOwnerResolver?: LocalOwnerResolver;
+  /**
+   * ADR-036: обфускация user-сообщения перед постановкой в очередь инъекций
+   * (`POST /:sessionId/steer`) — тот же колбэк, что у `POST /sessions/:id/prompt`.
+   */
+  obfuscate?: (sessionId: string, message: Message) => Promise<Message>;
 }
 
 const LOCAL_USER_ID = 'local';
@@ -54,6 +71,10 @@ const DEFAULT_MESSAGES: QueueRouteMessages = {
   sessionNotFound: () => 'Сессия не найдена',
   messageNotFoundIndex: () => 'Сообщение не найдено по индексу',
   forbidden: () => 'Доступ к сессии запрещён',
+  noActiveTurn: () => 'Активного хода нет — отправьте сообщение обычной очередью',
+  messageAlreadyRunning: () => 'Сообщение уже выполняется',
+  steerLimitExceeded: (_c, limit) =>
+    `Достигнут лимит вмешательств в ход (макс. ${limit})`,
 };
 
 /** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
@@ -139,13 +160,26 @@ export function createQueueRoutes(
   app.post('/:sessionId/return', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
+    const idParam = c.req.query('id');
+    const targetId = idParam && idParam.trim() !== '' ? idParam : undefined;
     const indexStr = c.req.query('index');
-    const index = indexStr !== undefined ? parseInt(indexStr, 10) : undefined;
+    const index = indexStr !== undefined ? Number(indexStr) : undefined;
+    // Legacy `?index=abc`/отрицательный — ошибка валидации, а не «вся очередь»
+    // (и не 500 из remote-клиента): проверяем до hybrid-ветки.
+    if (targetId === undefined && index !== undefined && (!Number.isInteger(index) || index < 0)) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: 'index должен быть неотрицательным целым' } },
+        400,
+      );
+    }
 
     if (isRemoteRef(sessionId)) {
       if (!remoteClient) return remoteUnavailable(c);
       try {
-        const result = await remoteClient.queueReturn(toLocalId(sessionId), index);
+        const result = await remoteClient.queueReturn(
+          toLocalId(sessionId),
+          targetId !== undefined ? { id: targetId } : index,
+        );
         return c.json(result);
       } catch (err) {
         const mapped = mapRemoteError(c, err);
@@ -159,7 +193,10 @@ export function createQueueRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
 
-    if (index !== undefined && !isNaN(index) && !session.pendingMessages[index]) {
+    if (targetId !== undefined && !session.pendingMessages.some((m) => m.id === targetId)) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFoundIndex(c) } }, 404);
+    }
+    if (targetId === undefined && index !== undefined && !isNaN(index) && !session.pendingMessages[index]) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFoundIndex(c) } }, 404);
     }
 
@@ -171,10 +208,20 @@ export function createQueueRoutes(
 
     let texts: string[] = [];
     let remainingCount = 0;
+    /** Найден ли элемент по `id` внутри `safeUpdate` (гонка: исчез между чтениями). */
+    let idRemoved = false;
 
     await sessionManager.safeUpdate(sessionId, async (s) => {
       let removedStreamIds: string[] = [];
-      if (index !== undefined && !isNaN(index)) {
+      if (targetId !== undefined) {
+        const msg = s.pendingMessages.find((m) => m.id === targetId);
+        if (!msg) return;
+        idRemoved = true;
+        texts = [msg.content];
+        const sid = msg.metadata?.stream_id as string | undefined;
+        removedStreamIds = sid ? [sid] : [];
+        s.pendingMessages = s.pendingMessages.filter((m) => m.id !== targetId);
+      } else if (index !== undefined && !isNaN(index)) {
         const msg = s.pendingMessages[index];
         if (!msg) return;
         texts = [msg.content];
@@ -211,11 +258,135 @@ export function createQueueRoutes(
       }
     });
 
+    // Элемент исчез между чтением и записью (параллельный `/return`/`/steer`) —
+    // честный 404, а не «успех с пустым texts».
+    if (targetId !== undefined && !idRemoved) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFoundIndex(c) } }, 404);
+    }
+
     if (remainingCount === 0 && !activeStreamId) {
       queueManager.stop(sessionId);
     }
 
     return c.json({ texts });
+  });
+
+  // POST /:sessionId/steer — отправить сообщение из очереди «в разрыв»
+  // текущего хода (ADR-104 × ADR-111/ADR-113, как delivery `steer` в inbox).
+  // Тело: `{ id?: string; index?: number }` (приоритет `id`, `index` — для
+  // совместимости; по умолчанию 0). Сообщение снимается из `pendingMessages`,
+  // его user-копия удаляется из истории (по `stream_id`, активный стрим не
+  // трогаем — как в `/return`) и уходит в очередь инъекций.
+  app.post('/:sessionId/steer', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
+    const sessionId = c.req.param('sessionId');
+    const body = await c.req.json().catch(() => null) as { id?: unknown; index?: unknown } | null;
+    const rawId = body?.id;
+    const targetId = typeof rawId === 'string' && rawId.trim() !== '' ? rawId : undefined;
+    const rawIndex = body?.index;
+    const index = rawIndex === undefined
+      ? 0
+      : typeof rawIndex === 'number' && Number.isInteger(rawIndex) && rawIndex >= 0
+        ? rawIndex
+        : Number.NaN;
+
+    if (rawId !== undefined && targetId === undefined) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: 'id должен быть непустой строкой' } },
+        400,
+      );
+    }
+    if (targetId === undefined && Number.isNaN(index)) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: 'index должен быть неотрицательным целым' } },
+        400,
+      );
+    }
+
+    if (isRemoteRef(sessionId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.queueSteer(
+          toLocalId(sessionId),
+          targetId !== undefined ? { id: targetId } : { index },
+        );
+        return c.json(result);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
+    const session = await sessionManager.getSession(sessionId);
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    const message = targetId !== undefined
+      ? session.pendingMessages.find((m) => m.id === targetId)
+      : session.pendingMessages[index];
+    if (!message) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFoundIndex(c) } }, 404);
+    }
+
+    // UI показывает кнопку только при активном ходе; без него сообщению некуда
+    // вклиниваться — обычная очередь (`/sessions/:id/prompt`).
+    const turnActive = Boolean(session.status?.blocked) || queueManager.isRunning(sessionId);
+    if (!turnActive) {
+      return c.json({ error: { code: 'NO_ACTIVE_TURN', message: messages.noActiveTurn(c) } }, 409);
+    }
+
+    // Активный стрим (не отменённый): его user-сообщение из истории не трогаем
+    // (как в `/return`), а само сообщение нельзя отправить «в разрыв» —
+    // оно уже выполняется (иначе инъекция вклинится в собственный ход).
+    const activeStreamId = session.currentStream && !session.currentStream.cancelled
+      ? session.currentStream.streamId
+      : undefined;
+    const messageStreamId = message.metadata?.stream_id as string | undefined;
+    if (activeStreamId && messageStreamId === activeStreamId) {
+      return c.json({
+        error: { code: 'CONFLICT', message: messages.messageAlreadyRunning(c) },
+      }, 409);
+    }
+
+    // Сначала ставим в очередь инъекций — при отказе (лимит) очередь и история
+    // остаются нетронутыми (сообщение не теряется).
+    const steered = await enqueueSteerMessage(
+      sessionManager,
+      eventBus,
+      sessionId,
+      message,
+      MAX_STEER_INJECTIONS_PER_TURN,
+      opts?.obfuscate,
+    );
+    if (!steered.accepted) {
+      return c.json({
+        error: {
+          code: STEERING_ERROR_CODES.limitExceeded,
+          message: messages.steerLimitExceeded(c, MAX_STEER_INJECTIONS_PER_TURN),
+        },
+      }, 429);
+    }
+
+    // Принято инъекцией — снимаем из pending именно это сообщение (по id, а не
+    // по индексу: параллельное изменение очереди индекс сдвигает) и удаляем
+    // его user-копию из истории по `stream_id`.
+    await sessionManager.safeUpdate(sessionId, async (s) => {
+      s.pendingMessages = s.pendingMessages.filter((m) => (message.id ? m.id !== message.id : m !== message));
+      if (!messageStreamId) return;
+      s.messages = s.messages.filter((m) => {
+        if (m.role !== MessageRole.USER) return true;
+        const sid = m.metadata?.stream_id as string | undefined;
+        if (!sid) return true;
+        if (sid === activeStreamId) return true;
+        return sid !== messageStreamId;
+      });
+    });
+
+    // `pending_count` в семействе queue-роутов — длина `pendingMessages`
+    // (как у `/clear`/`/resume`), а не размер steer-очереди.
+    const updated = await sessionManager.getSession(sessionId);
+    return c.json({ steered: true, pending_count: updated?.pendingMessages.length ?? 0 }, 202);
   });
 
   app.post('/:sessionId/resume', auth.requireAuth, async (c) => {
@@ -264,6 +435,7 @@ export function createQueueRoutes(
       if (streamId && !alreadyInHistory) {
         eventBus.publish(sessionId, 'message.queued', {
           stream_id: streamId,
+          message_id: firstMsg.id,
           pending_count: session.pendingMessages.length,
           message: firstMsg.content,
           agent_role: firstMsg.agentRole,
