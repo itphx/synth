@@ -124,10 +124,11 @@ export const QUESTION_TOOLS = ['question'];
  * поэтому правило `permission.rules.process` работает и по именам встроенных
  * тулов, и по capability плагинного тула.
  *
- * Обе группы — **только чтение**: в plan-режиме они разрешены (см.
- * `isPlanBlockedTool` — список блокируемых имён их не содержит).
+ * Группа `process` — чтение **и управление**: `process_list`/`process_logs` в
+ * plan-режиме разрешены, `process_stop`/`process_delete` — заблокированы
+ * (`isPlanBlockedTool`).
  */
-export const PROCESS_TOOLS = ['process_list', 'process_logs'];
+export const PROCESS_TOOLS = ['process_list', 'process_logs', 'process_stop', 'process_delete'];
 
 /** Все тулы пайплайнов (read + write). */
 export const PIPELINE_TOOLS = [...PIPELINE_READ_TOOLS, ...PIPELINE_WRITE_TOOLS];

@@ -317,7 +317,8 @@ describe('Встроенные тулы реестра фоновых прого
       expect(result.isError).toBeUndefined();
       expect(abort).toHaveBeenCalledTimes(1);
       expect(result.content).toContain(run.id);
-      expect(result.content).toContain('stopped');
+      expect(result.content).toContain('Stop requested');
+      expect(result.content).not.toContain('stopped (status');
       expect(result.metadata).toMatchObject({ id: run.id, status: 'running' });
     });
 
@@ -389,6 +390,20 @@ describe('Встроенные тулы реестра фоновых прого
       expect(result.metadata?.i18n).toMatchObject({ key: 'process.tool.running' });
       expect(remove).not.toHaveBeenCalled();
       expect(await repository.get(run.id)).not.toBeNull();
+    });
+
+    it('process_delete: чужой прогон вне скоупа → not_found, remove не вызван', async () => {
+      const other = await sessionManager.createSession({ title: 'Other' });
+      const foreign = await background.startProcess({ sessionId: other.id, command: 'true', cwd: tmpDir });
+      await background.finish(foreign.id, { status: 'completed', exitCode: 0 });
+      const remove = vi.spyOn(repository, 'remove');
+
+      const result = await processDeleteTool.execute({ id: foreign.id }, makeCtx());
+
+      expect(result.isError).toBe(true);
+      expect(result.metadata?.i18n).toMatchObject({ key: 'process.tool.not_found' });
+      expect(remove).not.toHaveBeenCalled();
+      expect(await repository.get(foreign.id)).not.toBeNull();
     });
   });
 

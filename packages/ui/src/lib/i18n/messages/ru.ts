@@ -3218,7 +3218,7 @@ export const dict = {
     'История дочерней сессии {child_session} доступна через тул read_session_reference',
   'process.tool.not_running': 'Фоновый прогон «{id}» не выполняется',
   'process.tool.running': 'Фоновый прогон «{id}» ещё выполняется — сначала остановите его через process_stop',
-  'process.tool.stopped': 'Фоновый прогон «{id}» остановлен (статус: {status})',
+  'process.tool.stopping': 'Остановка фонового прогона «{id}» запрошена',
   'process.tool.deleted': 'Запись фонового прогона «{id}» удалена',
 
   // --- Повторная привязка файла из workspace (ADR-115) ---

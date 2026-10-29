@@ -98,7 +98,7 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   },
   [ToolCapability.PROCESS]: {
     label: 'Фоновые процессы',
-    description: 'process_list, process_logs',
+    description: 'process_list, process_logs, process_stop, process_delete',
   },
   [ToolCapability.MODELS]: {
     label: 'Модели',

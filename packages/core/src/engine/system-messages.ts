@@ -591,7 +591,7 @@ export const SYSTEM_MESSAGES = {
     'The history of the child session {child_session} is available via the read_session_reference tool',
   'process.tool.not_running': 'Background run "{id}" is not running',
   'process.tool.running': 'Background run "{id}" is still running — stop it first with process_stop',
-  'process.tool.stopped': 'Background run "{id}" stopped (status: {status})',
+  'process.tool.stopping': 'Stop requested for background run "{id}"',
   'process.tool.deleted': 'Background run "{id}" deleted',
 
   // --- Повторная привязка файла из workspace (ADR-115) ---

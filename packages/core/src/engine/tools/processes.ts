@@ -446,7 +446,7 @@ export const processStopTool: ToolDefinition = {
     // Статус мог обновиться асинхронно (терминальный переход публикует сервис).
     const updated = (await registry.get(params.id)) ?? record;
     return {
-      content: sm('process.tool.stopped', { id: params.id, status: updated.status }),
+      content: sm('process.tool.stopping', { id: params.id }),
       metadata: { id: params.id, status: updated.status, kind: updated.kind },
     };
   },

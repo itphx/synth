@@ -448,7 +448,7 @@ export const ENGINE_MESSAGE_KEYS = [
   // ADR-111: управление фоновыми прогонами из агента.
   'process.tool.not_running',
   'process.tool.running',
-  'process.tool.stopped',
+  'process.tool.stopping',
   'process.tool.deleted',
   // --- Повторная привязка файла из workspace (ADR-115) ---
   'attach.message.from_workspace',
@@ -915,7 +915,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'process.tool.child_history': ["child_session"],
   'process.tool.not_running': ["id"],
   'process.tool.running': ["id"],
-  'process.tool.stopped': ["id","status"],
+  'process.tool.stopping': ["id"],
   'process.tool.deleted': ["id"],
   'attach.message.from_workspace': ["path"],
   'attach.tool.attached': ["path"],

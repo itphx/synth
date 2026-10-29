@@ -232,6 +232,15 @@ describe('POST /api/v2/queue/:sessionId/steer', () => {
     expect(session.pendingMessages.map((m) => m.id)).toEqual([message.id])
   })
 
+  it('400 — legacy ?index=-1: ошибка валидации, очередь не тронута', async () => {
+    const message = await seedPending()
+    const res = await app.request(`/api/v2/queue/${sessionId}/return?index=-1`, { method: 'POST' })
+    expect(res.status).toBe(400)
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR')
+    const session = (await sessionManager.getSession(sessionId))!
+    expect(session.pendingMessages.map((m) => m.id)).toEqual([message.id])
+  })
+
   it('400 — legacy ?index=abc в hybrid-ветке (без запроса к remote)', async () => {
     const remote = { queueReturn: vi.fn(), queueSteer: vi.fn() }
     const hybrid = new Hono()

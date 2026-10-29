@@ -1059,11 +1059,15 @@
   (`loadScheduleScope`/`isScheduleInScope`/`ensureScheduleMutable`).
   **Тулы реестра фоновых прогонов (ADR-111/PROP-097).** `process_list`/`process_logs`
   (`engine/tools/processes.ts`) — чтение **единого** реестра фоновой работы (фоновые
-  саб-агенты и фоновые шелл-процессы) и лога фонового процесса. Скоуп — **«своя сессия +
+  саб-агенты и фоновые шелл-процессы) и лога фонового процесса; `process_stop` —
+  остановка running-прогона (процесс — `SIGTERM`→`SIGKILL`, фоновый саб-агент — abort
+  дочернего прогона), `process_delete` — удаление только терминальной записи
+  (`BackgroundRunService.remove`). Скоуп — **«своя сессия +
   дочерние»**: видны прогоны текущей сессии и прогоны её дочерних сессий (`task`); чужой
   прогон выглядит как отсутствующий (`process.tool.not_found` — тот же текст, что и для
-  несуществующего, существование чужого ресурса не раскрывается). Только чтение: оба тула
-  разрешены в plan-режиме (`isPlanBlockedTool` их не блокирует), группа `process`
+  несуществующего, существование чужого ресурса не раскрывается). Чтение + управление:
+  `process_list`/`process_logs` разрешены в plan-режиме, `process_stop`/`process_delete`
+  там заблокированы (`PLAN_BLOCKED_AUTOMATION_TOOLS`), группа `process`
   отключаема админом. Зависимости — из `ctx.extra`: `backgroundService` (реестр),
   `processService` (лог), `sessionManager` (дети сессии); нет сервиса — понятный отказ
   `process.tool.deps_unavailable`. **Лог есть только у `kind: 'process'`** — он читается из

@@ -2739,6 +2739,10 @@ export const dict = {
   'process.tool.no_log': 'There is no log for this background run',
   'process.tool.child_history':
     'The history of the child session {child_session} is available via the read_session_reference tool',
+  'process.tool.not_running': 'Background run "{id}" is not running',
+  'process.tool.running': 'Background run "{id}" is still running — stop it first with process_stop',
+  'process.tool.stopping': 'Stop requested for background run "{id}"',
+  'process.tool.deleted': 'Background run "{id}" deleted',
 
   // --- Повторная привязка файла из workspace (ADR-115) ---
   'attach.message.from_workspace': 'File from the working directory: {path}',
