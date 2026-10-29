@@ -53,7 +53,9 @@
    `<process processID="…" state="exited|failed|killed" command="…">` и хвостом лога (≤ 4000
    символов — этого хватает модели, чтобы понять итог), затем родительский ход ставится в очередь.
    Лимиты сессии: `background.maxProcessesPerSession` и `background.maxRunsPerSession`
-   (`background_limit_exceeded` — ошибка тула, ход не падает).
+   (`background_limit_exceeded` — ошибка тула, ход не падает). Считаются только **живые**
+   (`running`) прогоны: терминальные записи — история реестра, её чистит retention
+   (ADR-111 п. 6), и лимит она не занимает.
 5. **Remote: процесс живёт на исполнителе, протокол v3.** Исполнитель (`@itphx/synth-executor`)
    держит `BackgroundExecService` (реестр — в памяти процесса исполнителя, журналы — на диске
    исполнителя, раздельные `stdout`/`stderr`) и отдаёт четыре маршрута:

@@ -10,7 +10,7 @@
 // Если токена нет — ProviderError (оркестратор не ретраит бесконечно).
 
 import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
-import { BaseProvider, resolveSystemPromptText, type LLMMessage, type SystemPromptInput, type CancellationToken } from './base.js';
+import { BaseProvider, resolveSystemPromptText, type LLMMessage, type SystemPromptInput, type CancellationToken, type ChatOptions } from './base.js';
 import { ProviderError, ContextLengthExceededError, RateLimitError } from './exceptions.js';
 import { info } from '../logger.js';
 // ADR-099: запросы к backend-прокси — через единый транспорт доверия TLS/CA.
@@ -97,10 +97,11 @@ export class RemoteProvider extends BaseProvider {
     tools?: Record<string, unknown>[],
     _stream?: boolean,
     debugCollector?: DebugCollector,
+    options?: ChatOptions,
   ): Promise<LLMResponse> {
     info('REMOTE', `чат: model=${this.model}, сообщений=${messages.length}`);
 
-    const resp = await this._request(messages, systemPrompt, tools, false);
+    const resp = await this._request(messages, systemPrompt, tools, false, undefined, options);
     const data = (await resp.json()) as Record<string, unknown>;
     debugCollector?.captureApiResponse(data);
     debugCollector?.captureRawModelResponse(JSON.stringify(data));
@@ -114,6 +115,7 @@ export class RemoteProvider extends BaseProvider {
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
+    options?: ChatOptions,
   ): AsyncGenerator<LLMChunk> {
     info('REMOTE', `чатAsync: model=${this.model}, сообщений=${messages.length}`);
 
@@ -147,7 +149,7 @@ export class RemoteProvider extends BaseProvider {
 
     let resp: Response;
     try {
-      resp = await this._request(messages, systemPrompt, tools, true, controller.signal);
+      resp = await this._request(messages, systemPrompt, tools, true, controller.signal, options);
     } catch (e) {
       // Отмена пользователя — молча завершаем генератор.
       if (cancellationToken?.cancelled || cancellationToken?.interrupted) return;
@@ -332,11 +334,12 @@ export class RemoteProvider extends BaseProvider {
     tools?: Record<string, unknown>[],
     stream?: boolean,
     signal?: AbortSignal,
+    options?: ChatOptions,
   ): Promise<Response> {
     const token = await this._resolveToken();
     const base = this.url.replace(/\/api\/v2\/?$/, '').replace(/\/+$/, '');
     const url = `${base}${LLM_PROXY_PATH}`;
-    const body = this._buildBody(messages, systemPrompt, tools, stream);
+    const body = this._buildBody(messages, systemPrompt, tools, stream, options);
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
@@ -392,6 +395,7 @@ export class RemoteProvider extends BaseProvider {
     systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     stream?: boolean,
+    options?: ChatOptions,
   ): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: this.model,
@@ -402,7 +406,11 @@ export class RemoteProvider extends BaseProvider {
     // ADR-070: просим backend-proxy отдать usage в стриме (как OpenAIProvider),
     // иначе live-статистика remote-провайдера до финального чанка недоступна.
     if (stream) body.stream_options = { include_usage: true };
-    if (tools?.length) body.tools = tools;
+    if (tools?.length) {
+      body.tools = tools;
+      // OpenAI-совместимое поле прокси; без инструментов не отправляем.
+      if (options?.toolChoice) body.tool_choice = options.toolChoice;
+    }
     if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
     // ADR-070 §2.2: prompt_cache_key пробрасывается на backend LLM Proxy, который
     // исполняет провайдера с этим именем; при cachePolicy:'none' — не отправляем.

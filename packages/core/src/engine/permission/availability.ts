@@ -60,8 +60,23 @@ export function isToolAvailableInDegradedMode(toolName: string): boolean {
   return DEGRADED_SAFE_TOOLS.has(toolName);
 }
 
+/**
+ * Тулы, чья capability входит в `WORKSPACE_CAPABILITIES`, но к рабочему каталогу
+ * они **не** привязаны.
+ *
+ * `ssh_keys_list` (ADR-076) несёт capability `git_read` — семантически он рядом
+ * с git-тулами, — но читает реестр SSH-ключей **инстанса**, а не файловую
+ * систему проекта. Без исключения тул становился бы недоступен в сессии без
+ * проекта (`unavailable(workspace)`), хотя ключи от workspace не зависят.
+ */
+const WORKSPACE_FREE_TOOLS: ReadonlySet<string> = new Set(['ssh_keys_list']);
+
 /** Зависит ли тул от рабочего каталога проекта (file/shell/git/search). */
-export function isWorkspaceDependentTool(capabilities?: readonly string[]): boolean {
+export function isWorkspaceDependentTool(
+  capabilities?: readonly string[],
+  toolName?: string,
+): boolean {
+  if (toolName && WORKSPACE_FREE_TOOLS.has(toolName)) return false;
   if (!capabilities || capabilities.length === 0) return false;
   return capabilities.some((cap) => WORKSPACE_CAPABILITIES.has(cap));
 }
@@ -166,7 +181,7 @@ export function computeToolAvailability(
 
   // 4. Рабочий каталог проекта: без `project.workspace` относительные пути
   // файловых/shell/git-тулов не имеют определённой базы — недоступны.
-  if (opts.workspaceReady === false && isWorkspaceDependentTool(capabilities)) {
+  if (opts.workspaceReady === false && isWorkspaceDependentTool(capabilities, toolName)) {
     return { available: false, reason: 'workspace' };
   }
 

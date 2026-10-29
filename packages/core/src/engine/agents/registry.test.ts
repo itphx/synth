@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createAgentRegistry } from './index.js';
+import { normalizeAgentModes } from './normalize.js';
 import { createToolRegistry } from '../tools/index.js';
 import { ToolCapability, type AgentDefinition, type ToolDefinition } from '@itphx/synth-shared';
 
@@ -125,6 +126,62 @@ describe('createAgentRegistry', () => {
     expect(allIds).toContain('title');
     expect(allIds).toContain('assistant');
     expect(allIds).toContain('general');
+  });
+});
+
+describe('AgentRegistry — набор ролей (leader/fixer/tester/researcher/security-auditor)', () => {
+  const registry = createAgentRegistry();
+
+  /** Удалённый набор ролей: у старых сессий в `settings.agentRole` может остаться id. */
+  it.each(['pm', 'developer', 'qa', 'analyst', 'auditor', 'reviewer', 'no-such-role'])(
+    'агента %s больше нет в реестре',
+    (id) => {
+      expect(registry.get(id)).toBeUndefined();
+    },
+  );
+
+  it('assistant сохранён', () => {
+    expect(registry.get('assistant')).toBeDefined();
+    expect(registry.get('assistant')!.agentMode).toEqual(['primary']);
+  });
+
+  it.each([
+    ['leader', ['primary'], 200],
+    ['fixer', ['primary', 'subagent'], 100],
+    ['tester', ['primary', 'subagent'], 100],
+    ['researcher', ['primary', 'subagent'], 25],
+    ['security-auditor', ['primary', 'subagent'], 60],
+  ] as const)('%s есть в реестре, agentMode нормализован, maxSteps=%d', (id, modes, maxSteps) => {
+    const agent = registry.get(id);
+    expect(agent, `агент ${id} не найден`).toBeDefined();
+    // agentMode всегда массив (даже если в определении строка/одно значение)
+    expect(Array.isArray(agent!.agentMode)).toBe(true);
+    expect(agent!.agentMode).toEqual([...modes]);
+    expect(agent!.maxSteps).toBe(maxSteps);
+    expect(agent!.contextFile).toBe(`${id.toUpperCase()}.md`);
+  });
+
+  it('leader — только primary (это оркестратор, а не сабагент)', () => {
+    const leader = registry.get('leader')!;
+    expect(normalizeAgentModes(leader.agentMode)).toEqual(['primary']);
+    expect(registry.getSubagents().map((a) => a.id)).not.toContain('leader');
+  });
+
+  it.each(['fixer', 'tester', 'researcher', 'security-auditor'])('%s доступен как сабагент', (id) => {
+    expect(registry.getSubagents().map((a) => a.id)).toContain(id);
+  });
+
+  it('leader без shell и без file_write (только чтение и делегирование)', () => {
+    const caps = registry.get('leader')!.capabilities;
+    expect(caps).not.toContain(ToolCapability.SHELL);
+    expect(caps).not.toContain(ToolCapability.FILE_WRITE);
+    expect(caps).toContain(ToolCapability.TASK);
+  });
+
+  it('researcher без shell и web (read-only)', () => {
+    const caps = registry.get('researcher')!.capabilities;
+    expect(caps).not.toContain(ToolCapability.SHELL);
+    expect(caps).not.toContain(ToolCapability.WEB);
   });
 });
 

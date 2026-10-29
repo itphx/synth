@@ -88,20 +88,20 @@ describe('computeToolAvailability (ADR-070 §2.9.1)', () => {
   it('dependency: git-тул при отсутствии git → unavailable(dependency)', () => {
     expect(
       computeToolAvailability('git_status', ['git_read'], {
-        runtimeDeps: { git: false, rg: true, sh: true },
+        runtimeDeps: { git: false, rg: true, sh: true, bash: true },
       }),
     ).toEqual({ available: false, reason: 'dependency' });
   });
 
-  it('dependency: grep_files при отсутствии rg, execute_shell при отсутствии sh', () => {
+  it('dependency: grep_files при отсутствии rg, execute_shell при отсутствии bash', () => {
     expect(
       computeToolAvailability('grep_files', ['file_read'], {
-        runtimeDeps: { git: true, rg: false, sh: true },
+        runtimeDeps: { git: true, rg: false, sh: true, bash: true },
       }),
     ).toEqual({ available: false, reason: 'dependency' });
     expect(
       computeToolAvailability('execute_shell', ['shell'], {
-        runtimeDeps: { git: true, rg: true, sh: false },
+        runtimeDeps: { git: true, rg: true, sh: true, bash: false },
       }),
     ).toEqual({ available: false, reason: 'dependency' });
   });
@@ -109,7 +109,7 @@ describe('computeToolAvailability (ADR-070 §2.9.1)', () => {
   it('dependency не влияет на тулы без внешней программы', () => {
     expect(
       computeToolAvailability('read_file', ['file_read'], {
-        runtimeDeps: { git: false, rg: false, sh: false },
+        runtimeDeps: { git: false, rg: false, sh: false, bash: false },
       }),
     ).toEqual({ available: true });
   });
@@ -120,6 +120,7 @@ describe('computeToolAvailability (ADR-070 §2.9.1)', () => {
         git: false,
         rg: true,
         sh: true,
+        bash: true,
         details: { git: 'git: отсутствует в 2 из 3 адресов пула' },
       },
     });
@@ -138,7 +139,7 @@ describe('computeToolAvailability (ADR-070 §2.9.1)', () => {
         sessionMode: 'plan',
         planMode: 'auto',
         planApproved: false,
-        runtimeDeps: { git: false, rg: true, sh: true },
+        runtimeDeps: { git: false, rg: true, sh: true, bash: true },
       }),
     ).toEqual({ available: false, reason: 'mode' });
   });
@@ -147,7 +148,7 @@ describe('computeToolAvailability (ADR-070 §2.9.1)', () => {
     expect(
       computeToolAvailability('git_status', ['git_read'], {
         agentCapabilities: ['file_read'],
-        runtimeDeps: { git: false, rg: true, sh: true },
+        runtimeDeps: { git: false, rg: true, sh: true, bash: true },
       }),
     ).toEqual({ available: false, reason: 'role' });
   });
@@ -204,6 +205,20 @@ describe('computeToolAvailability — workspace (ADR-075)', () => {
     expect(isWorkspaceDependentTool(['runtime'])).toBe(false);
     expect(isWorkspaceDependentTool(undefined)).toBe(false);
     expect(isWorkspaceDependentTool([])).toBe(false);
+  });
+
+  it('ssh_keys_list: capability git_read, но к рабочему каталогу не привязан (ADR-076)', () => {
+    // Ключи — ресурс инстанса: без `project.workspace` тул должен остаться
+    // доступным (иначе в сессии без проекта не узнать `sshKeyId`).
+    expect(isWorkspaceDependentTool(['git_read'], 'ssh_keys_list')).toBe(false);
+    expect(
+      computeToolAvailability('ssh_keys_list', ['git_read'], { workspaceReady: false }),
+    ).toEqual({ available: true });
+    // Исключение точечное: соседние git_read-тулы зависимость сохраняют.
+    expect(isWorkspaceDependentTool(['git_read'], 'git_status')).toBe(true);
+    expect(
+      computeToolAvailability('git_status', ['git_read'], { workspaceReady: false }),
+    ).toEqual({ available: false, reason: 'workspace' });
   });
 
   it('mode приоритетнее workspace (plan-рестрикция write)', () => {

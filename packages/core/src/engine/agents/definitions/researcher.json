@@ -1,0 +1,24 @@
+{
+  "id": "researcher",
+  "displayName": {
+    "en": "Researcher",
+    "ru": "Исследователь кода"
+  },
+  "description": {
+    "en": "Codebase research and consultation (read-only)",
+    "ru": "Исследование кодовой базы и консультации (только чтение)"
+  },
+  "capabilities": [
+    "file_read",
+    "search",
+    "git_read",
+    "mcp",
+    "memory",
+    "models"
+  ],
+  "icon": "search-eye",
+  "color": "--syntax-keyword",
+  "contextFile": "RESEARCHER.md",
+  "agentMode": ["primary", "subagent"],
+  "maxSteps": 25
+}

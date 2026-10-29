@@ -334,7 +334,7 @@ describe('state-messages', () => {
     const { added } = syncStateMessages(session, {
       contextConfig: makeContextConfig(),
       language: 'ru',
-      agentRole: 'analyst',
+      agentRole: 'researcher',
       unavailableTools: [
         { name: 'write_file', reason: 'role' },
         { name: 'git_status', reason: 'dependency', binary: 'git' },
@@ -353,7 +353,7 @@ describe('state-messages', () => {
     const { added } = syncStateMessages(session, {
       contextConfig: makeContextConfig(),
       language: 'ru',
-      agentRole: 'analyst',
+      agentRole: 'researcher',
       unavailableTools: [
         { name: 'write_file', reason: 'role' },
         { name: 'git_commit', reason: 'role' },
@@ -363,7 +363,7 @@ describe('state-messages', () => {
 
     const agent = added.find((m) => m.metadata?.type === 'agent_switch');
     expect(agent).toBeDefined();
-    expect(agent!.content).toContain('Активный агент: analyst');
+    expect(agent!.content).toContain('Активный агент: researcher');
     expect(agent!.content).toContain('write_file');
     expect(agent!.content).toContain('git_commit');
     expect(agent!.content).toContain('делегируйте через @');
@@ -387,7 +387,7 @@ describe('state-messages', () => {
     const deps: SyncStateMessagesDeps = {
       contextConfig: makeContextConfig(),
       language: 'ru',
-      agentRole: 'analyst',
+      agentRole: 'researcher',
       unavailableTools: [{ name: 'write_file', reason: 'role' }],
     };
 

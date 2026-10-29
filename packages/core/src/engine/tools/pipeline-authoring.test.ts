@@ -34,7 +34,7 @@ function validSpec(name = 'Тестовый пайплайн') {
   return {
     name,
     mode: 'act' as const,
-    nodes: [{ id: 'n1', kind: 'agent' as const, agent: 'developer' }],
+    nodes: [{ id: 'n1', kind: 'agent' as const, agent: 'fixer' }],
     exits: [{ kind: 'none' as const }],
   };
 }

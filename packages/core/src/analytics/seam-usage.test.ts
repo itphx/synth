@@ -32,7 +32,7 @@ describe('saveAssistantMessage → usage-роллап', () => {
             child_session_id: 'child-1',
             subagent_usage: subagentUsage,
             subagent_model: 'sub-model',
-            subagent_type: 'developer',
+            subagent_type: 'fixer',
           },
         },
       },
@@ -78,7 +78,7 @@ describe('saveAssistantMessage → usage-роллап', () => {
     expect(own.measures).toMatchObject({ input_tokens: 100, output_tokens: 10, requests: 1, messages: 1 });
 
     const sub = rows.find((row) => row.dimensions.model === 'sub-model')!;
-    expect(sub.dimensions.agent).toBe('developer');
+    expect(sub.dimensions.agent).toBe('fixer');
     expect(sub.measures).toMatchObject({ input_tokens: 50, output_tokens: 5, requests: 1 });
     // Сообщение саб-агента не считается за assistant-сообщение родителя.
     expect(sub.measures.messages).toBeUndefined();

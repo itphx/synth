@@ -20,7 +20,7 @@ import {
   type LlmFilterVerdictKind,
 } from '@itphx/synth-shared';
 
-import { BaseProvider, resolveSystemPromptText, type DetailedModelInfo, type LLMMessage, type SystemPromptInput, type CancellationToken } from '../../providers/base.js';
+import { BaseProvider, resolveSystemPromptText, type DetailedModelInfo, type LLMMessage, type SystemPromptInput, type CancellationToken, type ChatOptions } from '../../providers/base.js';
 import { ProviderError, RateLimitError } from '../../providers/exceptions.js';
 import type { DebugCollector } from '../../debug.js';
 import { warning } from '../../logger.js';
@@ -201,6 +201,7 @@ export class GatewayProvider extends BaseProvider {
     tools?: Record<string, unknown>[],
     stream?: boolean,
     debugCollector?: DebugCollector,
+    options?: ChatOptions,
   ): Promise<LLMResponse> {
     const startedAt = performance.now();
     let outcome: LlmCallOutcome = 'ok';
@@ -208,7 +209,7 @@ export class GatewayProvider extends BaseProvider {
 
     try {
       if (!this._config.enabled) {
-        const response = await this._inner.chat(messages, systemPrompt, tools, stream, debugCollector);
+        const response = await this._inner.chat(messages, systemPrompt, tools, stream, debugCollector, options);
         usage = response.usage;
         return response;
       }
@@ -236,6 +237,7 @@ export class GatewayProvider extends BaseProvider {
         effective.tools,
         stream,
         debugCollector,
+        options,
       );
       usage = response.usage;
 
@@ -262,6 +264,7 @@ export class GatewayProvider extends BaseProvider {
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
+    options?: ChatOptions,
   ): AsyncGenerator<LLMChunk> {
     const startedAt = performance.now();
     let outcome: LlmCallOutcome = 'ok';
@@ -275,6 +278,7 @@ export class GatewayProvider extends BaseProvider {
           tools,
           debugCollector,
           cancellationToken,
+          options,
         )) {
           if (chunk.usage) usage = chunk.usage;
           yield chunk;
@@ -310,6 +314,7 @@ export class GatewayProvider extends BaseProvider {
         effective.tools,
         debugCollector,
         cancellationToken,
+        options,
       )) {
         // Финальный чанк несёт полный накопленный контент — заменяем, а не складываем
         // (иначе контент удваивается: delta-чанки + финальный полный).

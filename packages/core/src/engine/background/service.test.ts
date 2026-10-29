@@ -36,6 +36,7 @@ interface Notification {
 function createService(opts?: {
   limits?: Partial<BackgroundRunLimits>;
   onNotifyParent?: (sessionId: string, message: Message) => void | Promise<void>;
+  getChildSessionIds?: (sessionId: string) => Promise<string[]>;
 }) {
   const repository = new MemoryBackgroundRunRepository();
   const eventBus = new EventBus();
@@ -56,6 +57,7 @@ function createService(opts?: {
       ?? ((sessionId: string, message: Message) => {
         notifications.push({ sessionId, message });
       }),
+    ...(opts?.getChildSessionIds ? { getChildSessionIds: opts.getChildSessionIds } : {}),
   });
   return { repository, eventBus, service, notifications };
 }
@@ -185,13 +187,80 @@ describe('BackgroundRunService — лимиты сессии', () => {
     expect(second.status).toBe('running');
   });
 
-  it('maxRunsPerSession: лимит записей реестра на сессию-владельца', async () => {
+  it('maxRunsPerSession: лимит одновременно идущих прогонов сессии-владельца', async () => {
     const { service } = createService({ limits: { maxRunsPerSession: 1 } });
 
     await service.startSubagent({ sessionId: 'parent-1', childSessionId: 'child-1' });
 
     const error = await service
       .startSubagent({ sessionId: 'parent-1', childSessionId: 'child-2' })
+      .then(() => null)
+      .catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(BackgroundLimitExceededError);
+    expect((error as BackgroundLimitExceededError).limitKind).toBe('runs');
+  });
+
+  it('maxRunsPerSession: 10 завершённых прогонов не блокируют новый запуск (регресс)', async () => {
+    const { service } = createService({ limits: { maxRunsPerSession: 10 } });
+
+    // История реестра: 10 терминальных записей (как в реальной сессии после
+    // десяти завершённых фоновых прогонов). Их чистит retention-прунер, и
+    // лимитом они считаться не должны.
+    for (let i = 0; i < 10; i += 1) {
+      const done = await service.startSubagent({
+        sessionId: 'parent-1',
+        childSessionId: `child-done-${i}`,
+      });
+      await service.finish(done.id, { status: 'completed', summary: 'ok' });
+    }
+
+    const fresh = await service.startSubagent({
+      sessionId: 'parent-1',
+      childSessionId: 'child-new',
+    });
+    expect(fresh.status).toBe('running');
+  });
+
+  it('maxRunsPerSession: 10 идущих прогонов — отказ background_limit_exceeded (runs)', async () => {
+    const { service } = createService({ limits: { maxRunsPerSession: 10 } });
+
+    for (let i = 0; i < 10; i += 1) {
+      await service.startSubagent({ sessionId: 'parent-1', childSessionId: `child-${i}` });
+    }
+
+    const error = await service
+      .startSubagent({ sessionId: 'parent-1', childSessionId: 'child-11' })
+      .then(() => null)
+      .catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(BackgroundLimitExceededError);
+    expect((error as BackgroundLimitExceededError).limitKind).toBe('runs');
+    expect((error as BackgroundLimitExceededError).limit).toBe(10);
+    expect((error as BackgroundLimitExceededError).code).toBe('background_limit_exceeded');
+  });
+
+  it('maxRunsPerSession: смешанный набор — считаются только идущие, обоих видов', async () => {
+    const { service } = createService({ limits: { maxRunsPerSession: 2 } });
+
+    // Пять завершённых прогонов лимит не занимают.
+    for (let i = 0; i < 5; i += 1) {
+      const done = await service.startSubagent({
+        sessionId: 'parent-1',
+        childSessionId: `child-done-${i}`,
+      });
+      await service.finish(done.id, { status: 'failed', summary: 'boom' });
+    }
+    // Прогон, прерванный рестартом (`orphaned`), — тоже терминальная запись.
+    await service.startProcess({ sessionId: 'parent-1', command: 'sleep 9', cwd: '/tmp' });
+    await service.recoverOnStart();
+
+    // Живые прогоны разных видов считаются вместе: саб-агент + процесс = 2.
+    await service.startSubagent({ sessionId: 'parent-1', childSessionId: 'child-live' });
+    await service.startProcess({ sessionId: 'parent-1', command: 'sleep 1', cwd: '/tmp' });
+
+    const error = await service
+      .startProcess({ sessionId: 'parent-1', command: 'sleep 2', cwd: '/tmp' })
       .then(() => null)
       .catch((err: unknown) => err);
 
@@ -420,6 +489,112 @@ describe('BackgroundRunService — остановка прогона', () => {
 
     expect(await service.stop(record.id)).toBe(false);
     expect(abort).not.toHaveBeenCalled();
+  });
+});
+
+describe('BackgroundRunService — stopBySession (Стоп сессии и её детей)', () => {
+  it('отменяет только running-прогоны своей сессии, терминальные и чужие не трогает', async () => {
+    const { service } = createService();
+    const running = await service.startSubagent({ sessionId: 'parent-1', childSessionId: 'child-1' });
+    const finished = await service.startSubagent({ sessionId: 'parent-1', childSessionId: 'child-2' });
+    await service.finish(finished.id, { status: 'completed', summary: 'ok' });
+    const foreign = await service.startSubagent({ sessionId: 'parent-2', childSessionId: 'child-3' });
+
+    const aborts = new Map<string, ReturnType<typeof vi.fn>>();
+    for (const record of [running, finished, foreign]) {
+      const abort = vi.fn();
+      aborts.set(record.id, abort);
+      // У завершённого хэндла уже нет (finish снимает), регистрируем заново
+      // намеренно: проверяем, что сервис отбирает по статусу, а не по хэндлу.
+      service.registerAbort(record.id, abort);
+    }
+
+    const stopped = await service.stopBySession('parent-1', 'parent_aborted');
+
+    expect(stopped).toBe(1);
+    expect(aborts.get(running.id)).toHaveBeenCalledWith('parent_aborted');
+    expect(aborts.get(finished.id)).not.toHaveBeenCalled();
+    expect(aborts.get(foreign.id)).not.toHaveBeenCalled();
+  });
+
+  it('reason по умолчанию — parent_aborted', async () => {
+    const { service } = createService();
+    const record = await service.startProcess({ sessionId: 'parent-1', command: 'sleep 1', cwd: '/tmp' });
+    const abort = vi.fn();
+    service.registerAbort(record.id, abort);
+
+    expect(await service.stopBySession('parent-1')).toBe(1);
+    expect(abort).toHaveBeenCalledWith('parent_aborted');
+  });
+
+  it('без getChildSessionIds обход ограничен самой сессией', async () => {
+    const { service } = createService();
+    const childRun = await service.startSubagent({ sessionId: 'child-1', childSessionId: 'grand-1' });
+    const abort = vi.fn();
+    service.registerAbort(childRun.id, abort);
+
+    expect(await service.stopBySession('parent-1')).toBe(0);
+    expect(abort).not.toHaveBeenCalled();
+  });
+
+  it('с getChildSessionIds обходит дерево (дети и внуки), чужие ветки не трогает', async () => {
+    const tree: Record<string, string[]> = {
+      'parent-1': ['child-1', 'child-2'],
+      'child-1': ['grand-1'],
+    };
+    const { service } = createService({
+      getChildSessionIds: async (id) => tree[id] ?? [],
+    });
+
+    const parentRun = await service.startProcess({ sessionId: 'parent-1', command: 'sleep 1', cwd: '/tmp' });
+    const childRun = await service.startSubagent({ sessionId: 'child-1', childSessionId: 'grand-1' });
+    const grandRun = await service.startProcess({ sessionId: 'grand-1', command: 'sleep 2', cwd: '/tmp' });
+    const strangerRun = await service.startSubagent({ sessionId: 'stranger', childSessionId: 'x' });
+
+    const aborts = new Map<string, ReturnType<typeof vi.fn>>();
+    for (const record of [parentRun, childRun, grandRun, strangerRun]) {
+      const abort = vi.fn();
+      aborts.set(record.id, abort);
+      service.registerAbort(record.id, abort);
+    }
+
+    expect(await service.stopBySession('parent-1')).toBe(3);
+    expect(aborts.get(parentRun.id)).toHaveBeenCalledTimes(1);
+    expect(aborts.get(childRun.id)).toHaveBeenCalledTimes(1);
+    expect(aborts.get(grandRun.id)).toHaveBeenCalledTimes(1);
+    expect(aborts.get(strangerRun.id)).not.toHaveBeenCalled();
+  });
+
+  it('цикл parentId не зацикливает обход (seen-guard)', async () => {
+    const requested: string[] = [];
+    const { service } = createService({
+      // A → B → A: повреждённые данные не должны дать бесконечный обход.
+      getChildSessionIds: async (id) => {
+        requested.push(id);
+        return id === 'a' ? ['b'] : id === 'b' ? ['a'] : [];
+      },
+    });
+
+    expect(await service.stopBySession('a')).toBe(0);
+    expect(requested).toEqual(['a', 'b']);
+  });
+
+  it('ошибка стора на одной сессии не мешает остальным', async () => {
+    const { service, repository } = createService({
+      getChildSessionIds: async (id) => (id === 'parent-1' ? ['child-1'] : []),
+    });
+    const childRun = await service.startSubagent({ sessionId: 'child-1', childSessionId: 'grand-1' });
+    const abort = vi.fn();
+    service.registerAbort(childRun.id, abort);
+
+    const original = repository.list.bind(repository);
+    vi.spyOn(repository, 'list').mockImplementation(async (filter) => {
+      if (filter?.sessionId === 'parent-1') throw new Error('boom');
+      return original(filter);
+    });
+
+    expect(await service.stopBySession('parent-1')).toBe(1);
+    expect(abort).toHaveBeenCalledTimes(1);
   });
 });
 

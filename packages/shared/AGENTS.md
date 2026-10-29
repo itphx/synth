@@ -44,7 +44,13 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   резолвер `resolveSecretKey`, пусто — файл `{dataDir}/secrets/master.key`); типы
   `GitRepoConfig` (реестр, `path` обязателен) и `SSHKey`/`SSHKeyMeta` (`agentIds: string[]`),
   `gitRepoConfigSchema`/`normalizeGitRepoConfig` (legacy `repos`) и `sshKeyCreate/UpdateSchema`;
-  i18n-ключ `sshkey.env_failed` (сбой подготовки SSH-окружения/askpass).
+  i18n-ключ `sshkey.env_failed` (сбой подготовки SSH-окружения/askpass). Секция `git` конфига
+  (`gitConfigSchema` + `GitConfig`): `cloneTimeoutMs`/`fetchTimeoutMs` — пределы сетевых
+  git-операций, мс (`int().min(0)`, default `300_000`; `0` — без таймаута); дефолты — в
+  `defaults.ts`, env-оверрайды `SYNTH_GIT_CLONE_TIMEOUT_MS`/`SYNTH_GIT_FETCH_TIMEOUT_MS` — по
+  общему правилу секций (`ENV_OVERRIDES`). i18n-ключи классификации пути/таймаутов:
+  `git.repo_exists`, `git.repo_occupied_repo|stub|dir` (`{path}`, `{entries}` для `dir`),
+  `git.repo_path_unreadable`, `git.clone_timeout`/`git.fetch_timeout` (`{timeout}`).
 - ADR-052/O1: `security.bootstrapServiceKeys` (installer service-key'и:
   `label`/`secret`/`scopes`/`roles?`/`description?`; Zod `bootstrapServiceKeySchema`/
   `bootstrapServiceKeysSchema`); объектный env-оверрайд `SYNTH_BOOTSTRAP_SERVICE_KEYS`
@@ -94,6 +100,10 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `SYNTH_BACKGROUND_ENABLED`/`SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION`/
   `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION`/`SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION`/
   `SYNTH_BACKGROUND_LOG_MAX_BYTES`/`SYNTH_BACKGROUND_RETENTION_DAYS`.
+- Секция `agents` (`agentsConfigSchema` + `AgentsConfig`): `subagentMaxInputTokens` — предохранитель
+  по объёму промпта саб-агента (**не** окно модели), default `150_000` (`DEFAULT_SUBAGENT_MAX_INPUT_TOKENS`),
+  `0` — без ограничения; при превышении прогон завершается отчётом (ядро). Env —
+  `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS`; тесты — `defaults.test.ts`/`types.test.ts`/`env-overrides.test.ts`.
 - ADR-094: секция `metrics` (`enabled`, default `false`; `metricsConfigSchema` + `MetricsConfig`) —
   мастер-выключатель `GET /metrics`; скалярный env-оверрайд `SYNTH_METRICS_ENABLED` (имя намеренно
   совпадает с Helm-чартом). Токен в схеме **не хранится** (инвариант 13): env `SYNTH_METRICS_TOKEN` /
@@ -120,7 +130,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   гибридной политики — `types/plugin-hybrid.ts` (публичный сигнал `{enabled, mode}`, политика
   `{mode, allow}`, статусы `unverified|allowed|denied`, `PLUGIN_ID_HEADER` = `X-Synth-Plugin-Id`,
   `PLUGIN_INVOKE_SCOPE` = `plugins:invoke`, `evaluatePluginServerPolicy`/`parsePluginPolicySignal`).
-- **Env-оверрайды скалярных ключей секций** `events`/`scheduler`/`webhooks`/`decision`/`analytics`/`metrics`/`plugins` —
+- **Env-оверрайды скалярных ключей секций** `events`/`scheduler`/`webhooks`/`decision`/`analytics`/`git`/`metrics`/`plugins` —
   реестр `ENV_OVERRIDES` (`src/config/env-overrides.ts`), применяется в `loadConfig`;
   имя `SYNTH_<SECTION>_<KEY>` (camelCase→SNAKE_CASE), невалидное значение → warn + игнор;
   приоритет `CLI > env > config.yaml > defaults` (ADR-023). Объектные/нескалярные ключи
@@ -408,7 +418,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 `engine/system-messages.ts` (en) и ui `lib/i18n/messages/ru.ts` (ru).
 - ADR-078: ключи `tool.binary_missing` (`{tool}`/`{binary}`) и
   `permission.dep_unavailable` (`{binary}`) — тул недоступен, т.к. в окружении нет
-  внешней программы (`git`/`rg`/`sh`).
+  внешней программы (`git`/`rg`/`sh`/`bash`).
 - ADR-046: `skill.scope_disabled` (`{name}`/`{reason}`) — скилл недоступен по scope
   (причина `system`/`project`/`session`).
 - ADR-030/ADR-089: `event.ingested`, `event.routed.*`, `event.binding.not_found`,

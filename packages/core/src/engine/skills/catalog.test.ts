@@ -36,7 +36,7 @@ describe('computeInvocation / matchesBinding / missingCapabilities', () => {
 
   it('matchesBinding: пустой = все, agents/groups фильтруют', () => {
     expect(matchesBinding({}, { id: 'any' })).toBe(true);
-    expect(matchesBinding({ agents: ['reviewer'] }, { id: 'developer' })).toBe(false);
+    expect(matchesBinding({ agents: ['reviewer'] }, { id: 'fixer' })).toBe(false);
     expect(matchesBinding({ agents: ['reviewer'] }, { id: 'reviewer' })).toBe(true);
     expect(matchesBinding({ groups: ['review'] }, { id: 'x', groups: ['other'] })).toBe(false);
     expect(matchesBinding({ groups: ['review'] }, { id: 'x', groups: ['review'] })).toBe(true);
@@ -66,7 +66,7 @@ describe('buildSkillCatalog (ADR-046 §4.5/§5/§6)', () => {
 
   it('binding по agents/groups', () => {
     const skill = mk('b', { agents: ['reviewer'], groups: ['quality'] });
-    expect(buildSkillCatalog([skill], { agent: { id: 'developer', groups: ['quality'] } }).stable).toEqual([]);
+    expect(buildSkillCatalog([skill], { agent: { id: 'fixer', groups: ['quality'] } }).stable).toEqual([]);
     expect(buildSkillCatalog([skill], { agent: { id: 'reviewer' } }).stable).toHaveLength(0); // groups не совпали
     expect(buildSkillCatalog([skill], { agent: { id: 'reviewer', groups: ['quality'] } }).stable).toHaveLength(1);
   });

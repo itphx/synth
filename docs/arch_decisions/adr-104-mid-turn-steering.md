@@ -39,8 +39,21 @@
   принципала и пересчёт потолка (Authority-слой, PROP-108) в объём решения не входят.
 - **Лимит — 5 инъекций на ход**: превышение → `429 STEER_LIMIT_EXCEEDED` и событие `steer.dropped`;
   лишние сообщения отбрасываются, а не копятся.
-- **События:** `message.injected` (инъекция применена), `steer.dropped` (отброшено по лимиту),
-  `stream.interrupted` (генерация прервана) — через общий транспорт событий (ADR-024), без новых каналов.
+- **Неприменённые инъекции снимаются, а не «переезжают» в следующий ход (решение 2026-10-28).**
+  Очередь вычитывается только на границе шага, поэтому при «Стоп» и в конце хода границы уже не
+  будет. Раньше сообщение, отправленное «в ход», оставалось в `steerInbox` и применялось в начале
+  **следующего** хода — выглядело «внезапным отдельным сообщением». Теперь:
+  - **«Стоп»** (`POST /api/v2/sessions/:id/abort`) — после `requestStop` очередь снимается
+    (`SessionManager.clearSteerInbox`), о снятии сообщает `steer.dropped` с `reason: 'aborted'`
+    (best-effort: сбой хранилища/шины не ломает `200 {status:'aborted'}`);
+  - **конец хода** (эпилог `orchestrator/phases/process-finalize.ts`, вне цикла Tool Use) — если
+    после цикла в `steerInbox` что-то осталось (инъекция пришла во время последней генерации),
+    очередь снимается с `reason: 'turn_ended'`;
+  - снятые сообщения **не** персистятся в историю (в отличие от применённых инъекций) — UI
+    показывает предупреждение с причиной и количеством; повторы подряд не спамят тостами.
+- **События:** `message.injected` (инъекция применена), `steer.dropped` (`reason`:
+  `limit` | `aborted` | `turn_ended`; поля `dropped_count`, `i18n`-ключ), `stream.interrupted`
+  (генерация прервана) — через общий транспорт событий (ADR-024), без новых каналов.
   Не `stream.cancelled`: то событие означает **отмену хода** («Стоп», ADR-005), а здесь ход продолжается
   тем же `stream_id` — публикация `stream.cancelled` закрыла бы стрим в UI и выглядела бы как конец хода.
 - **Порядок применения инъекций — по классам, внутри класса FIFO (этап 3).** Сначала применяются
@@ -94,8 +107,8 @@
 ## Статус в коде
 
 - API: `POST /api/v2/sessions/:id/prompt` и WS `send_message` — поле `mode` (`queue`/`steer`/`interrupt`), ответы `202 {status:'steered'|'interrupted', stream_id, pending_count, mode_applied}`, `429 STEER_LIMIT_EXCEEDED` (`docs/API_V2.md` §5.5).
-- Ядро: `queue/processor.ts` (`enqueueSteerMessage`), `sessions/manager.ts` (`steerInbox`, `takeSteerMessages` с приоритетом `interrupt` → `steer`), `engine/steering/apply.ts` (**общая точка применения инъекций на границе шага** — её используют и оркестратор, и цикл саб-агента), `engine/orchestrator.ts` (вычитка на границе шага, `_handleInterruptedGeneration`, `interrupt(streamId)`), `engine/tools/task/run-cycle.ts` (граница шага цикла **дочерней/фоновой** сессии), `shared/types/steering.ts` (типы, лимит 5, порядок).
-- UI: `SteerToggle` (иконочный тумблер «вмешаться»; очередь — обычная кнопка отправки, прерывание — кнопка «Стоп»), маркеры вмешательства/прерывания, `resetStreamAccumulator`/`resetStreamAttempt` — `packages/ui/AGENTS.md`.
+- Ядро: `queue/processor.ts` (`enqueueSteerMessage`), `sessions/manager.ts` (`steerInbox`, `takeSteerMessages` с приоритетом `interrupt` → `steer`, `clearSteerInbox`), `engine/steering/apply.ts` (**общая точка применения инъекций на границе шага** — её используют и оркестратор, и цикл саб-агента), `engine/orchestrator.ts` (вычитка на границе шага, `_handleInterruptedGeneration`, `interrupt(streamId)`), `engine/tools/task/run-cycle.ts` (граница шага цикла **дочерней/фоновой** сессии), `shared/types/steering.ts` (типы, лимит 5, порядок).
+- UI: `SteerModeSwitch` (`components/chat/SteerModeSwitch.tsx` — **переключатель режима** «В очередь» / «В ход»: `aria-pressed`, `data-testid="steer-mode"`, на узких экранах — иконки; клик по нему **никогда** не отправляет сообщение; прерывание — отдельная кнопка «Стоп»), маркеры вмешательства/прерывания, тост `steer.dropped`, `resetStreamAccumulator`/`resetStreamAttempt` — `packages/ui/AGENTS.md`.
 - Тесты: `queue/steering.test.ts`, `engine/orchestrator-steering.test.ts`, `engine/orchestrator-interrupt.test.ts`, `server/routes/sessions-steering.test.ts`, `queue/steering-subagent.test.ts`, `engine/tools/task/run-cycle.test.ts` (steering дочерней сессии).
 
 ## История
@@ -106,3 +119,7 @@
 - 2026-10-26 — закрыт остаток по фоновым саб-агентам: steering дочерней сессии применяется на
   границе шага её цикла (`engine/tools/task/run-cycle.ts`, общая точка — `engine/steering/apply.ts`),
   `interrupt` для ребёнка действует на границе (как обычное вмешательство).
+- 2026-10-28 — семантика конца прерванного/завершённого хода: неприменённые инъекции **снимаются**
+  (`steer.dropped` с `reason: 'aborted'` при «Стоп», `reason: 'turn_ended'` в конце хода) и не
+  переезжают в следующий ход; UI-переключатель режима перестал выглядеть кнопкой отправки
+  (dogfooding, баг «самолётик ничего не отправил»).

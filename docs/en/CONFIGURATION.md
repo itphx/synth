@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
+> ⚠️ RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -85,8 +85,8 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 
 ### Env overrides of nested sections (ADR-023)
 
-Scalar keys of the `events`, `scheduler`, `webhooks`, `decision`, `questions`, `background`,
-`authority` sections can be set
+Scalar keys of the `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `git`, `metrics`,
+`questions`, `background`, `agents`, `authority` sections can be set
 with environment variables — handy for k8s (ConfigMap → pod env). The variable name is
 built by the rule **`SYNTH_<SECTION>_<KEY>`**, where the camelCase key is converted to
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -143,6 +143,8 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_DECISION_CONFIDENCE_THRESHOLD` | number | `decision.confidenceThreshold` |
 | `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
+| `SYNTH_GIT_CLONE_TIMEOUT_MS` | number | `git.cloneTimeoutMs` (ADR-076: the `git clone` limit, ms; `0` — no timeout) |
+| `SYNTH_GIT_FETCH_TIMEOUT_MS` | number | `git.fetchTimeoutMs` (ADR-076: the `git fetch` limit, ms; `0` — no timeout) |
 | `SYNTH_QUESTIONS_TIMEOUT_MS` | number | `questions.timeoutMs` (stage 1 of roadmap 0.12.4 — block 3) |
 | `SYNTH_QUESTIONS_RETENTION_DAYS` | number | `questions.retentionDays` (stage 1 of roadmap 0.12.4 — block 3) |
 | `SYNTH_BACKGROUND_ENABLED` | boolean | `background.enabled` (stage 1 of roadmap 0.12.4 — block 4) |
@@ -151,6 +153,7 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | number | `background.maxRunsPerSession` (stage 1 of roadmap 0.12.4 — block 4) |
 | `SYNTH_BACKGROUND_LOG_MAX_BYTES` | number | `background.logMaxBytes` (stage 1 of roadmap 0.12.4 — block 4) |
 | `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (stage 1 of roadmap 0.12.4 — block 4) |
+| `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | number | `agents.subagentMaxInputTokens` (safeguard on the subagent prompt size; `0` — no limit) |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON array | `security.bootstrapServiceKeys` (an object env override, ADR-052/O1; see below) |
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; master switch of the authority layer) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — observation, `false` — enforcement) |
@@ -418,7 +421,7 @@ decision:                         # ADR-084: decision models (System One: Clef/J
 
 permission:
   rules: {}                       # granular permissions: allow/deny/ask per tool
-  askTimeoutMs: 30000
+  askTimeoutMs: 300000            # `ask` confirmation wait, ms (300000 = 5 minutes; 0 — no timeout); auto-reject after it
 
 security:
   promptInjection:
@@ -1486,14 +1489,15 @@ The section sets the behaviour of the single registry of the background work: ba
 **subagents** (`task({background: true})`, PROP-096/ADR-111) and background **shell
 processes** (`execute_shell({background: true})`, ADR-113) live in **one** registry —
 there is no second storage. The limits are counted per the owner session (for a subagent —
-the parent session).
+the parent session) and only over the **live** runs (`running`): the finished records are
+the registry history, the retention cleans them, and they do not occupy the limit.
 
 | Field | Purpose | Default |
 |------|-----------|--------------|
 | `background.enabled` | The master switch of the background work. `false` — both `task({background: true})` and `execute_shell({background: true})` respond with an error (`task.background_disabled` / `process.background_disabled`; the turn does not fail), while the foreground work and the registry keep working. Env — `SYNTH_BACKGROUND_ENABLED` | `true` |
 | `background.maxSubagentsPerSession` | The maximum of the background subagents running at the same time per the owner session; exceeding it → `background_limit_exceeded` (a tool error, the turn does not fail). Env — `SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION` | `2` |
 | `background.maxProcessesPerSession` | The maximum of the background shell processes running at the same time per the owner session; exceeding it → `background_limit_exceeded`. Env — `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION` | `5` |
-| `background.maxRunsPerSession` | The maximum of the registry records per the owner session (all the records are counted, they are cleaned by the retention). Env — `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | `10` |
+| `background.maxRunsPerSession` | The maximum of the background runs of any kind (subagents + processes) running **at the same time** per the owner session; the terminal records are not counted by the limit — they are the registry history and are cleaned by the retention. Env — `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | `10` |
 | `background.logMaxBytes` | The limit of the size of a background process log, bytes; `0` — no limit. Do not confuse it with the ceiling of the log output per HTTP request (256 KiB) — these are different values. Env — `SYNTH_BACKGROUND_LOG_MAX_BYTES` | `10485760` (10 MiB) |
 | `background.retentionDays` | The retention of the terminal registry records (`completed`/`failed`/`cancelled`/`orphaned`), days; `<= 0` — no limit. Env — `SYNTH_BACKGROUND_RETENTION_DAYS` | `7` |
 
@@ -1528,6 +1532,62 @@ background:
   `child.completed` / `child.failed` / `child.cancelled` in the owner session channel
   (ADR-009/ADR-024, no new channels). `process.stopped` — a stop request (once per run);
   the terminal status arrives later — with `process.exited`.
+
+### Agents (`agents.*`)
+
+Safeguards for agent runs. `subagentMaxInputTokens` limits the **prompt size** of a subagent
+(not the model window): before every LLM call of the subagent loop the prompt is estimated
+(`messages` + `systemPrompt` + tool definitions, `estimatePromptChars` → `estimateTokens`),
+and when the estimate exceeds the limit the provider is **not called** — the run finishes
+correctly with a deterministic report (no LLM): the token estimate, the number of completed
+steps and the unfinished tasks (from the child session todo list or from the task
+description). The report is persisted as a regular assistant message of the child session
+with the `completed` status, its metadata carries `context_budget_exceeded`/
+`context_budget_tokens`/`steps`, and the event `subagent.context_budget` is published to the
+parent. It is a safeguard against a growing history (cost, model degradation, provider
+limits), not a "keep working" hint.
+
+| Field | Purpose | Default |
+|-------|---------|---------|
+| `agents.subagentMaxInputTokens` | Safeguard on the subagent prompt size, input tokens (estimate); `0` — no limit. When exceeded, the run finishes with a report instead of a provider error. Env — `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | `150000` |
+
+- **The step limit has priority.** The final report step of `maxSteps` (the opencode mechanics)
+  is not treated as a budget overrun; otherwise the step-limit report would never be produced.
+- **The estimate is unavailable** (no data/empty prompt) — do not block (fail-open).
+- The estimate uses the chars-per-token heuristic (default 4): it is a safeguard, not an exact
+  token count of the model.
+
+```yaml
+agents:
+  subagentMaxInputTokens: 150000
+```
+
+### Git operations (`git.*`, ADR-076)
+
+The limits of the network git operations (`git clone`/`git fetch` of the project repositories —
+the `/api/v2/git/*` HTTP routes and the `project_repo_clone`/`project_repo_fetch` tools). A
+timeout alone does not make the operation atomic — `GitService` does: the clone goes into a
+**sibling** temporary directory `<path>.tmp-<uuid>` and appears at the target path only after
+the success (`rename`), so after a timeout/error neither the target directory nor the temporary
+one is left on disk.
+
+| Field | Purpose | Default |
+|------|-----------|--------------|
+| `git.cloneTimeoutMs` | The limit of `git clone`, ms; `0` — no timeout. Exceeding it → `git.clone_timeout` (HTTP **504**). Env — `SYNTH_GIT_CLONE_TIMEOUT_MS` | `300000` (5 minutes) |
+| `git.fetchTimeoutMs` | The limit of `git fetch`, ms; `0` — no timeout. Exceeding it → `git.fetch_timeout` (HTTP **504**). Env — `SYNTH_GIT_FETCH_TIMEOUT_MS` | `300000` (5 minutes) |
+
+- Other failures (no remote, no permissions, a dropped connection) are **not** replaced by a
+  timeout — the original git error is returned.
+- An occupied target path is classified by the file system state (`repo` — a full repository,
+  `stub` — a `.git` without commits left by an interrupted clone, `dir` — a non-empty directory
+  without git): over HTTP — 409 `git.repo_exists` + `details.occupied` (`details.entries` for
+  `dir`), in a tool — an actionable message (register / delete / choose another path).
+
+```yaml
+git:
+  cloneTimeoutMs: 300000   # SYNTH_GIT_CLONE_TIMEOUT_MS
+  fetchTimeoutMs: 300000   # SYNTH_GIT_FETCH_TIMEOUT_MS
+```
 
 ### Observability (`metrics.*`, ADR-094)
 

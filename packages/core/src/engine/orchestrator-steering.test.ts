@@ -149,7 +149,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const session = await sessionManager.createSession({
     title: 'Steer',
     projectId: project.id,
-    settings: { provider: 'mocksteer', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+    settings: { provider: 'mocksteer', model: 'm', systemPrompt: 'test', agentRole: 'fixer' },
   });
   if (options.sessionMode) {
     await sessionManager.withLock(session.id, async (s) => {
@@ -277,6 +277,39 @@ describe('ChatOrchestrator: инъекции в активный ход (ADR-104
       'вмешательство 0', 'вмешательство 1', 'вмешательство 2',
       'вмешательство 3', 'вмешательство 4',
     ]);
+
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('инъекция во время последней генерации снимается в конце хода (steer.dropped, turn_ended)', async () => {
+    const h = await makeHarness();
+    // Отправка «в ход» пришла, когда шла ПОСЛЕДНЯЯ генерация: границы шага уже
+    // не будет — сообщение не должно переехать в следующий ход (ADR-104,
+    // решение 2026-10-28).
+    MockSteerProvider.onCall = async (n) => {
+      if (n === 1) {
+        await enqueueSteerMessage(
+          h.sessionManager, h.eventBus, h.sessionId, makeMessage('позднее вмешательство'),
+        );
+      }
+    };
+
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    await run(h, (event, data) => chunks.push({ event, data }));
+
+    const dropped = chunks.find((c) => c.event === 'steer.dropped');
+    expect(dropped).toBeDefined();
+    expect(dropped!.data.reason).toBe('turn_ended');
+    expect(dropped!.data.dropped_count).toBe(1);
+    expect(typeof dropped!.data.error).toBe('string');
+    expect((dropped!.data.i18n as { key: string }).key).toBe('steer.dropped_turn_ended');
+
+    // Сообщение не применено и не попало в историю; очередь пуста.
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    expect(session.messages.some((m) => m.content === 'позднее вмешательство')).toBe(false);
+    expect(session.steerInbox ?? []).toHaveLength(0);
+    // `message.injected` не публиковался — инъекция не применялась.
+    expect(chunks.some((c) => c.event === 'message.injected')).toBe(false);
 
     await rm(h.tmpDir, { recursive: true, force: true });
   });

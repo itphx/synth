@@ -426,10 +426,10 @@ describe('AnthropicProvider — пары tool_use/tool_result из _sessionMessa
         toolCalls: [{ id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{}' } }],
       }),
       makeMsg({ role: MessageRole.TOOL, content: 'содержимое', agentRole: 'agentA', toolCallId: 'call_1' }),
-      makeMsg({ role: MessageRole.ASSISTANT, content: 'Готово', agentRole: 'developer' }),
+      makeMsg({ role: MessageRole.ASSISTANT, content: 'Готово', agentRole: 'fixer' }),
     ];
 
-    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'fixer', 'user');
     const formatted = provider._formatMessages(llm);
 
     const allParts = formatted.flatMap((m) => m.content as Array<Record<string, unknown>>);
@@ -701,5 +701,56 @@ describe('AnthropicProvider — вложения (ADR-115)', () => {
     ]);
 
     expect(formatted[0]!.content).toEqual([{ type: 'text', text: 'просто текст' }]);
+  });
+});
+
+describe('AnthropicProvider — tool_choice на шаге (лимит шагов)', () => {
+  /** Прокрутить стрим до конца (тело чанков здесь не проверяется). */
+  async function drain(gen: AsyncGenerator<LLMChunk>): Promise<LLMChunk[]> {
+    const chunks: LLMChunk[] = [];
+    for await (const chunk of gen) chunks.push(chunk);
+    return chunks;
+  }
+
+  it("chatAsync: options.toolChoice='none' + tools → tool_choice {type:'none'}, tools остаются", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new AnthropicProvider(baseParams);
+    const tools = makeTools();
+    await drain(provider.chatAsync([makeMessage()], undefined, tools, undefined, undefined, {
+      toolChoice: 'none',
+    }));
+
+    const body = readBody(fetchMock);
+    expect(body.tool_choice).toEqual({ type: 'none' });
+    // Инструменты остаются в запросе (кэш-префикс провайдера не сбрасывается).
+    expect((body.tools as unknown[]).length).toBe(tools.length);
+  });
+
+  it('chatAsync: без опции поля tool_choice нет', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new AnthropicProvider(baseParams);
+    await drain(provider.chatAsync([makeMessage()], undefined, makeTools()));
+
+    const body = readBody(fetchMock);
+    expect(body.tool_choice).toBeUndefined();
+    expect(body.tools).toBeDefined();
+  });
+
+  it('chatAsync: без tools tool_choice не отправляется', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new AnthropicProvider(baseParams);
+    await drain(provider.chatAsync([makeMessage()], undefined, undefined, undefined, undefined, {
+      toolChoice: 'none',
+    }));
+
+    const body = readBody(fetchMock);
+    expect(body.tool_choice).toBeUndefined();
+    expect(body.tools).toBeUndefined();
   });
 });

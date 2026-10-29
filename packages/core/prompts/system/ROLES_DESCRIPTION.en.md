@@ -5,12 +5,12 @@ The following roles are available:
 | ID | Name | Description |
 |----|------|-------------|
 | assistant | Assistant | General-purpose assistant for everyday tasks |
-| developer | Developer | Help with code, architecture, reviews |
+| leader | Leader | Task decomposition, delegation to executors, acceptance |
+| fixer | Fixer | Bug fixing: investigate → fix → verify |
+| tester | Tester | Tests, regression, evidence of working state |
+| researcher | Researcher | Architecture and dependency research (read-only) |
+| security-auditor | Security Auditor | Audit of vulnerability classes and invariants |
 | devops | DevOps Engineer | Infrastructure, deployment, CI/CD |
-| analyst | Analyst | Research, documentation, analysis |
 | admin | Administrator | System administration |
-| qa | QA Engineer | Testing, quality assurance |
-| pm | Project Manager | Planning, coordination |
-| auditor | Security Auditor | Code security analysis |
 
 Choose the role most suitable for your task.

@@ -398,7 +398,7 @@ async function makeHarness(providerName: string): Promise<Harness> {
   const session = await sessionManager.createSession({
     title: 'DenyAbort',
     projectId: project.id,
-    settings: { provider: providerName, model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+    settings: { provider: providerName, model: 'm', systemPrompt: 'test', agentRole: 'fixer' },
   });
   const msg = makeMessage();
   await sessionManager.addMessage(session.id, msg);
@@ -520,7 +520,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     expect(finalAssistant?.metadata?.status).toBe('error');
 
     // Пары для LLM целы: assistant с toolUse → парный tool, без осиротевших tool.
-    const llm = sessionMessagesToLlm(session.messages, 'developer');
+    const llm = sessionMessagesToLlm(session.messages, 'fixer');
     const toolUseIdx = llm.findIndex((m) => m.role === 'assistant' && (m.toolUse?.length ?? 0) > 0);
     expect(toolUseIdx).toBeGreaterThanOrEqual(0);
     expect(llm[toolUseIdx + 1]).toMatchObject({ role: 'tool', toolCallId: 'call_f0' });
@@ -564,7 +564,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
       { text: 'Шаг 1: проверяю команду', iteration: 0 },
     ]);
 
-    const llm = sessionMessagesToLlm(session.messages, 'developer');
+    const llm = sessionMessagesToLlm(session.messages, 'fixer');
     expect(llm.filter((m) => m.role === 'tool')).toHaveLength(1);
     expect(llm.filter((m) => m.role === 'assistant' && (m.toolUse?.length ?? 0) === 0)).toHaveLength(1);
     await rm(h.tmpDir, { recursive: true, force: true });
@@ -915,7 +915,7 @@ describe('ChatOrchestrator: отмена во время исполнения т
     });
     const session = await sessionManager.createSession({
       title: 'ToolCancel',
-      settings: { provider: 'mocktoolcancel', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+      settings: { provider: 'mocktoolcancel', model: 'm', systemPrompt: 'test', agentRole: 'fixer' },
     });
     const msg = makeMessage();
     await sessionManager.addMessage(session.id, msg);

@@ -168,7 +168,7 @@ describe('ChatOrchestrator × Plan/Act (ADR-025/ADR-027) — smoke', () => {
     const session = await sessionManager.createSession({
       title: 'Plan',
       projectId: project.id,
-      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', ...settings },
+      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'fixer', ...settings },
     });
     const msg = makeMessage();
     await sessionManager.addMessage(session.id, msg);
@@ -279,7 +279,7 @@ describe('ChatOrchestrator × Plan/Act (ADR-025/ADR-027) — smoke', () => {
 
     const session = await sessionManager.createSession({
       title: 'Plan',
-      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'auto' },
+      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'fixer', planMode: 'auto' },
     });
     session.projectId = project.id;
     await sessionManager.updateSession(session);
@@ -386,7 +386,7 @@ describe('ChatOrchestrator × Plan/Act (ADR-025/ADR-027) — smoke', () => {
 
     const session = await sessionManager.createSession({
       title: 'WS',
-      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'off' },
+      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'fixer', planMode: 'off' },
     });
     session.projectId = project.id;
     await sessionManager.updateSession(session);
@@ -429,7 +429,7 @@ describe('ChatOrchestrator × Plan/Act (ADR-025/ADR-027) — smoke', () => {
 
     const session = await sessionManager.createSession({
       title: 'Resume',
-      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'strict' },
+      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'fixer', planMode: 'strict' },
     });
     session.projectId = project.id;
     session.planApproved = true;
@@ -495,7 +495,7 @@ describe('ChatOrchestrator × Plan/Act (ADR-025/ADR-027) — smoke', () => {
 
     const session = await sessionManager.createSession({
       title: 'ModePrompt',
-      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'auto' },
+      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'fixer', planMode: 'auto' },
     });
     session.mode = 'plan';
     await sessionManager.updateSession(session);
@@ -537,7 +537,7 @@ describe('ChatOrchestrator × Plan/Act (ADR-025/ADR-027) — smoke', () => {
 
     const session = await sessionManager.createSession({
       title: `ModePrompt${mode.toUpperCase()}`,
-      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'auto' },
+      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'fixer', planMode: 'auto' },
     });
     session.mode = mode;
     await sessionManager.updateSession(session);
@@ -580,7 +580,7 @@ describe('ChatOrchestrator × Plan/Act (ADR-025/ADR-027) — smoke', () => {
 
     const session = await sessionManager.createSession({
       title: 'ModeNoFallback',
-      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'auto' },
+      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'fixer', planMode: 'auto' },
     });
     session.mode = 'plan';
     await sessionManager.updateSession(session);

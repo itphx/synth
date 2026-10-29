@@ -675,6 +675,145 @@ describe('task/tool.ts — выбор модели/провайдера саб-�
     expect(child.settings.model).toBe('explicit-model');
   });
 
+  it('составной model без provider: provider/model разбирается в пару (имя модели может содержать /)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const routeraiProv = makeNamedProvider('routerai', 'google/gemini-3.1-flash-lite');
+    const { getProvider, router } = makeModelRouterMock({
+      providerFor: (d) => (d.providerName === 'routerai' ? routeraiProv.provider : null),
+    });
+
+    const result = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        model: 'routerai/google/gemini-3.1-flash-lite',
+      },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({
+      providerName: 'routerai',
+      modelName: 'google/gemini-3.1-flash-lite',
+    }));
+    expect(routeraiProv.chatAsync).toHaveBeenCalledTimes(1);
+    expect(parentProv.chatAsync).not.toHaveBeenCalled();
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.provider).toBe('routerai');
+    expect(child.settings.model).toBe('google/gemini-3.1-flash-lite');
+  });
+
+  it('каталог моделей: неизвестная/отключённая пара → task.model_not_in_catalog со списком и list_models', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const { route, getProvider, router } = makeModelRouterMock({ providerFor: () => null });
+    const sessionsBefore = await sessionManager.listSessions(undefined, { light: true });
+
+    const result = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        // Составной id: провайдер + несуществующая модель.
+        model: 'routerai/missing-model',
+      },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig(),
+        listModels: async () => ([
+          { id: 'm1', provider: 'routerai', name: 'known-model', enabled: true },
+          { id: 'm2', provider: 'other', name: 'disabled-model', enabled: false },
+        ]),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.metadata!.i18n).toMatchObject({ key: 'task.model_not_in_catalog' });
+    expect(result.content).toContain('routerai/missing-model');
+    // Перечень доступных пар (отключённая модель не предлагается).
+    expect(result.content).toContain('routerai/known-model');
+    expect(result.content).not.toContain('other/disabled-model');
+    // Отсылка к каталогу.
+    expect(result.content).toContain('list_models');
+    // До пула провайдеров и до прогона дело не дошло.
+    expect(getProvider).not.toHaveBeenCalled();
+    expect(route).not.toHaveBeenCalled();
+    expect(parentProv.chatAsync).not.toHaveBeenCalled();
+    const sessionsAfter = await sessionManager.listSessions(undefined, { light: true });
+    expect(sessionsAfter).toHaveLength(sessionsBefore.length);
+  });
+
+  it('каталог моделей: валидная пара проходит, отключённая модель — отказ', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const routeraiProv = makeNamedProvider('routerai', 'google/gemini-3.1-flash-lite');
+    const catalog = [
+      { id: 'm1', provider: 'routerai', name: 'google/gemini-3.1-flash-lite', enabled: true },
+      { id: 'm2', provider: 'routerai', name: 'off-model', enabled: false },
+    ];
+    const { router } = makeModelRouterMock({
+      providerFor: (d) => (d.providerName === 'routerai' ? routeraiProv.provider : null),
+    });
+
+    const ok = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        model: 'routerai/google/gemini-3.1-flash-lite',
+      },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig(),
+        listModels: async () => catalog,
+      }, parent.id),
+    );
+    expect(ok.isError).toBeFalsy();
+    expect(routeraiProv.chatAsync).toHaveBeenCalledTimes(1);
+
+    const off = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        model: 'routerai/off-model',
+      },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig(),
+        listModels: async () => catalog,
+      }, parent.id),
+    );
+    expect(off.isError).toBe(true);
+    expect(off.metadata!.i18n).toMatchObject({ key: 'task.model_not_in_catalog' });
+    expect(off.content).toContain('routerai/off-model');
+  });
+
   it('только model (без provider): пара = провайдер родителя + заданная модель', async () => {
     const parent = await sessionManager.createSession({ title: 'P' });
     const parentProv = makeNamedProvider('parent-prov', 'parent-model');

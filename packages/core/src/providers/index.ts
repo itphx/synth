@@ -17,7 +17,7 @@ ProviderFactory.register('decision', DecisionProvider);
 ProviderFactory.register('systemone', DecisionProvider);
 
 export { ProviderFactory, BaseProvider } from './base.js';
-export type { LLMMessage, CancellationToken, ProviderConfig } from './base.js';
+export type { LLMMessage, CancellationToken, ChatOptions, ProviderConfig } from './base.js';
 export { OpenAIProvider } from './openai.js';
 export { AnthropicProvider } from './anthropic.js';
 export { OllamaProvider } from './ollama.js';

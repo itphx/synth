@@ -200,7 +200,7 @@ describe('AuthorityResolver', () => {
           actions: [],
           roles: [
             {
-              id: 'developer',
+              id: 'fixer',
               domain: 'base',
               grants: [grant({ action: 'write', targetPattern: 'path:src/**' })],
             },
@@ -210,10 +210,10 @@ describe('AuthorityResolver', () => {
           agents: [],
         },
       });
-      const asDeveloper = turn({ principal: principal({ roles: ['developer'] }) });
+      const asFixerRole = turn({ principal: principal({ roles: ['fixer'] }) });
 
-      expect(resolver.decide(asDeveloper, 'write', pathTarget('src/a.ts')).effect).toBe('allow');
-      expect(resolver.decide(asDeveloper, 'write', pathTarget('docs/a.md')).effect).toBe('deny');
+      expect(resolver.decide(asFixerRole, 'write', pathTarget('src/a.ts')).effect).toBe('allow');
+      expect(resolver.decide(asFixerRole, 'write', pathTarget('docs/a.md')).effect).toBe('deny');
     });
 
     // ADR-106 Ф5: роли агента, объявленные контентом пакета и записанные в

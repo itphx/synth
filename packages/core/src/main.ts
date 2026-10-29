@@ -254,10 +254,14 @@ program
       oauthProviders: synth.oauth.providers,
       // ADR-102: конфигурация аналитики (retention суточных роллапов).
       analyticsConfig: synth.analytics,
+      // ADR-076: таймауты сетевых git-операций (clone/fetch).
+      gitConfig: synth.git,
       // Этап 1 roadmap 0.13 (блок 3): «вопрос пользователю» (таймаут ответа).
       questionsConfig: synth.questions,
       // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов (PROP-096).
       backgroundConfig: synth.background,
+      // Предохранитель по объёму промпта саб-агента (`agents.subagentMaxInputTokens`).
+      agentsConfig: synth.agents,
       // ADR-115: лимиты вложений сообщений (attachments.*).
       attachmentsConfig: synth.attachments,
       // ADR-094: конфигурация метрик (`metrics.enabled`, env SYNTH_METRICS_ENABLED).

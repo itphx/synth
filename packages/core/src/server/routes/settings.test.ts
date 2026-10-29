@@ -282,13 +282,13 @@ describe('Settings API Routes (workspace)', () => {
   });
 
   describe('Security (askTimeoutMs)', () => {
-    it('GET /api/v2/settings/security возвращает дефолт askTimeoutMs=30000', async () => {
+    it('GET /api/v2/settings/security возвращает дефолт askTimeoutMs=300000 (5 минут)', async () => {
       const { app } = createTestApp(tmpDir, FALLBACK);
       const res = await app.request('/api/v2/settings/security');
       expect(res.status).toBe(200);
       const body: any = await res.json();
       expect(body.security.protectedPaths.enabled).toBe(true);
-      expect(body.security.askTimeoutMs).toBe(30000);
+      expect(body.security.askTimeoutMs).toBe(300_000);
     });
 
     it('PUT /api/v2/settings/security сохраняет askTimeoutMs и GET возвращает его (переживает рестарт)', async () => {
@@ -345,12 +345,12 @@ describe('Settings API Routes (workspace)', () => {
       expect(onSecurityChange).toHaveBeenCalledWith({ askTimeoutMs: 20000 });
     });
 
-    it('mergeSecurityConfig пробрасывает askTimeoutMs (runtime приоритетнее, дефолт 30000)', () => {
+    it('mergeSecurityConfig пробрасывает askTimeoutMs (runtime приоритетнее, дефолт 300000)', () => {
       const withAsk = mergeSecurityConfig(undefined, { askTimeoutMs: 5000 });
       expect(withAsk?.askTimeoutMs).toBe(5000);
 
       const defaultAsk = mergeSecurityConfig(undefined, { protectedPaths: { enabled: true } });
-      expect(defaultAsk?.askTimeoutMs).toBe(30000);
+      expect(defaultAsk?.askTimeoutMs).toBe(300_000);
     });
   });
 
@@ -1171,11 +1171,11 @@ describe('Settings API Routes — default-agent (админка «Агенты»
     app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
       settingsStore,
       fallbackWorkspace: FALLBACK,
-      fallbackDefaultAgent: 'analyst',
+      fallbackDefaultAgent: 'researcher',
     }));
     const res = await app.request('/api/v2/settings/default-agent');
     const body: any = await res.json();
-    expect(body).toEqual({ defaultAgent: 'analyst', isOverridden: false, defaults: 'analyst' });
+    expect(body).toEqual({ defaultAgent: 'researcher', isOverridden: false, defaults: 'researcher' });
   });
 
   it('PUT сохраняет и GET возвращает; переживает рестарт', async () => {
@@ -1183,18 +1183,18 @@ describe('Settings API Routes — default-agent (админка «Агенты»
     const put = await app.request('/api/v2/settings/default-agent', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ defaultAgent: 'developer' }),
+      body: JSON.stringify({ defaultAgent: 'fixer' }),
     });
     expect(put.status).toBe(200);
     const putBody: any = await put.json();
-    expect(putBody).toEqual({ defaultAgent: 'developer' });
+    expect(putBody).toEqual({ defaultAgent: 'fixer' });
 
     const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
-    expect(await restartedStore.getDefaultAgent()).toBe('developer');
+    expect(await restartedStore.getDefaultAgent()).toBe('fixer');
 
     const getRes = await app.request('/api/v2/settings/default-agent');
     const getBody: any = await getRes.json();
-    expect(getBody).toEqual({ defaultAgent: 'developer', isOverridden: true, defaults: DEFAULT_AGENT_ID });
+    expect(getBody).toEqual({ defaultAgent: 'fixer', isOverridden: true, defaults: DEFAULT_AGENT_ID });
   });
 
   it('PUT отклоняет пустой id', async () => {
@@ -1214,13 +1214,13 @@ describe('Settings API Routes — default-agent (админка «Агенты»
     const res = await app.request('/api/v2/settings/default-agent', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ defaultAgent: '  developer  ' }),
+      body: JSON.stringify({ defaultAgent: '  fixer  ' }),
     });
     expect(res.status).toBe(200);
     const body: any = await res.json();
-    expect(body).toEqual({ defaultAgent: 'developer' });
+    expect(body).toEqual({ defaultAgent: 'fixer' });
     const store = new RuntimeSettingsStore({ dataDir: tmpDir });
-    expect(await store.getDefaultAgent()).toBe('developer');
+    expect(await store.getDefaultAgent()).toBe('fixer');
   });
 
   it('PUT отклоняет id с недопустимыми символами', async () => {
@@ -1248,10 +1248,10 @@ describe('Settings API Routes — default-agent (админка «Агенты»
     const res = await app.request('/api/v2/settings/default-agent', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ defaultAgent: 'developer' }),
+      body: JSON.stringify({ defaultAgent: 'fixer' }),
     });
     expect(res.status).toBe(200);
-    expect(onDefaultAgentChange).toHaveBeenCalledWith('developer');
+    expect(onDefaultAgentChange).toHaveBeenCalledWith('fixer');
   });
 
   it('DELETE сбрасывает к fallback и live-применяет его', async () => {
@@ -1261,18 +1261,18 @@ describe('Settings API Routes — default-agent (админка «Агенты»
     app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
       settingsStore,
       fallbackWorkspace: FALLBACK,
-      fallbackDefaultAgent: 'analyst',
+      fallbackDefaultAgent: 'researcher',
       onDefaultAgentChange,
     }));
     await app.request('/api/v2/settings/default-agent', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ defaultAgent: 'developer' }),
+      body: JSON.stringify({ defaultAgent: 'fixer' }),
     });
 
     const body: any = await (await app.request('/api/v2/settings/default-agent', { method: 'DELETE' })).json();
-    expect(body).toEqual({ status: 'restored', defaultAgent: 'analyst', isOverridden: false, defaults: 'analyst' });
-    expect(onDefaultAgentChange).toHaveBeenLastCalledWith('analyst');
+    expect(body).toEqual({ status: 'restored', defaultAgent: 'researcher', isOverridden: false, defaults: 'researcher' });
+    expect(onDefaultAgentChange).toHaveBeenLastCalledWith('researcher');
     expect(await settingsStore.getDefaultAgent()).toBeUndefined();
   });
 });

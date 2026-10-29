@@ -213,6 +213,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       blobRefs: deps.storageContext.blobRefs,
       config: () => deps.attachmentsSettings.getConfig(),
     },
+    // ADR-111 §detach: «Стоп» останавливает и живые дочерние прогоны
+    // (фоновые саб-агенты и их процессы) — решение 2026-10-28.
+    deps.backgroundService,
   ));
 
   // Messages routes
@@ -284,6 +287,13 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   app.route('/api/v2/git', createGitRoutes(auth, projectStore, config.workspacesRoot, {
     sshKeyStore,
     execution: deps.executionPort,
+    // ADR-076: таймауты сетевых git-операций (`git.*` конфига; 0 — без таймаута).
+    ...(config.synth.git?.cloneTimeoutMs !== undefined
+      ? { cloneTimeoutMs: config.synth.git.cloneTimeoutMs }
+      : {}),
+    ...(config.synth.git?.fetchTimeoutMs !== undefined
+      ? { fetchTimeoutMs: config.synth.git.fetchTimeoutMs }
+      : {}),
     authorizeProject: async (c, projectId) => {
       const user = await auth.getCurrentUser(c);
       if (!user) return false;

@@ -20,11 +20,40 @@ function normRepoPath(path: string): string {
   return path === '' || path === '.' ? '' : path
 }
 
+/**
+ * Структурная ошибка последней операции (ADR-076). Строковый `error` оставлен
+ * для совместимости, но для actionable-UI нужны `code`/`details` (например,
+ * `details.occupied` у 409 «путь занят»).
+ */
+export interface GitActionError {
+  message: string
+  code?: string
+  details?: Record<string, unknown>
+}
+
+/** Отмена пользователем (`AbortController`) — не ошибка, в стор не пишется. */
+function isAbortError(e: unknown): boolean {
+  return (e as { name?: string } | null)?.name === 'AbortError'
+}
+
+/** Приводит пойманную ошибку к структурному виду; `null` — отмена. */
+function toActionError(e: unknown): GitActionError | null {
+  if (isAbortError(e)) return null
+  const err = (e ?? {}) as Error & { code?: string; details?: Record<string, unknown> }
+  return {
+    message: err.message || 'Operation failed',
+    ...(err.code ? { code: err.code } : {}),
+    ...(err.details ? { details: err.details } : {}),
+  }
+}
+
 interface GitStore {
   reposByProject: Record<string, GitRepoView[]>
   commitsByRepo: Record<string, CommitInfo[]>
   loading: boolean
   error: string | null
+  /** Структурная ошибка последней операции (`code`/`details` для actionable-UI). */
+  lastError: GitActionError | null
 
   expandedProjects: Set<string>
   expandedRepos: Set<string>
@@ -46,13 +75,20 @@ interface GitStore {
     branch?: string,
     name?: string,
     sshKeyId?: string,
+    /** Отмена клонирования (сеть может идти минутами). */
+    signal?: AbortSignal,
   ) => Promise<RepoStatus | null>
   registerRepo: (
     projectId: string,
     entry: { path: string; name?: string; url?: string; type?: 'https' | 'ssh'; defaultBranch?: string; sshKeyId?: string },
   ) => Promise<GitRepoConfigData | null>
   removeRepo: (projectId: string, opts: { id?: string; path?: string; deleteLocal?: boolean }) => Promise<boolean>
-  fetchRepo: (projectId: string, opts: { id?: string; path?: string }) => Promise<boolean>
+  fetchRepo: (
+    projectId: string,
+    opts: { id?: string; path?: string },
+    /** Отмена операции (сеть может идти минутами). */
+    signal?: AbortSignal,
+  ) => Promise<boolean>
   loadCommitLog: (projectId: string, repoPath: string) => Promise<CommitInfo[] | null>
   loadCommitDetail: (projectId: string, repoPath: string, hash: string) => Promise<CommitDetail | null>
 
@@ -76,6 +112,7 @@ export const useGitStore = create<GitStore>()(
   commitsByRepo: {},
   loading: false,
   error: null,
+  lastError: null,
 
   expandedProjects: new Set<string>(),
   expandedRepos: new Set<string>(),
@@ -97,7 +134,7 @@ export const useGitStore = create<GitStore>()(
   },
 
   scanWorkspace: async (projectId) => {
-    set({ loading: true, error: null })
+    set({ loading: true, error: null, lastError: null })
     try {
       const result = await synthApi.scanGitRepos(projectId)
       set((s) => {
@@ -111,67 +148,73 @@ export const useGitStore = create<GitStore>()(
       })
       return result.repos
     } catch (e) {
-      set({ error: (e as Error).message, loading: false })
+      const actionError = toActionError(e)
+      set({ loading: false, ...(actionError ? { error: actionError.message, lastError: actionError } : {}) })
       return null
     }
   },
 
   initRepo: async (projectId, path, defaultBranch, name, sshKeyId) => {
-    set({ loading: true, error: null })
+    set({ loading: true, error: null, lastError: null })
     try {
       const repo = await synthApi.initGitRepo(projectId, path, defaultBranch, name, sshKeyId)
       set({ loading: false })
       return repo
     } catch (e) {
-      set({ error: (e as Error).message, loading: false })
+      const actionError = toActionError(e)
+      set({ loading: false, ...(actionError ? { error: actionError.message, lastError: actionError } : {}) })
       return null
     }
   },
 
-  cloneRepo: async (projectId, url, path, branch, name, sshKeyId) => {
-    set({ loading: true, error: null })
+  cloneRepo: async (projectId, url, path, branch, name, sshKeyId, signal) => {
+    set({ loading: true, error: null, lastError: null })
     try {
-      const repo = await synthApi.cloneGitRepo(projectId, url, path, branch, name, sshKeyId)
+      const repo = await synthApi.cloneGitRepo(projectId, url, path, branch, name, sshKeyId, signal)
       set({ loading: false })
       return repo
     } catch (e) {
-      set({ error: (e as Error).message, loading: false })
+      const actionError = toActionError(e)
+      set({ loading: false, ...(actionError ? { error: actionError.message, lastError: actionError } : {}) })
       return null
     }
   },
 
   registerRepo: async (projectId, entry) => {
-    set({ loading: true, error: null })
+    set({ loading: true, error: null, lastError: null })
     try {
       const registered = await synthApi.registerGitRepo(projectId, entry)
       set({ loading: false })
       return registered
     } catch (e) {
-      set({ error: (e as Error).message, loading: false })
+      const actionError = toActionError(e)
+      set({ loading: false, ...(actionError ? { error: actionError.message, lastError: actionError } : {}) })
       return null
     }
   },
 
   removeRepo: async (projectId, opts) => {
-    set({ loading: true, error: null })
+    set({ loading: true, error: null, lastError: null })
     try {
       await synthApi.removeGitRepo(projectId, opts)
       set({ loading: false })
       return true
     } catch (e) {
-      set({ error: (e as Error).message, loading: false })
+      const actionError = toActionError(e)
+      set({ loading: false, ...(actionError ? { error: actionError.message, lastError: actionError } : {}) })
       return false
     }
   },
 
-  fetchRepo: async (projectId, opts) => {
-    set({ loading: true, error: null })
+  fetchRepo: async (projectId, opts, signal) => {
+    set({ loading: true, error: null, lastError: null })
     try {
-      await synthApi.fetchGitRepo(projectId, opts)
+      await synthApi.fetchGitRepo(projectId, opts, signal)
       set({ loading: false })
       return true
     } catch (e) {
-      set({ error: (e as Error).message, loading: false })
+      const actionError = toActionError(e)
+      set({ loading: false, ...(actionError ? { error: actionError.message, lastError: actionError } : {}) })
       return false
     }
   },

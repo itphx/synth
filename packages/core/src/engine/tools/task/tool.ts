@@ -5,7 +5,7 @@
  * в `run-cycle.ts`, создание дочерней сессии — в `fork.ts`, промпт — в `prompt.ts`.
  */
 import { MessageRole, nowISO, generateId, generateStreamId, makeTextPart, ToolCapability } from '@itphx/synth-shared';
-import type { ToolDefinition, Message, SessionSettings, ToolForLLM, ToolContext, ToolResult } from '@itphx/synth-shared';
+import type { ToolDefinition, Message, SessionSettings, ToolForLLM, ToolContext, ToolResult, ModelConfig } from '@itphx/synth-shared';
 import { normalizeAgentModes } from '../../agents/normalize.js';
 import type { CancellationToken, LLMMessage, BaseProvider } from '../../../providers/base.js';
 import { formatSkillsCatalogBlock } from '../../skills/catalog.js';
@@ -22,6 +22,8 @@ import type { ContextMode, TaskExtra } from './types.js';
 
 const DEFAULT_SUBAGENT_MAX_STEPS = 15;
 const DEFAULT_LAST_N = 4;
+/** Сколько доступных пар `provider/model` перечислять в отказе каталога. */
+const MODEL_HINTS_LIMIT = 10;
 
 export const taskTool: ToolDefinition = {
   name: 'task',
@@ -102,14 +104,22 @@ export const taskTool: ToolDefinition = {
       parentSettings: extra.parentSessionSettings,
     });
     if (resolution.unavailable) {
-      const unavailableParams = {
-        provider: resolution.unavailable.provider,
-        model: resolution.unavailable.model,
-      };
+      const { provider, model, available } = resolution.unavailable;
+      // Каталог знает доступные пары — отказ объясняет, что запрошенной пары
+      // нет (или модель отключена), и перечисляет альтернативы.
+      if (available !== undefined) {
+        const params = { provider, model, available };
+        return {
+          content: sm('task.model_not_in_catalog', params),
+          isError: true,
+          metadata: { available_models: available, i18n: i18nMeta('task.model_not_in_catalog', params) },
+        };
+      }
+      const params = { provider, model };
       return {
-        content: sm('task.model_unavailable', unavailableParams),
+        content: sm('task.model_unavailable', params),
         isError: true,
-        metadata: { i18n: i18nMeta('task.model_unavailable', unavailableParams) },
+        metadata: { i18n: i18nMeta('task.model_unavailable', params) },
       };
     }
 
@@ -365,7 +375,16 @@ interface SubagentProviderResolution {
   /** Routing-решение для отчётности (`<routed_by>`/metadata прогона). */
   routingDecisionInfo?: { providerName: string; modelName: string; strategy: string };
   /** Нужен не-родительский провайдер, но он недоступен — отказ тула. */
-  unavailable?: { provider: string; model: string };
+  unavailable?: {
+    provider: string;
+    model: string;
+    /**
+     * Пары из каталога моделей (до 10, `provider/model`) — заполняется, когда
+     * запрошенную пару отверг каталог (`listModels`), а не пул провайдеров.
+     * Наличие поля переключает текст отказа на `task.model_not_in_catalog`.
+     */
+    available?: string;
+  };
 }
 
 /**
@@ -404,17 +423,70 @@ async function resolveSubagentProvider(opts: {
 
   const subagentCfg = extra.routerConfig?.subagent;
   const subagentCfgEnabled = subagentCfg !== undefined && subagentCfg.enabled !== false;
-  const explicitModel = params.model?.trim() || '';
-  const explicitProvider = params.provider?.trim() || '';
+  let explicitModel = params.model?.trim() || '';
+  let explicitProvider = params.provider?.trim() || '';
+  // Составной id (`provider/model`) без явного `provider`: первый сегмент —
+  // провайдер, остаток — имя модели (внутри него `/` допустим, например
+  // `routerai/google/gemini-3.1-flash-lite`). Без разбора строка уходила бы
+  // как имя модели в провайдер родителя/дефолт, и ошибку возвращал бы уже API
+  // провайдера («supported API model names are…»).
+  if (explicitModel.includes('/') && !explicitProvider) {
+    const slash = explicitModel.indexOf('/');
+    explicitProvider = explicitModel.slice(0, slash).trim();
+    explicitModel = explicitModel.slice(slash + 1).trim();
+  }
   const cfgModel = subagentCfgEnabled ? (subagentCfg?.model?.trim() || '') : '';
   const cfgProvider = subagentCfgEnabled ? (subagentCfg?.provider?.trim() || '') : '';
 
+  /** Каталог моделей инстанса — если оркестратор передал загрузчик (fail-open). */
+  const loadModelCatalog = async (): Promise<ModelConfig[] | null> => {
+    if (!extra.listModels) return null;
+    try {
+      return await extra.listModels();
+    } catch {
+      // Каталог недоступен — валидация по нему не блокирует прогон.
+      return null;
+    }
+  };
+
+  /** Доступные пары каталога для текста отказа (до `MODEL_HINTS_LIMIT`). */
+  const availablePairsText = (catalog: ModelConfig[]): string => {
+    const pairs = catalog
+      .filter((m) => m.enabled !== false)
+      .map((m) => `${m.provider}/${m.name}`);
+    const shown = pairs.slice(0, MODEL_HINTS_LIMIT);
+    return pairs.length > shown.length ? `${shown.join(', ')}, …` : shown.join(', ');
+  };
+
   /** Резолв заданной пары через пул провайдеров роутера (без `route()`). */
-  const resolveRequestedPair = (
+  const resolveRequestedPair = async (
     providerName: string,
     modelName: string,
     strategy: string,
-  ): SubagentProviderResolution => {
+  ): Promise<SubagentProviderResolution> => {
+    // Валидация по каталогу — только для явно запрошенной пары (пара родителя
+    // идёт прежним путём). Каталог строже пула провайдеров: модель может быть
+    // заведена, но отключена (`enabled: false`).
+    const isParentPair = providerName === parentProviderName && modelName === parentModelName;
+    if (!isParentPair && providerName) {
+      const catalog = await loadModelCatalog();
+      if (catalog) {
+        const entry = catalog.find((m) => m.provider === providerName && m.name === modelName);
+        if (!entry || entry.enabled === false) {
+          return {
+            ...base,
+            providerName,
+            modelName,
+            unavailable: {
+              provider: providerName,
+              model: modelName,
+              available: availablePairsText(catalog),
+            },
+          };
+        }
+      }
+    }
+
     const requested = {
       providerName,
       modelName,
@@ -433,7 +505,7 @@ async function resolveSubagentProvider(opts: {
     }
     // Провайдер недоступен. Если это ровно родительская пара — берём родителя
     // (запроса на другую модель не было), иначе — явный отказ.
-    if (providerName === parentProviderName && modelName === parentModelName) {
+    if (isParentPair) {
       return base;
     }
     return {
@@ -446,7 +518,7 @@ async function resolveSubagentProvider(opts: {
 
   // 1. Явные параметры тула — приоритет выше всего.
   if (explicitModel || explicitProvider) {
-    return resolveRequestedPair(
+    return await resolveRequestedPair(
       explicitProvider || parentProviderName,
       explicitModel || parentModelName,
       'explicit',
@@ -455,7 +527,7 @@ async function resolveSubagentProvider(opts: {
 
   // 2. Дефолт инстанса для саб-агентов (router.subagent).
   if (cfgModel || cfgProvider) {
-    return resolveRequestedPair(
+    return await resolveRequestedPair(
       cfgProvider || parentProviderName,
       cfgModel || parentModelName,
       'subagent-config',
@@ -597,9 +669,10 @@ async function continueChildSession(opts: {
  * дочерней сессии (`acquireLock` + `currentStream`) → cancel-токен в
  * оркестраторе → detached-прогон → немедленный возврат `tool_result`.
  *
- * Фоновый ребёнок **независим** от родителя: свой `AbortController` (сигнал
- * родителя его не касается) и свой `streamId`. Отмена — только
- * `POST /sessions/<child>/abort`.
+ * Фоновый ребёнок **независим по сигналу** от родителя: свой `AbortController`
+ * (сигнал родителя его не касается) и свой `streamId`. Отдельная отмена —
+ * `POST /sessions/<child>/abort` либо `POST /processes/:id/stop`; «Стоп»
+ * сессии-родителя останавливает и его (ADR-111 §detach п. 10, решение 2026-10-28).
  */
 async function startBackgroundSubagent(opts: {
   params: TaskParams;

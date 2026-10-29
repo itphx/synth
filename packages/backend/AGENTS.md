@@ -44,7 +44,7 @@
 | `createProcessRoutes` | HTTP-контур единого реестра фоновых прогонов (PROP-096/097): список, деталь, лог, остановка, удаление |
 | `createPipelineMetrics` | коллектор метрик `synth_pipeline_*` (ADR-094/ADR-101) |
 | `WorktreeService`, `publishWorktreeUpdated`, `startWorktreeSweeper` | worktree'ы (ADR-114): сервис git-worktree'ов + публикация `worktree.updated` в каналы сессий проекта + **стартовый sweep** осиротевших записей (фоново, старт не блокируется, ошибка — в лог; вызывается в `src/app/deps.ts` сразу после сборки сервиса) |
-| `detectRuntimeDeps` | детект внешних бинарников (`git`/`rg`/`sh`) при старте → `runtimeDeps` оркестратора (ADR-078) |
+| `detectRuntimeDeps` | детект внешних бинарников (`git`/`rg`/`sh`/`bash`) при старте → `runtimeDeps` оркестратора (ADR-078) |
 
 Локально только:
 
@@ -185,7 +185,7 @@ Runbook и каталог метрик — `docs/OBSERVABILITY.md`; конфиг
 
 - Единственный LLM-эндпоинт backend — `POST /api/v2/llm/chat/completions` (OpenAI-совместимый), роутер `src/routes/llm.ts`.
 - ADR-052: на прокси навешан `scopeGuard('llm:chat')` — service-key без `llm:chat` → `403 SCOPE_REQUIRED` (проектной проекции у прокси нет).
-- Реализован на ядре: `GatewayProvider` + `ProviderFactory` + `AuditLogger`/`RateLimiter`/`SecretPatternStore`. Любой LLM-вызов — только через Gateway (ADR-036); провайдера напрямую не инстанцировать.
+- Реализован на ядре: `GatewayProvider` + `ProviderFactory` + `AuditLogger`/`RateLimiter`/`SecretPatternStore`. Любой LLM-вызов — только через Gateway (ADR-036); провайдера напрямую не инстанцировать. `tool_choice` (`auto`|`none`|`required`) из тела пробрасывается в `chat`/`chatAsync` провайдера (`ChatOptions`, только вместе с `tools[]`) — им идёт финальный шаг-отчёт по лимиту шагов; `GatewayProvider.chat` пробрасывает опции как `chatAsync`.
 - ADR-094: прокси передаёт `onCall: createLlmCallRecorder(deps.metrics)` в `GatewayProvider` (при `metrics.enabled`) — единственная точка `synth_llm_*`; не считать LLM-вызовы в обход Gateway.
 - Один `AuditLogger` и один payload-лог шарятся между оркестратором и чтением (`/api/v2/audit`, `/api/v2/logs/llm`) — не создавай вторые.
 - Runtime-тумблеры Gateway/security из UI применяются на живой оркестратор через колбэки `onLlmGatewayChange`/`onSecurityChange` в `src/app/deps.ts`.

@@ -10,14 +10,17 @@ import {
  *
  * Базовый словарь — в core (`EXECUTION_BASE_CAPABILITIES`): по нему control
  * plane судит о доступности встроенных тулов. Исполнитель обязан отдавать и
- * `sh` — иначе `execute_shell` в remote-режиме считался бы недоступным.
+ * `sh`, и `bash`: `execute_shell` требует **bash** (в образах `/bin/sh` —
+ * dash/busybox ash, bash-синтаксис там не работает), без `bash` в отчёте тул в
+ * remote-режиме считался бы недоступным.
  */
 describe('toolchain исполнителя (ADR-077)', () => {
-  it('базовый словарь — из core: git/rg/sh', async () => {
+  it('базовый словарь — из core: git/rg/sh/bash', async () => {
     const binaries = await resolveToolchainBinaries();
     expect(binaries).toContain('git');
     expect(binaries).toContain('rg');
     expect(binaries).toContain('sh');
+    expect(binaries).toContain('bash');
   });
 
   it('дополнительные сведения отделены от базовых', async () => {
@@ -29,9 +32,11 @@ describe('toolchain исполнителя (ADR-077)', () => {
     expect(binaries.length).toBeGreaterThan(3);
   });
 
-  it('detectToolchain: оболочка `sh` есть в отчёте (есть в любом образе)', async () => {
+  it('detectToolchain: оболочки `sh` и `bash` есть в отчёте (tier 0 образов)', async () => {
     const toolchain = await detectToolchain();
     expect(Object.keys(toolchain)).toContain('sh');
+    // bash — требование `execute_shell`: без него тул недоступен (fail-closed).
+    expect(Object.keys(toolchain)).toContain('bash');
   });
 
   it('detectToolchain: отсутствующий бинарник в отчёт не попадает', async () => {

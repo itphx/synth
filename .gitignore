@@ -35,6 +35,10 @@ Thumbs.db
 logs/
 tmp/
 
+# Core-дампы (OOM/падение процесса) — не должны попадать в рабочее дерево
+/core
+/core.[0-9]*
+
 # Кэш
 .tsbuildinfo
 *.tsbuildinfo

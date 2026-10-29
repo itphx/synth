@@ -3,7 +3,7 @@
  *
  * ADR-095 (шаг 5): вынесено из `task.ts` без изменения поведения.
  */
-import type { SessionSettings, RouterConfig, PermissionConfig, SecurityConfig, WorkspaceOutsideRootPolicy, ProfileStore } from '@itphx/synth-shared';
+import type { SessionSettings, RouterConfig, PermissionConfig, SecurityConfig, WorkspaceOutsideRootPolicy, ProfileStore, ModelConfig } from '@itphx/synth-shared';
 import type { AgentRegistry } from '../../agents/registry.js';
 import type { BaseProvider } from '../../../providers/base.js';
 import type { ToolRegistry } from '../registry.js';
@@ -51,6 +51,14 @@ export interface TaskExtra {
   mcpServers?: string[];
   modelRouter?: ModelRouter;
   routerConfig?: RouterConfig;
+  /**
+   * ADR-115: каталог моделей инстанса (`modelStore.list()`) — тот же загрузчик,
+   * что у тула `list_models`. Задан — явная пара `task({provider, model})`
+   * валидируется по каталогу (существует и не `enabled: false`), и отказ
+   * `task.model_not_in_catalog` перечисляет доступные пары. Не задан —
+   * поведение прежнее (валидация только через пул провайдеров роутера).
+   */
+  listModels?: () => Promise<ModelConfig[]>;
   contextConfig?: ContextFileRepository;
   publish?: (type: string, data: Record<string, unknown>) => void;
   streamId?: string;
@@ -60,6 +68,12 @@ export interface TaskExtra {
   callerAgentRole?: string;
   /** Permissions родительской сессии (ADR-029) — наследуются саб-агентом с deny-дополнениями. */
   permissionConfig?: PermissionConfig;
+  /**
+   * Предохранитель по объёму промпта саб-агента (`agents.subagentMaxInputTokens`):
+   * при превышении оценка бюджета завершает прогон детерминированным отчётом.
+   * `0`/не задан — без ограничения.
+   */
+  subagentMaxInputTokens?: number;
   /**
    * ADR-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) родителя.
    * Передаётся в permission-слой саб-агента (enforce `dependency`) и в секцию

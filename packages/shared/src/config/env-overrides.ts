@@ -73,6 +73,9 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'decision', key: 'escalationModel', type: 'string' },
   // analytics (ADR-102)
   { section: 'analytics', key: 'retentionDays', type: 'number' },
+  // git (ADR-076): таймауты сетевых git-операций (0 — без таймаута).
+  { section: 'git', key: 'cloneTimeoutMs', type: 'number' },
+  { section: 'git', key: 'fetchTimeoutMs', type: 'number' },
   // questions (этап 1 roadmap 0.13 — блок 3): таймаут ответа + retention.
   { section: 'questions', key: 'timeoutMs', type: 'number' },
   { section: 'questions', key: 'retentionDays', type: 'number' },
@@ -83,6 +86,8 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'background', key: 'maxRunsPerSession', type: 'number' },
   { section: 'background', key: 'logMaxBytes', type: 'number' },
   { section: 'background', key: 'retentionDays', type: 'number' },
+  // agents: предохранитель по объёму промпта саб-агента (не окно модели).
+  { section: 'agents', key: 'subagentMaxInputTokens', type: 'number' },
   // attachments (ADR-115): вложения сообщений. Семейства MIME
   // (`SYNTH_ATTACHMENTS_MODALITIES`, csv) — объектный ключ, обрабатывается
   // отдельно (`applyAttachmentsModalitiesEnvOverride`); список префиксов

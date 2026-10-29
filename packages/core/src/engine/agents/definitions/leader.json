@@ -1,0 +1,29 @@
+{
+  "id": "leader",
+  "displayName": {
+    "en": "Leader",
+    "ru": "Оркестратор"
+  },
+  "description": {
+    "en": "Task orchestrator: decomposition, delegation, acceptance",
+    "ru": "Оркестратор задач: декомпозиция, делегирование, приёмка"
+  },
+  "capabilities": [
+    "file_read",
+    "search",
+    "git_read",
+    "web",
+    "task",
+    "mcp",
+    "runtime",
+    "memory",
+    "question",
+    "process",
+    "models"
+  ],
+  "icon": "clipboard",
+  "color": "--primary",
+  "contextFile": "LEADER.md",
+  "agentMode": ["primary"],
+  "maxSteps": 200
+}

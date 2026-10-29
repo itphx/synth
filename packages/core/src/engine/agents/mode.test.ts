@@ -15,7 +15,7 @@ describe('isModeApplicable (ADR-025)', () => {
     expect(isModeApplicable({ capabilities: ['file_read', 'search', 'mcp'] })).toBe(false);
   });
 
-  it('read-only агент с web (analyst: file_read/search/web/mcp) → false (web не мутирует)', () => {
+  it('read-only агент с web (researcher: file_read/search/web/mcp) → false (web не мутирует)', () => {
     expect(isModeApplicable({ capabilities: ['file_read', 'search', 'web', 'mcp'] })).toBe(false);
   });
 
@@ -23,7 +23,7 @@ describe('isModeApplicable (ADR-025)', () => {
     expect(isModeApplicable({ capabilities: ['file_read', 'search', 'web', 'git_read', 'mcp'] })).toBe(false);
   });
 
-  it('developer (shell/file_write) → true', () => {
+  it('fixer (shell/file_write) → true', () => {
     expect(isModeApplicable({ capabilities: ['file_read', 'file_write', 'search', 'shell', 'git_read', 'git_write', 'mcp'] })).toBe(true);
   });
 

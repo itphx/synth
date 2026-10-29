@@ -46,12 +46,25 @@ export type SteerInjectedEvent = {
   metadata?: Record<string, unknown>;
 };
 
-/** Payload события `steer.dropped` — превышен лимит инъекций на ход. */
+/**
+ * Причины события `steer.dropped` (ADR-104, решение 2026-10-28):
+ * - `limit` — превышен лимит инъекций на ход (сообщение не принято);
+ * - `aborted` — ход остановлен («Стоп»), очередь инъекций снята;
+ * - `turn_ended` — ход закончился, границы шага больше не будет — неприменённые
+ *   инъекции снимаются, чтобы не «переехать» в следующий ход.
+ */
+export type SteerDroppedReason = 'limit' | 'aborted' | 'turn_ended';
+
+/** Payload события `steer.dropped` — сообщение не применено (и по какой причине). */
 export type SteerDroppedEvent = {
-  reason: 'limit';
-  /** Машинный код — тот же, что отдаёт API (429 STEER_LIMIT_EXCEEDED). */
-  code: typeof STEERING_ERROR_CODES.limitExceeded;
-  limit: number;
+  reason: SteerDroppedReason;
+  /** id стрима хода, в котором снято сообщение (для группировки в UI). */
+  stream_id?: string;
+  /** Машинный код — только для `limit` (как отдаёт API: 429 STEER_LIMIT_EXCEEDED). */
+  code?: typeof STEERING_ERROR_CODES.limitExceeded;
+  /** Предел инъекций на ход — только для `limit`. */
+  limit?: number;
+  /** Сколько сообщений снято/не принято. */
   dropped_count: number;
   error: string;
   i18n: MessageI18n;
@@ -147,4 +160,47 @@ export async function applySteerInjections(opts: SteerInjectionApplyOptions): Pr
       metadata: persisted.metadata,
     });
   }
+}
+
+/** Опции снятия неприменённых инъекций (ADR-104, решение 2026-10-28). */
+export interface SteerDropOptions {
+  /** Менеджер сессий — владелец очереди инъекций. */
+  sessionManager: SessionManager;
+  /** Сессия-владелец очереди. */
+  sessionId: string;
+  /** Публикация `steer.dropped` — только если очередь была непустой. */
+  publishDropped: (event: SteerDroppedEvent) => void;
+  /** Причина снятия: `aborted` («Стоп») или `turn_ended` (конец хода). */
+  reason: Exclude<SteerDroppedReason, 'limit'>;
+  /** id стрима хода — попадает в событие. */
+  streamId?: string;
+}
+
+/**
+ * Снять неприменённые инъекции из очереди сессии (ADR-104, решение 2026-10-28).
+ *
+ * Очередь вычитывается только на границе шага; если ход остановлен («Стоп») или
+ * закончился, границы уже не будет — оставшиеся сообщения иначе применились бы
+ * в начале следующего хода и выглядели «внезапным отдельным сообщением».
+ * Снятые сообщения **не** персистятся (в историю не попадают) — о них сообщает
+ * событие `steer.dropped` с причиной и количеством.
+ *
+ * Возвращает снятые сообщения (для тестов/диагностики); пустая очередь — `[]`
+ * и событие не публикуется.
+ */
+export async function dropSteerInjections(opts: SteerDropOptions): Promise<Message[]> {
+  const { sessionManager, sessionId, publishDropped, reason, streamId } = opts;
+  const dropped = await sessionManager.clearSteerInbox(sessionId);
+  if (dropped.length === 0) return dropped;
+
+  const key = reason === 'aborted' ? 'steer.dropped_aborted' : 'steer.dropped_turn_ended';
+  const params = { count: String(dropped.length) };
+  publishDropped({
+    reason,
+    dropped_count: dropped.length,
+    error: sm(key, params),
+    i18n: i18nMeta(key, params),
+    ...(streamId ? { stream_id: streamId } : {}),
+  });
+  return dropped;
 }

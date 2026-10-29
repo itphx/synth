@@ -1,6 +1,7 @@
 import type { PermissionConfig, PermissionRule } from '@itphx/synth-shared';
 
-export const DEFAULT_ASK_TIMEOUT_MS = 30_000;
+/** ADR-029: срок ожидания подтверждения `ask` по умолчанию — 5 минут. */
+export const DEFAULT_ASK_TIMEOUT_MS = 300_000;
 
 export function emptyPermissionConfig(): PermissionConfig {
   return { rules: {}, askTimeoutMs: DEFAULT_ASK_TIMEOUT_MS };

@@ -10,6 +10,9 @@
   `ignoreWorkspaceCycles: true` in `pnpm-workspace.yaml` — otherwise pnpm ≥12 fails
   the recursive `pnpm typecheck`/`lint`/`test` with `ERR_PNPM_TASK_CYCLE`)
 
+`packageManager` in the root `package.json` pins the local pnpm version
+(`pnpm@12.14.0`); with corepack enabled it uses exactly that version (`corepack enable`).
+
 ## Quick start
 
 ```bash

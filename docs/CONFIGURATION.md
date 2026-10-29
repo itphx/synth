@@ -84,8 +84,8 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 
 ### Env-оверрайды вложенных секций (ADR-023)
 
-Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `metrics`,
-`questions`, `background`, `authority` можно задавать
+Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `git`, `metrics`,
+`questions`, `background`, `agents`, `authority` можно задавать
 переменными окружения — удобно для k8s (ConfigMap → env пода). Имя переменной
 собирается по правилу **`SYNTH_<SECTION>_<KEY>`**, где camelCase ключа переводится в
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -143,6 +143,8 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
 | `SYNTH_ANALYTICS_RETENTION_DAYS` | number | `analytics.retentionDays` |
+| `SYNTH_GIT_CLONE_TIMEOUT_MS` | number | `git.cloneTimeoutMs` (ADR-076: предел `git clone`, мс; `0` — без таймаута) |
+| `SYNTH_GIT_FETCH_TIMEOUT_MS` | number | `git.fetchTimeoutMs` (ADR-076: предел `git fetch`, мс; `0` — без таймаута) |
 | `SYNTH_QUESTIONS_TIMEOUT_MS` | number | `questions.timeoutMs` (этап 1 roadmap 0.12.4 — блок 3) |
 | `SYNTH_QUESTIONS_RETENTION_DAYS` | number | `questions.retentionDays` (этап 1 roadmap 0.12.4 — блок 3) |
 | `SYNTH_BACKGROUND_ENABLED` | boolean | `background.enabled` (этап 1 roadmap 0.12.4 — блок 4) |
@@ -151,6 +153,7 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | number | `background.maxRunsPerSession` (этап 1 roadmap 0.12.4 — блок 4) |
 | `SYNTH_BACKGROUND_LOG_MAX_BYTES` | number | `background.logMaxBytes` (этап 1 roadmap 0.12.4 — блок 4) |
 | `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (этап 1 roadmap 0.12.4 — блок 4) |
+| `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | number | `agents.subagentMaxInputTokens` (предохранитель по объёму промпта саб-агента; `0` — без ограничения) |
 | `SYNTH_METRICS_ENABLED` | boolean | `metrics.enabled` |
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; мастер-выключатель слоя полномочий) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — наблюдение, `false` — принуждение) |
@@ -423,7 +426,7 @@ analytics:                        # ADR-102: аналитика и отчётн�
 
 permission:
   rules: {}                       # гранулярные permissions: allow/deny/ask per tool
-  askTimeoutMs: 30000
+  askTimeoutMs: 300000            # ожидание подтверждения `ask`, мс (300000 = 5 минут; 0 — без таймаута); по истечении — авто-отказ
 
 security:
   promptInjection:
@@ -1518,14 +1521,15 @@ questions:
 (`task({background: true})`, PROP-096/ADR-111) и фоновые **шелл-процессы**
 (`execute_shell({background: true})`, ADR-113) живут в **одном** реестре —
 второго хранилища нет. Лимиты считаются по сессии-владельцу (для саб-агента —
-родительская сессия).
+родительская сессия) и только по **живым** прогонам (`running`): завершённые
+записи — история реестра, её чистит retention, и лимит она не занимает.
 
 | Поле | Назначение | По умолчанию |
 |------|-----------|--------------|
 | `background.enabled` | Мастер-выключатель фоновой работы. `false` — и `task({background: true})`, и `execute_shell({background: true})` отвечают ошибкой (`task.background_disabled` / `process.background_disabled`; ход не падает), а foreground-работа и реестр продолжают работать. Env — `SYNTH_BACKGROUND_ENABLED` | `true` |
 | `background.maxSubagentsPerSession` | Максимум одновременно идущих фоновых саб-агентов на сессию-владельца; превышение → `background_limit_exceeded` (ошибка тула, ход не падает). Env — `SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION` | `2` |
 | `background.maxProcessesPerSession` | Максимум одновременно идущих фоновых шелл-процессов на сессию-владельца; превышение → `background_limit_exceeded`. Env — `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION` | `5` |
-| `background.maxRunsPerSession` | Максимум записей реестра на сессию-владельца (считаются все записи, чистятся retention-ом). Env — `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | `10` |
+| `background.maxRunsPerSession` | Максимум **одновременно идущих** фоновых прогонов любого вида (саб-агенты + процессы) на сессию-владельца; терминальные записи лимитом не считаются — это история реестра, её чистит retention. Env — `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | `10` |
 | `background.logMaxBytes` | Предел размера лога фонового процесса, байт; `0` — без ограничения. Не путать с потолком выдачи лога за один HTTP-запрос (256 КиБ) — это разные величины. Env — `SYNTH_BACKGROUND_LOG_MAX_BYTES` | `10485760` (10 МиБ) |
 | `background.retentionDays` | Срок хранения терминальных записей реестра (`completed`/`failed`/`cancelled`/`orphaned`), дни; `<= 0` — без ограничения. Env — `SYNTH_BACKGROUND_RETENTION_DAYS` | `7` |
 
@@ -1566,6 +1570,60 @@ background:
   сессии-владельца (ADR-009/ADR-024, новых каналов нет). `process.stopped` —
   запрос остановки (один раз на прогон); терминальный статус приходит позже —
   `process.exited`.
+
+### Агенты (`agents.*`)
+
+Предохранители прогонов агентов. `subagentMaxInputTokens` — ограничение **объёма промпта**
+саб-агента (не окно модели): перед каждым LLM-вызовом цикла саб-агента считается оценка
+промпта (`messages` + `systemPrompt` + описания инструментов, `estimatePromptChars` →
+`estimateTokens`), и при превышении провайдер **не вызывается** — прогон корректно
+завершается детерминированным отчётом (без LLM): токены, число выполненных шагов и
+незавершённые задачи (из todo-списка дочерней сессии либо из описания задачи). Отчёт
+сохраняется обычным assistant-ответом дочерней сессии со статусом `completed`, в metadata —
+`context_budget_exceeded`/`context_budget_tokens`/`steps`, родителю публикуется событие
+`subagent.context_budget`. Модели не дают «доработать» — это защита от раздувания истории
+(цена, деградация модели, лимиты провайдера).
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `agents.subagentMaxInputTokens` | Предохранитель по объёму промпта саб-агента, входные токены (оценка); `0` — без ограничения. При превышении прогон завершается отчётом, а не ошибкой провайдера. Env — `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | `150000` |
+
+- **Приоритет шаг-лимита.** Финальный шаг-отчёт по `maxSteps` (механика opencode) превышением
+  бюджета не считается: иначе отчёт по лимиту шагов не был бы получен вовсе.
+- **Оценка недоступна** (нет данных/пустой промпт) — не блокируем (fail-open).
+- Оценка — по эвристике chars-per-token (дефолт 4); это предохранитель, а не точный
+  подсчёт токенов модели.
+
+```yaml
+agents:
+  subagentMaxInputTokens: 150000
+```
+
+### Git-операции (`git.*`, ADR-076)
+
+Пределы сетевых git-операций (`git clone`/`git fetch` репозиториев проекта — HTTP-роуты
+`/api/v2/git/*` и тулы `project_repo_clone`/`project_repo_fetch`). Таймаут сам по себе
+атомарности не даёт — её обеспечивает `GitService`: клон идёт в **соседний** временный
+каталог `<path>.tmp-<uuid>` и появляется в целевом пути только после успеха (`rename`),
+поэтому после таймаута/ошибки на диске не остаётся ни целевого каталога, ни временного.
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `git.cloneTimeoutMs` | Предел `git clone`, мс; `0` — без таймаута. Истечение → `git.clone_timeout` (HTTP **504**). Env — `SYNTH_GIT_CLONE_TIMEOUT_MS` | `300000` (5 минут) |
+| `git.fetchTimeoutMs` | Предел `git fetch`, мс; `0` — без таймаута. Истечение → `git.fetch_timeout` (HTTP **504**). Env — `SYNTH_GIT_FETCH_TIMEOUT_MS` | `300000` (5 минут) |
+
+- Прочие сбои (нет remote, нет прав, обрыв соединения) **не** подменяются таймаутом —
+  наружу уходит исходная ошибка git.
+- Занятый целевой путь различается по состоянию файловой системы (`repo` — полноценный
+  репозиторий, `stub` — `.git` без коммитов от прерванного клона, `dir` — непустой каталог
+  без git): HTTP — 409 `git.repo_exists` + `details.occupied` (`details.entries` для `dir`),
+  тул — сообщение с действием (зарегистрировать / удалить / выбрать другой путь).
+
+```yaml
+git:
+  cloneTimeoutMs: 300000   # SYNTH_GIT_CLONE_TIMEOUT_MS
+  fetchTimeoutMs: 300000   # SYNTH_GIT_FETCH_TIMEOUT_MS
+```
 
 ### Вложения сообщений (`attachments.*`, ADR-115)
 

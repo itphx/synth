@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
 import { isAbsolute, normalize, resolve } from 'node:path';
 import { z } from 'zod';
 import { nowISO, ToolCapability, normalizeGitRepoConfig } from '@itphx/synth-shared';
@@ -17,11 +16,14 @@ import type { ProjectStoreContract } from '../../storage/project-store.js';
 import type { EventBus } from '../../events/bus.js';
 import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js';
 import { GitService, deriveRepoName } from '../../git/git-service.js';
+import { inspectRepoPath } from '../../git/repo-occupancy.js';
+import type { RepoOccupancyInfo } from '../../git/repo-occupancy.js';
 import { isSshUrl } from '../../git/ssh-env.js';
 import { isAborted, abortedResult } from './abort.js';
 import { loadSessionProject } from './project-manage.js';
 import { canEditProject } from './project-access.js';
 import { resolveSshEnvById } from './git-ssh.js';
+import { buildSshKeyRequiredResult } from './ssh-keys.js';
 import { t as sm, i18n as i18nMeta, type SystemMessageKey } from '../system-messages.js';
 
 /**
@@ -150,14 +152,39 @@ function deriveType(url?: string): 'https' | 'ssh' | undefined {
   return isSshUrl(url) ? 'ssh' : 'https';
 }
 
-/** Каталог существует и непустой (отсутствие каталога = пусто). */
-async function dirHasEntries(dir: string): Promise<boolean> {
-  try {
-    const entries = await readdir(dir);
-    return entries.length > 0;
-  } catch {
-    return false;
+/**
+ * Каталог занят: три разных состояния — три разных действия (ADR-076).
+ *
+ * Сообщение должно подсказать следующий шаг, иначе агент повторяет клон и
+ * упирается в тот же отказ.
+ */
+function repoOccupiedResult(relPath: string, info: RepoOccupancyInfo): ToolResult {
+  switch (info.occupied) {
+    case 'repo':
+      return i18nError('git.repo_occupied_repo', { path: relPath });
+    case 'stub':
+      return i18nError('git.repo_occupied_stub', { path: relPath });
+    default:
+      return i18nError('git.repo_occupied_dir', {
+        path: relPath,
+        entries: String(info.entries ?? 0),
+      });
   }
+}
+
+/**
+ * Ошибка сетевой git-операции: таймаут — отдельным actionable-сообщением
+ * (`git.clone_timeout`/`git.fetch_timeout`), остальное — общим текстом.
+ */
+function repoOpError(tool: string, err: unknown, timeoutMs?: number): ToolResult {
+  const code = (err as { code?: unknown } | null | undefined)?.code;
+  if (code === 'git.clone_timeout') {
+    return i18nError('git.clone_timeout', { timeout: String(timeoutMs ?? 0) });
+  }
+  if (code === 'git.fetch_timeout') {
+    return i18nError('git.fetch_timeout', { timeout: String(timeoutMs ?? 0) });
+  }
+  return toolExecError(tool, err);
 }
 
 /** Публикует `project.updated` — UI обновляет список проектов/Git-вкладку. */
@@ -208,15 +235,27 @@ export const projectRepoCloneTool: ToolDefinition = {
     const { extra, store, project, wsAbs, git } = loaded;
 
     const relPath = params.path || deriveRepoName(params.url);
+    // ADR-076: SSH-URL без ключа — не тупик: в сообщении перечислены доступные
+    // ключи (`id → name`) и назван тул `ssh_keys_list`. Стор ключей недоступен →
+    // прежний текст без списка (поведение не ломается).
     if (isSshUrl(params.url) && !params.sshKeyId) {
-      return i18nError('git.ssh_key_required', { path: relPath });
+      const hint = await buildSshKeyRequiredResult(extra.sshKeyStore, relPath);
+      return hint ?? i18nError('git.ssh_key_required', { path: relPath });
     }
 
     const containment = safeRelPath(git, wsAbs, relPath);
     if (!containment.ok) return containment.error;
-    if (await dirHasEntries(containment.abs)) {
-      return i18nError('git.repo_exists', { path: relPath });
+    // Занятость пути различаем по ФС (без запуска git): полноценный репозиторий
+    // регистрируют, след прерванного клона удаляют, непустой каталог обходят.
+    let occupancy: RepoOccupancyInfo | null;
+    try {
+      occupancy = await inspectRepoPath(containment.abs);
+    } catch {
+      // Каталог есть, но нечитаем (права) — отдельная понятная ошибка,
+      // иначе git падал бы ниже невнятным текстом.
+      return i18nError('git.repo_path_unreadable', { path: relPath });
     }
+    if (occupancy) return repoOccupiedResult(relPath, occupancy);
 
     const ssh = await resolveSshEnvById(extra.sshKeyStore, params.sshKeyId);
     if (ssh.error) return i18nError(ssh.error as SystemMessageKey, ssh.errorParams);
@@ -231,7 +270,7 @@ export const projectRepoCloneTool: ToolDefinition = {
         ssh.secrets ? { secrets: ssh.secrets } : undefined,
       );
     } catch (err) {
-      return toolExecError(this.name, err);
+      return repoOpError(this.name, err, git.cloneTimeoutMs);
     } finally {
       await ssh.cleanup();
     }
@@ -387,19 +426,36 @@ export const projectRepoFetchTool: ToolDefinition = {
       return i18nError('project.repo_not_found', { path: params.path ?? params.id ?? '' });
     }
     if (entry.url && isSshUrl(entry.url) && !entry.sshKeyId) {
-      return i18nError('git.ssh_key_required', { path: entry.path });
+      // ADR-076: как и у clone — подсказка со списком доступных ключей.
+      const hint = await buildSshKeyRequiredResult(extra.sshKeyStore, entry.path);
+      return hint ?? i18nError('git.ssh_key_required', { path: entry.path });
     }
 
     const containment = safeRelPath(git, wsAbs, entry.path);
     if (!containment.ok) return containment.error;
 
     const ssh = await resolveSshEnvById(extra.sshKeyStore, entry.sshKeyId);
-    if (ssh.error) return i18nError(ssh.error as SystemMessageKey, ssh.errorParams);
+    if (ssh.error) {
+      // Ключ в записи реестра есть, но в сторе его уже нет (удалён/переименован):
+      // сам по себе `sshkey.not_found` не подсказывает, что делать, — добавляем
+      // список доступных ключей.
+      if (ssh.error === 'sshkey.not_found') {
+        const hint = await buildSshKeyRequiredResult(extra.sshKeyStore, entry.path);
+        if (hint) {
+          return {
+            content: [sm('sshkey.not_found', ssh.errorParams), hint.content].join('\n'),
+            isError: true,
+            metadata: hint.metadata,
+          };
+        }
+      }
+      return i18nError(ssh.error as SystemMessageKey, ssh.errorParams);
+    }
 
     try {
       await git.fetchRepo(wsAbs, entry.path, ssh.secrets ? { secrets: ssh.secrets } : undefined);
     } catch (err) {
-      return toolExecError(this.name, err);
+      return repoOpError(this.name, err, git.fetchTimeoutMs);
     } finally {
       await ssh.cleanup();
     }

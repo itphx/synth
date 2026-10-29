@@ -230,6 +230,13 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
     blobs: storage.blobs,
     defaultWorkingDir,
     workspacesRoot,
+    // ADR-076: таймауты сетевых git-операций (`git.*` конфига; 0 — без таймаута).
+    ...(options.config.git?.cloneTimeoutMs !== undefined
+      ? { gitCloneTimeoutMs: options.config.git.cloneTimeoutMs }
+      : {}),
+    ...(options.config.git?.fetchTimeoutMs !== undefined
+      ? { gitFetchTimeoutMs: options.config.git.fetchTimeoutMs }
+      : {}),
     permissionConfig: options.config.permission,
     defaultPlanMode: options.config.session?.planMode,
     securityConfig: effectiveSecurityConfig,

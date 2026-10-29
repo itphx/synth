@@ -15,6 +15,13 @@ import { TreeNode, TreeChildren, TreeContainer } from '@/components/tree'
 import { OriginBadge } from '@/components/ui/OriginBadge'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import {
+  canDeleteOccupiedPath,
+  repoOccupiedAction,
+  repoOccupiedDetails,
+  type RepoOccupiedAction,
+  type RepoOccupiedDetails,
+} from '@/lib/gitOccupancy'
 import type { SSHKeyMeta } from '@itphx/synth-shared'
 import { CurrentProjectHeader, ScopeHint, OtherProjectsGroup } from './scope-parts'
 import { useAutoScroll } from './useAutoScroll'
@@ -44,6 +51,28 @@ function basenameOf(path: string): string {
 function isSshRepoUrl(url: string): boolean {
   const v = url.trim()
   return v.startsWith('git@') || v.startsWith('ssh://')
+}
+
+/**
+ * Освобождает путь от следа прерванного клона (`occupied: 'stub'`).
+ *
+ * Сначала штатное удаление: `DELETE /fs` сносит файл и **пустой** каталог. След
+ * клона — каталог с `.git`, то есть непустой, а рекурсивного удаления в API нет
+ * (`DELETE /fs` отвечает `400 DIR_NOT_EMPTY`). Тогда путь освобождается
+ * переносом в соседний `<path>.incomplete`: повторный клон возможен, а данные
+ * не теряются. Возвращает путь, куда отложен каталог (`null` — удаление удалось).
+ */
+async function clearOccupiedPath(projectId: string, path: string): Promise<string | null> {
+  try {
+    await synthApi.deleteEntry(projectId, path)
+    return null
+  } catch (e) {
+    const status = (e as { status?: number }).status
+    if (status !== 400) throw e
+    const aside = `${path.replace(/\/+$/, '')}.incomplete`
+    await synthApi.moveEntry(projectId, path, aside)
+    return aside
+  }
 }
 
 export function GitTab() {
@@ -91,7 +120,27 @@ export function GitTab() {
   const [removeTarget, setRemoveTarget] = useState<{ projectId: string; repo: GitRepoView } | null>(null)
   const [deleteLocal, setDeleteLocal] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  // Busy-состояния: без них форма клона выглядит зависшей (сеть идёт минутами).
+  const [isCloning, setIsCloning] = useState(false)
+  const [isInitializing, setIsInitializing] = useState(false)
+  const [isRegistering, setIsRegistering] = useState(false)
+  /** Идущая операция над записью реестра: спиннер в строке + блок остальных. */
+  const [busyRepo, setBusyRepo] = useState<{
+    projectId: string
+    path: string
+    kind: 'fetch' | 'remove'
+  } | null>(null)
+  /** Actionable-действие по 409 «путь занят» (`details.occupied`). */
+  const [occupied, setOccupied] = useState<{ action: RepoOccupiedAction; details: RepoOccupiedDetails } | null>(null)
   const projectRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  // Защита от двойного сабмита — на refs, а не на state: два клика до
+  // перерисовки не должны отправить второй параллельный запрос.
+  const cloneInFlightRef = useRef(false)
+  const initInFlightRef = useRef(false)
+  const busyRepoRef = useRef<{ projectId: string; path: string; kind: 'fetch' | 'remove' } | null>(null)
+  // Отмена клона: закрытие поповера и кнопка «Отмена» прерывают запрос.
+  const cloneAbortRef = useRef<AbortController | null>(null)
+  const clonePathInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => { loadProjects(); loadSessions() }, [loadProjects, loadSessions])
 
@@ -188,14 +237,23 @@ export function GitTab() {
     if (addRepoProjectId === projectId) {
       closePopover()
     } else {
+      // Переключение на другой проект = закрытие прежней формы: незавершённый
+      // клон прерываем, иначе он продолжится без видимой формы.
+      cloneAbortRef.current?.abort()
+      cloneAbortRef.current = null
       setAddRepoProjectId(projectId)
       setPopoverMode('clone')
       setScanResults(null)
       setActionError(null)
+      setOccupied(null)
     }
   }
 
   const closePopover = () => {
+    // Закрытие формы прерывает незавершённый клон: иначе запрос продолжается
+    // «в фоне», а пользователь уверен, что отменил операцию.
+    cloneAbortRef.current?.abort()
+    cloneAbortRef.current = null
     setAddRepoProjectId(null)
     setPopoverMode(null)
     setScanResults(null)
@@ -210,7 +268,11 @@ export function GitTab() {
     setInitBranch('main')
     setInitName('')
     setActionError(null)
+    setOccupied(null)
   }
+
+  // Уход компонента (смена вкладки) — тоже отмена клона, иначе запрос живёт без UI.
+  useEffect(() => () => { cloneAbortRef.current?.abort() }, [])
 
   /** Перечитать реестр проекта после мутации: список проектов + записи gitStore. */
   const refreshRepos = useCallback(async (projectId: string) => {
@@ -220,6 +282,18 @@ export function GitTab() {
   }, [loadProjects, loadRepos])
 
   const storeError = () => useGitStore.getState().error ?? t('common.error')
+
+  /**
+   * Показывает ошибку последней операции в форме. Если сервер различил причину
+   * 409 «путь занят» (`details.occupied`), под текстом появятся actionable-кнопки.
+   */
+  const applyStoreError = () => {
+    const last = useGitStore.getState().lastError
+    setActionError(last?.message ?? storeError())
+    const action = repoOccupiedAction(last?.details)
+    const details = repoOccupiedDetails(last?.details)
+    setOccupied(action && details ? { action, details } : null)
+  }
 
   const sshKeyLabel = useCallback((id?: string): string | null => {
     if (!id) return null
@@ -266,77 +340,204 @@ export function GitTab() {
     closePopover()
   }
 
+  /**
+   * Один прогон клонирования: индикация, `AbortController` и разбор ошибки
+   * (409 «путь занят» → actionable-действия). Guard от двойного сабмита держит
+   * вызывающий (`cloneInFlightRef`), чтобы он же покрывал `refreshRepos`.
+   */
+  const runClone = async (projectId: string) => {
+    const controller = new AbortController()
+    cloneAbortRef.current = controller
+    setIsCloning(true)
+    setActionError(null)
+    setOccupied(null)
+    try {
+      const repo = await cloneRepo(
+        projectId,
+        cloneUrl.trim(),
+        clonePath.trim() || undefined,
+        cloneBranch.trim() || undefined,
+        cloneName.trim() || undefined,
+        cloneSshKeyId || undefined,
+        controller.signal,
+      )
+      if (cloneAbortRef.current === controller) cloneAbortRef.current = null
+      if (controller.signal.aborted) {
+        // Отмена — не ошибка: нейтральное уведомление, форма остаётся открытой.
+        notify({ text: t('git.cloneCancelled'), type: 'info', category: 'system' })
+        return
+      }
+      if (!repo) {
+        applyStoreError()
+        return
+      }
+      await refreshRepos(projectId)
+      notify({ text: t('git.cloneSuccess'), type: 'success', category: 'system' })
+      closePopover()
+    } finally {
+      if (cloneAbortRef.current === controller) cloneAbortRef.current = null
+      setIsCloning(false)
+    }
+  }
+
   const handleDoClone = async (projectId: string) => {
+    // Синхронная проверка ref: повторный клик до перерисовки не должен
+    // отправить второй параллельный клон.
+    if (cloneInFlightRef.current) return
     if (!cloneUrl.trim()) return
     if (isSshRepoUrl(cloneUrl) && !cloneSshKeyId) {
       setActionError(t('git.ssh_key_required', { path: cloneName.trim() || clonePath.trim() || t('git.repo') }))
       return
     }
-    setActionError(null)
-    const repo = await cloneRepo(
-      projectId,
-      cloneUrl.trim(),
-      clonePath.trim() || undefined,
-      cloneBranch.trim() || undefined,
-      cloneName.trim() || undefined,
-      cloneSshKeyId || undefined,
-    )
-    if (!repo) {
-      setActionError(storeError())
-      return
+    cloneInFlightRef.current = true
+    try {
+      await runClone(projectId)
+    } finally {
+      cloneInFlightRef.current = false
     }
-    await refreshRepos(projectId)
-    notify({ text: t('git.cloneSuccess'), type: 'success', category: 'system' })
-    closePopover()
+  }
+
+  const handleCancelClone = () => {
+    cloneAbortRef.current?.abort()
   }
 
   const handleDoInit = async (projectId: string) => {
+    if (initInFlightRef.current) return
+    initInFlightRef.current = true
+    setIsInitializing(true)
     setActionError(null)
-    const path = initPath.trim() || '.'
-    const derivedName = path === '.' || path === '' ? '' : basenameOf(path)
-    const repo = await initRepo(
-      projectId,
-      path,
-      initBranch.trim() || undefined,
-      initName.trim() || derivedName || undefined,
-    )
-    if (!repo) {
-      setActionError(storeError())
-      return
+    setOccupied(null)
+    try {
+      const path = initPath.trim() || '.'
+      const derivedName = path === '.' || path === '' ? '' : basenameOf(path)
+      const repo = await initRepo(
+        projectId,
+        path,
+        initBranch.trim() || undefined,
+        initName.trim() || derivedName || undefined,
+      )
+      if (!repo) {
+        applyStoreError()
+        return
+      }
+      await refreshRepos(projectId)
+      notify({ text: t('git.initSuccess'), type: 'success', category: 'system' })
+      closePopover()
+    } finally {
+      initInFlightRef.current = false
+      setIsInitializing(false)
     }
-    await refreshRepos(projectId)
-    notify({ text: t('git.initSuccess'), type: 'success', category: 'system' })
-    closePopover()
+  }
+
+  /** 409 `occupied: 'repo'` — зарегистрировать существующий репозиторий. */
+  const handleRegisterOccupied = async (projectId: string) => {
+    if (cloneInFlightRef.current || !occupied) return
+    cloneInFlightRef.current = true
+    setIsRegistering(true)
+    setActionError(null)
+    try {
+      const path = occupied.details.path.trim() || clonePath.trim() || '.'
+      const registered = await registerRepo(projectId, {
+        path: path === '' ? '.' : path,
+        url: cloneUrl.trim() || undefined,
+        name: cloneName.trim() || undefined,
+        type: isSshRepoUrl(cloneUrl) ? 'ssh' : 'https',
+        sshKeyId: cloneSshKeyId || undefined,
+      })
+      if (!registered) {
+        applyStoreError()
+        return
+      }
+      await refreshRepos(projectId)
+      setOccupied(null)
+      notify({ text: t('git.registerOccupiedSuccess'), type: 'success', category: 'system' })
+      closePopover()
+    } finally {
+      cloneInFlightRef.current = false
+      setIsRegistering(false)
+    }
+  }
+
+  /** 409 `occupied: 'stub'` — удалить след прерванного клона и повторить клон. */
+  const handleDeleteOccupiedAndRetry = async (projectId: string) => {
+    if (cloneInFlightRef.current || !occupied) return
+    const target = occupied.details.path
+    if (!canDeleteOccupiedPath(occupied.details)) return
+    cloneInFlightRef.current = true
+    try {
+      setActionError(null)
+      let aside: string | null
+      try {
+        aside = await clearOccupiedPath(projectId, target)
+      } catch (e) {
+        setActionError((e as Error).message || t('common.error'))
+        setOccupied(null)
+        return
+      }
+      if (aside) {
+        // След клона — непустой каталог: удаление невозможно, он отложен в сторону.
+        notify({ text: t('git.occupied.stubMoved', { path: aside }), type: 'info', category: 'system' })
+      }
+      setOccupied(null)
+      await runClone(projectId)
+    } finally {
+      cloneInFlightRef.current = false
+    }
+  }
+
+  /** 409 `occupied: 'dir'` — другой путь: фокус на поле, поповер не закрываем. */
+  const handleChooseOtherPath = () => {
+    setActionError(null)
+    setOccupied(null)
+    clonePathInputRef.current?.focus()
   }
 
   const handleRemoveRepo = async () => {
-    if (!removeTarget) return
+    if (!removeTarget || busyRepoRef.current) return
     const { projectId, repo } = removeTarget
-    const ok = await removeRepo(projectId, {
-      id: repo.id,
-      path: repo.id ? undefined : repo.path || undefined,
-      deleteLocal,
-    })
-    if (!ok) {
-      notify({ text: storeError(), type: 'error', category: 'error' })
-      return
+    const busy = { projectId, path: repo.path, kind: 'remove' as const }
+    busyRepoRef.current = busy
+    setBusyRepo(busy)
+    try {
+      const ok = await removeRepo(projectId, {
+        id: repo.id,
+        path: repo.id ? undefined : repo.path || undefined,
+        deleteLocal,
+      })
+      if (!ok) {
+        notify({ text: storeError(), type: 'error', category: 'error' })
+        return
+      }
+      await refreshRepos(projectId)
+      setRemoveTarget(null)
+      setDeleteLocal(false)
+    } finally {
+      busyRepoRef.current = null
+      setBusyRepo(null)
     }
-    await refreshRepos(projectId)
-    setRemoveTarget(null)
-    setDeleteLocal(false)
   }
 
   const handleFetchRepo = async (projectId: string, repo: GitRepoView) => {
-    const ok = await fetchRepo(projectId, {
-      id: repo.id,
-      path: repo.id ? undefined : repo.path || undefined,
-    })
-    if (!ok) {
-      notify({ text: storeError(), type: 'error', category: 'error' })
-      return
+    // Пока идёт любая сетевая операция над записью реестра — остальные заблокированы.
+    if (busyRepoRef.current) return
+    const busy = { projectId, path: repo.path, kind: 'fetch' as const }
+    busyRepoRef.current = busy
+    setBusyRepo(busy)
+    try {
+      const ok = await fetchRepo(projectId, {
+        id: repo.id,
+        path: repo.id ? undefined : repo.path || undefined,
+      })
+      if (!ok) {
+        notify({ text: storeError(), type: 'error', category: 'error' })
+        return
+      }
+      await refreshRepos(projectId)
+      notify({ text: t('git.fetchSuccess'), type: 'success', category: 'system' })
+    } finally {
+      busyRepoRef.current = null
+      setBusyRepo(null)
     }
-    await refreshRepos(projectId)
-    notify({ text: t('git.fetchSuccess'), type: 'success', category: 'system' })
   }
 
   const renderGitProject = (project: ProjectData) => {
@@ -376,7 +577,7 @@ export function GitTab() {
               ]).map((mode) => (
                 <button
                   key={mode.id}
-                  onClick={(e) => { e.stopPropagation(); setPopoverMode(mode.id); setActionError(null) }}
+                  onClick={(e) => { e.stopPropagation(); setPopoverMode(mode.id); setActionError(null); setOccupied(null) }}
                   title={t(`git.${mode.id === 'scan' ? 'scan' : mode.id === 'clone' ? 'cloneRepo' : 'initRepo'}`)}
                   className={`flex items-center justify-center px-2 py-1 text-xs transition-colors
                     border-r border-sidebar-border last:border-r-0 flex-1
@@ -449,6 +650,7 @@ export function GitTab() {
                     onChange={(e) => setCloneUrl(e.target.value)}
                     placeholder="https://github.com/..."
                     autoFocus
+                    data-testid="git-clone-url"
                     className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
                   />
                 </div>
@@ -465,10 +667,12 @@ export function GitTab() {
                 <div>
                   <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.path')}</label>
                   <input
+                    ref={clonePathInputRef}
                     type="text"
                     value={clonePath}
                     onChange={(e) => setClonePath(e.target.value)}
                     placeholder={t('git.pathHint')}
+                    data-testid="git-clone-path"
                     className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
                   />
                 </div>
@@ -501,13 +705,35 @@ export function GitTab() {
                     <p className="text-[0.65rem] text-muted-foreground mt-0.5">{t('git.noSshKeys')}</p>
                   )}
                 </div>
-                <button
-                  onClick={() => handleDoClone(project.id)}
-                  disabled={!cloneUrl.trim() || (isSshRepoUrl(cloneUrl) && !cloneSshKeyId)}
-                  className="w-full rounded bg-primary px-3 py-2 min-h-[40px] text-xs text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                >
-                  {t('git.cloneRepo')}
-                </button>
+                <p className="text-[0.65rem] text-muted-foreground" data-testid="git-clone-network-hint">
+                  {t('git.cloneNetworkHint')}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleDoClone(project.id)}
+                    disabled={
+                      isCloning
+                      || isRegistering
+                      || !cloneUrl.trim()
+                      || (isSshRepoUrl(cloneUrl) && !cloneSshKeyId)
+                    }
+                    data-testid="git-clone-submit"
+                    aria-busy={isCloning}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded bg-primary px-3 py-2 min-h-[40px] text-xs text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    {isCloning && <Icon name="loader-2" className="size-3.5 shrink-0 animate-spin" />}
+                    {isCloning ? t('git.cloning') : t('git.cloneRepo')}
+                  </button>
+                  {isCloning && (
+                    <button
+                      onClick={handleCancelClone}
+                      data-testid="git-clone-cancel"
+                      className="rounded border border-sidebar-border px-2 py-2 min-h-[40px] text-xs text-foreground hover:bg-interactive-hover transition-colors"
+                    >
+                      {t('git.cloneCancel')}
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 
@@ -546,15 +772,51 @@ export function GitTab() {
                 </div>
                 <button
                   onClick={() => handleDoInit(project.id)}
-                  className="w-full rounded bg-primary px-3 py-2 min-h-[40px] text-xs text-primary-foreground hover:bg-primary/90 transition-colors"
+                  disabled={isInitializing}
+                  data-testid="git-init-submit"
+                  aria-busy={isInitializing}
+                  className="flex w-full items-center justify-center gap-1.5 rounded bg-primary px-3 py-2 min-h-[40px] text-xs text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                 >
-                  {t('git.initRepo')}
+                  {isInitializing && <Icon name="loader-2" className="size-3.5 shrink-0 animate-spin" />}
+                  {isInitializing ? t('git.initializing') : t('git.initRepo')}
                 </button>
               </div>
             )}
 
             {actionError && (
-              <p className="text-xs text-destructive mt-2">{actionError}</p>
+              <div className="mt-2 space-y-1.5" data-testid="git-action-error">
+                <p className="text-xs text-destructive">{actionError}</p>
+                {occupied && occupied.action === 'register' && (
+                  <button
+                    onClick={() => handleRegisterOccupied(project.id)}
+                    disabled={isRegistering}
+                    data-testid="git-occupied-register"
+                    className="flex w-full items-center justify-center gap-1.5 rounded border border-sidebar-border px-2 py-1.5 min-h-[32px] text-xs text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
+                  >
+                    {isRegistering && <Icon name="loader-2" className="size-3.5 shrink-0 animate-spin" />}
+                    {t('git.occupied.register')}
+                  </button>
+                )}
+                {occupied && occupied.action === 'delete-and-retry' && canDeleteOccupiedPath(occupied.details) && (
+                  <button
+                    onClick={() => handleDeleteOccupiedAndRetry(project.id)}
+                    disabled={isCloning}
+                    data-testid="git-occupied-delete-retry"
+                    className="flex w-full items-center justify-center gap-1.5 rounded border border-sidebar-border px-2 py-1.5 min-h-[32px] text-xs text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
+                  >
+                    {t('git.occupied.deleteAndRetry')}
+                  </button>
+                )}
+                {occupied && occupied.action === 'choose-path' && (
+                  <button
+                    onClick={handleChooseOtherPath}
+                    data-testid="git-occupied-choose-path"
+                    className="flex w-full items-center justify-center gap-1.5 rounded border border-sidebar-border px-2 py-1.5 min-h-[32px] text-xs text-foreground hover:bg-interactive-hover transition-colors"
+                  >
+                    {t('git.occupied.choosePath')}
+                  </button>
+                )}
+              </div>
             )}
           </PopoverContent>
         </Popover>
@@ -569,6 +831,9 @@ export function GitTab() {
               const destination = repoDestination(repo.path, t('git.workspaceRoot'))
               const displayName = repo.name || destination
               const keyLabel = sshKeyLabel(repo.sshKeyId)
+              const busyHere = busyRepo !== null
+                && busyRepo.projectId === project.id
+                && busyRepo.path === repo.path
 
               return (
                 <div key={rkey}>
@@ -586,11 +851,21 @@ export function GitTab() {
                     suffix={repo.currentBranch}
                     actions={[
                       { id: 'fetch', icon: 'refresh', title: t('git.fetchRepo'), onClick: () => handleFetchRepo(project.id, repo) },
-                      { id: 'remove', icon: 'delete-bin', title: t('git.remove'), variant: 'destructive', onClick: () => { setDeleteLocal(false); setRemoveTarget({ projectId: project.id, repo }) } },
+                      { id: 'remove', icon: 'delete-bin', title: t('git.remove'), variant: 'destructive', onClick: () => { if (busyRepoRef.current) return; setDeleteLocal(false); setRemoveTarget({ projectId: project.id, repo }) } },
                     ]}
                     subtitle={repo.lastCommitSubject?.slice(0, 30)}
                   />
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-2 pb-1 -mt-0.5 text-[0.65rem] text-muted-foreground">
+                    {busyHere && (
+                      <span
+                        className="inline-flex items-center gap-1 text-foreground"
+                        data-testid={`git-busy-${rkey}`}
+                        aria-live="polite"
+                      >
+                        <Icon name="loader-2" className="size-3 shrink-0 animate-spin" />
+                        {busyRepo.kind === 'fetch' ? t('git.fetching') : t('git.removing')}
+                      </span>
+                    )}
                     {repo.type && (
                       <span className="rounded border border-sidebar-border px-1 uppercase tracking-wide" title={t('git.type')}>
                         {repo.type}

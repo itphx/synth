@@ -14,6 +14,7 @@ import { t as sm } from '../system-messages.js';
 import { warning } from '../../logger.js';
 import type { SaveAssistantMessageFn } from './persistence.js';
 import type { LlmFailureContext } from './errors.js';
+import { StreamTiming } from './stream-stats.js';
 
 /** Зависимости `handleDebugSystemMessage`. */
 export interface DebugSystemMessageDeps {
@@ -49,6 +50,8 @@ export async function handleDebugSystemMessage(
 ): Promise<{ error?: string; errorType?: string; canRetry?: boolean }> {
   // ADR-070 §2.6: длительность этого прогона.
   const startedAt = Date.now();
+  // T14: тайминги стрима (`seq`/`t_ms` у чанков, сводка в `stream.done`).
+  const streamTiming = new StreamTiming(startedAt);
   const providerName = (message.provider as string) || session.settings.provider || '';
   const provider = deps.getProvider(providerName, session, reasoningLevel);
   if (!provider) {
@@ -99,6 +102,7 @@ export async function handleDebugSystemMessage(
 
       publishChunk('stream.chunk', {
         stream_id: streamId,
+        ...streamTiming.next(),
         content: chunk.isFinal ? '' : chunk.content,
         reasoning: chunk.reasoning,
         is_final: chunk.isFinal,
@@ -141,9 +145,14 @@ export async function handleDebugSystemMessage(
 
   const updatedSession = await deps.sessionManager.getSession(session.id);
 
+  const chunkStats = streamTiming.snapshot();
   publishChunk('stream.done', {
     stream_id: streamId,
     content: accumulatedContent,
+    content_chars: accumulatedContent.length,
+    chunks: chunkStats.chunks,
+    ...(chunkStats.firstChunkMs !== undefined ? { first_chunk_ms: chunkStats.firstChunkMs } : {}),
+    ...(chunkStats.lastChunkMs !== undefined ? { last_chunk_ms: chunkStats.lastChunkMs } : {}),
     message_index: (updatedSession?.messages.length ?? session.messages.length + 1) - 1,
     pending_count: Math.max(0, (updatedSession?.pendingMessages.length ?? 1) - 1),
     model: finalModel,

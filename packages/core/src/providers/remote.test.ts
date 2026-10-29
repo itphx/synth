@@ -503,3 +503,69 @@ describe('RemoteProvider — форматирование tool_use/tool_result',
     expect(fn.arguments).toBe(argsStr);
   });
 });
+
+describe('RemoteProvider — tool_choice на шаге (лимит шагов)', () => {
+  function sseResponse(events: string[]): Response {
+    return new Response(events.map((e) => `data: ${e}\n\n`).join(''), {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  }
+
+  const tools: Record<string, unknown>[] = [
+    { type: 'function', function: { name: 'read_file', description: '', parameters: {} } },
+  ];
+
+  function readBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+    const init = fetchMock.mock.calls[0]![1] as { body: string };
+    return JSON.parse(init.body) as Record<string, unknown>;
+  }
+
+  /** Прокрутить стрим до конца (тело чанков здесь не проверяется). */
+  async function drain(gen: AsyncGenerator<LLMChunk>): Promise<LLMChunk[]> {
+    const chunks: LLMChunk[] = [];
+    for await (const chunk of gen) chunks.push(chunk);
+    return chunks;
+  }
+
+  it("chatAsync: options.toolChoice='none' + tools → tool_choice в теле прокси-запроса", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: { content: 'ok' } }] }),
+      '[DONE]',
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider();
+    await drain(provider.chatAsync([makeMessage()], undefined, tools, undefined, undefined, {
+      toolChoice: 'none',
+    }));
+
+    const body = readBody(fetchMock);
+    expect(body.tool_choice).toBe('none');
+    expect(body.tools).toEqual(tools);
+  });
+
+  it('chatAsync: без опции поля tool_choice нет', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider();
+    await drain(provider.chatAsync([makeMessage()], undefined, tools));
+
+    expect(readBody(fetchMock).tool_choice).toBeUndefined();
+  });
+
+  it('chatAsync: без tools tool_choice не отправляется', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider();
+    await drain(provider.chatAsync([makeMessage()], undefined, undefined, undefined, undefined, {
+      toolChoice: 'none',
+    }));
+
+    const body = readBody(fetchMock);
+    expect(body.tool_choice).toBeUndefined();
+    expect(body.tools).toBeUndefined();
+  });
+});

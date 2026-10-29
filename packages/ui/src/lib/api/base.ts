@@ -19,7 +19,12 @@ export async function fetchJSON<T>(url: string, options?: RequestInit): Promise<
     // вызывающий не отличит подтверждение удаления (грязный worktree) от прочих
     // конфликтов и не покажет второй шаг подтверждения.
     const forceRequired = error.error?.forceRequired === true
-    throw Object.assign(new Error(msg), { status: response.status, code, forceRequired })
+    // `details` — машиночитаемая причина отказа (ADR-076: у 409 «путь занят» —
+    // `{path, occupied: 'repo'|'stub'|'dir', entries?}`). Без него вызывающий
+    // видит только текст и не может предложить действие (зарегистрировать /
+    // удалить / сменить путь).
+    const details = error.error?.details
+    throw Object.assign(new Error(msg), { status: response.status, code, forceRequired, details })
   }
   if (response.status === 204) return undefined as T
   return response.json()

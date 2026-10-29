@@ -11,7 +11,7 @@ import { join } from 'node:path';
 
 import type { LLMGatewayConfig, LLMChunk, LLMResponse } from '@itphx/synth-shared';
 
-import { BaseProvider, resolveSystemPromptText, type LLMMessage, type CancellationToken } from '../../providers/base.js';
+import { BaseProvider, resolveSystemPromptText, type ChatOptions, type LLMMessage, type CancellationToken } from '../../providers/base.js';
 import { ProviderError, RateLimitError } from '../../providers/exceptions.js';
 import { AuditLogger, GatewayProvider, RateLimiter } from './index.js';
 import type { LlmCallInfo } from '../../metrics/collectors/llm.js';
@@ -24,6 +24,8 @@ class MockCaptureProvider extends BaseProvider {
   static capturedMessages: LLMMessage[] | null = null;
   static capturedSystemPrompt: string | null = null;
   static capturedTools: Record<string, unknown>[] | null = null;
+  /** Опции chat-вызова (6-й аргумент `chatAsync`) — проверка проброса. */
+  static capturedOptions: ChatOptions | null = null;
   static responseContent = 'ok';
   /** ADR-094: имитация ошибки inner-провайдера. */
   static chatError: Error | null = null;
@@ -56,11 +58,13 @@ class MockCaptureProvider extends BaseProvider {
     tools?: Record<string, unknown>[],
     _debugCollector?: unknown,
     _cancellationToken?: CancellationToken,
+    options?: ChatOptions,
   ): AsyncGenerator<LLMChunk> {
     MockCaptureProvider.calls++;
     MockCaptureProvider.capturedMessages = messages;
     MockCaptureProvider.capturedSystemPrompt = resolveSystemPromptText(systemPrompt) ?? null;
     MockCaptureProvider.capturedTools = tools ?? null;
+    MockCaptureProvider.capturedOptions = options ?? null;
     yield {
       content: MockCaptureProvider.responseContent,
       isFinal: true,
@@ -118,6 +122,7 @@ describe('GatewayProvider (ADR-036)', () => {
     MockCaptureProvider.capturedMessages = null;
     MockCaptureProvider.capturedSystemPrompt = null;
     MockCaptureProvider.capturedTools = null;
+    MockCaptureProvider.capturedOptions = null;
     MockCaptureProvider.responseContent = 'ok';
     MockCaptureProvider.chatError = null;
     MockCaptureProvider.decideCalls = 0;
@@ -190,6 +195,46 @@ describe('GatewayProvider (ADR-036)', () => {
     expect(MockCaptureProvider.capturedMessages).toEqual(msgs); // секрет не тронут
     expect(MockCaptureProvider.capturedSystemPrompt).toBe('system');
     expect(res.content).toBe('ok');
+  });
+
+  it('chatAsync: options.toolChoice доходит до inner при включённом gateway (после обфускации)', async () => {
+    const { gw } = makeGateway();
+    const tools = [{ type: 'function', function: { name: 'read_file', parameters: {} } }];
+
+    // Секрет в сообщении — проверяем, что проброс опции не мешает обфускации.
+    for await (const chunk of gw.chatAsync([makeMessage(`ключ ${SK_KEY}`)], 'sys', tools, undefined, undefined, {
+      toolChoice: 'none',
+    })) {
+      expect(chunk).toBeDefined();
+    }
+
+    expect(MockCaptureProvider.calls).toBe(1);
+    expect(MockCaptureProvider.capturedOptions).toEqual({ toolChoice: 'none' });
+    expect(MockCaptureProvider.capturedTools).toEqual(tools);
+    expect(MockCaptureProvider.capturedMessages?.[0]?.content).toContain('⟦SYNTH_SECRET_1⟧');
+  });
+
+  it('chatAsync: options.toolChoice доходит до inner при выключенном gateway (passthrough)', async () => {
+    const { gw } = makeGateway({ config: { enabled: false } });
+
+    for await (const chunk of gw.chatAsync([makeMessage('hi')], undefined, undefined, undefined, undefined, {
+      toolChoice: 'none',
+    })) {
+      expect(chunk).toBeDefined();
+    }
+
+    expect(MockCaptureProvider.calls).toBe(1);
+    expect(MockCaptureProvider.capturedOptions).toEqual({ toolChoice: 'none' });
+  });
+
+  it('chatAsync без options: inner получает undefined (обратная совместимость)', async () => {
+    const { gw } = makeGateway();
+
+    for await (const chunk of gw.chatAsync([makeMessage('hi')])) {
+      expect(chunk).toBeDefined();
+    }
+
+    expect(MockCaptureProvider.capturedOptions).toBeNull();
   });
 
   it('rate limit превышен → warning-ответ, inner НЕ вызван', async () => {

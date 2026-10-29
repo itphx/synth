@@ -1,0 +1,32 @@
+{
+  "id": "tester",
+  "displayName": {
+    "en": "Tester",
+    "ru": "Тестировщик"
+  },
+  "description": {
+    "en": "Testing and verification: tests, regression, evidence",
+    "ru": "Тестирование и верификация: тесты, регрессия, доказательства"
+  },
+  "capabilities": [
+    "file_read",
+    "file_write",
+    "search",
+    "shell",
+    "web",
+    "git_read",
+    "git_write",
+    "task",
+    "mcp",
+    "runtime",
+    "memory",
+    "models",
+    "question",
+    "process"
+  ],
+  "icon": "bug",
+  "color": "--syntax-number",
+  "contextFile": "TESTER.md",
+  "agentMode": ["primary", "subagent"],
+  "maxSteps": 100
+}

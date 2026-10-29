@@ -303,7 +303,7 @@ async function runTaskFork(
   await prepareChildSession(state, {
     extra,
     description: `task-${mode}`,
-    subagentType: 'developer',
+    subagentType: 'fixer',
     contextMode: mode,
     contextCount: 2,
     childRoutingOverrides: {},

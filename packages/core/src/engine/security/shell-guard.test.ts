@@ -7,6 +7,7 @@ import {
   extractCommandPaths,
   isMutatingCommand,
   checkShellCommand,
+  looksLikePathToken,
   loadShellPolicy,
   clearShellPolicyCache,
   matchShellCommandPattern,
@@ -121,6 +122,48 @@ describe('extractCommandPaths', () => {
   it('без аргументов-путей — пустой результат', () => {
     expect(extractedPaths(['ls'])).toEqual([]);
     expect(extractedPaths(['echo'])).toEqual([]);
+  });
+
+  it('экранированный пробел: путь определяется через tryResolvePath (литерал), а не эвристикой', () => {
+    // `cat my\ file.txt` — токенизатор снимает экранирование, токен литеральный.
+    expect(tokenizeCommand('cat my\\ file.txt')).toEqual(['cat', 'my file.txt']);
+    expect(extractedPaths(['cat', 'my file.txt'])).toEqual([
+      { path: '/workspace/project/my file.txt', source: 'literal' },
+    ]);
+    // литеральный токен со обратным слэшем внутри одинарных кавычек — тоже литерал
+    expect(extractedPaths(['cat', 'dir\\file.txt'])[0]?.source).toBe('literal');
+  });
+});
+
+describe('looksLikePathToken', () => {
+  it('Windows-пути распознаются явно (drive-absolute и UNC)', () => {
+    expect(looksLikePathToken('C:\\Windows\\x')).toBe(true);
+    expect(looksLikePathToken('c:/Windows/x')).toBe(true);
+    expect(looksLikePathToken('\\\\srv\\share')).toBe(true);
+    expect(looksLikePathToken('C:\\Windows\\$x')).toBe(true);
+  });
+
+  it('обратный слэш сам по себе — не разделитель (экранирование/регэксп)', () => {
+    expect(looksLikePathToken('\\.sample$')).toBe(false);
+    expect(looksLikePathToken('^\\s*Test')).toBe(false);
+    expect(looksLikePathToken('FAIL\\|Failed')).toBe(false);
+  });
+
+  it('законные случаи по-прежнему пути', () => {
+    expect(looksLikePathToken('~/.ssh')).toBe(true);
+    expect(looksLikePathToken('/etc/passwd')).toBe(true);
+    expect(looksLikePathToken('./x')).toBe(true);
+    expect(looksLikePathToken('../x')).toBe(true);
+    expect(looksLikePathToken('$VAR/secrets')).toBe(true);
+    expect(looksLikePathToken('$HOME')).toBe(true);
+    expect(looksLikePathToken('foo/bar')).toBe(true);
+  });
+
+  it('рутина не считается путём: glob без разделителей, URL, короткие флаги', () => {
+    expect(looksLikePathToken('*.key')).toBe(false);
+    expect(looksLikePathToken('https://example.com/x')).toBe(false);
+    expect(looksLikePathToken('-')).toBe(false);
+    expect(looksLikePathToken('')).toBe(false);
   });
 });
 
@@ -357,6 +400,39 @@ describe('checkShellCommand — fail-closed динамика + {dataDir}/secrets
     expect(check('git commit -m "fix: typo"').action).toBe('allow');
     expect(check(`cat ${DATA_DIR}/settings.json`).action).toBe('allow');
     expect(check(`ls ${DATA_DIR}/sessions`).action).toBe('allow');
+  });
+
+  it('регресс: защищённые пути из динамики по-прежнему deny/ask', () => {
+    expect(check('cat $SYNTH_DATA_DIR/secrets/master.key').action).toBe('deny');
+    expect(check('cat ~/.ssh/id_rsa').action).toBe('deny');
+    expect(check('cat /etc/shadow').action).toBe('deny');
+    // динамический токен с маркером защищённого префикса — fail-closed deny
+    // (маркеры срабатывают до резолва approvalPaths); литерал — ask
+    expect(check('ls $HOME/.ssh/config').action).toBe('deny');
+    expect(check('ls ~/.ssh/config').action).toBe('ask');
+    expect(check('ls $HOME/.ssh/id_ed25519').action).toBe('deny');
+  });
+});
+
+describe('checkShellCommand — regex/escape-аргументы не считаются путями', () => {
+  const check = (cmd: string, cwd = CWD, policy: ShellPolicy = TEST_POLICY) => checkShellCommand(cmd, cwd, policy);
+
+  it('grep -v с regex-якорем ($ и экранированная точка) — allow', () => {
+    // обратный слэш в POSIX-shell — экранирование, а не разделитель пути
+    expect(check("ls synth/.git/hooks | grep -v '\\.sample$'").action).toBe('allow');
+    expect(check("ls .git/hooks | grep -v '\\.sample$'").action).toBe('allow');
+    expect(check("grep -r '\\.sample$' .").action).toBe('allow');
+  });
+
+  it('grep -E с экранированными классами символов — allow', () => {
+    expect(check("grep -E '^\\s*Test Files'").action).toBe('allow');
+    expect(check("grep -E 'FAIL|Failed Tests'").action).toBe('allow');
+    expect(check("grep -E 'a\\|b' file.txt").action).toBe('allow');
+  });
+
+  it('escape-аргумент со пробелом остаётся литеральным путём (не ask)', () => {
+    expect(check('cat my\\ file.txt').action).toBe('allow');
+    expect(check('touch my\\ file.txt').action).toBe('allow');
   });
 });
 

@@ -126,7 +126,7 @@ describe('handleLlmFailure', () => {
 
     const result = await handleLlmFailure(
       sessionId, 'stream1', new Error('fetch failed'), LLM_MAX_ATTEMPTS + 1,
-      context({ model: 'm', providerName: 'p', agentRole: 'developer', promptChars: 40, content: 'частично' }),
+      context({ model: 'm', providerName: 'p', agentRole: 'fixer', promptChars: 40, content: 'частично' }),
       deps(),
     );
 
@@ -136,7 +136,7 @@ describe('handleLlmFailure', () => {
     expect(call[0]).toBe(sessionId);
     expect(call[1]).toBe(sm('router.network_error'));
     expect(call[2]).toBe('stream1');
-    expect(call[3]).toBe('developer');
+    expect(call[3]).toBe('fixer');
     // best-effort оценка usage: promptChars/4 и content.length/4
     expect(call[4]).toMatchObject({ inputTokens: 10, outputTokens: 2, totalTokens: 12 });
     expect(call[5]).toBe('m');

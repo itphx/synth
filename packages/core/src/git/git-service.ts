@@ -1,7 +1,10 @@
-import { readdir, mkdir, rm } from 'node:fs/promises';
+import { readdir, mkdir, rename, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { resolve as pathResolve, relative, join, isAbsolute, sep } from 'node:path';
 import type { RepoStatus, CommitInfo, CommitDetail, CommitFileInfo } from '@itphx/synth-shared';
 import type { ExecutionPort, ExecSecret } from '../execution/ports/index.js';
+import { isExecutionError } from '../execution/ports/index.js';
+import { inspectRepoPath } from './repo-occupancy.js';
 import { gitExec, sanitizeGitEnv } from './exec.js';
 
 /**
@@ -37,9 +40,32 @@ export interface GitFetchOptions extends GitEnvOptions {
 /**
  * Опции сервиса. `execution` — порт исполнения команд (ADR-077); не задан —
  * inline (`InlineExecutionPort`), то есть прежнее локальное поведение.
+ *
+ * `cloneTimeoutMs`/`fetchTimeoutMs` — пределы сетевых операций (ADR-076,
+ * секция `git.*` конфига): значения подаёт вызывающий (роуты — из
+ * `createGitRoutes`, оркестратор — из `gitConfig`), дефолт — 5 минут.
+ * `0` — без таймаута.
  */
 export interface GitServiceOptions {
   execution?: ExecutionPort;
+  cloneTimeoutMs?: number;
+  fetchTimeoutMs?: number;
+}
+
+/**
+ * Дефолтные таймауты сетевых git-операций (мс) — совпадают с дефолтами
+ * секции `git` конфига (`git.cloneTimeoutMs`/`git.fetchTimeoutMs`).
+ *
+ * Сервис не читает конфиг сам (инвариант 10): значения подаёт вызывающий, а
+ * эти константы — фоллбэк для конструкторов без опций (тесты, CLI-пути).
+ */
+export const DEFAULT_GIT_CLONE_TIMEOUT_MS = 300_000;
+export const DEFAULT_GIT_FETCH_TIMEOUT_MS = 300_000;
+
+/** Нормализация таймаута: отрицательное/нечисловое значение → дефолт. */
+function normalizeTimeout(value: number | undefined, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return fallback;
+  return value;
 }
 
 function relativeTime(isoDate: string): string {
@@ -134,12 +160,16 @@ function parseNumstatZ(raw: string): CommitFileInfo[] {
 
 export class GitService {
   private readonly _execution: ExecutionPort | undefined;
+  private readonly _cloneTimeoutMs: number;
+  private readonly _fetchTimeoutMs: number;
 
   constructor(
     private workspacesRoot: string,
     options: GitServiceOptions = {},
   ) {
     this._execution = options.execution;
+    this._cloneTimeoutMs = normalizeTimeout(options.cloneTimeoutMs, DEFAULT_GIT_CLONE_TIMEOUT_MS);
+    this._fetchTimeoutMs = normalizeTimeout(options.fetchTimeoutMs, DEFAULT_GIT_FETCH_TIMEOUT_MS);
   }
 
   /** Публичный доступ к проверке containment (для роутов/тестов). */
@@ -147,16 +177,29 @@ export class GitService {
     return resolveRepoPath(workspaceAbsPath, repoRelPath);
   }
 
+  /** Действующий таймаут клонирования (мс; `0` — без таймаута) — для сообщений. */
+  get cloneTimeoutMs(): number {
+    return this._cloneTimeoutMs;
+  }
+
+  /** Действующий таймаут fetch (мс; `0` — без таймаута) — для сообщений. */
+  get fetchTimeoutMs(): number {
+    return this._fetchTimeoutMs;
+  }
+
   /** Git-команда через порт исполнения (ADR-077) с общим окружением. */
   private run(
     args: string[],
     cwd?: string,
     opts?: GitEnvOptions,
+    timeoutMs?: number,
   ): Promise<{ stdout: string; stderr: string }> {
     return gitExec(args, {
       execution: this._execution,
       cwd,
       env: opts?.env,
+      // `0`/не задано — без таймаута (прежнее поведение для прочих команд).
+      ...(typeof timeoutMs === 'number' && timeoutMs > 0 ? { timeoutMs } : {}),
       ...(opts?.secrets && opts.secrets.length > 0 ? { secrets: opts.secrets } : {}),
     });
   }
@@ -262,6 +305,24 @@ export class GitService {
     };
   }
 
+  /**
+   * ADR-076: клонирование репозитория — **атомарно**.
+   *
+   * Прежняя реализация запускала `git clone` прямо в целевой путь: падение на
+   * фазе fetch (сеть, таймаут, отмена) оставляло каталог с `.git` и
+   * `[remote "origin"]`, но без коммитов, а регистрация в `project.repos` шла
+   * только после успеха — повтор упирался в «409 уже существует», и путь
+   * навсегда оставался «ни репозиторий, ни свободное место».
+   *
+   * Теперь клон идёт в **соседний** временный каталог `<repoPath>.tmp-<uuid>`
+   * (тот же родитель → `rename` атомарен в пределах одной ФС), а целевой путь
+   * появляется только после успешного клонирования. Любая ошибка (таймаут,
+   * сеть, отмена, гонка за путь) убирает временный каталог: на диске **не
+   * остаётся ничего**.
+   *
+   * Ошибки типизированы: таймаут → `git.clone_timeout` (HTTP 504), занятый
+   * целевой путь → `git.repo_exists`, прочее — как есть.
+   */
   async cloneRepo(
     wsAbsPath: string,
     repoRelPath: string,
@@ -277,25 +338,68 @@ export class GitService {
     } catch {
       // директория может уже существовать
     }
+
+    // Временный каталог — рядом с целевым: `rename` в пределах одной ФС.
+    const tmpPath = `${repoPath}.tmp-${randomUUID()}`;
     const args = ['clone'];
     if (branch) args.push('--branch', branch);
-    args.push(url, repoPath);
-    // `cwd` — родительский каталог внутри workspace: в remote-режиме
-    // containment проверяет исполнитель, и абсолютный путь назначения обязан
-    // лежать в его workspace (том общий, ADR-077).
-    await this.run(args, parentDir, opts);
+    args.push(url, tmpPath);
+
+    try {
+      // `cwd` — родительский каталог внутри workspace: в remote-режиме
+      // containment проверяет исполнитель, и абсолютный путь назначения обязан
+      // лежать в его workspace (том общий, ADR-077).
+      await this.run(args, parentDir, opts, this._cloneTimeoutMs);
+
+      // Путь могли занять, пока шёл клон (гонка) — `rename` не должен молча
+      // затирать чужой каталог.
+      if ((await inspectRepoPath(repoPath)) !== null) {
+        throw {
+          error: `Репозиторий уже существует по пути «${effectivePath}»`,
+          code: 'git.repo_exists',
+        };
+      }
+      await rename(tmpPath, repoPath);
+    } catch (err) {
+      // Главный критерий: после неуспеха на диске не остаётся ничего.
+      await rm(tmpPath, { recursive: true, force: true }).catch(() => undefined);
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        throw {
+          error: `Клонирование репозитория прервано по таймауту (${this._cloneTimeoutMs} мс)`,
+          code: 'git.clone_timeout',
+        };
+      }
+      throw err;
+    }
+
     return {
       path: effectivePath,
       isRepo: true,
     };
   }
 
-  /** ADR-076: fetch репозитория (при необходимости с SSH-доступом). */
+  /**
+   * ADR-076: fetch репозитория (при необходимости с SSH-доступом).
+   *
+   * Таймаут — `git.fetchTimeoutMs` (сеть git может идти минутами, но зависший
+   * вызов не должен держать ход агента бесконечно); истечение →
+   * `git.fetch_timeout` (HTTP 504).
+   */
   async fetchRepo(wsAbsPath: string, repoRelPath: string, opts?: GitFetchOptions): Promise<void> {
     const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
     await this.ensureRepo(repoPath, opts);
     const args = opts?.remote ? ['fetch', opts.remote] : ['fetch'];
-    await this.run(args, repoPath, opts);
+    try {
+      await this.run(args, repoPath, opts, this._fetchTimeoutMs);
+    } catch (err) {
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        throw {
+          error: `git fetch прерван по таймауту (${this._fetchTimeoutMs} мс)`,
+          code: 'git.fetch_timeout',
+        };
+      }
+      throw err;
+    }
   }
 
   /**

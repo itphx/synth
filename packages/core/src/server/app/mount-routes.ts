@@ -153,6 +153,9 @@ export function mountStandaloneRoutes(
       analytics,
       // Этап 1 roadmap 0.13 (блок 3): вопросы пользователю (`ask_user`).
       ...(deps.questionService ? { questionService: deps.questionService } : {}),
+      // ADR-111 §detach: «Стоп» останавливает и живые дочерние прогоны
+      // (фоновые саб-агенты и их процессы) — решение 2026-10-28.
+      ...(deps.backgroundService ? { backgroundService: deps.backgroundService } : {}),
       // ADR-114: сервис worktree'ов — привязка сессии к worktree
       // (`PATCH /api/v2/sessions/:id { worktreeId }`).
       ...(deps.worktreeService ? { worktreeService: deps.worktreeService } : {}),
@@ -309,7 +312,17 @@ export function mountStandaloneRoutes(
     auth,
     projectStore,
     config.workspacesRoot ?? join(dataDir, 'workspaces'),
-    { sshKeyStore, execution: deps.executionPort },
+    {
+      sshKeyStore,
+      execution: deps.executionPort,
+      // ADR-076: таймауты сетевых git-операций (0 — без таймаута).
+      ...(config.gitConfig?.cloneTimeoutMs !== undefined
+        ? { cloneTimeoutMs: config.gitConfig.cloneTimeoutMs }
+        : {}),
+      ...(config.gitConfig?.fetchTimeoutMs !== undefined
+        ? { fetchTimeoutMs: config.gitConfig.fetchTimeoutMs }
+        : {}),
+    },
   ));
 
   // SSH-ключи агентов (ADR-076 §T5): flat CRUD + nested-роуты агента.

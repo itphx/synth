@@ -25,11 +25,13 @@ import type { ComposerSkillsCatalog } from './skills/catalog.js';
 import type { SkillRuntime, SkillScopeOptions } from './skills/types.js';
 import type { CommandRuntime } from '@itphx/synth-shared';
 import { calibrateCharsPerToken, estimateTokens, DEFAULT_CHARS_PER_TOKEN } from './context/token-ratio.js';
+import { DEFAULT_SUBAGENT_MAX_INPUT_TOKENS } from '@itphx/synth-shared/config';
 import { agentKeyOf } from './context/prompt-state.js';
 import { createStateMessage, findLastStateMessage, buildModeChangeContent, buildPlanUpdatedContent, wrapStateContent, type UnavailableTool } from './context/state-messages.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { AutomationRuntime } from './tools/automation-runtime.js';
 import type { AgentRegistry } from './agents/registry.js';
+import { DEFAULT_AGENT_ID } from './agents/index.js';
 import type { McpManager } from './mcp/manager.js';
 import { attachExecutorMcpFromDescriptor } from './mcp/executor-mcp-source.js';
 import { resolveMcpScope, type McpScopeDecision } from './mcp/scope.js';
@@ -55,6 +57,9 @@ import type { SSHKeyRepository } from '../storage/ports/ssh-key-repository.js';
 import type { ProjectStoreLike } from '../storage/project-store.js';
 import { GitService } from '../git/git-service.js';
 import { MAX_DOOM_LOOP_COUNT } from './llm-error.js';
+// Финальный шаг по лимиту шагов (общая механика opencode с циклом саб-агента):
+// инструкция «только текст» — assistant-сообщением в запрос.
+import { buildMaxStepsPrompt, maxStepsAssistantMessage } from './llm/max-steps.js';
 import { WorktreeDirectoryMissingError } from './worktree/errors.js';
 import type { WorktreeService } from './worktree/service.js';
 // ADR-115: гидратация вложений сообщений (blob → base64) перед LLM-вызовом.
@@ -103,6 +108,7 @@ import { publishFsChange } from './orchestrator/fs-change.js';
 import { applySteerInjections } from './steering/apply.js';
 import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, joinAccumulatedTexts, type SaveAssistantMessageDeps, type AssistantMessageStatus } from './orchestrator/persistence.js';
 import { StreamMessageDraft, type StreamMessageRef } from './orchestrator/stream-persistence.js';
+import { StreamTiming } from './orchestrator/stream-stats.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './orchestrator/errors.js';
 import { resolveModelContextWindow, getEffectiveModel, wrapWithGateway, getProvider, routeProvider, type RouteProviderDeps } from './orchestrator/routing.js';
 import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn, resolveTurnQuery as resolveTurnQueryFn } from './orchestrator/prompt-info.js';
@@ -284,6 +290,13 @@ export interface OrchestratorOptions {
    * Не задан — создаётся лениво из `workspacesRoot`.
    */
   gitService?: GitService;
+  /**
+   * ADR-076: таймауты сетевых git-операций (`git.cloneTimeoutMs`/
+   * `git.fetchTimeoutMs`) для git-сервиса по умолчанию. Не заданы — дефолт
+   * сервиса (5 минут); `0` — без таймаута. `gitService` приоритетнее.
+   */
+  gitCloneTimeoutMs?: number;
+  gitFetchTimeoutMs?: number;
   /**
    * ADR-075: managed-режим проекта (backend): включает строгую проверку явного
    * workspace (deny вне root) в тулах проекта.
@@ -501,6 +514,13 @@ export interface OrchestratorOptions {
    */
   backgroundEnabled?: boolean;
   /**
+   * Предохранитель по объёму промпта саб-агента (`agents.subagentMaxInputTokens`):
+   * оценка промпта проверяется перед каждым LLM-вызовом, при превышении прогон
+   * завершается детерминированным отчётом. `0` — без ограничения; не задано —
+   * дефолт секции `agents` (`DEFAULT_SUBAGENT_MAX_INPUT_TOKENS`).
+   */
+  subagentMaxInputTokens?: number;
+  /**
    * PROP-097 (блок 5b): сервис фоновых шелл-процессов.
    *
    * Не задан — тул `execute_shell` с `background: true` отказывает
@@ -590,6 +610,13 @@ export class ChatOrchestrator {
   private readonly _modelPriceLoader: ((modelName: string) => ModelPricing | null) | null;
   private readonly _toolRegistry: ToolRegistry | null;
   private readonly _agentRegistry: AgentRegistry | null;
+  /**
+   * Роли, для которых уже предупреждали о фоллбеке на агента по умолчанию
+   * (`_resolveAgentDefinition`): у старых сессий `settings.agentRole` может
+   * ссылаться на удалённую роль, и предупреждение не должно литься в лог на
+   * каждом ходе.
+   */
+  private readonly _warnedUnknownAgentRoles = new Set<string>();
   private readonly _mcpManager: McpManager | null;
   private readonly _cancellationTokens = new Map<string, CancellationToken>();
   private readonly _router: ModelRouter | null;
@@ -729,6 +756,8 @@ export class ChatOrchestrator {
   readonly activeRuns = new ActiveRunRegistry();
   /** Этап 1 roadmap 0.13 (блок 4): фоновые прогоны разрешены инстансом. */
   private readonly _backgroundEnabled: boolean;
+  /** Предохранитель по объёму промпта саб-агента (0 — без ограничения). */
+  private readonly _subagentMaxInputTokens: number;
   /**
    * PROP-097 (блок 5b): сервис фоновых шелл-процессов (null — не задан:
    * режим `background: true` у `execute_shell` недоступен).
@@ -782,6 +811,35 @@ export class ChatOrchestrator {
   /** Публичный доступ к реестру агентов (для сериализации modeApplicable). */
   get agentRegistry(): AgentRegistry | null {
     return this._agentRegistry;
+  }
+
+  /**
+   * Определение агента по роли с фоллбеком на агента по умолчанию.
+   *
+   * В инстансах с историей `settings.agentRole` может ссылаться на роль,
+   * которой больше нет в наборе (например, удалённая роль из прежнего набора
+   * `pm`/`developer`/`qa`/…). Ход не должен ни падать, ни оставаться без
+   * ограничений роли: неизвестная роль даёт **определение агента по умолчанию**
+   * (`DEFAULT_AGENT_ID` — `assistant`) с предупреждением в лог. Поэтому
+   * capabilities/maxSteps/prompt берутся у `assistant`, а строка `effectiveAgentRole`
+   * остаётся прежней (attribution, аналитика, `promptStates` — историческая метка).
+   *
+   * Предупреждение печатается один раз на роль за жизнь процесса (см.
+   * `_warnedUnknownAgentRoles`), иначе старые сессии писали бы его на каждом ходе.
+   * Без реестра агентов фоллбека нет — поведение прежнее (`undefined`).
+   */
+  private _resolveAgentDefinition(agentRole: string | undefined): AgentDefinition | undefined {
+    if (!agentRole || !this._agentRegistry) return undefined;
+    const found = this._agentRegistry.get(agentRole);
+    if (found) return found;
+    if (!this._warnedUnknownAgentRoles.has(agentRole)) {
+      this._warnedUnknownAgentRoles.add(agentRole);
+      warning(
+        'AGENTS',
+        `Неизвестная роль агента «${agentRole}» — используется роль по умолчанию «${DEFAULT_AGENT_ID}»`,
+      );
+    }
+    return this._agentRegistry.get(DEFAULT_AGENT_ID);
   }
 
   /**
@@ -964,7 +1022,12 @@ export class ChatOrchestrator {
     // ADR-075/ADR-076: git-сервис и режим/политика workspace для тулов управления
     // проектом. gitService по умолчанию — над тем же workspacesRoot и портом.
     this._gitService =
-      options.gitService ?? new GitService(this._workspacesRoot, { execution: this._executionPort });
+      options.gitService
+      ?? new GitService(this._workspacesRoot, {
+        execution: this._executionPort,
+        ...(options.gitCloneTimeoutMs !== undefined ? { cloneTimeoutMs: options.gitCloneTimeoutMs } : {}),
+        ...(options.gitFetchTimeoutMs !== undefined ? { fetchTimeoutMs: options.gitFetchTimeoutMs } : {}),
+      });
     this._workspaceManaged = options.workspaceManaged === true;
     this._getWorkspaceOutsideRootPolicy = options.getWorkspaceOutsideRootPolicy ?? null;
     this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
@@ -1017,6 +1080,7 @@ export class ChatOrchestrator {
     // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов + тумблер инстанса.
     this._backgroundService = options.backgroundService ?? null;
     this._backgroundEnabled = options.backgroundEnabled ?? true;
+    this._subagentMaxInputTokens = options.subagentMaxInputTokens ?? DEFAULT_SUBAGENT_MAX_INPUT_TOKENS;
     // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
     this._processService = options.processService ?? null;
     // ADR-114: сервис worktree'ов (тулы `git_worktree_*`).
@@ -1922,7 +1986,7 @@ export class ChatOrchestrator {
     const input = (message.content ?? '').trim();
     if (!input.startsWith('/')) return null;
 
-    const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
+    const agentDef = this._resolveAgentDefinition(effectiveAgentRole);
     const permissionConfig = session.settings.permission ?? this._permissionConfig;
 
     // ADR-046 §7.4: inline shell `` !`cmd` `` исполняется только через
@@ -3250,7 +3314,7 @@ export class ChatOrchestrator {
    */
   async getPromptInfo(session: Session): Promise<PromptDiagnostics> {
     const effectiveAgentRole = session.settings.agentRole;
-    const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
+    const agentDef = this._resolveAgentDefinition(effectiveAgentRole);
     // ADR-071 §2.4: проект загружаем один раз — для рабочего каталога и Composer.
     const project = await this._loadProject(session);
     // ADR-114 §3.2: диагностика **не** должна падать из-за исчезнувшего
@@ -3445,6 +3509,9 @@ export class ChatOrchestrator {
     // ADR-070 §2.6: старт прогона — для per-message duration_ms (полная
     // длительность у финального сообщения потока, включая tool-chain).
     const streamStartedAt = Date.now();
+    // T14: тайминги стрима — `seq`/`t_ms` у чанков и сводка в `stream.done`.
+    // Счётчик сквозной по ходу (все итерации Tool Use — один `stream_id`).
+    const streamTiming = new StreamTiming(streamStartedAt);
     const debugCollector = new DebugCollector(session.settings.debugEnabled);
     // ADR-114 §3: рабочий каталог сессии и её привязка к worktree (одним
     // чтением). Привязка нужна тулам (containment от каталога worktree,
@@ -3522,7 +3589,7 @@ export class ChatOrchestrator {
       authorityGate: this._authorityGate,
     });
 
-    const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
+    const agentDef = this._resolveAgentDefinition(effectiveAgentRole);
     const agentMaxSteps = agentDef?.maxSteps;
     const maxIterations = (agentMaxSteps !== undefined && agentMaxSteps > 0)
       ? agentMaxSteps
@@ -3655,7 +3722,11 @@ export class ChatOrchestrator {
       // Предупреждение о заполненности контекстного окна (fire-and-forget, не блокирует вызов)
       this._publishContextLimitWarning(session.id, modelName, messagesForLlm);
 
-      while (toolIteration < maxIterations) {
+      // Условие цикла: обычные шаги до лимита агента + ОДИН дополнительный
+      // шаг-лимит (механика opencode). `DEFAULT_MAX_ITERATIONS` — Infinity,
+      // лимит наступает только при явном `maxSteps` агента.
+      let stepLimitStepDone = false;
+      while (toolIteration < maxIterations || !stepLimitStepDone) {
         // Отмена до входа в итерацию (уже абортированный signal, «Стоп» на
         // стартовом stream.usage) — обрабатываем общей веткой отмены ниже.
         // Иначе пустой ход превращался бы в «ответ модели пуст» (error).
@@ -3704,6 +3775,19 @@ export class ChatOrchestrator {
           session, currentMessages, publishChunk, effectiveAgentRole, author, streamId,
         );
 
+        // Лимит шагов агента исчерпан — этот шаг финальный (механика opencode):
+        // инструменты остаются в запросе (кэшированный префикс провайдера),
+        // вызов запрещается `toolChoice: 'none'`, инструкция «только текст»
+        // вставляется assistant-сообщением в запрос (не в историю).
+        const stepLimitStep = Number.isFinite(maxIterations) && toolIteration >= maxIterations;
+        if (stepLimitStep) stepLimitStepDone = true;
+        const stepMessages: LLMMessage[] = stepLimitStep
+          ? [
+            ...currentMessages,
+            maxStepsAssistantMessage(buildMaxStepsPrompt(this._contextConfig ?? undefined, language, maxIterations)),
+          ]
+          : currentMessages;
+
         let accumulatedContent = '';
         let accumulatedReasoning = '';
         let toolCalls: Record<string, unknown>[] | undefined = [];
@@ -3717,7 +3801,7 @@ export class ChatOrchestrator {
         const iterationPromptChars = toolIteration === 0
           ? lastIterationPromptChars
           : this._estimatePromptChars(
-            currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
+            stepMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
           );
         lastIterationPromptChars = iterationPromptChars;
 
@@ -3744,11 +3828,12 @@ export class ChatOrchestrator {
 
         try {
           for await (const chunk of provider.chatAsync(
-            currentMessages,
+            stepMessages,
             finalSystemPrompt,
             tools as Record<string, unknown>[] | undefined,
             debugCollector,
             cancelToken,
+            stepLimitStep ? { toolChoice: 'none' } : undefined,
           )) {
             if (cancelToken.cancelled) break;
             // ADR-104 (этап 2): прерывание генерации (`interrupt`) — стрим
@@ -3833,6 +3918,8 @@ export class ChatOrchestrator {
             // Stream UI chunks (content from all iterations; reasoning always)
             publishChunk('stream.chunk', {
               stream_id: streamId,
+              // T14: измеримость — номер чанка в стриме и время от его старта.
+              ...streamTiming.next(),
               content: chunk.isFinal ? '' : chunk.content,
               reasoning: chunk.reasoning,
               iteration: toolIteration,
@@ -3973,6 +4060,14 @@ export class ChatOrchestrator {
           // Накопление через общий с UI хелпер: провайдер шлёт reasoning
           // кумулятивно, повтор в новой итерации не должен дать дубль.
           allReasoning = appendReasoningBlock(allReasoning, accumulatedReasoning, toolIteration);
+        }
+
+        // Шаг-лимит: ответ мог прийти нестандартным — с `toolCalls`, хотя
+        // `toolChoice: 'none'` вызов запрещает. Исполнять их НЕЛЬЗЯ: ответ
+        // считается текстовым (отчётом о проделанной работе).
+        if (stepLimitStep && toolCalls && toolCalls.length > 0) {
+          warning('ORCHESTRATOR', `Шаг-лимит: провайдер вернул ${toolCalls.length} tool call(s) при toolChoice='none' — вызовы не исполняются`);
+          toolCalls = [];
         }
 
         // No tool calls — final response
@@ -4327,6 +4422,8 @@ export class ChatOrchestrator {
                   // саб-агента и возвращает управление сразу.
                   backgroundService: this._backgroundService ?? undefined,
                   backgroundEnabled: this._backgroundEnabled,
+                  // Предохранитель по объёму промпта саб-агента (не окно модели).
+                  subagentMaxInputTokens: this._subagentMaxInputTokens,
                   // ADR-111 §detach: реестр активных (блокирующих) прогонов —
                   // `task` регистрирует в нём хэндл, `POST /sessions/:id/background`
                   // переводит прогон в фон.
@@ -4359,7 +4456,8 @@ export class ChatOrchestrator {
                     },
                   },
                   // ADR-115: каталог моделей инстанса — тул `list_models`
-                  // (модальности, текущая пара, назначения aux-моделей).
+                  // (модальности, текущая пара, назначения aux-моделей) и
+                  // валидация явной пары `task({provider, model})` (TaskExtra).
                   listModels: this._listModels ?? undefined,
                   blobRefs: this._blobRefs ?? undefined,
                   // ADR-114: сервис worktree'ов — тулы `git_worktree_*`.
@@ -4795,7 +4893,7 @@ export class ChatOrchestrator {
       // сообщение, `stream.done`, авто-тайтл, триггеры оптимизации контекста)
       // вынесен в `orchestrator/phases/process-finalize.ts`.
       return runProcessFinalize(
-        { session, streamId, publishChunk, debugCollector, streamStartedAt },
+        { session, streamId, publishChunk, debugCollector, streamStartedAt, streamTiming },
         {
           cancelledBeforeFinal, lastChunkModel, finalModel, finalUsage, finalContent, fallbackI18n,
           hadDeny, stopAfterDeny, denyStopReason, toolIteration, maxIterations,
@@ -4990,6 +5088,8 @@ export class ChatOrchestrator {
       routerConfig: this._routerConfig ?? undefined,
       securityConfig: this._securityConfig,
       permissionConfig: this._permissionConfig,
+      // Предохранитель по объёму промпта resumed-саб-агента (как у `task`).
+      subagentMaxInputTokens: this._subagentMaxInputTokens,
       // ADR-070 §2.9.1: dependency-гейт и `[НЕДОСТУПНЫЕ ТУЛЫ]` resumed-саб-агента.
       runtimeDeps: this._runtimeDeps,
       shellPolicy: this._getProtectedPaths() ?? undefined,

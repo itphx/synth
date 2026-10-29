@@ -7,6 +7,7 @@ import {
   type LLMMessage,
   type SystemPromptInput,
   type CancellationToken,
+  type ChatOptions,
 } from './base.js';
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
@@ -34,6 +35,7 @@ export class OllamaProvider extends BaseProvider {
     tools?: Record<string, unknown>[],
     stream?: boolean,
     debugCollector?: DebugCollector,
+    options?: ChatOptions,
   ): Promise<LLMResponse> {
     const formattedMessages = this._formatMessages(messages);
     // Ollama /api/chat игнорирует top-level `system` (это поле есть только у
@@ -49,7 +51,12 @@ export class OllamaProvider extends BaseProvider {
     };
     if (this.reasoningLevel === 'low') body.think = true;
     else if (this.reasoningLevel === 'none') body.think = false;
-    if (tools?.length) body.tools = this._formatTools(tools);
+    if (tools?.length) {
+      body.tools = this._formatTools(tools);
+      // OpenAI-совместимое поле (Ollama его игнорирует, но контракт общий);
+      // без инструментов не отправляем — часть API отвечает ошибкой.
+      if (options?.toolChoice) body.tool_choice = options.toolChoice;
+    }
     if (this.numCtx && this.numCtx > 0) body.options = { num_ctx: this.numCtx };
 
     const headers = { 'Content-Type': 'application/json' };
@@ -88,6 +95,7 @@ export class OllamaProvider extends BaseProvider {
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
+    options?: ChatOptions,
   ): AsyncGenerator<LLMChunk> {
     const formattedMessages = this._formatMessages(messages);
     // Ollama /api/chat игнорирует top-level `system` (см. chat()) — промпт
@@ -102,7 +110,12 @@ export class OllamaProvider extends BaseProvider {
     };
     if (this.reasoningLevel === 'low') body.think = true;
     else if (this.reasoningLevel === 'none') body.think = false;
-    if (tools?.length) body.tools = this._formatTools(tools);
+    if (tools?.length) {
+      body.tools = this._formatTools(tools);
+      // OpenAI-совместимое поле (Ollama его игнорирует, но контракт общий);
+      // без инструментов не отправляем — часть API отвечает ошибкой.
+      if (options?.toolChoice) body.tool_choice = options.toolChoice;
+    }
     if (this.numCtx && this.numCtx > 0) body.options = { num_ctx: this.numCtx };
 
     const headers = { 'Content-Type': 'application/json' };

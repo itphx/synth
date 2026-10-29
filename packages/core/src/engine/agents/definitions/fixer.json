@@ -1,0 +1,32 @@
+{
+  "id": "fixer",
+  "displayName": {
+    "en": "Fixer",
+    "ru": "Фиксер"
+  },
+  "description": {
+    "en": "Bug fixing: investigate, fix, verify",
+    "ru": "Исправление багов: исследование, правка, проверка"
+  },
+  "capabilities": [
+    "file_read",
+    "file_write",
+    "search",
+    "shell",
+    "web",
+    "git_read",
+    "git_write",
+    "task",
+    "mcp",
+    "runtime",
+    "memory",
+    "models",
+    "question",
+    "process"
+  ],
+  "icon": "code-s-slash",
+  "color": "--status-info",
+  "contextFile": "FIXER.md",
+  "agentMode": ["primary", "subagent"],
+  "maxSteps": 100
+}

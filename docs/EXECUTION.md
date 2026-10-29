@@ -70,8 +70,8 @@
 | **Control plane** (сессии, история, контекст, permissions, RBAC/OIDC, LLM Gateway, API v2) | в процессе backend'а | в процессе backend'а (1+ реплики — при PostgreSQL) |
 | **Хранилище** | файловое (`{dataDir}`) или PostgreSQL | PostgreSQL (предпосылка — см. «Миграция между топологиями») |
 | **Workspace проекта** (`project.workspace`, [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md)) | локальный каталог backend'а | общий том (backend ↔ исполнители), см. «Доступ к workspace» |
-| **Toolchain** (`git`, `ripgrep`, `python3`, `openssh-client`) | в образе backend'а (flavor — PROP-082) | в образе worker'а (`synth-executor`) |
-| **Исполнитель** (spawn/timeout/kill, лимиты вывода) | `InlineExecutionPort` — вызов `execFile` в процессе | удалённый порт — HTTP к `synth-executor` |
+| **Toolchain** (`git`, `ripgrep`, `bash`, `python3`, `openssh-client`) | в образе backend'а (flavor — PROP-082) | в образе worker'а (`synth-executor`) |
+| **Исполнитель** (spawn/timeout/kill, лимиты вывода) | `InlineExecutionPort` — `spawn` с `detached: true` в процессе (kill группы: `SIGTERM` → `SIGKILL`) | удалённый порт — HTTP к `synth-executor` |
 | **Исполняемые команды** (shell, grep, git) | в процессе backend'а | в контейнере worker'а |
 | **FS-роуты** (чтение/запись файлов через HTTP) | backend | backend (не уезжают — см. матрицу) |
 | **Provisioning workspace** | backend (`engine/workspace-provision.ts`) | backend (тот же модуль) |
@@ -152,7 +152,7 @@ core подключает пакет `@itphx/synth-executor` **динамиче�
 // packages/core/src/execution/ports/execution-port.ts
 /** Форма команды: shell-строка или argv-массив (без shell). */
 type ExecCommand =
-  | { kind: 'shell'; command: string; shell?: string }  // `<shell> -c <command>` (по умолчанию `sh`)
+  | { kind: 'shell'; command: string; shell?: string }  // `<shell> -c <command>`; встроенные вызовы ядра передают `bash`
   | { kind: 'argv'; file: string; args?: string[] };     // `<file> <args…>` — без shell
 
 interface ExecRequest {
@@ -179,11 +179,33 @@ interface ExecutionPort {
 ```
 
 - **Команда — дискриминированный union, а не строка.** В домене две формы вызова, и
-  различие принципиально: `shell` (`sh -c <команда>` — тул `execute_shell`, inline-shell
-  `` !`cmd` ``) сохраняет shell-семантику (пайпы, редиректы, подстановки переменных), а
+  различие принципиально: `shell` (`bash -c <команда>` — тул `execute_shell`, detach-путь,
+  фоновые процессы, inline-shell `` !`cmd` ``) сохраняет shell-семантику (пайпы, редиректы,
+  подстановки переменных), а
   `argv` (git, `rg`, проба `bin --version`) запускает бинарник **без shell** — значит,
   классическая инъекция невозможна и allowlist значений в git-тулах (ADR-076) остаётся
   осмысленным. Строкой это различие не выразить: либо инъекция, либо запрет shell-семантики.
+- **Оболочка shell-формы — `bash`, и он обязателен.** Все встроенные шелл-вызовы ядра
+  (`execute_shell`, detach-путь, фоновые процессы, inline-shell `` !`cmd` ``) передают
+  `shell: 'bash'` явно. Причина: `/bin/sh` в образах — это `dash` (Debian) или busybox
+  `ash` (alpine), где bash-синтаксис (`[[ ]]`, массивы, `pipefail`, `source`, `${var,,}`)
+  не работает, и команда агента падала бы на ровном месте. Нет `bash` в окружении — тул
+  **недоступен** (`unavailable(dependency)`, ADR-078), а не выполняется молча под `sh`:
+  скрытая подмена оболочки — это неверный результат, а не деградация. `DEFAULT_SHELL_BINARY`
+  — тоже `bash` (решение «всегда bash»): вызов порта без явной оболочки не должен молча
+  попадать в `sh`. В pool-режиме требование `requires: ['bash']` маршрутизирует команду в
+  адрес, объявивший `bash` в `GET /capabilities`; `bash` входит в tier 0 образов
+  (`install-tier-0.sh`).
+- **Остановка — по группе процессов, завершение — по `exit`.** `InlineExecutionPort`
+  запускает команду через `spawn` **лидером собственной группы** (`detached: true`):
+  «Стоп» (`AbortSignal`) и таймаут гасят **группу** — `SIGTERM`, через 5 с `SIGKILL` —
+  поэтому потомки shell-формы (`pnpm`, `tsc`, `node`, `cat`) не остаются жить и не держат
+  stdio. Промис разрешается по событию `exit` (а не `close`): после выхода — короткий
+  дренаж потоков (250 мс), затем потоки уничтожаются. `close` ждать нельзя: его не будет,
+  пока пайп держит внук, — именно из-за этого «Стоп» раньше не прерывал тул, а `pnpm build`
+  «висел» до конца команды. `stdin` команды — `/dev/null`: порт обслуживает только
+  неинтерактивные команды. На Windows групп процессов в таком виде нет — убивается только
+  ребёнок (тесты гоняются на Linux).
 - **Неуспешный код выхода — ошибка, а не поле результата.** `ExecResult.exitCode` у
   успешного вызова всегда `0`; ненулевой код приходит **ошибкой** `ExecutionError`
   (`reason: 'nonzero_exit'`, `code` = код выхода). Так дословно сохраняется текст
@@ -221,10 +243,9 @@ interface ExecutionPort {
   возвращаются** в ответе (ни в успехе, ни в ошибке). Фоновые процессы
   (`spawnBackground`) секреты **не поддерживают** — fail-closed с кодом `ESECRETS`
   (`EXECUTION_SECRETS_UNSUPPORTED_CODE`) с обеих сторон.
-- **Реализации:** `InlineExecutionPort` — исполнение в процессе поверх прежних
-  `execFileAsync` (`packages/core/src/engine/tools/shell.ts`, `packages/core/src/engine/tools/search.ts`,
-  `packages/core/src/engine/tools/git.ts`, `packages/core/src/engine/commands/inline-shell.ts`,
-  `packages/core/src/engine/tools/runtime-deps.ts`); удалённая — HTTP к
+- **Реализации:** `InlineExecutionPort` — исполнение в процессе поверх `spawn` с
+  `detached: true` (лидер группы: «Стоп»/таймаут гасят всё дерево, завершение — по `exit`
+  с коротким дренажом; см. «Остановка — по группе процессов…» выше); удалённая — HTTP к
   исполнителю (шаг 7b; пакет `@itphx/synth-executor`, клиент — экспорт `./client`).
 - **Контрактный suite** — как у storage-драйвера ([ADR-097](./arch_decisions/adr-097-storage-provider-class.md)):
   один набор тестов на любую реализацию (`packages/core/src/execution/contract/execution.ts` —
@@ -317,7 +338,7 @@ interface ExecutionPort {
 | `GET` | `/exec/:processId` | `200 { processId, status, exitCode, signal, pid?, command, cwd, startedAt, finishedAt?, durationMs?, stdoutBytes, stderrBytes, truncated }` — состояние фонового процесса; `404` — процесс не найден |
 | `GET` | `/exec/:processId/logs` | `200 { processId, status, exitCode, signal, stdout: { content, offset, nextOffset }, stderr: { … }, totalBytes, truncated }`; query `stdoutOffset`/`stderrOffset`/`limit` (отрезок ≤ 256 КиБ, по умолчанию 64 КиБ); `404` — процесс не найден |
 | `POST` | `/exec/:processId/stop` | `200 { status: 'stopping' }` — остановка фонового процесса; тело `{ signal }` — `SIGTERM`\|`SIGKILL` (пустое тело — `SIGTERM` по умолчанию, иной сигнал — `400`); через 5 с после `SIGTERM` — `SIGKILL`; сигнал уходит **группе процессов** (потомки shell-формы гаснут вместе с ней), идемпотентно; `404` — процесс не найден |
-| `GET` | `/capabilities` | `{ protocol: 5, toolchain: {git?, rg?, sh?, python3?}, os, arch, node, features: { background, secrets, mcpAttachments } }` — рукопожатие версии протокола и состава toolchain'а |
+| `GET` | `/capabilities` | `{ protocol: 5, toolchain: {git?, rg?, sh?, bash?, python3?}, os, arch, node, features: { background, secrets, mcpAttachments } }` — рукопожатие версии протокола и состава toolchain'а |
 | `GET` | `/mcp/servers` | `[{ name, status, toolCount, error? }]` — состояние MCP-серверов исполнителя (`idle`/`up`/`down`); значения `env` не отдаются |
 | `GET` | `/mcp/tools` | `[{ server, name, description, inputSchema }]` — инструменты всех **поднятых** MCP-серверов |
 | `POST` | `/mcp/call` | тело: `{ server, tool, arguments? }` → `200 { content, isError, attachments? }`; `attachments[]` — аддитивное поле протокола **5** (ADR-115): нетекстовые блоки результата (`image`/`audio`/`resource.blob`) в base64 без `data:`-префикса, `{mime, base64, name?}`, до 25 МиБ на файл и 20 МиБ на вызов, при `isError` не собираются; неизвестный сервер/инструмент → `404`, ошибка MCP → `500` с текстом ошибки (без секретов) |
@@ -331,7 +352,8 @@ interface ExecutionPort {
   `message`, частичные `stdout`/`stderr`, `killed`, `signal`, `truncated`,
   `durationMs` — клиент восстанавливает типизированную ошибку, не разбирая текст
   (тексты ошибок тулов — контракт, их переписывать нельзя).
-- **Отмена:** разрыв HTTP-запроса → `AbortSignal` на сервере → SIGTERM процессу.
+- **Отмена:** разрыв HTTP-запроса → `AbortSignal` на сервере → `SIGTERM` **группе
+  процессов** команды (через 5 с — `SIGKILL`), потомков не остаётся.
   Семантика «Стоп» (ADR-005) сохраняется: клиентский `AbortSignal` доезжает до
   исполнителя тем же эффектом, что и в inline-режиме.
 - **Версия протокола — 5** (было 1 → 2 → 3 → 4 → 5): добавлены MCP-эндпоинты (v2),
@@ -503,7 +525,7 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
 - **Очистка orphan-процессов.** Процессы, оставшиеся после падения исполнителя, — в зоне K8s
   (kubelet дочищает контейнер после смерти pod'а) и в зоне worker'а (собственный reaper: при старте
   worker убивает процессы предыдущего экземпляра, если они пережили перезапуск; `execute_shell` уже
-  убивает процесс по SIGTERM при «Стопе», `packages/core/src/engine/tools/shell.ts`).
+  убивает **группу процессов** по SIGTERM при «Стопе», `packages/core/src/engine/tools/shell.ts`).
 - **Интерактивность.** PTY/attach-режим — вне объёма этой версии (референс — PROP-064
   «UI-терминал»); exec-API — только неинтерактивные команды.
 
@@ -534,9 +556,9 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   выход за пределы → ошибка. Это **доверительная граница**, а не косметика: без неё
   удалённый порт превращается в выполнение команд в произвольном каталоге.
 - **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 5`) и
-  состав toolchain'а (`git`/`rg`/`sh`/`python3`), ОС и архитектуру. Это источник правды для
+  состав toolchain'а (`git`/`rg`/`sh`/`bash`/`python3`), ОС и архитектуру. Это источник правды для
   детекта внешних зависимостей в split-режиме (ADR-078): backend не должен считать
-  `git`/`rg`/`sh` доступными там, где их нет. Версия протокола — **контракт совместимости**:
+  `git`/`rg`/`bash` доступными там, где их нет. Версия протокола — **контракт совместимости**:
   исполнитель версии 1 не знает MCP-эндпоинтов, версии 2 — фоновых процессов, версии 3 —
   секретов вызова, версии 4 — вложений MCP-результата (§4.2), поэтому control
   plane и пул исполнителей обязаны обновляться вместе (ADR-077, операционные следствия шага A).
@@ -854,7 +876,7 @@ backend'а. Данные не затронуты (workspace — тот же то
 | `git`: argv-массив без shell, `mergedEnv = { ...process.env, ...env }`, containment `resolveRepoCwd` (симлинки) | `packages/core/src/engine/tools/git.ts:29`, `:30`, `:52` |
 | `simple-git`: env санитизируется (`sanitizeGitEnv` вырезает `git*` и blocklist `EDITOR`/`PAGER`/`SSH_ASKPASS`…), `GIT_TERMINAL_PROMPT=0` | `packages/core/src/git/git-service.ts:81`, `:107`, `:148` |
 | MCP stdio: `StdioClientTransport`; SDK мержит `getDefaultEnvironment()` (whitelist HOME/PATH) | `packages/core/src/engine/mcp/client.ts:159`, `:169` |
-| Детект бинарников `git`/`rg`/`sh`: `probeBinary` → `execFileAsync(bin, ['--version'], { timeout: 3000 })`; ENOENT → `false`, прочие ошибки → `true` (**fail-open**); кэш детекции — **по экземпляру порта** (`WeakMap`), не модульного уровня (после шага A: локальная проба inline не должна отравлять remote-кэш) | `packages/core/src/engine/tools/runtime-deps.ts:77`, `:79`, `:92` |
+| Детект бинарников `git`/`rg`/`sh`/`bash`: `probeBinary` → `execFileAsync(bin, ['--version'], { timeout: 3000 })`; ENOENT → `false`, прочие ошибки → `true` (**fail-open**); кэш детекции — **по экземпляру порта** (`WeakMap`), не модульного уровня (после шага A: локальная проба inline не должна отравлять remote-кэш) | `packages/core/src/engine/tools/runtime-deps.ts:77`, `:79`, `:92` |
 | Причины недоступности тула: `mode`/`role`/`dependency`/`workspace`/`storage`; порядок проверок storage→role→mode→dependency→workspace; `WORKSPACE_CAPABILITIES` | `packages/core/src/engine/permission/availability.ts:22`, `:28`, `:94`, `:147`, `:152` |
 | При деградации хранилища доступны только `skill`/`web_fetch`/`web_search`, прочие — `unavailable(storage)` | `packages/core/src/engine/permission/availability.ts:54`, `:113` |
 | Workspace: provisioning в backend'е — `resolveWorkspaceForLocalProject`, `validateManagedWorkspacePath`, `provisionManagedWorkspace` (атомарный `mkdir` без `recursive`), единая точка `provisionWorkspace` | `packages/core/src/engine/workspace-provision.ts:47`, `:109`, `:179`, `:207`, `:232` |

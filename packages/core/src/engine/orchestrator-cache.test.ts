@@ -121,7 +121,7 @@ describe('ChatOrchestrator — SystemPromptPayload (ADR-070 §2.2)', () => {
       settings: {
         provider: 'captureprompt',
         model: 'm',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
       },
     });

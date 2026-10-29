@@ -808,7 +808,7 @@ describe('PermissionEvaluator — unavailable (ADR-070 §2.9.1)', () => {
       toolName: 'git_status',
       params: {},
       capabilities: ['git_read'],
-      runtimeDeps: { git: false, rg: true, sh: true },
+      runtimeDeps: { git: false, rg: true, sh: true, bash: true },
     });
     expect(d.action).toBe('deny');
     expect(d.unavailable).toEqual({ reason: 'dependency' });
@@ -817,12 +817,12 @@ describe('PermissionEvaluator — unavailable (ADR-070 §2.9.1)', () => {
     expect(d.params).toEqual({ binary: 'git' });
   });
 
-  it('execute_shell при отсутствии sh → deny с unavailable(dependency)', () => {
+  it('execute_shell при отсутствии bash → deny с unavailable(dependency)', () => {
     const d = evalWith({
       toolName: 'execute_shell',
       params: { command: 'ls' },
       capabilities: ['shell'],
-      runtimeDeps: { git: true, rg: true, sh: false },
+      runtimeDeps: { git: true, rg: true, sh: true, bash: false },
     });
     expect(d.action).toBe('deny');
     expect(d.unavailable).toEqual({ reason: 'dependency' });
@@ -909,7 +909,7 @@ describe('PermissionEvaluator — workspace (ADR-075)', () => {
       params: {},
       workingDir: CWD,
       capabilities: ['git_read'],
-      runtimeDeps: { git: false, rg: true, sh: true },
+      runtimeDeps: { git: false, rg: true, sh: true, bash: true },
       workspaceReady: false,
     });
     expect(d.unavailable).toEqual({ reason: 'dependency' });

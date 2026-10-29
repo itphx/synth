@@ -73,6 +73,7 @@ describe('runtime-deps (ADR-070 §2.9.1)', () => {
       git: expect.any(Boolean),
       rg: expect.any(Boolean),
       sh: expect.any(Boolean),
+      bash: expect.any(Boolean),
     });
   });
 
@@ -93,7 +94,8 @@ describe('runtime-deps (ADR-070 §2.9.1)', () => {
 
   it('TOOL_RUNTIME_DEP: покрытие встроенных тулов с внешней зависимостью', () => {
     expect(TOOL_RUNTIME_DEP.grep_files).toBe('rg');
-    expect(TOOL_RUNTIME_DEP.execute_shell).toBe('sh');
+    // Оболочка тула — bash, не sh (в образах `sh` это dash/busybox ash).
+    expect(TOOL_RUNTIME_DEP.execute_shell).toBe('bash');
     for (const name of [
       'git_status', 'git_diff', 'git_log', 'git_commit', 'git_push', 'git_pull',
       'git_checkout', 'git_branch_list', 'git_show', 'git_blame', 'git_stash',
@@ -109,11 +111,12 @@ describe('runtime-deps (ADR-070 §2.9.1)', () => {
     expect(RUNTIME_DEP_BINARY.git).toBe('git');
     expect(RUNTIME_DEP_BINARY.rg).toBe('rg (ripgrep)');
     expect(RUNTIME_DEP_BINARY.sh).toBe('sh');
+    expect(RUNTIME_DEP_BINARY.bash).toBe('bash');
   });
 
   it('runtimeRequires/toolRuntimeRequires: требования берутся из карты тулов', () => {
     expect(runtimeRequires('git')).toEqual(['git']);
-    expect(toolRuntimeRequires('execute_shell')).toEqual(['sh']);
+    expect(toolRuntimeRequires('execute_shell')).toEqual(['bash']);
     expect(toolRuntimeRequires('grep_files')).toEqual(['rg']);
     expect(toolRuntimeRequires('git_status')).toEqual(['git']);
     expect(toolRuntimeRequires('read_file')).toEqual([]);
@@ -139,7 +142,7 @@ describe('runtime-deps: детект через порт (ADR-077)', () => {
     expect(deps.git).toBe(false);
     expect(deps.rg).toBe(true);
     expect(deps.sh).toBe(true);
-    expect(port.probes).toEqual(['git', 'rg', 'sh']);
+    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash']);
     const detail = runtimeDepUnavailableDetail(deps, 'git');
     expect(detail).toBeTruthy();
     expect(detail).toContain('git');
@@ -154,7 +157,7 @@ describe('runtime-deps: детект через порт (ADR-077)', () => {
     const port = new CapabilityPort({ git: false, rg: false, sh: false });
     const remote = await detectRuntimeDeps(port);
 
-    expect(port.probes).toEqual(['git', 'rg', 'sh']);
+    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash']);
     expect(remote.git).toBe(false);
     expect(remote.rg).toBe(false);
     expect(remote.sh).toBe(false);
@@ -233,7 +236,7 @@ describe('runtime-deps: TTL-кэш детекта (ADR-077)', () => {
     const second = detectRuntimeDeps(port, { ttlMs: TTL, now: TTL - 1 });
 
     expect(second).toBe(first);
-    expect(port.probes).toEqual(['git', 'rg', 'sh']);
+    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash']);
   });
 
   it('внеочередной (параллельный) вызов не создаёт лавину проб', async () => {
@@ -243,14 +246,14 @@ describe('runtime-deps: TTL-кэш детекта (ADR-077)', () => {
 
     expect(second).toBe(first);
     await Promise.all([first, second]);
-    expect(port.probes).toEqual(['git', 'rg', 'sh']);
+    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash']);
 
     // После истечения окна — одна новая проба на все параллельные вызовы.
     const third = detectRuntimeDeps(port, { ttlMs: TTL, now: TTL });
     const fourth = detectRuntimeDeps(port, { ttlMs: TTL, now: TTL });
     expect(fourth).toBe(third);
     await Promise.all([third, fourth]);
-    expect(port.probes).toEqual(['git', 'rg', 'sh', 'git', 'rg', 'sh']);
+    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash', 'git', 'rg', 'sh', 'bash']);
   });
 
   it('TTL истёк → перепроба порта (удалённый режим)', async () => {
@@ -267,7 +270,7 @@ describe('runtime-deps: TTL-кэш детекта (ADR-077)', () => {
     expect(after).not.toBe(before);
     expect(after.sh).toBe(true);
     expect(runtimeDepUnavailableDetail(after, 'sh')).toBeUndefined();
-    expect(port.probes).toHaveLength(6);
+    expect(port.probes).toHaveLength(8);
   });
 
   it('inline: TTL соблюдается, перепроба локальная (поведение прежнее)', async () => {
@@ -284,6 +287,9 @@ describe('runtime-deps: TTL-кэш детекта (ADR-077)', () => {
 
     expect(secondDeps).toEqual(firstDeps);
     expect(secondDeps.sh).toBe(true);
+    // bash — требование `execute_shell`: в тестовом окружении он есть
+    // (без него тул недоступен, fail-closed, ADR-078).
+    expect(secondDeps.bash).toBe(true);
     // Деталь недоступности inline — общего вида, без формулировок про пул.
     if (secondDeps.git === false) {
       expect(runtimeDepUnavailableDetail(secondDeps, 'git')).not.toContain('пула');
@@ -291,18 +297,20 @@ describe('runtime-deps: TTL-кэш детекта (ADR-077)', () => {
   });
 
   it('refreshRuntimeDeps: обновляет снимок по месту (тот же объект)', async () => {
-    const port = new MutableCapabilityPort({ git: true, rg: true, sh: false });
-    const snapshot: RuntimeDeps = { git: true, rg: true, sh: false };
+    const port = new MutableCapabilityPort({ git: true, rg: true, sh: false, bash: false });
+    const snapshot: RuntimeDeps = { git: true, rg: true, sh: false, bash: false };
     await refreshRuntimeDeps(snapshot, port, { ttlMs: TTL, now: 0 });
     expect(snapshot.sh).toBe(false);
     expect(snapshot.details?.sh).toBeTruthy();
 
     port.available.sh = true;
+    port.available.bash = true;
     const returned = await refreshRuntimeDeps(snapshot, port, { ttlMs: TTL, now: TTL });
 
     // Ссылка та же (снимок разделяется с точкой сборки), значения — свежие.
     expect(returned).toBe(snapshot);
     expect(snapshot.sh).toBe(true);
+    expect(snapshot.bash).toBe(true);
     // Устаревшая деталь снята, а не осталась висеть от прошлого снимка.
     expect(snapshot.details).toBeUndefined();
   });
@@ -312,6 +320,7 @@ describe('runtime-deps: TTL-кэш детекта (ADR-077)', () => {
       git: false,
       rg: true,
       sh: true,
+      bash: true,
       details: { git: 'git: отсутствует в 1 из 1 адресов пула' },
     };
     const returned = await refreshRuntimeDeps(snapshot, new FailingProbePort(), {
@@ -324,6 +333,7 @@ describe('runtime-deps: TTL-кэш детекта (ADR-077)', () => {
       git: false,
       rg: true,
       sh: true,
+      bash: true,
       details: { git: 'git: отсутствует в 1 из 1 адресов пула' },
     });
   });

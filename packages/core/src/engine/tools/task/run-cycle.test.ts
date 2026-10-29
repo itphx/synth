@@ -19,8 +19,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { MessageRole, generateId, nowISO, makeTextPart, MAX_STEER_INJECTIONS_PER_TURN } from '@itphx/synth-shared';
-import type { ToolContext, ToolDefinition, ToolResult, TokenUsage, Message } from '@itphx/synth-shared';
-import type { BaseProvider, LLMMessage, SystemPromptInput } from '../../../providers/base.js';
+import type { ToolContext, ToolDefinition, ToolResult, ToolForLLM, TokenUsage, Message } from '@itphx/synth-shared';
+import type { BaseProvider, CancellationToken, ChatOptions, LLMMessage, SystemPromptInput } from '../../../providers/base.js';
 import type { AgentRegistry } from '../../agents/registry.js';
 import type { ModelRouter } from '../../router/router.js';
 import { FileStore } from '../../../storage/file-store.js';
@@ -58,6 +58,11 @@ function toolCallChunk(name: string, args: Record<string, unknown> = {}, id = 'c
   };
 }
 
+/** Определения инструментов для провайдера (как их собирает `tool.ts` для модели). */
+function llmTools(): ToolForLLM[] {
+  return [{ type: 'function', function: { name: 'noop', description: 'noop', parameters: {} } }];
+}
+
 /** Провайдер с пошаговым сценарием: script[i] — чанки i-го вызова (последний повторяется). */
 function scriptedProvider(script: Chunk[][]) {
   let calls = 0;
@@ -68,6 +73,9 @@ function scriptedProvider(script: Chunk[][]) {
     messages: LLMMessage[],
     _systemPrompt?: SystemPromptInput,
     _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+    _options?: ChatOptions,
   ) => {
     const idx = Math.min(calls, script.length - 1);
     calls += 1;
@@ -220,6 +228,132 @@ describe('run-cycle — успешное завершение без дочер�
   });
 });
 
+describe('run-cycle — лимит шагов: финальный отчёт', () => {
+  it('лимит шагов: текстовый отчёт сохраняется как финальный ответ', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const report = 'ОТЧЁТ: сделано 2 из 5, осталось доделать тесты';
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [toolCallChunk('noop', {}, 'c2')],
+      [{ isFinal: true, content: report, model: 'test-model' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'noop ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      maxSteps: 2,
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).not.toContain('<status>error</status>');
+    expect(result.content).toContain(report);
+    expect(result.metadata!.step_limit_reached).toBe(true);
+    expect(result.metadata!.report_missing).toBeUndefined();
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const assistant = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.content === report,
+    );
+    expect(assistant).toBeDefined();
+  });
+});
+
+describe('run-cycle — предохранитель бюджета контекста (agents.subagentMaxInputTokens)', () => {
+  it('бюджет превышен: второй LLM-вызов не происходит, прогон завершается отчётом', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider, calls } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{ isFinal: true, content: 'должен быть недостижим' }],
+    ]);
+    // Длинный результат тула раздувает историю выше бюджета 50 токенов.
+    const { registry, counters } = makeRegistry({ noop: () => ({ content: 'x'.repeat(400) }) });
+    const published: Array<{ type: string; data: Record<string, unknown> }> = [];
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider, sessionManager, sessionId: parent.id, toolRegistry: registry,
+        subagentMaxInputTokens: 50,
+        publish: (type: string, data: Record<string, unknown>) => published.push({ type, data }),
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    // Провайдер вызван ровно один раз — превышение поймано ДО второго вызова.
+    expect(calls()).toBe(1);
+    expect(counters.noop).toBe(1);
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('[context_budget]');
+    expect(result.metadata!.context_budget_exceeded).toBe(true);
+    expect(typeof result.metadata!.context_budget_tokens).toBe('number');
+    expect(result.metadata!.context_budget_tokens as number).toBeGreaterThan(50);
+    expect(result.metadata!.steps).toBe(1);
+    expect(result.metadata!.final_content).toContain('[context_budget]');
+
+    // Событие родителю/UI — срабатывание предохранителя.
+    const budgetEvent = published.find((p) => p.type === 'subagent.context_budget')!;
+    expect(budgetEvent).toBeDefined();
+    expect(budgetEvent.data.child_session_id).toBe(child.id);
+    expect(budgetEvent.data.steps).toBe(1);
+    expect(budgetEvent.data.tokens as number).toBeGreaterThan(50);
+
+    // Отчёт сохранён как обычный assistant-ответ дочерней сессии.
+    const saved = (await sessionManager.getSession(child.id))!;
+    const assistant = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && typeof m.content === 'string' && m.content.includes('[context_budget]'),
+    );
+    expect(assistant).toBeDefined();
+    expect(assistant!.metadata!.status).toBe('completed');
+    expect(assistant!.metadata!.context_budget_exceeded).toBe(true);
+  });
+
+  it('бюджет 0 — ограничение выключено (поведение прежнее)', async () => {
+    const { provider, calls } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{ isFinal: true, content: 'done' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'x'.repeat(400) }) });
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider, sessionManager, subagentMaxInputTokens: 0, toolRegistry: registry,
+      }),
+    }));
+
+    expect(calls()).toBe(2);
+    expect(result.content).toContain('done');
+    expect(result.metadata!.context_budget_exceeded).toBeUndefined();
+  });
+
+  it('шаг-лимит приоритетнее бюджета: context_budget_exceeded не выставляется', async () => {
+    const report = 'ОТЧЁТ по лимиту шагов';
+    const { provider, calls } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{ isFinal: true, content: report }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'x'.repeat(400) }) });
+
+    const result = await runSubagent(makeConfig({
+      maxSteps: 1,
+      extra: makeExtra({
+        provider, sessionManager, subagentMaxInputTokens: 50, toolRegistry: registry,
+      }),
+    }));
+
+    // Второй вызов — шаг-лимит (toolChoice: none), а не бюджетный отчёт.
+    expect(calls()).toBe(2);
+    expect(result.content).toContain(report);
+    expect(result.metadata!.step_limit_reached).toBe(true);
+    expect(result.metadata!.step_limit).toBe(1);
+    expect(result.metadata!.context_budget_exceeded).toBeUndefined();
+  });
+});
+
 describe('run-cycle — цикл Tool Use', () => {
   it('исполняет тул, публикует события и пишет tool-chain в дочернюю сессию', async () => {
     const parent = await sessionManager.createSession({ title: 'P' });
@@ -322,7 +456,7 @@ describe('run-cycle — цикл Tool Use', () => {
     expect(toolCalls[0]!.result.content).toContain('ghost_tool');
   });
 
-  it('maxSteps=1: принудительный финальный шаг-отчёт (без инструментов) + маркер steps_limit', async () => {
+  it('maxSteps=1: финальный шаг-отчёт — обычный шаг с toolChoice=none + маркер steps_limit', async () => {
     // Провайдер на первом шаге просит тул (лимит шагов не даёт бесконечного
     // цикла), на втором — отвечает текстом: это финальный шаг-отчёт.
     const { provider, calls, chatAsync } = scriptedProvider([
@@ -333,14 +467,16 @@ describe('run-cycle — цикл Tool Use', () => {
 
     const result = await runSubagent(makeConfig({
       maxSteps: 1,
+      tools: llmTools(),
       extra: makeExtra({ provider, toolRegistry: registry }),
     }));
 
     expect(counters.noop).toBe(1);
-    // Два вызова LLM: основной шаг + шаг-отчёт.
+    // Два вызова LLM: основной шаг + шаг-лимит.
     expect(calls()).toBe(2);
-    // Шаг-отчёт — «только текст»: инструменты не передаются.
-    expect(chatAsync.mock.calls[1]![2]).toBeUndefined();
+    // Шаг-лимит: инструменты в запросе остаются, вызов запрещён опцией.
+    expect(chatAsync.mock.calls[1]![2]).toBeDefined();
+    expect(chatAsync.mock.calls[1]![5]).toEqual({ toolChoice: 'none' });
     expect(result.content).toContain('ОТЧЁТ: сделано 1 из 3');
     expect(result.content).toContain('[steps_limit]');
     expect(result.metadata!.step_limit_reached).toBe(true);
@@ -348,8 +484,10 @@ describe('run-cycle — цикл Tool Use', () => {
     expect(result.metadata!.final_content).toContain('ОТЧЁТ: сделано 1 из 3');
   });
 
-  it('шаг-отчёт: требование «только текст» подставляется в системный промпт', async () => {
-    const { provider, chatAsync } = scriptedProvider([
+  it('шаг-лимит: требование «только текст» — assistant-сообщением в запрос (не в system)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider, chatAsync, snapshots } = scriptedProvider([
       [toolCallChunk('noop')],
       [{ isFinal: true, content: 'отчёт' }],
     ]);
@@ -359,16 +497,26 @@ describe('run-cycle — цикл Tool Use', () => {
       maxSteps: 1,
       extra: makeExtra({
         provider,
+        sessionManager,
+        sessionId: parent.id,
         toolRegistry: registry,
         contextConfig: stubContextFiles({
           getMaxStepsPrompt: () => 'ЛИМИТ ШАГОВ ({limit}) — ТОЛЬКО ТЕКСТ',
         }),
       }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
     }));
 
-    const reportSystemPrompt = chatAsync.mock.calls[1]![1] as string;
-    expect(reportSystemPrompt).toContain('ЛИМИТ ШАГОВ (1) — ТОЛЬКО ТЕКСТ');
-    expect(reportSystemPrompt).toContain('SYS');
+    // Системный промпт не меняется — инструкция живёт в транскрипте.
+    expect(chatAsync.mock.calls[1]![1]).toBe('SYS');
+    const reportMessages = snapshots[1]!;
+    expect(reportMessages.at(-1)!.role).toBe('assistant');
+    expect(reportMessages.at(-1)!.content).toBe('ЛИМИТ ШАГОВ (1) — ТОЛЬКО ТЕКСТ');
+
+    // …и это сообщение НЕ попадает в историю дочерней сессии.
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.messages.some((m) => m.content.includes('ЛИМИТ ШАГОВ'))).toBe(false);
   });
 
   it('maxSteps=1: toolCall на шаге-отчёте не исполняется, цикл не падает', async () => {
@@ -390,6 +538,73 @@ describe('run-cycle — цикл Tool Use', () => {
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('exhausted the step limit (1)');
     expect(result.metadata!.step_limit_reached).toBe(true);
+    // Пустой отчёт — `report_missing` (успех без текстового отчёта).
+    expect(result.metadata!.report_missing).toBe(true);
+  });
+
+  it('maxSteps=2: третья итерация — шаг-лимит (tools в запросе, toolChoice=none, assistant-инструкция)', async () => {
+    // Механика opencode: лимит не «выход из цикла + отдельный вызов без
+    // инструментов», а ещё один обычный шаг того же цикла.
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const report = 'ОТЧЁТ: сделано 2 из 5, тесты остались';
+    const { provider, calls, chatAsync, snapshots } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [toolCallChunk('noop', {}, 'c2')],
+      [{ isFinal: true, content: report }],
+    ]);
+    const { registry, counters } = makeRegistry({ noop: () => ({ content: 'noop ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      maxSteps: 2,
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    // Два обычных шага с инструментами + шаг-лимит; лишних вызовов нет.
+    expect(calls()).toBe(3);
+    expect(counters.noop).toBe(2);
+
+    const limitCall = chatAsync.mock.calls[2]!;
+    // Инструменты остаются в запросе (кэшированный префикс провайдера).
+    expect(limitCall[2]).toBeDefined();
+    expect((limitCall[2] as unknown[]).length).toBe(1);
+    // Вызов инструментов запрещён опцией, ответ — текстовый отчёт.
+    expect(limitCall[5]).toEqual({ toolChoice: 'none' });
+    const limitMessages = snapshots[2]!;
+    expect(limitMessages.at(-1)!.role).toBe('assistant');
+    expect(limitMessages.at(-1)!.content).toContain('MAXIMUM STEPS REACHED');
+    expect(limitMessages.at(-1)!.content).toContain('(2)');
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain(report);
+    expect(result.metadata!.step_limit_reached).toBe(true);
+    expect(result.metadata!.step_limit).toBe(2);
+    expect(result.metadata!.report_missing).toBeUndefined();
+    // Инструменты на шаге-лимите не исполнялись — счётчик прежний.
+    const toolCalls = result.metadata!.tool_calls as Array<{ iteration: number }>;
+    expect(toolCalls).toHaveLength(2);
+  });
+
+  it('обычный ход без лимита: опции chatAsync не задаются (поведение прежнее)', async () => {
+    const { provider, chatAsync } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [{ isFinal: true, content: 'готово' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      maxSteps: 5,
+      extra: makeExtra({ provider, toolRegistry: registry }),
+    }));
+
+    expect(result.content).toContain('готово');
+    expect(result.metadata!.step_limit_reached).toBeUndefined();
+    for (const call of chatAsync.mock.calls) {
+      expect(call[5]).toBeUndefined();
+    }
   });
 });
 
@@ -780,6 +995,42 @@ describe('run-cycle — steering дочерней сессии (ADR-104)', () =>
     const saved = (await sessionManager.getSession(child.id))!;
     const applied = saved.messages.filter((m) => m.metadata?.steer === true);
     expect(applied).toHaveLength(MAX_STEER_INJECTIONS_PER_TURN);
+  });
+
+  it('остаток очереди в конце прогона снимается: steer.dropped(turn_ended), следующего хода нет', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const bus = new EventBus();
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    bus.subscribe(child.id, (e) => { events.push({ type: e.type, data: e.data as Record<string, unknown> }); });
+    // Пользователь вмешивается во время **последней** генерации ребёнка:
+    // границы шага после неё не будет.
+    const chatAsync = vi.fn(() => (async function* () {
+      await sessionManager.enqueueSteerMessage(child.id, steerMessage('позднее сообщение'));
+      yield { isFinal: true, content: 'done' };
+    })());
+    const provider = { model: 'test-model', name: 'test-provider', chatAsync } as unknown as BaseProvider;
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, eventBus: bus }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('done');
+    // Следующего хода (второго LLM-вызова) нет.
+    expect(chatAsync).toHaveBeenCalledTimes(1);
+
+    const dropped = events.find((e) => e.type === 'steer.dropped');
+    expect(dropped).toBeDefined();
+    expect(dropped!.data.reason).toBe('turn_ended');
+    expect(dropped!.data.dropped_count).toBe(1);
+
+    // Очередь пуста, снятое сообщение в историю не попало.
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.steerInbox ?? []).toHaveLength(0);
+    expect(saved.messages.some((m) => m.content === 'позднее сообщение')).toBe(false);
   });
 
   it('без дочерней сессии поведение прежнее: инъекция в родителя не попадает в ход саб-агента', async () => {

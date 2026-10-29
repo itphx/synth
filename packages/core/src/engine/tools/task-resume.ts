@@ -78,6 +78,11 @@ export interface SubagentResumeDeps {
   /** Fallback permission (глобальный конфиг), если у дочерней сессии нет своей. */
   permissionConfig?: PermissionConfig;
   /**
+   * Предохранитель по объёму промпта resumed-саб-агента
+   * (`agents.subagentMaxInputTokens`; `0`/не задан — без ограничения).
+   */
+  subagentMaxInputTokens?: number;
+  /**
    * ADR-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) —
    * dependency-гейт в permission-слое resumed-саб-агента и `[НЕДОСТУПНЫЕ ТУЛЫ]`.
    */
@@ -277,6 +282,8 @@ export async function runSubagentResume(
       sessionId: child.id,
       callerAgentRole: agentRole,
       permissionConfig: child.settings.permission ?? deps.permissionConfig,
+      // Предохранитель по объёму промпта resumed-саб-агента (как у `task`).
+      subagentMaxInputTokens: deps.subagentMaxInputTokens,
       // ADR-070 §2.9.1: dependency-гейт permission-слоя resumed-саб-агента.
       runtimeDeps: deps.runtimeDeps,
       // ADR-075: workspace-гейт permission-слоя resumed-саб-агента.

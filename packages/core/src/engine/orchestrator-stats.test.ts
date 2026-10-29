@@ -119,7 +119,7 @@ describe('ChatOrchestrator — per-message stats (ADR-070 §2.6)', () => {
 
     const session = await sessionManager.createSession({
       title: 'Stats',
-      settings: { provider: 'statsprovider', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'statsprovider', model: 'm', agentRole: 'fixer' },
     });
     const msg = makeUserMessage();
     await sessionManager.addMessage(session.id, msg);

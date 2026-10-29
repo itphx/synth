@@ -223,7 +223,7 @@ async function makeHarness(providerName: string): Promise<Harness> {
   const session = await sessionManager.createSession({
     title: 'StreamPersist',
     projectId: project.id,
-    settings: { provider: providerName, model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+    settings: { provider: providerName, model: 'm', systemPrompt: 'test', agentRole: 'fixer' },
   });
   const msg = makeUserMessage();
   await sessionManager.addMessage(session.id, msg);

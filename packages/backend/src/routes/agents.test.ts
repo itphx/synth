@@ -167,7 +167,7 @@ describe('Agent API Routes — синхронизация с AgentRegistry', () 
     const body: any = await res.json();
     const ids = body.agents.map((a: any) => a.id);
     expect(ids).toContain('assistant');
-    expect(ids).toContain('developer');
+    expect(ids).toContain('fixer');
     expect(ids).not.toContain('general'); // subagent
     expect(ids).not.toContain('explore'); // subagent
     expect(ids).not.toContain('title'); // system
@@ -253,17 +253,17 @@ describe('Agent API Routes — default_agent', () => {
   });
 
   it('GET /agents отдаёт значение геттера', async () => {
-    const app = createTestApp(undefined, () => 'analyst');
+    const app = createTestApp(undefined, () => 'researcher');
     const res = await app.request('/api/v2/agents');
     const body: any = await res.json();
-    expect(body.default_agent).toBe('analyst');
+    expect(body.default_agent).toBe('researcher');
   });
 
   it('GET /agents/all отдаёт значение геттера', async () => {
-    const app = createTestApp(undefined, async () => 'developer');
+    const app = createTestApp(undefined, async () => 'fixer');
     const res = await app.request('/api/v2/agents/all');
     const body: any = await res.json();
-    expect(body.default_agent).toBe('developer');
+    expect(body.default_agent).toBe('fixer');
   });
 });
 

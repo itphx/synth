@@ -177,7 +177,7 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
         provider: providerType,
         model: 'm',
         systemPrompt: 'test',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         debugEnabled: opts.debug ?? false,
       },
     });
@@ -333,7 +333,7 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
     });
     const session = await sessionManager.createSession({
       title: 'NoProvider',
-      settings: { provider: 'ghost', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+      settings: { provider: 'ghost', model: 'm', systemPrompt: 'test', agentRole: 'fixer' },
     });
     const msg = makeMessage();
     await sessionManager.addMessage(session.id, msg);
@@ -356,7 +356,7 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
     expect(userMsg!.metadata?.last_error).toBeTruthy();
 
     // История для LLM не содержит персистентную ошибку как реплику assistant.
-    const llm = ChatOrchestrator._sessionMessagesToLlm(after.messages, 'developer', 'user');
+    const llm = ChatOrchestrator._sessionMessagesToLlm(after.messages, 'fixer', 'user');
     expect(llm.some((m) => m.role === 'assistant' && m.content.includes('not found'))).toBe(false);
   });
 
@@ -365,18 +365,18 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
       ...makeMessage(),
       role: MessageRole.ASSISTANT,
       content: 'Provider ghost not found or not configured',
-      agentRole: 'developer',
+      agentRole: 'fixer',
       metadata: { stream_id: 's-x', status: 'error' },
     };
     const normalMsg: Message = {
       ...makeMessage(),
       role: MessageRole.ASSISTANT,
       content: 'обычный ответ',
-      agentRole: 'developer',
+      agentRole: 'fixer',
       metadata: { stream_id: 's-y', status: 'completed' },
     };
 
-    const llm = ChatOrchestrator._sessionMessagesToLlm([errorMsg, normalMsg], 'developer', 'user');
+    const llm = ChatOrchestrator._sessionMessagesToLlm([errorMsg, normalMsg], 'fixer', 'user');
 
     expect(llm.some((m) => m.content.includes('not found'))).toBe(false);
     expect(llm.some((m) => m.content === 'обычный ответ')).toBe(true);

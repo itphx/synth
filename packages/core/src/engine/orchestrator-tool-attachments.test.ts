@@ -244,7 +244,7 @@ describe('ChatOrchestrator — вложения тулов в текущем х�
         provider: PROVIDER,
         model: 'm',
         systemPrompt: 'test',
-        agentRole: 'developer',
+        agentRole: 'fixer',
       },
     });
     const msg = makeUserMessage();

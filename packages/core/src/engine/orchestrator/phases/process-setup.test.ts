@@ -85,7 +85,7 @@ describe('runProcessSetup', () => {
   async function makeSession(settings: Record<string, unknown> = {}): Promise<{ id: string; message: Message }> {
     const session = await sessionManager.createSession({
       title: 'Setup',
-      settings: { provider: 'setup-provider', model: 'set-model', agentRole: 'developer', ...settings } as never,
+      settings: { provider: 'setup-provider', model: 'set-model', agentRole: 'fixer', ...settings } as never,
     });
     const message: Message = {
       id: generateId(),
@@ -99,7 +99,7 @@ describe('runProcessSetup', () => {
       pinned: false,
       hidden: false,
       author: 'user',
-      agentRole: 'developer',
+      agentRole: 'fixer',
       metadata: { stream_id: 'stream1' },
     };
     await sessionManager.addMessage(session.id, message);
@@ -125,7 +125,7 @@ describe('runProcessSetup', () => {
       workingDir: tmpDir,
       workspaceReady: true,
       agentDef: undefined,
-      effectiveAgentRole: 'developer',
+      effectiveAgentRole: 'fixer',
       effectiveReasoningLevel: undefined,
       sessionMode: 'act',
       planMode: 'auto',
@@ -253,8 +253,8 @@ describe('runProcessSetup', () => {
     if (first.failed) return;
 
     let stored = (await sessionManager.getSession(id))!;
-    expect(stored.promptStates!.developer).toMatchObject({ generation: 1, reason: 'init', staticPrefix: 'PREFIX' });
-    expect(first.state.promptMeta).toMatchObject({ agentRole: 'developer', generation: 1, expected: 'miss' });
+    expect(stored.promptStates!.fixer).toMatchObject({ generation: 1, reason: 'init', staticPrefix: 'PREFIX' });
+    expect(first.state.promptMeta).toMatchObject({ agentRole: 'fixer', generation: 1, expected: 'miss' });
     expect(first.state.finalSystemPrompt).toMatchObject({
       text: 'SYSTEM',
       stablePrefix: 'PREFIX',
@@ -268,7 +268,7 @@ describe('runProcessSetup', () => {
     if (second.failed) return;
 
     stored = (await sessionManager.getSession(id))!;
-    expect(stored.promptStates!.developer!.generation).toBe(1);
+    expect(stored.promptStates!.fixer!.generation).toBe(1);
     expect(saveSpy.mock.calls.length).toBe(savesAfterFirst);
     expect(second.state.promptMeta).toMatchObject({ generation: 1, expected: 'hit' });
   });
@@ -367,7 +367,7 @@ describe('runProcessSetup', () => {
     expect(outcome.failed).toBe(false);
 
     const stored = (await sessionManager.getSession(id))!;
-    expect(stored.promptStates!.developer).toMatchObject({ generation: 2, reason: 'generation-change', staticPrefix: 'PREFIX-2' });
+    expect(stored.promptStates!.fixer).toMatchObject({ generation: 2, reason: 'generation-change', staticPrefix: 'PREFIX-2' });
   });
 
   it('systemPrompt-override: reason=override, stable-префикс не выставляется', async () => {
@@ -380,7 +380,7 @@ describe('runProcessSetup', () => {
 
     expect(outcome.state.finalSystemPrompt.stablePrefix).toBeUndefined();
     const stored = (await sessionManager.getSession(id))!;
-    expect(stored.promptStates!.developer).toMatchObject({ reason: 'override', staticPrefix: '' });
+    expect(stored.promptStates!.fixer).toMatchObject({ reason: 'override', staticPrefix: '' });
   });
 
   it('ADR-090: «вопрос хода» (текст сообщения пользователя) уходит в контекст композера', async () => {
@@ -437,9 +437,9 @@ describe('runProcessSetup', () => {
 
     await runProcessSetup(await makeArgs(id, message), deps);
     let stored = (await sessionManager.getSession(id))!;
-    expect(stored.promptStates!.developer).toMatchObject({ generation: 1, reason: 'init' });
+    expect(stored.promptStates!.fixer).toMatchObject({ generation: 1, reason: 'init' });
     // Блок провайдера помечен в состоянии — по нему ведётся отдельный трек.
-    expect(stored.promptStates!.developer!.blocks).toContainEqual(
+    expect(stored.promptStates!.fixer!.blocks).toContainEqual(
       expect.objectContaining({ key: 'plugin.demo.memory', provider: true }),
     );
 
@@ -453,7 +453,7 @@ describe('runProcessSetup', () => {
     expect(outcome.failed).toBe(false);
 
     stored = (await sessionManager.getSession(id))!;
-    expect(stored.promptStates!.developer).toMatchObject({ generation: 2, reason: 'generation-change' });
+    expect(stored.promptStates!.fixer).toMatchObject({ generation: 2, reason: 'generation-change' });
   });
 
   it('инструменты: builtin + MCP активных серверов, stableToolCount = число встроенных', async () => {
@@ -595,7 +595,7 @@ describe('runProcessSetup', () => {
     expect(outcome.failed).toBe(false);
 
     const event = events.find((e) => e.type === 'context.instructions_loaded')!;
-    expect(event.data).toMatchObject({ session_id: id, source: 'initial', agent: 'developer' });
+    expect(event.data).toMatchObject({ session_id: id, source: 'initial', agent: 'fixer' });
     expect(event.data.files).toHaveLength(2);
     // lazy-реестр сидируется только merged-chain файлами
     expect(seed).toHaveBeenCalledWith(id, ['/ws/AGENTS.md']);

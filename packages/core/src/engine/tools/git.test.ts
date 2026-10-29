@@ -64,7 +64,18 @@ vi.mock('node:child_process', async (importOriginal) => {
         }) as ExecCallback,
       );
     });
-  return { ...actual, execFile: execFileMock };
+  // Порт исполнения (`InlineExecutionPort`) запускает команды через `spawn`,
+  // а не `execFile`: argv git-тулов виден здесь по той же схеме.
+  const realSpawn = actual.spawn as unknown as (...a: unknown[]) => unknown;
+  const spawnMock = (file: string, args?: string[], options?: unknown): unknown => {
+    execCalls.push({
+      file,
+      args: [...(args ?? [])],
+      cwd: (options as { cwd?: string } | undefined)?.cwd,
+    });
+    return realSpawn(file, args, options);
+  };
+  return { ...actual, execFile: execFileMock, spawn: spawnMock };
 });
 
 /** Аргументы всех вызовов git после последнего сброса. */

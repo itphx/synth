@@ -230,7 +230,7 @@ describe('rebuildAnalyticsRollups — usage/activity', () => {
     await addMessage(env, child.id, msg({
       role: MessageRole.ASSISTANT,
       content: 'саб-ответ',
-      agentRole: 'developer',
+      agentRole: 'fixer',
       model: 'm-sub',
       usage: usage(7, 3),
       createdAt: '2026-10-10T10:06:00.000Z',
@@ -251,7 +251,7 @@ describe('rebuildAnalyticsRollups — usage/activity', () => {
               child_session_id: child.id,
               subagent_usage: usage(7, 3),
               subagent_model: 'm-sub',
-              subagent_type: 'developer',
+              subagent_type: 'fixer',
             },
           },
         }],

@@ -48,10 +48,13 @@ export const gitApi = {
     branch?: string,
     name?: string,
     sshKeyId?: string,
+    /** Отмена клонирования (`AbortController`): сеть может идти минутами. */
+    signal?: AbortSignal,
   ): Promise<RepoStatus> {
     return fetchJSON(`${BASE_URL}/git/repos/clone`, {
       method: 'POST',
       body: JSON.stringify({ projectId, url, path, branch, name, sshKeyId }),
+      signal,
     })
   },
 
@@ -81,10 +84,13 @@ export const gitApi = {
   async fetchGitRepo(
     projectId: string,
     opts: { id?: string; path?: string },
+    /** Отмена операции (`AbortController`) — сеть может идти минутами. */
+    signal?: AbortSignal,
   ): Promise<{ path: string; lastFetch: string }> {
     return fetchJSON(`${BASE_URL}/git/repos/fetch`, {
       method: 'POST',
       body: JSON.stringify({ projectId, ...opts }),
+      signal,
     })
   },
 

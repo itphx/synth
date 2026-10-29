@@ -6,8 +6,8 @@
  *
  * `execute()` порта исполнения возвращает вывод **после** завершения команды —
  * отвязывать нечего (ни `pid`, ни потока, ни промиса завершения). Поэтому, когда
- * доступен detach, команда запускается через `spawnBackground`: тот же
- * `sh -c`, тот же таймаут и окружение, но хэндл живого процесса есть с первой
+ * доступен detach, команда запускается через `spawnBackground`: та же
+ * оболочка (`bash -c`), тот же таймаут и окружение, но хэндл живого процесса есть с первой
  * секунды. Дальше:
  *
  * - команда не отвязана → тул ждёт `exited`, собирает вывод и возвращает
@@ -273,8 +273,8 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
   let handle: ExecBackgroundProcess;
   try {
     handle = await spawnBackground({
-      command: { kind: 'shell', command: input.command, shell: 'sh' },
-      // Бинарное требование тула (`sh`) — как у синхронного запуска (ADR-077).
+      command: { kind: 'shell', command: input.command, shell: 'bash' },
+      // Бинарное требование тула (`bash`) — как у синхронного запуска (ADR-077).
       requires: toolRuntimeRequires('execute_shell'),
       cwd: input.cwd,
       // Таймаут применяет сам фон: `spawnBackground` убивает процесс
@@ -464,7 +464,7 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
 /** Прежний путь `execute` — используется, если хэндла нет (прямой вызов). */
 async function executionFallback(input: DetachableShellInput): Promise<ToolResult> {
   const { stdout, stderr } = await input.port.execute({
-    command: { kind: 'shell', command: input.command, shell: 'sh' },
+    command: { kind: 'shell', command: input.command, shell: 'bash' },
     requires: toolRuntimeRequires('execute_shell'),
     cwd: input.cwd,
     timeoutMs: input.timeoutMs,
@@ -482,16 +482,16 @@ async function executionFallback(input: DetachableShellInput): Promise<ToolResul
   };
 }
 
-/** Неудача запуска фоновой формы (нет `sh`, неверный `cwd`, ошибка порта). */
+/** Неудача запуска фоновой формы (нет `bash`, неверный `cwd`, ошибка порта). */
 function spawnFailureResult(input: DetachableShellInput, err: unknown): ToolResult {
   const execError = isExecutionError(err) ? err : null;
   if (execError?.code === 'ENOENT') {
     return {
-      content: sm('tool.binary_missing', { tool: 'execute_shell', binary: 'sh' }),
+      content: sm('tool.binary_missing', { tool: 'execute_shell', binary: 'bash' }),
       isError: true,
       metadata: {
         command: input.displayCommand,
-        i18n: i18nMeta('tool.binary_missing', { tool: 'execute_shell', binary: 'sh' }),
+        i18n: i18nMeta('tool.binary_missing', { tool: 'execute_shell', binary: 'bash' }),
       },
     };
   }

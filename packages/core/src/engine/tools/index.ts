@@ -75,6 +75,8 @@ import { sendAttachmentTool } from './send-attachment.js';
 // ADR-115: каталог моделей инстанса для агента (модальности, текущая пара,
 // назначения aux-моделей).
 import { listModelsTool } from './list-models.js';
+// ADR-076: метаданные SSH-ключей инстанса (id для `sshKeyId` сетевых git-тулов).
+import { sshKeysListTool } from './ssh-keys.js';
 
 export { ToolRegistry } from './registry.js';
 export { zodToJsonSchema } from './json-schema.js';
@@ -110,6 +112,8 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   gitShowTool,
   gitBlameTool,
   gitStashTool,
+  // ADR-076: какие ключи доступны для `sshKeyId` (метаданные, без секретов)
+  sshKeysListTool,
   getProjectInfoTool,
   listReposTool,
   taskTool,

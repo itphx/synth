@@ -195,7 +195,7 @@ describe('ChatOrchestrator — per-session MCP scope (ADR-071 §2.1)', () => {
       settings: {
         provider: 'toolcapture',
         model: 'm',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         mcpServers,
         mcpDefaultOn,
       },
@@ -305,7 +305,7 @@ describe('ChatOrchestrator — per-session MCP scope (ADR-071 §2.1)', () => {
       settings: {
         provider: 'toolcapture',
         model: 'm',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         mcpServers: [],
         mcpDefaultOn: ['srvA'],
         mcpDisabledServers: ['srvA'],
@@ -325,7 +325,7 @@ describe('ChatOrchestrator — per-session MCP scope (ADR-071 §2.1)', () => {
       settings: {
         provider: 'toolcapture',
         model: 'm',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         mcpServers: ['srvB'],
         mcpDefaultOn: ['srvA'],
         mcpDisabledServers: ['srvA'],

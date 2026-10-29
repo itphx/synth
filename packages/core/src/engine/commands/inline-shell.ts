@@ -6,7 +6,7 @@ import type { ExecutionError, ExecutionPort } from '../../execution/ports/index.
  *
  * Это низкоуровневый исполнитель: permission-проверку (`PermissionEvaluator`,
  * ADR-029) и аудит делает вызывающая сторона (оркестратор). Параметры процесса
- * зеркалят тул `execute_shell`: `sh -c`, timeout 30 c, maxBuffer 10 MB,
+ * зеркалят тул `execute_shell`: `bash -c`, timeout 30 c, maxBuffer 10 MB,
  * `signal` сессии для «Стоп».
  *
  * ADR-077: исполнение — через порт (`execution`); по умолчанию — inline с
@@ -41,7 +41,7 @@ export async function runInlineShell(opts: InlineShellOptions): Promise<InlineSh
   const port = opts.execution ?? new InlineExecutionPort();
   try {
     const { stdout, stderr } = await port.execute({
-      command: { kind: 'shell', command: opts.command, shell: 'sh' },
+      command: { kind: 'shell', command: opts.command, shell: 'bash' },
       cwd: opts.workingDir,
       timeoutMs: opts.timeoutMs ?? INLINE_SHELL_TIMEOUT_MS,
       signal: opts.abortSignal,

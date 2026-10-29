@@ -147,7 +147,7 @@ describe('publishLiveUsage — троттлинг, дедуп, контракт 
 
     call(state, (event, data) => events.push({ event, data }), {
       usage,
-      agentRole: 'developer',
+      agentRole: 'fixer',
       model: 'm',
       provider: 'p',
       estimated: true,
@@ -159,7 +159,7 @@ describe('publishLiveUsage — троттлинг, дедуп, контракт 
       session_id: 's1',
       stream_id: 'stream1',
       iteration: 2,
-      agent_role: 'developer',
+      agent_role: 'fixer',
       model: 'm',
       provider: 'p',
       estimated: true,

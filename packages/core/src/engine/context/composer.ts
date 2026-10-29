@@ -120,17 +120,20 @@ export function hasAdminDisabled(
   return !!disabled && (disabled.capabilities.length > 0 || disabled.tools.length > 0);
 }
 
-/** ADR-070 §2.9.1: есть ли отсутствующие во внешнем окружении зависимости. */export function hasMissingDeps(deps?: RuntimeDeps): boolean {
-  return !!deps && (deps.git === false || deps.rg === false || deps.sh === false);
+/** ADR-070 §2.9.1: есть ли отсутствующие во внешнем окружении зависимости. */
+export function hasMissingDeps(deps?: RuntimeDeps): boolean {
+  return !!deps
+    && (deps.git === false || deps.rg === false || deps.sh === false || deps.bash === false);
 }
 
-/** Список отсутствующих программ (`git`, `rg (ripgrep)`, `sh`) для текста промпта. */
+/** Список отсутствующих программ (`git`, `rg (ripgrep)`, `sh`, `bash`) для текста промпта. */
 function missingDepsList(deps?: RuntimeDeps): string[] {
   if (!deps) return [];
   const out: string[] = [];
   if (deps.git === false) out.push(RUNTIME_DEP_BINARY.git);
   if (deps.rg === false) out.push(RUNTIME_DEP_BINARY.rg);
   if (deps.sh === false) out.push(RUNTIME_DEP_BINARY.sh);
+  if (deps.bash === false) out.push(RUNTIME_DEP_BINARY.bash);
   return out;
 }
 

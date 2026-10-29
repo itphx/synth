@@ -71,7 +71,7 @@ describe('ChatOrchestrator — слой plugin.tools в манифесте (ADR-
   async function createSession(): Promise<import('@itphx/synth-shared').Session> {
     return sessionManager.createSession({
       title: 'Plugin tools',
-      settings: { provider: 'toolcapture', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'toolcapture', model: 'm', agentRole: 'fixer' },
     });
   }
 

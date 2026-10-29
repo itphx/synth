@@ -40,7 +40,8 @@ export interface ShellToolExtra {
 export const executeShellTool: ToolDefinition = {
   name: 'execute_shell',
   description:
-    'Execute a shell command. Returns stdout and stderr. Use only for legitimate development tasks. Commands run in the working directory. Timeout: 30 seconds. '
+    'Execute a shell command (bash). Returns stdout and stderr. Use only for legitimate development tasks. Commands run in the working directory. Timeout: 30 seconds. '
+    + 'The interpreter is bash ([[ … ]], arrays, pipefail, ${var,,} work). If bash is not installed in the environment, the tool is unavailable. '
     + 'Set background=true to run the command in the background: it returns immediately, the full output is written to a log file, and a notification with the result arrives automatically — do not poll for the status.',
   parameters: z.object({
     command: z.string().describe('The command to execute (e.g., "npm test", "ls -la")'),
@@ -93,11 +94,13 @@ export const executeShellTool: ToolDefinition = {
 
     try {
       // ADR-077: исполнение — через порт (inline-реализация повторяет
-      // прежний `sh -c`: тот же бинарь, таймаут, maxBuffer 10 МБ и окружение
+      // прежнее поведение: тот же бинарь, таймаут, maxBuffer 10 МБ и окружение
       // `{...process.env, HOME: process.env.HOME || '/root'}`).
+      // Оболочка — **bash** явно: `/bin/sh` в образах это dash/busybox ash,
+      // bash-синтаксис агентских команд там не работает.
       const { stdout, stderr } = await port.execute({
-        command: { kind: 'shell', command, shell: 'sh' },
-        // ADR-077: бинарное требование тула (`sh`) — в remote-режиме команда
+        command: { kind: 'shell', command, shell: 'bash' },
+        // ADR-077: бинарное требование тула (`bash`) — в remote-режиме команда
         // уходит в адрес пула, где оболочка есть. Inline-режим поле игнорирует.
         requires: toolRuntimeRequires('execute_shell'),
         cwd,
@@ -130,14 +133,14 @@ export const executeShellTool: ToolDefinition = {
         return abortedResult(this.name, partial || undefined);
       }
 
-      // Fallback, если детекция окружения не сработала, а `sh` не установлен.
+      // Fallback, если детекция окружения не сработала, а `bash` не установлен.
       if (execError.code === 'ENOENT') {
         return {
-          content: sm('tool.binary_missing', { tool: this.name, binary: 'sh' }),
+          content: sm('tool.binary_missing', { tool: this.name, binary: 'bash' }),
           isError: true,
           metadata: {
             command: params.command,
-            i18n: i18nMeta('tool.binary_missing', { tool: this.name, binary: 'sh' }),
+            i18n: i18nMeta('tool.binary_missing', { tool: this.name, binary: 'bash' }),
           },
         };
       }

@@ -169,7 +169,7 @@ async function makeHarness(): Promise<Harness> {
     // Владелец сессии — владелец проекта (`u1`): принципал хода (ADR-106)
     // берётся из `session.ownerId`/`session.userId`.
     userId: 'u1',
-    settings: { provider: 'mockinterrupt', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+    settings: { provider: 'mockinterrupt', model: 'm', systemPrompt: 'test', agentRole: 'fixer' },
   });
   await sessionManager.addMessage(session.id, makeMessage());
   return { orchestrator, sessionManager, eventBus, tmpDir, sessionId: session.id, shadowInputs };
@@ -391,7 +391,7 @@ describe('ChatOrchestrator: прерывание генерации (ADR-104, э
     expect(new Set(principals).size).toBe(1);
     expect(h.shadowInputs[0]!.principal?.kind).toBe('user');
     expect(h.shadowInputs[0]!.principal?.id).toBe('u1');
-    expect(h.shadowInputs[0]!.agentId).toBe('developer');
+    expect(h.shadowInputs[0]!.agentId).toBe('fixer');
     expect(new Set(h.shadowInputs.map((i) => i.turnId)).size).toBe(1);
     expect(h.shadowInputs[0]!.turnId).toBe(streamId);
 

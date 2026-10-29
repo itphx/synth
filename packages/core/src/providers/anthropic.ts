@@ -14,6 +14,7 @@ import {
   type SystemPromptInput,
   type CachePolicy,
   type CancellationToken,
+  type ChatOptions,
 } from './base.js';
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
@@ -116,6 +117,7 @@ export class AnthropicProvider extends BaseProvider {
     tools?: Record<string, unknown>[],
     stream?: boolean,
     debugCollector?: DebugCollector,
+    options?: ChatOptions,
   ): Promise<LLMResponse> {
     const formattedMessages = this._formatMessages(messages);
     const body: Record<string, unknown> = {
@@ -129,7 +131,12 @@ export class AnthropicProvider extends BaseProvider {
     if (this.topP !== undefined) body.top_p = this.topP;
     const systemBlocks = this._buildSystemBlocks(systemPrompt);
     if (systemBlocks.length) body.system = systemBlocks;
-    if (tools?.length) body.tools = this._formatTools(tools);
+    if (tools?.length) {
+      body.tools = this._formatTools(tools);
+      // Anthropic: `tool_choice` — объект `{type}`; без инструментов поле не
+      // отправляем (валидация API отвергнет запрос).
+      if (options?.toolChoice) body.tool_choice = { type: options.toolChoice };
+    }
     if (stream) body.stream = true;
     this._applyCacheControl(body, systemPrompt);
 
@@ -176,6 +183,7 @@ export class AnthropicProvider extends BaseProvider {
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
+    options?: ChatOptions,
   ): AsyncGenerator<LLMChunk> {
     const formattedMessages = this._formatMessages(messages);
     const body: Record<string, unknown> = {
@@ -190,7 +198,12 @@ export class AnthropicProvider extends BaseProvider {
     if (this.topP !== undefined) body.top_p = this.topP;
     const systemBlocks = this._buildSystemBlocks(systemPrompt);
     if (systemBlocks.length) body.system = systemBlocks;
-    if (tools?.length) body.tools = this._formatTools(tools);
+    if (tools?.length) {
+      body.tools = this._formatTools(tools);
+      // Anthropic: `tool_choice` — объект `{type}`; `none` поддерживается.
+      // Без инструментов поле не отправляем (валидация API отвергнет запрос).
+      if (options?.toolChoice) body.tool_choice = { type: options.toolChoice };
+    }
     this._applyCacheControl(body, systemPrompt);
 
     const headers = this._getHeaders();

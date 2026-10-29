@@ -41,6 +41,9 @@ import type { AttachmentsConfig } from '@itphx/synth-shared';
 import type { QuestionService } from '@itphx/synth-core';
 // ADR-114: сервис worktree'ов — привязка сессии к worktree.
 import type { WorktreeService } from '@itphx/synth-core';
+// ADR-111/ADR-113: реестр фоновых прогонов — «Стоп» останавливает и детей
+// (решение 2026-10-28).
+import type { BackgroundRunService } from '@itphx/synth-core';
 import { createProjectAccess } from './projects.js';
 
 /**
@@ -114,6 +117,12 @@ export function createSessionRoutes(
      */
     config: AttachmentsConfig | (() => AttachmentsConfig);
   },
+  /**
+   * ADR-111/ADR-113: единый реестр фоновых прогонов — «Стоп» сессии
+   * останавливает и живые дочерние прогоны (фоновые саб-агенты и их процессы),
+   * решение 2026-10-28. Не задан — прежнее поведение (только свой стрим/очередь).
+   */
+  backgroundService?: BackgroundRunService,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -707,7 +716,7 @@ export function createSessionRoutes(
   // последней: статические/backend-only сегменты должны матчиться раньше.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}) },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}) },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,

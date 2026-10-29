@@ -582,7 +582,12 @@ export class WorktreeService {
     const execution = this._execution ?? new InlineExecutionPort();
     try {
       const result = await execution.execute({
-        command: { kind: 'shell', command },
+        // Оболочка — **bash** явно (решение «всегда bash»): `/bin/sh` в образах
+        // это dash/busybox ash, где bash-синтаксис стартового скрипта не работает.
+        command: { kind: 'shell', command, shell: 'bash' },
+        // Бинарное требование — как у прочих шелл-вызовов ядра: в pool-режиме
+        // команда уходит в адрес, где `bash` есть (ADR-077/ADR-078).
+        requires: ['bash'],
         cwd: directory,
         env: {
           SYNTH_WORKTREE_BASE: this.rootFor(projectId),

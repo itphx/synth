@@ -28,7 +28,7 @@
 
 /** Форма команды: shell-строка или argv-массив (без shell). */
 export type ExecCommand =
-  /** Shell-семантика: `<shell> -c <command>` (по умолчанию — `sh`). */
+  /** Shell-семантика: `<shell> -c <command>` (по умолчанию — `bash`). */
   | { kind: 'shell'; command: string; shell?: string }
   /** Прямой запуск: `<file> <args…>` — без shell. */
   | { kind: 'argv'; file: string; args?: string[] };
@@ -73,7 +73,7 @@ export interface ExecRequest {
   /**
    * Бинарные возможности, необходимые для успеха команды (ADR-077).
    *
-   * Словарь — `EXECUTION_BASE_CAPABILITIES` (`git`/`rg`/`sh`): это те же
+   * Словарь — `EXECUTION_BASE_CAPABILITIES` (`git`/`rg`/`sh`/`bash`): это те же
    * программы, доступность которых проверяет слой доступности тулов
    * (ADR-078). Удалённый порт использует поле как **условие маршрутизации**:
    * команда уходит в тот адрес пула, чей инвентарь (`GET /capabilities`)
@@ -243,8 +243,14 @@ export interface ExecutionPort {
  * этому же словарю (`GET /capabilities`). Дополнительные программы
  * (например `python3`) в словарь **не** входят: они — сведения о составе
  * окружения, а не условие доступности встроенного тула.
+ *
+ * `bash` — оболочка встроенных шелл-вызовов: все они (`execute_shell`,
+ * detach-путь, фоновые процессы, inline-shell) передают `shell: 'bash'`
+ * явно. `sh` остаётся базовой возможностью окружения (`/bin/sh` есть всегда),
+ * но требованием инструментов не является: на Debian это dash, на alpine —
+ * busybox ash, и bash-синтаксис в них не работает.
  */
-export const EXECUTION_BASE_CAPABILITIES = ['git', 'rg', 'sh'] as const;
+export const EXECUTION_BASE_CAPABILITIES = ['git', 'rg', 'sh', 'bash'] as const;
 
 /** Имя бинарной возможности из канонического словаря. */
 export type ExecutionBaseCapability = (typeof EXECUTION_BASE_CAPABILITIES)[number];
@@ -325,8 +331,18 @@ export type ExecFailureReason =
    */
   | 'dependency_missing';
 
-/** Базовая оболочка shell-формы (совпадает с текущим `sh -c`). */
-export const DEFAULT_SHELL_BINARY = 'sh';
+/**
+ * Базовая оболочка shell-формы, если вызывающий не указал `shell` явно.
+ *
+ * Встроенные шелл-вызовы ядра задают оболочку **явно** — `bash` (fail-closed
+ * без неё, ADR-078): `sh` в образах — это dash (Debian) или busybox ash
+ * (alpine), где bash-синтаксис (`[[ ]]`, массивы, `pipefail`, `${var,,}`) не
+ * работает. Дефолт порта — тоже `bash` (решение пользователя «всегда bash»):
+ * вызов без явной оболочки не должен молча попадать в `sh` и падать на
+ * bash-синтаксисе. Нет `bash` в окружении — вызывающий (тул) сообщает о
+ * недоступности программы, подмены на `sh` нет.
+ */
+export const DEFAULT_SHELL_BINARY = 'bash';
 
 /** Лимит буфера вывода по умолчанию (10 МБ — как нынешний `maxBuffer`). */
 export const DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;

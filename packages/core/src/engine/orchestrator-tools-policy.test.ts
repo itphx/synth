@@ -247,7 +247,7 @@ describe('ChatOrchestrator — tools.policy (ADR-071 §2.3)', () => {
       settings: {
         provider: opts.provider ?? 'cloud',
         model: 'm',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         mcpServers: opts.mcpServers ?? [],
         toolsPolicy: opts.toolsPolicy,
         mcpPolicy: opts.mcpPolicy,
@@ -513,7 +513,7 @@ describe('ChatOrchestrator — tools.policy (ADR-071 §2.3)', () => {
    * до перезапуска процесса — ход перечитывает снимок.
    */
   it('снимок доступности перечитывается ходом: ложный negative старта не залипает', async () => {
-    const port = new DepsPort({ git: true, rg: true, sh: false });
+    const port = new DepsPort({ git: true, rg: true, bash: false });
     orchestrator = makeOrchestrator({ executionPort: port });
     orchestrator.setToolsPolicy('available');
     // Детерминированный сдвиг TTL кэша детекта: подменяем только Date.
@@ -525,8 +525,8 @@ describe('ChatOrchestrator — tools.policy (ADR-071 §2.3)', () => {
       await runTurn(session.id);
       expect(toolNames()).not.toContain('execute_shell');
 
-      // Исполнитель поднялся: проба теперь видит `sh`, TTL детекта истёк.
-      port.available.sh = true;
+      // Исполнитель поднялся: проба теперь видит `bash`, TTL детекта истёк.
+      port.available.bash = true;
       vi.setSystemTime(new Date(startedAt.getTime() + 61_000));
       await runTurn(session.id);
 

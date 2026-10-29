@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import type { MiddlewareHandler } from 'hono';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { createGitRoutes } from './git.js';
 import type { GitRoutesOptions } from './git.js';
 import { ProjectStore } from '../../storage/project-store.js';
+import { ExecutionError, type ExecRequest, type ExecResult, type ExecutionPort } from '../../execution/ports/index.js';
 
 const passAuth: MiddlewareHandler = async (_c, next) => { await next(); };
 
@@ -18,6 +19,57 @@ async function exists(path: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Порт, «истекающий по таймауту» на заданной git-подкоманде (мок, без сети). */
+class TimingOutPort implements ExecutionPort {
+  readonly calls: ExecRequest[] = [];
+  readonly isRemote = false;
+
+  constructor(private readonly failOn: 'clone' | 'fetch') {}
+
+  async execute(req: ExecRequest): Promise<ExecResult> {
+    this.calls.push(req);
+    const args = req.command.kind === 'argv' ? req.command.args ?? [] : [];
+    if (args.includes(this.failOn)) {
+      throw new ExecutionError({
+        message: `Command failed: git ${this.failOn}`,
+        reason: 'timeout',
+        killed: true,
+      });
+    }
+    // Прочие git-вызовы (rev-parse) — успешны: путь «репозиторий есть».
+    return { stdout: 'true\n', stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+  }
+}
+
+/** Рабочий репозиторий с одним коммитом (для состояния «занято репозиторием»). */
+async function createRepoWithCommit(dir: string): Promise<void> {
+  const execFileAsync = promisify(execFile);
+  const git = (args: string[]) => execFileAsync('git', args, { cwd: dir });
+  await mkdir(dir, { recursive: true });
+  await git(['init', '--initial-branch=main']);
+  await git(['config', 'user.email', 'test@example.com']);
+  await git(['config', 'user.name', 'Test']);
+  await writeFile(join(dir, 'README.md'), 'hello\n');
+  await git(['add', '.']);
+  await git(['commit', '-m', 'initial']);
+}
+
+/**
+ * Реально ли окружение запрещает чтение каталога после `chmod 000`.
+ *
+ * Под root (часто в CI-контейнере) `chmod 000` чтение не запрещает — тогда
+ * кейс «нечитаемый каталог» пропускается, а не проверяется ложно.
+ */
+async function unreadableAfterChmod(dir: string): Promise<boolean> {
+  await chmod(dir, 0o000);
+  try {
+    await readdir(dir);
+    return false;
+  } catch {
+    return true;
   }
 }
 
@@ -205,6 +257,137 @@ describe('Git API Routes (ADR-076 §T3)', () => {
     expect(res.status).toBe(400);
     const body = await res.json() as { error: { code: string } };
     expect(body.error.code).toBe('git.repo_path_invalid');
+  });
+
+  it('clone: таймаут сетевой операции → 504 git.clone_timeout', async () => {
+    const port = new TimingOutPort('clone');
+    const app = makeApp({ execution: port, cloneTimeoutMs: 1500 });
+
+    const res = await post(app, '/repos/clone', {
+      projectId,
+      url: 'https://example.invalid/org/slow.git',
+      path: 'slow',
+    });
+
+    expect(res.status).toBe(504);
+    const body = await res.json() as { error: { code: string; error: string } };
+    expect(body.error.code).toBe('git.clone_timeout');
+    expect(body.error.error).toContain('1500');
+    expect(port.calls.at(-1)?.timeoutMs).toBe(1500);
+    // Атомарность: после таймаута на диске ничего не осталось.
+    expect(await exists(join(workspacesRoot, 'proj', 'slow'))).toBe(false);
+    expect((await projectStore.load(projectId))?.repos ?? []).toHaveLength(0);
+  });
+
+  it('fetch: таймаут сетевой операции → 504 git.fetch_timeout', async () => {
+    await post(makeApp(), '/repos/register', {
+      projectId,
+      path: 'app',
+      url: 'https://example.invalid/org/app.git',
+    });
+
+    const port = new TimingOutPort('fetch');
+    const app = makeApp({ execution: port, fetchTimeoutMs: 2500 });
+    const res = await post(app, '/repos/fetch', { projectId, path: 'app' });
+
+    expect(res.status).toBe(504);
+    const body = await res.json() as { error: { code: string; error: string } };
+    expect(body.error.code).toBe('git.fetch_timeout');
+    expect(body.error.error).toContain('2500');
+    expect(port.calls.at(-1)?.timeoutMs).toBe(2500);
+  });
+
+  it('занятый путь: полноценный репозиторий → 409 + details.occupied = repo', async () => {
+    await createRepoWithCommit(join(workspacesRoot, 'proj', 'taken'));
+    const app = makeApp();
+
+    const res = await post(app, '/repos/clone', {
+      projectId,
+      url: 'https://example.invalid/org/taken.git',
+      path: 'taken',
+    });
+
+    expect(res.status).toBe(409);
+    const body = await res.json() as {
+      error: { code: string; error: string; details?: { path: string; occupied: string; entries?: number } };
+    };
+    expect(body.error.code).toBe('git.repo_exists');
+    expect(body.error.details).toEqual({ path: 'taken', occupied: 'repo' });
+    // Текст actionable: зарегистрировать существующий, повторный клон не нужен.
+    expect(body.error.error).toMatch(/уже склонирован/);
+    expect(body.error.error).toMatch(/repos\/register/);
+  });
+
+  it('занятый путь: след прерванного клона → 409 + details.occupied = stub', async () => {
+    await mkdir(join(workspacesRoot, 'proj', 'half', '.git'), { recursive: true });
+    const app = makeApp();
+
+    const res = await post(app, '/repos/clone', {
+      projectId,
+      url: 'https://example.invalid/org/half.git',
+      path: 'half',
+    });
+
+    expect(res.status).toBe(409);
+    const body = await res.json() as {
+      error: { code: string; error: string; details?: { path: string; occupied: string; entries?: number } };
+    };
+    expect(body.error.code).toBe('git.repo_exists');
+    expect(body.error.details).toEqual({ path: 'half', occupied: 'stub' });
+    expect(body.error.error).toMatch(/незавершённый клон/);
+    expect(body.error.error).toMatch(/Удалите каталог/);
+  });
+
+  it('занятый путь: непустой каталог без git → 409 + details.occupied = dir с entries', async () => {
+    const dir = join(workspacesRoot, 'proj', 'busy');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'a.txt'), 'x');
+    await writeFile(join(dir, 'b.txt'), 'y');
+    const app = makeApp();
+
+    const res = await post(app, '/repos/clone', {
+      projectId,
+      url: 'https://example.invalid/org/busy.git',
+      path: 'busy',
+    });
+
+    expect(res.status).toBe(409);
+    const body = await res.json() as {
+      error: { code: string; error: string; details?: { path: string; occupied: string; entries?: number } };
+    };
+    expect(body.error.code).toBe('git.repo_exists');
+    expect(body.error.details).toEqual({ path: 'busy', occupied: 'dir', entries: 2 });
+    expect(body.error.error).toMatch(/непустой и не является git-репозиторием/);
+    expect(body.error.error).toMatch(/Укажите другой путь/);
+  });
+
+  it('нечитаемый целевой каталог → git.repo_path_unreadable', async (ctx) => {
+    const dir = join(workspacesRoot, 'proj', 'locked');
+    await mkdir(dir, { recursive: true });
+    let enforced = false;
+    try {
+      enforced = await unreadableAfterChmod(dir);
+      if (!enforced) {
+        // root (CI-контейнер) игнорирует права — кейс проверить нечем.
+        ctx.skip();
+        return;
+      }
+
+      const app = makeApp();
+      const res = await post(app, '/repos/clone', {
+        projectId,
+        url: 'https://example.invalid/org/locked.git',
+        path: 'locked',
+      });
+
+      const body = await res.json() as { error: { code: string; error: string } };
+      // Отдельная типизированная ошибка, а не невнятное падение внутри git.
+      expect(body.error.code).toBe('git.repo_path_unreadable');
+      expect(body.error.error).toMatch(/недоступен для чтения/);
+      expect(res.status).toBe(409);
+    } finally {
+      await chmod(dir, 0o700).catch(() => undefined);
+    }
   });
 });
 

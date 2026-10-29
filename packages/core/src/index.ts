@@ -203,7 +203,7 @@ export {
   ContextLengthExceededError,
   RateLimitError,
 } from './providers/index.js';
-export type { LLMMessage, CancellationToken, ProviderConfig } from './providers/index.js';
+export type { LLMMessage, CancellationToken, ChatOptions, ProviderConfig } from './providers/index.js';
 export { syncProvidersFromEnv } from './providers/sync-from-env.js';
 
 export {

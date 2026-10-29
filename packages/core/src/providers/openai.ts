@@ -14,6 +14,7 @@ import {
   type LLMMessage,
   type SystemPromptInput,
   type CancellationToken,
+  type ChatOptions,
 } from './base.js';
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
@@ -44,6 +45,7 @@ export class OpenAIProvider extends BaseProvider {
     tools?: Record<string, unknown>[],
     stream?: boolean,
     debugCollector?: DebugCollector,
+    options?: ChatOptions,
   ): Promise<LLMResponse> {
     info('OPENAI', `чат: model=${this.model}, сообщений=${messages.length}`);
 
@@ -56,7 +58,12 @@ export class OpenAIProvider extends BaseProvider {
     if (this.reasoningLevel && this.reasoningLevel !== 'default') body.reasoning_effort = this.reasoningLevel;
     if (this.topP !== undefined) body.top_p = this.topP;
     if (this.topK !== undefined) body.top_k = this.topK;
-    if (tools?.length) body.tools = tools;
+    if (tools?.length) {
+      body.tools = tools;
+      // `tool_choice` — только вместе с инструментами (без них часть API
+      // отвечает ошибкой); поле задаётся вызывающим слоем (финальный шаг).
+      if (options?.toolChoice) body.tool_choice = options.toolChoice;
+    }
     if (stream) body.stream = true;
     if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
     this._applyPromptCacheKey(body, systemPrompt);
@@ -99,6 +106,7 @@ export class OpenAIProvider extends BaseProvider {
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
+    options?: ChatOptions,
   ): AsyncGenerator<LLMChunk> {
     info('OPENAI', `чатAsync: model=${this.model}, сообщений=${messages.length}`);
 
@@ -115,7 +123,12 @@ export class OpenAIProvider extends BaseProvider {
     if (this.reasoningLevel && this.reasoningLevel !== 'default') body.reasoning_effort = this.reasoningLevel;
     if (this.topP !== undefined) body.top_p = this.topP;
     if (this.topK !== undefined) body.top_k = this.topK;
-    if (tools?.length) body.tools = tools;
+    if (tools?.length) {
+      body.tools = tools;
+      // `tool_choice` — только вместе с инструментами (без них часть API
+      // отвечает ошибкой); поле задаётся вызывающим слоем (финальный шаг).
+      if (options?.toolChoice) body.tool_choice = options.toolChoice;
+    }
     if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
     this._applyPromptCacheKey(body, systemPrompt);
 

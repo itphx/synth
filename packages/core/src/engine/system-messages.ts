@@ -25,7 +25,7 @@ export const SYSTEM_MESSAGES = {
   'session.stopped': 'Processing stopped: {reason}',
   'session.stopped_reason_denied': 'the user denied the request',
   'session.denied_blocked': 'Could not proceed: the action was blocked by the security policy',
-  'session.role_tool_blocked': 'Could not proceed: tool "{tool}" is unavailable to agent "{agent}" — delegate the task via @ (e.g. @developer or @general) or explain it to the user.',
+  'session.role_tool_blocked': 'Could not proceed: tool "{tool}" is unavailable to agent "{agent}" — delegate the task via @ (e.g. @fixer or @general) or explain it to the user.',
   'session.empty_response': 'Could not complete the request: the model response was empty',
   'session.dialog_title': 'Dialog — {id}',
   'session.default_title': 'New session',
@@ -46,6 +46,8 @@ export const SYSTEM_MESSAGES = {
   'task.deps_unavailable': 'Error: provider or agent registry unavailable for subagent launch',
   'task.model_unavailable':
     'Error: the model "{provider}/{model}" requested for the subagent is unavailable — the provider is not configured or the model is unknown',
+  'task.model_not_in_catalog':
+    'Error: the model "{provider}/{model}" requested for the subagent is not in the instance model catalog (or is disabled). Available: {available}. Use the list_models tool to pick a provider/model pair.',
   'task.subagent_exec_error_after_retries': 'Subagent execution error "{type}" after {attempts} attempt(s): {error}',
 
   // --- Возобновление дочерней сессии саб-агента (resume) ---
@@ -67,6 +69,12 @@ export const SYSTEM_MESSAGES = {
     '[steps_limit] The subagent was stopped by the step limit ({limit}).',
   'task.steps_limit_empty':
     'The subagent exhausted the step limit ({limit}) and gave no textual answer; continue from its history or raise the limit',
+  // Предохранитель по объёму промпта саб-агента (`agents.subagentMaxInputTokens`):
+  // отчёт формируется детерминированно (без LLM), маркер `[context_budget]`.
+  'task.context_budget':
+    '[context_budget] Context budget reached ({tokens} tokens). Steps completed: {steps}. Unfinished: {tasks}',
+  'subagent.context_budget':
+    'Subagent stopped by the context budget ({tokens} tokens, steps: {steps})',
   'task.background_started':
     'The subagent is running in the background (sessionID: {id}). You will be notified automatically; do not poll its status.',
   'task.background_limit':
@@ -370,8 +378,40 @@ export const SYSTEM_MESSAGES = {
   'sshkey.decrypt_failed': 'Failed to decrypt SSH key {id}',
   'sshkey.env_failed': 'Failed to prepare SSH environment (temporary key or askpass)',
   'git.ssh_key_required': 'SSH key is required for repository "{path}"',
+  // ADR-076: подсказка вместо тупика — какие ключи доступны и что с ними делать.
+  // Прежний `git.ssh_key_required` остаётся для путей без стора ключей (HTTP-роуты,
+  // стор не сконфигурирован) — поведение не ломается.
+  'git.ssh_key_required_hint':
+    'Error: SSH key is required for repository "{path}" but none is set or the configured key was not found. '
+    + 'Available SSH keys: {keys}. '
+    + 'Pass the id of a suitable key as `sshKeyId` (the `ssh_keys_list` tool shows the same list); '
+    + 'if no key fits or the list is empty, the user must add a key in Settings → SSH keys.',
+  'git.ssh_keys_none': 'none configured',
+  // Тул метаданных ключей (ssh_keys_list) — ADR-076.
+  'sshkeys.tool.header': 'SSH keys ({count}):',
+  'sshkeys.tool.empty':
+    'No SSH keys are configured. Add one in Settings → SSH keys (or POST /api/v2/ssh-keys).',
+  'sshkeys.tool.deps_unavailable':
+    'The SSH key store is unavailable in this build — SSH keys cannot be listed',
   'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
   'git.repo_exists': 'Repository already exists at "{path}"',
+  'git.repo_occupied_repo':
+    'Error: "{path}" already contains a git repository. Register the existing one instead of cloning again '
+    + '(HTTP `POST /api/v2/git/repos/register`, tool `project_repo_add`).',
+  'git.repo_occupied_stub':
+    'Error: "{path}" contains an incomplete clone (a `.git` directory without commits) left by an interrupted operation. '
+    + 'Delete the directory and retry the clone.',
+  'git.repo_occupied_dir':
+    'Error: "{path}" is a non-empty directory ({entries} entries) without a git repository. '
+    + 'Choose another path or clean the directory, then retry.',
+  'git.repo_path_unreadable':
+    'Error: "{path}" exists but cannot be read (permissions?). Fix access to the directory or choose another path.',
+  'git.clone_timeout':
+    'Error: git clone did not finish within {timeout} ms and was interrupted; no files were left behind. '
+    + 'Retry, or raise `git.cloneTimeoutMs` for a slow network.',
+  'git.fetch_timeout':
+    'Error: git fetch did not finish within {timeout} ms and was interrupted. '
+    + 'Retry, or raise `git.fetchTimeoutMs` for a slow network.',
 
   // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
   'worktree.directory_missing':
@@ -414,6 +454,10 @@ export const SYSTEM_MESSAGES = {
   'steer.limit_exceeded':
     'Steering limit reached: at most {limit} injected messages per turn',
   'steer.interrupted': 'Generation interrupted — the turn continues with the new message',
+  'steer.dropped_aborted':
+    'Turn stopped — {count} pending intervention(s) discarded (send them again as a new message)',
+  'steer.dropped_turn_ended':
+    'Turn already finished — {count} pending intervention(s) discarded (send them again as a new message)',
 
   // --- Профиль пользователя и онбординг ---
   'profile.deps_unavailable': 'Error: session manager or profiles store unavailable for {tool}',

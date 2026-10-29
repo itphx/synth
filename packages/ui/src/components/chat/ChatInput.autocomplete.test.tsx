@@ -192,23 +192,39 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
 })
 
 describe('ChatInput — режим отправки при активном ходе (ADR-104)', () => {
-  it('при активном ходе есть тумблер «вмешаться», по умолчанию выключен', async () => {
+  it('при активном ходе есть переключатель режима, по умолчанию выбрано «В очередь»', async () => {
     const container = await renderInput({ isStreaming: true })
 
-    const toggle = container.querySelector('[data-testid="steer-toggle"]') as HTMLButtonElement
-    expect(toggle).not.toBeNull()
-    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    const switchRoot = container.querySelector('[data-testid="steer-mode"]')
+    expect(switchRoot).not.toBeNull()
+    const queue = container.querySelector('[data-testid="steer-mode-queue"]') as HTMLButtonElement
+    const steer = container.querySelector('[data-testid="steer-mode-steer"]') as HTMLButtonElement
+    expect(queue.getAttribute('aria-pressed')).toBe('true')
+    expect(steer.getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('клик по тумблеру — сообщение уходит как «вмешаться» (steer)', async () => {
+  it('клик по переключателю режима НЕ отправляет сообщение', async () => {
+    const container = await renderInput({ isStreaming: true })
+
+    const steer = container.querySelector('[data-testid="steer-mode-steer"]') as HTMLButtonElement
+    await act(async () => {
+      steer.click()
+    })
+
+    // Переключатель — не кнопка отправки: сообщение уходит только по отдельной
+    // кнопке/Enter, иначе пользователь жмёт «самолётик» и не понимает, почему не ушло.
+    expect(mocks.onSend).not.toHaveBeenCalled()
+    expect(steer.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('выбранный «В ход» уходит в запрос как steer', async () => {
     const container = await renderInput({ isStreaming: true })
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
-    const toggle = container.querySelector('[data-testid="steer-toggle"]') as HTMLButtonElement
+    const steer = container.querySelector('[data-testid="steer-mode-steer"]') as HTMLButtonElement
 
     await act(async () => {
-      toggle.click()
+      steer.click()
     })
-    expect(toggle.getAttribute('aria-pressed')).toBe('true')
     await act(async () => {
       setTextareaValue(textarea, 'остановись на шаге 2')
     })
@@ -219,18 +235,20 @@ describe('ChatInput — режим отправки при активном хо
     expect(mocks.onSend).toHaveBeenCalledWith('остановись на шаге 2', undefined, 'steer', undefined)
   })
 
-  it('повторный клик по тумблеру возвращает отправку в очередь (queue)', async () => {
+  it('возврат на «В очередь» — отправка уходит как queue', async () => {
     const container = await renderInput({ isStreaming: true })
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
-    const toggle = container.querySelector('[data-testid="steer-toggle"]') as HTMLButtonElement
+    const queue = container.querySelector('[data-testid="steer-mode-queue"]') as HTMLButtonElement
+    const steer = container.querySelector('[data-testid="steer-mode-steer"]') as HTMLButtonElement
 
     await act(async () => {
-      toggle.click()
+      steer.click()
     })
     await act(async () => {
-      toggle.click()
+      queue.click()
     })
-    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    expect(queue.getAttribute('aria-pressed')).toBe('true')
+    expect(steer.getAttribute('aria-pressed')).toBe('false')
     await act(async () => {
       setTextareaValue(textarea, 'дождись конца хода')
     })
@@ -241,13 +259,14 @@ describe('ChatInput — режим отправки при активном хо
     expect(mocks.onSend).toHaveBeenCalledWith('дождись конца хода', undefined, 'queue', undefined)
   })
 
-  it('после успешной отправки «вмешательством» тумблер снова выключен', async () => {
+  it('после успешной отправки «в ход» режим снова «В очередь»', async () => {
     const container = await renderInput({ isStreaming: true })
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
-    const toggle = container.querySelector('[data-testid="steer-toggle"]') as HTMLButtonElement
+    const queue = container.querySelector('[data-testid="steer-mode-queue"]') as HTMLButtonElement
+    const steer = container.querySelector('[data-testid="steer-mode-steer"]') as HTMLButtonElement
 
     await act(async () => {
-      toggle.click()
+      steer.click()
     })
     await act(async () => {
       setTextareaValue(textarea, 'врежься в ход')
@@ -258,14 +277,15 @@ describe('ChatInput — режим отправки при активном хо
 
     expect(mocks.onSend).toHaveBeenCalledWith('врежься в ход', undefined, 'steer', undefined)
     // Следующее сообщение не должно уйти «вмешательством» случайно.
-    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    expect(queue.getAttribute('aria-pressed')).toBe('true')
+    expect(steer.getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('без активного хода тумблера нет и режим в запрос не уходит', async () => {
+  it('без активного хода переключателя нет и режим в запрос не уходит', async () => {
     const container = await renderInput()
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
 
-    expect(container.querySelector('[data-testid="steer-toggle"]')).toBeNull()
+    expect(container.querySelector('[data-testid="steer-mode"]')).toBeNull()
 
     await act(async () => {
       setTextareaValue(textarea, 'обычное сообщение')
@@ -279,7 +299,7 @@ describe('ChatInput — режим отправки при активном хо
     expect(mocks.onSend).toHaveBeenCalledWith('обычное сообщение', undefined, undefined, undefined)
   })
 
-  it('в режиме «в очередь» по умолчанию mode уходит как queue (в тело запроса не попадает)', async () => {
+  it('в режиме «В очередь» по умолчанию mode уходит как queue (в тело запроса не попадает)', async () => {
     const container = await renderInput({ isStreaming: true })
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
 

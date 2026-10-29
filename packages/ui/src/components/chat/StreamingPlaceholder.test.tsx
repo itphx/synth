@@ -266,3 +266,81 @@ describe('StreamingPlaceholder — «В фон» (ADR-111 §detach)', () => {
     expect(button!.title).toContain('ctrl+b')
   })
 })
+
+/**
+ * T14: регресс на deferred-рендер markdown.
+ *
+ * Плашка рендерит markdown по `useDeferredValue(stream.content)`, чтобы разбор
+ * большого ответа не блокировал ввод/скролл. Риск — «потеря» последнего чанка:
+ * после `isStreaming=false` финальный контент обязан отрисоваться сразу,
+ * фактическим значением, а не отстающим deferred.
+ */
+describe('StreamingPlaceholder — deferred markdown (T14)', () => {
+  let setStream: ((updater: (prev: StreamState) => StreamState) => void) | null = null
+
+  function StreamHarness({ initial }: { initial: StreamState }) {
+    const [stream, setState] = React.useState<StreamState>(initial)
+    setStream = setState
+    return (
+      <I18nProvider>
+        <StreamingPlaceholder stream={stream} sessionId="ses-1" onStop={() => {}} />
+      </I18nProvider>
+    )
+  }
+
+  async function renderInteractive(initial: StreamState): Promise<HTMLElement> {
+    useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push({ root, container })
+    await act(async () => {
+      root.render(<StreamHarness initial={initial} />)
+    })
+    return container
+  }
+
+  afterEach(() => {
+    setStream = null
+  })
+
+  it('показывает накопленный текст во время стрима', async () => {
+    const container = await renderInteractive(makeStream({ content: 'Начало ответа' }))
+    expect(container.textContent).toContain('Начало ответа')
+  })
+
+  it('финальный контент отображается полностью сразу после isStreaming=false', async () => {
+    const container = await renderInteractive(makeStream({ content: 'Начало' }))
+
+    await act(async () => {
+      setStream!(() => makeStream({
+        content: 'Начало. Финальная часть ответа целиком.',
+        isStreaming: false,
+      }))
+    })
+
+    // Последний чанк не «застревает» в deferred-значении и не теряется.
+    expect(container.textContent).toContain('Начало. Финальная часть ответа целиком.')
+  })
+
+  it('последний чанк доходит и без завершения стрима', async () => {
+    const container = await renderInteractive(makeStream({ content: 'Первая ' }))
+
+    await act(async () => {
+      setStream!((prev) => ({ ...prev, content: `${prev.content}вторая` }))
+    })
+
+    expect(container.textContent).toContain('Первая вторая')
+  })
+
+  it('кнопка «Стоп» есть во время стрима и исчезает после завершения (семантика индикаторов)', async () => {
+    const container = await renderInteractive(makeStream({ content: 'Текст' }))
+    expect(container.querySelector('button[title="Stop"]')).not.toBeNull()
+
+    await act(async () => {
+      setStream!((prev) => ({ ...prev, isStreaming: false }))
+    })
+    expect(container.querySelector('button[title="Stop"]')).toBeNull()
+  })
+})
+

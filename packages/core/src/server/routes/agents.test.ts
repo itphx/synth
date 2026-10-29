@@ -46,18 +46,18 @@ describe('Agent API Routes — default_agent', () => {
   });
 
   it('GET /agents отдаёт значение геттера', async () => {
-    const app = createTestApp(() => 'analyst');
+    const app = createTestApp(() => 'researcher');
     const res = await app.request('/api/v2/agents');
     const body: any = await res.json();
-    expect(body.default_agent).toBe('analyst');
+    expect(body.default_agent).toBe('researcher');
   });
 
   it('GET /agents/all отдаёт значение геттера', async () => {
-    const app = createTestApp(async () => 'developer');
+    const app = createTestApp(async () => 'fixer');
     const res = await app.request('/api/v2/agents/all');
     expect(res.status).toBe(200);
     const body: any = await res.json();
-    expect(body.default_agent).toBe('developer');
+    expect(body.default_agent).toBe('fixer');
   });
 });
 

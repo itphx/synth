@@ -88,6 +88,10 @@ const TOOL_ACTIONS: Readonly<Record<string, string>> = {
   git_branch_list: 'read',
   git_show: 'read',
   git_blame: 'read',
+  // ADR-076: метаданные SSH-ключей — чтение. Цель не задаём: ключи не привязаны
+  // к рабочему каталогу и не являются ресурсом проекта, поэтому действует общий
+  // фоллбек `authorityTargetKindForTool` → `session`.
+  ssh_keys_list: 'read',
   web_fetch: 'read',
   web_search: 'read',
   // Запись.

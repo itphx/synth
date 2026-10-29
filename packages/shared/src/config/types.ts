@@ -598,6 +598,27 @@ export const analyticsConfigSchema = z.object({
   retentionDays: z.number().int().default(400),
 });
 
+// --- Git-операции (ADR-076) ---
+
+/**
+ * ADR-076: таймауты сетевых git-операций (`clone`/`fetch`).
+ *
+ * Сеть git может идти минутами (большой репозиторий, медленный/недоступный
+ * remote), поэтому «зависший» вызов без таймаута держал бы ход агента и запрос
+ * HTTP неограниченно долго. Таймаут **не** отменяет уже сделанную работу
+ * атомарно сам по себе — атомарность (временный каталог + `rename`) и уборку
+ * остатков обеспечивает `GitService`.
+ *
+ * - `cloneTimeoutMs` — предел `git clone`, мс (по умолчанию 300 000 = 5 минут);
+ * - `fetchTimeoutMs` — предел `git fetch`, мс (по умолчанию 300 000).
+ *
+ * `0` — без таймаута (оператор осознанно разрешает бесконечное ожидание).
+ */
+export const gitConfigSchema = z.object({
+  cloneTimeoutMs: z.number().int().min(0).default(300_000),
+  fetchTimeoutMs: z.number().int().min(0).default(300_000),
+});
+
 // --- Вопросы пользователю (этап 1 roadmap 0.13 — блок 3) ---
 
 /**
@@ -626,8 +647,9 @@ export const questionsConfigSchema = z.object({
  *   саб-агентов на одну родительскую сессию;
  * - `maxProcessesPerSession` — максимум **одновременно идущих** фоновых
  *   шелл-процессов на одну сессию-владельца (PROP-097);
- * - `maxRunsPerSession` — максимум записей реестра на одну сессию-владельца
- *   (защита от роста реестра; записи чистит retention);
+ * - `maxRunsPerSession` — максимум **одновременно идущих** прогонов любого
+ *   вида на одну сессию-владельца (защита от параллельного шторма); история
+ *   реестра лимитом не считается — терминальные записи чистит retention;
  * - `logMaxBytes` — предел размера лога фонового процесса, байт; `0` — без
  *   ограничения. По превышении запись в лог прекращается, а в записи реестра
  *   ставится `metadata.truncated`;
@@ -641,6 +663,26 @@ export const backgroundConfigSchema = z.object({
   maxRunsPerSession: z.number().int().min(0).default(10),
   logMaxBytes: z.number().int().min(0).default(10_485_760),
   retentionDays: z.number().int().default(7),
+});
+
+// --- Агенты: предохранители прогонов ---
+
+/**
+ * Дефолт предохранителя по объёму промпта саб-агента
+ * (`agents.subagentMaxInputTokens`): 150k входных токенов.
+ */
+export const DEFAULT_SUBAGENT_MAX_INPUT_TOKENS = 150_000;
+
+/**
+ * Секция `agents` — ограничения прогонов агентов.
+ *
+ * - `subagentMaxInputTokens` — предохранитель по объёму промпта саб-агента
+ *   (**не** окно модели): оценка промпта проверяется перед каждым LLM-вызовом,
+ *   и при превышении прогон завершается детерминированным отчётом (работа
+ *   частично сделана), а не уходит в ошибку провайдера. `0` — без ограничения.
+ */
+export const agentsConfigSchema = z.object({
+  subagentMaxInputTokens: z.number().int().min(0).default(DEFAULT_SUBAGENT_MAX_INPUT_TOKENS),
 });
 
 // --- Authority-слой (ADR-106) ---
@@ -1363,8 +1405,10 @@ export const synthConfigSchema = z.object({
   decision: decisionConfigSchema.prefault({}),
   oauth: oauthConfigSchema.prefault({}),
   analytics: analyticsConfigSchema.prefault({}),
+  git: gitConfigSchema.prefault({}),
   questions: questionsConfigSchema.prefault({}),
   background: backgroundConfigSchema.prefault({}),
+  agents: agentsConfigSchema.prefault({}),
   attachments: attachmentsConfigSchema.prefault({}),
   metrics: metricsConfigSchema.prefault({}),
   authority: authorityConfigSchema.prefault({}),
@@ -1416,10 +1460,14 @@ export type OAuthProviderConfig = z.infer<typeof oauthProviderConfigSchema>;
 /** ADR-105 (Ф3): секция `oauth` (каталог провайдеров). */
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
 export type AnalyticsConfig = z.infer<typeof analyticsConfigSchema>;
+/** ADR-076: секция `git` (таймауты сетевых git-операций: clone/fetch). */
+export type GitConfig = z.infer<typeof gitConfigSchema>;
 /** Этап 1 roadmap 0.13 (блок 3): секция `questions` (таймаут ответа + retention). */
 export type QuestionsConfig = z.infer<typeof questionsConfigSchema>;
 /** Этап 1 roadmap 0.13 (блок 4): секция `background` (реестр фоновых прогонов). */
 export type BackgroundConfig = z.infer<typeof backgroundConfigSchema>;
+/** Секция `agents` — предохранители прогонов агентов. */
+export type AgentsConfig = z.infer<typeof agentsConfigSchema>;
 /** ADR-115: секция `attachments` (лимиты и политика вложений сообщений). */
 export type AttachmentModalitiesConfig = z.infer<typeof attachmentModalitiesSchema>;
 export type AttachmentsConfig = z.infer<typeof attachmentsConfigSchema>;

@@ -117,7 +117,7 @@ describe('ChatOrchestrator — usage/стоимость (ADR-070 §2.3)', () => 
 
     const session = await sessionManager.createSession({
       title: 'Usage',
-      settings: { provider: 'usageprovider', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'usageprovider', model: 'm', agentRole: 'fixer' },
     });
     const msg = makeUserMessage();
     await sessionManager.addMessage(session.id, msg);

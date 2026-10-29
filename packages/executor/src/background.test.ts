@@ -153,6 +153,54 @@ describe('фоновые процессы: остановка и таймаут'
     expect(record.status).toBe('killed');
     expect(record.signal).toBe('SIGTERM');
   });
+
+  // Регрессия «Стоп не прерывает тул»: `cat` держит пайп, поэтому `close`
+  // придёт только после убийства всей группы.
+  it('stop — гасит конвейер (sleep 30 | cat) быстро', async () => {
+    const svc = makeService();
+    const outcome = await svc.spawn({
+      command: { kind: 'shell', command: 'sleep 30 | cat', shell: 'bash' },
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const startedAt = Date.now();
+    expect(svc.stop(outcome.processId)).toBe(true);
+    const record = await waitTerminal(svc, outcome.processId);
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(record.status).toBe('killed');
+    expect(record.signal).toBe('SIGTERM');
+  });
+
+  // Регрессия: терминальный статус ставится по `exit`, а не по `close`.
+  // Оболочка вышла, а потомок продолжает жить и держит унаследованный пайп —
+  // `close` не придёт вовсе, и запись висела бы в `running`.
+  it('оболочка вышла, потомок держит пайп — статус по exit, а не по close', async () => {
+    const svc = makeService();
+    const outcome = await svc.spawn({
+      command: { kind: 'shell', command: 'sleep 30 & printf started', shell: 'bash' },
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    try {
+      const startedAt = Date.now();
+      const record = await waitTerminal(svc, outcome.processId);
+      expect(Date.now() - startedAt).toBeLessThan(3_000);
+      expect(record.status).toBe('exited');
+      expect(record.exitCode).toBe(0);
+      const logs = await svc.logs(outcome.processId);
+      expect(logs?.stdout.content).toContain('started');
+    } finally {
+      // Потомок пережил оболочку (это и есть сценарий) — добиваем группу,
+      // чтобы после теста не оставалось процессов.
+      if (outcome.pid !== undefined) {
+        try {
+          process.kill(-outcome.pid, 'SIGKILL');
+        } catch {
+          // Группы уже нет — не ошибка.
+        }
+      }
+    }
+  });
 });
 
 describe('фоновые процессы: лимиты', () => {

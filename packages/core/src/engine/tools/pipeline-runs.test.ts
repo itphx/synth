@@ -47,7 +47,7 @@ function makeSpec(pipelineId: string): PipelineSpec {
     version: 1,
     status: 'published',
     mode: 'act',
-    nodes: [{ id: 'n1', kind: 'agent', agent: 'developer' }],
+    nodes: [{ id: 'n1', kind: 'agent', agent: 'fixer' }],
     exits: [{ kind: 'none' }],
   };
 }

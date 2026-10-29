@@ -688,6 +688,20 @@ export const dict = {
   'git.fetchSuccess': 'Репозиторий обновлён (fetch)',
   'git.removeTitle': 'Удалить репозиторий?',
   'git.removeConfirm': 'Удалить «{path}» из реестра проекта?',
+  // Индикация и отмена длительных сетевых операций (клон/fetch идут минутами).
+  'git.cloning': 'Клонирование…',
+  'git.initializing': 'Инициализация…',
+  'git.fetching': 'Обновление…',
+  'git.removing': 'Удаление…',
+  'git.cloneCancel': 'Отмена',
+  'git.cloneCancelled': 'Клонирование отменено',
+  'git.cloneNetworkHint': 'Сетевая операция может занять несколько минут',
+  // 409 «путь занят» (details.occupied): три состояния — три действия.
+  'git.occupied.register': 'Зарегистрировать существующий',
+  'git.occupied.deleteAndRetry': 'Удалить и повторить',
+  'git.occupied.choosePath': 'Указать другой путь',
+  'git.occupied.stubMoved': 'След незавершённого клона сохранён в «{path}»',
+  'git.registerOccupiedSuccess': 'Существующий репозиторий зарегистрирован',
 
   'commit.hash': 'Коммит',
   'commit.author': 'Автор',
@@ -1195,12 +1209,14 @@ export const dict = {
   'chat.steer.interruptMarker': 'Прерывание хода',
   'chat.steer.mode.label': 'Режим отправки',
   'chat.steer.mode.queue': 'В очередь',
-  'chat.steer.mode.steer': 'Вмешаться',
+  'chat.steer.mode.steer': 'В ход',
   'chat.steer.mode.interrupt': 'Прервать',
   'chat.steer.mode.title': 'Как отправить сообщение во время работы агента',
   'chat.steer.mode.queueHint': 'Сообщение будет обработано после окончания текущего хода',
   'chat.steer.mode.steerHint': 'Сообщение будет вброшено в текущий ход на ближайшей границе шага',
   'chat.steer.mode.interruptHint': 'Текущая генерация будет прервана, ход продолжится с вашим сообщением',
+  'chat.steer.mode.sendSteer': 'Отправить в текущий ход',
+  'chat.steer.mode.sendInterrupt': 'Прервать генерацию и отправить',
 
   'chat.actions.copy': 'Копировать',
   'chat.actions.toggleOff': 'Выключить',
@@ -1248,6 +1264,9 @@ export const dict = {
   'notify.background.moveFailed': 'Не удалось перевести в фон',
   // ADR-112: уведомление о вопросе пользователю (сессия не открыта).
   'notify.question.asked': 'Агент ждёт ответа: {name}',
+  'notify.steer.dropped.limit': 'Лимит вмешательств на ход: не применено сообщений — {count}',
+  'notify.steer.dropped.aborted': 'Ход остановлен — не применено вмешательств: {count}',
+  'notify.steer.dropped.turn_ended': 'Ход закончился — не применено вмешательств: {count}',
   'chat.notice.copy': 'Копировать',
 
   'chat.message.copied': 'Скопировано',
@@ -2646,7 +2665,7 @@ export const dict = {
   'session.stopped_reason_denied': 'пользователь отклонил запрос',
   'session.denied_blocked': 'Не удалось продолжить: действие заблокировано политикой безопасности',
   'session.role_tool_blocked':
-    'Не удалось продолжить: инструмент «{tool}» недоступен агенту «{agent}» — делегируйте задачу через @ (например, @developer или @general) или объясните пользователю.',
+    'Не удалось продолжить: инструмент «{tool}» недоступен агенту «{agent}» — делегируйте задачу через @ (например, @fixer или @general) или объясните пользователю.',
   'session.empty_response': 'Не удалось выполнить запрос: ответ модели пуст',
   'session.dialog_title': 'Диалог — {id}',
   'session.default_title': 'Новая сессия',
@@ -2667,6 +2686,8 @@ export const dict = {
   'task.deps_unavailable': 'Ошибка: провайдер или реестр агентов недоступны для запуска сабагента',
   'task.model_unavailable':
     'Ошибка: модель «{provider}/{model}», запрошенная для сабагента, недоступна — провайдер не настроен или модель неизвестна',
+  'task.model_not_in_catalog':
+    'Ошибка: модели «{provider}/{model}» нет в каталоге моделей инстанса (или она отключена). Доступные пары: {available}. Выбери пару provider/model через инструмент list_models.',
   'task.subagent_exec_error_after_retries': 'Ошибка выполнения сабагента «{type}» после {attempts} попыток: {error}',
 
   // --- Возобновление дочерней сессии саб-агента (resume) ---
@@ -2686,6 +2707,10 @@ export const dict = {
     '[steps_limit] Сабагент остановлен по лимиту шагов ({limit}).',
   'task.steps_limit_empty':
     'Сабагент исчерпал лимит шагов ({limit}) и не дал текстового ответа; продолжай по его истории или увеличь лимит',
+  'task.context_budget':
+    '[context_budget] Достигнут бюджет контекста ({tokens} токенов). Выполнено шагов: {steps}. Незавершённые задачи: {tasks}',
+  'subagent.context_budget':
+    'Сабагент остановлен по бюджету контекста ({tokens} токенов, шагов: {steps})',
   'task.background_started':
     'Сабагент работает в фоне (sessionID: {id}). Уведомление придёт автоматически; не опрашивай статус.',
   'task.background_limit':
@@ -2978,8 +3003,37 @@ export const dict = {
   'sshkey.decrypt_failed': 'Не удалось расшифровать SSH-ключ {id}',
   'sshkey.env_failed': 'Не удалось подготовить SSH-окружение (временный ключ или askpass)',
   'git.ssh_key_required': 'Для репозитория «{path}» требуется SSH-ключ',
+  'git.ssh_key_required_hint':
+    'Ошибка: для репозитория «{path}» требуется SSH-ключ, но он не задан либо заданный ключ не найден. '
+    + 'Доступные SSH-ключи: {keys}. '
+    + 'Передайте id подходящего ключа в параметре `sshKeyId` (тот же список показывает тул `ssh_keys_list`); '
+    + 'если подходящего ключа нет или список пуст — пользователю нужно добавить ключ в «Настройки → SSH-ключи».',
+  'git.ssh_keys_none': 'нет ни одного',
+  'sshkeys.tool.header': 'SSH-ключи ({count}):',
+  'sshkeys.tool.empty':
+    'SSH-ключи не настроены. Добавьте ключ в «Настройки → SSH-ключи» (или POST /api/v2/ssh-keys).',
+  'sshkeys.tool.deps_unavailable':
+    'Хранилище SSH-ключей недоступно в этой сборке — список ключей получить нельзя',
   'git.repo_path_invalid': 'Недопустимый путь репозитория «{path}» (должен находиться внутри workspace проекта)',
   'git.repo_exists': 'Репозиторий уже существует по пути «{path}»',
+  'git.repo_occupied_repo':
+    'Ошибка: по пути «{path}» уже есть git-репозиторий. Зарегистрируйте существующий вместо повторного клонирования '
+    + '(HTTP `POST /api/v2/git/repos/register`, тул `project_repo_add`).',
+  'git.repo_occupied_stub':
+    'Ошибка: по пути «{path}» остался незавершённый клон (каталог `.git` без коммитов) от прерванной операции. '
+    + 'Удалите каталог и повторите клонирование.',
+  'git.repo_occupied_dir':
+    'Ошибка: путь «{path}» — непустой каталог ({entries} элементов) без git-репозитория. '
+    + 'Укажите другой путь или очистите каталог и повторите.',
+  'git.repo_path_unreadable':
+    'Ошибка: путь «{path}» существует, но недоступен для чтения (права?). '
+    + 'Исправьте доступ к каталогу или укажите другой путь.',
+  'git.clone_timeout':
+    'Ошибка: git clone не завершился за {timeout} мс и был прерван; файлы после прерывания не остаются. '
+    + 'Повторите попытку или увеличьте `git.cloneTimeoutMs` для медленной сети.',
+  'git.fetch_timeout':
+    'Ошибка: git fetch не завершился за {timeout} мс и был прерван. '
+    + 'Повторите попытку или увеличьте `git.fetchTimeoutMs` для медленной сети.',
 
   // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
   'worktree.directory_missing':
@@ -3022,6 +3076,10 @@ export const dict = {
     'Достигнут лимит вмешательств: не более {limit} сообщений на ход',
   'steer.interrupted':
     'Генерация прервана — ход продолжается с новым сообщением',
+  'steer.dropped_aborted':
+    'Ход остановлен — не применено вмешательств: {count}. Отправьте их снова отдельным сообщением',
+  'steer.dropped_turn_ended':
+    'Ход уже закончился — не применено вмешательств: {count}. Отправьте их снова отдельным сообщением',
 
   // --- Профиль пользователя и онбординг ---
   'profile.deps_unavailable': 'Ошибка: менеджер сессий или хранилище профилей недоступны для {tool}',

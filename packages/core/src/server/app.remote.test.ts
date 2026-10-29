@@ -503,7 +503,7 @@ describe('createStandaloneApp: WS /ws/events send_message с remote-рефом (
         type: 'send_message',
         session_id: 'remote:ses-1',
         content: 'привет удалённой сессии',
-        agent_role: 'developer',
+        agent_role: 'fixer',
         model: 'remote/m1',
       }));
 
@@ -521,7 +521,7 @@ describe('createStandaloneApp: WS /ws/events send_message с remote-рефом (
         ? (JSON.parse(rawBody) as Record<string, unknown>)
         : (JSON.parse(new TextDecoder().decode(rawBody as ArrayBuffer)) as Record<string, unknown>);
       expect(sentBody.content).toBe('привет удалённой сессии');
-      expect(sentBody.agent).toBe('developer');
+      expect(sentBody.agent).toBe('fixer');
       expect(sentBody.model).toBe('remote/m1');
 
       // UI сначала получил queued, ошибки «Session not found» нет.

@@ -144,7 +144,7 @@ describe('ChatOrchestrator × permissions (ADR-029) — smoke', () => {
         provider: 'mockperm',
         model: 'm',
         systemPrompt: 'test',
-        agentRole: 'developer',
+        agentRole: 'fixer',
       },
     });
     if (opts?.mode) {
@@ -459,7 +459,7 @@ describe('ChatOrchestrator × permissions — once:false и deny (ADR-029)', () 
     const session = await sessionManager.createSession({
       title: 'Smoke2',
       projectId,
-      settings: { provider: providerName, model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+      settings: { provider: providerName, model: 'm', systemPrompt: 'test', agentRole: 'fixer' },
     });
     opts?.onSession?.(session.id);
     const msg = makeMessage();

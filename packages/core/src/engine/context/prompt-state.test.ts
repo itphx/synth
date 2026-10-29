@@ -31,7 +31,7 @@ function composed(system = 'SYS', stablePrefix = 'STABLE') {
 
 describe('agentKeyOf', () => {
   it('возвращает agentRole, если задан', () => {
-    expect(agentKeyOf('developer')).toBe('developer');
+    expect(agentKeyOf('fixer')).toBe('fixer');
   });
 
   it('возвращает __default__ без агента', () => {

@@ -290,3 +290,56 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (ADR-
     expect(fresh.steerInbox).toHaveLength(MAX_STEER_INJECTIONS_PER_TURN);
   });
 });
+
+describe('POST /api/v2/sessions/:id/abort — снятие очереди инъекций (ADR-104)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-steer-abort-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('«Стоп» снимает неприменённые инъекции и публикует steer.dropped (reason aborted)', async () => {
+    const { app, sessionManager, eventBus } = createTestApp(tmpDir, { running: true });
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    await sessionManager.enqueueSteerMessage(session.id, makeSteerMessage('вмешательство 1'));
+    await sessionManager.enqueueSteerMessage(session.id, makeSteerMessage('вмешательство 2'));
+
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe(session.id, (event) => {
+      events.push({ type: event.type, data: event.data as Record<string, unknown> });
+    });
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/abort`, { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { status: string }).status).toBe('aborted');
+
+    // Очередь снята: в следующий ход сообщения не «переедут».
+    const fresh = (await sessionManager.getSession(session.id))!;
+    expect(fresh.steerInbox ?? []).toHaveLength(0);
+
+    const dropped = events.find((e) => e.type === 'steer.dropped');
+    expect(dropped).toBeDefined();
+    expect(dropped!.data.reason).toBe('aborted');
+    expect(dropped!.data.dropped_count).toBe(2);
+    expect(typeof dropped!.data.error).toBe('string');
+    expect((dropped!.data.i18n as { key: string }).key).toBe('steer.dropped_aborted');
+  });
+
+  it('пустая очередь — ответ 200 без события steer.dropped', async () => {
+    const { app, sessionManager, eventBus } = createTestApp(tmpDir, { running: true });
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+    const events: string[] = [];
+    eventBus.subscribe(session.id, (event) => {
+      events.push(event.type);
+    });
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/abort`, { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(events).not.toContain('steer.dropped');
+  });
+});

@@ -142,7 +142,7 @@ describe('ChatOrchestrator: reasoning_blocks без дублей (повтор �
         provider: 'mockrepeatreasoning',
         model: 'm',
         systemPrompt: 'test',
-        agentRole: 'developer',
+        agentRole: 'fixer',
       },
     });
     const msg = makeUserMessage();

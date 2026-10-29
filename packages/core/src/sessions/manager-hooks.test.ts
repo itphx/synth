@@ -30,7 +30,7 @@ describe('SessionManager — ADR-030 session hooks', () => {
     bus.on('session_end', (ctx) => { ended.push(ctx); }, { mode: 'async' });
 
     const manager = new SessionManager(new FileStore({ dataDir: tmpDir }), { hooks: bus });
-    const session = await manager.createSession({ projectId: 'p1', settings: { agentRole: 'developer' } });
+    const session = await manager.createSession({ projectId: 'p1', settings: { agentRole: 'fixer' } });
     await manager.deleteSession(session.id);
     // emitAsync — fire-and-forget: ждём наблюдаемого факта (оба хука выполнились).
     await vi.waitFor(() => {
@@ -40,7 +40,7 @@ describe('SessionManager — ADR-030 session hooks', () => {
 
     expect(started[0]!.sessionId).toBe(session.id);
     expect(started[0]!.projectId).toBe('p1');
-    expect(started[0]!.agent).toBe('developer');
+    expect(started[0]!.agent).toBe('fixer');
     expect(ended).toHaveLength(1);
     expect(ended[0]!.sessionId).toBe(session.id);
   });

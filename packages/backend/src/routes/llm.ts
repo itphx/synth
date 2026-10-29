@@ -26,6 +26,7 @@ import {
 } from '@itphx/synth-core';
 import type {
   CancellationToken,
+  ChatOptions,
   LLMMessage,
   MetricsRegistry,
   SecretPatternRepository,
@@ -67,6 +68,9 @@ const chatCompletionsSchema = z.object({
   // явно, чтобы Zod его не срезал (контракт запроса).
   stream_options: z.object({ include_usage: z.boolean().optional() }).optional(),
   tools: z.array(z.record(z.string(), z.unknown())).optional(),
+  // Управление вызовом инструментов на шаге: `none` — финальный шаг-отчёт по
+  // лимиту шагов (инструменты остаются в запросе ради кэшированного префикса).
+  tool_choice: z.enum(['auto', 'none', 'required']).optional(),
   session_id: z.string().optional(),
   // Имя серверного провайдера (шлют remote-зеркала RemoteProvider в гибриде).
   // Опционально — старые клиенты без поля работают как раньше (резолв по модели).
@@ -273,14 +277,17 @@ export function createLlmRoutes(kit: AuthKit, deps: LlmRoutesDeps): Hono {
 
     const messages = toLlmMessages(body.messages);
     const tools = body.tools && body.tools.length > 0 ? body.tools : undefined;
+    // `tool_choice` уходит провайдеру только когда задан в теле (иначе поведение
+    // прежнее — решение за моделью).
+    const chatOptions = body.tool_choice ? { toolChoice: body.tool_choice } : undefined;
 
     if (body.stream) {
-      return streamCompletions(c, provider, messages, tools, body.model, transientMap);
+      return streamCompletions(c, provider, messages, tools, body.model, transientMap, chatOptions);
     }
 
     // 4. Non-stream: полный ответ в OpenAI-формате.
     try {
-      const response = await provider.chat(messages, undefined, tools, false);
+      const response = await provider.chat(messages, undefined, tools, false, undefined, chatOptions);
       const map = transientMap.get('proxy') ?? {};
       const content = deobfuscateSecrets(response.content, map);
       // Симметрично OpenAIProvider._parseResponse: tool_calls → message.tool_calls,
@@ -320,6 +327,7 @@ function streamCompletions(
   tools: Record<string, unknown>[] | undefined,
   model: string,
   transientMap: Map<string, Record<string, string>>,
+  chatOptions?: ChatOptions,
 ): Response {
   const signal = c.req.raw.signal;
   const cancellationToken: CancellationToken = {
@@ -352,7 +360,7 @@ function streamCompletions(
         let sentReasoningLen = 0;
 
         try {
-          for await (const chunk of provider.chatAsync(messages, undefined, tools, undefined, cancellationToken)) {
+          for await (const chunk of provider.chatAsync(messages, undefined, tools, undefined, cancellationToken, chatOptions)) {
             if (chunk.usage) finalUsage = chunk.usage;
             if (chunk.toolCalls && chunk.toolCalls.length > 0) accumulatedToolCalls = chunk.toolCalls;
 

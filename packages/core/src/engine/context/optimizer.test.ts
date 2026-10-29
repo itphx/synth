@@ -30,7 +30,7 @@ function makeSession(): Session {
     id: 's1',
     parent_id: null,
     project_id: null,
-    agent: 'developer',
+    agent: 'fixer',
     title: 'test',
     mode: 'act',
     settings: {

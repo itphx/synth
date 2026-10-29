@@ -22,7 +22,11 @@ const READ_TOOLS = [
   'send_attachment',
 ];
 const WRITE_TOOLS = ['write_file', 'edit_file', 'create_directory', 'delete_file', 'save_attachment'];
-const GIT_READ_TOOLS = ['git_status', 'git_diff', 'git_log', 'git_branch_list', 'git_show', 'git_blame', 'git_worktree_list'];
+// ADR-076: `ssh_keys_list` — метаданные SSH-ключей инстанса. Группа `git_read`
+// (capability `git_read`, как у остальных читающих git-тулов), поэтому в
+// plan-режиме тул разрешён; к рабочему каталогу проекта он не привязан
+// (`isWorkspaceDependentTool` в `availability.ts`).
+const GIT_READ_TOOLS = ['git_status', 'git_diff', 'git_log', 'git_branch_list', 'git_show', 'git_blame', 'git_worktree_list', 'ssh_keys_list'];
 const GIT_WRITE_TOOLS = [
   'git_commit',
   'git_push',

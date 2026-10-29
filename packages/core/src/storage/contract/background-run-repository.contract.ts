@@ -115,7 +115,7 @@ export function describeBackgroundRunRepository(
           kind: 'process',
           childSessionId: undefined,
           projectId: 'proj-8',
-          agentRole: 'qa',
+          agentRole: 'tester',
           description: 'прогон тестов',
           processId: 'proc_99999999-8888-7777-6666-555555555555',
         }),
@@ -123,7 +123,7 @@ export function describeBackgroundRunRepository(
       const rewritten = await repo.get('bgr-proc');
       expect(rewritten?.processId).toBe('proc_99999999-8888-7777-6666-555555555555');
       expect(rewritten?.projectId).toBe('proj-8');
-      expect(rewritten?.agentRole).toBe('qa');
+      expect(rewritten?.agentRole).toBe('tester');
       expect(rewritten?.description).toBe('прогон тестов');
     });
 

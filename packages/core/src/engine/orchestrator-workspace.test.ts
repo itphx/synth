@@ -178,7 +178,7 @@ describe('ChatOrchestrator — workspace-гейт и мид-ходовая ра�
     const session = await sessionManager.createSession({
       title: 'NoProject',
       userId: 'u1',
-      settings: { provider: 'wsscript', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'wsscript', model: 'm', agentRole: 'fixer' },
     });
 
     const chunks = await runTurn(session.id);
@@ -206,7 +206,7 @@ describe('ChatOrchestrator — workspace-гейт и мид-ходовая ра�
     const session = await sessionManager.createSession({
       title: 'CreateThenWrite',
       userId: 'u1',
-      settings: { provider: 'wsscript', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'wsscript', model: 'm', agentRole: 'fixer' },
     });
 
     const chunks = await runTurn(session.id);
@@ -247,7 +247,7 @@ describe('ChatOrchestrator — workspace-гейт и мид-ходовая ра�
       title: 'SetWorkspace',
       userId: 'u1',
       projectId: project.id,
-      settings: { provider: 'wsscript', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'wsscript', model: 'm', agentRole: 'fixer' },
     });
 
     const chunks = await runTurn(session.id);

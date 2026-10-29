@@ -477,7 +477,7 @@ export class PermissionEvaluator {
     // 4. Рабочий каталог проекта (ADR-075): без `project.workspace` file/shell/git-
     // тулы недоступны — deny с подсказкой создать/привязать проект и задать
     // рабочий каталог. Тул виден модели (набор дефинишенов постоянен).
-    if (workspaceReady === false && isWorkspaceDependentTool(capabilities)) {
+    if (workspaceReady === false && isWorkspaceDependentTool(capabilities, toolName)) {
       return {
         action: 'deny',
         reason: sm('permission.workspace_unavailable'),

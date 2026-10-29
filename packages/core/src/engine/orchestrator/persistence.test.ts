@@ -168,7 +168,7 @@ describe('saveAssistantMessage / persistToolChain', () => {
     const session = await newSession();
 
     const returned = await saveAssistantMessage(
-      deps(), session.id, 'ответ', 'stream1', 'developer', USAGE, 'm', undefined,
+      deps(), session.id, 'ответ', 'stream1', 'fixer', USAGE, 'm', undefined,
       debugCollector, false, 'prov',
     );
 
@@ -178,7 +178,7 @@ describe('saveAssistantMessage / persistToolChain', () => {
     expect(saved).toMatchObject({
       role: MessageRole.ASSISTANT,
       content: 'ответ',
-      agentRole: 'developer',
+      agentRole: 'fixer',
       provider: 'prov',
       model: 'm',
       metadata: { stream_id: 'stream1', status: 'completed' },
@@ -211,7 +211,7 @@ describe('saveAssistantMessage / persistToolChain', () => {
 
     await saveAssistantMessage(
       deps({ blobRefs: { add: addRef } as never }),
-      session.id, 'держи файл', 'stream1', 'developer', USAGE, 'm', undefined,
+      session.id, 'держи файл', 'stream1', 'fixer', USAGE, 'm', undefined,
       debugCollector, false, 'prov',
       MessageRole.ASSISTANT, undefined, false,
       undefined, undefined, undefined, undefined, undefined, undefined, undefined,
@@ -291,7 +291,7 @@ describe('saveAssistantMessage / persistToolChain', () => {
     const modelPriceLoader = vi.fn(() => ({ inputPrice: 1, outputPrice: 2 }));
 
     await saveAssistantMessage(
-      deps({ modelPriceLoader }), session.id, 'частичный', 'stream1', 'developer', USAGE, 'm', 'думал',
+      deps({ modelPriceLoader }), session.id, 'частичный', 'stream1', 'fixer', USAGE, 'm', 'думал',
       debugCollector, true, 'prov', MessageRole.ASSISTANT, undefined, false,
       undefined, undefined, undefined, undefined, { duration_ms: 42 },
     );
@@ -352,16 +352,16 @@ describe('saveAssistantMessage / persistToolChain', () => {
     const session = await newSession();
 
     await saveAssistantMessage(
-      deps(), session.id, 'ответ', 'stream1', 'developer', USAGE, 'm', undefined,
+      deps(), session.id, 'ответ', 'stream1', 'fixer', USAGE, 'm', undefined,
       debugCollector, false, 'prov', MessageRole.ASSISTANT, undefined, false,
       undefined, [{ text: 'промежуточный', iteration: 0 }], undefined, undefined, undefined,
-      { agentRole: 'developer', generation: 2, expected: 'hit', cachedTokens: 0, validated: false },
+      { agentRole: 'fixer', generation: 2, expected: 'hit', cachedTokens: 0, validated: false },
     );
 
     const saved = (await sessionManager.getSession(session.id))!.messages[0]!;
     expect(saved.metadata!.intermediate_text_blocks).toEqual([{ text: 'промежуточный', iteration: 0 }]);
     expect(saved.promptMeta).toEqual({
-      agentRole: 'developer', generation: 2, expected: 'hit', cachedTokens: 40, validated: true,
+      agentRole: 'fixer', generation: 2, expected: 'hit', cachedTokens: 40, validated: true,
     });
   });
 
@@ -473,7 +473,7 @@ describe('saveAssistantMessage / persistToolChain', () => {
     const session = await newSession();
 
     await persistToolChain(
-      sessionManager, session.id, 'stream1', 'prov', 'developer', 'final-model',
+      sessionManager, session.id, 'stream1', 'prov', 'fixer', 'final-model',
       [
         { iteration: 0, calls: [{ id: 'call_a', type: 'function', function: { name: 'read_file', arguments: '{}' } }] },
         { iteration: 1, calls: [{ id: 'call_b', type: 'function', function: { name: 'write_file', arguments: '{}' } }] },
@@ -495,7 +495,7 @@ describe('saveAssistantMessage / persistToolChain', () => {
       content: 'думаю №1',
       provider: 'prov',
       model: 'final-model',
-      agentRole: 'developer',
+      agentRole: 'fixer',
       reasoning: 'reasoning №1',
       metadata: { stream_id: 'stream1', tool_chain: true },
     });
@@ -512,7 +512,7 @@ describe('saveAssistantMessage / persistToolChain', () => {
     expect(tool1!.toolCallId).toBe('call_b');
 
     // Инвариант: сохранённая история даёт валидный OpenAI-совместимый диалог
-    const llm = sessionMessagesToLlm(updated.messages, 'developer', updated.userId);
+    const llm = sessionMessagesToLlm(updated.messages, 'fixer', updated.userId);
     expect(llm.map((m) => m.role)).toEqual(['assistant', 'tool', 'assistant', 'tool']);
     expect(llm[0]!.toolUse).toHaveLength(1);
     expect(llm[1]!.toolCallId).toBe('call_a');
@@ -522,7 +522,7 @@ describe('saveAssistantMessage / persistToolChain', () => {
   it('persistToolChain: итерация без tool-результатов сохраняет только assistant', async () => {
     const session = await newSession();
     await persistToolChain(
-      sessionManager, session.id, 'stream1', 'prov', 'developer', 'm',
+      sessionManager, session.id, 'stream1', 'prov', 'fixer', 'm',
       [{ iteration: 0, calls: [{ id: 'call_a', function: { name: 'read_file' } }] }],
       [],
       [],

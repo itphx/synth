@@ -100,7 +100,7 @@ describe('ADR-077: точки исполнения ходят в порт с п�
     expect(result.isError).toBeFalsy();
     expect(port.requests).toHaveLength(1);
     const req = port.requests[0]!;
-    expect(req.command).toEqual({ kind: 'shell', command: 'echo ok', shell: 'sh' });
+    expect(req.command).toEqual({ kind: 'shell', command: 'echo ok', shell: 'bash' });
     expect(req.cwd).toBe(tmpDir);
     expect(req.timeoutMs).toBe(30_000);
     expect(req.maxOutputBytes).toBe(DEFAULT_MAX_OUTPUT_BYTES);
@@ -108,10 +108,10 @@ describe('ADR-077: точки исполнения ходят в порт с п�
     expect(req.signal).toBeUndefined();
   });
 
-  it('execute_shell: бинарное требование тула — sh (ADR-077)', async () => {
+  it('execute_shell: бинарное требование тула — bash (ADR-077)', async () => {
     const port = new RecordingPort({ result: { stdout: 'ok' } });
     await executeShellTool.execute({ command: 'echo ok' }, makeCtx(port));
-    expect(port.requests[0]!.requires).toEqual(['sh']);
+    expect(port.requests[0]!.requires).toEqual(['bash']);
   });
 
   it('execute_shell: явный таймаут уходит в порт; лимит 120 с не менялся', async () => {
@@ -172,7 +172,7 @@ describe('ADR-077: точки исполнения ходят в порт с п�
 
     expect(exec.isError).toBe(false);
     const req = port.requests[0]!;
-    expect(req.command).toEqual({ kind: 'shell', command: 'echo out', shell: 'sh' });
+    expect(req.command).toEqual({ kind: 'shell', command: 'echo out', shell: 'bash' });
     expect(req.cwd).toBe(tmpDir);
     expect(req.timeoutMs).toBe(30_000);
     expect(req.maxOutputBytes).toBe(DEFAULT_MAX_OUTPUT_BYTES);
@@ -204,14 +204,14 @@ describe('ADR-077: тексты ошибок тулов не изменилис�
     return { sessionId: 's1', messageId: 'm1', workingDir: tmpDir, extra: { executionPort: port } };
   }
 
-  it('execute_shell: ENOENT → tool.binary_missing (бинарь sh)', async () => {
+  it('execute_shell: ENOENT → tool.binary_missing (бинарь bash)', async () => {
     const port = new RecordingPort({
-      error: new ExecutionError({ message: 'spawn sh ENOENT', code: 'ENOENT', reason: 'spawn_failed' }),
+      error: new ExecutionError({ message: 'spawn bash ENOENT', code: 'ENOENT', reason: 'spawn_failed' }),
     });
     const result = await executeShellTool.execute({ command: 'echo ok' }, makeCtx(port));
 
     expect(result.isError).toBe(true);
-    expect(result.content).toBe(sm('tool.binary_missing', { tool: 'execute_shell', binary: 'sh' }));
+    expect(result.content).toBe(sm('tool.binary_missing', { tool: 'execute_shell', binary: 'bash' }));
     expect((result.metadata?.i18n as { key?: string })?.key).toBe('tool.binary_missing');
   });
 
@@ -336,6 +336,29 @@ describe('ADR-077: inline-реализация сохраняет окружен
 
     expect(result.isError).toBeFalsy();
     expect(result.content).toBe(sm('tool.empty_output'));
+  });
+
+  /**
+   * Функциональная проверка оболочки: `[[ ]]` — bash-синтаксис, в dash/busybox
+   * ash он даёт ошибку. Команда идёт реальным путём (InlineExecutionPort),
+   * то есть проверяется и передача `shell: 'bash'`, и сам bash в окружении.
+   */
+  it('execute_shell: оболочка — bash ([[ ]], pipefail, ${var,,})', async () => {
+    const result = await executeShellTool.execute(
+      {
+        command:
+          'set -euo pipefail\n'
+          + 'arr=(one two)\n'
+          + 'name=BASHUPPER\n'
+          + '[[ "${#arr[@]}" == 2 ]] || exit 11\n'
+          + '[[ "${name,,}" == "bashupper" ]] || exit 12\n'
+          + 'printf "%s" "${arr[1]}"',
+      },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toBe('two');
   });
 });
 

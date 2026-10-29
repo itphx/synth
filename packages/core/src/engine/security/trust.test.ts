@@ -98,6 +98,15 @@ describe('getToolTrust — матрица доверия', () => {
     expect(getToolTrust('list_repos', {}, WS)?.source).toBe('project');
   });
 
+  it('ssh_keys_list → trusted, источник project (ADR-076)', () => {
+    // Реестр ключей — структура инстанса, недоверенного содержимого в нём нет.
+    expect(getToolTrust('ssh_keys_list', {}, WS, [ToolCapability.GIT_READ])).toEqual({
+      trust: 'trusted',
+      source: 'project',
+      attrs: {},
+    });
+  });
+
   it('системные тулы → null', () => {
     for (const name of ['plan_enter', 'plan_exit', 'todo_write', 'classify_conversation']) {
       expect(getToolTrust(name, {}, WS)).toBeNull();

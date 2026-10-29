@@ -149,6 +149,40 @@ function questionNotifyName(questions: QuestionItem[] | undefined): string {
 }
 
 /**
+ * ADR-104: показать предупреждение о снятых инъекциях (`steer.dropped`).
+ *
+ * Причина в тексте: лимит на ход, остановка хода («Стоп») или закончившийся ход
+ * — иначе сообщение, не попавшее в ход, «исчезало» без объяснения. Повторные
+ * события подряд (одинаковая причина/количество/стрим в пределах окна)
+ * не дают второго тоста — иначе серия снятий спамила бы уведомлениями.
+ */
+const STEER_DROPPED_DEDUP_MS = 3000
+let lastSteerDropped: { key: string; at: number } | null = null
+
+function notifySteerDropped(sid: string, payload: Record<string, unknown>): void {
+  const rawReason = payload.reason
+  const reason: 'limit' | 'aborted' | 'turn_ended' =
+    rawReason === 'aborted' || rawReason === 'turn_ended' ? rawReason : 'limit'
+  const rawCount = Number(payload.dropped_count)
+  const count = Number.isFinite(rawCount) && rawCount > 0 ? rawCount : 1
+  const streamId = typeof payload.stream_id === 'string' ? payload.stream_id : ''
+
+  const key = `${sid}|${reason}|${count}|${streamId}`
+  const now = Date.now()
+  if (lastSteerDropped && lastSteerDropped.key === key && now - lastSteerDropped.at < STEER_DROPPED_DEDUP_MS) {
+    return
+  }
+  lastSteerDropped = { key, at: now }
+
+  notifyMessage({
+    text: i18nText(`notify.steer.dropped.${reason}`, { count }),
+    type: 'warning',
+    category: 'system',
+    sessionId: sid,
+  })
+}
+
+/**
  * Открыта ли сессия в **активной** центральной вкладке.
  *
  * Тост о вопросе нужен только для неактивной сессии: в открытой сессии док
@@ -385,6 +419,14 @@ export function createDispatcher(): EventDispatcher {
           created_at: new Date().toISOString(),
         }
         addMessage(sid, msg)
+        break
+      }
+
+      // ADR-104 (решение 2026-10-28): сообщение не применено — лимит на ход,
+      // остановка хода («Стоп») или ход уже закончился. Предупреждаем, иначе
+      // отправленное «в ход» сообщение просто исчезало бы из виду.
+      case 'steer.dropped': {
+        notifySteerDropped(sid, payload)
         break
       }
 
@@ -955,6 +997,20 @@ export function createDispatcher(): EventDispatcher {
             provider: payload.provider as string | undefined,
           })
         }
+        break
+      }
+
+      case 'subagent.context_budget': {
+        // Предохранитель бюджета контекста сработал: прогон завершён отчётом
+        // (работа частично сделана) — предупреждаем пользователя.
+        notifyMessage({
+          text: i18nText('subagent.context_budget', {
+            tokens: String(payload.tokens ?? '?'),
+            steps: String(payload.steps ?? 0),
+          }),
+          type: 'warning',
+          category: 'system',
+        })
         break
       }
 

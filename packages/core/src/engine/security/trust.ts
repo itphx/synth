@@ -52,6 +52,9 @@ const PROJECT_TOOLS = new Set([
   'project_workspace_set',
   'project_repo_add',
   'project_repo_remove',
+  // ADR-076: метаданные SSH-ключей инстанса — доверенные (реестр ключей, без
+  // секретов и без недоверенного содержимого), источник `project`.
+  'ssh_keys_list',
 ]);
 
 /** Файловые тулы: trust определяется положением пути относительно workingDir. */

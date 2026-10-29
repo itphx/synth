@@ -7,7 +7,15 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
-import { SessionManager, EventBus, FileStore, FileProfileStore, DEFAULT_AGENT_ID } from '../../index.js';
+import {
+  SessionManager,
+  EventBus,
+  FileStore,
+  FileProfileStore,
+  DEFAULT_AGENT_ID,
+  BackgroundRunService,
+  MemoryBackgroundRunRepository,
+} from '../../index.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import { WorktreeService } from '../../engine/worktree/service.js';
 import { MemoryWorktreeRepository } from '../../storage/memory/worktrees.js';
@@ -467,7 +475,7 @@ describe('Session API Routes (PATCH mode)', () => {
 
   describe('POST /api/v2/sessions — агент по умолчанию', () => {
     it('без settings.agentRole берёт значение из resolveDefaultAgent', async () => {
-      const { app, sessionManager } = createTestApp(tmpDir, undefined, { resolveDefaultAgent: () => 'analyst' });
+      const { app, sessionManager } = createTestApp(tmpDir, undefined, { resolveDefaultAgent: () => 'researcher' });
       const res = await app.request('/api/v2/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -476,20 +484,20 @@ describe('Session API Routes (PATCH mode)', () => {
       expect(res.status).toBe(201);
       const body: any = await res.json();
       const stored = await sessionManager.getSession(body.id);
-      expect(stored?.settings.agentRole).toBe('analyst');
+      expect(stored?.settings.agentRole).toBe('researcher');
     });
 
     it('явный settings.agentRole приоритетнее resolveDefaultAgent', async () => {
-      const { app, sessionManager } = createTestApp(tmpDir, undefined, { resolveDefaultAgent: () => 'analyst' });
+      const { app, sessionManager } = createTestApp(tmpDir, undefined, { resolveDefaultAgent: () => 'researcher' });
       const res = await app.request('/api/v2/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: 'S', settings: { agentRole: 'developer' } }),
+        body: JSON.stringify({ title: 'S', settings: { agentRole: 'fixer' } }),
       });
       expect(res.status).toBe(201);
       const body: any = await res.json();
       const stored = await sessionManager.getSession(body.id);
-      expect(stored?.settings.agentRole).toBe('developer');
+      expect(stored?.settings.agentRole).toBe('fixer');
     });
 
     it('без resolveDefaultAgent использует DEFAULT_AGENT_ID', async () => {
@@ -523,7 +531,7 @@ describe('Session API Routes (PATCH mode)', () => {
       await sessionManager.addMessage(session.id, {
         id: generateId(), role: MessageRole.ASSISTANT, seq: 0, origin: 'local',
         parts: [makeTextPart('ok')], content: 'ok', createdAt: nowISO(),
-        disabled: false, pinned: false, hidden: false, agentRole: 'developer',
+        disabled: false, pinned: false, hidden: false, agentRole: 'fixer',
         model: 'm', usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 },
         metadata: { duration_ms: 1000 },
       });
@@ -535,7 +543,7 @@ describe('Session API Routes (PATCH mode)', () => {
       expect(body.session_id).toBe(session.id);
       expect(Array.isArray(body.agents)).toBe(true);
       expect(Array.isArray(body.users)).toBe(true);
-      const dev = body.agents.find((a: any) => a.agent_role === 'developer');
+      const dev = body.agents.find((a: any) => a.agent_role === 'fixer');
       expect(dev).toBeTruthy();
       expect(dev.messages).toBe(1);
       expect(dev.input_tokens).toBe(100);
@@ -921,7 +929,7 @@ describe('POST /api/v2/sessions/:id/abort — персистентный фла�
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  function makeApp() {
+  function makeApp(backgroundService?: BackgroundRunService) {
     const app = new Hono();
     const fileStore = new FileStore({ dataDir: tmpDir });
     const sessionManager = new SessionManager(fileStore);
@@ -935,6 +943,7 @@ describe('POST /api/v2/sessions/:id/abort — персистентный фла�
         queueManager: queueManager as any,
         processMessage: orchestrator.createProcessMessage(),
         orchestrator: orchestrator as any,
+        ...(backgroundService ? { backgroundService } : {}),
       },
     );
     app.route('/api/v2/sessions', routes);
@@ -984,6 +993,54 @@ describe('POST /api/v2/sessions/:id/abort — персистентный фла�
     const s = await sessionManager.getSession(session.id);
     expect(s!.status.cancelRequested).toBeUndefined();
     expect(s!.status.cancelRequestedAt).toBeUndefined();
+  });
+
+  it('останавливает живые фоновые прогоны сессии, терминальный не трогает', async () => {
+    const background = new BackgroundRunService({
+      repository: new MemoryBackgroundRunRepository(),
+      eventBus: new EventBus(),
+      limits: { maxSubagentsPerSession: 0, maxProcessesPerSession: 0, maxRunsPerSession: 0 },
+    });
+    const { app, sessionManager } = makeApp(background);
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+    // Один running, один completed; хэндл отмены регистрируем у обоих —
+    // сервис обязан отбирать по статусу, а не по наличию хэндла.
+    const running = await background.startSubagent({ sessionId: session.id, childSessionId: 'child-1' });
+    const completed = await background.startSubagent({ sessionId: session.id, childSessionId: 'child-2' });
+    await background.finish(completed.id, { status: 'completed', summary: 'ok' });
+    const abortRunning = vi.fn();
+    const abortCompleted = vi.fn();
+    background.registerAbort(running.id, abortRunning);
+    background.registerAbort(completed.id, abortCompleted);
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/abort`, { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'aborted' });
+    expect(abortRunning).toHaveBeenCalledWith('parent_aborted');
+    expect(abortCompleted).not.toHaveBeenCalled();
+  });
+
+  it('сбой фонового сервиса не ломает ответ (best-effort)', async () => {
+    const background = new BackgroundRunService({
+      repository: new MemoryBackgroundRunRepository(),
+      eventBus: new EventBus(),
+      limits: { maxSubagentsPerSession: 0, maxProcessesPerSession: 0, maxRunsPerSession: 0 },
+    });
+    const stopBySession = vi
+      .spyOn(background, 'stopBySession')
+      .mockRejectedValue(new Error('реестр недоступен'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { app, sessionManager } = makeApp(background);
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/abort`, { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'aborted' });
+    expect(stopBySession).toHaveBeenCalledWith(session.id, 'parent_aborted');
+
+    stopBySession.mockRestore();
+    warn.mockRestore();
   });
 });
 

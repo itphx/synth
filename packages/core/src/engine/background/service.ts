@@ -10,9 +10,11 @@
  * 1. **Один переход состояния**: `running → completed | failed | cancelled |
  *    orphaned`. Повторный `finish` — no-op (идемпотентно): уведомление
  *    родителя не дублируется.
- * 2. **Лимит — свойство сессии**: одновременных фоновых детей на
- *    родительскую сессию (`maxSubagentsPerSession`) и записей реестра на
- *    сессию-владельца (`maxRunsPerSession`).
+ * 2. **Лимит — свойство сессии и считается по живым прогонам**: одновременные
+ *    фоновые дети на родительскую сессию (`maxSubagentsPerSession`),
+ *    одновременные процессы (`maxProcessesPerSession`) и все одновременно
+ *    идущие прогоны обоих видов на сессию-владельца (`maxRunsPerSession`).
+ *    Терминальные записи лимитом не считаются — их чистит retention.
  * 3. **Уведомление родителя** — сообщение в историю родителя (роль USER,
  *    видно модели) + автоход (постановка в очередь). Колбэк
  *    `onNotifyParent` задаёт **точка сборки** (composition root) — глобальных
@@ -48,6 +50,15 @@ export function processLogPath(runId: string): string {
   return `${PROCESS_LOG_DIR}/${runId}.log`;
 }
 
+/**
+ * Предел глубины обхода дочерних сессий в `stopBySession`.
+ *
+ * «Стоп» родителя останавливает и живые прогоны детей (решение 2026-10-28,
+ * ADR-111 §detach): глубина ограничена, чтобы патологическое дерево (цикл
+ * `parentId` в повреждённых данных) не превратилось в бесконечный обход.
+ */
+export const STOP_BY_SESSION_MAX_DEPTH = 5;
+
 export interface BackgroundRunServiceOptions {
   /** Порт реестра фоновых прогонов (ADR-096) — единственный источник истины. */
   repository: BackgroundRunRepository;
@@ -69,6 +80,13 @@ export interface BackgroundRunServiceOptions {
    * (`server/app/deps.ts`, `backend/app/deps.ts`) — здесь только вызов.
    */
   onNotifyParent?: (sessionId: string, message: Message) => void | Promise<void>;
+  /**
+   * Дочерние сессии по `parentId` — для `stopBySession` (решение 2026-10-28:
+   * «Стоп» останавливает и детей). Точка сборки задаёт обёртку над
+   * `SessionManager.getChildren`. Не задан — обход ограничивается прогонами
+   * самой сессии.
+   */
+  getChildSessionIds?: (sessionId: string) => Promise<string[]>;
 }
 
 /**
@@ -87,6 +105,8 @@ export class BackgroundRunService {
   private readonly _generateId: () => string;
   private readonly _now: () => string;
   private readonly _onNotifyParent?: (sessionId: string, message: Message) => void | Promise<void>;
+  /** Дочерние сессии по `parentId` (не задан — `stopBySession` без рекурсии). */
+  private readonly _getChildSessionIds?: (sessionId: string) => Promise<string[]>;
   /** Активные прогоны: `id` → хэндл отмены. */
   private readonly _aborts = new Map<string, { abort: (reason?: string) => void }>();
 
@@ -102,6 +122,7 @@ export class BackgroundRunService {
     this._generateId = options.generateId ?? defaultGenerateId;
     this._now = options.now ?? defaultNow;
     this._onNotifyParent = options.onNotifyParent;
+    this._getChildSessionIds = options.getChildSessionIds;
   }
 
   /**
@@ -229,6 +250,84 @@ export class BackgroundRunService {
     return true;
   }
 
+  /**
+   * Остановить **все живые** прогоны сессии и её дочерних сессий.
+   *
+   * «Стоп» сессии останавливает и фоновую работу её детей — фоновых
+   * саб-агентов и фоновые процессы (решение 2026-10-28, ADR-111 §detach;
+   * прежде отмена родителя переведённый прогон не трогала). Обход дерева —
+   * по `getChildSessionIds` (точка сборки: `SessionManager.getChildren`),
+   * глубина ≤ {@link STOP_BY_SESSION_MAX_DEPTH}.
+   *
+   * Трогаются **только `running`-прогоны**: терминальные записи и прогоны
+   * чужих сессий не затрагиваются (`list` фильтруется по `sessionId` +
+   * `status`, иначе в выборку попали бы и завершённые).
+   *
+   * Best-effort: ошибка стора на одной сессии не мешает остальным — она
+   * логируется, обход продолжается.
+   *
+   * @returns число прогонов, у которых сработал хэндл отмены (прогон,
+   *          переживший рестарт/уже завершившийся, не считается — его нечем
+   *          остановить в этом процессе).
+   */
+  async stopBySession(sessionId: string, reason = 'parent_aborted'): Promise<number> {
+    const sessionIds = await this._collectSessionTree(sessionId);
+    const stopped = new Set<string>();
+    for (const id of sessionIds) {
+      let running: BackgroundRunRecord[];
+      try {
+        running = await this._repository.list({ sessionId: id, status: 'running' });
+      } catch (err) {
+        this._logger.warn?.(
+          `[BackgroundRunService] список прогонов сессии ${id} не получен: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        continue;
+      }
+      for (const record of running) {
+        // Запись могла прийти дважды (одна сессия в дереве через разные ветки).
+        if (stopped.has(record.id)) continue;
+        if (await this.stop(record.id, reason)) stopped.add(record.id);
+      }
+    }
+    return stopped.size;
+  }
+
+  /**
+   * Сессия + её потомки (обход в ширину, глубина ≤ {@link STOP_BY_SESSION_MAX_DEPTH}).
+   *
+   * Без `getChildSessionIds` — только сама сессия. Ошибка резолвера детей на
+   * одной ветке не обрывает обход: ветка считается листом.
+   */
+  private async _collectSessionTree(rootId: string): Promise<string[]> {
+    const ids: string[] = [rootId];
+    const seen = new Set<string>([rootId]);
+    if (!this._getChildSessionIds) return ids;
+
+    let frontier: string[] = [rootId];
+    for (let depth = 0; depth < STOP_BY_SESSION_MAX_DEPTH && frontier.length > 0; depth += 1) {
+      const next: string[] = [];
+      for (const parentId of frontier) {
+        let children: string[];
+        try {
+          children = await this._getChildSessionIds(parentId);
+        } catch (err) {
+          this._logger.warn?.(
+            `[BackgroundRunService] дочерние сессии ${parentId} не получены: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          continue;
+        }
+        for (const childId of children) {
+          if (seen.has(childId)) continue;
+          seen.add(childId);
+          ids.push(childId);
+          next.push(childId);
+        }
+      }
+      frontier = next;
+    }
+    return ids;
+  }
+
   /** Запись прогона по id (прокси к порту). */
   async get(id: string): Promise<BackgroundRunRecord | null> {
     return this._repository.get(id);
@@ -281,9 +380,14 @@ export class BackgroundRunService {
   /**
    * Проверка лимитов сессии-владельца (бросок при превышении).
    *
-   * Лимит одновременных прогонов — **по виду** работы (`subagents`/`processes`):
-   * фоновые саб-агенты и шелл-процессы считаются раздельно (у них разные
-   * лимиты в конфигурации `background.*`).
+   * Все лимиты считаются по **живым** прогонам (`status: 'running'`):
+   * терминальные записи реестра лимит не занимают — их чистит retention
+   * (`prune`), и история завершённой работы не должна блокировать новые
+   * запуски. Лимит одновременных прогонов — **по виду** работы
+   * (`subagents`/`processes`): фоновые саб-агенты и шелл-процессы считаются
+   * раздельно (у них разные лимиты в конфигурации `background.*`);
+   * `maxRunsPerSession` — общий потолок одновременно идущих прогонов обоих
+   * видов на сессию-владельца.
    */
   private async _assertLimits(sessionId: string, kind: 'subagent' | 'process'): Promise<void> {
     if (kind === 'subagent') {
@@ -313,12 +417,14 @@ export class BackgroundRunService {
     }
     const maxRuns = this._limits.maxRunsPerSession;
     if (maxRuns > 0) {
-      const all = await this._repository.list({ sessionId });
-      if (all.length >= maxRuns) {
+      // Только идущие прогоны (обоих видов): терминальные записи — история
+      // реестра, её чистит retention и лимитом она не считается.
+      const running = await this._repository.list({ sessionId, status: 'running' });
+      if (running.length >= maxRuns) {
         throw new BackgroundLimitExceededError(
           'runs',
           maxRuns,
-          `Превышен лимит записей реестра фоновых прогонов для сессии ${sessionId} (${maxRuns})`,
+          `Превышен лимит одновременно идущих фоновых прогонов для сессии ${sessionId} (${maxRuns})`,
         );
       }
     }

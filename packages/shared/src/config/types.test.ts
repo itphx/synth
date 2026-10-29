@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('mcpServerConfigSchema (ADR-071 §2.2)', () => {
@@ -275,6 +275,29 @@ describe('pluginsHybridConfigSchema (ADR-090 Ф7)', () => {
 });
 
 /**
+ * ADR-076: секция `git` — таймауты сетевых git-операций (clone/fetch).
+ */
+describe('gitConfigSchema (ADR-076)', () => {
+  it('дефолт: таймауты clone/fetch — 5 минут', () => {
+    expect(gitConfigSchema.parse({})).toEqual({
+      cloneTimeoutMs: 300_000,
+      fetchTimeoutMs: 300_000,
+    });
+  });
+
+  it('0 — без таймаута (валидное значение)', () => {
+    expect(gitConfigSchema.parse({ cloneTimeoutMs: 0, fetchTimeoutMs: 0 })).toEqual({
+      cloneTimeoutMs: 0,
+      fetchTimeoutMs: 0,
+    });
+  });
+
+  it('отрицательный таймаут отклоняется', () => {
+    expect(gitConfigSchema.safeParse({ fetchTimeoutMs: -1 }).success).toBe(false);
+  });
+});
+
+/**
  * Этап 1 roadmap 0.13 (блок 3): секция `questions` — «вопрос пользователю».
  */
 describe('questionsConfigSchema (этап 1 roadmap 0.13 — блок 3)', () => {
@@ -296,7 +319,7 @@ describe('questionsConfigSchema (этап 1 roadmap 0.13 — блок 3)', () =>
  * шелл-процессы).
  */
 describe('backgroundConfigSchema (PROP-096/PROP-097)', () => {
-  it('дефолт: 2 саб-агента, 5 процессов, 10 записей реестра, лог 10 МиБ', () => {
+  it('дефолт: 2 саб-агента, 5 процессов, 10 идущих прогонов, лог 10 МиБ', () => {
     expect(backgroundConfigSchema.parse({})).toEqual({
       enabled: true,
       maxSubagentsPerSession: 2,
@@ -316,6 +339,24 @@ describe('backgroundConfigSchema (PROP-096/PROP-097)', () => {
   it('отрицательные лимиты отклоняются', () => {
     expect(backgroundConfigSchema.safeParse({ maxProcessesPerSession: -1 }).success).toBe(false);
     expect(backgroundConfigSchema.safeParse({ logMaxBytes: -1 }).success).toBe(false);
+  });
+});
+
+/**
+ * Секция `agents` — предохранитель по объёму промпта саб-агента.
+ */
+describe('agentsConfigSchema', () => {
+  it('дефолт: 150k входных токенов', () => {
+    expect(agentsConfigSchema.parse({})).toEqual({ subagentMaxInputTokens: 150_000 });
+  });
+
+  it('0 — ограничение выключено (валидное значение)', () => {
+    expect(agentsConfigSchema.parse({ subagentMaxInputTokens: 0 }).subagentMaxInputTokens).toBe(0);
+  });
+
+  it('дробное/отрицательное значение отклоняется', () => {
+    expect(agentsConfigSchema.safeParse({ subagentMaxInputTokens: -1 }).success).toBe(false);
+    expect(agentsConfigSchema.safeParse({ subagentMaxInputTokens: 1.5 }).success).toBe(false);
   });
 });
 

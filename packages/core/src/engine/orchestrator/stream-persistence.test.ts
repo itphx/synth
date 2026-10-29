@@ -14,7 +14,7 @@ function makeBase(): Omit<Message, 'id' | 'seq' | 'content' | 'parts' | 'created
     pinned: false,
     hidden: false,
     provider: 'prov',
-    agentRole: 'developer',
+    agentRole: 'fixer',
     model: 'm',
     usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     metadata: { stream_id: 'stream1' },

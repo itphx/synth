@@ -115,7 +115,7 @@
   (`maintenance/update.ts`) — они уезжают в исполнитель по фазам 2–3 плана ADR-077.
 - **Доступность программы — вопрос порта, а не control plane (ADR-077 шаг A).**
   `ExecRequest.requires?: string[]` — бинарные требования команды; канонический словарь
-  базовых возможностей — `EXECUTION_BASE_CAPABILITIES` (`git`/`rg`/`sh`) в
+  базовых возможностей — `EXECUTION_BASE_CAPABILITIES` (`git`/`rg`/`sh`/`bash`) в
   `execution/ports/execution-port.ts` (единственный источник истины для обеих сторон:
   исполнитель отдаёт тот же словарь в `GET /capabilities`). У порта — необязательные
   `probe?(bin, args?)` («доступен ли бинарь в моём окружении») и `capabilitySummary?(bin)`
@@ -282,7 +282,10 @@
   `ExecutionPort.probe?(bin, args?)`, `ExecutionPort.capabilitySummary?(bin)`,
   `ExecutionCapabilitySummary`, `EXECUTION_BASE_CAPABILITIES = ['git','rg','sh']`,
   причина отказа `dependency_missing`), `inline-execution-port.ts`
-  (`InlineExecutionPort` — исполнение в процессе поверх `execFile`; `probe()` — поверх общей пробы;
+  (`InlineExecutionPort` — исполнение в процессе через `spawn` с `detached: true` (лидер
+  собственной группы: «Стоп»/таймаут/лимит вывода гасят **группу** — `SIGTERM`, через 5 с
+  `SIGKILL`; завершение — по `exit` + дренаж потоков 250 мс, а не по `close`, иначе внук,
+  унаследовавший пайп, «подвешивал» вызов); `probe()` — поверх общей пробы;
   **ADR-113**: `spawnBackground?(req)` — фоновый запуск через `spawn` (не `execFile`):
   `processId` = `proc_<uuid>`, `pid`, поток `output` (`stdout`/`stderr` кусками), промис `exited`
   (`exitCode`/`signal`/`durationMs`), `stop(signal='SIGTERM')`; `timeoutMs > 0` — таймер
@@ -519,12 +522,35 @@
   подпути `/agents` — локальны). `server/serialize.ts` отдаёт в `status` сессии
   `cancel_requested`/`cancel_requested_at` (ADR-005); `server/routes/sessions.ts` —
   `POST /:id/abort` (надёжный «Стоп»: персистентный флаг + graceful `orchestrator.cancel`
-  + `QueueProcessorManager.requestStop`; без процессора флаг снимается).
+  + `QueueProcessorManager.requestStop`; без процессора флаг снимается; плюс
+  `BackgroundRunService.stopBySession` — останавливает и живые прогоны дочерних сессий,
+  фоновых саб-агентов и их процессы, дерево `parentId` до глубины 5, best-effort —
+  решение 2026-10-28).
 - `server/fs-workspace.ts` — резолв workspace проекта для FS-роутов
   (`resolveProjectWorkspace`, ADR-075) и детект бинарных файлов (`isTextFile`).
 - `engine/attachments/*` — ADR-115: вложения сообщений (сервис, MIME, приватность, GC,
   материализация, обработка aux-моделью). Устройство и правила — §«Вложения (ADR-115)» ниже.
 - `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use); опциональная зависимость `isCancelRequested` (персистентный флаг сессии) останавливает многоитерационный Tool Use (верх `while (toolIteration < maxIterations)`), когда живой cancelToken недоступен. ADR-095 (шаг 6a): самостоятельные методы вынесены в `engine/orchestrator/*` (`usage`, `fs-change`, `errors`, `persistence`, `routing`, `prompt-info`, `commands`, `debug`, `summarization`) — класс делегирует через тонкие обёртки/`*Deps()`-геттеры; (шаг 6b-1): из `_processMessage` вынесены фазы `engine/orchestrator/phases/*` — `process-early.ts` (системные сообщения, `/`-команды, micro-first), `process-setup.ts` (подготовка запроса: провайдер → MCP → state → Composer → тулы), `process-finalize.ts` (эпилог: отмена/фоллбеки/quality-check+escalation/персист/`stream.done`/авто-тайтл); в `_processMessage` остались пролог-скаляры, тело цикла Tool Use и его обработчики. Сборка промпта (ADR-070): `getPromptInfo(session)` → `PromptDiagnostics` (manifest + `history` + `promptState` активного агента + `lastPromptMeta` + `toolsDetail`), `_buildPromptHistoryInfo` зеркалит `_sessionMessagesToLlm`; state-сообщения (`syncStateMessages`) превращаются в синтетические user-сообщения `<system-state>`; `promptStates[agentKey]` читается/пишется по generation, `_cachePolicy` (`llm.cache`) уезжает в `SystemPromptPayload`; `_filterToolsByMode` удалён — список тулов постоянен.
+  **Финальный шаг по лимиту шагов (`AgentDefinition.maxSteps`) — механика opencode**
+  (`engine/llm/max-steps.ts`, общий модуль с циклом саб-агента): лимит не обрывает ход
+  отдельным вызовом «без инструментов», а добавляет ещё один обычный шаг того же цикла —
+  инструменты **остаются в запросе** (у провайдера сохраняется кэшированный префикс),
+  вызов запрещён `toolChoice: 'none'`, инструкция «отвечай только текстом» вставляется
+  **assistant-сообщением** (в историю не пишется). Провайдер вернул tool call несмотря на
+  запрет — вызовы не исполняются, ответ считается текстовым отчётом.
+  **Предохранитель бюджета контекста саб-агента (`agents.subagentMaxInputTokens`).**
+  В цикле саб-агента (`engine/tools/task/run-cycle.ts`) перед **каждым** LLM-вызовом
+  считается оценка промпта: `estimatePromptChars(messages, systemPrompt, tools)` →
+  `estimateTokens(chars, tokenRatio)` (`engine/context/token-ratio.ts`; ratio — дефолт 4,
+  калибровка не запрашивается). Оценка выше лимита (и лимит `> 0`) — провайдер **не
+  вызывается**: прогон завершается детерминированным отчётом без LLM
+  (`task.context_budget`: токены, выполненные шаги, незавершённые задачи из `session.todos`
+  либо из описания задачи — результаты инструментов не пересказываются), отчёт пишется
+  обычным assistant-сообщением дочерней сессии со статусом `completed`, в metadata —
+  `context_budget_exceeded`/`context_budget_tokens`/`steps`, родителю публикуется
+  `subagent.context_budget`. **Шаг-лимит имеет приоритет:** финальный шаг-отчёт opencode
+  (см. выше) превышением бюджета не считается. `0` — ограничение выключено; оценка
+  недоступна/пуста — не блокируем. Это предохранитель объёма промпта, а не окно модели.
   **Вложения из тулов (`_injectToolAttachments`, ADR-115).** Вызывается на границе
   итерации Tool Use — **после** того как все результаты итерации попали в `currentMessages`
   (`allToolCalls` с полем `iteration`) и **до** следующего LLM-вызова; порядок строго
@@ -599,7 +625,10 @@
 - `engine/permission/*` — permissions (`PERMISSION_GROUPS`; группа `plugin` — ADR-090 Ф3в: матчится
   **по источнику** `ToolSource` (`getToolGroups(toolName, capabilities, source?)`,
   `PermissionCheckInput.toolSource`), а не по capability, — плагин с `file_read`/`search` не
-  «выписывается» из правила `plugin`); `engine/security/*` — injection/shell/protected paths; `engine/security/secret-files.ts` — политика «файлы и каталоги секретов» (`isSecretFileName`/`isSecretDirectoryName`; список имён и каталогов + шаблоны `.env*`/`credentials*`/`secret(s)*`/`service-account*`/`id_*`/`*.pem|key|p12|pfx|jks|keystore|ppk|kdbx`/`*.tfstate*`; отдаётся плагину через `facade.security`, т.к. сканер расширений блокирует бандл за упоминание имён секретных файлов); слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
+  «выписывается» из правила `plugin`); `engine/security/*` — injection/shell/protected paths
+  (`shell-guard.ts`: `\` в POSIX-shell — экранирование/регэксп, а не разделитель пути, поэтому
+  regex-аргументы (`grep -v '\.sample$'`) путями не считаются, а Windows-пути распознаются явно —
+  `C:\…`, `\\server\share`); `engine/security/secret-files.ts` — политика «файлы и каталоги секретов» (`isSecretFileName`/`isSecretDirectoryName`; список имён и каталогов + шаблоны `.env*`/`credentials*`/`secret(s)*`/`service-account*`/`id_*`/`*.pem|key|p12|pfx|jks|keystore|ppk|kdbx`/`*.tfstate*`; отдаётся плагину через `facade.security`, т.к. сканер расширений блокирует бандл за упоминание имён секретных файлов); слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075; исключения — `WORKSPACE_FREE_TOOLS`: `ssh_keys_list`, ресурс инстанса, ADR-076); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
   `ContextConfig.getMaxStepsPrompt(language)` — требование «только текст» для
   финального шага-отчёта саб-агента по лимиту шагов (`prompts/system/MAX_STEPS.{lang}.md`;
@@ -744,7 +773,8 @@
   prompt-команда генерации/обновления `AGENTS.md` (`INIT_INSTRUCTION_PATH`). Тесты — `engine/commands/*.test.ts`.
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
   plan, todo, project, task, skill, profile_update, вложения `attach_workspace_file`/
-  `save_attachment`/`send_attachment`, каталог `list_models`). Реестр держит **три слоя** по
+  `save_attachment`/`send_attachment`, каталог `list_models`, метаданные SSH-ключей
+  `ssh_keys_list`). Реестр держит **три слоя** по
   `ToolDefinition.source` (`builtin` | `mcp` | `plugin`, ADR-071 §2.1 + ADR-090):
   `registerPlugin(tool, pluginName)` — единственный путь регистрации плагинного тула, **атомарная**
   валидация с отказом `invalid_name`/`invalid_definition`/`invalid_capability`/`name_conflict`;
@@ -765,6 +795,17 @@
   `task.ts` — фасад-реэкспорт. Тулы `task`/`task-resume` собирают промпт
   саб-агента (`resolveSubagentPrompt`) — проектные инструкции (ADR-069) добавляются,
   кроме `task(skip_context_files=true)`.
+  **Выбор модели саб-агента (`tool.ts`, `resolveSubagentProvider`).** Приоритет:
+  явные `params.provider`/`params.model` → `router.subagent.{provider,model}` →
+  `routing_strategy:'none'` (пара родителя) → `modelRouter.route()` (ADR-034).
+  Составной `model` без `provider` (`provider/model`, в т.ч. с `/` внутри имени —
+  `routerai/google/gemini-…`) разбирается: первый сегмент — провайдер, остаток —
+  модель. Если оркестратор передал `extra.listModels` (тот же загрузчик, что у
+  `list_models`), явная пара валидируется по каталогу (существует и не
+  `enabled:false`); иначе — отказ `task.model_not_in_catalog` с доступными парами
+  (до 10, `provider/model`) и отсылкой к `list_models`. Без каталога — прежняя
+  проверка через пул провайдеров роутера (`task.model_unavailable`, без тихого
+  отката на родителя).
   **Steering дочерней сессии (ADR-104 + ADR-111).** Цикл саб-агента применяет инъекции
   **на границе шага** (`run-cycle.ts`): перед каждым LLM-вызовом вычитывается `steerInbox`
   **сессии-ребёнка** (`sessionManager.takeSteerMessages`), сообщение персистится в истории
@@ -774,12 +815,24 @@
   ребёнка прогон **не** прерывает (на границе шага генерации нет) — применяется как обычная
   инъекция. Общая точка применения инъекций для основной сессии и ребёнка —
   `engine/steering/apply.ts` (`applySteerInjections`); оркестратор использует её же
-  (`ChatOrchestrator._applySteerInjections`). Очереди родителя и ребёнка изолированы. Тулы управления проектом:
+  (`ChatOrchestrator._applySteerInjections`). Очереди родителя и ребёнка изолированы.
+  Остаток очереди ребёнка в конце прогона снимается до финализации —
+  `dropSteerInjections(reason:'turn_ended')` с публикацией `steer.dropped` в канал
+  ребёнка (общая точка для обычного завершения, шаг-лимита и бюджета контекста). Тулы управления проектом:
   `project_update`/`project_workspace_set` (`project-manage.ts`) и
   `project_repo_clone|init|add|fetch|remove` (`project-repos.ts`) — проект берётся
   из сессии, смена workspace/регистрация репозиториев сохраняются `ProjectStore.save`
   и публикуют `project.updated`; `project_update` валидирует `icon`/`color` по
   `PROJECT_ICON_KEYS`/`PROJECT_COLOR_KEYS` (невалидно → ошибка с перечнем ключей).
+  **SSH-ключи (`ssh-keys.ts`, ADR-076).** `ssh_keys_list` — метаданные ключей
+  инстанса из `ctx.extra.sshKeyStore` (`list()`/`listForAgent()`; `reveal()` не
+  вызывается, секретов в ответе и метаданных нет), capability `git_read` (группа
+  `git_read`, plan разрешён), **к workspace не привязан** (исключение
+  `WORKSPACE_FREE_TOOLS` в `permission/availability.ts` — второй аргумент
+  `isWorkspaceDependentTool`). Отказ `project_repo_clone`/`_fetch` для SSH-URL без
+  ключа перечисляет доступные ключи (`buildSshKeyRequiredResult`,
+  `git.ssh_key_required_hint`, `id → name`, до 10) и отсылает к `ssh_keys_list`;
+  стор недоступен — прежний `git.ssh_key_required` без списка.
   Метаданные `icon`/`color` проекта и сессии — канонические ключи shared:
   валидация на записи (роуты `projects`/`sessions` → 400 `VALIDATION_ERROR`),
   сброс невалидных значений при чтении (`ProjectStore.load`, `FileStore.deserializeSession`,
@@ -789,7 +842,7 @@
   (`canEditProject`, ADR-075/D5). `engine/workspace-provision.ts` — общий
   provisioning workspace (нормализация/containment/создание каталога) для
   HTTP-роутов и тулов (ADR-075). `engine/tools/runtime-deps.ts` — детект внешних
-  бинарников (`git`/`rg`/`sh`; источник — **порт** (`probe()`), в inline — локальная
+  бинарников (`git`/`rg`/`sh`/`bash`; источник — **порт** (`probe()`), в inline — локальная
   проба; fail-open; кэш детекции — **по экземпляру порта**, `WeakMap`, TTL 60 с;
   снимок перечитывается ходом — `refreshRuntimeDeps`) и карта
   `TOOL_RUNTIME_DEP`; из неё же берутся бинарные требования тулов
@@ -797,6 +850,10 @@
   недоступности — в `RuntimeDeps.details` («в пуле: N из M» в remote-режиме) и далее
   в `ToolAvailability.detail` → `UnavailableTool.detail` → текст модели. Отсутствие
   программы даёт `unavailable(dependency)` (ADR-078), тулы из реестра не удаляются.
+  **Оболочка шелл-вызовов — `bash`** (`execute_shell`, detach-путь, фоновые процессы,
+  inline-shell передают `shell: 'bash'` явно): `/bin/sh` в образах это dash/busybox ash,
+  bash-синтаксис (`[[ ]]`, массивы, `pipefail`, `${var,,}`) там не работает; нет `bash` —
+  тул недоступен, подмены на `sh` нет. Поэтому `TOOL_RUNTIME_DEP.execute_shell = 'bash'`.
   `profile_update` (`profile-update.ts`) — онбординг владельца сессии: сохраняет
   `display_name`/`email`/`phone`/`notes` и завершает интервью (`ProfileData.interviewCompleted`);
   capability `user` (отключаемая группа `user` в `permission/groups.ts`; выдана только агенту
@@ -880,8 +937,8 @@
   (`offset`/`limit` в байтах, `truncated` — признак усечения лога при записи); у фонового
   саб-агента лога нет — тул отдаёт **summary** прогона и id дочерней сессии (её история —
   в `read_session_reference`). Capability `process` выдана агентам, которые ведут работу в
-  проекте (`assistant`/`developer`/`devops`/`admin`/`pm`/`qa`/`analyst`); у `explore`/
-  `general`/`auditor`/`title` её нет (тест — `engine/agents/capabilities.test.ts`).
+  проекте (`assistant`/`leader`/`devops`/`admin`/`fixer`/`tester`); у `researcher`/
+  `security-auditor`/`explore`/`general`/`title` её нет (тест — `engine/agents/capabilities.test.ts`).
   **Контекст плагинного тула сужается.** Для `source: 'plugin'` `executeToolDef` отдаёт только
   `sessionId`/`messageId`/`workingDir`/`agentRole?`/`projectId?`/`abortSignal?` (`narrowToolContext`): `extra` и `dataDir`
   плагину **не передаются** — симметрично `out-of-process` (по проводу те же три поля). Встроенные и
@@ -1382,7 +1439,10 @@
   `timeout`).
 - `engine/background/*` — ADR-111 (этап 1 roadmap 0.13 — блок 1.2): единый реестр фоновой
   работы. `service.ts` (`BackgroundRunService`: `startSubagent`/`startProcess`/`finish`/`stop`/
-  `recoverOnStart`/`prune`/`buildSubagentNotification`; лимиты сессии — `background.*`;
+  `stopBySession`/`recoverOnStart`/`prune`/`buildSubagentNotification`; лимиты сессии — `background.*`
+  (считаются только по **живым** `running`-прогонам: терминальные записи — история реестра, её
+  чистит retention, и лимит она не занимает; `maxRunsPerSession` — общий потолок одновременно идущих
+  прогонов обоих видов);
   старт публикует `child.started`/`process.started`, терминальный переход —
   `process.exited`/`child.completed|failed|cancelled` в канал
   сессии-владельца; `metadata` уведомления родителю несёт метки прогона —
@@ -1425,7 +1485,14 @@
   исчезнувшем каталоге). Спецификация — `docs/WORKTREES.md`.
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log; публичный API не меняется,
-  исполнение — через `ExecutionPort`), `exec.ts` (argv git через порт: `requires: ['git']`,
+  исполнение — через `ExecutionPort`; **клон атомарный**: git получает соседний временный
+  каталог `<path>.tmp-<uuid>`, целевой путь появляется только после успеха (`rename`), а любая
+  ошибка/таймаут убирает временный каталог — на диске не остаётся ничего; таймауты сетевых
+  операций — `cloneTimeoutMs`/`fetchTimeoutMs` из секции `git` конфига, истечение →
+  `git.clone_timeout`/`git.fetch_timeout`), `repo-occupancy.ts` (`inspectRepoPath` —
+  классификация занятого целевого пути **по файловой системе**, git не запускается:
+  `repo`/`stub`/`dir` + `entries`; нечитаемый каталог → `git.repo_path_unreadable`),
+  `exec.ts` (argv git через порт: `requires: ['git']`,
   общее окружение `sanitizeGitEnv` + `GIT_TERMINAL_PROMPT=0` + прокси, `maxOutputBytes`;
   CA `-c http.sslCAInfo=<path>` — **только inline**, в remote-режиме доверие задаёт
   исполнитель, ADR-099/ADR-077) и
@@ -1598,6 +1665,14 @@
 - `sessions/ephemeral.ts` — ephemeral TTL (ADR-089): `parseTtl`
   (`30s`/`15m`/`24h`/`7d`), `startEphemeralSweeper` (sweep 60 c, unref); поля
   `Session.expiresAt`/`archivedAt`, списки сессий по умолчанию без архива.
+- `sessions/auto-title.ts` — авто-заголовок сессии: LLM-ответ (снятие `<think>`,
+  первая непустая строка, предел 100 символов); при ошибке/пустом/слишком длинном
+  ответе — `warning('AUTO-TITLE', причина)` **без содержимого сообщений** и фоллбек:
+  первая непустая строка первого сообщения пользователя без markdown-разметки,
+  схлопнутые пробелы, обрезка до 60 символов. Фоллбек сохраняется через
+  `manager.renameSession` тем же путём, что LLM-заголовок (`session.updated`
+  публикует вызывающий — `orchestrator/phases/process-finalize.ts`); пользовательский
+  заголовок не перетирается (`isDefaultTitle`).
 - `sessions/stats.ts` — `computeSessionStats` (ADR-070): usage сообщений + рекурсивный usage
   саб-агентов (tool `task`), агрегаты по агентам/пользователям — для `GET /api/v2/sessions/:id/stats`.
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`; надёжный «Стоп» — `requestStop()` (in-memory запрос: будит backoff, абортит активный LLM-вызов) + `_shouldStop`/`_handleStopRequest` (проверка in-memory запроса и персистентного `status.cancelRequested` на границах цикла, очистка `pendingMessages`, снятие `blocked`/флага и `stream.cancelled` ровно один раз).

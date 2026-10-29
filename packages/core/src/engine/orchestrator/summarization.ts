@@ -15,6 +15,7 @@ import type { UsageCost } from '../../providers/usage.js';
 import { warning } from '../../logger.js';
 import type { SaveAssistantMessageFn } from './persistence.js';
 import type { LlmFailureContext } from './errors.js';
+import { StreamTiming } from './stream-stats.js';
 
 /** Зависимости `handleSummarization`. */
 export interface SummarizationDeps {
@@ -54,6 +55,8 @@ export async function handleSummarization(
 
   // ADR-070 §2.6: длительность этого прогона суммаризации.
   const startedAt = Date.now();
+  // T14: тайминги стрима (`seq`/`t_ms` у чанков, сводка в `stream.done`).
+  const streamTiming = new StreamTiming(startedAt);
   const lang = session.settings.language || 'ru';
 
   let prep: {
@@ -104,6 +107,7 @@ export async function handleSummarization(
 
       publishChunk('stream.chunk', {
         stream_id: streamId,
+        ...streamTiming.next(),
         content: chunk.isFinal ? '' : chunk.content,
         reasoning: chunk.reasoning,
         is_final: chunk.isFinal,
@@ -155,9 +159,14 @@ export async function handleSummarization(
 
   const updatedSession = await deps.sessionManager.getSession(session.id);
 
+  const chunkStats = streamTiming.snapshot();
   const doneData: Record<string, unknown> = {
     stream_id: streamId,
     content: accumulatedContent,
+    content_chars: accumulatedContent.length,
+    chunks: chunkStats.chunks,
+    ...(chunkStats.firstChunkMs !== undefined ? { first_chunk_ms: chunkStats.firstChunkMs } : {}),
+    ...(chunkStats.lastChunkMs !== undefined ? { last_chunk_ms: chunkStats.lastChunkMs } : {}),
     message_index: (updatedSession?.messages.length ?? session.messages.length + 1) - 1,
     pending_count: Math.max(0, (updatedSession?.pendingMessages.length ?? 1) - 1),
     model: finalModel,

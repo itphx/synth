@@ -163,7 +163,7 @@ describe('ChatOrchestrator — fs.changed после мутирующих тул
       title: 'FsChange',
       userId: 'u1',
       projectId: project.id,
-      settings: { provider: 'fsscript', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'fsscript', model: 'm', agentRole: 'fixer' },
     });
 
     const events = await runTurn(session.id);
@@ -189,7 +189,7 @@ describe('ChatOrchestrator — fs.changed после мутирующих тул
       title: 'FsChangeWs',
       userId: 'u1',
       projectId: project.id,
-      settings: { provider: 'fsscript', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'fsscript', model: 'm', agentRole: 'fixer' },
     });
 
     const events = await runTurn(session.id);

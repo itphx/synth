@@ -1,0 +1,24 @@
+{
+  "id": "security-auditor",
+  "displayName": {
+    "en": "Security Auditor",
+    "ru": "Аудитор безопасности"
+  },
+  "description": {
+    "en": "Security audit: vulnerability classes and invariants",
+    "ru": "Аудит безопасности: классы уязвимостей и инварианты"
+  },
+  "capabilities": [
+    "file_read",
+    "search",
+    "shell",
+    "git_read",
+    "mcp",
+    "models"
+  ],
+  "icon": "shield-check",
+  "color": "--status-warning",
+  "contextFile": "SECURITY-AUDITOR.md",
+  "agentMode": ["primary", "subagent"],
+  "maxSteps": 60
+}

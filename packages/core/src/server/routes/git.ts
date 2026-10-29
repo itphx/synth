@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readdir, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { Hono } from 'hono';
 import type { Context, MiddlewareHandler } from 'hono';
@@ -19,6 +19,8 @@ import {
   gitCommitQuerySchema,
 } from '@itphx/synth-shared';
 import { GitService, deriveRepoName, resolveRepoPath } from '../../git/git-service.js';
+import { inspectRepoPath } from '../../git/repo-occupancy.js';
+import type { RepoOccupancyInfo } from '../../git/repo-occupancy.js';
 import type { ExecutionPort, ExecSecret } from '../../execution/ports/index.js';
 import { isSshUrl } from '../../git/ssh-env.js';
 import { resolveSshEnvById } from '../../engine/tools/git-ssh.js';
@@ -68,12 +70,30 @@ export interface GitRoutesOptions {
    * исполнителю (control plane без toolchain'а). Не задан — inline.
    */
   execution?: ExecutionPort;
+  /**
+   * ADR-076: таймауты сетевых git-операций (`git.cloneTimeoutMs`/
+   * `git.fetchTimeoutMs` конфига). Не заданы — дефолт сервиса (5 минут);
+   * `0` — без таймаута.
+   */
+  cloneTimeoutMs?: number;
+  fetchTimeoutMs?: number;
 }
 
+/**
+ * Формат ошибки git-роутов: машиночитаемый код + необязательные подробности.
+ *
+ * `details` — аддитивное поле (появилось вместе с классификацией занятого
+ * пути): клиент и агент по `code` узнают «что не так», а по `details` —
+ * «почему», без разбора текста сообщения.
+ */
 interface RouteError {
   error: string;
   code: string;
+  details?: Record<string, unknown>;
 }
+
+/** HTTP-статусы git-роутов (включая 504 — истёкшее ожидание сетевой операции). */
+type RouteStatus = 400 | 403 | 404 | 409 | 500 | 504;
 
 /**
  * Ключ контекста Hono: id проекта, РАЗРЕШЁННЫЙ граничным guard'ом.
@@ -98,7 +118,7 @@ interface RegisterInput {
   lastFetch?: string;
 }
 
-function codeToStatus(code: string): number {
+function codeToStatus(code: string): RouteStatus {
   switch (code) {
     case 'NOT_FOUND':
     case 'WORKSPACE_NOT_FOUND':
@@ -114,7 +134,13 @@ function codeToStatus(code: string): number {
     case 'VALIDATION_ERROR':
       return 400;
     case 'git.repo_exists':
+    case 'git.repo_path_unreadable':
       return 409;
+    // ADR-076: истёкшее ожидание сетевой операции — 504 (клиент может
+    // повторить), а не 500: это не сбой сервера.
+    case 'git.clone_timeout':
+    case 'git.fetch_timeout':
+      return 504;
     default:
       return 500;
   }
@@ -133,7 +159,9 @@ function toRouteError(err: unknown): RouteError {
     if (e.code === 'PATH_TRAVERSAL') {
       return { error: e.error ?? 'Недопустимый путь репозитория', code: 'git.repo_path_invalid' };
     }
-    return { error: e.error ?? e.code, code: e.code };
+    const out: RouteError = { error: e.error ?? e.code, code: e.code };
+    if (e.details) out.details = e.details;
+    return out;
   }
   return { error: err instanceof Error ? err.message : String(err), code: 'INTERNAL_ERROR' };
 }
@@ -160,7 +188,11 @@ export function createGitRoutes(
   opts: GitRoutesOptions = {},
 ): Hono {
   const app = new Hono();
-  const gitService = new GitService(workspacesRoot, { execution: opts.execution });
+  const gitService = new GitService(workspacesRoot, {
+    execution: opts.execution,
+    ...(opts.cloneTimeoutMs !== undefined ? { cloneTimeoutMs: opts.cloneTimeoutMs } : {}),
+    ...(opts.fetchTimeoutMs !== undefined ? { fetchTimeoutMs: opts.fetchTimeoutMs } : {}),
+  });
   // `auth.requireAuth` уже навешан на write-эндпоинты выше, поэтому дефолтный
   // writeGuard — no-op (в backend передаётся requireAdmin/RBAC).
   const writeGuard: Middleware = opts.writeGuard ?? (async (_c, next) => { await next(); });
@@ -321,12 +353,40 @@ export function createGitRoutes(
     return repos.find((r) => r.path === path);
   }
 
-  async function pathHasEntries(dir: string): Promise<boolean> {
-    try {
-      const entries = await readdir(dir);
-      return entries.length > 0;
-    } catch {
-      return false;
+  /**
+   * Ошибка «путь занят» с различением состояния (ADR-076).
+   *
+   * Три состояния — три разных действия, поэтому сообщение actionable, а
+   * состояние уходит машиночитаемо в `details.occupied`.
+   */
+  function occupiedError(relPath: string, info: RepoOccupancyInfo): RouteError {
+    const details: Record<string, unknown> = { path: relPath, occupied: info.occupied };
+    if (info.entries !== undefined) details.entries = info.entries;
+    switch (info.occupied) {
+      case 'repo':
+        return {
+          error:
+            `Репозиторий «${relPath}» уже склонирован — зарегистрируйте существующий: `
+            + 'POST /api/v2/git/repos/register (тул project_repo_add), повторный клон не нужен.',
+          code: 'git.repo_exists',
+          details,
+        };
+      case 'stub':
+        return {
+          error:
+            `В каталоге «${relPath}» остался незавершённый клон (.git без коммитов). `
+            + 'Удалите каталог и повторите клонирование.',
+          code: 'git.repo_exists',
+          details,
+        };
+      default:
+        return {
+          error:
+            `Каталог «${relPath}» непустой и не является git-репозиторием `
+            + `(${info.entries ?? 0} элем.). Укажите другой путь или очистите каталог.`,
+          code: 'git.repo_exists',
+          details,
+        };
     }
   }
 
@@ -340,7 +400,7 @@ export function createGitRoutes(
       return c.json({ repos });
     } catch (err) {
       const e = toRouteError(err);
-      return c.json({ error: e }, codeToStatus(e.code) as 400 | 403 | 404 | 409 | 500);
+      return c.json({ error: e }, codeToStatus(e.code) as RouteStatus);
     }
   });
 
@@ -370,7 +430,7 @@ export function createGitRoutes(
       }
     } catch (err) {
       const e = toRouteError(err);
-      return c.json({ error: e }, codeToStatus(e.code) as 400 | 403 | 404 | 409 | 500);
+      return c.json({ error: e }, codeToStatus(e.code) as RouteStatus);
     }
   });
 
@@ -385,9 +445,11 @@ export function createGitRoutes(
       if (isSshUrl(body.url) && !body.sshKeyId) {
         throw { error: `Для репозитория «${relPath}» требуется SSH-ключ`, code: 'git.ssh_key_required' } satisfies RouteError;
       }
-      if (await pathHasEntries(resolveRepoPath(wsPath, relPath))) {
-        throw { error: `Репозиторий уже существует по пути «${relPath}»`, code: 'git.repo_exists' } satisfies RouteError;
-      }
+      // Занятость пути — только по ФС (без запуска git): полноценный
+      // репозиторий / след прерванного клона / непустой каталог → 409 с
+      // actionable-сообщением и `details.occupied`.
+      const occupancy = await inspectRepoPath(resolveRepoPath(wsPath, relPath));
+      if (occupancy) throw occupiedError(relPath, occupancy);
 
       const ssh = await resolveSshEnv(body.sshKeyId);
       try {
@@ -413,7 +475,7 @@ export function createGitRoutes(
       }
     } catch (err) {
       const e = toRouteError(err);
-      return c.json({ error: e }, codeToStatus(e.code) as 400 | 403 | 404 | 409 | 500);
+      return c.json({ error: e }, codeToStatus(e.code) as RouteStatus);
     }
   });
 
@@ -438,7 +500,7 @@ export function createGitRoutes(
       return c.json(entry);
     } catch (err) {
       const e = toRouteError(err);
-      return c.json({ error: e }, codeToStatus(e.code) as 400 | 403 | 404 | 409 | 500);
+      return c.json({ error: e }, codeToStatus(e.code) as RouteStatus);
     }
   });
 
@@ -469,7 +531,7 @@ export function createGitRoutes(
       return c.json({ removed, deletedLocal });
     } catch (err) {
       const e = toRouteError(err);
-      return c.json({ error: e }, codeToStatus(e.code) as 400 | 403 | 404 | 409 | 500);
+      return c.json({ error: e }, codeToStatus(e.code) as RouteStatus);
     }
   });
 
@@ -506,7 +568,7 @@ export function createGitRoutes(
       return c.json({ path: entry.path, lastFetch });
     } catch (err) {
       const e = toRouteError(err);
-      return c.json({ error: e }, codeToStatus(e.code) as 400 | 403 | 404 | 409 | 500);
+      return c.json({ error: e }, codeToStatus(e.code) as RouteStatus);
     }
   });
 
@@ -524,7 +586,7 @@ export function createGitRoutes(
       return c.json({ commits });
     } catch (err) {
       const e = toRouteError(err);
-      return c.json({ error: e }, codeToStatus(e.code) as 400 | 403 | 404 | 409 | 500);
+      return c.json({ error: e }, codeToStatus(e.code) as RouteStatus);
     }
   });
 
@@ -542,7 +604,7 @@ export function createGitRoutes(
       return c.json({ commit });
     } catch (err) {
       const e = toRouteError(err);
-      return c.json({ error: e }, codeToStatus(e.code) as 400 | 403 | 404 | 409 | 500);
+      return c.json({ error: e }, codeToStatus(e.code) as RouteStatus);
     }
   });
 

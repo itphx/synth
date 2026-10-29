@@ -15,7 +15,7 @@ import {
   RateLimiter,
   SecretPatternStore,
 } from '@itphx/synth-core';
-import type { CancellationToken, LLMMessage } from '@itphx/synth-core';
+import type { CancellationToken, ChatOptions, LLMMessage } from '@itphx/synth-core';
 import type {
   LLMChunk,
   LLMResponse,
@@ -71,6 +71,12 @@ class FakeProvider extends BaseProvider {
    */
   reasoningChunks: string[] | undefined;
   lastMessages: LLMMessage[] = [];
+  /** `tools` последнего вызова провайдера (проверка «инструменты остаются в запросе»). */
+  lastTools: Record<string, unknown>[] | undefined;
+  /** Опции последнего non-stream `chat` (проверка проброса `tool_choice`). */
+  lastChatOptions: ChatOptions | undefined;
+  /** Опции последнего `chatAsync` (проверка проброса `tool_choice` в стриме). */
+  lastAsyncOptions: ChatOptions | undefined;
 
   constructor(model = 'fake-model') {
     super({ url: 'http://fake.local/v1', apiKey: 'test-key', model, name: 'fake' });
@@ -83,11 +89,15 @@ class FakeProvider extends BaseProvider {
   async chat(
     messages: LLMMessage[],
     _systemPrompt?: string,
-    _tools?: Record<string, unknown>[],
+    tools?: Record<string, unknown>[],
     _stream?: boolean,
+    _debugCollector?: unknown,
+    options?: ChatOptions,
   ): Promise<LLMResponse> {
     if (this.throwError) throw this.throwError;
     this.lastMessages = messages;
+    this.lastTools = tools;
+    this.lastChatOptions = options;
     const content = this.echoUserContent
       ? (messages.find((m) => m.role === 'user')?.content ?? '')
       : 'Ответ fake-провайдера';
@@ -106,9 +116,11 @@ class FakeProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _debugCollector?: unknown,
     _cancellationToken?: CancellationToken,
+    options?: ChatOptions,
   ): AsyncGenerator<LLMChunk> {
     if (this.throwError) throw this.throwError;
     this.lastMessages = messages;
+    this.lastAsyncOptions = options;
     const content = this.echoUserContent
       ? (messages.find((m) => m.role === 'user')?.content ?? '')
       : 'Привет';
@@ -622,6 +634,78 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
       // Финальный чанк — finish_reason stop, затем [DONE].
       expect(parsed[parsed.length - 1]!.choices[0].finish_reason).toBe('stop');
       expect(text.trimEnd().endsWith('data: [DONE]')).toBe(true);
+    });
+  });
+
+  describe('tool_choice (финальный шаг-отчёт по лимиту шагов)', () => {
+    const tools = [
+      { type: 'function', function: { name: 'read_file', description: 'read', parameters: {} } },
+    ];
+
+    it("non-stream: tool_choice='none' доходит до провайдера вместе с tools", async () => {
+      const fake = new FakeProvider();
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'отчитайся' }],
+        tools,
+        tool_choice: 'none',
+      }));
+
+      expect(res.status).toBe(200);
+      expect(fake.lastChatOptions).toEqual({ toolChoice: 'none' });
+      // Инструменты на финальном шаге остаются в запросе — их не вырезаем.
+      expect(fake.lastTools).toEqual(tools);
+    });
+
+    it('non-stream: без поля tool_choice опции не передаются (поведение прежнее)', async () => {
+      const fake = new FakeProvider();
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'привет' }],
+        tools,
+      }));
+
+      expect(res.status).toBe(200);
+      expect(fake.lastChatOptions).toBeUndefined();
+    });
+
+    it("stream: tool_choice='none' доходит до chatAsync провайдера", async () => {
+      const fake = new FakeProvider();
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'отчитайся' }],
+        tools,
+        tool_choice: 'none',
+        stream: true,
+      }));
+
+      expect(res.status).toBe(200);
+      await res.text();
+      expect(fake.lastAsyncOptions).toEqual({ toolChoice: 'none' });
+    });
+
+    it('gateway включён: tool_choice пробрасывается после обфускации', async () => {
+      const fake = new FakeProvider();
+      const { app } = createTestContext(userUser, {
+        fakeProvider: fake,
+        gatewayConfig: gatewayEnabledConfig,
+      });
+
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'отчитайся' }],
+        tools,
+        tool_choice: 'required',
+      }));
+
+      expect(res.status).toBe(200);
+      expect(fake.lastChatOptions).toEqual({ toolChoice: 'required' });
     });
   });
 

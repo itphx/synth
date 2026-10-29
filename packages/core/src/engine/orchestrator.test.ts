@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -518,7 +518,7 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
 
     const session = await sessionManager.createSession({
       title: 'ToolChain',
-      settings: { provider: 'mocktool', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+      settings: { provider: 'mocktool', model: 'm', systemPrompt: 'test', agentRole: 'fixer' },
     });
     const msg = makeUserMessage();
     await sessionManager.addMessage(session.id, msg);
@@ -608,7 +608,7 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
 
       const session = await sessionManager.createSession({
         title: 'SubagentStats',
-        settings: { provider: 'subagentstats', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+        settings: { provider: 'subagentstats', model: 'm', systemPrompt: 'test', agentRole: 'fixer' },
       });
       const msg = makeUserMessage();
       await sessionManager.addMessage(session.id, msg);
@@ -639,7 +639,7 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
   it('_sessionMessagesToLlm возвращает assistant с toolUse и tool с toolCallId', async () => {
     const { messages } = await runToolChain();
 
-    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'fixer', 'user');
 
     const assistantLlm = llm.find((m) => m.role === 'assistant' && m.toolUse && m.toolUse.length > 0);
     expect(assistantLlm).toBeDefined();
@@ -688,12 +688,12 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
       disabled: false,
       pinned: false,
       hidden: false,
-      agentRole: 'developer',
+      agentRole: 'fixer',
     };
 
     const llm = ChatOrchestrator._sessionMessagesToLlm(
       [stateMsg, userMsg, assistantMsg],
-      'developer',
+      'fixer',
       'user',
     );
 
@@ -761,10 +761,10 @@ describe('ChatOrchestrator._sessionMessagesToLlm — агенты и tool-chain'
         agentRole: 'agentA',
         toolCallId: 'call_1',
       }),
-      makeMsg({ role: MessageRole.ASSISTANT, content: 'Готово', agentRole: 'developer' }),
+      makeMsg({ role: MessageRole.ASSISTANT, content: 'Готово', agentRole: 'fixer' }),
     ];
 
-    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'fixer', 'user');
 
     expect(llm.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
 
@@ -791,7 +791,7 @@ describe('ChatOrchestrator._sessionMessagesToLlm — агенты и tool-chain'
       makeMsg({ role: MessageRole.TOOL, content: 'результат', toolCallId: 'call_own' }),
     ];
 
-    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'fixer', 'user');
 
     expect(llm[0]!.role).toBe('assistant');
     expect(llm[0]!.content).toBe('ответ');
@@ -805,7 +805,7 @@ describe('ChatOrchestrator._sessionMessagesToLlm — агенты и tool-chain'
     const messages: Message[] = [
       makeMsg({ role: MessageRole.ASSISTANT, content: 'легаси-ответ' }),
     ];
-    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'fixer', 'user');
     expect(llm[0]!.role).toBe('assistant');
     expect(llm[0]!.content).toBe('легаси-ответ');
   });
@@ -815,32 +815,32 @@ describe('ChatOrchestrator._sessionMessagesToLlm — агенты и tool-chain'
       makeMsg({
         role: MessageRole.ASSISTANT,
         content: '',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         toolCalls: [makeToolCall('call_hidden')],
         disabled: true,
       }),
       makeMsg({
         role: MessageRole.TOOL,
         content: 'результат',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         toolCallId: 'call_hidden',
       }),
     ];
 
-    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'fixer', 'user');
 
     expect(llm.some((m) => m.role === 'tool')).toBe(false);
     expect(llm).toHaveLength(1);
     expect(llm[0]!.role).toBe('user');
-    expect(llm[0]!.content).toBe('[developer]: результат');
+    expect(llm[0]!.content).toBe('[fixer]: результат');
     expectNoOrphanTool(llm);
   });
 
   it('tool без toolCallId → user-текст, без осиротевшей роли tool', () => {
     const messages: Message[] = [
-      makeMsg({ role: MessageRole.TOOL, content: 'без id', agentRole: 'developer' }),
+      makeMsg({ role: MessageRole.TOOL, content: 'без id', agentRole: 'fixer' }),
     ];
-    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'fixer', 'user');
     expect(llm[0]!.role).toBe('user');
     expect(llm[0]!.toolCallId).toBeUndefined();
   });
@@ -942,7 +942,7 @@ describe('ChatOrchestrator — отмена сохраняет tool-вызовы
 
     const session = await sessionManager.createSession({
       title: 'Abort',
-      settings: { provider: 'mockabort', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+      settings: { provider: 'mockabort', model: 'm', systemPrompt: 'test', agentRole: 'fixer' },
     });
     const msg = makeUserMsg();
     await sessionManager.addMessage(session.id, msg);
@@ -1097,7 +1097,7 @@ describe('ChatOrchestrator — tool_call.result публикуется посл�
         provider: 'mockipi-consist',
         model: 'm',
         systemPrompt: 'test',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         language: 'ru',
       },
     });
@@ -1268,7 +1268,7 @@ describe('ChatOrchestrator — список тулов постоянен по �
 
     const session = await sessionManager.createSession({
       title: 'ModeTools',
-      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'fixer' },
     });
     session.mode = mode;
     await sessionManager.updateSession(session);
@@ -1313,7 +1313,7 @@ describe('ChatOrchestrator — список тулов постоянен по �
 
     const session = await sessionManager.createSession({
       title: 'StrictNoPlan',
-      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'fixer' },
     });
     const msg = makeUserMsg();
     await sessionManager.addMessage(session.id, msg);
@@ -1400,8 +1400,10 @@ describe('ChatOrchestrator — список тулов постоянен по �
 });
 
 // ADR-070 §2.9: тулы постоянны и по роли — агент видит ВСЕ тулы; недоступные
-// помечаются permission-слоем как unavailable(role). Неизвестный агент / role
-// undefined — по-прежнему НОЛЬ тулов (safety-fallback).
+// помечаются permission-слоем как unavailable(role). Неизвестная роль
+// (например, удалённая в новой версии) резолвится в агента по умолчанию
+// (`assistant`) — набор тулов как у него; `role` undefined — по-прежнему НОЛЬ
+// тулов (safety-fallback).
 describe('ChatOrchestrator — список тулов постоянен по роли (ADR-070 §2.9)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
@@ -1458,13 +1460,26 @@ describe('ChatOrchestrator — список тулов постоянен по �
     expect(names).toEqual([]);
   });
 
-  it('agentRole задан, но агент не найден в реестре: модель получает НОЛЬ тулов (не «все non-MCP»)', async () => {
-    const names = await runAgentRole('no-such-agent');
-    expect(names).toEqual([]);
+  it('agentRole задан, но агент не найден в реестре: фоллбек на агента по умолчанию (assistant)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Роль `pm` удалена из набора (этап 1 roadmap 0.13) — у старых сессий
+      // `settings.agentRole` может на неё ссылаться. Ход не падает и не идёт
+      // без ограничений роли: определение берётся у агента по умолчанию.
+      const names = await runAgentRole('pm');
+      const assistantNames = await runAgentRole('assistant');
+      expect(names.length).toBeGreaterThan(0);
+      expect(names.sort()).toEqual(assistantNames.sort());
+      // О фоллбеке сообщают один раз на роль (в лог, не в ответ модели).
+      const warned = warn.mock.calls.map((call) => call.map(String).join(' '));
+      expect(warned.some((line) => line.includes('pm'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
-  it('developer: execute_shell присутствует в переданных тулах', async () => {
-    const names = await runAgentRole('developer');
+  it('fixer: execute_shell присутствует в переданных тулах', async () => {
+    const names = await runAgentRole('fixer');
     expect(names).toContain('execute_shell');
   });
 });
@@ -1518,7 +1533,7 @@ describe('ChatOrchestrator — режим/план/todo как state-сообщ�
     if (!sessionId) {
       const session = await sessionManager.createSession({
         title: 'PlanPrompt',
-        settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'developer', ...settings },
+        settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'fixer', ...settings },
       });
       if (opts.planApproved !== undefined) session.planApproved = opts.planApproved;
       if (opts.todos !== undefined) session.todos = opts.todos;
@@ -1684,7 +1699,7 @@ describe('ChatOrchestrator — режим/план/todo как state-сообщ�
 
     const session = await sessionManager.createSession({
       title: 'PlanUpdated',
-      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'auto' },
+      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'fixer', planMode: 'auto' },
     });
     session.projectId = project.id;
     await sessionManager.updateSession(session);
@@ -1730,31 +1745,44 @@ describe('ChatOrchestrator — режим/план/todo как state-сообщ�
 
   it('агент с ограниченными capabilities: agent_switch и mode_change перечисляют role-недоступные', async () => {
     const { session } = await runPlanPrompt(
-      { agentRole: 'analyst', planMode: 'auto' },
+      { agentRole: 'fixer', planMode: 'auto' },
       { contextConfig: new ContextConfig({ userDataDir: tmpDir }), mode: 'act' },
     );
 
     const agentSwitch = stateMessages(session, 'agent_switch');
     expect(agentSwitch).toHaveLength(1);
-    expect(agentSwitch[0]!.content).toContain('Активный агент: analyst');
-    expect(agentSwitch[0]!.content).toContain('execute_shell');
+    expect(agentSwitch[0]!.content).toContain('Активный агент: fixer');
     expect(agentSwitch[0]!.content).toContain('делегируйте через @');
 
+    const roleNames = agentSwitch[0]!.content
+      .split('\n')
+      .filter((line) => line.startsWith('- '))
+      .map((line) => line.slice(2).split(' — ')[0]);
+    // Capability автоматизации (`pipeline`/`schedule`) fixer не выдана —
+    // тулы перечислены как role-недоступные и делегируются через @.
+    expect(roleNames).toContain('pipeline_run');
+    expect(roleNames).toContain('schedule_save');
+    // `user` (онбординг владельца) — только у assistant.
+    expect(roleNames).toContain('profile_update');
+    // `question`/`process` у fixer есть (осознанно) — в недоступных их нет.
+    expect(roleNames).not.toContain('question');
+    expect(roleNames).not.toContain('process_list');
+
     const mode = stateMessages(session, 'mode_change')[0]!;
-    expect(mode.content).toContain('execute_shell');
+    expect(mode.content).toContain('pipeline_run');
     expect(mode.content).toContain('недоступно для текущего агента');
   });
 
   it('agent_switch не дублируется при повторном sync (идемпотентность)', async () => {
     const first = await runPlanPrompt(
-      { agentRole: 'analyst', planMode: 'auto' },
+      { agentRole: 'researcher', planMode: 'auto' },
       { contextConfig: new ContextConfig({ userDataDir: tmpDir }), mode: 'act' },
     );
     expect(stateMessages(first.session, 'agent_switch')).toHaveLength(1);
     expect(stateMessages(first.session, 'mode_change')).toHaveLength(1);
 
     const second = await runPlanPrompt(
-      { agentRole: 'analyst', planMode: 'auto' },
+      { agentRole: 'researcher', planMode: 'auto' },
       { contextConfig: new ContextConfig({ userDataDir: tmpDir }) },
       first.sessionId,
     );

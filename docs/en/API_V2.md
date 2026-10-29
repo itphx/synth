@@ -200,6 +200,17 @@ interface BusEvent { type: EventType; sessionId: string; data: Record<string, un
 > Event transport — only WS `/ws/events` and SSE `GET /api/v2/events`.
 > Do not create new channels (ADR-008/009/024).
 
+> **Turn stream timings.** The `stream.chunk` event carries additive `seq` (chunk
+> index within the stream, starting at 1; continuous across Tool Use iterations —
+> the UI treats it as one `stream_id`) and `t_ms` (milliseconds since stream start).
+> The `stream.done` event carries additive `chunks` (number of chunks published),
+> `first_chunk_ms`/`last_chunk_ms` (first/last chunk time since stream start) and
+> `content_chars` (length of the final text). The fields measure the server → UI
+> delay: the server-side `last_chunk_ms` is compared with the moment `stream.done`/
+> the last chunk arrives in the client; older clients ignore them (existing fields
+> are unchanged). Local answers (`/` commands, debug, summary) report `chunks:1`,
+> `first_chunk_ms:0`, `last_chunk_ms:0`.
+
 ### 3.1. Permission approvals (ADR-106 F3)
 
 The approval request (`permission.asked`) and the reply to it (`permission.replied`) travel over
@@ -404,10 +415,11 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 > **The instance storage context.** The project export/import (`GET /api/v2/projects/:id/export`, `POST /api/v2/projects/import`) go through the instance storage context (`StorageContext`, ADR-096), not through their own file context — on `storage.backend=postgres` the database projects are visible (the spec — §5.8.1).
 > **Reliable Stop — `POST /api/v2/sessions/:id/abort` (ADR-005).** The route sets a **persistent** `SessionStatus.cancelRequested` flag (+ `cancelRequestedAt`) under the session lock — that is why the cancellation also fires when `currentStream`/the cancel token is not yet set (a session in the queue, in backoff, between Tool Use iterations), where the previous `orchestrator.cancel` was a no-op. With a live stream, a graceful `orchestrator.cancel` is additionally invoked (publishes `stream.cancelled`, keeps the partial response); then `QueueProcessorManager.requestStop` interrupts backoff/the active LLM call and ends the loop (`_handleStopRequest`: clearing `pendingMessages`, releasing `blocked`/the flag, `stream.cancelled` exactly once — without duplicating the graceful branch). If there is no processor, the flag is cleared so that the next run is not falsely cancelled. The response is `{status:'aborted'}`; without a session — 404. In a serialized session (`GET /api/v2/sessions/:id`) the `status` field contains `cancel_requested` (bool) and `cancel_requested_at` (ISO|null). The hybrid branch (a remote session) delegates to `remoteClient.abortSession`.
 > **Sending mode — `mode` in `POST /api/v2/sessions/:id/prompt` (ADR-104).** The optional `mode` field: `queue` (the default) — the message waits for the current turn to finish (the previous behaviour); `steer` — **intervening in the running turn without interrupting the generation**: the message goes to the injection queue (`steerInbox`) and enters the context at the nearest step boundary (before the next LLM call), persisted as a regular `user` reply with `metadata.steer=true`; `interrupt` — **aborting the current generation while the turn continues**: the stream is cut (the `stream.interrupted` event), the partial answer is saved as a separate `assistant` reply with the `interrupted` status (`metadata.interrupted`), the turn is **neither finished nor cancelled** ("Stop" is a separate mechanism, ADR-005) — the message is woven in at the nearest step boundary, and `toolUse`/`toolResult` pairs are not broken. An unknown `mode` value is treated as `queue`. The response for `steer` with a running turn is `202 {status:'steered', stream_id, pending_count, mode_applied:true}`, for `interrupt` — `202 {status:'interrupted', stream_id, pending_count, mode_applied:true}` (no separate SSE stream is opened — the stream of the current turn is already running); with no running turn `steer`/`interrupt` behave like `queue` (the regular queue + SSE). The limit is **5 injections per turn**; exceeding it → `429 STEER_LIMIT_EXCEEDED` (the `steer.dropped` event is published). The same field is accepted by the WS `send_message` message (backend and standalone).
+> **Pending injections are dropped (ADR-104, decision 2026-10-28).** The queue is drained only at a step boundary, so after "Stop" or at the end of a turn there is no boundary left. `POST /api/v2/sessions/:id/abort` clears the injection queue after stopping and — if it was non-empty — publishes `steer.dropped` with `reason:'aborted'` and `dropped_count` (best-effort: a failure does not change `200 {status:'aborted'}`). At the end of a turn (the orchestrator epilogue, outside the loop) the rest of the queue is dropped with `reason:'turn_ended'`. Dropped messages are **not** persisted in history and are **not** applied in the next turn — previously they "moved over" into the start of the next turn and looked like a sudden standalone message. The event `reason` is `limit` | `aborted` | `turn_ended`; the event also carries `dropped_count` and the `i18n` key (`steer.limit_exceeded` / `steer.dropped_aborted` / `steer.dropped_turn_ended`).
 > **Injection order (ADR-104, stage 3).** The injection queue is **not strict FIFO**: the injections of the `interrupt` class (the `metadata.interrupt=true` marker) are applied first, then the `steer` class; **within a class** the order is FIFO (the order of enqueuing). The order is deterministic and does not depend on when the injection was enqueued. When the per-turn limit overflows, the lowest-priority injections (`steer`) are dropped first, and the surplus is published as `steer.dropped`.
 > **An injection is an input into the same turn, not an answer from the user (ADR-104, stage 3).** An injection **does not answer** for the user on `permission.asked` and **does not cancel** a pending permission confirmation: a turn waiting on `ask` applies the injection at the step boundary **after** the answer. An injection also **does not widen the permissions**: in the `plan` mode a mutating tool stays denied (the permission layer rule `plan.deny`), even if the injection text "allows" it.
 > **Hybrid: a single mode contract (ADR-104, stage 3).** The `mode` reaches the remote side: the HTTP prompt of a remote session (`remote:<id>`) forwards the body as is, and the local core's WS path passes `mode` in the request to the remote backend (previously the mode was lost — a remote session always ran as `queue`). The response/ack carries the **applied** mode: the local side applied the mode itself — `mode_applied:true`; the remote side applied it — `202` with `mode_applied:true`; the remote side did **not** apply it (no running turn on the remote side, or an older version) — `202 {status:'queued', mode_applied:false}` (the message went through the regular queue). The WS `queued` ack contains `mode` and `mode_applied` (backend and standalone).
-> **Steering limitations (ADR-104).** **There is a mode selector in the UI**: while a turn is running, the composer shows three modes — "queue" (`queue`), "intervene" (`steer`), "interrupt" (`interrupt`); in the feed, injected messages are marked with the "intervention in the turn" marker (`metadata.steer`), in the `interrupt` mode — with the "turn interrupted" marker (`metadata.interrupt`), and an aborted generation gets the "Interrupted" badge (`metadata.status === 'interrupted'`). In hybrid mode the local core does not intervene in the turn executed by the remote backend: the mode is applied by the side that owns the turn (the remote backend), and the client is told in the ack whether the mode was applied (`mode_applied`).
+> **Steering limitations (ADR-104).** **There is a mode switch in the UI**: while a turn is running, the composer shows a segmented "Queue" / "Into turn" switch — exactly two modes in the UI (`queue`/`steer`; the server contract still accepts `interrupt`, but the UI never sets it — aborting has its own "Stop" button); in the feed, injected messages are marked with the "intervention in the turn" marker (`metadata.steer`), in the `interrupt` mode — with the "turn interrupted" marker (`metadata.interrupt`), and an aborted generation gets the "Interrupted" badge (`metadata.status === 'interrupted'`). In hybrid mode the local core does not intervene in the turn executed by the remote backend: the mode is applied by the side that owns the turn (the remote backend), and the client is told in the ack whether the mode was applied (`mode_applied`).
 > **Steering a child subagent session (ADR-104 + ADR-111).** The mode also works for child subagent sessions, including background ones: `POST /api/v2/sessions/<child>/prompt` with `mode:'steer'` puts the message into the injection queue **of the child session**, and the child's cycle (`engine/tools/task/run-cycle.ts`) applies it at the step boundary — before the next LLM call, in the same turn (the `toolUse`/`toolResult` pairs are not broken). The injection is persisted in the child's history as a regular `user` reply with `metadata.steer=true` and published to the child's channel (`message.added`, `message.injected`); exceeding the limit — the `steer.dropped` event in the child's channel, the turn does not fail. `interrupt` for a child **does not cut the generation** (at the step boundary there is none left) and is applied as a regular intervention. The general rule of the section applies: a message enters the injection queue only if the child session has a running turn (a background run always does: the child session is marked busy; with no running turn `steer`/`interrupt` behave like `queue`). The parent and child queues are isolated: an injection into the parent's queue does not enter the child's turn and vice versa (the check — `packages/core/src/queue/steering-subagent.test.ts`).
 > **Questions and a restart (ADR-112).** The wait for an answer to a question lives in the process memory: after a restart the unfinished questions are marked `cancelled` with the reason `interrupted`, the turn is not resumed (like the other tool-loop pauses). The question record itself survives the restart (the journal in the `QuestionRepository`). By default the question waits for an answer **without a timeout** (`questions.timeoutMs = 0`); the `question` tool may set a deadline (`timeout`, ≥ 5 minutes — not recommended: it aborts the wait).
 > **Answer attachments — `stream.done.attachments` (ADR-115, outbound).** The `stream.done` event (SSE of `POST /sessions/:id/prompt`, `GET /sessions/:id/events`) carries an additive `attachments?: Array<{sha256, mime, size, name?}>` — the media parts of the **final** assistant message of the turn (`image`/`audio`/`video`/`file`) in message order; with no media parts the field is absent. A gateway downloads the bytes by sha: `GET /api/v2/attachments/:sha256` (§5.6.1, RU only for now) — no session access needed. Field shape, source and download status codes — §5.6.1.
@@ -713,14 +725,33 @@ Errors — in the shared shape `{ error: { error, code } }`.
 |---|---|---|---|
 | POST | `/api/v2/git/scan` | read / auth | `{projectId}` → `{repos}` (git detection over the workspace, up to 3 levels) |
 | POST | `/api/v2/git/repos/init` | write / auth | `{projectId, path, defaultBranch?, name?, sshKeyId?}` → 201 `RepoStatus`; registers an entry |
-| POST | `/api/v2/git/repos/clone` | write / auth | `{projectId, url, path?, branch?, name?, sshKeyId?}` → 201 `RepoStatus`; an SSH URL without a key → 400 `git.ssh_key_required`; a taken path → 409 `git.repo_exists` |
+| POST | `/api/v2/git/repos/clone` | write / auth | `{projectId, url, path?, branch?, name?, sshKeyId?}` → 201 `RepoStatus`; an SSH URL without a key → 400 `git.ssh_key_required`; a taken path → 409 `git.repo_exists` (+`details.occupied`); a timeout → 504 `git.clone_timeout` |
 | POST | `/api/v2/git/repos/register` | write / auth | `{projectId, path, name?, url?, type?, defaultBranch?, sshKeyId?}` → 200 `GitRepoConfig` (upsert by `id`/`path`) |
 | POST | `/api/v2/git/repos/remove` | write / auth | `{projectId, id?\|path?, deleteLocal?}` → `{removed, deletedLocal}` (deleting the local directory — `deleteLocal`) |
-| POST | `/api/v2/git/repos/fetch` | write / auth | `{projectId, id?\|path?}` → `{path, lastFetch}`; an SSH URL without a key → 400 `git.ssh_key_required` |
+| POST | `/api/v2/git/repos/fetch` | write / auth | `{projectId, id?\|path?}` → `{path, lastFetch}`; an SSH URL without a key → 400 `git.ssh_key_required`; a timeout → 504 `git.fetch_timeout` |
 | GET | `/api/v2/git/log` | read / auth | `?project_id=&repo_path=&max_count=` → `{commits}` |
 | GET | `/api/v2/git/commit` | read / auth | `?project_id=&repo_path=&hash=` → `{commit}` |
 
 Backend RBAC: write endpoints (`init`/`clone`/`register`/`remove`/`fetch`) — owner/EDITOR/LEAD/ADMIN (`canEditProjectContent`), otherwise 403; read (`scan`/`log`/`commit`) — the **read** right on the project: owner/project member/`LEAD`/`ADMIN` (`canReadProject`), otherwise 403. The check is a **boundary** guard (`projectGuard('read'|'write')` in the core factory `createGitRoutes`), i.e. **before** the handler; there are no access checks inside the handlers (invariant 16). Core (standalone) — `requireAuth` (standalone has no per-project rights).
+
+**An occupied target path** (`clone`). The check is filesystem-based, without running git; the state
+is returned machine-readably in `details.occupied`, while the message names the **action**:
+
+| `details.occupied` | What is in the directory | Action in the message |
+|---|---|---|
+| `repo` | a full repository (`.git` with commits) | register the existing one (`POST /api/v2/git/repos/register`), no re-clone needed |
+| `stub` | a `.git` **without** commits — a trace of an interrupted clone | delete the directory and retry the clone |
+| `dir` | a non-empty directory without git (`details.entries` — the number of entries) | choose another path or clean the directory |
+
+In all three cases the code is `git.repo_exists` (409); the message and `details.occupied` differ.
+Clone atomicity: git gets a **temporary** directory `<path>.tmp-<uuid>` next to the target, and the
+target appears only after the success (`rename`); after a failure/timeout nothing is left on disk.
+An unreadable directory (no permissions) → **409 `git.repo_path_unreadable`**.
+
+**Network operation timeouts.** Exceeding `git.cloneTimeoutMs`/`git.fetchTimeoutMs`
+(the `git` section, see [CONFIGURATION.md](./CONFIGURATION.md)) — **504** `git.clone_timeout` /
+`git.fetch_timeout` (not 500: this is not a server failure, the request can be retried). Other git
+errors (no remote, a dropped connection, no permissions) are returned as-is (500 with the original text).
 
 > **Behaviour change (managed).** A request for a **non-existent** `projectId` in `/api/v2/git/*` now answers **403 instead of 404** — fail-closed, no existence disclosure (like the FS routes). Previously the read routes (`scan`/`log`/`commit`) did not check access at all and allowed reading another project’s git data by its id.
 
@@ -1876,6 +1907,14 @@ restart the `running` records become `orphaned`).
 
 The `createProcessRoutes` factory is shared by core and backend; managed passes the
 project access rule (`packages/backend/src/routes/processes.ts`).
+
+**Session limits (`background.*`).** Checked when a run is registered and counted only over
+the **live** (`running`) records: `maxSubagentsPerSession`/`maxProcessesPerSession` — per
+their own kind of work, `maxRunsPerSession` — the overall ceiling of the runs of both kinds
+running at the same time. The terminal records are the registry history (the retention,
+`background.retentionDays`, cleans them) and are **not** counted by the limit, so the
+finished runs do not block new starts. Exceeding it → `background_limit_exceeded` (a tool
+error, the turn does not fail; in detach — the `BACKGROUND_LIMIT` code in `failed[]`).
 
 | Method | Path | Build | RBAC (managed) | Purpose / req-resp |
 |---|---|---|---|---|

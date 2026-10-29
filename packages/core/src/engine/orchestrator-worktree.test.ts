@@ -245,7 +245,7 @@ describe('ChatOrchestrator — per-session cwd привязки к worktree (ADR
       title: 'Bound',
       userId: 'u1',
       projectId,
-      settings: { provider: 'wtscript', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'wtscript', model: 'm', agentRole: 'fixer' },
     });
     await bindWorktree(session.id, worktreeDir, projectId);
     configureProbeScript();
@@ -269,7 +269,7 @@ describe('ChatOrchestrator — per-session cwd привязки к worktree (ADR
       title: 'Missing',
       userId: 'u1',
       projectId,
-      settings: { provider: 'wtscript', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'wtscript', model: 'm', agentRole: 'fixer' },
     });
     const missingDir = join(tmpDir, 'worktrees', 'deleted');
     await bindWorktree(session.id, missingDir, projectId);
@@ -302,7 +302,7 @@ describe('ChatOrchestrator — per-session cwd привязки к worktree (ADR
       title: 'Parent',
       userId: 'u1',
       projectId,
-      settings: { provider: 'wtscript', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'wtscript', model: 'm', agentRole: 'fixer' },
     });
     await bindWorktree(parent.id, worktreeDir, projectId);
 
@@ -311,7 +311,7 @@ describe('ChatOrchestrator — per-session cwd привязки к worktree (ADR
       userId: 'u1',
       projectId,
       parentId: parent.id,
-      settings: { provider: 'wtscript', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'wtscript', model: 'm', agentRole: 'fixer' },
     });
     configureProbeScript();
 
@@ -327,7 +327,7 @@ describe('ChatOrchestrator — per-session cwd привязки к worktree (ADR
       title: 'Parent',
       userId: 'u1',
       projectId,
-      settings: { provider: 'wtscript', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'wtscript', model: 'm', agentRole: 'fixer' },
     });
     await bindWorktree(parent.id, worktreeDir, projectId);
 
@@ -338,7 +338,7 @@ describe('ChatOrchestrator — per-session cwd привязки к worktree (ADR
       userId: 'u1',
       projectId,
       parentId: parent.id,
-      settings: { provider: 'wtscript', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'wtscript', model: 'm', agentRole: 'fixer' },
     });
     await bindWorktree(child.id, childDir, projectId);
     configureProbeScript();
@@ -356,7 +356,7 @@ describe('ChatOrchestrator — per-session cwd привязки к worktree (ADR
       title: 'BoundRepo',
       userId: 'u1',
       projectId,
-      settings: { provider: 'wtscript', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'wtscript', model: 'm', agentRole: 'fixer' },
     });
     await bindWorktree(session.id, worktreeDir, projectId, 'repo');
     configureProbeScript();
@@ -376,7 +376,7 @@ describe('ChatOrchestrator — per-session cwd привязки к worktree (ADR
       title: 'Plain',
       userId: 'u1',
       projectId,
-      settings: { provider: 'wtscript', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'wtscript', model: 'm', agentRole: 'fixer' },
     });
     configureProbeScript();
 

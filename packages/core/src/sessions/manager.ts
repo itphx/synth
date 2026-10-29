@@ -649,6 +649,25 @@ export class SessionManager {
     });
   }
 
+  /**
+   * ADR-104 (решение 2026-10-28): снять очередь инъекций целиком.
+   *
+   * Очередь вычитывается только на границе шага, поэтому при «Стоп» и в конце
+   * хода оставшиеся сообщения иначе применились бы в начале следующего хода.
+   * Возвращает снятые сообщения (пустая очередь — `[]`); в историю они не
+   * попадают — о снятии сообщает `steer.dropped`.
+   */
+  async clearSteerInbox(sessionId: string): Promise<Message[]> {
+    return this.withLock(sessionId, async (session) => {
+      const inbox = session.steerInbox ?? [];
+      if (inbox.length === 0) return [];
+      session.steerInbox = [];
+      session.updatedAt = nowISO();
+      await this.store.save(session);
+      return inbox;
+    });
+  }
+
   async createCheckpoint(sessionId: string): Promise<Session | null> {
     return this.withLock(sessionId, async (session) => {
       const checkpoint: Checkpoint = {

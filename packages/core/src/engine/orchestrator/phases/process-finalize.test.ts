@@ -90,7 +90,7 @@ describe('runProcessFinalize', () => {
   });
 
   async function makeSession(withUserMessage = true): Promise<string> {
-    const session = await sessionManager.createSession({ title: 'Fin', settings: { agentRole: 'developer' } as never });
+    const session = await sessionManager.createSession({ title: 'Fin', settings: { agentRole: 'fixer' } as never });
     if (withUserMessage) {
       const message: Message = {
         id: generateId(),
@@ -138,13 +138,13 @@ describe('runProcessFinalize', () => {
       allIntermediateTexts: [],
       allToolCalls: [],
       currentMessages: [],
-      promptMeta: { agentRole: 'developer', generation: 1, expected: 'miss', cachedTokens: 0, validated: false },
+      promptMeta: { agentRole: 'fixer', generation: 1, expected: 'miss', cachedTokens: 0, validated: false },
       loadedTokenRatio: undefined,
       routingDecision: undefined,
       provider: new FakeProvider(),
       finalSystemPrompt: { text: 'sys', cacheKey: 'session-cache-key' },
       providerName: 'prov',
-      effectiveAgentRole: 'developer',
+      effectiveAgentRole: 'fixer',
       effectiveReasoningLevel: undefined,
       ...overrides,
     };
@@ -380,7 +380,7 @@ describe('runProcessFinalize', () => {
       await runProcessFinalize(
         makeArgs(sessionId),
         makeState({
-          finalContent: 'Сам не смог — предлагаю делегировать @developer',
+          finalContent: 'Сам не смог — предлагаю делегировать @fixer',
           hadDeny: true,
           roleBlocked: true,
           roleBlockedTool: 'execute_shell',
@@ -390,9 +390,9 @@ describe('runProcessFinalize', () => {
       );
 
       const saveCall = (deps.saveAssistantMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
-      expect(saveCall[1]).toBe('Сам не смог — предлагаю делегировать @developer');
+      expect(saveCall[1]).toBe('Сам не смог — предлагаю делегировать @fixer');
       expect(published[0]!.data).toMatchObject({
-        content: 'Сам не смог — предлагаю делегировать @developer',
+        content: 'Сам не смог — предлагаю делегировать @fixer',
         status: 'completed',
       });
     });

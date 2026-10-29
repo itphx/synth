@@ -52,7 +52,7 @@ const REGISTRY_ENTRY: GitRepoConfigData = {
 describe('gitStore — реестр репозиториев (ADR-076)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    useGitStore.setState({ reposByProject: {}, commitsByRepo: {}, loading: false, error: null })
+    useGitStore.setState({ reposByProject: {}, commitsByRepo: {}, loading: false, error: null, lastError: null })
   })
 
   it('loadRepos сохраняет метаданные реестра и прежний git-статус', async () => {
@@ -117,7 +117,7 @@ describe('gitStore — реестр репозиториев (ADR-076)', () => {
     expect(mocks.initGitRepo).toHaveBeenCalledWith('p1', 'app', 'main', 'App', 'k1')
 
     await useGitStore.getState().cloneRepo('p1', 'git@example.com:app.git', 'app', 'main', 'App', 'k1')
-    expect(mocks.cloneGitRepo).toHaveBeenCalledWith('p1', 'git@example.com:app.git', 'app', 'main', 'App', 'k1')
+    expect(mocks.cloneGitRepo).toHaveBeenCalledWith('p1', 'git@example.com:app.git', 'app', 'main', 'App', 'k1', undefined)
   })
 
   it('expandAll раскрывает переданные проекты и их репозитории', () => {
@@ -177,6 +177,67 @@ describe('gitStore — реестр репозиториев (ADR-076)', () => {
     expect(mocks.removeGitRepo).toHaveBeenCalledWith('p1', { id: 'r1', deleteLocal: true })
 
     await expect(useGitStore.getState().fetchRepo('p1', { id: 'r1' })).resolves.toBe(true)
-    expect(mocks.fetchGitRepo).toHaveBeenCalledWith('p1', { id: 'r1' })
+    expect(mocks.fetchGitRepo).toHaveBeenCalledWith('p1', { id: 'r1' }, undefined)
+  })
+
+  it('cloneRepo передаёт AbortSignal в API (отмена клона)', async () => {
+    mocks.cloneGitRepo.mockResolvedValue({ path: 'app', isRepo: true })
+    const controller = new AbortController()
+
+    await useGitStore.getState().cloneRepo('p1', 'https://x/app.git', 'app', undefined, undefined, undefined, controller.signal)
+
+    expect(mocks.cloneGitRepo).toHaveBeenCalledWith(
+      'p1', 'https://x/app.git', 'app', undefined, undefined, undefined, controller.signal,
+    )
+    expect(mocks.cloneGitRepo.mock.calls[0]![6]).toBe(controller.signal)
+  })
+
+  it('fetchRepo передаёт AbortSignal в API', async () => {
+    mocks.fetchGitRepo.mockResolvedValue({ path: 'app', lastFetch: '2026-02-02T00:00:00Z' })
+    const controller = new AbortController()
+
+    await useGitStore.getState().fetchRepo('p1', { path: 'app' }, controller.signal)
+
+    expect(mocks.fetchGitRepo.mock.calls[0]![2]).toBe(controller.signal)
+  })
+
+  it('lastError сохраняет message/code/details из отказа API (409 «путь занят»)', async () => {
+    mocks.cloneGitRepo.mockRejectedValue(
+      Object.assign(new Error('Репозиторий занят'), {
+        status: 409,
+        code: 'git.repo_exists',
+        details: { path: 'taken', occupied: 'repo' },
+      }),
+    )
+
+    await expect(useGitStore.getState().cloneRepo('p1', 'https://x/app.git')).resolves.toBeNull()
+
+    const state = useGitStore.getState()
+    expect(state.error).toBe('Репозиторий занят')
+    expect(state.lastError).toEqual({
+      message: 'Репозиторий занят',
+      code: 'git.repo_exists',
+      details: { path: 'taken', occupied: 'repo' },
+    })
+  })
+
+  it('AbortError не пишет ошибку в стор (пользователь отменил сам)', async () => {
+    mocks.cloneGitRepo.mockRejectedValue(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+
+    await expect(useGitStore.getState().cloneRepo('p1', 'https://x/app.git')).resolves.toBeNull()
+
+    const state = useGitStore.getState()
+    expect(state.error).toBeNull()
+    expect(state.lastError).toBeNull()
+    expect(state.loading).toBe(false)
+  })
+
+  it('успешная операция сбрасывает прежний lastError', async () => {
+    useGitStore.setState({ lastError: { message: 'старая', code: 'git.repo_exists' } })
+    mocks.fetchGitRepo.mockResolvedValue({ path: 'app', lastFetch: '2026-02-02T00:00:00Z' })
+
+    await useGitStore.getState().fetchRepo('p1', { path: 'app' })
+
+    expect(useGitStore.getState().lastError).toBeNull()
   })
 })

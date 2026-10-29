@@ -355,10 +355,21 @@ function policyBasename(entry: string): string {
   return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
 }
 
+/**
+ * Явный признак Windows-пути: drive-absolute (`C:\x` / `C:/x`) или UNC
+ * (`\\server\share`). Обратный слэш сам по себе путём не делает: в POSIX-shell
+ * `\` — экранирование/регэксп (`\.sample$`, `^\s*Test`), а не разделитель.
+ */
+function isWindowsPathToken(token: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(token) || /^\\\\[^\\]/.test(token);
+}
+
 /** Есть ли в токене хоть один фрагмент, похожий на элемент пути. */
 function hasPathLikeFragment(token: string): boolean {
+  if (isWindowsPathToken(token)) return true;
   for (const fragment of token.split(DYNAMIC_CHARS_RE)) {
-    if (fragment.includes('/') || fragment.includes('\\') || fragment.startsWith('~')) return true;
+    if (isWindowsPathToken(fragment)) return true;
+    if (fragment.includes('/') || fragment.startsWith('~')) return true;
   }
   return false;
 }
@@ -401,14 +412,17 @@ export function tokenTouchesProtectedMarker(token: string, policy: DeniedPathsSo
 /**
  * Похож ли токен на файловый путь (для fail-closed `ask`, когда динамику
  * разрешить не удалось). Glob без разделителей (`*.ts`) и URL — не считаем,
- * чтобы не спрашивать подтверждение на рутинные команды.
+ * чтобы не спрашивать подтверждение на рутинные команды. Обратный слэш
+ * разделителем не является (POSIX: экранирование/регэксп) — Windows-пути
+ * распознаются явно: `C:\x`, `C:/x`, `\\server\share`.
  */
 export function looksLikePathToken(token: string): boolean {
   if (token === '' || token === '-') return false;
+  if (isWindowsPathToken(token)) return true;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token)) return false; // URL
   if (/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(token)) return true; // $VAR / ${VAR}
   if (token.startsWith('~')) return true;
-  return token.includes('/') || token.includes('\\') || hasPathLikeFragment(token);
+  return token.includes('/') || hasPathLikeFragment(token);
 }
 
 /** Простые мутирующие команды (изменяют состояние файловой системы/системы). */

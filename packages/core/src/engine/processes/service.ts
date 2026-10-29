@@ -227,12 +227,12 @@ export class ProcessService {
     let proc: ExecBackgroundProcess;
     try {
       proc = await spawnBackground({
-        command: { kind: 'shell', command: input.command, shell: 'sh' },
+        command: { kind: 'shell', command: input.command, shell: 'bash' },
         cwd: input.cwd,
         ...(input.env ? { env: input.env } : {}),
         // Фоновый процесс по умолчанию **без таймаута**: он переживает ход агента.
         timeoutMs: input.timeoutMs ?? 0,
-        // Бинарное требование тула (`sh`) — как у синхронного запуска (ADR-077).
+        // Бинарное требование тула (`bash`) — как у синхронного запуска (ADR-077).
         requires: toolRuntimeRequires('execute_shell'),
       });
     } catch (err) {

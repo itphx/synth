@@ -24,6 +24,7 @@ describe('defaultConfig', () => {
     expect(defaultConfig).toHaveProperty('decision');
     expect(defaultConfig).toHaveProperty('metrics');
     expect(defaultConfig).toHaveProperty('questions');
+    expect(defaultConfig).toHaveProperty('agents');
     expect(defaultConfig).toHaveProperty('attachments');
   });
 
@@ -46,7 +47,11 @@ describe('defaultConfig', () => {
     expect(defaultConfig.questions).toEqual({ timeoutMs: 0, retentionDays: 14 });
   });
 
-  it('background по умолчанию: 2 саб-агента, 5 процессов, лог 10 МиБ (PROP-096/PROP-097)', () => {
+  it('permission.askTimeoutMs по умолчанию — 5 минут (подтверждение не должно истекать за 30 с, T9)', () => {
+    expect(defaultConfig.permission).toEqual({ rules: {}, askTimeoutMs: 300_000 });
+  });
+
+  it('background по умолчанию: 2 саб-агента, 5 процессов, 10 идущих прогонов, лог 10 МиБ (PROP-096/PROP-097)', () => {
     expect(defaultConfig.background).toEqual({
       enabled: true,
       maxSubagentsPerSession: 2,
@@ -55,6 +60,10 @@ describe('defaultConfig', () => {
       logMaxBytes: 10_485_760,
       retentionDays: 7,
     });
+  });
+
+  it('agents по умолчанию: предохранитель бюджета саб-агента 150k токенов', () => {
+    expect(defaultConfig.agents).toEqual({ subagentMaxInputTokens: 150_000 });
   });
 
   it('llm.defaultProvider и llm.defaultModel — пустые строки (зона админа)', () => {
@@ -224,6 +233,13 @@ describe('defaultConfig', () => {
   it('analytics по умолчанию: retention суточных роллапов 400 дней (ADR-102)', () => {
     expect(defaultConfig.analytics).toEqual({
       retentionDays: 400,
+    });
+  });
+
+  it('git по умолчанию: таймауты clone/fetch — 5 минут (ADR-076)', () => {
+    expect(defaultConfig.git).toEqual({
+      cloneTimeoutMs: 300_000,
+      fetchTimeoutMs: 300_000,
     });
   });
 

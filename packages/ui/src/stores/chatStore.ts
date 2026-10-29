@@ -173,6 +173,14 @@ export interface StreamDoneMetadata {
   usage_estimated?: boolean
   /** ADR-070 §2.6: провайдер финального ответа (stream.done.provider). */
   provider?: string
+  /** T14: длина финального текста ответа (stream.done.content_chars). */
+  content_chars?: number
+  /** T14: число опубликованных `stream.chunk` за стрим (stream.done.chunks). */
+  chunks?: number
+  /** T14: время первого чанка от старта стрима, мс (stream.done.first_chunk_ms). */
+  first_chunk_ms?: number
+  /** T14: время последнего чанка от старта стрима, мс (stream.done.last_chunk_ms). */
+  last_chunk_ms?: number
 }
 
 /** Статус повторной попытки (событие stream.retry): «Повторная попытка N/MAX через X сек». */

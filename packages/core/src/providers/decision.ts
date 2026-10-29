@@ -23,6 +23,7 @@ import {
   type LLMMessage,
   type SystemPromptInput,
   type CancellationToken,
+  type ChatOptions,
 } from './base.js';
 import type { DebugCollector } from '../debug.js';
 import {
@@ -62,6 +63,7 @@ export class DecisionProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _debugCollector?: DebugCollector,
     _cancellationToken?: CancellationToken,
+    _options?: ChatOptions,
   ): AsyncGenerator<LLMChunk> {
     throw new ProviderError('decision-провайдер не поддерживает chat', this.name);
   }

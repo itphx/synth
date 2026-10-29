@@ -132,6 +132,11 @@ export interface StandaloneConfig {
   /** ADR-102: конфигурация аналитики (`analytics.retentionDays`) из config.yaml. */
   analyticsConfig?: SynthConfig['analytics'];
   /**
+   * ADR-076: таймауты сетевых git-операций (`git.cloneTimeoutMs`/
+   * `git.fetchTimeoutMs`). Не заданы — дефолт (5 минут), `0` — без таймаута.
+   */
+  gitConfig?: SynthConfig['git'];
+  /**
    * Этап 1 roadmap 0.13 (блок 3): конфигурация «вопрос пользователю»
    * (`questions.timeoutMs` — срок ожидания ответа, `questions.retentionDays`).
    */
@@ -141,6 +146,11 @@ export interface StandaloneConfig {
    * прогонов (`background.enabled`/лимиты/retention — PROP-096).
    */
   backgroundConfig?: SynthConfig['background'];
+  /**
+   * Секция `agents` — предохранители прогонов агентов
+   * (`subagentMaxInputTokens`: предохранитель по объёму промпта саб-агента).
+   */
+  agentsConfig?: SynthConfig['agents'];
   /**
    * ADR-115: конфигурация вложений сообщений (`attachments.*` — лимиты размера,
    * число файлов, белый список MIME, срок хранения осиротевших объектов).

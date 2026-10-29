@@ -4,10 +4,12 @@
  * Capability `pipeline`/`schedule` — **отключаемые админом** доменные
  * возможности (ADR-071 §2.3.1): выдавать их нужно осознанно.
  *
- * - получают capability: `assistant`, `developer`, `devops`, `admin`, `pm`, `qa`,
- *   `analyst` — агенты, которые ведут работу в проекте;
- * - не получают: `explore` (read-only исследователь), `general` (сабагент без
- *   домена проекта), `auditor` (read-only аудит безопасности), `title`
+ * - получают capability: `assistant`, `devops`, `admin` — агенты, которые
+ *   ведут автоматизацию инстанса и проекта;
+ * - не получают: `leader` (оркестратор делегирует, автором пайплайнов и
+ *   расписаний не является), `fixer`/`tester` (у них другой инструментарий),
+ *   `researcher` (read-only исследователь), `security-auditor` (read-only аудит
+ *   безопасности), `explore`/`general` (сабагенты без домена проекта), `title`
  *   (системный генератор заголовков, без инструментов вовсе).
  */
 
@@ -18,10 +20,26 @@ import { processListTool, processLogsTool } from '../tools/processes.js';
 import { listModelsTool } from '../tools/list-models.js';
 import { computeToolAvailability } from '../permission/availability.js';
 
-/** Агенты, которым нужны capability пайплайнов и расписаний. */
-const WITH_AUTOMATION = ['assistant', 'developer', 'devops', 'admin', 'pm', 'qa', 'analyst'];
+/**
+ * Агенты, которым нужны capability пайплайнов и расписаний: авторство и запуск
+ * автоматизации инстанса/проекта.
+ * `leader` делегирует работу и автором не является, `fixer`/`tester` пайплайны
+ * и расписания не ведут — у них другой инструментарий.
+ */
+const WITH_AUTOMATION = ['assistant', 'devops', 'admin'];
+/**
+ * Вопрос пользователю и реестр фоновых прогонов — шире автоматизации: нужны и
+ * оркестратору, и исполнителям (спросить человека, посмотреть свою фоновую работу).
+ */
+const WITH_AUTOMATION_AND_EXECUTORS = [...WITH_AUTOMATION, 'leader', 'fixer', 'tester'];
 /** Агенты, которым capability пайплайнов/расписаний не выдаётся. */
-const WITHOUT_AUTOMATION = ['explore', 'general', 'auditor', 'title'];
+const WITHOUT_AUTOMATION = [
+  'leader', 'fixer', 'tester', 'researcher', 'security-auditor', 'explore', 'general', 'title',
+];
+/** Агенты, которым не выдаётся ни `question`, ни `process`. */
+const WITHOUT_AUTOMATION_AND_EXECUTORS = [
+  'researcher', 'security-auditor', 'explore', 'general', 'title',
+];
 
 describe('Дефолтные агенты — capability pipeline/schedule (ADR-101/ADR-051)', () => {
   const agents = loadSystemAgentDefinitions();
@@ -52,22 +70,23 @@ describe('Дефолтные агенты — capability pipeline/schedule (ADR-
  * Этап 1 roadmap 0.13 (блок 3): capability `question` — вопрос пользователю
  * посреди хода.
  *
- * Capability получают те же агенты, что и `pipeline`/`schedule` (агенты,
- * которые ведут работу в проекте и могут уточнять требования у человека).
- * Read-only агенты (`explore`, `auditor`), сабагент (`general`) и
- * генератор заголовков (`title`) — нет: вопрос задаёт человек, а не агент.
+ * Capability получают агенты, которые ведут работу (в т.ч. оркестратор) и могут
+ * уточнять требования у человека — включая исполнителей (`fixer`/`tester`).
+ * Read-only агенты (`researcher`, `security-auditor`), сабагенты (`explore`,
+ * `general`) и генератор заголовков (`title`) — нет: вопрос задаёт человек,
+ * а не агент.
  */
 describe('Дефолтные агенты — capability question (этап 1 roadmap 0.13)', () => {
   const agents = loadSystemAgentDefinitions();
   const byId = new Map(agents.map((a) => [a.id, a]));
 
-  it.each(WITH_AUTOMATION)('%s имеет capability question', (id) => {
+  it.each(WITH_AUTOMATION_AND_EXECUTORS)('%s имеет capability question', (id) => {
     const agent = byId.get(id);
     expect(agent, `агент ${id} не найден`).toBeDefined();
     expect(agent!.capabilities, id).toContain(ToolCapability.QUESTION);
   });
 
-  it.each(WITHOUT_AUTOMATION)('%s не имеет capability question', (id) => {
+  it.each(WITHOUT_AUTOMATION_AND_EXECUTORS)('%s не имеет capability question', (id) => {
     const agent = byId.get(id);
     expect(agent, `агент ${id} не найден`).toBeDefined();
     expect(agent!.capabilities, id).not.toContain(ToolCapability.QUESTION);
@@ -78,9 +97,9 @@ describe('Дефолтные агенты — capability question (этап 1 ro
  * Этап 1 roadmap 0.13 (блок 17): capability `process` — реестр фоновых
  * прогонов (ADR-111/PROP-097).
  *
- * Capability получают те же агенты, что и `pipeline`/`schedule`/`question`:
- * реестр фоновой работы — часть работы в проекте (агент должен уметь
- * посмотреть, что запустил, и прочитать лог фонового процесса).
+ * Capability получают те же агенты, что и `question`: реестр фоновой работы —
+ * часть работы в проекте (агент должен уметь посмотреть, что запустил, и
+ * прочитать лог фонового процесса).
  *
  * Проверка идёт **через доступность тула** (`computeToolAvailability`), а не
  * только через список capability: так тест ловит и « capability есть, но тул
@@ -92,19 +111,19 @@ describe('Дефолтные агенты — capability process (этап 1 roa
 
   const PROCESS_TOOLS = [processListTool, processLogsTool];
 
-  it.each(WITH_AUTOMATION)('%s имеет capability process', (id) => {
+  it.each(WITH_AUTOMATION_AND_EXECUTORS)('%s имеет capability process', (id) => {
     const agent = byId.get(id);
     expect(agent, `агент ${id} не найден`).toBeDefined();
     expect(agent!.capabilities, id).toContain(ToolCapability.PROCESS);
   });
 
-  it.each(WITHOUT_AUTOMATION)('%s не имеет capability process', (id) => {
+  it.each(WITHOUT_AUTOMATION_AND_EXECUTORS)('%s не имеет capability process', (id) => {
     const agent = byId.get(id);
     expect(agent, `агент ${id} не найден`).toBeDefined();
     expect(agent!.capabilities, id).not.toContain(ToolCapability.PROCESS);
   });
 
-  it.each(WITH_AUTOMATION)('%s видит process_list/process_logs', (id) => {
+  it.each(WITH_AUTOMATION_AND_EXECUTORS)('%s видит process_list/process_logs', (id) => {
     const agent = byId.get(id)!;
     for (const tool of PROCESS_TOOLS) {
       const availability = computeToolAvailability(

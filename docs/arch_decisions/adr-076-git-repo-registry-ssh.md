@@ -173,6 +173,50 @@ $SYNTH_DATA_DIR/secrets/ssh-keys/<id>.json    # SSHKey, секреты заши�
 - [ADR-077](./adr-077-runtime-toolchain.md) «Инструментальное окружение исполнения» — нативный `git`/`ssh` обязателен.
 - [ADR-036](./adr-036-llm-gateway.md) «LLM Gateway» — обфускация и аудит.
 
+## История
+
+- **2026-10-28 — тул метаданных ключей и подсказка вместо тупика (dogfooding P0, T11).**
+  `project_repo_clone` требует `sshKeyId` для SSH-URL, но у агента не было **ни одного** тула,
+  чтобы узнать доступные ключи: требование выполнить нечем, а «SSH key is required for repository
+  X» не подсказывало следующий шаг — пользователь трижды упирался в этот отказ в одной сессии.
+  Добавлен тул **`ssh_keys_list`** (`engine/tools/ssh-keys.ts`): метаданные ключей инстанса
+  (`id`, `name`, `type`, `agentIds`, `createdAt`), необязательный фильтр `agent_id`
+  (`listForAgent`), стор — `ctx.extra.sshKeyStore`; `reveal()` не вызывается, поэтому приватный
+  ключ и passphrase не попадают ни в `content`, ни в `metadata`. Нет стора — понятная ошибка
+  `sshkeys.tool.deps_unavailable`, пусто — `sshkeys.tool.empty` («добавьте ключ в настройках»).
+  Capability `git_read` (группа `git_read`, в plan-режиме разрешён), trust — `trusted`/`project`,
+  authority — действие `read`; **к workspace не привязан**: в `permission/availability.ts`
+  появился точечный список `WORKSPACE_FREE_TOOLS` (второй аргумент `isWorkspaceDependentTool`),
+  иначе тул был бы недоступен в сессии без проекта, хотя ключи — ресурс инстанса.
+  Отказ `project_repo_clone`/`project_repo_fetch` для SSH-URL без ключа (и `project_repo_fetch`,
+  когда `sshKeyId` записи в сторе уже нет) теперь строит подсказку `git.ssh_key_required_hint`
+  (`{path}`, `{keys}`): доступные ключи в форме **`id → name`** (до 10) и отсылка к
+  `ssh_keys_list`; пустой список — «добавьте ключ в «Настройки → SSH-ключи»». Стор недоступен —
+  прежний текст `git.ssh_key_required` без списка (поведение не ломается; HTTP-роуты `/api/v2/git`
+  не менялись). Тесты: `engine/tools/ssh-keys.test.ts` (список/фильтр/пусто/отсутствие секретов/
+  нет стора/регистрация и политика), `engine/tools/project-repos.test.ts` (подсказка со списком и
+  без), `engine/permission/availability.test.ts`, `engine/security/trust.test.ts`.
+
+- **2026-10-28 — атомарный клон, таймауты и классификация занятого пути (dogfooding P0).**
+  `git clone` больше не идёт прямо в целевой путь: он выполняется в **соседний** временный каталог
+  `<path>.tmp-<uuid>` (тот же родитель → `rename` атомарен в пределах ФС), а цель появляется только
+  после успеха. Причина: падение на фазе fetch (сеть/таймаут/отмена) оставляло каталог с `.git` и
+  `origin`, но без коммитов; регистрация в `project.repos` шла только после успеха, и повтор
+  упирался в «409 уже существует» — путь навсегда оставался «ни репозиторий, ни свободное место».
+  Теперь любая ошибка убирает временный каталог: на диске не остаётся ничего, повтор клонирования
+  работает. Таймауты сетевых операций — секция `git` (`cloneTimeoutMs`/`fetchTimeoutMs`, дефолт
+  300 000 мс, `0` — без таймаута; env `SYNTH_GIT_CLONE_TIMEOUT_MS`/`SYNTH_GIT_FETCH_TIMEOUT_MS`):
+  истечение → типизированные `git.clone_timeout`/`git.fetch_timeout` (**504** на HTTP, actionable
+  сообщение в туле `project_repo_clone`/`project_repo_fetch`), прочие сбои пробрасываются как есть.
+  Занятый целевой путь различается **по файловой системе** (`git/repo-occupancy.ts`, git не
+  запускается): `repo` (полноценный репозиторий → зарегистрировать), `stub` (`.git` без коммитов —
+  след прерванного клона → удалить) и `dir` (непустой каталог без git → другой путь). Код ответа
+  остаётся `git.repo_exists` (409) для всех трёх (различие — `details.occupied`/`details.entries` и
+  текст), а нечитаемый каталог (нет прав) — `git.repo_path_unreadable` (409) вместо невнятного
+  падения внутри git. Тесты: `git/git-service.test.ts` (успешный/неуспешный клон, отсутствие
+  `*.tmp-*`, таймауты `clone`/`fetch`), `server/routes/git.test.ts` (504, три состояния пути,
+  нечитаемый каталог), `engine/tools/project-repos.test.ts` (сообщения с действием, таймаут).
+
 ## Порядок реализации (выполнено 2026-09-24)
 
 1. **Тип + схемы** `GitRepoConfig`; удалено `AgentDefinition.sshKeys`. ✅

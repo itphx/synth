@@ -110,7 +110,7 @@ describe('ChatOrchestrator — live stream.usage (ADR-070)', () => {
 
     const session = await sessionManager.createSession({
       title: 'LiveUsage',
-      settings: { provider: 'liveusage', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'liveusage', model: 'm', agentRole: 'fixer' },
     });
     const msg = makeUserMessage();
     await sessionManager.addMessage(session.id, msg);

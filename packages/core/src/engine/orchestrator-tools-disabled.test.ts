@@ -136,7 +136,7 @@ describe('ChatOrchestrator — tools.disabled (ADR-071 §2.6)', () => {
     return sessionManager.createSession({
       title: 'tools disabled',
       projectId,
-      settings: { provider: 'toolcapture', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'toolcapture', model: 'm', agentRole: 'fixer' },
     }).then(async (session) => {
       session.mode = mode;
       await sessionManager.saveSession(session);

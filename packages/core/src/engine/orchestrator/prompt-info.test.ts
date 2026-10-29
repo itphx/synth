@@ -86,7 +86,7 @@ describe('sessionMessagesToLlm — фильтрация и инвариант to
       msg({ role: MessageRole.INFO, content: 'info' }),
     ];
 
-    const llm = sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = sessionMessagesToLlm(messages, 'fixer', 'user');
     expect(llm.map((m) => m.content)).toEqual(['видно']);
   });
 
@@ -96,13 +96,13 @@ describe('sessionMessagesToLlm — фильтрация и инвариант to
       msg({
         role: MessageRole.ASSISTANT,
         content: 'Timeout or connection drop',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         metadata: { status: 'error' },
       }),
-      msg({ role: MessageRole.ASSISTANT, content: 'ответ', agentRole: 'developer' }),
+      msg({ role: MessageRole.ASSISTANT, content: 'ответ', agentRole: 'fixer' }),
     ];
 
-    const llm = sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = sessionMessagesToLlm(messages, 'fixer', 'user');
     expect(llm.map((m) => m.content)).toEqual(['вопрос', 'ответ']);
   });
 
@@ -116,7 +116,7 @@ describe('sessionMessagesToLlm — фильтрация и инвариант to
       msg({ role: MessageRole.SYSTEM, content: 'без type', metadata: { state: true } }),
     ];
 
-    const llm = sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = sessionMessagesToLlm(messages, 'fixer', 'user');
     expect(llm[0]).toMatchObject({ role: 'user', content: wrapStateContent('mode_change', '[MODE] act') });
     expect(llm[1]!.content).toBe(wrapStateContent('state', 'без type'));
     expect(llm[1]!.content).not.toContain('[anonymous]');
@@ -125,11 +125,11 @@ describe('sessionMessagesToLlm — фильтрация и инвариант to
   it('assistant(toolCalls) → assistant+toolUse, парный tool → role tool с toolCallId', () => {
     const messages = [
       msg({ role: MessageRole.USER, content: 'задача', author: 'user' }),
-      assistantWithTool('', 'call_1', 'developer'),
-      msg({ role: MessageRole.TOOL, content: 'результат', toolCallId: 'call_1', agentRole: 'developer' }),
+      assistantWithTool('', 'call_1', 'fixer'),
+      msg({ role: MessageRole.TOOL, content: 'результат', toolCallId: 'call_1', agentRole: 'fixer' }),
     ];
 
-    const llm = sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = sessionMessagesToLlm(messages, 'fixer', 'user');
     expect(llm[1]!.role).toBe('assistant');
     expect(llm[1]!.toolUse).toHaveLength(1);
     expect(llm[2]).toMatchObject({ role: MessageRole.TOOL, toolCallId: 'call_1', content: 'результат' });
@@ -138,24 +138,24 @@ describe('sessionMessagesToLlm — фильтрация и инвариант to
   it('осиротевший tool (нет вызова выше) уходит user-текстом с атрибуцией', () => {
     const messages = [
       msg({ role: MessageRole.USER, content: 'задача', author: 'user' }),
-      msg({ role: MessageRole.TOOL, content: 'осиротевший', toolCallId: 'call_x', agentRole: 'developer' }),
+      msg({ role: MessageRole.TOOL, content: 'осиротевший', toolCallId: 'call_x', agentRole: 'fixer' }),
       msg({ role: MessageRole.TOOL, content: 'без toolCallId' }),
     ];
 
-    const llm = sessionMessagesToLlm(messages, 'developer', 'user');
-    expect(llm[1]).toMatchObject({ role: 'user', content: '[developer]: осиротевший' });
+    const llm = sessionMessagesToLlm(messages, 'fixer', 'user');
+    expect(llm[1]).toMatchObject({ role: 'user', content: '[fixer]: осиротевший' });
     expect(llm[1]!.toolCallId).toBeUndefined();
     expect(llm[2]).toMatchObject({ role: 'user', content: '[anonymous]: без toolCallId' });
   });
 
   it('disabled-assistant не регистрирует свои toolCallId — его tool-результат не становится парным', () => {
     const messages = [
-      assistantWithTool('', 'call_1', 'developer'),
-      msg({ role: MessageRole.TOOL, content: 'результат', toolCallId: 'call_1', agentRole: 'developer' }),
+      assistantWithTool('', 'call_1', 'fixer'),
+      msg({ role: MessageRole.TOOL, content: 'результат', toolCallId: 'call_1', agentRole: 'fixer' }),
     ];
     messages[0]!.disabled = true;
 
-    const llm = sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = sessionMessagesToLlm(messages, 'fixer', 'user');
     expect(llm).toHaveLength(1);
     expect(llm[0]!.role).toBe('user');
     expect(llm[0]!.toolCallId).toBeUndefined();
@@ -167,7 +167,7 @@ describe('sessionMessagesToLlm — фильтрация и инвариант to
       msg({ role: MessageRole.TOOL, content: 'ok', toolCallId: 'call_1', agentRole: 'researcher' }),
     ];
 
-    const llm = sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = sessionMessagesToLlm(messages, 'fixer', 'user');
     expect(llm[0]).toMatchObject({
       role: 'assistant',
       content: '[researcher]: текст чужого агента',
@@ -178,18 +178,18 @@ describe('sessionMessagesToLlm — фильтрация и инвариант to
   });
 
   it('пустой content у чужого assistant с toolCalls — без префикса атрибуции', () => {
-    const llm = sessionMessagesToLlm([assistantWithTool('', 'call_1', 'researcher')], 'developer', 'user');
+    const llm = sessionMessagesToLlm([assistantWithTool('', 'call_1', 'researcher')], 'fixer', 'user');
     expect(llm[0]!.content).toBe('');
   });
 
   it('reasoning прокидывается только для своего assistant', () => {
     const messages = [
-      msg({ role: MessageRole.ASSISTANT, content: 'свой', agentRole: 'developer', reasoning: 'r-own' }),
+      msg({ role: MessageRole.ASSISTANT, content: 'свой', agentRole: 'fixer', reasoning: 'r-own' }),
       msg({ role: MessageRole.ASSISTANT, content: 'чужой', agentRole: 'researcher', reasoning: 'r-foreign' }),
       msg({ role: MessageRole.ASSISTANT, content: 'легаси без agentRole', reasoning: 'r-legacy' }),
     ];
 
-    const llm = sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = sessionMessagesToLlm(messages, 'fixer', 'user');
     expect(llm[0]!.reasoning).toBe('r-own');
     expect(llm[1]!.reasoning).toBeUndefined();
     // пустой agentRole = «своё» (легаси/сабагент) — иначе такие assistant порождали бы сирот
@@ -205,7 +205,7 @@ describe('sessionMessagesToLlm — фильтрация и инвариант to
       msg({ role: MessageRole.USER, content: 'без автора' }),
     ];
 
-    const llm = sessionMessagesToLlm(messages, 'developer', 'user');
+    const llm = sessionMessagesToLlm(messages, 'fixer', 'user');
     expect(llm.map((m) => m.content)).toEqual([
       'мой',
       '{telegram}: чужой',
@@ -219,15 +219,15 @@ describe('buildPromptHistoryInfo — read-only слой истории', () => {
   it('messages.count совпадает с реальной отправкой, disabled/hidden/info — в excluded', () => {
     const messages = [
       msg({ role: MessageRole.USER, content: 'вопрос', author: 'user' }),
-      msg({ role: MessageRole.ASSISTANT, content: 'ответ', agentRole: 'developer' }),
+      msg({ role: MessageRole.ASSISTANT, content: 'ответ', agentRole: 'fixer' }),
       msg({ role: MessageRole.USER, content: 'off', disabled: true }),
       msg({ role: MessageRole.USER, content: 'hid', hidden: true }),
       msg({ role: MessageRole.INFO, content: 'info' }),
     ];
     const session = makeSession(messages, { userId: 'user' });
 
-    const info = buildPromptHistoryInfo(session, 'developer');
-    const sent = sessionMessagesToLlm(messages, 'developer', 'user');
+    const info = buildPromptHistoryInfo(session, 'fixer');
+    const sent = sessionMessagesToLlm(messages, 'fixer', 'user');
 
     expect(info.messages.count).toBe(sent.length);
     expect(info.excluded).toEqual({ disabled: 1, hidden: 1, info: 1 });
@@ -236,21 +236,21 @@ describe('buildPromptHistoryInfo — read-only слой истории', () => {
   it('отключённая user-реплика выключает весь свой ход в истории промпта', () => {
     const messages = [
       msg({ role: MessageRole.USER, content: 'q1', author: 'user' }),
-      msg({ role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'developer' }),
+      msg({ role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'fixer' }),
       msg({ role: MessageRole.USER, content: 'q2', author: 'user', disabled: true }),
       msg({
         role: MessageRole.ASSISTANT,
         content: 'a2',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         toolCalls: [{ id: 't1', function: { name: 'read_file' } }],
       }),
       msg({ role: MessageRole.TOOL, content: 'result', toolCallId: 't1' }),
       msg({ role: MessageRole.USER, content: 'q3', author: 'user' }),
-      msg({ role: MessageRole.ASSISTANT, content: 'a3', agentRole: 'developer' }),
+      msg({ role: MessageRole.ASSISTANT, content: 'a3', agentRole: 'fixer' }),
     ];
     const session = makeSession(messages, { userId: 'user' });
 
-    const info = buildPromptHistoryInfo(session, 'developer');
+    const info = buildPromptHistoryInfo(session, 'fixer');
 
     // q2 + её assistant + tool-результат.
     expect(info.excluded.disabled).toBe(3);
@@ -263,14 +263,14 @@ describe('buildPromptHistoryInfo — read-only слой истории', () => {
       msg({
         role: MessageRole.ASSISTANT,
         content: 'текст',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         reasoning: 'мысль',
         toolCalls: [{ id: 'c1', function: { name: 'read_file' } }],
       }),
     ];
     const session = makeSession(messages, { userId: 'user' });
 
-    const info = buildPromptHistoryInfo(session, 'developer', DEFAULT_CHARS_PER_TOKEN);
+    const info = buildPromptHistoryInfo(session, 'fixer', DEFAULT_CHARS_PER_TOKEN);
     const expectedChars =
       'вопрос'.length
       + 'текст'.length
@@ -290,7 +290,7 @@ describe('buildPromptHistoryInfo — read-only слой истории', () => {
     ];
     const session = makeSession(messages);
 
-    const info = buildPromptHistoryInfo(session, 'developer');
+    const info = buildPromptHistoryInfo(session, 'fixer');
     expect(info.stateMessages.map((s) => s.type)).toEqual(['mode_change', 'todos_updated']);
     expect(info.stateMessages[0]!.count).toBe(2);
     expect(info.stateMessages[1]!.count).toBe(1);
@@ -306,7 +306,7 @@ describe('buildPromptHistoryInfo — read-only слой истории', () => {
     skipped.parts = [{ id: 'p3', type: 'tool_result', data: { b: 2 } }];
     const session = makeSession([withAttachment, skipped], { userId: 'user' });
 
-    const info = buildPromptHistoryInfo(session, 'developer');
+    const info = buildPromptHistoryInfo(session, 'fixer');
     expect(info.attachments.count).toBe(1);
     expect(info.attachments.chars).toBe(JSON.stringify({ a: 1 }).length);
   });
@@ -318,7 +318,7 @@ describe('buildPromptHistoryInfo — read-only слой истории', () => {
     ];
     const session = makeSession(messages, { userId: 'user' });
 
-    const info = buildPromptHistoryInfo(session, 'developer');
+    const info = buildPromptHistoryInfo(session, 'fixer');
     expect(info.secretPlaceholders).toBe(2);
   });
 });
@@ -333,13 +333,13 @@ describe('lastPromptMeta', () => {
   });
 
   it('возвращает promptMeta последнего ответа; null если их нет', () => {
-    const withMeta = msg({ role: MessageRole.ASSISTANT, content: 'a', agentRole: 'developer', promptMeta: meta('developer') });
+    const withMeta = msg({ role: MessageRole.ASSISTANT, content: 'a', agentRole: 'fixer', promptMeta: meta('fixer') });
     const session = makeSession([
       msg({ role: MessageRole.USER, content: 'q', author: 'user' }),
       withMeta,
     ]);
 
-    expect(lastPromptMeta(session, 'developer')).toBe(withMeta.promptMeta);
+    expect(lastPromptMeta(session, 'fixer')).toBe(withMeta.promptMeta);
     expect(lastPromptMeta(session)).toBe(withMeta.promptMeta);
     expect(lastPromptMeta(makeSession([]))).toBeNull();
   });
@@ -350,7 +350,7 @@ describe('lastPromptMeta', () => {
     const session = makeSession([legacy, other]);
 
     // Последняя запись принадлежит другому агенту — она пропускается, берётся предыдущая
-    expect(lastPromptMeta(session, 'developer')).toBe(legacy.promptMeta);
+    expect(lastPromptMeta(session, 'fixer')).toBe(legacy.promptMeta);
     // Запись без agentRole считается «своей» для любого агента (легаси/сабагент)
     expect(lastPromptMeta(makeSession([legacy, legacy]))).toBe(legacy.promptMeta);
     expect(lastPromptMeta(session, 'researcher')).toBe(other.promptMeta);

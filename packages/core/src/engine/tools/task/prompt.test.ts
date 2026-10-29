@@ -64,6 +64,41 @@ describe('resolveSubagentPrompt', () => {
     expect(resolveSubagentPrompt({}, 'explore', 'en', dir)).toBe('BASE PROMPT');
   });
 
+  it('фоллбек на ролевой промпт roles/<TYPE>.{lang}.md (общий текст с основной сессией)', async () => {
+    const rolesDir = join(dir, 'roles');
+    await mkdir(rolesDir, { recursive: true });
+    await writeFile(join(rolesDir, 'FIXER.ru.md'), 'ROLE RU PROMPT');
+
+    // subagents/fixer.* нет → берётся ролевой промпт (ADR-069/ADR-046 не дублируют текст).
+    expect(resolveSubagentPrompt({ subagentPrompt: 'legacy' }, 'fixer', 'ru', dir))
+      .toBe('ROLE RU PROMPT');
+  });
+
+  it('иерархия целиком: subagents/<type> → roles/<TYPE> → subagentPrompt', async () => {
+    const rolesDir = join(dir, 'roles');
+    await mkdir(rolesDir, { recursive: true });
+    await writeFile(join(rolesDir, 'TESTER.ru.md'), 'ROLE RU');
+    await writeFile(join(rolesDir, 'TESTER.en.md'), 'ROLE EN');
+    await writeFile(join(subagentsDir, 'tester.ru.md'), 'SUBAGENT RU');
+
+    // 1) файл в subagents/ важнее ролевого.
+    expect(resolveSubagentPrompt({ subagentPrompt: 'legacy' }, 'tester', 'ru', dir))
+      .toBe('SUBAGENT RU');
+
+    // 2) без subagents/ — ролевой промпт, локаль соблюдается.
+    await rm(join(subagentsDir, 'tester.ru.md'));
+    expect(resolveSubagentPrompt({ subagentPrompt: 'legacy' }, 'tester', 'ru', dir))
+      .toBe('ROLE RU');
+    expect(resolveSubagentPrompt({ subagentPrompt: 'legacy' }, 'tester', 'en', dir))
+      .toBe('ROLE EN');
+
+    // 3) ни subagents/, ни roles/ — легаси `subagentPrompt` из дефинишена.
+    await rm(join(rolesDir, 'TESTER.ru.md'));
+    await rm(join(rolesDir, 'TESTER.en.md'));
+    expect(resolveSubagentPrompt({ subagentPrompt: 'legacy' }, 'tester', 'ru', dir))
+      .toBe('legacy');
+  });
+
   it('нет файлов промпта → agentDef.subagentPrompt (легаси definitions)', async () => {
     expect(resolveSubagentPrompt({ subagentPrompt: 'legacy prompt' }, 'explore', 'ru', dir))
       .toBe('legacy prompt');
@@ -94,7 +129,7 @@ describe('buildSubagentUnavailableToolsSection (ADR-070 §2.9.1 / ADR-075)', () 
     const tools = [tool('git_status'), tool('read_file')];
     const section = buildSubagentUnavailableToolsSection(
       tools,
-      { git: false, rg: true, sh: true },
+      { git: false, rg: true, sh: true, bash: true },
       'ru',
     );
     expect(section).toContain('[НЕДОСТУПНЫЕ ТУЛЫ]');
@@ -106,7 +141,7 @@ describe('buildSubagentUnavailableToolsSection (ADR-070 §2.9.1 / ADR-075)', () 
   it('en-локаль даёт англоязычный заголовок', () => {
     const section = buildSubagentUnavailableToolsSection(
       [tool('grep_files')],
-      { git: true, rg: false, sh: true },
+      { git: true, rg: false, sh: true, bash: true },
       'en',
     );
     expect(section).toContain('[UNAVAILABLE TOOLS]');
@@ -143,7 +178,7 @@ describe('buildSubagentUnavailableToolsSection (ADR-070 §2.9.1 / ADR-075)', () 
   it('dependency и workspace: тул не дублируется (dependency приоритетнее)', () => {
     const section = buildSubagentUnavailableToolsSection(
       [tool('git_status'), tool('read_file')],
-      { git: false, rg: true, sh: true },
+      { git: false, rg: true, sh: true, bash: true },
       'ru',
       {
         workspaceReady: false,

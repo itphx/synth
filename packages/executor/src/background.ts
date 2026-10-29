@@ -34,7 +34,13 @@
  *
  * - `timeoutMs > 0` — `SIGTERM` по истечении таймаута, через 5 с — `SIGKILL`
  *   (те же пауза и сигналы, что у inline-порта в core);
- * - `stop()` — идемпотентно: повторный вызов не дублирует эскалацию.
+ * - сигналы уходят **группе процессов** (`kill(-pid)` на POSIX; ребёнок —
+ *   лидер своей группы, `detached: true`), поэтому shell-форма гаснет целиком:
+ *   потомки не остаются держать пайпы;
+ * - `stop()` — идемпотентно: повторный вызов не дублирует эскалацию (после
+ *   `exit` сигналы не шлются вовсе — pid мог быть переиспользован);
+ * - терминальный статус ставится по `exit` (+ короткий дренаж потоков), а не
+ *   по `close`: `close` не придёт, пока пайп держит внук.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -42,12 +48,22 @@ import { randomUUID } from 'node:crypto';
 import { appendFile, chmod, mkdir, open, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 import type { ExecCommand } from '@itphx/synth-core';
 import type { BackgroundProcessStatus, ExecutorErrorReason } from './protocol.js';
 import { resolveContainedCwd } from './workspace.js';
 
 /** Базовая оболочка shell-формы (совпадает с `DEFAULT_SHELL_BINARY` в core). */
-const DEFAULT_SHELL_BINARY = 'sh';
+const DEFAULT_SHELL_BINARY = 'bash';
+
+/**
+ * Предел дренажа потоков после `exit`.
+ *
+ * `close` ждать нельзя: его не будет, пока пайп держит внук, унаследовавший
+ * stdio. После `exit` дочитываем уже прочитанный хвост, но не дольше этого
+ * предела, затем потоки уничтожаются.
+ */
+const EXIT_DRAIN_MS = 250;
 
 /** Лимит живых фоновых процессов по умолчанию. */
 export const DEFAULT_MAX_BACKGROUND_PROCESSES = 8;
@@ -204,6 +220,66 @@ interface BackgroundEntry extends BackgroundProcessRecord {
   timeoutTimer?: NodeJS.Timeout;
   killTimer?: NodeJS.Timeout;
   stopRequested: boolean;
+  /**
+   * Процесс уже вышел (событие `exit`): группа распущена, сигналы больше не
+   * шлём — pid мог быть переиспользован, а `kill(-pid)` попал бы в чужую
+   * группу. Терминальный статус ставится после дренажа потоков.
+   */
+  exitSeen: boolean;
+}
+
+/**
+ * Потоки вывода процесса (только реально открытые).
+ *
+ * `ChildProcess.stdout`/`stderr` — `null` при `stdio: 'ignore'`/`'inherit'`;
+ * у нас всегда `pipe`, но тип обязывает фильтровать.
+ */
+function outputStreams(child: ChildProcess): Readable[] {
+  return [child.stdout, child.stderr].filter((stream): stream is Readable => stream !== null);
+}
+
+/** Дождаться конца потоков вывода (не дольше `timeoutMs`). */
+function drainOutputStreams(child: ChildProcess, timeoutMs: number): Promise<void> {
+  const streams = outputStreams(child);
+  if (streams.length === 0) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    let remaining = streams.length;
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    timer.unref?.();
+    for (const stream of streams) {
+      if (stream.readableEnded || stream.destroyed) {
+        remaining -= 1;
+        continue;
+      }
+      // Ошибка потока трактуется как его конец: ожидание не должно зависнуть.
+      stream.once('end', () => {
+        remaining -= 1;
+        if (remaining <= 0) finish();
+      });
+      stream.once('error', () => {
+        remaining -= 1;
+        if (remaining <= 0) finish();
+      });
+    }
+    if (remaining <= 0) finish();
+  });
+}
+
+/**
+ * Уничтожить потоки вывода процесса.
+ *
+ * Нужно после дренажа: если пайп унаследовал живой внук, дескриптор иначе
+ * остаётся открытым, а `close` не приходит никогда.
+ */
+function destroyOutputStreams(child: ChildProcess): void {
+  for (const stream of outputStreams(child)) stream.destroy();
 }
 
 /** Файл и аргументы запуска для обеих форм команды (как в core). */
@@ -375,6 +451,7 @@ export class BackgroundExecService {
         stdoutChain: Promise.resolve(),
         stderrChain: Promise.resolve(),
         stopRequested: false,
+        exitSeen: false,
       };
       this._entries.set(id, entry);
 
@@ -391,8 +468,26 @@ export class BackgroundExecService {
       child.stderr?.on('data', (chunk: Buffer) => {
         this._onData(entry, 'stderr', chunk);
       });
+      // Ошибка потока не должна становиться непойманной: терминальный статус
+      // определяет `exit`, а не сбой чтения.
+      child.stdout?.on('error', () => {});
+      child.stderr?.on('error', () => {});
+      // Терминальный статус — по `exit`, не по `close`: `close` не придёт,
+      // пока пайп держит внук, унаследовавший stdio. После `exit` дочитываем
+      // хвост (дренаж с пределом), затем потоки уничтожаются.
+      child.on('exit', (code, signal) => {
+        entry.exitSeen = true;
+        this._clearTimers(entry);
+        void drainOutputStreams(child, EXIT_DRAIN_MS).then(() => {
+          destroyOutputStreams(child);
+          this._onExit(entry, code, signal);
+        });
+      });
+      // Неудача запуска: `exit` может не прийти вовсе, а `close` приходит с
+      // отрицательным кодом libuv (`-2` для ENOENT) — как и раньше.
       child.on('close', (code, signal) => {
-        this._onClose(entry, code, signal);
+        if (entry.exitSeen || entry.status !== 'running') return;
+        this._onExit(entry, code, signal);
       });
 
       // Таймаут процесса: `SIGTERM`, через 5 с — `SIGKILL`.
@@ -591,20 +686,16 @@ export class BackgroundExecService {
     entry.truncated = true;
   }
 
-  /** Процесс завершился: терминальный статус и время жизни. */
-  private _onClose(
+  /**
+   * Процесс завершился (`exit` + дренаж потоков): терминальный статус и
+   * время жизни.
+   */
+  private _onExit(
     entry: BackgroundEntry,
     code: number | null,
     signal: NodeJS.Signals | null,
   ): void {
-    if (entry.timeoutTimer) {
-      clearTimeout(entry.timeoutTimer);
-      entry.timeoutTimer = undefined;
-    }
-    if (entry.killTimer) {
-      clearTimeout(entry.killTimer);
-      entry.killTimer = undefined;
-    }
+    this._clearTimers(entry);
     const finishedAt = this._now();
     entry.finishedAt = finishedAt;
     entry.durationMs = Math.max(0, finishedAt - entry.startedAt);
@@ -614,6 +705,18 @@ export class BackgroundExecService {
     entry.child = undefined;
   }
 
+  /** Снять таймеры процесса (таймаут и эскалация `SIGKILL`). */
+  private _clearTimers(entry: BackgroundEntry): void {
+    if (entry.timeoutTimer) {
+      clearTimeout(entry.timeoutTimer);
+      entry.timeoutTimer = undefined;
+    }
+    if (entry.killTimer) {
+      clearTimeout(entry.killTimer);
+      entry.killTimer = undefined;
+    }
+  }
+
   /**
    * Отправить сигнал процессу и его потомкам.
    *
@@ -621,8 +724,12 @@ export class BackgroundExecService {
    * поэтому `kill(-pid)` достаёт всё дерево. Иначе сигнал получает только
    * оболочка, а форкнутая ею команда остаётся жить: `close` не приходит, пока
    * потомок не закроет пайпы. Если группы уже нет — падаем на прямое убийство.
+   *
+   * Процесс уже вышел (`exitSeen`) — сигнал не шлём: pid мог быть
+   * переиспользован, а `kill(-pid)` попал бы в чужую группу.
    */
   private _signal(entry: BackgroundEntry, signal: NodeJS.Signals): void {
+    if (entry.exitSeen) return;
     const child = entry.child;
     if (!child) return;
     const pid = child.pid;

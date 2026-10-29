@@ -109,7 +109,7 @@ describe('ChatOrchestrator — метрики LLM-вызовов (ADR-094)', () 
 
     const session = await sessionManager.createSession({
       title: 'Metrics',
-      settings: { provider: 'metricsprovider', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'metricsprovider', model: 'm', agentRole: 'fixer' },
     });
     const msg = makeUserMessage();
     await sessionManager.addMessage(session.id, msg);

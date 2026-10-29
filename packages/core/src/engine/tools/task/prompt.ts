@@ -14,8 +14,16 @@ import { isWorkspaceDependentTool } from '../../permission/availability.js';
 import { isRuntimeDepAvailable, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, type RuntimeDeps } from '../runtime-deps.js';
 
 /**
- * Промпт саб-агента по языку сессии: prompts/subagents/{type}.{lang}.md →
- * {type}.md → agentDef.subagentPrompt (definitions JSON, легаси).
+ * Промпт саб-агента по языку сессии:
+ * `prompts/subagents/{type}.{lang}.md` → `{type}.md` →
+ * `prompts/roles/{TYPE}.{lang}.md` → `{TYPE}.md` → `agentDef.subagentPrompt`
+ * (definitions JSON, легаси).
+ *
+ * Второй уровень (`roles/`) — не дублирование текстов: ролевые агенты
+ * (`fixer`/`tester`/`researcher`/`security-auditor`) имеют **один** промпт в
+ * `prompts/roles/`, он же используется основной сессией (`ContextConfig.getRolePrompt`).
+ * Без этого фоллбека саб-агент с ролью без файла в `subagents/` получал бы пустой
+ * промпт (или легаси-`subagentPrompt` из дефинишена).
  * Каталог промптов — systemPromptsDir из ContextConfig (резолв prompts/ или dist/prompts).
  */
 export function resolveSubagentPrompt(
@@ -26,13 +34,21 @@ export function resolveSubagentPrompt(
 ): string {
   if (systemPromptsDir) {
     const lang = language === 'en' ? 'en' : 'ru';
-    const localizedPath = join(systemPromptsDir, 'subagents', `${subagentType}.${lang}.md`);
-    if (existsSync(localizedPath)) {
-      try { return readFileSync(localizedPath, 'utf-8'); } catch { /* fallback ниже */ }
-    }
-    const basePath = join(systemPromptsDir, 'subagents', `${subagentType}.md`);
-    if (existsSync(basePath)) {
-      try { return readFileSync(basePath, 'utf-8'); } catch { /* fallback ниже */ }
+    const roleType = subagentType.toUpperCase();
+    const candidates = [
+      join(systemPromptsDir, 'subagents', `${subagentType}.${lang}.md`),
+      join(systemPromptsDir, 'subagents', `${subagentType}.md`),
+      join(systemPromptsDir, 'roles', `${roleType}.${lang}.md`),
+      join(systemPromptsDir, 'roles', `${roleType}.md`),
+    ];
+    for (const path of candidates) {
+      if (!existsSync(path)) continue;
+      try {
+        const content = readFileSync(path, 'utf-8');
+        if (content) return content;
+      } catch {
+        /* fallback ниже */
+      }
     }
   }
   return agentDef.subagentPrompt || '';
@@ -74,7 +90,7 @@ export function buildSubagentUnavailableToolsSection(
     }
     // ADR-075: без рабочего каталога проекта file/shell/git-тулы недоступны.
     // Дедупликация по имени: тул не попадает одновременно и как dependency, и как workspace.
-    if (workspaceReady === false && !seen.has(name) && isWorkspaceDependentTool(capabilitiesOf?.(name))) {
+    if (workspaceReady === false && !seen.has(name) && isWorkspaceDependentTool(capabilitiesOf?.(name), name)) {
       unavailable.push({ name, reason: 'workspace' });
       seen.add(name);
     }

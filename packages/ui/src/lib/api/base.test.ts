@@ -139,6 +139,33 @@ describe('base.fetchJSON — формат ошибок проекта', () => {
 
     await expect(fetchJSON('/api/v2/x')).rejects.toMatchObject({ status: 400, code: undefined })
   })
+
+  it('пробрасывает details (ADR-076: 409 «путь занят» — occupied)', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        {
+          error: {
+            code: 'git.repo_exists',
+            error: 'Репозиторий занят',
+            details: { path: 'taken', occupied: 'repo' },
+          },
+        },
+        409,
+      ),
+    )
+
+    await expect(fetchJSON('/api/v2/git/repos/clone')).rejects.toMatchObject({
+      status: 409,
+      code: 'git.repo_exists',
+      details: { path: 'taken', occupied: 'repo' },
+    })
+  })
+
+  it('details отсутствуют в теле → details === undefined', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: { message: 'boom' } }, 409))
+
+    await expect(fetchJSON('/api/v2/x')).rejects.toMatchObject({ status: 409, details: undefined })
+  })
 })
 
 describe('base.encodeFilePath — кодирование пути supporting-файла', () => {

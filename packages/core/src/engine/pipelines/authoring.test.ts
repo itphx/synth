@@ -27,7 +27,7 @@ function validSpec(name = 'Тестовый пайплайн'): PipelineSpec {
     version: 1,
     status: 'draft',
     mode: 'act',
-    nodes: [{ id: 'n1', kind: 'agent', agent: 'developer' }],
+    nodes: [{ id: 'n1', kind: 'agent', agent: 'fixer' }],
     exits: [{ kind: 'none' }],
   };
 }
@@ -89,7 +89,7 @@ describe('Авторские операции над пайплайном (ADR-1
 
     const next = validSpec('Переименованный пайплайн');
     next.nodes = [
-      { id: 'n1', kind: 'agent', agent: 'developer' },
+      { id: 'n1', kind: 'agent', agent: 'fixer' },
       { id: 'n2', kind: 'tool', tool: 'read_file' },
     ];
 
@@ -120,7 +120,7 @@ describe('Авторские операции над пайплайном (ADR-1
     const broken = validSpec();
     // Переход `on[].then` ссылается на несуществующий узел.
     broken.nodes = [
-      { id: 'n1', kind: 'agent', agent: 'developer', on: [{ when: { path: 'prev.status', op: 'eq', value: 'ok' }, then: 'missing' }] },
+      { id: 'n1', kind: 'agent', agent: 'fixer', on: [{ when: { path: 'prev.status', op: 'eq', value: 'ok' }, then: 'missing' }] },
     ];
 
     await expect(

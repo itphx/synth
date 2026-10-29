@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useDeferredValue, useMemo, useState } from 'react'
 import { cn, resolveColor } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { useAgentsStore } from '@/stores/agentsStore'
@@ -196,9 +196,22 @@ export function StreamingPlaceholder({ stream, onStop, sessionId, retry, onRetry
     : undefined
 
   const isInline = intermediateTextMode !== 'bottom'
+  // T14 (dogfooding): markdown-парсинг длинного ответа не должен блокировать
+  // ввод/скролл. `useDeferredValue` отдаёт отстающее значение на «срочных»
+  // рендерах (набор текста, скролл), а разбор markdown делает в фоне. Когда
+  // стрим завершён (`isStreaming === false`), показываем фактический контент
+  // сразу — финальный рендер не должен «догонять» deferred-значение.
+  const deferredContent = useDeferredValue(stream.content)
+  const renderedContent = stream.isStreaming ? deferredContent : stream.content
   const displayContent = isInline
-    ? stream.content.slice(stream._lastContentLen).replace(/^\n+|\n+$/g, '')
-    : stream.content
+    ? renderedContent.slice(stream._lastContentLen).replace(/^\n+|\n+$/g, '')
+    : renderedContent
+  // Элемент markdown пересоздаётся только при смене отображаемого текста —
+  // не на каждом рендере плашки (статистика/таймеры/кнопки).
+  const markdown = useMemo(
+    () => (displayContent ? <MarkdownContent content={displayContent} /> : null),
+    [displayContent],
+  )
 
   const timeline = buildTimeline(
     stream.reasoningBlocks,
@@ -298,7 +311,7 @@ export function StreamingPlaceholder({ stream, onStop, sessionId, retry, onRetry
           return null
         })}
 
-        {displayContent && <MarkdownContent content={displayContent} />}
+        {markdown}
 
         {stream.isStreaming && (
           <div className="flex items-center gap-0.5 mt-2 pt-1.5 border-t border-border/30">

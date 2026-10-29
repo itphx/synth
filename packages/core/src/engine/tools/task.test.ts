@@ -547,13 +547,13 @@ describe('taskTool — context modes', () => {
 
   it('возвращает ошибку, если агент не имеет класса subagent', async () => {
     const result = await taskTool.execute(
-      { description: 'test', prompt: 'hello', subagent_type: 'developer' },
+      { description: 'test', prompt: 'hello', subagent_type: 'fixer' },
       {
         ...baseCtx,
         extra: {
           provider: makeMockProvider(),
           agentRegistry: {
-            get: () => ({ id: 'developer', agentMode: ['primary'] }),
+            get: () => ({ id: 'fixer', agentMode: ['primary'] }),
             getSubagents: () => [{ id: 'explore' }],
             getToolsForAgent: () => [],
           } as unknown as MockAgentRegistry,
@@ -1224,7 +1224,7 @@ describe('taskTool × runtimeDeps саб-агента (ADR-070 §2.9.1)', () => 
           sessionId: parent.id,
           agentRegistry: makeFullToolAgentRegistry(toolRegistry),
           toolRegistry,
-          runtimeDeps: { git: false, rg: true, sh: true },
+          runtimeDeps: { git: false, rg: true, sh: true, bash: true },
         },
       },
     );
@@ -1289,7 +1289,7 @@ describe('taskTool × runtimeDeps саб-агента (ADR-070 §2.9.1)', () => 
           sessionId: parent.id,
           agentRegistry: makeFullToolAgentRegistry(toolRegistry),
           toolRegistry,
-          runtimeDeps: { git: true, rg: true, sh: true },
+          runtimeDeps: { git: true, rg: true, sh: true, bash: true },
         },
       },
     );
@@ -1603,14 +1603,14 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
       disabled: false,
       pinned: false,
       hidden: false,
-      agentRole: 'developer',
+      agentRole: 'fixer',
       metadata: { tool_name: 'task', child_session_id: childSessionId },
     });
 
     const stats = await computeSessionStats((await sessionManager.getSession(parent.id))!, {
       getSession: (id) => sessionManager.getSession(id),
     });
-    const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
+    const dev = stats.agents.find((a) => a.agent_role === 'fixer')!;
     expect(dev.subagent_sessions).toBe(1);
     expect(dev.subagent_tokens).toBe(168);
   });
@@ -2252,7 +2252,7 @@ describe('buildSubagentUnavailableToolsSection — workspace-гейт (ADR-075)'
   it('workspaceReady=false: file/shell/git-тулы помечаются workspace, web-тул — нет', () => {
     const section = buildSubagentUnavailableToolsSection(
       [makeTool('read_file'), makeTool('execute_shell'), makeTool('git_status'), makeTool('web_fetch')],
-      { git: true, rg: true, sh: true },
+      { git: true, rg: true, sh: true, bash: true },
       'ru',
       { workspaceReady: false, capabilitiesOf },
     );
@@ -2268,11 +2268,11 @@ describe('buildSubagentUnavailableToolsSection — workspace-гейт (ADR-075)'
 
   it('workspaceReady=true/undefined: секции недоступных тулов нет', () => {
     const tools = [makeTool('read_file'), makeTool('web_fetch')];
-    expect(buildSubagentUnavailableToolsSection(tools, { git: true, rg: true, sh: true }, 'ru', {
+    expect(buildSubagentUnavailableToolsSection(tools, { git: true, rg: true, sh: true, bash: true }, 'ru', {
       workspaceReady: true,
       capabilitiesOf,
     })).toBe('');
-    expect(buildSubagentUnavailableToolsSection(tools, { git: true, rg: true, sh: true }, 'ru', {
+    expect(buildSubagentUnavailableToolsSection(tools, { git: true, rg: true, sh: true, bash: true }, 'ru', {
       capabilitiesOf,
     })).toBe('');
   });
@@ -2280,7 +2280,7 @@ describe('buildSubagentUnavailableToolsSection — workspace-гейт (ADR-075)'
   it('dependency-тул остаётся отдельной строкой и не дублируется как workspace', () => {
     const section = buildSubagentUnavailableToolsSection(
       [makeTool('git_status'), makeTool('read_file'), makeTool('web_fetch')],
-      { git: false, rg: true, sh: true },
+      { git: false, rg: true, sh: true, bash: true },
       'ru',
       { workspaceReady: false, capabilitiesOf },
     );

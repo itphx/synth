@@ -193,7 +193,7 @@ describe('ChatOrchestrator — проектные инструкции (ADR-069 
     return sessionManager.createSession({
       title: 'Instr',
       projectId: withProject ? 'p1' : undefined,
-      settings: { provider: 'instrstub', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'instrstub', model: 'm', agentRole: 'fixer' },
     });
   }
 
@@ -214,7 +214,7 @@ describe('ChatOrchestrator — проектные инструкции (ADR-069 
     const session = await createSession(true);
 
     const after = await runTurn(orchestrator, session.id);
-    expect(after.promptStates!.developer!.generation).toBe(1);
+    expect(after.promptStates!.fixer!.generation).toBe(1);
 
     const info = await orchestrator.getPromptInfo(after);
     const entry = info.manifest.entries.find((e) => e.key === 'instructions');
@@ -228,21 +228,21 @@ describe('ChatOrchestrator — проектные инструкции (ADR-069 
     const session = await createSession(true);
 
     const first = await runTurn(orchestrator, session.id);
-    expect(first.promptStates!.developer!.generation).toBe(1);
-    const stablePrefixBefore = first.promptStates!.developer!.staticPrefix;
+    expect(first.promptStates!.fixer!.generation).toBe(1);
+    const stablePrefixBefore = first.promptStates!.fixer!.staticPrefix;
 
     // Контент инструкций изменился; stable-префикс — нет.
     await writeFile(join(wsDir, 'AGENTS.md'), 'V2-INSTRUCTIONS', 'utf-8');
 
     const second = await runTurn(orchestrator, session.id);
-    const state = second.promptStates!.developer!;
+    const state = second.promptStates!.fixer!;
     expect(state.generation).toBe(2);
     expect(state.reason).toBe('generation-change');
     expect(state.staticPrefix).toBe(stablePrefixBefore);
 
     // Повторный ход с тем же контентом — без нового bump.
     const third = await runTurn(orchestrator, session.id);
-    expect(third.promptStates!.developer!.generation).toBe(2);
+    expect(third.promptStates!.fixer!.generation).toBe(2);
   });
 
   it('instructions.enabled=false: инструкции не грузятся и generation не растёт', async () => {
@@ -253,7 +253,7 @@ describe('ChatOrchestrator — проектные инструкции (ADR-069 
     await writeFile(join(wsDir, 'AGENTS.md'), 'V2-INSTRUCTIONS', 'utf-8');
     const second = await runTurn(orchestrator, session.id);
 
-    expect(second.promptStates!.developer!.generation).toBe(1);
+    expect(second.promptStates!.fixer!.generation).toBe(1);
     const info = await orchestrator.getPromptInfo(second);
     expect(info.manifest.entries.find((e) => e.key === 'instructions')).toBeUndefined();
   });
@@ -275,7 +275,7 @@ describe('ChatOrchestrator — проектные инструкции (ADR-069 
       settings: {
         provider: 'instrstub',
         model: 'm',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         systemPrompt: 'MY-OVERRIDE',
       },
     });
@@ -310,7 +310,7 @@ describe('ChatOrchestrator — проектные инструкции (ADR-069 
     const session = await sessionManager.createSession({
       title: 'Lazy',
       projectId: 'p1',
-      settings: { provider: 'lazystub', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'lazystub', model: 'm', agentRole: 'fixer' },
     });
 
     const chunks: Array<{ type: string; data: Record<string, unknown> }> = [];

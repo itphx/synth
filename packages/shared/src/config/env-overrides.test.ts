@@ -43,6 +43,10 @@ describe('toSnakeCase / envOverrideName (ADR-023)', () => {
     expect(envOverrideName({ section: 'attachments', key: 'maxBytesPerFile', type: 'number' })).toBe(
       'SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE',
     );
+    // agents: предохранитель бюджета промпта саб-агента.
+    expect(envOverrideName({ section: 'agents', key: 'subagentMaxInputTokens', type: 'number' })).toBe(
+      'SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS',
+    );
   });
 
   it('реестр содержит уникальные env-имена', () => {
@@ -103,6 +107,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       analytics: { retentionDays: 400 },
       questions: { timeoutMs: 600_000, retentionDays: 14 },
       background: { enabled: true, maxSubagentsPerSession: 2, maxProcessesPerSession: 5, maxRunsPerSession: 10, logMaxBytes: 10_485_760 },
+      agents: { subagentMaxInputTokens: 150_000 },
       attachments: {
         enabled: true,
         modalities: { image: true, pdf: true, audio: true, video: true },
@@ -134,6 +139,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       SYNTH_QUESTIONS_RETENTION_DAYS: '7',
       SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION: '3',
       SYNTH_BACKGROUND_LOG_MAX_BYTES: '2048',
+      SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS: '90000',
       SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE: '10485760',
       SYNTH_ATTACHMENTS_MAX_FILES_PER_MESSAGE: '4',
       SYNTH_ATTACHMENTS_MAX_BYTES_PER_SESSION: '104857600',
@@ -163,6 +169,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(cfg.questions).toEqual({ timeoutMs: 0, retentionDays: 7 });
     // PROP-097: лимит фоновых процессов и предел размера лога.
     expect(cfg.background).toMatchObject({ maxProcessesPerSession: 3, logMaxBytes: 2048 });
+    // agents: предохранитель бюджета промпта саб-агента.
+    expect(cfg.agents).toEqual({ subagentMaxInputTokens: 90_000 });
     // ADR-115: лимиты и мастер-выключатель вложений сообщений.
     expect(cfg.attachments).toEqual({
       enabled: false,
@@ -271,6 +279,25 @@ describe('applyEnvOverrides (ADR-023)', () => {
       embeddingProvider: 'ollama',
       embeddingModel: 'nomic-embed-text',
     });
+  });
+
+  // ADR-076: таймауты сетевых git-операций (`SYNTH_GIT_*_TIMEOUT_MS`).
+  it('применяет env-оверрайды git.cloneTimeoutMs/fetchTimeoutMs (секция создаётся)', () => {
+    const cfg = applyEnvOverrides(makeConfig(), {
+      SYNTH_GIT_CLONE_TIMEOUT_MS: '60000',
+      SYNTH_GIT_FETCH_TIMEOUT_MS: '0',
+    });
+
+    expect(cfg.git).toEqual({ cloneTimeoutMs: 60_000, fetchTimeoutMs: 0 });
+  });
+
+  it('git.*: невалидное число → warn + игнор (секция не появляется)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyEnvOverrides(makeConfig(), { SYNTH_GIT_CLONE_TIMEOUT_MS: 'soon' });
+
+    expect(cfg.git).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('SYNTH_GIT_CLONE_TIMEOUT_MS');
   });
 });
 

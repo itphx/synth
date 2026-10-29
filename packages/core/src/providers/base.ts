@@ -391,6 +391,25 @@ export interface SystemPromptPayload {
 export type SystemPromptInput = string | SystemPromptPayload;
 
 /**
+ * Опции одного chat-вызова (не часть конфига провайдера).
+ *
+ * `toolChoice` управляет вызовом инструментов на шаге: `auto` — решает модель,
+ * `required` — инструмент обязателен, `none` — инструменты не вызывать.
+ *
+ * Зачем это нужно: на финальном шаге по лимиту шагов инструменты **не
+ * убираются** из запроса (иначе у провайдера слетает кэшированный префикс и
+ * модель начинает печатать разметку вызова текстом), а вызов запрещается через
+ * `tool_choice: 'none'`.
+ *
+ * Поле передаётся в тело запроса только когда `tools` непустой: часть API
+ * отвечает ошибкой на `tool_choice` без инструментов.
+ */
+export interface ChatOptions {
+  /** Управление вызовом инструментов на шаге. */
+  toolChoice?: 'auto' | 'none' | 'required';
+}
+
+/**
  * Возвращает текст системного промпта из строки или payload'а.
  * `undefined`, если input не задан или текст пуст.
  */
@@ -498,6 +517,7 @@ export abstract class BaseProvider {
     tools?: Record<string, unknown>[],
     stream?: boolean,
     debugCollector?: DebugCollector,
+    options?: ChatOptions,
   ): Promise<LLMResponse>;
 
   abstract chatAsync(
@@ -506,6 +526,7 @@ export abstract class BaseProvider {
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
+    options?: ChatOptions,
   ): AsyncGenerator<LLMChunk>;
 
   abstract getProviderName(): string;

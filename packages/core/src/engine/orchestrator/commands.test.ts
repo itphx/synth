@@ -45,7 +45,14 @@ describe('publishLocalCompletion', () => {
     publishLocalCompletion((event, data) => published.push({ event, data }), 's1', 'ответ');
 
     expect(published.map((p) => p.event)).toEqual(['stream.chunk', 'stream.done']);
-    expect(published[0]!.data).toEqual({ stream_id: 's1', content: 'ответ', is_final: true });
+    expect(published[0]!.data).toEqual({
+      stream_id: 's1',
+      // T14: локальный ответ — один чанк.
+      seq: 1,
+      t_ms: 0,
+      content: 'ответ',
+      is_final: true,
+    });
     expect(published[1]!.data).toMatchObject({
       stream_id: 's1',
       content: 'ответ',
@@ -110,7 +117,7 @@ describe('finishLocalCommand', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function setup(settings: Record<string, unknown> = { agentRole: 'developer' }) {
+  async function setup(settings: Record<string, unknown> = { agentRole: 'fixer' }) {
     const session = await sessionManager.createSession({ title: 'Cmd', settings: settings as never });
     const userMessage = makeUserMessage();
     await sessionManager.addMessage(session.id, userMessage);
@@ -168,7 +175,7 @@ describe('finishLocalCommand', () => {
       ephemeral: true,
       model: 'command',
       provider: 'command',
-      agentRole: 'developer',
+      agentRole: 'fixer',
       metadata: {
         command: true,
         commandName: 'help',
@@ -203,7 +210,7 @@ describe('finishLocalCommand', () => {
   });
 
   it('agentRole берётся из user-сообщения, при отсутствии — из настроек сессии', async () => {
-    const withRole = await setup({ agentRole: 'developer' });
+    const withRole = await setup({ agentRole: 'fixer' });
     const commandUser = { ...withRole.userMessage, agentRole: 'researcher' };
     await finishLocalCommand(
       withRole.session, commandUser, () => {}, 'out', 'stream1', { name: 'skills' },

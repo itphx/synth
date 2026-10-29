@@ -700,3 +700,71 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
     expect(formatted[0]!.content).toBe('просто текст');
   });
 });
+
+describe('OpenAIProvider — tool_choice на шаге (лимит шагов)', () => {
+  function sseResponse(): Response {
+    return new Response('data: [DONE]\n\n', {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  }
+
+  function makeTools(): Record<string, unknown>[] {
+    return [
+      { type: 'function', function: { name: 'read_file', description: '', parameters: {} } },
+    ];
+  }
+
+  /** Прокрутить стрим до конца (тело чанков здесь не проверяется). */
+  async function drain(gen: AsyncGenerator<LLMChunk>): Promise<LLMChunk[]> {
+    const chunks: LLMChunk[] = [];
+    for await (const chunk of gen) chunks.push(chunk);
+    return chunks;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("chatAsync: options.toolChoice='none' + tools → tool_choice: 'none' в теле, tools остаются", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OpenAIProvider(baseParams);
+    const tools = makeTools();
+    await drain(provider.chatAsync([makeMessage()], undefined, tools, undefined, undefined, {
+      toolChoice: 'none',
+    }));
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.tool_choice).toBe('none');
+    // Инструменты остаются в запросе — кэшированный префикс провайдера сохраняется.
+    expect(body.tools).toEqual(tools);
+  });
+
+  it('chatAsync: без опции поля tool_choice нет (обратная совместимость)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OpenAIProvider(baseParams);
+    await drain(provider.chatAsync([makeMessage()], undefined, makeTools()));
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.tool_choice).toBeUndefined();
+    expect(body.tools).toBeDefined();
+  });
+
+  it('chatAsync: без tools tool_choice не отправляется даже при заданной опции', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OpenAIProvider(baseParams);
+    await drain(provider.chatAsync([makeMessage()], undefined, undefined, undefined, undefined, {
+      toolChoice: 'none',
+    }));
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.tool_choice).toBeUndefined();
+    expect(body.tools).toBeUndefined();
+  });
+});

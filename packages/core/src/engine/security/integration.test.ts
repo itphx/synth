@@ -168,7 +168,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
         provider: 'mockipi',
         model: 'm',
         systemPrompt: 'test',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         language: 'ru',
       },
     });
@@ -224,7 +224,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
   it('ролевые промпты (системные prompts/roles) содержат секцию [CONTENT RULES]', () => {
     const ctx = new ContextConfig({ userDataDir: join(tmpDir, 'context') });
     // title — исключение: генератор заголовков, не работает с контентом (см. отдельный тест)
-    const roles = ['admin', 'analyst', 'assistant', 'auditor', 'developer', 'devops', 'pm', 'qa'];
+    const roles = ['admin', 'assistant', 'devops', 'leader', 'fixer', 'tester', 'researcher', 'security-auditor'];
     for (const role of roles) {
       const ru = ctx.getRolePrompt(role, undefined, 'ru') ?? '';
       expect(ru, `role ${role} ru`).toContain('[CONTENT RULES]');
@@ -408,7 +408,7 @@ describe('ChatOrchestrator × защита {dataDir}/secrets (H5)', () => {
     const session = await sessionManager.createSession({
       title: 'Secrets smoke',
       projectId,
-      settings: { provider: 'mockipi', model: 'm', systemPrompt: 'test', agentRole: 'developer', language: 'ru' },
+      settings: { provider: 'mockipi', model: 'm', systemPrompt: 'test', agentRole: 'fixer', language: 'ru' },
     });
     const msg = makeMessage();
     await sessionManager.addMessage(session.id, msg);
@@ -453,5 +453,15 @@ describe('ChatOrchestrator × защита {dataDir}/secrets (H5)', () => {
     await writeFile(join(tmpDir, 'notes.txt'), 'обычный текст проекта\n');
     const tool = await run('read_file', { file_path: 'notes.txt' });
     expect(tool).toContain('обычный текст проекта');
+  });
+
+  it('execute_shell: regex-аргумент с экранированием не даёт ложного ask (T9)', async () => {
+    // Регресс: `\` в POSIX-shell — экранирование/регэксп, а не разделитель пути;
+    // раньше токен `\.sample$` считался путём и ход уходил в подтверждение.
+    await writeFile(join(tmpDir, 'notes.txt'), 'обычный текст проекта\n');
+    const tool = await run('execute_shell', { command: "ls . | grep -v '\\.sample$'" });
+    expect(tool).not.toContain('Permission denied');
+    expect(tool).not.toContain('approval');
+    expect(tool).toContain('notes.txt');
   });
 });

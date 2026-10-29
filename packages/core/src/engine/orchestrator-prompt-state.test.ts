@@ -107,7 +107,7 @@ describe('ChatOrchestrator — promptStates/promptMeta (ADR-070 §2.4)', () => {
       settings: {
         provider: 'cachemeta',
         model: 'm',
-        agentRole: 'developer',
+        agentRole: 'fixer',
         ...extraSettings,
       },
     });
@@ -125,7 +125,7 @@ describe('ChatOrchestrator — promptStates/promptMeta (ADR-070 §2.4)', () => {
     return [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
   }
 
-  function makeAssistantMessage(content: string, agentRole = 'developer'): Message {
+  function makeAssistantMessage(content: string, agentRole = 'fixer'): Message {
     return {
       id: generateId(),
       role: MessageRole.ASSISTANT,
@@ -165,7 +165,7 @@ describe('ChatOrchestrator — promptStates/promptMeta (ADR-070 §2.4)', () => {
     return sessionManager.createSession({
       title: 'History',
       userId,
-      settings: { provider: 'cachemeta', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'cachemeta', model: 'm', agentRole: 'fixer' },
     });
   }
 
@@ -175,7 +175,7 @@ describe('ChatOrchestrator — promptStates/promptMeta (ADR-070 §2.4)', () => {
 
     const after = await runTurn(session.id);
 
-    const state = after.promptStates?.developer;
+    const state = after.promptStates?.fixer;
     expect(state).toBeDefined();
     expect(state!.generation).toBe(1);
     expect(state!.reason).toBe('init');
@@ -183,7 +183,7 @@ describe('ChatOrchestrator — promptStates/promptMeta (ADR-070 §2.4)', () => {
 
     const meta = lastAssistant(after).promptMeta;
     expect(meta).toBeDefined();
-    expect(meta!.agentRole).toBe('developer');
+    expect(meta!.agentRole).toBe('fixer');
     expect(meta!.generation).toBe(1);
     expect(meta!.expected).toBe('miss');
     expect(meta!.cachedTokens).toBe(0);
@@ -193,10 +193,10 @@ describe('ChatOrchestrator — promptStates/promptMeta (ADR-070 §2.4)', () => {
   it('второй ход с тем же промптом: expected=hit, state не пересобирается', async () => {
     const session = await createSession();
     const first = await runTurn(session.id);
-    const stateBefore = first.promptStates!.developer!;
+    const stateBefore = first.promptStates!.fixer!;
 
     const second = await runTurn(session.id);
-    const stateAfter = second.promptStates!.developer!;
+    const stateAfter = second.promptStates!.fixer!;
 
     // Записи не было: generation и updatedAt сохранены.
     expect(stateAfter.generation).toBe(1);
@@ -225,7 +225,7 @@ describe('ChatOrchestrator — promptStates/promptMeta (ADR-070 §2.4)', () => {
     const session = await createSession({ systemPrompt: 'мой оверрайд' });
     const after = await runTurn(session.id);
 
-    const state = after.promptStates?.developer;
+    const state = after.promptStates?.fixer;
     expect(state!.reason).toBe('override');
     expect(state!.staticPrefix).toBe('');
     expect(state!.staticPrefixHash).toBe(
@@ -246,7 +246,7 @@ describe('ChatOrchestrator — promptStates/promptMeta (ADR-070 §2.4)', () => {
     await orchestrator.createProcessMessage()(fresh, otherMsg, new AbortController().signal, () => {});
 
     const after = (await sessionManager.getSession(session.id))!;
-    expect(after.promptStates!.developer!.generation).toBe(1);
+    expect(after.promptStates!.fixer!.generation).toBe(1);
     expect(after.promptStates!.researcher!.generation).toBe(1);
     expect(after.promptStates!.researcher!.reason).toBe('init');
   });
@@ -261,12 +261,12 @@ describe('ChatOrchestrator — promptStates/promptMeta (ADR-070 §2.4)', () => {
     expect(role?.status).toBe('loaded');
     expect(info.manifest.totalChars).toBeGreaterThan(0);
     expect(info.manifest.generation).toBe(1);
-    expect(info.promptState).toEqual(after.promptStates!.developer);
+    expect(info.promptState).toEqual(after.promptStates!.fixer);
     expect(info.lastPromptMeta).toEqual(lastAssistant(after).promptMeta);
 
     // Побочных эффектов нет: состояние в хранилище не перезаписано.
     const reloaded = (await sessionManager.getSession(session.id))!;
-    expect(reloaded.promptStates!.developer!.updatedAt).toBe(after.promptStates!.developer!.updatedAt);
+    expect(reloaded.promptStates!.fixer!.updatedAt).toBe(after.promptStates!.fixer!.updatedAt);
   });
 
   describe('_buildPromptHistoryInfo (ADR-070 §2.5, слой messages)', () => {

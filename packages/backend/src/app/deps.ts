@@ -482,6 +482,10 @@ export async function createBackendDeps(
         // системное (автор `Subagent`/`Process`), а не пользовательский ввод;
         // секреты в исходящих LLM-запросах обфусцирует сам Gateway.
         onNotifyParent: notifyBackgroundParent,
+        // «Стоп» сессии останавливает и живые прогоны детей (ADR-111 §detach,
+        // решение 2026-10-28): дерево обходит сам сервис (глубина ≤ 5).
+        getChildSessionIds: async (parentId) =>
+          (await sessionManager.getChildren(parentId, { light: true })).map((s) => s.id),
       });
   // Старт: прогоны прошлого процесса не пережили рестарт (хэндлы отмены — в
   // памяти) — помечаем их `orphaned`. Best-effort: ошибка не роняет старт.
@@ -933,6 +937,14 @@ export async function createBackendDeps(
     profilesStore,
     // ADR-076 §T6: тот же store, что у git/ssh-роутов — без дублей инстансов.
     sshKeyStore,
+    // ADR-076: таймауты сетевых git-операций (`git.cloneTimeoutMs`/`fetchTimeoutMs`)
+    // для git-сервиса тулов `project_repo_*`; git-роуты получают те же значения.
+    ...(config.synth.git?.cloneTimeoutMs !== undefined
+      ? { gitCloneTimeoutMs: config.synth.git.cloneTimeoutMs }
+      : {}),
+    ...(config.synth.git?.fetchTimeoutMs !== undefined
+      ? { gitFetchTimeoutMs: config.synth.git.fetchTimeoutMs }
+      : {}),
     // ADR-096 (W2.4): словари классификации — порт из контекста хранения.
     dictionaryStore,
     // ADR-115/ADR-116: blob-порт гидратации вложений — из контекста хранения
@@ -1024,6 +1036,8 @@ export async function createBackendDeps(
     // per-session рабочих каталогов проекта).
     ...(worktreeService ? { worktreeService } : {}),
     backgroundEnabled: config.synth.background.enabled,
+    // Предохранитель по объёму промпта саб-агента (`agents.subagentMaxInputTokens`).
+    subagentMaxInputTokens: config.synth.agents.subagentMaxInputTokens,
   });
 
   // ADR-090 (Ф5б-2): эффективный конфиг слоя = config.yaml (+env) поверх

@@ -2,7 +2,7 @@
  * Runtime-зависимости встроенных инструментов от внешних программ окружения.
  *
  * Часть встроенных тулов работает только через внешние бинарники (`git`, `rg`,
- * `sh`). Если бинарника нет, тул всё равно остаётся в реестре (инвариант
+ * `bash`). Если бинарника нет, тул всё равно остаётся в реестре (инвариант
  * постоянного набора дефинишенов, ADR-070), но помечается недоступным с причиной
  * `dependency` — слой доступности сообщает об этом модели и UI.
  *
@@ -36,7 +36,7 @@ import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
 import { probeBinaryThroughPort } from '../../execution/probe.js';
 import type { ExecutionPort } from '../../execution/ports/index.js';
 
-export type RuntimeDependency = 'git' | 'rg' | 'sh' | 'ffmpeg';
+export type RuntimeDependency = 'git' | 'rg' | 'sh' | 'bash' | 'ffmpeg';
 
 /**
  * Зависимости, входящие в **снимок** `RuntimeDeps` (требования встроенных
@@ -45,8 +45,16 @@ export type RuntimeDependency = 'git' | 'rg' | 'sh' | 'ffmpeg';
  */
 export type ToolRuntimeDependency = Exclude<RuntimeDependency, 'ffmpeg'>;
 
-/** Все зависимости тулов — в порядке проверки (тот же, что и словарь core, ADR-077). */
-export const RUNTIME_DEPENDENCIES: readonly ToolRuntimeDependency[] = ['git', 'rg', 'sh'];
+/**
+ * Все зависимости тулов — в порядке проверки (тот же, что и словарь core, ADR-077).
+ *
+ * `bash` — оболочка тула `execute_shell` (и всех внутренних шелл-вызовов:
+ * фоновые процессы, detach, inline-shell). `sh` остаётся в словаре как базовая
+ * возможность окружения (`/bin/sh` есть всегда), но требованием инструментов
+ * больше не является: на Debian `/bin/sh` — это dash, на alpine — busybox ash,
+ * и bash-синтаксис (`[[ ]]`, массивы, `pipefail`, `${var,,}`) в них не работает.
+ */
+export const RUNTIME_DEPENDENCIES: readonly ToolRuntimeDependency[] = ['git', 'rg', 'sh', 'bash'];
 
 /**
  * ADR-115: программы обработки медиа (aux-модели, `engine/attachments/derive.ts`).
@@ -63,6 +71,8 @@ export interface RuntimeDeps {
   git: boolean;
   rg: boolean;
   sh: boolean;
+  /** Оболочка `bash` — требование `execute_shell` (fail-closed без неё). */
+  bash: boolean;
   /**
    * Детали недоступности — по зависимости (ADR-077).
    *
@@ -79,6 +89,7 @@ export const RUNTIME_DEP_BINARY: Record<RuntimeDependency, string> = {
   git: 'git',
   rg: 'rg (ripgrep)',
   sh: 'sh',
+  bash: 'bash',
   ffmpeg: 'ffmpeg',
 };
 
@@ -87,6 +98,7 @@ export const RUNTIME_DEP_COMMAND: Record<RuntimeDependency, string> = {
   git: 'git',
   rg: 'rg',
   sh: 'sh',
+  bash: 'bash',
   ffmpeg: 'ffmpeg',
 };
 
@@ -96,7 +108,9 @@ export const RUNTIME_DEP_COMMAND: Record<RuntimeDependency, string> = {
  */
 export const TOOL_RUNTIME_DEP: Record<string, ToolRuntimeDependency> = {
   grep_files: 'rg',
-  execute_shell: 'sh',
+  // Оболочка тула — `bash`, не `sh`: `sh` в образах это dash/busybox ash, а
+  // bash-синтаксис агентских команд в них не работает (fail-closed без bash).
+  execute_shell: 'bash',
   git_status: 'git',
   git_diff: 'git',
   git_log: 'git',
@@ -117,7 +131,7 @@ export const TOOL_RUNTIME_DEP: Record<string, ToolRuntimeDependency> = {
 };
 
 /** Fail-open дефолт: все зависимости считаются доступными. */
-export const ALL_RUNTIME_DEPS_AVAILABLE: RuntimeDeps = { git: true, rg: true, sh: true };
+export const ALL_RUNTIME_DEPS_AVAILABLE: RuntimeDeps = { git: true, rg: true, sh: true, bash: true };
 
 /** Доступна ли зависимость. `undefined` (детекция не выполнена) → доступна (fail-open). */
 export function isRuntimeDepAvailable(
@@ -217,7 +231,7 @@ async function detectDeps(port: ExecutionPort): Promise<RuntimeDeps> {
     }),
   );
 
-  const deps: RuntimeDeps = { git: false, rg: false, sh: false };
+  const deps: RuntimeDeps = { git: false, rg: false, sh: false, bash: false };
   const details: Partial<Record<RuntimeDependency, string>> = {};
   for (const result of results) {
     deps[result.dep] = result.available;
@@ -386,6 +400,7 @@ export async function refreshRuntimeDeps(
   target.git = fresh.git;
   target.rg = fresh.rg;
   target.sh = fresh.sh;
+  target.bash = fresh.bash;
   target.details = fresh.details;
   return target;
 }

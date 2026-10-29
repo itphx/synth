@@ -70,12 +70,12 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
   });
 
   it('агрегирует по agent_role: usage, cost, cache_hit_rate, output_tps', async () => {
-    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'hi', author: 'local' }));
     await sessionManager.addMessage(session.id, msg({
       role: MessageRole.ASSISTANT,
       content: 'dev answer',
-      agentRole: 'developer',
+      agentRole: 'fixer',
       model: 'm',
       usage: usage(1000, 100, 400),
       metadata: { duration_ms: 2000 },
@@ -91,7 +91,7 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
 
     const stats = await computeSessionStats(await load(session), deps());
 
-    const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
+    const dev = stats.agents.find((a) => a.agent_role === 'fixer')!;
     expect(dev.messages).toBe(1);
     expect(dev.input_tokens).toBe(1000);
     expect(dev.output_tokens).toBe(100);
@@ -110,49 +110,49 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
   });
 
   it('tool-chain сообщения не считаются ответом агента, tool — не агент', async () => {
-    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'hi', author: 'local' }));
     await sessionManager.addMessage(session.id, msg({
       role: MessageRole.ASSISTANT,
       content: 'intermediate',
-      agentRole: 'developer',
+      agentRole: 'fixer',
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       metadata: { tool_chain: true },
     }));
     await sessionManager.addMessage(session.id, msg({
       role: MessageRole.TOOL,
       content: 'tool result',
-      agentRole: 'developer',
+      agentRole: 'fixer',
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     }));
     await sessionManager.addMessage(session.id, msg({
       role: MessageRole.ASSISTANT,
       content: 'final',
-      agentRole: 'developer',
+      agentRole: 'fixer',
       model: 'm',
       usage: usage(10, 5),
       metadata: { duration_ms: 1000 },
     }));
 
     const stats = await computeSessionStats(await load(session), deps());
-    const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
+    const dev = stats.agents.find((a) => a.agent_role === 'fixer')!;
     expect(dev.messages).toBe(1);
     expect(dev.input_tokens).toBe(10);
   });
 
   it('атрибуция usage по автору user-сообщения (два автора)', async () => {
-    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'a', author: 'alice' }));
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'developer', model: 'm', usage: usage(100, 10),
+      role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'fixer', model: 'm', usage: usage(100, 10),
     }));
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.TOOL, content: 'tool', agentRole: 'developer',
+      role: MessageRole.TOOL, content: 'tool', agentRole: 'fixer',
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     }));
     await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'b', author: 'bob' }));
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'b1', agentRole: 'developer', model: 'm', usage: usage(200, 20),
+      role: MessageRole.ASSISTANT, content: 'b1', agentRole: 'fixer', model: 'm', usage: usage(200, 20),
     }));
 
     const stats = await computeSessionStats(await load(session), deps());
@@ -168,7 +168,7 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
   });
 
   it('подтягивает usage дочерней сессии task (child_session_id)', async () => {
-    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     const child = await sessionManager.createSession({ parentId: session.id, settings: { agentRole: 'task' } });
     await sessionManager.addMessage(child.id, msg({
       role: MessageRole.ASSISTANT, content: 'subagent answer', agentRole: 'task', model: 'm', usage: usage(300, 30),
@@ -179,18 +179,18 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
     await sessionManager.addMessage(session.id, msg({
       role: MessageRole.TOOL,
       content: 'task result',
-      agentRole: 'developer',
+      agentRole: 'fixer',
       metadata: { tool_name: 'task', subagent_type: 'task', child_session_id: child.id },
     }));
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'final', agentRole: 'developer', model: 'm', usage: usage(100, 10),
+      role: MessageRole.ASSISTANT, content: 'final', agentRole: 'fixer', model: 'm', usage: usage(100, 10),
       metadata: {
         tool_results: [{ name: 'task', result: { metadata: { child_session_id: child.id, subagent_type: 'task' } } }],
       },
     }));
 
     const stats = await computeSessionStats(await load(session), deps());
-    const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
+    const dev = stats.agents.find((a) => a.agent_role === 'fixer')!;
     // Дедупликация: child найден и в tool-сообщении, и в tool_results → 1 сессия.
     expect(dev.subagent_sessions).toBe(1);
     expect(dev.subagent_tokens).toBe(330);
@@ -213,9 +213,9 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
   });
 
   it('subagents: без дочерних сессий сводка нулевая', async () => {
-    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'solo', agentRole: 'developer', model: 'm', usage: usage(100, 10),
+      role: MessageRole.ASSISTANT, content: 'solo', agentRole: 'fixer', model: 'm', usage: usage(100, 10),
     }));
 
     const stats = await computeSessionStats(await load(session), deps());
@@ -232,7 +232,7 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
   });
 
   it('рекурсивно подтягивает внуков и ограничивает глубину', async () => {
-    const root = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const root = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     // Цепочка root → c1 → c2 → ... → c7, у каждого потомка usage.
     let parentId = root.id;
     const chain: string[] = [];
@@ -243,7 +243,7 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
     }
     // Ссылки: root → c1, c_i → c_{i+1}; у потомков — usage.
     await sessionManager.addMessage(root.id, msg({
-      role: MessageRole.TOOL, content: 'task', agentRole: 'developer',
+      role: MessageRole.TOOL, content: 'task', agentRole: 'fixer',
       metadata: { tool_name: 'task', child_session_id: chain[0] },
     }));
     for (let i = 0; i < chain.length; i++) {
@@ -260,7 +260,7 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
     }
 
     const stats = await computeSessionStats(await load(root), deps());
-    const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
+    const dev = stats.agents.find((a) => a.agent_role === 'fixer')!;
     // Глубина ≤ MAX_SUBAGENT_DEPTH (5): учитываются c1..c5, не c6/c7.
     expect(dev.subagent_sessions).toBe(MAX_SUBAGENT_DEPTH);
     expect(dev.subagent_tokens).toBe(MAX_SUBAGENT_DEPTH * 110);
@@ -270,7 +270,7 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
   });
 
   it('защита от циклов: ребёнок ссылается на корень', async () => {
-    const root = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const root = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     const child = await sessionManager.createSession({ parentId: root.id, settings: { agentRole: 'task' } });
     // Ребёнок ссылается на корень как на своего ребёнка — цикл.
     await sessionManager.addMessage(child.id, msg({
@@ -281,12 +281,12 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
       role: MessageRole.ASSISTANT, content: 'a', agentRole: 'task', model: 'm', usage: usage(50, 5),
     }));
     await sessionManager.addMessage(root.id, msg({
-      role: MessageRole.TOOL, content: 'task', agentRole: 'developer',
+      role: MessageRole.TOOL, content: 'task', agentRole: 'fixer',
       metadata: { tool_name: 'task', child_session_id: child.id },
     }));
 
     const stats = await computeSessionStats(await load(root), deps());
-    const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
+    const dev = stats.agents.find((a) => a.agent_role === 'fixer')!;
     expect(dev.subagent_sessions).toBe(1);
     expect(dev.subagent_tokens).toBe(55);
     // Итоги агента включают usage ребёнка (own у dev нет).
@@ -295,13 +295,13 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
   });
 
   it('нули: без usage и duration output_tps/cache_hit_rate = 0', async () => {
-    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'no usage', agentRole: 'developer',
+      role: MessageRole.ASSISTANT, content: 'no usage', agentRole: 'fixer',
     }));
 
     const stats = await computeSessionStats(await load(session), deps());
-    const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
+    const dev = stats.agents.find((a) => a.agent_role === 'fixer')!;
     expect(dev.output_tps).toBe(0);
     expect(dev.cache_hit_rate).toBe(0);
     expect(dev.duration_ms).toBe(0);
@@ -309,35 +309,35 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
   });
 
   it('cost_usd берётся из metadata, если нет загрузчика цен', async () => {
-    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'x', agentRole: 'developer', model: 'm', usage: usage(10, 1),
+      role: MessageRole.ASSISTANT, content: 'x', agentRole: 'fixer', model: 'm', usage: usage(10, 1),
       metadata: { cost_usd: 0.25 },
     }));
 
     const stats = await computeSessionStats(await load(session), {
       getSession: (id) => sessionManager.getSession(id),
     });
-    expect(stats.agents.find((a) => a.agent_role === 'developer')!.cost_usd).toBe(0.25);
+    expect(stats.agents.find((a) => a.agent_role === 'fixer')!.cost_usd).toBe(0.25);
   });
 
   it('мультивалютность: USD + RUB в одной сессии → cost_by_currency и cost_usd = сумма', async () => {
-    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'hi', author: 'local' }));
     // USD-модель: 100*1/1e6 + 10*2/1e6 = 0.00012 USD
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'usd', agentRole: 'developer', model: 'm', usage: usage(100, 10),
+      role: MessageRole.ASSISTANT, content: 'usd', agentRole: 'fixer', model: 'm', usage: usage(100, 10),
     }));
     // RUB-модель: 100*10/1e6 + 10*20/1e6 = 0.0012 RUB
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'rub', agentRole: 'developer', model: 'r', usage: usage(100, 10),
+      role: MessageRole.ASSISTANT, content: 'rub', agentRole: 'fixer', model: 'r', usage: usage(100, 10),
     }));
 
     const stats = await computeSessionStats(await load(session), {
       getSession: (id) => sessionManager.getSession(id),
       getModelPricing: pricingByCurrency,
     });
-    const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
+    const dev = stats.agents.find((a) => a.agent_role === 'fixer')!;
 
     expect(dev.cost_by_currency).toEqual({ USD: 0.00012, RUB: 0.0012 });
     // cost_usd — номинальная сумма всех валют (обратная совместимость).
@@ -348,24 +348,24 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
   });
 
   it('старые metadata без cost_currency читаются как USD', async () => {
-    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'legacy', agentRole: 'developer',
+      role: MessageRole.ASSISTANT, content: 'legacy', agentRole: 'fixer',
       metadata: { cost_usd: 0.5 },
     }));
 
     const stats = await computeSessionStats(await load(session), {
       getSession: (id) => sessionManager.getSession(id),
     });
-    const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
+    const dev = stats.agents.find((a) => a.agent_role === 'fixer')!;
     expect(dev.cost_by_currency).toEqual({ USD: 0.5 });
   });
 
   it('resolveAuthorName подставляет display_name автора', async () => {
-    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'a', author: 'alice' }));
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'developer', model: 'm', usage: usage(100, 10),
+      role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'fixer', model: 'm', usage: usage(100, 10),
     }));
 
     const stats = await computeSessionStats(await load(session), {
@@ -377,10 +377,10 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
   });
 
   it('без resolveAuthorName или при null — только author', async () => {
-    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'a', author: 'alice' }));
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'developer', model: 'm', usage: usage(100, 10),
+      role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'fixer', model: 'm', usage: usage(100, 10),
     }));
 
     const withoutResolver = await computeSessionStats(await load(session), deps());
@@ -394,18 +394,18 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
   });
 
   it('кэширует resolveAuthorName: один вызов на автора', async () => {
-    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'a', author: 'alice' }));
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'developer', model: 'm', usage: usage(100, 10),
+      role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'fixer', model: 'm', usage: usage(100, 10),
     }));
     await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'b', author: 'alice' }));
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'a2', agentRole: 'developer', model: 'm', usage: usage(50, 5),
+      role: MessageRole.ASSISTANT, content: 'a2', agentRole: 'fixer', model: 'm', usage: usage(50, 5),
     }));
     await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'c', author: 'bob' }));
     await sessionManager.addMessage(session.id, msg({
-      role: MessageRole.ASSISTANT, content: 'b1', agentRole: 'developer', model: 'm', usage: usage(20, 2),
+      role: MessageRole.ASSISTANT, content: 'b1', agentRole: 'fixer', model: 'm', usage: usage(20, 2),
     }));
 
     const calls: string[] = [];

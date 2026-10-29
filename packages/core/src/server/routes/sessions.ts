@@ -25,6 +25,7 @@ import type { LocalOwnerResolver } from '../local-owner.js';
 import type { AnalyticsRecorder } from '../../analytics/recorder.js';
 import { sessionAxes } from '../../analytics/recorder.js';
 import { MEMORY_NAMESPACE } from '../../engine/plugins/memory-namespace.js';
+import { dropSteerInjections } from '../../engine/steering/apply.js';
 import type { MemoryFactRepository } from '../../storage/ports/memory-fact-repository.js';
 import type { MemoryIndexRepository } from '../../storage/ports/memory-index-repository.js';
 // Этап 1 roadmap 0.13 (блок 3): «вопрос пользователю» (`ask_user`).
@@ -44,6 +45,9 @@ import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.
 import type { BlobStore } from '../../storage/ports/blob-store.js';
 // ADR-111 §detach: вид блокирующего прогона (`POST /:id/background`).
 import type { ActiveRunKind } from '../../engine/background/active-runs.js';
+// ADR-111/ADR-113: реестр фоновых прогонов — «Стоп» останавливает и дочерние
+// прогоны (решение 2026-10-28).
+import type { BackgroundRunService } from '../../engine/background/service.js';
 import { makeMediaPart, appendMediaPlaceholders } from '@itphx/synth-shared';
 import type { Part } from '@itphx/synth-shared';
 
@@ -99,6 +103,14 @@ export interface SessionRoutesDeps {
    * отвечает 503, `POST .../answer|cancel` — 503.
    */
   questionService?: QuestionService;
+  /**
+   * Единый реестр фоновых прогонов (ADR-111/ADR-113).
+   *
+   * Нужен «Стопу» (`POST /:id/abort`): он останавливает и живые прогоны
+   * сессии/её детей (решение 2026-10-28, ADR-111 §detach). Не задан —
+   * прежнее поведение (отменяется только собственный стрим/очередь).
+   */
+  backgroundService?: BackgroundRunService;
   /**
    * ADR-114: сервис worktree'ов — привязка сессии к worktree
    * (`PATCH /api/v2/sessions/:id { worktreeId }`).
@@ -1610,6 +1622,38 @@ export function createSessionRoutes(
         s.status.cancelRequestedAt = undefined;
         await sessionManager.saveSession(s);
       });
+    }
+
+    // ADR-104 (решение 2026-10-28): «Стоп» снимает неприменённые инъекции —
+    // границы шага больше не будет, иначе сообщение применилось бы в начале
+    // следующего хода. Best-effort: сбой хранилища/шины не должен превращать
+    // «сессия уже отменена» в ошибку ответа (ответ остаётся 200 aborted).
+    try {
+      await dropSteerInjections({
+        sessionManager,
+        sessionId: id,
+        reason: 'aborted',
+        streamId: session.currentStream?.streamId,
+        publishDropped: (event) => deps.eventBus.publish(id, 'steer.dropped', event),
+      });
+    } catch (err) {
+      console.warn(
+        `[sessions] снятие очереди инъекций сессии ${id} не удалось: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // «Стоп» останавливает и живые дочерние прогоны — фоновых саб-агентов и их
+    // фоновые процессы (решение 2026-10-28, ADR-111 §detach; прежде отмена
+    // родителя переведённый прогон не трогала). Best-effort: сбой реестра не
+    // должен превращать «сессия уже отменена» в ошибку ответа.
+    if (deps.backgroundService) {
+      try {
+        await deps.backgroundService.stopBySession(id, 'parent_aborted');
+      } catch (err) {
+        console.warn(
+          `[sessions] остановка фоновых прогонов сессии ${id} не удалась: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
     // ADR-102: мера `activity.aborts` — на осях `user`/`project` сессии.
     void analytics?.recordActivity('aborts', sessionAxes(session));

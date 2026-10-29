@@ -33,6 +33,9 @@ export function publishLocalCompletion(
 ): void {
   publishChunk('stream.chunk', {
     stream_id: streamId,
+    // T14: локальный ответ — один чанк, значит `seq:1` и `t_ms:0`.
+    seq: 1,
+    t_ms: 0,
     content,
     is_final: true,
     ...(opts?.model ? { model: opts.model } : {}),
@@ -41,6 +44,10 @@ export function publishLocalCompletion(
   publishChunk('stream.done', {
     stream_id: streamId,
     content,
+    content_chars: content.length,
+    chunks: 1,
+    first_chunk_ms: 0,
+    last_chunk_ms: 0,
     pending_count: 0,
     model: opts?.model ?? 'command',
     provider: opts?.provider ?? 'command',

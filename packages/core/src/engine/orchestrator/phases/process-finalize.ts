@@ -33,6 +33,8 @@ import type { SaveAssistantMessageFn, AssistantMessageStatus } from '../persiste
 import { autoTitleSession } from '../../../sessions/auto-title.js';
 import { warning } from '../../../logger.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
+import { dropSteerInjections } from '../../steering/apply.js';
+import type { StreamTiming } from '../stream-stats.js';
 
 /** Результат эпилога `_processMessage` (структурно = `ProcessMessageResult`). */
 export interface ProcessFinalizeResult {
@@ -49,6 +51,12 @@ export interface ProcessFinalizeArgs {
   debugCollector: DebugCollector;
   /** ADR-070 §2.6: старт прогона (для `duration_ms`). */
   streamStartedAt: number;
+  /**
+   * T14: тайминги чанков хода (`seq`/`t_ms` в `stream.chunk`) — в `stream.done`
+   * уходят сводкой `chunks`/`first_chunk_ms`/`last_chunk_ms`. Не передан —
+   * аддитивных полей нет (локальные ответы/прежние вызовы).
+   */
+  streamTiming?: StreamTiming;
 }
 
 /**
@@ -229,7 +237,7 @@ export async function runProcessFinalize(
   state: ProcessFinalizeState,
   deps: ProcessFinalizeDeps,
 ): Promise<ProcessFinalizeResult> {
-  const { session, streamId, publishChunk, debugCollector, streamStartedAt } = args;
+  const { session, streamId, publishChunk, debugCollector, streamStartedAt, streamTiming } = args;
   const {
     cancelledBeforeFinal, lastChunkModel, provider, providerName, effectiveAgentRole,
     allToolCalls, allIntermediateTexts, allReasoning,
@@ -239,6 +247,27 @@ export async function runProcessFinalize(
     currentMessages, loadedTokenRatio, finalSystemPrompt, currentDraft, outboundParts,
   } = state;
   let { finalContent, finalModel, finalUsage, fallbackI18n } = state;
+
+  // ADR-104 (решение 2026-10-28): ход заканчивается — снимаем неприменённые
+  // инъекции из очереди. Границы шага больше не будет, поэтому сообщение,
+  // пришедшее во время последней генерации/финализации, иначе применилось бы
+  // в начале следующего хода и выглядело «внезапным отдельным сообщением».
+  // Причина `aborted` — ход остановлен «Стопом» (остаток после снятия в роуте),
+  // `turn_ended` — обычное завершение. Best-effort: сбой очереди не роняет ход.
+  try {
+    await dropSteerInjections({
+      sessionManager: deps.sessionManager,
+      sessionId: session.id,
+      reason: cancelledBeforeFinal ? 'aborted' : 'turn_ended',
+      streamId,
+      publishDropped: (event) => publishChunk('steer.dropped', event),
+    });
+  } catch (err) {
+    warning(
+      'ORCHESTRATOR',
+      `Снятие неприменённых инъекций не удалось: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   // Отмена до финального сохранения (во время исполнения тула или до входа
   // в итерацию): завершаем ровно как ветку отмены (stream.cancelled), а не
@@ -429,9 +458,21 @@ export async function runProcessFinalize(
   // Получаем актуальную сессию после сохранения
   const updatedSession = await deps.sessionManager.getSession(session.id);
 
+  // T14: сводка таймингов стрима — аддитивные поля `stream.done`; по ним UI
+  // сравнивает серверный `last_chunk_ms` с моментом прихода события у клиента.
+  const chunkStats = streamTiming?.snapshot();
+
   const doneData: Record<string, unknown> = {
     stream_id: streamId,
     content: savedContent,
+    content_chars: savedContent.length,
+    ...(chunkStats
+      ? {
+          chunks: chunkStats.chunks,
+          ...(chunkStats.firstChunkMs !== undefined ? { first_chunk_ms: chunkStats.firstChunkMs } : {}),
+          ...(chunkStats.lastChunkMs !== undefined ? { last_chunk_ms: chunkStats.lastChunkMs } : {}),
+        }
+      : {}),
     message_index: (updatedSession?.messages.length ?? session.messages.length + 1) - 1,
     pending_count: Math.max(0, (updatedSession?.pendingMessages.length ?? 1) - 1),
     model: finalModel,
@@ -568,5 +609,6 @@ export async function runProcessFinalize(
   }
 
   deps.unregister(streamId);
+
   return {};
 }

@@ -72,7 +72,7 @@ describe('attachAnalyticsActivityHooks', () => {
       projectId: 'p1',
     });
     // Агентские события: оси резолвятся по id дочерней сессии.
-    fx.hooks.emitAsync('agent_spawned', { agentId: 'child-1', agentType: 'developer' });
+    fx.hooks.emitAsync('agent_spawned', { agentId: 'child-1', agentType: 'fixer' });
     fx.hooks.emitAsync('agent_failed', { agentId: 'child-1', error: 'boom' });
 
     await vi.waitFor(async () => {

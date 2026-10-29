@@ -1,13 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import * as undici from 'undici';
 import { GitService, resolveRepoPath, sanitizeGitEnv } from './git-service.js';
-import { DEFAULT_MAX_OUTPUT_BYTES, type ExecRequest, type ExecSecret, type ExecutionPort } from '../execution/ports/index.js';
+import { InlineExecutionPort } from '../execution/inline-execution-port.js';
+import {
+  DEFAULT_MAX_OUTPUT_BYTES,
+  ExecutionError,
+  isExecutionError,
+  type ExecRequest,
+  type ExecResult,
+  type ExecSecret,
+  type ExecutionPort,
+} from '../execution/ports/index.js';
 import { initTlsTrust, _resetTlsTrustForTests } from '../security/tls.js';
 
 const execFileAsync = promisify(execFile);
@@ -116,6 +125,58 @@ class CapturingPort implements ExecutionPort {
     this.calls.push(req);
     return { stdout: this.stdout, stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
   }
+}
+
+/**
+ * Порт-шпион, который **исполняет** команды (inline) и запоминает запросы.
+ *
+ * `cloneRepo` после успешного `git clone` делает `rename` временного каталога:
+ * с «глухим» моком временного каталога не возникает, и проверка аргументов
+ * падала бы на `ENOENT` вместо проверки поведения.
+ */
+class DelegatingPort implements ExecutionPort {
+  readonly calls: ExecRequest[] = [];
+  readonly isRemote = false;
+  private readonly inner = new InlineExecutionPort();
+
+  async execute(req: ExecRequest): Promise<ExecResult> {
+    this.calls.push(req);
+    return this.inner.execute(req);
+  }
+}
+
+/**
+ * Порт, «истекающий по таймауту» на заданной git-подкоманде (без сети).
+ *
+ * Таймаут настоящего `git clone`/`fetch` воспроизводить нечем: сеть в тестах
+ * недоступна, а ждать реальные минуты нельзя — мок порта даёт ту же ошибку
+ * (`ExecutionError.reason = 'timeout'`), что и `InlineExecutionPort`.
+ */
+class TimingOutPort implements ExecutionPort {
+  readonly calls: ExecRequest[] = [];
+  readonly isRemote = false;
+
+  constructor(private readonly failOn: 'clone' | 'fetch') {}
+
+  async execute(req: ExecRequest): Promise<ExecResult> {
+    this.calls.push(req);
+    const args = req.command.kind === 'argv' ? req.command.args ?? [] : [];
+    if (args.includes(this.failOn)) {
+      throw new ExecutionError({
+        message: `Command failed: git ${this.failOn}`,
+        reason: 'timeout',
+        killed: true,
+      });
+    }
+    // Прочие git-вызовы (rev-parse/status) — успешны: путь «репозиторий есть».
+    return { stdout: 'true\n', stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+  }
+}
+
+/** Временные каталоги клонирования (`<repo>.tmp-<uuid>`) в каталоге-родителе. */
+async function listTmpSiblings(parent: string): Promise<string[]> {
+  const entries = await readdir(parent).catch(() => [] as string[]);
+  return entries.filter((entry) => entry.includes('.tmp-'));
 }
 
 describe('GitService (ADR-076 §T3, ADR-077)', () => {
@@ -249,16 +310,88 @@ describe('GitService (ADR-076 §T3, ADR-077)', () => {
     expect(scanned.find((r) => r.path === 'repos/clone')?.isRepo).toBe(true);
   });
 
-  it('cloneRepo с веткой использует `clone --branch <branch>`', async () => {
+  it('cloneRepo с веткой использует `clone --branch <branch>` во временный каталог', async () => {
     const bare = await createBareRepo(root);
-    const port = new CapturingPort();
+    const port = new DelegatingPort();
     const svc = new GitService(root, { execution: port });
     await svc.cloneRepo(ws, 'repos/branchy', `file://${bare}`, 'main');
-    const args = port.calls.at(-1)?.command;
-    expect(args).toMatchObject({ kind: 'argv', file: 'git' });
-    if (args?.kind === 'argv') {
-      expect(args.args?.slice(0, 5)).toEqual(['clone', '--branch', 'main', `file://${bare}`, join(ws, 'repos', 'branchy')]);
-    }
+
+    const command = port.calls.at(-1)?.command;
+    expect(command).toMatchObject({ kind: 'argv', file: 'git' });
+    if (command?.kind !== 'argv') throw new Error('ожидалась argv-форма');
+    const argv = command.args ?? [];
+
+    // ADR-076: клон идёт в `<repo>.tmp-<uuid>` рядом с целевым каталогом —
+    // цель `git clone` больше не абсолютный путь репозитория.
+    const at = argv.indexOf('clone');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(argv.slice(at, at + 4)).toEqual(['clone', '--branch', 'main', `file://${bare}`]);
+
+    const target = argv.at(-1) ?? '';
+    const expectedTarget = join(ws, 'repos', 'branchy');
+    expect(dirname(target)).toBe(dirname(expectedTarget));
+    expect(basename(target)).toMatch(/^branchy\.tmp-[0-9a-f-]{36}$/);
+    expect(target.startsWith(`${expectedTarget}.tmp-`)).toBe(true);
+    expect(target).not.toBe(expectedTarget);
+
+    // Клон действительно выполнен и переименован в целевой путь.
+    expect(await exists(join(expectedTarget, 'README.md'))).toBe(true);
+  });
+
+  it('cloneRepo: успешный клон атомарен — целевой каталог есть, временных не осталось', async () => {
+    const bare = await createBareRepo(root);
+    const target = join(ws, 'repos', 'atomic');
+
+    const repo = await service.cloneRepo(ws, 'repos/atomic', `file://${bare}`);
+
+    expect(repo).toMatchObject({ path: 'repos/atomic', isRepo: true });
+    expect(await exists(join(target, 'README.md'))).toBe(true);
+    // Временные каталоги `*.tmp-<uuid>` убираются/переименовываются: на диске их нет.
+    expect(await listTmpSiblings(join(ws, 'repos'))).toEqual([]);
+  });
+
+  it('cloneRepo: неуспешный клон не оставляет ни целевого каталога, ни `.tmp-*`', async () => {
+    const missingUrl = `file://${join(root, 'nope-origin.git')}`;
+    const target = join(ws, 'repos', 'broken');
+
+    const err = await service.cloneRepo(ws, 'repos/broken', missingUrl).catch((e: unknown) => e);
+
+    // Ошибка не подменяется на «занятый путь»/таймаут — это исходная ошибка git.
+    expect(isExecutionError(err)).toBe(true);
+    expect((err as { code?: string }).code).not.toBe('git.clone_timeout');
+    expect(err).toBeInstanceOf(Error);
+
+    expect(await exists(target)).toBe(false);
+    expect(await listTmpSiblings(join(ws, 'repos'))).toEqual([]);
+  });
+
+  it('cloneRepo: таймаут порта → git.clone_timeout, следов на диске нет', async () => {
+    const port = new TimingOutPort('clone');
+    const svc = new GitService(root, { execution: port, cloneTimeoutMs: 1234 });
+    const target = join(ws, 'repos', 'slow');
+
+    const err = await svc
+      .cloneRepo(ws, 'repos/slow', 'https://example.invalid/org/slow.git')
+      .catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: 'git.clone_timeout' });
+    expect((err as { error: string }).error).toContain('1234');
+    // Таймаут проброшен в порт — иначе «зависший» clone ждал бы вечно.
+    expect(port.calls.at(-1)?.timeoutMs).toBe(1234);
+
+    expect(await exists(target)).toBe(false);
+    expect(await listTmpSiblings(join(ws, 'repos'))).toEqual([]);
+  });
+
+  it('fetchRepo: таймаут порта → git.fetch_timeout', async () => {
+    const port = new TimingOutPort('fetch');
+    const svc = new GitService(root, { execution: port, fetchTimeoutMs: 4321 });
+
+    const err = await svc.fetchRepo(ws, 'repos/app').catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: 'git.fetch_timeout' });
+    expect((err as { error: string }).error).toContain('4321');
+    expect(port.calls.at(-1)?.timeoutMs).toBe(4321);
   });
 
   it('fetchRepo обновляет remote-ветку', async () => {

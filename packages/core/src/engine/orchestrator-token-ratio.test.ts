@@ -145,7 +145,7 @@ describe('ChatOrchestrator — калибровка chars-per-token (ADR-071 §2
   async function createSession(): Promise<Session> {
     return sessionManager.createSession({
       title: 'ratio',
-      settings: { provider: 'ratiotest', model: 'm', agentRole: 'developer' },
+      settings: { provider: 'ratiotest', model: 'm', agentRole: 'fixer' },
     });
   }
 

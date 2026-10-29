@@ -708,6 +708,20 @@ export const dict = {
   'git.fetchSuccess': 'Repository fetched',
   'git.removeTitle': 'Remove repository?',
   'git.removeConfirm': 'Remove "{path}" from the project registry?',
+  // Progress indicators and cancellation for long network operations.
+  'git.cloning': 'Cloning…',
+  'git.initializing': 'Initializing…',
+  'git.fetching': 'Fetching…',
+  'git.removing': 'Removing…',
+  'git.cloneCancel': 'Cancel',
+  'git.cloneCancelled': 'Clone cancelled',
+  'git.cloneNetworkHint': 'A network operation may take several minutes',
+  // 409 "path is taken" (details.occupied): three states — three actions.
+  'git.occupied.register': 'Register existing',
+  'git.occupied.deleteAndRetry': 'Delete and retry',
+  'git.occupied.choosePath': 'Choose another path',
+  'git.occupied.stubMoved': 'Incomplete clone kept at "{path}"',
+  'git.registerOccupiedSuccess': 'Existing repository registered',
 
   'commit.hash': 'Commit',
   'commit.author': 'Author',
@@ -1215,12 +1229,14 @@ export const dict = {
   'chat.steer.interruptMarker': 'Turn interrupted',
   'chat.steer.mode.label': 'Send mode',
   'chat.steer.mode.queue': 'Queue',
-  'chat.steer.mode.steer': 'Intervene',
+  'chat.steer.mode.steer': 'Into turn',
   'chat.steer.mode.interrupt': 'Interrupt',
   'chat.steer.mode.title': 'How to send a message while the agent is working',
   'chat.steer.mode.queueHint': 'The message will be processed after the current turn ends',
   'chat.steer.mode.steerHint': 'The message will be injected into the current turn at the next step boundary',
   'chat.steer.mode.interruptHint': 'The current generation will be interrupted; the turn continues with your message',
+  'chat.steer.mode.sendSteer': 'Send into the current turn',
+  'chat.steer.mode.sendInterrupt': 'Interrupt generation and send',
 
   'chat.actions.copy': 'Copy',
   'chat.actions.toggleOff': 'Disable',
@@ -1268,6 +1284,9 @@ export const dict = {
   'notify.background.moveFailed': 'Failed to move to background',
   // ADR-112: notification about a user question (the session is not open).
   'notify.question.asked': 'Agent is waiting for an answer: {name}',
+  'notify.steer.dropped.limit': 'Per-turn intervention limit: messages not applied — {count}',
+  'notify.steer.dropped.aborted': 'Turn stopped — interventions not applied: {count}',
+  'notify.steer.dropped.turn_ended': 'Turn already finished — interventions not applied: {count}',
   'chat.notice.copy': 'Copy',
 
   'chat.message.copied': 'Copied',
@@ -2657,6 +2676,17 @@ export const dict = {
   'sshkey.decrypt_failed': 'Failed to decrypt SSH key {id}',
   'sshkey.env_failed': 'Failed to prepare SSH environment (temporary key or askpass)',
   'git.ssh_key_required': 'SSH key is required for repository "{path}"',
+  'git.ssh_key_required_hint':
+    'Error: SSH key is required for repository "{path}" but none is set or the configured key was not found. '
+    + 'Available SSH keys: {keys}. '
+    + 'Pass the id of a suitable key as `sshKeyId` (the `ssh_keys_list` tool shows the same list); '
+    + 'if no key fits or the list is empty, the user must add a key in Settings → SSH keys.',
+  'git.ssh_keys_none': 'none configured',
+  'sshkeys.tool.header': 'SSH keys ({count}):',
+  'sshkeys.tool.empty':
+    'No SSH keys are configured. Add one in Settings → SSH keys (or POST /api/v2/ssh-keys).',
+  'sshkeys.tool.deps_unavailable':
+    'The SSH key store is unavailable in this build — SSH keys cannot be listed',
   'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
   'git.repo_exists': 'Repository already exists at "{path}"',
 
@@ -2738,6 +2768,10 @@ export const dict = {
     '[steps_limit] The subagent was stopped by the step limit ({limit}).',
   'task.steps_limit_empty':
     'The subagent exhausted the step limit ({limit}) and gave no textual answer; continue from its history or raise the limit',
+  'task.context_budget':
+    '[context_budget] Context budget reached ({tokens} tokens). Steps completed: {steps}. Unfinished: {tasks}',
+  'subagent.context_budget':
+    'Subagent stopped by the context budget ({tokens} tokens, steps: {steps})',
   'task.background_started':
     'The subagent is running in the background (sessionID: {id}). You will be notified automatically; do not poll its status.',
   'task.background_limit':
@@ -2750,6 +2784,8 @@ export const dict = {
     'Session {id} is busy or already running — it cannot be continued right now',
   'task.model_unavailable':
     'Error: the model "{provider}/{model}" requested for the subagent is unavailable — the provider is not configured or the model is unknown',
+  'task.model_not_in_catalog':
+    'Error: the model "{provider}/{model}" requested for the subagent is not in the instance model catalog (or is disabled). Available: {available}. Use the list_models tool to pick a provider/model pair.',
 
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH keys',
