@@ -727,6 +727,13 @@
   `ChatOrchestrator._resolveEffectiveAgentRole` (метка `session.settings.agentRole`
   остаётся исторической). Полнота ролевых файлов (RU+EN на каждый `contextFile`) —
   тест `definitions.test.ts` (падает при переименовании роли без правки агента).
+  **Классы агентов:** `admin`/`devops` — `primary`+`subagent` (`maxSteps: 100`), чтобы
+  `leader` мог делегировать инфраструктуру (CI/CD, деплой) и серверные задачи
+  (systemd, пакеты, сеть, диски) через `task`; `assistant`/`leader` — только `primary`
+  (у `assistant` capability `user`/`profile_update`, `leader` — сам не вызывается как
+  сабагент, без рекурсии),
+  `title` — `system`. Список сабагентов берётся из определений (`AgentRegistry.getSubagents`),
+  отдельного статического перечня нет.
 - `engine/authority/*` — ADR-106: слой полномочий (модель — `shared/types/authority.ts`).
   **`activation.ts`** — активация контента `provides.authority` пакета в **политику инстанса**
   (чистые функции; запись делает `server/routes/packs.ts`): активация — при одобрении пакета

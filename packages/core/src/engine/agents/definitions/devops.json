@@ -28,5 +28,7 @@
   ],
   "icon": "server",
   "color": "--syntax-type",
-  "contextFile": "DEVOPS.md"
+  "contextFile": "DEVOPS.md",
+  "agentMode": ["primary", "subagent"],
+  "maxSteps": 100
 }

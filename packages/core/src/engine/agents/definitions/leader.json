@@ -2,11 +2,11 @@
   "id": "leader",
   "displayName": {
     "en": "Leader",
-    "ru": "Оркестратор"
+    "ru": "Лидер"
   },
   "description": {
-    "en": "Task orchestrator: decomposition, delegation, acceptance",
-    "ru": "Оркестратор задач: декомпозиция, делегирование, приёмка"
+    "en": "Task leader: decomposition, delegation, acceptance",
+    "ru": "Лидер задач: декомпозиция, делегирование, приёмка"
   },
   "capabilities": [
     "file_read",

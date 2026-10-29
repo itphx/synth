@@ -10,7 +10,7 @@ export const taskParametersSchema = z.object({
   prompt: z.string().describe('The task for the subagent to perform'),
   subagent_type: z.string().describe(
     'Subagent type from the agent registry: any agent whose mode includes "subagent" '
-    + '(for example general, explore, fixer, tester, researcher, security-auditor). '
+    + '(for example general, explore, fixer, tester, researcher, security-auditor, devops, admin). '
     + 'An unknown type returns the list of available types',
   ),
   task_id: z.string().optional().describe('ID for resuming an existing subagent session'),

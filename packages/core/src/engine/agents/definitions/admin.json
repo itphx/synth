@@ -28,5 +28,7 @@
   ],
   "icon": "shield-keyhole",
   "color": "--status-error",
-  "contextFile": "ADMIN.md"
+  "contextFile": "ADMIN.md",
+  "agentMode": ["primary", "subagent"],
+  "maxSteps": 100
 }

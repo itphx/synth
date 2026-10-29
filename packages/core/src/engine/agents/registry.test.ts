@@ -147,6 +147,8 @@ describe('AgentRegistry — набор ролей (leader/fixer/tester/researche
   it('assistant сохранён', () => {
     expect(registry.get('assistant')).toBeDefined();
     expect(registry.get('assistant')!.agentMode).toEqual(['primary']);
+    // capability `user` (`profile_update`) — сабагенту не отдаём
+    expect(registry.getSubagents().map((a) => a.id)).not.toContain('assistant');
   });
 
   it.each([
@@ -155,6 +157,8 @@ describe('AgentRegistry — набор ролей (leader/fixer/tester/researche
     ['tester', ['primary', 'subagent'], 100],
     ['researcher', ['primary', 'subagent'], 25],
     ['security-auditor', ['primary', 'subagent'], 60],
+    ['devops', ['primary', 'subagent'], 100],
+    ['admin', ['primary', 'subagent'], 100],
   ] as const)('%s есть в реестре, agentMode нормализован, maxSteps=%d', (id, modes, maxSteps) => {
     const agent = registry.get(id);
     expect(agent, `агент ${id} не найден`).toBeDefined();
@@ -171,8 +175,28 @@ describe('AgentRegistry — набор ролей (leader/fixer/tester/researche
     expect(registry.getSubagents().map((a) => a.id)).not.toContain('leader');
   });
 
-  it.each(['fixer', 'tester', 'researcher', 'security-auditor'])('%s доступен как сабагент', (id) => {
-    expect(registry.getSubagents().map((a) => a.id)).toContain(id);
+  it('leader: отображаемое имя — «Лидер» (не «Оркестратор»: оркестратор — архитектурный слой)', () => {
+    const leader = registry.get('leader')!;
+    expect(leader.displayName).toBe('Лидер');
+    // Слово не должно вернуться ни в имя, ни в описание роли
+    expect(leader.description ?? '').not.toContain('Оркестратор');
+  });
+
+  it.each(['fixer', 'tester', 'researcher', 'security-auditor', 'devops', 'admin'])(
+    '%s доступен как сабагент',
+    (id) => {
+      expect(registry.getSubagents().map((a) => a.id)).toContain(id);
+    },
+  );
+
+  it('admin/devops: primary+subagent и maxSteps 100 (делегирование инфраструктуры)', () => {
+    for (const id of ['admin', 'devops']) {
+      const agent = registry.get(id)!;
+      expect(agent.agentMode).toEqual(['primary', 'subagent']);
+      expect(agent.maxSteps).toBe(100);
+      expect(registry.list({ mode: 'primary' }).map((a) => a.id)).toContain(id);
+      expect(registry.getSubagents().map((a) => a.id)).toContain(id);
+    }
   });
 
   it('leader без shell и без file_write (только чтение и делегирование)', () => {
