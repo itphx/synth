@@ -400,6 +400,69 @@ describe('project repos tools (ADR-076)', () => {
     expect(result.metadata?.i18n).toEqual({ key: 'project.repo_not_found', params: { path: 'nope' } });
   });
 
+  it('fetch: путь записи — не git-репозиторий → git.repo_not_a_repo (не [object Object])', async () => {
+    // Запись есть, а репозитория по пути нет: каталог пуст (`.git` отсутствует).
+    await mkdir(join(workspacesRoot, 'proj', 'notgit'), { recursive: true });
+    await projectRepoAddTool.execute({ path: 'notgit' }, makeCtx());
+
+    const result = await projectRepoFetchTool.execute({ path: 'notgit' }, makeCtx());
+
+    expect(result.isError).toBe(true);
+    // git-слой бросает plain-объект `{ error, code }`: его текст не должен
+    // превращаться в `[object Object]`.
+    expect(result.content).not.toContain('[object Object]');
+    expect(result.metadata?.i18n).toEqual({ key: 'git.repo_not_a_repo', params: { path: 'notgit' } });
+    // Сообщение actionable: путь и следующие шаги.
+    expect(result.content).toContain('notgit');
+    expect(result.content).toContain('project_repo_add');
+    expect(result.content).toContain('project_repo_clone');
+  });
+
+  it('fetch: каталог записи удалён с диска → git.repo_not_a_repo', async () => {
+    const bare = await createBareRepo(root);
+    await projectRepoCloneTool.execute({ url: `file://${bare}`, path: 'gone' }, makeCtx());
+    await rm(join(workspacesRoot, 'proj', 'gone'), { recursive: true, force: true });
+
+    const result = await projectRepoFetchTool.execute({ path: 'gone' }, makeCtx());
+
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toContain('[object Object]');
+    expect(result.metadata?.i18n).toEqual({ key: 'git.repo_not_a_repo', params: { path: 'gone' } });
+  });
+
+  it('fetch: косметика пути (./app, app/, ./app/) находит запись реестра', async () => {
+    const bare = await createBareRepo(root);
+    await projectRepoCloneTool.execute({ url: `file://${bare}`, path: 'app' }, makeCtx());
+
+    for (const path of ['./app', 'app/', './app/']) {
+      // Состарим lastFetch: успешный fetch обязан его обновить.
+      const before = (await projectStore.load(projectId))!;
+      before.repos = [{ ...before.repos![0]!, lastFetch: '2000-01-01T00:00:00.000Z' }];
+      await projectStore.save(before);
+
+      const result = await projectRepoFetchTool.execute({ path }, makeCtx());
+
+      expect(result.isError, `путь «${path}» не нашёл запись реестра`).toBeUndefined();
+      expect(result.metadata?.path).toBe('app');
+      const stored = (await projectStore.load(projectId))!;
+      expect(stored.repos?.[0]?.lastFetch).not.toBe('2000-01-01T00:00:00.000Z');
+      // Реестр не переписывается: `path` хранится как задан.
+      expect(stored.repos?.[0]?.path).toBe('app');
+    }
+  });
+
+  it('fetch: `..`-сегменты и абсолютный путь не матчатся на запись', async () => {
+    const bare = await createBareRepo(root);
+    await projectRepoCloneTool.execute({ url: `file://${bare}`, path: 'app' }, makeCtx());
+
+    const outside = ['../app', './../app', join(workspacesRoot, 'proj', 'app')];
+    for (const path of outside) {
+      const result = await projectRepoFetchTool.execute({ path }, makeCtx());
+      expect(result.isError, `путь «${path}» не должен находить запись`).toBe(true);
+      expect(result.metadata?.i18n).toEqual({ key: 'project.repo_not_found', params: { path } });
+    }
+  });
+
   it('remove: снимает запись, но не удаляет локальный каталог', async () => {
     await mkdir(join(workspacesRoot, 'proj', 'vendor', 'lib'), { recursive: true });
     await writeFile(join(workspacesRoot, 'proj', 'vendor', 'lib', 'file.txt'), 'x');
@@ -414,5 +477,16 @@ describe('project repos tools (ADR-076)', () => {
     expect(stored.repos ?? []).toHaveLength(0);
     // Локальный каталог остаётся на месте (deleteLocal не поддерживается).
     expect(await exists(join(workspacesRoot, 'proj', 'vendor', 'lib', 'file.txt'))).toBe(true);
+  });
+
+  it("remove: косметика пути ('./vendor/lib') находит запись реестра", async () => {
+    await mkdir(join(workspacesRoot, 'proj', 'vendor', 'lib'), { recursive: true });
+    await projectRepoAddTool.execute({ path: 'vendor/lib', url: 'https://example.com/lib.git' }, makeCtx());
+
+    const result = await projectRepoRemoveTool.execute({ path: './vendor/lib' }, makeCtx());
+
+    expect(result.isError).toBeUndefined();
+    expect(result.metadata?.path).toBe('vendor/lib');
+    expect((await projectStore.load(projectId))!.repos ?? []).toHaveLength(0);
   });
 });

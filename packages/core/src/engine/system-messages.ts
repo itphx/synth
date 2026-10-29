@@ -413,6 +413,10 @@ export const SYSTEM_MESSAGES = {
   'sshkeys.tool.deps_unavailable':
     'The SSH key store is unavailable in this build — SSH keys cannot be listed',
   'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
+  'git.repo_not_a_repo':
+    'Error: "{path}" is not a git repository (the directory is missing, empty or has no `.git`). '
+    + 'The registry entry points to a path without a repository — re-register the path of an existing '
+    + 'repository (tool `project_repo_add`) or clone the repository again (tool `project_repo_clone`).',
   'git.repo_exists': 'Repository already exists at "{path}"',
   'git.repo_occupied_repo':
     'Error: "{path}" already contains a git repository. Register the existing one instead of cloning again '

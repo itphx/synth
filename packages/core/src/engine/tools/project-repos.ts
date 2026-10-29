@@ -20,6 +20,7 @@ import { inspectRepoPath } from '../../git/repo-occupancy.js';
 import type { RepoOccupancyInfo } from '../../git/repo-occupancy.js';
 import { isSshUrl } from '../../git/ssh-env.js';
 import { isAborted, abortedResult } from './abort.js';
+import { errorText } from './error-text.js';
 import { loadSessionProject } from './project-manage.js';
 import { canEditProject } from './project-access.js';
 import { resolveSshEnvById } from './git-ssh.js';
@@ -65,7 +66,9 @@ function i18nError(key: SystemMessageKey, params?: Record<string, string>): Tool
 
 function toolExecError(tool: string, err: unknown): ToolResult {
   return {
-    content: sm('tool.exec_error', { tool, error: err instanceof Error ? err.message : String(err) }),
+    // git-слой бросает и plain-объекты `{ error, code }` — `String(err)` от них
+    // дал бы `[object Object]` (см. tools/error-text.ts).
+    content: sm('tool.exec_error', { tool, error: errorText(err) }),
     isError: true,
   };
 }
@@ -144,7 +147,30 @@ async function registerRepo(
 
 function findRepo(repos: GitRepoConfig[], id?: string, path?: string): GitRepoConfig | undefined {
   if (id) return repos.find((r) => r.id === id);
-  return repos.find((r) => r.path === path);
+  const wanted = comparableRepoPath(path);
+  // Пустой аргумент (`undefined`/'' как и прежде) запись не ищет: иначе он
+  // совпал бы с записью пустого пути (корень workspace).
+  if (!wanted) return undefined;
+  return repos.find((r) => comparableRepoPath(r.path) === wanted);
+}
+
+/**
+ * Путь записи реестра в виде, пригодном для сравнения: косметика записи
+ * (ведущие `./`, дублирующиеся `/`, хвостовой `/`) не должна мешать найти
+ * репозиторий — `project_repo_fetch {path: "./app/"}` ищет ту же запись, что и
+ * `path: "app"`.
+ *
+ * Это **только сравнение**, не резолв: `..`-сегменты и абсолютные пути
+ * остаются как есть, поэтому на запись они по-прежнему не матчатся, а
+ * containment проверяется отдельно (`GitService.resolveRepoPath`). Сам `path`
+ * в реестре хранится как задан — нормализация его не переписывает.
+ */
+function comparableRepoPath(path: string | undefined): string {
+  if (!path) return '';
+  return path
+    .replace(/^(?:\.\/)+/, '')
+    .replace(/\/{2,}/g, '/')
+    .replace(/\/+$/, '');
 }
 
 function deriveType(url?: string): 'https' | 'ssh' | undefined {
@@ -176,13 +202,19 @@ function repoOccupiedResult(relPath: string, info: RepoOccupancyInfo): ToolResul
  * Ошибка сетевой git-операции: таймаут — отдельным actionable-сообщением
  * (`git.clone_timeout`/`git.fetch_timeout`), остальное — общим текстом.
  */
-function repoOpError(tool: string, err: unknown, timeoutMs?: number): ToolResult {
+function repoOpError(tool: string, err: unknown, timeoutMs?: number, repoPath?: string): ToolResult {
   const code = (err as { code?: unknown } | null | undefined)?.code;
   if (code === 'git.clone_timeout') {
     return i18nError('git.clone_timeout', { timeout: String(timeoutMs ?? 0) });
   }
   if (code === 'git.fetch_timeout') {
     return i18nError('git.fetch_timeout', { timeout: String(timeoutMs ?? 0) });
+  }
+  // `NOT_FOUND` от git-слоя (`ensureRepo`): запись в реестре есть, а репозитория
+  // по её пути нет (каталог удалён/очищен/никогда не был репозиторием).
+  // Сообщение называет путь и следующий шаг — иначе агент повторяет fetch.
+  if (code === 'NOT_FOUND' && repoPath) {
+    return i18nError('git.repo_not_a_repo', { path: repoPath });
   }
   return toolExecError(tool, err);
 }
@@ -455,7 +487,7 @@ export const projectRepoFetchTool: ToolDefinition = {
     try {
       await git.fetchRepo(wsAbs, entry.path, ssh.secrets ? { secrets: ssh.secrets } : undefined);
     } catch (err) {
-      return repoOpError(this.name, err, git.fetchTimeoutMs);
+      return repoOpError(this.name, err, git.fetchTimeoutMs, entry.path);
     } finally {
       await ssh.cleanup();
     }

@@ -319,6 +319,7 @@ export const ENGINE_MESSAGE_KEYS = [
   'sshkeys.tool.empty',
   'sshkeys.tool.deps_unavailable',
   'git.repo_path_invalid',
+  'git.repo_not_a_repo',
   'git.repo_exists',
   'git.repo_occupied_repo',
   'git.repo_occupied_stub',
@@ -780,6 +781,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'sshkeys.tool.empty': [],
   'sshkeys.tool.deps_unavailable': [],
   'git.repo_path_invalid': ["path"],
+  'git.repo_not_a_repo': ["path"],
   'git.repo_exists': ["path"],
   // ADR-076: занятый путь различается по состоянию (полноценный репозиторий /
   // след прерванного клона / непустой каталог) — сообщения actionable.
