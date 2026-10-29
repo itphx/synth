@@ -28,6 +28,11 @@ import type { AgentInfo } from '@/lib/api/synthApi'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+// jsdom не реализует scrollIntoView, а панель прокручивает форму после открытия
+if (!HTMLElement.prototype.scrollIntoView) {
+  HTMLElement.prototype.scrollIntoView = () => {}
+}
+
 const agent = (id: string, mode: AgentInfo['agent_mode']): AgentInfo => ({
   id,
   display_name: id,
@@ -40,7 +45,6 @@ const agent = (id: string, mode: AgentInfo['agent_mode']): AgentInfo => ({
   mode: 'simple',
   agent_mode: mode,
   reasoning_level: null,
-  subagent_prompt: null,
   max_steps: 0,
   provider: null,
   model: null,
@@ -140,6 +144,112 @@ describe('AgentsPanel — фильтр на Kit Tabs (ADR-072)', () => {
     })
     const container = await renderPanel()
     expect(container.querySelector('[role="tablist"]')).toBeNull()
+  })
+})
+
+describe('AgentsPanel — температура агента: Auto (дефолт модели)', () => {
+  const AGENT = agent('main', ['primary'])
+
+  beforeEach(() => {
+    apiMock.getAllAgents.mockResolvedValue({ agents: [AGENT], default_agent: null })
+  })
+
+  /** Открывает форму редактирования агента «main» через кнопку Edit. */
+  async function openEditor(container: HTMLElement): Promise<void> {
+    const editButton = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'Edit',
+    ) as HTMLButtonElement | undefined
+    expect(editButton).toBeDefined()
+    await act(async () => {
+      editButton!.click()
+    })
+    await act(async () => {})
+  }
+
+  const autoCheckbox = (container: HTMLElement) =>
+    container.querySelector('[data-testid="agent-temperature-auto"]') as HTMLInputElement
+  const slider = (container: HTMLElement) =>
+    container.querySelector('input[type="range"]') as HTMLInputElement
+
+  it('агент без температуры: включён Auto, слайдер заблокирован, сохраняется null', async () => {
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    const checkbox = autoCheckbox(container)
+    expect(checkbox).not.toBeNull()
+    expect(checkbox.checked).toBe(true)
+
+    const range = slider(container)
+    expect(range.disabled).toBe(true)
+
+    const save = container.querySelector('[data-testid="agent-save"]') as HTMLButtonElement
+    await act(async () => {
+      save.click()
+    })
+    await act(async () => {})
+
+    expect(apiMock.saveAgent).toHaveBeenCalledTimes(1)
+    expect(apiMock.saveAgent).toHaveBeenCalledWith(expect.objectContaining({ temperature: null }))
+  })
+
+  it('агент с температурой: Auto снят, слайдер отправляет число', async () => {
+    apiMock.getAgentDetail.mockResolvedValue({ temperature: 0.9 })
+    const container = await renderPanel()
+    await openEditor(container)
+
+    const checkbox = autoCheckbox(container)
+    expect(checkbox.checked).toBe(false)
+
+    const range = slider(container)
+    expect(range.disabled).toBe(false)
+    expect(range.value).toBe('0.9')
+
+    // Меняем значение слайдера (React слушает нативный input)
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      'value',
+    )!.set!
+    await act(async () => {
+      setter.call(range, '0.5')
+      range.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    const save = container.querySelector('[data-testid="agent-save"]') as HTMLButtonElement
+    await act(async () => {
+      save.click()
+    })
+    await act(async () => {})
+
+    expect(apiMock.saveAgent).toHaveBeenCalledWith(expect.objectContaining({ temperature: 0.5 }))
+  })
+
+  it('выключение Auto подставляет 0.3, включение — снова сбрасывает в null', async () => {
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    const checkbox = autoCheckbox(container)
+    expect(checkbox.checked).toBe(true)
+
+    await act(async () => {
+      checkbox.click()
+    })
+    expect(autoCheckbox(container).checked).toBe(false)
+    expect(slider(container).value).toBe('0.3')
+
+    await act(async () => {
+      autoCheckbox(container).click()
+    })
+    expect(autoCheckbox(container).checked).toBe(true)
+
+    const save = container.querySelector('[data-testid="agent-save"]') as HTMLButtonElement
+    await act(async () => {
+      save.click()
+    })
+    await act(async () => {})
+
+    expect(apiMock.saveAgent).toHaveBeenCalledWith(expect.objectContaining({ temperature: null }))
   })
 })
 

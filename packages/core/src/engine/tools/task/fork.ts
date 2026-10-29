@@ -6,7 +6,7 @@
  * по-прежнему не фатальны (проглатываются) — саб-агент продолжает без дочерней
  * сессии, а частично применённые мутации состояния сохраняются.
  */
-import { MessageRole, generateId } from '@itphx/synth-shared';
+import { MessageRole } from '@itphx/synth-shared';
 import type { Message, SessionSettings } from '@itphx/synth-shared';
 import { serializeSession } from '../../../server/serialize.js';
 import { deriveSubagentPermission } from '../../permission/derive.js';
@@ -18,6 +18,14 @@ export interface PreparedChildSession {
   childSessionId?: string;
   childMessages: Message[];
   parentNotesText: string;
+  /**
+   * Сжатие родительской истории (`context_mode: 'summary'`).
+   *
+   * В историю ребёнка SUMMARY-сообщение **не пишется** (как в opencode):
+   * сжатие — разовый контекст первого запуска и уходит в системный промпт
+   * (`[PARENT SUMMARY]`), а не в видимую историю дочерней сессии.
+   */
+  parentSummaryText?: string;
 }
 
 export interface PrepareChildSessionOptions {
@@ -27,6 +35,19 @@ export interface PrepareChildSessionOptions {
   contextMode: ContextMode;
   contextCount: number;
   childRoutingOverrides: Partial<SessionSettings>;
+  /**
+   * Температура саб-агента (`agent.temperature` → `session.settings.temperature`).
+   * `undefined` — не перетирать настройки ребёнка (наследуется температура
+   * родителя/форка, дальше — дефолт модели).
+   */
+  temperature?: number;
+  /**
+   * Фактическая пара прогона (`resolution.providerName`/`resolution.modelName`):
+   * дочерняя сессия должна указывать на модель, которой реально шёл прогон.
+   * Не задано — пара не перетирается (наследуется от родителя).
+   */
+  provider?: string;
+  model?: string;
 }
 
 /**
@@ -38,10 +59,34 @@ export async function prepareChildSession(
   state: PreparedChildSession,
   opts: PrepareChildSessionOptions,
 ): Promise<void> {
-  const { extra, description, subagentType, contextMode, contextCount, childRoutingOverrides } = opts;
+  const { extra, description, subagentType, contextMode, contextCount, childRoutingOverrides, temperature, provider, model } = opts;
 
   // ─── Permissions дочерней сессии (ADR-029): наследуем родителя + deny-дополнения ──
   const derivedPermission = deriveSubagentPermission(extra.permissionConfig);
+
+  /**
+   * Переопределения настроек ребёнка, общие для всех режимов контекста.
+   * Температура агента идёт последней: она приоритетнее настроек родителя
+   * (`agent.temperature` → `session.settings.temperature` → дефолт модели).
+   * `undefined` — настройку ребёнка не трогаем (температура остаётся
+   * родительской/форка).
+   */
+  const childSettingsPatch: Partial<SessionSettings> = {
+    agentRole: subagentType,
+    permission: derivedPermission,
+    planMode: 'auto',
+    // Ребёнок — задача, а не продолжение диалога (как в opencode): авто-оптимизация
+    // контекста и авто-суммаризация родителя не наследуются. Иначе после первого
+    // сообщения/форка мог сработать `shouldSummarize`/`summarizationPending` родителя.
+    contextOptimization: 'none',
+    summarizationEnabled: false,
+    ...childRoutingOverrides,
+    // Фактическая пара прогона — последней: ребёнок видит модель, на которой
+    // шёл прогон (даже если childRoutingOverrides пришёл без пары).
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    ...(temperature !== undefined ? { temperature } : {}),
+  };
 
   // ─── Создание дочерней сессии с контекстом ───────────────────────
   if (extra.sessionManager && extra.sessionId) {
@@ -63,7 +108,7 @@ export async function prepareChildSession(
           fork.userId = parentSession.userId;
           fork.ownerId = parentSession.ownerId;
           fork.mode = parentSession.mode;
-          fork.settings = { ...fork.settings, agentRole: subagentType, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides };
+          fork.settings = { ...fork.settings, ...childSettingsPatch };
           await extra.sessionManager.updateSession(fork);
           state.childSessionId = fork.id;
           state.childMessages = fork.messages;
@@ -77,7 +122,7 @@ export async function prepareChildSession(
           fork.userId = parentSession.userId;
           fork.ownerId = parentSession.ownerId;
           fork.mode = parentSession.mode;
-          fork.settings = { ...fork.settings, agentRole: subagentType, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides };
+          fork.settings = { ...fork.settings, ...childSettingsPatch };
           await extra.sessionManager.updateSession(fork);
           state.childSessionId = fork.id;
           state.childMessages = fork.messages;
@@ -89,27 +134,22 @@ export async function prepareChildSession(
           fork.userId = parentSession.userId;
           fork.ownerId = parentSession.ownerId;
           fork.mode = parentSession.mode;
-          fork.settings = { ...fork.settings, agentRole: subagentType, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides };
+          fork.settings = { ...fork.settings, ...childSettingsPatch };
           await extra.sessionManager.updateSession(fork);
           state.childSessionId = fork.id;
           state.childMessages = fork.messages;
 
           try {
             const summaryMsg = await extra.contextOptimizer!.summarize(fork);
-            if (summaryMsg.content) {
-              await extra.sessionManager.addMessage(state.childSessionId, {
-                ...summaryMsg,
-                id: generateId(),
-                origin: 'local',
-                hidden: false,
-              });
-            }
+            // SUMMARY-сообщение в историю ребёнка не пишем: сжатие — разовый
+            // контекст первого запуска и уходит в системный промпт (`[PARENT SUMMARY]`).
+            if (summaryMsg.content) state.parentSummaryText = summaryMsg.content;
           } catch {
             // fallback: без саммари, только prompt с полной историей
           }
 
           // Всегда отключаем унаследованные сообщения — в summary-режиме
-          // они заменены суммаризацией (или мы fallback-нули без неё)
+          // они заменены суммаризацией в системном промпте (или мы fallback-нули без неё)
           {
             const child = await extra.sessionManager.getSession(state.childSessionId);
             if (child) {
@@ -130,10 +170,7 @@ export async function prepareChildSession(
           // none mode (default)
           const childSettings: Partial<SessionSettings> = {
             ...parentSession.settings,
-            agentRole: subagentType,
-            permission: derivedPermission,
-            planMode: 'auto',
-            ...childRoutingOverrides,
+            ...childSettingsPatch,
           };
           // ADR-089: создание дочерней сессии — через funnel (`initiator:'agent'`),
           // если он передан; иначе прямой `createSession` (прежнее поведение).

@@ -43,28 +43,35 @@ interface ProviderCall {
   system?: SystemPromptInput;
   tools?: Record<string, unknown>[];
   stream?: boolean;
+  /** Температура экземпляра провайдера, на котором шёл вызов. */
+  temperature?: number;
 }
 
 /** Провайдер-заглушка: без сети, без LLM. */
 function makeProvider(
   respond: (call: ProviderCall) => Promise<LLMResponse> | LLMResponse,
+  options: { temperature?: number } = {},
 ): { provider: BaseProvider; calls: ProviderCall[] } {
   const calls: ProviderCall[] = [];
-  const provider = {
+  const make = (temperature?: number): BaseProvider => ({
     model: 'mock-model',
+    temperature,
     getProviderName: () => 'mock',
+    // Клон с другой температурой (как `BaseProvider.withTemperature`):
+    // журнал вызовов общий — тест видит, с какой температурой шёл запрос.
+    withTemperature: (next: number | undefined) => make(next),
     chat: async (
       messages: LLMMessage[],
       system?: SystemPromptInput,
       tools?: Record<string, unknown>[],
       stream?: boolean,
     ): Promise<LLMResponse> => {
-      const call = { messages, system, tools, stream };
+      const call = { messages, system, tools, stream, temperature };
       calls.push(call);
       return respond(call);
     },
-  } as unknown as BaseProvider;
-  return { provider, calls };
+  }) as unknown as BaseProvider;
+  return { provider: make(options.temperature), calls };
 }
 
 /** Ответ провайдера по умолчанию. */
@@ -1061,5 +1068,70 @@ describe('вложения agent-шага (ADR-115 × ADR-101)', () => {
     const content = calls[0]?.messages[0]?.content ?? '';
     expect(content).toContain('[attachment not delivered: photo.jpg (image/jpeg) — unavailable');
     expect(content).toContain(blobPath);
+  });
+});
+
+// Температура шага: `agent.temperature` → температура провайдера (конфиг) →
+// дефолт модели. Провайдер шага может быть разделяемым — правим клоном.
+describe('исполнитель agent-шага — температура', () => {
+  it('температура агента шага уходит в провайдер, оригинал не мутируется', async () => {
+    const { provider, calls } = makeProvider(() => okResponse('готово'), { temperature: 0.1 });
+    const { composer } = makeComposer();
+
+    const outcome = await createAgentStepExecutor().execute(
+      makeCtx(makeNode(), {
+        step: makeStepContext({ agent: { id: 'assistant', temperature: 0.25 } as never }),
+        llm: { composer, resolveProvider: () => provider },
+      }),
+    );
+
+    expect(isStepGateOutcome(outcome)).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.temperature).toBe(0.25);
+    // Исходный провайдер не мутирован (температура конфига сохранена).
+    expect(provider.temperature).toBe(0.1);
+  });
+
+  it('у агента температуры нет → температура провайдера не меняется', async () => {
+    const { provider, calls } = makeProvider(() => okResponse('готово'), { temperature: 0.1 });
+    const { composer } = makeComposer();
+
+    await createAgentStepExecutor().execute(
+      makeCtx(makeNode(), {
+        step: makeStepContext({ agent: { id: 'assistant' } as never }),
+        llm: { composer, resolveProvider: () => provider },
+      }),
+    );
+
+    expect(calls[0]?.temperature).toBe(0.1);
+  });
+
+  it('провайдер уже с температурой агента (фабрика) — клон не нужен, резолвер получает ctx шага', async () => {
+    // Дефолтный резолвер точки сборки (`resolvePipelineStepProvider`) передаёт
+    // `agent.temperature` прямо в `ProviderFactory.create` — температура уже на
+    // провайдере, поэтому шаг не клонирует его второй раз.
+    const { provider, calls } = makeProvider(() => okResponse('готово'), { temperature: 0.25 });
+    const { composer } = makeComposer();
+    const seen: StepExecutionContext[] = [];
+
+    await createAgentStepExecutor().execute(
+      makeCtx(makeNode(), {
+        step: makeStepContext({ agent: { id: 'assistant', temperature: 0.25 } as never }),
+        llm: {
+          composer,
+          resolveProvider: (ctx) => {
+            seen.push(ctx);
+            return provider;
+          },
+        },
+      }),
+    );
+
+    // Резолвер получает контекст шага: агент (провайдер/модель/температура/
+    // sampling) доступен точке сборки.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.step?.agent?.id).toBe('assistant');
+    expect(provider.temperature).toBe(0.25);
+    expect(calls[0]?.temperature).toBe(0.25);
   });
 });

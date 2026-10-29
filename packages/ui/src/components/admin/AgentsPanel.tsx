@@ -23,7 +23,6 @@ import {
   SelectField,
   SliderField,
   Tabs,
-  TextArea,
   TextField,
   useSettingsDraft,
 } from '../ui/settings'
@@ -62,14 +61,17 @@ interface AgentForm {
   description: string
   provider: string
   model: string
-  temperature: number
+  /**
+   * `undefined` — «Auto»: температура не задана, LLM-запрос идёт с дефолтом
+   * модели (поле `temperature` не отправляется). `undefined` ≠ `0`.
+   */
+  temperature: number | undefined
   top_p: number
   top_k: number
   reasoning_level: string
   agent_mode: AgentMode[]
   context_file: string
   capabilities: string[]
-  subagent_prompt: string
   max_steps: number
   icon: string
   color: string
@@ -77,9 +79,10 @@ interface AgentForm {
 
 const emptyForm = (): AgentForm => ({
   id: '', display_name: '', description: '', provider: '', model: '',
-  temperature: 0.7, top_p: 0, top_k: 0, reasoning_level: '',
+  // undefined = Auto (дефолт модели), а не 0.7 — значение задаёт пользователь
+  temperature: undefined, top_p: 0, top_k: 0, reasoning_level: '',
   agent_mode: ['primary'], context_file: '',
-  capabilities: [], subagent_prompt: '', max_steps: 0, icon: '', color: '',
+  capabilities: [], max_steps: 0, icon: '', color: '',
 })
 
 function buildForm(a: AgentInfo, detail?: Record<string, unknown> | null): AgentForm {
@@ -90,14 +93,14 @@ function buildForm(a: AgentInfo, detail?: Record<string, unknown> | null): Agent
     description: a.description || (detail?.description as string) || '',
     provider: a.provider || (detail?.provider as string) || '',
     model: a.model || (detail?.model as string) || '',
-    temperature: (detail?.temperature as number) ?? 0.7,
+    // Нет значения (или null от API) — Auto: дефолт модели, без подстановки 0.7
+    temperature: typeof detail?.temperature === 'number' ? detail.temperature : undefined,
     top_p: (detail?.topP as number) ?? 0,
     top_k: (detail?.topK as number) ?? 0,
     reasoning_level: (a.reasoning_level || (detail?.reasoningLevel as string) || ''),
     agent_mode: agentMode,
     context_file: a.context_file || (detail?.contextFile as string) || '',
     capabilities: (detail?.capabilities as string[]) || a.capabilities,
-    subagent_prompt: (a.subagent_prompt || (detail?.subagentPrompt as string) || ''),
     max_steps: (a.max_steps ?? (detail?.maxSteps as number) ?? 0),
     icon: a.icon || (detail?.icon as string) || '',
     color: a.color || (detail?.color as string) || '',
@@ -250,7 +253,8 @@ export const AgentsPanel = () => {
         description: form.description,
         provider: form.provider || undefined,
         model: form.model || undefined,
-        temperature: form.temperature,
+        // `null` = сброс в Auto (сервер трактует как «поле не задано»)
+        temperature: form.temperature ?? null,
         top_p: form.top_p || undefined,
         top_k: form.top_k || undefined,
         reasoning_level: form.reasoning_level || undefined,
@@ -259,7 +263,6 @@ export const AgentsPanel = () => {
         agent_mode: form.agent_mode,
         context_file: form.context_file || undefined,
         capabilities: form.capabilities,
-        subagent_prompt: form.agent_mode.includes('subagent') ? form.subagent_prompt : undefined,
         max_steps: form.max_steps,
         icon: form.icon || undefined,
         color: form.color || undefined,
@@ -319,8 +322,6 @@ export const AgentsPanel = () => {
       : level === 'none'
         ? t('admin.agents.reasoning.none')
         : t(`chat.reasoning.${level}`)
-
-  const showSubagentFields = form.agent_mode.includes('subagent')
 
   const renderForm = () => (
     <div ref={formRef}>
@@ -421,17 +422,39 @@ export const AgentsPanel = () => {
             </SelectContent>
           </SelectField>
 
-          {/* Temperature */}
-          <div className="sm:col-span-2">
+          {/* Temperature: Auto (дефолт модели) ↔ явное значение */}
+          <div className="sm:col-span-2 space-y-2">
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={form.temperature === undefined}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    // включили Auto — снимаем значение; выключили — стартуем с 0.3
+                    temperature: e.target.checked ? undefined : 0.3,
+                  })
+                }
+                aria-label={t('admin.agents.temperatureAuto')}
+                data-testid="agent-temperature-auto"
+                className="accent-primary"
+              />
+              {t('admin.agents.temperatureAuto')}
+            </label>
             <SliderField
               label={t('common.temperature')}
               tooltip={t('settings.help.agents.temperature')}
               min={0}
               max={2}
               step={0.05}
-              value={form.temperature}
+              value={form.temperature ?? 0.3}
+              disabled={form.temperature === undefined}
               onValueChange={(value) => setForm({ ...form, temperature: value })}
-              formatValue={(value) => value.toFixed(2)}
+              formatValue={(value) =>
+                form.temperature === undefined
+                  ? t('admin.agents.temperatureAutoShort')
+                  : value.toFixed(2)
+              }
             />
           </div>
 
@@ -484,20 +507,6 @@ export const AgentsPanel = () => {
               setForm({ ...form, max_steps: isNaN(v) ? 0 : v })
             }}
           />
-
-          {/* Subagent-specific fields */}
-          {showSubagentFields && (
-            <div className="sm:col-span-2">
-              <TextArea
-                label={t('admin.agents.subagentPrompt')}
-                tooltip={t('settings.help.agents.subagentPrompt')}
-                value={form.subagent_prompt}
-                onChange={(e) => setForm({ ...form, subagent_prompt: e.target.value })}
-                rows={6}
-                mono
-              />
-            </div>
-          )}
         </div>
 
         {/* Capabilities */}

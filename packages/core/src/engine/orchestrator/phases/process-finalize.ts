@@ -30,6 +30,7 @@ import type { AgentRegistry } from '../../agents/registry.js';
 import type { ContextOptimizer } from '../../context/optimizer.js';
 import type { ModelRouter, RoutingDecision } from '../../router/router.js';
 import type { SaveAssistantMessageFn, AssistantMessageStatus } from '../persistence.js';
+import type { ProviderOverrides } from '../routing.js';
 import { autoTitleSession } from '../../../sessions/auto-title.js';
 import { warning } from '../../../logger.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
@@ -150,7 +151,13 @@ export interface ProcessFinalizeDeps {
     usage: TokenUsage | undefined,
     currentRatio: number | undefined,
   ) => Promise<void>;
-  getProvider: (providerName: string, session: Session, reasoningLevel?: ReasoningLevel) => BaseProvider | null;
+  getProvider: (
+    providerName: string,
+    session: Session,
+    reasoningLevel?: ReasoningLevel,
+    /** Переопределения агента (температура/topP/topK и явная пара provider/model). */
+    overrides?: ProviderOverrides,
+  ) => BaseProvider | null;
   unregister: (streamId: string) => void;
 }
 
@@ -369,7 +376,14 @@ export async function runProcessFinalize(
           reason: 'escalation_fallback',
           strategy: 'default',
         };
-        const fbProvider = deps.router.getProvider(fbDecision, undefined, effectiveReasoningLevel);
+        // Сэмплинг агента хода: эскалация меняет модель, но агент тот же —
+        // top-p/top-k берём из его определения (0/не задано — дефолт модели).
+        const agentDef = effectiveAgentRole ? deps.agentRegistry?.get(effectiveAgentRole) : undefined;
+        const agentTopP = agentDef?.topP && agentDef.topP > 0 ? agentDef.topP : undefined;
+        const agentTopK = agentDef?.topK && agentDef.topK > 0 ? agentDef.topK : undefined;
+        const fbProvider = deps.router.getProvider(
+          fbDecision, undefined, effectiveReasoningLevel, undefined, undefined, agentTopP, agentTopK,
+        );
         if (fbProvider) {
           // Перевызываем LLM с fallback-моделью (без стриминга в UI)
           try {
@@ -510,8 +524,16 @@ export async function runProcessFinalize(
     if (userMsgCount === 1) {
       const titleAgentDef = deps.agentRegistry?.get('title');
       let titleProvider = provider;
-      if (titleAgentDef?.reasoningLevel && providerName) {
-        const tp = deps.getProvider(providerName, updatedSession, titleAgentDef.reasoningLevel);
+      // Температура title-агента применяется и без собственного reasoningLevel.
+      if (
+        titleAgentDef
+        && (titleAgentDef.reasoningLevel || titleAgentDef.temperature !== undefined)
+        && providerName
+      ) {
+        const tp = deps.getProvider(
+          providerName, updatedSession, titleAgentDef.reasoningLevel,
+          { temperature: titleAgentDef.temperature },
+        );
         if (tp) titleProvider = tp;
       }
       autoTitleSession(updatedSession, deps.sessionManager, titleProvider)

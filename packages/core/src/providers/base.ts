@@ -474,7 +474,8 @@ export abstract class BaseProvider {
   apiKey: string;
   model: string;
   timeout: number;
-  temperature: number;
+  /** `undefined` — дефолт модели: поле `temperature` не отправляется. */
+  temperature?: number;
   topP?: number;
   topK?: number;
   name: string;
@@ -501,7 +502,7 @@ export abstract class BaseProvider {
     this.apiKey = params.apiKey;
     this.model = params.model;
     this.timeout = params.timeout ?? 120;
-    this.temperature = params.temperature ?? 0.7;
+    this.temperature = params.temperature;
     this.topP = params.topP;
     this.topK = params.topK;
     this.name = params.name ?? 'unknown';
@@ -509,6 +510,58 @@ export abstract class BaseProvider {
     this.reasoningLevel = params.reasoningLevel ?? 'default';
     this.maxTokens = params.maxTokens;
     this.numCtx = params.numCtx;
+  }
+
+  /**
+   * Temperature в тело запроса — только если она задана явно.
+   *
+   * `undefined` означает «дефолт модели»: провайдеру поле не отправляется,
+   * иначе 0.7 из ядра перекрывал бы собственный дефолт модели
+   * (`agent.temperature` → `session.settings.temperature` → модель).
+   */
+  protected _applyTemperature(body: Record<string, unknown>): void {
+    if (this.temperature !== undefined) {
+      body.temperature = this.temperature;
+    }
+  }
+
+  /**
+   * Клон провайдера с другой температурой.
+   *
+   * Экземпляры провайдеров кэшируются (`ProviderPool`) и разделяются между
+   * прогонами, поэтому менять `temperature` «на месте» нельзя — иначе
+   * температура агента протекла бы в чужой вызов. Копируются прототип и все
+   * собственные поля, так что подкласс остаётся тем же классом.
+   *
+   * `undefined` — «дефолт модели» (поле не отправляется).
+   *
+   * `GatewayProvider` переопределяет метод: его запрос уходит во **внутренний**
+   * провайдер, поэтому клонировать нужно и его.
+   */
+  withTemperature(temperature: number | undefined): this {
+    const clone = Object.create(Object.getPrototypeOf(this)) as this;
+    Object.assign(clone, this);
+    clone.temperature = temperature;
+    return clone;
+  }
+
+  /**
+   * Клон провайдера с другим sampling (`topP`/`topK`).
+   *
+   * Та же причина, что у `withTemperature`: экземпляры кэшируются и
+   * разделяются между прогонами, поэтому поля нельзя менять «на месте».
+   * `undefined` — «не задано» (поле в запрос не отправляется, действует
+   * дефолт провайдера/модели).
+   *
+   * `GatewayProvider` переопределяет метод: его запрос уходит во **внутренний**
+   * провайдер, поэтому клонировать нужно и его.
+   */
+  withSampling(topP: number | undefined, topK: number | undefined): this {
+    const clone = Object.create(Object.getPrototypeOf(this)) as this;
+    Object.assign(clone, this);
+    clone.topP = topP;
+    clone.topK = topK;
+    return clone;
   }
 
   abstract chat(
@@ -600,7 +653,7 @@ export class ProviderFactory {
       apiKey,
       model,
       timeout,
-      temperature: temperature ?? 0.7,
+      temperature,
       topP,
       topK,
       name: config.name || name,

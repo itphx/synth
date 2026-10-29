@@ -53,8 +53,8 @@ export class OpenAIProvider extends BaseProvider {
     const body: Record<string, unknown> = {
       model: this.model,
       messages: formattedMessages,
-      temperature: this.temperature,
     };
+    this._applyTemperature(body);
     if (this.reasoningLevel && this.reasoningLevel !== 'default') body.reasoning_effort = this.reasoningLevel;
     if (this.topP !== undefined) body.top_p = this.topP;
     if (this.topK !== undefined) body.top_k = this.topK;
@@ -114,12 +114,12 @@ export class OpenAIProvider extends BaseProvider {
     const body: Record<string, unknown> = {
       model: this.model,
       messages: formattedMessages,
-      temperature: this.temperature,
       stream: true,
       // ADR-070 §2.3: просим провайдера прислать usage в стриме — иначе
       // cached_tokens/reasoning_tokens в статистику не попадают.
       stream_options: { include_usage: true },
     };
+    this._applyTemperature(body);
     if (this.reasoningLevel && this.reasoningLevel !== 'default') body.reasoning_effort = this.reasoningLevel;
     if (this.topP !== undefined) body.top_p = this.topP;
     if (this.topK !== undefined) body.top_k = this.topK;

@@ -20,5 +20,6 @@
   "color": "--syntax-keyword",
   "contextFile": "RESEARCHER.md",
   "agentMode": ["primary", "subagent"],
+  "temperature": 0.2,
   "maxSteps": 25
 }

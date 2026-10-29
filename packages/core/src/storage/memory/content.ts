@@ -287,6 +287,10 @@ export class MemoryContextFileRepository implements ContextFileRepository {
     return '';
   }
 
+  getSubagentNotice(): string {
+    return '';
+  }
+
   getMaxStepsPrompt(): string {
     return '';
   }

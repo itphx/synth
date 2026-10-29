@@ -179,6 +179,10 @@ export class PgContextFileRepository implements ContextFileRepository, ContextOv
     return this._config.getSchedulerTurnNotice(language);
   }
 
+  getSubagentNotice(language?: string): string {
+    return this._config.getSubagentNotice(language);
+  }
+
   getMaxStepsPrompt(language?: string): string {
     return this._config.getMaxStepsPrompt(language);
   }

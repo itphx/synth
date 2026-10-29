@@ -141,7 +141,8 @@ export class SessionManager {
       pendingMessages: [],
       status: {},
       settings: {
-        temperature: data.settings?.temperature ?? 0.7,
+        // undefined = дефолт модели (см. SessionSettings.temperature).
+        temperature: data.settings?.temperature,
         maxTokens: data.settings?.maxTokens ?? 4096,
         debugEnabled: data.settings?.debugEnabled ?? true,
         streamEnabled: data.settings?.streamEnabled ?? true,

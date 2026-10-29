@@ -14,44 +14,43 @@ import { isWorkspaceDependentTool } from '../../permission/availability.js';
 import { isRuntimeDepAvailable, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, type RuntimeDeps } from '../runtime-deps.js';
 
 /**
- * Промпт саб-агента по языку сессии:
+ * Промпт саб-агента по языку сессии — **только файлы**:
  * `prompts/subagents/{type}.{lang}.md` → `{type}.md` →
- * `prompts/roles/{TYPE}.{lang}.md` → `{TYPE}.md` → `agentDef.subagentPrompt`
- * (definitions JSON, легаси).
+ * `prompts/roles/{TYPE}.{lang}.md` → `{TYPE}.md`.
  *
  * Второй уровень (`roles/`) — не дублирование текстов: ролевые агенты
  * (`fixer`/`tester`/`researcher`/`security-auditor`) имеют **один** промпт в
  * `prompts/roles/`, он же используется основной сессией (`ContextConfig.getRolePrompt`).
- * Без этого фоллбека саб-агент с ролью без файла в `subagents/` получал бы пустой
- * промпт (или легаси-`subagentPrompt` из дефинишена).
+ * Фоллбека из определения агента (легаси-поле в definitions JSON) больше нет:
+ * промпт саб-агента задаётся исключительно файлами. Нет ни одного файла — пустая строка
+ * (роль без инструкции; у встроенных агентов файлы обязательны — это проверяет
+ * `engine/agents/definitions.test.ts`).
  * Каталог промптов — systemPromptsDir из ContextConfig (резолв prompts/ или dist/prompts).
  */
 export function resolveSubagentPrompt(
-  agentDef: { subagentPrompt?: string },
   subagentType: string,
   language: string | undefined,
   systemPromptsDir: string | undefined,
 ): string {
-  if (systemPromptsDir) {
-    const lang = language === 'en' ? 'en' : 'ru';
-    const roleType = subagentType.toUpperCase();
-    const candidates = [
-      join(systemPromptsDir, 'subagents', `${subagentType}.${lang}.md`),
-      join(systemPromptsDir, 'subagents', `${subagentType}.md`),
-      join(systemPromptsDir, 'roles', `${roleType}.${lang}.md`),
-      join(systemPromptsDir, 'roles', `${roleType}.md`),
-    ];
-    for (const path of candidates) {
-      if (!existsSync(path)) continue;
-      try {
-        const content = readFileSync(path, 'utf-8');
-        if (content) return content;
-      } catch {
-        /* fallback ниже */
-      }
+  if (!systemPromptsDir) return '';
+  const lang = language === 'en' ? 'en' : 'ru';
+  const roleType = subagentType.toUpperCase();
+  const candidates = [
+    join(systemPromptsDir, 'subagents', `${subagentType}.${lang}.md`),
+    join(systemPromptsDir, 'subagents', `${subagentType}.md`),
+    join(systemPromptsDir, 'roles', `${roleType}.${lang}.md`),
+    join(systemPromptsDir, 'roles', `${roleType}.md`),
+  ];
+  for (const path of candidates) {
+    if (!existsSync(path)) continue;
+    try {
+      const content = readFileSync(path, 'utf-8');
+      if (content) return content;
+    } catch {
+      /* пробуем следующий кандидат */
     }
   }
-  return agentDef.subagentPrompt || '';
+  return '';
 }
 
 /**

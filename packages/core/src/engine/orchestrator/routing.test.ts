@@ -217,6 +217,39 @@ describe('getProvider', () => {
     expect(provider.temperature).toBe(0.1);
   });
 
+  it('явная температура (агента) приоритетнее настройки сессии', () => {
+    const provider = getProvider(
+      'mock', makeSession({ model: 'm', temperature: 0.1 }), undefined, deps(), { temperature: 0.9 },
+    )!;
+    expect(provider.temperature).toBe(0.9);
+  });
+
+  it('модель агента перекрывает настройку сессии', () => {
+    const provider = getProvider(
+      'mock', makeSession({ model: 's-model' }), undefined, deps(), { model: 'agent-model' },
+    )!;
+    expect(provider.model).toBe('agent-model');
+  });
+
+  it('topP/topK агента уходят в провайдер', () => {
+    const provider = getProvider(
+      'mock', makeSession({ model: 'm' }), undefined, deps(), { topP: 0.9, topK: 40 },
+    )!;
+    expect(provider.topP).toBe(0.9);
+    expect(provider.topK).toBe(40);
+  });
+
+  it('без topP/topK — поля не заданы (дефолт модели)', () => {
+    const provider = getProvider('mock', makeSession({ model: 'm' }), undefined, deps())!;
+    expect(provider.topP).toBeUndefined();
+    expect(provider.topK).toBeUndefined();
+  });
+
+  it('без температур агента и сессии — дефолт модели (temperature undefined)', () => {
+    const provider = getProvider('mock', makeSession({ model: 'm' }), undefined, deps())!;
+    expect(provider.temperature).toBeUndefined();
+  });
+
   it('провайдер оборачивается в gateway при заданном gatewayConfig', () => {
     const provider = getProvider(
       'mock', makeSession({ model: 'm' }), undefined,
@@ -341,5 +374,115 @@ describe('routeProvider (ADR-034)', () => {
       depsWithRouter({ route: vi.fn(async () => decision), getProvider: () => null }),
     );
     expect(result).toBeNull();
+  });
+
+  it('явная температура агента перекрывает session.temperature в пуле', async () => {
+    const getProviderSpy = vi.fn((_decision: unknown, _temperature?: number) => new MockProvider({
+      url: '', apiKey: '', model: 'decision-model', type: 'orchmock',
+    }));
+    await routeProvider(
+      makeSession({ provider: 'mock', model: 's-model', temperature: 0.1 }), makeMessage(), undefined, undefined,
+      depsWithRouter({ route: vi.fn(async () => decision), getProvider: getProviderSpy }), { temperature: 0.9 },
+    );
+    // Пул получает effective-температуру вторым аргументом.
+    expect(getProviderSpy.mock.calls[0]![1]).toBe(0.9);
+  });
+
+  it('без температуры агента в пул уходит session.temperature', async () => {
+    const getProviderSpy = vi.fn((_decision: unknown, _temperature?: number) => new MockProvider({
+      url: '', apiKey: '', model: 'decision-model', type: 'orchmock',
+    }));
+    await routeProvider(
+      makeSession({ provider: 'mock', model: 's-model', temperature: 0.1 }), makeMessage(), undefined, undefined,
+      depsWithRouter({ route: vi.fn(async () => decision), getProvider: getProviderSpy }),
+    );
+    expect(getProviderSpy.mock.calls[0]![1]).toBe(0.1);
+  });
+
+  it('fallback провайдера сессии получает явную температуру агента', async () => {
+    const result = await routeProvider(
+      makeSession({ provider: 'mock', model: 's-model', temperature: 0.1 }), makeMessage(), undefined, undefined,
+      depsWithRouter({ route: vi.fn(async () => decision), getProvider: () => null }), { temperature: 0.9 },
+    );
+    expect(result!.provider.temperature).toBe(0.9);
+  });
+
+  // --- Переопределения агента (AgentDefinition.provider/model/topP/topK) ---
+  const twoProviders = providerLoader({
+    mock: { name: 'mock', type: 'orchmock', baseUrl: 'http://localhost:1', apiKey: '', defaultModel: 'mock-default' } as unknown as SharedProviderConfig,
+    other: { name: 'other', type: 'orchmock', baseUrl: 'http://localhost:2', apiKey: '', defaultModel: 'other-default' } as unknown as SharedProviderConfig,
+  });
+
+  it('агент задал provider+model — роутер не вызывается, пара берётся от агента', async () => {
+    const route = vi.fn(async () => decision);
+    const result = await routeProvider(
+      makeSession({ provider: 'mock', model: 's-model' }), makeMessage(), undefined, undefined,
+      depsWithRouter({ route, getProvider: vi.fn() }, { providerLoader: twoProviders }),
+      { provider: 'other', model: 'agent-model' },
+    );
+
+    expect(route).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ providerName: 'other', modelName: 'agent-model' });
+    expect(result!.provider.name).toBe('other');
+    expect(result!.provider.model).toBe('agent-model');
+    expect(result!.decision).toBeUndefined();
+  });
+
+  it('агент задал только provider — модель берётся из сессии', async () => {
+    const result = await routeProvider(
+      makeSession({ provider: 'mock', model: 's-model' }), makeMessage(), undefined, undefined,
+      depsWithRouter(null, { providerLoader: twoProviders }), { provider: 'other' },
+    );
+
+    expect(result).toMatchObject({ providerName: 'other', modelName: 's-model' });
+    expect(result!.provider.name).toBe('other');
+    expect(result!.provider.model).toBe('s-model');
+  });
+
+  it('агент задал только model — провайдер берётся из сессии', async () => {
+    const result = await routeProvider(
+      makeSession({ provider: 'mock', model: 's-model' }), makeMessage(), undefined, undefined,
+      depsWithRouter(null, { providerLoader: twoProviders }), { model: 'agent-model' },
+    );
+
+    expect(result).toMatchObject({ providerName: 'mock', modelName: 'agent-model' });
+    expect(result!.provider.model).toBe('agent-model');
+  });
+
+  it('переопределение модели агента перекрывает модель сообщения', async () => {
+    const result = await routeProvider(
+      makeSession({ provider: 'mock', model: 's-model' }),
+      makeMessage({ provider: 'mock', model: 'msg-model' } as never),
+      undefined, undefined,
+      depsWithRouter(null, { providerLoader: twoProviders }), { model: 'agent-model' },
+    );
+    expect(result!.modelName).toBe('agent-model');
+  });
+
+  it('настройки сессии не мутируются переопределениями агента', async () => {
+    const session = makeSession({ provider: 'mock', model: 's-model', temperature: 0.1 });
+    await routeProvider(
+      session, makeMessage(), undefined, undefined,
+      depsWithRouter(null, { providerLoader: twoProviders }),
+      { provider: 'other', model: 'agent-model', temperature: 0.9, topP: 0.5, topK: 10 },
+    );
+    expect(session.settings.provider).toBe('mock');
+    expect(session.settings.model).toBe('s-model');
+    expect(session.settings.temperature).toBe(0.1);
+    expect(Object.keys(session.settings).sort()).toEqual(['model', 'provider', 'temperature']);
+  });
+
+  it('topP/topK агента уходят в пул роутера', async () => {
+    const getProviderSpy = vi.fn((..._args: unknown[]) => new MockProvider({
+      url: '', apiKey: '', model: 'decision-model', type: 'orchmock',
+    }));
+    await routeProvider(
+      makeSession({ provider: 'mock', model: 's-model' }), makeMessage(), undefined, undefined,
+      depsWithRouter({ route: vi.fn(async () => decision), getProvider: getProviderSpy }),
+      { topP: 0.5, topK: 10 },
+    );
+    const call = getProviderSpy.mock.calls[0]!;
+    expect(call[5]).toBe(0.5);
+    expect(call[6]).toBe(10);
   });
 });

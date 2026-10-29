@@ -1,6 +1,7 @@
 /**
  * Инвариант «все встроенные агенты корректны»: у каждого агента с непустым
- * `contextFile` ролевой промпт существует **и в RU, и в EN**.
+ * `contextFile` ролевой промпт существует **и в RU, и в EN**, а у агента без
+ * `contextFile` (саб-агент) существует собственный файл `prompts/subagents/<id>.{ru,en}.md`.
  *
  * Дефект, который этот тест закрывает: при переименовании роли (как замена
  * набора `pm`/`developer`/`qa`/`analyst`/`auditor` на `leader`/`fixer`/`tester`/
@@ -8,6 +9,10 @@
  * остаться со старым именем, а `contextFile` в определении — указывать на новый.
  * Тогда `ContextConfig.getRolePrompt` молча не находил файл, и агент работал без
  * ролевой инструкции (блок `role` подменялся общим `ROLES_DESCRIPTION`).
+ *
+ * Промпт саб-агента задаётся **только файлами** (`resolveSubagentPrompt`):
+ * `prompts/subagents/<id>.*` → `prompts/roles/<ID>.*`; наследуемого поля
+ * промпта в определении агента больше нет (`agent.ts`), поэтому отсутствие файла = пустой промпт.
  *
  * Тест падает, если роль переименовали/удалили файл, но не поправили агента.
  */
@@ -18,14 +23,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSystemAgentDefinitions } from './index.js';
 
-const ROLES_DIR = join(
+const PROMPTS_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
   '..',
   '..',
   '..',
   'prompts',
-  'roles',
 );
+const ROLES_DIR = join(PROMPTS_DIR, 'roles');
+const SUBAGENTS_DIR = join(PROMPTS_DIR, 'subagents');
 
 /**
  * Кандидаты имени ролевого файла — та же логика, что у
@@ -46,7 +52,7 @@ function findRoleFile(contextFile: string, language: 'ru' | 'en'): string | null
   );
 }
 
-describe('Определения встроенных агентов: ролевые файлы RU/EN', () => {
+describe('Определения встроенных агентов: ролевые файлы и файлы саб-агентов RU/EN', () => {
   const agents = loadSystemAgentDefinitions();
 
   it('набор встроенных агентов не пуст', () => {
@@ -70,14 +76,19 @@ describe('Определения встроенных агентов: ролев
     }
   });
 
-  it('агенты без contextFile (subagentPrompt) — исключение, ролевой файл не требуется', () => {
+  it('агенты без contextFile — промпт только файлами: prompts/subagents/<id>.{ru,en}.md существуют', () => {
     const withoutRole = agents.filter((a) => (a.contextFile ?? '') === '');
-    // Такие агенты обязаны нести собственный prompt — иначе роль пустая.
+    // У встроенных саб-агентов (general/explore) нет ролевого файла —
+    // их промпт обязан лежать в `prompts/subagents/`, иначе роль пустая.
+    expect(withoutRole.length).toBeGreaterThan(0);
     for (const agent of withoutRole) {
-      expect(
-        (agent.subagentPrompt ?? '').trim().length,
-        `агент «${agent.id}»: пустой contextFile и пустой subagentPrompt`,
-      ).toBeGreaterThan(0);
+      for (const language of ['ru', 'en'] as const) {
+        const path = join(SUBAGENTS_DIR, `${agent.id}.${language}.md`);
+        expect(
+          existsSync(path),
+          `агент «${agent.id}»: нет файла промпта ${language} (ожидался ${path})`,
+        ).toBe(true);
+      }
     }
   });
 });

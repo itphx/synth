@@ -46,9 +46,9 @@ export class OllamaProvider extends BaseProvider {
     const body: Record<string, unknown> = {
       model: this.model,
       messages: formattedMessages,
-      temperature: this.temperature,
       stream: !!stream,
     };
+    this._applyTemperature(body);
     if (this.reasoningLevel === 'low') body.think = true;
     else if (this.reasoningLevel === 'none') body.think = false;
     if (tools?.length) {
@@ -105,9 +105,9 @@ export class OllamaProvider extends BaseProvider {
     const body: Record<string, unknown> = {
       model: this.model,
       messages: formattedMessages,
-      temperature: this.temperature,
       stream: true,
     };
+    this._applyTemperature(body);
     if (this.reasoningLevel === 'low') body.think = true;
     else if (this.reasoningLevel === 'none') body.think = false;
     if (tools?.length) {

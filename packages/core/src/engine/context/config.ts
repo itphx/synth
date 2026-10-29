@@ -523,6 +523,28 @@ export class ContextConfig implements ContextFileRepository {
   }
 
   /**
+   * ADR-026: системный блок `[SUBAGENT]` — «ты саб-агент, запущенный другой
+   * сессией». Добавляется в **system prompt только нового дочернего прогона**
+   * (продолжения `task_id`/resume его не получают); в user-сообщении и
+   * сохранённой истории блока нет.
+   *
+   * Файлы: prompts/system/SUBAGENT.{lang}.md — только локализованные
+   * (базового SUBAGENT.md нет). Override через {userDataDir}/user/system/ —
+   * стандартный механизм system-категории, проверяется первым.
+   * Возвращает пустую строку, если файл не найден.
+   */
+  getSubagentNotice(language = 'ru'): string {
+    const stem = 'SUBAGENT';
+
+    // 1. Пользовательский override system-категории
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
+
+    // 2. Встроенный prompts/system/SUBAGENT.{lang}.md
+    return this._readPrompt(stem, 'system', language) ?? '';
+  }
+
+  /**
    * Требование «только текст» для финального шага-отчёта саб-агента,
    * которого коснулся лимит шагов (механика opencode: принудительный
    * финальный шаг с запретом инструментов).

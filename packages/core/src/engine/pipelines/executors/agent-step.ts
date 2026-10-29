@@ -251,13 +251,16 @@ export async function executeAgentStep(
 
   // 3. Провайдер шага (ADR-036) и дефолты модели инстанса (ADR-089).
   const defaults = await resolveLlmDefaults(llm);
-  const provider = await resolveProvider(ctx, llm, logger);
-  if (!provider) {
+  const baseProvider = await resolveProvider(ctx, llm, logger);
+  if (!baseProvider) {
     return failed(ctx, 'pipeline.provider_not_found', t('pipeline.provider_not_found', {
       node: ctx.node.id,
       provider: defaults?.provider ?? '',
     }));
   }
+  // Температура шага: агент шага → температура провайдера (конфиг) → дефолт
+  // модели. Клон, а не мутация: провайдер может быть разделяемым.
+  const provider = applyStepTemperature(baseProvider, ctx.step?.agent?.temperature);
 
   // 4. Подготовка шага: системный промпт, сообщение шага, вложения, тулы,
   //    локальная история. Собирается один раз на попытку — цикл Э4.3b
@@ -978,6 +981,23 @@ async function resolveProvider(
     );
     return null;
   }
+}
+
+/**
+ * Температура шага: `agent.temperature` → температура провайдера (конфиг
+ * инстанса) → дефолт модели.
+ *
+ * Провайдер шага не кэшируется, но может быть разделяемым — правим клоном.
+ * Температура агента не задана и у провайдера её нет → возвращаем как есть
+ * (`undefined` — поле `temperature` в запрос не отправляется).
+ */
+function applyStepTemperature(
+  provider: BaseProvider,
+  agentTemperature: number | undefined,
+): BaseProvider {
+  const temperature = agentTemperature ?? provider.temperature;
+  if (temperature === provider.temperature) return provider;
+  return provider.withTemperature(temperature);
 }
 
 /** Дефолты `provider`/`model` инстанса (ADR-089) — диагностика шага. */

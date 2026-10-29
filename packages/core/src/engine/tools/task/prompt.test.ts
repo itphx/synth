@@ -41,27 +41,26 @@ describe('resolveSubagentPrompt', () => {
     await writeFile(join(subagentsDir, 'explore.ru.md'), 'RU PROMPT');
     await writeFile(join(subagentsDir, 'explore.md'), 'BASE PROMPT');
 
-    expect(resolveSubagentPrompt({ subagentPrompt: 'legacy' }, 'explore', undefined, dir))
-      .toBe('RU PROMPT');
+    expect(resolveSubagentPrompt('explore', undefined, dir)).toBe('RU PROMPT');
   });
 
   it('language=en читает {type}.en.md', async () => {
     await writeFile(join(subagentsDir, 'explore.en.md'), 'EN PROMPT');
     await writeFile(join(subagentsDir, 'explore.ru.md'), 'RU PROMPT');
 
-    expect(resolveSubagentPrompt({}, 'explore', 'en', dir)).toBe('EN PROMPT');
+    expect(resolveSubagentPrompt('explore', 'en', dir)).toBe('EN PROMPT');
   });
 
   it('неизвестный язык трактуется как ru', async () => {
     await writeFile(join(subagentsDir, 'explore.ru.md'), 'RU PROMPT');
 
-    expect(resolveSubagentPrompt({}, 'explore', 'de', dir)).toBe('RU PROMPT');
+    expect(resolveSubagentPrompt('explore', 'de', dir)).toBe('RU PROMPT');
   });
 
   it('фоллбек на базовый {type}.md, если локализованного нет', async () => {
     await writeFile(join(subagentsDir, 'explore.md'), 'BASE PROMPT');
 
-    expect(resolveSubagentPrompt({}, 'explore', 'en', dir)).toBe('BASE PROMPT');
+    expect(resolveSubagentPrompt('explore', 'en', dir)).toBe('BASE PROMPT');
   });
 
   it('фоллбек на ролевой промпт roles/<TYPE>.{lang}.md (общий текст с основной сессией)', async () => {
@@ -70,11 +69,10 @@ describe('resolveSubagentPrompt', () => {
     await writeFile(join(rolesDir, 'FIXER.ru.md'), 'ROLE RU PROMPT');
 
     // subagents/fixer.* нет → берётся ролевой промпт (ADR-069/ADR-046 не дублируют текст).
-    expect(resolveSubagentPrompt({ subagentPrompt: 'legacy' }, 'fixer', 'ru', dir))
-      .toBe('ROLE RU PROMPT');
+    expect(resolveSubagentPrompt('fixer', 'ru', dir)).toBe('ROLE RU PROMPT');
   });
 
-  it('иерархия целиком: subagents/<type> → roles/<TYPE> → subagentPrompt', async () => {
+  it('иерархия целиком: subagents/<type> → roles/<TYPE>', async () => {
     const rolesDir = join(dir, 'roles');
     await mkdir(rolesDir, { recursive: true });
     await writeFile(join(rolesDir, 'TESTER.ru.md'), 'ROLE RU');
@@ -82,35 +80,20 @@ describe('resolveSubagentPrompt', () => {
     await writeFile(join(subagentsDir, 'tester.ru.md'), 'SUBAGENT RU');
 
     // 1) файл в subagents/ важнее ролевого.
-    expect(resolveSubagentPrompt({ subagentPrompt: 'legacy' }, 'tester', 'ru', dir))
-      .toBe('SUBAGENT RU');
+    expect(resolveSubagentPrompt('tester', 'ru', dir)).toBe('SUBAGENT RU');
 
     // 2) без subagents/ — ролевой промпт, локаль соблюдается.
     await rm(join(subagentsDir, 'tester.ru.md'));
-    expect(resolveSubagentPrompt({ subagentPrompt: 'legacy' }, 'tester', 'ru', dir))
-      .toBe('ROLE RU');
-    expect(resolveSubagentPrompt({ subagentPrompt: 'legacy' }, 'tester', 'en', dir))
-      .toBe('ROLE EN');
-
-    // 3) ни subagents/, ни roles/ — легаси `subagentPrompt` из дефинишена.
-    await rm(join(rolesDir, 'TESTER.ru.md'));
-    await rm(join(rolesDir, 'TESTER.en.md'));
-    expect(resolveSubagentPrompt({ subagentPrompt: 'legacy' }, 'tester', 'ru', dir))
-      .toBe('legacy');
+    expect(resolveSubagentPrompt('tester', 'ru', dir)).toBe('ROLE RU');
+    expect(resolveSubagentPrompt('tester', 'en', dir)).toBe('ROLE EN');
   });
 
-  it('нет файлов промпта → agentDef.subagentPrompt (легаси definitions)', async () => {
-    expect(resolveSubagentPrompt({ subagentPrompt: 'legacy prompt' }, 'explore', 'ru', dir))
-      .toBe('legacy prompt');
+  it('нет файлов промпта → пустая строка (fallback из дефинишена убран)', () => {
+    expect(resolveSubagentPrompt('explore', 'ru', dir)).toBe('');
   });
 
-  it('systemPromptsDir не задан → сразу agentDef.subagentPrompt', () => {
-    expect(resolveSubagentPrompt({ subagentPrompt: 'legacy prompt' }, 'explore', 'ru', undefined))
-      .toBe('legacy prompt');
-  });
-
-  it('нет ни файла, ни subagentPrompt → пустая строка', () => {
-    expect(resolveSubagentPrompt({}, 'explore', 'ru', undefined)).toBe('');
+  it('systemPromptsDir не задан → пустая строка', () => {
+    expect(resolveSubagentPrompt('explore', 'ru', undefined)).toBe('');
   });
 });
 

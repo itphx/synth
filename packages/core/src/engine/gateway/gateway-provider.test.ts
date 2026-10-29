@@ -26,6 +26,11 @@ class MockCaptureProvider extends BaseProvider {
   static capturedTools: Record<string, unknown>[] | null = null;
   /** Опции chat-вызова (6-й аргумент `chatAsync`) — проверка проброса. */
   static capturedOptions: ChatOptions | null = null;
+  /** Температура экземпляра, на котором реально шёл вызов. */
+  static capturedTemperature: number | undefined;
+  /** Sampling экземпляра, на котором реально шёл вызов. */
+  static capturedTopP: number | undefined;
+  static capturedTopK: number | undefined;
   static responseContent = 'ok';
   /** ADR-094: имитация ошибки inner-провайдера. */
   static chatError: Error | null = null;
@@ -44,6 +49,9 @@ class MockCaptureProvider extends BaseProvider {
     MockCaptureProvider.capturedMessages = messages;
     MockCaptureProvider.capturedSystemPrompt = resolveSystemPromptText(systemPrompt) ?? null;
     MockCaptureProvider.capturedTools = tools ?? null;
+    MockCaptureProvider.capturedTemperature = this.temperature;
+    MockCaptureProvider.capturedTopP = this.topP;
+    MockCaptureProvider.capturedTopK = this.topK;
     if (MockCaptureProvider.chatError) throw MockCaptureProvider.chatError;
     return {
       content: MockCaptureProvider.responseContent,
@@ -65,6 +73,9 @@ class MockCaptureProvider extends BaseProvider {
     MockCaptureProvider.capturedSystemPrompt = resolveSystemPromptText(systemPrompt) ?? null;
     MockCaptureProvider.capturedTools = tools ?? null;
     MockCaptureProvider.capturedOptions = options ?? null;
+    MockCaptureProvider.capturedTemperature = this.temperature;
+    MockCaptureProvider.capturedTopP = this.topP;
+    MockCaptureProvider.capturedTopK = this.topK;
     yield {
       content: MockCaptureProvider.responseContent,
       isFinal: true,
@@ -113,6 +124,14 @@ function makeMessage(content: string): LLMMessage {
   };
 }
 
+/**
+ * Полное вычитывание async-генератора: тело `chatAsync` исполняется только
+ * при итерации, поэтому «пустой» цикл — часть проверки (без `no-unused-vars`).
+ */
+async function drain(stream: AsyncIterable<unknown>): Promise<void> {
+  for await (const chunk of stream) void chunk;
+}
+
 describe('GatewayProvider (ADR-036)', () => {
   let tmpDir: string;
 
@@ -123,6 +142,9 @@ describe('GatewayProvider (ADR-036)', () => {
     MockCaptureProvider.capturedSystemPrompt = null;
     MockCaptureProvider.capturedTools = null;
     MockCaptureProvider.capturedOptions = null;
+    MockCaptureProvider.capturedTemperature = undefined;
+    MockCaptureProvider.capturedTopP = undefined;
+    MockCaptureProvider.capturedTopK = undefined;
     MockCaptureProvider.responseContent = 'ok';
     MockCaptureProvider.chatError = null;
     MockCaptureProvider.decideCalls = 0;
@@ -497,5 +519,77 @@ describe('GatewayProvider (ADR-036)', () => {
       outcome: 'ok',
       usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 },
     });
+  });
+
+  // withTemperature: клон обёртки с другой температурой. Нужен, потому что
+  // температура читается внутренним провайдером — клон одной обёртки оставил бы
+  // старую температуру (и агент шёл бы с температурой чужого прогона).
+  it('withTemperature: клонирует inner с новой температурой, оригиналы не мутируются', async () => {
+    const { gw, inner } = makeGateway();
+
+    const clone = gw.withTemperature(0.25);
+
+    expect(clone).not.toBe(gw);
+    expect(clone).toBeInstanceOf(GatewayProvider);
+    expect(clone.temperature).toBe(0.25);
+    // Оригиналы не тронуты (обёртка и внутренний провайдер).
+    expect(gw.temperature).toBeUndefined();
+    expect(inner.temperature).toBeUndefined();
+
+    // Температуру видит именно внутренний провайдер — она уходит в запрос.
+    await clone.chat([makeMessage('привет')]);
+    expect(MockCaptureProvider.calls).toBe(1);
+    expect(MockCaptureProvider.capturedTemperature).toBe(0.25);
+  });
+
+  it('withTemperature: undefined снимает температуру у inner (дефолт модели)', async () => {
+    const { gw } = makeGateway();
+    const hot = gw.withTemperature(0.9);
+    const cold = hot.withTemperature(undefined);
+
+    expect(cold.temperature).toBeUndefined();
+    // Промежуточный клон не мутирован.
+    expect(hot.temperature).toBe(0.9);
+
+    await cold.chatAsync([makeMessage('hi')]);
+    expect(MockCaptureProvider.capturedTemperature).toBeUndefined();
+  });
+
+  // withSampling: клон обёртки с другим topP/topK — sampling читает внутренний
+  // провайдер при сборке тела запроса, поэтому клонируется и он.
+  it('withSampling: клонирует inner с новым sampling, оригиналы не мутируются', async () => {
+    const { gw, inner } = makeGateway();
+
+    const clone = gw.withSampling(0.7, 25);
+
+    expect(clone).not.toBe(gw);
+    expect(clone).toBeInstanceOf(GatewayProvider);
+    expect(clone.topP).toBe(0.7);
+    expect(clone.topK).toBe(25);
+    expect(gw.topP).toBeUndefined();
+    expect(gw.topK).toBeUndefined();
+    expect(inner.topP).toBeUndefined();
+    expect(inner.topK).toBeUndefined();
+
+    // Async-генератор исполняется только при итерации.
+    await drain(clone.chatAsync([makeMessage('hi')]));
+    expect(MockCaptureProvider.capturedTopP).toBe(0.7);
+    expect(MockCaptureProvider.capturedTopK).toBe(25);
+  });
+
+  it('withSampling: undefined снимает sampling у inner (дефолт провайдера)', async () => {
+    const { gw } = makeGateway();
+    const sampled = gw.withSampling(0.9, 40);
+    const plain = sampled.withSampling(undefined, undefined);
+
+    expect(plain.topP).toBeUndefined();
+    expect(plain.topK).toBeUndefined();
+    // Промежуточный клон не мутирован.
+    expect(sampled.topP).toBe(0.9);
+    expect(sampled.topK).toBe(40);
+
+    await drain(plain.chatAsync([makeMessage('hi')]));
+    expect(MockCaptureProvider.capturedTopP).toBeUndefined();
+    expect(MockCaptureProvider.capturedTopK).toBeUndefined();
   });
 });

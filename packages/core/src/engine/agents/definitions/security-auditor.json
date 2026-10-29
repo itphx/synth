@@ -20,5 +20,6 @@
   "color": "--status-warning",
   "contextFile": "SECURITY-AUDITOR.md",
   "agentMode": ["primary", "subagent"],
+  "temperature": 0.1,
   "maxSteps": 60
 }

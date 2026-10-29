@@ -117,8 +117,14 @@ export interface SubagentResumeDeps {
    * (резолвит оркестратор; в ребёнке повторного резолва нет).
    */
   getProjectInstructions?: (child: Session, parent: Session, workingDir: string) => Promise<string | undefined>;
-  /** Резолв провайдера дочерней сессии (gateway/роутер оркестратора). */
-  getProvider: (child: Session) => BaseProvider | null;
+  /**
+   * Резолв провайдера дочерней сессии (gateway/роутер оркестратора).
+   *
+   * `overrides` — sampling агента (`topP`/`topK`); пара `provider`/`model` и
+   * температура прогона передаются **клоном** сессии (stored-сессия не
+   * мутируется).
+   */
+  getProvider: (child: Session, overrides?: { topP?: number; topK?: number }) => BaseProvider | null;
   /** Рабочий каталог дочерней сессии. */
   getWorkingDir: (child: Session) => Promise<string>;
   /**
@@ -189,7 +195,28 @@ export async function runSubagentResume(
     if (!agentDef || !normalizeAgentModes(agentDef.agentMode).includes('subagent')) {
       throw new SubagentResumeError('AGENT_NOT_FOUND', sm('task.resume_agent_not_found', { type: agentRole }));
     }
-    const provider = deps.getProvider(child);
+    // Температура resumed-саб-агента: `agent.temperature` → настройки ребёнка
+    // (унаследованы от родителя при создании). Пара и sampling — по тому же
+    // приоритету: `agent.provider`/`model` → настройки ребёнка → провайдер
+    // родителя. Stored-сессию не мутируем — резолверу провайдера отдаём клон
+    // с переопределениями; та же величина уходит в прогон для QA-эскалации.
+    const resumeTemperature = agentDef.temperature ?? child.settings.temperature;
+    const agentProvider = agentDef.provider?.trim() || undefined;
+    const agentModel = agentDef.model?.trim() || undefined;
+    const resumeTopP = agentDef.topP && agentDef.topP > 0 ? agentDef.topP : undefined;
+    const resumeTopK = agentDef.topK && agentDef.topK > 0 ? agentDef.topK : undefined;
+    const provider = deps.getProvider(
+      {
+        ...child,
+        settings: {
+          ...child.settings,
+          temperature: resumeTemperature,
+          ...(agentProvider ? { provider: agentProvider } : {}),
+          ...(agentModel ? { model: agentModel } : {}),
+        },
+      },
+      { topP: resumeTopP, topK: resumeTopK },
+    );
     if (!provider) {
       throw new SubagentResumeError('NO_PROVIDER', sm('task.resume_provider_unavailable', { id: child.id }));
     }
@@ -209,7 +236,6 @@ export async function runSubagentResume(
     const initialMessages = resumeInitialMessages(freshChild);
 
     let systemPrompt = resolveSubagentPrompt(
-      agentDef,
       agentRole,
       child.settings.language,
       deps.contextConfig?.systemPromptsDir,
@@ -321,6 +347,11 @@ export async function runSubagentResume(
       llmSystemPrompt: systemPrompt,
       initialMessages,
       provider,
+      // Температура прогона — для QA-эскалации (fallback-модель из пула).
+      temperature: resumeTemperature,
+      // Sampling агента — для QA-эскалации (fallback-модель из пула).
+      topP: resumeTopP,
+      topK: resumeTopK,
       tools: subagentTools,
       childSessionId: child.id,
       parentSessionId: parent.id,

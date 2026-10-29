@@ -195,6 +195,35 @@ export class GatewayProvider extends BaseProvider {
     return this._inner.getProviderName();
   }
 
+  /**
+   * Клон gateway-обёртки с другой температурой (см. `BaseProvider.withTemperature`).
+   *
+   * Внутренний провайдер клонируется тоже: температура читается именно им при
+   * сборке тела запроса, поэтому клон одной обёртки (с прежним `_inner`)
+   * оставил бы старую температуру. Оригиналы не мутируются.
+   */
+  withTemperature(temperature: number | undefined): this {
+    return new GatewayProvider(
+      this._inner.withTemperature(temperature),
+      this._config,
+      this._opts,
+    ) as this;
+  }
+
+  /**
+   * Клон gateway-обёртки с другим sampling (`topP`/`topK`).
+   *
+   * Как и `withTemperature`: `top_p`/`top_k` в тело запроса кладёт внутренний
+   * провайдер, поэтому клонируется и он. Оригиналы не мутируются.
+   */
+  withSampling(topP: number | undefined, topK: number | undefined): this {
+    return new GatewayProvider(
+      this._inner.withSampling(topP, topK),
+      this._config,
+      this._opts,
+    ) as this;
+  }
+
   async chat(
     messages: LLMMessage[],
     systemPrompt?: SystemPromptInput,

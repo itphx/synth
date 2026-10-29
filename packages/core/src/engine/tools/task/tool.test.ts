@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ToolCapability } from '@itphx/synth-shared';
+import { MessageRole, ToolCapability, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { Message, Session, SessionSettings, ToolContext, RouterConfig } from '@itphx/synth-shared';
 import type { BaseProvider } from '../../../providers/base.js';
 import type { AgentRegistry } from '../../agents/registry.js';
@@ -30,13 +30,24 @@ import {
   resolveSubagentPrompt,
 } from './prompt.js';
 import { publishMessageAdded } from './child-session.js';
+import { stubContextFiles } from '../../../test-helpers/storage-stubs.js';
 import { LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../../llm-error.js';
 import type { TaskExtra } from './types.js';
 
-function makeAgentRegistry(subagents: string[] = ['explore']): AgentRegistry {
+function makeAgentRegistry(
+  subagents: string[] = ['explore'],
+  agentTemperature?: number,
+  agentOverrides: Record<string, unknown> = {},
+): AgentRegistry {
   return {
     get: (id: string) => (subagents.includes(id)
-      ? { id, agentMode: ['subagent'], subagentPrompt: 'You are a test subagent.', maxSteps: 1 }
+      ? {
+          id,
+          agentMode: ['subagent'],
+          maxSteps: 1,
+          ...(agentTemperature !== undefined ? { temperature: agentTemperature } : {}),
+          ...agentOverrides,
+        }
       : undefined),
     getSubagents: () => subagents.map((id) => ({ id })),
     getToolsForAgent: () => [],
@@ -121,7 +132,7 @@ describe('task/tool.ts — определение и ранние отказы',
   it('агент без класса subagent → task.subagent_not_allowed', async () => {
     const { provider } = makeProvider();
     const registry = {
-      get: () => ({ id: 'main', agentMode: ['primary'], subagentPrompt: '' }),
+      get: () => ({ id: 'main', agentMode: ['primary'] }),
       getSubagents: () => [],
       getToolsForAgent: () => [],
     } as unknown as AgentRegistry;
@@ -154,7 +165,7 @@ describe('task/tool.ts — делегирование в prompt.ts', () => {
       makeCtx({
         provider,
         agentRegistry: makeAgentRegistry(),
-        contextConfig: { systemPromptsDir: promptsDir } as never,
+        contextConfig: stubContextFiles({ systemPromptsDir: promptsDir }),
       }),
     );
 
@@ -177,9 +188,203 @@ describe('task/tool.ts — делегирование в prompt.ts', () => {
       }),
     );
 
-    const [, systemPrompt] = chatAsync.mock.calls[0] as unknown as [unknown, string];
-    expect(systemPrompt).not.toContain('SECRET RULES');
+    const [, systemPrompt] = chatAsync.mock.calls[0] as unknown as [unknown, string | undefined];
+    expect(systemPrompt ?? '').not.toContain('SECRET RULES');
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Поведение как в opencode: стандартный префикс prompt нового саб-агента,
+// отсутствие префикса у продолжений, режимы контекста (ADR-026).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ADR-026: служебный блок саб-агента — теперь **системный** (SUBAGENT.{ru,en}.md),
+// а не префикс user-сообщения. В тестах — заглушка порта файлов контекста.
+const SUBAGENT_NOTICE_RU = '[SUBAGENT]\n\nТы — сабагент, запущенный другой сессией.';
+const SUBAGENT_NOTICE_EN = '[SUBAGENT]\n\nYou are a subagent spawned by another session.';
+const LEGACY_PREFIX = 'You are a subagent spawned by another session.';
+
+function makeSubagentContextConfig() {
+  return stubContextFiles({
+    getSubagentNotice: (language?: string) => (language === 'en' ? SUBAGENT_NOTICE_EN : SUBAGENT_NOTICE_RU),
+  });
+}
+
+describe('task/tool.ts — системный блок саб-агента и режимы контекста (ADR-026)', () => {
+  let dir: string;
+  let sessionManager: SessionManager;
+  let parent: Session;
+
+  function textMsg(content: string, role: MessageRole = MessageRole.USER): Message {
+    return {
+      id: generateId(),
+      role,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(content)],
+      content,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    };
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'synth-task-prefix-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: dir }));
+    parent = await sessionManager.createSession({ title: 'P' });
+    // 5 сообщений: `last_n` с границей 2 копирует историю до контрольной точки.
+    for (let i = 0; i < 5; i++) {
+      await sessionManager.addMessage(
+        parent.id,
+        textMsg(`msg ${i}`, i % 2 === 0 ? MessageRole.USER : MessageRole.ASSISTANT),
+      );
+    }
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('новый дочерний прогон: [SUBAGENT] в system prompt, user-сообщение — без префикса', async () => {
+    const { provider, chatAsync } = makeProvider('ok');
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'do the work', subagent_type: 'explore', context_mode: 'none' },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        contextConfig: makeSubagentContextConfig(),
+        // Язык родителя → английский вариант системного блока.
+        parentSessionSettings: { language: 'en' } as SessionSettings,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const [messages, systemPrompt] = chatAsync.mock.calls[0] as unknown as [
+      Array<{ role: string; content: string }>,
+      string,
+    ];
+    expect(messages).toHaveLength(1);
+    // user-сообщение — исходный prompt, служебного блока в нём нет
+    expect(messages[0]!.content).toBe('do the work');
+    expect(messages[0]!.content).not.toContain(LEGACY_PREFIX);
+    // системный блок — в system prompt (второй аргумент chatAsync)
+    expect(systemPrompt).toContain('[SUBAGENT]');
+    expect(systemPrompt).toContain('subagent spawned');
+
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    const userMessages = child.messages.filter((m) => m.role === MessageRole.USER);
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]!.content).toBe('do the work');
+    // В сохранённой истории служебного блока нет вообще
+    expect(child.messages.every((m) => !m.content.includes('[SUBAGENT]'))).toBe(true);
+  });
+
+  it('продолжение task_id: системный блок [SUBAGENT] не добавляется', async () => {
+    const { provider, chatAsync } = makeProvider('resumed');
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'continue', subagent_type: 'explore', task_id: child.id },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        contextConfig: makeSubagentContextConfig(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const [messages, systemPrompt] = chatAsync.mock.calls[0] as unknown as [
+      Array<{ content: string }>,
+      string,
+    ];
+    expect(systemPrompt ?? '').not.toContain('[SUBAGENT]');
+    expect(messages.every((m) => !m.content.startsWith(LEGACY_PREFIX))).toBe(true);
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.messages.every((m) => !m.content.startsWith(LEGACY_PREFIX))).toBe(true);
+  });
+
+  it('summary: сжатие уходит в [PARENT SUMMARY], в истории ребёнка нет SUMMARY', async () => {
+    const { provider, chatAsync } = makeProvider('ok');
+    const summarize = vi.fn(async () => textMsg('compressed history', MessageRole.SUMMARY));
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'do the work', subagent_type: 'explore', context_mode: 'summary' },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        contextConfig: makeSubagentContextConfig(),
+        contextOptimizer: { summarize } as never,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(summarize).toHaveBeenCalledTimes(1);
+
+    const [, systemPrompt] = chatAsync.mock.calls[0] as unknown as [Array<{ content: string }>, string];
+    expect(systemPrompt).toContain('[PARENT SUMMARY]');
+    expect(systemPrompt).toContain('compressed history');
+    expect(systemPrompt).toContain('[SUBAGENT]');
+
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.messages.filter((m) => m.role === MessageRole.SUMMARY)).toHaveLength(0);
+    // Унаследованные сообщения отключены, user-промпт нового прогона — без служебного блока.
+    const own = child.messages.filter((m) => !m.disabled && m.role === MessageRole.USER);
+    expect(own).toHaveLength(1);
+    expect(own[0]!.content).toBe('do the work');
+  });
+
+  it.each(['inherit', 'last_n'] as const)(
+    '%s: история родителя копируется (без отключённых), [SUBAGENT] — в system prompt',
+    async (mode) => {
+      const { provider, chatAsync } = makeProvider('ok');
+      const result = await taskTool.execute(
+        {
+          description: 'd',
+          prompt: 'do the work',
+          subagent_type: 'explore',
+          context_mode: mode,
+          ...(mode === 'last_n' ? { context_count: 2 } : {}),
+        },
+        makeCtx({
+          provider,
+          agentRegistry: makeAgentRegistry(),
+          sessionManager,
+          sessionId: parent.id,
+          contextConfig: makeSubagentContextConfig(),
+        }, parent.id),
+      );
+
+      expect(result.isError).toBeFalsy();
+      const [messages, systemPrompt] = chatAsync.mock.calls[0] as unknown as [
+        Array<{ role: string; content: string }>,
+        string,
+      ];
+      const history = messages.slice(0, -1).map((m) => m.content);
+      // inherit — вся история (5), last_n(2) — до контрольной точки (4).
+      expect(history).toEqual(
+        mode === 'inherit'
+          ? ['msg 0', 'msg 1', 'msg 2', 'msg 3', 'msg 4']
+          : ['msg 0', 'msg 1', 'msg 2', 'msg 3'],
+      );
+      // Последнее user-сообщение — исходный prompt без префикса.
+      expect(messages.at(-1)!.content).toBe('do the work');
+      expect(systemPrompt).toContain('[SUBAGENT]');
+    },
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -518,6 +723,58 @@ describe('task/tool.ts — продолжение ребёнка через task
     expect(saved.messages.some((m) => m.content.includes('resumed answer'))).toBe(true);
   });
 
+  it('продолжение через task_id: температура агента (клон провайдера родителя)', async () => {
+    const parentProv = makeTempAwareProvider('parent-prov', 'parent-model');
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore', temperature: 0.6 },
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore', task_id: child.id },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(['explore'], 0.15),
+        sessionManager,
+        sessionId: parent.id,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    // Прогон — на клоне с температурой агента, оригинал не мутирован.
+    expect(parentProv.created.at(-1)!.temperature).toBe(0.15);
+    expect(parentProv.created.at(-1)!.chatAsync).toHaveBeenCalledTimes(1);
+    expect(parentProv.provider.temperature).toBeUndefined();
+  });
+
+  it('продолжение через task_id: у агента температуры нет → температура дочерней сессии', async () => {
+    const parentProv = makeTempAwareProvider('parent-prov', 'parent-model');
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore', temperature: 0.6 },
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore', task_id: child.id },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(['explore']),
+        sessionManager,
+        sessionId: parent.id,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(parentProv.created.at(-1)!.temperature).toBe(0.6);
+    // Stored-сессия не перезаписана прогоном.
+    const stored = (await sessionManager.getSession(child.id))!;
+    expect(stored.settings.temperature).toBe(0.6);
+  });
+
   it('несуществующий task_id → task.resume_session_not_found', async () => {
     const { provider } = makeProvider();
     const result = await taskTool.execute(
@@ -658,10 +915,11 @@ describe('task/tool.ts — выбор модели/провайдера саб-�
     expect(result.isError).toBeFalsy();
     // Роутер не звали — пара задана явно.
     expect(route).not.toHaveBeenCalled();
+    // Второй аргумент — температура прогона (агента/сессии); у теста её нет.
     expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({
       providerName: 'explicit-prov',
       modelName: 'explicit-model',
-    }));
+    }), undefined);
     // Прогон идёт на явно выбранном провайдере, а не на родительском.
     expect(explicitProv.chatAsync).toHaveBeenCalledTimes(1);
     expect(parentProv.chatAsync).not.toHaveBeenCalled();
@@ -705,7 +963,7 @@ describe('task/tool.ts — выбор модели/провайдера саб-�
     expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({
       providerName: 'routerai',
       modelName: 'google/gemini-3.1-flash-lite',
-    }));
+    }), undefined);
     expect(routeraiProv.chatAsync).toHaveBeenCalledTimes(1);
     expect(parentProv.chatAsync).not.toHaveBeenCalled();
     const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
@@ -840,7 +1098,7 @@ describe('task/tool.ts — выбор модели/провайдера саб-�
     expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({
       providerName: 'parent-prov',
       modelName: 'only-model',
-    }));
+    }), undefined);
     expect(explicitProv.chatAsync).toHaveBeenCalledTimes(1);
     expect(result.metadata!.routing_strategy).toBe('explicit');
 
@@ -877,7 +1135,7 @@ describe('task/tool.ts — выбор модели/провайдера саб-�
     expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({
       providerName: 'cfg-prov',
       modelName: 'cfg-model',
-    }));
+    }), undefined);
     expect(cfgProv.chatAsync).toHaveBeenCalledTimes(1);
     expect(parentProv.chatAsync).not.toHaveBeenCalled();
     expect(result.metadata!.routing_strategy).toBe('subagent-config');
@@ -1060,7 +1318,7 @@ describe('task/tool.ts — выбор модели/провайдера саб-�
     expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({
       providerName: 'routed-prov',
       modelName: 'routed-model',
-    }));
+    }), undefined);
     expect(routedProv.chatAsync).toHaveBeenCalledTimes(1);
     expect(parentProv.chatAsync).not.toHaveBeenCalled();
     expect(result.metadata!.routing_strategy).toBe('content');
@@ -1069,5 +1327,401 @@ describe('task/tool.ts — выбор модели/провайдера саб-�
     const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
     expect(child.settings.provider).toBe('routed-prov');
     expect(child.settings.model).toBe('routed-model');
+  });
+
+  /**
+   * Провайдер с `withTemperature`/`withSampling` (как у `BaseProvider`):
+   * клоны фиксируются по порядку, оригинал не мутируется.
+   */
+  function makeSamplingAwareProvider(name: string, model: string) {
+    const created: Array<{
+      temperature?: number;
+      topP?: number;
+      topK?: number;
+      chatAsync: ReturnType<typeof vi.fn>;
+    }> = [];
+    const make = (temperature?: number, topP?: number, topK?: number): BaseProvider => {
+      const chatAsync = vi.fn(() => (async function* () {
+        yield { isFinal: true, content: 'ok', toolCalls: [] };
+      })());
+      const provider = {
+        name,
+        model,
+        temperature,
+        topP,
+        topK,
+        chatAsync,
+        withTemperature: (next: number | undefined) => make(next, topP, topK),
+        withSampling: (p: number | undefined, k: number | undefined) => make(temperature, p, k),
+      } as unknown as BaseProvider;
+      created.push({ temperature, topP, topK, chatAsync });
+      return provider;
+    };
+    return { provider: make(), created };
+  }
+
+  it('provider/model агента: пара из AgentDefinition, sampling уходит в getProvider, ребёнок видит пару', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const agentProv = makeNamedProvider('agent-prov', 'agent-model');
+    const { route, getProvider, router } = makeModelRouterMock({
+      providerFor: (d) => (d.providerName === 'agent-prov' ? agentProv.provider : null),
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore' },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(['explore'], undefined, {
+          provider: 'agent-prov',
+          model: 'agent-model',
+          topP: 0.8,
+          topK: 40,
+        }),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        // Пара агента выше дефолта инстанса для саб-агентов.
+        routerConfig: makeRouterConfig({
+          subagent: { enabled: true, model: 'cfg-model', provider: 'cfg-prov' },
+        }),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(route).not.toHaveBeenCalled();
+    const call = getProvider.mock.calls[0] as unknown[];
+    expect(call[0]).toMatchObject({ providerName: 'agent-prov', modelName: 'agent-model' });
+    // topP/topK агента — 6-й и 7-й аргументы пула.
+    expect(call[5]).toBe(0.8);
+    expect(call[6]).toBe(40);
+    expect(agentProv.chatAsync).toHaveBeenCalledTimes(1);
+    expect(parentProv.chatAsync).not.toHaveBeenCalled();
+    expect(result.metadata!.routing_strategy).toBe('agent');
+
+    // Ребёнок видит фактическую пару прогона.
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.provider).toBe('agent-prov');
+    expect(child.settings.model).toBe('agent-model');
+  });
+
+  it('только model агента: провайдер — родительский, модель — агента', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const agentProv = makeNamedProvider('parent-prov', 'agent-model');
+    const { getProvider, router } = makeModelRouterMock({
+      providerFor: (d) => (d.providerName === 'parent-prov' && d.modelName === 'agent-model'
+        ? agentProv.provider
+        : null),
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore' },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(['explore'], undefined, { model: 'agent-model' }),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(getProvider.mock.calls[0]![0]).toMatchObject({
+      providerName: 'parent-prov',
+      modelName: 'agent-model',
+    });
+    expect(agentProv.chatAsync).toHaveBeenCalledTimes(1);
+    expect(parentProv.chatAsync).not.toHaveBeenCalled();
+    expect(result.metadata!.routing_strategy).toBe('agent');
+
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.provider).toBe('parent-prov');
+    expect(child.settings.model).toBe('agent-model');
+  });
+
+  it('явные params.model/provider приоритетнее пары агента', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const explicitProv = makeNamedProvider('explicit-prov', 'explicit-model');
+    const { getProvider, router } = makeModelRouterMock({
+      providerFor: (d) => (d.providerName === 'explicit-prov' ? explicitProv.provider : null),
+    });
+
+    const result = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        model: 'explicit-model',
+        provider: 'explicit-prov',
+      },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(['explore'], undefined, {
+          provider: 'agent-prov',
+          model: 'agent-model',
+        }),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(getProvider.mock.calls[0]![0]).toMatchObject({
+      providerName: 'explicit-prov',
+      modelName: 'explicit-model',
+    });
+    expect(explicitProv.chatAsync).toHaveBeenCalledTimes(1);
+    expect(result.metadata!.routing_strategy).toBe('explicit');
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.provider).toBe('explicit-prov');
+    expect(child.settings.model).toBe('explicit-model');
+  });
+
+  it('пара агента совпадает с родительской: базовый провайдер (температура/sampling), пул не зовём', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeSamplingAwareProvider('parent-prov', 'parent-model');
+    const { route, getProvider, router } = makeModelRouterMock({
+      providerFor: () => { throw new Error('пул не должен вызываться для родительской пары'); },
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore' },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(['explore'], 0.15, {
+          provider: 'parent-prov',
+          model: 'parent-model',
+          topP: 0.8,
+          topK: 40,
+        }),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings,
+        modelRouter: router,
+        routerConfig: makeRouterConfig(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(getProvider).not.toHaveBeenCalled();
+    expect(route).not.toHaveBeenCalled();
+    const runProvider = parentProv.created.at(-1)!;
+    expect(runProvider.temperature).toBe(0.15);
+    expect(runProvider.topP).toBe(0.8);
+    expect(runProvider.topK).toBe(40);
+    expect(runProvider.chatAsync).toHaveBeenCalledTimes(1);
+    // Оригинал не мутирован.
+    expect(parentProv.created[0]!.temperature).toBeUndefined();
+    expect(parentProv.created[0]!.topP).toBeUndefined();
+  });
+
+  it('task_id: продолжение идёт на паре агента (settings ребёнка) через пул', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const agentProv = makeNamedProvider('agent-prov', 'agent-model');
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore', provider: 'agent-prov', model: 'agent-model' },
+    });
+    const { getProvider, router } = makeModelRouterMock({
+      providerFor: (d) => (d.providerName === 'agent-prov' ? agentProv.provider : null),
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore', task_id: child.id },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(['explore'], undefined, { topP: 0.8, topK: 40 }),
+        sessionManager,
+        sessionId: parent.id,
+        modelRouter: router,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const call = getProvider.mock.calls[0] as unknown[];
+    expect(call[0]).toMatchObject({ providerName: 'agent-prov', modelName: 'agent-model' });
+    expect(call[5]).toBe(0.8);
+    expect(call[6]).toBe(40);
+    expect(agentProv.chatAsync).toHaveBeenCalledTimes(1);
+    expect(parentProv.chatAsync).not.toHaveBeenCalled();
+    // Stored-сессия ребёнка не переписана прогоном.
+    const stored = (await sessionManager.getSession(child.id))!;
+    expect(stored.settings.provider).toBe('agent-prov');
+    expect(stored.settings.model).toBe('agent-model');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Температура саб-агента: `agent.temperature` → `session.settings.temperature`
+// родителя → дефолт модели. Одна и та же величина должна дойти и до провайдера
+// прогона, и до настроек дочерней сессии (провайдеры кэшируются в пуле —
+// мутировать их нельзя, только клонировать через `withTemperature`).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Провайдер с `withTemperature` (как у `BaseProvider`): клон получает новую
+ * температуру, оригинал не мутируется. `created` — экземпляры по порядку:
+ * последний — тот, на котором шёл прогон.
+ */
+function makeTempAwareProvider(name: string, model: string) {
+  const created: Array<{ temperature?: number; chatAsync: ReturnType<typeof vi.fn> }> = [];
+  const make = (temperature?: number): BaseProvider => {
+    const chatAsync = vi.fn(() => (async function* () {
+      yield { isFinal: true, content: 'ok', toolCalls: [] };
+    })());
+    const provider = {
+      name,
+      model,
+      temperature,
+      chatAsync,
+      withTemperature: (next: number | undefined) => make(next),
+    } as unknown as BaseProvider;
+    created.push({ temperature, chatAsync });
+    return provider;
+  };
+  return { provider: make(), created };
+}
+
+describe('task/tool.ts — температура саб-агента', () => {
+  let dir: string;
+  let sessionManager: SessionManager;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'synth-task-temp-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: dir }));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  });
+
+  const parentSettings = (temperature?: number) => ({
+    provider: 'parent-prov',
+    model: 'parent-model',
+    routingEnabled: false,
+    ...(temperature !== undefined ? { temperature } : {}),
+  }) as unknown as SessionSettings;
+
+  it('температура агента приоритетнее сессии: провайдер прогона — клон, настройки ребёнка совпадают', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeTempAwareProvider('parent-prov', 'parent-model');
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore' },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(['explore'], 0.2),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings(0.7),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    // Прогон идёт на клоне с температурой агента, оригинал не мутирован.
+    expect(parentProv.created).toHaveLength(2);
+    expect(parentProv.created.at(-1)!.temperature).toBe(0.2);
+    expect(parentProv.created.at(-1)!.chatAsync).toHaveBeenCalledTimes(1);
+    expect(parentProv.provider.temperature).toBeUndefined();
+
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.temperature).toBe(0.2);
+  });
+
+  it('у агента температуры нет → берётся температура родительской сессии', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeTempAwareProvider('parent-prov', 'parent-model');
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore' },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(['explore']),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings(0.45),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(parentProv.created.at(-1)!.temperature).toBe(0.45);
+
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.temperature).toBe(0.45);
+  });
+
+  it('ни у агента, ни у сессии температуры нет → провайдер не клонируется, в настройках ребёнка temperature нет', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeTempAwareProvider('parent-prov', 'parent-model');
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore' },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(['explore']),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    // Клона нет — используется родительский провайдер как есть.
+    expect(parentProv.created).toHaveLength(1);
+    expect(parentProv.provider.chatAsync).toHaveBeenCalledTimes(1);
+
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.temperature).toBeUndefined();
+  });
+
+  it('явная модель: температура агента уходит в пул провайдеров роутера', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const parentProv = makeTempAwareProvider('parent-prov', 'parent-model');
+    const explicitProv = makeNamedProvider('explicit-prov', 'explicit-model');
+    const { getProvider, router } = makeModelRouterMock({
+      providerFor: (d) => (d.providerName === 'explicit-prov' ? explicitProv.provider : null),
+    });
+
+    const result = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        model: 'explicit-model',
+        provider: 'explicit-prov',
+      },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(['explore'], 0.35),
+        sessionManager,
+        sessionId: parent.id,
+        parentSessionSettings: parentSettings(0.7),
+        modelRouter: router,
+        routerConfig: makeRouterConfig(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    // Температура — второй аргумент `ModelRouter.getProvider` (её кладёт в
+    // cacheKey пул, иначе агенты делили бы один экземпляр провайдера).
+    expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({
+      providerName: 'explicit-prov',
+      modelName: 'explicit-model',
+    }), 0.35);
+    expect(explicitProv.chatAsync).toHaveBeenCalledTimes(1);
+
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.temperature).toBe(0.35);
   });
 });

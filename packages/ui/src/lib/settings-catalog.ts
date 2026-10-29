@@ -1288,13 +1288,6 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     keywords: ['steps', 'limit', 'шаги', 'лимит'],
   },
   {
-    id: 'agents.subagentPrompt',
-    categoryId: 'agents',
-    sectionId: 'agents-form',
-    labelKey: 'admin.agents.subagentPrompt',
-    keywords: ['subagent prompt', 'instruction', 'сабагент', 'промпт'],
-  },
-  {
     id: 'agents.capabilities',
     categoryId: 'agents',
     sectionId: 'agents-form',

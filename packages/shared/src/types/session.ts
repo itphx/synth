@@ -60,7 +60,11 @@ export interface SessionSettings {
   model?: string;
   /** Уровень размышлений модели. Для openai/generic — reasoning_effort, anthropic — thinking, ollama — think. */
   reasoningLevel?: ReasoningLevel;
-  temperature: number;
+  /**
+   * Температура генерации. `undefined` — дефолт модели: поле `temperature`
+   * вообще не отправляется провайдеру (не подменяется на 0.7).
+   */
+  temperature?: number;
   maxTokens: number;
   systemPrompt?: string;
   debugEnabled: boolean;

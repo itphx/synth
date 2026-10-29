@@ -117,7 +117,8 @@ export const sessionSettingsSchema = z.object({
   provider: z.string().optional(),
   model: z.string().optional(),
   reasoningLevel: z.enum(['default', 'none', 'low', 'medium', 'high']).optional(),
-  temperature: z.number().min(0).max(2).default(0.7),
+  // Без дефолта: `undefined` = дефолт модели (поле не отправляется провайдеру).
+  temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().int().min(1).max(200000).default(4096),
   systemPrompt: z.string().optional(),
   debugEnabled: z.boolean().default(true),

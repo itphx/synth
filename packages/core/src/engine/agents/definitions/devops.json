@@ -30,5 +30,6 @@
   "color": "--syntax-type",
   "contextFile": "DEVOPS.md",
   "agentMode": ["primary", "subagent"],
+  "temperature": 0.1,
   "maxSteps": 100
 }

@@ -302,3 +302,100 @@ describe('ProviderPool — приоритет numCtx', () => {
     expect(provider?.numCtx).toBe(4096);
   });
 });
+
+describe('ProviderPool — кеш по температуре (Auto = дефолт модели)', () => {
+  beforeEach(() => {
+    ProviderFactory.register('mockpool', MockPoolProvider);
+  });
+
+  afterEach(() => {
+    ProviderFactory['_providers'].delete('mockpool');
+  });
+
+  it('разная температура — разные экземпляры, одинаковая — кеш', () => {
+    const pool = new ProviderPool(makeLoader());
+
+    const cold = pool.getProvider('mockpool', 'mock-model', 0.2);
+    const hot = pool.getProvider('mockpool', 'mock-model', 0.9);
+    const coldAgain = pool.getProvider('mockpool', 'mock-model', 0.2);
+
+    expect(cold?.temperature).toBe(0.2);
+    expect(hot?.temperature).toBe(0.9);
+    expect(hot).not.toBe(cold);
+    expect(coldAgain).toBe(cold);
+  });
+
+  it('без температуры — «auto» (undefined, не 0.7) и отдельный ключ кеша', () => {
+    const pool = new ProviderPool(makeLoader());
+
+    const auto = pool.getProvider('mockpool', 'mock-model');
+    expect(auto?.temperature).toBeUndefined();
+
+    const explicit = pool.getProvider('mockpool', 'mock-model', 0.7);
+    expect(explicit?.temperature).toBe(0.7);
+    expect(explicit).not.toBe(auto);
+  });
+
+  it('температура 0 — валидное значение, не «auto»', () => {
+    const pool = new ProviderPool(makeLoader());
+
+    const zero = pool.getProvider('mockpool', 'mock-model', 0);
+    expect(zero?.temperature).toBe(0);
+    expect(zero).not.toBe(pool.getProvider('mockpool', 'mock-model'));
+  });
+});
+
+describe('ProviderPool — topP/topK в ключе кеша', () => {
+  beforeEach(() => {
+    ProviderFactory.register('mockpool', MockPoolProvider);
+  });
+
+  afterEach(() => {
+    ProviderFactory['_providers'].delete('mockpool');
+  });
+
+  it('разные topP/topK — разные экземпляры, одинаковые — кеш', () => {
+    const pool = new ProviderPool(makeLoader());
+
+    const first = pool.getProvider('mockpool', 'mock-model', 0.2, undefined, undefined, undefined, 0.9, 40);
+    const second = pool.getProvider('mockpool', 'mock-model', 0.2, undefined, undefined, undefined, 0.5, 40);
+    const firstAgain = pool.getProvider('mockpool', 'mock-model', 0.2, undefined, undefined, undefined, 0.9, 40);
+
+    expect(first?.topP).toBe(0.9);
+    expect(first?.topK).toBe(40);
+    expect(second?.topP).toBe(0.5);
+    expect(second).not.toBe(first);
+    expect(firstAgain).toBe(first);
+  });
+
+  it('topK входит в ключ отдельно от topP', () => {
+    const pool = new ProviderPool(makeLoader());
+
+    const topK40 = pool.getProvider('mockpool', 'mock-model', undefined, undefined, undefined, undefined, 0.9, 40);
+    const topK20 = pool.getProvider('mockpool', 'mock-model', undefined, undefined, undefined, undefined, 0.9, 20);
+
+    expect(topK40?.topK).toBe(40);
+    expect(topK20?.topK).toBe(20);
+    expect(topK20).not.toBe(topK40);
+  });
+
+  it('без topP/topK — «auto»: поля не заданы и ключ отделён от явных значений', () => {
+    const pool = new ProviderPool(makeLoader());
+
+    const auto = pool.getProvider('mockpool', 'mock-model');
+    expect(auto?.topP).toBeUndefined();
+    expect(auto?.topK).toBeUndefined();
+
+    const explicit = pool.getProvider('mockpool', 'mock-model', undefined, undefined, undefined, undefined, 0.9, 40);
+    expect(explicit).not.toBe(auto);
+  });
+
+  it('0 отличается от «auto» по ключу кеша (0 — отдельное значение)', () => {
+    const pool = new ProviderPool(makeLoader());
+
+    const zero = pool.getProvider('mockpool', 'mock-model', undefined, undefined, undefined, undefined, 0, 0);
+    expect(zero?.topP).toBe(0);
+    expect(zero?.topK).toBe(0);
+    expect(zero).not.toBe(pool.getProvider('mockpool', 'mock-model'));
+  });
+});

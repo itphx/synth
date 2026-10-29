@@ -516,6 +516,10 @@ describe('runProcessFinalize', () => {
         expect.objectContaining({ providerName: 'fb', modelName: 'fb-model', reason: 'escalation_fallback' }),
         undefined,
         undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
       );
       expect(published[0]!.data).toMatchObject({ content: 'эскалированный ответ', model: 'fb-model', status: 'completed' });
       expect(events.find((e) => e.type === 'message.quality_check')!.data).toMatchObject({
@@ -544,7 +548,45 @@ describe('runProcessFinalize', () => {
         expect.objectContaining({ providerName: 'sess', modelName: 'sess-model' }),
         undefined,
         undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
       );
+    });
+
+    it('topP/topK агента хода уходят в пул при эскалации', async () => {
+      const sessionId = await makeSession();
+      const router = routerWith({ enabled: true, pass: false, fallback: { provider: 'fb', model: 'fb-model' } });
+      const deps = makeDeps({
+        router,
+        agentRegistry: {
+          get: (id: string) => (id === 'fixer' ? { id: 'fixer', topP: 0.9, topK: 40 } : undefined),
+        } as never,
+      });
+
+      await runProcessFinalize(makeArgs(sessionId), makeState({ routingDecision: decision }), deps);
+
+      const call = (router.getProvider as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(call[5]).toBe(0.9);
+      expect(call[6]).toBe(40);
+    });
+
+    it('без topP/topK у агента — в пул уходят undefined', async () => {
+      const sessionId = await makeSession();
+      const router = routerWith({ enabled: true, pass: false, fallback: { provider: 'fb', model: 'fb-model' } });
+      const deps = makeDeps({
+        router,
+        agentRegistry: {
+          get: (id: string) => (id === 'fixer' ? { id: 'fixer', topP: 0, topK: 0 } : undefined),
+        } as never,
+      });
+
+      await runProcessFinalize(makeArgs(sessionId), makeState({ routingDecision: decision }), deps);
+
+      const call = (router.getProvider as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(call[5]).toBeUndefined();
+      expect(call[6]).toBeUndefined();
     });
 
     it('успешный QC → qa_pass=true, перевызова нет', async () => {

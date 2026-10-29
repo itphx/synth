@@ -535,6 +535,53 @@ describe('ContextConfig.getAttachmentsDroppedTemplate (ADR-115)', () => {
   });
 });
 
+describe('ContextConfig.getSubagentNotice (ADR-026)', () => {
+  let userDataDir: string;
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'synth-subagent-notice-'));
+  });
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true });
+  });
+
+  it('ru → [SUBAGENT] и русский текст, en → английская версия, fr → пустая строка', async () => {
+    const config = new ContextConfig({ userDataDir });
+
+    const ru = config.getSubagentNotice('ru');
+    expect(ru).toContain('[SUBAGENT]');
+    expect(ru).toContain('сабагент');
+    expect(ru).toContain('Не расширяй объём задачи');
+
+    const en = config.getSubagentNotice('en');
+    expect(en).toContain('[SUBAGENT]');
+    expect(en).toContain('You are a subagent spawned by another session.');
+    expect(en).not.toContain('сабагент');
+
+    // Локализованного файла для неизвестного языка нет — блока нет.
+    expect(config.getSubagentNotice('fr')).toBe('');
+  });
+
+  it('override из system-категории приоритетнее встроенного', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(join(userDataDir, 'user', 'system', 'SUBAGENT.md'), 'ПОЛЬЗОВАТЕЛЬСКИЙ SUBAGENT', 'utf-8');
+
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getSubagentNotice('ru')).toBe('ПОЛЬЗОВАТЕЛЬСКИЙ SUBAGENT');
+  });
+
+  it('файла нет ни встроенного, ни override → пустая строка', async () => {
+    const emptyPrompts = await mkdtemp(join(tmpdir(), 'synth-subagent-empty-'));
+    try {
+      const config = new ContextConfig({ userDataDir, systemPromptsDir: emptyPrompts });
+      expect(config.getSubagentNotice('ru')).toBe('');
+    } finally {
+      await rm(emptyPrompts, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('ContextConfig.getMediaDeriveTemplate (ADR-115, aux-модель)', () => {
   let userDataDir: string;
 

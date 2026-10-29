@@ -76,6 +76,44 @@
 - Любой LLM-вызов — через `GatewayProvider`
   (`engine/gateway/gateway-provider.ts`: guard, обфускация, rate limit, аудит);
   провайдера напрямую не дёргать (ADR-036).
+- **Температура LLM-вызова — одна величина на прогон.** Приоритет:
+  `AgentDefinition.temperature` → `session.settings.temperature` → дефолт модели
+  (`undefined` — поле `temperature` в запросе **не отправляется**,
+  `BaseProvider._applyTemperature`). Так во всех точках вызова: основной ход
+  (`process-setup` → `routeProvider`), саб-агент `task`/`task-resume` и агентский
+  шаг пайплайна (`executors/agent-step.ts`). Провайдеры кэшируются
+  (`ProviderPool`, `temperature` входит в `cacheKey`), поэтому температура чужого
+  прогона выставляется **клоном** — `BaseProvider.withTemperature` (оригинал не
+  мутируется); `GatewayProvider` переопределяет метод и клонирует ещё и `inner`:
+  в тело запроса температуру кладёт именно он.
+  Значения встроенных агентов (`engine/agents/definitions/*.json`, перенесены из
+  кастомных агентов OpenCode — `~/dev/harness/agents/*.md`): `leader` 0.15,
+  `fixer`/`researcher` 0.2, `admin`/`devops`/`tester`/`security-auditor` 0.1,
+  `title` 0.3. У `assistant`/`general`/`explore` температура **не задана** —
+  Auto (дефолт модели). Лоадер (`loadSystemAgentDefinitions`) обязан пробрасывать
+  поле из JSON: без этого значение из определения молча терялось. В UI (админка
+  «Агенты») «Auto (model default)» = `undefined`, при сохранении уходит
+  `temperature: null` — роут (`POST /api/v2/agents`) трактует `null` как сброс
+  (поле не задано), а `null` в API ≠ `0`.
+- **Провайдер/модель/sampling агента применяются при создании провайдера хода.**
+  `AgentDefinition.provider`/`model`/`topP`/`topK` (поля есть в UI-админке «Агенты»
+  и в сторе) читает `process-setup`: они собираются в `ProviderOverrides`
+  (`engine/orchestrator/routing.ts`) и уходят в `routeProvider`. Приоритет
+  `provider`/`model`: **агент → `message.provider`/`model` → `session.settings`**
+  (агент задал только provider — модель берётся из сообщения/сессии, и наоборот;
+  обе заданы — этот выбор **перекрывает роутер**, он не вызывается вовсе).
+  `topP`/`topK`: только от агента (значение `> 0`; `0`/`undefined` — «не задано»,
+  поле в запрос провайдера не попадает), в router-пути прокидываются в пул
+  (`ModelRouter.getProvider` → `ProviderPool.getProvider`), а в пуле входят в
+  `cacheKey` (`topP ?? 'auto'`, `topK ?? 'auto'`) — иначе агенты с разным
+  sampling делили бы один экземпляр. `session.settings` агент **не мутирует**
+  (это состояние следующих ходов): переопределения живут только в вызове.
+  Escalation-фоллбек в `process-finalize` берёт `topP`/`topK` действующего агента
+  (модель меняется — sampling агента сохраняется). Саб-агент `task`/`task-resume`
+  применяет provider/model/topP/topK агента по тому же приоритету (пара — выше
+  `router.subagent`/роутинга, sampling — клоном `withSampling`; фактическая пара
+  фиксируется в настройках ребёнка), шаг пайплайна пока передаёт только
+  `temperature` (остаток).
 - **Наблюдаемость — контракт (ADR-094).** `metrics/*` — свой реестр без внешних
   зависимостей (рендер exposition 0.0.4 внутри core, новых пакетов не добавлять);
   имена `synth_*` и лейблы фиксированы, `route` — шаблон, `session_id`/`user_id`/
@@ -857,11 +895,28 @@
   permissions), `child-session.ts` (создание/сообщения/события), `run-cycle.ts` (общий
   tool-loop `runSubagent`, используемый и `task-resume.ts`), `prompt.ts`, `args.ts`, `types.ts`;
   `task.ts` — фасад-реэкспорт. Тулы `task`/`task-resume` собирают промпт
-  саб-агента (`resolveSubagentPrompt`) — проектные инструкции (ADR-069) добавляются,
-  кроме `task(skip_context_files=true)`.
+  саб-агента (`resolveSubagentPrompt`) **только из файлов** — `prompts/subagents/<type>.{ru,en}.md`
+  → `<type>.md` → `prompts/roles/<TYPE>.{ru,en}.md` → `<TYPE>.md`; поля промпта в определении
+  агента (`AgentDefinition`) нет, фоллбека из JSON не существует (нет файла — пустой промпт;
+  у встроенных `general`/`explore` файлы `prompts/subagents/*` обязательны — тест
+  `engine/agents/definitions.test.ts`). Проектные инструкции (ADR-069) добавляются,
+  кроме `task(skip_context_files=true)`. **Семантика как в opencode:** новый дочерний прогон
+  получает системный блок `[SUBAGENT]` (`prompts/system/SUBAGENT.{ru,en}.md`, загрузчик —
+  `ContextConfig.getSubagentNotice`) в начало system prompt; в user-сообщении и истории
+  блока нет, продолжение `task_id`/resume его не получает; дефолт
+  `context_mode: none` — свежий контекст; во всех режимах ребёнок получает
+  `contextOptimization: 'none'` и `summarizationEnabled: false` (авто-суммаризация родителя не
+  наследуется); `summary` — разовое сжатие истории родителя в системный промпт
+  (`[PARENT SUMMARY]`, `PreparedChildSession.parentSummaryText`), без SUMMARY-сообщения
+  в истории ребёнка (ADR-026, обновление 2026-10-29).
   **Выбор модели саб-агента (`tool.ts`, `resolveSubagentProvider`).** Приоритет:
-  явные `params.provider`/`params.model` → `router.subagent.{provider,model}` →
-  `routing_strategy:'none'` (пара родителя) → `modelRouter.route()` (ADR-034).
+  явные `params.provider`/`params.model` → пара агента
+  (`AgentDefinition.provider`/`model`; недостающая половина — из родителя, пара,
+  равная родительской, — базовый провайдер без пула) →
+  `router.subagent.{provider,model}` → `routing_strategy:'none'` (пара родителя) →
+  `modelRouter.route()` (ADR-034). Пункты 1–3 роутер не зовут: пара резолвится
+  через `ModelRouter.getProvider` (с температурой и sampling `agent.topP`/`topK`;
+  `0`/`undefined` — «не задано»).
   Составной `model` без `provider` (`provider/model`, в т.ч. с `/` внутри имени —
   `routerai/google/gemini-…`) разбирается: первый сегмент — провайдер, остаток —
   модель. Если оркестратор передал `extra.listModels` (тот же загрузчик, что у
@@ -870,6 +925,21 @@
   (до 10, `provider/model`) и отсылкой к `list_models`. Без каталога — прежняя
   проверка через пул провайдеров роутера (`task.model_unavailable`, без тихого
   отката на родителя).
+  **Температура саб-агента.** `agentDef.temperature ?? extra.parentSessionSettings?.temperature`
+  (иначе дефолт модели) уходит **двумя** путями: провайдеру прогона
+  (`resolveSubagentProvider` — клон родительского через `withTemperature`,
+  `ModelRouter.getProvider(decision, temperature)` для явной/роутнутой пары,
+  `temperature` в `cacheKey` пула) и в настройки дочерней сессии
+  (`prepareChildSession({temperature})` — все режимы контекста). Продолжение в
+  текущем ходе (`task({task_id})`, `continueChildSession`) применяет ту же
+  величину (`agentDef.temperature ?? child.settings.temperature`) к провайдеру
+  прогона (клон родительского). `task-resume` считает ту же величину
+  (`agentDef.temperature ?? child.settings.temperature`) и
+  отдаёт `deps.getProvider` **клон сессии** с переопределённой температурой —
+  stored-сессия не мутируется. Температура прогона передаётся в
+  `SubagentRunConfig.temperature`: QA-эскалация (`run-cycle.ts`) поднимает
+  другую модель из пула и запрашивает её `getProvider(decision, temperature)` —
+  fallback-вызов идёт с температурой агента, а не с дефолтом модели.
   **Steering дочерней сессии (ADR-104 + ADR-111).** Цикл саб-агента применяет инъекции
   **на границе шага** (`run-cycle.ts`): перед каждым LLM-вызовом вычитывается `steerInbox`
   **сессии-ребёнка** (`sessionManager.takeSteerMessages`), сообщение персистится в истории
@@ -1366,7 +1436,9 @@
   `StepOutcome`/`StepGateOutcome`. Исполнители — `executors/`: `tool-step.ts`
   (через `executeToolDef`), `script-step.ts` (только через shell-тул `execute_shell`),
   `human-step.ts` (HITL-вопрос с таймаутом), `agent-step.ts` (**свой Tool-Use-цикл внутри
-  движка**: LLM — только через `GatewayProvider`; `ask` → гейт `tool_approval` →
+  движка**: LLM — только через `GatewayProvider`; температура шага —
+  `step.agent.temperature ?? provider.temperature` (клон через `withTemperature`);
+  `ask` → гейт `tool_approval` →
   `resume` применяет одобрение к тому же вызову), `common.ts` (общая «проверка права +
   вызов тула»). **Вложения прогона (ADR-115 × ADR-101, `engine/pipelines/attachments.ts`)**:
   прогон носит только ссылки (байты — в blob, ADR-116), вход — `trigger.payload.attachments`,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { taskTool } from './task.js';
@@ -19,17 +19,26 @@ import { stubSshKeys } from '../../test-helpers/storage-stubs.js';
 import type { GitService } from '../../git/git-service.js';
 import { z } from 'zod';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { Message, PermissionConfig, ProviderConfig, ToolContext, ToolDefinition } from '@itphx/synth-shared';
+import type { Message, PermissionConfig, ProviderConfig, Session, ToolContext, ToolDefinition } from '@itphx/synth-shared';
 
 // ─────────────────────────────────────────────────────────────────────
 // B1: Retry саб-агента при ошибках провайдера (taskTool)
 // ─────────────────────────────────────────────────────────────────────
 
-function makeMockAgentRegistry(): AgentRegistry {
+function makeMockAgentRegistry(
+  agentTemperature?: number,
+  agentOverrides: Record<string, unknown> = {},
+): AgentRegistry {
   return {
     get: (id: string) => {
       if (id === 'explore') {
-        return { id, agentMode: ['subagent'], subagentPrompt: 'You are a test subagent.', maxSteps: 1 };
+        return {
+          id,
+          agentMode: ['subagent'],
+          maxSteps: 1,
+          ...(agentTemperature !== undefined ? { temperature: agentTemperature } : {}),
+          ...agentOverrides,
+        };
       }
       return undefined;
     },
@@ -510,6 +519,9 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
   });
 
   it('LLMMessage-история resume содержит маркер последним user-сообщением', async () => {    const { parent, child } = await createInterruptedChild();
+    // Промпт саб-агента теперь только из файлов: кладём его во временный каталог промптов.
+    await mkdir(join(tmpDir, 'prompts', 'subagents'), { recursive: true });
+    await writeFile(join(tmpDir, 'prompts', 'subagents', 'explore.ru.md'), 'You are a test subagent.');
     let captured: LLMMessage[] = [];
     let capturedSystem = '';
     const provider = {
@@ -528,12 +540,15 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
         agentRegistry: makeMockAgentRegistry(),
         getProvider: () => provider as never,
         getWorkingDir: async () => tmpDir,
+        contextConfig: { systemPromptsDir: join(tmpDir, 'prompts') } as never,
       },
       { child: (await sessionManager.getSession(child))!, parent: (await sessionManager.getSession(parent))!, streamId: 'st-2', abortSignal: new AbortController().signal },
     );
 
     // ADR-070 §1.5: system — вторым аргументом chatAsync, в messages system-сообщения нет.
     expect(capturedSystem).toBe('You are a test subagent.');
+    // ADR-026: продолжение (resume) не получает служебный блок [SUBAGENT].
+    expect(capturedSystem).not.toContain('[SUBAGENT]');
     expect(captured.some((m) => m.role === 'system')).toBe(false);
     // user(промпт) + assistant(частичный) + user(маркер resume)
     const roles = captured.map((m) => m.role);
@@ -542,6 +557,164 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(captured[captured.length - 1]!.content).toContain('Resume the interrupted task');
     // Частичный ответ саб-агента в контексте
     expect(captured.some((m) => m.role === 'assistant' && m.content === 'начал анализ...')).toBe(true);
+  });
+
+  // Температура resumed-саб-агента: `agent.temperature` → настройки дочерней
+  // сессии. Stored-сессию не мутируем — резолверу провайдера отдаётся клон.
+  it('resume: провайдер получает температуру агента, stored-сессия не мутируется', async () => {
+    const { parent, child } = await createInterruptedChild();
+    let seen: Session | undefined;
+    const provider = {
+      model: 'm',
+      name: 'mockres',
+      chatAsync: vi.fn().mockImplementation(async function* () {
+        yield { isFinal: true, content: 'ok', toolCalls: [] };
+      }),
+    };
+
+    await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: makeMockAgentRegistry(0.15),
+        getProvider: (session) => {
+          seen = session;
+          return provider as never;
+        },
+        getWorkingDir: async () => tmpDir,
+      },
+      {
+        child: (await sessionManager.getSession(child))!,
+        parent: (await sessionManager.getSession(parent))!,
+        streamId: 'st-temp-agent',
+        abortSignal: new AbortController().signal,
+      },
+    );
+
+    expect(seen!.settings.temperature).toBe(0.15);
+    // Хранимая сессия не перезаписана: температура агента — параметр прогона.
+    const stored = (await sessionManager.getSession(child))!;
+    expect(stored.settings.temperature).toBeUndefined();
+  });
+
+  it('resume: у агента температуры нет → температура дочерней сессии', async () => {
+    const { parent, child } = await createInterruptedChild();
+    const before = (await sessionManager.getSession(child))!;
+    before.settings = { ...before.settings, temperature: 0.55 };
+    await sessionManager.updateSession(before);
+
+    let seen: Session | undefined;
+    const provider = {
+      model: 'm',
+      name: 'mockres',
+      chatAsync: vi.fn().mockImplementation(async function* () {
+        yield { isFinal: true, content: 'ok', toolCalls: [] };
+      }),
+    };
+
+    await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: makeMockAgentRegistry(),
+        getProvider: (session) => {
+          seen = session;
+          return provider as never;
+        },
+        getWorkingDir: async () => tmpDir,
+      },
+      {
+        child: (await sessionManager.getSession(child))!,
+        parent: (await sessionManager.getSession(parent))!,
+        streamId: 'st-temp-session',
+        abortSignal: new AbortController().signal,
+      },
+    );
+
+    expect(seen!.settings.temperature).toBe(0.55);
+    const stored = (await sessionManager.getSession(child))!;
+    expect(stored.settings.temperature).toBe(0.55);
+  });
+
+  it('resume: provider/model/sampling агента уходят в getProvider, stored-сессия не мутируется', async () => {
+    const { parent, child } = await createInterruptedChild();
+    let seen: Session | undefined;
+    let seenOverrides: { topP?: number; topK?: number } | undefined;
+    const provider = {
+      model: 'agent-model',
+      name: 'agent-prov',
+      chatAsync: vi.fn().mockImplementation(async function* () {
+        yield { isFinal: true, content: 'ok', toolCalls: [] };
+      }),
+    };
+
+    await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: makeMockAgentRegistry(undefined, {
+          provider: 'agent-prov',
+          model: 'agent-model',
+          topP: 0.8,
+          topK: 40,
+        }),
+        getProvider: (session, overrides) => {
+          seen = session;
+          seenOverrides = overrides;
+          return provider as never;
+        },
+        getWorkingDir: async () => tmpDir,
+      },
+      {
+        child: (await sessionManager.getSession(child))!,
+        parent: (await sessionManager.getSession(parent))!,
+        streamId: 'st-agent-pair',
+        abortSignal: new AbortController().signal,
+      },
+    );
+
+    // Резолверу ушёл клон: пара агента и sampling — параметры прогона.
+    expect(seen!.settings.provider).toBe('agent-prov');
+    expect(seen!.settings.model).toBe('agent-model');
+    expect(seenOverrides).toEqual({ topP: 0.8, topK: 40 });
+    // Хранимая сессия не перезаписана: у неё прежняя пара.
+    const stored = (await sessionManager.getSession(child))!;
+    expect(stored.settings.provider).toBe('mockres');
+    expect(stored.settings.model).toBe('m');
+  });
+
+  it('resume: у агента нет пары → провайдер ребёнка не перетирается', async () => {
+    const { parent, child } = await createInterruptedChild();
+    let seen: Session | undefined;
+    const provider = {
+      model: 'm',
+      name: 'mockres',
+      chatAsync: vi.fn().mockImplementation(async function* () {
+        yield { isFinal: true, content: 'ok', toolCalls: [] };
+      }),
+    };
+
+    await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: makeMockAgentRegistry(),
+        getProvider: (session) => {
+          seen = session;
+          return provider as never;
+        },
+        getWorkingDir: async () => tmpDir,
+      },
+      {
+        child: (await sessionManager.getSession(child))!,
+        parent: (await sessionManager.getSession(parent))!,
+        streamId: 'st-no-agent-pair',
+        abortSignal: new AbortController().signal,
+      },
+    );
+
+    expect(seen!.settings.provider).toBe('mockres');
+    expect(seen!.settings.model).toBe('m');
   });
 
   it('ADR-069: getProjectInstructions добавляет проектные инструкции в system prompt resume', async () => {
@@ -604,14 +777,14 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     );
 
     expect(resolverCalled).toBe(false);
-    expect(capturedSystem).not.toContain('RESUME-RULES');
+    expect(capturedSystem ?? '').not.toContain('RESUME-RULES');
   });
 
   it('ADR-071 §2.1 + ADR-070: resume наследует MCP-скоуп и modelPriceLoader', async () => {    const { parent, child } = await createInterruptedChild();
     let capturedMcp: string[] | undefined;
     const registry = {
       get: (id: string) => (id === 'explore'
-        ? { id, agentMode: ['subagent'], subagentPrompt: 'p', maxSteps: 1 }
+        ? { id, agentMode: ['subagent'], maxSteps: 1 }
         : undefined),
       getSubagents: () => [{ id: 'explore' }],
       getToolsForAgent: (_id: string, mcp?: string[]) => {

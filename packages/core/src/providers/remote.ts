@@ -400,8 +400,8 @@ export class RemoteProvider extends BaseProvider {
     const body: Record<string, unknown> = {
       model: this.model,
       messages: this._formatMessages(messages, systemPrompt),
-      temperature: this.temperature,
     };
+    this._applyTemperature(body);
     if (stream) body.stream = true;
     // ADR-070: просим backend-proxy отдать usage в стриме (как OpenAIProvider),
     // иначе live-статистика remote-провайдера до финального чанка недоступна.

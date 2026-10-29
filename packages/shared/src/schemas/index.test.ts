@@ -169,7 +169,8 @@ describe('patchObjectSchema — патч не заполняет отсутст�
 
   it('create-схема сессии по-прежнему применяет дефолты', () => {
     const parsed = sessionCreateSchema.parse({ settings: {} });
-    expect(parsed.settings?.temperature).toBe(0.7);
+    // Temperature дефолта не имеет: undefined = дефолт модели.
+    expect(parsed.settings?.temperature).toBeUndefined();
     expect(parsed.settings?.maxTokens).toBe(4096);
   });
 });

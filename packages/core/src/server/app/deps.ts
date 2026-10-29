@@ -96,6 +96,8 @@ import {
   // ADR-101 §9 / ADR-116: артефакты прогонов — blob-порт + `blob_refs`.
   PipelineArtifactStore,
   ensureBuiltinPipelines,
+  // ADR-101 §4 × `AgentDefinition`: провайдер агентского шага.
+  resolvePipelineStepProvider,
   toCoreProviderConfig,
   ProviderFactory,
   // ADR-090 (Ф3а) / §5, §10 (Ф5б-1): общий реестр блоков
@@ -112,6 +114,7 @@ import {
   type PipelinePermissionDeps,
   type PipelineRunRecord,
   type PluginEmbedFn,
+  type StepExecutionContext,
   type StorageContext,
 } from '../../index.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
@@ -1448,25 +1451,18 @@ export async function createStandaloneDeps(
   // ADR-036/ADR-101: провайдер шага — **всегда** через `GatewayProvider`
   // (обёртка оркестратора: та же точка, что у пула провайдеров). Провайдер
   // не кэшируется — обёртка подхватывает live-конфиг LLM Gateway.
-  const resolvePipelineProvider = async (): Promise<BaseProvider | null> => {
-    try {
-      const defaults = await resolveLlmDefaults();
-      const providerName = defaults.provider?.trim();
-      if (!providerName) return null;
-      const sharedConfig = providerLoader(providerName);
-      if (!sharedConfig) return null;
-      const coreConfig = toCoreProviderConfig(
-        sharedConfig,
-        defaults.model?.trim() || sharedConfig.defaultModel || '',
-      );
-      return orchestrator.wrapProviderWithGateway(
-        ProviderFactory.create(providerName, coreConfig),
-      );
-    } catch {
-      // Провайдер не собран — шаг упадёт с `pipeline.provider_not_found`.
-      return null;
-    }
-  };
+  // ADR-101 §4 × `AgentDefinition`: провайдер/модель/температура/sampling
+  // агента шага (`ctx.step.agent`) приоритетнее дефолтов инстанса — резолвер
+  // общий с managed-точкой сборки (`resolvePipelineStepProvider`).
+  const resolvePipelineProvider = (ctx: StepExecutionContext): Promise<BaseProvider | null> =>
+    resolvePipelineStepProvider(ctx, {
+      resolveLlmDefaults,
+      loadProviderConfig: providerLoader,
+      toProviderConfig: toCoreProviderConfig,
+      createProvider: (name, config, temperature, topP, topK) =>
+        ProviderFactory.create(name, config, temperature, topP, topK),
+      wrapProvider: (provider) => orchestrator.wrapProviderWithGateway(provider),
+    });
   const pipelineWorkspacesRoot = config.workspacesRoot ?? join(dataDir, 'workspaces');
   // ADR-101 §9 / ADR-116: артефакты прогонов — байты в общем blob-порте,
   // отдельного хранилища артефактов нет (решение 2026-10-27). Тот же инстанс

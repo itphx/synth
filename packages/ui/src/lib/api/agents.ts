@@ -16,7 +16,6 @@ export interface AgentInfo {
   mode: 'simple' | 'orchestrator'
   agent_mode: AgentMode[] | null
   reasoning_level?: string | null
-  subagent_prompt: string | null
   max_steps: number | null
   provider: string | null
   model: string | null

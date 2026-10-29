@@ -56,6 +56,24 @@ export interface SubagentRunConfig {
   initialMessages: LLMMessage[];
   /** Провайдер саб-агента (уже резолвнутый роутером/оркестратором). */
   provider: BaseProvider;
+  /**
+   * Температура прогона (`agent.temperature` → `session.settings.temperature`).
+   *
+   * У провайдера она уже выставлена, но QA-эскалация (ADR-034) поднимает
+   * **другую** модель из пула — ей температуру надо передать отдельно, иначе
+   * fallback-вызов ушёл бы с дефолтом модели/температурой чужого прогона.
+   * `undefined` — дефолт модели.
+   */
+  temperature?: number;
+  /**
+   * Sampling прогона (`agent.topP`/`topK`, только положительные значения).
+   *
+   * У провайдера он уже выставлен, но QA-эскалация (ADR-034) поднимает
+   * **другую** модель из пула — ей sampling надо передать отдельно, иначе
+   * fallback-вызов ушёл бы с дефолтом модели. `undefined` — не задано.
+   */
+  topP?: number;
+  topK?: number;
   tools?: ToolForLLM[];
   /** Дочерняя сессия (если есть) — в неё пишется история саб-агента. */
   childSessionId?: string;
@@ -1295,7 +1313,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               reason: 'escalation_fallback',
               strategy: 'default',
             };
-            const fbEffectiveProvider = extra.modelRouter.getProvider(fbDecision);
+            // Без sampling — прежняя арность вызова пула.
+            const fbEffectiveProvider = (config.topP !== undefined || config.topK !== undefined)
+              ? extra.modelRouter.getProvider(
+                fbDecision, config.temperature, undefined, undefined, undefined, config.topP, config.topK,
+              )
+              : extra.modelRouter.getProvider(fbDecision, config.temperature);
             if (fbEffectiveProvider) {
               try {
                 // Перевызываем с fallback-моделью (только последний user-запрос);

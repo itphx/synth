@@ -112,6 +112,8 @@ import {
   // ADR-115 × ADR-101: вложения прогона — derive для text-only модели шага.
   createPipelineAttachmentDerive,
   ensureBuiltinPipelines,
+  // ADR-101 §4 × `AgentDefinition`: провайдер агентского шага (код общий с core).
+  resolvePipelineStepProvider,
   toCoreProviderConfig,
   ProviderFactory,
   // ADR-077: порт исполнения команд (inline/remote).
@@ -136,6 +138,7 @@ import type {
   PipelinePermissionDeps,
   PipelineRunRecord,
   PluginEmbedFn,
+  StepExecutionContext,
 } from '@itphx/synth-core';
 import type { BackendConfig } from '../lib/app-config.js';
 import { EventHub } from '../events/hub.js';
@@ -1374,25 +1377,18 @@ export async function createBackendDeps(
   // ADR-036/ADR-101: провайдер шага — **всегда** через `GatewayProvider`
   // (обёртка оркестратора: та же точка, что у пула провайдеров). Провайдер
   // не кэшируется — обёртка подхватывает live-конфиг LLM Gateway.
-  const resolvePipelineProvider = async (): Promise<BaseProvider | null> => {
-    try {
-      const defaults = await resolveLlmDefaults();
-      const providerName = defaults.provider?.trim();
-      if (!providerName) return null;
-      const sharedConfig = providerLoader(providerName);
-      if (!sharedConfig) return null;
-      const coreConfig = toCoreProviderConfig(
-        sharedConfig,
-        defaults.model?.trim() || sharedConfig.defaultModel || '',
-      );
-      return orchestrator.wrapProviderWithGateway(
-        ProviderFactory.create(providerName, coreConfig),
-      );
-    } catch {
-      // Провайдер не собран — шаг упадёт с `pipeline.provider_not_found`.
-      return null;
-    }
-  };
+  // ADR-101 §4 × `AgentDefinition`: провайдер/модель/температура/sampling
+  // агента шага (`ctx.step.agent`) приоритетнее дефолтов инстанса — резолвер
+  // общий с core-точкой сборки (`resolvePipelineStepProvider`).
+  const resolvePipelineProvider = (ctx: StepExecutionContext): Promise<BaseProvider | null> =>
+    resolvePipelineStepProvider(ctx, {
+      resolveLlmDefaults,
+      loadProviderConfig: providerLoader,
+      toProviderConfig: toCoreProviderConfig,
+      createProvider: (name, config, temperature, topP, topK) =>
+        ProviderFactory.create(name, config, temperature, topP, topK),
+      wrapProvider: (provider) => orchestrator.wrapProviderWithGateway(provider),
+    });
   // ADR-101 §9 / ADR-116: артефакты прогонов — байты в общем blob-порте
   // (отдельного хранилища артефактов нет). Тот же инстанс получают выход `file`
   // (запись) и HTTP-раздача артефактов прогона (`GET

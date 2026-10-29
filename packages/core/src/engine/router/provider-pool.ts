@@ -1,6 +1,8 @@
 /**
  * ProviderPool — кеширование экземпляров BaseProvider (ADR-034).
- * Ключ кеша: `${providerName}:${modelName}`.
+ * Ключ кеша: `${providerName}:${modelName}:${temperature}:${reasoningLevel}:…:${topP}:${topK}`.
+ * Temperature/topP/topK входят в ключ: у агентов они разные, и без них агенты
+ * получали бы один и тот же экземпляр провайдера (`auto` — дефолт модели).
  * При включённом LLM Gateway (ADR-036) созданный провайдер оборачивается
  * в GatewayProvider через gatewayFactory. Фабрику передаёт оркестратор:
  * GatewayProvider нужны getMap/saveMap от сессии, которых в пуле нет,
@@ -41,8 +43,12 @@ export class ProviderPool {
     reasoningLevel?: ReasoningLevel,
     maxTokens?: number,
     numCtx?: number,
+    /** top-p агента; `0`/undefined — не задано (дефолт провайдера). */
+    topP?: number,
+    /** top-k агента; `0`/undefined — не задано (дефолт провайдера). */
+    topK?: number,
   ): BaseProvider | null {
-    const cacheKey = `${providerName}:${modelName}:${reasoningLevel ?? 'none'}:${maxTokens ?? ''}:${numCtx ?? ''}`;
+    const cacheKey = `${providerName}:${modelName}:${temperature ?? 'auto'}:${reasoningLevel ?? 'none'}:${maxTokens ?? ''}:${numCtx ?? ''}:${topP ?? 'auto'}:${topK ?? 'auto'}`;
     const cached = this._cache.get(cacheKey);
     if (cached) return cached;
 
@@ -62,7 +68,9 @@ export class ProviderPool {
       const provider = ProviderFactory.create(
         providerName,
         coreConfig,
-        temperature ?? 0.7,
+        temperature,
+        topP,
+        topK,
       );
       const wrapped = this._applyGateway(provider);
       this._cache.set(cacheKey, wrapped);

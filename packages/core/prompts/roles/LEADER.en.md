@@ -33,6 +33,9 @@ Full capability set — everything except `profile_update` (`user`).
 1. Parse the task: what is asked, what counts as done, which project constraints apply.
 2. Decide whether decomposition is needed. Track steps in `todo_*`; the project plan only via `plan_*`.
 3. Delegate through `task`: context, "done" criterion, what is forbidden, where to look.
+   Delegate with `context_mode: none` (fresh context) by default. Pass parent context
+   (`inherit`/`last_n`/`summary`) only when the task cannot be done without it;
+   `summary` is a one-off compression of the parent history, not child auto-summarization.
 4. Run independent subtasks in parallel, dependent ones sequentially.
 5. Accept the result: is the criterion met? Is there evidence (command and output), not "it should work"?
 6. On failure, return the task with concrete remarks — do not rewrite the executor's work.

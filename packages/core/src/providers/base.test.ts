@@ -210,3 +210,92 @@ describe('ProviderFactory.create — проброс numCtx', () => {
     expect(provider.numCtx).toBeUndefined();
   });
 });
+
+describe('BaseProvider.withTemperature — клон с другой температурой', () => {
+  const makeOpenAi = (temperature?: number) => ProviderFactory.create(
+    'openai',
+    { url: 'https://api.openai.com', apiKey: 'k', model: 'gpt-test' },
+    temperature,
+  );
+
+  it('клон того же класса с новой температурой; оригинал не мутируется', () => {
+    const original = makeOpenAi(0.3);
+    const clone = original.withTemperature(0.9);
+
+    expect(clone).not.toBe(original);
+    // Тот же класс/прототип — методы провайдера доступны.
+    expect(Object.getPrototypeOf(clone)).toBe(Object.getPrototypeOf(original));
+    expect(clone.temperature).toBe(0.9);
+    expect(original.temperature).toBe(0.3);
+    // Остальные поля скопированы.
+    expect(clone.url).toBe(original.url);
+    expect(clone.model).toBe(original.model);
+    expect(clone.name).toBe(original.name);
+    expect(clone.timeout).toBe(original.timeout);
+    expect(clone.getProviderName()).toBe(original.getProviderName());
+  });
+
+  it('undefined — «дефолт модели»: у клона температура снимается, у оригинала остаётся', () => {
+    const original = makeOpenAi(0.3);
+    const clone = original.withTemperature(undefined);
+
+    expect(clone.temperature).toBeUndefined();
+    expect(original.temperature).toBe(0.3);
+  });
+
+  it('0 — валидное значение (не «сброс»)', () => {
+    const original = makeOpenAi();
+    const clone = original.withTemperature(0);
+
+    expect(clone.temperature).toBe(0);
+    expect(original.temperature).toBeUndefined();
+  });
+});
+
+describe('BaseProvider.withSampling — клон с другим topP/topK', () => {
+  const makeOpenAi = (topP?: number, topK?: number) => ProviderFactory.create(
+    'openai',
+    { url: 'https://api.openai.com', apiKey: 'k', model: 'gpt-test' },
+    undefined,
+    topP,
+    topK,
+  );
+
+  it('клон того же класса с новым sampling; оригинал не мутируется', () => {
+    const original = makeOpenAi(0.5, 20);
+    const clone = original.withSampling(0.9, 40);
+
+    expect(clone).not.toBe(original);
+    expect(Object.getPrototypeOf(clone)).toBe(Object.getPrototypeOf(original));
+    expect(clone.topP).toBe(0.9);
+    expect(clone.topK).toBe(40);
+    expect(original.topP).toBe(0.5);
+    expect(original.topK).toBe(20);
+    // Остальные поля скопированы.
+    expect(clone.model).toBe(original.model);
+    expect(clone.name).toBe(original.name);
+    expect(clone.temperature).toBe(original.temperature);
+  });
+
+  it('undefined — «не задано»: у клона sampling снимается, у оригинала остаётся', () => {
+    const original = makeOpenAi(0.5, 20);
+    const clone = original.withSampling(undefined, undefined);
+
+    expect(clone.topP).toBeUndefined();
+    expect(clone.topK).toBeUndefined();
+    expect(original.topP).toBe(0.5);
+    expect(original.topK).toBe(20);
+  });
+
+  it('комбинируется с withTemperature (оба клона независимы)', () => {
+    const original = makeOpenAi();
+    const clone = original.withTemperature(0.2).withSampling(0.7, 10);
+
+    expect(clone.temperature).toBe(0.2);
+    expect(clone.topP).toBe(0.7);
+    expect(clone.topK).toBe(10);
+    expect(original.temperature).toBeUndefined();
+    expect(original.topP).toBeUndefined();
+    expect(original.topK).toBeUndefined();
+  });
+});

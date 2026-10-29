@@ -1747,6 +1747,9 @@ export {
   PIPELINE_ATTACHMENTS_MAX_FILES,
   PipelineAttachmentError,
   validatePipelineAttachments,
+  // ADR-101 §4 × `AgentDefinition`: провайдер агентского шага — общий
+  // резолвер точек сборки (core/backend).
+  resolvePipelineStepProvider,
 } from './engine/pipelines/index.js';
 export type {
   PipelineArtifactEntry,
@@ -1757,6 +1760,9 @@ export type {
   PipelineAttachmentErrorReason,
   PipelineAttachmentRef,
   PipelineAttachmentSource,
+  PipelineStepAgentProviderFields,
+  PipelineStepProviderConfigLike,
+  PipelineStepProviderDeps,
   StepAttachmentHydrationOptions,
 } from './engine/pipelines/index.js';
 export type {

@@ -39,7 +39,6 @@ function agent(id: string, name: string): AgentInfo {
     mode: 'simple',
     agent_mode: ['primary'],
     reasoning_level: null,
-    subagent_prompt: null,
     max_steps: 0,
     provider: null,
     model: null,

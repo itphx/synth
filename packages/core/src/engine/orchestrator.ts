@@ -110,7 +110,7 @@ import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, join
 import { StreamMessageDraft, type StreamMessageRef } from './orchestrator/stream-persistence.js';
 import { StreamTiming } from './orchestrator/stream-stats.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './orchestrator/errors.js';
-import { resolveModelContextWindow, getEffectiveModel, wrapWithGateway, getProvider, routeProvider, type RouteProviderDeps } from './orchestrator/routing.js';
+import { resolveModelContextWindow, getEffectiveModel, wrapWithGateway, getProvider, routeProvider, type ProviderOverrides, type RouteProviderDeps } from './orchestrator/routing.js';
 import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn, resolveTurnQuery as resolveTurnQueryFn } from './orchestrator/prompt-info.js';
 import { publishLocalCompletion as publishLocalCompletionFn, finishLocalCommand as finishLocalCommandFn, type FinishLocalCommandDeps } from './orchestrator/commands.js';
 import { handleDebugSystemMessage as handleDebugSystemMessageFn, type DebugSystemMessageDeps } from './orchestrator/debug.js';
@@ -2684,8 +2684,8 @@ export class ChatOrchestrator {
   /** ADR-095 (шаг 6b-1): зависимости вынесенной подготовки запроса `_processMessage`. */
   private _processSetupDeps(session?: Session): ProcessSetupDeps {
     return {
-      routeProvider: (session, message, reasoningLevel, debugCollector) =>
-        this._routeProvider(session, message, reasoningLevel, debugCollector),
+      routeProvider: (session, message, reasoningLevel, debugCollector, overrides) =>
+        this._routeProvider(session, message, reasoningLevel, debugCollector, overrides),
       handleLlmFailure: (sessionId, streamId, error, attempt, ctx) =>
         this._handleLlmFailure(sessionId, streamId, error, attempt, ctx),
       contextConfig: this._contextConfig,
@@ -2808,8 +2808,8 @@ export class ChatOrchestrator {
       getAssistantSecrets: (sessionId, content) => this._getAssistantSecrets(sessionId, content),
       calibrateTokenRatio: (model, promptChars, usage, currentRatio) =>
         this._calibrateTokenRatio(model, promptChars, usage, currentRatio),
-      getProvider: (providerName, session, reasoningLevel) =>
-        this._getProvider(providerName, session, reasoningLevel),
+      getProvider: (providerName, session, reasoningLevel, overrides) =>
+        this._getProvider(providerName, session, reasoningLevel, overrides),
       unregister: (streamId) => {
         this._cancellationTokens.delete(streamId);
       },
@@ -5240,7 +5240,13 @@ export class ChatOrchestrator {
         });
         return resolved?.content;
       },
-      getProvider: (child) => this._getProvider(child.settings.provider || '', child, child.settings.reasoningLevel),
+      // Пара прогона — из клона настроек ребёнка; sampling агента — overrides.
+      getProvider: (child, overrides) => this._getProvider(
+        child.settings.provider || '',
+        child,
+        child.settings.reasoningLevel,
+        { topP: overrides?.topP, topK: overrides?.topK },
+      ),
       getWorkingDir: (child) => this._resolveWorkingDir(child),
       // ADR-075: workspace-гейт resumed-саб-агента — по проекту дочерней сессии.
       getWorkspaceReady: async (child) => (await this._resolveProjectWorkspace(child)) !== null,
@@ -5327,8 +5333,13 @@ export class ChatOrchestrator {
     };
   }
 
-  private _getProvider(providerName: string, session: Session, reasoningLevel?: ReasoningLevel) {
-    return getProvider(providerName, session, reasoningLevel, this._routingDeps());
+  private _getProvider(
+    providerName: string,
+    session: Session,
+    reasoningLevel?: ReasoningLevel,
+    overrides: ProviderOverrides = {},
+  ) {
+    return getProvider(providerName, session, reasoningLevel, this._routingDeps(), overrides);
   }
 
   /**
@@ -5377,14 +5388,16 @@ export class ChatOrchestrator {
   /**
    * Выбор провайдера и модели через роутер (ADR-034).
    * Если роутер недоступен — fallback на _getProvider().
+   * `overrides` — явный выбор/сэмплинг агента (см. `ProviderOverrides`).
    */
   private async _routeProvider(
     session: Session,
     message: Message,
     reasoningLevel?: ReasoningLevel,
     debugCollector?: DebugCollector,
+    overrides: ProviderOverrides = {},
   ): Promise<{ provider: BaseProvider; providerName: string; modelName: string; decision?: RoutingDecision } | null> {
-    return routeProvider(session, message, reasoningLevel, debugCollector, this._routingDeps());
+    return routeProvider(session, message, reasoningLevel, debugCollector, this._routingDeps(), overrides);
   }
 
   static _sessionMessagesToLlm(

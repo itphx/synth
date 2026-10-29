@@ -27,5 +27,6 @@
   "color": "--syntax-number",
   "contextFile": "TESTER.md",
   "agentMode": ["primary", "subagent"],
+  "temperature": 0.1,
   "maxSteps": 100
 }

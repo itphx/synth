@@ -219,6 +219,30 @@ describe('AgentRegistry — набор ролей (leader/fixer/tester/researche
     expect(caps).not.toContain(ToolCapability.SHELL);
     expect(caps).not.toContain(ToolCapability.WEB);
   });
+
+  /**
+   * Температура встроенных агентов — значения из кастомных агентов OpenCode
+   * (`~/dev/harness/agents/*.md`). `undefined` — «Auto»: поле `temperature`
+   * в LLM-запрос не отправляется, используется дефолт модели.
+   */
+  it.each([
+    ['leader', 0.15],
+    ['fixer', 0.2],
+    ['researcher', 0.2],
+    ['admin', 0.1],
+    ['devops', 0.1],
+    ['tester', 0.1],
+    ['security-auditor', 0.1],
+    ['title', 0.3],
+  ] as const)('%s: temperature=%d из определения', (id, temperature) => {
+    expect(registry.get(id)?.temperature).toBe(temperature);
+  });
+
+  it.each(['assistant', 'general', 'explore'])('%s: температура не задана (Auto)', (id) => {
+    const agent = registry.get(id);
+    expect(agent).toBeDefined();
+    expect(agent!.temperature).toBeUndefined();
+  });
 });
 
 describe('AgentRegistry.getToolsForAgent (ADR-070 §2.9)', () => {

@@ -8,6 +8,7 @@ import { MessageRole, nowISO, generateId, generateStreamId, makeTextPart, ToolCa
 import type { ToolDefinition, Message, SessionSettings, ToolForLLM, ToolContext, ToolResult, ModelConfig } from '@itphx/synth-shared';
 import { normalizeAgentModes } from '../../agents/normalize.js';
 import type { CancellationToken, LLMMessage, BaseProvider } from '../../../providers/base.js';
+import type { ModelRouter } from '../../router/router.js';
 import { formatSkillsCatalogBlock } from '../../skills/catalog.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { BackgroundLimitExceededError } from '../../background/types.js';
@@ -88,7 +89,6 @@ export const taskTool: ToolDefinition = {
     const contextMode: ContextMode = params.context_mode || 'none';
     const contextCount = params.context_count || DEFAULT_LAST_N;
     const systemPrompt = resolveSubagentPrompt(
-      agentDef,
       params.subagent_type,
       extra.parentSessionSettings?.language,
       extra.contextConfig?.systemPromptsDir,
@@ -99,10 +99,26 @@ export const taskTool: ToolDefinition = {
     // ─── Выбор провайдера для саб-агента (ADR-034 Фаза 4) ────────────
     // Резолвится ДО создания дочерней сессии: настройки ребёнка должны
     // совпадать с фактической моделью прогона.
+    // Температура саб-агента: `agent.temperature` → `session.settings.temperature`
+    // родителя → дефолт модели (`undefined` — поле не отправляется). Одна и та
+    // же величина уходит и провайдеру прогона, и в настройки дочерней сессии —
+    // иначе ребёнок показывал бы одну температуру, а прогон шёл с другой.
+    // Пара и sampling агента (`AgentDefinition.provider`/`model`/`topP`/`topK`)
+    // идут тем же путём: пустая строка — «не задано», `0` у sampling — «не задано».
+    const effectiveTemperature = agentDef.temperature ?? extra.parentSessionSettings?.temperature;
+    const agentProvider = agentDef.provider?.trim() || undefined;
+    const agentModel = agentDef.model?.trim() || undefined;
+    const agentTopP = agentDef.topP && agentDef.topP > 0 ? agentDef.topP : undefined;
+    const agentTopK = agentDef.topK && agentDef.topK > 0 ? agentDef.topK : undefined;
     const resolution = await resolveSubagentProvider({
       params,
       extra,
       parentSettings: extra.parentSessionSettings,
+      temperature: effectiveTemperature,
+      agentProvider,
+      agentModel,
+      topP: agentTopP,
+      topK: agentTopK,
     });
     if (resolution.unavailable) {
       const { provider, model, available } = resolution.unavailable;
@@ -157,14 +173,25 @@ export const taskTool: ToolDefinition = {
       contextMode,
       contextCount,
       childRoutingOverrides,
+      temperature: effectiveTemperature,
+      // Фактическая пара прогона — чтобы ребёнок видел именно её.
+      provider: resolution.providerName,
+      model: resolution.modelName,
     });
     const childSessionId = childState.childSessionId;
     let childMessages = childState.childMessages;
     const parentNotesText = childState.parentNotesText;
 
+    // ADR-026: стандартный системный блок `[SUBAGENT]` добавляется в начало
+    // system prompt **только нового** дочернего прогона (продолжения
+    // `task_id`/resume его не получают). В user-сообщении и истории его нет.
+    // `params.prompt` передаётся как есть — он же уходит в routing/QA.
+    const subagentLang = extra.parentSessionSettings?.language || 'ru';
+    const subagentNotice = extra.contextConfig?.getSubagentNotice(subagentLang) ?? '';
+
     // ─── Сборка LLM-сообщений ────────────────────────────────────────
     let llmSystemPrompt = (() => {
-      let prompt = systemPrompt;
+      let prompt = [subagentNotice, systemPrompt].filter(Boolean).join('\n\n');
 
       // Заметки родительской сессии — передаём во всех режимах с контекстом
       // (inherit, summary, last_n), но НЕ в none (чистый лист)
@@ -172,10 +199,13 @@ export const taskTool: ToolDefinition = {
         prompt += `\n\n[PARENT NOTES]\nНиже — важные заметки из основной сессии. Учитывай их при выполнении задачи.\n\n${parentNotesText}`;
       }
 
-      if (contextMode === 'summary' && childMessages.length > 0) {
-        const summaryMsg = childMessages.find(m => m.role === MessageRole.SUMMARY);
-        if (summaryMsg?.content) {
-          prompt += `\n\n[PARENT SUMMARY]\n${summaryMsg.content}`;
+      if (contextMode === 'summary') {
+        // Сжатие родительской истории — из состояния форка (ADR-026, обновление
+        // 2026-10-29); fallback — SUMMARY-сообщение в истории ребёнка (старые сессии).
+        const parentSummaryText = childState.parentSummaryText
+          ?? childMessages.find(m => m.role === MessageRole.SUMMARY)?.content;
+        if (parentSummaryText) {
+          prompt += `\n\n[PARENT SUMMARY]\n${parentSummaryText}`;
         }
       }
 
@@ -337,6 +367,11 @@ export const taskTool: ToolDefinition = {
       llmSystemPrompt,
       initialMessages: messages,
       provider: effectiveProvider,
+      // Температура прогона — для QA-эскалации (fallback-модель из пула).
+      temperature: effectiveTemperature,
+      // Sampling агента — для QA-эскалации (у fallback-модели остаётся sampling агента).
+      topP: agentTopP,
+      topK: agentTopK,
       tools,
       childSessionId,
       parentSessionId: extra.sessionId!,
@@ -389,33 +424,91 @@ interface SubagentProviderResolution {
 }
 
 /**
+ * Клон провайдера с температурой и sampling агента.
+ *
+ * Провайдеры кэшируются и разделяются между прогонами — мутировать оригинал
+ * нельзя. `withSampling` может отсутствовать у упрощённых/тестовых реализаций
+ * `BaseProvider` — тогда sampling не применяется (температура — как раньше).
+ */
+function withAgentSampling(
+  provider: BaseProvider,
+  temperature: number | undefined,
+  topP: number | undefined,
+  topK: number | undefined,
+): BaseProvider {
+  const withTemperature = temperature !== undefined ? provider.withTemperature(temperature) : provider;
+  return typeof withTemperature.withSampling === 'function'
+    ? withTemperature.withSampling(topP, topK)
+    : withTemperature;
+}
+
+/**
+ * Провайдер из пула роутера с температурой и sampling агента.
+ *
+ * Без sampling вызываем прежней арностью (`getProvider(decision, temperature)`) —
+ * наблюдаемый контракт пула для прогонов без `topP`/`topK` не меняется.
+ */
+function getPoolProvider(
+  router: ModelRouter | undefined,
+  decision: Parameters<ModelRouter['getProvider']>[0],
+  temperature: number | undefined,
+  topP: number | undefined,
+  topK: number | undefined,
+): BaseProvider | null {
+  if (!router) return null;
+  return topP !== undefined || topK !== undefined
+    ? router.getProvider(decision, temperature, undefined, undefined, undefined, topP, topK)
+    : router.getProvider(decision, temperature);
+}
+
+/**
  * Резолвинг провайдера/модели саб-агента (ADR-034 Фаза 4).
  *
  * Приоритет (сверху вниз):
  *  1. **явные** `params.model`/`params.provider` — пара, заданная вызывающим
  *     агентом (недостающее поле — из настроек родителя);
- *  2. `routerConfig.subagent.{model,provider}` — дефолт инстанса для
+ *  2. **пара агента** — `AgentDefinition.provider`/`model` (недостающая
+ *     половина — из родителя); пара, равная родительской, — базовый провайдер;
+ *  3. `routerConfig.subagent.{model,provider}` — дефолт инстанса для
  *     саб-агентов (при `enabled !== false`), недостающее — из родителя;
- *  3. `params.routing_strategy === 'none'` — пара родителя, роутер не зовём;
- *  4. иначе — `modelRouter.route()` (прежнее поведение ADR-034).
+ *  4. `params.routing_strategy === 'none'` — пара родителя, роутер не зовём;
+ *  5. иначе — `modelRouter.route()` (прежнее поведение ADR-034).
  *
- * Пункты 1–2 роутер **не** зовут: провайдер резолвится напрямую через
- * `modelRouter.getProvider()`. Если запрошенная пара недоступна (провайдер не
- * настроен/модель неизвестна) — отказ тула `task.model_unavailable`, без тихого
- * отката на родителя: иначе прогон ушёл бы на другой модели, чем запросили.
+ * Пункты 1–3 роутер **не** зовут: провайдер резолвится напрямую через
+ * `modelRouter.getProvider()` (с температурой и sampling агента). Если
+ * запрошенная пара недоступна (провайдер не настроен/модель неизвестна) —
+ * отказ тула `task.model_unavailable`, без тихого отката на родителя: иначе
+ * прогон ушёл бы на другой модели, чем запросили.
  */
 async function resolveSubagentProvider(opts: {
   params: TaskParams;
   extra: TaskExtra;
   parentSettings?: SessionSettings;
+  /**
+   * Температура прогона саб-агента (`agent.temperature` → `session.settings.temperature`).
+   * `undefined` — дефолт модели.
+   */
+  temperature?: number;
+  /** `AgentDefinition.provider` (trim; пусто — не задано). */
+  agentProvider?: string;
+  /** `AgentDefinition.model` (trim; пусто — не задано). */
+  agentModel?: string;
+  /** `agent.topP` (`> 0`; иначе не задано). */
+  topP?: number;
+  /** `agent.topK` (`> 0`; иначе не задано). */
+  topK?: number;
 }): Promise<SubagentProviderResolution> {
-  const { params, extra, parentSettings } = opts;
+  const { params, extra, parentSettings, temperature, agentProvider, agentModel, topP, topK } = opts;
 
   // Пара родителя: настройки сессии → провайдер родителя (fallback).
   const parentProviderName = parentSettings?.provider || extra.provider?.name || '';
   const parentModelName = parentSettings?.model || extra.provider?.model || '';
+  // Провайдер родителя кэширован в пуле и разделяется между прогонами, поэтому
+  // температуру и sampling выставляем клоном (без `temperature`/sampling — берём
+  // как есть: там могут быть значения конфига провайдера).
+  const baseProvider = withAgentSampling(extra.provider, temperature, topP, topK);
   const base: SubagentProviderResolution = {
-    provider: extra.provider,
+    provider: baseProvider,
     providerName: parentProviderName,
     modelName: parentModelName,
     parentProviderName,
@@ -494,7 +587,7 @@ async function resolveSubagentProvider(opts: {
       reason: 'explicit override',
       strategy: 'default',
     };
-    const resolved = extra.modelRouter?.getProvider(requested) ?? null;
+    const resolved = getPoolProvider(extra.modelRouter, requested, temperature, topP, topK);
     if (resolved) {
       return {
         ...base,
@@ -526,7 +619,20 @@ async function resolveSubagentProvider(opts: {
     );
   }
 
-  // 2. Дефолт инстанса для саб-агентов (router.subagent).
+  // 2. Пара из определения агента (`AgentDefinition.provider`/`model`) — ниже
+  //    явных параметров, но выше `router.subagent` и роутинга. Недостающая
+  //    половина — из родителя; ровно родительская пара — базовый провайдер
+  //    (температура/sampling агента уже выставлены клоном выше).
+  if (agentProvider || agentModel) {
+    const pairProvider = agentProvider || parentProviderName;
+    const pairModel = agentModel || parentModelName;
+    if (pairProvider === parentProviderName && pairModel === parentModelName) {
+      return base;
+    }
+    return await resolveRequestedPair(pairProvider, pairModel, 'agent');
+  }
+
+  // 3. Дефолт инстанса для саб-агентов (router.subagent).
   if (cfgModel || cfgProvider) {
     return await resolveRequestedPair(
       cfgProvider || parentProviderName,
@@ -535,13 +641,13 @@ async function resolveSubagentProvider(opts: {
     );
   }
 
-  // 3. Роутинг выключен явно (`routing_strategy: 'none'`) — пара родителя,
+  // 4. Роутинг выключен явно (`routing_strategy: 'none'`) — пара родителя,
   //    роутер не зовём.
   if (params.routing_strategy === 'none') {
     return base;
   }
 
-  // 4. Роутинг ADR-034 — прежнее поведение: решение роутера, при совпадении
+  // 5. Роутинг ADR-034 — прежнее поведение: решение роутера, при совпадении
   //    с родителем — провайдер родителя.
   if (extra.modelRouter && parentSettings && parentSettings.routingEnabled !== false && extra.routerConfig) {
     try {
@@ -549,7 +655,8 @@ async function resolveSubagentProvider(opts: {
         sessionSettings: parentSettings,
         userMessage: params.prompt,
       });
-      const routedProvider = extra.modelRouter.getProvider(decision);
+      // Sampling агента сохраняется и на роутнутой модели (temp — прогона).
+      const routedProvider = getPoolProvider(extra.modelRouter, decision, temperature, topP, topK);
       if (routedProvider && (decision.providerName !== parentProviderName || decision.modelName !== parentModelName)) {
         return {
           ...base,
@@ -641,19 +748,51 @@ async function continueChildSession(opts: {
     streamId,
   };
 
+  // Температура продолжения: `agent.temperature` → настройки ребёнка (унаследованы
+  // от родителя при создании). Провайдер родителя кэширован и разделяется —
+  // берём клон, иначе ребёнок шёл бы с температурой родительского хода.
+  // Пара продолжения: `agent.provider/model` → настройки ребёнка (при создании
+  // туда зафиксирована фактическая пара прогона) → провайдер родителя.
+  const agentProvider = agentDef.provider?.trim() || undefined;
+  const agentModel = agentDef.model?.trim() || undefined;
+  const agentTopP = agentDef.topP && agentDef.topP > 0 ? agentDef.topP : undefined;
+  const agentTopK = agentDef.topK && agentDef.topK > 0 ? agentDef.topK : undefined;
+
+  const childTemperature = agentDef.temperature ?? child.settings.temperature;
+  const desiredProvider = agentProvider || child.settings.provider || extra.provider.name;
+  const desiredModel = agentModel || child.settings.model || extra.provider.model;
+
+  // Пара отличается от провайдера родителя — берём её из пула роутера
+  // (с температурой и sampling агента); иначе — клон родительского.
+  let childProvider: BaseProvider | null = null;
+  if (extra.modelRouter && (desiredProvider !== extra.provider.name || desiredModel !== extra.provider.model)) {
+    childProvider = getPoolProvider(
+      extra.modelRouter,
+      { providerName: desiredProvider, modelName: desiredModel, reason: 'agent pair', strategy: 'default' },
+      childTemperature,
+      agentTopP,
+      agentTopK,
+    );
+  }
+  childProvider ??= withAgentSampling(extra.provider, childTemperature, agentTopP, agentTopK);
+
   return runSubagent({
     subagentType: agentRole,
     description: params.description || child.title || '',
     contextMode: 'none',
     maxSteps: agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS,
     llmSystemPrompt: resolveSubagentPrompt(
-      agentDef,
       agentRole,
       child.settings.language,
       extra.contextConfig?.systemPromptsDir,
     ),
     initialMessages: resumeInitialMessages(freshChild),
-    provider: extra.provider,
+    provider: childProvider,
+    // Температура продолжения — для QA-эскалации (fallback-модель из пула).
+    temperature: childTemperature,
+    // Sampling агента — для QA-эскалации (fallback-модель из пула).
+    topP: agentTopP,
+    topK: agentTopK,
     tools: extra.agentRegistry.getToolsForAgent(agentDef.id, extra.mcpServers),
     childSessionId: child.id,
     parentSessionId: ctx.sessionId,

@@ -111,6 +111,36 @@ describe('Agent API Routes — CRUD (core superset)', () => {
     expect((stored?.capabilities ?? []).length).toBeGreaterThan(0);
   });
 
+  it('POST /agents: temperature задаётся, наследуется и сбрасывается null-ом (Auto)', async () => {
+    const app = createTestApp();
+
+    // 1. Явное значение сохраняется
+    const created = await app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'temp-agent', display_name: 'Temp', temperature: 0.25 }),
+    });
+    expect(created.status).toBe(201);
+    expect((await store.load('temp-agent'))?.temperature).toBe(0.25);
+
+    // 2. Поле не передано — значение прежней записи сохраняется
+    await app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'temp-agent', display_name: 'Temp' }),
+    });
+    expect((await store.load('temp-agent'))?.temperature).toBe(0.25);
+
+    // 3. `null` — явный сброс в Auto (поле не задано, а не унаследовано)
+    const reset = await app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'temp-agent', display_name: 'Temp', temperature: null }),
+    });
+    expect(reset.status).toBe(200);
+    expect((await store.load('temp-agent'))?.temperature).toBeUndefined();
+  });
+
   it('GET /agents/:id отдаёт builtin и 404 для неизвестного', async () => {
     const app = createTestApp();
     const ok = await app.request('/api/v2/agents/assistant');

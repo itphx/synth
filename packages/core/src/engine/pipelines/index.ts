@@ -21,6 +21,14 @@
  * - `authoring.ts` — авторские операции над пайплайном проекта.
  */
 export { PipelineEngine } from './engine.js';
+// ADR-101 §4 × `AgentDefinition`: провайдер агентского шага (provider/model/
+// temperature/topP/topK агента) — общий резолвер обеих точек сборки.
+export { resolvePipelineStepProvider } from './step-provider.js';
+export type {
+  PipelineStepAgentProviderFields,
+  PipelineStepProviderConfigLike,
+  PipelineStepProviderDeps,
+} from './step-provider.js';
 export { evaluateCondition } from './condition.js';
 export { resolveSpecVars, resolveStepInput } from './mapping.js';
 export { nextNodeId, MAX_PIPELINE_TRANSITIONS } from './planner.js';

@@ -44,6 +44,7 @@ export function stubContextFiles(
     getParticipantsNotice: (): string => '',
     getSchedulerNotice: (): string => '',
     getSchedulerTurnNotice: (): string => '',
+    getSubagentNotice: (): string => '',
     getMaxStepsPrompt: (): string => '',
     getSummarizerPrompt: (): string => '',
     getUserContextTemplate: (): string => '',

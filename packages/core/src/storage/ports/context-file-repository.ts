@@ -28,6 +28,11 @@ export interface ContextFileRepository {
   getSchedulerNotice(language?: string): string;
   getSchedulerTurnNotice(language?: string): string;
   /**
+   * ADR-026: системный блок `[SUBAGENT]` (prompts/system/SUBAGENT.{lang}.md)
+   * для system prompt нового дочернего прогона саб-агента.
+   */
+  getSubagentNotice(language?: string): string;
+  /**
    * Требование «только текст» для финального шага-отчёта саб-агента по
    * лимиту шагов (prompts/system/MAX_STEPS.{lang}.md).
    */

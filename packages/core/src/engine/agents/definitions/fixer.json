@@ -28,5 +28,6 @@
   "color": "--status-info",
   "contextFile": "FIXER.md",
   "agentMode": ["primary", "subagent"],
+  "temperature": 0.2,
   "maxSteps": 100
 }

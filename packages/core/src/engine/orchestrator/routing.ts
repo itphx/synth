@@ -89,6 +89,23 @@ export function wrapWithGateway(provider: BaseProvider, session: Session, deps: 
   });
 }
 
+/**
+ * Переопределения выборки провайдера/модели и сэмплинга от агента
+ * (`AgentDefinition.provider`/`model`/`temperature`/`topP`/`topK`).
+ *
+ * Приоритет полей (`provider`/`model`): агент → сообщение → настройка сессии.
+ * У `topP`/`topK` значение `0` означает «не задано» (как и `undefined`):
+ * фильтрует вызывающий, в провайдер уходят только положительные значения.
+ */
+export interface ProviderOverrides {
+  provider?: string;
+  model?: string;
+  /** Температура агента (undefined — `session.settings.temperature`, затем дефолт модели). */
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+}
+
 /** Зависимости создания провайдера сессии. */
 export interface GetProviderDeps {
   providerLoader: (name: string) => SharedProviderConfig | null;
@@ -102,8 +119,10 @@ export function getProvider(
   session: Session,
   reasoningLevel: ReasoningLevel | undefined,
   deps: GetProviderDeps,
+  overrides: ProviderOverrides = {},
 ): BaseProvider | null {
-  const modelName = session.settings.model || '';
+  // Модель: агент → настройка сессии → defaultModel провайдера (ниже).
+  const modelName = overrides.model || session.settings.model || '';
   const sharedConfig = deps.providerLoader(providerName);
   if (!sharedConfig) return null;
 
@@ -118,7 +137,11 @@ export function getProvider(
         // Приоритет: явный provider.numCtx > ModelConfig.contextWindow.
         numCtx: sharedConfig.numCtx ?? (contextWindow > 0 ? contextWindow : undefined),
       },
-      session.settings.temperature,
+      // Температура: агент → настройка сессии → дефолт модели (undefined не отправляем).
+      overrides.temperature ?? session.settings.temperature,
+      // top-p/top-k: только от агента (провайдерский дефолт — не задаём поле).
+      overrides.topP,
+      overrides.topK,
     );
     return wrapWithGateway(provider, session, deps.gateway);
   } catch (e) {
@@ -135,6 +158,12 @@ export interface RouteProviderDeps extends GetProviderDeps {
 /**
  * Выбор провайдера и модели через роутер (ADR-034).
  * Если роутер недоступен — fallback на getProvider().
+ *
+ * `overrides` — явный выбор агента (`AgentDefinition.provider`/`model`) и его
+ * сэмплинг (`temperature`/`topP`/`topK`). Задан `provider` или `model` — роутер
+ * не вызывается вовсе (агент перекрывает эвристики), недостающее поле берётся
+ * из сообщения/сессии. Иначе — прежний путь через роутер; `topP`/`topK`
+ * прокидываются в пул провайдеров (у роутера модель своя, сэмплинг — агента).
  */
 export async function routeProvider(
   session: Session,
@@ -142,7 +171,26 @@ export async function routeProvider(
   reasoningLevel: ReasoningLevel | undefined,
   debugCollector: import('../../debug.js').DebugCollector | undefined,
   deps: RouteProviderDeps,
+  overrides: ProviderOverrides = {},
 ): Promise<{ provider: BaseProvider; providerName: string; modelName: string; decision?: RoutingDecision } | null> {
+  // Приоритет: агент → сессия → дефолт модели (undefined — не отправляем поле).
+  const effectiveTemperature = overrides.temperature ?? session.settings.temperature;
+
+  // Агент задал провайдера и/или модель — явный выбор важнее эвристик роутера
+  // (роутер подбирал бы категорию по тексту сообщения и перебил бы агента).
+  // Недостающее поле берётся из сообщения/сессии: агент мог задать только одно.
+  if (overrides.provider || overrides.model) {
+    const providerName = overrides.provider || (message.provider as string) || session.settings.provider || '';
+    const modelName = overrides.model || (message.model as string) || session.settings.model;
+    const provider = getProvider(providerName, session, reasoningLevel, deps, {
+      ...overrides,
+      provider: providerName,
+      ...(modelName ? { model: modelName } : {}),
+    });
+    if (!provider) return null;
+    return { provider, providerName, modelName: provider.model };
+  }
+
   if (deps.router && session.settings.routingEnabled !== false) {
     const toolCallNames = message.toolCalls?.map((tc) => {
       const func = tc.function as { name: string } | undefined;
@@ -169,10 +217,13 @@ export async function routeProvider(
     const routedWindow = resolveModelContextWindow(decision.modelName, deps.optimizer);
     let provider = deps.router.getProvider(
       decision,
-      undefined,
+      effectiveTemperature,
       reasoningLevel ?? session.settings.reasoningLevel,
       session.settings.maxTokens,
       routedWindow > 0 ? routedWindow : undefined,
+      // top-p/top-k агента: модель выбрал роутер, сэмплинг — агента.
+      overrides.topP,
+      overrides.topK,
     );
     if (provider) {
       // ADR-036: ProviderPool уже оборачивает провайдера через gatewayFactory.
@@ -192,7 +243,7 @@ export async function routeProvider(
     // (например, категория не имеет маппинга в routingContent),
     // используем стандартный getProvider() для провайдера сессии
     const fallbackName = session.settings.provider || '';
-    provider = getProvider(fallbackName, session, reasoningLevel, deps);
+    provider = getProvider(fallbackName, session, reasoningLevel, deps, overrides);
     if (provider) {
       return {
         provider,
@@ -205,7 +256,7 @@ export async function routeProvider(
 
   // Fallback: старый метод (если роутер недоступен или все пути выше не сработали)
   const providerName = (message.provider as string) || session.settings.provider || '';
-  const provider = getProvider(providerName, session, reasoningLevel, deps);
+  const provider = getProvider(providerName, session, reasoningLevel, deps, overrides);
   if (!provider) return null;
 
   return {

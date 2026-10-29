@@ -131,6 +131,34 @@ describe('prepareChildSession — none mode (default)', () => {
     expect(child.settings.provider).toBe('child-provider');
   });
 
+  it('провайдер/модель фактической пары прогона попадают в настройки ребёнка', async () => {
+    const parent = await makeParent();
+    const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
+
+    await prepareChildSession(state, {
+      ...opts({ sessionManager, sessionId: parent.id }),
+      provider: 'agent-prov',
+      model: 'agent-model',
+    });
+
+    const child = (await sessionManager.getSession(state.childSessionId!))!;
+    expect(child.settings.provider).toBe('agent-prov');
+    expect(child.settings.model).toBe('agent-model');
+  });
+
+  it('без provider/model пара ребёнка не перетирается (наследуется от родителя)', async () => {
+    const parent = await makeParent();
+    parent.settings = { ...parent.settings, provider: 'parent-prov', model: 'parent-model' };
+    await sessionManager.updateSession(parent);
+    const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
+
+    await prepareChildSession(state, opts({ sessionManager, sessionId: parent.id }));
+
+    const child = (await sessionManager.getSession(state.childSessionId!))!;
+    expect(child.settings.provider).toBe('parent-prov');
+    expect(child.settings.model).toBe('parent-model');
+  });
+
   // Регрессия: none-режим передаёт `permission` в `SessionManager.createSession`,
   // который раньше собирал settings по whitelist и НЕ копировал `permission`.
   // В итоге `child.settings.permission` у none-ребёнка был undefined (в отличие
@@ -311,7 +339,7 @@ describe('prepareChildSession — режимы с контекстом', () => {
     expect(state.childMessages.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('summary c contextOptimizer: добавляет SUMMARY и отключает унаследованные сообщения', async () => {
+  it('summary c contextOptimizer: сжатие уходит в состояние форка, SUMMARY в историю не пишется', async () => {
     const parent = await makeParent(3);
     const summaryMsg = makeMsg('compressed history', MessageRole.SUMMARY);
     const summarize = vi.fn(async () => summaryMsg);
@@ -324,13 +352,46 @@ describe('prepareChildSession — режимы с контекстом', () => {
 
     expect(summarize).toHaveBeenCalledTimes(1);
     const child = (await sessionManager.getSession(state.childSessionId!))!;
-    const summaries = child.messages.filter((m) => m.role === MessageRole.SUMMARY);
-    expect(summaries).toHaveLength(1);
-    expect(summaries[0]!.content).toBe('compressed history');
-    // Все прочие (унаследованные) сообщения отключены — контекст заменён саммари.
-    expect(child.messages.filter((m) => m.role !== MessageRole.SUMMARY).every((m) => m.disabled)).toBe(true);
+    // Видимой суммаризации в истории ребёнка нет (как в opencode).
+    expect(child.messages.filter((m) => m.role === MessageRole.SUMMARY)).toHaveLength(0);
+    // Сжатие — в состоянии форка: из него собирается `[PARENT SUMMARY]` системного промпта.
+    expect(state.parentSummaryText).toBe('compressed history');
+    // Все унаследованные сообщения отключены — контекст заменён сжатием.
+    expect(child.messages.length).toBeGreaterThan(0);
+    expect(child.messages.every((m) => m.disabled)).toBe(true);
     expect(state.childMessages.map((m) => m.content)).toEqual(child.messages.map((m) => m.content));
   });
+
+  it.each(['none', 'inherit', 'last_n', 'summary'] as const)(
+    '%s: ребёнок не наследует авто-оптимизацию/суммаризацию родителя',
+    async (mode) => {
+      const parent = await makeParent(3);
+      const stored = (await sessionManager.getSession(parent.id))!;
+      stored.settings = {
+        ...stored.settings,
+        contextOptimization: 'summarization',
+        summarizationEnabled: true,
+        summarizeAfterN: 1,
+      };
+      await sessionManager.updateSession(stored);
+
+      const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
+      await prepareChildSession(state, opts(
+        {
+          sessionManager,
+          sessionId: parent.id,
+          contextOptimizer: { summarize: async () => makeMsg('s', MessageRole.SUMMARY) } as never,
+        },
+        { contextMode: mode },
+      ));
+
+      const child = (await sessionManager.getSession(state.childSessionId!))!;
+      expect(child.settings.contextOptimization).toBe('none');
+      expect(child.settings.summarizationEnabled).toBe(false);
+      // Флаг «жду суммаризацию» не наследуется (createSession/fork создают false).
+      expect(child.summarizationPending).toBe(false);
+    },
+  );
 
   it('summary без contextOptimizer → откат к none (форк НЕ делается)', async () => {
     const parent = await makeParent(3);
@@ -394,5 +455,57 @@ describe('prepareChildSession — заметки родителя / событи
       agentType: 'explore',
       parentId: parent.id,
     });
+  });
+});
+
+describe('prepareChildSession — температура саб-агента', () => {
+  // Приоритет: `agent.temperature` → `session.settings.temperature` → дефолт
+  // модели. Эффективную температуру считает вызывающий (`task/tool.ts`), здесь
+  // она должна попасть в настройки ребёнка во всех режимах контекста.
+  const modes: ContextMode[] = ['none', 'inherit', 'last_n'];
+
+  it.each(modes)('%s: температура агента попадает в настройки дочерней сессии', async (mode) => {
+    const parent = await makeParent(2);
+    const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
+
+    await prepareChildSession(state, {
+      ...opts({ sessionManager, sessionId: parent.id }, { contextMode: mode }),
+      temperature: 0.25,
+    });
+
+    const child = (await sessionManager.getSession(state.childSessionId!))!;
+    expect(child.settings.temperature).toBe(0.25);
+    // Остальные переопределения на месте (температура их не вытеснила).
+    expect(child.settings.agentRole).toBe('explore');
+    expect(child.settings.planMode).toBe('auto');
+  });
+
+  it('temperature не задана → сохраняется температура родителя (не перетирается)', async () => {
+    const parent = await makeParent(1);
+    const stored = (await sessionManager.getSession(parent.id))!;
+    stored.settings = { ...stored.settings, temperature: 0.6 };
+    await sessionManager.updateSession(stored);
+
+    const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
+    await prepareChildSession(state, opts(
+      { sessionManager, sessionId: parent.id },
+      { contextMode: 'inherit' },
+    ));
+
+    const child = (await sessionManager.getSession(state.childSessionId!))!;
+    expect(child.settings.temperature).toBe(0.6);
+  });
+
+  it('0 — валидная температура (не «не задано»)', async () => {
+    const parent = await makeParent(0);
+    const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
+
+    await prepareChildSession(state, {
+      ...opts({ sessionManager, sessionId: parent.id }),
+      temperature: 0,
+    });
+
+    const child = (await sessionManager.getSession(state.childSessionId!))!;
+    expect(child.settings.temperature).toBe(0);
   });
 });

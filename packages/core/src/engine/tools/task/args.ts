@@ -17,7 +17,13 @@ export const taskParametersSchema = z.object({
   background: z.boolean().optional()
     .describe('Run the subagent in the background and return control immediately; you will be notified automatically — do not poll its status'),
   context_mode: z.enum(['none', 'inherit', 'summary', 'last_n']).optional()
-    .describe('Context passing mode: none — only prompt, inherit — full parent history, summary — compressed via LLM, last_n — last N messages (default: none)'),
+    .describe(
+      'Parent context passing mode (default: none — fresh context, only the prompt). '
+      + 'Pass parent context only when the task really needs it: inherit — full parent history, '
+      + 'last_n — last N messages, summary — one-off compression of the parent history '
+      + '(it is NOT automatic summarization of the child session; the child session never '
+      + 'inherits the parent auto-summarization). For self-contained tasks keep none',
+    ),
   context_count: z.number().int().min(1).max(50).optional()
     .describe('Number of last messages to include (only for last_n mode, default: 4)'),
   model: z.string().optional()

@@ -99,7 +99,7 @@ function throwingProvider(error: Error, prelude: Chunk[] = []) {
 
 function makeAgentRegistry(): AgentRegistry {
   return {
-    get: (id: string) => ({ id, agentMode: ['subagent'], subagentPrompt: 'SYS', capabilities: [] }),
+    get: (id: string) => ({ id, agentMode: ['subagent'], capabilities: [] }),
     getSubagents: () => [],
     getToolsForAgent: () => [],
   } as unknown as AgentRegistry;
@@ -808,6 +808,82 @@ describe('run-cycle — quality check и эскалация (ADR-034)', () => {
     expect(result.metadata!.routing_strategy).toBe('escalation_fallback');
     expect(result.metadata!.routing_provider).toBe('fb-prov');
     expect(result.metadata!.routing_model).toBe('fb-model');
+  });
+
+  it('эскалация передаёт температуру прогона в пул провайдеров (не дефолт модели)', async () => {
+    const fallbackProvider = {
+      model: 'fb-model',
+      name: 'fb-prov',
+      chat: vi.fn(async () => ({ content: 'escalated answer', model: 'fb-model', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } })),
+    } as unknown as BaseProvider;
+    const { provider } = scriptedProvider([[{ isFinal: true, content: 'draft answer' }]]);
+    const getProvider = vi.fn(() => fallbackProvider);
+    const modelRouter = {
+      checkQuality: vi.fn(async () => ({ pass: false, reason: 'too short' })),
+      getProvider,
+    } as unknown as ModelRouter;
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider, modelRouter,
+        routerConfig: { escalation: { enabled: true, fallbackProvider: 'fb-prov', fallbackModel: 'fb-model' } },
+      }),
+      temperature: 0.25,
+      routingDecisionInfo: { providerName: 'p', modelName: 'm', strategy: 'content' },
+    }));
+
+    expect(result.metadata!.routing_strategy).toBe('escalation_fallback');
+    // Температура агента доходит и до fallback-модели: пул кладёт её в cacheKey
+    // и в запрос — иначе эскалация шла бы с дефолтом модели/чужой температурой.
+    expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({
+      providerName: 'fb-prov',
+      modelName: 'fb-model',
+    }), 0.25);
+    // Без sampling арность вызова пула прежняя — `(decision, temperature)`.
+    expect(getProvider.mock.calls[0]).toHaveLength(2);
+  });
+
+  it('эскалация передаёт sampling агента (topP/topK) в пул 6-м и 7-м аргументами', async () => {
+    const fallbackProvider = {
+      model: 'fb-model',
+      name: 'fb-prov',
+      chat: vi.fn(async () => ({ content: 'escalated answer', model: 'fb-model', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } })),
+    } as unknown as BaseProvider;
+    const { provider } = scriptedProvider([[{ isFinal: true, content: 'draft answer' }]]);
+    const getProvider = vi.fn(() => fallbackProvider);
+    const modelRouter = {
+      checkQuality: vi.fn(async () => ({ pass: false, reason: 'too short' })),
+      getProvider,
+    } as unknown as ModelRouter;
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider, modelRouter,
+        routerConfig: { escalation: { enabled: true, fallbackProvider: 'fb-prov', fallbackModel: 'fb-model' } },
+      }),
+      temperature: 0.3,
+      topP: 0.8,
+      topK: 40,
+      routingDecisionInfo: { providerName: 'p', modelName: 'm', strategy: 'content' },
+    }));
+
+    expect(result.metadata!.routing_strategy).toBe('escalation_fallback');
+    // Sampling агента остаётся и у fallback-модели: иначе эскалация уходила бы
+    // с дефолтным sampling модели, а не с настройкой агента.
+    expect(getProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerName: 'fb-prov',
+        modelName: 'fb-model',
+        reason: 'escalation_fallback',
+      }),
+      0.3,
+      undefined,
+      undefined,
+      undefined,
+      0.8,
+      40,
+    );
+    expect(getProvider.mock.calls[0]).toHaveLength(7);
   });
 
   it('QA fail без fallback: ответ сохраняется + предупреждение в контенте', async () => {

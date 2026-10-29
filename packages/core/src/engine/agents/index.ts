@@ -36,9 +36,9 @@ interface AgentDefFile {
   color: string;
   contextFile: string;
   agentMode?: string | string[];
-  subagentPrompt?: string;
   maxSteps?: number;
   reasoningLevel?: ReasoningLevel;
+  temperature?: number;
 }
 
 export function loadSystemAgentDefinitions(): AgentDefinition[] {
@@ -60,9 +60,11 @@ export function loadSystemAgentDefinitions(): AgentDefinition[] {
       enabled: true,
       isOverridden: false,
       agentMode: normalizeAgentModes(def.agentMode),
-      subagentPrompt: def.subagentPrompt,
       maxSteps: def.maxSteps,
       reasoningLevel: def.reasoningLevel,
+      // Температура агента из определения: `undefined` — Auto (дефолт модели),
+      // поле в LLM-запрос не отправляется (см. `SessionSettings.temperature`).
+      temperature: def.temperature,
     });
   }
 

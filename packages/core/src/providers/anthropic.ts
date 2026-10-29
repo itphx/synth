@@ -123,9 +123,9 @@ export class AnthropicProvider extends BaseProvider {
     const body: Record<string, unknown> = {
       model: this.model,
       messages: formattedMessages,
-      temperature: this.temperature,
       max_tokens: this.maxTokens ?? 4096,
     };
+    this._applyTemperature(body);
     if (this.reasoningLevel === 'high') body.thinking = { type: 'enabled', budget_tokens: 8192 };
     else if (this.reasoningLevel === 'none') body.thinking = { type: 'disabled' };
     if (this.topP !== undefined) body.top_p = this.topP;
@@ -189,10 +189,10 @@ export class AnthropicProvider extends BaseProvider {
     const body: Record<string, unknown> = {
       model: this.model,
       messages: formattedMessages,
-      temperature: this.temperature,
       max_tokens: this.maxTokens ?? 4096,
       stream: true,
     };
+    this._applyTemperature(body);
     if (this.reasoningLevel === 'high') body.thinking = { type: 'enabled', budget_tokens: 8192 };
     else if (this.reasoningLevel === 'none') body.thinking = { type: 'disabled' };
     if (this.topP !== undefined) body.top_p = this.topP;

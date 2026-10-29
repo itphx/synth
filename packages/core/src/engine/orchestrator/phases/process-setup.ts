@@ -42,6 +42,7 @@ import type { UnavailableTool } from '../../context/state-messages.js';
 import type { ComposerSkillsCatalog } from '../../skills/catalog.js';
 import type { LazyInstructionsLoader } from '../../context/lazy-instructions.js';
 import type { RoutingDecision } from '../../router/router.js';
+import type { ProviderOverrides } from '../routing.js';
 import type { LlmFailureContext } from '../errors.js';
 import { syncStateMessages } from '../../context/state-messages.js';
 import { suppressDisabledTurns } from '../../context/disabled-turns.js';
@@ -205,6 +206,8 @@ export interface ProcessSetupDeps {
     message: Message,
     reasoningLevel: ReasoningLevel | undefined,
     debugCollector: DebugCollector,
+    /** Переопределения агента (provider/model/temperature/topP/topK); нет — настройки сессии. */
+    overrides?: ProviderOverrides,
   ) => Promise<{ provider: BaseProvider; providerName: string; modelName: string; decision?: RoutingDecision } | null>;
   handleLlmFailure: (
     sessionId: string,
@@ -353,10 +356,23 @@ export async function runProcessSetup(
     effectiveReasoningLevel, sessionMode, planMode, planApproved, author, attempt,
   } = args;
 
-  // 1. Get provider (через роутер если доступен, иначе напрямую)
-  const routeResult = await deps.routeProvider(session, message, effectiveReasoningLevel, debugCollector);
+  // 1. Get provider (через роутер если доступен, иначе напрямую).
+  // Переопределения агента: provider/model перекрывают сессию и роутер,
+  // temperature — приоритетнее настройки сессии, topP/topK уходят в провайдер
+  // (0 = не задано — не отправляем поле, остаётся дефолт провайдера/модели).
+  const overrides: ProviderOverrides = {
+    ...(agentDef?.provider ? { provider: agentDef.provider } : {}),
+    ...(agentDef?.model ? { model: agentDef.model } : {}),
+    ...(agentDef?.temperature !== undefined ? { temperature: agentDef.temperature } : {}),
+    ...(agentDef?.topP && agentDef.topP > 0 ? { topP: agentDef.topP } : {}),
+    ...(agentDef?.topK && agentDef.topK > 0 ? { topK: agentDef.topK } : {}),
+  };
+  const routeResult = await deps.routeProvider(
+    session, message, effectiveReasoningLevel, debugCollector, overrides,
+  );
   if (!routeResult) {
-    const providerName = (message.provider as string) || session.settings.provider || '';
+    // Тот же приоритет, что у выбора провайдера: агент → сообщение → сессия.
+    const providerName = overrides.provider || (message.provider as string) || session.settings.provider || '';
     // Терминальная ошибка конфигурации провайдера: раньше возвращалась без
     // персистентности — после перезагрузки сессия выглядела как «агент
     // думает». Теперь проходит общий путь `_handleLlmFailure` (assistant-
@@ -371,7 +387,7 @@ export async function runProcessSetup(
         {
           debugCollector,
           durationMs: Date.now() - streamStartedAt,
-          model: session.settings.model,
+          model: overrides.model || session.settings.model,
           providerName,
           agentRole: effectiveAgentRole,
           errorType: 'provider_not_found',

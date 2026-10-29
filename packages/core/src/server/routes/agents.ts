@@ -99,7 +99,6 @@ const AGENT_FIELDS = (a: AgentDefinition, isBuiltin: boolean) => ({
   available: true,
   mode: 'simple' as const,
   agent_mode: normalizeAgentModes(a.agentMode),
-  subagent_prompt: a.subagentPrompt || null,
   max_steps: a.maxSteps ?? null,
   provider: a.provider || null,
   model: a.model || null,
@@ -273,7 +272,12 @@ export function createAgentRoutes(
       enabled: body.enabled ?? existing?.enabled ?? builtin?.enabled ?? true,
       provider: body.provider ?? existing?.provider,
       model: body.model ?? existing?.model,
-      temperature: body.temperature ?? existing?.temperature,
+      temperature:
+        // `null` — явный сброс в Auto (дефолт модели): поле не задано, а не
+        // унаследовано от прежней записи (UI: чекбокс «Auto (model default)»).
+        body.temperature === null
+          ? undefined
+          : (body.temperature ?? existing?.temperature),
       topP: body.top_p ?? body.topP ?? existing?.topP,
       topK: body.top_k ?? body.topK ?? existing?.topK,
       reasoningLevel: body.reasoning_level ?? body.reasoningLevel ?? existing?.reasoningLevel ?? builtin?.reasoningLevel,
@@ -282,7 +286,6 @@ export function createAgentRoutes(
       color: body.color ?? existing?.color,
       description: body.description ?? existing?.description,
       agentMode: normalizeAgentModes(body.agent_mode ?? body.agentMode ?? existing?.agentMode ?? builtin?.agentMode),
-      subagentPrompt: body.subagent_prompt ?? body.subagentPrompt ?? existing?.subagentPrompt,
       maxSteps: body.max_steps ?? body.maxSteps ?? existing?.maxSteps,
       // ADR-046 §6.2: группы агента (привязка скиллов по `metadata.synth.groups`).
       groups: normalizeGroups(body.groups) ?? existing?.groups ?? builtin?.groups,

@@ -16,7 +16,6 @@ import { createToolRegistry } from './index.js';
 interface MockAgentDef {
   id: string;
   agentMode: string | string[];
-  subagentPrompt?: string;
   maxSteps?: number;
 }
 
@@ -41,7 +40,6 @@ function makeMockAgentRegistry(subagents: string[] = ['explore']): MockAgentRegi
         return {
           id,
           agentMode: ['subagent'],
-          subagentPrompt: 'You are a test subagent.',
           maxSteps: 1,
         };
       }
@@ -381,7 +379,7 @@ describe('taskTool — context modes', () => {
 
   // ─── SessionManager: mode 'summary' — fork + summarize ───────────
 
-  it('summary mode: child session содержит forked сообщения + summary от contextOptimizer', async () => {
+  it('summary mode: summary уходит в системный промпт, в истории ребёнка SUMMARY нет', async () => {
     const parent = await createParentWithMessages();
     const parentMsgCount = parent.messages.length;
 
@@ -403,12 +401,13 @@ describe('taskTool — context modes', () => {
       }),
     } satisfies Pick<ContextOptimizer, 'summarize'>;
 
+    const provider = makeMockProvider();
     const result = await taskTool.execute(
       { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'summary' },
       {
         ...baseCtx,
         extra: {
-          provider: makeMockProvider(),
+          provider,
           sessionManager,
           eventBus,
           sessionId: parent.id,
@@ -428,14 +427,17 @@ describe('taskTool — context modes', () => {
     expect(child!.parentId).toBe(parent.id);
     expect(child!.sessionOrigin).toBe('subagent');
 
-    // Должны быть унаследованные сообщения от родителя (fork)
+    // Должны быть унаследованные сообщения от родителя (fork), но отключённые
     const inherited = child!.messages.filter(m => m.origin === 'inherited');
     expect(inherited.length).toBe(parentMsgCount);
+    expect(inherited.every(m => m.disabled)).toBe(true);
 
-    // Должен быть summary message
-    const summary = child!.messages.find(m => m.role === MessageRole.SUMMARY);
-    expect(summary).toBeDefined();
-    expect(summary!.content).toBe(mockSummaryContent);
+    // SUMMARY-сообщения в истории ребёнка нет (ADR-026, обновление 2026-10-29):
+    // сжатие — разовый контекст первого запуска и идёт в системный промпт.
+    expect(child!.messages.find(m => m.role === MessageRole.SUMMARY)).toBeUndefined();
+    const systemPrompt = provider.chatAsync.mock.calls[0]![1] as string;
+    expect(systemPrompt).toContain('[PARENT SUMMARY]');
+    expect(systemPrompt).toContain(mockSummaryContent);
   });
 
   it('summary mode: fallback на inherit при ошибке contextOptimizer', async () => {
@@ -495,12 +497,13 @@ describe('taskTool — context modes', () => {
       }),
     } satisfies Pick<ContextOptimizer, 'summarize'>;
 
+    const provider = makeMockProvider();
     const result = await taskTool.execute(
       { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'summary' },
       {
         ...baseCtx,
         extra: {
-          provider: makeMockProvider(),
+          provider,
           sessionManager,
           eventBus,
           sessionId: parent.id,
@@ -519,9 +522,11 @@ describe('taskTool — context modes', () => {
     // Нет inherited сообщений (пустая родительская сессия)
     const inherited = child!.messages.filter(m => m.origin === 'inherited');
     expect(inherited).toHaveLength(0);
-    // Summary всё ещё добавляется
-    const summary = child!.messages.find(m => m.role === MessageRole.SUMMARY);
-    expect(summary).toBeDefined();
+    // Сжатие идёт в системный промпт, SUMMARY-сообщения в истории нет.
+    expect(child!.messages.find(m => m.role === MessageRole.SUMMARY)).toBeUndefined();
+    const systemPrompt = provider.chatAsync.mock.calls[0]![1] as string;
+    expect(systemPrompt).toContain('[PARENT SUMMARY]');
+    expect(systemPrompt).toContain('(пустой контекст)');
   });
 
   // ─── No valid agent ──────────────────────────────────────────────
@@ -1358,7 +1363,7 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
     return {
       get: (id: string) => {
         if (id === 'explore') {
-          return { id, agentMode: ['subagent'], subagentPrompt: 'You are a test subagent.', maxSteps: 5 };
+          return { id, agentMode: ['subagent'], maxSteps: 5 };
         }
         return undefined;
       },
@@ -1423,8 +1428,14 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
     const partialMsg = child.messages.find((m) => m.metadata?.partial === true);
     expect(partialMsg).toBeDefined();
     expect(partialMsg!.content).toContain('Частичный ответ: начал работу');
-    // Промпт и выполненный tool-call тоже в истории дочерней сессии
-    expect(child.messages.some((m) => m.role === MessageRole.USER && m.content === 'hello')).toBe(true);
+    // Промпт и выполненный tool-call тоже в истории дочерней сессии.
+    // ADR-026: user-сообщение — исходный prompt, без служебного префикса.
+    expect(child.messages.some(
+      (m) => m.role === MessageRole.USER && m.content === 'hello',
+    )).toBe(true);
+    expect(child.messages.every(
+      (m) => !m.content.startsWith('You are a subagent spawned by another session.'),
+    )).toBe(true);
     expect(child.messages.some((m) => m.role === MessageRole.TOOL)).toBe(true);
     // Маркер прерывания
     const stopMarker = child.messages.find((m) => m.metadata?.stopped_by === 'user');
@@ -1510,8 +1521,11 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
     expect(result.metadata!.error).toBe(true);
 
     // История дочерней сессии сохранена: промпт + сообщение об ошибке
+    // (ADR-026: user-сообщение — исходный prompt, без служебного блок-префикса).
     const child = (await sessionManager.getSession(childSessionId))!;
-    expect(child.messages.some((m) => m.role === MessageRole.USER && m.content === 'hello')).toBe(true);
+    expect(child.messages.some(
+      (m) => m.role === MessageRole.USER && m.content === 'hello',
+    )).toBe(true);
     const errMsg = child.messages.find((m) => m.metadata?.error === true);
     expect(errMsg).toBeDefined();
     expect(errMsg!.content).toContain('provider down');
@@ -1648,7 +1662,7 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
       name: 'test-provider',
     };
     const registry = {
-      get: () => ({ id: 'explore', agentMode: ['subagent'], subagentPrompt: 'test', maxSteps: 3 }),
+      get: () => ({ id: 'explore', agentMode: ['subagent'], maxSteps: 3 }),
       getSubagents: () => [{ id: 'explore' }],
       getToolsForAgent: () => [],
     };
@@ -2016,7 +2030,7 @@ describe('taskTool — metadata финального child-сообщения (A
     return {
       get: (id: string) => {
         if (id === 'explore') {
-          return { id, agentMode: ['subagent'], subagentPrompt: 'You are a test subagent.', maxSteps: 5 };
+          return { id, agentMode: ['subagent'], maxSteps: 5 };
         }
         return undefined;
       },

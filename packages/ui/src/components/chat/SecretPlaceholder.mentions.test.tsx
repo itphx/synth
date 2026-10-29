@@ -22,7 +22,6 @@ function makeAgent(id: string, color: string | null = null): AgentInfo {
     available: true,
     mode: 'simple',
     agent_mode: null,
-    subagent_prompt: null,
     max_steps: null,
     provider: null,
     model: null,

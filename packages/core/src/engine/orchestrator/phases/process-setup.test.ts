@@ -19,7 +19,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { LLMChunk, LLMResponse, Message, Project, ToolForLLM } from '@itphx/synth-shared';
+import type { LLMChunk, LLMResponse, Message, AgentDefinition, Project, ToolForLLM } from '@itphx/synth-shared';
 import { stubContextFiles } from '../../../test-helpers/storage-stubs.js';
 import { FileStore } from '../../../storage/file-store.js';
 import { SessionManager } from '../../../sessions/manager.js';
@@ -688,5 +688,76 @@ describe('runProcessSetup', () => {
     if (outcome.failed) return;
     expect(outcome.state.baseLlmMessages.some((m) => m.content.includes('скрытая оптимизатором'))).toBe(false);
     expect(outcome.state.messagesForLlm.some((m) => m.content.includes('вопрос'))).toBe(true);
+  });
+
+  // --- Переопределения агента (AgentDefinition.provider/model/temperature/topP/topK) ---
+
+  function agentDefWith(overrides: Partial<AgentDefinition>): AgentDefinition {
+    return {
+      id: 'fixer', displayName: 'Fixer', capabilities: [], enabled: true, isOverridden: false, ...overrides,
+    } as AgentDefinition;
+  }
+
+  it('agentDef → routeProvider: provider/model/temperature/topP/topK в overrides', async () => {
+    const { id, message } = await makeSession();
+    const routeProvider = vi.fn(async () => ({
+      provider: new SetupProvider({ url: '', apiKey: '', model: 'agent-model', name: 'agent-provider', type: 'setup-provider' }),
+      providerName: 'agent-provider',
+      modelName: 'agent-model',
+    }));
+    const deps = makeDeps({ routeProvider: routeProvider as never });
+    const agentDef = agentDefWith({
+      provider: 'agent-provider', model: 'agent-model', temperature: 0.1, topP: 0.9, topK: 40,
+    });
+
+    const outcome = await runProcessSetup(await makeArgs(id, message, { agentDef }), deps);
+
+    expect(outcome.failed).toBe(false);
+    expect(routeProvider).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), undefined, expect.anything(),
+      { provider: 'agent-provider', model: 'agent-model', temperature: 0.1, topP: 0.9, topK: 40 },
+    );
+
+    // Настройки сессии — источник для следующих ходов, агент их не перетирает.
+    const stored = (await sessionManager.getSession(id))!;
+    expect(stored.settings.provider).toBe('setup-provider');
+    expect(stored.settings.model).toBe('set-model');
+    expect(stored.settings.temperature).toBeUndefined();
+    expect(stored.settings).not.toHaveProperty('topP');
+    expect(stored.settings).not.toHaveProperty('topK');
+  });
+
+  it('agentDef с topP/topK = 0 → в overrides их нет (0 = «не задано»)', async () => {
+    const { id, message } = await makeSession();
+    const routeProvider = vi.fn(async () => ({
+      provider: new SetupProvider({ url: '', apiKey: '', model: 'set-model', name: 'session', type: 'setup-provider' }),
+      providerName: 'setup-provider',
+      modelName: 'set-model',
+    }));
+    const deps = makeDeps({ routeProvider: routeProvider as never });
+    const agentDef = agentDefWith({ temperature: 0, topP: 0, topK: 0 });
+
+    await runProcessSetup(await makeArgs(id, message, { agentDef }), deps);
+
+    expect(routeProvider).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), undefined, expect.anything(),
+      { temperature: 0 },
+    );
+  });
+
+  it('agentDef без переопределений → пустой overrides (прежнее поведение)', async () => {
+    const { id, message } = await makeSession();
+    const routeProvider = vi.fn(async () => ({
+      provider: new SetupProvider({ url: '', apiKey: '', model: 'set-model', name: 'session', type: 'setup-provider' }),
+      providerName: 'setup-provider',
+      modelName: 'set-model',
+    }));
+    const deps = makeDeps({ routeProvider: routeProvider as never });
+
+    await runProcessSetup(await makeArgs(id, message, { agentDef: agentDefWith({}) }), deps);
+
+    expect(routeProvider).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), undefined, expect.anything(), {},
+    );
   });
 });

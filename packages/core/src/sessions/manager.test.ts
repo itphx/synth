@@ -42,7 +42,7 @@ describe('SessionManager', () => {
     expect(session.id).toBeDefined();
     expect(session.title).toBe('Test');
     expect(session.status).toEqual({});
-    expect(session.settings.temperature).toBe(0.7);
+    expect(session.settings.temperature).toBeUndefined();
   });
 
   it('createSession сохраняет ownerId (fallback userId, иначе пусто)', async () => {
