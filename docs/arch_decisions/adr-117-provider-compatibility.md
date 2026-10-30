@@ -63,7 +63,8 @@
    отправляется. Anthropic: thinking-план (бюджет от фактического `max_tokens`), `temperature: 1`,
    `tool_choice: required → auto`.
 6. **Anthropic round-trip thinking — часть того же слоя.** Подпись thinking-блока и
-   `redacted_thinking` собираются в стриме и non-stream (`reasoningSignature`, `reasoningRedacted`);
+   `redacted_thinking` собираются в стриме и non-stream (`reasoningSignature`, `reasoningRedacted`;
+   с 2026-10-30 — **по блокам**, `reasoningBlocks`/`Part.metadata`, `91be3f89`);
    `_formatMessages` собирает assistant-блоки в порядке `redacted_thinking → thinking → text → tool_use`;
    при выключенном thinking блоки не реплеятся. Поля персистятся (файловый store и PostgreSQL,
    миграция `028-message-reasoning-signature`) и **наружу через API не отдаются** — это служебные
@@ -107,8 +108,10 @@
   только конфигом.
 - **Остатки:** авто-определения для `maxTokensField`/`streamUsage` нет (только явное значение или
   дефолт); существующие записи каталога не мигрируются (совместимость — через эвристики и дефолты);
-  поведение при смене провайдера/модели у сохранённой подписи не проверяется отдельно (подпись
-  реплеится только когда thinking включён в этом запросе).
+  блоки thinking фильтруются по **роли агента**, а не по фактической паре provider/model — при смене
+  модели/провайдера у того же агента сохранённые подписи всё равно уйдут в историю (симметрично
+  `engine/tools/task/resume-target.ts`); подпись реплеится только когда thinking включён в этом
+  запросе.
 
 ## Статус в коде
 
@@ -126,6 +129,11 @@
 - персист подписи — `packages/shared/src/types/{llm,message}.ts`,
   `storage/file-store.ts`, `packages/storage-postgres/src/migrations/028-message-reasoning-signature.ts`,
   контрактный паспорт порта сессий; наружу не сериализуется (`server/serialize.ts`);
+- **мульти-блочная подпись thinking** (`91be3f89`) — `Part.metadata {signature?, redacted?}` у
+  reasoning-частей, `LLMReasoningBlock`/`reasoningBlocks` в LLM-контракте, `engine/reasoning-blocks.ts`,
+  сбор блоков в Anthropic (stream/non-stream) и реплей по блокам, персист `metadata` частей
+  (file + PG), `messageToLLMMessage(msg, currentAgentRole?)` с фильтром по роли агента, `content` при
+  наличии `parts` — без reasoning-частей; `optimizer.ts` переведён на общий `toCoreProviderConfig`;
 - справка — [CONFIGURATION.md](../CONFIGURATION.md) §«Каталог моделей», [API_V2.md](../API_V2.md)
   §5.9/§5.10, `packages/{core,ui}/AGENTS.md`.
 
@@ -133,3 +141,8 @@
 
 - 2026-10-30 — принято (`f3d1b780` — слой совместимости, `e2a6e359` — UI, `2d4f5763` — Anthropic
   round-trip thinking и персист подписи).
+- 2026-10-30 — **мульти-блочная подпись thinking реализована** (`91be3f89`): за ход reasoning приходит
+  несколькими блоками, и подпись живёт на каждом блоке (`Part.metadata` ↔ `LLMReasoningBlock`), а не
+  одним полем на сообщение; реплей — по блокам (`redacted_thinking → thinking → text → tool_use`),
+  `content` без reasoning-частей при наличии `parts`; остаток — фильтрация блоков по роли агента, а не
+  по паре provider/model (см. «Последствия → Остатки»).

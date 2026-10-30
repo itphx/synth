@@ -448,11 +448,15 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/messages/:sessionId/:index/debug` | оба | auth | Отладочные данные сообщения |
 
 > **Служебные поля reasoning наружу не отдаются (ADR-117).** `reasoningSignature` (подпись
-> Anthropic thinking-блока) и `reasoningRedacted` (opaque-данные `redacted_thinking`) хранятся в
-> сообщении и персистятся (файловый store и PostgreSQL, миграция `028-message-reasoning-signature`),
-> но в публичный ответ (`GET /sessions/:id/messages`, события `message.added`/`session.updated`,
-> экспорт сессии) **не попадают**: это данные протокола провайдера, нужные только для реплея истории
-> в API Anthropic. Поле `reasoning` (текст рассуждений) отдаётся как раньше.
+> Anthropic thinking-блока) и `reasoningRedacted` (opaque-данные `redacted_thinking`) — **legacy-поля**
+> сообщения; актуально подпись хранится **на каждом блоке reasoning отдельно** (`Part.metadata
+> {signature?, redacted?}`, в LLM-контракте — `reasoningBlocks`, коммит `91be3f89`). Персистятся
+> (файловый store и PostgreSQL, миграция `028-message-reasoning-signature`; `serializePart`/
+> `deserializePart` сохраняют `metadata` части), но в публичный ответ (`GET /sessions/:id/messages`,
+> события `message.added`/`session.updated`, экспорт сессии) **не попадают**: это данные протокола
+> провайдера, нужные только для реплея истории в API Anthropic. Поле `reasoning` (текст рассуждений)
+> отдаётся как раньше; строковый `content` при наличии `parts` собирается **без** reasoning-блоков
+> (legacy-сообщения без `parts` — прежнее поведение).
 
 ### 5.6.1 Вложения сообщений — `/api/v2/sessions/:id/attachments*` (оба, ADR-115)
 

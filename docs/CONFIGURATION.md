@@ -1672,9 +1672,14 @@ agents:
 запрос уходит обычным (вместо `400` «max_tokens must be greater than thinking.budget_tokens»). При
 включённом thinking `temperature` принудительно становится `1`, а `tool_choice: required` коэрсится в
 `auto` (Anthropic запрещает принудительный вызов). Подпись thinking-блока (`signature`) и
-opaque-данные `redacted_thinking` сохраняются в сообщении и возвращаются в историю в порядке
-`redacted_thinking → thinking → text → tool_use`; пустая подпись (`signature: ""`) допустима. При
-выключенном thinking блоки в историю не уходят. Наружу через API эти служебные поля не отдаются.
+opaque-данные `redacted_thinking` сохраняются **на каждом блоке reasoning отдельно** (`Part.metadata`;
+в LLM-контракте — `reasoningBlocks`) и возвращаются в историю по блокам в порядке
+`redacted_thinking → thinking → text → tool_use`; пустая подпись (`signature: ""`) допустима. Блоки
+уходят в историю только для «своего» агента (смена модели у того же агента старые подписи не
+отбрасывает — фильтр по роли агента, не по паре provider/model). При наличии `parts` строковый
+`content` сообщения собирается **без** reasoning-блоков (legacy-сообщения без `parts` — прежнее
+поведение). При выключенном thinking блоки в историю не уходят. Наружу через API эти служебные поля
+не отдаются.
 
 **Ollama (`/api/chat`).** `think` включается для `low|medium|high` (`none` — `false`, `default` —
 поле не отправляется); `tool_choice` не отправляется (`compatibility.supportsToolChoice: false`

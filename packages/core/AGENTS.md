@@ -1893,15 +1893,37 @@
   API: `POST`/`PATCH /api/v2/providers`, `POST /api/v2/models` принимают `compatibility` как **полную
   замену** (`null`/`{}` — сброс, поле не передано — без изменений, неизвестное поле/тип → 400);
   `GET` отдаёт поле, только если оно задано (`server/routes/{providers,models}.ts`).
-  **Anthropic: round-trip thinking.** При `reasoningLevel: 'high'` бюджет thinking считается от
-  фактического `max_tokens` (`resolveThinkingBudget`: не больше половины и строго меньше лимита,
-  минимум 1024; места нет — thinking выключен, а не `400`), `temperature` принудительно `1`,
-  `tool_choice: 'required'` коэрсится в `'auto'`. Подпись блока (`reasoningSignature`) и opaque-данные
-  `redacted_thinking` (`reasoningRedacted`) собираются в стриме и non-stream (пустая подпись
-  `signature: ""` допустима — так отвечает RouterAI для qwen), персистятся (file-store + PostgreSQL,
-  миграция `028-message-reasoning-signature`) и реплеятся в порядке
-  `redacted_thinking → thinking → text → tool_use`; при выключенном thinking блоки в историю не уходят.
-  Наружу через API эти поля не отдаются (`server/serialize.ts`) — служебные данные протокола.
+  **Anthropic: round-trip thinking — мульти-блочный (`91be3f89`).** При `reasoningLevel: 'high'`
+  бюджет thinking считается от фактического `max_tokens` (`resolveThinkingBudget`: не больше половины
+  и строго меньше лимита, минимум 1024; места нет — thinking выключен, а не `400`), `temperature`
+  принудительно `1`, `tool_choice: 'required'` коэрсится в `'auto'`.
+  За ход reasoning приходит **несколькими блоками** (по итерациям), а подпись валидна только для
+  своего текста — поэтому блоки хранятся **по отдельности**: `Part` с `type: 'reasoning'` и
+  `metadata?: { signature?, redacted? }`; в LLM-контракте — `LLMReasoningBlock { text, signature?,
+  redactedData? }` (`LLMChunk`/`LLMResponse.reasoningBlocks`, `LLMMessage.reasoningBlocks`).
+  Legacy-поля `reasoningSignature`/`reasoningRedacted` на сообщении сохранены как **fallback**
+  (`reasoningBlocksOfMessage`), `appendReasoningBlock(..., meta?)` не теряет подпись при продолжении
+  блока. Anthropic собирает блоки в стриме (`content_block_start`/`thinking_delta`/`signature_delta`,
+  блок закрывается на старте следующего) и в non-stream; `_formatMessages` реплеит их по блокам в
+  порядке `redacted_thinking → thinking → text → tool_use`, **у каждого блока своя подпись**; пустая
+  подпись (`signature: ""`) допустима — так отвечает RouterAI для qwen. При выключенном thinking
+  блоки в историю не уходят. Наружу через API не отдаются (`server/serialize.ts`) — служебные данные
+  протокола.
+  **Шов «части ↔ блоки» — `engine/reasoning-blocks.ts`** (`toLlmReasoningBlocks`,
+  `makeReasoningParts`, `reasoningBlocksFromParts`, `reasoningBlocksOfMessage`): оркестратор и цикл
+  саб-агента собирают блоки по итерациям, персистят их в `parts` финального assistant-сообщения
+  (`persistence.ts`), история восстанавливается в `prompt-info.ts`; `serializePart`/`deserializePart`
+  (file-store и PostgreSQL) сохраняют `metadata` части. `messageToLLMMessage(msg, currentAgentRole?)`
+  прокидывает блоки **только для «своего» агента** (алиасы ролей учитываются), чужой агент — без
+  блоков; `task` при `context_mode: inherit|last_n` передаёт роль ребёнка. **`content` при наличии
+  `parts` собирается без reasoning-частей** (иначе после перезагрузки `<reasoning>` подмешивался в
+  текст ответа); legacy-сообщения без `parts` — прежнее поведение.
+  **Ограничение:** фильтрация блоков идёт по **роли агента**, а не по фактической паре
+  provider/model — при смене модели у того же агента старые подписи всё равно уйдут в историю
+  (симметрично `engine/tools/task/resume-target.ts`).
+  **Суммаризация** (`engine/context/optimizer.ts`) использует общий `toCoreProviderConfig` —
+  `provider.compatibility` доезжает до провайдера суммаризации (раньше терялась: reasoning-поле и
+  `maxTokensField` расходились с основным прогоном агента).
   **Ollama (`/api/chat`).** `think` включается для `low|medium|high` (`none` — `false`, `default` — поле
   не отправляется); `tool_choice` не отправляется при `supportsToolChoice: false` (`providers/ollama.ts`).
 - `profiles.ts` — реестр серверных профилей гибрида.

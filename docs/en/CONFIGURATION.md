@@ -1636,10 +1636,14 @@ strictly less than it, at least 1024 tokens; if there is no room (`max_tokens` �
 not enabled and the request goes as a regular one (instead of `400` “max_tokens must be greater than
 thinking.budget_tokens”). With thinking enabled `temperature` is forced to `1`, and
 `tool_choice: required` is coerced to `auto` (Anthropic forbids a forced call). The thinking block
-signature (`signature`) and the opaque `redacted_thinking` data are stored on the message and replayed
-into the history in the order `redacted_thinking → thinking → text → tool_use`; an empty signature
-(`signature: ""`) is valid. With thinking disabled the blocks are not replayed. These service fields are
-never exposed through the API.
+signature (`signature`) and the opaque `redacted_thinking` data are stored **on each reasoning block
+separately** (`Part.metadata`; `reasoningBlocks` in the LLM contract) and replayed into the history
+block by block in the order `redacted_thinking → thinking → text → tool_use`; an empty signature
+(`signature: ""`) is valid. Blocks are passed to the history only for the “own” agent (switching the
+model for the same agent does not drop the old signatures — the filter is by agent role, not by the
+provider/model pair). When `parts` are present the string `content` of the message is built **without**
+the reasoning blocks (legacy messages without `parts` keep the previous behaviour). With thinking
+disabled the blocks are not replayed. These service fields are never exposed through the API.
 
 **Ollama (`/api/chat`).** `think` is enabled for `low|medium|high` (`none` — `false`, `default` — the
 field is not sent); `tool_choice` is not sent (`compatibility.supportsToolChoice: false` by default for
