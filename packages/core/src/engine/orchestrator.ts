@@ -108,7 +108,7 @@ import { computeMessageCost, resolveMessageModel, estimateUsage, estimatePromptC
 import { publishFsChange } from './orchestrator/fs-change.js';
 import { applySteerInjections } from './steering/apply.js';
 import type { SteerRequeueResult } from './steering/apply.js';
-import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, joinAccumulatedTexts, type SaveAssistantMessageDeps, type AssistantMessageStatus, type AssistantMessageStep } from './orchestrator/persistence.js';
+import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, joinAccumulatedTexts, hasVisibleStepContent, type SaveAssistantMessageDeps, type AssistantMessageStatus, type AssistantMessageStep } from './orchestrator/persistence.js';
 import { StreamMessageDraft, type StreamMessageRef } from './orchestrator/stream-persistence.js';
 import { StreamTiming } from './orchestrator/stream-stats.js';
 // ADR-118 §1/§4: единая точка публикации `turn.*`/`step.*`/`part.*` и
@@ -4347,16 +4347,26 @@ export class ChatOrchestrator {
         // Шаг 2а/2б: сразу фиксируем assistant-сообщение итерации с toolCalls (до
         // исполнения тулов) — падение/отмена в середине хода не должны терять
         // уже полученный ответ модели. Черновик частичного стрима превращается
-        // в промежуточное tool_chain-сообщение (metadata заменяется целиком,
+        // в промежуточное сообщение шага (metadata заменяется целиком,
         // streaming убирается); пара tool-сообщений пишется ниже
         // (`_persistToolResult`) по мере готовности результатов.
+        //
+        // `tool_chain` — маркер «служебное сообщение, скрыть в транскрипте».
+        // Ставим его ТОЛЬКО когда у шага нет видимого текста: шаг с текстом —
+        // реальный ответ агента, и после перезагрузки страницы он обязан
+        // остаться в истории (иначе ответ «исчезает»).
+        const stepParts = [makeTextPart(accumulatedContent), ...makeReasoningParts(iterationBlocks)];
+        const stepVisible = hasVisibleStepContent(accumulatedContent, stepParts);
         await draft.finalize({
           content: accumulatedContent,
-          parts: [makeTextPart(accumulatedContent), ...makeReasoningParts(iterationBlocks)],
+          parts: stepParts,
           reasoning: accumulatedReasoning || undefined,
           toolCalls,
           model: chunkModel ?? finalModel,
-          metadata: { stream_id: streamId, tool_chain: true },
+          metadata: {
+            stream_id: streamId,
+            ...(stepVisible ? {} : { tool_chain: true }),
+          },
           // ADR-118 §5: шаг завершён — статус сообщения терминальный.
           status: 'completed',
         });

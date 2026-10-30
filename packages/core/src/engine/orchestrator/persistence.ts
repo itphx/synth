@@ -105,6 +105,33 @@ export function joinAccumulatedTexts(
 }
 
 /**
+ * Есть ли в сообщении шага **видимый пользователю текст**.
+ *
+ * `metadata.tool_chain` скрывает сообщение в транскрипте (UI:
+ * `isVisibleMessage`). Во время стрима текст шага виден в live-частях, но после
+ * перезагрузки страницы скрытое сообщение из истории пропадает — ответ
+ * агента «исчезает». Поэтому маркер `tool_chain` ставится ТОЛЬКО сообщениям
+ * без содержимого: пустой `content`, нет текстовых частей и нет reasoning-частей.
+ *
+ * Текст части лежит в `data` (core `Part`), рассуждения — части `type:
+ * 'reasoning'`.
+ */
+export function hasVisibleStepContent(
+  content: string | undefined,
+  parts: readonly Part[] | undefined,
+): boolean {
+  if (typeof content === 'string' && content.trim().length > 0) return true;
+  for (const part of parts ?? []) {
+    if (!part || typeof part !== 'object') continue;
+    if (part.type === 'reasoning') return true;
+    if (part.type !== 'text') continue;
+    const text = typeof part.data === 'string' ? part.data : '';
+    if (text.trim().length > 0) return true;
+  }
+  return false;
+}
+
+/**
  * ADR-036: возвращает реальные значения секретов для плейсхолдеров
  * ⟦SYNTH_SECRET_N⟧ в тексте сообщения (из карты обфускации сессии).
  * Пустой объект если карты нет, плейсхолдеров нет или gateway выключен.
@@ -179,6 +206,12 @@ export async function persistToolChain(
     const iterText = allIntermediateTexts.find((t) => t.iteration === iteration)?.text ?? '';
     const iterReasoning = allReasoning.find((r) => r.iteration === iteration)?.text;
 
+    const assistantParts = withDeterministicPartIds([makeTextPart(iterText)]);
+    // Маркер `tool_chain` — только для сообщений БЕЗ видимого текста: шаг с
+    // текстом — реальный ответ агента, и его нельзя скрывать от транскрипта
+    // (иначе после перезагрузки страницы ответ пропадает).
+    const assistantVisible = hasVisibleStepContent(iterText, assistantParts);
+
     const assistantMsg: Message = {
       id: generateId(),
       role: MessageRole.ASSISTANT,
@@ -186,7 +219,7 @@ export async function persistToolChain(
       origin: 'local',
       // ADR-118 §1: части tool-chain — с теми же детерминированными id, что и
       // у шага в стриме (`msg:text:N`), иначе клиент нарисует текст дважды.
-      parts: withDeterministicPartIds([makeTextPart(iterText)]),
+      parts: assistantParts,
       content: iterText,
       toolCalls: raw.calls,
       createdAt: nowISO(),
@@ -197,7 +230,10 @@ export async function persistToolChain(
       provider: providerName,
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       agentRole,
-      metadata: { stream_id: streamId, tool_chain: true },
+      metadata: {
+        stream_id: streamId,
+        ...(assistantVisible ? {} : { tool_chain: true }),
+      },
       ...(iterReasoning ? { reasoning: iterReasoning } : {}),
     };
     await sessionManager.addMessage(sessionId, assistantMsg);

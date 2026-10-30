@@ -566,13 +566,18 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     expect(result.error).toBeDefined();
 
     const session = (await h.sessionManager.getSession(h.sessionId))!;
+    // Промежуточный шаг с вызовом инструмента — assistant с `toolCalls`.
+    // Маркер `tool_chain` ставится ТОЛЬКО шагам БЕЗ видимого текста: у этого
+    // шага есть текст ('Шаг 1') — значит, маркера нет (иначе ответ агента
+    // исчезнет из транскрипта после перезагрузки страницы).
     const chainAssistant = session.messages.find(
-      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.tool_chain === true,
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) > 0,
     );
     expect(chainAssistant).toBeDefined();
     expect(chainAssistant!.toolCalls).toHaveLength(1);
     expect(chainAssistant!.content).toContain('Шаг 1');
     expect(chainAssistant!.model).toBe('m');
+    expect(chainAssistant!.metadata?.tool_chain).toBeUndefined();
 
     const toolMsg = session.messages.find((m) => m.role === MessageRole.TOOL);
     expect(toolMsg).toBeDefined();
@@ -585,9 +590,9 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     const toolIdx = session.messages.indexOf(toolMsg!);
     expect(toolIdx).toBe(assistantIdx + 1);
 
-    // Финальное сообщение — ошибка LLM (без tool_chain).
+    // Финальное сообщение — ошибка LLM (без вызовов инструментов).
     const finalAssistant = [...session.messages].reverse().find(
-      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) === 0,
     );
     expect(finalAssistant?.metadata?.status).toBe('error');
 
@@ -609,12 +614,15 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     expect(result.error).toBeUndefined();
 
     const session = (await h.sessionManager.getSession(h.sessionId))!;
+    // Промежуточный шаг — assistant с `toolCalls`; финальный — assistant без
+    // вызовов. Маркер `tool_chain` у шага с текстом НЕ ставится (текст шага —
+    // реальный ответ агента, его нельзя скрывать из транскрипта).
     const chainAssistants = session.messages.filter(
-      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.tool_chain === true,
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) > 0,
     );
     const toolMessages = session.messages.filter((m) => m.role === MessageRole.TOOL);
     const finalAssistants = session.messages.filter(
-      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) === 0,
     );
     expect(chainAssistants).toHaveLength(1);
     expect(toolMessages).toHaveLength(1);
@@ -631,6 +639,8 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
 
     // Финальное сообщение — без tool_chain, прежние metadata сохранены.
     expect(finalAssistant.metadata?.tool_chain).toBeUndefined();
+    // Промежуточный шаг с текстом — тоже без tool_chain (текст видим).
+    expect(chainAssistant.metadata?.tool_chain).toBeUndefined();
     expect((finalAssistant.metadata?.tool_results as unknown[])).toHaveLength(1);
     expect(finalAssistant.metadata?.intermediate_text_blocks).toEqual([
       { text: 'Шаг 1: проверяю команду', iteration: 0 },
@@ -1178,18 +1188,26 @@ describe('ChatOrchestrator: отмена во время исполнения т
     expect(toolMsg!.content).toContain('прерван отменой');
     // Шаг 2а: tool-результат записан сразу (tool_chain), пара assistant(tool_calls) уже есть.
     expect(toolMsg!.metadata?.tool_chain).toBe(true);
+    // Промежуточный шаг — assistant с вызовами инструментов. Маркер
+    // `tool_chain` у него НЕ ставится: у шага есть текст ('Запускаю долгий
+    // тул') — такой шаг нельзя скрывать из транскрипта.
     const chainAssistant = updated.messages.find(
-      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.tool_chain === true,
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) > 0,
     );
     expect(chainAssistant).toBeDefined();
     expect(chainAssistant!.toolCalls).toHaveLength(1);
+    expect(chainAssistant!.metadata?.tool_chain).toBeUndefined();
     expect(updated.messages.indexOf(toolMsg!)).toBe(updated.messages.indexOf(chainAssistant!) + 1);
     const cancelledAssistant = [...updated.messages].reverse().find(
-      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) === 0,
     );
     expect(cancelledAssistant).toBeDefined();
     expect(cancelledAssistant!.metadata?.tool_results).toBeDefined();
     expect(cancelledAssistant!.metadata?.status).toBe('cancelled');
+    // Отмена не должна плодить записи с одинаковым id: id сообщения шага уже
+    // занят tool-chain записью — новая запись отмены получает свой.
+    const ids = updated.messages.map((m) => m.id);
+    expect(new Set(ids).size).toBe(ids.length);
     await rm(tmpDir, { recursive: true, force: true });
   });
 });

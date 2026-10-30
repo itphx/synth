@@ -406,6 +406,46 @@ describe('run-cycle — цикл Tool Use', () => {
     expect(toolCalls[0]!.args).toEqual({ x: 1 });
   });
 
+  it('шаг саб-агента с текстом: маркер tool_chain не ставится (текст виден в транскрипте)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [{
+        isFinal: true,
+        content: 'Читаю файл',
+        toolCalls: [{ id: 'c1', function: { name: 'noop', arguments: '{}' } }],
+      }],
+      [{ isFinal: true, content: 'done' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'noop ok' }) });
+
+    await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider,
+        sessionManager,
+        sessionId: parent.id,
+        toolRegistry: registry,
+        callId: 'call-1',
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const step = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) > 0,
+    );
+    expect(step).toBeDefined();
+    expect(step!.content).toBe('Читаю файл');
+    // Маркер `tool_chain` ставится ТОЛЬКО шагам без видимого текста: у этого
+    // шага есть текст — ответ агента нельзя скрывать из транскрипта.
+    expect(step!.metadata?.tool_chain).toBeUndefined();
+
+    // tool-результат — служебное сообщение, маркер у него всегда.
+    const toolMsg = saved.messages.find((m) => m.role === MessageRole.TOOL)!;
+    expect(toolMsg.metadata?.tool_chain).toBe(true);
+  });
+
   it('doom-loop: одинаковый вызов MAX_DOOM_LOOP_COUNT раз блокируется без исполнения', async () => {
     const parent = await sessionManager.createSession({ title: 'P' });
     const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });

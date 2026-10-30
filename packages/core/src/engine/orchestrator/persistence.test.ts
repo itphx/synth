@@ -627,8 +627,11 @@ describe('saveAssistantMessage / persistToolChain', () => {
       model: 'final-model',
       agentRole: 'fixer',
       reasoning: 'reasoning №1',
-      metadata: { stream_id: 'stream1', tool_chain: true },
+      // У шага с текстом маркера `tool_chain` нет — иначе текст ответа
+      // агента скрывается из транскрипта (после перезагрузки он «исчезает»).
+      metadata: { stream_id: 'stream1' },
     });
+    expect(assistant0!.metadata?.tool_chain).toBeUndefined();
     expect(assistant0!.toolCalls).toHaveLength(1);
     expect(tool0).toMatchObject({
       role: MessageRole.TOOL,

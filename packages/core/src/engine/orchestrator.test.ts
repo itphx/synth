@@ -552,7 +552,10 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
     expect(intermediateAssistant.toolCalls).toBeDefined();
     expect(intermediateAssistant.toolCalls).toHaveLength(1);
     expect((intermediateAssistant.toolCalls![0] as { function?: { name?: string } }).function?.name).toBe('read_file');
-    expect(intermediateAssistant.metadata?.tool_chain).toBe(true);
+    // Маркер `tool_chain` ставится ТОЛЬКО шагам без видимого текста: у шага
+    // есть текст ('Сейчас прочитаю файл') — маркера нет, иначе ответ агента
+    // исчезнет из транскрипта после перезагрузки страницы.
+    expect(intermediateAssistant.metadata?.tool_chain).toBeUndefined();
 
     const toolMsg = chain[2]!;
     expect(toolMsg.toolCallId).toBe('call_1');
@@ -972,7 +975,9 @@ describe('ChatOrchestrator — отмена сохраняет tool-вызовы
     ]);
 
     const intermediate = chain[1]!;
-    expect(intermediate.metadata?.tool_chain).toBe(true);
+    // Шаг с текстом ('выполняю тул') — маркера `tool_chain` нет: текст шага
+    // виден в транскрипте (иначе после перезагрузки страницы он исчезнет).
+    expect(intermediate.metadata?.tool_chain).toBeUndefined();
     expect(intermediate.toolCalls).toHaveLength(1);
     expect((intermediate.toolCalls![0] as { id: string }).id).toBe('call_abort');
 

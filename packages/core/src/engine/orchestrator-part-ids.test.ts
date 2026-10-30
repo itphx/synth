@@ -188,11 +188,15 @@ describe('ADR-118 §1: детерминированные id частей в п�
     const session = (await h.sessionManager.getSession(h.sessionId))!;
     const assistants = session.messages.filter((m) => m.role === MessageRole.ASSISTANT);
 
-    // Шаг 1 (вызов инструмента) — tool-chain сообщение; шаг 2 — финальный.
-    const chain = assistants.find((m) => m.metadata?.tool_chain === true)!;
-    const final = assistants.find((m) => m.metadata?.tool_chain !== true)!;
+    // Шаг 1 (вызов инструмента) — assistant с `toolCalls`; шаг 2 — финальный.
+    // Маркер `tool_chain` у шага с текстом НЕ ставится (текст шага — реальный
+    // ответ агента), поэтому шаг ищем по вызовам инструментов, а не по маркеру.
+    const chain = assistants.find((m) => (m.toolCalls?.length ?? 0) > 0)!;
+    const final = assistants.find((m) => (m.toolCalls?.length ?? 0) === 0)!;
     expect(chain).toBeDefined();
     expect(final).toBeDefined();
+    expect(chain.metadata?.tool_chain).toBeUndefined();
+    expect(final.metadata?.tool_chain).toBeUndefined();
 
     // Части стрима и части персиста — по одному messageId.
     const chainText = chain.parts.find((p) => p.type === 'text')!;
@@ -224,8 +228,10 @@ describe('ADR-118 §1: детерминированные id частей в п�
     );
 
     const session = (await h.sessionManager.getSession(h.sessionId))!;
+    // Финальный шаг — assistant без вызовов инструментов (у шага с вызовами
+    // маркера `tool_chain` нет — текст шага видим в транскрипте).
     const final = session.messages.find(
-      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.tool_chain !== true,
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) === 0,
     )!;
 
     // Live-части финального шага — из `part.delta` стрима.

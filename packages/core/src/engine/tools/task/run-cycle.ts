@@ -25,6 +25,7 @@ import { createChildSessionLifecycle, publishMessageAdded } from './child-sessio
 import { messageToLLMMessage } from './prompt.js';
 import { applySteerInjections, dropSteerInjections } from '../../steering/apply.js';
 import { makeReasoningParts, toLlmReasoningBlocks } from '../../reasoning-blocks.js';
+import { hasVisibleStepContent } from '../../orchestrator/persistence.js';
 import { requeueMessages } from '../../../queue/processor.js';
 import type { ContextMode, SubagentRetryConfig, TaskExtra } from './types.js';
 
@@ -1099,12 +1100,17 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // Сохранить ответ ассистента с tool calls в дочернюю сессию
       if (childSessionId && extra.sessionManager) {
         try {
+          const stepParts = [makeTextPart(accumulatedContent || ''), ...makeReasoningParts(iterationBlocks)];
+          // Маркер `tool_chain` — только для сообщений БЕЗ видимого текста:
+          // шаг с текстом — реальный ответ агента, и его нельзя скрывать от
+          // транскрипта (после перезагрузки страницы ответ пропадает).
+          const stepVisible = hasVisibleStepContent(accumulatedContent || '', stepParts);
           const assistantMsg: Message = {
             id: stepMessageId,
             role: MessageRole.ASSISTANT,
             seq: 0,
             origin: 'local',
-            parts: [makeTextPart(accumulatedContent || ''), ...makeReasoningParts(iterationBlocks)],
+            parts: stepParts,
             content: accumulatedContent || '',
             createdAt: nowISO(),
             disabled: false,
@@ -1120,7 +1126,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             // tool_chain=true — UI дочерней сессии скрывает промежуточные
             // сообщения (визуализация уже в финальном с tool_results).
             toolCalls,
-            metadata: { stream_id: extra.streamId, tool_chain: true },
+            metadata: {
+              stream_id: extra.streamId,
+              ...(stepVisible ? {} : { tool_chain: true }),
+            },
           };
           const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
           if (updated && extra.eventBus) {
