@@ -626,6 +626,7 @@ docker-демон, нет облачного лимита в 30 минут, кэ
 | ADR-115 | Мультимодальный ввод — вложения сообщений (Part, blob-порт, API, UI) | ⚠️ Частично | [adr-115](./docs/arch_decisions/adr-115-multimodal-input.md) |
 | ADR-116 | Состояние инстанса в SQL и blob-порты на томе | ⚠️ Частично | [adr-116](./docs/arch_decisions/adr-116-instance-state-and-blob-ports.md) |
 | ADR-117 | Слой совместимости провайдеров/моделей (`compatibility`: reasoning-поле, лимит вывода, `tool_choice`) и Anthropic thinking round-trip | ✅ Реализовано | [adr-117](./docs/arch_decisions/adr-117-provider-compatibility.md) |
+| ADR-118 | Поток сообщений v2 — ход как последовательность шагов | ⚠️ Частично | [adr-118](./docs/arch_decisions/adr-118-message-stream-v2.md) |
 <!-- ad-index:end -->
 
 Правило: `docs/arch_decisions/` — единственный дом ADR/PROP; номера и файлы стабильны (ссылок на id по репозиторию — тысячи), файлы не переносятся и не удаляются.
