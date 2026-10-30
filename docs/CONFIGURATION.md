@@ -1635,7 +1635,7 @@ OpenAI-chat / Anthropic / Ollama, лимит шагов) — [PROVIDERS.md](./PR
 | `supportsToolChoice` | Провайдер понимает `tool_choice` | `true` (у нативного Ollama — `false`) |
 | `cacheFormat` | Формат inline-маркеров prompt-cache (`cache_control: {type:'ephemeral'}`): `anthropic` — последний tool + system + граница последнего сообщения; `alibaba` — system + граница последнего сообщения (без tools). Бюджет — ≤4 breakpoint'а; при заданном значении `prompt_cache_key` **не** отправляется | Не задан (только `prompt_cache_key`) |
 | `requireFinishReason` | Требовать `finish_reason` в стриме: провайдер, закрывший стрим без него, отдал недописанный ответ (incomplete-stream, не ретраится) | `true` |
-| `supportsEffortUpdates` | Effort-режим Anthropic 5.x: отправлять `output_config.effort` (тир из `reasoningLevel`: `low\|medium\|high`) и **не** отправлять `thinking` — thinking-блоки истории не реплеятся, `temperature` не форсируется. Без флага — прежний режим, явный effort игнорируется | `false` (только явным `true`) |
+| `supportsEffortUpdates` | Effort-режим Anthropic 5.x: отправлять `output_config.effort` (тир из `effort` агента/сессии либо из `reasoningLevel`: `low\|medium\|high`) и **не** отправлять `thinking` — thinking-блоки истории не реплеятся, `temperature` не форсируется. Без флага — прежний режим, явный effort игнорируется | `false` (только явным `true`) |
 
 - **Приоритет:** явное значение **модели** → явное значение **провайдера** → **эвристика** →
   встроенный дефолт (`resolveModelCompatibility`). Эвристики (`detectCompatibilityHeuristics`)
@@ -1693,11 +1693,13 @@ opaque-данные `redacted_thinking` сохраняются **на каждо
 не отдаются.
 
 **Anthropic: effort-режим (`compatibility.supportsEffortUpdates`).** При явном `true` провайдер
-отправляет `output_config.effort` (тир из `reasoningLevel`: `low|medium|high`; `none`/`default` —
-поле не отправляется) и **не** отправляет `thinking` вообще (ни `enabled`, ни `disabled`), поэтому
-бюджет не считается, `temperature` не форсируется, а thinking-блоки истории не реплеятся. Тиры
-`xhigh`/`max` доступны только при явной передаче `ChatOptions.effort` (в настройках агента/сессии их
-нет). Без флага поведение прежнее — см. [PROVIDERS.md](./PROVIDERS.md) §6.1.
+отправляет `output_config.effort` и **не** отправляет `thinking` вообще (ни `enabled`, ни
+`disabled`), поэтому бюджет не считается, `temperature` не форсируется, а thinking-блоки истории не
+реплеятся. Тир берётся по приоритету: `ChatOptions.effort` → `effort` агента (админка «Агенты») →
+`effort` сессии → `effortForReasoningLevel(reasoningLevel)`; как и `reasoningLevel`, поля `effort`
+живут в настройках агента/сессии (`low|medium|high|xhigh|max`, `null` — сброс к «авто»), а тиры
+`xhigh`/`max` из `reasoningLevel` не выводятся — задаются только явным `effort`. Без флага поведение
+прежнее — см. [PROVIDERS.md](./PROVIDERS.md) §6.1.
 
 **Ollama (`/api/chat`).** `think` включается для `low|medium|high` (`none` — `false`, `default` —
 поле не отправляется); `tool_choice` не отправляется (`compatibility.supportsToolChoice: false`

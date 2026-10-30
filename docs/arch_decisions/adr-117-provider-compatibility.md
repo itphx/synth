@@ -101,19 +101,23 @@
      флаг делает только то, что осмысленно без него: при явном `compatibility.supportsEffortUpdates:
      true` Anthropic-провайдер отправляет `output_config.effort` и **не** отправляет `thinking`
      (ни `enabled`, ни `disabled`) — у effort-моделей это другой режим; thinking-блоки истории не
-     реплеятся, `temperature` не форсируется. Тир считается на **каждый** LLM-вызов (оркестратор —
-     `agentDef.reasoningLevel ?? session.settings.reasoningLevel`, саб-агент — свой
-     `reasoningLevel`) и едет через `ChatOptions.effort`, а не через конструктор провайдера (он
-     кэшируется): `low|medium|high` из `reasoningLevel`, `none`/`default` — параметр не отправляется,
-     `xhigh`/`max` — только явным `ChatOptions.effort`. Включение — **только явным значением**
-     (дефолт `false`, авто-эвристик нет): иначе существующие записи каталога начали бы слать поле
-     шлюзам без поддержки. Отличие от opencode: нет effort-маркеров в истории (там — служебное
-     system-сообщение с партом `effort`, чтобы не инвалидировать prompt-cache) и нет mid-turn UI-смены
-     уровня; смена уровня между шагами подхватывается, но может инвалидировать кэш промпта. Остатки:
-     официальный `api.anthropic.com` в effort-режиме не проверялся (проверки — на моках);
-     LLM Proxy (backend) `reasoning_effort` **принимает** и прокидывает merged `compatibility`, а вот
-     гибридный `RemoteProvider` его не отправляет (передаёт в прокси только `toolChoice`) — в
-     remote-сессии effort теряется (остаток).
+     реплеятся, `temperature` не форсируется. Тир считается на **каждый** LLM-вызов по цепочке
+     `ChatOptions.effort` → `agent.effort` → `session.settings.effort` → `effortForReasoningLevel(
+     reasoningLevel)` (оркестратор — основной ход, `engine/tools/task/run-cycle.ts` — саб-агент, у
+     ребёнка тир фиксируется в его настройках) и едет через `ChatOptions.effort`, а не через
+     конструктор провайдера (он кэшируется): `low|medium|high` из `reasoningLevel`, `none`/`default` —
+     параметр не отправляется, **`xhigh`/`max` доступны из настроек** — поля `AgentDefinition.effort`/
+     `SessionSettings.effort` (админка «Агенты», `null` — сброс к «авто») или явный `ChatOptions.effort`.
+     Включение — **только явным значением** (дефолт `false`, авто-эвристик нет): иначе существующие
+     записи каталога начали бы слать поле шлюзам без поддержки. Отличие от opencode: нет
+     effort-маркеров в истории (там — служебное system-сообщение с партом `effort`, чтобы не
+     инвалидировать prompt-cache); смена уровня между ходами подхватывается, но может инвалидировать
+     кэш промпта. **Гибрид — исправлено** (`3f8fa7cb`): `RemoteProvider` отправляет `reasoning_effort`
+     в LLM Proxy (stream и non-stream; при `undefined` поля нет — старые серверы не ломаются, guard
+     остаётся на удалённой стороне). Остатки: mid-turn смена усилия (`PATCH` во время хода) не
+     подхватывается до конца хода — дешёвого чтения настроек нет (`loadLight` в файловой реализации
+     парсит всю сессию), нужен `SessionRepository.loadSettings`/кэш настроек с инвалидацией;
+     официальный `api.anthropic.com` в effort-режиме не проверялся (проверки — на моках).
 9. **UI.** В формах провайдера и модели — сворачиваемый блок «Расширенные параметры»
    (`components/admin/CompatibilityFields.tsx`): tri-state «Авто / Да / Нет» (явный `false` не
    схлопывается в «авто»), селект поля reasoning с вариантом «своё значение», «изменено»-бейдж;

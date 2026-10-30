@@ -1881,17 +1881,24 @@
   явное `true`: флаг меняет тело запроса, и угадывание отправило бы `output_config` шлюзам без
   поддержки) включает effort-режим Anthropic: `body.output_config = { effort }` и **никакого**
   `thinking` (ни `enabled`, ни `disabled`), thinking-блоки истории не реплеятся, `temperature` не
-  форсируется. Тир считается на **каждый** LLM-вызов: `ChatOptions.effort` (`providers/base.ts`,
-  сборка — `buildChatOptions`) приоритетнее `reasoningLevel`; `effortForReasoningLevel` маппит только
-  `low|medium|high` (`none`/`default` → параметр не отправляется; `xhigh`/`max` — только явный
-  `ChatOptions.effort`). Значения считают `engine/orchestrator.ts`
-  (`agentDef.reasoningLevel ?? session.settings.reasoningLevel`) и цикл саб-агента
-  (`engine/tools/task/run-cycle.ts`, `config.reasoningLevel`) — на каждый вызов, потому что провайдер
-  кэшируется. LLM Proxy (backend) `reasoning_effort` принимает и собирает `compatibility` теми же
-  слоями (провайдер → shorthand модели → модель), а гибридный `RemoteProvider` effort **не**
-  отправляет (передаёт только `toolChoice`). `SessionManager.createSession` сохраняет
-  `settings.reasoningLevel` при создании (раньше терял — effort не применялся до `PATCH`);
+  форсируется. Тир считается на **каждый** LLM-вызов по цепочке `ChatOptions.effort` → `agent.effort` →
+  `session.settings.effort` → `effortForReasoningLevel(reasoningLevel)`; `effortForReasoningLevel`
+  маппит только `low|medium|high` (`none`/`default` → параметр не отправляется), а `xhigh`/`max`
+  задаются явным `effort` — поля `AgentDefinition.effort`/`SessionSettings.effort`
+  (`shared/types/{agent,session}.ts`; `null` при обновлении — сброс к «авто»; валидация в схемах
+  сессии/агента). Значения считают `engine/orchestrator.ts` (`agentDef.effort ??
+  session.settings.effort ?? …`) и цикл саб-агента (`engine/tools/task/run-cycle.ts`,
+  `SubagentRunConfig.effort`; `task`/`task-resume` кладут `agent.effort ?? настройки ребёнка` и
+  фиксируют тир в настройках дочерней сессии) — на каждый вызов, потому что провайдер кэшируется.
+  LLM Proxy (backend) `reasoning_effort` принимает и собирает `compatibility` теми же слоями
+  (провайдер → shorthand модели → модель); гибридный `RemoteProvider` шлёт `reasoning_effort` сам
+  (stream и non-stream; при `undefined` поля нет — аддитивно для старых серверов, guard остаётся на
+  удалённой стороне). `SessionManager.createSession` сохраняет `settings.reasoningLevel` **и**
+  `settings.effort` при создании (раньше `reasoningLevel` терялся — effort не применялся до `PATCH`);
   `topP`/`topK` — поля агента, в `SessionSettings` их нет.
+  **Остаток:** mid-turn смена усилия (`PATCH` во время хода) не подхватывается до конца хода —
+  дешёвого getter'а настроек нет (`loadLight` в файловой реализации парсит всю сессию), нужен
+  `SessionRepository.loadSettings`/кэш настроек с инвалидацией.
   Два уровня: `ProviderConfig.compatibility` — дефолты провайдера, `ModelConfig.compatibility` —
   перекрывает их по каждому полю; `ModelConfig.requiresReasoning` — **shorthand** для
   `compatibility.requireReasoning` (нормализация `compatibility.requireReasoning ?? requiresReasoning`).

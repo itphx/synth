@@ -1598,7 +1598,7 @@ rather than hardcoded per provider type. The same object exists on two levels:
 | `supportsToolChoice` | The provider understands `tool_choice` | `true` (native Ollama — `false`) |
 | `cacheFormat` | Prompt-cache inline marker format (`cache_control: {type:'ephemeral'}`): `anthropic` — last tool + system + last message boundary; `alibaba` — system + last message boundary (no tools). Budget — ≤4 breakpoints; when set, `prompt_cache_key` is **not** sent | Unset (`prompt_cache_key` only) |
 | `requireFinishReason` | Require `finish_reason` in the stream: a provider that closes the stream without it returned an incomplete answer (incomplete-stream, not retried) | `true` |
-| `supportsEffortUpdates` | Anthropic 5.x effort mode: send `output_config.effort` (tier from `reasoningLevel`: `low\|medium\|high`) and **not** send `thinking` — thinking blocks in history are not replayed, `temperature` is not forced. Without the flag — the previous mode, an explicit effort is ignored | `false` (explicit `true` only) |
+| `supportsEffortUpdates` | Anthropic 5.x effort mode: send `output_config.effort` (tier from the agent/session `effort` or from `reasoningLevel`: `low\|medium\|high`) and **not** send `thinking` — thinking blocks in history are not replayed, `temperature` is not forced. Without the flag — the previous mode, an explicit effort is ignored | `false` (explicit `true` only) |
 
 - **Priority:** the explicit **model** value → the explicit **provider** value → the **heuristic** →
   the built-in default (`resolveModelCompatibility`). Heuristics (`detectCompatibilityHeuristics`) apply
@@ -1656,11 +1656,13 @@ the reasoning blocks (legacy messages without `parts` keep the previous behaviou
 disabled the blocks are not replayed. These service fields are never exposed through the API.
 
 **Anthropic: effort mode (`compatibility.supportsEffortUpdates`).** With an explicit `true` the provider
-sends `output_config.effort` (tier from `reasoningLevel`: `low|medium|high`; `none`/`default` — the field
-is not sent) and does **not** send `thinking` at all (neither `enabled` nor `disabled`), so the budget is
-not computed, `temperature` is not forced, and thinking blocks from history are not replayed. Tiers
-`xhigh`/`max` are available only when `ChatOptions.effort` is passed explicitly (they are not present in
-agent/session settings). Without the flag the behaviour is unchanged — see [PROVIDERS.md](./PROVIDERS.md) §6.1.
+sends `output_config.effort` and does **not** send `thinking` at all (neither `enabled` nor `disabled`),
+so the budget is not computed, `temperature` is not forced, and thinking blocks from history are not
+replayed. The tier is resolved by priority: `ChatOptions.effort` → the agent `effort` (the «Agents» admin
+section) → the session `effort` → `effortForReasoningLevel(reasoningLevel)`; like `reasoningLevel`, the
+`effort` fields live in agent/session settings (`low|medium|high|xhigh|max`, `null` resets to "auto"),
+and `xhigh`/`max` are not derived from `reasoningLevel` — only an explicit `effort` sets them. Without
+the flag the behaviour is unchanged — see [PROVIDERS.md](./PROVIDERS.md) §6.1.
 
 **Ollama (`/api/chat`).** `think` is enabled for `low|medium|high` (`none` — `false`, `default` — the
 field is not sent); `tool_choice` is not sent (`compatibility.supportsToolChoice: false` by default for
