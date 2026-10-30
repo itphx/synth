@@ -1,8 +1,8 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { marked, Renderer } from 'marked'
 import DOMPurify from 'dompurify'
 import { i18nText, useI18nStore } from '@/lib/i18n'
-import { highlightCode } from '@/lib/markdown/highlight'
+import { getThemeEpoch, highlightCode, subscribeThemeChange } from '@/lib/markdown/highlight'
 
 interface MarkdownContentProps {
   content: string
@@ -137,6 +137,11 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
   const source = streaming ? deferredContent : content
   // Словарь в зависимостях: подписи кнопки копирования переводятся при смене локали.
   const dictionary = useI18nStore((s) => s.dictionary)
+  /**
+   * Epoch темы: растёт при каждой смене темы. Подсветка shiki пишет цвета
+   * инлайном, поэтому уже подсвеченные блоки при смене темы надо перерисовать.
+   */
+  const themeEpoch = useSyncExternalStore(subscribeThemeChange, getThemeEpoch, getThemeEpoch)
 
   const html = useMemo(() => {
     if (!source) return ''
@@ -175,6 +180,36 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
   const htmlProp = useMemo(() => ({ __html: html }), [html])
 
   /**
+   * Смена темы: подсвеченные блоки держат цвета **старой** темы (shiki пишет
+   * их инлайном), поэтому при смене темы подсветку снимаем — блоки возвращаются
+   * в исходное состояние (просто текстом: разметка shiki сохраняет текст, так
+   * что `textContent` совпадает с оригиналом). Дальше эффект подсветки
+   * (зависит от `themeEpoch`) рисует их заново, уже в новой палитре.
+   *
+   * Ref отличает «тема сменилась» от первого прогона эффекта: в StrictMode
+   * эффекты выполняются дважды, и без ref'а второй прогон сбросил бы только
+   * что начатую подсветку (и продублировал токенизацию).
+   */
+  const paintedThemeEpochRef = useRef(themeEpoch)
+  useEffect(() => {
+    if (paintedThemeEpochRef.current === themeEpoch) return
+    paintedThemeEpochRef.current = themeEpoch
+    const container = containerRef.current
+    if (!container) return
+    for (const block of Array.from(container.querySelectorAll<HTMLElement>('.md-code'))) {
+      // Подсветка «в полёте»: промис от старой темы больше не актуален.
+      delete block.dataset.highlighting
+      pendingHighlights.delete(block)
+      if (block.dataset.highlighted !== '1') continue
+      delete block.dataset.highlighted
+      const pre = block.querySelector<HTMLElement>('pre.md-code-pre')
+      const code = pre?.querySelector('code')
+      pre?.classList.remove('shiki')
+      if (code) code.textContent = code.textContent ?? ''
+    }
+  }, [themeEpoch])
+
+  /**
    * Подсветка кода (shiki, лениво) — только для «устоявшихся» блоков: во время
    * стриминга не трогаем (иначе DOM пересобирается на каждой дельте), а после
    * завершения шага (`streaming: false`) подсвечиваем один раз — маркер
@@ -204,6 +239,9 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
       const pending = highlightCode(source, lang).catch(() => null)
       pendingHighlights.set(block, pending)
       void pending.then((highlighted) => {
+        // Тема сменилась, пока шёл await — результат устарел, не применяем
+        // (его перерисует следующий прогон эффекта, уже в новой палитре).
+        if (getThemeEpoch() !== themeEpoch) return
         delete block.dataset.highlighting
         if (!highlighted) return
         // Блок уже подсвечен (повторный прогон) — ничего не делаем.
@@ -217,7 +255,7 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
         block.dataset.highlighted = '1'
       })
     }
-  }, [html, streaming])
+  }, [html, streaming, themeEpoch])
 
   // Делегирование клика: кнопка копирования живёт в HTML из marked, не в React-дереве.
   const handleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {

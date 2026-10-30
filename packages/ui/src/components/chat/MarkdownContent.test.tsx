@@ -4,14 +4,17 @@ import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
 
 import { i18nText } from '@/lib/i18n'
-import { highlightCode } from '@/lib/markdown/highlight'
+import { highlightCode, resetThemeWatcher } from '@/lib/markdown/highlight'
 import { MarkdownContent, MAX_NUMBERED_CODE_LINES } from './MarkdownContent'
 
 // Подсветка (shiki) — отдельный модуль со своим тестом; здесь проверяем только
 // интеграцию: когда вызывается и как применяется/игнорируется результат.
-vi.mock('@/lib/markdown/highlight', () => ({
-  highlightCode: vi.fn(async () => null),
-}))
+// Остальные экспорты модуля (детектор смены темы) остаются настоящими —
+// перекраска проверяется на реальном наблюдателе DOM.
+vi.mock('@/lib/markdown/highlight', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/markdown/highlight')>()
+  return { ...actual, highlightCode: vi.fn(async () => null) }
+})
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -55,6 +58,13 @@ function innerHtmlDescriptor(): PropertyDescriptor {
   throw new Error('innerHTML accessor not found')
 }
 
+/** Дождаться доставки MutationObserver (микротаска jsdom) и её обработчиков. */
+async function flushDom(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+}
+
 beforeEach(() => {
   const highlight = vi.mocked(highlightCode)
   highlight.mockReset()
@@ -75,6 +85,8 @@ afterEach(async () => {
     container.remove()
   }
   document.body.innerHTML = ''
+  resetThemeWatcher()
+  document.documentElement.className = ''
   vi.restoreAllMocks()
 })
 
@@ -315,5 +327,53 @@ describe('MarkdownContent: подсветка кода (shiki)', () => {
     expect(highlightCode).toHaveBeenCalledTimes(1)
     expect(container.querySelector('pre.md-code-pre')?.classList.contains('shiki')).toBe(true)
     expect(container.querySelector('.md-code')?.getAttribute('data-highlighted')).toBe('1')
+  })
+
+  it('смена темы перекрашивает уже подсвеченный блок (повторный вызов highlightCode)', async () => {
+    let call = 0
+    // Как настоящий shiki: текст кода сохраняется (комментарий — метка
+    // поколения подсветки, в `textContent` он не попадает).
+    vi.mocked(highlightCode).mockImplementation(async (code) => {
+      call += 1
+      return `<span class="line">${code}</span><!--gen-${call}-->`
+    })
+
+    const container = await renderMarkdown('```ts\nconst a = 1\n```')
+    await flushEffects()
+
+    expect(highlightCode).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('code')?.innerHTML).toContain('gen-1')
+    expect(container.querySelector('code')?.textContent).toBe('const a = 1')
+    expect(container.querySelector('pre.md-code-pre')?.classList.contains('shiki')).toBe(true)
+
+    // Смена темы: класс на <html> → epoch растёт → блок перерисовывается.
+    await act(async () => {
+      document.documentElement.classList.add('dark')
+    })
+    await flushDom()
+    await flushEffects()
+
+    expect(highlightCode).toHaveBeenCalledTimes(2)
+    expect(highlightCode).toHaveBeenLastCalledWith('const a = 1', 'ts')
+    expect(container.querySelector('code')?.innerHTML).toContain('gen-2')
+    expect(container.querySelector('code')?.textContent).toBe('const a = 1')
+    expect(container.querySelector('pre.md-code-pre')?.classList.contains('shiki')).toBe(true)
+    expect(container.querySelector('.md-code')?.getAttribute('data-highlighted')).toBe('1')
+    expect(container.querySelector('.md-code')?.getAttribute('data-highlighting')).toBeNull()
+  })
+
+  it('смена темы во время стриминга не подсвечивает блок', async () => {
+    vi.mocked(highlightCode).mockResolvedValue('<span class="line">HIGHLIGHTED</span>')
+    const { container } = await renderTree('```ts\nconst a = 1\n```', true)
+    await flushEffects()
+
+    await act(async () => {
+      document.documentElement.classList.add('dark')
+    })
+    await flushDom()
+    await flushEffects()
+
+    expect(highlightCode).not.toHaveBeenCalled()
+    expect(container.querySelector('pre.md-code-pre')?.classList.contains('shiki')).toBe(false)
   })
 })

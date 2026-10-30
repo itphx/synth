@@ -385,6 +385,10 @@ function extractCodeHtml(html: string): string | null {
  * (неизвестный язык, превышение лимитов, ошибка shiki — без исключений).
  */
 export async function highlightCode(code: string, lang: string): Promise<string | null> {
+  // Наблюдатель темы нужен и без подписчиков: иначе смена темы оставит
+  // кэш подсветки от старой палитры (блоки получат цвета прошлой темы).
+  ensureThemeWatcher()
+
   const language = resolveHighlightLanguage(lang)
   if (!language || !code) return null
   if (code.length > MAX_HIGHLIGHT_CHARS) return null
@@ -407,4 +411,151 @@ export async function highlightCode(code: string, lang: string): Promise<string 
     console.debug('[markdown/highlight] shiki failed, leaving code plain:', error)
     return null
   }
+}
+
+/* ───────────────────────────── Смена темы ───────────────────────────── */
+
+/** id `<style>`, который создаёт `lib/theme/cssGenerator.ts` при смене темы. */
+const THEME_STYLE_ID = 'opencode-theme-variables'
+
+/**
+ * Отпечаток темы: вариант (dark/light) + содержимое `<style>` темы.
+ *
+ * Сравниваем по содержимому style-элемента, а не по палитре CSS-переменных:
+ * пользовательские свойства резолвятся браузером только при реальном layout,
+ * а в тестовой среде (jsdom) не резолвятся вовсе — отпечаток по содержимому
+ * одинаково работает в обоих случаях.
+ */
+function themeSignature(): string {
+  const variant = isDarkDocument() ? 'dark' : 'light'
+  let vars = ''
+  try {
+    vars = document.getElementById(THEME_STYLE_ID)?.textContent ?? ''
+  } catch {
+    vars = ''
+  }
+  return `${variant}|${vars}`
+}
+
+/** Монотонный счётчик смен темы (растёт при каждой фактической смене). */
+let themeEpoch = 0
+
+/** Подписчики смены темы (перерисовывают подсвеченные блоки). */
+const themeListeners = new Set<() => void>()
+
+/** Отпечаток темы, под которым построен текущий кэш подсветки. */
+let lastThemeSignature: string | null = null
+
+/** Наблюдатели DOM (ставятся один раз, лениво). */
+let rootObserver: MutationObserver | null = null
+let headObserver: MutationObserver | null = null
+let colorSchemeQuery: MediaQueryList | null = null
+
+/** Сбросить кэш подсветки и увеличить epoch — тема изменилась. */
+function notifyThemeChanged(): void {
+  clearHighlightCache()
+  themeEpoch += 1
+  for (const listener of Array.from(themeListeners)) {
+    try {
+      listener()
+    } catch (error) {
+      console.debug('[markdown/highlight] theme listener failed:', error)
+    }
+  }
+}
+
+/** Проверить, сменилась ли тема (по отпечатку) — и уведомить подписчиков. */
+function checkThemeChanged(): void {
+  const signature = themeSignature()
+  if (lastThemeSignature === null) {
+    lastThemeSignature = signature
+    return
+  }
+  if (signature === lastThemeSignature) return
+  lastThemeSignature = signature
+  notifyThemeChanged()
+}
+
+/** Системная тема ОС (`prefers-color-scheme`): тема могла смениться. */
+function handleColorSchemeChange(): void {
+  checkThemeChanged()
+}
+
+/**
+ * Поставить наблюдатели темы (один раз, лениво — при первом использовании).
+ *
+ * Три пути смены темы:
+ * 1. класс `dark`/`light` на `<html>` — атрибуты `class`/`style`;
+ * 2. подмена `<style id="opencode-theme-variables">` в `<head>`;
+ * 3. системная тема ОС (`prefers-color-scheme: dark`).
+ */
+function ensureThemeWatcher(): void {
+  if (typeof document === 'undefined') return
+  if (rootObserver) return
+
+  lastThemeSignature = themeSignature()
+
+  if (typeof MutationObserver !== 'undefined') {
+    rootObserver = new MutationObserver(() => {
+      checkThemeChanged()
+    })
+    rootObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class', 'style'],
+    })
+
+    if (document.head) {
+      headObserver = new MutationObserver(() => {
+        checkThemeChanged()
+      })
+      headObserver.observe(document.head, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      })
+    }
+  }
+
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    colorSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    if (typeof colorSchemeQuery.addEventListener === 'function') {
+      colorSchemeQuery.addEventListener('change', handleColorSchemeChange)
+    }
+  }
+}
+
+/** Текущий epoch темы (монотонно растёт при каждой смене). */
+export function getThemeEpoch(): number {
+  return themeEpoch
+}
+
+/**
+ * Подписка на смену темы: колбэк вызывается при каждой смене.
+ * Возвращает функцию отписки.
+ */
+export function subscribeThemeChange(callback: () => void): () => void {
+  ensureThemeWatcher()
+  themeListeners.add(callback)
+  return () => {
+    themeListeners.delete(callback)
+  }
+}
+
+/**
+ * Сброс наблюдателя темы (тесты): обсерверы снимаются, подписчики чистятся.
+ * Epoch монотонный и не сбрасывается — это счётчик, а не состояние.
+ */
+export function resetThemeWatcher(): void {
+  rootObserver?.disconnect()
+  rootObserver = null
+  headObserver?.disconnect()
+  headObserver = null
+  if (colorSchemeQuery) {
+    if (typeof colorSchemeQuery.removeEventListener === 'function') {
+      colorSchemeQuery.removeEventListener('change', handleColorSchemeChange)
+    }
+    colorSchemeQuery = null
+  }
+  themeListeners.clear()
+  lastThemeSignature = null
 }

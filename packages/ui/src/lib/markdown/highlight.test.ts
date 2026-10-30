@@ -50,14 +50,27 @@ vi.mock('shiki/langs/python.mjs', () => ({ default: [{ name: 'python' }] }))
 
 import {
   clearHighlightCache,
+  getThemeEpoch,
   highlightCode,
   MAX_HIGHLIGHT_CHARS,
   MAX_HIGHLIGHT_LINES,
+  resetThemeWatcher,
   resolveHighlightLanguage,
+  subscribeThemeChange,
 } from './highlight'
+
+/**
+ * Дождаться доставки MutationObserver (микротаска jsdom) и её обработчиков.
+ * Макрозадача (setTimeout) гарантирует, что все микротаски уже выполнены.
+ */
+async function flushDom(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+}
 
 beforeEach(() => {
   clearHighlightCache()
+  resetThemeWatcher()
+  document.documentElement.className = ''
   shiki.state.codeToHtmlCalls = 0
   shiki.state.languageLoads = 0
   shiki.state.themeLoads = 0
@@ -65,6 +78,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetThemeWatcher()
+  document.documentElement.className = ''
+  document.getElementById('opencode-theme-variables')?.remove()
   vi.restoreAllMocks()
 })
 
@@ -148,5 +164,98 @@ describe('highlightCode', () => {
     await highlightCode('let x = 1', 'ts')
 
     expect(shiki.state.codeToHtmlCalls).toBe(2)
+  })
+})
+
+describe('смена темы', () => {
+  it('смена класса на <html> сбрасывает кэш и уведомляет подписчиков', async () => {
+    const seen: number[] = []
+    const unsubscribe = subscribeThemeChange(() => {
+      seen.push(getThemeEpoch())
+    })
+
+    await highlightCode('const a = 1', 'ts')
+    expect(shiki.state.codeToHtmlCalls).toBe(1)
+
+    document.documentElement.classList.add('dark')
+    await flushDom()
+
+    expect(seen.length).toBe(1)
+    expect(seen[0]).toBe(getThemeEpoch())
+
+    // Кэш сброшен: тот же код токенизируется заново (новая палитра).
+    await highlightCode('const a = 1', 'ts')
+    expect(shiki.state.codeToHtmlCalls).toBe(2)
+
+    unsubscribe()
+  })
+
+  it('подмена <style id="opencode-theme-variables"> сбрасывает кэш и уведомляет подписчиков', async () => {
+    const style = document.createElement('style')
+    style.id = 'opencode-theme-variables'
+    style.textContent = ':root { --background: #101010; }'
+    document.head.appendChild(style)
+
+    const seen: number[] = []
+    const unsubscribe = subscribeThemeChange(() => {
+      seen.push(getThemeEpoch())
+    })
+
+    await highlightCode('const a = 1', 'ts')
+    expect(shiki.state.codeToHtmlCalls).toBe(1)
+
+    style.textContent = ':root { --background: #202020; }'
+    await flushDom()
+
+    expect(seen.length).toBe(1)
+    expect(seen[0]).toBe(getThemeEpoch())
+
+    await highlightCode('const a = 1', 'ts')
+    expect(shiki.state.codeToHtmlCalls).toBe(2)
+
+    unsubscribe()
+    style.remove()
+  })
+
+  it('повторные подписки не плодят обработчики: одна смена — один вызов', async () => {
+    const first: number[] = []
+    const second: number[] = []
+    const unsubscribeFirst = subscribeThemeChange(() => {
+      first.push(getThemeEpoch())
+    })
+    const unsubscribeSecond = subscribeThemeChange(() => {
+      second.push(getThemeEpoch())
+    })
+
+    document.documentElement.classList.add('dark')
+    await flushDom()
+
+    expect(first.length).toBe(1)
+    expect(second.length).toBe(1)
+
+    document.documentElement.classList.remove('dark')
+    await flushDom()
+
+    expect(first.length).toBe(2)
+    expect(second.length).toBe(2)
+
+    unsubscribeFirst()
+    unsubscribeSecond()
+  })
+
+  it('отписка отменяет уведомления', async () => {
+    const seen: number[] = []
+    const unsubscribe = subscribeThemeChange(() => {
+      seen.push(getThemeEpoch())
+    })
+
+    document.documentElement.classList.add('dark')
+    await flushDom()
+    expect(seen.length).toBe(1)
+
+    unsubscribe()
+    document.documentElement.classList.remove('dark')
+    await flushDom()
+    expect(seen.length).toBe(1)
   })
 })
